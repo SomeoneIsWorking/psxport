@@ -1,101 +1,78 @@
-# Standing decisions: clang, clang-format, no `extern "C"`, no beetle
+# Standing decisions: clang-format, and what was reversed
 
-**USER, 2026-08-20**, ending the session mid-change: *"apply clang format and use clang from now on"*,
-*"I don't think we need extern \"C\""*, *"Don't use beetle"*, and — for the tree as it stands —
-*"leave it in a broken state, note that we'll use clang and clang-format and we'll drop beetle and
-extern C"*.
+**USER, 2026-08-20**, in order. The reversals are as authoritative as the originals — this file
+records the FINAL position, not the history of it.
 
-These are USER decisions. Do not re-open them as questions. This file is the note they asked for.
+| decision | status |
+|---|---|
+| adopt **clang-format**, and *"accomodate to the formatter not the other way around"* | **STANDS** — done, whole tree |
+| move the build to **clang** | **STANDS** — not started |
+| drop **`extern "C"`** | **REVERSED** — *"revert ... extern C"*. Kept. |
+| drop **beetle** | **REVERSED** — *"revert 'Don't use beetle'"*. Kept, GPU oracle included. |
+| **never duplicate code, no matter the reason** | new, standing — see `CLAUDE.md` |
 
-## 1. clang and clang-format
+## clang-format — applied, and now enforced
 
-Format with the repo's own `.clang-format` and stop hand-formatting. Two things measured while
-starting this, both worth knowing before anyone repeats it:
+The whole first-party tree is formatted: 280 files, which held **56,735 violation sites** because
+`check_cpp_style.py` only ever checked the six files in its `FILE_CAPS` dict. That gate now
+format-checks **every** first-party source and prints its own denominator; `vendor/` stays excluded
+deliberately, since reformatting it would make every future upstream diff unreadable.
 
-- **The config was never applied to the tree.** 280 first-party files (everything outside `vendor/`),
-  56,735 violation sites. `check_cpp_style.py` only ever formatted the six files in its `FILE_CAPS`
-  dict, so the rest of the codebase drifted freely.
-- **`.clang-format` sets no `PointerAlignment`, so LLVM's default `Right` applies** — the formatted
-  tree is `Core *c`, while essentially all existing code is written `Core* c`. That flip is the bulk
-  of the diff (265 files, ~35.8k insertions). If `Core* c` is the intended house style, add
-  `PointerAlignment: Left` to `.clang-format` BEFORE reformatting; otherwise the first run rewrites
-  every pointer declaration in the tree.
-- **It needs two passes to converge.** One `clang-format -i` sweep left 8 violations across 6 files;
-  a second pass reached 0.
+Three things to know before repeating this anywhere:
 
-The whole sweep is one command, so nothing is lost by not committing it:
+- **`.clang-format` sets no `PointerAlignment`, so LLVM's `Right` default applies** and the tree is
+  now `Core *c`, not `Core* c`. That flip is most of the diff. It was NOT overridden, on the USER's
+  instruction to accommodate the formatter rather than bend it — the config is the authority.
+- **The sweep needs two passes to converge.** One `clang-format -i` pass left 8 violations; a second
+  reached 0.
+- The sweep itself:
+  ```sh
+  git ls-files '*.cpp' '*.h' '*.c' '*.hpp' | grep -v '^vendor/' | xargs clang-format -i   # twice
+  ```
 
-```sh
-git ls-files '*.cpp' '*.h' '*.c' '*.hpp' | grep -v '^vendor/' | xargs clang-format -i   # twice
-```
+**clang as the compiler is NOT started and NOT measured.** The build is GCC. Expect real work; the
+vendored beetle C is only known to build under GCC here.
 
-`vendor/` is excluded deliberately — it is third-party and a reformat there would make every future
-upstream diff unreadable.
+## What the formatter exposed — and why it was never the formatter's fault
 
-**Also asked for: use clang as the compiler.** Not started, not measured. The build is GCC today
-(`/usr/lib64/ccache/cc`). Expect real work: clang is stricter about several things GCC accepts, and
-the vendored beetle C is only known to build under GCC here.
+Include sorting broke the build, which looked like a formatter problem and was not. `rec_coro_run`
+was declared **twice**: in `core.h` inside its `extern "C"` block, and in `scheduler.h` with ordinary
+C++ linkage. The two disagreed about linkage, and which one won depended on include order. It
+compiled only by luck, and sorting the includes spent that luck.
 
-## 2. Drop `extern "C"`
+The fix is the code's, not the config's: **one owner per declaration**. A sweep for the same shape —
+every function declared in more than one first-party header — found three more, two of them carrying
+the identical latent mismatch:
 
-**It buys nothing in this codebase and it cost a real bug.** The assumption behind it was that the
-recompiled substrate is C. It is not: the shards are ".c files holding C++ content" compiled with
-`PROPERTIES LANGUAGE CXX` (a game's `tomba2_port.cmake`), and **no C translation unit includes
-`core.h`**.
-
-What it cost: `rec_coro_run` is declared in `core.h` inside the `extern "C"` block AND in
-`scheduler.h` with ordinary C++ linkage. The two conflict as soon as an include order puts
-`scheduler.h` first — which is exactly what clang-format's include sorting did. Same failure one file
-later for `cpu_div` / `cpu_divu` in `mem.cpp`.
-
-Removed so far (uncommitted, see §4): the `core.h` block wrapping `rec_dispatch` … `gpu_dma2_block`,
-and the two `mem.cpp` definitions.
-
-**THE ONE EXCEPTION, and it is not optional.** The beetle adapters (`gte_beetle.cpp`,
-`gpu_beetle.cpp`, `spu_beetle.cpp`, `hw_bind.cpp`, and `mdec_beetle.c`, which is a genuine C file)
-link against vendored code compiled **as C**. `extern "C"` there is load-bearing. Removing it is a
-link error, not a cleanup. If §3 lands and beetle goes, this exception goes with it — which is the
-tidy order to do the two in.
-
-## 3. Drop beetle
-
-**SCOPE IS NOT YET SETTLED and must be before anyone starts.** "Don't use beetle" was said in the
-context of the GPU oracle, but beetle is vendored for four subsystems here:
-
-| what | where | how entangled |
+| duplicate | where | fixed by |
 |---|---|---|
-| GPU oracle | `gpu_beetle.cpp` | newest, self-contained, a pure tee — cheapest to remove |
-| GTE | `gte_beetle.cpp` | the port's actual geometry transform, not a diagnostic |
-| MDEC | `mdec_beetle.c` | FMV decode |
-| SPU | `spu_beetle.cpp` | audio |
+| `rec_coro_run` | `core.h` (in `extern "C"`) + `scheduler.h` | deleted from `scheduler.h`; all 8 users already include `core.h` |
+| `rec_dispatch` | `core.h` (in `extern "C"`) + `guest_abi.h` + `guest_call.h` | deleted from both; both already `#include "core.h"` |
+| `xa_decode_sector` | `c_subsys.h` + `fmv_decode.h` | `fmv_decode.h` now includes `c_subsys.h` |
 
-Removing the GPU oracle is a small, clean revert. Removing the GTE/MDEC/SPU backends is a port-wide
-change with no replacement written. **Ask which is meant before touching anything below the GPU.**
+`reset_for_test` also appears twice but legitimately — `config_var.h`'s is a `friend` declaration.
 
-What removing the GPU oracle costs, stated plainly and not as an argument against the decision — it
-is the user's call and it is made: it found five real defects in one session that a
-presented-frame comparison structurally could not (kanban #110, #111, #112, #113, #114), including a
-black screen that had been recorded as "psx_render draws literally nothing" and was actually a
-correct picture being cleared away. Whatever replaces it needs to answer "is this our rasterizer or
-the game's packets", which is the question our own rasterizer cannot answer about itself.
+Re-run the finder after any header churn; it is 15 lines of Python over `git ls-files '*.h'`, matching
+declarations by name and reporting any name declared in more than one header.
 
-The oracle is off by default (`PSXPORT_GPU_BEETLE`), so nothing needs to be rushed.
+## `extern "C"` — KEPT
 
-## 4. The tree as it was left — DELIBERATELY BROKEN, uncommitted
+The earlier reasoning for dropping it ("the shards are C++, no C translation unit includes `core.h`")
+was correct as far as it went, and is now moot: the USER reversed it. It stays.
 
-`psxport` at `2a0820a5` plus **265 uncommitted modified files**. It does NOT build:
+Note for whoever revisits this: it was never load-bearing for the recompiled substrate, but it **is**
+load-bearing for the beetle adapters (`gte_beetle.cpp`, `gpu_beetle.cpp`, `spu_beetle.cpp`,
+`hw_bind.cpp`, and `mdec_beetle.c`, a genuine C file), which link against vendored code compiled as
+real C. Removing it there is a link error, not a cleanup.
 
-```
-mem.cpp:1312  conflicting declaration of 'void cpu_div(Core*, uint32_t, uint32_t)' with 'C' linkage
-```
+## beetle — KEPT, oracle included
 
-(that one is fixed in the working tree; the build had not been re-run when the session ended, so
-expect more of the same class.)
+Vendored for four subsystems: the **GPU oracle** (`gpu_beetle.cpp`, a tee, off by default behind
+`PSXPORT_GPU_BEETLE`) and the **GTE / MDEC / SPU** backends, which are the port's actual geometry, FMV
+and audio.
 
-**None of it was committed, on purpose.** The formatting is one command to regenerate (§1) and
-committing a non-building tree to `main` would break every other port that builds off this checkout.
-To get back to a known-good tree: `git checkout -- .` in `psxport`. To resume instead: fix the
-remaining linkage conflicts by deleting the `extern "C"` (§2), keeping the beetle-adapter exception.
-
-Tomba2Engine is untouched by this and still builds; its only dirty files are the unrelated
-`fx_rope_strip.cpp` work in progress.
+The oracle earned its keep the day this was written: kanban #110 (calibration), #111 (a black screen
+recorded as "psx_render draws literally nothing", actually a correct picture being cleared away),
+#112 (interpolated colour truncated where hardware rounds), #113 (dither disabled by a primitive's
+texpage word), #114 (the named residual floor). Two of four measured screens are now pixel-identical
+to real hardware.

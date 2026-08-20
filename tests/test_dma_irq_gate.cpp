@@ -18,8 +18,8 @@
 //     an STR frame only, so one frame of N sectors owes the guest exactly ONE completion.
 //
 // Hermetic: pure integer rules, no Core, no disc, no GPU.
-#include "testutil.h"
 #include "../runtime/recomp/dma_irq.h"
+#include "testutil.h"
 
 // Channel 3 is the CD-ROM's. Named rather than spelled 3 at fifteen call sites.
 static constexpr int CH_CD = 3;
@@ -44,12 +44,17 @@ static uint32_t str_set_transfer_irq(uint32_t dicr, int ch, bool raise) {
 static void test_reset_state_arms_no_channel(void) {
   const uint32_t dicr = 0;
   int armed = 0;
-  for (int ch = 0; ch < 7; ch++)
-    if (dma_irq_armed(dicr, ch)) armed++;
+  for (int ch = 0; ch < 7; ch++) {
+    if (dma_irq_armed(dicr, ch)) {
+      armed++;
+    }
+  }
   CHECK_EQ(armed, 0);
   CHECK_EQ(dma_dicr_read(dicr), 0u);
   // And a completion changes nothing, on every channel.
-  for (int ch = 0; ch < 7; ch++) CHECK_EQ(dma_dicr_complete(dicr, ch), dicr);
+  for (int ch = 0; ch < 7; ch++) {
+    CHECK_EQ(dma_dicr_complete(dicr, ch), dicr);
+  }
 }
 
 // Registering a DMA callback arms exactly one channel, plus the master enable.
@@ -58,8 +63,11 @@ static void test_dmacallback_arms_master_and_one_channel(void) {
   CHECK((dicr & DICR_MASTER_EN) != 0);
   CHECK(dma_irq_armed(dicr, CH_CD));
   int others = 0;
-  for (int ch = 0; ch < 7; ch++)
-    if (ch != CH_CD && dma_irq_armed(dicr, ch)) others++;
+  for (int ch = 0; ch < 7; ch++) {
+    if (ch != CH_CD && dma_irq_armed(dicr, ch)) {
+      others++;
+    }
+  }
   CHECK_EQ(others, 0);
 }
 
@@ -70,7 +78,7 @@ static void test_per_transfer_byte_write_toggles_only_that_channel(void) {
   uint32_t dicr = dmacallback_arm(0, CH_CD);
   dicr = str_set_transfer_irq(dicr, CH_CD, false);
   CHECK(!dma_irq_armed(dicr, CH_CD));
-  CHECK((dicr & DICR_MASTER_EN) != 0);      // same byte — must survive
+  CHECK((dicr & DICR_MASTER_EN) != 0); // same byte — must survive
   dicr = str_set_transfer_irq(dicr, CH_CD, true);
   CHECK(dma_irq_armed(dicr, CH_CD));
   CHECK((dicr & DICR_MASTER_EN) != 0);
@@ -118,19 +126,24 @@ static void test_master_flag_is_read_only_and_computed(void) {
 // completion for the frame. Ungated, it is signalled 11 times — which is what marked ring slots
 // ready before the frame existed and deadlocked the intro movies.
 static void test_str_frame_owes_exactly_one_completion(void) {
-  uint32_t dicr = dmacallback_arm(0, CH_CD);      // FUN_80086030 -> DMACallback(3, 0x8008DB44)
+  uint32_t dicr = dmacallback_arm(0, CH_CD); // FUN_80086030 -> DMACallback(3, 0x8008DB44)
   const int chunks = 10;
   int transfers = 0, signalled = 0;
   for (int i = 0; i < chunks; i++) {
     const bool last = (i == chunks - 1);
-    dicr = str_set_transfer_irq(dicr, CH_CD, false);   // header DMA: 8 words, never raises
+    dicr = str_set_transfer_irq(dicr, CH_CD, false); // header DMA: 8 words, never raises
     transfers++;
-    if (dma_irq_armed(dicr, CH_CD)) signalled++;
-    dicr = str_set_transfer_irq(dicr, CH_CD, last);    // data DMA: 0x1F8 words
+    if (dma_irq_armed(dicr, CH_CD)) {
+      signalled++;
+    }
+    dicr = str_set_transfer_irq(dicr, CH_CD, last); // data DMA: 0x1F8 words
     transfers++;
-    if (dma_irq_armed(dicr, CH_CD)) { signalled++; dicr = dma_dicr_complete(dicr, CH_CD); }
+    if (dma_irq_armed(dicr, CH_CD)) {
+      signalled++;
+      dicr = dma_dicr_complete(dicr, CH_CD);
+    }
   }
-  CHECK_EQ(transfers, 2 * chunks);                // denominator: every transfer was examined
+  CHECK_EQ(transfers, 2 * chunks); // denominator: every transfer was examined
   CHECK_EQ(signalled, 1);
   CHECK_EQ(dicr & DICR_FLAG_MASK, 1u << (24 + CH_CD));
 }
@@ -151,16 +164,20 @@ static void test_a_completion_signals_the_channel_that_completed(void) {
   DmaDone done;
   CHECK(done.complete(dicr, CH_MDEC_OUT));
   CHECK(done.owed(CH_MDEC_OUT));
-  CHECK(!done.owed(CH_CD));                       // nothing completed on the CD channel
+  CHECK(!done.owed(CH_CD)); // nothing completed on the CD channel
   CHECK_EQ(dicr & DICR_FLAG_MASK, 1u << (24 + CH_MDEC_OUT));
   // Denominator: no OTHER channel was left owed either.
   int owed = 0;
-  for (int ch = 0; ch < 7; ch++) if (done.owed(ch)) owed++;
+  for (int ch = 0; ch < 7; ch++) {
+    if (done.owed(ch)) {
+      owed++;
+    }
+  }
   CHECK_EQ(owed, 1);
 }
 
 static void test_an_unarmed_channel_is_owed_nothing(void) {
-  uint32_t dicr = dmacallback_arm(0, CH_CD);      // only the CD channel armed
+  uint32_t dicr = dmacallback_arm(0, CH_CD); // only the CD channel armed
   DmaDone done;
   CHECK(!done.complete(dicr, CH_MDEC_OUT));
   CHECK(!done.owed(CH_MDEC_OUT));
@@ -178,7 +195,7 @@ static void test_two_channels_completing_in_one_window_both_survive(void) {
   CHECK(done.owed(CH_MDEC_OUT));
   done.taken(CH_MDEC_IN);
   CHECK(!done.owed(CH_MDEC_IN));
-  CHECK(done.owed(CH_MDEC_OUT));                  // taking one must not clear the other
+  CHECK(done.owed(CH_MDEC_OUT)); // taking one must not clear the other
 }
 
 static void test_callback_slot_is_per_channel(void) {
@@ -187,11 +204,16 @@ static void test_callback_slot_is_per_channel(void) {
   const uint32_t TABLE = 0x800B4388u;
   CHECK_EQ(dma_callback_slot(TABLE, CH_CD), 0x800B4394u);
   CHECK_EQ(dma_callback_slot(TABLE, CH_MDEC_OUT), 0x800B438Cu);
-  for (int ch = 0; ch < 7; ch++)
+  for (int ch = 0; ch < 7; ch++) {
     CHECK_EQ(dma_callback_slot(TABLE, ch), TABLE + 4u * (uint32_t)ch);
+  }
   // A game that has not RE'd its table gets no slot at all, on every channel.
   int nonzero = 0;
-  for (int ch = 0; ch < 7; ch++) if (dma_callback_slot(0, ch)) nonzero++;
+  for (int ch = 0; ch < 7; ch++) {
+    if (dma_callback_slot(0, ch)) {
+      nonzero++;
+    }
+  }
   CHECK_EQ(nonzero, 0);
 }
 

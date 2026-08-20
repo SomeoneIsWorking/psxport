@@ -26,32 +26,38 @@
 
 namespace {
 
-int   g_calls  = 0;
-int   g_frames = -1;
-int16_t* g_buf = nullptr;
+int g_calls = 0;
+int g_frames = -1;
+int16_t *g_buf = nullptr;
 
-void stub_mix(Core* c, int16_t* buf, int frames) {
+void stub_mix(Core *c, int16_t *buf, int frames) {
   (void)c;
   g_calls++;
   g_frames = frames;
   g_buf = buf;
-  for (int i = 0; i < frames * 2; i++) buf[i] = (int16_t)(buf[i] + 100);
+  for (int i = 0; i < frames * 2; i++) {
+    buf[i] = (int16_t)(buf[i] + 100);
+  }
 }
 
-}  // namespace
+} // namespace
 
 // A port with no music engine of its own: the hook is null and the mix step must do nothing at all.
 static void test_null_hook_is_a_no_op(void) {
-  GameHooks hooks{};                 // value-initialised: every hook, audioMixFrame included, null
+  GameHooks hooks{}; // value-initialised: every hook, audioMixFrame included, null
   CHECK(hooks.audioMixFrame == nullptr);
 
   int16_t buf[8];
-  for (int i = 0; i < 8; i++) buf[i] = (int16_t)(i * 7);
+  for (int i = 0; i < 8; i++) {
+    buf[i] = (int16_t)(i * 7);
+  }
   int16_t want[8];
-  for (int i = 0; i < 8; i++) want[i] = (int16_t)(i * 7);
+  for (int i = 0; i < 8; i++) {
+    want[i] = (int16_t)(i * 7);
+  }
 
   g_calls = 0;
-  spu_mix_game_audio(nullptr, &hooks, buf, 4);   // 4 stereo frames = 8 samples
+  spu_mix_game_audio(nullptr, &hooks, buf, 4); // 4 stereo frames = 8 samples
 
   CHECK_EQ(g_calls, 0);
   CHECK_MEM_EQ(buf, want, sizeof want);
@@ -59,8 +65,8 @@ static void test_null_hook_is_a_no_op(void) {
 
 // A null hook TABLE is the same contract — nothing to mix, and nothing to dereference.
 static void test_null_hooks_table_is_a_no_op(void) {
-  int16_t buf[4] = { 1, 2, 3, 4 };
-  int16_t want[4] = { 1, 2, 3, 4 };
+  int16_t buf[4] = {1, 2, 3, 4};
+  int16_t want[4] = {1, 2, 3, 4};
 
   g_calls = 0;
   spu_mix_game_audio(nullptr, nullptr, buf, 2);
@@ -75,10 +81,12 @@ static void test_present_hook_is_called_once(void) {
   GameHooks hooks{};
   hooks.audioMixFrame = &stub_mix;
 
-  int16_t buf[6] = { 0, 0, 0, 0, 0, 0 };
-  int16_t want[6] = { 100, 100, 100, 100, 100, 100 };
+  int16_t buf[6] = {0, 0, 0, 0, 0, 0};
+  int16_t want[6] = {100, 100, 100, 100, 100, 100};
 
-  g_calls = 0; g_frames = -1; g_buf = nullptr;
+  g_calls = 0;
+  g_frames = -1;
+  g_buf = nullptr;
   spu_mix_game_audio(nullptr, &hooks, buf, 3);
 
   CHECK_EQ(g_calls, 1);

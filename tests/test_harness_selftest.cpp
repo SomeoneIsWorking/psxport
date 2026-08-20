@@ -11,12 +11,12 @@
 // cases go red.
 #include "testutil.h"
 
-#include <string>   // test_streq_survives_temporaries builds temporaries on purpose
+#include <string> // test_streq_survives_temporaries builds temporaries on purpose
 
 // ---- probes: each is a test body that is WRONG on purpose ---------------------------------------
 static void test_probe_failing_check(void) {
-  CHECK(1 == 2);                 // must record a failure and return immediately
-  CHECK(1 == 1);                 // must NOT be reached (a failing check aborts the case)
+  CHECK(1 == 2); // must record a failure and return immediately
+  CHECK(1 == 1); // must NOT be reached (a failing check aborts the case)
 }
 
 static void test_probe_asserts_nothing(void) {
@@ -28,33 +28,37 @@ static void test_probe_asserts_nothing(void) {
 // A failing CHECK must (a) be counted as a failure, (b) abort the rest of the test body, and
 // (c) make RUN() mark the case failed.
 static void test_failing_check_goes_red(void) {
-  int s_checks = pt_checks, s_fails = pt_fails, s_tests = pt_tests, s_tf = pt_tests_failed,
-      s_cc = pt_case_checks;
+  int s_checks = pt_checks, s_fails = pt_fails, s_tests = pt_tests, s_tf = pt_tests_failed, s_cc = pt_case_checks;
   pt_expect_fail = 1;
   RUN(probe_failing_check);
   pt_expect_fail = 0;
-  int observed_checks = pt_checks - s_checks;   // 1: the failing one; the second must not run
-  int observed_fails  = pt_fails - s_fails;
-  int observed_tf     = pt_tests_failed - s_tf;
-  pt_checks = s_checks; pt_fails = s_fails; pt_tests = s_tests; pt_tests_failed = s_tf;
+  int observed_checks = pt_checks - s_checks; // 1: the failing one; the second must not run
+  int observed_fails = pt_fails - s_fails;
+  int observed_tf = pt_tests_failed - s_tf;
+  pt_checks = s_checks;
+  pt_fails = s_fails;
+  pt_tests = s_tests;
+  pt_tests_failed = s_tf;
   pt_case_checks = s_cc;
 
-  CHECK_EQ(observed_fails, 1);    // the bad check was counted
-  CHECK_EQ(observed_checks, 1);   // and it short-circuited the rest of the body
-  CHECK_EQ(observed_tf, 1);       // and RUN() marked the case failed
+  CHECK_EQ(observed_fails, 1);  // the bad check was counted
+  CHECK_EQ(observed_checks, 1); // and it short-circuited the rest of the body
+  CHECK_EQ(observed_tf, 1);     // and RUN() marked the case failed
 }
 
 // A test body that asserts NOTHING must go red. This is the failure mode `assert()`-based tests
 // cannot catch: an empty body exits 0 and reads as a pass.
 static void test_empty_case_goes_red(void) {
-  int s_checks = pt_checks, s_fails = pt_fails, s_tests = pt_tests, s_tf = pt_tests_failed,
-      s_cc = pt_case_checks;
+  int s_checks = pt_checks, s_fails = pt_fails, s_tests = pt_tests, s_tf = pt_tests_failed, s_cc = pt_case_checks;
   pt_expect_fail = 1;
   RUN(probe_asserts_nothing);
   pt_expect_fail = 0;
   int observed_fails = pt_fails - s_fails;
-  int observed_tf    = pt_tests_failed - s_tf;
-  pt_checks = s_checks; pt_fails = s_fails; pt_tests = s_tests; pt_tests_failed = s_tf;
+  int observed_tf = pt_tests_failed - s_tf;
+  pt_checks = s_checks;
+  pt_fails = s_fails;
+  pt_tests = s_tests;
+  pt_tests_failed = s_tf;
   pt_case_checks = s_cc;
 
   CHECK_EQ(observed_fails, 1);
@@ -77,13 +81,15 @@ static void test_comparators_pass_on_equal(void) {
 // short results (small-string optimisation leaves the bytes in the dead stack slot) and garbled
 // long ones, so the verdict depended on the LENGTH of the answer. Both lengths are checked here:
 // the case above used only string literals, which is why the trap survived.
-static std::string echo(const char* s) { return std::string(s); }
+static std::string echo(const char *s) {
+  return std::string(s);
+}
 
 static void test_streq_survives_temporaries(void) {
-  CHECK_STREQ(echo("short").c_str(), "short");                    // 5 chars: inline (SSO)
-  const char* kLong = "a string comfortably past the small-string optimisation boundary";
-  CHECK_STREQ(echo(kLong).c_str(), kLong);                        // 64 chars: heap-allocated
-  CHECK_STREQ(echo(kLong).c_str(), echo(kLong).c_str());          // temporaries on BOTH sides
+  CHECK_STREQ(echo("short").c_str(), "short"); // 5 chars: inline (SSO)
+  const char *kLong = "a string comfortably past the small-string optimisation boundary";
+  CHECK_STREQ(echo(kLong).c_str(), kLong);               // 64 chars: heap-allocated
+  CHECK_STREQ(echo(kLong).c_str(), echo(kLong).c_str()); // temporaries on BOTH sides
 }
 
 // pt_verdict() is what pt_summary() returns to the shell, i.e. what ctest reads as red/green.
@@ -91,10 +97,15 @@ static void test_streq_survives_temporaries(void) {
 // case cannot be swallowed by the restore.
 static void test_verdict_exit_code(void) {
   int s_fails = pt_fails, s_tests = pt_tests;
-  pt_fails = 0;             int v_clean   = pt_verdict();   // clean run          -> 0
-  pt_fails = 3;             int v_failed  = pt_verdict();   // any failed check   -> 1
-  pt_tests = 0; pt_fails = 0; int v_notests = pt_verdict(); // no tests run at all -> 1
-  pt_fails = s_fails; pt_tests = s_tests;
+  pt_fails = 0;
+  int v_clean = pt_verdict(); // clean run          -> 0
+  pt_fails = 3;
+  int v_failed = pt_verdict(); // any failed check   -> 1
+  pt_tests = 0;
+  pt_fails = 0;
+  int v_notests = pt_verdict(); // no tests run at all -> 1
+  pt_fails = s_fails;
+  pt_tests = s_tests;
 
   CHECK_EQ(v_clean, 0);
   CHECK_EQ(v_failed, 1);

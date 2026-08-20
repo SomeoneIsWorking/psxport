@@ -25,15 +25,15 @@
 // A negative reported without those four is a lie, and the test that would let it ship is a test that
 // only ever checks the positive path. Hermetic: the census is a pure table with no Core, no GPU, no
 // disc (that is also why it is a separate class from the OtAttr tables it will be fed from).
-#include "testutil.h"
 #include "producer_census.h"
+#include "testutil.h"
 
 static void test_first_sight_creates_a_row(void) {
   ProducerCensus c;
   CHECK_EQ(c.rowCount(), 0);
   c.noteGuest(0x8002BC9Cu, /*prims=*/3, /*frame=*/10);
   CHECK_EQ(c.rowCount(), 1);
-  const ProducerCensus::Row* r = c.find(ProducerKey::guest(0x8002BC9Cu));
+  const ProducerCensus::Row *r = c.find(ProducerKey::guest(0x8002BC9Cu));
   CHECK(r != nullptr);
   CHECK_EQ(r->primsGuest, 3);
   CHECK_EQ(r->primsNative, 0);
@@ -44,7 +44,7 @@ static void test_first_sight_creates_a_row(void) {
   c.noteGuest(0x8002BC9Cu, 5, 11);
   CHECK_EQ(c.rowCount(), 1);
   CHECK_EQ(c.find(ProducerKey::guest(0x8002BC9Cu))->primsGuest, 8);
-  CHECK_EQ(c.find(ProducerKey::guest(0x8002BC9Cu))->firstFrame, 10u);   // first sighting is not overwritten
+  CHECK_EQ(c.find(ProducerKey::guest(0x8002BC9Cu))->firstFrame, 10u); // first sighting is not overwritten
   CHECK_EQ(c.find(ProducerKey::guest(0x8002BC9Cu))->lastFrame, 11u);
 }
 
@@ -52,9 +52,9 @@ static void test_first_sight_creates_a_row(void) {
 static void test_guest_and_native_share_one_row(void) {
   ProducerCensus c;
   c.noteGuest(0x8007CD38u, 4, 1);
-  c.noteNative(ProducerKey::guest(0x8007CD38u), 4, 1);   // a native producer declaring the fn it ports
+  c.noteNative(ProducerKey::guest(0x8007CD38u), 4, 1); // a native producer declaring the fn it ports
   CHECK_EQ(c.rowCount(), 1);
-  const ProducerCensus::Row* r = c.find(ProducerKey::guest(0x8007CD38u));
+  const ProducerCensus::Row *r = c.find(ProducerKey::guest(0x8007CD38u));
   CHECK_EQ(r->primsGuest, 4);
   CHECK_EQ(r->primsNative, 4);
   // A PC-only producer (an enhancement with no guest counterpart) is a legal row that never compares.
@@ -73,8 +73,8 @@ static void test_unattributable_prims_are_counted_not_dropped(void) {
   ProducerCensus c;
   c.noteUnattributable(ProducerCensus::WHY_GP0_ANON, 12);
   c.noteUnattributable(ProducerCensus::WHY_SPAN_MISS, 5);
-  CHECK_EQ(c.rowCount(), 0);          // no row invented for them…
-  CHECK_EQ(c.gp0Anon(), 12);          // …and they are NOT lost
+  CHECK_EQ(c.rowCount(), 0); // no row invented for them…
+  CHECK_EQ(c.gp0Anon(), 12); // …and they are NOT lost
   CHECK_EQ(c.spanMiss(), 5);
   // The report's honesty test: attributed vs total. 0 attributed out of 17 seen is a very different
   // statement from 0 out of 0, and the census must be able to make it.
@@ -84,8 +84,8 @@ static void test_unattributable_prims_are_counted_not_dropped(void) {
 
 static void test_unscoped_native_pushes_are_counted(void) {
   ProducerCensus c;
-  c.noteNative(ProducerKey::none(), 9, 3);   // pushes with no ProducerScope open
-  CHECK_EQ(c.rowCount(), 0);                 // NOT attributed to a made-up row
+  c.noteNative(ProducerKey::none(), 9, 3); // pushes with no ProducerScope open
+  CHECK_EQ(c.rowCount(), 0);               // NOT attributed to a made-up row
   CHECK_EQ(c.unscopedNative(), 9);
   CHECK_EQ(c.primsSeen(), 9);
   CHECK_EQ(c.primsAttributed(), 0);
@@ -108,14 +108,16 @@ static void test_empty_is_distinguishable_from_clean(void) {
 static void test_overflow_is_reported(void) {
   ProducerCensus c;
   const int cap = ProducerCensus::CAP;
-  for (int i = 0; i < cap; i++) c.noteGuest(0x80000000u + (uint32_t)(i * 4), 1, 0);
+  for (int i = 0; i < cap; i++) {
+    c.noteGuest(0x80000000u + (uint32_t)(i * 4), 1, 0);
+  }
   CHECK_EQ(c.rowCount(), cap);
   CHECK_EQ(c.overflow(), 0);
-  c.noteGuest(0xBADF00D0u, 1, 0);                 // one too many
+  c.noteGuest(0xBADF00D0u, 1, 0); // one too many
   CHECK_EQ(c.rowCount(), cap);
   CHECK_EQ(c.overflow(), 1);
-  CHECK_EQ(c.primsSeen(), cap + 1);               // still SEEN — the prim happened
-  CHECK_EQ(c.primsAttributed(), cap + 1);         // and it WAS attributable; only the row did not fit
+  CHECK_EQ(c.primsSeen(), cap + 1);       // still SEEN — the prim happened
+  CHECK_EQ(c.primsAttributed(), cap + 1); // and it WAS attributable; only the row did not fit
 }
 
 // Per-Core (SBS runs two): two censuses never share state.

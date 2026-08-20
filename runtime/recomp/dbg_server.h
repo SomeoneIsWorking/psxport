@@ -8,52 +8,75 @@
 // listener bind fails and its `mStarted` stays false. Callers with `Core* c` reach the endpoint via
 // `c->game->dbg_server.method()`. No legacy free-function shims — all callers use the class directly.
 #pragma once
-#include <pthread.h>
 #include <cstddef>
+#include <pthread.h>
 class Core;
 class Game;
 
 class DbgServer {
 public:
-  Game* game = nullptr;   // back-pointer wired by Game()
+  Game *game = nullptr; // back-pointer wired by Game()
 
   // Process entry — installed by boot when PSXPORT_DEBUG_SERVER is set. NO-OP otherwise.
-  void start(Core* c);
+  void start(Core *c);
 
   // Called once per frame from the native frame loop. Services at most one queued command; the
   // Core* is stashed for the `call` subcommand to run guest fns at this frame boundary.
-  void service(Core* c);
+  void service(Core *c);
 
   // Pause / step gating polled by the frame loop.
-  bool isPaused()      const { return mPaused; }
-  bool stepPending()   const { return mStep > 0; }
-  void consumeStep()          { if (mStep > 0) mStep--; }
-  void setPaused(bool p)      { mPaused = p; mStep = 0; }
-  void togglePause()          { mPaused = !mPaused; mStep = 0; }
-  void addStep(int n)         { mPaused = true; mStep += n; }
+  bool isPaused() const {
+    return mPaused;
+  }
+  bool stepPending() const {
+    return mStep > 0;
+  }
+  void consumeStep() {
+    if (mStep > 0) {
+      mStep--;
+    }
+  }
+  void setPaused(bool p) {
+    mPaused = p;
+    mStep = 0;
+  }
+  void togglePause() {
+    mPaused = !mPaused;
+    mStep = 0;
+  }
+  void addStep(int n) {
+    mPaused = true;
+    mStep += n;
+  }
 
   // Held-input mask (set by press/release/hold subcommands, applied to c->game->pad.driveHold).
-  unsigned short heldMask() const   { return mHeld; }
-  void setHeldMask(unsigned short m){ mHeld = m; }
+  unsigned short heldMask() const {
+    return mHeld;
+  }
+  void setHeldMask(unsigned short m) {
+    mHeld = m;
+  }
 
   // Command dispatcher's live Core pointer (set at the top of service()); nullptr outside a frame.
-  Core* ctx() const { return mCtx; }
+  Core *ctx() const {
+    return mCtx;
+  }
 
 private:
-  bool  mPaused = false;
-  int   mStep   = 0;
-  unsigned short mHeld = 0xFFFF;   // active-low held mask (all released)
+  bool mPaused = false;
+  int mStep = 0;
+  unsigned short mHeld = 0xFFFF; // active-low held mask (all released)
 
   // Handoff between the TCP server thread and the MAIN thread. mMtx guards mReqPending/mRespReady/
   // mCmd/mRespBuf/mRespLen. See dbg_server.cpp for the timed-wait dance in dbg_submit.
-  bool  mStarted = false;
-  Core* mCtx = nullptr;
-  pthread_mutex_t mMtx  = PTHREAD_MUTEX_INITIALIZER;
-  pthread_cond_t  mDone = PTHREAD_COND_INITIALIZER;   // signalled by main when a result is ready
-  char   mCmd[512] = {};      // command awaiting service (server -> main)
-  int    mReqPending = 0;     // 1 while a command is queued for the main thread
-  int    mRespReady  = 0;     // 1 once the main thread has produced a result
-  char*  mRespBuf = nullptr;  // malloc'd result (main -> server); server frees after sending
+  bool mStarted = false;
+  Core *mCtx = nullptr;
+  pthread_mutex_t mMtx = PTHREAD_MUTEX_INITIALIZER;
+  pthread_cond_t mDone = PTHREAD_COND_INITIALIZER; // signalled by main when a result is ready
+  char mCmd[512] = {};                             // command awaiting service (server -> main)
+  int mReqPending = 0;                             // 1 while a command is queued for the main thread
+  int mRespReady = 0;                              // 1 once the main thread has produced a result
+  char *mRespBuf = nullptr;                        // malloc'd result (main -> server); server frees after sending
   size_t mRespLen = 0;
-  friend class DbgServerInternals;   // dbg_server.cpp accessor helper (see impl file)
+  friend class DbgServerInternals; // dbg_server.cpp accessor helper (see impl file)
 };

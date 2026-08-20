@@ -35,26 +35,53 @@ using psx::ui::RowKind;
 
 // Every id the shipped assets/rml/menu.rml actually authors, plus debug_ids, which the model knows
 // and the shipped document does NOT use (it is reachable by a game shipping its own menu.rml).
-static const char* const kRealToggles[] = {
-    "aspect", "ires", "fps60", "ssao", "light", "shadows",
-    "debug_ids", "debug_quads", "debug_objects",
+static const char *const kRealToggles[] = {
+    "aspect",
+    "ires",
+    "fps60",
+    "ssao",
+    "light",
+    "shadows",
+    "debug_ids",
+    "debug_quads",
+    "debug_objects",
 };
-static const char* const kRealAdjusts[] = {
-    "ssao_strength", "ssao_radius", "ssao_bias", "ssao_range",
-    "light_dir_x", "light_dir_y", "light_dir_z",
-    "light_ambient", "light_diffuse", "shadow_strength",
+static const char *const kRealAdjusts[] = {
+    "ssao_strength",
+    "ssao_radius",
+    "ssao_bias",
+    "ssao_range",
+    "light_dir_x",
+    "light_dir_y",
+    "light_dir_z",
+    "light_ambient",
+    "light_diffuse",
+    "shadow_strength",
 };
 // Near-misses: plausible typos, wrong-kind lookups, and an id from the OTHER table. Each one must
 // come back false, and `warp_area` is in here on purpose — it is an adjust row whose model is
 // WarpControl, not Mods, so ModRowModel must NOT claim it.
-static const char* const kNotToggles[] = {
-    "ssoa", "aspect_ratio", "ASPECT", "", "ssao_strength", "warp_area", "quit", "music_0",
+static const char *const kNotToggles[] = {
+    "ssoa",
+    "aspect_ratio",
+    "ASPECT",
+    "",
+    "ssao_strength",
+    "warp_area",
+    "quit",
+    "music_0",
 };
-static const char* const kNotAdjusts[] = {
-    "ssao_strenght", "light_dir_w", "", "aspect", "warp_area", "shadow", "close",
+static const char *const kNotAdjusts[] = {
+    "ssao_strenght",
+    "light_dir_w",
+    "",
+    "aspect",
+    "warp_area",
+    "shadow",
+    "close",
 };
 
-static std::string text_of(const Mods& m, RowKind k, const char* id) {
+static std::string text_of(const Mods &m, RowKind k, const char *id) {
   std::string out = "<not-set>";
   ModRowModel::value_text(m, k, id, out);
   return out;
@@ -63,15 +90,26 @@ static std::string text_of(const Mods& m, RowKind k, const char* id) {
 // ---- 1. the discriminator, run against BOTH classes -----------------------------------------------
 static void test_knows_answers_both_ways(void) {
   int yes = 0, no = 0;
-  for (const char* id : kRealToggles) { CHECK(ModRowModel::knows(RowKind::Toggle, id)); yes++; }
-  for (const char* id : kRealAdjusts) { CHECK(ModRowModel::knows(RowKind::Adjust, id)); yes++; }
-  for (const char* id : kNotToggles)  { CHECK(!ModRowModel::knows(RowKind::Toggle, id)); no++; }
-  for (const char* id : kNotAdjusts)  { CHECK(!ModRowModel::knows(RowKind::Adjust, id)); no++; }
+  for (const char *id : kRealToggles) {
+    CHECK(ModRowModel::knows(RowKind::Toggle, id));
+    yes++;
+  }
+  for (const char *id : kRealAdjusts) {
+    CHECK(ModRowModel::knows(RowKind::Adjust, id));
+    yes++;
+  }
+  for (const char *id : kNotToggles) {
+    CHECK(!ModRowModel::knows(RowKind::Toggle, id));
+    no++;
+  }
+  for (const char *id : kNotAdjusts) {
+    CHECK(!ModRowModel::knows(RowKind::Adjust, id));
+    no++;
+  }
   // Action rows are not this model's business at all.
   CHECK(!ModRowModel::knows(RowKind::Action, "quit"));
   CHECK(!ModRowModel::knows(RowKind::None, "aspect"));
-  fprintf(stderr, "    [model] knows(): %d ids that MUST be known, %d that MUST NOT — both checked\n",
-          yes, no);
+  fprintf(stderr, "    [model] knows(): %d ids that MUST be known, %d that MUST NOT — both checked\n", yes, no);
   // The tables' own counts must match what this file believes exists, or the lists above have
   // drifted and every "MUST NOT be known" case is testing a shrunken table.
   CHECK_EQ(ModRowModel::toggle_count(), (int)(sizeof(kRealToggles) / sizeof(kRealToggles[0])));
@@ -81,19 +119,21 @@ static void test_knows_answers_both_ways(void) {
 // ---- 2. every label of every multi-state row --------------------------------------------------------
 static void test_toggle_labels_cover_every_state(void) {
   Mods m;
-  static const char* const kAspect[] = { "Vanilla", "16:9", "21:9", "Auto" };
+  static const char *const kAspect[] = {"Vanilla", "16:9", "21:9", "Auto"};
   for (int i = 0; i < 4; i++) {
     m.aspect = i;
     CHECK_STREQ(text_of(m, RowKind::Toggle, "aspect").c_str(), kAspect[i]);
   }
   // 0 is Auto for this row and 1 is Vanilla — the two rows' index conventions genuinely differ.
-  static const char* const kIres[] = { "Auto", "Vanilla", "X2", "X3", "X4" };
+  static const char *const kIres[] = {"Auto", "Vanilla", "X2", "X3", "X4"};
   for (int i = 0; i < 5; i++) {
     m.ires = i;
     CHECK_STREQ(text_of(m, RowKind::Toggle, "ires").c_str(), kIres[i]);
   }
-  m.ssao = 0; CHECK_STREQ(text_of(m, RowKind::Toggle, "ssao").c_str(), "Off");
-  m.ssao = 1; CHECK_STREQ(text_of(m, RowKind::Toggle, "ssao").c_str(), "On");
+  m.ssao = 0;
+  CHECK_STREQ(text_of(m, RowKind::Toggle, "ssao").c_str(), "Off");
+  m.ssao = 1;
+  CHECK_STREQ(text_of(m, RowKind::Toggle, "ssao").c_str(), "On");
 }
 
 // ---- 3. THE COLLAPSE THAT WOULD HAVE BEEN SILENT ------------------------------------------------------
@@ -104,13 +144,13 @@ static void test_toggle_labels_cover_every_state(void) {
 // for the table rewrite: it is the case a naive generic clamp fails.
 static void test_out_of_range_falls_back_per_row(void) {
   Mods m;
-  for (int bad : { -1, 4, 99, 1 << 20 }) {
+  for (int bad : {-1, 4, 99, 1 << 20}) {
     m.aspect = bad;
-    CHECK_STREQ(text_of(m, RowKind::Toggle, "aspect").c_str(), "Vanilla");   // index 0
+    CHECK_STREQ(text_of(m, RowKind::Toggle, "aspect").c_str(), "Vanilla"); // index 0
   }
-  for (int bad : { -1, 5, 99, 1 << 20 }) {
+  for (int bad : {-1, 5, 99, 1 << 20}) {
     m.ires = bad;
-    CHECK_STREQ(text_of(m, RowKind::Toggle, "ires").c_str(), "Vanilla");     // index 1, NOT "Auto"
+    CHECK_STREQ(text_of(m, RowKind::Toggle, "ires").c_str(), "Vanilla"); // index 1, NOT "Auto"
     CHECK(text_of(m, RowKind::Toggle, "ires") != "Auto");
   }
 }
@@ -121,17 +161,19 @@ static void test_toggle_cycles_and_wraps(void) {
   // A bool row: 0 <-> 1. debug_quads is deliberately chosen because it does NOT persist, so this
   // case touches no file at all.
   m.debug_quads = 0;
-  ModRowModel::toggle(m, "debug_quads"); CHECK_EQ(m.debug_quads, 1);
-  ModRowModel::toggle(m, "debug_quads"); CHECK_EQ(m.debug_quads, 0);
+  ModRowModel::toggle(m, "debug_quads");
+  CHECK_EQ(m.debug_quads, 1);
+  ModRowModel::toggle(m, "debug_quads");
+  CHECK_EQ(m.debug_quads, 0);
 
   m.aspect = 0;
-  for (int expect : { 1, 2, 3, 0, 1 }) {
+  for (int expect : {1, 2, 3, 0, 1}) {
     ModRowModel::toggle(m, "aspect");
     CHECK_EQ(m.aspect, expect);
   }
   // Five states, wrapping 4 -> 0. The old hand-written form was `ires += 1; if (ires > 4) ires = 0`.
   m.ires = 0;
-  for (int expect : { 1, 2, 3, 4, 0, 1 }) {
+  for (int expect : {1, 2, 3, 4, 0, 1}) {
     ModRowModel::toggle(m, "ires");
     CHECK_EQ(m.ires, expect);
   }
@@ -146,9 +188,13 @@ static void test_adjust_clamps_at_both_ends(void) {
   ModRowModel::adjust(m, "ssao_strength", -1);
   CHECK_STREQ(text_of(m, RowKind::Adjust, "ssao_strength").c_str(), "1.00");
   // Walk hard into both stops. 2.0 high, 0.0 low.
-  for (int i = 0; i < 200; i++) ModRowModel::adjust(m, "ssao_strength", +1);
+  for (int i = 0; i < 200; i++) {
+    ModRowModel::adjust(m, "ssao_strength", +1);
+  }
   CHECK_STREQ(text_of(m, RowKind::Adjust, "ssao_strength").c_str(), "2.00");
-  for (int i = 0; i < 200; i++) ModRowModel::adjust(m, "ssao_strength", -1);
+  for (int i = 0; i < 200; i++) {
+    ModRowModel::adjust(m, "ssao_strength", -1);
+  }
   CHECK_STREQ(text_of(m, RowKind::Adjust, "ssao_strength").c_str(), "0.00");
 
   // Per-row precision is part of what the row displays: 3 decimals for bias, 1 for radius.
@@ -195,7 +241,7 @@ int main(void) {
   // Setting the Override layer directly is the hermetic form — no environment, no process state.
   // It is REMOVED at the end: a hermetic test that leaves a file behind in whatever directory it
   // happened to be run from is not hermetic, it just fails somewhere else later.
-  const char* kSettings = "scratch_test_ui_mod_row_model_settings.ini";
+  const char *kSettings = "scratch_test_ui_mod_row_model_settings.ini";
   psx::config::cv_settings_path.set_text(psx::config::Layer::Override, kSettings);
 
   RUN(knows_answers_both_ways);
@@ -206,6 +252,6 @@ int main(void) {
   RUN(unknown_id_reports_rather_than_pretending);
 
   std::error_code ec;
-  std::filesystem::remove(kSettings, ec);   // best-effort; the rows above may never have saved
+  std::filesystem::remove(kSettings, ec); // best-effort; the rows above may never have saved
   return pt_summary();
 }

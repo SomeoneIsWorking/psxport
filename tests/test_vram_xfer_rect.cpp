@@ -1,7 +1,7 @@
 // GP0 A0 (CPU->VRAM) and C0 (VRAM->CPU) share vram_xfer_rect().  A disagreement
 // here corrupts save/modify/restore flows while each direction can still look correct alone.
-#include "testutil.h"
 #include "../runtime/recomp/gpu_native_internal.h"
+#include "testutil.h"
 
 static void test_decodes_coordinate_fields(void) {
   const VramRect r = vram_xfer_rect(0x01FF03FFu, 0x01FE03FDu);

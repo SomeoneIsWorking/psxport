@@ -29,7 +29,7 @@ static void test_a_fresh_instance_is_invalid_and_not_the_stock_values(void) {
   // "never set" reads as "set to stock".
   CHECK(pp.geomOfx() != 160.0f);
   CHECK(pp.geomOfy() != 120.0f);
-  CHECK(pp.geomH()   != 350.0f);
+  CHECK(pp.geomH() != 350.0f);
 }
 
 // Validity needs BOTH setters. The offset and the screen distance are separate libgte calls at
@@ -67,13 +67,13 @@ static void test_the_stock_projection_round_trips(void) {
 // (journal 5900/5926). So the widened value must arrive here verbatim.
 static void test_a_widened_center_is_stored_verbatim(void) {
   ProjParams wide;
-  wide.setGeomOffset(214.0f, 120.0f);     // 16:9
+  wide.setGeomOffset(214.0f, 120.0f); // 16:9
   wide.setGeomScreen(350.0f);
   CHECK_EQ((int)wide.geomOfx(), 214);
   CHECK_EQ((int)wide.geomOfy(), 120);
 
   ProjParams ultrawide;
-  ultrawide.setGeomOffset(280.0f, 120.0f);  // 21:9
+  ultrawide.setGeomOffset(280.0f, 120.0f); // 21:9
   ultrawide.setGeomScreen(350.0f);
   CHECK_EQ((int)ultrawide.geomOfx(), 280);
 }
@@ -87,7 +87,7 @@ static void test_a_second_screen_call_replaces_only_H(void) {
   ProjParams pp;
   pp.setGeomOffset(160.0f, 120.0f);
   pp.setGeomScreen(350.0f);
-  pp.setGeomScreen(233.0f);               // the narrowed per-area draw range
+  pp.setGeomScreen(233.0f); // the narrowed per-area draw range
   CHECK_EQ((int)pp.geomH(), 233);
   CHECK_EQ((int)pp.geomOfx(), 160);
   CHECK_EQ((int)pp.geomOfy(), 120);

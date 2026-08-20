@@ -31,52 +31,58 @@ class WarpControl;
 // ---- what a row is wired to -----------------------------------------------------------------------
 class RowBinding {
 public:
-    virtual ~RowBinding() = default;
+  virtual ~RowBinding() = default;
 
-    // Current display text. `false` means "leave the authored placeholder alone" — an action row
-    // has no state to show, and its `<value>` in menu.rml is a glyph the document chose.
-    virtual bool text(std::string& out) const { (void)out; return false; }
+  // Current display text. `false` means "leave the authored placeholder alone" — an action row
+  // has no state to show, and its `<value>` in menu.rml is a glyph the document chose.
+  virtual bool text(std::string &out) const {
+    (void)out;
+    return false;
+  }
 
-    // Enter / A / click use dir = +1; Left and Right use -1 / +1 on a row that steps with arrows.
-    virtual void step(int dir) = 0;
+  // Enter / A / click use dir = +1; Left and Right use -1 / +1 on a row that steps with arrows.
+  virtual void step(int dir) = 0;
 
-    // True when Left/Right should step this row. False rows let Left/Right fall through to the tab
-    // bar, which is how a toggle row's arrows change TAB rather than the value — existing
-    // behaviour, preserved deliberately.
-    virtual bool steps_with_arrows() const { return false; }
+  // True when Left/Right should step this row. False rows let Left/Right fall through to the tab
+  // bar, which is how a toggle row's arrows change TAB rather than the value — existing
+  // behaviour, preserved deliberately.
+  virtual bool steps_with_arrows() const {
+    return false;
+  }
 };
 
-std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods* mods, std::string id);
-std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods* mods, std::string id);
-std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl* warp);
+std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id);
+std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id);
+std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp);
 std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action);
 
 // ---- the row widget -------------------------------------------------------------------------------
 class MenuRow : public Component {
 public:
-    // `root` is the authored `<select-button>`; `on_click` is invoked before the binding steps, so
-    // the document can move focus to the clicked row exactly as the keyboard path does.
-    MenuRow(Rml::Element* root, std::unique_ptr<RowBinding> binding,
-            std::function<void(MenuRow&)> on_click);
+  // `root` is the authored `<select-button>`; `on_click` is invoked before the binding steps, so
+  // the document can move focus to the clicked row exactly as the keyboard path does.
+  MenuRow(Rml::Element *root, std::unique_ptr<RowBinding> binding, std::function<void(MenuRow &)> on_click);
 
-    // Refresh the `<value>` text from the binding. Called by the base's per-frame walk.
-    void update() override;
+  // Refresh the `<value>` text from the binding. Called by the base's per-frame walk.
+  void update() override;
 
-    void step(int dir);
-    bool steps_with_arrows() const { return mBinding && mBinding->steps_with_arrows(); }
+  void step(int dir);
+  bool steps_with_arrows() const {
+    return mBinding && mBinding->steps_with_arrows();
+  }
 
-    // One line describing this row AS IT CURRENTLY IS — its authored kind/id, its label, and the
-    // text actually in the DOM (decoded, i.e. what the font would draw). This is what makes the
-    // menu enumerable from the REPL without a window, so "did the restructure lose a row?" is a
-    // question a headless run answers rather than one a human answers by reading two files.
-    std::string describe() const;
+  // One line describing this row AS IT CURRENTLY IS — its authored kind/id, its label, and the
+  // text actually in the DOM (decoded, i.e. what the font would draw). This is what makes the
+  // menu enumerable from the REPL without a window, so "did the restructure lose a row?" is a
+  // question a headless run answers rather than one a human answers by reading two files.
+  std::string describe() const;
 
 private:
-    std::unique_ptr<RowBinding>   mBinding;
-    std::function<void(MenuRow&)> mOnClick;
-    Rml::Element*                 mValue = nullptr;
+  std::unique_ptr<RowBinding> mBinding;
+  std::function<void(MenuRow &)> mOnClick;
+  Rml::Element *mValue = nullptr;
 };
 
-}  // namespace psx::ui
+} // namespace psx::ui
 
 #endif

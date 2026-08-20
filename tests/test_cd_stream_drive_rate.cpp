@@ -25,10 +25,10 @@
 #include "cd.h"
 
 static void test_speed_from_mode_is_the_hardware_rate(void) {
-  CHECK_EQ(cd_stream_sectors_per_sec(0x00), 75);    // single speed
-  CHECK_EQ(cd_stream_sectors_per_sec(0x80), 150);   // Setmode bit 0x80 = double speed
-  CHECK_EQ(cd_stream_sectors_per_sec(0xE0), 150);   // what the guest actually programs for STR
-  CHECK_EQ(cd_stream_sectors_per_sec(0x20), 75);    // whole-sector framing does not touch the rate
+  CHECK_EQ(cd_stream_sectors_per_sec(0x00), 75);  // single speed
+  CHECK_EQ(cd_stream_sectors_per_sec(0x80), 150); // Setmode bit 0x80 = double speed
+  CHECK_EQ(cd_stream_sectors_per_sec(0xE0), 150); // what the guest actually programs for STR
+  CHECK_EQ(cd_stream_sectors_per_sec(0x20), 75);  // whole-sector framing does not touch the rate
 }
 
 // At t=0 nothing has elapsed, so nothing is owed — but the FIRST sector must not be blocked, or the
@@ -63,7 +63,7 @@ static void test_behind_budget_delivers_the_shortfall(void) {
 // the movie racing. Never negative, so a caller can use the value as a loop count directly.
 static void test_caught_up_or_ahead_is_zero_never_negative(void) {
   CHECK_EQ(cd_stream_sectors_due(1000000000ull, 150, 150), 0);
-  CHECK_EQ(cd_stream_sectors_due(1000000000ull, 150, 400), 0);   // ahead: still 0, not -250
+  CHECK_EQ(cd_stream_sectors_due(1000000000ull, 150, 400), 0); // ahead: still 0, not -250
   CHECK_EQ(cd_stream_sectors_due(0, 150, 999999), 0);
 }
 
@@ -71,7 +71,7 @@ static void test_caught_up_or_ahead_is_zero_never_negative(void) {
 // whole backlog at once would burst thousands of sectors and be exactly the unpaced behaviour this
 // exists to stop, so the per-call answer is bounded — and the bound is stated, not silent.
 static void test_a_long_gap_is_bounded_per_call(void) {
-  const int due = cd_stream_sectors_due(60ull * 1000000000ull, 150, 0);   // a whole minute owed
+  const int due = cd_stream_sectors_due(60ull * 1000000000ull, 150, 0); // a whole minute owed
   CHECK(due > 0);
   CHECK(due <= CD_STREAM_MAX_BURST);
 }

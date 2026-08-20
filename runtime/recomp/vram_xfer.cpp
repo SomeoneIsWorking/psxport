@@ -40,8 +40,8 @@
 // `[vramguard] CLOBBER ...` line names the exact write that hit the atlas — turning a rare visual into a
 // deterministic, pinpointed root cause.
 #include "core.h"
-#include <lucent/log.h>
 #include "gpu_native_internal.h"
+#include <lucent/log.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -49,7 +49,9 @@
 // wrap, but the engine's own atlas/render transfers never do, so an out-of-page base/extent flags a bad
 // descriptor (the corruption vector). w<=0 / h<=0 are no-ops the callers already skip; treat as in-page.
 static inline int rect_in_page(int x, int y, int w, int h) {
-  if (w <= 0 || h <= 0) return 1;
+  if (w <= 0 || h <= 0) {
+    return 1;
+  }
   return x >= 0 && y >= 0 && x + w <= VRAM_W && y + h <= VRAM_H;
 }
 static inline int rects_overlap(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh) {
@@ -77,34 +79,54 @@ static inline int rects_overlap(int ax, int ay, int aw, int ah, int bx, int by, 
 // buffer of a double-buffered game is not the displayed rect, so it can still be registered if
 // sampled — such a hit is reported with the "sampled" tag so it triages at a glance rather than
 // being silently filtered out.
-void GpuState::vram_register_sampled(int x, int y, int w, int h, const char* tag) {
-  if (w <= 0 || h <= 0) return;
-  if (!lucent::channel_on("vramguard")) return;   // pure diagnostic bookkeeping; off = no cost
-  if (rects_overlap(x, y, w, h, s_disp_x, s_disp_y, s_disp_w, s_disp_h)) return;
+void GpuState::vram_register_sampled(int x, int y, int w, int h, const char *tag) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+  if (!lucent::channel_on("vramguard")) {
+    return; // pure diagnostic bookkeeping; off = no cost
+  }
+  if (rects_overlap(x, y, w, h, s_disp_x, s_disp_y, s_disp_w, s_disp_h)) {
+    return;
+  }
   vram_register_atlas(x, y, w, h, tag);
 }
 
-void GpuState::vram_register_atlas(int x, int y, int w, int h, const char* tag) {
-  if (w <= 0 || h <= 0) return;
+void GpuState::vram_register_atlas(int x, int y, int w, int h, const char *tag) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
   // Refresh an existing region with the same origin in place (the game re-uploads pages each area load).
   for (int i = 0; i < s_vg_n; i++) {
     if (s_vg[i].x == x && s_vg[i].y == y) {
-      s_vg[i].w = w; s_vg[i].h = h; s_vg[i].frame = s_frame; s_vg[i].live = 1;
+      s_vg[i].w = w;
+      s_vg[i].h = h;
+      s_vg[i].frame = s_frame;
+      s_vg[i].live = 1;
       snprintf(s_vg[i].tag, sizeof s_vg[i].tag, "%s", tag ? tag : "tex");
       return;
     }
   }
-  lucent::debug("vramguard", "register {} ({},{} {}x{}) [{} protected]",
-                tag ? tag : "tex", x, y, w, h, s_vg_n + 1);
+  lucent::debug("vramguard", "register {} ({},{} {}x{}) [{} protected]", tag ? tag : "tex", x, y, w, h, s_vg_n + 1);
   if (s_vg_n >= VG_MAX) {
     // Full: recycle the oldest slot (the registry is a moving window of currently-resident pages).
-    int oldest = 0; for (int i = 1; i < s_vg_n; i++) if (s_vg[i].frame < s_vg[oldest].frame) oldest = i;
+    int oldest = 0;
+    for (int i = 1; i < s_vg_n; i++) {
+      if (s_vg[i].frame < s_vg[oldest].frame) {
+        oldest = i;
+      }
+    }
     s_vg[oldest] = VgRegion{x, y, w, h, s_frame, 1, {0}};
     snprintf(s_vg[oldest].tag, sizeof s_vg[oldest].tag, "%s", tag ? tag : "tex");
     return;
   }
-  VgRegion& r = s_vg[s_vg_n++];
-  r.x = x; r.y = y; r.w = w; r.h = h; r.frame = s_frame; r.live = 1;
+  VgRegion &r = s_vg[s_vg_n++];
+  r.x = x;
+  r.y = y;
+  r.w = w;
+  r.h = h;
+  r.frame = s_frame;
+  r.live = 1;
   snprintf(r.tag, sizeof r.tag, "%s", tag ? tag : "tex");
 }
 
@@ -115,38 +137,75 @@ void GpuState::vram_register_atlas(int x, int y, int w, int h, const char* tag) 
 // kind it checked, and how many clobbers and out-of-page rects that produced. A run whose census shows
 // 0 registered regions has proven NOTHING about clobbers, and this line says so out loud.
 void GpuState::vram_guard_report() {
-  if (!lucent::channel_on("vramguard")) return;
-  if (s_vg_reported_frame == (int)s_frame) return;
+  if (!lucent::channel_on("vramguard")) {
+    return;
+  }
+  if (s_vg_reported_frame == (int)s_frame) {
+    return;
+  }
   s_vg_reported_frame = (int)s_frame;
   const long total = s_vg_checks[0] + s_vg_checks[1] + s_vg_checks[2] + s_vg_checks[3] + s_vg_checks[4];
   lucent::info("vramguard",
                "census f{}: {} atlas region(s) registered; {} write(s) checked "
                "(native={} A0={} 80copy={} fill={} blank={}); {} clobber(s), {} out-of-page{}",
-               s_frame, s_vg_n, total, s_vg_checks[0], s_vg_checks[1], s_vg_checks[2],
-               s_vg_checks[3], s_vg_checks[4], s_vg_clobbers, s_vg_oob,
-               s_vg_n == 0 ? "  <-- NO ATLAS REGISTERED: a clobber CANNOT be detected in this run"
-                           : "");
+               s_frame,
+               s_vg_n,
+               total,
+               s_vg_checks[0],
+               s_vg_checks[1],
+               s_vg_checks[2],
+               s_vg_checks[3],
+               s_vg_checks[4],
+               s_vg_clobbers,
+               s_vg_oob,
+               s_vg_n == 0 ? "  <-- NO ATLAS REGISTERED: a clobber CANNOT be detected in this run" : "");
 }
 
-void GpuState::vram_guard_check(const char* path, int x, int y, int w, int h, uint32_t src) {
-  if (!lucent::channel_on("vramguard")) return;
-  if (w <= 0 || h <= 0) return;
+void GpuState::vram_guard_check(const char *path, int x, int y, int w, int h, uint32_t src) {
+  if (!lucent::channel_on("vramguard")) {
+    return;
+  }
+  if (w <= 0 || h <= 0) {
+    return;
+  }
   // Census first, so a write is counted even when it is clean — that count IS the denominator.
   switch (path ? path[0] : 0) {
-    case 'n': s_vg_checks[0]++; break;
-    case 'A': s_vg_checks[1]++; break;
-    case '8': s_vg_checks[2]++; break;
-    case 'f': s_vg_checks[3]++; break;
-    case 'b': s_vg_checks[4]++; break;
-    default: break;
+  case 'n':
+    s_vg_checks[0]++;
+    break;
+  case 'A':
+    s_vg_checks[1]++;
+    break;
+  case '8':
+    s_vg_checks[2]++;
+    break;
+  case 'f':
+    s_vg_checks[3]++;
+    break;
+  case 'b':
+    s_vg_checks[4]++;
+    break;
+  default:
+    break;
   }
 
   // (a) Out-of-page base/extent: a correct atlas/render transfer is always wholly inside VRAM; an
   // out-of-page rect is a garbage descriptor that the vram() wrap would silently fold onto live VRAM.
   if (!rect_in_page(x, y, w, h)) {
     s_vg_oob++;
-    if (s_vg_oob_log++ < 40)
-      lucent::info("vramguard", "OUT-OF-PAGE {} f{} rect=({},{} {}x{}) src=0x{:08X} node=0x{:08X} -> wraps onto VRAM (likely the clobber vector)", path ? path : "(null)", s_frame, x, y, w, h, src, s_cur_node);
+    if (s_vg_oob_log++ < 40) {
+      lucent::info("vramguard",
+                   "OUT-OF-PAGE {} f{} rect=({},{} {}x{}) src=0x{:08X} node=0x{:08X} -> wraps onto VRAM (likely the "
+                   "clobber vector)",
+                   path ? path : "(null)",
+                   s_frame,
+                   x,
+                   y,
+                   w,
+                   h,
+                   src,
+                   s_cur_node);
+    }
   }
 
   // (b) Clobber of a registered, resident atlas region by a NON-atlas writer. Atlas uploads themselves
@@ -165,9 +224,13 @@ void GpuState::vram_guard_check(const char* path, int x, int y, int w, int h, ui
   // that is precisely the corruption this guard exists to name.
   const char p0 = path ? path[0] : 0;
   const int is_upload = (p0 == 'n' || p0 == 'A');
-  if (is_upload) return;
+  if (is_upload) {
+    return;
+  }
   for (int i = 0; i < s_vg_n; i++) {
-    if (!s_vg[i].live) continue;
+    if (!s_vg[i].live) {
+      continue;
+    }
     if (rects_overlap(x, y, w, h, s_vg[i].x, s_vg[i].y, s_vg[i].w, s_vg[i].h)) {
       s_vg_clobbers++;
       // ONE LINE PER (writer, region) PAIR. A clobber that repeats every frame is one fact, not
@@ -175,11 +238,27 @@ void GpuState::vram_guard_check(const char* path, int x, int y, int w, int h, ui
       // clobber that appears later — which, for a bug reproduced by playing to a specific moment, is
       // the only one that matters. The census still counts every occurrence, so the total is not lost.
       const int wclass = (p0 == 'f') ? 0 : (p0 == '8') ? 1 : (p0 == 'b') ? 2 : 3;
-      if (s_vg_seen[wclass][i]) return;
+      if (s_vg_seen[wclass][i]) {
+        return;
+      }
       s_vg_seen[wclass][i] = 1;
-      if (s_vg_clobber_log++ < 80)
-        lucent::info("vramguard", "CLOBBER {} f{} rect=({},{} {}x{}) HITS atlas[{}] ({},{} {}x{}) src=0x{:08X} node=0x{:08X}", path ? path : "(null)", s_frame, x, y, w, h, s_vg[i].tag,
-                     s_vg[i].x, s_vg[i].y, s_vg[i].w, s_vg[i].h, src, s_cur_node);
+      if (s_vg_clobber_log++ < 80) {
+        lucent::info("vramguard",
+                     "CLOBBER {} f{} rect=({},{} {}x{}) HITS atlas[{}] ({},{} {}x{}) src=0x{:08X} node=0x{:08X}",
+                     path ? path : "(null)",
+                     s_frame,
+                     x,
+                     y,
+                     w,
+                     h,
+                     s_vg[i].tag,
+                     s_vg[i].x,
+                     s_vg[i].y,
+                     s_vg[i].w,
+                     s_vg[i].h,
+                     src,
+                     s_cur_node);
+      }
       return;
     }
   }

@@ -18,25 +18,27 @@
 // false and all methods no-op. In standalone the sole Game owns the UI.
 #ifndef PSXPORT_RMLUI_OVERLAY_H
 #define PSXPORT_RMLUI_OVERLAY_H
-#include <string>
 #include <SDL3/SDL.h>
 #include <cstdint>
+#include <string>
 
 #ifdef __cplusplus
 #include <memory>
 
 class Game;
 
-namespace psx::ui { class MenuDocument; }
+namespace psx::ui {
+class MenuDocument;
+}
 
 class RmlOverlay {
 public:
-  Game* game = nullptr;   // back-pointer wired by Game()
+  Game *game = nullptr; // back-pointer wired by Game()
 
   RmlOverlay();
   ~RmlOverlay();
-  RmlOverlay(const RmlOverlay&)            = delete;
-  RmlOverlay& operator=(const RmlOverlay&) = delete;
+  RmlOverlay(const RmlOverlay &) = delete;
+  RmlOverlay &operator=(const RmlOverlay &) = delete;
 
   // Bring RmlUi up on the port's existing SDL_GPU device. Call once after the device exists.
   // No-op if already inited.
@@ -52,26 +54,31 @@ public:
   // re-derived here from SDL_GetWindowSize, which exists in one leg only. `target_fmt` is the
   // colour format of the pass the overlay will record into (swapchain windowed, present image
   // headless).
-  void init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat target_fmt,
-            int sink_w, int sink_h);
+  void init(SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h);
   void shutdown();
 
   // Feed every SDL event (ESC toggles the menu; F1 debugger). Safe if not inited.
-  void event(const SDL_Event* e);
+  void event(const SDL_Event *e);
   // CPU-side per-frame update (RmlUi context + live row/readout refresh). Safe if not inited.
   void newFrame();
   // Record the menu geometry into the present render pass. No-op when menu is hidden / not inited.
-  void recordGpu(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* rp, int win_w, int win_h);
+  void recordGpu(SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int win_w, int win_h);
 
   // `inited()` = RmlUi is up and owns resources. It is NOT "there is a menu": LoadDocument can fail
   // (typically a missing PSXPORT_ASSET_DIR) and leave a live context with no document. Ask
   // `hasMenu()` before anything that assumes a UI exists — conflating the two is what let a failed
   // asset load still log "overlay up".
-  bool inited() const { return mInited; }
-  bool hasMenu() const { return mMenu != nullptr; }
+  bool inited() const {
+    return mInited;
+  }
+  bool hasMenu() const {
+    return mMenu != nullptr;
+  }
   bool visible() const;
   void setVisible(bool v);
-  void setOptionsMode(bool v) { mOptionsMode = v; }
+  void setOptionsMode(bool v) {
+    mOptionsMode = v;
+  }
 
   // Live world readout (camera/Tomba position + current stage). Pushed each frame from
   // overlay_glue (which gates the push on Sbs::shownCore()).
@@ -86,17 +93,17 @@ public:
   // instrument the project uses. Same class of blindness as the windowed-only init that was already
   // removed, and the same answer: the window is a SINK, not the only way in. Host UI state only.
   void selectTab(int index);
-  bool sendKey(int sdl_keycode);   // false = the menu did not claim that key
-  void dumpMenu() const;           // enumerate every tab/pane/row + its live value
+  bool sendKey(int sdl_keycode); // false = the menu did not claim that key
+  void dumpMenu() const;         // enumerate every tab/pane/row + its live value
 
 private:
-  bool mInited      = false;
-  bool mOptionsMode = false;    // stands in for the game's in-game Options menu
+  bool mInited = false;
+  bool mOptionsMode = false; // stands in for the game's in-game Options menu
 
-  SDL_Window* mWin = nullptr;
-  void* mCtx    = nullptr;      // Rml::Context*        (void* to keep Rml headers out of ours)
-  void* mSys    = nullptr;      // SystemInterface_SDL*
-  void* mRender = nullptr;      // RmlRenderInterfaceGpu*
+  SDL_Window *mWin = nullptr;
+  void *mCtx = nullptr;    // Rml::Context*        (void* to keep Rml headers out of ours)
+  void *mSys = nullptr;    // SystemInterface_SDL*
+  void *mRender = nullptr; // RmlRenderInterfaceGpu*
 
   // The UI. Null when LoadDocument failed — which is exactly what hasMenu() reports.
   std::unique_ptr<psx::ui::MenuDocument> mMenu;

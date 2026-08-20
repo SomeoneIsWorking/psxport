@@ -5,10 +5,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void* MDEC_NewState(void);
-void  MDEC_FreeState(void* p);
-void  MDEC_BindState(void* p);   // make `p` the active MDEC instance (null -> the shared default)
-void  MDEC_Power(void);          // reset the BOUND MDEC state to power-on
+void *MDEC_NewState(void);
+void MDEC_FreeState(void *p);
+void MDEC_BindState(void *p); // make `p` the active MDEC instance (null -> the shared default)
+void MDEC_Power(void);        // reset the BOUND MDEC state to power-on
 #ifdef __cplusplus
 }
 #endif

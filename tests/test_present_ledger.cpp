@@ -19,8 +19,13 @@ void test_a_captured_but_unpresented_layer_is_reported(void) {
   led.beginFrame();
   led.inRealPresent = true;
   // The exact shape of the panel bug: the 2D chrome is captured, the world is captured AND presented.
-  for (int i = 0; i < 21; i++) led.noteCaptured(2);              // overlay — captured, never emitted
-  for (int i = 0; i < 642; i++) { led.noteCaptured(1); led.noteEmitted(1); }   // world — fine
+  for (int i = 0; i < 21; i++) {
+    led.noteCaptured(2); // overlay — captured, never emitted
+  }
+  for (int i = 0; i < 642; i++) {
+    led.noteCaptured(1);
+    led.noteEmitted(1);
+  } // world — fine
   CHECK_EQ(led.reconcile(/*frame=*/930, /*fatal=*/false), 1);
   CHECK_EQ((int)led.framesDropped, 1);
 }
@@ -29,8 +34,12 @@ void test_two_dropped_layers_are_both_named(void) {
   PresentLedger led;
   led.beginFrame();
   led.inRealPresent = true;
-  for (int i = 0; i < 9; i++)  led.noteCaptured(2);
-  for (int i = 0; i < 12; i++) led.noteCaptured(3);
+  for (int i = 0; i < 9; i++) {
+    led.noteCaptured(2);
+  }
+  for (int i = 0; i < 12; i++) {
+    led.noteCaptured(3);
+  }
   CHECK_EQ(led.reconcile(/*frame=*/1, /*fatal=*/false), 2);
 }
 
@@ -38,8 +47,14 @@ void test_a_matched_frame_does_not_cry_wolf(void) {
   PresentLedger led;
   led.beginFrame();
   led.inRealPresent = true;
-  for (int i = 0; i < 5; i++) { led.noteCaptured(0); led.noteEmitted(0); }
-  for (int i = 0; i < 7; i++) { led.noteCaptured(3); led.noteEmitted(3); }
+  for (int i = 0; i < 5; i++) {
+    led.noteCaptured(0);
+    led.noteEmitted(0);
+  }
+  for (int i = 0; i < 7; i++) {
+    led.noteCaptured(3);
+    led.noteEmitted(3);
+  }
   CHECK_EQ(led.reconcile(/*frame=*/2, /*fatal=*/false), 0);
   CHECK_EQ((int)led.framesDropped, 0);
 }
@@ -51,7 +66,9 @@ void test_presented_without_captured_is_not_a_drop(void) {
   PresentLedger led;
   led.beginFrame();
   led.inRealPresent = true;
-  for (int i = 0; i < 640; i++) led.noteEmitted(1);   // world from the sink, nothing captured
+  for (int i = 0; i < 640; i++) {
+    led.noteEmitted(1); // world from the sink, nothing captured
+  }
   CHECK_EQ(led.reconcile(/*frame=*/3, /*fatal=*/false), 0);
 }
 
@@ -61,8 +78,12 @@ void test_emits_outside_the_real_present_do_not_count(void) {
   PresentLedger led;
   led.beginFrame();
   led.inRealPresent = false;
-  for (int i = 0; i < 4; i++) led.noteCaptured(2);
-  for (int i = 0; i < 4; i++) led.noteEmitted(2);     // the in-between drew them; the real frame did not
+  for (int i = 0; i < 4; i++) {
+    led.noteCaptured(2);
+  }
+  for (int i = 0; i < 4; i++) {
+    led.noteEmitted(2); // the in-between drew them; the real frame did not
+  }
   led.inRealPresent = true;
   CHECK_EQ(led.reconcile(/*frame=*/4, /*fatal=*/false), 1);
 }
@@ -71,7 +92,7 @@ void test_the_shipping_selftest_passes(void) {
   CHECK_EQ(PresentLedger::selftest(), 0);
 }
 
-}  // namespace
+} // namespace
 
 int main(void) {
   RUN(a_captured_but_unpresented_layer_is_reported);

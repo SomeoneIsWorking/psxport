@@ -21,28 +21,32 @@ namespace psx::ui {
 
 class MenuTab : public Component {
 public:
-    MenuTab(Rml::Element* root, std::function<void()> on_click);
+  MenuTab(Rml::Element *root, std::function<void()> on_click);
 };
 
 class MenuTabBar : public Component {
 public:
-    // `root` is the authored `<tab-bar>`; `on_select` is called with the new index whenever the
-    // selection changes, including the initial one.
-    MenuTabBar(Rml::Element* root, std::function<void(int)> on_select);
+  // `root` is the authored `<tab-bar>`; `on_select` is called with the new index whenever the
+  // selection changes, including the initial one.
+  MenuTabBar(Rml::Element *root, std::function<void(int)> on_select);
 
-    int  count() const { return (int)mTabs.size(); }
-    int  active() const { return mActive; }
+  int count() const {
+    return (int)mTabs.size();
+  }
+  int active() const {
+    return mActive;
+  }
 
-    // Select `index`, wrapping at both ends (so Left from the first tab reaches the last). No-op
-    // when there are no tabs.
-    void select(int index);
+  // Select `index`, wrapping at both ends (so Left from the first tab reaches the last). No-op
+  // when there are no tabs.
+  void select(int index);
 
 private:
-    std::vector<MenuTab*>    mTabs;
-    std::function<void(int)> mOnSelect;
-    int                      mActive = 0;
+  std::vector<MenuTab *> mTabs;
+  std::function<void(int)> mOnSelect;
+  int mActive = 0;
 };
 
-}  // namespace psx::ui
+} // namespace psx::ui
 
 #endif

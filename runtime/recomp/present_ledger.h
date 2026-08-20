@@ -25,28 +25,50 @@
 // negatives.
 #ifndef PRESENT_LEDGER_H
 #define PRESENT_LEDGER_H
-#include <stdint.h>
 #include <lucent/log.h>
+#include <stdint.h>
 
 // RQ_BACKGROUND / RQ_WORLD / RQ_OVERLAY / RQ_HUD — the layer split render_queue.h owns. Kept as a bare
 // count so this header does not depend on that one (it is included from it).
 static const int kLedgerLayers = 4;
 
 struct PresentLedger {
-  long captured[kLedgerLayers] = {0, 0, 0, 0};   // prims the logic frame put into the capture
-  long emitted [kLedgerLayers] = {0, 0, 0, 0};   // prims the REAL present handed to the rasterizer
-  bool inRealPresent = false;                     // set only around the real (t=1) present pass
-  long framesReconciled = 0;                      // the run-end denominator
-  long framesDropped    = 0;
+  long captured[kLedgerLayers] = {0, 0, 0, 0}; // prims the logic frame put into the capture
+  long emitted[kLedgerLayers] = {0, 0, 0, 0};  // prims the REAL present handed to the rasterizer
+  bool inRealPresent = false;                  // set only around the real (t=1) present pass
+  long framesReconciled = 0;                   // the run-end denominator
+  long framesDropped = 0;
 
-  void noteCaptured(int layer) { if ((unsigned)layer < kLedgerLayers) captured[layer]++; }
-  void noteEmitted (int layer) { if (inRealPresent && (unsigned)layer < kLedgerLayers) emitted[layer]++; }
+  void noteCaptured(int layer) {
+    if ((unsigned)layer < kLedgerLayers) {
+      captured[layer]++;
+    }
+  }
+  void noteEmitted(int layer) {
+    if (inRealPresent && (unsigned)layer < kLedgerLayers) {
+      emitted[layer]++;
+    }
+  }
 
-  void beginFrame() { for (int i = 0; i < kLedgerLayers; i++) captured[i] = emitted[i] = 0; }
+  void beginFrame() {
+    for (int i = 0; i < kLedgerLayers; i++) {
+      captured[i] = emitted[i] = 0;
+    }
+  }
 
-  static const char* layerName(int l) {
-    switch (l) { case 0: return "background"; case 1: return "world"; case 2: return "overlay";
-                 case 3: return "hud"; default: return "?"; }
+  static const char *layerName(int l) {
+    switch (l) {
+    case 0:
+      return "background";
+    case 1:
+      return "world";
+    case 2:
+      return "overlay";
+    case 3:
+      return "hud";
+    default:
+      return "?";
+    }
   }
 
   // Returns the number of layers that were captured and then presented by nobody. `fatal` makes a drop
@@ -55,32 +77,54 @@ struct PresentLedger {
     int dropped = 0;
     long capTotal = 0, emitTotal = 0;
     for (int i = 0; i < kLedgerLayers; i++) {
-      capTotal += captured[i]; emitTotal += emitted[i];
-      if (captured[i] > 0 && emitted[i] == 0) dropped++;
+      capTotal += captured[i];
+      emitTotal += emitted[i];
+      if (captured[i] > 0 && emitted[i] == 0) {
+        dropped++;
+      }
     }
     framesReconciled++;
     if (!dropped) {
       // The denominator travels with the OK, so a green line cannot be confused with a frame in which
       // the ledger happened to see nothing at all.
-      lucent::debug("ledger", "f{} OK — captured {} presented {} across {} layer(s); "
+      lucent::debug("ledger",
+                    "f{} OK — captured {} presented {} across {} layer(s); "
                     "bg {}/{} world {}/{} overlay {}/{} hud {}/{}",
-                    frame, capTotal, emitTotal, kLedgerLayers,
-                    emitted[0], captured[0], emitted[1], captured[1],
-                    emitted[2], captured[2], emitted[3], captured[3]);
+                    frame,
+                    capTotal,
+                    emitTotal,
+                    kLedgerLayers,
+                    emitted[0],
+                    captured[0],
+                    emitted[1],
+                    captured[1],
+                    emitted[2],
+                    captured[2],
+                    emitted[3],
+                    captured[3]);
       return 0;
     }
     framesDropped++;
-    lucent::error("ledger", "f{} DROPPED — {} layer(s) captured prims that the real present drew for "
+    lucent::error("ledger",
+                  "f{} DROPPED — {} layer(s) captured prims that the real present drew for "
                   "NOBODY. A producer that pushes prims nothing presents is INVISIBLE ON SCREEN; this "
-                  "is not noise.", frame, dropped);
-    for (int i = 0; i < kLedgerLayers; i++)
-      if (captured[i] > 0 && emitted[i] == 0)
-        lucent::error("ledger", "  layer {:<10} captured {:>6}  presented {:>6}", layerName(i),
-                      captured[i], emitted[i]);
-    lucent::error("ledger", "  totals this frame: captured {} presented {}. See docs/one-renderer.md — "
+                  "is not noise.",
+                  frame,
+                  dropped);
+    for (int i = 0; i < kLedgerLayers; i++) {
+      if (captured[i] > 0 && emitted[i] == 0) {
+        lucent::error(
+            "ledger", "  layer {:<10} captured {:>6}  presented {:>6}", layerName(i), captured[i], emitted[i]);
+      }
+    }
+    lucent::error("ledger",
+                  "  totals this frame: captured {} presented {}. See docs/one-renderer.md — "
                   "the usual cause is a frame-build path that consumes only part of the capture.",
-                  capTotal, emitTotal);
-    if (fatal) abort();
+                  capTotal,
+                  emitTotal);
+    if (fatal) {
+      abort();
+    }
     return dropped;
   }
 
@@ -88,14 +132,18 @@ struct PresentLedger {
   // regressions ship, so "the ledger never ran" must be impossible to read as "nothing was dropped".
   void runEnd() const {
     if (!framesReconciled) {
-      lucent::warn("ledger", "run-end: the ledger was NEVER FED — 0 frames reconciled. This does NOT "
+      lucent::warn("ledger",
+                   "run-end: the ledger was NEVER FED — 0 frames reconciled. This does NOT "
                    "mean nothing was dropped. It means the counters are not wired, or this run never "
                    "reached a real present (diff_mode / early abort / no frame committed). This run "
                    "proves NOTHING about whether captured prims reach the screen.");
       return;
     }
-    lucent::info("ledger", "run-end: {} frame(s) reconciled, {} with a dropped layer. Denominator: "
-                 "every logic frame that reached the frame fence.", framesReconciled, framesDropped);
+    lucent::info("ledger",
+                 "run-end: {} frame(s) reconciled, {} with a dropped layer. Denominator: "
+                 "every logic frame that reached the frame fence.",
+                 framesReconciled,
+                 framesDropped);
   }
 
   // Prove the instrument fires. Feeds a layer that is captured and never presented and requires
@@ -104,22 +152,34 @@ struct PresentLedger {
     PresentLedger L;
     L.beginFrame();
     L.inRealPresent = true;
-    for (int i = 0; i < 3; i++) L.noteCaptured(2);   // overlay: 3 captured...
-    for (int i = 0; i < 9; i++) { L.noteCaptured(1); L.noteEmitted(1); }   // ...world fine
+    for (int i = 0; i < 3; i++) {
+      L.noteCaptured(2); // overlay: 3 captured...
+    }
+    for (int i = 0; i < 9; i++) {
+      L.noteCaptured(1);
+      L.noteEmitted(1);
+    } // ...world fine
     const int drops = L.reconcile(/*frame=*/0, /*fatal=*/false);
     if (drops != 1) {
-      lucent::error("ledger", "SELFTEST FAILED: a captured-but-unpresented overlay layer reported {} "
-                    "drop(s), expected 1. The instrument cannot see the bug it exists for.", drops);
+      lucent::error("ledger",
+                    "SELFTEST FAILED: a captured-but-unpresented overlay layer reported {} "
+                    "drop(s), expected 1. The instrument cannot see the bug it exists for.",
+                    drops);
       return 1;
     }
     L.beginFrame();
-    for (int i = 0; i < 4; i++) { L.noteCaptured(3); L.noteEmitted(3); }
+    for (int i = 0; i < 4; i++) {
+      L.noteCaptured(3);
+      L.noteEmitted(3);
+    }
     if (L.reconcile(/*frame=*/1, /*fatal=*/false) != 0) {
-      lucent::error("ledger", "SELFTEST FAILED: a clean frame reported a drop — the instrument cries "
+      lucent::error("ledger",
+                    "SELFTEST FAILED: a clean frame reported a drop — the instrument cries "
                     "wolf, which is how a real drop gets ignored.");
       return 1;
     }
-    lucent::info("ledger", "selftest OK: reports DROPPED on a captured-but-unpresented layer and clean "
+    lucent::info("ledger",
+                 "selftest OK: reports DROPPED on a captured-but-unpresented layer and clean "
                  "on a matched frame — both answers observed.");
     return 0;
   }

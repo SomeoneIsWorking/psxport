@@ -39,52 +39,63 @@ struct GameHooks;
 // Split out here so that contract is reachable by a hermetic test: no SPU, no device, no Game.
 // Null `hooks` or null `hooks->audioMixFrame` is the normal case for such a port and must be a
 // silent no-op that leaves `buf` exactly as the SPU rendered it.
-void spu_mix_game_audio(Core* c, const GameHooks* hooks, int16_t* buf, int frames);
+void spu_mix_game_audio(Core *c, const GameHooks *hooks, int16_t *buf, int frames);
 
 class SpuAudio {
 public:
-  Game* game = nullptr;   // back-pointer wired by Game(); reaches this Core's SPU/XA/native-music state
+  Game *game = nullptr; // back-pointer wired by Game(); reaches this Core's SPU/XA/native-music state
 
   void init();
-  void frame()      { frameEx(true); }
-  void frameLogic() { frameEx(false); }   // SBS/dual-core: advance XA for game logic only, no output
-  void wavReopen(const char* path);       // REPL music-dump: finalize current WAV, start a fresh one
+  void frame() {
+    frameEx(true);
+  }
+  void frameLogic() {
+    frameEx(false);
+  } // SBS/dual-core: advance XA for game logic only, no output
+  void wavReopen(const char *path); // REPL music-dump: finalize current WAV, start a fresh one
 
 private:
   void frameEx(bool output);
-  void wavOpen(const char* path);
+  void wavOpen(const char *path);
   void wavClose();
   // atexit hook — finalizes the WAV of whichever SpuAudio has one open (a static pointer set on
   // wavOpen, cleared on wavClose). Only one WAV per process in practice, so this is safe.
   static void wavCloseAtExit();
-  static SpuAudio* sWavOwner;
-  static void wavLe16(FILE* f, uint16_t v) { fputc(v & 0xFF, f); fputc((v >> 8) & 0xFF, f); }
-  static void wavLe32(FILE* f, uint32_t v) { for (int i = 0; i < 4; i++) fputc((v >> (8*i)) & 0xFF, f); }
+  static SpuAudio *sWavOwner;
+  static void wavLe16(FILE *f, uint16_t v) {
+    fputc(v & 0xFF, f);
+    fputc((v >> 8) & 0xFF, f);
+  }
+  static void wavLe32(FILE *f, uint32_t v) {
+    for (int i = 0; i < 4; i++) {
+      fputc((v >> (8 * i)) & 0xFF, f);
+    }
+  }
 
 #ifdef PSXPORT_SDL
-  SDL_AudioStream* mStream = nullptr;   // NULL = not open / failed / disabled
+  SDL_AudioStream *mStream = nullptr; // NULL = not open / failed / disabled
 #endif
-  int      mState    = 0;               // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
-  FILE*    mWav      = nullptr;         // open WAV file, or NULL
-  uint32_t mWavBytes = 0;               // PCM bytes written so far
-  uint32_t mWavSynced = 0;              // mWavBytes at the last header patch + flush (see frameEx):
-                                        // the capture stays a valid WAV even if the process is
-                                        // killed, which is how every headless run actually ends
+  int mState = 0;          // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
+  FILE *mWav = nullptr;    // open WAV file, or NULL
+  uint32_t mWavBytes = 0;  // PCM bytes written so far
+  uint32_t mWavSynced = 0; // mWavBytes at the last header patch + flush (see frameEx):
+                           // the capture stays a valid WAV even if the process is
+                           // killed, which is how every headless run actually ends
 
   // Per-frame mix buffer (735 stereo frames + slack). Per-instance so two SBS Games never mix
   // through the same scratch. The native-music render scratch moved game-side into the audioMixFrame
   // GameHooks impl (game_hooks.cpp), which owns its own per-call buffer.
-  int16_t  mMixBuf [2 * (735 + 64)] = {};   // SPU render target (+ native-music mixdown via the hook)
+  int16_t mMixBuf[2 * (735 + 64)] = {}; // SPU render target (+ native-music mixdown via the hook)
 
   // `debug spuprof` diagnostics (average spu_update() wall time every 60 frames).
-  int      mProfOn = -1;                // -1 = unknown, 0/1 cached
-  double   mProfAccumMs = 0, mProfLoopMs = 0;
-  int      mProfN = 0, mProfHavePrev = 0;
+  int mProfOn = -1; // -1 = unknown, 0/1 cached
+  double mProfAccumMs = 0, mProfLoopMs = 0;
+  int mProfN = 0, mProfHavePrev = 0;
   struct timespec mProfPrev = {};
 
   // `debug audiorate` diagnostics (effective production rate + drop count).
-  int      mRateOn = -1;                // -1 = unknown, 0/1 cached
-  double   mRateT0 = 0;
-  long     mRateSamp = 0, mRateDrops = 0, mRateCalls = 0;
-  int      mRateHave = 0;
+  int mRateOn = -1; // -1 = unknown, 0/1 cached
+  double mRateT0 = 0;
+  long mRateSamp = 0, mRateDrops = 0, mRateCalls = 0;
+  int mRateHave = 0;
 };

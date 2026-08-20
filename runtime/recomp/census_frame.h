@@ -16,8 +16,10 @@
 // measured in: "this effect drew for 54 frames" is a statement about game time, not about how often the
 // host chose to present.
 #pragma once
-#include <stdint.h>
 #include "core.h"
 #include "game.h"
+#include <stdint.h>
 
-inline uint32_t census_frame(Core* c) { return c->game->timing.logicFrame; }
+inline uint32_t census_frame(Core *c) {
+  return c->game->timing.logicFrame;
+}

@@ -29,11 +29,11 @@
 //   overflow()       — producers that did not fit the table, so a short list cannot read as complete.
 // A report that prints a row list without these six is not allowed to claim coverage.
 #pragma once
+#include <lucent/log.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>         // strtoul — loadClaims parses the persisted DB
-#include <string.h>          // strcmp — the native-only iid collision check (see note())
-#include <lucent/log.h>
+#include <stdlib.h> // strtoul — loadClaims parses the persisted DB
+#include <string.h> // strcmp — the native-only iid collision check (see note())
 
 // ---- ProducerKey — the row identity -------------------------------------------------------------
 //
@@ -52,22 +52,34 @@
 // silently merge two producers.
 struct ProducerKey {
   enum Kind : uint8_t { NONE = 0, GUEST = 1, NATIVE_ONLY = 2 };
-  Kind     kind = NONE;
-  uint32_t id   = 0;      // GUEST: the guest fn address. NATIVE_ONLY: an interned producer id.
+  Kind kind = NONE;
+  uint32_t id = 0; // GUEST: the guest fn address. NATIVE_ONLY: an interned producer id.
 
-  static ProducerKey guest(uint32_t addr)  { return ProducerKey{GUEST, addr}; }
-  static ProducerKey native(uint32_t iid)  { return ProducerKey{NATIVE_ONLY, iid}; }
+  static ProducerKey guest(uint32_t addr) {
+    return ProducerKey{GUEST, addr};
+  }
+  static ProducerKey native(uint32_t iid) {
+    return ProducerKey{NATIVE_ONLY, iid};
+  }
   // NONE is not "unknown, pick something" — it is the explicit statement that the caller could not
   // name a producer, and it routes to unscopedNative()/spanMiss() rather than to a row.
-  static ProducerKey none()                { return ProducerKey{NONE, 0}; }
+  static ProducerKey none() {
+    return ProducerKey{NONE, 0};
+  }
 
-  bool valid()        const { return kind != NONE; }
-  bool isNativeOnly() const { return kind == NATIVE_ONLY; }
-  bool operator==(const ProducerKey& o) const { return kind == o.kind && id == o.id; }
+  bool valid() const {
+    return kind != NONE;
+  }
+  bool isNativeOnly() const {
+    return kind == NATIVE_ONLY;
+  }
+  bool operator==(const ProducerKey &o) const {
+    return kind == o.kind && id == o.id;
+  }
 };
 
 class ProducerCensus {
- public:
+public:
   // A play session traverses a lot of scenes; Tomba!2 has 68 files under game/render/ and the guest
   // has more producers than that. 1024 rows is generous for one run and still a fixed ~40 KB per Core,
   // and going over is REPORTED (overflow()) rather than dropped silently.
@@ -76,8 +88,8 @@ class ProducerCensus {
   // Why a prim could not be attributed. Named rather than bool'd so a report can say WHICH blindness
   // it hit — the two have different fixes (one is unfixable, one means the feed is off).
   enum Why : uint8_t {
-    WHY_GP0_ANON   = 0,  // the GP0 words carried no guest source address at all
-    WHY_SPAN_MISS  = 1,  // there was an address, but no attribution span covered it
+    WHY_GP0_ANON = 0,  // the GP0 words carried no guest source address at all
+    WHY_SPAN_MISS = 1, // there was an address, but no attribution span covered it
     // A span WAS found and its emitter fn is 0: nothing indirectly-dispatched was on OtAttr's shadow
     // stack when the store happened, so the span cannot name a producer. This is its own reason because
     // its fix differs from the other two — it is not a missing span, it is a span that knows the address
@@ -94,12 +106,12 @@ class ProducerCensus {
     // a native-only row is keyed by an interned hash, so without the name the row is unidentifiable in
     // the DB; and holding the first name is what lets an iid COLLISION be detected instead of silently
     // merging two PC-only producers into one row.
-    const char* name = "";
-    uint32_t primsGuest  = 0;   // prims attributed to this producer on the guest/GTE leg
-    uint32_t primsNative = 0;   // prims its native ProducerScope pushed
-    uint32_t firstFrame  = 0;   // first sighting (never overwritten — it is the "first_seen" the DB keeps)
-    uint32_t lastFrame   = 0;
-    uint32_t frames      = 0;   // distinct frames it was seen in (a one-frame flash vs a constant draw)
+    const char *name = "";
+    uint32_t primsGuest = 0;  // prims attributed to this producer on the guest/GTE leg
+    uint32_t primsNative = 0; // prims its native ProducerScope pushed
+    uint32_t firstFrame = 0;  // first sighting (never overwritten — it is the "first_seen" the DB keeps)
+    uint32_t lastFrame = 0;
+    uint32_t frames = 0; // distinct frames it was seen in (a one-frame flash vs a constant draw)
   };
 
   // ---- feed -------------------------------------------------------------------------------------
@@ -113,7 +125,7 @@ class ProducerCensus {
   // `name` is the open scope's declared name (ProducerScopeState::currentName()) and is OPTIONAL only
   // so that every existing call site keeps compiling; pass it wherever it is available, because it is
   // the only thing that makes a native-only (PC-only) row identifiable and iid collisions detectable.
-  void noteNative(ProducerKey key, uint32_t prims, uint32_t frame, const char* name = nullptr) {
+  void noteNative(ProducerKey key, uint32_t prims, uint32_t frame, const char *name = nullptr) {
     noteNativeLayer(key, prims, frame, /*layer=*/-1, name);
   }
   // Same, but records WHICH DRAW LAYER an UNSCOPED push came from. Without this the report can only say
@@ -121,14 +133,16 @@ class ProducerCensus {
   // the obvious way to find the location (guess a producer, scope it, re-run) is exactly the
   // re-derivation this DB exists to replace. The layer is free at the call site, so the report can rank
   // the un-declared work by pass and say which producer family to scope next.
-  void noteNativeLayer(ProducerKey key, uint32_t prims, uint32_t frame, int layer,
-                       const char* name = nullptr) {
+  void noteNativeLayer(ProducerKey key, uint32_t prims, uint32_t frame, int layer, const char *name = nullptr) {
     if (!key.valid()) {
       mFed = true;
       mUnscopedNative += prims;
       mPrimsSeen += prims;
-      if (layer >= 0 && layer < LAYER_CAP) mUnscopedByLayer[layer] += prims;
-      else                                 mUnscopedLayerUnknown += prims;
+      if (layer >= 0 && layer < LAYER_CAP) {
+        mUnscopedByLayer[layer] += prims;
+      } else {
+        mUnscopedLayerUnknown += prims;
+      }
       return;
     }
     note(key, prims, frame, /*native=*/true, name);
@@ -139,18 +153,30 @@ class ProducerCensus {
   // denominator for the candidate fix of keying the guest leg on the node's render fn (node+0x18), which
   // would land in the SAME key space the native leg uses. Counted rather than reasoned about, because
   // "the node is probably there" is exactly the assumption that costs a session.
-  void noteSpanNoFnHadNode(uint32_t prims) { mSpanNoFnWithNode += prims; }
-  uint64_t spanNoFnWithNode() const { return mSpanNoFnWithNode; }
+  void noteSpanNoFnHadNode(uint32_t prims) {
+    mSpanNoFnWithNode += prims;
+  }
+  uint64_t spanNoFnWithNode() const {
+    return mSpanNoFnWithNode;
+  }
   // Guest-leg prims whose producer was named by the NODE's render fn rather than by the span's emitter
   // fn. Counted separately and reported, because two identity SOURCES feeding one column is exactly the
   // kind of quiet conflation that makes a row untrustworthy later: a reader must be able to see how a
   // row was named, not just what it was named.
-  void noteGuestViaNode(uint32_t prims) { mGuestViaNode += prims; }
-  uint64_t guestViaNode() const { return mGuestViaNode; }
+  void noteGuestViaNode(uint32_t prims) {
+    mGuestViaNode += prims;
+  }
+  uint64_t guestViaNode() const {
+    return mGuestViaNode;
+  }
   // Named by the store's guest PC. Its own channel because it is the WEAKEST of the three routes —
   // c->pc is not restored when a nested call returns, so it can name a callee rather than the submitter.
-  void noteGuestViaPc(uint32_t prims) { mGuestViaPc += prims; }
-  uint64_t guestViaPc() const { return mGuestViaPc; }
+  void noteGuestViaPc(uint32_t prims) {
+    mGuestViaPc += prims;
+  }
+  uint64_t guestViaPc() const {
+    return mGuestViaPc;
+  }
 
   // GUEST-ORIGIN prims arriving at the NATIVE queue's chokepoint, counted apart from undeclared native
   // work — and this distinction is not cosmetic, it decides whether a number can ever reach zero.
@@ -167,15 +193,25 @@ class ProducerCensus {
   // exists to prevent. So this is a SEPARATE, REPORTED number rather than a silent exclusion: it says
   // "these prims came from the guest, they are not yours to declare", which is a different sentence from
   // "these are attributed".
-  void noteGuestOriginPush(uint32_t prims) { mFed = true; mPrimsSeen += prims; mGuestOrigin += prims; }
-  uint64_t guestOrigin() const { return mGuestOrigin; }
+  void noteGuestOriginPush(uint32_t prims) {
+    mFed = true;
+    mPrimsSeen += prims;
+    mGuestOrigin += prims;
+  }
+  uint64_t guestOrigin() const {
+    return mGuestOrigin;
+  }
 
   void noteUnattributable(Why why, uint32_t prims) {
     mFed = true;
     mPrimsSeen += prims;
-    if (why == WHY_GP0_ANON)        mGp0Anon += prims;
-    else if (why == WHY_SPAN_NO_FN) mSpanNoFn += prims;
-    else                            mSpanMiss += prims;
+    if (why == WHY_GP0_ANON) {
+      mGp0Anon += prims;
+    } else if (why == WHY_SPAN_NO_FN) {
+      mSpanNoFn += prims;
+    } else {
+      mSpanMiss += prims;
+    }
   }
 
   // ---- read -------------------------------------------------------------------------------------
@@ -222,32 +258,37 @@ class ProducerCensus {
   // when it could not describe a repo. Nothing here manufactures an identity: an unset id stays empty and
   // the provenance report REFUSES to classify rather than comparing against "".
   static constexpr int BUILD_ID_CAP = 96;
-  void setBuildId(const char* id) {
+  void setBuildId(const char *id) {
     mBuildId[0] = 0;
-    if (!id) return;
+    if (!id) {
+      return;
+    }
     size_t n = 0;
     // The id is written into a WHITESPACE-DELIMITED claim-file column, so a space in it would split into
     // two fields and silently corrupt every later parse. Sanitised at the boundary, visibly (`_`).
-    for (const char* p = id; *p && n + 1 < BUILD_ID_CAP; ++p) {
+    for (const char *p = id; *p && n + 1 < BUILD_ID_CAP; ++p) {
       const unsigned char ch = (unsigned char)*p;
       mBuildId[n++] = (ch > 0x20 && ch < 0x7F) ? (char)ch : '_';
     }
     mBuildId[n] = 0;
   }
-  const char* buildId() const { return mBuildId; }
+  const char *buildId() const {
+    return mBuildId;
+  }
   // An id of the form `UNKNOWN(<reason>)` is the generator saying NO IDENTITY WAS AVAILABLE. It must never
   // take part in an equality test: two builds that both failed to describe themselves are not the same
   // build, and treating them as equal is exactly the false negative the DB exists to stop reporting.
-  static bool buildIdIsReal(const char* id) {
+  static bool buildIdIsReal(const char *id) {
     return id && id[0] && strncmp(id, "UNKNOWN(", 8) != 0;
   }
 
-  int loadClaims(const char* path) {
-    FILE* f = fopen(path, "r");
+  int loadClaims(const char *path) {
+    FILE *f = fopen(path, "r");
     if (!f) {
-      lucent::warn("producers", "claim set NOT loaded: cannot open {} — every guest prim will resolve to "
-                                "'no native producer' for that reason alone, which is NOT a measurement. "
-                                "Run a pc_render leg first to write a DB, or point PSXPORT_PRODUCERS_DB at one.",
+      lucent::warn("producers",
+                   "claim set NOT loaded: cannot open {} — every guest prim will resolve to "
+                   "'no native producer' for that reason alone, which is NOT a measurement. "
+                   "Run a pc_render leg first to write a DB, or point PSXPORT_PRODUCERS_DB at one.",
                    path);
       return 0;
     }
@@ -259,12 +300,16 @@ class ProducerCensus {
       // construction (nothing else is written to that file); a JSONL row must prove prims_native > 0.
       if (line[0] == '0' && (line[1] == 'x' || line[1] == 'X')) {
         const uint32_t a = (uint32_t)strtoul(line, nullptr, 16);
-        if (!a) continue;
+        if (!a) {
+          continue;
+        }
         // PROVENANCE COLUMNS, and the OLD ONE-COLUMN FILE STILL LOADS: `strtoul` already ignored the tail,
         // so a bare `0x…` line simply yields no provenance — which is a REAL third state ("written by a
         // pre-provenance build"), not a defect to paper over with a placeholder id.
-        const char* prov = claimLineBuildId(line);
-        if (!prov) provAbsent++;
+        const char *prov = claimLineBuildId(line);
+        if (!prov) {
+          provAbsent++;
+        }
         // A LATER LINE FOR AN ADDRESS ALREADY IN THE SET *UPDATES* ITS PROVENANCE, and this is the whole
         // reason the report can say "last earned by". The file is append-only and therefore chronological,
         // so the newest line for an address is the newest EARN event; keeping the first one (the previous
@@ -273,7 +318,10 @@ class ProducerCensus {
         const int at = claimIndexOf(a);
         if (at >= 0) {
           dup++;
-          if (prov) { setClaimProv(at, prov); provUpdated++; }
+          if (prov) {
+            setClaimProv(at, prov);
+            provUpdated++;
+          }
           continue;
         }
         if (mClaimCount < CLAIM_CAP) {
@@ -282,34 +330,57 @@ class ProducerCensus {
           mClaimFromDisk[i] = true;
           setClaimProv(i, prov);
           loaded++;
-        } else mClaimOverflow++;
+        } else {
+          mClaimOverflow++;
+        }
         continue;
       }
-      const char* pn = strstr(line, "\"prims_native\":");
-      if (!pn) continue;
-      if (strtoul(pn + 16, nullptr, 10) == 0) { skippedNoNative++; continue; }   // no native producer -> not a claim
-      const char* k = strstr(line, "\"key\":\"0x");
-      if (!k) continue;
+      const char *pn = strstr(line, "\"prims_native\":");
+      if (!pn) {
+        continue;
+      }
+      if (strtoul(pn + 16, nullptr, 10) == 0) {
+        skippedNoNative++;
+        continue;
+      } // no native producer -> not a claim
+      const char *k = strstr(line, "\"key\":\"0x");
+      if (!k) {
+        continue;
+      }
       const uint32_t addr = (uint32_t)strtoul(k + 9, nullptr, 16);
-      if (!addr) continue;
+      if (!addr) {
+        continue;
+      }
       const int at = claimIndexOf(addr);
-      if (at >= 0) { dup++; continue; }
+      if (at >= 0) {
+        dup++;
+        continue;
+      }
       if (mClaimCount < CLAIM_CAP) {
         const int i = mClaimCount++;
         mClaims[i] = addr;
         mClaimFromDisk[i] = true;
-        setClaimProv(i, nullptr);      // a JSONL row carries no claim-file provenance column
+        setClaimProv(i, nullptr); // a JSONL row carries no claim-file provenance column
         provAbsent++;
         loaded++;
+      } else {
+        mClaimOverflow++;
       }
-      else                         { mClaimOverflow++; }
     }
     fclose(f);
-    lucent::info("producers", "claim set loaded from {}: {} address(es) ({} row(s) skipped as having no "
-                              "native producer, {} duplicate line(s) of which {} carried NEWER provenance "
-                              "that superseded an earlier line, {} line(s) carried NO build id at all, {} "
-                              "lost to CLAIM_CAP={}). These are the rows a guest prim can be JOINED to.",
-                 path, loaded, skippedNoNative, dup, provUpdated, provAbsent, mClaimOverflow, CLAIM_CAP);
+    lucent::info("producers",
+                 "claim set loaded from {}: {} address(es) ({} row(s) skipped as having no "
+                 "native producer, {} duplicate line(s) of which {} carried NEWER provenance "
+                 "that superseded an earlier line, {} line(s) carried NO build id at all, {} "
+                 "lost to CLAIM_CAP={}). These are the rows a guest prim can be JOINED to.",
+                 path,
+                 loaded,
+                 skippedNoNative,
+                 dup,
+                 provUpdated,
+                 provAbsent,
+                 mClaimOverflow,
+                 CLAIM_CAP);
     return loaded;
   }
 
@@ -327,102 +398,170 @@ class ProducerCensus {
   // claim this run did not earn is the one already on its old line, and leaving that line alone preserves
   // it. Append-only is UNCHANGED and still right for the reason its original note gives — absence on one
   // leg must never un-earn a claim, because no single leg runs both halves.
-  int appendClaims(const char* path, const char* runStamp) const {
+  int appendClaims(const char *path, const char *runStamp) const {
     int earned = 0;
-    for (int i = 0; i < mClaimCount; i++) if (mClaimEarnedHere[i]) earned++;
+    for (int i = 0; i < mClaimCount; i++) {
+      if (mClaimEarnedHere[i]) {
+        earned++;
+      }
+    }
     if (earned == 0) {
       // NOT SILENT. "This run earned nothing new" is a real and common outcome (a pure psx_render leg, or a
       // native leg that revisited only content it had already claimed) and it must be distinguishable from
       // a failed write, which is what an early `return 0` with no line looked like before.
-      lucent::info("producers", "claim set: appended 0 address(es) -> {} — this run EARNED no claim "
-                                "({} claim(s) were loaded from disk and are deliberately NOT re-emitted; "
-                                "re-emitting them is the union-echo bug kanban #91 is about)",
-                   path, mClaimCount);
+      lucent::info("producers",
+                   "claim set: appended 0 address(es) -> {} — this run EARNED no claim "
+                   "({} claim(s) were loaded from disk and are deliberately NOT re-emitted; "
+                   "re-emitting them is the union-echo bug kanban #91 is about)",
+                   path,
+                   mClaimCount);
       return 0;
     }
-    FILE* f = fopen(path, "a");
+    FILE *f = fopen(path, "a");
     if (!f) {
-      lucent::warn("producers", "claim set NOT persisted: cannot append to {} — the next run will resolve "
-                                "fewer guest prims and will say so", path);
+      lucent::warn("producers",
+                   "claim set NOT persisted: cannot append to {} — the next run will resolve "
+                   "fewer guest prims and will say so",
+                   path);
       return 0;
     }
     // Line format `0xADDRESS <run-stamp> <build-id>`. Deliberately whitespace-columnar and address-first:
     // `loadClaims`'s existing `line[0]=='0'` branch strtoul's the address and IGNORES the tail, so a file
     // written here still loads in a PRE-provenance build, and a pre-provenance file still loads here.
     for (int i = 0; i < mClaimCount; i++) {
-      if (!mClaimEarnedHere[i]) continue;
-      fprintf(f, "0x%08X %s %s\n", mClaims[i],
+      if (!mClaimEarnedHere[i]) {
+        continue;
+      }
+      fprintf(f,
+              "0x%08X %s %s\n",
+              mClaims[i],
               (runStamp && runStamp[0]) ? runStamp : "no-stamp",
               mBuildId[0] ? mBuildId : "UNKNOWN(no-build-id-set)");
     }
     fclose(f);
-    lucent::info("producers", "claim set: appended {} address(es) EARNED THIS RUN -> {} (of {} in the set; "
-                              "the other {} were loaded from disk and keep the provenance of the run that "
-                              "earned them). Stamped build id: {}. Append-only: a claim earned by a native "
-                              "producer drawing is never un-earned by a later leg that skips it.",
-                 earned, path, mClaimCount, mClaimCount - earned,
+    lucent::info("producers",
+                 "claim set: appended {} address(es) EARNED THIS RUN -> {} (of {} in the set; "
+                 "the other {} were loaded from disk and keep the provenance of the run that "
+                 "earned them). Stamped build id: {}. Append-only: a claim earned by a native "
+                 "producer drawing is never un-earned by a later leg that skips it.",
+                 earned,
+                 path,
+                 mClaimCount,
+                 mClaimCount - earned,
                  mBuildId[0] ? mBuildId : "NONE — the caller never called setBuildId()");
     return earned;
   }
 
   bool claims(uint32_t addr) const {
-    for (int i = 0; i < mClaimCount; i++) if (mClaims[i] == addr) return true;
+    for (int i = 0; i < mClaimCount; i++) {
+      if (mClaims[i] == addr) {
+        return true;
+      }
+    }
     return false;
   }
-  int claimCount() const { return mClaimCount; }
-  uint32_t claimAt(int i) const { return (i >= 0 && i < mClaimCount) ? mClaims[i] : 0; }
+  int claimCount() const {
+    return mClaimCount;
+  }
+  uint32_t claimAt(int i) const {
+    return (i >= 0 && i < mClaimCount) ? mClaims[i] : 0;
+  }
   // ---- THE UNION SPLIT (kanban #91 step 1) --------------------------------------------------------
   // `claimCount()` is a UNION and always was: `loadClaims` and `note()` fill the same array, on purpose —
   // the resolver wants every address a guest prim may join to, whoever earned it. What was missing is that
   // NOTHING could tell the two apart afterwards, so a claim earned five commits ago and one earned in this
   // very run were indistinguishable. These two predicates are that distinction, and everything provenance
   // downstream (the file writer, the report, the tests) is built on them rather than on array position.
-  bool claimEarnedHere(int i) const { return (i >= 0 && i < mClaimCount) && mClaimEarnedHere[i]; }
-  bool claimFromDisk(int i)   const { return (i >= 0 && i < mClaimCount) && mClaimFromDisk[i]; }
+  bool claimEarnedHere(int i) const {
+    return (i >= 0 && i < mClaimCount) && mClaimEarnedHere[i];
+  }
+  bool claimFromDisk(int i) const {
+    return (i >= 0 && i < mClaimCount) && mClaimFromDisk[i];
+  }
   // The build id the claim FILE recorded for this claim; "" when the line carried none (a pre-provenance
   // build wrote it). Never synthesised — see the note on `UNKNOWN(...)` above.
-  const char* claimProv(int i) const { return (i >= 0 && i < mClaimCount) ? mClaimProv[i] : ""; }
+  const char *claimProv(int i) const {
+    return (i >= 0 && i < mClaimCount) ? mClaimProv[i] : "";
+  }
   int claimEarnedHereCount() const {
     int n = 0;
-    for (int i = 0; i < mClaimCount; i++) if (mClaimEarnedHere[i]) n++;
+    for (int i = 0; i < mClaimCount; i++) {
+      if (mClaimEarnedHere[i]) {
+        n++;
+      }
+    }
     return n;
   }
   int claimLoadedCount() const {
     int n = 0;
-    for (int i = 0; i < mClaimCount; i++) if (mClaimFromDisk[i]) n++;
+    for (int i = 0; i < mClaimCount; i++) {
+      if (mClaimFromDisk[i]) {
+        n++;
+      }
+    }
     return n;
   }
   // Stores attributed while the set was still EMPTY — the ordering blind spot, COUNTED rather than
   // argued about. A prim drawn before the frame's first native producer ran cannot be resolved, so it
   // lands on its emitter key. If this is large, early rows are emitter-keyed and the join is partial.
-  uint64_t claimResolveTooEarly() const { return mClaimTooEarly; }
-  void noteClaimTooEarly() { mClaimTooEarly++; }
+  uint64_t claimResolveTooEarly() const {
+    return mClaimTooEarly;
+  }
+  void noteClaimTooEarly() {
+    mClaimTooEarly++;
+  }
 
-  int rowCount() const { return mRowCount; }
-  const Row* rowAt(int i) const { return (i >= 0 && i < mRowCount) ? &mRows[i] : nullptr; }
-  const Row* find(ProducerKey key) const {
-    for (int i = 0; i < mRowCount; i++) if (mRows[i].key == key) return &mRows[i];
+  int rowCount() const {
+    return mRowCount;
+  }
+  const Row *rowAt(int i) const {
+    return (i >= 0 && i < mRowCount) ? &mRows[i] : nullptr;
+  }
+  const Row *find(ProducerKey key) const {
+    for (int i = 0; i < mRowCount; i++) {
+      if (mRows[i].key == key) {
+        return &mRows[i];
+      }
+    }
     return nullptr;
   }
 
-  bool     wasFed()          const { return mFed; }
-  uint64_t primsSeen()       const { return mPrimsSeen; }
+  bool wasFed() const {
+    return mFed;
+  }
+  uint64_t primsSeen() const {
+    return mPrimsSeen;
+  }
   uint64_t primsAttributed() const {
     return mPrimsSeen - mGp0Anon - mSpanMiss - mSpanNoFn - mUnscopedNative - mGuestOrigin;
   }
-  uint64_t gp0Anon()         const { return mGp0Anon; }
-  uint64_t spanMiss()         const { return mSpanMiss; }
-  uint64_t spanNoFn()        const { return mSpanNoFn; }
-  uint64_t unscopedNative()  const { return mUnscopedNative; }
-  int      overflow()        const { return mOverflow; }
+  uint64_t gp0Anon() const {
+    return mGp0Anon;
+  }
+  uint64_t spanMiss() const {
+    return mSpanMiss;
+  }
+  uint64_t spanNoFn() const {
+    return mSpanNoFn;
+  }
+  uint64_t unscopedNative() const {
+    return mUnscopedNative;
+  }
+  int overflow() const {
+    return mOverflow;
+  }
   // PC-only producers whose interned iid landed on a row already claimed under a DIFFERENT name. Zero is
   // the normal answer; non-zero means two producers are sharing one row and BOTH rows' numbers are wrong.
-  int      iidCollisions()   const { return mIidCollisions; }
-  static constexpr int LAYER_CAP = 8;    // RqLayer today is 0..3; headroom without a dependency on it
+  int iidCollisions() const {
+    return mIidCollisions;
+  }
+  static constexpr int LAYER_CAP = 8; // RqLayer today is 0..3; headroom without a dependency on it
   uint64_t unscopedInLayer(int l) const {
     return (l >= 0 && l < LAYER_CAP) ? mUnscopedByLayer[l] : 0;
   }
-  uint64_t unscopedLayerUnknown() const { return mUnscopedLayerUnknown; }
+  uint64_t unscopedLayerUnknown() const {
+    return mUnscopedLayerUnknown;
+  }
 
   // ---- persistence: one JSONL per run, which is how the DB reaches GIT ---------------------------
   // USER 2026-08-11: the DB "should also be populated when I'm playing" AND "should be in the git".
@@ -440,25 +579,28 @@ class ProducerCensus {
   // Ownership query injected by the caller (overrides::query) rather than #included here, so this header
   // stays hermetic — tests/test_producer_scope.cpp exercises the census with no registry linked at all.
   // Returns false when the address is not override-installed; fills the native hit count on true.
-  typedef bool (*OwnedQueryFn)(uint32_t addr, uint64_t* nativeHits, uint64_t* oracleHits);
+  typedef bool (*OwnedQueryFn)(uint32_t addr, uint64_t *nativeHits, uint64_t *oracleHits);
 
-  void writeJsonl(const char* path, const char* stamp, OwnedQueryFn ownedQuery = nullptr) const {
+  void writeJsonl(const char *path, const char *stamp, OwnedQueryFn ownedQuery = nullptr) const {
     if (!mFed) {
       lucent::warn("producers",
                    "NOT writing {}: the census was never fed this run, so there is nothing observed to "
-                   "persist. This is not an empty run — it is an unwired or unexecuted feed.", path);
+                   "persist. This is not an empty run — it is an unwired or unexecuted feed.",
+                   path);
       return;
     }
-    FILE* f = fopen(path, "ab");
+    FILE *f = fopen(path, "ab");
     if (!f) {
       lucent::error("producers",
                     "could not open {} for append — THIS RUN'S OBSERVATIONS ARE LOST ({} row(s), {} "
                     "prims). The directory may not exist; it is created by the caller, not here.",
-                    path, mRowCount, (unsigned long long)mPrimsSeen);
+                    path,
+                    mRowCount,
+                    (unsigned long long)mPrimsSeen);
       return;
     }
     for (int i = 0; i < mRowCount; i++) {
-      const Row& r = mRows[i];
+      const Row &r = mRows[i];
       // OWNERSHIP, and the three states are deliberately distinct. Without a query we must not write
       // `false`: "the address is not override-installed" and "nobody asked" are different facts, and
       // collapsing them is how the DB's own report line came to print one answer forever — the fields
@@ -483,11 +625,13 @@ class ProducerCensus {
         // substrate gen body (oracle leg / forced). The first says the override is unexercised; the
         // second says it ran as the reference. Reporting only nativeHits collapses them into one row
         // that reads like the first — the same conflation that made these fields useless to begin with.
-        snprintf(owned, sizeof owned,
+        snprintf(owned,
+                 sizeof owned,
                  ",\"has_native\":%s,\"native_reached\":%s,\"native_hits\":%llu,\"oracle_hits\":%llu",
                  registered ? "true" : "false",
                  (registered && nativeHits > 0) ? "true" : "false",
-                 (unsigned long long)nativeHits, (unsigned long long)oracleHits);
+                 (unsigned long long)nativeHits,
+                 (unsigned long long)oracleHits);
       }
       // `pc_name` is the OBSERVED scope name, kept separate from producers.py's CURATED `name:` — the
       // runtime must not overwrite a human's label, and for a native-only row it is the only thing that
@@ -496,8 +640,16 @@ class ProducerCensus {
               "{\"key\":\"%s\",\"kind\":\"%s\",\"pc_name\":\"%s\","
               "\"prims_guest\":%u,\"prims_native\":%u,"
               "\"frames\":%u,\"first_frame\":%u,\"last_frame\":%u%s,\"seen_at\":\"%s\"}\n",
-              keyStr(r.key).s, r.key.isNativeOnly() ? "native-only" : "guest", jsonSafe(r.name).s,
-              r.primsGuest, r.primsNative, r.frames, r.firstFrame, r.lastFrame, owned, stamp ? stamp : "");
+              keyStr(r.key).s,
+              r.key.isNativeOnly() ? "native-only" : "guest",
+              jsonSafe(r.name).s,
+              r.primsGuest,
+              r.primsNative,
+              r.frames,
+              r.firstFrame,
+              r.lastFrame,
+              owned,
+              stamp ? stamp : "");
     }
     // The denominators travel WITH the rows. Without them a later reader can compute a coverage
     // percentage from the rows alone and be confidently wrong, because the rows say nothing about the
@@ -508,18 +660,26 @@ class ProducerCensus {
             "\"unscoped_native\":%llu,\"overflow\":%d,\"iid_collisions\":%d,"
             "\"rows\":%d,\"claims_earned_here\":%d,\"claims_loaded\":%d,"
             "\"build_id\":\"%s\",\"seen_at\":\"%s\"}\n",
-            (unsigned long long)mPrimsSeen, (unsigned long long)primsAttributed(),
-            (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
-            (unsigned long long)mSpanNoFn, (unsigned long long)mGuestOrigin,
-            (unsigned long long)mUnscopedNative, mOverflow, mIidCollisions, mRowCount,
-            claimEarnedHereCount(), claimLoadedCount(),
+            (unsigned long long)mPrimsSeen,
+            (unsigned long long)primsAttributed(),
+            (unsigned long long)mGp0Anon,
+            (unsigned long long)mSpanMiss,
+            (unsigned long long)mSpanNoFn,
+            (unsigned long long)mGuestOrigin,
+            (unsigned long long)mUnscopedNative,
+            mOverflow,
+            mIidCollisions,
+            mRowCount,
+            claimEarnedHereCount(),
+            claimLoadedCount(),
             // THE RUN'S OWN BUILD IDENTITY, travelling with the rows. `tools/producers.py stale` states
             // as its residual that "nothing here can say which PSXPORT_DIR a build came from" — it
             // identifies a leg's binary by an md5 the harness records, which `touch` cannot fake but which
             // also cannot name the CODE. This field is that name. It is written EXACTLY as held: when no
             // identity was set it is the empty string, never a placeholder, because a reader must be able
             // to tell "this run had no identity" from "this run was build ''".
-            mBuildId, stamp ? stamp : "");
+            mBuildId,
+            stamp ? stamp : "");
     fclose(f);
     lucent::info("producers", "wrote {} row(s) + totals -> {}", mRowCount, path);
   }
@@ -546,10 +706,10 @@ class ProducerCensus {
   //
   // It prints even when the set is empty and even when nothing is wrong, because "the set holds nothing
   // from a foreign build" is a finding only if the reader can see the denominator it was drawn from.
-  void reportClaimProvenance(const char* who) const {
+  void reportClaimProvenance(const char *who) const {
     const int loaded = claimLoadedCount();
     const int earnedHere = claimEarnedHereCount();
-    const int fresh = mClaimCount - loaded;   // earned this run and never seen on disk before
+    const int fresh = mClaimCount - loaded; // earned this run and never seen on disk before
     if (!buildIdIsReal(mBuildId)) {
       lucent::warn("producers",
                    "{}: claim set provenance CANNOT BE COMPUTED — this run has no usable build identity "
@@ -557,35 +717,66 @@ class ProducerCensus {
                    "any of the loaded ones were last earned by a DIFFERENT build is UNKNOWN, not 'none': "
                    "the comparison was never made. Fix the build-id generator (cmake/build_id.cmake) "
                    "rather than reading the numbers above as an all-clear.",
-                   who, mBuildId[0] ? mBuildId : "setBuildId() was never called",
-                   mClaimCount, loaded, earnedHere);
+                   who,
+                   mBuildId[0] ? mBuildId : "setBuildId() was never called",
+                   mClaimCount,
+                   loaded,
+                   earnedHere);
       return;
     }
     int reEarned = 0, otherBuild = 0, sameBuildCold = 0, noProv = 0, provUnknown = 0;
-    const char* firstOther = nullptr;
+    const char *firstOther = nullptr;
     uint32_t firstOtherAddr = 0;
     for (int i = 0; i < mClaimCount; i++) {
-      if (!mClaimFromDisk[i]) continue;
-      if (mClaimEarnedHere[i]) { reEarned++; continue; }
-      const char* p = mClaimProv[i];
-      if (!p[0])                    { noProv++; continue; }
-      if (!buildIdIsReal(p))        { provUnknown++; continue; }
-      if (strcmp(p, mBuildId) == 0) { sameBuildCold++; continue; }
+      if (!mClaimFromDisk[i]) {
+        continue;
+      }
+      if (mClaimEarnedHere[i]) {
+        reEarned++;
+        continue;
+      }
+      const char *p = mClaimProv[i];
+      if (!p[0]) {
+        noProv++;
+        continue;
+      }
+      if (!buildIdIsReal(p)) {
+        provUnknown++;
+        continue;
+      }
+      if (strcmp(p, mBuildId) == 0) {
+        sameBuildCold++;
+        continue;
+      }
       otherBuild++;
-      if (!firstOther) { firstOther = p; firstOtherAddr = mClaims[i]; }
+      if (!firstOther) {
+        firstOther = p;
+        firstOtherAddr = mClaims[i];
+      }
     }
     char firstOtherNote[160] = "";
-    if (firstOther)
-      snprintf(firstOtherNote, sizeof firstOtherNote, " (first: 0x%08X, last earned by %s)",
-               firstOtherAddr, firstOther);
+    if (firstOther) {
+      snprintf(
+          firstOtherNote, sizeof firstOtherNote, " (first: 0x%08X, last earned by %s)", firstOtherAddr, firstOther);
+    }
     lucent::info("producers",
                  "{}: claim set provenance — build id {}. {} claim(s) in the set = {} loaded from disk + {} "
                  "first earned in this run. Of the {} loaded: {} RE-EARNED by this build in this run, {} "
                  "last earned by a DIFFERENT build{}, {} last earned by THIS build id but not re-earned in "
                  "this run, {} carry NO provenance (written by a pre-provenance build), {} carry an "
                  "UNKNOWN(...) id which is NOT comparable and so is neither.",
-                 who, mBuildId, mClaimCount, loaded, fresh, loaded, reEarned, otherBuild, firstOtherNote,
-                 sameBuildCold, noProv, provUnknown);
+                 who,
+                 mBuildId,
+                 mClaimCount,
+                 loaded,
+                 fresh,
+                 loaded,
+                 reEarned,
+                 otherBuild,
+                 firstOtherNote,
+                 sameBuildCold,
+                 noProv,
+                 provUnknown);
     // THE BLIND SPOT, and it is louder than the numbers on purpose — this is the sentence whose absence
     // would make a reader draw the exactly wrong conclusion from the line above.
     const int notReEarned = otherBuild + sameBuildCold + noProv + provUnknown;
@@ -598,7 +789,9 @@ class ProducerCensus {
                    "modes select one single address), so a claim goes un-earned whenever this run never "
                    "visited the content that earns it. REACH THE CONTENT before treating any of these as "
                    "dead, and do not prune them.",
-                   who, notReEarned, otherBuild);
+                   who,
+                   notReEarned,
+                   otherBuild);
     }
   }
 
@@ -607,21 +800,26 @@ class ProducerCensus {
   // different fixes (the feed is unwired vs no native producer ran), and they print identically unless
   // said outright. Likewise a coverage percentage with no denominator is unreadable, so every blind
   // spot is named with its count rather than folded into "attributed".
-  void report(const char* who) const {
+  void report(const char *who) const {
     if (!mFed) {
       lucent::warn("producers",
                    "{}: the producer census was NEVER FED this run — 0 notes reached it. This is NOT "
                    "'no producer drew anything'; it means the feed is not wired or never executed, so "
-                   "the DB learned NOTHING from this run.", who);
+                   "the DB learned NOTHING from this run.",
+                   who);
       return;
     }
     lucent::info("producers",
                  "{}: {} row(s); prims seen {} = attributed {} + unscoped-native {} + guest-origin {} + "
                  "gp0-anon {} + span-miss {} + span-no-fn {}{}",
-                 who, mRowCount, (unsigned long long)mPrimsSeen,
-                 (unsigned long long)primsAttributed(), (unsigned long long)mUnscopedNative,
+                 who,
+                 mRowCount,
+                 (unsigned long long)mPrimsSeen,
+                 (unsigned long long)primsAttributed(),
+                 (unsigned long long)mUnscopedNative,
                  (unsigned long long)mGuestOrigin,
-                 (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
+                 (unsigned long long)mGp0Anon,
+                 (unsigned long long)mSpanMiss,
                  (unsigned long long)mSpanNoFn,
                  mOverflow ? " [ROW TABLE OVERFLOWED — rows were DROPPED]" : "");
     // THE ROWS THEMSELVES, ranked. Totals alone say how much is attributed but not TO WHAT, and "which
@@ -630,115 +828,158 @@ class ProducerCensus {
     {
       int order[CAP];
       const int n = mRowCount;
-      for (int i = 0; i < n; i++) order[i] = i;
-      for (int i = 1; i < n; i++) {          // insertion sort: n is small and this must not allocate
+      for (int i = 0; i < n; i++) {
+        order[i] = i;
+      }
+      for (int i = 1; i < n; i++) { // insertion sort: n is small and this must not allocate
         const int v = order[i];
         int j = i - 1;
         while (j >= 0 && (mRows[order[j]].primsNative + mRows[order[j]].primsGuest) <
-                         (mRows[v].primsNative + mRows[v].primsGuest)) { order[j + 1] = order[j]; j--; }
+                             (mRows[v].primsNative + mRows[v].primsGuest)) {
+          order[j + 1] = order[j];
+          j--;
+        }
         order[j + 1] = v;
       }
       const int shown = n < 16 ? n : 16;
       for (int i = 0; i < shown; i++) {
-        const Row& r = mRows[order[i]];
-        lucent::info("producers", "  {} {}  native {}  guest {}  frames {} (f{}..f{})  {}",
-                     r.key.isNativeOnly() ? "pc-only" : "guest  ", keyStr(r.key).s,
-                     r.primsNative, r.primsGuest, r.frames, r.firstFrame, r.lastFrame, r.name);
+        const Row &r = mRows[order[i]];
+        lucent::info("producers",
+                     "  {} {}  native {}  guest {}  frames {} (f{}..f{})  {}",
+                     r.key.isNativeOnly() ? "pc-only" : "guest  ",
+                     keyStr(r.key).s,
+                     r.primsNative,
+                     r.primsGuest,
+                     r.frames,
+                     r.firstFrame,
+                     r.lastFrame,
+                     r.name);
       }
-      if (n > shown)
-        lucent::info("producers", "  … {} more row(s) not shown (full set goes to the JSONL writer)",
-                     n - shown);
+      if (n > shown) {
+        lucent::info("producers", "  … {} more row(s) not shown (full set goes to the JSONL writer)", n - shown);
+      }
     }
     if (mIidCollisions) {
       lucent::error("producers",
                     "{}: {} PC-only push(es) hit an iid ALREADY CLAIMED BY A DIFFERENT PRODUCER — first "
                     "clash: pc-{:08X} claimed by '{}', then pushed by '{}'. Both rows' prim counts are "
                     "now wrong; rename one producer's stable id.",
-                    who, mIidCollisions, mCollideIid,
-                    mCollideA ? mCollideA : "?", mCollideB ? mCollideB : "?");
+                    who,
+                    mIidCollisions,
+                    mCollideIid,
+                    mCollideA ? mCollideA : "?",
+                    mCollideB ? mCollideB : "?");
     }
     if (mGuestViaNode) {
       lucent::info("producers",
                    "{}: {} guest prim(s) were named by the NODE's render fn (node+0x18) rather than by "
                    "the span's emitter fn — the same key space the native leg uses, so both legs land in "
-                   "one row.", who, (unsigned long long)mGuestViaNode);
+                   "one row.",
+                   who,
+                   (unsigned long long)mGuestViaNode);
     }
     if (mGuestViaPc) {
       lucent::warn("producers",
                    "{}: {} guest prim(s) were named only by the store's guest PC — the WEAKEST route "
                    "(c->pc is not restored after a nested call, so it may name a callee rather than the "
                    "submitter). Treat those rows as provisional until a stronger identity replaces them.",
-                   who, (unsigned long long)mGuestViaPc);
+                   who,
+                   (unsigned long long)mGuestViaPc);
     }
     if (mSpanNoFn) {
       lucent::warn("producers",
                    "{}: {} prim(s) had a span with NO emitter fn — of those, {} DID carry a render-walk "
                    "node. That second number is the denominator for keying the guest leg on the node's "
                    "render fn (node+0x18); if it is 0 that candidate is dead, not merely unexplored.",
-                   who, (unsigned long long)mSpanNoFn, (unsigned long long)mSpanNoFnWithNode);
+                   who,
+                   (unsigned long long)mSpanNoFn,
+                   (unsigned long long)mSpanNoFnWithNode);
     }
     if (mUnscopedNative) {
       // WHERE the undeclared work is, ranked, so the next producer to scope is measured not guessed.
       // Layer names match RqLayer (render_queue.h) without including it — this header is used by
       // hermetic tests that must not pull the queue in.
-      static const char* kLayer[LAYER_CAP] = { "background", "world", "overlay", "hud",
-                                               "layer4", "layer5", "layer6", "layer7" };
+      static const char *kLayer[LAYER_CAP] = {
+          "background", "world", "overlay", "hud", "layer4", "layer5", "layer6", "layer7"};
       lucent::Line ln;
       ln.add("{}: undeclared native prims BY LAYER:", who);
-      for (int l = 0; l < LAYER_CAP; l++)
-        if (mUnscopedByLayer[l]) ln.add(" {}={}", kLayer[l], (unsigned long long)mUnscopedByLayer[l]);
-      if (mUnscopedLayerUnknown) ln.add(" (no-layer-reported={})",
-                                        (unsigned long long)mUnscopedLayerUnknown);
+      for (int l = 0; l < LAYER_CAP; l++) {
+        if (mUnscopedByLayer[l]) {
+          ln.add(" {}={}", kLayer[l], (unsigned long long)mUnscopedByLayer[l]);
+        }
+      }
+      if (mUnscopedLayerUnknown) {
+        ln.add(" (no-layer-reported={})", (unsigned long long)mUnscopedLayerUnknown);
+      }
       ln.flush(lucent::Level::Warn, "producers");
       lucent::warn("producers",
                    "{}: {} native prim(s) drew with NO ProducerScope open — real work by an UNDECLARED "
                    "producer. Those are missing DB rows, not noise: wrap the producer in a "
-                   "ProducerScope naming its guest address.", who, (unsigned long long)mUnscopedNative);
+                   "ProducerScope naming its guest address.",
+                   who,
+                   (unsigned long long)mUnscopedNative);
     }
   }
 
- private:
+private:
   static constexpr int CLAIM_CAP = 256;
-  static constexpr int PROV_CAP  = BUILD_ID_CAP;
+  static constexpr int PROV_CAP = BUILD_ID_CAP;
   uint32_t mClaims[CLAIM_CAP] = {};
   // Parallel to mClaims, and parallel rather than a struct only because mClaims' layout is what
   // `reportChains` and `claimAt` already hand out; a struct here would churn three call sites for nothing.
-  bool     mClaimEarnedHere[CLAIM_CAP] = {};   // a native producer pushed on this GUEST key IN THIS RUN
-  bool     mClaimFromDisk[CLAIM_CAP]   = {};   // the claim existed before this run started
-  char     mClaimProv[CLAIM_CAP][PROV_CAP] = {};   // build id the FILE recorded; "" = none recorded
-  char     mBuildId[BUILD_ID_CAP] = {};        // identity of the RUNNING code; "" = caller never set one
-  int      mClaimCount = 0;
-  int      mClaimOverflow = 0;     // claims lost to a full set — an UNCLAIMED prim may be this, not a miss
+  bool mClaimEarnedHere[CLAIM_CAP] = {};     // a native producer pushed on this GUEST key IN THIS RUN
+  bool mClaimFromDisk[CLAIM_CAP] = {};       // the claim existed before this run started
+  char mClaimProv[CLAIM_CAP][PROV_CAP] = {}; // build id the FILE recorded; "" = none recorded
+  char mBuildId[BUILD_ID_CAP] = {};          // identity of the RUNNING code; "" = caller never set one
+  int mClaimCount = 0;
+  int mClaimOverflow = 0; // claims lost to a full set — an UNCLAIMED prim may be this, not a miss
   uint64_t mClaimTooEarly = 0;
 
   int claimIndexOf(uint32_t addr) const {
-    for (int i = 0; i < mClaimCount; i++) if (mClaims[i] == addr) return i;
+    for (int i = 0; i < mClaimCount; i++) {
+      if (mClaims[i] == addr) {
+        return i;
+      }
+    }
     return -1;
   }
-  void setClaimProv(int i, const char* prov) {
+  void setClaimProv(int i, const char *prov) {
     mClaimProv[i][0] = 0;
-    if (!prov) return;
+    if (!prov) {
+      return;
+    }
     size_t n = 0;
-    while (prov[n] && (unsigned char)prov[n] > 0x20 && n + 1 < PROV_CAP) { mClaimProv[i][n] = prov[n]; n++; }
+    while (prov[n] && (unsigned char)prov[n] > 0x20 && n + 1 < PROV_CAP) {
+      mClaimProv[i][n] = prov[n];
+      n++;
+    }
     mClaimProv[i][n] = 0;
   }
   // Third whitespace-delimited field of a claim line, or nullptr when the line has no such field. Returns
   // nullptr — never "" and never a placeholder — because "this line records no build id" is a REAL state
   // the report has to name separately from "recorded a different build".
-  static const char* claimLineBuildId(const char* line) {
+  static const char *claimLineBuildId(const char *line) {
     int field = 0;
-    const char* p = line;
+    const char *p = line;
     while (*p) {
-      while (*p == ' ' || *p == '\t') p++;
-      if (!*p || *p == '\n' || *p == '\r') return nullptr;
-      if (field == 2) return p;
-      while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+      while (*p == ' ' || *p == '\t') {
+        p++;
+      }
+      if (!*p || *p == '\n' || *p == '\r') {
+        return nullptr;
+      }
+      if (field == 2) {
+        return p;
+      }
+      while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') {
+        p++;
+      }
       field++;
     }
     return nullptr;
   }
 
-  void note(ProducerKey key, uint32_t prims, uint32_t frame, bool native, const char* name = nullptr) {
+  void note(ProducerKey key, uint32_t prims, uint32_t frame, bool native, const char *name = nullptr) {
     mFed = true;
     mPrimsSeen += prims;
     // A NATIVE push on a GUEST key is what makes that address a claim — see claims() above. Registered
@@ -757,13 +998,18 @@ class ProducerCensus {
         mClaims[i] = key.id;
         mClaimEarnedHere[i] = true;
         mClaimFromDisk[i] = false;
-        mClaimProv[i][0] = 0;         // brand new: its provenance is THIS build, written by appendClaims
+        mClaimProv[i][0] = 0; // brand new: its provenance is THIS build, written by appendClaims
       } else {
         mClaimOverflow++;
       }
     }
-    Row* r = nullptr;
-    for (int i = 0; i < mRowCount; i++) if (mRows[i].key == key) { r = &mRows[i]; break; }
+    Row *r = nullptr;
+    for (int i = 0; i < mRowCount; i++) {
+      if (mRows[i].key == key) {
+        r = &mRows[i];
+        break;
+      }
+    }
     if (r && name && name[0]) {
       if (!r->name[0]) {
         r->name = name;
@@ -775,22 +1021,33 @@ class ProducerCensus {
         // pushes from more than one native under more than one name (0x8007FCC8 has two claimants —
         // `codemap.py --addr 0x8007FCC8`), so a name mismatch there is not evidence of a key collision.
         mIidCollisions++;
-        if (!mCollideA) { mCollideA = r->name; mCollideB = name; mCollideIid = key.id; }
+        if (!mCollideA) {
+          mCollideA = r->name;
+          mCollideB = name;
+          mCollideIid = key.id;
+        }
       }
     }
     if (!r) {
-      if (mRowCount >= CAP) { mOverflow++; return; }   // the prim still counted as seen+attributed
+      if (mRowCount >= CAP) {
+        mOverflow++;
+        return;
+      } // the prim still counted as seen+attributed
       r = &mRows[mRowCount++];
       r->key = key;
       r->name = (name && name[0]) ? name : "";
       r->firstFrame = frame;
-      r->lastFrame  = frame;
-      r->frames     = 1;
+      r->lastFrame = frame;
+      r->frames = 1;
     } else if (frame != r->lastFrame) {
       r->lastFrame = frame;
       r->frames++;
     }
-    if (native) r->primsNative += prims; else r->primsGuest += prims;
+    if (native) {
+      r->primsNative += prims;
+    } else {
+      r->primsGuest += prims;
+    }
   }
 
   // ---- the row key AS A STRING, and why native-only rows may not use the guest format --------------
@@ -798,7 +1055,9 @@ class ProducerCensus {
   // FILENAME (docs/producers/<key>.md) and the argument to `producers.py show`. An interned iid printed
   // as `0x6E3A1C2B` would be indistinguishable from a guest address in every one of those places — a
   // row that looks like a function that does not exist. `pc-` says which space the number lives in.
-  struct KeyStr { char s[24]; };
+  struct KeyStr {
+    char s[24];
+  };
   static KeyStr keyStr(ProducerKey k) {
     KeyStr o{};
     snprintf(o.s, sizeof o.s, k.isNativeOnly() ? "pc-%08X" : "0x%08X", k.id);
@@ -807,11 +1066,13 @@ class ProducerCensus {
   // Names come from source string literals, but this writes JSON that a tool INGESTS: one stray quote
   // and producers.py counts the whole record unparseable, so a run's rows vanish from the DB. Sanitised
   // rather than trusted; truncation is visible in the value itself.
-  struct SafeStr { char s[64]; };
-  static SafeStr jsonSafe(const char* in) {
+  struct SafeStr {
+    char s[64];
+  };
+  static SafeStr jsonSafe(const char *in) {
     SafeStr o{};
     size_t n = 0;
-    for (const char* p = in ? in : ""; *p && n + 1 < sizeof o.s; ++p) {
+    for (const char *p = in ? in : ""; *p && n + 1 < sizeof o.s; ++p) {
       const unsigned char c = (unsigned char)*p;
       o.s[n++] = (c >= 0x20 && c < 0x7F && c != '"' && c != '\\') ? (char)c : '_';
     }
@@ -819,20 +1080,20 @@ class ProducerCensus {
     return o;
   }
 
-  int         mIidCollisions = 0;
-  const char* mCollideA = nullptr;
-  const char* mCollideB = nullptr;
-  uint32_t    mCollideIid = 0;
+  int mIidCollisions = 0;
+  const char *mCollideA = nullptr;
+  const char *mCollideB = nullptr;
+  uint32_t mCollideIid = 0;
   uint64_t mSpanNoFn = 0;
   uint64_t mSpanNoFnWithNode = 0;
   uint64_t mGuestViaNode = 0;
   uint64_t mGuestViaPc = 0;
   uint64_t mUnscopedByLayer[LAYER_CAP] = {};
   uint64_t mUnscopedLayerUnknown = 0;
-  Row      mRows[CAP] = {};
-  int      mRowCount = 0;
-  int      mOverflow = 0;
-  bool     mFed = false;
+  Row mRows[CAP] = {};
+  int mRowCount = 0;
+  int mOverflow = 0;
+  bool mFed = false;
   uint64_t mPrimsSeen = 0, mGp0Anon = 0, mSpanMiss = 0, mUnscopedNative = 0;
-  uint64_t mGuestOrigin = 0;   // guest-origin pushes at the native chokepoint (see noteGuestOriginPush)
+  uint64_t mGuestOrigin = 0; // guest-origin pushes at the native chokepoint (see noteGuestOriginPush)
 };

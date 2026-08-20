@@ -15,25 +15,27 @@
 // fact that it cycles.
 //
 // Hermetic: render_mode.h is a header of value types — no Core, no SDL, no window.
-#include "testutil.h"
 #include "render_mode.h"
+#include "testutil.h"
 #include <string.h>
 
 // The full cycle, asserted as a sequence rather than "it changed": a function that returned some other
 // path every time would satisfy a mere inequality check.
 static void test_cycle_order_is_native_gte_psx(void) {
   CHECK(render_path_next(RenderPath::Native) == RenderPath::Gte);
-  CHECK(render_path_next(RenderPath::Gte)    == RenderPath::Psx);
-  CHECK(render_path_next(RenderPath::Psx)    == RenderPath::Native);
+  CHECK(render_path_next(RenderPath::Gte) == RenderPath::Psx);
+  CHECK(render_path_next(RenderPath::Psx) == RenderPath::Native);
 }
 
 // Three presses from any starting point return to where they began — the property a user relies on when
 // they cycle past the one they wanted.
 static void test_three_steps_returns_to_start(void) {
-  const RenderPath starts[3] = { RenderPath::Native, RenderPath::Gte, RenderPath::Psx };
+  const RenderPath starts[3] = {RenderPath::Native, RenderPath::Gte, RenderPath::Psx};
   for (int i = 0; i < 3; i++) {
     RenderPath p = starts[i];
-    for (int k = 0; k < 3; k++) p = render_path_next(p);
+    for (int k = 0; k < 3; k++) {
+      p = render_path_next(p);
+    }
     CHECK(p == starts[i]);
   }
 }
@@ -42,9 +44,12 @@ static void test_three_steps_returns_to_start(void) {
 // would leave one renderer unreachable by the hotkey while every individual step still looked sane —
 // exactly the kind of gap a "it advances" assertion cannot see.
 static void test_cycle_visits_all_three_exactly_once(void) {
-  int seen[3] = { 0, 0, 0 };
+  int seen[3] = {0, 0, 0};
   RenderPath p = RenderPath::Native;
-  for (int k = 0; k < 3; k++) { seen[(int)p]++; p = render_path_next(p); }
+  for (int k = 0; k < 3; k++) {
+    seen[(int)p]++;
+    p = render_path_next(p);
+  }
   CHECK_EQ(seen[(int)RenderPath::Native], 1);
   CHECK_EQ(seen[(int)RenderPath::Gte], 1);
   CHECK_EQ(seen[(int)RenderPath::Psx], 1);
@@ -55,7 +60,7 @@ static void test_cycle_visits_all_three_exactly_once(void) {
 static void test_cycled_names_round_trip_through_parse(void) {
   RenderPath p = RenderPath::Native;
   for (int k = 0; k < 3; k++) {
-    const char* name = render_path_name(p);
+    const char *name = render_path_name(p);
     CHECK(name != NULL && strcmp(name, "?") != 0);
     RenderPath back = RenderPath::Native;
     CHECK(render_path_parse(name, &back));

@@ -24,11 +24,11 @@
 // does not accumulate samples there — which is what you want when the question is "where is the work".
 #include "cfg.h"
 #include "fs_util.h"
-#include <lucent/log.h>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <lucent/log.h>
 #include <string>
 #include <sys/time.h>
 #include <ucontext.h>
@@ -38,29 +38,43 @@ namespace {
 // Open-addressed PC histogram, fixed size, touched only from a signal handler — so no allocation, no
 // locking, and nothing that can deadlock if the sample lands inside malloc.
 constexpr int PROF_SLOTS = 1 << 16;
-struct Slot { uintptr_t pc; uint64_t n; };
+struct Slot {
+  uintptr_t pc;
+  uint64_t n;
+};
 Slot g_slots[PROF_SLOTS];
 volatile sig_atomic_t g_on = 0;
 uint64_t g_total = 0, g_dropped = 0;
 
-void on_prof(int, siginfo_t*, void* uc) {
-  if (!g_on) return;
+void on_prof(int, siginfo_t *, void *uc) {
+  if (!g_on) {
+    return;
+  }
 #if defined(__x86_64__)
-  const uintptr_t pc = (uintptr_t)((ucontext_t*)uc)->uc_mcontext.gregs[REG_RIP];
+  const uintptr_t pc = (uintptr_t)((ucontext_t *)uc)->uc_mcontext.gregs[REG_RIP];
 #elif defined(__aarch64__)
-  const uintptr_t pc = (uintptr_t)((ucontext_t*)uc)->uc_mcontext.pc;
+  const uintptr_t pc = (uintptr_t)((ucontext_t *)uc)->uc_mcontext.pc;
 #else
   const uintptr_t pc = 0;
 #endif
-  if (!pc) return;
+  if (!pc) {
+    return;
+  }
   g_total++;
   size_t h = (size_t)((pc >> 4) * 1147ull) & (PROF_SLOTS - 1);
   for (int probe = 0; probe < 64; probe++) {
-    Slot& s = g_slots[(h + probe) & (PROF_SLOTS - 1)];
-    if (s.pc == pc) { s.n++; return; }
-    if (s.pc == 0) { s.pc = pc; s.n = 1; return; }
+    Slot &s = g_slots[(h + probe) & (PROF_SLOTS - 1)];
+    if (s.pc == pc) {
+      s.n++;
+      return;
+    }
+    if (s.pc == 0) {
+      s.pc = pc;
+      s.n = 1;
+      return;
+    }
   }
-  g_dropped++;   // table congested at this bucket — counted, never silently discarded
+  g_dropped++; // table congested at this bucket — counted, never silently discarded
 }
 
 void dump();
@@ -76,46 +90,63 @@ void on_term(int sig) {
 }
 
 void dump() {
-  if (!g_on) return;
+  if (!g_on) {
+    return;
+  }
   g_on = 0;
-  const char* out = cfg_str("PSXPORT_PROF_OUT");
-  if (!out) out = "scratch/raw/prof_host.txt";
+  const char *out = cfg_str("PSXPORT_PROF_OUT");
+  if (!out) {
+    out = "scratch/raw/prof_host.txt";
+  }
   std::string t;
   char line[128];
-  snprintf(line, sizeof line, "# host-PC samples=%llu dropped=%llu\n",
-           (unsigned long long)g_total, (unsigned long long)g_dropped);
+  snprintf(line,
+           sizeof line,
+           "# host-PC samples=%llu dropped=%llu\n",
+           (unsigned long long)g_total,
+           (unsigned long long)g_dropped);
   t += line;
-  for (int i = 0; i < PROF_SLOTS; i++)
+  for (int i = 0; i < PROF_SLOTS; i++) {
     if (g_slots[i].pc) {
-      snprintf(line, sizeof line, "%016llx %llu\n",
-               (unsigned long long)g_slots[i].pc, (unsigned long long)g_slots[i].n);
+      snprintf(
+          line, sizeof line, "%016llx %llu\n", (unsigned long long)g_slots[i].pc, (unsigned long long)g_slots[i].n);
       t += line;
     }
-  if (Fs::writeFile(out, t.data(), t.size()))
-    lucent::info("prof", "{} sample(s) -> {}  (resolve with tools/prof_hot.py)",
-                 (unsigned long long)g_total, out);
-  else
+  }
+  if (Fs::writeFile(out, t.data(), t.size())) {
+    lucent::info("prof", "{} sample(s) -> {}  (resolve with tools/prof_hot.py)", (unsigned long long)g_total, out);
+  } else {
     lucent::error("prof", "FAILED to write {} — the profile you asked for does not exist", out);
-  if (g_dropped)
-    lucent::warn("prof", "{} sample(s) DROPPED to table congestion — the hot set is wider than the "
-                         "histogram; treat the tail as incomplete", (unsigned long long)g_dropped);
+  }
+  if (g_dropped) {
+    lucent::warn("prof",
+                 "{} sample(s) DROPPED to table congestion — the hot set is wider than the "
+                 "histogram; treat the tail as incomplete",
+                 (unsigned long long)g_dropped);
+  }
 }
 
-}  // namespace
+} // namespace
 
 void hostprof_init() {
-  if (!cfg_on("PSXPORT_PROF")) return;
+  if (!cfg_on("PSXPORT_PROF")) {
+    return;
+  }
   int hz = 1000;
-  if (const char* h = cfg_str("PSXPORT_PROF_HZ")) hz = atoi(h);
-  if (hz < 1) hz = 1;
+  if (const char *h = cfg_str("PSXPORT_PROF_HZ")) {
+    hz = atoi(h);
+  }
+  if (hz < 1) {
+    hz = 1;
+  }
 
-  struct sigaction sa {};
+  struct sigaction sa{};
   sa.sa_sigaction = on_prof;
   sa.sa_flags = SA_SIGINFO | SA_RESTART;
   sigemptyset(&sa.sa_mask);
   sigaction(SIGPROF, &sa, nullptr);
 
-  struct itimerval it {};
+  struct itimerval it{};
   it.it_interval.tv_usec = 1000000 / hz;
   it.it_value = it.it_interval;
   setitimer(ITIMER_PROF, &it, nullptr);

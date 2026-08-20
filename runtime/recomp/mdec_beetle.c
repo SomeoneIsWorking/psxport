@@ -6,19 +6,19 @@
 // clean recomp-facing interface to Beetle's MDEC_* API and provides faithful-first stubs for
 // the two externs mdec.c references (event-cycle budget, savestate unused) so the decode math
 // matches the oracle exactly. No enhancements: same IDCT, same YCbCr coefficients, same packing.
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 // Beetle MDEC API (mednafen/psx/mdec.h), declared locally to avoid pulling Beetle headers.
 // (mdec.c has no MDEC_Init; MDEC_Power is the reset/construct entry point.)
-void     MDEC_Power(void);
-void     MDEC_Write(const int32_t timestamp, uint32_t A, uint32_t V);
+void MDEC_Power(void);
+void MDEC_Write(const int32_t timestamp, uint32_t A, uint32_t V);
 uint32_t MDEC_Read(const int32_t timestamp, uint32_t A);
-void     MDEC_DMAWrite(uint32_t V);
+void MDEC_DMAWrite(uint32_t V);
 uint32_t MDEC_DMARead(uint32_t *offs);
-bool     MDEC_DMACanWrite(void);
-bool     MDEC_DMACanRead(void);
-void     MDEC_Run(int32_t clocks);
+bool MDEC_DMACanWrite(void);
+bool MDEC_DMACanRead(void);
+void MDEC_Run(int32_t clocks);
 
 // Externs mdec.c references — faithful-first values.
 // EventCycles is the global "next event horizon" the PSX scheduler uses to bound how far the
@@ -35,10 +35,16 @@ int32_t EventCycles = 0x7FFFFFFF;
 // Beetle selects between them with (A & 4): bit 2 clear = data port, set = status/control.
 // We pass the raw byte address straight through (only bit 2 matters). The timestamp argument
 // is unused by mdec.c's reads/writes, so 0 is faithful.
-void mdec_init(void) { MDEC_Power(); }
+void mdec_init(void) {
+  MDEC_Power();
+}
 
-void mdec_write(uint32_t addr, uint32_t val) { MDEC_Write(0, addr, val); }
-uint32_t mdec_read(uint32_t addr)            { return MDEC_Read(0, addr); }
+void mdec_write(uint32_t addr, uint32_t val) {
+  MDEC_Write(0, addr, val);
+}
+uint32_t mdec_read(uint32_t addr) {
+  return MDEC_Read(0, addr);
+}
 
 // DMA0 (MDEC-in): feed up to `count` 32-bit words of the compressed stream into the input FIFO.
 // Returns the number of words ACTUALLY fed (a short return is a deferral, not a drop).
@@ -57,14 +63,16 @@ uint32_t mdec_read(uint32_t addr)            { return MDEC_Read(0, addr); }
 // when DMA1 drains). In particular, when the decoder is BLOCKED ON OUTPUT (OutFIFO has data),
 // MDEC_Run() can NEVER retire the macroblock in flight — real DMA0/DMA1 ping-pong around the
 // decoder (vendor dma.c ChCan) — so bail immediately rather than burning a step budget.
-int mdec_dma_in(const uint32_t* words, int count) {
+int mdec_dma_in(const uint32_t *words, int count) {
   int i;
   for (i = 0; i < count; i++) {
     if (!MDEC_DMACanWrite()) {
-      if (!MDEC_DMACanRead())
-        MDEC_Run(0x40000000);        // run until the state machine parks at a FIFO gate
-      if (!MDEC_DMACanWrite())
-        return i;                    // output-blocked, command retired, or wedged: caller classifies
+      if (!MDEC_DMACanRead()) {
+        MDEC_Run(0x40000000); // run until the state machine parks at a FIFO gate
+      }
+      if (!MDEC_DMACanWrite()) {
+        return i; // output-blocked, command retired, or wedged: caller classifies
+      }
     }
     MDEC_DMAWrite(words[i]);
   }
@@ -125,7 +133,7 @@ int mdec_dma_in(const uint32_t* words, int count) {
 //
 // 4bpp/8bpp: for depth 0/1, RAMOffsetWWS == 0, so voffs is always 0 and placement degrades to a
 // plain linear drain (buf[i]) — which is exactly what hardware does there (no interleave).
-int mdec_dma_out(uint32_t* buf, int count) {
+int mdec_dma_out(uint32_t *buf, int count) {
   // Same time-stepping requirement as mdec_dma_in: decoded words only APPEAR inside MDEC_Run(), so a
   // loop that gives up the moment the output FIFO is empty returns a short (often zero-length)
   // drain and the frame is never produced. Advance the decoder and re-check before concluding there
@@ -135,7 +143,9 @@ int mdec_dma_out(uint32_t* buf, int count) {
   for (i = 0; i < count; i++) {
     int steps = 0;
     while (!MDEC_DMACanRead()) {
-      if (++steps > kMaxSteps) goto done;   // truly exhausted: return the short count, honestly
+      if (++steps > kMaxSteps) {
+        goto done; // truly exhausted: return the short count, honestly
+      }
       MDEC_Run(kStepClocks);
     }
     uint32_t offs;
@@ -155,10 +165,12 @@ done:
 // `buf` already advanced by the words drained so far (so i + offs is the cumulative dest).
 // Without this the tail fell to a linear data-port read -> wrong positions -> garbage/black
 // bits in the bottom-right macroblock.
-int mdec_dma_out_rest(uint32_t* buf, int count) {
+int mdec_dma_out_rest(uint32_t *buf, int count) {
   int i;
   for (i = 0; i < count; i++) {
-    if (MDEC_Read(0, 0x1F801824u) & 0x80000000u) break;   // status bit31 = OutFIFO empty
+    if (MDEC_Read(0, 0x1F801824u) & 0x80000000u) {
+      break; // status bit31 = OutFIFO empty
+    }
     uint32_t offs;
     uint32_t v = MDEC_DMARead(&offs);
     buf[i + (int32_t)offs] = v;
@@ -172,14 +184,22 @@ int mdec_dma_out_rest(uint32_t* buf, int count) {
 // documented above mdec_dma_out):
 //     MainRAM[(CurAddr + (offs << 2)) & 0x1FFFFC] = word;   CurAddr = (CurAddr + 4) & 0xFFFFFF;
 // with CurAddr running from the channel's MADR and advancing one word per transferred word.
-uint32_t mdec_dma_read_word(uint32_t* offs) { return MDEC_DMARead(offs); }
+uint32_t mdec_dma_read_word(uint32_t *offs) {
+  return MDEC_DMARead(offs);
+}
 
 // Give the decoder an effectively unbounded clock budget: runs the state machine until it parks at
 // a FIFO gate (InFIFO empty / OutFIFO full). Same idiom as native_fmv's mdec_pump; EventCycles
 // (0x7FFFFFFF here) is the only ceiling, so one call always reaches the next genuine block point.
-void mdec_step(void) { MDEC_Run(0x40000000); }
+void mdec_step(void) {
+  MDEC_Run(0x40000000);
+}
 
 // Status helpers wrapping Beetle's DMA-readiness predicates, for a caller that gates its own
 // DMA0/DMA1 transfers (>= 0x20 words available and the matching enable bit set in Control).
-bool mdec_dma_can_write(void) { return MDEC_DMACanWrite(); }
-bool mdec_dma_can_read(void)  { return MDEC_DMACanRead(); }
+bool mdec_dma_can_write(void) {
+  return MDEC_DMACanWrite();
+}
+bool mdec_dma_can_read(void) {
+  return MDEC_DMACanRead();
+}

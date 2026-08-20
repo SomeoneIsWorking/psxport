@@ -54,9 +54,16 @@ std::unique_ptr<RenderQueue> make_queue(void) {
 // Append one keyed WORLD face. Every field resolveKeyOrder reads is set explicitly here: the layer/
 // order-mode/sort-key triple that makes it "keyed", the dbg_node that decides its OBJECT GROUP, the
 // float screen XY, and the per-vertex ord (larger = nearer, the renderer's convention).
-void push_face(RenderQueue& q, uint32_t node, int sort_key,
-               float x0, float y0, float x1, float y1, float ord_at_v0, float ord_at_v2) {
-  RqItem& it = q.items[q.n];
+void push_face(RenderQueue &q,
+               uint32_t node,
+               int sort_key,
+               float x0,
+               float y0,
+               float x1,
+               float y1,
+               float ord_at_v0,
+               float ord_at_v2) {
+  RqItem &it = q.items[q.n];
   memset(&it, 0, sizeof(it));
   it.seq = q.seq++;
   it.layer = RQ_WORLD;
@@ -73,8 +80,8 @@ void push_face(RenderQueue& q, uint32_t node, int sort_key,
   it.key_ord = 1000.0f + (float)q.n;
   // Vertex winding 0=(x0,y0) 1=(x1,y0) 2=(x1,y1) 3=(x0,y1): an axis-aligned quad, split by the
   // rasterizer into tris (0,1,2) and (1,2,3) — the same split rq_ord_at samples with.
-  const float vx[4] = { x0, x1, x1, x0 };
-  const float vy[4] = { y0, y0, y1, y1 };
+  const float vx[4] = {x0, x1, x1, x0};
+  const float vy[4] = {y0, y0, y1, y1};
   for (int k = 0; k < 4; k++) {
     it.xsf[k] = vx[k];
     it.ysf[k] = vy[k];
@@ -94,23 +101,35 @@ void push_face(RenderQueue& q, uint32_t node, int sort_key,
 // The specification, implemented independently of the unit: snap[x] iff SOME other face of the same
 // object is in contest with x. Deliberately the dumbest possible O(n^2) formulation — it is the
 // oracle, so it must be obviously right rather than fast.
-std::vector<uint8_t> brute_force_snap(const RenderQueue& q) {
+std::vector<uint8_t> brute_force_snap(const RenderQueue &q) {
   std::vector<int> keyed;
   for (int i = 0; i < q.n; i++) {
-    const RqItem& it = q.items[i];
-    if (it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) continue;
-    if (it.dbg_node < 0x80000000u || it.dbg_node >= 0x80200000u) continue;
+    const RqItem &it = q.items[i];
+    if (it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) {
+      continue;
+    }
+    if (it.dbg_node < 0x80000000u || it.dbg_node >= 0x80200000u) {
+      continue;
+    }
     keyed.push_back(i);
   }
   std::vector<uint8_t> snap(q.n, 0);
-  for (size_t a = 0; a < keyed.size(); a++)
+  for (size_t a = 0; a < keyed.size(); a++) {
     for (size_t b = 0; b < keyed.size(); b++) {
-      if (a == b) continue;
-      const RqItem& A = q.items[keyed[a]];
-      const RqItem& B = q.items[keyed[b]];
-      if (A.dbg_node != B.dbg_node) continue;
-      if (rq_faces_in_contest(A, B)) { snap[keyed[a]] = 1; snap[keyed[b]] = 1; }
+      if (a == b) {
+        continue;
+      }
+      const RqItem &A = q.items[keyed[a]];
+      const RqItem &B = q.items[keyed[b]];
+      if (A.dbg_node != B.dbg_node) {
+        continue;
+      }
+      if (rq_faces_in_contest(A, B)) {
+        snap[keyed[a]] = 1;
+        snap[keyed[b]] = 1;
+      }
     }
+  }
   return snap;
 }
 
@@ -118,29 +137,42 @@ std::vector<uint8_t> brute_force_snap(const RenderQueue& q) {
 // reports the totals so a "0 disagreements" result carries its denominator — over how many faces,
 // and how many of them the oracle expected to be snapped. A run where the oracle snapped nothing
 // proves nothing about the snapping rules, so cases assert the expected snap count too.
-struct SnapCompare { int faces; int oracle_snapped; int unit_snapped; int disagreements; };
+struct SnapCompare {
+  int faces;
+  int oracle_snapped;
+  int unit_snapped;
+  int disagreements;
+};
 
-SnapCompare run_and_compare(RenderQueue& q) {
+SnapCompare run_and_compare(RenderQueue &q) {
   // The oracle reads pre-resolve depths, so it must run BEFORE the unit overwrites them with key_ord.
   std::vector<uint8_t> want = brute_force_snap(q);
   std::vector<float> ord_before(q.n);
-  for (int i = 0; i < q.n; i++) ord_before[i] = q.items[i].key_ord;
+  for (int i = 0; i < q.n; i++) {
+    ord_before[i] = q.items[i].key_ord;
+  }
 
   q.resolveKeyOrderFaces(0);
 
-  SnapCompare r = { q.n, 0, 0, 0 };
+  SnapCompare r = {q.n, 0, 0, 0};
   for (int i = 0; i < q.n; i++) {
     // A snapped face has every vertex ord replaced by its key_ord — that IS the observable effect.
     bool got = q.items[i].depth[0] == ord_before[i] && q.items[i].depth[1] == ord_before[i] &&
                q.items[i].depth[2] == ord_before[i] && q.items[i].depth[3] == ord_before[i];
-    if (want[i]) r.oracle_snapped++;
-    if (got) r.unit_snapped++;
-    if ((int)want[i] != (int)got) r.disagreements++;
+    if (want[i]) {
+      r.oracle_snapped++;
+    }
+    if (got) {
+      r.unit_snapped++;
+    }
+    if ((int)want[i] != (int)got) {
+      r.disagreements++;
+    }
   }
   return r;
 }
 
-}  // namespace
+} // namespace
 
 // ---- 1. the contradiction rule: two faces of one object whose depth inverts the game's key order --
 static void test_contradicting_pair_snaps_both(void) {
@@ -152,7 +184,7 @@ static void test_contradicting_pair_snaps_both(void) {
   push_face(*q, 0x800FD850u, 460, 0, 0, 40, 40, 0.20f, 0.80f);
   SnapCompare r = run_and_compare(*q);
   CHECK_EQ(r.faces, 2);
-  CHECK_EQ(r.oracle_snapped, 2);   // the rule must actually FIRE here, else the case tests nothing
+  CHECK_EQ(r.oracle_snapped, 2); // the rule must actually FIRE here, else the case tests nothing
   CHECK_EQ(r.disagreements, 0);
 }
 
@@ -162,9 +194,10 @@ static void test_disjoint_faces_never_snap(void) {
   // Eight faces of one object, side by side and not overlapping, keys ascending with depth. No pair
   // can contest, so NOTHING may be snapped — the property that makes this a discriminator rather
   // than the reverted "re-order every face" ramp.
-  for (int i = 0; i < 8; i++)
-    push_face(*q, 0x800FD850u, 400 + i,
-              (float)(i * 50), 0, (float)(i * 50 + 40), 40, 0.5f - 0.01f * i, 0.5f - 0.01f * i);
+  for (int i = 0; i < 8; i++) {
+    push_face(
+        *q, 0x800FD850u, 400 + i, (float)(i * 50), 0, (float)(i * 50 + 40), 40, 0.5f - 0.01f * i, 0.5f - 0.01f * i);
+  }
   SnapCompare r = run_and_compare(*q);
   CHECK_EQ(r.faces, 8);
   CHECK_EQ(r.oracle_snapped, 0);
@@ -193,7 +226,7 @@ static void test_coincident_same_key_pair_snaps(void) {
   // The key says nothing about which is in front, and the fixed quad triangulation splits a rotated
   // listing on the opposite diagonal — so both snap and submission order decides.
   push_face(*q, 0x800FD850u, 408, 10, 10, 50, 50, 0.40f, 0.40f);
-  RqItem& rot = q->items[q->n];
+  RqItem &rot = q->items[q->n];
   rot = q->items[0];
   rot.seq = q->seq++;
   // Rotate the vertex listing by one: same multiset of corners, different diagonal.
@@ -218,12 +251,12 @@ static void test_mixed_group_matches_oracle(void) {
   push_face(*q, 0x800FD850u, 460, 0, 0, 40, 40, 0.20f, 0.80f);
   push_face(*q, 0x800FD850u, 408, 200, 200, 240, 240, 0.40f, 0.40f);
   push_face(*q, 0x800FD850u, 408, 200, 200, 240, 240, 0.40f, 0.40f);
-  for (int i = 0; i < 4; i++)
-    push_face(*q, 0x800FD850u, 500 + i,
-              (float)(600 + i * 60), 0, (float)(600 + i * 60 + 40), 40, 0.2f, 0.2f);
+  for (int i = 0; i < 4; i++) {
+    push_face(*q, 0x800FD850u, 500 + i, (float)(600 + i * 60), 0, (float)(600 + i * 60 + 40), 40, 0.2f, 0.2f);
+  }
   SnapCompare r = run_and_compare(*q);
   CHECK_EQ(r.faces, 8);
-  CHECK_EQ(r.oracle_snapped, 4);   // the two contest pairs, and only those
+  CHECK_EQ(r.oracle_snapped, 4); // the two contest pairs, and only those
   CHECK_EQ(r.disagreements, 0);
 }
 
@@ -240,9 +273,7 @@ static void test_large_group_work_is_not_quadratic(void) {
     // Alternating ramp directions guarantee adjacent faces contest: even faces ramp near->far,
     // odd faces far->near, and consecutive keys make the odd one the "farther-keyed" partner.
     bool even = (i % 2) == 0;
-    push_face(*q, 0x800F06D8u, 1500 + i,
-              0, 0, 300, 200,
-              even ? 0.90f : 0.20f, even ? 0.10f : 0.80f);
+    push_face(*q, 0x800F06D8u, 1500 + i, 0, 0, 300, 200, even ? 0.90f : 0.20f, even ? 0.10f : 0.80f);
   }
   SnapCompare r = run_and_compare(*q);
   CHECK_EQ(r.faces, kFaces);

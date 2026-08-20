@@ -20,31 +20,37 @@
 //     and 3 differ by exactly one thing: the rasterizer.
 //   * The path is PER-CORE state, so SBS/dualcore can run leg A native against leg B pure without
 //     either leg observing the other's setting.
-#include "testutil.h"
 #include "render_mode.h"
+#include "testutil.h"
 
 // Every path maps to exactly one (geometry source, rasterizer, enhancements) triple. Spelled as a
 // table so a future path (or a changed meaning) has to edit the EXPECTATION, not just the code.
 static void test_path_derives_all_three_answers(void) {
-  struct Row { RenderPath path; bool psxRender; bool softGpu; bool enh; const char* name; };
+  struct Row {
+    RenderPath path;
+    bool psxRender;
+    bool softGpu;
+    bool enh;
+    const char *name;
+  };
   static const Row rows[] = {
-    // path                geometry from guest?  software raster?  PC enhancements?
-    { RenderPath::Native,  false,                false,            true,   "native" },
-    { RenderPath::Gte,     true,                 false,            false,  "gte"    },
-    { RenderPath::Psx,     true,                 true,             false,  "psx"    },
+      // path                geometry from guest?  software raster?  PC enhancements?
+      {RenderPath::Native, false, false, true, "native"},
+      {RenderPath::Gte, true, false, false, "gte"},
+      {RenderPath::Psx, true, true, false, "psx"},
   };
   int n = 0;
-  for (const Row& r : rows) {
+  for (const Row &r : rows) {
     RenderMode m;
     m.setPath(r.path);
     CHECK_EQ((int)m.path(), (int)r.path);
-    CHECK_EQ(m.psxRender(),          r.psxRender);
-    CHECK_EQ(m.softGpu(),            r.softGpu);
+    CHECK_EQ(m.psxRender(), r.psxRender);
+    CHECK_EQ(m.softGpu(), r.softGpu);
     CHECK_EQ(m.enhancementsAllowed(), r.enh);
     CHECK(strcmp(render_path_name(r.path), r.name) == 0);
     n++;
   }
-  CHECK_EQ(n, 3);   // the denominator: three paths were actually exercised, not zero
+  CHECK_EQ(n, 3); // the denominator: three paths were actually exercised, not zero
 }
 
 // The default must be the shipping configuration. A default of Gte or Psx would silently turn the
@@ -64,11 +70,13 @@ static void test_software_raster_implies_guest_geometry(void) {
   for (int i = 0; i <= (int)RenderPath::Psx; i++) {
     RenderMode m;
     m.setPath((RenderPath)i);
-    if (m.softGpu() && !m.psxRender()) illegal++;
+    if (m.softGpu() && !m.psxRender()) {
+      illegal++;
+    }
     seen++;
   }
-  CHECK_EQ(seen, 3);       // scanned all three paths…
-  CHECK_EQ(illegal, 0);    // …and none of them spells the black-screen pair
+  CHECK_EQ(seen, 3);    // scanned all three paths…
+  CHECK_EQ(illegal, 0); // …and none of them spells the black-screen pair
 }
 
 // Parsing is what the CVar layer and the REPL command both go through, so a typo must be REJECTED
@@ -77,14 +85,14 @@ static void test_software_raster_implies_guest_geometry(void) {
 static void test_parse_names_and_reject_garbage(void) {
   RenderPath p = RenderPath::Native;
   CHECK(render_path_parse("native", &p) && p == RenderPath::Native);
-  CHECK(render_path_parse("gte",    &p) && p == RenderPath::Gte);
-  CHECK(render_path_parse("psx",    &p) && p == RenderPath::Psx);
-  CHECK(render_path_parse("PSX",    &p) && p == RenderPath::Psx);   // case-insensitive
+  CHECK(render_path_parse("gte", &p) && p == RenderPath::Gte);
+  CHECK(render_path_parse("psx", &p) && p == RenderPath::Psx);
+  CHECK(render_path_parse("PSX", &p) && p == RenderPath::Psx); // case-insensitive
   p = RenderPath::Gte;
-  CHECK(!render_path_parse("softgpu", &p));   // not a name
-  CHECK(!render_path_parse("",        &p));
-  CHECK(!render_path_parse("nativ",   &p));   // no prefix matching: a truncation is a typo
-  CHECK_EQ((int)p, (int)RenderPath::Gte);     // a rejected parse leaves the target UNTOUCHED
+  CHECK(!render_path_parse("softgpu", &p)); // not a name
+  CHECK(!render_path_parse("", &p));
+  CHECK(!render_path_parse("nativ", &p)); // no prefix matching: a truncation is a typo
+  CHECK_EQ((int)p, (int)RenderPath::Gte); // a rejected parse leaves the target UNTOUCHED
 }
 
 // Per-Core independence: two RenderModes (SBS's two cores) never share state.

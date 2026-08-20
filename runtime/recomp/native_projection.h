@@ -23,8 +23,7 @@ struct ModelVertex {
 };
 
 struct NativeProjectedVertex {
-  std::array<int64_t, 3>
-      raw_view_fixed{}; // signed wrapped 44-bit, 12 fractional bits
+  std::array<int64_t, 3> raw_view_fixed{}; // signed wrapped 44-bit, 12 fractional bits
   std::array<float, 3> raw_view{};
   std::array<int32_t, 3> ir{};
   uint16_t sz = 0;
@@ -41,8 +40,6 @@ struct NativeProjectedVertex {
 // SXY/SZ for native rendering. This is endpoint projection only: projected
 // output is not a temporal recipe and must not be stored/lerped in place of
 // authored model, transform, and camera inputs.
-NativeProjectedVertex project(const FixedAffine &affine,
-                              const ProjectionParams &projection,
-                              ModelVertex vertex);
+NativeProjectedVertex project(const FixedAffine &affine, const ProjectionParams &projection, ModelVertex vertex);
 
 } // namespace psxport::native_projection

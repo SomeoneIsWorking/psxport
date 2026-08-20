@@ -34,37 +34,45 @@ namespace psx::ui {
 
 class AssetSet {
 public:
-    // Resolve `<PSXPORT_ASSET_DIR>/assets/rml/` and check it exists. Logs one error naming the
-    // resolved directory, the cwd and the knob when it does not. Call once before loading anything.
-    // Returns false if the directory is missing — every subsequent resolve() will also fail, and
-    // the caller should say "no menu" rather than attempt four doomed loads.
-    bool open();
+  // Resolve `<PSXPORT_ASSET_DIR>/assets/rml/` and check it exists. Logs one error naming the
+  // resolved directory, the cwd and the knob when it does not. Call once before loading anything.
+  // Returns false if the directory is missing — every subsequent resolve() will also fail, and
+  // the caller should say "no menu" rather than attempt four doomed loads.
+  bool open();
 
-    // Absolute path for `rel` (e.g. "menu.rml") inside the asset directory. Always returns a path,
-    // even if `open()` failed, so an error message can name what WOULD have been tried.
-    std::string resolve(const char* rel) const;
+  // Absolute path for `rel` (e.g. "menu.rml") inside the asset directory. Always returns a path,
+  // even if `open()` failed, so an error message can name what WOULD have been tried.
+  std::string resolve(const char *rel) const;
 
-    // resolve() + an existence check. Records the miss for report() and logs it with its path.
-    bool require(const char* rel, std::string& out_path);
+  // resolve() + an existence check. Records the miss for report() and logs it with its path.
+  bool require(const char *rel, std::string &out_path);
 
-    // One summary line carrying the denominator: `assets: N of M found in <dir>`. Emitted at
-    // error level when anything is missing, info otherwise. Returns true if nothing was missing.
-    bool report() const;
+  // One summary line carrying the denominator: `assets: N of M found in <dir>`. Emitted at
+  // error level when anything is missing, info otherwise. Returns true if nothing was missing.
+  bool report() const;
 
-    const std::string& dir() const { return mDir; }
-    bool  base_ok() const { return mBaseOk; }
-    int   found() const   { return mFound; }
-    int   wanted() const  { return mWanted; }
+  const std::string &dir() const {
+    return mDir;
+  }
+  bool base_ok() const {
+    return mBaseOk;
+  }
+  int found() const {
+    return mFound;
+  }
+  int wanted() const {
+    return mWanted;
+  }
 
 private:
-    std::string              mDir;
-    std::vector<std::string> mMissing;
-    int  mFound  = 0;
-    int  mWanted = 0;
-    bool mBaseOk = false;
-    bool mOpened = false;
+  std::string mDir;
+  std::vector<std::string> mMissing;
+  int mFound = 0;
+  int mWanted = 0;
+  bool mBaseOk = false;
+  bool mOpened = false;
 };
 
-}  // namespace psx::ui
+} // namespace psx::ui
 
 #endif

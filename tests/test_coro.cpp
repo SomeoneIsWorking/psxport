@@ -18,27 +18,33 @@ static void test_midbody_yield_preserves_locals(void) {
   trace.clear();
   Coro co;
   co.start([&] {
-    int phase = 10;          // a real C local: only correct on resume if the stack is preserved
-    trace.push_back(phase);  // 10
+    int phase = 10;         // a real C local: only correct on resume if the stack is preserved
+    trace.push_back(phase); // 10
     co.yield();
     phase += 1;
-    trace.push_back(phase);  // 11
+    trace.push_back(phase); // 11
     co.yield();
     phase += 1;
-    trace.push_back(phase);  // 12
+    trace.push_back(phase); // 12
   });
   CHECK(co.started());
-  CHECK(!co.done());                       // nothing runs before the first resume
+  CHECK(!co.done()); // nothing runs before the first resume
   CHECK_EQ(trace.size(), 0u);
 
   co.resume();
-  CHECK_EQ(trace.size(), 1u); CHECK_EQ(trace[0], 10); CHECK(!co.done());
+  CHECK_EQ(trace.size(), 1u);
+  CHECK_EQ(trace[0], 10);
+  CHECK(!co.done());
   co.resume();
-  CHECK_EQ(trace.size(), 2u); CHECK_EQ(trace[1], 11); CHECK(!co.done());
+  CHECK_EQ(trace.size(), 2u);
+  CHECK_EQ(trace[1], 11);
+  CHECK(!co.done());
   co.resume();
-  CHECK_EQ(trace.size(), 3u); CHECK_EQ(trace[2], 12); CHECK(co.done());
+  CHECK_EQ(trace.size(), 3u);
+  CHECK_EQ(trace[2], 12);
+  CHECK(co.done());
   co.resume();
-  CHECK_EQ(trace.size(), 3u);              // resume after done is a no-op
+  CHECK_EQ(trace.size(), 3u); // resume after done is a no-op
 }
 
 // Deep nested calls across a yield: the resume point is mid-INNER-function, the exact case the
@@ -48,30 +54,59 @@ static void test_yield_from_nested_frames(void) {
   Coro co;
   auto inner = [&](int base) {
     trace.push_back(base + 1);
-    co.yield();                 // suspend 3 frames deep
-    trace.push_back(base + 2);  // resume mid-inner-function
+    co.yield();                // suspend 3 frames deep
+    trace.push_back(base + 2); // resume mid-inner-function
   };
-  auto mid = [&](int base) { trace.push_back(base); inner(base + 10); trace.push_back(base + 99); };
-  co.start([&] { mid(100); });
+  auto mid = [&](int base) {
+    trace.push_back(base);
+    inner(base + 10);
+    trace.push_back(base + 99);
+  };
+  co.start([&] {
+    mid(100);
+  });
 
-  co.resume();  // 100, 111
-  CHECK_EQ(trace.size(), 2u); CHECK_EQ(trace[0], 100); CHECK_EQ(trace[1], 111); CHECK(!co.done());
-  co.resume();  // 112, 199 -> body returns
-  CHECK_EQ(trace.size(), 4u); CHECK_EQ(trace[2], 112); CHECK_EQ(trace[3], 199); CHECK(co.done());
+  co.resume(); // 100, 111
+  CHECK_EQ(trace.size(), 2u);
+  CHECK_EQ(trace[0], 100);
+  CHECK_EQ(trace[1], 111);
+  CHECK(!co.done());
+  co.resume(); // 112, 199 -> body returns
+  CHECK_EQ(trace.size(), 4u);
+  CHECK_EQ(trace[2], 112);
+  CHECK_EQ(trace[3], 199);
+  CHECK(co.done());
 }
 
 // Two interleaved fibers driven by one "scheduler" — resuming A must not disturb B's suspended stack.
 static void test_two_fibers_interleave(void) {
   trace.clear();
   Coro a, b;
-  a.start([&] { trace.push_back(1); a.yield(); trace.push_back(3); a.yield(); trace.push_back(5); });
-  b.start([&] { trace.push_back(2); b.yield(); trace.push_back(4); b.yield(); trace.push_back(6); });
-  a.resume(); b.resume();   // 1,2
-  a.resume(); b.resume();   // 3,4
-  a.resume(); b.resume();   // 5,6
+  a.start([&] {
+    trace.push_back(1);
+    a.yield();
+    trace.push_back(3);
+    a.yield();
+    trace.push_back(5);
+  });
+  b.start([&] {
+    trace.push_back(2);
+    b.yield();
+    trace.push_back(4);
+    b.yield();
+    trace.push_back(6);
+  });
+  a.resume();
+  b.resume(); // 1,2
+  a.resume();
+  b.resume(); // 3,4
+  a.resume();
+  b.resume(); // 5,6
   const std::vector<int> want{1, 2, 3, 4, 5, 6};
   CHECK_EQ(trace.size(), want.size());
-  for (size_t i = 0; i < want.size(); i++) CHECK_EQ(trace[i], want[i]);
+  for (size_t i = 0; i < want.size(); i++) {
+    CHECK_EQ(trace[i], want[i]);
+  }
   CHECK(a.done());
   CHECK(b.done());
 }
@@ -85,15 +120,16 @@ static void test_cancel_unwinds_blocked_fiber(void) {
     Coro co;
     co.start([&] {
       trace.push_back(1);
-      co.yield();            // blocks here forever unless cancel()'d
-      reached_after = 1;     // must NOT run after cancel
+      co.yield();        // blocks here forever unless cancel()'d
+      reached_after = 1; // must NOT run after cancel
       trace.push_back(2);
     });
-    co.resume();             // runs to the yield
-    CHECK_EQ(trace.size(), 1u); CHECK(!co.done());
-    co.cancel();             // unwinds the blocked fiber
+    co.resume(); // runs to the yield
+    CHECK_EQ(trace.size(), 1u);
+    CHECK(!co.done());
+    co.cancel(); // unwinds the blocked fiber
     CHECK(co.done());
-  }                          // ~Coro joins cleanly (no hang/abort)
+  } // ~Coro joins cleanly (no hang/abort)
   CHECK_EQ(reached_after, 0);
   CHECK_EQ(trace.size(), 1u);
 }
@@ -105,11 +141,14 @@ static void test_destructor_self_cancels(void) {
   int destructed = 0;
   {
     Coro co;
-    co.start([&] { co.yield(); co.yield(); });
-    co.resume();               // blocked at first yield
+    co.start([&] {
+      co.yield();
+      co.yield();
+    });
+    co.resume(); // blocked at first yield
     CHECK(!co.done());
   }
-  destructed = 1;              // only reached if ~Coro cancelled + joined instead of hanging
+  destructed = 1; // only reached if ~Coro cancelled + joined instead of hanging
   CHECK_EQ(destructed, 1);
 }
 

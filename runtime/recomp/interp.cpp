@@ -15,24 +15,24 @@
 //
 // Faithful-first simplifications match the emitter: no load-delay slot; add==addu; signed
 // div/mult via cpu_div/mult helpers; GTE via gte_op/gte_read/write.
-#include "core.h"
-#include "game.h"            // c->game->platform_hle
 #include "cfg.h"
+#include "core.h"
+#include "game.h"         // c->game->platform_hle
+#include "platform_hle.h" // class PlatformHle — sync-primitive HLE lookup on an interpreted call target
+#include "recomp_iface.h" // seam: psxport_recomp()->rec_func_index (generated MAIN entry index)
 #include <lucent/log.h>
-#include "platform_hle.h"    // class PlatformHle — sync-primitive HLE lookup on an interpreted call target
-#include "recomp_iface.h"    // seam: psxport_recomp()->rec_func_index (generated MAIN entry index)
 #include <stdio.h>
 #include <stdlib.h>
 
-void rec_dispatch(Core* c, uint32_t addr);
-void rec_syscall(Core* c, uint32_t code);
-void rec_break(Core* c, uint32_t code);
+void rec_dispatch(Core *c, uint32_t addr);
+void rec_syscall(Core *c, uint32_t code);
+void rec_break(Core *c, uint32_t code);
 // ORACLE engine (later-278): this file is recompiled back in as the INTERPRETER ENGINE for the oracle
 // Core only (docs/oracle.md). The native port Core still runs the recomp substrate; a per-Core flag
 // `c->use_interp` routes the oracle Core's dispatch here instead. The public entries are renamed
 // interp_coro_run / interp_run so they do NOT collide with dispatch.cpp's substrate shims of the old
 // rec_coro_run / rec_interp names (those shims now forward HERE when c->use_interp).
-void interp_run(Core* c, uint32_t pc);
+void interp_run(Core *c, uint32_t pc);
 
 // Diagnostics: the PC currently being interpreted (read by the watchdog on a stall to report
 // WHERE the interpreter is spinning). Optional call trace (PSXPORT_INTERP_TRACE=<path>) logs
@@ -42,14 +42,24 @@ void interp_run(Core* c, uint32_t pc);
 // bracket override (one fn registered at SEVERAL scanned overlay entries) can super-call the exact body
 // it intercepted instead of a stale stored address. Read immediately on override entry.
 // g_override_tgt retired — per-Core Core::override_tgt (see core.h). Referenced here via c->override_tgt.
-void interp_trace_open(Core* c, const char* path) {
-  FILE*& fp = c->idiag.trace_fp;
-  if (path && *path) { fp = fopen(path, "w"); if (!fp) perror(path);
-    else setvbuf(fp, 0, _IOLBF, 0); }
-  else if (fp) { fclose(fp); fp = 0; }   // empty path = close
+void interp_trace_open(Core *c, const char *path) {
+  FILE *&fp = c->idiag.trace_fp;
+  if (path && *path) {
+    fp = fopen(path, "w");
+    if (!fp) {
+      perror(path);
+    } else {
+      setvbuf(fp, 0, _IOLBF, 0);
+    }
+  } else if (fp) {
+    fclose(fp);
+    fp = 0;
+  } // empty path = close
 }
-static inline void trace_call(InterpDiag& d, uint32_t from, uint32_t to) {
-  if (d.trace_fp) fprintf(d.trace_fp, "%08X -> %08X\n", from, to);
+static inline void trace_call(InterpDiag &d, uint32_t from, uint32_t to) {
+  if (d.trace_fp) {
+    fprintf(d.trace_fp, "%08X -> %08X\n", from, to);
+  }
 }
 
 // ---- Differential NATIVE-CALL tracer (PSXPORT_NCALL_TRACE=<path>) ---------------------------------
@@ -60,28 +70,54 @@ static inline void trace_call(InterpDiag& d, uint32_t from, uint32_t to) {
 // exact override whose conversion broke (a different return value / register effect); the first line
 // with differing INPUTS means an earlier call's memory side-effect diverged. tools/ncall_diff.py
 // runs both builds and reports that first divergence. Zero cost when the env var is unset.
-static void ncall_open_once(InterpDiag& d) {
-  if (d.ncall_init) return;
+static void ncall_open_once(InterpDiag &d) {
+  if (d.ncall_init) {
+    return;
+  }
   d.ncall_init = 1;
-  const char* p = cfg_str("PSXPORT_NCALL_TRACE");
-  if (p && *p) { d.ncall_fp = fopen(p, "w"); if (!d.ncall_fp) perror(p);
-                 else setvbuf(d.ncall_fp, 0, _IOLBF, 0); }
+  const char *p = cfg_str("PSXPORT_NCALL_TRACE");
+  if (p && *p) {
+    d.ncall_fp = fopen(p, "w");
+    if (!d.ncall_fp) {
+      perror(p);
+    } else {
+      setvbuf(d.ncall_fp, 0, _IOLBF, 0);
+    }
+  }
 }
 // kind: 'O' = address-keyed override, 'B' = BIOS vector. Logged AFTER the native fn runs.
-static inline void ncall_log(InterpDiag& d, char kind, uint32_t tgt, uint32_t a0, uint32_t a1, uint32_t a2,
-                             uint32_t a3, uint32_t v0, uint32_t v1) {
-  if (!d.ncall_fp) return;
-  fprintf(d.ncall_fp, "%ld %c %08X  a:%08X %08X %08X %08X -> v:%08X %08X\n",
-          d.ncall_seq++, kind, tgt, a0, a1, a2, a3, v0, v1);
+static inline void ncall_log(InterpDiag &d,
+                             char kind,
+                             uint32_t tgt,
+                             uint32_t a0,
+                             uint32_t a1,
+                             uint32_t a2,
+                             uint32_t a3,
+                             uint32_t v0,
+                             uint32_t v1) {
+  if (!d.ncall_fp) {
+    return;
+  }
+  fprintf(d.ncall_fp,
+          "%ld %c %08X  a:%08X %08X %08X %08X -> v:%08X %08X\n",
+          d.ncall_seq++,
+          kind,
+          tgt,
+          a0,
+          a1,
+          a2,
+          a3,
+          v0,
+          v1);
 }
 
-#define RS(i)  (((i) >> 21) & 31)
-#define RT(i)  (((i) >> 16) & 31)
-#define RD(i)  (((i) >> 11) & 31)
-#define SH(i)  (((i) >> 6) & 31)
-#define FN(i)  ((i) & 63)
+#define RS(i) (((i) >> 21) & 31)
+#define RT(i) (((i) >> 16) & 31)
+#define RD(i) (((i) >> 11) & 31)
+#define SH(i) (((i) >> 6) & 31)
+#define FN(i) ((i) & 63)
 #define IMM(i) ((uint32_t)(uint16_t)(i))
-#define SIMM(i)((uint32_t)(int32_t)(int16_t)(i))
+#define SIMM(i) ((uint32_t)(int32_t)(int16_t)(i))
 #define TGT(i, pc) (((pc) & 0xF0000000u) | (((i) & 0x03FFFFFFu) << 2))
 
 // ── NATIVE DEPTH, mfc2 FORM, DONE DYNAMICALLY (see gte_beetle.cpp gte_hold_pz / gte_record_pz).
@@ -109,11 +145,20 @@ static uint8_t s_pz_kind[32];
 // was attributed in the first place.
 static int interp_depth_on() {
   static int v = -1;
-  if (v < 0) v = cfg_on("PSXPORT_INTERP_DEPTH") ? 1 : 0;
+  if (v < 0) {
+    v = cfg_on("PSXPORT_INTERP_DEPTH") ? 1 : 0;
+  }
   return v;
 }
 
-#define W(n, v) do { uint32_t _n = (n); if (_n) { c->r[_n] = (v); s_pz_kind[_n] = PZ_NONE; } } while (0)
+#define W(n, v)                                                                                                        \
+  do {                                                                                                                 \
+    uint32_t _n = (n);                                                                                                 \
+    if (_n) {                                                                                                          \
+      c->r[_n] = (v);                                                                                                  \
+      s_pz_kind[_n] = PZ_NONE;                                                                                         \
+    }                                                                                                                  \
+  } while (0)
 
 // A DERIVED value keeps its provenance. Both renderers pack a projected vertex as
 // `(screenXY << 5) | clipcode` into a cache and unshift it when assembling the packet, so the word
@@ -129,16 +174,18 @@ static int interp_depth_on() {
 // expands to `uint32_t _n = (_n)` — self-initialisation from an uninitialised value, and every
 // derived write lands on a garbage register. That is exactly what happened, and it presented as the
 // port hanging on the first interpreted renderer, not as anything resembling a depth problem.
-#define WD(n, v, a, b) do {                                                    \
-    uint32_t _dn = (n), _da = (a), _db = (b);                                  \
-    uint32_t _ds = s_pz_kind[_da & 31] ? _da : (s_pz_kind[_db & 31] ? _db : 0u); \
-    uint8_t  _dk = _ds ? s_pz_kind[_ds & 31] : (uint8_t)PZ_NONE;               \
-    uint32_t _dv = (v);   /* BEFORE the write — v may read the destination */  \
-    if (_dn) {                                                                 \
-      if (_ds) gte_hold_move((int)_dn, (int)_ds);                              \
-      c->r[_dn] = _dv;                                                         \
-      s_pz_kind[_dn] = _dk;                                                    \
-    }                                                                          \
+#define WD(n, v, a, b)                                                                                                 \
+  do {                                                                                                                 \
+    uint32_t _dn = (n), _da = (a), _db = (b);                                                                          \
+    uint32_t _ds = s_pz_kind[_da & 31] ? _da : (s_pz_kind[_db & 31] ? _db : 0u);                                       \
+    uint8_t _dk = _ds ? s_pz_kind[_ds & 31] : (uint8_t)PZ_NONE;                                                        \
+    uint32_t _dv = (v); /* BEFORE the write — v may read the destination */                                            \
+    if (_dn) {                                                                                                         \
+      if (_ds)                                                                                                         \
+        gte_hold_move((int)_dn, (int)_ds);                                                                             \
+      c->r[_dn] = _dv;                                                                                                 \
+      s_pz_kind[_dn] = _dk;                                                                                            \
+    }                                                                                                                  \
   } while (0)
 
 // ---- Core load-delay hazard DETECTOR (PSXPORT_LDHAZARD) ------------------------------------
@@ -151,55 +198,106 @@ static int interp_depth_on() {
 // Returns the GPR a load writes (target), or 0 if `in` is not a GPR-target load.
 static int ld_target(uint32_t in) {
   uint32_t op = in >> 26;
-  if (op >= 0x20 && op <= 0x26) return RT(in);          // lb lh lwl lw lbu lhu lwr
-  if (op == 0x10 && RS(in) == 0x00) return RT(in);      // mfc0
-  if (op == 0x12 && (RS(in) == 0x00 || RS(in) == 0x02)) return RT(in); // mfc2 / cfc2
+  if (op >= 0x20 && op <= 0x26) {
+    return RT(in); // lb lh lwl lw lbu lhu lwr
+  }
+  if (op == 0x10 && RS(in) == 0x00) {
+    return RT(in); // mfc0
+  }
+  if (op == 0x12 && (RS(in) == 0x00 || RS(in) == 0x02)) {
+    return RT(in); // mfc2 / cfc2
+  }
   return 0;
 }
 // Does `in` read GPR r as a source operand?
 static int reads_gpr(uint32_t in, int r) {
-  if (r == 0) return 0;
+  if (r == 0) {
+    return 0;
+  }
   uint32_t op = in >> 26, f = FN(in);
   switch (op) {
-    case 0x00: // SPECIAL
-      switch (f) {
-        case 0x00: case 0x02: case 0x03: return RT(in) == r;            // sll srl sra (rt, sh imm)
-        case 0x08: return RS(in) == r;                                  // jr
-        case 0x09: return RS(in) == r;                                  // jalr
-        case 0x10: case 0x12: return 0;                                 // mfhi mflo
-        case 0x11: case 0x13: return RS(in) == r;                       // mthi mtlo
-        default:   return RS(in) == r || RT(in) == r;                   // arith/logic/shiftv/mul/div
-      }
-    case 0x0F: return 0;                                                // lui
-    case 0x08: case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E:
-      return RS(in) == r;                                               // addi.. ori.. (rs)
-    case 0x20: case 0x21: case 0x23: case 0x24: case 0x25: return RS(in) == r;   // loads: base
-    case 0x22: case 0x26: return RS(in) == r || RT(in) == r;            // lwl/lwr: base + merge
-    case 0x28: case 0x29: case 0x2B: case 0x2A: case 0x2E:              // stores
-      return RS(in) == r || RT(in) == r;
-    case 0x04: case 0x05: return RS(in) == r || RT(in) == r;            // beq bne
-    case 0x06: case 0x07: case 0x01: return RS(in) == r;                // blez bgtz regimm
-    case 0x10: return RS(in) == 0x04 && RT(in) == r;                    // mtc0 (rt)
-    case 0x12: return (RS(in) == 0x04 || RS(in) == 0x06) && RT(in) == r; // mtc2/ctc2 (rt)
-    case 0x32: return RS(in) == r;                                      // lwc2 base
-    case 0x3A: return RS(in) == r;                                      // swc2 base
-    default: return 0;
+  case 0x00: // SPECIAL
+    switch (f) {
+    case 0x00:
+    case 0x02:
+    case 0x03:
+      return RT(in) == r; // sll srl sra (rt, sh imm)
+    case 0x08:
+      return RS(in) == r; // jr
+    case 0x09:
+      return RS(in) == r; // jalr
+    case 0x10:
+    case 0x12:
+      return 0; // mfhi mflo
+    case 0x11:
+    case 0x13:
+      return RS(in) == r; // mthi mtlo
+    default:
+      return RS(in) == r || RT(in) == r; // arith/logic/shiftv/mul/div
+    }
+  case 0x0F:
+    return 0; // lui
+  case 0x08:
+  case 0x09:
+  case 0x0A:
+  case 0x0B:
+  case 0x0C:
+  case 0x0D:
+  case 0x0E:
+    return RS(in) == r; // addi.. ori.. (rs)
+  case 0x20:
+  case 0x21:
+  case 0x23:
+  case 0x24:
+  case 0x25:
+    return RS(in) == r; // loads: base
+  case 0x22:
+  case 0x26:
+    return RS(in) == r || RT(in) == r; // lwl/lwr: base + merge
+  case 0x28:
+  case 0x29:
+  case 0x2B:
+  case 0x2A:
+  case 0x2E: // stores
+    return RS(in) == r || RT(in) == r;
+  case 0x04:
+  case 0x05:
+    return RS(in) == r || RT(in) == r; // beq bne
+  case 0x06:
+  case 0x07:
+  case 0x01:
+    return RS(in) == r; // blez bgtz regimm
+  case 0x10:
+    return RS(in) == 0x04 && RT(in) == r; // mtc0 (rt)
+  case 0x12:
+    return (RS(in) == 0x04 || RS(in) == 0x06) && RT(in) == r; // mtc2/ctc2 (rt)
+  case 0x32:
+    return RS(in) == r; // lwc2 base
+  case 0x3A:
+    return RS(in) == r; // swc2 base
+  default:
+    return 0;
   }
 }
 // Check the just-fetched instruction (`in`@`pc`, about to execute) against the previously
 // executed one, then make it the new "last". Called in execution order — INCLUDING delay slots —
 // so a load in a jump/branch delay slot is checked against the branch TARGET (the real next op).
-static inline void ldhaz_step(InterpDiag& d, uint32_t in, uint32_t pc) {
-  if (d.ldhaz < 0) d.ldhaz = lucent::channel_on("ldhazard") ? 1 : 0;
+static inline void ldhaz_step(InterpDiag &d, uint32_t in, uint32_t pc) {
+  if (d.ldhaz < 0) {
+    d.ldhaz = lucent::channel_on("ldhazard") ? 1 : 0;
+  }
   if (d.ldhaz) {
-    uint32_t p = d.ld_last_in; int t = ld_target(p);
+    uint32_t p = d.ld_last_in;
+    int t = ld_target(p);
     // Skip the lwl/lwr unaligned-merge idiom (same rt): our no-delay model merges correctly.
     int merge = ((p >> 26) == 0x22 && (in >> 26) == 0x26 && RT(p) == RT(in)) ||
                 ((p >> 26) == 0x26 && (in >> 26) == 0x22 && RT(p) == RT(in));
-    if (t && !merge && reads_gpr(in, t) && d.ldhaz_n++ < 60)
+    if (t && !merge && reads_gpr(in, t) && d.ldhaz_n++ < 60) {
       lucent::info("ldhaz", "load r{} @{:08X} ({:08X}) -> read by next @{:08X} ({:08X})", t, d.ld_last_pc, p, pc, in);
+    }
   }
-  d.ld_last_in = in; d.ld_last_pc = pc;
+  d.ld_last_in = in;
+  d.ld_last_pc = pc;
 }
 
 // OVERRIDE TABLE REMOVED (2026-06-22) — top-down PC-driven model: PC calls PC directly; PSX never
@@ -209,133 +307,267 @@ static inline void ldhaz_step(InterpDiag& d, uint32_t in, uint32_t pc) {
 // interpreter into native code at a registered address. Native code is now invoked by PC calling
 // the native function directly.
 
-static int is_bios(uint32_t a) { uint32_t p = a & 0x1FFFFFFF; return p==0xA0||p==0xB0||p==0xC0; }
+static int is_bios(uint32_t a) {
+  uint32_t p = a & 0x1FFFFFFF;
+  return p == 0xA0 || p == 0xB0 || p == 0xC0;
+}
 
 // Execute one non-control instruction (delay-slot-safe; no branches/jumps/loads-delay).
-static void exec_simple(Core* c, uint32_t in) {
+static void exec_simple(Core *c, uint32_t in) {
   uint32_t op = in >> 26;
-  if (in == 0) return;  // nop
+  if (in == 0) {
+    return; // nop
+  }
   switch (op) {
-    case 0x00: {  // SPECIAL
-      uint32_t f = FN(in), rs = RS(in), rt = RT(in), rd = RD(in), sh = SH(in);
-      switch (f) {
-        case 0x00: WD(rd, c->r[rt] << sh, rt, rt); break;                              // sll
-        case 0x02: WD(rd, c->r[rt] >> sh, rt, rt); break;                             // srl
-        case 0x03: WD(rd, (uint32_t)((int32_t)c->r[rt] >> sh), rt, rt); break;        // sra
-        case 0x04: WD(rd, c->r[rt] << (c->r[rs] & 31), rt, rt); break;                // sllv
-        case 0x06: WD(rd, c->r[rt] >> (c->r[rs] & 31), rt, rt); break;                // srlv
-        case 0x07: WD(rd, (uint32_t)((int32_t)c->r[rt] >> (c->r[rs] & 31)), rt, rt); break; // srav
-        case 0x10: W(rd, c->hi); break;                                      // mfhi
-        case 0x11: c->hi = c->r[rs]; break;                                  // mthi
-        case 0x12: W(rd, c->lo); break;                                      // mflo
-        case 0x13: c->lo = c->r[rs]; break;                                  // mtlo
-        case 0x18: { int64_t p = (int64_t)(int32_t)c->r[rs] * (int64_t)(int32_t)c->r[rt];
-                     c->lo = (uint32_t)p; c->hi = (uint32_t)((uint64_t)p >> 32); } break; // mult
-        case 0x19: { uint64_t p = (uint64_t)c->r[rs] * (uint64_t)c->r[rt];
-                     c->lo = (uint32_t)p; c->hi = (uint32_t)(p >> 32); } break;           // multu
-        case 0x1A: cpu_div(c, c->r[rs], c->r[rt]); break;                    // div
-        case 0x1B: cpu_divu(c, c->r[rs], c->r[rt]); break;                   // divu
-        case 0x20: case 0x21: WD(rd, c->r[rs] + c->r[rt], rs, rt); break;    // add/addu
-        case 0x22: case 0x23: WD(rd, c->r[rs] - c->r[rt], rs, rt); break;    // sub/subu
-        case 0x24: WD(rd, c->r[rs] & c->r[rt], rs, rt); break;               // and
-        case 0x25: WD(rd, c->r[rs] | c->r[rt], rs, rt); break;               // or
-        case 0x26: WD(rd, c->r[rs] ^ c->r[rt], rs, rt); break;               // xor
-        case 0x27: W(rd, ~(c->r[rs] | c->r[rt])); break;                     // nor
-        case 0x2A: W(rd, (uint32_t)((int32_t)c->r[rs] < (int32_t)c->r[rt])); break; // slt
-        case 0x2B: W(rd, (uint32_t)(c->r[rs] < c->r[rt])); break;            // sltu
-        case 0x0C: rec_syscall(c, (in >> 6) & 0xFFFFF); break;               // syscall
-        case 0x0D: rec_break(c, (in >> 6) & 0xFFFFF); break;                 // break
-        default: lucent::info("interp", "bad special funct 0x{:02X}", f); break;
+  case 0x00: { // SPECIAL
+    uint32_t f = FN(in), rs = RS(in), rt = RT(in), rd = RD(in), sh = SH(in);
+    switch (f) {
+    case 0x00:
+      WD(rd, c->r[rt] << sh, rt, rt);
+      break; // sll
+    case 0x02:
+      WD(rd, c->r[rt] >> sh, rt, rt);
+      break; // srl
+    case 0x03:
+      WD(rd, (uint32_t)((int32_t)c->r[rt] >> sh), rt, rt);
+      break; // sra
+    case 0x04:
+      WD(rd, c->r[rt] << (c->r[rs] & 31), rt, rt);
+      break; // sllv
+    case 0x06:
+      WD(rd, c->r[rt] >> (c->r[rs] & 31), rt, rt);
+      break; // srlv
+    case 0x07:
+      WD(rd, (uint32_t)((int32_t)c->r[rt] >> (c->r[rs] & 31)), rt, rt);
+      break; // srav
+    case 0x10:
+      W(rd, c->hi);
+      break; // mfhi
+    case 0x11:
+      c->hi = c->r[rs];
+      break; // mthi
+    case 0x12:
+      W(rd, c->lo);
+      break; // mflo
+    case 0x13:
+      c->lo = c->r[rs];
+      break; // mtlo
+    case 0x18: {
+      int64_t p = (int64_t)(int32_t)c->r[rs] * (int64_t)(int32_t)c->r[rt];
+      c->lo = (uint32_t)p;
+      c->hi = (uint32_t)((uint64_t)p >> 32);
+    } break; // mult
+    case 0x19: {
+      uint64_t p = (uint64_t)c->r[rs] * (uint64_t)c->r[rt];
+      c->lo = (uint32_t)p;
+      c->hi = (uint32_t)(p >> 32);
+    } break; // multu
+    case 0x1A:
+      cpu_div(c, c->r[rs], c->r[rt]);
+      break; // div
+    case 0x1B:
+      cpu_divu(c, c->r[rs], c->r[rt]);
+      break; // divu
+    case 0x20:
+    case 0x21:
+      WD(rd, c->r[rs] + c->r[rt], rs, rt);
+      break; // add/addu
+    case 0x22:
+    case 0x23:
+      WD(rd, c->r[rs] - c->r[rt], rs, rt);
+      break; // sub/subu
+    case 0x24:
+      WD(rd, c->r[rs] & c->r[rt], rs, rt);
+      break; // and
+    case 0x25:
+      WD(rd, c->r[rs] | c->r[rt], rs, rt);
+      break; // or
+    case 0x26:
+      WD(rd, c->r[rs] ^ c->r[rt], rs, rt);
+      break; // xor
+    case 0x27:
+      W(rd, ~(c->r[rs] | c->r[rt]));
+      break; // nor
+    case 0x2A:
+      W(rd, (uint32_t)((int32_t)c->r[rs] < (int32_t)c->r[rt]));
+      break; // slt
+    case 0x2B:
+      W(rd, (uint32_t)(c->r[rs] < c->r[rt]));
+      break; // sltu
+    case 0x0C:
+      rec_syscall(c, (in >> 6) & 0xFFFFF);
+      break; // syscall
+    case 0x0D:
+      rec_break(c, (in >> 6) & 0xFFFFF);
+      break; // break
+    default:
+      lucent::info("interp", "bad special funct 0x{:02X}", f);
+      break;
+    }
+    break;
+  }
+  case 0x0F:
+    W(RT(in), IMM(in) << 16);
+    break; // lui
+  case 0x08:
+  case 0x09:
+    WD(RT(in), c->r[RS(in)] + SIMM(in), RS(in), RS(in));
+    break; // addi/addiu
+  case 0x0A:
+    W(RT(in), (uint32_t)((int32_t)c->r[RS(in)] < (int32_t)SIMM(in)));
+    break; // slti
+  case 0x0B:
+    W(RT(in), (uint32_t)(c->r[RS(in)] < SIMM(in)));
+    break; // sltiu
+  case 0x0C:
+    WD(RT(in), c->r[RS(in)] & IMM(in), RS(in), RS(in));
+    break; // andi
+  case 0x0D:
+    WD(RT(in), c->r[RS(in)] | IMM(in), RS(in), RS(in));
+    break; // ori
+  case 0x0E:
+    WD(RT(in), c->r[RS(in)] ^ IMM(in), RS(in), RS(in));
+    break; // xori
+  case 0x20:
+    W(RT(in), (uint32_t)c->mem_r8s(c->r[RS(in)] + SIMM(in)));
+    break; // lb
+  case 0x24:
+    W(RT(in), (uint32_t)c->mem_r8(c->r[RS(in)] + SIMM(in)));
+    break; // lbu
+  case 0x21:
+    W(RT(in), (uint32_t)c->mem_r16s(c->r[RS(in)] + SIMM(in)));
+    break; // lh
+  case 0x25:
+    W(RT(in), (uint32_t)c->mem_r16(c->r[RS(in)] + SIMM(in)));
+    break;     // lhu
+  case 0x23: { // lw
+    const uint32_t a = c->r[RS(in)] + SIMM(in), rt = RT(in);
+    W(rt, c->mem_r32(a));
+    // Remember WHERE this word came from, at the load — a load may clobber its own base register
+    // (Spyro's vertex-cache index does exactly that), so the address cannot be rebuilt at the store.
+    if (rt && interp_depth_on()) {
+      gte_hold_src(c, (int)rt, a);
+      s_pz_kind[rt] = PZ_SRC;
+    }
+    break;
+  }
+  case 0x22:
+    W(RT(in), c->mem_lwl(c->r[RT(in)], c->r[RS(in)] + SIMM(in)));
+    break; // lwl
+  case 0x26:
+    W(RT(in), c->mem_lwr(c->r[RT(in)], c->r[RS(in)] + SIMM(in)));
+    break; // lwr
+  case 0x28:
+    c->mem_w8(c->r[RS(in)] + SIMM(in), (uint8_t)c->r[RT(in)]);
+    break; // sb
+  case 0x29:
+    c->mem_w16(c->r[RS(in)] + SIMM(in), (uint16_t)c->r[RT(in)]);
+    break;     // sh
+  case 0x2B: { // sw
+    const uint32_t a = c->r[RS(in)] + SIMM(in), rt = RT(in);
+    c->mem_w32(a, c->r[rt]);
+    // Attach depth to the address written, but ONLY from a register that still carries it.
+    if (s_pz_kind[rt & 31] == PZ_VERTEX) {
+      gte_record_pz(c, a, (int)rt);
+    } else if (s_pz_kind[rt & 31] == PZ_SRC) {
+      gte_copy_pz(c, (int)rt, a);
+    }
+    break;
+  }
+  case 0x2A:
+    c->mem_swl(c->r[RS(in)] + SIMM(in), c->r[RT(in)]);
+    break; // swl
+  case 0x2E:
+    c->mem_swr(c->r[RS(in)] + SIMM(in), c->r[RT(in)]);
+    break;     // swr
+  case 0x10: { // COP0
+    uint32_t fmt = RS(in);
+    if (fmt == 0x00) {
+      W(RT(in), cop0_mfc(c, RD(in))); // mfc0
+    } else if (fmt == 0x04) {
+      cop0_mtc(c, RD(in), c->r[RT(in)]); // mtc0
+    }
+    // rfe (in==0x42000010) is a no-op under HLE
+    break;
+  }
+  case 0x12: { // COP2 / GTE
+    uint32_t fmt = RS(in);
+    if (in & (1u << 25)) {
+      gte_op(c, in);
+      break;
+    } // GTE operation (cop2 bit25)
+    if (fmt == 0x00) { // mfc2
+      const uint32_t rd = RD(in), rt = RT(in);
+      W(rt, gte_read_data(rd));
+      // SXY0/1/2 and SXYP are the projected screen-XY registers; each pairs with the SZ holding
+      // that vertex's view-space Z (same pairing the recompiler uses — see emit.py ZPAIR).
+      if (rt && rd >= 12 && rd <= 15 && interp_depth_on()) {
+        static const int kZPair[4] = {17, 18, 19, 19};
+        gte_hold_pz(c, (int)rt, kZPair[rd - 12]);
+        s_pz_kind[rt] = PZ_VERTEX;
       }
-      break;
+    } else if (fmt == 0x02) {
+      W(RT(in), gte_read_ctrl(RD(in))); // cfc2
+    } else if (fmt == 0x04) {
+      gte_write_data(RD(in), c->r[RT(in)]); // mtc2
+    } else if (fmt == 0x06) {
+      gte_write_ctrl(RD(in), c->r[RT(in)]); // ctc2
     }
-    case 0x0F: W(RT(in), IMM(in) << 16); break;                             // lui
-    case 0x08: case 0x09: WD(RT(in), c->r[RS(in)] + SIMM(in), RS(in), RS(in)); break;        // addi/addiu
-    case 0x0A: W(RT(in), (uint32_t)((int32_t)c->r[RS(in)] < (int32_t)SIMM(in))); break; // slti
-    case 0x0B: W(RT(in), (uint32_t)(c->r[RS(in)] < SIMM(in))); break;       // sltiu
-    case 0x0C: WD(RT(in), c->r[RS(in)] & IMM(in), RS(in), RS(in)); break;                    // andi
-    case 0x0D: WD(RT(in), c->r[RS(in)] | IMM(in), RS(in), RS(in)); break;                    // ori
-    case 0x0E: WD(RT(in), c->r[RS(in)] ^ IMM(in), RS(in), RS(in)); break;                    // xori
-    case 0x20: W(RT(in), (uint32_t)c->mem_r8s(c->r[RS(in)] + SIMM(in))); break;   // lb
-    case 0x24: W(RT(in), (uint32_t)c->mem_r8(c->r[RS(in)] + SIMM(in))); break;           // lbu
-    case 0x21: W(RT(in), (uint32_t)c->mem_r16s(c->r[RS(in)] + SIMM(in))); break; // lh
-    case 0x25: W(RT(in), (uint32_t)c->mem_r16(c->r[RS(in)] + SIMM(in))); break;          // lhu
-    case 0x23: {                                                                          // lw
-      const uint32_t a = c->r[RS(in)] + SIMM(in), rt = RT(in);
-      W(rt, c->mem_r32(a));
-      // Remember WHERE this word came from, at the load — a load may clobber its own base register
-      // (Spyro's vertex-cache index does exactly that), so the address cannot be rebuilt at the store.
-      if (rt && interp_depth_on()) { gte_hold_src(c, (int)rt, a); s_pz_kind[rt] = PZ_SRC; }
-      break;
+    break;
+  }
+  case 0x32:
+    gte_write_data(RT(in), c->mem_r32(c->r[RS(in)] + SIMM(in)));
+    break; // lwc2
+  // swc2. Routed through gte_store_xy for the projected screen-XY registers so the interpreter
+  // records native depth exactly as the recompiled path does — a function stepped under the
+  // interpreter must not silently lose its vertices' depth (the two paths are mixed at will).
+  case 0x3A: {
+    const uint32_t a = c->r[RS(in)] + SIMM(in), rt = RT(in);
+    if (rt >= 12 && rt <= 15) {
+      gte_store_xy(c, a, (int)rt);
+    } else {
+      c->mem_w32(a, gte_read_data(rt));
     }
-    case 0x22: W(RT(in), c->mem_lwl(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwl
-    case 0x26: W(RT(in), c->mem_lwr(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwr
-    case 0x28: c->mem_w8(c->r[RS(in)] + SIMM(in), (uint8_t)c->r[RT(in)]); break;         // sb
-    case 0x29: c->mem_w16(c->r[RS(in)] + SIMM(in), (uint16_t)c->r[RT(in)]); break;       // sh
-    case 0x2B: {                                                                          // sw
-      const uint32_t a = c->r[RS(in)] + SIMM(in), rt = RT(in);
-      c->mem_w32(a, c->r[rt]);
-      // Attach depth to the address written, but ONLY from a register that still carries it.
-      if (s_pz_kind[rt & 31] == PZ_VERTEX)   gte_record_pz(c, a, (int)rt);
-      else if (s_pz_kind[rt & 31] == PZ_SRC) gte_copy_pz(c, (int)rt, a);
-      break;
-    }
-    case 0x2A: c->mem_swl(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // swl
-    case 0x2E: c->mem_swr(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // swr
-    case 0x10: {  // COP0
-      uint32_t fmt = RS(in);
-      if (fmt == 0x00) W(RT(in), cop0_mfc(c, RD(in)));        // mfc0
-      else if (fmt == 0x04) cop0_mtc(c, RD(in), c->r[RT(in)]); // mtc0
-      // rfe (in==0x42000010) is a no-op under HLE
-      break;
-    }
-    case 0x12: {  // COP2 / GTE
-      uint32_t fmt = RS(in);
-      if (in & (1u << 25)) { gte_op(c, in); break; }          // GTE operation (cop2 bit25)
-      if (fmt == 0x00) {                                      // mfc2
-        const uint32_t rd = RD(in), rt = RT(in);
-        W(rt, gte_read_data(rd));
-        // SXY0/1/2 and SXYP are the projected screen-XY registers; each pairs with the SZ holding
-        // that vertex's view-space Z (same pairing the recompiler uses — see emit.py ZPAIR).
-        if (rt && rd >= 12 && rd <= 15 && interp_depth_on()) {
-          static const int kZPair[4] = {17, 18, 19, 19};
-          gte_hold_pz(c, (int)rt, kZPair[rd - 12]);
-          s_pz_kind[rt] = PZ_VERTEX;
+    break;
+  }
+  default:
+    // FAIL-FAST (global rule, user 2026-06-22): a bad opcode means the PC derailed into data/garbage —
+    // a real bug (wrong jump target / unloaded overlay / corrupt load). Do NOT limp on spewing thousands
+    // of "bad opcode" lines; abort immediately with the derail site + a guest-stack backtrace so the
+    // broken jump/load can be found and fixed at its root.
+    lucent::info("DERAIL",
+                 "\nbad opcode 0x{:02X} insn=0x{:08X} at pc=0x{:08X} ra=0x{:08X} sp=0x{:08X}",
+                 op,
+                 in,
+                 c->pc,
+                 c->r[31],
+                 c->r[29]);
+    {
+      uint32_t sp = c->r[29];
+      int shown = 0;
+      for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
+        uint32_t w = c->mem_r32(a), k = w & 0x1FFFFFFF;
+        if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0) {
+          lucent::info("interp", "   [sp+0x{:03X}]=0x{:08X}", a - sp, w);
+          shown++;
         }
       }
-      else if (fmt == 0x02) W(RT(in), gte_read_ctrl(RD(in))); // cfc2
-      else if (fmt == 0x04) gte_write_data(RD(in), c->r[RT(in)]); // mtc2
-      else if (fmt == 0x06) gte_write_ctrl(RD(in), c->r[RT(in)]); // ctc2
-      break;
     }
-    case 0x32: gte_write_data(RT(in), c->mem_r32(c->r[RS(in)] + SIMM(in))); break;       // lwc2
-    // swc2. Routed through gte_store_xy for the projected screen-XY registers so the interpreter
-    // records native depth exactly as the recompiled path does — a function stepped under the
-    // interpreter must not silently lose its vertices' depth (the two paths are mixed at will).
-    case 0x3A: {
-      const uint32_t a = c->r[RS(in)] + SIMM(in), rt = RT(in);
-      if (rt >= 12 && rt <= 15) gte_store_xy(c, a, (int)rt);
-      else c->mem_w32(a, gte_read_data(rt));
-      break;
+    // PSXPORT_DERAIL_DUMP=<path>: snapshot guest RAM at the derail so the offending overlay/jump can be
+    // reverse-engineered (the overlay code isn't in static MAIN.EXE; disas.py --ram needs this dump).
+    {
+      const char *dp = cfg_str("PSXPORT_DERAIL_DUMP");
+      if (dp) {
+        FILE *df = fopen(dp, "wb");
+        if (df) {
+          fwrite(c->ram, 1, 0x200000, df);
+          fclose(df);
+          lucent::info("DERAIL", "guest RAM dumped -> {} (2MB)", dp);
+        }
+      }
     }
-    default:
-      // FAIL-FAST (global rule, user 2026-06-22): a bad opcode means the PC derailed into data/garbage —
-      // a real bug (wrong jump target / unloaded overlay / corrupt load). Do NOT limp on spewing thousands
-      // of "bad opcode" lines; abort immediately with the derail site + a guest-stack backtrace so the
-      // broken jump/load can be found and fixed at its root.
-      lucent::info("DERAIL", "\nbad opcode 0x{:02X} insn=0x{:08X} at pc=0x{:08X} ra=0x{:08X} sp=0x{:08X}", op, in, c->pc, c->r[31], c->r[29]);
-      { uint32_t sp = c->r[29]; int shown = 0;
-        for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
-          uint32_t w = c->mem_r32(a), k = w & 0x1FFFFFFF;
-          if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0) { lucent::info("interp", "   [sp+0x{:03X}]=0x{:08X}", a-sp, w); shown++; }
-        } }
-      // PSXPORT_DERAIL_DUMP=<path>: snapshot guest RAM at the derail so the offending overlay/jump can be
-      // reverse-engineered (the overlay code isn't in static MAIN.EXE; disas.py --ram needs this dump).
-      { const char* dp = cfg_str("PSXPORT_DERAIL_DUMP");
-        if (dp) { FILE* df = fopen(dp, "wb");
-          if (df) { fwrite(c->ram, 1, 0x200000, df); fclose(df);
-                    lucent::info("DERAIL", "guest RAM dumped -> {} (2MB)", dp); } } }
-      fflush(stderr); abort();
+    fflush(stderr);
+    abort();
   }
 }
 
@@ -350,7 +582,7 @@ static void exec_simple(Core* c, uint32_t in) {
 // everything else is interpreted flat. This is the ucontext-free model: all a yield must
 // save/restore is the PSX state (PC via the link/stack, regs, SP-in-g_ram).
 #define CORO_SENTINEL 0xDEAD0000u
-void rec_dispatch_miss(Core* c, uint32_t addr);
+void rec_dispatch_miss(Core *c, uint32_t addr);
 
 // ---- Interpreter burn-down tripwire (PSXPORT_INTERP_FUNCS=<path>) --------------------------------
 // The top-down native-port metric: record every UNIQUE guest function the interpreter actually runs
@@ -359,21 +591,37 @@ void rec_dispatch_miss(Core* c, uint32_t addr);
 // appended as `TO  <-from  count(so far=1)` so the file doubles as a representative call-edge map for
 // building the port tree top-down. Open-addressing set, line-buffered so a kill/timeout still yields
 // the list. Zero cost when the env var is unset.
-static void ifn_open_once(InterpDiag& d) {
+static void ifn_open_once(InterpDiag &d) {
   d.ifn_init = 1;
-  const char* p = cfg_str("PSXPORT_INTERP_FUNCS");
-  if (p && *p) { d.ifn_fp = fopen(p, "w"); if (!d.ifn_fp) perror(p);
-                 else setvbuf(d.ifn_fp, 0, _IOLBF, 0); }
+  const char *p = cfg_str("PSXPORT_INTERP_FUNCS");
+  if (p && *p) {
+    d.ifn_fp = fopen(p, "w");
+    if (!d.ifn_fp) {
+      perror(p);
+    } else {
+      setvbuf(d.ifn_fp, 0, _IOLBF, 0);
+    }
+  }
 }
-static inline void ifn_record(InterpDiag& d, uint32_t tgt, uint32_t from) {
-  if (!d.ifn_init) ifn_open_once(d);
-  if (!d.ifn_fp) return;
+static inline void ifn_record(InterpDiag &d, uint32_t tgt, uint32_t from) {
+  if (!d.ifn_init) {
+    ifn_open_once(d);
+  }
+  if (!d.ifn_fp) {
+    return;
+  }
   uint32_t h = (tgt * 2654435761u) >> 18, m = (1u << 14) - 1u;
   for (uint32_t i = 0; i < (1u << 14); i++) {
     uint32_t s = (h + i) & m;
-    if (d.ifn_set[s] == tgt) return;              // already recorded
-    if (d.ifn_set[s] == 0) { d.ifn_set[s] = tgt; d.ifn_count++;
-      fprintf(d.ifn_fp, "%08X  <-%08X  [#%d]\n", tgt, from, d.ifn_count); return; }
+    if (d.ifn_set[s] == tgt) {
+      return; // already recorded
+    }
+    if (d.ifn_set[s] == 0) {
+      d.ifn_set[s] = tgt;
+      d.ifn_count++;
+      fprintf(d.ifn_fp, "%08X  <-%08X  [#%d]\n", tgt, from, d.ifn_count);
+      return;
+    }
   }
 }
 
@@ -393,60 +641,98 @@ static inline void ifn_record(InterpDiag& d, uint32_t tgt, uint32_t from) {
 //      if each call is cheap. Open-addressing, same shape as the ifn set.
 // Overlay (DEMO/GAME.BIN) functions aren't in tomba2_funcs.txt; their hot addresses report raw.
 // (histogram state lives on InterpDiag — per-Core so SBS profiles never interleave)
-static inline void prof_pc_tick(InterpDiag& d, uint32_t pc) {
+static inline void prof_pc_tick(InterpDiag &d, uint32_t pc) {
   d.prof_pc[(pc & 0x1FFFFF) >> 4]++;
   d.prof_total++;
 }
-static inline void prof_call_tick(InterpDiag& d, uint32_t tgt) {
+static inline void prof_call_tick(InterpDiag &d, uint32_t tgt) {
   uint32_t h = (tgt * 2654435761u) >> 18, m = (1u << 14) - 1u;
   for (uint32_t i = 0; i < (1u << 14); i++) {
     uint32_t s = (h + i) & m;
-    if (d.prof_call_addr[s] == tgt) { d.prof_call_n[s]++; d.prof_call_total++; return; }
-    if (d.prof_call_addr[s] == 0)   { d.prof_call_addr[s] = tgt; d.prof_call_n[s] = 1; d.prof_call_total++; return; }
+    if (d.prof_call_addr[s] == tgt) {
+      d.prof_call_n[s]++;
+      d.prof_call_total++;
+      return;
+    }
+    if (d.prof_call_addr[s] == 0) {
+      d.prof_call_addr[s] = tgt;
+      d.prof_call_n[s] = 1;
+      d.prof_call_total++;
+      return;
+    }
   }
 }
-void prof_start(Core* c) {
-  InterpDiag& d = c->idiag;
-  for (uint32_t i = 0; i < (1u << 17); i++) d.prof_pc[i] = 0;
-  for (uint32_t i = 0; i < (1u << 14); i++) { d.prof_call_addr[i] = 0; d.prof_call_n[i] = 0; }
+void prof_start(Core *c) {
+  InterpDiag &d = c->idiag;
+  for (uint32_t i = 0; i < (1u << 17); i++) {
+    d.prof_pc[i] = 0;
+  }
+  for (uint32_t i = 0; i < (1u << 14); i++) {
+    d.prof_call_addr[i] = 0;
+    d.prof_call_n[i] = 0;
+  }
   d.prof_total = d.prof_call_total = 0;
   d.prof_on = 1;
   lucent::info("prof", "profiling started (reset)");
 }
-void prof_stop(Core* c) { c->idiag.prof_on = 0; lucent::info("prof", "profiling stopped"); }
+void prof_stop(Core *c) {
+  c->idiag.prof_on = 0;
+  lucent::info("prof", "profiling stopped");
+}
 
-void prof_dump(Core* c, const char* path) {
-  InterpDiag& d = c->idiag;
+void prof_dump(Core *c, const char *path) {
+  InterpDiag &d = c->idiag;
   // Top PC buckets (time) + top call targets (frequency), sorted desc. Simple selection of top-N
   // by repeated linear max — N is small (200), the arrays are 8K/16K, runs in a blink.
-  FILE* fp = path && *path ? fopen(path, "w") : 0;
-  FILE* out = fp ? fp : stderr;
+  FILE *fp = path && *path ? fopen(path, "w") : 0;
+  FILE *out = fp ? fp : stderr;
   const int NPC = 200, NCALL = 200;
-  fprintf(out, "# prof: %llu instructions, %llu interpreted-fn entries\n",
-          (unsigned long long)d.prof_total, (unsigned long long)d.prof_call_total);
+  fprintf(out,
+          "# prof: %llu instructions, %llu interpreted-fn entries\n",
+          (unsigned long long)d.prof_total,
+          (unsigned long long)d.prof_call_total);
   fprintf(out, "# --- TIME (top %d PC buckets, 16B each; addr = bucket base) ---\n", NPC);
   fprintf(out, "# bucket_addr   insns      pct\n");
   // copy bucket counts so we can zero out as we extract
   for (int k = 0; k < NPC; k++) {
-    uint64_t best = 0; int bi = -1;
-    for (int i = 0; i < (1 << 17); i++) if (d.prof_pc[i] > best) { best = d.prof_pc[i]; bi = i; }
-    if (bi < 0 || best == 0) break;
+    uint64_t best = 0;
+    int bi = -1;
+    for (int i = 0; i < (1 << 17); i++) {
+      if (d.prof_pc[i] > best) {
+        best = d.prof_pc[i];
+        bi = i;
+      }
+    }
+    if (bi < 0 || best == 0) {
+      break;
+    }
     uint32_t addr = 0x80000000u | ((uint32_t)bi << 4);
     double pct = d.prof_total ? 100.0 * (double)best / (double)d.prof_total : 0.0;
     fprintf(out, "%08X   %10llu   %5.2f%%\n", addr, (unsigned long long)best, pct);
-    d.prof_pc[bi] = 0;  // consume (prof_on is off during dump; start re-zeros anyway)
+    d.prof_pc[bi] = 0; // consume (prof_on is off during dump; start re-zeros anyway)
   }
   fprintf(out, "# --- FREQUENCY (top %d interpreted-fn entry counts) ---\n", NCALL);
   fprintf(out, "# func_addr     calls      pct\n");
   for (int k = 0; k < NCALL; k++) {
-    uint64_t best = 0; int bi = -1;
-    for (int i = 0; i < (1 << 14); i++) if (d.prof_call_addr[i] && d.prof_call_n[i] > best) { best = d.prof_call_n[i]; bi = i; }
-    if (bi < 0 || best == 0) break;
+    uint64_t best = 0;
+    int bi = -1;
+    for (int i = 0; i < (1 << 14); i++) {
+      if (d.prof_call_addr[i] && d.prof_call_n[i] > best) {
+        best = d.prof_call_n[i];
+        bi = i;
+      }
+    }
+    if (bi < 0 || best == 0) {
+      break;
+    }
     double pct = d.prof_call_total ? 100.0 * (double)best / (double)d.prof_call_total : 0.0;
     fprintf(out, "%08X   %10llu   %5.2f%%\n", d.prof_call_addr[bi], (unsigned long long)best, pct);
-    d.prof_call_n[bi] = 0;  // consume
+    d.prof_call_n[bi] = 0; // consume
   }
-  if (fp) { fclose(fp); lucent::info("prof", "dump -> {}", path); }
+  if (fp) {
+    fclose(fp);
+    lucent::info("prof", "dump -> {}", path);
+  }
 }
 
 // Invoke a call target natively if it is a BIOS vector (returns 1), else 0 (caller jumps).
@@ -454,19 +740,26 @@ void prof_dump(Core* c, const char* path) {
 // PSX code run via the interpreter executes pure recomp all the way down and can never re-enter native
 // code (PSX never calls PC). Native code is reached only top-down, by PC calling it directly. BIOS vectors
 // still route to HLE below — that is hardware emulation, not a function override.
-static int coro_native_call(Core* c, uint32_t tgt) {
+static int coro_native_call(Core *c, uint32_t tgt) {
   if (is_bios(tgt)) {
-    if (!c->idiag.ncall_init) ncall_open_once(c->idiag);
-    uint32_t a0=c->r[4],a1=c->r[5],a2=c->r[6],a3=c->r[7];
+    if (!c->idiag.ncall_init) {
+      ncall_open_once(c->idiag);
+    }
+    uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6], a3 = c->r[7];
     rec_dispatch_miss(c, tgt);
-    ncall_log(c->idiag, 'B', tgt, a0,a1,a2,a3, c->r[2], c->r[3]);
+    ncall_log(c->idiag, 'B', tgt, a0, a1, a2, a3, c->r[2], c->r[3]);
     return 1;
   }
   // PLATFORM HLE (sync_overrides.cpp): PSX BIOS-library HW-sync leaves (libcd/libetc/libmdec) that
   // busy-spin on an IRQ/status bit we don't model. NOT the removed game-override table — these are
   // hardware-emulation entries only (same class as the is_bios HLE above), restricted to the
   // BIOS-library address window. A `jal` to one runs the native HLE and returns to the caller.
-  { if (auto pf = c->game->platform_hle.lookup(tgt)) { pf(c); return 1; } }
+  {
+    if (auto pf = c->game->platform_hle.lookup(tgt)) {
+      pf(c);
+      return 1;
+    }
+  }
   // No-interpreter SUBSTRATE: if `tgt` is a statically-recompiled function, run its COMPILED body
   // (rec_dispatch -> the generated addr->func_XXXX switch -> gen_func / g_override) instead of letting
   // the flat interpreter execute it. Returns "handled" so the loop resumes at the caller's return addr,
@@ -476,19 +769,32 @@ static int coro_native_call(Core* c, uint32_t tgt) {
   // Bisect gate (PSXPORT_SUBSTRATE_LO/HI, hex KSEG0 addrs): when set, route to the compiled body only
   // for tgt in [LO,HI); outside the window fall to the interpreter. Lets us binary-search a derailing
   // compiled body without rebuilding. Unset window (LO==0 && HI==0) = route ALL recompiled targets.
-  InterpDiag& d = c->idiag;
-  if (!d.sg_init) { d.sg_init = 1; const char* l = cfg_str("PSXPORT_SUBSTRATE_LO"); const char* h = cfg_str("PSXPORT_SUBSTRATE_HI");
-                    if (l) d.sg_lo = (uint32_t)strtoul(l, 0, 16); if (h) d.sg_hi = (uint32_t)strtoul(h, 0, 16); }
+  InterpDiag &d = c->idiag;
+  if (!d.sg_init) {
+    d.sg_init = 1;
+    const char *l = cfg_str("PSXPORT_SUBSTRATE_LO");
+    const char *h = cfg_str("PSXPORT_SUBSTRATE_HI");
+    if (l) {
+      d.sg_lo = (uint32_t)strtoul(l, 0, 16);
+    }
+    if (h) {
+      d.sg_hi = (uint32_t)strtoul(h, 0, 16);
+    }
+  }
   // ORACLE: the pure-PSX oracle Core interprets EVERY game/overlay function — it must NOT drop into a
   // recompiled body (that is the thing under test, and freezes in the cutscene). Skip the substrate route
   // for use_interp cores; only is_bios + platform_hle (above) run native. Non-oracle (hybrid) cores keep
   // the recomp-body fast path.
-  if (!c->use_interp && psxport_recomp()->rec_func_index(tgt) >= 0 && (!(d.sg_lo | d.sg_hi) || (tgt >= d.sg_lo && tgt < d.sg_hi))) {
-    d.callring[d.callring_pos++ & 63] = tgt;   // derail diagnostics: last compiled entries
-    rec_dispatch(c, tgt); return 1;            // recompiled target -> run its COMPILED body
+  if (!c->use_interp && psxport_recomp()->rec_func_index(tgt) >= 0 &&
+      (!(d.sg_lo | d.sg_hi) || (tgt >= d.sg_lo && tgt < d.sg_hi))) {
+    d.callring[d.callring_pos++ & 63] = tgt; // derail diagnostics: last compiled entries
+    rec_dispatch(c, tgt);
+    return 1; // recompiled target -> run its COMPILED body
   }
-  ifn_record(d, tgt, c->r[31]);   // tripwire: the interpreter is about to run this (non-native) function
-  if (d.prof_on) prof_call_tick(d, tgt);  // perf: count entries into this un-owned (interpreted) function
+  ifn_record(d, tgt, c->r[31]); // tripwire: the interpreter is about to run this (non-native) function
+  if (d.prof_on) {
+    prof_call_tick(d, tgt); // perf: count entries into this un-owned (interpreted) function
+  }
   return 0;
 }
 
@@ -498,125 +804,258 @@ static int coro_native_call(Core* c, uint32_t tgt) {
 // override returns, the flat loop's next pc is the redirect if set, else the override's r[31] (normal
 // "return to caller"). Consuming clears it, so it never leaks past one control transfer.
 // (rec_coro_redirect is owned by dispatch.cpp now; not redefined here.)
-static inline uint32_t coro_next_pc(Core* c) {
-  if (c->coro_redirect_pc) { uint32_t p = c->coro_redirect_pc; c->coro_redirect_pc = 0; return p; }
+static inline uint32_t coro_next_pc(Core *c) {
+  if (c->coro_redirect_pc) {
+    uint32_t p = c->coro_redirect_pc;
+    c->coro_redirect_pc = 0;
+    return p;
+  }
   return c->r[31];
 }
 
-static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
+static void interp_flat(Core *c, uint32_t pc, uint32_t stop_ra) {
   // Spin detector (PSXPORT_SPINDBG): a non-yielding busy-wait in game code loops here forever
   // (never returns to the scheduler, never calls a native override that longjmps). Track the
   // pc range over a window; if we run a huge number of iterations without leaving a tiny pc
   // window, the game is busy-waiting — dump the loop range + the branch's register operands so
   // the wait condition can be identified and ported to PC.
-  InterpDiag& d = c->idiag;
-  if (d.spindbg < 0) d.spindbg = lucent::channel_on("spin") ? 1 : 0;
+  InterpDiag &d = c->idiag;
+  if (d.spindbg < 0) {
+    d.spindbg = lucent::channel_on("spin") ? 1 : 0;
+  }
   int spindbg = d.spindbg;
-  unsigned long iters = 0; uint32_t lo = pc, hi = pc;
+  unsigned long iters = 0;
+  uint32_t lo = pc, hi = pc;
   for (;;) {
     // Exit the moment control reaches our return sentinel — by a `jr ra` (handled below) OR by a
     // tail-call's implicit return (`pc = c->r[31]` after a native override, where ra was the
     // inherited sentinel). The old recursive rec_interp returned to C on any tail-call into an
     // override; the flat loop needs this top check to match it. stop_ra (CORO_SENTINEL 0xDEAD0000)
     // is a poison address, never real code, so this is a no-op for normal flow in both callers.
-    if (pc == stop_ra) return;
+    if (pc == stop_ra) {
+      return;
+    }
     if (spindbg) {
-      if (pc < lo) lo = pc; if (pc > hi) hi = pc;
+      if (pc < lo) {
+        lo = pc;
+      }
+      if (pc > hi) {
+        hi = pc;
+      }
       if (++iters >= 80000000UL) {
-        lucent::info("spindbg", "busy-loop: pc window 0x{:08X}..0x{:08X} (cur 0x{:08X}) regs: v0={:08X} v1={:08X} a0={:08X} a1={:08X} t0={:08X} t1={:08X} s0={:08X} s1={:08X}", lo, hi, pc, c->r[2], c->r[3], c->r[4], c->r[5], c->r[8], c->r[9],
-                     c->r[16], c->r[17]);
+        lucent::info("spindbg",
+                     "busy-loop: pc window 0x{:08X}..0x{:08X} (cur 0x{:08X}) regs: v0={:08X} v1={:08X} a0={:08X} "
+                     "a1={:08X} t0={:08X} t1={:08X} s0={:08X} s1={:08X}",
+                     lo,
+                     hi,
+                     pc,
+                     c->r[2],
+                     c->r[3],
+                     c->r[4],
+                     c->r[5],
+                     c->r[8],
+                     c->r[9],
+                     c->r[16],
+                     c->r[17]);
         // CD-streaming contract (FUN_8001cfc8 task slot 2): start/end LBA = task2 obj
         // (0x801fe0e0) +0x54/+0x58, dest/words at _DAT_1f8001f8/f4, plus the stream flags.
-        lucent::info("spindbg", "  stream: startLBA={} endLBA={} chan={} be0e4=0x{:02X} dest=0x{:08X} words={} f0={}", c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146),
-                     c->mem_r8(0x800be0e4), c->mem_r32(0x1f8001f8), c->mem_r32(0x1f8001f4), c->mem_r32(0x1f8001f0));
-        iters = 0; lo = hi = pc;
+        lucent::info("spindbg",
+                     "  stream: startLBA={} endLBA={} chan={} be0e4=0x{:02X} dest=0x{:08X} words={} f0={}",
+                     c->mem_r32(0x801fe134),
+                     c->mem_r32(0x801fe138),
+                     c->mem_r8(0x801fe146),
+                     c->mem_r8(0x800be0e4),
+                     c->mem_r32(0x1f8001f8),
+                     c->mem_r32(0x1f8001f4),
+                     c->mem_r32(0x1f8001f0));
+        iters = 0;
+        lo = hi = pc;
       }
     }
-    c->pc = pc;   // per-core PC for backtraces/watchdog (oracle Core)
+    c->pc = pc; // per-core PC for backtraces/watchdog (oracle Core)
     // Interpreter parity for generation-selected recomp checkpoints. The per-instruction branch
     // exists only while a diagnostic is armed; normal interpreter runs pay the existing false test.
-    if (c->pcObserver.matches(pc)) c->pcObserver.observe(c, pc);
+    if (c->pcObserver.matches(pc)) {
+      c->pcObserver.observe(c, pc);
+    }
     // PSXPORT_PCTRAP=0xADDR — when the interpreter first reaches ADDR, dump the guest call chain (ra + a
     // wide stack scan incl. OVERLAY code 0x80100000..0x80200000) so we can find the native->interpreted
     // handoff for a still-PSX path (e.g. the field render driver). later-242 (RE tool, not behavior).
-    { if (d.pctrap == 0xFFFFFFFFu) { const char* s = cfg_str("PSXPORT_PCTRAP"); d.pctrap = s ? (uint32_t)strtoul(s,0,0) : 0;
-        const char* k = cfg_str("PSXPORT_PCTRAP_SKIP"); d.pctrap_skip = k ? strtol(k,0,0) : 0; }
-      if (d.pctrap && pc == d.pctrap) { if (d.pctrap_hit++ == d.pctrap_skip) {
-        lucent::info("pctrap", "reached 0x{:08X}  ra=0x{:08X} sp=0x{:08X} a0=0x{:08X}", pc, c->r[31], c->r[29], c->r[4]);
-        uint32_t sp = c->r[29]; int shown = 0;
-        for (uint32_t a = sp; a < sp + 1024 && shown < 24; a += 4) { uint32_t w = c->mem_r32(a); uint32_t k = w & 0x1FFFFFFF;
-          if (k >= 0x10000 && k < 0x200000 && (w & 3) == 0) { lucent::info("interp", "    [sp+0x{:03X}] 0x{:08X}", a - sp, w); shown++; } }
-        fflush(stderr); } } }
+    {
+      if (d.pctrap == 0xFFFFFFFFu) {
+        const char *s = cfg_str("PSXPORT_PCTRAP");
+        d.pctrap = s ? (uint32_t)strtoul(s, 0, 0) : 0;
+        const char *k = cfg_str("PSXPORT_PCTRAP_SKIP");
+        d.pctrap_skip = k ? strtol(k, 0, 0) : 0;
+      }
+      if (d.pctrap && pc == d.pctrap) {
+        if (d.pctrap_hit++ == d.pctrap_skip) {
+          lucent::info(
+              "pctrap", "reached 0x{:08X}  ra=0x{:08X} sp=0x{:08X} a0=0x{:08X}", pc, c->r[31], c->r[29], c->r[4]);
+          uint32_t sp = c->r[29];
+          int shown = 0;
+          for (uint32_t a = sp; a < sp + 1024 && shown < 24; a += 4) {
+            uint32_t w = c->mem_r32(a);
+            uint32_t k = w & 0x1FFFFFFF;
+            if (k >= 0x10000 && k < 0x200000 && (w & 3) == 0) {
+              lucent::info("interp", "    [sp+0x{:03X}] 0x{:08X}", a - sp, w);
+              shown++;
+            }
+          }
+          fflush(stderr);
+        }
+      }
+    }
     // DIAG (debug chan `fadeshot`): every recomp screen-fade call FUN_8007E9C8(color=a0) — capture s_tex
     // and log color+ra, to see the intro menu->cutscene transition's "two fade-ins" render state deterministically.
     if (pc == 0x8007E9C8u) {
-      static int fs = -2; if (fs == -2) fs = lucent::channel_on("fadeshot") ? 1 : 0;
-      if (fs) { void gpu_vk_shot(Core*, const char*); static int fn = 0;
+      static int fs = -2;
+      if (fs == -2) {
+        fs = lucent::channel_on("fadeshot") ? 1 : 0;
+      }
+      if (fs) {
+        void gpu_vk_shot(Core *, const char *);
+        static int fn = 0;
         lucent::info("fadeshot", "call={} color=0x{:06X} ra=0x{:08X}", fn, c->r[4] & 0xffffff, c->r[31]);
-        if (fn < 120) { char p[128]; snprintf(p, sizeof p, "scratch/screenshots/fade_%03d.ppm", fn); gpu_vk_shot(c, p); }
-        fn++; }
+        if (fn < 120) {
+          char p[128];
+          snprintf(p, sizeof p, "scratch/screenshots/fade_%03d.ppm", fn);
+          gpu_vk_shot(c, p);
+        }
+        fn++;
+      }
     }
     // PSXPORT_DEBUG=keyon (oracle, temporary): trace every libsnd voice keyon 0x800939A0
     // (a0=seq|chan<<8, a1=vab id, a2=program, a3=note, sp+16=velocity). Reveals which sequences/
     // instruments/notes actually compose a song — ground truth for the offline snd_render tool.
     if (pc == 0x800939A0u) {
-      static int kon = -2; if (kon == -2) kon = lucent::channel_on("keyon") ? 1 : 0;
-      if (kon) lucent::info("keyon", "seq={} chan={} vab={} prog={} note={} vel={}", c->r[4] & 0xff, (c->r[4] >> 8) & 0xff, (int)(int16_t)c->r[5],
-                       (int)(int16_t)c->r[6], c->r[7] & 0xff, c->mem_r32(c->r[29] + 16));
+      static int kon = -2;
+      if (kon == -2) {
+        kon = lucent::channel_on("keyon") ? 1 : 0;
+      }
+      if (kon) {
+        lucent::info("keyon",
+                     "seq={} chan={} vab={} prog={} note={} vel={}",
+                     c->r[4] & 0xff,
+                     (c->r[4] >> 8) & 0xff,
+                     (int)(int16_t)c->r[5],
+                     (int)(int16_t)c->r[6],
+                     c->r[7] & 0xff,
+                     c->mem_r32(c->r[29] + 16));
+      }
     }
     // PSXPORT_DEBUG=bgmreq: trace the game's BGM trigger sound_play_bgm 0x80074BF8 (a0=idx; low7=song,
     // bit7 set => loop). Reveals which song the GAME LOGIC actually requests per area/dialogue — the
     // signal the native MusicCoord::fieldBgmDirector currently ignores (it hardcodes song 8).
     if (pc == 0x80074BF8u || pc == 0x80074E48u) {
-      static int br = -2; if (br == -2) br = lucent::channel_on("bgmreq") ? 1 : 0;
-      if (br) { if (pc == 0x80074E48u) lucent::info("bgmreq", "sound_stop_bgm() ra={:08X}", c->r[31]);
-                else lucent::info("bgmreq", "sound_play_bgm(idx={} song={} loop={}) ra={:08X}", c->r[4], c->r[4] & 0x7f, (c->r[4] & 0x80) == 0, c->r[31]); }
+      static int br = -2;
+      if (br == -2) {
+        br = lucent::channel_on("bgmreq") ? 1 : 0;
+      }
+      if (br) {
+        if (pc == 0x80074E48u) {
+          lucent::info("bgmreq", "sound_stop_bgm() ra={:08X}", c->r[31]);
+        } else {
+          lucent::info("bgmreq",
+                       "sound_play_bgm(idx={} song={} loop={}) ra={:08X}",
+                       c->r[4],
+                       c->r[4] & 0x7f,
+                       (c->r[4] & 0x80) == 0,
+                       c->r[31]);
+        }
+      }
     }
     // PSXPORT_DEBUG=demoflag: trace which demo-flag (0x1f80019a) READER PCs execute (find DEMO-text drawer).
     if (pc == 0x80026874u || pc == 0x80052208u || pc == 0x800522b0u || pc == 0x80075834u || pc == 0x800788ccu) {
-      static int df = -2; if (df == -2) df = lucent::channel_on("demoflag") ? 1 : 0;
-      if (df) { static unsigned n[5]={0,0,0,0,0}; int k = pc==0x80026874u?0:pc==0x80052208u?1:pc==0x800522b0u?2:pc==0x80075834u?3:4;
-                if (++n[k] <= 2) lucent::info("demoflag", "reader @{:08X} hit (flag={:02X}) ra={:08X}", pc, c->mem_r8(0x1f80019au), c->r[31]); }
+      static int df = -2;
+      if (df == -2) {
+        df = lucent::channel_on("demoflag") ? 1 : 0;
+      }
+      if (df) {
+        static unsigned n[5] = {0, 0, 0, 0, 0};
+        int k = pc == 0x80026874u ? 0 : pc == 0x80052208u ? 1 : pc == 0x800522b0u ? 2 : pc == 0x80075834u ? 3 : 4;
+        if (++n[k] <= 2) {
+          lucent::info("demoflag", "reader @{:08X} hit (flag={:02X}) ra={:08X}", pc, c->mem_r8(0x1f80019au), c->r[31]);
+        }
+      }
     }
     // PSXPORT_DEBUG=septrace: trace the libsnd SEP event dispatcher 0x80091460 — at 0x800914d0 the
     // status byte (s2=r18) has just been read from the track stream pointer (a3=r7, already +1). Log
     // the byte ADDRESS and value per event = the game's exact event walk (byte-consumption oracle for
     // aligning our na_seq_render parser). r17=seq, r16/.. set later; r7-1 = the status byte's address.
     if (pc == 0x800914D0u) {
-      static int stc = -2; if (stc == -2) stc = lucent::channel_on("septrace") ? 1 : 0;
-      if (stc) lucent::info("septrace", "@{:08X} status={:02X}", c->r[7] - 1, c->r[18] & 0xff);
+      static int stc = -2;
+      if (stc == -2) {
+        stc = lucent::channel_on("septrace") ? 1 : 0;
+      }
+      if (stc) {
+        lucent::info("septrace", "@{:08X} status={:02X}", c->r[7] - 1, c->r[18] & 0xff);
+      }
     }
     // PSXPORT_DEBUG=tickdbg: where does the recomp libsnd sequencer stall? trace the per-vblank tick
     // wrapper 0x800909C0, SsSeqCalled 0x80090BD0, and the SEP event dispatcher 0x80091460. If the tick
     // runs but the dispatcher never does, the sequence clock isn't advancing (frozen sequencer).
     if (pc == 0x800909C0u || pc == 0x80090BD0u || pc == 0x80091460u) {
-      static int td = -2; if (td == -2) td = lucent::channel_on("tickdbg") ? 1 : 0;
-      if (td) { static unsigned ct[3]={0,0,0}; int k = pc==0x800909C0u?0 : pc==0x80090BD0u?1:2;
-                if (++ct[k] <= 3 || ct[k]%200==0)
-                  lucent::info("tickdbg", "{} count={}", pc==0x800909C0u?"tick(909C0)":pc==0x80090BD0u?"SsSeqCalled(90BD0)":"dispatch(91460)", ct[k]); }
+      static int td = -2;
+      if (td == -2) {
+        td = lucent::channel_on("tickdbg") ? 1 : 0;
+      }
+      if (td) {
+        static unsigned ct[3] = {0, 0, 0};
+        int k = pc == 0x800909C0u ? 0 : pc == 0x80090BD0u ? 1 : 2;
+        if (++ct[k] <= 3 || ct[k] % 200 == 0) {
+          lucent::info("tickdbg",
+                       "{} count={}",
+                       pc == 0x800909C0u   ? "tick(909C0)"
+                       : pc == 0x80090BD0u ? "SsSeqCalled(90BD0)"
+                                           : "dispatch(91460)",
+                       ct[k]);
+        }
+      }
     }
     // PSXPORT_DEBUG=seqopen: trace SsSeqOpen 0x80090210 (a0=SEP addr, a1=VAB id) — the game's intended
     // SEQ->VAB binding (which we currently guess). a2/a3 = seq/sub indices. Reveals which VAB each song
     // is authored against, the missing piece for correct instruments/pitch.
     if (pc == 0x80090210u) {
-      static int so = -2; if (so == -2) so = lucent::channel_on("seqopen") ? 1 : 0;
-      if (so) lucent::info("seqopen", "SsSeqOpen(sep={:08X} vab={}) ra={:08X}", c->r[4], (int)(int16_t)c->r[5], c->r[31]);
+      static int so = -2;
+      if (so == -2) {
+        so = lucent::channel_on("seqopen") ? 1 : 0;
+      }
+      if (so) {
+        lucent::info("seqopen", "SsSeqOpen(sep={:08X} vab={}) ra={:08X}", c->r[4], (int)(int16_t)c->r[5], c->r[31]);
+      }
     }
     // PSXPORT_DEBUG=seqplay: trace SsSeqPlay 0x80090560 (a0=seq handle) — which sequences are played.
     if (pc == 0x80090560u) {
-      static int sp = -2; if (sp == -2) sp = lucent::channel_on("seqplay") ? 1 : 0;
-      if (sp) lucent::info("seqplay", "SsSeqPlay(handle={}, mode={}, loop={})", (int)(int16_t)c->r[4], c->r[5], c->r[6]);
+      static int sp = -2;
+      if (sp == -2) {
+        sp = lucent::channel_on("seqplay") ? 1 : 0;
+      }
+      if (sp) {
+        lucent::info("seqplay", "SsSeqPlay(handle={}, mode={}, loop={})", (int)(int16_t)c->r[4], c->r[5], c->r[6]);
+      }
     }
     // PSXPORT_DEBUG=banksel: trace the libsnd bank-select event handler 0x8008e390 (sets channel
     // slot[0x26]=VAB from the stream). a0=seq, a1=chan. Reveals whether it runs for note channels.
     if (pc == 0x8008e390u) {
-      static int bs = -2; if (bs == -2) bs = lucent::channel_on("banksel") ? 1 : 0;
-      if (bs) { uint32_t cap = c->mem_r32(0x80104c30u + (c->r[4] & 0xffff) * 4);
-                uint32_t cs = cap + (c->r[5] & 0xffff) * 176;
-                uint32_t dp = c->mem_r32(cs);
-                lucent::info("banksel", "seq={} chan={} streambyte=0x{:02x} (-> slot[0x26])", c->r[4] & 0xffff, c->r[5] & 0xffff, c->mem_r8(dp)); }
+      static int bs = -2;
+      if (bs == -2) {
+        bs = lucent::channel_on("banksel") ? 1 : 0;
+      }
+      if (bs) {
+        uint32_t cap = c->mem_r32(0x80104c30u + (c->r[4] & 0xffff) * 4);
+        uint32_t cs = cap + (c->r[5] & 0xffff) * 176;
+        uint32_t dp = c->mem_r32(cs);
+        lucent::info("banksel",
+                     "seq={} chan={} streambyte=0x{:02x} (-> slot[0x26])",
+                     c->r[4] & 0xffff,
+                     c->r[5] & 0xffff,
+                     c->mem_r8(dp));
+      }
     }
-    if (d.prof_on) prof_pc_tick(d, pc);   // perf profiler: instructions-per-PC-bucket (time histogram)
+    if (d.prof_on) {
+      prof_pc_tick(d, pc); // perf profiler: instructions-per-PC-bucket (time histogram)
+    }
     // PSXPORT_SPRITEDBG: when the sprite-flush routine copies the red-quad clut template
     // (0x7EF71100) into the OT (store at 0x8007E67C), dump the renderer's working registers so
     // the owning sprite object ($a3/$t5) and its descriptor list ($a2) can be identified.
@@ -624,10 +1063,16 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // with the caller ra — to trace which overlay code draws a given 2D text/banner element.
     if (pc == 0x8007E998 && lucent::channel_on("text")) {
       static int n = 0;
-      if (n++ < 30)
-        lucent::debug("text", "[textdbg] 8007E998(x={} y={} a2={:08X} a3={:08X}) ra={:08X} stage={:08X}",
-                      (int)(int16_t)c->r[4], (int)(int16_t)c->r[5], c->r[6], c->r[7], c->r[31],
+      if (n++ < 30) {
+        lucent::debug("text",
+                      "[textdbg] 8007E998(x={} y={} a2={:08X} a3={:08X}) ra={:08X} stage={:08X}",
+                      (int)(int16_t)c->r[4],
+                      (int)(int16_t)c->r[5],
+                      c->r[6],
+                      c->r[7],
+                      c->r[31],
                       c->mem_r32(0x801fe00c));
+      }
     }
     uint32_t in = c->mem_r32(pc);
     uint32_t op = in >> 26;
@@ -635,14 +1080,28 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // interp on garbage (insn 0xFFFFFFFF). Report the exact PC + regs ONCE and stop the run (instead of
     // spinning 12M "bad opcode" lines), so the offending function's broken return can be identified.
     if (op == 0x3F && lucent::channel_on("derail")) {
-      lucent::debug("derail", "pc={:08X} in={:08X}  ra={:08X} sp={:08X} gp={:08X}  stop_ra={:08X}",
-                    pc, in, c->r[31], c->r[29], c->r[28], stop_ra);
-      for (int k = 0; k < 16; k++) lucent::debug("derail", "  stk[{:2}] @{:08X} = {:08X}", k, c->r[29] + k*4, c->mem_r32(c->r[29] + k*4));
+      lucent::debug("derail",
+                    "pc={:08X} in={:08X}  ra={:08X} sp={:08X} gp={:08X}  stop_ra={:08X}",
+                    pc,
+                    in,
+                    c->r[31],
+                    c->r[29],
+                    c->r[28],
+                    stop_ra);
+      for (int k = 0; k < 16; k++) {
+        lucent::debug("derail", "  stk[{:2}] @{:08X} = {:08X}", k, c->r[29] + k * 4, c->mem_r32(c->r[29] + k * 4));
+      }
       lucent::debug("derail", "last compiled entries (newest last):");
-      for (int k = 24; k >= 1; k--) { uint32_t a = d.callring[(d.callring_pos - k) & 63]; if (a) lucent::debug("derail", "  {:08X}", a); }
-      fflush(stderr); abort();
+      for (int k = 24; k >= 1; k--) {
+        uint32_t a = d.callring[(d.callring_pos - k) & 63];
+        if (a) {
+          lucent::debug("derail", "  {:08X}", a);
+        }
+      }
+      fflush(stderr);
+      abort();
     }
-    ldhaz_step(d, in, pc);                           // load-delay hazard detector (execution order)
+    ldhaz_step(d, in, pc); // load-delay hazard detector (execution order)
 
     // `break` is a program trap. We HLE the BIOS, so there is no exception handler to resume
     // into — the trap ENDS this run. In particular crt0 (0x800896E0) is `jal main; break`: on
@@ -651,54 +1110,83 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // chance (it returned to C on the next `jr ra`, which fell through into a halt loop); the flat
     // loop must treat the break itself as the halt. (A `break` never executes on a hot path here —
     // the field run hits exactly one, this terminal — so ending the run on it is correct.)
-    if (op == 0x00 && FN(in) == 0x0D) { rec_break(c, (in >> 6) & 0xFFFFF); return; }
+    if (op == 0x00 && FN(in) == 0x0D) {
+      rec_break(c, (in >> 6) & 0xFFFFF);
+      return;
+    }
 
-    if (op == 0x02 || op == 0x03) {                  // j / jal
+    if (op == 0x02 || op == 0x03) { // j / jal
       uint32_t tgt = TGT(in, pc);
-      if (op == 0x03) { c->r[31] = pc + 8; trace_call(d, pc, tgt); }  // jal: link + optional call trace
-      ldhaz_step(d, c->mem_r32(pc + 4), pc + 4);         // delay slot executes next
-      exec_simple(c, c->mem_r32(pc + 4));               // delay slot
+      if (op == 0x03) {
+        c->r[31] = pc + 8;
+        trace_call(d, pc, tgt);
+      } // jal: link + optional call trace
+      ldhaz_step(d, c->mem_r32(pc + 4), pc + 4); // delay slot executes next
+      exec_simple(c, c->mem_r32(pc + 4));        // delay slot
       // A native override / BIOS vector must win on EITHER a `jal` call or a tail-`j` into it,
       // else the flat interpreter re-runs a function the PC side owns (e.g. the LZ decompressor
       // 0x80044D8C) and can diverge from it. coro_native_call only fires for exact override/BIOS
       // addresses, so a plain local `j` (label inside interpreted code) falls through unchanged.
-      if (coro_native_call(c, tgt)) { pc = coro_next_pc(c); continue; }
-      pc = tgt; continue;                            // flat call/jump
+      if (coro_native_call(c, tgt)) {
+        pc = coro_next_pc(c);
+        continue;
+      }
+      pc = tgt;
+      continue; // flat call/jump
     }
-    if (op == 0x00 && (FN(in) == 0x08 || FN(in) == 0x09)) {  // jr / jalr
+    if (op == 0x00 && (FN(in) == 0x08 || FN(in) == 0x09)) { // jr / jalr
       uint32_t tgt = c->r[RS(in)];
       uint32_t link = pc + 8, rd = RD(in);
       int is_jalr = FN(in) == 0x09, is_ra = RS(in) == 31;
-      ldhaz_step(d, c->mem_r32(pc + 4), pc + 4);         // delay slot executes next
-      exec_simple(c, c->mem_r32(pc + 4));               // delay slot
+      ldhaz_step(d, c->mem_r32(pc + 4), pc + 4); // delay slot executes next
+      exec_simple(c, c->mem_r32(pc + 4));        // delay slot
       if (is_jalr) {
-        if (rd) c->r[rd] = link;
-        trace_call(d, pc, tgt);                      // optional call trace (PSXPORT_INTERP_TRACE)
-        if (coro_native_call(c, tgt)) { pc = coro_next_pc(c); continue; }
-        pc = tgt; continue;                          // flat indirect call
+        if (rd) {
+          c->r[rd] = link;
+        }
+        trace_call(d, pc, tgt); // optional call trace (PSXPORT_INTERP_TRACE)
+        if (coro_native_call(c, tgt)) {
+          pc = coro_next_pc(c);
+          continue;
+        }
+        pc = tgt;
+        continue; // flat indirect call
       }
-      if (is_ra) {                                   // return
-        if (tgt == stop_ra) return;                  // returned to our sentinel -> this run is done
-        pc = tgt; continue;                          // flat return up the PSX call chain
+      if (is_ra) { // return
+        if (tgt == stop_ra) {
+          return; // returned to our sentinel -> this run is done
+        }
+        pc = tgt;
+        continue; // flat return up the PSX call chain
       }
-      if (coro_native_call(c, tgt)) { pc = coro_next_pc(c); continue; }  // computed tail-call
-      trace_call(d, pc, tgt);                        // computed jump (switch table / jr-dispatch) — traced too
-      pc = tgt; continue;                            // computed jump (switch table etc.)
+      if (coro_native_call(c, tgt)) {
+        pc = coro_next_pc(c);
+        continue;
+      } // computed tail-call
+      trace_call(d, pc, tgt); // computed jump (switch table / jr-dispatch) — traced too
+      pc = tgt;
+      continue; // computed jump (switch table etc.)
     }
-    if (op == 0x01 || op == 0x04 || op == 0x05 || op == 0x06 || op == 0x07) {  // branches
+    if (op == 0x01 || op == 0x04 || op == 0x05 || op == 0x06 || op == 0x07) { // branches
       int t;
       uint32_t rs = RS(in), rt = RT(in);
       uint32_t tgt = pc + 4 + (SIMM(in) << 2);
-      if (op == 0x04) t = (c->r[rs] == c->r[rt]);
-      else if (op == 0x05) t = (c->r[rs] != c->r[rt]);
-      else if (op == 0x06) t = ((int32_t)c->r[rs] <= 0);
-      else if (op == 0x07) t = ((int32_t)c->r[rs] > 0);
-      else {
+      if (op == 0x04) {
+        t = (c->r[rs] == c->r[rt]);
+      } else if (op == 0x05) {
+        t = (c->r[rs] != c->r[rt]);
+      } else if (op == 0x06) {
+        t = ((int32_t)c->r[rs] <= 0);
+      } else if (op == 0x07) {
+        t = ((int32_t)c->r[rs] > 0);
+      } else {
         uint32_t sub = rt;
         t = (sub & 1) ? ((int32_t)c->r[rs] >= 0) : ((int32_t)c->r[rs] < 0);
-        if (sub & 0x10) c->r[31] = pc + 8;
+        if (sub & 0x10) {
+          c->r[31] = pc + 8;
+        }
       }
-      ldhaz_step(d, c->mem_r32(pc + 4), pc + 4);         // delay slot executes next
+      ldhaz_step(d, c->mem_r32(pc + 4), pc + 4); // delay slot executes next
       exec_simple(c, c->mem_r32(pc + 4));
       pc = t ? tgt : pc + 8;
       continue;
@@ -716,7 +1204,9 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
 // A cooperative TASK: native_boot.c enters its top function with ra=CORO_SENTINEL, then the loop
 // runs until that function returns (jr ra -> sentinel == task ended) or a native override
 // (ov_yield/CD) longjmps back to the scheduler.
-void interp_coro_run(Core* c, uint32_t pc) { interp_flat(c, pc, CORO_SENTINEL); }
+void interp_coro_run(Core *c, uint32_t pc) {
+  interp_flat(c, pc, CORO_SENTINEL);
+}
 
 // A SYNCHRONOUS nested call — call_addr's old recursive job, plus rec_super_call (interpret the
 // original PSX body for the A/B oracle) and the dispatch-miss RAM-code path. It must run the
@@ -726,7 +1216,7 @@ void interp_coro_run(Core* c, uint32_t pc) { interp_flat(c, pc, CORO_SENTINEL); 
 // of the old recursive rec_interp exactly. Nesting (e.g. an override calling rec_super_call mid
 // task) is safe: each invocation's PSX frames sit above the caller's, so only the target's own
 // `jr ra` reaches the sentinel and ends this run.
-void interp_run(Core* c, uint32_t pc) {
+void interp_run(Core *c, uint32_t pc) {
   uint32_t saved_ra = c->r[31];
   c->r[31] = CORO_SENTINEL;
   interp_flat(c, pc, CORO_SENTINEL);
@@ -747,4 +1237,6 @@ void interp_run(Core* c, uint32_t pc) {
 // as the sentinel: it is the caller's continuation, reachable from inside the callee only by the
 // `jr ra` this is meant to stop on. Requires r[31] to hold the guest return address on entry, which
 // is what the recompiler emits before every call.
-void interp_call(Core* c, uint32_t pc) { interp_flat(c, pc, c->r[31]); }
+void interp_call(Core *c, uint32_t pc) {
+  interp_flat(c, pc, c->r[31]);
+}

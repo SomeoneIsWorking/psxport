@@ -60,28 +60,32 @@ struct Run {
   std::string out;
 };
 
-static Run run(const std::string& cmd) {
+static Run run(const std::string &cmd) {
   Run r;
-  FILE* p = popen((cmd + " 2>&1").c_str(), "r");
+  FILE *p = popen((cmd + " 2>&1").c_str(), "r");
   if (!p) {
     r.out = "popen failed";
     return r;
   }
   char buf[4096];
   size_t n;
-  while ((n = fread(buf, 1, sizeof buf, p)) > 0) r.out.append(buf, n);
+  while ((n = fread(buf, 1, sizeof buf, p)) > 0) {
+    r.out.append(buf, n);
+  }
   const int st = pclose(p);
   r.rc = (st == -1) ? -1 : (WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
   return r;
 }
 
-static std::string capture(const std::string& cmd) {
+static std::string capture(const std::string &cmd) {
   std::string s = run(cmd).out;
-  while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+  while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) {
+    s.pop_back();
+  }
   return s;
 }
 
-static bool has(const std::string& hay, const char* needle) {
+static bool has(const std::string &hay, const char *needle) {
   return hay.find(needle) != std::string::npos;
 }
 
@@ -93,26 +97,29 @@ static bool has(const std::string& hay, const char* needle) {
 static std::string script_path(void) {
   std::string f = __FILE__;
   const size_t a = f.rfind('/');
-  if (a == std::string::npos) return "";
+  if (a == std::string::npos) {
+    return "";
+  }
   const size_t b = f.rfind('/', a - 1);
-  if (b == std::string::npos) return "";
+  if (b == std::string::npos) {
+    return "";
+  }
   return f.substr(0, b) + "/scripts/sync-submodules.sh";
 }
 
 /* ---- fixture ----------------------------------------------------------------------------------- */
 
 struct Fixture {
-  std::string root;  /* absolute; holds src/ (the "remotes"), game/ (the checkout), home/ */
-  std::string env;   /* env prefix that isolates git from the developer's own config       */
-  std::string git;   /* `git` plus the flags every fixture command needs                   */
+  std::string root; /* absolute; holds src/ (the "remotes"), game/ (the checkout), home/ */
+  std::string env;  /* env prefix that isolates git from the developer's own config       */
+  std::string git;  /* `git` plus the flags every fixture command needs                   */
   bool ok = false;
 };
 
-static bool step(const Fixture& fx, const std::string& cmd, bool required = true) {
+static bool step(const Fixture &fx, const std::string &cmd, bool required = true) {
   const Run r = run(fx.env + cmd);
   if (required && r.rc != 0) {
-    fprintf(stderr, "    fixture step FAILED rc=%d: %s\n      %s\n", r.rc, cmd.c_str(),
-            r.out.c_str());
+    fprintf(stderr, "    fixture step FAILED rc=%d: %s\n      %s\n", r.rc, cmd.c_str(), r.out.c_str());
     return false;
   }
   return true;
@@ -122,15 +129,18 @@ static bool step(const Fixture& fx, const std::string& cmd, bool required = true
  * arm_drift  = leave vendor/lucent one commit BEHIND its recorded gitlink (stale — sync should fix)
  * ahead_drift= leave vendor/lucent one commit AHEAD of it (a DELIBERATE checkout — must be kept)
  * local_work = leave an untracked file inside vendor/lucent                                        */
-static Fixture make_fixture(const char* name, bool ghost, bool arm_drift, bool local_work,
-                           bool ahead_drift = false) {
+static Fixture make_fixture(const char *name, bool ghost, bool arm_drift, bool local_work, bool ahead_drift = false) {
   Fixture fx;
   char cwd[4096];
-  if (!getcwd(cwd, sizeof cwd)) return fx;
+  if (!getcwd(cwd, sizeof cwd)) {
+    return fx;
+  }
   fx.root = std::string(cwd) + "/sync_submodules_fixture_" + name;
 
   run("rm -rf '" + fx.root + "'");
-  if (run("mkdir -p '" + fx.root + "/home'").rc != 0) return fx;
+  if (run("mkdir -p '" + fx.root + "/home'").rc != 0) {
+    return fx;
+  }
   run("touch '" + fx.root + "/home/.gitconfig'");
 
   fx.env = "env HOME='" + fx.root + "/home' GIT_CONFIG_GLOBAL='" + fx.root +
@@ -140,88 +150,131 @@ static Fixture make_fixture(const char* name, bool ghost, bool arm_drift, bool l
 
   const std::string R = "'" + fx.root + "'";
   const std::string G = fx.git;
-  auto mk = [&](const char* rel) {
-    return "mkdir -p " + R + "/" + rel + " && " + G + " -C " + R + "/" + rel + " init -q && echo " +
-           rel + " > " + R + "/" + rel + "/README && " + G + " -C " + R + "/" + rel +
-           " add -A && " + G + " -C " + R + "/" + rel + " commit -qm c1";
+  auto mk = [&](const char *rel) {
+    return "mkdir -p " + R + "/" + rel + " && " + G + " -C " + R + "/" + rel + " init -q && echo " + rel + " > " + R +
+           "/" + rel + "/README && " + G + " -C " + R + "/" + rel + " add -A && " + G + " -C " + R + "/" + rel +
+           " commit -qm c1";
   };
 
   std::vector<std::string> steps;
   steps.push_back(mk("src/lucent"));
   /* lucent needs two commits so "one commit behind the gitlink" is expressible */
-  steps.push_back("echo two > " + R + "/src/lucent/README && " + G + " -C " + R +
-                  "/src/lucent commit -qam c2");
+  steps.push_back("echo two > " + R + "/src/lucent/README && " + G + " -C " + R + "/src/lucent commit -qam c2");
   steps.push_back(mk("src/beetle"));
-  for (const std::string& s : steps)
-    if (!step(fx, s)) return fx;
+  for (const std::string &s : steps) {
+    if (!step(fx, s)) {
+      return fx;
+    }
+  }
 
   /* THE POISON: a gitlink in beetle's tree with no .gitmodules mapping — beetle-psx's
    * deps/lightning/gnulib, reproduced exactly. Any git recursion dies here. */
   const std::string bl = capture(fx.env + G + " -C " + R + "/src/lucent rev-parse HEAD");
   if (bl.size() != 40) {
-    fprintf(stderr, "    fixture: could not read a sha for the poison gitlink (got \"%s\")\n",
-            bl.c_str());
+    fprintf(stderr, "    fixture: could not read a sha for the poison gitlink (got \"%s\")\n", bl.c_str());
     return fx;
   }
-  if (!step(fx, G + " -C " + R + "/src/beetle update-index --add --cacheinfo 160000," + bl +
-                    ",deps/lightning/gnulib")) return fx;
-  if (!step(fx, G + " -C " + R + "/src/beetle commit -qm poison")) return fx;
-
-  if (!step(fx, mk("src/framework"))) return fx;
-  if (!step(fx, G + " -C " + R + "/src/framework submodule add -q ../beetle vendor/beetle")) return fx;
-  if (!step(fx, G + " -C " + R + "/src/framework submodule add -q ../lucent vendor/lucent")) return fx;
-  if (ghost) {
-    if (!step(fx, mk("src/ghost"))) return fx;
-    if (!step(fx, G + " -C " + R + "/src/framework submodule add -q ../ghost vendor/ghost")) return fx;
+  if (!step(fx,
+            G + " -C " + R + "/src/beetle update-index --add --cacheinfo 160000," + bl + ",deps/lightning/gnulib")) {
+    return fx;
   }
-  if (!step(fx, G + " -C " + R + "/src/framework commit -qm vendor")) return fx;
-  if (ghost) /* delete the remote AFTER recording the gitlink: declared + recorded + unclonable */
-    if (!step(fx, "rm -rf " + R + "/src/ghost " + R + "/src/framework/vendor/ghost")) return fx;
+  if (!step(fx, G + " -C " + R + "/src/beetle commit -qm poison")) {
+    return fx;
+  }
 
-  if (!step(fx, mk("src/game"))) return fx;
-  if (!step(fx, G + " -C " + R + "/src/game submodule add -q ../framework external/framework")) return fx;
-  if (!step(fx, G + " -C " + R + "/src/game commit -qm vendor")) return fx;
-  if (!step(fx, G + " clone -q " + R + "/src/game " + R + "/game")) return fx;
+  if (!step(fx, mk("src/framework"))) {
+    return fx;
+  }
+  if (!step(fx, G + " -C " + R + "/src/framework submodule add -q ../beetle vendor/beetle")) {
+    return fx;
+  }
+  if (!step(fx, G + " -C " + R + "/src/framework submodule add -q ../lucent vendor/lucent")) {
+    return fx;
+  }
+  if (ghost) {
+    if (!step(fx, mk("src/ghost"))) {
+      return fx;
+    }
+    if (!step(fx, G + " -C " + R + "/src/framework submodule add -q ../ghost vendor/ghost")) {
+      return fx;
+    }
+  }
+  if (!step(fx, G + " -C " + R + "/src/framework commit -qm vendor")) {
+    return fx;
+  }
+  if (ghost) { /* delete the remote AFTER recording the gitlink: declared + recorded + unclonable */
+    if (!step(fx, "rm -rf " + R + "/src/ghost " + R + "/src/framework/vendor/ghost")) {
+      return fx;
+    }
+  }
+
+  if (!step(fx, mk("src/game"))) {
+    return fx;
+  }
+  if (!step(fx, G + " -C " + R + "/src/game submodule add -q ../framework external/framework")) {
+    return fx;
+  }
+  if (!step(fx, G + " -C " + R + "/src/game commit -qm vendor")) {
+    return fx;
+  }
+  if (!step(fx, G + " clone -q " + R + "/src/game " + R + "/game")) {
+    return fx;
+  }
   /* This is EXPECTED to report failure — it is the poison doing its job. */
   step(fx, G + " -C " + R + "/game submodule update --init --recursive", false);
 
   if (arm_drift) {
     const std::string old = capture(fx.env + G + " -C " + R + "/src/lucent rev-parse HEAD~1");
-    if (old.size() != 40) return fx;
-    if (!step(fx, G + " -C " + R + "/game/external/framework/vendor/lucent checkout -q " + old))
+    if (old.size() != 40) {
       return fx;
+    }
+    if (!step(fx, G + " -C " + R + "/game/external/framework/vendor/lucent checkout -q " + old)) {
+      return fx;
+    }
   }
   /* AHEAD: a commit the recorded gitlink does not contain, checked out on purpose. This is the
    * operator bumping a pin, or an agent testing a newer framework — the exact case a blind
    * `git submodule update` silently destroys. */
   if (ahead_drift) {
-    if (!step(fx, G + " -C " + R + "/src/lucent commit -q --allow-empty -m ahead")) return fx;
+    if (!step(fx, G + " -C " + R + "/src/lucent commit -q --allow-empty -m ahead")) {
+      return fx;
+    }
     const std::string tip = capture(fx.env + G + " -C " + R + "/src/lucent rev-parse HEAD");
-    if (tip.size() != 40) return fx;
-    if (!step(fx, G + " -C " + R + "/game/external/framework/vendor/lucent fetch -q origin")) return fx;
-    if (!step(fx, G + " -C " + R + "/game/external/framework/vendor/lucent checkout -q " + tip)) return fx;
+    if (tip.size() != 40) {
+      return fx;
+    }
+    if (!step(fx, G + " -C " + R + "/game/external/framework/vendor/lucent fetch -q origin")) {
+      return fx;
+    }
+    if (!step(fx, G + " -C " + R + "/game/external/framework/vendor/lucent checkout -q " + tip)) {
+      return fx;
+    }
   }
-  if (local_work)
-    if (!step(fx, "echo mine > " + R + "/game/external/framework/vendor/lucent/LOCAL_WORK")) return fx;
+  if (local_work) {
+    if (!step(fx, "echo mine > " + R + "/game/external/framework/vendor/lucent/LOCAL_WORK")) {
+      return fx;
+    }
+  }
 
   fx.ok = true;
   return fx;
 }
 
-static std::string lucent_head(const Fixture& fx) {
-  return capture(fx.env + fx.git + " -C '" + fx.root +
-                 "/game/external/framework/vendor/lucent' rev-parse HEAD");
+static std::string lucent_head(const Fixture &fx) {
+  return capture(fx.env + fx.git + " -C '" + fx.root + "/game/external/framework/vendor/lucent' rev-parse HEAD");
 }
-static std::string lucent_gitlink(const Fixture& fx) {
+static std::string lucent_gitlink(const Fixture &fx) {
   return capture(fx.env + fx.git + " -C '" + fx.root +
                  "/game/external/framework' ls-files -s -- vendor/lucent | awk '{print $2}'");
 }
 /* popen() has no cwd argument, so the `cd` is part of the command line. */
-static Run script_in(const Fixture& fx) {
+static Run script_in(const Fixture &fx) {
   return run("cd '" + fx.root + "/game' && " + fx.env + "bash '" + script_path() + "'");
 }
 
-static void cleanup(const Fixture& fx) { run("rm -rf '" + fx.root + "'"); }
+static void cleanup(const Fixture &fx) {
+  run("rm -rf '" + fx.root + "'");
+}
 
 /* ---- case 0: the harness itself ---------------------------------------------------------------- */
 /* If git is missing or the script is not where this test computed it to be, every other case below
@@ -245,11 +298,13 @@ static void test_does_not_certify_a_submodule_gits_recursion_never_reached(void)
    *     declared submodules, vendor/lucent among the missing. Asserted, not assumed — otherwise a
    *     green result could just mean the fixture failed to reproduce the trap. */
   const Run st = run("cd '" + fx.root + "/game' && " + fx.env + "git submodule status --recursive");
-  const std::string listed =
-      capture("cd '" + fx.root + "/game' && " + fx.env +
-              "git submodule status --recursive 2>/dev/null | grep -c . || true");
-  fprintf(stderr, "  git submodule status --recursive listed %s of the 3 declared (rc=%d):\n%s",
-          listed.c_str(), st.rc, st.out.c_str());
+  const std::string listed = capture("cd '" + fx.root + "/game' && " + fx.env +
+                                     "git submodule status --recursive 2>/dev/null | grep -c . || true");
+  fprintf(stderr,
+          "  git submodule status --recursive listed %s of the 3 declared (rc=%d):\n%s",
+          listed.c_str(),
+          st.rc,
+          st.out.c_str());
   CHECK_STREQ(listed.c_str(), "2");
   CHECK(st.rc != 0);
   CHECK(!has(st.out, "vendor/lucent"));
@@ -280,21 +335,21 @@ static void test_refuses_to_certify_when_a_declared_submodule_is_unseeable(void)
   CHECK(fx.ok);
 
   /* `cd` is a shell builtin, so it must precede the `env` prefix, never follow it. */
-  const std::string declared =
-      capture("cd '" + fx.root + "/game' && " + fx.env +
-              "git config -f external/framework/.gitmodules --get-regexp "
-              "'^submodule\\..*\\.path$' | grep -c . || true");
-  fprintf(stderr, "  framework declares %s submodules (+1 top-level); vendor/ghost has no clonable "
-                  "remote, so 4 are declared in total\n",
+  const std::string declared = capture("cd '" + fx.root + "/game' && " + fx.env +
+                                       "git config -f external/framework/.gitmodules --get-regexp "
+                                       "'^submodule\\..*\\.path$' | grep -c . || true");
+  fprintf(stderr,
+          "  framework declares %s submodules (+1 top-level); vendor/ghost has no clonable "
+          "remote, so 4 are declared in total\n",
           declared.c_str());
   CHECK_STREQ(declared.c_str(), "3");
 
   const Run r = script_in(fx);
   fprintf(stderr, "  script exit=%d, output:\n%s", r.rc, r.out.c_str());
-  CHECK(r.rc != 0);                       /* REFUSE, loudly */
+  CHECK(r.rc != 0); /* REFUSE, loudly */
   CHECK(has(r.out, "CANNOT SEE"));
-  CHECK(has(r.out, "vendor/ghost"));      /* names WHAT it could not see */
-  CHECK(has(r.out, " of 4 submodule(s)"));/* carries its DENOMINATOR */
+  CHECK(has(r.out, "vendor/ghost"));       /* names WHAT it could not see */
+  CHECK(has(r.out, " of 4 submodule(s)")); /* carries its DENOMINATOR */
   CHECK(!has(r.out, "all at this repo's recorded gitlinks"));
   cleanup(fx);
 }
@@ -336,7 +391,7 @@ static void test_still_refuses_to_clobber_real_local_work(void) {
   fprintf(stderr, "  script exit=%d, output:\n%s", r.rc, r.out.c_str());
   CHECK(has(r.out, "NOT syncing"));
   CHECK(has(r.out, "external/framework/vendor/lucent"));
-  CHECK(lucent_head(fx) == before);  /* the local work is still there, unclobbered */
+  CHECK(lucent_head(fx) == before); /* the local work is still there, unclobbered */
   CHECK_EQ(run("test -f '" + fx.root + "/game/external/framework/vendor/lucent/LOCAL_WORK'").rc, 0);
   cleanup(fx);
 }
@@ -351,7 +406,10 @@ static void test_still_refuses_to_clobber_real_local_work(void) {
  * Ancestry is the discriminator. This case pins the DESCENDANT arm; case 1 pins the ANCESTOR arm, so
  * the two together prove the script distinguishes them rather than just refusing everything. */
 static void test_never_rewinds_a_deliberate_checkout(void) {
-  Fixture fx = make_fixture("ahead", /*ghost=*/false, /*arm_drift=*/false, /*local_work=*/false,
+  Fixture fx = make_fixture("ahead",
+                            /*ghost=*/false,
+                            /*arm_drift=*/false,
+                            /*local_work=*/false,
                             /*ahead_drift=*/true);
   CHECK(fx.ok);
   const std::string before = lucent_head(fx);

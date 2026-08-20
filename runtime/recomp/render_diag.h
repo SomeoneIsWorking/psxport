@@ -21,16 +21,26 @@ class RenderDiag {
 public:
   // Per-object walk scope. beginObject sets the current object's node pointer; endObject clears it.
   // Callers pair these around a per-object dispatch; nesting is not supported (the walk itself doesn't nest).
-  void beginObject(uint32_t node) { mNode = node; }
-  void endObject()                { mNode = 0; }
-  uint32_t currentNode() const    { return mNode; }
+  void beginObject(uint32_t node) {
+    mNode = node;
+  }
+  void endObject() {
+    mNode = 0;
+  }
+  uint32_t currentNode() const {
+    return mNode;
+  }
 
   // Geomblk-cmd scope. Set at the top of Render::gt3gt4 (with the geomblk chunk it is submitting) and by
   // the per-entity list walk (with each entity's cmd record). Downstream diag reads it via currentGeomblk().
-  void setGeomblk(uint32_t cmd)   { mGeomblk = cmd; }
-  uint32_t currentGeomblk() const { return mGeomblk; }
+  void setGeomblk(uint32_t cmd) {
+    mGeomblk = cmd;
+  }
+  uint32_t currentGeomblk() const {
+    return mGeomblk;
+  }
 
 private:
-  uint32_t mNode    = 0;
+  uint32_t mNode = 0;
   uint32_t mGeomblk = 0;
 };

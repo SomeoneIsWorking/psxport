@@ -25,64 +25,88 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "game_iface.h"
-#include "game_hooks_opt.h"
 #include "fps60.h"
+#include "game_hooks_opt.h"
+#include "game_iface.h"
 
 // `Core` is never CONSTRUCTED here — it has a real constructor that a hermetic test cannot stand up.
 // The accessors take the hooks table explicitly for exactly that reason, so the Core pointer is only
 // ever FORWARDED, never dereferenced, and the spies record it to prove it arrives unchanged. A
 // sentinel address stands in for a real Core (same shape as the audioMixFrame test).
 class Core;
-static Core* const kFakeCore = reinterpret_cast<Core*>(0xC0FFEE00u);
+static Core *const kFakeCore = reinterpret_cast<Core *>(0xC0FFEE00u);
 
 // ---- spies -------------------------------------------------------------------------------------
-static int  s_name_calls = 0;
-static int  s_play_calls = 0;
-static int  s_play_track = -999;
-static Core* s_name_core  = nullptr;
-static Core* s_play_core  = nullptr;
-static Core* s_cam_core   = nullptr;
-static Core* s_world_core = nullptr;
-static Core* s_bb_core    = nullptr;
+static int s_name_calls = 0;
+static int s_play_calls = 0;
+static int s_play_track = -999;
+static Core *s_name_core = nullptr;
+static Core *s_play_core = nullptr;
+static Core *s_cam_core = nullptr;
+static Core *s_world_core = nullptr;
+static Core *s_bb_core = nullptr;
 static int s_world_calls = 0;
 static int s_bb_calls = 0;
 static float s_world_t = -1.0f;
 
-static const char* spy_now_playing(Core* c) { s_name_calls++; s_name_core = c; return "Track 07"; }
-static void        spy_sound_test(Core* c, int track) { s_play_calls++; s_play_core = c; s_play_track = track; }
-static void        spy_scene_cam(Core* c, float R[3][3], float T[3]) {
-  s_cam_core = c;
-  for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R[i][j] = (float)(10 * i + j);
-  T[0] = -3.0f; T[1] = 4.0f; T[2] = 99.0f;
+static const char *spy_now_playing(Core *c) {
+  s_name_calls++;
+  s_name_core = c;
+  return "Track 07";
 }
-static void spy_world_pass(Core* c, float t) {
+static void spy_sound_test(Core *c, int track) {
+  s_play_calls++;
+  s_play_core = c;
+  s_play_track = track;
+}
+static void spy_scene_cam(Core *c, float R[3][3], float T[3]) {
+  s_cam_core = c;
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      R[i][j] = (float)(10 * i + j);
+    }
+  }
+  T[0] = -3.0f;
+  T[1] = 4.0f;
+  T[2] = 99.0f;
+}
+static void spy_world_pass(Core *c, float t) {
   s_world_calls++;
   s_world_core = c;
   s_world_t = t;
 }
-static void spy_bb_swap(Core* c) { s_bb_calls++; s_bb_core = c; }
-static int s_temporal_calls=0;static Core* s_temporal_core=nullptr;
-static void spy_temporal_rotate(Core* c){s_temporal_calls++;s_temporal_core=c;}
+static void spy_bb_swap(Core *c) {
+  s_bb_calls++;
+  s_bb_core = c;
+}
+static int s_temporal_calls = 0;
+static Core *s_temporal_core = nullptr;
+static void spy_temporal_rotate(Core *c) {
+  s_temporal_calls++;
+  s_temporal_core = c;
+}
 
 static void reset_spies(void) {
-  s_name_calls = s_play_calls = 0; s_play_track = -999;
+  s_name_calls = s_play_calls = 0;
+  s_play_track = -999;
   s_name_core = s_play_core = s_cam_core = nullptr;
-  s_world_calls = s_bb_calls = 0; s_world_t = -1.0f;
+  s_world_calls = s_bb_calls = 0;
+  s_world_t = -1.0f;
   s_world_core = s_bb_core = nullptr;
-  s_temporal_calls=0;s_temporal_core=nullptr;
+  s_temporal_calls = 0;
+  s_temporal_core = nullptr;
 }
 
 // A null hooks TABLE is a different failure from a null hook IN the table — a port that never installs
 // hooks at all reaches the same call sites, so both are asserted separately.
 static void test_absent_hook_is_a_safe_answer_not_a_jump_to_zero(void) {
-  GameHooks hooks{};            // every entry value-initialised to nullptr — the spider1/spyro shape
+  GameHooks hooks{}; // every entry value-initialised to nullptr — the spider1/spyro shape
   CHECK(hooks.audioNowPlayingName == nullptr);
-  CHECK(hooks.audioSoundTestPlay  == nullptr);
+  CHECK(hooks.audioSoundTestPlay == nullptr);
   reset_spies();
 
-  CHECK(game_audio_now_playing_name(nullptr, &hooks) == nullptr);   // "nothing playing", not a crash
-  game_audio_sound_test_play(nullptr, &hooks, 3);                   // silent no-op
+  CHECK(game_audio_now_playing_name(nullptr, &hooks) == nullptr); // "nothing playing", not a crash
+  game_audio_sound_test_play(nullptr, &hooks, 3);                 // silent no-op
   CHECK_EQ(s_play_calls, 0);
 }
 
@@ -99,14 +123,14 @@ static void test_a_null_hooks_table_is_also_safe(void) {
 static void test_a_present_hook_is_actually_called(void) {
   GameHooks hooks{};
   hooks.audioNowPlayingName = spy_now_playing;
-  hooks.audioSoundTestPlay  = spy_sound_test;
+  hooks.audioSoundTestPlay = spy_sound_test;
   reset_spies();
 
-  const char* nm = game_audio_now_playing_name(kFakeCore, &hooks);
+  const char *nm = game_audio_now_playing_name(kFakeCore, &hooks);
   CHECK(nm != nullptr);
   CHECK(strcmp(nm, "Track 07") == 0);
   CHECK_EQ(s_name_calls, 1);
-  CHECK(s_name_core == kFakeCore);      // the Core is forwarded, not dropped or rewritten
+  CHECK(s_name_core == kFakeCore); // the Core is forwarded, not dropped or rewritten
 
   game_audio_sound_test_play(kFakeCore, &hooks, 7);
   CHECK_EQ(s_play_calls, 1);
@@ -174,11 +198,17 @@ static void test_world_rerun_is_not_eligible_until_a_game_claims_it(void) {
   CHECK(!fps60.mTier1EligibleCur);
 }
 
-static void test_temporal_rotate_is_optional_and_exact(void){
-  GameHooks empty{};reset_spies();game_fps60_temporal_rotate(kFakeCore,&empty);
-  game_fps60_temporal_rotate(kFakeCore,nullptr);CHECK_EQ(s_temporal_calls,0);
-  GameHooks hooks{};hooks.fps60TemporalRotate=spy_temporal_rotate;
-  game_fps60_temporal_rotate(kFakeCore,&hooks);CHECK_EQ(s_temporal_calls,1);CHECK(s_temporal_core==kFakeCore);
+static void test_temporal_rotate_is_optional_and_exact(void) {
+  GameHooks empty{};
+  reset_spies();
+  game_fps60_temporal_rotate(kFakeCore, &empty);
+  game_fps60_temporal_rotate(kFakeCore, nullptr);
+  CHECK_EQ(s_temporal_calls, 0);
+  GameHooks hooks{};
+  hooks.fps60TemporalRotate = spy_temporal_rotate;
+  game_fps60_temporal_rotate(kFakeCore, &hooks);
+  CHECK_EQ(s_temporal_calls, 1);
+  CHECK(s_temporal_core == kFakeCore);
 }
 
 int main(void) {

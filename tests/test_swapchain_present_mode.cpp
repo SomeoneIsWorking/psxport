@@ -44,7 +44,7 @@ static void test_vsync_only_when_nothing_else_is_offered(void) {
 // case that is red against "always VSYNC".
 static void test_never_settles_for_a_blocking_mode_when_a_nonblocking_one_exists(void) {
   int scanned = 0, nonblocking = 0;
-  for (int mb = 0; mb < 2; mb++)
+  for (int mb = 0; mb < 2; mb++) {
     for (int im = 0; im < 2; im++) {
       SDL_GPUPresentMode m = preferred_present_mode(mb != 0, im != 0);
       bool any_nonblocking_offered = (mb != 0) || (im != 0);
@@ -53,11 +53,14 @@ static void test_never_settles_for_a_blocking_mode_when_a_nonblocking_one_exists
       CHECK(m != SDL_GPU_PRESENTMODE_IMMEDIATE || im != 0);
       // ...and it must never block when it did not have to.
       CHECK_EQ(present_mode_blocks_caller(m), !any_nonblocking_offered);
-      if (!present_mode_blocks_caller(m)) nonblocking++;
+      if (!present_mode_blocks_caller(m)) {
+        nonblocking++;
+      }
       scanned++;
     }
-  CHECK_EQ(scanned, 4);        // the denominator: the full 2x2 input space, every combination checked
-  CHECK_EQ(nonblocking, 3);    // 3 of the 4 combinations offer a non-blocking mode; all 3 must take it
+  }
+  CHECK_EQ(scanned, 4);     // the denominator: the full 2x2 input space, every combination checked
+  CHECK_EQ(nonblocking, 3); // 3 of the 4 combinations offer a non-blocking mode; all 3 must take it
 }
 
 // Sanity on the predicate itself, so the case above cannot pass by the predicate being vacuously false.
@@ -72,7 +75,7 @@ static void test_mode_name_is_never_null(void) {
   CHECK_STREQ(present_mode_name(SDL_GPU_PRESENTMODE_VSYNC), "VSYNC");
   CHECK_STREQ(present_mode_name(SDL_GPU_PRESENTMODE_IMMEDIATE), "IMMEDIATE");
   CHECK_STREQ(present_mode_name(SDL_GPU_PRESENTMODE_MAILBOX), "MAILBOX");
-  CHECK(present_mode_name((SDL_GPUPresentMode)9999) != NULL);   // out-of-range must still be printable
+  CHECK(present_mode_name((SDL_GPUPresentMode)9999) != NULL); // out-of-range must still be printable
 }
 
 int main(void) {

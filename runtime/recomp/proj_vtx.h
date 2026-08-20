@@ -7,4 +7,7 @@
 // get ProjVtx via projection.h as before.
 #pragma once
 
-typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; } ProjVtx;
+typedef struct {
+  int ir1, ir2, ir3, sz, sx, sy;
+  float px, py, pz, vx, vy, vz;
+} ProjVtx;

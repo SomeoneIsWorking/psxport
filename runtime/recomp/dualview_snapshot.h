@@ -20,18 +20,24 @@ class Core;
 
 class DualviewSnapshot {
 public:
-  bool havePre() const  { return mHavePre; }
-  void clearPre()       { mHavePre = false; }   // called after restorePost — snapshot consumed
+  bool havePre() const {
+    return mHavePre;
+  }
+  void clearPre() {
+    mHavePre = false;
+  } // called after restorePost — snapshot consumed
 
-  void capturePre(Core* c);    // called from ov_field_frame before the native render
-  void capturePost(Core* c);   // called after the native render, before the PSX pass rewinds
-  void restorePre(Core* c);    // rewind to pre so the PSX render pass sees the pre-render state
-  void restorePost(Core* c);   // undo the extra PSX pass so the canonical game resumes
+  void capturePre(Core *c);  // called from ov_field_frame before the native render
+  void capturePost(Core *c); // called after the native render, before the PSX pass rewinds
+  void restorePre(Core *c);  // rewind to pre so the PSX render pass sees the pre-render state
+  void restorePost(Core *c); // undo the extra PSX pass so the canonical game resumes
 
 private:
-  bool     mHavePre = false;
-  uint8_t  mPreRam[0x200000];   uint8_t  mPostRam[0x200000];
-  uint8_t  mPreSpad[0x400];     uint8_t  mPostSpad[0x400];
-  uint32_t mPreGc[32],  mPostGc[32];   // GTE control regs
-  uint32_t mPreGd[32],  mPostGd[32];   // GTE data regs
+  bool mHavePre = false;
+  uint8_t mPreRam[0x200000];
+  uint8_t mPostRam[0x200000];
+  uint8_t mPreSpad[0x400];
+  uint8_t mPostSpad[0x400];
+  uint32_t mPreGc[32], mPostGc[32]; // GTE control regs
+  uint32_t mPreGd[32], mPostGd[32]; // GTE data regs
 };

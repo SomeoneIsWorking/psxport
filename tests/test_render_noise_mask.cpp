@@ -16,20 +16,20 @@
 // masks 0x1F88 MORE bytes, all of them inside the OT, which is render output by definition.
 //
 // Hermetic: GameConfig is a POD, the mask is pure arithmetic over it. No Core, no GPU, no disc.
-#include "testutil.h"
 #include "render_noise.h"
+#include "testutil.h"
 #include <string.h>
 
 // Tomba!2's real values (Tomba2Engine/game/core/game_config.cpp), the only game that has RE'd them.
 static GameConfig tomba2_cfg() {
   GameConfig c{};
-  c.packetPoolBase   = 0x800BFE68u;
+  c.packetPoolBase = 0x800BFE68u;
   c.packetPoolStride = 0x00014000u;
-  c.otRegionBase     = 0x800E80A8u;
-  c.otRegionStride   = 0x00002070u;
-  c.poolPtrCur       = 0x800BF544u;
-  c.poolPtrLast      = 0x800BF4F4u;
-  c.dwellCounter     = 0x800E809Cu;
+  c.otRegionBase = 0x800E80A8u;
+  c.otRegionStride = 0x00002070u;
+  c.poolPtrCur = 0x800BF544u;
+  c.poolPtrLast = 0x800BF4F4u;
+  c.dwellCounter = 0x800E809Cu;
   return c;
 }
 
@@ -46,7 +46,7 @@ static void test_bounds_reproduce_the_literals(void) {
   // env: the words between pool and OT — draw env + the dwell counter, which must fall inside it.
   CHECK_EQ(m.envLo, 0x800E7E68u);
   CHECK_EQ(m.envHi, 0x800E80A8u);
-  CHECK(m.covers(0x800E809Cu));          // dwellCounter — the old comment put it in the ptrs window
+  CHECK(m.covers(0x800E809Cu)); // dwellCounter — the old comment put it in the ptrs window
   // ptrs: the pointer pair plus its adjacent bookkeeping words, byte-identical to the old literal.
   CHECK_EQ(m.ptrLo, 0x800BF4F0u);
   CHECK_EQ(m.ptrHi, 0x800BF54Cu);
@@ -58,15 +58,20 @@ static void test_ot_parity1_is_now_masked(void) {
   const GameConfig cfg = tomba2_cfg();
   const RenderNoiseMask m = RenderNoiseMask::from(&cfg, "test");
   const uint32_t oldHi = 0x800EA200u;          // where the single literal window used to stop
-  const uint32_t p1Lo  = 0x800E80A8u + 0x2070u;  // OT parity 1 starts here (0x800EA118)
+  const uint32_t p1Lo = 0x800E80A8u + 0x2070u; // OT parity 1 starts here (0x800EA118)
   CHECK(m.covers(p1Lo));                       // the 0xE8 bytes the old window did reach
   CHECK(m.covers(oldHi));                      // …and everything past it that it did not
   CHECK(m.covers(0x800EC187u));                // the last byte of parity 1
   CHECK(!m.covers(0x800EC188u));               // hi is EXCLUSIVE — one past the end is NOT masked
   int scanned = 0, masked = 0;                 // the denominator, so "it's covered" is not a vibe
-  for (uint32_t a = p1Lo; a < 0x800EC188u; a += 4u) { scanned++; if (m.covers(a)) masked++; }
+  for (uint32_t a = p1Lo; a < 0x800EC188u; a += 4u) {
+    scanned++;
+    if (m.covers(a)) {
+      masked++;
+    }
+  }
   CHECK_EQ(scanned, 0x2070 / 4);
-  CHECK_EQ(masked, scanned);                   // ALL of parity 1, where the literal masked 2.8%
+  CHECK_EQ(masked, scanned); // ALL of parity 1, where the literal masked 2.8%
 }
 
 // Ordinary engine RAM must not be masked, in both directions of each boundary. A mask that swallowed
@@ -74,12 +79,12 @@ static void test_ot_parity1_is_now_masked(void) {
 static void test_engine_ram_is_not_masked(void) {
   const GameConfig cfg = tomba2_cfg();
   const RenderNoiseMask m = RenderNoiseMask::from(&cfg, "test");
-  CHECK(!m.covers(0x80100000u));   // overlay/engine code+data, well above the OT
-  CHECK(!m.covers(0x80010000u));   // low main RAM
-  CHECK(!m.covers(0x801FE000u));   // the scheduler task table — gameplay state, must never be masked
-  CHECK(!m.covers(0x800BFE64u));   // one word BELOW the pool
-  CHECK(m.covers(0x800BFE68u));    // …and the first word of it
-  CHECK(!m.covers(0x800BF4ECu));   // one word below the ptrs window
+  CHECK(!m.covers(0x80100000u)); // overlay/engine code+data, well above the OT
+  CHECK(!m.covers(0x80010000u)); // low main RAM
+  CHECK(!m.covers(0x801FE000u)); // the scheduler task table — gameplay state, must never be masked
+  CHECK(!m.covers(0x800BFE64u)); // one word BELOW the pool
+  CHECK(m.covers(0x800BFE68u));  // …and the first word of it
+  CHECK(!m.covers(0x800BF4ECu)); // one word below the ptrs window
   CHECK(m.covers(0x800BF4F0u));
 }
 
@@ -91,9 +96,14 @@ static void test_unset_config_masks_nothing(void) {
   CHECK(!m.known);
   CHECK_EQ(m.bytes(), 0u);
   int scanned = 0, masked = 0;
-  for (uint32_t a = 0x80000000u; a < 0x80200000u; a += 0x1000u) { scanned++; if (m.covers(a)) masked++; }
-  CHECK_EQ(scanned, 512);          // scanned the whole 2 MB window…
-  CHECK_EQ(masked, 0);             // …and it masks NOTHING, rather than inheriting Tomba!2's range
+  for (uint32_t a = 0x80000000u; a < 0x80200000u; a += 0x1000u) {
+    scanned++;
+    if (m.covers(a)) {
+      masked++;
+    }
+  }
+  CHECK_EQ(scanned, 512); // scanned the whole 2 MB window…
+  CHECK_EQ(masked, 0);    // …and it masks NOTHING, rather than inheriting Tomba!2's range
   // …and it says so rather than looking like a mask that found nothing.
   char buf[256];
   CHECK(strstr(m.describe(buf, sizeof buf), "unset") != nullptr);
@@ -106,7 +116,8 @@ static void test_unset_config_masks_nothing(void) {
 // A PARTIAL config masks only what it can derive, and must not invent the rest.
 static void test_partial_config_masks_only_what_it_knows(void) {
   GameConfig cfg{};
-  cfg.packetPoolBase = 0x80100000u; cfg.packetPoolStride = 0x1000u;   // pool only: no OT, no ptrs
+  cfg.packetPoolBase = 0x80100000u;
+  cfg.packetPoolStride = 0x1000u; // pool only: no OT, no ptrs
   const RenderNoiseMask m = RenderNoiseMask::from(&cfg, "test");
   CHECK(m.known);
   CHECK(m.covers(0x80100000u));
@@ -115,7 +126,7 @@ static void test_partial_config_masks_only_what_it_knows(void) {
   CHECK_EQ(m.otLo, 0u);
   CHECK_EQ(m.otHi, 0u);
   CHECK_EQ(m.ptrLo, 0u);
-  CHECK_EQ(m.envLo, 0u);          // no OT -> no env window invented between pool and nothing
+  CHECK_EQ(m.envLo, 0u); // no OT -> no env window invented between pool and nothing
   CHECK_EQ(m.bytes(), 0x2000u);
 }
 
@@ -123,13 +134,15 @@ static void test_partial_config_masks_only_what_it_knows(void) {
 // must not get a masked megabyte between them.
 static void test_env_window_needs_the_ot_to_be_adjacent(void) {
   GameConfig far{};
-  far.packetPoolBase = 0x80080000u; far.packetPoolStride = 0x1000u;   // pool ends 0x80082000
-  far.otRegionBase   = 0x80190000u; far.otRegionStride   = 0x1000u;   // OT is 1 MB away
+  far.packetPoolBase = 0x80080000u;
+  far.packetPoolStride = 0x1000u; // pool ends 0x80082000
+  far.otRegionBase = 0x80190000u;
+  far.otRegionStride = 0x1000u; // OT is 1 MB away
   const RenderNoiseMask m = RenderNoiseMask::from(&far, "test");
   CHECK(m.known);
   CHECK_EQ(m.envLo, 0u);
   CHECK_EQ(m.envHi, 0u);
-  CHECK(!m.covers(0x80100000u));   // the gap between them stays UNMASKED
+  CHECK(!m.covers(0x80100000u)); // the gap between them stays UNMASKED
   CHECK_EQ(m.bytes(), 0x2000u + 0x2000u);
 }
 

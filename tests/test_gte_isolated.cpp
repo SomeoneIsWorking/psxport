@@ -23,15 +23,17 @@ static CompareResult compare_regs(const GteRegs &a, const GteRegs &b) {
   for (unsigned i = 0; i < 64; ++i) {
     ++result.compared;
     if (a.REG[i] != b.REG[i]) {
-      if (!result.mismatched)
+      if (!result.mismatched) {
         result.first = i;
+      }
       ++result.mismatched;
     }
   }
   ++result.compared;
   if (a.FLAGS != b.FLAGS) {
-    if (!result.mismatched)
+    if (!result.mismatched) {
       result.first = 64;
+    }
     ++result.mismatched;
   }
   return result;
@@ -46,8 +48,9 @@ static uint32_t next_random(uint32_t &state) {
 
 static GteRegs make_state(uint32_t seed) {
   GteRegs state{};
-  for (auto &reg : state.REG)
+  for (auto &reg : state.REG) {
     reg = next_random(seed);
+  }
   state.FLAGS = next_random(seed);
   return state;
 }
@@ -78,13 +81,11 @@ static void run_differential(uint32_t instruction, uint32_t seed) {
 static void test_randomized_differential(void) {
   // INTPL, NCDS, and the DPCS instruction reached by Spyro's positive
   // color-blend arm.
-  constexpr std::array<uint32_t, 3> instructions = {0x4a980011u, 0x4a780013u,
-                                                    0x4a780010u};
+  constexpr std::array<uint32_t, 3> instructions = {0x4a980011u, 0x4a780013u, 0x4a780010u};
   uint32_t cases = 0;
   for (const uint32_t instruction : instructions) {
     for (uint32_t i = 0; i < 128; ++i) {
-      run_differential(instruction,
-                       0x91e10da5u ^ instruction ^ (i * 0x9e3779b9u));
+      run_differential(instruction, 0x91e10da5u ^ instruction ^ (i * 0x9e3779b9u));
       ++cases;
     }
   }
@@ -162,7 +163,7 @@ static void test_isolation_restores_the_binding_across_a_run(void) {
     const uint32_t op = n ? 0x4a780013u : 0x4a980011u;
 
     GTE_BindState(&expected);
-    GTE_Instruction(op);            // the reference answer, computed while bound
+    GTE_Instruction(op); // the reference answer, computed while bound
     GTE_BindState(&caller);
 
     CHECK(GTE_ExecuteIsolated(&isolated, op) >= 0);

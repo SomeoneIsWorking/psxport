@@ -5,15 +5,15 @@
 // for tasks the port does not own natively. The per-frame slot loop and the PC-native stanzas
 // (DEMO/SOP/GAME/task-1/STAGE-0) live on PcScheduler (game/core/pc_scheduler.cpp), which calls
 // the two stanzas exported here.
-#include "core.h"
-#include "game.h"      // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "scheduler.h"
+#include "core.h"
+#include "coro.h" // thread-fiber for full-PSX mid-function resume (later-264)
+#include "game.h" // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
+#include <execinfo.h>
 #include <lucent/log.h>
-#include "coro.h"      // thread-fiber for full-PSX mid-function resume (later-264)
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <execinfo.h>
 
 // Generic cooperative-task entry. POST-INTERPRETER (later-254): this is now just rec_dispatch
 // (dispatch.cpp) — it can only ENTER a recompiled function at its top, NOT resume a yielded task at a
@@ -54,7 +54,7 @@
 // no-op returning the handle, exactly as the stubbed thread layer did. The caller (FUN_80051f80
 // etc.) has already run its real body, so register side effects it needs on resume (e.g. it
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
-extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — guest-stack backtrace (btyield)
+extern "C" void guest_backtrace_to(Core *, FILE *); // sync_overrides.cpp — guest-stack backtrace (btyield)
 
 // Native port of FUN_80051F14 (see scheduler.h). Verified via ram_menu Ghidra decomp + MAIN.EXE
 // disas. Substrate body:
@@ -81,7 +81,7 @@ extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — gu
 // Syscalls EnterCriticalSection / ExitCriticalSection are no-ops in our port — the fiber scheduler
 // doesn't use BIOS critical sections.
 static constexpr uint32_t kBiosTcbHandlePlaceholder = 0xFF000000u;
-void native_task_spawn(Core* c, int slot, uint32_t entry_pc) {
+void native_task_spawn(Core *c, int slot, uint32_t entry_pc) {
   const uint32_t base = c->cfg->taskTableBase + (uint32_t)slot * c->cfg->taskSlotStride;
 
   // NOTE: substrate FUN_80051F14 also does `sp -= 24; sw s0, 16(sp); sw ra, 20(sp)` — a prologue
@@ -93,46 +93,66 @@ void native_task_spawn(Core* c, int slot, uint32_t entry_pc) {
   // in the chain writes at the correct sp. For now, only the task-slot writes fire (which are at
   // fixed absolute addresses — 0x801FE000+slot*0x70 — so they match unconditionally).
   c->mem_w32(base + 0x0C, entry_pc);
-  c->mem_w32(base + 0x10, c->r[28]);          // FUN_80080930() returns caller's gp
-  c->mem_w16(base + 0x00, 2);                  // RUNNABLE
-  c->mem_w8 (base + 0x6F, 0);
+  c->mem_w32(base + 0x10, c->r[28]); // FUN_80080930() returns caller's gp
+  c->mem_w16(base + 0x00, 2);        // RUNNABLE
+  c->mem_w8(base + 0x6F, 0);
   c->mem_w32(base + 0x04, kBiosTcbHandlePlaceholder);
 }
 
-void scheduler_yield(Core* c) {
-  if (c->game && c->game->verify.inCheck) {   // MV_CHECK legs must be yield-free (verify_harness.h)
-    lucent::error("mirror-verify", "FATAL: yield inside a strict-check leg — this mirror is not yield-free; gate it with SBS lockstep instead of MV_CHECK.");
+void scheduler_yield(Core *c) {
+  if (c->game && c->game->verify.inCheck) { // MV_CHECK legs must be yield-free (verify_harness.h)
+    lucent::error("mirror-verify",
+                  "FATAL: yield inside a strict-check leg — this mirror is not yield-free; gate it with SBS lockstep "
+                  "instead of MV_CHECK.");
     abort();
   }
-  if (!c->game->pcSched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
-  lucent::debug("yieldpc", "switch yield ra=0x{:08X} waitloop=0x{:08X} r16=0x{:08X} r29=0x{:08X} 801fe0e0=0x{:X}",
-                c->r[31], c->mem_r32(c->r[29] + 16), c->r[16], c->r[29], c->mem_r32(0x801fe0e0u));
+  if (!c->game->pcSched.in_stage) {
+    c->r[2] = c->r[4];
+    return;
+  } // no-op: return the handle arg in v0
+  lucent::debug("yieldpc",
+                "switch yield ra=0x{:08X} waitloop=0x{:08X} r16=0x{:08X} r29=0x{:08X} 801fe0e0=0x{:X}",
+                c->r[31],
+                c->mem_r32(c->r[29] + 16),
+                c->r[16],
+                c->r[29],
+                c->mem_r32(0x801fe0e0u));
   int slot = c->game->pcSched.cur_slot;
-  c->game->pcSched.task_ctx[slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
+  c->game->pcSched.task_ctx[slot] = static_cast<R3000 &>(*c); // save REGISTERS only (r29=task SP, r31=resume ra)
   if (c->game->pcSched.cur_is_coro) {
     // FULL-PSX thread-fiber task. If the guest just ENDED this task (FUN_80051fb4 set state=0 then funneled
     // here), the body will never be resumed — unwind the fiber thread so its body returns and the Coro
     // finishes (else the thread blocks forever). Otherwise BLOCK the fiber (its whole C stack preserved);
     // the scheduler's co->resume() returns and we continue here on the next resume — mid-function.
     if (c->mem_r16(c->cfg->taskTableBase + (uint32_t)slot * c->cfg->taskSlotStride) == 0) {
-      lucent::debug("sched", "   switch EXIT slot {} (base.state==0) ra=0x{:08X}",
-                    slot, c->r[31]);
+      lucent::debug("sched", "   switch EXIT slot {} (base.state==0) ra=0x{:08X}", slot, c->r[31]);
       c->game->pcSched.coro[slot]->exit_now();
     }
     lucent::debug("yieldpc", "[sched]   switch YIELD slot {} ra=0x{:08X}", slot, c->r[31]);
     // btyield: dump the coro's guest call chain at the yield point (the live regs ARE the yielding
     // field-mode frame). Diagnoses WHERE a full-PSX task is parked (e.g. the deep field-mode sub-wait).
     if (lucent::channel_on("btyield")) {
-      lucent::debug("btyield", "slot {} ra=0x{:08X} r16=0x{:08X} r17=0x{:08X} r18=0x{:08X} r19=0x{:08X} r29=0x{:08X}",
-                    slot, c->r[31], c->r[16], c->r[17], c->r[18], c->r[19], c->r[29]);
+      lucent::debug("btyield",
+                    "slot {} ra=0x{:08X} r16=0x{:08X} r17=0x{:08X} r18=0x{:08X} r19=0x{:08X} r29=0x{:08X}",
+                    slot,
+                    c->r[31],
+                    c->r[16],
+                    c->r[17],
+                    c->r[18],
+                    c->r[19],
+                    c->r[29]);
       guest_backtrace_to(c, stderr);
-      { void* bt[40]; int n = backtrace(bt, 40); lucent::debug("btyield", "C-stack (recomp func chain):");
-        backtrace_symbols_fd(bt, n, 2); }
+      {
+        void *bt[40];
+        int n = backtrace(bt, 40);
+        lucent::debug("btyield", "C-stack (recomp func chain):");
+        backtrace_symbols_fd(bt, n, 2);
+      }
     }
     c->game->pcSched.coro[slot]->yield();
     return;
   }
-  longjmp(c->game->pcSched.yield_jmp, 1);   // native path: unwind to the scheduler's setjmp
+  longjmp(c->game->pcSched.yield_jmp, 1); // native path: unwind to the scheduler's setjmp
 }
 
 // ---- Substrate task-slot stanzas ------------------------------------------------------------------
@@ -140,7 +160,6 @@ void scheduler_yield(Core* c) {
 // 1 (handled) when it processed the tick (caller does `continue` to the next slot), or 0
 // (not mine) to fall through to the next stanza. The PC-native stanzas live on PcScheduler
 // (game/core/pc_scheduler.cpp); the two below are the substrate fallbacks it calls.
-
 
 // FULL-PSX (psx_fallback) task — thread-fiber coroutine. The substrate can't re-enter mid-fn, so
 // each task runs on its own Coro thread that BLOCKS at a yield (preserving its C stack) and
@@ -150,50 +169,70 @@ void scheduler_yield(Core* c) {
 // native handler, so substrate-only wakes like task-1 preload (0x80044F58) execute on A same as
 // core B and the FUN_80044BD4 spawn-and-wait cycle actually runs (dropping the completion-shim
 // override in engine.cpp).
-int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
-                                 int native_content, const R3000& loop) {
+int recomp_run_coro_fiber_stanza(Core *c, int i, uint32_t base, uint32_t st, int native_content, const R3000 &loop) {
   if (native_content) {
-    if (c->game->native_sync) return 0;
-    if (c->hooks->hasNativeHandlerForEntry(c, c->mem_r32(base + 0xc))) return 0;
+    if (c->game->native_sync) {
+      return 0;
+    }
+    if (c->hooks->hasNativeHandlerForEntry(c, c->mem_r32(base + 0xc))) {
+      return 0;
+    }
   }
-  Coro*& co = c->game->pcSched.coro[i];
+  Coro *&co = c->game->pcSched.coro[i];
   int co_fresh = (st == 3 || (st == 2 && !c->game->pcSched.task_started[i]));
   if (co_fresh) {
-    if (co) { delete co; co = nullptr; }
+    if (co) {
+      delete co;
+      co = nullptr;
+    }
     uint32_t entry = c->mem_r32(base + 0xc);
     c->game->pcSched.task_ctx[i] = loop;
     c->game->pcSched.task_ctx[i].r[29] = c->mem_r32(base + 8);
     c->game->pcSched.task_ctx[i].r[31] = 0xDEAD0000u;
     c->game->pcSched.task_started[i] = 1;
-    c->game->pcSched.demo_native[i] = 0; c->game->pcSched.game_native[i] = 0; c->game->pcSched.game_coop[i] = 0;
-    Core* cc = c;
+    c->game->pcSched.demo_native[i] = 0;
+    c->game->pcSched.game_native[i] = 0;
+    c->game->pcSched.game_coop[i] = 0;
+    Core *cc = c;
     co = new Coro();
-    co->start([cc, entry] { rec_coro_run(cc, entry); });
+    co->start([cc, entry] {
+      rec_coro_run(cc, entry);
+    });
   } else if (st == 2 && co && !co->done()) {
     /* resume the suspended fiber (regs restored below) */
   } else if (st == 2) {
     c->game->pcSched.task_started[i] = 0;
     return 1;
   } else {
-    return 1;                                                    // sleeping this frame (state==1)
+    return 1; // sleeping this frame (state==1)
   }
   c->mem_w16(base, 4);
   c->mem_w32(c->cfg->curTaskPtr, base);
   c->game->pcSched.cur_slot = i;
   c->game->pcSched.in_stage = 1;
   c->game->pcSched.cur_is_coro = 1;
-  static_cast<R3000&>(*c) = c->game->pcSched.task_ctx[i];
-  lucent::debug("sched", "slot {} coro {} st={} entry=0x{:08X} sp=0x{:08X}", i,
-                co_fresh ? "start" : "resume", st, c->mem_r32(base + 0xc), c->game->pcSched.task_ctx[i].r[29]);
+  static_cast<R3000 &>(*c) = c->game->pcSched.task_ctx[i];
+  lucent::debug("sched",
+                "slot {} coro {} st={} entry=0x{:08X} sp=0x{:08X}",
+                i,
+                co_fresh ? "start" : "resume",
+                st,
+                c->mem_r32(base + 0xc),
+                c->game->pcSched.task_ctx[i].r[29]);
   co->resume();
   c->game->pcSched.cur_is_coro = 0;
   c->game->pcSched.in_stage = 0;
-  lucent::debug("sched", "   slot {} coro out: done={} base.state={} entry=0x{:08X}",
-                i, co->done() ? 1 : 0, c->mem_r16(base), c->mem_r32(base + 0xc));
+  lucent::debug("sched",
+                "   slot {} coro out: done={} base.state={} entry=0x{:08X}",
+                i,
+                co->done() ? 1 : 0,
+                c->mem_r16(base),
+                c->mem_r32(base + 0xc));
   if (co->done() || c->mem_r16(base) == 0) {
     c->mem_w16(base, 0);
     c->game->pcSched.task_started[i] = 0;
-    delete co; co = nullptr;
+    delete co;
+    co = nullptr;
   }
   return 1;
 }
@@ -203,8 +242,8 @@ int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
 // regs pinned); state==2 resume from saved r31. Inside the setjmp block, fresh entries for the
 // two remaining native task entries (GAME stagePrologue and STAGE-0 startBinStage) fire before
 // rec_coro_run. DEMO/SOP/GAME-per-frame entries were consumed by the PcScheduler stanzas.
-int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t st,
-                                       int native_content, const R3000& loop) {
+int recomp_run_generic_dispatch_stanza(
+    Core *c, int i, uint32_t base, uint32_t st, int native_content, const R3000 &loop) {
   uint32_t resume_pc;
   int fresh = 0;
   if (st == 3 || (st == 2 && !c->game->pcSched.task_started[i])) {
@@ -215,8 +254,7 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
     c->game->pcSched.task_ctx[i].r[31] = 0xDEAD0000u;
     c->game->pcSched.task_started[i] = 1;
     c->game->pcSched.demo_native[i] = 0;
-  } else if (st == 2 && c->game->pcSched.game_coop[i]
-             && c->mem_r32(base + 0xc) == 0x8010637Cu) {
+  } else if (st == 2 && c->game->pcSched.game_coop[i] && c->mem_r32(base + 0xc) == 0x8010637Cu) {
     // GAME cooperative re-entry at loop top 0x801063F4 with the callee-saved regs the loop
     // expects; sp pinned to task-top - 0x20 (verified 0x8010637C prologue frame size, later-284c
     // stack-leak fix) so the pre-prologue r29 leak doesn't ratchet task0's guest sp into the task
@@ -228,17 +266,22 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
     c->game->pcSched.task_ctx[i].r[31] = 0x801063F4u;
     c->game->pcSched.task_ctx[i].r[29] = c->mem_r32(base + 8) - 0x20u;
   } else if (st == 2) {
-    c->game->pcSched.game_coop[i] = 0;                           // left GAME cooperative loop
+    c->game->pcSched.game_coop[i] = 0; // left GAME cooperative loop
     resume_pc = c->game->pcSched.task_ctx[i].r[31];
   } else {
-    return 1;                                                    // sleeping this frame (state==1)
+    return 1; // sleeping this frame (state==1)
   }
   c->mem_w16(base, 4);
-  lucent::debug("sched", "slot {} st_in={} resume_pc=0x{:08X} ra=0x{:08X} sp=0x{:08X}",
-                i, st, resume_pc, c->game->pcSched.task_ctx[i].r[31], c->game->pcSched.task_ctx[i].r[29]);
+  lucent::debug("sched",
+                "slot {} st_in={} resume_pc=0x{:08X} ra=0x{:08X} sp=0x{:08X}",
+                i,
+                st,
+                resume_pc,
+                c->game->pcSched.task_ctx[i].r[31],
+                c->game->pcSched.task_ctx[i].r[29]);
   c->mem_w32(c->cfg->curTaskPtr, base);
   c->game->pcSched.cur_slot = i;
-  static_cast<R3000&>(*c) = c->game->pcSched.task_ctx[i];
+  static_cast<R3000 &>(*c) = c->game->pcSched.task_ctx[i];
   c->game->pcSched.in_stage = 1;
   if (setjmp(c->game->pcSched.yield_jmp) == 0) {
     uint32_t start = resume_pc;
@@ -248,10 +291,10 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
     // by entryPc. The start/in_stage dance + the stage-0 finalize stay HERE (scheduler bookkeeping); only
     // the engine stage BODY and its entry-PC constants moved into the hook.
     if (native_content && fresh) {
-      c->coro_redirect_pc = 0;   // clear before: only the hook's stageMain path sets it (safety vs a stale value)
+      c->coro_redirect_pc = 0; // clear before: only the hook's stageMain path sets it (safety vs a stale value)
       if (c->hooks->schedFreshEntry(c, i, base, resume_pc)) {
         // TERMINAL startBinStage: finalize the fresh stage-0 slot and end the tick (skip rec_coro_run).
-        c->game->pcSched.task_ctx[i] = static_cast<R3000&>(*c);
+        c->game->pcSched.task_ctx[i] = static_cast<R3000 &>(*c);
         c->mem_w16(base, 2);
         c->game->pcSched.in_stage = 0;
         return 1;
@@ -259,10 +302,13 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
       // stageMain left the redirect start in c->coro_redirect_pc; a non-stage fresh entry left it 0 (start
       // stays resume_pc). Reproduces `start = coro_redirect_pc ? coro_redirect_pc : r[31]` — stageMain
       // ALWAYS sets coro_redirect_pc (= 0x801063F4), so the original r[31] fallback branch was dead.
-      if (c->coro_redirect_pc) { start = c->coro_redirect_pc; c->coro_redirect_pc = 0; }
+      if (c->coro_redirect_pc) {
+        start = c->coro_redirect_pc;
+        c->coro_redirect_pc = 0;
+      }
     }
     rec_coro_run(c, start);
-    c->mem_w16(base, 0);                                          // task returned (jr ra sentinel)
+    c->mem_w16(base, 0); // task returned (jr ra sentinel)
     c->game->pcSched.task_started[i] = 0;
   }
   c->game->pcSched.in_stage = 0;

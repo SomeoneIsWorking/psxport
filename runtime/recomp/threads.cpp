@@ -13,18 +13,36 @@
 
 #define THR_BASE 0xFF000000u
 
-void threads_init(Core* c) { (void)c; }
+void threads_init(Core *c) {
+  (void)c;
+}
 
 // B0:0x0E OpenThread(pc,sp,gp) -> handle. No native stack is created (no coroutines).
-uint32_t thread_open(Core* c)  { (void)c; return THR_BASE; }
-// B0:0x0F CloseThread(handle) -> 1.
-uint32_t thread_close(Core* c) { (void)c; return 1; }
-// B0:0x10 ChangeThread(handle): no-op (no context switch in the native boot).
-void     thread_change(Core* c, uint32_t handle) { (void)c; (void)handle; }
-
-static void open_thread(Core* c)   { c->r[2] = thread_open(c); }
-static void close_thread(Core* c)  { c->r[2] = thread_close(c); }
-static void change_thread(Core* c) { uint32_t h = c->r[4]; thread_change(c, h); c->r[2] = h; }
-
-void threads_register_overrides(void) {
+uint32_t thread_open(Core *c) {
+  (void)c;
+  return THR_BASE;
 }
+// B0:0x0F CloseThread(handle) -> 1.
+uint32_t thread_close(Core *c) {
+  (void)c;
+  return 1;
+}
+// B0:0x10 ChangeThread(handle): no-op (no context switch in the native boot).
+void thread_change(Core *c, uint32_t handle) {
+  (void)c;
+  (void)handle;
+}
+
+static void open_thread(Core *c) {
+  c->r[2] = thread_open(c);
+}
+static void close_thread(Core *c) {
+  c->r[2] = thread_close(c);
+}
+static void change_thread(Core *c) {
+  uint32_t h = c->r[4];
+  thread_change(c, h);
+  c->r[2] = h;
+}
+
+void threads_register_overrides(void) {}

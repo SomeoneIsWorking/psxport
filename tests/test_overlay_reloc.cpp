@@ -41,8 +41,10 @@ namespace {
 constexpr uint32_t kLinkBase = 0x800C65ECu;
 constexpr uint32_t kSizeA = 0x800u, kSizeB = 0x8800u, kSizeC = 0x9800u;
 
-void disp_stub(Core*, uint32_t) {}
-int idx_stub(uint32_t) { return -1; }
+void disp_stub(Core *, uint32_t) {}
+int idx_stub(uint32_t) {
+  return -1;
+}
 
 const RecOverlay kOverlays[] = {
     {kLinkBase, kLinkBase + kSizeA, "L5A5LSC", disp_stub, idx_stub, nullptr, 0, 1},
@@ -54,23 +56,29 @@ const RecOverlay kOverlays[] = {
 };
 
 const RecompRegistry kRegistry = {
-    nullptr, nullptr, kOverlays, (int)(sizeof kOverlays / sizeof kOverlays[0]),
-    nullptr, nullptr, nullptr, nullptr,
+    nullptr,
+    nullptr,
+    kOverlays,
+    (int)(sizeof kOverlays / sizeof kOverlays[0]),
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
 };
 
 // The three live bases measured from a real boot of the port (scratch/logs/boot_after.log): the
 // game's allocator placed the three co-resident modules here, and they are nowhere near each other
 // or near the link base.
-constexpr uint32_t kLiveA = 0x8014A6D0u;   // L5A5LSC
-constexpr uint32_t kLiveB = 0x801BDA30u;   // LIZMAN
-constexpr uint32_t kLiveC = 0x801C6238u;   // VENOM
+constexpr uint32_t kLiveA = 0x8014A6D0u; // L5A5LSC
+constexpr uint32_t kLiveB = 0x801BDA30u; // LIZMAN
+constexpr uint32_t kLiveC = 0x801C6238u; // VENOM
 
 std::unique_ptr<Core> fresh_core() {
   psxport_install_recomp(&kRegistry);
   return std::make_unique<Core>();
 }
 
-}  // namespace
+} // namespace
 
 // THE CASE THE PINNED DESIGN GOT WRONG: three modules live at once, each owning its own addresses.
 static void test_three_coresident_modules_route_separately(void) {
@@ -84,11 +92,12 @@ static void test_three_coresident_modules_route_separately(void) {
   int probed = 0;
   const uint32_t live[3] = {kLiveA, kLiveB, kLiveC};
   const uint32_t size[3] = {kSizeA, kSizeB, kSizeC};
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 3; ++i) {
     for (uint32_t off : {0u, size[i] / 2, size[i] - 4}) {
       CHECK_EQ(overlay_live_index(c.get(), live[i] + off), i);
       ++probed;
     }
+  }
   CHECK_EQ(probed, 9);
 
   // The delta each module's recompiled code adds to every address it composes.

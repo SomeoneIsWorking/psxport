@@ -29,28 +29,34 @@ static void test_headless_never_opens_audio(void) {
 
   // headless: silent regardless of the knob. This is the arm native_fmv.cpp was missing.
   CHECK_EQ(audio_may_open(/*noaudio=*/false, /*windowed=*/false), false);
-  CHECK_EQ(audio_may_open(/*noaudio=*/true,  /*windowed=*/false), false);
+  CHECK_EQ(audio_may_open(/*noaudio=*/true, /*windowed=*/false), false);
 
   // explicit opt-out beats a window
-  CHECK_EQ(audio_may_open(/*noaudio=*/true,  /*windowed=*/true), false);
+  CHECK_EQ(audio_may_open(/*noaudio=*/true, /*windowed=*/true), false);
 }
 
 // ---- 2. the lint: no audio device is opened outside the shared predicate ------------------------
 // Resolve a framework-relative path from THIS FILE's compile-time location, so the lint works from
 // any cwd. ctest runs from the build dir, not tests/ — a relative path made the test fail there while
 // passing by hand, which is a defect in the test, not in the code under test.
-static std::string src_path(const char* rel) {
-  std::string self = __FILE__;                       // .../psxport/tests/test_audio_policy.cpp
+static std::string src_path(const char *rel) {
+  std::string self = __FILE__; // .../psxport/tests/test_audio_policy.cpp
   const size_t cut = self.find_last_of('/');
   const std::string tests_dir = (cut == std::string::npos) ? std::string(".") : self.substr(0, cut);
-  return tests_dir + "/../" + rel;                   // .../psxport/<rel>
+  return tests_dir + "/../" + rel; // .../psxport/<rel>
 }
 
-static std::string slurp(const char* path) {
-  FILE* f = fopen(path, "rb");
-  if (!f) return std::string();
-  std::string s; char buf[8192]; size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0) s.append(buf, n);
+static std::string slurp(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) {
+    return std::string();
+  }
+  std::string s;
+  char buf[8192];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof buf, f)) > 0) {
+    s.append(buf, n);
+  }
   fclose(f);
   return s;
 }
@@ -59,15 +65,15 @@ static void test_every_audio_open_site_consults_the_shared_predicate(void) {
   // The framework's audio paths. Listed rather than globbed BECAUSE a new audio path must be a
   // deliberate edit here — that is the point of the lint, and a glob would silently absolve a file
   // nobody thought about.
-  const char* srcs[] = {
-    "runtime/recomp/spu_audio.cpp",
-    "runtime/recomp/native_fmv.cpp",
+  const char *srcs[] = {
+      "runtime/recomp/spu_audio.cpp",
+      "runtime/recomp/native_fmv.cpp",
   };
 
   int scanned = 0, sites = 0, guarded = 0;
-  for (const char* rel : srcs) {
+  for (const char *rel : srcs) {
     std::string s = slurp(src_path(rel).c_str());
-    if (s.empty()) {                       // REFUSE rather than pass vacuously
+    if (s.empty()) { // REFUSE rather than pass vacuously
       printf("  FAIL could not read %s — the lint would have passed by seeing nothing\n", rel);
       CHECK(false);
       continue;
@@ -78,16 +84,18 @@ static void test_every_audio_open_site_consults_the_shared_predicate(void) {
          p = s.find("SDL_OpenAudioDeviceStream", p + 1)) {
       sites++;
       const size_t use = s.rfind("audio_may_open", p);
-      if (use != std::string::npos) guarded++;
-      else printf("  FAIL %s: an SDL_OpenAudioDeviceStream site is not guarded by audio_may_open()\n", rel);
+      if (use != std::string::npos) {
+        guarded++;
+      } else {
+        printf("  FAIL %s: an SDL_OpenAudioDeviceStream site is not guarded by audio_may_open()\n", rel);
+      }
     }
   }
 
   // Denominators, so a green line can never mean "the lint found nothing to check".
-  printf("  [lint] audio: scanned %d file(s), %d device-open site(s), %d guarded\n",
-         scanned, sites, guarded);
+  printf("  [lint] audio: scanned %d file(s), %d device-open site(s), %d guarded\n", scanned, sites, guarded);
   CHECK_EQ(scanned, 2);
-  CHECK(sites >= 2);          // one per audio path; fewer means a path vanished and this list is stale
+  CHECK(sites >= 2); // one per audio path; fewer means a path vanished and this list is stale
   CHECK_EQ(guarded, sites);
 }
 

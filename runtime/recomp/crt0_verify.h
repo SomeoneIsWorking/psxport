@@ -41,11 +41,11 @@
 // A scan that resolves NOTHING (e.g. the crt0 window reads all zeroes because the guest image is not
 // loaded yet) says exactly that, with its denominator, instead of silently reporting "0 disagreements".
 #pragma once
+#include "crt0_boot.h"
+#include "game_iface.h"
+#include <lucent/log.h>
 #include <stdint.h>
 #include <stdio.h>
-#include "game_iface.h"
-#include "crt0_boot.h"
-#include <lucent/log.h>
 
 // How far to scan. All five measured crt0s reach their `jal` within 34 instructions; 96 is generous
 // without being unbounded.
@@ -55,167 +55,233 @@ static const int CRT0_SCAN_LIMIT = 96;
 // Straight-line only: the .bss loop's back-edge is deliberately NOT followed, because every value being
 // extracted is established before or after the loop, never by iterating it.
 enum Crt0Tag {
-  CT_UNKNOWN = 0,   // nothing is known about this register
-  CT_CONST,         // a resolved constant (lui/addiu/ori/addu chains)
-  CT_LOADED,        // the result of `lw` from a resolved address: src = that address, bias = later addi
-  CT_HEAPSIZE,      // the `subu` chain result — the value the guest passes as InitHeap's `size`
-  CT_HEAPBASE,      // the masked (and possibly KSEG0'd) heap base — InitHeap's `ptr`
+  CT_UNKNOWN = 0, // nothing is known about this register
+  CT_CONST,       // a resolved constant (lui/addiu/ori/addu chains)
+  CT_LOADED,      // the result of `lw` from a resolved address: src = that address, bias = later addi
+  CT_HEAPSIZE,    // the `subu` chain result — the value the guest passes as InitHeap's `size`
+  CT_HEAPBASE,    // the masked (and possibly KSEG0'd) heap base — InitHeap's `ptr`
 };
 struct Crt0SReg {
-  Crt0Tag  tag = CT_UNKNOWN;
-  uint32_t val = 0;      // valid when tag == CT_CONST (or CT_HEAPBASE, which is also resolved)
-  uint32_t src = 0;      // valid when tag == CT_LOADED: the absolute address loaded from
-  int32_t  bias = 0;     // valid when tag == CT_LOADED: accumulated `addi` on the loaded value
+  Crt0Tag tag = CT_UNKNOWN;
+  uint32_t val = 0; // valid when tag == CT_CONST (or CT_HEAPBASE, which is also resolved)
+  uint32_t src = 0; // valid when tag == CT_LOADED: the absolute address loaded from
+  int32_t bias = 0; // valid when tag == CT_LOADED: accumulated `addi` on the loaded value
 };
 
 // ── what the scan managed to observe ────────────────────────────────────────────────────────────────
 struct Crt0Observed {
-  int         decoded = 0;              // DENOMINATOR: instructions decoded before stopping
-  const char* stopped = "scan limit";   // why it stopped
-  int         allZero = 0;              // words in the window that were 0x00000000 (image not loaded?)
+  int decoded = 0;                    // DENOMINATOR: instructions decoded before stopping
+  const char *stopped = "scan limit"; // why it stopped
+  int allZero = 0;                    // words in the window that were 0x00000000 (image not loaded?)
 
-  bool haveBssLo = false;     uint32_t bssLo = 0;
-  bool haveBssHi = false;     uint32_t bssHi = 0;
-  bool haveStackTop = false;  uint32_t stackTopBase = 0;
-  bool haveBias = false;      int32_t  bias = 0;       // resolved WITH the stack-top; 0 = no `addi`
-  bool haveReserve = false;   uint32_t stackTopBase2 = 0;
-  bool haveHeapBase = false;  uint32_t heapBase = 0;   // UNMASKED, as GameConfig states it
-  bool haveGp = false;        uint32_t gp = 0;
-  bool haveLibcInit = false;  uint32_t libcInit = 0;
+  bool haveBssLo = false;
+  uint32_t bssLo = 0;
+  bool haveBssHi = false;
+  uint32_t bssHi = 0;
+  bool haveStackTop = false;
+  uint32_t stackTopBase = 0;
+  bool haveBias = false;
+  int32_t bias = 0; // resolved WITH the stack-top; 0 = no `addi`
+  bool haveReserve = false;
+  uint32_t stackTopBase2 = 0;
+  bool haveHeapBase = false;
+  uint32_t heapBase = 0; // UNMASKED, as GameConfig states it
+  bool haveGp = false;
+  uint32_t gp = 0;
+  bool haveLibcInit = false;
+  uint32_t libcInit = 0;
 
   // The two optional absolute stores. `scanComplete` is what makes "no store" a CONCLUSION rather than
   // "I stopped early": it is true only when the scan reached the `jal`, i.e. saw the whole prologue.
   bool scanComplete = false;
-  bool sawHeapSizeStore = false;  uint32_t heapSizePtr = 0;
-  bool sawHeapBaseStore = false;  uint32_t heapBasePtr = 0;
+  bool sawHeapSizeStore = false;
+  uint32_t heapSizePtr = 0;
+  bool sawHeapBaseStore = false;
+  uint32_t heapBasePtr = 0;
 
-  bool a1LiveAtCall = false;   // r[5] still holds the heap size when the guest reaches its `jal`
-  bool a0PlusFour   = false;   // the `jal` delay slot is `addi a0,a0,4` (the +4 crt0_plan applies)
-  bool libcInitIsInitHeap = false;  // libcInit's first 3 words are the A(39h) BIOS thunk
+  bool a1LiveAtCall = false;       // r[5] still holds the heap size when the guest reaches its `jal`
+  bool a0PlusFour = false;         // the `jal` delay slot is `addi a0,a0,4` (the +4 crt0_plan applies)
+  bool libcInitIsInitHeap = false; // libcInit's first 3 words are the A(39h) BIOS thunk
 };
 
 // crt0_scan — decode the guest crt0 at `entry`, reading guest words through `rd32(addr)`.
-template <class Reader>
-static inline Crt0Observed crt0_scan(uint32_t entry, Reader rd32) {
+template <class Reader> static inline Crt0Observed crt0_scan(uint32_t entry, Reader rd32) {
   Crt0Observed o;
   Crt0SReg r[32];
-  r[0].tag = CT_CONST; r[0].val = 0;                 // $zero
+  r[0].tag = CT_CONST;
+  r[0].val = 0; // $zero
 
-  int spSrcReg = -1;                                  // the register whose CT_LOADED value became sp
+  int spSrcReg = -1; // the register whose CT_LOADED value became sp
   for (int i = 0; i < CRT0_SCAN_LIMIT; i++) {
     const uint32_t pc = entry + 4u * (uint32_t)i;
-    const uint32_t w  = rd32(pc);
+    const uint32_t w = rd32(pc);
     o.decoded = i + 1;
-    if (w == 0) { o.allZero++; continue; }            // nop / unloaded memory — both look like this
+    if (w == 0) {
+      o.allZero++;
+      continue;
+    } // nop / unloaded memory — both look like this
 
     const uint32_t op = w >> 26, rs = (w >> 21) & 31, rt = (w >> 16) & 31, rd = (w >> 11) & 31;
     const uint32_t sa = (w >> 6) & 31, fn = w & 0x3F;
-    const int32_t  imm = (int32_t)(int16_t)(uint16_t)(w & 0xFFFF);
+    const int32_t imm = (int32_t)(int16_t)(uint16_t)(w & 0xFFFF);
 
-    if (op == 0x03) {                                 // jal — the end of the prologue
+    if (op == 0x03) { // jal — the end of the prologue
       o.haveLibcInit = true;
       o.libcInit = ((pc + 4u) & 0xF0000000u) | ((w & 0x3FFFFFFu) << 2);
       o.a1LiveAtCall = (r[5].tag == CT_HEAPSIZE);
-      const uint32_t ds = rd32(pc + 4u);              // the delay slot really is part of the call
-      o.a0PlusFour = ((ds >> 26) == 0x08 || (ds >> 26) == 0x09) &&
-                     ((ds >> 21) & 31) == 4 && ((ds >> 16) & 31) == 4 &&
+      const uint32_t ds = rd32(pc + 4u); // the delay slot really is part of the call
+      o.a0PlusFour = ((ds >> 26) == 0x08 || (ds >> 26) == 0x09) && ((ds >> 21) & 31) == 4 && ((ds >> 16) & 31) == 4 &&
                      (int32_t)(int16_t)(uint16_t)(ds & 0xFFFF) == 4;
       // The A(39h) InitHeap thunk signature: addiu t2,zero,0xA0 / jr t2 / addiu t1,zero,0x39.
-      o.libcInitIsInitHeap = rd32(o.libcInit)      == 0x240A00A0u &&
-                             rd32(o.libcInit + 4u) == 0x01400008u &&
+      o.libcInitIsInitHeap = rd32(o.libcInit) == 0x240A00A0u && rd32(o.libcInit + 4u) == 0x01400008u &&
                              rd32(o.libcInit + 8u) == 0x24090039u;
       o.scanComplete = true;
       o.stopped = "jal (libcInit)";
       break;
     }
     switch (op) {
-      case 0x0F:                                      // lui
-        r[rt].tag = CT_CONST; r[rt].val = (uint32_t)(w & 0xFFFF) << 16; break;
-      case 0x08: case 0x09:                           // addi / addiu
-        if (r[rs].tag == CT_LOADED) {                 // biasing a loaded word — this is the sp bias
-          r[rt] = r[rs]; r[rt].bias += imm;
-        } else if (r[rs].tag == CT_CONST) {
-          r[rt].tag = CT_CONST; r[rt].val = r[rs].val + (uint32_t)imm;
-        } else if (r[rs].tag == CT_HEAPBASE) {
-          r[rt] = r[rs]; r[rt].val += (uint32_t)imm;
-        } else r[rt] = Crt0SReg{};
-        // $gp is built by `lui gp,hi / addiu gp,gp,lo`, so it is resolved on the second half. A crt0
-        // that set gp with a bare `lui` would leave this unresolved and be REPORTED as unresolved,
-        // which is the intended behaviour — not silently skipped.
-        if (rt == 28 && r[28].tag == CT_CONST) { o.haveGp = true; o.gp = r[28].val; }
-        break;
-      case 0x0D:                                      // ori
-        if (r[rs].tag == CT_CONST) { r[rt].tag = CT_CONST; r[rt].val = r[rs].val | (w & 0xFFFF); }
-        else r[rt] = Crt0SReg{};
-        break;
-      case 0x23:                                      // lw
-        if (r[rs].tag == CT_CONST) {
-          r[rt].tag = CT_LOADED; r[rt].src = r[rs].val + (uint32_t)imm; r[rt].bias = 0;
-        } else r[rt] = Crt0SReg{};
-        break;
-      case 0x2B:                                      // sw
-        if (r[rs].tag == CT_CONST) {
-          const uint32_t addr = r[rs].val + (uint32_t)imm;
-          if (r[rt].tag == CT_CONST && r[rt].val == 0 && !o.haveBssLo) {   // `sw zero,0(v0)` — .bss loop
-            o.haveBssLo = true; o.bssLo = addr;
-          } else if (r[rt].tag == CT_HEAPSIZE) { o.sawHeapSizeStore = true; o.heapSizePtr = addr; }
-          else if (r[rt].tag == CT_HEAPBASE)   { o.sawHeapBaseStore = true; o.heapBasePtr = addr; }
+    case 0x0F: // lui
+      r[rt].tag = CT_CONST;
+      r[rt].val = (uint32_t)(w & 0xFFFF) << 16;
+      break;
+    case 0x08:
+    case 0x09:                      // addi / addiu
+      if (r[rs].tag == CT_LOADED) { // biasing a loaded word — this is the sp bias
+        r[rt] = r[rs];
+        r[rt].bias += imm;
+      } else if (r[rs].tag == CT_CONST) {
+        r[rt].tag = CT_CONST;
+        r[rt].val = r[rs].val + (uint32_t)imm;
+      } else if (r[rs].tag == CT_HEAPBASE) {
+        r[rt] = r[rs];
+        r[rt].val += (uint32_t)imm;
+      } else {
+        r[rt] = Crt0SReg{};
+      }
+      // $gp is built by `lui gp,hi / addiu gp,gp,lo`, so it is resolved on the second half. A crt0
+      // that set gp with a bare `lui` would leave this unresolved and be REPORTED as unresolved,
+      // which is the intended behaviour — not silently skipped.
+      if (rt == 28 && r[28].tag == CT_CONST) {
+        o.haveGp = true;
+        o.gp = r[28].val;
+      }
+      break;
+    case 0x0D: // ori
+      if (r[rs].tag == CT_CONST) {
+        r[rt].tag = CT_CONST;
+        r[rt].val = r[rs].val | (w & 0xFFFF);
+      } else {
+        r[rt] = Crt0SReg{};
+      }
+      break;
+    case 0x23: // lw
+      if (r[rs].tag == CT_CONST) {
+        r[rt].tag = CT_LOADED;
+        r[rt].src = r[rs].val + (uint32_t)imm;
+        r[rt].bias = 0;
+      } else {
+        r[rt] = Crt0SReg{};
+      }
+      break;
+    case 0x2B: // sw
+      if (r[rs].tag == CT_CONST) {
+        const uint32_t addr = r[rs].val + (uint32_t)imm;
+        if (r[rt].tag == CT_CONST && r[rt].val == 0 && !o.haveBssLo) { // `sw zero,0(v0)` — .bss loop
+          o.haveBssLo = true;
+          o.bssLo = addr;
+        } else if (r[rt].tag == CT_HEAPSIZE) {
+          o.sawHeapSizeStore = true;
+          o.heapSizePtr = addr;
+        } else if (r[rt].tag == CT_HEAPBASE) {
+          o.sawHeapBaseStore = true;
+          o.heapBasePtr = addr;
+        }
+      }
+      break;
+    case 0x00:
+      switch (fn) {
+      case 0x21: // addu
+        if (r[rs].tag == CT_CONST && r[rt].tag == CT_CONST) {
+          r[rd].tag = CT_CONST;
+          r[rd].val = r[rs].val + r[rt].val;
+        } else if (r[rs].tag == CT_CONST && r[rs].val == 0) {
+          r[rd] = r[rt];
+        } else if (r[rt].tag == CT_CONST && r[rt].val == 0) {
+          r[rd] = r[rs];
+        } else {
+          r[rd] = Crt0SReg{};
         }
         break;
-      case 0x00:
-        switch (fn) {
-          case 0x21:                                  // addu
-            if (r[rs].tag == CT_CONST && r[rt].tag == CT_CONST) {
-              r[rd].tag = CT_CONST; r[rd].val = r[rs].val + r[rt].val;
-            } else if (r[rs].tag == CT_CONST && r[rs].val == 0) r[rd] = r[rt];
-            else if (r[rt].tag == CT_CONST && r[rt].val == 0)   r[rd] = r[rs];
-            else r[rd] = Crt0SReg{};
-            break;
-          case 0x23:                                  // subu — the heap-size chain
-            if (r[rs].tag == CT_LOADED && r[rt].tag == CT_LOADED) {
-              // (stack-top word ± bias) - (reserve word): names the SECOND global.
-              if (spSrcReg >= 0 && r[rs].src == o.stackTopBase) {
-                o.haveReserve = true; o.stackTopBase2 = r[rt].src;
-              }
-              r[rd].tag = CT_HEAPSIZE;
-            } else if (r[rs].tag == CT_HEAPSIZE && r[rt].tag == CT_HEAPBASE) {
-              r[rd].tag = CT_HEAPSIZE;                // …minus the masked heap base
-            } else r[rd] = Crt0SReg{};
-            break;
-          case 0x25:                                  // or — sp = word|KSEG0, and heapbase|KSEG0
-            if (rd == 29) {                           // $sp
-              const int src = (r[rs].tag == CT_LOADED) ? (int)rs : (r[rt].tag == CT_LOADED) ? (int)rt : -1;
-              if (src >= 0) {
-                spSrcReg = src;
-                o.haveStackTop = true; o.stackTopBase = r[src].src;
-                o.haveBias = true;     o.bias = r[src].bias;
-              }
-            }
-            if (r[rs].tag == CT_HEAPBASE)      r[rd] = r[rs];
-            else if (r[rt].tag == CT_HEAPBASE) r[rd] = r[rt];
-            else if (rd != 29) r[rd] = Crt0SReg{};
-            break;
-          case 0x00:                                  // sll — the `& 0x1FFFFFFF` mask, first half
-            if (r[rt].tag == CT_CONST && sa == 3) {
-              o.haveHeapBase = true; o.heapBase = r[rt].val;   // UNMASKED, which is what GameConfig holds
-              r[rd].tag = CT_HEAPBASE; r[rd].val = r[rt].val << 3;
-            } else r[rd] = Crt0SReg{};
-            break;
-          case 0x02:                                  // srl — the mask's second half
-            if (r[rt].tag == CT_HEAPBASE && sa == 3) { r[rd].tag = CT_HEAPBASE; r[rd].val = r[rt].val >> 3; }
-            else r[rd] = Crt0SReg{};
-            break;
-          case 0x08: o.stopped = "jr"; return o;      // left the prologue without a jal
-          case 0x0D: o.stopped = "break"; return o;
-          default: r[rd] = Crt0SReg{}; break;
+      case 0x23: // subu — the heap-size chain
+        if (r[rs].tag == CT_LOADED && r[rt].tag == CT_LOADED) {
+          // (stack-top word ± bias) - (reserve word): names the SECOND global.
+          if (spSrcReg >= 0 && r[rs].src == o.stackTopBase) {
+            o.haveReserve = true;
+            o.stackTopBase2 = r[rt].src;
+          }
+          r[rd].tag = CT_HEAPSIZE;
+        } else if (r[rs].tag == CT_HEAPSIZE && r[rt].tag == CT_HEAPBASE) {
+          r[rd].tag = CT_HEAPSIZE; // …minus the masked heap base
+        } else {
+          r[rd] = Crt0SReg{};
         }
         break;
-      default: break;                                 // branches and everything else define no tracked reg
+      case 0x25:        // or — sp = word|KSEG0, and heapbase|KSEG0
+        if (rd == 29) { // $sp
+          const int src = (r[rs].tag == CT_LOADED) ? (int)rs : (r[rt].tag == CT_LOADED) ? (int)rt : -1;
+          if (src >= 0) {
+            spSrcReg = src;
+            o.haveStackTop = true;
+            o.stackTopBase = r[src].src;
+            o.haveBias = true;
+            o.bias = r[src].bias;
+          }
+        }
+        if (r[rs].tag == CT_HEAPBASE) {
+          r[rd] = r[rs];
+        } else if (r[rt].tag == CT_HEAPBASE) {
+          r[rd] = r[rt];
+        } else if (rd != 29) {
+          r[rd] = Crt0SReg{};
+        }
+        break;
+      case 0x00: // sll — the `& 0x1FFFFFFF` mask, first half
+        if (r[rt].tag == CT_CONST && sa == 3) {
+          o.haveHeapBase = true;
+          o.heapBase = r[rt].val; // UNMASKED, which is what GameConfig holds
+          r[rd].tag = CT_HEAPBASE;
+          r[rd].val = r[rt].val << 3;
+        } else {
+          r[rd] = Crt0SReg{};
+        }
+        break;
+      case 0x02: // srl — the mask's second half
+        if (r[rt].tag == CT_HEAPBASE && sa == 3) {
+          r[rd].tag = CT_HEAPBASE;
+          r[rd].val = r[rt].val >> 3;
+        } else {
+          r[rd] = Crt0SReg{};
+        }
+        break;
+      case 0x08:
+        o.stopped = "jr";
+        return o; // left the prologue without a jal
+      case 0x0D:
+        o.stopped = "break";
+        return o;
+      default:
+        r[rd] = Crt0SReg{};
+        break;
+      }
+      break;
+    default:
+      break; // branches and everything else define no tracked reg
     }
     // The .bss loop's terminator is `sltu at, vLo, vHi` (SPECIAL fn 0x2B): the second operand holds the
     // END of the span. Handled here rather than in the switch because it is a READ, not a definition.
     if (op == 0x00 && fn == 0x2B && !o.haveBssHi && r[rt].tag == CT_CONST) {
-      o.haveBssHi = true; o.bssHi = r[rt].val;
+      o.haveBssHi = true;
+      o.bssHi = r[rt].val;
     }
   }
   return o;
@@ -224,17 +290,24 @@ static inline Crt0Observed crt0_scan(uint32_t entry, Reader rd32) {
 // ── the diff ────────────────────────────────────────────────────────────────────────────────────────
 // One row per field. `resolved` false means the scan could not decide — counted and named, never
 // silently treated as agreement.
-struct Crt0AuditRow { const char* name; bool resolved; uint32_t observed, shipped; bool agree; };
+struct Crt0AuditRow {
+  const char *name;
+  bool resolved;
+  uint32_t observed, shipped;
+  bool agree;
+};
 
 // crt0_audit — scan the guest crt0 and diff it against the shipped GameConfig + the derived plan.
 // Returns FALSE only on a CONFIRMED disagreement (the caller must then refuse to boot).
 template <class Reader>
-static inline bool crt0_audit(const GameConfig* cfg, const Crt0Plan& p, Reader rd32, const char* who) {
+static inline bool crt0_audit(const GameConfig *cfg, const Crt0Plan &p, Reader rd32, const char *who) {
   if (!cfg || !cfg->crt0) {
-    lucent::warn("crt0", "{}: NOT AUDITED — GameConfig::crt0 is 0, so there is no guest crt0 to compare "
-                         "the shipped boot group against. 0 of 10 fields were checked; every constant "
-                         "below is an UNVERIFIED hand copy. Fill in `crt0` (the PS-EXE entry pc) to turn "
-                         "this audit on.", who);
+    lucent::warn("crt0",
+                 "{}: NOT AUDITED — GameConfig::crt0 is 0, so there is no guest crt0 to compare "
+                 "the shipped boot group against. 0 of 10 fields were checked; every constant "
+                 "below is an UNVERIFIED hand copy. Fill in `crt0` (the PS-EXE entry pc) to turn "
+                 "this audit on.",
+                 who);
     return true;
   }
   const Crt0Observed o = crt0_scan(cfg->crt0, rd32);
@@ -247,83 +320,135 @@ static inline bool crt0_audit(const GameConfig* cfg, const Crt0Plan& p, Reader r
   // THROUGH (stackTopBase/stackTopBase2/heapBase) are compared against the config, because a wrong one
   // there shows up as a wrong loaded word, which crt0_plan's own plausibility check catches.
   Crt0AuditRow rows[] = {
-    {"bssZeroLo",     o.haveBssLo,     o.bssLo,         p.bssLo,            o.bssLo == p.bssLo},
-    {"bssZeroHi",     o.haveBssHi,     o.bssHi,         p.bssHi,            o.bssHi == p.bssHi},
-    {"stackTopBase",  o.haveStackTop,  o.stackTopBase,  cfg->stackTopBase,  o.stackTopBase == cfg->stackTopBase},
-    {"stackTopBase2", o.haveReserve,   o.stackTopBase2, cfg->stackTopBase2, o.stackTopBase2 == cfg->stackTopBase2},
-    {"heapBase",      o.haveHeapBase,  o.heapBase,      cfg->heapBase,      o.heapBase == cfg->heapBase},
-    {"gp",            o.haveGp,        o.gp,            p.gp,               o.gp == p.gp},
-    {"libcInit",      o.haveLibcInit,  o.libcInit,      p.libcInit,         o.libcInit == p.libcInit},
-    // The bias the plan APPLIED, not the one the config declared — see the note above.
-    {"stackBias(applied)", o.haveBias,  (uint32_t)o.bias, (uint32_t)p.stackTopBias,
-                                                        o.bias == p.stackTopBias},
-    // The two optional stores are only DECIDABLE once the scan reached the jal — otherwise "no store
-    // seen" is indistinguishable from "stopped before the store".
-    {"heapSizePtr",   o.scanComplete,  o.heapSizePtr,   cfg->heapSizePtr,   o.heapSizePtr == cfg->heapSizePtr},
-    {"heapBasePtr",   o.scanComplete,  o.heapBasePtr,   cfg->heapBasePtr,   o.heapBasePtr == cfg->heapBasePtr},
+      {"bssZeroLo", o.haveBssLo, o.bssLo, p.bssLo, o.bssLo == p.bssLo},
+      {"bssZeroHi", o.haveBssHi, o.bssHi, p.bssHi, o.bssHi == p.bssHi},
+      {"stackTopBase", o.haveStackTop, o.stackTopBase, cfg->stackTopBase, o.stackTopBase == cfg->stackTopBase},
+      {"stackTopBase2", o.haveReserve, o.stackTopBase2, cfg->stackTopBase2, o.stackTopBase2 == cfg->stackTopBase2},
+      {"heapBase", o.haveHeapBase, o.heapBase, cfg->heapBase, o.heapBase == cfg->heapBase},
+      {"gp", o.haveGp, o.gp, p.gp, o.gp == p.gp},
+      {"libcInit", o.haveLibcInit, o.libcInit, p.libcInit, o.libcInit == p.libcInit},
+      // The bias the plan APPLIED, not the one the config declared — see the note above.
+      {"stackBias(applied)", o.haveBias, (uint32_t)o.bias, (uint32_t)p.stackTopBias, o.bias == p.stackTopBias},
+      // The two optional stores are only DECIDABLE once the scan reached the jal — otherwise "no store
+      // seen" is indistinguishable from "stopped before the store".
+      {"heapSizePtr", o.scanComplete, o.heapSizePtr, cfg->heapSizePtr, o.heapSizePtr == cfg->heapSizePtr},
+      {"heapBasePtr", o.scanComplete, o.heapBasePtr, cfg->heapBasePtr, o.heapBasePtr == cfg->heapBasePtr},
   };
   const int n = (int)(sizeof rows / sizeof rows[0]);
 
   int agreed = 0, disagreed = 0, unresolved = 0;
-  char bad[512]; bad[0] = 0;
-  char unk[256]; unk[0] = 0;
+  char bad[512];
+  bad[0] = 0;
+  char unk[256];
+  unk[0] = 0;
   for (int i = 0; i < n; i++) {
     if (!rows[i].resolved) {
       unresolved++;
-      size_t at = 0; while (at < sizeof unk && unk[at]) at++;
+      size_t at = 0;
+      while (at < sizeof unk && unk[at]) {
+        at++;
+      }
       snprintf(unk + at, sizeof unk - at, "%s%s", at ? ", " : "", rows[i].name);
       continue;
     }
-    if (rows[i].agree) { agreed++; continue; }
+    if (rows[i].agree) {
+      agreed++;
+      continue;
+    }
     disagreed++;
-    size_t at = 0; while (at < sizeof bad && bad[at]) at++;
-    snprintf(bad + at, sizeof bad - at, "%s%s: guest says 0x%08X, game_config.cpp ships 0x%08X",
-             at ? " | " : "", rows[i].name, rows[i].observed, rows[i].shipped);
+    size_t at = 0;
+    while (at < sizeof bad && bad[at]) {
+      at++;
+    }
+    snprintf(bad + at,
+             sizeof bad - at,
+             "%s%s: guest says 0x%08X, game_config.cpp ships 0x%08X",
+             at ? " | " : "",
+             rows[i].name,
+             rows[i].observed,
+             rows[i].shipped);
   }
 
   // THE DENOMINATOR, always. `decoded`, `allZero` and where it stopped are what make a clean audit
   // distinguishable from an audit of nothing: a window of unloaded memory decodes as all-zero words and
   // would otherwise resolve no fields and report no disagreements.
-  lucent::info("crt0", "{}: guest-crt0 AUDIT at 0x{:08X} — {} instruction(s) decoded ({} zero word(s)), "
-                       "stopped at {}: {} field(s) AGREE, {} DISAGREE, {} unresolved{}{}{}. "
-                       "libcInit {} the A(39h) InitHeap thunk; a1 {} live at the guest's own jal; "
-                       "delay slot {} `addi a0,a0,4`.",
-               who, cfg->crt0, o.decoded, o.allZero, o.stopped, agreed, disagreed, unresolved,
-               unresolved ? " (" : "", unresolved ? unk : "", unresolved ? ")" : "",
-               o.libcInitIsInitHeap ? "IS" : "is NOT", o.a1LiveAtCall ? "IS" : "is NOT",
+  lucent::info("crt0",
+               "{}: guest-crt0 AUDIT at 0x{:08X} — {} instruction(s) decoded ({} zero word(s)), "
+               "stopped at {}: {} field(s) AGREE, {} DISAGREE, {} unresolved{}{}{}. "
+               "libcInit {} the A(39h) InitHeap thunk; a1 {} live at the guest's own jal; "
+               "delay slot {} `addi a0,a0,4`.",
+               who,
+               cfg->crt0,
+               o.decoded,
+               o.allZero,
+               o.stopped,
+               agreed,
+               disagreed,
+               unresolved,
+               unresolved ? " (" : "",
+               unresolved ? unk : "",
+               unresolved ? ")" : "",
+               o.libcInitIsInitHeap ? "IS" : "is NOT",
+               o.a1LiveAtCall ? "IS" : "is NOT",
                o.a0PlusFour ? "is" : "is NOT");
-  lucent::info("crt0", "{}: the plan this audit covers applies sp=0x{:08X} a0=0x{:08X} a1=0x{:X} "
-                       "libcInit=0x{:08X} — printed next to the audit so the verified CONSTANTS and the "
-                       "APPLIED values appear in the same log, never one without the other.",
-               who, p.sp, p.a0, p.a1, p.libcInit);
-  if (unresolved)
-    lucent::info("crt0", "{}: the {} unresolved field(s) above are a limit of the SCANNER, not a "
-                         "statement about the game — they are NOT verified and must not be read as "
-                         "agreeing. Fields: {}.", who, unresolved, unk);
-  if (o.decoded && o.allZero == o.decoded)
-    lucent::warn("crt0", "{}: every one of the {} words at 0x{:08X} read as 0x00000000 — the guest image "
-                         "is not present there, so this audit examined NOTHING. Do not read the counts "
-                         "above as a pass.", who, o.decoded, cfg->crt0);
+  lucent::info("crt0",
+               "{}: the plan this audit covers applies sp=0x{:08X} a0=0x{:08X} a1=0x{:X} "
+               "libcInit=0x{:08X} — printed next to the audit so the verified CONSTANTS and the "
+               "APPLIED values appear in the same log, never one without the other.",
+               who,
+               p.sp,
+               p.a0,
+               p.a1,
+               p.libcInit);
+  if (unresolved) {
+    lucent::info("crt0",
+                 "{}: the {} unresolved field(s) above are a limit of the SCANNER, not a "
+                 "statement about the game — they are NOT verified and must not be read as "
+                 "agreeing. Fields: {}.",
+                 who,
+                 unresolved,
+                 unk);
+  }
+  if (o.decoded && o.allZero == o.decoded) {
+    lucent::warn("crt0",
+                 "{}: every one of the {} words at 0x{:08X} read as 0x00000000 — the guest image "
+                 "is not present there, so this audit examined NOTHING. Do not read the counts "
+                 "above as a pass.",
+                 who,
+                 o.decoded,
+                 cfg->crt0);
+  }
   // `a1` is the whole of item 4: if the guest keeps the size live at its own jal, a port that does not
   // set r[5] is passing a stale register. Stated on every boot, for every consumer.
-  if (o.scanComplete && o.libcInitIsInitHeap && !o.a1LiveAtCall)
-    lucent::warn("crt0", "{}: the guest reaches libcInit with a1 NOT holding the heap size — this game "
-                         "does NOT match the A(39h) InitHeap(ptr,size) shape the framework applies. "
-                         "crt0_apply still sets r[5]; verify that is faithful for this title.", who);
+  if (o.scanComplete && o.libcInitIsInitHeap && !o.a1LiveAtCall) {
+    lucent::warn("crt0",
+                 "{}: the guest reaches libcInit with a1 NOT holding the heap size — this game "
+                 "does NOT match the A(39h) InitHeap(ptr,size) shape the framework applies. "
+                 "crt0_apply still sets r[5]; verify that is faithful for this title.",
+                 who);
+  }
   if (disagreed) {
-    lucent::error("crt0", "{}: REFUSING TO BOOT — {} of {} crt0 constant(s) shipped in the game's "
-                          "game_config.cpp DISAGREE with the guest's own crt0 at 0x{:08X}: {}."
-                          "\n  The guest bytes are the measurement; the config is a hand copy of it. Fix "
-                          "the config (or, if the scanner is wrong, say so with the disassembly — "
-                          "runtime/recomp/crt0_verify.h documents the five crt0s it was measured on).",
-                  who, disagreed, n, cfg->crt0, bad);
+    lucent::error("crt0",
+                  "{}: REFUSING TO BOOT — {} of {} crt0 constant(s) shipped in the game's "
+                  "game_config.cpp DISAGREE with the guest's own crt0 at 0x{:08X}: {}."
+                  "\n  The guest bytes are the measurement; the config is a hand copy of it. Fix "
+                  "the config (or, if the scanner is wrong, say so with the disassembly — "
+                  "runtime/recomp/crt0_verify.h documents the five crt0s it was measured on).",
+                  who,
+                  disagreed,
+                  n,
+                  cfg->crt0,
+                  bad);
     return false;
   }
   // A "success" with nothing resolved is not a success, and must not be reported as one.
   if (agreed == 0) {
-    lucent::warn("crt0", "{}: the audit resolved ZERO fields, so it PROVED NOTHING about the {} shipped "
-                         "constants. Boot continues (this is the scanner's limitation, not a detected "
-                         "fault), but treat the boot group as unverified.", who, n);
+    lucent::warn("crt0",
+                 "{}: the audit resolved ZERO fields, so it PROVED NOTHING about the {} shipped "
+                 "constants. Boot continues (this is the scanner's limitation, not a detected "
+                 "fault), but treat the boot group as unverified.",
+                 who,
+                 n);
   }
   return true;
 }

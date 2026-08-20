@@ -13,13 +13,17 @@
 #ifdef __cplusplus
 class NativeGates {
 public:
-  int  get(const char* name);            // 1 = native layer active; 0 = routed to PSX recomp. Auto-registers.
-  void set(const char* name, int on);
+  int get(const char *name); // 1 = native layer active; 0 = routed to PSX recomp. Auto-registers.
+  void set(const char *name, int on);
   void list() const;
+
 private:
-  struct Entry { const char* name; int on; };
+  struct Entry {
+    const char *name;
+    int on;
+  };
   Entry mGates[32];
-  int   mCount = 0;
+  int mCount = 0;
 };
 #endif
 #endif

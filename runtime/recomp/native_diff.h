@@ -43,7 +43,7 @@ class Core;
 
 // Run `native`, and under PSXPORT_NDIFF also run `body` from the identical pre-state and compare.
 // `name` labels the site in the log (use the guest address). Returns true if a difference was found.
-bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Core*));
+bool ndiff_run(Core *c, const char *name, void (*native)(Core *), void (*body)(Core *));
 
 // Has any site reported a divergence this run? For a gate check — a port whose native bodies match
 // should be able to assert zero, and a regression then fails loudly rather than drifting.

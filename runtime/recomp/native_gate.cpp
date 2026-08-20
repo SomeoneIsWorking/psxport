@@ -1,23 +1,36 @@
 // native_gate.cpp — the PC-native-layer A/B GATE registry. See native_gate.h.
 #include "native_gate.h"
-#include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <lucent/log.h>
 
-int NativeGates::get(const char* name) {
-  for (int i = 0; i < mCount; i++) if (!strcmp(mGates[i].name, name)) return mGates[i].on;
-  if (mCount < 32) { mGates[mCount] = { strdup(name), 1 }; return mGates[mCount++].on; }  // copy name; default ON
+int NativeGates::get(const char *name) {
+  for (int i = 0; i < mCount; i++) {
+    if (!strcmp(mGates[i].name, name)) {
+      return mGates[i].on;
+    }
+  }
+  if (mCount < 32) {
+    mGates[mCount] = {strdup(name), 1};
+    return mGates[mCount++].on;
+  } // copy name; default ON
   return 1;
 }
 
-void NativeGates::set(const char* name, int on) {
-  (void)get(name);   // ensure registered
-  for (int i = 0; i < mCount; i++) if (!strcmp(mGates[i].name, name)) { mGates[i].on = on; return; }
+void NativeGates::set(const char *name, int on) {
+  (void)get(name); // ensure registered
+  for (int i = 0; i < mCount; i++) {
+    if (!strcmp(mGates[i].name, name)) {
+      mGates[i].on = on;
+      return;
+    }
+  }
 }
 
 void NativeGates::list() const {
   lucent::info("native", "gates ({}):", mCount);
-  for (int i = 0; i < mCount; i++)
+  for (int i = 0; i < mCount; i++) {
     lucent::info("native", "  {:<16} {}", mGates[i].name ? mGates[i].name : "(null)", mGates[i].on ? "on" : "off");
+  }
 }

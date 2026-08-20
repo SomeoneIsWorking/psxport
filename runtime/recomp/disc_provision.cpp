@@ -5,10 +5,10 @@
 #include "fs_util.h"
 #include <cstdio>
 #include <cstring>
-#include <vector>
 #include <lucent/log.h>
+#include <vector>
 
-extern "C" int disc_extract_file(DiscState* d, const char* iso_path, const char* out_path) {
+extern "C" int disc_extract_file(DiscState *d, const char *iso_path, const char *out_path) {
   uint32_t lba, size;
   if (!disc_find_file(d, iso_path, &lba, &size)) {
     lucent::info("disc", "extract: {} not found on disc", iso_path ? iso_path : "(null)");
@@ -28,14 +28,19 @@ extern "C" int disc_extract_file(DiscState* d, const char* iso_path, const char*
     lucent::error("disc", "extract: failed to write {}", out_path ? out_path : "(null)");
     return 0;
   }
-  lucent::info("disc", "extracted {} -> {} ({} bytes)", iso_path ? iso_path : "(null)", out_path ? out_path : "(null)", size);
+  lucent::info(
+      "disc", "extracted {} -> {} ({} bytes)", iso_path ? iso_path : "(null)", out_path ? out_path : "(null)", size);
   return 1;
 }
 
-extern "C" int disc_dropin_scan(char* out, unsigned out_cap) {
+extern "C" int disc_dropin_scan(char *out, unsigned out_cap) {
   std::string found = Fs::findFirstWithExtension(".", ".chd");
-  if (found.empty()) return 0;
-  if (found.size() + 1 > out_cap) return 0;
+  if (found.empty()) {
+    return 0;
+  }
+  if (found.size() + 1 > out_cap) {
+    return 0;
+  }
   memcpy(out, found.c_str(), found.size() + 1);
   return 1;
 }

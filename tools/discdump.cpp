@@ -17,17 +17,16 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr uint32_t kRawFrameSize = 2448;  // 2352 raw + 96 subcode, CHD CD unit
+constexpr uint32_t kRawFrameSize = 2448; // 2352 raw + 96 subcode, CHD CD unit
 constexpr uint32_t kUserDataSize = 2048;
 
-class ChdDisc
-{
+class ChdDisc {
 public:
-  bool Open(const std::string& path)
-  {
-    if (chd_open(path.c_str(), CHD_OPEN_READ, nullptr, &m_chd) != CHDERR_NONE)
+  bool Open(const std::string &path) {
+    if (chd_open(path.c_str(), CHD_OPEN_READ, nullptr, &m_chd) != CHDERR_NONE) {
       return false;
-    const chd_header* h = chd_get_header(m_chd);
+    }
+    const chd_header *h = chd_get_header(m_chd);
     m_hunk_bytes = h->hunkbytes;
     m_frames_per_hunk = h->hunkbytes / kRawFrameSize;
     m_hunk_count = h->totalhunks;
@@ -35,26 +34,26 @@ public:
     return m_frames_per_hunk > 0;
   }
 
-  ~ChdDisc()
-  {
-    if (m_chd)
+  ~ChdDisc() {
+    if (m_chd) {
       chd_close(m_chd);
+    }
   }
 
   // Read the 2048-byte user data of one sector (mode1 or mode2 form1).
-  bool ReadSector(uint32_t lba, uint8_t* out)
-  {
+  bool ReadSector(uint32_t lba, uint8_t *out) {
     const uint32_t hunk = lba / m_frames_per_hunk;
     const uint32_t offset = (lba % m_frames_per_hunk) * kRawFrameSize;
-    if (hunk >= m_hunk_count)
+    if (hunk >= m_hunk_count) {
       return false;
-    if (hunk != m_cached_hunk)
-    {
-      if (chd_read(m_chd, hunk, m_hunk_buf.data()) != CHDERR_NONE)
+    }
+    if (hunk != m_cached_hunk) {
+      if (chd_read(m_chd, hunk, m_hunk_buf.data()) != CHDERR_NONE) {
         return false;
+      }
       m_cached_hunk = hunk;
     }
-    const uint8_t* raw = m_hunk_buf.data() + offset;
+    const uint8_t *raw = m_hunk_buf.data() + offset;
     const uint8_t mode = raw[15];
     const uint32_t data_off = (mode == 2) ? 24 : 16;
     std::memcpy(out, raw + data_off, kUserDataSize);
@@ -63,14 +62,16 @@ public:
 
   // Raw 2352-byte sector (12 sync + 3 addr + 1 mode + Mode2 8-byte subheader + data). For XA
   // inspection: raw[15]=mode, raw[16]=file, raw[17]=chan, raw[18]=submode (bit2=audio, bit7=EOF).
-  bool ReadRaw(uint32_t lba, uint8_t* out2352)
-  {
+  bool ReadRaw(uint32_t lba, uint8_t *out2352) {
     const uint32_t hunk = lba / m_frames_per_hunk;
     const uint32_t offset = (lba % m_frames_per_hunk) * kRawFrameSize;
-    if (hunk >= m_hunk_count) return false;
-    if (hunk != m_cached_hunk)
-    {
-      if (chd_read(m_chd, hunk, m_hunk_buf.data()) != CHDERR_NONE) return false;
+    if (hunk >= m_hunk_count) {
+      return false;
+    }
+    if (hunk != m_cached_hunk) {
+      if (chd_read(m_chd, hunk, m_hunk_buf.data()) != CHDERR_NONE) {
+        return false;
+      }
       m_cached_hunk = hunk;
     }
     std::memcpy(out2352, m_hunk_buf.data() + offset, 2352);
@@ -78,7 +79,7 @@ public:
   }
 
 private:
-  chd_file* m_chd = nullptr;
+  chd_file *m_chd = nullptr;
   uint32_t m_hunk_bytes = 0;
   uint32_t m_frames_per_hunk = 0;
   uint32_t m_hunk_count = 0;
@@ -86,54 +87,50 @@ private:
   std::vector<uint8_t> m_hunk_buf;
 };
 
-uint32_t ReadLE32(const uint8_t* p)
-{
+uint32_t ReadLE32(const uint8_t *p) {
   return p[0] | (p[1] << 8) | (p[2] << 16) | (uint32_t(p[3]) << 24);
 }
 
-struct IsoFile
-{
+struct IsoFile {
   uint32_t lba;
   uint32_t size;
 };
 
-std::string NormalizeName(std::string n)
-{
-  if (auto sc = n.find(';'); sc != std::string::npos)
+std::string NormalizeName(std::string n) {
+  if (auto sc = n.find(';'); sc != std::string::npos) {
     n.resize(sc);
-  for (char& c : n)
+  }
+  for (char &c : n) {
     c = (char)std::toupper((unsigned char)c);
+  }
   return n;
 }
 
 // Find a file by name in the root directory.
-bool FindRootFile(ChdDisc& disc, const std::string& want, IsoFile* out)
-{
+bool FindRootFile(ChdDisc &disc, const std::string &want, IsoFile *out) {
   uint8_t sec[kUserDataSize];
-  if (!disc.ReadSector(16, sec) || std::memcmp(sec + 1, "CD001", 5) != 0)
-  {
+  if (!disc.ReadSector(16, sec) || std::memcmp(sec + 1, "CD001", 5) != 0) {
     std::fprintf(stderr, "no ISO9660 PVD at LBA 16\n");
     return false;
   }
-  const uint8_t* rootrec = sec + 156;
+  const uint8_t *rootrec = sec + 156;
   const uint32_t root_lba = ReadLE32(rootrec + 2);
   const uint32_t root_size = ReadLE32(rootrec + 10);
 
   const std::string want_norm = NormalizeName(want);
-  for (uint32_t off = 0; off < root_size; off += kUserDataSize)
-  {
-    if (!disc.ReadSector(root_lba + off / kUserDataSize, sec))
+  for (uint32_t off = 0; off < root_size; off += kUserDataSize) {
+    if (!disc.ReadSector(root_lba + off / kUserDataSize, sec)) {
       return false;
+    }
     uint32_t pos = 0;
-    while (pos < kUserDataSize)
-    {
+    while (pos < kUserDataSize) {
       const uint8_t len = sec[pos];
-      if (len == 0)
-        break;  // rest of sector is padding
+      if (len == 0) {
+        break; // rest of sector is padding
+      }
       const uint8_t name_len = sec[pos + 32];
-      std::string name((const char*)sec + pos + 33, name_len);
-      if (NormalizeName(name) == want_norm)
-      {
+      std::string name((const char *)sec + pos + 33, name_len);
+      if (NormalizeName(name) == want_norm) {
         out->lba = ReadLE32(sec + pos + 2);
         out->size = ReadLE32(sec + pos + 10);
         return true;
@@ -144,64 +141,62 @@ bool FindRootFile(ChdDisc& disc, const std::string& want, IsoFile* out)
   return false;
 }
 
-bool DumpFile(ChdDisc& disc, const IsoFile& f, const fs::path& outpath,
-              std::vector<uint8_t>* contents = nullptr)
-{
-  std::vector<uint8_t> buf(((size_t)f.size + kUserDataSize - 1) / kUserDataSize *
-                           kUserDataSize);
-  for (uint32_t i = 0; i < buf.size() / kUserDataSize; i++)
-    if (!disc.ReadSector(f.lba + i, buf.data() + (size_t)i * kUserDataSize))
+bool DumpFile(ChdDisc &disc, const IsoFile &f, const fs::path &outpath, std::vector<uint8_t> *contents = nullptr) {
+  std::vector<uint8_t> buf(((size_t)f.size + kUserDataSize - 1) / kUserDataSize * kUserDataSize);
+  for (uint32_t i = 0; i < buf.size() / kUserDataSize; i++) {
+    if (!disc.ReadSector(f.lba + i, buf.data() + (size_t)i * kUserDataSize)) {
       return false;
+    }
+  }
   buf.resize(f.size);
   std::ofstream out(outpath, std::ios::binary);
-  out.write((const char*)buf.data(), (std::streamsize)buf.size());
-  if (contents)
+  out.write((const char *)buf.data(), (std::streamsize)buf.size());
+  if (contents) {
     *contents = std::move(buf);
+  }
   return out.good();
 }
 
-bool GetRootDir(ChdDisc& disc, uint32_t* lba, uint32_t* size)
-{
+bool GetRootDir(ChdDisc &disc, uint32_t *lba, uint32_t *size) {
   uint8_t sec[kUserDataSize];
-  if (!disc.ReadSector(16, sec) || std::memcmp(sec + 1, "CD001", 5) != 0)
-  {
+  if (!disc.ReadSector(16, sec) || std::memcmp(sec + 1, "CD001", 5) != 0) {
     std::fprintf(stderr, "no ISO9660 PVD at LBA 16\n");
     return false;
   }
-  const uint8_t* root = sec + 156;
+  const uint8_t *root = sec + 156;
   *lba = ReadLE32(root + 2);
   *size = ReadLE32(root + 10);
   return true;
 }
 
 // Find one entry (file or subdir) by name within a single directory extent.
-bool FindDirEntry(ChdDisc& disc, uint32_t dir_lba, uint32_t dir_size,
-                  const std::string& want, bool want_dir, IsoFile* out)
-{
+bool FindDirEntry(
+    ChdDisc &disc, uint32_t dir_lba, uint32_t dir_size, const std::string &want, bool want_dir, IsoFile *out) {
   const uint32_t nsec = (dir_size + kUserDataSize - 1) / kUserDataSize;
   std::vector<uint8_t> buf((size_t)nsec * kUserDataSize);
-  for (uint32_t i = 0; i < nsec; i++)
-    if (!disc.ReadSector(dir_lba + i, buf.data() + (size_t)i * kUserDataSize))
+  for (uint32_t i = 0; i < nsec; i++) {
+    if (!disc.ReadSector(dir_lba + i, buf.data() + (size_t)i * kUserDataSize)) {
       return false;
+    }
+  }
   const std::string wn = NormalizeName(want);
-  for (uint32_t s = 0; s < buf.size(); s += kUserDataSize)
-  {
+  for (uint32_t s = 0; s < buf.size(); s += kUserDataSize) {
     uint32_t pos = s;
-    while (pos < s + kUserDataSize)
-    {
+    while (pos < s + kUserDataSize) {
       const uint8_t len = buf[pos];
-      if (len == 0)
+      if (len == 0) {
         break;
+      }
       const uint8_t flags = buf[pos + 25];
       const uint8_t nlen = buf[pos + 32];
-      std::string name((const char*)&buf[pos + 33], nlen);
+      std::string name((const char *)&buf[pos + 33], nlen);
       const uint32_t e_lba = ReadLE32(&buf[pos + 2]);
       const uint32_t e_size = ReadLE32(&buf[pos + 10]);
       pos += len;
-      if (nlen == 1 && (name[0] == 0 || name[0] == 1))
+      if (nlen == 1 && (name[0] == 0 || name[0] == 1)) {
         continue;
-      if ((bool)(flags & 0x02) == want_dir && NormalizeName(name) == wn)
-      {
+      }
+      if ((bool)(flags & 0x02) == want_dir && NormalizeName(name) == wn) {
         out->lba = e_lba;
         out->size = e_size;
         return true;
@@ -212,27 +207,29 @@ bool FindDirEntry(ChdDisc& disc, uint32_t dir_lba, uint32_t dir_size,
 }
 
 // Find a file by a (possibly nested) path like "BIN/START.BIN", descending subdirectories.
-bool FindFileInTree(ChdDisc& disc, const std::string& path, IsoFile* out)
-{
+bool FindFileInTree(ChdDisc &disc, const std::string &path, IsoFile *out) {
   uint32_t lba, size;
-  if (!GetRootDir(disc, &lba, &size))
+  if (!GetRootDir(disc, &lba, &size)) {
     return false;
-  std::vector<std::string> parts;
-  for (size_t i = 0, j; i < path.size(); i = j + 1)
-  {
-    j = path.find('/', i);
-    if (j == std::string::npos)
-      j = path.size();
-    if (j > i)
-      parts.emplace_back(path.substr(i, j - i));
   }
-  if (parts.empty())
+  std::vector<std::string> parts;
+  for (size_t i = 0, j; i < path.size(); i = j + 1) {
+    j = path.find('/', i);
+    if (j == std::string::npos) {
+      j = path.size();
+    }
+    if (j > i) {
+      parts.emplace_back(path.substr(i, j - i));
+    }
+  }
+  if (parts.empty()) {
     return false;
-  for (size_t k = 0; k + 1 < parts.size(); k++)
-  {
+  }
+  for (size_t k = 0; k + 1 < parts.size(); k++) {
     IsoFile d;
-    if (!FindDirEntry(disc, lba, size, parts[k], true, &d))
+    if (!FindDirEntry(disc, lba, size, parts[k], true, &d)) {
       return false;
+    }
     lba = d.lba;
     size = d.size;
   }
@@ -240,171 +237,169 @@ bool FindFileInTree(ChdDisc& disc, const std::string& path, IsoFile* out)
 }
 
 // Recursively print the ISO9660 directory tree (files: full path, LBA, size).
-void ListTree(ChdDisc& disc, uint32_t dir_lba, uint32_t dir_size, const std::string& prefix)
-{
+void ListTree(ChdDisc &disc, uint32_t dir_lba, uint32_t dir_size, const std::string &prefix) {
   const uint32_t nsec = (dir_size + kUserDataSize - 1) / kUserDataSize;
   std::vector<uint8_t> buf((size_t)nsec * kUserDataSize);
-  for (uint32_t i = 0; i < nsec; i++)
-    if (!disc.ReadSector(dir_lba + i, buf.data() + (size_t)i * kUserDataSize))
+  for (uint32_t i = 0; i < nsec; i++) {
+    if (!disc.ReadSector(dir_lba + i, buf.data() + (size_t)i * kUserDataSize)) {
       return;
+    }
+  }
 
   // Directory records never straddle a 2048-byte sector boundary.
-  for (uint32_t s = 0; s < buf.size(); s += kUserDataSize)
-  {
+  for (uint32_t s = 0; s < buf.size(); s += kUserDataSize) {
     uint32_t pos = s;
-    while (pos < s + kUserDataSize)
-    {
+    while (pos < s + kUserDataSize) {
       const uint8_t len = buf[pos];
-      if (len == 0)
-        break;  // remainder of this sector is padding
+      if (len == 0) {
+        break; // remainder of this sector is padding
+      }
       const uint8_t flags = buf[pos + 25];
       const uint8_t nlen = buf[pos + 32];
       const uint32_t e_lba = ReadLE32(&buf[pos + 2]);
       const uint32_t e_size = ReadLE32(&buf[pos + 10]);
-      std::string name((const char*)&buf[pos + 33], nlen);
+      std::string name((const char *)&buf[pos + 33], nlen);
       pos += len;
-      if (nlen == 1 && (name[0] == 0 || name[0] == 1))
-        continue;  // "." and ".."
+      if (nlen == 1 && (name[0] == 0 || name[0] == 1)) {
+        continue; // "." and ".."
+      }
       const std::string disp = NormalizeName(name);
-      if (flags & 0x02)  // directory
+      if (flags & 0x02) // directory
       {
         std::printf("%s%s/\n", prefix.c_str(), disp.c_str());
         ListTree(disc, e_lba, e_size, prefix + disp + "/");
-      }
-      else
-      {
-        std::printf("%s%-16s  LBA %-7u  %u bytes\n", prefix.c_str(), disp.c_str(),
-                    e_lba, e_size);
+      } else {
+        std::printf("%s%-16s  LBA %-7u  %u bytes\n", prefix.c_str(), disp.c_str(), e_lba, e_size);
       }
     }
   }
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv)
-{
+int main(int argc, char **argv) {
   // `discdump list [disc.chd]`          prints the full ISO9660 file tree.
   // `discdump get <NAME> [disc] [out]`  extracts one root-dir file by name.
   const std::string mode = argc > 1 ? argv[1] : "";
   const bool list_mode = mode == "list";
   const bool get_mode = mode == "get";
-  const bool subhdr_mode = mode == "subhdr";  // subhdr <lba> <count> [disc]: dump XA file/chan/submode
+  const bool subhdr_mode = mode == "subhdr"; // subhdr <lba> <count> [disc]: dump XA file/chan/submode
   const std::string get_name = (get_mode && argc > 2) ? argv[2] : "";
   const int disc_argi = list_mode ? 2 : (get_mode ? 3 : (subhdr_mode ? 4 : 1));
-  const auto disc_path =
-      psxport::ResolveDiscPath(argc > disc_argi ? argv[disc_argi] : "");
-  if (!disc_path)
-  {
+  const auto disc_path = psxport::ResolveDiscPath(argc > disc_argi ? argv[disc_argi] : "");
+  if (!disc_path) {
     std::fprintf(stderr, "no disc image (arg, PSXPORT_DISC, or *.chd drop-in)\n");
     return 1;
   }
   // In extract mode an optional outdir follows the disc arg; list mode has no outdir.
   const int outdir_argi = disc_argi + 1;
-  const fs::path outdir = (!list_mode && argc > outdir_argi) ? argv[outdir_argi]
-                                                             : fs::path("scratch/bin");
-  if (!list_mode)
+  const fs::path outdir = (!list_mode && argc > outdir_argi) ? argv[outdir_argi] : fs::path("scratch/bin");
+  if (!list_mode) {
     fs::create_directories(outdir);
+  }
 
   ChdDisc disc;
-  if (!disc.Open(*disc_path))
-  {
+  if (!disc.Open(*disc_path)) {
     std::fprintf(stderr, "failed to open CHD: %s\n", disc_path->c_str());
     return 1;
   }
   std::printf("disc: %s\n", disc_path->c_str());
 
-  if (subhdr_mode)
-  {
+  if (subhdr_mode) {
     const uint32_t lba0 = argc > 2 ? (uint32_t)std::strtoul(argv[2], nullptr, 0) : 0;
-    const uint32_t cnt  = argc > 3 ? (uint32_t)std::strtoul(argv[3], nullptr, 0) : 16;
+    const uint32_t cnt = argc > 3 ? (uint32_t)std::strtoul(argv[3], nullptr, 0) : 16;
     std::printf("LBA      mode file chan submode  audio eof\n");
-    for (uint32_t i = 0; i < cnt; i++)
-    {
+    for (uint32_t i = 0; i < cnt; i++) {
       uint8_t raw[2352];
-      if (!disc.ReadRaw(lba0 + i, raw)) { std::printf("%-8u  <read fail>\n", lba0 + i); break; }
+      if (!disc.ReadRaw(lba0 + i, raw)) {
+        std::printf("%-8u  <read fail>\n", lba0 + i);
+        break;
+      }
       const uint8_t md = raw[15], file = raw[16], chan = raw[17], sub = raw[18];
       std::printf("%-8u  %2u  %3u  %3u   0x%02X     %d    %d\n",
-                  lba0 + i, md, file, chan, sub, (sub & 0x04) != 0, (sub & 0x80) != 0);
+                  lba0 + i,
+                  md,
+                  file,
+                  chan,
+                  sub,
+                  (sub & 0x04) != 0,
+                  (sub & 0x80) != 0);
     }
     return 0;
   }
 
-  if (list_mode)
-  {
+  if (list_mode) {
     uint32_t rlba, rsize;
-    if (!GetRootDir(disc, &rlba, &rsize))
+    if (!GetRootDir(disc, &rlba, &rsize)) {
       return 1;
+    }
     std::printf("root dir LBA %u, %u bytes\n\n", rlba, rsize);
     ListTree(disc, rlba, rsize, "");
     return 0;
   }
 
-  if (get_mode)
-  {
-    if (get_name.empty())
-    {
+  if (get_mode) {
+    if (get_name.empty()) {
       std::fprintf(stderr, "usage: discdump get <NAME> [disc] [outdir]\n");
       return 1;
     }
     IsoFile f;
     const bool nested = get_name.find('/') != std::string::npos;
-    const bool found = nested ? FindFileInTree(disc, get_name, &f)
-                              : FindRootFile(disc, get_name, &f);
-    if (!found)
-    {
+    const bool found = nested ? FindFileInTree(disc, get_name, &f) : FindRootFile(disc, get_name, &f);
+    if (!found) {
       std::fprintf(stderr, "%s not found\n", get_name.c_str());
       return 1;
     }
     const std::string base = get_name.substr(get_name.find_last_of('/') + 1);
     const fs::path out = outdir / NormalizeName(base);
-    if (!DumpFile(disc, f, out))
+    if (!DumpFile(disc, f, out)) {
       return 1;
+    }
     std::printf("dumped %s (%u bytes, LBA %u)\n", out.c_str(), f.size, f.lba);
     return 0;
   }
 
   IsoFile cnf;
-  if (!FindRootFile(disc, "SYSTEM.CNF", &cnf))
-  {
+  if (!FindRootFile(disc, "SYSTEM.CNF", &cnf)) {
     std::fprintf(stderr, "SYSTEM.CNF not found\n");
     return 1;
   }
   std::vector<uint8_t> cnf_data;
-  if (!DumpFile(disc, cnf, outdir / "SYSTEM.CNF", &cnf_data))
+  if (!DumpFile(disc, cnf, outdir / "SYSTEM.CNF", &cnf_data)) {
     return 1;
+  }
 
   // Parse "BOOT = cdrom:\SCUS_xxx.yy;1"
-  std::string cnf_text((const char*)cnf_data.data(), cnf_data.size());
+  std::string cnf_text((const char *)cnf_data.data(), cnf_data.size());
   std::string boot_name;
-  if (auto b = cnf_text.find("BOOT"); b != std::string::npos)
-  {
+  if (auto b = cnf_text.find("BOOT"); b != std::string::npos) {
     const auto eol = cnf_text.find_first_of("\r\n", b);
     const auto eq = cnf_text.find('=', b);
     std::string rest = cnf_text.substr(eq + 1, eol - eq - 1);
-    if (auto sep = rest.find_last_of("\\:"); sep != std::string::npos)
+    if (auto sep = rest.find_last_of("\\:"); sep != std::string::npos) {
       rest = rest.substr(sep + 1);
+    }
     const auto first = rest.find_first_not_of(" \t");
     const auto last = rest.find_last_not_of(" \t\0");
-    if (first != std::string::npos)
+    if (first != std::string::npos) {
       boot_name = rest.substr(first, last - first + 1);
+    }
   }
-  if (boot_name.empty())
-  {
+  if (boot_name.empty()) {
     std::fprintf(stderr, "could not parse BOOT from SYSTEM.CNF:\n%s\n", cnf_text.c_str());
     return 1;
   }
   std::printf("boot executable: %s\n", boot_name.c_str());
 
   IsoFile exe;
-  if (!FindRootFile(disc, boot_name, &exe))
-  {
+  if (!FindRootFile(disc, boot_name, &exe)) {
     std::fprintf(stderr, "boot executable not found in root dir\n");
     return 1;
   }
   const fs::path exe_out = outdir / NormalizeName(boot_name);
-  if (!DumpFile(disc, exe, exe_out))
+  if (!DumpFile(disc, exe, exe_out)) {
     return 1;
+  }
   std::printf("dumped %s (%u bytes, LBA %u)\n", exe_out.c_str(), exe.size, exe.lba);
   return 0;
 }

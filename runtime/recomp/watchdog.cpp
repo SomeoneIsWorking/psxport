@@ -6,15 +6,15 @@
 //
 // Build note: backtrace symbol names need -rdynamic at link time (run.sh adds it). Without it
 // you still get addresses — resolve with `addr2line -e scratch/bin/tomba2_port <addr>`.
-#include <signal.h>
-#include "cfg.h"          // cfg_str — the CONFIG half of cfg.h; the logging half is retired
-#include "config_vars.h"  // cv_watchdog / cv_watchdog_boot — migrated onto the layered CVar system
 #include "c_subsys.h"    // C linkage for watchdog_init/pet/suspend/disable (callers are C++ and vendored C)
+#include "cfg.h"         // cfg_str — the CONFIG half of cfg.h; the logging half is retired
+#include "config_vars.h" // cv_watchdog / cv_watchdog_boot — migrated onto the layered CVar system
 #include <lucent/log.h>
-#include <unistd.h>
+#include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
+#include <unistd.h>
 #if defined(__GLIBC__) || defined(__linux__)
 #include <execinfo.h>
 #define HAVE_BACKTRACE 1
@@ -24,11 +24,11 @@
 // state must be reachable from file scope. All of it lives in this ONE static struct; the
 // sig_atomic_t fields are the only ones a handler reads.
 static struct {
-  int secs;                                 // 0 => disabled
-  int boot_secs;                            // generous grace for the FIRST frame (cold pipeline compile)
+  int secs;      // 0 => disabled
+  int boot_secs; // generous grace for the FIRST frame (cold pipeline compile)
   volatile sig_atomic_t armed;
-  volatile sig_atomic_t first_frame_done;   // 0 until the first present pets the watchdog
-  volatile sig_atomic_t int_seen;           // SIGINT/SIGTERM re-entry latch
+  volatile sig_atomic_t first_frame_done; // 0 until the first present pets the watchdog
+  volatile sig_atomic_t int_seen;         // SIGINT/SIGTERM re-entry latch
 } s_wd;
 
 // The interpreter is gone (2026-06-30): under the recomp substrate the C backtrace below names the
@@ -46,9 +46,9 @@ static void on_alarm(int sig) {
     write(2, hint, sizeof(hint) - 1);
   }
 #ifdef HAVE_BACKTRACE
-  void* bt[64];
+  void *bt[64];
   int n = backtrace(bt, 64);
-  backtrace_symbols_fd(bt, n, 2);              // async-signal-safe (unlike backtrace_symbols)
+  backtrace_symbols_fd(bt, n, 2); // async-signal-safe (unlike backtrace_symbols)
 #endif
   _exit(134);
 }
@@ -56,10 +56,16 @@ static void on_alarm(int sig) {
 static void on_fault(int sig) {
   static const char msg[] = "\n[watchdog] FAULT (signal): backtrace:\n";
   write(2, msg, sizeof(msg) - 1);
-  { char b[] = "[watchdog] signal = 00\n"; b[20] = '0' + (sig / 10) % 10; b[21] = '0' + sig % 10;
-    write(2, b, sizeof(b) - 1); }
+  {
+    char b[] = "[watchdog] signal = 00\n";
+    b[20] = '0' + (sig / 10) % 10;
+    b[21] = '0' + sig % 10;
+    write(2, b, sizeof(b) - 1);
+  }
 #ifdef HAVE_BACKTRACE
-  void* bt[64]; int n = backtrace(bt, 64); backtrace_symbols_fd(bt, n, 2);
+  void *bt[64];
+  int n = backtrace(bt, 64);
+  backtrace_symbols_fd(bt, n, 2);
 #endif
   _exit(139);
 }
@@ -71,12 +77,16 @@ static void on_fault(int sig) {
 // A second signal hard-kills in case anything in the handler wedges.
 static void on_interrupt(int sig) {
   (void)sig;
-  if (s_wd.int_seen) _exit(130);       // second Ctrl+C: bail without touching anything
+  if (s_wd.int_seen) {
+    _exit(130); // second Ctrl+C: bail without touching anything
+  }
   s_wd.int_seen = 1;
   static const char msg[] = "\n[watchdog] INTERRUPT (SIGINT/SIGTERM) — where it was stuck:\n";
   write(2, msg, sizeof(msg) - 1);
 #ifdef HAVE_BACKTRACE
-  void* bt[64]; int n = backtrace(bt, 64); backtrace_symbols_fd(bt, n, 2);
+  void *bt[64];
+  int n = backtrace(bt, 64);
+  backtrace_symbols_fd(bt, n, 2);
 #endif
   _exit(130);
 }
@@ -109,7 +119,9 @@ void watchdog_init(void) {
   // back to the declared default and the CVar binding logs a warn naming the bad value. A hang that
   // wedges forever because someone mistyped the timeout is not a behaviour worth preserving.
   s_wd.secs = (int)psx::config::cv_watchdog.get();
-  if (s_wd.secs <= 0) return;
+  if (s_wd.secs <= 0) {
+    return;
+  }
   // The FIRST presented frame is legitimately slow: RADV/AMD compiles every Vulkan pipeline (SSAO,
   // shadow map, tritex, present blit, …) on first use, so the first present blocks in the GPU fence
   // wait for several seconds on a cold shader cache (e.g. right after a full ./run.sh rebuild). That
@@ -126,13 +138,16 @@ void watchdog_init(void) {
   sigaction(SIGALRM, &sa, 0);
   s_wd.armed = 1;
   alarm((unsigned)s_wd.boot_secs);
-  lucent::info("watchdog", "armed: {}s frame-progress timeout ({}s grace for the first frame)", s_wd.secs, s_wd.boot_secs);
+  lucent::info(
+      "watchdog", "armed: {}s frame-progress timeout ({}s grace for the first frame)", s_wd.secs, s_wd.boot_secs);
 }
 
 // Pet from the present path — one beat per produced frame. Re-arms the timer. The first present
 // switches from the boot grace to the steady-state budget.
 void watchdog_pet(void) {
-  if (!s_wd.armed) return;
+  if (!s_wd.armed) {
+    return;
+  }
   s_wd.first_frame_done = 1;
   alarm((unsigned)s_wd.secs);
 }
@@ -142,7 +157,9 @@ void watchdog_pet(void) {
 // next watchdog_pet (the next presented frame after resume) re-arms it. Without this the 3s timeout
 // fires on a deliberately paused/idle process. (cancel any pending alarm; keep s_armed so pet re-arms.)
 void watchdog_suspend(void) {
-  if (s_wd.armed) alarm(0);
+  if (s_wd.armed) {
+    alarm(0);
+  }
 }
 
 // Permanently disable the frame-progress watchdog. For the SBS divergence debugger, which PAUSES the

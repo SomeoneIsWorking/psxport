@@ -30,20 +30,22 @@
 // guest that ORs its channel's enable bit in must read back the other channels' bits, not zero.
 static constexpr uint32_t DPCR_RESET = 0x07654321u;
 
-static constexpr uint32_t DICR_FORCE       = 0x00008000u;  // bit 15
-static constexpr uint32_t DICR_ENABLE_MASK = 0x007F0000u;  // bits 16-22, one per channel
-static constexpr uint32_t DICR_MASTER_EN   = 0x00800000u;  // bit 23
-static constexpr uint32_t DICR_FLAG_MASK   = 0x7F000000u;  // bits 24-30, one per channel
-static constexpr uint32_t DICR_MASTER_FLAG = 0x80000000u;  // bit 31, read-only
+static constexpr uint32_t DICR_FORCE = 0x00008000u;       // bit 15
+static constexpr uint32_t DICR_ENABLE_MASK = 0x007F0000u; // bits 16-22, one per channel
+static constexpr uint32_t DICR_MASTER_EN = 0x00800000u;   // bit 23
+static constexpr uint32_t DICR_FLAG_MASK = 0x7F000000u;   // bits 24-30, one per channel
+static constexpr uint32_t DICR_MASTER_FLAG = 0x80000000u; // bit 31, read-only
 // Everything a store may set directly. The flag bits are excluded because a write to them
 // ACKNOWLEDGES rather than sets, and bit 31 because it is read-only.
-static constexpr uint32_t DICR_RW_MASK     = 0x00FF803Fu;
+static constexpr uint32_t DICR_RW_MASK = 0x00FF803Fu;
 
 // The byte lanes a `bytes`-wide access at `addr` covers, as a mask over the 32-bit register.
 // Sub-word access is not a corner case here: libstr's DMA starter read-modify-writes the BYTE at
 // DICR+2 (the enable bits plus the master-enable bit) on every single transfer.
 inline uint32_t dma_lane_mask(uint32_t addr, uint32_t bytes) {
-  if (bytes >= 4) return 0xFFFFFFFFu;
+  if (bytes >= 4) {
+    return 0xFFFFFFFFu;
+  }
   const uint32_t shift = (addr & 3u) * 8u;
   const uint32_t width = bytes * 8u;
   return ((width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u)) << shift;
@@ -56,8 +58,7 @@ inline uint32_t dma_lane_value(uint32_t addr, uint32_t v, uint32_t bytes) {
 
 // What a read of DICR returns: the stored word plus the computed master flag.
 inline uint32_t dma_dicr_read(uint32_t dicr) {
-  const bool armed_and_flagged =
-      (dicr & DICR_MASTER_EN) != 0 && (dicr & ((dicr & DICR_ENABLE_MASK) << 8)) != 0;
+  const bool armed_and_flagged = (dicr & DICR_MASTER_EN) != 0 && (dicr & ((dicr & DICR_ENABLE_MASK) << 8)) != 0;
   const uint32_t out = dicr & ~DICR_MASTER_FLAG;
   return ((dicr & DICR_FORCE) || armed_and_flagged) ? (out | DICR_MASTER_FLAG) : out;
 }
@@ -98,7 +99,7 @@ void dma_irq_ack(int ch);
 // Hle::irqPoll (which is where guest code may safely be re-entered).
 bool dma_done_owed(int ch);
 void dma_done_taken(int ch);
-bool dma_done_any();      // is ANY channel still owed? the deferred-work gate must not clear while so
+bool dma_done_any(); // is ANY channel still owed? the deferred-work gate must not clear while so
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // WHO gets called when a transfer finishes, and on WHICH channels.
@@ -128,12 +129,18 @@ inline uint32_t dma_callback_slot(uint32_t table, int ch) {
 struct DmaDone {
   uint32_t mask = 0;
   // Record a completion on `ch`, applying the hardware gate. True if the guest is now owed a call.
-  bool complete(uint32_t& dicr, int ch) {
-    if (!dma_irq_armed(dicr, ch)) return false;
-    dicr = dma_dicr_complete(dicr, ch);           // hardware sets the channel's flag
+  bool complete(uint32_t &dicr, int ch) {
+    if (!dma_irq_armed(dicr, ch)) {
+      return false;
+    }
+    dicr = dma_dicr_complete(dicr, ch); // hardware sets the channel's flag
     mask |= 1u << ch;
     return true;
   }
-  bool owed(int ch) const { return (mask & (1u << ch)) != 0; }
-  void taken(int ch) { mask &= ~(1u << ch); }
+  bool owed(int ch) const {
+    return (mask & (1u << ch)) != 0;
+  }
+  void taken(int ch) {
+    mask &= ~(1u << ch);
+  }
 };

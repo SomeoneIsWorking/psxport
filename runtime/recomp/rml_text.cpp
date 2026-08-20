@@ -7,5 +7,5 @@
 // vendor/rmlui/Source/Core/StringUtilities.cpp), so the round trip stays correct by construction if
 // the vendored library ever changes. tests/test_rml_text_encoding.cpp asserts that round trip.
 std::string rml_text_markup(std::string_view plain) {
-    return Rml::StringUtilities::EncodeRml(Rml::String(plain));
+  return Rml::StringUtilities::EncodeRml(Rml::String(plain));
 }

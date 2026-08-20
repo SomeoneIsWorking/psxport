@@ -10,15 +10,15 @@
 // meaning to drift, and the ONLY reason the second one existed is that the first was in the wrong file.
 //
 // Design + the decisions this encodes: docs/plans/render-path-tristate.md.
+#include "cfg.h"
+#include "config_vars.h" // psx::config::render_path() — the CVar ladder
 #include "core.h"
 #include "game.h"
-#include "cfg.h"
-#include "config_vars.h"     // psx::config::render_path() — the CVar ladder
 #include "render_substrate.h"
 #include <lucent/log.h>
 #include <stdlib.h>
 
-void render_path_install(Core* c) {
+void render_path_install(Core *c) {
   // 1. The CVar: Default < Value (settings file) < Override (PSXPORT_RENDER_PATH) < Runtime (REPL).
   RenderPath p = psx::config::render_path();
 
@@ -27,18 +27,24 @@ void render_path_install(Core* c) {
   //    Tomba2 kanban #78 warns people not to mistake for a reference, and it no longer exists (USER
   //    2026-08-11: "GTE/OT should stay pure"). It maps to `gte` and WARNS — a flag whose meaning
   //    changed silently is how the headless-pacing class of bug happened.
-  if (const char* r = cfg_str("PSXPORT_RENDER_PSX")) {
+  if (const char *r = cfg_str("PSXPORT_RENDER_PSX")) {
     if (*r) {
       p = (atoi(r) != 0) ? RenderPath::Gte : RenderPath::Native;
-      lucent::warn("render", "PSXPORT_RENDER_PSX={} is a DEPRECATED alias -> render path '{}'. It no longer keeps "
-                             "the PC enhancements live (fps60 / widescreen / ires / deferred are native-only now). "
-                             "Use PSXPORT_RENDER_PATH={}.", r, render_path_name(p), render_path_name(p));
+      lucent::warn("render",
+                   "PSXPORT_RENDER_PSX={} is a DEPRECATED alias -> render path '{}'. It no longer keeps "
+                   "the PC enhancements live (fps60 / widescreen / ires / deferred are native-only now). "
+                   "Use PSXPORT_RENDER_PATH={}.",
+                   r,
+                   render_path_name(p),
+                   render_path_name(p));
     }
   }
 
   // 3. PSXPORT_ORACLE is the BUNDLE (substrate gameplay + a pure picture) and outranks both: a run that
   //    asked for the reference must get the reference, not whatever the settings file had persisted.
-  if (oracle_mode()) p = RenderPath::Gte;
+  if (oracle_mode()) {
+    p = RenderPath::Gte;
+  }
 
   c->rsub.mode.setPath(p);
 
@@ -46,7 +52,8 @@ void render_path_install(Core* c) {
   // this line; a measurement whose render path is unrecorded can be attributed to the wrong renderer,
   // which this workspace has already paid for twice (every headless timing number before psxport
   // 80e3d203, and the RENDER_PSX/ORACLE mixup). Not a debug channel — an info line on every run.
-  lucent::info("render", "render path = {} — geometry from {}, rasterized by {}, PC enhancements {}",
+  lucent::info("render",
+               "render path = {} — geometry from {}, rasterized by {}, PC enhancements {}",
                render_path_name(c->rsub.mode.path()),
                c->rsub.mode.psxRender() ? "the GUEST (its own GTE + ordering table)" : "PC-NATIVE producers",
                c->game->gpu.sw_path() ? "the PSX SOFTWARE rasterizer (s_vram)" : "the PC rasterizer (SDL_GPU)",

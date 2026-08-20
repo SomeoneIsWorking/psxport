@@ -36,20 +36,20 @@
 // Core.
 #include "testutil.h"
 
-#include "repl_service.h"
-#include "config_vars.h"
-#include "config.h"
 #include "cfg.h"
+#include "config.h"
+#include "config_vars.h"
+#include "repl_service.h"
 
 #include <lucent/config.h>
 
-#include <string>
-#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
-#include <unistd.h>
+#include <string>
 #include <sys/wait.h>
+#include <unistd.h>
+#include <vector>
 
 // ── source corpus ───────────────────────────────────────────────────────────────────────────────
 // <this file>/../.. — the psxport checkout under test, not some other copy (tests/CMakeLists.txt
@@ -58,16 +58,20 @@
 static std::string repo_root(void) {
   std::string f = __FILE__;
   const size_t a = f.rfind('/');
-  if (a == std::string::npos) return "";
+  if (a == std::string::npos) {
+    return "";
+  }
   const size_t b = f.rfind('/', a - 1);
-  if (b == std::string::npos) return "";
+  if (b == std::string::npos) {
+    return "";
+  }
   return f.substr(0, b);
 }
 
-static std::string read_source(const char* rel, bool* ok) {
+static std::string read_source(const char *rel, bool *ok) {
   *ok = false;
   const std::string path = repo_root() + "/" + rel;
-  FILE* f = fopen(path.c_str(), "rb");
+  FILE *f = fopen(path.c_str(), "rb");
   if (!f) {
     fprintf(stderr, "    REFUSING: cannot read %s — this scan searched NOTHING\n", path.c_str());
     return "";
@@ -75,16 +79,20 @@ static std::string read_source(const char* rel, bool* ok) {
   std::string s;
   char buf[65536];
   size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0) s.append(buf, n);
+  while ((n = fread(buf, 1, sizeof buf, f)) > 0) {
+    s.append(buf, n);
+  }
   fclose(f);
   *ok = true;
   fprintf(stderr, "    scanned %s: %zu bytes\n", rel, s.size());
   return s;
 }
 
-static int count_of(const std::string& hay, const char* needle) {
+static int count_of(const std::string &hay, const char *needle) {
   int n = 0;
-  for (size_t p = hay.find(needle); p != std::string::npos; p = hay.find(needle, p + 1)) ++n;
+  for (size_t p = hay.find(needle); p != std::string::npos; p = hay.find(needle, p + 1)) {
+    ++n;
+  }
   return n;
 }
 
@@ -92,16 +100,17 @@ static int count_of(const std::string& hay, const char* needle) {
 static void test_sbs_loop_does_not_ignore_stdin(void) {
   bool ok = false;
   const std::string sbs = read_source("runtime/recomp/sbs.cpp", &ok);
-  CHECK(ok);            // a missing file is a refusal, not a pass
+  CHECK(ok); // a missing file is a refusal, not a pass
   CHECK(sbs.size() > 10000);
 
   const int guard_calls = count_of(sbs, "refuse_if_unserviced");
-  const int read_calls  = count_of(sbs, "repl.read(");
-  fprintf(stderr, "    sbs.cpp: refusal-guard call sites=%d, repl.read( call sites=%d\n",
-          guard_calls, read_calls);
-  if (guard_calls + read_calls == 0)
-    fprintf(stderr, "    ^ SBS owns the process from PSXPORT_SBS_MODE onward and neither refuses nor\n"
-                    "      services stdin: a piped REPL script is silently discarded.\n");
+  const int read_calls = count_of(sbs, "repl.read(");
+  fprintf(stderr, "    sbs.cpp: refusal-guard call sites=%d, repl.read( call sites=%d\n", guard_calls, read_calls);
+  if (guard_calls + read_calls == 0) {
+    fprintf(stderr,
+            "    ^ SBS owns the process from PSXPORT_SBS_MODE onward and neither refuses nor\n"
+            "      services stdin: a piped REPL script is silently discarded.\n");
+  }
   CHECK(guard_calls + read_calls > 0);
 }
 
@@ -113,7 +122,7 @@ static void test_repl_pump_census(void) {
   CHECK(ok);
   const int nb_reads = count_of(nb, "repl.read(");
   fprintf(stderr, "    native_boot.cpp (single-core loop): repl.read( call sites=%d\n", nb_reads);
-  CHECK(nb_reads >= 1);      // if this ever hits 0 the REPL has no pump AT ALL and (a) is moot
+  CHECK(nb_reads >= 1); // if this ever hits 0 the REPL has no pump AT ALL and (a) is moot
 
   bool ok2 = false;
   const std::string rp = read_source("runtime/recomp/repl.cpp", &ok2);
@@ -137,41 +146,45 @@ static void test_repl_pump_census(void) {
 // Tomba2Engine dispatches PSXPORT_DUALCORE + PSXPORT_SELFTEST, spyro and spider1 dispatch
 // PSXPORT_SELFTEST).
 static void test_every_pumpless_loop_guards(void) {
-  struct Loop { const char* file; const char* what; };
+  struct Loop {
+    const char *file;
+    const char *what;
+  };
   static const Loop loops[] = {
-    {"runtime/recomp/sbs.cpp",      "SBS two-core harness (PSXPORT_SBS / PSXPORT_SBS_MODE)"},
-    {"runtime/recomp/dualcore.cpp", "DualCore render-divergence harness (PSXPORT_DUALCORE)"},
-    {"runtime/recomp/selftest.cpp", "selftest dispatcher (PSXPORT_SELFTEST)"},
+      {"runtime/recomp/sbs.cpp", "SBS two-core harness (PSXPORT_SBS / PSXPORT_SBS_MODE)"},
+      {"runtime/recomp/dualcore.cpp", "DualCore render-divergence harness (PSXPORT_DUALCORE)"},
+      {"runtime/recomp/selftest.cpp", "selftest dispatcher (PSXPORT_SELFTEST)"},
   };
   int scanned = 0, guarded = 0, unguarded = 0;
-  for (const Loop& L : loops) {
+  for (const Loop &L : loops) {
     bool ok = false;
     const std::string src = read_source(L.file, &ok);
-    CHECK(ok);                       // a file we cannot read is a refusal, never a pass
+    CHECK(ok); // a file we cannot read is a refusal, never a pass
     ++scanned;
     const int guards = count_of(src, "refuse_if_unserviced");
-    const int reads  = count_of(src, "repl.read(");
+    const int reads = count_of(src, "repl.read(");
     fprintf(stderr, "    %-30s guards=%d repl.read=%d  <- %s\n", L.file, guards, reads, L.what);
-    if (guards + reads > 0) ++guarded;
-    else {
+    if (guards + reads > 0) {
+      ++guarded;
+    } else {
       ++unguarded;
-      fprintf(stderr, "    ^ UNGUARDED: this loop owns the process and neither reads stdin nor\n"
-                      "      refuses, so a piped REPL script handed to it is silently discarded.\n");
+      fprintf(stderr,
+              "    ^ UNGUARDED: this loop owns the process and neither reads stdin nor\n"
+              "      refuses, so a piped REPL script handed to it is silently discarded.\n");
     }
   }
-  fprintf(stderr, "    census: scanned %d pumpless loop(s), %d guarded, %d UNGUARDED\n",
-          scanned, guarded, unguarded);
-  CHECK_EQ(scanned, 3);              // a shrinking corpus must fail, not quietly pass
+  fprintf(stderr, "    census: scanned %d pumpless loop(s), %d guarded, %d UNGUARDED\n", scanned, guarded, unguarded);
+  CHECK_EQ(scanned, 3); // a shrinking corpus must fail, not quietly pass
   CHECK_EQ(unguarded, 0);
 }
 
 // ── 2. POLICY: the decision, exercised on BOTH classes ──────────────────────────────────────────
-using psx::repl_service::Query;
-using psx::repl_service::Verdict;
 using psx::repl_service::decide;
 using psx::repl_service::message;
+using psx::repl_service::Query;
+using psx::repl_service::Verdict;
 
-static const char* vname(Verdict v) {
+static const char *vname(Verdict v) {
   return v == Verdict::Ok ? "Ok" : v == Verdict::Warn ? "Warn" : "Refuse";
 }
 
@@ -182,7 +195,7 @@ static void test_dropped_input_is_refused(void) {
   piped.loopServicesRepl = false;
   piped.replRequested = false;
   piped.stdinIsTty = false;
-  piped.stdinPendingBytes = 24;      // "newgame\nrun 200\nquit\n"
+  piped.stdinPendingBytes = 24; // "newgame\nrun 200\nquit\n"
   fprintf(stderr, "    piped script into a pumpless loop -> %s\n", vname(decide(piped)));
   CHECK(decide(piped) == Verdict::Refuse);
 
@@ -190,9 +203,8 @@ static void test_dropped_input_is_refused(void) {
   Query asked;
   asked.loopServicesRepl = false;
   asked.replRequested = true;
-  asked.stdinPendingBytes = 0;       // nothing written yet
-  fprintf(stderr, "    PSXPORT_REPL=1 into a pumpless loop (0 bytes pending) -> %s\n",
-          vname(decide(asked)));
+  asked.stdinPendingBytes = 0; // nothing written yet
+  fprintf(stderr, "    PSXPORT_REPL=1 into a pumpless loop (0 bytes pending) -> %s\n", vname(decide(asked)));
   CHECK(decide(asked) == Verdict::Refuse);
 
   // A file redirect (`binary < script.txt`) is the same defect with a different fd type.
@@ -215,19 +227,19 @@ static void test_dropped_input_is_refused(void) {
 // break every existing agent SBS gate (docs/port-framework.md's headless PSXPORT_SBS_MODE=full run)
 // and would train operators to ignore the message.
 static void test_legitimate_headless_runs_are_not_refused(void) {
-  Query devnull;                       // `binary < /dev/null` — readable at EOF, 0 bytes pending
+  Query devnull; // `binary < /dev/null` — readable at EOF, 0 bytes pending
   devnull.loopServicesRepl = false;
   devnull.stdinPendingBytes = 0;
   fprintf(stderr, "    < /dev/null -> %s\n", vname(decide(devnull)));
   CHECK(decide(devnull) == Verdict::Ok);
 
-  Query unknownFd;                     // fd type we cannot measure: "cannot tell" never refuses
+  Query unknownFd; // fd type we cannot measure: "cannot tell" never refuses
   unknownFd.loopServicesRepl = false;
   unknownFd.stdinPendingBytes = -1;
   fprintf(stderr, "    unmeasurable stdin (pending=-1) -> %s\n", vname(decide(unknownFd)));
   CHECK(decide(unknownFd) == Verdict::Ok);
 
-  Query idleTty;                       // interactive SBS, operator not typing
+  Query idleTty; // interactive SBS, operator not typing
   idleTty.loopServicesRepl = false;
   idleTty.stdinIsTty = true;
   idleTty.stdinPendingBytes = 0;
@@ -239,10 +251,9 @@ static void test_legitimate_headless_runs_are_not_refused(void) {
   serviced.loopServicesRepl = true;
   serviced.replRequested = true;
   serviced.stdinPendingBytes = 24;
-  fprintf(stderr, "    SAME piped script into the single-core (pumping) loop -> %s\n",
-          vname(decide(serviced)));
+  fprintf(stderr, "    SAME piped script into the single-core (pumping) loop -> %s\n", vname(decide(serviced)));
   CHECK(decide(serviced) == Verdict::Ok);
-  CHECK(message("native", serviced, Verdict::Ok).empty());   // Ok prints nothing
+  CHECK(message("native", serviced, Verdict::Ok).empty()); // Ok prints nothing
 }
 
 // A refusal that does not say what was dropped and what to use instead is indistinguishable from a
@@ -261,7 +272,7 @@ static void test_the_refusal_names_the_supported_alternative(void) {
   CHECK(m.find("24 byte(s)") != std::string::npos);                // the denominator
   CHECK(m.find("PSXPORT_SBS_AUTONAV") != std::string::npos);       // the way to drive an SBS run
   CHECK(m.find("REFUSING THE RUN") != std::string::npos);
-  CHECK(m.find("exit 2") != std::string::npos);                    // non-zero, and it says so
+  CHECK(m.find("exit 2") != std::string::npos); // non-zero, and it says so
   CHECK_EQ(psx::repl_service::kRefusalExit, 2);
 
   // The warn text must NOT claim it is refusing (it isn't) — a message that lies about what it did
@@ -280,11 +291,11 @@ static void test_the_refusal_names_the_supported_alternative(void) {
 // without a paragraph resolves to the fallback, and the operator is told nothing useful. Scanning
 // the real call sites is what turns that from a silent no-op into a test failure.
 static void test_every_call_site_passes_a_registered_loop_name(void) {
-  static const char* const kFiles[] = {"runtime/recomp/sbs.cpp", "runtime/recomp/dualcore.cpp",
-                                       "runtime/recomp/selftest.cpp"};
+  static const char *const kFiles[] = {
+      "runtime/recomp/sbs.cpp", "runtime/recomp/dualcore.cpp", "runtime/recomp/selftest.cpp"};
   static const char kNeedle[] = "refuse_if_unserviced(\"";
   int sites = 0, unregistered = 0;
-  for (const char* rel : kFiles) {
+  for (const char *rel : kFiles) {
     bool ok = false;
     const std::string src = read_source(rel, &ok);
     CHECK(ok);
@@ -294,15 +305,24 @@ static void test_every_call_site_passes_a_registered_loop_name(void) {
       CHECK(b != std::string::npos);
       const std::string name = src.substr(a, b - a);
       const bool reg = psx::repl_service::drive_advice(name.c_str()) != nullptr;
-      fprintf(stderr, "    %s: refuse_if_unserviced(\"%s\") -> advice %s\n",
-              rel, name.c_str(), reg ? "REGISTERED" : "MISSING");
+      fprintf(stderr,
+              "    %s: refuse_if_unserviced(\"%s\") -> advice %s\n",
+              rel,
+              name.c_str(),
+              reg ? "REGISTERED" : "MISSING");
       ++sites;
-      if (!reg) ++unregistered;
+      if (!reg) {
+        ++unregistered;
+      }
     }
   }
-  fprintf(stderr, "    scanned %zu file(s), found %d call site(s) with a literal loop name, "
-                  "%d unregistered\n", sizeof(kFiles) / sizeof(kFiles[0]), sites, unregistered);
-  CHECK(sites >= 3);            // 0 sites would mean the scan found nothing and "passed"
+  fprintf(stderr,
+          "    scanned %zu file(s), found %d call site(s) with a literal loop name, "
+          "%d unregistered\n",
+          sizeof(kFiles) / sizeof(kFiles[0]),
+          sites,
+          unregistered);
+  CHECK(sites >= 3); // 0 sites would mean the scan found nothing and "passed"
   CHECK_EQ(unregistered, 0);
 }
 
@@ -315,17 +335,19 @@ static void test_advice_is_per_loop_and_the_gap_is_loud(void) {
   piped.stdinPendingBytes = 24;
 
   const std::string sbs = message("SBS", piped, Verdict::Refuse);
-  const std::string dc  = message("DualCore", piped, Verdict::Refuse);
-  const std::string st  = message("selftest", piped, Verdict::Refuse);
+  const std::string dc = message("DualCore", piped, Verdict::Refuse);
+  const std::string st = message("selftest", piped, Verdict::Refuse);
   CHECK(sbs.find("PSXPORT_SBS_AUTONAV") != std::string::npos);
   CHECK(dc.find("PSXPORT_DUALCORE") != std::string::npos);
-  CHECK(dc.find("PSXPORT_SBS_AUTONAV") == std::string::npos);   // the bug this pins
+  CHECK(dc.find("PSXPORT_SBS_AUTONAV") == std::string::npos); // the bug this pins
   CHECK(st.find("PSXPORT_SELFTEST") != std::string::npos);
   CHECK(st.find("PSXPORT_SBS_AUTONAV") == std::string::npos);
-  fprintf(stderr, "    DualCore advice (%zu chars, SBS knobs present: %s)\n", dc.size(),
+  fprintf(stderr,
+          "    DualCore advice (%zu chars, SBS knobs present: %s)\n",
+          dc.size(),
           dc.find("PSXPORT_SBS") == std::string::npos ? "no" : "YES — WRONG");
 
-  const std::string unk = message("sbs", piped, Verdict::Refuse);   // lowercase typo
+  const std::string unk = message("sbs", piped, Verdict::Refuse); // lowercase typo
   fprintf(stderr, "    unregistered loop \"sbs\" -> %s\n", unk.c_str());
   CHECK(unk.find("NO DRIVE MECHANISM IS REGISTERED") != std::string::npos);
   CHECK(unk.find("PSXPORT_SBS_AUTONAV") == std::string::npos);
@@ -346,28 +368,51 @@ enum ChildStdin { kPipeWithScript, kDevNull, kEmptyPipe };
 static int child_exit_code(ChildStdin kind, bool servicesRepl, bool replEnv) {
   static const char kScript[] = "newgame\nrun 200\nquit\n";
   int pfd[2] = {-1, -1};
-  if (kind != kDevNull && pipe(pfd) != 0) { fprintf(stderr, "    REFUSING: pipe() failed\n"); return -1; }
+  if (kind != kDevNull && pipe(pfd) != 0) {
+    fprintf(stderr, "    REFUSING: pipe() failed\n");
+    return -1;
+  }
   if (kind == kPipeWithScript) {
     const ssize_t w = write(pfd[1], kScript, sizeof kScript - 1);
-    if (w != (ssize_t)(sizeof kScript - 1)) { fprintf(stderr, "    REFUSING: short write to pipe\n"); return -1; }
+    if (w != (ssize_t)(sizeof kScript - 1)) {
+      fprintf(stderr, "    REFUSING: short write to pipe\n");
+      return -1;
+    }
   }
-  if (kind != kDevNull) close(pfd[1]);   // EOF on the read end once drained — the poll() trap
+  if (kind != kDevNull) {
+    close(pfd[1]); // EOF on the read end once drained — the poll() trap
+  }
 
   const pid_t pid = fork();
-  if (pid < 0) { fprintf(stderr, "    REFUSING: fork() failed\n"); return -1; }
+  if (pid < 0) {
+    fprintf(stderr, "    REFUSING: fork() failed\n");
+    return -1;
+  }
   if (pid == 0) {
     int fd = (kind == kDevNull) ? open("/dev/null", O_RDONLY) : pfd[0];
-    if (fd < 0) _exit(97);
-    if (dup2(fd, STDIN_FILENO) < 0) _exit(98);
-    if (replEnv) setenv("PSXPORT_REPL", "1", 1); else unsetenv("PSXPORT_REPL");
+    if (fd < 0) {
+      _exit(97);
+    }
+    if (dup2(fd, STDIN_FILENO) < 0) {
+      _exit(98);
+    }
+    if (replEnv) {
+      setenv("PSXPORT_REPL", "1", 1);
+    } else {
+      unsetenv("PSXPORT_REPL");
+    }
     lucent::config::reset_cache();
     psx::config::reset_for_test();
     psx::repl_service::refuse_if_unserviced("SBS-test", servicesRepl);
-    _exit(0);                            // it RETURNED: no refusal
+    _exit(0); // it RETURNED: no refusal
   }
-  if (kind != kDevNull) close(pfd[0]);
+  if (kind != kDevNull) {
+    close(pfd[0]);
+  }
   int status = 0;
-  if (waitpid(pid, &status, 0) != pid) return -1;
+  if (waitpid(pid, &status, 0) != pid) {
+    return -1;
+  }
   return WIFEXITED(status) ? WEXITSTATUS(status) : -WTERMSIG(status);
 }
 
@@ -398,21 +443,25 @@ static void test_the_shipping_guard_fires_and_only_when_it_should(void) {
 // than read raw. The point of a migration is that it cannot change what a run does — so check the
 // migrated value against the pre-migration accessor, in both states.
 static void test_psxport_repl_is_a_ladder_knob_matching_its_pre_migration_behaviour(void) {
-  CHECK(psx::config::find("PSXPORT_REPL") != nullptr);   // it is IN the inventory, not read raw
+  CHECK(psx::config::find("PSXPORT_REPL") != nullptr); // it is IN the inventory, not read raw
 
   // The oracle is the pre-migration body: native_boot.cpp read cfg_on("PSXPORT_REPL"), and cfg_on
   // used to be `lucent::config::flag(name) ? 1 : 0`. Same env, same answer, or the knob's meaning
   // moved under the migration. Same value set as tests/test_config_cvar.cpp uses.
-  const char* const values[] = {nullptr, "1", "0", "yes", "off", "", "banana"};
+  const char *const values[] = {nullptr, "1", "0", "yes", "off", "", "banana"};
   int compared = 0;
-  for (const char* v : values) {
-    if (v) setenv("PSXPORT_REPL", v, 1); else unsetenv("PSXPORT_REPL");
-    lucent::config::reset_cache();       // lucent memoises per name
-    psx::config::reset_for_test();       // a CVar binds its env Override once
+  for (const char *v : values) {
+    if (v) {
+      setenv("PSXPORT_REPL", v, 1);
+    } else {
+      unsetenv("PSXPORT_REPL");
+    }
+    lucent::config::reset_cache(); // lucent memoises per name
+    psx::config::reset_for_test(); // a CVar binds its env Override once
     const int want = lucent::config::flag("PSXPORT_REPL") ? 1 : 0;
-    const int got  = psx::config::cv_repl.get() ? 1 : 0;
-    fprintf(stderr, "    PSXPORT_REPL=%-8s cv_repl=%d  pre-migration=%d\n",
-            v ? (*v ? v : "\"\"") : "<unset>", got, want);
+    const int got = psx::config::cv_repl.get() ? 1 : 0;
+    fprintf(
+        stderr, "    PSXPORT_REPL=%-8s cv_repl=%d  pre-migration=%d\n", v ? (*v ? v : "\"\"") : "<unset>", got, want);
     CHECK_EQ(got, want);
     ++compared;
   }

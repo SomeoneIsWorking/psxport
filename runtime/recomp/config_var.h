@@ -56,12 +56,12 @@ namespace psx::config {
 // CVar always has one), so the optional slots below are indexed by `(int)layer - 1`.
 enum class Layer : unsigned char { Default = 0, Value = 1, Override = 2, Runtime = 3 };
 inline constexpr int kLayerCount = 4;
-const char* layer_name(Layer l);
+const char *layer_name(Layer l);
 
 // What a knob holds. Deliberately only the three shapes the cfg_* API ever had — bool, integer,
 // string — so every one of the 201 existing knobs is expressible without a new type.
 enum class Kind : unsigned char { Bool, Int, Text };
-const char* kind_name(Kind k);
+const char *kind_name(Kind k);
 
 class CVarBase;
 
@@ -70,36 +70,46 @@ namespace detail {
 // environment read through these — rather than re-parsing the variable here — is what makes
 // "a migrated knob resolves identically to its pre-migration behaviour" true by construction
 // instead of true by careful re-implementation. Defined in config.cpp.
-bool        env_present(const char* name);
-bool        env_bool(const char* name);
-long        env_int(const char* name, long fallback);
-std::string env_text(const char* name);
+bool env_present(const char *name);
+bool env_bool(const char *name);
+long env_int(const char *name, long fallback);
+std::string env_text(const char *name);
 // Registry hooks. Declared here so a CVar can self-register and self-unregister without this header
 // pulling in the registry's own interface.
-void registry_add(CVarBase* v);
-void registry_remove(CVarBase* v);
+void registry_add(CVarBase *v);
+void registry_remove(CVarBase *v);
 void registry_lock();
 void registry_unlock();
-}  // namespace detail
+} // namespace detail
 
 class CVarBase {
- public:
+public:
   virtual ~CVarBase();
 
-  const char* name() const { return mName; }
-  Kind kind() const { return mKind; }
-  const char* help() const { return mHelp; }
+  const char *name() const {
+    return mName;
+  }
+  Kind kind() const {
+    return mKind;
+  }
+  const char *help() const {
+    return mHelp;
+  }
 
   // False for a knob whose Value layer must never be written to the settings file — e.g.
   // PSXPORT_SETTINGS, which SELECTS that file and so cannot be stored inside it.
-  bool persistable() const { return mPersistable; }
+  bool persistable() const {
+    return mPersistable;
+  }
 
   // True for a knob that is DECLARED here for introspection but whose value is resolved by another
   // subsystem — PSXPORT_DEBUG and PSXPORT_LOG_FILE, which lucent reads for itself (built with
   // LUCENT_CHANNEL_ENV / LUCENT_LOG_FILE_ENV; see cmake/psxport.cmake). Declaring them costs nothing
   // and keeps the environment audit from reporting the two most-used knobs in the port as unknown.
   // Nothing here reads or overrides them.
-  bool external() const { return mExternal; }
+  bool external() const {
+    return mExternal;
+  }
 
   // The layer the effective value comes from — derived from which slots are set, not stored.
   Layer layer() const;
@@ -112,49 +122,55 @@ class CVarBase {
   // Parse `text` for this Kind and store it at `l`. False = unparseable, nothing stored.
   virtual bool set_text(Layer l, std::string_view text) = 0;
 
- protected:
-  CVarBase(const char* name, Kind kind, const char* help, bool persistable, bool external);
-  CVarBase(const CVarBase&) = delete;
-  CVarBase& operator=(const CVarBase&) = delete;
+protected:
+  CVarBase(const char *name, Kind kind, const char *help, bool persistable, bool external);
+  CVarBase(const CVarBase &) = delete;
+  CVarBase &operator=(const CVarBase &) = delete;
 
   // Pull the PSXPORT_* environment variable of this name into the Override layer, once. Lazy on
   // purpose: there is no init call to forget, and a test may set the variable after startup.
   void ensure_env_bound() const;
   virtual void bind_env() = 0;
 
-  const char* mName;
-  const char* mHelp;
+  const char *mName;
+  const char *mHelp;
   Kind mKind;
   bool mPersistable;
   bool mExternal;
   mutable bool mEnvBound = false;
-  bool mSet[kLayerCount] = {true, false, false, false};   // slot 0 (Default) always present
+  bool mSet[kLayerCount] = {true, false, false, false}; // slot 0 (Default) always present
 
   friend void reset_for_test();
-  friend void detail::registry_add(CVarBase*);
+  friend void detail::registry_add(CVarBase *);
 };
 
-template <class T>
-class CVar : public CVarBase {
- public:
-  CVar(const char* name, T dflt, const char* help, bool persistable = true, bool external = false)
+template <class T> class CVar : public CVarBase {
+public:
+  CVar(const char *name, T dflt, const char *help, bool persistable = true, bool external = false)
       : CVarBase(name, kind_of(), help, persistable, external), mDefault(std::move(dflt)) {}
 
   // The effective value. Binds the environment on first use.
-  const T& get() const {
+  const T &get() const {
     ensure_env_bound();
-    for (int i = kLayerCount - 1; i >= 1; --i)
-      if (mSlot[i - 1].has_value()) return *mSlot[i - 1];
+    for (int i = kLayerCount - 1; i >= 1; --i) {
+      if (mSlot[i - 1].has_value()) {
+        return *mSlot[i - 1];
+      }
+    }
     return mDefault;
   }
-  operator const T&() const { return get(); }
+  operator const T &() const {
+    return get();
+  }
 
-  const T& default_value() const { return mDefault; }
+  const T &default_value() const {
+    return mDefault;
+  }
 
   // What the settings file must keep: Default or Value only. An Override is a launch argument and a
   // Runtime value is a console command; persisting either would turn a one-run choice into the
   // user's saved configuration. Straight from Dusklight's getValueForSave.
-  const T& value_for_save() const {
+  const T &value_for_save() const {
     ensure_env_bound();
     return mSlot[(int)Layer::Value - 1].has_value() ? *mSlot[(int)Layer::Value - 1] : mDefault;
   }
@@ -172,31 +188,37 @@ class CVar : public CVarBase {
   }
 
   void clear(Layer l) override {
-    if (l == Layer::Default) return;   // a CVar always has a default
+    if (l == Layer::Default) {
+      return; // a CVar always has a default
+    }
     detail::registry_lock();
     mSlot[(int)l - 1].reset();
     mSet[(int)l] = false;
     detail::registry_unlock();
   }
 
-  std::string value_text() const override { return to_text(get()); }
+  std::string value_text() const override {
+    return to_text(get());
+  }
 
   std::string layer_text(Layer l) const override {
-    if (l == Layer::Default) return to_text(mDefault);
+    if (l == Layer::Default) {
+      return to_text(mDefault);
+    }
     return mSlot[(int)l - 1].has_value() ? to_text(*mSlot[(int)l - 1]) : std::string();
   }
 
   bool set_text(Layer l, std::string_view text) override;
 
- protected:
+protected:
   void bind_env() override;
 
- private:
+private:
   static constexpr Kind kind_of();
-  static std::string to_text(const T& v);
+  static std::string to_text(const T &v);
 
   T mDefault;
-  std::optional<T> mSlot[kLayerCount - 1];   // Value, Override, Runtime
+  std::optional<T> mSlot[kLayerCount - 1]; // Value, Override, Runtime
 };
 
 using BoolVar = CVar<bool>;
@@ -207,13 +229,19 @@ using TextVar = CVar<std::string>;
 // DECLARED here, before the extern-template lines below: declaring `extern BoolVar cv_oracle;` in
 // config_vars.h instantiates enough of the class that a specialisation appearing only in the .cpp is
 // "a specialisation after instantiation" and is ill-formed.
-template <> constexpr Kind CVar<bool>::kind_of() { return Kind::Bool; }
-template <> constexpr Kind CVar<long>::kind_of() { return Kind::Int; }
-template <> constexpr Kind CVar<std::string>::kind_of() { return Kind::Text; }
+template <> constexpr Kind CVar<bool>::kind_of() {
+  return Kind::Bool;
+}
+template <> constexpr Kind CVar<long>::kind_of() {
+  return Kind::Int;
+}
+template <> constexpr Kind CVar<std::string>::kind_of() {
+  return Kind::Text;
+}
 
-template <> std::string CVar<bool>::to_text(const bool& v);
-template <> std::string CVar<long>::to_text(const long& v);
-template <> std::string CVar<std::string>::to_text(const std::string& v);
+template <> std::string CVar<bool>::to_text(const bool &v);
+template <> std::string CVar<long>::to_text(const long &v);
+template <> std::string CVar<std::string>::to_text(const std::string &v);
 
 template <> bool CVar<bool>::set_text(Layer l, std::string_view text);
 template <> bool CVar<long>::set_text(Layer l, std::string_view text);
@@ -227,6 +255,6 @@ extern template class CVar<bool>;
 extern template class CVar<long>;
 extern template class CVar<std::string>;
 
-}  // namespace psx::config
+} // namespace psx::config
 
-#endif  // PSXPORT_CONFIG_VAR_H
+#endif // PSXPORT_CONFIG_VAR_H

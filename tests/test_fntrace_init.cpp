@@ -33,17 +33,23 @@ int index_stub(uint32_t address) {
 }
 
 void set_override_stub(uint32_t address, RecOverrideFn handler) {
-  if (g_install_count <
-      static_cast<int>(sizeof g_installs / sizeof g_installs[0]))
+  if (g_install_count < static_cast<int>(sizeof g_installs / sizeof g_installs[0])) {
     g_installs[g_install_count] = {address, handler};
+  }
   ++g_install_count;
 }
 
 void game_override_stub(Core *) {}
 
 const RecompRegistry kRegistry = {
-    dispatch_stub,     index_stub, nullptr, 0,
-    set_override_stub, nullptr,    nullptr, nullptr,
+    dispatch_stub,
+    index_stub,
+    nullptr,
+    0,
+    set_override_stub,
+    nullptr,
+    nullptr,
+    nullptr,
 };
 
 } // namespace

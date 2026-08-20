@@ -11,18 +11,16 @@
 
 class Core;
 
-using GtePreOpFn = void (*)(Core* core, uint64_t ordinal, uint32_t guestPc,
-                            uint32_t instruction, void* user);
-using GtePostOpFn = void (*)(Core* core, uint64_t ordinal, uint32_t guestPc,
-                             uint32_t instruction, void* user);
+using GtePreOpFn = void (*)(Core *core, uint64_t ordinal, uint32_t guestPc, uint32_t instruction, void *user);
+using GtePostOpFn = void (*)(Core *core, uint64_t ordinal, uint32_t guestPc, uint32_t instruction, void *user);
 
 class GtePreOpObserver {
 public:
-  void arm(GtePreOpFn fn, void* user) {
+  void arm(GtePreOpFn fn, void *user) {
     arm(fn, nullptr, user);
   }
 
-  void arm(GtePreOpFn preFn, GtePostOpFn postFn, void* user) {
+  void arm(GtePreOpFn preFn, GtePostOpFn postFn, void *user) {
     mPreFn = preFn;
     mPostFn = postFn;
     mUser = user;
@@ -37,22 +35,32 @@ public:
     return seen;
   }
 
-  bool armed() const { return mPreFn != nullptr || mPostFn != nullptr; }
-  uint64_t seen() const { return mSeen; }
+  bool armed() const {
+    return mPreFn != nullptr || mPostFn != nullptr;
+  }
+  uint64_t seen() const {
+    return mSeen;
+  }
 
-  uint64_t observe(Core* core, uint32_t guestPc, uint32_t instruction) {
-    if (!armed()) return 0;
+  uint64_t observe(Core *core, uint32_t guestPc, uint32_t instruction) {
+    if (!armed()) {
+      return 0;
+    }
     const uint64_t ordinal = ++mSeen;
-    if (mPreFn) mPreFn(core, ordinal, guestPc, instruction, mUser);
+    if (mPreFn) {
+      mPreFn(core, ordinal, guestPc, instruction, mUser);
+    }
     return ordinal;
   }
 
-  void observePost(Core* core, uint64_t ordinal, uint32_t guestPc, uint32_t instruction) {
-    if (ordinal != 0 && mPostFn) mPostFn(core, ordinal, guestPc, instruction, mUser);
+  void observePost(Core *core, uint64_t ordinal, uint32_t guestPc, uint32_t instruction) {
+    if (ordinal != 0 && mPostFn) {
+      mPostFn(core, ordinal, guestPc, instruction, mUser);
+    }
   }
 
   template <typename Operation>
-  void observeAround(Core* core, uint32_t guestPc, uint32_t instruction, Operation&& operation) {
+  void observeAround(Core *core, uint32_t guestPc, uint32_t instruction, Operation &&operation) {
     const uint64_t ordinal = observe(core, guestPc, instruction);
     operation();
     observePost(core, ordinal, guestPc, instruction);
@@ -61,6 +69,6 @@ public:
 private:
   GtePreOpFn mPreFn = nullptr;
   GtePostOpFn mPostFn = nullptr;
-  void* mUser = nullptr;
+  void *mUser = nullptr;
   uint64_t mSeen = 0;
 };

@@ -35,7 +35,7 @@
 #include <cstdint>
 
 struct Core;
-typedef void (*OverrideFn)(Core*);
+typedef void (*OverrideFn)(Core *);
 
 namespace overrides {
 
@@ -60,14 +60,14 @@ typedef void (*Setter)(uint32_t, OverrideFn);
 //   - nullptr: rec_dispatch interception ONLY. Direct `func_X(c)` callers fall through to the gen body
 //     (substrate) unchanged — required where a direct call must stay on the substrate (e.g. an
 //     intra-shard call the port deliberately leaves unhooked).
-void install(uint32_t addr, const char* name, OverrideFn native, OverrideFn gen, Setter setter = nullptr);
+void install(uint32_t addr, const char *name, OverrideFn native, OverrideFn gen, Setter setter = nullptr);
 
 // rec_dispatch interception point. Runs the entry (native or gen, per the oracle leg) and returns true
 // if `addr` is registered; false lets rec_dispatch route normally. Intercepting here — rather than only
 // at the g_<mod>_override[] wrapper — preserves the "an override fires even when its overlay image is
 // not resident in guest RAM" property that the old EngineOverrides::run() provided (gen bodies are
 // always linked, independent of overlay residency).
-bool dispatch(Core* c, uint32_t addr);
+bool dispatch(Core *c, uint32_t addr);
 
 // COVERAGE — how much of what we OWN did a run actually execute? Fills `total` with the number of
 // registered addresses and `unreached` with how many were never dispatched on either core.
@@ -80,7 +80,7 @@ bool dispatch(Core* c, uint32_t addr);
 // counts were already here, but only under PSXPORT_DEBUG=ovhit — a flag you have to already suspect
 // something to set. Callers that report a clean compare should print this ALONGSIDE the verdict so
 // "green" is self-qualifying, not a claim about the whole port.
-void coverage(int* total, int* unreached);
+void coverage(int *total, int *unreached);
 
 // PER-ADDRESS OWNERSHIP QUERY — is this guest address override-installed, and did its native body run?
 // Returns false when the address is not registered at all; on true, fills the hit counts (core A native
@@ -97,12 +97,12 @@ void coverage(int* total, int* unreached);
 // NOT mean no native draws that picture. A display-pass producer legitimately draws from game state while
 // the guest function stays on the substrate (the per-mode emitters and the per-area backdrop drawers are
 // exactly this), so a row with prims_native > 0 and has_native false is normal and correct, not a defect.
-bool query(uint32_t addr, uint64_t* nativeHits, uint64_t* oracleHits);
+bool query(uint32_t addr, uint64_t *nativeHits, uint64_t *oracleHits);
 
-}  // namespace overrides
+} // namespace overrides
 
 // Thin module-named forwarders for the direct-install call sites (render emitters etc.) that already
 // pass { native, gen }. Equivalent to overrides::install(addr, nullptr, native, gen, <mod>).
 void engine_set_override_main(uint32_t addr, OverrideFn native, OverrideFn gen);
-void engine_set_override_a00 (uint32_t addr, OverrideFn native, OverrideFn gen);
+void engine_set_override_a00(uint32_t addr, OverrideFn native, OverrideFn gen);
 void engine_set_override_game(uint32_t addr, OverrideFn native, OverrideFn gen);

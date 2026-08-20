@@ -18,12 +18,18 @@
 // "no interrupt was pending" and "interrupts are disabled forever" look identical from outside.
 //
 // Registers are stored per-Core so two Cores never share exception state.
-uint32_t cop0_mfc(Core* c, uint32_t reg) { return reg < 16 ? c->cop0[reg] : 0; }
+uint32_t cop0_mfc(Core *c, uint32_t reg) {
+  return reg < 16 ? c->cop0[reg] : 0;
+}
 
-void cop0_mtc(Core* c, uint32_t reg, uint32_t v) {
-  if (reg >= 16) return;
+void cop0_mtc(Core *c, uint32_t reg, uint32_t v) {
+  if (reg >= 16) {
+    return;
+  }
   c->cop0[reg] = v;
-  if (reg == 12) c->game->hle.irq_enabled = (v & 1u) ? 1 : 0;   // SR.IEc — master interrupt enable
+  if (reg == 12) {
+    c->game->hle.irq_enabled = (v & 1u) ? 1 : 0; // SR.IEc — master interrupt enable
+  }
 }
 
 // rec_syscall / rec_break live in hle.c (kernel concern).

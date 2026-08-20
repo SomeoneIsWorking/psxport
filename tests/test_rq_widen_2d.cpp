@@ -20,30 +20,34 @@
 // A NEGATIVE HERE CARRIES ITS DENOMINATOR: the 4:3 case asserts the no-op across an ENUMERATED sweep
 // of every (space x layer x flat x untextured) combination and prints how many it covered, so
 // "widescreen off changes nothing" is a counted claim rather than one spot check.
-#include "testutil.h"
 #include "render_queue.h"
+#include "testutil.h"
 
 // The two aspect shapes the framework ships, as the games actually see them.
-static const int kNative320 = 320, kWide169 = 428;   // Tomba! 2 / Spider-Man — margin 54
-static const int kNative512 = 512, kSpyro169 = 684;  // Spyro (512x240) — margin 86, NOT 182
+static const int kNative320 = 320, kWide169 = 428;  // Tomba! 2 / Spider-Man — margin 54
+static const int kNative512 = 512, kSpyro169 = 684; // Spyro (512x240) — margin 86, NOT 182
 
 // ---- 1. 4:3 is a no-op BY CONSTRUCTION, across every combination -------------------------------
 // The whole widescreen path must be invisible when the user has not asked for it. Swept rather than
 // spot-checked so the count is the evidence.
 static void test_4_3_is_identity_everywhere(void) {
   int combos = 0;
-  const int xs[] = { 0, 1, 159, 160, 161, 319 };
-  const int layers[] = { RQ_BACKGROUND, RQ_WORLD, RQ_OVERLAY, RQ_HUD };
-  const Rq2dSpace spaces[] = { RQ_2D_AUTHORED_4_3, RQ_2D_WIDE_FINAL };
-  for (unsigned si = 0; si < sizeof spaces / sizeof *spaces; si++)
-    for (unsigned li = 0; li < sizeof layers / sizeof *layers; li++)
-      for (int flat = 0; flat <= 1; flat++)
-        for (int untex = 0; untex <= 1; untex++)
+  const int xs[] = {0, 1, 159, 160, 161, 319};
+  const int layers[] = {RQ_BACKGROUND, RQ_WORLD, RQ_OVERLAY, RQ_HUD};
+  const Rq2dSpace spaces[] = {RQ_2D_AUTHORED_4_3, RQ_2D_WIDE_FINAL};
+  for (unsigned si = 0; si < sizeof spaces / sizeof *spaces; si++) {
+    for (unsigned li = 0; li < sizeof layers / sizeof *layers; li++) {
+      for (int flat = 0; flat <= 1; flat++) {
+        for (int untex = 0; untex <= 1; untex++) {
           for (unsigned xi = 0; xi < sizeof xs / sizeof *xs; xi++) {
             combos++;
-            CHECK_EQ(rq_widen_2d_x(xs[xi], kNative320, kNative320, spaces[si],
-                                   layers[li], flat != 0, untex != 0), xs[xi]);
+            CHECK_EQ(rq_widen_2d_x(xs[xi], kNative320, kNative320, spaces[si], layers[li], flat != 0, untex != 0),
+                     xs[xi]);
           }
+        }
+      }
+    }
+  }
   // Denominator: say what was actually swept, so "no change at 4:3" is a number.
   printf("      [4:3 identity] swept %d (space x layer x flat x untextured x x) combinations\n", combos);
   CHECK_EQ(combos, 2 * 4 * 2 * 2 * 6);
@@ -51,12 +55,12 @@ static void test_4_3_is_identity_everywhere(void) {
 
 // ---- 2. 4:3-AUTHORED coordinates are CENTRED (the long-standing, correct behaviour) -------------
 static void test_authored_4_3_is_centred(void) {
-  const int margin = (kWide169 - kNative320) / 2;   // 54
+  const int margin = (kWide169 - kNative320) / 2; // 54
   CHECK_EQ(margin, 54);
   // A HUD/overlay element keeps its native size and is registered with the centred world.
-  CHECK_EQ(rq_widen_2d_x(0,   kWide169, kNative320, RQ_2D_AUTHORED_4_3, RQ_OVERLAY, true, true), 54);
+  CHECK_EQ(rq_widen_2d_x(0, kWide169, kNative320, RQ_2D_AUTHORED_4_3, RQ_OVERLAY, true, true), 54);
   CHECK_EQ(rq_widen_2d_x(160, kWide169, kNative320, RQ_2D_AUTHORED_4_3, RQ_OVERLAY, true, true), 214);
-  CHECK_EQ(rq_widen_2d_x(320, kWide169, kNative320, RQ_2D_AUTHORED_4_3, RQ_HUD,     true, true), 374);
+  CHECK_EQ(rq_widen_2d_x(320, kWide169, kNative320, RQ_2D_AUTHORED_4_3, RQ_HUD, true, true), 374);
 }
 
 // ---- 3. Only a UNIFORM SOLID FILL stretches; anything with content is pillarboxed ---------------
@@ -64,7 +68,7 @@ static void test_authored_4_3_is_centred(void) {
 // TEXTURED backdrop spreads/squishes the picture, so those get the same centring as everything else.
 static void test_only_flat_untextured_background_stretches(void) {
   // flat + untextured + RQ_BACKGROUND -> stretch to fill [0, ww)
-  CHECK_EQ(rq_widen_2d_x(0,   kWide169, kNative320, RQ_2D_AUTHORED_4_3, RQ_BACKGROUND, true, true), 0);
+  CHECK_EQ(rq_widen_2d_x(0, kWide169, kNative320, RQ_2D_AUTHORED_4_3, RQ_BACKGROUND, true, true), 0);
   CHECK_EQ(rq_widen_2d_x(320, kWide169, kNative320, RQ_2D_AUTHORED_4_3, RQ_BACKGROUND, true, true), 428);
   CHECK_EQ(rq_widen_2d_x(160, kWide169, kNative320, RQ_2D_AUTHORED_4_3, RQ_BACKGROUND, true, true), 214);
   // a GRADIENT background (not flat) -> centred, not stretched
@@ -80,17 +84,18 @@ static void test_only_flat_untextured_background_stretches(void) {
 // with CR24 = nw/2, or the native camera). Adding the centring margin to them shifts them off the
 // thing they are anchored to, by exactly one margin.
 static void test_wide_final_is_never_shifted(void) {
-  const int layers[] = { RQ_BACKGROUND, RQ_WORLD, RQ_OVERLAY, RQ_HUD };
+  const int layers[] = {RQ_BACKGROUND, RQ_WORLD, RQ_OVERLAY, RQ_HUD};
   int covered = 0;
-  for (unsigned li = 0; li < sizeof layers / sizeof *layers; li++)
-    for (int flat = 0; flat <= 1; flat++)
+  for (unsigned li = 0; li < sizeof layers / sizeof *layers; li++) {
+    for (int flat = 0; flat <= 1; flat++) {
       for (int untex = 0; untex <= 1; untex++) {
         covered++;
         // No layer, and no material shape, may move a wide-final coordinate — INCLUDING the
         // flat+untextured RQ_BACKGROUND combination that stretches when it is 4:3-authored.
-        CHECK_EQ(rq_widen_2d_x(214, kWide169, kNative320, RQ_2D_WIDE_FINAL,
-                               layers[li], flat != 0, untex != 0), 214);
+        CHECK_EQ(rq_widen_2d_x(214, kWide169, kNative320, RQ_2D_WIDE_FINAL, layers[li], flat != 0, untex != 0), 214);
       }
+    }
+  }
   printf("      [wide-final] swept %d (layer x flat x untextured) combinations\n", covered);
   CHECK_EQ(covered, 4 * 2 * 2);
 
@@ -108,9 +113,9 @@ static void test_wide_final_is_never_shifted(void) {
 // no-op for a 320-wide game, so nothing caught it, but for Spyro (512x240) it centred by
 // (684-320)/2 = 182 instead of (684-512)/2 = 86 and stretched by 684/320 instead of 684/512.
 static void test_margin_scales_from_the_games_own_width(void) {
-  const int margin = (kSpyro169 - kNative512) / 2;   // 86
+  const int margin = (kSpyro169 - kNative512) / 2; // 86
   CHECK_EQ(margin, 86);
-  CHECK_EQ(rq_widen_2d_x(0,   kSpyro169, kNative512, RQ_2D_AUTHORED_4_3, RQ_OVERLAY, true, true), 86);
+  CHECK_EQ(rq_widen_2d_x(0, kSpyro169, kNative512, RQ_2D_AUTHORED_4_3, RQ_OVERLAY, true, true), 86);
   CHECK_EQ(rq_widen_2d_x(256, kSpyro169, kNative512, RQ_2D_AUTHORED_4_3, RQ_OVERLAY, true, true), 342);
   // and the stretch divides by the game's own width, so a full-width fill lands exactly on the edge
   CHECK_EQ(rq_widen_2d_x(512, kSpyro169, kNative512, RQ_2D_AUTHORED_4_3, RQ_BACKGROUND, true, true), 684);

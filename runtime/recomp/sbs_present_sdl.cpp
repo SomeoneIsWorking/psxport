@@ -11,17 +11,21 @@
 class Game;
 // gpu_vk.cpp: composite two CPU RGBA8 panes (A left, B right) to the swapchain in one window frame.
 // `game` is the Game used to reach the RmlOverlay in the shared present path (init_gpu/poll_quit).
-void gpu_vk_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB);
+void gpu_vk_present_sbs2(Game *game, const uint8_t *rgbaA, int wA, int hA, const uint8_t *rgbaB, int wB, int hB);
 
 extern "C" {
-void sbs_rl_init(void) {}        // the SDL_GPU renderer creates the window lazily on the first present
+void sbs_rl_init(void) {} // the SDL_GPU renderer creates the window lazily on the first present
 void sbs_rl_shutdown(void) {}
 
 // Return 1 if the window was closed (SDL quit). gpu_vk_present_sbs2 also exits(0) on quit, so this is a
 // belt-and-suspenders check for frames where no present ran (e.g. paused).
 int sbs_rl_should_close(void) {
   SDL_Event e;
-  while (SDL_PollEvent(&e)) if (e.type == SDL_EVENT_QUIT) return 1;
+  while (SDL_PollEvent(&e)) {
+    if (e.type == SDL_EVENT_QUIT) {
+      return 1;
+    }
+  }
   return 0;
 }
 
@@ -29,28 +33,54 @@ int sbs_rl_should_close(void) {
 // both cores by sbs.cpp::feed_input.
 unsigned short sbs_rl_poll_input(void) {
   SDL_PumpEvents();
-  const bool* ks = SDL_GetKeyboardState(NULL);
+  const bool *ks = SDL_GetKeyboardState(NULL);
   uint16_t m = 0xFFFF;
-  if (!ks) return m;
-  #define KD(sc) (ks[(sc)])
-  if (KD(SDL_SCANCODE_UP)    || KD(SDL_SCANCODE_W)) m &= ~0x0010u;   // Up
-  if (KD(SDL_SCANCODE_RIGHT) || KD(SDL_SCANCODE_D)) m &= ~0x0020u;   // Right
-  if (KD(SDL_SCANCODE_DOWN)  || KD(SDL_SCANCODE_S)) m &= ~0x0040u;   // Down
-  if (KD(SDL_SCANCODE_LEFT)  || KD(SDL_SCANCODE_A)) m &= ~0x0080u;   // Left
-  if (KD(SDL_SCANCODE_RETURN))                      m &= ~0x0008u;   // Start
-  if (KD(SDL_SCANCODE_RSHIFT)|| KD(SDL_SCANCODE_TAB)) m &= ~0x0001u; // Select
-  if (KD(SDL_SCANCODE_K)) m &= ~0x4000u;   // Cross
-  if (KD(SDL_SCANCODE_L)) m &= ~0x2000u;   // Circle
-  if (KD(SDL_SCANCODE_I)) m &= ~0x1000u;   // Triangle
-  if (KD(SDL_SCANCODE_J)) m &= ~0x8000u;   // Square
-  if (KD(SDL_SCANCODE_Q)) m &= ~0x0400u;   // L1
-  if (KD(SDL_SCANCODE_E)) m &= ~0x0800u;   // R1
-  #undef KD
+  if (!ks) {
+    return m;
+  }
+#define KD(sc) (ks[(sc)])
+  if (KD(SDL_SCANCODE_UP) || KD(SDL_SCANCODE_W)) {
+    m &= ~0x0010u; // Up
+  }
+  if (KD(SDL_SCANCODE_RIGHT) || KD(SDL_SCANCODE_D)) {
+    m &= ~0x0020u; // Right
+  }
+  if (KD(SDL_SCANCODE_DOWN) || KD(SDL_SCANCODE_S)) {
+    m &= ~0x0040u; // Down
+  }
+  if (KD(SDL_SCANCODE_LEFT) || KD(SDL_SCANCODE_A)) {
+    m &= ~0x0080u; // Left
+  }
+  if (KD(SDL_SCANCODE_RETURN)) {
+    m &= ~0x0008u; // Start
+  }
+  if (KD(SDL_SCANCODE_RSHIFT) || KD(SDL_SCANCODE_TAB)) {
+    m &= ~0x0001u; // Select
+  }
+  if (KD(SDL_SCANCODE_K)) {
+    m &= ~0x4000u; // Cross
+  }
+  if (KD(SDL_SCANCODE_L)) {
+    m &= ~0x2000u; // Circle
+  }
+  if (KD(SDL_SCANCODE_I)) {
+    m &= ~0x1000u; // Triangle
+  }
+  if (KD(SDL_SCANCODE_J)) {
+    m &= ~0x8000u; // Square
+  }
+  if (KD(SDL_SCANCODE_Q)) {
+    m &= ~0x0400u; // L1
+  }
+  if (KD(SDL_SCANCODE_E)) {
+    m &= ~0x0800u; // R1
+  }
+#undef KD
   return m;
 }
 
-}   // extern "C"
+} // extern "C"
 
-void sbs_rl_present(Game* game, const unsigned char* a, int wA, int hA, const unsigned char* b, int wB, int hB) {
+void sbs_rl_present(Game *game, const unsigned char *a, int wA, int hA, const unsigned char *b, int wB, int hB) {
   gpu_vk_present_sbs2(game, a, wA, hA, b, wB, hB);
 }

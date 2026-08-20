@@ -22,18 +22,24 @@
 
 static int g_checks = 0, g_fail = 0;
 
-static const char* name(PresentRebuild r) {
+static const char *name(PresentRebuild r) {
   switch (r) {
-    case PRESENT_REUSE_LAST:    return "REUSE_LAST";
-    case PRESENT_REBUILD_GEOM:  return "REBUILD_GEOM";
-    case PRESENT_REBUILD_VRAM:  return "REBUILD_VRAM";
+  case PRESENT_REUSE_LAST:
+    return "REUSE_LAST";
+  case PRESENT_REBUILD_GEOM:
+    return "REBUILD_GEOM";
+  case PRESENT_REBUILD_VRAM:
+    return "REBUILD_VRAM";
   }
   return "??";
 }
 
-static void check(const char* what, PresentRebuild got, PresentRebuild want) {
+static void check(const char *what, PresentRebuild got, PresentRebuild want) {
   g_checks++;
-  if (got == want) { printf("  ok   %-58s -> %s\n", what, name(got)); return; }
+  if (got == want) {
+    printf("  ok   %-58s -> %s\n", what, name(got));
+    return;
+  }
   g_fail++;
   printf("  FAIL %-58s -> %s (expected %s)\n", what, name(got), name(want));
 }
@@ -51,24 +57,23 @@ int main(void) {
 
   // Several writes between builds (a still is uploaded as many strips) still counts as one change.
   check("upload-only screen: many VRAM writes since the build",
-        present_rebuild_decision(true, true, 37, 0), PRESENT_REBUILD_VRAM);
+        present_rebuild_decision(true, true, 37, 0),
+        PRESENT_REBUILD_VRAM);
 
   // ---- 2. What afca817d bought, which the fix must NOT give back. ---------------------------------
   // The Spider-Man 30Hz case: the guest built no ordering table for this field AND touched no VRAM.
   // Nothing changed, so re-show — rebuilding here is what produced the measured 0.0% / 99.4% /
   // 0.0% alternation. This is the assertion that stops the fix from becoming "always rebuild".
   check("idle field: empty batch, no VRAM write since the build",
-        present_rebuild_decision(true, true, 12, 12), PRESENT_REUSE_LAST);
+        present_rebuild_decision(true, true, 12, 12),
+        PRESENT_REUSE_LAST);
 
   // The very first present of a run, before anything at all has happened.
-  check("cold start: empty batch, zero writes",
-        present_rebuild_decision(true, true, 0, 0), PRESENT_REUSE_LAST);
+  check("cold start: empty batch, zero writes", present_rebuild_decision(true, true, 0, 0), PRESENT_REUSE_LAST);
 
   // ---- 3. Geometry still dominates. ---------------------------------------------------------------
-  check("normal frame: primitives submitted",
-        present_rebuild_decision(false, true, 5, 5), PRESENT_REBUILD_GEOM);
-  check("primitives submitted AND VRAM written",
-        present_rebuild_decision(false, true, 6, 5), PRESENT_REBUILD_GEOM);
+  check("normal frame: primitives submitted", present_rebuild_decision(false, true, 5, 5), PRESENT_REBUILD_GEOM);
+  check("primitives submitted AND VRAM written", present_rebuild_decision(false, true, 6, 5), PRESENT_REBUILD_GEOM);
 
   // ---- 4. A NATIVE-PRODUCER port is untouched by this change, by construction. ---------------------
   // guestVramIsPicture = GameConfig::preserveVramBackdrop = 0 (Tomba!2). Its guest still writes VRAM
@@ -77,11 +82,12 @@ int main(void) {
   // With the flag clear the decision must be identical to afca817d's for EVERY write count, which is
   // what makes the blast radius on that port provably nil rather than merely untested.
   check("native producer, VRAM written: still reuse (Tomba!2 unchanged)",
-        present_rebuild_decision(true, /*guestVramIsPicture=*/false, 99, 0), PRESENT_REUSE_LAST);
-  check("native producer, no VRAM write: still reuse",
-        present_rebuild_decision(true, false, 4, 4), PRESENT_REUSE_LAST);
+        present_rebuild_decision(true, /*guestVramIsPicture=*/false, 99, 0),
+        PRESENT_REUSE_LAST);
+  check("native producer, no VRAM write: still reuse", present_rebuild_decision(true, false, 4, 4), PRESENT_REUSE_LAST);
   check("native producer, primitives submitted: rebuild as always",
-        present_rebuild_decision(false, false, 9, 0), PRESENT_REBUILD_GEOM);
+        present_rebuild_decision(false, false, 9, 0),
+        PRESENT_REBUILD_GEOM);
 
   // ---- 5. THE SOFTWARE RASTERIZER OWNS THE PICTURE (RenderPath::Psx, 2026-08-11). ------------------
   // MEASURED FAILURE THIS ENCODES: spyro on PSXPORT_RENDER_PATH=psx presented 0.0% non-black / 1 colour
@@ -98,8 +104,11 @@ int main(void) {
   // present, and there is no "the guest did nothing this field" optimisation to model — that
   // optimisation is about the VK composite.
   check("software raster: empty batch, no VRAM write, no geometry — still the picture",
-        present_rebuild_decision(/*batchEmpty=*/true, /*guestVramIsPicture=*/true, /*vramWrites=*/7,
-                                 /*atLastBuild=*/7, /*swRasterIsPicture=*/true),
+        present_rebuild_decision(/*batchEmpty=*/true,
+                                 /*guestVramIsPicture=*/true,
+                                 /*vramWrites=*/7,
+                                 /*atLastBuild=*/7,
+                                 /*swRasterIsPicture=*/true),
         PRESENT_REBUILD_VRAM);
   // It must not depend on preserveVramBackdrop: that flag answers "is the GUEST's VRAM the picture",
   // and this path's picture is in s_vram because WE rasterized it there.
@@ -109,9 +118,11 @@ int main(void) {
   // BOTH DIRECTIONS: with the new input false, every pre-existing decision is bit-identical. This is
   // the assertion that stops the fix from becoming "always rebuild" on the paths that were working.
   check("VK path unchanged: idle field still reuses",
-        present_rebuild_decision(true, true, 12, 12, /*swRasterIsPicture=*/false), PRESENT_REUSE_LAST);
+        present_rebuild_decision(true, true, 12, 12, /*swRasterIsPicture=*/false),
+        PRESENT_REUSE_LAST);
   check("VK path unchanged: geometry still dominates",
-        present_rebuild_decision(false, true, 5, 5, /*swRasterIsPicture=*/false), PRESENT_REBUILD_GEOM);
+        present_rebuild_decision(false, true, 5, 5, /*swRasterIsPicture=*/false),
+        PRESENT_REBUILD_GEOM);
 
   // ---- 6. The counter must not wedge. -------------------------------------------------------------
   // Compared with != rather than >, so a wrapped uint32 counter still reads as "changed" instead of
@@ -120,7 +131,6 @@ int main(void) {
         present_rebuild_decision(true, true, /*vramWrites=*/0u, /*atLastBuild=*/0xFFFFFFFFu),
         PRESENT_REBUILD_VRAM);
 
-  printf("%s: %d/%d checks passed (%d failed)\n",
-         g_fail ? "FAILED" : "PASSED", g_checks - g_fail, g_checks, g_fail);
+  printf("%s: %d/%d checks passed (%d failed)\n", g_fail ? "FAILED" : "PASSED", g_checks - g_fail, g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

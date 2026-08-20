@@ -30,8 +30,8 @@
 //
 // Hermetic: no SDL, no GPU, no window, no disc.
 
-#include "video_plan.h"
 #include "testutil.h"
+#include "video_plan.h"
 
 // The window's creation size, which is also the headless sink's default (gpu_vk.cpp
 // PRESENT_WINDOW_W/H). Spelled as literals here on purpose: a test that imported the constants it
@@ -42,41 +42,60 @@ static const int SINK_W = 960, SINK_H = 720;
 static const int NO_WINDOW_W = 320, NO_WINDOW_H = 240;
 
 // ---- the rule as shipped at 9890eaa8, kept ONLY as this suite's negative control -------------------
-[[maybe_unused]] static int legacy_ires(const VideoInputs& in, bool hasWindow) {
+[[maybe_unused]] static int legacy_ires(const VideoInputs &in, bool hasWindow) {
   const int winH = hasWindow ? in.sinkH : NO_WINDOW_H;
   const int cap = in.iresCap < 1 ? 1 : in.iresCap;
   int i = in.modsIres;
-  if (i == 0) { i = (int)((winH / 240.0) + 0.5); if (i < 1) i = 1; }
-  if (i < 1) i = 1;
-  if (i > cap) i = cap;
+  if (i == 0) {
+    i = (int)((winH / 240.0) + 0.5);
+    if (i < 1) {
+      i = 1;
+    }
+  }
+  if (i < 1) {
+    i = 1;
+  }
+  if (i > cap) {
+    i = cap;
+  }
   return i;
 }
-[[maybe_unused]] static int legacy_wide_native_w(const VideoInputs& in, bool hasWindow) {
+[[maybe_unused]] static int legacy_wide_native_w(const VideoInputs &in, bool hasWindow) {
   const int native = in.nativeW > 0 ? in.nativeW : 320;
   auto scaled = [&](int for320) {
-    if (native == 320) return for320;
+    if (native == 320) {
+      return for320;
+    }
     int w = (int)((double)for320 * native / 320.0 + 0.5);
     w &= ~1;
     return (in.vramW > 0 && w > in.vramW) ? in.vramW : w;
   };
   switch (in.aspect) {
-    case ASPECT_16_9: return scaled(428);
-    case ASPECT_21_9: return scaled(560);
-    case ASPECT_AUTO: {
-      const int ww = hasWindow ? in.sinkW : NO_WINDOW_W;
-      const int wh = hasWindow ? in.sinkH : NO_WINDOW_H;
-      int w = (int)(((double)native * 0.75 * ww) / wh + 0.5); w &= ~1;
-      if (w < native) w = native;
-      if (in.vramW > 0 && w > in.vramW) w = in.vramW;
-      return w;
+  case ASPECT_16_9:
+    return scaled(428);
+  case ASPECT_21_9:
+    return scaled(560);
+  case ASPECT_AUTO: {
+    const int ww = hasWindow ? in.sinkW : NO_WINDOW_W;
+    const int wh = hasWindow ? in.sinkH : NO_WINDOW_H;
+    int w = (int)(((double)native * 0.75 * ww) / wh + 0.5);
+    w &= ~1;
+    if (w < native) {
+      w = native;
     }
-    default: return native;
+    if (in.vramW > 0 && w > in.vramW) {
+      w = in.vramW;
+    }
+    return w;
+  }
+  default:
+    return native;
   }
 }
 
 // The units under test, with the window presented as a parameter the SHIPPED rule simply ignores —
 // that asymmetry IS the fix.
-static int ires_of(const VideoInputs& in, bool hasWindow) {
+static int ires_of(const VideoInputs &in, bool hasWindow) {
 #ifdef PSXPORT_TEST_LEGACY_VIDEO_PLAN
   return legacy_ires(in, hasWindow);
 #else
@@ -84,7 +103,7 @@ static int ires_of(const VideoInputs& in, bool hasWindow) {
   return video_ires_scale(in);
 #endif
 }
-static int wide_of(const VideoInputs& in, bool hasWindow) {
+static int wide_of(const VideoInputs &in, bool hasWindow) {
 #ifdef PSXPORT_TEST_LEGACY_VIDEO_PLAN
   return legacy_wide_native_w(in, hasWindow);
 #else
@@ -96,26 +115,33 @@ static int wide_of(const VideoInputs& in, bool hasWindow) {
 // ---- the input table -------------------------------------------------------------------------------
 // Every case is a configuration one of the three ports actually renders in: Tomba!2 is 320 wide,
 // spyro and spider1 are 512 wide, and each can be 4:3, 16:9, 21:9 or AUTO with a fixed or AUTO ires.
-struct Case { const char* name; VideoInputs in; };
+struct Case {
+  const char *name;
+  VideoInputs in;
+};
 static VideoInputs mk(int nativeW, int aspect, int modsIres, int cap) {
   VideoInputs v;
-  v.sinkW = SINK_W; v.sinkH = SINK_H;
-  v.nativeW = nativeW; v.aspect = aspect; v.modsIres = modsIres; v.iresCap = cap;
-  v.vramW = 1024;   // VRAM_W
+  v.sinkW = SINK_W;
+  v.sinkH = SINK_H;
+  v.nativeW = nativeW;
+  v.aspect = aspect;
+  v.modsIres = modsIres;
+  v.iresCap = cap;
+  v.vramW = 1024; // VRAM_W
   return v;
 }
 static const Case CASES[] = {
-  { "Tomba!2 320 4:3, ires AUTO",   mk(320, ASPECT_4_3,  0, 8) },
-  { "Tomba!2 320 16:9, ires AUTO",  mk(320, ASPECT_16_9, 0, 8) },
-  { "Tomba!2 320 AUTO, ires AUTO",  mk(320, ASPECT_AUTO, 0, 8) },
-  { "spyro 512 4:3, ires AUTO",     mk(512, ASPECT_4_3,  0, 8) },
-  { "spyro 512 16:9, ires AUTO",    mk(512, ASPECT_16_9, 0, 8) },
-  { "spyro 512 21:9, ires AUTO",    mk(512, ASPECT_21_9, 0, 8) },
-  { "spyro 512 AUTO, ires AUTO",    mk(512, ASPECT_AUTO, 0, 8) },
-  { "spider1 512 4:3, ires 1",      mk(512, ASPECT_4_3,  1, 8) },
-  { "spider1 512 16:9, ires 4",     mk(512, ASPECT_16_9, 4, 8) },
-  { "256-wide mode, ires AUTO",     mk(256, ASPECT_AUTO, 0, 8) },
-  { "640-wide mode, ires AUTO",     mk(640, ASPECT_16_9, 0, 8) },
+    {"Tomba!2 320 4:3, ires AUTO", mk(320, ASPECT_4_3, 0, 8)},
+    {"Tomba!2 320 16:9, ires AUTO", mk(320, ASPECT_16_9, 0, 8)},
+    {"Tomba!2 320 AUTO, ires AUTO", mk(320, ASPECT_AUTO, 0, 8)},
+    {"spyro 512 4:3, ires AUTO", mk(512, ASPECT_4_3, 0, 8)},
+    {"spyro 512 16:9, ires AUTO", mk(512, ASPECT_16_9, 0, 8)},
+    {"spyro 512 21:9, ires AUTO", mk(512, ASPECT_21_9, 0, 8)},
+    {"spyro 512 AUTO, ires AUTO", mk(512, ASPECT_AUTO, 0, 8)},
+    {"spider1 512 4:3, ires 1", mk(512, ASPECT_4_3, 1, 8)},
+    {"spider1 512 16:9, ires 4", mk(512, ASPECT_16_9, 4, 8)},
+    {"256-wide mode, ires AUTO", mk(256, ASPECT_AUTO, 0, 8)},
+    {"640-wide mode, ires AUTO", mk(640, ASPECT_16_9, 0, 8)},
 };
 static const int NCASES = (int)(sizeof CASES / sizeof CASES[0]);
 
@@ -128,7 +154,7 @@ static void test_ires_is_identical_with_and_without_a_window(void) {
     const int hdl = ires_of(CASES[i].in, /*hasWindow=*/false);
     CHECK_EQ(hdl, win);
   }
-  CHECK_EQ(NCASES, 11);   // the denominator: 11 configurations, both legs each
+  CHECK_EQ(NCASES, 11); // the denominator: 11 configurations, both legs each
 }
 
 static void test_widescreen_width_is_identical_with_and_without_a_window(void) {
@@ -153,10 +179,12 @@ static void test_a_960x720_sink_is_ires_3_in_both_legs(void) {
 // The decisions themselves, pinned so the move out of gpu_vk.cpp is an equivalence proof.
 // ────────────────────────────────────────────────────────────────────────────────────────────────────
 static void test_auto_ires_derives_from_the_sink_height(void) {
-  struct { int h, want; } t[] = { {240,1}, {360,2}, {480,2}, {600,3}, {720,3}, {1080,5}, {2160,9} };
+  struct {
+    int h, want;
+  } t[] = {{240, 1}, {360, 2}, {480, 2}, {600, 3}, {720, 3}, {1080, 5}, {2160, 9}};
   int checked = 0;
-  for (auto& e : t) {
-    VideoInputs v = mk(320, ASPECT_4_3, 0, 16);   // cap high enough not to mask the derivation
+  for (auto &e : t) {
+    VideoInputs v = mk(320, ASPECT_4_3, 0, 16); // cap high enough not to mask the derivation
     v.sinkH = e.h;
     CHECK_EQ(video_ires_scale(v), e.want);
     ++checked;
@@ -166,26 +194,29 @@ static void test_auto_ires_derives_from_the_sink_height(void) {
 
 static void test_a_fixed_ires_ignores_the_sink_entirely(void) {
   for (int fixed = 1; fixed <= 4; ++fixed) {
-    VideoInputs a = mk(320, ASPECT_4_3, fixed, 8); a.sinkH = 240;
-    VideoInputs b = mk(320, ASPECT_4_3, fixed, 8); b.sinkH = 2160;
+    VideoInputs a = mk(320, ASPECT_4_3, fixed, 8);
+    a.sinkH = 240;
+    VideoInputs b = mk(320, ASPECT_4_3, fixed, 8);
+    b.sinkH = 2160;
     CHECK_EQ(video_ires_scale(a), fixed);
     CHECK_EQ(video_ires_scale(b), fixed);
   }
 }
 
 static void test_the_memory_cap_clamps_both_auto_and_fixed(void) {
-  VideoInputs autoV = mk(320, ASPECT_4_3, 0, 2); autoV.sinkH = 2160;   // would want 9
+  VideoInputs autoV = mk(320, ASPECT_4_3, 0, 2);
+  autoV.sinkH = 2160; // would want 9
   CHECK_EQ(video_ires_scale(autoV), 2);
   VideoInputs fixedV = mk(320, ASPECT_4_3, 4, 2);
   CHECK_EQ(video_ires_scale(fixedV), 2);
-  VideoInputs zeroCap = mk(320, ASPECT_4_3, 4, 0);                     // a nonsense cap floors at 1
+  VideoInputs zeroCap = mk(320, ASPECT_4_3, 4, 0); // a nonsense cap floors at 1
   CHECK_EQ(video_ires_scale(zeroCap), 1);
 }
 
 // A 320-wide game must be bit-identical to the pre-existing widescreen targets — those numbers have
 // consumers tuned to them, and this refactor must not re-derive them.
 static void test_a_320_wide_game_keeps_its_historical_widescreen_targets(void) {
-  CHECK_EQ(video_wide_native_w(mk(320, ASPECT_4_3,  1, 8)), 320);
+  CHECK_EQ(video_wide_native_w(mk(320, ASPECT_4_3, 1, 8)), 320);
   CHECK_EQ(video_wide_native_w(mk(320, ASPECT_16_9, 1, 8)), 428);
   CHECK_EQ(video_wide_native_w(mk(320, ASPECT_21_9, 1, 8)), 560);
 }
@@ -193,10 +224,10 @@ static void test_a_320_wide_game_keeps_its_historical_widescreen_targets(void) {
 // The 512-wide case the scaling exists for: 16:9 must WIDEN a 512-wide frame, not crop it to 428.
 static void test_a_512_wide_game_widens_rather_than_crops(void) {
   const int w169 = video_wide_native_w(mk(512, ASPECT_16_9, 1, 8));
-  CHECK_EQ(w169, 684);            // round(428 * 512/320) = 685 -> forced even
+  CHECK_EQ(w169, 684); // round(428 * 512/320) = 685 -> forced even
   CHECK(w169 > 512);
   const int w219 = video_wide_native_w(mk(512, ASPECT_21_9, 1, 8));
-  CHECK_EQ(w219, 896);            // round(560 * 512/320) = 896
+  CHECK_EQ(w219, 896); // round(560 * 512/320) = 896
   CHECK(w219 > w169);
 }
 
@@ -205,18 +236,24 @@ static void test_aspect_auto_matches_the_sink_aspect(void) {
   CHECK_EQ(video_wide_native_w(mk(320, ASPECT_AUTO, 1, 8)), 320);
   CHECK_EQ(video_wide_native_w(mk(512, ASPECT_AUTO, 1, 8)), 512);
   // A 16:9 sink widens: 320 * 0.75 * 1920/1080 = 426.67 -> 426 (even).
-  VideoInputs wide = mk(320, ASPECT_AUTO, 1, 8); wide.sinkW = 1920; wide.sinkH = 1080;
+  VideoInputs wide = mk(320, ASPECT_AUTO, 1, 8);
+  wide.sinkW = 1920;
+  wide.sinkH = 1080;
   CHECK_EQ(video_wide_native_w(wide), 426);
   // A TALLER-than-4:3 sink never narrows below native — a narrower frame would crop the picture.
-  VideoInputs tall = mk(320, ASPECT_AUTO, 1, 8); tall.sinkW = 800; tall.sinkH = 1200;
+  VideoInputs tall = mk(320, ASPECT_AUTO, 1, 8);
+  tall.sinkW = 800;
+  tall.sinkH = 1200;
   CHECK_EQ(video_wide_native_w(tall), 320);
   // A missing sink degrades to native rather than dividing by zero.
-  VideoInputs none = mk(512, ASPECT_AUTO, 1, 8); none.sinkW = 0; none.sinkH = 0;
+  VideoInputs none = mk(512, ASPECT_AUTO, 1, 8);
+  none.sinkW = 0;
+  none.sinkH = 0;
   CHECK_EQ(video_wide_native_w(none), 512);
 }
 
 static void test_a_widened_frame_is_clamped_to_vram(void) {
-  VideoInputs v = mk(640, ASPECT_21_9, 1, 8);   // 560 * 640/320 = 1120 > VRAM_W
+  VideoInputs v = mk(640, ASPECT_21_9, 1, 8); // 560 * 640/320 = 1120 > VRAM_W
   CHECK_EQ(video_wide_native_w(v), 1024);
 }
 
@@ -227,9 +264,12 @@ static void test_a_widened_frame_is_clamped_to_vram(void) {
 static void test_the_legacy_rule_fails_the_property(void) {
   int diverged_ires = 0, diverged_wide = 0;
   for (int i = 0; i < NCASES; ++i) {
-    if (legacy_ires(CASES[i].in, true) != legacy_ires(CASES[i].in, false)) ++diverged_ires;
-    if (legacy_wide_native_w(CASES[i].in, true) != legacy_wide_native_w(CASES[i].in, false))
+    if (legacy_ires(CASES[i].in, true) != legacy_ires(CASES[i].in, false)) {
+      ++diverged_ires;
+    }
+    if (legacy_wide_native_w(CASES[i].in, true) != legacy_wide_native_w(CASES[i].in, false)) {
       ++diverged_wide;
+    }
   }
   // 9 of the 11 cases ask for AUTO ires; every one of them reads 3 windowed and 1 headless.
   CHECK_EQ(diverged_ires, 9);
@@ -237,9 +277,11 @@ static void test_the_legacy_rule_fails_the_property(void) {
   // — which is exactly why this defect survived: one of the two decisions is silently correct at the
   // default sink and only breaks on a non-4:3 window.
   CHECK_EQ(diverged_wide, 0);
-  VideoInputs wide = mk(320, ASPECT_AUTO, 1, 8); wide.sinkW = 1920; wide.sinkH = 1080;
+  VideoInputs wide = mk(320, ASPECT_AUTO, 1, 8);
+  wide.sinkW = 1920;
+  wide.sinkH = 1080;
   CHECK_EQ(legacy_wide_native_w(wide, true), 426);
-  CHECK_EQ(legacy_wide_native_w(wide, false), 320);   // headless silently loses the widescreen FOV
+  CHECK_EQ(legacy_wide_native_w(wide, false), 320); // headless silently loses the widescreen FOV
   CHECK(legacy_wide_native_w(wide, true) != legacy_wide_native_w(wide, false));
 }
 #endif

@@ -35,10 +35,10 @@ static void test_letterbox_fits_and_centres(void) {
 
 // The layout must never scale a pane up or down past its column: it fits INSIDE, always.
 static void test_letterbox_never_exceeds_the_box(void) {
-  const int boxes[][2] = { {640, 480}, {1280, 720}, {960, 540}, {300, 900}, {7, 5} };
-  const int srcs[][2]  = { {320, 240}, {368, 240}, {640, 480}, {512, 256}, {1, 1} };
+  const int boxes[][2] = {{640, 480}, {1280, 720}, {960, 540}, {300, 900}, {7, 5}};
+  const int srcs[][2] = {{320, 240}, {368, 240}, {640, 480}, {512, 256}, {1, 1}};
   int scanned = 0;
-  for (unsigned b = 0; b < sizeof boxes / sizeof boxes[0]; b++)
+  for (unsigned b = 0; b < sizeof boxes / sizeof boxes[0]; b++) {
     for (unsigned s = 0; s < sizeof srcs / sizeof srcs[0]; s++) {
       PaneRect r = pane_letterbox(srcs[s][0], srcs[s][1], boxes[b][0], boxes[b][1]);
       CHECK(r.x >= 0 && r.y >= 0);
@@ -46,7 +46,8 @@ static void test_letterbox_never_exceeds_the_box(void) {
       CHECK(r.y + r.h <= boxes[b][1]);
       scanned++;
     }
-  CHECK_EQ(scanned, 25);   // the denominator: 5 boxes x 5 sources, all checked
+  }
+  CHECK_EQ(scanned, 25); // the denominator: 5 boxes x 5 sources, all checked
 }
 
 // THE regression the stopgap was: core A's frame took the whole window. A belongs in the LEFT half.
@@ -55,7 +56,7 @@ static void test_pane_a_stays_in_the_left_half(void) {
   PaneRect a = sbs_pane_rect(SBS_PANE_A, 320, 240, winW, winH);
   CHECK(a.w > 0 && a.h > 0);
   CHECK(a.x >= 0);
-  CHECK(a.x + a.w <= winW / 2);        // fails outright under "present A fullscreen"
+  CHECK(a.x + a.w <= winW / 2); // fails outright under "present A fullscreen"
 }
 
 // ...and core B must actually be drawn, in the RIGHT half. Under the stopgap B had no rect at all.

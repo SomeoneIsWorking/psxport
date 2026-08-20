@@ -15,21 +15,21 @@ struct Core;
 //   wide_engine_ofx — the projection centre for that width (w/2), i.e. the GTE OFX to use
 // These were forward-declared inline at each call site, which is how three separate writers of the
 // projection centre grew without anything tying them together. One declaration site now.
-int gpu_vk_wide_engine(Core* core);
-int gpu_vk_wide_engine_w(Core* core);
-int gpu_vk_wide_engine_ofx(Core* core);
+int gpu_vk_wide_engine(Core *core);
+int gpu_vk_wide_engine_w(Core *core);
+int gpu_vk_wide_engine_ofx(Core *core);
 
 // per-prim depth / OT-submission order (set by the gp0 tee before each VK draw)
-void gpu_vk_set_order(Core* core, unsigned idx);
-void gpu_vk_set_order_2d(Core* core, unsigned idx);
-void gpu_vk_set_order_2d_n(Core* core, unsigned idx);
-void gpu_vk_set_order_2d_bg(Core* core, unsigned idx);
-void gpu_vk_set_order_2d_bg_n(Core* core, unsigned idx);
-void gpu_vk_set_vd(Core* core, const float* d3);
-void gpu_vk_set_vd_n(Core* core, const float* d3);
-void gpu_vk_set_xyf(Core* core, const float* xf, const float* yf);  // sub-pixel screen XY (#15 smoothing)
-void gpu_vk_set_order_override(Core* core, uint32_t seq);
-void gpu_vk_set_painter_material(Core* core, int gouraud, int dither);
+void gpu_vk_set_order(Core *core, unsigned idx);
+void gpu_vk_set_order_2d(Core *core, unsigned idx);
+void gpu_vk_set_order_2d_n(Core *core, unsigned idx);
+void gpu_vk_set_order_2d_bg(Core *core, unsigned idx);
+void gpu_vk_set_order_2d_bg_n(Core *core, unsigned idx);
+void gpu_vk_set_vd(Core *core, const float *d3);
+void gpu_vk_set_vd_n(Core *core, const float *d3);
+void gpu_vk_set_xyf(Core *core, const float *xf, const float *yf); // sub-pixel screen XY (#15 smoothing)
+void gpu_vk_set_order_override(Core *core, uint32_t seq);
+void gpu_vk_set_painter_material(Core *core, int gouraud, int dither);
 bool gpu_vk_order_bias_distinguishes(uint32_t seq);
 
 // Dynamic shadow mapping: capture one OPAQUE world-geometry triangle's VIEW-SPACE positions (v0/v1/v2,
@@ -37,44 +37,99 @@ bool gpu_vk_order_bias_distinguishes(uint32_t seq);
 // geometry stream. Rasterized from the directional light's view into a depth map, then sampled in the
 // deferred pass to darken occluded pixels. Called from the opaque world submitters (submit.cpp,
 // native_terrain.cpp). Cheap no-op when shadows are off. v0/v1/v2 point to 3 floats each.
-void gpu_vk_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2);
-int  gpu_vk_shadows_active(void);   // shadows toggle (g_mods.shadows && g_mods.light) — submitters gate capture
+void gpu_vk_shadow_push_tri(Core *core, const float *v0, const float *v1, const float *v2);
+int gpu_vk_shadows_active(void); // shadows toggle (g_mods.shadows && g_mods.light) — submitters gate capture
 
 // geometry tee + dirty-region mirror
-void gpu_vk_dirty(Core* core, int x, int y, int w, int h);
-void gpu_vk_semi_group(Core* core, int x0, int y0, int x1, int y1);
-void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
-                     int x2,int y2,int r2,int g2,int b2, int dax0,int day0,int dax1,int day1);
-void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs,
-                        const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                        int tpx, int tpy, int mode, int raw, int clutx, int cluty,
-                        int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1);
-void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs,
-                      const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                      int tpx, int tpy, int mode, int raw, int clutx, int cluty,
-                      int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend);
-bool gpu_vk_painter_begin(Core* core, uint32_t object);
-bool gpu_vk_painter_end(Core* core);
+void gpu_vk_dirty(Core *core, int x, int y, int w, int h);
+void gpu_vk_semi_group(Core *core, int x0, int y0, int x1, int y1);
+void gpu_vk_draw_tri(Core *core,
+                     int x0,
+                     int y0,
+                     int r0,
+                     int g0,
+                     int b0,
+                     int x1,
+                     int y1,
+                     int r1,
+                     int g1,
+                     int b1,
+                     int x2,
+                     int y2,
+                     int r2,
+                     int g2,
+                     int b2,
+                     int dax0,
+                     int day0,
+                     int dax1,
+                     int day1);
+void gpu_vk_draw_tritri(Core *core,
+                        const int *xs,
+                        const int *ys,
+                        const int *us,
+                        const int *vs,
+                        const unsigned char *rs,
+                        const unsigned char *gs,
+                        const unsigned char *bs,
+                        int tpx,
+                        int tpy,
+                        int mode,
+                        int raw,
+                        int clutx,
+                        int cluty,
+                        int twmx,
+                        int twmy,
+                        int twox,
+                        int twoy,
+                        int dax0,
+                        int day0,
+                        int dax1,
+                        int day1);
+void gpu_vk_draw_semi(Core *core,
+                      const int *xs,
+                      const int *ys,
+                      const int *us,
+                      const int *vs,
+                      const unsigned char *rs,
+                      const unsigned char *gs,
+                      const unsigned char *bs,
+                      int tpx,
+                      int tpy,
+                      int mode,
+                      int raw,
+                      int clutx,
+                      int cluty,
+                      int twmx,
+                      int twmy,
+                      int twox,
+                      int twoy,
+                      int dax0,
+                      int day0,
+                      int dax1,
+                      int day1,
+                      int blend);
+bool gpu_vk_painter_begin(Core *core, uint32_t object);
+bool gpu_vk_painter_end(Core *core);
 
 // present / per-frame / readback
-void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h);
+void gpu_vk_present(Core *core, const uint16_t *src, int sx, int sy, int w, int h);
 // Re-show the last presented frame without advancing or rebuilding anything (debug-server pause loop).
-void gpu_vk_repaint(Core* core);
+void gpu_vk_repaint(Core *core);
 // PC-native fullscreen IMAGE present: draw a plain RGBA8 image (iw x ih) FULLSCREEN, letterboxed to 4:3
 // (pillarbox, black bars), every rgb scaled by `fade` (0..1). Reusable, PSX-free (no VRAM/GP0/CLUT) —
 // uploads the host RGBA into its own texture and draws it. Windowed presents to the swapchain; headless
 // only uploads (no present) — verify headless via the caller's own CPU-side dump.
-void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade);
-void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);
+void gpu_vk_present_image(Core *core, const uint8_t *rgba, int iw, int ih, float fade);
+void gpu_vk_frame_end(Core *core, const uint16_t *svram, int frame);
 // preseqobj (per-object motion tracker): the present index this emit pass will dump, or -1 if no preseq
 // capture is armed. Lets RenderQueue::emitItem key each [preseqobj] line to its present frame.
-int gpu_vk_preseq_present_index(Core* core);
-void gpu_vk_shot(Core* core, const char* path);
+int gpu_vk_preseq_present_index(Core *core);
+void gpu_vk_shot(Core *core, const char *path);
 // Capture the PRESENTED PICTURE (s_present_img) rather than guest VRAM — the composite as the player
 // sees it: letterboxed, faded, source-selected, 24bpp-decoded. Works in BOTH legs, and is the only
 // capture in this framework that samples the present stage. See PSXPORT_PRESENT_SHOT_AT.
-void gpu_vk_present_shot(Core* core, const char* path);
-void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);
+void gpu_vk_present_shot(Core *core, const char *path);
+void gpu_vk_stats(Core *core, int *tri, int *tex, int *semi);
 
 // (Engine-owned screen fade is now the PC-native subsystem class ScreenFade at
 // game/render/screen_fade.h. The old gpu_set_fade / gpu_clear_fade / engine_fade_set entries
@@ -82,7 +137,7 @@ void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);
 
 // this-/last-frame native-geometry status (defined in gpu_native.cpp; read by the gpu_vk present path)
 // — now per-instance. A frame with neither 3D nor a full-screen 2D backdrop is a raw framebuffer (FMV).
-int gpu_seen3d_this_frame(Core* core);
-int gpu_had3d_last_frame(Core* core);
+int gpu_seen3d_this_frame(Core *core);
+int gpu_had3d_last_frame(Core *core);
 
 #endif // GPU_GPU_H

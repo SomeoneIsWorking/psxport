@@ -30,7 +30,7 @@ class Core;
 //
 // A port calls this from its own run-end path (the framework's frame loop is not entered by every
 // port, so there is no framework-side hook that reliably runs).
-void render_depth_coverage_report(Core* core, const char* why);
+void render_depth_coverage_report(Core *core, const char *why);
 
 class RenderStats {
 public:

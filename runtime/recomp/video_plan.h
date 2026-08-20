@@ -21,7 +21,7 @@
 //
 // Header-only and dependency-light on purpose (mods.h only, for the ASPECT_* enum) so a test can
 // include it with nothing linked.
-#include "mods.h"   // ASPECT_4_3 / _16_9 / _21_9 / _AUTO
+#include "mods.h" // ASPECT_4_3 / _16_9 / _21_9 / _AUTO
 
 // A PSX display field is 240 scanlines. This is the denominator the AUTO internal-resolution scale
 // is expressed against: ires=N means N render samples per PSX scanline, so "how many times does the
@@ -44,47 +44,64 @@ struct VideoInputs {
   int sinkH = 0;
   // The game's OWN 4:3 framebuffer width (GP1(0x08) horizontal resolution). <= 0 degrades to 320.
   int nativeW = 0;
-  int aspect = ASPECT_4_3;   // Mods::aspect
-  int modsIres = 1;          // Mods::ires — 0 = AUTO, 1..cap = fixed
-  int iresCap = 1;           // the memory-budget cap computed by the caller
-  int vramW = 0;             // hard clamp for a widened framebuffer (VRAM_W); <= 0 = no clamp
+  int aspect = ASPECT_4_3; // Mods::aspect
+  int modsIres = 1;        // Mods::ires — 0 = AUTO, 1..cap = fixed
+  int iresCap = 1;         // the memory-budget cap computed by the caller
+  int vramW = 0;           // hard clamp for a widened framebuffer (VRAM_W); <= 0 = no clamp
 };
 
 // The framebuffer width the engine renders at for the selected aspect.
-inline int video_wide_native_w(const VideoInputs& in) {
+inline int video_wide_native_w(const VideoInputs &in) {
   const int native = in.nativeW > 0 ? in.nativeW : WIDE_REFERENCE_NATIVE_W;
   const int vramClamp = in.vramW;
   auto scaled = [native, vramClamp](int for320) {
-    if (native == WIDE_REFERENCE_NATIVE_W) return for320;   // exact, for every existing consumer
+    if (native == WIDE_REFERENCE_NATIVE_W) {
+      return for320; // exact, for every existing consumer
+    }
     int w = (int)((double)for320 * native / (double)WIDE_REFERENCE_NATIVE_W + 0.5);
-    w &= ~1;                                                // even, as the AUTO path also requires
+    w &= ~1; // even, as the AUTO path also requires
     return (vramClamp > 0 && w > vramClamp) ? vramClamp : w;
   };
   switch (in.aspect) {
-    case ASPECT_16_9: return scaled(428);
-    case ASPECT_21_9: return scaled(560);
-    case ASPECT_AUTO: {
-      // Match the SINK's aspect — identically in both legs, and identically under SBS (each core
-      // renders its full-sink FOV into its own target; the SBS compositor letterboxes that into its
-      // half-sink pane, so there is no special case here).
-      if (in.sinkH <= 0 || in.sinkW <= 0) return native;    // no sink to match: stay 4:3, honestly
-      int w = (int)(((double)native * 0.75 * in.sinkW) / (double)in.sinkH + 0.5);
-      w &= ~1;
-      if (w < native) w = native;
-      if (vramClamp > 0 && w > vramClamp) w = vramClamp;
-      return w;
+  case ASPECT_16_9:
+    return scaled(428);
+  case ASPECT_21_9:
+    return scaled(560);
+  case ASPECT_AUTO: {
+    // Match the SINK's aspect — identically in both legs, and identically under SBS (each core
+    // renders its full-sink FOV into its own target; the SBS compositor letterboxes that into its
+    // half-sink pane, so there is no special case here).
+    if (in.sinkH <= 0 || in.sinkW <= 0) {
+      return native; // no sink to match: stay 4:3, honestly
     }
-    default: return native;
+    int w = (int)(((double)native * 0.75 * in.sinkW) / (double)in.sinkH + 0.5);
+    w &= ~1;
+    if (w < native) {
+      w = native;
+    }
+    if (vramClamp > 0 && w > vramClamp) {
+      w = vramClamp;
+    }
+    return w;
+  }
+  default:
+    return native;
   }
 }
 
 // The internal-resolution scale. AUTO derives it from the SINK's height, which is what the picture
 // is being composed for — not from a window, which may not exist.
-inline int video_ires_scale(const VideoInputs& in) {
+inline int video_ires_scale(const VideoInputs &in) {
   const int cap = in.iresCap < 1 ? 1 : in.iresCap;
   int i = in.modsIres;
-  if (i == 0) i = (int)(((double)in.sinkH / (double)PRESENT_NATIVE_LINES) + 0.5);
-  if (i < 1) i = 1;
-  if (i > cap) i = cap;
+  if (i == 0) {
+    i = (int)(((double)in.sinkH / (double)PRESENT_NATIVE_LINES) + 0.5);
+  }
+  if (i < 1) {
+    i = 1;
+  }
+  if (i > cap) {
+    i = cap;
+  }
   return i;
 }

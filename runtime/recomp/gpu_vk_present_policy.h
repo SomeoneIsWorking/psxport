@@ -79,8 +79,14 @@ static inline PresentRebuild present_rebuild_decision(bool batchEmpty,
                                                       uint32_t vramWrites,
                                                       uint32_t vramWritesAtLastBuild,
                                                       bool swRasterIsPicture = false) {
-  if (swRasterIsPicture) return PRESENT_REBUILD_VRAM;
-  if (!batchEmpty) return PRESENT_REBUILD_GEOM;
-  if (guestVramIsPicture && vramWrites != vramWritesAtLastBuild) return PRESENT_REBUILD_VRAM;
+  if (swRasterIsPicture) {
+    return PRESENT_REBUILD_VRAM;
+  }
+  if (!batchEmpty) {
+    return PRESENT_REBUILD_GEOM;
+  }
+  if (guestVramIsPicture && vramWrites != vramWritesAtLastBuild) {
+    return PRESENT_REBUILD_VRAM;
+  }
   return PRESENT_REUSE_LAST;
 }

@@ -43,7 +43,7 @@
 // ctor reads psxport_game_config()), no Game anywhere.
 static std::unique_ptr<Core> bare_core(void) {
   static const GameConfig cfg{};
-  static const GameHooks  hooks{};
+  static const GameHooks hooks{};
   psxport_install_game(&cfg, &hooks);
   return std::make_unique<Core>();
 }
@@ -51,7 +51,7 @@ static std::unique_ptr<Core> bare_core(void) {
 // (1) main RAM round-trips at all three widths, through the KSEG0 mirror the substrate uses.
 static void test_main_ram_roundtrip_without_game(void) {
   auto c = bare_core();
-  CHECK(c->game == nullptr);   // the precondition under test — not an incidental detail
+  CHECK(c->game == nullptr); // the precondition under test — not an incidental detail
 
   c->mem_w32(0x80010000u, 0xDEADBEEFu);
   CHECK_EQ(c->mem_r32(0x80010000u), 0xDEADBEEFu);
@@ -73,7 +73,7 @@ static void test_scratchpad_roundtrip_without_game(void) {
   CHECK(c->game == nullptr);
   c->mem_w32(0x1F800100u, 0xC0FFEE01u);
   CHECK_EQ(c->mem_r32(0x1F800100u), 0xC0FFEE01u);
-  c->mem_w32(0x9F800104u, 0xC0FFEE02u);            // KSEG1 form of scratchpad+4
+  c->mem_w32(0x9F800104u, 0xC0FFEE02u); // KSEG1 form of scratchpad+4
   CHECK_EQ(c->mem_r32(0x1F800104u), 0xC0FFEE02u);
 }
 
@@ -82,10 +82,10 @@ static void test_scratchpad_roundtrip_without_game(void) {
 static void test_store_is_still_attributed(void) {
   auto c = bare_core();
   CHECK(c->game == nullptr);
-  OtAttr& oa = c->rsub.otAttr;
+  OtAttr &oa = c->rsub.otAttr;
 
   const uint32_t base = 0x80020000u;
-  CHECK_EQ(oa.watchRegister(base, 16), 0);         // slot 0 of WATCH_SLOTS
+  CHECK_EQ(oa.watchRegister(base, 16), 0); // slot 0 of WATCH_SLOTS
   CHECK_EQ(oa.watchSlotCount(), 1);
 
   // Nothing has been written yet: the pooled record for a fresh region reads as "never written"

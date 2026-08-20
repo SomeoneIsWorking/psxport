@@ -14,40 +14,40 @@
 #define XA_RING_FRAMES 16384
 
 typedef struct XaState {
-  int      active;            // 1 while ReadS streaming with XA-ADPCM enabled  (was s_active)
-  uint32_t lba;               // next CHD sector to read                        (was s_lba)
-  uint8_t  mode;              // last Setmode                                   (was s_mode)
-  int      filter_set;        // a Setfilter was issued                         (was s_filter_set)
-  uint8_t  filter_file, filter_chan;  //                                       (was s_filter_*)
-  int      owns_slot2;        // native owner of voice task slot 2              (was s_owns_slot2)
-  uint32_t end_lba;           // clip end LBA (0 = open-ended)                  (was s_end_lba)
-  uint32_t clip_start;        // clip start LBA (idempotency + loop restart)    (was s_clip_start)
-  uint8_t  clip_chan;         // clip channel (idempotency)                     (was s_clip_chan)
-  int      loop;              // loop the clip when the head passes the end     (was s_loop)
-  int16_t  ring[XA_RING_FRAMES][2];   // decoded-sample ring (interleaved S16)  (was s_ring)
-  uint32_t wr;                // total frames written (monotonic)               (was s_wr)
-  double   rd;                // total frames read (monotonic, fractional)      (was s_rd)
-  int16_t  hist[2][2];        // XA IIR history, persists across sectors        (was s_hist)
-  int      src_freq;          //                                               (was s_src_freq, init 37800)
+  int active;                       // 1 while ReadS streaming with XA-ADPCM enabled  (was s_active)
+  uint32_t lba;                     // next CHD sector to read                        (was s_lba)
+  uint8_t mode;                     // last Setmode                                   (was s_mode)
+  int filter_set;                   // a Setfilter was issued                         (was s_filter_set)
+  uint8_t filter_file, filter_chan; //                                       (was s_filter_*)
+  int owns_slot2;                   // native owner of voice task slot 2              (was s_owns_slot2)
+  uint32_t end_lba;                 // clip end LBA (0 = open-ended)                  (was s_end_lba)
+  uint32_t clip_start;              // clip start LBA (idempotency + loop restart)    (was s_clip_start)
+  uint8_t clip_chan;                // clip channel (idempotency)                     (was s_clip_chan)
+  int loop;                         // loop the clip when the head passes the end     (was s_loop)
+  int16_t ring[XA_RING_FRAMES][2];  // decoded-sample ring (interleaved S16)  (was s_ring)
+  uint32_t wr;                      // total frames written (monotonic)               (was s_wr)
+  double rd;                        // total frames read (monotonic, fractional)      (was s_rd)
+  int16_t hist[2][2];               // XA IIR history, persists across sectors        (was s_hist)
+  int src_freq;                     //                                               (was s_src_freq, init 37800)
   // Census for the stream currently active, reset at start/play and reported at stop. Decode is
   // PULL-driven, so "no audio came out" has two very different causes that look identical from
   // outside: the SPU never pulled a sample (pulls == 0 — the mixer is not running, or CD audio is
   // gated off), or it pulled and the disc side produced nothing (pulls > 0, sectors == 0). These
   // need opposite fixes, so the stop line names both counts instead of leaving silence unexplained.
-  uint32_t pulls;             // CDC_GetCDAudioSample calls while this stream was active
-  uint32_t sectors;           // audio sectors actually decoded into the ring
-  struct DiscState* disc;     // Game-owned disc backend (wired by Game())
+  uint32_t pulls;         // CDC_GetCDAudioSample calls while this stream was active
+  uint32_t sectors;       // audio sectors actually decoded into the ring
+  struct DiscState *disc; // Game-owned disc backend (wired by Game())
 } XaState;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 // Initialize a fresh XaState to power-on defaults (src_freq=37800, everything else 0). Called by Game().
-void xa_state_init(XaState* s);
+void xa_state_init(XaState *s);
 // Bind `s` for the vendored Beetle spu.c sample pull ONLY: CDC_GetCDAudioSample(s32*) is a
 // context-free vendor callback, so it reads the bound instance (sanctioned vendor interop).
 // All xa_stream_* entry points take their XaState explicitly.
-void xa_bind_state(XaState* s);
+void xa_bind_state(XaState *s);
 #ifdef __cplusplus
 }
 #endif

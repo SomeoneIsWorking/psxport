@@ -21,10 +21,18 @@ public:
     mPrevious = current;
   }
 
-  uint16_t pressed() const { return mPressed; }
-  uint16_t released() const { return mReleased; }
-  bool pressed(uint16_t mask) const { return (mPressed & mask) != 0; }
-  bool released(uint16_t mask) const { return (mReleased & mask) != 0; }
+  uint16_t pressed() const {
+    return mPressed;
+  }
+  uint16_t released() const {
+    return mReleased;
+  }
+  bool pressed(uint16_t mask) const {
+    return (mPressed & mask) != 0;
+  }
+  bool released(uint16_t mask) const {
+    return (mReleased & mask) != 0;
+  }
 
 private:
   uint16_t mPrevious = 0xFFFFu;

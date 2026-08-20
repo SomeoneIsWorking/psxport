@@ -13,7 +13,9 @@
 
 // A viewport rectangle in window pixels. Mirrors the x/y/w/h of SDL_GPUViewport without depending on
 // SDL: this header is the layout RULE, the renderer only consumes it.
-struct PaneRect { int x, y, w, h; };
+struct PaneRect {
+  int x, y, w, h;
+};
 
 // The two SBS panes, by index. A is the port under test, B is the recomp oracle; A is on the LEFT
 // because that is the order every SBS diff dump, log line and PPM uses ("A=port left | B=oracle right").
@@ -24,9 +26,15 @@ enum { SBS_PANE_A = 0, SBS_PANE_B = 1, SBS_PANE_COUNT = 2 };
 // pane dimensions to >= 1 before it ever gets here).
 inline PaneRect pane_letterbox(int aw, int ah, int ow, int oh) {
   int dw, dh;
-  if ((long)ow * ah >= (long)oh * aw) { dh = oh; dw = oh * aw / ah; }   // box is wider than the image: bars left/right
-  else                                { dw = ow; dh = ow * ah / aw; }   // box is taller: bars top/bottom
-  return PaneRect{ (ow - dw) / 2, (oh - dh) / 2, dw, dh };
+  if ((long)ow * ah >= (long)oh * aw) {
+    dh = oh;
+    dw = oh * aw / ah;
+  } // box is wider than the image: bars left/right
+  else {
+    dw = ow;
+    dh = ow * ah / aw;
+  } // box is taller: bars top/bottom
+  return PaneRect{(ow - dw) / 2, (oh - dh) / 2, dw, dh};
 }
 
 // Where pane `pane` (SBS_PANE_A / SBS_PANE_B) of a srcW x srcH picture lands in a winW x winH window.

@@ -10,20 +10,20 @@
 // Decode-scratch state that was per-Fmv-instance (inbuf/outbuf) or per-member latches
 // (bs_hdr_logged/dconly) is function-static here: the runtime and the tools are both
 // single-threaded through these entry points.
+#include "fmv_decode.h"
+#include "c_subsys.h" // mdec_init/mdec_write/mdec_dma_in/mdec_dma_out/mdec_dma_out_rest/mdec_dma_can_write/MDEC_Run
+#include "cfg.h"
+#include <lucent/log.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
-#include "cfg.h"
-#include <lucent/log.h>
-#include "c_subsys.h"     // mdec_init/mdec_write/mdec_dma_in/mdec_dma_out/mdec_dma_out_rest/mdec_dma_can_write/MDEC_Run
-#include "fmv_decode.h"
 
-#define FMV_INBUF_WORDS   (128u * 1024u)   // MDEC input words
-#define FMV_OUTBUF_WORDS  (512u * 1024u)   // MDEC output words
-#define MDEC0         0x1F801820u   // data port
-#define MDEC1         0x1F801824u   // control/status port
+#define FMV_INBUF_WORDS (128u * 1024u)  // MDEC input words
+#define FMV_OUTBUF_WORDS (512u * 1024u) // MDEC output words
+#define MDEC0 0x1F801820u               // data port
+#define MDEC1 0x1F801824u               // control/status port
 
 // Pump the MDEC decode state machine. Beetle's MDEC only advances its decode loop when it
 // is given clock cycles (MDEC_Run); mdec_write/mdec_dma_in call MDEC_Run(0), which never
@@ -31,24 +31,30 @@
 // and produces NO output. With no real PSX scheduler in this native path we must pump a
 // large clock count ourselves after feeding a command/data so the block decode runs to
 // completion. (This is the native equivalent of the scheduler ticking the MDEC event.)
-static void mdec_pump(void) { MDEC_Run(0x40000000); }
+static void mdec_pump(void) {
+  MDEC_Run(0x40000000);
+}
 
 // ====================================================================================
 // Bit reader — PSX BS stores the stream as little-endian 16-bit units, but bits within
 // each 16-bit unit are consumed MSB-first.
 // ====================================================================================
 typedef struct {
-  const uint8_t* data;
-  uint32_t       size;     // bytes available
-  uint32_t       bytepos;
-  uint32_t       bitbuf;   // bits left-aligned, MSB next to consume
-  int            bitcnt;   // valid bits in bitbuf
+  const uint8_t *data;
+  uint32_t size; // bytes available
+  uint32_t bytepos;
+  uint32_t bitbuf; // bits left-aligned, MSB next to consume
+  int bitcnt;      // valid bits in bitbuf
 } BitReader;
 
-static void br_init(BitReader* b, const uint8_t* data, uint32_t size) {
-  b->data = data; b->size = size; b->bytepos = 0; b->bitbuf = 0; b->bitcnt = 0;
+static void br_init(BitReader *b, const uint8_t *data, uint32_t size) {
+  b->data = data;
+  b->size = size;
+  b->bytepos = 0;
+  b->bitbuf = 0;
+  b->bitcnt = 0;
 }
-static void br_refill(BitReader* b) {
+static void br_refill(BitReader *b) {
   while (b->bitcnt <= 16 && b->bytepos + 1 < b->size) {
     uint16_t w = (uint16_t)(b->data[b->bytepos] | (b->data[b->bytepos + 1] << 8));
     b->bytepos += 2;
@@ -56,14 +62,25 @@ static void br_refill(BitReader* b) {
     b->bitcnt += 16;
   }
 }
-static uint32_t br_peek(BitReader* b, int n) {
+static uint32_t br_peek(BitReader *b, int n) {
   br_refill(b);
-  if (n == 0) return 0;
+  if (n == 0) {
+    return 0;
+  }
   return (b->bitbuf >> (32 - n)) & (uint32_t)((1ull << n) - 1);
 }
-static void br_skip(BitReader* b, int n) { b->bitbuf <<= n; b->bitcnt -= n; }
-static uint32_t br_get(BitReader* b, int n) { uint32_t v = br_peek(b, n); br_skip(b, n); return v; }
-static int br_eof(BitReader* b) { return (b->bitcnt <= 0) && (b->bytepos + 1 >= b->size); }
+static void br_skip(BitReader *b, int n) {
+  b->bitbuf <<= n;
+  b->bitcnt -= n;
+}
+static uint32_t br_get(BitReader *b, int n) {
+  uint32_t v = br_peek(b, n);
+  br_skip(b, n);
+  return v;
+}
+static int br_eof(BitReader *b) {
+  return (b->bitcnt <= 0) && (b->bytepos + 1 >= b->size);
+}
 
 // ====================================================================================
 // PSX STR / MPEG-1 AC run/level VLC table — SINGLE source of truth.
@@ -82,143 +99,154 @@ static int br_eof(BitReader* b) { return (b->bitcnt <= 0) && (b->bytepos + 1 >= 
 // Correctness is PROVEN end-to-end: scratch/fmvdev/fmvtest.c decodes real LOGO.STR and
 // OP.STR frames; OP.STR frames yield ~10k-13k AC codes and render coherent video (verified).
 // ====================================================================================
-typedef struct { uint8_t len; uint16_t code; uint8_t run; uint8_t level; } VLC;
+typedef struct {
+  uint8_t len;
+  uint16_t code;
+  uint8_t run;
+  uint8_t level;
+} VLC;
 
 static const VLC s_vlc[] = {
-  // {len, code, run, level}  -- the canonical MPEG-1 / PSX STR AC VLC table.
-  { 2, 0x00003,  0,  1 },  // 11
-  { 3, 0x00003,  1,  1 },  // 011
-  { 4, 0x00004,  0,  2 },  // 0100
-  { 4, 0x00005,  2,  1 },  // 0101
-  { 5, 0x00005,  0,  3 },  // 00101
-  { 5, 0x00006,  4,  1 },  // 00110
-  { 5, 0x00007,  3,  1 },  // 00111
-  { 6, 0x00004,  7,  1 },  // 000100
-  { 6, 0x00005,  6,  1 },  // 000101
-  { 6, 0x00006,  1,  2 },  // 000110
-  { 6, 0x00007,  5,  1 },  // 000111
-  { 7, 0x00004,  2,  2 },  // 0000100
-  { 7, 0x00005,  9,  1 },  // 0000101
-  { 7, 0x00006,  0,  4 },  // 0000110
-  { 7, 0x00007,  8,  1 },  // 0000111
-  { 8, 0x00020, 13,  1 },  // 00100000
-  { 8, 0x00021,  0,  6 },  // 00100001
-  { 8, 0x00022, 12,  1 },  // 00100010
-  { 8, 0x00023, 11,  1 },  // 00100011
-  { 8, 0x00024,  3,  2 },  // 00100100
-  { 8, 0x00025,  1,  3 },  // 00100101
-  { 8, 0x00026,  0,  5 },  // 00100110
-  { 8, 0x00027, 10,  1 },  // 00100111
-  {10, 0x00008, 16,  1 },  // 0000001000
-  {10, 0x00009,  5,  2 },  // 0000001001
-  {10, 0x0000a,  0,  7 },  // 0000001010
-  {10, 0x0000b,  2,  3 },  // 0000001011
-  {10, 0x0000c,  1,  4 },  // 0000001100
-  {10, 0x0000d, 15,  1 },  // 0000001101
-  {10, 0x0000e, 14,  1 },  // 0000001110
-  {10, 0x0000f,  4,  2 },  // 0000001111
-  {12, 0x00010,  0, 11 },  // 000000010000
-  {12, 0x00011,  8,  2 },  // 000000010001
-  {12, 0x00012,  4,  3 },  // 000000010010
-  {12, 0x00013,  0, 10 },  // 000000010011
-  {12, 0x00014,  2,  4 },  // 000000010100
-  {12, 0x00015,  7,  2 },  // 000000010101
-  {12, 0x00016, 21,  1 },  // 000000010110
-  {12, 0x00017, 20,  1 },  // 000000010111
-  {12, 0x00018,  0,  9 },  // 000000011000
-  {12, 0x00019, 19,  1 },  // 000000011001
-  {12, 0x0001a, 18,  1 },  // 000000011010
-  {12, 0x0001b,  1,  5 },  // 000000011011
-  {12, 0x0001c,  3,  3 },  // 000000011100
-  {12, 0x0001d,  0,  8 },  // 000000011101
-  {12, 0x0001e,  6,  2 },  // 000000011110
-  {12, 0x0001f, 17,  1 },  // 000000011111
-  {13, 0x00010, 10,  2 },  // 0000000010000
-  {13, 0x00011,  9,  2 },  // 0000000010001
-  {13, 0x00012,  5,  3 },  // 0000000010010
-  {13, 0x00013,  3,  4 },  // 0000000010011
-  {13, 0x00014,  2,  5 },  // 0000000010100
-  {13, 0x00015,  1,  7 },  // 0000000010110
-  {13, 0x00016,  1,  6 },  // 0000000010111
-  {13, 0x00017,  0, 15 },  // 0000000010111
-  {13, 0x00018,  0, 14 },  // 0000000011000
-  {13, 0x00019,  0, 13 },  // 0000000011001
-  {13, 0x0001a,  0, 12 },  // 0000000011010
-  {13, 0x0001b, 26,  1 },  // 0000000011011
-  {13, 0x0001c, 25,  1 },  // 0000000011100
-  {13, 0x0001d, 24,  1 },  // 0000000011101
-  {13, 0x0001e, 23,  1 },  // 0000000011110
-  {13, 0x0001f, 22,  1 },  // 0000000011111
-  {14, 0x00010,  0, 31 },  // 00000000010000
-  {14, 0x00011,  0, 30 },  // 00000000010001
-  {14, 0x00012,  0, 29 },  // 00000000010010
-  {14, 0x00013,  0, 28 },  // 00000000010011
-  {14, 0x00014,  0, 27 },  // 00000000010100
-  {14, 0x00015,  0, 26 },  // 00000000010101
-  {14, 0x00016,  0, 25 },  // 00000000010110
-  {14, 0x00017,  0, 24 },  // 00000000010111
-  {14, 0x00018,  0, 23 },  // 00000000011000
-  {14, 0x00019,  0, 22 },  // 00000000011001
-  {14, 0x0001a,  0, 21 },  // 00000000011010
-  {14, 0x0001b,  0, 20 },  // 00000000011011
-  {14, 0x0001c,  0, 19 },  // 00000000011100
-  {14, 0x0001d,  0, 18 },  // 00000000011101
-  {14, 0x0001e,  0, 17 },  // 00000000011110
-  {14, 0x0001f,  0, 16 },  // 00000000011111
-  {15, 0x00010,  0, 40 },  // 000000000010000
-  {15, 0x00011,  0, 39 },  // 000000000010001
-  {15, 0x00012,  0, 38 },  // 000000000010010
-  {15, 0x00013,  0, 37 },  // 000000000010011
-  {15, 0x00014,  0, 36 },  // 000000000010100
-  {15, 0x00015,  0, 35 },  // 000000000010101
-  {15, 0x00016,  0, 34 },  // 000000000010110
-  {15, 0x00017,  0, 33 },  // 000000000010111
-  {15, 0x00018,  0, 32 },  // 000000000011000
-  {15, 0x00019,  1, 14 },  // 000000000011001
-  {15, 0x0001a,  1, 13 },  // 000000000011010
-  {15, 0x0001b,  1, 12 },  // 000000000011011
-  {15, 0x0001c,  1, 11 },  // 000000000011100
-  {15, 0x0001d,  1, 10 },  // 000000000011101
-  {15, 0x0001e,  1,  9 },  // 000000000011110
-  {15, 0x0001f,  1,  8 },  // 000000000011111
-  {16, 0x00010,  1, 18 },  // 0000000000010000
-  {16, 0x00011,  1, 17 },  // 0000000000010001
-  {16, 0x00012,  1, 16 },  // 0000000000010010
-  {16, 0x00013,  1, 15 },  // 0000000000010011
-  {16, 0x00014,  6,  3 },  // 0000000000010100
-  {16, 0x00015, 16,  2 },  // 0000000000010101
-  {16, 0x00016, 15,  2 },  // 0000000000010110
-  {16, 0x00017, 14,  2 },  // 0000000000010111
-  {16, 0x00018, 13,  2 },  // 0000000000011000
-  {16, 0x00019, 12,  2 },  // 0000000000011001
-  {16, 0x0001a, 11,  2 },  // 0000000000011010
-  {16, 0x0001b, 31,  1 },  // 0000000000011011
-  {16, 0x0001c, 30,  1 },  // 0000000000011100
-  {16, 0x0001d, 29,  1 },  // 0000000000011101
-  {16, 0x0001e, 28,  1 },  // 0000000000011110
-  {16, 0x0001f, 27,  1 },  // 0000000000011111
+    // {len, code, run, level}  -- the canonical MPEG-1 / PSX STR AC VLC table.
+    {2, 0x00003, 0, 1},   // 11
+    {3, 0x00003, 1, 1},   // 011
+    {4, 0x00004, 0, 2},   // 0100
+    {4, 0x00005, 2, 1},   // 0101
+    {5, 0x00005, 0, 3},   // 00101
+    {5, 0x00006, 4, 1},   // 00110
+    {5, 0x00007, 3, 1},   // 00111
+    {6, 0x00004, 7, 1},   // 000100
+    {6, 0x00005, 6, 1},   // 000101
+    {6, 0x00006, 1, 2},   // 000110
+    {6, 0x00007, 5, 1},   // 000111
+    {7, 0x00004, 2, 2},   // 0000100
+    {7, 0x00005, 9, 1},   // 0000101
+    {7, 0x00006, 0, 4},   // 0000110
+    {7, 0x00007, 8, 1},   // 0000111
+    {8, 0x00020, 13, 1},  // 00100000
+    {8, 0x00021, 0, 6},   // 00100001
+    {8, 0x00022, 12, 1},  // 00100010
+    {8, 0x00023, 11, 1},  // 00100011
+    {8, 0x00024, 3, 2},   // 00100100
+    {8, 0x00025, 1, 3},   // 00100101
+    {8, 0x00026, 0, 5},   // 00100110
+    {8, 0x00027, 10, 1},  // 00100111
+    {10, 0x00008, 16, 1}, // 0000001000
+    {10, 0x00009, 5, 2},  // 0000001001
+    {10, 0x0000a, 0, 7},  // 0000001010
+    {10, 0x0000b, 2, 3},  // 0000001011
+    {10, 0x0000c, 1, 4},  // 0000001100
+    {10, 0x0000d, 15, 1}, // 0000001101
+    {10, 0x0000e, 14, 1}, // 0000001110
+    {10, 0x0000f, 4, 2},  // 0000001111
+    {12, 0x00010, 0, 11}, // 000000010000
+    {12, 0x00011, 8, 2},  // 000000010001
+    {12, 0x00012, 4, 3},  // 000000010010
+    {12, 0x00013, 0, 10}, // 000000010011
+    {12, 0x00014, 2, 4},  // 000000010100
+    {12, 0x00015, 7, 2},  // 000000010101
+    {12, 0x00016, 21, 1}, // 000000010110
+    {12, 0x00017, 20, 1}, // 000000010111
+    {12, 0x00018, 0, 9},  // 000000011000
+    {12, 0x00019, 19, 1}, // 000000011001
+    {12, 0x0001a, 18, 1}, // 000000011010
+    {12, 0x0001b, 1, 5},  // 000000011011
+    {12, 0x0001c, 3, 3},  // 000000011100
+    {12, 0x0001d, 0, 8},  // 000000011101
+    {12, 0x0001e, 6, 2},  // 000000011110
+    {12, 0x0001f, 17, 1}, // 000000011111
+    {13, 0x00010, 10, 2}, // 0000000010000
+    {13, 0x00011, 9, 2},  // 0000000010001
+    {13, 0x00012, 5, 3},  // 0000000010010
+    {13, 0x00013, 3, 4},  // 0000000010011
+    {13, 0x00014, 2, 5},  // 0000000010100
+    {13, 0x00015, 1, 7},  // 0000000010110
+    {13, 0x00016, 1, 6},  // 0000000010111
+    {13, 0x00017, 0, 15}, // 0000000010111
+    {13, 0x00018, 0, 14}, // 0000000011000
+    {13, 0x00019, 0, 13}, // 0000000011001
+    {13, 0x0001a, 0, 12}, // 0000000011010
+    {13, 0x0001b, 26, 1}, // 0000000011011
+    {13, 0x0001c, 25, 1}, // 0000000011100
+    {13, 0x0001d, 24, 1}, // 0000000011101
+    {13, 0x0001e, 23, 1}, // 0000000011110
+    {13, 0x0001f, 22, 1}, // 0000000011111
+    {14, 0x00010, 0, 31}, // 00000000010000
+    {14, 0x00011, 0, 30}, // 00000000010001
+    {14, 0x00012, 0, 29}, // 00000000010010
+    {14, 0x00013, 0, 28}, // 00000000010011
+    {14, 0x00014, 0, 27}, // 00000000010100
+    {14, 0x00015, 0, 26}, // 00000000010101
+    {14, 0x00016, 0, 25}, // 00000000010110
+    {14, 0x00017, 0, 24}, // 00000000010111
+    {14, 0x00018, 0, 23}, // 00000000011000
+    {14, 0x00019, 0, 22}, // 00000000011001
+    {14, 0x0001a, 0, 21}, // 00000000011010
+    {14, 0x0001b, 0, 20}, // 00000000011011
+    {14, 0x0001c, 0, 19}, // 00000000011100
+    {14, 0x0001d, 0, 18}, // 00000000011101
+    {14, 0x0001e, 0, 17}, // 00000000011110
+    {14, 0x0001f, 0, 16}, // 00000000011111
+    {15, 0x00010, 0, 40}, // 000000000010000
+    {15, 0x00011, 0, 39}, // 000000000010001
+    {15, 0x00012, 0, 38}, // 000000000010010
+    {15, 0x00013, 0, 37}, // 000000000010011
+    {15, 0x00014, 0, 36}, // 000000000010100
+    {15, 0x00015, 0, 35}, // 000000000010101
+    {15, 0x00016, 0, 34}, // 000000000010110
+    {15, 0x00017, 0, 33}, // 000000000010111
+    {15, 0x00018, 0, 32}, // 000000000011000
+    {15, 0x00019, 1, 14}, // 000000000011001
+    {15, 0x0001a, 1, 13}, // 000000000011010
+    {15, 0x0001b, 1, 12}, // 000000000011011
+    {15, 0x0001c, 1, 11}, // 000000000011100
+    {15, 0x0001d, 1, 10}, // 000000000011101
+    {15, 0x0001e, 1, 9},  // 000000000011110
+    {15, 0x0001f, 1, 8},  // 000000000011111
+    {16, 0x00010, 1, 18}, // 0000000000010000
+    {16, 0x00011, 1, 17}, // 0000000000010001
+    {16, 0x00012, 1, 16}, // 0000000000010010
+    {16, 0x00013, 1, 15}, // 0000000000010011
+    {16, 0x00014, 6, 3},  // 0000000000010100
+    {16, 0x00015, 16, 2}, // 0000000000010101
+    {16, 0x00016, 15, 2}, // 0000000000010110
+    {16, 0x00017, 14, 2}, // 0000000000010111
+    {16, 0x00018, 13, 2}, // 0000000000011000
+    {16, 0x00019, 12, 2}, // 0000000000011001
+    {16, 0x0001a, 11, 2}, // 0000000000011010
+    {16, 0x0001b, 31, 1}, // 0000000000011011
+    {16, 0x0001c, 30, 1}, // 0000000000011100
+    {16, 0x0001d, 29, 1}, // 0000000000011101
+    {16, 0x0001e, 28, 1}, // 0000000000011110
+    {16, 0x0001f, 27, 1}, // 0000000000011111
 };
 
 // Decode one AC code from the bitstream.
 // Returns: 0 = EOB, 1 = (run,level) pair set, -1 = bad code.
-static int bs_decode_ac(BitReader* b, int* run, int* level) {
+static int bs_decode_ac(BitReader *b, int *run, int *level) {
   // EOB = "10"
-  if (br_peek(b, 2) == 0x2) { br_skip(b, 2); return 0; }
+  if (br_peek(b, 2) == 0x2) {
+    br_skip(b, 2);
+    return 0;
+  }
   // ESCAPE = "000001"  (6 zero-ish bits: 000001)
   if (br_peek(b, 6) == 0x1) {
     br_skip(b, 6);
     int r = (int)br_get(b, 6);
     int l = (int)br_get(b, 10);
-    if (l & 0x200) l -= 0x400;
-    *run = r; *level = l;
+    if (l & 0x200) {
+      l -= 0x400;
+    }
+    *run = r;
+    *level = l;
     return 1;
   }
   for (int n = 1; n <= 16; n++) {
     uint32_t v = br_peek(b, n);
-    for (unsigned i = 0; i < sizeof(s_vlc)/sizeof(s_vlc[0]); i++) {
+    for (unsigned i = 0; i < sizeof(s_vlc) / sizeof(s_vlc[0]); i++) {
       if (s_vlc[i].len == n && s_vlc[i].code == v) {
         br_skip(b, n);
-        int s = (int)br_get(b, 1);   // sign bit: 0 = positive, 1 = negative (MPEG-1 convention)
+        int s = (int)br_get(b, 1); // sign bit: 0 = positive, 1 = negative (MPEG-1 convention)
         int lv = s_vlc[i].level;
         *run = s_vlc[i].run;
         *level = s ? -lv : lv;
@@ -231,20 +259,30 @@ static int bs_decode_ac(BitReader* b, int* run, int* level) {
 
 // Decode an entire BS frame into the MDEC run-level code stream.
 // Returns number of 16-bit codes written, or negative on error.
-int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
-                    int width, int height, uint16_t* codes, int max_codes) {
-  static int bs_hdr_logged = 0;            // [fmv] BS-header debug print latch (was an Fmv member)
-  static int dconly = -1;                  // PSXPORT_FMV_DCONLY cache (-1 = unread)
-  if (payload_size < 8) return -1;
+int bs_decode_frame(
+    const uint8_t *payload, uint32_t payload_size, int width, int height, uint16_t *codes, int max_codes) {
+  static int bs_hdr_logged = 0; // [fmv] BS-header debug print latch (was an Fmv member)
+  static int dconly = -1;       // PSXPORT_FMV_DCONLY cache (-1 = unread)
+  if (payload_size < 8) {
+    return -1;
+  }
   uint16_t bs_q = (uint16_t)(payload[4] | (payload[5] << 8));
   int qscale = bs_q & 0x3F;
-  if (qscale == 0) qscale = 1;
+  if (qscale == 0) {
+    qscale = 1;
+  }
   if (lucent::channel_on("fmv")) {
     uint16_t magic = (uint16_t)(payload[2] | (payload[3] << 8));
-    uint16_t ver   = (uint16_t)(payload[6] | (payload[7] << 8));
-    if (!bs_hdr_logged) { bs_hdr_logged = 1;
-      lucent::debug("fmv", "BS hdr: nwords={} magic={:04x} qscale={} version={}",
-                    (unsigned)(payload[0] | (payload[1] << 8)), magic, qscale, ver); }
+    uint16_t ver = (uint16_t)(payload[6] | (payload[7] << 8));
+    if (!bs_hdr_logged) {
+      bs_hdr_logged = 1;
+      lucent::debug("fmv",
+                    "BS hdr: nwords={} magic={:04x} qscale={} version={}",
+                    (unsigned)(payload[0] | (payload[1] << 8)),
+                    magic,
+                    qscale,
+                    ver);
+    }
   }
 
   BitReader br;
@@ -256,29 +294,44 @@ int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
 
   int out = 0;
   for (int blk = 0; blk < nblocks; blk++) {
-    if (br_eof(&br)) break;
+    if (br_eof(&br)) {
+      break;
+    }
     // BS v2: each block begins with a fixed 10-bit DC coefficient (signed), then run/level
     // AC VLC pairs until EOB. The MDEC first-word format carries QScale in bits[15:10] and
     // the DC coefficient in bits[9:0]. (Verified against LOGO.STR: the leading bits parse as
     // 10-bit DC values followed by "10" EOB on the fade-in frames.)
     int dc = (int)br_get(&br, 10);
-    if (dc & 0x200) dc -= 0x400;
-    if (out >= max_codes) return out;
+    if (dc & 0x200) {
+      dc -= 0x400;
+    }
+    if (out >= max_codes) {
+      return out;
+    }
     codes[out++] = (uint16_t)(((qscale & 0x3F) << 10) | (dc & 0x3FF));
 
-    if (dconly < 0) dconly = cfg_on("PSXPORT_FMV_DCONLY") ? 1 : 0;
+    if (dconly < 0) {
+      dconly = cfg_on("PSXPORT_FMV_DCONLY") ? 1 : 0;
+    }
     for (;;) {
       int run, level;
       int r = bs_decode_ac(&br, &run, &level);
-      if (r == 0) {                       // EOB
-        if (out >= max_codes) return out;
+      if (r == 0) { // EOB
+        if (out >= max_codes) {
+          return out;
+        }
         codes[out++] = 0xFE00;
         break;
       }
-      if (r < 0) return (out > 0) ? out : -2;
-      if (out >= max_codes) return out;
-      if (!dconly)                        // DCONLY: consume AC bits (keep sync) but drop the code
+      if (r < 0) {
+        return (out > 0) ? out : -2;
+      }
+      if (out >= max_codes) {
+        return out;
+      }
+      if (!dconly) { // DCONLY: consume AC bits (keep sync) but drop the code
         codes[out++] = (uint16_t)(((run & 0x3F) << 10) | (level & 0x3FF));
+      }
     }
   }
   return out;
@@ -304,14 +357,9 @@ int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
 // PSX/MPEG-1 standard intra quantization matrix, in zig-zag-natural (row-major) order.
 // This is the canonical DecDCTReset default; identical for luma and chroma here.
 static const uint8_t s_quant_default[64] = {
-   2, 16, 19, 22, 26, 27, 29, 34,
-  16, 16, 22, 24, 27, 29, 34, 37,
-  19, 22, 26, 27, 29, 34, 34, 38,
-  22, 22, 26, 27, 29, 34, 37, 40,
-  22, 26, 27, 29, 32, 35, 40, 48,
-  26, 27, 29, 32, 35, 40, 48, 58,
-  26, 27, 29, 34, 38, 46, 56, 69,
-  27, 29, 35, 38, 46, 56, 69, 83,
+    2,  16, 19, 22, 26, 27, 29, 34, 16, 16, 22, 24, 27, 29, 34, 37, 19, 22, 26, 27, 29, 34,
+    34, 38, 22, 22, 26, 27, 29, 34, 37, 40, 22, 26, 27, 29, 32, 35, 40, 48, 26, 27, 29, 32,
+    35, 40, 48, 58, 26, 27, 29, 34, 38, 46, 56, 69, 27, 29, 35, 38, 46, 56, 69, 83,
 };
 
 // mednafen's MDEC ZigZag scan (mdec.c). The quant table is consumed in SCAN order
@@ -321,10 +369,10 @@ static const uint8_t s_quant_default[64] = {
 // per-frequency weight to every AC coefficient (DC at index 0 is unaffected: ZigZag[0]==0) —
 // the cause of the "DC clean, AC banded" artifact. Reorder it here.
 static const uint8_t MDEC_ZIGZAG[64] = {
-  0x00,0x08,0x01,0x02,0x09,0x10,0x18,0x11,0x0a,0x03,0x04,0x0b,0x12,0x19,0x20,0x28,
-  0x21,0x1a,0x13,0x0c,0x05,0x06,0x0d,0x14,0x1b,0x22,0x29,0x30,0x38,0x31,0x2a,0x23,
-  0x1c,0x15,0x0e,0x07,0x0f,0x16,0x1d,0x24,0x2b,0x32,0x39,0x3a,0x33,0x2c,0x25,0x1e,
-  0x17,0x1f,0x26,0x2d,0x34,0x3b,0x3c,0x35,0x2e,0x27,0x2f,0x36,0x3d,0x3e,0x37,0x3f,
+    0x00, 0x08, 0x01, 0x02, 0x09, 0x10, 0x18, 0x11, 0x0a, 0x03, 0x04, 0x0b, 0x12, 0x19, 0x20, 0x28,
+    0x21, 0x1a, 0x13, 0x0c, 0x05, 0x06, 0x0d, 0x14, 0x1b, 0x22, 0x29, 0x30, 0x38, 0x31, 0x2a, 0x23,
+    0x1c, 0x15, 0x0e, 0x07, 0x0f, 0x16, 0x1d, 0x24, 0x2b, 0x32, 0x39, 0x3a, 0x33, 0x2c, 0x25, 0x1e,
+    0x17, 0x1f, 0x26, 0x2d, 0x34, 0x3b, 0x3c, 0x35, 0x2e, 0x27, 0x2f, 0x36, 0x3d, 0x3e, 0x37, 0x3f,
 };
 
 static void mdec_upload_tables(void) {
@@ -332,17 +380,19 @@ static void mdec_upload_tables(void) {
   // Pack 4 bytes per 32-bit word; 64 luma + 64 chroma bytes = 32 words. Reorder raster ->
   // zigzag so QMatrix[CoeffIndex] (scan order) holds the right per-frequency weight.
   uint8_t qz[64];
-  for (int p = 0; p < 64; p++) qz[p] = s_quant_default[MDEC_ZIGZAG[p]];
-  uint32_t qcmd = (2u << 29) | 1u;     // (Command>>29)==2, bit0 set => 0x10+0x10 words
+  for (int p = 0; p < 64; p++) {
+    qz[p] = s_quant_default[MDEC_ZIGZAG[p]];
+  }
+  uint32_t qcmd = (2u << 29) | 1u; // (Command>>29)==2, bit0 set => 0x10+0x10 words
   mdec_write(MDEC0, qcmd);
   uint32_t qwords[32];
-  for (int i = 0; i < 16; i++) {       // luma 64 bytes (zigzag order)
-    qwords[i] = (uint32_t)qz[i*4+0]
-              | ((uint32_t)qz[i*4+1] << 8)
-              | ((uint32_t)qz[i*4+2] << 16)
-              | ((uint32_t)qz[i*4+3] << 24);
+  for (int i = 0; i < 16; i++) { // luma 64 bytes (zigzag order)
+    qwords[i] = (uint32_t)qz[i * 4 + 0] | ((uint32_t)qz[i * 4 + 1] << 8) | ((uint32_t)qz[i * 4 + 2] << 16) |
+                ((uint32_t)qz[i * 4 + 3] << 24);
   }
-  for (int i = 0; i < 16; i++) qwords[16+i] = qwords[i];   // chroma = same default
+  for (int i = 0; i < 16; i++) {
+    qwords[16 + i] = qwords[i]; // chroma = same default
+  }
   mdec_dma_in(qwords, 32);
   mdec_pump();
 
@@ -368,14 +418,19 @@ static void mdec_upload_tables(void) {
       // 0x7FFF; nearly every entry clamped, giving the wrong IDCT gain (washed-out flat
       // blocks + banding). 2^15 is the correct, non-saturating scale.
       int iv = (int)lround(v * 32768.0);
-      if (iv >  32767) iv =  32767;
-      if (iv < -32768) iv = -32768;
+      if (iv > 32767) {
+        iv = 32767;
+      }
+      if (iv < -32768) {
+        iv = -32768;
+      }
       idct[u * 8 + x] = (int16_t)iv;
     }
   }
   uint32_t iwords[32];
-  for (int i = 0; i < 32; i++)
-    iwords[i] = (uint16_t)idct[i*2] | ((uint32_t)(uint16_t)idct[i*2+1] << 16);
+  for (int i = 0; i < 32; i++) {
+    iwords[i] = (uint16_t)idct[i * 2] | ((uint32_t)(uint16_t)idct[i * 2 + 1] << 16);
+  }
   mdec_dma_in(iwords, 32);
   mdec_pump();
 }
@@ -383,21 +438,24 @@ static void mdec_upload_tables(void) {
 // ====================================================================================
 // MDEC feed (16bpp) + RGB555 extraction
 // ====================================================================================
-int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
-                          int width, int height, uint16_t* pixels) {
-  static uint32_t* inbuf  = 0;    // MDEC input words (was an Fmv member; lazily allocated)
-  static uint32_t* outbuf = 0;    // MDEC output words (was an Fmv member; lazily allocated)
+int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int height, uint16_t *pixels) {
+  static uint32_t *inbuf = 0;                 // MDEC input words (was an Fmv member; lazily allocated)
+  static uint32_t *outbuf = 0;                // MDEC output words (was an Fmv member; lazily allocated)
   mdec_write(MDEC1, 0x80000000);              // reset
   mdec_write(MDEC1, (1u << 30) | (1u << 29)); // enable DMA in + out
-  mdec_upload_tables();                        // load quant + IDCT (else output is black)
+  mdec_upload_tables();                       // load quant + IDCT (else output is black)
 
   int nwords = (ncodes + 1) / 2;
   // Decode-macroblock command: [31:29]=1, [28:27]=depth(16bpp=3), [15:0]=param word count.
   uint32_t cmd = 0x30000000u | (0x3u << 27) | (uint32_t)(nwords & 0xFFFF);
   mdec_write(MDEC0, cmd);
 
-  if (!inbuf) inbuf = (uint32_t*)malloc(FMV_INBUF_WORDS * 4);
-  if (nwords > (int)FMV_INBUF_WORDS) return -1;
+  if (!inbuf) {
+    inbuf = (uint32_t *)malloc(FMV_INBUF_WORDS * 4);
+  }
+  if (nwords > (int)FMV_INBUF_WORDS) {
+    return -1;
+  }
   for (int i = 0; i < nwords; i++) {
     uint16_t lo = codes[i * 2];
     uint16_t hi = (i * 2 + 1 < ncodes) ? codes[i * 2 + 1] : 0xFE00;
@@ -409,9 +467,13 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   // self-contained 16x16 RASTER block; it does NOT tile the blocks across the frame width
   // (on real PSX the game DMAs each macroblock to its own computed address). So we drain
   // the whole stream linearly, then TILE each 16x16 block into the width x height frame.
-  int total_words = (width * height) / 2;     // 16bpp: 2 px/word
-  if (!outbuf) outbuf = (uint32_t*)malloc(FMV_OUTBUF_WORDS * 4);
-  if (total_words > (int)FMV_OUTBUF_WORDS) return -2;
+  int total_words = (width * height) / 2; // 16bpp: 2 px/word
+  if (!outbuf) {
+    outbuf = (uint32_t *)malloc(FMV_OUTBUF_WORDS * 4);
+  }
+  if (total_words > (int)FMV_OUTBUF_WORDS) {
+    return -2;
+  }
   memset(outbuf, 0, (size_t)total_words * 4);
 
   // CRITICAL: the MDEC InFIFO is small (~0x20 words). Pushing the whole frame at once would
@@ -425,7 +487,10 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
     // words are free, so a 0x10-word chunk is always safe (never dropped). Pump after each
     // chunk so the decoder drains the InFIFO before we top it up again.
     if (in_pos < nwords && mdec_dma_can_write()) {
-      int chunk = nwords - in_pos; if (chunk > 0x10) chunk = 0x10;
+      int chunk = nwords - in_pos;
+      if (chunk > 0x10) {
+        chunk = 0x10;
+      }
       // mdec_dma_in returns the count actually written: it bails early when the decode parks
       // output-blocked, so advancing by `chunk` would skip the deferred words permanently.
       int fed = mdec_dma_in(&inbuf[in_pos], chunk);
@@ -435,11 +500,15 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
     int n = (got < total_words) ? mdec_dma_out(outbuf + got, total_words - got) : 0;
     got += n;
     if (in_pos >= nwords && n == 0) {
-      if (++stall >= 4) break;   // input drained + several empty output pumps => done
+      if (++stall >= 4) {
+        break; // input drained + several empty output pumps => done
+      }
     } else {
       stall = 0;
     }
-    if (got >= total_words && in_pos >= nwords) break;
+    if (got >= total_words && in_pos >= nwords) {
+      break;
+    }
   }
 
   // Tail flush: mdec_dma_out only drains in >=0x20-word bursts (DMACanRead gate), so a final
@@ -452,17 +521,17 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   int got_before_tail = got;
   int tail = mdec_dma_out_rest(outbuf + got, total_words - got);
   got += tail;
-  lucent::debug("fmv", "  drain: {} scattered + {} tail-scatter = {}/{} total",
-                got_before_tail, tail, got, total_words);
+  lucent::debug(
+      "fmv", "  drain: {} scattered + {} tail-scatter = {}/{} total", got_before_tail, tail, got, total_words);
 
   // Tile 16x16 macroblocks (each 128 words = 256 px, raster within the block) into the frame.
   memset(pixels, 0, (size_t)width * height * 2);
-  const uint16_t* mb = (const uint16_t*)outbuf;  // 2 px per outbuf word
+  const uint16_t *mb = (const uint16_t *)outbuf; // 2 px per outbuf word
   int mbx = (width + 15) / 16;
   int mby = (height + 15) / 16;
-  int produced = got;                            // words actually drained
-  lucent::debug("fmv", "  drained {}/{} words ({} macroblocks)", got, total_words, got/128);
-  int blocks_avail = produced / 128;             // 128 (32-bit) words per 16x16 MB
+  int produced = got; // words actually drained
+  lucent::debug("fmv", "  drained {}/{} words ({} macroblocks)", got, total_words, got / 128);
+  int blocks_avail = produced / 128; // 128 (32-bit) words per 16x16 MB
   // Each 128-word (256 px) group is a 16x16 RASTER macroblock: mednafen emits four 8x8 Y
   // sub-blocks and mdec_dma_out's voffs scatter (RAMOffsetWWS=4) lays them out as a 16x16
   // raster (verified via PSXPORT_MDEC_OFFS). The game emits macroblocks COLUMN-MAJOR
@@ -473,21 +542,32 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   int rowmajor = cfg_on("PSXPORT_FMV_ROWMAJOR") ? 1 : 0;
   for (int blk = 0; blk < blocks_avail; blk++) {
     int bx, by;
-    if (rowmajor) { by = blk / mbx; bx = blk % mbx; }
-    else          { bx = blk / mby; by = blk % mby; }   // column-major emit order
-    if (bx >= mbx || by >= mby) continue;
-    const uint16_t* src = mb + blk * 256;
+    if (rowmajor) {
+      by = blk / mbx;
+      bx = blk % mbx;
+    } else {
+      bx = blk / mby;
+      by = blk % mby;
+    } // column-major emit order
+    if (bx >= mbx || by >= mby) {
+      continue;
+    }
+    const uint16_t *src = mb + blk * 256;
     for (int yy = 0; yy < 16; yy++) {
       int fy = by * 16 + yy;
-      if (fy >= height) break;
+      if (fy >= height) {
+        break;
+      }
       for (int xx = 0; xx < 16; xx++) {
         int fx = bx * 16 + xx;
-        if (fx >= width) break;
+        if (fx >= width) {
+          break;
+        }
         pixels[fy * width + fx] = src[yy * 16 + xx];
       }
     }
   }
-  return width * height;   // pixel count
+  return width * height; // pixel count
 }
 
 // ====================================================================================
@@ -500,13 +580,18 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
 // ====================================================================================
 
 static const int32_t XA_W[16][2] = {
-  {0,0},{60,0},{115,-52},{98,-55},{122,-60} };   // mednafen DecodeXAADPCM weights
+    {0, 0}, {60, 0}, {115, -52}, {98, -55}, {122, -60}}; // mednafen DecodeXAADPCM weights
 
-static void xa_decode_unit(const uint8_t* in, int16_t* out, int shift, int filter) {
+static void xa_decode_unit(const uint8_t *in, int16_t *out, int shift, int filter) {
   for (int i = 0; i < 28; i++) {
-    int32_t s = (int16_t)(in[i] << 8); s >>= shift;
-    s += (out[i-1] * XA_W[filter][0] + out[i-2] * XA_W[filter][1]) >> 6;
-    if (s < -32768) s = -32768; else if (s > 32767) s = 32767;
+    int32_t s = (int16_t)(in[i] << 8);
+    s >>= shift;
+    s += (out[i - 1] * XA_W[filter][0] + out[i - 2] * XA_W[filter][1]) >> 6;
+    if (s < -32768) {
+      s = -32768;
+    } else if (s > 32767) {
+      s = 32767;
+    }
     out[i] = (int16_t)s;
   }
 }
@@ -515,39 +600,59 @@ static void xa_decode_unit(const uint8_t* in, int16_t* out, int shift, int filte
 // (out[2*n]=L, out[2*n+1]=R); returns stereo frame count (<=2016). `hist[ch][0..1]` is the
 // per-channel history that MUST persist across sectors. `*freq` set to the sample rate.
 // Non-static so the sound oracle (tools/fmv_compare) can diff it against a reference.
-int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* freq) {
-  int coding = raw[19];                          // subheader coding byte (raw = sync12+hdr4+subhdr8+...)
-  int ishift = (coding & 0x10) ? 0 : 1;          // unit_index_shift: 1 for 4-bit, 0 for 8-bit
+int xa_decode_sector(const uint8_t *raw, int16_t *out, int16_t hist[2][2], int *freq) {
+  int coding = raw[19];                 // subheader coding byte (raw = sync12+hdr4+subhdr8+...)
+  int ishift = (coding & 0x10) ? 0 : 1; // unit_index_shift: 1 for 4-bit, 0 for 8-bit
   int stereo = coding & 0x01;
-  int units  = 4 << ishift;                      // 8 (4-bit) / 4 (8-bit)
-  if (freq) *freq = (coding & 0x04) ? 18900 : 37800;
+  int units = 4 << ishift; // 8 (4-bit) / 4 (8-bit)
+  if (freq) {
+    *freq = (coding & 0x04) ? 18900 : 37800;
+  }
   // Per-channel sample buffer. MONO sectors put ALL units on one channel: 4-bit mono =
   // 18 groups * 8 units * 28 = 4032 samples/sector (vs 2016 per channel when stereo splits
   // them). Size for the mono max, else mono voice (e.g. Tomba2 dialog, 18900Hz mono) overflows.
   static int16_t ch[2][4032 + 8];
-  int cp[2] = {0,0};
+  int cp[2] = {0, 0};
   for (int group = 0; group < 18; group++) {
-    const uint8_t* sg = raw + 24 + group * 128;  // 16 param bytes + 112 sample bytes
+    const uint8_t *sg = raw + 24 + group * 128; // 16 param bytes + 112 sample bytes
     for (int unit = 0; unit < units; unit++) {
-      int param  = sg[(unit & 3) | ((unit & 4) << 1)];
-      int pcopy  = sg[4 | (unit & 3) | ((unit & 4) << 1)];
+      int param = sg[(unit & 3) | ((unit & 4) << 1)];
+      int pcopy = sg[4 | (unit & 3) | ((unit & 4) << 1)];
       uint8_t ib[28];
       for (int i = 0; i < 28; i++) {
         uint8_t t = sg[16 + i * 4 + (unit >> ishift)];
-        if (ishift) { t <<= (unit & 1) ? 0 : 4; t &= 0xf0; }
+        if (ishift) {
+          t <<= (unit & 1) ? 0 : 4;
+          t &= 0xf0;
+        }
         ib[i] = t;
       }
       int ocn = (unit & 1) && stereo;
       int16_t ob[2 + 28];
-      ob[0] = hist[ocn][0]; ob[1] = hist[ocn][1];
+      ob[0] = hist[ocn][0];
+      ob[1] = hist[ocn][1];
       xa_decode_unit(ib, ob + 2, param & 0x0F, param >> 4);
-      hist[ocn][0] = ob[28]; hist[ocn][1] = ob[29];
-      if (param != pcopy) memset(ob, 0, sizeof ob);  // corruption guard (mednafen parity)
-      if (stereo) { for (int s = 0; s < 28; s++) ch[ocn][cp[ocn]++] = ob[2 + s]; }
-      else { for (int s = 0; s < 28; s++) { ch[0][cp[0]++] = ob[2+s]; ch[1][cp[1]++] = ob[2+s]; } }
+      hist[ocn][0] = ob[28];
+      hist[ocn][1] = ob[29];
+      if (param != pcopy) {
+        memset(ob, 0, sizeof ob); // corruption guard (mednafen parity)
+      }
+      if (stereo) {
+        for (int s = 0; s < 28; s++) {
+          ch[ocn][cp[ocn]++] = ob[2 + s];
+        }
+      } else {
+        for (int s = 0; s < 28; s++) {
+          ch[0][cp[0]++] = ob[2 + s];
+          ch[1][cp[1]++] = ob[2 + s];
+        }
+      }
     }
   }
   int n = cp[0];
-  for (int i = 0; i < n; i++) { out[2*i] = ch[0][i]; out[2*i+1] = ch[1][i]; }
+  for (int i = 0; i < n; i++) {
+    out[2 * i] = ch[0][i];
+    out[2 * i + 1] = ch[1][i];
+  }
   return n;
 }

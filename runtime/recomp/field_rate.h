@@ -18,8 +18,8 @@
 // never executed on real data. It is stated as the documented hardware rate rather than measured,
 // and that is exactly what it should say here rather than being quietly presented as verified.
 enum : unsigned {
-  FIELD_RATE_NTSC_MILLIHZ = 59940u,   // 60000/1001 Hz
-  FIELD_RATE_PAL_MILLIHZ  = 50000u,   // 50 Hz
+  FIELD_RATE_NTSC_MILLIHZ = 59940u, // 60000/1001 Hz
+  FIELD_RATE_PAL_MILLIHZ = 50000u,  // 50 Hz
 };
 
 inline unsigned field_rate_millihz(bool pal) {

@@ -6,7 +6,7 @@ namespace {
 
 struct Hit {
   int calls = 0;
-  Core* core = nullptr;
+  Core *core = nullptr;
   uint64_t ordinal = 0;
   uint32_t pc = 0;
   uint32_t insn = 0;
@@ -14,8 +14,8 @@ struct Hit {
   int order[2] = {};
 };
 
-void record(Core* core, uint64_t ordinal, uint32_t pc, uint32_t insn, void* user) {
-  Hit* hit = static_cast<Hit*>(user);
+void record(Core *core, uint64_t ordinal, uint32_t pc, uint32_t insn, void *user) {
+  Hit *hit = static_cast<Hit *>(user);
   hit->calls++;
   hit->core = core;
   hit->ordinal = ordinal;
@@ -23,8 +23,8 @@ void record(Core* core, uint64_t ordinal, uint32_t pc, uint32_t insn, void* user
   hit->insn = insn;
 }
 
-void record_pre(Core* core, uint64_t ordinal, uint32_t pc, uint32_t insn, void* user) {
-  Hit* hit = static_cast<Hit*>(user);
+void record_pre(Core *core, uint64_t ordinal, uint32_t pc, uint32_t insn, void *user) {
+  Hit *hit = static_cast<Hit *>(user);
   hit->core = core;
   hit->ordinal = ordinal;
   hit->pc = pc;
@@ -33,8 +33,8 @@ void record_pre(Core* core, uint64_t ordinal, uint32_t pc, uint32_t insn, void* 
   hit->value = 10;
 }
 
-void record_post(Core* core, uint64_t ordinal, uint32_t pc, uint32_t insn, void* user) {
-  Hit* hit = static_cast<Hit*>(user);
+void record_post(Core *core, uint64_t ordinal, uint32_t pc, uint32_t insn, void *user) {
+  Hit *hit = static_cast<Hit *>(user);
   hit->core = core;
   hit->ordinal = ordinal;
   hit->pc = pc;
@@ -46,7 +46,7 @@ void record_post(Core* core, uint64_t ordinal, uint32_t pc, uint32_t insn, void*
 void test_unarmed_is_a_real_negative_not_a_silent_counter() {
   GtePreOpObserver observer;
   Hit hit;
-  Core* fake = reinterpret_cast<Core*>(0xC0FFEE00u);
+  Core *fake = reinterpret_cast<Core *>(0xC0FFEE00u);
   observer.observe(fake, 0x80012340u, 0x4A280030u);
   observer.observePost(fake, 0, 0x80012340u, 0x4A280030u);
   CHECK(!observer.armed());
@@ -57,7 +57,7 @@ void test_unarmed_is_a_real_negative_not_a_silent_counter() {
 void test_paired_observer_preserves_identity_and_pre_post_order() {
   GtePreOpObserver observer;
   Hit hit;
-  Core* fake = reinterpret_cast<Core*>(0xC0FFEE00u);
+  Core *fake = reinterpret_cast<Core *>(0xC0FFEE00u);
   observer.arm(record_pre, record_post, &hit);
   observer.observeAround(fake, 0x80024528u, 0x4A180001u, [&hit] {
     CHECK_EQ(hit.value, 10);
@@ -76,7 +76,7 @@ void test_paired_observer_preserves_identity_and_pre_post_order() {
 void test_armed_observer_gets_preop_identity_and_a_denominator() {
   GtePreOpObserver observer;
   Hit hit;
-  Core* fake = reinterpret_cast<Core*>(0xC0FFEE00u);
+  Core *fake = reinterpret_cast<Core *>(0xC0FFEE00u);
   observer.arm(record, &hit);
   observer.observe(fake, 0x80024510u, 0x4A280030u);
   observer.observe(fake, 0x80024528u, 0x4A180001u);
@@ -93,7 +93,7 @@ void test_armed_observer_gets_preop_identity_and_a_denominator() {
   CHECK_EQ(hit.calls, 2);
 }
 
-}  // namespace
+} // namespace
 
 int main() {
   RUN(unarmed_is_a_real_negative_not_a_silent_counter);

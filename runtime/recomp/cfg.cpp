@@ -52,10 +52,12 @@ namespace {
 
 // Formats a printf-style call into a bounded buffer. Truncation marks itself rather than silently
 // losing the tail, so a too-long diagnostic is visibly cut instead of quietly wrong.
-std::string vformat(const char* fmt, va_list ap) {
+std::string vformat(const char *fmt, va_list ap) {
   char buf[4096];
   const int n = vsnprintf(buf, sizeof buf, fmt, ap);
-  if (n < 0) return std::string();
+  if (n < 0) {
+    return std::string();
+  }
   if (static_cast<size_t>(n) >= sizeof buf) {
     std::string out(buf, sizeof buf - 1);
     out.append("...");
@@ -77,17 +79,19 @@ std::string vformat(const char* fmt, va_list ap) {
 // where it cannot be skipped now; tests/test_lucent_channel_env.cpp is the gate.
 void bootstrap_once() {
   static bool done = false;
-  if (done) return;
+  if (done) {
+    return;
+  }
   done = true;
   s_dbg_gen++;
 }
 
-void emit(lucent::Level level, const char* chan, const char* fmt, va_list ap) {
+void emit(lucent::Level level, const char *chan, const char *fmt, va_list ap) {
   bootstrap_once();
   lucent::log(level, chan ? chan : "?", vformat(fmt, ap));
 }
 
-}  // namespace
+} // namespace
 
 extern "C" {
 
@@ -96,35 +100,43 @@ namespace {
 // A declared CVar of the wrong Kind for the accessor being used is a mistake in the inventory, not a
 // runtime condition — but silently falling through to the environment would hide it, and a knob that
 // half-works is exactly what this system exists to stop. Say it once, then behave as before.
-psx::config::CVarBase* declared_as(const char* name, psx::config::Kind want) {
-  psx::config::CVarBase* v = psx::config::find(name);
-  if (!v) return nullptr;
-  if (v->external()) return nullptr;   // lucent owns it; see config_vars.h
+psx::config::CVarBase *declared_as(const char *name, psx::config::Kind want) {
+  psx::config::CVarBase *v = psx::config::find(name);
+  if (!v) {
+    return nullptr;
+  }
+  if (v->external()) {
+    return nullptr; // lucent owns it; see config_vars.h
+  }
   if (v->kind() != want) {
     static bool warned = false;
     if (!warned) {
       warned = true;
-      lucent::warn("cfg", "{} is declared as {} but is being read as {} — falling back to the environment",
-                   name, psx::config::kind_name(v->kind()), psx::config::kind_name(want));
+      lucent::warn("cfg",
+                   "{} is declared as {} but is being read as {} — falling back to the environment",
+                   name,
+                   psx::config::kind_name(v->kind()),
+                   psx::config::kind_name(want));
     }
     return nullptr;
   }
   return v;
 }
 
-}  // namespace
+} // namespace
 
-int cfg_on(const char* name) {
-  if (psx::config::CVarBase* v = declared_as(name, psx::config::Kind::Bool))
-    return static_cast<psx::config::BoolVar*>(v)->get() ? 1 : 0;
+int cfg_on(const char *name) {
+  if (psx::config::CVarBase *v = declared_as(name, psx::config::Kind::Bool)) {
+    return static_cast<psx::config::BoolVar *>(v)->get() ? 1 : 0;
+  }
   const bool on = lucent::config::flag(name);
   psx::config::note_legacy_read(name, psx::config::Kind::Bool, on ? "1" : "0");
   return on ? 1 : 0;
 }
 
-int cfg_int(const char* name, int def) {
-  if (psx::config::CVarBase* v = declared_as(name, psx::config::Kind::Int)) {
-    psx::config::IntVar* iv = static_cast<psx::config::IntVar*>(v);
+int cfg_int(const char *name, int def) {
+  if (psx::config::CVarBase *v = declared_as(name, psx::config::Kind::Int)) {
+    psx::config::IntVar *iv = static_cast<psx::config::IntVar *>(v);
     // The caller's `def` and the CVar's declared default must agree, or the same knob means two
     // things depending on which call site got there first. That is a build-time mistake; report it
     // rather than picking a winner in silence. The inventory is the authority.
@@ -132,8 +144,11 @@ int cfg_int(const char* name, int def) {
       static bool warned = false;
       if (!warned) {
         warned = true;
-        lucent::warn("cfg", "cfg_int({}, {}) disagrees with the declared default {} — using the declared one",
-                     name, def, iv->default_value());
+        lucent::warn("cfg",
+                     "cfg_int({}, {}) disagrees with the declared default {} — using the declared one",
+                     name,
+                     def,
+                     iv->default_value());
       }
     }
     return static_cast<int>(iv->get());
@@ -143,53 +158,70 @@ int cfg_int(const char* name, int def) {
   return static_cast<int>(v);
 }
 
-const char* cfg_str(const char* name) {
-  if (psx::config::CVarBase* v = declared_as(name, psx::config::Kind::Text)) {
-    const std::string& s = static_cast<psx::config::TextVar*>(v)->get();
-    return s.empty() ? nullptr : s.c_str();   // callers test for NULL, not for ""
+const char *cfg_str(const char *name) {
+  if (psx::config::CVarBase *v = declared_as(name, psx::config::Kind::Text)) {
+    const std::string &s = static_cast<psx::config::TextVar *>(v)->get();
+    return s.empty() ? nullptr : s.c_str(); // callers test for NULL, not for ""
   }
-  const std::string& v = lucent::config::text(name);
+  const std::string &v = lucent::config::text(name);
   psx::config::note_legacy_read(name, psx::config::Kind::Text, v);
-  return v.empty() ? nullptr : v.c_str();   // callers test for NULL, not for ""
+  return v.empty() ? nullptr : v.c_str(); // callers test for NULL, not for ""
 }
 
-int cfg_dbg(const char* chan) {
+int cfg_dbg(const char *chan) {
   bootstrap_once();
   return lucent::channel_on(chan) ? 1 : 0;
 }
 
 // Defined OUTSIDE the anonymous namespace above: cfg.h declares it extern "C", so a definition inside
 // that namespace would be a different, internally-linked function and the link would fail.
-unsigned cfg_dbg_generation(void) { bootstrap_once(); return s_dbg_gen; }
-
-void cfg_dbg_set(const char* chans) {
+unsigned cfg_dbg_generation(void) {
   bootstrap_once();
-  lucent::enable_channels(chans ? chans : "");
-  s_dbg_gen++;                       // invalidate every hot-path cache of cfg_dbg()
+  return s_dbg_gen;
 }
 
-void cfg_logf(const char* chan, const char* fmt, ...) {
+void cfg_dbg_set(const char *chans) {
   bootstrap_once();
-  if (!lucent::channel_on(chan)) return;
-  va_list ap; va_start(ap, fmt);
+  lucent::enable_channels(chans ? chans : "");
+  s_dbg_gen++; // invalidate every hot-path cache of cfg_dbg()
+}
+
+void cfg_logf(const char *chan, const char *fmt, ...) {
+  bootstrap_once();
+  if (!lucent::channel_on(chan)) {
+    return;
+  }
+  va_list ap;
+  va_start(ap, fmt);
   lucent::log(lucent::Level::Debug, chan ? chan : "?", vformat(fmt, ap));
   va_end(ap);
 }
 
-void cfg_logi(const char* chan, const char* fmt, ...) {
-  va_list ap; va_start(ap, fmt); emit(lucent::Level::Info, chan, fmt, ap); va_end(ap);
+void cfg_logi(const char *chan, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  emit(lucent::Level::Info, chan, fmt, ap);
+  va_end(ap);
 }
-void cfg_logw(const char* chan, const char* fmt, ...) {
-  va_list ap; va_start(ap, fmt); emit(lucent::Level::Warn, chan, fmt, ap); va_end(ap);
+void cfg_logw(const char *chan, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  emit(lucent::Level::Warn, chan, fmt, ap);
+  va_end(ap);
 }
-void cfg_loge(const char* chan, const char* fmt, ...) {
-  va_list ap; va_start(ap, fmt); emit(lucent::Level::Error, chan, fmt, ap); va_end(ap);
+void cfg_loge(const char *chan, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  emit(lucent::Level::Error, chan, fmt, ap);
+  va_end(ap);
 }
 
 // PSXPORT_ORACLE — the pure PSX reference mode. MIGRATED: the hand-rolled `static int v = -1` cache
 // is gone; the CVar binds the environment once and every enhancement gate reads the same object, so
 // `report()` can say what oracle mode resolved to and from which layer.
-int oracle_mode(void) { return psx::config::cv_oracle.get() ? 1 : 0; }
+int oracle_mode(void) {
+  return psx::config::cv_oracle.get() ? 1 : 0;
+}
 
 // PSXPORT_ENH=<name,name|all> — the sanctioned enhancement class, MIGRATED onto the CVar ladder
 // (Tomba2Engine kanban #92). The body used to live here: it read lucent::config::text("PSXPORT_ENH")
@@ -203,27 +235,30 @@ int oracle_mode(void) { return psx::config::cv_oracle.get() ? 1 : 0; }
 // reaches the same rule through psx::config::enh(). Two copies of "what a byte-compare run IS" is the
 // worst possible duplication: diverge, and one of them fails to recognise an SBS variant while the
 // contaminated compare still looks clean.
-int cfg_enh(const char* name) {
+int cfg_enh(const char *name) {
   bootstrap_once();
   return psx::config::enh_named(name) ? 1 : 0;
 }
 
 void cfg_dump(void) {
   static int done = 0;
-  if (done) return;
+  if (done) {
+    return;
+  }
   done = 1;
   bootstrap_once();
   std::string line;
-  for (const std::string& entry : lucent::config::active()) {
-    if (entry.rfind("PSXPORT_", 0) != 0) continue;
+  for (const std::string &entry : lucent::config::active()) {
+    if (entry.rfind("PSXPORT_", 0) != 0) {
+      continue;
+    }
     line.push_back(' ');
     line.append(entry);
   }
   // Print the raw list even when it is EMPTY. "active:" with nothing after it says "this run was
   // configured with no PSXPORT_* variables at all", which is a fact; printing nothing says only that
   // this function may not have run.
-  lucent::log(lucent::Level::Info, "cfg", line.empty() ? "active: (no PSXPORT_* variables set)"
-                                                       : "active:" + line);
+  lucent::log(lucent::Level::Info, "cfg", line.empty() ? "active: (no PSXPORT_* variables set)" : "active:" + line);
   // ...and then the part the raw list cannot give you: what each knob RESOLVED to, which layer it
   // came from, and which variables in that list matched nothing at all.
   psx::config::report_once();
@@ -232,15 +267,23 @@ void cfg_dump(void) {
 // --- CfgLine: the piecewise line accumulator ----------------------------------------------------
 // Same accumulate-then-flush shape as lucent::Line, kept as a C struct because C translation units
 // construct it directly. The flush is what routes through lucent.
-void cfg_line_reset(CfgLine* l) { l->used = 0; l->buf[0] = 0; }
+void cfg_line_reset(CfgLine *l) {
+  l->used = 0;
+  l->buf[0] = 0;
+}
 
-void cfg_line_addf(CfgLine* l, const char* fmt, ...) {
-  if (l->used >= sizeof l->buf - 1) return;
+void cfg_line_addf(CfgLine *l, const char *fmt, ...) {
+  if (l->used >= sizeof l->buf - 1) {
+    return;
+  }
   const size_t space = sizeof l->buf - l->used;
-  va_list ap; va_start(ap, fmt);
+  va_list ap;
+  va_start(ap, fmt);
   const int w = vsnprintf(l->buf + l->used, space, fmt, ap);
   va_end(ap);
-  if (w < 0) return;
+  if (w < 0) {
+    return;
+  }
   if (static_cast<size_t>(w) >= space) {
     l->used = static_cast<unsigned>(sizeof l->buf - 1);
     memcpy(l->buf + l->used - 3, "...", 3);
@@ -250,7 +293,7 @@ void cfg_line_addf(CfgLine* l, const char* fmt, ...) {
   l->used += static_cast<unsigned>(w);
 }
 
-void cfg_line_flush(CfgLine* l, const char* chan) {
+void cfg_line_flush(CfgLine *l, const char *chan) {
   if (l->used) {
     bootstrap_once();
     lucent::log(lucent::Level::Info, chan ? chan : "?", l->buf);
@@ -258,4 +301,4 @@ void cfg_line_flush(CfgLine* l, const char* chan) {
   cfg_line_reset(l);
 }
 
-}  // extern "C"
+} // extern "C"

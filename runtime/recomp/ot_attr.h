@@ -51,8 +51,8 @@
 //      `otattr trace <addr>` heuristic: a writer fn that touches many distinct pages in one frame LOOKS
 //      like a copy loop (batching many sources into one buffer), which is the census's actual scenario.
 #pragma once
+#include <lucent/log.h> // lucent::Channel — the inline armed test below
 #include <stdint.h>
-#include <lucent/log.h>   // lucent::Channel — the inline armed test below
 class Core;
 
 // The `otattr` channel as an INTERNED HANDLE. This is the one place in the framework that has earned
@@ -92,7 +92,7 @@ public:
   // when the fn/node attribution is identical) — sized generously since this is diagnostic-only memory,
   // live only while the `otattr` channel is enabled.
   static constexpr int SPAN_CAP = 65536;
-  static constexpr int GTE_CAP  = 512;
+  static constexpr int GTE_CAP = 512;
 
   // `pc` = the guest fn most recently ENTERED when this store happened. Every recompiled wrapper opens
   // with `c->pc = 0x<its own address>`, so unlike `fn` (which comes from the indirect-dispatch shadow
@@ -106,7 +106,10 @@ public:
   // guest leg to `fn` puts the legs in disjoint rows. Kept ALONGSIDE `fn` rather than replacing it, so
   // "the emitter" and "the row it belongs to" stay separately readable — collapsing them is how a
   // resolution bug becomes invisible.
-  struct Span { uint32_t lo, hi; uint32_t fn, caller, node, pc, claimed; };
+  struct Span {
+    uint32_t lo, hi;
+    uint32_t fn, caller, node, pc, claimed;
+  };
 
   // The chain walk is BOUNDED — an unclaimed chain would otherwise pay a full-depth scan on every new
   // span, on a path that is armed by default. 8 is not a guess: the otchain measurement found every claim
@@ -114,7 +117,9 @@ public:
   // limit is COUNTED and warned about, because a silently-too-small window looks exactly like an effect
   // with no native producer.
   static constexpr int CLAIM_SEARCH_DEPTH = 8;
-  struct GteBucket { uint32_t fn, node, count; };
+  struct GteBucket {
+    uint32_t fn, node, count;
+  };
 
   // Called from Core::mem_w8/16/32 (mem.cpp) for EVERY guest store — no-op unless the `otattr` channel
   // is enabled (checked internally — a hot-path early-out) and the address falls in
@@ -124,67 +129,100 @@ public:
   // (trackStore -> cfg_dbg_generation -> bootstrap_once) to conclude it had nothing to do, measuring
   // 2.54% of total CPU on its own. lucent::Channel is that same generation-stamped cache, done once
   // in the logging library instead of hand-rolled here against a counter cfg.cpp had to export.
-  void trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes);
-  inline void trackStore(Core* c, uint32_t addr, uint32_t bytes) {
+  void trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes);
+  inline void trackStore(Core *c, uint32_t addr, uint32_t bytes) {
     // Steady state with both off: two relaxed loads and two compares, still no call.
-    if (!g_otattr_channel && !g_producer_census_armed) return;
+    if (!g_otattr_channel && !g_producer_census_armed) {
+      return;
+    }
     trackStoreSlow(c, addr, bytes);
   }
 
   // Called from gte_op's RTPS/RTPT branch (gte_beetle.cpp) — aggregates a call count per (fn, node).
-  void trackGte(Core* c);
+  void trackGte(Core *c);
 
   // REPL/diagnostic readback — NOT hot path, may scan linearly.
-  bool lookupStore(uint32_t addr, Span* out) const;
-  int  spanCount()  const { return mSpanCount; }
-  int  spanOverflow() const { return mSpanOverflow; }
-  const Span* spanAt(int i) const { return &mSpans[i]; }
-  int  gteCount() const { return mGteCount; }
-  int  gteOverflow() const { return mGteOverflow; }
-  const GteBucket* gteAt(int i) const { return &mGte[i]; }
-  uint32_t frame() const { return mFrame; }
+  bool lookupStore(uint32_t addr, Span *out) const;
+  int spanCount() const {
+    return mSpanCount;
+  }
+  int spanOverflow() const {
+    return mSpanOverflow;
+  }
+  const Span *spanAt(int i) const {
+    return &mSpans[i];
+  }
+  int gteCount() const {
+    return mGteCount;
+  }
+  int gteOverflow() const {
+    return mGteOverflow;
+  }
+  const GteBucket *gteAt(int i) const {
+    return &mGte[i];
+  }
+  uint32_t frame() const {
+    return mFrame;
+  }
 
   // --- LAST-WRITER PROVENANCE (watched regions) ---
 
   // Up to 8 regions; 64 KB of word-granular last-writer records total across all of them (static, so
   // this is diagnostic memory that's live regardless of whether `otattr` is on — cheap, always allocated
   // like the span/GTE tables above).
-  static constexpr int WATCH_SLOTS     = 8;
+  static constexpr int WATCH_SLOTS = 8;
   static constexpr int WATCH_CAP_BYTES = 65536;
   static constexpr int WATCH_CAP_WORDS = WATCH_CAP_BYTES / 4;
 
   // Physical (0x1FFFFFFF-masked) address range — works uniformly for main RAM (KUSEG/KSEG0/KSEG1 all
   // mask to the same 0x000xxxxx..0x1FFFFFxx physical range) AND scratchpad (0x1F800000-0x1F8003FF,
   // which is NOT mirrored across segments the way main RAM is — see trackStore's `phys` comment).
-  struct WatchRegion { uint32_t lo = 0, hi = 0, wordBase = 0; bool active = false; };
+  struct WatchRegion {
+    uint32_t lo = 0, hi = 0, wordBase = 0;
+    bool active = false;
+  };
   // `frame == NO_FRAME` is the never-written state of a freshly carved region's slice (see
   // watchRegister) — the negative that must stay distinguishable from a recorded write.
-  struct WordRec     { uint32_t fn = 0, caller = 0, frame = 0xFFFFFFFFu /* NO_FRAME */; };
+  struct WordRec {
+    uint32_t fn = 0, caller = 0, frame = 0xFFFFFFFFu /* NO_FRAME */;
+  };
 
-  static constexpr int FNSTAT_CAP   = 256;
-  static constexpr int FNSTAT_PAGES = 8;   // distinct 4KB dest pages tracked per fn before "overflow" (many)
+  static constexpr int FNSTAT_CAP = 256;
+  static constexpr int FNSTAT_PAGES = 8; // distinct 4KB dest pages tracked per fn before "overflow" (many)
   struct FnStoreStat {
     uint32_t fn = 0, count = 0;
     uint32_t pages[FNSTAT_PAGES] = {};
-    int      pageCount = 0;
-    bool     pageOverflow = false;
+    int pageCount = 0;
+    bool pageOverflow = false;
   };
 
   // Register a watched region [addr, addr+len). Returns the slot index, or -1 if all WATCH_SLOTS are
   // used or the WATCH_CAP_WORDS word budget is exhausted (both counted so `otattr watch` can report why).
   int watchRegister(uint32_t addr, uint32_t len);
-  int watchSlotCount() const { return mWatchCount; }
-  int watchWordsUsed() const { return mWatchWordsUsed; }
-  int watchOverflow()  const { return mWatchOverflow; }
-  const WatchRegion* watchAt(int i) const { return &mWatch[i]; }
+  int watchSlotCount() const {
+    return mWatchCount;
+  }
+  int watchWordsUsed() const {
+    return mWatchWordsUsed;
+  }
+  int watchOverflow() const {
+    return mWatchOverflow;
+  }
+  const WatchRegion *watchAt(int i) const {
+    return &mWatch[i];
+  }
 
   // Word-granular last-writer lookup. `addr` may be any address inside a watched region (rounded down
   // to its containing word). Returns false if `addr` isn't inside ANY watched region.
-  bool watchLookup(uint32_t addr, WordRec* out, uint32_t* wordAddrOut = nullptr) const;
+  bool watchLookup(uint32_t addr, WordRec *out, uint32_t *wordAddrOut = nullptr) const;
 
-  const FnStoreStat* fnStatFind(uint32_t fn) const;
-  int fnStatCount() const { return mFnStatCount; }
-  const FnStoreStat* fnStatAt(int i) const { return &mFnStat[i]; }
+  const FnStoreStat *fnStatFind(uint32_t fn) const;
+  int fnStatCount() const {
+    return mFnStatCount;
+  }
+  const FnStoreStat *fnStatAt(int i) const {
+    return &mFnStat[i];
+  }
 
   // Bound the span table's lifetime to ONE LOGIC FRAME, driven by the frame loop.
   //
@@ -195,14 +233,20 @@ public:
   // emitter fn was 0, which is why the guest leg reported 16,384 prims as span-no-fn and attributed
   // NONE. A span table is only meaningful for the frame whose packets it describes, so the frame loop
   // says when a frame begins and this is the one clock that matters.
-  void beginLogicFrame(uint32_t frame) { resetIfNewFrame(frame); }
+  void beginLogicFrame(uint32_t frame) {
+    resetIfNewFrame(frame);
+  }
 
   // Run-end verdict for the frame-loop contract. Stores before a game's loop starts are legitimate
   // boot activity, so stampFrame records them but does not accuse the loop immediately. The verdict
   // becomes meaningful only after the run had a chance to call beginLogicFrame.
-  bool frameContractSatisfied() const { return mFrame != NO_FRAME || mPreFrameStamps == 0; }
-  uint64_t preFrameStampCount() const { return mPreFrameStamps; }
-  void reportFrameContract(const char* context) const;
+  bool frameContractSatisfied() const {
+    return mFrame != NO_FRAME || mPreFrameStamps == 0;
+  }
+  uint64_t preFrameStampCount() const {
+    return mPreFrameStamps;
+  }
+  void reportFrameContract(const char *context) const;
 
   // The idle value of every frame field below: "no frame has been declared yet" for the table clocks,
   // and "this word was never written" for a watch record. Named because two of the three used to be a
@@ -226,11 +270,10 @@ public:
   //
   // A Core that no frame loop drives has a genuinely undefined frame, and that case is WARNED AT
   // RUN END rather than quietly stamped. Warning here would falsely accuse normal boot stores before
-  // a healthy game loop has had a chance to start. An unstamped table must not be mistakable for a stamped one. It returns 0
-  // (not NO_FRAME) because NO_FRAME is also WordRec's "never written" — stamping a real write with it
-  // would make a recorded store indistinguishable from an untouched word.
+  // a healthy game loop has had a chance to start. An unstamped table must not be mistakable for a stamped one. It
+  // returns 0 (not NO_FRAME) because NO_FRAME is also WordRec's "never written" — stamping a real write with it would
+  // make a recorded store indistinguishable from an untouched word.
   uint32_t stampFrame();
-
 
   // `PSXPORT_DEBUG=otchain` — WHAT THE WHOLE CALL CHAIN IS at a packet-pool store, sampled.
   //
@@ -244,33 +287,39 @@ public:
   // Capped BY NOVELTY, not by count: one sample per distinct (top, depth) pair, so a chain shape that
   // occurs once is as visible as one that occurs 78,000 times. `mChainSeen` is the denominator and
   // `mChainDropped` the shapes lost to a full table — a report with a full table is explicitly incomplete.
-  static constexpr int CHAIN_SLOTS  = 128;   // distinct chain SHAPES kept
+  static constexpr int CHAIN_SLOTS = 128; // distinct chain SHAPES kept
   // 32, raised from 20 on 2026-08-12: the deepest observed chain is 28 frames, and at 20 a reader had to
   // RECONSTRUCT the tail by splicing two shapes together to answer "is there a claim further out". A
   // diagnostic that requires arithmetic to read is one people will read wrong.
-  static constexpr int CHAIN_FRAMES = 32;    // frames recorded per shape, innermost first
+  static constexpr int CHAIN_FRAMES = 32; // frames recorded per shape, innermost first
   struct ChainSample {
-    uint32_t top;      // otattrTop() — the key the guest leg uses today
-    int      depth;    // full guest depth (may exceed what was recorded, and may exceed the cap)
-    int      nframes;  // how many of `frames` are populated
-    uint64_t hits;     // stores that matched this shape
+    uint32_t top;  // otattrTop() — the key the guest leg uses today
+    int depth;     // full guest depth (may exceed what was recorded, and may exceed the cap)
+    int nframes;   // how many of `frames` are populated
+    uint64_t hits; // stores that matched this shape
     uint32_t frames[CHAIN_FRAMES];
   };
-  uint32_t resolveClaimedFrame(Core* c);
-  void sampleChain(Core* c);
+  uint32_t resolveClaimedFrame(Core *c);
+  void sampleChain(Core *c);
   // Reported at run end alongside the census. `claims`/`nclaims` = the addresses a producer row is keyed
   // at, so the report can state, per shape, WHETHER any frame in the chain is one of them — that is the
   // measurement, and a chain matching none is the interesting case, not a blank.
-  void reportChains(const uint32_t* claims, int nclaims) const;
+  void reportChains(const uint32_t *claims, int nclaims) const;
   // The claim set AS THE RESOLVER SEES IT. reportChains used to be handed a list derived from this run's
   // census rows, while resolveClaimedFrame consults the PERSISTED set — so on a guest leg the report
   // measured a different thing from the resolver and printed "0 of 29 claimed" while the resolver was
   // joining 266,760 spans. It refused loudly rather than lying, which is why this was findable, but a
   // report and the mechanism it reports on must not read from two sources.
   // Run-end accounting for the claim resolution itself, so a join rate is never read off row counts alone.
-  uint64_t claimResolved()   const { return mClaimResolved; }
-  uint64_t claimUnresolved() const { return mClaimUnresolved; }
-  uint64_t claimAtLimit()    const { return mClaimAtLimit; }
+  uint64_t claimResolved() const {
+    return mClaimResolved;
+  }
+  uint64_t claimUnresolved() const {
+    return mClaimUnresolved;
+  }
+  uint64_t claimAtLimit() const {
+    return mClaimAtLimit;
+  }
 
 private:
   void resetIfNewFrame(uint32_t frame);
@@ -279,36 +328,35 @@ private:
 
   uint32_t mFrame = NO_FRAME;
   uint64_t mPreFrameStamps = 0;
-  Span     mSpans[SPAN_CAP] = {};
-  int      mSpanCount = 0;
-  int      mSpanOverflow = 0;
+  Span mSpans[SPAN_CAP] = {};
+  int mSpanCount = 0;
+  int mSpanOverflow = 0;
   // Is mSpans address-sorted? Maintained on insert (never assumed) so lookupStore can binary-search;
   // false falls back to the reverse linear scan, which is always correct.
-  bool     mSpansSorted = true;
+  bool mSpansSorted = true;
 
   uint32_t mGteFrame = NO_FRAME;
   GteBucket mGte[GTE_CAP] = {};
-  int       mGteCount = 0;
-  int       mGteOverflow = 0;
+  int mGteCount = 0;
+  int mGteOverflow = 0;
 
   WatchRegion mWatch[WATCH_SLOTS] = {};
-  int         mWatchCount = 0;
-  int         mWatchWordsUsed = 0;
-  int         mWatchOverflow = 0;
-  WordRec     mWatchWords[WATCH_CAP_WORDS] = {};   // pooled backing store, indexed via wordBase + offset
+  int mWatchCount = 0;
+  int mWatchWordsUsed = 0;
+  int mWatchOverflow = 0;
+  WordRec mWatchWords[WATCH_CAP_WORDS] = {}; // pooled backing store, indexed via wordBase + offset
 
   ChainSample mChains[CHAIN_SLOTS] = {};
-  int         mChainCount = 0;
-  uint64_t    mChainSeen = 0;        // stores offered to the sampler — the denominator
-  uint64_t    mChainDropped = 0;     // novel shapes lost because the table was full
-  uint64_t    mChainBlind = 0;       // chains the shadow stack could not see (depth over OTATTR_CAP)
-  uint64_t    mClaimAtLimit = 0;    // claims found at the last searched frame — the window may be too small
-  uint64_t    mClaimResolved = 0;   // spans whose chain yielded a claimed frame
-  uint64_t    mClaimUnresolved = 0; // spans with no claimed frame in the window — the honest "no native producer"
+  int mChainCount = 0;
+  uint64_t mChainSeen = 0;       // stores offered to the sampler — the denominator
+  uint64_t mChainDropped = 0;    // novel shapes lost because the table was full
+  uint64_t mChainBlind = 0;      // chains the shadow stack could not see (depth over OTATTR_CAP)
+  uint64_t mClaimAtLimit = 0;    // claims found at the last searched frame — the window may be too small
+  uint64_t mClaimResolved = 0;   // spans whose chain yielded a claimed frame
+  uint64_t mClaimUnresolved = 0; // spans with no claimed frame in the window — the honest "no native producer"
 
-
-  uint32_t    mFnStatFrame = NO_FRAME;
+  uint32_t mFnStatFrame = NO_FRAME;
   FnStoreStat mFnStat[FNSTAT_CAP] = {};
-  int         mFnStatCount = 0;
-  int         mFnStatOverflow = 0;
+  int mFnStatCount = 0;
+  int mFnStatOverflow = 0;
 };

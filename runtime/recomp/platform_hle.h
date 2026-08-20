@@ -11,14 +11,14 @@
 #pragma once
 #include <cstdint>
 struct Core;
-class  Game;
+class Game;
 
 // OverrideFn is defined in scheduler.h — the (Core*)->void signature every HLE handler obeys.
-typedef void (*OverrideFn)(Core* c);
+typedef void (*OverrideFn)(Core *c);
 
 class PlatformHle {
 public:
-  Game* game = nullptr;   // back-pointer wired by Game()
+  Game *game = nullptr; // back-pointer wired by Game()
 
   // Register the built-in hardware-sync HLE entries (libmdec/libcd/libgpu/libetc VSync +
   // cooperative task-switch ChangeThread). Called once per Game from boot; idempotent.
@@ -35,14 +35,13 @@ public:
 private:
   // The accepted address windows are GAME data (GameConfig::hle.windowLo/windowHi), so the guard
   // takes the config rather than baking one game's memory map into the framework.
-  static bool inBiosWindow(const struct GameConfig* cfg, uint32_t a);
+  static bool inBiosWindow(const struct GameConfig *cfg, uint32_t a);
 
   static constexpr int kMax = 32;
 
-  uint32_t   mAddr[kMax] = {0};
-  OverrideFn mFn[kMax]   = {nullptr};
-  int        mN = 0;
-  uint32_t   mLo = 0xFFFFFFFFu;
-  uint32_t   mHi = 0;
-
+  uint32_t mAddr[kMax] = {0};
+  OverrideFn mFn[kMax] = {nullptr};
+  int mN = 0;
+  uint32_t mLo = 0xFFFFFFFFu;
+  uint32_t mHi = 0;
 };

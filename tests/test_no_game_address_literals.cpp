@@ -91,16 +91,27 @@ static const uint32_t kConsoleExceptions[] = {
 };
 
 static bool is_console_exception(uint32_t v) {
-  for (uint32_t e : kConsoleExceptions)
-    if (v == e) return true;
+  for (uint32_t e : kConsoleExceptions) {
+    if (v == e) {
+      return true;
+    }
+  }
   return false;
 }
 
 static bool is_game_addr(uint32_t v) {
-  if (is_console_exception(v)) return false;
-  if (v >= 0x80010000u && v <= 0x801fffffu) return true; /* game-owned main RAM, KSEG0        */
-  if (v >= 0xa0010000u && v <= 0xa01fffffu) return true; /* same, uncached mirror             */
-  if (v > 0x1f800000u && v <= 0x1f8003ffu) return true;  /* a field in scratchpad = game field */
+  if (is_console_exception(v)) {
+    return false;
+  }
+  if (v >= 0x80010000u && v <= 0x801fffffu) {
+    return true; /* game-owned main RAM, KSEG0        */
+  }
+  if (v >= 0xa0010000u && v <= 0xa01fffffu) {
+    return true; /* same, uncached mirror             */
+  }
+  if (v > 0x1f800000u && v <= 0x1f8003ffu) {
+    return true; /* a field in scratchpad = game field */
+  }
   return false;
 }
 
@@ -108,18 +119,22 @@ static bool is_game_addr(uint32_t v) {
 
 /* Comments and string/char literals are documentation, not behaviour (see the header comment), so
  * they are blanked out before the number scan. Newlines are preserved so line numbers stay true. */
-static std::string strip_comments_and_strings(const std::string& s) {
+static std::string strip_comments_and_strings(const std::string &s) {
   std::string out;
   out.reserve(s.size());
   const size_t n = s.size();
   for (size_t i = 0; i < n;) {
     const char c = s[i];
     if (c == '/' && i + 1 < n && s[i + 1] == '/') {
-      while (i < n && s[i] != '\n') ++i;
+      while (i < n && s[i] != '\n') {
+        ++i;
+      }
     } else if (c == '/' && i + 1 < n && s[i + 1] == '*') {
       i += 2;
       while (i + 1 < n && !(s[i] == '*' && s[i + 1] == '/')) {
-        if (s[i] == '\n') out += '\n';
+        if (s[i] == '\n') {
+          out += '\n';
+        }
         ++i;
       }
       i = (i + 1 < n) ? i + 2 : n;
@@ -127,11 +142,17 @@ static std::string strip_comments_and_strings(const std::string& s) {
       const char q = c;
       ++i;
       while (i < n && s[i] != q) {
-        if (s[i] == '\\') ++i;
-        if (i < n && s[i] == '\n') out += '\n'; /* unterminated literal: do not eat the file */
+        if (s[i] == '\\') {
+          ++i;
+        }
+        if (i < n && s[i] == '\n') {
+          out += '\n'; /* unterminated literal: do not eat the file */
+        }
         ++i;
       }
-      if (i < n) ++i;
+      if (i < n) {
+        ++i;
+      }
     } else {
       out += c;
       ++i;
@@ -153,16 +174,18 @@ struct Scan {
   bool corpus_ok = false;
 };
 
-static bool is_source(const std::string& f) {
-  const char* ext[] = {".c", ".cpp", ".h", ".hpp"};
-  for (const char* e : ext) {
+static bool is_source(const std::string &f) {
+  const char *ext[] = {".c", ".cpp", ".h", ".hpp"};
+  for (const char *e : ext) {
     const size_t k = strlen(e);
-    if (f.size() > k && f.compare(f.size() - k, k, e) == 0) return true;
+    if (f.size() > k && f.compare(f.size() - k, k, e) == 0) {
+      return true;
+    }
   }
   return false;
 }
 
-static void scan_text(const std::string& rel, const std::string& text, Scan& sc) {
+static void scan_text(const std::string &rel, const std::string &text, Scan &sc) {
   const std::string code = strip_comments_and_strings(text);
   int line = 1;
   for (size_t i = 0; i < code.size(); ++i) {
@@ -171,9 +194,12 @@ static void scan_text(const std::string& rel, const std::string& text, Scan& sc)
       continue;
     }
     /* A hex literal, not a suffix of an identifier like `foo0x1`. */
-    if (code[i] != '0' || i + 1 >= code.size() || (code[i + 1] != 'x' && code[i + 1] != 'X'))
+    if (code[i] != '0' || i + 1 >= code.size() || (code[i + 1] != 'x' && code[i + 1] != 'X')) {
       continue;
-    if (i > 0 && (isalnum((unsigned char)code[i - 1]) || code[i - 1] == '_')) continue;
+    }
+    if (i > 0 && (isalnum((unsigned char)code[i - 1]) || code[i - 1] == '_')) {
+      continue;
+    }
     size_t j = i + 2, digits = 0;
     uint64_t v = 0;
     while (j < code.size() && isxdigit((unsigned char)code[j])) {
@@ -183,41 +209,57 @@ static void scan_text(const std::string& rel, const std::string& text, Scan& sc)
       ++j;
     }
     i = j - 1;
-    if (digits < 4 || digits > 8) continue; /* <4 digits cannot be a 32-bit guest address */
+    if (digits < 4 || digits > 8) {
+      continue; /* <4 digits cannot be a 32-bit guest address */
+    }
     ++sc.numbers;
-    if (is_game_addr((uint32_t)v)) sc.hits.push_back(Hit{rel, line, (uint32_t)v});
+    if (is_game_addr((uint32_t)v)) {
+      sc.hits.push_back(Hit{rel, line, (uint32_t)v});
+    }
   }
 }
 
-static std::string read_file(const std::string& path, bool* ok) {
-  FILE* f = fopen(path.c_str(), "rb");
+static std::string read_file(const std::string &path, bool *ok) {
+  FILE *f = fopen(path.c_str(), "rb");
   *ok = false;
-  if (!f) return "";
+  if (!f) {
+    return "";
+  }
   std::string s;
   char buf[65536];
   size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0) s.append(buf, n);
+  while ((n = fread(buf, 1, sizeof buf, f)) > 0) {
+    s.append(buf, n);
+  }
   fclose(f);
   *ok = true;
   return s;
 }
 
-static void walk(const std::string& abs, const std::string& rel, Scan& sc) {
-  DIR* d = opendir(abs.c_str());
-  if (!d) return;
+static void walk(const std::string &abs, const std::string &rel, Scan &sc) {
+  DIR *d = opendir(abs.c_str());
+  if (!d) {
+    return;
+  }
   std::vector<std::string> subdirs;
-  struct dirent* e;
+  struct dirent *e;
   while ((e = readdir(d)) != nullptr) {
     const std::string name = e->d_name;
-    if (name == "." || name == ".." || name == "vendor" || name == "__pycache__") continue;
+    if (name == "." || name == ".." || name == "vendor" || name == "__pycache__") {
+      continue;
+    }
     const std::string a = abs + "/" + name, r = rel.empty() ? name : rel + "/" + name;
     struct stat st;
-    if (stat(a.c_str(), &st) != 0) continue;
+    if (stat(a.c_str(), &st) != 0) {
+      continue;
+    }
     if (S_ISDIR(st.st_mode)) {
       subdirs.push_back(name);
       continue;
     }
-    if (!S_ISREG(st.st_mode) || !is_source(name)) continue;
+    if (!S_ISREG(st.st_mode) || !is_source(name)) {
+      continue;
+    }
     bool ok = false;
     const std::string text = read_file(a, &ok);
     if (!ok) {
@@ -229,7 +271,9 @@ static void walk(const std::string& abs, const std::string& rel, Scan& sc) {
     scan_text(r, text, sc);
   }
   closedir(d);
-  for (const std::string& s : subdirs) walk(abs + "/" + s, rel.empty() ? s : rel + "/" + s, sc);
+  for (const std::string &s : subdirs) {
+    walk(abs + "/" + s, rel.empty() ? s : rel + "/" + s, sc);
+  }
 }
 
 /* <this file>/../.. — the psxport checkout under test, not some other copy. tests/CMakeLists.txt
@@ -237,14 +281,18 @@ static void walk(const std::string& abs, const std::string& rel, Scan& sc) {
 static std::string repo_root(void) {
   std::string f = __FILE__;
   const size_t a = f.rfind('/');
-  if (a == std::string::npos) return "";
+  if (a == std::string::npos) {
+    return "";
+  }
   const size_t b = f.rfind('/', a - 1);
-  if (b == std::string::npos) return "";
+  if (b == std::string::npos) {
+    return "";
+  }
   return f.substr(0, b);
 }
 
 /* The scanned corpus. Anything the framework static library compiles lives under these. */
-static const char* kScanDirs[] = {"runtime", "common"};
+static const char *kScanDirs[] = {"runtime", "common"};
 
 static Scan scan_framework(void) {
   Scan sc;
@@ -254,7 +302,7 @@ static Scan scan_framework(void) {
     return sc;
   }
   int dirs_found = 0;
-  for (const char* d : kScanDirs) {
+  for (const char *d : kScanDirs) {
     struct stat st;
     const std::string a = root + "/" + d;
     if (stat(a.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
@@ -304,7 +352,7 @@ static Scan scan_framework(void) {
  * packetPoolStride, otBasePtr, poolPtrCur/poolPtrLast, taskTableBase/taskSlotStride/taskCount,
  * curTaskPtr and more. Reuse before inventing. */
 struct BaselineRow {
-  const char* file;
+  const char *file;
   uint32_t value;
   int count;
 };
@@ -606,17 +654,16 @@ static void test_classifier(void) {
 /* Proof that the SCANNER fires, in the shipping artifact, independent of any manual injection: a
  * synthetic source file whose every case is known. If this ever passes trivially the gate is dead. */
 static void test_scanner_selftest(void) {
-  const std::string src =
-      "// a comment naming 0x800BFE68 is RE documentation, not a violation\n"
-      "/* nor is 0x801FE00C in a block comment */\n"
-      "static const char* name = \"packet pool at 0x800E7E68\";\n"
-      "static uint32_t hw = 0x1F801810u;      // GP0: console\n"
-      "static uint32_t spad = 0x1F800000u;    // scratchpad base: console\n"
-      "static uint32_t ramsz = 0x200000u;     // console\n"
-      "static uint32_t mask = 0x1FFFFFFFu;    // console\n"
-      "static uint32_t load = 0x80010000u;    // PS-EXE load base: allowed\n"
-      "static uint32_t pool = 0x800BFE68u;    // <-- VIOLATION (line 9)\n"
-      "static uint32_t task = 0x1F800138u;    // <-- VIOLATION (line 10)\n";
+  const std::string src = "// a comment naming 0x800BFE68 is RE documentation, not a violation\n"
+                          "/* nor is 0x801FE00C in a block comment */\n"
+                          "static const char* name = \"packet pool at 0x800E7E68\";\n"
+                          "static uint32_t hw = 0x1F801810u;      // GP0: console\n"
+                          "static uint32_t spad = 0x1F800000u;    // scratchpad base: console\n"
+                          "static uint32_t ramsz = 0x200000u;     // console\n"
+                          "static uint32_t mask = 0x1FFFFFFFu;    // console\n"
+                          "static uint32_t load = 0x80010000u;    // PS-EXE load base: allowed\n"
+                          "static uint32_t pool = 0x800BFE68u;    // <-- VIOLATION (line 9)\n"
+                          "static uint32_t task = 0x1F800138u;    // <-- VIOLATION (line 10)\n";
   Scan sc;
   scan_text("synthetic.cpp", src, sc);
   /* The denominator, so a "found nothing" can never be confused with "never looked": 7 hex literals
@@ -631,8 +678,7 @@ static void test_scanner_selftest(void) {
   /* And the inverse: a file of nothing but console constants must yield ZERO hits out of a NON-ZERO
    * denominator. "0 of 0" would mean the scanner stopped working. */
   Scan clean;
-  scan_text("clean.cpp", "uint32_t a[] = {0x1F801810u,0x1F800000u,0x200000u,0x80000080u,0xBFC00000u};\n",
-            clean);
+  scan_text("clean.cpp", "uint32_t a[] = {0x1F801810u,0x1F800000u,0x200000u,0x80000080u,0xBFC00000u};\n", clean);
   CHECK_EQ(clean.numbers, 5);
   CHECK_EQ((int)clean.hits.size(), 0);
 }
@@ -640,8 +686,10 @@ static void test_scanner_selftest(void) {
 /* The corpus must exist and be non-trivial. Without this, a broken path would report a clean repo. */
 static void test_corpus_present(void) {
   const Scan sc = scan_framework();
-  fprintf(stderr, "    scanned %d framework source files under runtime/ + common/, %ld hex literals\n",
-          sc.files, sc.numbers);
+  fprintf(stderr,
+          "    scanned %d framework source files under runtime/ + common/, %ld hex literals\n",
+          sc.files,
+          sc.numbers);
   CHECK(sc.corpus_ok);
   CHECK(sc.files > 100);   /* the framework is ~200 files; a handful means the walk broke */
   CHECK(sc.numbers > 500); /* and it really did look at numbers                          */
@@ -655,29 +703,35 @@ static void test_no_new_game_address_literals(void) {
   typedef std::pair<std::string, uint32_t> Key;
   std::map<Key, int> found;
   std::map<Key, std::string> where; /* first line number seen, for the failure message */
-  for (const Hit& h : sc.hits) {
+  for (const Hit &h : sc.hits) {
     const Key k(h.file, h.value);
-    if (found[k]++ == 0) where[k] = h.file + ":" + std::to_string(h.line);
+    if (found[k]++ == 0) {
+      where[k] = h.file + ":" + std::to_string(h.line);
+    }
   }
 
   std::map<Key, int> base;
   int base_total = 0;
-  for (const BaselineRow& r : kBaseline) {
+  for (const BaselineRow &r : kBaseline) {
     base[Key(r.file, r.value)] += r.count;
     base_total += r.count;
   }
 
   int found_total = 0;
-  for (const auto& kv : found) found_total += kv.second;
+  for (const auto &kv : found) {
+    found_total += kv.second;
+  }
 
   /* The number, every run, so progress is legible. */
   fprintf(stderr,
           "    game-address literals in framework live code: %d (baseline %d) across %d (file,value)"
           " pairs\n",
-          found_total, base_total, (int)found.size());
+          found_total,
+          base_total,
+          (int)found.size());
 
   int nnew = 0, nstale = 0, nfixed = 0;
-  for (const auto& kv : found) {
+  for (const auto &kv : found) {
     const int b = base.count(kv.first) ? base[kv.first] : 0;
     if (kv.second > b) {
       ++nnew;
@@ -685,24 +739,34 @@ static void test_no_new_game_address_literals(void) {
               "    NEW game address in framework code: %s 0x%08x x%d (baseline %d) at %s\n"
               "      -> move it into GameConfig (runtime/recomp/game_iface.h) and read it from"
               " there; see ot_attr.cpp pool_range() for the honest-zero shape.\n",
-              kv.first.first.c_str(), kv.first.second, kv.second, b, where[kv.first].c_str());
+              kv.first.first.c_str(),
+              kv.first.second,
+              kv.second,
+              b,
+              where[kv.first].c_str());
     } else if (kv.second < b) {
       ++nstale;
       fprintf(stderr,
               "    STALE baseline row: %s 0x%08x now occurs %d time(s), baseline says %d.\n"
               "      -> lower the count in tests/test_no_game_address_literals.cpp (the baseline is"
               " shrink-only; a fix and its baseline edit land together).\n",
-              kv.first.first.c_str(), kv.first.second, kv.second, b);
+              kv.first.first.c_str(),
+              kv.first.second,
+              kv.second,
+              b);
     }
   }
-  for (const auto& kv : base) {
-    if (found.count(kv.first)) continue;
+  for (const auto &kv : base) {
+    if (found.count(kv.first)) {
+      continue;
+    }
     ++nfixed;
     fprintf(stderr,
             "    FIXED (baseline row no longer matches anything): %s 0x%08x\n"
             "      -> DELETE that row from tests/test_no_game_address_literals.cpp. Leaving it would"
             " let the literal come back unnoticed.\n",
-            kv.first.first.c_str(), kv.first.second);
+            kv.first.first.c_str(),
+            kv.first.second);
   }
 
   CHECK_EQ(nnew, 0);

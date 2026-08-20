@@ -19,23 +19,25 @@ namespace psx::ui {
 
 class WarpControl {
 public:
-    explicit WarpControl(Game* game) : mGame(game) {}
+  explicit WarpControl(Game *game) : mGame(game) {}
 
-    int         areaCount() const;
-    std::string areaLabel(int area) const;
-    std::string currentLabel() const { return areaLabel(mArea); }
-    void        adjust(int dir);
+  int areaCount() const;
+  std::string areaLabel(int area) const;
+  std::string currentLabel() const {
+    return areaLabel(mArea);
+  }
+  void adjust(int dir);
 
-    // Arm the warp and return the status line for the readout. The GAME decides whether a warp is
-    // legal: it is only legal from the field, because the warp runs the game's OWN door transition
-    // (fade, teardown, CD settle, reload) and that needs a running field machine to carry it out.
-    std::string arm();
+  // Arm the warp and return the status line for the readout. The GAME decides whether a warp is
+  // legal: it is only legal from the field, because the warp runs the game's OWN door transition
+  // (fade, teardown, CD settle, reload) and that needs a running field machine to carry it out.
+  std::string arm();
 
 private:
-    Game* mGame = nullptr;
-    int   mArea = 0;
+  Game *mGame = nullptr;
+  int mArea = 0;
 };
 
-}  // namespace psx::ui
+} // namespace psx::ui
 
 #endif

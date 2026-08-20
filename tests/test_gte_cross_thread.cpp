@@ -25,7 +25,7 @@
 #include <thread>
 
 extern "C" {
-void     GTE_WriteCR(unsigned int which, uint32_t value);
+void GTE_WriteCR(unsigned int which, uint32_t value);
 uint32_t GTE_ReadCR(unsigned int which);
 }
 
@@ -34,21 +34,21 @@ namespace {
 // A value with bits in both halves, so a half-written or zeroed register is distinguishable from a
 // correctly written one.
 constexpr uint32_t kSentinel = 0xA5C31007u;
-constexpr unsigned kCtrlReg  = 0;   // RT11/RT12 — the first register a libgte MulMatrix touches, and
-                                    // the exact one the incident faulted on.
+constexpr unsigned kCtrlReg = 0; // RT11/RT12 — the first register a libgte MulMatrix touches, and
+                                 // the exact one the incident faulted on.
 
 // Everything the worker observed, so a failure says WHICH half broke rather than just "not equal".
 struct WorkerResult {
-  uint32_t readBack   = 0;      // GTE_ReadCR seen from the worker thread
-  const GteRegs* seen = nullptr;  // GTE_CurState() as the worker saw it
+  uint32_t readBack = 0;         // GTE_ReadCR seen from the worker thread
+  const GteRegs *seen = nullptr; // GTE_CurState() as the worker saw it
 };
 
-void writeFromAnotherThread(WorkerResult* out) {
+void writeFromAnotherThread(WorkerResult *out) {
   std::thread worker([out] {
     // Deliberately NO GTE_BindState here: this models a guest task fiber, which never binds.
     GTE_WriteCR(kCtrlReg, kSentinel);
     out->readBack = GTE_ReadCR(kCtrlReg);
-    out->seen     = GTE_CurState();
+    out->seen = GTE_CurState();
   });
   worker.join();
 }
@@ -56,7 +56,7 @@ void writeFromAnotherThread(WorkerResult* out) {
 void test_a_write_from_an_unbound_thread_lands_in_the_bound_state(void) {
   GteRegs bound;
   std::memset(&bound, 0, sizeof(bound));
-  GTE_BindState(&bound);          // the main/scheduler thread binds, as native_boot.cpp does
+  GTE_BindState(&bound); // the main/scheduler thread binds, as native_boot.cpp does
 
   WorkerResult got;
   writeFromAnotherThread(&got);
@@ -73,9 +73,9 @@ void test_a_write_from_an_unbound_thread_lands_in_the_bound_state(void) {
 // get a usable register file. This is the NULL-CR deref itself, isolated — the fallback has to hand
 // back a fully initialised file or not exist at all.
 void test_the_unbound_fallback_is_never_half_initialised(void) {
-  GTE_BindState(nullptr);         // fall back to the default register file
+  GTE_BindState(nullptr); // fall back to the default register file
 
-  GteRegs* cur = GTE_CurState();
+  GteRegs *cur = GTE_CurState();
   CHECK(cur != nullptr);
   CHECK(cur->CR != nullptr);
   CHECK(cur->DR != nullptr);
@@ -83,12 +83,12 @@ void test_the_unbound_fallback_is_never_half_initialised(void) {
   CHECK(cur->DR == cur->REG);
 
   WorkerResult got;
-  writeFromAnotherThread(&got);   // must not fault, and must reach the same default file
+  writeFromAnotherThread(&got); // must not fault, and must reach the same default file
   CHECK(got.seen == cur);
   CHECK_EQ((int)got.readBack, (int)kSentinel);
 }
 
-}  // namespace
+} // namespace
 
 int main(void) {
   RUN(a_write_from_an_unbound_thread_lands_in_the_bound_state);

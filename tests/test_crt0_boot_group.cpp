@@ -44,18 +44,27 @@ static void capture_start(void) {
   g_errors = 0;
   lucent::set_sink([](lucent::Level lv, std::string_view line) {
     g_lines.emplace_back(line);
-    if (lv == lucent::Level::Error) g_errors++;
+    if (lv == lucent::Level::Error) {
+      g_errors++;
+    }
   });
 }
-static void capture_stop(void) { lucent::set_sink(nullptr); }
-
-static void dump_capture(const char* what) {
-  fprintf(stderr, "  [%s] captured %zu line(s), %d at error level\n", what, g_lines.size(), g_errors);
-  for (const std::string& l : g_lines) fprintf(stderr, "  [%s] | %s\n", what, l.c_str());
+static void capture_stop(void) {
+  lucent::set_sink(nullptr);
 }
-static bool any_line_has(const char* needle) {
-  for (const std::string& l : g_lines)
-    if (l.find(needle) != std::string::npos) return true;
+
+static void dump_capture(const char *what) {
+  fprintf(stderr, "  [%s] captured %zu line(s), %d at error level\n", what, g_lines.size(), g_errors);
+  for (const std::string &l : g_lines) {
+    fprintf(stderr, "  [%s] | %s\n", what, l.c_str());
+  }
+}
+static bool any_line_has(const char *needle) {
+  for (const std::string &l : g_lines) {
+    if (l.find(needle) != std::string::npos) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -63,25 +72,30 @@ static bool any_line_has(const char* needle) {
 // Tomba!2 MAIN.EXE, crt0 FUN_800896E0 — Tomba2Engine/game/core/game_config.cpp.
 static GameConfig tomba2_cfg(void) {
   GameConfig c{};
-  c.bssZeroLo = 0x800BE0D8u; c.bssZeroHi = 0x80106228u;
-  c.stackTopBase = 0x800A3F88u; c.stackTopBase2 = 0x800A3F8Cu;
+  c.bssZeroLo = 0x800BE0D8u;
+  c.bssZeroHi = 0x80106228u;
+  c.stackTopBase = 0x800A3F88u;
+  c.stackTopBase2 = 0x800A3F8Cu;
   c.heapBase = 0x80106228u;
-  c.heapSizePtr = 0x800ABEF8u; c.heapBasePtr = 0x800ABEF4u;   // `sw a1,-16648(at)` / `sw a0,-16652(at)`
+  c.heapSizePtr = 0x800ABEF8u;
+  c.heapBasePtr = 0x800ABEF4u; // `sw a1,-16648(at)` / `sw a0,-16652(at)`
   c.gp = 0x800BE0D4u;
-  c.libcInit = 0x80089860u;                                   // BIOS A(39h) InitHeap thunk
-  c.stackBias = {1u, -8};                                      // `addi v0,v0,-8` @0x80089710
+  c.libcInit = 0x80089860u; // BIOS A(39h) InitHeap thunk
+  c.stackBias = {1u, -8};   // `addi v0,v0,-8` @0x80089710
   return c;
 }
 // Mega Man X4 SLUS_005.61, crt0 0x800DAE8C — megamanx4/game/core/game_config.cpp kCrt0* constants.
 // heapSizePtr/heapBasePtr are ABSENT: the function's ONLY absolute store is `sw ra`.
 static GameConfig x4_cfg(void) {
   GameConfig c{};
-  c.bssZeroLo = 0x8012F418u; c.bssZeroHi = 0x80175F38u;
-  c.stackTopBase = 0x800DAF3Cu; c.stackTopBase2 = 0x8011CB74u;
+  c.bssZeroLo = 0x8012F418u;
+  c.bssZeroHi = 0x80175F38u;
+  c.stackTopBase = 0x800DAF3Cu;
+  c.stackTopBase2 = 0x8011CB74u;
   c.heapBase = 0x80175F38u;
   c.gp = 0x8012F418u;
-  c.libcInit = 0x800EDCDCu;                                   // BIOS A(39h) InitHeap thunk
-  c.stackBias = {1u, 0};                                       // NO bias instruction between lw and `or sp`
+  c.libcInit = 0x800EDCDCu; // BIOS A(39h) InitHeap thunk
+  c.stackBias = {1u, 0};    // NO bias instruction between lw and `or sp`
   return c;
 }
 // The words each guest crt0 LOADS. X4's are measured (0x00200000 at 0x800DAF3C, 0x00008000 at
@@ -89,10 +103,10 @@ static GameConfig x4_cfg(void) {
 // the same 0x00200000 (its sp is 0x801FFFF8 = (0x00200000 - 8) | KSEG0, which is what the port runs
 // with today); its reserve word is not needed to be exact for these assertions and is stated as an
 // input, so every expected number below is derived from THESE inputs, never from a remembered output.
-static const uint32_t X4_STACK_WORD    = 0x00200000u;
-static const uint32_t X4_RESERVE_WORD  = 0x00008000u;
-static const uint32_t T2_STACK_WORD    = 0x00200000u;
-static const uint32_t T2_RESERVE_WORD  = 0x00008000u;
+static const uint32_t X4_STACK_WORD = 0x00200000u;
+static const uint32_t X4_RESERVE_WORD = 0x00008000u;
+static const uint32_t T2_STACK_WORD = 0x00200000u;
+static const uint32_t T2_RESERVE_WORD = 0x00008000u;
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // CASE 1: Tomba!2 — the shipping consumer. The plan must reproduce the values the port boots with
@@ -103,21 +117,25 @@ static void test_tomba2_group_is_reproduced_exactly(void) {
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, T2_STACK_WORD, T2_RESERVE_WORD, "test-tomba2");
   capture_stop();
-  if (g_errors) dump_capture("tomba2");
-  CHECK_EQ(g_errors, 0);              // a correct group must not emit one error line
+  if (g_errors) {
+    dump_capture("tomba2");
+  }
+  CHECK_EQ(g_errors, 0); // a correct group must not emit one error line
   CHECK(p.ok);
-  CHECK_EQ(p.sp, 0x801FFFF8u);        // (0x00200000 - 8) | KSEG0 — the bias is APPLIED
-  CHECK_EQ(p.sp, p.sp);               // (fp == sp is applied by the caller from this one field)
+  CHECK_EQ(p.sp, 0x801FFFF8u); // (0x00200000 - 8) | KSEG0 — the bias is APPLIED
+  CHECK_EQ(p.sp, p.sp);        // (fp == sp is applied by the caller from this one field)
   CHECK_EQ(p.gp, 0x800BE0D4u);
   CHECK_EQ(p.bssLo, 0x800BE0D8u);
   CHECK_EQ(p.bssHi, 0x80106228u);
   CHECK_EQ(p.heapBaseMasked, 0x00106228u);
-  CHECK_EQ(p.a0, 0x8010622Cu);        // (masked | KSEG0) + 4
+  CHECK_EQ(p.a0, 0x8010622Cu); // (masked | KSEG0) + 4
   // heapsz = (0x001FFFF8 - 0x00008000) - 0x00106228
   CHECK_EQ(p.a1, (0x001FFFF8u - 0x00008000u) - 0x00106228u);
   CHECK_EQ(p.libcInit, 0x80089860u);
-  CHECK(p.storeHeapSize); CHECK_EQ(p.heapSizeAddr, 0x800ABEF8u);
-  CHECK(p.storeHeapBase); CHECK_EQ(p.heapBaseAddr, 0x800ABEF4u);
+  CHECK(p.storeHeapSize);
+  CHECK_EQ(p.heapSizeAddr, 0x800ABEF8u);
+  CHECK(p.storeHeapBase);
+  CHECK_EQ(p.heapBaseAddr, 0x800ABEF4u);
   // The plan is not silent on success either — the boot log has to carry the numbers.
   CHECK(any_line_has("0x801FFFF8"));
   CHECK(any_line_has("2 of 2 declared"));
@@ -132,17 +150,21 @@ static void test_x4_group_has_no_bias_and_no_stores(void) {
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "test-x4");
   capture_stop();
-  if (g_errors) dump_capture("x4");
+  if (g_errors) {
+    dump_capture("x4");
+  }
   CHECK_EQ(g_errors, 0);
   CHECK(p.ok);
-  CHECK_EQ(p.sp, 0x80200000u);        // NOT 0x801FFFF8 — this is item 1 of the defect
+  CHECK_EQ(p.sp, 0x80200000u); // NOT 0x801FFFF8 — this is item 1 of the defect
   CHECK_EQ(p.gp, 0x8012F418u);
   CHECK_EQ(p.heapBaseMasked, 0x00175F38u);
   CHECK_EQ(p.a0, 0x80175F3Cu);
-  CHECK_EQ(p.a1, 0x000820C8u);        // the measured heap size, 532,680 bytes
+  CHECK_EQ(p.a1, 0x000820C8u); // the measured heap size, 532,680 bytes
   // ── THE WHOLE POINT: no store, and NO ADDRESS TO STORE TO. The old code wrote both to guest 0.
-  CHECK(!p.storeHeapSize); CHECK_EQ(p.heapSizeAddr, 0u);
-  CHECK(!p.storeHeapBase); CHECK_EQ(p.heapBaseAddr, 0u);
+  CHECK(!p.storeHeapSize);
+  CHECK_EQ(p.heapSizeAddr, 0u);
+  CHECK(!p.storeHeapBase);
+  CHECK_EQ(p.heapBaseAddr, 0u);
   // …and the absence is ANNOUNCED as measured-absent, so a reader of the boot log can tell it from a
   // field nobody filled in.
   CHECK(any_line_has("0 of 2 declared"));
@@ -176,20 +198,24 @@ static void test_the_two_shapes_differ_on_the_same_stack_word(void) {
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_undeclared_bias_refuses_and_names_itself(void) {
   GameConfig cfg = x4_cfg();
-  cfg.stackBias = {0u, 0};                     // the state a consumer that has not stated it is in
+  cfg.stackBias = {0u, 0}; // the state a consumer that has not stated it is in
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "test-nobias");
   capture_stop();
   dump_capture("nobias");
   CHECK(!p.ok);
-  CHECK_EQ(g_errors, 1);                       // it FIRED, exactly once
-  CHECK(any_line_has("stackBias.declared"));   // …and named the field to fill
-  CHECK(any_line_has("1 of 8"));               // …with the denominator: 1 missing OF 8 checked
-  CHECK(any_line_has("test-nobias"));          // …and which caller is affected
+  CHECK_EQ(g_errors, 1);                     // it FIRED, exactly once
+  CHECK(any_line_has("stackBias.declared")); // …and named the field to fill
+  CHECK(any_line_has("1 of 8"));             // …with the denominator: 1 missing OF 8 checked
+  CHECK(any_line_has("test-nobias"));        // …and which caller is affected
   // A refused plan must leave EVERYTHING zero: a caller that ignored `ok` must not find a usable-
   // looking sp/gp/a0 sitting in the struct.
-  CHECK_EQ(p.sp, 0u); CHECK_EQ(p.gp, 0u); CHECK_EQ(p.a0, 0u); CHECK_EQ(p.a1, 0u);
-  CHECK(!p.storeHeapSize); CHECK(!p.storeHeapBase);
+  CHECK_EQ(p.sp, 0u);
+  CHECK_EQ(p.gp, 0u);
+  CHECK_EQ(p.a0, 0u);
+  CHECK_EQ(p.a1, 0u);
+  CHECK(!p.storeHeapSize);
+  CHECK(!p.storeHeapBase);
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -205,9 +231,16 @@ static void test_zero_config_refuses_with_every_field_named(void) {
   CHECK(!p.ok);
   CHECK_EQ(g_errors, 1);
   CHECK(any_line_has("8 of 8"));
-  for (const char* f : {"bssZeroLo", "bssZeroHi", "stackTopBase", "stackTopBase2", "heapBase", "gp",
-                        "libcInit", "stackBias.declared"})
+  for (const char *f : {"bssZeroLo",
+                        "bssZeroHi",
+                        "stackTopBase",
+                        "stackTopBase2",
+                        "heapBase",
+                        "gp",
+                        "libcInit",
+                        "stackBias.declared"}) {
     CHECK(any_line_has(f));
+  }
   // It must not print another game's addresses as a fallback.
   CHECK(!any_line_has("0x800BE0D8"));
   CHECK_EQ(p.sp, 0u);
@@ -222,7 +255,7 @@ static void test_null_config_refuses(void) {
   CHECK(!p.ok);
   CHECK_EQ(g_errors, 1);
   CHECK(any_line_has("NO GameConfig"));
-  CHECK(any_line_has("0 of 8"));               // the denominator of a refusal that checked nothing
+  CHECK(any_line_has("0 of 8")); // the denominator of a refusal that checked nothing
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -232,7 +265,8 @@ static void test_null_config_refuses(void) {
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_partial_group_names_only_the_missing(void) {
   GameConfig cfg = tomba2_cfg();
-  cfg.gp = 0; cfg.libcInit = 0;                // two fields not yet located
+  cfg.gp = 0;
+  cfg.libcInit = 0; // two fields not yet located
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, T2_STACK_WORD, T2_RESERVE_WORD, "test-partial");
   capture_stop();
@@ -242,7 +276,7 @@ static void test_partial_group_names_only_the_missing(void) {
   CHECK(any_line_has("2 of 8"));
   CHECK(any_line_has("gp"));
   CHECK(any_line_has("libcInit"));
-  CHECK(!any_line_has("bssZeroLo"));           // …and does NOT claim the filled half is missing
+  CHECK(!any_line_has("bssZeroLo")); // …and does NOT claim the filled half is missing
   CHECK(!any_line_has("stackTopBase"));
 }
 
@@ -255,13 +289,13 @@ static void test_partial_group_names_only_the_missing(void) {
 static void test_underflowing_heap_size_refuses(void) {
   const GameConfig cfg = x4_cfg();
   capture_start();
-  const Crt0Plan p = crt0_plan(&cfg, 0u, X4_RESERVE_WORD, "test-underflow");   // stack-top word reads 0
+  const Crt0Plan p = crt0_plan(&cfg, 0u, X4_RESERVE_WORD, "test-underflow"); // stack-top word reads 0
   capture_stop();
   dump_capture("underflow");
   CHECK(!p.ok);
   CHECK_EQ(g_errors, 1);
   CHECK(any_line_has("not a heap size"));
-  CHECK(any_line_has("0x800DAF3C"));           // names the global whose word is wrong
+  CHECK(any_line_has("0x800DAF3C")); // names the global whose word is wrong
   CHECK_EQ(p.a1, 0u);
   // …and the same config with the REAL word passes, so this check discriminates rather than always
   // refusing.
@@ -275,19 +309,22 @@ static void test_underflowing_heap_size_refuses(void) {
 // A non-empty, mis-aligned or inverted .bss span is likewise a wrong value with everything set.
 static void test_bad_bss_span_refuses(void) {
   GameConfig cfg = x4_cfg();
-  cfg.bssZeroHi = cfg.bssZeroLo - 4u;          // inverted
+  cfg.bssZeroHi = cfg.bssZeroLo - 4u; // inverted
   capture_start();
   const Crt0Plan a = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "test-bss-inverted");
   capture_stop();
   dump_capture("bss-inverted");
-  CHECK(!a.ok); CHECK_EQ(g_errors, 1); CHECK(any_line_has("word-aligned non-empty"));
+  CHECK(!a.ok);
+  CHECK_EQ(g_errors, 1);
+  CHECK(any_line_has("word-aligned non-empty"));
 
   GameConfig mis = x4_cfg();
-  mis.bssZeroLo |= 2u;                         // unaligned
+  mis.bssZeroLo |= 2u; // unaligned
   capture_start();
   const Crt0Plan b = crt0_plan(&mis, X4_STACK_WORD, X4_RESERVE_WORD, "test-bss-unaligned");
   capture_stop();
-  CHECK(!b.ok); CHECK_EQ(g_errors, 1);
+  CHECK(!b.ok);
+  CHECK_EQ(g_errors, 1);
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -298,25 +335,49 @@ static void test_bad_bss_span_refuses(void) {
 // function to a Core, so this is the shipping sequence, not a paraphrase of it.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 struct RecWriter {
-  uint32_t lo = 0, hi = 0;                             // the .bss span, so its writes can be counted
+  uint32_t lo = 0, hi = 0; // the .bss span, so its writes can be counted
   uint32_t bssWords = 0;
-  std::vector<std::pair<uint32_t, uint32_t>> other;    // every write OUTSIDE the .bss span
+  std::vector<std::pair<uint32_t, uint32_t>> other; // every write OUTSIDE the .bss span
   uint32_t regs[32] = {};
-  bool     regSet[32] = {};
+  bool regSet[32] = {};
   uint32_t called = 0;
-  int      nCalls = 0;
-  void w32(uint32_t a, uint32_t v) { if (a >= lo && a < hi) bssWords++; else other.emplace_back(a, v); }
-  void reg(int i, uint32_t v) { regs[i] = v; regSet[i] = true; }
-  void call(uint32_t e) { called = e; nCalls++; }
+  int nCalls = 0;
+  void w32(uint32_t a, uint32_t v) {
+    if (a >= lo && a < hi) {
+      bssWords++;
+    } else {
+      other.emplace_back(a, v);
+    }
+  }
+  void reg(int i, uint32_t v) {
+    regs[i] = v;
+    regSet[i] = true;
+  }
+  void call(uint32_t e) {
+    called = e;
+    nCalls++;
+  }
   int writesTo(uint32_t a) const {
-    int n = 0; for (const auto& kv : other) if (kv.first == a) n++; return n;
+    int n = 0;
+    for (const auto &kv : other) {
+      if (kv.first == a) {
+        n++;
+      }
+    }
+    return n;
   }
 };
-static void dump_writer(const char* what, const RecWriter& w) {
-  fprintf(stderr, "  [%s] .bss words=%u, %zu non-bss write(s), %d call(s) -> 0x%08X\n",
-          what, w.bssWords, w.other.size(), w.nCalls, w.called);
-  for (const auto& kv : w.other)
+static void dump_writer(const char *what, const RecWriter &w) {
+  fprintf(stderr,
+          "  [%s] .bss words=%u, %zu non-bss write(s), %d call(s) -> 0x%08X\n",
+          what,
+          w.bssWords,
+          w.other.size(),
+          w.nCalls,
+          w.called);
+  for (const auto &kv : w.other) {
     fprintf(stderr, "  [%s] | write 0x%08X <- 0x%08X\n", what, kv.first, kv.second);
+  }
 }
 
 static void test_absent_heap_globals_write_nothing_at_all(void) {
@@ -325,7 +386,9 @@ static void test_absent_heap_globals_write_nothing_at_all(void) {
   const Crt0Plan p = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "apply-x4");
   capture_stop();
   CHECK(p.ok);
-  RecWriter w; w.lo = p.bssLo; w.hi = p.bssHi;
+  RecWriter w;
+  w.lo = p.bssLo;
+  w.hi = p.bssHi;
   CHECK(crt0_apply(p, w));
   dump_writer("apply-x4", w);
   // THE ASSERTION THE DEFECT NEEDED: not one word is written outside the .bss span, and in particular
@@ -333,12 +396,15 @@ static void test_absent_heap_globals_write_nothing_at_all(void) {
   // whose crt0 has no heap globals.
   CHECK_EQ((int)w.other.size(), 0);
   CHECK_EQ(w.writesTo(0x00000000u), 0);
-  CHECK_EQ(w.bssWords, (p.bssHi - p.bssLo) / 4u);      // and the .bss really was cleared, word by word
-  CHECK_EQ(w.regs[29], 0x80200000u); CHECK_EQ(w.regs[30], 0x80200000u);
+  CHECK_EQ(w.bssWords, (p.bssHi - p.bssLo) / 4u); // and the .bss really was cleared, word by word
+  CHECK_EQ(w.regs[29], 0x80200000u);
+  CHECK_EQ(w.regs[30], 0x80200000u);
   CHECK_EQ(w.regs[28], 0x8012F418u);
-  CHECK_EQ(w.regs[4],  0x80175F3Cu);
-  CHECK(w.regSet[5]); CHECK_EQ(w.regs[5], 0x000820C8u); // a1 = the heap size — the item-4 fix
-  CHECK_EQ(w.nCalls, 1); CHECK_EQ(w.called, 0x800EDCDCu);
+  CHECK_EQ(w.regs[4], 0x80175F3Cu);
+  CHECK(w.regSet[5]);
+  CHECK_EQ(w.regs[5], 0x000820C8u); // a1 = the heap size — the item-4 fix
+  CHECK_EQ(w.nCalls, 1);
+  CHECK_EQ(w.called, 0x800EDCDCu);
 }
 
 // The consumer that DOES have both globals must still get both writes, at the measured addresses and
@@ -349,18 +415,25 @@ static void test_present_heap_globals_write_exactly_two_words(void) {
   const Crt0Plan p = crt0_plan(&cfg, T2_STACK_WORD, T2_RESERVE_WORD, "apply-t2");
   capture_stop();
   CHECK(p.ok);
-  RecWriter w; w.lo = p.bssLo; w.hi = p.bssHi;
+  RecWriter w;
+  w.lo = p.bssLo;
+  w.hi = p.bssHi;
   CHECK(crt0_apply(p, w));
   dump_writer("apply-t2", w);
   CHECK_EQ((int)w.other.size(), 2);
   CHECK_EQ(w.writesTo(0x00000000u), 0);
   CHECK_EQ(w.writesTo(0x800ABEF8u), 1);
   CHECK_EQ(w.writesTo(0x800ABEF4u), 1);
-  for (const auto& kv : w.other) {
-    if (kv.first == 0x800ABEF8u) CHECK_EQ(kv.second, p.a1);                 // the heap SIZE
-    if (kv.first == 0x800ABEF4u) CHECK_EQ(kv.second, 0x80106228u);          // the heap BASE, KSEG0'd
+  for (const auto &kv : w.other) {
+    if (kv.first == 0x800ABEF8u) {
+      CHECK_EQ(kv.second, p.a1); // the heap SIZE
+    }
+    if (kv.first == 0x800ABEF4u) {
+      CHECK_EQ(kv.second, 0x80106228u); // the heap BASE, KSEG0'd
+    }
   }
-  CHECK(w.regSet[5]); CHECK_EQ(w.regs[5], p.a1);
+  CHECK(w.regSet[5]);
+  CHECK_EQ(w.regs[5], p.a1);
   CHECK_EQ(w.called, 0x80089860u);
 }
 
@@ -372,13 +445,17 @@ static void test_refused_plan_applies_nothing(void) {
   const Crt0Plan p = crt0_plan(&cfg, 0u, 0u, "apply-zero");
   capture_stop();
   CHECK(!p.ok);
-  RecWriter w; w.lo = 1; w.hi = 1;                     // an empty "bss span": every write is recorded
+  RecWriter w;
+  w.lo = 1;
+  w.hi = 1; // an empty "bss span": every write is recorded
   CHECK(!crt0_apply(p, w));
   dump_writer("apply-zero", w);
   CHECK_EQ((int)w.other.size(), 0);
   CHECK_EQ(w.bssWords, 0u);
   CHECK_EQ(w.nCalls, 0);
-  for (int i = 0; i < 32; i++) CHECK(!w.regSet[i]);
+  for (int i = 0; i < 32; i++) {
+    CHECK(!w.regSet[i]);
+  }
 }
 
 int main(void) {

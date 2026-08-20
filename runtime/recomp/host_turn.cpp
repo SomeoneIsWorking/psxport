@@ -23,14 +23,14 @@
 // time. There is no such constant here: the arming interval only affects how promptly a turn is
 // taken, while the number of fields owed is always elapsed_time × field_rate.
 #include "core.h"
+#include "game.h" // Game::hle.irq_enabled — the guest's critical-section flag
 #include "host_turn_plan.h"
-#include <cstdlib>   // std::atexit — the timer thread joins itself at exit (see below)
-#include "game.h"   // Game::hle.irq_enabled — the guest's critical-section flag
-#include "native_diff.h"  // ndiff_in_progress — the differential is a critical section too
-#include <lucent/log.h>
+#include "native_diff.h" // ndiff_in_progress — the differential is a critical section too
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib> // std::atexit — the timer thread joins itself at exit (see below)
+#include <lucent/log.h>
 #include <mutex>
 #include <thread>
 
@@ -38,19 +38,19 @@ namespace {
 
 // The registered handler and the Core it belongs to. A single Core is the norm; the divergence
 // harness runs two, but only one of them is ever the live paced port, so one registration is right.
-HostTurnFn        s_fn   = nullptr;
-Core*             s_core = nullptr;
-unsigned          s_fps_millihz = 0;
+HostTurnFn s_fn = nullptr;
+Core *s_core = nullptr;
+unsigned s_fps_millihz = 0;
 
-std::thread             s_thread;
-std::mutex              s_m;
+std::thread s_thread;
+std::mutex s_m;
 std::condition_variable s_cv;
-bool                    s_stop = false;
-HostTurnClockState      s_clock;
+bool s_stop = false;
+HostTurnClockState s_clock;
 
 int64_t steady_now_ns() {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(
-           std::chrono::steady_clock::now().time_since_epoch()).count();
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
 }
 
 // Re-entrancy guard. The handler runs guest code (it dispatches the game's registered callback), and
@@ -69,26 +69,32 @@ void timer_main() {
   std::unique_lock<std::mutex> lk(s_m);
   while (!s_stop) {
     const uint64_t generation = s_clock.generation;
-    const auto deadline = std::chrono::steady_clock::time_point(
-      std::chrono::nanoseconds(s_clock.deadline_ns));
+    const auto deadline = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(s_clock.deadline_ns));
     s_cv.wait_until(lk, deadline, [generation] {
       return s_stop || s_clock.generation != generation;
     });
     const int64_t now_ns = steady_now_ns();
-    const HostTurnWakeAction action =
-      host_turn_wake_action(generation, s_clock, now_ns, s_stop);
-    if (action == HostTurnWakeAction::Stop) break;
-    if (action == HostTurnWakeAction::Restart) continue;
-    Core* c = s_core;
+    const HostTurnWakeAction action = host_turn_wake_action(generation, s_clock, now_ns, s_stop);
+    if (action == HostTurnWakeAction::Stop) {
+      break;
+    }
+    if (action == HostTurnWakeAction::Restart) {
+      continue;
+    }
+    Core *c = s_core;
     // Relaxed is right: this is a hint word, and the guest thread re-derives the actual amount of
     // owed work from the clock. A missed or late set costs latency, never correctness.
-    if (c) __atomic_or_fetch(&c->pending_work, Core::PW_HOST, __ATOMIC_RELAXED);
+    if (c) {
+      __atomic_or_fetch(&c->pending_work, Core::PW_HOST, __ATOMIC_RELAXED);
+    }
     s_clock = host_turn_clock_armed(s_clock, now_ns, period_ns);
   }
 }
 
-void host_turn_field_delivered(Core* c) {
-  if (!c || c != s_core) return;
+void host_turn_field_delivered(Core *c) {
+  if (!c || c != s_core) {
+    return;
+  }
   // An explicit guest/native field and the timer represent the same hardware event. Cancel any
   // already-latched host turn and restart the timer from this completed field; otherwise a timer
   // tick that occurred while the explicit path was pacing is delivered immediately afterward and
@@ -101,28 +107,35 @@ void host_turn_field_delivered(Core* c) {
     // the timer arms first and this clears it, or this advances generation first and the timer's
     // stale wake restarts. Clearing before taking the lock leaves a third ordering where the timer
     // re-arms the obsolete field between the clear and generation change.
-    __atomic_and_fetch(&c->pending_work,
-                       host_turn_pending_after_field(~0, Core::PW_HOST), __ATOMIC_RELAXED);
+    __atomic_and_fetch(&c->pending_work, host_turn_pending_after_field(~0, Core::PW_HOST), __ATOMIC_RELAXED);
   }
   s_cv.notify_all();
 }
 
-}  // namespace
+} // namespace
 
-void rec_host_turn_field_delivered(Core* c) { host_turn_field_delivered(c); }
+void rec_host_turn_field_delivered(Core *c) {
+  host_turn_field_delivered(c);
+}
 
-void rec_host_turn_register(Core* c, HostTurnFn fn, unsigned fps_millihz) {
+void rec_host_turn_register(Core *c, HostTurnFn fn, unsigned fps_millihz) {
   if (!c || !fn || !fps_millihz) {
-    lucent::error("hostturn", "refusing to register: core={} fn={} fps_millihz={} — a zero field rate "
-                              "would make the timer spin, and a null handler would arm a gate nothing "
-                              "services.", (void*)c, (void*)fn, fps_millihz);
+    lucent::error("hostturn",
+                  "refusing to register: core={} fn={} fps_millihz={} — a zero field rate "
+                  "would make the timer spin, and a null handler would arm a gate nothing "
+                  "services.",
+                  (void *)c,
+                  (void *)fn,
+                  fps_millihz);
     return;
   }
   if (s_fn) {
     lucent::warn("hostturn", "already registered; ignoring the second registration");
     return;
   }
-  s_fn = fn; s_core = c; s_fps_millihz = fps_millihz;
+  s_fn = fn;
+  s_core = c;
+  s_fps_millihz = fps_millihz;
   {
     std::lock_guard<std::mutex> lk(s_m);
     s_stop = false;
@@ -143,21 +156,35 @@ void rec_host_turn_register(Core* c, HostTurnFn fn, unsigned fps_millihz) {
   // explicit call from a port (spyro's producer_run.cpp does one) costs nothing and the atexit path is
   // still there for the ports that do not.
   static bool atexit_armed = false;
-  if (!atexit_armed) { atexit_armed = true; std::atexit(+[] { rec_host_turn_shutdown(); }); }
-  lucent::info("hostturn", "host turn armed at {}.{:03} Hz — the guest yields to the host at recompiled "
-                           "function entry", fps_millihz / 1000, fps_millihz % 1000);
+  if (!atexit_armed) {
+    atexit_armed = true;
+    std::atexit(+[] {
+      rec_host_turn_shutdown();
+    });
+  }
+  lucent::info("hostturn",
+               "host turn armed at {}.{:03} Hz — the guest yields to the host at recompiled "
+               "function entry",
+               fps_millihz / 1000,
+               fps_millihz % 1000);
 }
 
 void rec_host_turn_shutdown() {
-  if (!s_thread.joinable()) return;
-  { std::lock_guard<std::mutex> lk(s_m); s_stop = true; }
+  if (!s_thread.joinable()) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lk(s_m);
+    s_stop = true;
+  }
   s_cv.notify_all();
   s_thread.join();
-  s_fn = nullptr; s_core = nullptr;
+  s_fn = nullptr;
+  s_core = nullptr;
 }
 
 // Called from rec_irq_poll (the substrate's gate entry) when PW_HOST is set.
-void rec_host_turn(Core* c) {
+void rec_host_turn(Core *c) {
   // RESPECT THE GUEST'S CRITICAL SECTIONS. The turn dispatches a callback the GUEST registered, so it
   // is guest code running at a moment the guest did not choose. When the guest has masked interrupts
   // (COP0 Status.IEc clear) it is saying exactly one thing: do not run my handlers here. Ignoring
@@ -176,31 +203,39 @@ void rec_host_turn(Core* c) {
   // Do NOT clear PW_HOST when deferring: hardware would leave the VBlank latched and deliver it when
   // the guest re-enables. Leaving the bit set reproduces that — the turn is taken at the first gate
   // after the critical section ends, rather than being silently dropped.
-  if (!c->game->hle.irq_enabled) return;
+  if (!c->game->hle.irq_enabled) {
+    return;
+  }
 
   // THE DIFFERENTIAL HARNESS IS ALSO A CRITICAL SECTION, and for the same reason: guest code must not
   // run at a moment it did not choose. A turn taken inside ndiff_run's substrate leg (the only leg
   // with a gate in it) writes the vblank counter, the pad buffers and the handler's stack, and the
   // comparison then reports those bytes as the NATIVE body diverging. See native_diff.h. PW_HOST is
   // deliberately left armed: the turn is taken at the first gate after the comparison finishes.
-  if (ndiff_in_progress()) return;
+  if (ndiff_in_progress()) {
+    return;
+  }
 
   // Clear only once the turn is actually being taken. The timer may set it again while the handler
   // runs — that is correct and means another field elapsed during the turn.
   __atomic_and_fetch(&c->pending_work, ~Core::PW_HOST, __ATOMIC_RELAXED);
 
-  if (s_in_turn || !s_fn || c != s_core) return;
+  if (s_in_turn || !s_fn || c != s_core) {
+    return;
+  }
   // The same transient-state check interrupt delivery makes (hle.cpp): if either is live we are in
   // the middle of the dispatch machinery, not at a clean boundary, and running guest code here could
   // lose a pending redirect.
-  if (c->override_tgt || c->coro_redirect_pc) return;
+  if (c->override_tgt || c->coro_redirect_pc) {
+    return;
+  }
 
   s_in_turn = true;
   // Full guest-context save/restore. The handler dispatches a guest callback, which will use the
   // register file; the function whose entry we intercepted has not run a single instruction yet and
   // must see its arguments intact.
-  const R3000 saved = *static_cast<R3000*>(c);
+  const R3000 saved = *static_cast<R3000 *>(c);
   s_fn(c);
-  *static_cast<R3000*>(c) = saved;
+  *static_cast<R3000 *>(c) = saved;
   s_in_turn = false;
 }

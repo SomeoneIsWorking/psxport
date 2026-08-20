@@ -39,9 +39,9 @@ namespace repl_service {
 static const int kRefusalExit = 2;
 
 enum class Verdict {
-  Ok,      // nothing is being dropped: either the loop pumps the REPL, or no input is waiting
-  Warn,    // a human is typing at a terminal into a loop that will not read it — say so, keep going
-  Refuse,  // a script's commands are being dropped on the floor — the run's conclusion is worthless
+  Ok,     // nothing is being dropped: either the loop pumps the REPL, or no input is waiting
+  Warn,   // a human is typing at a terminal into a loop that will not read it — say so, keep going
+  Refuse, // a script's commands are being dropped on the floor — the run's conclusion is worthless
 };
 
 struct Query {
@@ -58,15 +58,21 @@ struct Query {
   long stdinPendingBytes = -1;
 };
 
-inline Verdict decide(const Query& q) {
+inline Verdict decide(const Query &q) {
   // The loop reads stdin itself: nothing is being dropped, whatever is in the pipe.
-  if (q.loopServicesRepl) return Verdict::Ok;
+  if (q.loopServicesRepl) {
+    return Verdict::Ok;
+  }
   // An explicit PSXPORT_REPL against a loop with no pump is unambiguous, pending bytes or not: the
   // operator asked for a REPL this run cannot give them. This is the case that needs no timing luck.
-  if (q.replRequested) return Verdict::Refuse;
+  if (q.replRequested) {
+    return Verdict::Refuse;
+  }
   // No explicit request: the evidence is bytes waiting on the pipe. This is the repro that started
   // it (`printf 'newgame\nrun 200\nquit\n' | PSXPORT_SBS_MODE=full …` sets no PSXPORT_REPL at all).
-  if (q.stdinPendingBytes > 0) return q.stdinIsTty ? Verdict::Warn : Verdict::Refuse;
+  if (q.stdinPendingBytes > 0) {
+    return q.stdinIsTty ? Verdict::Warn : Verdict::Refuse;
+  }
   // 0 bytes waiting (`< /dev/null`, an idle inherited pipe) or an fd we cannot measure: a run with
   // no input to drop is a normal headless run and must stay silent.
   return Verdict::Ok;
@@ -80,47 +86,56 @@ inline Verdict decide(const Query& q) {
 // silently-correct SBS advice. That is what makes the typo case (`"sbs"`, a new harness added
 // without a paragraph) visible instead of a no-op — and tests/test_repl_unserviced_refusal.cpp
 // scans every call site in the runtime to check the name it passes IS registered.
-inline const char* drive_advice(const char* loopName) {
+inline const char *drive_advice(const char *loopName) {
   const std::string n = loopName ? loopName : "";
-  if (n == "SBS")
+  if (n == "SBS") {
     return "To DRIVE an SBS run use the harness's own two-core mechanisms, which apply to BOTH "
            "cores identically: PSXPORT_SBS_AUTONAV=1 (auto-nav to the field), "
            "PSXPORT_SBS_WARP=frame:area[:sub] (deterministic area load), "
            "PSXPORT_SBS_PAD_REPLAY=<file.pad> (recorded input), or PSXPORT_DEBUG_SERVER=1 (live "
            "socket). For the REPL itself, run the SINGLE-CORE port without "
            "PSXPORT_SBS/PSXPORT_SBS_MODE.";
-  if (n == "DualCore")
+  }
+  if (n == "DualCore") {
     return "A DualCore run (PSXPORT_DUALCORE=1) is a one-shot diagnostic that drives ITSELF: its "
            "nav machine taps Cross to the GAME stage and pulses Start through the cutscene, then "
            "it diffs guest RAM between the native-render and PSX-render legs. There is no operator "
            "input to give it; PSXPORT_DC_ALL=1 is the only knob that changes its report. For the "
            "REPL itself, run the SINGLE-CORE port without PSXPORT_DUALCORE.";
-  if (n == "selftest")
+  }
+  if (n == "selftest") {
     return "A PSXPORT_SELFTEST run is a FIXED script with a pass/fail exit code and no operator "
            "input, so there is nothing for a REPL command to drive; PSXPORT_SELFTEST_VERBOSE=1 is "
            "what changes what it prints. For the REPL itself, run the SINGLE-CORE port without "
            "PSXPORT_SELFTEST.";
-  return nullptr;   // unregistered: message() states that rather than inventing advice
+  }
+  return nullptr; // unregistered: message() states that rather than inventing advice
 }
 
 // The operator-facing text. Built here, next to the rule, so the test can assert what a refusal
 // SAYS — a refusal that does not name the unserviced thing and the supported alternative just
 // looks like a crash. `loopName` is the loop that owns the process ("SBS", "DualCore", …) and must
 // be one of the names drive_advice() registers.
-inline std::string message(const char* loopName, const Query& q, Verdict v) {
+inline std::string message(const char *loopName, const Query &q, Verdict v) {
   const std::string loop = loopName ? loopName : "this harness";
   std::string s;
-  if (v == Verdict::Ok) return s;   // callers must not print anything on Ok
+  if (v == Verdict::Ok) {
+    return s; // callers must not print anything on Ok
+  }
   s += "the " + loop + " loop does NOT service the REPL — ";
-  if (q.replRequested)
+  if (q.replRequested) {
     s += "PSXPORT_REPL is set, but Repl::read() is pumped ONLY by the single-core native frame loop "
          "(runtime/recomp/native_boot.cpp), which this run never enters. ";
-  if (q.stdinPendingBytes > 0)
+  }
+  if (q.stdinPendingBytes > 0) {
     s += std::to_string(q.stdinPendingBytes) +
          " byte(s) are ALREADY WAITING on stdin and NOTHING in this run will ever read them: every "
-         "command in that script would be silently discarded while the " + loop + " harness ran its "
+         "command in that script would be silently discarded while the " +
+         loop +
+         " harness ran its "
          "own script, and the run would look like it had worked. ";
-  if (const char* advice = drive_advice(loopName)) {
+  }
+  if (const char *advice = drive_advice(loopName)) {
     s += advice;
     s += " ";
   } else {
@@ -130,12 +145,13 @@ inline std::string message(const char* loopName, const Query& q, Verdict v) {
          "tell you what to use instead — that is a gap in the guard, not in your command line. For "
          "the REPL itself, run the SINGLE-CORE port. ";
   }
-  if (v == Verdict::Refuse)
+  if (v == Verdict::Refuse) {
     s += "REFUSING THE RUN (exit " + std::to_string(kRefusalExit) +
          ") rather than producing a verdict over input it threw away.";
-  else
+  } else {
     s += "Nothing in this run is reading your terminal; drive it with the mechanisms above. "
          "(Continuing — a live session is not killed for a keystroke.)";
+  }
   return s;
 }
 
@@ -148,9 +164,9 @@ long stdin_pending_bytes();
 // Probe the process + decide + report. On Verdict::Refuse this calls exit(kRefusalExit) and does
 // not return; on Warn it logs at most once per process; on Ok it is silent. `loopServicesRepl` is
 // the caller stating whether ITS loop pumps Repl::read().
-void refuse_if_unserviced(const char* loopName, bool loopServicesRepl = false);
+void refuse_if_unserviced(const char *loopName, bool loopServicesRepl = false);
 
-}  // namespace repl_service
-}  // namespace psx
+} // namespace repl_service
+} // namespace psx
 
-#endif  // PSXPORT_REPL_SERVICE_H
+#endif // PSXPORT_REPL_SERVICE_H

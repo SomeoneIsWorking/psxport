@@ -26,25 +26,25 @@ enum class RowKind { None, Toggle, Adjust, Action };
 
 class ModRowModel {
 public:
-    // Is `id` a row this model knows about, in the given kind? Used to report unknown ids at load
-    // rather than discovering them when a user presses a dead button.
-    static bool knows(RowKind kind, std::string_view id);
+  // Is `id` a row this model knows about, in the given kind? Used to report unknown ids at load
+  // rather than discovering them when a user presses a dead button.
+  static bool knows(RowKind kind, std::string_view id);
 
-    // Current display text for a row. Returns false (leaving `out` untouched) when the id is
-    // unknown — the caller has already reported that at load time.
-    static bool value_text(const Mods& m, RowKind kind, std::string_view id, std::string& out);
+  // Current display text for a row. Returns false (leaving `out` untouched) when the id is
+  // unknown — the caller has already reported that at load time.
+  static bool value_text(const Mods &m, RowKind kind, std::string_view id, std::string &out);
 
-    // Cycle a toggle row to its next state, persisting if the row is a persisted setting.
-    static void toggle(Mods& m, std::string_view id);
+  // Cycle a toggle row to its next state, persisting if the row is a persisted setting.
+  static void toggle(Mods &m, std::string_view id);
 
-    // Step an adjust row by `dir` (+1/-1), clamped to the row's range, persisting.
-    static void adjust(Mods& m, std::string_view id, int dir);
+  // Step an adjust row by `dir` (+1/-1), clamped to the row's range, persisting.
+  static void adjust(Mods &m, std::string_view id, int dir);
 
-    // Denominators for the load-time report and for tests: how many rows of each kind exist.
-    static int toggle_count();
-    static int adjust_count();
+  // Denominators for the load-time report and for tests: how many rows of each kind exist.
+  static int toggle_count();
+  static int adjust_count();
 };
 
-}  // namespace psx::ui
+} // namespace psx::ui
 
 #endif

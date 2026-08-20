@@ -16,20 +16,19 @@ extern "C" {
 
 // Decode an entire BS frame (8-byte BS header + VLC bitstream) into the MDEC run-level code
 // stream. Returns number of 16-bit codes written, or negative on error.
-int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
-                    int width, int height, uint16_t* codes, int max_codes);
+int bs_decode_frame(
+    const uint8_t *payload, uint32_t payload_size, int width, int height, uint16_t *codes, int max_codes);
 
 // Feed the MDEC (16bpp) with the code stream and extract/tile the RGB555 frame into `pixels`
 // (width*height entries). Uploads the quant + IDCT tables first. Returns width*height, or
 // negative on error.
-int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
-                          int width, int height, uint16_t* pixels);
+int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int height, uint16_t *pixels);
 
-// Decode one raw 2352B XA-ADPCM sector to interleaved S16 stereo (out[2*n]=L, out[2*n+1]=R;
-// mono duplicated to both channels). Returns stereo frame count; `*freq` = sample rate.
-// `hist[ch][0..1]` is the per-channel history that MUST persist across sectors.
-// (Also declared in c_subsys.h for xa_stream.c; identical declaration.)
-int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* freq);
+// xa_decode_sector — decode one raw 2352B XA-ADPCM sector to interleaved S16 stereo.
+// DECLARED IN c_subsys.h, which this includes. The declaration used to be copied here as well, with
+// a comment saying so ("identical declaration") — a copy that is known about is still a copy, and
+// the two would drift the first time either signature changed.
+#include "c_subsys.h"
 
 #ifdef __cplusplus
 }

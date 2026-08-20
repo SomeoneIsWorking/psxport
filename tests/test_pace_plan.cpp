@@ -38,31 +38,40 @@
 
 // The two field rates the framework decodes from GP1(0x08) bit 3. Stated here as literals ON PURPOSE:
 // a test that imported the constants it is checking would pass no matter what they were changed to.
-static const unsigned NTSC_MILLIHZ = 59940u;   // 60000/1001 Hz
-static const unsigned PAL_MILLIHZ  = 50000u;   // 50 Hz
+static const unsigned NTSC_MILLIHZ = 59940u; // 60000/1001 Hz
+static const unsigned PAL_MILLIHZ = 50000u;  // 50 Hz
 
 // ---- the rule as shipped at 9890eaa8, kept ONLY as this suite's negative control -------------------
 // gpu_native.cpp:1542..1575. Note both defects: `hasWindow` gates pacing, and the interval divides by
 // a hardcoded 60.0 rather than by the game's field rate (which the rule had no way to receive).
-[[maybe_unused]] static PacePlan legacy_pace(const PaceInputs& in, bool hasWindow) {
+[[maybe_unused]] static PacePlan legacy_pace(const PaceInputs &in, bool hasWindow) {
   PacePlan p;
   p.nextMs = in.nextMs;
-  if (!hasWindow || in.unpaced) return p;
+  if (!hasWindow || in.unpaced) {
+    return p;
+  }
   int parts = in.parts < 1 ? 1 : in.parts;
   int quota = in.quota;
-  if (quota < 1) { p.quotaUnset = true; quota = 1; }
+  if (quota < 1) {
+    p.quotaUnset = true;
+    quota = 1;
+  }
   p.paced = true;
   p.intervalMs = (double)quota * 1000.0 / 60.0 / (double)parts;
   double next = (in.seeded ? in.nextMs : in.nowMs) + p.intervalMs;
-  if (next > in.nowMs) p.sleepMs = next - in.nowMs;
-  else if (in.nowMs - next > p.intervalMs) { next = in.nowMs; p.resync = true; }
+  if (next > in.nowMs) {
+    p.sleepMs = next - in.nowMs;
+  } else if (in.nowMs - next > p.intervalMs) {
+    next = in.nowMs;
+    p.resync = true;
+  }
   p.nextMs = next;
   return p;
 }
 
 // The unit under test, with the window presented as a parameter the SHIPPED rule simply ignores —
 // that asymmetry IS the fix, and expressing it this way is what lets one property cover both rules.
-static PacePlan pace(const PaceInputs& in, bool hasWindow) {
+static PacePlan pace(const PaceInputs &in, bool hasWindow) {
 #ifdef PSXPORT_TEST_LEGACY_PACE_PLAN
   return legacy_pace(in, hasWindow);
 #else
@@ -71,24 +80,31 @@ static PacePlan pace(const PaceInputs& in, bool hasWindow) {
 #endif
 }
 
-static bool near_ms(double a, double b, double tol) { return fabs(a - b) <= tol; }
+static bool near_ms(double a, double b, double tol) {
+  return fabs(a - b) <= tol;
+}
 
 // ---- the input table -------------------------------------------------------------------------------
 // Every case is a cadence one of the three ports actually paces at, so a green run has a denominator
 // that means something: spyro/spider1 pace once per field (quota 1), Tomba!2 once per 30fps logic
 // frame (quota 2), and fps60 halves whichever of those with parts=2.
-struct Case { const char* name; int quota; int parts; unsigned rate; };
+struct Case {
+  const char *name;
+  int quota;
+  int parts;
+  unsigned rate;
+};
 static const Case CASES[] = {
-  { "spyro/spider1: 1 field per call",  1, 1, NTSC_MILLIHZ },
-  { "Tomba!2: 2 fields per call",       2, 1, NTSC_MILLIHZ },
-  { "fps60 halving a 1-field call",     1, 2, NTSC_MILLIHZ },
-  { "fps60 halving a 2-field call",     2, 2, NTSC_MILLIHZ },
-  { "PAL, 1 field per call",            1, 1, PAL_MILLIHZ  },
-  { "unset quota (reported, paced 1)",  0, 1, NTSC_MILLIHZ },
+    {"spyro/spider1: 1 field per call", 1, 1, NTSC_MILLIHZ},
+    {"Tomba!2: 2 fields per call", 2, 1, NTSC_MILLIHZ},
+    {"fps60 halving a 1-field call", 1, 2, NTSC_MILLIHZ},
+    {"fps60 halving a 2-field call", 2, 2, NTSC_MILLIHZ},
+    {"PAL, 1 field per call", 1, 1, PAL_MILLIHZ},
+    {"unset quota (reported, paced 1)", 0, 1, NTSC_MILLIHZ},
 };
 static const int NCASES = (int)(sizeof CASES / sizeof CASES[0]);
 
-static PaceInputs mk(const Case& c, double nowMs, double nextMs, bool seeded) {
+static PaceInputs mk(const Case &c, double nowMs, double nextMs, bool seeded) {
   PaceInputs in;
   in.unpaced = false;
   in.quota = c.quota;
@@ -114,7 +130,7 @@ static void test_pacing_is_identical_with_and_without_a_window(void) {
     CHECK(near_ms(hdl.sleepMs, win.sleepMs, 0.0));
     CHECK(near_ms(hdl.nextMs, win.nextMs, 0.0));
   }
-  CHECK_EQ(NCASES, 6);   // the denominator: six cadences compared, both legs each
+  CHECK_EQ(NCASES, 6); // the denominator: six cadences compared, both legs each
 }
 
 // PSXPORT_NOPACE is the ONE switch. It must suppress pacing in BOTH legs — that is what makes it a
@@ -142,8 +158,8 @@ static void test_nopace_is_the_only_switch_that_suppresses_pacing(void) {
 // ────────────────────────────────────────────────────────────────────────────────────────────────────
 static void test_the_interval_is_one_field_at_the_games_rate(void) {
   for (int i = 0; i < NCASES; ++i) {
-    const Case& c = CASES[i];
-    const int quota = c.quota < 1 ? 1 : c.quota;          // an unset quota paces at 1 field
+    const Case &c = CASES[i];
+    const int quota = c.quota < 1 ? 1 : c.quota; // an unset quota paces at 1 field
     const double want = (double)quota * 1000000.0 / (double)c.rate / (double)c.parts;
     const PacePlan p = pace(mk(c, 1000.0, 1000.0, true), /*hasWindow=*/true);
     CHECK(p.paced);
@@ -164,7 +180,7 @@ static void test_an_ntsc_field_is_not_a_sixtieth_of_a_second(void) {
 }
 
 static void test_pal_paces_slower_than_ntsc(void) {
-  const PacePlan pal  = pace(mk(CASES[4], 1000.0, 1000.0, true), true);
+  const PacePlan pal = pace(mk(CASES[4], 1000.0, 1000.0, true), true);
   const PacePlan ntsc = pace(mk(CASES[0], 1000.0, 1000.0, true), true);
   CHECK(pal.paced);
   CHECK(ntsc.paced);
@@ -178,7 +194,7 @@ static void test_pal_paces_slower_than_ntsc(void) {
 // time the consumer's clock needs to produce N fields. A 60.000 Hz pacer is short by 60 ms per
 // simulated minute — 3.6 whole fields of beat against the counter it is waiting on.
 static void test_the_pacer_and_the_field_counter_do_not_drift(void) {
-  const int kCalls = 3600;                                    // one minute of NTSC fields
+  const int kCalls = 3600; // one minute of NTSC fields
   const double consumer_ms = (double)kCalls * 1000000.0 / (double)NTSC_MILLIHZ;
   double now = 0.0, next = 0.0;
   bool seeded = false;
@@ -186,12 +202,15 @@ static void test_the_pacer_and_the_field_counter_do_not_drift(void) {
   for (int n = 0; n < kCalls; ++n) {
     PaceInputs in = mk(CASES[0], now, next, seeded);
     const PacePlan p = pace(in, /*hasWindow=*/true);
-    if (!p.paced) break;
+    if (!p.paced) {
+      break;
+    }
     ++paced;
-    next = p.nextMs; seeded = true;
-    now = next;                                               // a host that always hits its deadline
+    next = p.nextMs;
+    seeded = true;
+    now = next; // a host that always hits its deadline
   }
-  CHECK_EQ(paced, kCalls);                                    // the denominator: 3600 pacing calls
+  CHECK_EQ(paced, kCalls); // the denominator: 3600 pacing calls
   // Within a tenth of a field over a simulated minute. The legacy rule misses by 60.06 ms = 3.6 fields.
   CHECK(near_ms(now, consumer_ms, 1.6683));
 }
@@ -231,7 +250,8 @@ static void test_a_hitch_resyncs_instead_of_sprinting(void) {
 }
 
 static void test_parts_below_one_is_clamped_not_a_divide_by_zero(void) {
-  Case c = CASES[0]; c.parts = 0;
+  Case c = CASES[0];
+  c.parts = 0;
   const PacePlan p = pace(mk(c, 1000.0, 1000.0, true), true);
   CHECK(p.paced);
   CHECK(near_ms(p.intervalMs, 1000000.0 / (double)NTSC_MILLIHZ, 1e-9));
@@ -268,7 +288,7 @@ static void test_the_legacy_rule_fails_both_properties(void) {
   const PacePlan lwin = legacy_pace(in, true);
   const PacePlan lhdl = legacy_pace(in, false);
   CHECK_EQ(lwin.paced, 1);
-  CHECK_EQ(lhdl.paced, 0);                       // property 1 violated: headless is not paced
+  CHECK_EQ(lhdl.paced, 0); // property 1 violated: headless is not paced
   CHECK(lwin.paced != lhdl.paced);
   // property 2 violated: the legacy interval is a sixtieth of a second regardless of the game's rate
   CHECK(near_ms(lwin.intervalMs, 1000.0 / 60.0, 1e-12));

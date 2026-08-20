@@ -32,8 +32,12 @@
 // the POLICY is what is worth pinning down, and a policy that needs a live swapchain to check is a
 // policy nobody checks.
 static inline SDL_GPUPresentMode preferred_present_mode(bool mailbox_ok, bool immediate_ok) {
-  if (mailbox_ok) return SDL_GPU_PRESENTMODE_MAILBOX;
-  if (immediate_ok) return SDL_GPU_PRESENTMODE_IMMEDIATE;
+  if (mailbox_ok) {
+    return SDL_GPU_PRESENTMODE_MAILBOX;
+  }
+  if (immediate_ok) {
+    return SDL_GPU_PRESENTMODE_IMMEDIATE;
+  }
   return SDL_GPU_PRESENTMODE_VSYNC;
 }
 
@@ -45,11 +49,14 @@ static inline bool present_mode_blocks_caller(SDL_GPUPresentMode m) {
 
 // Name for the log. Never returns null — a null const char* is undefined behaviour for std::format,
 // and this feeds a lucent::info on the boot path.
-static inline const char* present_mode_name(SDL_GPUPresentMode m) {
+static inline const char *present_mode_name(SDL_GPUPresentMode m) {
   switch (m) {
-    case SDL_GPU_PRESENTMODE_VSYNC:     return "VSYNC";
-    case SDL_GPU_PRESENTMODE_IMMEDIATE: return "IMMEDIATE";
-    case SDL_GPU_PRESENTMODE_MAILBOX:   return "MAILBOX";
+  case SDL_GPU_PRESENTMODE_VSYNC:
+    return "VSYNC";
+  case SDL_GPU_PRESENTMODE_IMMEDIATE:
+    return "IMMEDIATE";
+  case SDL_GPU_PRESENTMODE_MAILBOX:
+    return "MAILBOX";
   }
   return "(unknown)";
 }

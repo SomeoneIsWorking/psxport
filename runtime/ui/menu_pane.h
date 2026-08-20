@@ -27,42 +27,48 @@ namespace psx::ui {
 // so the pane asks it to wire each authored row rather than reaching for those models itself.
 class RowBuilder {
 public:
-    virtual ~RowBuilder() = default;
-    // Build the binding for an authored `<select-button>`. Returning null is allowed and means "I
-    // do not recognise this row"; the pane still adopts it so navigation order is unchanged, and
-    // the builder is responsible for REPORTING the unknown id (a silently-skipped row is exactly
-    // the failure mod_row_model.h describes).
-    virtual std::unique_ptr<RowBinding> bind_row(Rml::Element* row) = 0;
-    virtual void on_row_clicked(MenuRow& row) = 0;
+  virtual ~RowBuilder() = default;
+  // Build the binding for an authored `<select-button>`. Returning null is allowed and means "I
+  // do not recognise this row"; the pane still adopts it so navigation order is unchanged, and
+  // the builder is responsible for REPORTING the unknown id (a silently-skipped row is exactly
+  // the failure mod_row_model.h describes).
+  virtual std::unique_ptr<RowBinding> bind_row(Rml::Element *row) = 0;
+  virtual void on_row_clicked(MenuRow &row) = 0;
 };
 
 class MenuPane : public Component {
 public:
-    MenuPane(Rml::Element* root, RowBuilder& builder);
+  MenuPane(Rml::Element *root, RowBuilder &builder);
 
-    // Per-frame walk. A hidden pane refreshes nothing — its rows are not on screen, and refreshing
-    // them was never the old behaviour either.
-    void update() override;
+  // Per-frame walk. A hidden pane refreshes nothing — its rows are not on screen, and refreshing
+  // them was never the old behaviour either.
+  void update() override;
 
-    void set_shown(bool shown);
-    bool shown() const { return mRoot && mRoot->IsPseudoClassSet("shown"); }
+  void set_shown(bool shown);
+  bool shown() const {
+    return mRoot && mRoot->IsPseudoClassSet("shown");
+  }
 
-    // Focus this pane's first row. Returns false if it has none (the About pane, for instance).
-    bool focus_first_row();
+  // Focus this pane's first row. Returns false if it has none (the About pane, for instance).
+  bool focus_first_row();
 
-    // The row whose subtree contains `element` — used to turn RmlUi's focus element back into the
-    // component that owns it. Null when the focus is not on one of this pane's rows.
-    MenuRow* row_containing(Rml::Element* element) const;
+  // The row whose subtree contains `element` — used to turn RmlUi's focus element back into the
+  // component that owns it. Null when the focus is not on one of this pane's rows.
+  MenuRow *row_containing(Rml::Element *element) const;
 
-    int row_count() const { return (int)mRows.size(); }
-    const std::vector<MenuRow*>& rows() const { return mRows; }
+  int row_count() const {
+    return (int)mRows.size();
+  }
+  const std::vector<MenuRow *> &rows() const {
+    return mRows;
+  }
 
 private:
-    // Rows are held by the Component base's mChildren (it owns their lifetime); this is the typed
-    // view for the ordered operations above.
-    std::vector<MenuRow*> mRows;
+  // Rows are held by the Component base's mChildren (it owns their lifetime); this is the typed
+  // view for the ordered operations above.
+  std::vector<MenuRow *> mRows;
 };
 
-}  // namespace psx::ui
+} // namespace psx::ui
 
 #endif

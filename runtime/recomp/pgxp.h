@@ -19,25 +19,32 @@ public:
   static constexpr int kSize = 1 << kBits;
   static constexpr int kMask = kSize - 1;
 
-  void bind(Core* c);                            // set the currently-bound cache to this instance
-  static Pgxp* current() { return sCurrent; }    // Beetle callback consults this (no Core* in scope)
+  void bind(Core *c); // set the currently-bound cache to this instance
+  static Pgxp *current() {
+    return sCurrent;
+  } // Beetle callback consults this (no Core* in scope)
 
   void push(float x, float y, float z, uint32_t sxyPacked);
-  bool lookup(int sx, int sy, float* px, float* py, float* pz) const;
-  bool lookupView(int sx, int sy, float* vx, float* vy, float* vz) const;
+  bool lookup(int sx, int sy, float *px, float *py, float *pz) const;
+  bool lookupView(int sx, int sy, float *vx, float *vy, float *vz) const;
   void frameReset();
 
 private:
-  struct Ent { uint32_t key; float x, y, z; float vx, vy, vz; uint8_t valid; };
+  struct Ent {
+    uint32_t key;
+    float x, y, z;
+    float vx, vy, vz;
+    uint8_t valid;
+  };
   Ent mSlots[kSize];
 
-  static Pgxp* sCurrent;
+  static Pgxp *sCurrent;
 
   static uint32_t keyOf(int sx, int sy) {
     return ((uint32_t)(sy & 0x7FF) << 11) | (uint32_t)(sx & 0x7FF);
   }
   static uint32_t slotOf(uint32_t key) {
-    uint32_t h = key * 2654435761u;              // Knuth multiplicative hash
+    uint32_t h = key * 2654435761u; // Knuth multiplicative hash
     return (h >> (32 - kBits)) & kMask;
   }
 };
@@ -45,6 +52,6 @@ private:
 // ---- Free-function bridges (declared once here, defined in pgxp.cpp) -------------------------------
 // Thin forwards to `Pgxp::current()` for renderer callers that lack a `Core*` in scope. Bound per-core
 // via `Pgxp::bind()` inside gte_bind, so during a frame these reach this-core state.
-int  pgxp_lookup(int sx, int sy, float* px, float* py, float* pz);
-int  pgxp_lookup_view(int sx, int sy, float* vx, float* vy, float* vz);
+int pgxp_lookup(int sx, int sy, float *px, float *py, float *pz);
+int pgxp_lookup_view(int sx, int sy, float *vx, float *vy, float *vz);
 void pgxp_frame_reset(void);

@@ -13,9 +13,9 @@
 //
 // Hermetic: ProducerScope + ProducerCensus are host-side value types. No Core, no RenderQueue, no GPU,
 // no disc — the scope's contract is "which producer is current", and that is testable on its own.
-#include "testutil.h"
 #include "producer_census.h"
 #include "producer_scope.h"
+#include "testutil.h"
 #include <string.h>
 
 // A scope names a producer for the span of a native draw, and RESTORES the previous one rather than
@@ -53,13 +53,13 @@ static void test_scoped_pushes_are_attributed(void) {
     cx.noteNative(st.currentKey(), 2, /*frame=*/10);
   }
   CHECK(cx.wasFed());
-  CHECK_EQ(cx.unscopedNative(), 0u);            // everything was declared
+  CHECK_EQ(cx.unscopedNative(), 0u); // everything was declared
   CHECK_EQ(cx.primsSeen(), 6u);
   CHECK_EQ(cx.primsAttributed(), 6u);
-  const ProducerCensus::Row* r = cx.find(ProducerKey::guest(0x8002BC9Cu));
+  const ProducerCensus::Row *r = cx.find(ProducerKey::guest(0x8002BC9Cu));
   CHECK(r != nullptr);
   CHECK_EQ(r->primsNative, 6u);
-  CHECK_EQ(r->primsGuest, 0u);                  // the native leg must not invent guest-leg counts
+  CHECK_EQ(r->primsGuest, 0u); // the native leg must not invent guest-leg counts
   CHECK_EQ(r->firstFrame, 10u);
 }
 
@@ -67,20 +67,20 @@ static void test_scoped_pushes_are_attributed(void) {
 static void test_unscoped_pushes_are_counted_not_dropped(void) {
   ProducerCensus cx;
   ProducerScopeState st;
-  cx.noteNative(st.currentKey(), 3, /*frame=*/7);      // no scope open
+  cx.noteNative(st.currentKey(), 3, /*frame=*/7); // no scope open
   CHECK_EQ(cx.unscopedNative(), 3u);
-  CHECK_EQ(cx.primsSeen(), 3u);                          // it IS work that happened…
-  CHECK_EQ(cx.primsAttributed(), 0u);                    // …and it is NOT attributed to any producer
-  CHECK_EQ(cx.rowCount(), 0);                           // and it invents no row
+  CHECK_EQ(cx.primsSeen(), 3u);       // it IS work that happened…
+  CHECK_EQ(cx.primsAttributed(), 0u); // …and it is NOT attributed to any producer
+  CHECK_EQ(cx.rowCount(), 0);         // and it invents no row
   // Mixed: declared and undeclared work in the same run must not contaminate each other's totals.
   {
     ProducerScope s(&st, 0x8003B704u, "beamQuadRender");
     cx.noteNative(st.currentKey(), 5, 8);
   }
   cx.noteNative(st.currentKey(), 1, 9);
-  CHECK_EQ(cx.unscopedNative(), 4u);                     // 3 + 1
+  CHECK_EQ(cx.unscopedNative(), 4u); // 3 + 1
   CHECK_EQ(cx.primsAttributed(), 5u);
-  CHECK_EQ(cx.primsSeen(), 9u);                          // 3 + 5 + 1 — the DENOMINATOR
+  CHECK_EQ(cx.primsSeen(), 9u); // 3 + 5 + 1 — the DENOMINATOR
   CHECK_EQ(cx.rowCount(), 1);
   // seen == attributed + unscoped, exactly. If this drifts, some prim went uncounted somewhere and the
   // census's own totals would no longer prove they cover the whole picture.
@@ -94,7 +94,7 @@ static void test_unfed_is_distinguishable_from_zero(void) {
   CHECK(!cx.wasFed());
   ProducerCensus fed;
   ProducerScopeState st;
-  fed.noteNative(st.currentKey(), 0, 1);              // fed, but the producer drew nothing
+  fed.noteNative(st.currentKey(), 0, 1); // fed, but the producer drew nothing
   CHECK(fed.wasFed());
   CHECK_EQ(fed.primsSeen(), 0u);
   CHECK_EQ(fed.unscopedNative(), 0u);
@@ -110,13 +110,12 @@ static void test_same_producer_across_frames_is_one_row(void) {
     cx.noteNative(st.currentKey(), 2, f);
   }
   CHECK_EQ(cx.rowCount(), 1);
-  const ProducerCensus::Row* r = cx.find(ProducerKey::guest(0x800288ACu));
+  const ProducerCensus::Row *r = cx.find(ProducerKey::guest(0x800288ACu));
   CHECK(r != nullptr);
   CHECK_EQ(r->primsNative, 20u);
   CHECK_EQ(r->firstFrame, 100u);
   CHECK_EQ(r->lastFrame, 109u);
 }
-
 
 // ---- PC-ONLY producers: an enhancement with no guest counterpart must be able to declare itself ----
 //
@@ -135,7 +134,7 @@ static void test_pc_producer_iids_are_stable_and_distinct(void) {
                 "the same stable id must intern to the same row on every run");
   static_assert(producer_iid("pc/margin-render") != producer_iid("pc/pillarbox-fill"),
                 "two different producers must not share a row");
-  CHECK(producer_iid("") != 0u);                       // the empty id is still not a zero key
+  CHECK(producer_iid("") != 0u); // the empty id is still not a zero key
   CHECK_EQ(pc_producer("pc/margin-render").iid, producer_iid("pc/margin-render"));
   CHECK(strcmp(pc_producer("pc/margin-render").name, "pc/margin-render") == 0);
   // Same NUMBER in the two spaces is two different rows — asserted on the key, not assumed.
@@ -152,22 +151,22 @@ static void test_pc_only_scope_is_attributed_to_a_native_row(void) {
     ProducerScope s(&st, kMargin);
     CHECK(st.active());
     CHECK(st.currentKey().valid());
-    CHECK(st.currentKey().isNativeOnly());             // <- the whole gap: this was GUEST unconditionally
+    CHECK(st.currentKey().isNativeOnly()); // <- the whole gap: this was GUEST unconditionally
     // A PC-only scope has NO guest address, and must not answer with its iid as though it had one.
     CHECK_EQ(st.currentAddr(), 0u);
     CHECK(strcmp(st.currentName(), "pc/margin-render") == 0);
     cx.noteNative(st.currentKey(), 24, /*frame=*/5, st.currentName());
   }
   CHECK(!st.active());
-  CHECK_EQ(cx.unscopedNative(), 0u);                   // (a) not silently dropped into "undeclared"
+  CHECK_EQ(cx.unscopedNative(), 0u); // (a) not silently dropped into "undeclared"
   CHECK_EQ(cx.primsSeen(), 24u);
   CHECK_EQ(cx.primsAttributed(), 24u);
   CHECK_EQ(cx.rowCount(), 1);
-  const ProducerCensus::Row* pc = cx.find(ProducerKey::native(kMargin.iid));
+  const ProducerCensus::Row *pc = cx.find(ProducerKey::native(kMargin.iid));
   CHECK(pc != nullptr);
   CHECK_EQ(pc->primsNative, 24u);
   CHECK_EQ(pc->primsGuest, 0u);
-  CHECK(strcmp(pc->name, "pc/margin-render") == 0);    // the row can say WHICH code it is
+  CHECK(strcmp(pc->name, "pc/margin-render") == 0); // the row can say WHICH code it is
   // The two id spaces stay separate: the same number as a guest address is a different row.
   CHECK(cx.find(ProducerKey::guest(kMargin.iid)) == nullptr);
   // (c) the census invariant, restated on this path.
@@ -180,18 +179,23 @@ static void test_pc_only_prims_do_not_land_on_the_guest_row(void) {
   ProducerCensus cx;
   ProducerScopeState st;
   static constexpr PcProducer kPillarbox = pc_producer("pc/pillarbox-fill");
-  { ProducerScope s(&st, kPillarbox); cx.noteNative(st.currentKey(), 1, 3, st.currentName()); }
-  { ProducerScope s(&st, 0x8007FC24u, "optionsBackdrop");
-    cx.noteNative(st.currentKey(), 1, 3, st.currentName()); }
-  cx.noteGuest(0x8007FC24u, 1, 3);                     // what the guest leg saw: ONE prim
-  const ProducerCensus::Row* g = cx.find(ProducerKey::guest(0x8007FC24u));
+  {
+    ProducerScope s(&st, kPillarbox);
+    cx.noteNative(st.currentKey(), 1, 3, st.currentName());
+  }
+  {
+    ProducerScope s(&st, 0x8007FC24u, "optionsBackdrop");
+    cx.noteNative(st.currentKey(), 1, 3, st.currentName());
+  }
+  cx.noteGuest(0x8007FC24u, 1, 3); // what the guest leg saw: ONE prim
+  const ProducerCensus::Row *g = cx.find(ProducerKey::guest(0x8007FC24u));
   CHECK(g != nullptr);
-  CHECK_EQ(g->primsNative, 1u);                        // 1-vs-1, not the fabricated 2-vs-1
+  CHECK_EQ(g->primsNative, 1u); // 1-vs-1, not the fabricated 2-vs-1
   CHECK_EQ(g->primsGuest, 1u);
-  const ProducerCensus::Row* p = cx.find(ProducerKey::native(kPillarbox.iid));
+  const ProducerCensus::Row *p = cx.find(ProducerKey::native(kPillarbox.iid));
   CHECK(p != nullptr);
   CHECK_EQ(p->primsNative, 1u);
-  CHECK_EQ(p->primsGuest, 0u);                         // a PC-only row can never have a guest leg
+  CHECK_EQ(p->primsGuest, 0u); // a PC-only row can never have a guest leg
   CHECK_EQ(cx.rowCount(), 2);
   CHECK_EQ(cx.unscopedNative(), 0u);
   CHECK_EQ(cx.primsSeen(), cx.primsAttributed());
@@ -211,11 +215,11 @@ static void test_pc_only_scope_nests_and_restores(void) {
       CHECK(st.currentKey().isNativeOnly());
       cx.noteNative(st.currentKey(), 5, 9, st.currentName());
     }
-    CHECK_EQ(st.currentAddr(), 0x8003CCA4u);           // restored, and it is a GUEST scope again
+    CHECK_EQ(st.currentAddr(), 0x8003CCA4u); // restored, and it is a GUEST scope again
     CHECK(st.currentKey() == ProducerKey::guest(0x8003CCA4u));
     cx.noteNative(st.currentKey(), 3, 9, st.currentName());
   }
-  CHECK_EQ(cx.find(ProducerKey::guest(0x8003CCA4u))->primsNative, 5u);   // 2 + 3
+  CHECK_EQ(cx.find(ProducerKey::guest(0x8003CCA4u))->primsNative, 5u); // 2 + 3
   CHECK_EQ(cx.find(ProducerKey::native(kMargin.iid))->primsNative, 5u);
   CHECK_EQ(cx.unscopedNative(), 0u);
 }
@@ -227,11 +231,11 @@ static void test_iid_collision_is_counted_and_only_for_native_rows(void) {
   ProducerCensus cx;
   const uint32_t iid = producer_iid("pc/margin-render");
   cx.noteNative(ProducerKey::native(iid), 1, 1, "pc/margin-render");
-  cx.noteNative(ProducerKey::native(iid), 1, 2, "pc/margin-render");    // same producer again
+  cx.noteNative(ProducerKey::native(iid), 1, 2, "pc/margin-render"); // same producer again
   CHECK_EQ(cx.iidCollisions(), 0);
-  cx.noteNative(ProducerKey::native(iid), 1, 3, "pc/something-else");   // a DIFFERENT producer, one iid
+  cx.noteNative(ProducerKey::native(iid), 1, 3, "pc/something-else"); // a DIFFERENT producer, one iid
   CHECK_EQ(cx.iidCollisions(), 1);
-  CHECK_EQ(cx.rowCount(), 1);                          // it still counts the prims rather than dropping
+  CHECK_EQ(cx.rowCount(), 1); // it still counts the prims rather than dropping
   CHECK_EQ(cx.primsSeen(), 3u);
   CHECK_EQ(cx.primsAttributed(), 3u);
 

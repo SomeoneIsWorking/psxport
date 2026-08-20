@@ -15,14 +15,14 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-int         cfg_on (const char* name);
-int         cfg_int(const char* name, int def);
-const char* cfg_str(const char* name);
+int cfg_on(const char *name);
+int cfg_int(const char *name, int def);
+const char *cfg_str(const char *name);
 // PSXPORT_ORACLE — the pure PSX reference mode (recomp gameplay + UNENHANCED PSX render). When on, NO
 // native render enhancement may touch the picture: no fps60, no widescreen, no native depth / obj_depth
 // compositing, no RenderObserver tagging. Cached. Every enhancement gate that could contaminate the PSX
 // render consults this (or is forced off at boot). See docs/config.md + native_boot.cpp.
-int         oracle_mode(void);
+int oracle_mode(void);
 // Is PC ENHANCEMENT `name` enabled? Driven by PSXPORT_ENH=<name,name|all>. Enhancements are the
 // sanctioned third behavior class: deliberate, meaningful guest-state changes (expanded object
 // load/unload, faster fades/transitions). Force-suppressed (returns 0, a notice PER KNOB) whenever
@@ -35,13 +35,13 @@ int         oracle_mode(void);
 // enhancements are its OWN CVars calls psx::config::enh(cv_my_knob) and gets the identical rule rather
 // than a second copy of it. An EMPTY name is REFUSED with an error (the pre-migration body answered YES
 // to it under PSXPORT_ENH=all) — see docs/config.md "PC enhancements".
-int         cfg_enh(const char* name);
-int         cfg_dbg(const char* chan);            // is debug CHANNEL `chan` enabled? (set via REPL `debug`)
-void        cfg_dbg_set(const char* chans);       // REPL `debug <chans|all>`: enable diagnostic channels
+int cfg_enh(const char *name);
+int cfg_dbg(const char *chan);       // is debug CHANNEL `chan` enabled? (set via REPL `debug`)
+void cfg_dbg_set(const char *chans); // REPL `debug <chans|all>`: enable diagnostic channels
 // Generation counter for the enabled-channel SET, bumped whenever it changes. cfg_dbg() is NOT a cheap
 // flag test — it string-compares the channel name against the enabled set — so a call site on a
 // genuinely hot path caches cfg_dbg()'s answer and re-checks only when this counter moves.
-unsigned    cfg_dbg_generation(void);
+unsigned cfg_dbg_generation(void);
 // ...and the INLINE form, because the caching call sites this counter exists for are on the hottest
 // path in the substrate and were paying an out-of-line call to read it. OtAttr::trackStore runs on
 // EVERY guest store and reached the counter through two nested calls (cfg_dbg_generation ->
@@ -58,7 +58,7 @@ static inline unsigned cfg_dbg_generation_fast(void) {
 #ifdef __GNUC__
 __attribute__((format(printf, 2, 3)))
 #endif
-void        cfg_logf(const char* chan, const char* fmt, ...);
+void cfg_logf(const char *chan, const char *fmt, ...);
 // ALWAYS-ON levels (not channel-gated) — the messages a normal run is meant to print. Same sink and
 // same "[chan] " prefixing as cfg_logf, so PSXPORT_LOG_FILE captures them too; warn/error suffix the
 // tag ("[cd:warn]" / "[cd:error]") to stay greppable. Use these instead of raw fprintf(stderr, ...):
@@ -67,16 +67,16 @@ void        cfg_logf(const char* chan, const char* fmt, ...);
 #ifdef __GNUC__
 __attribute__((format(printf, 2, 3)))
 #endif
-void        cfg_logi(const char* chan, const char* fmt, ...);
+void cfg_logi(const char *chan, const char *fmt, ...);
 #ifdef __GNUC__
 __attribute__((format(printf, 2, 3)))
 #endif
-void        cfg_logw(const char* chan, const char* fmt, ...);
+void cfg_logw(const char *chan, const char *fmt, ...);
 #ifdef __GNUC__
 __attribute__((format(printf, 2, 3)))
 #endif
-void        cfg_loge(const char* chan, const char* fmt, ...);
-void        cfg_dump(void);   // log every active PSXPORT_* var (once); for boot-time visibility
+void cfg_loge(const char *chan, const char *fmt, ...);
+void cfg_dump(void); // log every active PSXPORT_* var (once); for boot-time visibility
 
 // --- Line accumulator: for DUMPS built piece-by-piece (hex rows, byte tables, column runs) --------
 // The logger emits one whole line per call, so a loop that appends `%02X` per byte cannot call it
@@ -85,13 +85,16 @@ void        cfg_dump(void);   // log every active PSXPORT_* var (once); for boot
 //   cfg_line_addf(&ln, "  A @0x%08X:", addr);
 //   for (…) cfg_line_addf(&ln, " %02X", b[i]);
 //   cfg_line_flush(&ln, "sbs");            // -> cfg_logi("sbs", …) and resets
-typedef struct { char buf[4096]; unsigned used; } CfgLine;
-void        cfg_line_reset(CfgLine* l);
+typedef struct {
+  char buf[4096];
+  unsigned used;
+} CfgLine;
+void cfg_line_reset(CfgLine *l);
 #ifdef __GNUC__
 __attribute__((format(printf, 2, 3)))
 #endif
-void        cfg_line_addf(CfgLine* l, const char* fmt, ...);
-void        cfg_line_flush(CfgLine* l, const char* chan);   // emit at info level, then reset
+void cfg_line_addf(CfgLine *l, const char *fmt, ...);
+void cfg_line_flush(CfgLine *l, const char *chan); // emit at info level, then reset
 #ifdef __cplusplus
 }
 #endif

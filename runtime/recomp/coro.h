@@ -23,8 +23,8 @@ class Coro {
 public:
   Coro() = default;
   ~Coro();
-  Coro(const Coro&) = delete;
-  Coro& operator=(const Coro&) = delete;
+  Coro(const Coro &) = delete;
+  Coro &operator=(const Coro &) = delete;
 
   // Spawn the fiber thread. It blocks immediately; nothing runs until the first resume(). `body` runs
   // to completion across resume()/yield() ping-pongs; when it returns the Coro is done().
@@ -48,19 +48,23 @@ public:
   // live waiter (UB / hang). No-op if not started or already done.
   void cancel();
 
-  bool started() const { return started_; }
-  bool done() const { return finished_; }
+  bool started() const {
+    return started_;
+  }
+  bool done() const {
+    return finished_;
+  }
 
 private:
   enum class Turn { Scheduler, Fiber };
   std::thread th_;
   std::mutex m_;
   std::condition_variable cv_;
-  Turn turn_ = Turn::Scheduler;   // whose turn to run; the other side is blocked on cv_
+  Turn turn_ = Turn::Scheduler; // whose turn to run; the other side is blocked on cv_
   bool started_ = false;
   bool finished_ = false;
-  bool canceling_ = false;        // set by cancel(); yield() unwinds instead of returning when seen
-  std::jmp_buf exit_jmp_;         // body root, set in thread_main; exit_now()/cancel unwind here
+  bool canceling_ = false; // set by cancel(); yield() unwinds instead of returning when seen
+  std::jmp_buf exit_jmp_;  // body root, set in thread_main; exit_now()/cancel unwind here
   std::function<void()> body_;
 
   void thread_main();

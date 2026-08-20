@@ -35,9 +35,29 @@ def main() -> int:
         print(f"cpp-style: REFUSED — missing managed file(s): {', '.join(missing)}", file=sys.stderr)
         return 2
 
+    # FORMAT-CHECK EVERY FIRST-PARTY SOURCE, not just the size-capped seams.
+    #
+    # USER, 2026-08-20: "apply clang format and use clang from now on ... you should accomodate to
+    # the formatter not the other way around". Checking six files was how 280 first-party files came
+    # to hold 56,735 violations while the gate stayed green — a gate that watches 2% of the tree
+    # reports on 2% of the tree. The whole tree is formatted now, so this keeps it that way.
+    #
+    # vendor/ is excluded deliberately: it is third-party, and reformatting it would make every
+    # future upstream diff unreadable.
+    listed = subprocess.run(
+        ["git", "ls-files", "*.cpp", "*.h", "*.c", "*.hpp"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.split()
+    sources = [ROOT / f for f in listed if not f.startswith("vendor/")]
+    if not sources:
+        print("cpp-style: REFUSED — git ls-files matched no first-party source; nothing was checked",
+              file=sys.stderr)
+        return 2
+
     formatted = subprocess.run(
-        [formatter, "--dry-run", "--Werror", *map(str, paths)], cwd=ROOT, check=False
+        [formatter, "--dry-run", "--Werror", *map(str, sources)], cwd=ROOT, check=False
     )
+    print(f"cpp-style: format-checked {len(sources)} first-party file(s) (vendor/ excluded)")
     if formatted.returncode:
         print("cpp-style: FAIL — run clang-format with the repository .clang-format", file=sys.stderr)
         return 1

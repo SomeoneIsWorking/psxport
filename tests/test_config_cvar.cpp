@@ -47,27 +47,34 @@ using psx::config::Layer;
 
 // Every test knob name lives under this prefix so it is impossible to collide with a real knob, and
 // so the audit's "unknown" class has something deterministic to find.
-static const char* kBogus = "PSXPORT_TEST_NOT_A_KNOB_AT_ALL";
+static const char *kBogus = "PSXPORT_TEST_NOT_A_KNOB_AT_ALL";
 
-static void set_env(const char* name, const char* value) {
-  if (value)
+static void set_env(const char *name, const char *value) {
+  if (value) {
     setenv(name, value, 1);
-  else
+  } else {
     unsetenv(name);
+  }
   // Both caches must forget: lucent's (it memoises per full name) and ours (a CVar binds its env
   // Override once). Without this a test that sets a variable measures the previous test's answer.
   lucent::config::reset_cache();
   psx::config::reset_for_test();
 }
 
-static bool contains(const std::vector<std::string>& v, const std::string& s) {
+static bool contains(const std::vector<std::string> &v, const std::string &s) {
   return std::find(v.begin(), v.end(), s) != v.end();
 }
 
-static void print_audit(const psx::config::EnvAudit& a) {
-  fprintf(stderr, "  audit: %zu PSXPORT_* var(s) in the environment -> %zu declared, %zu legacy, %zu UNKNOWN\n",
-          a.set_in_env.size(), a.declared.size(), a.legacy.size(), a.unknown.size());
-  for (const std::string& s : a.unknown) fprintf(stderr, "  audit:   UNKNOWN %s\n", s.c_str());
+static void print_audit(const psx::config::EnvAudit &a) {
+  fprintf(stderr,
+          "  audit: %zu PSXPORT_* var(s) in the environment -> %zu declared, %zu legacy, %zu UNKNOWN\n",
+          a.set_in_env.size(),
+          a.declared.size(),
+          a.legacy.size(),
+          a.unknown.size());
+  for (const std::string &s : a.unknown) {
+    fprintf(stderr, "  audit:   UNKNOWN %s\n", s.c_str());
+  }
 }
 
 // ── 1. COMPATIBILITY: a migrated knob resolves exactly as it did before migration ───────────────
@@ -75,14 +82,14 @@ static void print_audit(const psx::config::EnvAudit& a) {
 // `lucent::config::flag(name) ? 1 : 0`; if routing it through a CVar changes any answer for any
 // input, that is a knob whose meaning silently moved.
 static void test_migrated_bool_knob_matches_pre_migration_env_behaviour(void) {
-  const char* const values[] = {nullptr, "1", "0", "yes", "off", "", "banana"};
+  const char *const values[] = {nullptr, "1", "0", "yes", "off", "", "banana"};
   int compared = 0;
-  for (const char* v : values) {
+  for (const char *v : values) {
     set_env("PSXPORT_NOAUDIO", v);
-    const int want = lucent::config::flag("PSXPORT_NOAUDIO") ? 1 : 0;  // the pre-migration body
+    const int want = lucent::config::flag("PSXPORT_NOAUDIO") ? 1 : 0; // the pre-migration body
     const int got = cfg_on("PSXPORT_NOAUDIO");
-    fprintf(stderr, "  PSXPORT_NOAUDIO=%-8s cfg_on=%d  pre-migration=%d\n", v ? (*v ? v : "\"\"") : "<unset>",
-            got, want);
+    fprintf(
+        stderr, "  PSXPORT_NOAUDIO=%-8s cfg_on=%d  pre-migration=%d\n", v ? (*v ? v : "\"\"") : "<unset>", got, want);
     CHECK_EQ(got, want);
     ++compared;
   }
@@ -92,9 +99,9 @@ static void test_migrated_bool_knob_matches_pre_migration_env_behaviour(void) {
 }
 
 static void test_migrated_int_and_text_knobs_match_pre_migration_env_behaviour(void) {
-  const char* const ints[] = {nullptr, "0", "3", "45", "notanumber"};
+  const char *const ints[] = {nullptr, "0", "3", "45", "notanumber"};
   int compared = 0;
-  for (const char* v : ints) {
+  for (const char *v : ints) {
     set_env("PSXPORT_WATCHDOG", v);
     const int want = (int)lucent::config::number("PSXPORT_WATCHDOG", 3);
     const int got = cfg_int("PSXPORT_WATCHDOG", 3);
@@ -102,16 +109,21 @@ static void test_migrated_int_and_text_knobs_match_pre_migration_env_behaviour(v
     CHECK_EQ(got, want);
     ++compared;
   }
-  const char* const texts[] = {nullptr, "", "external/psxport", "/some/where"};
-  for (const char* v : texts) {
+  const char *const texts[] = {nullptr, "", "external/psxport", "/some/where"};
+  for (const char *v : texts) {
     set_env("PSXPORT_ASSET_DIR", v);
-    const std::string& ref = lucent::config::text("PSXPORT_ASSET_DIR");
-    const char* want = ref.empty() ? nullptr : ref.c_str();      // the pre-migration body, verbatim
-    const char* got = cfg_str("PSXPORT_ASSET_DIR");
-    fprintf(stderr, "  PSXPORT_ASSET_DIR=%-18s cfg_str=%s  pre-migration=%s\n", v ? (*v ? v : "\"\"") : "<unset>",
-            got ? got : "(null)", want ? want : "(null)");
+    const std::string &ref = lucent::config::text("PSXPORT_ASSET_DIR");
+    const char *want = ref.empty() ? nullptr : ref.c_str(); // the pre-migration body, verbatim
+    const char *got = cfg_str("PSXPORT_ASSET_DIR");
+    fprintf(stderr,
+            "  PSXPORT_ASSET_DIR=%-18s cfg_str=%s  pre-migration=%s\n",
+            v ? (*v ? v : "\"\"") : "<unset>",
+            got ? got : "(null)",
+            want ? want : "(null)");
     CHECK_EQ(got == nullptr, want == nullptr);
-    if (got && want) CHECK_STREQ(got, want);
+    if (got && want) {
+      CHECK_STREQ(got, want);
+    }
     ++compared;
   }
   fprintf(stderr, "  compared %d value(s) against the pre-migration implementation\n", compared);
@@ -146,7 +158,7 @@ static void test_producer_db_knobs_resolve_with_their_pre_migration_defaults(voi
 static void test_unmigrated_knob_still_resolves_through_the_env(void) {
   set_env("PSXPORT_SBS_AUTONAV", "1");
   CHECK_EQ(cfg_on("PSXPORT_SBS_AUTONAV"), 1);
-  CHECK(psx::config::find("PSXPORT_SBS_AUTONAV") == nullptr);   // deliberately NOT migrated yet
+  CHECK(psx::config::find("PSXPORT_SBS_AUTONAV") == nullptr); // deliberately NOT migrated yet
   set_env("PSXPORT_SBS_AUTONAV", "0");
   CHECK_EQ(cfg_on("PSXPORT_SBS_AUTONAV"), 0);
   set_env("PSXPORT_SBS_AUTONAV", nullptr);
@@ -159,15 +171,15 @@ static void test_layer_ladder_resolves_and_unresolves_in_the_documented_order(vo
   CHECK_EQ((int)v.layer(), (int)Layer::Default);
   CHECK_EQ(v.get(), false);
 
-  v.set(Layer::Value, true);                    // psxport_settings.ini
+  v.set(Layer::Value, true); // psxport_settings.ini
   CHECK_EQ((int)v.layer(), (int)Layer::Value);
   CHECK_EQ(v.get(), true);
 
-  v.set(Layer::Override, false);                // env var / launch arg
+  v.set(Layer::Override, false); // env var / launch arg
   CHECK_EQ((int)v.layer(), (int)Layer::Override);
   CHECK_EQ(v.get(), false);
 
-  v.set(Layer::Runtime, true);                  // REPL / debug-server, this run only
+  v.set(Layer::Runtime, true); // REPL / debug-server, this run only
   CHECK_EQ((int)v.layer(), (int)Layer::Runtime);
   CHECK_EQ(v.get(), true);
 
@@ -205,8 +217,8 @@ static void test_override_and_runtime_layers_are_never_persisted(void) {
   v.set(Layer::Value, true);
   v.set(Layer::Override, false);
   v.set(Layer::Runtime, false);
-  CHECK_EQ(v.get(), false);              // what the run sees
-  CHECK_EQ(v.value_for_save(), true);    // what the settings file must keep
+  CHECK_EQ(v.get(), false);           // what the run sees
+  CHECK_EQ(v.value_for_save(), true); // what the settings file must keep
 }
 
 // ── 3. THE AUDIT, run against BOTH classes ──────────────────────────────────────────────────────
@@ -240,8 +252,8 @@ static void test_an_unmigrated_knob_is_classified_legacy_once_it_has_been_read(v
   set_env("PSXPORT_SBS_KEYS", "1");
   const psx::config::EnvAudit before = psx::config::audit_environment();
   print_audit(before);
-  CHECK(contains(before.unknown, "PSXPORT_SBS_KEYS"));   // nothing has read it yet
-  (void)cfg_on("PSXPORT_SBS_KEYS");                      // the legacy compatibility path
+  CHECK(contains(before.unknown, "PSXPORT_SBS_KEYS")); // nothing has read it yet
+  (void)cfg_on("PSXPORT_SBS_KEYS");                    // the legacy compatibility path
   const psx::config::EnvAudit after = psx::config::audit_environment();
   print_audit(after);
   CHECK(contains(after.legacy, "PSXPORT_SBS_KEYS"));
@@ -272,15 +284,19 @@ static void test_the_audit_selftest_fires_in_the_shipping_library(void) {
 // nothing would pass every other case in this file.
 static void test_the_declared_inventory_is_not_empty(void) {
   int n = 0;
-  psx::config::enumerate([&n](CVarBase& v) {
-    fprintf(stderr, "  cvar %-28s %-4s = %-18s [%s]\n", v.name(), psx::config::kind_name(v.kind()),
-            v.value_text().c_str(), psx::config::layer_name(v.layer()));
+  psx::config::enumerate([&n](CVarBase &v) {
+    fprintf(stderr,
+            "  cvar %-28s %-4s = %-18s [%s]\n",
+            v.name(),
+            psx::config::kind_name(v.kind()),
+            v.value_text().c_str(),
+            psx::config::layer_name(v.layer()));
     ++n;
   });
   fprintf(stderr, "  %d CVar(s) registered\n", n);
   CHECK(n >= 7);
   CHECK(psx::config::find("PSXPORT_ORACLE") != nullptr);
-  CHECK(psx::config::find("PSXPORT_FPS60") != nullptr);   // documented since forever, read by NOTHING
+  CHECK(psx::config::find("PSXPORT_FPS60") != nullptr); // documented since forever, read by NOTHING
 }
 
 int main(void) {

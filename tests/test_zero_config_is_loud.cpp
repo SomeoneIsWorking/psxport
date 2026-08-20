@@ -42,24 +42,33 @@ static std::vector<std::string> g_lines;
 
 static void capture_start(void) {
   g_lines.clear();
-  lucent::set_sink([](lucent::Level, std::string_view line) { g_lines.emplace_back(line); });
+  lucent::set_sink([](lucent::Level, std::string_view line) {
+    g_lines.emplace_back(line);
+  });
 }
-static void capture_stop(void) { lucent::set_sink(nullptr); }
+static void capture_stop(void) {
+  lucent::set_sink(nullptr);
+}
 
 // Dump what was captured, so a wrong COUNT is debuggable from the test output alone.
-static void dump_capture(const char* what) {
+static void dump_capture(const char *what) {
   fprintf(stderr, "  [%s] captured %zu line(s)\n", what, g_lines.size());
-  for (const std::string& l : g_lines) fprintf(stderr, "  [%s] | %s\n", what, l.c_str());
+  for (const std::string &l : g_lines) {
+    fprintf(stderr, "  [%s] | %s\n", what, l.c_str());
+  }
 }
 
-static bool line_has(size_t i, const char* needle) {
+static bool line_has(size_t i, const char *needle) {
   return i < g_lines.size() && g_lines[i].find(needle) != std::string::npos;
 }
 // Does ANY captured line contain `needle`? Used for the must-NOT-appear checks, where "not in line 0"
 // would be a weaker claim than intended.
-static bool any_line_has(const char* needle) {
-  for (const std::string& l : g_lines)
-    if (l.find(needle) != std::string::npos) return true;
+static bool any_line_has(const char *needle) {
+  for (const std::string &l : g_lines) {
+    if (l.find(needle) != std::string::npos) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -67,24 +76,26 @@ static bool any_line_has(const char* needle) {
 // Tomba!2's real values — Tomba2Engine/game/core/game_config.cpp, the only game that has RE'd these.
 static GameConfig tomba2_cfg(void) {
   GameConfig c{};
-  c.packetPoolBase   = 0x800BFE68u;
+  c.packetPoolBase = 0x800BFE68u;
   c.packetPoolStride = 0x00014000u;
-  c.otRegionBase     = 0x800E80A8u;
-  c.otRegionStride   = 0x00002070u;
-  c.poolPtrCur       = 0x800BF544u;
-  c.poolPtrLast      = 0x800BF4F4u;
-  c.dwellCounter     = 0x800E809Cu;
-  c.taskTableBase    = 0x801FE000u;
-  c.taskSlotStride   = 0x00000070u;
-  c.taskCount        = 3u;
-  c.curTaskPtr       = 0x1F800138u;
-  c.stageGame        = 0x8010637Cu;
+  c.otRegionBase = 0x800E80A8u;
+  c.otRegionStride = 0x00002070u;
+  c.poolPtrCur = 0x800BF544u;
+  c.poolPtrLast = 0x800BF4F4u;
+  c.dwellCounter = 0x800E809Cu;
+  c.taskTableBase = 0x801FE000u;
+  c.taskSlotStride = 0x00000070u;
+  c.taskCount = 3u;
+  c.curTaskPtr = 0x1F800138u;
+  c.stageGame = 0x8010637Cu;
   return c;
 }
 // spyro / spider1: every field above is an HONEST ZERO with a TODO in their game_config.cpp. A
 // default-constructed GameConfig IS that state, which is why the zero cases below construct one
 // rather than copying their files.
-static GameConfig unre_cfg(void) { return GameConfig{}; }
+static GameConfig unre_cfg(void) {
+  return GameConfig{};
+}
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // CASE 1 (MUST RUN FIRST): the false-alarm direction. On the game that filled the fields, building
@@ -100,17 +111,20 @@ static void test_filled_config_is_silent(void) {
   const RenderNoiseMask m2 = RenderNoiseMask::from(&cfg, "test-filled-again");
   const RenderNoiseMask m3 = RenderNoiseMask::from(&cfg, "test-filled-third");
   capture_stop();
-  if (!g_lines.empty()) dump_capture("filled");
-  CHECK_EQ((long long)g_lines.size(), 0);   // the whole point: a correct game hears nothing
+  if (!g_lines.empty()) {
+    dump_capture("filled");
+  }
+  CHECK_EQ((long long)g_lines.size(), 0); // the whole point: a correct game hears nothing
   // …and it is silent because it SUCCEEDED, not because it bailed out early.
   CHECK(m.known);
   CHECK(m2.known);
   CHECK(m3.known);
-  CHECK_EQ(m.bytes(), (0x800E7E68u - 0x800BFE68u) + (0x800EC188u - 0x800E80A8u) +
-                          (0x800E80A8u - 0x800E7E68u) + (0x800BF54Cu - 0x800BF4F0u));
+  CHECK_EQ(m.bytes(),
+           (0x800E7E68u - 0x800BFE68u) + (0x800EC188u - 0x800E80A8u) + (0x800E80A8u - 0x800E7E68u) +
+               (0x800BF54Cu - 0x800BF4F0u));
   // The report header must print THIS run's real window, never the "unset" apology.
   char buf[256];
-  const char* d = m.describe(buf, sizeof buf);
+  const char *d = m.describe(buf, sizeof buf);
   CHECK(std::string(d).find("unset") == std::string::npos);
   CHECK(std::string(d).find("0x800BFE68") != std::string::npos);
   CHECK(std::string(d).find("0x800EC188") != std::string::npos);
@@ -122,16 +136,18 @@ static void test_filled_config_task_addrs_are_the_literals(void) {
   const GameConfig cfg = tomba2_cfg();
   capture_start();
   const uint32_t entry = task0_stage_entry_addr(&cfg);
-  const uint32_t sm    = task0_state_mach_addr(&cfg);
-  const uint32_t s4a   = task0_field_submode_addr(&cfg);
-  const uint32_t s4e   = task0_field_runstate_addr(&cfg);
+  const uint32_t sm = task0_state_mach_addr(&cfg);
+  const uint32_t s4a = task0_field_submode_addr(&cfg);
+  const uint32_t s4e = task0_field_runstate_addr(&cfg);
   capture_stop();
-  if (!g_lines.empty()) dump_capture("filled-task");
+  if (!g_lines.empty()) {
+    dump_capture("filled-task");
+  }
   CHECK_EQ((long long)g_lines.size(), 0);
-  CHECK_EQ(entry, 0x801FE00Cu);   // sbs.cpp's old TASK0_ENTRY
-  CHECK_EQ(sm,    0x801FE048u);   // the vabBuildPending / MODE=skip gate word
-  CHECK_EQ(s4a,   0x801FE04Au);   // old SM_S4A
-  CHECK_EQ(s4e,   0x801FE04Eu);   // old SM_S4E
+  CHECK_EQ(entry, 0x801FE00Cu); // sbs.cpp's old TASK0_ENTRY
+  CHECK_EQ(sm, 0x801FE048u);    // the vabBuildPending / MODE=skip gate word
+  CHECK_EQ(s4a, 0x801FE04Au);   // old SM_S4A
+  CHECK_EQ(s4e, 0x801FE04Eu);   // old SM_S4E
   // sbs.cpp's nav predicate, spelled exactly as Impl::navArm() spells it. TRUE here means auto-nav
   // arms on Tomba!2 — i.e. the refusal below is not achieved by breaking the working game.
   CHECK(entry && cfg.stageGame);
@@ -145,23 +161,24 @@ static void test_filled_config_task_addrs_are_the_literals(void) {
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_partial_config_names_the_missing_parts(void) {
   GameConfig cfg{};
-  cfg.packetPoolBase = 0x80100000u; cfg.packetPoolStride = 0x1000u;   // pool known; OT and ptrs not
+  cfg.packetPoolBase = 0x80100000u;
+  cfg.packetPoolStride = 0x1000u; // pool known; OT and ptrs not
   capture_start();
   const RenderNoiseMask m = RenderNoiseMask::from(&cfg, "test-partial");
-  RenderNoiseMask::from(&cfg, "test-partial-again");                   // once per process, so: 1 line
+  RenderNoiseMask::from(&cfg, "test-partial-again"); // once per process, so: 1 line
   capture_stop();
   dump_capture("partial");
   CHECK_EQ((long long)g_lines.size(), 1);
   CHECK(line_has(0, "PARTIAL"));
-  CHECK(line_has(0, "test-partial"));         // names WHICH consumer's verdict is affected
+  CHECK(line_has(0, "test-partial")); // names WHICH consumer's verdict is affected
   CHECK(line_has(0, "ordering table MISSING"));
   CHECK(line_has(0, "pool pointers MISSING"));
-  CHECK(line_has(0, "packet pool ok"));       // …and does not claim the part it DOES have is missing
+  CHECK(line_has(0, "packet pool ok")); // …and does not claim the part it DOES have is missing
   // A partial mask must not silently inherit the rest.
   CHECK(m.known);
   CHECK_EQ(m.otLo, 0u);
   CHECK_EQ(m.ptrLo, 0u);
-  CHECK(!m.covers(0x800E80A8u));              // Tomba!2's OT is NOT masked for this game
+  CHECK(!m.covers(0x800E80A8u)); // Tomba!2's OT is NOT masked for this game
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -175,13 +192,13 @@ static void test_zero_config_warns_loudly(void) {
   const RenderNoiseMask m = RenderNoiseMask::from(&cfg, "test-zero");
   capture_stop();
   dump_capture("zero");
-  CHECK_EQ((long long)g_lines.size(), 1);     // it FIRED — the check this whole file exists for
-  CHECK(line_has(0, "render-noise"));         // on a channel, so it is greppable
-  CHECK(line_has(0, "test-zero"));            // names the affected consumer
+  CHECK_EQ((long long)g_lines.size(), 1); // it FIRED — the check this whole file exists for
+  CHECK(line_has(0, "render-noise"));     // on a channel, so it is greppable
+  CHECK(line_has(0, "test-zero"));        // names the affected consumer
   CHECK(line_has(0, "EMPTY"));
-  CHECK(line_has(0, "packetPool"));           // names what to fill, not just that something is wrong
+  CHECK(line_has(0, "packetPool")); // names what to fill, not just that something is wrong
   CHECK(line_has(0, "otRegion"));
-  CHECK(line_has(0, "REPORTED AS GAMEPLAY DIVERGENCE"));   // names the CONSEQUENCE for the verdict
+  CHECK(line_has(0, "REPORTED AS GAMEPLAY DIVERGENCE")); // names the CONSEQUENCE for the verdict
   // It must not print another game's window as if it were a fallback.
   CHECK(!any_line_has("0x800BFE68"));
   CHECK(!any_line_has("800bfe68"));
@@ -190,7 +207,7 @@ static void test_zero_config_warns_loudly(void) {
   // The blindness must be visible in a REPORT HEADER too, not only in the log stream — a harness
   // report read after the fact is where the wrong-region mistake actually gets made.
   char buf[256];
-  const char* d = m.describe(buf, sizeof buf);
+  const char *d = m.describe(buf, sizeof buf);
   CHECK(std::string(d).find("unset") != std::string::npos);
   CHECK(std::string(d).find("0x800BFE68") == std::string::npos);
 }
@@ -210,7 +227,7 @@ static void test_second_consumer_of_an_empty_mask_is_not_named(void) {
   const RenderNoiseMask b = RenderNoiseMask::from(nullptr, "third-consumer-dualcore");
   capture_stop();
   dump_capture("second-consumer");
-  CHECK_EQ((long long)g_lines.size(), 0);            // documented, not desired
+  CHECK_EQ((long long)g_lines.size(), 0); // documented, not desired
   CHECK(!any_line_has("second-consumer-sbs-addrlabel"));
   // The MASK is still correct for both — the suppression is of the announcement only, so a consumer
   // that checks `known` (as every one of them does) still refuses/labels honestly.
@@ -227,18 +244,18 @@ static void test_second_consumer_of_an_empty_mask_is_not_named(void) {
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_zero_config_task_addrs_are_zero_not_offsets(void) {
   const GameConfig cfg = unre_cfg();
-  CHECK_EQ(task0_stage_entry_addr(&cfg),    0u);   // NOT 0x0C — sbs kP[] "stage" probe / sbs-ww stage=
-  CHECK_EQ(task0_state_mach_addr(&cfg),     0u);   // NOT 0x48 — MODE=skip's vabBuildPending gate
-  CHECK_EQ(task0_field_submode_addr(&cfg),  0u);   // NOT 0x4A — navStep s4a
-  CHECK_EQ(task0_field_runstate_addr(&cfg), 0u);   // NOT 0x4E — navStep s4e
-  CHECK_EQ(task_slot_base(&cfg, 0),         0u);
-  CHECK_EQ(task_slot_base(&cfg, 2),         0u);   // NOT 0xE0 — the task-slot dump's third row
+  CHECK_EQ(task0_stage_entry_addr(&cfg), 0u);    // NOT 0x0C — sbs kP[] "stage" probe / sbs-ww stage=
+  CHECK_EQ(task0_state_mach_addr(&cfg), 0u);     // NOT 0x48 — MODE=skip's vabBuildPending gate
+  CHECK_EQ(task0_field_submode_addr(&cfg), 0u);  // NOT 0x4A — navStep s4a
+  CHECK_EQ(task0_field_runstate_addr(&cfg), 0u); // NOT 0x4E — navStep s4e
+  CHECK_EQ(task_slot_base(&cfg, 0), 0u);
+  CHECK_EQ(task_slot_base(&cfg, 2), 0u); // NOT 0xE0 — the task-slot dump's third row
   // Every one of the four helpers must also survive a null config (a game with no GameConfig at all).
-  CHECK_EQ(task0_stage_entry_addr(nullptr),    0u);
-  CHECK_EQ(task0_state_mach_addr(nullptr),     0u);
-  CHECK_EQ(task0_field_submode_addr(nullptr),  0u);
+  CHECK_EQ(task0_stage_entry_addr(nullptr), 0u);
+  CHECK_EQ(task0_state_mach_addr(nullptr), 0u);
+  CHECK_EQ(task0_field_submode_addr(nullptr), 0u);
   CHECK_EQ(task0_field_runstate_addr(nullptr), 0u);
-  CHECK_EQ(task_slot_base(nullptr, 1),         0u);
+  CHECK_EQ(task_slot_base(nullptr, 1), 0u);
   // sbs.cpp's guards, spelled as sbs.cpp spells them, asserted FALSE:
   //   navArm():        mNavKnown = mNavEntryAddr && mNavStageGame   -> no auto-nav
   CHECK(!(task0_stage_entry_addr(&cfg) && cfg.stageGame));
@@ -261,11 +278,13 @@ static void test_zero_config_task_addrs_are_zero_not_offsets(void) {
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_half_filled_config_does_not_arm_nav(void) {
   GameConfig onlyTable{};
-  onlyTable.taskTableBase = 0x801FE000u; onlyTable.taskSlotStride = 0x70u; onlyTable.taskCount = 3u;
-  CHECK(task0_stage_entry_addr(&onlyTable) != 0u);              // the address IS derivable…
-  CHECK(!(task0_stage_entry_addr(&onlyTable) && onlyTable.stageGame));  // …and nav still refuses
+  onlyTable.taskTableBase = 0x801FE000u;
+  onlyTable.taskSlotStride = 0x70u;
+  onlyTable.taskCount = 3u;
+  CHECK(task0_stage_entry_addr(&onlyTable) != 0u);                     // the address IS derivable…
+  CHECK(!(task0_stage_entry_addr(&onlyTable) && onlyTable.stageGame)); // …and nav still refuses
   GameConfig onlyStage{};
-  onlyStage.stageGame = 0x8010637Cu;                            // stage PC known, table not
+  onlyStage.stageGame = 0x8010637Cu; // stage PC known, table not
   CHECK_EQ(task0_stage_entry_addr(&onlyStage), 0u);
   CHECK(!(task0_stage_entry_addr(&onlyStage) && onlyStage.stageGame));
   // MODE=skip must refuse in the second case too — its gate word is unreachable without the table.

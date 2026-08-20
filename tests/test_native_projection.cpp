@@ -27,13 +27,11 @@ struct FractionalExpected {
   float pz = 0.0f;
 };
 
-static unsigned compare_fractional(const NativeProjectedVertex &actual,
-                                   const FractionalExpected &expected) {
+static unsigned compare_fractional(const NativeProjectedVertex &actual, const FractionalExpected &expected) {
   unsigned mismatched = 0;
   for (unsigned i = 0; i < 3; ++i) {
     mismatched += actual.raw_view_fixed[i] != expected.raw_fixed[i];
-    mismatched +=
-        ((uint64_t)actual.raw_view_fixed[i] & 0xfffu) != expected.fraction[i];
+    mismatched += ((uint64_t)actual.raw_view_fixed[i] & 0xfffu) != expected.fraction[i];
     mismatched += actual.raw_view[i] != expected.raw[i];
   }
   mismatched += std::fabs(actual.px - expected.px) > 1.0e-6f;
@@ -42,13 +40,16 @@ static unsigned compare_fractional(const NativeProjectedVertex &actual,
   return mismatched;
 }
 
-static CompareResult compare(const NativeProjectedVertex &native,
-                             const GteRegs &guest, unsigned shift = 12) {
+static CompareResult compare(const NativeProjectedVertex &native, const GteRegs &guest, unsigned shift = 12) {
   const std::array<int32_t, 9> expected = {
-      (int16_t)guest.REG[9],          (int16_t)guest.REG[10],
-      (int16_t)guest.REG[11],         (int32_t)guest.REG[25],
-      (int32_t)guest.REG[26],         (int32_t)guest.REG[27],
-      (uint16_t)guest.REG[19],        (int16_t)guest.REG[14],
+      (int16_t)guest.REG[9],
+      (int16_t)guest.REG[10],
+      (int16_t)guest.REG[11],
+      (int32_t)guest.REG[25],
+      (int32_t)guest.REG[26],
+      (int32_t)guest.REG[27],
+      (uint16_t)guest.REG[19],
+      (int16_t)guest.REG[14],
       (int16_t)(guest.REG[14] >> 16),
   };
   const std::array<int32_t, 9> actual = {
@@ -66,8 +67,9 @@ static CompareResult compare(const NativeProjectedVertex &native,
   for (unsigned i = 0; i < actual.size(); ++i) {
     ++result.compared;
     if (actual[i] != expected[i]) {
-      if (!result.mismatched)
+      if (!result.mismatched) {
         result.first = i;
+      }
       ++result.mismatched;
     }
   }
@@ -81,21 +83,16 @@ static uint32_t random_word(uint32_t &state) {
   return state;
 }
 
-static GteRegs make_guest(const FixedAffine &affine,
-                          const ProjectionParams &projection,
-                          ModelVertex vertex) {
+static GteRegs make_guest(const FixedAffine &affine, const ProjectionParams &projection, ModelVertex vertex) {
   GteRegs guest{};
-  guest.REG[32] =
-      (uint16_t)affine.m[0][0] | ((uint32_t)(uint16_t)affine.m[0][1] << 16);
-  guest.REG[33] =
-      (uint16_t)affine.m[0][2] | ((uint32_t)(uint16_t)affine.m[1][0] << 16);
-  guest.REG[34] =
-      (uint16_t)affine.m[1][1] | ((uint32_t)(uint16_t)affine.m[1][2] << 16);
-  guest.REG[35] =
-      (uint16_t)affine.m[2][0] | ((uint32_t)(uint16_t)affine.m[2][1] << 16);
+  guest.REG[32] = (uint16_t)affine.m[0][0] | ((uint32_t)(uint16_t)affine.m[0][1] << 16);
+  guest.REG[33] = (uint16_t)affine.m[0][2] | ((uint32_t)(uint16_t)affine.m[1][0] << 16);
+  guest.REG[34] = (uint16_t)affine.m[1][1] | ((uint32_t)(uint16_t)affine.m[1][2] << 16);
+  guest.REG[35] = (uint16_t)affine.m[2][0] | ((uint32_t)(uint16_t)affine.m[2][1] << 16);
   guest.REG[36] = (uint16_t)affine.m[2][2];
-  for (unsigned i = 0; i < 3; ++i)
+  for (unsigned i = 0; i < 3; ++i) {
     guest.REG[37 + i] = (uint32_t)affine.t[i];
+  }
   guest.REG[56] = (uint32_t)projection.ofx;
   guest.REG[57] = (uint32_t)projection.ofy;
   guest.REG[58] = projection.h;
@@ -106,21 +103,19 @@ static GteRegs make_guest(const FixedAffine &affine,
 
 static void check_diagnostic_mode(const FixedAffine &affine,
                                   const ProjectionParams &projection,
-                                  ModelVertex vertex, unsigned shift,
+                                  ModelVertex vertex,
+                                  unsigned shift,
                                   bool limit_mode) {
   GteRegs guest = make_guest(affine, projection, vertex);
-  const uint32_t insn = 0x4a000001u | (shift == 12 ? (1u << 19) : 0u) |
-                        (limit_mode ? (1u << 10) : 0u);
+  const uint32_t insn = 0x4a000001u | (shift == 12 ? (1u << 19) : 0u) | (limit_mode ? (1u << 10) : 0u);
   CHECK(GTE_ExecuteIsolated(&guest, insn) >= 0);
-  const NativeProjectedVertex native =
-      detail::project_gte_mode(affine, projection, vertex, shift, limit_mode);
+  const NativeProjectedVertex native = detail::project_gte_mode(affine, projection, vertex, shift, limit_mode);
   const CompareResult result = compare(native, guest, shift);
   CHECK_EQ(result.compared, 9u);
   CHECK_EQ(result.mismatched, 0u);
 }
 
-static void check_case(const FixedAffine &affine,
-                       const ProjectionParams &projection, ModelVertex vertex) {
+static void check_case(const FixedAffine &affine, const ProjectionParams &projection, ModelVertex vertex) {
   GteRegs guest = make_guest(affine, projection, vertex);
   CHECK(GTE_ExecuteIsolated(&guest, 0x4a180001u) >= 0);
   const NativeProjectedVertex native = project(affine, projection, vertex);
@@ -134,17 +129,17 @@ static void test_random_and_edges(void) {
   uint32_t cases = 0;
   for (unsigned n = 0; n < 1024; ++n) {
     FixedAffine affine{};
-    for (auto &row : affine.m)
-      for (int16_t &value : row)
+    for (auto &row : affine.m) {
+      for (int16_t &value : row) {
         value = (int16_t)random_word(seed);
-    for (int32_t &value : affine.t)
+      }
+    }
+    for (int32_t &value : affine.t) {
       value = (int32_t)random_word(seed);
-    const ProjectionParams projection{(int32_t)random_word(seed),
-                                      (int32_t)random_word(seed),
-                                      (uint16_t)random_word(seed)};
-    const ModelVertex vertex{(int16_t)random_word(seed),
-                             (int16_t)random_word(seed),
-                             (int16_t)random_word(seed)};
+    }
+    const ProjectionParams projection{
+        (int32_t)random_word(seed), (int32_t)random_word(seed), (uint16_t)random_word(seed)};
+    const ModelVertex vertex{(int16_t)random_word(seed), (int16_t)random_word(seed), (int16_t)random_word(seed)};
     check_case(affine, projection, vertex);
     ++cases;
   }
@@ -179,17 +174,17 @@ static void test_diagnostic_modes(void) {
   unsigned cases = 0;
   for (unsigned n = 0; n < 256; ++n) {
     FixedAffine affine{};
-    for (auto &row : affine.m)
-      for (int16_t &value : row)
+    for (auto &row : affine.m) {
+      for (int16_t &value : row) {
         value = (int16_t)random_word(seed);
-    for (int32_t &value : affine.t)
+      }
+    }
+    for (int32_t &value : affine.t) {
       value = (int32_t)random_word(seed);
-    const ProjectionParams projection{(int32_t)random_word(seed),
-                                      (int32_t)random_word(seed),
-                                      (uint16_t)random_word(seed)};
-    const ModelVertex vertex{(int16_t)random_word(seed),
-                             (int16_t)random_word(seed),
-                             (int16_t)random_word(seed)};
+    }
+    const ProjectionParams projection{
+        (int32_t)random_word(seed), (int32_t)random_word(seed), (uint16_t)random_word(seed)};
+    const ModelVertex vertex{(int16_t)random_word(seed), (int16_t)random_word(seed), (int16_t)random_word(seed)};
     check_diagnostic_mode(affine, projection, vertex, 0, false);
     check_diagnostic_mode(affine, projection, vertex, 0, true);
     check_diagnostic_mode(affine, projection, vertex, 12, true);
@@ -223,9 +218,12 @@ static void test_fractional_endpoint_channels(void) {
   NativeProjectedVertex far = project(far_affine, projection, {1, 1, 1});
   constexpr float far_z = 512.0f + 3.0f / 4096.0f;
   const FractionalExpected far_expected{
-      {18432, -11264, 2097155},       {2048, 1024, 3},
-      {4.5f, -2.75f, far_z},          160.0f + 4.0f * 256.0f / far_z,
-      120.0f - 3.0f * 256.0f / far_z, far_z,
+      {18432, -11264, 2097155},
+      {2048, 1024, 3},
+      {4.5f, -2.75f, far_z},
+      160.0f + 4.0f * 256.0f / far_z,
+      120.0f - 3.0f * 256.0f / far_z,
+      far_z,
   };
   CHECK_EQ(compare_fractional(far, far_expected), 0u);
 

@@ -27,8 +27,8 @@ class Core;
 
 // Loads the accumulated claim set (PSXPORT_PRODUCERS_DB, default <PRODUCERS_DIR>/claims.txt). Safe to call
 // when the census will not be fed — loadClaims reports its own refusal when the file is absent.
-void producer_db_begin(Core* c);
+void producer_db_begin(Core *c);
 
 // Run-end: the claim-resolution accounting, the census report, the per-run JSONL, and the append-only claim
 // file. This is the ONLY place the DB becomes durable, so a port that does not call it produces no DB.
-void producer_db_finish(Core* c);
+void producer_db_finish(Core *c);

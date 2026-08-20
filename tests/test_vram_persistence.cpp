@@ -30,46 +30,56 @@
 // HERMETIC: no GPU, no window, no disc. The unit under test is VramDirty (runtime/recomp/vram_dirty.h);
 // the framebuffer, the fills and the rasterizer around it are a model.
 
-#include "vram_dirty.h"
 #include "testutil.h"
-#include <string.h>
+#include "vram_dirty.h"
 #include <stdlib.h>
+#include <string.h>
 
 // ---- the modelled console ---------------------------------------------------------------------
-static const int W = 1024, H = 512;      // guest VRAM
-static const int DW = 512, DH = 240;     // one display buffer
-static const int BUF_Y[2] = { 0, 240 };  // the two buffers, exactly as Spyro's queue y-ranges show
+static const int W = 1024, H = 512;   // guest VRAM
+static const int DW = 512, DH = 240;  // one display buffer
+static const int BUF_Y[2] = {0, 240}; // the two buffers, exactly as Spyro's queue y-ranges show
 
-static const uint16_t CLEAR_FILL = 0x6BFF;   // whatever the guest fills the back buffer with
+static const uint16_t CLEAR_FILL = 0x6BFF; // whatever the guest fills the back buffer with
 #define GEO_COLOUR(frame) ((uint16_t)(0x1000 + (frame)))
 
 enum UploadRule { UPLOAD_WHOLE_CANVAS, UPLOAD_DIRTY_RECTS };
 
 struct Console {
-  uint16_t* cpu;    // guest CPU VRAM — GP0 uploads/fills/copies ONLY (vk_path: no polygons here)
-  uint16_t* comp;   // the composite the display scans out of (the VK image)
+  uint16_t *cpu;  // guest CPU VRAM — GP0 uploads/fills/copies ONLY (vk_path: no polygons here)
+  uint16_t *comp; // the composite the display scans out of (the VK image)
   VramDirty dirty;
   // the native geometry batch: a filled span, reset at every present (GpuVkState::frame_end)
-  int  batch_y0 = 0, batch_y1 = 0;
+  int batch_y0 = 0, batch_y1 = 0;
   uint16_t batch_colour = 0;
   bool batch_live = false;
 
   Console() {
-    cpu  = (uint16_t*)calloc((size_t)W * H, 2);
-    comp = (uint16_t*)calloc((size_t)W * H, 2);
+    cpu = (uint16_t *)calloc((size_t)W * H, 2);
+    comp = (uint16_t *)calloc((size_t)W * H, 2);
     dirty.setCanvas(W, H);
-    dirty.clear();   // the composite starts in a known (blank) state for the model
+    dirty.clear(); // the composite starts in a known (blank) state for the model
   }
-  ~Console() { free(cpu); free(comp); }
+  ~Console() {
+    free(cpu);
+    free(comp);
+  }
 
   // GP0 0x02 fill / 0xA0 upload — CPU VRAM, plus the dirty chokepoint every such path already calls.
   void guestFill(int x, int y, int w, int h, uint16_t v) {
-    for (int r = y; r < y + h; r++) for (int c = x; c < x + w; c++) cpu[(size_t)r * W + c] = v;
+    for (int r = y; r < y + h; r++) {
+      for (int c = x; c < x + w; c++) {
+        cpu[(size_t)r * W + c] = v;
+      }
+    }
     dirty.add(x, y, w, h);
   }
   // A native submit: goes to the rasterizer, NEVER to CPU VRAM.
   void submitGeometry(int y0, int y1, uint16_t colour) {
-    batch_y0 = y0; batch_y1 = y1; batch_colour = colour; batch_live = true;
+    batch_y0 = y0;
+    batch_y1 = y1;
+    batch_colour = colour;
+    batch_live = true;
   }
 
   void present(UploadRule rule) {
@@ -83,40 +93,50 @@ struct Console {
       // exactly this, so a regression that re-broadens the upload set fails here.
       VramDirtyRect rs[VramDirty::CAP + 1];
       const int nr = vram_upload_regions(dirty, rs, VramDirty::CAP + 1);
-      for (int i = 0; i < nr; i++)
-        for (int y = rs[i].y; y < rs[i].y + rs[i].h; y++)
+      for (int i = 0; i < nr; i++) {
+        for (int y = rs[i].y; y < rs[i].y + rs[i].h; y++) {
           memcpy(&comp[(size_t)y * W + rs[i].x], &cpu[(size_t)y * W + rs[i].x], (size_t)rs[i].w * 2);
+        }
+      }
     }
     dirty.clear();
-    if (batch_live) {                                   // render_geom(): draw the batch over it
-      for (int y = batch_y0; y < batch_y1; y++)
-        for (int x = 100; x < 200; x++) comp[(size_t)y * W + x] = batch_colour;
-      batch_live = false;                               // frame_end() resets the batch
+    if (batch_live) { // render_geom(): draw the batch over it
+      for (int y = batch_y0; y < batch_y1; y++) {
+        for (int x = 100; x < 200; x++) {
+          comp[(size_t)y * W + x] = batch_colour;
+        }
+      }
+      batch_live = false; // frame_end() resets the batch
     }
   }
 
   // How many pixels of the display band starting at `bufY` carry `colour`.
   int bandPixels(int bufY, uint16_t colour) const {
     int n = 0;
-    for (int y = bufY; y < bufY + DH; y++)
-      for (int x = 0; x < DW; x++) if (comp[(size_t)y * W + x] == colour) n++;
+    for (int y = bufY; y < bufY + DH; y++) {
+      for (int x = 0; x < DW; x++) {
+        if (comp[(size_t)y * W + x] == colour) {
+          n++;
+        }
+      }
+    }
     return n;
   }
 };
 
 // Run `frames` guest frames of the modelled double-buffered game and return, for each present, how many
 // pixels of the DISPLAYED band carried the PREVIOUS frame's geometry colour. That is the whole property.
-static void run_double_buffered(UploadRule rule, int frames, int* prev_geo_px, int* cur_geo_px) {
+static void run_double_buffered(UploadRule rule, int frames, int *prev_geo_px, int *cur_geo_px) {
   Console c;
   for (int n = 0; n < frames; n++) {
-    const int back  = BUF_Y[n & 1];
+    const int back = BUF_Y[n & 1];
     const int front = BUF_Y[(n + 1) & 1];
-    c.guestFill(0, back, DW, DH, CLEAR_FILL);                   // the guest clears its back buffer
-    c.submitGeometry(back + 10, back + 30, GEO_COLOUR(n));      // ...and draws frame n into it
+    c.guestFill(0, back, DW, DH, CLEAR_FILL);              // the guest clears its back buffer
+    c.submitGeometry(back + 10, back + 30, GEO_COLOUR(n)); // ...and draws frame n into it
     c.present(rule);
     // The display shows the buffer the guest finished LAST frame.
     prev_geo_px[n] = c.bandPixels(front, GEO_COLOUR(n - 1));
-    cur_geo_px[n]  = c.bandPixels(back,  GEO_COLOUR(n));
+    cur_geo_px[n] = c.bandPixels(back, GEO_COLOUR(n));
   }
 }
 
@@ -129,12 +149,16 @@ static void test_displayed_buffer_keeps_last_frames_geometry(void) {
   CHECK_EQ(N - 1, 7);
   int kept = 0;
   for (int n = 1; n < N; n++) {
-    CHECK_EQ(prev[n], 100 * 20);   // the whole previous-frame span, still there
-    if (prev[n] > 0) kept++;
+    CHECK_EQ(prev[n], 100 * 20); // the whole previous-frame span, still there
+    if (prev[n] > 0) {
+      kept++;
+    }
   }
   CHECK_EQ(kept, N - 1);
   // ...and the frame just drawn is in the buffer it was drawn into, on every present.
-  for (int n = 0; n < N; n++) CHECK_EQ(cur[n], 100 * 20);
+  for (int n = 0; n < N; n++) {
+    CHECK_EQ(cur[n], 100 * 20);
+  }
 }
 
 // ---- 2. NEGATIVE CONTROL: the pre-fix rule must LOSE it ---------------------------------------
@@ -145,13 +169,17 @@ static void test_whole_canvas_upload_destroys_it(void) {
   run_double_buffered(UPLOAD_WHOLE_CANVAS, N, prev, cur);
   int lost = 0;
   for (int n = 1; n < N; n++) {
-    CHECK_EQ(prev[n], 0);          // erased by the blanket re-upload — the measured flat frame
-    if (prev[n] == 0) lost++;
+    CHECK_EQ(prev[n], 0); // erased by the blanket re-upload — the measured flat frame
+    if (prev[n] == 0) {
+      lost++;
+    }
   }
   CHECK_EQ(lost, N - 1);
   // The current frame still shows, because its geometry is rasterized AFTER the upload. That is
   // exactly why the bug alternated instead of blacking the screen out entirely.
-  for (int n = 0; n < N; n++) CHECK_EQ(cur[n], 100 * 20);
+  for (int n = 0; n < N; n++) {
+    CHECK_EQ(cur[n], 100 * 20);
+  }
 }
 
 // ---- 3. an upload-only screen still repaints (issue 0043 / C149 must not regress) --------------
@@ -162,7 +190,7 @@ static void test_upload_only_screen_still_repaints(void) {
   c.guestFill(0, 0, DW, DH, 0x0001);
   c.present(UPLOAD_DIRTY_RECTS);
   CHECK_EQ(c.bandPixels(0, 0x0001), DW * DH);
-  c.guestFill(0, 0, DW, DH, 0x7FFF);      // the next logo frame, still zero primitives
+  c.guestFill(0, 0, DW, DH, 0x7FFF); // the next logo frame, still zero primitives
   c.present(UPLOAD_DIRTY_RECTS);
   CHECK_EQ(c.bandPixels(0, 0x7FFF), DW * DH);
   CHECK_EQ(c.bandPixels(0, 0x0001), 0);
@@ -175,15 +203,15 @@ static void test_no_guest_write_uploads_nothing(void) {
   c.submitGeometry(250, 270, GEO_COLOUR(1));
   c.present(UPLOAD_DIRTY_RECTS);
   CHECK_EQ(c.bandPixels(240, GEO_COLOUR(1)), 100 * 20);
-  CHECK(c.dirty.empty());                 // cleared by the present
-  c.present(UPLOAD_DIRTY_RECTS);          // an idle field: no fill, no geometry
-  CHECK_EQ(c.bandPixels(240, GEO_COLOUR(1)), 100 * 20);   // still there
+  CHECK(c.dirty.empty());                               // cleared by the present
+  c.present(UPLOAD_DIRTY_RECTS);                        // an idle field: no fill, no geometry
+  CHECK_EQ(c.bandPixels(240, GEO_COLOUR(1)), 100 * 20); // still there
 }
 
 // ---- 5. VramDirty itself ----------------------------------------------------------------------
 static void test_dirty_starts_as_all(void) {
   VramDirty d;
-  CHECK(d.all());                         // no canvas, nothing uploaded: upload everything
+  CHECK(d.all()); // no canvas, nothing uploaded: upload everything
   d.setCanvas(W, H);
   CHECK(d.all());
   d.clear();
@@ -193,22 +221,28 @@ static void test_dirty_starts_as_all(void) {
 }
 
 static void test_dirty_clips_and_counts_drops(void) {
-  VramDirty d; d.setCanvas(W, H); d.clear();
-  d.add(-50, -50, 100, 100);              // straddles the origin
+  VramDirty d;
+  d.setCanvas(W, H);
+  d.clear();
+  d.add(-50, -50, 100, 100); // straddles the origin
   CHECK_EQ(d.count(), 1);
-  CHECK_EQ(d.at(0).x, 0); CHECK_EQ(d.at(0).y, 0);
-  CHECK_EQ(d.at(0).w, 50); CHECK_EQ(d.at(0).h, 50);
-  d.add(W + 10, 0, 8, 8);                 // entirely off-canvas
-  d.add(0, 0, 0, 8);                      // empty
+  CHECK_EQ(d.at(0).x, 0);
+  CHECK_EQ(d.at(0).y, 0);
+  CHECK_EQ(d.at(0).w, 50);
+  CHECK_EQ(d.at(0).h, 50);
+  d.add(W + 10, 0, 8, 8); // entirely off-canvas
+  d.add(0, 0, 0, 8);      // empty
   CHECK_EQ(d.count(), 1);
-  CHECK_EQ((int)d.dropped(), 2);          // dropped, and SAID SO — not silently ignored
+  CHECK_EQ((int)d.dropped(), 2); // dropped, and SAID SO — not silently ignored
   CHECK_EQ((int)d.adds(), 3);
 }
 
 static void test_dirty_dedupes_contained_writes(void) {
-  VramDirty d; d.setCanvas(W, H); d.clear();
+  VramDirty d;
+  d.setCanvas(W, H);
+  d.clear();
   d.add(0, 0, 512, 240);
-  d.add(10, 10, 20, 20);                  // inside the first
+  d.add(10, 10, 20, 20); // inside the first
   CHECK_EQ(d.count(), 1);
   CHECK_EQ((int)d.adds(), 2);
 }
@@ -216,11 +250,14 @@ static void test_dirty_dedupes_contained_writes(void) {
 // Overflow must be CONSERVATIVE: never lose coverage. Feed CAP+8 disjoint writes and assert every one
 // of them is still covered by the union of what is stored, with the count as the denominator.
 static void test_dirty_overflow_never_loses_coverage(void) {
-  VramDirty d; d.setCanvas(W, H); d.clear();
+  VramDirty d;
+  d.setCanvas(W, H);
+  d.clear();
   const int N = VramDirty::CAP + 8;
   int xs[N], ys[N];
   for (int i = 0; i < N; i++) {
-    xs[i] = (i % 32) * 32; ys[i] = (i / 32) * 32;
+    xs[i] = (i % 32) * 32;
+    ys[i] = (i / 32) * 32;
     d.add(xs[i], ys[i], 8, 8);
   }
   CHECK(d.count() <= VramDirty::CAP);
@@ -230,18 +267,25 @@ static void test_dirty_overflow_never_loses_coverage(void) {
     bool ok = false;
     for (int j = 0; j < d.count(); j++) {
       VramDirtyRect r = d.at(j);
-      if (xs[i] >= r.x && ys[i] >= r.y && xs[i] + 8 <= r.x + r.w && ys[i] + 8 <= r.y + r.h) { ok = true; break; }
+      if (xs[i] >= r.x && ys[i] >= r.y && xs[i] + 8 <= r.x + r.w && ys[i] + 8 <= r.y + r.h) {
+        ok = true;
+        break;
+      }
     }
-    if (ok) covered++;
+    if (ok) {
+      covered++;
+    }
   }
-  CHECK_EQ(covered, N);                   // scanned N writes, N covered — none dropped by the merge
+  CHECK_EQ(covered, N); // scanned N writes, N covered — none dropped by the merge
 }
 
 static void test_dirty_canvas_change_rearms_full_upload(void) {
-  VramDirty d; d.setCanvas(W, H); d.clear();
+  VramDirty d;
+  d.setCanvas(W, H);
+  d.clear();
   d.add(0, 0, 8, 8);
   CHECK_EQ(d.count(), 1);
-  d.setCanvas(W, 256);                    // the target was recreated: its content is unknown again
+  d.setCanvas(W, 256); // the target was recreated: its content is unknown again
   CHECK(d.all());
   CHECK_EQ(d.whole().w, W);
   CHECK_EQ(d.whole().h, 256);

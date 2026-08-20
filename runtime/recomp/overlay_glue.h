@@ -16,19 +16,19 @@ class Game;
 // `win` may be NULL — the overlay EXISTS in both legs; the window is a sink, not a mode. `sink_w`/
 // `sink_h` is the sink's measured size and `target_fmt` the colour format of the pass the overlay
 // records into. See rmlui_overlay.h for why none of this is re-derived from the window.
-void overlay_glue_init(Game* game, SDL_Window* win, SDL_GPUDevice* dev,
-                       SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h);
+void overlay_glue_init(
+    Game *game, SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h);
 
 // Feed every SDL event (overlay mouse/keys; ESC toggles the menu). No-op if not inited.
-void overlay_glue_event(Game* game, const SDL_Event* e);
+void overlay_glue_event(Game *game, const SDL_Event *e);
 
 // Per-frame CPU step: latch the live world readout from guest RAM (camera/Tomba pos + stage) for
 // the menu's HUD line, then run the overlay's CPU update. Called from present() before recording.
-void overlay_glue_frame_begin(Core* core);
+void overlay_glue_frame_begin(Core *core);
 
 // Record the menu geometry into the present render pass `rp` (its command buffer `cmd`). `win_w`/
 // `win_h` = the FULL window pixel size (glue passes them through so the menu covers the whole
 // window, not the letterboxed game pane). No-op if hidden.
-void overlay_glue_record(Game* game, SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* rp, int win_w, int win_h);
+void overlay_glue_record(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int win_w, int win_h);
 
 #endif

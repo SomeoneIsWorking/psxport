@@ -13,13 +13,13 @@
 //   CDC_GetCDAudioSample(s32*) — CD-DA audio source feeding the SPU mixer
 //   MDFNSS_StateAction(...)    — savestate (unused)
 // Each is shimmed faithful-first below; none pull in another .c file.
-#include <stdint.h>
-#include "cfg.h"          // cfg_str (PSXPORT_SPUBT) — the CONFIG half of cfg.h
+#include "cfg.h" // cfg_str (PSXPORT_SPUBT) — the CONFIG half of cfg.h
+#include <lucent/log.h>
 #include <stdbool.h>
-#include <string.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <lucent/log.h>
+#include <string.h>
 
 // C LINKAGE FOR THE WHOLE FILE. This module is the C-ABI adapter between the vendored Beetle spu.c
 // (compiled as C, and the caller of IRQ_Assert) and the C++ runtime, which reaches spu_init/spu_write/
@@ -34,20 +34,20 @@ extern "C" {
 // StateMem is opaque here; SPU_StateAction is not exposed by the adapter.
 // ---------------------------------------------------------------------------
 struct StateMem;
-void     SPU_Init(void);
-void     SPU_Kill(void);
-void     SPU_Power(void);
-void     SPU_Write(int32_t timestamp, uint32_t A, uint16_t V);
+void SPU_Init(void);
+void SPU_Kill(void);
+void SPU_Power(void);
+void SPU_Write(int32_t timestamp, uint32_t A, uint16_t V);
 uint16_t SPU_Read(int32_t timestamp, uint32_t A);
-void     SPU_WriteDMA(uint32_t V);
+void SPU_WriteDMA(uint32_t V);
 uint32_t SPU_ReadDMA(void);
-int32_t  SPU_UpdateFromCDC(int32_t clocks);
+int32_t SPU_UpdateFromCDC(int32_t clocks);
 
 // Beetle's global audio output ring: SPU mixes 44.1 kHz stereo samples into this
 // buffer; the frontend drains it. IntermediateBufferPos is the write cursor (in
 // stereo frames). Defined in spu.c — we only read/reset it here.
 extern uint32_t IntermediateBufferPos;
-extern int16_t  IntermediateBuffer[4096][2];
+extern int16_t IntermediateBuffer[4096][2];
 
 // ---------------------------------------------------------------------------
 // Externs spu.c references — faithful-first definitions.
@@ -74,16 +74,18 @@ bool psx_spu_silent_voice_opt = true;
 // — the same instance-free bind spu_bind_log uses), which latches the rising edge into that Game's
 // I_STAT bit 9 and lets the existing Hle::irqPoll chain run the guest's handler. NULL before the
 // first bind and in the psxport_smoke link, where there is no Core to raise on.
-void spu_irq_raise(void* core, int asserted);   // hw_bind.cpp (C++ side owns Game/Hle)
+void spu_irq_raise(void *core, int asserted); // hw_bind.cpp (C++ side owns Game/Hle)
 
-static void* s_irq_core = 0;
-void spu_bind_irq_core(void* core) { s_irq_core = core; }
+static void *s_irq_core = 0;
+void spu_bind_irq_core(void *core) {
+  s_irq_core = core;
+}
 
-void IRQ_Assert(int which, bool asserted)
-{
-   (void)which;   // IRQ_SPU (9) is the only source that reaches this adapter — see above
-   if (s_irq_core)
-      spu_irq_raise(s_irq_core, asserted ? 1 : 0);
+void IRQ_Assert(int which, bool asserted) {
+  (void)which; // IRQ_SPU (9) is the only source that reaches this adapter — see above
+  if (s_irq_core) {
+    spu_irq_raise(s_irq_core, asserted ? 1 : 0);
+  }
 }
 
 // CD-DA / CD-XA audio source. spu.c calls this once per output sample to fetch the stereo CD
@@ -110,10 +112,9 @@ void IRQ_Assert(int which, bool asserted)
 // convention Beetle uses for its non-timed accesses). The mix is unaffected.
 // ---------------------------------------------------------------------------
 
-void spu_init(void)
-{
-   SPU_Init();
-   SPU_Power();
+void spu_init(void) {
+  SPU_Init();
+  SPU_Power();
 }
 
 // SBS per-Core SPU-write log. spu_bind_log (called from hw_bind::spu_bind) sets this to the
@@ -121,151 +122,205 @@ void spu_init(void)
 // two cores' logs at frame boundary to flag audio-relevant divergences (Issue #29). Set to
 // NULL when SBS is not running; append is a cheap null-check.
 typedef struct SpuWriteLog_ {
-   uint32_t entries[8192];   // (addr, val) pairs; 4096 writes/frame budget
-   uint32_t count;
+  uint32_t entries[8192]; // (addr, val) pairs; 4096 writes/frame budget
+  uint32_t count;
 } SpuWriteLog_;
 // SANCTIONED BIND POINTER: spu_write is reached from instance-free paths (MMIO/DMA), so the active
 // core's log is bound per frame-step (spu_bind_log <- SpuDevice::bind), exactly like SPU_BindState
 // binds the SPU state itself. NULL when SBS is off.
-static SpuWriteLog_* s_spu_log = 0;
-void  spu_bind_log(void* log) { s_spu_log = (SpuWriteLog_*)log; }
-void  spu_log_reset(void* log) { if (log) ((SpuWriteLog_*)log)->count = 0; }
-void* spu_new_log(void) { return calloc(1, sizeof(SpuWriteLog_)); }
-uint32_t spu_log_count(void* log) { return log ? ((SpuWriteLog_*)log)->count : 0; }
-uint32_t spu_log_entry(void* log, uint32_t i, int hi) {
-  SpuWriteLog_* l = (SpuWriteLog_*)log;
-  if (!l || i >= l->count) return 0;
-  return l->entries[i*2 + (hi ? 1 : 0)];
+static SpuWriteLog_ *s_spu_log = 0;
+void spu_bind_log(void *log) {
+  s_spu_log = (SpuWriteLog_ *)log;
+}
+void spu_log_reset(void *log) {
+  if (log) {
+    ((SpuWriteLog_ *)log)->count = 0;
+  }
+}
+void *spu_new_log(void) {
+  return calloc(1, sizeof(SpuWriteLog_));
+}
+uint32_t spu_log_count(void *log) {
+  return log ? ((SpuWriteLog_ *)log)->count : 0;
+}
+uint32_t spu_log_entry(void *log, uint32_t i, int hi) {
+  SpuWriteLog_ *l = (SpuWriteLog_ *)log;
+  if (!l || i >= l->count) {
+    return 0;
+  }
+  return l->entries[i * 2 + (hi ? 1 : 0)];
 }
 
-void spu_write(uint32_t addr, uint32_t val)
-{
-   if (s_spu_log && s_spu_log->count * 2 + 1 < (uint32_t)(sizeof(s_spu_log->entries)/sizeof(s_spu_log->entries[0]))) {
-      s_spu_log->entries[s_spu_log->count * 2 + 0] = addr;
-      s_spu_log->entries[s_spu_log->count * 2 + 1] = val;
-      s_spu_log->count++;
-   }
-   // `PSXPORT_DEBUG=spu`: surface whether the game drives the SPU at all (silent-output triage).
-   // Logs total writes, key-on (KON 0x1F801D88/8A), and SPUCNT (0x1F801DAA, bit15 = SPU enable).
-   // The gate guards the BLOCK (the per-category counters below are real work) and spu_write runs
-   // per MMIO store, so it is an interned Channel rather than a name lookup per call.
-   static const lucent::Channel spu_ch{"spu"};
-   if (spu_ch) {
-      // Process-wide `debug spu` print counters, consolidated in one static struct (this module is
-      // instance-free at its MMIO entry; the counters are log numbering only, never machine state).
-      static struct { long n, datacnt, voice_w, koff_w, vol_w, cdvol_w; uint32_t lastaddr; } sd;
-      uint32_t off = addr & 0x3FF;
-      long n = ++sd.n;
-      // Per-category counters to separate "driver never runs its note path" from
-      // "driver runs but keys nothing". Voice regs are 0x000..0x17F (24 voices x 0x10);
-      // pitch is voice*0x10+0x04, ADSR is +0x06/+0x08, start-addr +0x06... we just count.
-      if      (off < 0x180)                sd.voice_w++;       // any of the 24 voices
-      else if (off == 0x18C || off == 0x18E) sd.koff_w++;       // KOFF (key-off)
-      else if (off == 0x1B0 || off == 0x1B2) sd.cdvol_w++;      // CD input volume L/R
-      else if (off == 0x180 || off == 0x182) sd.vol_w++;        // main volume L/R
-      // Per-voice pitch/start-addr writes — with the KON lines these give the full "which sample,
-      // what pitch, when" stream for A/B sequence diffs (docs/config.md `spu` channel).
-      if (off < 0x180) {
-         uint32_t vreg = off & 0xF, vno = off >> 4;
-         if (vreg == 0x4)      lucent::debug(spu_ch, "[spudbg] V{:02} pitch={:04X}", vno, val & 0xFFFF);
-         else if (vreg == 0x6) lucent::debug(spu_ch, "[spudbg] V{:02} start={:04X}", vno, val & 0xFFFF);
+void spu_write(uint32_t addr, uint32_t val) {
+  if (s_spu_log && s_spu_log->count * 2 + 1 < (uint32_t)(sizeof(s_spu_log->entries) / sizeof(s_spu_log->entries[0]))) {
+    s_spu_log->entries[s_spu_log->count * 2 + 0] = addr;
+    s_spu_log->entries[s_spu_log->count * 2 + 1] = val;
+    s_spu_log->count++;
+  }
+  // `PSXPORT_DEBUG=spu`: surface whether the game drives the SPU at all (silent-output triage).
+  // Logs total writes, key-on (KON 0x1F801D88/8A), and SPUCNT (0x1F801DAA, bit15 = SPU enable).
+  // The gate guards the BLOCK (the per-category counters below are real work) and spu_write runs
+  // per MMIO store, so it is an interned Channel rather than a name lookup per call.
+  static const lucent::Channel spu_ch{"spu"};
+  if (spu_ch) {
+    // Process-wide `debug spu` print counters, consolidated in one static struct (this module is
+    // instance-free at its MMIO entry; the counters are log numbering only, never machine state).
+    static struct {
+      long n, datacnt, voice_w, koff_w, vol_w, cdvol_w;
+      uint32_t lastaddr;
+    } sd;
+    uint32_t off = addr & 0x3FF;
+    long n = ++sd.n;
+    // Per-category counters to separate "driver never runs its note path" from
+    // "driver runs but keys nothing". Voice regs are 0x000..0x17F (24 voices x 0x10);
+    // pitch is voice*0x10+0x04, ADSR is +0x06/+0x08, start-addr +0x06... we just count.
+    if (off < 0x180) {
+      sd.voice_w++; // any of the 24 voices
+    } else if (off == 0x18C || off == 0x18E) {
+      sd.koff_w++; // KOFF (key-off)
+    } else if (off == 0x1B0 || off == 0x1B2) {
+      sd.cdvol_w++; // CD input volume L/R
+    } else if (off == 0x180 || off == 0x182) {
+      sd.vol_w++; // main volume L/R
+    }
+    // Per-voice pitch/start-addr writes — with the KON lines these give the full "which sample,
+    // what pitch, when" stream for A/B sequence diffs (docs/config.md `spu` channel).
+    if (off < 0x180) {
+      uint32_t vreg = off & 0xF, vno = off >> 4;
+      if (vreg == 0x4) {
+        lucent::debug(spu_ch, "[spudbg] V{:02} pitch={:04X}", vno, val & 0xFFFF);
+      } else if (vreg == 0x6) {
+        lucent::debug(spu_ch, "[spudbg] V{:02} start={:04X}", vno, val & 0xFFFF);
       }
-      if (off == 0x188 || off == 0x18A) lucent::debug(spu_ch, "[spudbg] KON off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
-      else if (off == 0x18C || off == 0x18E) lucent::debug(spu_ch, "[spudbg] KOFF off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
-      else if (off == 0x1AA) lucent::debug(spu_ch, "[spudbg] SPUCNT={:04X} enable={} cdaudio={} xfermode={} (writes={})", val & 0xFFFF, (val >> 15) & 1, val & 1, (val >> 4) & 3, n);
-      else if (off == 0x1B0 || off == 0x1B2) lucent::debug(spu_ch, "[spudbg] CDVOL off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
-      else if (off == 0x1A6) { sd.lastaddr = (val & 0xFFFF) << 3; lucent::debug(spu_ch, "[spudbg] SPU xfer ADDR=0x{:05X}", sd.lastaddr); }
-      else if (off == 0x1A8) { sd.datacnt++; if ((sd.datacnt % 1000) == 1) lucent::debug(spu_ch, "[spudbg] SPU DATA-port write #{} (val={:04X})", sd.datacnt, val & 0xFFFF); }
-      if ((n % 20000) == 0)
-         lucent::debug(spu_ch, "[spudbg] SUMMARY writes={} voice={} koff={} mainvol={} cdvol={}",
-                       n, sd.voice_w, sd.koff_w, sd.vol_w, sd.cdvol_w);
-   }
-   // PSXPORT_SPUBT=<hex reg offset> — host backtrace on every write to that SPU register (e.g.
-   // 156 = voice 21 start-addr). Guest-side attribution for SPU writes: wwatch can't see MMIO and
-   // dispwatch misses static gen-to-gen calls; the host stack names the gen_func_*/native chain.
-   {
-      const char* bt = cfg_str("PSXPORT_SPUBT");
-      if (bt && (addr & 0x3FF) == (uint32_t)strtoul(bt, 0, 16)) {
-         extern int backtrace(void**, int);
-         extern void backtrace_symbols_fd(void* const*, int, int);
-         void* frames[32]; int n = backtrace(frames, 32);
-         lucent::info("spubt", "off={:03X} val={:04X}", addr & 0x3FF, val & 0xFFFF);
-         backtrace_symbols_fd(frames, n, 2); lucent::info("spubt", "----");
+    }
+    if (off == 0x188 || off == 0x18A) {
+      lucent::debug(spu_ch, "[spudbg] KON off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
+    } else if (off == 0x18C || off == 0x18E) {
+      lucent::debug(spu_ch, "[spudbg] KOFF off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
+    } else if (off == 0x1AA) {
+      lucent::debug(spu_ch,
+                    "[spudbg] SPUCNT={:04X} enable={} cdaudio={} xfermode={} (writes={})",
+                    val & 0xFFFF,
+                    (val >> 15) & 1,
+                    val & 1,
+                    (val >> 4) & 3,
+                    n);
+    } else if (off == 0x1B0 || off == 0x1B2) {
+      lucent::debug(spu_ch, "[spudbg] CDVOL off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
+    } else if (off == 0x1A6) {
+      sd.lastaddr = (val & 0xFFFF) << 3;
+      lucent::debug(spu_ch, "[spudbg] SPU xfer ADDR=0x{:05X}", sd.lastaddr);
+    } else if (off == 0x1A8) {
+      sd.datacnt++;
+      if ((sd.datacnt % 1000) == 1) {
+        lucent::debug(spu_ch, "[spudbg] SPU DATA-port write #{} (val={:04X})", sd.datacnt, val & 0xFFFF);
       }
-   }
-   SPU_Write(0, addr & 0x3FF, (uint16_t)val);
+    }
+    if ((n % 20000) == 0) {
+      lucent::debug(spu_ch,
+                    "[spudbg] SUMMARY writes={} voice={} koff={} mainvol={} cdvol={}",
+                    n,
+                    sd.voice_w,
+                    sd.koff_w,
+                    sd.vol_w,
+                    sd.cdvol_w);
+    }
+  }
+  // PSXPORT_SPUBT=<hex reg offset> — host backtrace on every write to that SPU register (e.g.
+  // 156 = voice 21 start-addr). Guest-side attribution for SPU writes: wwatch can't see MMIO and
+  // dispwatch misses static gen-to-gen calls; the host stack names the gen_func_*/native chain.
+  {
+    const char *bt = cfg_str("PSXPORT_SPUBT");
+    if (bt && (addr & 0x3FF) == (uint32_t)strtoul(bt, 0, 16)) {
+      extern int backtrace(void **, int);
+      extern void backtrace_symbols_fd(void *const *, int, int);
+      void *frames[32];
+      int n = backtrace(frames, 32);
+      lucent::info("spubt", "off={:03X} val={:04X}", addr & 0x3FF, val & 0xFFFF);
+      backtrace_symbols_fd(frames, n, 2);
+      lucent::info("spubt", "----");
+    }
+  }
+  SPU_Write(0, addr & 0x3FF, (uint16_t)val);
 }
 
-uint32_t spu_read(uint32_t addr)
-{
-   return SPU_Read(0, addr & 0x3FF);
+uint32_t spu_read(uint32_t addr) {
+  return SPU_Read(0, addr & 0x3FF);
 }
 
 // DMA (channel 4) <-> SPU RAM. Beetle's SPU_WriteDMA/ReadDMA move one 32-bit word
 // (two 16-bit SPU-RAM samples) per call through the SPU's DMA FIFO; we loop over the
 // caller's word block.
-void spu_dma_write(const uint32_t *words, int count)
-{
-   static const lucent::Channel spu_ch{"spu"};
-   if (spu_ch) {                              // guards the counters, not the print
-      static struct { long calls, total; } sd;   // process-wide `debug spu` print counters (see spu_write)
-      sd.calls++; sd.total += count;
-      lucent::debug(spu_ch, "[spudbg] SPU-RAM DMA write: {} words (call {}, total {} words)", count, sd.calls, sd.total);
-   }
-   int i;
-   for (i = 0; i < count; i++)
-      SPU_WriteDMA(words[i]);
+void spu_dma_write(const uint32_t *words, int count) {
+  static const lucent::Channel spu_ch{"spu"};
+  if (spu_ch) { // guards the counters, not the print
+    static struct {
+      long calls, total;
+    } sd; // process-wide `debug spu` print counters (see spu_write)
+    sd.calls++;
+    sd.total += count;
+    lucent::debug(spu_ch, "[spudbg] SPU-RAM DMA write: {} words (call {}, total {} words)", count, sd.calls, sd.total);
+  }
+  int i;
+  for (i = 0; i < count; i++) {
+    SPU_WriteDMA(words[i]);
+  }
 }
 
-int spu_dma_read(uint32_t *words, int count)
-{
-   int i;
-   for (i = 0; i < count; i++)
-      words[i] = SPU_ReadDMA();
-   return count;
+int spu_dma_read(uint32_t *words, int count) {
+  int i;
+  for (i = 0; i < count; i++) {
+    words[i] = SPU_ReadDMA();
+  }
+  return count;
 }
 
 // Advance the SPU by 'clocks' CPU(/CDC-domain) cycles, mixing 44.1 kHz stereo samples
 // into IntermediateBuffer. Returns Beetle's value (clocks until the next SPU event).
-int32_t spu_update(int32_t clocks)
-{
-   return SPU_UpdateFromCDC(clocks);
+int32_t spu_update(int32_t clocks) {
+  return SPU_UpdateFromCDC(clocks);
 }
 
 // Drain mixed stereo samples accumulated since the last pull. Copies up to max_frames
 // interleaved L/R int16 frames out of IntermediateBuffer and resets the write cursor,
 // returning the number of frames produced. Sample rate is 44100 Hz, stereo, signed 16.
 // (Buffer holds at most 4096 frames; mix often enough that it doesn't overrun.)
-int spu_render(int16_t *out, int max_frames)
-{
-   uint32_t avail = IntermediateBufferPos;
-   uint32_t n = avail;
-   if (max_frames >= 0 && n > (uint32_t)max_frames)
-      n = (uint32_t)max_frames;
+int spu_render(int16_t *out, int max_frames) {
+  uint32_t avail = IntermediateBufferPos;
+  uint32_t n = avail;
+  if (max_frames >= 0 && n > (uint32_t)max_frames) {
+    n = (uint32_t)max_frames;
+  }
 
-   memcpy(out, IntermediateBuffer, (size_t)n * 2 * sizeof(int16_t));
+  memcpy(out, IntermediateBuffer, (size_t)n * 2 * sizeof(int16_t));
 
-   static const lucent::Channel spu_ch{"spu"};
-   if (spu_ch) {                              // guards the peak SCAN over n*2 samples, not the print
-      static long fr; int peak = 0;   // process-wide `debug spu` print counter (see spu_write)
-      for (uint32_t i = 0; i < n * 2; i++) { int v = out[i]; if (v < 0) v = -v; if (v > peak) peak = v; }
-      if ((++fr % 60) == 0 || peak > 0)
-         lucent::debug(spu_ch, "[spudbg] spu_render frame {}: {} stereo samples, peak={}", fr, n, peak);
-   }
+  static const lucent::Channel spu_ch{"spu"};
+  if (spu_ch) { // guards the peak SCAN over n*2 samples, not the print
+    static long fr;
+    int peak = 0; // process-wide `debug spu` print counter (see spu_write)
+    for (uint32_t i = 0; i < n * 2; i++) {
+      int v = out[i];
+      if (v < 0) {
+        v = -v;
+      }
+      if (v > peak) {
+        peak = v;
+      }
+    }
+    if ((++fr % 60) == 0 || peak > 0) {
+      lucent::debug(spu_ch, "[spudbg] spu_render frame {}: {} stereo samples, peak={}", fr, n, peak);
+    }
+  }
 
-   if (n < avail)
-   {
-      // Keep the unread tail for the next pull (shouldn't normally happen if the PM
-      // sizes max_frames >= a frame's worth, ~735 NTSC / ~882 PAL samples).
-      memmove(IntermediateBuffer, &IntermediateBuffer[n],
-              (size_t)(avail - n) * 2 * sizeof(int16_t));
-      IntermediateBufferPos = avail - n;
-   }
-   else
-   {
-      IntermediateBufferPos = 0;
-   }
-   return (int)n;
+  if (n < avail) {
+    // Keep the unread tail for the next pull (shouldn't normally happen if the PM
+    // sizes max_frames >= a frame's worth, ~735 NTSC / ~882 PAL samples).
+    memmove(IntermediateBuffer, &IntermediateBuffer[n], (size_t)(avail - n) * 2 * sizeof(int16_t));
+    IntermediateBufferPos = avail - n;
+  } else {
+    IntermediateBufferPos = 0;
+  }
+  return (int)n;
 }
 
-}  // extern "C"
+} // extern "C"

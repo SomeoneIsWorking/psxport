@@ -25,7 +25,7 @@ struct Core;
 
 // Call once per completed frame. Cheap when nothing is scheduled: one counter increment and two
 // compares. Writes at most PSXPORT_SNAP_MAX images per run so a stray SNAP_EVERY cannot fill the disk.
-void snapshot_tick(Core* c);
+void snapshot_tick(Core *c);
 
 // Force a capture now, tagged with a reason that lands in the sidecar. Returns true if written.
-bool snapshot_now(Core* c, const char* why);
+bool snapshot_now(Core *c, const char *why);

@@ -27,8 +27,8 @@
 namespace psx::config {
 
 // --- lookup ------------------------------------------------------------------------------------
-CVarBase* find(std::string_view name);              // null if not declared
-void enumerate(const std::function<void(CVarBase&)>& fn);   // every declared CVar, name order
+CVarBase *find(std::string_view name);                     // null if not declared
+void enumerate(const std::function<void(CVarBase &)> &fn); // every declared CVar, name order
 std::size_t registered_count();
 
 // --- the legacy compatibility path ---------------------------------------------------------------
@@ -37,16 +37,16 @@ std::size_t registered_count();
 // way past so the registry knows the knob was READ, which is what lets the audit tell a real
 // un-migrated knob apart from a typo. It is an observation, not a declaration — the distinction is
 // reported, because a knob on a code path this run never entered is invisible to it.
-void note_legacy_read(const char* name, Kind kind, std::string_view resolved);
+void note_legacy_read(const char *name, Kind kind, std::string_view resolved);
 std::size_t legacy_read_count();
 
 // --- the environment audit -----------------------------------------------------------------------
 struct EnvAudit {
   // "NAME=value" for every PSXPORT_* variable present in the environment. The denominator.
   std::vector<std::string> set_in_env;
-  std::vector<std::string> declared;   // names matching a registered CVar
-  std::vector<std::string> legacy;     // names some cfg_* call has read this run
-  std::vector<std::string> unknown;    // names matching NEITHER — these did nothing
+  std::vector<std::string> declared; // names matching a registered CVar
+  std::vector<std::string> legacy;   // names some cfg_* call has read this run
+  std::vector<std::string> unknown;  // names matching NEITHER — these did nothing
 };
 EnvAudit audit_environment();
 
@@ -85,8 +85,8 @@ bool selftest();
 // --- mutation from outside -------------------------------------------------------------------------
 // Returns false if the name is not a declared CVar, or the text does not parse for its Kind. Both
 // are reported; neither is swallowed.
-bool set_from_settings_file(std::string_view name, std::string_view text);  // -> Layer::Value
-bool set_runtime(std::string_view name, std::string_view text);             // -> Layer::Runtime (REPL)
+bool set_from_settings_file(std::string_view name, std::string_view text); // -> Layer::Value
+bool set_runtime(std::string_view name, std::string_view text);            // -> Layer::Runtime (REPL)
 bool clear_runtime(std::string_view name);
 
 // For a knob whose VALUE lives in another subsystem (PSXPORT_DEBUG -> lucent::enable_channels):
@@ -98,6 +98,6 @@ void note_runtime_external(std::string_view name, std::string_view text);
 // need setenv() to take effect. Pair it with lucent::config::reset_cache().
 void reset_for_test();
 
-}  // namespace psx::config
+} // namespace psx::config
 
-#endif  // PSXPORT_CONFIG_H
+#endif // PSXPORT_CONFIG_H

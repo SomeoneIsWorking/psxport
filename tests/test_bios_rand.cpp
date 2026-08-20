@@ -9,8 +9,7 @@ namespace {
 
 enum { R_V0 = 2, R_A0 = 4 };
 
-bool bios_a0(Game &game, uint32_t fn, uint32_t arg,
-             uint32_t sentinel = 0xDEADBEEFu) {
+bool bios_a0(Game &game, uint32_t fn, uint32_t arg, uint32_t sentinel = 0xDEADBEEFu) {
   game.core.r[R_A0] = arg;
   game.core.r[R_V0] = sentinel;
   return game.hle.dispatchBios('A', fn);
@@ -28,10 +27,10 @@ uint32_t next(Game &game) {
 void test_seed_one_exact_sequence_and_restart() {
   Game *game = new Game();
   seed(*game, 1);
-  static constexpr uint32_t expected[] = {16838u, 5758u, 10113u, 17515u,
-                                          31051u};
-  for (uint32_t value : expected)
+  static constexpr uint32_t expected[] = {16838u, 5758u, 10113u, 17515u, 31051u};
+  for (uint32_t value : expected) {
     CHECK_EQ(next(*game), value);
+  }
 
   seed(*game, 1);
   CHECK_EQ(next(*game), expected[0]);

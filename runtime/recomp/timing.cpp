@@ -7,11 +7,11 @@
 // based waiter. Reached via c->game->timing.method().
 #include "core.h"
 #include "game.h"
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 enum { A0 = 4, V0 = 2 };
-#define VBLANK_COUNT 0x800ABDE0u   // DAT_800abde0: libetc VSync counter (FUN_80085900 returns it)
+#define VBLANK_COUNT 0x800ABDE0u // DAT_800abde0: libetc VSync counter (FUN_80085900 returns it)
 
 // 0x80085BB0 FUN_80085bb0 VSyncCallback(func): no-op. The original routes the per-vblank
 // callback through the libapi interrupt vector we don't model; we don't deliver preemptive
@@ -25,7 +25,7 @@ void Timing::vsyncCallback() {
 
 // Deliver the VBlank event to whichever class the game opened it under (RCnt3 vblank, or the
 // libapi vblank class); broad spec so any opened+enabled vblank EvCB matches.
-static void deliver_vblank_events(Core* c) {
+static void deliver_vblank_events(Core *c) {
   c->game->hle.deliverEvent(0xF2000003u, 0xFFFFFFFFu);
   c->game->hle.deliverEvent(0xF0000001u, 0xFFFFFFFFu);
 }
@@ -36,7 +36,7 @@ static void deliver_vblank_events(Core* c) {
 //   mode == 0 -> wait one vblank; mode > 1 -> wait `mode` vblanks. Advance the frame clock.
 // Currently unreachable — sync_overrides traps VSync (all pacing is PC-native). Kept for RE.
 void Timing::vsync() {
-  Core* c = &game->core;
+  Core *c = &game->core;
   int32_t mode = (int32_t)c->r[A0];
   if (mode < 0) {
     c->r[V0] = vblank;
@@ -61,4 +61,3 @@ void Timing::frameTick() {
   vblank += 1u;
   game->core.mem_w32(VBLANK_COUNT, vblank);
 }
-

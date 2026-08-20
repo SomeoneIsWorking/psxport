@@ -29,20 +29,22 @@
 // This module is self-contained (no recomp/runtime headers required) so it can be
 // unit-tested standalone. The PM wires it into hle.c/mem.c (see report).
 
-#include <stdint.h>
-#include "cfg.h"
-#include <lucent/log.h>
-#include "core.h"
-#include "game.h"   // class Pad lives on Game; reached via c->game->pad (see class docs)
 #include "c_subsys.h" // gpu_windowed()
-#include "render_mode.h"  // RenderPath + render_path_next — the F5 live render-path cycle
-#include "config_vars.h"  // cv_render_path — mirror the live path into the CVar Runtime layer
-#include "fs_util.h"  // Fs::writeFile — host file writes go through the shared util
+#include "cfg.h"
+#include "config_vars.h" // cv_render_path — mirror the live path into the CVar Runtime layer
+#include "core.h"
+#include "fs_util.h"     // Fs::writeFile — host file writes go through the shared util
+#include "game.h"        // class Pad lives on Game; reached via c->game->pad (see class docs)
+#include "render_mode.h" // RenderPath + render_path_next — the F5 live render-path cycle
+#include <lucent/log.h>
+#include <stdint.h>
 
 // Cut the in-memory capture (every finalized pad mask since frame 0) into a .pad replay. Same
 // uint16-LE-per-frame format PSXPORT_PAD_REPLAY loads, so the result is directly replayable.
-bool Pad::saveRecording(const char* path, size_t nframes) const {
-  if (!path || mRecLog.empty()) return false;
+bool Pad::saveRecording(const char *path, size_t nframes) const {
+  if (!path || mRecLog.empty()) {
+    return false;
+  }
   const size_t n = (nframes && nframes < mRecLog.size()) ? nframes : mRecLog.size();
   return Fs::writeFile(path, mRecLog.data(), n * sizeof(uint16_t));
 }
@@ -62,12 +64,14 @@ void Pad::setButtons(uint16_t mask) {
 // Write the standard digital auto-pad packet into a buffer the game polls.
 // `buf` must have room for at least 4 bytes. Layout matches FUN_80003a4c's output
 // for a connected digital pad (id 0x41).
-void Pad::fillBuffer(uint8_t* buf) {
-  if (!buf) return;
-  buf[0] = 0x00;                                // status: pad present / read ok
-  buf[1] = 0x41;                                // id: digital controller (1 halfword of data)
-  buf[2] = (uint8_t)(buttons & 0xFF);           // button mask low  (active-low)
-  buf[3] = (uint8_t)((buttons >> 8) & 0xFF);    // button mask high (active-low)
+void Pad::fillBuffer(uint8_t *buf) {
+  if (!buf) {
+    return;
+  }
+  buf[0] = 0x00;                             // status: pad present / read ok
+  buf[1] = 0x41;                             // id: digital controller (1 halfword of data)
+  buf[2] = (uint8_t)(buttons & 0xFF);        // button mask low  (active-low)
+  buf[3] = (uint8_t)((buttons >> 8) & 0xFF); // button mask high (active-low)
 }
 
 // --- Optional SDL host input ------------------------------------------------
@@ -76,8 +80,8 @@ void Pad::fillBuffer(uint8_t* buf) {
 // under PSXPORT_SDL, matching gpu_native.c's optional-SDL style.
 #ifdef PSXPORT_SDL
 #include <SDL3/SDL.h>
-#include <stdio.h>   // diagnostic fprintf in pad_poll_sdl (controller-driving-directions notice)
-#include <stdlib.h>  // atoi (PSXPORT_PAD_NOPAD parse)
+#include <stdio.h>  // diagnostic fprintf in pad_poll_sdl (controller-driving-directions notice)
+#include <stdlib.h> // atoi (PSXPORT_PAD_NOPAD parse)
 
 // The overlay's `wantsKeyboard()` reports true ONLY while the user is actively typing into an RmlUi
 // text widget — not merely because the menu is open/focused. Suppress the game's keyboard read in
@@ -91,9 +95,12 @@ void Pad::fillBuffer(uint8_t* buf) {
 // Lazily ensure SDL's gamepad subsystem is up. SDL_Init(SDL_INIT_VIDEO) happens in gpu_vk.cpp
 // (not owned here); the gamepad subsystem is independent, so we add it on first use. Idempotent.
 void Pad::ensureGcSubsystem() {
-  if (mGcSubInit) return;
-  if ((SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD) == 0)
+  if (mGcSubInit) {
+    return;
+  }
+  if ((SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD) == 0) {
     SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+  }
   mGcSubInit = 1;
 }
 
@@ -105,10 +112,18 @@ void Pad::rescanControllers() {
   // ESCAPE HATCH (Linux WASD-dead): PSXPORT_PAD_NOPAD=1 ignores ALL game controllers and uses the
   // keyboard only. Use this if a connected/phantom pad with a drifting analog stick ("analog mode")
   // is injecting a phantom direction and you can't unplug it. Close anything already open, then bail.
-  if (mNoPad < 0) { const char* v = cfg_str("PSXPORT_PAD_NOPAD"); mNoPad = (v && atoi(v) != 0) ? 1 : 0; }
+  if (mNoPad < 0) {
+    const char *v = cfg_str("PSXPORT_PAD_NOPAD");
+    mNoPad = (v && atoi(v) != 0) ? 1 : 0;
+  }
   if (mNoPad) {
-    for (int s = 0; s < PAD_MAX_GC; s++)
-      if (mGc[s]) { SDL_CloseGamepad(mGc[s]); mGc[s] = nullptr; mGcInst[s] = -1; }
+    for (int s = 0; s < PAD_MAX_GC; s++) {
+      if (mGc[s]) {
+        SDL_CloseGamepad(mGc[s]);
+        mGc[s] = nullptr;
+        mGcInst[s] = -1;
+      }
+    }
     return;
   }
   ensureGcSubsystem();
@@ -116,22 +131,34 @@ void Pad::rescanControllers() {
   for (int s = 0; s < PAD_MAX_GC; s++) {
     if (mGc[s] && !SDL_GamepadConnected(mGc[s])) {
       SDL_CloseGamepad(mGc[s]);
-      mGc[s] = nullptr; mGcInst[s] = -1;
+      mGc[s] = nullptr;
+      mGcInst[s] = -1;
     }
   }
   // 2) Open any attached gamepad we don't already hold (dedup by instance id). SDL3 SDL_GetGamepads
   //    returns instance IDs of devices with a real gamepad mapping (no accelerometers/phantom joysticks),
   //    so we don't open garbage-axis devices that used to inject a permanent phantom direction.
-  int n = 0; SDL_JoystickID* ids = SDL_GetGamepads(&n);
+  int n = 0;
+  SDL_JoystickID *ids = SDL_GetGamepads(&n);
   for (int i = 0; i < n; i++) {
     SDL_JoystickID inst = ids[i];
     int already = 0;
-    for (int s = 0; s < PAD_MAX_GC; s++) if (mGcInst[s] == (int)inst) { already = 1; break; }
-    if (already) continue;
+    for (int s = 0; s < PAD_MAX_GC; s++) {
+      if (mGcInst[s] == (int)inst) {
+        already = 1;
+        break;
+      }
+    }
+    if (already) {
+      continue;
+    }
     for (int s = 0; s < PAD_MAX_GC; s++) {
       if (!mGc[s]) {
-        SDL_Gamepad* gc = SDL_OpenGamepad(inst);
-        if (gc) { mGc[s] = gc; mGcInst[s] = (int)SDL_GetGamepadID(gc); }
+        SDL_Gamepad *gc = SDL_OpenGamepad(inst);
+        if (gc) {
+          mGc[s] = gc;
+          mGcInst[s] = (int)SDL_GetGamepadID(gc);
+        }
         break;
       }
     }
@@ -156,28 +183,60 @@ void Pad::rescanControllers() {
 // direction makes the game look "stuck"/unresponsive to WASD (it fights or saturates movement), which
 // is exactly the "WASD doesn't move the player / maybe analog mode" symptom on the Linux machine. Keep
 // the threshold high (~70%) so only a deliberate stick push registers and resting drift never does.
-static void pad_apply_controller(SDL_Gamepad* gc, uint16_t* mask) {
-  #define BTN(b) SDL_GetGamepadButton(gc, (b))
-  const int STICK = 22000;   // ~67% of 32767 deflection -> treat as a directional press (drift-proof)
+static void pad_apply_controller(SDL_Gamepad *gc, uint16_t *mask) {
+#define BTN(b) SDL_GetGamepadButton(gc, (b))
+  const int STICK = 22000; // ~67% of 32767 deflection -> treat as a directional press (drift-proof)
   Sint16 lx = SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFTX);
   Sint16 ly = SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFTY);
-  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_UP)    || ly < -STICK) *mask &= ~0x0010u; // Up
-  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || lx >  STICK) *mask &= ~0x0020u; // Right
-  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_DOWN)  || ly >  STICK) *mask &= ~0x0040u; // Down
-  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_LEFT)  || lx < -STICK) *mask &= ~0x0080u; // Left
-  if (BTN(SDL_GAMEPAD_BUTTON_START))         *mask &= ~0x0008u; // Start
-  if (BTN(SDL_GAMEPAD_BUTTON_BACK))          *mask &= ~0x0001u; // Select
-  if (BTN(SDL_GAMEPAD_BUTTON_SOUTH))         *mask &= ~0x4000u; // Cross  (SDL3 SOUTH = bottom)
-  if (BTN(SDL_GAMEPAD_BUTTON_EAST))          *mask &= ~0x2000u; // Circle (EAST = right)
-  if (BTN(SDL_GAMEPAD_BUTTON_WEST))          *mask &= ~0x8000u; // Square (WEST = left)
-  if (BTN(SDL_GAMEPAD_BUTTON_NORTH))         *mask &= ~0x1000u; // Triangle (NORTH = top)
-  if (BTN(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) *mask &= ~0x0400u; // L1
-  if (BTN(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER))*mask &= ~0x0800u; // R1
-  if (BTN(SDL_GAMEPAD_BUTTON_LEFT_STICK))    *mask &= ~0x0002u; // L3
-  if (BTN(SDL_GAMEPAD_BUTTON_RIGHT_STICK))   *mask &= ~0x0004u; // R3
-  if (SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFT_TRIGGER)  > STICK) *mask &= ~0x0100u; // L2
-  if (SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > STICK) *mask &= ~0x0200u; // R2
-  #undef BTN
+  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_UP) || ly < -STICK) {
+    *mask &= ~0x0010u; // Up
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || lx > STICK) {
+    *mask &= ~0x0020u; // Right
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || ly > STICK) {
+    *mask &= ~0x0040u; // Down
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || lx < -STICK) {
+    *mask &= ~0x0080u; // Left
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_START)) {
+    *mask &= ~0x0008u; // Start
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_BACK)) {
+    *mask &= ~0x0001u; // Select
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_SOUTH)) {
+    *mask &= ~0x4000u; // Cross  (SDL3 SOUTH = bottom)
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_EAST)) {
+    *mask &= ~0x2000u; // Circle (EAST = right)
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_WEST)) {
+    *mask &= ~0x8000u; // Square (WEST = left)
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_NORTH)) {
+    *mask &= ~0x1000u; // Triangle (NORTH = top)
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) {
+    *mask &= ~0x0400u; // L1
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) {
+    *mask &= ~0x0800u; // R1
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_LEFT_STICK)) {
+    *mask &= ~0x0002u; // L3
+  }
+  if (BTN(SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
+    *mask &= ~0x0004u; // R3
+  }
+  if (SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > STICK) {
+    *mask &= ~0x0100u; // L2
+  }
+  if (SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > STICK) {
+    *mask &= ~0x0200u; // R2
+  }
+#undef BTN
 }
 
 // Map keyboard + first connected gamepad to the PSX button mask. Call once per
@@ -191,24 +250,52 @@ void Pad::pollSdl() {
   // from the SDL_GPU build, so there is no IME/compose widget to suppress here any more (the old GH#18
   // SDL_StopTextInput dance is unnecessary). The keyboard read is gated only by rmlui_overlay_wants_keyboard
   // (stubbed to 0 in this build), so WASD always drives the game.
-  const bool* ks = ((game && game->rml_overlay.wantsKeyboard()) ? nullptr : SDL_GetKeyboardState(NULL));
+  const bool *ks = ((game && game->rml_overlay.wantsKeyboard()) ? nullptr : SDL_GetKeyboardState(NULL));
   if (ks) {
-    #define KEYDOWN(sc) (ks[(sc)] != 0)
-    if (KEYDOWN(SDL_SCANCODE_UP)     || KEYDOWN(SDL_SCANCODE_W)) mask &= ~0x0010u; // Up
-    if (KEYDOWN(SDL_SCANCODE_RIGHT)  || KEYDOWN(SDL_SCANCODE_D)) mask &= ~0x0020u; // Right
-    if (KEYDOWN(SDL_SCANCODE_DOWN)   || KEYDOWN(SDL_SCANCODE_S)) mask &= ~0x0040u; // Down
-    if (KEYDOWN(SDL_SCANCODE_LEFT)   || KEYDOWN(SDL_SCANCODE_A)) mask &= ~0x0080u; // Left
-    if (KEYDOWN(SDL_SCANCODE_RETURN))                           mask &= ~0x0008u; // Start
-    if (KEYDOWN(SDL_SCANCODE_RSHIFT) || KEYDOWN(SDL_SCANCODE_TAB)) mask &= ~0x0001u; // Select
-    if (KEYDOWN(SDL_SCANCODE_K))     mask &= ~0x4000u; // Cross
-    if (KEYDOWN(SDL_SCANCODE_L))     mask &= ~0x2000u; // Circle
-    if (KEYDOWN(SDL_SCANCODE_I))     mask &= ~0x1000u; // Triangle
-    if (KEYDOWN(SDL_SCANCODE_J))     mask &= ~0x8000u; // Square
-    if (KEYDOWN(SDL_SCANCODE_Q))     mask &= ~0x0400u; // L1
-    if (KEYDOWN(SDL_SCANCODE_E))     mask &= ~0x0800u; // R1
-    if (KEYDOWN(SDL_SCANCODE_1))     mask &= ~0x0100u; // L2
-    if (KEYDOWN(SDL_SCANCODE_3))     mask &= ~0x0200u; // R2
-    #undef KEYDOWN
+#define KEYDOWN(sc) (ks[(sc)] != 0)
+    if (KEYDOWN(SDL_SCANCODE_UP) || KEYDOWN(SDL_SCANCODE_W)) {
+      mask &= ~0x0010u; // Up
+    }
+    if (KEYDOWN(SDL_SCANCODE_RIGHT) || KEYDOWN(SDL_SCANCODE_D)) {
+      mask &= ~0x0020u; // Right
+    }
+    if (KEYDOWN(SDL_SCANCODE_DOWN) || KEYDOWN(SDL_SCANCODE_S)) {
+      mask &= ~0x0040u; // Down
+    }
+    if (KEYDOWN(SDL_SCANCODE_LEFT) || KEYDOWN(SDL_SCANCODE_A)) {
+      mask &= ~0x0080u; // Left
+    }
+    if (KEYDOWN(SDL_SCANCODE_RETURN)) {
+      mask &= ~0x0008u; // Start
+    }
+    if (KEYDOWN(SDL_SCANCODE_RSHIFT) || KEYDOWN(SDL_SCANCODE_TAB)) {
+      mask &= ~0x0001u; // Select
+    }
+    if (KEYDOWN(SDL_SCANCODE_K)) {
+      mask &= ~0x4000u; // Cross
+    }
+    if (KEYDOWN(SDL_SCANCODE_L)) {
+      mask &= ~0x2000u; // Circle
+    }
+    if (KEYDOWN(SDL_SCANCODE_I)) {
+      mask &= ~0x1000u; // Triangle
+    }
+    if (KEYDOWN(SDL_SCANCODE_J)) {
+      mask &= ~0x8000u; // Square
+    }
+    if (KEYDOWN(SDL_SCANCODE_Q)) {
+      mask &= ~0x0400u; // L1
+    }
+    if (KEYDOWN(SDL_SCANCODE_E)) {
+      mask &= ~0x0800u; // R1
+    }
+    if (KEYDOWN(SDL_SCANCODE_1)) {
+      mask &= ~0x0100u; // L2
+    }
+    if (KEYDOWN(SDL_SCANCODE_3)) {
+      mask &= ~0x0200u; // R2
+    }
+#undef KEYDOWN
   }
 
   // Debug pause / frame-step keys (edge-detected so one keypress = one action). P toggles pause/play;
@@ -216,12 +303,17 @@ void Pad::pollSdl() {
   // `ks` above) so these still work even when RmlUi suppressed gameplay keys. Handled here because
   // pad_poll_sdl runs every frame in BOTH the running loop and the paused wait. (dbg_server.c)
   if (game) {
-    const bool* dks = SDL_GetKeyboardState(NULL);
-    int p  = dks && dks[SDL_SCANCODE_P]      != 0;
+    const bool *dks = SDL_GetKeyboardState(NULL);
+    int p = dks && dks[SDL_SCANCODE_P] != 0;
     int st = dks && dks[SDL_SCANCODE_PERIOD] != 0;
-    if (p  && !mPrevP)    game->dbg_server.togglePause();
-    if (st && !mPrevStep) game->dbg_server.addStep(1);
-    mPrevP = p; mPrevStep = st;
+    if (p && !mPrevP) {
+      game->dbg_server.togglePause();
+    }
+    if (st && !mPrevStep) {
+      game->dbg_server.addStep(1);
+    }
+    mPrevP = p;
+    mPrevStep = st;
 
     // F5 — CYCLE THE RENDER PATH LIVE: native -> gte -> psx -> native (USER ask, 2026-08-11: "need a
     // toggle to switch between PC render native, PC render from GTE and pure PSX rasterizer"). The three
@@ -245,20 +337,22 @@ void Pad::pollSdl() {
     const int rp = dks && dks[SDL_SCANCODE_F5] != 0;
     if (rp && !mPrevRenderPath) {
       if (game->oracle || game->sbs) {
-        lucent::warn("render", "F5 render-path cycle REFUSED: this run is {} and exists to be the "
-                               "reference — changing the renderer mid-run would invalidate it. Relaunch "
-                               "without it, or use PSXPORT_RENDER_PATH at launch.",
+        lucent::warn("render",
+                     "F5 render-path cycle REFUSED: this run is {} and exists to be the "
+                     "reference — changing the renderer mid-run would invalidate it. Relaunch "
+                     "without it, or use PSXPORT_RENDER_PATH at launch.",
                      game->oracle ? "ORACLE" : "an SBS compare");
       } else {
-        Core* rc = &game->core;
+        Core *rc = &game->core;
         const RenderPath next = render_path_next(rc->rsub.mode.path());
         rc->rsub.mode.setPath(next);
         psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(next));
-        lucent::info("render", "F5 -> render path = {} — {} (PC enhancements {})",
+        lucent::info("render",
+                     "F5 -> render path = {} — {} (PC enhancements {})",
                      render_path_name(next),
                      next == RenderPath::Native ? "PC-native producers, PC rasterizer"
-                       : next == RenderPath::Gte ? "guest GTE/OT geometry, PC rasterizer"
-                                                 : "guest GTE/OT geometry, PSX software rasterizer",
+                     : next == RenderPath::Gte  ? "guest GTE/OT geometry, PC rasterizer"
+                                                : "guest GTE/OT geometry, PSX software rasterizer",
                      rc->rsub.mode.enhancementsAllowed() ? "ALLOWED" : "locked out");
       }
     }
@@ -277,8 +371,11 @@ void Pad::pollSdl() {
   rescanControllers();
   SDL_UpdateGamepads();
   uint16_t before_pads = mask;
-  for (int s = 0; s < PAD_MAX_GC; s++)
-    if (mGc[s]) pad_apply_controller(mGc[s], &mask);
+  for (int s = 0; s < PAD_MAX_GC; s++) {
+    if (mGc[s]) {
+      pad_apply_controller(mGc[s], &mask);
+    }
+  }
 
   // DIAGNOSTIC (Linux WASD-dead hunt): if a controller is injecting directions while the keyboard
   // pressed nothing, say so once — this tells the user a connected/phantom pad (e.g. a drifting analog
@@ -286,11 +383,14 @@ void Pad::pollSdl() {
   // Only fires on a transition so it doesn't spam. Set PSXPORT_PAD_NOPAD=1 to ignore controllers
   // entirely (keyboard only) if a phantom device is the culprit and you can't unplug it.
   {
-    const uint16_t DIRS = 0x00F0u;  // Up/Right/Down/Left
-    int pad_dirs   = (before_pads & DIRS) != (mask & DIRS);          // a pad changed a direction bit
-    int kbd_no_dir = (before_pads & DIRS) == DIRS;                   // keyboard pressed no direction
+    const uint16_t DIRS = 0x00F0u;                        // Up/Right/Down/Left
+    int pad_dirs = (before_pads & DIRS) != (mask & DIRS); // a pad changed a direction bit
+    int kbd_no_dir = (before_pads & DIRS) == DIRS;        // keyboard pressed no direction
     if (pad_dirs && kbd_no_dir && !mPadDirsWarned) {
-      lucent::info("pad", "a game controller is driving DIRECTIONS (host pad mask=0x{:04x}). If WASD seems dead, an analog stick / phantom pad is the input. Set PSXPORT_PAD_NOPAD=1 to use the keyboard only.", (unsigned)mask);
+      lucent::info("pad",
+                   "a game controller is driving DIRECTIONS (host pad mask=0x{:04x}). If WASD seems dead, an analog "
+                   "stick / phantom pad is the input. Set PSXPORT_PAD_NOPAD=1 to use the keyboard only.",
+                   (unsigned)mask);
       mPadDirsWarned = 1;
     }
   }
@@ -326,14 +426,16 @@ void Pad::pollSdl() {
 // pad buffer pointer for slot `slot` is at 0x0000AEC8 + slot*4 (FUN_800040c4 stores
 // them there; FUN_80003a4c reads them via &DAT_0000aec8 + slot*4).
 // FUN_80003a4c(slot): a0 = slot index.
-static void pad_read(Core* c) {
-  uint32_t b = c->mem_r32(c->cfg->padSlotPtrTable + c->r[4] * 4u);   // registered slot buffer ptr
+static void pad_read(Core *c) {
+  uint32_t b = c->mem_r32(c->cfg->padSlotPtrTable + c->r[4] * 4u); // registered slot buffer ptr
   if (b) {
     uint8_t pk[4];
     c->game->pad.fillBuffer(pk);
-    for (int i = 0; i < 4; i++) c->mem_w8(b + i, pk[i]);
+    for (int i = 0; i < 4; i++) {
+      c->mem_w8(b + i, pk[i]);
+    }
   }
-  c->r[2] = 0;   // v0 = 0 (read complete / pad serviced)
+  c->r[2] = 0; // v0 = 0 (read complete / pad serviced)
 }
 
 void Pad::overridesInit() {
@@ -359,24 +461,38 @@ void Pad::overridesInit() {
 
 // REPL pad control (native-port -repl): a held active-low mask + a tap countdown, applied by
 // serviceFrame() so the interactive driver can press/hold/tap buttons.
-void Pad::driveHold(uint16_t activeLowMask) { repl_on = 1; repl_hold = activeLowMask; }
-void Pad::driveTap(uint16_t activeLowMask, int nframes) { repl_on = 1; repl_tap = activeLowMask; repl_tap_n = nframes; }
+void Pad::driveHold(uint16_t activeLowMask) {
+  repl_on = 1;
+  repl_hold = activeLowMask;
+}
+void Pad::driveTap(uint16_t activeLowMask, int nframes) {
+  repl_on = 1;
+  repl_tap = activeLowMask;
+  repl_tap_n = nframes;
+}
 // Fully relinquish REPL pad control (repl_on=0) so neither a held mask nor a stale PAD_NONE keeps
 // overriding host/FORCE input. Used by the state-gated auto-navigator to go hands-off in gameplay.
-void Pad::driveRelease() { repl_on = 0; repl_hold = PAD_NONE; repl_tap = PAD_NONE; repl_tap_n = 0; }
+void Pad::driveRelease() {
+  repl_on = 0;
+  repl_hold = PAD_NONE;
+  repl_tap = PAD_NONE;
+  repl_tap_n = 0;
+}
 
 // Host input only — no frame-indexed state touched (no record/replay tick, no mFc, no tap countdown,
 // no shot/dump schedules). pollSdl also carries the P / '.' debug keys, which is what lets a paused
 // session be un-paused from the keyboard.
 void Pad::pumpHostInput() {
 #ifdef PSXPORT_SDL
-  if (gpu_windowed() && !game->sbs) pollSdl();
+  if (gpu_windowed() && !game->sbs) {
+    pollSdl();
+  }
 #endif
 }
 
 void Pad::serviceFrame() {
-  Core* c = &game->core;
-  int have_window = gpu_windowed();              // a live on-screen window is up (gpu_vk.cpp)
+  Core *c = &game->core;
+  int have_window = gpu_windowed(); // a live on-screen window is up (gpu_vk.cpp)
 #ifdef PSXPORT_SDL
   // Under SBS, the harness polls SDL ONCE per frame and feeds the SAME mask into both cores'
   // Pad::buttons via feedInput() (sbs.cpp). Skipping our own pollSdl here keeps the two cores'
@@ -384,17 +500,26 @@ void Pad::serviceFrame() {
   // mid-press (or a controller axis update in the tiny gap) gives them different masks → real
   // divergence downstream (area-update slot table, packet pool, etc.). Standalone runs still poll
   // as before (game->sbs is nullptr).
-  if (have_window && !game->sbs) pollSdl();      // host keyboard/gamepad -> this->buttons
+  if (have_window && !game->sbs) {
+    pollSdl(); // host keyboard/gamepad -> this->buttons
+  }
 #endif
-  if (!mForceInit) {                             // headless test hook: pulse an active-low mask
-    const char* force = cfg_str("PSXPORT_FORCE_BUTTONS");
-    if (force) { mForceOn = 1; mForceMask = (uint16_t)strtoul(force, 0, 16); }
+  if (!mForceInit) { // headless test hook: pulse an active-low mask
+    const char *force = cfg_str("PSXPORT_FORCE_BUTTONS");
+    if (force) {
+      mForceOn = 1;
+      mForceMask = (uint16_t)strtoul(force, 0, 16);
+    }
     // Second phase: HOLD a mask continuously from PSXPORT_FORCE_HOLD_AT onward (overrides the
     // pulse). Lets a headless run reach a state via pulsed Start, then hold a direction in-level
     // (a held direction is what the game reads for movement) — for interactivity testing.
-    const char* hold = cfg_str("PSXPORT_FORCE_HOLD");
-    if (hold) { mForceOn = 1; mHoldMask = (uint16_t)strtoul(hold, 0, 16);
-                const char* at = cfg_str("PSXPORT_FORCE_HOLD_AT"); mHoldAt = at ? strtoul(at, 0, 0) : 0; }
+    const char *hold = cfg_str("PSXPORT_FORCE_HOLD");
+    if (hold) {
+      mForceOn = 1;
+      mHoldMask = (uint16_t)strtoul(hold, 0, 16);
+      const char *at = cfg_str("PSXPORT_FORCE_HOLD_AT");
+      mHoldAt = at ? strtoul(at, 0, 0) : 0;
+    }
     mForceInit = 1;
   }
   // Pulse the forced buttons (pressed 8 frames, released 24) so each press is a fresh EDGE the
@@ -405,10 +530,16 @@ void Pad::serviceFrame() {
   // pulse Start to drive through attract/menu/intro to a target scene, then go fully hands-off so
   // the scene's own BGM/state isn't disturbed by phantom presses (Start in gameplay = pause menu,
   // which stops BGM — that artifact poisoned earlier BGM captures).
-  if (mStopAt == -2) { const char* e = cfg_str("PSXPORT_FORCE_STOP_AT"); mStopAt = e ? atol(e) : -1; }
+  if (mStopAt == -2) {
+    const char *e = cfg_str("PSXPORT_FORCE_STOP_AT");
+    mStopAt = e ? atol(e) : -1;
+  }
   if (mForceOn && !(mStopAt >= 0 && (long)mFc >= mStopAt)) {
-    if (mHoldMask != PAD_NONE && mFc >= mHoldAt) setButtons(mHoldMask);
-    else setButtons((mFc % 32u) < 8u ? mForceMask : PAD_NONE);
+    if (mHoldMask != PAD_NONE && mFc >= mHoldAt) {
+      setButtons(mHoldMask);
+    } else {
+      setButtons((mFc % 32u) < 8u ? mForceMask : PAD_NONE);
+    }
   }
   // REPL pad control: a tap (countdown) overrides the held mask while active. The effective REPL
   // mask is also kept aside so a replay in progress MERGES it (below) instead of swallowing it:
@@ -418,8 +549,12 @@ void Pad::serviceFrame() {
   // REPL command is issued (mask stays PAD_NONE = no-op).
   uint16_t repl_mask = PAD_NONE;
   if (repl_on) {
-    if (repl_tap_n > 0) { repl_mask = repl_tap; repl_tap_n--; }
-    else repl_mask = repl_hold;
+    if (repl_tap_n > 0) {
+      repl_mask = repl_tap;
+      repl_tap_n--;
+    } else {
+      repl_mask = repl_hold;
+    }
     setButtons(repl_mask);
   }
   mFc++;
@@ -434,24 +569,29 @@ void Pad::serviceFrame() {
   // per pad_service_frame call from frame 0). Past the recording's end, replay stops overriding
   // (hands-off) so the game free-runs.
   {
-    FILE*&     rec_fp = mRecFp;     // record sink
-    uint16_t*& rep_buf = mRepBuf;   // replay source (loaded once)
-    size_t&    rep_n = mRepN;
-    uint32_t&  rec_fc = mRecFc;     // shared record/replay frame index
+    FILE *&rec_fp = mRecFp;       // record sink
+    uint16_t *&rep_buf = mRepBuf; // replay source (loaded once)
+    size_t &rep_n = mRepN;
+    uint32_t &rec_fc = mRecFc; // shared record/replay frame index
     if (!mRecInit) {
       mRecInit = 1;
       // Recording is ALWAYS ON by default (so a hand-played session — e.g. on the user's macOS build —
       // is captured and can be sent over for deterministic replay/diagnosis). Default sink:
       // scratch/bin/pad_session.pad, overwritten each run. Override the path with PSXPORT_PAD_RECORD=<path>;
       // disable with PSXPORT_PAD_RECORD=0. Skipped while REPLAYING (no point re-capturing the replayed input).
-      const char* rpath = cfg_str("PSXPORT_PAD_RECORD");
+      const char *rpath = cfg_str("PSXPORT_PAD_RECORD");
       bool default_sink = false;
-      if (rpath && !strcmp(rpath, "0")) rpath = nullptr;                 // explicit disable
+      if (rpath && !strcmp(rpath, "0")) {
+        rpath = nullptr; // explicit disable
+      }
       // Default-on recording is WINDOWED-ONLY (#56/#57): headless runs (SBS/AUTO_SKIP smoke, agent probes)
       // have no play-session worth capturing AND were silently truncating the user's real captures every
       // time — that is what clobbered the bucket + flame repros. Headless auto-record is OFF; an explicit
       // PSXPORT_PAD_RECORD=<path> still records anywhere (windowed or headless).
-      else if (!rpath && !cfg_str("PSXPORT_PAD_REPLAY") && gpu_windowed()) { rpath = "scratch/bin/pad_session.pad"; default_sink = true; }  // default-on (windowed)
+      else if (!rpath && !cfg_str("PSXPORT_PAD_REPLAY") && gpu_windowed()) {
+        rpath = "scratch/bin/pad_session.pad";
+        default_sink = true;
+      } // default-on (windowed)
       // NOTE a RESUME run (PSXPORT_PAD_RESUME, below) deliberately does NOT suppress recording: the
       // sink captures the replayed prefix and the live play that follows as ONE from-boot recording,
       // which is what makes a resume chainable — today's session can be resumed from again tomorrow.
@@ -468,13 +608,17 @@ void Pad::serviceFrame() {
           for (int k = 4; k >= 1; k--) {
             snprintf(oldp, sizeof oldp, "scratch/bin/pad_session.%d.pad", k);
             snprintf(newp, sizeof newp, "scratch/bin/pad_session.%d.pad", k + 1);
-            rename(oldp, newp);   // no-op if source absent
+            rename(oldp, newp); // no-op if source absent
           }
           rename("scratch/bin/pad_session.pad", "scratch/bin/pad_session.1.pad");
         }
         rec_fp = fopen(rpath, "wb");
-        lucent::info("padrec", "recording -> {}{}", rec_fp ? rpath : "(open FAILED)",
-                default_sink ? " (prev rotated to pad_session.1..5.pad; use replays/<cat>/<name>.pad to keep a repro)" : "");
+        lucent::info("padrec",
+                     "recording -> {}{}",
+                     rec_fp ? rpath : "(open FAILED)",
+                     default_sink
+                         ? " (prev rotated to pad_session.1..5.pad; use replays/<cat>/<name>.pad to keep a repro)"
+                         : "");
       }
       // PSXPORT_PAD_RESUME=<path> — CONTINUE FROM A RECORDING (USER ask, 2026-08-19: "a feature where
       // I can continue from a pad recording instead of having to play all over again"). It is the same
@@ -485,33 +629,52 @@ void Pad::serviceFrame() {
       // want opposite pacing — a deterministic gate/repro (real speed, so what it measures is what the
       // user sees) and getting back to a spot (as fast as the host can). Which one you meant is stated
       // by which knob you set; nothing is inferred from the sink, the leg, or whether a window is open.
-      const char* resume = cfg_str("PSXPORT_PAD_RESUME");
-      const char* ppath = cfg_str("PSXPORT_PAD_REPLAY");
+      const char *resume = cfg_str("PSXPORT_PAD_RESUME");
+      const char *ppath = cfg_str("PSXPORT_PAD_REPLAY");
       if (resume && *resume) {
-        if (ppath && *ppath)
-          lucent::warn("padrec", "both PSXPORT_PAD_RESUME and PSXPORT_PAD_REPLAY are set — using RESUME "
-                                 "({}) and IGNORING REPLAY ({}); they are two different intentions.",
-                       resume, ppath);
+        if (ppath && *ppath) {
+          lucent::warn("padrec",
+                       "both PSXPORT_PAD_RESUME and PSXPORT_PAD_REPLAY are set — using RESUME "
+                       "({}) and IGNORING REPLAY ({}); they are two different intentions.",
+                       resume,
+                       ppath);
+        }
         ppath = resume;
         mResumeFf = 1;
       }
       if (ppath) {
-        FILE* f = fopen(ppath, "rb");
-        if (f) { fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-          rep_n = (size_t)(sz / 2); rep_buf = (uint16_t*)malloc(rep_n * 2);
-          if (rep_buf && fread(rep_buf, 2, rep_n, f) != rep_n) { free(rep_buf); rep_buf = nullptr; rep_n = 0; }
+        FILE *f = fopen(ppath, "rb");
+        if (f) {
+          fseek(f, 0, SEEK_END);
+          long sz = ftell(f);
+          fseek(f, 0, SEEK_SET);
+          rep_n = (size_t)(sz / 2);
+          rep_buf = (uint16_t *)malloc(rep_n * 2);
+          if (rep_buf && fread(rep_buf, 2, rep_n, f) != rep_n) {
+            free(rep_buf);
+            rep_buf = nullptr;
+            rep_n = 0;
+          }
           fclose(f);
-          lucent::info("padrec", "{} {} frames <- {}{}", mResumeFf ? "RESUMING from" : "replaying",
-                       rep_n, ppath,
+          lucent::info("padrec",
+                       "{} {} frames <- {}{}",
+                       mResumeFf ? "RESUMING from" : "replaying",
+                       rep_n,
+                       ppath,
                        mResumeFf ? " (fast-forward: unpaced, muted, FMVs uncapped — control is handed "
-                                   "over when the recording runs out)" : "");
-        } else lucent::error("padrec", "{} open FAILED: {}", mResumeFf ? "resume" : "replay", ppath);
+                                   "over when the recording runs out)"
+                                 : "");
+        } else {
+          lucent::error("padrec", "{} open FAILED: {}", mResumeFf ? "resume" : "replay", ppath);
+        }
         // A resume whose file did not load is a run that silently starts a NEW GAME from boot — the
         // exact thing the user asked not to have to do. Say so and drop the fast-forward, rather than
         // sprinting through a fresh boot with no input.
         if (mResumeFf && !rep_buf) {
-          lucent::error("padrec", "PSXPORT_PAD_RESUME={} produced no frames — this run starts from BOOT "
-                                  "with no replayed input. Not fast-forwarding.", ppath);
+          lucent::error("padrec",
+                        "PSXPORT_PAD_RESUME={} produced no frames — this run starts from BOOT "
+                        "with no replayed input. Not fast-forwarding.",
+                        ppath);
           mResumeFf = 0;
         }
       }
@@ -526,14 +689,19 @@ void Pad::serviceFrame() {
       // out loud because a resume that ends somewhere unexpected (a truncated file, a desync) is
       // otherwise indistinguishable from one that landed — the player just sees the game speed up.
       mResumeDone = 1;
-      lucent::info("padrec", "RESUME complete at pad frame {} — real-time pacing, sound and control "
-                             "are yours. This session keeps recording, so you can resume from here too.",
+      lucent::info("padrec",
+                   "RESUME complete at pad frame {} — real-time pacing, sound and control "
+                   "are yours. This session keeps recording, so you can resume from here too.",
                    rec_fc);
     }
     // Latch edges only after every input source has resolved to the mask the guest receives. Sampling
     // host input earlier would miss replay/REPL presses or expose an edge for a mask later replaced.
     sampleButtonEdges();
-    if (rec_fp) { uint16_t m = buttons; fwrite(&m, 2, 1, rec_fp); fflush(rec_fp); }
+    if (rec_fp) {
+      uint16_t m = buttons;
+      fwrite(&m, 2, 1, rec_fp);
+      fflush(rec_fp);
+    }
     // Always keep the mask in memory too, file sink or not: this is what the debug server's `padrec
     // save` cuts a replay from, so a LIVE session (the user already playing, with the repro on screen)
     // can be captured on demand instead of having to be re-played from boot into a chosen sink.
@@ -542,57 +710,116 @@ void Pad::serviceFrame() {
     // indices to scratch/screenshots/padshot_<frame>.ppm. The pad-frame axis (rec_fc) is the faithful
     // one (gpu_frame_no drifts because boot/FMV presents extra frames), so this captures a deterministic
     // visual timeline of a replayed session. Done here, after the mask is applied for THIS frame.
-    uint32_t* shot_at = mShotAt; int& shot_n = mShotN;
+    uint32_t *shot_at = mShotAt;
+    int &shot_n = mShotN;
     if (!mShotInit) {
       mShotInit = 1;
-      const char* s = cfg_str("PSXPORT_PAD_SHOT_AT");
-      if (s) { char buf[512]; snprintf(buf, sizeof buf, "%s", s);
-        for (char* t = strtok(buf, ","); t && shot_n < 64; t = strtok(nullptr, ","))
-          shot_at[shot_n++] = (uint32_t)strtoul(t, 0, 0); }
+      const char *s = cfg_str("PSXPORT_PAD_SHOT_AT");
+      if (s) {
+        char buf[512];
+        snprintf(buf, sizeof buf, "%s", s);
+        for (char *t = strtok(buf, ","); t && shot_n < 64; t = strtok(nullptr, ",")) {
+          shot_at[shot_n++] = (uint32_t)strtoul(t, 0, 0);
+        }
+      }
     }
-    for (int i = 0; i < shot_n; i++) if (shot_at[i] == rec_fc) {
-      void gpu_vk_shot(Core*, const char*); char p[96];
-      snprintf(p, sizeof p, "scratch/screenshots/padshot_%u.ppm", rec_fc);
-      gpu_vk_shot(c, p);
-      lucent::info("padrec", "shot at replay-frame {} -> {}", rec_fc, p);
+    for (int i = 0; i < shot_n; i++) {
+      if (shot_at[i] == rec_fc) {
+        void gpu_vk_shot(Core *, const char *);
+        char p[96];
+        snprintf(p, sizeof p, "scratch/screenshots/padshot_%u.ppm", rec_fc);
+        gpu_vk_shot(c, p);
+        lucent::info("padrec", "shot at replay-frame {} -> {}", rec_fc, p);
+      }
     }
     // PSXPORT_PAD_DUMP_AT=f0,f1,... : dump 2MB guest RAM (+.spad) at these REPLAY frames to
     // scratch/bin/padram_<f>.bin — for A/B diffing scene state (e.g. village vs hut interior).
-    uint32_t* dump_at = mDumpAt; int& dump_n = mDumpN;
-    if (!mDumpInit) { mDumpInit = 1; const char* s = cfg_str("PSXPORT_PAD_DUMP_AT");
-      if (s) { char buf[256]; snprintf(buf, sizeof buf, "%s", s);
-        for (char* t = strtok(buf, ","); t && dump_n < 32; t = strtok(nullptr, ","))
-          dump_at[dump_n++] = (uint32_t)strtoul(t, 0, 0); } }
-    for (int i = 0; i < dump_n; i++) if (dump_at[i] == rec_fc) {
-      char p[96]; snprintf(p, sizeof p, "scratch/bin/padram_%u.bin", rec_fc);
-      FILE* fp = fopen(p, "wb"); if (fp) { fwrite(c->ram, 1, 0x200000, fp); fclose(fp); }
-      char sp[112]; snprintf(sp, sizeof sp, "%s.spad", p);
-      FILE* spf = fopen(sp, "wb"); if (spf) { fwrite(c->scratch, 1, sizeof c->scratch, spf); fclose(spf); }
-      // also dump the classified display list (which prims/passes drew this frame) — pins the culprit pass.
-      void gpu_scene_dump_now(Core*, FILE*);
-      char sc[100]; snprintf(sc, sizeof sc, "scratch/bin/padscene_%u.txt", rec_fc);
-      FILE* scf = fopen(sc, "w"); if (scf) { gpu_scene_dump_now(c, scf); fclose(scf); }
-      lucent::info("padrec", "dumpram+scene at replay-frame {} -> {}", rec_fc, p);
+    uint32_t *dump_at = mDumpAt;
+    int &dump_n = mDumpN;
+    if (!mDumpInit) {
+      mDumpInit = 1;
+      const char *s = cfg_str("PSXPORT_PAD_DUMP_AT");
+      if (s) {
+        char buf[256];
+        snprintf(buf, sizeof buf, "%s", s);
+        for (char *t = strtok(buf, ","); t && dump_n < 32; t = strtok(nullptr, ",")) {
+          dump_at[dump_n++] = (uint32_t)strtoul(t, 0, 0);
+        }
+      }
+    }
+    for (int i = 0; i < dump_n; i++) {
+      if (dump_at[i] == rec_fc) {
+        char p[96];
+        snprintf(p, sizeof p, "scratch/bin/padram_%u.bin", rec_fc);
+        FILE *fp = fopen(p, "wb");
+        if (fp) {
+          fwrite(c->ram, 1, 0x200000, fp);
+          fclose(fp);
+        }
+        char sp[112];
+        snprintf(sp, sizeof sp, "%s.spad", p);
+        FILE *spf = fopen(sp, "wb");
+        if (spf) {
+          fwrite(c->scratch, 1, sizeof c->scratch, spf);
+          fclose(spf);
+        }
+        // also dump the classified display list (which prims/passes drew this frame) — pins the culprit pass.
+        void gpu_scene_dump_now(Core *, FILE *);
+        char sc[100];
+        snprintf(sc, sizeof sc, "scratch/bin/padscene_%u.txt", rec_fc);
+        FILE *scf = fopen(sc, "w");
+        if (scf) {
+          gpu_scene_dump_now(c, scf);
+          fclose(scf);
+        }
+        lucent::info("padrec", "dumpram+scene at replay-frame {} -> {}", rec_fc, p);
+      }
     }
     // PSXPORT_PAD_TRACE=lo-hi : log the transition/scene markers EVERY replay frame in [lo,hi] (pad-frame
     // indexed — the faithful axis). Finds which field moves when the player walks into the hut (the
     // seamless sub-scene transition). All fixed-address globals; sm = *0x1f800138.
-    uint32_t& trace_lo = mTraceLo; uint32_t& trace_hi = mTraceHi;
-    if (!mTraceInit) { mTraceInit = 1; const char* s = cfg_str("PSXPORT_PAD_TRACE");
-      if (s) { unsigned a=0,b=0; if (sscanf(s,"%u-%u",&a,&b)==2){trace_lo=a;trace_hi=b;} else if (sscanf(s,"%u",&a)==1){trace_lo=0;trace_hi=a;} } }
+    uint32_t &trace_lo = mTraceLo;
+    uint32_t &trace_hi = mTraceHi;
+    if (!mTraceInit) {
+      mTraceInit = 1;
+      const char *s = cfg_str("PSXPORT_PAD_TRACE");
+      if (s) {
+        unsigned a = 0, b = 0;
+        if (sscanf(s, "%u-%u", &a, &b) == 2) {
+          trace_lo = a;
+          trace_hi = b;
+        } else if (sscanf(s, "%u", &a) == 1) {
+          trace_lo = 0;
+          trace_hi = a;
+        }
+      }
+    }
     if (rec_fc >= trace_lo && rec_fc <= trace_hi) {
       uint32_t sm = c->mem_r32(0x1f800138u);
-      lucent::info("padtr", "f{:<4} bf839={:02X} bf80f={:02X} i236={:02X} sm4a={} sm4c={} sm4e={} scene={} bf870={:02X} bf809={:02X} bf89c={:02X} e7e68={:08X} tX={} tZ={}", rec_fc, c->mem_r8(0x800bf839u), c->mem_r8(0x800bf80fu), c->mem_r8(0x1f800236u),
-        c->mem_r16(sm+0x4a), c->mem_r16(sm+0x4c), c->mem_r16(sm+0x4e),
-        c->mem_r32(0x800be258u), c->mem_r8(0x800bf870u), c->mem_r8(0x800bf809u), c->mem_r8(0x800bf89cu),
-        c->mem_r32(0x800e7e68u), c->mem_r16s(0x800fe916u), c->mem_r16s(0x800fe91eu));
+      lucent::info("padtr",
+                   "f{:<4} bf839={:02X} bf80f={:02X} i236={:02X} sm4a={} sm4c={} sm4e={} scene={} bf870={:02X} "
+                   "bf809={:02X} bf89c={:02X} e7e68={:08X} tX={} tZ={}",
+                   rec_fc,
+                   c->mem_r8(0x800bf839u),
+                   c->mem_r8(0x800bf80fu),
+                   c->mem_r8(0x1f800236u),
+                   c->mem_r16(sm + 0x4a),
+                   c->mem_r16(sm + 0x4c),
+                   c->mem_r16(sm + 0x4e),
+                   c->mem_r32(0x800be258u),
+                   c->mem_r8(0x800bf870u),
+                   c->mem_r8(0x800bf809u),
+                   c->mem_r8(0x800bf89cu),
+                   c->mem_r32(0x800e7e68u),
+                   c->mem_r16s(0x800fe916u),
+                   c->mem_r16s(0x800fe91eu));
     }
     rec_fc++;
   }
 
   uint8_t pk[4];
   fillBuffer(pk);
-  uint32_t bufs[2] = { c->cfg->padSlot0Buf, c->cfg->padSlot1Buf };  // fixed game pad buffers
+  uint32_t bufs[2] = {c->cfg->padSlot0Buf, c->cfg->padSlot1Buf}; // fixed game pad buffers
   const uint32_t tbl = c->cfg->padSlotPtrTable;
   const uint32_t stride = c->cfg->padSlotPtrStride ? c->cfg->padSlotPtrStride : 4u;
   for (int slot = 0; slot < 2; slot++) {
@@ -600,12 +827,20 @@ void Pad::serviceFrame() {
     // game with no known table reads guest address 0 (and 0+stride) and calls whatever garbage is
     // there a buffer pointer — writing the pad packet into an arbitrary address.
     uint32_t b = tbl ? c->mem_r32(tbl + (uint32_t)slot * stride) : 0u;
-    if (!b) b = bufs[slot];                                  // fall back to the fixed buffer
-    if (!b) continue;                                        // neither known: nothing to fill
-    for (int i = 0; i < 4; i++) c->mem_w8(b + i, pk[i]);
+    if (!b) {
+      b = bufs[slot]; // fall back to the fixed buffer
+    }
+    if (!b) {
+      continue; // neither known: nothing to fill
+    }
+    for (int i = 0; i < 4; i++) {
+      c->mem_w8(b + i, pk[i]);
+    }
   }
   // Slot 1: report "no controller" so single-pad logic ignores it (status 0xFF).
-  if (c->cfg->padSlot1Buf) c->mem_w8(c->cfg->padSlot1Buf, 0xFF);
+  if (c->cfg->padSlot1Buf) {
+    c->mem_w8(c->cfg->padSlot1Buf, 0xFF);
+  }
 }
 
 #endif // PSXPORT_PAD_NO_OVERRIDES

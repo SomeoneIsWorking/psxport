@@ -50,67 +50,111 @@
 
 // ── a minimal R3000A assembler ──────────────────────────────────────────────────────────────────────
 enum Crt0FixtureReg {
-  CF_ZERO = 0, CF_AT = 1, CF_V0 = 2, CF_V1 = 3, CF_A0 = 4, CF_A1 = 5, CF_T0 = 8,
-  CF_GP = 28, CF_SP = 29, CF_FP = 30, CF_RA = 31
+  CF_ZERO = 0,
+  CF_AT = 1,
+  CF_V0 = 2,
+  CF_V1 = 3,
+  CF_A0 = 4,
+  CF_A1 = 5,
+  CF_T0 = 8,
+  CF_GP = 28,
+  CF_SP = 29,
+  CF_FP = 30,
+  CF_RA = 31
 };
-static inline uint32_t cf_i16(int32_t v) { return (uint32_t)v & 0xFFFFu; }
-static inline uint32_t cf_lui  (int rt, uint32_t hi)        { return 0x3C000000u | (uint32_t)rt << 16 | (hi & 0xFFFF); }
-static inline uint32_t cf_addiu(int rt, int rs, int32_t im)  { return 0x24000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(im); }
-static inline uint32_t cf_addi (int rt, int rs, int32_t im)  { return 0x20000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(im); }
-static inline uint32_t cf_lw   (int rt, int rs, int32_t im)  { return 0x8C000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(im); }
-static inline uint32_t cf_sw   (int rt, int rs, int32_t im)  { return 0xAC000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(im); }
-static inline uint32_t cf_bne  (int rs, int rt, int32_t off) { return 0x14000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(off); }
-static inline uint32_t cf_spec (int rd, int rs, int rt, uint32_t sa, uint32_t fn) {
+static inline uint32_t cf_i16(int32_t v) {
+  return (uint32_t)v & 0xFFFFu;
+}
+static inline uint32_t cf_lui(int rt, uint32_t hi) {
+  return 0x3C000000u | (uint32_t)rt << 16 | (hi & 0xFFFF);
+}
+static inline uint32_t cf_addiu(int rt, int rs, int32_t im) {
+  return 0x24000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(im);
+}
+static inline uint32_t cf_addi(int rt, int rs, int32_t im) {
+  return 0x20000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(im);
+}
+static inline uint32_t cf_lw(int rt, int rs, int32_t im) {
+  return 0x8C000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(im);
+}
+static inline uint32_t cf_sw(int rt, int rs, int32_t im) {
+  return 0xAC000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(im);
+}
+static inline uint32_t cf_bne(int rs, int rt, int32_t off) {
+  return 0x14000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | cf_i16(off);
+}
+static inline uint32_t cf_spec(int rd, int rs, int rt, uint32_t sa, uint32_t fn) {
   return (uint32_t)rs << 21 | (uint32_t)rt << 16 | (uint32_t)rd << 11 | sa << 6 | fn;
 }
-static inline uint32_t cf_sltu(int rd, int rs, int rt) { return cf_spec(rd, rs, rt, 0, 0x2B); }
-static inline uint32_t cf_subu(int rd, int rs, int rt) { return cf_spec(rd, rs, rt, 0, 0x23); }
-static inline uint32_t cf_or  (int rd, int rs, int rt) { return cf_spec(rd, rs, rt, 0, 0x25); }
-static inline uint32_t cf_addu(int rd, int rs, int rt) { return cf_spec(rd, rs, rt, 0, 0x21); }
-static inline uint32_t cf_sll (int rd, int rt, uint32_t sa) { return cf_spec(rd, 0, rt, sa, 0x00); }
-static inline uint32_t cf_srl (int rd, int rt, uint32_t sa) { return cf_spec(rd, 0, rt, sa, 0x02); }
-static inline uint32_t cf_jal (uint32_t target) { return 0x0C000000u | ((target >> 2) & 0x3FFFFFFu); }
+static inline uint32_t cf_sltu(int rd, int rs, int rt) {
+  return cf_spec(rd, rs, rt, 0, 0x2B);
+}
+static inline uint32_t cf_subu(int rd, int rs, int rt) {
+  return cf_spec(rd, rs, rt, 0, 0x23);
+}
+static inline uint32_t cf_or(int rd, int rs, int rt) {
+  return cf_spec(rd, rs, rt, 0, 0x25);
+}
+static inline uint32_t cf_addu(int rd, int rs, int rt) {
+  return cf_spec(rd, rs, rt, 0, 0x21);
+}
+static inline uint32_t cf_sll(int rd, int rt, uint32_t sa) {
+  return cf_spec(rd, 0, rt, sa, 0x00);
+}
+static inline uint32_t cf_srl(int rd, int rt, uint32_t sa) {
+  return cf_spec(rd, 0, rt, sa, 0x02);
+}
+static inline uint32_t cf_jal(uint32_t target) {
+  return 0x0C000000u | ((target >> 2) & 0x3FFFFFFu);
+}
 
 // `lui rX,hi / addiu rX,rX,lo` for an absolute 32-bit address (the standard %hi/%lo pair: the addiu's
 // immediate is SIGN-extended, so hi is adjusted when lo's top bit is set).
-static inline uint32_t CF_HI(uint32_t a) { return ((a >> 16) + ((a & 0x8000u) ? 1u : 0u)) & 0xFFFFu; }
-static inline int32_t  CF_LO(uint32_t a) { return (int32_t)(int16_t)(uint16_t)(a & 0xFFFFu); }
+static inline uint32_t CF_HI(uint32_t a) {
+  return ((a >> 16) + ((a & 0x8000u) ? 1u : 0u)) & 0xFFFFu;
+}
+static inline int32_t CF_LO(uint32_t a) {
+  return (int32_t)(int16_t)(uint16_t)(a & 0xFFFFu);
+}
 
 // ── the pins: this encoder's output vs bytes disassembled from a real crt0 ───────────────────────────
-struct Crt0PinRow { const char* what; uint32_t got, want; };
+struct Crt0PinRow {
+  const char *what;
+  uint32_t got, want;
+};
 
 // The FLOOR lives here, next to the rows it counts, because a `for` over the rows passes while proving
 // nothing if the list is empty or has been whittled down. Both consumers assert the count against this
 // before their loop, so "0 mismatches" cannot be a report of never having looked — and there is ONE
 // number to raise when a row is added, not one per consumer to forget.
-static const int CRT0_FIXTURE_PIN_FLOOR = 21;   // 18 measured instructions + 3 %hi/%lo round trips
+static const int CRT0_FIXTURE_PIN_FLOOR = 21; // 18 measured instructions + 3 %hi/%lo round trips
 
 // Every row is one instruction read out of a real executable. A consumer that uses the fixture without
 // checking these is testing a decoder against an encoder, with no third party.
 static inline std::vector<Crt0PinRow> crt0_fixture_pins(void) {
   return {
-    {"0x800896E0 lui   v0,0x800C",        cf_lui(CF_V0, 0x800C),      0x3C02800Cu},
-    {"0x800896E4 addiu v0,v0,-7976",      cf_addiu(CF_V0, CF_V0, -7976), 0x2442E0D8u},
-    {"0x800896F0 sw    zero,0(v0)",       cf_sw(CF_ZERO, CF_V0, 0),   0xAC400000u},
-    {"0x800896F8 sltu  at,v0,v1",         cf_sltu(CF_AT, CF_V0, CF_V1), 0x0043082Bu},
-    {"0x800896FC bne   at,zero,-4",       cf_bne(CF_AT, CF_ZERO, -4), 0x1420FFFCu},
-    {"0x80089708 lw    v0,16264(v0)",     cf_lw(CF_V0, CF_V0, 16264), 0x8C423F88u},
-    {"0x80089710 addi  v0,v0,-8",         cf_addi(CF_V0, CF_V0, -8),  0x2042FFF8u},
-    {"0x80089714 lui   t0,0x8000",        cf_lui(CF_T0, 0x8000),      0x3C088000u},
-    {"0x80089718 or    sp,v0,t0",         cf_or(CF_SP, CF_V0, CF_T0), 0x0048E825u},
-    {"0x80089724 sll   a0,a0,3",          cf_sll(CF_A0, CF_A0, 3),    0x000420C0u},
-    {"0x80089728 srl   a0,a0,3",          cf_srl(CF_A0, CF_A0, 3),    0x000420C2u},
-    {"0x80089738 subu  a1,v0,v1",         cf_subu(CF_A1, CF_V0, CF_V1), 0x00432823u},
-    {"0x8008973C subu  a1,a1,a0",         cf_subu(CF_A1, CF_A1, CF_A0), 0x00A42823u},
-    {"0x80089744 sw    a1,-16648(at)",    cf_sw(CF_A1, CF_AT, -16648), 0xAC25BEF8u},
-    {"0x80089764 addu  fp,sp,zero",       cf_addu(CF_FP, CF_SP, CF_ZERO), 0x03A0F021u},
-    {"0x80089768 jal   0x80089860",       cf_jal(0x80089860u),        0x0C022618u},
-    {"0x800DAECC addu  a0,a0,v0 (X4)",    cf_addu(CF_A0, CF_A0, CF_V0), 0x00822021u},
-    {"0x800DAED0 lw    v0,0(a0)  (X4)",   cf_lw(CF_V0, CF_A0, 0),     0x8C820000u},
-    // …and the %hi/%lo pair really reconstructs the address, including the sign-extension carry.
-    {"%hi/%lo rebuilds 0x800BE0D8",  (CF_HI(0x800BE0D8u) << 16) + (uint32_t)CF_LO(0x800BE0D8u), 0x800BE0D8u},
-    {"%hi/%lo rebuilds 0x800A3F88",  (CF_HI(0x800A3F88u) << 16) + (uint32_t)CF_LO(0x800A3F88u), 0x800A3F88u},
-    {"%hi/%lo rebuilds 0x80106228",  (CF_HI(0x80106228u) << 16) + (uint32_t)CF_LO(0x80106228u), 0x80106228u},
+      {"0x800896E0 lui   v0,0x800C", cf_lui(CF_V0, 0x800C), 0x3C02800Cu},
+      {"0x800896E4 addiu v0,v0,-7976", cf_addiu(CF_V0, CF_V0, -7976), 0x2442E0D8u},
+      {"0x800896F0 sw    zero,0(v0)", cf_sw(CF_ZERO, CF_V0, 0), 0xAC400000u},
+      {"0x800896F8 sltu  at,v0,v1", cf_sltu(CF_AT, CF_V0, CF_V1), 0x0043082Bu},
+      {"0x800896FC bne   at,zero,-4", cf_bne(CF_AT, CF_ZERO, -4), 0x1420FFFCu},
+      {"0x80089708 lw    v0,16264(v0)", cf_lw(CF_V0, CF_V0, 16264), 0x8C423F88u},
+      {"0x80089710 addi  v0,v0,-8", cf_addi(CF_V0, CF_V0, -8), 0x2042FFF8u},
+      {"0x80089714 lui   t0,0x8000", cf_lui(CF_T0, 0x8000), 0x3C088000u},
+      {"0x80089718 or    sp,v0,t0", cf_or(CF_SP, CF_V0, CF_T0), 0x0048E825u},
+      {"0x80089724 sll   a0,a0,3", cf_sll(CF_A0, CF_A0, 3), 0x000420C0u},
+      {"0x80089728 srl   a0,a0,3", cf_srl(CF_A0, CF_A0, 3), 0x000420C2u},
+      {"0x80089738 subu  a1,v0,v1", cf_subu(CF_A1, CF_V0, CF_V1), 0x00432823u},
+      {"0x8008973C subu  a1,a1,a0", cf_subu(CF_A1, CF_A1, CF_A0), 0x00A42823u},
+      {"0x80089744 sw    a1,-16648(at)", cf_sw(CF_A1, CF_AT, -16648), 0xAC25BEF8u},
+      {"0x80089764 addu  fp,sp,zero", cf_addu(CF_FP, CF_SP, CF_ZERO), 0x03A0F021u},
+      {"0x80089768 jal   0x80089860", cf_jal(0x80089860u), 0x0C022618u},
+      {"0x800DAECC addu  a0,a0,v0 (X4)", cf_addu(CF_A0, CF_A0, CF_V0), 0x00822021u},
+      {"0x800DAED0 lw    v0,0(a0)  (X4)", cf_lw(CF_V0, CF_A0, 0), 0x8C820000u},
+      // …and the %hi/%lo pair really reconstructs the address, including the sign-extension carry.
+      {"%hi/%lo rebuilds 0x800BE0D8", (CF_HI(0x800BE0D8u) << 16) + (uint32_t)CF_LO(0x800BE0D8u), 0x800BE0D8u},
+      {"%hi/%lo rebuilds 0x800A3F88", (CF_HI(0x800A3F88u) << 16) + (uint32_t)CF_LO(0x800A3F88u), 0x800A3F88u},
+      {"%hi/%lo rebuilds 0x80106228", (CF_HI(0x80106228u) << 16) + (uint32_t)CF_LO(0x80106228u), 0x80106228u},
   };
 }
 
@@ -122,10 +166,10 @@ static inline std::vector<Crt0PinRow> crt0_fixture_pins(void) {
 // direct `lui v0 / lw v0,lo(v0)`, so the decoder is exercised on BOTH forms in the corpus.
 struct Crt0Template {
   uint32_t entry, bssLo, bssHi, stackTopBase, stackTopBase2, heapBase, gp, libcInit;
-  int32_t  bias = -8;
-  uint32_t heapSizePtr = 0, heapBasePtr = 0;   // 0 = this crt0 has no such global
-  uint32_t raSave = 0;                         // the one absolute store X4 does have
-  bool     indirectStackTop = false;
+  int32_t bias = -8;
+  uint32_t heapSizePtr = 0, heapBasePtr = 0; // 0 = this crt0 has no such global
+  uint32_t raSave = 0;                       // the one absolute store X4 does have
+  bool indirectStackTop = false;
 };
 
 // The BIOS A(39h) InitHeap thunk the crt0's `jal` lands on, in all five measured executables:
@@ -133,16 +177,18 @@ struct Crt0Template {
 static const uint32_t CRT0_INITHEAP_THUNK[3] = {0x240A00A0u, 0x01400008u, 0x24090039u};
 
 // crt0_fixture_words — the prologue, as words starting at `t.entry`.
-static inline std::vector<uint32_t> crt0_fixture_words(const Crt0Template& t) {
+static inline std::vector<uint32_t> crt0_fixture_words(const Crt0Template &t) {
   std::vector<uint32_t> c;
   // .bss clear loop: v0 = bssLo, v1 = bssHi, then `sw zero,0(v0); addiu v0,v0,4; sltu at,v0,v1; bne`.
-  c.push_back(cf_lui(CF_V0, CF_HI(t.bssLo)));   c.push_back(cf_addiu(CF_V0, CF_V0, CF_LO(t.bssLo)));
-  c.push_back(cf_lui(CF_V1, CF_HI(t.bssHi)));   c.push_back(cf_addiu(CF_V1, CF_V1, CF_LO(t.bssHi)));
+  c.push_back(cf_lui(CF_V0, CF_HI(t.bssLo)));
+  c.push_back(cf_addiu(CF_V0, CF_V0, CF_LO(t.bssLo)));
+  c.push_back(cf_lui(CF_V1, CF_HI(t.bssHi)));
+  c.push_back(cf_addiu(CF_V1, CF_V1, CF_LO(t.bssHi)));
   c.push_back(cf_sw(CF_ZERO, CF_V0, 0));
   c.push_back(cf_addiu(CF_V0, CF_V0, 4));
   c.push_back(cf_sltu(CF_AT, CF_V0, CF_V1));
   c.push_back(cf_bne(CF_AT, CF_ZERO, -4));
-  c.push_back(0);                                             // delay slot
+  c.push_back(0); // delay slot
   // sp = (mem[stackTopBase] + bias) | KSEG0
   if (t.indirectStackTop) {
     c.push_back(cf_addiu(CF_V0, CF_ZERO, 4));
@@ -153,14 +199,18 @@ static inline std::vector<uint32_t> crt0_fixture_words(const Crt0Template& t) {
   } else {
     c.push_back(cf_lui(CF_V0, CF_HI(t.stackTopBase)));
     c.push_back(cf_lw(CF_V0, CF_V0, CF_LO(t.stackTopBase)));
-    c.push_back(0);                                           // load delay
+    c.push_back(0); // load delay
   }
-  if (t.bias) c.push_back(cf_addi(CF_V0, CF_V0, t.bias));
+  if (t.bias) {
+    c.push_back(cf_addi(CF_V0, CF_V0, t.bias));
+  }
   c.push_back(cf_lui(CF_T0, 0x8000));
   c.push_back(cf_or(CF_SP, CF_V0, CF_T0));
   // a0 = heapBase & 0x1FFFFFFF, via sll 3 / srl 3
-  c.push_back(cf_lui(CF_A0, CF_HI(t.heapBase)));  c.push_back(cf_addiu(CF_A0, CF_A0, CF_LO(t.heapBase)));
-  c.push_back(cf_sll(CF_A0, CF_A0, 3));  c.push_back(cf_srl(CF_A0, CF_A0, 3));
+  c.push_back(cf_lui(CF_A0, CF_HI(t.heapBase)));
+  c.push_back(cf_addiu(CF_A0, CF_A0, CF_LO(t.heapBase)));
+  c.push_back(cf_sll(CF_A0, CF_A0, 3));
+  c.push_back(cf_srl(CF_A0, CF_A0, 3));
   // a1 = (v0 - mem[stackTopBase2]) - a0
   c.push_back(cf_lui(CF_V1, CF_HI(t.stackTopBase2)));
   c.push_back(cf_lw(CF_V1, CF_V1, CF_LO(t.stackTopBase2)));
@@ -180,21 +230,25 @@ static inline std::vector<uint32_t> crt0_fixture_words(const Crt0Template& t) {
     c.push_back(cf_lui(CF_AT, CF_HI(t.raSave)));
     c.push_back(cf_sw(CF_RA, CF_AT, CF_LO(t.raSave)));
   }
-  c.push_back(cf_lui(CF_GP, CF_HI(t.gp)));  c.push_back(cf_addiu(CF_GP, CF_GP, CF_LO(t.gp)));
+  c.push_back(cf_lui(CF_GP, CF_HI(t.gp)));
+  c.push_back(cf_addiu(CF_GP, CF_GP, CF_LO(t.gp)));
   c.push_back(cf_addu(CF_FP, CF_SP, CF_ZERO));
   c.push_back(cf_jal(t.libcInit));
-  c.push_back(cf_addi(CF_A0, CF_A0, 4));                      // the delay slot IS the +4
+  c.push_back(cf_addi(CF_A0, CF_A0, 4)); // the delay slot IS the +4
   return c;
 }
 
 // crt0_fixture_emit — write the prologue AND the InitHeap thunk it calls through `store(addr, word)`.
 // Templated on the sink so the audit test can write into a std::map standing in for guest RAM while
 // crt0_extract's selftest writes into a PS-X EXE image, WITHOUT a second copy of the emitter.
-template <class Store>
-static inline void crt0_fixture_emit(const Crt0Template& t, Store store) {
+template <class Store> static inline void crt0_fixture_emit(const Crt0Template &t, Store store) {
   const std::vector<uint32_t> c = crt0_fixture_words(t);
-  for (size_t i = 0; i < c.size(); i++) store(t.entry + 4u * (uint32_t)i, c[i]);
-  for (int i = 0; i < 3; i++) store(t.libcInit + 4u * (uint32_t)i, CRT0_INITHEAP_THUNK[i]);
+  for (size_t i = 0; i < c.size(); i++) {
+    store(t.entry + 4u * (uint32_t)i, c[i]);
+  }
+  for (int i = 0; i < 3; i++) {
+    store(t.libcInit + 4u * (uint32_t)i, CRT0_INITHEAP_THUNK[i]);
+  }
 }
 
 // ── the two measured shapes ─────────────────────────────────────────────────────────────────────────
@@ -203,14 +257,35 @@ static inline void crt0_fixture_emit(const Crt0Template& t, Store store) {
 // here rather than per-consumer: a consumer inventing its own addresses is a consumer whose "pass" says
 // nothing about any shipping game.
 static const uint32_t CRT0_FIXTURE_TOMBA2_ENTRY = 0x800896E0u;
-static const uint32_t CRT0_FIXTURE_MMX4_ENTRY   = 0x800DAE8Cu;
+static const uint32_t CRT0_FIXTURE_MMX4_ENTRY = 0x800DAE8Cu;
 
 static inline Crt0Template crt0_fixture_psyq_tomba2(void) {
-  return Crt0Template{CRT0_FIXTURE_TOMBA2_ENTRY, 0x800BE0D8u, 0x80106228u, 0x800A3F88u, 0x800A3F8Cu,
-                      0x80106228u, 0x800BE0D4u, 0x80089860u, -8, 0x800ABEF8u, 0x800ABEF4u,
-                      0x800BE0D8u, false};
+  return Crt0Template{CRT0_FIXTURE_TOMBA2_ENTRY,
+                      0x800BE0D8u,
+                      0x80106228u,
+                      0x800A3F88u,
+                      0x800A3F8Cu,
+                      0x80106228u,
+                      0x800BE0D4u,
+                      0x80089860u,
+                      -8,
+                      0x800ABEF8u,
+                      0x800ABEF4u,
+                      0x800BE0D8u,
+                      false};
 }
 static inline Crt0Template crt0_fixture_psyq_mmx4(void) {
-  return Crt0Template{CRT0_FIXTURE_MMX4_ENTRY, 0x8012F418u, 0x80175F38u, 0x800DAF3Cu, 0x8011CB74u,
-                      0x80175F38u, 0x8012F418u, 0x800EDCDCu, 0, 0, 0, 0x8012F418u, true};
+  return Crt0Template{CRT0_FIXTURE_MMX4_ENTRY,
+                      0x8012F418u,
+                      0x80175F38u,
+                      0x800DAF3Cu,
+                      0x8011CB74u,
+                      0x80175F38u,
+                      0x8012F418u,
+                      0x800EDCDCu,
+                      0,
+                      0,
+                      0,
+                      0x8012F418u,
+                      true};
 }

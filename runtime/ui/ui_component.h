@@ -59,65 +59,70 @@ namespace psx::ui {
 // tests/test_rml_text_encoding.cpp asserts the whole UI subsystem holds exactly one raw inner-RML
 // call site — the one in ui_component.cpp. Add readouts by calling set_text, never by reaching for
 // that setter again.
-void set_text(Rml::Element* el, std::string_view text);
+void set_text(Rml::Element *el, std::string_view text);
 
 class Component {
 public:
-    Component() = default;
-    explicit Component(Rml::Element* root) : mRoot(root) {}
-    virtual ~Component();
+  Component() = default;
+  explicit Component(Rml::Element *root) : mRoot(root) {}
+  virtual ~Component();
 
-    Component(const Component&)            = delete;
-    Component& operator=(const Component&) = delete;
+  Component(const Component &) = delete;
+  Component &operator=(const Component &) = delete;
 
-    // Per-frame CPU step. The base walks children; override to refresh your own element and call
-    // Component::update() to keep the walk going.
-    virtual void update();
+  // Per-frame CPU step. The base walks children; override to refresh your own element and call
+  // Component::update() to keep the walk going.
+  virtual void update();
 
-    // Focus this component, or the first child that will take focus. Returns false if nothing did.
-    virtual bool focus();
+  // Focus this component, or the first child that will take focus. Returns false if nothing did.
+  virtual bool focus();
 
-    virtual bool selected() const { return mRoot && mRoot->IsPseudoClassSet("selected"); }
-    virtual void set_selected(bool value);
-    virtual bool disabled() const { return mRoot && mRoot->IsPseudoClassSet("disabled"); }
-    virtual void set_disabled(bool value);
+  virtual bool selected() const {
+    return mRoot && mRoot->IsPseudoClassSet("selected");
+  }
+  virtual void set_selected(bool value);
+  virtual bool disabled() const {
+    return mRoot && mRoot->IsPseudoClassSet("disabled");
+  }
+  virtual void set_disabled(bool value);
 
-    // Register an event listener whose lifetime is this component's. `element` may be null, meaning
-    // this component's own root.
-    void listen(Rml::Element* element, Rml::EventId event, ScopedEventListener::Callback callback,
-                bool capture = false);
+  // Register an event listener whose lifetime is this component's. `element` may be null, meaning
+  // this component's own root.
+  void listen(Rml::Element *element, Rml::EventId event, ScopedEventListener::Callback callback, bool capture = false);
 
-    // Is `element` this component's root or a descendant of it?
-    bool contains(Rml::Element* element) const;
+  // Is `element` this component's root or a descendant of it?
+  bool contains(Rml::Element *element) const;
 
-    Rml::Element* root() const { return mRoot; }
+  Rml::Element *root() const {
+    return mRoot;
+  }
 
 protected:
-    // ADOPT an authored element as a child component (see the header comment for why this is not
-    // Dusklight's `add_child`). `root` must be a descendant of this component's root; the returned
-    // reference stays valid until this component is destroyed or clear_children() is called.
-    // (Dusklight constrains the equivalent with a C++20 `requires`; the framework builds as C++17
-    // — cmake/psxport.cmake sets CXX_STANDARD 17 for the mednafen backends — so the same constraint
-    // is a static_assert. Same guarantee, same message when it fires.)
-    template <typename T, typename... Args>
-    T& adopt(Rml::Element* root, Args&&... args) {
-        static_assert(std::is_base_of<Component, T>::value,
-                      "adopt<T>() requires T to derive from psx::ui::Component");
-        auto child = std::make_unique<T>(root, std::forward<Args>(args)...);
-        T& ref     = *child;
-        mChildren.emplace_back(std::move(child));
-        return ref;
-    }
+  // ADOPT an authored element as a child component (see the header comment for why this is not
+  // Dusklight's `add_child`). `root` must be a descendant of this component's root; the returned
+  // reference stays valid until this component is destroyed or clear_children() is called.
+  // (Dusklight constrains the equivalent with a C++20 `requires`; the framework builds as C++17
+  // — cmake/psxport.cmake sets CXX_STANDARD 17 for the mednafen backends — so the same constraint
+  // is a static_assert. Same guarantee, same message when it fires.)
+  template <typename T, typename... Args> T &adopt(Rml::Element *root, Args &&...args) {
+    static_assert(std::is_base_of<Component, T>::value, "adopt<T>() requires T to derive from psx::ui::Component");
+    auto child = std::make_unique<T>(root, std::forward<Args>(args)...);
+    T &ref = *child;
+    mChildren.emplace_back(std::move(child));
+    return ref;
+  }
 
-    // Drop every child component (and therefore every listener they registered). Does NOT remove
-    // the authored elements — we do not own them, the document does.
-    void clear_children() { mChildren.clear(); }
+  // Drop every child component (and therefore every listener they registered). Does NOT remove
+  // the authored elements — we do not own them, the document does.
+  void clear_children() {
+    mChildren.clear();
+  }
 
-    Rml::Element*                                   mRoot = nullptr;
-    std::vector<std::unique_ptr<Component>>         mChildren;
-    std::vector<std::unique_ptr<ScopedEventListener>> mListeners;
+  Rml::Element *mRoot = nullptr;
+  std::vector<std::unique_ptr<Component>> mChildren;
+  std::vector<std::unique_ptr<ScopedEventListener>> mListeners;
 };
 
-}  // namespace psx::ui
+} // namespace psx::ui
 
 #endif

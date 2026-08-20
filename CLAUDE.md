@@ -1,27 +1,29 @@
 # psxport — a PSX→PC static-recompilation framework
 
-> ## ⛳ RESUME HERE — read this before anything else (2026-08-20)
->
-> The last session ended MID-CHANGE, deliberately. **`$PSX/psxport` has ~265 uncommitted modified
-> files and does NOT build.** That is not damage to repair on sight; it is where four standing USER
-> decisions were being applied when the session ran out.
->
-> **A "continue" starts at kanban #115** — `python3 tools/kanban.py show 115`. Its companion note,
-> with every measurement, is `external/psxport/docs/plans/toolchain-and-oracle-decisions.md`.
->
-> The four decisions, USER 2026-08-20, **not open questions**: adopt **clang-format** (and clang as
-> the compiler, not started), **drop `extern "C"`**, and **drop beetle** — whose scope is the one
-> thing still to ASK about, because beetle is the GPU oracle *and* the GTE/MDEC/SPU backends.
->
-> First move: decide `PointerAlignment` in `.clang-format` before re-sweeping, or the first run
-> rewrites every pointer in the tree. To abandon the half-change instead: `cd $PSX/psxport && git
-> checkout -- .`
->
-> Tomba2Engine itself is untouched and still builds; its dirty files are the unrelated
-> `game/render/fx_rope_strip.cpp` work in progress.
-
 **Unlabeled content is machine convention, revisable by any session. USER lines are verbatim dated
 quotes and only those.**
+
+## NEVER DUPLICATE CODE — no matter the reason
+
+USER, 2026-08-20: *"Never duplicate code no matter the reason"*. No exceptions clause, and none is
+implied by "it's only a declaration", "the copies are identical", or a comment admitting the copy.
+
+This is not style. It cost a real bug the same day: `rec_coro_run` was declared in `core.h` inside its
+`extern "C"` block AND in `scheduler.h` with ordinary C++ linkage. The two disagreed about linkage,
+which is invisible until something reorders includes — and clang-format's include sorting promptly
+did, breaking the build in a way that read as a formatter problem. It was not; it was a duplicate.
+
+A sweep for the same shape (every function declared in more than one first-party header) found three
+more, two of them carrying the same latent linkage mismatch:
+
+| duplicate | where | note |
+|---|---|---|
+| `rec_dispatch` | `core.h` (in `extern "C"`) + `guest_abi.h` + `guest_call.h` | both re-declared it WITHOUT the linkage, and both already `#include "core.h"` |
+| `xa_decode_sector` | `c_subsys.h` + `fmv_decode.h` | the copy even carried a comment saying "identical declaration" |
+
+**A copy you have documented is still a copy.** Include the header that owns the thing; one owner per
+declaration. `python3` one-liner that finds these is in the session log — re-run it after any header
+churn.
 
 ## The two bars everything else answers to — the USER's own
 

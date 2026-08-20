@@ -35,14 +35,14 @@
 struct PaceInputs {
   // PSXPORT_NOPACE — the ONE switch that means "run as fast as the host can". It is the only thing
   // that may suppress pacing, in either leg.
-  bool     unpaced = false;
+  bool unpaced = false;
   // GameConfig::paceQuota — how many DISPLAY FIELDS one pacing call represents. < 1 means the port
   // has not declared its cadence; that is a configuration defect, reported via quotaUnset rather
   // than guessed at silently.
-  int      quota = 0;
+  int quota = 0;
   // Sub-frames per pacing call: 1 = pace a whole logic frame, 2 = half (fps60 presents twice per
   // logic frame). < 1 is clamped to 1.
-  int      parts = 1;
+  int parts = 1;
   // The DISPLAY FIELD RATE in milli-hertz — 59940 for NTSC (60000/1001 Hz), 50000 for PAL. Zero is
   // not a rate: it is reported via rateUnset and produces no sleep, because dividing by it would be
   // the arithmetic equivalent of pacing on nothing.
@@ -50,38 +50,46 @@ struct PaceInputs {
   // Monotonic clock reading for this call, and the running deadline carried from the previous
   // paced call. `seeded` false means there has been no previous paced call, so the deadline starts
   // at now.
-  double   nowMs = 0.0;
-  double   nextMs = 0.0;
-  bool     seeded = false;
+  double nowMs = 0.0;
+  double nextMs = 0.0;
+  bool seeded = false;
 };
 
 // The decision. `nextMs` is only meaningful (and must only be stored back) when `paced` is true —
 // a non-pacing call leaves the deadline exactly where it was, so that turning pacing off and on
 // cannot inject a bogus catch-up.
 struct PacePlan {
-  bool   paced = false;       // did this call pace at all?
-  bool   quotaUnset = false;  // quota < 1: the port has not derived its cadence (paced at 1 field)
-  bool   rateUnset = false;   // fieldRateMilliHz == 0: no display clock to pace against
-  double intervalMs = 0.0;    // the target wall-clock spacing of this (sub)frame
-  double sleepMs = 0.0;       // 0 = the deadline has already passed; do not sleep
-  double nextMs = 0.0;        // the deadline to carry forward (valid only when paced)
-  bool   resync = false;      // the deadline was more than one interval in the past: drop the debt
+  bool paced = false;      // did this call pace at all?
+  bool quotaUnset = false; // quota < 1: the port has not derived its cadence (paced at 1 field)
+  bool rateUnset = false;  // fieldRateMilliHz == 0: no display clock to pace against
+  double intervalMs = 0.0; // the target wall-clock spacing of this (sub)frame
+  double sleepMs = 0.0;    // 0 = the deadline has already passed; do not sleep
+  double nextMs = 0.0;     // the deadline to carry forward (valid only when paced)
+  bool resync = false;     // the deadline was more than one interval in the past: drop the debt
 };
 
-inline PacePlan pace_plan(const PaceInputs& in) {
+inline PacePlan pace_plan(const PaceInputs &in) {
   PacePlan p;
-  p.nextMs = in.nextMs;                       // untouched unless we actually pace
+  p.nextMs = in.nextMs; // untouched unless we actually pace
 
   // The ONE switch. Nothing else — not the presence of a window, not the render path, not the leg.
-  if (in.unpaced) return p;
+  if (in.unpaced) {
+    return p;
+  }
 
   // A zero field rate cannot be paced against. Say so instead of substituting a number: the whole
   // point of this change is that the pacing rate is never invented locally.
-  if (in.fieldRateMilliHz == 0) { p.rateUnset = true; return p; }
+  if (in.fieldRateMilliHz == 0) {
+    p.rateUnset = true;
+    return p;
+  }
 
   int parts = in.parts < 1 ? 1 : in.parts;
   int quota = in.quota;
-  if (quota < 1) { p.quotaUnset = true; quota = 1; }
+  if (quota < 1) {
+    p.quotaUnset = true;
+    quota = 1;
+  }
 
   p.paced = true;
   // fields / (fields per second) -> seconds -> ms. quota * 1e6 / millihz is that, without ever

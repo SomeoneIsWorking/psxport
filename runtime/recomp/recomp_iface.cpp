@@ -3,7 +3,11 @@
 // generated symbols (game-agnostic) — the game supplies the pointers.
 #include "recomp_iface.h"
 
-static const RecompRegistry* g_recomp = nullptr;
+static const RecompRegistry *g_recomp = nullptr;
 
-void                  psxport_install_recomp(const RecompRegistry* r) { g_recomp = r; }
-const RecompRegistry* psxport_recomp()                                { return g_recomp; }
+void psxport_install_recomp(const RecompRegistry *r) {
+  g_recomp = r;
+}
+const RecompRegistry *psxport_recomp() {
+  return g_recomp;
+}

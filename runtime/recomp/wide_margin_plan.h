@@ -11,7 +11,9 @@ struct WideMarginPlan {
 
 inline WideMarginPlan plan_wide_margin(int sx, int sy, int native_w, int wide_w, int h) {
   WideMarginPlan p{};
-  if (native_w <= 0 || wide_w <= native_w || h <= 0) return p;
+  if (native_w <= 0 || wide_w <= native_w || h <= 0) {
+    return p;
+  }
   p.draw = true;
   p.x0 = sx + native_w;
   p.y0 = sy;

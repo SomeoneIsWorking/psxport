@@ -11,7 +11,7 @@
 using PainterObjectId = uint32_t;
 
 enum PainterObjectFlags : uint8_t {
-  PAINTER_OBJECT_NONE   = 0,
+  PAINTER_OBJECT_NONE = 0,
   // Compatibility scope flag: emitOrQueue/push maps it into each RqItem::dither. New producers should
   // pass the per-item DTD value explicitly because a single object may contain both draw states.
   PAINTER_OBJECT_DITHER = 1u << 0,
@@ -69,7 +69,9 @@ struct PainterObjectPlan {
   std::vector<size_t> ordinary_items;
   std::vector<PainterCommand> commands;
   std::vector<PainterObjectRange> objects;
-  bool accepted() const { return stats.refusal == PainterObjectRefusal::None; }
+  bool accepted() const {
+    return stats.refusal == PainterObjectRefusal::None;
+  }
 };
 
 #endif

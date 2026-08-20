@@ -60,21 +60,27 @@
 // via core->game->fps60; every touching function is a method (callers use c->game->fps60.method(...)).
 #ifndef GAME_RENDER_FPS60_H
 #define GAME_RENDER_FPS60_H
+#include "render_queue.h" // RqItem, RenderQueue (mSink — Tier-1's isolated capture sink)
 #include <stdint.h>
 #include <unordered_map>
 #include <vector>
-#include "render_queue.h"   // RqItem, RenderQueue (mSink — Tier-1's isolated capture sink)
 
 struct Core;
 class Game;
 
 // logic-rate detector (validated lrate_proto): votes on the number of frames each projected-geometry
 // fingerprint is HELD, so the tier knows how many in-betweens to synthesize (Tomba2 logic = 30fps → 1).
-typedef struct { uint64_t last_hash; int held; int period; int votes[9]; long changes; } RateDet;
+typedef struct {
+  uint64_t last_hash;
+  int held;
+  int period;
+  int votes[9];
+  long changes;
+} RateDet;
 
 // ---- Fps60 — the 60fps tier's per-instance interpolation state + methods ------------------------------
 struct Fps60 {
-  Game* game = nullptr;   // owner back-pointer (set in Game()) — gates via active()
+  Game *game = nullptr; // owner back-pointer (set in Game()) — gates via active()
 
   // IS THE TIER LIVE? Two conditions, and both are real: the user asked for it (Mods::fps60) AND this
   // Core's render path allows a PC enhancement to touch the picture (RenderMode::enhancementsAllowed —
@@ -84,39 +90,42 @@ struct Fps60 {
   // (needs Game/Core).
   bool active() const;
   // ---- logic-rate detector (kept) --------------------------------------------------------------------
-  uint64_t mFrameHash = 1469598103934665603ull;   // per-frame projected-geometry fingerprint (rate input)
-  long     mFrameGeom = 0;                          // #verts folded this frame (0 => idle frame)
-  long     mFence     = 0;                          // logic-frame counter
-  int      mCommitGuestFields = 0;                  // explicit cadence for the current commit
-  RateDet  mRd = { 0, 0, 2, {}, 0 };
-  void fold(uint32_t v);                            // fold a projected SXY into the frame fingerprint
-  void rtp(uint32_t op);                            // gte RTP tap (fps60 gate) → fold the new SXY(s)
+  uint64_t mFrameHash = 1469598103934665603ull; // per-frame projected-geometry fingerprint (rate input)
+  long mFrameGeom = 0;                          // #verts folded this frame (0 => idle frame)
+  long mFence = 0;                              // logic-frame counter
+  int mCommitGuestFields = 0;                   // explicit cadence for the current commit
+  RateDet mRd = {0, 0, 2, {}, 0};
+  void fold(uint32_t v); // fold a projected SXY into the frame fingerprint
+  void rtp(uint32_t op); // gte RTP tap (fps60 gate) → fold the new SXY(s)
   // guestFields is the number of display fields advanced by this logic frame. Zero uses
   // GameConfig::paceQuota for ports with one ordinary pacing boundary per logic frame.
-  void frame_commit(Core* core, int guestFields = 0);
+  void frame_commit(Core *core, int guestFields = 0);
 
   // ---- shared camera reader ----------------------------------------------------------------------------
   // Scene camera read choke: a GAME hook fills R(int16 units)/T from that game's own camera state and the
   // framework supplies the game-recorded OFX/OFY/H projection constants. This is the ONE reader the whole
   // native projection path uses (projComposeCore / projComposeCamera / native_terrain) — not fps60-specific;
   // it lives here because every caller already reaches it via c->game->fps60.sceneCam(...).
-  void sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy, float& H);
+  void sceneCam(Core *c, float R[3][3], float T[3], float &ofx, float &ofy, float &H);
 
   // ---- TIER 1: camera-lerp native world (terrain) re-render (docs/fps60-rework.md) ---------------------
   // Two-slot camera store, captured by sceneCam() every REAL (non-override) call — the SAME source
   // terrainRender() reads, rotated cur->prev in lockstep with mRqCur/mRqPrev (present_vk's end-of-frame
   // swap). R is raw int16-unit rows (undivided, the sceneCam/native_terrain convention); T/ofx/ofy/H as
   // sceneCam returns them.
-  struct Fps60Cam { float R[3][3] = {{0,0,0},{0,0,0},{0,0,0}}; float T[3] = {0,0,0};
-                    float ofx = 0, ofy = 0, H = 0; };
+  struct Fps60Cam {
+    float R[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+    float T[3] = {0, 0, 0};
+    float ofx = 0, ofy = 0, H = 0;
+  };
   Fps60Cam mCamCur, mCamPrev;
-  bool     mCamOverrideOn = false;   // set only while tier1Render() is re-invoking terrainRenderAll()
-  Fps60Cam mCamOverride;             // the lerped camera sceneCam() returns while mCamOverrideOn
-  RenderQueue* mSink = nullptr;       // ISOLATED capture sink (Game::rqRedirect points here during the
-                                      // re-render) — never the live `game->rq` the next real frame builds.
-                                      // Heap-allocated lazily (RQ_MAX items is ~16MB — same reason mRqCur/
-                                      // mRqPrev/mRqLerp below are `new[]`, not embedded arrays).
-  long mTier1PrimsThisFrame = 0;     // telemetry: WORLD (terrain+scene-table) prims tier1Render drew into mSink
+  bool mCamOverrideOn = false;   // set only while tier1Render() is re-invoking terrainRenderAll()
+  Fps60Cam mCamOverride;         // the lerped camera sceneCam() returns while mCamOverrideOn
+  RenderQueue *mSink = nullptr;  // ISOLATED capture sink (Game::rqRedirect points here during the
+                                 // re-render) — never the live `game->rq` the next real frame builds.
+                                 // Heap-allocated lazily (RQ_MAX items is ~16MB — same reason mRqCur/
+                                 // mRqPrev/mRqLerp below are `new[]`, not embedded arrays).
+  long mTier1PrimsThisFrame = 0; // telemetry: WORLD (terrain+scene-table) prims tier1Render drew into mSink
   // #50: tier1Render re-renders the native FIELD passes (terrain/scene-table) on the interp frame. During an
   // authored OT sub-scene (hut interior, #49) or any beat where the real frame did NOT run sceneNative, there
   // is no native FIELD to re-render — running it anyway draws the exterior field on interp frames only
@@ -128,7 +137,7 @@ struct Fps60 {
   // Default-true made a game with no producer enter tier1 and call a null hook (or, if made a no-op,
   // discard captured world faces without replacements).
   bool mTier1EligibleCur = false;
-  void tier1Render(Core* core, float t);   // re-run terrainRenderAll() under lerp(mCamPrev,mCamCur,t) into mSink
+  void tier1Render(Core *core, float t); // re-run terrainRenderAll() under lerp(mCamPrev,mCamCur,t) into mSink
 
   // ---- TIER 1 BACKDROP: game-logic-scroll LAYER-TRANSFORM lerp (docs/fps60-rework.md) -----------------
   // Two-slot host capture of PARALLAX_BG_SM's per-frame-varying scroll offset (0x800ED018+0x28/+0x2A),
@@ -136,13 +145,15 @@ struct Fps60 {
   // self-capture. Everything else backdropRender reads (W/H/tilemap ptr/tpage/clutbase/wrap-moduli) is
   // static per-area config, unchanged while the layer runs, so it is safe to re-read directly at present
   // time (same invariant as terrain/scene-table's static geometry) without a capture slot.
-  struct Fps60Bg { int scrollX = 0, scrollY = 0; };
+  struct Fps60Bg {
+    int scrollX = 0, scrollY = 0;
+  };
   Fps60Bg mBgCur, mBgPrev;
-  bool    mBgOverrideOn = false;   // set only while tier1Render() is re-invoking backdropRender()
-  Fps60Bg mBgOverride;             // the wrap-lerped scroll offset backdropRender() reads while mBgOverrideOn
+  bool mBgOverrideOn = false; // set only while tier1Render() is re-invoking backdropRender()
+  Fps60Bg mBgOverride;        // the wrap-lerped scroll offset backdropRender() reads while mBgOverrideOn
   // bgScroll: the scroll-offset read choke Render::backdropRender() calls instead of reading t4+0x28/+0x2A
   // directly — real call: reads + captures into mBgCur; present-time override: returns mBgOverride.
-  void bgScroll(Core* c, uint32_t t4, int& scrollX, int& scrollY);
+  void bgScroll(Core *c, uint32_t t4, int &scrollX, int &scrollY);
 
   // ---- PER-OBJECT TRANSFORM choke (UNIFIED-PATH redesign 2026-07-15, docs/fps60-rework.md) ------------
   // The object's world rotation/position (Robj cmd+0x18, Tobj cmd+0x2C), the last INPUT still read live
@@ -151,10 +162,13 @@ struct Fps60 {
   // read live + capture into mObjCur[cmd]. Interp present
   // (mObjOverrideOn): return lerp(mObjPrev[cmd], mObjCur[cmd], mT). `cmd` = the object's stable render-
   // command block (node+0xC0[i]) = its per-object identity across frames.
-  struct Fps60Obj { float R[3][3]; float T[3]; };
+  struct Fps60Obj {
+    float R[3][3];
+    float T[3];
+  };
   std::unordered_map<uint32_t, Fps60Obj> mObjCur, mObjPrev;
-  bool mObjOverrideOn = false;   // set only while the interp present re-runs the object walk
-  void projObj(Core* c, uint32_t cmd, float Robj[3][3], float Tobj[3]);
+  bool mObjOverrideOn = false; // set only while the interp present re-runs the object walk
+  void projObj(Core *c, uint32_t cmd, float Robj[3][3], float Tobj[3]);
 
   // ---- GUEST-TIME WORLD CAPTURE-ONLY (kanban #33) ------------------------------------------------------
   // Once BOTH presents were unified behind presentPass (both re-render the field WORLD via tier1Render
@@ -175,29 +189,29 @@ struct Fps60 {
   bool mWorldCaptureOnly = false;
 
   // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------
-  RqItem* mRqCur  = nullptr;    // this logic frame's resolved queue snapshot (captured at flush)
-  RqItem* mRqPrev = nullptr;    // previous frame's snapshot (Q[N-1])
+  RqItem *mRqCur = nullptr;  // this logic frame's resolved queue snapshot (captured at flush)
+  RqItem *mRqPrev = nullptr; // previous frame's snapshot (Q[N-1])
   int mNCur = 0, mNPrev = 0, mHavePrev = 0;
   // Running seq offset for the CURRENT logic frame's accumulated captures. Each RenderQueue flush
   // restarts seq at 0, and presentPass merges by (layer, seq), so every appended flush is rebased by
   // the prims already captured this frame. Reset with mNCur at the frame fence (presentRotate).
   uint32_t mSeqBase = 0;
-  void rq_capture(const RqItem* items, int n);      // copy the sorted queue snapshot
-  void present_vk(Core* core);                      // build+present the in-between, then the real frame
+  void rq_capture(const RqItem *items, int n); // copy the sorted queue snapshot
+  void present_vk(Core *core);                 // build+present the in-between, then the real frame
   // presentPass — THE ONE PLACE A FRAME IS BUILT AND EMITTED. Both presents call it; `t` is the ONLY
   // difference between them (USER 2026-07-22: "there should be just one site, the only difference should
   // be whether to lerp"). t=1 serves every lerped input its CURRENT value, so the real frame is just the
   // degenerate in-between — it is not a second code path that happens to agree. Proven, not asserted:
   // with PSXPORT_FPS60_TFORCE=1 the two presents are pixel-identical, 0/76800 over 10 consecutive frames.
-  void presentPass(Core* core, float t);
-  void presentRotate();                             // rotate the cur/prev capture slots after both presents
-  int  mDbg = -1;                                    // PSXPORT_DEBUG=fps60 lazy latch
+  void presentPass(Core *core, float t);
+  void presentRotate(); // rotate the cur/prev capture slots after both presents
+  int mDbg = -1;        // PSXPORT_DEBUG=fps60 lazy latch
 
   // ---- interp parameter + telemetry (UNIFIED PATH, 2026-07-15) ---------------------------------------
   // The interp present is the SAME render re-run under lerped inputs (camera + per-object transforms +
   // backdrop scroll) into mSink, merged with mRqCur's 2D verbatim — no prim matching. mT is the in-between
   // parameter both the camera lerp (tier1Render) and projObj's per-object lerp share.
-  float mT = 0.5f;                    // in-between parameter (t=0.5 for one midpoint at 30->60fps)
+  float mT = 0.5f; // in-between parameter (t=0.5 for one midpoint at 30->60fps)
   // BACKDROP telemetry: prims tier1Render drew into mSink for the backdrop layer (RQ_BACKGROUND) this
   // present, counted separately from mTier1PrimsThisFrame (terrain+scene-table+objects, RQ_WORLD).
   long mBackdropPrimsThisFrame = 0;
@@ -210,7 +224,7 @@ struct Fps60 {
   // unbounded run can't fill disk; toggling the channel back on resets the cap.
   static constexpr int kDumpMax = 600;
   int mDumpSeq = 0;
-  void dumpPresent(Core* core, bool interp);          // called from present_vk after each present pass
+  void dumpPresent(Core *core, bool interp); // called from present_vk after each present pass
   ~Fps60();
 };
 

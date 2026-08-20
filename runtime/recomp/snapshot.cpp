@@ -1,13 +1,13 @@
 // snapshot.cpp — on-demand guest RAM capture. See snapshot.h for the why.
 #include "snapshot.h"
-#include "core.h"
 #include "cfg.h"
+#include "core.h"
 #include "fs_util.h"
-#include <lucent/log.h>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <lucent/log.h>
 #include <string>
 #include <vector>
 
@@ -16,52 +16,73 @@ namespace {
 // Set from a signal handler, so it must be exactly this type — nothing else is safe to touch there.
 volatile sig_atomic_t g_sig_requested = 0;
 
-void on_usr1(int) { g_sig_requested = 1; }
+void on_usr1(int) {
+  g_sig_requested = 1;
+}
 
 struct Sched {
   bool init = false;
-  std::vector<uint64_t> at;     // explicit frame numbers
-  uint64_t every = 0;           // periodic interval, 0 = off
-  int max = 8;                  // hard cap on images per run
+  std::vector<uint64_t> at; // explicit frame numbers
+  uint64_t every = 0;       // periodic interval, 0 = off
+  int max = 8;              // hard cap on images per run
   int written = 0;
   uint64_t frame = 0;
 };
 
-Sched& sched() { static Sched s; return s; }
+Sched &sched() {
+  static Sched s;
+  return s;
+}
 
-void parse_list(const char* s, std::vector<uint64_t>& out) {
-  if (!s) return;
+void parse_list(const char *s, std::vector<uint64_t> &out) {
+  if (!s) {
+    return;
+  }
   char buf[512];
   snprintf(buf, sizeof buf, "%s", s);
-  for (char* t = strtok(buf, ","); t; t = strtok(nullptr, ","))
+  for (char *t = strtok(buf, ","); t; t = strtok(nullptr, ",")) {
     out.push_back(strtoull(t, nullptr, 0));
+  }
 }
 
 void init_once() {
-  Sched& s = sched();
-  if (s.init) return;
+  Sched &s = sched();
+  if (s.init) {
+    return;
+  }
   s.init = true;
   parse_list(cfg_str("PSXPORT_SNAP_AT"), s.at);
-  if (const char* e = cfg_str("PSXPORT_SNAP_EVERY")) s.every = strtoull(e, nullptr, 0);
-  if (const char* m = cfg_str("PSXPORT_SNAP_MAX")) s.max = atoi(m);
+  if (const char *e = cfg_str("PSXPORT_SNAP_EVERY")) {
+    s.every = strtoull(e, nullptr, 0);
+  }
+  if (const char *m = cfg_str("PSXPORT_SNAP_MAX")) {
+    s.max = atoi(m);
+  }
   // SIGUSR1 is installed unconditionally: it costs nothing, and the whole point is to be able to
   // snapshot a run that was NOT started with any snapshot flag set — which is every interesting run,
   // because you rarely know in advance that a state is worth capturing.
   signal(SIGUSR1, on_usr1);
-  if (!s.at.empty() || s.every)
-    lucent::info("snap", "scheduled: {} explicit frame(s), every={}, max={} "
-                         "(also: kill -USR1 {})",
-                 s.at.size(), (unsigned long long)s.every, s.max, (int)getpid());
+  if (!s.at.empty() || s.every) {
+    lucent::info("snap",
+                 "scheduled: {} explicit frame(s), every={}, max={} "
+                 "(also: kill -USR1 {})",
+                 s.at.size(),
+                 (unsigned long long)s.every,
+                 s.max,
+                 (int)getpid());
+  }
 }
 
-}  // namespace
+} // namespace
 
-bool snapshot_now(Core* c, const char* why) {
-  Sched& s = sched();
+bool snapshot_now(Core *c, const char *why) {
+  Sched &s = sched();
   if (s.written >= s.max) {
-    lucent::warn("snap", "cap reached ({}) — NOT writing '{}'. Raise PSXPORT_SNAP_MAX if you meant it; "
-                         "silently skipping would leave you waiting for a file that never arrives.",
-                 s.max, why ? why : "?");
+    lucent::warn("snap",
+                 "cap reached ({}) — NOT writing '{}'. Raise PSXPORT_SNAP_MAX if you meant it; "
+                 "silently skipping would leave you waiting for a file that never arrives.",
+                 s.max,
+                 why ? why : "?");
     return false;
   }
   char path[160], side[192];
@@ -74,12 +95,15 @@ bool snapshot_now(Core* c, const char* why) {
   // A directory of anonymous 2 MB dumps is unusable a day later. Say what this one is.
   std::string meta;
   char line[256];
-  snprintf(line, sizeof line, "frame=%llu\nreason=%s\n", (unsigned long long)s.frame,
-           why ? why : "?");
+  snprintf(line, sizeof line, "frame=%llu\nreason=%s\n", (unsigned long long)s.frame, why ? why : "?");
   meta += line;
-  snprintf(line, sizeof line, "base=0x80000000  size=0x200000\n"
-                              "import: external/psxport/tools/decomp.sh import %s <proj>\n"
-                              "query : tools/whatis.py --ram %s 0x800xxxxx\n", path, path);
+  snprintf(line,
+           sizeof line,
+           "base=0x80000000  size=0x200000\n"
+           "import: external/psxport/tools/decomp.sh import %s <proj>\n"
+           "query : tools/whatis.py --ram %s 0x800xxxxx\n",
+           path,
+           path);
   meta += line;
   Fs::writeFile(side, meta.data(), meta.size());
   s.written++;
@@ -87,9 +111,9 @@ bool snapshot_now(Core* c, const char* why) {
   return true;
 }
 
-void snapshot_tick(Core* c) {
+void snapshot_tick(Core *c) {
   init_once();
-  Sched& s = sched();
+  Sched &s = sched();
   s.frame++;
   if (g_sig_requested) {
     g_sig_requested = 0;
@@ -100,9 +124,10 @@ void snapshot_tick(Core* c) {
     snapshot_now(c, "PSXPORT_SNAP_EVERY");
     return;
   }
-  for (uint64_t f : s.at)
+  for (uint64_t f : s.at) {
     if (f == s.frame) {
       snapshot_now(c, "PSXPORT_SNAP_AT");
       return;
     }
+  }
 }

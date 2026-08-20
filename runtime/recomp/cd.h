@@ -37,13 +37,13 @@ int cd_stream_sectors_due(uint64_t elapsed_ns, int sectors_per_sec, uint32_t alr
 
 class Cd {
 public:
-  Game* game = nullptr;
+  Game *game = nullptr;
   // deferred ingame-music state (suppressed during dialog, resumed after)
-  int      pending_music = 0;   // a looping ingame-music clip is deferred/remembered (was s_pending_music)
-  uint8_t  pm_chan  = 0;        // was s_pm_chan
-  uint32_t pm_start = 0;        // was s_pm_start
-  uint32_t pm_end   = 0;        // was s_pm_end
-  int      verbose  = 0;        // [cd] read/loadfile trace (was s_cd_verbose)
+  int pending_music = 0; // a looping ingame-music clip is deferred/remembered (was s_pending_music)
+  uint8_t pm_chan = 0;   // was s_pm_chan
+  uint32_t pm_start = 0; // was s_pm_start
+  uint32_t pm_end = 0;   // was s_pm_end
+  int verbose = 0;       // [cd] read/loadfile trace (was s_cd_verbose)
 
   // Drive position last set by CdlSetloc (command 0x02), as an LBA; -1 = none set yet.
   //
@@ -58,7 +58,7 @@ public:
   // bookkeeping (no guest memory is touched), and is what a stock-libcd read path needs to exist at
   // all. Surfaced by the Spyro port, which spins forever after its boot splash because no read can
   // resolve a target sector.
-  int32_t  setloc_lba = -1;
+  int32_t setloc_lba = -1;
 
   // Stock-libcd read driving (cd_override.cpp cd_drive_stock_read). `stock_reading` is cleared by the
   // guest's own Pause/Stop, which is what terminates the per-sector callback loop; `in_stock_read`
@@ -77,9 +77,8 @@ public:
   // the guest since then; together they say whether the drive is ahead of or behind real time.
   // Reset on every ReadN/ReadS so a new movie starts with a fresh budget rather than inheriting the
   // last one's credit.
-  uint64_t stream_t0_ns    = 0;
+  uint64_t stream_t0_ns = 0;
   uint32_t stream_delivered = 0;
-
 
   // Sector FIFO for the stock-libcd path. Real hardware presents ONE sector as a byte stream that
   // successive CdGetSector calls pop SEQUENTIALLY — the game reads 3 words (the 4-byte header plus
@@ -89,10 +88,10 @@ public:
   //
   // So the buffer is RAW (2352 bytes) and a cursor tracks how much has been popped, starting past
   // the 12-byte sync pattern — which is exactly where the PSX data FIFO begins in whole-sector mode.
-  uint8_t  sec_raw[2352] = {};
-  int      sec_pos  = 0;      // cursor into sec_raw; 0 = nothing loaded
-  int      sec_len  = 0;      // bytes available in sec_raw
-  int32_t  sec_lba  = -1;     // which LBA sec_raw holds
+  uint8_t sec_raw[2352] = {};
+  int sec_pos = 0;      // cursor into sec_raw; 0 = nothing loaded
+  int sec_len = 0;      // bytes available in sec_raw
+  int32_t sec_lba = -1; // which LBA sec_raw holds
 
   // loadFile(dest, lba, size): direct-call native loadfile (0x8001DB8C semantics) — used by the
   //   PC-native boot/stage path, which owns the START.BIN / stage-overlay load top-down.
@@ -109,7 +108,7 @@ public:
   void toSpuMix(int on);
   // audioTrace(tag): diagnostic — trace the game's CD-volume fade state + XA stream lifecycle,
   //   on change only (`PSXPORT_DEBUG=cd_override`).
-  void audioTrace(const char* tag);
+  void audioTrace(const char *tag);
   // hleInit(): native HLE CdInit — leave RAM in the state FUN_800898a0's SUCCESS path leaves it
   //   (CD-event callback table installed); no controller handshake, no busy-wait.
   void hleInit();
@@ -119,5 +118,5 @@ public:
   //   the ready callback it registered. No-op unless a continuous read is active. Call from the
   //   port's per-field timing so the stream advances at roughly the drive's rate; a file read must
   //   NOT be pumped this way (it terminates itself).
-  void pumpStream(Core* c, int sectors);
+  void pumpStream(Core *c, int sectors);
 };

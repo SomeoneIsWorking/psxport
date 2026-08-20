@@ -43,12 +43,12 @@
 #include "rml_text.h"
 #include <RmlUi/Core/StringUtilities.h>
 
-#include <string>
-#include <vector>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <vector>
 
 // ---- corpus location ---------------------------------------------------------------------------
 // __FILE__ is the absolute path CMake passed the compiler (tests/CMakeLists.txt globs absolute
@@ -57,14 +57,16 @@
 // they computed rather than quietly scanning nothing.
 static std::string repo_root() {
   std::string f = __FILE__;
-  size_t slash = f.find_last_of('/');            // .../tests/test_rml_text_encoding.cpp
-  std::string tests_dir = f.substr(0, slash);    // .../tests
+  size_t slash = f.find_last_of('/');         // .../tests/test_rml_text_encoding.cpp
+  std::string tests_dir = f.substr(0, slash); // .../tests
   return tests_dir.substr(0, tests_dir.find_last_of('/'));
 }
 
-static bool read_file(const std::string& path, std::string& out) {
+static bool read_file(const std::string &path, std::string &out) {
   std::ifstream in(path, std::ios::binary);
-  if (!in) return false;
+  if (!in) {
+    return false;
+  }
   std::ostringstream ss;
   ss << in.rdbuf();
   out = ss.str();
@@ -75,29 +77,42 @@ static bool read_file(const std::string& path, std::string& out) {
 // The exact set RmlUi can decode, read off vendor/rmlui/Source/Core/StringUtilities.cpp
 // (DecodeRml) and vendor/rmlui/Source/Core/ElementText.cpp (BuildToken). Keep this list in step
 // with the vendored library; it is the whole contract this test enforces.
-static bool entity_is_supported(const std::string& name) {
-  if (name.size() > 1 && name[0] == '#') return true;   // numeric character reference
+static bool entity_is_supported(const std::string &name) {
+  if (name.size() > 1 && name[0] == '#') {
+    return true; // numeric character reference
+  }
   return name == "lt" || name == "gt" || name == "amp" || name == "quot" || name == "nbsp";
 }
 
 struct EntityScan {
-  int total = 0;          // every `&...;` reference seen
-  int numeric = 0;        // &#NNN; / &#xHH;  — decoded by DecodeRml
-  int named_ok = 0;       // &lt; &gt; &amp; &quot; &nbsp;
-  std::vector<std::string> unsupported;   // "<file>:<line>: &middot;"
+  int total = 0;                        // every `&...;` reference seen
+  int numeric = 0;                      // &#NNN; / &#xHH;  — decoded by DecodeRml
+  int named_ok = 0;                     // &lt; &gt; &amp; &quot; &nbsp;
+  std::vector<std::string> unsupported; // "<file>:<line>: &middot;"
 };
 
 // Scan one blob. `label` is what a hit is reported against. Entity names are letters/digits, or a
 // leading '#' for a numeric reference; anything else is a bare '&' and not a reference at all.
-static void scan_entities(const std::string& label, const std::string& text, EntityScan& s) {
+static void scan_entities(const std::string &label, const std::string &text, EntityScan &s) {
   int line = 1;
   for (size_t i = 0; i < text.size(); i++) {
-    if (text[i] == '\n') { line++; continue; }
-    if (text[i] != '&') continue;
+    if (text[i] == '\n') {
+      line++;
+      continue;
+    }
+    if (text[i] != '&') {
+      continue;
+    }
     size_t j = i + 1;
-    if (j < text.size() && text[j] == '#') j++;
-    while (j < text.size() && (isalnum((unsigned char)text[j]))) j++;
-    if (j >= text.size() || text[j] != ';' || j == i + 1) continue;   // not a reference
+    if (j < text.size() && text[j] == '#') {
+      j++;
+    }
+    while (j < text.size() && (isalnum((unsigned char)text[j]))) {
+      j++;
+    }
+    if (j >= text.size() || text[j] != ';' || j == i + 1) {
+      continue; // not a reference
+    }
     std::string name = text.substr(i + 1, j - (i + 1));
     s.total++;
     if (!entity_is_supported(name)) {
@@ -130,21 +145,20 @@ static void test_markup_round_trips_through_rmlui(void) {
   // This is what makes rmlui_overlay's "only rewrite when it changed" guard work. SetInnerRML(m)
   // stores DecodeRml(m) on the text element; GetInnerRML() returns EncodeRml(that). So the guard
   // is stable exactly when DecodeRml(rml_text_markup(t)) == t for every t we set.
-  static const char* const cases[] = {
-    "render 1398x720 \xc2\xb7 window 1536x790 \xc2\xb7 internal 3x",
-    "pos X 13029 Y -2872 Z 7161 \xc2\xb7 stage GAME (0x8010637C)",
-    "playing: Song 7 (field)",
-    "a & b < c > d \" e",
-    "&middot;",
-    "",
+  static const char *const cases[] = {
+      "render 1398x720 \xc2\xb7 window 1536x790 \xc2\xb7 internal 3x",
+      "pos X 13029 Y -2872 Z 7161 \xc2\xb7 stage GAME (0x8010637C)",
+      "playing: Song 7 (field)",
+      "a & b < c > d \" e",
+      "&middot;",
+      "",
   };
-  for (const char* t : cases) {
+  for (const char *t : cases) {
     const std::string markup = rml_text_markup(t);
     CHECK_STREQ(Rml::StringUtilities::DecodeRml(markup).c_str(), t);
     // Stability: re-encoding what the DOM would hand back yields the identical markup, so the
     // guard compares equal on the second frame instead of rewriting forever.
-    CHECK_STREQ(Rml::StringUtilities::EncodeRml(Rml::StringUtilities::DecodeRml(markup)).c_str(),
-                 markup.c_str());
+    CHECK_STREQ(Rml::StringUtilities::EncodeRml(Rml::StringUtilities::DecodeRml(markup)).c_str(), markup.c_str());
   }
 }
 
@@ -158,38 +172,35 @@ static void test_markup_round_trips_through_rmlui(void) {
 static void test_old_separator_still_reproduces_the_bug(void) {
   // BEFORE — markup with an HTML entity name. RmlUi passes it through untouched, so the DOM holds
   // the literal characters and the font draws "&middot;". This is the reported symptom.
-  const char* kOldVideo = "render 1398x720 &middot; window 1536x790 &middot; internal 3x";
+  const char *kOldVideo = "render 1398x720 &middot; window 1536x790 &middot; internal 3x";
   const std::string old_dom = Rml::StringUtilities::DecodeRml(kOldVideo);
   CHECK_STREQ(old_dom.c_str(), "render 1398x720 &middot; window 1536x790 &middot; internal 3x");
-  CHECK(old_dom.find("&middot;") != std::string::npos);   // the literal survives: the bug
+  CHECK(old_dom.find("&middot;") != std::string::npos); // the literal survives: the bug
 
   // AFTER — the same line composed as DATA with a real U+00B7 and encoded at the boundary. The DOM
   // holds the character itself, and there is no entity anywhere for RmlUi to fail to decode.
-  const char* kNewVideo = "render 1398x720 \xc2\xb7 window 1536x790 \xc2\xb7 internal 3x";
+  const char *kNewVideo = "render 1398x720 \xc2\xb7 window 1536x790 \xc2\xb7 internal 3x";
   const std::string new_dom = Rml::StringUtilities::DecodeRml(rml_text_markup(kNewVideo));
   CHECK_STREQ(new_dom.c_str(), kNewVideo);
   CHECK(new_dom.find("&middot;") == std::string::npos);
-  CHECK(new_dom.find("&") == std::string::npos);          // no entity of any kind reaches the font
+  CHECK(new_dom.find("&") == std::string::npos); // no entity of any kind reaches the font
 
   // Same for the world readout line.
-  const char* kOldWorld = "pos X 13029 Y -2872 Z 7161 &middot; stage GAME (0x8010637C)";
+  const char *kOldWorld = "pos X 13029 Y -2872 Z 7161 &middot; stage GAME (0x8010637C)";
   CHECK(Rml::StringUtilities::DecodeRml(kOldWorld).find("&middot;") != std::string::npos);
-  const char* kNewWorld = "pos X 13029 Y -2872 Z 7161 \xc2\xb7 stage GAME (0x8010637C)";
+  const char *kNewWorld = "pos X 13029 Y -2872 Z 7161 \xc2\xb7 stage GAME (0x8010637C)";
   CHECK_STREQ(Rml::StringUtilities::DecodeRml(rml_text_markup(kNewWorld)).c_str(), kNewWorld);
 
   // THE SECOND DEFECT, measured rather than argued: the old "only rewrite when it changed" guard
   // was `GetInnerRML() != raw_string`. GetInnerRML() is EncodeRml(stored_text), so reproduce it —
   // and it does NOT equal the raw string, which is why the comparison was true on every frame and
   // the element was reparsed and relaid-out forever.
-  const std::string old_get_inner =
-      Rml::StringUtilities::EncodeRml(Rml::StringUtilities::DecodeRml(kOldVideo));
-  CHECK(old_get_inner != std::string(kOldVideo));                 // guard could never fire
-  CHECK_STREQ(old_get_inner.c_str(),
-              "render 1398x720 &amp;middot; window 1536x790 &amp;middot; internal 3x");
+  const std::string old_get_inner = Rml::StringUtilities::EncodeRml(Rml::StringUtilities::DecodeRml(kOldVideo));
+  CHECK(old_get_inner != std::string(kOldVideo)); // guard could never fire
+  CHECK_STREQ(old_get_inner.c_str(), "render 1398x720 &amp;middot; window 1536x790 &amp;middot; internal 3x");
   // With the fix the two sides are the same string, so the guard fires and the rewrite stops.
   const std::string new_markup = rml_text_markup(kNewVideo);
-  CHECK_STREQ(Rml::StringUtilities::EncodeRml(Rml::StringUtilities::DecodeRml(new_markup)).c_str(),
-              new_markup.c_str());
+  CHECK_STREQ(Rml::StringUtilities::EncodeRml(Rml::StringUtilities::DecodeRml(new_markup)).c_str(), new_markup.c_str());
 }
 
 // ---- 2. the lint's own self-test -----------------------------------------------------------------
@@ -208,14 +219,14 @@ static void test_lint_selftest(void) {
 
 // ---- 3. the shipped corpus ------------------------------------------------------------------------
 static void test_shipped_rml_assets_use_only_decodable_entities(void) {
-  static const char* const files[] = {
-    "assets/rml/menu.rml",
-    "assets/rml/rml.rcss",
-    "assets/rml/menu.rcss",
+  static const char *const files[] = {
+      "assets/rml/menu.rml",
+      "assets/rml/rml.rcss",
+      "assets/rml/menu.rcss",
   };
   EntityScan s;
   int scanned = 0;
-  for (const char* rel : files) {
+  for (const char *rel : files) {
     std::string blob;
     const std::string path = repo_root() + "/" + rel;
     // REFUSE rather than return empty: a missing corpus must fail, not read as "clean".
@@ -227,11 +238,17 @@ static void test_shipped_rml_assets_use_only_decodable_entities(void) {
     scan_entities(rel, blob, s);
   }
   CHECK_EQ(scanned, (int)(sizeof(files) / sizeof(files[0])));
-  fprintf(stderr, "    [lint] scanned %d files, %d entity refs (%d numeric, %d supported-named), "
-                  "%d UNSUPPORTED\n",
-          scanned, s.total, s.numeric, s.named_ok, (int)s.unsupported.size());
-  for (const std::string& hit : s.unsupported)
+  fprintf(stderr,
+          "    [lint] scanned %d files, %d entity refs (%d numeric, %d supported-named), "
+          "%d UNSUPPORTED\n",
+          scanned,
+          s.total,
+          s.numeric,
+          s.named_ok,
+          (int)s.unsupported.size());
+  for (const std::string &hit : s.unsupported) {
     fprintf(stderr, "    [lint]   RmlUi cannot decode: %s\n", hit.c_str());
+  }
   // Denominator: the corpus is known to contain entity references, so a zero here would mean the
   // scanner broke rather than that the assets are clean.
   CHECK(s.total > 0);
@@ -252,7 +269,7 @@ static void test_shipped_rml_assets_use_only_decodable_entities(void) {
 // someone remembers this file. So the corpus is `runtime/ui/**` walked at run time, plus the
 // overlay shell, and the test REFUSES (rather than passing) if that walk finds nothing.
 static void test_overlay_routes_all_text_through_one_boundary(void) {
-  std::vector<std::string> corpus;   // repo-relative paths
+  std::vector<std::string> corpus; // repo-relative paths
 
   const std::string ui_dir = repo_root() + "/runtime/ui";
   std::error_code ec;
@@ -260,10 +277,14 @@ static void test_overlay_routes_all_text_through_one_boundary(void) {
     PT_FAILED("runtime/ui does not exist, so this test scanned NOTHING: %s", ui_dir.c_str());
     return;
   }
-  for (const auto& e : std::filesystem::directory_iterator(ui_dir, ec)) {
-    if (!e.is_regular_file()) continue;
+  for (const auto &e : std::filesystem::directory_iterator(ui_dir, ec)) {
+    if (!e.is_regular_file()) {
+      continue;
+    }
     const std::string ext = e.path().extension().string();
-    if (ext == ".cpp" || ext == ".h") corpus.push_back("runtime/ui/" + e.path().filename().string());
+    if (ext == ".cpp" || ext == ".h") {
+      corpus.push_back("runtime/ui/" + e.path().filename().string());
+    }
   }
   // The overlay shell still owns RmlUi's lifetime and could reintroduce a raw setter on its own.
   corpus.push_back("runtime/recomp/rmlui_overlay.cpp");
@@ -275,27 +296,29 @@ static void test_overlay_routes_all_text_through_one_boundary(void) {
 
   int calls = 0, scanned = 0;
   std::vector<std::string> sites;
-  for (const std::string& rel : corpus) {
+  for (const std::string &rel : corpus) {
     std::string src;
     if (!read_file(repo_root() + "/" + rel, src)) {
       PT_FAILED("UI source not readable, so this test's corpus is INCOMPLETE: %s", rel.c_str());
       continue;
     }
     scanned++;
-    for (size_t p = src.find("SetInnerRML("); p != std::string::npos;
-         p = src.find("SetInnerRML(", p + 1)) {
+    for (size_t p = src.find("SetInnerRML("); p != std::string::npos; p = src.find("SetInnerRML(", p + 1)) {
       calls++;
       sites.push_back(rel);
     }
   }
-  fprintf(stderr, "    [lint] UI subsystem: scanned %d file(s), %d raw SetInnerRML( call site(s)\n",
-          scanned, calls);
-  for (const std::string& s : sites) fprintf(stderr, "    [lint]   call site in: %s\n", s.c_str());
+  fprintf(stderr, "    [lint] UI subsystem: scanned %d file(s), %d raw SetInnerRML( call site(s)\n", scanned, calls);
+  for (const std::string &s : sites) {
+    fprintf(stderr, "    [lint]   call site in: %s\n", s.c_str());
+  }
   CHECK_EQ(scanned, (int)corpus.size());
   CHECK_EQ(calls, 1);
   // And it must be the ONE we mean. A single raw setter that had migrated into, say, a row widget
   // would satisfy the count while defeating the purpose.
-  if (calls == 1) CHECK_STREQ(sites[0].c_str(), "runtime/ui/ui_component.cpp");
+  if (calls == 1) {
+    CHECK_STREQ(sites[0].c_str(), "runtime/ui/ui_component.cpp");
+  }
 }
 
 int main(void) {

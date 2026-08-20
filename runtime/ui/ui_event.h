@@ -24,30 +24,29 @@ namespace psx::ui {
 
 class ScopedEventListener final : public Rml::EventListener {
 public:
-    using Callback = std::function<void(Rml::Event&)>;
+  using Callback = std::function<void(Rml::Event &)>;
 
-    ScopedEventListener(Rml::Element* element, Rml::EventId event, Callback callback,
-                        bool capture = false);
-    ~ScopedEventListener() override;
+  ScopedEventListener(Rml::Element *element, Rml::EventId event, Callback callback, bool capture = false);
+  ~ScopedEventListener() override;
 
-    ScopedEventListener(const ScopedEventListener&)            = delete;
-    ScopedEventListener& operator=(const ScopedEventListener&) = delete;
-    ScopedEventListener(ScopedEventListener&&)                 = delete;
-    ScopedEventListener& operator=(ScopedEventListener&&)      = delete;
+  ScopedEventListener(const ScopedEventListener &) = delete;
+  ScopedEventListener &operator=(const ScopedEventListener &) = delete;
+  ScopedEventListener(ScopedEventListener &&) = delete;
+  ScopedEventListener &operator=(ScopedEventListener &&) = delete;
 
-    void ProcessEvent(Rml::Event& event) override;
-    // RmlUi calls this when the element we registered on is destroyed. Forgetting the pointer here
-    // is what makes destruction-after-the-document safe: the destructor then has nothing to
-    // deregister from, instead of calling into freed memory.
-    void OnDetach(Rml::Element* element) override;
+  void ProcessEvent(Rml::Event &event) override;
+  // RmlUi calls this when the element we registered on is destroyed. Forgetting the pointer here
+  // is what makes destruction-after-the-document safe: the destructor then has nothing to
+  // deregister from, instead of calling into freed memory.
+  void OnDetach(Rml::Element *element) override;
 
 private:
-    Rml::Element*  mElement = nullptr;
-    Rml::EventId   mEvent   = Rml::EventId::Invalid;
-    bool           mCapture = false;
-    Callback       mCallback;
+  Rml::Element *mElement = nullptr;
+  Rml::EventId mEvent = Rml::EventId::Invalid;
+  bool mCapture = false;
+  Callback mCallback;
 };
 
-}  // namespace psx::ui
+} // namespace psx::ui
 
 #endif

@@ -16,11 +16,11 @@
 // window: an inherited mask does not merely drop ranges, it makes the harness's headline verdict a
 // statement about a region it blinded itself to. Empty-and-noisy is recoverable; silently-wrong is not.
 #pragma once
-#include <stdint.h>
-#include <stdio.h>    // snprintf (describe())
-#include <stddef.h>   // size_t
 #include "game_iface.h"
 #include <lucent/log.h>
+#include <stddef.h> // size_t
+#include <stdint.h>
+#include <stdio.h> // snprintf (describe())
 
 // The render-noise windows of ONE game, all derived from GameConfig. `hi` is EXCLUSIVE everywhere.
 //
@@ -40,10 +40,10 @@
 // 0x800E809C, which lands in the `env` window, not here.)
 struct RenderNoiseMask {
   uint32_t poolLo = 0, poolHi = 0;
-  uint32_t otLo   = 0, otHi   = 0;
-  uint32_t envLo  = 0, envHi  = 0;   // empty unless the OT sits just above the pool (see ENV_SLACK)
-  uint32_t ptrLo  = 0, ptrHi  = 0;
-  bool known = false;                // false => covers() is EMPTY, and something already said so
+  uint32_t otLo = 0, otHi = 0;
+  uint32_t envLo = 0, envHi = 0; // empty unless the OT sits just above the pool (see ENV_SLACK)
+  uint32_t ptrLo = 0, ptrHi = 0;
+  bool known = false; // false => covers() is EMPTY, and something already said so
 
   // How far above the packet pool the OT may sit for the words BETWEEN them to count as render noise
   // (draw env / dwell counter). Tomba!2: 0x240. A game whose OT is nowhere near its pool gets no env
@@ -51,11 +51,21 @@ struct RenderNoiseMask {
   static constexpr uint32_t ENV_SLACK = 0x1000u;
 
   bool covers(uint32_t a) const {
-    if (!known) return false;
-    if (a >= poolLo && a < poolHi) return true;
-    if (a >= otLo   && a < otHi)   return true;
-    if (a >= envLo  && a < envHi)  return true;
-    if (a >= ptrLo  && a < ptrHi)  return true;
+    if (!known) {
+      return false;
+    }
+    if (a >= poolLo && a < poolHi) {
+      return true;
+    }
+    if (a >= otLo && a < otHi) {
+      return true;
+    }
+    if (a >= envLo && a < envHi) {
+      return true;
+    }
+    if (a >= ptrLo && a < ptrHi) {
+      return true;
+    }
     return false;
   }
 
@@ -66,11 +76,11 @@ struct RenderNoiseMask {
   // Build the mask for `cfg`. `who` names the harness in the blind-mask warning, so the log says
   // which run's verdict is affected. Warns AT MOST ONCE per process (an inline function's local
   // static is one object across every TU), because these are per-byte-hot call sites.
-  static RenderNoiseMask from(const GameConfig* cfg, const char* who) {
+  static RenderNoiseMask from(const GameConfig *cfg, const char *who) {
     RenderNoiseMask m;
     const bool havePool = cfg && cfg->packetPoolBase && cfg->packetPoolStride;
-    const bool haveOt   = cfg && cfg->otRegionBase   && cfg->otRegionStride;
-    const bool havePtrs = cfg && cfg->poolPtrCur     && cfg->poolPtrLast;
+    const bool haveOt = cfg && cfg->otRegionBase && cfg->otRegionStride;
+    const bool havePtrs = cfg && cfg->poolPtrCur && cfg->poolPtrLast;
     if (!havePool && !haveOt && !havePtrs) {
       static bool warned = false;
       if (!warned) {
@@ -80,19 +90,28 @@ struct RenderNoiseMask {
                      "are all 0 for this game, so RENDER-PATH NOISE WILL BE REPORTED AS GAMEPLAY "
                      "DIVERGENCE. It is NOT falling back to another game's window (that would silently "
                      "delete real divergences from the verdict). RE the packet pool / ordering table and "
-                     "fill those fields.", who);
+                     "fill those fields.",
+                     who);
       }
       return m;
     }
-    if (havePool) { m.poolLo = cfg->packetPoolBase; m.poolHi = cfg->packetPoolBase + 2u * cfg->packetPoolStride; }
-    if (haveOt)   { m.otLo   = cfg->otRegionBase;   m.otHi   = cfg->otRegionBase   + 2u * cfg->otRegionStride;   }
+    if (havePool) {
+      m.poolLo = cfg->packetPoolBase;
+      m.poolHi = cfg->packetPoolBase + 2u * cfg->packetPoolStride;
+    }
+    if (haveOt) {
+      m.otLo = cfg->otRegionBase;
+      m.otHi = cfg->otRegionBase + 2u * cfg->otRegionStride;
+    }
     if (havePtrs) {
       const uint32_t lo = cfg->poolPtrLast < cfg->poolPtrCur ? cfg->poolPtrLast : cfg->poolPtrCur;
-      const uint32_t hi = cfg->poolPtrLast < cfg->poolPtrCur ? cfg->poolPtrCur  : cfg->poolPtrLast;
-      m.ptrLo = lo - 4u; m.ptrHi = hi + 8u;
+      const uint32_t hi = cfg->poolPtrLast < cfg->poolPtrCur ? cfg->poolPtrCur : cfg->poolPtrLast;
+      m.ptrLo = lo - 4u;
+      m.ptrHi = hi + 8u;
     }
     if (havePool && haveOt && m.otLo >= m.poolHi && m.otLo - m.poolHi <= ENV_SLACK) {
-      m.envLo = m.poolHi; m.envHi = m.otLo;
+      m.envLo = m.poolHi;
+      m.envHi = m.otLo;
     }
     m.known = true;
     // A PARTIAL mask is still a blind spot, and the caller's verdict depends on which part is missing —
@@ -104,8 +123,11 @@ struct RenderNoiseMask {
         lucent::warn("render-noise",
                      "{}: the render-region mask is PARTIAL — packet pool {}, ordering table {}, pool "
                      "pointers {}. The unset parts mask NOTHING, so divergence reported there may be "
-                     "render noise rather than a gameplay bug.", who,
-                     havePool ? "ok" : "MISSING", haveOt ? "ok" : "MISSING", havePtrs ? "ok" : "MISSING");
+                     "render noise rather than a gameplay bug.",
+                     who,
+                     havePool ? "ok" : "MISSING",
+                     haveOt ? "ok" : "MISSING",
+                     havePtrs ? "ok" : "MISSING");
       }
     }
     return m;
@@ -114,10 +136,23 @@ struct RenderNoiseMask {
   // One line describing what is actually masked — for a harness report header, which must never print
   // another game's addresses as if they were this run's.
   // Returns a caller-owned string built into `buf`.
-  const char* describe(char* buf, size_t n) const {
-    if (!known) { snprintf(buf, n, "(no render region masked — GameConfig packet-pool/OT fields unset)"); return buf; }
-    snprintf(buf, n, "pool 0x%08X..0x%08X  OT 0x%08X..0x%08X  env 0x%08X..0x%08X  ptrs 0x%08X..0x%08X (%u B)",
-             poolLo, poolHi, otLo, otHi, envLo, envHi, ptrLo, ptrHi, bytes());
+  const char *describe(char *buf, size_t n) const {
+    if (!known) {
+      snprintf(buf, n, "(no render region masked — GameConfig packet-pool/OT fields unset)");
+      return buf;
+    }
+    snprintf(buf,
+             n,
+             "pool 0x%08X..0x%08X  OT 0x%08X..0x%08X  env 0x%08X..0x%08X  ptrs 0x%08X..0x%08X (%u B)",
+             poolLo,
+             poolHi,
+             otLo,
+             otHi,
+             envLo,
+             envHi,
+             ptrLo,
+             ptrHi,
+             bytes());
     return buf;
   }
 };

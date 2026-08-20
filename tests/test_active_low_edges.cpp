@@ -1,5 +1,5 @@
-#include "testutil.h"
 #include "active_low_edges.h"
+#include "testutil.h"
 
 static void test_press_hold_release_and_reset() {
   ActiveLowEdges edges;
@@ -34,7 +34,6 @@ static void test_press_hold_release_and_reset() {
   edges.sample(0xFFFFu);
   edges.sample((uint16_t)(0xFFFFu & ~Start));
   CHECK(edges.pressed(Start));
-
 }
 
 int main() {

@@ -23,38 +23,37 @@ extern "C" {
 // of its cycle budget" and "the window hit hardware at instruction 3" must never look the same to a
 // caller, or a comparison over 0 useful instructions reads as a comparison that agreed.
 typedef enum OracleStop {
-  ORACLE_STOP_NONE = 0,       // not run yet
-  ORACLE_STOP_BUDGET,         // clean: the requested cycle budget was consumed, no event, no fault
-  ORACLE_STOP_HARDWARE,       // the code touched a device register — the straight-line window is over
-  ORACLE_STOP_EVENT,          // a scheduled event came due (milestone 1 asserts this cannot happen)
+  ORACLE_STOP_NONE = 0, // not run yet
+  ORACLE_STOP_BUDGET,   // clean: the requested cycle budget was consumed, no event, no fault
+  ORACLE_STOP_HARDWARE, // the code touched a device register — the straight-line window is over
+  ORACLE_STOP_EVENT,    // a scheduled event came due (milestone 1 asserts this cannot happen)
 } OracleStop;
 
 typedef struct OracleState {
-  uint32_t   gpr[32];         // r0..r31
-  uint32_t   lo, hi;
-  uint32_t   pc;              // BACKED_PC
-  uint32_t   next_pc;         // BACKED_new_PC (the branch-delay successor)
-  int32_t    timestamp;       // the core's own cycle count
+  uint32_t gpr[32]; // r0..r31
+  uint32_t lo, hi;
+  uint32_t pc;       // BACKED_PC
+  uint32_t next_pc;  // BACKED_new_PC (the branch-delay successor)
+  int32_t timestamp; // the core's own cycle count
   OracleStop stop;
-  uint32_t   stop_addr;       // the offending address when stop == ORACLE_STOP_HARDWARE
+  uint32_t stop_addr; // the offending address when stop == ORACLE_STOP_HARDWARE
 } OracleState;
 
 // Bring up main RAM + scratchpad and the CPU. Returns 0 and explains itself on failure; a failed init
 // never leaves a half-initialised core behind for a caller to step. Idempotent.
-int  oracle_init(void);
+int oracle_init(void);
 void oracle_teardown(void);
 
 // Inject a PS-X EXE image: copy `len` bytes to guest `t_addr`, then set pc/gp/sp/fp. This is the plan's
 // option 1 — neither side executes a BIOS boot, so our HLE'd BIOS and Beetle's real one never have to
 // agree about kernel memory. Callers pass exactly what `crt0_plan` computed, so the two sides start from
 // one derivation rather than two. Returns 0 (naming why) if the image would not fit in main RAM.
-int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr,
-                    uint32_t pc, uint32_t gp, uint32_t sp);
+int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr, uint32_t pc, uint32_t gp, uint32_t sp);
 
 // Run until `cycles` of the core's own timestamp have elapsed, or until the window ends for one of the
 // OracleStop reasons. Returns the stop reason; `oracle_capture` reads the resulting state out.
 OracleStop oracle_run(int32_t cycles);
-void       oracle_capture(OracleState *out);
+void oracle_capture(OracleState *out);
 
 // Advance by the smallest amount the core will advance — the substrate for milestone 2's register-level
 // differential, where a divergence must localise to ONE instruction rather than one frame.

@@ -16,42 +16,53 @@
 // two places for them to drift. Verified pixel-exact, not asserted: 12 sampled frames of the hut replay
 // are 0-diff against the pre-refactor build, and under PSXPORT_FPS60_TFORCE=1 the two presents agree
 // 0/76800 over 10 consecutive frames.
-#include "core.h"
-#include "game.h"     // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
-#include "render_mode.h"   // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
-#include "render_queue.h"
-#include "proj_params.h"   // ProjParams — the camera's projection constants + Snapshot save/restore
-#include "game_hooks_opt.h" // game-owned scene-camera reader; never a framework scratchpad layout
 #include "cfg.h"
+#include "core.h"
+#include "fs_util.h"        // Fs::ensureParentDirs — no hand-rolled mkdir
+#include "game.h"           // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
+#include "game_hooks_opt.h" // game-owned scene-camera reader; never a framework scratchpad layout
+#include "mods.h"           // Mods (game->mods.fps60)
+#include "proj_params.h"    // ProjParams — the camera's projection constants + Snapshot save/restore
+#include "render_mode.h"    // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
+#include "render_queue.h"
 #include <lucent/log.h>
-#include "mods.h"     // Mods (game->mods.fps60)
-#include "fs_util.h"  // Fs::ensureParentDirs — no hand-rolled mkdir
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 #include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unordered_map>
-#include <utility>   // std::swap (pointer-swap double buffer rotation, stage 1)
+#include <utility> // std::swap (pointer-swap double buffer rotation, stage 1)
 
-extern "C" { uint32_t GTE_ReadDR(unsigned); }   // Beetle GTE (mednafen gte.c) — RTP result regs (rate tap)
+extern "C" {
+uint32_t GTE_ReadDR(unsigned);
+} // Beetle GTE (mednafen gte.c) — RTP result regs (rate tap)
 
 // Present primitives (gpu_native.cpp): the real per-frame present + the 60fps in-between pass + the pacer.
-void gpu_present_ex(Core* core, int do_blit);
-void gpu_fps60_present_pass(Core* core);
-void gpu_pace_subframe(Core* core, int n);
-void gpu_pace_subframe_fields(Core* core, int guestFields, int parts);
-void gpu_pace_frame(Core* core);   // whole-frame pacer — used when no in-between was inserted
+void gpu_present_ex(Core *core, int do_blit);
+void gpu_fps60_present_pass(Core *core);
+void gpu_pace_subframe(Core *core, int n);
+void gpu_pace_subframe_fields(Core *core, int guestFields, int parts);
+void gpu_pace_frame(Core *core); // whole-frame pacer — used when no in-between was inserted
 
 #define FPS60_RQ_MAX RQ_MAX
 
-Fps60::~Fps60() { delete[] mRqCur; delete[] mRqPrev; delete mSink; }
+Fps60::~Fps60() {
+  delete[] mRqCur;
+  delete[] mRqPrev;
+  delete mSink;
+}
 
 // ---- logic-rate detector (validated lrate_proto) -----------------------------------------------------
 void Fps60::fold(uint32_t v) {
   uint64_t h = mFrameHash;
-  for (int i = 0; i < 4; i++) { h ^= (v & 0xFF); h *= 1099511628211ull; v >>= 8; }
-  mFrameHash = h; mFrameGeom++;
+  for (int i = 0; i < 4; i++) {
+    h ^= (v & 0xFF);
+    h *= 1099511628211ull;
+    v >>= 8;
+  }
+  mFrameHash = h;
+  mFrameGeom++;
 }
 // gte RTP tap (fps60 gate): fold this vertex's projected SXY into the frame fingerprint. RTPS(0x01) writes
 // one SXY (DR14); RTPT(0x30) writes three (DR12/13/14). This is the ONLY remaining GTE tap — it feeds the
@@ -62,35 +73,59 @@ bool Fps60::active() const {
 }
 
 void Fps60::rtp(uint32_t op) {
-  if (!active()) return;
+  if (!active()) {
+    return;
+  }
   unsigned lo = (op == 0x30) ? 12 : 14;
-  for (unsigned r = lo; r <= 14; r++) fold(GTE_ReadDR(r));
+  for (unsigned r = lo; r <= 14; r++) {
+    fold(GTE_ReadDR(r));
+  }
 }
-static void rate_tick(RateDet* d, uint64_t set_hash) {
-  if (set_hash == d->last_hash) { d->held++; return; }
+static void rate_tick(RateDet *d, uint64_t set_hash) {
+  if (set_hash == d->last_hash) {
+    d->held++;
+    return;
+  }
   int p = d->held + 1;
-  if (p >= 1 && p <= 8) d->votes[p]++;
+  if (p >= 1 && p <= 8) {
+    d->votes[p]++;
+  }
   int best = 0, bp = 2;
-  for (int i = 1; i <= 8; i++) if (d->votes[i] > best) { best = d->votes[i]; bp = i; }
+  for (int i = 1; i <= 8; i++) {
+    if (d->votes[i] > best) {
+      best = d->votes[i];
+      bp = i;
+    }
+  }
   d->period = bp;
-  d->last_hash = set_hash; d->held = 0; d->changes++;
+  d->last_hash = set_hash;
+  d->held = 0;
+  d->changes++;
 }
 
 // ---- shared camera reader -------------------------------------------------------------------------------
-void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy, float& H) {
+void Fps60::sceneCam(Core *c, float R[3][3], float T[3], float &ofx, float &ofy, float &H) {
   // TIER 1 override (fps60.h "Object-tier attempt 2026-07-14"): while present_vk's tier1Render() is
   // re-invoking terrainRenderAll() at the interp present, hand back the LERPED camera instead of a guest
   // read — no guest reads at present time, matching the fps60 present-time invariant.
   if (mCamOverrideOn) {
-    for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) R[i][j] = mCamOverride.R[i][j]; T[i] = mCamOverride.T[i]; }
-    ofx = mCamOverride.ofx; ofy = mCamOverride.ofy; H = mCamOverride.H;
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        R[i][j] = mCamOverride.R[i][j];
+      }
+      T[i] = mCamOverride.T[i];
+    }
+    ofx = mCamOverride.ofx;
+    ofy = mCamOverride.ofy;
+    H = mCamOverride.H;
     return;
   }
   // The view matrix is GAME state. psxport used to decode Tomba!2's scratchpad layout here, which
   // made every future native producer silently read unrelated memory in another title. The game owns
   // that decode; the framework owns only the capture/lerp around its result.
   if (!game_fps60_read_scene_cam(c, c ? c->hooks : nullptr, R, T)) {
-    lucent::error("fps60", "Fps60::sceneCam REFUSED: this game supplied no fps60ReadSceneCam hook; "
+    lucent::error("fps60",
+                  "Fps60::sceneCam REFUSED: this game supplied no fps60ReadSceneCam hook; "
                   "a native camera cannot be inferred from framework memory");
     abort();
   }
@@ -111,18 +146,30 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
   // camera it is built from — an input to the one renderer, not fps60 machinery. Gating it on active()
   // is what made fps60=0 a second renderer: with no camera captured, a present-time world build runs
   // against a zero camera and collapses the scene to its backdrop.
-  for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) mCamCur.R[i][j] = R[i][j]; mCamCur.T[i] = T[i]; }
-  mCamCur.ofx = ofx; mCamCur.ofy = ofy; mCamCur.H = H;
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      mCamCur.R[i][j] = R[i][j];
+    }
+    mCamCur.T[i] = T[i];
+  }
+  mCamCur.ofx = ofx;
+  mCamCur.ofy = ofy;
+  mCamCur.H = H;
 }
 
 // ---- TIER 1 BACKDROP: game-logic-scroll layer-transform lerp (docs/fps60-rework.md) --------------------
-void Fps60::bgScroll(Core* c, uint32_t t4, int& scrollX, int& scrollY) {
-  if (mBgOverrideOn) { scrollX = mBgOverride.scrollX; scrollY = mBgOverride.scrollY; return; }
+void Fps60::bgScroll(Core *c, uint32_t t4, int &scrollX, int &scrollY) {
+  if (mBgOverrideOn) {
+    scrollX = mBgOverride.scrollX;
+    scrollY = mBgOverride.scrollY;
+    return;
+  }
   scrollX = c->mem_r16s(t4 + 0x28u);
   scrollY = c->mem_r16s(t4 + 0x2au);
   // TIER 1 capture: this is a REAL-frame call — mirror it into mBgCur, rotated in lockstep with mRqCur/
   // mRqPrev / mCamCur/mCamPrev by present_vk's end-of-frame swap.
-  mBgCur.scrollX = scrollX; mBgCur.scrollY = scrollY;   // unconditional, same reason as sceneCam's capture
+  mBgCur.scrollX = scrollX;
+  mBgCur.scrollY = scrollY; // unconditional, same reason as sceneCam's capture
 }
 
 // Shortest-signed-path lerp for a value the guest wraps into [0, mod) every tick (ParallaxBg::step's
@@ -131,12 +178,21 @@ void Fps60::bgScroll(Core* c, uint32_t t4, int& scrollX, int& scrollY) {
 // ->1->2, whose midpoint is 0. Exact at t=0/t=1 by construction (integer diff, lroundf(diff*0)=0 and
 // lroundf(diff*1)=diff are both exact for integer diff).
 static int wrapLerp(int prev, int cur, int mod, float t) {
-  if (mod <= 0) return prev + (int)lroundf((float)(cur - prev) * t);
+  if (mod <= 0) {
+    return prev + (int)lroundf((float)(cur - prev) * t);
+  }
   int diff = cur - prev;
-  if (diff >  mod / 2) diff -= mod;
-  if (diff < -mod / 2) diff += mod;
+  if (diff > mod / 2) {
+    diff -= mod;
+  }
+  if (diff < -mod / 2) {
+    diff += mod;
+  }
   int v = prev + (int)lroundf((float)diff * t);
-  v %= mod; if (v < 0) v += mod;
+  v %= mod;
+  if (v < 0) {
+    v += mod;
+  }
   return v;
 }
 
@@ -153,8 +209,8 @@ static int wrapLerp(int prev, int cur, int mod, float t) {
 // write, exactly like the real display pass. Per-Core shared render state incidentally touched by the
 // re-render (ProjParams' published camview + H/OFX/OFY) is snapshotted and restored so nothing else ever
 // observes the lerped camera.
-void Fps60::tier1Render(Core* core, float t) {
-  Core* c = core;
+void Fps60::tier1Render(Core *core, float t) {
+  Core *c = core;
   // mSink is a bare capture sink (not one of Game's constructor-wired RenderQueue members — see
   // Game::Game's `rq.game = this` — so its own `game` back-pointer is null unless wired here). #54:
   // that was harmless while every push2dQuad(RQ_BACKGROUND, ...) call unconditionally forced
@@ -162,22 +218,42 @@ void Fps60::tier1Render(Core* core, float t) {
   // `core->rsub.diag.currentNode()` (render_queue.cpp emitOrQueue) exposed it: push2dQuad resolves
   // its OWN Core internally as `&game->core` (it takes no Core* param), so a null `game` there crashed
   // on the very next real-frame backdrop re-render. Wire it once, same as every other Game-owned queue.
-  if (!mSink) { mSink = new RenderQueue(); mSink->game = game; }
+  if (!mSink) {
+    mSink = new RenderQueue();
+    mSink->game = game;
+  }
   mSink->reset();
 
   Fps60Cam lerp;
   for (int i = 0; i < 3; i++) {
-    for (int j = 0; j < 3; j++) lerp.R[i][j] = mCamPrev.R[i][j] + (mCamCur.R[i][j] - mCamPrev.R[i][j]) * t;
+    for (int j = 0; j < 3; j++) {
+      lerp.R[i][j] = mCamPrev.R[i][j] + (mCamCur.R[i][j] - mCamPrev.R[i][j]) * t;
+    }
     lerp.T[i] = mCamPrev.T[i] + (mCamCur.T[i] - mCamPrev.T[i]) * t;
   }
   lerp.ofx = mCamPrev.ofx + (mCamCur.ofx - mCamPrev.ofx) * t;
   lerp.ofy = mCamPrev.ofy + (mCamCur.ofy - mCamPrev.ofy) * t;
-  lerp.H   = mCamPrev.H   + (mCamCur.H   - mCamPrev.H)   * t;
+  lerp.H = mCamPrev.H + (mCamCur.H - mCamPrev.H) * t;
   mCamOverride = lerp;
-  lucent::debug("terrpc", "[tier1dbg] t={:.3f} cur.T=({:.1f},{:.1f},{:.1f}) prev.T=({:.1f},{:.1f},{:.1f}) lerp.T=({:.1f},{:.1f},{:.1f}) "
-                          "cur.H={:.1f} prev.H={:.1f} lerp.H={:.1f} ofx={:.1f} ofy={:.1f}",
-                t, mCamCur.T[0], mCamCur.T[1], mCamCur.T[2], mCamPrev.T[0], mCamPrev.T[1], mCamPrev.T[2],
-                lerp.T[0], lerp.T[1], lerp.T[2], mCamCur.H, mCamPrev.H, lerp.H, lerp.ofx, lerp.ofy);
+  lucent::debug(
+      "terrpc",
+      "[tier1dbg] t={:.3f} cur.T=({:.1f},{:.1f},{:.1f}) prev.T=({:.1f},{:.1f},{:.1f}) lerp.T=({:.1f},{:.1f},{:.1f}) "
+      "cur.H={:.1f} prev.H={:.1f} lerp.H={:.1f} ofx={:.1f} ofy={:.1f}",
+      t,
+      mCamCur.T[0],
+      mCamCur.T[1],
+      mCamCur.T[2],
+      mCamPrev.T[0],
+      mCamPrev.T[1],
+      mCamPrev.T[2],
+      lerp.T[0],
+      lerp.T[1],
+      lerp.T[2],
+      mCamCur.H,
+      mCamPrev.H,
+      lerp.H,
+      lerp.ofx,
+      lerp.ofy);
 
   // #67 GATE PARITY: mirror the REAL frame's world-pass gates (Render::worldVoidBeat / fieldAreaInit —
   // the same reads sceneNative made this interval, unchanged since per the present-time invariant). The
@@ -189,13 +265,14 @@ void Fps60::tier1Render(Core* core, float t) {
   // call the game to re-run its world passes under those lerped inputs. TRANSITIONAL (game_iface.h): the
   // target is a submit model (game submits drawables, framework lerps — no callback into game render).
   ProjParams::Snapshot projSaved = c->rsub.projParams.snapshot();
-  RenderQueue* prevRedirect = c->game->rqRedirect;
+  RenderQueue *prevRedirect = c->game->rqRedirect;
   c->game->rqRedirect = mSink;
   mCamOverrideOn = true;
   {
-    DisplayPassGuard displayPass(c->rsub.mode);   // FAIL-FAST: abort on any guest write, real-path discipline
+    DisplayPassGuard displayPass(c->rsub.mode); // FAIL-FAST: abort on any guest write, real-path discipline
     if (!game_fps60_world_pass(c, c ? c->hooks : nullptr, t)) {
-      lucent::error("fps60", "Fps60::tier1Render REFUSED: this frame claimed a native world pass, "
+      lucent::error("fps60",
+                    "Fps60::tier1Render REFUSED: this frame claimed a native world pass, "
                     "but this game supplied no fps60WorldPass hook; captured world faces cannot be "
                     "discarded without a producer to replace them");
       abort();
@@ -212,7 +289,11 @@ void Fps60::tier1Render(Core* core, float t) {
   // Split mSink's telemetry by producer: RQ_BACKGROUND (backdrop) vs RQ_WORLD (terrain+scene-table) — the
   // two producers sharing the sink, distinguished the same way the debug print already reported them.
   mBackdropPrimsThisFrame = 0;
-  for (int i = 0; i < mSink->n; i++) if (mSink->items[i].layer == RQ_BACKGROUND) mBackdropPrimsThisFrame++;
+  for (int i = 0; i < mSink->n; i++) {
+    if (mSink->items[i].layer == RQ_BACKGROUND) {
+      mBackdropPrimsThisFrame++;
+    }
+  }
   mTier1PrimsThisFrame = mSink->n - mBackdropPrimsThisFrame;
   // DIAG (debug channel "tier1sc"): the aggregate screen bbox tier1Render actually re-rendered this
   // present, split by producer — used once to data-derive the scene-table's on-screen footprint for the
@@ -221,26 +302,58 @@ void Fps60::tier1Render(Core* core, float t) {
   // guards real non-logging work, not the print.
   static const lucent::Channel ch_tier1sc{"tier1sc"};
   if (ch_tier1sc) {
-    float tminx=1e9f,tmaxx=-1e9f,tminy=1e9f,tmaxy=-1e9f, sminx=1e9f,smaxx=-1e9f,sminy=1e9f,smaxy=-1e9f;
-    int tn=0, sn=0;
+    float tminx = 1e9f, tmaxx = -1e9f, tminy = 1e9f, tmaxy = -1e9f, sminx = 1e9f, smaxx = -1e9f, sminy = 1e9f,
+          smaxy = -1e9f;
+    int tn = 0, sn = 0;
     for (int i = 0; i < mSink->n; i++) {
-      const RqItem& it = mSink->items[i];
-      float *mnx,*mxx,*mny,*mxy; int* cnt;
-      if (it.dbg_node == kTerrainDbgNode)          { mnx=&tminx; mxx=&tmaxx; mny=&tminy; mxy=&tmaxy; cnt=&tn; }
-      else if (it.dbg_node == kSceneTableDbgNode)  { mnx=&sminx; mxx=&smaxx; mny=&sminy; mxy=&smaxy; cnt=&sn; }
-      else continue;
+      const RqItem &it = mSink->items[i];
+      float *mnx, *mxx, *mny, *mxy;
+      int *cnt;
+      if (it.dbg_node == kTerrainDbgNode) {
+        mnx = &tminx;
+        mxx = &tmaxx;
+        mny = &tminy;
+        mxy = &tmaxy;
+        cnt = &tn;
+      } else if (it.dbg_node == kSceneTableDbgNode) {
+        mnx = &sminx;
+        mxx = &smaxx;
+        mny = &sminy;
+        mxy = &smaxy;
+        cnt = &sn;
+      } else {
+        continue;
+      }
       (*cnt)++;
       for (int k = 0; k < 4; k++) {
-        if (it.xsf[k] < *mnx) *mnx = it.xsf[k]; if (it.xsf[k] > *mxx) *mxx = it.xsf[k];
-        if (it.ysf[k] < *mny) *mny = it.ysf[k]; if (it.ysf[k] > *mxy) *mxy = it.ysf[k];
+        if (it.xsf[k] < *mnx) {
+          *mnx = it.xsf[k];
+        }
+        if (it.xsf[k] > *mxx) {
+          *mxx = it.xsf[k];
+        }
+        if (it.ysf[k] < *mny) {
+          *mny = it.ysf[k];
+        }
+        if (it.ysf[k] > *mxy) {
+          *mxy = it.ysf[k];
+        }
       }
     }
-    lucent::debug(ch_tier1sc, "terrain n={} bbox=[{:.0f},{:.0f},{:.0f},{:.0f}] sceneTable n={} bbox=[{:.0f},{:.0f},{:.0f},{:.0f}]",
-                  tn, tn?tminx:0.f, tn?tminy:0.f, tn?tmaxx:0.f, tn?tmaxy:0.f,
-                  sn, sn?sminx:0.f, sn?sminy:0.f, sn?smaxx:0.f, sn?smaxy:0.f);
+    lucent::debug(ch_tier1sc,
+                  "terrain n={} bbox=[{:.0f},{:.0f},{:.0f},{:.0f}] sceneTable n={} bbox=[{:.0f},{:.0f},{:.0f},{:.0f}]",
+                  tn,
+                  tn ? tminx : 0.f,
+                  tn ? tminy : 0.f,
+                  tn ? tmaxx : 0.f,
+                  tn ? tmaxy : 0.f,
+                  sn,
+                  sn ? sminx : 0.f,
+                  sn ? sminy : 0.f,
+                  sn ? smaxx : 0.f,
+                  sn ? smaxy : 0.f);
   }
 }
-
 
 // TIER 1 OWNERSHIP RULE (fps60.h "Object-tier attempt", extended to fieldEntityRender): RQ_WORLD prims
 // tagged kTerrainDbgNode OR kSceneTableDbgNode (render_queue.h) are EXACTLY the prims Fps60::tier1Render
@@ -266,11 +379,13 @@ void Fps60::tier1Render(Core* core, float t) {
 // only) — the title-menu screen went backdrop-less at 60fps, only its HUD text surviving. Fixed: only
 // backdropRender's OWN prims (tagged kBackdropDbgNode, render_walk.cpp) are tier1-owned; every other
 // RQ_BACKGROUND item keeps dbg_node==0 and presents verbatim, same as any other un-owned 2D content.
-static inline bool isTier1Owned(const RqItem& it) {
+static inline bool isTier1Owned(const RqItem &it) {
   // fps60 step 2b: tier1Render re-renders the native display-pass world (terrain + scene-table + OBJECTS
   // via fieldObjectsRender) under lerped inputs, so those prims are tier1-owned and come from mSink.
   // (Backdrop: only backdropRender's own prims; other RQ_BACKGROUND 2D keeps the per-prim path, #54.)
-  if (it.layer == RQ_BACKGROUND) return it.dbg_node == kBackdropDbgNode;
+  if (it.layer == RQ_BACKGROUND) {
+    return it.dbg_node == kBackdropDbgNode;
+  }
   // #67 CORRECTION ("2D things flicker at fps60"): "tier1 owns ALL of RQ_WORLD" was FALSE — the #54 bug
   // class again, on the world layer. RQ_WORLD has GUEST-EXECUTION-TIME producers the display-pass re-run
   // never re-emits: the guest-OT obj-depth billboard walk (gpu_native.cpp is3d/objz classification) and
@@ -284,13 +399,11 @@ static inline bool isTier1Owned(const RqItem& it) {
   return it.layer == RQ_WORLD && it.has_xyf;
 }
 
-
-
 // See the declaration above presentPass. `fps60seq` is consulted once per PRESENT (presentPass) to
 // decide whether to walk the whole captured queue, so it is hoisted into a Channel handle.
 static const lucent::Channel ch_fps60seq{"fps60seq"};
 
-static void seqRunDump(const RqItem* items, int n, const char* what) {
+static void seqRunDump(const RqItem *items, int n, const char *what) {
   int i = 0;
   while (i < n) {
     const int layer = items[i].layer;
@@ -298,9 +411,18 @@ static void seqRunDump(const RqItem* items, int n, const char* what) {
     const uint32_t seq0 = items[i].seq;
     const uint32_t node0 = items[i].dbg_node;
     int j = i;
-    while (j < n && items[j].layer == layer && isTier1Owned(items[j]) == owned) j++;
-    lucent::debug(ch_fps60seq, "  {} layer={} {:<9} n={:4} seq=[{}..{}] node0={:08X}", what, layer,
-                  owned ? "TIER1" : "verbatim", j - i, seq0, items[j - 1].seq, node0);
+    while (j < n && items[j].layer == layer && isTier1Owned(items[j]) == owned) {
+      j++;
+    }
+    lucent::debug(ch_fps60seq,
+                  "  {} layer={} {:<9} n={:4} seq=[{}..{}] node0={:08X}",
+                  what,
+                  layer,
+                  owned ? "TIER1" : "verbatim",
+                  j - i,
+                  seq0,
+                  items[j - 1].seq,
+                  node0);
     i = j;
   }
 }
@@ -310,20 +432,34 @@ static void seqRunDump(const RqItem* items, int n, const char* what) {
 // writer (gpu_vk_shot/gpu_native_shot), no new pixel path. Must run right after the present call that
 // filled the target (present_vk's PASS 1 for interp, PASS 2 for real) so the readback sees that pass's
 // content, not the next one's.
-void Fps60::dumpPresent(Core* core, bool interp) {
+void Fps60::dumpPresent(Core *core, bool interp) {
   // Not a print guard: the channel decides whether this present does a full VRAM readback + PNG write,
   // and the off-branch RESETS the capture cap. Per present, so it is a Channel handle.
   static const lucent::Channel ch_fps60dump{"fps60dump"};
-  if (!ch_fps60dump) { mDumpSeq = 0; return; }   // channel off: idle, and reset the cap for next arm
+  if (!ch_fps60dump) {
+    mDumpSeq = 0;
+    return;
+  } // channel off: idle, and reset the cap for next arm
   if (mDumpSeq >= kDumpMax) {
-    if (mDumpSeq == kDumpMax) { lucent::info("fps60dump", "cap ({} files) reached — stop capturing", kDumpMax); mDumpSeq++; }
+    if (mDumpSeq == kDumpMax) {
+      lucent::info("fps60dump", "cap ({} files) reached — stop capturing", kDumpMax);
+      mDumpSeq++;
+    }
     return;
   }
   char path[192];
   snprintf(path, sizeof path, "scratch/framedump/f%06ld_%04d_%s.png", mFence, mDumpSeq, interp ? "interp" : "real");
-  if (!Fs::ensureParentDirs(path)) return;
-  int gpu_vk_enabled(void); void gpu_vk_shot(Core*, const char*); void gpu_native_shot(Core*, const char*);
-  if (gpu_vk_enabled()) gpu_vk_shot(core, path); else gpu_native_shot(core, path);
+  if (!Fs::ensureParentDirs(path)) {
+    return;
+  }
+  int gpu_vk_enabled(void);
+  void gpu_vk_shot(Core *, const char *);
+  void gpu_native_shot(Core *, const char *);
+  if (gpu_vk_enabled()) {
+    gpu_vk_shot(core, path);
+  } else {
+    gpu_native_shot(core, path);
+  }
   mDumpSeq++;
 }
 
@@ -352,36 +488,52 @@ void Fps60::dumpPresent(Core* core, bool interp) {
 // Ordering: presentPass merges by (layer, seq), and each flush restarts seq at 0, so appended items are
 // rebased by the running total. Within a layer, paint order across flushes is then submission order —
 // exactly what emitQueue() would have produced had it run per flush.
-void Fps60::rq_capture(const RqItem* items, int n) {
-  if (!mRqCur)  mRqCur  = new RqItem[FPS60_RQ_MAX];
-  if (!mRqPrev) mRqPrev = new RqItem[FPS60_RQ_MAX];
-  if (n <= 0) return;                 // an empty flush contributes nothing; it must not blank the frame
+void Fps60::rq_capture(const RqItem *items, int n) {
+  if (!mRqCur) {
+    mRqCur = new RqItem[FPS60_RQ_MAX];
+  }
+  if (!mRqPrev) {
+    mRqPrev = new RqItem[FPS60_RQ_MAX];
+  }
+  if (n <= 0) {
+    return; // an empty flush contributes nothing; it must not blank the frame
+  }
   if (mNCur + n > FPS60_RQ_MAX) {
     // FAIL-FAST rather than truncate: a silently dropped tail is the exact failure this function is
     // being fixed for, and it would come back as "some layer is missing in one scene".
-    lucent::error("fps60", "Fps60::rq_capture OVERFLOW: {} captured + {} this flush > FPS60_RQ_MAX {}. "
-                  "Raise the cap; do not drop prims.", mNCur, n, (int)FPS60_RQ_MAX);
+    lucent::error("fps60",
+                  "Fps60::rq_capture OVERFLOW: {} captured + {} this flush > FPS60_RQ_MAX {}. "
+                  "Raise the cap; do not drop prims.",
+                  mNCur,
+                  n,
+                  (int)FPS60_RQ_MAX);
     abort();
   }
   const uint32_t seqBase = mSeqBase;
-  for (int i = 0; i < n; i++) game->rq.mLedger.noteCaptured(items[i].layer);   // present_ledger.h
+  for (int i = 0; i < n; i++) {
+    game->rq.mLedger.noteCaptured(items[i].layer); // present_ledger.h
+  }
   memcpy(mRqCur + mNCur, items, (size_t)n * sizeof(RqItem));
-  for (int i = 0; i < n; i++) mRqCur[mNCur + i].seq += seqBase;
-  mNCur    += n;
+  for (int i = 0; i < n; i++) {
+    mRqCur[mNCur + i].seq += seqBase;
+  }
+  mNCur += n;
   mSeqBase += (uint32_t)n;
 }
 
 // THE frame fence and THE present, for both configs. This used to `return` when the tier was off, which
 // is what left fps60=0 to be presented by a separate branch in the game — two renderers rather than one
 // renderer plus an optional extra frame (USER, 2026-08-16).
-void Fps60::frame_commit(Core* core, int guestFields) {
+void Fps60::frame_commit(Core *core, int guestFields) {
   mCommitGuestFields = guestFields;
-  if (active()) {   // the logic-rate detector schedules in-betweens; with none to schedule it has no job
+  if (active()) { // the logic-rate detector schedules in-betweens; with none to schedule it has no job
     uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
     rate_tick(&mRd, set_hash);
   }
   mFence++;
-  if (!core->game->diff_mode) present_vk(core);
+  if (!core->game->diff_mode) {
+    present_vk(core);
+  }
   // Reconcile BEFORE resetting: a layer captured this frame and drawn by nobody is the shape every one
   // of the 2026-08-16 render regressions had (docs/one-renderer.md, kanban #98).
   core->game->rq.mLedger.reconcile(mFence, cfg_on("PSXPORT_GATE_PRESENTATION"));
@@ -394,9 +546,9 @@ void Fps60::frame_commit(Core* core, int guestFields) {
 // captured queue's verbatim remainder. No guest reads at present time, no second render path — an
 // interpolated frame is built through the exact same per-item draw call (`q.emitItem`) slot B uses
 // for Q[N]; it cannot show a game state neither real frame had.
-void Fps60::present_vk(Core* core) {
-  Core* c = core;
-  RenderQueue& q = c->game->rq;
+void Fps60::present_vk(Core *core) {
+  Core *c = core;
+  RenderQueue &q = c->game->rq;
 
   // Gate-B test knob (TEMPORARY, internal — see docs/config.md): PSXPORT_FPS60_TFORCE=0 pins the whole
   // present (camera lerp + queue-prim lerp share mT) to Q[N-1]'s endpoint, =1 to Q[N]'s, so a run can be
@@ -415,31 +567,39 @@ void Fps60::present_vk(Core* core) {
   // replaying THIS frame's own queue (Q[N] twice, terrain included) rather than lerping against an
   // empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame.
   if (extraFrame) {
-  presentPass(c, tInterp);
-  gpu_fps60_present_pass(c);
-  dumpPresent(c, /*interp=*/true);
-  // Was an info line behind a latched `fps60` channel test — a per-present line that only ever appeared
-  // when the channel was asked for, so it is debug audience, not info. (fps60.h's `mDbg` latch that
-  // gated it is now unused; drop the member next time that header is touched.)
-  lucent::debug("fps60", "f{} slotA: replay prev={} n={} tier1={} backdrop={} t={:.3f}", mFence,
-                mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", mNCur, mTier1PrimsThisFrame,
-                mBackdropPrimsThisFrame, mT);
-  gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
+    presentPass(c, tInterp);
+    gpu_fps60_present_pass(c);
+    dumpPresent(c, /*interp=*/true);
+    // Was an info line behind a latched `fps60` channel test — a per-present line that only ever appeared
+    // when the channel was asked for, so it is debug audience, not info. (fps60.h's `mDbg` latch that
+    // gated it is now unused; drop the member next time that header is touched.)
+    lucent::debug("fps60",
+                  "f{} slotA: replay prev={} n={} tier1={} backdrop={} t={:.3f}",
+                  mFence,
+                  mHavePrev ? "Q[N-1]" : "Q[N] (first frame)",
+                  mNCur,
+                  mTier1PrimsThisFrame,
+                  mBackdropPrimsThisFrame,
+                  mT);
+    gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
   }
 
   // ---- PASS 2 (slot B): the real frame. SAME call, t=1 — every lerped input resolves to its current
   // value, so this is the in-between at its near endpoint rather than a separate replay of the captured
   // queue. That is what makes the symmetry structural instead of a property two code paths happen to
   // share.
-  q.mLedger.inRealPresent = true;    // only the real present counts as "reached the screen"
+  q.mLedger.inRealPresent = true; // only the real present counts as "reached the screen"
   presentPass(c, 1.0f);
   q.mLedger.inRealPresent = false;
   gpu_present_ex(c, 1);
   dumpPresent(c, /*interp=*/false);
   // Pacing differs only BECAUSE the extra frame does: two half-frames when an in-between was inserted,
   // one whole frame when it was not.
-  if (extraFrame) gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
-  else            gpu_pace_frame(c);
+  if (extraFrame) {
+    gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
+  } else {
+    gpu_pace_frame(c);
+  }
 
   presentRotate();
 }
@@ -456,13 +616,14 @@ void Fps60::present_vk(Core* core) {
 // (layer, tier1-owned), with each run's seq range. Answers the one question the merge depends on —
 // whether the tier1-owned world prims occupy a CONTIGUOUS seq block inside the guest-time queue, or are
 // interleaved with prims that present verbatim. Read-only; never load-bearing.
-static void seqRunDump(const RqItem* items, int n, const char* what);
+static void seqRunDump(const RqItem *items, int n, const char *what);
 
-void Fps60::presentPass(Core* c, float t) {
-  RenderQueue& q = c->game->rq;
-  if (ch_fps60seq) {   // guards seqRunDump's walk of the whole captured queue, not the print
+void Fps60::presentPass(Core *c, float t) {
+  RenderQueue &q = c->game->rq;
+  if (ch_fps60seq) { // guards seqRunDump's walk of the whole captured queue, not the print
     static long lastDumped = -1;
-    if (lastDumped != mFence) { lastDumped = mFence;
+    if (lastDumped != mFence) {
+      lastDumped = mFence;
       lucent::debug(ch_fps60seq, "f{} captured n={}", mFence, mNCur);
       seqRunDump(mRqCur, mNCur, "rqcur");
     }
@@ -481,7 +642,9 @@ void Fps60::presentPass(Core* c, float t) {
   // is a prev to lerp from. The psxRender guard keeps the native world off the substrate/ORACLE leg,
   // where mTier1EligibleCur is a stale latch (renderScene never runs there to clear it).
   const bool kTier1 = mTier1EligibleCur && !c->rsub.mode.psxRender();
-  if (kTier1) tier1Render(c, t);
+  if (kTier1) {
+    tier1Render(c, t);
+  }
   {
     // fps60 UNIFIED PATH (docs/fps60-rework.md): the field frame's WORLD — terrain + scene-table + OBJECTS
     // + backdrop — is re-run by tier1Render into mSink under the lerped camera + per-object transforms, ALL
@@ -499,25 +662,35 @@ void Fps60::presentPass(Core* c, float t) {
     const int sinkN = (tier1 && mSink) ? mSink->n : 0;
     int ia = 0, ib = 0;
     for (;;) {
-      while (ib < mNCur && tier1 && isTier1Owned(mRqCur[ib])) ib++;   // world prims come from mSink — skip in mRqCur
+      while (ib < mNCur && tier1 && isTier1Owned(mRqCur[ib])) {
+        ib++; // world prims come from mSink — skip in mRqCur
+      }
       const bool haveA = ia < sinkN, haveB = ib < mNCur;
-      if (!haveA && !haveB) break;
+      if (!haveA && !haveB) {
+        break;
+      }
       bool takeSink;
-      if (!haveB)      takeSink = true;
-      else if (!haveA) takeSink = false;
-      else {
-        const RqItem& sa = mSink->items[ia]; const RqItem& sb = mRqCur[ib];
+      if (!haveB) {
+        takeSink = true;
+      } else if (!haveA) {
+        takeSink = false;
+      } else {
+        const RqItem &sa = mSink->items[ia];
+        const RqItem &sb = mRqCur[ib];
         takeSink = (sa.layer != sb.layer) ? (sa.layer < sb.layer) : (sa.seq <= sb.seq);
       }
-      if (takeSink) q.emitItem(c, &mSink->items[ia++]);
-      else          q.emitItem(c, &mRqCur[ib++]);
+      if (takeSink) {
+        q.emitItem(c, &mSink->items[ia++]);
+      } else {
+        q.emitItem(c, &mRqCur[ib++]);
+      }
     }
   }
 }
 
 // ---- rotate captures, once per logic frame after both presents ----------------------------------------
 void Fps60::presentRotate() {
-  Core* c = &game->core;
+  Core *c = &game->core;
   // POINTER SWAP, not memcpy (avoids the double-copy churn of the old design) ---------------------------
   // mRqCur (just-drawn Q[N]) becomes next frame's mRqPrev; the buffer mRqPrev used to point at (now-stale,
   // two-frames-old content that's never read again) becomes rq_capture's next overwrite target. mCamCur/
@@ -531,16 +704,17 @@ void Fps60::presentRotate() {
   // logic frame, so the reset cannot live there; after the swap mNCur holds the two-frames-ago count,
   // which is stale by definition. Zeroing here (rather than relying on the next capture to overwrite) is
   // what makes "this frame captured nothing" distinguishable from "this frame reused stale prims".
-  mNCur    = 0;
+  mNCur = 0;
   mSeqBase = 0;
   std::swap(mCamCur, mCamPrev);
   std::swap(mBgCur, mBgPrev);
-  std::swap(mObjCur, mObjPrev);   // this frame's per-object transforms become next frame's Q[N-1]
-  mObjCur.clear();                // fresh capture set for the next real frame's projComposeObject calls
-  game_fps60_bb_swap_prev(c, c ? c->hooks : nullptr); // billboard records rotate in lockstep (#67
-                                  // per-particle lerp source); games with no native billboard history
-                                  // have nothing to rotate
-                                  // native_boot's bbFrameReset clears the new cur before the next walk
+  std::swap(mObjCur, mObjPrev); // this frame's per-object transforms become next frame's Q[N-1]
+  mObjCur.clear();              // fresh capture set for the next real frame's projComposeObject calls
+  game_fps60_bb_swap_prev(c,
+                          c ? c->hooks : nullptr); // billboard records rotate in lockstep (#67
+                                                   // per-particle lerp source); games with no native billboard history
+                                                   // have nothing to rotate
+                                                   // native_boot's bbFrameReset clears the new cur before the next walk
   game_fps60_temporal_rotate(c, c ? c->hooks : nullptr);
   mHavePrev = 1;
 }
@@ -553,34 +727,48 @@ void Fps60::presentRotate() {
 // appeared object (in cur, no prev) uses cur as-is (no lerp) for its first frame; a stale key (in prev,
 // not cur) is simply not re-rendered (the object walk only visits live cmds). When fps60 is off, the
 // override is never armed and the capture map churn is the only cost.
-void Fps60::projObj(Core* c, uint32_t cmd, float Robj[3][3], float Tobj[3]) {
+void Fps60::projObj(Core *c, uint32_t cmd, float Robj[3][3], float Tobj[3]) {
   if (mObjOverrideOn) {
     auto pc = mObjCur.find(cmd);
     if (pc != mObjCur.end()) {
       auto pp = mObjPrev.find(cmd);
-      const Fps60Obj& C = pc->second;
+      const Fps60Obj &C = pc->second;
       if (pp != mObjPrev.end()) {
-        const Fps60Obj& P = pp->second;
+        const Fps60Obj &P = pp->second;
         for (int i = 0; i < 3; i++) {
-          for (int j = 0; j < 3; j++) Robj[i][j] = P.R[i][j] + (C.R[i][j] - P.R[i][j]) * mT;
+          for (int j = 0; j < 3; j++) {
+            Robj[i][j] = P.R[i][j] + (C.R[i][j] - P.R[i][j]) * mT;
+          }
           Tobj[i] = P.T[i] + (C.T[i] - P.T[i]) * mT;
         }
-      } else {  // new object this frame — no prev to lerp from, use cur
-        for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) Robj[i][j] = C.R[i][j]; Tobj[i] = C.T[i]; }
+      } else { // new object this frame — no prev to lerp from, use cur
+        for (int i = 0; i < 3; i++) {
+          for (int j = 0; j < 3; j++) {
+            Robj[i][j] = C.R[i][j];
+          }
+          Tobj[i] = C.T[i];
+        }
       }
       return;
     }
     // cmd not captured this frame (shouldn't happen for a live-walked object) — fall through to a live read.
   }
   // Real frame: read live from guest RAM (the exact read projComposeObject used to do inline).
-  for (int col = 0; col < 3; col++)
-    for (int row = 0; row < 3; row++)
+  for (int col = 0; col < 3; col++) {
+    for (int row = 0; row < 3; row++) {
       Robj[row][col] = (float)c->mem_r16s(cmd + 0x18u + (uint32_t)col * 2u + (uint32_t)row * 6u);
+    }
+  }
   Tobj[0] = (float)c->mem_r16s(cmd + 0x2Cu);
   Tobj[1] = (float)c->mem_r16s(cmd + 0x30u);
   Tobj[2] = (float)c->mem_r16s(cmd + 0x34u);
   // Capture keyed by cmd (host memory only — the READ-ONLY OVERLAY invariant holds).
   Fps60Obj o;
-  for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) o.R[i][j] = Robj[i][j]; o.T[i] = Tobj[i]; }
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      o.R[i][j] = Robj[i][j];
+    }
+    o.T[i] = Tobj[i];
+  }
   mObjCur[cmd] = o;
 }

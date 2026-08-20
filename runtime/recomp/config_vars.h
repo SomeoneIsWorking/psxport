@@ -13,7 +13,7 @@
 // pre-migration one in tests/test_config_cvar.cpp — the compatibility gate is the point of the
 // exercise, not a formality.
 #include "config_var.h"
-#include "render_mode.h"   // RenderPath — the type cv_render_path resolves to
+#include "render_mode.h" // RenderPath — the type cv_render_path resolves to
 
 namespace psx::config {
 
@@ -89,7 +89,7 @@ extern TextVar cv_enh;
 // `why`, when non-null, receives the INPUTS that made it a compare run ("PSXPORT_ORACLE",
 // "PSXPORT_SBS_MODE=panes", …) so the suppression notice can say what suppressed it. Empty when the
 // verdict is false.
-bool compare_run(std::string* why = nullptr);
+bool compare_run(std::string *why = nullptr);
 // The same decision as a PURE function of its three inputs, so it can be exercised over all eight
 // combinations without touching the process environment — including the four the live process cannot
 // reach, since PSXPORT_SBS / PSXPORT_SBS_MODE are env-only and nothing in-process can move them.
@@ -99,7 +99,7 @@ bool compare_run(std::string* why = nullptr);
 // was the defect: selftest() (config.h) used to loop ONLY this predicate, and deleting the suppression
 // from enh_gate() left it reporting no disagreements. selftest() now drives enh_gate() itself and keeps
 // this loop for the SBS combinations only.
-bool compare_run_from(bool oracle, bool sbs, std::string_view sbs_mode, std::string* why = nullptr);
+bool compare_run_from(bool oracle, bool sbs, std::string_view sbs_mode, std::string *why = nullptr);
 
 // THE RESOLVE-TIME HOOK. `asked` is what the ladder resolved; the return is what the run may do.
 // Under a compare run it is false whatever the ladder said (docs/config-migration.md
@@ -108,12 +108,12 @@ bool compare_run_from(bool oracle, bool sbs, std::string_view sbs_mode, std::str
 //
 // PER KNOB, NOT PER RUN, and that is the part to preserve: a run with two enhancements asked for must
 // NAME BOTH, or the second one reads as never having been asked for.
-bool enh_gate(const char* key, bool asked);
+bool enh_gate(const char *key, bool asked);
 // The two ways to reach it. `enh(v)` is for a game that declares its enhancements as its OWN CVars
 // (the shape megamanx4 uses); `enh_named(name)` is for a name selected through PSXPORT_ENH, and is
 // what cfg_enh() forwards to.
-bool enh(const CVar<bool>& v);
-bool enh_named(const char* name);
+bool enh(const CVar<bool> &v);
+bool enh_named(const char *name);
 
 // PSXPORT_RENDER_PATH — the render path: native | gte | psx (docs/plans/render-path-tristate.md).
 // Read it through render_path() below, never by parsing the text at a call site.
@@ -153,6 +153,6 @@ extern TextVar cv_log_file;
 // admired. Not documented as a knob in docs/config.md, because it is not one.
 extern BoolVar cv_selftest_declared;
 
-}  // namespace psx::config
+} // namespace psx::config
 
-#endif  // PSXPORT_CONFIG_VARS_H
+#endif // PSXPORT_CONFIG_VARS_H
