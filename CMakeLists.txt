@@ -24,20 +24,21 @@ add_subdirectory(vendor/beetle-psx/deps/libchdr EXCLUDE_FROM_ALL)
 
 add_subdirectory(common)
 
-# enable_testing() must precede any subdirectory that calls add_test(), and tools/oracle does — its
-# oracle_spike is a gate, not a demo. Registered here rather than in tests/ because it links
-# psxport_oracle (the independent reference emulator) and not `psxport`, so it does not belong to the
-# globbed framework suite. A silently-unregistered test is worse than none: `ctest -R oracle` answered
-# "No tests were found!!!" while the binary passed 12/12, which reads as a missing feature.
-enable_testing()
+# A standalone psxport configure owns and runs the framework suite. An embedded consumer owns its own
+# CTest surface: registering psxport tests there advertises executables that a consumer target did not
+# build, and makes framework cpp_style inspect the consumer with framework policy. Explicit ON remains
+# available to a consumer that deliberately builds and runs the complete framework suite.
+option(PSXPORT_BUILD_TESTS "Register the complete psxport CTest suite" ${PROJECT_IS_TOP_LEVEL})
+if(PSXPORT_BUILD_TESTS)
+  enable_testing()
+endif()
 add_subdirectory(tools)
 
 # The framework static library `psxport` (+ option(PSXPORT_BUILD_SMOKE) + the standalone agnosticism smoke).
 include(cmake/psxport.cmake)
 
 # Framework test suite — `ctest --test-dir build`. Must come after psxport.cmake (the tests link
-# `psxport`). Tests are globbed in tests/CMakeLists.txt, so adding one edits no shared file.
-# This is only wired in a STANDALONE psxport configure; a consuming game includes cmake/psxport.cmake
-# directly and never processes this file. See docs/project-map.md ("Tests").
-# enable_testing() is called above tools/, which needs it too.
-add_subdirectory(tests)
+# `psxport`). Embedded consumers default this off even if they add_subdirectory the framework root.
+if(PSXPORT_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()

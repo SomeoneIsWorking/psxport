@@ -11,7 +11,7 @@ build/tests/test_watchdog — shipping watchdog timing and completed-present con
 
 ## Validated by
 
-2026-08-21: showed both answers through the production API: first-present work survived beyond the 1 s steady timeout before completion, while a stall after watchdog_present_complete exited 134 and emitted STUCK; source contract also rejects entry-time arming.
+2026-08-21: showed both answers through the production API: bootstrap progress survived beyond the 1 s steady timeout without ending the 3 s boot phase, while stalls after `watchdog_main_present_complete` exited 134 and emitted STUCK. A second negative proved that later generic progress resets the steady alarm without restoring boot grace. The source contract also rejects entry-time arming.
 
 ## Known failure modes
 

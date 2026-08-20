@@ -106,9 +106,10 @@ static void present_rgb555(Core *core, const uint16_t *pixels, int width, int he
     rgba[i * 4 + 3] = 255;
   }
   gpu_vk_present_image(core, rgba.data(), width, height, 1.0f);
-  // Native movie frames bypass GpuState::gpu_present_ex(), the normal watchdog heartbeat path.
-  // They are still completed presents, so report the same forward progress here.
-  watchdog_present_complete();
+  // Native movie frames bypass GpuState::gpu_present_ex(), the main-presenter readiness path. They
+  // are forward progress, but a startup movie does not prove the main VRAM targets are initialized.
+  // After the main presenter is ready this heartbeat automatically uses the steady timeout.
+  watchdog_progress();
 }
 
 // CD-XA ADPCM audio decode lives in fmv_decode.cpp (xa_decode_sector) — the shared machinery

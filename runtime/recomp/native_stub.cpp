@@ -130,7 +130,9 @@ static void native_scea_splash(Core *c) {
     }
     gpu_pace_frame(c); // paces at the game's field rate, headless or not
                        // (PSXPORT_NOPACE=1 is the only "run flat out")
-    watchdog_present_complete();
+    // This image path proves splash progress, not readiness of the main VRAM presenter: its per-Game
+    // targets are first materialised by gpu_clear_display below and may still need the cold-init grace.
+    watchdog_progress();
   }
   gpu_clear_display(c); // hard black after the fade-out (clean cut to FMV)
   free(scea_rgba);

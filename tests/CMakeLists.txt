@@ -80,3 +80,11 @@ add_test(NAME cpp_style_selftest
 add_test(NAME tool_selftests_classifier
          COMMAND ${CMAKE_COMMAND} -E env python3
                  ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/tool_selftests.py --selftest)
+
+add_test(NAME psexe_loader
+         COMMAND ${CMAKE_COMMAND} -E env python3
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/test_psexe.py)
+
+add_test(NAME cmake_test_ownership
+         COMMAND ${CMAKE_COMMAND} -E env python3
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_cmake_test_ownership.py)

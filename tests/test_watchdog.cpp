@@ -1,8 +1,8 @@
-// The frame watchdog must retain its larger boot allowance until the first present COMPLETES, then
-// enforce the shorter steady-state budget. Exercise the shipping signal/timer API in child processes
-// so the deliberate timeout cannot terminate the test runner itself. This is the narrow exception to
-// the suite's no-wall-clock rule: the production unit under test is alarm(2), both waits are bounded,
-// and the negative case must observe the real signal-handler exit rather than a duplicate timer model.
+// The frame watchdog must retain its larger boot allowance across bootstrap-image progress until the
+// main VRAM presenter COMPLETES, then enforce the shorter steady-state budget. Exercise the shipping API in child
+// processes so the deliberate timeout cannot terminate the test runner itself. This is the narrow exception to the
+// suite's no-wall-clock rule: the production unit under test is alarm(2), both waits are bounded, and the negative case
+// must observe the real signal-handler exit rather than a duplicate timer model.
 #include "c_subsys.h"
 #include "testutil.h"
 
@@ -46,7 +46,13 @@ std::string readGpuNative() {
   return text;
 }
 
-ChildResult runChild(bool completeBeforeWait) {
+enum class ChildAction {
+  BootstrapProgressThenComplete,
+  CompleteThenStall,
+  CompleteProgressThenStall,
+};
+
+ChildResult runChild(ChildAction action) {
   int diagnostic[2];
   if (pipe(diagnostic) != 0) {
     return {-1, {}};
@@ -59,13 +65,20 @@ ChildResult runChild(bool completeBeforeWait) {
     setenv("PSXPORT_WATCHDOG", "1", 1);
     setenv("PSXPORT_WATCHDOG_BOOT", "3", 1);
     watchdog_init();
-    if (completeBeforeWait) {
-      watchdog_present_complete();
+    if (action == ChildAction::CompleteThenStall) {
+      watchdog_main_present_complete();
       pause();
-    } else {
-      // Longer than the 1s steady budget but shorter than the 3s first-present grace.
+    } else if (action == ChildAction::BootstrapProgressThenComplete) {
+      // Longer than the 1s steady budget but shorter than the 3s cold-init grace.
       sleepMilliseconds(1300);
-      watchdog_present_complete();
+      watchdog_progress();
+      sleepMilliseconds(1300);
+      watchdog_main_present_complete();
+    } else {
+      watchdog_main_present_complete();
+      sleepMilliseconds(500);
+      watchdog_progress();
+      pause();
     }
     _exit(0);
   }
@@ -86,19 +99,27 @@ ChildResult runChild(bool completeBeforeWait) {
 
 } // namespace
 
-static void test_first_present_retains_boot_grace_until_completion(void) {
-  const ChildResult result = runChild(false);
+static void test_bootstrap_progress_retains_grace_until_main_present(void) {
+  const ChildResult result = runChild(ChildAction::BootstrapProgressThenComplete);
   CHECK(WIFEXITED(result.status));
   CHECK_EQ(WEXITSTATUS(result.status), 0);
   CHECK(result.stderrText.find("[watchdog] STUCK") == std::string::npos);
 }
 
 static void test_completed_present_arms_steady_timeout(void) {
-  const ChildResult result = runChild(true);
+  const ChildResult result = runChild(ChildAction::CompleteThenStall);
   CHECK(WIFEXITED(result.status));
   CHECK_EQ(WEXITSTATUS(result.status), 134);
   CHECK(result.stderrText.find("[watchdog] STUCK") != std::string::npos);
-  CHECK(result.stderrText.find("tripped on the FIRST frame") == std::string::npos);
+  CHECK(result.stderrText.find("before the main presenter became ready") == std::string::npos);
+}
+
+static void test_progress_after_completion_retains_steady_timeout(void) {
+  const ChildResult result = runChild(ChildAction::CompleteProgressThenStall);
+  CHECK(WIFEXITED(result.status));
+  CHECK_EQ(WEXITSTATUS(result.status), 134);
+  CHECK(result.stderrText.find("[watchdog] STUCK") != std::string::npos);
+  CHECK(result.stderrText.find("before the main presenter became ready") == std::string::npos);
 }
 
 static void test_shipping_present_reports_only_after_finalize(void) {
@@ -107,7 +128,7 @@ static void test_shipping_present_reports_only_after_finalize(void) {
   const size_t present = source.find("void GpuState::gpu_present_ex(");
   CHECK(present != std::string::npos);
   const size_t finalize = source.find("frame_finalize(core);", present);
-  const size_t complete = source.find("watchdog_present_complete();", present);
+  const size_t complete = source.find("watchdog_main_present_complete();", present);
   CHECK(finalize != std::string::npos);
   CHECK(complete != std::string::npos);
   CHECK(complete > finalize);
@@ -115,8 +136,9 @@ static void test_shipping_present_reports_only_after_finalize(void) {
 }
 
 int main(void) {
-  RUN(first_present_retains_boot_grace_until_completion);
+  RUN(bootstrap_progress_retains_grace_until_main_present);
   RUN(completed_present_arms_steady_timeout);
+  RUN(progress_after_completion_retains_steady_timeout);
   RUN(shipping_present_reports_only_after_finalize);
   return pt_summary();
 }

@@ -54,10 +54,11 @@ add_executable(oracle_spike oracle_spike.c)
 target_link_libraries(oracle_spike PRIVATE psxport_oracle)
 target_compile_options(oracle_spike PRIVATE -O2 -g)
 
-# Registered unconditionally: the root CMakeLists calls enable_testing() before descending into tools/,
-# and this is a GATE — an oracle that stopped executing injected code must fail `ctest`, not merely be
-# available to run by hand. Guarding on BUILD_TESTING here made it vanish from ctest silently.
-add_test(NAME oracle_spike COMMAND oracle_spike)
+# Standalone psxport registers this gate. An embedded consumer still gets the oracle targets but owns
+# its own CTest surface unless it explicitly opts into the complete framework suite.
+if(PSXPORT_BUILD_TESTS)
+  add_test(NAME oracle_spike COMMAND oracle_spike)
+endif()
 
 # oracle_trace — runs a REAL game executable in the reference and writes a per-instruction trace, which is
 # one side of milestone 2's differential. A trace FILE rather than a pipe or a symbol-prefixed archive: it
@@ -66,6 +67,11 @@ add_test(NAME oracle_spike COMMAND oracle_spike)
 add_executable(oracle_trace oracle_trace.c)
 target_link_libraries(oracle_trace PRIVATE psxport_oracle)
 target_compile_options(oracle_trace PRIVATE -O2 -g)
+if(PSXPORT_BUILD_TESTS)
+  add_test(NAME crossvalidate_crt0_selftest
+           COMMAND ${CMAKE_COMMAND} -E env python3
+                   ${CMAKE_CURRENT_SOURCE_DIR}/crossvalidate_crt0.py --selftest)
+endif()
 
 # NO mutation harness here. `prove_spike_can_fail.sh` used to rebuild the shim with one thing broken and
 # require oracle_spike to fail. It earned its keep once — it is what exposed the unpopulated-FastMap and

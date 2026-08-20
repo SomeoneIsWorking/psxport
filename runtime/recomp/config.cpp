@@ -290,7 +290,7 @@ IntVar cv_watchdog("PSXPORT_WATCHDOG",
                    /*persistable=*/false);
 IntVar cv_watchdog_boot("PSXPORT_WATCHDOG_BOOT",
                         -1,
-                        "first-present grace, seconds (-1 = derive: max(WATCHDOG, 45))",
+                        "main-presenter cold-init grace, seconds (-1 = derive: max(WATCHDOG, 45))",
                         /*persistable=*/false);
 
 TextVar cv_asset_dir("PSXPORT_ASSET_DIR",

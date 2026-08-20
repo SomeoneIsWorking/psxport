@@ -50,9 +50,18 @@ static const char *kReg[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
                                "t3",   "t4", "t5", "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5",
                                "s6",   "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
 
+static void dump_register_block(FILE *out, const char *tag, long step, const OracleState *state) {
+  fprintf(out, "# %s-REGS step=%ld pc=0x%08X\n", tag, step, state->pc);
+  for (int r = 1; r < 32; r++) {
+    fprintf(out, "# %s-REG %s=0x%08X\n", tag, kReg[r], state->gpr[r]);
+  }
+  fprintf(out, "# %s-REG lo=0x%08X\n# %s-REG hi=0x%08X\n", tag, state->lo, tag, state->hi);
+}
+
 static void usage(void) {
   fprintf(stderr,
           "usage: oracle_trace <PS-X EXE> [--steps N] [--out FILE] [--entry 0xADDR]\n"
+          "                    [--capture-first-call]\n"
           "\n"
           "Steps a real game executable in the independent reference emulator (the vendored Mednafen PSX\n"
           "CPU, no libretro.c) and writes a per-instruction trace for a differential compare.\n"
@@ -60,6 +69,8 @@ static void usage(void) {
           "  --steps N      how many instructions to trace (default 200)\n"
           "  --out FILE     where the trace goes (default: stdout)\n"
           "  --entry 0xADDR start somewhere other than the header's pc0, for tracing one function\n"
+          "  --capture-first-call record registers after the delay slot of the first executed jal;\n"
+          "                       refuse if no call is reached inside --steps\n"
           "  --summary-only omit per-step lines; keep the headers, the boundary register dump and the\n"
           "                 summary. For long windows (a bss-zeroing loop is ~200k instructions) where the\n"
           "                 per-step detail would be gigabytes and only the boundary is of interest.\n"
@@ -76,6 +87,7 @@ int main(int argc, char **argv) {
   const char *path = NULL, *out_path = NULL;
   long steps = 200;
   uint32_t entry_override = 0;
+  int capture_first_call = 0;
   int summary_only = 0;
 
   for (int i = 1; i < argc; i++) {
@@ -85,6 +97,8 @@ int main(int argc, char **argv) {
       out_path = argv[++i];
     } else if (!strcmp(argv[i], "--entry") && i + 1 < argc) {
       entry_override = (uint32_t)strtoul(argv[++i], NULL, 0);
+    } else if (!strcmp(argv[i], "--capture-first-call")) {
+      capture_first_call = 1;
     } else if (!strcmp(argv[i], "--summary-only")) {
       summary_only = 1;
     } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
@@ -212,6 +226,9 @@ int main(int argc, char **argv) {
           t_size);
   fprintf(out, "# entry: 0x%08X%s\n", entry, entry_override ? " (--entry override)" : " (header pc0)");
   fprintf(out, "# steps requested: %ld\n", steps);
+  if (capture_first_call) {
+    fprintf(out, "# requested call capture: first executed jal\n");
+  }
   fprintf(out, "# format: <n> <pc> <cycles> [reg=value ...]  — only CHANGED registers are listed\n");
 
   OracleState prev;
@@ -231,8 +248,16 @@ int main(int argc, char **argv) {
   long last_jal_step = -1;
   int jal_pending = 0;
   uint32_t jal_pending_ra = 0;
+  long captured_call_step = -1;
 
   for (n = 0; n < steps; n++) {
+    // Identify jal from the instruction bytes, not from a change to $ra: ordinary instructions and jalr
+    // can also write r31. The executable bytes are independent of the symbolic crt0 decoder.
+    int executed_jal = 0;
+    if (present >= 4 && prev.pc >= t_addr && prev.pc <= t_addr + present - 4) {
+      const uint32_t offset = prev.pc - t_addr;
+      executed_jal = (rd32le(img + PSX_EXE_HEADER_BYTES + offset) >> 26) == 3;
+    }
     stop = oracle_step();
     OracleState now;
     oracle_capture(&now);
@@ -273,7 +298,7 @@ int main(int argc, char **argv) {
       // unconditionally, including under --summary-only, because the boundary is the whole point of a
       // long window — and dumped in one place so a cross-check parses one format, not a scan for the
       // last write to each register.
-      fprintf(out, "# BOUNDARY-REGS step=%ld pc=0x%08X\n", n, now.pc);
+      dump_register_block(out, "BOUNDARY", n, &now);
       if (last_jal_step >= 0) {
         fprintf(
             out, "# BOUNDARY-LAST-JAL target=0x%08X ra=0x%08X step=%ld\n", last_jal_target, last_jal_ra, last_jal_step);
@@ -282,18 +307,19 @@ int main(int argc, char **argv) {
                 "# BOUNDARY-LAST-JAL none — execution left the text without a jal having been\n"
                 "#   observed, so there is no call site to attribute the boundary to\n");
       }
-      for (int r = 1; r < 32; r++) {
-        fprintf(out, "# BOUNDARY-REG %s=0x%08X\n", kReg[r], now.gpr[r]);
-      }
-      fprintf(out, "# BOUNDARY-REG lo=0x%08X\n# BOUNDARY-REG hi=0x%08X\n", now.lo, now.hi);
     }
     if (jal_pending) { // the delay slot has now run; this PC is the call target
       last_jal_target = now.pc;
       last_jal_ra = jal_pending_ra;
       last_jal_step = n;
       jal_pending = 0;
+      if (capture_first_call && captured_call_step < 0) {
+        captured_call_step = n;
+        fprintf(out, "# CAPTURED-CALL target=0x%08X ra=0x%08X step=%ld\n", last_jal_target, last_jal_ra, last_jal_step);
+        dump_register_block(out, "CALL-BOUNDARY", n, &now);
+      }
     }
-    if (now.gpr[31] != prev.gpr[31]) {
+    if (executed_jal) {
       jal_pending = 1;
       jal_pending_ra = now.gpr[31];
     }
@@ -332,6 +358,16 @@ int main(int argc, char **argv) {
             "#   be performed from it. Raise --steps.\n",
             traced);
   }
+  if (capture_first_call) {
+    if (captured_call_step >= 0) {
+      fprintf(out, "# captured first executed call at step %ld\n", captured_call_step);
+    } else {
+      fprintf(out,
+              "# FIRST CALL WAS NOT REACHED in %ld traced step(s) — no call-boundary comparison\n"
+              "#   can be performed. Raise --steps.\n",
+              traced);
+    }
+  }
   if (summary_only) {
     fprintf(out,
             "# --summary-only: per-step lines were omitted deliberately. This trace CANNOT be used\n"
@@ -361,7 +397,11 @@ int main(int argc, char **argv) {
     fprintf(stderr, "  trace: %s\n", out_path);
   }
 
+  if (capture_first_call && captured_call_step < 0) {
+    fprintf(stderr, "oracle_trace: REFUSING — no call was reached in %ld step(s).\n", traced);
+  }
+
   free(img);
   oracle_teardown();
-  return 0;
+  return capture_first_call && captured_call_step < 0 ? 2 : 0;
 }

@@ -1,7 +1,7 @@
 ---
 id: C002
 kind: claim
-status: holds
+status: falsified
 created: 2026-08-21
 tags: watchdog,presentation
 depends: runtime/recomp/watchdog.cpp#watchdog_present_complete, runtime/recomp/gpu_native.cpp#GpuState::gpu_present_ex, tests/test_watchdog.cpp#main
@@ -24,3 +24,7 @@ A pre-completion first present is killed at the steady timeout, or a post-comple
 ## Re-confirmed 2026-08-21
 
 2026-08-21 re-confirmed after the completed implementation: build/tests/test_watchdog passed the real first-present positive and post-completion alarm/exit negative; full Clang CTest passed 67/67; Spyro gate passed 14/14 at 3,000 fields where the old entry-time arming had exited 134 in cold SDL initialization.
+
+## Falsified 2026-08-21
+
+The test treated every completed presentation as proof that all cold GPU initialization was finished. Tomba's SCEA/FMV image presenter can complete before the main VRAM presenter allocates its per-Game targets; its heartbeat therefore armed the steady 15-second timeout and two contended runs exited 134 inside the first main-target allocation. C006 replaces this claim with the explicit two-phase contract.

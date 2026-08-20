@@ -74,7 +74,9 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 `core.h`/`game.h` (the `Core`/`Game` objects), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
-REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp` (first-present grace survives cold SDL/GPU initialization; steady timing begins only after completed presentation), `stubs.cpp`,
+REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp`
+(SCEA/FMV image progress retains cold-init grace until the first main-VRAM presentation completes; every later
+heartbeat uses steady timing), `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
 `synchronous_task_wait.{h,cpp}` owns the one product policy for a cooperative spawn-and-wait: game-specific
 task addresses and continuation PCs come from `GameConfig`, the spawned task is pumped to its authored close,
@@ -158,6 +160,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 | tool | what it is for | note |
 |---|---|---|
 | `recomp/emit.py` | the static recompiler: PSX MIPS -> emitted C | |
+| `recomp/psexe.py` | load PS-X EXEs and raw RAM images for framework RE tools | ownership test covers success and refusal paths |
 | `abi_extract.py` | static ABI/stack-contract extractor for generated function bodies | |
 | `port_check.py` | equivalence gate: does a native port's guest-visible store sequence match the substrate | |
 | `port_gen.py` | first-draft generator for a byte-faithful native class method | |
@@ -170,7 +173,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 | `disasm.py` | disassemble a region of a 2 MB main-RAM dump (capstone) | |
 | `dbgclient.py` | REPL client for the debug server | needs a live server |
 | `ghidra_decomp.py` · `symdump_re.py` · `symwidth_re.py` | Ghidra headless scripts | run only inside Ghidra |
-| `oracle/oracle_trace` | run a real executable in the independent reference emulator, write a per-instruction trace | + `oracle_spike` (gate), `crossvalidate_crt0.py` |
+| `oracle/oracle_trace` | run a real executable in the independent reference emulator, write a per-instruction trace or capture one decoded call boundary | + `oracle_spike` (gate), `crossvalidate_crt0.py --selftest` (Crash/CTR shapes) |
 | `crt0_extract` | report a PS-X EXE's crt0 boot group through the shipping decoder | |
 | `discdump` | extract files from a CHD/ISO without `run.sh` | |
 | `smoke/psxport_smoke` | the agnosticism proof: link libpsxport against a stub, zero game symbols | |
@@ -247,7 +250,16 @@ the game enabled CD audio; sequenced (libsnd) BGM is a SEPARATE working path. De
 
 psxport is shared by the game ports, so a framework change is gated by a **hermetic** suite that
 needs no disc and no window — the games each need a disc to run at all, so anything
-disc-gated is useless as a shared gate.
+disc-gated is useless as a shared gate. A standalone configure owns that complete suite through
+`PSXPORT_BUILD_TESTS=ON` (the default when psxport is the top-level project). An embedded consumer
+owns its own CTest surface and defaults the option OFF: framework targets remain available, but psxport
+does not advertise test executables the consumer target did not build or run framework style policy
+against the consumer tree. A consumer can explicitly opt into the complete framework suite.
+
+`test_cmake_test_ownership.py` configures a real embedded fixture twice and proves both sides of that
+boundary: the default registers only the consumer's probe, while explicit opt-in registers the framework
+oracle, runtime, loader, and policy gates. This prevents stale binaries in a reused consumer build from
+masquerading as current framework failures.
 
 `test_synchronous_task_wait` exercises flags 1/2/3 through the shipping completion seam and proves synchronous
 completion does not mutate the retired wait counter. The normal `cpp_style` CTest runs the reusable
@@ -265,7 +277,7 @@ ctest --test-dir build --output-on-failure
 
 ### The agnosticism RATCHET: `game_literals` (`tools/lint/game_literals.py`)
 
-Two of the 44 current ctest entries are not compiled tests. `game_literals` scans `runtime/**` and
+Two entries are the `game_literals` Python gate and its detector selftest. `game_literals` scans `runtime/**` and
 `tools/recomp/**` for hardcoded GUEST addresses — one game's fact compiled into the library every
 port links — and `game_literals_selftest` gates the detector that certifies it. `psxport_smoke` is
 structurally blind to this leak class: a byte-faithful transcription of another game's functions

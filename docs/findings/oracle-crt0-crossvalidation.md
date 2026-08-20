@@ -38,6 +38,23 @@ Seven fields per image: `gp`, the `jal` target (`libcInit`), the BIOS function n
 Every column is BOTH methods' value — they are identical, which is the finding. `$t1 = 0x39` for all seven
 and is omitted from the table for that reason.
 
+## Crash 1 exposed and removed the BIOS-exit assumption
+
+Crash 1's `SCUS_949.00` has a valid but different shape: crt0 calls an in-image `libcInit` at
+`0x80011A18`; that function is not the three-instruction A(39h) thunk. The old cross-validator waited for
+the first exit from mapped text and therefore sampled an unrelated jump to `0xBFC00180` 4,173 steps after
+libcInit. Its last call target and live arguments were unrelated, producing a misleading 1-agree / 5-disagree
+/ 1-unseen result.
+
+The oracle now captures the first executed `jal` independently; `crt0_extract` independently identifies
+the first crt0 call as `libcInit`, so the target comparison is not selected into agreement. The tracer
+records registers after that call's delay slot and refuses if no call is reached. On the real Crash image
+it reaches `0x80011A18` at step 57,910 and all six applicable fields agree: `gp`, call target, `a0`, and
+`crt0_plan`'s `sp`/`a0`/`a1`. The stock-thunk control remains separate: real CTR
+`SCUS_944.26` reaches `libcInit=0x80080620` at step 92,375, then A(39h) at step 92,378, and still agrees on
+all seven fields. A later unrelated text exit cannot satisfy that BIOS check because its last call target
+must also equal the decoded `libcInit`.
+
 **`SCUS_944.54` is Tomba! 2's boot STUB; the game is `MAIN.EXE`, which the stub `LoadExec`s.** Both are
 listed because both have a crt0 and both were checked, but only `MAIN.EXE`'s numbers describe the port —
 they are not interchangeable, and the two disagree exactly where you would expect two different programs to
@@ -131,26 +148,20 @@ all use low stacks.
 
 ## Why the agreement is not vacuous
 
-A cross-check that accidentally read both numbers out of the SAME source would report perfect agreement on
-every game forever and look exactly like success. `tools/oracle/prove_crossvalidate_discriminates.py`
-rules that out: it feeds game A's symbolic decode against game B's executed boundary and requires every
-game-specific field to DISAGREE. Measured on Spyro vs Spider-Man — 5 of 6 fields discriminate, and the
-sixth is `$t1 = 0x39`, which is asserted to be the SAME because every PS-X crt0 makes that same call.
-
-That script has three outcomes per field, not two, and the reason is measured: `crt0_plan sp` is
-`0x801FFFF8` for both Spyro and Tomba! 2, so that PAIR cannot test it — while across the corpus `sp` takes
-three distinct values, so it does discriminate in general. A coincidental collision is reported
-INCONCLUSIVE (exit 2, "not a pass") rather than FAIL, because a false alarm trains everyone to ignore the
-check.
+A cross-check that accidentally read both numbers out of the same source would report agreement forever.
+`crossvalidate_crt0.py --selftest` mutates the independently captured call target and requires a real
+disagreement; it also requires an unrelated text exit to be reported unseen and a missing call boundary to
+refuse. Fields still have three outcomes: agree, disagree, or cannot see. The last one exits 2 rather than
+being laundered into agreement.
 
 ## Reproducing it
 
 ```sh
 cmake -S . -B build && cmake --build build --target oracle_trace crt0_extract -j
 python3 tools/oracle/crossvalidate_crt0.py <path-to-extracted-exe> --steps 900000
-python3 tools/oracle/prove_crossvalidate_discriminates.py <exe-A> <exe-B>   # validate the checker itself
+python3 tools/oracle/crossvalidate_crt0.py --selftest
 ```
 
 `--steps` must be large enough to get through the bss-zeroing loop; Mega Man X4 needs ~362k instructions.
-If the window is too short the script REFUSES (exit 2) and says the boundary was never reached — it does
-not report "0 mismatches", because zero comparisons and zero disagreements must never look alike.
+If the window is too short the script REFUSES (exit 2) and says no call boundary was reached — it does not
+report "0 mismatches", because zero comparisons and zero disagreements must never look alike.

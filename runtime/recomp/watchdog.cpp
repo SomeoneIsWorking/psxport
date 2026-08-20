@@ -2,8 +2,9 @@
 // condition that never becomes true, an infinite loop, etc.) without crashing — so an external
 // `timeout` is the only way to stop it and it tells you nothing about WHERE. This arms a SIGALRM
 // that fires if no frame has been presented within N seconds and dumps the current backtrace
-// (the stuck call stack) before aborting. Report progress only after a present completes: the first
-// present owns a larger cold-initialization grace and must not discard it before SDL/GPU setup returns.
+// (the stuck call stack) before aborting. The main VRAM presenter owns the one-way transition from
+// cold-init grace to steady timing. Bootstrap image presenters report progress without making that
+// transition: they do not allocate the main presenter's per-Game targets or prove it is ready.
 //
 // Build note: backtrace symbol names need -rdynamic at link time (run.sh adds it). Without it
 // you still get addresses — resolve with `addr2line -e scratch/bin/tomba2_port <addr>`.
@@ -26,10 +27,10 @@
 // sig_atomic_t fields are the only ones a handler reads.
 static struct {
   int secs;      // 0 => disabled
-  int boot_secs; // generous grace for the FIRST frame (cold pipeline compile)
+  int boot_secs; // generous grace until the main presenter completes cold initialization
   volatile sig_atomic_t armed;
-  volatile sig_atomic_t first_frame_done; // 0 until the first present completes
-  volatile sig_atomic_t int_seen;         // SIGINT/SIGTERM re-entry latch
+  volatile sig_atomic_t main_present_ready; // 0 until the first main VRAM presentation completes
+  volatile sig_atomic_t int_seen;           // SIGINT/SIGTERM re-entry latch
 } s_wd;
 
 // The interpreter is gone (2026-06-30): under the recomp substrate the C backtrace below names the
@@ -41,9 +42,10 @@ static void on_alarm(int sig) {
   (void)sig;
   static const char msg[] = "\n[watchdog] STUCK: no frame presented within the timeout — backtrace:\n";
   write(2, msg, sizeof(msg) - 1);
-  if (!s_wd.first_frame_done) {
-    static const char hint[] = "[watchdog] (tripped on the FIRST frame — likely cold GPU pipeline "
-                               "compile, not a hang; re-run, or raise PSXPORT_WATCHDOG_BOOT)\n";
+  if (!s_wd.main_present_ready) {
+    static const char hint[] = "[watchdog] (tripped before the main presenter became ready — likely "
+                               "cold GPU initialization, not a hang; re-run, or raise "
+                               "PSXPORT_WATCHDOG_BOOT)\n";
     write(2, hint, sizeof(hint) - 1);
   }
 #ifdef HAVE_BACKTRACE
@@ -123,10 +125,10 @@ void watchdog_init(void) {
   if (s_wd.secs <= 0) {
     return;
   }
-  // The FIRST presented frame is legitimately slow: RADV/AMD compiles every Vulkan pipeline (SSAO,
-  // shadow map, tritex, present blit, …) on first use, so the first present blocks in the GPU fence
+  // The FIRST main-VRAM frame is legitimately slow: RADV/AMD compiles every Vulkan pipeline (SSAO,
+  // shadow map, tritex, present blit, …) on first use, so that present can block in the GPU fence
   // wait for several seconds on a cold shader cache (e.g. right after a full ./run.sh rebuild). That
-  // is NOT a hang, so the 3s steady-state budget must not apply to it. Give the first frame a much
+  // is NOT a hang, so the 3s steady-state budget must not apply to it. Give cold initialization a much
   // larger grace (still finite, so a real first-frame GPU hang is still caught + a Ctrl+C works).
   // PSXPORT_WATCHDOG_BOOT overrides; default = max(s_secs, 45). The CVar's default is -1, NOT 0,
   // precisely so that an explicit PSXPORT_WATCHDOG_BOOT=0 still means zero rather than being
@@ -139,18 +141,31 @@ void watchdog_init(void) {
   sigaction(SIGALRM, &sa, 0);
   s_wd.armed = 1;
   alarm((unsigned)s_wd.boot_secs);
-  lucent::info(
-      "watchdog", "armed: {}s frame-progress timeout ({}s grace for the first frame)", s_wd.secs, s_wd.boot_secs);
+  lucent::info("watchdog",
+               "armed: {}s frame-progress timeout ({}s grace until the main presenter is ready)",
+               s_wd.secs,
+               s_wd.boot_secs);
 }
 
-// Report a COMPLETED present — one beat per produced frame. Calling this at present entry is wrong:
-// cold SDL/GPU initialization is part of the first present and owns boot_secs, not the shorter steady
-// budget. The 2026-08-21 Spyro gate caught that exact ordering bug in SDL_Init(VIDEO).
-void watchdog_present_complete(void) {
+// Report forward progress without changing lifecycle phase. The SCEA and FMV image presenters use
+// this because they can submit images before the main VRAM presenter has allocated its targets. Once
+// that presenter is ready, the same call naturally uses the steady timeout, so later movies do not
+// regain boot grace.
+void watchdog_progress(void) {
+  if (s_wd.armed) {
+    alarm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
+  }
+}
+
+// Report a COMPLETED main-VRAM present — one beat per produced gameplay frame and the one-way
+// cold-init -> steady transition. Calling this at entry is wrong: SDL/GPU initialization and the
+// first full target allocation are part of this present and own boot_secs. Calling it for a simpler
+// bootstrap image is equally wrong because that path does not materialise those targets.
+void watchdog_main_present_complete(void) {
   if (!s_wd.armed) {
     return;
   }
-  s_wd.first_frame_done = 1;
+  s_wd.main_present_ready = 1;
   alarm((unsigned)s_wd.secs);
 }
 
@@ -159,7 +174,7 @@ void watchdog_present_complete(void) {
 // calls this before work so a resumed step can still be diagnosed if it hangs.
 void watchdog_resume(void) {
   if (s_wd.armed) {
-    alarm((unsigned)(s_wd.first_frame_done ? s_wd.secs : s_wd.boot_secs));
+    alarm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
   }
 }
 

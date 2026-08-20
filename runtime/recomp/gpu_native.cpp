@@ -3668,8 +3668,8 @@ void GpuState::gpu_present_ex(Core *core, int do_blit) {
                    s_fade_bigsemi);
     }
   }
-  frame_finalize(core);        // depth-table reset, batch reset, s_frame++ / s_prim_order / s_seen3d bookkeeping
-  watchdog_present_complete(); // completion, not entry: cold initialization retains first-frame grace
+  frame_finalize(core);             // depth-table reset, batch reset, s_frame++ / s_prim_order / s_seen3d bookkeeping
+  watchdog_main_present_complete(); // completion, not entry: cold initialization retains cold-init grace
 }
 // Per-frame render finalize: the "advance to the next frame" work that is INDEPENDENT of the window blit —
 // native per-vertex depth-table reset, geometry-batch reset, and the per-frame GpuState counters

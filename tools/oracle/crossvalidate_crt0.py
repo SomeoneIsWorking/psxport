@@ -11,8 +11,8 @@ them, forever, which is the exact failure the oracle exists to break: an instrum
 other answer.
 
 `tools/oracle/oracle_trace` derives nothing. It EXECUTES the real crt0 in the vendored Mednafen CPU and
-records what the registers actually held. So the two methods share no code and no assumptions — one
-reads instructions, the other runs them.
+records the first call boundary independently. For stock A(39h) thunks it also retains the later BIOS
+boundary check; an in-image libcInit does not have to leave mapped text.
 
 This script runs both and compares them field by field. A measured constant that ships must be diffed by
 CODE against the measurement it came from, never hand-compared; hand-comparing is how a session reports
@@ -21,14 +21,15 @@ agreement it never checked.
 WHAT A NEGATIVE LOOKS LIKE — designed first, on purpose
 -------------------------------------------------------
 Every way this can fail to answer prints something that is NOT mistakable for agreement:
-  * no BOUNDARY-REG block in the trace -> the window never reached the BIOS call, so NOTHING was
-    compared. Exits 2 saying so and telling you to raise --steps. It does not print "0 mismatches".
+  * no CALL-BOUNDARY-REG block in the trace -> the window never reached a call, so NOTHING was compared.
+    Exits 2 saying so and telling you to raise --steps. It does not print "0 mismatches".
   * a field present in one source and absent in the other -> reported as CANNOT SEE, counted separately
     from both agreements and disagreements, and it makes the run exit nonzero.
   * a disagreement -> printed with both values and which source said what.
 And the denominator is always printed: how many fields were compared out of how many were attempted.
 
 Usage:  crossvalidate_crt0.py <PS-X EXE> [--build DIR] [--steps N]
+        crossvalidate_crt0.py --selftest
 Exit:   0 = every comparable field agrees, and at least one was compared.
         1 = a real disagreement.
         2 = could not compare (a tool missing, the window too short, a field invisible).
@@ -47,7 +48,7 @@ def die(msg, code=2):
 
 
 def run(cmd):
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -80,8 +81,8 @@ def parse_symbolic(text):
     return out
 
 
-def parse_boundary(text):
-    """State at the moment execution left the mapped text. Returns ({reg: int}, step, pc, jal) or None.
+def parse_boundary(text, tag="BOUNDARY"):
+    """Parse one named register boundary. Returns ({reg: int}, step, pc, jal) or None.
 
     `jal` is the target of the last observed jal — the CALL that left the text. It is recorded by the
     tracer rather than derived here, because a jal's target is the PC one step after $ra is written (the
@@ -89,14 +90,17 @@ def parse_boundary(text):
     is a different address and produced a false DISAGREE before this was fixed.
     """
     regs, step, pc, jal = {}, None, None, None
+    regs_re = re.compile(rf"# {re.escape(tag)}-REGS step=(\d+) pc=0x([0-9A-Fa-f]+)")
+    reg_re = re.compile(rf"# {re.escape(tag)}-REG (\w+)=0x([0-9A-Fa-f]+)")
     for line in text.splitlines():
-        m = re.match(r"# BOUNDARY-REGS step=(\d+) pc=0x([0-9A-Fa-f]+)", line)
+        m = regs_re.match(line)
         if m:
             step, pc = int(m.group(1)), int(m.group(2), 16)
-        m = re.match(r"# BOUNDARY-REG (\w+)=0x([0-9A-Fa-f]+)", line)
+        m = reg_re.match(line)
         if m:
             regs[m.group(1)] = int(m.group(2), 16)
-        m = re.match(r"# BOUNDARY-LAST-JAL target=0x([0-9A-Fa-f]+)", line)
+        marker = "BOUNDARY-LAST-JAL" if tag == "BOUNDARY" else "CAPTURED-CALL"
+        m = re.match(rf"# {marker} target=0x([0-9A-Fa-f]+)", line)
         if m:
             jal = int(m.group(1), 16)
     if step is None:
@@ -104,13 +108,82 @@ def parse_boundary(text):
     return regs, step, pc, jal
 
 
+def comparison_rows(sym, call, text_exit=None):
+    regs, _, _, jal = call
+    rows = [
+        ("gp", sym.get("gp"), regs.get("gp"), "crt0 loads the decoded value into $gp"),
+        ("libcInit target (the jal)", sym.get("libcInit"), jal,
+         "the oracle's first executed jal must target decoded libcInit"),
+        ("libcInit a0 (heapBase+4)", sym.get("heapBase") + 4 if sym.get("heapBase") else None,
+         regs.get("a0"), "the decoded delay slot adds four to heapBase"),
+        ("crt0_plan sp", sym.get("planSp"), regs.get("sp"), "executed $sp must equal the shipping plan"),
+        ("crt0_plan a0", sym.get("planA0"), regs.get("a0"), "executed $a0 must equal the shipping plan"),
+        ("crt0_plan a1 (HEAP SIZE)", sym.get("planA1"), regs.get("a1"),
+         "executed $a1 at libcInit must equal the shipping plan"),
+    ]
+    if "biosFn" in sym:
+        bios = None
+        if text_exit and text_exit[3] == sym.get("libcInit"):
+            bios = text_exit[0].get("t1")
+        rows.append(("BIOS function number", sym["biosFn"], bios,
+                     "the decoded stock thunk must be the call exiting at A(39h)"))
+    bias, sp = sym.get("stackBias"), regs.get("sp")
+    if bias is not None and sp is not None:
+        rows.append(("stackBias relation", None, None,
+                     f"executed sp=0x{sp:08X}, bias {bias} -> top 0x{(sp - bias) & 0xFFFFFFFF:08X}"))
+    return rows
+
+
+def row_counts(rows):
+    compared = [(a, b) for _, a, b, _ in rows if a is not None or b is not None]
+    return (sum(a == b for a, b in compared if a is not None and b is not None),
+            sum(a != b for a, b in compared if a is not None and b is not None),
+            sum(a is None or b is None for a, b in compared))
+
+
+def selftest():
+    crash = {"gp": 0x800563FC, "libcInit": 0x80011A18, "heapBase": 0x80061A78,
+             "planSp": 0x801FFFF8, "planA0": 0x80061A7C, "planA1": 0x19D580, "stackBias": -8}
+    call_text = """# CAPTURED-CALL target=0x80011A18 ra=0x8003E0A8 step=57910
+# CALL-BOUNDARY-REGS step=57910 pc=0x80011A18
+# CALL-BOUNDARY-REG gp=0x800563FC
+# CALL-BOUNDARY-REG sp=0x801FFFF8
+# CALL-BOUNDARY-REG a0=0x80061A7C
+# CALL-BOUNDARY-REG a1=0x0019D580"""
+    call = parse_boundary(call_text, "CALL-BOUNDARY")
+    ctr = dict(crash, biosFn=0x39)
+    exit_text = """# BOUNDARY-REGS step=57913 pc=0x000000A0
+# BOUNDARY-LAST-JAL target=0x80011A18 ra=0x8003E0A8 step=57910
+# BOUNDARY-REG t1=0x00000039"""
+    checks = [
+        ("Crash in-image libcInit", row_counts(comparison_rows(crash, call)) == (6, 0, 0)),
+        ("unreached call refuses", parse_boundary("# FIRST CALL WAS NOT REACHED", "CALL-BOUNDARY") is None),
+        ("wrong call target disagrees", row_counts(comparison_rows(
+            crash, parse_boundary(call_text.replace("target=0x80011A18", "target=0x80011A1C"),
+                                  "CALL-BOUNDARY"))) == (5, 1, 0)),
+        ("CTR A(39h) control", row_counts(comparison_rows(ctr, call, parse_boundary(exit_text))) == (7, 0, 0)),
+        ("unrelated exit is unseen", row_counts(comparison_rows(
+            ctr, call, parse_boundary(exit_text.replace("target=0x80011A18", "target=0x80011A1C")))) == (6, 0, 1)),
+    ]
+    for label, ok in checks:
+        print(f"  {'PASS' if ok else 'FAIL'} {label}")
+    failed = sum(not ok for _, ok in checks)
+    print(f"crossvalidate_crt0 --selftest: {len(checks) - failed}/{len(checks)} passed")
+    return 1 if failed else 0
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("exe")
+    ap.add_argument("exe", nargs="?")
     ap.add_argument("--build", default=None, help="build dir holding crt0_extract and oracle_trace")
     ap.add_argument("--steps", type=int, default=400000,
                     help="instructions to execute; a bss-zeroing loop can be ~220k (default 400000)")
+    ap.add_argument("--selftest", action="store_true", help="run bounded Crash/CTR boundary tests")
     a = ap.parse_args()
+    if a.selftest:
+        return selftest() if not a.exe else die("--selftest does not take an executable")
+    if not a.exe:
+        die("no executable given")
 
     repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     build = a.build or os.path.join(repo, "build")
@@ -141,67 +214,30 @@ def main():
         die("crt0_extract produced no parseable boot-group fields — its report format changed and this "
             "script would silently compare nothing")
 
-    rc_b, so_b, se_b = run([tracer, a.exe, "--steps", str(a.steps),
-                            "--summary-only", "--out", trace_path])
+    if sym.get("libcInit") is None:
+        die("crt0_extract did not report libcInit; there is no call boundary to compare")
+    rc_b, _so_b, se_b = run([tracer, a.exe, "--steps", str(a.steps), "--capture-first-call",
+                             "--summary-only", "--out", trace_path])
     if rc_b != 0:
         die(f"oracle_trace refused (exit {rc_b}):\n{se_b.strip()}")
     with open(trace_path) as f:
         trace_text = f.read()
 
-    b = parse_boundary(trace_text)
-    if b is None:
-        die(f"the {a.steps}-instruction window never left the mapped text, so it never reached the BIOS "
-            f"call and there is NO boundary to compare. Raise --steps. (A bss-zeroing loop over a large "
-            f"bss can need several hundred thousand instructions.) Trace: {trace_path}")
-    regs, step, pc, jal_target = b
+    call = parse_boundary(trace_text, "CALL-BOUNDARY")
+    if call is None:
+        die(f"the {a.steps}-instruction window never reached a call, so there is NO boundary to compare. "
+            f"Raise --steps. Trace: {trace_path}")
+    _regs, step, pc, _jal = call
+    text_exit = parse_boundary(trace_text)
 
-    print(f"\n  execution left the mapped text at step {step}, pc=0x{pc:08X}")
+    print(f"\n  execution reached the first crt0 call at step {step}, pc=0x{pc:08X}")
+    if "biosFn" in sym and text_exit:
+        print(f"  stock A(39h) control also reached pc=0x{text_exit[2]:08X} at step {text_exit[1]}")
     print(f"  trace: {trace_path}\n")
 
-    # Each row: label, what method A says, what method B's registers say, and the derivation that links
-    # them. The derivation is written out so a reader can check the CLAIM, not just the numbers.
-    rows = []
+    rows = comparison_rows(sym, call, text_exit)
 
-    def cmp_row(label, a_val, b_val, how):
-        rows.append((label, a_val, b_val, how))
-
-    cmp_row("gp", sym.get("gp"), regs.get("gp"),
-            "crt0 loads $gp with the value crt0_extract reads out of the lui/ori pair")
-    cmp_row("libcInit target (the jal)", sym.get("libcInit"), jal_target,
-            "the tracer records the target of the last jal before the boundary; crt0_extract names the "
-            "same address as libcInit")
-    cmp_row("BIOS function number", sym.get("biosFn"), regs.get("t1"),
-            "the thunk loads the BIOS function number into $t1 before jumping to 0xA0; crt0_extract "
-            "claims A(39h) = InitHeap, so the executed $t1 must be 0x39")
-    cmp_row("InitHeap a0 (heapBase+4)", sym.get("heapBase") + 4 if sym.get("heapBase") else None,
-            regs.get("a0"),
-            "crt0_extract reports the delay slot is `addi a0,a0,4`, so the executed a0 must be "
-            "heapBase+4")
-    # The three crt0_plan outputs. a1 is the important one: it is COMPUTED, not scanned, from two words the
-    # crt0 loads — so until crt0_extract printed its own value there was nothing to diff the oracle's
-    # measurement against, and the heap size is precisely the field that shipped wrong.
-    cmp_row("crt0_plan sp", sym.get("planSp"), regs.get("sp"),
-            "crt0_plan computes sp = mem[stackTopBase] + bias | 0x80000000; the executed $sp must equal it")
-    cmp_row("crt0_plan a0", sym.get("planA0"), regs.get("a0"),
-            "crt0_plan computes a0 = (heapBase masked | KSEG0) + 4")
-    cmp_row("crt0_plan a1 (HEAP SIZE)", sym.get("planA1"), regs.get("a1"),
-            "crt0_plan computes a1 = (mem[stackTopBase] + bias - mem[stackTopBase2]) - maskedHeapBase; "
-            "the executed $a1 at the InitHeap call must equal it")
-
-    # sp: crt0_extract reports the ADDRESS of the stack-top global plus the bias, not the resulting sp,
-    # so this row states what it can and cannot check rather than inventing a comparison.
-    bias = sym.get("stackBias")
-    sp = regs.get("sp")
-    if bias is not None and sp is not None:
-        # The executed sp must be a KSEG0 address, and (sp - bias) must be the unbiased stack top, which
-        # for every measured Sony crt0 is a round value. Checking the bias RELATION is honest; checking sp
-        # against a constant would just re-assert the trace.
-        unbiased = (sp - bias) & 0xFFFFFFFF
-        rows.append(("stackBias relation", None, None,
-                     f"executed sp=0x{sp:08X}, declared bias {bias} -> unbiased stack top "
-                     f"0x{unbiased:08X}"))
-
-    agree, disagree, cannot = 0, 0, 0
+    agree, disagree, cannot = row_counts(rows)
     print("  field                          method A      method B      verdict")
     print("  " + "-" * 74)
     for label, av, bv, how in rows:
@@ -209,17 +245,14 @@ def main():
             print(f"  {label:<30} {'—':>11}   {'—':>11}   INFO      {how}")
             continue
         if av is None or bv is None:
-            cannot += 1
             a_s = f"0x{av:08X}" if av is not None else "not reported"
             b_s = f"0x{bv:08X}" if bv is not None else "not reported"
             print(f"  {label:<30} {a_s:>11}   {b_s:>11}   CANNOT SEE")
             print(f"       one method does not report this field, so it is NOT agreement: {how}")
             continue
         if av == bv:
-            agree += 1
             print(f"  {label:<30} 0x{av:08X}    0x{bv:08X}    AGREE")
         else:
-            disagree += 1
             print(f"  {label:<30} 0x{av:08X}    0x{bv:08X}    *** DISAGREE ***")
             print(f"       {how}")
 
@@ -236,11 +269,14 @@ def main():
         print("\nDISAGREEMENT. The two methods do not describe the same crt0. Trust neither shipped constant")
         print("  until it is resolved — and note the EXECUTION is the stronger evidence.")
         return 1
+    if cannot:
+        print("\nREFUSING: at least one required field could not be observed at its validated boundary.")
+        return 2
     if agree == 0:
         print("\nREFUSING: zero fields were actually compared, so this run proves nothing.")
         return 2
     print(f"\nAGREEMENT on all {agree} comparable field(s). A symbolic decode and a real execution, sharing")
-    print("  no code, describe the same boot group.")
+    print("  no code, describe the same libcInit call boundary.")
     return 0
 
 
