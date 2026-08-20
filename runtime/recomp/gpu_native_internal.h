@@ -272,7 +272,17 @@ struct GpuState {
   // through MY OWN decoder (not the rasterizer) and write an RGB PPM. Proves the texture decode is owned.
   void tex_export(const char* name, int u0, int v0, int w, int h);
   void raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, uint8_t cb, int semi);
-  void set_texpage(uint16_t tp);
+  // A texpage word reaches the GPU by two routes that are NOT equivalent, and conflating them is
+  // what switched dithering off mid-frame (kanban #113). On real hardware — and in beetle, where the
+  // two are literally different functions — GP0(0xE1) DrawMode owns the dither-enable bit, while a
+  // primitive's embedded texpage word carries page / colour-mode / blend / tex-disable and nothing
+  // else. Bit 9 of an embedded word is meaningless; honouring it let the first textured polygon that
+  // happened to have it clear disable dither for everything drawn afterwards.
+  enum class TexPageFrom {
+    DrawMode,    // GP0(0xE1) — the only command permitted to change the dither enable
+    Primitive,   // a textured polygon/sprite's embedded word (vertex 1's UV slot high half)
+  };
+  void set_texpage(uint16_t tp, TexPageFrom from);
   void set_clut(uint16_t cl);
   void gp0_exec(Core* core);
   void gpu_gp0(Core* core, uint32_t w);

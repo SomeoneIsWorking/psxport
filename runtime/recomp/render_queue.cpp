@@ -1150,7 +1150,9 @@ void RenderQueue::drawWorldQuad(Core* core, const float* px, const float* py, co
   { static const lucent::Channel silbbox{"silbbox"}; static int once = 0;
     if (silbbox && !once++) lucent::debug("silbbox", "s_off=({},{})", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
   GpuState& s = core->game->gpu;
-  s.set_texpage(tp);
+  // Primitive route: this tp came from a guest PRIMITIVE's embedded texpage word, so it must not be
+  // allowed to change the dither enable — that belongs to GP0(0xE1) alone. See TexPageFrom.
+  s.set_texpage(tp, GpuState::TexPageFrom::Primitive);
   s.set_clut(clut);
   s.s_seen3d = 1;                              // a projected world prim has now been drawn this frame
   int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];

@@ -75,7 +75,18 @@ extern "C" {
 // Renderer/geometry knobs — pinned to plain, faithful, software-path behaviour.
 uint8_t  psx_gpu_upscale_shift = 0;         // 1x internal resolution: we want the HARDWARE answer
 uint8_t  psx_gpu_upscale_shift_hw = 0;
-uint8_t  psx_gpu_dither_mode = 1;           // dithering ON, as the console does it
+// TWO BUGS LIVED IN THIS ONE LINE, both mine, and they are why the oracle's dither could not be
+// trusted on 3D content (kanban #113):
+//   * TYPE. beetle declares `extern enum dither_mode psx_gpu_dither_mode` (gpu_common.h) — an
+//     unscoped enum, so 4 bytes. Defining it as uint8_t here gave the linker a 1-byte object that
+//     beetle then read 4 bytes out of, taking three bytes of whatever followed in .data. That is
+//     undefined behaviour, and the value it yielded was never checked.
+//   * VALUE. The enum is DITHER_NATIVE = 0, DITHER_UPSCALED = 1, DITHER_OFF = 2. "1" was written
+//     here meaning "on"; 1 is UPSCALED. It happens to behave identically at dither_upscale_shift 0,
+//     which is exactly why it survived — a wrong constant that is harmless today and wrong the
+//     moment upscaling is switched on.
+// unsigned int, because every enumerator is non-negative and that is the underlying type GCC picks.
+unsigned int psx_gpu_dither_mode = 0;       // DITHER_NATIVE — dither exactly as the console does
 bool     psx_gpu_rasterize_both_fields = false;
 uint8_t  line_render_mode = 0;
 bool     is_monkey_hero = false;            // a per-title compatibility hack in the fork; not us
@@ -208,6 +219,15 @@ bool ensure_init() {
   // and every "no difference found" from this oracle is void. That is the only thing that separates a
   // working oracle from one that agrees because it rasterises nothing (which is exactly how this
   // landed the first three times).
+  // PSXPORT_GPU_BEETLE_DITHER=0 — turn beetle's dithering off, as a DISCRIMINATOR rather than a
+  // setting. When ours and beetle disagree in a 4x4 pattern, "one of us dithers and the other does
+  // not" is the hypothesis, and reasoning cannot say WHICH: running beetle undithered can. If the
+  // difference collapses, our side was the one not dithering; if it grows, ours was.
+  if (cfg_int("PSXPORT_GPU_BEETLE_DITHER", 1) == 0) {
+    psx_gpu_dither_mode = 2;   // DITHER_OFF
+    lucent::warn("gpubeetle", "beetle's dithering is DISABLED (PSXPORT_GPU_BEETLE_DITHER=0). This is "
+                              "a discriminator run, not a faithful one.");
+  }
   s_selftest = cfg_int("PSXPORT_GPU_BEETLE_SELFTEST", 0) != 0;
   if (s_selftest) {
     psxport_gpu_selftest_bias = 1;

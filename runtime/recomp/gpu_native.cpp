@@ -594,12 +594,14 @@ static inline uint8_t cmd_b(uint32_t c) { return (c >> 16) & 0xFF; }
 static inline int cx(uint32_t w) { int v = w & 0x7FF; return v >= 0x400 ? v - 0x800 : v; }
 static inline int cy(uint32_t w) { int v = (w >> 16) & 0x7FF; return v >= 0x400 ? v - 0x800 : v; }
 
-void GpuState::set_texpage(uint16_t tp) {
+void GpuState::set_texpage(uint16_t tp, TexPageFrom from) {
   s_tp_x = (tp & 0xF) * 64;
   s_tp_y = ((tp >> 4) & 1) * 256;
   s_tp_blend = (tp >> 5) & 3;
   s_tp_mode = (tp >> 7) & 3; if (s_tp_mode > 2) s_tp_mode = 2;
-  s_tp_dither = (tp >> 9) & 1;     // ordered 4x4 dither enable
+  // ONLY GP0(0xE1). beetle's Command_DrawMode calls SetTPage(cmdw) and THEN assigns dtd; SetTPage
+  // itself — the path a primitive's embedded word takes — never touches it. See TexPageFrom.
+  if (from == TexPageFrom::DrawMode) s_tp_dither = (tp >> 9) & 1;   // ordered 4x4 dither enable
   // A PAGE A DRAW SAMPLES IS, BY DEFINITION, LIVE ATLAS. That is the port-agnostic registration the
   // guard needs: it asks the game what it READS rather than guessing from where an upload landed, so
   // it works for a game that uploads through GP0(0xA0) (Spider-Man) exactly as for one that uses the
@@ -794,7 +796,7 @@ void GpuState::gp0_exec(Core* core) {
         uint32_t uv = s_fifo[idx++];
         v[i].u = uv & 0xFF; v[i].v = (uv >> 8) & 0xFF;
         if (i == 0) set_clut((uv >> 16) & 0xFFFF);
-        if (i == 1) set_texpage((uv >> 16) & 0xFFFF);
+        if (i == 1) set_texpage((uv >> 16) & 0xFFFF, TexPageFrom::Primitive);
       }
     }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
@@ -1328,7 +1330,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
     switch (op) {                                // single-word env / state commands
       case 0x00: return;                         // nop
       case 0x01: return;                         // clear cache
-      case 0xE1: set_texpage(w & 0xFFFF); return;
+      case 0xE1: set_texpage(w & 0xFFFF, TexPageFrom::DrawMode); return;
       case 0xE2: s_tw_mx = w & 31; s_tw_my = (w >> 5) & 31; s_tw_ox = (w >> 10) & 31; s_tw_oy = (w >> 15) & 31; return;
       case 0xE3: s_da_x0 = w & 0x3FF; s_da_y0 = (w >> 10) & 0x1FF;
         lucent::debug("env", "E3 clip_tl=({},{})", s_da_x0, s_da_y0); return;
