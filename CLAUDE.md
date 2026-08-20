@@ -1,5 +1,25 @@
 # psxport — a PSX→PC static-recompilation framework
 
+> ## ⛳ RESUME HERE — read this before anything else (2026-08-20)
+>
+> The last session ended MID-CHANGE, deliberately. **`$PSX/psxport` has ~265 uncommitted modified
+> files and does NOT build.** That is not damage to repair on sight; it is where four standing USER
+> decisions were being applied when the session ran out.
+>
+> **A "continue" starts at kanban #115** — `python3 tools/kanban.py show 115`. Its companion note,
+> with every measurement, is `external/psxport/docs/plans/toolchain-and-oracle-decisions.md`.
+>
+> The four decisions, USER 2026-08-20, **not open questions**: adopt **clang-format** (and clang as
+> the compiler, not started), **drop `extern "C"`**, and **drop beetle** — whose scope is the one
+> thing still to ASK about, because beetle is the GPU oracle *and* the GTE/MDEC/SPU backends.
+>
+> First move: decide `PointerAlignment` in `.clang-format` before re-sweeping, or the first run
+> rewrites every pointer in the tree. To abandon the half-change instead: `cd $PSX/psxport && git
+> checkout -- .`
+>
+> Tomba2Engine itself is untouched and still builds; its dirty files are the unrelated
+> `game/render/fx_rope_strip.cpp` work in progress.
+
 **Unlabeled content is machine convention, revisable by any session. USER lines are verbatim dated
 quotes and only those.**
 
