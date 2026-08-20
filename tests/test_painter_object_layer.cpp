@@ -182,7 +182,7 @@ static void test_painter_depth_is_not_key_flattened(void) {
     }
   }
   float p0 = q->items[0].depth[0], p1 = q->items[1].depth[0];
-  q->resolveKeyOrderFaces(0);
+  q->resolveKeyOrderFaces(0, "test");
   CHECK(q->items[0].depth[0] == p0);
   CHECK(q->items[1].depth[0] == p1);
   CHECK(q->items[2].depth[0] == q->items[2].key_ord || q->items[3].depth[0] == q->items[3].key_ord);

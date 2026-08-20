@@ -29,7 +29,7 @@
 //      to its square. Without this, a re-introduced exhaustive scan is invisible until a game
 //      wedges again.
 //
-// Hermetic: no Core, no disc, no GPU. resolveKeyOrderFaces(frame) is the Core-free entry point;
+// Hermetic: no Core, no disc, no GPU. resolveKeyOrderFaces(frame, who) is the Core-free entry point;
 // the RqItems are built directly.
 #include "testutil.h"
 
@@ -152,7 +152,7 @@ SnapCompare run_and_compare(RenderQueue &q) {
     ord_before[i] = q.items[i].key_ord;
   }
 
-  q.resolveKeyOrderFaces(0);
+  q.resolveKeyOrderFaces(0, "test");
 
   SnapCompare r = {q.n, 0, 0, 0};
   for (int i = 0; i < q.n; i++) {

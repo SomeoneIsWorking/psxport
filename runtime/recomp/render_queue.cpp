@@ -1711,6 +1711,13 @@ static constexpr uint32_t kGuestRamEnd = 0x80200000u;
 uint64_t g_contest_reject_bbox = 0, g_contest_reject_depth = 0, g_contest_reject_sat = 0, g_contest_grid = 0,
          g_contest_grid_hit = 0;
 
+// BROADPHASE DENOMINATORS. Without these, "the pair tests dropped by 90%" and "the search silently
+// stopped looking" print the same number. `examined` counts every candidate the sweep actually looked
+// at, `skip_settled` those both of whose faces were already snapped (testing them could only re-set a
+// bit that is already set), and `reject_y` those the sweep rejected on the y axis before offering the
+// pair to the contest. examined = skip_settled + reject_y + (pairs offered to the contest).
+uint64_t g_bp_examined = 0, g_bp_skip_settled = 0, g_bp_reject_y = 0;
+
 // EVERYTHING IN THE BARYCENTRIC SETUP THAT DEPENDS ONLY ON THE FACE, lifted out of the per-sample
 // loop. The interior contest samples an 8x8 grid and asks each face for its interpolated ord at every
 // point, so the six vertex fetches and the determinant were being recomputed 64 times per face per
@@ -2027,6 +2034,9 @@ static bool rq_faces_in_contest_ext(const RqItem &A,
     g_contest_reject_depth++;
     return false;
   }
+  // Counted ONCE. This increment used to appear twice with no branch between (here and again just
+  // before rq_faces_invert), so every "REACHED GRID" figure this census ever printed was exactly 2x
+  // the truth — including the ones quoted on kanban #118.
   g_contest_grid++;
 
   // EXACT INTERIOR CONTEST. This was an 8x8 SAMPLED grid: 64 points over the bbox intersection, two
@@ -2040,7 +2050,6 @@ static bool rq_faces_in_contest_ext(const RqItem &A,
   // share, that region is convex, and an affine function's maximum over a convex polygon is at a
   // VERTEX. Clip one triangle by the other and test the surviving vertices — exact, and a handful of
   // evaluations instead of 128.
-  g_contest_grid++;
   if (rq_faces_invert(near_set, far_set)) {
     g_contest_grid_hit++;
     return true;
@@ -2126,27 +2135,61 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who) {
     setups[i] = rq_face_setup(it);
   }
 
+  // SWEEP AND PRUNE, not an all-pairs scan. MEASURED on the 1,100-frame field scene: the all-pairs
+  // form offered 36.5M pairs to the contest over the run and 88% of them died on the FIRST line of
+  // the contest's own cheap reject — the two faces' screen bboxes do not overlap at all — while 0.53%
+  // of all pairs found an inversion. That is a spatial-overlap query answered by brute force, and its
+  // cost grows with the SQUARE of faces per object rather than with how many faces actually overlap.
+  //
+  // Sorting each object's faces by bbox x0 makes the x half of that query a walk: for face `a`, the
+  // only partners whose bboxes can meet it are those whose x0 is still below a.x1, and because the
+  // order is ascending the first b that fails ends the scan for a. y is then one inline compare.
+  //
+  // THE SNAP SET IS UNCHANGED, which is the whole requirement, and it holds for the reason the
+  // witness-search comment above already states: snap[x] is exactly "there exists a y in x's object
+  // with rq_faces_in_contest(x, y)", and the rule is SYMMETRIC. So the answer depends only on WHICH
+  // PAIRS ARE REACHABLE, never on the order they are visited — and this sweep drops only pairs whose
+  // bboxes are disjoint, which the contest itself rejects on that same first line. A pair whose two
+  // faces are both already snapped is skipped for the same reason: testing it could only re-set bits
+  // that are set. tests/test_render_queue_keyorder.cpp gates the equivalence against a brute-force
+  // oracle, and the REAL SCENE'S PER-FRAME SNAP COUNT is the gate for any change here.
+  static thread_local std::vector<uint32_t> order; // scratch: group positions sorted by bbox x0
   for (size_t group_start = 0; group_start < faces.size();) {
     size_t group_end = group_start + 1;
     while (group_end < faces.size() && faces[group_end].node == faces[group_start].node) {
       group_end++;
     }
-    for (size_t a = group_start; a < group_end; a++) {
-      if (snap[a]) {
-        continue; // its witness has already been found
-      }
-      for (size_t b = group_start; b < group_end; b++) {
-        if (b == a) {
+    order.clear();
+    for (size_t i = group_start; i < group_end; i++) {
+      order.push_back(static_cast<uint32_t>(i));
+    }
+    std::sort(order.begin(), order.end(), [&extents](uint32_t l, uint32_t r) {
+      return extents[l].x0 < extents[r].x0;
+    });
+    for (size_t i = 0; i < order.size(); i++) {
+      const uint32_t a = order[i];
+      for (size_t j = i + 1; j < order.size(); j++) {
+        const uint32_t b = order[j];
+        // Ascending x0, so b.x0 is the larger left edge: once it reaches a's right edge nothing
+        // further along can overlap `a` either. The comparison is the contest's own (ox0 >= ox1).
+        if (extents[b].x0 >= extents[a].x1) {
+          break;
+        }
+        g_bp_examined++;
+        if (snap[a] && snap[b]) {
+          g_bp_skip_settled++;
+          continue;
+        }
+        if (extents[a].y0 >= extents[b].y1 || extents[b].y0 >= extents[a].y1) {
+          g_bp_reject_y++;
           continue;
         }
         keyOrderPairTests++;
-        if (!rq_faces_in_contest_ext(
+        if (rq_faces_in_contest_ext(
                 items[faces[a].idx], items[faces[b].idx], extents[a], extents[b], setups[a], setups[b])) {
-          continue;
+          snap[a] = 1;
+          snap[b] = 1;
         }
-        snap[a] = 1;
-        snap[b] = 1;
-        break; // one witness is all the rule needs
       }
     }
     group_start = group_end;
@@ -2171,14 +2214,17 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who) {
   }
   lucent::debug("keyord",
                 "f{} [{}] resolveKeyOrder: {}/{} keyed faces snapped ({} pair tests, {} queued prims) | "
-                "cumulative: bbox-reject {} depth-reject {} sat-reject {} REACHED GRID {} (of which found "
-                "an inversion {})",
+                "cumulative: broadphase examined {} (skip-settled {} y-reject {}) | offered: bbox-reject "
+                "{} depth-reject {} sat-reject {} REACHED GRID {} (of which found an inversion {})",
                 frame,
                 who,
                 nsnap,
                 faces.size(),
                 keyOrderPairTests,
                 n,
+                g_bp_examined,
+                g_bp_skip_settled,
+                g_bp_reject_y,
                 g_contest_reject_bbox,
                 g_contest_reject_depth,
                 g_contest_reject_sat,
