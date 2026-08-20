@@ -525,7 +525,9 @@ void RenderQueue::sortQueue() {
   if (already) {
     return;
   }
-  std::sort(keys.begin(), keys.end(), [](const Key &a, const Key &b) { return a.k < b.k; });
+  std::sort(keys.begin(), keys.end(), [](const Key &a, const Key &b) {
+    return a.k < b.k;
+  });
 
   // Apply the permutation through a reused scratch buffer. Two touches per item and both contiguous
   // on one side, against n log n scattered payload moves inside the merge sort.

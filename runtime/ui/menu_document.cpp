@@ -23,11 +23,12 @@ constexpr const char *kAttrAdjust = "adjust";
 
 // The one adjust row whose model is not `Mods`.
 constexpr const char *kWarpAreaId = "warp_area";
+constexpr const char *kRenderPathId = "render_path";
 
 } // namespace
 
 MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *game)
-    : Component(doc), mCtx(ctx), mDoc(doc), mGame(game), mWarp(game) {
+    : Component(doc), mCtx(ctx), mDoc(doc), mGame(game), mWarp(game), mRenderPath(game) {
   if (!mDoc) {
     return;
   }
@@ -130,6 +131,9 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
 
   id = row->GetAttribute<Rml::String>(kAttrToggle, "");
   if (!id.empty()) {
+    if (id == kRenderPathId) {
+      return make_render_path_binding(&mRenderPath);
+    }
     if (!ModRowModel::knows(RowKind::Toggle, id)) {
       mUnknownRows++;
       lucent::error("rmlui",

@@ -1,6 +1,7 @@
 #include "menu_row.h"
 
 #include "mods.h"
+#include "render_path_control.h"
 #include "warp_control.h"
 
 #include <RmlUi/Core/StringUtilities.h>
@@ -70,6 +71,26 @@ private:
   WarpControl *mWarp;
 };
 
+class RenderPathBinding final : public RowBinding {
+public:
+  explicit RenderPathBinding(RenderPathControl *render_path) : mRenderPath(render_path) {}
+  bool text(std::string &out) const override {
+    if (!mRenderPath) {
+      return false;
+    }
+    out = mRenderPath->currentLabel();
+    return true;
+  }
+  void step(int) override {
+    if (mRenderPath) {
+      mRenderPath->cycle();
+    }
+  }
+
+private:
+  RenderPathControl *mRenderPath;
+};
+
 class ActionBinding final : public RowBinding {
 public:
   explicit ActionBinding(std::function<void()> action) : mAction(std::move(action)) {}
@@ -93,6 +114,9 @@ std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id) 
 }
 std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp) {
   return std::make_unique<WarpAreaBinding>(warp);
+}
+std::unique_ptr<RowBinding> make_render_path_binding(RenderPathControl *render_path) {
+  return std::make_unique<RenderPathBinding>(render_path);
 }
 std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action) {
   return std::make_unique<ActionBinding>(std::move(action));

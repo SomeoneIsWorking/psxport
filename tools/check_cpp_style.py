@@ -20,6 +20,8 @@ FILE_CAPS = {
     "runtime/recomp/synchronous_task_wait.cpp": 220,
     "runtime/recomp/synchronous_task_wait.h": 80,
     "tests/test_synchronous_task_wait.cpp": 180,
+    "runtime/ui/render_path_control.cpp": 100,
+    "runtime/ui/render_path_control.h": 50,
 }
 
 

@@ -17,6 +17,7 @@ decisions.
     runtime/ui/ui_assets.{h,cpp}           asset resolution that refuses to report success
     runtime/ui/mod_row_model.{h,cpp}       what a row MEANS (the Mods toggle/adjust tables)
     runtime/ui/warp_control.{h,cpp}        the Debug tab's dev area warp
+    runtime/ui/render_path_control.{h,cpp} the Display tab's live renderer selector
     runtime/ui/menu_row.{h,cpp}            one <select-button> + its binding
     runtime/ui/menu_pane.{h,cpp}           one tab's page of rows
     runtime/ui/menu_tab_bar.{h,cpp}        the <tab> row and which one is selected
@@ -121,7 +122,8 @@ denominator.
   time (not a hardcoded list) and fails if there is ever more than one, or if it is in the wrong
   file.
 - **A new row kind is a new `RowBinding`**, not a branch in `MenuDocument`.
-- **A new `toggle=`/`adjust=` id is a row in `mod_row_model.cpp`'s table.** An id the model does not
-  know is now an ERROR at document load naming the id — it used to be a silently dead row.
+- **A new Mods-backed `toggle=`/`adjust=` id is a row in `mod_row_model.cpp`'s table.** Feature-owned
+  state gets a cohesive control plus `RowBinding`, as `warp_control` and `render_path_control` do;
+  `MenuDocument` only maps the authored id to that binding. An unresolved id is an ERROR at load.
 - **Non-ASCII glyphs in `.rml` are numeric character references** (`&#183;`), never HTML entity
   names: RML is XML-ish, and an unknown name renders literally. The test lints the shipped assets.

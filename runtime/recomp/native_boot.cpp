@@ -26,8 +26,8 @@
 #include "game.h"       // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "game_iface.h" // GameHooks — c->hooks->devWarpAreaLoad (dev-warp area load) + the frame-loop hooks
 #include "hostprof.h"
+#include "hw_bind.h" // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "memcensus.h"
-#include "hw_bind.h"           // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "ot_attr.h"           // g_producer_census_armed — the producer-census arm, set at boot below
 #include "override_registry.h" // overrides::query — per-row ownership for the producer-census JSONL
 #include "scheduler.h"         // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)

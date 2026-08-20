@@ -23,8 +23,8 @@
 // ITIMER_PROF counts CPU time, not wall time, so a port blocked on I/O or sleeping in frame pacing
 // does not accumulate samples there — which is what you want when the question is "where is the work".
 #include "cfg.h"
-#include "memcensus.h"
 #include "fs_util.h"
+#include "memcensus.h"
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>

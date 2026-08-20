@@ -125,7 +125,7 @@ A `TextVar cv_render_path` in `config_vars.h` / `config.cpp`: `Default` = `nativ
 - `PSXPORT_RENDER_PSX` / `PSXPORT_ORACLE` become **compatibility aliases that map onto the enum and
   log the mapping**, then get deleted once the games' scripts/gates are converted. No tombstones
   (global CLAUDE.md): once nothing sets them, every reference goes.
-- **HOTKEY: `F5` cycles the path live** — `native -> gte -> psx -> native` — which is what the USER
+- **RmlUi: Display → Renderer cycles the path live** — `native -> gte -> psx -> native` — which is what the USER
   actually asked for ("need a toggle to switch between PC render native, PC render from GTE and pure PSX
   rasterizer"). The env var alone does not satisfy that ask: the three paths only mean anything next to
   each other, and comparing them by relaunching loses the scene, so you can never hold one frame still

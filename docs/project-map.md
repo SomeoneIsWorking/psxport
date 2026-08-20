@@ -61,7 +61,8 @@ Every subfolder is on the include path, so `#include "foo.h"` resolves regardles
 One file pair per component on `psx::ui::Component`, modelled on Dusklight's `src/dusk/ui/` (CC0):
 `ui_event` (scoped listeners), `ui_component` (the base + the ONE data->DOM text boundary),
 `ui_assets` (asset resolution that refuses to report success), `mod_row_model` (what a row means),
-`warp_control`, `menu_row`, `menu_pane`, `menu_tab_bar`, `menu_readouts`, `menu_document`.
+`warp_control`, `render_path_control`, `menu_row`, `menu_pane`, `menu_tab_bar`, `menu_readouts`,
+`menu_document`.
 `runtime/recomp/rmlui_overlay.{h,cpp}` keeps RmlUi's LIFETIME only and knows no elements.
 **Read `docs/ui-architecture.md` before adding to the menu** — it carries the shapes taken from
 Dusklight, the one place ours deliberately differs, the headless driving surface (`menu dump` /

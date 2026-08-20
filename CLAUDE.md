@@ -338,8 +338,11 @@ copy-paste**, and cite what you took.
   (`selected`, `disabled`) rather than ad-hoc bools. Concrete components — `button`, `bool_button`,
   `modal`, `menu_bar`, `document`, `graphics_tuner`, `logs_window`, `mods_window`,
   `controller_config` — are each a file pair. Stylesheets live apart in `res/rml/*.rcss`.
-  `runtime/recomp/rmlui_overlay.cpp` is ONE monolith by comparison; that is the gap to close, and the
-  adoption order is in `docs/plans/rmlui-componentisation.md`.
+  psxport follows that boundary under `runtime/ui/`; `runtime/recomp/rmlui_overlay.cpp` owns RmlUi
+  lifetime and event routing only. Feature state stays in cohesive controls: for example,
+  `render_path_control` owns the Display tab's renderer selector, while `pad_input` knows nothing
+  about renderer policy. Details and the deliberate authored-DOM difference are in
+  `docs/ui-architecture.md`.
 - **Config is a layered CVar system** — already adopted here (`runtime/recomp/config_var.h`, above).
 - **Frame interpolation is RECORD-AND-REPLACE** (`src/dusk/frame_interpolation.{h,cpp}`): the sim tick
   runs untouched while each final matrix is recorded keyed by its own address; the presentation frame

@@ -158,6 +158,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/ui_assets.cpp          # asset resolution that REFUSES to report success
   ${PSXPORT_ROOT}/runtime/ui/mod_row_model.cpp      # what a menu row MEANS (Mods toggle/adjust tables)
   ${PSXPORT_ROOT}/runtime/ui/warp_control.cpp       # the Debug tab's dev area warp
+  ${PSXPORT_ROOT}/runtime/ui/render_path_control.cpp # the Display tab's live renderer selector
   ${PSXPORT_ROOT}/runtime/ui/menu_row.cpp           # one <select-button> + its binding
   ${PSXPORT_ROOT}/runtime/ui/menu_pane.cpp          # one tab's page of rows
   ${PSXPORT_ROOT}/runtime/ui/menu_tab_bar.cpp       # the <tab> row and which one is selected

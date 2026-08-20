@@ -40,7 +40,7 @@ inline const char *render_path_name(RenderPath p) {
   return "?";
 }
 
-// CYCLE to the next path — the one definition of "next", so the hotkey and the REPL's bare `renderpath`
+// CYCLE to the next path — the one definition of "next", so the RmlUi selector and bare `renderpath`
 // cannot drift into different orders. Native -> Gte -> Psx -> Native. The order is deliberate and is the
 // order a comparison wants: the shipping picture, then the guest's own geometry on the PC rasterizer, then
 // that same geometry on the PSX rasterizer — so consecutive presses isolate ONE variable at a time

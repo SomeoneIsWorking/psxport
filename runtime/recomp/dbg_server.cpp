@@ -264,7 +264,7 @@ static void dbg_exec(FILE *out, const char *line) {
             "  renderpath [P]   switch the LIVE render path: native | gte | psx; bare form CYCLES.\n"
             "                   native = PC producers + PC rasterizer; gte = the guest's own GTE/OT on the\n"
             "                   PC rasterizer; psx = the guest's own GTE/OT on the PSX software rasterizer.\n"
-            "                   Same switch as the F5 hotkey; refuses under ORACLE/SBS.\n");
+            "                   Same switch as the RmlUi Renderer row; refuses under ORACLE/SBS.\n");
   } else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
     if (!b) {
       b = 16;
@@ -551,19 +551,14 @@ static void dbg_exec(FILE *out, const char *line) {
       fprintf(out, "cvar <PSXPORT_NAME> <value> — this run only; `cvar <name>` clears it; `cvars` lists everything\n");
     }
   } else if (!strcmp(cmd, "renderpath")) {
-    // THE LIVE RENDER-PATH SWITCH, over the wire. It already existed as the F5 hotkey (pad_input.cpp)
-    // and as a REPL command (repl.cpp) — and NEITHER is reachable while the user plays: F5 needs the
-    // window focused and prints its confirmation to a terminal, and the REPL blocks the frame loop so
-    // it cannot be attached to a live session at all. Comparing the three paths is the entire point of
-    // having three, so the switch has to be reachable from the one channel that works on a running
-    // window. Behaviour (order, refusals, CVar mirror) is shared with both of them via render_mode.h;
-    // this adds no new mechanism.
+    // THE LIVE RENDER-PATH SWITCH, over the wire. The player-facing owner is the RmlUi Renderer row;
+    // this command keeps the same control reachable to headless tools and remote diagnostics.
     char st[16] = {0};
     Game *g = s_ctx ? s_ctx->game : nullptr;
     if (!g) {
       fprintf(out, "renderpath: no Game on this context\n");
     } else if (g->oracle || g->sbs) {
-      // Same refusal as the F5 key: these legs exist to BE the reference, and a renderer swapped
+      // Same refusal as the RmlUi row: these legs exist to BE the reference, and a renderer swapped
       // under a compare would invalidate it while looking like nothing happened.
       fprintf(out,
               "renderpath REFUSED: this run is %s and exists to be the reference — changing the "
@@ -581,7 +576,7 @@ static void dbg_exec(FILE *out, const char *line) {
                 render_path_name(s_ctx->rsub.mode.path()));
       } else {
         if (!named) {
-          p = render_path_next(p); // bare form CYCLES — same order as F5 and the REPL
+          p = render_path_next(p); // bare form CYCLES — same order as RmlUi and the REPL
         }
         s_ctx->rsub.mode.setPath(p);
         psx::config::cv_render_path.set(psx::config::Layer::Runtime,

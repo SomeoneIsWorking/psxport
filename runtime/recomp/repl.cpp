@@ -498,7 +498,7 @@ long Repl::read(Core *c, uint32_t f) {
           continue;
         }
       } else {
-        p = render_path_next(p); // bare form CYCLES — same order as the F5 hotkey (render_mode.h)
+        p = render_path_next(p); // bare form CYCLES — same order as the RmlUi selector
       }
       c->rsub.mode.setPath(p);
       psx::config::cv_render_path.set(psx::config::Layer::Runtime,

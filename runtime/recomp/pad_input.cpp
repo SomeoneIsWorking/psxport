@@ -31,11 +31,9 @@
 
 #include "c_subsys.h" // gpu_windowed()
 #include "cfg.h"
-#include "config_vars.h" // cv_render_path — mirror the live path into the CVar Runtime layer
 #include "core.h"
-#include "fs_util.h"     // Fs::writeFile — host file writes go through the shared util
-#include "game.h"        // class Pad lives on Game; reached via c->game->pad (see class docs)
-#include "render_mode.h" // RenderPath + render_path_next — the F5 live render-path cycle
+#include "fs_util.h" // Fs::writeFile — host file writes go through the shared util
+#include "game.h"    // class Pad lives on Game; reached via c->game->pad (see class docs)
 #include <lucent/log.h>
 #include <stdint.h>
 
@@ -314,49 +312,6 @@ void Pad::pollSdl() {
     }
     mPrevP = p;
     mPrevStep = st;
-
-    // F5 — CYCLE THE RENDER PATH LIVE: native -> gte -> psx -> native (USER ask, 2026-08-11: "need a
-    // toggle to switch between PC render native, PC render from GTE and pure PSX rasterizer"). The three
-    // paths only mean something next to each other, and comparing them by relaunching the game loses the
-    // scene — you cannot hold a frame still and swap the renderer under it, which is the one thing the
-    // comparison needs.
-    //
-    // The cycle order lives in render_path_next() and is shared with the REPL's bare `renderpath`, so the
-    // key and the command cannot drift into different orders.
-    //
-    // WHY THIS IS SAFE MID-RUN, and it is not a new mechanism: RenderSubstrateMode::setPath is already
-    // called at runtime by the REPL (repl.cpp), the path is read per-frame at the render decision rather
-    // than latched at boot, and nothing here touches guest memory — the guest's GTE/OT work happens on
-    // every path regardless; the path only selects who turns it into pixels. Also mirrored into the CVar's
-    // Runtime layer so `cvars` reports the LIVE value instead of the launch value, which is what makes a
-    // screenshot's provenance readable after the fact.
-    //
-    // SUPPRESSED under ORACLE and SBS: those legs exist to BE the reference, and a keystroke that
-    // silently changed the reference mid-compare would invalidate the run while looking like nothing
-    // happened. It refuses out loud rather than ignoring the key, so a press that did nothing says why.
-    const int rp = dks && dks[SDL_SCANCODE_F5] != 0;
-    if (rp && !mPrevRenderPath) {
-      if (game->oracle || game->sbs) {
-        lucent::warn("render",
-                     "F5 render-path cycle REFUSED: this run is {} and exists to be the "
-                     "reference — changing the renderer mid-run would invalidate it. Relaunch "
-                     "without it, or use PSXPORT_RENDER_PATH at launch.",
-                     game->oracle ? "ORACLE" : "an SBS compare");
-      } else {
-        Core *rc = &game->core;
-        const RenderPath next = render_path_next(rc->rsub.mode.path());
-        rc->rsub.mode.setPath(next);
-        psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(next));
-        lucent::info("render",
-                     "F5 -> render path = {} — {} (PC enhancements {})",
-                     render_path_name(next),
-                     next == RenderPath::Native ? "PC-native producers, PC rasterizer"
-                     : next == RenderPath::Gte  ? "guest GTE/OT geometry, PC rasterizer"
-                                                : "guest GTE/OT geometry, PSX software rasterizer",
-                     rc->rsub.mode.enhancementsAllowed() ? "ALLOWED" : "locked out");
-      }
-    }
-    mPrevRenderPath = rp;
   }
 
   // HOTSWAP-aware controllers: open/close as devices come and go, then OR every connected pad into the

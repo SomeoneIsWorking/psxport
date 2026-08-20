@@ -27,6 +27,7 @@ class Mods;
 namespace psx::ui {
 
 class WarpControl;
+class RenderPathControl;
 
 // ---- what a row is wired to -----------------------------------------------------------------------
 class RowBinding {
@@ -54,6 +55,7 @@ public:
 std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id);
 std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id);
 std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp);
+std::unique_ptr<RowBinding> make_render_path_binding(RenderPathControl *render_path);
 std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action);
 
 // ---- the row widget -------------------------------------------------------------------------------

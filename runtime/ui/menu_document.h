@@ -23,6 +23,7 @@
 #include "menu_readouts.h"
 #include "menu_row.h"
 #include "menu_tab_bar.h"
+#include "render_path_control.h"
 #include "ui_component.h"
 #include "warp_control.h"
 
@@ -113,6 +114,7 @@ private:
   Game *mGame = nullptr;
 
   WarpControl mWarp;
+  RenderPathControl mRenderPath;
   MenuTabBar *mTabBar = nullptr;     // owned by Component::mChildren
   MenuReadouts *mReadouts = nullptr; // owned by Component::mChildren
   std::vector<MenuPane *> mPanes;    // owned by Component::mChildren

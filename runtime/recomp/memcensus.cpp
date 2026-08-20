@@ -4,8 +4,8 @@
 #include "cfg.h"
 
 #include <atomic>
-#include <stdlib.h> // atexit
 #include <stdio.h>
+#include <stdlib.h> // atexit
 #include <string.h>
 
 extern "C" {
