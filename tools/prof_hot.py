@@ -68,6 +68,69 @@ def main():
         return 2
     addrs = [a for a, _, _ in syms]
 
+    # The module map the profiler captured at dump time (`# map lo hi path`). Without it a sample
+    # outside the executable can only be called "unresolved", which reads as a hole in the profile
+    # instead of "this much time is in the GPU driver".
+    modules = []
+    for line in open(args.samples):
+        if line.startswith("# map "):
+            _, _, lo, hi, path = line.rstrip("\n").split(" ", 4)
+            modules.append((int(lo, 16), int(hi, 16), path))
+    modules.sort()
+    mod_lo = [m[0] for m in modules]
+
+    def module_index(addr):
+        i = bisect.bisect_right(mod_lo, addr) - 1
+        return i if (i >= 0 and addr < modules[i][1]) else None
+
+    def module_of(addr):
+        i = module_index(addr)
+        return modules[i][2].rsplit("/", 1)[-1] if i is not None else None
+
+    # DYNAMIC SYMBOLS OF THE SHARED OBJECTS TOO. "[libc.so.6] 19.6%" is a better answer than
+    # "unresolved", but it still is not one you can act on — `memcpy` and `malloc` demand completely
+    # different fixes. nm -D gives the exported symbols; the runtime address is the mapping base plus
+    # the symbol's file offset, which holds because these are position-independent objects mapped at
+    # their first executable segment.
+    dyn_cache = {}
+
+    def dyn_symbol(addr):
+        i = module_index(addr)
+        if i is None:
+            return None
+        lo, _, path = modules[i]
+        if path not in dyn_cache:
+            table = []
+            try:
+                out = subprocess.run(["nm", "-D", "--defined-only", "-S", "--no-demangle", path],
+                                     capture_output=True, text=True, timeout=20).stdout
+                for ln in out.splitlines():
+                    q = ln.split(None, 3)
+                    # Require a SIZE column. Without it there is no way to know whether a sample is
+                    # inside the symbol or merely after it, and a shared object is full of gaps.
+                    if len(q) >= 4 and q[2] in "tTwWi":
+                        try:
+                            table.append((int(q[0], 16), int(q[1], 16), q[3]))
+                        except ValueError:
+                            pass
+            except Exception:
+                table = []
+            table.sort()
+            dyn_cache[path] = (table, [a for a, _, _ in table])
+        table, keys = dyn_cache[path]
+        if not table:
+            return None
+        off = addr - lo
+        j = bisect.bisect_right(keys, off) - 1
+        # STRICTLY INSIDE the symbol's own extent, or no name at all. Falling back to "the nearest
+        # preceding export" is how this first reported 15.6% of the frame in libc's
+        # `_dl_mcount_wrapper` — a profiling hook that cannot be hot. An honest "[libc.so.6]" beats a
+        # confident wrong function, and libc's real hot paths are IFUNC-resolved so they often are not
+        # where the exported name sits.
+        if j >= 0 and table[j][1] and off < table[j][0] + table[j][1]:
+            return table[j][2]
+        return None
+
     total = 0
     hits = collections.Counter()
     unresolved = 0
@@ -79,12 +142,21 @@ def main():
         total += n
         i = bisect.bisect_right(addrs, addr) - 1
         if i < 0:
+            sym = dyn_symbol(addr)
+            mod = module_of(addr) or "unknown module"
+            hits[f"[{mod}] {sym}" if sym else f"[{mod}]"] += n
             unresolved += n
             continue
         start, size, name = syms[i]
         # A symbol with a known size bounds its own range; without one, accept only a modest gap so a
         # PC far past the last symbol is not silently credited to it.
         if (size and addr >= start + size) or (not size and addr - start > 0x10000):
+            # Outside every symbol of the executable. Name the module AND, where the object exports
+            # symbols, the function inside it — "[libc.so.6] __memmove_avx_unaligned_erms" is
+            # actionable; "unresolved" is not.
+            sym = dyn_symbol(addr)
+            mod = module_of(addr) or "unknown module"
+            hits[f"[{mod}] {sym}" if sym else f"[{mod}]"] += n
             unresolved += n
             continue
         hits[name] += n
@@ -104,7 +176,8 @@ def main():
     for name, n in hits.most_common(args.top):
         print(f"{100*n/total:6.2f}  {n:8d}  {name}")
     if unresolved:
-        print(f"{100*unresolved/total:6.2f}  {unresolved:8d}  <unresolved — outside every text symbol>")
+        print(f"\n{100*unresolved/total:6.2f}  {unresolved:8d}  of the above are outside every text symbol "
+              f"(shown as [module]); {len(modules)} executable mapping(s) were captured")
     return 0
 
 

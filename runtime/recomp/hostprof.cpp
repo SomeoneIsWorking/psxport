@@ -113,6 +113,32 @@ void dump() {
       t += line;
     }
   }
+  // THE MODULE MAP, so a sample outside the executable can still be NAMED. Roughly a quarter of the
+  // samples on a real frame land in shared objects — the GPU driver, libc, SDL — and without this the
+  // reader can only report them as "unresolved", which reads as a gap in the profile rather than as
+  // "this much time is in the driver". Emitted as `# map <lo> <hi> <path>` lines the reader matches
+  // against; /proc/self/maps is the only place this correspondence exists, and it is gone once the
+  // process exits, so it has to be captured here rather than reconstructed later.
+  if (FILE *m = fopen("/proc/self/maps", "r")) {
+    char mline[512];
+    while (fgets(mline, sizeof mline, m)) {
+      unsigned long long lo = 0, hi = 0;
+      char perms[8] = {}, path[400] = {};
+      // Executable mappings only — a sampled PC can never be in a non-x region.
+      if (sscanf(mline, "%llx-%llx %7s %*s %*s %*s %399[^\n]", &lo, &hi, perms, path) >= 3 && perms[2] == 'x' &&
+          path[0]) {
+        char *p2 = path;
+        while (*p2 == ' ') {
+          p2++;
+        }
+        snprintf(line, sizeof line, "# map %016llx %016llx ", lo, hi);
+        t += line;
+        t += p2;
+        t += "\n";
+      }
+    }
+    fclose(m);
+  }
   if (Fs::writeFile(out, t.data(), t.size())) {
     lucent::info("prof", "{} sample(s) -> {}  (resolve with tools/prof_hot.py)", (unsigned long long)g_total, out);
   } else {
