@@ -1462,8 +1462,13 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
                   nup, s_dirty.all() ? 1 : 0, s_dirty.adds(), s_dirty.merges(), s_dirty.dropped());
     upload_vram(*this, cmd, src, up, nup);                   // CPU VRAM -> THIS Game's VRAM image (2D backdrop)
     s_dirty.clear();                                         // the composite now holds every guest write
+    // ...and the THIRD site blind on RenderPath::Psx, after the decision and the dirty list above.
+    // render_geom clears the composite to black when no native primitive was submitted, which is
+    // right when the native renderer owns the frame and catastrophic when the software rasterizer
+    // does: its batch is ALWAYS empty, so the clear wipes the s_vram we just uploaded. See
+    // vram_backdrop_is_picture() for the measurement.
     render_geom(*this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c,
-                game->core.cfg && game->core.cfg->preserveVramBackdrop);   // draw the batch on top (+depth)
+                vram_backdrop_is_picture(guestVramIsPicture, game->gpu.sw_path()));
     s_vram_writes_built = s_vram_writes;   // this composite now reflects every guest write so far
   }
 

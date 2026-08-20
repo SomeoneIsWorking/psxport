@@ -54,3 +54,6 @@ tools/fmv_export/test_fmv_decode
 psxport_settings.ini
 docs/reference/issues/shot_*.png
 *.log
+
+# out-of-tree build dirs for hermetic tests (build/ is already ignored)
+build_*/

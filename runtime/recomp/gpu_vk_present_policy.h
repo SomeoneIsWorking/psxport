@@ -53,6 +53,27 @@ enum PresentRebuild {
 //   for a composite that had never been built. Checked FIRST, and it does not consult
 //   guestVramIsPicture: that flag answers "is the GUEST's VRAM the picture", while here the picture is
 //   in s_vram because WE rasterized it there.
+// Does the VRAM backdrop hold real picture content, so that render_geom must NOT clear it away when
+// no native primitive was submitted this frame?
+//
+// THIS IS THE THIRD SITE THAT IS BLIND ON RenderPath::Psx, and the other two are described directly
+// above. The software rasterizer draws the whole frame into s_vram, tees no VK geometry and marks
+// nothing dirty — so `total == 0` in render_geom is permanently true there and says nothing about
+// whether there is a picture. Asking GameConfig::preserveVramBackdrop alone is asking the wrong
+// question: that flag is the port's statement about whether the GUEST's VRAM is part of the picture
+// under the NATIVE renderer, and a port whose native producers own the frame answers "no" correctly
+// while still needing its own software-rasterized output left alone.
+//
+// MEASURED 2026-08-20, Tomba!2 f1120 of replays/bugs/ingame-item-menu.pad on the psx path: VRAM
+// pixel-identical to the beetle GPU oracle (0 of 524,288 differing) and holding the menu at 90.0%
+// coverage in the guest's declared display rect, while the presented frame was 0/691,200 non-black.
+// upload_vram had just uploaded it; this clear then wiped it.
+//
+// The two inputs are independent reasons for the same conclusion, so neither may veto the other.
+static inline bool vram_backdrop_is_picture(bool guestVramIsPicture, bool swRasterIsPicture) {
+  return guestVramIsPicture || swRasterIsPicture;
+}
+
 static inline PresentRebuild present_rebuild_decision(bool batchEmpty,
                                                       bool guestVramIsPicture,
                                                       uint32_t vramWrites,
