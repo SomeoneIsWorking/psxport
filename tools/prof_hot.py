@@ -101,9 +101,23 @@ def main():
         lo, _, path = modules[i]
         if path not in dyn_cache:
             table = []
+            # PREFER THE DEBUGINFO when the system can supply it. A stripped distro library exports
+            # only its public names, and its hot paths are usually IFUNC-resolved internals that sit
+            # nowhere near them — which is why the plain -D table could not name libc's memcpy. Fedora
+            # ships debuginfod and it needs no root; if it is unavailable this falls straight back to
+            # the dynamic table and simply resolves less.
+            src, flag = path, "-D"
             try:
-                out = subprocess.run(["nm", "-D", "--defined-only", "-S", "--no-demangle", path],
-                                     capture_output=True, text=True, timeout=20).stdout
+                got = subprocess.run(["debuginfod-find", "debuginfo", path],
+                                     capture_output=True, text=True, timeout=60)
+                if got.returncode == 0 and got.stdout.strip():
+                    src, flag = got.stdout.strip(), "--defined-only"
+            except Exception:
+                pass
+            try:
+                out = subprocess.run(["nm", "-C", "--defined-only", "-S", "--no-demangle", flag, src]
+                                     if flag == "-D" else ["nm", "-C", "--defined-only", "-S", src],
+                                     capture_output=True, text=True, timeout=30).stdout
                 for ln in out.splitlines():
                     q = ln.split(None, 3)
                     # Require a SIZE column. Without it there is no way to know whether a sample is

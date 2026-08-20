@@ -1217,14 +1217,44 @@ static void poll_quit(Game *game) {
 // full 1024-pixel row stride (srci.offset + pixels_per_row) instead of needing its own packing.
 // `regions` MUST be explicit at every call site — a caller that genuinely wants the whole canvas says
 // so, rather than getting it because nobody thought about it.
+// BYTE CENSUS for the two whole-VRAM staging copies (kanban #118). The host profile puts
+// __memmove_avx_unaligned_erms at 13.5% of the frame — the largest single entry — and wall-clock A/B
+// could not tell which copy it is, because halving one moved the total by less than the noise on a
+// loaded machine. Bytes are not noisy.
+uint64_t g_bytes_upload = 0, g_bytes_snap = 0;
+
 static void
 upload_vram(GpuVkState &g, SDL_GPUCommandBuffer *cmd, const uint16_t *src, const VramDirtyRect *regions, int nregions) {
   g.ensure_targets();
   if (nregions <= 0) {
     return; // nothing the guest wrote — the composite already shows it
   }
-  void *p = SDL_MapGPUTransferBuffer(s_dev, g.s_vram_xfer, true);
-  memcpy(p, src, (size_t)VRAM_W * VRAM_H * 2);
+  // STAGE ONLY THE ROWS THE REGIONS NAME. The comment above explains why the transfer buffer keeps the
+  // FULL 1024-pixel row stride — each region's GPU copy addresses it with srci.offset + pixels_per_row,
+  // so no packing is needed. That argument is about the LAYOUT, and it survives: the rows land at the
+  // same offsets they always did. It never required COPYING the rows nobody asked for.
+  //
+  // Measured (kanban #118): the two whole-VRAM staging copies move ~3 MB per frame, 3,287 MiB over a
+  // 1,100-frame scene, and the host profile puts __memmove_avx_unaligned_erms at 13.5% of the frame —
+  // the largest single entry, at a throughput consistent with write-combined memory (~6 GB/s). A dirty
+  // rect is typically a fraction of the canvas, so this copies a fraction of the bytes.
+  //
+  // `cycle` must be FALSE now: with a partial write, the untouched parts of the buffer have to be the
+  // ones the previous frame left, not a fresh uninitialised allocation. Every byte a region's GPU copy
+  // reads is written just below, so nothing stale is consumed either way — but a cycled buffer would
+  // also invalidate the offsets this loop hands the copy pass.
+  void *p = SDL_MapGPUTransferBuffer(s_dev, g.s_vram_xfer, false);
+  for (int i = 0; i < nregions; i++) {
+    const VramDirtyRect &r = regions[i];
+    if (r.w <= 0 || r.h <= 0) {
+      continue;
+    }
+    for (int row = 0; row < r.h; row++) {
+      const size_t off = ((size_t)(r.y + row) * VRAM_W + r.x) * 2;
+      memcpy((char *)p + off, (const char *)src + off, (size_t)r.w * 2);
+    }
+    g_bytes_upload += (uint64_t)r.w * r.h * 2;
+  }
   SDL_UnmapGPUTransferBuffer(s_dev, g.s_vram_xfer);
   SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
   for (int i = 0; i < nregions; i++) {
@@ -1610,6 +1640,7 @@ static void render_geom(GpuVkState &g,
   // ---- upload: snapshot + ALL vertex batches (3D world + both 2D bands) in ONE copy pass -----------
   {
     void *p = SDL_MapGPUTransferBuffer(s_dev, g.s_snap_xfer, true);
+    g_bytes_snap += (uint64_t)VRAM_W * VRAM_H * 2;
     memcpy(p, src, (size_t)VRAM_W * VRAM_H * 2);
     SDL_UnmapGPUTransferBuffer(s_dev, g.s_snap_xfer);
   }
@@ -2154,6 +2185,16 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // inside the logger, which is the whole point of having a configurable one.
   GpuDevice &gd = gdev();
   gd.s_ps_n[decision]++;
+  { // per-frame byte totals for the staging copies — read with `debug vramcopy`
+    static uint64_t prev_up = 0, prev_sn = 0;
+    lucent::debug("vramcopy",
+                  "this frame: upload_vram {} KiB, render_geom snapshot {} KiB (cumulative {} MiB)",
+                  (g_bytes_upload - prev_up) >> 10,
+                  (g_bytes_snap - prev_sn) >> 10,
+                  (g_bytes_upload + g_bytes_snap) >> 20);
+    prev_up = g_bytes_upload;
+    prev_sn = g_bytes_snap;
+  }
   lucent::debug("presentskip",
                 "presents={} reuse_last={} rebuild_geom={} rebuild_vram={} | vram_writes={}",
                 gd.s_ps_n[0] + gd.s_ps_n[1] + gd.s_ps_n[2],
