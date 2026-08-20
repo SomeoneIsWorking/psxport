@@ -26,8 +26,8 @@
 // NEGATIVE-RESULT DISCIPLINE: both directions of both routes are asserted. A fix that simply stopped
 // updating dither anywhere would pass a suite that only checked "the primitive route must not set
 // it", and would silently disable dithering for good.
-#include "testutil.h"
 #include "../runtime/recomp/gpu_native_internal.h"
+#include "testutil.h"
 
 // Bit 9 set, page 0, 4bpp — the word a DrawMode command would carry to turn dithering ON.
 static const uint16_t kDitherOn = (uint16_t)(1u << 9);

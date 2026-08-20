@@ -44,6 +44,26 @@ static inline VramRect vram_xfer_rect(uint32_t coord, uint32_t size) {
 // ---- GpuState — the native GPU's per-instance render machine state + rasterizer ----------------
 // Owned by Game (game.h has `GpuState gpu;`). Field names keep their historical `s_`/`g_` spelling so
 // the rasterizer bodies are unchanged by the move (they now read members via implicit `this`).
+// Barycentric interpolation, ROUNDED TO NEAREST — the rule beetle's DDA follows by seeding every
+// interpolant with a half-LSB bias (gpu_polygon.c:904 for u/v, :945 for r/g/b):
+//
+//     ig.r = (COORD_MF_INT(vertices[cv].r) + (1 << (COORD_FBS - 1))) << COORD_POST_PADDING;
+//
+// A plain integer divide truncates toward zero instead, which is a SYSTEMATIC bias, not noise:
+// measured at f1090 of Tomba!2's ingame-options-page replay, 97.6% of the surviving one-LSB
+// differences against the beetle GPU oracle were ours-LOW. The UV path already rounded; colour did
+// not.
+//
+// `aa` is the DOUBLED SIGNED area, so it flips sign with the triangle's winding and every weight
+// flips with it. Round in sign-normalized form — floor() would round the wrong way for one winding
+// and simply move the bias rather than remove it.
+static inline int bary_round(long l0, int v0, long l1, int v1, long l2, int v2, long aa) {
+  long num = l0 * v0 + l1 * v1 + l2 * v2;
+  long den = aa;
+  if (den < 0) { num = -num; den = -den; }
+  return (int)((num + den / 2) / den);
+}
+
 struct GpuState {
   Game* game = nullptr;   // set by Game(); blit_src uses &game->core to reach the gpu_vk present wrapper
 

@@ -417,18 +417,22 @@ void GpuState::tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int
           // a uniform block (journal later 44: black-wedge shadow). PSX hardware SATURATES the
           // product to 0xFF; doing it in uint8_t wraps mod 256, turning a bright grass texel red, so
           // compute wide and clamp (the grass red-block bug, journal later 42).
-          int cr = (int)((l0*a.r + l1*b.r + l2*c.r) / aa);
-          int cg = (int)((l0*a.g + l1*b.g + l2*c.g) / aa);
-          int cb = (int)((l0*a.b + l1*b.b + l2*c.b) / aa);
+          // ROUNDED, not truncated — beetle seeds its colour DDA with a half-LSB bias exactly as it
+          // does for u/v above (gpu_polygon.c:945). Truncating here biased every modulated pixel
+          // LOW; see bary_round().
+          int cr = bary_round(l0, a.r, l1, b.r, l2, c.r, aa);
+          int cg = bary_round(l0, a.g, l1, b.g, l2, c.g, aa);
+          int cb = bary_round(l0, a.b, l1, b.b, l2, c.b, aa);
           pt_cr = cr; pt_cg = cg; pt_cb = cb;
           int rr = r * cr / 128, gg = g * cg / 128, bb = bl * cb / 128;
           r = rr > 255 ? 255 : rr; g = gg > 255 ? 255 : gg; bl = bb > 255 ? 255 : bb;
           dithered = 1;
         } else { pt_cr = pt_cg = pt_cb = 128; }   // raw: undithered texel, modulation color = neutral
       } else if (shade) {
-        r = (uint8_t)((l0*a.r + l1*b.r + l2*c.r) / aa);
-        g = (uint8_t)((l0*a.g + l1*b.g + l2*c.g) / aa);
-        bl = (uint8_t)((l0*a.b + l1*b.b + l2*c.b) / aa);
+        // Untextured gouraud: same rounding rule as the modulated path above.
+        r  = (uint8_t)bary_round(l0, a.r, l1, b.r, l2, c.r, aa);
+        g  = (uint8_t)bary_round(l0, a.g, l1, b.g, l2, c.g, aa);
+        bl = (uint8_t)bary_round(l0, a.b, l1, b.b, l2, c.b, aa);
         dithered = 1;
       } else { r = a.r; g = a.g; bl = a.b; }
       if (s_tp_dither && dithered) { r = dith(r, x, y); g = dith(g, x, y); bl = dith(bl, x, y); }
