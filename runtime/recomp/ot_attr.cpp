@@ -191,28 +191,77 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
 // DB's actual answer rather than a guess.
 uint32_t OtAttr::resolveClaimedFrame(Core *c) {
   const ProducerCensus &census = c->rsub.census;
+
+  // CACHED ON THE CALL CHAIN. The answer is a pure function of (visible stack prefix, claim set), and
+  // the same effect re-emits from the same chain every frame — so without this the walk below repeats
+  // per span, per frame, forever, for an answer that was settled the first time. Invalidated when the
+  // claim set GROWS, which is the only thing that can change an answer (claims are append-only).
+  if (mResolveCacheClaimCount != census.claimCount()) {
+    for (int i = 0; i < RCACHE_SLOTS; i++) {
+      mResolveCache[i].depth = -1;
+    }
+    mResolveCacheClaimCount = census.claimCount();
+  }
+  const int visNow = c->idiag.otattrVisibleDepth();
+  const int limNow = visNow < CLAIM_SEARCH_DEPTH ? visNow : CLAIM_SEARCH_DEPTH;
+  uint32_t prefix[CLAIM_SEARCH_DEPTH] = {};
+  uint32_t h = 2166136261u; // FNV-1a over the prefix
+  for (int i = 0; i < limNow; i++) {
+    prefix[i] = c->idiag.otattrFrameFromTop(i);
+    h = (h ^ prefix[i]) * 16777619u;
+  }
+  ResolveEntry &slot = mResolveCache[(h ^ (uint32_t)limNow) & (RCACHE_SLOTS - 1)];
+  if (slot.depth == limNow) {
+    bool same = true;
+    for (int i = 0; i < limNow && same; i++) {
+      same = slot.prefix[i] == prefix[i];
+    }
+    if (same) { // EXACT match on the whole prefix — never "the hash agreed"
+      mResolveHit++;
+      // The resolved/unresolved tallies feed the run-end report, so they count RESOLUTIONS, not cache
+      // misses. Skipping them here would silently shrink every number the DB reports the moment the
+      // cache started working — the report would improve because the counter broke.
+      if (slot.result) {
+        mClaimResolved++;
+      } else {
+        mClaimUnresolved++;
+      }
+      return slot.result;
+    }
+  }
+  mResolveMiss++;
   // AN EMPTY CLAIM SET RESOLVES NOTHING, AND THAT IS COUNTED, NOT SILENT. It happens for real: on a pure
   // psx_render leg no native producer runs, and during the first frames of any leg the natives have not
   // run yet. Without this counter those prims land on their emitter key and read as "no native producer"
   // — a false negative indistinguishable from a true one.
+  // NOT cached: an empty claim set is a transient state (no native producer has run yet), and caching
+  // "unresolved" from it would outlive the condition. The invalidation above would clear it anyway the
+  // moment a claim arrived, but returning early keeps that reasoning local.
   if (census.claimCount() == 0) {
     c->rsub.census.noteClaimTooEarly();
     return 0;
   }
-  const int vis = c->idiag.otattrVisibleDepth();
-  const int lim = vis < CLAIM_SEARCH_DEPTH ? vis : CLAIM_SEARCH_DEPTH;
-  for (int i = 0; i < lim; i++) {
-    const uint32_t f = c->idiag.otattrFrameFromTop(i);
+  uint32_t found = 0;
+  for (int i = 0; i < limNow; i++) {
+    const uint32_t f = prefix[i];
     if (f && census.claims(f)) {
       if (i == CLAIM_SEARCH_DEPTH - 1) {
         mClaimAtLimit++;
       }
       mClaimResolved++;
-      return f;
+      found = f;
+      break;
     }
   }
-  mClaimUnresolved++;
-  return 0;
+  if (!found) {
+    mClaimUnresolved++;
+  }
+  slot.depth = limNow;
+  for (int i = 0; i < limNow; i++) {
+    slot.prefix[i] = prefix[i];
+  }
+  slot.result = found;
+  return found;
 }
 
 // See ot_attr.h for why this exists: it checks the premise the frame-selection fix rests on.

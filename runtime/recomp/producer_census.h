@@ -326,6 +326,7 @@ public:
         }
         if (mClaimCount < CLAIM_CAP) {
           const int i = mClaimCount++;
+          mClaimIndexDirty = true;
           mClaims[i] = a;
           mClaimFromDisk[i] = true;
           setClaimProv(i, prov);
@@ -358,6 +359,7 @@ public:
       }
       if (mClaimCount < CLAIM_CAP) {
         const int i = mClaimCount++;
+        mClaimIndexDirty = true;
         mClaims[i] = addr;
         mClaimFromDisk[i] = true;
         setClaimProv(i, nullptr); // a JSONL row carries no claim-file provenance column
@@ -452,9 +454,27 @@ public:
     return earned;
   }
 
+  // MEMBERSHIP IS O(1), not a scan of the whole set. OtAttr::resolveClaimedFrame calls this up to
+  // CLAIM_SEARCH_DEPTH (8) times PER PRIMITIVE, so a linear scan of ~28 claims is ~224 comparisons per
+  // prim — measured at 13.31% of a 3D frame in the host profile, the second-largest entry after the
+  // ordering contest. The mirror below answers the same question in ~1 probe. Semantics are identical:
+  // it is rebuilt from mClaims[0..mClaimCount) by rebuildClaimIndex(), so the array remains the truth
+  // and everything that hands out claim POSITIONS (claimAt, claimEarnedHere, reportChains) is untouched.
   bool claims(uint32_t addr) const {
-    for (int i = 0; i < mClaimCount; i++) {
-      if (mClaims[i] == addr) {
+    if (mClaimCount == 0) {
+      return false;
+    }
+    if (mClaimIndexDirty) {
+      rebuildClaimIndex();
+      mClaimIndexDirty = false;
+    }
+    for (uint32_t i = 0, h = claimHash(addr); i < kClaimIndexSlots; i++) {
+      const uint32_t slot = (h + i) & (kClaimIndexSlots - 1);
+      const uint32_t v = mClaimIndex[slot];
+      if (v == kClaimIndexEmpty) {
+        return false; // open addressing: an empty slot ends the probe chain
+      }
+      if (v == addr) {
         return true;
       }
     }
@@ -925,6 +945,42 @@ private:
   static constexpr int CLAIM_CAP = 256;
   static constexpr int PROV_CAP = BUILD_ID_CAP;
   uint32_t mClaims[CLAIM_CAP] = {};
+
+  // O(1) MIRROR OF mClaims, for claims() — see the comment there for why. Open addressing, power-of-two
+  // slots at 2x CLAIM_CAP so the table is at most half full and probe chains stay short. A guest
+  // address is never 0 (kClaimIndexEmpty), so 0 is a safe empty marker rather than a sentinel that
+  // could collide with real data.
+  static constexpr uint32_t kClaimIndexSlots = 512; // 2 * CLAIM_CAP, power of two
+  static constexpr uint32_t kClaimIndexEmpty = 0;
+  mutable uint32_t mClaimIndex[kClaimIndexSlots] = {};
+  // Set by every site that grows the claim set; cleared by the lazy rebuild in claims(). A flag rather
+  // than a rebuild at each add site, because the add sites are three and duplicating the probe loop
+  // into them would be three copies of one rule.
+  mutable bool mClaimIndexDirty = true;
+  static uint32_t claimHash(uint32_t a) {
+    a *= 0x9E3779B1u; // Knuth multiplicative — guest addresses are dense and 4-aligned, so the low
+    return a >> 23;   // bits alone would collide heavily; take the high bits into 512 slots
+  }
+  // Rebuilt whenever the claim set changes. That happens on load and on a producer earning a new
+  // claim — rare, unlike claims() itself, which runs per prim per stack level.
+  void rebuildClaimIndex() const {
+    for (uint32_t i = 0; i < kClaimIndexSlots; i++) {
+      mClaimIndex[i] = kClaimIndexEmpty;
+    }
+    for (int c = 0; c < mClaimCount; c++) {
+      const uint32_t addr = mClaims[c];
+      if (addr == kClaimIndexEmpty) {
+        continue;
+      }
+      for (uint32_t i = 0, h = claimHash(addr); i < kClaimIndexSlots; i++) {
+        const uint32_t slot = (h + i) & (kClaimIndexSlots - 1);
+        if (mClaimIndex[slot] == kClaimIndexEmpty || mClaimIndex[slot] == addr) {
+          mClaimIndex[slot] = addr;
+          break;
+        }
+      }
+    }
+  }
   // Parallel to mClaims, and parallel rather than a struct only because mClaims' layout is what
   // `reportChains` and `claimAt` already hand out; a struct here would churn three call sites for nothing.
   bool mClaimEarnedHere[CLAIM_CAP] = {};     // a native producer pushed on this GUEST key IN THIS RUN
@@ -995,6 +1051,7 @@ private:
         mClaimEarnedHere[at] = true;
       } else if (mClaimCount < CLAIM_CAP) {
         const int i = mClaimCount++;
+        mClaimIndexDirty = true;
         mClaims[i] = key.id;
         mClaimEarnedHere[i] = true;
         mClaimFromDisk[i] = false;

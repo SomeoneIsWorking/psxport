@@ -366,10 +366,32 @@ private:
 
   ChainSample mChains[CHAIN_SLOTS] = {};
   int mChainCount = 0;
-  uint64_t mChainSeen = 0;       // stores offered to the sampler — the denominator
-  uint64_t mChainDropped = 0;    // novel shapes lost because the table was full
-  uint64_t mChainBlind = 0;      // chains the shadow stack could not see (depth over OTATTR_CAP)
-  uint64_t mClaimAtLimit = 0;    // claims found at the last searched frame — the window may be too small
+  uint64_t mChainSeen = 0;    // stores offered to the sampler — the denominator
+  uint64_t mChainDropped = 0; // novel shapes lost because the table was full
+  uint64_t mChainBlind = 0;   // chains the shadow stack could not see (depth over OTATTR_CAP)
+  uint64_t mClaimAtLimit = 0; // claims found at the last searched frame — the window may be too small
+
+  // ---- RESOLUTION CACHE ---------------------------------------------------------------------------
+  // USER, 2026-08-20: "the DB is supposed to be cached so same effect doesn't keep hammering the
+  // framerate". Exactly right, and it was not. resolveClaimedFrame runs once per SPAN — 10,188 spans on
+  // a terrain-heavy frame — and walks the shadow stack doing a claim lookup at each level, EVERY FRAME,
+  // for effects whose answer never changes. Measured before this: 13.31% of a 3D frame.
+  //
+  // The result is a pure function of (visible stack prefix, claim set). So cache it on the prefix and
+  // invalidate when the claim set grows — nothing else can change the answer.
+  //
+  // Exact, not heuristic: a hit re-compares the WHOLE stored prefix, so two chains that merely hash
+  // alike cannot return each other's answer. Getting attribution silently wrong is the one failure this
+  // cache must not have — a wrong producer in the DB is worse than a slow one.
+  static constexpr int RCACHE_SLOTS = 256; // power of two
+  struct ResolveEntry {
+    uint32_t prefix[CLAIM_SEARCH_DEPTH] = {};
+    int depth = -1; // -1 = empty slot
+    uint32_t result = 0;
+  };
+  ResolveEntry mResolveCache[RCACHE_SLOTS];
+  int mResolveCacheClaimCount = -1; // claim count the cache was built against
+  uint64_t mResolveHit = 0, mResolveMiss = 0;
   uint64_t mClaimResolved = 0;   // spans whose chain yielded a claimed frame
   uint64_t mClaimUnresolved = 0; // spans with no claimed frame in the window — the honest "no native producer"
 
