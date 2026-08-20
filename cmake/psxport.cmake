@@ -83,6 +83,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/coro.cpp
   ${PSXPORT_ROOT}/runtime/recomp/overlay_router.cpp
   ${PSXPORT_ROOT}/runtime/recomp/cfg.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/memcensus.cpp      # --wrap=memcpy call-site attribution (PSXPORT_MEMCENSUS)
   ${PSXPORT_ROOT}/runtime/recomp/mem.cpp
   ${PSXPORT_ROOT}/runtime/recomp/stubs.cpp
   ${PSXPORT_ROOT}/runtime/recomp/hle.cpp
@@ -228,6 +229,20 @@ target_compile_definitions(psxport PUBLIC
 
 target_compile_options(psxport PRIVATE -w -O2 -g
   ${SDL3_CFLAGS_OTHER} ${FREETYPE_CFLAGS_OTHER})
+
+# WHICH CALL SITES MOVE THE BYTES (runtime/recomp/memcensus.cpp). --wrap is a LINK-time rewrite, and
+# it must be on the final executable's link rather than this static library's, so it is INTERFACE:
+# every consumer (the game exe, psxport_smoke) inherits it and every first-party memcpy/memmove call
+# routes through __wrap_*. Always linked, never always counting — the wrapper is one relaxed load and
+# a not-taken branch unless PSXPORT_MEMCENSUS=1, so an ordinary run is unaffected.
+#
+# ON by default because an instrument nobody can switch on without recompiling is an instrument
+# nobody uses; set PSXPORT_WRAP_MEMCPY=OFF to link without it and prove the wrapper itself costs
+# nothing (an A/B this option exists to make possible).
+option(PSXPORT_WRAP_MEMCPY "Route first-party memcpy/memmove through the call-site census" ON)
+if(PSXPORT_WRAP_MEMCPY)
+  target_link_options(psxport INTERFACE -Wl,--wrap=memcpy -Wl,--wrap=memmove)
+endif()
 
 # Link deps PUBLIC/INTERFACE so any consumer (the game exe, the smoke) inherits them.
 # lucent — logging + configuration (https://github.com/SomeoneIsWorking/lucent). The cfg_* API in

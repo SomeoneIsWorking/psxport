@@ -148,11 +148,23 @@ def main():
     total = 0
     hits = collections.Counter()
     unresolved = 0
+    # Set from the first data line: 3 columns = memcensus (bytes), 2 = hostprof (samples).
+    unit = "samples"
     for line in open(args.samples):
         if line.startswith("#") or not line.strip():
             continue
-        a_s, n_s = line.split()
-        addr, n = int(a_s, 16), int(n_s)
+        parts = line.split()
+        addr = int(parts[0], 16)
+        # TWO INPUT SHAPES, ONE RESOLVER. hostprof writes `addr samples`; memcensus (the
+        # --wrap=memcpy call-site census) writes `addr calls bytes`. Both ask this tool the same
+        # question — turn a host address into a name — so they share it rather than growing a second
+        # copy of the symbol/module machinery. With a third column the ranking is BY BYTES, because
+        # "which call sites move the bytes" is exactly what that instrument was built to answer.
+        if len(parts) >= 3:
+            n = int(parts[2])
+            unit = "bytes"
+        else:
+            n = int(parts[1])
         total += n
         i = bisect.bisect_right(addrs, addr) - 1
         if i < 0:
@@ -176,21 +188,21 @@ def main():
         hits[name] += n
 
     if total == 0:
-        print("REFUSED: the sample file holds no samples — nothing to report", file=sys.stderr)
+        print(f"REFUSED: {args.samples} holds no {unit} — nothing to report", file=sys.stderr)
         return 2
 
     resolved = total - unresolved
-    print(f"# {args.samples}: {total} samples, {resolved} resolved ({100*resolved/total:.1f}%), "
+    print(f"# {args.samples}: {total} {unit}, {resolved} resolved ({100*resolved/total:.1f}%), "
           f"{unresolved} unresolved ({100*unresolved/total:.1f}%) over {len(syms)} text symbols")
     if unresolved and unresolved / total > 0.05:
-        print(f"# NOTE: {100*unresolved/total:.1f}% of samples fell outside every known text symbol. "
+        print(f"# NOTE: {100*unresolved/total:.1f}% of {unit} fell outside every known text symbol. "
               f"Percentages below are of the TOTAL, so they still sum honestly, but a large unresolved "
               f"share means the ranking is incomplete — not that the named functions are cheap.")
-    print(f"\n{'%tot':>6}  {'samples':>8}  symbol")
+    print(f"\n{'%tot':>6}  {unit:>12}  symbol")
     for name, n in hits.most_common(args.top):
-        print(f"{100*n/total:6.2f}  {n:8d}  {name}")
+        print(f"{100*n/total:6.2f}  {n:12d}  {name}")
     if unresolved:
-        print(f"\n{100*unresolved/total:6.2f}  {unresolved:8d}  of the above are outside every text symbol "
+        print(f"\n{100*unresolved/total:6.2f}  {unresolved:12d}  of the above are outside every text symbol "
               f"(shown as [module]); {len(modules)} executable mapping(s) were captured")
     return 0
 

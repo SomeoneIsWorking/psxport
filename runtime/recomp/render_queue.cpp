@@ -476,11 +476,66 @@ void RenderQueue::mark_consumed() {
 // builds a fresh queue by re-running sceneNative + re-appending non-scene prims) sorts identically.
 // NOTE (coplanar z-fight follow-up): a secondary tie-break key can layer on top of the (layer,seq) sort
 // here — keep this comparator the single sort authority so it has one place to extend.
+// SORT THE KEYS, PERMUTE ONCE — do not sort 264-byte payloads to order 8 bytes of key.
+//
+// MEASURED, and this was the largest single byte mover in the whole port. The --wrap=memcpy call-site
+// census (runtime/recomp/memcensus.cpp) over the 1,100-frame field scene attributed 12.29 GB of
+// copying, and 46% of it was THIS FUNCTION:
+//
+//     33.4%  4.11 GB   std::__move_merge<RqItem*, sortQueue()::lambda>
+//      7.6%  940 MB    std::__insertion_sort<RqItem*, sortQueue()::lambda>
+//      5.4%  670 MB    the remaining merge stages
+//
+// sizeof(RqItem) is 264 bytes and a frame holds ~900 of them, so a stable_sort moved megabytes per
+// call, three times a frame, to order a key that is (layer, seq) — one small int and one counter.
+// The host profile could only ever say "__memmove_avx_unaligned_erms, 10-13%": it names where the
+// program counter is, never who asked for the copy. Two earlier attempts on kanban #118 cut VRAM
+// staging bytes instead and measured no change, because VRAM staging was never the biggest source.
+//
+// SAME ORDER, EXACTLY. `seq` is assigned by push order and is therefore unique, so (layer, seq) is a
+// TOTAL order and stability is not load-bearing — but the packed key preserves the original
+// comparator's meaning term for term: layer major, seq minor. Packing them into one uint64 makes the
+// sort operate on 16-byte elements instead of 264-byte ones, which is the entire win; the permutation
+// afterwards touches each item at most twice, versus n log n payload moves inside the merge.
 void RenderQueue::sortQueue() {
-  if (n) {
-    std::stable_sort(items, items + n, [](const RqItem &a, const RqItem &b) {
-      return a.layer != b.layer ? a.layer < b.layer : a.seq < b.seq;
-    });
+  if (n <= 1) {
+    return;
+  }
+  // Packed sort key: layer in the high word, seq in the low. Both are small non-negative ints (seq
+  // counts pushes from 0 and the queue caps far below 2^31), so unsigned comparison of the packed
+  // value is layer-major-then-seq by construction.
+  struct Key {
+    uint64_t k;
+    uint32_t idx;
+  };
+  static thread_local std::vector<Key> keys;
+  keys.clear();
+  keys.reserve((size_t)n);
+  bool already = true;
+  for (int i = 0; i < n; i++) {
+    const uint64_t k = ((uint64_t)(uint32_t)items[i].layer << 32) | (uint32_t)items[i].seq;
+    if (i && k < keys[(size_t)i - 1].k) {
+      already = false;
+    }
+    keys.push_back(Key{k, (uint32_t)i});
+  }
+  // THE COMMON CASE MOVES NOTHING. Items are pushed in seq order, so a frame whose layers happen to
+  // be pushed grouped is already sorted and the permutation below would be the identity. Checked
+  // rather than assumed — and it is one pass over the keys we just built, not a second scan.
+  if (already) {
+    return;
+  }
+  std::sort(keys.begin(), keys.end(), [](const Key &a, const Key &b) { return a.k < b.k; });
+
+  // Apply the permutation through a reused scratch buffer. Two touches per item and both contiguous
+  // on one side, against n log n scattered payload moves inside the merge sort.
+  static thread_local std::vector<RqItem> perm;
+  perm.resize((size_t)n);
+  for (int i = 0; i < n; i++) {
+    perm[(size_t)i] = items[keys[(size_t)i].idx];
+  }
+  for (int i = 0; i < n; i++) {
+    items[i] = perm[(size_t)i];
   }
 }
 

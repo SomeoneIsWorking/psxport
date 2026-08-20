@@ -23,6 +23,7 @@
 // ITIMER_PROF counts CPU time, not wall time, so a port blocked on I/O or sleeping in frame pacing
 // does not accumulate samples there — which is what you want when the question is "where is the work".
 #include "cfg.h"
+#include "memcensus.h"
 #include "fs_util.h"
 #include <csignal>
 #include <cstdio>
@@ -85,6 +86,7 @@ void dump();
 // default disposition so the exit status still reports what killed us (the gate depends on that).
 void on_term(int sig) {
   dump();
+  memcensus_dump();
   signal(sig, SIG_DFL);
   raise(sig);
 }

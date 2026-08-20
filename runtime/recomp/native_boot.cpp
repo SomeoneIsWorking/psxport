@@ -26,6 +26,7 @@
 #include "game.h"       // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "game_iface.h" // GameHooks — c->hooks->devWarpAreaLoad (dev-warp area load) + the frame-loop hooks
 #include "hostprof.h"
+#include "memcensus.h"
 #include "hw_bind.h"           // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "ot_attr.h"           // g_producer_census_armed — the producer-census arm, set at boot below
 #include "override_registry.h" // overrides::query — per-row ownership for the producer-census JSONL
@@ -886,6 +887,10 @@ void native_boot_run(Core *c) {
   // evidence is worse than none, because its existence answers "can we measure this?" with a yes.
   // Here is where it belongs: once, at boot, before any frame runs.
   hostprof_init();
+  // WHICH CALL SITES MOVE THE BYTES (PSXPORT_MEMCENSUS). hostprof answers "the PC is inside memmove",
+  // which has now produced two wrong conclusions on kanban #118 because it cannot name the CALLER.
+  // Armed here, beside the profiler, for the same reason.
+  memcensus_init();
   // The producer census arm, from the CVar rather than a hardcoded true. Read ONCE here: trackStore's
   // inline gate is on the path of every guest store, so it must stay two relaxed loads.
   g_producer_census_armed = psx::config::cv_producers.get();
