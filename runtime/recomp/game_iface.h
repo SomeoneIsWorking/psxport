@@ -291,7 +291,6 @@ struct GameConfig {
   // mid-struct silently shifts every field after it there.
   const char *windowTitle;
 
-
   // --- crt0 stack-top bias (crt0_boot.h) --------------------------------------------------------
   // The guest crt0's OWN adjustment of the stack-top word before it becomes sp:
   //

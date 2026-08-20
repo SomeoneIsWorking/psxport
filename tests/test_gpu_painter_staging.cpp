@@ -8,7 +8,11 @@ static void draw(GpuVkState& g, int mode, int u0) {
 }
 static void draw_untextured(GpuVkState& g, bool gouraud, bool dither) {
   float d[3]={.2f,.4f,.6f}; g.s_vd=d; g.s_painter_item_gouraud=gouraud; g.s_painter_item_dither=dither;
-  g.draw_tri(0,0,10,20,30, 8,0,40,50,60, 0,8,70,80,90);
+  // Full-canvas clip: psxport 7782da9c gave draw_tri a guest draw-area rect (dax0,day0,dax1,day1)
+  // and did not update this call, which stopped the file compiling — and with it the ENTIRE suite,
+  // since one unbuildable test aborts the build and leaves every other test "Not Run". This test is
+  // about painter STAGING, not clipping, so the clip must not be able to reject the triangle.
+  g.draw_tri(0,0,10,20,30, 8,0,40,50,60, 0,8,70,80,90, 0,0,1023,511);
 }
 
 static void test_separate_ordered_object_ranges(void) {
