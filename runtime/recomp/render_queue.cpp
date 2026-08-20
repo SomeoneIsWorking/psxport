@@ -1810,7 +1810,14 @@ static RqFaceExtent rq_face_extent(const RqItem &it) {
 //
 // Both rules are symmetric in A and B, which is what lets the caller treat "is this face in contest
 // with anything" as an existence question and stop at the first witness.
-bool rq_faces_in_contest(const RqItem &A, const RqItem &B) {
+// The real body, taking PRECOMPUTED extents. An extent depends only on the face, but the contest is
+// asked about PAIRS, so recomputing it per call recomputes one face's extent once per partner it is
+// tested against. Measured on Tomba!2's native path at f1201: 14,772 pair tests over 262 keyed faces
+// = 29,544 extent computations of 262 distinct values, and rq_face_extent was 16.18% of the frame in
+// the host profile. The caller that has the whole group in hand computes each once; the public
+// two-argument form below keeps working for callers (and tests) that do not.
+static bool
+rq_faces_in_contest_ext(const RqItem &A, const RqItem &B, const RqFaceExtent &extA, const RqFaceExtent &extB) {
   if (A.sort_key == B.sort_key) { // SAME OT BUCKET (kanban #29 — hut wall decals)
     return rq_faces_coincident(A, B);
   }
@@ -1819,8 +1826,8 @@ bool rq_faces_in_contest(const RqItem &A, const RqItem &B) {
   const bool a_is_near = A.sort_key < B.sort_key;
   const RqItem &near_face = a_is_near ? A : B;
   const RqItem &far_face = a_is_near ? B : A;
-  const RqFaceExtent near_ext = rq_face_extent(near_face);
-  const RqFaceExtent far_ext = rq_face_extent(far_face);
+  const RqFaceExtent &near_ext = a_is_near ? extA : extB;
+  const RqFaceExtent &far_ext = a_is_near ? extB : extA;
 
   // Cheap rejects. No screen overlap at all, or the far face can never out-depth the near one (ord:
   // larger = nearer, so an inversion requires far.omax > near.omin).
@@ -1857,6 +1864,13 @@ bool rq_faces_in_contest(const RqItem &A, const RqItem &B) {
     }
   }
   return false;
+}
+
+// PUBLIC ENTRY POINT — computes the two extents and delegates. One implementation of the rule lives
+// above; this is the convenience form for anyone who does not already have the extents, including
+// tests/test_render_queue_keyorder.cpp, which checks the rule against a brute-force oracle.
+bool rq_faces_in_contest(const RqItem &A, const RqItem &B) {
+  return rq_faces_in_contest_ext(A, B, rq_face_extent(A), rq_face_extent(B));
 }
 
 void RenderQueue::resolveKeyOrder(Core *core) {
@@ -1918,6 +1932,14 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
   // symmetric, so a witness found while deciding `a` settles `b` too — which is why setting both
   // ends here loses nothing. tests/test_render_queue_keyorder.cpp asserts this against a brute-force
   // oracle on inputs exercising both contest rules AND the negative case.
+  // EACH FACE'S EXTENT ONCE, not once per partner it is contested against. This is pure memoisation
+  // — the same values in the same order — so the snap set is unchanged and the brute-force oracle in
+  // tests/test_render_queue_keyorder.cpp still gates it.
+  std::vector<RqFaceExtent> extents(faces.size());
+  for (size_t i = 0; i < faces.size(); i++) {
+    extents[i] = rq_face_extent(items[faces[i].idx]);
+  }
+
   for (size_t group_start = 0; group_start < faces.size();) {
     size_t group_end = group_start + 1;
     while (group_end < faces.size() && faces[group_end].node == faces[group_start].node) {
@@ -1932,7 +1954,7 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
           continue;
         }
         keyOrderPairTests++;
-        if (!rq_faces_in_contest(items[faces[a].idx], items[faces[b].idx])) {
+        if (!rq_faces_in_contest_ext(items[faces[a].idx], items[faces[b].idx], extents[a], extents[b])) {
           continue;
         }
         snap[a] = 1;
