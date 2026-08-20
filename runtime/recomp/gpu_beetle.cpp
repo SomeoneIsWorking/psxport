@@ -369,11 +369,11 @@ void gpu_beetle_frame_report(int frame, const uint16_t* ours, int vram_w, int vr
     const unsigned long queued = psxport_gpu_fifo_depth();
     lucent::info("gpubeetle",
                  "f{} FEED: words accepted {} dropped {} | cmds {} = poly {} + line {} + sprite {} + "
-                 "xfer {} + fill {} + env {} + nop0 {} + unknown {} | quad-cont {} starved {} null-func {} | fifo queued {}",
+                 "xfer {} + fill {} + env {} + nop0 {} + unknown {} | cont: quad {} line {} | starved {} null-func {} | fifo queued {}",
                  frame, d[PGC_WORDS_ACCEPTED], d[PGC_WORDS_DROPPED], d[PGC_CMDS_DISPATCHED],
                  d[PGC_POLY], d[PGC_LINE], d[PGC_SPRITE], d[PGC_XFER], d[PGC_FILL],
-                 d[PGC_STATE], d[PGC_NOP0], d[PGC_NOP], d[PGC_POLY_CONT], d[PGC_STARVED],
-                 d[PGC_NULL_FUNC], queued);
+                 d[PGC_STATE], d[PGC_NOP0], d[PGC_NOP], d[PGC_POLY_CONT], d[PGC_LINE_CONT],
+                 d[PGC_STARVED], d[PGC_NULL_FUNC], queued);
     // The comparison the whole oracle rests on: primitives WE drew vs primitives beetle dispatched.
     // Equal counts mean a pixel difference is a rasterizer difference. Unequal counts mean the tee
     // is lossy and NOTHING about the pixels may be read as a verdict yet.
