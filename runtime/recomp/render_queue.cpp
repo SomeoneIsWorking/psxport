@@ -1704,24 +1704,58 @@ static constexpr uint32_t kGuestRamEnd = 0x80200000u;
 
 // Interpolated ord of item `it` at screen point (x,y), using the same triangle split + barycentric the
 // rasterizer applies (tri 0 = verts 0,1,2; tri 1 = verts 1,2,3). Returns false when outside both tris.
-static bool rq_ord_at(const RqItem *it, float x, float y, float *out) {
-  int nv = it->nv ? it->nv : 4;
-  for (int t = 0; t < (nv == 4 ? 2 : 1); t++) {
-    int i0 = t, i1 = t + 1, i2 = t + 2;
-    float x0 = rq_vx(*it, i0), y0 = rq_vy(*it, i0);
-    float x1 = rq_vx(*it, i1), y1 = rq_vy(*it, i1);
-    float x2 = rq_vx(*it, i2), y2 = rq_vy(*it, i2);
-    float den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
-    if (den == 0.f) {
+// EVERYTHING IN THE BARYCENTRIC SETUP THAT DEPENDS ONLY ON THE FACE, lifted out of the per-sample
+// loop. The interior contest samples an 8x8 grid and asks each face for its interpolated ord at every
+// point, so the six vertex fetches and the determinant were being recomputed 64 times per face per
+// PAIR — and the host profile put rq_ord_at at 18.81% of the whole frame, the single largest entry.
+// The arithmetic below is character-for-character what the per-sample code did, including keeping the
+// DIVISION by `den` rather than multiplying by a reciprocal: this must stay bit-identical, because
+// the contest's answer is a comparison and a boundary case that rounds the other way flips a face's
+// snap decision. tests/test_render_queue_keyorder.cpp checks the rule against a brute-force oracle.
+struct RqTriSetup {
+  float x0, y0, x1, y1, x2, y2;
+  float den; // 0 means degenerate — the sampler skips this triangle, as the old code did
+  float d0, d1, d2;
+};
+struct RqFaceSetup {
+  int ntri = 0;
+  RqTriSetup tri[2];
+};
+
+static RqFaceSetup rq_face_setup(const RqItem &it) {
+  const int nv = it.nv ? it.nv : 4;
+  RqFaceSetup f;
+  f.ntri = (nv == 4 ? 2 : 1);
+  for (int t = 0; t < f.ntri; t++) {
+    const int i0 = t, i1 = t + 1, i2 = t + 2;
+    RqTriSetup &tri = f.tri[t];
+    tri.x0 = rq_vx(it, i0);
+    tri.y0 = rq_vy(it, i0);
+    tri.x1 = rq_vx(it, i1);
+    tri.y1 = rq_vy(it, i1);
+    tri.x2 = rq_vx(it, i2);
+    tri.y2 = rq_vy(it, i2);
+    tri.den = (tri.y1 - tri.y2) * (tri.x0 - tri.x2) + (tri.x2 - tri.x1) * (tri.y0 - tri.y2);
+    tri.d0 = it.depth[i0];
+    tri.d1 = it.depth[i1];
+    tri.d2 = it.depth[i2];
+  }
+  return f;
+}
+
+static bool rq_ord_at_setup(const RqFaceSetup &f, float x, float y, float *out) {
+  for (int t = 0; t < f.ntri; t++) {
+    const RqTriSetup &tri = f.tri[t];
+    if (tri.den == 0.f) {
       continue;
     }
-    float l0 = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / den;
-    float l1 = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / den;
-    float l2 = 1.f - l0 - l1;
+    const float l0 = ((tri.y1 - tri.y2) * (x - tri.x2) + (tri.x2 - tri.x1) * (y - tri.y2)) / tri.den;
+    const float l1 = ((tri.y2 - tri.y0) * (x - tri.x2) + (tri.x0 - tri.x2) * (y - tri.y2)) / tri.den;
+    const float l2 = 1.f - l0 - l1;
     if (l0 < 0.f || l1 < 0.f || l2 < 0.f) {
       continue; // outside this triangle (strict interior sampling)
     }
-    *out = l0 * it->depth[i0] + l1 * it->depth[i1] + l2 * it->depth[i2];
+    *out = l0 * tri.d0 + l1 * tri.d1 + l2 * tri.d2;
     return true;
   }
   return false;
@@ -1816,8 +1850,12 @@ static RqFaceExtent rq_face_extent(const RqItem &it) {
 // = 29,544 extent computations of 262 distinct values, and rq_face_extent was 16.18% of the frame in
 // the host profile. The caller that has the whole group in hand computes each once; the public
 // two-argument form below keeps working for callers (and tests) that do not.
-static bool
-rq_faces_in_contest_ext(const RqItem &A, const RqItem &B, const RqFaceExtent &extA, const RqFaceExtent &extB) {
+static bool rq_faces_in_contest_ext(const RqItem &A,
+                                    const RqItem &B,
+                                    const RqFaceExtent &extA,
+                                    const RqFaceExtent &extB,
+                                    const RqFaceSetup &setA,
+                                    const RqFaceSetup &setB) {
   if (A.sort_key == B.sort_key) { // SAME OT BUCKET (kanban #29 — hut wall decals)
     return rq_faces_coincident(A, B);
   }
@@ -1828,6 +1866,8 @@ rq_faces_in_contest_ext(const RqItem &A, const RqItem &B, const RqFaceExtent &ex
   const RqItem &far_face = a_is_near ? B : A;
   const RqFaceExtent &near_ext = a_is_near ? extA : extB;
   const RqFaceExtent &far_ext = a_is_near ? extB : extA;
+  const RqFaceSetup &near_set = a_is_near ? setA : setB;
+  const RqFaceSetup &far_set = a_is_near ? setB : setA;
 
   // Cheap rejects. No screen overlap at all, or the far face can never out-depth the near one (ord:
   // larger = nearer, so an inversion requires far.omax > near.omin).
@@ -1852,10 +1892,10 @@ rq_faces_in_contest_ext(const RqItem &A, const RqItem &B, const RqFaceExtent &ex
     for (int ix = 1; ix <= kGridSteps; ix++) {
       const float px = ox0 + sx * ix, py = oy0 + sy * iy;
       float ord_near, ord_far;
-      if (!rq_ord_at(&near_face, px, py, &ord_near)) {
+      if (!rq_ord_at_setup(near_set, px, py, &ord_near)) {
         continue;
       }
-      if (!rq_ord_at(&far_face, px, py, &ord_far)) {
+      if (!rq_ord_at_setup(far_set, px, py, &ord_far)) {
         continue;
       }
       if (ord_far > ord_near) {
@@ -1870,7 +1910,7 @@ rq_faces_in_contest_ext(const RqItem &A, const RqItem &B, const RqFaceExtent &ex
 // above; this is the convenience form for anyone who does not already have the extents, including
 // tests/test_render_queue_keyorder.cpp, which checks the rule against a brute-force oracle.
 bool rq_faces_in_contest(const RqItem &A, const RqItem &B) {
-  return rq_faces_in_contest_ext(A, B, rq_face_extent(A), rq_face_extent(B));
+  return rq_faces_in_contest_ext(A, B, rq_face_extent(A), rq_face_extent(B), rq_face_setup(A), rq_face_setup(B));
 }
 
 void RenderQueue::resolveKeyOrder(Core *core) {
@@ -1936,8 +1976,11 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
   // — the same values in the same order — so the snap set is unchanged and the brute-force oracle in
   // tests/test_render_queue_keyorder.cpp still gates it.
   std::vector<RqFaceExtent> extents(faces.size());
+  std::vector<RqFaceSetup> setups(faces.size());
   for (size_t i = 0; i < faces.size(); i++) {
-    extents[i] = rq_face_extent(items[faces[i].idx]);
+    const RqItem &it = items[faces[i].idx];
+    extents[i] = rq_face_extent(it);
+    setups[i] = rq_face_setup(it);
   }
 
   for (size_t group_start = 0; group_start < faces.size();) {
@@ -1954,7 +1997,8 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
           continue;
         }
         keyOrderPairTests++;
-        if (!rq_faces_in_contest_ext(items[faces[a].idx], items[faces[b].idx], extents[a], extents[b])) {
+        if (!rq_faces_in_contest_ext(
+                items[faces[a].idx], items[faces[b].idx], extents[a], extents[b], setups[a], setups[b])) {
           continue;
         }
         snap[a] = 1;
