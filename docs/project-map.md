@@ -72,7 +72,7 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 `core.h`/`game.h` (the `Core`/`Game` objects), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
-REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.c`, `stubs.cpp`,
+REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp`, `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
 `synchronous_task_wait.{h,cpp}` owns the one product policy for a cooperative spawn-and-wait: game-specific
 task addresses and continuation PCs come from `GameConfig`, the spawned task is pumped to its authored close,
@@ -118,7 +118,7 @@ view coordinates out. It has no Core/GTE/ambient state and is intentionally not 
 framework's legacy projection probe delegates to the same implementation through a private sf/lm adapter;
 `test_native_projection` differentially covers the producer mode plus the probe's sf=0/lm=1 modes against
 isolated vendor RTPS, including saturation and a forced-mismatch discriminator. `mdec_beetle.c` (mdec.c),
-`native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`
+`native_fmv.cpp` (STR/MDEC FMV + shared XA decoder; direct movie presents report watchdog progress), `pad_input.cpp`
 (final effective mask + shared `ActiveLowEdges`; game/sequence code owns every resulting transition).
 
 ## Tools — ONE LINE EACH, and what is wrong with this list
