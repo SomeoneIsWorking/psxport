@@ -28,11 +28,15 @@
 // their OWN copy of it with Tomba!2's literals still in them — three copies meant fixing one left two
 // lying. This function is now just the pool window of that shared mask.
 namespace {
-struct PoolRange {
-  uint32_t lo, hi;
-  bool known;
-};
-PoolRange pool_range(Core *c) {
+// DERIVED ONCE PER CONFIG, not once per store. This is called from trackStoreSlow, i.e. on EVERY
+// guest memory write, and it used to rebuild the whole RenderNoiseMask each time — measured at 1.53%
+// of a 3D field frame purely to recompute a constant. The mask is a pure function of `cfg`, and
+// `Core::cfg` is set once, so the answer cannot change while the pointer does not.
+//
+// KEYED ON THE cfg POINTER rather than cached in a bare static, and that is load-bearing: SBS runs
+// two Cores, and render_noise.h exists precisely because a mask inherited across games does not just
+// drop ranges, it makes a harness blind to real divergence. A changed pointer re-derives.
+OtAttr::PoolWindow pool_range_uncached(Core *c) {
   const RenderNoiseMask m = RenderNoiseMask::from(c->cfg, "otattr");
   if (!m.poolLo && !m.poolHi) {
     static bool warned = false;
@@ -49,6 +53,14 @@ PoolRange pool_range(Core *c) {
   return {m.poolLo, m.poolHi, true};
 }
 } // namespace
+
+void OtAttr::poolRangeMiss(Core *c) {
+  const PoolWindow r = pool_range_uncached(c);
+  mPoolCfg = c->cfg;
+  mPoolLo = r.lo;
+  mPoolHi = r.hi;
+  mPoolKnown = r.known;
+}
 
 // The frame stamp every table here shares — see ot_attr.h for the null-deref this replaced and for why
 // there is now exactly ONE clock instead of a logic clock for the spans and a present clock for the rest.
@@ -135,8 +147,13 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
   trackWatch(fn, caller, phys, bytes, frame);
 
   const uint32_t k = addr | 0x80000000u;
-  const PoolRange pool = pool_range(c);
-  if (!pool.known || k < pool.lo || k >= pool.hi) {
+  // The cache CHECK is here, not behind a call: one pointer compare, then three member loads. See
+  // poolRangeMiss in the header for the measurement that made this split necessary — a tidier
+  // compare-inside-a-member-function version was measurably SLOWER than no cache at all.
+  if (c->cfg != mPoolCfg) {
+    poolRangeMiss(c);
+  }
+  if (!mPoolKnown || k < mPoolLo || k >= mPoolHi) {
     return;
   }
 

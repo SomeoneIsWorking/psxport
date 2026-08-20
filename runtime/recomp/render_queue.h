@@ -351,12 +351,12 @@ struct RenderQueue {
   // Runs once per frame at flush: within each object, finds face pairs whose interpolated per-vertex
   // depth would CONTRADICT the game's own sort-key order and snaps those faces' test depth to their
   // key's shared ord. Zero bias, zero constants: every value is the game's own computation.
-  void resolveKeyOrder(Core *core);
+  void resolveKeyOrder(Core *core, const char *who);
 
   // The algorithm behind resolveKeyOrder, with no Core dependency — `frame` only labels diagnostics.
   // Split out so the rule can be tested on its inputs alone (tests/test_render_queue_keyorder.cpp):
   // build a queue, push the faces, call this, inspect the snap decisions.
-  void resolveKeyOrderFaces(uint32_t frame);
+  void resolveKeyOrderFaces(uint32_t frame, const char *who);
 
   // Pair tests performed by the last resolveKeyOrderFaces call. The rule asks an EXISTENCE question
   // per face ("is this face in contest with any other face of its object"), so this must scale with
@@ -372,7 +372,11 @@ struct RenderQueue {
   // for the re-rendered world of the in-between frame. Adding a third ordering step belongs HERE, not
   // at a call site — kanban #17 is what happens when it doesn't (resolveKeyOrder ran only on the real
   // frame, so the barrel's snapped faces alternated every other frame and flickered at 60fps).
-  void finalize(Core *core);
+  // `who` NAMES THE CALLER in the keyord census. There are exactly two queue-finishing sites (flush
+  // for the real frame, Fps60::tier1Render for the interpolated one), but the census showed THREE
+  // contests per logic frame, and prim counts alone could not say which site the extra one came from.
+  // A diagnostic that cannot name its own caller makes the reader guess.
+  void finalize(Core *core, const char *who);
 
 private:
   // Debug OBJECT-ID overlay (REPL `debug objid`) — pure host HUD quads appended at flush time.

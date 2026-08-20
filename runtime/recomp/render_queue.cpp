@@ -886,8 +886,8 @@ void RenderQueue::zfightScan(Core *core) {
 
 // finalize — see the header. Game-sort-key order resolution (kanban #11) runs FIRST, on the complete
 // queue, so the snapped depths reach every consumer of that queue identically; the sort follows.
-void RenderQueue::finalize(Core *core) {
-  resolveKeyOrder(core);
+void RenderQueue::finalize(Core *core, const char *who) {
+  resolveKeyOrder(core, who);
   sortQueue();
 }
 
@@ -923,7 +923,7 @@ void RenderQueue::flush(Core *core) {
   if (n && objid_on(core)) {
     objidOverlay(core);
   }
-  finalize(core);
+  finalize(core, "flush");
   // Sited here, beside zfightScan, so it sees the same sorted item set under BOTH the fps60 capture
   // branch below and the plain emitQueue() path — see histogram()'s own comment.
   histogram();
@@ -2055,13 +2055,13 @@ bool rq_faces_in_contest(const RqItem &A, const RqItem &B) {
   return rq_faces_in_contest_ext(A, B, rq_face_extent(A), rq_face_extent(B), rq_face_setup(A), rq_face_setup(B));
 }
 
-void RenderQueue::resolveKeyOrder(Core *core) {
-  resolveKeyOrderFaces(core->game->gpu.s_frame);
+void RenderQueue::resolveKeyOrder(Core *core, const char *who) {
+  resolveKeyOrderFaces(core->game->gpu.s_frame, who);
 }
 
 // Core-free so the rule is testable on its inputs alone (tests/test_render_queue_keyorder.cpp);
 // `frame` is carried purely to label the diagnostics.
-void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
+void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who) {
   // Gather this frame's keyed world faces, grouped by object. Real guest nodes only — the reserved
   // sentinels (terrain/scene-table/backdrop) and unscoped prims carry no game sort key anyway.
   struct KeyedFace {
@@ -2085,8 +2085,9 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
     // A NEGATIVE WITH ITS DENOMINATOR: "nothing snapped" and "there was nothing to snap" are
     // different answers, and a silent return makes them look identical in a log.
     lucent::debug("keyord",
-                  "f{} resolveKeyOrder: {} keyed faces of {} queued prims — nothing to contest",
+                  "f{} [{}] resolveKeyOrder: {} keyed faces of {} queued prims — nothing to contest",
                   frame,
+                  who,
                   faces.size(),
                   n);
     return;
@@ -2169,10 +2170,11 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
     snapped_seqs.add(" {}:{:08X}/{}", it.seq, it.dbg_node, it.sort_key);
   }
   lucent::debug("keyord",
-                "f{} resolveKeyOrder: {}/{} keyed faces snapped ({} pair tests, {} queued prims) | "
+                "f{} [{}] resolveKeyOrder: {}/{} keyed faces snapped ({} pair tests, {} queued prims) | "
                 "cumulative: bbox-reject {} depth-reject {} sat-reject {} REACHED GRID {} (of which found "
                 "an inversion {})",
                 frame,
+                who,
                 nsnap,
                 faces.size(),
                 keyOrderPairTests,
