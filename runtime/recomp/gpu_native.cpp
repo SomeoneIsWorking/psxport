@@ -24,9 +24,10 @@
 // The beetle-GPU oracle tee (gpu_beetle.cpp). Every guest command word goes to both implementations
 // so the two VRAMs can be diffed on the same frame — see that file for why our own rasterizer could
 // not serve as the reference it was being treated as.
-void gpu_beetle_gp0(uint32_t w);
+void gpu_beetle_gp0(uint32_t w, int is_xfer_data);
 void gpu_beetle_gp1(uint32_t w);
 void gpu_beetle_frame_report(int frame, const uint16_t* ours, int vram_w, int vram_h);
+void gpu_beetle_load_image(int x, int y, int w, int h, const uint16_t* pixels);
 
 #include "pace_plan.h"             // the frame-pacing decision, as a pure function (no window input)
 #include "mods.h"                   // g_mods.fps60 (was g_fps60_on)
@@ -565,6 +566,13 @@ void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uin
   for (int v = 0; v < h; v++)
     for (int u = 0; u < w; u++)
       *vram(x + u, y + v) = core->mem_r16(src + (uint32_t)((v * w + u) * 2));
+  // Tee to the beetle oracle: this native path bypasses gpu_gp0, so without this the oracle's VRAM
+  // is missing every texture and framebuffer upload the port performs natively.
+  { static std::vector<uint16_t> tee; tee.resize((size_t)w * h);
+    for (int v = 0; v < h; v++)
+      for (int u = 0; u < w; u++)
+        tee[(size_t)v * w + u] = core->mem_r16(src + (uint32_t)((v * w + u) * 2));
+    gpu_beetle_load_image(x, y, w, h, tee.data()); }
   // Mirror the upload into the VK VRAM image, exactly like the GP0 0xA0 / VRAM-copy / fill paths.
   // This native upload is a VRAM-writing path too; without the mirror its textures land only in the
   // SW s_vram. The VK opaque pass samples a full s_vram snapshot so it still saw them, but the VK
@@ -1298,7 +1306,7 @@ static int gp0_len(uint32_t c) {
 // One word into the GP0 port (direct write or DMA).
 void GpuState::gpu_gp0(Core* core, uint32_t w) {
   s_gp0_words++;
-  gpu_beetle_gp0(w);   // oracle tee — no-op unless PSXPORT_GPU_BEETLE is on
+  gpu_beetle_gp0(w, s_xfer ? 1 : 0);   // oracle tee — no-op unless PSXPORT_GPU_BEETLE is on
   gp0raw_note(s_frame, w, s_xfer ? 1 : 0);       // PSXPORT_GP0RAW: raw word capture, pre-decode
   if (s_xfer) {                                  // CPU->VRAM pixel stream (2 px/word)
     if (s_twp_active && s_twp_px == 0) s_twp_addr0 = s_gp0_src;

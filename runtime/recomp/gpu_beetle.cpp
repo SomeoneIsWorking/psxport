@@ -126,6 +126,12 @@ namespace {
 bool s_inited = false;
 bool s_failed = false;
 long s_words_gp0 = 0, s_words_gp1 = 0;   // the DENOMINATOR: what we actually fed it
+// WHICH COMMANDS the oracle actually received, by top-level GP0 opcode. "The word stream arrives"
+// and "the DRAWING commands arrive" are different claims, and only this can tell them apart: beetle
+// visibly received the texture UPLOADS (its VRAM holds the sky texture) while drawing no polygons,
+// which is a shape no total-word count can express.
+long s_op_hist[256] = {};
+long s_xfer_words = 0;
 int32_t s_ts = 0;                        // our own monotonic clock for GPU_Update
 
 // The scanout sink. Allocated once; its CONTENTS are never read by us — the oracle's answer is VRAM,
@@ -207,9 +213,10 @@ bool ensure_init() {
 
 // ---- The tee. Called from GpuState::gpu_gp0 / gpu_gp1, which are the single funnels every guest
 // ---- command word already passes through.
-void gpu_beetle_gp0(uint32_t w) {
+void gpu_beetle_gp0(uint32_t w, int is_xfer_data) {
   if (!enabled() || !ensure_init()) return;
   s_words_gp0++;
+  if (is_xfer_data) s_xfer_words++; else s_op_hist[w >> 24]++;
   GPU_Write(s_ts, 0x1F801810u, w);   // A&4 == 0 selects GP0 ("Data")
   pump_fifo();
 }
@@ -219,6 +226,31 @@ void gpu_beetle_gp1(uint32_t w) {
   s_words_gp1++;
   GPU_Write(s_ts, 0x1F801814u, w);   // A&4 != 0 selects GP1 ("Control")
   pump_fifo();
+}
+
+// NATIVE VRAM UPLOADS MUST BE TEED TOO, or the oracle is comparing against a different VRAM.
+//
+// GpuState::gpu_native_load_image writes *vram(...) straight from guest RAM and never goes near
+// gpu_gp0 — so beetle saw none of it. That is what the first comparison actually found: at frame 4
+// our VRAM held 97,540 non-black pixels after only FOURTEEN GP0 words, which is arithmetically
+// impossible through the command port and was the tell that a second writer existed.
+//
+// Replayed as the GP0 sequence the hardware would have received (0xA0, destination, extent, then the
+// packed pixel stream) rather than poked into beetle's VRAM behind its back: the transfer is a real
+// state machine in there (INCMD_FBWRITE), and driving it through the front door keeps beetle's idea
+// of itself consistent — and keeps this a tee of the COMMAND STREAM, which is the thing being
+// compared.
+void gpu_beetle_load_image(int x, int y, int w, int h, const uint16_t* pixels) {
+  if (!enabled() || !ensure_init() || !pixels || w <= 0 || h <= 0) return;
+  gpu_beetle_gp0(0xA0000000u, 0);                                        // CPU -> VRAM blit
+  gpu_beetle_gp0(((uint32_t)(y & 0x1FF) << 16) | (uint32_t)(x & 0x3FF), 0);
+  gpu_beetle_gp0(((uint32_t)h << 16) | (uint32_t)w, 0);
+  const long n = (long)w * h;
+  for (long i = 0; i < n; i += 2) {
+    const uint32_t lo = pixels[i];
+    const uint32_t hi = (i + 1 < n) ? pixels[i + 1] : 0u;   // odd pixel count pads, as the port does
+    gpu_beetle_gp0(lo | (hi << 16), 1);
+  }
 }
 
 const uint16_t* gpu_beetle_vram() {
@@ -284,6 +316,21 @@ void gpu_beetle_frame_report(int frame, const uint16_t* ours, int vram_w, int vr
         lucent::info("gpubeetle", "f{} VRAM dumped -> {}", frame, path);
       }
       }
+    } }
+  // The command census, ranked. A draw opcode is 0x20-0x7F (polys/lines/rects); 0xA0 is a CPU->VRAM
+  // upload; 0xE1-0xE6 are the drawing-environment words without which every primitive is clipped away.
+  { static int s_last_hist = -1;
+    if (want_dump && s_last_hist != frame) {
+      s_last_hist = frame;
+      long draws = 0, envs = 0;
+      for (int op = 0x20; op <= 0x7F; op++) draws += s_op_hist[op];
+      for (int op = 0xE1; op <= 0xE6; op++) envs  += s_op_hist[op];
+      lucent::info("gpubeetle", "f{} command census fed to the oracle: {} draw op(s) [0x20-0x7F], "
+                                "{} draw-env op(s) [0xE1-0xE6], {} upload(s) [0xA0], {} transfer data word(s)",
+                   frame, draws, envs, s_op_hist[0xA0], s_xfer_words);
+      for (int op = 0; op < 256; op++)
+        if (s_op_hist[op] > 0)
+          lucent::debug("gpubeetle", "  op {:02X}: {}", op, s_op_hist[op]);
     } }
   if (theirs_nz == 0 && s_words_gp0 > 0)
     lucent::warn("gpubeetle", "f{} beetle's VRAM is ENTIRELY BLACK after {} GP0 word(s). That is the "
