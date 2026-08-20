@@ -30,6 +30,7 @@ extern BoolVar cv_noaudio;
 // PSXPORT_NOPACE — do not sleep to hold the present rate. An agent's headless progress run wants
 // frames as fast as they come; a normal run wants 60 Hz.
 extern BoolVar cv_nopace;
+extern BoolVar cv_producers; // arm the producer census (ot_attr.h) — see config.cpp for the cost
 
 // PSXPORT_REPL — the interactive REPL on stdin. IT IS SERVICED BY EXACTLY ONE LOOP: the single-core
 // native frame loop (runtime/recomp/native_boot.cpp) calls Repl::read() between frames. Every other

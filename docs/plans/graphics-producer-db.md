@@ -253,13 +253,28 @@ tool and `docs/producers/` are game-side and need no framework claim.
 > **STAGE 2 STATUS 2026-08-11 — the gate cost is SETTLED and CHEAP; the feed is BLOCKED on span-table
 > capacity.** Measured, not estimated:
 >
-> * **The hot-path gate is affordable, so the census stays on in ordinary play.** Widening
->   `OtAttr::trackStore` to `g_otattr_channel || g_producer_census_armed` costs **+0.26%** (Tomba!2, 300
->   frames headless, three runs each: 77.7/77.6/77.7 s closed vs 77.9/77.9/77.7 s armed) against the
->   **2.54%** the out-of-line version once cost. The work is real and not optimised away: the same run
->   records **10,188 spans, 0 overflow**, printed at run end so "no cost" can never be read as "no work".
->   With the guest-leg join added the total is **+0.8%**. So the plan's fear — that the census could not
->   be free enough to leave on during play — does NOT hold, and no opt-in flag is needed.
+> * **THE GATE IS CHEAP; THE CENSUS IS NOT. This bullet said "+0.8% total, no opt-in flag needed" and
+>   that conclusion is FALSIFIED (2026-08-20).** The distinction it missed: widening
+>   `OtAttr::trackStore`'s inline GATE really is ~free, but the WORK the gate lets through is not.
+>
+>   The old figure — +0.26%, from 77.7/77.6/77.7 s closed vs 77.9/77.9/77.7 s armed — was taken on a run
+>   doing 300 frames in 77.7 s, i.e. **3.9 fps**. At that pace almost any fixed cost measures as free.
+>
+>   Re-priced on an UNPACED 3D field scene (1,100 frames of `replays/bugs/ingame-options-page.pad`,
+>   clang, three runs each), which needed a new `PSXPORT_PRODUCERS` knob because the arm was a
+>   hardcoded `inline bool = true` that could not be A/B'd at all:
+>
+>   | | runs | mean |
+>   |---|---|---|
+>   | armed (default) | 5.662 / 5.789 / 5.757 s | 5.736 |
+>   | off | 4.784 / 4.631 / 4.695 s | 4.703 |
+>
+>   **The census costs 18.0% of frame time.** A host profile of the same scene agrees independently:
+>   `OtAttr::resolveClaimedFrame` 13.31% + `trackStoreSlow` 3.91% = 17.2%. Two methods, one answer.
+>
+>   The census still stays ON by default — the USER asked for the producer database and it answers a
+>   question nothing else does. What changes is that the cost is now KNOWN and switchable, and the
+>   claim that no opt-in flag was needed is withdrawn.
 > * **The join is wired** at all three prim-completion sites in `gpu_gp0` (polygon, rect/sprite, line)
 >   via `GpuState::censusGuestPrim`, joining `s_fifo_addr[0]` -> `OtAttr::lookupStore` -> the census.
 > * **THE BLOCKER: the span table saturates.** On the `gte` render path (the only path where guest GP0

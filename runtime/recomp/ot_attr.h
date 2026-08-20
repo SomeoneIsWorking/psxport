@@ -77,12 +77,30 @@ inline const lucent::Channel g_otchain_channel{"otchain"};
 // number any change here has to beat.
 // DEFAULT ON, and that is a measured decision rather than an optimistic one. The DB's premise is that
 // ORDINARY PLAY populates it, so an opt-in flag would leave exactly the data source that matters
-// uncounted. Priced on Tomba!2, 300 frames headless, three runs each, identical script:
+// uncounted.
+//
+// THE "+0.26%" PRICE RECORDED HERE WAS WRONG, and is corrected rather than deleted so nobody
+// re-derives it. It read:
 //     gate closed (before): 77.7 / 77.6 / 77.7 s
 //     gate open  (armed)  : 77.9 / 77.9 / 77.7 s     => +0.26%
+// 300 frames in 77.7 s is 3.9 fps — a workload so dominated by something else that almost any fixed
+// cost measures as free. Re-priced 2026-08-20 on an UNPACED 3D field scene (1,100 frames of
+// replays/bugs/ingame-options-page.pad, clang, three runs each), using the PSXPORT_PRODUCERS knob
+// that had to be added because the arm was a hardcoded `inline bool = true` with no way to A/B it:
+//     armed   5.662 / 5.789 / 5.757 s   mean 5.736
+//     off     4.784 / 4.631 / 4.695 s   mean 4.703     => the census costs 18.0%
+// A host profile of the same scene agrees independently: OtAttr::resolveClaimedFrame 13.31% +
+// trackStoreSlow 3.91% = 17.2%. Two methods, one answer.
+//
+// This is NOT an argument for deleting the census — the USER asked for the producer database, and a
+// diagnostic that answers "which native producer drew this" is worth real time. It is an argument for
+// knowing what it costs, and for being able to switch it off when measuring something else.
 // against the 2.54% of total CPU the OUT-OF-LINE version of this gate once cost (see below). And the
 // work is real, not optimised away: the same run records 10,188 spans with 0 overflow, which is printed
 // at run end precisely so "no cost" can never be mistaken for "no work happened".
+// Set once at boot from PSXPORT_PRODUCERS (config.cpp), which defaults TRUE so behaviour is
+// unchanged. It stays a plain global rather than a CVar read because trackStore's inline gate is on
+// the path of EVERY guest store — the whole point of that gate is that it is two relaxed loads.
 inline bool g_producer_census_armed = true;
 
 class OtAttr {

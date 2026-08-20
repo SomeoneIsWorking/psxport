@@ -302,6 +302,18 @@ TextVar cv_settings_path("PSXPORT_SETTINGS",
                          "path to the settings file — selects the Value layer, so never persisted",
                          /*persistable=*/false);
 
+// The producer census runs on every guest store and every prim. Its cost was recorded in ot_attr.h as
+// "+0.26%" from a 300-frame run at 77.7 s — i.e. 3.9 fps, a pace at which almost anything looks free.
+// A host profile of an unpaced 3D field scene puts OtAttr::resolveClaimedFrame at 13.31% and
+// trackStoreSlow at 3.91%. Those two numbers cannot both describe the same thing, and until this knob
+// existed there was no way to A/B it at all — the arm was a hardcoded `inline bool = true`.
+// Default TRUE, so behaviour is unchanged and the census the USER asked for keeps working.
+BoolVar cv_producers("PSXPORT_PRODUCERS",
+                     true,
+                     "arm the producer census (per-store + per-prim attribution). Off makes the "
+                     "producer DB stop recording; use it to price the census, not to fix a bug",
+                     /*persistable=*/false);
+
 TextVar cv_producers_dir("PSXPORT_PRODUCERS_DIR",
                          "scratch/producers",
                          "where the producer-census JSONL + accumulated claim set are written",
