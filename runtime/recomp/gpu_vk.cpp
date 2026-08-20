@@ -526,10 +526,18 @@ static bool gpu_fault_preflight() {
   return false;
 }
 
+uint64_t g_submit_ns = 0, g_submit_n = 0, g_fenced_ns = 0, g_fenced_n = 0;
+static inline uint64_t gpu_now_ns() {
+  struct timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
 static bool gpu_submit_and_wait(SDL_GPUCommandBuffer *cmd, const char *where) {
   if (!cmd) {
     return false;
   }
+  const uint64_t t0_fenced = gpu_now_ns();
   SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
   if (!fence) {
     if (!s_gpu_faulted) {
@@ -548,6 +556,8 @@ static bool gpu_submit_and_wait(SDL_GPUCommandBuffer *cmd, const char *where) {
   for (;;) {
     if (SDL_QueryGPUFence(s_dev, fence)) {
       SDL_ReleaseGPUFence(s_dev, fence);
+      g_fenced_ns += gpu_now_ns() - t0_fenced; // submit + the whole wait for it to signal
+      g_fenced_n++;
       return true;
     }
     const Uint64 waited = SDL_GetTicks() - t0;
@@ -570,13 +580,22 @@ static bool gpu_submit_and_wait(SDL_GPUCommandBuffer *cmd, const char *where) {
   }
 }
 
+// A SAMPLED PROFILE CANNOT SEE WAITING. It reports where the program counter is, so a frame blocked on
+// the GPU shows up as time inside whatever libc call the block happens to occur in — which is how
+// __memmove came to be 13.5% of a profile while removing 28% of the bytes it copies changed the frame
+// by nothing (kanban #118). These two counters measure the other thing: how long the CPU spends INSIDE
+// the submit calls, per frame. `debug gpuwait`.
 // Submit, and latch on failure. EVERY submit in this file goes through here — a raw
 // SDL_SubmitGPUCommandBuffer is the defect this exists to remove, so do not add one back.
 static bool gpu_submit(SDL_GPUCommandBuffer *cmd, const char *where) {
   if (!cmd) {
     return false;
   }
-  if (SDL_SubmitGPUCommandBuffer(cmd)) {
+  const uint64_t t0 = gpu_now_ns();
+  const bool ok = SDL_SubmitGPUCommandBuffer(cmd);
+  g_submit_ns += gpu_now_ns() - t0;
+  g_submit_n++;
+  if (ok) {
     return true;
   }
   if (!s_gpu_faulted) {
@@ -2185,6 +2204,19 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // inside the logger, which is the whole point of having a configurable one.
   GpuDevice &gd = gdev();
   gd.s_ps_n[decision]++;
+  { // WHERE THE FRAME WAITS — see gpu_submit's banner for why a sampled profile cannot answer this.
+    static uint64_t p_sub = 0, p_subn = 0, p_fen = 0, p_fenn = 0;
+    lucent::debug("gpuwait",
+                  "this frame: submit {} us over {} call(s), fenced submit+wait {} us over {}",
+                  (g_submit_ns - p_sub) / 1000,
+                  g_submit_n - p_subn,
+                  (g_fenced_ns - p_fen) / 1000,
+                  g_fenced_n - p_fenn);
+    p_sub = g_submit_ns;
+    p_subn = g_submit_n;
+    p_fen = g_fenced_ns;
+    p_fenn = g_fenced_n;
+  }
   { // per-frame byte totals for the staging copies — read with `debug vramcopy`
     static uint64_t prev_up = 0, prev_sn = 0;
     lucent::debug("vramcopy",
