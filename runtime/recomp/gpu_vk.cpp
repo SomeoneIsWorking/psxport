@@ -125,6 +125,23 @@ struct PresentPC {
 static inline float ord3d(float d) {
   return NATIVE_3D_MIN + d * (NATIVE_3D_MAX - NATIVE_3D_MIN);
 }
+float gpu_vk_map_3d_depth(float depth) {
+  return ord3d(depth);
+}
+float gpu_vk_next_distinct_3d_depth(float depth, float nearer_limit) {
+  const float mapped = ord3d(depth);
+  while (depth < nearer_limit) {
+    const float next = std::nextafter(depth, nearer_limit);
+    if (!(next < nearer_limit)) {
+      return nearer_limit;
+    }
+    depth = next;
+    if (ord3d(depth) > mapped) {
+      return depth;
+    }
+  }
+  return nearer_limit;
+}
 // 3D-band depth with the paint-order tiebreak folded in and clamped to the 3D band. When two world prims
 // share a (near-)equal real depth, the later-emitted one gets a marginally larger value and wins the
 // GREATER_OR_EQUAL depth test uniformly (deterministic, motion-stable), replacing the per-pixel

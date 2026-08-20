@@ -31,6 +31,10 @@ void gpu_vk_set_xyf(Core *core, const float *xf, const float *yf); // sub-pixel 
 void gpu_vk_set_order_override(Core *core, uint32_t seq);
 void gpu_vk_set_painter_material(Core *core, int gouraud, int dither);
 bool gpu_vk_order_bias_distinguishes(uint32_t seq);
+// The exact normalized-depth mapping used by world vertices, and the next input whose mapped D32
+// value is representably distinct. Key-order ties use these instead of guessing an input epsilon.
+float gpu_vk_map_3d_depth(float depth);
+float gpu_vk_next_distinct_3d_depth(float depth, float nearer_limit);
 
 // Dynamic shadow mapping: capture one OPAQUE world-geometry triangle's VIEW-SPACE positions (v0/v1/v2,
 // each {x=ir1, y=ir2, z=pz} — the metric view space the deferred pass reconstructs) into the host shadow

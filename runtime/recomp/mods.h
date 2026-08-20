@@ -34,8 +34,9 @@ public:
   //
   // AUTHORED replays the bucket the game itself computed (submit.cpp game_sort_key, RE'd from the
   // guest's own submitter and verified equal to it) as the depth value, so the depth buffer stops
-  // being a second opinion and reproduces the console's order — ties inside a bucket compare equal
-  // and the GREATER_OR_EQUAL test lets the later-drawn fragment win, which is painter order.
+  // being a second opinion and reproduces the console's order. Ties inside a bucket use adjacent D32
+  // values in AddPrim's head-insertion order: the guest walks later submissions first, so the earliest
+  // submission paints last and wins.
   //
   // NOTE WHICH ONE IS THE ENHANCEMENT. Every other field here is off-is-faithful; this one is
   // inverted, because DEPTH is the port's improvement and AUTHORED is the console's behaviour. That

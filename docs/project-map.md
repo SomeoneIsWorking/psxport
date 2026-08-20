@@ -89,7 +89,9 @@ restart behavior, per-Game isolation, and negative wrong-table plus neighboring-
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
 **GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_vk.cpp` (Vulkan backend + present),
 `render_queue.{h,cpp}` + `painter_object_layer.h` own the painter-object contract: selected opaque world
-faces are partitioned into a unified, sequence-stable command stream across material variants. `gpu_vk.cpp`
+faces are partitioned into a unified, sequence-stable command stream across material variants.
+`ot_lifo_depth.{h,cpp}` encodes PSX `AddPrim` head-insertion order for equal-key authored faces, while
+`gpu_vk_next_distinct_3d_depth` owns conversion to raster-distinct Vulkan D32 values. `gpu_vk.cpp`
 retains interleaved textured and untextured command runs (including explicit flat/Gouraud and DTD state),
 replays each object with authored-order overwrite into reusable packed-color + real-D32 targets, then
 depth-composites the resolved surface into the world before semitransparency. The shipping GPU selftest

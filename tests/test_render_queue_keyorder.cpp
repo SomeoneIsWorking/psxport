@@ -35,6 +35,7 @@
 
 #include "render_queue.h"
 
+#include "gpu_vk.h"
 #include "mods.h" // FACE_ORDER_DEPTH — the ordering mode the rule is driven with
 
 #include <math.h>
@@ -74,12 +75,9 @@ void push_face(RenderQueue &q,
   it.has_xyf = 1;
   it.dbg_node = node;
   it.sort_key = sort_key;
-  // key_ord is deliberately given a value NO face uses as a vertex ord. Snapping is observed by
-  // "every vertex ord became key_ord", so a face whose real ords happened to equal its key_ord would
-  // read as snapped whether it was or not — an ambiguity that silently passed three cases the first
-  // time this test was run. Nothing under test reads key_ord's magnitude (the contest rules use
-  // sort_key and the vertex ords only), so a distinctive value costs the test nothing.
-  it.key_ord = 1000.0f + (float)q.n;
+  // One distinctive, strictly monotone ord per key, matching the shipping key_to_ord contract.
+  // Same-key faces MUST share it: the resolver's OT-LIFO rule is precisely about separating that tie.
+  it.key_ord = 2.0f - 0.0001f * (float)sort_key;
   // Vertex winding 0=(x0,y0) 1=(x1,y0) 2=(x1,y1) 3=(x0,y1): an axis-aligned quad, split by the
   // rasterizer into tris (0,1,2) and (1,2,3) — the same split rq_ord_at samples with.
   const float vx[4] = {x0, x1, x1, x0};
@@ -158,9 +156,10 @@ SnapCompare run_and_compare(RenderQueue &q) {
 
   SnapCompare r = {q.n, 0, 0, 0};
   for (int i = 0; i < q.n; i++) {
-    // A snapped face has every vertex ord replaced by its key_ord — that IS the observable effect.
-    bool got = q.items[i].depth[0] == ord_before[i] && q.items[i].depth[1] == ord_before[i] &&
-               q.items[i].depth[2] == ord_before[i] && q.items[i].depth[3] == ord_before[i];
+    // A snapped face has one constant ord in its key's band. The earliest submission in a same-key
+    // group is advanced by representable D32 steps toward the nearer band, so it can be > key_ord.
+    bool got = q.items[i].depth[0] >= ord_before[i] && q.items[i].depth[1] == q.items[i].depth[0] &&
+               q.items[i].depth[2] == q.items[i].depth[0] && q.items[i].depth[3] == q.items[i].depth[0];
     if (want[i]) {
       r.oracle_snapped++;
     }
@@ -242,9 +241,32 @@ static void test_coincident_same_key_pair_snaps(void) {
   CHECK_EQ(r.faces, 2);
   CHECK_EQ(r.oracle_snapped, 2);
   CHECK_EQ(r.disagreements, 0);
+  // Native emits seq 0 then seq 1. The PSX bucket walk is seq 1 then seq 0 because AddPrim inserts
+  // each packet at the head, so seq 0 must be nearer and win despite being emitted first.
+  CHECK(q->items[0].depth[0] > q->items[1].depth[0]);
 }
 
-// ---- 5. a mixed group: both rules and non-participants together ---------------------------------
+// ---- 5. AddPrim head insertion: every same-bucket group reverses submission order ----------------
+static void test_authored_bucket_depths_match_addprim_lifo(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  constexpr int kFaces = 17;
+  for (int i = 0; i < kFaces; i++) {
+    push_face(*q, 0x800FD850u, 511, 0, 0, 40, 40, 0.25f + 0.01f * i, 0.25f + 0.01f * i);
+  }
+  q->resolveKeyOrderFaces(0, "test", FACE_ORDER_AUTHORED);
+
+  // The linked-list oracle after repeated head insertion is [16..0]. Native still emits [0..16],
+  // so its depth order must be strictly [nearest..farthest] to make the same seq 0 packet win.
+  for (int seq = 0; seq + 1 < kFaces; seq++) {
+    CHECK(q->items[seq].depth[0] > q->items[seq + 1].depth[0]);
+    CHECK(gpu_vk_map_3d_depth(q->items[seq].depth[0]) > gpu_vk_map_3d_depth(q->items[seq + 1].depth[0]));
+    CHECK_EQ(q->items[seq].authored_depth, 1);
+  }
+  CHECK_EQ(q->items[kFaces - 1].depth[0], q->items[kFaces - 1].key_ord);
+  CHECK_EQ(q->items[kFaces - 1].authored_depth, 1);
+}
+
+// ---- 6. a mixed group: both rules and non-participants together ---------------------------------
 static void test_mixed_group_matches_oracle(void) {
   std::unique_ptr<RenderQueue> q = make_queue();
   // A contesting pair, a coincident same-key pair, and four faces that touch nothing — all in one
@@ -262,7 +284,7 @@ static void test_mixed_group_matches_oracle(void) {
   CHECK_EQ(r.disagreements, 0);
 }
 
-// ---- 6. THE WEDGE: cost must scale with the group, not with its square --------------------------
+// ---- 7. THE WEDGE: cost must scale with the group, not with its square --------------------------
 static void test_large_group_work_is_not_quadratic(void) {
   std::unique_ptr<RenderQueue> q = make_queue();
   // The shape measured on the wedge frame: ONE object node, tens of thousands of keyed faces, all
@@ -300,6 +322,7 @@ int main(void) {
   RUN(disjoint_faces_never_snap);
   RUN(contest_does_not_cross_objects);
   RUN(coincident_same_key_pair_snaps);
+  RUN(authored_bucket_depths_match_addprim_lifo);
   RUN(mixed_group_matches_oracle);
   RUN(large_group_work_is_not_quadratic);
   return pt_summary();

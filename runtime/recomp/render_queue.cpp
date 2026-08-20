@@ -6,6 +6,7 @@
 #include "game.h"
 #include "gpu_vk.h"
 #include "mods.h"
+#include "ot_lifo_depth.h"
 #include "proj_params.h" // class ProjParams — proj_camview_world_screen / camview_publish bridges
 #include <algorithm>
 #include <cmath>
@@ -1251,6 +1252,12 @@ void RenderQueue::emitItem(Core *core, const RqItem *it) {
   if (mPainterRegrouping) {
     gpu_vk_set_order_override(core, it->seq);
   }
+  // The generic paint bias makes later native emissions win near-equal real-depth contests. An
+  // authored depth has already encoded the guest OT's answer, including AddPrim's opposite same-bucket
+  // LIFO rule, so adding native emission order here would overwrite that answer.
+  if (it->authored_depth) {
+    gpu_vk_set_order_override(core, 0);
+  }
   gpu_vk_set_painter_material(core, it->shade_gouraud, it->dither);
   gpu_vk_set_order(core, ord);
   // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near
@@ -1730,9 +1737,12 @@ void RenderQueue::emitOrQueue(Core *core,
 // The rule: every keyed face carries the sort key the GAME computed for it (RqItem::sort_key, recomputed
 // natively in submit.cpp from the RE'd emitter bodies). Within one object, if a face pair's interpolated
 // depth could CONTRADICT the game's key order — the farther-keyed face able to win a pixel both cover —
-// both faces' test depth is snapped to their key's shared ord (RqItem::key_ord, a pure function of the
-// key). Snapped faces then resolve exactly as the game ordered them; equal keys snap to the SAME value
-// and GREATER_OR_EQUAL + submission order resolves the tie. Everything else — faces whose real depth
+// both faces' test depth is snapped to their key's ord band (RqItem::key_ord, a pure function of the
+// key). Snapped faces then resolve exactly as the game ordered them. Different keys use their distinct
+// key ords; equal keys use adjacent representable depths in the PSX OT's LIFO order. AddPrim inserts at
+// a bucket's head, so the guest later walks later submissions FIRST and the earliest submission paints
+// LAST. Native emission walks submission order, so the earliest submission must carry the nearest depth
+// within the shared band to reproduce that result. Everything else — faces whose real depth
 // already agrees with the key order, terrain, other objects — keeps untouched per-vertex depth. Zero
 // bias, zero span budget, zero tuned constant.
 //
@@ -2199,27 +2209,29 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who, int face
     // grouping — a bucket index is meaningful frame-wide, which is the point of an ordering table —
     // so those prims are ordered here for the first time.
     int authored = 0;
+    std::vector<int> authored_indices;
+    authored_indices.reserve((size_t)n);
     for (int i = 0; i < n; i++) {
       RqItem &it = items[i];
       if (it.painter_object || it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) {
         continue;
       }
-      for (int k = 0; k < 4; k++) {
-        it.depth[k] = it.key_ord;
-      }
+      authored_indices.push_back(i);
       authored++;
     }
+    const size_t tied = rq_apply_ot_lifo_depths(items, std::move(authored_indices));
     // The negative this needs: the faces NOT covered. A prim with no sort key keeps its real depth
     // and therefore still competes on a different basis, so a frame is only as faithful as its key
     // coverage — say so with the denominator rather than implying the whole queue is authored.
     lucent::debug("keyord",
                   "f{} [{}] AUTHORED ORDER: {} of {} queued prims drawn by the game's OT bucket; "
-                  "{} world prim(s) have NO key and keep real depth",
+                  "{} world prim(s) have NO key and keep real depth; {} face(s) in multi-face buckets use OT LIFO ties",
                   frame,
                   who,
                   authored,
                   n,
-                  skip_nokey);
+                  skip_nokey,
+                  tied);
     return;
   }
 
@@ -2334,21 +2346,23 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who, int face
   // measuring. lucent::Line truncates past its cap, so the summary that follows carries the totals.
   size_t nsnap = 0;
   lucent::Line snapped_seqs;
+  std::vector<int> snapped_indices;
+  snapped_indices.reserve(faces.size());
   for (size_t i = 0; i < faces.size(); i++) {
     if (!snap[i]) {
       continue;
     }
     RqItem &it = items[faces[i].idx];
-    for (int k = 0; k < 4; k++) {
-      it.depth[k] = it.key_ord;
-    }
+    snapped_indices.push_back(faces[i].idx);
     nsnap++;
     snapped_seqs.add(" {}:{:08X}/{}", it.seq, it.dbg_node, it.sort_key);
   }
+  const size_t tied = rq_apply_ot_lifo_depths(items, std::move(snapped_indices));
   lucent::debug("keyord",
                 "f{} [{}] resolveKeyOrder: {}/{} keyed faces snapped ({} pair tests, {} queued prims) | "
                 "cumulative: broadphase examined {} (skip-settled {} y-reject {}) | offered: bbox-reject "
-                "{} depth-reject {} sat-reject {} REACHED GRID {} (of which found an inversion {})",
+                "{} depth-reject {} sat-reject {} REACHED GRID {} (of which found an inversion {}); "
+                "{} face(s) in multi-face buckets use OT LIFO ties",
                 frame,
                 who,
                 nsnap,
@@ -2362,7 +2376,8 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who, int face
                 g_contest_reject_depth,
                 g_contest_reject_sat,
                 g_contest_grid,
-                g_contest_grid_hit);
+                g_contest_grid_hit,
+                tied);
   if (!snapped_seqs.empty()) {
     lucent::Line detail;
     detail.add("f{} snapped seq:node/key —", frame);

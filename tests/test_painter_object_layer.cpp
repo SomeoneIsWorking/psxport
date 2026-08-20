@@ -174,7 +174,9 @@ static void test_painter_depth_is_not_key_flattened(void) {
   for (int i = 0; i < 4; i++) {
     q->items[i].dbg_node = 0x80001000;
     q->items[i].sort_key = i & 1;
-    q->items[i].key_ord = .123f + i;
+    // Shipping key_to_ord is strictly decreasing with the bucket key. Keep this fixture valid so
+    // the key-order resolver can distinguish a production invariant failure from the painter test.
+    q->items[i].key_ord = .223f - .100f * (float)(i & 1);
     q->items[i].has_xyf = 1;
     q->items[i].nv = 4;
     for (int k = 0; k < 4; k++) {

@@ -113,14 +113,15 @@ struct RqItem {
   uint8_t shade_gouraud;          // original G3/G4 shading opcode; cannot be inferred from equal RGB
   uint8_t dither;                 // original draw-mode DTD bit, carried per item
   PainterObjectId painter_object; // 0 = ordinary path; non-zero = local authored-order object
-  uint32_t seq;                   // submission order — stable tiebreak within a layer
+  uint32_t seq;                   // submission order — stable layer order; OT ties reverse it explicitly
   int xs[4], ys[4];               // screen verts (with draw offset, rounded) — 2D/HUD + fallback path
   // Sub-pixel float screen XY (draw offset applied in float) for the engine-owned 3D world path. When
   // has_xyf is set the rasterizer uses these instead of the rounded xs/ys, so world geometry keeps its
   // sub-pixel position and stops snapping pixel-to-pixel (PS1 wobble) — vertex smoothing, issue #15.
   float xsf[4], ysf[4];
-  uint8_t has_xyf;  // 1 = xsf/ysf are valid sub-pixel positions (world prims via drawWorldQuad)
-  int us[4], vs[4]; // texel coords
+  uint8_t has_xyf;        // 1 = xsf/ysf are valid sub-pixel positions (world prims via drawWorldQuad)
+  uint8_t authored_depth; // 1 = depth[] already encodes OT order; suppress the generic later-draw bias
+  int us[4], vs[4];       // texel coords
   uint8_t rs[4], gs[4], bs[4];
   float depth[4];                       // normalized per-vertex D32 depth (proj_pz_to_ord)
   int tp_x, tp_y, mode, clut_x, clut_y; // resolved texpage / color mode / clut
