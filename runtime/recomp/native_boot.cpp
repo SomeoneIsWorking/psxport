@@ -599,8 +599,8 @@ static void game_main(Core *c) {
         usleep(15000);
       }
     }
-    watchdog_pet();          // re-arm the timer for THIS step (covers a step that hangs before it presents,
-                             // and re-arms after an idle suspend); c_subsys.h C-linkage decl
+    watchdog_resume();       // re-arm after idle without falsely claiming this frame completed; the
+                             // completed present switches first-frame grace to the steady budget
     native_step_frame(c, f); // one frame of deterministic guest work (steppable core; see fn above).
     // native_step_frame -> ov_frame_update OWNS present + pace + per-vblank audio (PC-driven frame body),
     // so this loop runs no pacer of its own.

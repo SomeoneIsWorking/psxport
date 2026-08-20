@@ -74,7 +74,7 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 `core.h`/`game.h` (the `Core`/`Game` objects), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
-REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp`, `stubs.cpp`,
+REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp` (first-present grace survives cold SDL/GPU initialization; steady timing begins only after completed presentation), `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
 `synchronous_task_wait.{h,cpp}` owns the one product policy for a cooperative spawn-and-wait: game-specific
 task addresses and continuation PCs come from `GameConfig`, the spawned task is pumped to its authored close,

@@ -29,7 +29,7 @@ static void test_native_fmv_present_reports_progress(void) {
   CHECK(!source.empty());
   const size_t present = source.find("gpu_vk_present_image(core, rgba.data(), width, height, 1.0f);");
   CHECK(present != std::string::npos);
-  const size_t pet = source.find("watchdog_pet();", present);
+  const size_t pet = source.find("watchdog_present_complete();", present);
   CHECK(pet != std::string::npos);
   CHECK(pet - present < 500);
 }

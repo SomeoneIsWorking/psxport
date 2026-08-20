@@ -13,7 +13,7 @@ The normal cpp_style CTest enforces Clang formatting, 1,200/default plus shrink-
 
 ## Evidence
 
-2026-08-21 Clang configure/build succeeded; tools/check_cpp_style.py reported 292 formatted/size-checked files and clang-tidy checked 153 of 156 first-party C++ TUs, naming the 3 non-CMake tools; full CTest passed 66/66.
+2026-08-21 Clang configure/build succeeded; tools/check_cpp_style.py reported 293 formatted/size-checked files and clang-tidy checked 154 of 157 first-party C++ TUs, naming the 3 non-CMake tools; full CTest passed 67/67.
 
 ## What would falsify it
 

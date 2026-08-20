@@ -2,7 +2,8 @@
 // condition that never becomes true, an infinite loop, etc.) without crashing — so an external
 // `timeout` is the only way to stop it and it tells you nothing about WHERE. This arms a SIGALRM
 // that fires if no frame has been presented within N seconds and dumps the current backtrace
-// (the stuck call stack) before aborting. Pet it from gpu_present (one beat per presented frame).
+// (the stuck call stack) before aborting. Report progress only after a present completes: the first
+// present owns a larger cold-initialization grace and must not discard it before SDL/GPU setup returns.
 //
 // Build note: backtrace symbol names need -rdynamic at link time (run.sh adds it). Without it
 // you still get addresses — resolve with `addr2line -e scratch/bin/tomba2_port <addr>`.
@@ -27,7 +28,7 @@ static struct {
   int secs;      // 0 => disabled
   int boot_secs; // generous grace for the FIRST frame (cold pipeline compile)
   volatile sig_atomic_t armed;
-  volatile sig_atomic_t first_frame_done; // 0 until the first present pets the watchdog
+  volatile sig_atomic_t first_frame_done; // 0 until the first present completes
   volatile sig_atomic_t int_seen;         // SIGINT/SIGTERM re-entry latch
 } s_wd;
 
@@ -142,9 +143,10 @@ void watchdog_init(void) {
       "watchdog", "armed: {}s frame-progress timeout ({}s grace for the first frame)", s_wd.secs, s_wd.boot_secs);
 }
 
-// Pet from the present path — one beat per produced frame. Re-arms the timer. The first present
-// switches from the boot grace to the steady-state budget.
-void watchdog_pet(void) {
+// Report a COMPLETED present — one beat per produced frame. Calling this at present entry is wrong:
+// cold SDL/GPU initialization is part of the first present and owns boot_secs, not the shorter steady
+// budget. The 2026-08-21 Spyro gate caught that exact ordering bug in SDL_Init(VIDEO).
+void watchdog_present_complete(void) {
   if (!s_wd.armed) {
     return;
   }
@@ -152,10 +154,19 @@ void watchdog_pet(void) {
   alarm((unsigned)s_wd.secs);
 }
 
+// Resume after watchdog_suspend without claiming that a frame completed. Before the first completed
+// present this retains boot_secs; afterwards it re-arms the steady-state budget. The native frame loop
+// calls this before work so a resumed step can still be diagnosed if it hangs.
+void watchdog_resume(void) {
+  if (s_wd.armed) {
+    alarm((unsigned)(s_wd.first_frame_done ? s_wd.secs : s_wd.boot_secs));
+  }
+}
+
 // Suspend the frame-progress timeout during an INTENTIONAL idle where no frame is presented and that
 // is NOT a hang: a debug-server PAUSE/step-wait, or blocking on REPL stdin for the next command. The
-// next watchdog_pet (the next presented frame after resume) re-arms it. Without this the 3s timeout
-// fires on a deliberately paused/idle process. (cancel any pending alarm; keep s_armed so pet re-arms.)
+// watchdog_resume re-arms it before work resumes, and the next completed present resets it. Without
+// this the 3s timeout fires on a deliberately paused/idle process. Keep s_armed so resume can re-arm.
 void watchdog_suspend(void) {
   if (s_wd.armed) {
     alarm(0);

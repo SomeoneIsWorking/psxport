@@ -130,7 +130,7 @@ static void native_scea_splash(Core *c) {
     }
     gpu_pace_frame(c); // paces at the game's field rate, headless or not
                        // (PSXPORT_NOPACE=1 is the only "run flat out")
-    watchdog_pet();
+    watchdog_present_complete();
   }
   gpu_clear_display(c); // hard black after the fade-out (clean cut to FMV)
   free(scea_rgba);
