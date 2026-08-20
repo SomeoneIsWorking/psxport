@@ -2120,12 +2120,14 @@ bool rq_faces_in_contest(const RqItem &A, const RqItem &B) {
 }
 
 void RenderQueue::resolveKeyOrder(Core *core, const char *who) {
-  resolveKeyOrderFaces(core->game->gpu.s_frame, who);
+  // The MODE is read here and passed down, not read inside the rule: resolveKeyOrderFaces is
+  // deliberately Core-free so the test suite can drive it on its inputs alone.
+  resolveKeyOrderFaces(core->game->gpu.s_frame, who, core->game->mods.face_order);
 }
 
 // Core-free so the rule is testable on its inputs alone (tests/test_render_queue_keyorder.cpp);
 // `frame` is carried purely to label the diagnostics.
-void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who) {
+void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who, int faceOrder) {
   // Gather this frame's keyed world faces, grouped by object. Real guest nodes only — the reserved
   // sentinels (terrain/scene-table/backdrop) and unscoped prims carry no game sort key anyway.
   struct KeyedFace {
@@ -2133,18 +2135,92 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who) {
     uint32_t node;
   };
   static thread_local std::vector<KeyedFace> faces; // scratch, reused across frames
+  // WHY A PRIM IS NOT A KEYED FACE, counted per reason. "262 keyed faces of 914 queued prims" says
+  // nothing about the other 652, and that gap is the whole question behind porting the ORDER the game
+  // authored rather than reconstructing it: a prim with no sort key is one whose OT bucket the port
+  // cannot currently ask the game for, so it has no authored order to honour and the depth buffer is
+  // all there is. Counting the reasons turns "29% keyed" into a work list.
   faces.clear();
+  int skip_painter = 0, skip_layer = 0, skip_ordmode = 0, skip_nokey = 0, skip_node = 0;
   for (int i = 0; i < n; i++) {
     const RqItem &it = items[i];
-    if (it.painter_object || it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) {
+    if (it.painter_object) {
+      skip_painter++;
+      continue;
+    }
+    if (it.layer != RQ_WORLD) {
+      skip_layer++;
+      continue;
+    }
+    if (it.order_mode != RQ_OM_DEPTH) {
+      skip_ordmode++;
+      continue;
+    }
+    if (it.sort_key < 0) {
+      skip_nokey++; // NO AUTHORED ORDER AVAILABLE — the population that more porting would close
       continue;
     }
     if (it.dbg_node < kGuestRamBase || it.dbg_node >= kGuestRamEnd) {
+      skip_node++; // keyed, but not attributed to a guest object, so it has no group to contest within
       continue;
     }
     faces.push_back(KeyedFace{i, it.dbg_node});
   }
+  lucent::debug("keyord",
+                "f{} [{}] queue census: {} prims = {} keyed faces + skipped(painter {}, non-world {}, "
+                "non-depth-order {}, NO SORT KEY {}, no object {})",
+                frame,
+                who,
+                n,
+                faces.size(),
+                skip_painter,
+                skip_layer,
+                skip_ordmode,
+                skip_nokey,
+                skip_node);
   keyOrderPairTests = 0;
+
+  // AUTHORED ORDER, REPLAYED - "Face Ordering: Authored" in the Display settings
+  // (Mods::face_order). USER, 2026-08-20: "I'd rather port it like the artists designed it
+  // rather than having the wrong thing first then sorting it."
+  // Every keyed face takes its bucket's ord, so the depth buffer stops being a second opinion that
+  // has to be argued with and simply reproduces the order the game filed. Nothing can then contradict
+  // the authored order, so the pairwise contest below has nothing to correct and does not run.
+  //
+  // This is the SAME assignment the contest already applies to the pairs it snaps — applied to all
+  // keyed faces instead of only to the ones caught disagreeing. The difference is not the mechanism,
+  // it is which answer is authoritative.
+  if (faceOrder == FACE_ORDER_AUTHORED) {
+    // NOT over `faces` — over every keyed world prim. The contest can only work WITHIN one object, so
+    // it must exclude prims whose owning object is unknown (dbg_node outside guest RAM): measured 275
+    // per world render against the 250 it can contest. Replaying the authored order needs no such
+    // grouping — a bucket index is meaningful frame-wide, which is the point of an ordering table —
+    // so those prims are ordered here for the first time.
+    int authored = 0;
+    for (int i = 0; i < n; i++) {
+      RqItem &it = items[i];
+      if (it.painter_object || it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) {
+        continue;
+      }
+      for (int k = 0; k < 4; k++) {
+        it.depth[k] = it.key_ord;
+      }
+      authored++;
+    }
+    // The negative this needs: the faces NOT covered. A prim with no sort key keeps its real depth
+    // and therefore still competes on a different basis, so a frame is only as faithful as its key
+    // coverage — say so with the denominator rather than implying the whole queue is authored.
+    lucent::debug("keyord",
+                  "f{} [{}] AUTHORED ORDER: {} of {} queued prims drawn by the game's OT bucket; "
+                  "{} world prim(s) have NO key and keep real depth",
+                  frame,
+                  who,
+                  authored,
+                  n,
+                  skip_nokey);
+    return;
+  }
+
   if (faces.size() < 2) {
     // A NEGATIVE WITH ITS DENOMINATOR: "nothing snapped" and "there was nothing to snap" are
     // different answers, and a silent return makes them look identical in a log.

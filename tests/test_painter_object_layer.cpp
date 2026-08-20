@@ -1,4 +1,6 @@
 #include "render_queue.h"
+
+#include "mods.h" // FACE_ORDER_DEPTH — the ordering mode the rule is driven with
 #include "testutil.h"
 #include <memory>
 
@@ -182,7 +184,7 @@ static void test_painter_depth_is_not_key_flattened(void) {
     }
   }
   float p0 = q->items[0].depth[0], p1 = q->items[1].depth[0];
-  q->resolveKeyOrderFaces(0, "test");
+  q->resolveKeyOrderFaces(0, "test", FACE_ORDER_DEPTH);
   CHECK(q->items[0].depth[0] == p0);
   CHECK(q->items[1].depth[0] == p1);
   CHECK(q->items[2].depth[0] == q->items[2].key_ord || q->items[3].depth[0] == q->items[3].key_ord);

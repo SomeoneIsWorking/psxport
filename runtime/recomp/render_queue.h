@@ -356,7 +356,9 @@ struct RenderQueue {
   // The algorithm behind resolveKeyOrder, with no Core dependency — `frame` only labels diagnostics.
   // Split out so the rule can be tested on its inputs alone (tests/test_render_queue_keyorder.cpp):
   // build a queue, push the faces, call this, inspect the snap decisions.
-  void resolveKeyOrderFaces(uint32_t frame, const char *who);
+  // `faceOrder` = Mods::face_order (FACE_ORDER_DEPTH / FACE_ORDER_AUTHORED). Passed in rather than
+  // read from a Core so this stays drivable on its inputs alone by the test suite.
+  void resolveKeyOrderFaces(uint32_t frame, const char *who, int faceOrder);
 
   // Pair tests performed by the last resolveKeyOrderFaces call. The rule asks an EXISTENCE question
   // per face ("is this face in contest with any other face of its object"), so this must scale with

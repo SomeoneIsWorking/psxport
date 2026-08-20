@@ -44,6 +44,7 @@
 				<select-button toggle="aspect"><key>Aspect Ratio</key><value>Vanilla</value></select-button>
 				<select-button toggle="ires"><key>Internal Resolution</key><value>Vanilla</value></select-button>
 				<select-button toggle="fps60"><key>60fps Interpolation</key><value>Off</value></select-button>
+				<select-button toggle="face_order"><key>Face Ordering</key><value>Depth (enhanced)</value></select-button>
 				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
 			</pane>
 

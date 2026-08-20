@@ -29,6 +29,9 @@ const char *const kOnOff[] = {"Off", "On"};
 const char *const kAspect[] = {"Vanilla", "16:9", "21:9", "Auto"};
 // Merged resolution selector: 0 = Auto, 1..4 = Vanilla(1x)/X2/X3/X4.
 const char *const kIres[] = {"Auto", "Vanilla", "X2", "X3", "X4"};
+// Named for what the player sees, not for the mechanism: "Depth" is per-pixel depth ordering (this
+// port's improvement), "Authored" is the order the game itself filed its polygons in.
+const char *const kFaceOrder[] = {"Depth (enhanced)", "Authored (faithful)"};
 
 const ToggleRow kToggleRows[] = {
     {"aspect",
@@ -46,6 +49,14 @@ const ToggleRow kToggleRows[] = {
      kIres,
      5,
      1,
+     true},
+    {"face_order",
+     [](Mods &m) {
+       return &m.face_order;
+     },
+     kFaceOrder,
+     2,
+     0,
      true},
     {"fps60",
      [](Mods &m) {

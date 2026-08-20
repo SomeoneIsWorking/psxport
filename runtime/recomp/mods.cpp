@@ -30,9 +30,10 @@ void Mods::save() const {
     psx::config::cv_fps60.set(psx::config::Layer::Value, fps60 != 0);
   }
   fprintf(f,
-          "aspect=%d\nires=%d\nssao=%d\nlight=%d\nshadows=%d\nfps60=%d\n",
+          "aspect=%d\nires=%d\nface_order=%d\nssao=%d\nlight=%d\nshadows=%d\nfps60=%d\n",
           aspect,
           ires,
+          face_order,
           ssao,
           light,
           shadows,
@@ -79,6 +80,8 @@ void Mods::load() {
       if (atoi(v)) {
         ires = 0;
       }
+    } else if (!strcmp(k, "face_order")) {
+      face_order = atoi(v);
     } else if (!strcmp(k, "ssao")) {
       ssao = atoi(v);
     } else if (!strcmp(k, "light")) {

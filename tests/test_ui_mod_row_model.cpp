@@ -38,6 +38,7 @@ using psx::ui::RowKind;
 static const char *const kRealToggles[] = {
     "aspect",
     "ires",
+    "face_order",
     "fps60",
     "ssao",
     "light",
