@@ -20,11 +20,12 @@
 #include "config.h"      // psx::config::report_once — arms the exit audit at BOOT, for every port
 #include "config_vars.h" // psx::config::render_path() / cv_repl — knobs through the CVar ladder
 #include "core.h"
-#include "crt0_boot.h"         // crt0_plan/crt0_apply — THE crt0 derivation + the required/ABSENT decision
-#include "crt0_verify.h"       // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
-#include "fntrace.h"           // fntrace_init — developer overrides install after game-owned overrides
+#include "crt0_boot.h"   // crt0_plan/crt0_apply — THE crt0 derivation + the required/ABSENT decision
+#include "crt0_verify.h" // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
+#include "fntrace.h"
 #include "game.h"              // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "game_iface.h"        // GameHooks — c->hooks->devWarpAreaLoad (dev-warp area load) + the frame-loop hooks
+#include "hostprof.h"          // hostprof_init — PSXPORT_PROF host sampling profiler
 #include "hw_bind.h"           // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "override_registry.h" // overrides::query — per-row ownership for the producer-census JSONL
 #include "scheduler.h"         // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
@@ -878,6 +879,12 @@ void native_boot_run(Core *c) {
   // diagnostics must install last or a working game override can silently displace them. dc_boot_init
   // performs the same ordering for dual-core and selftest boot paths.
   fntrace_init();
+  // The HOST sampling profiler (PSXPORT_PROF). It was written, documented, given a companion report
+  // tool, compiled into the library — and CALLED FROM NOWHERE, so `PSXPORT_PROF=1` came back from the
+  // exit audit as "set for this whole run and NOTHING ever read it". An instrument that cannot produce
+  // evidence is worse than none, because its existence answers "can we measure this?" with a yes.
+  // Here is where it belongs: once, at boot, before any frame runs.
+  hostprof_init();
   {
     void cfg_dump(void);
     cfg_dump();
