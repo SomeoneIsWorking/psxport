@@ -102,6 +102,13 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/fmv_decode.cpp   # pure .STR decode (VLC/MDEC/XA), shared by the player + offline tools
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gte.c
   ${PSXPORT_ROOT}/runtime/recomp/gte_beetle.cpp
+  # The REAL PSX GPU, as an independent oracle for psx_render (runtime/recomp/gpu_beetle.cpp explains
+  # why our own rasterizer could not be one). gpu.c #includes gpu_polygon.c / gpu_sprite.c /
+  # gpu_line.c, so those are NOT listed; gpu_polygon_sub.c and rhi/rhi_intf.c are separate units.
+  ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gpu.c
+  ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gpu_polygon_sub.c
+  ${PSXPORT_ROOT}/vendor/beetle-psx/rhi/rhi_intf.c
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_beetle.cpp
   ${PSXPORT_ROOT}/runtime/recomp/native_projection.cpp
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
   ${PSXPORT_ROOT}/runtime/recomp/mdec_beetle.c
@@ -271,3 +278,11 @@ if(PSXPORT_BUILD_SMOKE)
   # The smoke includes framework headers (core.h etc.) — inherits RT/generated via the PUBLIC iface.
   target_link_libraries(psxport_smoke PRIVATE psxport)
 endif()
+
+# The vendored GPU sources use sscanf/fprintf/stderr without including <stdio.h>. Supply it on the
+# compile line rather than editing the fork — psxport's rule is that beetle changes live in the
+# committed fork, and this is a build-flag concern, not a source defect worth forking over.
+set_source_files_properties(
+  ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gpu.c
+  ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gpu_polygon_sub.c
+  PROPERTIES COMPILE_OPTIONS "-include;stdio.h")

@@ -20,6 +20,14 @@
 #include <lucent/log.h>
 #include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_debug.cpp)
 #include "field_rate.h"            // THE display field rate, in milli-hertz (one definition)
+
+// The beetle-GPU oracle tee (gpu_beetle.cpp). Every guest command word goes to both implementations
+// so the two VRAMs can be diffed on the same frame — see that file for why our own rasterizer could
+// not serve as the reference it was being treated as.
+void gpu_beetle_gp0(uint32_t w);
+void gpu_beetle_gp1(uint32_t w);
+void gpu_beetle_frame_report(int frame, const uint16_t* ours, int vram_w, int vram_h);
+
 #include "pace_plan.h"             // the frame-pacing decision, as a pure function (no window input)
 #include "mods.h"                   // g_mods.fps60 (was g_fps60_on)
 #include "render_substrate.h"          // Render::mDbgRenderNode (was g_dbg_render_node)
@@ -1290,6 +1298,7 @@ static int gp0_len(uint32_t c) {
 // One word into the GP0 port (direct write or DMA).
 void GpuState::gpu_gp0(Core* core, uint32_t w) {
   s_gp0_words++;
+  gpu_beetle_gp0(w);   // oracle tee — no-op unless PSXPORT_GPU_BEETLE is on
   gp0raw_note(s_frame, w, s_xfer ? 1 : 0);       // PSXPORT_GP0RAW: raw word capture, pre-decode
   if (s_xfer) {                                  // CPU->VRAM pixel stream (2 px/word)
     if (s_twp_active && s_twp_px == 0) s_twp_addr0 = s_gp0_src;
@@ -1462,6 +1471,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
 
 // GP1 display/control commands.
 void GpuState::gpu_gp1(uint32_t w) {
+  gpu_beetle_gp1(w);   // oracle tee — no-op unless PSXPORT_GPU_BEETLE is on
   uint8_t op = w >> 24;
   lucent::debug("gp1", "f{} {:02X} {:06X}", s_frame, op, w & 0xFFFFFF);
   switch (op) {
@@ -1935,6 +1945,7 @@ void GpuState::frame_finalize(Core* core) {
   { void prim_dump_close_if_done(Core*, int); prim_dump_close_if_done(core, s_frame); }   // PSXPORT_PRIMDUMP: flush the file
   { void gp0raw_close_if_done(int); gp0raw_close_if_done(s_frame); }                      // PSXPORT_GP0RAW: flush + report counts
   shot_triggers(core, s_frame);   // PSXPORT_SHOT_AT / PSXPORT_PRESENT_SHOT_AT — every presenter reaches here
+  gpu_beetle_frame_report(s_frame, s_vram, VRAM_W, VRAM_H);   // oracle diff, with its denominators
 }
 // ---- capture triggers, at the ONE point every present goes through ---------------------------------
 // These live here, called from the tail of gpu_present_ex, rather than in gpu_present — and that is a
