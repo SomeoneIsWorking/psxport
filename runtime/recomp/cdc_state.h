@@ -28,6 +28,7 @@ typedef struct CdcState {
   uint32_t loc_lba;            // Setloc target                              (was s_loc_lba)
   uint8_t mode;                // Setmode                                     (was s_mode)
   int reading;                 // ReadN/ReadS active                          (was s_reading)
+  uint8_t bfrd;                // request-register BFRD latch (bit 7): 1 until explicitly deasserted
   CdcIrqEnt q[8];              // pending-interrupt queue                     (was s_q)
   int q_head, q_tail, resp_rd; //                                     (was s_q_head/s_q_tail/s_resp_rd)
   uint8_t irq_edge;            // 1 = the controller just RAISED an interrupt and nothing has latched

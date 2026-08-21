@@ -88,6 +88,12 @@ Two rules this enforces, both learned the hard way:
 - **Never guess an overlay base.** An overlay is keyed *by* its load address, so a wrong base emits a
   whole module of correctly-decoded instructions at wrong addresses — every `jal` target, pointer
   test and router lookup then silently wrong. A missing base is a hard error, not a default.
+- **Seed a measured `HookEntryInt` continuation as `main_reentry`.** `B0:0x19` receives a setjmp
+  buffer, and its `+0` word is usually the instruction after the game's setjmp call — inside the
+  interrupt bootstrap, not at a natural function boundary. Derive that return PC from the retail
+  call site and add it to `main_reentry`; a guessed function seed cannot enter the custom hardware
+  dispatcher and leaves CD/SPU callbacks unreachable. Its eventual `B0:0x17 ReturnFromException`
+  is non-returning; psxport unwinds generated frames back to the interrupted register context.
 
 Grow the file empirically: boot, and when the substrate fail-fasts with a `[recomp-MISS]`, add that
 address with a note on how it is reached.

@@ -27,6 +27,13 @@ from decode import decode
 import psexe
 import emit
 
+SCRATCH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "scratch", "bin"))
+
+
+def scratch_tempdir(prefix="emit-test-"):
+    os.makedirs(SCRATCH, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix=prefix, dir=SCRATCH)
+
 # ----------------------------------------------------------------------------------------------------
 # Tiny MIPS assembler — just enough to write readable test functions. Two passes (resolve labels).
 # ----------------------------------------------------------------------------------------------------
@@ -186,12 +193,12 @@ def _emit_checkpoint_fixture(out_dir, diagnostic_pcs=None):
 
 
 def test_diagnostic_checkpoint_empty_set_is_byte_identical_to_legacy_output():
-    with tempfile.TemporaryDirectory() as legacy, tempfile.TemporaryDirectory() as explicit:
+    with scratch_tempdir() as legacy, scratch_tempdir() as explicit:
         assert _emit_checkpoint_fixture(legacy) == _emit_checkpoint_fixture(explicit, set())
 
 
 def test_diagnostic_checkpoints_precede_two_selected_ordinary_instructions():
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         files = _emit_checkpoint_fixture(td, {0x80010000, 0x80010004})
         shard = files[emit.MAIN_NAMES.shardpfx + "_0.c"].decode()
         assert shard.count("pc_observer_at(c,") == 2
@@ -209,7 +216,7 @@ def test_diagnostic_checkpoint_branch_target_observes_after_label_before_instruc
     a.jr("ra")
     a.nop()
     data, _ = a.assemble()
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         emit.emit_module(exe_of(data), td, emit.MAIN_NAMES, {a.base}, shards=1,
                          diagnostic_pcs={a.labels["target"]})
         shard = open(os.path.join(td, emit.MAIN_NAMES.shardpfx + "_0.c")).read()
@@ -231,7 +238,7 @@ def test_diagnostic_checkpoint_overlapping_bodies_refuse_duplicate_site():
     a.jr("ra")
     a.nop()
     data, _ = a.assemble()
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         try:
             emit.emit_module(exe_of(data), td, emit.MAIN_NAMES, {a.base, second}, shards=1,
                              diagnostic_pcs={a.labels["shared"]})
@@ -257,7 +264,7 @@ def test_function_qualified_checkpoint_selects_one_overlapping_body():
     a.jr("ra")
     a.nop()
     data, _ = a.assemble()
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         emit.emit_module(exe_of(data), td, emit.MAIN_NAMES, {a.base, second}, shards=1,
                          diagnostic_pcs={(second, a.labels["shared"])})
         shard = open(os.path.join(td, emit.MAIN_NAMES.shardpfx + "_0.c")).read()
@@ -265,7 +272,7 @@ def test_function_qualified_checkpoint_selects_one_overlapping_body():
 
 
 def test_diagnostic_checkpoint_outside_emitted_text_refuses_with_denominator():
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         try:
             _emit_checkpoint_fixture(td, {0x80010100})
         except SystemExit as error:
@@ -549,7 +556,7 @@ def run_func(data, base, regs=None, mem=None, hooks="", base_exe=0x80010000, fun
                   .replace("__ENTRY__", f"gen_func_{base:08X}")
                   .replace("__PRECALL__", precall)
                   .replace("__HOOKS__", hooks))
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         cpp = os.path.join(td, "t.cpp")
         binp = os.path.join(td, "t")
         open(cpp, "w").write(src)
@@ -587,7 +594,7 @@ def run_module(data, base, entry, regs=None, base_exe=0x80010000, seeds=None):
     if not cc:
         return None
     e = exe_of(data, base_exe)
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         # core.h is what the generated TUs include; give them the harness's Core plus the runtime
         # symbols the dispatch TU references.
         prelude = HARNESS.split("__HOOKS__")[0]
@@ -1110,6 +1117,50 @@ def test_vertex_store_in_a_branch_delay_slot_is_tapped():
         f"the tap must sit in the delay-slot statement, between the store and the transfer:\n{line}"
 
 
+def test_main_reentry_emits_a_wrapper_body_and_dispatch_case():
+    """The saved PC after HookEntryInt's setjmp is inside a function and must be dispatchable."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    a = Asm()
+    a.jr("ra")
+    a.nop()
+    a.addiu("sp", "sp", -8)       # a natural function starts here
+    a.nop()
+    reentry = 0x80010010           # deliberately inside that function, after its prologue
+    a.addiu("sp", "sp", 8)
+    a.jr("ra")
+    a.nop()
+    text, _ = a.assemble()
+
+    def run(td, seeded):
+        exe_path = os.path.join(td, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)
+        struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))
+        open(exe_path, "wb").write(bytes(hdr) + text)
+        seeds_path = os.path.join(td, "seeds.json")
+        values = f'"0x{reentry:08X}"' if seeded else ""
+        open(seeds_path, "w").write('{"main_reentry": [' + values + "]}")
+        gen = os.path.join(td, "generated")
+        os.makedirs(gen)
+        env = dict(os.environ, PSXPORT_SHARDS="1", PSXPORT_USE_GHIDRA="0")
+        result = subprocess.run([sys.executable, os.path.join(here, "emit.py"), exe_path,
+                                 os.path.join(gen, "rec.c"), "--seeds", seeds_path],
+                                capture_output=True, text=True, env=env)
+        assert result.returncode == 0, f"emit.py failed:\n{result.stdout}\n{result.stderr}"
+        return "\n".join(open(os.path.join(gen, name)).read() for name in sorted(os.listdir(gen)))
+
+    with scratch_tempdir("emit-reentry-positive-") as td:
+        positive = run(td, True)
+        assert f"void func_{reentry:08X}(Core*)" in positive, "main_reentry wrapper was not declared"
+        assert f"void gen_func_{reentry:08X}(Core* c)" in positive, "main_reentry body was not emitted"
+        assert f"case 0x{reentry & 0x1FFFFFFF:08X}u:" in positive, "main_reentry was not dispatchable"
+    with scratch_tempdir("emit-reentry-negative-") as td:
+        negative = run(td, False)
+        assert f"func_{reentry:08X}" not in negative, "unseeded interior PC was emitted"
+        assert f"case 0x{reentry & 0x1FFFFFFF:08X}u:" not in negative, "unseeded interior PC was dispatchable"
+
+
 # ----------------------------------------------------------------------------------------------------
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
@@ -1329,7 +1380,7 @@ def test_data_overlay_emits_an_empty_module():
     module (dispatch falls to rec_dispatch_miss) while KEEPING the overlay's router-table entry —
     the load is real and the runtime must still identify the resident image; it is just not code."""
     here = os.path.dirname(os.path.abspath(__file__))
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         a = Asm()                                   # minimal valid MAIN.EXE
         a.addiu("sp", "sp", -0x10)
         a.jr("ra")
@@ -1440,12 +1491,12 @@ def test_noreturn_code_needs_an_explicit_seed():
     ov, entry = a.assemble()
     # strip every jr-ra-shaped word just in case the assembler emitted one
     assert b"\x08\x00\xe0\x03" not in ov, "test image must contain no jr ra"
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         r, gen = _run_emit_cli(here, td, ov)
         disp = open(os.path.join(gen, "ov_stage0_disp.c")).read()
         assert "case 0x" not in disp, "seedless noreturn image: the data guard should empty it"
         assert "NOT CODE" in r.stdout + r.stderr
-    with tempfile.TemporaryDirectory() as td:
+    with scratch_tempdir() as td:
         r, gen = _run_emit_cli(here, td, ov, ov_seeds=["0x8007AA38"])
         disp = open(os.path.join(gen, "ov_stage0_disp.c")).read()
         assert "case 0x" in disp, "an explicit seed vouches for noreturn code — it must recompile"

@@ -180,6 +180,9 @@ void cdc_begin_read(CdcState *s, uint32_t lba) {
 }
 
 int cdc_dma_read(CdcState *s, uint32_t *out, int words) {
+  if (!s->bfrd) {
+    return 0;
+  }
   int got = 0;
   while (got < words && s->data_rd + 4 <= s->data_n) {
     const uint8_t *p = s->data + s->data_rd;
@@ -288,6 +291,33 @@ static void exec_command(CdcState *s, uint8_t cmd) {
   s->param_n = 0; // command consumes the param FIFO
 }
 
+// Apply the bank-0 request register's BFRD latch. BFRD is a level, not a command: writing 0x80
+// again while it is already asserted leaves the current data FIFO and its read cursor untouched.
+// A real new request is the 0 -> 1 transition. In this synchronous model that transition after a
+// partial read discards the unread remainder and presents the following sector immediately; that is
+// how whole-sector stream readers move on after consuming only their 2048-byte payload.
+static void write_request_register(CdcState *s, uint8_t value) {
+  const uint8_t asserted = value & 0x80;
+  if (!asserted) {
+    s->bfrd = 0;
+    return;
+  }
+  if (s->bfrd) {
+    return;
+  }
+
+  s->bfrd = 1;
+  if (!s->reading) {
+    return;
+  }
+  if (s->data_rd > 0) {
+    s->loc_lba++;
+    const uint8_t response[1] = {s->stat};
+    cdc_irq(s, 1, response, 1); // INT1: next sector ready
+  }
+  load_sector(s);
+}
+
 uint32_t cdc_read(CdcState *s, uint32_t p) {
   switch (p & 3) {
   case 0: { // status register
@@ -301,7 +331,7 @@ uint32_t cdc_read(CdcState *s, uint32_t p) {
     if (!q_empty(s) && s->resp_rd < s->q[s->q_head].len) {
       st |= 0x20; // RSLRRDY (response ready)
     }
-    if (s->data_rd < s->data_n) {
+    if (s->bfrd && s->data_rd < s->data_n) {
       st |= 0x40; // DRQSTS (data FIFO not empty)
     }
     return st;
@@ -314,7 +344,7 @@ uint32_t cdc_read(CdcState *s, uint32_t p) {
     return s->resp_rd < f->len ? f->resp[s->resp_rd++] : 0;
   }
   case 2: { // data FIFO — CPU pop path; must advance the head exactly as DMA3 does
-    if (s->data_rd >= s->data_n) {
+    if (!s->bfrd || s->data_rd >= s->data_n) {
       return 0;
     }
     const uint8_t b = s->data[s->data_rd++];
@@ -371,24 +401,7 @@ void cdc_write(CdcState *s, uint32_t p, uint8_t v) {
         s->param_n = 0; // reset param FIFO
       }
     } else if (s->index == 0) { // request register
-      // BFRD: "give me sector data". If the host has ALREADY taken bytes from the current
-      // sector, this request is for the FOLLOWING one — the drive refills its FIFO per sector and
-      // whatever the host did not read is discarded. That is the advance point for a streaming
-      // reader, which takes 2048 of a 2340-byte whole-sector FIFO and then simply asks again, so a
-      // drain-based advance can never fire for it.
-      if (v & 0x80) {
-        if (s->reading) {
-          if (s->data_rd > 0) {
-            s->loc_lba++;
-            {
-              uint8_t r1[1];
-              r1[0] = s->stat;
-              cdc_irq(s, 1, r1, 1);
-            } // INT1: next sector ready
-          }
-          load_sector(s);
-        }
-      }
+      write_request_register(s, v);
     }
     return;
   }

@@ -8,6 +8,7 @@
 // in game.h (`c->game->hle`) — per-Core so SBS's two cores keep separate BIOS state. The
 // BIOS-call dispatchers below are METHODS on that class; the `rec_syscall` / `rec_break`
 // / `rec_dispatch_miss` free entries below are the C-ABI shims the recompiled shards call.
+#include "bios_interrupt.h"
 #include "cfg.h"
 #include "core.h"
 #include "dma_irq.h" // dma_irq_ack — the CD DMA completion dispatch below stands in for the
@@ -399,9 +400,6 @@ void Hle::irqPoll(Core *c) {
     in_irq = 0;
   }
 
-  // One-shot decline diagnostic. "No delivery happened" has four possible causes and they are
-  // indistinguishable from the outside; naming the first one that fires turns a silent nothing into
-  // a pointed question.
   // Decline accounting. A ONE-SHOT version of this could not distinguish "declined once early" from
   // "declined for the entire run", which are completely different diagnoses — so count each reason
   // and report periodically. Cheap: only runs when the channel is on.
@@ -438,11 +436,12 @@ void Hle::irqPoll(Core *c) {
   // owed. Clearing the gate then loses it, and the chain stops after one strip — measured: two
   // strips per movie decoded and then "no decode command in flight". So the gate survives while
   // anything is owed, and only the genuinely-idle case pays nothing.
-  if ((!pending || irq_n == 0) && !dma_done_any()) {
+  const bool has_delivery_path = irq_n != 0 || exception_exit_buf != 0;
+  if ((!pending || !has_delivery_path) && !dma_done_any()) {
     c->pending_work &= ~Core::PW_IRQ;
     return;
   }
-  if (!pending || irq_n == 0) {
+  if (!pending || !has_delivery_path) {
     return;
   }
 
@@ -476,29 +475,41 @@ void Hle::irqPoll(Core *c) {
     claimed = 1;
     break;
   }
-  // "Nobody claimed it" and "the walk never ran" look identical from the outside, and only the first
-  // is a statement about the GAME. Say which, once per distinct pending mask.
+  // Declining here only says the BIOS element chain did not own this source. Games commonly route
+  // CD-ROM through the custom exception exit and a separate master table, so do not misdiagnose a
+  // correct VBlank-only verifier as "the game has no CD service".
   if (!claimed) {
     static uint32_t last_unclaimed = 0xFFFFFFFFu;
     if (pending != last_unclaimed) {
       last_unclaimed = pending;
       lucent::info("irq",
-                   "pending I_STAT&I_MASK=0x{:03X} but NO registered element claimed it "
-                   "({} in chain) — this game does not service that source via the BIOS chain",
+                   "pending I_STAT&I_MASK=0x{:03X}; no SysEnq element claimed it "
+                   "({} in chain), custom exception exit {}",
                    pending,
-                   irq_n);
+                   irq_n,
+                   exception_exit_buf ? "installed" : "not installed");
     }
   }
 
   *static_cast<R3000 *>(c) = saved;
+  if (exception_exit_buf) {
+    custom_exit_active = 1;
+    const BiosInterruptDispatchResult result = bios_interrupt_dispatch_custom_exit(c, exception_exit_buf, rec_dispatch);
+    custom_exit_active = 0;
+    if (result != BiosInterruptDispatchResult::ReturnedFromException) {
+      lucent::error("irq", "custom exception exit violated B0:0x17 contract (result={})", (int)result);
+      abort();
+    }
+  }
+  *static_cast<R3000 *>(c) = saved;
   in_irq = 0;
-  if (!dma_done_any()) {              // see above: an owed DMA callback keeps the gate armed
-    c->pending_work &= ~Core::PW_IRQ; // re-armed by the next raise / mask change
+  const bool still_deliverable = (c->irqStatLatch() & i_mask) && (irq_n != 0 || exception_exit_buf != 0);
+  if (!dma_done_any() && !still_deliverable) { // an owed DMA callback or live IRQ keeps the gate armed
+    c->pending_work &= ~Core::PW_IRQ;
   }
 }
 
-// The substrate's entry point: every recompiled function wrapper calls this when Core::pending_work
-// is non-zero (emit.py). Free function so the generated code needs no knowledge of Game or Hle.
+// Every recompiled function wrapper calls this when Core::pending_work is non-zero (emit.py).
 //
 // Two INDEPENDENT kinds of deferred work share the gate word, and the order here is deliberate: the
 // host turn runs FIRST. A host turn advances the frame clock and can present; a guest IRQ dispatch
@@ -966,26 +977,15 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     case 0x16: // BIOS pad — no-op (native)
       c->r[V0] = 0;
       return true;
-    case 0x19: // B(19h)
-      // NOT "hook a handler function". This is SetCustomExitFromException: $a0 points at a
-      // jmp_buf-shaped structure { +0 ra, +4 sp, +8 fp, +0x0C..0x28 s0..s7, +0x2C gp }, and the
-      // BIOS exception path — AFTER walking the SysEnqIntRP chains — loads those registers and
-      // jumps to `ra` instead of resuming the interrupted context. Dump it: whether `+0` is a
-      // function ENTRY decides whether a static recompile can enter it at all. A mid-function `ra`,
-      // which a real setjmp would leave, is not an address the substrate can dispatch to.
-      if (lucent::channel_on("bios")) {
-        lucent::debug("bios",
-                      "B0:0x19 custom-exit buf=0x{:08X}: ra=0x{:08X} sp=0x{:08X} fp=0x{:08X} gp=0x{:08X}",
-                      a0,
-                      c->mem_r32(a0),
-                      c->mem_r32(a0 + 4),
-                      c->mem_r32(a0 + 8),
-                      c->mem_r32(a0 + 0x2C));
-        for (int i = 0; i < 8; i++) {
-          lucent::debug("bios", "  s{} = 0x{:08X}", i, c->mem_r32(a0 + 0x0Cu + 4u * (uint32_t)i));
-        }
-      }
-      int_handler = a0;
+    case 0x17: // ReturnFromException — non-returning unwind to irqPoll's saved R3000 context
+      bios_interrupt_return_from_exception(custom_exit_active != 0);
+    case 0x18: // ResetEntryInt — remove the custom exception-exit context
+      exception_exit_buf = 0;
+      c->r[V0] = 0;
+      return true;
+    case 0x19: // HookEntryInt — install the guest jmp_buf restored after the BIOS chain walk
+      exception_exit_buf = a0;
+      bios_interrupt_trace_custom_exit(c, a0);
       c->r[V0] = 0;
       return true;
     // B0:0x35 FileWrite is NOT handled here. It used to be, unconditionally: this switch wrote fd

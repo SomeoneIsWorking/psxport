@@ -72,6 +72,7 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 ## `runtime/recomp/` — the PSX→PC PLATFORM (common; future `psxport` submodule)
 **Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (bus dispatch + watchpoints PSXPORT_WWATCH/CW),
 `core.h`/`game.h` (the `Core`/`Game` objects), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
+`bios_interrupt.{h,cpp}` (the HookEntryInt saved-context contract),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
 REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp`
@@ -87,6 +88,16 @@ generated multi-frame routine remains an explicit oracle rather than a second pr
 host `rand()`: host sequences differ and process-global state would couple SBS/dual-core Games.
 `test_bios_rand` reaches the shipping `Hle::dispatchBios` seam and gates the exact seed-1 sequence,
 restart behavior, per-Game isolation, and negative wrong-table plus neighboring-function cases.
+`Hle::irqPoll` walks the measured SysEnqIntRP element chain and then enters the optional custom
+exception exit installed by `B0:0x19 HookEntryInt`. `bios_interrupt.{h,cpp}` owns the jmp-buffer
+layout (`ra/sp/fp/s0..s7/gp`) and makes the saved setjmp continuation return non-zero.
+`B0:0x17 ReturnFromException` raises a private scoped unwind through generated C, so the continuation
+cannot fall through into its one-time initialization; only then does the outer injection restore the
+interrupted `R3000`. `B0:0x18 ResetEntryInt` clears the context. `test_bios_interrupt` drives the
+shipping BIOS entry points and proves context restoration, zero-buffer/zero-RA refusal, non-returning
+unwind, and the illegal normal-return answer. A consumer must seed the measured saved RA as
+`main_reentry`, because it is usually inside the interrupt bootstrap rather than a natural function
+entry.
 `ot_attr.{h,cpp}` owns the logic-frame stamp contract: pre-loop boot stores are counted, and the
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
 **GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 4,373 ln), `gpu_vk.cpp` (Vulkan backend + present;
@@ -127,7 +138,11 @@ billboard-history hook.
 **Audio:** `spu_beetle.c` (Beetle spu.c mixer lift), `spu_audio.c` (SDL sink + PSXPORT_WAV), `xa_stream.c`
 (in-game XA-ADPCM streaming).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
-game-validated blocking-control seam), `cdc_native.c`, `disc.c` (libchdr), `memcard.cpp`.
+game-validated blocking-control seam), `cdc_native.cpp` (per-Game register/FIFO/IRQ model and bank-0
+BFRD request latch), `disc.cpp` (libchdr), `memcard.cpp`. Reasserting an already-high BFRD preserves a
+partial DMA cursor; only a deassert→assert transition discards the remainder and presents the next
+sector. `test_cdc_bfrd_split_dma` drives the shipping begin-read/write/DMA path with a hermetic raw
+sector backend and proves repeated-assert, transition, and deasserted-access answers (535 checks).
 **Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle
 gte.c). `gte_state.h::GTE_ExecuteIsolated` runs any vendor GTE instruction against an explicit `GteRegs`
 without changing the caller's bound state. Its implementation tracks nested isolation depth and suppresses
@@ -159,7 +174,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 
 | tool | what it is for | note |
 |---|---|---|
-| `recomp/emit.py` | the static recompiler: PSX MIPS -> emitted C | |
+| `recomp/emit.py` | the static recompiler: PSX MIPS -> emitted C | `test_emit.py` proves `main_reentry` emits a wrapper, body and dispatcher case, and that an unseeded interior PC emits none |
 | `recomp/psexe.py` | load PS-X EXEs and raw RAM images for framework RE tools | ownership test covers success and refusal paths |
 | `abi_extract.py` | static ABI/stack-contract extractor for generated function bodies | |
 | `port_check.py` | equivalence gate: does a native port's guest-visible store sequence match the substrate | |

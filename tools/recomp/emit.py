@@ -2431,7 +2431,7 @@ def main():
                               for address in checkpoint if address is not None},
                         "--seeds diagnostic_pcs owner/pc")
     ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
-    seeds = ({exe.entry} | gs["main"] | pointer_table_funcs(exe)
+    seeds = ({exe.entry} | gs["main"] | gs["main_reentry"] | pointer_table_funcs(exe)
              | constructed_func_pointers(exe) | code_pointer_tables(exe)
              | overlay_data_func_pointers(exe, ov_dir))   # object-behavior handlers in overlay templates
     out_dir = os.path.dirname(out_path) or "."

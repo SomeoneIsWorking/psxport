@@ -38,11 +38,11 @@ public:
   // BIOS libc rand/srand (A0:0x2F/0x30). Per Hle, hence per Game/Core: host rand() would introduce
   // process-global cross-core state and a host-specific sequence. Sony's libc starts from seed 1.
   uint32_t rand_state = 1;
-  int work_ok = 0;          // was s_work_ok
-  int dcb_n = 0;            // installed BIOS devices (see deviceAdd)
-  uint32_t int_handler = 0; // was s_int_handler (B0:0x19 HookEntryInt)
-  int irq_enabled = 1;      // was s_irq_enabled
-  int miss_count = 0;       // recomp-miss log numbering (was s_miss)
+  int work_ok = 0;                 // was s_work_ok
+  int dcb_n = 0;                   // installed BIOS devices (see deviceAdd)
+  uint32_t exception_exit_buf = 0; // B0:0x19 HookEntryInt guest jmp_buf; restored after chain walk
+  int irq_enabled = 1;             // was s_irq_enabled
+  int miss_count = 0;              // recomp-miss log numbering (was s_miss)
 
   // I_STAT (0x1F801070) / I_MASK (0x1F801074). These had NO model at all: both reads fell through to
   // the unmapped-I/O path and returned 0, so every guest interrupt VERIFIER — which exists precisely
@@ -69,7 +69,8 @@ public:
   uint32_t irq_elem[IRQ_CHAIN_MAX] = {};
   uint32_t irq_prio[IRQ_CHAIN_MAX] = {};
   int irq_n = 0;
-  int in_irq = 0; // re-entrancy guard: an ISR's own BIOS calls must not re-deliver
+  int in_irq = 0;             // re-entrancy guard: an ISR's own BIOS calls must not re-deliver
+  int custom_exit_active = 0; // B0:0x17 may unwind only the scoped HookEntryInt dispatch
 
   // Deliver one pending interrupt, if any, to the guest's registered chain. MUST only be called at a
   // point where guest state is call-coherent — a guest function boundary — never from inside a

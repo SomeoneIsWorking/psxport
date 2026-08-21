@@ -85,6 +85,10 @@ add_test(NAME psexe_loader
          COMMAND ${CMAKE_COMMAND} -E env python3
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/test_psexe.py)
 
+add_test(NAME recomp_emitter
+         COMMAND ${CMAKE_COMMAND} -E env python3
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/test_emit.py)
+
 add_test(NAME cmake_test_ownership
          COMMAND ${CMAKE_COMMAND} -E env python3
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_cmake_test_ownership.py)
