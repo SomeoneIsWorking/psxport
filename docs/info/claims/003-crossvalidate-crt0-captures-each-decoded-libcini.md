@@ -6,7 +6,7 @@ created: 2026-08-21
 tags:
 depends: tools/oracle/crossvalidate_crt0.py#main, tools/oracle/oracle_trace.c#main
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21 02:53:49
+verified_at: 2026-08-21 11:09:16
 ---
 
 ## Claim
@@ -23,4 +23,7 @@ A real executable reaches its decoded libcInit but the trace captures another ca
 
 ## Re-confirmed 2026-08-21
 
-2026-08-21: real Crash1 independently captured first jal target 0x80011A18 at step 57910 and agreed 6/6; real CTR captured 0x80080620 at step 92375 and A(39h) at 92378, agreeing 7/7; short Crash run refused exit 2; selftest 5/5; integrated Clang CTest passed 70/70.
+Real Crash1 independently captured first jal target 0x80011A18 at step 57910 and agreed 6/6; real
+CTR captured 0x80080620 at step 92375 and A(39h) at 92378, agreeing 7/7; the short Crash run refused
+exit 2. After the canonical ordinal-capture integration, standalone Clang CTest passed oracle_spike,
+crossvalidate_crt0_selftest, and oracle_trace_selftest as part of 74/74.

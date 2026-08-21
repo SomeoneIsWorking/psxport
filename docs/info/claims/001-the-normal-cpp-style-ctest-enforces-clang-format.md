@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-21
 tags:
 depends: tools/check_cpp_style.py#check_tidy, tests/CMakeLists.txt, .clang-tidy
+reconfirmed: 2026-08-21
+verified_at: 2026-08-21 11:09:16
 ---
 
 ## Claim
@@ -20,3 +22,7 @@ The normal cpp_style CTest enforces Clang formatting, 1,200/default plus shrink-
 Any cpp_style run that accepts format drift, cap growth, a non-Clang compile command, a missing
 touched TU, attempts to lint a worktree-deleted path, or checks zero TUs on this non-empty clean tree
 falsifies it.
+
+## Re-confirmed 2026-08-21
+
+Post-integration standalone Clang CTest passed 74/74; cpp_style passed the full format, structure, and compile-backed clang-tidy corpus.
