@@ -24,11 +24,14 @@
 
 // ── MIPS R3000A encoders, so the fixture reads as instructions rather than hex ────────────────────
 #define R_ZERO 0
+#define R_V0 2
+#define R_V1 3
 #define R_T0 8
 #define R_T1 9
 #define R_T2 10
 #define R_T3 11
 #define R_SP 29
+#define R_RA 31
 
 static uint32_t i_lui(int rt, uint16_t imm) {
   return (0x0Fu << 26) | ((uint32_t)rt << 16) | imm;
@@ -51,9 +54,15 @@ static uint32_t i_lw(int rt, int16_t off, int rs) {
 static uint32_t i_nop(void) {
   return 0u;
 }
+static uint32_t i_jal(uint32_t target) {
+  return (0x03u << 26) | ((target >> 2) & 0x03FFFFFFu);
+}
+static uint32_t i_jr(int rs) {
+  return ((uint32_t)rs << 21) | 0x08u;
+}
 
 // ── check bookkeeping: a plan up front, so a run that stops early cannot read as a pass ──────────
-#define PLANNED_CHECKS 22
+#define PLANNED_CHECKS 39
 static int s_ran = 0, s_failed = 0;
 
 static void check_u32(const char *what, uint32_t got, uint32_t want) {
@@ -349,12 +358,108 @@ static int mirroring_case(void) {
   return 1;
 }
 
+// ── MODELED CALL RETURN: resume the same independent CPU after an explicitly owned external leaf ──
+//
+// The oracle intentionally maps no BIOS. A differential can still continue after a BIOS/libc leaf when
+// the CONSUMER owns that leaf's semantics, but only if the continuation surface refuses a stale or wrong
+// boundary. This fixture reaches physical 0xA0 through a real jal + three-instruction thunk, first asks
+// to return from the wrong target (must refuse without mutation), then supplies explicit v0/v1 and proves
+// that execution resumes at the captured $ra with the CPU timestamp and unrelated registers preserved.
+static int modeled_call_return_case(void) {
+  enum { THUNK_INDEX = 8 };
+  const uint32_t return_pc = FIX_ADDR + 8u;
+  const uint32_t thunk = FIX_ADDR + THUNK_INDEX * 4u;
+  uint32_t prog[12] = {0};
+  prog[0] = i_jal(thunk);
+  prog[1] = i_addiu(R_T0, R_ZERO, 0x1111); // jal delay slot
+  prog[2] = i_addiu(R_T3, R_ZERO, 0x2222); // first instruction after modeled return
+  prog[THUNK_INDEX + 0] = i_addiu(R_T2, R_ZERO, 0xA0);
+  prog[THUNK_INDEX + 1] = i_jr(R_T2);
+  prog[THUNK_INDEX + 2] = i_addiu(R_T1, R_ZERO, 0x39); // jr delay slot: A(39h)
+
+  if (!oracle_init()) {
+    return 0;
+  }
+  if (!oracle_load_exe(prog, sizeof(prog), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) {
+    return 0;
+  }
+
+  OracleState at_target;
+  int steps = 0;
+  do {
+    oracle_step();
+    oracle_capture(&at_target);
+    steps++;
+  } while (at_target.pc != 0xA0u && steps < 16);
+
+  check_u32("modeled return: reached external target", at_target.pc, 0xA0u);
+  check_u32("modeled return: captured jal return PC", at_target.gpr[R_RA], return_pc);
+  check_u32("modeled return: thunk selected A(39h)", at_target.gpr[R_T1], 0x39u);
+
+  const int wrong_target = oracle_resume_call_return(0xB0u, return_pc, 0x12345678u, 0x89ABCDEFu);
+  OracleState after_refusal;
+  oracle_capture(&after_refusal);
+  check_u32("modeled return: wrong target is refused", (uint32_t)wrong_target, 0u);
+  check_u32("modeled return: refusal preserves PC", after_refusal.pc, at_target.pc);
+
+  const int wrong_ra = oracle_resume_call_return(0xA0u, return_pc + 4u, 0x12345678u, 0x89ABCDEFu);
+  OracleState after_ra_refusal;
+  oracle_capture(&after_ra_refusal);
+  check_u32("modeled return: wrong return PC is refused", (uint32_t)wrong_ra, 0u);
+  check_u32("modeled return: return-PC refusal preserves PC", after_ra_refusal.pc, at_target.pc);
+
+  const int resumed = oracle_resume_call_return(0xA0u, return_pc, 0x12345678u, 0x89ABCDEFu);
+  OracleState after_resume;
+  oracle_capture(&after_resume);
+  check_u32("modeled return: exact boundary is accepted", (uint32_t)resumed, 1u);
+  check_u32("modeled return: PC resumes at captured $ra", after_resume.pc, return_pc);
+  check_u32("modeled return: successor is sequential", after_resume.next_pc, return_pc + 4u);
+  check_u32("modeled return: explicit $v0 is installed", after_resume.gpr[R_V0], 0x12345678u);
+  check_u32("modeled return: explicit $v1 is installed", after_resume.gpr[R_V1], 0x89ABCDEFu);
+  check_u32("modeled return: unrelated register is preserved", after_resume.gpr[R_T0], at_target.gpr[R_T0]);
+  check_u32("modeled return: timestamp is preserved", (uint32_t)after_resume.timestamp, (uint32_t)at_target.timestamp);
+
+  oracle_step();
+  OracleState continued;
+  oracle_capture(&continued);
+  check_u32("modeled return: caller executes after resume", continued.gpr[R_T3], 0x2222u);
+
+  oracle_teardown();
+
+  uint32_t pending_prog[13] = {0};
+  pending_prog[0] = i_jal(thunk);
+  pending_prog[1] = i_nop();
+  pending_prog[THUNK_INDEX + 0] = i_addiu(R_T2, R_ZERO, 0xA0);
+  pending_prog[THUNK_INDEX + 1] = i_addiu(R_T1, R_ZERO, 0x39);
+  pending_prog[THUNK_INDEX + 2] = i_jr(R_T2);
+  pending_prog[THUNK_INDEX + 3] = i_lw(R_T3, 0, R_SP);
+
+  if (!oracle_init()) {
+    return 0;
+  }
+  if (!oracle_load_exe(pending_prog, sizeof(pending_prog), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) {
+    return 0;
+  }
+  steps = 0;
+  do {
+    oracle_step();
+    oracle_capture(&at_target);
+    steps++;
+  } while (at_target.pc != 0xA0u && steps < 16);
+  const int pending_load = oracle_resume_call_return(0xA0u, return_pc, 0u, at_target.gpr[R_V1]);
+  oracle_capture(&after_refusal);
+  check_u32("modeled return: pending load is refused", (uint32_t)pending_load, 0u);
+  check_u32("modeled return: load-delay refusal preserves PC", after_refusal.pc, at_target.pc);
+  oracle_teardown();
+  return 1;
+}
+
 int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0); // unbuffered: a crash mid-run must not swallow the checks already
   setvbuf(stderr, NULL, _IONBF, 0); // printed, and stderr/stdout must interleave in the real order
 
   printf("psxport oracle spike — milestone 1 of docs/plans/oracle-against-beetle.md\n");
-  printf("PLAN: %d checks across 2 program classes.\n", PLANNED_CHECKS);
+  printf("PLAN: %d checks across 5 program classes.\n", PLANNED_CHECKS);
   printf("  POSITIVE (9 checks): inject 8 hand-assembled instructions at 0x%08X, run 200 cycles,\n"
          "    assert $t0-$t3, $gp, $sp, the stored word in RAM, a clean stop, and that PC advanced within RAM.\n",
          FIX_ADDR);
@@ -364,6 +469,8 @@ int main(void) {
          "    exactly where the bulk run landed, having actually stepped through the program.\n");
   printf("  MIRRORING (4 checks): store through 0x807FFFF8 — the address Spider-Man's crt0 really uses as\n"
          "    its stack pointer — and require it to be RAM via the 4th mirror, not a hardware access.\n");
+  printf("  MODELED RETURN (17 checks): reach an external leaf through a real call/thunk, require wrong\n"
+         "    target/return and pending-load boundaries to refuse, then explicitly return and execute the caller.\n");
   printf("  BLIND SPOTS, stated so this is not mistaken for more than it is: no BIOS is mapped, no\n"
          "    real game executable is loaded, no comparison against psxport's own paths is performed,\n"
          "    and nothing here exercises the GTE, DMA, CD or timers.\n\n");
@@ -389,6 +496,12 @@ int main(void) {
   printf("\nMIRRORING — 2 MB of RAM appears four times across the 8 MB window:\n");
   if (!mirroring_case()) {
     printf("  REFUSED: oracle setup failed; the mirroring case did not run.\n");
+    return 2;
+  }
+
+  printf("\nMODELED RETURN — explicit external-leaf semantics resume this same CPU:\n");
+  if (!modeled_call_return_case()) {
+    printf("  REFUSED: oracle setup failed; the modeled-return case did not run.\n");
     return 2;
   }
 

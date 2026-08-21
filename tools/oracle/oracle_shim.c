@@ -408,6 +408,58 @@ OracleStop oracle_step(void) {
   return oracle_slice(1);
 }
 
+int oracle_resume_call_return(uint32_t expected_target,
+                              uint32_t expected_return_pc,
+                              uint32_t return_v0,
+                              uint32_t return_v1) {
+  if (!s_up) {
+    fprintf(stderr, "oracle: REFUSING modeled call return — oracle_init() has not succeeded.\n");
+    return 0;
+  }
+
+  uint32_t *r = CPU_GPR(PSX_CPU);
+  if (PSX_CPU->BACKED_PC != expected_target) {
+    fprintf(stderr,
+            "oracle: REFUSING modeled call return — current target is 0x%08X, expected 0x%08X.\n",
+            PSX_CPU->BACKED_PC,
+            expected_target);
+    return 0;
+  }
+  if (r[31] != expected_return_pc) {
+    fprintf(stderr,
+            "oracle: REFUSING modeled call return — current $ra is 0x%08X, expected 0x%08X.\n",
+            r[31],
+            expected_return_pc);
+    return 0;
+  }
+  // GPR_full[34] is the core's load-delay sink; BACKED_LDWhich==34 means no delayed load is pending.
+  // An external leaf would give a delay-slot load time to commit, but an instant modeled return cannot
+  // reproduce that passage of instructions. Refuse rather than making the value visible one caller
+  // instruction late.
+  if (PSX_CPU->BACKED_LDWhich != 34u) {
+    fprintf(stderr,
+            "oracle: REFUSING modeled call return — delayed load into register %u is still pending.\n",
+            PSX_CPU->BACKED_LDWhich);
+    return 0;
+  }
+
+  uint32_t unused_offset = 0;
+  if ((expected_return_pc & 3u) != 0 || !in_main_ram(expected_return_pc, &unused_offset)) {
+    fprintf(stderr,
+            "oracle: REFUSING modeled call return — $ra 0x%08X is not an aligned main-RAM address.\n",
+            expected_return_pc);
+    return 0;
+  }
+
+  r[2] = return_v0;
+  r[3] = return_v1;
+  PSX_CPU->BACKED_PC = expected_return_pc;
+  PSX_CPU->BACKED_new_PC = expected_return_pc + 4u;
+  s_stop = ORACLE_STOP_NONE;
+  s_stop_addr = 0;
+  return 1;
+}
+
 int32_t oracle_timestamp(void) {
   return s_ts;
 }

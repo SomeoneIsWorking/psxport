@@ -157,8 +157,19 @@ now does: it is a separate process (so no shared state), it needs no IPC protoco
 and it is reproducible and human-readable — so after a recompiler change, "did the oracle move or did we?"
 is answerable, which with two live processes it is not.
 
-The one thing it gives up: the oracle cannot be steered mid-run by the port, which milestone 3's
-BIOS-call boundary may want. If that bites, the trace becomes a pipe and the format is unchanged.
+The trace remains process-isolated, but it can now be steered at one narrow, explicit boundary without a
+pipe: `oracle_resume_call_return` validates the observed external target and `$ra`, installs an explicit
+`$v0/$v1`, preserves the independent CPU's RAM/register/timestamp state, and resumes its PC pipeline.
+`oracle_trace --model-bios-return TABLE:FN:V0` owns no BIOS policy; it requires the consumer to name the
+table/function/result, verifies `$t1`, and captures the first subsequent call or hardware access. The
+34-check spike proves both accepted and wrong-target answers, while `test_oracle_trace.py` proves the CLI's
+successful/wrong-function answers. CTR is the first real consumer: two repeat oracle runs were identical,
+then oracle and generated execution agreed on 108/108 pre-call, modeled-return, and next-call fields.
+
+The same tracer now owns ordinal direct-call decoding through `--capture-call N` (`--capture-first-call`
+is its compatibility alias). This removes per-game copies of jal/delay-slot parsing. Its 6-check CLI gate
+proves calls 1 and 2 produce different targets and that requesting call 3 refuses with `reached 2 of 3`
+rather than emitting an empty boundary.
 
 ### Milestone 2, part one: the crt0 constants are now confirmed BY EXECUTION
 
@@ -190,7 +201,8 @@ wrong before, which makes it the highest-value one to add next.
    lands in zeroed RAM. That is not a defect to patch around: it is precisely the boundary milestone 3
    exists to model, reached by measurement instead of by assumption.
 3. **BIOS-call boundary** (option 1): detect the thunk, suspend the compare, resume at the return, and
-   assert on the documented result. Each HLE becomes its own case.
+   assert on the documented result. **Mechanism complete; A(39h) proven by CTR.** Each additional HLE still
+   becomes its own consumer-owned case rather than a generic guessed BIOS.
 4. **Then** extend to RAM-per-frame with the CD path in, which is where `cdc.c`'s instant-read tap and
    the pacing differences start to matter.
 5. **Retire `pc_faithful` as "the oracle"** in `Tomba2Engine/CLAUDE.md` once Beetle is the reference.

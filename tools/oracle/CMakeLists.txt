@@ -71,6 +71,11 @@ if(PSXPORT_BUILD_TESTS)
   add_test(NAME crossvalidate_crt0_selftest
            COMMAND ${CMAKE_COMMAND} -E env python3
                    ${CMAKE_CURRENT_SOURCE_DIR}/crossvalidate_crt0.py --selftest)
+  add_test(NAME oracle_trace_selftest
+           COMMAND ${CMAKE_COMMAND} -E env python3
+                   ${CMAKE_CURRENT_SOURCE_DIR}/test_oracle_trace.py
+                   $<TARGET_FILE:oracle_trace>
+                   --scratch ${CMAKE_BINARY_DIR}/scratch/oracle-trace-selftest)
 endif()
 
 # NO mutation harness here. `prove_spike_can_fail.sh` used to rebuild the shim with one thing broken and

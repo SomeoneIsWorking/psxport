@@ -14,9 +14,10 @@
 //     be diffed, re-diffed after a recompiler change, read by a human, and checked into an issue.
 //   * a compare that fails can be re-run against the SAME reference bytes, so "did the oracle change or
 //     did we?" is answerable. With two live processes it is not.
-// The cost is that the oracle cannot be steered by the port mid-run (it cannot be told "stop where you
-// stopped"), which milestone 3's BIOS-call boundary may want. That is a real limit, recorded rather than
-// discovered: if it bites, the trace becomes a pipe and the format below is unchanged.
+// The port still cannot steer this process. A CONSUMER can explicitly model one external BIOS return,
+// however: the trace validates the table/function boundary, applies the generic shim's checked call-return
+// continuation, and captures the next observable boundary. Policy remains outside this process and the two
+// executions still share no state.
 //
 // ═══ WHAT IT DOES NOT DO ═════════════════════════════════════════════════════════════════════════════
 // It does not compare anything. It produces one side of a comparison. A trace being written successfully
@@ -50,6 +51,56 @@ static const char *kReg[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
                                "t3",   "t4", "t5", "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5",
                                "s6",   "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
 
+typedef struct ModeledBiosReturn {
+  int enabled;
+  char table;
+  uint32_t target;
+  uint32_t function;
+  uint32_t v0;
+} ModeledBiosReturn;
+
+static int parse_u32(const char *text, const char **end, uint32_t *value) {
+  char *parsed_end = NULL;
+  const unsigned long parsed = strtoul(text, &parsed_end, 0);
+  if (parsed_end == text || parsed > UINT32_MAX) {
+    return 0;
+  }
+  *end = parsed_end;
+  *value = (uint32_t)parsed;
+  return 1;
+}
+
+static int parse_modeled_bios_return(const char *text, ModeledBiosReturn *model) {
+  if (!text || !text[0] || text[1] != ':') {
+    return 0;
+  }
+  char table = text[0];
+  if (table >= 'a' && table <= 'z') {
+    table = (char)(table - ('a' - 'A'));
+  }
+  if (table != 'A' && table != 'B' && table != 'C') {
+    return 0;
+  }
+
+  const char *cursor = text + 2;
+  const char *end = NULL;
+  uint32_t function = 0, v0 = 0;
+  if (!parse_u32(cursor, &end, &function) || *end != ':' || function > 0xFFu) {
+    return 0;
+  }
+  cursor = end + 1;
+  if (!parse_u32(cursor, &end, &v0) || *end != '\0') {
+    return 0;
+  }
+
+  model->enabled = 1;
+  model->table = table;
+  model->target = table == 'A' ? 0xA0u : table == 'B' ? 0xB0u : 0xC0u;
+  model->function = function;
+  model->v0 = v0;
+  return 1;
+}
+
 static void dump_register_block(FILE *out, const char *tag, long step, const OracleState *state) {
   fprintf(out, "# %s-REGS step=%ld pc=0x%08X\n", tag, step, state->pc);
   for (int r = 1; r < 32; r++) {
@@ -61,7 +112,8 @@ static void dump_register_block(FILE *out, const char *tag, long step, const Ora
 static void usage(void) {
   fprintf(stderr,
           "usage: oracle_trace <PS-X EXE> [--steps N] [--out FILE] [--entry 0xADDR]\n"
-          "                    [--capture-first-call]\n"
+          "                    [--capture-first-call | --capture-call N]\n"
+          "                    [--model-bios-return TABLE:FN:V0]\n"
           "\n"
           "Steps a real game executable in the independent reference emulator (the vendored Mednafen PSX\n"
           "CPU, no libretro.c) and writes a per-instruction trace for a differential compare.\n"
@@ -70,7 +122,14 @@ static void usage(void) {
           "  --out FILE     where the trace goes (default: stdout)\n"
           "  --entry 0xADDR start somewhere other than the header's pc0, for tracing one function\n"
           "  --capture-first-call record registers after the delay slot of the first executed jal;\n"
-          "                       refuse if no call is reached inside --steps\n"
+          "                       compatibility alias for --capture-call 1\n"
+          "  --capture-call N record the Nth executed jal after its delay slot; refuse with the\n"
+          "                   reached denominator if fewer than N calls occur inside --steps\n"
+          "  --model-bios-return TABLE:FN:V0\n"
+          "                 when execution reaches the named A0/B0/C0 vector with $t1 == FN, install\n"
+          "                 explicit $v0 (preserving $v1), resume at the observed $ra, and capture the\n"
+          "                 first subsequent call or hardware access. The consumer owns the BIOS\n"
+          "                 semantics; this tool only validates and applies the modeled return.\n"
           "  --summary-only omit per-step lines; keep the headers, the boundary register dump and the\n"
           "                 summary. For long windows (a bss-zeroing loop is ~200k instructions) where the\n"
           "                 per-step detail would be gigabytes and only the boundary is of interest.\n"
@@ -87,8 +146,9 @@ int main(int argc, char **argv) {
   const char *path = NULL, *out_path = NULL;
   long steps = 200;
   uint32_t entry_override = 0;
-  int capture_first_call = 0;
+  long capture_call_ordinal = 0;
   int summary_only = 0;
+  ModeledBiosReturn modeled_bios = {0};
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--steps") && i + 1 < argc) {
@@ -98,7 +158,25 @@ int main(int argc, char **argv) {
     } else if (!strcmp(argv[i], "--entry") && i + 1 < argc) {
       entry_override = (uint32_t)strtoul(argv[++i], NULL, 0);
     } else if (!strcmp(argv[i], "--capture-first-call")) {
-      capture_first_call = 1;
+      if (capture_call_ordinal > 1) {
+        fprintf(
+            stderr, "oracle_trace: --capture-first-call conflicts with --capture-call %ld.\n", capture_call_ordinal);
+        return 2;
+      }
+      capture_call_ordinal = 1;
+    } else if (!strcmp(argv[i], "--capture-call") && i + 1 < argc) {
+      char *end = NULL;
+      const long ordinal = strtol(argv[++i], &end, 0);
+      if (!end || *end != '\0' || ordinal <= 0 || (capture_call_ordinal && capture_call_ordinal != ordinal)) {
+        fprintf(stderr, "oracle_trace: invalid or conflicting --capture-call ordinal %s.\n", argv[i]);
+        return 2;
+      }
+      capture_call_ordinal = ordinal;
+    } else if (!strcmp(argv[i], "--model-bios-return") && i + 1 < argc) {
+      if (!parse_modeled_bios_return(argv[++i], &modeled_bios)) {
+        fprintf(stderr, "oracle_trace: invalid --model-bios-return %s (expected A:0x39:0 style).\n", argv[i]);
+        return 2;
+      }
     } else if (!strcmp(argv[i], "--summary-only")) {
       summary_only = 1;
     } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
@@ -226,8 +304,16 @@ int main(int argc, char **argv) {
           t_size);
   fprintf(out, "# entry: 0x%08X%s\n", entry, entry_override ? " (--entry override)" : " (header pc0)");
   fprintf(out, "# steps requested: %ld\n", steps);
-  if (capture_first_call) {
-    fprintf(out, "# requested call capture: first executed jal\n");
+  if (capture_call_ordinal) {
+    fprintf(out, "# requested call capture: executed jal ordinal %ld\n", capture_call_ordinal);
+  }
+  if (modeled_bios.enabled) {
+    fprintf(out,
+            "# requested modeled BIOS return: %c(0x%02X) at 0x%08X, explicit v0=0x%08X, v1 preserved\n",
+            modeled_bios.table,
+            modeled_bios.function,
+            modeled_bios.target,
+            modeled_bios.v0);
   }
   fprintf(out, "# format: <n> <pc> <cycles> [reg=value ...]  — only CHANGED registers are listed\n");
 
@@ -249,14 +335,26 @@ int main(int argc, char **argv) {
   int jal_pending = 0;
   uint32_t jal_pending_ra = 0;
   long captured_call_step = -1;
+  long completed_jal_calls = 0;
+  long modeled_return_step = -1;
+  long post_return_call_step = -1;
+  long post_return_hardware_step = -1;
+  int modeled_return_refused = 0;
+  int post_call_pending = 0;
+  uint32_t post_call_pending_ra = 0;
 
   for (n = 0; n < steps; n++) {
     // Identify jal from the instruction bytes, not from a change to $ra: ordinary instructions and jalr
     // can also write r31. The executable bytes are independent of the symbolic crt0 decoder.
     int executed_jal = 0;
+    int executed_link_call = 0;
     if (present >= 4 && prev.pc >= t_addr && prev.pc <= t_addr + present - 4) {
       const uint32_t offset = prev.pc - t_addr;
-      executed_jal = (rd32le(img + PSX_EXE_HEADER_BYTES + offset) >> 26) == 3;
+      const uint32_t instruction = rd32le(img + PSX_EXE_HEADER_BYTES + offset);
+      const uint32_t opcode = instruction >> 26;
+      executed_jal = opcode == 3;
+      executed_link_call =
+          executed_jal || (opcode == 0 && (instruction & 0x3Fu) == 9u && ((instruction >> 11) & 0x1Fu) != 0);
     }
     stop = oracle_step();
     OracleState now;
@@ -313,18 +411,68 @@ int main(int argc, char **argv) {
       last_jal_ra = jal_pending_ra;
       last_jal_step = n;
       jal_pending = 0;
-      if (capture_first_call && captured_call_step < 0) {
+      completed_jal_calls++;
+      if (capture_call_ordinal == completed_jal_calls && captured_call_step < 0) {
         captured_call_step = n;
         fprintf(out, "# CAPTURED-CALL target=0x%08X ra=0x%08X step=%ld\n", last_jal_target, last_jal_ra, last_jal_step);
         dump_register_block(out, "CALL-BOUNDARY", n, &now);
+      }
+    }
+    if (post_call_pending) {
+      post_return_call_step = n;
+      post_call_pending = 0;
+      fprintf(out, "# POST-RETURN-CAPTURED-CALL target=0x%08X ra=0x%08X step=%ld\n", now.pc, post_call_pending_ra, n);
+      dump_register_block(out, "POST-RETURN-CALL-BOUNDARY", n, &now);
+    }
+
+    if (modeled_bios.enabled && modeled_return_step < 0 && now.pc == modeled_bios.target) {
+      if ((now.gpr[9] & 0xFFu) != modeled_bios.function) {
+        fprintf(stderr,
+                "oracle_trace: REFUSING modeled BIOS return — reached %c0 at step %ld with $t1=0x%08X, "
+                "not requested function 0x%02X.\n",
+                modeled_bios.table,
+                n,
+                now.gpr[9],
+                modeled_bios.function);
+        modeled_return_refused = 1;
+      } else if (!oracle_resume_call_return(modeled_bios.target, now.gpr[31], modeled_bios.v0, now.gpr[3])) {
+        modeled_return_refused = 1;
+      } else {
+        const uint32_t return_pc = now.gpr[31];
+        const uint32_t preserved_v1 = now.gpr[3];
+        modeled_return_step = n;
+        post_call_pending = 0;
+        oracle_capture(&now);
+        fprintf(out,
+                "# MODELED-BIOS-RETURN table=%c function=0x%02X target=0x%08X ra=0x%08X "
+                "v0=0x%08X v1=0x%08X step=%ld\n",
+                modeled_bios.table,
+                modeled_bios.function,
+                modeled_bios.target,
+                return_pc,
+                modeled_bios.v0,
+                preserved_v1,
+                n);
+        dump_register_block(out, "MODELED-RETURN", n, &now);
       }
     }
     if (executed_jal) {
       jal_pending = 1;
       jal_pending_ra = now.gpr[31];
     }
+    if (executed_link_call && modeled_return_step >= 0 && post_return_call_step < 0) {
+      post_call_pending = 1;
+      post_call_pending_ra = now.gpr[31];
+    }
 
-    if (stop != ORACLE_STOP_BUDGET) {
+    if (stop == ORACLE_STOP_HARDWARE && modeled_return_step >= 0 && post_return_call_step < 0) {
+      post_return_hardware_step = n;
+      fprintf(out, "# POST-RETURN-HARDWARE address=0x%08X step=%ld\n", now.stop_addr, n);
+      dump_register_block(out, "POST-RETURN-HARDWARE-BOUNDARY", n, &now);
+    }
+
+    if (modeled_return_refused || post_return_call_step >= 0 || post_return_hardware_step >= 0 ||
+        stop != ORACLE_STOP_BUDGET) {
       break;
     }
     prev = now;
@@ -346,11 +494,19 @@ int main(int argc, char **argv) {
     fprintf(out, "# hardware address: 0x%08X\n", fin.stop_addr);
   }
   if (left_text_step >= 0) {
-    fprintf(out,
-            "# left mapped text at step %ld (pc=0x%08X); everything after that is NOT game code from\n"
-            "#   this image, and no compare should treat it as such\n",
-            left_text_step,
-            left_text_at);
+    if (modeled_return_step >= 0) {
+      fprintf(out,
+              "# left mapped text at step %ld (pc=0x%08X), then resumed at the explicit modeled-call\n"
+              "#   return boundary at the same step; no external-vector instructions were executed\n",
+              left_text_step,
+              left_text_at);
+    } else {
+      fprintf(out,
+              "# left mapped text at step %ld (pc=0x%08X); everything after that is NOT game code from\n"
+              "#   this image, and no compare should treat it as such\n",
+              left_text_step,
+              left_text_at);
+    }
   } else {
     fprintf(out,
             "# NEVER LEFT the mapped text in %ld traced step(s) — no boundary was reached, so this\n"
@@ -358,14 +514,43 @@ int main(int argc, char **argv) {
             "#   be performed from it. Raise --steps.\n",
             traced);
   }
-  if (capture_first_call) {
+  if (capture_call_ordinal) {
     if (captured_call_step >= 0) {
-      fprintf(out, "# captured first executed call at step %ld\n", captured_call_step);
+      fprintf(out,
+              "# captured executed jal call %ld of %ld requested at step %ld; observed %ld total\n",
+              capture_call_ordinal,
+              capture_call_ordinal,
+              captured_call_step,
+              completed_jal_calls);
     } else {
       fprintf(out,
-              "# FIRST CALL WAS NOT REACHED in %ld traced step(s) — no call-boundary comparison\n"
-              "#   can be performed. Raise --steps.\n",
+              "# REQUESTED CALL WAS NOT REACHED in %ld traced step(s): reached %ld of %ld executed jal\n"
+              "#   call boundary/boundaries; no CALL-BOUNDARY block was written. Raise --steps.\n",
+              traced,
+              completed_jal_calls,
+              capture_call_ordinal);
+    }
+  }
+  if (modeled_bios.enabled) {
+    if (modeled_return_step < 0) {
+      fprintf(out,
+              "# MODELED BIOS RETURN WAS NOT APPLIED in %ld traced step(s); no post-return comparison\n"
+              "#   can be performed\n",
               traced);
+    } else if (post_return_call_step >= 0) {
+      fprintf(out,
+              "# post-return boundary: call captured at step %ld after modeled return at step %ld\n",
+              post_return_call_step,
+              modeled_return_step);
+    } else if (post_return_hardware_step >= 0) {
+      fprintf(out,
+              "# post-return boundary: hardware captured at step %ld after modeled return at step %ld\n",
+              post_return_hardware_step,
+              modeled_return_step);
+    } else {
+      fprintf(out,
+              "# NO POST-RETURN CALL OR HARDWARE was reached after modeled return at step %ld; raise --steps\n",
+              modeled_return_step);
     }
   }
   if (summary_only) {
@@ -387,21 +572,41 @@ int main(int argc, char **argv) {
           fin.pc,
           oracle_stop_name(stop));
   if (left_text_step >= 0) {
-    fprintf(stderr,
-            "  left the mapped text at step %ld -> pc=0x%08X. That is the end of the straight-line\n"
-            "  window; see the plan's BIOS-call boundary (milestone 3).\n",
-            left_text_step,
-            left_text_at);
+    if (modeled_return_step >= 0) {
+      fprintf(stderr,
+              "  reached external pc=0x%08X at step %ld, applied the explicit modeled return, and\n"
+              "  resumed the same independent CPU without executing vector memory.\n",
+              left_text_at,
+              left_text_step);
+    } else {
+      fprintf(stderr,
+              "  left the mapped text at step %ld -> pc=0x%08X. That is the end of the straight-line\n"
+              "  window; see the plan's BIOS-call boundary (milestone 3).\n",
+              left_text_step,
+              left_text_at);
+    }
   }
   if (out_path) {
     fprintf(stderr, "  trace: %s\n", out_path);
   }
 
-  if (capture_first_call && captured_call_step < 0) {
-    fprintf(stderr, "oracle_trace: REFUSING — no call was reached in %ld step(s).\n", traced);
+  if (capture_call_ordinal && captured_call_step < 0) {
+    fprintf(stderr,
+            "oracle_trace: REFUSING — reached %ld of %ld requested executed jal call boundary/boundaries "
+            "in %ld step(s).\n",
+            completed_jal_calls,
+            capture_call_ordinal,
+            traced);
+  }
+
+  const int modeled_incomplete =
+      modeled_bios.enabled && (modeled_return_step < 0 || (post_return_call_step < 0 && post_return_hardware_step < 0));
+  if (modeled_incomplete || modeled_return_refused) {
+    fprintf(stderr,
+            "oracle_trace: REFUSING — the requested modeled return and post-return boundary were not both proven.\n");
   }
 
   free(img);
   oracle_teardown();
-  return capture_first_call && captured_call_step < 0 ? 2 : 0;
+  return (capture_call_ordinal && captured_call_step < 0) || modeled_incomplete || modeled_return_refused ? 2 : 0;
 }

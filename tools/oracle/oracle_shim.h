@@ -68,6 +68,21 @@ void oracle_capture(OracleState *out);
 // timestamp, so restarting it at 0 every step would make stalls expire early and quietly change results.
 OracleStop oracle_step(void);
 
+// Resume the SAME independent CPU after a caller has explicitly modeled an external call's semantics.
+// The caller supplies the boundary it observed and the complete two-register return value. The shim
+// refuses if either the current target or $ra changed, if a delayed load is still pending, or if $ra is
+// not an aligned main-RAM address. The load-delay refusal matters because a real external leaf would let
+// that load commit while an instant return cannot model the intervening instruction time. On success only
+// $v0/$v1 and the PC pipeline are changed. RAM, all other registers, and the monotonic timestamp remain
+// the state produced by the independent CPU.
+//
+// This is mechanism, not BIOS policy: deciding that A(39h) returns a particular value belongs to the
+// consumer that owns and cites those semantics. Returns 1 on success and 0 after naming a refusal.
+int oracle_resume_call_return(uint32_t expected_target,
+                              uint32_t expected_return_pc,
+                              uint32_t return_v0,
+                              uint32_t return_v1);
+
 // How many cycles the core has consumed since the last load. Carried across `oracle_step` calls, so a
 // trace can report where in the window a divergence sat.
 int32_t oracle_timestamp(void);
