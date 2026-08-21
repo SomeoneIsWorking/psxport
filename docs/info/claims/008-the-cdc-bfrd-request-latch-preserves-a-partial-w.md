@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cdc,cdrom,dma
 depends: runtime/recomp/cdc_native.cpp#write_request_register, tests/test_cdc_bfrd_split_dma.cpp#test_repeated_assertion_preserves_split_dma_cursor
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21 11:36:00
+verified_at: 2026-08-21 13:02:10
 ---
 
 ## Claim
@@ -33,3 +33,7 @@ consumer receives bytes from the wrong LBA/cursor.
 
 Reconfirmed against the deterministic drive-deadline model: BFRD suite 3/3 with 535 checks and
 continuous ReadN suite 5/5 with 59 checks.
+
+## Re-confirmed 2026-08-21
+
+Post-landing Clang CTest passed 77/77; the shipping BFRD suite passed its repeated-assertion, split-DMA, deasserted-access, and following-sector answers.

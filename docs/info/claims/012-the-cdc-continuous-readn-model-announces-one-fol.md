@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cdc,cdrom,readn,dma
 depends: runtime/recomp/cdc_native.cpp#cdc_drive_service, runtime/recomp/timing.cpp#Timing::advanceGuestInstructionTicks, tools/recomp/emit.py#emit_run, tests/test_cdc_continuous_read.cpp#test_first_sector_waits_one_drive_period
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21 11:36:00
+verified_at: 2026-08-21 13:02:10
 ---
 
 ## Claim
@@ -49,3 +49,7 @@ Pause before the next sector.
 
 Reconfirmed on the deterministic-cycle implementation with the hermetic both-answer gates and live
 Crash Bash/Vagrant Story consumers above. The final Clang CTest suite passes 77/77.
+
+## Re-confirmed 2026-08-21
+
+Post-landing Clang CTest passed 77/77; deterministic deadline tests passed and Toy Story 2, Vagrant Story, and Crash Bash all advanced past their former synchronous or stalled ReadN boundaries.

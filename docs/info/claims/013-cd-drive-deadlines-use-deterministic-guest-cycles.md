@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: timing,cdc,determinism,recompiler,interpreter
 depends: runtime/recomp/timing.cpp#Timing::advanceGuestInstructionTicks, runtime/recomp/interp.cpp#interp_flat, tools/recomp/emit.py#emit_run, tests/test_interp_guest_cycles.cpp#test_interpreter_ticks_service_the_shipping_cdc_deadline, tools/recomp/test_emit.py#test_exec_loop_sum
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21 12:45:00
+verified_at: 2026-08-21 13:02:10
 ---
 
 ## Claim
@@ -37,3 +37,7 @@ drive deadline for the same guest instruction stream; an interpreted and emitted
 window reports different instruction ticks; a loop counts its static body rather than executed
 iterations; or any CDC sector event is armed from host wall time. Claiming physical drive-rate or
 cycle accuracy before issue 0007 is resolved also falsifies the scope of this claim.
+
+## Re-confirmed 2026-08-21
+
+Post-landing emitted/interpreted instruction-tick parity gates passed inside the 77/77 suite; path-sensitive loop timing retained 23 ticks and production consumers retained deterministic sector ordering independent of host wall time.
