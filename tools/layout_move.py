@@ -99,7 +99,6 @@ SUBSYS = {
     "gpu_vk_semi_selftest.cpp": "gpu", "gpu_vk_semi_selftest.h": "gpu",
     "gpu_vk_selftest_support.h": "gpu",
     "gpu_vk_texture_phase_selftest.cpp": "gpu", "gpu_vk_texture_phase_selftest.h": "gpu",
-    "gpu_vk_shaders.h": "gpu",           # GENERATED (gitignored) — see GEN_ONLY below
     "gpu_native.cpp": "gpu", "gpu_native_internal.h": "gpu",
     "gpu_debug.cpp": "gpu",
     "gpu_perf.cpp": "gpu", "gpu_perf.h": "gpu",
@@ -171,9 +170,9 @@ SUBSYS = {
 # Directories under runtime/recomp/ that move wholesale.
 DIR_MOVES = {"shaders_gpu": "gpu/shaders_gpu"}
 
-# In SUBSYS for the include rewrite, but NOT on disk in git: generated, gitignored. The build
-# regenerates it at its new path (tools/gen_gpu_shaders.py, rewritten below).
-GEN_ONLY = {"gpu_vk_shaders.h"}
+# Ignored debris from the former source-tree shader output. The generator now writes only to each
+# consumer's build tree, so the layout move removes this file without recreating it under runtime/.
+LEGACY_GENERATED = {"gpu_vk_shaders.h"}
 
 SRC_EXT = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc")
 
@@ -270,14 +269,19 @@ set_source_files_properties(${MED}/psx/gte.c PROPERTIES
 
 PSXPORT_BUILD_FILES = {
     "cmake/psxport.cmake": [("set(RT runtime/recomp)", "set(RT runtime)", 1),
-                            (GTE_SHIM_ANCHOR, GTE_SHIM, 1),
-                            ("${RT}/gpu/shaders_gpu", "${RT}/gpu/shaders_gpu", 2),
-                            ("${RT}/gpu/gpu_vk_shaders.h", "${RT}/gpu/gpu_vk_shaders.h", 1)],
+                            (GTE_SHIM_ANCHOR, GTE_SHIM, 1)],
+    "cmake/gpu_shaders.cmake": [
+        ("set(shader_runtime_dir ${psxport_root}/runtime)",
+         "set(shader_runtime_dir ${psxport_root}/runtime/gpu)", 1),
+    ],
     "tools/gen_gpu_shaders.py": [
         ('SHADER_DIR_REL = Path("runtime/recomp/shaders_gpu")',
          'SHADER_DIR_REL = Path("runtime/gpu/shaders_gpu")', 1),
-        ('OUTPUT_REL = Path("runtime/recomp/gpu_vk_shaders.h")',
-         'OUTPUT_REL = Path("runtime/gpu/gpu_vk_shaders.h")', 1),
+        ('LEGACY_SOURCE_OUTPUT_REL = Path("runtime/gpu_vk_shaders.h")',
+         'LEGACY_SOURCE_OUTPUT_REL = Path("runtime/gpu/gpu_vk_shaders.h")', 1),
+    ],
+    "tests/test_gpu_shader_build_ownership.py": [
+        ('runtime/gpu_vk_shaders.h', 'runtime/gpu/gpu_vk_shaders.h', 2),
     ],
     "tools/fmv_export/build.sh": [("RE=runtime", "RE=runtime", 1),
                                   ("$RE/media/mdec_beetle.c", "$RE/media/mdec_beetle.c", 1),
@@ -623,15 +627,13 @@ def do_apply(psxport_root, games, dry, rep, do_docs=True):
         git(psxport_root, "mv", o, n)
     rep.say(f"  git mv: {len(moves)} files moved")
 
-    # 1b. the generated, gitignored header that used to be emitted into runtime/recomp/. It is
-    #     rebuilt at its new path by tools/gen_gpu_shaders.py; the stale copy is debris that would
-    #     otherwise keep runtime/recomp/ alive as an empty directory.
-    for base in GEN_ONLY:
+    # 1b. Remove the old generated, gitignored source-tree header. Shader outputs are now owned by
+    #     each consumer build tree, so no corresponding runtime/gpu file is created.
+    for base in LEGACY_GENERATED:
         stale = os.path.join(psxport_root, OLD_DIR, base)
         if os.path.exists(stale):
             os.remove(stale)
-            rep.say(f"  removed stale generated {OLD_DIR}/{base} (rebuilt at "
-                    f"{NEW_DIR}/{SUBSYS[base]}/{base})")
+            rep.say(f"  removed stale generated {OLD_DIR}/{base} (build-tree owned)")
 
     # 1c. git tracks files, not directories, so `git mv` leaves the emptied runtime/recomp/ (and its
     #     shaders_gpu/) on disk. An empty directory with the OLD name is a trap for the next `ls`.

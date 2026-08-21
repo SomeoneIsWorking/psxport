@@ -57,31 +57,13 @@ set(RMLUI_LOTTIE_PLUGIN  OFF CACHE BOOL   "" FORCE)
 set(RMLUI_FONT_ENGINE    freetype CACHE STRING "" FORCE)
 add_subdirectory(${PSXPORT_ROOT}/vendor/rmlui ${CMAKE_BINARY_DIR}/rmlui_build EXCLUDE_FROM_ALL)
 
-# ---- generated SDL_GPU SPIR-V header (runtime/recomp/gpu_vk_shaders.h) ------------------------
+# ---- generated SDL_GPU SPIR-V header ----------------------------------------------------------
 # tools/gen_gpu_shaders.py compiles shaders_gpu/*.{vert,frag} (incl. the RmlUi overlay shaders) and
-# embeds the SPIR-V into the source tree. Shared *.glsl includes are dependencies, not entry points.
-file(GLOB SHADER_SRCS CONFIGURE_DEPENDS
-  ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.vert ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.frag
-  ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.glsl)
-set(SHADERS_H ${PSXPORT_ROOT}/${RT}/gpu_vk_shaders.h)
-# The stamp owns dependency freshness; the generated header is replaced only when its bytes change.
-# A timestamp-only shader edit therefore recompiles GLSL without forcing every header consumer to rebuild.
-set(SHADERS_STAMP ${CMAKE_CURRENT_BINARY_DIR}/psxport_gpu_shaders.stamp)
-add_custom_command(OUTPUT ${SHADERS_STAMP}
-  BYPRODUCTS ${SHADERS_H}
-  COMMAND ${PSXPORT_ROOT}/tools/gen_gpu_shaders.py --stamp ${SHADERS_STAMP}
-  DEPENDS ${SHADER_SRCS} ${PSXPORT_ROOT}/tools/gen_gpu_shaders.py
-  WORKING_DIRECTORY ${PSXPORT_ROOT}
-  COMMENT "Generating SDL_GPU SPIR-V header (gpu_vk_shaders.h)"
-  VERBATIM)
-# Makefile generators do not rebuild a missing BYPRODUCT from the stamp rule. Keep one cheap existence
-# guard on the target: with a current stamp it performs only Python stat checks; if the ignored header
-# was removed, the same authoritative generator recreates it before any C++ compiler can include it.
-add_custom_target(gen_gpu_shaders
-  COMMAND ${PSXPORT_ROOT}/tools/gen_gpu_shaders.py --stamp ${SHADERS_STAMP}
-  DEPENDS ${SHADERS_STAMP}
-  WORKING_DIRECTORY ${PSXPORT_ROOT}
-  VERBATIM)
+# embeds the SPIR-V into this consumer's build tree. Shared *.glsl includes are dependencies, not
+# entry points. A source-tree output is incorrect: independent consumer builds would all register the
+# same ignored file as their BYPRODUCT, so cleaning one build could delete another build's input.
+include(${PSXPORT_ROOT}/cmake/gpu_shaders.cmake)
+psxport_add_gpu_shaders(${PSXPORT_ROOT} SHADERS_H)
 
 # ---- framework source list (PSX-generic; NO game/*, NO generated/*) ---------------------------
 # All of runtime/recomp/** + the vendored Beetle GTE/MDEC/SPU C backends + the RmlUi SDL backend.
@@ -224,8 +206,8 @@ set_target_properties(psxport PROPERTIES
   CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
 # Framework include dirs. RT + generated + the vendored backends are PUBLIC so consumers inherit them.
-# generated/ is PUBLIC because framework sources include generated headers (overlay_router.cpp ->
-# overlay_table.h; gpu_vk.cpp/rmlui_render_gpu.cpp -> gpu_vk_shaders.h which is in RT). The symbols
+# generated/ is PUBLIC because framework sources include game-generated headers (overlay_router.cpp ->
+# overlay_table.h). The shader header is separately build-owned under ${CMAKE_BINARY_DIR}. The symbols
 # those generated headers declare (main_dispatch, g_rec_overlays, rec_func_index) are DEFINED in
 # generated/ sources (the game substrate) — so the archive carries them as UNDEFINED, resolved only at
 # the final game-exe link. That is expected for a static archive.

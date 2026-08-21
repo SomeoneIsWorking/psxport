@@ -29,10 +29,10 @@
 // ONE per process — the first Game constructed claims it (GpuDevice::sInstance); the wrappers
 // ignore Core* exactly as before. The per-frame batch state lives on GpuVkState (game.h).
 #include "cfg.h"
-#include "gpu_vk_shaders.h" // generated: spv_g_present_{vert,frag} / spv_g_image_{vert,frag}
-#include "mods.h"           // Mods: per-Game mod toggles (wide/ires) — reached via game->mods
-#include "overlay_glue.h"   // RmlUi mod/debug overlay hooks (init / event / per-frame / record)
-#include "video_plan.h"     // video_wide_native_w / video_ires_scale — resolution from the SINK, not a window
+#include "mods.h"                             // Mods: per-Game mod toggles (wide/ires) — reached via game->mods
+#include "overlay_glue.h"                     // RmlUi mod/debug overlay hooks (init / event / per-frame / record)
+#include "psxport_generated/gpu_vk_shaders.h" // generated SPIR-V for the SDL_GPU renderer
+#include "video_plan.h" // video_wide_native_w / video_ires_scale — resolution from the SINK, not a window
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include <math.h>

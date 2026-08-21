@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "gpu_vk_shaders.h" // generated SPIR-V: spv_g_rml_vert / spv_g_rml_frag
+#include "psxport_generated/gpu_vk_shaders.h" // generated SPIR-V: spv_g_rml_vert / spv_g_rml_frag
 #include <lucent/log.h>
 
 namespace {

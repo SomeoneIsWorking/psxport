@@ -15,7 +15,8 @@ absent on iOS, and its immediate-mode batch fought a custom integer-VRAM PSX ras
 
 ## Asset reuse (big)
 - **Shaders:** reuse `runtime/recomp/shaders_vk/*.{vert,frag}` as-is. `tools/gen_vk_shaders.sh` already
-  compiles them GLSL→SPIR-V→`gpu_vk_shaders.h` (embedded). SDL_GPU's Vulkan backend consumes SPIR-V
+  compiles them GLSL→SPIR-V→the consumer build's `psxport_generated/gpu_vk_shaders.h` (embedded).
+  SDL_GPU's Vulkan backend consumes SPIR-V
   directly (`SDL_CreateGPUShader` with `SDL_GPU_SHADERFORMAT_SPIRV`). For Metal (Mac): transpile the same
   SPIR-V via **SDL_shadercross** (offline or at load) — add for the Mac build.
 - **Renderer design:** `gpu_vk.cpp` is the behavioral reference — VRAM R16_UINT image, the tri/tritex/semi
@@ -43,7 +44,8 @@ absent on iOS, and its immediate-mode batch fought a custom integer-VRAM PSX ras
 
 ## Phasing (this is the plan the swarm executes)
 1. **Module + build:** new `runtime/recomp/gpu_vk.cpp` providing EVERY `gpu_vk_*`/`gpu_*` entry point from
-   `gpu_vk.h` on SDL_GPU. SDL2→SDL3 in CFLAGS/link. Reuse `gpu_vk_shaders.h` (SPIR-V). Build green.
+   `gpu_vk.h` on SDL_GPU. SDL2→SDL3 in CFLAGS/link. Reuse the build-owned shader header (SPIR-V).
+   Build green.
 2. **Single-core game renders:** VRAM 2D + native 3D (depth) + present + fade + `shot`. Verify on Linux
    (Vulkan backend) + USER eyeballs Mac (Metal).
 3. **SBS:** two offscreen targets composited side-by-side (native Metal → no MoltenVK black).
@@ -57,7 +59,8 @@ absent on iOS, and its immediate-mode batch fought a custom integer-VRAM PSX ras
     uploaded each present; present pass (sample VRAM 1555 → swapchain, letterbox 4:3 + fade); fullscreen
     IMAGE present (SCEA/FMV); headless VRAM readback (`shot`). All `gpu_vk_*` symbols provided.
   - shaders: `runtime/recomp/shaders_gpu/{present,image}.{vert,frag}` (SDL_GPU binding convention —
-    frag samplers set=2, frag uniform buffers set=3) → `gpu_vk_shaders.h` via `tools/gen_gpu_shaders.py`.
+    frag samplers set=2, frag uniform buffers set=3) → build-owned `gpu_vk_shaders.h` via
+    `tools/gen_gpu_shaders.py`.
   - SDL2→SDL3: `pad_input.cpp` (SDL_Gamepad + bool keyboard), `spu_audio.c` + `native_fmv.cpp`
     (SDL_AudioStream), `gpu_native.cpp` (retired the SDL_Renderer SW window — GPU path is THE present).
   - RmlUi overlay dropped (`rmlui_overlay_stub.cpp`); SBS two-pane present is now SDL_GPU (`sbs_present_sdl.cpp` + `gpu_vk_present_sbs2`). Build wires

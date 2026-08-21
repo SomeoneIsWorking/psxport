@@ -124,7 +124,9 @@ shipping GPU selftest reads both local and post-composite D32 boundaries. The un
 applies the PSX 4x4 dither matrix in native-pixel coordinates only for Gouraud+DTD; semi-transparent groups
 still refuse.
 `wide_margin_plan.h` (renderer-only coverage for host-visible VRAM extension),
-`gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`.
+`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`. `cmake/gpu_shaders.cmake` owns the
+per-consumer build-tree `psxport_generated/gpu_vk_shaders.h`; no generated shader header is shared
+through the source tree.
 **Independent GPU diagnostic:** `gpu_beetle.cpp` tees GP0/GP1, native image uploads, and GPUREAD drains
 into Beetle's software GPU without advancing its CPU/scanout clock; `GPU_StartFrame` is called only at
 guest-frame boundaries. The census in `psxport_gpu_census.h` owns accepted/dropped/dispatched/known-no-op/
@@ -198,7 +200,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 | `port_gen.py` | first-draft generator for a byte-faithful native class method | |
 | `logsig.py` | extract the message template of every diagnostic call site | selftest PASSES |
 | `layout_move.py` | the planned `runtime/recomp/` -> `runtime/<subsystem>/` move | selftest PASSES; move NOT done yet |
-| `gen_gpu_shaders.py` | compile the fixed SDL_GPU shader set and shared includes into `gpu_vk_shaders.h` | 5/5 selftest; build-tree stamp keeps byte-identical header mtimes stable |
+| `gen_gpu_shaders.py` | compile the fixed SDL_GPU shader set and shared includes into each consumer build's `psxport_generated/gpu_vk_shaders.h` | 7/7 selftest; `test_gpu_shader_build_ownership.py` 3/3 proves concurrent CMake builds survive peer clean and reproduces the legacy shared-BYPRODUCT failure |
 | `tool_selftests.py` | run every tool's `--selftest` in a repo, and name the ones with none | in `scripts/` |
 | `exe_similarity.py` | address-independent code similarity between PS-EXE images | needs 2 executables |
 | `lineage_probe.py` | whole-function + string lineage evidence between PS-EXE images | selftest needs a corpus |
