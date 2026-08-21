@@ -155,7 +155,11 @@ reasserting it preserves a partial DMA cursor, and a later transition only insta
 drive deadline already elapsed. Pause/Stop cancels the owned deadline. `test_cdc_bfrd_split_dma`
 gates latch/access behavior (535 checks), `test_cdc_continuous_read` gates too-early/due, partial,
 Pause, full-drain, status and speed answers (59 checks), and `test_interp_guest_cycles` plus the
-emitter execution suite gate interpreted/emitted clock advancement.
+emitter execution suite gate interpreted/emitted clock advancement. DMA3 commits its programmed
+word count: FIFO words first, then the controller's zero read value after depletion; it never
+preserves stale destination RAM or consumes a future sector. `test_cdc_dma_depletion` gates the
+shipping CDC and Core DMA3 paths with the measured 504-word/70-word-tail split, including deasserted
+BFRD (3 cases, 1,518 checks).
 **Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle
 gte.c). `gte_state.h::GTE_ExecuteIsolated` runs any vendor GTE instruction against an explicit `GteRegs`
 without changing the caller's bound state. Its implementation tracks nested isolation depth and suppresses

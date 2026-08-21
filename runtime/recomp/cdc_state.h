@@ -63,8 +63,9 @@ int cdc_drive_service(CdcState *s);
 // MMIO 0x1F801800-3 register model — the instance is explicit (mem.cpp passes &game->cdc).
 uint32_t cdc_read(CdcState *s, uint32_t p);
 void cdc_write(CdcState *s, uint32_t p, uint8_t v);
-// DMA3 (CDROM -> RAM) FIFO drain, called by the DMA3 CHCR model in mem.cpp. Returns words delivered;
-// a short return means the FIFO ran dry and the transfer is genuinely incomplete.
+// DMA3 (CDROM -> RAM) controller read, called by the DMA3 CHCR model in mem.cpp. Writes every
+// requested output word: FIFO data first, then the controller's zero value after depletion. Returns
+// the FIFO-sourced word count so the caller can report the exact zero-filled denominator.
 int cdc_dma_read(CdcState *s, uint32_t *out, int words);
 // Position the controller at `lba` and load that sector into the data FIFO, so a guest driving the
 // hardware directly (XA/streaming: spin on DRQSTS, then DMA3) sees real data even when the libcd

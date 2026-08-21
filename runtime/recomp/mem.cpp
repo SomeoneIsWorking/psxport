@@ -845,20 +845,20 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         n = 0x10000;
       }
       const uint32_t da = s_dma3_madr & 0x1FFFFC;
-      const int got = cdc_dma_read(&game->cdc, s_dma_buf, n);
-      for (int i = 0; i < got; i++) {
+      const int fifo_words = cdc_dma_read(&game->cdc, s_dma_buf, n);
+      for (int i = 0; i < n; i++) {
         mem_w32(da + i * 4, s_dma_buf[i]);
       }
-      // A short drain means the sector FIFO ran dry. Report it and write NOTHING for the missing
-      // words — filling them would hand the guest fabricated data that looks like a real read.
-      if (got < n) {
-        lucent::error("cdc",
-                      "DMA3 underrun: guest asked {} words, FIFO held {} — the missing words were "
-                      "NOT written, so this read is genuinely incomplete",
-                      n,
-                      got);
-      }
-      lucent::debug("cdc", "DMA3 {} words -> 0x{:08X} (head now LBA {})", got, 0x80000000u | da, game->cdc.loc_lba);
+      // CDC DMA returns zero after the FIFO empties (Beetle PS_CDC_DMARead) and still completes.
+      // Keep both populations visible so a normal libstr tail flush cannot masquerade as disc data
+      // and an unexpected depletion cannot disappear silently.
+      lucent::debug("cdc",
+                    "DMA3 {} words -> 0x{:08X}: FIFO {} + controller-zero {} (head LBA {})",
+                    n,
+                    0x80000000u | da,
+                    fifo_words,
+                    n - fifo_words,
+                    game->cdc.loc_lba);
       s_dma3_chcr &= ~0x01000000u; // clear busy: the completion poll must pass
       irqStatLatch();              // draining a sector queues the next INT1
       // Announce completion — but ONLY if the guest asked to hear about THIS transfer. DICR is where

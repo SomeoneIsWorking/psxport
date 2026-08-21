@@ -208,9 +208,11 @@ static void sector_consumed(CdcState *s) {
   s->bfrd = 0;
 }
 
-// DMA3 (CDROM -> RAM): pop up to `words` 32-bit words from the sector data FIFO. Returns the count
-// actually delivered; a SHORT return means the FIFO ran dry and the caller must say so loudly — a
-// transfer reported complete that moved nothing is exactly the silent lie this layer must not tell.
+// DMA3 (CDROM -> RAM): produce exactly `words` controller-read words. Bytes available in the data
+// FIFO are drained first; the controller returns zero after depletion, matching Beetle's
+// PS_CDC_DMARead rather than leaving the destination's old RAM contents in place. The return value
+// is the number of words sourced from the FIFO, so the DMA owner can report the exact zero-filled
+// denominator without pretending those zeros came from the disc.
 // Begin a sequential read at `lba`; the first sector becomes available after one drive period.
 //
 // Why the HLE path must call this: a game can read the disc at TWO levels. File reads go through
@@ -247,6 +249,10 @@ void cdc_begin_read(CdcState *s, uint32_t lba) {
 }
 
 int cdc_dma_read(CdcState *s, uint32_t *out, int words) {
+  if (words <= 0) {
+    return 0;
+  }
+  memset(out, 0, (size_t)words * sizeof *out);
   if (!s->bfrd) {
     return 0;
   }
