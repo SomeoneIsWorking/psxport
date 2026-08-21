@@ -205,7 +205,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 | `port_gen.py` | first-draft generator for a byte-faithful native class method | |
 | `logsig.py` | extract the message template of every diagnostic call site | selftest PASSES |
 | `layout_move.py` | the planned `runtime/recomp/` -> `runtime/<subsystem>/` move | selftest PASSES; move NOT done yet |
-| `gen_gpu_shaders.py` | compile the fixed SDL_GPU shader set and shared includes into each consumer build's `psxport_generated/gpu_vk_shaders.h` | 7/7 selftest; `test_gpu_shader_build_ownership.py` 3/3 proves concurrent CMake builds survive peer clean and reproduces the legacy shared-BYPRODUCT failure |
+| `gen_gpu_shaders.py` | compile the fixed SDL_GPU shader set and shared includes into each consumer build's `psxport_generated/gpu_vk_shaders.h` | 7/7 selftest; `test_gpu_shader_build_ownership.py` 4/4 compiles nested `add_subdirectory` consumers, survives peer clean, rejects a missing target include owner, and reproduces the legacy shared-BYPRODUCT failure |
 | `tool_selftests.py` | run every tool's `--selftest` in a repo, and name the ones with none | in `scripts/` |
 | `exe_similarity.py` | address-independent code similarity between PS-EXE images | needs 2 executables |
 | `lineage_probe.py` | whole-function + string lineage evidence between PS-EXE images | selftest needs a corpus |

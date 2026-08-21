@@ -257,7 +257,7 @@ def rules_for(rel):
 # Measured, not assumed: `gte_state.h` is the ONLY framework header any file under
 # vendor/beetle-psx/mednafen/ includes. mdec_state.h / mdec_device.h / spu_state.h / spu_device.h
 # are reached only from psxport's own mdec_beetle.c / spu_beetle.cpp, which the move rewrites.
-GTE_SHIM_ANCHOR = "add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC} ${SHADERS_H})"
+GTE_SHIM_ANCHOR = "add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC})"
 GTE_SHIM = GTE_SHIM_ANCHOR + """
 
 # The vendored Beetle GTE core includes the framework's `gte_state.h` by bare name, and it lives in

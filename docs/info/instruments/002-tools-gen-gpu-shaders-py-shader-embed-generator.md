@@ -21,13 +21,16 @@ The concurrency cases generate two build-owned outputs simultaneously, remove on
 consumer clean, regenerate it, and prove the peer remains byte-identical. The opposite source-tree
 destination is refused.
 
-`tests/test_gpu_shader_build_ownership.py` independently includes the shipping CMake module in two
-Ninja build directories, builds both targets concurrently, and proves cleaning A removes only A's
-header. Its mutated legacy fixture registers one source-tree header as both builds' BYPRODUCT and
-reproduces the missing peer header after cleaning A: 3/3 with both answers.
+`tests/test_gpu_shader_build_ownership.py` independently includes the shipping CMake module through
+a nested `add_subdirectory` in two Ninja build directories. Both Clang targets compile a source that
+includes the generated header, and cleaning A removes only A's header. Removing the module's target
+include directory makes that nested compile fail on the generated include, while the legacy fixture
+registers one source-tree header as both builds' BYPRODUCT and reproduces peer deletion: 4/4 with
+both ownership failures.
 
 ## Known failure modes
 
 The former 5/5 selftest covered only one build directory and therefore could not detect cross-build
 BYPRODUCT deletion. Concurrency ownership requires the CMake integration gate as well as generator
-atomicity.
+atomicity. The first 3/3 CMake gate built only `gen_gpu_shaders`, so it missed that a nested consumer
+could generate the right file without exposing its sub-build include directory to the compiler.

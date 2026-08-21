@@ -63,7 +63,6 @@ add_subdirectory(${PSXPORT_ROOT}/vendor/rmlui ${CMAKE_BINARY_DIR}/rmlui_build EX
 # entry points. A source-tree output is incorrect: independent consumer builds would all register the
 # same ignored file as their BYPRODUCT, so cleaning one build could delete another build's input.
 include(${PSXPORT_ROOT}/cmake/gpu_shaders.cmake)
-psxport_add_gpu_shaders(${PSXPORT_ROOT} SHADERS_H)
 
 # ---- framework source list (PSX-generic; NO game/*, NO generated/*) ---------------------------
 # All of runtime/recomp/** + the vendored Beetle GTE/MDEC/SPU C backends + the RmlUi SDL backend.
@@ -173,8 +172,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/verify_harness.cpp   # A/B verify scaffold (skip/observable half split to game verify_skip.cpp) (P1.7c)
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
-add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC} ${SHADERS_H})
-add_dependencies(psxport gen_gpu_shaders)
+add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC})
+psxport_add_gpu_shaders(${PSXPORT_ROOT} psxport)
 
 # ---- BUILD IDENTITY (kanban #91 step 2) -------------------------------------------------------
 # `git describe --always --dirty` for the framework AND for the consuming project, written into
@@ -207,7 +206,8 @@ set_target_properties(psxport PROPERTIES
 
 # Framework include dirs. RT + generated + the vendored backends are PUBLIC so consumers inherit them.
 # generated/ is PUBLIC because framework sources include game-generated headers (overlay_router.cpp ->
-# overlay_table.h). The shader header is separately build-owned under ${CMAKE_BINARY_DIR}. The symbols
+# overlay_table.h). The shader module separately attaches its exact build-owned include directory to
+# psxport; it may differ from ${CMAKE_BINARY_DIR} when a consumer uses add_subdirectory. The symbols
 # those generated headers declare (main_dispatch, g_rec_overlays, rec_func_index) are DEFINED in
 # generated/ sources (the game substrate) — so the archive carries them as UNDEFINED, resolved only at
 # the final game-exe link. That is expected for a static archive.

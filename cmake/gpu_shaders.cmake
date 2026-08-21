@@ -2,7 +2,7 @@
 #
 # Each configured build must own both the header and its dependency stamp. Registering a source-tree
 # header as a BYPRODUCT lets `clean` in any consumer delete the input of every other consumer.
-function(psxport_add_gpu_shaders psxport_root output_variable)
+function(psxport_add_gpu_shaders psxport_root target)
   set(shader_runtime_dir ${psxport_root}/runtime/recomp)
   file(GLOB shader_sources CONFIGURE_DEPENDS
     ${shader_runtime_dir}/shaders_gpu/*.vert
@@ -31,5 +31,7 @@ function(psxport_add_gpu_shaders psxport_root output_variable)
     WORKING_DIRECTORY ${psxport_root}
     VERBATIM)
 
-  set(${output_variable} ${shader_header} PARENT_SCOPE)
+  target_sources(${target} PRIVATE ${shader_header})
+  target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+  add_dependencies(${target} gen_gpu_shaders)
 endfunction()
