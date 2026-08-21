@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cdc,cdrom,readn,dma
 depends: runtime/recomp/cdc_native.cpp#announce_following_sector, tests/test_cdc_continuous_read.cpp#test_partial_fifo_does_not_block_following_sector_event
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21 11:35:46
+verified_at: 2026-08-21 11:36:00
 ---
 
 ## Claim
@@ -24,6 +24,10 @@ A partial accepted FIFO suppresses the following data-ready event, changes LBA/c
 ## Re-confirmed 2026-08-21
 
 Reconfirmed after the isolated Clang build and 75/75 CTests, targeted final continuous-read test 3/3 with 31 checks, prior BFRD suite 3/3 with 535 checks, real Crash Bash LBA35799-to-35800 transition and 189-sector pass, and bounded Tomba no-regression comparison.
+
+## Re-confirmed 2026-08-21
+
+Post-landing Clang build and 75/75 CTests passed; continuous ReadN shipping test passes 3/3 with 31 checks, and the isolated real Crash Bash consumer advanced from LBA35799 through LBA35987 without a recompilation miss.
 
 ## Re-confirmed 2026-08-21
 

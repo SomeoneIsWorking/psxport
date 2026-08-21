@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cdc,cdrom,dma
 depends: runtime/recomp/cdc_native.cpp#write_request_register, tests/test_cdc_bfrd_split_dma.cpp#test_repeated_assertion_preserves_split_dma_cursor
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21 11:35:45
+verified_at: 2026-08-21 11:36:00
 ---
 
 ## Claim
@@ -20,6 +20,10 @@ test_cdc_bfrd_split_dma drives cdc_begin_read, cdc_write and cdc_dma_read with s
 ## What would falsify it
 
 Any repeated asserted BFRD write changes loc_lba/data_rd or any deassert-then-assert transition fails to present the following sector; or a real consumer receives bytes from the wrong LBA/cursor under either sequence.
+
+## Re-confirmed 2026-08-21
+
+Post-landing Clang build and 75/75 CTests passed; the BFRD split-DMA shipping suite remains 3/3 with 535 checks while the continuous-ReadN suite passes 3/3.
 
 ## Re-confirmed 2026-08-21
 
