@@ -62,7 +62,7 @@ static uint32_t lba_from_param(CdcState *s) { // Setloc params: amm,ass,asect (B
   return (uint32_t)((mm * 60 + ss) * 75 + ff - 150);
 }
 
-static void load_sector(CdcState *s) { // fill the data FIFO with the sector at loc_lba
+static bool load_sector(CdcState *s) { // fill the data FIFO with the sector at loc_lba
   // WHAT THE FIFO CONTAINS DEPENDS ON Setmode's bit 0x20 ("whole sector"), and getting this wrong is
   // invisible until much later. Streaming code reads the first 8 words of each sector expecting the
   // 4-byte header plus 8-byte subheader — that is how it tells a video sector from an audio one.
@@ -76,7 +76,7 @@ static void load_sector(CdcState *s) { // fill the data FIFO with the sector at 
       lucent::error("cdc", "ReadN: no data for LBA {} — data FIFO left EMPTY", s->loc_lba);
       s->data_n = 0;
       s->data_rd = 0;
-      return;
+      return false;
     }
     // The subheader is at raw[16..23]: file, channel, submode, coding. Submode bit 0x04 marks an
     // XA-ADPCM audio sector. Logged for EVERY sector, with its submode, so a run's census carries
@@ -91,52 +91,64 @@ static void load_sector(CdcState *s) { // fill the data FIFO with the sector at 
     memcpy(s->data, raw + 12, 2340);
     s->data_n = 2340;
     s->data_rd = 0;
-    return;
+    return true;
   }
   uint8_t sec[2048];
   if (!disc_read_sector(s->disc, s->loc_lba, sec)) {
     lucent::error("cdc", "ReadN: no data for LBA {} (no disc, or out of range) — data FIFO left EMPTY", s->loc_lba);
     s->data_n = 0;
     s->data_rd = 0;
-    // AND STOP THE CONTINUOUS READ. A real drive runs out of disc: it cannot keep presenting sectors
-    // past the lead-out, so it stops raising INT1. Without this the ack path's advance is a feedback
-    // loop — ack raises the next INT1, which is acked, which advances again — and a consumer whose
-    // ack handling differs from the one this was designed for walks the head off the end of the disc
-    // forever. Measured in the Spyro port: 4.4 MILLION out-of-range reads in a 40s run, 8 frames
-    // presented instead of 18809, with the head at LBA 23476094 on a ~281k-sector disc.
-    s->reading = 0;
-    return;
+    return false;
   }
   memcpy(s->data, sec, 2048);
   s->data_n = 2048;
   s->data_rd = 0;
+  return true;
 }
 
-// A whole sector has been consumed (drained by DMA3 or popped by the CPU) during a continuous
-// ReadN/ReadS. Real hardware delivers the NEXT sector as a fresh INT1 one sector-time later; this
-// model is synchronous, so it is ready immediately: advance the head and announce INT1.
-//
-// Without this, exec_command queued exactly ONE INT1 per ReadN and never advanced loc_lba, so a
-// multi-sector read received sector N forever — the guest waits for a second sector that is never
-// announced. Nothing is raised when the drive is not reading (Pause/Stop cleared s->reading), so no
-// event is fabricated.
-// The single advance point. A sector is done when its FIFO has been fully consumed; the drive then
-// presents the next one and announces it. An earlier revision moved this to the interrupt-ACK path on
-// the theory that hardware paces per interrupt — but this guest's streaming reader never acks
-// (it drives BFRD directly), so advancement there never fired. Keep exactly one advance point.
+static void queue_data_ready(CdcState *s) {
+  const uint8_t response[1] = {s->stat};
+  cdc_irq(s, 1, response, 1);
+}
+
+static void stop_continuous_read(CdcState *s) {
+  s->reading = 0;
+  s->following_sector_ready = 0;
+}
+
+static void start_continuous_read(CdcState *s) {
+  s->reading = 1;
+  s->bfrd = 0;
+  s->following_sector_ready = 0;
+  if (!load_sector(s)) {
+    stop_continuous_read(s);
+    return;
+  }
+  queue_data_ready(s);
+}
+
+// The drive and the BFRD data FIFO are separate buffers. Once software accepts the current sector
+// into the FIFO, a continuous ReadN/ReadS can receive and announce the following sector even while
+// unread bytes remain in that FIFO. The synchronous model records that drive-side availability and
+// emits its one INT1 immediately; a later BFRD service request swaps the announced sector into the
+// FIFO. Keeping this state separate is what permits clients to leave a raw sector's EDC/ECC tail
+// unread without stalling the drive.
+static void announce_following_sector(CdcState *s) {
+  if (!s->reading || s->following_sector_ready) {
+    return;
+  }
+  s->following_sector_ready = 1;
+  queue_data_ready(s);
+}
+
+// Draining the data FIFO releases that buffer; it does not drive the disc head or produce an event.
+// If a following sector was announced, the next BFRD service request installs it. Clearing BFRD
+// here models the hardware FIFO becoming serviceable again even when software leaves the request
+// bit high.
 static void sector_consumed(CdcState *s) {
   s->data_n = 0;
   s->data_rd = 0;
-  if (!s->reading) {
-    return;
-  }
-  s->loc_lba++;
-  load_sector(s);
-  {
-    uint8_t r1[1];
-    r1[0] = s->stat;
-    cdc_irq(s, 1, r1, 1);
-  } // INT1: next sector data-ready
+  s->bfrd = 0;
 }
 
 // DMA3 (CDROM -> RAM): pop up to `words` 32-bit words from the sector data FIFO. Returns the count
@@ -170,13 +182,7 @@ void cdc_set_mode(CdcState *s, uint8_t mode) {
 
 void cdc_begin_read(CdcState *s, uint32_t lba) {
   s->loc_lba = lba;
-  s->reading = 1;
-  load_sector(s);
-  {
-    uint8_t r1[1];
-    r1[0] = s->stat;
-    cdc_irq(s, 1, r1, 1);
-  } // INT1: sector data-ready
+  start_continuous_read(s);
 }
 
 int cdc_dma_read(CdcState *s, uint32_t *out, int words) {
@@ -213,25 +219,21 @@ static void exec_command(CdcState *s, uint8_t cmd) {
     break; // Setmode
   case 0x06:
   case 0x1B: // ReadN / ReadS
-    s->reading = 1;
     cdc_irq(s, 3, r1, 1);
-    load_sector(s);
-    {
-      uint8_t s2[1] = {s->stat};
-      cdc_irq(s, 1, s2, 1);
-    } // INT1 data-ready
+    start_continuous_read(s);
     break;
   case 0x09:
-    s->reading = 0;
+    stop_continuous_read(s);
     cdc_irq(s, 3, r1, 1);
     cdc_irq(s, 2, r1, 1);
     break; // Pause
   case 0x08:
-    s->reading = 0;
+    stop_continuous_read(s);
     cdc_irq(s, 3, r1, 1);
     cdc_irq(s, 2, r1, 1);
     break; // Stop
   case 0x0A:
+    stop_continuous_read(s);
     s->stat = 0x02;
     s->mode = 0;
     cdc_irq(s, 3, r1, 1);
@@ -294,8 +296,8 @@ static void exec_command(CdcState *s, uint8_t cmd) {
 // Apply the bank-0 request register's BFRD latch. BFRD is a level, not a command: writing 0x80
 // again while it is already asserted leaves the current data FIFO and its read cursor untouched.
 // A real new request is the 0 -> 1 transition. In this synchronous model that transition after a
-// partial read discards the unread remainder and presents the following sector immediately; that is
-// how whole-sector stream readers move on after consuming only their 2048-byte payload.
+// partial read discards the unread remainder and presents the already-announced following sector;
+// that is how whole-sector stream readers move on after consuming only their 2048-byte payload.
 static void write_request_register(CdcState *s, uint8_t value) {
   const uint8_t asserted = value & 0x80;
   if (!asserted) {
@@ -310,12 +312,20 @@ static void write_request_register(CdcState *s, uint8_t value) {
   if (!s->reading) {
     return;
   }
-  if (s->data_rd > 0) {
+
+  // Reasserting an untouched FIFO only re-enables access to those same bytes. A consumed or empty
+  // FIFO accepts the following sector that the continuous drive announced independently.
+  if (s->following_sector_ready && (s->data_rd > 0 || s->data_n == 0)) {
     s->loc_lba++;
-    const uint8_t response[1] = {s->stat};
-    cdc_irq(s, 1, response, 1); // INT1: next sector ready
+    s->following_sector_ready = 0;
+    if (!load_sector(s)) {
+      stop_continuous_read(s);
+      return;
+    }
   }
-  load_sector(s);
+  if (s->data_n > 0) {
+    announce_following_sector(s);
+  }
 }
 
 uint32_t cdc_read(CdcState *s, uint32_t p) {

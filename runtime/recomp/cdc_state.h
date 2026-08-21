@@ -18,27 +18,28 @@ typedef struct CdcIrqEnt {
 } CdcIrqEnt;
 
 typedef struct CdcState {
-  int index;                   // 0x1F801800 low 2 bits (register bank)       (was s_index)
-  uint8_t param[16];           // param FIFO                                  (was s_param)
-  int param_n;                 //                                            (was s_param_n)
-  uint8_t data[2340];          // sector data FIFO                            (was s_data)
-  int data_n, data_rd;         //                                            (was s_data_n/s_data_rd)
-  uint8_t irq_en;              // interrupt enable register                   (was s_irq_en)
-  uint8_t stat;                // drive status byte (bit1 = motor on)         (was s_stat, init 0x02)
-  uint32_t loc_lba;            // Setloc target                              (was s_loc_lba)
-  uint8_t mode;                // Setmode                                     (was s_mode)
-  int reading;                 // ReadN/ReadS active                          (was s_reading)
-  uint8_t bfrd;                // request-register BFRD latch (bit 7): 1 until explicitly deasserted
-  CdcIrqEnt q[8];              // pending-interrupt queue                     (was s_q)
-  int q_head, q_tail, resp_rd; //                                     (was s_q_head/s_q_tail/s_resp_rd)
-  uint8_t irq_edge;            // 1 = the controller just RAISED an interrupt and nothing has latched
-                               // it yet. The MMIO dispatcher (mem.cpp) consumes this and sets I_STAT
-                               // bit 2, which is edge-triggered on real hardware: acking the CD
-                               // controller at 0x1F801803 does NOT clear I_STAT, and a queued second
-                               // response raises a FRESH edge as it becomes current. Kept here rather
-                               // than reaching for I_STAT directly because this model has no Game
-                               // pointer.
-  struct DiscState *disc;      // Game-owned disc backend (wired by Game())
+  int index;                      // 0x1F801800 low 2 bits (register bank)       (was s_index)
+  uint8_t param[16];              // param FIFO                                  (was s_param)
+  int param_n;                    //                                            (was s_param_n)
+  uint8_t data[2340];             // sector data FIFO                            (was s_data)
+  int data_n, data_rd;            //                                            (was s_data_n/s_data_rd)
+  uint8_t irq_en;                 // interrupt enable register                   (was s_irq_en)
+  uint8_t stat;                   // drive status byte (bit1 = motor on)         (was s_stat, init 0x02)
+  uint32_t loc_lba;               // Setloc target                              (was s_loc_lba)
+  uint8_t mode;                   // Setmode                                     (was s_mode)
+  int reading;                    // ReadN/ReadS active                          (was s_reading)
+  uint8_t bfrd;                   // request-register BFRD latch (bit 7): 1 until explicitly deasserted
+  uint8_t following_sector_ready; // drive-side next-sector availability, independent of data FIFO drain
+  CdcIrqEnt q[8];                 // pending-interrupt queue                     (was s_q)
+  int q_head, q_tail, resp_rd;    //                                     (was s_q_head/s_q_tail/s_resp_rd)
+  uint8_t irq_edge;               // 1 = the controller just RAISED an interrupt and nothing has latched
+                                  // it yet. The MMIO dispatcher (mem.cpp) consumes this and sets I_STAT
+                                  // bit 2, which is edge-triggered on real hardware: acking the CD
+                                  // controller at 0x1F801803 does NOT clear I_STAT, and a queued second
+                                  // response raises a FRESH edge as it becomes current. Kept here rather
+                                  // than reaching for I_STAT directly because this model has no Game
+                                  // pointer.
+  struct DiscState *disc;         // Game-owned disc backend (wired by Game())
 } CdcState;
 
 #ifdef __cplusplus

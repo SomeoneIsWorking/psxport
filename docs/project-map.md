@@ -139,10 +139,14 @@ billboard-history hook.
 (in-game XA-ADPCM streaming).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
 game-validated blocking-control seam), `cdc_native.cpp` (per-Game register/FIFO/IRQ model and bank-0
-BFRD request latch), `disc.cpp` (libchdr), `memcard.cpp`. Reasserting an already-high BFRD preserves a
-partial DMA cursor; only a deassert→assert transition discards the remainder and presents the next
-sector. `test_cdc_bfrd_split_dma` drives the shipping begin-read/write/DMA path with a hermetic raw
-sector backend and proves repeated-assert, transition, and deasserted-access answers (535 checks).
+BFRD request latch plus separate drive-side following-sector availability), `disc.cpp` (libchdr),
+`memcard.cpp`. Reasserting an already-high BFRD preserves a partial DMA cursor. A deassert→assert
+transition after partial consumption discards the remainder and presents the already-announced next
+sector; a fully drained FIFO rearms BFRD without advancing by itself. `test_cdc_bfrd_split_dma`
+proves repeated-assert, transition, and deasserted-access answers (535 checks), while
+`test_cdc_continuous_read` proves that continuous ReadN announces exactly one following sector
+independently of partial FIFO drainage and none after Pause stops the drive (31 checks). Both drive
+the shipping begin-read/write/DMA path with a hermetic raw-sector backend.
 **Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle
 gte.c). `gte_state.h::GTE_ExecuteIsolated` runs any vendor GTE instruction against an explicit `GteRegs`
 without changing the caller's bound state. Its implementation tracks nested isolation depth and suppresses
