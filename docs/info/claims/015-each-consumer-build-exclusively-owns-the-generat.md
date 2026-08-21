@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cmake,gpu,shader,concurrency
 depends: cmake/gpu_shaders.cmake#psxport_add_gpu_shaders, tools/gen_gpu_shaders.py#validate_output_owner, tests/test_gpu_shader_build_ownership.py#main
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21 14:07:17
+verified_at: 2026-08-21 14:09:25
 ---
 
 ## Claim
@@ -34,3 +34,7 @@ Nested `add_subdirectory` Clang ownership gate passes 4/4, removing the exact ta
 fails compilation, the legacy shared BYPRODUCT reproduces peer deletion, and framework CTest passes
 81/81. Fresh nested Crash Bash compiles both renderer TUs and links; Crash 1 additionally passes its
 four canonical oracle-call boundaries at 34/34 each and 9/9 classifier selftest.
+
+## Re-confirmed 2026-08-21
+
+Post-landing framework CTest passed 81/81; nested add_subdirectory ownership gate passed 4/4 including missing-include and legacy shared-BYPRODUCT opposites; fresh Crash Bash and Crash 1 Clang consumers compiled both renderer TUs and linked.
