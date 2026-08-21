@@ -137,6 +137,11 @@ GPU. `dc_boot_init` initializes CD and `PlatformHle` service tables per `Game`, 
 healthy-looking process-global override from A. `GameHooks::devWarp` is one complete game-owned cold
 warp used by both the standalone REPL and SBS; the framework owns timing, not guest addresses or area
 machine layout.
+`native_diff.{h,cpp}` is the narrower per-call owner oracle. Every active `ndiff_run` has an independent
+snapshot frame, so a natively owned parent may call a separately owned child without the child replacing
+the parent's pre-state or native answer. `test_native_diff` reaches the shipping API: an equivalent nested
+parent/child produces zero divergences, while an independently mutated child produces two real child
+divergences (one in each parent leg) and leaves the equivalent parent itself matched.
 **Interpolation camera seam:** `fps60.cpp` owns camera capture/lerp but reads the live view matrix through
 `GameHooks::fps60ReadSceneCam`; the matrix layout is game-owned. Tomba! 2 decodes its scratchpad matrix in
 `game/core/game_hooks.cpp`. A missing reader aborts when a native projection path asks for it—there is no

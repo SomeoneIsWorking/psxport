@@ -5,6 +5,7 @@
 #include "game.h" // Game::gte — the COP2 register file, compared below
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <lucent/log.h>
 #include <map>
 #include <string>
@@ -19,20 +20,24 @@ struct Site {
   int diffs = 0;
 };
 
+struct SnapshotFrame {
+  // Reused at each nesting depth so a verified run does not churn 6 MB of allocation per call.
+  std::vector<uint8_t> preRam, nativeRam, substrateRam;
+  std::vector<uint8_t> preSpad, nativeSpad, substrateSpad;
+  GteRegs preGte{}, nativeGte{}, substrateGte{};
+};
+
 struct State {
   bool init = false;
   int budget = 0;   // calls to verify per site; 0 = disabled
   int maxdiff = 32; // per-call cap on individual byte diffs listed
   int divergences = 0;
   std::map<std::string, Site> sites;
-  // Reused across calls so a verified run does not churn 6 MB of allocation per call.
-  std::vector<uint8_t> pre, natRam, subRam;
-  std::vector<uint8_t> preSpad, natSpad, subSpad;
-  // COP2/GTE. A PS1 game's hot maths lives here, and comparing only GPRs + RAM would report "matches"
-  // while a native body silently left the GTE register file different — the substrate's `cop2`
-  // instructions write REG[0..63] and FLAGS, none of which is guest RAM. Without this the differential
-  // simply cannot verify any function containing lwc2/swc2/cop2, which is most of the geometry code.
-  GteRegs preGte{}, natGte{}, subGte{};
+  // A parent comparison can call another owned body, which opens a nested ndiff_run. Each active
+  // depth needs an independent snapshot; a singleton lets the child overwrite the parent's rewind
+  // state and native answer. deque keeps the outer frame reference stable when a deeper frame is
+  // first allocated, and completed frames retain their vector capacity for the next call.
+  std::deque<SnapshotFrame> frames;
 };
 
 State &st() {
@@ -128,6 +133,12 @@ bool ndiff_run(Core *c, const char *name, void (*native)(Core *), void (*body)(C
   }
   site.calls++;
 
+  const size_t depth = static_cast<size_t>(s_in_diff);
+  if (s.frames.size() <= depth) {
+    s.frames.resize(depth + 1u);
+  }
+  SnapshotFrame &snapshot = s.frames[depth];
+
   const size_t spad = sizeof c->scratch;
   // Both legs run inside this window; see ndiff_in_progress() in the header for what must stand
   // still while they do. RAII so an early return or a throw cannot leave the port permanently unable
@@ -141,31 +152,31 @@ bool ndiff_run(Core *c, const char *name, void (*native)(Core *), void (*body)(C
     }
   } _diff_window;
 
-  s.pre.assign(c->ram, c->ram + RAM_SIZE);
-  s.preSpad.assign(c->scratch, c->scratch + spad);
+  snapshot.preRam.assign(c->ram, c->ram + RAM_SIZE);
+  snapshot.preSpad.assign(c->scratch, c->scratch + spad);
   const R3000 preRegs = *static_cast<R3000 *>(c);
-  s.preGte = c->game->gte;
+  snapshot.preGte = c->game->gte;
 
   native(c);
-  s.natRam.assign(c->ram, c->ram + RAM_SIZE);
-  s.natSpad.assign(c->scratch, c->scratch + spad);
+  snapshot.nativeRam.assign(c->ram, c->ram + RAM_SIZE);
+  snapshot.nativeSpad.assign(c->scratch, c->scratch + spad);
   const R3000 natRegs = *static_cast<R3000 *>(c);
-  s.natGte = c->game->gte;
+  snapshot.nativeGte = c->game->gte;
 
   // Rewind to the exact pre-state and run the body the native code claims to replace.
-  memcpy(c->ram, s.pre.data(), RAM_SIZE);
-  memcpy(c->scratch, s.preSpad.data(), spad);
+  memcpy(c->ram, snapshot.preRam.data(), RAM_SIZE);
+  memcpy(c->scratch, snapshot.preSpad.data(), spad);
   *static_cast<R3000 *>(c) = preRegs;
-  c->game->gte = s.preGte;
+  c->game->gte = snapshot.preGte;
   body(c);
-  s.subRam.assign(c->ram, c->ram + RAM_SIZE);
-  s.subSpad.assign(c->scratch, c->scratch + spad);
+  snapshot.substrateRam.assign(c->ram, c->ram + RAM_SIZE);
+  snapshot.substrateSpad.assign(c->scratch, c->scratch + spad);
   const R3000 subRegs = *static_cast<R3000 *>(c);
-  s.subGte = c->game->gte;
+  snapshot.substrateGte = c->game->gte;
 
   int diffs = 0;
-  diffs += report_ram(name, s.natRam, s.subRam, 0x80000000u, "RAM", s.maxdiff);
-  diffs += report_ram(name, s.natSpad, s.subSpad, 0x1F800000u, "scratchpad", s.maxdiff);
+  diffs += report_ram(name, snapshot.nativeRam, snapshot.substrateRam, 0x80000000u, "RAM", s.maxdiff);
+  diffs += report_ram(name, snapshot.nativeSpad, snapshot.substrateSpad, 0x1F800000u, "scratchpad", s.maxdiff);
   // v0/v1 are the return values and the usual place a contract mismatch shows; report every GPR that
   // differs, since "which register" is most of the diagnosis.
   static const char *kReg[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2",
@@ -185,23 +196,23 @@ bool ndiff_run(Core *c, const char *name, void (*native)(Core *), void (*body)(C
   // COP2 data regs are DR = REG[0..31], control regs CR = REG[32..63]; name them that way so a diff
   // reads as "cop2 DR12" rather than an opaque index.
   for (int i = 0; i < 64; i++) {
-    if (s.natGte.REG[i] != s.subGte.REG[i]) {
+    if (snapshot.nativeGte.REG[i] != snapshot.substrateGte.REG[i]) {
       lucent::error("ndiff",
                     "  {} cop2 {}{}: native=0x{:08X} substrate=0x{:08X}",
                     name ? name : "(null)",
                     i < 32 ? "DR" : "CR",
                     i < 32 ? i : i - 32,
-                    s.natGte.REG[i],
-                    s.subGte.REG[i]);
+                    snapshot.nativeGte.REG[i],
+                    snapshot.substrateGte.REG[i]);
       diffs++;
     }
   }
-  if (s.natGte.FLAGS != s.subGte.FLAGS) {
+  if (snapshot.nativeGte.FLAGS != snapshot.substrateGte.FLAGS) {
     lucent::error("ndiff",
                   "  {} cop2 FLAGS: native=0x{:08X} substrate=0x{:08X}",
                   name ? name : "(null)",
-                  s.natGte.FLAGS,
-                  s.subGte.FLAGS);
+                  snapshot.nativeGte.FLAGS,
+                  snapshot.substrateGte.FLAGS);
     diffs++;
   }
   if (natRegs.hi != subRegs.hi || natRegs.lo != subRegs.lo) {
@@ -217,10 +228,10 @@ bool ndiff_run(Core *c, const char *name, void (*native)(Core *), void (*body)(C
 
   // LEAVE THE NATIVE RESULT IN PLACE. Falling back to the substrate on a diff would make a broken
   // replacement behave correctly under the very flag meant to expose it.
-  memcpy(c->ram, s.natRam.data(), RAM_SIZE);
-  memcpy(c->scratch, s.natSpad.data(), spad);
+  memcpy(c->ram, snapshot.nativeRam.data(), RAM_SIZE);
+  memcpy(c->scratch, snapshot.nativeSpad.data(), spad);
   *static_cast<R3000 *>(c) = natRegs;
-  c->game->gte = s.natGte;
+  c->game->gte = snapshot.nativeGte;
 
   if (diffs) {
     site.diffs++;

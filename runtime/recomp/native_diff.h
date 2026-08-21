@@ -20,6 +20,10 @@
 // The native result is the one left in place, so a diff run behaves like a native run — it does not
 // silently fall back to the substrate, which would make a broken replacement look fine.
 //
+// OWNED CALLS MAY NEST. A parent native/body pair can call another separately owned function, so
+// each active ndiff_run keeps its own RAM, scratchpad, register, and GTE snapshots. The child is
+// checked normally; completing it cannot replace the parent's rewind state or captured native answer.
+//
 // Cost is real (two 2 MB copies plus two executions per verified call), so it is OFF unless asked
 // for, and bounded: PSXPORT_NDIFF=<n> verifies the first n calls of each site and then runs native
 // only. That is usually enough — a replacement that matches its first calls and then diverges is
