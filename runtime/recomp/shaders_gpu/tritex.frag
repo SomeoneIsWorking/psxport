@@ -16,7 +16,8 @@ layout(location = 1) noperspective in vec2 v_uv;
 layout(location = 2) flat in ivec4 v_tp;     // tpx, tpy, mode, raw
 layout(location = 3) flat in ivec4 v_clut;   // clutx, cluty, semi, blend
 layout(location = 4) flat in ivec4 v_tw;     // texture window
-layout(location = 5) flat in ivec4 v_da;     // draw-area clip
+layout(location = 5) flat in ivec4 v_da;
+layout(location = 6) flat in ivec4 v_uvbb;     // draw-area clip
 // VRAM is R8G8_UNORM (R=low byte, G=high byte of the 1555 word — SDL_GPU forbids integer SAMPLER formats).
 layout(set = 2, binding = 0) uniform sampler2D u_vram;
 // ires (internal-resolution) scale: v_da (draw-area clip) is in NATIVE VRAM pixel units, and the manual
@@ -38,7 +39,7 @@ void main() {
     if (mode == 3) {                                  // untextured: use the vertex color directly
         texel = uint(clamp(v_col.r,0.,1.)*31.+0.5) | (uint(clamp(v_col.g,0.,1.)*31.+0.5)<<5) | (uint(clamp(v_col.b,0.,1.)*31.+0.5)<<10);
     } else {
-        vec2 psx_uv = psxUvAtIntegerPixel(v_uv, pc.scale);
+        vec2 psx_uv = psxUvAtIntegerPixel(v_uv, pc.scale, v_uvbb);
         int u = int(psx_uv.x), v = int(psx_uv.y);
         u = (u & ~(v_tw.x * 8)) | ((v_tw.z & v_tw.x) * 8);
         v = (v & ~(v_tw.y * 8)) | ((v_tw.w & v_tw.y) * 8);

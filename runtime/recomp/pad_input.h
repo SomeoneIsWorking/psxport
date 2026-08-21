@@ -27,7 +27,8 @@ public:
   void driveHold(uint16_t activeLowMask); // was pad_repl_hold(c, mask) — REPL: hold down these bits
   void driveTap(uint16_t activeLowMask, int nframes); // was pad_repl_tap(c, mask, n) — press for n frames
   void driveRelease();                                // was pad_repl_release(c) — clear REPL drive
-  void serviceFrame();                                // was pad_service_frame(c) — per-frame native pad service
+  void serviceFrame();
+  void applyGuestPoke(Core *c);                                // was pad_service_frame(c) — per-frame native pad service
 
   // Pump host input WITHOUT advancing a pad frame. For the debug-server pause loop, which must keep
   // the window responsive (and the P / '.' keys alive) while the game is explicitly NOT advancing.
@@ -134,6 +135,13 @@ private:
   std::vector<uint16_t> mRecLog; // every finalized mask, always — the `padrec save` source
   int mShotInit = 0, mShotN = 0;
   uint32_t mShotAt[64] = {};
+  // PSXPORT_GUEST_POKE — guest locations rewritten every frame (see applyGuestPoke).
+  static constexpr int kPokeMax = 16;
+  struct GuestPoke {
+    uint32_t addr, val, width;
+  };
+  int mPokeInit = 0, mPokeN = 0;
+  GuestPoke mPoke[kPokeMax] = {};
   int mDumpInit = 0, mDumpN = 0;
   uint32_t mDumpAt[32] = {};
   int mTraceInit = 0;

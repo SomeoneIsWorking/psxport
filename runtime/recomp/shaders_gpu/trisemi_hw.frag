@@ -30,7 +30,8 @@ layout(location = 1) noperspective in vec2 v_uv;
 layout(location = 2) flat in ivec4 v_tp;     // tpx, tpy, mode, raw
 layout(location = 3) flat in ivec4 v_clut;   // clutx, cluty, semi, blend
 layout(location = 4) flat in ivec4 v_tw;     // texture window
-layout(location = 5) flat in ivec4 v_da;     // draw-area clip
+layout(location = 5) flat in ivec4 v_da;
+layout(location = 6) flat in ivec4 v_uvbb;     // draw-area clip
 layout(set = 2, binding = 0) uniform sampler2D u_vram;
 // ires (internal-resolution) scale — see tritex.frag's identical comment: v_da is native-unit, gl_FragCoord
 // is ires-scaled, divide back down before the clip test. 1 at i==1 (no-op, byte-identical to pre-ires).
@@ -48,7 +49,7 @@ void main() {
     if (mode == 3) {
         F = clamp(v_col, 0.0, 1.0);          // untextured: vertex colour is the foreground directly
     } else {
-        vec2 psx_uv = psxUvAtIntegerPixel(v_uv, pc.scale);
+        vec2 psx_uv = psxUvAtIntegerPixel(v_uv, pc.scale, v_uvbb);
         int u = int(psx_uv.x), v = int(psx_uv.y);
         u = (u & ~(v_tw.x * 8)) | ((v_tw.z & v_tw.x) * 8);
         v = (v & ~(v_tw.y * 8)) | ((v_tw.w & v_tw.y) * 8);

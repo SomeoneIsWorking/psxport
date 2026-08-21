@@ -148,6 +148,17 @@ And its own limit, stated there rather than left implied: it is still the native
 precision and at `ires>1`. It answers *"what does the SUBSTRATE draw"*, never *"what does the HARDWARE
 draw"*. For the latter there is no in-tree answer.
 
+**`PSXPORT_GUEST_POKE=<addr>:<val>[:<width>],...` — DIAGNOSTIC ONLY.** Writes those guest locations
+EVERY frame (width 1/2/4 bytes, default 1; addr and val hex), at the platform frame tick, on whatever
+leg is running. Per-frame because the state worth forcing is usually state the guest REWRITES each
+frame — Tomba! 2's HUD ring gate `0x800ED061` returns to 0 on every pass, so a one-shot REPL `w8` is
+gone before the next render. At the frame tick rather than inside a producer because a render-time
+force reaches only the NATIVE picture: the oracle leg draws from the guest OT, so it would show
+nothing and the comparison would be native-vs-blank. Poking guest state makes BOTH legs draw the same
+thing, which is what lets the oracle answer what a forced-on layer should look like. It CHANGES CANON
+GUEST STATE: on in BOTH legs of a comparison or NEITHER, and never in an SBS byte-compare. A malformed
+spec REFUSES loudly and names how many entries it rejected, rather than quietly poking nothing.
+
 **SBS gate honesty (read before trusting a green run — docs/findings/sbs.md "COVERAGE-limited"):**
 - Every SBS run now prints its own REACH at exit: `coverage: N/M owned addresses executed this run — K
   NEVER reached`. A byte-compare only reports on code the run ENTERS; a boot-window run reaches ~236
@@ -434,7 +445,12 @@ together: `debug spu,cdcmd,bgm`. Old → new channel:
 | (no legacy var)        | `fps60seq` (captured-queue composition by (layer, tier1-owned) runs + seq ranges — the merge-ordering probe for kanban #31/#33; `Fps60::presentPass`) | | | |
 | (so e.g. `PSXPORT_CDCMD_DBG=1` → `PSXPORT_DEBUG=cdcmd`) | | | `PSXPORT_WS_SXHIST` | `sxhist` |
 
-New channels (no legacy var): `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
+New channels (no legacy var): `hudring` (Tomba! 2, game/render/field_hud.cpp — every UI FT4 piece the HUD
+producers emit, as a HALF-OPEN rect `x[XL,XR) y[YT,YB)` plus its u/v range, under a per-call
+`pieces=N` denominator and a `fieldHudItemRing ENTER` line carrying that producer's own wedge counts.
+The half-open printing is the point: two pieces TILE when one's XR equals the next's XL and OVERLAP
+when it exceeds it, which is how the HP ring's shared-column seam was measured. The ENTER line prints
+even when nothing is drawn, so "the ring drew nothing" and "the ring never ran" cannot be confused) · `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
 trace, native_boot.cpp — for stage/scheduler debugging) · `stage` (GAME stage-machine native-ownership log,
 game/core/engine.cpp) · `rqhist` (per-frame render-queue layer×opaque/semi histogram, render_queue.cpp — "is
 the world even being queued?") · `rqflush` (ONE line per `RenderQueue::flush`: `n=` items, `reemit=` — this

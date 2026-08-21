@@ -171,7 +171,17 @@ struct TexVtx {
   float x, y, u, v, r, g, b;
   int32_t tp[4], clut[4], tw[4], da[4];
   float ord;
-}; // 96 bytes
+  // uvbb = this PRIMITIVE's own vertex-UV bounding box (umin, vmin, umax, vmax), flat-interpolated.
+  // Carried at FULL int width, not packed into bytes: a 256-wide texture legitimately spans u 0..256
+  // half-open, and a byte pack turned that 256 into 0, collapsing the box and smearing one texel
+  // across every row of the title screen.
+  // The PSX evaluates UV only at pixels it covers, so it can never fetch outside this box; a GPU
+  // covers by fragment CENTRE while psx_uv.glsl reconstructs at the integer pixel, which on a
+  // non-axis-aligned edge lands outside the primitive. Clamping the reconstruction to this box
+  // restores the invariant hardware gets for free. Identical on all 3 vertices — per-primitive data
+  // on a per-vertex channel, because a `flat` varying would only carry the provoking vertex.
+  int32_t uvbb[4];
+}; // 112 bytes
 // Batch buffers + counts moved onto GpuVkState (per-Core) — reach as `this->s_tri_buf` (cast from
 // void* to TriVtx*) inside the methods. The `render_geom` free function below takes a `GpuVkState&`
 // so it can pull the right instance's batches at present time.
@@ -1053,6 +1063,7 @@ static void create_3d_pipelines(void) {
       {5, 0, SDL_GPU_VERTEXELEMENTFORMAT_INT4, 60},
       {6, 0, SDL_GPU_VERTEXELEMENTFORMAT_INT4, 76},
       {7, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, 92},
+      {8, 0, SDL_GPU_VERTEXELEMENTFORMAT_INT4, 96}, // uvbb: the primitive's own vertex-UV bounds
   };
   s_tri_pipe = make_geom_pipeline(spv_g_tri_vert,
                                   spv_g_tri_vert_len,
@@ -1070,12 +1081,12 @@ static void create_3d_pipelines(void) {
                                      spv_g_tritex_frag_len,
                                      sizeof(TexVtx),
                                      tex_attr,
-                                     8,
+                                     9,
                                      1,
                                      true,
                                      1); // +1 fragment uniform: ires scale (PC.scale)
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
-    s_semi_pipe[m] = make_semi_pipeline(m, tex_attr, 8, sizeof(TexVtx));
+    s_semi_pipe[m] = make_semi_pipeline(m, tex_attr, 9, sizeof(TexVtx));
   }
   // bug #55 (part 3): depth-only stamp so translucent-only 3D coverage still marks the depth buffer the
   // ires composite-back's coverage gate reads (see semi_cover.frag). depth_write=true, same GREATER_OR_EQUAL
@@ -1086,7 +1097,7 @@ static void create_3d_pipelines(void) {
                                          spv_g_semi_cover_frag_len,
                                          sizeof(TexVtx),
                                          tex_attr,
-                                         8,
+                                         9,
                                          1,
                                          true,
                                          1,
@@ -1097,7 +1108,7 @@ static void create_3d_pipelines(void) {
                                           spv_g_tritex_frag_len,
                                           sizeof(TexVtx),
                                           tex_attr,
-                                          8,
+                                          9,
                                           1,
                                           true,
                                           1,
@@ -3398,11 +3409,23 @@ void GpuVkState::tex_emit(TexVtx *t,
                           int day1,
                           int semi,
                           int blend) {
+  int umin = us[0], umax = us[0], vmin = vs[0], vmax = vs[0];
+  for (int i = 1; i < 3; i++) {
+    umin = us[i] < umin ? us[i] : umin;
+    umax = us[i] > umax ? us[i] : umax;
+    vmin = vs[i] < vmin ? vs[i] : vmin;
+    vmax = vs[i] > vmax ? vs[i] : vmax;
+  }
+  const int32_t uvbb[4] = {umin, vmin, umax, vmax};
   for (int i = 0; i < 3; i++) {
     t[i].x = s_xf ? s_xf[i] : (float)xs[i];
     t[i].y = s_yf ? s_yf[i] : (float)ys[i];
     t[i].u = us[i];
     t[i].v = vs[i];
+    t[i].uvbb[0] = uvbb[0];
+    t[i].uvbb[1] = uvbb[1];
+    t[i].uvbb[2] = uvbb[2];
+    t[i].uvbb[3] = uvbb[3];
     t[i].r = rs[i] / 255.f;
     t[i].g = gs[i] / 255.f;
     t[i].b = bs[i] / 255.f;

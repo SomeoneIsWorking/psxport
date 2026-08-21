@@ -23,7 +23,8 @@ layout(location = 1) noperspective in vec2 v_uv;
 layout(location = 2) flat in ivec4 v_tp;     // tpx, tpy, mode, raw
 layout(location = 3) flat in ivec4 v_clut;   // clutx, cluty, semi, blend
 layout(location = 4) flat in ivec4 v_tw;     // texture window
-layout(location = 5) flat in ivec4 v_da;     // draw-area clip
+layout(location = 5) flat in ivec4 v_da;
+layout(location = 6) flat in ivec4 v_uvbb;     // draw-area clip
 layout(set = 2, binding = 0) uniform sampler2D u_vram;
 layout(set = 3, binding = 0) uniform PC { int scale; } pc;   // ires scale (same role as trisemi_hw.frag's)
 
@@ -35,7 +36,7 @@ void main() {
     if (px < v_da.x || px > v_da.z || py < v_da.y || py > v_da.w) discard;
     int mode = v_tp.z;
     if (mode != 3) {   // untextured (mode==3) prims have no texel to check — always covered where rasterized
-        vec2 psx_uv = psxUvAtIntegerPixel(v_uv, pc.scale);
+        vec2 psx_uv = psxUvAtIntegerPixel(v_uv, pc.scale, v_uvbb);
         int u = int(psx_uv.x), v = int(psx_uv.y);
         u = (u & ~(v_tw.x * 8)) | ((v_tw.z & v_tw.x) * 8);
         v = (v & ~(v_tw.y * 8)) | ((v_tw.w & v_tw.y) * 8);

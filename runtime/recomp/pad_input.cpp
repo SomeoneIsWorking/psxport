@@ -445,6 +445,70 @@ void Pad::pumpHostInput() {
 #endif
 }
 
+// PSXPORT_GUEST_POKE=<addr>:<val>[:<width>],... — write these guest locations EVERY frame, on
+// whatever leg is running. Width is 1 (default), 2 or 4 bytes; addr and val are hex.
+//
+// Why a per-frame write and not a one-shot: the state worth forcing is usually state the guest
+// REWRITES every frame (Tomba! 2's HUD ring gate at 0x800ED061 goes back to 0 on each pass, so a
+// single REPL `w8` is gone by the next render). A one-shot poke silently does nothing there.
+//
+// Why it lives at the platform frame tick rather than in a producer: a render-time force reaches only
+// the NATIVE picture, so the oracle leg — which draws from the guest OT — would show nothing and the
+// comparison would be native-vs-blank. Writing guest state makes BOTH legs draw the same thing, which
+// is the only way the oracle can answer what a forced-on layer should look like.
+//
+// It CHANGES CANON GUEST STATE, so it must be on in BOTH legs of a comparison or in NEITHER, and never
+// in an SBS byte-compare. A malformed spec REFUSES loudly instead of quietly poking nothing.
+void Pad::applyGuestPoke(Core *c) {
+  if (!mPokeInit) {
+    mPokeInit = 1;
+    const char *spec = cfg_str("PSXPORT_GUEST_POKE");
+    if (spec) {
+      char buf[512];
+      snprintf(buf, sizeof buf, "%s", spec);
+      int bad = 0;
+      for (char *t = strtok(buf, ","); t; t = strtok(nullptr, ",")) {
+        unsigned addr = 0, val = 0, width = 1;
+        const int got = sscanf(t, "%x:%x:%u", &addr, &val, &width);
+        if (got < 2 || (width != 1 && width != 2 && width != 4) || mPokeN >= kPokeMax) {
+          bad++;
+          continue;
+        }
+        mPoke[mPokeN].addr = addr;
+        mPoke[mPokeN].val = val;
+        mPoke[mPokeN].width = width;
+        mPokeN++;
+      }
+      if (bad || !mPokeN) {
+        lucent::error("poke",
+                      "PSXPORT_GUEST_POKE={}: REFUSED {} malformed entr(y/ies), accepted {} — "
+                      "expected <hexaddr>:<hexval>[:1|2|4] separated by commas. Nothing is being "
+                      "poked for the rejected ones, so do not read this run as forcing them.",
+                      spec,
+                      bad,
+                      mPokeN);
+      }
+      for (int i = 0; i < mPokeN; i++) {
+        lucent::info("poke",
+                     "every frame: [{:08X}] = {:X} ({} byte{})",
+                     mPoke[i].addr,
+                     mPoke[i].val,
+                     mPoke[i].width,
+                     mPoke[i].width == 1 ? "" : "s");
+      }
+    }
+  }
+  for (int i = 0; i < mPokeN; i++) {
+    if (mPoke[i].width == 1) {
+      c->mem_w8(mPoke[i].addr, (uint8_t)mPoke[i].val);
+    } else if (mPoke[i].width == 2) {
+      c->mem_w16(mPoke[i].addr, (uint16_t)mPoke[i].val);
+    } else {
+      c->mem_w32(mPoke[i].addr, mPoke[i].val);
+    }
+  }
+}
+
 void Pad::serviceFrame() {
   Core *c = &game->core;
   int have_window = gpu_windowed(); // a live on-screen window is up (gpu_vk.cpp)
@@ -771,6 +835,8 @@ void Pad::serviceFrame() {
     }
     rec_fc++;
   }
+
+  applyGuestPoke(c);
 
   uint8_t pk[4];
   fillBuffer(pk);

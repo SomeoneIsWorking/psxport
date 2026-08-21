@@ -2779,8 +2779,34 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
       s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
       lucent::debug("env", "E5 offset=({},{})", s_off_x, s_off_y);
       return;
-    case 0xE6:
+    case 0xE6: {
+      // PSXPORT_DEBUG=maskbit — GP0(E6) sets "set mask while drawing" (bit 0) and "CHECK mask before
+      // draw" (bit 1). Neither is modelled. Bit 1 matters for correctness: with it on, hardware SKIPS
+      // a write wherever the destination pixel is already masked, so deliberately overlapping prims
+      // composite ONCE. Print every DISTINCT word with a running total, so "the game never enables
+      // it" is a measured zero rather than an unlooked-at silence.
+      if (cfg_dbg("maskbit")) {
+        static uint32_t s_seen[8];
+        static int s_n = 0, s_total = 0;
+        s_total++;
+        const uint32_t v = w & 3u;
+        bool known = false;
+        for (int i = 0; i < s_n; i++) {
+          known = known || s_seen[i] == v;
+        }
+        if (!known && s_n < 8) {
+          s_seen[s_n++] = v;
+          lucent::warn("maskbit",
+                       "GP0(E6) set_mask={} check_mask={} (word {:08X}) — {} distinct value(s) in {} E6 writes",
+                       v & 1u,
+                       (v >> 1) & 1u,
+                       w,
+                       s_n,
+                       s_total);
+        }
+      }
       return; // mask settings (mask-test not modeled)
+    }
     default:
       break;
     }
