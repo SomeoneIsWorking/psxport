@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cmake,gpu,shader,concurrency
 depends: cmake/gpu_shaders.cmake#psxport_add_gpu_shaders, tools/gen_gpu_shaders.py#validate_output_owner, tests/test_gpu_shader_build_ownership.py#main
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21 13:52:55
+verified_at: 2026-08-21 13:58:09
 ---
 
 ## Claim
@@ -30,3 +30,7 @@ header; or the shipping CMake module emits the header outside its caller's binar
 ## Re-confirmed 2026-08-21
 
 Clang CTest 80/80; generator 7/7; shipping CMake two-build concurrency/peer-clean integration 3/3 including legacy shared-BYPRODUCT opposite; full psxport build compiled both renderer consumers.
+
+## Re-confirmed 2026-08-21
+
+Post-integration Clang build passed both renderer consumers; generator selftest passed 7/7, two-build CMake ownership gate passed 3/3 including the legacy peer-clean opposite, and full CTest passed 81/81.

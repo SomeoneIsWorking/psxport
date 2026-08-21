@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: ndiff,ownership,nesting,snapshot
 depends: runtime/recomp/native_diff.cpp#ndiff_run, tests/test_native_diff.cpp#test_equivalent_nested_calls_keep_independent_snapshots, tests/test_native_diff.cpp#test_mutated_nested_child_reports_the_other_answer
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21
+verified_at: 2026-08-21 13:58:09
 ---
 
 ## Claim
@@ -33,3 +33,7 @@ An equivalent nested parent/child reports any divergence; an outer comparison be
 pre-state or leaves a child's partial result in place; nested depth causes a crash or stale reference;
 the independently mutated child is not reported twice; or a real consumer still reports a parent-only
 saved-stack-slot mismatch after rebuilding against this implementation.
+
+## Re-confirmed 2026-08-21
+
+Post-integration shipping native-diff nested snapshot gate passed both equivalent and mutated cases within the full Clang CTest 81/81 suite.
