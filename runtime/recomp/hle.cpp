@@ -9,6 +9,7 @@
 // BIOS-call dispatchers below are METHODS on that class; the `rec_syscall` / `rec_break`
 // / `rec_dispatch_miss` free entries below are the C-ABI shims the recompiled shards call.
 #include "bios_interrupt.h"
+#include "bios_libc_string.h"
 #include "cfg.h"
 #include "core.h"
 #include "dma_irq.h" // dma_irq_ack — the CD DMA completion dispatch below stands in for the
@@ -572,6 +573,9 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                 c->r[31]);
   HleEvCB *s_ev = ev; // alias so the switch bodies below read tersely
   if (table == 'A') {
+    if (bios_libc_string_dispatch(c, fn)) {
+      return true;
+    }
     switch (fn) {
     // Sony libc rand/srand. This exact LCG also appears in linked PSX libc implementations:
     // unsigned 32-bit wrap, then the upper 15 bits. Keep the state per Hle/Game rather than using
@@ -658,66 +662,6 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       }
       c->r[V0] = a0;
       return true;
-    // The STRING leaves, added for the same reason and next to their memory siblings. An absent
-    // one is worse than a missing feature: dispatchBios returns false, the miss path logs UNIMPL
-    // and returns WITHOUT WRITING $v0, so the guest reads whatever the previous BIOS call left
-    // there. A comparison that never returns 0 is then a lookup that can never match.
-    //
-    // Spider-Man shows exactly that. Its font registry (FUN_8001AF74) linear-searches a name table
-    // with A(17h) strcmp and, on the no-match fall-through, stores index == count — one PAST the
-    // last entry. With strcmp inert the match was impossible, the index climbed to 8, and the text
-    // metrics routine then read 0x80097BBC + 8*0x28 + 0x14 = 0x80097D10, which is off the end of
-    // the font table and inside an unrelated u16 constant table. It dereferenced the constant
-    // 0x1C001D00 as a pointer. A(19h) strcpy being inert compounded it: the names were never
-    // copied in, so entry 0's name field is all-zero .bss and there was nothing to match anyway.
-    // Measured per boot before the fix: A(1Bh) x355, A(17h) x105, A(19h) x8.
-    //
-    // Conventions are the BIOS's: the compare family returns the signed difference of UNSIGNED
-    // chars, the copy family returns dst, strlen returns the length. Every byte goes through
-    // mem_r8/mem_w8 like the memory group above, so guest memory mapping is honoured.
-    case 0x17: { // strcmp(s1, s2)
-      uint32_t i = 0;
-      uint8_t x, y;
-      do {
-        x = c->mem_r8(a0 + i);
-        y = c->mem_r8(a1 + i);
-        i++;
-      } while (x && x == y);
-      c->r[V0] = (uint32_t)(int32_t)((int)x - (int)y);
-      return true;
-    }
-    case 0x18: { // strncmp(s1, s2, n)
-      uint32_t i = 0;
-      int d = 0;
-      for (; i < a2; i++) {
-        uint8_t x = c->mem_r8(a0 + i), y = c->mem_r8(a1 + i);
-        d = (int)x - (int)y;
-        if (d || !x) {
-          break;
-        }
-      }
-      c->r[V0] = (uint32_t)(int32_t)d;
-      return true;
-    }
-    case 0x19: { // strcpy(dst, src)
-      uint32_t i = 0;
-      uint8_t ch;
-      do {
-        ch = c->mem_r8(a1 + i);
-        c->mem_w8(a0 + i, ch);
-        i++;
-      } while (ch);
-      c->r[V0] = a0;
-      return true;
-    }
-    case 0x1B: { // strlen(s)
-      uint32_t n = 0;
-      while (c->mem_r8(a0 + n)) {
-        n++;
-      }
-      c->r[V0] = n;
-      return true;
-    }
     case 0x2C:       // memmove(dst, src, n) —
       if (a0 > a1) { // overlap-correct, unlike 2Ah
         for (uint32_t i = a2; i-- > 0;) {

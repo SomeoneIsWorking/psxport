@@ -83,7 +83,13 @@ heartbeat uses steady timing), `stubs.cpp`,
 task addresses and continuation PCs come from `GameConfig`, the spawned task is pumped to its authored close,
 and completion returns without manufacturing loading frames. `pc_scheduler.cpp` delegates to that owner; the
 generated multi-frame routine remains an explicit oracle rather than a second product launch mode.
-`hle.cpp` implements Sony libc `A0:0x2F/0x30` (`rand`/`srand`) with per-`Hle` state and the exact
+`bios_libc_string.{h,cpp}` owns Sony libc's string leaves behind the narrow dispatch called by
+`hle.cpp`. It implements `A0:0x15` (`strcat`) as a guest-address byte loop: it scans the
+destination, copies the source through `Core::mem_r8`/`mem_w8` including the terminator, and returns
+the original destination. `test_bios_libc_string` reaches the shipping dispatch seam and gates the
+return value, terminating write and surrounding bytes, KSEG aliasing, forward guest alias copy order,
+empty inputs, and opposite answers for a wrong table and the unimplemented neighboring leaf.
+`hle.cpp` also implements Sony libc `A0:0x2F/0x30` (`rand`/`srand`) with per-`Hle` state and the exact
 32-bit LCG (`state*0x41C64E6D+0x3039`, return `(state>>16)&0x7FFF`). It deliberately does not call
 host `rand()`: host sequences differ and process-global state would couple SBS/dual-core Games.
 `test_bios_rand` reaches the shipping `Hle::dispatchBios` seam and gates the exact seed-1 sequence,
