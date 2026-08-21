@@ -6,7 +6,7 @@ created: 2026-08-21
 tags:
 depends: runtime/recomp/bios_libc_string.cpp#bios_libc_string_dispatch, runtime/recomp/hle.cpp#Hle::dispatchBios, tests/test_bios_libc_string.cpp
 reconfirmed: 2026-08-21
-verified_at: 2026-08-21 11:35:52
+verified_at: 2026-08-21 11:37:46
 ---
 
 ## Claim
@@ -28,3 +28,7 @@ Final Clang build and complete framework gate passed 75/75, including test_bios_
 ## Re-confirmed 2026-08-21
 
 Final post-extraction Clang gate passed 75/75. test_bios_libc_string passed 4/4 cases / 44 checks through Game::hle.dispatchBios, including the immediately adjacent post-terminator guard byte, KSEG mirror, forward guest alias order, and wrong-table/neighbor opposite answers. Toy Story 2 live boot advances from the former A0:0x15 abort to generated stock-libcd completion poll 0x80091B18.
+
+## Re-confirmed 2026-08-21
+
+Post-landing Clang build and 76/76 CTests passed; test_bios_libc_string passes 4/4 cases and 44 checks through the shipping Hle dispatcher, and Toy Story advances past A0:0x15 into its stock-libcd poll.

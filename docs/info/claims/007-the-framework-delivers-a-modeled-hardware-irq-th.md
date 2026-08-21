@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-21
 tags: bios,irq,hookentryint
 depends: runtime/recomp/bios_interrupt.cpp#bios_interrupt_dispatch_custom_exit, runtime/recomp/hle.cpp#Hle::irqPoll, tools/recomp/emit.py#main
+reconfirmed: 2026-08-21
+verified_at: 2026-08-21 11:37:46
 ---
 
 ## Claim
@@ -22,3 +24,7 @@ and its CD drain. Vagrant `tools/re_vblank.py`, claims 012/014, and issues 0014/
 ## What would falsify it
 
 Any retail-backed consumer whose installed HookEntryInt continuation is skipped, whose source callback is not reached after its verifier declines, or whose generated code executes after B0:0x17.
+
+## Re-confirmed 2026-08-21
+
+Post-string-extraction Clang build and 76/76 CTests passed, including the shipping bios_interrupt suite; Hle::irqPoll behavior is unchanged.
