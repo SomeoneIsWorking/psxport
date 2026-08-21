@@ -23,12 +23,13 @@
 #include <stdint.h>
 
 #include "cd.h"
+#include "cd_drive_timing.h"
 
 static void test_speed_from_mode_is_the_hardware_rate(void) {
-  CHECK_EQ(cd_stream_sectors_per_sec(0x00), 75);  // single speed
-  CHECK_EQ(cd_stream_sectors_per_sec(0x80), 150); // Setmode bit 0x80 = double speed
-  CHECK_EQ(cd_stream_sectors_per_sec(0xE0), 150); // what the guest actually programs for STR
-  CHECK_EQ(cd_stream_sectors_per_sec(0x20), 75);  // whole-sector framing does not touch the rate
+  CHECK_EQ(cd_drive_sectors_per_second(0x00), 75);  // single speed
+  CHECK_EQ(cd_drive_sectors_per_second(0x80), 150); // Setmode bit 0x80 = double speed
+  CHECK_EQ(cd_drive_sectors_per_second(0xE0), 150); // what the guest actually programs for STR
+  CHECK_EQ(cd_drive_sectors_per_second(0x20), 75);  // whole-sector framing does not touch the rate
 }
 
 // At t=0 nothing has elapsed, so nothing is owed — but the FIRST sector must not be blocked, or the

@@ -4,31 +4,48 @@ kind: claim
 status: holds
 created: 2026-08-21
 tags: cdc,cdrom,readn,dma
-depends: runtime/recomp/cdc_native.cpp#announce_following_sector, tests/test_cdc_continuous_read.cpp#test_partial_fifo_does_not_block_following_sector_event
+depends: runtime/recomp/cdc_native.cpp#cdc_drive_service, runtime/recomp/timing.cpp#Timing::advanceGuestInstructionTicks, tools/recomp/emit.py#emit_run, tests/test_cdc_continuous_read.cpp#test_first_sector_waits_one_drive_period
 reconfirmed: 2026-08-21
 verified_at: 2026-08-21 11:36:00
 ---
 
 ## Claim
 
-The CDC continuous ReadN model announces one following sector independently of partial BFRD FIFO drainage and installs it only when software makes a later data-service request.
+The CDC continuous ReadN model schedules first and following sectors in deterministic guest
+instruction-time. It uses nominal thresholds derived from the PSX CPU clock and the Setmode-selected
+75/150-sector-per-second rates. Sector arrival is independent of BFRD FIFO drainage; BFRD can only
+expose or swap a sector whose drive deadline has elapsed. Because one executed instruction currently
+contributes one tick, this claim establishes deterministic ordering, not cycle-accurate physical
+drive timing; issue 0007 records that limitation.
 
 ## Evidence
 
-test_cdc_continuous_read drives the shipping cdc_begin_read/cdc_write/cdc_dma_read path with hermetic raw sectors. Before the fix its partial-FIFO and full-drain cases both saw pending IRQ type 0 instead of 1; the original stopped opposite passed. The final strengthened suite passes 3/3 and 31 checks: a 2060/2340-byte partial FIFO retains LBA16/cursor while exactly one following INT1 is pending, Pause produces its INT3/INT2 responses and no data event, and a full drain only empties/rearms BFRD before the next request installs LBA17. test_cdc_bfrd_split_dma remains 3/3 and 535. Real Crash Bash built against the isolated framework worktree DMA-read LBA35799 as 3+512 words, left 280 bytes, observed pending E1 and acknowledged it, then BFRD 00->80 loaded LBA35800 and both DMA legs completed; it continued through LBA35987 (189 sectors per pass, 21 passes), with no Cant-find or recomp-miss. Tomba's bounded 120-frame route matched its clean baseline exactly but is explicitly negative coverage: it performed no asserted BFRD or DMA.
+`test_cdc_continuous_read` drives the shipping begin/read/write/DMA/service path with an injected
+instruction-time counter: 5/5 tests and 59 checks. At tick 0 and deadline-1 it sees no data/INT1; at
+the nominal 225,792-tick double-speed threshold it sees the first LBA16 sector and status 0x22. A 2060/2340-byte partial
+FIFO remains intact while LBA17 becomes ready only at the next deadline; Pause returns 0x22 ACK,
+0x02 completion and cancels the event. `test_interp_guest_cycles` executes the actual interpreter
+and proves its four-instruction window services the shipping CDC deadline; the emitter's path-sensitive
+loop test reports 23 instruction ticks rather than the static-body answer 7.
+
+Live Vagrant Story arms at tick 83,098,580 and services at 83,324,373 for a 225,792-tick deadline
+plus one batching-tick overshoot. Its 17th callback queues and dispatches Pause before another sector.
+Five ReadN transfers complete: four WAVE loads and the 271-sector TITLE.PRG transfer; the sixth
+`DsEndReadySystem` call is pre-read initialization. Crash Bash returns from a 189-sector start before its first INT1, then
+services LBA35799..35987 at the same nominal 225,792-tick period and prints `done loading`. Crash Bash's
+stricter true-oracle completion-state comparison still refuses the port because its transient
+completed-pending result is cleared before the guest observes it; issue 0006 records that separate
+HookEntryInt/ReturnFromException ordering boundary rather than attributing it to drive pacing.
 
 ## What would falsify it
 
-A partial accepted FIFO suppresses the following data-ready event, changes LBA/cursor before a later BFRD service request, emits more than one event for repeated asserted BFRD, emits a data event after Pause, or a real consumer fails to reach the next LBA unless it drains the raw-sector tail.
+A host pause/debugger stop changes sector ordering; ReadN emits its first INT1 before one drive
+period; a partial FIFO suppresses a due event or changes before BFRD service; Pause leaves a live
+deadline; single/double speed differs from the nominal 451,584/225,792 tick thresholds; interpreter
+and emitted execution advance different instruction counts; or a real consumer cannot arbitrate
+Pause before the next sector.
 
 ## Re-confirmed 2026-08-21
 
-Reconfirmed after the isolated Clang build and 75/75 CTests, targeted final continuous-read test 3/3 with 31 checks, prior BFRD suite 3/3 with 535 checks, real Crash Bash LBA35799-to-35800 transition and 189-sector pass, and bounded Tomba no-regression comparison.
-
-## Re-confirmed 2026-08-21
-
-Post-landing Clang build and 75/75 CTests passed; continuous ReadN shipping test passes 3/3 with 31 checks, and the isolated real Crash Bash consumer advanced from LBA35799 through LBA35987 without a recompilation miss.
-
-## Re-confirmed 2026-08-21
-
-Post-landing Clang build and 75/75 CTests passed; continuous ReadN shipping test passes 3/3 with 31 checks, and the isolated real Crash Bash consumer advanced from LBA35799 through LBA35987 without a recompilation miss.
+Reconfirmed on the deterministic-cycle implementation with the hermetic both-answer gates and live
+Crash Bash/Vagrant Story consumers above. The final Clang CTest suite passes 77/77.

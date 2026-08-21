@@ -7,8 +7,8 @@
 // machine (0x800123B0) loops forever. This is a focused, faithful model of the CXD1199-style
 // register interface: index banking, parameter/response/data FIFOs, and a queue of pending
 // interrupts (commands that return INT3-ack-then-INT2-complete). Data reads are served from the
-// disc image (disc.cpp). We complete commands SYNCHRONOUSLY (the response is ready on the next poll),
-// which is correct for code that busy-polls the flag without advancing time.
+// disc image (disc.cpp). Command responses are ready on the next poll; ReadN sector availability is
+// separately scheduled in deterministic guest instruction-time at the programmed nominal speed.
 //
 // Register map (bank = 0x1F801800 & 3):
 //   0x1F801800  W: index/bank (low 2 bits)      R: status (FIFO/busy bits + index)
@@ -16,6 +16,7 @@
 //   0x1F801802  W bank0: parameter FIFO (push)   R: data FIFO (pop)
 //   0x1F801803  W bank0: request (BFRD want-data) W bank1: ack/reset IRQ flags
 //               R bank0/2: interrupt enable      R bank1/3: interrupt flag (pending IRQ type)
+#include "cd_drive_timing.h"
 #include "cdc_state.h"
 #include "disc.h"
 #include "r3000.h"
@@ -27,10 +28,13 @@
 // PER-INSTANCE CD-controller state: the register/FIFO/IRQ-queue model lives on a CdcState (one per
 // Game, game.h) passed EXPLICITLY to every entry point — no bound "current" pointer.
 
+constexpr uint8_t kCdlStatStandby = 0x02;
+constexpr uint8_t kCdlStatRead = 0x20;
+
 void cdc_state_init(CdcState *s) {
   struct DiscState *disc = s->disc; // preserve wiring across re-init
   memset(s, 0, sizeof *s);
-  s->stat = 0x02; // power-on defaults
+  s->stat = kCdlStatStandby; // power-on defaults
   s->disc = disc;
 }
 
@@ -111,34 +115,87 @@ static void queue_data_ready(CdcState *s) {
   cdc_irq(s, 1, response, 1);
 }
 
+static void cancel_drive_event(CdcState *s) {
+  if (!s->drive_event_armed) {
+    return;
+  }
+  s->drive_event_armed = 0;
+  s->drive_deadline_ticks = 0;
+}
+
+static void schedule_sector_event(CdcState *s) {
+  if (!s->reading || s->following_sector_ready || s->drive_event_armed || !s->tick_now) {
+    return;
+  }
+  const uint64_t now_ticks = s->tick_now(s->tick_context);
+  s->drive_deadline_ticks = now_ticks + cd_drive_sector_period_instruction_ticks(s->mode);
+  s->drive_event_armed = 1;
+  lucent::debug("cdcpace",
+                "armed sector event now={} deadline={} mode=0x{:02X} first={}",
+                now_ticks,
+                s->drive_deadline_ticks,
+                s->mode,
+                s->first_sector_pending);
+}
+
 static void stop_continuous_read(CdcState *s) {
+  cancel_drive_event(s);
   s->reading = 0;
+  s->stat &= static_cast<uint8_t>(~kCdlStatRead); // clears when the drive leaves DS_READING
+  s->first_sector_pending = 0;
   s->following_sector_ready = 0;
 }
 
 static void start_continuous_read(CdcState *s) {
+  cancel_drive_event(s);
   s->reading = 1;
+  s->first_sector_pending = 1;
   s->bfrd = 0;
   s->following_sector_ready = 0;
-  if (!load_sector(s)) {
-    stop_continuous_read(s);
-    return;
-  }
-  queue_data_ready(s);
+  s->data_n = 0;
+  s->data_rd = 0;
+  schedule_sector_event(s);
 }
 
-// The drive and the BFRD data FIFO are separate buffers. Once software accepts the current sector
-// into the FIFO, a continuous ReadN/ReadS can receive and announce the following sector even while
-// unread bytes remain in that FIFO. The synchronous model records that drive-side availability and
-// emits its one INT1 immediately; a later BFRD service request swaps the announced sector into the
-// FIFO. Keeping this state separate is what permits clients to leave a raw sector's EDC/ECC tail
-// unread without stalling the drive.
-static void announce_following_sector(CdcState *s) {
-  if (!s->reading || s->following_sector_ready) {
-    return;
+void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now) {
+  s->tick_context = context;
+  s->tick_now = now;
+}
+
+int cdc_drive_service(CdcState *s) {
+  if (!s->drive_event_armed || !s->tick_now) {
+    return 0;
   }
+
+  const uint64_t now_ticks = s->tick_now(s->tick_context);
+  if (now_ticks < s->drive_deadline_ticks) {
+    return 0;
+  }
+
+  s->drive_event_armed = 0;
+  s->drive_deadline_ticks = 0;
+  lucent::debug(
+      "cdcpace", "servicing sector event now={} first={} lba={}", now_ticks, s->first_sector_pending, s->loc_lba);
+  if (!s->reading || s->following_sector_ready) {
+    return 0;
+  }
+
+  if (s->first_sector_pending) {
+    s->first_sector_pending = 0;
+    if (!load_sector(s)) {
+      stop_continuous_read(s);
+      return 0;
+    }
+    s->stat |= kCdlStatRead; // INT1/Getstat must identify an active sector read
+    queue_data_ready(s);
+    return 1;
+  }
+
+  // One drive-side buffer, one INT1. Software may still own unread bytes from the prior sector;
+  // the later BFRD service request swaps this ready sector into the CPU/DMA-visible FIFO.
   s->following_sector_ready = 1;
   queue_data_ready(s);
+  return 1;
 }
 
 // Draining the data FIFO releases that buffer; it does not drive the disc head or produce an event.
@@ -154,7 +211,7 @@ static void sector_consumed(CdcState *s) {
 // DMA3 (CDROM -> RAM): pop up to `words` 32-bit words from the sector data FIFO. Returns the count
 // actually delivered; a SHORT return means the FIFO ran dry and the caller must say so loudly — a
 // transfer reported complete that moved nothing is exactly the silent lie this layer must not tell.
-// Begin a sequential read at `lba` and make the first sector available NOW.
+// Begin a sequential read at `lba`; the first sector becomes available after one drive period.
 //
 // Why the HLE path must call this: a game can read the disc at TWO levels. File reads go through
 // libcd (CdRead/CdGetSector), which this port serves natively. But XA/streaming code bypasses all of
@@ -178,6 +235,10 @@ void cdc_set_mode(CdcState *s, uint8_t mode) {
                 (mode & 0x08) ? 1 : 0,
                 (mode & 0x20) ? 1 : 0);
   s->mode = mode;
+  if (s->drive_event_armed) {
+    cancel_drive_event(s);
+    schedule_sector_event(s);
+  }
 }
 
 void cdc_begin_read(CdcState *s, uint32_t lba) {
@@ -214,7 +275,7 @@ static void exec_command(CdcState *s, uint8_t cmd) {
     cdc_irq(s, 3, r1, 1);
     break; // Setloc
   case 0x0E:
-    s->mode = s->param[0];
+    cdc_set_mode(s, s->param[0]);
     cdc_irq(s, 3, r1, 1);
     break; // Setmode
   case 0x06:
@@ -222,19 +283,25 @@ static void exec_command(CdcState *s, uint8_t cmd) {
     cdc_irq(s, 3, r1, 1);
     start_continuous_read(s);
     break;
-  case 0x09:
+  case 0x09: {
+    const uint8_t reading_status[1] = {s->stat};
     stop_continuous_read(s);
-    cdc_irq(s, 3, r1, 1);
-    cdc_irq(s, 2, r1, 1);
+    const uint8_t paused_status[1] = {s->stat};
+    cdc_irq(s, 3, reading_status, 1);
+    cdc_irq(s, 2, paused_status, 1);
     break; // Pause
-  case 0x08:
+  }
+  case 0x08: {
+    const uint8_t reading_status[1] = {s->stat};
     stop_continuous_read(s);
-    cdc_irq(s, 3, r1, 1);
-    cdc_irq(s, 2, r1, 1);
+    const uint8_t stopped_status[1] = {s->stat};
+    cdc_irq(s, 3, reading_status, 1);
+    cdc_irq(s, 2, stopped_status, 1);
     break; // Stop
+  }
   case 0x0A:
     stop_continuous_read(s);
-    s->stat = 0x02;
+    s->stat = kCdlStatStandby;
     s->mode = 0;
     cdc_irq(s, 3, r1, 1);
     cdc_irq(s, 2, r1, 1);
@@ -295,9 +362,9 @@ static void exec_command(CdcState *s, uint8_t cmd) {
 
 // Apply the bank-0 request register's BFRD latch. BFRD is a level, not a command: writing 0x80
 // again while it is already asserted leaves the current data FIFO and its read cursor untouched.
-// A real new request is the 0 -> 1 transition. In this synchronous model that transition after a
-// partial read discards the unread remainder and presents the already-announced following sector;
-// that is how whole-sector stream readers move on after consuming only their 2048-byte payload.
+// A real new request is the 0 -> 1 transition. BFRD controls only software access to the data FIFO;
+// elapsed drive time owns the following-sector INT1. A transition after that event discards any
+// unread remainder and presents the already-ready sector.
 static void write_request_register(CdcState *s, uint8_t value) {
   const uint8_t asserted = value & 0x80;
   if (!asserted) {
@@ -323,8 +390,8 @@ static void write_request_register(CdcState *s, uint8_t value) {
       return;
     }
   }
-  if (s->data_n > 0) {
-    announce_following_sector(s);
+  if (s->data_n > 0 && !s->following_sector_ready) {
+    schedule_sector_event(s);
   }
 }
 

@@ -144,15 +144,18 @@ billboard-history hook.
 **Audio:** `spu_beetle.c` (Beetle spu.c mixer lift), `spu_audio.c` (SDL sink + PSXPORT_WAV), `xa_stream.c`
 (in-game XA-ADPCM streaming).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
-game-validated blocking-control seam), `cdc_native.cpp` (per-Game register/FIFO/IRQ model and bank-0
-BFRD request latch plus separate drive-side following-sector availability), `disc.cpp` (libchdr),
-`memcard.cpp`. Reasserting an already-high BFRD preserves a partial DMA cursor. A deassert→assert
-transition after partial consumption discards the remainder and presents the already-announced next
-sector; a fully drained FIFO rearms BFRD without advancing by itself. `test_cdc_bfrd_split_dma`
-proves repeated-assert, transition, and deasserted-access answers (535 checks), while
-`test_cdc_continuous_read` proves that continuous ReadN announces exactly one following sector
-independently of partial FIFO drainage and none after Pause stops the drive (31 checks). Both drive
-the shipping begin-read/write/DMA path with a hermetic raw-sector backend.
+game-validated blocking-control seam), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
+latch and drive-event state), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),
+`timing.cpp` (per-Game deterministic guest instruction-time owner), `disc.cpp` (libchdr), `memcard.cpp`. Generated blocks and
+the oracle interpreter advance the same deterministic clock; ReadN schedules its first and following
+INT1 at nominal 451,584 ticks (1x) or 225,792 ticks (Setmode bit 0x80, 2x). One instruction currently
+contributes one tick, so this is deterministic ordering rather than cycle-accurate physical timing.
+BFRD never creates an event:
+reasserting it preserves a partial DMA cursor, and a later transition only installs a sector whose
+drive deadline already elapsed. Pause/Stop cancels the owned deadline. `test_cdc_bfrd_split_dma`
+gates latch/access behavior (535 checks), `test_cdc_continuous_read` gates too-early/due, partial,
+Pause, full-drain, status and speed answers (59 checks), and `test_interp_guest_cycles` plus the
+emitter execution suite gate interpreted/emitted clock advancement.
 **Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle
 gte.c). `gte_state.h::GTE_ExecuteIsolated` runs any vendor GTE instruction against an explicit `GteRegs`
 without changing the caller's bound state. Its implementation tracks nested isolation depth and suppresses
@@ -184,7 +187,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 
 | tool | what it is for | note |
 |---|---|---|
-| `recomp/emit.py` | the static recompiler: PSX MIPS -> emitted C | `test_emit.py` proves `main_reentry` emits a wrapper, body and dispatcher case, and that an unseeded interior PC emits none |
+| `recomp/emit.py` | the static recompiler: PSX MIPS -> emitted C; emitted blocks also advance deterministic guest instruction-time | `test_emit.py` proves `main_reentry` emission/refusal and path-sensitive instruction counts (23 executed loop ticks vs the wrong static-body answer 7); `test_interp_guest_cycles` matches the interpreter on a four-instruction window |
 | `recomp/psexe.py` | load PS-X EXEs and raw RAM images for framework RE tools | ownership test covers success and refusal paths |
 | `abi_extract.py` | static ABI/stack-contract extractor for generated function bodies | |
 | `port_check.py` | equivalence gate: does a native port's guest-visible store sequence match the substrate | |

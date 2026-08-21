@@ -827,13 +827,14 @@ static void interp_flat(Core *c, uint32_t pc, uint32_t stop_ra) {
   unsigned long iters = 0;
   uint32_t lo = pc, hi = pc;
   for (;;) {
-    // Exit the moment control reaches our return sentinel — by a `jr ra` (handled below) OR by a
-    // tail-call's implicit return (`pc = c->r[31]` after a native override, where ra was the
-    // inherited sentinel). The old recursive rec_interp returned to C on any tail-call into an
-    // override; the flat loop needs this top check to match it. stop_ra (CORO_SENTINEL 0xDEAD0000)
-    // is a poison address, never real code, so this is a no-op for normal flow in both callers.
+    // Stop at the return sentinel reached by `jr ra` or a native tail call. It is a poison address,
+    // never guest code, so this check is inert during ordinary execution.
     if (pc == stop_ra) {
       return;
+    }
+    c->pc = pc;
+    if (c->pending_work) {
+      rec_irq_poll(c);
     }
     if (spindbg) {
       if (pc < lo) {
@@ -1103,18 +1104,13 @@ static void interp_flat(Core *c, uint32_t pc, uint32_t stop_ra) {
     }
     ldhaz_step(d, in, pc); // load-delay hazard detector (execution order)
 
-    // `break` is a program trap. We HLE the BIOS, so there is no exception handler to resume
-    // into — the trap ENDS this run. In particular crt0 (0x800896E0) is `jal main; break`: on
-    // real PSX main never returns, but our native main (game_main) returns after N headless
-    // frames, so control reaches that terminal break. The old recursive rec_interp escaped it by
-    // chance (it returned to C on the next `jr ra`, which fell through into a halt loop); the flat
-    // loop must treat the break itself as the halt. (A `break` never executes on a hot path here —
-    // the field run hits exactly one, this terminal — so ending the run on it is correct.)
+    // `break` ends this HLE run: there is no guest exception handler to resume. crt0 reaches its
+    // terminal break only after the native main returns from a bounded run.
     if (op == 0x00 && FN(in) == 0x0D) {
+      rec_guest_instruction_ticks(c, 1);
       rec_break(c, (in >> 6) & 0xFFFFF);
       return;
     }
-
     if (op == 0x02 || op == 0x03) { // j / jal
       uint32_t tgt = TGT(in, pc);
       if (op == 0x03) {
@@ -1122,7 +1118,8 @@ static void interp_flat(Core *c, uint32_t pc, uint32_t stop_ra) {
         trace_call(d, pc, tgt);
       } // jal: link + optional call trace
       ldhaz_step(d, c->mem_r32(pc + 4), pc + 4); // delay slot executes next
-      exec_simple(c, c->mem_r32(pc + 4));        // delay slot
+      exec_simple(c, c->mem_r32(pc + 4));
+      rec_guest_instruction_ticks(c, 2); // delay slot, then its boundary
       // A native override / BIOS vector must win on EITHER a `jal` call or a tail-`j` into it,
       // else the flat interpreter re-runs a function the PC side owns (e.g. the LZ decompressor
       // 0x80044D8C) and can diverge from it. coro_native_call only fires for exact override/BIOS
@@ -1139,7 +1136,8 @@ static void interp_flat(Core *c, uint32_t pc, uint32_t stop_ra) {
       uint32_t link = pc + 8, rd = RD(in);
       int is_jalr = FN(in) == 0x09, is_ra = RS(in) == 31;
       ldhaz_step(d, c->mem_r32(pc + 4), pc + 4); // delay slot executes next
-      exec_simple(c, c->mem_r32(pc + 4));        // delay slot
+      exec_simple(c, c->mem_r32(pc + 4));
+      rec_guest_instruction_ticks(c, 2); // delay slot, then its boundary
       if (is_jalr) {
         if (rd) {
           c->r[rd] = link;
@@ -1188,10 +1186,12 @@ static void interp_flat(Core *c, uint32_t pc, uint32_t stop_ra) {
       }
       ldhaz_step(d, c->mem_r32(pc + 4), pc + 4); // delay slot executes next
       exec_simple(c, c->mem_r32(pc + 4));
+      rec_guest_instruction_ticks(c, 2);
       pc = t ? tgt : pc + 8;
       continue;
     }
     exec_simple(c, in);
+    rec_guest_instruction_ticks(c, 1);
     pc += 4;
   }
 }

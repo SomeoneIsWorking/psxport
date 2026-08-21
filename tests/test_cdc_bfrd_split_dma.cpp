@@ -8,9 +8,8 @@
 //
 // This is the shipping CDC path with a hermetic disc backend: cdc_begin_read() loads a synthetic raw
 // sector through disc_read_raw(), cdc_write() receives the exact request-register sequence, and
-// cdc_dma_read() performs both DMA legs. The second case proves the discriminator: deasserting BFRD
-// before asserting it again really does request the next sector, so an implementation that ignores
-// every later request cannot pass.
+// cdc_dma_read() performs both DMA legs. BFRD changes only FIFO access; the separate continuous-read
+// test owns drive-time sector arrival.
 #include "testutil.h"
 
 #include <algorithm>
@@ -19,6 +18,7 @@
 #include <cstdint>
 
 #include "cdc_state.h"
+#include "cdc_test_clock.h"
 #include "disc.h"
 
 namespace {
@@ -49,12 +49,14 @@ void write_bfrd(CdcState *cdc, uint8_t value) {
   cdc_write(cdc, 0x1F801803u, value);
 }
 
-CdcState begin_whole_sector_read(DiscState *disc) {
+CdcState begin_whole_sector_read(DiscState *disc, CdcTestClock *clock) {
   CdcState cdc{};
   cdc.disc = disc;
   cdc_state_init(&cdc);
+  cdc_test_bind(&cdc, clock);
   cdc_set_mode(&cdc, 0xA0); // double-speed, whole-sector FIFO
   cdc_begin_read(&cdc, kPvdLba);
+  cdc_test_service_deadline(&cdc, clock);
   write_bfrd(&cdc, 0x00);
   write_bfrd(&cdc, 0x80);
   return cdc;
@@ -62,7 +64,8 @@ CdcState begin_whole_sector_read(DiscState *disc) {
 
 void test_repeated_assertion_preserves_split_dma_cursor(void) {
   DiscState disc{};
-  CdcState cdc = begin_whole_sector_read(&disc);
+  CdcTestClock clock{};
+  CdcState cdc = begin_whole_sector_read(&disc, &clock);
   std::array<uint32_t, kHeaderWords> header{};
   std::array<uint32_t, kPayloadWords> payload{};
 
@@ -86,9 +89,10 @@ void test_repeated_assertion_preserves_split_dma_cursor(void) {
   }
 }
 
-void test_deassert_then_assert_requests_next_sector(void) {
+void test_deassert_then_assert_preserves_sector_until_drive_event(void) {
   DiscState disc{};
-  CdcState cdc = begin_whole_sector_read(&disc);
+  CdcTestClock clock{};
+  CdcState cdc = begin_whole_sector_read(&disc, &clock);
   std::array<uint32_t, kHeaderWords> header{};
   uint32_t next_word = 0;
 
@@ -96,15 +100,16 @@ void test_deassert_then_assert_requests_next_sector(void) {
   write_bfrd(&cdc, 0x00);
   write_bfrd(&cdc, 0x80);
 
-  CHECK_EQ(cdc.loc_lba, kPvdLba + 1);
-  CHECK_EQ(cdc.data_rd, 0);
+  CHECK_EQ(cdc.loc_lba, kPvdLba);
+  CHECK_EQ(cdc.data_rd, kHeaderWords * sizeof(uint32_t));
   CHECK_EQ(cdc_dma_read(&cdc, &next_word, 1), 1);
-  CHECK_EQ(next_word, read_le32(kNextSector.data() + 12));
+  CHECK_EQ(next_word, read_le32(kPvdSector.data() + 24));
 }
 
 void test_deasserted_latch_blocks_fifo_access(void) {
   DiscState disc{};
-  CdcState cdc = begin_whole_sector_read(&disc);
+  CdcTestClock clock{};
+  CdcState cdc = begin_whole_sector_read(&disc, &clock);
   uint32_t word = 0;
 
   CHECK((cdc_read(&cdc, 0x1F801800u) & 0x40u) != 0); // DRQSTS while BFRD is asserted
@@ -136,7 +141,7 @@ extern "C" int disc_read_sector(DiscState *, uint32_t, uint8_t *) {
 
 int main() {
   RUN(repeated_assertion_preserves_split_dma_cursor);
-  RUN(deassert_then_assert_requests_next_sector);
+  RUN(deassert_then_assert_preserves_sector_until_drive_event);
   RUN(deasserted_latch_blocks_fifo_access);
   return pt_summary();
 }

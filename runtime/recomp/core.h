@@ -259,6 +259,8 @@ void rec_dispatch_miss(Core *c, uint32_t addr);
 void rec_syscall(Core *c, uint32_t code);
 void rec_break(Core *c, uint32_t code);
 void rec_irq_poll(Core *c); // service Core::pending_work at a guest call boundary
+void rec_guest_instruction_ticks(Core *c,
+                                 uint32_t ticks); // deterministic instruction time (timing.cpp)
 
 // --- host turn (host_turn.cpp) -----------------------------------------------------------------
 // A static recompile has no place to give the HOST a turn while the guest executes straight-line

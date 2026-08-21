@@ -16,13 +16,8 @@ class Core;
 // head covered 512 — video 3.98x too fast, reproduced at 3.97x on LOGO.STR. Audio can never sync to
 // that, and nothing was wrong with the audio.
 //
-// These two are pure functions of hardware facts and elapsed time, so they are gated by a hermetic
-// test (tests/test_cd_stream_drive_rate.cpp) rather than reasoned about.
-
-// Sectors per second for a Setmode byte. A CD-ROM delivers 75 sectors/s per speed multiple, and
-// Setmode bit 0x80 selects double speed. Not a tunable: the guest programs mode 0xE0 for these
-// movies, which is double speed.
-int cd_stream_sectors_per_sec(uint8_t mode);
+// The hardware rate is owned by cd_drive_timing; the stream budget below applies that shared rate to
+// elapsed time. Both are gated by tests/test_cd_stream_drive_rate.cpp rather than reasoned about.
 
 // How many sectors the drive owes RIGHT NOW: elapsed x rate, minus what has already been delivered
 // for this stream. Never negative (a caller uses it directly as a loop count) and bounded per call,

@@ -481,6 +481,7 @@ struct InterpDiagFixture {
 struct Core {
   uint32_t r[32]; uint32_t lo, hi, pc;
   uint32_t pending_work = 0;      // upstream's deferred-work gate tests this at entries/back-edges
+  uint64_t guest_ticks = 0;       // deterministic instruction time emitted by the shipping translator
   InterpDiagFixture idiag;        // generated wrappers maintain the shipping OT-attribution stack
   uint8_t ram[0x200000];
   uint8_t  mem_r8 (uint32_t a){ return ram[a & 0x1FFFFF]; }
@@ -509,6 +510,7 @@ void gte_hold_src(Core*, int, uint32_t) {}
 void gte_copy_pz(Core*, int, uint32_t) {}
 uint32_t gte_read_data(uint32_t){ return 0; }
 static void rec_irq_poll(Core*) {}
+static void rec_guest_instruction_ticks(Core* c, uint32_t ticks) { c->guest_ticks += ticks; }
 uint32_t g_dispatch = 0;
 void (*g_dispatch_fn)(Core*) = 0;   // when set, rec_dispatch TAIL-calls it (models the loop back-edge)
 void rec_dispatch(Core* c, uint32_t addr){ g_dispatch = addr; if (g_dispatch_fn) g_dispatch_fn(c); }
@@ -521,20 +523,19 @@ int main(int argc, char** argv){
   __PRECALL__
   __ENTRY__(&c);
   for(int i=0;i<32;i++) printf("r%d=%08x\n", i, c.r[i]);
-  printf("lo=%08x\nhi=%08x\ndispatch=%08x\n", c.lo, c.hi, g_dispatch);
+  printf("lo=%08x\nhi=%08x\ndispatch=%08x\nticks=%llx\n", c.lo, c.hi, g_dispatch,
+         static_cast<unsigned long long>(c.guest_ticks));
   return 0;
 }
 """
 
 
 def _have_cxx():
-    for cc in ("c++", "g++", "clang++"):
-        try:
-            subprocess.run([cc, "--version"], capture_output=True, check=True)
-            return cc
-        except Exception:
-            continue
-    return None
+    try:
+        subprocess.run(["clang++", "--version"], capture_output=True, check=True)
+        return "clang++"
+    except Exception:
+        return None
 
 
 def run_func(data, base, regs=None, mem=None, hooks="", base_exe=0x80010000, funcset=None, precall="",
@@ -600,7 +601,8 @@ def run_module(data, base, entry, regs=None, base_exe=0x80010000, seeds=None):
         prelude = HARNESS.split("__HOOKS__")[0]
         # Every TU includes this, so the harness's definitions have to be inline/static here.
         for sym in ("void gte_hold_pz", "void gte_record_pz", "void gte_hold_src", "void gte_copy_pz",
-                    "uint32_t gte_read_data", "void rec_dispatch(", "uint32_t g_dispatch",
+                    "uint32_t gte_read_data", "void rec_guest_instruction_ticks", "void rec_dispatch(",
+                    "uint32_t g_dispatch",
                     "void (*g_dispatch_fn)"):
             prelude = prelude.replace(sym, "inline " + sym)
         core_h = ("#pragma once\n" + prelude
@@ -617,7 +619,8 @@ def run_module(data, base, entry, regs=None, base_exe=0x80010000, seeds=None):
             "    else { unsigned ad; if(sscanf(argv[i],\"m%x=%x\",&ad,&val)==2) c.mem_w32(ad,val); } }\n"
             f"  gen_func_{entry:08X}(&c);\n"
             '  for(int i=0;i<32;i++) printf("r%d=%08x\\n", i, c.r[i]);\n'
-            '  printf("lo=%08x\\nhi=%08x\\ndispatch=%08x\\n", c.lo, c.hi, g_dispatch);\n'
+            '  printf("lo=%08x\\nhi=%08x\\ndispatch=%08x\\nticks=%llx\\n", c.lo, c.hi, g_dispatch, '
+            'static_cast<unsigned long long>(c.guest_ticks));\n'
             '  printf("otpush=%08x\\notpop=%08x\\notdepth=%08x\\n", c.idiag.otattr_pushes, '
             'c.idiag.otattr_pops, c.idiag.otattr_depth);\n'
             "  return 0;\n}\n")
@@ -657,6 +660,7 @@ def test_exec_basic_alu():
     data, _ = a.assemble()
     res = run_func(data, 0x80010000, regs={"a0": 10, "a1": 5})
     assert res["r"][2] == (10 + 5) * 2, res["r"][2]
+    assert res["ticks"] == 4, res["ticks"]
 
 
 def test_exec_loop_sum():
@@ -675,6 +679,9 @@ def test_exec_loop_sum():
     data, _ = a.assemble()
     res = run_func(data, 0x80010000, regs={"a0": 5})
     assert res["r"][2] == 15, res["r"][2]
+    # One setup instruction, five four-instruction loop iterations, and jr+nop. A static-body
+    # counter would report 7; this proves the shipping emitter counts the path actually executed.
+    assert res["ticks"] == 23, res["ticks"]
 
 
 def test_exec_jumptable():

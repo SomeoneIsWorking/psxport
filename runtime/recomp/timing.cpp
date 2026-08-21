@@ -5,6 +5,7 @@
 // returns it; VSync(-1) queries it. This is the standard static-recomp frame model: one logic
 // frame per VSync(0). Each tick also DeliverEvents the VBlank event class for any TestEvent-
 // based waiter. Reached via c->game->timing.method().
+#include "cdc_state.h"
 #include "core.h"
 #include "game.h"
 #include <stdio.h>
@@ -12,6 +13,25 @@
 
 enum { A0 = 4, V0 = 2 };
 #define VBLANK_COUNT 0x800ABDE0u // DAT_800abde0: libetc VSync counter (FUN_80085900 returns it)
+
+uint64_t Timing::readGuestInstructionTicks(void *context) {
+  return static_cast<Timing *>(context)->guestInstructionTicks;
+}
+
+void Timing::bindCdcClock(CdcState *cdc) {
+  cdc_bind_tick_source(cdc, this, readGuestInstructionTicks);
+}
+
+void Timing::advanceGuestInstructionTicks(uint32_t ticks) {
+  guestInstructionTicks += ticks;
+  if (cdc_drive_service(&game->cdc)) {
+    game->core.irqStatLatch();
+  }
+}
+
+extern "C" void rec_guest_instruction_ticks(Core *core, uint32_t ticks) {
+  core->game->timing.advanceGuestInstructionTicks(ticks);
+}
 
 // 0x80085BB0 FUN_80085bb0 VSyncCallback(func): no-op. The original routes the per-vblank
 // callback through the libapi interrupt vector we don't model; we don't deliver preemptive

@@ -14,6 +14,7 @@
 //     bytes from the disc image at lba straight into buf, return 1 (its bool success value).
 //     This bypasses the whole FUN_8008c960/c5d8/cafc/ac34 command+IRQ machinery for data.
 #include "c_subsys.h"
+#include "cd_drive_timing.h"
 #include "core.h"
 #include "game.h"
 #include "overlay_router.h"
@@ -800,10 +801,6 @@ void Cd::hleInit() {
 //
 // The guest's own Pause/Stop clears stream_active, so this never outlives what the game asked for.
 // ---- streamed-read drive pacing (declared in cd.h; gated by tests/test_cd_stream_drive_rate.cpp) --
-int cd_stream_sectors_per_sec(uint8_t mode) {
-  return (mode & 0x80) ? 150 : 75; // 75 sectors/s per speed multiple; bit 0x80 = double speed
-}
-
 int cd_stream_sectors_due(uint64_t elapsed_ns, int sectors_per_sec, uint32_t already_delivered) {
   if (sectors_per_sec <= 0) {
     return 0;
@@ -845,7 +842,7 @@ void Cd::pumpStream(Core *c, int sectors) {
       stream_t0_ns = now_ns; // first pump of this stream seeds the clock
     }
     const uint8_t mode = game ? game->cdc.mode : 0x80;
-    const int rate = cd_stream_sectors_per_sec(mode);
+    const int rate = cd_drive_sectors_per_second(mode);
     int due = cd_stream_sectors_due(now_ns - stream_t0_ns, rate, stream_delivered);
     // The very first sector is never withheld: at t=0 nothing has elapsed, so nothing is owed, and
     // a stream that cannot deliver its first sector can never start.

@@ -188,6 +188,7 @@ public:
     mods.init(); // per-Game mod state: factory defaults + the player's settings file
     disc_state_init(&disc);
     cdc_state_init(&cdc);
+    timing.bindCdcClock(&cdc);
     xa_state_init(&xa);
     gte.dbg.sxhist_on = gte.dbg.gteprobe = gte.dbg.projprobe = gte.dbg.rtpcaller_on = -1;
     // core.cfg is already valid here: Core is a MEMBER, so its constructor (which snapshots

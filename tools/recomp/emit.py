@@ -1264,10 +1264,23 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
     backedges |= {t for t in ra_conts if any(t <= j for j in computed_jrs)}
 
     def emit_run(s, e):
+        # Advance deterministic guest instruction-time by the instructions that actually ran, batching each
+        # straight-line block into one call. A debugger pause or slow host therefore advances ZERO
+        # guest time. Flush before a label so a goto skips the preceding fall-through block's count;
+        # control+delay-slot ticks are spliced after the delay slot and before the transfer.
+        block_ticks = 0
+
+        def flush_ticks():
+            nonlocal block_ticks
+            if block_ticks:
+                out.append(f"  rec_guest_instruction_ticks(c, {block_ticks}u);")
+                block_ticks = 0
+
         a = s
         while a < e:
             i = ins[a]
             if a in labels:
+                flush_ticks()
                 out.append(f"L_{a:08X}:;")
                 # Loop back-edge: give the host a turn. One predictable load-and-test per iteration,
                 # and only on loops — see the `backedges` note above for why function entry alone is
@@ -1304,11 +1317,14 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
                         ds_c += f" gte_record_pz(c, {addr_expr(slot)}, {pz_stores[sa]});"
                     elif sa in pz_copies:
                         ds_c += f" gte_copy_pz(c, {pz_copies[sa]}, {addr_expr(slot)});"
+                delay_body = ds_c
+                ds_c += f" rec_guest_instruction_ticks(c, {block_ticks + 2}u);"
+                block_ticks = 0
                 out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a), a in ra_tails,
                                         a in ra_computed, intra_links.get(a), ra_conts))
                 if (a + 4) in ds_label_targets:        # the delay slot is also a branch target
                     out.append(f"  goto L_DSAFTER_{a:08X};")
-                    out.append(f"L_{a + 4:08X}:; {ds_c}")
+                    out.append(f"L_{a + 4:08X}:; {delay_body} rec_guest_instruction_ticks(c, 1u);")
                     out.append(f"L_DSAFTER_{a:08X}:;")
                 a += 8
             else:
@@ -1332,7 +1348,9 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
                     out.append(f"  gte_record_pz(c, {addr_expr(i)}, {pz_stores[a]});")
                 elif a in pz_copies:
                     out.append(f"  gte_copy_pz(c, {pz_copies[a]}, {addr_expr(i)});")
+                block_ticks += 1
                 a += 4
+        flush_ticks()
 
     # A function cut at a DELIBERATE mid-function RE-ENTRY SEED (reentry) whose body runs off its end into
     # that seed must CONTINUE into it, not `return`. Case: GAME's prologue 0x8010637C falls through into its

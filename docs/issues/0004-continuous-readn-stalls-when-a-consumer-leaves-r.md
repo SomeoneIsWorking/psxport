@@ -28,11 +28,19 @@ other sector modes. Advancing on interrupt acknowledgment was already disproven 
 that drive BFRD without using acknowledgment as the data-consumption boundary. The controller needs
 separate drive-side following-sector availability and software FIFO-consumption state.
 
-The shipping-path hermetic test supplies the discriminator. Before the fix its partial-FIFO case
-failed because no following `INT1` was pending; its stopped-controller case passed, ruling out
-unconditional event generation.
+The shipping-path hermetic test supplies both discriminators. The consumption-owned model emitted
+no following `INT1`; the later BFRD-owned model emitted one immediately. The controller instead
+needs a drive deadline independent of both FIFO consumption and BFRD traffic.
 
 ## Resolution
 
-### Resolution (2026-08-21)
-Separated drive-side following-sector availability from BFRD data-FIFO consumption in cdc_native.cpp. Accepting a sector now records and emits exactly one following INT1 without changing the current FIFO; draining only empties/rearms BFRD, and a later real service request installs the announced sector. The pre-fix shipping-path test failed both event discriminators (IRQ type 0 instead of 1); final test passes 3/3 and 31 checks, including an actual Pause INT3/INT2 opposite case, and the prior split-DMA suite remains 3/3 and 535. Real Crash Bash, built with PSXPORT_DIR pointing at the isolated worktree, DMA-read LBA35799 as 3+512 words while leaving 280 bytes, observed pending E1/ack, wrote BFRD 00 then 80, loaded LBA35800, and completed the next 3+512-word DMA. It continued through LBA35987: 189 sectors per pass over 21 passes, with no Cant-find or recomp-miss. Repeated high-level loading is the next distinct consumer boundary, not a failure of continuous delivery; evidence crashbash/scratch/logs/cdc-continuous-consumer.log.
+`Timing::guestInstructionTicks` now owns deterministic guest instruction-time. Emitted and interpreted guest
+execution advance the same counter; ReadN schedules its first sector and every following sector at
+nominal 451,584-tick (1x) or 225,792-tick (Setmode bit 0x80, 2x) thresholds. BFRD only exposes or swaps a sector that the
+drive event already made ready. Pause/Stop cancels the owned deadline.
+
+The shipping test passes 5/5 with 59 checks, including too-early, exactly-due, partial-tail, Pause,
+full-drain and both-speed answers. Real Crash Bash returns from its 189-sector start with all 189
+still pending, then services LBA35799..35987 at +225,792-tick deadlines despite every sector
+leaving 280 bytes unread, prints `done loading`, and reaches the next recompilation boundary. Issue
+0007 records that one tick per instruction is not a cycle-accurate physical drive model.
