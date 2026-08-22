@@ -6,7 +6,7 @@ created: 2026-08-22
 tags:
 depends: runtime/recomp/gpu_vk.cpp#GpuVkState::present, runtime/recomp/gpu_painter.cpp#GpuVkState::painter_command
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 18:00:09
+verified_at: 2026-08-22 19:33:47
 ---
 
 ## Claim
@@ -28,3 +28,7 @@ Reverified after authored replay and draw-area work: gpu_vk.cpp shrank to 4,402 
 ## Re-confirmed 2026-08-22
 
 Post-commit baseline corrected after 0f808dc9: that commit is the already-recorded authored draw-area extraction/discriminator change, not a later unverified mutation. Current full Clang framework CTest passes 84/84, including cpp_style structure caps, format, and tidy.
+
+## Re-confirmed 2026-08-22
+
+Post-composition cpp_style passed inside Clang CTest 90/90; structure caps and peer renderer ownership remained enforced.

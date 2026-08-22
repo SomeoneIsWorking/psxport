@@ -1,12 +1,12 @@
 ---
-id: C026
+id: C027
 kind: claim
 status: holds
 created: 2026-08-22
 tags: widescreen,projection
 depends: runtime/recomp/guest_widescreen_projection.h, runtime/recomp/guest_widescreen_projection.cpp, runtime/recomp/render_mode.h, runtime/recomp/gpu_display_mode.h, tests/test_guest_widescreen_projection.cpp, tests/test_gpu_display_mode.cpp
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:25:40
+verified_at: 2026-08-22 19:33:48
 ---
 
 ## Claim
@@ -28,3 +28,7 @@ Reconfirmed after final Clang build and CTest 88/88; exact MMX4/Tekken extent co
 ## Re-confirmed 2026-08-22
 
 Full Clang build and 88/88 CTests pass after exact opposite-answer guest projection controls: 320 display/project/draw widens to 428; distinct 368 display/draw widens to 492 while 384 projection widens directly to 512; Psx/Native and 4:3 remain identity. MMX4 direct consumer full Clang link and 8/8 title tests pass without Fps60/lerp/native-depth/native-producer dependencies.
+
+## Re-confirmed 2026-08-22
+
+Post-composition Clang CTest 90/90 passed guest-wide 320->428, 368->492, 384->512, 4:3 identity, latch, path, and display-mode controls.

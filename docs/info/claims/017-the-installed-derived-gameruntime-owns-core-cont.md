@@ -6,7 +6,7 @@ created: 2026-08-22
 tags: architecture,game-runtime
 depends: runtime/recomp/game_iface.cpp#psxport_install_game, runtime/recomp/core.cpp#Core, runtime/recomp/game.h#Game, runtime/recomp/game_runtime.h#GameRuntime
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:02:18
+verified_at: 2026-08-22 19:33:47
 ---
 
 ## Claim
@@ -39,3 +39,7 @@ range validity, and the bounded adapter projection; independent CTR embedded con
 ## Re-confirmed 2026-08-22
 
 Post-commit full Clang CTest passed GameRuntime and guest-program ownership contracts within 85/85.
+
+## Re-confirmed 2026-08-22
+
+Post-composition Clang CTest 90/90 passed test_game_runtime, ownership, optional-hook, and direct-runtime controls.
