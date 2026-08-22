@@ -148,6 +148,9 @@ def decode(addr: int, raw: int) -> Instr:
         name = COP2_MOVE.get(rs)
         if name is None:
             return Instr(addr, raw, UNKNOWN, f"cop2:0x{rs:02X}", rt=rt, rd=rd)
+        if raw & 0x7FF:
+            return Instr(addr, raw, UNKNOWN, f"cop2-move-reserved:0x{raw & 0x7FF:03X}",
+                         rt=rt, rd=rd)
         return Instr(addr, raw, GTE_MOVE, name, rt=rt, rd=rd)
 
     ent = PRIMARY.get(op)

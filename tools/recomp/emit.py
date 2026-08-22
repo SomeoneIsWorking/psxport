@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-12.1"   # wrappers maintain the OT-attribution stack on DIRECT calls too
+RECOMP_VERSION = "2026-08-22.1"   # lui+ori computed tables; canonical COP2 moves only
 
 R = lambda n: f"c->r[{n}]"
 
@@ -647,6 +647,8 @@ def find_jump_tables(exe, ins, lo, hi, validate=True, tbl_spans=None):
             targets = [exe.word(tbl + k * 4) for k in range(count)]
         except Exception:
             return None
+        if any(t & 3 for t in targets):
+            return None                 # R3000A instruction targets are always word-aligned
         if validate and any(not (lo <= t < hi) for t in targets):   # a real switch jumps within its fn
             return None
         return tbl, count, targets
@@ -693,10 +695,34 @@ class _NoIns:
 _N = _NoIns()
 
 
+def _fold_immediate_constant(i, known):
+    """Return the constant written by a standard MIPS immediate-construction instruction."""
+    if i.op == "lui":
+        return i.imm << 16
+    if i.rs not in known:
+        return None
+    if i.op in ("addi", "addiu"):
+        return (known[i.rs] + i.simm) & 0xFFFFFFFF
+    if i.op == "ori":
+        return known[i.rs] | i.imm
+    return None
+
+
+def _advance_immediate_constants(i, known):
+    """Advance a conservative reaching-constant map through one instruction."""
+    value = _fold_immediate_constant(i, known)
+    for reg in tuple(known):
+        if defines_reg(i, reg):
+            del known[reg]
+    if value is not None:
+        known[i.rt] = value
+    return value
+
+
 def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
     """Recover `jr base + idx*2^k` — a computed OFFSET dispatch with NO address table.
 
-    Shape:  lui/addiu rB,<immediate base> ; sll rI,rI,k ; add dst,rB,rI ; jr dst
+    Shape:  lui + addiu/ori rB,<immediate base> ; sll rI,rI,k ; add dst,rB,rI ; jr dst
 
     The two idioms above this one both require the target ADDRESS to be read from a table with
     `lw rN,OFF(base)`. Here there is no table: the base is an immediate and the index is scaled into an
@@ -722,11 +748,11 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
             # construction (lui/addiu), this is the no-index form and the constants below are the
             # answer — bailing here made the scan blind to it, because the very instruction that
             # assigns the target address looked like disqualifying interference.
-            if i.op in ("lui", "addi", "addiu"):
+            if i.op in ("lui", "addi", "addiu", "ori"):
                 break
             return None
     if add_a is None:
-        # NO INDEX AT ALL: `lui rX,HI ; addiu rX,rX,LO ; ... ; jr rX` — an indirect jump whose register
+        # NO INDEX AT ALL: `lui rX,HI ; addiu/ori rX,rX,LO ; ... ; jr rX` — an indirect jump whose register
         # holds a plain IMMEDIATE, set at one or more sites in the function (Spyro's 0x800243FC reaches
         # 0x800240F8 or 0x800241A8 this way). There is no base+index to decompose, so the earlier scan
         # bails; the targets are simply the constants assigned to that register. Same principle as the
@@ -736,27 +762,26 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
             i = ins.get(a)
             if i is None:
                 continue
-            if i.op == "lui":
-                hi_v[i.rt] = i.imm << 16
-            elif i.op in ("addi", "addiu") and i.rs in hi_v:
-                v = (hi_v[i.rs] + i.simm) & 0xFFFFFFFF
-                hi_v[i.rt] = v
-                if i.rt == dst and lo <= v < hi:
-                    consts.add(v)
+            v = _advance_immediate_constants(i, hi_v)
+            # A lui is only the high half of a standard address construction. Count the completed
+            # low-half assignment, never the partial value; this preserves the pre-ori detector's
+            # semantics and prevents one stale candidate from becoming a two-target false positive.
+            if v is not None and i.op != "lui" and i.rt == dst and not (v & 3) and lo <= v < hi:
+                consts.add(v)
         return sorted(consts) if len(consts) >= 2 else None
 
-    # 2. the immediate base. FORWARD, because `lui rB,HI ; addiu rB,rB,LO` cannot be resolved walking
-    #    backward — the addiu is met before the lui that gives it meaning.
+    # 2. the immediate base. FORWARD, because `lui rB,HI ; addiu/ori rB,rB,LO` cannot be resolved
+    #    walking backward — the low-half instruction is met before the lui that gives it meaning.
     base = base_reg = None
     hi_val = {}
     for a in range(max(lo, add_a - window * 4), add_a, 4):
         i = ins.get(a)
         if i is None:
             continue
-        if i.op == "lui":
-            hi_val[i.rt] = i.imm << 16
-        elif i.op == "addiu" and i.rs in hi_val and i.rt in srcs:
-            base, base_reg = (hi_val[i.rs] + i.simm) & 0xFFFFFFFF, i.rt
+        v = _advance_immediate_constants(i, hi_val)
+        if v is not None:
+            if i.rt in srcs:
+                base, base_reg = v, i.rt
     if base_reg is None or not (lo <= base < hi):
         return None
 
@@ -764,19 +789,40 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
     #    OTHER addend — keying on "any sll writing either operand" picked up an unrelated `sll` on the
     #    base register once the window widened, giving idx == base and no cases.
     other = srcs[1] if srcs[0] == base_reg else srcs[0]
-    idx_reg = shift = scale_op = None
+    idx_reg = shift = scale_op = scale_a = None
     for a in range(max(lo, add_a - window * 4), add_a, 4):
         i = ins.get(a)
         # `srl` as well as `sll`: the index is sometimes a BITFIELD, masked out with andi and shifted
         # DOWN into place (0x8004E5A4-0x8004E5A8 is `andi t2,v0,0xFF00 ; srl t2,t2,5`, i.e. bits 8-15
         # scaled by 8). An sll-only match missed that whole family.
         if i is not None and i.op in ("sll", "srl") and i.rd == other:
-            idx_reg, shift, scale_op = i.rt, i.shamt, i.op
+            idx_reg, shift, scale_op, scale_a = i.rt, i.shamt, i.op, a
     if idx_reg is None:
         return None
     # For a right-shifted bitfield the constant-index route is meaningless (the constants feeding it are
     # pre-shift field values), so the run walk is the only sound bound — it is unioned in below anyway.
     stride = (1 << shift) if scale_op == "sll" else 8
+
+    # A low-bit mask immediately defining the scaled index is an exact bound: `andi idx,src,31`
+    # means precisely 32 reachable slots. Prefer it over scanning for jump-shaped blocks, because
+    # shared bodies after an inline trampoline table can also contain jumps and are not table slots.
+    masked_count = None
+    if scale_op == "sll":
+        for a in range(scale_a - 4, max(lo, scale_a - window * 4) - 4, -4):
+            i = ins.get(a)
+            if i is None:
+                continue
+            if i.op == "andi" and i.rt == idx_reg:
+                mask = i.imm
+                if mask and (mask & (mask + 1)) == 0:
+                    masked_count = mask + 1
+                break
+            if defines_reg(i, idx_reg):
+                break
+
+    if masked_count is not None:
+        out = [base + k * stride for k in range(masked_count)]
+        return out if all(not (t & 3) and lo <= t < hi for t in out) else None
 
     targets = set()
     # 4a. indices assigned as CONSTANTS by the branch cascade dominating the jr — exact when the index
@@ -811,7 +857,7 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
                 if miss >= 2:
                     break
 
-    out = sorted(t for t in targets if lo <= t < hi)
+    out = sorted(t for t in targets if not (t & 3) and lo <= t < hi)
     return out if len(out) >= 2 else None
 
 

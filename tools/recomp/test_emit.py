@@ -727,6 +727,100 @@ def test_exec_jumptable():
         assert res["r"][2] == want, f"switch({inp}) -> {res['r'][2]:#x} != {want}"
 
 
+def test_exec_inline_trampoline_table_with_ori_base():
+    if _skip_if_no_cc():
+        return
+    # switch(a0 & 3) via an inline array of fixed-width j+nop trampolines. Unlike the address-table
+    # idiom above, jr lands ON the table slot; each slot then jumps into the shared body. Psy-Q forms
+    # the base with lui+ori here, not lui+addiu. A missing recovery routes the mid-function slot through
+    # rec_dispatch instead of keeping it inside this emitted function.
+    a = Asm(0x80010000)
+    a.lui("t9", 0x8001)
+    a.ori("t9", "t9", 0x0020)
+    a.andi("t1", "a0", 3)
+    a.sll("t1", "t1", 3)
+    a.addu("t1", "t1", "t9")
+    a.jr("t1")
+    a.nop()
+    a.nop()  # align table to 0x80010020
+    a.label("slot0")
+    a.j("case0")
+    a.nop()
+    a.label("slot1")
+    a.j("case1")
+    a.nop()
+    a.label("slot2")
+    a.j("case2")
+    a.nop()
+    a.label("slot3")
+    a.j("case3")
+    a.nop()
+    for index, value in enumerate((11, 22, 33, 44)):
+        a.label(f"case{index}")
+        a.addiu("v0", "zero", value)
+        a.jr("ra")
+        a.nop()
+    data, _ = a.assemble()
+    e = exe_of(data)
+    ins = {x: decode(x, e.word(x)) for x in range(e.load, e.text_end, 4)}
+    recovered = emit.find_jump_tables(e, ins, e.load, e.text_end)
+    jr = a.base + 5 * 4
+    slots = [a.labels[f"slot{index}"] for index in range(4)]
+    assert recovered[jr] == slots
+    assert a.labels["case0"] not in recovered[jr], "shared body label is not a table slot"
+    for inp, want in enumerate((11, 22, 33, 44)):
+        res = run_func(data, a.base, regs={"a0": inp})
+        assert res["r"][2] == want, (
+            f"inline trampoline switch({inp}) -> {res['r'][2]:#x} != {want}; "
+            f"dispatch={res['dispatch']:#x}"
+        )
+
+
+def test_computed_offset_rejects_partial_lui_and_clobbered_low_half():
+    # A duplicated tail can contain a jr below the containing function's `lo`. Recovery must not
+    # pair that jr with unrelated constants in the containing body. In particular, a bare lui is a
+    # partial address, and a load kills that partial value before the later addiu. The old forward
+    # map retained the stale high half; counting the lui itself as a second target then turned this
+    # pair into the false local target set {0x80010000, 0x8001006A}.
+    a = Asm(0x8000FFF0)
+    a.jr("v0")
+    a.nop()
+    a.nop()
+    a.nop()
+    owner_lo = a.base + 16
+    a.lui("v0", 0x8001)
+    a.lw("v0", 0x100, "v0")
+    a.addiu("v0", "v0", 0x6A)
+    a.jr("ra")
+    a.nop()
+    for _ in range(32):
+        a.nop()
+    data, _ = a.assemble()
+    e = exe_of(data, base=a.base)
+    ins = {x: decode(x, e.word(x)) for x in range(e.load, e.text_end, 4)}
+    assert emit._scan_computed_offset(ins, a.base, 2, owner_lo, e.text_end) is None
+
+
+def test_computed_offset_rejects_unaligned_masked_targets():
+    # A register jump to a non-word-aligned address raises an address error on R3000A; it can never
+    # be an emitted C label. Range-only validation admitted base 0x...22 and later walked a
+    # halfword-shifted instruction stream until it fell off the image.
+    a = Asm(0x80010000)
+    a.lui("t9", 0x8001)
+    a.ori("t9", "t9", 0x0022)
+    a.andi("t1", "a0", 3)
+    a.sll("t1", "t1", 3)
+    a.addu("t1", "t1", "t9")
+    a.jr("t1")
+    a.nop()
+    for _ in range(12):
+        a.nop()
+    data, _ = a.assemble()
+    e = exe_of(data)
+    ins = {x: decode(x, e.word(x)) for x in range(e.load, e.text_end, 4)}
+    assert a.base + 5 * 4 not in emit.find_jump_tables(e, ins, e.load, e.text_end)
+
+
 def test_exec_branch_into_delay_slot():
     if _skip_if_no_cc():
         return

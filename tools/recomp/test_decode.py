@@ -91,6 +91,18 @@ def test_cop():
     chk(0, 0xE8820000, D.GTE_STORE, "swc2 v0, 0(a0)")
 
 
+def test_cop2_move_reserved_bits_are_not_instructions():
+    # COP2 register moves require bits 10..0 to be zero. Data word 0x48CCCCCE has the ctc2 primary
+    # fields by coincidence, but reserved=0x4CE; accepting it invents code/function boundaries.
+    canonical = 0x48CCC800
+    chk(0, canonical, D.GTE_MOVE, "ctc2 t4, $25", rt=12, rd=25)
+    for reserved in (0x001, 0x400, 0x4CE, 0x7FF):
+        ins = decode(0, canonical | reserved)
+        assert ins.kind == D.UNKNOWN, (
+            f"reserved COP2 move bits 0x{reserved:03X} decoded as {fmt(ins)}"
+        )
+
+
 def test_nop_and_unknown():
     chk(0, 0x00000000, D.NOP, "nop")
     assert decode(0, 0xFC000000).kind == D.UNKNOWN  # opcode 0x3F unused

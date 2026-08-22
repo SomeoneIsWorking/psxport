@@ -89,6 +89,10 @@ add_test(NAME recomp_emitter
          COMMAND ${CMAKE_COMMAND} -E env python3
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/test_emit.py)
 
+add_test(NAME recomp_decoder
+         COMMAND ${CMAKE_COMMAND} -E env python3
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/test_decode.py)
+
 add_test(NAME gpu_shader_generator
          COMMAND ${CMAKE_COMMAND} -E env python3
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/gen_gpu_shaders.py --selftest)

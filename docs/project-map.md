@@ -235,7 +235,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 
 | tool | what it is for | note |
 |---|---|---|
-| `recomp/emit.py` | the static recompiler: PSX MIPS -> emitted C; emitted blocks also advance deterministic guest instruction-time | `test_emit.py` proves `main_reentry` emission/refusal and path-sensitive instruction counts (23 executed loop ticks vs the wrong static-body answer 7); `test_interp_guest_cycles` matches the interpreter on a four-instruction window |
+| `recomp/emit.py` | the static recompiler: PSX MIPS -> emitted C; emitted blocks also advance deterministic guest instruction-time | `test_emit.py` proves `main_reentry` emission/refusal, exact bounded inline `lui`/`ori` trampoline tables, and path-sensitive instruction counts (23 executed loop ticks vs the wrong static-body answer 7); `test_decode.py` rejects non-canonical COP2 moves with reserved low bits; `test_interp_guest_cycles` matches the interpreter on a four-instruction window |
 | `recomp/psexe.py` | load PS-X EXEs and raw RAM images for framework RE tools | ownership test covers success and refusal paths |
 | `abi_extract.py` | static ABI/stack-contract extractor for generated function bodies | |
 | `port_check.py` | equivalence gate: does a native port's guest-visible store sequence match the substrate | |
