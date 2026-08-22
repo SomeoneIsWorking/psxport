@@ -102,20 +102,21 @@ into `ctest`. What was actually established, by running it:
   derived by hand in the fixture's own comments: `$t0 = 0x12345678` from `lui`+`ori`, `$t2 = 0x123456DC`
   from `addu`, `$t3` round-tripped through a `sw`/`lw` pair, the stored word visible in main RAM itself,
   and PC advanced 160 bytes while staying inside RAM. 12 of 12 checks pass.
-- **The glue surface is 15 symbols, not 53.** Measured by linking rather than by reading: a CPU that only
-  has to STEP needs `cpu.c`, `gte.c` and the six PGXP translation units, and those leave undefined only
+- **The base CPU glue surface is 15 symbols, not 53.** Measured by linking rather than by reading: a CPU
+  that only has to STEP needs `cpu.c`, `gte.c` and the six PGXP translation units, and those leave undefined only
   `ScratchRAM`, the eight `PSX_MemRead/Write*`, `PSX_EventHandler`, `psx_gte_overclock`,
-  `MDFNSS_StateAction`, `widescreen_hack`, `widescreen_hack_aspect_ratio_setting`. The CD, GPU, DMA,
-  timer, SIO and filestream layers are not in the stepping path at all. `gte.c` compiles once
-  `runtime/recomp` is on the include path, exactly as the feasibility section predicted.
-- **A hardware access is REPORTED, not absorbed.** The spike's second program reads GPUSTAT at
+  `MDFNSS_StateAction`, `widescreen_hack`, `widescreen_hack_aspect_ratio_setting`. The narrow I_STAT /
+  I_MASK extension additionally links Mednafen's `irq.c`; CD, GPU, DMA, timer, SIO and filestream remain
+  outside the stepping library. `gte.c` compiles once `runtime/recomp` is on the include path, exactly as
+  the feasibility section predicted.
+- **An unsupported hardware access is REPORTED, not absorbed.** The spike's second program reads GPUSTAT at
   `0x1F801814`; the run must come back `ORACLE_STOP_HARDWARE` naming that address. A shim that returned 0
   for device reads would report a clean window instead, and milestone 2 would then compare instructions
   nobody executed.
-- **The spike has shown BOTH answers.** `tools/oracle/prove_spike_can_fail.sh` (ctest:
-  `oracle_spike_discriminates`) rebuilds the shim with its FastMap population loop disabled — in a
-  throwaway copy under `scratch/`, never the shipping file — and requires the spike to FAIL: 9 of 12
-  checks fail there. Without that, 12/12 would have meant nothing.
+- **The narrow IRQ model stays on the same CPU.** A shipping fixture writes I_MASK, reads it back after
+  the real load delay, writes I_STAT, and proves caller execution continues. The adjacent GPUSTAT case
+  remains the opposite answer, so adding one modeled register block cannot silently turn every unknown
+  device into zero. The complete spike now plans and passes 43/43 checks across six program classes.
 
 Three things milestone 1 taught that were NOT in the design:
 
@@ -162,12 +163,12 @@ pipe: `oracle_resume_call_return` validates the observed external target and `$r
 `$v0/$v1`, preserves the independent CPU's RAM/register/timestamp state, and resumes its PC pipeline.
 `oracle_trace --model-bios-return TABLE:FN:V0` owns no BIOS policy; it requires the consumer to name the
 table/function/result, verifies `$t1`, and captures the first subsequent call or hardware access. The
-34-check spike proves both accepted and wrong-target answers, while `test_oracle_trace.py` proves the CLI's
+43-check spike proves both accepted and wrong-target answers, while `test_oracle_trace.py` proves the CLI's
 successful/wrong-function answers. CTR is the first real consumer: two repeat oracle runs were identical,
 then oracle and generated execution agreed on 108/108 pre-call, modeled-return, and next-call fields.
 
 The same tracer now owns ordinal direct-call decoding through `--capture-call N` (`--capture-first-call`
-is its compatibility alias). This removes per-game copies of jal/delay-slot parsing. Its 6-check CLI gate
+is its compatibility alias). This removes per-game copies of jal/delay-slot parsing. Its 8-check CLI gate
 proves calls 1 and 2 produce different targets and that requesting call 3 refuses with `reached 2 of 3`
 rather than emitting an empty boundary.
 

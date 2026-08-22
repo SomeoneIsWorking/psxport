@@ -10,18 +10,18 @@
 // MEASURED GLUE SURFACE (2026-08-13, by linking rather than by reading): stepping needs `cpu.o`,
 // `gte.o` and the six PGXP objects, and those reference exactly FIFTEEN symbols nobody in that set
 // defines — `ScratchRAM`, the eight `PSX_MemRead/Write*`, `PSX_EventHandler`, `psx_gte_overclock`,
-// `MDFNSS_StateAction`, `widescreen_hack`, `widescreen_hack_aspect_ratio_setting`. Not the 53 the whole
-// core needs: the CD, GPU, DMA, timer, SIO and filestream layers are not in the stepping path at all.
+// `MDFNSS_StateAction`, `widescreen_hack`, `widescreen_hack_aspect_ratio_setting`. The narrow IRQ bus
+// extension also links Mednafen's `irq.o`; the CD, GPU, DMA, timer, SIO and filestream layers remain
+// outside this stepping library.
 // `MainRAM` is here because THIS file owns the RAM, not because the CPU asks for it — the CPU reaches
 // main memory through `PSX_MemRead*` and through the FastMap set up in `oracle_init`.
 //
 // ═══ THE RULE HERE: A STUB THAT IS REACHED MUST SAY SO, NEVER RETURN ZERO ═════════════════════════════
-// Milestone 1 executes a STRAIGHT-LINE window of game code: no disc, no GPU, no timers, no interrupts.
-// A hardware access inside that window is not an error to swallow, it is THE MEASUREMENT — it marks the
-// instruction at which the window ended, past which any comparison would be comparing two programs that
-// diverged for a correct reason. So `PSX_MemRead*`/`PSX_MemWrite*` refuse anything outside main RAM and
-// scratchpad, naming the address, and the run reports `ORACLE_STOP_HARDWARE` rather than a clean stop.
-// Returning 0 there would make "the window ended" indistinguishable from "a device held zero".
+// Milestone 1 began with straight-line code; the oracle now models only the PSX interrupt controller's
+// I_STAT/I_MASK bus range so a real write/read/write sequence can stay on the same Mednafen CPU. Every
+// other hardware access remains a measurement boundary: `PSX_MemRead*`/`PSX_MemWrite*` name the address
+// and report `ORACLE_STOP_HARDWARE` rather than inventing a value. Returning 0 there would make "the
+// window ended" indistinguishable from "a device held zero".
 //
 // ═══ DETERMINISM ═════════════════════════════════════════════════════════════════════════════════════
 // The plan makes determinism a precondition, so: nothing here reads host time or host entropy, and
@@ -34,6 +34,7 @@
 #include <string.h>
 
 #include "cpu.h"
+#include "irq.h"
 #include "oracle_shim.h"
 #include "psx.h"
 
@@ -69,6 +70,8 @@ uint8_t widescreen_hack_aspect_ratio_setting = 0;
 #define RAM_MASK 0x001FFFFFu   // and the offset it wraps to
 #define SPAD_BASE 0x1F800000u
 #define SPAD_SIZE 0x00000400u
+#define IRQ_BASE 0x1F801070u
+#define IRQ_END 0x1F801078u
 
 // Where the window stood when it ended. File-scope because the memory callbacks discover it while
 // `oracle_run` reports it, and Mednafen's callback signatures have nowhere to thread it through.
@@ -120,6 +123,10 @@ static inline int in_scratch(uint32_t a, uint32_t *off) {
   }
   return 0;
 }
+static inline int in_irq(uint32_t a) {
+  const uint32_t phys = a & 0x1FFFFFFFu;
+  return phys >= IRQ_BASE && phys < IRQ_END;
+}
 static inline uint8_t *ram(void) {
   return (uint8_t *)MultiAccessSizeMem_get_data32(MainRAM);
 }
@@ -127,19 +134,19 @@ static inline uint8_t *spad(void) {
   return (uint8_t *)MultiAccessSizeMem_get_data32(ScratchRAM);
 }
 
-// A device access ends the window. Recorded AND announced, and the CPU is told to stop, so the caller
-// sees the exact instruction rather than a run that carried on over garbage.
+// An unsupported device access ends the window. Recorded AND announced, and the CPU is told to stop, so
+// the caller sees the exact instruction rather than a run that carried on over garbage.
 static void hw_access(uint32_t addr, int is_write, int bits) {
   if (s_stop == ORACLE_STOP_NONE || s_stop == ORACLE_STOP_BUDGET) {
     s_stop = ORACLE_STOP_HARDWARE;
     s_stop_addr = addr;
   }
   fprintf(stderr,
-          "oracle: HARDWARE %s%d at 0x%08X — outside main RAM and scratchpad.\n"
-          "        Milestone 1 runs a window that touches no hardware, so the window is OVER at this\n"
-          "        instruction; a comparison past it would compare two programs that diverged for a\n"
-          "        correct reason. Reported instead of returning 0, because a zero here cannot be told\n"
-          "        apart from a device that really held zero. docs/plans/oracle-against-beetle.md\n",
+          "oracle: UNSUPPORTED HARDWARE %s%d at 0x%08X.\n"
+          "        Only main RAM, scratchpad, and the I_STAT/I_MASK interrupt-controller range are\n"
+          "        modeled. The window is OVER at this instruction; a comparison past it would invent\n"
+          "        device behavior. Reported instead of returning 0, because a zero here cannot be\n"
+          "        distinguished from a device that really held zero.\n",
           is_write ? "WRITE" : "READ",
           bits,
           addr);
@@ -148,12 +155,15 @@ static void hw_access(uint32_t addr, int is_write, int bits) {
 
 uint8_t MDFN_FASTCALL PSX_MemRead8(int32_t *ts, uint32_t A) {
   uint32_t o;
-  (void)ts;
   if (in_main_ram(A, &o)) {
     return ram()[o];
   }
   if (in_scratch(A, &o)) {
     return spad()[o];
+  }
+  if (in_irq(A)) {
+    (*ts)++;
+    return (uint8_t)IRQ_Read(A);
   }
   hw_access(A, 0, 8);
   return 0;
@@ -161,7 +171,6 @@ uint8_t MDFN_FASTCALL PSX_MemRead8(int32_t *ts, uint32_t A) {
 uint16_t MDFN_FASTCALL PSX_MemRead16(int32_t *ts, uint32_t A) {
   uint32_t o;
   uint16_t v;
-  (void)ts;
   if (in_main_ram(A, &o)) {
     memcpy(&v, ram() + o, 2);
     return v;
@@ -170,12 +179,15 @@ uint16_t MDFN_FASTCALL PSX_MemRead16(int32_t *ts, uint32_t A) {
     memcpy(&v, spad() + o, 2);
     return v;
   }
+  if (in_irq(A)) {
+    (*ts)++;
+    return (uint16_t)IRQ_Read(A);
+  }
   hw_access(A, 0, 16);
   return 0;
 }
 uint32_t MDFN_FASTCALL PSX_MemRead32(int32_t *ts, uint32_t A) {
   uint32_t o, v;
-  (void)ts;
   if (in_main_ram(A, &o)) {
     memcpy(&v, ram() + o, 4);
     return v;
@@ -183,6 +195,10 @@ uint32_t MDFN_FASTCALL PSX_MemRead32(int32_t *ts, uint32_t A) {
   if (in_scratch(A, &o)) {
     memcpy(&v, spad() + o, 4);
     return v;
+  }
+  if (in_irq(A)) {
+    (*ts)++;
+    return IRQ_Read(A);
   }
   hw_access(A, 0, 32);
   return 0;
@@ -203,6 +219,10 @@ void MDFN_FASTCALL PSX_MemWrite8(int32_t ts, uint32_t A, uint32_t V) {
     spad()[o] = (uint8_t)V;
     return;
   }
+  if (in_irq(A)) {
+    IRQ_Write(A, (uint8_t)V);
+    return;
+  }
   hw_access(A, 1, 8);
 }
 void MDFN_FASTCALL PSX_MemWrite16(int32_t ts, uint32_t A, uint32_t V) {
@@ -217,6 +237,10 @@ void MDFN_FASTCALL PSX_MemWrite16(int32_t ts, uint32_t A, uint32_t V) {
     memcpy(spad() + o, &v, 2);
     return;
   }
+  if (in_irq(A)) {
+    IRQ_Write(A, v);
+    return;
+  }
   hw_access(A, 1, 16);
 }
 void MDFN_FASTCALL PSX_MemWrite32(int32_t ts, uint32_t A, uint32_t V) {
@@ -228,6 +252,10 @@ void MDFN_FASTCALL PSX_MemWrite32(int32_t ts, uint32_t A, uint32_t V) {
   }
   if (in_scratch(A, &o)) {
     memcpy(spad() + o, &V, 4);
+    return;
+  }
+  if (in_irq(A)) {
+    IRQ_Write(A, V);
     return;
   }
   hw_access(A, 1, 32);
@@ -307,6 +335,7 @@ int oracle_init(void) {
     return 0;
   }
   CPU_Power(PSX_CPU);
+  IRQ_Power();
 
   // Instruction fetch does NOT go through PSX_MemRead32: cpu.c reads opcodes straight out of `FastMap`
   // (lines 794 and 810), so a core with an unpopulated FastMap fetches from `DummyPage` and executes

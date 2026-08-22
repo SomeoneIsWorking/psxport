@@ -25,7 +25,7 @@ extern "C" {
 typedef enum OracleStop {
   ORACLE_STOP_NONE = 0, // not run yet
   ORACLE_STOP_BUDGET,   // clean: the requested cycle budget was consumed, no event, no fault
-  ORACLE_STOP_HARDWARE, // the code touched a device register — the straight-line window is over
+  ORACLE_STOP_HARDWARE, // the code touched an unsupported device register — the window is over
   ORACLE_STOP_EVENT,    // a scheduled event came due (milestone 1 asserts this cannot happen)
 } OracleStop;
 

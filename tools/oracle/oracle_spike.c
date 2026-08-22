@@ -51,6 +51,12 @@ static uint32_t i_sw(int rt, int16_t off, int rs) {
 static uint32_t i_lw(int rt, int16_t off, int rs) {
   return (0x23u << 26) | ((uint32_t)rs << 21) | ((uint32_t)rt << 16) | (uint16_t)off;
 }
+static uint32_t i_lhu(int rt, int16_t off, int rs) {
+  return (0x25u << 26) | ((uint32_t)rs << 21) | ((uint32_t)rt << 16) | (uint16_t)off;
+}
+static uint32_t i_sh(int rt, int16_t off, int rs) {
+  return (0x29u << 26) | ((uint32_t)rs << 21) | ((uint32_t)rt << 16) | (uint16_t)off;
+}
 static uint32_t i_nop(void) {
   return 0u;
 }
@@ -62,7 +68,7 @@ static uint32_t i_jr(int rs) {
 }
 
 // ── check bookkeeping: a plan up front, so a run that stops early cannot read as a pass ──────────
-#define PLANNED_CHECKS 39
+#define PLANNED_CHECKS 43
 static int s_ran = 0, s_failed = 0;
 
 static void check_u32(const char *what, uint32_t got, uint32_t want) {
@@ -201,7 +207,7 @@ static int negative_case(void) {
     return 0;
   }
 
-  printf("  (the `oracle: HARDWARE READ32` block below is the EXPECTED output of this case)\n");
+  printf("  (the `oracle: UNSUPPORTED HARDWARE READ32` block below is expected here)\n");
   const OracleStop stop = oracle_run(200);
 
   OracleState st;
@@ -210,6 +216,52 @@ static int negative_case(void) {
   check_stop("negative: window ended at hardware", stop, ORACLE_STOP_HARDWARE);
   check_u32("negative: the offending address", st.stop_addr, 0x1F801814u);
   check_u32("negative: $t0 computed the address", st.gpr[R_T0], 0x1F801814u);
+
+  oracle_teardown();
+  return 1;
+}
+
+// ── IRQ BUS: real I_MASK/I_STAT accesses must remain on this same CPU ─────────────────────────────
+//
+//   lui   $t0, 0x1F80
+//   ori   $t0, $t0, 0x1074  $t0 = I_MASK
+//   addiu $t1, $zero, 0x3333
+//   sh    $t1, 0($t0)       I_MASK = 0x3333
+//   lhu   $t2, 0($t0)       $t2 = the real controller's mask readback after its load delay
+//   nop
+//   sh    $zero, -4($t0)    acknowledge no asserted I_STAT bits
+//   addiu $t3, $zero, 0x4444 proves execution continued beyond the complete sequence
+//
+// This is the same access-width and write/read/write shape Tekken reaches. It uses no title address or
+// expected PC: I_STAT/I_MASK are hardware facts, and the negative GPUSTAT case above must remain the
+// opposite answer so adding one modeled device cannot silently turn every unknown register into zero.
+static int irq_bus_case(void) {
+  uint32_t prog[9];
+  int n = 0;
+  prog[n++] = i_lui(R_T0, 0x1F80);
+  prog[n++] = i_ori(R_T0, R_T0, 0x1074);
+  prog[n++] = i_addiu(R_T1, R_ZERO, 0x3333);
+  prog[n++] = i_sh(R_T1, 0, R_T0);
+  prog[n++] = i_lhu(R_T2, 0, R_T0);
+  prog[n++] = i_nop();
+  prog[n++] = i_sh(R_ZERO, -4, R_T0);
+  prog[n++] = i_addiu(R_T3, R_ZERO, 0x4444);
+  prog[n++] = i_nop();
+
+  if (!oracle_init()) {
+    return 0;
+  }
+  if (!oracle_load_exe(prog, (uint32_t)(n * 4), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) {
+    return 0;
+  }
+
+  const OracleStop stop = oracle_run(200);
+  OracleState st;
+  oracle_capture(&st);
+  check_stop("IRQ bus: sequence stayed on the same CPU", stop, ORACLE_STOP_BUDGET);
+  check_u32("IRQ bus: exact I_MASK address", st.gpr[R_T0], 0x1F801074u);
+  check_u32("IRQ bus: controller supplied mask readback", st.gpr[R_T2], 0x00003333u);
+  check_u32("IRQ bus: caller continued after I_STAT write", st.gpr[R_T3], 0x00004444u);
 
   oracle_teardown();
   return 1;
@@ -459,12 +511,14 @@ int main(void) {
   setvbuf(stderr, NULL, _IONBF, 0); // printed, and stderr/stdout must interleave in the real order
 
   printf("psxport oracle spike — milestone 1 of docs/plans/oracle-against-beetle.md\n");
-  printf("PLAN: %d checks across 5 program classes.\n", PLANNED_CHECKS);
+  printf("PLAN: %d checks across 6 program classes.\n", PLANNED_CHECKS);
   printf("  POSITIVE (9 checks): inject 8 hand-assembled instructions at 0x%08X, run 200 cycles,\n"
          "    assert $t0-$t3, $gp, $sp, the stored word in RAM, a clean stop, and that PC advanced within RAM.\n",
          FIX_ADDR);
   printf("  NEGATIVE (3 checks): read GPUSTAT at 0x1F801814 and assert the run REPORTS a hardware\n"
          "    stop at that address, rather than reading 0 and continuing.\n");
+  printf("  IRQ BUS (4 checks): write/read I_MASK and write I_STAT through the vendored controller,\n"
+         "    then prove the same CPU continues; GPUSTAT remains the opposite answer.\n");
   printf("  STEPPING (6 checks): run the SAME fixture one instruction at a time and require it to land\n"
          "    exactly where the bulk run landed, having actually stepped through the program.\n");
   printf("  MIRRORING (4 checks): store through 0x807FFFF8 — the address Spider-Man's crt0 really uses as\n"
@@ -484,6 +538,12 @@ int main(void) {
   printf("\nNEGATIVE — a hardware access must end the window and be named:\n");
   if (!negative_case()) {
     printf("  REFUSED: oracle setup failed; the negative case did not run.\n");
+    return 2;
+  }
+
+  printf("\nIRQ BUS — the vendored controller must execute write/read/write without leaving this CPU:\n");
+  if (!irq_bus_case()) {
+    printf("  REFUSED: oracle setup failed; the IRQ-bus case did not run.\n");
     return 2;
   }
 
