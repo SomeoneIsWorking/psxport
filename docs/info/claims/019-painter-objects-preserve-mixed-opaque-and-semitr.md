@@ -4,7 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags:
-depends: runtime/recomp/painter_object_layer.cpp#buildPainterObjectPlan, runtime/recomp/gpu_painter.cpp#GpuVkState::painter_command, runtime/recomp/gpu_vk.cpp#render_geom
+depends: runtime/recomp/painter_object_layer.cpp#buildPainterObjectPlan, runtime/recomp/gpu_painter.cpp#GpuVkState::painter_command
+reconfirmed: 2026-08-22
+verified_at: 2026-08-22 17:01:35
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ test_painter_object_layer accepts and preserves semi/blend metadata; test_gpu_pa
 ## What would falsify it
 
 A painter object produces a different packed color or depth than guest authored-order replay for any supported opaque/semitransparent command stream or ABR mode.
+
+## Re-confirmed 2026-08-22
+
+Reverified after cross-object replay and draw-area clip: planner/staging tests and full Clang CTest pass 83/83; the real Vulkan mixed-material stream remains 6/6 and the draw-area outside/inside discriminator passes.

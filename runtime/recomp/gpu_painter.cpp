@@ -2,6 +2,7 @@
 
 #include "core.h"
 #include "game.h"
+#include "gpu_painter.h"
 #include "gpu_vk_device.h"
 
 #include <SDL3/SDL.h>
@@ -141,4 +142,31 @@ void gpu_vk_painter_set_item_object(Core *core, uint32_t object) {
 
 bool gpu_vk_painter_end(Core *core) {
   return core->game->gpu_vk.painter_end();
+}
+
+void gpu_vk_painter_stage_draw_area_selftest(GpuVkState &gpu, uint16_t *vram, int vramWidth) {
+  float depth[3] = {.40f, .40f, .40f};
+  gpu.set_order(7);
+  gpu.set_vd(depth);
+  gpu.s_painter_item_gouraud = 0;
+  gpu.s_painter_item_dither = 0;
+  // The triangle covers both readback probes, but only the inner draw area is eligible to paint.
+  gpu.draw_tri(200, 190, 255, 0, 0, 280, 190, 255, 0, 0, 240, 230, 255, 0, 0, 220, 200, 260, 220);
+  for (int y = 190; y <= 230; ++y) {
+    for (int x = 200; x <= 280; ++x) {
+      vram[y * vramWidth + x] = 0;
+    }
+  }
+}
+
+bool gpu_vk_painter_check_draw_area_selftest(const uint16_t *localColor, int scaledWidth, int scale) {
+  const uint16_t outside = localColor[(205 * scale) * scaledWidth + 216 * scale];
+  const uint16_t inside = localColor[(205 * scale) * scaledWidth + 240 * scale];
+  const bool ok = outside == 0 && inside == 0x001F;
+  lucent::info("gpu_selftest",
+               "painter untextured draw-area outside={:04X} expect 0000 inside={:04X} expect 001F => {}",
+               outside,
+               inside,
+               ok ? "PASS" : "FAIL");
+  return ok;
 }

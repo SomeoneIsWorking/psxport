@@ -124,7 +124,10 @@ comparator; duplicate keys, unordered world faces, and mixed policies refuse ins
 `RenderQueue::flush` epochs remain independent because a captured logic frame may contain several complete
 OT traversals. Both direct queue emission and `Fps60::presentPass` call the same pointer-stream planner, so
 presentation cannot bypass painter ordering or copy multi-megabyte `RqItem` payloads.
-`gpu_painter.cpp` owns painter target lifecycle and command staging.
+`gpu_painter.{h,cpp}` owns painter target lifecycle, command staging, and the focused real-GPU
+discriminator for the custom untextured painter. Both painter fragment paths enforce each item's
+inclusive PSX draw area before shading; this prevents valid authored geometry from leaking into
+guest guard rows when the host target is wider than the original viewport.
 `ot_lifo_depth.{h,cpp}` encodes PSX `AddPrim` head-insertion order for equal-key authored faces, while
 `gpu_vk_next_distinct_3d_depth` owns conversion to raster-distinct Vulkan D32 values. `gpu_vk.cpp`
 retains interleaved textured and untextured command runs (including explicit flat/Gouraud and DTD state).

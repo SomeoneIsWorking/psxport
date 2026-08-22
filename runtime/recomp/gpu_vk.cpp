@@ -1,6 +1,7 @@
 #include "gpu_vk.h" // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
 #include "core.h"
 #include "game.h"                          // Game / GpuVkState (per-instance render state)
+#include "gpu_painter.h"                   // authored painter staging + focused GPU discriminator
 #include "gpu_vk_present_mode.h"           // preferred_present_mode — the sink must not stall the guest thread
 #include "gpu_vk_present_policy.h"         // present_rebuild_decision — when a present must rebuild the composite
 #include "gpu_vk_semi_selftest.h"          // semi-textured PSX equations through shipping shaders + blend state
@@ -3819,6 +3820,7 @@ void GpuVkState::tritest() {
     // Unsaturated G3 at known native matrix cells: x=300,y=60 is -4, x=303,y=60 is +1.
     // At 2x, adjacent physical pixels within each native cell must match.
     utri(288, 318, .40f, 6, 127, 127, 127, true, true);
+    gpu_vk_painter_stage_draw_area_selftest(*this, pat, VRAM_W);
     if (!painter_end()) {
       lucent::error("gpu_selftest", "painter end failed");
       ok = 0;
@@ -3906,21 +3908,23 @@ void GpuVkState::tritest() {
                  pok ? "PASS" : "FAIL");
     ok &= pok;
     lucent::info("gpu_selftest",
-                 "painter mixed stream commands={} materials={}/{}/{}/{}/{} F3-dither-off={:04X} => {}",
+                 "painter mixed stream commands={} materials={}/{}/{}/{}/{}/{} F3-dither-off={:04X} => {}",
                  s_painter_cmd_n,
                  s_painter_cmd_material[0],
                  s_painter_cmd_material[1],
                  s_painter_cmd_material[2],
                  s_painter_cmd_material[3],
                  s_painter_cmd_material[4],
+                 s_painter_cmd_material[5],
                  fc,
-                 (s_painter_cmd_n == 5 && s_painter_cmd_material[0] == 1 && s_painter_cmd_material[1] == 0 &&
+                 (s_painter_cmd_n == 6 && s_painter_cmd_material[0] == 1 && s_painter_cmd_material[1] == 0 &&
                   s_painter_cmd_material[2] == 1 && s_painter_cmd_material[3] == 0 && s_painter_cmd_material[4] == 0 &&
-                  (fc & 31) == 16)
+                  s_painter_cmd_material[5] == 0 && (fc & 31) == 16)
                      ? "PASS"
                      : "FAIL");
-    ok &= s_painter_cmd_n == 5 && s_painter_cmd_material[0] == 1 && s_painter_cmd_material[1] == 0 &&
-          s_painter_cmd_material[2] == 1 && s_painter_cmd_material[3] == 0 && s_painter_cmd_material[4] == 0;
+    ok &= s_painter_cmd_n == 6 && s_painter_cmd_material[0] == 1 && s_painter_cmd_material[1] == 0 &&
+          s_painter_cmd_material[2] == 1 && s_painter_cmd_material[3] == 0 && s_painter_cmd_material[4] == 0 &&
+          s_painter_cmd_material[5] == 0;
     lucent::info("gpu_selftest",
                  "painter G3 dither scale2 neg={:04X}/{:04X} expect 3DEF pos={:04X}/{:04X} expect 4210 => {}",
                  neg0,
@@ -3929,6 +3933,7 @@ void GpuVkState::tritest() {
                  pos1,
                  dither_ok ? "PASS" : "FAIL");
     ok &= dither_ok;
+    ok &= gpu_vk_painter_check_draw_area_selftest(lcpix, sw, 2);
     SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer);
     SDL_UnmapGPUTransferBuffer(s_dev, ddl);
     SDL_UnmapGPUTransferBuffer(s_dev, s_painter_test_local_depth);
