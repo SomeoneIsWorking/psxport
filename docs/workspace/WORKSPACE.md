@@ -26,23 +26,30 @@ every game commit, and a recursive clone would pull seven copies of psxport + be
 ### Target title scope
 
 The target ports are Spyro 1/2/3; Crash 1/2/3; Crash Bash; Crash Team Racing; Vagrant Story; Mega Man
-X4; Tomba! 1/2; Tekken 3; and Spider-Man 1/2. Mega Man X4 is already 60 fps, so its enhancement path is
-widescreen first and, much later, drop-in co-op — not interpolation. All planned lineage repositories
-now have public, reproducible trees. Most newly added titles are honest harness-first scaffolds, not
-implementation coverage; no widescreen or interpolation support is implied by repository existence.
+X4; Tomba! 1/2; Tekken 3; and Spider-Man 1/2.
+
+USER 2026-08-22: "For already 60fps games, Tekken 3, Tomba! (first game, not 2), Mega Man X4, we don't
+need lerp or anything that lerp needs, they just need widescreen"
+
+Tekken 3 (`SLUS_004.02`), Tomba! 1 (`SCUS_942.36`), and Mega Man X4 (`SLUS_005.61`) are already 60 fps, so their rendering-enhancement scope is
+widescreen only: no fps60 mode, interpolation/lerp, or temporal pipeline added solely to support
+interpolation. This does not apply to Tomba! 2 (`SCUS_944.54`, then `MAIN.EXE`). X4 separately retains its later load-removal and
+drop-in co-op goals. All planned lineage repositories now have public, reproducible trees. Most newly
+added titles are honest harness-first scaffolds, not implementation coverage; no widescreen or
+interpolation support is implied by repository existence.
 
 | path | what it is |
 |---|---|
 | `psxport/` | **the framework DEV CLONE — the one writable framework checkout.** Also the home of every doc listed above |
-| `Tomba2Engine/` | Tomba! 2 — psxport's reference consumer; also owns the separate Tomba! 1 title project, with no shared `game/` |
+| `Tomba2Engine/` | Tomba! 2 (`SCUS_944.54` → `MAIN.EXE`) — psxport's reference consumer; also owns the separate, widescreen-only Tomba! 1 (`SCUS_942.36`) title project, with no shared `game/` |
 | `spyro/` | Spyro 1/2/3, the Insomniac-lineage repository; Spyro 1 (`SCUS_942.28`) is the current implementation |
 | `spider1/` | Spider-Man 1/2, the Neversoft-lineage repository; Spider-Man 1 (`SLUS_008.75`, USA) is the current implementation |
 | `vagrant/` | Vagrant Story (`SLUS_010.40`, USA). Vendors the CC0 `rood-reverse` decomp. Defining fact: the boot exe is ~15% of the code, 933,925 B lives in `.PRG` overlays |
-| `megamanx4/` | Mega Man X4 (`SLUS_005.61`, USA) — the only **enhancement-class** port here: already 60fps, so no native producers, no lerp, no native depth. Wants widescreen + load removal + drop-in co-op. Vendors the AGPL-3.0 `mmx4` decomp, which may NOT be lifted into `psxport` |
+| `megamanx4/` | Mega Man X4 (`SLUS_005.61`, USA) — already 60 fps, so no fps60, native-producer, lerp, or native-depth pipeline. Wants widescreen + load removal + drop-in co-op. Vendors the AGPL-3.0 `mmx4` decomp, which may NOT be lifted into `psxport` |
 | `crash/` | Crash Bandicoot 1/2/3 in one architecture repository; harness-first scaffold |
 | `ctr/` | Crash Team Racing; standalone harness-first scaffold |
 | `crashbash/` | Crash Bash; standalone harness-first scaffold |
-| `tekken3/` | Tekken 3; standalone harness-first scaffold |
+| `tekken3/` | Tekken 3 (`SLUS_004.02`); standalone harness-first scaffold, already 60 fps and targeting widescreen only |
 | `toystory2/` | Existing Toy Story 2 (`SLUS_008.93`, USA) checkout — not in the active title scope above |
 | `coord/` | **UNTRACKED, machine-local, EPHEMERAL ONLY**: `claims/` (the area locks — a lock coordinates the agents on THIS machine, so it must not be tracked), plus agent scratch. Nothing durable belongs here |
 

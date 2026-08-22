@@ -113,8 +113,9 @@ drop-in. Reference only — it is **never built** as part of psxport and is not 
     input-latency reduction, and both sit behind full engine RE. Everything cheap is already free;
     everything with a moat is expensive.
   - **Mega Man X4 is NOT the analogy.** X4 has an AGPL decomp whose build target is byte-identical to
-    our extraction — free symbols at our addresses. Tekken 3 is X4's enhancement shape with Toy Story
-    2's prior art *minus* TS2's format tooling: one MIT archive unpacker, its file map derived from the
+    our extraction — free symbols at our addresses. Tekken 3 shares X4's already-60-fps,
+    widescreen-only rendering scope, but has Toy Story 2's prior-art shape *minus* TS2's format
+    tooling: one MIT archive unpacker, its file map derived from the
     wrong region. Hardest tree in the workspace on the prior-art axis.
   - **It DOES stream code overlays** — `SLUS_004.02`, SHA-1 `562c82d5888f5cb19a883dbfbf1e61a5fa143cbe`,
     1,185,792 B. Overlay code lives in `TEKKEN3.BNS`: 7 word-aligned clusters, ≥220,564 B, +49% on the

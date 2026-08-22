@@ -142,14 +142,28 @@ and the enhancement produces the *picture* from its own pass. **The overlay MUST
 RAM** — a guest write from render is a bug that breaks the byte-compare. This rule is what keeps
 enhancements orthogonal to faithfulness: you don't have to finish Phase 1 to have wide/60fps.
 
-### Native depth is the north star
+### Choose the enhancement class before building its prerequisites
+
+Do not make the 30-to-60fps interpolation stack a universal port prerequisite. Mega Man X4
+(`SLUS_005.61`), Tekken 3 (`SLUS_004.02`), and Tomba! 1 (`SCUS_942.36`) already run at the requested 60fps cadence by title scope, so their rendering
+target is **widescreen only**: no temporal interpolation, no previous/current transform capture, and
+no native-depth or native-producer work justified merely as an interpolation prerequisite. Tomba! 2
+(`SCUS_944.54`, which loads `MAIN.EXE`) is explicitly not in this class. Keep each
+title's original frame loop and recover only what its wider projection, culling, 2D layout, and edge
+presentation actually require. This is a USER scope decision (2026-08-22), not a cross-title timing
+measurement; a title may revise it only with title-specific evidence or a later scope decision.
+
+The coupled capability below applies to a title that really does need an interpolated higher display
+cadence and a moving PC-native camera. It does not apply to an already-60fps widescreen-only port.
+
+### Native depth is the north star for an interpolated native camera
 
 Painter's/OT order has no real depth — it only works for the *fixed* PSX camera because the game
 pre-sorted for that one viewpoint. The moment you widen the FOV or interpolate a frame you've
 moved the camera, and paint order is wrong (z-fighting, bad occlusion). **Native depth — real
 world-Z in a depth buffer — is the only thing that survives a moving/wider camera.**
 
-Crucially, wide + 60fps + correct occlusion are not three features; they are one capability:
+For that interpolated-native class, wide + 60fps + correct occlusion are not three features; they are one capability:
 **recovering world-space coordinates behind what's drawn.**
 
 - native depth = the world Z per vertex,
@@ -219,7 +233,7 @@ port); a full handler port is the faithful end-state.
 | **Parallax / 2D backdrops** | **Irreducibly per-game** — they *fake* depth with 2D scroll and never touch the GTE, so there is no world coordinate to recover. You must RE the game's parallax model (layers, scroll rates, pinned depth) |
 | Object gameplay logic (AI, physics, quests) | **Per-game** — this is the long tail; own it top-down for faithfulness |
 
-So the honest version of "make the next port easier": lean as hard as possible on the GTE tap for
+So the honest version of "make the next interpolated-native port easier": lean as hard as possible on the GTE tap for
 native depth → camera + 3D + billboards become mostly generic (depth, 60fps, wide fall out
 together). The per-game render RE then concentrates on the layers that don't go through GTE —
 parallax/2D — a much smaller, well-bounded surface than "RE the whole renderer top-down."
@@ -235,9 +249,10 @@ real and already isolated.
    Phase 0); vendor the oracle emulator.
 2. **Stand up the harness** (SBS/oracle) and confirm byte-lockstep with everything on substrate.
 3. **Lift the framework** unchanged: substrate, PSX-HW backends, SDK-HLE, tooling, render substrate.
-4. **Bring up the GTE tap** (`projprim`/PGXP equivalent) → native depth for the 3D world. This is
-   the single highest-leverage capability; wide + 60fps ride on it.
-5. **Add per-primitive identity** from the caller context → per-object anchors (60fps) and the
+4. **If the title needs interpolated native rendering, bring up the GTE tap** (`projprim`/PGXP
+   equivalent) → native depth for the 3D world. If it is already 60fps and needs widescreen only,
+   skip the temporal/native-depth machinery and RE its real projection/culling/layout path instead.
+5. **For interpolated native rendering, add per-primitive identity** from the caller context → per-object anchors (60fps) and the
    dissolution of manager-node grouping. Start with `(node, slot)`.
 6. **RE the parallax/2D backdrop model** — the irreducible per-game render RE. Feed those layers
    correct depth/width explicitly.
