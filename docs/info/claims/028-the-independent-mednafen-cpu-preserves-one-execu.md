@@ -6,7 +6,7 @@ created: 2026-08-22
 tags: oracle,irq,harness
 depends: tools/oracle/oracle_shim.c, tools/oracle/oracle_spike.c
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:37:04
+verified_at: 2026-08-22 19:40:57
 ---
 
 ## Claim
@@ -28,3 +28,7 @@ Final Clang build and full framework CTest passed 85/85. oracle_spike passed the
 ## Re-confirmed 2026-08-22
 
 Post-cleanup final gate: oracle_spike passed 43/43 with same-CPU I_MASK/I_STAT continuation and the unsupported GPUSTAT opposite answer; full Clang framework CTest passed 85/85 including cpp_style/clang-tidy.
+
+## Re-confirmed 2026-08-22
+
+Post-landing Clang CTest 90/90 passed oracle_spike 43/43, same-CPU I_MASK/I_STAT continuation, and the unsupported GPUSTAT opposite answer.
