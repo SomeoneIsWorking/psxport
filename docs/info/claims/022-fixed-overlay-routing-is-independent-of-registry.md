@@ -6,7 +6,7 @@ created: 2026-08-22
 tags: overlay,routing,signature,crashbash
 depends: runtime/recomp/overlay_router.cpp#overlay_resolve_fixed, tests/test_overlay_reloc.cpp
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 18:00:29
+verified_at: 2026-08-22 19:02:18
 ---
 
 ## Claim
@@ -27,3 +27,7 @@ identity is resident; or equal-width matches are guessed.
 ## Re-confirmed 2026-08-22
 
 test_overlay_reloc 8/8 cases and 55 checks in full 84/84 CTest; real Crash Bash consumer advances past 0x800B5244; independent of names/order and refuses equal-specificity ambiguity.
+
+## Re-confirmed 2026-08-22
+
+Post-commit full Clang CTest passed overlay relocation/routing controls within 85/85.

@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags: timing,cdc,determinism,recompiler,interpreter
 depends: runtime/recomp/timing.cpp#Timing::advanceGuestInstructionTicks, runtime/recomp/interp.cpp#interp_flat, tools/recomp/emit.py#emit_run, tests/test_interp_guest_cycles.cpp#test_interpreter_ticks_service_the_shipping_cdc_deadline, tools/recomp/test_emit.py#test_exec_loop_sum
-reconfirmed: 2026-08-21
-verified_at: 2026-08-21 13:02:10
+reconfirmed: 2026-08-22
+verified_at: 2026-08-22 19:02:18
 ---
 
 ## Claim
@@ -41,3 +41,7 @@ cycle accuracy before issue 0007 is resolved also falsifies the scope of this cl
 ## Re-confirmed 2026-08-21
 
 Post-landing emitted/interpreted instruction-tick parity gates passed inside the 77/77 suite; path-sensitive loop timing retained 23 ticks and production consumers retained deterministic sector ordering independent of host wall time.
+
+## Re-confirmed 2026-08-22
+
+Post-commit full Clang CTest passed drive-rate, CDC, interpreter guest-cycle, and emitter execution controls within 85/85.

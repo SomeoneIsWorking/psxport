@@ -6,7 +6,7 @@ created: 2026-08-22
 tags: bios,hle,libc,toupper
 depends: runtime/recomp/bios_libc_string.cpp#bios_libc_string_dispatch, runtime/recomp/hle.cpp#Hle::dispatchBios, tests/test_bios_libc_string.cpp
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 18:00:29
+verified_at: 2026-08-22 19:02:18
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ A0:0x25 no longer reaches bios_libc_string_dispatch; a lowercase ASCII byte is n
 ## Re-confirmed 2026-08-22
 
 Shipping-dispatch toupper controls pass in full Clang framework CTest 84/84: t->T, T/digit/0xE0 unchanged, wrong BIOS table unclaimed.
+
+## Re-confirmed 2026-08-22
+
+Post-commit full Clang CTest passed the ASCII toupper shipping-HLE controls within 85/85.

@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-22
 tags: recompiler,control-flow
 depends: tools/recomp/emit.py#_scan_computed_offset, tools/recomp/test_emit.py, tools/recomp/decode.py
+reconfirmed: 2026-08-22
+verified_at: 2026-08-22 19:02:18
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ RED-first four-case inline trampoline execution and exact-target census now pass
 ## What would falsify it
 
 Any supported executable loses a legitimate computed target, admits an extra or unaligned target, Toy Story slot census changes, or Vagrant fresh emission regresses.
+
+## Re-confirmed 2026-08-22
+
+Post-commit 55/55 focused pytest and 85/85 Clang CTest pass; Toy exact 32-slot/local execution and Vagrant fresh 799-resident plus 137-TITLE emission are green.

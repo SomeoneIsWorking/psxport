@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags:
 depends: tools/check_cpp_style.py#check_tidy, tests/CMakeLists.txt, .clang-tidy
-reconfirmed: 2026-08-21
-verified_at: 2026-08-21 13:58:09
+reconfirmed: 2026-08-22
+verified_at: 2026-08-22 19:02:18
 ---
 
 ## Claim
@@ -30,3 +30,7 @@ Post-integration standalone Clang CTest passed 74/74; cpp_style passed the full 
 ## Re-confirmed 2026-08-21
 
 Post-integration Clang 22.1.8 rebuild and normal CTest passed 81/81; cpp_style passed all configured format, structure, and compile-backed clang-tidy checks.
+
+## Re-confirmed 2026-08-22
+
+Post-commit full Clang CTest passed 85/85, including cpp_style and its selftest after adding the tracked decoder test target.

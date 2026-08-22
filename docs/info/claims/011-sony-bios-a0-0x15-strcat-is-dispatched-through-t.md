@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags:
 depends: runtime/recomp/bios_libc_string.cpp#bios_libc_string_dispatch, runtime/recomp/hle.cpp#Hle::dispatchBios, tests/test_bios_libc_string.cpp
-reconfirmed: 2026-08-21
-verified_at: 2026-08-21 11:37:46
+reconfirmed: 2026-08-22
+verified_at: 2026-08-22 19:02:18
 ---
 
 ## Claim
@@ -32,3 +32,7 @@ Final post-extraction Clang gate passed 75/75. test_bios_libc_string passed 4/4 
 ## Re-confirmed 2026-08-21
 
 Post-landing Clang build and 76/76 CTests passed; test_bios_libc_string passes 4/4 cases and 44 checks through the shipping Hle dispatcher, and Toy Story advances past A0:0x15 into its stock-libcd poll.
+
+## Re-confirmed 2026-08-22
+
+Post-commit full Clang CTest passed test_bios_libc_string and all 85 tests.
