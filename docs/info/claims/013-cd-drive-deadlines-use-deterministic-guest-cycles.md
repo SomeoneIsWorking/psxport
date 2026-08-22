@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: timing,cdc,determinism,recompiler,interpreter,display
 depends: runtime/recomp/emulated_time.cpp#EmulatedTime::advanceDisplayFields, runtime/recomp/timing.cpp#Timing::advanceGuestInstructionTicks, runtime/recomp/frame_pacer.cpp#gpu_pace_subframe_fields, runtime/recomp/interp.cpp#interp_flat, tools/recomp/emit.py#emit_run, tests/test_cdc_emulated_time.cpp#test_yield_heavy_loop_reaches_the_same_shipping_cdc_deadline, tests/test_interp_guest_cycles.cpp#test_interpreter_ticks_service_the_shipping_cdc_deadline, tools/recomp/test_emit.py#test_exec_loop_sum
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:33:46
+verified_at: 2026-08-22 19:50:54
 ---
 
 ## Claim
@@ -61,3 +61,7 @@ The real Mega Man X4 loader crosses all six traced front-end boundaries through 
 ## Re-confirmed 2026-08-22
 
 Post-composition Clang CTest 90/90 passed emulated-time, continuous-read, pace-plan, interpreter, and emitter controls.
+
+## Re-confirmed 2026-08-22
+
+Combined Clang framework build and full 91/91 CTest pass at f468f2c7, including CDC deterministic-time controls, HSync counter coverage, and DMA regression coverage.

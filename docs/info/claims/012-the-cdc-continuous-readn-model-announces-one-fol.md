@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cdc,cdrom,readn,dma
 depends: runtime/recomp/cdc_native.cpp#cdc_drive_service, runtime/recomp/timing.cpp#Timing::advanceGuestInstructionTicks, tools/recomp/emit.py#emit_run, tests/test_cdc_continuous_read.cpp#test_first_sector_waits_one_drive_period
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:33:46
+verified_at: 2026-08-22 19:50:54
 ---
 
 ## Claim
@@ -61,3 +61,7 @@ Post-commit full Clang CTest passed CDC continuous-read coverage and emitter exe
 ## Re-confirmed 2026-08-22
 
 Post-composition Clang CTest 90/90 passed continuous-read, CDC drive-rate, instruction parity, and emulated-time controls.
+
+## Re-confirmed 2026-08-22
+
+Combined Clang framework build and full 91/91 CTest pass at f468f2c7, including CDC deterministic-time controls, HSync counter coverage, and DMA regression coverage.
