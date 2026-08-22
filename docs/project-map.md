@@ -196,13 +196,19 @@ billboard-history hook.
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
 game-validated blocking-control seam), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
 latch and drive-event state), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),
-`emulated_time.{h,cpp}` + `timing.cpp` (per-Game deterministic emulated CPU-time owner),
+`emulated_time.{h,cpp}` + `timing.cpp` (per-Game deterministic emulated CPU-time owner and the
+NTSC/PAL HBlank phase exposed through root counter 1 at `0x1F801110`),
 `frame_pacer.{h,cpp}` (display cadence + guest field delivery + optional host sleep), `disc.cpp`
 (libchdr), `memcard.cpp`. Generated blocks and the oracle interpreter advance the same deterministic
 clock; a shared display-field delivery advances it to the guest-programmed NTSC/PAL boundary even
 when host sleeping is disabled. ReadN schedules its first and following INT1 at nominal 451,584 ticks
 (1x) or 225,792 ticks (Setmode bit 0x80, 2x). One instruction currently contributes one tick, so this
 is deterministic ordering rather than cycle-accurate physical timing.
+Sony libetc `VSync(1)` samples root counter 1 and subtracts its saved baseline; it therefore observes
+the same free-running low-16-bit HSync count as direct guest MMIO, without a title-specific override.
+`test_hsync_counter` gates both shipping seams, an intra-field line-248 progression, NTSC/PAL field
+geometry, and invalid-cadence refusal. The clock uses nominal non-interlaced field geometry; alternating
+interlaced field parity is not modeled.
 BFRD never creates an event:
 reasserting it preserves a partial DMA cursor, and a later transition only installs a sector whose
 drive deadline already elapsed. Pause/Stop cancels the owned deadline. `test_cdc_emulated_time`

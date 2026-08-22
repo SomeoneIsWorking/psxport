@@ -591,6 +591,9 @@ static void warn_unmapped_ram(Core *gc, uint32_t a, uint32_t bytes, const char *
 
 uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
+  if (p == 0x1F801110) { // root counter 1: HBlank-clocked free-running 16-bit counter
+    return game->timing.hSyncCounter();
+  }
   if (p == 0x1F801814) {              // GPUSTAT: report ready; toggle even/odd line
     io_gpustat_toggle ^= 0x80000000u; // per-instance (Core member), not a shared static
     return 0x1C000000u | io_gpustat_toggle;
@@ -616,12 +619,8 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     irqStatLatch(); // the controller may have raised during this access; I_STAT is set THEN, not
                     // when the CPU next looks — and latching here is also what makes the edge
                     // observable on the `irq` channel in a run where nothing reads I_STAT.
-    // `PSXPORT_DEBUG=cdcr` — the READ counterpart of cdcw. Without it you can see every command and
-    // parameter a game writes but not whether it ever comes back for the DATA, which is the question
-    // that decides how a port serves reads: a game that pops the data FIFO (register 2) transfers
-    // sectors with its OWN code and only needs the FIFO filled, whereas one that never touches it is
-    // taking delivery some other way and needs a destination. Distinguishing those two by reading
-    // disassembly is guesswork; one run of this settles it.
+    // `PSXPORT_DEBUG=cdcr` logs reads: register 2 means guest-owned FIFO transfer; a game that never
+    // touches it takes delivery elsewhere. This distinction is measured, not guessed from disassembly.
     // Same pc/ra caveat as cdcw: static gen-to-gen calls do not refresh guest pc/ra, so treat them as
     // hints and use cdcbt when the caller identity matters.
     lucent::debug("cdcr",

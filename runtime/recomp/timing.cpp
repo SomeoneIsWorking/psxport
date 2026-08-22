@@ -7,6 +7,7 @@
 // based waiter. Reached via c->game->timing.method().
 #include "cdc_state.h"
 #include "core.h"
+#include "field_rate.h"
 #include "game.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +45,11 @@ uint64_t Timing::emulatedCpuTicks() const {
   return mEmulatedTime.nowTicks();
 }
 
+uint16_t Timing::hSyncCounter() const {
+  const bool pal = game && game->gpu.s_disp_pal != 0;
+  return static_cast<uint16_t>(mEmulatedTime.hSyncCount(field_rate_millihz(pal), display_lines_per_field(pal)));
+}
+
 void Timing::serviceCdc() {
   if (cdc_drive_service(&game->cdc)) {
     game->core.irqStatLatch();
@@ -73,7 +79,7 @@ static void deliver_vblank_events(Core *c) {
 
 // 0x80085900 FUN_80085900 = libetc VSync(mode) reached via c->r[A0]:
 //   mode < 0  -> return current vblank count (query, no wait)
-//   mode == 1 -> return hblank delta (query, no wait) — dummy 0 here
+//   mode == 1 -> return HBlank-clocked root-counter delta since the last wait (query, no wait)
 //   mode == 0 -> wait one vblank; mode > 1 -> wait `mode` vblanks. Advance the frame clock.
 // Currently unreachable — sync_overrides traps VSync (all pacing is PC-native). Kept for RE.
 void Timing::vsync() {
@@ -82,11 +88,12 @@ void Timing::vsync() {
   if (mode < 0) {
     c->r[V0] = vblank;
   } else if (mode == 1) {
-    c->r[V0] = 0;
+    c->r[V0] = static_cast<uint16_t>(hSyncCounter() - mVSyncHSyncBaseline);
   } else {
     vblank += (mode == 0) ? 1u : (uint32_t)mode;
     c->r[V0] = vblank;
     deliver_vblank_events(c);
+    mVSyncHSyncBaseline = hSyncCounter();
   }
   c->mem_w32(VBLANK_COUNT, vblank);
 }

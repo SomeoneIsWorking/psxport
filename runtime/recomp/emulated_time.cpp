@@ -11,7 +11,10 @@ unsigned __int128 display_field_duration_q32(uint32_t fields, uint32_t parts, ui
   const unsigned __int128 numerator = (static_cast<unsigned __int128>(kNominalPsxCpuHz) * 1000u * fields)
                                       << kFractionBits;
   const unsigned __int128 denominator = static_cast<unsigned __int128>(fieldRateMilliHz) * parts;
-  return numerator / denominator;
+  // A delivered field is a completed boundary. Round its Q32 representation upward so converting
+  // that exact boundary back to HSyncs cannot report one line short solely because the fixed-point
+  // duration was truncated by less than one Q32 tick.
+  return (numerator + denominator - 1) / denominator;
 }
 
 } // namespace
@@ -43,4 +46,13 @@ bool EmulatedTime::advanceDisplayFields(uint32_t fields, uint32_t parts, uint32_
 
 uint64_t EmulatedTime::nowTicks() const {
   return static_cast<uint64_t>(mNowQ32 >> kFractionBits);
+}
+
+uint64_t EmulatedTime::hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const {
+  if (fieldRateMilliHz == 0 || linesPerField == 0) {
+    return 0;
+  }
+  const unsigned __int128 scaled = mNowQ32 * fieldRateMilliHz * linesPerField;
+  const unsigned __int128 denominator = (static_cast<unsigned __int128>(kNominalPsxCpuHz) * 1000u) << kFractionBits;
+  return static_cast<uint64_t>(scaled / denominator);
 }

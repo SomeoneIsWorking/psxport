@@ -22,6 +22,7 @@ public:
   void advanceGuestInstructionTicks(uint32_t ticks);
   bool advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilliHz);
   [[nodiscard]] uint64_t emulatedCpuTicks() const;
+  [[nodiscard]] uint16_t hSyncCounter() const;
 
   // vsyncCallback(): 0x80085BB0 FUN_80085bb0 VSyncCallback(func) — no-op. Native frame loop
   //   owns pacing; the libapi per-vblank IRQ vector isn't modeled. Was ov_vsync_callback.
@@ -38,6 +39,7 @@ public:
 
 private:
   EmulatedTime mEmulatedTime;
+  uint16_t mVSyncHSyncBaseline = 0;
 
   static uint64_t readEmulatedCpuTicks(void *context);
   void serviceCdc();

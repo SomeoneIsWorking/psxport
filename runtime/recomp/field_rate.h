@@ -20,8 +20,17 @@
 enum : unsigned {
   FIELD_RATE_NTSC_MILLIHZ = 59940u, // 60000/1001 Hz
   FIELD_RATE_PAL_MILLIHZ = 50000u,  // 50 Hz
+  // Nominal non-interlaced field geometry used by the PSX GPU and HBlank-clocked root counter 1.
+  // Interlaced hardware alternates adjacent line counts; the deterministic framework clock does
+  // not yet model field parity, so it retains the standard's nominal complete-field denominator.
+  DISPLAY_LINES_NTSC = 263u,
+  DISPLAY_LINES_PAL = 314u,
 };
 
 inline unsigned field_rate_millihz(bool pal) {
   return pal ? FIELD_RATE_PAL_MILLIHZ : FIELD_RATE_NTSC_MILLIHZ;
+}
+
+inline unsigned display_lines_per_field(bool pal) {
+  return pal ? DISPLAY_LINES_PAL : DISPLAY_LINES_NTSC;
 }
