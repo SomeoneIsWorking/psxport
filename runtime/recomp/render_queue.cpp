@@ -978,34 +978,27 @@ void RenderQueue::flush(Core *core) {
     objidOverlay(core);
   }
   finalize(core, "flush");
-  // Sited here, beside zfightScan, so it sees the same sorted item set under BOTH the fps60 capture
-  // branch below and the plain emitQueue() path — see histogram()'s own comment.
+  // Sited here, beside zfightScan, so it sees the same sorted item set before either current-frame
+  // capture or the diff-mode inline emit — see histogram()'s own comment.
   histogram();
   // zfightScan reads only the sorted item array (depth/xy/order_mode set at submission time) — it does not
   // depend on emitItem having run — so it belongs HERE, right after sortQueue, not inside emitQueue. This is
-  // the one placement that scans the exact same (sorted, real-frame) item set under BOTH the fps60 capture
-  // branch below and the plain emitQueue() path: fps60 double-buffers this REAL queue and later re-derives an
-  // INTERPOLATED queue from it (Fps60::rq_capture / present_vk) — the interp frame is a lerp of two already-
-  // scanned real frames, so it doesn't need (or want) its own scan. Previously this call lived at the tail of
-  // emitQueue(), which the fps60 branch below skips entirely (it returns before emitQueue) — under the user's
-  // real mods.fps60=1 config the instrument never ran at all.
+  // the one placement that scans the exact same sorted, real-frame item set before FramePresenter captures
+  // it. A temporal decorator may later re-render from captured inputs, but that synthesized picture does not
+  // need (or want) its own real-queue scan. Previously this call lived at the tail of emitQueue(), which the
+  // capture path skips entirely, so the instrument never ran on presented builds.
   zfightScan(core);
-  // fps60: the interpolated-60fps tier OWNS presentation — it double-buffers this sorted queue (Q[N]) and
-  // presents ONE FRAME BEHIND (slot A = lerp(Q[N-1],Q[N]), slot B = Q[N] verbatim; Fps60::present_vk). So
-  // it must HOLD the sorted queue rather than have flush emit it now. Only when this core actually presents
-  // per-frame: under diff_mode (SBS dual-core compare) per-core present is suppressed, so present_vk never
-  // runs — capturing would leave the geometry batch empty (black SBS panes). In diff_mode the SBS composite
-  // reads the geometry batch directly, so flush MUST inline-emit. Gate the fps60 capture on !diff_mode.
-  // ONE PATH. A flush CAPTURES; presentation is Fps60::present_vk's job in both configs. This used to
-  // read `if (fps60.active() && !diff_mode)`, sending fps60=0 down emitQueue() and fps60=1 down the
-  // capture — two renderers, and the source of a family of "only broken at 60" bugs: the panel layer
-  // dropped at 60 only, zfightScan/rqhist scanning a queue that was not what got drawn, and the
-  // painter-object layer unreachable because it lives in emitQueue.
+  // ONE PATH. Every ordinary flush CAPTURES into the neutral FramePresenter; its frame fence decides
+  // whether to emit the current picture directly or offer it to an optional temporal decorator. This
+  // used to branch on fps60.active(), creating two renderers and a family of "only broken at 60" bugs.
   //
   // diff_mode (SBS dual-core compare) is a genuine exception rather than a config: per-core present is
   // suppressed there, so nothing would consume a capture and the panes would be black. It emits inline.
   if (!core->game->diff_mode) {
-    core->game->fps60.rq_capture(items, n);
+    for (int i = 0; i < n; ++i) {
+      mLedger.noteCaptured(items[i].layer);
+    }
+    core->game->presentation.capture(items, n);
     mark_consumed();
     return;
   }

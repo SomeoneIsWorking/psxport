@@ -1742,9 +1742,9 @@ void Sbs::Impl::grabPane(Game *g, uint8_t *rgba, int *ow, int *oh) {
   // Widescreen: the engine renders a wider FOV into VRAM columns [sx, sx+nw) — sample the wide
   // width like the standalone present does (else the wide pane is cropped back to 4:3).
   {
-    int gpu_vk_wide_engine(Core *), gpu_vk_wide_engine_w(Core *);
-    if (gpu_vk_wide_engine(&g->core)) {
-      w = gpu_vk_wide_engine_w(&g->core);
+    int gpu_vk_wide_presentation(Core *), gpu_vk_wide_presentation_w(Core *);
+    if (gpu_vk_wide_presentation(&g->core)) {
+      w = gpu_vk_wide_presentation_w(&g->core);
     }
   }
   if (w < 1) {

@@ -913,9 +913,9 @@ or level — they can't be a bare channel:
   60000/1001. A run states its decoded standard once: `[gpu] display standard -> NTSC (59.940 Hz
   fields — the frame pacer's clock, GP1(08)=…)`. `PSXPORT_DEBUG=pacer` shows the per-call interval,
   sleep and resyncs.
-  `Fps60::frame_commit(core, guestFields)` accepts an explicit logic-frame field count for
-  guest-owned loops whose ordinary path has more than one pacing boundary per logic frame. Passing
-  zero keeps the `paceQuota` behavior. This distinction is required for Spyro: its ordinary path
+  `FramePresenter::commit(core, guestFields, temporal)` accepts an explicit logic-frame field count
+  and owns pacing independently of interpolation. An already-60fps title omits `temporal`; a title
+  with an optional temporal product supplies it at the same fence. This distinction is required for Spyro: its ordinary path
   paces each of two fields separately (`paceQuota=1`), while its FPS60 commit owns both fields and
   must split a two-field interval across the two synthesized presents. Treating that commit as one
   field advances VBlank/audio at about twice wall time while video rendering falls behind.

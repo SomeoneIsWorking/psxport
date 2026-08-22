@@ -71,9 +71,9 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 
 ## `runtime/recomp/` — the PSX→PC PLATFORM (common; future `psxport` submodule)
 **Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (bus dispatch + watchpoints PSXPORT_WWATCH/CW),
-`game_runtime.h` + `guest_program_image.h` + `game_iface.{h,cpp}` (derived `GameRuntime` install,
-the immutable executable-image fact owner, per-Game driver/scheduler factories, and the bounded legacy
-projection), `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and
+`game_runtime.{h,cpp}` + `guest_program_image.h` + `game_iface.{h,cpp}` (derived `GameRuntime` install,
+the immutable executable-image fact owner, per-Game driver/scheduler and optional temporal-presentation
+factories, and the bounded legacy projection), `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and
 callback bags kept source-compatible while consumers migrate), `core.h`/`game.h` (the `Core`/`Game` objects;
 `Game` owns the runtime-created products), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
 `bios_interrupt.{h,cpp}` (the HookEntryInt saved-context contract),
@@ -126,7 +126,13 @@ no loader identity exists, and constructs an equal-width ambiguity; the real con
 MENU's 0x800B5244 target instead of first-matching BOOT.
 `ot_attr.{h,cpp}` owns the logic-frame stamp contract: pre-loop boot stores are counted, and the
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
-**GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 4,121 ln), `gpu_vk.cpp` (SDL_GPU backend +
+**GPU/present:** `frame_presenter.{h,cpp}` owns non-temporal current-frame capture, one real present,
+diagnostics, explicit field pacing, and ledger reconciliation. `Fps60` is an optional temporal decorator,
+not the frame-lifecycle owner; direct runtimes neither instantiate nor link it. `guest_widescreen_projection.h`
+owns the typed, frame-latched title projection/presentation plan; the GTE-only positive contract remains
+separate from Native-only `RenderMode::enhancementsAllowed()`. `gpu_display_mode.h` is the pure GP1(08h)
+horizontal decoder, including bit 6's 368-dot mode. Full ownership and consumer rules are in
+`docs/presentation-contract.md`. `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 4,121 ln), `gpu_vk.cpp` (SDL_GPU backend +
 present — 4,404 lines), `gpu_primitive_dump.{h,cpp}` (primitive-census CSV lifecycle and row encoding),
 and `image_writer.{h,cpp}` (the checked RGB24-to-PPM/PNG host-file boundary shared by software and GPU
 captures). The two legacy renderer files remain critical extraction territory and are shrink-only.
@@ -136,7 +142,7 @@ opaque/semitransparent material variants. Authored replay domains merge several 
 guest OT stream with the single `(ot_bin descending, link_ordinal descending, chain_suborder ascending)`
 comparator; duplicate keys, unordered world faces, and mixed policies refuse instead of guessing. Physical
 `RenderQueue::flush` epochs remain independent because a captured logic frame may contain several complete
-OT traversals. Both direct queue emission and `Fps60::presentPass` call the same pointer-stream planner, so
+OT traversals. Both neutral presentation and `Fps60::presentPass` call the same pointer-stream planner, so
 presentation cannot bypass painter ordering or copy multi-megabyte `RqItem` payloads.
 `gpu_painter.{h,cpp}` owns painter target lifecycle, command staging, and the focused real-GPU
 discriminator for the custom untextured painter. Both painter fragment paths enforce each item's

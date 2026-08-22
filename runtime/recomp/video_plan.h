@@ -15,7 +15,7 @@
 // THE FIX IS NOT "ADD A HEADLESS BRANCH". Resolution is an EXPLICIT input — the size of the surface
 // the picture is being composed for — and that surface exists in both legs: windowed it is the live
 // drawable, headless it is the configured sink (PSXPORT_PRESENT_SINK, defaulting to the window's own
-// creation size). gpu_vk.cpp's `sink_size()` already had that leg-independent definition; these two
+// creation size). gpu_vk.cpp's `gpu_vk_present_sink_size()` already had that leg-independent definition; these two
 // decisions were simply reading the wrong thing. So the inputs below name a SINK, not a window, and
 // there is no way to ask this header whether a window exists.
 //

@@ -2774,7 +2774,7 @@ void GpuState::gpu_gp1(uint32_t w) {
     }
     break;
   case 0x08: // display mode: horizontal res (bits0-1, bit6=368), interlace (bit5), VRes 480 (bit2)
-    s_disp_w = ((w & 3) == 0) ? 256 : ((w & 3) == 1) ? 320 : ((w & 3) == 2) ? 512 : 640;
+    s_disp_w = gp1_display_width(w);
     s_disp_480i = ((w & 0x20) && (w & 0x04)) ? 1 : 0;
     // BIT 4 IS THE DISPLAY COLOUR DEPTH: 0 = 15-bit, 1 = 24-bit. A game that switches to 24bpp for a
     // still (logo screens, FMV frames) packs RGB888 across 1.5 halfwords per pixel, so reading its
@@ -3044,12 +3044,12 @@ void GpuState::gpu_native_shot(Core *core, const char *path) {
   // (soft_gpu oracle: VK is off for this Core, so fall through to the s_vram PPM dump below.)
   if (vk_path()) {
     void gpu_vk_shot_region(Core *, const char *, int, int, int, int);
-    int gpu_vk_wide_engine(Core *), gpu_vk_wide_engine_w(Core *);
+    int gpu_vk_wide_presentation(Core *), gpu_vk_wide_presentation_w(Core *);
     int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
     // Widescreen: crop the wider FB the engine rendered (nw@aspect), matching the windowed present's
     // wide sample region — otherwise a headless wide shot silently crops back to the 4:3 s_disp_w.
-    if (gpu_vk_wide_engine(core)) {
-      dw = gpu_vk_wide_engine_w(core);
+    if (gpu_vk_wide_presentation(core)) {
+      dw = gpu_vk_wide_presentation_w(core);
     }
     gpu_vk_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);
     return;

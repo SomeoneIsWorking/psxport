@@ -9,6 +9,7 @@
 // it. NOT a public API; internal to the GPU TUs.
 #ifndef GPU_NATIVE_INTERNAL_H
 #define GPU_NATIVE_INTERNAL_H
+#include "gpu_display_mode.h"
 #include <stdint.h>
 #include <stdio.h>
 

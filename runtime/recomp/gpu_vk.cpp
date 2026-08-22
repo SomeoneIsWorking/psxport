@@ -210,7 +210,7 @@ extern "C" int gpu_windowed(void) {
 }
 
 // Live window size in pixels (swapchain extent), used ONLY to answer "how big is the sink" in the
-// windowed leg — see sink_size() below, which is what every consumer must ask.
+// windowed leg — see gpu_vk_present_sink_size() below, which is what every consumer must ask.
 //
 // DO NOT REACH FOR THESE TO SIZE ANYTHING. They fall back to 320x240 when no window exists, and that
 // fallback silently became the RESOLUTION INPUT for the AUTO internal-resolution scale and for
@@ -263,7 +263,8 @@ enum { PRESENT_WINDOW_W = 960, PRESENT_WINDOW_H = 720 };
 // override emitted three warns per frame: MEASURED at 7990 of 8020 lines in a 45 s run, burying every
 // other diagnostic in the log. The value cannot change during a run, so parsing it per frame bought
 // nothing and cost the log.
-static void sink_size(int *w, int *h) {
+void gpu_vk_present_sink_size(int *w, int *h) {
+  (void)gpu_vk_enabled(); // resolves the headless/windowed leg before a pre-first-present title latch
   if (!s_headless) {
     *w = win_w();
     *h = win_h();
@@ -313,13 +314,11 @@ int gpu_vk_native_w(Core *c) {
 // banner on win_w()/win_h(). `iresCap` is filled by the one caller that needs it.
 static VideoInputs video_inputs(const Game *game, int iresCap) {
   VideoInputs v;
-  sink_size(&v.sinkW, &v.sinkH);
+  gpu_vk_present_sink_size(&v.sinkW, &v.sinkH);
   v.nativeW = game->gpu.s_disp_w;
-  // THE ENHANCEMENT GATE, at the one place aspect + internal resolution enter the video plan. On a pure
-  // render path (RenderPath::Gte / Psx) the picture is 4:3 at 1x no matter what the user's saved settings
-  // say — USER 2026-08-11: the guest render stays pure, and fps60/wide/ires are native-only. Gating the
-  // READ, rather than mutating Mods the way Game::setOracle's forceNeutral() does, is what lets the path
-  // be toggled live at the REPL and give the user their own settings back on the way out.
+  // THE BROAD ENHANCEMENT GATE, at the one place host-owned aspect + internal resolution enter the
+  // video plan. Guest projection never enters through Mods: its positively latched extent is consumed
+  // separately below, so it cannot accidentally enable ires or alter native producer geometry.
   const bool enh = game->core.rsub.mode.enhancementsAllowed();
   v.aspect = enh ? game->mods.aspect : ASPECT_4_3;
   v.modsIres = enh ? game->mods.ires : 1;
@@ -364,7 +363,10 @@ void gpu_vk_video_status(Core *c, int *native_w, int *ires, int *fbw, int *fbh, 
   // at 1x where the same build in its window rendered at 3x, and headless captures were not the
   // user's picture. Both decisions moved to video_plan.h and take the sink, which exists in both legs.
   const VideoInputs v = video_inputs(c->game, cap);
-  const int nw = video_wide_native_w(v);
+  int nw = video_wide_native_w(v);
+  if (gpu_vk_wide_presentation(c) && !gpu_vk_wide_engine(c)) {
+    nw = c->game->guestDisplay.plan().presentationExtent.width;
+  }
   const int i = video_ires_scale(v);
   if (native_w) {
     *native_w = nw;
@@ -1214,7 +1216,7 @@ static void init_gpu(Game *game) {
   // (docs/workspace/PROTOCOL.md), so the overlay takes the SINK's size and the format of the pass it will
   // record into, and `s_win` (NULL headless) is passed only for input translation.
   int ow = 0, oh = 0;
-  sink_size(&ow, &oh);
+  gpu_vk_present_sink_size(&ow, &oh);
   overlay_glue_init(game, s_win, s_dev, s_headless ? PRESENT_IMG_FMT : s_swap_fmt, ow, oh);
 }
 
@@ -2080,7 +2082,7 @@ void GpuVkState::ensure_present_img(int w, int h) {
 static PresentInputs
 present_inputs(const GpuVkState &g, int sx, int sy, int disp_w, int h, int native_w, const FadeState &fade) {
   PresentInputs in{};
-  sink_size(&in.sink_w, &in.sink_h);
+  gpu_vk_present_sink_size(&in.sink_w, &in.sink_h);
   in.sx = sx;
   in.sy = sy;
   in.disp_w = disp_w;
@@ -2122,8 +2124,8 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // content is already black here — sampling the wide width just shows black, never the atlas. So the
   // present can unconditionally span the wide FB when widescreen; no frame-type heuristic needed.
   int disp_w = w;
-  if (gpu_vk_wide_engine(&game->core)) {
-    disp_w = gpu_vk_wide_engine_w(&game->core);
+  if (gpu_vk_wide_presentation(&game->core)) {
+    disp_w = gpu_vk_wide_presentation_w(&game->core);
   }
   s_present_sx = sx;
   s_present_sy = sy;
@@ -2388,7 +2390,7 @@ void GpuVkState::build_present_image(SDL_GPUCommandBuffer *cmd, const PresentPla
   // null, and binding it as the present sampler segfaults inside the SDL_GPU driver. Materialise the
   // targets here; ensure_targets() is a one-shot no-op once they exist.
   ensure_targets();
-  // From the PLAN, never a fresh sink_size() call — see PresentPlan::sink_w. The target and the
+  // From the PLAN, never a fresh gpu_vk_present_sink_size() call — see PresentPlan::sink_w. The target and the
   // viewport must be two views of ONE measurement of the window, or a resize mid-present letterboxes
   // for a rectangle that is not the one being drawn into.
   ensure_present_img(plan.sink_w, plan.sink_h);

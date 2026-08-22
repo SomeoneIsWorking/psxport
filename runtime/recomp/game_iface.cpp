@@ -1,13 +1,16 @@
 // game_iface.cpp — polymorphic game runtime installation plus the bounded legacy adapter.
 #include "game_iface.h"
 
+#include "fps60.h"
+
 #include <memory>
 
 namespace {
-GameRuntime *g_runtime = nullptr;
 std::unique_ptr<LegacyGameRuntimeAdapter> g_ownedLegacyRuntime;
 
 } // namespace
+
+void psxport_clear_game_runtime_for_legacy();
 
 LegacyGameRuntimeAdapter::LegacyGameRuntimeAdapter(const GameConfig &config, const GameHooks &hooks)
     : guestProgramImage_{
@@ -52,28 +55,16 @@ const GuestProgramImage *LegacyGameRuntimeAdapter::guestProgramImage() const {
   return &guestProgramImage_;
 }
 
-void psxport_install_game(GameRuntime &runtime) {
-  g_runtime = &runtime;
-}
-
-GameRuntime *psxport_game_runtime() {
-  return g_runtime;
+std::unique_ptr<TemporalFramePresentation> LegacyGameRuntimeAdapter::createTemporalFramePresentation(Game &game) {
+  return std::make_unique<Fps60>(game);
 }
 
 void psxport_install_game(const GameConfig *cfg, const GameHooks *hooks) {
   if (!cfg || !hooks) {
     g_ownedLegacyRuntime.reset();
-    g_runtime = nullptr;
+    psxport_clear_game_runtime_for_legacy();
     return;
   }
   g_ownedLegacyRuntime = std::make_unique<LegacyGameRuntimeAdapter>(*cfg, *hooks);
   psxport_install_game(*g_ownedLegacyRuntime);
-}
-
-const GameConfig *psxport_game_config() {
-  return g_runtime ? g_runtime->legacyConfigForMigration() : nullptr;
-}
-
-const GameHooks *psxport_game_hooks() {
-  return g_runtime ? g_runtime->legacyHooksForMigration() : nullptr;
 }

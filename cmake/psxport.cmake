@@ -68,6 +68,10 @@ include(${PSXPORT_ROOT}/cmake/gpu_shaders.cmake)
 # All of runtime/recomp/** + the vendored Beetle GTE/MDEC/SPU C backends + the RmlUi SDL backend.
 set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/core.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/game.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/game_runtime.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/frame_presenter.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/guest_widescreen_projection.cpp
   ${PSXPORT_ROOT}/runtime/recomp/fs_util.cpp          # generic std::filesystem host-I/O wrapper (class Fs), no game types
   ${PSXPORT_ROOT}/runtime/recomp/game_iface.cpp       # polymorphic GameRuntime install + bounded legacy adapter
   ${PSXPORT_ROOT}/runtime/recomp/recomp_iface.cpp     # framework↔generated seam storage (RecompRegistry install)

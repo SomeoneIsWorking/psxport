@@ -14,32 +14,33 @@
 #include "cd.h"        // class Cd — native CD subsystem (sync reads + libcd HLE + music state)
 #include "cdc_state.h" // CdcState — per-instance native CD-controller register model (cdc_native.c)
 #include "core.h"
-#include "dbg_server.h"          // class DbgServer — live TCP debug endpoint (127.0.0.1)
-#include "disc.h"                // DiscState — native by-LBA CHD disc backend (disc.c)
-#include "fps60.h"               // Fps60 — the interpolated-60fps tier's per-instance state
-#include "game_runtime.h"        // GameRuntime + per-Game polymorphic behavior products
-#include "gpu_native_internal.h" // GpuState — the native GPU's per-instance render machine state
-#include "gpu_perf.h"            // class GpuPerf — per-frame CPU phase profiler (`debug perf`)
-#include "gpu_vk_device.h"       // class GpuDevice — the SDL3 GPU host window/device (first Game claims it)
-#include "gpu_vk_internal.h"     // GpuVkState — the Vulkan present backend's per-instance render state
-#include "gte_state.h"           // GteRegs — per-instance GTE (COP2) register file (Beetle gte.c)
-#include "hle.h"                 // class Hle — BIOS HLE (events, heap, work area, A0/B0/C0 dispatch)
-#include "mdec_device.h"         // class MdecDevice — per-instance MDEC state handle (Beetle mdec.c)
-#include "memcard.h"             // class Memcard — host-backed 128 KB memory card device
-#include "mods.h"                // class Mods — per-Game PC-native mod toggles (aspect/ires/ssao/light/fps60)
-#include "native_fmv.h"          // class Fmv — native .STR movie player
-#include "native_gate.h"         // class NativeGates — PC-native-layer A/B GATE registry (REPL diag)
-#include "native_stub.h"         // class BootStub — SCEA splash + MAIN.EXE LoadExec hand-off
-#include "pad_input.h"           // class Pad — native controller input + REPL drive
-#include "platform_hle.h"        // class PlatformHle — HW-sync HLE table (VSync/CdSync/…)
-#include "render_queue.h"        // RenderQueue — the engine-owned draw-order authority
-#include "repl.h"                // class Repl — REPL driver + auto-drive request state
-#include "rmlui_overlay.h"       // class RmlOverlay — mod/debug HTML UI + world readout HUD
-#include "spu_audio.h"           // class SpuAudio — host audio output sink (SDL3 + WAV capture)
-#include "spu_device.h"          // class SpuDevice — per-instance SPU state handle (Beetle spu.c)
-#include "timing.h"              // class Timing — native VBlank/VSync frame clock
-#include "verify_harness.h"      // class VerifyHarness — shared A/B verify scaffold (game/core)
-#include "xa_state.h"            // XaState  — per-instance native XA-ADPCM CD-audio streamer (xa_stream.c)
+#include "dbg_server.h"                  // class DbgServer — live TCP debug endpoint (127.0.0.1)
+#include "disc.h"                        // DiscState — native by-LBA CHD disc backend (disc.c)
+#include "frame_presenter.h"             // FramePresenter — neutral current-frame capture/present/cadence fence
+#include "game_runtime.h"                // GameRuntime + per-Game polymorphic behavior products
+#include "gpu_native_internal.h"         // GpuState — the native GPU's per-instance render machine state
+#include "gpu_perf.h"                    // class GpuPerf — per-frame CPU phase profiler (`debug perf`)
+#include "gpu_vk_device.h"               // class GpuDevice — the SDL3 GPU host window/device (first Game claims it)
+#include "gpu_vk_internal.h"             // GpuVkState — the Vulkan present backend's per-instance render state
+#include "gte_state.h"                   // GteRegs — per-instance GTE (COP2) register file (Beetle gte.c)
+#include "guest_widescreen_projection.h" // title-owned guest projection + latched presentation extent
+#include "hle.h"                         // class Hle — BIOS HLE (events, heap, work area, A0/B0/C0 dispatch)
+#include "mdec_device.h"                 // class MdecDevice — per-instance MDEC state handle (Beetle mdec.c)
+#include "memcard.h"                     // class Memcard — host-backed 128 KB memory card device
+#include "mods.h"                        // class Mods — per-Game PC-native mod toggles (aspect/ires/ssao/light/fps60)
+#include "native_fmv.h"                  // class Fmv — native .STR movie player
+#include "native_gate.h"                 // class NativeGates — PC-native-layer A/B GATE registry (REPL diag)
+#include "native_stub.h"                 // class BootStub — SCEA splash + MAIN.EXE LoadExec hand-off
+#include "pad_input.h"                   // class Pad — native controller input + REPL drive
+#include "platform_hle.h"                // class PlatformHle — HW-sync HLE table (VSync/CdSync/…)
+#include "render_queue.h"                // RenderQueue — the engine-owned draw-order authority
+#include "repl.h"                        // class Repl — REPL driver + auto-drive request state
+#include "rmlui_overlay.h"               // class RmlOverlay — mod/debug HTML UI + world readout HUD
+#include "spu_audio.h"                   // class SpuAudio — host audio output sink (SDL3 + WAV capture)
+#include "spu_device.h"                  // class SpuDevice — per-instance SPU state handle (Beetle spu.c)
+#include "timing.h"                      // class Timing — native VBlank/VSync frame clock
+#include "verify_harness.h"              // class VerifyHarness — shared A/B verify scaffold (game/core)
+#include "xa_state.h"                    // XaState  — per-instance native XA-ADPCM CD-audio streamer (xa_stream.c)
 
 class Sbs; // forward decl — Game holds `sbs` back-pointer set by Sbs::run
 #include <setjmp.h>
@@ -65,14 +66,16 @@ public:
   XaState xa;     // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
   Hle hle;
   Pad pad;
-  Repl repl;           // interactive REPL driver + REPL-armed auto-drive requests (repl.cpp)
-  Fmv fmv;             // native .STR movie player (native_fmv.cpp)
-  BootStub stub;       // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
-  PcScheduler pcSched; // native cooperative task scheduler (game/core/pc_scheduler.cpp)
-  GpuState gpu;        // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
-  GpuVkState gpu_vk;   // Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
-  GpuDevice gpu_dev;   // SDL3 GPU host device/window/pipelines (ONE per process; first Game claims it)
-  RenderQueue rq;      // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
+  Repl repl;                           // interactive REPL driver + REPL-armed auto-drive requests (repl.cpp)
+  Fmv fmv;                             // native .STR movie player (native_fmv.cpp)
+  BootStub stub;                       // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
+  PcScheduler pcSched;                 // native cooperative task scheduler (game/core/pc_scheduler.cpp)
+  GpuState gpu;                        // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
+  GpuVkState gpu_vk;                   // Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
+  GpuDevice gpu_dev;                   // SDL3 GPU host device/window/pipelines (ONE per process; first Game claims it)
+  RenderQueue rq;                      // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
+  FramePresenter presentation;         // non-temporal current-frame fence, present and pacing owner
+  GuestPresentationState guestDisplay; // latched only when the title publishes matching guest projection
   // Tier-1 capture-target redirect (docs/fps60-rework.md "Object-tier attempt ... Why Tier 1 isn't
   // built"): non-null ONLY while Fps60::present_vk re-invokes Render::terrainRenderAll() at the interp
   // present under a lerped camera. native_terrain.cpp's drawWorldQuad call checks this and, when set,
@@ -87,7 +90,6 @@ public:
   RenderQueue &activeRq() {
     return rqRedirect ? *rqRedirect : rq;
   }
-  Fps60 fps60;        // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
   SpuAudio spu_audio; // host audio output sink (SDL3 device + optional WAV capture)
   // The game's SEP/VAB in-game music player + Sound Test catalogue live game-side on TombaCtx now;
   // the framework SPU sink + mod-UI HUD reach them through the audioMixFrame / audioNowPlayingName /
@@ -164,52 +166,13 @@ public:
   // Declared after the subsystem state so the products are destroyed first. A derived driver or
   // scheduler may retain references to the fully wired subsystem members it receives at creation.
   GameRuntime *runtime = nullptr;
+  std::unique_ptr<TemporalFramePresentation> temporalPresentation;
   std::unique_ptr<FrameDriver> frameDriver;
   std::unique_ptr<TaskScheduler> taskScheduler;
 
   // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_vk.game->core). Set once here so no file-scope global is needed.
-  Game() {
-    runtime = core.runtime;
-    core.game = this;
-    gpu.game = this;
-    gpu_vk.game = this;
-    timing.game = this;
-    pad.game = this;
-    fps60.game = this;
-    hle.game = this;
-    rq.game = this;
-    pcSched.game = this;
-    cd.game = this;
-    fmv.game = this;
-    stub.game = this;
-    spu_audio.game = this;
-    rml_overlay.game = this;
-    platform_hle.game = this;
-    memcard.game = this;
-    dbg_server.game = this;
-    verify.core = &core;
-    if (!GpuDevice::sInstance) {
-      GpuDevice::sInstance = &gpu_dev; // first Game claims the host device
-    }
-    mods.init(); // per-Game mod state: factory defaults + the player's settings file
-    disc_state_init(&disc);
-    cdc_state_init(&cdc);
-    timing.bindCdcClock(&cdc);
-    xa_state_init(&xa);
-    gte.dbg.sxhist_on = gte.dbg.gteprobe = gte.dbg.projprobe = gte.dbg.rtpcaller_on = -1;
-    // core.cfg is already valid here: Core is a MEMBER, so its constructor (which snapshots
-    // the installed GameConfig) runs before this body. Must follow disc_state_init, which
-    // memsets the struct.
-    disc.env_key = core.cfg ? core.cfg->discEnvVar : 0; // GameConfig::discEnvVar
-    cdc.disc = &disc;
-    xa.disc = &disc;
-    // Factories receive a fully wired Game: their derived products may retain subsystem references,
-    // so creating them before the back-pointers and device state above would expose a half-built owner.
-    if (runtime) {
-      frameDriver = runtime->createFrameDriver(*this);
-      taskScheduler = runtime->createTaskScheduler(*this);
-    }
-  } // per-instance disc backend + CD-controller + XA streamer
+  Game();
+  ~Game();
 };

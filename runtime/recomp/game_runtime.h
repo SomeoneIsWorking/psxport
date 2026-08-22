@@ -14,6 +14,8 @@
 
 class Core;
 class Game;
+class GuestWidescreenProjection;
+class TemporalFramePresentation;
 struct GameConfig;
 struct GameHooks;
 
@@ -54,6 +56,17 @@ public:
   virtual const GuestProgramImage *guestProgramImage() const {
     return nullptr;
   }
+
+  // Optional title-owned guest projection. The returned object declares the aspect only; the title
+  // must publish a matching guest projection plan before the host exposes a wider presentation span.
+  virtual const GuestWidescreenProjection *guestWidescreenProjection() const {
+    return nullptr;
+  }
+
+  // Optional temporal decorator. Direct runtimes default to the neutral current-frame presenter and
+  // therefore instantiate no interpolation history. Legacy consumers keep their existing behavior via
+  // LegacyGameRuntimeAdapter until they declare the narrower contract directly.
+  virtual std::unique_ptr<TemporalFramePresentation> createTemporalFramePresentation(Game &game);
 
   virtual std::unique_ptr<FrameDriver> createFrameDriver(Game &) {
     return nullptr;

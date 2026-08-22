@@ -109,12 +109,14 @@ public:
     return mPath == RenderPath::Psx;
   }
 
-  // MAY A PC ENHANCEMENT TOUCH THIS CORE'S PICTURE? — fps60 interpolation, widescreen geometry,
+  // MAY A PC ENHANCEMENT TOUCH THIS CORE'S PICTURE? — fps60 interpolation, host-owned widescreen geometry,
   // internal-resolution scaling, the deferred SSAO/light/shadow passes, observer tagging.
   //
   // NATIVE-ONLY, and that is a USER decision, not an inference: *"I don't want GTE enhancements,
   // GTE/OT should stay pure"* and, when the consequence was put to them, *"Yes fps60/wide/native-depth
-  // is supposed to be native-only"* (2026-08-11). So this is false for BOTH guest paths.
+  // is supposed to be native-only"* (2026-08-11). So this is false for BOTH guest paths. A title-owned
+  // GTE projection may separately publish its matching host extent through guestWidescreenAllowed;
+  // that contract does not enable interpolation, internal resolution or deferred native passes.
   //
   // Enhancements are gated HERE, at the read sites, rather than by mutating Mods (what
   // Game::setOracle's forceNeutral() does): a live toggle that clobbered the user's saved settings on
@@ -122,6 +124,14 @@ public:
   // whether the picture is allowed to honour it.
   bool enhancementsAllowed() const {
     return mPath == RenderPath::Native;
+  }
+
+  // MAY A TITLE-AUTHORED GUEST PROJECTION EXPOSE ITS MATCHING WIDE PRESENTATION EXTENT? This is not
+  // the broad PC-enhancement permission above. The title changes its own GTE projection/culling/layout
+  // and latches that fact explicitly; this permits only the matching host crop on the Gte path. Psx
+  // remains the untouched 4:3 reference, and Native uses the existing host-owned widescreen pipeline.
+  bool guestWidescreenAllowed() const {
+    return mPath == RenderPath::Gte;
   }
 
   // Dual-view: render ONE game state two ways side-by-side (engine-native left | PSX-recomp right).

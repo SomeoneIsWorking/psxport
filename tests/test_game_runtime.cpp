@@ -225,6 +225,7 @@ void test_game_owns_runtime_products_and_context() {
     CHECK_EQ(game->core.runtime, &runtime);
     CHECK_EQ(game->core.guestProgramImage, &runtime.programImage);
     CHECK_EQ(game->core.gameCtx, &runtime.contextToken);
+    CHECK(game->temporalPresentation == nullptr);
     CHECK(game->frameDriver != nullptr);
     CHECK(game->taskScheduler != nullptr);
     CHECK_EQ(runtime.contextsCreated, 1);
@@ -240,6 +241,18 @@ void test_game_owns_runtime_products_and_context() {
   CHECK_EQ(runtime.contextsDestroyed, 1);
 }
 
+void test_only_legacy_adapter_installs_the_temporal_compatibility_decorator() {
+  static const GameConfig config{};
+  static GameHooks hooks{};
+  hooks.ctxCreate = legacy_create_context;
+  hooks.ctxDestroy = legacy_destroy_context;
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  psxport_install_game(runtime);
+
+  auto game = std::make_unique<Game>();
+  CHECK(game->temporalPresentation != nullptr);
+}
+
 } // namespace
 
 int main() {
@@ -248,5 +261,6 @@ int main() {
   RUN(legacy_pair_is_bounded_by_runtime_adapter);
   RUN(legacy_adapter_supports_incremental_inheritance);
   RUN(game_owns_runtime_products_and_context);
+  RUN(only_legacy_adapter_installs_the_temporal_compatibility_decorator);
   return pt_summary();
 }

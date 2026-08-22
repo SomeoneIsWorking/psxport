@@ -20,6 +20,7 @@ public:
   void registerOverrides(Game &game) override;
   void bootInit(Core &core) override;
   const GuestProgramImage *guestProgramImage() const override;
+  std::unique_ptr<TemporalFramePresentation> createTemporalFramePresentation(Game &game) override;
 
 private:
   GuestProgramImage guestProgramImage_;

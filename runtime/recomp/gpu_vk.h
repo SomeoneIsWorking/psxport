@@ -5,6 +5,7 @@
 // declaration site — the scattered local forward-decls inside the gp0 tee (gpu_native.cpp) are gone.
 #ifndef GPU_GPU_H
 #define GPU_GPU_H
+#include "guest_widescreen_projection.h"
 #include <stdint.h>
 struct Core;
 
@@ -18,6 +19,11 @@ struct Core;
 int gpu_vk_wide_engine(Core *core);
 int gpu_vk_wide_engine_w(Core *core);
 int gpu_vk_wide_engine_ofx(Core *core);
+int gpu_vk_wide_presentation(Core *core);
+int gpu_vk_wide_presentation_w(Core *core);
+GuestProjectionPlan gpu_vk_latch_guest_projection(Core *core, GuestProjectionGeometry geometry);
+// Leg-independent sink extent used by the guest projection latch and renderer planning.
+void gpu_vk_present_sink_size(int *width, int *height);
 
 // per-prim depth / OT-submission order (set by the gp0 tee before each VK draw)
 void gpu_vk_set_order(Core *core, unsigned idx);

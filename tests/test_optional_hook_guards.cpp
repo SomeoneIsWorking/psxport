@@ -26,13 +26,15 @@
 #include <string.h>
 
 #include "fps60.h"
+#include "game.h"
 #include "game_hooks_opt.h"
 #include "game_iface.h"
 
-// `Core` is never CONSTRUCTED here — it has a real constructor that a hermetic test cannot stand up.
-// The accessors take the hooks table explicitly for exactly that reason, so the Core pointer is only
-// ever FORWARDED, never dereferenced, and the spies record it to prove it arrives unchanged. A
-// sentinel address stands in for a real Core (same shape as the audioMixFrame test).
+#include <memory>
+
+// Hook-accessor cases do not construct Core: the pointer is only forwarded and spies record it to
+// prove it arrives unchanged. The final Fps60 default-state check constructs a direct-runtime Game
+// separately because Fps60 now requires its real owner rather than permitting a detached instance.
 class Core;
 static Core *const kFakeCore = reinterpret_cast<Core *>(0xC0FFEE00u);
 
@@ -194,7 +196,18 @@ static void test_billboard_rotate_is_optional_but_present_hook_runs(void) {
 }
 
 static void test_world_rerun_is_not_eligible_until_a_game_claims_it(void) {
-  Fps60 fps60;
+  class Runtime final : public GameRuntime {
+  public:
+    void *createContext(Core &) override {
+      return nullptr;
+    }
+    void destroyContext(void *) override {}
+    void registerOverrides(Game &) override {}
+    void bootInit(Core &) override {}
+  } runtime;
+  psxport_install_game(runtime);
+  const auto game = std::make_unique<Game>();
+  Fps60 fps60(*game);
   CHECK(!fps60.mTier1EligibleCur);
 }
 

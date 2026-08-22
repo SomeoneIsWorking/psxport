@@ -4,10 +4,8 @@
 // living entirely in the INPUTS — camera (sceneCam), per-object transforms (projObj), and backdrop scroll
 // (bgScroll) each served a lerp(prev,cur,t) at present time; tier1Render re-runs the field world
 // (terrain+scene-table+objects+backdrop) into mSink under those lerped inputs, and present_vk merges it
-// with mRqCur's 2D (HUD/overlay, screen-space, verbatim). The authored sub-scene (hut interior) has no
-// native world producer and now aborts-with-identity (renderHutInterior, break-first) rather than
-// presenting a non-interpolatable 30fps render. No prim matching. Host-only,
-// gated g_mods.fps60.
+// with the captured frame's 2D (HUD/overlay, screen-space, verbatim). No prim matching. Host-only,
+// gated by the optional temporal product and g_mods.fps60.
 //
 // ONE SITE (USER 2026-07-22: "there should be just one site, the only difference should be whether to
 // lerp"). Both presents call Fps60::presentPass(c, t) and NOTHING else distinguishes them: the real frame
@@ -16,10 +14,10 @@
 // two places for them to drift. Verified pixel-exact, not asserted: 12 sampled frames of the hut replay
 // are 0-diff against the pre-refactor build, and under PSXPORT_FPS60_TFORCE=1 the two presents agree
 // 0/76800 over 10 consecutive frames.
+#include "fps60.h"
 #include "cfg.h"
 #include "core.h"
-#include "fs_util.h"        // Fs::ensureParentDirs — no hand-rolled mkdir
-#include "game.h"           // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
+#include "game.h"           // Game-owned optional temporal product and RenderQueue
 #include "game_hooks_opt.h" // game-owned scene-camera reader; never a framework scratchpad layout
 #include "mods.h"           // Mods (game->mods.fps60)
 #include "proj_params.h"    // ProjParams — the camera's projection constants + Snapshot save/restore
@@ -38,19 +36,17 @@ extern "C" {
 uint32_t GTE_ReadDR(unsigned);
 } // Beetle GTE (mednafen gte.c) — RTP result regs (rate tap)
 
-// Present primitives (gpu_native.cpp): the real per-frame present + the 60fps in-between pass + the pacer.
-void gpu_present_ex(Core *core, int do_blit);
-void gpu_fps60_present_pass(Core *core);
-void gpu_pace_subframe(Core *core, int n);
-void gpu_pace_subframe_fields(Core *core, int guestFields, int parts);
-void gpu_pace_frame(Core *core); // whole-frame pacer — used when no in-between was inserted
-
-#define FPS60_RQ_MAX RQ_MAX
-
 Fps60::~Fps60() {
-  delete[] mRqCur;
-  delete[] mRqPrev;
   delete mSink;
+}
+
+Fps60 &fps60(Game &game) {
+  auto *temporal = dynamic_cast<Fps60 *>(game.temporalPresentation.get());
+  if (!temporal) {
+    lucent::error("fps60", "temporal interpolation was requested from a Game that did not create it");
+    std::abort();
+  }
+  return *temporal;
 }
 
 // ---- logic-rate detector (validated lrate_proto) -----------------------------------------------------
@@ -140,7 +136,8 @@ void Fps60::sceneCam(Core *c, float R[3][3], float T[3], float &ofx, float &ofy,
   // render a plausible picture over an RE gap and make it unfindable.
   c->rsub.projParams.requireGeom("Fps60::sceneCam", ofx, ofy, H);
   // TIER 1 capture: this is a REAL-frame call (mCamOverrideOn is false) — mirror it into mCamCur, the slot
-  // that present_vk's end-of-frame swap rotates in lockstep with mRqCur/mRqPrev. Every sceneCam() call this
+  // that present_vk's end-of-frame rotation advances at the same fence as current-frame capture. Every
+  // sceneCam() call this
   // logic frame reads the same unchanged guest camera, so overwriting on every call is idempotent.
   // UNCONDITIONAL. The world is built at PRESENT time in both configs (see presentPass), and this is the
   // camera it is built from — an input to the one renderer, not fps60 machinery. Gating it on active()
@@ -166,8 +163,8 @@ void Fps60::bgScroll(Core *c, uint32_t t4, int &scrollX, int &scrollY) {
   }
   scrollX = c->mem_r16s(t4 + 0x28u);
   scrollY = c->mem_r16s(t4 + 0x2au);
-  // TIER 1 capture: this is a REAL-frame call — mirror it into mBgCur, rotated in lockstep with mRqCur/
-  // mRqPrev / mCamCur/mCamPrev by present_vk's end-of-frame swap.
+  // TIER 1 capture: this is a REAL-frame call — mirror it into mBgCur, rotated with the temporal
+  // camera state after the present fence completes.
   mBgCur.scrollX = scrollX;
   mBgCur.scrollY = scrollY; // unconditional, same reason as sceneCam's capture
 }
@@ -394,7 +391,7 @@ static inline bool isTier1Owned(const RqItem &it) {
   // interp present with nothing re-rendering them → 30Hz flicker of exactly the 2D objects. The exact
   // discriminator is has_xyf: every prim tier1Render's re-run reproduces goes through drawWorldQuad
   // (float-projected native world → has_xyf=1); every guest-time world prim is a resolved screen-space
-  // integer record (emitOrQueue with xsf==nullptr → has_xyf=0) and is presented VERBATIM from mRqCur,
+  // integer record (emitOrQueue with xsf==nullptr → has_xyf=0) and is presented VERBATIM from the captured frame,
   // like HUD, until its emitter is owned per docs/fps60-rework.md's REDIRECT doctrine.
   return it.layer == RQ_WORLD && it.has_xyf;
 }
@@ -427,119 +424,19 @@ static void seqRunDump(const RqItem *items, int n, const char *what) {
   }
 }
 
-// ---- per-present frame dump (debug channel `fps60dump`) ----------------------------------------------
-// Writes what THIS present pass just put in s_vram_tex, exactly like REPL `shot` — same VRAM-readback
-// writer (gpu_vk_shot/gpu_native_shot), no new pixel path. Must run right after the present call that
-// filled the target (present_vk's PASS 1 for interp, PASS 2 for real) so the readback sees that pass's
-// content, not the next one's.
-void Fps60::dumpPresent(Core *core, bool interp) {
-  // Not a print guard: the channel decides whether this present does a full VRAM readback + PNG write,
-  // and the off-branch RESETS the capture cap. Per present, so it is a Channel handle.
-  static const lucent::Channel ch_fps60dump{"fps60dump"};
-  if (!ch_fps60dump) {
-    mDumpSeq = 0;
-    return;
-  } // channel off: idle, and reset the cap for next arm
-  if (mDumpSeq >= kDumpMax) {
-    if (mDumpSeq == kDumpMax) {
-      lucent::info("fps60dump", "cap ({} files) reached — stop capturing", kDumpMax);
-      mDumpSeq++;
-    }
-    return;
-  }
-  char path[192];
-  snprintf(path, sizeof path, "scratch/framedump/f%06ld_%04d_%s.png", mFence, mDumpSeq, interp ? "interp" : "real");
-  if (!Fs::ensureParentDirs(path)) {
-    return;
-  }
-  int gpu_vk_enabled(void);
-  void gpu_vk_shot(Core *, const char *);
-  void gpu_native_shot(Core *, const char *);
-  if (gpu_vk_enabled()) {
-    gpu_vk_shot(core, path);
-  } else {
-    gpu_native_shot(core, path);
-  }
-  mDumpSeq++;
-}
-
-// ---- per-logic-frame fence + present -----------------------------------------------------------------
-// rq_capture ACCUMULATES into `mRqCur` across every flush of one logic frame, and is emptied at the
-// frame fence by presentRotate. `mRqPrev` is left untouched here — it still holds last frame's real
-// queue, which present_vk's slot A is about to replay verbatim. See the swap at the end of present_vk.
-//
-// It used to OVERWRITE per flush (`memcpy(mRqCur, …); mNCur = n;`), on the assumption that a flush is
-// the frame's final queue. It is not: a flush is "one draw-list submission ended", and a logic frame
-// issues one per guest DrawOTag — commonly TWO. Whatever was in the earlier flush was then silently
-// discarded at 60fps while rendering perfectly at 30, because at fps60=0 flush() calls emitQueue()
-// directly and every flush reaches the picture.
-//
-// Measured cost of that assumption: Tomba!2 emits its 2D panel/prompt/dialog chrome in the FIRST flush
-// and the world in the second, so the ENTIRE panel family vanished at the committed default fps60=1 —
-// kanban #94's "Use UP + O to talk" box and #35's START page, the latter having been fixed and
-// screenshot-verified a fortnight earlier on the fps60=0 leg. Since flush COUNT is guest-state
-// dependent, the same panel code was visible in one scene and invisible in another, and an unrelated
-// change to when the guest issues DrawOTag could flip a whole UI layer off with no UI commit in the
-// diff. That is why this family read as "fixed and re-broken a million times" (USER, 2026-08-16) when
-// none of the fixes had actually regressed. Same mechanism behind the black SBS panes and kanban #20's
-// black pause screen. The invariant that keeps it honest is the produced-vs-presented ledger; a
-// producer that pushes prims nothing presents is invisible on screen and must never be silent.
-//
-// Ordering: presentPass merges by (layer, seq), and each flush restarts seq at 0, so appended items are
-// rebased by the running total. Within a layer, paint order across flushes is then submission order —
-// exactly what emitQueue() would have produced had it run per flush.
-void Fps60::rq_capture(const RqItem *items, int n) {
-  if (!mRqCur) {
-    mRqCur = new RqItem[FPS60_RQ_MAX];
-  }
-  if (!mRqPrev) {
-    mRqPrev = new RqItem[FPS60_RQ_MAX];
-  }
-  if (n <= 0) {
-    return; // an empty flush contributes nothing; it must not blank the frame
-  }
-  if (mNCur + n > FPS60_RQ_MAX) {
-    // FAIL-FAST rather than truncate: a silently dropped tail is the exact failure this function is
-    // being fixed for, and it would come back as "some layer is missing in one scene".
-    lucent::error("fps60",
-                  "Fps60::rq_capture OVERFLOW: {} captured + {} this flush > FPS60_RQ_MAX {}. "
-                  "Raise the cap; do not drop prims.",
-                  mNCur,
-                  n,
-                  (int)FPS60_RQ_MAX);
-    abort();
-  }
-  const uint32_t seqBase = mSeqBase;
-  for (int i = 0; i < n; i++) {
-    game->rq.mLedger.noteCaptured(items[i].layer); // present_ledger.h
-  }
-  memcpy(mRqCur + mNCur, items, (size_t)n * sizeof(RqItem));
-  for (int i = 0; i < n; i++) {
-    mRqCur[mNCur + i].seq += seqBase;
-    mRqCur[mNCur + i].flush_ordinal = mCaptureFlushOrdinal;
-  }
-  mNCur += n;
-  mSeqBase += (uint32_t)n;
-  ++mCaptureFlushOrdinal;
-}
-
-// THE frame fence and THE present, for both configs. This used to `return` when the tier was off, which
-// is what left fps60=0 to be presented by a separate branch in the game — two renderers rather than one
-// renderer plus an optional extra frame (USER, 2026-08-16).
 void Fps60::frame_commit(Core *core, int guestFields) {
+  game->presentation.commit(core, guestFields, this);
+}
+
+void Fps60::present(FramePresentationBackend &backend, Core &core, CapturedFrameView frame, int guestFields) {
   mCommitGuestFields = guestFields;
   if (active()) { // the logic-rate detector schedules in-betweens; with none to schedule it has no job
     uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
     rate_tick(&mRd, set_hash);
   }
-  mFence++;
-  if (!core->game->diff_mode) {
-    present_vk(core);
+  if (!core.game->diff_mode) {
+    present_vk(backend, &core, frame);
   }
-  // Reconcile BEFORE resetting: a layer captured this frame and drawn by nobody is the shape every one
-  // of the 2026-08-16 render regressions had (docs/one-renderer.md, kanban #98).
-  core->game->rq.mLedger.reconcile(mFence, cfg_on("PSXPORT_GATE_PRESENTATION"));
-  core->game->rq.mLedger.beginFrame();
   mFrameHash = 1469598103934665603ull;
   mFrameGeom = 0;
 }
@@ -548,7 +445,7 @@ void Fps60::frame_commit(Core *core, int guestFields) {
 // captured queue's verbatim remainder. No guest reads at present time, no second render path — an
 // interpolated frame is built through the exact same per-item draw call (`q.emitItem`) slot B uses
 // for Q[N]; it cannot show a game state neither real frame had.
-void Fps60::present_vk(Core *core) {
+void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFrameView frame) {
   Core *c = core;
   RenderQueue &q = c->game->rq;
 
@@ -569,21 +466,20 @@ void Fps60::present_vk(Core *core) {
   // replaying THIS frame's own queue (Q[N] twice, terrain included) rather than lerping against an
   // empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame.
   if (extraFrame) {
-    presentPass(c, tInterp);
-    gpu_fps60_present_pass(c);
-    dumpPresent(c, /*interp=*/true);
+    presentPass(c, tInterp, frame);
+    backend.presentIntermediate();
+    backend.captureDiagnostic(frame.fence, /*interpolated=*/true);
     // Was an info line behind a latched `fps60` channel test — a per-present line that only ever appeared
-    // when the channel was asked for, so it is debug audience, not info. (fps60.h's `mDbg` latch that
-    // gated it is now unused; drop the member next time that header is touched.)
+    // when the channel was asked for, so it is debug audience, not info.
     lucent::debug("fps60",
                   "f{} slotA: replay prev={} n={} tier1={} backdrop={} t={:.3f}",
-                  mFence,
+                  frame.fence,
                   mHavePrev ? "Q[N-1]" : "Q[N] (first frame)",
-                  mNCur,
+                  frame.items.size(),
                   mTier1PrimsThisFrame,
                   mBackdropPrimsThisFrame,
                   mT);
-    gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
+    backend.pace(mCommitGuestFields, 2);
   }
 
   // ---- PASS 2 (slot B): the real frame. SAME call, t=1 — every lerped input resolves to its current
@@ -591,16 +487,16 @@ void Fps60::present_vk(Core *core) {
   // queue. That is what makes the symmetry structural instead of a property two code paths happen to
   // share.
   q.mLedger.inRealPresent = true; // only the real present counts as "reached the screen"
-  presentPass(c, 1.0f);
+  presentPass(c, 1.0f, frame);
   q.mLedger.inRealPresent = false;
-  gpu_present_ex(c, 1);
-  dumpPresent(c, /*interp=*/false);
+  backend.presentReal();
+  backend.captureDiagnostic(frame.fence, /*interpolated=*/false);
   // Pacing differs only BECAUSE the extra frame does: two half-frames when an in-between was inserted,
   // one whole frame when it was not.
   if (extraFrame) {
-    gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
+    backend.pace(mCommitGuestFields, 2);
   } else {
-    gpu_pace_frame(c);
+    backend.pace(mCommitGuestFields, 1);
   }
 
   presentRotate();
@@ -620,14 +516,14 @@ void Fps60::present_vk(Core *core) {
 // interleaved with prims that present verbatim. Read-only; never load-bearing.
 static void seqRunDump(const RqItem *items, int n, const char *what);
 
-void Fps60::presentPass(Core *c, float t) {
+void Fps60::presentPass(Core *c, float t, CapturedFrameView frame) {
   RenderQueue &q = c->game->rq;
   if (ch_fps60seq) { // guards seqRunDump's walk of the whole captured queue, not the print
     static long lastDumped = -1;
-    if (lastDumped != mFence) {
-      lastDumped = mFence;
-      lucent::debug(ch_fps60seq, "f{} captured n={}", mFence, mNCur);
-      seqRunDump(mRqCur, mNCur, "rqcur");
+    if (lastDumped != static_cast<long>(frame.fence)) {
+      lastDumped = static_cast<long>(frame.fence);
+      lucent::debug(ch_fps60seq, "f{} captured n={}", frame.fence, frame.items.size());
+      seqRunDump(frame.items.data(), static_cast<int>(frame.items.size()), "rqcur");
     }
   }
   // mT is the parameter of the pass being built right now — the camera choke (sceneCam), the per-object
@@ -651,25 +547,26 @@ void Fps60::presentPass(Core *c, float t) {
     // fps60 UNIFIED PATH (docs/fps60-rework.md): the field frame's WORLD — terrain + scene-table + OBJECTS
     // + backdrop — is re-run by tier1Render into mSink under the lerped camera + per-object transforms, ALL
     // interpolated through the SAME render path the real frame used (lerp lives in the INPUTS, not a per-
-    // prim output match). Slot A = mSink (that lerped world) merged with mRqCur's REMAINING prims — the 2D
+    // prim output match). Slot A = mSink (that lerped world) merged with the current frame's REMAINING prims — the 2D
     // HUD/overlay, which are screen-space and presented VERBATIM (no lerp needed) — in (layer, seq) paint
-    // order. isTier1Owned marks the world prims that come from mSink so we skip them in mRqCur —
+    // order. isTier1Owned marks the world prims that come from mSink so we skip them in the current frame —
     // nothing is fingerprint-matched. (mTier1EligibleCur gates the field re-render;
     // when false — hut interior / narration / title — there is NO re-run, so nothing is tier1-owned:
     // consult no sink (mSink still holds the LAST eligible frame's world — merging it painted the stale
-    // field exterior into non-field interp frames, the #50 bug class) and skip nothing from mRqCur (the
+    // field exterior into non-field interp frames, the #50 bug class) and skip nothing from the captured frame (the
     // hut's own perObjFlush world prims must present verbatim, or the interior vanishes every other
     // frame). The whole captured queue replays as-is — the documented degenerate lerp.)
     const bool tier1 = kTier1;
     const int sinkN = (tier1 && mSink) ? mSink->n : 0;
     mPresentStream.clear();
-    mPresentStream.reserve((size_t)sinkN + (size_t)mNCur);
+    const int currentCount = static_cast<int>(frame.items.size());
+    mPresentStream.reserve(static_cast<size_t>(sinkN) + frame.items.size());
     int ia = 0, ib = 0;
     for (;;) {
-      while (ib < mNCur && tier1 && isTier1Owned(mRqCur[ib])) {
-        ib++; // world prims come from mSink — skip in mRqCur
+      while (ib < currentCount && tier1 && isTier1Owned(frame.items[ib])) {
+        ib++; // world prims come from mSink — skip in the captured current frame
       }
-      const bool haveA = ia < sinkN, haveB = ib < mNCur;
+      const bool haveA = ia < sinkN, haveB = ib < currentCount;
       if (!haveA && !haveB) {
         break;
       }
@@ -680,13 +577,13 @@ void Fps60::presentPass(Core *c, float t) {
         takeSink = false;
       } else {
         const RqItem &sa = mSink->items[ia];
-        const RqItem &sb = mRqCur[ib];
+        const RqItem &sb = frame.items[ib];
         takeSink = (sa.layer != sb.layer) ? (sa.layer < sb.layer) : (sa.seq <= sb.seq);
       }
       if (takeSink) {
         mPresentStream.push_back(&mSink->items[ia++]);
       } else {
-        mPresentStream.push_back(&mRqCur[ib++]);
+        mPresentStream.push_back(&frame.items[ib++]);
       }
     }
     q.emitItemStream(c, mPresentStream);
@@ -696,22 +593,7 @@ void Fps60::presentPass(Core *c, float t) {
 // ---- rotate captures, once per logic frame after both presents ----------------------------------------
 void Fps60::presentRotate() {
   Core *c = &game->core;
-  // POINTER SWAP, not memcpy (avoids the double-copy churn of the old design) ---------------------------
-  // mRqCur (just-drawn Q[N]) becomes next frame's mRqPrev; the buffer mRqPrev used to point at (now-stale,
-  // two-frames-old content that's never read again) becomes rq_capture's next overwrite target. mCamCur/
-  // mCamPrev and mBgCur/mBgPrev rotate in lockstep — both were written by THIS frame's own
-  // terrainRenderAll()/backdropRender() calls (via sceneCam/bgScroll, during drawOTag, before this
-  // present_vk call — see the invariant in fps60.h) so they hold the SAME frame's state mRqCur's content
-  // came from.
-  std::swap(mRqCur, mRqPrev);
-  std::swap(mNCur, mNPrev);
-  // The frame fence, and the ONLY place the capture is emptied. rq_capture accumulates every flush of a
-  // logic frame, so the reset cannot live there; after the swap mNCur holds the two-frames-ago count,
-  // which is stale by definition. Zeroing here (rather than relying on the next capture to overwrite) is
-  // what makes "this frame captured nothing" distinguishable from "this frame reused stale prims".
-  mNCur = 0;
-  mSeqBase = 0;
-  mCaptureFlushOrdinal = 0;
+  // Only temporal inputs rotate here. Current-frame queue capture/reset belongs to FramePresenter.
   std::swap(mCamCur, mCamPrev);
   std::swap(mBgCur, mBgPrev);
   std::swap(mObjCur, mObjPrev); // this frame's per-object transforms become next frame's Q[N-1]
