@@ -30,12 +30,14 @@ static void draw_semitransparent(GpuVkState &g, int mode, int blend) {
 static void test_separate_ordered_object_ranges(void) {
   GpuVkState g;
   CHECK(g.painter_begin(10));
+  g.painter_set_item_object(100);
   draw(g, 0, 1);
   draw_untextured(g, true, true);
   draw_semitransparent(g, 1, 2);
   draw(g, 2, 7);
   CHECK(g.painter_end());
   CHECK(g.painter_begin(20));
+  g.painter_set_item_object(200);
   draw(g, 1, 13);
   CHECK(g.painter_end());
   int ordinary = -1, painter = -1, ranges = -1;
@@ -43,7 +45,7 @@ static void test_separate_ordered_object_ranges(void) {
   CHECK_EQ(ordinary, 0);
   CHECK_EQ(painter, 15);
   CHECK_EQ(ranges, 2);
-  CHECK_EQ(g.s_painter_object[0], 10);
+  CHECK_EQ(g.s_painter_range_id[0], 10);
   CHECK_EQ(g.s_painter_first[0], 0);
   CHECK_EQ(g.s_painter_count[0], 4);
   CHECK_EQ(g.s_painter_cmd_material[0], 1);
@@ -54,9 +56,25 @@ static void test_separate_ordered_object_ranges(void) {
   CHECK_EQ(g.s_painter_cmd_material[3], 1);
   CHECK_EQ(g.s_painter_cmd_gouraud[1], 1);
   CHECK_EQ(g.s_painter_cmd_dither[1], 1);
-  CHECK_EQ(g.s_painter_object[1], 20);
+  CHECK_EQ(g.s_painter_cmd_object[0], 100);
+  CHECK_EQ(g.s_painter_range_id[1], 20);
+  CHECK_EQ(g.s_painter_cmd_object[4], 200);
   CHECK_EQ(g.s_painter_first[1], 4);
   CHECK_EQ(g.s_painter_count[1], 1);
+}
+
+static void test_authored_domain_preserves_object_boundaries(void) {
+  GpuVkState g;
+  CHECK(g.painter_begin(77));
+  g.painter_set_item_object(10);
+  draw(g, 1, 0);
+  g.painter_set_item_object(20);
+  draw(g, 1, 1);
+  CHECK(g.painter_end());
+  CHECK_EQ(g.s_painter_ranges, 1);
+  CHECK_EQ(g.s_painter_count[0], 2);
+  CHECK_EQ(g.s_painter_cmd_object[0], 10);
+  CHECK_EQ(g.s_painter_cmd_object[1], 20);
 }
 
 static void test_ordinary_stays_ordinary(void) {
@@ -84,6 +102,7 @@ static void test_semitransparent_commands_do_not_coalesce(void) {
 
 int main(void) {
   RUN(separate_ordered_object_ranges);
+  RUN(authored_domain_preserves_object_boundaries);
   RUN(ordinary_stays_ordinary);
   RUN(semitransparent_commands_do_not_coalesce);
   return pt_summary();

@@ -6,7 +6,7 @@ created: 2026-08-22
 tags: architecture,game-runtime
 depends: runtime/recomp/game_iface.cpp#psxport_install_game, runtime/recomp/core.cpp#Core, runtime/recomp/game.h#Game
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 12:53:37
+verified_at: 2026-08-22 16:34:08
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ A Core bypasses GameRuntime lifecycle, a Game factory runs before core.game/subs
 ## Re-confirmed 2026-08-22
 
 scratch/build-game-runtime-main/tests/test_game_runtime: 4/4 cases, 30 checks, 0 failed after integration in the main checkout, including a derived LegacyGameRuntimeAdapter overriding one behavior while retaining legacy context/config; scratch/bin/psxport_smoke: 8/8 with both legacy views null; Clang-tidy clean on all 5 touched TUs. The isolated full CTest was 81/82, with the sole failure the then-untouched pad_input.h:31 formatting.
+
+## Re-confirmed 2026-08-22
+
+Reverified after derived runtime integration: test_game_runtime passes in the full 83/83 Clang framework CTest; touched runtime files pass clang-format and clang-tidy.

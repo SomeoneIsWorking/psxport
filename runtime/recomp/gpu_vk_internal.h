@@ -130,7 +130,7 @@ struct GpuVkState {
   const float *s_vd = nullptr;
   const float *s_vdn = nullptr;
   float s_cur_ord = 0, s_cur_ordn = 0;
-  int64_t s_order_override = -1; // canonical RqItem::seq while painter regrouping is active
+  int64_t s_order_override = -1; // physical-flush-local sequence rank while painter regrouping is active
   // Paint-order depth TIEBREAK bias (z-fighting fix): a tiny per-prim increment = paint_order * ZBIAS_UNIT,
   // added to the 3D-band per-vertex depth so that when two world prims are at (near-)EQUAL real depth — the
   // barrel/decoration case where the game's integer geometry is genuinely coplanar to GTE fixed-point
@@ -182,7 +182,8 @@ struct GpuVkState {
   int s_tri_n = 0;
   void *s_tex_buf = nullptr;
   int s_tex_n = 0;
-  // Phase-1 painter-object staging. One unified textured vertex stream plus object ranges; it stays
+  // Painter staging. Each range is either one legacy isolated object or one frame-wide authored
+  // replay domain; command metadata retains the producer object across a merged domain.
   // separate from s_tex_buf so selected faces can never leak into the ordinary depth-tested batch.
   void *s_painter_tex_buf = nullptr;
   int s_painter_tex_n = 0;
@@ -190,7 +191,8 @@ struct GpuVkState {
   int s_painter_tri_n = 0;
   int s_painter_active = 0;
   int s_painter_item_gouraud = 0, s_painter_item_dither = 0;
-  uint32_t s_painter_object[256] = {};
+  uint32_t s_painter_current_object = 0;
+  uint32_t s_painter_range_id[256] = {};
   int s_painter_first[256] = {};
   int s_painter_count[256] = {};
   uint8_t s_painter_cmd_material[16384] = {};
@@ -198,6 +200,7 @@ struct GpuVkState {
   uint8_t s_painter_cmd_dither[16384] = {};
   uint8_t s_painter_cmd_semi[16384] = {};
   uint8_t s_painter_cmd_blend[16384] = {};
+  uint32_t s_painter_cmd_object[16384] = {};
   int s_painter_cmd_first[16384] = {};
   int s_painter_cmd_count[16384] = {};
   int s_painter_cmd_n = 0;
@@ -333,7 +336,8 @@ struct GpuVkState {
                  int dax1,
                  int day1,
                  int blend);
-  bool painter_begin(uint32_t object);
+  bool painter_begin(uint32_t range_id);
+  void painter_set_item_object(uint32_t object);
   bool painter_end();
   bool painter_command(int material, int first, int count, int semi = 0, int blend = 0);
   void painter_staging_stats(int *ordinary_tex_vertices, int *painter_vertices, int *ranges) const;

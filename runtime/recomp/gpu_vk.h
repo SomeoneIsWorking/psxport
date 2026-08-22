@@ -112,7 +112,8 @@ void gpu_vk_draw_semi(Core *core,
                       int dax1,
                       int day1,
                       int blend);
-bool gpu_vk_painter_begin(Core *core, uint32_t object);
+bool gpu_vk_painter_begin(Core *core, uint32_t range_id);
+void gpu_vk_painter_set_item_object(Core *core, uint32_t object);
 bool gpu_vk_painter_end(Core *core);
 
 // present / per-frame / readback

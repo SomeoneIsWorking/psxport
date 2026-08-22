@@ -2,6 +2,7 @@
 
 #include "mods.h" // FACE_ORDER_DEPTH — the ordering mode the rule is driven with
 #include "testutil.h"
+#include <array>
 #include <memory>
 
 static std::unique_ptr<RenderQueue> make_queue(void) {
@@ -18,7 +19,8 @@ static void add(RenderQueue &q,
                 int semi = 0,
                 uint8_t flags = 0,
                 int gouraud = 0,
-                int dither = 0) {
+                int dither = 0,
+                PainterReplayOrder replay = {}) {
   RqItem &it = q.items[q.n++];
   it = RqItem{};
   it.painter_object = id;
@@ -31,6 +33,11 @@ static void add(RenderQueue &q,
   it.semi = semi;
   it.shade_gouraud = (uint8_t)gouraud;
   it.dither = (uint8_t)dither;
+  it.painter_replay = replay;
+}
+
+static PainterReplayOrder replay(uint32_t domain, uint16_t bin, uint32_t link, uint32_t suborder) {
+  return {.domain = domain, .key = {.ot_bin = bin, .link_ordinal = link, .chain_suborder = suborder}};
 }
 
 static void test_interleaved_materials_and_ties(void) {
@@ -83,13 +90,105 @@ static void test_multiple_objects_are_contiguous(void) {
   CHECK_EQ(p.stats.grouped_faces, 4);
   CHECK_EQ(p.stats.objects, 2);
   CHECK_EQ(p.stats.partitioned_items, 6);
-  CHECK_EQ(p.objects[0].object, 2);
-  CHECK_EQ(p.objects[0].command_count, 2);
+  CHECK_EQ((int)p.ranges[0].kind, (int)PainterPlaybackKind::IsolatedObject);
+  CHECK_EQ(p.ranges[0].identity, 2);
+  CHECK_EQ(p.ranges[0].command_count, 2);
   CHECK_EQ(p.commands[0].seq, 10);
   CHECK_EQ(p.commands[1].seq, 30);
-  CHECK_EQ(p.objects[1].object, 1);
+  CHECK_EQ(p.ranges[1].identity, 1);
   CHECK_EQ(p.commands[2].seq, 20);
   CHECK_EQ(p.commands[3].seq, 40);
+}
+
+static void test_authored_domain_merges_objects_in_guest_replay_order(void) {
+  auto q = make_queue();
+  add(*q, 10, 0, 0, 0, 0, 0, 0, replay(77, 8, 1, 0));
+  add(*q, 20, 1, 1, 1, 0, 0, 0, replay(77, 9, 0, 0));
+  q->items[1].tp_blend = 2;
+  add(*q, 10, 2, 3, 0, 0, 0, 0, replay(77, 8, 2, 1));
+  add(*q, 30, 3, 2, 0, 0, 0, 0, replay(77, 8, 2, 0));
+  PainterObjectPlan p = q->buildPainterObjectPlan();
+  CHECK(p.accepted());
+  CHECK_EQ(p.stats.objects, 3);
+  CHECK_EQ(p.stats.authored_domains, 1);
+  CHECK_EQ(p.ranges.size(), 1);
+  CHECK_EQ((int)p.ranges[0].kind, (int)PainterPlaybackKind::AuthoredDomain);
+  CHECK_EQ(p.ranges[0].identity, 77);
+  CHECK_EQ(p.ranges[0].command_count, 4);
+  CHECK_EQ(p.commands[0].object, 20);
+  CHECK(p.commands[0].semi_transparent);
+  CHECK_EQ(p.commands[0].blend_mode, 2);
+  CHECK_EQ(p.commands[1].object, 30);
+  CHECK_EQ(p.commands[2].object, 10);
+  CHECK_EQ(p.commands[3].object, 10);
+  CHECK_EQ(p.commands[1].replay.key.chain_suborder, 0);
+  CHECK_EQ(p.commands[2].replay.key.chain_suborder, 1);
+}
+
+static void test_presentation_stream_plans_across_captured_queues(void) {
+  auto captured = make_queue();
+  auto rerendered = make_queue();
+  add(*captured, 10, 0, 0, 0, 0, 0, 0, replay(77, 8, 1, 0));
+  add(*rerendered, 20, 1, 0, 0, 0, 0, 0, replay(77, 9, 0, 0));
+  add(*captured, 30, 2, 0, 0, 0, 0, 0, replay(77, 8, 2, 0));
+  captured->items[0].seq = 2650;
+  rerendered->items[0].seq = 2652;
+  captured->items[1].seq = 2654;
+  const std::array<const RqItem *, 3> present = {&captured->items[0], &rerendered->items[0], &captured->items[1]};
+  const PainterObjectPlan plan = planPainterItemStream(present);
+  CHECK(plan.accepted());
+  CHECK_EQ(plan.ranges.size(), 1);
+  CHECK_EQ(plan.ranges[0].command_count, 3);
+  CHECK_EQ(plan.commands[0].object, 20);
+  CHECK_EQ(plan.commands[1].object, 30);
+  CHECK_EQ(plan.commands[2].object, 10);
+  CHECK_EQ(plan.commands[0].item_index, 1);
+  CHECK_EQ(plan.presentation_ranks[0], 0);
+  CHECK_EQ(plan.presentation_ranks[1], 1);
+  CHECK_EQ(plan.presentation_ranks[2], 2);
+
+  rerendered->items[0].flush_ordinal = 1;
+  const PainterObjectPlan mixedFlush = planPainterItemStream(present);
+  CHECK_EQ((int)mixedFlush.stats.refusal, (int)PainterObjectRefusal::MixedFlushEpoch);
+  CHECK_EQ(mixedFlush.stats.refusal_item, 1);
+}
+
+static void test_authored_domain_refuses_incomplete_or_ambiguous_order(void) {
+  auto q = make_queue();
+  add(*q, 1, 0, 0, 0, 0, 0, 0, replay(7, 9, 1, 0));
+  add(*q, 2, 1, 0, 0, 0, 0, 0, replay(7, 9, 1, 0));
+  PainterObjectPlan p = q->buildPainterObjectPlan();
+  CHECK_EQ((int)p.stats.refusal, (int)PainterObjectRefusal::DuplicateReplayKey);
+
+  q = make_queue();
+  add(*q, 1, 0, 0, 0, 0, 0, 0, replay(7, 9, 1, 0));
+  add(*q, 0, 1, 0);
+  p = q->buildPainterObjectPlan();
+  CHECK_EQ((int)p.stats.refusal, (int)PainterObjectRefusal::UnorderedWorldMix);
+  CHECK_EQ(p.stats.refusal_item, 1);
+
+  q = make_queue();
+  add(*q, 1, 0, 0, 0, 0, 0, 0, replay(7, 9, 1, 0));
+  add(*q, 2, 1, 0);
+  p = q->buildPainterObjectPlan();
+  CHECK_EQ((int)p.stats.refusal, (int)PainterObjectRefusal::MixedReplayPolicy);
+
+  q = make_queue();
+  add(*q, 1, 0, 0, 0, 0, 0, 0, replay(7, 9, 1, 0));
+  add(*q, 1, 1, 0, 0, 0, 0, 0, replay(8, 9, 2, 0));
+  p = q->buildPainterObjectPlan();
+  CHECK_EQ((int)p.stats.refusal, (int)PainterObjectRefusal::ObjectInMultipleDomains);
+}
+
+static void test_authored_admission_refuses_unknown_world_mix(void) {
+  auto q = make_queue();
+  add(*q, 0, 0, 3);
+  PainterObjectAdmission admission = q->preflightPainterObject(8, 1, 77);
+  CHECK_EQ((int)admission.refusal, (int)PainterObjectAdmissionRefusal::UnorderedWorldMix);
+  q = make_queue();
+  add(*q, 4, 0, 3);
+  admission = q->preflightPainterObject(8, 1, 77);
+  CHECK_EQ((int)admission.refusal, (int)PainterObjectAdmissionRefusal::MixedReplayPolicy);
 }
 
 static void test_atomic_admission_accepts_existing_semitransparency(void) {
@@ -241,6 +340,10 @@ static void test_lazy_reset_preserves_scopes(void) {
 int main(void) {
   RUN(interleaved_materials_and_ties);
   RUN(multiple_objects_are_contiguous);
+  RUN(authored_domain_merges_objects_in_guest_replay_order);
+  RUN(presentation_stream_plans_across_captured_queues);
+  RUN(authored_domain_refuses_incomplete_or_ambiguous_order);
+  RUN(authored_admission_refuses_unknown_world_mix);
   RUN(atomic_admission_accepts_existing_semitransparency);
   RUN(refusals_and_denominators);
   RUN(painter_depth_is_not_key_flattened);

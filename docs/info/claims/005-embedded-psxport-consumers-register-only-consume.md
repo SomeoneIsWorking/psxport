@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags: cmake,testing
 depends: CMakeLists.txt, tools/oracle/CMakeLists.txt, tests/test_cmake_test_ownership.py
-reconfirmed: 2026-08-21
-verified_at: 2026-08-21 11:09:16
+reconfirmed: 2026-08-22
+verified_at: 2026-08-22 16:34:08
 ---
 
 ## Claim
@@ -26,3 +26,7 @@ A real embedded default configure lists a psxport-owned test, or standalone/expl
 The generic embedded fixture passed both default-OFF and explicit-ON; a fresh Clang Crash Bash
 scaffold listed exactly its two intended tests and passed 2/2. Post-integration standalone Clang
 CTest passed cmake_test_ownership with 74 tests registered only in the standalone build.
+
+## Re-confirmed 2026-08-22
+
+Reverified after runtime/painter changes: full Clang framework CTest passes 83/83, including cmake_test_ownership and the embedded/standalone ownership classifiers.

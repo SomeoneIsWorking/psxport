@@ -104,17 +104,21 @@ static constexpr uint32_t kBackdropDbgNode = 0xFFFF0003u;
 // values are captured at enqueue time (after texpage/clut resolution + draw-offset/rounding) so flush is
 // independent of any GpuState mutated between enqueue and flush.
 struct RqItem {
-  uint8_t layer;                  // RqLayer
-  uint8_t semi;                   // semi-transparent (blended) quad
-  uint8_t nv;                     // vertex count: 3 = triangle (one tri), 4 = quad (two tris)
-  uint8_t raw;                    // raw texel (no color modulation)
-  uint8_t order_mode;             // RqOrderMode — how depth is applied at emit
-  uint8_t painter_flags;          // legacy scope flags, mapped into explicit per-item state at capture
-  uint8_t shade_gouraud;          // original G3/G4 shading opcode; cannot be inferred from equal RGB
-  uint8_t dither;                 // original draw-mode DTD bit, carried per item
-  PainterObjectId painter_object; // 0 = ordinary path; non-zero = local authored-order object
-  uint32_t seq;                   // submission order — stable layer order; OT ties reverse it explicitly
-  int xs[4], ys[4];               // screen verts (with draw offset, rounded) — 2D/HUD + fallback path
+  uint8_t layer;                     // RqLayer
+  uint8_t semi;                      // semi-transparent (blended) quad
+  uint8_t nv;                        // vertex count: 3 = triangle (one tri), 4 = quad (two tris)
+  uint8_t raw;                       // raw texel (no color modulation)
+  uint8_t order_mode;                // RqOrderMode — how depth is applied at emit
+  uint8_t painter_flags;             // legacy scope flags, mapped into explicit per-item state at capture
+  uint8_t shade_gouraud;             // original G3/G4 shading opcode; cannot be inferred from equal RGB
+  uint8_t dither;                    // original draw-mode DTD bit, carried per item
+  PainterObjectId painter_object;    // 0 = ordinary path; non-zero = local authored-order object
+  PainterReplayOrder painter_replay; // optional frame-wide guest replay position
+  uint32_t seq;                      // submission order — stable layer order; OT ties reverse it explicitly
+  // Physical flush boundary inside a captured presentation. Layers restart at each DrawOTag/flush, so
+  // painter planning may regroup only items sharing this ordinal. Live queues use zero; fps60 stamps it.
+  uint32_t flush_ordinal;
+  int xs[4], ys[4]; // screen verts (with draw offset, rounded) — 2D/HUD + fallback path
   // Sub-pixel float screen XY (draw offset applied in float) for the engine-owned 3D world path. When
   // has_xyf is set the rasterizer uses these instead of the rounded xs/ys, so world geometry keeps its
   // sub-pixel position and stops snapping pixel-to-pixel (PS1 wobble) — vertex smoothing, issue #15.
@@ -184,16 +188,21 @@ struct RenderQueue {
   unsigned long long pushed_total = 0;
   int consumed = 1; // start consumed so the first push begins a clean frame
   void reset();
-  RqItem *push();              // NULL on overflow (reserves a slot; lazy per-frame reset)
-  void flush(Core *core);      // sort by (layer, seq), then capture (fps60) OR emit each, mark consumed
-  void sortQueue();            // stable_sort items by (layer, seq) — the engine draw order (fps60 mid-present)
-  void emitQueue(Core *core);  // emit each item to the VK rasterizer + mark consumed (no sort)
+  RqItem *push();             // NULL on overflow (reserves a slot; lazy per-frame reset)
+  void flush(Core *core);     // sort by (layer, seq), then capture (fps60) OR emit each, mark consumed
+  void sortQueue();           // stable_sort items by (layer, seq) — the engine draw order (fps60 mid-present)
+  void emitQueue(Core *core); // emit each item to the VK rasterizer + mark consumed (no sort)
+  // Emit one already-sorted presentation stream. Pointer indirection lets fps60 merge its captured
+  // queue and present-time re-render without copying multi-megabyte RqItems or bypassing painter planning.
+  void emitItemStream(Core *core, std::span<const RqItem *const> stream);
   void histogram();            // `debug rqhist` layer x opaque/semi census; called from flush(),
                                // never emitQueue() — fps60 never reaches emitQueue (see the .cpp)
   void zfightScan(Core *core); // PSXPORT_ZFIGHT diag: SW-rasterize opaque depth prims, find near-equal top-2 contests
   void mark_consumed();
-  PainterObjectAdmission
-  preflightPainterObject(PainterObjectId object, size_t new_faces, PainterObjectLimits limits = {}) const;
+  PainterObjectAdmission preflightPainterObject(PainterObjectId object,
+                                                size_t new_faces,
+                                                PainterReplayDomainId replay_domain = 0,
+                                                PainterObjectLimits limits = {}) const;
   PainterObjectPlan buildPainterObjectPlan(PainterObjectLimits limits = {}) const;
 
   // The screen space of the 2D quads being pushed RIGHT NOW. Producers that author 4:3 layout — the
@@ -209,6 +218,7 @@ struct RenderQueue {
   uint16_t mPainterScopeDepth = 0;
   bool mPainterInvalidId = false;
   bool mPainterRegrouping = false;
+  uint32_t mPainterPresentationRank = 0;
 
   class PainterObjectScope {
   public:
@@ -328,7 +338,8 @@ struct RenderQueue {
                    int sort_key = -1,
                    float key_ord = 0.0f,
                    int shade_gouraud = 0,
-                   int dither = 0);
+                   int dither = 0,
+                   PainterReplayOrder painter_replay = {});
 
   // drawWorldQuad: PC-native world-quad draw — a quad already projected to FLOAT screen coords + real
   // per-vertex depth, teed as two triangles to the VK rasterizer through the queue. No GP0 packet, no

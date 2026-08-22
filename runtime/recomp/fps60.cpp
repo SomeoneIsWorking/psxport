@@ -516,9 +516,11 @@ void Fps60::rq_capture(const RqItem *items, int n) {
   memcpy(mRqCur + mNCur, items, (size_t)n * sizeof(RqItem));
   for (int i = 0; i < n; i++) {
     mRqCur[mNCur + i].seq += seqBase;
+    mRqCur[mNCur + i].flush_ordinal = mCaptureFlushOrdinal;
   }
   mNCur += n;
   mSeqBase += (uint32_t)n;
+  ++mCaptureFlushOrdinal;
 }
 
 // THE frame fence and THE present, for both configs. This used to `return` when the tier was off, which
@@ -660,6 +662,8 @@ void Fps60::presentPass(Core *c, float t) {
     // frame). The whole captured queue replays as-is — the documented degenerate lerp.)
     const bool tier1 = kTier1;
     const int sinkN = (tier1 && mSink) ? mSink->n : 0;
+    mPresentStream.clear();
+    mPresentStream.reserve((size_t)sinkN + (size_t)mNCur);
     int ia = 0, ib = 0;
     for (;;) {
       while (ib < mNCur && tier1 && isTier1Owned(mRqCur[ib])) {
@@ -680,11 +684,12 @@ void Fps60::presentPass(Core *c, float t) {
         takeSink = (sa.layer != sb.layer) ? (sa.layer < sb.layer) : (sa.seq <= sb.seq);
       }
       if (takeSink) {
-        q.emitItem(c, &mSink->items[ia++]);
+        mPresentStream.push_back(&mSink->items[ia++]);
       } else {
-        q.emitItem(c, &mRqCur[ib++]);
+        mPresentStream.push_back(&mRqCur[ib++]);
       }
     }
+    q.emitItemStream(c, mPresentStream);
   }
 }
 
@@ -706,6 +711,7 @@ void Fps60::presentRotate() {
   // what makes "this frame captured nothing" distinguishable from "this frame reused stale prims".
   mNCur = 0;
   mSeqBase = 0;
+  mCaptureFlushOrdinal = 0;
   std::swap(mCamCur, mCamPrev);
   std::swap(mBgCur, mBgPrev);
   std::swap(mObjCur, mObjPrev); // this frame's per-object transforms become next frame's Q[N-1]

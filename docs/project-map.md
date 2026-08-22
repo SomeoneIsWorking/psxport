@@ -116,10 +116,15 @@ run-end report distinguishes satisfied, failed, and unexercised rather than warn
 present — 4,404 lines), `gpu_primitive_dump.{h,cpp}` (primitive-census CSV lifecycle and row encoding),
 and `image_writer.{h,cpp}` (the checked RGB24-to-PPM/PNG host-file boundary shared by software and GPU
 captures). The two legacy renderer files remain critical extraction territory and are shrink-only.
-`render_queue.{h,cpp}` + `painter_object_layer.{h,cpp}` own atomic painter admission and command planning:
-selected world faces retain one sequence-stable stream across textured/untextured and
-opaque/semitransparent material variants. `gpu_painter.cpp` owns painter target lifecycle and command
-staging.
+`render_queue.{h,cpp}` + `painter_object_layer.{h,cpp}` own atomic painter admission and command planning.
+Legacy painter objects retain one sequence-stable local stream across textured/untextured and
+opaque/semitransparent material variants. Authored replay domains merge several producer objects into one
+guest OT stream with the single `(ot_bin descending, link_ordinal descending, chain_suborder ascending)`
+comparator; duplicate keys, unordered world faces, and mixed policies refuse instead of guessing. Physical
+`RenderQueue::flush` epochs remain independent because a captured logic frame may contain several complete
+OT traversals. Both direct queue emission and `Fps60::presentPass` call the same pointer-stream planner, so
+presentation cannot bypass painter ordering or copy multi-megabyte `RqItem` payloads.
+`gpu_painter.cpp` owns painter target lifecycle and command staging.
 `ot_lifo_depth.{h,cpp}` encodes PSX `AddPrim` head-insertion order for equal-key authored faces, while
 `gpu_vk_next_distinct_3d_depth` owns conversion to raster-distinct Vulkan D32 values. `gpu_vk.cpp`
 retains interleaved textured and untextured command runs (including explicit flat/Gouraud and DTD state).

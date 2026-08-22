@@ -362,7 +362,9 @@ RqItem *RenderQueue::push() {
   pushed_total++; // monotonic; see render_queue.h — the only sound basis for a per-call prim count
   RqItem *it = &items[n++];
   it->seq = seq++;
+  it->flush_ordinal = 0;
   it->painter_object = mPainterObject;
+  it->painter_replay = {};
   it->painter_flags = mPainterFlags;
   it->dither = (mPainterFlags & PAINTER_OBJECT_DITHER) ? 1 : 0;
   return it;
@@ -380,7 +382,7 @@ void RenderQueue::mark_consumed() {
 // builds a fresh queue by re-running sceneNative + re-appending non-scene prims) sorts identically.
 // NOTE (coplanar z-fight follow-up): a secondary tie-break key can layer on top of the (layer,seq) sort
 // here — keep this comparator the single sort authority so it has one place to extend.
-// SORT THE KEYS, PERMUTE ONCE — do not sort 264-byte payloads to order 8 bytes of key.
+// SORT THE KEYS, PERMUTE ONCE — do not sort 284-byte payloads to order 8 bytes of key.
 //
 // MEASURED, and this was the largest single byte mover in the whole port. The --wrap=memcpy call-site
 // census (runtime/recomp/memcensus.cpp) over the 1,100-frame field scene attributed 12.29 GB of
@@ -390,7 +392,7 @@ void RenderQueue::mark_consumed() {
 //      7.6%  940 MB    std::__insertion_sort<RqItem*, sortQueue()::lambda>
 //      5.4%  670 MB    the remaining merge stages
 //
-// sizeof(RqItem) is 264 bytes and a frame holds ~900 of them, so a stable_sort moved megabytes per
+// sizeof(RqItem) is 284 bytes and a frame holds ~900 of them, so a stable_sort moved megabytes per
 // call, three times a frame, to order a key that is (layer, seq) — one small int and one counter.
 // The host profile could only ever say "__memmove_avx_unaligned_erms, 10-13%": it names where the
 // program counter is, never who asked for the copy. Two earlier attempts on kanban #118 cut VRAM
@@ -484,61 +486,152 @@ void RenderQueue::emitQueue(Core *core) {
     mark_consumed();
     return;
   }
+  std::vector<const RqItem *> stream;
+  stream.reserve((size_t)n);
+  for (int i = 0; i < n; ++i) {
+    stream.push_back(&items[i]);
+  }
+  emitItemStream(core, stream);
+  mark_consumed();
+}
+
+void RenderQueue::emitItemStream(Core *core, std::span<const RqItem *const> stream) {
+  if (stream.empty()) {
+    return;
+  }
   bool havePainter = false;
-  for (int i = 0; i < n; i++) {
-    havePainter |= items[i].painter_object != 0;
+  for (const RqItem *item : stream) {
+    havePainter |= item->painter_object != 0;
   }
   if (!havePainter) {
-    for (int i = 0; i < n; i++) {
-      emitItem(core, &items[i]);
+    for (const RqItem *item : stream) {
+      emitItem(core, item);
     }
-  } else {
-    PainterObjectPlan plan = buildPainterObjectPlan();
-    if (!plan.accepted() || plan.stats.partitioned_items != (size_t)n) {
+    return;
+  }
+  size_t runBegin = 0;
+  while (runBegin < stream.size()) {
+    size_t runEnd = runBegin + 1;
+    while (runEnd < stream.size() && stream[runEnd]->flush_ordinal == stream[runBegin]->flush_ordinal) {
+      ++runEnd;
+    }
+    const std::span<const RqItem *const> run = stream.subspan(runBegin, runEnd - runBegin);
+    const bool runHasPainter = std::any_of(run.begin(), run.end(), [](const RqItem *item) {
+      return item->painter_object != 0;
+    });
+    if (!runHasPainter) {
+      for (const RqItem *item : run) {
+        emitItem(core, item);
+      }
+      runBegin = runEnd;
+      continue;
+    }
+    PainterObjectPlan plan = planPainterItemStream(run);
+    if (!plan.accepted() || plan.stats.partitioned_items != run.size()) {
       lucent::error("rq",
-                    "FATAL: painter plan refused={} scanned={} grouped={} partitioned={}/{} item={}",
+                    "FATAL: painter plan refused={} flush={} scanned={} grouped={} partitioned={}/{} item={}",
                     (int)plan.stats.refusal,
+                    run.front()->flush_ordinal,
                     plan.stats.items_scanned,
                     plan.stats.grouped_faces,
                     plan.stats.partitioned_items,
-                    n,
+                    run.size(),
                     plan.stats.refusal_item);
       abort();
     }
-    // Regrouping changes physical pass order. Exact-real-depth painter/ordinary ties are preserved by
-    // the renderer's canonical-seq epsilon only while it is unsaturated; beyond that point later pass
-    // order would silently become the answer. Refuse such mixed frames rather than claim equivalence.
-    if (!plan.ordinary_items.empty() || plan.objects.size() > 1) {
-      uint32_t maxseq = 0;
-      for (int i = 0; i < n; i++) {
-        if (items[i].seq > maxseq) {
-          maxseq = items[i].seq;
+    static const lucent::Channel painterPlanChannel{"painterplan"};
+    if (painterPlanChannel) {
+      lucent::Line line;
+      line.add("f{} flush={} items={} objects={} domains={} ranges={}",
+               census_frame(core),
+               run.front()->flush_ordinal,
+               plan.commands.size(),
+               plan.stats.objects,
+               plan.stats.authored_domains,
+               plan.ranges.size());
+      std::vector<std::pair<PainterObjectId, size_t>> objectCounts;
+      for (const PainterCommand &command : plan.commands) {
+        const auto found = std::find_if(objectCounts.begin(), objectCounts.end(), [&](const auto &entry) {
+          return entry.first == command.object;
+        });
+        if (found == objectCounts.end()) {
+          objectCounts.push_back({command.object, 1});
+        } else {
+          ++found->second;
         }
       }
-      if (!gpu_vk_order_bias_distinguishes(maxseq)) {
+      line.add(" counts=");
+      for (const auto &[object, count] : objectCounts) {
+        line.add("{:08X}:{} ", object, count);
+      }
+      for (const PainterPlaybackRange &range : plan.ranges) {
+        const PainterCommand &first = plan.commands[range.first_command];
+        const PainterCommand &last = plan.commands[range.first_command + range.command_count - 1];
+        line.add("range {:08X}/{} first={:08X}@{}/{}/{} last={:08X}@{}/{}/{} transitions=",
+                 range.identity,
+                 range.command_count,
+                 first.object,
+                 first.replay.key.ot_bin,
+                 first.replay.key.link_ordinal,
+                 first.replay.key.chain_suborder,
+                 last.object,
+                 last.replay.key.ot_bin,
+                 last.replay.key.link_ordinal,
+                 last.replay.key.chain_suborder);
+        PainterObjectId previous = first.object;
+        size_t reported = 0;
+        for (size_t k = 1; k < range.command_count && reported < 12; ++k) {
+          const PainterCommand &command = plan.commands[range.first_command + k];
+          if (command.object == previous) {
+            continue;
+          }
+          line.add("{:08X}@{}/{}/{} ",
+                   command.object,
+                   command.replay.key.ot_bin,
+                   command.replay.key.link_ordinal,
+                   command.replay.key.chain_suborder);
+          previous = command.object;
+          ++reported;
+        }
+      }
+      line.flush_debug(painterPlanChannel);
+    }
+    // Regrouping changes physical pass order. Exact-real-depth painter/ordinary ties are preserved by
+    // a dense rank of original sequence values inside THIS physical flush. Fps60 rebases RqItem::seq
+    // across captured flushes, but that global offset carries no ordering information inside this run
+    // and must not consume the finite epsilon channel. Refuse if even the local ranks would saturate.
+    if (!plan.ordinary_items.empty() || plan.ranges.size() > 1) {
+      const uint32_t maxRank = plan.presentation_ranks.empty()
+                                   ? 0
+                                   : *std::max_element(plan.presentation_ranks.begin(), plan.presentation_ranks.end());
+      if (!gpu_vk_order_bias_distinguishes(maxRank)) {
         lucent::error(
-            "rq", "FATAL: painter/ordinary tie channel saturated at max_seq={} — refusing regrouped frame", maxseq);
+            "rq", "FATAL: painter/ordinary tie channel saturated at local_rank={} — refusing regrouped flush", maxRank);
         abort();
       }
     }
     mPainterRegrouping = true;
     for (size_t i : plan.ordinary_items) {
-      emitItem(core, &items[i]);
+      mPainterPresentationRank = plan.presentation_ranks[i];
+      emitItem(core, run[i]);
     }
-    for (const PainterObjectRange &range : plan.objects) {
-      if (!gpu_vk_painter_begin(core, range.object)) {
+    for (const PainterPlaybackRange &range : plan.ranges) {
+      if (!gpu_vk_painter_begin(core, range.identity)) {
         abort();
       }
       for (size_t k = 0; k < range.command_count; k++) {
-        emitItem(core, &items[plan.commands[range.first_command + k].item_index]);
+        const PainterCommand &command = plan.commands[range.first_command + k];
+        gpu_vk_painter_set_item_object(core, command.object);
+        mPainterPresentationRank = plan.presentation_ranks[command.item_index];
+        emitItem(core, run[command.item_index]);
       }
       if (!gpu_vk_painter_end(core)) {
         abort();
       }
     }
     mPainterRegrouping = false;
+    runBegin = runEnd;
   }
-  mark_consumed();
 }
 
 // PSXPORT_ZFIGHT[=eps]: automatic z-fight FINDER. Software-rasterize every opaque RQ_OM_DEPTH world prim
@@ -1149,11 +1242,11 @@ void RenderQueue::emitItem(Core *core, const RqItem *it) {
   }
   mLedger.noteEmitted(it->layer); // present_ledger.h — the single funnel every drawn prim passes
   unsigned ord = s.s_prim_order++;
-  // Canonical queue sequence, applied at the last possible point so an earlier diagnostic/filter return
-  // cannot leak an override into the next item. Regrouped painter emission therefore keeps exact-depth
-  // ties in original global order, while the ordinary path's counter/accounting remains unchanged.
+  // Physical-flush-local presentation rank, applied at the last possible point so an earlier
+  // diagnostic/filter return cannot leak an override into the next item. Regrouped painter emission
+  // therefore keeps exact-depth ties in original order without consuming bias on fps60's global seq base.
   if (mPainterRegrouping) {
-    gpu_vk_set_order_override(core, it->seq);
+    gpu_vk_set_order_override(core, mPainterPresentationRank);
   }
   // The generic paint bias makes later native emissions win near-equal real-depth contests. An
   // authored depth has already encoded the guest OT's answer, including AddPrim's opposite same-bucket
@@ -1442,7 +1535,8 @@ void RenderQueue::emitOrQueue(Core *core,
                               int sort_key,
                               float key_ord,
                               int shade_gouraud,
-                              int dither) {
+                              int dither,
+                              PainterReplayOrder painter_replay) {
   // ---- graphics-producer DB, NATIVE leg (docs/plans/graphics-producer-db.md stage 3) -------------
   // THE one chokepoint: drawWorldQuad and push2dQuad both funnel here, so counting once here covers
   // every native push and cannot double-count. An open ProducerScope names the producer; with none
@@ -1558,12 +1652,14 @@ void RenderQueue::emitOrQueue(Core *core,
     }
   }
   RqItem it;
+  it.flush_ordinal = 0;
   it.layer = (uint8_t)layer;
   it.semi = semi ? 1 : 0;
   it.nv = (uint8_t)nv;
   it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
   it.painter_object = mPainterObject;
+  it.painter_replay = painter_replay;
   it.painter_flags = mPainterFlags;
   it.shade_gouraud = shade_gouraud ? 1 : 0;
   it.dither = (dither || (mPainterFlags & PAINTER_OBJECT_DITHER)) ? 1 : 0;

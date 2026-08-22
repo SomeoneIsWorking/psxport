@@ -191,11 +191,15 @@ struct Fps60 {
   // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------
   RqItem *mRqCur = nullptr;  // this logic frame's resolved queue snapshot (captured at flush)
   RqItem *mRqPrev = nullptr; // previous frame's snapshot (Q[N-1])
+  // Pointer-only presentation merge. The pointed-to items remain owned by mRqCur/mSink for the whole
+  // synchronous emit; keeping this as a reusable member avoids a large per-present item copy/allocation.
+  std::vector<const RqItem *> mPresentStream;
   int mNCur = 0, mNPrev = 0, mHavePrev = 0;
   // Running seq offset for the CURRENT logic frame's accumulated captures. Each RenderQueue flush
   // restarts seq at 0, and presentPass merges by (layer, seq), so every appended flush is rebased by
   // the prims already captured this frame. Reset with mNCur at the frame fence (presentRotate).
   uint32_t mSeqBase = 0;
+  uint32_t mCaptureFlushOrdinal = 0;
   void rq_capture(const RqItem *items, int n); // copy the sorted queue snapshot
   void present_vk(Core *core);                 // build+present the in-between, then the real frame
   // presentPass — THE ONE PLACE A FRAME IS BUILT AND EMITTED. Both presents call it; `t` is the ONLY

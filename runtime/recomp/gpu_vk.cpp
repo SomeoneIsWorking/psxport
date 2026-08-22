@@ -4377,13 +4377,6 @@ void gpu_vk_shot_b(Core *core, const char *path) {
 void gpu_vk_frame_end(Core *core, const uint16_t *svram, int frame) {
   core->game->gpu_vk.frame_end(svram, frame);
 }
-bool gpu_vk_painter_begin(Core *core, uint32_t object) {
-  return core->game->gpu_vk.painter_begin(object);
-}
-bool gpu_vk_painter_end(Core *core) {
-  return core->game->gpu_vk.painter_end();
-}
-
 // REPL `preseq` arm (repl.cpp) — creates the dir and arms the per-present dump in present().
 void gpu_vk_preseq_arm(Core *core, int n, const char *dir) {
   GpuVkState &s = core->game->gpu_vk;

@@ -1,5 +1,7 @@
 #include "gpu_vk_internal.h"
 
+#include "core.h"
+#include "game.h"
 #include "gpu_vk_device.h"
 
 #include <SDL3/SDL.h>
@@ -60,14 +62,19 @@ void GpuVkState::ensure_painter_targets(int width, int height) {
   s_painter_h = height;
 }
 
-bool GpuVkState::painter_begin(uint32_t object) {
-  if (!object || s_painter_active || s_painter_ranges >= 256) {
+bool GpuVkState::painter_begin(uint32_t range_id) {
+  if (!range_id || s_painter_active || s_painter_ranges >= 256) {
     return false;
   }
   s_painter_active = 1;
-  s_painter_object[s_painter_ranges] = object;
+  s_painter_current_object = 0;
+  s_painter_range_id[s_painter_ranges] = range_id;
   s_painter_first[s_painter_ranges] = s_painter_cmd_n;
   return true;
+}
+
+void GpuVkState::painter_set_item_object(uint32_t object) {
+  s_painter_current_object = object;
 }
 
 bool GpuVkState::painter_end() {
@@ -90,7 +97,7 @@ bool GpuVkState::painter_command(int material, int first, int count, int semi, i
     const int previous = s_painter_cmd_n - 1;
     if (s_painter_cmd_material[previous] == material && s_painter_cmd_gouraud[previous] == s_painter_item_gouraud &&
         s_painter_cmd_dither[previous] == s_painter_item_dither && s_painter_cmd_semi[previous] == semi &&
-        s_painter_cmd_blend[previous] == blend &&
+        s_painter_cmd_blend[previous] == blend && s_painter_cmd_object[previous] == s_painter_current_object &&
         s_painter_cmd_first[previous] + s_painter_cmd_count[previous] == first) {
       s_painter_cmd_count[previous] += count;
       return true;
@@ -106,6 +113,7 @@ bool GpuVkState::painter_command(int material, int first, int count, int semi, i
   s_painter_cmd_dither[command] = (uint8_t)s_painter_item_dither;
   s_painter_cmd_semi[command] = (uint8_t)semi;
   s_painter_cmd_blend[command] = (uint8_t)blend;
+  s_painter_cmd_object[command] = s_painter_current_object;
   s_painter_cmd_first[command] = first;
   s_painter_cmd_count[command] = count;
   return true;
@@ -121,4 +129,16 @@ void GpuVkState::painter_staging_stats(int *ordinary, int *painter, int *ranges)
   if (ranges) {
     *ranges = s_painter_ranges;
   }
+}
+
+bool gpu_vk_painter_begin(Core *core, uint32_t range_id) {
+  return core->game->gpu_vk.painter_begin(range_id);
+}
+
+void gpu_vk_painter_set_item_object(Core *core, uint32_t object) {
+  core->game->gpu_vk.painter_set_item_object(object);
+}
+
+bool gpu_vk_painter_end(Core *core) {
+  return core->game->gpu_vk.painter_end();
 }

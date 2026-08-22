@@ -5,7 +5,7 @@ status: holds
 created: 2026-08-21
 tags: watchdog,presentation,bootstrap
 depends: runtime/recomp/gpu_native.cpp#GpuState::gpu_present_ex
-verified_at: 2026-08-22 13:41:18
+verified_at: 2026-08-22 16:34:08
 reconfirmed: 2026-08-22
 ---
 
@@ -31,3 +31,7 @@ remains the consumer positive.
 ## Re-confirmed 2026-08-22
 
 Post-extraction Clang CTest passed 83/83, including test_watchdog 17/17 and test_fmv_watchdog 9/9; gpu_present_ex retained the main-VRAM completion call after primitive-dump/image-writer ownership moved out of gpu_native.cpp.
+
+## Re-confirmed 2026-08-22
+
+Reverified after renderer/runtime changes: test_fmv_watchdog and test_watchdog pass inside the full 83/83 Clang framework CTest.
