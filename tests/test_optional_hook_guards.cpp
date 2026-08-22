@@ -83,6 +83,16 @@ static void spy_bb_swap(Core *c) {
 }
 static int s_temporal_calls = 0;
 static Core *s_temporal_core = nullptr;
+static int s_fade_calls = 0;
+static Core *s_fade_core = nullptr;
+static void spy_fade_state(Core *c, FadeState *state) {
+  ++s_fade_calls;
+  s_fade_core = c;
+  state->mode = 3;
+  state->r = 11;
+  state->g = 22;
+  state->b = 33;
+}
 static void spy_temporal_rotate(Core *c) {
   s_temporal_calls++;
   s_temporal_core = c;
@@ -97,6 +107,8 @@ static void reset_spies(void) {
   s_world_core = s_bb_core = nullptr;
   s_temporal_calls = 0;
   s_temporal_core = nullptr;
+  s_fade_calls = 0;
+  s_fade_core = nullptr;
 }
 
 // A null hooks TABLE is a different failure from a null hook IN the table — a port that never installs
@@ -144,6 +156,30 @@ static void test_a_present_hook_is_actually_called(void) {
   game_audio_sound_test_play(kFakeCore, &hooks, -1);
   CHECK_EQ(s_play_calls, 2);
   CHECK_EQ(s_play_track, -1);
+}
+
+static void test_fade_reader_handles_absent_table_and_calls_present_hook(void) {
+  reset_spies();
+  const FadeState noTable = game_render_fade_state(kFakeCore, nullptr);
+  CHECK_EQ(noTable.mode, 0);
+  CHECK_EQ(noTable.r, 0);
+  CHECK_EQ(noTable.g, 0);
+  CHECK_EQ(noTable.b, 0);
+
+  GameHooks empty{};
+  const FadeState noHook = game_render_fade_state(kFakeCore, &empty);
+  CHECK_EQ(noHook.mode, 0);
+  CHECK_EQ(s_fade_calls, 0);
+
+  GameHooks hooks{};
+  hooks.renderFadeState = spy_fade_state;
+  const FadeState fade = game_render_fade_state(kFakeCore, &hooks);
+  CHECK_EQ(s_fade_calls, 1);
+  CHECK(s_fade_core == kFakeCore);
+  CHECK_EQ(fade.mode, 3);
+  CHECK_EQ(fade.r, 11);
+  CHECK_EQ(fade.g, 22);
+  CHECK_EQ(fade.b, 33);
 }
 
 static void test_scene_camera_reader_has_no_silent_fallback(void) {
@@ -228,6 +264,7 @@ int main(void) {
   RUN(absent_hook_is_a_safe_answer_not_a_jump_to_zero);
   RUN(a_null_hooks_table_is_also_safe);
   RUN(a_present_hook_is_actually_called);
+  RUN(fade_reader_handles_absent_table_and_calls_present_hook);
   RUN(scene_camera_reader_has_no_silent_fallback);
   RUN(world_pass_absence_refuses_instead_of_claiming_an_empty_world);
   RUN(world_pass_presence_forwards_one_exact_rerun);

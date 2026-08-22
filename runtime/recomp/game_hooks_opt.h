@@ -30,7 +30,13 @@
 #pragma once
 
 class Core;
+struct FadeState;
 struct GameHooks;
+
+// Read the optional game-owned fade state. A title with no legacy hook table, or no fade hook in
+// that table, is exactly the default zero/no-fade state. Keeping both cases here prevents renderer
+// call sites from dereferencing the compatibility table directly.
+FadeState game_render_fade_state(Core *c, const GameHooks *hooks);
 
 // Currently-playing Sound-Test track name, or nullptr when nothing is playing OR the game has no
 // Sound Test at all. The overlay renders both as "stopped", which is exactly right: a game without a

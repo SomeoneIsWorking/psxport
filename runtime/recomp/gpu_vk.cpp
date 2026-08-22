@@ -1,6 +1,7 @@
 #include "gpu_vk.h" // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
 #include "core.h"
 #include "game.h"                          // Game / GpuVkState (per-instance render state)
+#include "game_hooks_opt.h"                // guarded optional fade-state reader
 #include "gpu_painter.h"                   // authored painter staging + focused GPU discriminator
 #include "gpu_vk_present_mode.h"           // preferred_present_mode — the sink must not stall the guest thread
 #include "gpu_vk_present_policy.h"         // present_rebuild_decision — when a present must rebuild the composite
@@ -2035,15 +2036,8 @@ static void render_geom(GpuVkState &g,
 // called it unconditionally and segfaulted the moment a shot/dump ran in such a port. That crash was
 // recorded for months as "the VK readback BLOCKS" (issue 0018): the run produced few frames and no
 // files, which looks exactly like a hang unless you check the exit status — it was 139 all along.
-// One accessor so the guard cannot be forgotten again; absent means "no fade", which is what the
-// guarded sites already did by leaving FadeState default-initialised.
-static inline FadeState fade_state_of(Core *c) {
-  FadeState f{};
-  if (c && c->hooks && c->hooks->renderFadeState) {
-    c->hooks->renderFadeState(c, &f);
-  }
-  return f;
-}
+// The guarded accessor lives in game_hooks_opt; absent means "no fade", which is what the guarded
+// sites already did by leaving FadeState default-initialised.
 
 void GpuVkState::ensure_present_img(int w, int h) {
   if (w <= 0 || h <= 0) {
@@ -2180,10 +2174,7 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // consumer (Spyro, whose Phase-0 hook table is almost entirely null) segfaulted on its first
   // present. Default to "no fade" — zeroed, i.e. mode 0 / rgb 0 — which is exactly the state a game
   // without a fade subsystem is in.
-  FadeState fade{};
-  if (game->core.hooks->renderFadeState) {
-    game->core.hooks->renderFadeState(&game->core, &fade);
-  }
+  const FadeState fade = game_render_fade_state(&game->core, game->core.hooks);
   static const lucent::Channel fadewatch_ch{"fadewatch"};
   if (fadewatch_ch) {
     GpuDevice &gd = gdev();
@@ -2830,7 +2821,7 @@ void GpuVkState::shot(const char *path) {
     lucent::warn("gpu_shot", "GPU not active — NOTHING captured");
     return;
   }
-  FadeState f = fade_state_of(&game->core);
+  FadeState f = game_render_fade_state(&game->core, game->core.hooks);
   const bool wrote = dump_to(*this, path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
   if (!wrote) {
     lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)");
@@ -2855,7 +2846,7 @@ void gpu_vk_shot_region(Core *core, const char *path, int sx, int sy, int w, int
   if (!gpu_vk_enabled() || !s_inited) {
     return;
   }
-  FadeState f = fade_state_of(core);
+  FadeState f = game_render_fade_state(core, core ? core->hooks : nullptr);
   if (!dump_to(core->game->gpu_vk, path, sx, sy, w, h, f.mode, f.r, f.g, f.b)) {
     lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)");
     return;
@@ -3115,7 +3106,7 @@ void GpuVkState::frame_end(const uint16_t *svram, int frame) {
   if (s_preseq_left > 0) {
     char p[192];
     snprintf(p, sizeof p, "%s/p%04d.ppm", s_preseq_dir, s_preseq_idx++);
-    FadeState f = fade_state_of(&game->core);
+    FadeState f = game_render_fade_state(&game->core, game->core.hooks);
     dump_to(*this, p, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
     if (--s_preseq_left == 0) {
       lucent::info("preseq", "done: {} frames -> {}", s_preseq_idx, s_preseq_dir);
@@ -3988,7 +3979,8 @@ void gpu_vk_rawdump_arm(const char *path, int frame) {
 
 // SBS pane: render one core's VRAM + geometry, read [sx,sy,w,h] to RGBA8, and apply the same fade as present.
 void gpu_vk_render_readback(Core *core, const uint16_t *vram, int sx, int sy, int w, int h, uint8_t *rgba) {
-  FadeState f = fade_state_of(core); // THIS core's fade (guest-backed, SBS-clean)
+  FadeState f =
+      game_render_fade_state(core, core ? core->hooks : nullptr); // THIS core's fade (guest-backed, SBS-clean)
   const int s_fade_mode = f.mode;
   const uint8_t s_fade_r = f.r, s_fade_g = f.g, s_fade_b = f.b;
   if (!gpu_vk_enabled()) {
@@ -4251,7 +4243,7 @@ void gpu_vk_present(Core *core, const uint16_t *src, int sx, int sy, int w, int 
     int &lsy = gd.s_fws_lsy;
     int &lw = gd.s_fws_lw;
     int &lh = gd.s_fws_lh;
-    FadeState f = fade_state_of(core);
+    FadeState f = game_render_fade_state(core, core ? core->hooks : nullptr);
     int m = f.mode;
     uint8_t r = f.r, g = f.g, b = f.b;
     if (m != lm || r != lr || g != lg || b != lb || sx != lsx || sy != lsy || w != lw || h != lh) {

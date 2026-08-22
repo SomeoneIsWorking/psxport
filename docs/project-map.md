@@ -76,6 +76,8 @@ the immutable executable-image fact owner, per-Game driver/scheduler and optiona
 factories, and the bounded legacy projection), `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and
 callback bags kept source-compatible while consumers migrate), `core.h`/`game.h` (the `Core`/`Game` objects;
 `Game` owns the runtime-created products), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
+`game_hooks_opt.{h,cpp}` (the single guarded boundary for optional compatibility callbacks, including
+the absent-table zero/no-fade presentation state),
 `bios_interrupt.{h,cpp}` (the HookEntryInt saved-context contract),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
