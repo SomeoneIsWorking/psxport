@@ -38,7 +38,8 @@
 #include <cstdlib>
 
 #include "core.h"             // Core, mem_w32/mem_r32 — framework header (no game.h in its chain)
-#include "game_iface.h"       // GameConfig / GameHooks / psxport_install_game
+#include "game_iface.h"       // Legacy-view absence asserted below
+#include "game_runtime.h"     // GameRuntime — the second-generation game ownership seam
 #include "ot_attr.h"          // OtAttr — the store-attribution instrument checked by check 8
 #include "render_substrate.h" // Core::rsub, which owns the OtAttr
 
@@ -49,6 +50,16 @@
 static const int PLAN = 8;
 static int g_run = 0;
 static int g_failed = 0;
+
+class SmokeRuntime final : public GameRuntime {
+public:
+  void *createContext(Core &) override {
+    return nullptr;
+  }
+  void destroyContext(void *) override {}
+  void registerOverrides(Game &) override {}
+  void bootInit(Core &) override {}
+};
 
 // Printed BEFORE the check body executes, so the last line of a crashed run names the crash site.
 static void begin(const char *name) {
@@ -97,15 +108,13 @@ int main() {
          "  link, not this run). Now checking the CORE-ALONE runtime contract: %d checks planned.\n",
          PLAN);
 
-  // Stub seam: a zeroed config and an all-null hooks table. Null ctxCreate/ctxDestroy is fine — Core's
-  // ctor/dtor guard them (`if (hooks && hooks->ctxCreate) ...`). No game code exists to install a real
-  // one, which is the whole point.
-  static const GameConfig stub_cfg{};  // all-zero guest addresses/tables
-  static const GameHooks stub_hooks{}; // all members nullptr
-  psxport_install_game(&stub_cfg, &stub_hooks);
+  // The stub derives the real seam. It deliberately supplies no legacy config/hooks pair: a new game
+  // must not inherit the old public bags merely to satisfy the game-agnostic framework link.
+  static SmokeRuntime stub_runtime;
+  psxport_install_game(stub_runtime);
 
-  SMOKE_TRUE("seam-config-readback", psxport_game_config() == &stub_cfg);
-  SMOKE_TRUE("seam-hooks-readback", psxport_game_hooks() == &stub_hooks);
+  SMOKE_TRUE("derived-runtime-readback", psxport_game_runtime() == &stub_runtime);
+  SMOKE_TRUE("no-legacy-config-or-hooks", psxport_game_config() == nullptr && psxport_game_hooks() == nullptr);
 
   Core *c = new Core();
   SMOKE_TRUE("null-ctxCreate-leaves-null-ctx", c->gameCtx == nullptr);

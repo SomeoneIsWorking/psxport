@@ -196,6 +196,8 @@ struct GpuVkState {
   uint8_t s_painter_cmd_material[16384] = {};
   uint8_t s_painter_cmd_gouraud[16384] = {};
   uint8_t s_painter_cmd_dither[16384] = {};
+  uint8_t s_painter_cmd_semi[16384] = {};
+  uint8_t s_painter_cmd_blend[16384] = {};
   int s_painter_cmd_first[16384] = {};
   int s_painter_cmd_count[16384] = {};
   int s_painter_cmd_n = 0;
@@ -206,6 +208,7 @@ struct GpuVkState {
   SDL_GPUBuffer *s_painter_tri_vbuf = nullptr;
   SDL_GPUTransferBuffer *s_painter_tri_xfer = nullptr;
   SDL_GPUTexture *s_painter_color = nullptr;
+  SDL_GPUTexture *s_painter_rgba = nullptr;
   SDL_GPUTexture *s_painter_depth = nullptr;
   int s_painter_w = 0, s_painter_h = 0;
   void ensure_painter_targets(int w, int h);
@@ -332,6 +335,7 @@ struct GpuVkState {
                  int blend);
   bool painter_begin(uint32_t object);
   bool painter_end();
+  bool painter_command(int material, int first, int count, int semi = 0, int blend = 0);
   void painter_staging_stats(int *ordinary_tex_vertices, int *painter_vertices, int *ranges) const;
   void shot(const char *path);
   void shot_b(const char *path); // SBS: capture target 1 (core B / right pane)

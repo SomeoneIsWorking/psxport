@@ -13,7 +13,7 @@
 // handle's type just changes from R3000* to Core*. Memory is a set of methods (mem_r32, ...),
 // so inside any Core method a bare `mem_r32(a)` resolves to `this->mem_r32(a)`.
 #pragma once
-#include "game_iface.h"  // THE framework↔game seam: GameConfig / GameHooks / gameCtx
+#include "game_iface.h"  // Legacy GameConfig/GameHooks compatibility views.
 #include "interp_diag.h" // Core owns an InterpDiag (interp.cpp trace/profile state)
 #include "pc_observer.h"
 #include "r3000.h"
@@ -33,11 +33,10 @@ public:
 
   Game *game = nullptr; // back-pointer to the owning Game (set by Game's constructor)
 
-  // ---- The framework↔game seam (game_iface.h). The generic runtime reaches the game ONLY through
-  // these: `c->cfg->addr` for game guest-address literals, `c->hooks->fn(c)` for game callbacks, and
-  // `c->gameCtx` for the game's opaque per-Core subsystem aggregate. Set at init by the game; process-
-  // global (both SBS cores point at the same game config/hooks). During the in-repo decoupling the
-  // game subsystems below are progressively migrated into gameCtx. ----
+  // ---- Framework↔game seam. GameRuntime is the owning polymorphic interface. cfg/hooks are
+  // compatibility views populated only by the bounded legacy adapter; migrate their consumers into
+  // GameRuntime behavior or narrow immutable fact groups rather than extending either bag. ----
+  GameRuntime *runtime = nullptr;
   const GameConfig *cfg = nullptr;
   const GameHooks *hooks = nullptr;
   void *gameCtx = nullptr;

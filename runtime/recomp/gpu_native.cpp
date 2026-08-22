@@ -18,6 +18,8 @@
 #include "config_vars.h"
 #include "field_rate.h"          // THE display field rate, in milli-hertz (one definition)
 #include "gpu_native_internal.h" // shared VRAM/state/helpers (also used by gpu_debug.cpp)
+#include "gpu_primitive_dump.h"  // primitive-census CSV diagnostic owner
+#include "image_writer.h"        // one checked RGB24 capture-file boundary
 #include "r3000.h"
 #include <lucent/log.h>
 
@@ -191,250 +193,6 @@ static int ws_2d_local_x(Core *core, int x, int is_bg) {
   return x + margin; // HUD: center the native-width element in the wide FB
 }
 
-// PSXPORT_PRIMDUMP=<frame>: dump every prim drawn on that frame, in OT-walk order, to
-// scratch/logs/prims_f<frame>.csv — one row per prim: id (walk order), kind, op, is3d, bg(ackdrop),
-// bbox, rgb, textured, semi. Lets a human identify which IDs are the water/sky backdrop so the
-// backdrop-vs-HUD band split can be made correct (and order-independent).
-// A RANGE, not a single frame ("a:b" or "a-b", inclusive; a bare "a" is still one frame). A game that
-// draws at 30 Hz presents at 60, so HALF the frames emit no prims at all — arming a single frame is a
-// coin flip, and the miss used to be SILENT (no file, no line, indistinguishable from "the probe never
-// compiled in"). Both holes are closed here: a range makes the hit deterministic, and the close path
-// below reports the ZERO case out loud.
-FILE *GpuState::primdump_open(int frame) {
-  if (s_primdump_frame == -2) {
-    const char *e = cfg_str("PSXPORT_PRIMDUMP");
-    s_primdump_frame = -1;
-    s_primdump_end = -1;
-    if (e) {
-      int a = 0, b = 0;
-      if (sscanf(e, "%d:%d", &a, &b) == 2 || sscanf(e, "%d-%d", &a, &b) == 2) {
-        s_primdump_frame = a;
-        s_primdump_end = b;
-      } else {
-        s_primdump_frame = atoi(e);
-        s_primdump_end = s_primdump_frame;
-      }
-    }
-    // UNCONDITIONAL arm line: without it "no CSV appeared" is indistinguishable between "the env var
-    // never reached us", "the armed frame never came" and "the frame had no prims" (instruments.md
-    // rule 1). Printed once, at the first prim of the run, whether armed or not.
-    lucent::info(
-        "primdump", "armed frames {}..{} (PSXPORT_PRIMDUMP={})", s_primdump_frame, s_primdump_end, e ? e : "<unset>");
-  }
-  if (s_primdump_frame < 0 || frame < s_primdump_frame || frame > s_primdump_end) {
-    return 0;
-  }
-  s_primdump_seen++; // denominator: prims offered inside the window
-  if (!s_primdump_f) {
-    int r = system("mkdir -p scratch/logs");
-    (void)r;
-    char p[128];
-    snprintf(p, sizeof p, "scratch/logs/prims_f%d.csv", s_primdump_frame);
-    s_primdump_f = fopen(p, "w");
-    if (s_primdump_f) {
-      fprintf(s_primdump_f,
-              "frame,id,kind,op,is3d,bg,x0,y0,x1,y1,r,g,b,tex,semi,"
-              "mode,raw,tpx,tpy,clutx,cluty,twmx,twmy,twox,twoy,u0,v0,umin,umax,vmin,vmax,"
-              "dax0,day0,dax1,day1,offx,offy\n");
-    }
-  }
-  return s_primdump_f;
-}
-// Texture-addressing columns, appended 2026-08-05 for issue 0007 (untextured 3D world). Without
-// these the CSV could not distinguish "the prims point outside the atlas" from "they point into it
-// and the sampling is wrong" — the exact fork the issue is stuck on. mode is the GP0 texture colour
-// mode (0=4bpp CLUT, 1=8bpp CLUT, 2=15bpp direct, 3=untextured); tp/clut are the ABSOLUTE VRAM
-// texel coords set_texpage()/set_clut() computed; tw* is the texture window mask/offset in 8-texel
-// units; u/v are the raw per-vertex texcoords (min/max over the prim's vertices, so a degenerate
-// all-equal UV set is visible as umin==umax && vmin==vmax).
-// DRAW-AREA + DRAW-OFFSET columns, appended 2026-08-19. Without them the CSV shows prims sitting
-// outside the framebuffer and cannot say WHY: the guest asked for them there, or the clip that was
-// supposed to reject them is wrong. Those are opposite fixes, and the coordinates alone look the same
-// either way — the bbox is in post-offset VRAM space, so "y=223 while drawing into the buffer at 240"
-// is only readable next to the da/off the prim was submitted with.
-static void primdump_texcols(FILE *f, const GpuState &g, int tex, const int *us, const int *vs, int nv, int raw) {
-  // An UNTEXTURED GP0 poly carries no UV words, so Vtx::u/v were never assigned and the caller's
-  // us[]/vs[] hold stack garbage (the first CSV printed values like -1472683276 for them). Emit -1,
-  // which cannot be confused with a real 0..255 texcoord, rather than laundering the garbage.
-  if (!tex) {
-    fprintf(f,
-            ",3,%d,%d,%d,%d,%d,%d,%d,%d,%d,-1,-1,-1,-1,-1,-1,%d,%d,%d,%d,%d,%d\n",
-            raw,
-            g.s_tp_x,
-            g.s_tp_y,
-            g.s_clut_x,
-            g.s_clut_y,
-            g.s_tw_mx,
-            g.s_tw_my,
-            g.s_tw_ox,
-            g.s_tw_oy,
-            g.s_da_x0,
-            g.s_da_y0,
-            g.s_da_x1,
-            g.s_da_y1,
-            g.s_off_x,
-            g.s_off_y);
-    return;
-  }
-  int u0 = nv > 0 ? us[0] : 0, v0 = nv > 0 ? vs[0] : 0;
-  int umin = u0, umax = u0, vmin = v0, vmax = v0;
-  for (int i = 1; i < nv; i++) {
-    if (us[i] < umin) {
-      umin = us[i];
-    }
-    if (us[i] > umax) {
-      umax = us[i];
-    }
-    if (vs[i] < vmin) {
-      vmin = vs[i];
-    }
-    if (vs[i] > vmax) {
-      vmax = vs[i];
-    }
-  }
-  fprintf(f,
-          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
-          tex ? g.s_tp_mode : 3,
-          raw,
-          g.s_tp_x,
-          g.s_tp_y,
-          g.s_clut_x,
-          g.s_clut_y,
-          g.s_tw_mx,
-          g.s_tw_my,
-          g.s_tw_ox,
-          g.s_tw_oy,
-          u0,
-          v0,
-          umin,
-          umax,
-          vmin,
-          vmax,
-          g.s_da_x0,
-          g.s_da_y0,
-          g.s_da_x1,
-          g.s_da_y1,
-          g.s_off_x,
-          g.s_off_y);
-}
-void prim_dump_poly(Core *core,
-                    int frame,
-                    unsigned id,
-                    uint8_t op,
-                    int nv,
-                    int is3d,
-                    int bg,
-                    const int *xs,
-                    const int *ys,
-                    const int *us,
-                    const int *vs,
-                    uint8_t r,
-                    uint8_t g,
-                    uint8_t b,
-                    int tex,
-                    int semi,
-                    int raw) {
-  FILE *f = core->game->gpu.primdump_open(frame);
-  if (!f) {
-    return;
-  }
-  int x0 = xs[0], y0 = ys[0], x1 = xs[0], y1 = ys[0];
-  for (int i = 1; i < nv; i++) {
-    if (xs[i] < x0) {
-      x0 = xs[i];
-    }
-    if (xs[i] > x1) {
-      x1 = xs[i];
-    }
-    if (ys[i] < y0) {
-      y0 = ys[i];
-    }
-    if (ys[i] > y1) {
-      y1 = ys[i];
-    }
-  }
-  fprintf(f,
-          "%d,%u,poly,%02X,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-          frame,
-          id,
-          op,
-          is3d,
-          bg,
-          x0,
-          y0,
-          x1,
-          y1,
-          r,
-          g,
-          b,
-          tex,
-          semi);
-  primdump_texcols(f, core->game->gpu, tex, us, vs, nv, raw);
-}
-void prim_dump_sprite(Core *core,
-                      int frame,
-                      unsigned id,
-                      uint8_t op,
-                      int x,
-                      int y,
-                      int w,
-                      int h,
-                      int bg,
-                      uint8_t r,
-                      uint8_t g,
-                      uint8_t b,
-                      int tex,
-                      int semi,
-                      int u0,
-                      int v0,
-                      int raw) {
-  FILE *f = core->game->gpu.primdump_open(frame);
-  if (!f) {
-    return;
-  }
-  fprintf(f,
-          "%d,%u,sprite,%02X,0,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-          frame,
-          id,
-          op,
-          bg,
-          x,
-          y,
-          x + w,
-          y + h,
-          r,
-          g,
-          b,
-          tex,
-          semi);
-  int us[2] = {u0, u0 + (w > 0 ? w - 1 : 0)}, vs[2] = {v0, v0 + (h > 0 ? h - 1 : 0)};
-  primdump_texcols(f, core->game->gpu, tex, us, vs, 2, raw);
-}
-void prim_dump_close_if_done(Core *core, int frame) {
-  GpuState &g = core->game->gpu;
-  if (g.s_primdump_frame < 0 || g.s_primdump_reported || frame <= g.s_primdump_end) {
-    return;
-  }
-  g.s_primdump_reported = 1;
-  if (g.s_primdump_f) {
-    fclose(g.s_primdump_f);
-    g.s_primdump_f = 0;
-    lucent::info("primdump",
-                 "wrote scratch/logs/prims_f{}.csv — {} prims over frames {}..{}",
-                 g.s_primdump_frame,
-                 g.s_primdump_seen,
-                 g.s_primdump_frame,
-                 g.s_primdump_end);
-  } else {
-    // THE NEGATIVE, said out loud. Previously this branch did not exist and the window closing empty
-    // produced no file and no line at all.
-    lucent::warn("primdump",
-                 "frames {}..{} passed with ZERO prims offered — no CSV written. The game "
-                 "draws at 30 Hz (half the presents emit nothing); widen the window (PSXPORT_PRIMDUMP=a:b).",
-                 g.s_primdump_frame,
-                 g.s_primdump_end);
-  }
-}
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
 // scene is drawn, to settle whether a bright fade frame is in the GP0 (engine emits it) or invented
 // by VK. Works identically under SW and VK (same tee'd colors), so one playthrough pins the locus.
@@ -1498,40 +1256,23 @@ void GpuState::gp0_exec(Core *core) {
         // PSXPORT_PRIMDUMP=<frame>: dump every prim (poly) of that frame as an individual PNG (named by its
         // OT-walk ID) so the backdrop can be identified by eye and its band corrected. id=ord_idx.
         {
-          void prim_dump_poly(Core *,
-                              int frame,
-                              unsigned id,
-                              uint8_t op,
-                              int nv,
-                              int is3d,
-                              int bg,
-                              const int *xs,
-                              const int *ys,
-                              const int *us,
-                              const int *vs,
-                              uint8_t r,
-                              uint8_t g,
-                              uint8_t b,
-                              int tex,
-                              int semi,
-                              int raw);
-          prim_dump_poly(core,
-                         s_frame,
-                         ord_idx,
-                         op,
-                         nv,
-                         is3d,
-                         is3d ? -1 : bg,
-                         xs,
-                         ys,
-                         us,
-                         vs,
-                         rs[0],
-                         gs[0],
-                         bs[0],
-                         textured ? 1 : 0,
-                         semi,
-                         rw);
+          gpu_primitive_dump_polygon(core,
+                                     s_frame,
+                                     ord_idx,
+                                     op,
+                                     nv,
+                                     is3d,
+                                     is3d ? -1 : bg,
+                                     xs,
+                                     ys,
+                                     us,
+                                     vs,
+                                     rs[0],
+                                     gs[0],
+                                     bs[0],
+                                     textured ? 1 : 0,
+                                     semi,
+                                     rw);
         }
         if (is3d) {
           core->rsub.stats.nd3d++;
@@ -2160,24 +1901,7 @@ void GpuState::gp0_exec(Core *core) {
                       s_cur_node);
       }
       {
-        void prim_dump_sprite(Core *,
-                              int,
-                              unsigned,
-                              uint8_t,
-                              int,
-                              int,
-                              int,
-                              int,
-                              int,
-                              uint8_t,
-                              uint8_t,
-                              uint8_t,
-                              int,
-                              int,
-                              int,
-                              int,
-                              int);
-        prim_dump_sprite(
+        gpu_primitive_dump_sprite(
             core, s_frame, ord_idx, op, x, y, w, h, bg, cr, cg, cb, textured ? 1 : 0, semi, u0, v0, (op & 1) ? 1 : 0);
       }
       int X = x + s_off_x, Y = y + s_off_y;
@@ -3330,7 +3054,6 @@ void GpuState::gpu_native_shot(Core *core, const char *path) {
     gpu_vk_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);
     return;
   }
-  bool image_write_rgb24(const char *, const unsigned char *, int, int); // gpu_vk.cpp — false = NOTHING written
   unsigned char *buf = (unsigned char *)malloc((size_t)s_disp_w * s_disp_h * 3);
   if (!buf) {
     lucent::error("shot", "alloc failed for {}", path ? path : "(null)");
@@ -3777,8 +3500,7 @@ void GpuState::frame_finalize(Core *core) {
   s_prev_had_bg2d = s_seen_bg2d; // #54: remember whether this frame drew a full-screen 2D backdrop
   s_seen_bg2d = 0;
   {
-    void prim_dump_close_if_done(Core *, int);
-    prim_dump_close_if_done(core, s_frame);
+    gpu_primitive_dump_finish_frame(core, s_frame);
   } // PSXPORT_PRIMDUMP: flush the file
   {
     void gp0raw_close_if_done(int);

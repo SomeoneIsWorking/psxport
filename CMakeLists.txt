@@ -1,7 +1,7 @@
 # psxport — a PSX→PC static-recompilation FRAMEWORK. This repo builds the game-agnostic pieces: the
 # recompiler tooling, the runtime/recomp substrate (interp + HW backends + SBS harness + VK renderer),
 # and the psxport STATIC library a game links. A game (e.g. Tomba2Engine) vendors this repo as a
-# submodule, provides GameConfig/GameHooks (runtime/recomp/game_iface.h) + the recompiled substrate
+# submodule, derives GameRuntime (runtime/recomp/game_runtime.h), provides the recompiled substrate
 # (generated/), and links libpsxport. See docs/porting-a-new-psx-game.md.
 cmake_minimum_required(VERSION 3.21)
 project(psxport CXX C)

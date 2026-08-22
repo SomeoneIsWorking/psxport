@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <vector>
 
-// Host-only identity for a set of opaque world faces whose producer-authored order must win locally.
+// Host-only identity for a set of world faces whose producer-authored order must win locally.
 // Zero keeps the ordinary RenderQueue path.  The value is deliberately opaque to the framework: games
 // allocate identities, while the renderer only groups equal non-zero values.
 using PainterObjectId = uint32_t;
@@ -20,7 +20,6 @@ enum PainterObjectFlags : uint8_t {
 enum class PainterObjectRefusal : uint8_t {
   None = 0,
   Empty,
-  SemiTransparent,
   NonWorld,
   NonDepth,
   TooManyObjects,
@@ -54,6 +53,32 @@ struct PainterCommand {
   PainterMaterial material = PainterMaterial::Untextured;
   bool shade_gouraud = false;
   bool dither = false;
+  bool semi_transparent = false;
+  uint8_t blend_mode = 0;
+};
+
+enum class PainterObjectAdmissionRefusal : uint8_t {
+  None = 0,
+  Empty,
+  InvalidObjectId,
+  ActiveScope,
+  InvalidLifecycle,
+  DuplicateObject,
+  TooManyObjects,
+  TooManyFaces,
+  QueueCapacity,
+  InvalidExistingFace,
+};
+
+struct PainterObjectAdmission {
+  PainterObjectAdmissionRefusal refusal = PainterObjectAdmissionRefusal::None;
+  size_t queued_items = 0;
+  size_t existing_objects = 0;
+  size_t existing_faces = 0;
+  size_t refusal_item = SIZE_MAX;
+  bool accepted() const {
+    return refusal == PainterObjectAdmissionRefusal::None;
+  }
 };
 
 struct PainterObjectRange {

@@ -26,8 +26,8 @@ EXCLUDED_TOP_LEVEL = {"build", "external", "generated", "scratch", "vendor"}
 # implementation through --root and declare their own legacy exceptions with --cap.
 PSXPORT_CAPS = {
     "runtime/recomp/game_iface.h": 500,
-    "runtime/recomp/gpu_native.cpp": 4373,
-    "runtime/recomp/gpu_vk.cpp": 4444,
+    "runtime/recomp/gpu_native.cpp": 4121,
+    "runtime/recomp/gpu_vk.cpp": 4404,
     "runtime/recomp/gpu_vk_semi_selftest.cpp": 200,
     "runtime/recomp/gpu_vk_semi_selftest.h": 40,
     "runtime/recomp/gpu_vk_selftest_support.h": 40,

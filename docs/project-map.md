@@ -71,7 +71,10 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 
 ## `runtime/recomp/` — the PSX→PC PLATFORM (common; future `psxport` submodule)
 **Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (bus dispatch + watchpoints PSXPORT_WWATCH/CW),
-`core.h`/`game.h` (the `Core`/`Game` objects), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
+`game_runtime.h` + `game_iface.{h,cpp}` (derived `GameRuntime` install, per-Game driver/scheduler factories,
+and the bounded legacy adapter), `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and
+callback bags kept source-compatible while consumers migrate), `core.h`/`game.h` (the `Core`/`Game` objects;
+`Game` owns the runtime-created products), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
 `bios_interrupt.{h,cpp}` (the HookEntryInt saved-context contract),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
@@ -104,27 +107,37 @@ shipping BIOS entry points and proves context restoration, zero-buffer/zero-RA r
 unwind, and the illegal normal-return answer. A consumer must seed the measured saved RA as
 `main_reentry`, because it is usually inside the interrupt bootstrap rather than a natural function
 entry.
+The runtime seam is partial: shipping consumers inherit `LegacyGameRuntimeAdapter` until typed fact
+groups replace every generic `c->cfg` read. `GuestProgramImage` (crt0 + overlay router + backtrace
+resident range) is the next named slice; `docs/plans/game-seam-redesign.md` owns its deletion set.
 `ot_attr.{h,cpp}` owns the logic-frame stamp contract: pre-loop boot stores are counted, and the
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
-**GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 4,373 ln), `gpu_vk.cpp` (Vulkan backend + present;
-critical legacy file frozen at 4,444 lines),
-`render_queue.{h,cpp}` + `painter_object_layer.h` own the painter-object contract: selected opaque world
-faces are partitioned into a unified, sequence-stable command stream across material variants.
+**GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 4,121 ln), `gpu_vk.cpp` (SDL_GPU backend +
+present — 4,404 lines), `gpu_primitive_dump.{h,cpp}` (primitive-census CSV lifecycle and row encoding),
+and `image_writer.{h,cpp}` (the checked RGB24-to-PPM/PNG host-file boundary shared by software and GPU
+captures). The two legacy renderer files remain critical extraction territory and are shrink-only.
+`render_queue.{h,cpp}` + `painter_object_layer.{h,cpp}` own atomic painter admission and command planning:
+selected world faces retain one sequence-stable stream across textured/untextured and
+opaque/semitransparent material variants. `gpu_painter.cpp` owns painter target lifecycle and command
+staging.
 `ot_lifo_depth.{h,cpp}` encodes PSX `AddPrim` head-insertion order for equal-key authored faces, while
 `gpu_vk_next_distinct_3d_depth` owns conversion to raster-distinct Vulkan D32 values. `gpu_vk.cpp`
-retains interleaved textured and untextured command runs (including explicit flat/Gouraud and DTD state),
-replays each object with authored-order overwrite into reusable packed-color + real-D32 targets, then
-depth-composites the resolved surface into the world before semitransparency. `gpu_vk_semi_selftest.cpp`
+retains interleaved textured and untextured command runs (including explicit flat/Gouraud and DTD state).
+Each object seeds its reusable packed target from the current canvas, replays opaque commands directly,
+and runs decode -> fixed-function PSX blend -> encode for every semitransparent command so each blend sees
+the immediately preceding authored result at 5-bit precision. The resolved packed color + real D32 then
+depth-composite into the world. `gpu_vk_semi_selftest.cpp`
 owns the 16-case PSX semi-textured equation matrix, packet setup, integer reference equations, and verdict;
 `gpu_vk_texture_phase_selftest.cpp` separately owns the 20-case 1x/3x opaque/semi integer-pixel UV-phase
 matrix. Both use `gpu_vk_selftest_support.h` and `gpu_vk.cpp` supplies only the shipping
 upload/`render_geom`/readback operation. `shaders_gpu/psx_uv.glsl` is the one 12-fractional-bit
 integer-native-pixel reconstruction shared by opaque, semi, and semi-cover fragment shaders. The remaining
 shipping GPU selftest reads both local and post-composite D32 boundaries. The untextured companion pipeline
-applies the PSX 4x4 dither matrix in native-pixel coordinates only for Gouraud+DTD; semi-transparent groups
-still refuse.
+applies the PSX 4x4 dither matrix in native-pixel coordinates only for Gouraud+DTD.
 `wide_margin_plan.h` (renderer-only coverage for host-visible VRAM extension),
-`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`. `cmake/gpu_shaders.cmake` owns the
+`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`. `test_image_writer` reaches the shipping
+file boundary and gates invalid-input refusal, parent-directory creation, the PPM header, and all six
+payload bytes. `cmake/gpu_shaders.cmake` owns the
 per-consumer build-tree `psxport_generated/gpu_vk_shaders.h`; no generated shader header is shared
 through the source tree.
 **Independent GPU diagnostic:** `gpu_beetle.cpp` tees GP0/GP1, native image uploads, and GPUREAD drains
@@ -253,8 +266,8 @@ stand an ImGui developer stack up yet, and the one-line removal if that holds.
   native in its subsystem file.
 - **Remaining size debt:** `native_boot.cpp` still holds boot + the native per-frame scheduler.
   `gpu_native.cpp`/`gpu_vk.cpp`/`game/render/submit.cpp` exceed the default 1,200-line source cap; treat
-  each touched responsibility as an extraction boundary. `gpu_vk.cpp` is mechanically frozen at 4,444
-  lines after moving the semi-textured blend selftest to its own owner; do not grow it again.
+  each touched responsibility as an extraction boundary. The renderer caps ratcheted to 4,121 and 4,404
+  after moving primitive-dump diagnostics and image-file output to peer owners; do not grow them again.
 
 ## CD path — the part that's easy to get wrong
 The port does NOT emulate the CD controller for the game; `cd_override.cpp` replaces libcd/engine
@@ -299,6 +312,11 @@ against the consumer tree. A consumer can explicitly opt into the complete frame
 boundary: the default registers only the consumer's probe, while explicit opt-in registers the framework
 oracle, runtime, loader, and policy gates. This prevents stale binaries in a reused consumer build from
 masquerading as current framework failures.
+
+`test_game_runtime` proves a derived runtime is the installed authority, owns per-Core context lifecycle,
+creates exactly one `FrameDriver` and `TaskScheduler` per `Game`, and that the bounded legacy pair still
+delegates while consumers migrate. `psxport_smoke` derives the new seam with both legacy views null, so
+link-level agnosticism no longer depends on constructing the deprecated bags.
 
 `test_synchronous_task_wait` exercises flags 1/2/3 through the shipping completion seam and proves synchronous
 completion does not mutate the retired wait counter. The normal `cpp_style` CTest runs the reusable

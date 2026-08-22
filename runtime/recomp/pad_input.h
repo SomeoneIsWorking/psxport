@@ -28,7 +28,7 @@ public:
   void driveTap(uint16_t activeLowMask, int nframes); // was pad_repl_tap(c, mask, n) — press for n frames
   void driveRelease();                                // was pad_repl_release(c) — clear REPL drive
   void serviceFrame();
-  void applyGuestPoke(Core *c);                                // was pad_service_frame(c) — per-frame native pad service
+  void applyGuestPoke(Core *c); // was pad_service_frame(c) — per-frame native pad service
 
   // Pump host input WITHOUT advancing a pad frame. For the debug-server pause loop, which must keep
   // the window responsive (and the P / '.' keys alive) while the game is explicitly NOT advancing.

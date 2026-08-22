@@ -4,9 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-21
 tags: watchdog,presentation,bootstrap
-depends: runtime/recomp/watchdog.cpp#watchdog_progress, runtime/recomp/watchdog.cpp#watchdog_main_present_complete, runtime/recomp/native_stub.cpp#native_scea_splash, runtime/recomp/native_fmv.cpp#present_rgb555, runtime/recomp/gpu_native.cpp#GpuState::gpu_present_ex, tests/test_watchdog.cpp#main
-verified_at: 2026-08-21 11:09:16
-reconfirmed: 2026-08-21
+depends: runtime/recomp/gpu_native.cpp#GpuState::gpu_present_ex
+verified_at: 2026-08-22 13:41:18
+reconfirmed: 2026-08-22
 ---
 
 ## Claim
@@ -27,3 +27,7 @@ Shipping watchdog tests passed 17/17 and SCEA/FMV ownership tests passed 9/9; bo
 preserves boot grace and later progress cannot restore it after main readiness. Post-integration
 standalone Clang CTest passed test_watchdog as part of 74/74; the recorded real Tomba LOGO.STR run
 remains the consumer positive.
+
+## Re-confirmed 2026-08-22
+
+Post-extraction Clang CTest passed 83/83, including test_watchdog 17/17 and test_fmv_watchdog 9/9; gpu_present_ex retained the main-VRAM completion call after primitive-dump/image-writer ownership moved out of gpu_native.cpp.

@@ -17,6 +17,7 @@
 #include "dbg_server.h"          // class DbgServer — live TCP debug endpoint (127.0.0.1)
 #include "disc.h"                // DiscState — native by-LBA CHD disc backend (disc.c)
 #include "fps60.h"               // Fps60 — the interpolated-60fps tier's per-instance state
+#include "game_runtime.h"        // GameRuntime + per-Game polymorphic behavior products
 #include "gpu_native_internal.h" // GpuState — the native GPU's per-instance render machine state
 #include "gpu_perf.h"            // class GpuPerf — per-frame CPU phase profiler (`debug perf`)
 #include "gpu_vk_device.h"       // class GpuDevice — the SDL3 GPU host window/device (first Game claims it)
@@ -160,10 +161,17 @@ public:
   // the `b` core (terrain -> recomp super-call) so an a-vs-b core.ram diff isolates submit_terrain.
   int neutralize_terrain = 0;
 
+  // Declared after the subsystem state so the products are destroyed first. A derived driver or
+  // scheduler may retain references to the fully wired subsystem members it receives at creation.
+  GameRuntime *runtime = nullptr;
+  std::unique_ptr<FrameDriver> frameDriver;
+  std::unique_ptr<TaskScheduler> taskScheduler;
+
   // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_vk.game->core). Set once here so no file-scope global is needed.
   Game() {
+    runtime = core.runtime;
     core.game = this;
     gpu.game = this;
     gpu_vk.game = this;
@@ -197,5 +205,11 @@ public:
     disc.env_key = core.cfg ? core.cfg->discEnvVar : 0; // GameConfig::discEnvVar
     cdc.disc = &disc;
     xa.disc = &disc;
+    // Factories receive a fully wired Game: their derived products may retain subsystem references,
+    // so creating them before the back-pointers and device state above would expose a half-built owner.
+    if (runtime) {
+      frameDriver = runtime->createFrameDriver(*this);
+      taskScheduler = runtime->createTaskScheduler(*this);
+    }
   } // per-instance disc backend + CD-controller + XA streamer
 };

@@ -1,16 +1,15 @@
 #include "gpu_vk.h" // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
 #include "core.h"
-#include "fs_util.h"                       // Fs::ensureParentDirs — a capture must not silently write nothing
 #include "game.h"                          // Game / GpuVkState (per-instance render state)
 #include "gpu_vk_present_mode.h"           // preferred_present_mode — the sink must not stall the guest thread
 #include "gpu_vk_present_policy.h"         // present_rebuild_decision — when a present must rebuild the composite
 #include "gpu_vk_semi_selftest.h"          // semi-textured PSX equations through shipping shaders + blend state
 #include "gpu_vk_texture_phase_selftest.h" // integer-pixel UV phase through opaque + semi shipping paths
+#include "image_writer.h"                  // one checked RGB24 capture-file boundary
 #include "present_plan.h"                  // plan_present — the presented picture, decided identically in both legs
 #include "render_substrate.h"              // Render::stats (RenderStats — was g_dbg_world_quads)
 #include "sbs_pane_layout.h"               // pane_letterbox / sbs_pane_rect — where each frame lands in the window
 #include "wide_margin_plan.h"              // renderer-only coverage for host-visible VRAM extension
-#include <errno.h>                         // strerror on a failed capture: the reason rides with the failure
 #include <lucent/log.h>                    // diagnostics: lucent::debug (channel-gated internally — never guard it)
 // gpu_vk.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
 //
@@ -86,6 +85,7 @@ static inline GpuDevice &gdev() {
 #define s_semi_cover_pipe (gdev().s_semi_cover_pipe)
 #define s_painter_tex_pipe (gdev().s_painter_tex_pipe)
 #define s_painter_tri_pipe (gdev().s_painter_tri_pipe)
+#define s_painter_semi_pipe (gdev().s_painter_semi_pipe)
 #define s_painter_composite_pipe (gdev().s_painter_composite_pipe)
 
 // Painter GPU selftest boundary captures. These are null in shipping operation; the selftest owns the
@@ -793,8 +793,12 @@ static SDL_GPUGraphicsPipeline *make_painter_composite_pipeline() {
 // SRC_ALPHA reads the shader's per-fragment destination coefficient (0=opaque texel, .5=ABR0 blend,
 // 1=ABR1/2/3 blend); the op is ADD for avg/add/add4 and REVERSE_SUBTRACT for sub. Depth: test against the
 // opaque pass's depth, never write/clear.
-static SDL_GPUGraphicsPipeline *
-make_semi_pipeline(int mode, const SDL_GPUVertexAttribute *attrs, Uint32 n_attr, Uint32 pitch) {
+static SDL_GPUGraphicsPipeline *make_semi_pipeline(int mode,
+                                                   const SDL_GPUVertexAttribute *attrs,
+                                                   Uint32 n_attr,
+                                                   Uint32 pitch,
+                                                   bool depth_write = false,
+                                                   SDL_GPUCompareOp compare = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL) {
   SDL_GPUShader *vs = make_shader(spv_g_tritex_vert, spv_g_tritex_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
   SDL_GPUShader *fs = make_shader(spv_g_trisemi_hw_frag,
                                   spv_g_trisemi_hw_frag_len,
@@ -828,8 +832,8 @@ make_semi_pipeline(int mode, const SDL_GPUVertexAttribute *attrs, Uint32 n_attr,
   gp.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
   gp.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
   gp.depth_stencil_state.enable_depth_test = true;
-  gp.depth_stencil_state.enable_depth_write = false;
-  gp.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
+  gp.depth_stencil_state.enable_depth_write = depth_write;
+  gp.depth_stencil_state.compare_op = compare;
   gp.target_info.color_target_descriptions = &ct;
   gp.target_info.num_color_targets = 1;
   gp.target_info.has_depth_stencil_target = true;
@@ -940,40 +944,6 @@ void GpuVkState::ensure_targets() {
   cti.num_levels = 1;
   s_color_rgba = SDL_CreateGPUTexture(s_dev, &cti);
   GPUCHK(s_color_rgba, "color_rgba tex");
-}
-
-void GpuVkState::ensure_painter_targets(int w, int h) {
-  if (s_painter_color && s_painter_w == w && s_painter_h == h) {
-    return;
-  }
-  if (s_painter_color) {
-    SDL_ReleaseGPUTexture(s_dev, s_painter_color);
-  }
-  if (s_painter_depth) {
-    SDL_ReleaseGPUTexture(s_dev, s_painter_depth);
-  }
-  SDL_GPUTextureCreateInfo ci = {};
-  ci.type = SDL_GPU_TEXTURETYPE_2D;
-  ci.format = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
-  ci.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-  ci.width = w;
-  ci.height = h;
-  ci.layer_count_or_depth = 1;
-  ci.num_levels = 1;
-  s_painter_color = SDL_CreateGPUTexture(s_dev, &ci);
-  GPUCHK(s_painter_color, "painter color");
-  SDL_GPUTextureCreateInfo di = {};
-  di.type = SDL_GPU_TEXTURETYPE_2D;
-  di.format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
-  di.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-  di.width = w;
-  di.height = h;
-  di.layer_count_or_depth = 1;
-  di.num_levels = 1;
-  s_painter_depth = SDL_CreateGPUTexture(s_dev, &di);
-  GPUCHK(s_painter_depth, "painter depth");
-  s_painter_w = w;
-  s_painter_h = h;
 }
 
 // ires (internal resolution) scaled 3D target: lazily (re)built to VRAM_W*i x VRAM_H*i whenever the live
@@ -1126,6 +1096,9 @@ static void create_3d_pipelines(void) {
                                           1,
                                           false,
                                           SDL_GPU_COMPAREOP_ALWAYS);
+  for (int m = 0; m < NUM_BLEND_MODES; ++m) {
+    s_painter_semi_pipe[m] = make_semi_pipeline(m, tex_attr, 9, sizeof(TexVtx), true, SDL_GPU_COMPAREOP_ALWAYS);
+  }
   s_painter_composite_pipe = make_painter_composite_pipeline();
   s_decode_pipe = make_fullscreen_offscreen_pipeline(spv_g_fsq_vert,
                                                      spv_g_fsq_vert_len,
@@ -1851,11 +1824,20 @@ static void render_geom(GpuVkState &g,
   // through the ordinary world GE/write test. TexVtx ord carries the same global submit-order epsilon as
   // ordinary geometry, explicitly preserving equal-real-depth ties despite the regrouped passes.
   for (int r = 0; r < g.s_painter_ranges; r++) {
+    SDL_GPUBlitInfo seed = {};
+    seed.source.texture = C;
+    seed.source.w = (Uint32)cw;
+    seed.source.h = (Uint32)ch;
+    seed.destination.texture = g.s_painter_color;
+    seed.destination.w = (Uint32)cw;
+    seed.destination.h = (Uint32)ch;
+    seed.load_op = SDL_GPU_LOADOP_DONT_CARE;
+    seed.filter = SDL_GPU_FILTER_NEAREST;
+    SDL_BlitGPUTexture(cmd, &seed);
     SDL_GPUColorTargetInfo pct = {};
     pct.texture = g.s_painter_color;
-    pct.load_op = SDL_GPU_LOADOP_CLEAR;
+    pct.load_op = SDL_GPU_LOADOP_LOAD;
     pct.store_op = SDL_GPU_STOREOP_STORE;
-    pct.clear_color = (SDL_FColor){0, 0, 0, 1};
     SDL_GPUDepthStencilTargetInfo pdt = {};
     pdt.texture = g.s_painter_depth;
     pdt.clear_depth = 0.f;
@@ -1871,6 +1853,50 @@ static void render_geom(GpuVkState &g,
       const bool textured = g.s_painter_cmd_material[ci] != 0;
       SDL_GPUBufferBinding pb = {textured ? g.s_painter_tex_vbuf : g.s_painter_tri_vbuf,
                                  (Uint32)(g.s_painter_cmd_first[ci] * (textured ? sizeof(TexVtx) : sizeof(TriVtx)))};
+      if (g.s_painter_cmd_semi[ci]) {
+        SDL_EndGPURenderPass(pr);
+        SDL_GPUColorTargetInfo blend = {};
+        blend.texture = g.s_painter_rgba;
+        blend.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        blend.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass *decode = SDL_BeginGPURenderPass(cmd, &blend, 1, nullptr);
+        SDL_SetGPUViewport(decode, &vp);
+        SDL_SetGPUScissor(decode, &sc2d);
+        SDL_GPUTextureSamplerBinding packed = {g.s_painter_color, s_samp_nearest};
+        SDL_BindGPUGraphicsPipeline(decode, s_decode_pipe);
+        SDL_BindGPUFragmentSamplers(decode, 0, &packed, 1);
+        SDL_DrawGPUPrimitives(decode, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(decode);
+
+        blend.load_op = SDL_GPU_LOADOP_LOAD;
+        pdt.load_op = SDL_GPU_LOADOP_LOAD;
+        SDL_GPURenderPass *semi = SDL_BeginGPURenderPass(cmd, &blend, 1, &pdt);
+        SDL_SetGPUViewport(semi, &vp);
+        SDL_SetGPUScissor(semi, &sc3d);
+        SDL_BindGPUGraphicsPipeline(semi, s_painter_semi_pipe[g.s_painter_cmd_blend[ci] & 3]);
+        SDL_BindGPUVertexBuffers(semi, 0, &pb, 1);
+        SDL_BindGPUFragmentSamplers(semi, 0, &snap, 1);
+        int32_t scale_pc = scale;
+        SDL_PushGPUFragmentUniformData(cmd, 0, &scale_pc, sizeof scale_pc);
+        SDL_DrawGPUPrimitives(semi, g.s_painter_cmd_count[ci], 1, 0, 0);
+        SDL_EndGPURenderPass(semi);
+
+        pct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        SDL_GPURenderPass *encode = SDL_BeginGPURenderPass(cmd, &pct, 1, nullptr);
+        SDL_SetGPUViewport(encode, &vp);
+        SDL_SetGPUScissor(encode, &sc2d);
+        SDL_GPUTextureSamplerBinding rgba = {g.s_painter_rgba, s_samp_nearest};
+        SDL_BindGPUGraphicsPipeline(encode, s_encode_pipe);
+        SDL_BindGPUFragmentSamplers(encode, 0, &rgba, 1);
+        SDL_DrawGPUPrimitives(encode, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(encode);
+
+        pct.load_op = SDL_GPU_LOADOP_LOAD;
+        pr = SDL_BeginGPURenderPass(cmd, &pct, 1, &pdt);
+        SDL_SetGPUViewport(pr, &vp);
+        SDL_SetGPUScissor(pr, &sc3d);
+        continue;
+      }
       SDL_BindGPUGraphicsPipeline(pr, textured ? s_painter_tex_pipe : s_painter_tri_pipe);
       SDL_BindGPUVertexBuffers(pr, 0, &pb, 1);
       if (textured) {
@@ -2638,8 +2664,6 @@ static const uint16_t *readback_vram(GpuVkState &g) {
 // It cannot silently return an empty file: with no image it says so and writes nothing, because a
 // plausible black PPM is exactly how the earlier instruments lied.
 void GpuVkState::present_shot(const char *path) {
-  bool image_write_rgb24(
-      const char *, const unsigned char *, int, int); // defined below — PNG by default; false = nothing written
   if (!gpu_vk_enabled() || !s_inited) {
     lucent::warn("present_shot", "GPU not active — NOTHING captured");
     return;
@@ -2714,66 +2738,6 @@ void GpuVkState::present_shot(const char *path) {
                100.0 * (double)nonblack / ((double)w * h));
 }
 
-#include <SDL3_image/SDL_image.h>
-// THE one place any shot/dump turns an RGB24 buffer into a file. Format is chosen by extension, and
-// PNG is the DEFAULT (a bare or unknown extension writes PNG) so callers get a directly-viewable file
-// with no PPM->PNG convert step — only an explicit `.ppm` path keeps the raw P6 dump. Shared by the VK
-// readback (dump_to) and the software-GPU shot (gpu_native.cpp) so the rule can't drift between them.
-//
-// RETURNS FALSE WHEN NOTHING WAS WRITTEN, and that return type is the whole point of this function's
-// last revision. It used to be `void` with a bare `if (f)`, so a missing scratch/screenshots/ made
-// every capture a silent no-op while its caller logged "wrote <path>" with a coverage percentage.
-// MEASURED 2026-08-05 on the real spider1 build from a cwd without that directory: 2 armed captures,
-// 2 cheerful success lines, 0 files on disk. That is this project's cardinal failure — an instrument
-// certifying a measurement it never took — committed by the very code written to stop it. The parent
-// directory is now created (nothing else in the framework creates scratch/screenshots), and every
-// failure path returns false so the caller must say so.
-// WHY THE REASON IS LOGGED HERE AND NOT BY THE CALLER: only this function knows which step failed,
-// and the obvious caller-side `strerror(errno)` is a LIE — Fs::ensureParentDirs goes through
-// std::filesystem, which reports via error_code and does not set errno, so a failed mkdir left the
-// caller printing whatever unrelated errno happened to be lying around. It printed "Timer expired"
-// for a path that could not be created. A diagnostic that states a confidently wrong cause is worse
-// than one that states none, so the cause is named at the site that actually has it.
-bool image_write_rgb24(const char *path, const unsigned char *rgb, int w, int h) {
-  if (!path || !rgb || w <= 0 || h <= 0) {
-    lucent::error(
-        "image_write", "refusing to write: path={} rgb={} {}x{}", path ? path : "(null)", (const void *)rgb, w, h);
-    return false;
-  }
-  if (!Fs::ensureParentDirs(path)) {
-    lucent::error("image_write", "cannot create the parent directory of {} — NOTHING written", path);
-    return false;
-  }
-  size_t n = strlen(path);
-  bool ppm = (n > 4 && strcmp(path + n - 4, ".ppm") == 0);
-  if (ppm) {
-    FILE *f = fopen(path, "wb");
-    if (!f) {
-      lucent::error("image_write", "fopen({}) failed: {}", path, strerror(errno));
-      return false;
-    }
-    bool ok = fprintf(f, "P6\n%d %d\n255\n", w, h) > 0 && fwrite(rgb, 3, (size_t)w * h, f) == (size_t)w * h;
-    if (!ok) {
-      lucent::error("image_write", "short write to {}: {}", path, strerror(errno));
-    }
-    if (fclose(f) != 0) {
-      lucent::error("image_write", "fclose({}) failed: {}", path, strerror(errno));
-      ok = false;
-    }
-    return ok;
-  }
-  SDL_Surface *s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGB24, (void *)rgb, w * 3);
-  if (!s) {
-    lucent::error("image_write", "SDL_CreateSurfaceFrom failed for {}: {}", path, SDL_GetError());
-    return false;
-  }
-  bool ok = IMG_SavePNG(s, path);
-  if (!ok) {
-    lucent::error("image_write", "IMG_SavePNG({}) failed: {}", path, SDL_GetError());
-  }
-  SDL_DestroySurface(s);
-  return ok;
-}
 static bool dump_to(GpuVkState &g,
                     const char *path,
                     int sx,
@@ -3205,38 +3169,6 @@ static inline void ggs_alloc_batches(GpuVkState &g) {
   }
 }
 
-bool GpuVkState::painter_begin(uint32_t object) {
-  ggs_alloc_batches(*this);
-  if (!object || s_painter_active || s_painter_ranges >= 256) {
-    return false;
-  }
-  s_painter_active = 1;
-  s_painter_object[s_painter_ranges] = object;
-  s_painter_first[s_painter_ranges] = s_painter_cmd_n;
-  return true;
-}
-
-bool GpuVkState::painter_end() {
-  if (!s_painter_active) {
-    return false;
-  }
-  s_painter_count[s_painter_ranges] = s_painter_cmd_n - s_painter_first[s_painter_ranges];
-  s_painter_active = 0;
-  ++s_painter_ranges;
-  return !s_painter_overflow && s_painter_count[s_painter_ranges - 1] > 0;
-}
-void GpuVkState::painter_staging_stats(int *ordinary, int *painter, int *ranges) const {
-  if (ordinary) {
-    *ordinary = s_tex_n;
-  }
-  if (painter) {
-    *painter = s_painter_tex_n + s_painter_tri_n;
-  }
-  if (ranges) {
-    *ranges = s_painter_ranges;
-  }
-}
-
 // bug #55 classifier: is the CURRENT prim (about to be appended by draw_tri/draw_tritri/draw_semi) 3D
 // world geometry, or which 2D band does it belong to? s_vd (per-vertex native depth) is set ONLY for
 // RQ_OM_DEPTH world prims (render_queue.cpp RQ_SETVD) and freshly cleared by set_order()/set_order_2d*
@@ -3249,33 +3181,6 @@ static inline bool ggs_is_3d(const GpuVkState &g) {
 }
 static inline int ggs_2d_band(const GpuVkState &g) {
   return g.s_cur_ord <= NATIVE_3D_MIN ? GGS_2D_BG : GGS_2D_FG;
-}
-
-static bool painter_command(GpuVkState &g, int material, int first, int count) {
-  if (!g.s_painter_active || count <= 0) {
-    return false;
-  }
-  // Never coalesce across an object boundary: each object clears and composites the reusable target.
-  if (g.s_painter_cmd_n > g.s_painter_first[g.s_painter_ranges]) {
-    const int i = g.s_painter_cmd_n - 1;
-    if (g.s_painter_cmd_material[i] == material && g.s_painter_cmd_gouraud[i] == g.s_painter_item_gouraud &&
-        g.s_painter_cmd_dither[i] == g.s_painter_item_dither &&
-        g.s_painter_cmd_first[i] + g.s_painter_cmd_count[i] == first) {
-      g.s_painter_cmd_count[i] += count;
-      return true;
-    }
-  }
-  if (g.s_painter_cmd_n >= 16384) {
-    g.s_painter_overflow = 1;
-    return false;
-  }
-  const int i = g.s_painter_cmd_n++;
-  g.s_painter_cmd_material[i] = (uint8_t)material;
-  g.s_painter_cmd_gouraud[i] = (uint8_t)g.s_painter_item_gouraud;
-  g.s_painter_cmd_dither[i] = (uint8_t)g.s_painter_item_dither;
-  g.s_painter_cmd_first[i] = first;
-  g.s_painter_cmd_count[i] = count;
-  return true;
 }
 
 void GpuVkState::draw_tri(int x0,
@@ -3300,7 +3205,7 @@ void GpuVkState::draw_tri(int x0,
   ggs_alloc_batches(*this);
   const int32_t da[4] = {dax0, day0, dax1, day1};
   if (s_painter_active) {
-    if (s_painter_tri_n + 3 > TRI_CAP || !painter_command(*this, 0, s_painter_tri_n, 3)) {
+    if (s_painter_tri_n + 3 > TRI_CAP || !painter_command(0, s_painter_tri_n, 3)) {
       s_painter_overflow = 1;
       return;
     }
@@ -3475,7 +3380,7 @@ void GpuVkState::draw_tritri(const int *xs,
       s_painter_overflow = 1;
       return;
     }
-    if (!painter_command(*this, 1, s_painter_tex_n, 3)) {
+    if (!painter_command(1, s_painter_tex_n, 3)) {
       s_painter_overflow = 1;
       return;
     }
@@ -3592,6 +3497,38 @@ void GpuVkState::draw_semi(const int *xs,
                            int blend) {
   int m = blend & 3; // bucket by PSX blend mode: one HW-blend pipeline/vertex-buffer per mode (see render_geom)
   ggs_alloc_batches(*this);
+  if (s_painter_active) {
+    if (s_painter_tex_n + 3 > TEX_CAP || !painter_command(1, s_painter_tex_n, 3, 1, m)) {
+      s_painter_overflow = 1;
+      return;
+    }
+    tex_emit(((TexVtx *)s_painter_tex_buf) + s_painter_tex_n,
+             xs,
+             ys,
+             us,
+             vs,
+             rs,
+             gs,
+             bs,
+             tpx,
+             tpy,
+             mode,
+             raw,
+             clutx,
+             cluty,
+             twmx,
+             twmy,
+             twox,
+             twoy,
+             dax0,
+             day0,
+             dax1,
+             day1,
+             1,
+             m);
+    s_painter_tex_n += 3;
+    return;
+  }
   // bug #55: 2D (non-world) semi/translucent tris render at native resolution, never through the ires target.
   if (!ggs_is_3d(*this)) {
     int band = ggs_2d_band(*this);

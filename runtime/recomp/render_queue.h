@@ -192,6 +192,8 @@ struct RenderQueue {
                                // never emitQueue() — fps60 never reaches emitQueue (see the .cpp)
   void zfightScan(Core *core); // PSXPORT_ZFIGHT diag: SW-rasterize opaque depth prims, find near-equal top-2 contests
   void mark_consumed();
+  PainterObjectAdmission
+  preflightPainterObject(PainterObjectId object, size_t new_faces, PainterObjectLimits limits = {}) const;
   PainterObjectPlan buildPainterObjectPlan(PainterObjectLimits limits = {}) const;
 
   // The screen space of the 2D quads being pushed RIGHT NOW. Producers that author 4:3 layout — the

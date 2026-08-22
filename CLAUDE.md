@@ -44,10 +44,11 @@ Everything further down is the mechanics of satisfying those two.
 This repo is the **game-agnostic framework** extracted from the Tomba!2 port: the static recompiler
 (`tools/recomp/`), the `runtime/recomp/` substrate (MIPS interp + Beetle GTE/MDEC/SPU backends + the
 native SDL_GPU renderer + the SBS differential harness + BIOS/SDK HLE), and the `psxport` STATIC library
-a game links. It carries **no game code** — the framework `#include`s nothing from a game; a game provides
-`GameConfig` + `GameHooks` (`runtime/recomp/game_iface.h`) + the recompiled substrate (`generated/`) and
-links `libpsxport`. The `psxport_smoke` target proves agnosticism (links libpsxport with a stub, zero game
-symbols).
+a game links. It carries **no game code** — the framework `#include`s nothing from a game; a game derives
+`GameRuntime` (`runtime/recomp/game_runtime.h`), installs that process-lifetime object, supplies the
+recompiled substrate (`generated/`), and links `libpsxport`. `GameConfig` + `GameHooks` now exist only as
+the bounded compatibility adapter for ports still migrating. The `psxport_smoke` target proves the real
+derived seam links with both legacy views null and zero game symbols.
 
 **This file is the authority for how a game consumes psxport** — and, because every game vendors this
 repo as `external/psxport`, everything in `docs/` reaches every game tree and every subagent working
@@ -204,12 +205,22 @@ Common knobs: `PSXPORT_NOAUDIO=1` · `PSXPORT_DEBUG=cd,gpu` (channel-gated diagn
   executable into emitted C (`shard_*.c`, the "substrate"); `runtime/recomp/` is the native PSX
   platform layer (GPU/SPU/GTE/MDEC/CD/XA/FMV + BIOS/SDK HLE), the SDL_GPU renderer, and the
   side-by-side (SBS) differential harness. It `#include`s **nothing** from a game.
-- **`game/`** — the game half: `game/core/` holds the seam (`GameConfig` guest-address literals,
-  `GameHooks`, the recomp registry, `main()`), plus native reimplementations that progressively take
-  ownership of substrate functions.
+- **`game/`** — the game half: `game/core/` owns a derived `GameRuntime`, the recomp registry, `main()`,
+  and native reimplementations that progressively take ownership of substrate functions. During
+  migration, its derived runtime may delegate unmoved members through the bounded legacy adapter.
 
-The seam is `runtime/recomp/game_iface.h` (`GameConfig` / `GameHooks` / opaque `void* Core::gameCtx`)
-and `recomp_iface.h` (`RecompRegistry`). `psxport_smoke` exists to keep that seam honest.
+The ownership seam is `runtime/recomp/game_runtime.h` (`GameRuntime`, per-Game `FrameDriver` and
+`TaskScheduler` products) and `recomp_iface.h` (`RecompRegistry`). `runtime/recomp/game_iface.h` owns
+only the temporary adapter/install boundary; the deprecated bags are isolated in
+`legacy_game_config.h` and `legacy_game_hooks.h`. They are compatibility debt, not extension points:
+do not add a field or callback there. `psxport_smoke` and `test_game_runtime` keep the derived seam and
+its temporary adapter honest.
+
+A shipping port still uses `LegacyGameRuntimeAdapter` until every generic `c->cfg` consumer has moved
+to a narrow typed fact group. The next group is `GuestProgramImage` for crt0, overlay routing, and the
+resident-code backtrace heuristic; the exact deletion set and subsequent groups are in
+`docs/plans/game-seam-redesign.md`. Do not make `GameRuntime` return the old bag or add one virtual
+integer getter per field.
 
 Consequences that bite:
 
@@ -328,6 +339,10 @@ measurement wins.
 daily). A shipping PC port of Twilight Princess on the `zeldaret/tp` decomp: different console, same
 problem shape, and USER rule 1 at the top of this file is to follow it closely. **Take the SHAPE, not a
 copy-paste**, and cite what you took.
+
+Renderer support follows that peer-owner shape too: `gpu_primitive_dump` owns primitive-census CSV
+lifecycle and encoding, while `image_writer` owns RGB24 file output for every renderer. Do not grow
+those responsibilities back into `gpu_native.cpp` or `gpu_vk.cpp`.
 
 - **UI is TWO stacks on purpose.** `src/dusk/ui/` is RmlUi for the game-facing UI; `src/dusk/imgui/` is
   ImGui for developer overlays (console, save editor, heap/process/camera overlays, actor spawner).

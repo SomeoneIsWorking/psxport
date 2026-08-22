@@ -1,6 +1,11 @@
 # The game seam, second generation — from one flat config to a typed seam
 
-**Status: A PLAN. Nothing here is implemented.** Written 2026-08-11 against the psxport dev clone at
+**Status: PARTIAL.** The first inheritance slice is implemented: `GameRuntime` installation, per-Core
+context lifecycle, override registration, boot initialization, and per-Game `FrameDriver` /
+`TaskScheduler` factories. `Game` owns the factory products. Current ports remain source-compatible
+through a bounded `LegacyGameRuntimeAdapter`; the adapter exposes no virtual config getter, and the
+new smoke derives `GameRuntime` with both legacy views null. The control-flow moves in steps 5–7 and
+the final `GameConfig` diet remain outstanding. Written 2026-08-11 against the psxport dev clone at
 `10c37cf5` (working tree dirty with the render-noise/ot_attr work of the same session — the packet-pool
 literal fixes referenced below are in that tree, some uncommitted). Every citation is `file:line` in
 that state; read a line number as "where this was when written". Companion docs:
@@ -200,11 +205,10 @@ One header, `runtime/recomp/game_runtime.h`. A game implements ONE class and ins
 All names concrete; signatures are the proposal, not a sketch.
 
 ```cpp
-// game_runtime.h — the framework↔game seam, second generation. Replaces the (GameConfig*,
-// GameHooks*) pair of game_iface.h. The framework #includes nothing from a game; a game
-// implements GameRuntime in its own repo and installs it before any Game is constructed.
+// game_runtime.h — the framework↔game seam, second generation. The framework #includes nothing
+// from a game; a game implements GameRuntime in its own repo and installs it before any Game is
+// constructed. GameConfig/GameHooks are not part of this interface.
 #pragma once
-#include "game_iface.h"     // GameConfig (Kind-1 facts) + FadeState — both survive
 #include <memory>
 
 class Core; class Game;
@@ -222,9 +226,9 @@ namespace lucent { class Line; }
 class FrameDriver {
 public:
   virtual ~FrameDriver() = default;
-  virtual void stepFrame(Core* c, uint32_t f) = 0;   // the dc_step_frame unit. Deterministic.
-  virtual void autoDrive(Core* c, uint32_t f) {}     // AUTO_SKIP / newgame / warp state machines
-  virtual void frameProbes(Core* c, uint32_t f) {}   // per-frame diagnostics (seqdbg/state/bgm…)
+  virtual void stepFrame(Core& c, uint32_t f) = 0;   // the dc_step_frame unit. Deterministic.
+  virtual void autoDrive(Core& c, uint32_t f) {}     // AUTO_SKIP / newgame / warp state machines
+  virtual void frameProbes(Core& c, uint32_t f) {}   // per-frame diagnostics (seqdbg/state/bgm…)
 };
 
 // The game's cooperative-task scheduler, if it has one the framework must be able to tick.
@@ -232,7 +236,7 @@ class TaskScheduler {
 public:
   virtual ~TaskScheduler() = default;
   virtual void step() = 0;                    // one pass over the game's task slots
-  virtual void yield(Core* c) = 0;            // the ChangeThread funnel (PlatformHle routes here)
+  virtual void yield(Core& c) = 0;            // the ChangeThread funnel (PlatformHle routes here)
   virtual void tickSleepCountdown() {}        // optional per-frame sweep
 };
 
@@ -265,14 +269,11 @@ class GameRuntime {
 public:
   virtual ~GameRuntime() = default;
 
-  // Kind 1 — the scalar fact registry, role unchanged (slimmed per §4.3).
-  virtual const GameConfig& config() const = 0;
-
   // Lifecycle (pure: every port already implements these as hooks today).
-  virtual void* ctxCreate(Core* c) = 0;
-  virtual void  ctxDestroy(void* ctx) = 0;
-  virtual void  registerOverrides(Game* g) = 0;   // overrides + PC-tap rows + anything registered
-  virtual void  bootInit(Core* c) = 0;
+  virtual void* createContext(Core& c) = 0;
+  virtual void  destroyContext(void* ctx) = 0;
+  virtual void  registerOverrides(Game& g) = 0;   // overrides + PC-tap rows + anything registered
+  virtual void  bootInit(Core& c) = 0;
 
   // Kind 2 factories. nullptr is a REAL ANSWER with defined consequences, logged at boot:
   //   no FrameDriver   -> the framework loop shell refuses to loop; the game drives its own loop
@@ -280,8 +281,8 @@ public:
   //                       that need stepping REFUSE, naming this (dualcore precedent).
   //   no TaskScheduler -> PlatformHle's ChangeThread routing refuses registration of a yield
   //                       funnel; nothing silently no-ops.
-  virtual std::unique_ptr<FrameDriver>   createFrameDriver(Game& g)   { return nullptr; }
-  virtual std::unique_ptr<TaskScheduler> createScheduler(Game& g)     { return nullptr; }
+  virtual std::unique_ptr<FrameDriver>   createFrameDriver(Game& g)       { return nullptr; }
+  virtual std::unique_ptr<TaskScheduler> createTaskScheduler(Game& g)     { return nullptr; }
 
   // Kind 2/3 singletons (stateless, may be static members of the game's runtime).
   virtual GameplayProbe*    probe()  { return nullptr; }   // null => harnesses refuse, loudly
@@ -296,16 +297,17 @@ public:
 };
 
 // Install: once, before any Game exists. Both SBS cores share it.
-void         psxport_install_game(GameRuntime* rt);
+void         psxport_install_game(GameRuntime& rt);
 GameRuntime* psxport_game_runtime();
 ```
 
 **Ownership and reach.** The game's `main()` owns the `GameRuntime` instance (a static in
 `game/core/main.cpp`), process lifetime, never deleted by the framework. `Game`'s constructor
-snapshots `rt = psxport_game_runtime()`, keeps `core.cfg = &rt->config()` (so the thousands of
-existing `c->cfg->` sites do not churn), and materialises per-Game state:
-`sched = rt->createScheduler(*this)`, `driver = rt->createFrameDriver(*this)`. A `Core* c` reaches
-everything as today: `c->cfg`, `c->game->rt`, `c->game->sched`, `c->game->driver`. `Game::pcSched`
+snapshots `rt = psxport_game_runtime()` and materialises per-Game state:
+`taskScheduler = rt->createTaskScheduler(*this)`, `frameDriver = rt->createFrameDriver(*this)`. A
+`Core* c` reaches everything through `c->runtime`, `c->game->taskScheduler`, and
+`c->game->frameDriver`. During migration only,
+the legacy adapter also fills `c->cfg`/`c->hooks`. `Game::pcSched`
 (game.h:70) — a Tomba class held by value in a framework object — is deleted; its replacement is
 the `sched` unique_ptr.
 
@@ -325,10 +327,39 @@ public:
 ```
 
 **Transitional adapter, so migration is per-member.** Step 4 of §6 introduces
-`HooksAdapter : GameRuntime` (framework-side, temporary) built over an installed
+`LegacyGameRuntimeAdapter : GameRuntime` (framework-side, temporary) built over an installed
 `(GameConfig*, GameHooks*)` pair; the legacy `psxport_install_game(cfg, hooks)` constructs one.
 Every subsequent step moves one member from delegation to a real override in one game, and the
 adapter dies when all three games install a `GameRuntime` directly.
+
+The exact consumer migration is intentionally incremental:
+
+1. Define `<Title>Runtime final : public LegacyGameRuntimeAdapter` in the game's `game/core/` and
+   pass its existing `GameConfig` and `GameHooks` to the base constructor.
+2. Replace `psxport_install_game(&config, &hooks)` with a process-lifetime runtime object and
+   `psxport_install_game(runtime)`.
+3. Override `createContext`/`destroyContext`, `registerOverrides`, `bootInit`, and the driver/scheduler
+   factories as each cohesive owner moves. An unoverridden member still delegates through the adapter.
+4. Extract only generic immutable fact groups that a living framework algorithm iterates; move every
+   other config field beside its derived behavior. Once `c->cfg`/`c->hooks` have no consumers, derive
+   directly from `GameRuntime` and delete the adapter plus the old pair.
+
+**Next typed ownership slice — guest program image, not another config bag.** A current port cannot
+boot from direct `GameRuntime` yet because `core.cfg` is deliberately null outside the adapter. The
+next framework slice is one immutable `GuestProgramImage` value owned by `GameRuntime`, containing
+only the executable facts jointly consumed by `crt0_setup`/`crt0_plan`, `overlay_router`, and the
+resident-code backtrace heuristic: BSS range, stack/heap declarations, GP/libc/main/crt0 entries, and
+resident text range. Those three generic algorithms consume that one typed value; it is not one
+virtual getter per integer and does not absorb disc, CD, pad, render-memory, scheduler, or game policy.
+Moving the group deletes the corresponding `GameConfig` fields in the same change. The following
+fact slices use the same consumer-owned rule (`DiscIdentity`, `RenderMemoryLayout`, platform-library
+entry tables), each with a named algorithm and deletion set. Any fact used only by derived behavior
+moves directly beside that behavior instead of entering one of these values.
+
+Until those slices land, a real consumer derives `LegacyGameRuntimeAdapter`; deriving `GameRuntime`
+directly is valid only for a consumer whose framework paths require no remaining legacy facts (the
+Core-only smoke is the current proof). This limitation is explicit so `core.cfg == nullptr` is never
+mistaken for a completed consumer migration.
 
 **What stays in GameConfig, and why that is not a cop-out.** Everything that passes Q1 with a
 living framework consumer: `recMainLo/Hi` (overlay_router, backtrace heuristic), `discEnvVar`,
@@ -456,10 +487,13 @@ kinds at once.
    (non-Tomba) config; today the report prints Tomba's `miss-state` block reading meaningless
    words; after, it prints "no game atlas — raw address only". (Also removes sbs.cpp's citations
    of Tomba game-source files from framework comments.)
-4. **`GameRuntime` + `HooksAdapter`, pure mechanics** — no behaviour moves; the adapter delegates
-   every virtual to the installed hooks. RED: the smoke stub implements `GameRuntime`; a test
-   installs it and asserts `psxport_game_runtime()->config()` reaches it. Games still install the
-   legacy pair.
+4. **`GameRuntime` + bounded `LegacyGameRuntimeAdapter` — IMPLEMENTED, first slice.** Context lifecycle,
+   override registration and boot initialization dispatch virtually; `Game` owns the optional
+   per-Game driver/scheduler products. The smoke derives `GameRuntime` directly and proves both
+   legacy views are null. `test_game_runtime` also gates the adapter's old-pair delegation. Deliberate
+   delta from the 2026-08-11 sketch: there is no `virtual config()` and no base-class config bag.
+   Immutable facts remain reachable only through the named legacy adapter until later steps extract
+   the narrow fact groups their generic consumers genuinely iterate.
 5. **SchedBody death.** `pc_scheduler.{h,cpp}` + scheduler.cpp's stanzas move to Tomba2Engine as
    `TombaScheduler`; enum + 3 hooks + `Game::pcSched` deleted; PlatformHle's ChangeThread routes
    to `sched->yield`. Gates: Tomba SBS byte-compare (the stanzas' cadence — the Slip #1-#4
@@ -478,7 +512,7 @@ kinds at once.
    dualcore under a stub config must still REFUSE (it does today — keep that test) but now with
    "no GameplayProbe" wording; SBS nav on Tomba reproduces the same frame numbers for
    REACH_GAME as before the move (recorded in the step's evidence).
-8. **GameConfig diet + designated initializers** (§4.3), `HooksAdapter` deleted once all three
+8. **GameConfig diet + designated initializers** (§4.3), `LegacyGameRuntimeAdapter` deleted once all three
    games construct a `GameRuntime`. Gate: lint baseline strictly smaller than at step 0; the
    remaining entries each carry a `psx-console:` marker or a burn-down issue reference.
 

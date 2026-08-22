@@ -304,20 +304,20 @@ static void native_crt0(Core *c) {
 // of game_main so the dual-core harness can init two cores then drive the frame loop itself.
 static void game_init(Core *c) {
   // The game's boot-init prologue (FUN_80050b08 init prefix + task-0 bootstrap) is GAME behaviour: it
-  // moved WHOLE to the game side (game/core/game_hooks.cpp tomba_bootInit) via the bootInit hook, so
+  // moved WHOLE to the game side (game/core/game_hooks.cpp tomba_bootInit) via GameRuntime, so
   // this framework file no longer bakes in the game's guest boot-prologue addresses or c->engine.* init
   // calls. It moves as ONE unit (not just the engine calls) because the engine calls are interleaved
   // with the rc-dispatched guest leaves and task0Bootstrap depends on the scheduler-table init between
   // them — the order is load-bearing and cannot be split. crt0_setup + the per-core binds (this file)
   // stay framework scaffolding.
-  c->hooks->bootInit(c);
+  c->runtime->bootInit(*c);
 }
 
 // Dual-core harness hooks (dualcore.cpp / selftest.cpp / sbs.cpp): boot a core to the start of the
 // frame loop, then step it one frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap;
 // dc_step_frame = one frame.
 //
-// c->hooks->registerOverrides(c->game) HAS to run here (2026-07-08 fix, docs/findings/tooling.md
+// GameRuntime::registerOverrides HAS to run here (2026-07-08 fix, docs/findings/tooling.md
 // "SBS/DualCore/Selftest never populate their own Game's override table"): every harness that boots
 // via dc_boot_init constructs its OWN Game, and the registration previously lived ONLY inline in
 // boot.cpp's main(), against a single throwaway Game these harnesses never touch. Without calling it
@@ -334,7 +334,7 @@ static void game_init(Core *c) {
 // dc_boot_init — the per-Core boot chokepoint EVERY port and harness funnels through (standalone
 // main(), SBS, dualcore, the selftests). The render path is installed HERE, not in one boot spine's
 // tail, because that is the mistake this replaces: it used to be resolved inside native_boot_run, so a
-// port that boots past it (spyro: main -> dc_boot_init -> bootInit hook) had the path stuck at its
+// port that boots past it (spyro: main -> dc_boot_init -> GameRuntime::bootInit) had the path stuck at its
 // default and had to re-parse the flag game-side to get it back. A knob read at Core setup belongs at
 // Core setup. Harnesses that own the path per leg (Sbs::Impl::applyMode) set it after this and win.
 void dc_boot_init(Core *c) {
@@ -345,7 +345,7 @@ void dc_boot_init(Core *c) {
   spu_bind(c);
   mdec_bind(c);
   xa_bind(c);
-  c->hooks->registerOverrides(c->game);
+  c->runtime->registerOverrides(*c->game);
   // Harnesses construct their own Game objects, so every per-Game hardware-service table must be
   // populated here as well as on the standalone main() path.  The generated override setters are
   // process-global and made the native leg appear healthy even when this table was empty; the pure

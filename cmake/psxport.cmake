@@ -69,7 +69,7 @@ include(${PSXPORT_ROOT}/cmake/gpu_shaders.cmake)
 set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/core.cpp
   ${PSXPORT_ROOT}/runtime/recomp/fs_util.cpp          # generic std::filesystem host-I/O wrapper (class Fs), no game types
-  ${PSXPORT_ROOT}/runtime/recomp/game_iface.cpp       # framework↔game seam storage (GameConfig/GameHooks install)
+  ${PSXPORT_ROOT}/runtime/recomp/game_iface.cpp       # polymorphic GameRuntime install + bounded legacy adapter
   ${PSXPORT_ROOT}/runtime/recomp/recomp_iface.cpp     # framework↔generated seam storage (RecompRegistry install)
   ${PSXPORT_ROOT}/runtime/recomp/dispatch.cpp
   ${PSXPORT_ROOT}/runtime/recomp/interp.cpp           # ORACLE engine: pure-MIPS interpreter for the oracle Core
@@ -85,6 +85,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/host_turn.cpp
   ${PSXPORT_ROOT}/runtime/recomp/threads.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_native.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_primitive_dump.cpp # primitive-census CSV diagnostic owner
+  ${PSXPORT_ROOT}/runtime/recomp/image_writer.cpp      # one checked RGB24 capture-file boundary
   ${PSXPORT_ROOT}/runtime/recomp/gpu_debug.cpp
   ${PSXPORT_ROOT}/runtime/recomp/vram_xfer.cpp
   ${PSXPORT_ROOT}/runtime/recomp/spu_audio.cpp
@@ -118,6 +120,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/xa_stream.cpp
   ${PSXPORT_ROOT}/runtime/recomp/timing.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_painter.cpp # painter target lifecycle + authored command staging
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_semi_selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_texture_phase_selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_perf.cpp
@@ -167,6 +170,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
   ${PSXPORT_ROOT}/runtime/recomp/ot_lifo_depth.cpp    # PSX AddPrim head-insertion ties -> raster-distinct native depths
   ${PSXPORT_ROOT}/runtime/recomp/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)
+  ${PSXPORT_ROOT}/runtime/recomp/painter_object_layer.cpp # atomic painter admission + authored command plan
   ${PSXPORT_ROOT}/runtime/recomp/pc_scheduler.cpp     # PC-native cooperative task scheduler; stage bodies via hooks (P1.7c)
   ${PSXPORT_ROOT}/runtime/recomp/synchronous_task_wait.cpp # one native synchronous FUN_80044BD4 owner
   ${PSXPORT_ROOT}/runtime/recomp/verify_harness.cpp   # A/B verify scaffold (skip/observable half split to game verify_skip.cpp) (P1.7c)

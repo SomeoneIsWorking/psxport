@@ -92,15 +92,39 @@ static void test_multiple_objects_are_contiguous(void) {
   CHECK_EQ(p.commands[3].seq, 40);
 }
 
+static void test_atomic_admission_accepts_existing_semitransparency(void) {
+  auto q = make_queue();
+  add(*q, 4, 0, 1, 1);
+  q->items[0].tp_blend = 3;
+  add(*q, 0, 1, 3);
+  const PainterObjectAdmission accepted = q->preflightPainterObject(8, 2);
+  CHECK(accepted.accepted());
+  CHECK_EQ(accepted.queued_items, 2);
+  CHECK_EQ(accepted.existing_objects, 1);
+  CHECK_EQ(accepted.existing_faces, 1);
+
+  PainterObjectAdmission refused = q->preflightPainterObject(4, 1);
+  CHECK_EQ((int)refused.refusal, (int)PainterObjectAdmissionRefusal::DuplicateObject);
+  CHECK_EQ(refused.refusal_item, 0);
+
+  q->items[0].tp_blend = 4;
+  refused = q->preflightPainterObject(8, 1);
+  CHECK_EQ((int)refused.refusal, (int)PainterObjectAdmissionRefusal::InvalidExistingFace);
+  CHECK_EQ(refused.refusal_item, 0);
+}
+
 static void test_refusals_and_denominators(void) {
   auto q = make_queue();
   PainterObjectPlan p = q->buildPainterObjectPlan();
   CHECK_EQ((int)p.stats.refusal, (int)PainterObjectRefusal::Empty);
   CHECK_EQ(p.stats.items_scanned, 0);
   add(*q, 1, 0, 0, 1);
+  q->items[0].tp_blend = 2;
   p = q->buildPainterObjectPlan();
-  CHECK_EQ((int)p.stats.refusal, (int)PainterObjectRefusal::SemiTransparent);
+  CHECK(p.accepted());
   CHECK_EQ(p.stats.grouped_faces, 1);
+  CHECK(p.commands[0].semi_transparent);
+  CHECK_EQ(p.commands[0].blend_mode, 2);
   q = make_queue();
   add(*q, 1, 0, 3, 0, PAINTER_OBJECT_DITHER, 1, 1);
   p = q->buildPainterObjectPlan();
@@ -217,6 +241,7 @@ static void test_lazy_reset_preserves_scopes(void) {
 int main(void) {
   RUN(interleaved_materials_and_ties);
   RUN(multiple_objects_are_contiguous);
+  RUN(atomic_admission_accepts_existing_semitransparency);
   RUN(refusals_and_denominators);
   RUN(painter_depth_is_not_key_flattened);
   RUN(lazy_reset_preserves_scopes);
