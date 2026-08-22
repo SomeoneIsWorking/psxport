@@ -1,9 +1,9 @@
 // crt0_verify.h — RE-DERIVE the crt0 boot group FROM THE GUEST'S OWN INSTRUCTIONS and diff it against
-// the constants the game shipped in its `GameConfig`.
+// the constants the game shipped in its `GuestProgramImage`.
 //
 // ═══ WHY THIS EXISTS: THE GATE RULE ═════════════════════════════════════════════════════════════════
-// Every field of GameConfig's crt0 group is a value somebody MEASURED out of the executable and then
-// TYPED into `game/core/game_config.cpp`. Before this file, nothing compared the typed copy to the
+// Every crt0 field in GuestProgramImage is a value somebody MEASURED out of the executable and then
+// TYPED into the game's derived runtime. Before this file, nothing compared the typed copy to the
 // measurement — the shape of defect found independently in four of five ports in this workspace: a
 // per-repo tool holds its own copy of the answer and asserts the binary matches THAT, while the port
 // holds a second copy, and no code relates the two. Sabotage proved every such gate green with the
@@ -85,7 +85,7 @@ struct Crt0Observed {
   bool haveReserve = false;
   uint32_t stackTopBase2 = 0;
   bool haveHeapBase = false;
-  uint32_t heapBase = 0; // UNMASKED, as GameConfig states it
+  uint32_t heapBase = 0; // UNMASKED, as GuestProgramImage states it
   bool haveGp = false;
   uint32_t gp = 0;
   bool haveLibcInit = false;
@@ -248,7 +248,7 @@ template <class Reader> static inline Crt0Observed crt0_scan(uint32_t entry, Rea
       case 0x00: // sll — the `& 0x1FFFFFFF` mask, first half
         if (r[rt].tag == CT_CONST && sa == 3) {
           o.haveHeapBase = true;
-          o.heapBase = r[rt].val; // UNMASKED, which is what GameConfig holds
+          o.heapBase = r[rt].val; // UNMASKED, which is what GuestProgramImage holds
           r[rd].tag = CT_HEAPBASE;
           r[rd].val = r[rt].val << 3;
         } else {
@@ -297,42 +297,59 @@ struct Crt0AuditRow {
   bool agree;
 };
 
-// crt0_audit — scan the guest crt0 and diff it against the shipped GameConfig + the derived plan.
+// crt0_audit — scan the guest crt0 and diff it against the shipped GuestProgramImage + derived plan.
 // Returns FALSE only on a CONFIRMED disagreement (the caller must then refuse to boot).
 template <class Reader>
-static inline bool crt0_audit(const GameConfig *cfg, const Crt0Plan &p, Reader rd32, const char *who) {
-  if (!cfg || !cfg->crt0) {
+static inline bool crt0_audit(const GuestProgramImage *image, const Crt0Plan &p, Reader rd32, const char *who) {
+  if (!image || !image->crt0Entry) {
     lucent::warn("crt0",
-                 "{}: NOT AUDITED — GameConfig::crt0 is 0, so there is no guest crt0 to compare "
+                 "{}: NOT AUDITED — GuestProgramImage::crt0Entry is 0, so there is no guest crt0 to compare "
                  "the shipped boot group against. 0 of 10 fields were checked; every constant "
-                 "below is an UNVERIFIED hand copy. Fill in `crt0` (the PS-EXE entry pc) to turn "
+                 "below is an UNVERIFIED hand copy. Fill in `crt0Entry` (the PS-EXE entry pc) to turn "
                  "this audit on.",
                  who);
     return true;
   }
-  const Crt0Observed o = crt0_scan(cfg->crt0, rd32);
+  const Crt0Observed o = crt0_scan(image->crt0Entry, rd32);
 
   // WHICH SIDE EACH ROW COMPARES AGAINST, and why it matters. Where the plan CARRIES the value it is
   // about to apply (bssLo/bssHi/gp/libcInit/the bias), the row is diffed against THE PLAN — so the audit
   // gates the value that actually reaches guest state, not merely the constant the game declared. That
   // distinction is not academic: the pre-fix framework read `cfg->stackBias` nowhere and hardcoded -8, a
-  // fault that a config-only audit would have declared clean. The three addresses the plan only reads
-  // THROUGH (stackTopBase/stackTopBase2/heapBase) are compared against the config, because a wrong one
-  // there shows up as a wrong loaded word, which crt0_plan's own plausibility check catches.
+  // fault that an image-only audit would have declared clean. The three addresses the plan only reads
+  // THROUGH (stackTopWordAddress/stackReserveWordAddress/heapBase) are compared against the image,
+  // because a wrong one there shows up as a wrong loaded word, which crt0_plan's own plausibility
+  // check catches.
   Crt0AuditRow rows[] = {
       {"bssZeroLo", o.haveBssLo, o.bssLo, p.bssLo, o.bssLo == p.bssLo},
       {"bssZeroHi", o.haveBssHi, o.bssHi, p.bssHi, o.bssHi == p.bssHi},
-      {"stackTopBase", o.haveStackTop, o.stackTopBase, cfg->stackTopBase, o.stackTopBase == cfg->stackTopBase},
-      {"stackTopBase2", o.haveReserve, o.stackTopBase2, cfg->stackTopBase2, o.stackTopBase2 == cfg->stackTopBase2},
-      {"heapBase", o.haveHeapBase, o.heapBase, cfg->heapBase, o.heapBase == cfg->heapBase},
+      {"stackTopWordAddress",
+       o.haveStackTop,
+       o.stackTopBase,
+       image->stackTopWordAddress,
+       o.stackTopBase == image->stackTopWordAddress},
+      {"stackReserveWordAddress",
+       o.haveReserve,
+       o.stackTopBase2,
+       image->stackReserveWordAddress,
+       o.stackTopBase2 == image->stackReserveWordAddress},
+      {"heapBase", o.haveHeapBase, o.heapBase, image->heapBase, o.heapBase == image->heapBase},
       {"gp", o.haveGp, o.gp, p.gp, o.gp == p.gp},
       {"libcInit", o.haveLibcInit, o.libcInit, p.libcInit, o.libcInit == p.libcInit},
-      // The bias the plan APPLIED, not the one the config declared — see the note above.
+      // The bias the plan APPLIED, not merely the one the image declared — see the note above.
       {"stackBias(applied)", o.haveBias, (uint32_t)o.bias, (uint32_t)p.stackTopBias, o.bias == p.stackTopBias},
       // The two optional stores are only DECIDABLE once the scan reached the jal — otherwise "no store
       // seen" is indistinguishable from "stopped before the store".
-      {"heapSizePtr", o.scanComplete, o.heapSizePtr, cfg->heapSizePtr, o.heapSizePtr == cfg->heapSizePtr},
-      {"heapBasePtr", o.scanComplete, o.heapBasePtr, cfg->heapBasePtr, o.heapBasePtr == cfg->heapBasePtr},
+      {"heapSizeStoreAddress",
+       o.scanComplete,
+       o.heapSizePtr,
+       image->heapSizeStoreAddress,
+       o.heapSizePtr == image->heapSizeStoreAddress},
+      {"heapBaseStoreAddress",
+       o.scanComplete,
+       o.heapBasePtr,
+       image->heapBaseStoreAddress,
+       o.heapBasePtr == image->heapBaseStoreAddress},
   };
   const int n = (int)(sizeof rows / sizeof rows[0]);
 
@@ -362,7 +379,7 @@ static inline bool crt0_audit(const GameConfig *cfg, const Crt0Plan &p, Reader r
     }
     snprintf(bad + at,
              sizeof bad - at,
-             "%s%s: guest says 0x%08X, game_config.cpp ships 0x%08X",
+             "%s%s: guest says 0x%08X, derived runtime ships 0x%08X",
              at ? " | " : "",
              rows[i].name,
              rows[i].observed,
@@ -378,7 +395,7 @@ static inline bool crt0_audit(const GameConfig *cfg, const Crt0Plan &p, Reader r
                "libcInit {} the A(39h) InitHeap thunk; a1 {} live at the guest's own jal; "
                "delay slot {} `addi a0,a0,4`.",
                who,
-               cfg->crt0,
+               image->crt0Entry,
                o.decoded,
                o.allZero,
                o.stopped,
@@ -416,7 +433,7 @@ static inline bool crt0_audit(const GameConfig *cfg, const Crt0Plan &p, Reader r
                  "above as a pass.",
                  who,
                  o.decoded,
-                 cfg->crt0);
+                 image->crt0Entry);
   }
   // `a1` is the whole of item 4: if the guest keeps the size live at its own jal, a port that does not
   // set r[5] is passing a stale register. Stated on every boot, for every consumer.
@@ -430,14 +447,14 @@ static inline bool crt0_audit(const GameConfig *cfg, const Crt0Plan &p, Reader r
   if (disagreed) {
     lucent::error("crt0",
                   "{}: REFUSING TO BOOT — {} of {} crt0 constant(s) shipped in the game's "
-                  "game_config.cpp DISAGREE with the guest's own crt0 at 0x{:08X}: {}."
-                  "\n  The guest bytes are the measurement; the config is a hand copy of it. Fix "
-                  "the config (or, if the scanner is wrong, say so with the disassembly — "
+                  "GuestProgramImage DISAGREE with the guest's own crt0 at 0x{:08X}: {}."
+                  "\n  The guest bytes are the measurement; the runtime image is a hand copy of "
+                  "it. Fix the derived runtime (or, if the scanner is wrong, say so with the disassembly — "
                   "runtime/recomp/crt0_verify.h documents the five crt0s it was measured on).",
                   who,
                   disagreed,
                   n,
-                  cfg->crt0,
+                  image->crt0Entry,
                   bad);
     return false;
   }

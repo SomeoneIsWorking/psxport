@@ -228,12 +228,12 @@ static void game_main(Core *c);
 // hermetic test (tests/test_crt0_boot_group.cpp) exercises the code that SHIPS rather than a helper
 // beside it. Keep it that way: a computation added here is a second copy by definition.
 static void crt0_setup(Core *c) {
-  const GameConfig *cfg = c->cfg;
+  const GuestProgramImage *image = c->guestProgramImage;
   // The two words the guest crt0 loads. Read before the .bss clear, exactly as the guest does — and
   // read through the plan's inputs rather than inside it, so the plan stays pure and testable.
-  const uint32_t stackTopWord = cfg ? c->mem_r32(cfg->stackTopBase) : 0u;
-  const uint32_t reserveWord = cfg ? c->mem_r32(cfg->stackTopBase2) : 0u;
-  const Crt0Plan p = crt0_plan(cfg, stackTopWord, reserveWord, "crt0_setup");
+  const uint32_t stackTopWord = image ? c->mem_r32(image->stackTopWordAddress) : 0u;
+  const uint32_t reserveWord = image ? c->mem_r32(image->stackReserveWordAddress) : 0u;
+  const Crt0Plan p = crt0_plan(image, stackTopWord, reserveWord, "crt0_setup");
   if (!p.ok) {
     // crt0_plan has already said WHICH fields are missing and how many it checked. Exiting is the
     // only honest continuation: the previous behaviour was to clear whatever span the zero fields
@@ -247,10 +247,10 @@ static void crt0_setup(Core *c) {
   }
   // CROSS-CHECK THE SHIPPED CONSTANTS AGAINST THE GUEST'S OWN crt0 BYTES, before applying any of them.
   // This is the gate that was missing: every field above is a MEASURED value hand-copied into the game's
-  // game_config.cpp, and nothing compared the copy to the measurement. crt0_audit re-derives the group
-  // from the instruction stream at cfg->crt0 and refuses a CONFIRMED disagreement (crt0_verify.h).
+  // derived runtime, and nothing compared the copy to the measurement. crt0_audit re-derives the group
+  // from the instruction stream at image->crt0Entry and refuses a CONFIRMED disagreement (crt0_verify.h).
   if (!crt0_audit(
-          cfg,
+          image,
           p,
           [c](uint32_t a) {
             return c->mem_r32(a);

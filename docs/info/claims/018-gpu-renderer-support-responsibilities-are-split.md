@@ -6,7 +6,7 @@ created: 2026-08-22
 tags:
 depends: runtime/recomp/gpu_vk.cpp#GpuVkState::present, runtime/recomp/gpu_painter.cpp#GpuVkState::painter_command
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 17:01:35
+verified_at: 2026-08-22 18:00:09
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ if gpu_native.cpp exceeds 4,121, gpu_vk.cpp exceeds 4,404, either extracted owne
 ## Re-confirmed 2026-08-22
 
 Reverified after authored replay and draw-area work: gpu_vk.cpp shrank to 4,402 lines, painter lifecycle/staging/discriminator remain in gpu_painter.{h,cpp}, full Clang CTest passes 83/83, and the real Vulkan draw-area discriminator passes both answers.
+
+## Re-confirmed 2026-08-22
+
+Post-commit baseline corrected after 0f808dc9: that commit is the already-recorded authored draw-area extraction/discriminator change, not a later unverified mutation. Current full Clang framework CTest passes 84/84, including cpp_style structure caps, format, and tidy.

@@ -6,7 +6,7 @@ created: 2026-08-22
 tags:
 depends: runtime/recomp/painter_object_layer.cpp#buildPainterObjectPlan, runtime/recomp/gpu_painter.cpp#GpuVkState::painter_command
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 17:01:35
+verified_at: 2026-08-22 18:00:09
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ A painter object produces a different packed color or depth than guest authored-
 ## Re-confirmed 2026-08-22
 
 Reverified after cross-object replay and draw-area clip: planner/staging tests and full Clang CTest pass 83/83; the real Vulkan mixed-material stream remains 6/6 and the draw-area outside/inside discriminator passes.
+
+## Re-confirmed 2026-08-22
+
+Post-commit baseline corrected after 0f808dc9: the already-recorded mixed-material and draw-area discriminators cover that exact change. Current painter planner/staging tests and full Clang framework CTest pass 84/84.

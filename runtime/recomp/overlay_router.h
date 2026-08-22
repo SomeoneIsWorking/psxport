@@ -9,6 +9,13 @@
 #include <stdint.h>
 
 struct Core;
+struct RecOverlay;
+
+struct FixedOverlayResolution {
+  const RecOverlay *overlay = nullptr;
+  bool addressInOverlayRange = false;
+  bool ambiguous = false;
+};
 
 // Called by an overlay LOADER immediately after an image has been written to `dest`, to record which
 // overlay is now resident in that slot. Order matters: the freshly-written image still matches its
@@ -48,6 +55,11 @@ int overlay_evict_at(Core *c, uint32_t base);
 // Which live relocatable module owns guest address `addr`? -1 if none. This is the router's own
 // lookup, exposed because a game's loader diagnostics want the same answer.
 int overlay_live_index(Core *c, uint32_t addr);
+
+// Resolve a fixed-address overlay from the image signatures currently present in guest RAM. When
+// nested ranges both match, the narrowest image owns the address; equal-width matches are refused as
+// ambiguous. Exposed so the routing rule can be falsified without dispatching arbitrary game code.
+FixedOverlayResolution overlay_resolve_fixed(Core *c, uint32_t addr);
 
 // For a slot-range address, the name of the overlay currently resident in that slot — "none" when the
 // slot is empty or its content matches no known overlay, and null when `addr` is in no slot range.

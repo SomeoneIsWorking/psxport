@@ -71,8 +71,9 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 
 ## `runtime/recomp/` — the PSX→PC PLATFORM (common; future `psxport` submodule)
 **Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (bus dispatch + watchpoints PSXPORT_WWATCH/CW),
-`game_runtime.h` + `game_iface.{h,cpp}` (derived `GameRuntime` install, per-Game driver/scheduler factories,
-and the bounded legacy adapter), `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and
+`game_runtime.h` + `guest_program_image.h` + `game_iface.{h,cpp}` (derived `GameRuntime` install,
+the immutable executable-image fact owner, per-Game driver/scheduler factories, and the bounded legacy
+projection), `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and
 callback bags kept source-compatible while consumers migrate), `core.h`/`game.h` (the `Core`/`Game` objects;
 `Game` owns the runtime-created products), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
 `bios_interrupt.{h,cpp}` (the HookEntryInt saved-context contract),
@@ -86,12 +87,14 @@ heartbeat uses steady timing), `stubs.cpp`,
 task addresses and continuation PCs come from `GameConfig`, the spawned task is pumped to its authored close,
 and completion returns without manufacturing loading frames. `pc_scheduler.cpp` delegates to that owner; the
 generated multi-frame routine remains an explicit oracle rather than a second product launch mode.
-`bios_libc_string.{h,cpp}` owns Sony libc's string leaves behind the narrow dispatch called by
+`bios_libc_string.{h,cpp}` owns Sony libc's string/character leaves behind the narrow dispatch called by
 `hle.cpp`. It implements `A0:0x15` (`strcat`) as a guest-address byte loop: it scans the
 destination, copies the source through `Core::mem_r8`/`mem_w8` including the terminator, and returns
 the original destination. `test_bios_libc_string` reaches the shipping dispatch seam and gates the
 return value, terminating write and surrounding bytes, KSEG aliasing, forward guest alias copy order,
-empty inputs, and opposite answers for a wrong table and the unimplemented neighboring leaf.
+empty inputs, and opposite answers for a wrong table and the unimplemented neighboring leaf. The same
+shipping seam owns locale-independent ASCII `A0:0x25` (`toupper`); its controls prove lowercase
+conversion while uppercase, digits, and `0xE0` remain unchanged.
 `hle.cpp` also implements Sony libc `A0:0x2F/0x30` (`rand`/`srand`) with per-`Hle` state and the exact
 32-bit LCG (`state*0x41C64E6D+0x3039`, return `(state>>16)&0x7FFF`). It deliberately does not call
 host `rand()`: host sequences differ and process-global state would couple SBS/dual-core Games.
@@ -108,8 +111,19 @@ unwind, and the illegal normal-return answer. A consumer must seed the measured 
 `main_reentry`, because it is usually inside the interrupt bootstrap rather than a natural function
 entry.
 The runtime seam is partial: shipping consumers inherit `LegacyGameRuntimeAdapter` until typed fact
-groups replace every generic `c->cfg` read. `GuestProgramImage` (crt0 + overlay router + backtrace
-resident range) is the next named slice; `docs/plans/game-seam-redesign.md` owns its deletion set.
+groups replace every generic `c->cfg` read. `GuestProgramImage` is the first landed group: derived
+runtimes own crt0, resident MAIN routing, and backtrace-code facts; `Core` snapshots that immutable view,
+and those algorithms no longer read `GameConfig`. The adapter's one-way projection keeps unmigrated
+consumers source-compatible. `DiscIdentity` is the next candidate group; the consumer follow-up and
+deletion set live in `docs/plans/game-seam-redesign.md`.
+`overlay_router.{h,cpp}` owns both live-range relocatable modules and signature-identified fixed
+modules. Fixed ranges may nest: the router evaluates every containing resident identity (a current RAM
+signature, or a loader-recorded slot identity after the game mutates its header), chooses the smallest
+range, and refuses equal-specificity ambiguity. Dispatch, entry validation, and resident-name
+diagnostics share that one resolver. `test_overlay_reloc` includes Crash Bash's measured BOOT/MENU
+nested ranges and signatures, reverses and renames their registry, removes the nested signature where
+no loader identity exists, and constructs an equal-width ambiguity; the real consumer now routes
+MENU's 0x800B5244 target instead of first-matching BOOT.
 `ot_attr.{h,cpp}` owns the logic-frame stamp contract: pre-loop boot stores are counted, and the
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
 **GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 4,121 ln), `gpu_vk.cpp` (SDL_GPU backend +
@@ -325,7 +339,10 @@ masquerading as current framework failures.
 
 `test_game_runtime` proves a derived runtime is the installed authority, owns per-Core context lifecycle,
 creates exactly one `FrameDriver` and `TaskScheduler` per `Game`, and that the bounded legacy pair still
-delegates while consumers migrate. `psxport_smoke` derives the new seam with both legacy views null, so
+delegates while consumers migrate. It also proves direct and adapter runtimes expose the same typed
+program-image view. `test_guest_program_image_ownership` mechanically rejects any crt0/router/backtrace
+consumer that reaches back into the legacy config or lets `GameHooks` own executable facts.
+`psxport_smoke` derives the new seam with both legacy views null, so
 link-level agnosticism no longer depends on constructing the deprecated bags.
 
 `test_synchronous_task_wait` exercises flags 1/2/3 through the shipping completion seam and proves synchronous

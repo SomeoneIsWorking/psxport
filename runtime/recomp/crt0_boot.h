@@ -1,5 +1,6 @@
-// crt0_boot.h — THE ONE derivation of a PSY-Q crt0's register/memory writes from GameConfig, and the
-// ONE place that decides whether a game's boot group is complete enough to run.
+// crt0_boot.h — THE ONE derivation of a PSY-Q crt0's register/memory writes from
+// GuestProgramImage, and the ONE place that decides whether a game's boot group is complete enough
+// to run.
 //
 // WHY THIS FILE EXISTS (megamanx4 docs/issues/0005). `native_boot.cpp::crt0_setup` was a faithful
 // transcription of the FIRST consumer's crt0 (Tomba!2, FUN_800896E0) wearing generic clothes. That was
@@ -30,15 +31,14 @@
 //      which is the arena capacity every BIOS malloc is measured against.
 //
 // THE SHAPE OF THE FIX. The arithmetic and every completeness decision live HERE, in a pure function
-// over (GameConfig, the two guest words it reads). `crt0_setup` became a thin applier that performs no
-// arithmetic of its own, so the code the tests exercise IS the code that ships — there is no helper
-// beside the shipping path to drift from it.
+// over (GuestProgramImage, the two guest words it reads). `crt0_setup` became a thin applier that
+// performs no arithmetic of its own, so the code the tests exercise IS the code that ships — there
+// is no helper beside the shipping path to drift from it.
 //
 // ABSENT vs UNSET, which is the distinction the old code could not express:
-//   * ABSENT   — "this guest crt0 has no such global". heapSizePtr / heapBasePtr == 0. That is the
-//                framework's documented meaning of zero everywhere else in GameConfig, and it is a
-//                MEASURED answer, so the plan simply does not perform the store, and SAYS SO with the
-//                store count it did perform. Never a write to guest 0.
+//   * ABSENT   — "this guest crt0 has no such global". The typed store address is 0. That is a
+//                MEASURED answer, so the plan simply does not perform the store, and SAYS SO with
+//                the store count it did perform. Never a write to guest 0.
 //   * UNSET    — a REQUIRED value nobody has reverse-engineered yet. The plan REFUSES: `ok == false`,
 //                one error line naming every missing field AND the denominator (how many were
 //                checked), and the caller must not boot. Refusing is the only honest answer, because
@@ -49,7 +49,7 @@
 // optional stores it performed out of how many the game declares). "No store performed" and "I was
 // never given an address" are therefore different lines, which is the entire point.
 #pragma once
-#include "game_iface.h"
+#include "guest_program_image.h"
 #include <lucent/log.h>
 #include <stdint.h>
 #include <stdio.h> // snprintf
@@ -100,11 +100,11 @@ struct Crt0Required {
 //
 // `who` names the caller in every emitted line (a boot has more than one Core: SBS boots two).
 static inline Crt0Plan
-crt0_plan(const GameConfig *cfg, uint32_t stackTopWord, uint32_t stackReserveWord, const char *who) {
+crt0_plan(const GuestProgramImage *image, uint32_t stackTopWord, uint32_t stackReserveWord, const char *who) {
   Crt0Plan p;
-  if (!cfg) {
+  if (!image) {
     lucent::error("crt0",
-                  "{}: NO GameConfig installed — the boot group could not be read at all, so "
+                  "{}: NO GuestProgramImage installed — the boot group could not be read at all, so "
                   "0 of 8 required fields were checked. Refusing to run a crt0 (the previous "
                   "behaviour was to clear a zero-length .bss and write the heap base to guest "
                   "0x00000000).",
@@ -116,19 +116,19 @@ crt0_plan(const GameConfig *cfg, uint32_t stackTopWord, uint32_t stackReserveWor
   // Every one of these is an address in guest RAM (0x8xxxxxxx) or, for the bias declaration, an
   // explicit flag, so ZERO is unambiguously "not reverse-engineered yet" and never a real value.
   const Crt0Required req[] = {
-      {"bssZeroLo", cfg->bssZeroLo},
-      {"bssZeroHi", cfg->bssZeroHi},
-      {"stackTopBase", cfg->stackTopBase},
-      {"stackTopBase2", cfg->stackTopBase2},
-      {"heapBase", cfg->heapBase},
-      {"gp", cfg->gp},
-      {"libcInit", cfg->libcInit},
+      {"bss.begin", image->bss.begin},
+      {"bss.end", image->bss.end},
+      {"stackTopWordAddress", image->stackTopWordAddress},
+      {"stackReserveWordAddress", image->stackReserveWordAddress},
+      {"heapBase", image->heapBase},
+      {"globalPointer", image->globalPointer},
+      {"libcInitEntry", image->libcInitEntry},
       // The stack-top bias CANNOT use zero-means-absent: 0 is X4's real, measured value. So the
       // declaration is explicit and separate from the value, and an undeclared bias refuses rather than
       // inheriting the stock PSY-Q -8. Defaulting to -8 would be right for four of the five ports in
       // this workspace and silently 8 bytes wrong for the fifth — which is precisely the class of bug
       // this file exists to end.
-      {"stackBias.declared", cfg->stackBias.declared},
+      {"stackBias.declared", image->stackBias.declared},
   };
   const int n_req = (int)(sizeof req / sizeof req[0]);
   char missing[256];
@@ -151,7 +151,7 @@ crt0_plan(const GameConfig *cfg, uint32_t stackTopWord, uint32_t stackReserveWor
                   "\n  This is an un-reverse-engineered crt0, not a framework failure. The "
                   "group is consumed AS A GROUP: running it half-filled clears a wrong .bss "
                   "span, builds sp from mem[0], and hands InitHeap a garbage size."
-                  "\n  Fill them in the game's GameConfig (game/core/game_config.cpp) with a "
+                  "\n  Fill them in the game's GuestProgramImage (owned by its derived runtime) with a "
                   "citation per field. `stackBias` must be stated explicitly even when the "
                   "measured bias is 0 — see crt0_boot.h.",
                   who,
@@ -162,14 +162,14 @@ crt0_plan(const GameConfig *cfg, uint32_t stackTopWord, uint32_t stackReserveWor
   }
 
   // ── relations that must hold for the group to describe a crt0 at all ────────────────────────────
-  if (cfg->bssZeroHi <= cfg->bssZeroLo || (cfg->bssZeroLo & 3u) || (cfg->bssZeroHi & 3u)) {
+  if (image->bss.end <= image->bss.begin || (image->bss.begin & 3u) || (image->bss.end & 3u)) {
     lucent::error("crt0",
                   "{}: REFUSING — .bss clear span [0x{:08X}, 0x{:08X}) is not a word-aligned "
                   "non-empty range. All {} required fields are set, so this is a WRONG value, "
                   "not a missing one.",
                   who,
-                  cfg->bssZeroLo,
-                  cfg->bssZeroHi,
+                  image->bss.begin,
+                  image->bss.end,
                   n_req);
     return p;
   }
@@ -178,9 +178,9 @@ crt0_plan(const GameConfig *cfg, uint32_t stackTopWord, uint32_t stackReserveWor
   //   v0 = mem[stackTopBase] (+ bias)      sp = fp = v0 | 0x80000000
   //   a0 = heapBase & 0x1FFFFFFF           a1 = (v0 - mem[stackTopBase2]) - a0
   //   a0 |= 0x80000000                     libcInit(a0 + 4, a1)
-  const int32_t bias = cfg->stackBias.value;
+  const int32_t bias = image->stackBias.bytes;
   const uint32_t v0 = (uint32_t)((int64_t)stackTopWord + bias);
-  const uint32_t a0m = cfg->heapBase & 0x1FFFFFFFu;
+  const uint32_t a0m = image->heapBase & 0x1FFFFFFFu;
   const uint32_t hsz = (v0 - stackReserveWord) - a0m;
 
   if (hsz == 0 || hsz >= CRT0_MAX_PLAUSIBLE_HEAP) {
@@ -194,31 +194,31 @@ crt0_plan(const GameConfig *cfg, uint32_t stackTopWord, uint32_t stackReserveWor
                   who,
                   hsz,
                   CRT0_MAX_PLAUSIBLE_HEAP,
-                  cfg->stackTopBase,
+                  image->stackTopWordAddress,
                   stackTopWord,
                   bias < 0 ? "-" : "+",
                   bias < 0 ? -(int64_t)bias : (int64_t)bias,
-                  cfg->stackTopBase2,
+                  image->stackReserveWordAddress,
                   stackReserveWord,
                   a0m);
     return p;
   }
 
   p.ok = true;
-  p.bssLo = cfg->bssZeroLo;
-  p.bssHi = cfg->bssZeroHi;
+  p.bssLo = image->bss.begin;
+  p.bssHi = image->bss.end;
   p.stackTopWord = stackTopWord;
   p.stackTopBias = bias;
   p.sp = v0 | 0x80000000u;
-  p.gp = cfg->gp;
+  p.gp = image->globalPointer;
   p.heapBaseMasked = a0m;
   p.a0 = (a0m | 0x80000000u) + 4u;
   p.a1 = hsz;
-  p.libcInit = cfg->libcInit;
-  p.storeHeapSize = cfg->heapSizePtr != 0u;
-  p.heapSizeAddr = cfg->heapSizePtr;
-  p.storeHeapBase = cfg->heapBasePtr != 0u;
-  p.heapBaseAddr = cfg->heapBasePtr;
+  p.libcInit = image->libcInitEntry;
+  p.storeHeapSize = image->heapSizeStoreAddress != 0u;
+  p.heapSizeAddr = image->heapSizeStoreAddress;
+  p.storeHeapBase = image->heapBaseStoreAddress != 0u;
+  p.heapBaseAddr = image->heapBaseStoreAddress;
 
   // The POSITIVE report. Printed at info on every boot, not behind a debug channel, because every
   // number here is a guest fact that decides whether the game runs: an 8-byte sp error and a wrong
@@ -234,7 +234,7 @@ crt0_plan(const GameConfig *cfg, uint32_t stackTopWord, uint32_t stackReserveWor
                p.bssHi,
                p.bssHi - p.bssLo,
                p.sp,
-               cfg->stackTopBase,
+               image->stackTopWordAddress,
                stackTopWord,
                bias,
                p.gp,
@@ -248,7 +248,7 @@ crt0_plan(const GameConfig *cfg, uint32_t stackTopWord, uint32_t stackReserveWor
     lucent::info("crt0",
                  "{}: heap-size global {} / heap-base global {} — this crt0 keeps {} in "
                  "REGISTERS ONLY, so no store is performed. That is a MEASURED absence "
-                 "(GameConfig leaves the pointer 0), not a missing address: the framework used "
+                 "(GuestProgramImage leaves the pointer 0), not a missing address: the framework used "
                  "to write these to guest 0x00000000.",
                  who,
                  p.storeHeapSize ? "present" : "ABSENT",
@@ -260,8 +260,8 @@ crt0_plan(const GameConfig *cfg, uint32_t stackTopWord, uint32_t stackReserveWor
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // crt0_apply — APPLY a plan. Also here, and also templated, for ONE reason: the defect this file
-// exists to fix was not in the arithmetic, it was in the APPLICATION — `mem_w32(cfg->heapSizePtr, …)`
-// executed unconditionally with `heapSizePtr == 0`. A test that only checked the plan would assert
+// exists to fix was not in the arithmetic, it was in the APPLICATION — an unconditional store
+// through the optional heap-size address when the address was absent. A test that only checked the plan would assert
 // `storeHeapSize == false` and still not know whether the caller honoured it. So the write SEQUENCE is
 // generated here, over an abstract writer, and the hermetic test drives it with a RECORDING writer that
 // asserts the set of addresses written — i.e. "no write to guest 0" is a checked postcondition of the

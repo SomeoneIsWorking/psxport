@@ -13,6 +13,7 @@
 // This replaces the old generated `rec_dispatch` (which was just MAIN's switch and aborted on any
 // overlay address). The interpreter is gone (later-254): a slot address with no matching resident
 // overlay, or an address no module recompiled, still FAILS FAST in rec_dispatch_miss by design.
+#include "overlay_router.h"
 #include "core.h"
 #include "game.h"              // PcScheduler::resident_ov (per-core resident-overlay-by-slot map)
 #include "override_registry.h" // overrides::dispatch — native engine/game override interception
@@ -25,9 +26,28 @@
 void rec_dispatch_miss(Core *c, uint32_t addr);
 #include "sbs.h" // class Sbs — coreId/frame() for diag tagging when running under the SBS harness
 
+static const GuestProgramImage &program_image_for_routing(Core *c) {
+  if (!c->guestProgramImage) {
+    lucent::error("dispatch",
+                  "REFUSING TO ROUTE guest code: the installed GameRuntime supplies no "
+                  "GuestProgramImage, so MAIN's resident text range is unknown.");
+    abort();
+  }
+  if (!c->guestProgramImage->residentText.valid()) {
+    lucent::error("dispatch",
+                  "REFUSING TO ROUTE guest code: GuestProgramImage::residentText is not a valid "
+                  "half-open physical address range.");
+    abort();
+  }
+  return *c->guestProgramImage;
+}
+
 // Overlap-slot bases (the addresses where mutually-exclusive overlays load) -> a 0..2 index into the
 // per-core resident_ov[] map. Kept in sync with emit.py OVERLAY_BASES / overlay_base().
 static int slot_index(Core *c, uint32_t base) {
+  if (!c->cfg) {
+    return -1;
+  }
   for (int i = 0; i < 3; i++) {
     if ((c->cfg->overlaySlots[i].base & 0x1FFFFFFF) == (base & 0x1FFFFFFF)) {
       return i;
@@ -54,6 +74,9 @@ void overlay_note_load(Core *c, uint32_t dest) {
   for (int i = 0; i < R->overlay_count; i++) {
     const RecOverlay *o = &R->overlays[i];
     if ((o->base & 0x1FFFFFFF) != (dest & 0x1FFFFFFF)) {
+      continue;
+    }
+    if (!o->sig || o->siglen == 0 || o->siglen > 32) {
       continue;
     }
     if (memcmp(o->sig, ram, o->siglen) == 0) {
@@ -89,7 +112,7 @@ static const RecOverlay *resident_overlay(Core *c, uint32_t base) {
   const RecompRegistry *R = psxport_recomp();
   const unsigned char *ram = c->ram + (base & 0x1FFFFFFF);
   int s = slot_index(c, base);
-  const RecOverlay *cached = (s >= 0) ? c->game->pcSched.resident_ov[s] : 0;
+  const RecOverlay *cached = (s >= 0 && c->game) ? c->game->pcSched.resident_ov[s] : nullptr;
   // Trust the load-time IDENTITY only while the live RAM still matches its signature. The cache becomes
   // STALE when the slot is reloaded with a different overlay by a path that bypasses overlay_note_load,
   // or when a noted load was a transient preload later overwritten by another overlay. A 32-byte memcmp
@@ -99,7 +122,8 @@ static const RecOverlay *resident_overlay(Core *c, uint32_t base) {
   // never-dismissed intro narration; the cache still said A00, so the SOP narration renderer 0x8010BF54
   // mis-routed to A00's switch — which has no function entry there, only a mid-function label — and the
   // dispatch fell to a fail-fast miss. The live RAM at the base matched sig_sop exactly the whole time.)
-  if (cached && cached->siglen <= 32 && memcmp(cached->sig, ram, cached->siglen) == 0) {
+  if (cached && cached->sig && cached->siglen > 0 && cached->siglen <= 32 &&
+      memcmp(cached->sig, ram, cached->siglen) == 0) {
     return cached;
   }
   // Signature scan: find the overlay whose image is in the slot right now (the overlays overlap at a base,
@@ -107,11 +131,11 @@ static const RecOverlay *resident_overlay(Core *c, uint32_t base) {
   // common path (cached match above) stays a single memcmp.
   for (int i = 0; i < R->overlay_count; i++) {
     const RecOverlay *o = &R->overlays[i];
-    if (o->base != base || o->siglen > 32) {
+    if (o->base != base || !o->sig || o->siglen == 0 || o->siglen > 32) {
       continue;
     }
     if (memcmp(o->sig, ram, o->siglen) == 0) {
-      if (s >= 0) {
+      if (s >= 0 && c->game) {
         c->game->pcSched.resident_ov[s] = o;
       }
       return o;
@@ -120,6 +144,51 @@ static const RecOverlay *resident_overlay(Core *c, uint32_t base) {
   // No signature matched (e.g. the resident overlay mutated its own header pointer table after load). The
   // load-time identity is the best remaining guess for the truly-resident overlay; fall back to it.
   return cached;
+}
+
+static bool fixed_overlay_contains(const RecOverlay &overlay, uint32_t physicalAddress) {
+  if (overlay.end <= overlay.base) {
+    return false;
+  }
+  const uint32_t physicalBase = overlay.base & 0x1FFFFFFFu;
+  const uint32_t imageSize = overlay.end - overlay.base;
+  return physicalAddress - physicalBase < imageSize;
+}
+
+FixedOverlayResolution overlay_resolve_fixed(Core *c, uint32_t addr) {
+  const RecompRegistry *registry = psxport_recomp();
+  const uint32_t physicalAddress = addr & 0x1FFFFFFFu;
+  FixedOverlayResolution resolution;
+  uint32_t narrowestImageSize = UINT32_MAX;
+
+  for (int i = 0; i < registry->overlay_count; ++i) {
+    const RecOverlay &range = registry->overlays[i];
+    if (range.relocatable || !fixed_overlay_contains(range, physicalAddress)) {
+      continue;
+    }
+    resolution.addressInOverlayRange = true;
+
+    const RecOverlay *resident = resident_overlay(c, range.base);
+    if (!resident || resident->relocatable || !fixed_overlay_contains(*resident, physicalAddress)) {
+      continue;
+    }
+    if (resident == resolution.overlay) {
+      continue;
+    }
+
+    const uint32_t imageSize = resident->end - resident->base;
+    if (imageSize < narrowestImageSize) {
+      resolution.overlay = resident;
+      resolution.ambiguous = false;
+      narrowestImageSize = imageSize;
+      continue;
+    }
+    if (imageSize == narrowestImageSize) {
+      resolution.overlay = nullptr;
+      resolution.ambiguous = true;
+    }
+  }
+  return resolution;
 }
 
 // ---- RELOCATABLE MODULES: the live placement registry (overlay_router.h) -------------------------
@@ -233,23 +302,22 @@ int overlay_evict_at(Core *c, uint32_t base) {
 // resident in that slot (the one rec_dispatch routed to before its switch fell to the miss default).
 // Returns the overlay name, or "none" (slot empty / unmatched), or 0 if addr is not in any slot range.
 const char *overlay_router_resident_name(Core *c, uint32_t addr) {
-  uint32_t a = addr & 0x1FFFFFFF;
   const RecompRegistry *R = psxport_recomp();
   const int live = overlay_live_index(c, addr);
   if (live >= 0) {
     return R->overlays[live].name;
   }
-  for (int i = 0; i < R->overlay_count; i++) {
-    const RecOverlay *o = &R->overlays[i];
-    if (o->relocatable) {
-      continue;
-    }
-    if (a >= (o->base & 0x1FFFFFFF) && a < (o->end & 0x1FFFFFFF)) {
-      const RecOverlay *res = resident_overlay(c, o->base);
-      return res ? res->name : "none";
-    }
+  const FixedOverlayResolution fixed = overlay_resolve_fixed(c, addr);
+  if (fixed.ambiguous) {
+    return "ambiguous";
   }
-  return 0;
+  if (fixed.overlay) {
+    return fixed.overlay->name;
+  }
+  if (fixed.addressInOverlayRange) {
+    return "none";
+  }
+  return nullptr;
 }
 
 // Is `addr` a real function ENTRY in whatever recompiled module owns it right now (MAIN, or the overlay
@@ -264,23 +332,20 @@ extern "C" void guest_backtrace_to(Core *, FILE *); // sync_overrides.cpp — he
 int rec_addr_has_entry(Core *c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
   const RecompRegistry *R = psxport_recomp();
-  if (a >= c->cfg->recMainLo && a < c->cfg->recMainHi) {
+  const GuestProgramImage &image = program_image_for_routing(c);
+  if (image.residentText.containsPhysical(a)) {
     return R->rec_func_index(addr) >= 0;
   }
   const int live = overlay_live_index(c, addr);
   if (live >= 0) {
     return R->overlays[live].idx(addr - (uint32_t)c->ovDelta[live]) >= 0;
   }
-  for (int i = 0; i < R->overlay_count; i++) {
-    if (R->overlays[i].relocatable) {
-      continue; // routed by live base, handled above
-    }
-    const RecOverlay *o = &R->overlays[i];
-    if (a < (o->base & 0x1FFFFFFF) || a >= (o->end & 0x1FFFFFFF)) {
-      continue;
-    }
-    const RecOverlay *res = resident_overlay(c, o->base);
-    return res && res->idx && res->idx(addr) >= 0;
+  const FixedOverlayResolution fixed = overlay_resolve_fixed(c, addr);
+  if (fixed.overlay) {
+    return fixed.overlay->idx && fixed.overlay->idx(addr) >= 0;
+  }
+  if (fixed.addressInOverlayRange) {
+    return 0;
   }
   return 1;
 }
@@ -442,7 +507,8 @@ void rec_dispatch(Core *c, uint32_t addr) {
   // attribution no longer changes shape between a diagnostic run and a normal one.
   uint32_t a = addr & 0x1FFFFFFF;
   const RecompRegistry *R = psxport_recomp();
-  if (a >= c->cfg->recMainLo && a < c->cfg->recMainHi) {
+  const GuestProgramImage &image = program_image_for_routing(c);
+  if (image.residentText.containsPhysical(a)) {
     R->main_dispatch(c, addr); // pushes/pops inside the wrapper now — see the note above
     return;
   }
@@ -454,44 +520,30 @@ void rec_dispatch(Core *c, uint32_t addr) {
     R->overlays[live].disp(c, addr); // pushes/pops inside the wrapper now
     return;
   }
-  for (int i = 0; i < R->overlay_count; i++) {
-    const RecOverlay *o = &R->overlays[i];
-    if (o->relocatable) {
-      continue; // live-base routed, handled above
-    }
-    if (a >= (o->base & 0x1FFFFFFF) && a < (o->end & 0x1FFFFFFF)) {
-      const RecOverlay *res = resident_overlay(c, o->base);
-      if (res) {
-        res->disp(c, addr); // pushes/pops inside the wrapper now
-        return;
+  const FixedOverlayResolution fixed = overlay_resolve_fixed(c, addr);
+  if (fixed.overlay) {
+    fixed.overlay->disp(c, addr); // pushes/pops inside the wrapper now
+    return;
+  }
+  if (fixed.addressInOverlayRange) {
+    lucent::error("overlay-router",
+                  "addr 0x{:08X} has {} fixed-overlay signature match; refusing to guess.",
+                  addr,
+                  fixed.ambiguous ? "an AMBIGUOUS" : "NO resident");
+    for (int i = 0; i < R->overlay_count; ++i) {
+      const RecOverlay &candidate = R->overlays[i];
+      if (candidate.relocatable || !fixed_overlay_contains(candidate, a)) {
+        continue;
       }
-      // overlay slot but NO resident overlay signature matches -> fail fast. Dump what IS resident so a
-      // miss-loop can see whether the slot holds an unexpected overlay or a relocated/clobbered image.
-      const unsigned char *ram = c->ram + (o->base & 0x1FFFFFFF);
-      lucent::error("overlay-router", "addr 0x{:08X} in slot 0x{:08X} but NO resident overlay matches.", addr, o->base);
-      lucent::Line ln;
-      ln.add("  resident[0..16] =");
-      for (int k = 0; k < 16; k++) {
-        ln.add(" {:02X}", ram[k]);
-      }
-      ln.flush(lucent::Level::Info, "overlay-router");
-      for (int j = 0; j < R->overlay_count; j++) {
-        const RecOverlay *q = &R->overlays[j];
-        if (q->base != o->base) {
-          continue;
-        }
-        int nmatch = 0;
-        for (unsigned k = 0; k < q->siglen && k < 16; k++) {
-          nmatch += (q->sig[k] == ram[k]);
-        }
-        ln.add("  cand {:<6} sig[0..16] =", q->name ? q->name : "(null)");
-        for (unsigned k = 0; k < 16 && k < q->siglen; k++) {
-          ln.add(" {:02X}", q->sig[k]);
-        }
-        ln.add("   ({}/16 match)", nmatch);
-        ln.flush(lucent::Level::Info, "overlay-router");
-      }
-      break; // fail fast below
+      const unsigned char *ram = c->ram + (candidate.base & 0x1FFFFFFFu);
+      const bool signatureMatches = candidate.sig && candidate.siglen > 0 && candidate.siglen <= 32 &&
+                                    memcmp(candidate.sig, ram, candidate.siglen) == 0;
+      lucent::info("overlay-router",
+                   "  candidate '{}' range 0x{:08X}..0x{:08X}, signature {}",
+                   candidate.name ? candidate.name : "(null)",
+                   candidate.base,
+                   candidate.end,
+                   signatureMatches ? "matches" : "does not match");
     }
   }
   rec_dispatch_miss(c, addr);

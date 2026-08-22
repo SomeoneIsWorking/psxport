@@ -6,7 +6,7 @@ created: 2026-08-22
 tags: gpu,renderer,painter,order
 depends: runtime/recomp/shaders_gpu/painter_tri.frag#main, runtime/recomp/gpu_painter.cpp#gpu_vk_painter_stage_draw_area_selftest
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 17:01:23
+verified_at: 2026-08-22 18:00:09
 ---
 
 ## Claim
@@ -33,3 +33,7 @@ outside its guest clip rectangle.
 ## Re-confirmed 2026-08-22
 
 Real Vulkan authored-painter draw-area discriminator preserves outside=0000 and paints inside=001F; full Clang framework CTest passes 83/83.
+
+## Re-confirmed 2026-08-22
+
+Post-commit baseline corrected after 0f808dc9: the previously recorded real Vulkan outside=0000/inside=001F discriminator and Spyro authored-order result cover that exact draw-area change. Current planner/staging checks and full Clang framework CTest pass 84/84.

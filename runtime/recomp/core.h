@@ -37,6 +37,7 @@ public:
   // compatibility views populated only by the bounded legacy adapter; migrate their consumers into
   // GameRuntime behavior or narrow immutable fact groups rather than extending either bag. ----
   GameRuntime *runtime = nullptr;
+  const GuestProgramImage *guestProgramImage = nullptr;
   const GameConfig *cfg = nullptr;
   const GameHooks *hooks = nullptr;
   void *gameCtx = nullptr;

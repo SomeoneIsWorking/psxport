@@ -1,10 +1,13 @@
 # The game seam, second generation — from one flat config to a typed seam
 
-**Status: PARTIAL.** The first inheritance slice is implemented: `GameRuntime` installation, per-Core
+**Status: PARTIAL.** The inheritance slice and first immutable fact slice are implemented:
+`GameRuntime` installation, `GuestProgramImage`, per-Core
 context lifecycle, override registration, boot initialization, and per-Game `FrameDriver` /
 `TaskScheduler` factories. `Game` owns the factory products. Current ports remain source-compatible
 through a bounded `LegacyGameRuntimeAdapter`; the adapter exposes no virtual config getter, and the
-new smoke derives `GameRuntime` with both legacy views null. The control-flow moves in steps 5–7 and
+new smoke derives `GameRuntime` with both legacy views null. The crt0, resident-MAIN router, and
+backtrace heuristic now consume the runtime-owned image rather than `c->cfg`; the legacy adapter owns
+the only projection from old fields. The control-flow moves in steps 5–7 and
 the final `GameConfig` diet remain outstanding. Written 2026-08-11 against the psxport dev clone at
 `10c37cf5` (working tree dirty with the render-noise/ot_attr work of the same session — the packet-pool
 literal fixes referenced below are in that tree, some uncommitted). Every citation is `file:line` in
@@ -344,25 +347,29 @@ The exact consumer migration is intentionally incremental:
    other config field beside its derived behavior. Once `c->cfg`/`c->hooks` have no consumers, derive
    directly from `GameRuntime` and delete the adapter plus the old pair.
 
-**Next typed ownership slice — guest program image, not another config bag.** A current port cannot
-boot from direct `GameRuntime` yet because `core.cfg` is deliberately null outside the adapter. The
-next framework slice is one immutable `GuestProgramImage` value owned by `GameRuntime`, containing
+**First typed ownership slice — `GuestProgramImage`, IMPLEMENTED.** A direct `GameRuntime` can now
+provide one immutable `GuestProgramImage` value, containing
 only the executable facts jointly consumed by `crt0_setup`/`crt0_plan`, `overlay_router`, and the
 resident-code backtrace heuristic: BSS range, stack/heap declarations, GP/libc/main/crt0 entries, and
 resident text range. Those three generic algorithms consume that one typed value; it is not one
 virtual getter per integer and does not absorb disc, CD, pad, render-memory, scheduler, or game policy.
-Moving the group deletes the corresponding `GameConfig` fields in the same change. The following
+The framework side no longer reads the corresponding `GameConfig` fields. They remain solely as input
+to `LegacyGameRuntimeAdapter` until each consumer moves its measured constants into its derived runtime;
+deleting them before those consumer changes would knowingly break every pinned port. The consumer
+migrations and final field deletion are one follow-up milestone, not a second framework authority.
+The following
 fact slices use the same consumer-owned rule (`DiscIdentity`, `RenderMemoryLayout`, platform-library
 entry tables), each with a named algorithm and deletion set. Any fact used only by derived behavior
 moves directly beside that behavior instead of entering one of these values.
 
-Until those slices land, a real consumer derives `LegacyGameRuntimeAdapter`; deriving `GameRuntime`
-directly is valid only for a consumer whose framework paths require no remaining legacy facts (the
-Core-only smoke is the current proof). This limitation is explicit so `core.cfg == nullptr` is never
+Until the remaining slices land, a real consumer derives `LegacyGameRuntimeAdapter`; deriving
+`GameRuntime` directly is valid only for a consumer whose framework paths require no remaining legacy
+facts. Crt0/routing/backtrace no longer impose that limitation; disc, render-memory, platform-library,
+and other live config reads still do. This limitation is explicit so `core.cfg == nullptr` is never
 mistaken for a completed consumer migration.
 
 **What stays in GameConfig, and why that is not a cop-out.** Everything that passes Q1 with a
-living framework consumer: `recMainLo/Hi` (overlay_router, backtrace heuristic), `discEnvVar`,
+living framework consumer: `discEnvVar`,
 `bootFmv`, `cardEnvVar/cardDefaultPath`, `windowTitle`, `paceQuota`, `preserveVramBackdrop`, the
 `hle` platform-sync group (PlatformHle::initBuiltins), the pad group, the CD chokepoint group
 (cd_override.cpp), `overlaySlots`, `packetPool*/otRegion*/poolPtr*` (render_noise.h — the harness
@@ -494,6 +501,11 @@ kinds at once.
    delta from the 2026-08-11 sketch: there is no `virtual config()` and no base-class config bag.
    Immutable facts remain reachable only through the named legacy adapter until later steps extract
    the narrow fact groups their generic consumers genuinely iterate.
+4a. **`GuestProgramImage` — IMPLEMENTED, first typed fact slice.** Crt0 planning/audit/application,
+   resident MAIN dispatch, and the diagnostic backtrace range read the immutable runtime-owned value.
+   `Core` snapshots it beside the runtime; the adapter projects legacy fields once in its constructor.
+   `test_guest_program_image_ownership` prevents those algorithms and `GameHooks` from reclaiming it.
+   Remaining follow-up: migrate each consumer's constants, then delete the adapter-only legacy fields.
 5. **SchedBody death.** `pc_scheduler.{h,cpp}` + scheduler.cpp's stanzas move to Tomba2Engine as
    `TombaScheduler`; enum + 3 hooks + `Game::pcSched` deleted; PlatformHle's ChangeThread routes
    to `sched->yield`. Gates: Tomba SBS byte-compare (the stanzas' cadence — the Slip #1-#4

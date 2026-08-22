@@ -19,6 +19,10 @@ public:
   void destroyContext(void *context) override;
   void registerOverrides(Game &game) override;
   void bootInit(Core &core) override;
+  const GuestProgramImage *guestProgramImage() const override;
+
+private:
+  GuestProgramImage guestProgramImage_;
 };
 
 // Legacy adapter install. New code calls psxport_install_game(GameRuntime&) from game_runtime.h.

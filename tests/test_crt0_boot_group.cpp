@@ -7,7 +7,7 @@
 // capacity for every port had NO test, and its two silent failure modes shipped:
 //   * a hardcoded `- 8` stack-top bias, right for four of five executables in this workspace;
 //   * `mem_w32(cfg->heapSizePtr, …)` with heapSizePtr == 0, i.e. a write to GUEST ADDRESS 0.
-// The derivation now lives in crt0_boot.h as a pure function over (GameConfig, the two words the guest
+// The derivation now lives in crt0_boot.h as a pure function over (GuestProgramImage, the two words the guest
 // crt0 loads), and `crt0_setup` is a thin applier with NO arithmetic of its own — so what is asserted
 // below IS the shipping path, not a copy of it. If someone re-adds a computation to crt0_setup, that
 // computation is by definition a second copy and this file stops covering it.
@@ -70,32 +70,32 @@ static bool any_line_has(const char *needle) {
 
 // ── the two real boot groups ────────────────────────────────────────────────────────────────────
 // Tomba!2 MAIN.EXE, crt0 FUN_800896E0 — Tomba2Engine/game/core/game_config.cpp.
-static GameConfig tomba2_cfg(void) {
-  GameConfig c{};
-  c.bssZeroLo = 0x800BE0D8u;
-  c.bssZeroHi = 0x80106228u;
-  c.stackTopBase = 0x800A3F88u;
-  c.stackTopBase2 = 0x800A3F8Cu;
+static GuestProgramImage tomba2_cfg(void) {
+  GuestProgramImage c{};
+  c.bss.begin = 0x800BE0D8u;
+  c.bss.end = 0x80106228u;
+  c.stackTopWordAddress = 0x800A3F88u;
+  c.stackReserveWordAddress = 0x800A3F8Cu;
   c.heapBase = 0x80106228u;
-  c.heapSizePtr = 0x800ABEF8u;
-  c.heapBasePtr = 0x800ABEF4u; // `sw a1,-16648(at)` / `sw a0,-16652(at)`
-  c.gp = 0x800BE0D4u;
-  c.libcInit = 0x80089860u; // BIOS A(39h) InitHeap thunk
-  c.stackBias = {1u, -8};   // `addi v0,v0,-8` @0x80089710
+  c.heapSizeStoreAddress = 0x800ABEF8u;
+  c.heapBaseStoreAddress = 0x800ABEF4u; // `sw a1,-16648(at)` / `sw a0,-16652(at)`
+  c.globalPointer = 0x800BE0D4u;
+  c.libcInitEntry = 0x80089860u; // BIOS A(39h) InitHeap thunk
+  c.stackBias = {true, -8};      // `addi v0,v0,-8` @0x80089710
   return c;
 }
 // Mega Man X4 SLUS_005.61, crt0 0x800DAE8C — megamanx4/game/core/game_config.cpp kCrt0* constants.
 // heapSizePtr/heapBasePtr are ABSENT: the function's ONLY absolute store is `sw ra`.
-static GameConfig x4_cfg(void) {
-  GameConfig c{};
-  c.bssZeroLo = 0x8012F418u;
-  c.bssZeroHi = 0x80175F38u;
-  c.stackTopBase = 0x800DAF3Cu;
-  c.stackTopBase2 = 0x8011CB74u;
+static GuestProgramImage x4_cfg(void) {
+  GuestProgramImage c{};
+  c.bss.begin = 0x8012F418u;
+  c.bss.end = 0x80175F38u;
+  c.stackTopWordAddress = 0x800DAF3Cu;
+  c.stackReserveWordAddress = 0x8011CB74u;
   c.heapBase = 0x80175F38u;
-  c.gp = 0x8012F418u;
-  c.libcInit = 0x800EDCDCu; // BIOS A(39h) InitHeap thunk
-  c.stackBias = {1u, 0};    // NO bias instruction between lw and `or sp`
+  c.globalPointer = 0x8012F418u;
+  c.libcInitEntry = 0x800EDCDCu; // BIOS A(39h) InitHeap thunk
+  c.stackBias = {true, 0};       // NO bias instruction between lw and `or sp`
   return c;
 }
 // The words each guest crt0 LOADS. X4's are measured (0x00200000 at 0x800DAF3C, 0x00008000 at
@@ -113,7 +113,7 @@ static const uint32_t T2_RESERVE_WORD = 0x00008000u;
 // today, INCLUDING the -8 bias, and must perform BOTH absolute stores.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_tomba2_group_is_reproduced_exactly(void) {
-  const GameConfig cfg = tomba2_cfg();
+  const GuestProgramImage cfg = tomba2_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, T2_STACK_WORD, T2_RESERVE_WORD, "test-tomba2");
   capture_stop();
@@ -146,7 +146,7 @@ static void test_tomba2_group_is_reproduced_exactly(void) {
 // sp must be 0x80200000 (not 0x801FFFF8), and both stores must be declined WITHOUT a guest-0 write.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_x4_group_has_no_bias_and_no_stores(void) {
-  const GameConfig cfg = x4_cfg();
+  const GuestProgramImage cfg = x4_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "test-x4");
   capture_stop();
@@ -177,7 +177,7 @@ static void test_x4_group_has_no_bias_and_no_stores(void) {
 // the wrong field (or ignored it) would still satisfy one of the two cases above on its own.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_the_two_shapes_differ_on_the_same_stack_word(void) {
-  const GameConfig t2 = tomba2_cfg(), x4 = x4_cfg();
+  const GuestProgramImage t2 = tomba2_cfg(), x4 = x4_cfg();
   capture_start();
   const Crt0Plan a = crt0_plan(&t2, T2_STACK_WORD, T2_RESERVE_WORD, "diff-t2");
   const Crt0Plan b = crt0_plan(&x4, X4_STACK_WORD, X4_RESERVE_WORD, "diff-x4");
@@ -197,8 +197,8 @@ static void test_the_two_shapes_differ_on_the_same_stack_word(void) {
 // one field alone.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_undeclared_bias_refuses_and_names_itself(void) {
-  GameConfig cfg = x4_cfg();
-  cfg.stackBias = {0u, 0}; // the state a consumer that has not stated it is in
+  GuestProgramImage cfg = x4_cfg();
+  cfg.stackBias = {false, 0}; // the state a consumer that has not stated it is in
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "test-nobias");
   capture_stop();
@@ -223,7 +223,7 @@ static void test_undeclared_bias_refuses_and_names_itself(void) {
 // its crt0 is RE'd. It must refuse, name every one of the 7 unset fields, and count them.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_zero_config_refuses_with_every_field_named(void) {
-  const GameConfig cfg{};
+  const GuestProgramImage cfg{};
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, 0u, 0u, "test-zero");
   capture_stop();
@@ -231,13 +231,13 @@ static void test_zero_config_refuses_with_every_field_named(void) {
   CHECK(!p.ok);
   CHECK_EQ(g_errors, 1);
   CHECK(any_line_has("8 of 8"));
-  for (const char *f : {"bssZeroLo",
-                        "bssZeroHi",
-                        "stackTopBase",
-                        "stackTopBase2",
+  for (const char *f : {"bss.begin",
+                        "bss.end",
+                        "stackTopWordAddress",
+                        "stackReserveWordAddress",
                         "heapBase",
-                        "gp",
-                        "libcInit",
+                        "globalPointer",
+                        "libcInitEntry",
                         "stackBias.declared"}) {
     CHECK(any_line_has(f));
   }
@@ -246,7 +246,7 @@ static void test_zero_config_refuses_with_every_field_named(void) {
   CHECK_EQ(p.sp, 0u);
 }
 
-// A null GameConfig is the same class of state and must refuse rather than dereference.
+// A null GuestProgramImage is the same class of state and must refuse rather than dereference.
 static void test_null_config_refuses(void) {
   capture_start();
   const Crt0Plan p = crt0_plan(nullptr, 0u, 0u, "test-null");
@@ -254,7 +254,7 @@ static void test_null_config_refuses(void) {
   dump_capture("null");
   CHECK(!p.ok);
   CHECK_EQ(g_errors, 1);
-  CHECK(any_line_has("NO GameConfig"));
+  CHECK(any_line_has("NO GuestProgramImage"));
   CHECK(any_line_has("0 of 8")); // the denominator of a refusal that checked nothing
 }
 
@@ -264,9 +264,9 @@ static void test_null_config_refuses(void) {
 // one state that looks like progress.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_partial_group_names_only_the_missing(void) {
-  GameConfig cfg = tomba2_cfg();
-  cfg.gp = 0;
-  cfg.libcInit = 0; // two fields not yet located
+  GuestProgramImage cfg = tomba2_cfg();
+  cfg.globalPointer = 0;
+  cfg.libcInitEntry = 0; // two fields not yet located
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, T2_STACK_WORD, T2_RESERVE_WORD, "test-partial");
   capture_stop();
@@ -274,10 +274,10 @@ static void test_partial_group_names_only_the_missing(void) {
   CHECK(!p.ok);
   CHECK_EQ(g_errors, 1);
   CHECK(any_line_has("2 of 8"));
-  CHECK(any_line_has("gp"));
-  CHECK(any_line_has("libcInit"));
-  CHECK(!any_line_has("bssZeroLo")); // …and does NOT claim the filled half is missing
-  CHECK(!any_line_has("stackTopBase"));
+  CHECK(any_line_has("globalPointer"));
+  CHECK(any_line_has("libcInitEntry"));
+  CHECK(!any_line_has("bss.begin")); // …and does NOT claim the filled half is missing
+  CHECK(!any_line_has("stackTopWordAddress"));
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -287,7 +287,7 @@ static void test_partial_group_names_only_the_missing(void) {
 // EVERY request out of an arena that does not exist. Refusing is the only safe answer.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_underflowing_heap_size_refuses(void) {
-  const GameConfig cfg = x4_cfg();
+  const GuestProgramImage cfg = x4_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, 0u, X4_RESERVE_WORD, "test-underflow"); // stack-top word reads 0
   capture_stop();
@@ -308,8 +308,8 @@ static void test_underflowing_heap_size_refuses(void) {
 
 // A non-empty, mis-aligned or inverted .bss span is likewise a wrong value with everything set.
 static void test_bad_bss_span_refuses(void) {
-  GameConfig cfg = x4_cfg();
-  cfg.bssZeroHi = cfg.bssZeroLo - 4u; // inverted
+  GuestProgramImage cfg = x4_cfg();
+  cfg.bss.end = cfg.bss.begin - 4u; // inverted
   capture_start();
   const Crt0Plan a = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "test-bss-inverted");
   capture_stop();
@@ -318,8 +318,8 @@ static void test_bad_bss_span_refuses(void) {
   CHECK_EQ(g_errors, 1);
   CHECK(any_line_has("word-aligned non-empty"));
 
-  GameConfig mis = x4_cfg();
-  mis.bssZeroLo |= 2u; // unaligned
+  GuestProgramImage mis = x4_cfg();
+  mis.bss.begin |= 2u; // unaligned
   capture_start();
   const Crt0Plan b = crt0_plan(&mis, X4_STACK_WORD, X4_RESERVE_WORD, "test-bss-unaligned");
   capture_stop();
@@ -381,7 +381,7 @@ static void dump_writer(const char *what, const RecWriter &w) {
 }
 
 static void test_absent_heap_globals_write_nothing_at_all(void) {
-  const GameConfig cfg = x4_cfg();
+  const GuestProgramImage cfg = x4_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "apply-x4");
   capture_stop();
@@ -410,7 +410,7 @@ static void test_absent_heap_globals_write_nothing_at_all(void) {
 // The consumer that DOES have both globals must still get both writes, at the measured addresses and
 // nowhere else — so the fix cannot be "stop storing" for everyone.
 static void test_present_heap_globals_write_exactly_two_words(void) {
-  const GameConfig cfg = tomba2_cfg();
+  const GuestProgramImage cfg = tomba2_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, T2_STACK_WORD, T2_RESERVE_WORD, "apply-t2");
   capture_stop();
@@ -440,7 +440,7 @@ static void test_present_heap_globals_write_exactly_two_words(void) {
 // A refused plan must write NOTHING, even through a caller that ignored `ok`. Belt and braces, because
 // the failure mode of this whole area is guest state fabricated from unset fields.
 static void test_refused_plan_applies_nothing(void) {
-  const GameConfig cfg{};
+  const GuestProgramImage cfg{};
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, 0u, 0u, "apply-zero");
   capture_stop();

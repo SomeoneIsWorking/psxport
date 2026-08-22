@@ -108,14 +108,25 @@ static void gpu_timeout_chk(Core *c) {
 // Kept as `extern "C"` because the SBS divergence debugger captures it via a function-pointer.
 extern "C" void guest_backtrace_to(Core *c, FILE *out) {
   // The "does this word look like a return address" test needs the game's resident-code range.
-  // Configured range wins; otherwise fall back to the recompiled MAIN text, which every game states.
+  // The optional diagnostic range wins; otherwise GuestProgramImage falls back to resident MAIN.
   // (Was hardcoded to Tomba!2's 0x10000..0x120000 — for another game that silently prints nothing,
   // or prints noise, exactly when a trap most needs to show its call chain.)
-  const GameConfig *cfg = c->cfg;
-  uint32_t lo = cfg->hle.codeScanLo, hi = cfg->hle.codeScanHi;
-  if (!hi) {
-    lo = cfg->recMainLo;
-    hi = cfg->recMainHi;
+  if (!c->guestProgramImage) {
+    fprintf(out, "  guest stack unavailable: GameRuntime supplies no GuestProgramImage\n");
+    return;
+  }
+  const GuestAddressRange code = c->guestProgramImage->effectiveBacktraceText();
+  if (code.empty()) {
+    fprintf(out, "  guest stack unavailable: GuestProgramImage declares no resident code range\n");
+    return;
+  }
+  if (!code.valid()) {
+    fprintf(out,
+            "  guest stack unavailable: GuestProgramImage declares invalid code range "
+            "[0x%08X,0x%08X)\n",
+            code.begin,
+            code.end);
+    return;
   }
 
   uint32_t sp = c->r[29];
@@ -124,7 +135,7 @@ extern "C" void guest_backtrace_to(Core *c, FILE *out) {
   for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
     uint32_t w = c->mem_r32(a);
     uint32_t k = w & 0x1FFFFFFF;
-    if (k >= lo && k < hi && (w & 3) == 0) // resident MAIN/overlay code, word-aligned
+    if (code.containsPhysical(k) && (w & 3) == 0) // resident MAIN/overlay code, word-aligned
     {
       fprintf(out, "    [sp+0x%03X] 0x%08X\n", a - sp, w);
       shown++;

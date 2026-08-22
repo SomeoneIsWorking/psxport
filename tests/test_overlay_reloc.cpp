@@ -32,6 +32,7 @@
 #include "overlay_router.h"
 #include "recomp_iface.h"
 
+#include <cstring>
 #include <memory>
 
 namespace {
@@ -65,6 +66,58 @@ const RecompRegistry kRegistry = {
     nullptr,
     nullptr,
 };
+
+constexpr uint32_t kBootBase = 0x80078C90u;
+constexpr uint32_t kBootSize = 0x5E800u;
+constexpr uint32_t kMenuBase = 0x800B32B4u;
+constexpr uint32_t kMenuSize = 0x8000u;
+constexpr uint32_t kMenuTarget = 0x800B5244u;
+constexpr uint32_t kMenuCallbackWord = 0x800B9524u;
+
+const unsigned char kBootSignature[32] = {
+    0xDC, 0x2B, 0x09, 0x80, 0xA0, 0x2B, 0x09, 0x80, 0x7C, 0x2B, 0x09, 0x80, 0x40, 0x2B, 0x09, 0x80,
+    0x44, 0x71, 0x0D, 0x80, 0x06, 0x80, 0x02, 0x3C, 0xE0, 0xA5, 0x42, 0x8C, 0xE0, 0xFF, 0xBD, 0x27,
+};
+const unsigned char kMenuSignature[32] = {
+    0x69, 0x00, 0x00, 0x00, 0x63, 0x6F, 0x6D, 0x70, 0x6C, 0x65, 0x74, 0x65, 0x20, 0x65, 0x61, 0x63,
+    0x68, 0x20, 0x77, 0x61, 0x72, 0x70, 0x20, 0x72, 0x6F, 0x6F, 0x6D, 0x20, 0x74, 0x6F, 0x0A, 0x75,
+};
+
+const RecOverlay kNestedBootFirst[] = {
+    {kBootBase, kBootBase + kBootSize, "BOOT.BIN", disp_stub, idx_stub, kBootSignature, 32, 0},
+    {kMenuBase, kMenuBase + kMenuSize, "MENU.BIN", disp_stub, idx_stub, kMenuSignature, 32, 0},
+};
+const RecOverlay kNestedMenuFirstRenamed[] = {
+    {kMenuBase, kMenuBase + kMenuSize, "Z", disp_stub, idx_stub, kMenuSignature, 32, 0},
+    {kBootBase, kBootBase + kBootSize, "A", disp_stub, idx_stub, kBootSignature, 32, 0},
+};
+
+constexpr uint32_t kPeerBase = kMenuBase - 0x1000u;
+const RecOverlay kEqualWidthPeers[] = {
+    {kPeerBase, kPeerBase + kMenuSize, "LEFT", disp_stub, idx_stub, kBootSignature, 32, 0},
+    {kMenuBase, kMenuBase + kMenuSize, "RIGHT", disp_stub, idx_stub, kMenuSignature, 32, 0},
+};
+
+RecompRegistry nested_registry(const RecOverlay *overlays) {
+  return {
+      nullptr,
+      nullptr,
+      overlays,
+      2,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+  };
+}
+
+std::unique_ptr<Core> nested_core(const RecompRegistry &registry) {
+  psxport_install_recomp(&registry);
+  auto core = std::make_unique<Core>();
+  std::memcpy(core->ram + (kBootBase & 0x1FFFFFFFu), kBootSignature, sizeof kBootSignature);
+  std::memcpy(core->ram + (kMenuBase & 0x1FFFFFFFu), kMenuSignature, sizeof kMenuSignature);
+  return core;
+}
 
 // The three live bases measured from a real boot of the port (scratch/logs/boot_after.log): the
 // game's allocator placed the three co-resident modules here, and they are nowhere near each other
@@ -165,6 +218,52 @@ static void test_registry_ignores_fixed_base_and_unknown_names(void) {
   CHECK_EQ(overlay_live_index(c.get(), 0x80106228u + 0x10), -1);
 }
 
+// Crash Bash keeps BOOT resident while loading MENU inside BOOT's broad address range. Both image
+// signatures remain valid, so a first-table-match router sends MENU callbacks into BOOT. The owner is
+// the narrowest matching resident image, independent of table order and diagnostic names.
+static void test_nested_fixed_overlay_prefers_most_specific_signature_match(void) {
+  RecompRegistry bootFirst = nested_registry(kNestedBootFirst);
+  auto a = nested_core(bootFirst);
+  FixedOverlayResolution targetA = overlay_resolve_fixed(a.get(), kMenuTarget);
+  FixedOverlayResolution callbackA = overlay_resolve_fixed(a.get(), kMenuCallbackWord);
+  CHECK_EQ(targetA.overlay, &kNestedBootFirst[1]);
+  CHECK_EQ(callbackA.overlay, &kNestedBootFirst[1]);
+  CHECK(!targetA.ambiguous);
+  CHECK(targetA.addressInOverlayRange);
+
+  RecompRegistry menuFirstRenamed = nested_registry(kNestedMenuFirstRenamed);
+  auto b = nested_core(menuFirstRenamed);
+  FixedOverlayResolution targetB = overlay_resolve_fixed(b.get(), kMenuTarget);
+  FixedOverlayResolution callbackB = overlay_resolve_fixed(b.get(), kMenuCallbackWord);
+  CHECK_EQ(targetB.overlay, &kNestedMenuFirstRenamed[0]);
+  CHECK_EQ(callbackB.overlay, &kNestedMenuFirstRenamed[0]);
+  CHECK(!targetB.ambiguous);
+  CHECK(targetB.addressInOverlayRange);
+
+  FixedOverlayResolution bootOnly = overlay_resolve_fixed(b.get(), kMenuBase - 4);
+  CHECK_EQ(bootOnly.overlay, &kNestedMenuFirstRenamed[1]);
+
+  // Residency is established by current RAM, not by the narrow range alone. If MENU's signature
+  // disappears, the still-matching enclosing BOOT image becomes the only defensible owner.
+  std::memset(b->ram + (kMenuBase & 0x1FFFFFFFu), 0, sizeof kMenuSignature);
+  FixedOverlayResolution menuAbsent = overlay_resolve_fixed(b.get(), kMenuTarget);
+  CHECK_EQ(menuAbsent.overlay, &kNestedMenuFirstRenamed[1]);
+  CHECK(!menuAbsent.ambiguous);
+}
+
+static void test_equal_specificity_is_refused_as_ambiguous(void) {
+  RecompRegistry peers = nested_registry(kEqualWidthPeers);
+  psxport_install_recomp(&peers);
+  auto core = std::make_unique<Core>();
+  std::memcpy(core->ram + (kPeerBase & 0x1FFFFFFFu), kBootSignature, sizeof kBootSignature);
+  std::memcpy(core->ram + (kMenuBase & 0x1FFFFFFFu), kMenuSignature, sizeof kMenuSignature);
+
+  FixedOverlayResolution resolution = overlay_resolve_fixed(core.get(), kMenuTarget);
+  CHECK_EQ(resolution.overlay, nullptr);
+  CHECK(resolution.addressInOverlayRange);
+  CHECK(resolution.ambiguous);
+}
+
 int main(void) {
   RUN(three_coresident_modules_route_separately);
   RUN(live_range_is_half_open);
@@ -172,5 +271,7 @@ int main(void) {
   RUN(reload_moves_the_module);
   RUN(placement_is_per_core);
   RUN(registry_ignores_fixed_base_and_unknown_names);
+  RUN(nested_fixed_overlay_prefers_most_specific_signature_match);
+  RUN(equal_specificity_is_refused_as_ambiguous);
   return pt_summary();
 }

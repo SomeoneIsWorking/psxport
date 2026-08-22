@@ -34,9 +34,9 @@ from a game. It is consumed as a submodule by a game repository; the reference c
 
 The framework reaches a game **only** through a small interface, so it stays game-agnostic:
 
-- `runtime/recomp/game_iface.h` — `GameConfig` (guest-address literals + config), `GameHooks` (a
-  behavior vtable the framework calls into), and an opaque `void* Core::gameCtx` (the game's own
-  context).
+- `runtime/recomp/game_runtime.h` — the derived `GameRuntime` authority, including the immutable
+  `GuestProgramImage` fact group and an opaque per-Core game context. `game_iface.h` contains only the
+  bounded `GameConfig`/`GameHooks` migration adapter.
 - `runtime/recomp/recomp_iface.h` — the `RecompRegistry` for the generated substrate.
 
 The `psxport_smoke` target links the library against a zero-game stub to prove the framework builds
@@ -98,8 +98,8 @@ tests/            framework tests
 psxport is the framework half of a reverse-engineering + reimplementation effort; the full working
 rules are in [`CLAUDE.md`](CLAUDE.md). In short:
 
-- **Keep it game-agnostic.** No game headers, no game-specific addresses. The game is reached only
-  through `game_iface.h` (`GameConfig` / `GameHooks` / `gameCtx`) and the `RecompRegistry`;
+- **Keep it game-agnostic.** No game headers, no game-specific addresses. The game is reached through
+  its derived `GameRuntime` and the `RecompRegistry`; `GameConfig` / `GameHooks` are migration-only;
   `psxport_smoke` must keep linking with zero game symbols.
 - **The generated substrate is sacrosanct** — fix mistranslations in the recompiler, not by hand-
   editing emitted `shard_*.c`.

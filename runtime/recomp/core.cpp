@@ -19,6 +19,7 @@ Core::Core() {
   // Snapshot the game-owned polymorphic runtime. The two legacy views are non-null only when the
   // bounded adapter was installed by a consumer that has not migrated this seam yet.
   runtime = psxport_game_runtime();
+  guestProgramImage = runtime ? runtime->guestProgramImage() : nullptr;
   cfg = psxport_game_config();
   hooks = psxport_game_hooks();
   if (runtime) {

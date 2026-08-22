@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <memory>
 
+#include "guest_program_image.h"
+
 class Core;
 class Game;
 struct GameConfig;
@@ -45,6 +47,13 @@ public:
   virtual void destroyContext(void *context) = 0;
   virtual void registerOverrides(Game &game) = 0;
   virtual void bootInit(Core &core) = 0;
+
+  // Immutable facts about the guest executable image. A direct runtime owns the returned value for
+  // at least the lifetime of every Core. Null is an honest answer for tools/smoke clients that never
+  // boot or route guest code; those algorithms refuse by name when invoked without it.
+  virtual const GuestProgramImage *guestProgramImage() const {
+    return nullptr;
+  }
 
   virtual std::unique_ptr<FrameDriver> createFrameDriver(Game &) {
     return nullptr;

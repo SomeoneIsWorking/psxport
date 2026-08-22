@@ -9,7 +9,22 @@ std::unique_ptr<LegacyGameRuntimeAdapter> g_ownedLegacyRuntime;
 
 } // namespace
 
-LegacyGameRuntimeAdapter::LegacyGameRuntimeAdapter(const GameConfig &config, const GameHooks &hooks) {
+LegacyGameRuntimeAdapter::LegacyGameRuntimeAdapter(const GameConfig &config, const GameHooks &hooks)
+    : guestProgramImage_{
+          .bss = {config.bssZeroLo, config.bssZeroHi},
+          .stackTopWordAddress = config.stackTopBase,
+          .stackReserveWordAddress = config.stackTopBase2,
+          .heapBase = config.heapBase,
+          .heapSizeStoreAddress = config.heapSizePtr,
+          .heapBaseStoreAddress = config.heapBasePtr,
+          .globalPointer = config.gp,
+          .libcInitEntry = config.libcInit,
+          .gameMainEntry = config.gameMain,
+          .crt0Entry = config.crt0,
+          .residentText = {config.recMainLo, config.recMainHi},
+          .backtraceText = {config.hle.codeScanLo, config.hle.codeScanHi},
+          .stackBias = {config.stackBias.declared != 0, config.stackBias.value},
+      } {
   bindLegacyInterface(&config, &hooks);
 }
 
@@ -31,6 +46,10 @@ void LegacyGameRuntimeAdapter::registerOverrides(Game &game) {
 
 void LegacyGameRuntimeAdapter::bootInit(Core &core) {
   legacyHooks()->bootInit(&core);
+}
+
+const GuestProgramImage *LegacyGameRuntimeAdapter::guestProgramImage() const {
+  return &guestProgramImage_;
 }
 
 void psxport_install_game(GameRuntime &runtime) {

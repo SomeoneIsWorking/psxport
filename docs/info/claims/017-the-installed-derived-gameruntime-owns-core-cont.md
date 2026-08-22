@@ -4,9 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: architecture,game-runtime
-depends: runtime/recomp/game_iface.cpp#psxport_install_game, runtime/recomp/core.cpp#Core, runtime/recomp/game.h#Game
+depends: runtime/recomp/game_iface.cpp#psxport_install_game, runtime/recomp/core.cpp#Core, runtime/recomp/game.h#Game, runtime/recomp/game_runtime.h#GameRuntime
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 16:34:08
+verified_at: 2026-08-22 17:59:40
 ---
 
 ## Claim
@@ -28,3 +28,10 @@ scratch/build-game-runtime-main/tests/test_game_runtime: 4/4 cases, 30 checks, 0
 ## Re-confirmed 2026-08-22
 
 Reverified after derived runtime integration: test_game_runtime passes in the full 83/83 Clang framework CTest; touched runtime files pass clang-format and clang-tidy.
+
+## Re-confirmed 2026-08-22
+
+Reverified after the first typed fact slice: full Clang framework build and CTest pass 84/84;
+`test_game_runtime` passes 5/5 cases and 49 checks, including direct `GuestProgramImage` ownership,
+range validity, and the bounded adapter projection; independent CTR embedded consumer CTest passes
+87/87.

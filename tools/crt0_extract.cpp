@@ -1,7 +1,7 @@
 // crt0_extract — report a PSX executable's crt0 boot group, using THE SHIPPING DECODER.
 //
 // WHY THIS IS A C++ TOOL AND NOT A PYTHON SCRIPT. Every value it prints becomes a constant in some
-// game's `game_config.cpp`, and `crt0_audit` (runtime/recomp/crt0_verify.h) re-derives those same
+// game's derived runtime, and `crt0_audit` (runtime/recomp/crt0_verify.h) re-derives those same
 // values from the guest's own instruction stream at boot and REFUSES a disagreement. If this tool had
 // its own MIPS decoder, the two would drift, and the drift would present as the audit refusing a boot
 // over a constant this tool had just "measured" — the gate blaming the game for the tool's bug. So it
@@ -10,12 +10,12 @@
 // WHAT A NEGATIVE PRINTS. Never "(nothing found)". A refusal names what it could not do and exits
 // non-zero; a partial scan prints its DENOMINATOR (instructions decoded, why it stopped, how many words
 // in the window were zero) next to every field it did and did not resolve. A field this tool cannot see
-// must reach `game_config.cpp` as 0 with a TODO, never as a guess — zero is honest, and `crt0_plan`
+// must reach `GuestProgramImage` as 0 with a TODO, never as a guess — zero is honest, and `crt0_plan`
 // distinguishes ABSENT (a measured "this crt0 has no such global") from UNSET (nobody has RE'd it) by
 // the explicit `declared` flag, not by the value.
 //
 // ═══ THE REFUSALS ARE GATED, BY `--selftest` ════════════════════════════════════════════════════════
-// Every refusal below is the reason a wrong constant does NOT reach a game_config.cpp, so a refusal that
+// Every refusal below is the reason a wrong constant does NOT reach a derived runtime, so a refusal that
 // silently stopped refusing would be the worst failure this tool has: it would print a boot group of
 // zeroes, read off an image it never decoded, in the tool's normal confident format. Until 2026-08-12
 // nothing checked them — they had been confirmed by hand once, which gates nothing thereafter.
@@ -219,20 +219,20 @@ extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t en
   // about the InitHeap arguments, for the same reason they already share `crt0_scan`. It is pure — the two
   // words the guest crt0 loads are passed in — so it can run here against the image's own bytes.
   if (r.resolved == r.total && o.scanComplete) {
-    GameConfig gc{};
-    gc.bssZeroLo = o.bssLo;
-    gc.bssZeroHi = o.bssHi;
-    gc.stackTopBase = o.stackTopBase;
-    gc.stackTopBase2 = o.stackTopBase2;
-    gc.heapBase = o.heapBase;
-    gc.heapSizePtr = o.sawHeapSizeStore ? o.heapSizePtr : 0u;
-    gc.heapBasePtr = o.sawHeapBaseStore ? o.heapBasePtr : 0u;
-    gc.gp = o.gp;
-    gc.libcInit = o.libcInit;
-    gc.stackBias = {1u, o.bias};
+    GuestProgramImage image{};
+    image.bss.begin = o.bssLo;
+    image.bss.end = o.bssHi;
+    image.stackTopWordAddress = o.stackTopBase;
+    image.stackReserveWordAddress = o.stackTopBase2;
+    image.heapBase = o.heapBase;
+    image.heapSizeStoreAddress = o.sawHeapSizeStore ? o.heapSizePtr : 0u;
+    image.heapBaseStoreAddress = o.sawHeapBaseStore ? o.heapBasePtr : 0u;
+    image.globalPointer = o.gp;
+    image.libcInitEntry = o.libcInit;
+    image.stackBias = {true, o.bias};
     const uint32_t stackTopWord = exe.r32(o.stackTopBase);
     const uint32_t stackReserveWord = exe.r32(o.stackTopBase2);
-    r.plan = crt0_plan(&gc, stackTopWord, stackReserveWord, "crt0_extract");
+    r.plan = crt0_plan(&image, stackTopWord, stackReserveWord, "crt0_extract");
     r.planOk = r.plan.ok;
     if (report) {
       if (r.planOk) {
@@ -297,10 +297,12 @@ extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t en
 
     // The paste-ready declaration. Emitted only for what was RESOLVED; an unresolved field is emitted as
     // a TODO rather than a zero that would read as a measurement.
-    fputs("  --- for game_config.cpp (append at the END of the initialiser; GameConfig is positional) ---\n", report);
+    fputs("  --- for the derived runtime's GuestProgramImage ---\n", report);
     if (o.haveBias) {
-      fprintf(
-          report, "    cfg.stackBias = {1, %d};   // measured by tools/crt0_extract from %s\n", (int32_t)o.bias, label);
+      fprintf(report,
+              "    image.stackBias = {true, %d};   // measured by tools/crt0_extract from %s\n",
+              (int32_t)o.bias,
+              label);
     } else {
       fputs("    // TODO stackBias: UNRESOLVED by crt0_extract — do NOT declare it until measured.\n"
             "    //   Leaving `declared` at 0 makes crt0_plan REFUSE the boot, which is the correct\n"
@@ -509,7 +511,7 @@ static int selftest(void) {
         "  header-declares-more-text-than-present NOTE are exercised only by a real run), the images are\n"
         "  assembled from tests/crt0_fixture.h rather than read out of a commercial executable, so a real\n"
         "  crt0 shape outside the five measured ones is invisible to it, and it says nothing about\n"
-        "  whether any game's game_config.cpp actually carries the values this tool printed — that is\n"
+        "  whether any game's GuestProgramImage actually carries the values this tool printed — that is\n"
         "  crt0_audit's job, at every boot.\n",
         stderr);
   return g_failed ? 1 : 0;

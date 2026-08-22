@@ -1,6 +1,6 @@
 // test_crt0_guest_audit.cpp — THE GATE RULE, for the crt0 boot group.
 //
-// WHAT IT GATES. Every constant in a game's `GameConfig` crt0 group is a value somebody measured out of
+// WHAT IT GATES. Every constant in a game's `GuestProgramImage` crt0 group is a value somebody measured out of
 // the executable and typed into `game/core/game_config.cpp`. Nothing compared the typed copy to the
 // measurement, which is the defect shape found independently in four of five ports here. `crt0_audit`
 // (runtime/recomp/crt0_verify.h) closes it by re-deriving the group from the guest's OWN instruction
@@ -83,47 +83,47 @@ static void emit_crt0(FakeRam &ram, const Crt0Template &t) {
     ram.w[a] = w;
   });
 }
-// ── the two shapes, as GameConfigs ──────────────────────────────────────────────────────────────────
+// ── the two shapes, as GuestProgramImages ───────────────────────────────────────────────────────────
 // The guest templates are the fixture header's two MEASURED shapes (the crt0 groups of Tomba2Engine and
 // megamanx4 `game/core/game_config.cpp`), so these cases describe real crt0s rather than invented ones.
 //
-// The `GameConfig` under audit is DERIVED from the same template rather than hand-typed a second time.
+// The `GuestProgramImage` under audit is DERIVED from the same template rather than hand-typed a second time.
 // That is deliberate: a second hand copy of eleven addresses is exactly the defect class this file
 // gates, and a typo in it would surface as a spurious refusal that looks like a framework bug. It costs
 // the test nothing, because what the audit actually compares is the config against what `crt0_scan`
 // DECODES from the emitted bytes — deriving the config does not short-circuit the encoder→decoder round
 // trip, and every refusal case below perturbs the config away from the template on purpose.
-static GameConfig cfg_from(const Crt0Template &t) {
-  GameConfig c{};
-  c.bssZeroLo = t.bssLo;
-  c.bssZeroHi = t.bssHi;
-  c.stackTopBase = t.stackTopBase;
-  c.stackTopBase2 = t.stackTopBase2;
+static GuestProgramImage cfg_from(const Crt0Template &t) {
+  GuestProgramImage c{};
+  c.bss.begin = t.bssLo;
+  c.bss.end = t.bssHi;
+  c.stackTopWordAddress = t.stackTopBase;
+  c.stackReserveWordAddress = t.stackTopBase2;
   c.heapBase = t.heapBase;
-  c.heapSizePtr = t.heapSizePtr;
-  c.heapBasePtr = t.heapBasePtr; // 0 = ABSENT, a measured answer
-  c.gp = t.gp;
-  c.libcInit = t.libcInit;
-  c.crt0 = t.entry;
-  c.stackBias = {1u, t.bias};
+  c.heapSizeStoreAddress = t.heapSizePtr;
+  c.heapBaseStoreAddress = t.heapBasePtr; // 0 = ABSENT, a measured answer
+  c.globalPointer = t.gp;
+  c.libcInitEntry = t.libcInit;
+  c.crt0Entry = t.entry;
+  c.stackBias = {true, t.bias};
   return c;
 }
 static const uint32_t T2_CRT0 = CRT0_FIXTURE_TOMBA2_ENTRY;
 static Crt0Template t2_guest(void) {
   return crt0_fixture_psyq_tomba2();
 }
-static GameConfig t2_cfg(void) {
+static GuestProgramImage t2_cfg(void) {
   return cfg_from(t2_guest());
 }
 static Crt0Template x4_guest(void) {
   return crt0_fixture_psyq_mmx4();
 }
-static GameConfig x4_cfg(void) {
+static GuestProgramImage x4_cfg(void) {
   return cfg_from(x4_guest());
 }
 
 // A plan is needed only so the audit can print the applied values next to the verified ones.
-static Crt0Plan plan_for(const GameConfig &cfg, uint32_t stackWord, uint32_t reserveWord) {
+static Crt0Plan plan_for(const GuestProgramImage &cfg, uint32_t stackWord, uint32_t reserveWord) {
   lucent::set_sink([](lucent::Level, std::string_view) {}); // the plan's own log is not under test
   Crt0Plan p = crt0_plan(&cfg, stackWord, reserveWord, "fixture");
   lucent::set_sink(nullptr);
@@ -166,7 +166,7 @@ static void test_assembler_matches_measured_bytes(void) {
 static void test_agreeing_config_passes_with_a_denominator(void) {
   FakeRam ram;
   emit_crt0(ram, t2_guest());
-  const GameConfig cfg = t2_cfg();
+  const GuestProgramImage cfg = t2_cfg();
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
   const bool ok = crt0_audit(
@@ -192,7 +192,7 @@ static void test_agreeing_config_passes_with_a_denominator(void) {
 static void test_agreeing_x4_shape_passes(void) {
   FakeRam ram;
   emit_crt0(ram, x4_guest());
-  const GameConfig cfg = x4_cfg();
+  const GuestProgramImage cfg = x4_cfg();
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
   const bool ok = crt0_audit(
@@ -219,8 +219,8 @@ static void test_agreeing_x4_shape_passes(void) {
 static void test_wrong_bias_is_refused_and_named(void) {
   FakeRam ram;
   emit_crt0(ram, x4_guest());
-  GameConfig cfg = x4_cfg();
-  cfg.stackBias = {1u, -8}; // the value the old framework applied to all
+  GuestProgramImage cfg = x4_cfg();
+  cfg.stackBias = {true, -8}; // the value the old framework applied to all
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
   const bool ok = crt0_audit(
@@ -244,9 +244,9 @@ static void test_wrong_bias_is_refused_and_named(void) {
 static void test_claimed_but_absent_heap_globals_are_refused(void) {
   FakeRam ram;
   emit_crt0(ram, x4_guest());
-  GameConfig cfg = x4_cfg();
-  cfg.heapSizePtr = 0x80123456u;
-  cfg.heapBasePtr = 0x8012345Au; // invented, to keep the framework quiet
+  GuestProgramImage cfg = x4_cfg();
+  cfg.heapSizeStoreAddress = 0x80123456u;
+  cfg.heapBaseStoreAddress = 0x8012345Au; // invented, to keep the framework quiet
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
   const bool ok = crt0_audit(
@@ -260,8 +260,8 @@ static void test_claimed_but_absent_heap_globals_are_refused(void) {
   dump_capture("fakeptrs");
   CHECK(!ok);
   CHECK_EQ(g_errors, 1);
-  CHECK(any_line_has("heapSizePtr"));
-  CHECK(any_line_has("heapBasePtr"));
+  CHECK(any_line_has("heapSizeStoreAddress"));
+  CHECK(any_line_has("heapBaseStoreAddress"));
   CHECK(any_line_has("2 of 10"));
 }
 
@@ -270,9 +270,9 @@ static void test_claimed_but_absent_heap_globals_are_refused(void) {
 static void test_omitted_but_present_heap_globals_are_refused(void) {
   FakeRam ram;
   emit_crt0(ram, t2_guest());
-  GameConfig cfg = t2_cfg();
-  cfg.heapSizePtr = 0;
-  cfg.heapBasePtr = 0;
+  GuestProgramImage cfg = t2_cfg();
+  cfg.heapSizeStoreAddress = 0;
+  cfg.heapBaseStoreAddress = 0;
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
   const bool ok = crt0_audit(
@@ -285,7 +285,7 @@ static void test_omitted_but_present_heap_globals_are_refused(void) {
   capture_stop();
   dump_capture("omitted");
   CHECK(!ok);
-  CHECK(any_line_has("heapSizePtr: guest says 0x800ABEF8, game_config.cpp ships 0x00000000"));
+  CHECK(any_line_has("heapSizeStoreAddress: guest says 0x800ABEF8, derived runtime ships 0x00000000"));
 }
 
 // Every other field, one at a time — so the audit is proved to actually COMPARE each row rather than
@@ -293,22 +293,43 @@ static void test_omitted_but_present_heap_globals_are_refused(void) {
 static void test_every_field_is_actually_compared(void) {
   struct Case {
     const char *name;
-    uint32_t GameConfig::*field;
+    uint32_t *(*field)(GuestProgramImage &);
   };
   const Case cases[] = {
-      {"bssZeroLo", &GameConfig::bssZeroLo},
-      {"bssZeroHi", &GameConfig::bssZeroHi},
-      {"stackTopBase", &GameConfig::stackTopBase},
-      {"stackTopBase2", &GameConfig::stackTopBase2},
-      {"heapBase", &GameConfig::heapBase},
-      {"gp", &GameConfig::gp},
-      {"libcInit", &GameConfig::libcInit},
+      {"bssZeroLo",
+       [](GuestProgramImage &image) {
+         return &image.bss.begin;
+       }},
+      {"bssZeroHi",
+       [](GuestProgramImage &image) {
+         return &image.bss.end;
+       }},
+      {"stackTopWordAddress",
+       [](GuestProgramImage &image) {
+         return &image.stackTopWordAddress;
+       }},
+      {"stackReserveWordAddress",
+       [](GuestProgramImage &image) {
+         return &image.stackReserveWordAddress;
+       }},
+      {"heapBase",
+       [](GuestProgramImage &image) {
+         return &image.heapBase;
+       }},
+      {"gp",
+       [](GuestProgramImage &image) {
+         return &image.globalPointer;
+       }},
+      {"libcInit",
+       [](GuestProgramImage &image) {
+         return &image.libcInitEntry;
+       }},
   };
   FakeRam ram;
   emit_crt0(ram, t2_guest());
   for (const Case &k : cases) {
-    GameConfig cfg = t2_cfg();
-    (cfg.*(k.field)) += 4u; // a 4-byte lie: the smallest one that is still a lie
+    GuestProgramImage cfg = t2_cfg();
+    *k.field(cfg) += 4u; // a 4-byte lie: the smallest one that is still a lie
     const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
     capture_start();
     const bool ok = crt0_audit(
@@ -334,7 +355,7 @@ static void test_every_field_is_actually_compared(void) {
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_unloaded_guest_memory_reports_nothing_examined(void) {
   FakeRam ram; // deliberately empty
-  const GameConfig cfg = t2_cfg();
+  const GuestProgramImage cfg = t2_cfg();
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
   const bool ok = crt0_audit(
@@ -358,8 +379,8 @@ static void test_unloaded_guest_memory_reports_nothing_examined(void) {
 // A game that has not filled in `crt0` cannot be audited at all — and must be told so, with the
 // denominator, rather than quietly getting a clean bill of health.
 static void test_missing_crt0_entry_says_it_verified_nothing(void) {
-  GameConfig cfg = t2_cfg();
-  cfg.crt0 = 0;
+  GuestProgramImage cfg = t2_cfg();
+  cfg.crt0Entry = 0;
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   FakeRam ram;
   emit_crt0(ram, t2_guest());
@@ -387,7 +408,7 @@ static void test_truncated_prologue_reports_unresolved_not_agreement(void) {
   for (uint32_t a = T2_CRT0 + 40u; a < T2_CRT0 + 200u; a += 4u) {
     ram.w[a] = 0x00000000u; // wipe the tail
   }
-  const GameConfig cfg = t2_cfg();
+  const GuestProgramImage cfg = t2_cfg();
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
   const bool ok = crt0_audit(

@@ -40,6 +40,22 @@ bool strcat_call(Game &game, uint32_t destination, uint32_t source) {
   return game.hle.dispatchBios('A', 0x15);
 }
 
+void check_toupper(Game &game, uint32_t character, uint32_t expected) {
+  game.core.r[R_A0] = character;
+  game.core.r[R_V0] = 0xDEADBEEFu;
+  CHECK(game.hle.dispatchBios('A', 0x25));
+  CHECK_EQ(game.core.r[R_V0], expected);
+}
+
+void test_toupper_is_ascii_only_and_locale_independent() {
+  auto game = new Game();
+  check_toupper(*game, static_cast<uint32_t>('t'), static_cast<uint32_t>('T'));
+  check_toupper(*game, static_cast<uint32_t>('T'), static_cast<uint32_t>('T'));
+  check_toupper(*game, static_cast<uint32_t>('7'), static_cast<uint32_t>('7'));
+  check_toupper(*game, 0xE0u, 0xE0u);
+  delete game;
+}
+
 void test_appends_terminator_returns_destination_and_preserves_guards() {
   auto game = new Game();
   put_string(game->core, kDst, "LEVEL01\\SFX");
@@ -95,6 +111,8 @@ void test_wrong_table_and_neighbor_are_not_claimed() {
   CHECK_EQ(game->core.r[R_V0], 0xDEADBEEFu);
   CHECK(!game->hle.dispatchBios('A', 0x16));
   CHECK_EQ(game->core.r[R_V0], 0xDEADBEEFu);
+  CHECK(!game->hle.dispatchBios('Z', 0x25));
+  CHECK_EQ(game->core.r[R_V0], 0xDEADBEEFu);
   check_string(game->core, kDst, "base");
   delete game;
 }
@@ -102,6 +120,7 @@ void test_wrong_table_and_neighbor_are_not_claimed() {
 } // namespace
 
 int main() {
+  RUN(toupper_is_ascii_only_and_locale_independent);
   RUN(appends_terminator_returns_destination_and_preserves_guards);
   RUN(guest_mirror_source_and_empty_inputs);
   RUN(forward_guest_alias_uses_bytewise_psx_copy_order);

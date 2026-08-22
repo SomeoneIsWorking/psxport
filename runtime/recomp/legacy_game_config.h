@@ -23,11 +23,12 @@ enum SchedBody {
   SCHED_FIBER_STAGE_BODY,       // eng(c).stageBodyFaithful()
 };
 
-// GameConfig — the game-specific guest ADDRESSES/tables. A game fills one static instance; the
-// framework substrate reads `c->cfg->field` in place of the hardcoded MAIN.EXE literals it used to bake
-// in. Grouped by the framework consumer. (Values live in a game-provided instance, NOT here.)
+// GameConfig — deprecated compatibility storage for game-specific guest facts not yet migrated to
+// typed runtime owners. A game fills one static instance; living legacy consumers read `c->cfg`.
+// The first group below is adapter input only and must disappear after every consumer supplies its
+// own GuestProgramImage. Do not add fields here.
 struct GameConfig {
-  // --- crt0 / boot (native_boot.cpp crt0_setup, game_init) ---
+  // --- adapter-only GuestProgramImage projection; generic crt0/routing code no longer reads these ---
   uint32_t bssZeroLo, bssZeroHi;        // .bss clear range
   uint32_t stackTopBase, stackTopBase2; // guest stack top globals
   uint32_t heapBase;                    // heap start
@@ -36,11 +37,8 @@ struct GameConfig {
   uint32_t libcInit;                    // libc init entry
   uint32_t gameMain, crt0;              // game-main / crt0 entries
 
-  // Recompiled MAIN .text range, masked to a physical address (addr & 0x1FFFFFFF). overlay_router
-  // uses it to decide "is this address in the resident MAIN module or in an overlay slot". These are
-  // GAME data — they come from the consumer's own recompiler run — so they belong here rather than
-  // as a #include of the consumer's generated/overlay_table.h, which made the framework impossible to
-  // compile standalone (see docs/porting-a-new-psx-game.md).
+  // Recompiled MAIN .text range, masked to physical addresses. Adapter input only: the live overlay
+  // router consumes GuestProgramImage::residentText.
   uint32_t recMainLo, recMainHi;
 
   // Per-game name of the environment variable / .env key that points at this game's disc image
@@ -170,10 +168,8 @@ struct GameConfig {
     // register_() refuses everything and says so — a game must state its own memory map.
     uint32_t windowLo[2], windowHi[2];
 
-    // Resident-code range for the guest-backtrace heuristic (which words on the guest stack look
-    // like return addresses). Compared against `addr & 0x1FFFFFFF`, so these are PHYSICAL. When left
-    // zero the scan falls back to [recMainLo, recMainHi); set it explicitly when the game has
-    // overlays resident above the main text.
+    // Adapter input only for GuestProgramImage::backtraceText. Physical range; zero means the typed
+    // image falls back to residentText.
     uint32_t codeScanLo, codeScanHi;
 
     uint32_t decDctInSync, decDctOutSync;    // libmdec DecDCTinSync / DecDCToutSync

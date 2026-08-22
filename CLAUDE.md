@@ -217,8 +217,10 @@ do not add a field or callback there. `psxport_smoke` and `test_game_runtime` ke
 its temporary adapter honest.
 
 A shipping port still uses `LegacyGameRuntimeAdapter` until every generic `c->cfg` consumer has moved
-to a narrow typed fact group. The next group is `GuestProgramImage` for crt0, overlay routing, and the
-resident-code backtrace heuristic; the exact deletion set and subsequent groups are in
+to a narrow typed fact group. `GuestProgramImage` is the first completed group: crt0, overlay routing,
+and the resident-code backtrace heuristic consume the immutable value owned by `GameRuntime`; only the
+adapter projects the old fields for unmigrated ports. `DiscIdentity` is the next candidate group, and
+the consumer migration/deletion set and subsequent groups are in
 `docs/plans/game-seam-redesign.md`. Do not make `GameRuntime` return the old bag or add one virtual
 integer getter per field.
 
