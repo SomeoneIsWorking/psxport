@@ -6,7 +6,7 @@ created: 2026-08-22
 tags:
 depends: runtime/recomp/gpu_vk.cpp#GpuVkState::present, runtime/recomp/gpu_painter.cpp#GpuVkState::painter_command
 reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:33:47
+verified_at: 2026-08-22 19:47:01
 ---
 
 ## Claim
@@ -32,3 +32,7 @@ Post-commit baseline corrected after 0f808dc9: that commit is the already-record
 ## Re-confirmed 2026-08-22
 
 Post-composition cpp_style passed inside Clang CTest 90/90; structure caps and peer renderer ownership remained enforced.
+
+## Re-confirmed 2026-08-22
+
+Post-hook-fix Clang CTest 90/90 passed cpp_style, structure and all renderer ownership controls after GpuVkState::present was routed through the guarded fade accessor.
