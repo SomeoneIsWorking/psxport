@@ -95,7 +95,6 @@ static void scea_dump_ppm(const uint8_t *rgba, float fade01, const char *path) {
 static void native_scea_splash(Core *c) {
   void gpu_scea_decode_rgba(uint8_t *);
   void gpu_vk_present_image(Core *, const uint8_t *, int, int, float);
-  void gpu_pace_frame(Core *);
   void gpu_clear_display(Core *);
   // Decode the baked SCEA asset into a PC-native RGBA8 screen image ONCE (no PSX VRAM / GP0 / CLUT path).
   uint8_t *scea_rgba = (uint8_t *)malloc((size_t)SCEA_DISP_W * SCEA_DISP_H * 4);

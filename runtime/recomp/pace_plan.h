@@ -22,7 +22,7 @@
 //      at the game's REAL display field rate (NTSC is 60000/1001 = 59.940 Hz, not 60). Two clocks
 //      at different rates across one wait loop is a beat, and a beat in a wait loop is what reaches
 //      the screen. The rate is now an INPUT, taken from the standard the guest itself programmed
-//      into GP1(0x08) bit 3 (gpu_native.cpp `gpu_field_rate_millihz`) — not a second literal, which
+//      into GP1(0x08) bit 3 (`frame_pacer.cpp::gpu_field_rate_millihz`) — not a second literal, which
 //      would have been the same bug with a different number.
 //
 // UNITS. Everything in milliseconds except the field rate, which is in MILLI-HERTZ because that is
@@ -62,6 +62,8 @@ struct PacePlan {
   bool paced = false;      // did this call pace at all?
   bool quotaUnset = false; // quota < 1: the port has not derived its cadence (paced at 1 field)
   bool rateUnset = false;  // fieldRateMilliHz == 0: no display clock to pace against
+  int effectiveQuota = 0;  // normalized display fields represented by this call
+  int effectiveParts = 0;  // normalized subdivisions of that field quota
   double intervalMs = 0.0; // the target wall-clock spacing of this (sub)frame
   double sleepMs = 0.0;    // 0 = the deadline has already passed; do not sleep
   double nextMs = 0.0;     // the deadline to carry forward (valid only when paced)
@@ -72,6 +74,14 @@ inline PacePlan pace_plan(const PaceInputs &in) {
   PacePlan p;
   p.nextMs = in.nextMs; // untouched unless we actually pace
 
+  p.effectiveParts = in.parts < 1 ? 1 : in.parts;
+  p.effectiveQuota = in.quota;
+  if (p.effectiveQuota < 1) {
+    p.quotaUnset = true;
+    p.effectiveQuota = 1;
+  }
+  p.rateUnset = in.fieldRateMilliHz == 0;
+
   // The ONE switch. Nothing else — not the presence of a window, not the render path, not the leg.
   if (in.unpaced) {
     return p;
@@ -79,22 +89,14 @@ inline PacePlan pace_plan(const PaceInputs &in) {
 
   // A zero field rate cannot be paced against. Say so instead of substituting a number: the whole
   // point of this change is that the pacing rate is never invented locally.
-  if (in.fieldRateMilliHz == 0) {
-    p.rateUnset = true;
+  if (p.rateUnset) {
     return p;
-  }
-
-  int parts = in.parts < 1 ? 1 : in.parts;
-  int quota = in.quota;
-  if (quota < 1) {
-    p.quotaUnset = true;
-    quota = 1;
   }
 
   p.paced = true;
   // fields / (fields per second) -> seconds -> ms. quota * 1e6 / millihz is that, without ever
   // materialising the rate in Hz (60000/1001 is not exact there).
-  p.intervalMs = (double)quota * 1000000.0 / (double)in.fieldRateMilliHz / (double)parts;
+  p.intervalMs = (double)p.effectiveQuota * 1000000.0 / (double)in.fieldRateMilliHz / (double)p.effectiveParts;
 
   double next = (in.seeded ? in.nextMs : in.nowMs) + p.intervalMs;
   if (next > in.nowMs) {

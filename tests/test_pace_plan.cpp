@@ -1,7 +1,7 @@
 // test_pace_plan.cpp — frame pacing must not depend on a window, and must run on the GAME's clock.
 //
 // WHAT THIS GATES. `runtime/recomp/pace_plan.h` is the whole pacing decision. Two USER-flagged
-// defects lived in the code it replaces (gpu_native.cpp `gpu_pace_subframe`), and this file pins
+// defects lived in the code it replaces (now `frame_pacer.cpp`), and this file pins
 // both of them shut:
 //
 //   1. HEADLESS WAS NEVER PACED. The shipped rule opened with
@@ -280,6 +280,23 @@ static void test_a_zero_field_rate_refuses_to_pace(void) {
   CHECK(near_ms(p.nextMs, 1000.0, 0.0));
 }
 
+static void test_unpaced_host_execution_retains_the_guest_field_cadence(void) {
+  PaceInputs in = mk(CASES[3], 1000.0, 1000.0, true);
+  in.unpaced = true;
+  const PacePlan p = pace_plan(in);
+  CHECK_EQ(p.paced, 0);
+  CHECK_EQ(p.effectiveQuota, 2);
+  CHECK_EQ(p.effectiveParts, 2);
+
+  in.quota = 0;
+  in.parts = 0;
+  const PacePlan normalized = pace_plan(in);
+  CHECK_EQ(normalized.paced, 0);
+  CHECK_EQ(normalized.quotaUnset, 1);
+  CHECK_EQ(normalized.effectiveQuota, 1);
+  CHECK_EQ(normalized.effectiveParts, 1);
+}
+
 // THE SUITE'S OWN NEGATIVE CONTROL, asserted rather than described: the legacy rule must FAIL both
 // properties. If this case ever passes, the properties above have stopped discriminating and every
 // green run below it is worthless.
@@ -315,6 +332,7 @@ int main(void) {
   RUN(an_unset_quota_is_reported_not_silently_guessed);
 #ifndef PSXPORT_TEST_LEGACY_PACE_PLAN
   RUN(a_zero_field_rate_refuses_to_pace);
+  RUN(unpaced_host_execution_retains_the_guest_field_cadence);
   RUN(the_legacy_rule_fails_both_properties);
 #endif
   return pt_summary();

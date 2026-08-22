@@ -122,6 +122,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/cd_drive_timing.cpp
   ${PSXPORT_ROOT}/runtime/recomp/cdc_native.cpp
   ${PSXPORT_ROOT}/runtime/recomp/xa_stream.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/emulated_time.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/frame_pacer.cpp
   ${PSXPORT_ROOT}/runtime/recomp/timing.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_painter.cpp # painter target lifecycle + authored command staging

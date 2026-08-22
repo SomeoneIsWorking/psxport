@@ -14,16 +14,37 @@
 enum { A0 = 4, V0 = 2 };
 #define VBLANK_COUNT 0x800ABDE0u // DAT_800abde0: libetc VSync counter (FUN_80085900 returns it)
 
-uint64_t Timing::readGuestInstructionTicks(void *context) {
-  return static_cast<Timing *>(context)->guestInstructionTicks;
+uint64_t Timing::readEmulatedCpuTicks(void *context) {
+  return static_cast<Timing *>(context)->mEmulatedTime.nowTicks();
 }
 
 void Timing::bindCdcClock(CdcState *cdc) {
-  cdc_bind_tick_source(cdc, this, readGuestInstructionTicks);
+  cdc_bind_tick_source(cdc, this, readEmulatedCpuTicks);
 }
 
 void Timing::advanceGuestInstructionTicks(uint32_t ticks) {
   guestInstructionTicks += ticks;
+  mEmulatedTime.advanceInstructions(ticks);
+  serviceCdc();
+}
+
+bool Timing::advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilliHz) {
+  if (fields <= 0 || parts <= 0 || fieldRateMilliHz == 0) {
+    return false;
+  }
+  if (!mEmulatedTime.advanceDisplayFields(
+          static_cast<uint32_t>(fields), static_cast<uint32_t>(parts), fieldRateMilliHz)) {
+    return false;
+  }
+  serviceCdc();
+  return true;
+}
+
+uint64_t Timing::emulatedCpuTicks() const {
+  return mEmulatedTime.nowTicks();
+}
+
+void Timing::serviceCdc() {
   if (cdc_drive_service(&game->cdc)) {
     game->core.irqStatLatch();
   }

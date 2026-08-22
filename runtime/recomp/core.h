@@ -22,6 +22,8 @@
 
 #ifdef __cplusplus
 
+#include "frame_pacer.h"
+
 class Game; // the whole-machine owner (game.h); Core::game points back to it so any code holding a
             // Core* reaches migrated subsystem state via c->game->... (de-globalization, 2026-06-19).
 
@@ -351,13 +353,6 @@ void gpu_present_ex(Core *core, int do_blit);
 // M3 provenance: an owned background drawer's override records the KSEG0 packet-pool span [lo,hi) it
 // produced this frame, so the OT walk classifies those prims as RQ_BACKGROUND (submit.cpp).
 void gpu_bg_range_add(Core *core, uint32_t lo, uint32_t hi);
-void gpu_pace_frame(Core *core);
-void gpu_pace_subframe(Core *core, int parts);
-void gpu_pace_subframe_fields(Core *core, int guestFields, int parts);
-// The display FIELD RATE this game runs at, in milli-hertz — decoded from GP1(0x08) bit 3, i.e. from
-// the standard the guest itself programmed (59940 = NTSC's 60000/1001 Hz, 50000 = PAL). THE one
-// source of a field rate in this runtime; see field_rate.h for why a second literal is a bug.
-unsigned gpu_field_rate_millihz(Core *core);
 void gpu_native_load_image(Core *core, int x, int y, int w, int h, uint32_t src);
 
 #endif // __cplusplus

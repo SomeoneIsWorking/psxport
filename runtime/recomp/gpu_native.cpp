@@ -14,7 +14,6 @@
 // VRAM is 1024x512 16-bit (5-5-5 BGR + mask), holding both textures (sampled by textured
 // primitives via texpage+CLUT) and the framebuffer regions the game composes & displays.
 #include "cfg.h"
-#include "config.h" // psx::config::cv_nopace — the pace knob resolves through the CVar ladder
 #include "config_vars.h"
 #include "field_rate.h"          // THE display field rate, in milli-hertz (one definition)
 #include "gpu_native_internal.h" // shared VRAM/state/helpers (also used by gpu_debug.cpp)
@@ -33,14 +32,12 @@ void gpu_beetle_frame_report(int frame, const uint16_t *ours, int vram_w, int vr
 void gpu_beetle_load_image(int x, int y, int w, int h, const uint16_t *pixels);
 
 #include "mods.h"             // g_mods.fps60 (was g_fps60_on)
-#include "pace_plan.h"        // the frame-pacing decision, as a pure function (no window input)
 #include "render_substrate.h" // Render::mDbgRenderNode (was g_dbg_render_node)
 #include "scea_asset.h"       // baked SCEA license-screen texture+CLUT (PC-native boot splash)
 #include <execinfo.h>         // PSXPORT_TEXWATCH_BT host backtrace (guest pc is fiction, INST-23)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h> // clock_gettime / nanosleep — portable PC-owned frame pacer (gpu_pace_subframe)
 #ifdef PSXPORT_SDL
 #include <SDL3/SDL.h>
 #endif
@@ -2919,121 +2916,6 @@ void GpuState::gpu_repaint() {
 void GpuState::present_window() {}
 void GpuState::gpu_repaint() {}
 #endif
-
-// The display field rate this game runs at, in milli-hertz — read from the standard the guest itself
-// programmed into GP1(0x08) bit 3, not assumed by the framework. THE ONE source of a field rate in
-// this runtime; see field_rate.h for why there is exactly one.
-unsigned gpu_field_rate_millihz(Core *core) {
-  return field_rate_millihz(core && core->game ? core->game->gpu.s_disp_pal != 0 : false);
-}
-
-// Frame pacing: the game loop runs UNTHROTTLED — at thousands of fps — unless it is held to the
-// game's own frame interval. The cadence is per-game via GameConfig::paceQuota (the number of
-// DISPLAY FIELDS one pacing call represents), and the interval is that many fields at the game's
-// real field rate. Called ONCE per game frame from the port's frame boundary — NOT from gpu_present,
-// which the boot stub also drives many times per frame (pacing those would stall the boot).
-// A guest-owned-loop port paces once per vblank and sets paceQuota=1.
-// Pace 1/`parts` of a logic frame: parts=1 → one full logic frame (30fps faithful path); parts=2 →
-// half a logic frame (fps60 presents twice per logic frame for 60fps). The shared deadline advances
-// by exactly one logic frame's worth per logic frame either way, so audio stays realtime.
-//
-// TWO DEFECTS WERE FIXED HERE, both USER-flagged, and the decision moved into pace_plan.h so neither
-// can silently regrow (tests/test_pace_plan.cpp carries a transcription of the old rule as its
-// negative control):
-//
-//   1. `if (!gpu_has_window() || cfg_on("PSXPORT_NOPACE")) return;` — HEADLESS WAS NEVER PACED, so
-//      every headless timing number described a program the user never runs, and headless is where
-//      essentially every measurement in this project is taken. PSXPORT_NOPACE was ALREADY the
-//      independent switch for "run unpaced", so the window term was redundant with it. Speed is
-//      orthogonal to windowing; conflating them is how this got in. USER RULE: "windowed and
-//      headless should be equal anyway… headless just means no window and no audio".
-//      CONSEQUENCE, and it is not a bug: a headless run is now a REAL-TIME run. Every gate and tool
-//      whose intent is "as fast as possible" passes PSXPORT_NOPACE=1 — that is what the switch is
-//      for, and it is now the only thing that says so.
-//
-//   2. `quota * 1000.0 / 60.0` — a LITERAL 60.000 Hz, while the consumer of the pacing counts
-//      display fields at the game's real rate (NTSC is 60000/1001 = 59.940 Hz). Two clocks at
-//      different rates across one wait loop is a beat: over a minute the 60.000 Hz pacer lands
-//      60 ms — 3.6 whole fields — short of where the field counter is. The rate now comes from
-//      gpu_field_rate_millihz(), i.e. from the game.
-//
-// The scratchpad quota fallback stays DELETED. It read 0x1F800235 — a hardcoded Tomba!2 engine field
-// that is ordinary working memory in any other game — so a second consumer slept on garbage. An
-// un-RE'd magic address feeding a timing decision is exactly the banned shape, and its failure mode
-// is a plausible-looking slow run rather than an error. Unset is LOUD, once, and paces at 1 field.
-void gpu_pace_subframe_fields(Core *core, int guestFields, int parts) {
-  // Portable monotonic clock + nanosleep (no SDL dependency), so it works identically on Linux and
-  // macOS — and, now, identically with and without a window.
-  static double s_next = 0.0;
-  static bool s_seeded = false;
-
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-
-  PaceInputs in;
-  // PSXPORT_NOPACE is the standing switch for "run flat out". A RESUME run (PSXPORT_PAD_RESUME) is
-  // the same request, scoped to the replayed prefix: it is fast-forwarding back to where the player
-  // left off, and stops the instant the recording is spent (Pad::fastForwarding). Both are EXPLICIT
-  // asks — nothing here infers speed from a window, a sink or a leg, which is the property this
-  // function was rewritten to have.
-  in.unpaced = psx::config::cv_nopace.get() || (core->game && core->game->pad.fastForwarding());
-  in.quota = guestFields > 0 ? guestFields : ((core->cfg && core->cfg->paceQuota) ? (int)core->cfg->paceQuota : 0);
-  in.parts = parts;
-  in.fieldRateMilliHz = gpu_field_rate_millihz(core);
-  in.nowMs = ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
-  in.nextMs = s_next;
-  in.seeded = s_seeded;
-
-  const PacePlan p = pace_plan(in);
-
-  // A port that has not derived its cadence should be visibly unconfigured, not quietly mistimed.
-  if (p.quotaUnset) {
-    static bool warned = false;
-    if (!warned) {
-      warned = true;
-      lucent::warn("gpu",
-                   "GameConfig::paceQuota is unset — pacing 1 display field per call. Derive "
-                   "this port's real cadence (fields per gpu_pace_frame call) and set it.");
-    }
-  }
-  // Structurally unreachable (gpu_field_rate_millihz always returns a standard's rate), but a
-  // diagnostic that can only print the reassuring answer is worthless: if the rate ever does arrive
-  // as zero, the run is unpaced and must say so instead of silently substituting 60.
-  if (p.rateUnset) {
-    static bool warned_rate = false;
-    if (!warned_rate) {
-      warned_rate = true;
-      lucent::warn("gpu",
-                   "no display field rate — NOT pacing. GP1(08) has not been decoded for this "
-                   "Core, so there is no clock to pace against and none will be invented.");
-    }
-  }
-  if (!p.paced) {
-    return;
-  }
-
-  s_next = p.nextMs;
-  s_seeded = true;
-  lucent::debug("pacer",
-                "interval={:.4f}ms sleep={:.4f}ms quota={} parts={} rate={}mHz{}",
-                p.intervalMs,
-                p.sleepMs,
-                in.quota,
-                parts,
-                in.fieldRateMilliHz,
-                p.resync ? " RESYNC" : "");
-  if (p.sleepMs <= 0.0) {
-    return;
-  }
-  struct timespec req = {(time_t)(p.sleepMs / 1000.0), (long)((p.sleepMs - (long)(p.sleepMs / 1000.0) * 1000.0) * 1e6)};
-  nanosleep(&req, 0);
-}
-void gpu_pace_subframe(Core *core, int parts) {
-  gpu_pace_subframe_fields(core, 0, parts);
-}
-void gpu_pace_frame(Core *core) {
-  gpu_pace_subframe(core, 1);
-}
 
 // Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs;
 // PSXPORT_GPU_WINDOW=1 shows a live SDL window.

@@ -12,7 +12,7 @@
 // is what reaches the screen. Fixing that by writing 59940 at the pacer would have been the same
 // bug with a different number, so the rate has exactly ONE spelling per standard, here, and the
 // framework READS which standard the game is in from the game itself: GP1(0x08) bit 3, decoded in
-// GpuState::gpu_gp1 into `s_disp_pal` and served by `gpu_field_rate_millihz(Core*)`.
+// GpuState::gpu_gp1 into `s_disp_pal` and served by `frame_pacer.cpp`.
 //
 // PAL IS UNTESTED IN THIS WORKSPACE — all three consuming games are NTSC discs, so the PAL arm has
 // never executed on real data. It is stated as the documented hardware rate rather than measured,

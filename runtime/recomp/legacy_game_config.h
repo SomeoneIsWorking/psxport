@@ -226,7 +226,7 @@ struct GameConfig {
   const char *cardEnvVar;
   const char *cardDefaultPath;
 
-  // --- frame pacing (gpu_native.cpp gpu_pace_subframe) ------------------------------------------
+  // --- frame pacing (frame_pacer.cpp) -----------------------------------------------------------
   // The pacer sleeps a whole-frame interval per call so a live run plays at the game's intended
   // speed instead of spinning. `quota` is the number of DISPLAY FIELDS one pacing call represents,
   // and the interval is that many fields at the game's real field rate (gpu_field_rate_millihz,

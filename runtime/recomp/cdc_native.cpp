@@ -128,7 +128,7 @@ static void schedule_sector_event(CdcState *s) {
     return;
   }
   const uint64_t now_ticks = s->tick_now(s->tick_context);
-  s->drive_deadline_ticks = now_ticks + cd_drive_sector_period_instruction_ticks(s->mode);
+  s->drive_deadline_ticks = now_ticks + cd_drive_sector_period_cpu_ticks(s->mode);
   s->drive_event_armed = 1;
   lucent::debug("cdcpace",
                 "armed sector event now={} deadline={} mode=0x{:02X} first={}",

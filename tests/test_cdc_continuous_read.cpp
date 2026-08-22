@@ -98,7 +98,7 @@ void test_first_sector_waits_one_drive_period(void) {
 
   CHECK_EQ(pending_irq_type(&cdc), 0);
   CHECK_EQ(cdc.data_n, 0);
-  CHECK_EQ(cdc.drive_deadline_ticks, cd_drive_sector_period_instruction_ticks(0xA0));
+  CHECK_EQ(cdc.drive_deadline_ticks, cd_drive_sector_period_cpu_ticks(0xA0));
 
   clock.ticks = cdc.drive_deadline_ticks - 1;
   CHECK_EQ(cdc_drive_service(&cdc), 0);
@@ -125,7 +125,7 @@ void test_partial_fifo_does_not_block_following_sector_event(void) {
   write_bfrd(&cdc, 0x80); // accept LBA 16; LBA 17 is not due until one drive period elapses
   CHECK_EQ(pending_irq_type(&cdc), 0);
   CHECK(cdc.drive_event_armed);
-  CHECK_EQ(cdc.drive_deadline_ticks, clock.ticks + cd_drive_sector_period_instruction_ticks(0xA0));
+  CHECK_EQ(cdc.drive_deadline_ticks, clock.ticks + cd_drive_sector_period_cpu_ticks(0xA0));
 
   CHECK_EQ(cdc_dma_read(&cdc, header.data(), static_cast<int>(header.size())), header.size());
   write_bfrd(&cdc, 0x80); // repeated assertion between split DMA legs
@@ -151,7 +151,7 @@ void test_partial_fifo_does_not_block_following_sector_event(void) {
   CHECK_EQ(cdc.loc_lba, kFirstLba + 1);
   CHECK_EQ(cdc.data_rd, 0);
   CHECK_EQ(pending_irq_type(&cdc), 0); // LBA 18 has a new future deadline, not an immediate INT1
-  CHECK_EQ(cdc.drive_deadline_ticks, clock.ticks + cd_drive_sector_period_instruction_ticks(0xA0));
+  CHECK_EQ(cdc.drive_deadline_ticks, clock.ticks + cd_drive_sector_period_cpu_ticks(0xA0));
 
   uint32_t second_word = 0;
   CHECK_EQ(cdc_dma_read(&cdc, &second_word, 1), 1);
@@ -219,8 +219,8 @@ void test_setmode_selects_single_and_double_speed_deadlines(void) {
   CdcState single = begin_read(&disc, &single_clock, 0x20);
   CdcState twice = begin_read(&disc, &double_clock, 0xA0);
 
-  CHECK_EQ(single.drive_deadline_ticks, cd_drive_sector_period_instruction_ticks(0x20));
-  CHECK_EQ(twice.drive_deadline_ticks, cd_drive_sector_period_instruction_ticks(0xA0));
+  CHECK_EQ(single.drive_deadline_ticks, cd_drive_sector_period_cpu_ticks(0x20));
+  CHECK_EQ(twice.drive_deadline_ticks, cd_drive_sector_period_cpu_ticks(0xA0));
   CHECK_EQ(single.drive_deadline_ticks, 451'584u);
   CHECK_EQ(twice.drive_deadline_ticks, 225'792u);
 }

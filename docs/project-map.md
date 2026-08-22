@@ -194,13 +194,18 @@ billboard-history hook.
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
 game-validated blocking-control seam), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
 latch and drive-event state), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),
-`timing.cpp` (per-Game deterministic guest instruction-time owner), `disc.cpp` (libchdr), `memcard.cpp`. Generated blocks and
-the oracle interpreter advance the same deterministic clock; ReadN schedules its first and following
-INT1 at nominal 451,584 ticks (1x) or 225,792 ticks (Setmode bit 0x80, 2x). One instruction currently
-contributes one tick, so this is deterministic ordering rather than cycle-accurate physical timing.
+`emulated_time.{h,cpp}` + `timing.cpp` (per-Game deterministic emulated CPU-time owner),
+`frame_pacer.{h,cpp}` (display cadence + guest field delivery + optional host sleep), `disc.cpp`
+(libchdr), `memcard.cpp`. Generated blocks and the oracle interpreter advance the same deterministic
+clock; a shared display-field delivery advances it to the guest-programmed NTSC/PAL boundary even
+when host sleeping is disabled. ReadN schedules its first and following INT1 at nominal 451,584 ticks
+(1x) or 225,792 ticks (Setmode bit 0x80, 2x). One instruction currently contributes one tick, so this
+is deterministic ordering rather than cycle-accurate physical timing.
 BFRD never creates an event:
 reasserting it preserves a partial DMA cursor, and a later transition only installs a sector whose
-drive deadline already elapsed. Pause/Stop cancels the owned deadline. `test_cdc_bfrd_split_dma`
+drive deadline already elapsed. Pause/Stop cancels the owned deadline. `test_cdc_emulated_time`
+gates instruction-heavy versus yield-heavy deadline delivery, fractional subfields, late-boundary
+resynchronization, and invalid cadence. `test_cdc_bfrd_split_dma`
 gates latch/access behavior (535 checks), `test_cdc_continuous_read` gates too-early/due, partial,
 Pause, full-drain, status and speed answers (59 checks), and `test_interp_guest_cycles` plus the
 emitter execution suite gate interpreted/emitted clock advancement. DMA3 commits its programmed

@@ -19,7 +19,7 @@ deadline at cycle four and proves the shipping timing/IRQ wiring consumes it.
 
 ## Known failure modes
 
-The compact differential covers integer/control instruction timing and the CDC wiring, not
-instruction-specific PSX wait states. The current drive model deliberately uses executed CPU-cycle
-units; if memory/coprocessor latency becomes modeled, this instrument must gain those unequal-cost
-answers before claims rely on them.
+The compact differential covers integer/control instruction timing and the CDC wiring, not display
+waits or instruction-specific PSX wait states. `test_cdc_emulated_time` is the separate instrument
+for the display-wait contribution. If memory/coprocessor latency becomes modeled, this instrument
+must gain those unequal-cost answers before claims rely on them.
