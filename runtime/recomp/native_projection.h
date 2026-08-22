@@ -14,6 +14,8 @@ struct ProjectionParams {
   int32_t ofx = 0;
   int32_t ofy = 0;
   uint16_t h = 0;
+  int16_t dqa = 0;
+  int32_t dqb = 0;
 };
 
 struct ModelVertex {
@@ -29,6 +31,7 @@ struct NativeProjectedVertex {
   uint16_t sz = 0;
   int16_t sx = 0;
   int16_t sy = 0;
+  uint32_t flags = 0;
   float px = 0.0f;
   float py = 0.0f;
   float pz = 0.0f;

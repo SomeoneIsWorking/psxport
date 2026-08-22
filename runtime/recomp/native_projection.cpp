@@ -34,8 +34,9 @@ int32_t reciprocal(uint16_t divisor) {
   return ((x * (131072 + t)) + 0x80) >> 8;
 }
 
-uint32_t divide_unr(uint16_t dividend, uint16_t divisor) {
+uint32_t divide_unr(uint16_t dividend, uint16_t divisor, uint32_t &flags) {
   if ((uint32_t)divisor * 2u <= dividend) {
+    flags |= 1u << 17;
     return 0x1ffffu;
   }
   const unsigned shift = compat_clz_u16(divisor);
@@ -46,7 +47,13 @@ uint32_t divide_unr(uint16_t dividend, uint16_t divisor) {
   return std::min(result, 0x1ffffu);
 }
 
-int64_t wrap44(int64_t value) {
+int64_t wrap44(int64_t value, unsigned row, uint32_t &flags) {
+  if (value >= (INT64_C(1) << 43)) {
+    flags |= 1u << (30 - row);
+  }
+  if (value < -(INT64_C(1) << 43)) {
+    flags |= 1u << (27 - row);
+  }
   constexpr uint64_t mask = (UINT64_C(1) << 44) - 1;
   constexpr uint64_t sign = UINT64_C(1) << 43;
   const uint64_t bits = (uint64_t)value & mask;
@@ -55,6 +62,22 @@ int64_t wrap44(int64_t value) {
 
 int32_t clampi(int32_t value, int32_t low, int32_t high) {
   return std::clamp(value, low, high);
+}
+
+int32_t clamp_flagged(int32_t value, int32_t low, int32_t high, unsigned bit, uint32_t &flags) {
+  if (value < low || value > high) {
+    flags |= 1u << bit;
+  }
+  return clampi(value, low, high);
+}
+
+void check_mac0_overflow(int64_t value, uint32_t &flags) {
+  if (value < INT32_MIN) {
+    flags |= 1u << 15;
+  }
+  if (value > INT32_MAX) {
+    flags |= 1u << 16;
+  }
 }
 
 } // namespace
@@ -72,16 +95,34 @@ NativeProjectedVertex detail::project_gte_mode(const FixedAffine &affine,
   for (unsigned row = 0; row < 3; ++row) {
     int64_t accumulator = (int64_t)affine.t[row] * 4096;
     for (unsigned column = 0; column < 3; ++column) {
-      accumulator = wrap44(accumulator + (int64_t)affine.m[row][column] * v[column]);
+      accumulator = wrap44(accumulator + (int64_t)affine.m[row][column] * v[column], row, out.flags);
     }
     out.raw_view_fixed[row] = accumulator;
     out.raw_view[row] = (float)accumulator / 4096.0f;
-    out.ir[row] = clampi((int32_t)(accumulator >> shift), limit_mode ? 0 : -32768, 32767);
+    const int32_t mac = (int32_t)(accumulator >> shift);
+    const int32_t flag_value = row == 2 ? (int32_t)(accumulator >> 12) : mac;
+    out.ir[row] = clamp_flagged(flag_value, -32768, 32767, 24 - row, out.flags);
+    out.ir[row] = clampi(mac, limit_mode ? 0 : -32768, 32767);
   }
-  out.sz = (uint16_t)clampi((int32_t)(out.raw_view_fixed[2] >> 12), 0, 65535);
-  const uint32_t ratio = divide_unr(projection.h, out.sz);
-  out.sx = (int16_t)clampi((int32_t)(((int64_t)projection.ofx + (int64_t)out.ir[0] * ratio) >> 16), -1024, 1023);
-  out.sy = (int16_t)clampi((int32_t)(((int64_t)projection.ofy + (int64_t)out.ir[1] * ratio) >> 16), -1024, 1023);
+  out.sz = (uint16_t)clamp_flagged((int32_t)(out.raw_view_fixed[2] >> 12), 0, 65535, 18, out.flags);
+  const uint32_t ratio = divide_unr(projection.h, out.sz, out.flags);
+  const auto project_axis = [&](int32_t offset, int32_t ir, unsigned bit) {
+    const int64_t expression = (int64_t)offset + (int64_t)ir * ratio;
+    check_mac0_overflow(expression, out.flags);
+    return (int16_t)clamp_flagged((int32_t)(expression >> 16), -1024, 1023, bit, out.flags);
+  };
+  out.sx = project_axis(projection.ofx, out.ir[0], 14);
+  out.sy = project_axis(projection.ofy, out.ir[1], 13);
+
+  const int64_t depth_cue = (int64_t)projection.dqb + (int64_t)projection.dqa * ratio;
+  check_mac0_overflow(depth_cue, out.flags);
+  const int32_t ir0 = (int32_t)(depth_cue >> 12);
+  if (ir0 < 0 || ir0 > 4096) {
+    out.flags |= 1u << 12;
+  }
+  if ((out.flags & 0x7f87e000u) != 0) {
+    out.flags |= 1u << 31;
+  }
 
   out.pz = std::max((float)projection.h * 0.5f, out.raw_view[2]);
   const float scale = out.pz > 0.0f ? (float)projection.h / out.pz : 0.0f;

@@ -15,7 +15,7 @@ using namespace psxport::native_projection;
 struct CompareResult {
   unsigned compared = 0;
   unsigned mismatched = 0;
-  unsigned first = 9;
+  unsigned first = 10;
 };
 
 struct FractionalExpected {
@@ -41,7 +41,7 @@ static unsigned compare_fractional(const NativeProjectedVertex &actual, const Fr
 }
 
 static CompareResult compare(const NativeProjectedVertex &native, const GteRegs &guest, unsigned shift = 12) {
-  const std::array<int32_t, 9> expected = {
+  const std::array<int64_t, 10> expected = {
       (int16_t)guest.REG[9],
       (int16_t)guest.REG[10],
       (int16_t)guest.REG[11],
@@ -51,8 +51,9 @@ static CompareResult compare(const NativeProjectedVertex &native, const GteRegs 
       (uint16_t)guest.REG[19],
       (int16_t)guest.REG[14],
       (int16_t)(guest.REG[14] >> 16),
+      guest.FLAGS,
   };
-  const std::array<int32_t, 9> actual = {
+  const std::array<int64_t, 10> actual = {
       native.ir[0],
       native.ir[1],
       native.ir[2],
@@ -62,6 +63,7 @@ static CompareResult compare(const NativeProjectedVertex &native, const GteRegs 
       native.sz,
       native.sx,
       native.sy,
+      native.flags,
   };
   CompareResult result{};
   for (unsigned i = 0; i < actual.size(); ++i) {
@@ -96,6 +98,8 @@ static GteRegs make_guest(const FixedAffine &affine, const ProjectionParams &pro
   guest.REG[56] = (uint32_t)projection.ofx;
   guest.REG[57] = (uint32_t)projection.ofy;
   guest.REG[58] = projection.h;
+  guest.REG[59] = (uint16_t)projection.dqa;
+  guest.REG[60] = (uint32_t)projection.dqb;
   guest.REG[0] = (uint16_t)vertex.x | ((uint32_t)(uint16_t)vertex.y << 16);
   guest.REG[1] = (uint16_t)vertex.z;
   return guest;
@@ -111,7 +115,7 @@ static void check_diagnostic_mode(const FixedAffine &affine,
   CHECK(GTE_ExecuteIsolated(&guest, insn) >= 0);
   const NativeProjectedVertex native = detail::project_gte_mode(affine, projection, vertex, shift, limit_mode);
   const CompareResult result = compare(native, guest, shift);
-  CHECK_EQ(result.compared, 9u);
+  CHECK_EQ(result.compared, 10u);
   CHECK_EQ(result.mismatched, 0u);
 }
 
@@ -120,7 +124,7 @@ static void check_case(const FixedAffine &affine, const ProjectionParams &projec
   CHECK(GTE_ExecuteIsolated(&guest, 0x4a180001u) >= 0);
   const NativeProjectedVertex native = project(affine, projection, vertex);
   const CompareResult result = compare(native, guest);
-  CHECK_EQ(result.compared, 9u);
+  CHECK_EQ(result.compared, 10u);
   CHECK_EQ(result.mismatched, 0u);
 }
 
@@ -137,8 +141,11 @@ static void test_random_and_edges(void) {
     for (int32_t &value : affine.t) {
       value = (int32_t)random_word(seed);
     }
-    const ProjectionParams projection{
-        (int32_t)random_word(seed), (int32_t)random_word(seed), (uint16_t)random_word(seed)};
+    const ProjectionParams projection{(int32_t)random_word(seed),
+                                      (int32_t)random_word(seed),
+                                      (uint16_t)random_word(seed),
+                                      (int16_t)random_word(seed),
+                                      (int32_t)random_word(seed)};
     const ModelVertex vertex{(int16_t)random_word(seed), (int16_t)random_word(seed), (int16_t)random_word(seed)};
     check_case(affine, projection, vertex);
     ++cases;
@@ -164,9 +171,34 @@ static void test_forced_mismatch_other_answer(void) {
   CHECK_EQ(compare(native, guest).mismatched, 0u);
   ++native.sx;
   const CompareResult corrupt = compare(native, guest);
-  CHECK_EQ(corrupt.compared, 9u);
+  CHECK_EQ(corrupt.compared, 10u);
   CHECK_EQ(corrupt.mismatched, 1u);
   CHECK_EQ(corrupt.first, 7u);
+}
+
+static void test_flag_output_and_negative_control(void) {
+  FixedAffine identity{};
+  identity.m[0][0] = identity.m[1][1] = identity.m[2][2] = 4096;
+  const ProjectionParams projection{160 << 16, 120 << 16, 256};
+
+  GteRegs ordinary_guest = make_guest(identity, projection, {4, -7, 512});
+  CHECK(GTE_ExecuteIsolated(&ordinary_guest, 0x4a180001u) >= 0);
+  NativeProjectedVertex ordinary = project(identity, projection, {4, -7, 512});
+  CHECK_EQ(ordinary.flags, 0u);
+  CHECK_EQ(compare(ordinary, ordinary_guest).mismatched, 0u);
+
+  GteRegs clipped_guest = make_guest(identity, projection, {0, 0, 0});
+  CHECK(GTE_ExecuteIsolated(&clipped_guest, 0x4a180001u) >= 0);
+  NativeProjectedVertex clipped = project(identity, projection, {0, 0, 0});
+  CHECK((clipped.flags & (1u << 17)) != 0);
+  CHECK((clipped.flags & (1u << 31)) != 0);
+  CHECK_EQ(compare(clipped, clipped_guest).mismatched, 0u);
+
+  clipped.flags ^= 1u << 17;
+  const CompareResult corrupt = compare(clipped, clipped_guest);
+  CHECK_EQ(corrupt.compared, 10u);
+  CHECK_EQ(corrupt.mismatched, 1u);
+  CHECK_EQ(corrupt.first, 9u);
 }
 
 static void test_diagnostic_modes(void) {
@@ -182,8 +214,11 @@ static void test_diagnostic_modes(void) {
     for (int32_t &value : affine.t) {
       value = (int32_t)random_word(seed);
     }
-    const ProjectionParams projection{
-        (int32_t)random_word(seed), (int32_t)random_word(seed), (uint16_t)random_word(seed)};
+    const ProjectionParams projection{(int32_t)random_word(seed),
+                                      (int32_t)random_word(seed),
+                                      (uint16_t)random_word(seed),
+                                      (int16_t)random_word(seed),
+                                      (int32_t)random_word(seed)};
     const ModelVertex vertex{(int16_t)random_word(seed), (int16_t)random_word(seed), (int16_t)random_word(seed)};
     check_diagnostic_mode(affine, projection, vertex, 0, false);
     check_diagnostic_mode(affine, projection, vertex, 0, true);
@@ -238,6 +273,7 @@ int main() {
   GTE_Init();
   RUN(random_and_edges);
   RUN(forced_mismatch_other_answer);
+  RUN(flag_output_and_negative_control);
   RUN(diagnostic_modes);
   RUN(fractional_endpoint_channels);
   return pt_summary();
