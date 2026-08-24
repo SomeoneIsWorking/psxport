@@ -101,18 +101,24 @@ static int parse_modeled_bios_return(const char *text, ModeledBiosReturn *model)
   return 1;
 }
 
-static void dump_register_block(FILE *out, const char *tag, long step, const OracleState *state) {
-  fprintf(out, "# %s-REGS step=%ld pc=0x%08X\n", tag, step, state->pc);
+static void
+dump_register_block(FILE *out, const char *tag, const char *position_name, long position, const OracleState *state) {
+  fprintf(out, "# %s-REGS %s=%ld pc=0x%08X\n", tag, position_name, position, state->pc);
   for (int r = 1; r < 32; r++) {
     fprintf(out, "# %s-REG %s=0x%08X\n", tag, kReg[r], state->gpr[r]);
   }
   fprintf(out, "# %s-REG lo=0x%08X\n# %s-REG hi=0x%08X\n", tag, state->lo, tag, state->hi);
 }
 
+static void dump_pc_boundary(FILE *out, uint32_t target, long executed, const OracleState *state) {
+  fprintf(out, "# CAPTURED-PC target=0x%08X executed=%ld\n", target, executed);
+  dump_register_block(out, "PC-BOUNDARY", "executed", executed, state);
+}
+
 static void usage(void) {
   fprintf(stderr,
           "usage: oracle_trace <PS-X EXE> [--steps N] [--out FILE] [--entry 0xADDR]\n"
-          "                    [--capture-first-call | --capture-call N]\n"
+          "                    [--capture-first-call | --capture-call N | --capture-at 0xADDR]\n"
           "                    [--model-bios-return TABLE:FN:V0]\n"
           "\n"
           "Steps a real game executable in the independent reference emulator (the vendored Mednafen PSX\n"
@@ -125,6 +131,9 @@ static void usage(void) {
           "                       compatibility alias for --capture-call 1\n"
           "  --capture-call N record the Nth executed jal after its delay slot; refuse with the\n"
           "                   reached denominator if fewer than N calls occur inside --steps\n"
+          "  --capture-at ADDR stop when the CPU reaches ADDR and record state before executing\n"
+          "                    its instruction; refuse with the executed-step denominator if it is\n"
+          "                    not reached. This is mutually exclusive with call/model capture.\n"
           "  --model-bios-return TABLE:FN:V0\n"
           "                 when execution reaches the named A0/B0/C0 vector with $t1 == FN, install\n"
           "                 explicit $v0 (preserving $v1), resume at the observed $ra, and capture the\n"
@@ -147,6 +156,8 @@ int main(int argc, char **argv) {
   long steps = 200;
   uint32_t entry_override = 0;
   long capture_call_ordinal = 0;
+  uint32_t capture_pc = 0;
+  int capture_pc_enabled = 0;
   int summary_only = 0;
   ModeledBiosReturn modeled_bios = {0};
 
@@ -158,22 +169,32 @@ int main(int argc, char **argv) {
     } else if (!strcmp(argv[i], "--entry") && i + 1 < argc) {
       entry_override = (uint32_t)strtoul(argv[++i], NULL, 0);
     } else if (!strcmp(argv[i], "--capture-first-call")) {
-      if (capture_call_ordinal > 1) {
-        fprintf(
-            stderr, "oracle_trace: --capture-first-call conflicts with --capture-call %ld.\n", capture_call_ordinal);
+      if (capture_pc_enabled || capture_call_ordinal > 1) {
+        fprintf(stderr, "oracle_trace: --capture-first-call conflicts with another capture selector.\n");
         return 2;
       }
       capture_call_ordinal = 1;
     } else if (!strcmp(argv[i], "--capture-call") && i + 1 < argc) {
       char *end = NULL;
       const long ordinal = strtol(argv[++i], &end, 0);
-      if (!end || *end != '\0' || ordinal <= 0 || (capture_call_ordinal && capture_call_ordinal != ordinal)) {
+      if (!end || *end != '\0' || ordinal <= 0 || capture_pc_enabled ||
+          (capture_call_ordinal && capture_call_ordinal != ordinal)) {
         fprintf(stderr, "oracle_trace: invalid or conflicting --capture-call ordinal %s.\n", argv[i]);
         return 2;
       }
       capture_call_ordinal = ordinal;
+    } else if (!strcmp(argv[i], "--capture-at") && i + 1 < argc) {
+      const char *end = NULL;
+      uint32_t parsed_pc = 0;
+      if (!parse_u32(argv[++i], &end, &parsed_pc) || *end != '\0' || (parsed_pc & 3u) != 0 || capture_call_ordinal ||
+          modeled_bios.enabled || (capture_pc_enabled && capture_pc != parsed_pc)) {
+        fprintf(stderr, "oracle_trace: invalid, unaligned, or conflicting --capture-at address %s.\n", argv[i]);
+        return 2;
+      }
+      capture_pc = parsed_pc;
+      capture_pc_enabled = 1;
     } else if (!strcmp(argv[i], "--model-bios-return") && i + 1 < argc) {
-      if (!parse_modeled_bios_return(argv[++i], &modeled_bios)) {
+      if (capture_pc_enabled || !parse_modeled_bios_return(argv[++i], &modeled_bios)) {
         fprintf(stderr, "oracle_trace: invalid --model-bios-return %s (expected A:0x39:0 style).\n", argv[i]);
         return 2;
       }
@@ -307,6 +328,9 @@ int main(int argc, char **argv) {
   if (capture_call_ordinal) {
     fprintf(out, "# requested call capture: executed jal ordinal %ld\n", capture_call_ordinal);
   }
+  if (capture_pc_enabled) {
+    fprintf(out, "# requested PC capture: 0x%08X before its instruction executes\n", capture_pc);
+  }
   if (modeled_bios.enabled) {
     fprintf(out,
             "# requested modeled BIOS return: %c(0x%02X) at 0x%08X, explicit v0=0x%08X, v1 preserved\n",
@@ -322,6 +346,7 @@ int main(int argc, char **argv) {
   fprintf(out, "# initial: pc=0x%08X gp=0x%08X sp=0x%08X\n", prev.pc, prev.gpr[28], prev.gpr[29]);
 
   long n = 0;
+  long executed_steps = 0;
   uint32_t left_text_at = 0; // the first PC outside the mapped text, if any
   long left_text_step = -1;
   OracleStop stop = ORACLE_STOP_NONE;
@@ -335,6 +360,7 @@ int main(int argc, char **argv) {
   int jal_pending = 0;
   uint32_t jal_pending_ra = 0;
   long captured_call_step = -1;
+  long captured_pc_executed = -1;
   long completed_jal_calls = 0;
   long modeled_return_step = -1;
   long post_return_call_step = -1;
@@ -343,7 +369,12 @@ int main(int argc, char **argv) {
   int post_call_pending = 0;
   uint32_t post_call_pending_ra = 0;
 
-  for (n = 0; n < steps; n++) {
+  if (capture_pc_enabled && prev.pc == capture_pc) {
+    captured_pc_executed = 0;
+    dump_pc_boundary(out, capture_pc, captured_pc_executed, &prev);
+  }
+
+  for (n = 0; n < steps && captured_pc_executed < 0; n++) {
     // Identify jal from the instruction bytes, not from a change to $ra: ordinary instructions and jalr
     // can also write r31. The executable bytes are independent of the symbolic crt0 decoder.
     int executed_jal = 0;
@@ -359,6 +390,7 @@ int main(int argc, char **argv) {
     stop = oracle_step();
     OracleState now;
     oracle_capture(&now);
+    executed_steps++;
 
     // Every step gets a line, even one that changed nothing: a diff must be able to tell "this step made
     // no difference" apart from "this step is missing from the trace".
@@ -396,7 +428,7 @@ int main(int argc, char **argv) {
       // unconditionally, including under --summary-only, because the boundary is the whole point of a
       // long window — and dumped in one place so a cross-check parses one format, not a scan for the
       // last write to each register.
-      dump_register_block(out, "BOUNDARY", n, &now);
+      dump_register_block(out, "BOUNDARY", "step", n, &now);
       if (last_jal_step >= 0) {
         fprintf(
             out, "# BOUNDARY-LAST-JAL target=0x%08X ra=0x%08X step=%ld\n", last_jal_target, last_jal_ra, last_jal_step);
@@ -415,14 +447,14 @@ int main(int argc, char **argv) {
       if (capture_call_ordinal == completed_jal_calls && captured_call_step < 0) {
         captured_call_step = n;
         fprintf(out, "# CAPTURED-CALL target=0x%08X ra=0x%08X step=%ld\n", last_jal_target, last_jal_ra, last_jal_step);
-        dump_register_block(out, "CALL-BOUNDARY", n, &now);
+        dump_register_block(out, "CALL-BOUNDARY", "step", n, &now);
       }
     }
     if (post_call_pending) {
       post_return_call_step = n;
       post_call_pending = 0;
       fprintf(out, "# POST-RETURN-CAPTURED-CALL target=0x%08X ra=0x%08X step=%ld\n", now.pc, post_call_pending_ra, n);
-      dump_register_block(out, "POST-RETURN-CALL-BOUNDARY", n, &now);
+      dump_register_block(out, "POST-RETURN-CALL-BOUNDARY", "step", n, &now);
     }
 
     if (modeled_bios.enabled && modeled_return_step < 0 && now.pc == modeled_bios.target) {
@@ -453,7 +485,7 @@ int main(int argc, char **argv) {
                 modeled_bios.v0,
                 preserved_v1,
                 n);
-        dump_register_block(out, "MODELED-RETURN", n, &now);
+        dump_register_block(out, "MODELED-RETURN", "step", n, &now);
       }
     }
     if (executed_jal) {
@@ -468,7 +500,16 @@ int main(int argc, char **argv) {
     if (stop == ORACLE_STOP_HARDWARE && modeled_return_step >= 0 && post_return_call_step < 0) {
       post_return_hardware_step = n;
       fprintf(out, "# POST-RETURN-HARDWARE address=0x%08X step=%ld\n", now.stop_addr, n);
-      dump_register_block(out, "POST-RETURN-HARDWARE-BOUNDARY", n, &now);
+      dump_register_block(out, "POST-RETURN-HARDWARE-BOUNDARY", "step", n, &now);
+    }
+
+    // A device callback can advance BACKED_PC before ending the slice. That successor is not a valid
+    // capture boundary: the unsupported predecessor did not produce trustworthy state. Only a cleanly
+    // completed instruction may establish the requested pre-execution PC boundary.
+    if (capture_pc_enabled && stop == ORACLE_STOP_BUDGET && now.pc == capture_pc) {
+      captured_pc_executed = executed_steps;
+      dump_pc_boundary(out, capture_pc, captured_pc_executed, &now);
+      break;
     }
 
     if (modeled_return_refused || post_return_call_step >= 0 || post_return_hardware_step >= 0 ||
@@ -480,7 +521,7 @@ int main(int argc, char **argv) {
 
   OracleState fin;
   oracle_capture(&fin);
-  const long traced = (n < steps) ? n + 1 : steps;
+  const long traced = executed_steps;
 
   // ── the summary states the DENOMINATOR and every reason the trace is shorter than asked for ─────
   fprintf(out,
@@ -529,6 +570,21 @@ int main(int argc, char **argv) {
               traced,
               completed_jal_calls,
               capture_call_ordinal);
+    }
+  }
+  if (capture_pc_enabled) {
+    if (captured_pc_executed >= 0) {
+      fprintf(out,
+              "# requested PC 0x%08X reached after %ld executed instruction(s); its instruction was not executed\n",
+              capture_pc,
+              captured_pc_executed);
+    } else {
+      fprintf(out,
+              "# REQUESTED PC WAS NOT REACHED in %ld of %ld requested executed instruction(s): "
+              "pc=0x%08X; no PC-BOUNDARY block was written. Raise --steps.\n",
+              traced,
+              steps,
+              capture_pc);
     }
   }
   if (modeled_bios.enabled) {
@@ -598,6 +654,14 @@ int main(int argc, char **argv) {
             capture_call_ordinal,
             traced);
   }
+  if (capture_pc_enabled && captured_pc_executed < 0) {
+    fprintf(stderr,
+            "oracle_trace: REFUSING — requested PC 0x%08X was not reached in %ld of %ld requested "
+            "executed instruction(s).\n",
+            capture_pc,
+            traced,
+            steps);
+  }
 
   const int modeled_incomplete =
       modeled_bios.enabled && (modeled_return_step < 0 || (post_return_call_step < 0 && post_return_hardware_step < 0));
@@ -608,5 +672,8 @@ int main(int argc, char **argv) {
 
   free(img);
   oracle_teardown();
-  return (capture_call_ordinal && captured_call_step < 0) || modeled_incomplete || modeled_return_refused ? 2 : 0;
+  return (capture_call_ordinal && captured_call_step < 0) || (capture_pc_enabled && captured_pc_executed < 0) ||
+                 modeled_incomplete || modeled_return_refused
+             ? 2
+             : 0;
 }

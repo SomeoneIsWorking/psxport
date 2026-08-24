@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-24
 tags:
 depends: runtime/recomp/frame_presenter.cpp#FramePresenter::commitUnpresented, runtime/recomp/pad_input.cpp#Pad::serviceFrame
+reconfirmed: 2026-08-24
+verified_at: 2026-08-24 23:01:26
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ Clang full build and CTest 96/96; test_frame_presenter_unpresented proves no emi
 ## What would falsify it
 
 either unpresented fields reach an output path or a default Pad instance reports slot 1 present
+
+## Re-confirmed 2026-08-24
+
+2026-08-24 Clang full framework build and CTest 96/96 passed after 7bd24f2b; test_frame_presenter_unpresented and test_pad_slot1_policy both pass.

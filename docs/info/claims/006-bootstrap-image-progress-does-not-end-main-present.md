@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags: watchdog,presentation,bootstrap
 depends: runtime/recomp/gpu_native.cpp#GpuState::gpu_present_ex
-verified_at: 2026-08-22 19:33:46
-reconfirmed: 2026-08-22
+verified_at: 2026-08-24 23:01:25
+reconfirmed: 2026-08-24
 ---
 
 ## Claim
@@ -39,3 +39,7 @@ Reverified after renderer/runtime changes: test_fmv_watchdog and test_watchdog p
 ## Re-confirmed 2026-08-22
 
 Post-composition Clang CTest 90/90 passed test_fmv_watchdog and cpp_style after gpu_native/presentation changes.
+
+## Re-confirmed 2026-08-24
+
+2026-08-24 Clang full framework build and CTest 96/96 passed after 7bd24f2b; test_watchdog and the cold-init watchdog path remain green.

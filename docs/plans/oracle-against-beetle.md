@@ -168,9 +168,13 @@ successful/wrong-function answers. CTR is the first real consumer: two repeat or
 then oracle and generated execution agreed on 108/108 pre-call, modeled-return, and next-call fields.
 
 The same tracer now owns ordinal direct-call decoding through `--capture-call N` (`--capture-first-call`
-is its compatibility alias). This removes per-game copies of jal/delay-slot parsing. Its 8-check CLI gate
-proves calls 1 and 2 produce different targets and that requesting call 3 refuses with `reached 2 of 3`
-rather than emitting an empty boundary.
+is its compatibility alias), plus exact pre-execution boundaries through `--capture-at ADDR`. The latter
+is what makes an indirect `jalr` target observable without teaching the framework a game's address or
+call graph. It captures the initial PC or a clean post-step successor only; an unsupported hardware
+predecessor cannot masquerade as a trustworthy boundary. The 12-check CLI gate proves calls 1 and 2
+produce different targets, call 3 refuses with `reached 2 of 3`, an indirect target carries exactly 33
+canonical register records before its first instruction, and unreachable or hardware-tainted targets
+exit 2 without a boundary block.
 
 ### Milestone 2, part one: the crt0 constants are now confirmed BY EXECUTION
 

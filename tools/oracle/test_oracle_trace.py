@@ -16,6 +16,7 @@ FUNCTION_ONE = LOAD_ADDRESS + 0x40
 FUNCTION_TWO = LOAD_ADDRESS + 0x50
 BIOS_THUNK = LOAD_ADDRESS + 0x60
 POST_MODEL_CALL = LOAD_ADDRESS + 0x70
+INDIRECT_TARGET = LOAD_ADDRESS + 0x80
 
 
 def jal(target: int) -> int:
@@ -28,6 +29,22 @@ def addiu(rt: int, rs: int, immediate: int) -> int:
 
 def jr(rs: int) -> int:
     return (rs << 21) | 0x08
+
+
+def lui(rt: int, immediate: int) -> int:
+    return (0x0F << 26) | (rt << 16) | (immediate & 0xFFFF)
+
+
+def ori(rt: int, rs: int, immediate: int) -> int:
+    return (0x0D << 26) | (rs << 21) | (rt << 16) | (immediate & 0xFFFF)
+
+
+def jalr(rd: int, rs: int) -> int:
+    return (rs << 21) | (rd << 11) | 0x09
+
+
+def sw(rt: int, base: int, immediate: int) -> int:
+    return (0x2B << 26) | (base << 21) | (rt << 16) | (immediate & 0xFFFF)
 
 
 def make_executable(path: pathlib.Path) -> None:
@@ -61,6 +78,36 @@ def make_modeled_return_executable(path: pathlib.Path) -> None:
     words[26] = addiu(9, 0, 0x39)
     words[28] = addiu(8, 0, 0x4444)
 
+    payload = b"".join(struct.pack("<I", word) for word in words)
+    header = bytearray(0x800)
+    header[:8] = b"PS-X EXE"
+    struct.pack_into("<I", header, 0x10, LOAD_ADDRESS)
+    struct.pack_into("<I", header, 0x18, LOAD_ADDRESS)
+    struct.pack_into("<I", header, 0x1C, len(payload))
+    struct.pack_into("<I", header, 0x30, 0x801FFF00)
+    path.write_bytes(header + payload)
+
+
+def make_indirect_call_executable(path: pathlib.Path) -> None:
+    words = [0] * 40
+    words[0] = lui(8, INDIRECT_TARGET >> 16)
+    words[1] = ori(8, 8, INDIRECT_TARGET)
+    words[2] = jalr(31, 8)
+    words[3] = addiu(9, 0, 0x1357)
+    words[(INDIRECT_TARGET - LOAD_ADDRESS) // 4] = addiu(10, 0, 0x2468)
+
+    payload = b"".join(struct.pack("<I", word) for word in words)
+    header = bytearray(0x800)
+    header[:8] = b"PS-X EXE"
+    struct.pack_into("<I", header, 0x10, LOAD_ADDRESS)
+    struct.pack_into("<I", header, 0x18, LOAD_ADDRESS)
+    struct.pack_into("<I", header, 0x1C, len(payload))
+    struct.pack_into("<I", header, 0x30, 0x801FFF00)
+    path.write_bytes(header + payload)
+
+
+def make_hardware_stop_executable(path: pathlib.Path) -> None:
+    words = [lui(8, 0x1F80), ori(8, 8, 0x1814), sw(0, 8, 0), 0]
     payload = b"".join(struct.pack("<I", word) for word in words)
     header = bytearray(0x800)
     header[:8] = b"PS-X EXE"
@@ -115,6 +162,28 @@ def run_first_call_alias(
 def captured_target(trace: pathlib.Path) -> int | None:
     match = re.search(r"^# CAPTURED-CALL target=0x([0-9A-Fa-f]+)\b", trace.read_text(encoding="utf-8"), re.MULTILINE)
     return int(match.group(1), 16) if match else None
+
+
+def run_capture_at(
+    tracer: pathlib.Path, executable: pathlib.Path, trace: pathlib.Path, target: int, steps: int
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            str(tracer),
+            str(executable),
+            "--steps",
+            str(steps),
+            "--capture-at",
+            f"0x{target:08X}",
+            "--summary-only",
+            "--out",
+            str(trace),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
 
 
 def run_modeled_return(
@@ -173,12 +242,33 @@ def main() -> int:
     modeled = run_modeled_return(arguments.tracer, modeled_executable, modeled_trace, 0x39)
     wrong_model = run_modeled_return(arguments.tracer, modeled_executable, wrong_model_trace, 0x38)
 
+    indirect_executable = arguments.scratch / "indirect-call-fixture.exe"
+    make_indirect_call_executable(indirect_executable)
+    indirect_trace = arguments.scratch / "capture-at-indirect-target.trace"
+    missing_pc_trace = arguments.scratch / "capture-at-missing.trace"
+    indirect = run_capture_at(arguments.tracer, indirect_executable, indirect_trace, INDIRECT_TARGET, 16)
+    missing_pc = run_capture_at(
+        arguments.tracer, indirect_executable, missing_pc_trace, LOAD_ADDRESS + 0x24, 8
+    )
+
+    hardware_executable = arguments.scratch / "hardware-stop-fixture.exe"
+    make_hardware_stop_executable(hardware_executable)
+    hardware_successor_trace = arguments.scratch / "capture-at-hardware-successor.trace"
+    hardware_successor = run_capture_at(
+        arguments.tracer, hardware_executable, hardware_successor_trace, LOAD_ADDRESS + 0x0C, 8
+    )
+
     first_target = captured_target(first_trace)
     alias_target = captured_target(alias_trace)
     second_target = captured_target(second_trace)
     missing_text = missing_trace.read_text(encoding="utf-8") if missing_trace.is_file() else ""
     modeled_text = modeled_trace.read_text(encoding="utf-8") if modeled_trace.is_file() else ""
     wrong_model_text = wrong_model_trace.read_text(encoding="utf-8") if wrong_model_trace.is_file() else ""
+    indirect_text = indirect_trace.read_text(encoding="utf-8") if indirect_trace.is_file() else ""
+    missing_pc_text = missing_pc_trace.read_text(encoding="utf-8") if missing_pc_trace.is_file() else ""
+    hardware_successor_text = (
+        hardware_successor_trace.read_text(encoding="utf-8") if hardware_successor_trace.is_file() else ""
+    )
     checks = [
         ("ordinal 1 captures the first call", first.returncode == 0 and first_target == FUNCTION_ONE),
         (
@@ -211,6 +301,30 @@ def main() -> int:
             and "# MODELED-BIOS-RETURN" not in wrong_model_text
             and "# POST-RETURN-CAPTURED-CALL" not in wrong_model_text,
         ),
+        (
+            "capture-at reaches an indirect-call target before its first instruction",
+            indirect.returncode == 0
+            and f"# CAPTURED-PC target=0x{INDIRECT_TARGET:08X} executed=4" in indirect_text
+            and "# PC-BOUNDARY-REG t1=0x00001357" in indirect_text
+            and "# PC-BOUNDARY-REG t2=0x00000000" in indirect_text,
+        ),
+        (
+            "capture-at carries the canonical 33-register boundary block",
+            len(re.findall(r"^# PC-BOUNDARY-REG ", indirect_text, re.MULTILINE)) == 33,
+        ),
+        (
+            "unreached capture-at refuses with its instruction denominator and no boundary block",
+            missing_pc.returncode == 2
+            and "was not reached in 8 of 8 requested executed instruction(s)" in missing_pc.stderr
+            and "# PC-BOUNDARY-REGS" not in missing_pc_text,
+        ),
+        (
+            "an unsupported predecessor cannot masquerade as a reached successor PC",
+            hardware_successor.returncode == 2
+            and "UNSUPPORTED HARDWARE WRITE32 at 0x1F801814" in hardware_successor.stderr
+            and "was not reached in 3 of 8 requested executed instruction(s)" in hardware_successor.stderr
+            and "# PC-BOUNDARY-REGS" not in hardware_successor_text,
+        ),
     ]
     for label, passed in checks:
         print(f"  {'PASS' if passed else 'FAIL'} {label}")
@@ -229,6 +343,12 @@ def main() -> int:
         print(modeled.stderr, file=sys.stderr)
         print("--- wrong modeled return stderr ---", file=sys.stderr)
         print(wrong_model.stderr, file=sys.stderr)
+        print("--- capture-at indirect target stderr ---", file=sys.stderr)
+        print(indirect.stderr, file=sys.stderr)
+        print("--- capture-at missing target stderr ---", file=sys.stderr)
+        print(missing_pc.stderr, file=sys.stderr)
+        print("--- capture-at hardware-successor stderr ---", file=sys.stderr)
+        print(hardware_successor.stderr, file=sys.stderr)
     return 1 if failed else 0
 
 

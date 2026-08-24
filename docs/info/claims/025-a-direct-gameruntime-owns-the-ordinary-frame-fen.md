@@ -6,7 +6,7 @@ created: 2026-08-22
 tags: presentation,runtime
 depends: runtime/recomp/frame_presenter.h, runtime/recomp/frame_presenter.cpp, runtime/recomp/game.h, runtime/recomp/game_runtime.h, runtime/recomp/game_runtime.cpp, tests/test_direct_runtime_no_temporal_link.cpp, tests/test_frame_presenter_contract.cpp
 reconfirmed: 2026-08-24
-verified_at: 2026-08-24 19:59:55
+verified_at: 2026-08-24 23:01:26
 ---
 
 ## Claim
@@ -36,3 +36,7 @@ Post-composition Clang CTest 90/90 passed direct-runtime no-temporal link and ne
 ## Re-confirmed 2026-08-24
 
 Post-policy full 93/93 CTest passed test_direct_runtime_no_temporal_link; nm-based concrete Fps60 absence and neutral one-present behavior remained green after adding the required runtime method
+
+## Re-confirmed 2026-08-24
+
+2026-08-24 Clang full framework build and CTest 96/96 passed after 7bd24f2b; test_direct_runtime_no_temporal_link, test_frame_presenter_contract, and X4's linked-binary dependency gate all pass.
