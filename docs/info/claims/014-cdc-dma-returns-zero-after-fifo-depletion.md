@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cdc,dma3,fifo,zero-fill
 depends: runtime/recomp/cdc_native.cpp#cdc_dma_read, runtime/recomp/mem.cpp#Core::io_write, tests/test_cdc_dma_depletion.cpp#test_dma3_shipping_path_commits_the_full_programmed_transfer
 reconfirmed: 2026-08-25
-verified_at: 2026-08-25 01:02:39
+verified_at: 2026-08-25 01:16:03
 ---
 
 ## Claim
@@ -46,3 +46,7 @@ Combined Clang framework build and full 91/91 CTest pass at f468f2c7, including 
 ## Re-confirmed 2026-08-25
 
 Fresh Clang 22 build at 73bb5338: test_cdc_dma_depletion and test_cdc_bfrd_split_dma passed in the full 100/100 CTest suite.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 64f5e181: CDC DMA depletion and BFRD split tests passed within the complete 102/102 CTest suite.

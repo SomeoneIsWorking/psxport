@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cdc,cdrom,readn,dma
 depends: runtime/recomp/cdc_native.cpp#cdc_drive_service, runtime/recomp/timing.cpp#Timing::advanceGuestInstructionTicks, tools/recomp/emit.py#emit_run, tests/test_cdc_continuous_read.cpp#test_first_sector_waits_one_drive_period
 reconfirmed: 2026-08-25
-verified_at: 2026-08-25 01:02:38
+verified_at: 2026-08-25 01:16:02
 ---
 
 ## Claim
@@ -73,3 +73,7 @@ Fresh Clang 22 build at 1e3afdfb: CDC continuous/read timing tests passed in the
 ## Re-confirmed 2026-08-25
 
 Fresh Clang 22 build at 73bb5338: CDC command phases, continuous ReadN, emulated time, DMA depletion, and BFRD split tests passed in the full 100/100 CTest suite.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 64f5e181: CDC phases and continuous ReadN tests passed within the complete 102/102 CTest suite.

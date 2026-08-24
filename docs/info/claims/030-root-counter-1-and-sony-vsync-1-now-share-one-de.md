@@ -6,7 +6,7 @@ created: 2026-08-22
 tags: timing,vsync,hsync
 depends: runtime/recomp/emulated_time.cpp#EmulatedTime::hSyncCount, runtime/recomp/timing.cpp#Timing::hSyncCounter, runtime/recomp/timing.cpp#Timing::vsync, runtime/recomp/mem.cpp#Core::io_read, tests/test_hsync_counter.cpp
 reconfirmed: 2026-08-25
-verified_at: 2026-08-25 01:02:40
+verified_at: 2026-08-25 01:16:04
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ A reference trace disagrees with the nominal NTSC/PAL phase, an interlaced-field
 ## Re-confirmed 2026-08-25
 
 Fresh Clang 22 build at 73bb5338: test_hsync_counter and the CDC/memory regression set passed in the full 100/100 CTest suite.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 64f5e181: test_hsync_counter plus the full memory/CDC regression suite passed within the complete 102/102 CTest suite.

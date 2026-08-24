@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-22
 tags: architecture,game-runtime,guest-program-image
 depends: runtime/recomp/game_runtime.h#GameRuntime, runtime/recomp/game_iface.cpp#LegacyGameRuntimeAdapter, runtime/recomp/native_boot.cpp, runtime/recomp/overlay_router.cpp#program_image_for_routing, runtime/recomp/sync_overrides.cpp#guest_backtrace_to, tests/test_guest_program_image_ownership.cpp
-reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:02:18
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 01:16:03
 ---
 
 ## Claim
@@ -33,3 +33,7 @@ framework/consumer gate 87/87.
 ## Re-confirmed 2026-08-22
 
 Post-commit full Clang CTest passed GuestProgramImage ownership, boot-group, routing, and backtrace-dependent contracts within 85/85.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 64f5e181: test_guest_program_image_ownership, standalone frame boundary, and boot tests passed within the complete 102/102 CTest suite.
