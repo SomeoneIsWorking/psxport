@@ -92,8 +92,10 @@ the absent-table zero/no-fade presentation state); temporal-only guarded callbac
 emitter, interpreter, and native HLE; `rec_dispatch_miss` owns pre-HLE observation of external BIOS
 targets while generated entries retain their emitted checkpoint owner),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
-`native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
-REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp`
+`native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics;
+`standalone_frame_boundary.h` owns present-pending -> begin-capture -> optional cold-warp -> guest-work
+ordering, while SBS never services that standalone warp phase; the interactive REPL was extracted to
+`repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp`
 (SCEA/FMV image progress retains cold-init grace until the first main-VRAM presentation completes; every later
 heartbeat uses steady timing), `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.

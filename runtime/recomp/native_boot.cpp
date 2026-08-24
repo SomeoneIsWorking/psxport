@@ -31,6 +31,7 @@
 #include "ot_attr.h"           // g_producer_census_armed — the producer-census arm, set at boot below
 #include "override_registry.h" // overrides::query — per-row ownership for the producer-census JSONL
 #include "scheduler.h"         // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
+#include "standalone_frame_boundary.h"
 #include <lucent/log.h>
 #include <sys/stat.h>          // mkdir — create scratch/producers/ on a fresh clone
 #include <time.h>              // run stamp for the producer-census JSONL filename
@@ -83,7 +84,23 @@ void rec_super_call(Core *, uint32_t); // interpret the original PSX body (A/B o
 // g_dualview retired 2026-07-02 — per-Core Render::mDualview / dualview() / setDualview(bool).
 #include "sbs.h" // class Sbs — the PSXPORT_SBS two-core side-by-side harness
 
-static void native_step_frame(Core *c, uint32_t f) {
+static void apply_armed_dev_warp(Core *c, uint32_t f) {
+  if (!c->game->repl.warpArmed) {
+    return;
+  }
+
+  c->game->repl.warpArmed = 0;
+  const uint32_t dest = c->game->repl.warpDest & 0x1fu;
+  if (!c->hooks || !c->hooks->devWarp) {
+    lucent::error("repl", "warp: this game has no complete dev-warp operation");
+    return;
+  }
+
+  c->hooks->devWarp(c, (int)dest, (int)(c->game->repl.warpSub & 0x3fu));
+  lucent::info("repl", "warp: cold area {} sub {} loaded at f{}", dest, c->game->repl.warpSub, f);
+}
+
+static void native_step_frame(Core *c, uint32_t f, bool serviceStandaloneWarp) {
   const GameConfig *cfg = c->cfg;
   void gte_bind(Core *);
   gte_bind(c); // bind THIS core's GTE register file (per-instance — no shared GTE)
@@ -149,19 +166,37 @@ static void native_step_frame(Core *c, uint32_t f) {
   // this was wired they were orphaned with the override table (a live window ran uncapped + stale). The
   // present happens here (before the OT submit below) so the VK batch shown is the one DrawOTag built last
   // frame, exactly as the override-era ordering did.
-  c->hooks->frameUpdate(c); // tick + per-vblank audio + present + pace
-  // Billboard-record frame boundary (#67): the records the guest render walk (pcSched.step below) is
-  // about to capture belong to the NEW logic frame; the presents above (fps60's interp re-run included)
-  // consumed last frame's. Reset here — after present, before the walk — mirroring the mObjCur rotation.
-  c->hooks->renderBbFrameReset(c);
-  c->game->cd.audioTrace("post"); // CD-vol fade state AFTER tick+mix
-  c->game->perf.phaseBegin(3);    // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
-  // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields are setjmp/
-  // longjmp coroutines, CD loads are synchronous). It stays native at every gate level. What the gate
-  // controls is whether the TASK BODIES it steps run as native stage dispatchers + content (full native) or
-  // as pure PSX recomp coroutines (psx_fallback on) — see the gate checks inside PcScheduler::step.
-  c->game->pcSched.step(); // <- replaces FUN_80051e60 (BIOS scheduler)
-  c->game->perf.phaseEnd(3);
+  standalone_frame_boundary(
+      [&] {
+        c->hooks->frameUpdate(c);
+      }, // tick + per-vblank audio + present + pace
+      [&] {
+        // Billboard-record frame boundary (#67): the records the guest render walk (pcSched.step
+        // below) is about to capture belong to the NEW logic frame; the presents above (fps60's
+        // interp re-run included) consumed last frame's. Reset here — after present, before the walk
+        // and before the optional warp operation — mirroring the mObjCur rotation. The field-area-init
+        // capture predicate is game-owned; this generic reset does not infer scene existence.
+        c->hooks->renderBbFrameReset(c);
+      },
+      [&] {
+        // Dual-core/SBS owns its warp transaction separately. The standalone REPL command is serviced
+        // only after presentation has consumed the pending old-scene capture.
+        if (serviceStandaloneWarp) {
+          apply_armed_dev_warp(c, f);
+        }
+      },
+      [&] {
+        c->game->cd.audioTrace("post"); // CD-vol fade state AFTER tick+mix
+        c->game->perf.phaseBegin(
+            3); // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
+        // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields
+        // are setjmp/longjmp coroutines, CD loads are synchronous). It stays native at every gate
+        // level. What the gate controls is whether the TASK BODIES it steps run as native stage
+        // dispatchers + content (full native) or as pure PSX recomp coroutines (psx_fallback on) — see
+        // the gate checks inside PcScheduler::step.
+        c->game->pcSched.step(); // <- replaces FUN_80051e60 (BIOS scheduler)
+        c->game->perf.phaseEnd(3);
+      });
   c->hooks->musicCoordTick(c);           // dialogs stop/restore ingame music
   c->game->cd.audioTrace("coord");       // CD-vol fade state AFTER coord
   rc1(c, cfg->drawSync, 0);              // draw sync
@@ -360,7 +395,7 @@ void dc_boot_init(Core *c) {
   game_init(c);
 }
 void dc_step_frame(Core *c, uint32_t f) {
-  native_step_frame(c, f);
+  native_step_frame(c, f, false);
 }
 
 static void game_main(Core *c) {
@@ -563,20 +598,6 @@ static void game_main(Core *c) {
         lucent::info("repl", "skip done at frame {}", f);
       }
     }
-    // `warp` is one game-owned cold operation. Standalone used to implement half of Tomba's area
-    // machine here while SBS implemented a different load-then-door hybrid; the latter ran old-area
-    // objects against the destination handler table and tried to dispatch a mid-function continuation
-    // as a callback. The framework now owns only command timing and range validation.
-    if (c->game->repl.warpArmed) {
-      c->game->repl.warpArmed = 0;
-      const uint32_t dest = c->game->repl.warpDest & 0x1fu;
-      if (!c->hooks || !c->hooks->devWarp) {
-        lucent::error("repl", "warp: this game has no complete dev-warp operation");
-      } else {
-        c->hooks->devWarp(c, (int)dest, (int)(c->game->repl.warpSub & 0x3fu));
-        lucent::info("repl", "warp: cold area {} sub {} loaded at f{}", dest, c->game->repl.warpSub, f);
-      }
-    }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
@@ -599,9 +620,9 @@ static void game_main(Core *c) {
         usleep(15000);
       }
     }
-    watchdog_resume();       // re-arm after idle without falsely claiming this frame completed; the
-                             // completed present switches first-frame grace to the steady budget
-    native_step_frame(c, f); // one frame of deterministic guest work (steppable core; see fn above).
+    watchdog_resume();             // re-arm after idle without falsely claiming this frame completed; the
+                                   // completed present switches first-frame grace to the steady budget
+    native_step_frame(c, f, true); // one frame of deterministic guest work (steppable core; see fn above).
     // native_step_frame -> ov_frame_update OWNS present + pace + per-vblank audio (PC-driven frame body),
     // so this loop runs no pacer of its own.
     // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
