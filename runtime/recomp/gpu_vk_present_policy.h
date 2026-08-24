@@ -78,6 +78,26 @@ static inline bool vram_backdrop_is_picture(bool guestVramIsPicture, bool swRast
   return guestVramIsPicture || swRasterIsPicture;
 }
 
+// Should render_geom LOAD the existing PC composite instead of clearing the whole 1024x512 target?
+//
+// `guestGeometryPath` is RenderPath::Gte: the guest still owns its ordinary PSX double-buffering, but
+// its GP0 primitives are rasterized into the PC composite rather than s_vram. That composite must be
+// persistent for the same reason hardware VRAM is persistent. While the guest draws page A, the display
+// scans the completed page B; clearing the whole target before drawing A erases B immediately before it
+// is scanned. This is independent of `guestVramIsPicture`: texture/CLUT uploads in s_vram are not
+// themselves the picture on Gte, while the already-rasterized PC framebuffer pages still persist.
+//
+// The first build under an ownership rule remains a clear. Otherwise a newly-created GPU texture would
+// be LOADed with undefined contents, and a transition away from a guest-VRAM backdrop could retain the
+// old owner's pixels. Once that initialization/re-ownership build has happened, Gte preserves both
+// pages and the guest's own fills/background primitives clear the page it is actually drawing.
+static inline bool preserve_composite_backdrop(bool guestVramIsPicture,
+                                               bool swRasterIsPicture,
+                                               bool guestGeometryPath,
+                                               bool rebuildForOwnership) {
+  return vram_backdrop_is_picture(guestVramIsPicture, swRasterIsPicture) || (guestGeometryPath && !rebuildForOwnership);
+}
+
 static inline PresentRebuild present_rebuild_decision(bool batchEmpty,
                                                       bool guestVramIsPicture,
                                                       uint32_t vramWrites,

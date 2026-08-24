@@ -2241,6 +2241,10 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // VRAM write, so it still rebuilds.
   const bool guestVramIsPicture = game_guest_vram_is_picture(*game);
   const GuestVramCompositePlan ownershipPlan = s_guest_vram_composite.plan(guestVramIsPicture);
+  const bool preserveCompositeBackdrop = preserve_composite_backdrop(guestVramIsPicture,
+                                                                     game->gpu.sw_path(),
+                                                                     game->core.rsub.mode.path() == RenderPath::Gte,
+                                                                     ownershipPlan.rebuildForOwnership);
   // …and a THIRD source, on which both of the inputs above are structurally blind: the PSX software
   // rasterizer (RenderPath::Psx) draws the frame into s_vram with no VK geometry and no dirty mark, so
   // s_vram is the picture at every present. See the policy header for the measurement.
@@ -2340,18 +2344,9 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
     // render_geom clears the composite to black when no native primitive was submitted, which is
     // right when the native renderer owns the frame and catastrophic when the software rasterizer
     // does: its batch is ALWAYS empty, so the clear wipes the s_vram we just uploaded. See
-    // vram_backdrop_is_picture() for the measurement.
-    render_geom(*this,
-                cmd,
-                src,
-                sx,
-                sy,
-                disp_w,
-                h,
-                &s_dbg_tri_c,
-                &s_dbg_tex_c,
-                &s_dbg_semi_c,
-                vram_backdrop_is_picture(guestVramIsPicture, game->gpu.sw_path()));
+    // preserve_composite_backdrop() for the ownership and persistence policy.
+    render_geom(
+        *this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c, preserveCompositeBackdrop);
     s_vram_writes_built = s_vram_writes; // this composite now reflects every guest write so far
     s_guest_vram_composite.didBuild(guestVramIsPicture);
   }

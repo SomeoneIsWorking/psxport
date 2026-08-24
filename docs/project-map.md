@@ -81,6 +81,9 @@ whether guest VRAM is picture content beneath native geometry; the checked rende
 missing runtime and `gpu_vk.cpp` never reads the legacy static backdrop bit),
 `guest_vram_composite_policy.h` (the per-`Game` persistent-composite ownership latch; both policy
 transitions invalidate the old composite and native-to-guest requests a complete VRAM upload),
+`gpu_vk_present_policy.h::preserve_composite_backdrop` (the PC-composite persistence rule: stable Gte
+ownership preserves both guest framebuffer pages, its first ownership build initializes them, Native
+clears rebuilt frames, and Psx/guest-VRAM picture ownership remains independent),
 `game_hooks_opt.{h,cpp}` (the guarded boundary for neutral optional compatibility callbacks, including
 the absent-table zero/no-fade presentation state); temporal-only guarded callbacks live separately in
 `fps60_game_hooks.{h,cpp}` so a direct runtime does not link them,
