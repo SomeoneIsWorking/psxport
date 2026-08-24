@@ -81,8 +81,9 @@ whether guest VRAM is picture content beneath native geometry; the checked rende
 missing runtime and `gpu_vk.cpp` never reads the legacy static backdrop bit),
 `guest_vram_composite_policy.h` (the per-`Game` persistent-composite ownership latch; both policy
 transitions invalidate the old composite and native-to-guest requests a complete VRAM upload),
-`game_hooks_opt.{h,cpp}` (the single guarded boundary for optional compatibility callbacks, including
-the absent-table zero/no-fade presentation state),
+`game_hooks_opt.{h,cpp}` (the guarded boundary for neutral optional compatibility callbacks, including
+the absent-table zero/no-fade presentation state); temporal-only guarded callbacks live separately in
+`fps60_game_hooks.{h,cpp}` so a direct runtime does not link them,
 `bios_interrupt.{h,cpp}` (the HookEntryInt saved-context contract),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
@@ -135,10 +136,12 @@ MENU's 0x800B5244 target instead of first-matching BOOT.
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
 **GPU/present:** `frame_presenter.{h,cpp}` owns non-temporal current-frame capture, one real present,
 diagnostics, explicit field pacing, and ledger reconciliation. Its `commitUnpresented` entry rotates the
-same fence, ledger, and capture state for a deliberately hidden field without emitting, presenting, pacing,
+same fence, ledger, and capture state for the diff-mode field path without emitting, presenting, pacing,
 or recording a diagnostic; the injected-backend test proves both that path and the next visible commit.
 `Fps60` is an optional temporal decorator, not the frame-lifecycle owner; direct runtimes neither
-instantiate nor link it. `guest_widescreen_projection.h`
+instantiate nor link it. `fps60_gpu_present.{h,cpp}` owns the intermediate-pass renderer reset and is
+referenced only by `fps60.cpp`; the neutral presenter has no temporal renderer operation.
+`guest_widescreen_projection.h`
 owns the typed, frame-latched title projection/presentation plan; the GTE-only positive contract remains
 separate from Native-only `RenderMode::enhancementsAllowed()`. `gpu_display_mode.h` is the pure GP1(08h)
 horizontal decoder, including bit 6's 368-dot mode. Full ownership and consumer rules are in
@@ -193,14 +196,19 @@ snapshot frame, so a natively owned parent may call a separately owned child wit
 the parent's pre-state or native answer. `test_native_diff` reaches the shipping API: an equivalent nested
 parent/child produces zero divergences, while an independently mutated child produces two real child
 divergences (one in each parent leg) and leaves the equivalent parent itself matched.
-**Interpolation camera seam:** `fps60.cpp` owns camera capture/lerp but reads the live view matrix through
-`GameHooks::fps60ReadSceneCam`; the matrix layout is game-owned. Tomba! 2 decodes its scratchpad matrix in
-`game/core/game_hooks.cpp`. A missing reader aborts when a native projection path asks for it—there is no
-framework camera-address fallback. `GameHooks::fps60TemporalRotate` is the separate post-two-present
-lifecycle seam for game-owned immutable render recipes; it is optional and does not alias the transitional
-billboard-history hook.
-**Audio:** `spu_beetle.c` (Beetle spu.c mixer lift), `spu_audio.c` (SDL sink + PSXPORT_WAV), `xa_stream.c`
-(in-game XA-ADPCM streaming).
+**Interpolation camera seam:** `fps60.cpp` owns camera capture/lerp and reaches temporal-only guarded
+callbacks through `fps60_game_hooks.{h,cpp}`. `GameHooks::fps60ReadSceneCam` remains game-owned; Tomba! 2
+decodes its scratchpad matrix in `game/core/game_hooks.cpp`. A missing reader aborts when a native
+projection path asks for it—there is no framework camera-address fallback.
+`GameHooks::fps60TemporalRotate` is the separate post-two-present lifecycle seam for game-owned immutable
+render recipes; it is optional and does not alias the transitional billboard-history hook.
+**Audio:** `spu_beetle.cpp` (Beetle spu.c mixer lift), `spu_audio.cpp` (SDL sink +
+`PSXPORT_WAV`), `spu_field_cadence.h` (exact display-field-rate → SPU-clock/sample schedule), and
+`xa_stream.cpp` (in-game XA-ADPCM streaming). The sink reads the same exact NTSC 60,000/1,001 or
+PAL 50/1 rational owned by `field_rate.h`; it carries integer remainders between fields instead of
+rounding every NTSC field to the exact-60 Hz legacy values of 564,480 clocks and 735 samples.
+`test_spu_field_cadence` exercises the shipping accumulator at exact 60 Hz, NTSC, and an NTSC→PAL
+rate change; 60,000 NTSC fields total exactly 44,144,100 stereo frames (44.1 kHz for 1,001 seconds).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
 game-validated blocking-control seam), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
 latch and drive-event state), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),

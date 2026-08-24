@@ -30,16 +30,12 @@ public:
   void presentReal() override {
     ++presents;
   }
-  void presentIntermediate() override {
-    ++intermediatePresents;
-  }
   void captureDiagnostic(uint64_t, bool) override {}
   void pace(int, int) override {}
   void reconcile(uint64_t) override {}
   void beginLedgerFrame() override {}
 
   int presents = 0;
-  int intermediatePresents = 0;
 };
 
 void test_direct_runtime_constructs_without_a_temporal_product() {
@@ -50,10 +46,9 @@ void test_direct_runtime_constructs_without_a_temporal_product() {
   NeutralBackend backend;
   game->presentation.commit(backend, 1);
   CHECK_EQ(backend.presents, 1);
-  CHECK_EQ(backend.intermediatePresents, 0);
 }
 
-void test_direct_runtime_binary_does_not_link_fps60(const char *executable) {
+void test_direct_runtime_binary_does_not_link_temporal_helpers(const char *executable) {
   const std::string command = std::string("nm -C -- '") + executable + "'";
   FILE *symbols = popen(command.c_str(), "r");
   CHECK(symbols != nullptr);
@@ -63,16 +58,19 @@ void test_direct_runtime_binary_does_not_link_fps60(const char *executable) {
 
   char line[1024];
   int lines = 0;
-  bool concreteInterpolationLinked = false;
+  bool temporalCodeLinked = false;
   while (std::fgets(line, sizeof(line), symbols)) {
     ++lines;
     const std::string symbol(line);
-    concreteInterpolationLinked |= symbol.find("Fps60::") != std::string::npos;
-    concreteInterpolationLinked |= symbol.find("vtable for Fps60") != std::string::npos;
+    temporalCodeLinked |= symbol.find("Fps60::") != std::string::npos;
+    temporalCodeLinked |= symbol.find("vtable for Fps60") != std::string::npos;
+    temporalCodeLinked |= symbol.find("game_fps60_") != std::string::npos;
+    temporalCodeLinked |= symbol.find("gpu_fps60_present_pass(") != std::string::npos;
+    temporalCodeLinked |= symbol.find("GpuState::gpu_fps60_present_pass(") != std::string::npos;
   }
   CHECK_EQ(pclose(symbols), 0);
   CHECK(lines > 0);
-  CHECK(!concreteInterpolationLinked);
+  CHECK(!temporalCodeLinked);
 }
 
 } // namespace
@@ -82,6 +80,6 @@ int main(int argc, char **argv) {
     return 2;
   }
   RUN(direct_runtime_constructs_without_a_temporal_product);
-  test_direct_runtime_binary_does_not_link_fps60(argv[0]);
+  test_direct_runtime_binary_does_not_link_temporal_helpers(argv[0]);
   return pt_summary();
 }

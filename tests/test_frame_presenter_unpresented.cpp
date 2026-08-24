@@ -1,5 +1,5 @@
-// A delivered-but-deliberately-unpresented field must rotate the presenter's bookkeeping exactly
-// as commit() does, without reaching any output path.
+// A delivered-but-deliberately-unpresented diff-mode field must rotate the presenter's bookkeeping
+// exactly as commit() does, without reaching any output path.
 
 #include "../runtime/recomp/frame_presenter.h"
 #include "testutil.h"
@@ -15,9 +15,6 @@ public:
   }
   void presentReal() override {
     ++presents;
-  }
-  void presentIntermediate() override {
-    ++intermediatePresents;
   }
   void captureDiagnostic(uint64_t, bool) override {
     ++diagnostics;
@@ -35,7 +32,6 @@ public:
 
   int emitted = 0;
   int presents = 0;
-  int intermediatePresents = 0;
   int diagnostics = 0;
   int pacedFields = 0;
   int reconciles = 0;
@@ -69,7 +65,6 @@ void test_unpresented_field_rotates_bookkeeping_without_output() {
   CountingBackend backend;
   presenter.commitUnpresented(backend);
   CHECK_EQ(backend.presents, 0);
-  CHECK_EQ(backend.intermediatePresents, 0);
   CHECK_EQ(backend.emitted, 0);
   CHECK_EQ(backend.diagnostics, 0);
   CHECK_EQ(backend.pacedFields, 0);

@@ -3501,21 +3501,6 @@ void GpuState::gpu_clear_display(Core *core) {
   gpu_blank_display();
   gpu_present(core);
 }
-// VK 60fps in-between pass: present whatever draws are accumulated in the VK batch (over the current
-// s_vram 2D background), then end the VK frame to reset the batch + restart the per-frame depth order.
-// No s_frame++/diagnostics (that bookkeeping happens once per LOGIC frame in gpu_present_ex for the real
-// pass). fps60 emits the interpolated RqItems, calls this to show them, then emits the real frame.
-void GpuState::gpu_fps60_present_pass(Core *core) {
-  present_window(); // blit_src(s_vram) -> gpu_vk_present renders the batch + shows
-  // Plain per-present reset: this pass emitted the WHOLE queue (color prims AND the shadow tris carried on
-  // each opaque world item, via RenderQueue::emitItem) and presented through the full pipeline (panel_render ->
-  // shadow_pass + ssao_pass). frame_end resets BOTH the draw batch and the shadow stream; the REAL pass
-  // that follows re-emits the same queue, rebuilding an identical shadow map. No keep_shadow side-channel —
-  // both 60fps presents are the same full pipeline by construction, so the shadow/HUD/2D are correct on both.
-  gpu_vk_frame_end(core, s_vram, s_frame); // submit/diff + reset the VK draw + shadow batch
-  s_prim_order = 0;                        // restart per-frame OT submission order for the next pass
-}
-
 void GpuState::gpu_native_init() {
   if (lucent::channel_on("gpu") || cfg_on("PSXPORT_GPU_LOG")) {
     s_log = 1; // diagnostic: per-frame prim log via env
@@ -3921,9 +3906,6 @@ void gpu_disp_region(Core *core, int *sx, int *sy, int *w, int *h) {
 }
 void gpu_clear_display(Core *core) {
   core->game->gpu.gpu_clear_display(core);
-}
-void gpu_fps60_present_pass(Core *core) {
-  core->game->gpu.gpu_fps60_present_pass(core);
 }
 void gpu_native_load_image(Core *core, int x, int y, int w, int h, uint32_t src) {
   core->game->gpu.gpu_native_load_image(core, x, y, w, h, src);

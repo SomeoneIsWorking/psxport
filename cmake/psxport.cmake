@@ -173,6 +173,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
   ${PSXPORT_ROOT}/runtime/recomp/game_hooks_opt.cpp
   ${PSXPORT_ROOT}/runtime/recomp/overlay_glue.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/fps60_game_hooks.cpp  # guarded callbacks used only by temporal presentation
+  ${PSXPORT_ROOT}/runtime/recomp/fps60_gpu_present.cpp # renderer pass used only by temporal presentation
   ${PSXPORT_ROOT}/runtime/recomp/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
   ${PSXPORT_ROOT}/runtime/recomp/ot_lifo_depth.cpp    # PSX AddPrim head-insertion ties -> raster-distinct native depths
   ${PSXPORT_ROOT}/runtime/recomp/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)

@@ -1,8 +1,9 @@
 // class SpuAudio — the native audio OUTPUT sink for one Game.
 //
 // Drives the shared SPU mix (spu_beetle.c) into a host SDL3 audio stream: init() opens the device
-// once per Game; frame() advances the SPU exactly one NTSC frame of clocks, drains the produced
-// samples, mixes native music, and queues them to the host device (+ optional WAV capture). No
+// once per Game; frame() advances the SPU by the exact rational duration of one display field,
+// drains the produced samples, mixes native music, and queues them to the host device (+ optional
+// WAV capture). No
 // PSX SPU hardware is presented — we only consume the already-mixed PCM the SPU produced.
 //
 // Owned by `class Game` (`c->game->spu_audio.method()`); the back-pointer is wired in Game(). One
@@ -12,10 +13,12 @@
 //
 // Called from:
 //   - boot.cpp                    → spu_audio.init()               (per Game, at boot)
-//   - game_tomba2.cpp frame body  → spu_audio.frame()              (per Game, per video frame)
+//   - game_tomba2.cpp frame body  → spu_audio.frame()              (per Game, per display field)
 //                                  spu_audio.frameLogic()          (SBS diff: advance XA only, no output)
 //   - repl.cpp `wav <path>`       → spu_audio.wavReopen(path)      (mid-run WAV capture handoff)
 #pragma once
+#include "spu_field_cadence.h"
+
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -82,10 +85,13 @@ private:
                            // the capture stays a valid WAV even if the process is
                            // killed, which is how every headless run actually ends
 
-  // Per-frame mix buffer (735 stereo frames + slack). Per-instance so two SBS Games never mix
+  SpuFieldCadence mCadence;
+
+  // Per-field mix buffer (up to one PAL field + slack). Per-instance so two SBS Games never mix
   // through the same scratch. The native-music render scratch moved game-side into the audioMixFrame
   // GameHooks impl (game_hooks.cpp), which owns its own per-call buffer.
-  int16_t mMixBuf[2 * (735 + 64)] = {}; // SPU render target (+ native-music mixdown via the hook)
+  static constexpr uint32_t kRenderSlack = 64;
+  int16_t mMixBuf[2 * (SpuFieldCadence::kMaximumStandardSamplesPerField + kRenderSlack)] = {};
 
   // `debug spuprof` diagnostics (average spu_update() wall time every 60 frames).
   int mProfOn = -1; // -1 = unknown, 0/1 cached

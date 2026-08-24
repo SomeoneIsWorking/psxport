@@ -22,10 +22,6 @@ public:
     calls.emplace_back("present");
     ++presents;
   }
-  void presentIntermediate() override {
-    calls.emplace_back("present-intermediate");
-    ++intermediatePresents;
-  }
   void captureDiagnostic(uint64_t, bool interpolated) override {
     calls.emplace_back(interpolated ? "dump-interp" : "dump-real");
     ++diagnostics;
@@ -48,7 +44,6 @@ public:
   std::vector<std::string> calls;
   int emitted = 0;
   int presents = 0;
-  int intermediatePresents = 0;
   int diagnostics = 0;
   int pacedFields = 0;
   int paceParts = 0;
@@ -70,7 +65,6 @@ void test_neutral_commit_owns_the_complete_non_temporal_fence() {
 
   CHECK_EQ(backend.emitted, 2);
   CHECK_EQ(backend.presents, 1);
-  CHECK_EQ(backend.intermediatePresents, 0);
   CHECK_EQ(backend.diagnostics, 1);
   CHECK_EQ(backend.pacedFields, 1);
   CHECK_EQ(backend.paceParts, 1);

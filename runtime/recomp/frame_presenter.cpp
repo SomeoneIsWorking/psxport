@@ -73,10 +73,6 @@ public:
     gpu_present_ex(&core_, 1);
   }
 
-  void presentIntermediate() override {
-    gpu_fps60_present_pass(&core_);
-  }
-
   void captureDiagnostic(uint64_t fence, bool interpolated) override {
     dump_present(&core_, fence, dumpSequence_, interpolated);
   }

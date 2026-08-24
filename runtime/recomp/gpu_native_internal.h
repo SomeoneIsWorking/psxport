@@ -368,8 +368,6 @@ struct GpuState {
   // different fixes: one is inherent to a packet the walk never stamped, the other means the span feed
   // missed. See runtime/recomp/producer_census.h.
   void censusGuestPrim(Core *core);
-  void
-  gpu_fps60_present_pass(Core *core); // VK 60fps: present the accumulated batch over s_vram, reset batch (no s_frame++)
 };
 
 // ---- Diagnostic dumps (gpu_debug.cpp) — read the per-instance state via Core* -----------------
@@ -394,7 +392,6 @@ uint16_t gpu_vram_peek(Core *core, int x, int y);
 void gpu_scea_decode_rgba(uint8_t *out);
 void gpu_vram_load(Core *core, const uint16_t *src);
 void gpu_vram_save(Core *core, uint16_t *dst);
-void gpu_fps60_present_pass(Core *core); // VK 60fps in-between present pass
 // gpu_provat_display / gpu_prov_dump (gpu_debug.cpp) take Core* too:
 void gpu_provat_display(Core *core, FILE *out, int qx, int qy);
 void gpu_prov_dump(Core *core, int vx, int vy);

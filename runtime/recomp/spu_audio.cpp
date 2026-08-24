@@ -1,6 +1,6 @@
 // Native audio OUTPUT sink — plays the SPU's mixed samples through SDL3. See spu_audio.h.
 //
-// The SPU lift (spu_beetle.c) mixes 44100 Hz stereo int16 into an internal buffer; spu_update()
+// The SPU lift (spu_beetle.c) mixes 44.1 kHz stereo int16 into an internal buffer; spu_update()
 // advances that mixer and spu_render() drains the finished frames. This file is the speaker end.
 // One `SpuAudio` per Game (embedded on Game as `spu_audio`); the SBS harness ensures only one
 // Game's SpuAudio actually drives the host device.
@@ -28,17 +28,10 @@ int xa_stream_is_active(struct XaState *xs);
 int gpu_windowed(void);
 }
 
-// The SPU is clocked off the PSX system clock and divides it by 768 to yield 44100 Hz samples
-// (Beetle: spu.c clock_divider = 768). One NTSC video frame is 1/60 s, so:
-//   33,868,800 Hz / 60 = 564,480 system clocks per frame
-//   564,480 / 768       = 735 stereo frames per video frame (== 44100/60). Exact.
-#define SPU_CLOCKS_PER_VIDEO_FRAME 564480 // 33868800 / 60
-#define SPU_FRAMES_PER_VIDEO_FRAME 735    // 44100 / 60 (one video frame of stereo frames)
-
 // SDL_QueueAudio backlog cap: if the device queue grows past this many bytes we skip a render to
 // let it drain, so audio can't accumulate unbounded latency when the producer outruns the consumer.
-#define AUDIO_QUEUE_CAP_BYTES (4 * SPU_FRAMES_PER_VIDEO_FRAME * 2 * (int)sizeof(int16_t))
-#define WAV_MAX_BYTES (600u * 44100u * 2u * 2u) // ~10 min of stereo s16
+constexpr int kAudioQueueCapBytes = 4 * (SpuFieldCadence::kSampleRateHz / 60) * 2 * static_cast<int>(sizeof(int16_t));
+constexpr uint32_t kWavMaxBytes = 600u * SpuFieldCadence::kSampleRateHz * 2u * 2u;
 
 // ---- WAV capture ownership (atexit hook) --------------------------------------------------------
 SpuAudio *SpuAudio::sWavOwner = nullptr;
@@ -49,7 +42,7 @@ void SpuAudio::wavCloseAtExit() {
 }
 
 // ---- WAV capture (PSXPORT_WAV=path) -------------------------------------------------------------
-// Dumps the SPU's mixed 44100 Hz stereo int16 output to a WAV file, INDEPENDENT of SDL — works
+// Dumps the SPU's mixed 44.1 kHz stereo int16 output to a WAV file, INDEPENDENT of SDL — works
 // headless / under PSXPORT_NOAUDIO. Header sizes patched at exit. Capped so a runaway run can't
 // fill the disk.
 void SpuAudio::wavClose() {
@@ -66,7 +59,10 @@ void SpuAudio::wavClose() {
   if (sWavOwner == this) {
     sWavOwner = nullptr;
   }
-  lucent::info("spu_wav", "wrote {} PCM bytes ({:.2f} s)", data, data / (44100.0 * 4.0));
+  lucent::info("spu_wav",
+               "wrote {} PCM bytes ({:.2f} s)",
+               data,
+               data / (static_cast<double>(SpuFieldCadence::kSampleRateHz) * 4.0));
 }
 
 void SpuAudio::wavOpen(const char *path) {
@@ -80,12 +76,12 @@ void SpuAudio::wavOpen(const char *path) {
   fwrite("WAVE", 1, 4, mWav);
   fwrite("fmt ", 1, 4, mWav);
   wavLe32(mWav, 16);
-  wavLe16(mWav, 1);             // PCM
-  wavLe16(mWav, 2);             // stereo
-  wavLe32(mWav, 44100);         // sample rate
-  wavLe32(mWav, 44100 * 2 * 2); // byte rate
-  wavLe16(mWav, 2 * 2);         // block align
-  wavLe16(mWav, 16);            // bits/sample
+  wavLe16(mWav, 1);                                      // PCM
+  wavLe16(mWav, 2);                                      // stereo
+  wavLe32(mWav, SpuFieldCadence::kSampleRateHz);         // sample rate
+  wavLe32(mWav, SpuFieldCadence::kSampleRateHz * 2 * 2); // byte rate
+  wavLe16(mWav, 2 * 2);                                  // block align
+  wavLe16(mWav, 16);                                     // bits/sample
   fwrite("data", 1, 4, mWav);
   wavLe32(mWav, 0); // size patched at close
   if (!sWavOwner) {
@@ -105,7 +101,7 @@ void SpuAudio::wavReopen(const char *path) {
   wavOpen(path);
 }
 
-// Open the SDL3 audio device (44100 Hz, S16, stereo). Idempotent: subsequent calls are no-ops.
+// Open the SDL3 audio device (44.1 kHz, S16, stereo). Idempotent: subsequent calls are no-ops.
 // Honors PSXPORT_NOAUDIO (force-disable) and gracefully disables if SDL can't init/open a device.
 void SpuAudio::init() {
   if (mState != 0) {
@@ -137,11 +133,11 @@ void SpuAudio::init() {
     return;
   }
 
-  // SDL3 push-model: open a stream bound to the default playback device (44100 Hz S16 stereo). We
+  // SDL3 push-model: open a stream bound to the default playback device (44.1 kHz S16 stereo). We
   // feed it via SDL_PutAudioStreamData each frame (no callback). Device buffer is managed by SDL.
   SDL_AudioSpec spec;
   SDL_memset(&spec, 0, sizeof spec);
-  spec.freq = 44100;
+  spec.freq = static_cast<int>(SpuFieldCadence::kSampleRateHz);
   spec.format = SDL_AUDIO_S16;
   spec.channels = 2;
 
@@ -175,9 +171,10 @@ void spu_mix_game_audio(Core *c, const GameHooks *hooks, int16_t *buf, int frame
   hooks->audioMixFrame(c, buf, frames);
 }
 
-// Called once per video frame: advance the SPU one NTSC frame of clocks (~735 stereo frames),
-// drain them, and queue to the device. No-op when audio is disabled/failed. Bounds the device
-// queue: if the backlog exceeds AUDIO_QUEUE_CAP_BYTES we still advance the SPU (so its mixer state
+// Called once per delivered display field: advance the SPU by that field's fractional share of its
+// clock and sample rates, drain the resulting frames, and queue them to the device. No-op when audio
+// is disabled/failed. Bounds the device queue: if the backlog exceeds kAudioQueueCapBytes we still
+// advance the SPU (so its mixer state
 // stays correct) but drop the rendered samples instead of queueing, letting the device drain.
 void SpuAudio::frameEx(bool output) {
   // We advance + drain the SPU when SOMETHING consumes it: the SDL device (playback) OR a WAV
@@ -197,7 +194,9 @@ void SpuAudio::frameEx(bool output) {
     return;
   }
 
-  // Advance the mixer by exactly one video frame of system clocks.
+  const SpuFieldAdvance advance = mCadence.advance(display_field_rate(game->gpu.s_disp_pal != 0));
+
+  // Advance the mixer by exactly one display field's share of system clocks.
   int16_t *buf = mMixBuf;
 
   // Diagnostics: `debug spuprof` prints the average spu_update() wall time every 60 frames.
@@ -210,7 +209,7 @@ void SpuAudio::frameEx(bool output) {
     if (mProfHavePrev) {
       mProfLoopMs += (a.tv_sec - mProfPrev.tv_sec) * 1e3 + (a.tv_nsec - mProfPrev.tv_nsec) / 1e6;
     }
-    spu_update(SPU_CLOCKS_PER_VIDEO_FRAME);
+    spu_update(static_cast<int32_t>(advance.clocks));
     clock_gettime(CLOCK_MONOTONIC, &b);
     mProfAccumMs += (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6;
     mProfPrev = a;
@@ -226,17 +225,17 @@ void SpuAudio::frameEx(bool output) {
       mProfN = 0;
     }
   } else {
-    spu_update(SPU_CLOCKS_PER_VIDEO_FRAME);
+    spu_update(static_cast<int32_t>(advance.clocks));
   }
 
-  int frames = spu_render(buf, SPU_FRAMES_PER_VIDEO_FRAME + 64);
+  int frames = spu_render(buf, static_cast<int>(advance.samples + kRenderSlack));
   // Logic-only (SBS): rendered PCM is discarded; XA head has advanced (clip progresses).
   if (!output) {
     return;
   }
   if (frames <= 0) {
     // The SPU produced nothing this frame, but native music may still need output.
-    frames = SPU_FRAMES_PER_VIDEO_FRAME;
+    frames = static_cast<int>(advance.samples);
     memset(buf, 0, (size_t)frames * 2 * sizeof(int16_t));
   }
 
@@ -248,7 +247,7 @@ void SpuAudio::frameEx(bool output) {
   }
 
   // WAV capture: append the drained PCM. Capped.
-  if (wav_on && mWavBytes < WAV_MAX_BYTES) {
+  if (wav_on && mWavBytes < kWavMaxBytes) {
     size_t bytes = (size_t)frames * 2 * sizeof(int16_t);
     fwrite(buf, 1, bytes, mWav);
     mWavBytes += (uint32_t)bytes;
@@ -261,7 +260,7 @@ void SpuAudio::frameEx(bool output) {
     //
     // So flush and patch the sizes about once a second. Cost is one fflush + two seeks per ~172
     // frames; the capture is then at most ~1 s short if the process is killed, instead of empty.
-    if (mWavBytes - mWavSynced >= 44100u * 2u * sizeof(int16_t)) {
+    if (mWavBytes - mWavSynced >= SpuFieldCadence::kSampleRateHz * 2u * sizeof(int16_t)) {
       mWavSynced = mWavBytes;
       const long end = ftell(mWav);
       fseek(mWav, 4, SEEK_SET);
@@ -292,14 +291,15 @@ void SpuAudio::frameEx(bool output) {
       }
       mRateSamp += frames;
       mRateCalls++;
-      if (SDL_GetAudioStreamQueued(mStream) > AUDIO_QUEUE_CAP_BYTES) {
+      if (SDL_GetAudioStreamQueued(mStream) > kAudioQueueCapBytes) {
         mRateDrops++;
       }
       double dt = now - mRateT0;
       if (dt >= 2.0) {
         lucent::info("audio_rate",
-                     "{:.0f} samples/s (want 44100), {} calls/{:.1f}s, drops={}, backlog={}",
+                     "{:.0f} samples/s (want {}), {} calls/{:.1f}s, drops={}, backlog={}",
                      mRateSamp / dt,
+                     SpuFieldCadence::kSampleRateHz,
                      mRateCalls,
                      dt,
                      mRateDrops,
@@ -312,7 +312,7 @@ void SpuAudio::frameEx(bool output) {
     }
   }
   // Drop (don't queue) when the backlog is already too deep — keeps latency bounded.
-  if (SDL_GetAudioStreamQueued(mStream) > AUDIO_QUEUE_CAP_BYTES) {
+  if (SDL_GetAudioStreamQueued(mStream) > kAudioQueueCapBytes) {
     return;
   }
 

@@ -1,5 +1,6 @@
 #pragma once
-// THE DISPLAY FIELD RATE — one definition, in milli-hertz.
+// THE DISPLAY FIELD RATE — one exact rational definition, with milli-hertz retained for APIs that
+// cannot consume the rational form.
 //
 // WHY MILLI-HERTZ. NTSC's field rate is 60000/1001 Hz = 59.94005... — not representable in integer
 // Hz, and not equal to 60. The framework's other field-clock consumer already speaks milli-hertz
@@ -17,18 +18,37 @@
 // PAL IS UNTESTED IN THIS WORKSPACE — all three consuming games are NTSC discs, so the PAL arm has
 // never executed on real data. It is stated as the documented hardware rate rather than measured,
 // and that is exactly what it should say here rather than being quietly presented as verified.
-enum : unsigned {
-  FIELD_RATE_NTSC_MILLIHZ = 59940u, // 60000/1001 Hz
-  FIELD_RATE_PAL_MILLIHZ = 50000u,  // 50 Hz
-  // Nominal non-interlaced field geometry used by the PSX GPU and HBlank-clocked root counter 1.
-  // Interlaced hardware alternates adjacent line counts; the deterministic framework clock does
-  // not yet model field parity, so it retains the standard's nominal complete-field denominator.
-  DISPLAY_LINES_NTSC = 263u,
-  DISPLAY_LINES_PAL = 314u,
+#include <cstdint>
+
+struct DisplayFieldRate {
+  uint32_t frequencyNumerator;
+  uint32_t frequencyDenominator;
+
+  constexpr bool operator==(const DisplayFieldRate &) const = default;
 };
 
+inline constexpr DisplayFieldRate DISPLAY_FIELD_RATE_NTSC{60000u, 1001u};
+inline constexpr DisplayFieldRate DISPLAY_FIELD_RATE_PAL{50u, 1u};
+
+constexpr unsigned field_rate_millihz(DisplayFieldRate rate) {
+  return static_cast<unsigned>((static_cast<uint64_t>(rate.frequencyNumerator) * 1000u) / rate.frequencyDenominator);
+}
+
+inline constexpr unsigned FIELD_RATE_NTSC_MILLIHZ = field_rate_millihz(DISPLAY_FIELD_RATE_NTSC);
+inline constexpr unsigned FIELD_RATE_PAL_MILLIHZ = field_rate_millihz(DISPLAY_FIELD_RATE_PAL);
+
+// Nominal non-interlaced field geometry used by the PSX GPU and HBlank-clocked root counter 1.
+// Interlaced hardware alternates adjacent line counts; the deterministic framework clock does
+// not yet model field parity, so it retains the standard's nominal complete-field denominator.
+inline constexpr unsigned DISPLAY_LINES_NTSC = 263u;
+inline constexpr unsigned DISPLAY_LINES_PAL = 314u;
+
+inline constexpr DisplayFieldRate display_field_rate(bool pal) {
+  return pal ? DISPLAY_FIELD_RATE_PAL : DISPLAY_FIELD_RATE_NTSC;
+}
+
 inline unsigned field_rate_millihz(bool pal) {
-  return pal ? FIELD_RATE_PAL_MILLIHZ : FIELD_RATE_NTSC_MILLIHZ;
+  return field_rate_millihz(display_field_rate(pal));
 }
 
 inline unsigned display_lines_per_field(bool pal) {

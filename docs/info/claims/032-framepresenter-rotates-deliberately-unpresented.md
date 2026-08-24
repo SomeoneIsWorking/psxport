@@ -13,7 +13,7 @@ FramePresenter rotates deliberately unpresented fields without output, and Pad k
 
 ## Evidence
 
-Clang full build and CTest 95/95; test_frame_presenter_unpresented proves no emit/present/pace/diagnostic plus capture rotation and next-frame isolation; test_pad_slot1_policy proves absent default and connected packet positives
+Clang full build and CTest 96/96; test_frame_presenter_unpresented proves no emit/present/pace/diagnostic plus capture rotation and next-frame isolation; test_pad_slot1_policy proves absent default and connected packet positives
 
 ## What would falsify it
 

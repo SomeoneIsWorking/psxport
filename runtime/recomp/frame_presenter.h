@@ -22,7 +22,6 @@ public:
 
   virtual void emit(std::span<const RqItem> items) = 0;
   virtual void presentReal() = 0;
-  virtual void presentIntermediate() = 0;
   virtual void captureDiagnostic(uint64_t fence, bool interpolated) = 0;
   virtual void pace(int guestFields, int parts) = 0;
   virtual void reconcile(uint64_t fence) = 0;

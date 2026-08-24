@@ -17,11 +17,12 @@
 #include "fps60.h"
 #include "cfg.h"
 #include "core.h"
-#include "game.h"           // Game-owned optional temporal product and RenderQueue
-#include "game_hooks_opt.h" // game-owned scene-camera reader; never a framework scratchpad layout
-#include "mods.h"           // Mods (game->mods.fps60)
-#include "proj_params.h"    // ProjParams — the camera's projection constants + Snapshot save/restore
-#include "render_mode.h"    // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
+#include "fps60_game_hooks.h"
+#include "fps60_gpu_present.h"
+#include "game.h"        // Game-owned optional temporal product and RenderQueue
+#include "mods.h"        // Mods (game->mods.fps60)
+#include "proj_params.h" // ProjParams — the camera's projection constants + Snapshot save/restore
+#include "render_mode.h" // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
 #include "render_queue.h"
 #include <lucent/log.h>
 #include <math.h>
@@ -467,7 +468,7 @@ void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFr
   // empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame.
   if (extraFrame) {
     presentPass(c, tInterp, frame);
-    backend.presentIntermediate();
+    gpu_fps60_present_pass(c);
     backend.captureDiagnostic(frame.fence, /*interpolated=*/true);
     // Was an info line behind a latched `fps60` channel test — a per-present line that only ever appeared
     // when the channel was asked for, so it is debug audience, not info.

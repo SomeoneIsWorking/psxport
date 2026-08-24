@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "fps60.h"
+#include "fps60_game_hooks.h"
 #include "game.h"
 #include "game_hooks_opt.h"
 #include "game_iface.h"
