@@ -161,7 +161,9 @@ opaque/semitransparent material variants. Authored replay domains merge several 
 guest OT stream with the single `(ot_bin descending, link_ordinal descending, chain_suborder ascending)`
 comparator; duplicate keys, unordered world faces, and mixed policies refuse instead of guessing. Physical
 `RenderQueue::flush` epochs remain independent because a captured logic frame may contain several complete
-OT traversals. Both neutral presentation and `Fps60::presentPass` call the same pointer-stream planner, so
+OT traversals. A consumed queue retains storage only for the next push's lazy reset; it is not a pending
+physical epoch, so an empty later flush has no sort, diagnostic, ledger, capture, or emit side effect.
+Both neutral presentation and `Fps60::presentPass` call the same pointer-stream planner, so
 presentation cannot bypass painter ordering or copy multi-megabyte `RqItem` payloads.
 `gpu_painter.{h,cpp}` owns painter target lifecycle, command staging, and the focused real-GPU
 discriminator for the custom untextured painter. Both painter fragment paths enforce each item's

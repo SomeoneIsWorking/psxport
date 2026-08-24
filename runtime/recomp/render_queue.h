@@ -189,7 +189,7 @@ struct RenderQueue {
   int consumed = 1; // start consumed so the first push begins a clean frame
   void reset();
   RqItem *push();             // NULL on overflow (reserves a slot; lazy per-frame reset)
-  void flush(Core *core);     // sort by (layer, seq), then capture (fps60) OR emit each, mark consumed
+  void flush(Core *core);     // no-op if consumed; otherwise sort, capture/emit, then mark consumed
   void sortQueue();           // stable_sort items by (layer, seq) — the engine draw order (fps60 mid-present)
   void emitQueue(Core *core); // emit each item to the VK rasterizer + mark consumed (no sort)
   // Emit one already-sorted presentation stream. Pointer indirection lets fps60 merge its captured
