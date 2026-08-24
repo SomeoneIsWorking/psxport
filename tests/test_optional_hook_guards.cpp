@@ -234,6 +234,9 @@ static void test_billboard_rotate_is_optional_but_present_hook_runs(void) {
 static void test_world_rerun_is_not_eligible_until_a_game_claims_it(void) {
   class Runtime final : public GameRuntime {
   public:
+    bool guestVramIsPicture(const Game &) const override {
+      return false;
+    }
     void *createContext(Core &) override {
       return nullptr;
     }

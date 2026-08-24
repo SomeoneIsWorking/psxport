@@ -30,6 +30,10 @@ static const char *name(PresentRebuild r) {
     return "REBUILD_GEOM";
   case PRESENT_REBUILD_VRAM:
     return "REBUILD_VRAM";
+  case PRESENT_REBUILD_OWNERSHIP:
+    return "REBUILD_OWNERSHIP";
+  case PRESENT_REBUILD_COUNT:
+    break;
   }
   return "??";
 }
@@ -108,23 +112,40 @@ int main(void) {
                                  /*guestVramIsPicture=*/true,
                                  /*vramWrites=*/7,
                                  /*atLastBuild=*/7,
+                                 /*rebuildForOwnership=*/false,
                                  /*swRasterIsPicture=*/true),
         PRESENT_REBUILD_VRAM);
   // It must not depend on preserveVramBackdrop: that flag answers "is the GUEST's VRAM the picture",
   // and this path's picture is in s_vram because WE rasterized it there.
   check("software raster: native-producer port flag, still the picture",
-        present_rebuild_decision(true, /*guestVramIsPicture=*/false, 0, 0, /*swRasterIsPicture=*/true),
+        present_rebuild_decision(true,
+                                 /*guestVramIsPicture=*/false,
+                                 0,
+                                 0,
+                                 /*rebuildForOwnership=*/false,
+                                 /*swRasterIsPicture=*/true),
         PRESENT_REBUILD_VRAM);
   // BOTH DIRECTIONS: with the new input false, every pre-existing decision is bit-identical. This is
   // the assertion that stops the fix from becoming "always rebuild" on the paths that were working.
   check("VK path unchanged: idle field still reuses",
-        present_rebuild_decision(true, true, 12, 12, /*swRasterIsPicture=*/false),
+        present_rebuild_decision(true, true, 12, 12, /*rebuildForOwnership=*/false, /*swRasterIsPicture=*/false),
         PRESENT_REUSE_LAST);
   check("VK path unchanged: geometry still dominates",
-        present_rebuild_decision(false, true, 5, 5, /*swRasterIsPicture=*/false),
+        present_rebuild_decision(false, true, 5, 5, /*rebuildForOwnership=*/false, /*swRasterIsPicture=*/false),
         PRESENT_REBUILD_GEOM);
 
-  // ---- 6. The counter must not wedge. -------------------------------------------------------------
+  // ---- 6. Changing picture ownership invalidates the persistent composite. ----------------------
+  check("cold composite: build under declared ownership",
+        present_rebuild_decision(true, false, 0, 0, /*rebuildForOwnership=*/true),
+        PRESENT_REBUILD_OWNERSHIP);
+  check("guest-to-native transition: discard the guest-backed composite",
+        present_rebuild_decision(true, false, 4, 4, /*rebuildForOwnership=*/true),
+        PRESENT_REBUILD_OWNERSHIP);
+  check("native-to-guest transition: restore the guest-backed composite",
+        present_rebuild_decision(true, true, 4, 4, /*rebuildForOwnership=*/true),
+        PRESENT_REBUILD_OWNERSHIP);
+
+  // ---- 7. The counter must not wedge. -------------------------------------------------------------
   // Compared with != rather than >, so a wrapped uint32 counter still reads as "changed" instead of
   // silently pinning the frame to REUSE_LAST forever (which is a black screen that never recovers).
   check("write counter wrapped past the recorded build value",

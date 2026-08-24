@@ -76,6 +76,11 @@ the immutable executable-image fact owner, per-Game driver/scheduler and optiona
 factories, and the bounded legacy projection), `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and
 callback bags kept source-compatible while consumers migrate), `core.h`/`game.h` (the `Core`/`Game` objects;
 `Game` owns the runtime-created products), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
+`GameRuntime::guestVramIsPicture(const Game&)` (the required inherited current-frame authority for
+whether guest VRAM is picture content beneath native geometry; the checked renderer query refuses a
+missing runtime and `gpu_vk.cpp` never reads the legacy static backdrop bit),
+`guest_vram_composite_policy.h` (the per-`Game` persistent-composite ownership latch; both policy
+transitions invalidate the old composite and native-to-guest requests a complete VRAM upload),
 `game_hooks_opt.{h,cpp}` (the single guarded boundary for optional compatibility callbacks, including
 the absent-table zero/no-fade presentation state),
 `bios_interrupt.{h,cpp}` (the HookEntryInt saved-context contract),

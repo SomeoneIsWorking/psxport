@@ -196,9 +196,14 @@ Boundary cases the audit hit, decided:
   offsets.
 * **Slot/struct OFFSETS are game data exactly like bases** (`task_slot_layout.h`'s own STOPGAP
   banner says so). Q1 if a generic consumer reads them; they die with their consumer if Q2 moves it.
-* **A per-game POLICY switch is Q1 even when it feels behavioural** (`preserveVramBackdrop`,
-  `paceQuota`, `hle.vsyncTrap`): the framework's code path is generic; the game states which leg.
-  It becomes Q2 only when the legs stop sharing a shape.
+* **A per-game POLICY switch is Q1 only while its answer is immutable** (`paceQuota`,
+  `hle.vsyncTrap`): the framework's code path is generic; the game states which leg. A title that
+  changes ownership by frame is Q2. `preserveVramBackdrop` crossed that boundary in issue 0022:
+  Spyro needs guest VRAM for upload-only boot screens and rejects it under complete native frames,
+  so the live owner is now the required pure virtual
+  `GameRuntime::guestVramIsPicture(const Game&)`. The renderer's checked query refuses a missing
+  runtime, and its per-`Game` composite latch rebuilds on either ownership transition instead of
+  reusing pixels built under the previous answer.
 
 ---
 
@@ -370,7 +375,7 @@ mistaken for a completed consumer migration.
 
 **What stays in GameConfig, and why that is not a cop-out.** Everything that passes Q1 with a
 living framework consumer: `discEnvVar`,
-`bootFmv`, `cardEnvVar/cardDefaultPath`, `windowTitle`, `paceQuota`, `preserveVramBackdrop`, the
+`bootFmv`, `cardEnvVar/cardDefaultPath`, `windowTitle`, `paceQuota`, the
 `hle` platform-sync group (PlatformHle::initBuiltins), the pad group, the CD chokepoint group
 (cd_override.cpp), `overlaySlots`, `packetPool*/otRegion*/poolPtr*` (render_noise.h — the harness
 mask is a genuinely generic consumer even after the frame loop leaves), `taskTableBase/
@@ -380,6 +385,10 @@ returning 0 is precisely as dishonest as a field holding 0, so the honesty work 
 in the consumer) is identical either way and already the codified rule. The config ALSO sheds
 fields (§4.3), and every survivor's comment must name its framework consumer — that naming is what
 keeps "it's just a config field" from becoming the next leak.
+
+`GameConfig::preserveVramBackdrop` is now adapter input only. The renderer asks the derived runtime
+per frame; the field remains solely to preserve unmigrated consumers until their runtimes override
+the typed policy and the adapter projection can be deleted.
 
 ---
 

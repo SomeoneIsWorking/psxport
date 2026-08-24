@@ -55,6 +55,11 @@ const GuestProgramImage *LegacyGameRuntimeAdapter::guestProgramImage() const {
   return &guestProgramImage_;
 }
 
+bool LegacyGameRuntimeAdapter::guestVramIsPicture(const Game &) const {
+  const GameConfig *config = legacyConfigForMigration();
+  return config && config->preserveVramBackdrop != 0;
+}
+
 std::unique_ptr<TemporalFramePresentation> LegacyGameRuntimeAdapter::createTemporalFramePresentation(Game &game) {
   return std::make_unique<Fps60>(game);
 }

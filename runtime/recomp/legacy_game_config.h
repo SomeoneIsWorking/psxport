@@ -200,7 +200,7 @@ struct GameConfig {
     uint32_t vsyncTrap;
   } hle;
 
-  // --- rendering policy (gpu_vk.cpp render_geom) ---
+  // --- adapter-only rendering policy --------------------------------------------------------------
   // Does the guest's UPLOADED VRAM stay visible under the submitted primitives?
   //
   // The renderer clears the colour target to black before drawing, on the principle that "the PC
@@ -215,6 +215,8 @@ struct GameConfig {
   // ZERO KEEPS THE EXISTING BEHAVIOUR (clear to black), so a consumer that does not set it is
   // unaffected — and this field is APPENDED at the end of the struct because GameConfig is
   // initialised positionally by some consumers. Set to 1 while the guest still owns drawing.
+  // LegacyGameRuntimeAdapter projects this into GameRuntime::guestVramIsPicture(). The renderer no
+  // longer reads the bag. Migrated runtimes override that policy directly and may vary it per frame.
   uint32_t preserveVramBackdrop;
 
   // --- memory card (memcard.cpp) ----------------------------------------------------------------

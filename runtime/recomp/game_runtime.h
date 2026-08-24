@@ -63,6 +63,12 @@ public:
     return nullptr;
   }
 
+  // Whether guest VRAM is picture content for the current frame. This is deliberately a runtime
+  // policy, not an immutable configuration bit: a title may use guest uploads for boot logos and
+  // later hand the whole frame to native producers. The renderer asks at each present so the
+  // derived title runtime can answer from its actual render mode.
+  virtual bool guestVramIsPicture(const Game &game) const = 0;
+
   // Optional temporal decorator. Direct runtimes default to the neutral current-frame presenter and
   // therefore instantiate no interpolation history. Legacy consumers keep their existing behavior via
   // LegacyGameRuntimeAdapter until they declare the narrower contract directly.
@@ -105,3 +111,7 @@ private:
 // ownership; SBS Games share the same immutable process-lifetime runtime object.
 void psxport_install_game(GameRuntime &runtime);
 GameRuntime *psxport_game_runtime();
+
+// Checked shipping query used by every renderer path. A missing runtime is an installation defect,
+// not an implicit answer about the picture, and therefore refuses instead of returning false.
+bool game_guest_vram_is_picture(const Game &game);

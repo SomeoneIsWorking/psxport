@@ -13,7 +13,8 @@
 // NOT a public API; internal to the GPU TUs.
 #ifndef GPU_GPU_INTERNAL_H
 #define GPU_GPU_INTERNAL_H
-#include "vram_dirty.h" // class VramDirty — which parts of guest VRAM a present must re-upload
+#include "guest_vram_composite_policy.h" // persistent-composite ownership transition latch
+#include "vram_dirty.h"                  // class VramDirty — which parts of guest VRAM a present must re-upload
 #include <stdint.h>
 
 struct Game;   // back-pointer target (game.h); only frame_via_fb() uses it (to reach s_seen3d via Core)
@@ -236,6 +237,7 @@ struct GpuVkState {
   // See gpu_vk_present_policy.h for why the batch alone is not that test.
   uint32_t s_vram_writes = 0;
   uint32_t s_vram_writes_built = 0;
+  GuestVramCompositePolicy s_guest_vram_composite;
   // ...and WHERE those writes landed. The composite is a persistent framebuffer (see vram_dirty.h): a
   // present re-uploads only the regions the guest actually wrote, because a blanket re-upload erases
   // every pixel the VK rasterizer has drawn — including the whole of the buffer the guest is about to

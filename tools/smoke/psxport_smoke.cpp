@@ -53,6 +53,9 @@ static int g_failed = 0;
 
 class SmokeRuntime final : public GameRuntime {
 public:
+  bool guestVramIsPicture(const Game &) const override {
+    return false;
+  }
   void *createContext(Core &) override {
     return nullptr;
   }

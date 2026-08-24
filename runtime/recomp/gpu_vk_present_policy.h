@@ -16,7 +16,7 @@
 // whole frame. Treating them as nothing new never builds a composite at all, so they show black.
 //
 // That is issue 0029 one level up. 0029 was the same assumption inside render_geom ("total == 0 means
-// clear to black"), fixed by GameConfig::preserveVramBackdrop. The empty-batch early-out then landed
+// clear to black"), fixed by the title runtime's guest-VRAM-picture policy. The empty-batch early-out then landed
 // ABOVE upload_vram, so the preserve control could not be reached and the screens went black again.
 //
 // So the predicate is deliberately about CHANGE, not about who owns rendering: rebuild when EITHER
@@ -30,10 +30,14 @@ enum PresentRebuild {
   // The guest wrote the framebuffer directly (GP0 0xA0 upload / fill / VRAM->VRAM copy / native
   // load_image) since the composite was built, and submitted no primitives. THE UPLOAD-ONLY SCREEN.
   PRESENT_REBUILD_VRAM,
+  // The title changed whether guest VRAM is picture content. The persistent composite was built
+  // under the opposite ownership rule and must be rebuilt even if no other producer changed.
+  PRESENT_REBUILD_OWNERSHIP,
+  PRESENT_REBUILD_COUNT,
 };
 
-// guestVramIsPicture: GameConfig::preserveVramBackdrop — the port's own statement about whether the
-//   guest's VRAM is part of the picture. It has to be consulted here, and it is NOT a convenience
+// guestVramIsPicture: GameRuntime::guestVramIsPicture() — the port's current-frame statement about
+//   whether the guest's VRAM is part of the picture. It has to be consulted here, and it is NOT a convenience
 //   gate to shrink the blast radius; the arm below is only MEANINGFUL when it is set. If a port's
 //   native producer owns the frame, render_geom clears an empty batch to black, so "rebuild because
 //   the guest wrote VRAM" would composite black over a good frame — strictly worse than re-showing
@@ -59,7 +63,7 @@ enum PresentRebuild {
 // THIS IS THE THIRD SITE THAT IS BLIND ON RenderPath::Psx, and the other two are described directly
 // above. The software rasterizer draws the whole frame into s_vram, tees no VK geometry and marks
 // nothing dirty — so `total == 0` in render_geom is permanently true there and says nothing about
-// whether there is a picture. Asking GameConfig::preserveVramBackdrop alone is asking the wrong
+// whether there is a picture. Asking the guest-VRAM policy alone is asking the wrong
 // question: that flag is the port's statement about whether the GUEST's VRAM is part of the picture
 // under the NATIVE renderer, and a port whose native producers own the frame answers "no" correctly
 // while still needing its own software-rasterized output left alone.
@@ -78,12 +82,16 @@ static inline PresentRebuild present_rebuild_decision(bool batchEmpty,
                                                       bool guestVramIsPicture,
                                                       uint32_t vramWrites,
                                                       uint32_t vramWritesAtLastBuild,
+                                                      bool rebuildForOwnership = false,
                                                       bool swRasterIsPicture = false) {
   if (swRasterIsPicture) {
     return PRESENT_REBUILD_VRAM;
   }
   if (!batchEmpty) {
     return PRESENT_REBUILD_GEOM;
+  }
+  if (rebuildForOwnership) {
+    return PRESENT_REBUILD_OWNERSHIP;
   }
   if (guestVramIsPicture && vramWrites != vramWritesAtLastBuild) {
     return PRESENT_REBUILD_VRAM;

@@ -9,6 +9,7 @@
 // so the gpu_vk.cpp bodies are unchanged by the move (accessed via shadow macros there).
 #pragma once
 #include "gpu_vk_internal.h" // GGS_NUM_BLEND_MODES
+#include "gpu_vk_present_policy.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include <stdint.h>
@@ -64,9 +65,9 @@ public:
   int s_sbs_w[2] = {}, s_sbs_h[2] = {};
 
   // ---- diagnostics dedupe / scratch ----
-  int s_trace_n = 0;          // PSXPORT_GPU_TRACE print counter
-  long s_ps_n[3] = {0, 0, 0}; // `debug presentskip`: PresentRebuild decision tally
-  int s_fw_lastmode = -999;   // `debug fadewatch` change detector (present)
+  int s_trace_n = 0;                       // PSXPORT_GPU_TRACE print counter
+  long s_ps_n[PRESENT_REBUILD_COUNT] = {}; // `debug presentskip`: PresentRebuild decision tally
+  int s_fw_lastmode = -999;                // `debug fadewatch` change detector (present)
   uint8_t s_fw_lr = 0, s_fw_lg = 0, s_fw_lb = 0;
   int s_fw_lsx = -999, s_fw_lsy = -999, s_fw_lw = -999, s_fw_lh = -999;
   int s_fws_lastmode = -999; // fadewatch-state tap (wrapper) change detector

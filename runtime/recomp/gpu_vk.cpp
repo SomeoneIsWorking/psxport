@@ -1612,8 +1612,8 @@ static void render_geom(GpuVkState &g,
   g.s_present_ires = 0; // default: present from native s_vram_tex; the unified path below raises it to `scale`
   if (total == 0) {
     // No native submit this frame. Which of two things that means depends on who owns the frame, and
-    // GameConfig::preserveVramBackdrop is what says so — the SAME switch band 1 below consults for its
-    // clear. Honour it here too; not doing so was issue 0029.
+    // GameRuntime::guestVramIsPicture() says so — the SAME runtime policy band 1 below consults for
+    // its clear. Honour it here too; not doing so was issue 0029.
     //   * A port whose NATIVE renderer owns the frame: zero prims means nothing to show, so clear to
     //     BLACK rather than reveal raw PSX VRAM. (A native FMV or splash draws via gpu_vk_present_image,
     //     a separate native RGBA path — not this VRAM present.)
@@ -1805,7 +1805,7 @@ static void render_geom(GpuVkState &g,
   // Clearing to black shows ONLY what was submitted, which is right when a native
   // renderer owns the frame. A port still running the guest's drawing needs the
   // uploaded VRAM to survive, or its upload-only screens render black — see
-  // GameConfig::preserveVramBackdrop.
+  // GameRuntime::guestVramIsPicture().
   render_pass_set(cmd,
                   C,
                   Cd,
@@ -2223,7 +2223,7 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // whether or not the game drew into it, so a field with no drawing shows the previous image again.
   // Skipping the rebuild reproduces that exactly, and costs nothing — there is nothing new to show.
   //
-  // preserveVramBackdrop does NOT cover this case and was tried first: it only skips render_geom's
+  // Preserving guest VRAM does NOT cover this case and was tried first: it only skips render_geom's
   // CLEAR, while upload_vram above still overwrites the composite with guest VRAM — which for a port
   // that composites natively is empty, so the frame came out black anyway.
   //
@@ -2233,18 +2233,23 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // zero primitives, and skipping the rebuild for it means no composite is ever built, so it shows
   // black for its whole duration. That is Spyro's black boot logos, and it is issue 0029 one level
   // up: the identical "zero prims means nothing to show" assumption, re-introduced ABOVE the
-  // preserveVramBackdrop control that was added to fix it, where that control cannot be reached.
+  // guest-VRAM policy that was added to fix it, where that policy cannot be reached.
   //
   // So the guard asks about CHANGE from BOTH producers, which is also what the hardware analogy
   // actually says — the display re-scans the same framebuffer only while nothing has written it.
   // A genuinely blank frame the guest MEANT to be blank clears its own VRAM, and that clear is a
   // VRAM write, so it still rebuilds.
-  const bool guestVramIsPicture = game->core.cfg && game->core.cfg->preserveVramBackdrop;
+  const bool guestVramIsPicture = game_guest_vram_is_picture(*game);
+  const GuestVramCompositePlan ownershipPlan = s_guest_vram_composite.plan(guestVramIsPicture);
   // …and a THIRD source, on which both of the inputs above are structurally blind: the PSX software
   // rasterizer (RenderPath::Psx) draws the frame into s_vram with no VK geometry and no dirty mark, so
   // s_vram is the picture at every present. See the policy header for the measurement.
-  const PresentRebuild decision = present_rebuild_decision(
-      geom_batch_empty(*this), guestVramIsPicture, s_vram_writes, s_vram_writes_built, game->gpu.sw_path());
+  const PresentRebuild decision = present_rebuild_decision(geom_batch_empty(*this),
+                                                           guestVramIsPicture,
+                                                           s_vram_writes,
+                                                           s_vram_writes_built,
+                                                           ownershipPlan.rebuildForOwnership,
+                                                           game->gpu.sw_path());
   // `debug presentskip`: the decision's running DISTRIBUTION with its denominator. This is the
   // measurement that sizes the change for a given port: REUSE_LAST is what afca817d bought (an idle
   // field costing nothing), REBUILD_VRAM is what this predicate restored (an upload-only screen that
@@ -2279,11 +2284,13 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
     prev_sn = g_bytes_snap;
   }
   lucent::debug("presentskip",
-                "presents={} reuse_last={} rebuild_geom={} rebuild_vram={} | vram_writes={}",
-                gd.s_ps_n[0] + gd.s_ps_n[1] + gd.s_ps_n[2],
+                "presents={} reuse_last={} rebuild_geom={} rebuild_vram={} rebuild_ownership={} | vram_writes={}",
+                gd.s_ps_n[PRESENT_REUSE_LAST] + gd.s_ps_n[PRESENT_REBUILD_GEOM] + gd.s_ps_n[PRESENT_REBUILD_VRAM] +
+                    gd.s_ps_n[PRESENT_REBUILD_OWNERSHIP],
                 gd.s_ps_n[PRESENT_REUSE_LAST],
                 gd.s_ps_n[PRESENT_REBUILD_GEOM],
                 gd.s_ps_n[PRESENT_REBUILD_VRAM],
+                gd.s_ps_n[PRESENT_REBUILD_OWNERSHIP],
                 s_vram_writes);
   // REUSE_LAST skips REBUILDING THE FRAME (no VRAM upload, no geometry) — it does not skip PRESENTING
   // one. The composite below still runs, because the picture depends on live state the frame does not:
@@ -2295,7 +2302,7 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
     // on RenderPath::Psx the region list is empty, `nup` is 0, and a rebuild uploads NOTHING: measured
     // 2026-08-11, fixing only the decision left the present still 0.0% non-black at 700/1200/2010. It
     // is not a heuristic here — on this path we rasterized every pixel of that buffer ourselves.
-    if (game->gpu.sw_path()) {
+    if (game->gpu.sw_path() || ownershipPlan.uploadWholeVram) {
       s_dirty.markAll();
     }
 
@@ -2346,6 +2353,7 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
                 &s_dbg_semi_c,
                 vram_backdrop_is_picture(guestVramIsPicture, game->gpu.sw_path()));
     s_vram_writes_built = s_vram_writes; // this composite now reflects every guest write so far
+    s_guest_vram_composite.didBuild(guestVramIsPicture);
   }
 
   // ---- THE PRESENT STAGE, ONE CODE PATH -------------------------------------------------------------
@@ -3995,8 +4003,8 @@ void gpu_vk_render_readback(Core *core, const uint16_t *vram, int sx, int sy, in
   GPUCHK(cmd, "render_readback cmd");
   upload_vram(g, cmd, vram, kWholeVram, 1); // SBS pane: this core's picture IS its CPU VRAM + batch
   int a, b, c;
-  const bool preserve =
-      vram_backdrop_is_picture(core->cfg && core->cfg->preserveVramBackdrop, core->game->gpu.sw_path());
+  const bool guestVramIsPicture = game_guest_vram_is_picture(*core->game);
+  const bool preserve = vram_backdrop_is_picture(guestVramIsPicture, core->game->gpu.sw_path());
   render_geom(g, cmd, vram, sx, sy, w, h, &a, &b, &c, preserve);
   gpu_submit(cmd, "gpu_vk_render_readback"); // render into THIS core's VRAM image; NO swapchain present
   // readback_vram returns nullptr when the GPU is latched off. Refuse by NAME here: dereferencing it

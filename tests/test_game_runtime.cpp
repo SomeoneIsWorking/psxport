@@ -43,6 +43,10 @@ public:
     return &programImage;
   }
 
+  bool guestVramIsPicture(const Game &game) const override {
+    return guestVramPicture || &game == pictureGame;
+  }
+
   void *createContext(Core &) override {
     ++contextsCreated;
     return &contextToken;
@@ -95,6 +99,8 @@ public:
   int frameDriversCreated = 0;
   int taskSchedulersCreated = 0;
   bool factoriesSawWiredGame = true;
+  bool guestVramPicture = false;
+  const Game *pictureGame = nullptr;
 };
 
 class MigratingRuntime final : public LegacyGameRuntimeAdapter {
@@ -253,6 +259,46 @@ void test_only_legacy_adapter_installs_the_temporal_compatibility_decorator() {
   CHECK(game->temporalPresentation != nullptr);
 }
 
+void test_guest_vram_picture_policy_is_runtime_owned_and_dynamic() {
+  TestRuntime runtime;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+
+  CHECK(!game_guest_vram_is_picture(*game));
+  runtime.guestVramPicture = true;
+  CHECK(game_guest_vram_is_picture(*game));
+}
+
+void test_guest_vram_picture_policy_is_per_game() {
+  TestRuntime runtime;
+  psxport_install_game(runtime);
+  auto pictureGame = std::make_unique<Game>();
+  auto nativeGame = std::make_unique<Game>();
+
+  runtime.pictureGame = pictureGame.get();
+  CHECK(game_guest_vram_is_picture(*pictureGame));
+  CHECK(!game_guest_vram_is_picture(*nativeGame));
+}
+
+void test_legacy_adapter_projects_static_backdrop_policy_only_for_migration() {
+  static GameHooks hooks{};
+  hooks.ctxCreate = legacy_create_context;
+  hooks.ctxDestroy = legacy_destroy_context;
+
+  GameConfig hiddenConfig{};
+  LegacyGameRuntimeAdapter hidden(hiddenConfig, hooks);
+  psxport_install_game(hidden);
+  auto hiddenGame = std::make_unique<Game>();
+  CHECK(!game_guest_vram_is_picture(*hiddenGame));
+
+  GameConfig visibleConfig{};
+  visibleConfig.preserveVramBackdrop = 1;
+  LegacyGameRuntimeAdapter visible(visibleConfig, hooks);
+  psxport_install_game(visible);
+  auto visibleGame = std::make_unique<Game>();
+  CHECK(game_guest_vram_is_picture(*visibleGame));
+}
+
 } // namespace
 
 int main() {
@@ -262,5 +308,8 @@ int main() {
   RUN(legacy_adapter_supports_incremental_inheritance);
   RUN(game_owns_runtime_products_and_context);
   RUN(only_legacy_adapter_installs_the_temporal_compatibility_decorator);
+  RUN(guest_vram_picture_policy_is_runtime_owned_and_dynamic);
+  RUN(guest_vram_picture_policy_is_per_game);
+  RUN(legacy_adapter_projects_static_backdrop_policy_only_for_migration);
   return pt_summary();
 }
