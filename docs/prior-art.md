@@ -151,6 +151,6 @@ before it is clean and the USER has approved.
    Both now ship a `--selftest` that gates positives AND negatives ON THE REAL CORPUS, and both refuse
    (exit 2) rather than certify a corpus they did not scan — but note that `lineage_probe.py` only got its
    corpus layer on 2026-08-12 in a later pass: until then its selftest was SYNTHETIC-ONLY and passed with
-   the corpus absent, truncated or swapped, which is exactly the gap that let the first tool's wrong SDK
+   the    corpus absent, truncated or swapped, which is exactly the gap that let the first tool's wrong SDK
    ceiling survive. Nobody else appears to have either.
-   Same for the registry/gate patterns and `gpuguard`.
+   Same for the registry/gate patterns.

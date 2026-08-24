@@ -57,36 +57,8 @@ the same task; `git worktree remove` THEN `git worktree prune`, because removing
 leaves the registration behind — which is exactly the state found here. Operator: `git worktree list` in
 every game repo is end-of-session cleanup.
 
-Related, same shared-`.git` mechanism: a worktree `stash pop` has already grabbed another agent's stash
-in this workspace (`Tomba2Engine/CLAUDE.md`). `refs/stash` and `.git/modules` are common ground.
-
-## 2026-08-12 — the gpuguard classifier was wrong in BOTH directions
-
-Found when it DENIED a `git commit`: it searched the whole command string for a binary name, so a commit
-whose MESSAGE mentioned `psxport` and `tomba2_port` was classified as a GPU launch. Reading the code found
-the other direction too — `spyro_port`, `spiderman_port`, `control_port` and `ffa` were not in its list at
-all, and it examined only one statement, so `cd x && ./scratch/bin/spyro_port` was MISSED. **Three of the
-four PSX ports were never interlocked.** It also had a blanket "the word gpuguard appears" exemption,
-which let `gpuguard status && ./scratch/bin/tomba2_port …` through entirely.
-
-The first pass at the fix (match in COMMAND POSITION only) still missed five real launch shapes —
-`for g in a b; do ./bin/spyro_port; done`, `if true; then ./bin/tomba2_port; fi`, `while read l; do …;
-done`, `time …`, `nohup …` — because the statement began with a shell keyword that is not a wrapper, so
-the classifier returned the keyword as the executable. Found by PROBING the classifier with the command
-shapes actually in use, not by re-reading it. Shell keywords are statement separators now.
-
-Current shape: command position only (executable of each statement, after skipping `VAR=val` and wrappers
-like `timeout`/`env`/`python3`), heredoc bodies stripped as data, `tools/gate.py` and `tools/gate.sh`
-treated as launches because they drive the port binary, `cmake --build --target <port>` explicitly NOT a
-launch (a latched card must block runs, not all work).
-
-**Validate in both directions:** `python3 ~/.claude/hooks/gpu_guard_hook.py --selftest` runs 20 launch and
-14 non-launch cases; the OLD matcher scores 6 false positives and 7 false negatives against that suite,
-which is what makes the suite a discriminator rather than a decoration. Labelling correctly is not
-reaching the interlock: `gpuguard latch …`, feed the hook a launch and a commit, confirm DENY/ALLOW, then
-`gpuguard clear`.
-
-**Falsifier:** a new port binary name, or a launch shape the selftest does not contain.
+ Related, same shared-`.git` mechanism: a worktree `stash pop` has already grabbed another agent's stash
+ in this workspace (`Tomba2Engine/CLAUDE.md`). `refs/stash` and `.git/modules` are common ground.
 
 ## 2026-08-06 — headless was unpaced and rendered at a different internal resolution (LANDED `80e3d203`)
 
