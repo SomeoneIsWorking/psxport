@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags: cdc,dma3,fifo,zero-fill
 depends: runtime/recomp/cdc_native.cpp#cdc_dma_read, runtime/recomp/mem.cpp#Core::io_write, tests/test_cdc_dma_depletion.cpp#test_dma3_shipping_path_commits_the_full_programmed_transfer
-reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:50:54
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 01:02:39
 ---
 
 ## Claim
@@ -42,3 +42,7 @@ real consumer repeats Spider-Man's post-underrun poison/allocator abort on this 
 ## Re-confirmed 2026-08-22
 
 Combined Clang framework build and full 91/91 CTest pass at f468f2c7, including CDC deterministic-time controls, HSync counter coverage, and DMA regression coverage.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 73bb5338: test_cdc_dma_depletion and test_cdc_bfrd_split_dma passed in the full 100/100 CTest suite.

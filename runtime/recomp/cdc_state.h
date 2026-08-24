@@ -27,7 +27,8 @@ typedef struct CdcState {
   int data_n, data_rd;            //                                            (was s_data_n/s_data_rd)
   uint8_t irq_en;                 // interrupt enable register                   (was s_irq_en)
   uint8_t stat;                   // drive status byte (bit1 = motor on)         (was s_stat, init 0x02)
-  uint32_t loc_lba;               // Setloc target                              (was s_loc_lba)
+  uint32_t loc_lba;               // current physical sector
+  uint32_t command_lba;           // Setloc target, applied by ReadN/ReadS/Seek
   uint8_t mode;                   // Setmode                                     (was s_mode)
   int reading;                    // ReadN/ReadS active                          (was s_reading)
   uint8_t first_sector_pending;   // ReadN accepted; first data sector waits for its drive deadline
@@ -35,10 +36,18 @@ typedef struct CdcState {
   uint8_t following_sector_ready; // drive-side next-sector availability, independent of data FIFO drain
   uint8_t drive_event_armed;      // one following-sector deadline is outstanding
   uint64_t drive_deadline_ticks;  // absolute timestamp in the injected guest-instruction domain
+  uint8_t command_event_armed;    // command receive/execute/completion deadline is outstanding
+  uint8_t pending_command;        // command register value captured at the latest write
+  int8_t command_phase;           // -1 receive start, 0 arguments, 1 execute, 2 complete
+  uint8_t command_arg_latch;      // argument currently crossing the controller receive boundary
+  uint8_t command_args[16];       // arguments consumed by the active command
+  uint8_t command_arg_n;
+  uint64_t command_deadline_ticks;
   void *tick_context;
   CdcTickNowFn tick_now;
   CdcIrqEnt q[8];              // pending-interrupt queue                     (was s_q)
   int q_head, q_tail, resp_rd; //                                     (was s_q_head/s_q_tail/s_resp_rd)
+  uint64_t irq_sequence;       // increments whenever a response becomes current
   uint8_t irq_edge;            // 1 = the controller just RAISED an interrupt and nothing has latched
                                // it yet. The MMIO dispatcher (mem.cpp) consumes this and sets I_STAT
                                // bit 2, which is edge-triggered on real hardware: acking the CD
@@ -57,8 +66,8 @@ void cdc_state_init(CdcState *s);
 // Inject the deterministic guest-instruction clock. Production binds Timing; hermetic tests bind a fake
 // counter and call cdc_drive_service through the same controller path.
 void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now);
-// Service one scheduled drive event on the guest thread. Returns 1 only when a due event emitted
-// a data-ready INT1; an early wake leaves the existing deadline armed and returns 0.
+// Service due drive and command events on the guest thread. Returns 1 only when a response became
+// current and raised a new controller IRQ edge; an early wake leaves existing deadlines armed.
 int cdc_drive_service(CdcState *s);
 // MMIO 0x1F801800-3 register model — the instance is explicit (mem.cpp passes &game->cdc).
 uint32_t cdc_read(CdcState *s, uint32_t p);

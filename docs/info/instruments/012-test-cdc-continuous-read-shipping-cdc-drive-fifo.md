@@ -13,7 +13,7 @@ test_cdc_continuous_read shipping CDC drive/FIFO independence test
 
 The instrument has produced both wrong answers. On the consumption-owned model, partial-FIFO and
 full-drain cases saw no following INT1. On the immediate BFRD-owned model, an elapsed-zero assertion
-produced INT1 before guest code could return. The current suite passes 5/5 and 59 checks through the
+produced INT1 before guest code could return. The current suite passes 5/5 and 64 checks through the
 shipping controller: no event at deadline-1, event at the deadline, preserved partial cursor,
 cancelled Pause deadline, full-drain behavior, nominal 451,584/225,792-tick thresholds, INT1 status 0x22 and
 Pause completion status 0x02.

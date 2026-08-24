@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-22
 tags: timing,vsync,hsync
 depends: runtime/recomp/emulated_time.cpp#EmulatedTime::hSyncCount, runtime/recomp/timing.cpp#Timing::hSyncCounter, runtime/recomp/timing.cpp#Timing::vsync, runtime/recomp/mem.cpp#Core::io_read, tests/test_hsync_counter.cpp
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 01:02:40
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ Vagrant's intact Sony VSync body reads the pointer resolving to 0x1F801110 and s
 ## What would falsify it
 
 A reference trace disagrees with the nominal NTSC/PAL phase, an interlaced-field consumer requires alternating line parity, either shipping seam diverges from the other, or test_hsync_counter/full CTest regresses.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 73bb5338: test_hsync_counter and the CDC/memory regression set passed in the full 100/100 CTest suite.

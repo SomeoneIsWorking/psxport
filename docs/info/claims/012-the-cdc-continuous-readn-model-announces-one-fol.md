@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: cdc,cdrom,readn,dma
 depends: runtime/recomp/cdc_native.cpp#cdc_drive_service, runtime/recomp/timing.cpp#Timing::advanceGuestInstructionTicks, tools/recomp/emit.py#emit_run, tests/test_cdc_continuous_read.cpp#test_first_sector_waits_one_drive_period
 reconfirmed: 2026-08-25
-verified_at: 2026-08-25 00:52:59
+verified_at: 2026-08-25 01:02:38
 ---
 
 ## Claim
@@ -21,7 +21,7 @@ drive timing; issue 0007 records that limitation.
 ## Evidence
 
 `test_cdc_continuous_read` drives the shipping begin/read/write/DMA/service path with an injected
-instruction-time counter: 5/5 tests and 59 checks. At tick 0 and deadline-1 it sees no data/INT1; at
+instruction-time counter: 5/5 tests and 64 checks. At tick 0 and deadline-1 it sees no data/INT1; at
 the nominal 225,792-tick double-speed threshold it sees the first LBA16 sector and status 0x22. A 2060/2340-byte partial
 FIFO remains intact while LBA17 becomes ready only at the next deadline; Pause returns 0x22 ACK,
 0x02 completion and cancels the event. `test_interp_guest_cycles` executes the actual interpreter
@@ -69,3 +69,7 @@ Combined Clang framework build and full 91/91 CTest pass at f468f2c7, including 
 ## Re-confirmed 2026-08-25
 
 Fresh Clang 22 build at 1e3afdfb: CDC continuous/read timing tests passed in the full 99/99 suite; emitter passed 49/49.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 73bb5338: CDC command phases, continuous ReadN, emulated time, DMA depletion, and BFRD split tests passed in the full 100/100 CTest suite.

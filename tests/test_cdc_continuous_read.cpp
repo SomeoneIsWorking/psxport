@@ -15,6 +15,7 @@
 #include <cstdint>
 
 #include "cd_drive_timing.h"
+#include "cdc_command_phase.h"
 #include "cdc_state.h"
 #include "cdc_test_clock.h"
 #include "disc.h"
@@ -168,12 +169,21 @@ void test_stopped_controller_does_not_announce_sector(void) {
   const uint64_t cancelled_deadline = cdc.drive_deadline_ticks;
   CHECK(cdc.drive_event_armed);
   issue_command(&cdc, 0x09); // Pause: INT3 acknowledgement followed by INT2 completion
+  CHECK_EQ(cdc.reading, 1);
+  CHECK_EQ(pending_irq_type(&cdc), 0);
+
+  clock.ticks += cdc_command_ack_delay_cpu_ticks(0);
+  CHECK_EQ(cdc_drive_service(&cdc), 1);
   CHECK_EQ(cdc.reading, 0);
   CHECK_EQ(cdc.following_sector_ready, 0);
   CHECK_EQ(cdc.drive_event_armed, 0);
   CHECK_EQ(pending_irq_type(&cdc), 3);
   CHECK_EQ(response_byte(&cdc), 0x22); // Pause ACK observes the still-reading status
+  const uint64_t completion_deadline = cdc.command_deadline_ticks;
   acknowledge_irq(&cdc);
+  CHECK_EQ(pending_irq_type(&cdc), 0);
+  clock.ticks = completion_deadline;
+  CHECK_EQ(cdc_drive_service(&cdc), 1);
   CHECK_EQ(pending_irq_type(&cdc), 2);
   CHECK_EQ(response_byte(&cdc), 0x02); // completion observes paused/not-reading status
   acknowledge_irq(&cdc);
@@ -181,7 +191,7 @@ void test_stopped_controller_does_not_announce_sector(void) {
 
   write_bfrd(&cdc, 0x00);
   write_bfrd(&cdc, 0x80);
-  clock.ticks = cancelled_deadline + 1;
+  clock.ticks = completion_deadline + 1;
 
   CHECK_EQ(cdc.reading, 0);
   CHECK_EQ(cdc_drive_service(&cdc), 0);

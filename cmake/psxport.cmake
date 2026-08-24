@@ -121,6 +121,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/disc_provision.cpp
   ${PSXPORT_ROOT}/runtime/recomp/cd_override.cpp
   ${PSXPORT_ROOT}/runtime/recomp/cd_drive_timing.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/cdc_command_phase.cpp
   ${PSXPORT_ROOT}/runtime/recomp/cdc_native.cpp
   ${PSXPORT_ROOT}/runtime/recomp/xa_stream.cpp
   ${PSXPORT_ROOT}/runtime/recomp/emulated_time.cpp

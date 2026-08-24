@@ -795,8 +795,8 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       backtrace_symbols_fd(bt, n, 2);
     }
     cdc_write(&game->cdc, p, (uint8_t)v);
-    irqStatLatch(); // a command usually completes here and raises IRQ2 — latch it now, not on
-                    // whatever unrelated access happens to read I_STAT next.
+    irqStatLatch(); // An ACK may make a queued controller response current and raise a fresh edge;
+                    // latch that edge on this access rather than a later, unrelated I_STAT read.
     return;
   }
   if (p == 0x1F801810) {

@@ -7,8 +7,8 @@
 // machine (0x800123B0) loops forever. This is a focused, faithful model of the CXD1199-style
 // register interface: index banking, parameter/response/data FIFOs, and a queue of pending
 // interrupts (commands that return INT3-ack-then-INT2-complete). Data reads are served from the
-// disc image (disc.cpp). Command responses are ready on the next poll; ReadN sector availability is
-// separately scheduled in deterministic guest instruction-time at the programmed nominal speed.
+// disc image (disc.cpp). Command receive, argument transfer, execution, and completion are scheduled
+// in deterministic guest time; ReadN sector availability uses that same clock at the nominal speed.
 //
 // Register map (bank = 0x1F801800 & 3):
 //   0x1F801800  W: index/bank (low 2 bits)      R: status (FIFO/busy bits + index)
@@ -17,6 +17,7 @@
 //   0x1F801803  W bank0: request (BFRD want-data) W bank1: ack/reset IRQ flags
 //               R bank0/2: interrupt enable      R bank1/3: interrupt flag (pending IRQ type)
 #include "cd_drive_timing.h"
+#include "cdc_command_phase.h"
 #include "cdc_state.h"
 #include "disc.h"
 #include "r3000.h"
@@ -39,6 +40,7 @@ void cdc_state_init(CdcState *s) {
 }
 
 static void cdc_irq(CdcState *s, uint8_t type, const uint8_t *resp, int len) {
+  const bool becomes_current = s->q_tail == s->q_head;
   int n = (s->q_tail + 1) & 7;
   if (n == s->q_head) {
     return; // queue full (shouldn't happen)
@@ -48,22 +50,85 @@ static void cdc_irq(CdcState *s, uint8_t type, const uint8_t *resp, int len) {
   if (len) {
     memcpy(s->q[s->q_tail].resp, resp, (size_t)len);
   }
-  if (s->q_tail == s->q_head) {
+  if (becomes_current) {
     s->resp_rd = 0; // first entry becomes active
   }
   s->q_tail = n;
-  s->irq_edge = 1; // -> I_STAT bit 2, latched by the MMIO dispatcher
+  if (becomes_current) {
+    ++s->irq_sequence;
+    s->irq_edge = 1; // -> I_STAT bit 2, latched by the MMIO dispatcher
+  }
 }
 static int q_empty(CdcState *s) {
   return s->q_head == s->q_tail;
 }
 
-static uint32_t lba_from_param(CdcState *s) { // Setloc params: amm,ass,asect (BCD), minus the 2s lead-in
-  const uint8_t *p = s->param;
+static uint32_t lba_from_command_args(const CdcState *s) {
+  // Setloc params: amm,ass,asect (BCD), minus the 2s lead-in.
+  const uint8_t *p = s->command_args;
   int mm = (p[0] >> 4) * 10 + (p[0] & 0xF);
   int ss = (p[1] >> 4) * 10 + (p[1] & 0xF);
   int ff = (p[2] >> 4) * 10 + (p[2] & 0xF);
   return (uint32_t)((mm * 60 + ss) * 75 + ff - 150);
+}
+
+static uint64_t deterministic_seek_time(const CdcState *s, uint32_t target_lba) {
+  // Beetle's PS_CDC_CalcSeekTime with only its random 0..25000 component fixed at zero.
+  const bool motor_on = (s->stat & kCdlStatStandby) != 0;
+  const bool paused = motor_on && !s->reading;
+  const uint32_t initial_lba = motor_on ? s->loc_lba : 0;
+  const uint64_t difference = initial_lba > target_lba ? initial_lba - target_lba : target_lba - initial_lba;
+  uint64_t ticks = motor_on ? 0u : 33'868'800u;
+  const uint64_t seek_ticks = difference * 33'868'800u / (72u * 60u * 75u);
+  ticks += seek_ticks < 20'000u ? 20'000u : seek_ticks;
+  if (difference >= 2'250u) {
+    ticks += 33'868'800u * 300u / 1'000u;
+  } else if (paused) {
+    ticks += (s->mode & 0x80) != 0 ? 1'237'952u : 1'237'952u * 2u;
+  } else if (difference >= 3u && difference < 12u) {
+    ticks += cd_drive_sector_period_cpu_ticks(s->mode) * 4u;
+  }
+  return ticks;
+}
+
+static bool command_accepts_argument_count(uint8_t command, uint8_t count) {
+  switch (command) {
+  case 0x02:
+    return count == 3;
+  case 0x03:
+    return count <= 1;
+  case 0x0D:
+  case 0x1D:
+    return count == 2;
+  case 0x0E:
+  case 0x12:
+  case 0x14:
+  case 0x19:
+    return count == 1;
+  case 0x01:
+  case 0x04:
+  case 0x05:
+  case 0x06:
+  case 0x07:
+  case 0x08:
+  case 0x09:
+  case 0x0A:
+  case 0x0B:
+  case 0x0C:
+  case 0x0F:
+  case 0x10:
+  case 0x11:
+  case 0x13:
+  case 0x15:
+  case 0x16:
+  case 0x1A:
+  case 0x1B:
+  case 0x1C:
+  case 0x1E:
+    return count == 0;
+  default:
+    return false;
+  }
 }
 
 static bool load_sector(CdcState *s) { // fill the data FIFO with the sector at loc_lba
@@ -149,6 +214,7 @@ static void stop_continuous_read(CdcState *s) {
 static void start_continuous_read(CdcState *s) {
   cancel_drive_event(s);
   s->reading = 1;
+  s->stat |= kCdlStatRead;
   s->first_sector_pending = 1;
   s->bfrd = 0;
   s->following_sector_ready = 0;
@@ -162,7 +228,7 @@ void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now) {
   s->tick_now = now;
 }
 
-int cdc_drive_service(CdcState *s) {
+static int service_drive_event(CdcState *s) {
   if (!s->drive_event_armed || !s->tick_now) {
     return 0;
   }
@@ -245,6 +311,7 @@ void cdc_set_mode(CdcState *s, uint8_t mode) {
 
 void cdc_begin_read(CdcState *s, uint32_t lba) {
   s->loc_lba = lba;
+  s->command_lba = lba;
   start_continuous_read(s);
 }
 
@@ -268,102 +335,151 @@ int cdc_dma_read(CdcState *s, uint32_t *out, int words) {
   return got;
 }
 
-static void exec_command(CdcState *s, uint8_t cmd) {
-  lucent::debug(
-      "cdc", "cmd 0x{:02X} params={} [{:02X} {:02X} {:02X}]", cmd, s->param_n, s->param[0], s->param[1], s->param[2]);
+static uint64_t exec_command(CdcState *s, uint8_t cmd) {
+  lucent::debug("cdc",
+                "cmd 0x{:02X} args={} [{:02X} {:02X} {:02X}]",
+                cmd,
+                s->command_arg_n,
+                s->command_args[0],
+                s->command_args[1],
+                s->command_args[2]);
+  if (!command_accepts_argument_count(cmd, s->command_arg_n)) {
+    const uint8_t error[2] = {static_cast<uint8_t>(s->stat | 0x01), 0x20};
+    cdc_irq(s, 5, error, 2);
+    return 0;
+  }
   uint8_t r1[1] = {s->stat};
   switch (cmd) {
   case 0x01:
     cdc_irq(s, 3, r1, 1);
-    break; // Getstat
+    return 0; // Getstat
   case 0x02:
-    s->loc_lba = lba_from_param(s);
+    s->command_lba = lba_from_command_args(s);
     cdc_irq(s, 3, r1, 1);
-    break; // Setloc
+    return 0; // Setloc
   case 0x0E:
-    cdc_set_mode(s, s->param[0]);
+    cdc_set_mode(s, s->command_args[0]);
     cdc_irq(s, 3, r1, 1);
-    break; // Setmode
+    return 0; // Setmode
   case 0x06:
   case 0x1B: // ReadN / ReadS
     cdc_irq(s, 3, r1, 1);
+    s->loc_lba = s->command_lba;
     start_continuous_read(s);
-    break;
+    return 0;
   case 0x09: {
     const uint8_t reading_status[1] = {s->stat};
+    const bool was_reading = s->reading != 0;
     stop_continuous_read(s);
-    const uint8_t paused_status[1] = {s->stat};
     cdc_irq(s, 3, reading_status, 1);
-    cdc_irq(s, 2, paused_status, 1);
-    break; // Pause
+    if (!was_reading) {
+      return 5'000;
+    }
+    const uint64_t speed_scale = (s->mode & 0x80) != 0 ? 1u : 2u;
+    return (1'124'584u + static_cast<uint64_t>(s->loc_lba) * 42'596u / (75u * 60u)) * speed_scale;
   }
   case 0x08: {
     const uint8_t reading_status[1] = {s->stat};
+    const bool was_stopped = !s->reading && (s->stat & kCdlStatStandby) == 0;
     stop_continuous_read(s);
-    const uint8_t stopped_status[1] = {s->stat};
+    s->stat = 0;
     cdc_irq(s, 3, reading_status, 1);
-    cdc_irq(s, 2, stopped_status, 1);
-    break; // Stop
+    return was_stopped ? 5'000u : 33'868u;
   }
   case 0x0A:
     stop_continuous_read(s);
     s->stat = kCdlStatStandby;
     s->mode = 0;
+    s->command_lba = 0;
     cdc_irq(s, 3, r1, 1);
-    cdc_irq(s, 2, r1, 1);
-    break; // Init
+    return 4'100'000u; // Reset's deterministic seek-to-sector-zero completion.
   case 0x0B:
   case 0x0C:
     cdc_irq(s, 3, r1, 1);
-    break; // Mute / Demute
+    return 0; // Mute / Demute
   case 0x15:
   case 0x16: // SeekL / SeekP
     cdc_irq(s, 3, r1, 1);
-    cdc_irq(s, 2, r1, 1);
-    break;
+    return deterministic_seek_time(s, s->command_lba);
   case 0x1E: // ReadTOC
     cdc_irq(s, 3, r1, 1);
-    cdc_irq(s, 2, r1, 1);
-    break;
+    return 30'000'000u + deterministic_seek_time(s, 0);
   case 0x07:
+    if (s->stat != 0) {
+      const uint8_t error[2] = {static_cast<uint8_t>(s->stat | 0x01), 0x20};
+      cdc_irq(s, 5, error, 2);
+      return 0;
+    }
+    s->stat = kCdlStatStandby;
+    cdc_irq(s, 3, r1, 1);
+    return 3'386'880u;
   case 0x0D:
   case 0x03:
   case 0x17:
   case 0x18: // MotorOn/SetFilter/Play/SetSession
     cdc_irq(s, 3, r1, 1);
-    cdc_irq(s, 2, r1, 1);
-    break;
+    return 0;
   case 0x19: { // Test (sub-function in param[0])
-    if (s->param[0] == 0x20) {
+    if (s->command_args[0] == 0x20) {
       uint8_t v[4] = {0x94, 0x09, 0x19, 0xC0}; // BIOS date/version
       cdc_irq(s, 3, v, 4);
     } else {
       cdc_irq(s, 3, r1, 1);
     }
-    break;
+    return 0;
   }
   case 0x1A: { // GetID -> region/license
     cdc_irq(s, 3, r1, 1);
-    uint8_t id[8] = {0x02, 0x00, 0x20, 0x00, 'S', 'C', 'E', 'A'}; // licensed, America
-    cdc_irq(s, 2, id, 8);
-    break;
+    return 33'868u;
   }
+  case 0x12:
+    cdc_irq(s, 3, r1, 1);
+    return 33'868u;
   case 0x13: {
     uint8_t t[3] = {s->stat, 0x01, 0x01};
     cdc_irq(s, 3, t, 3);
-    break;
+    return 0;
   } // GetTN
   case 0x14: {
     uint8_t t[3] = {s->stat, 0x00, 0x02};
     cdc_irq(s, 3, t, 3);
-    break;
+    return 0;
   } // GetTD
   default:
     lucent::debug("cdc", "UNHANDLED cmd 0x{:02X} -> ack only", cmd);
     cdc_irq(s, 3, r1, 1);
-    break;
+    return 0;
   }
-  s->param_n = 0; // command consumes the param FIFO
+}
+
+static void complete_command(CdcState *s) {
+  if (s->pending_command == 0x1A) {
+    const uint8_t id[8] = {0x02, 0x00, 0x20, 0x00, 'S', 'C', 'E', 'A'};
+    cdc_irq(s, 2, id, 8);
+    return;
+  }
+  if (s->pending_command == 0x0A) {
+    s->loc_lba = 0;
+  } else if (s->pending_command == 0x15 || s->pending_command == 0x16) {
+    s->loc_lba = s->command_lba;
+    s->stat = kCdlStatStandby;
+  }
+  const uint8_t response[1] = {s->stat};
+  cdc_irq(s, 2, response, 1);
+}
+
+int cdc_drive_service(CdcState *s) {
+  // The oracle services its drive counter before its command counter when both expire in the same
+  // update. Preserve that ordering so an exact tie makes INT1 current and queues command INT3.
+  const uint64_t irq_sequence_before = s->irq_sequence;
+  service_drive_event(s);
+  const CdcCommandEvent event = cdc_command_service(s, q_empty(s));
+  if (event == CdcCommandEvent::kExecute) {
+    cdc_command_finish_execution(s, exec_command(s, s->pending_command));
+  } else if (event == CdcCommandEvent::kComplete) {
+    complete_command(s);
+  }
+  return s->irq_sequence != irq_sequence_before;
 }
 
 // Apply the bank-0 request register's BFRD latch. BFRD is a level, not a command: writing 0x80
@@ -417,6 +533,9 @@ uint32_t cdc_read(CdcState *s, uint32_t p) {
     if (s->bfrd && s->data_rd < s->data_n) {
       st |= 0x40; // DRQSTS (data FIFO not empty)
     }
+    if (s->command_event_armed && s->command_phase <= 1) {
+      st |= 0x80; // BUSYSTS while command receive/argument/execution is pending
+    }
     return st;
   }
   case 1: { // response FIFO
@@ -452,7 +571,7 @@ void cdc_write(CdcState *s, uint32_t p, uint8_t v) {
     return; // index/bank select
   case 1:
     if (s->index == 0) {
-      exec_command(s, v); // command register
+      cdc_command_schedule(s, v); // command register
     }
     return;
   case 2:
@@ -476,6 +595,7 @@ void cdc_write(CdcState *s, uint32_t p, uint8_t v) {
           // edge the second and later responses of a multi-INT command sequence would be visible
           // in the FIFO but never announced, which looks exactly like a dropped response.
           if (!q_empty(s)) {
+            ++s->irq_sequence;
             s->irq_edge = 1;
           }
         }

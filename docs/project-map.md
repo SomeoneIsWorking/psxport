@@ -217,7 +217,8 @@ rounding every NTSC field to the exact-60 Hz legacy values of 564,480 clocks and
 rate change; 60,000 NTSC fields total exactly 44,144,100 stereo frames (44.1 kHz for 1,001 seconds).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
 game-validated blocking-control seam), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
-latch and drive-event state), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),
+latch and command effects), `cdc_command_phase.{h,cpp}` (oracle-derived command receive, argument,
+execution, and completion scheduler), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),
 `emulated_time.{h,cpp}` + `timing.cpp` (per-Game deterministic emulated CPU-time owner and the
 NTSC/PAL HBlank phase exposed through root counter 1 at `0x1F801110`),
 `frame_pacer.{h,cpp}` (display cadence + guest field delivery + optional host sleep), `disc.cpp`
@@ -233,16 +234,24 @@ geometry, and invalid-cadence refusal. The clock uses nominal non-interlaced fie
 interlaced field parity is not modeled.
 BFRD never creates an event:
 reasserting it preserves a partial DMA cursor, and a later transition only installs a sector whose
-drive deadline already elapsed. Pause/Stop cancels the owned deadline. `test_cdc_emulated_time`
+drive deadline already elapsed. Command writes arm a 12,315-tick receive deadline; arguments transfer
+at 1,815 ticks each, execution follows 8,500 ticks later, and only then are side effects and INT3
+made visible. Multi-phase commands hold their later INT2 until the current IRQ is acknowledged, and
+an exact drive/command deadline tie services drive INT1 first. Pause/Stop cancels the owned deadline.
+`test_cdc_command_phases` gates zero/three-argument timing, late side effects, argument validation,
+INT3/INT2 separation, replacement, and tie ordering. `test_cdc_emulated_time`
 gates instruction-heavy versus yield-heavy deadline delivery, fractional subfields, late-boundary
 resynchronization, and invalid cadence. `test_cdc_bfrd_split_dma`
 gates latch/access behavior (535 checks), `test_cdc_continuous_read` gates too-early/due, partial,
-Pause, full-drain, status and speed answers (59 checks), and `test_interp_guest_cycles` plus the
+Pause, full-drain, status and speed answers (64 checks), and `test_interp_guest_cycles` plus the
 emitter execution suite gate interpreted/emitted clock advancement. DMA3 commits its programmed
 word count: FIFO words first, then the controller's zero read value after depletion; it never
 preserves stale destination RAM or consumes a future sector. `test_cdc_dma_depletion` gates the
 shipping CDC and Core DMA3 paths with the measured 504-word/70-word-tail split, including deasserted
 BFRD (3 cases, 1,518 checks).
+Crash Bash's pre-landing one-shot consumer trace crosses its former GetTN empty-poll boundary and
+advances through Setloc, Setmode, ReadN, and Pause into later continuous sector ranges; that evidence
+validates the command handoff, not a first frame or gameplay.
 **Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle
 gte.c). `gte_state.h::GTE_ExecuteIsolated` runs any vendor GTE instruction against an explicit `GteRegs`
 without changing the caller's bound state. Its implementation tracks nested isolation depth and suppresses

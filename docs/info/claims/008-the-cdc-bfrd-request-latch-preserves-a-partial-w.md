@@ -32,7 +32,7 @@ consumer receives bytes from the wrong LBA/cursor.
 ## Re-confirmed 2026-08-21
 
 Reconfirmed against the deterministic drive-deadline model: BFRD suite 3/3 with 535 checks and
-continuous ReadN suite 5/5 with 59 checks.
+continuous ReadN suite 5/5 with 64 checks.
 
 ## Re-confirmed 2026-08-21
 
