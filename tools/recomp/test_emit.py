@@ -588,7 +588,8 @@ def run_func(data, base, regs=None, mem=None, hooks="", base_exe=0x80010000, fun
     return res
 
 
-def run_module(data, base, entry, regs=None, base_exe=0x80010000, seeds=None):
+def run_module(data, base, entry, regs=None, base_exe=0x80010000, seeds=None,
+               overlay_data=None):
     """WHOLE-PIPELINE execution test: emit_module(exe) -> shards + dispatch TU, compile them together
     with the harness, run `entry`, return the same dict as run_func.
 
@@ -614,7 +615,13 @@ def run_module(data, base, entry, regs=None, base_exe=0x80010000, seeds=None):
                   + "\ntypedef void (*OverrideFn)(Core*);\n"
                     "inline void rec_dispatch_miss(Core* c, uint32_t a){ rec_dispatch(c, a); }\n")
         open(os.path.join(td, "core.h"), "w").write(core_h)
-        srcs = emit.emit_module(e, td, emit.MAIN_NAMES, seeds or {base}, shards=1)
+        overlay_dir = None
+        if overlay_data is not None:
+            overlay_dir = os.path.join(td, "overlays")
+            os.makedirs(overlay_dir)
+            open(os.path.join(overlay_dir, "MIXED.BIN"), "wb").write(overlay_data)
+        srcs = emit.emit_module(e, td, emit.MAIN_NAMES, seeds or {base}, overlay_dir,
+                                shards=1)
         main_cpp = os.path.join(td, "main.cpp")
         open(main_cpp, "w").write(
             '#include "rec_decls.h"\n#include <cstdio>\n#include <cstring>\n'
@@ -666,6 +673,39 @@ def test_exec_basic_alu():
     res = run_func(data, 0x80010000, regs={"a0": 10, "a1": 5})
     assert res["r"][2] == (10 + 5) * 2, res["r"][2]
     assert res["ticks"] == 4, res["ticks"]
+
+
+def test_exec_overlay_jal_shaped_data_cannot_split_a_resident_delay_slot():
+    """Whole-pipeline regression for Toy Story 2's model-table reset corruption.
+
+    A mixed code/data overlay contains a word that decodes as `jal delay_slot`.  That target cannot
+    be a function entry: it is the resident loop branch's delay slot and therefore belongs to the
+    loop.  Promoting it splits the resident function immediately before the slot, so emit_func sees
+    no delay instruction and emits `/* DS */`; the increment then runs only once on fall-through.
+    """
+    if _skip_if_no_cc():
+        return
+    base = 0x80010000
+    a = Asm(base)
+    a.addiu("t0", "zero", 0)
+    a.addiu("t1", "zero", 3)
+    a.label("loop")
+    a.addiu("t0", "t0", 1)
+    a.slt("t2", "t0", "t1")
+    a.bne("t2", "zero", "loop")
+    a.addiu("a1", "a1", 4)        # branch delay slot: must run on all three iterations
+    a.addu("v0", "a1", "zero")
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    delay_slot = base + 0x14
+    fake_jal = (3 << 26) | ((delay_slot >> 2) & 0x03FFFFFF)
+    overlay_data = struct.pack("<I", fake_jal)
+
+    result = run_module(data, base, base, regs={"a1": 0}, overlay_data=overlay_data)
+    assert result["r"][5] == 12, \
+        f"resident branch delay slot ran {result['r'][5] // 4} of 3 iterations"
+    assert result["r"][2] == 12, result["r"][2]
 
 
 def test_exec_loop_sum():
@@ -737,17 +777,22 @@ def test_exec_inline_trampoline_table_with_ori_base():
         return
     # switch(a0 & 3) via an inline array of fixed-width j+nop trampolines. Unlike the address-table
     # idiom above, jr lands ON the table slot; each slot then jumps into the shared body. Psy-Q forms
-    # the base with lui+ori here, not lui+addiu. A missing recovery routes the mid-function slot through
-    # rec_dispatch instead of keeping it inside this emitted function.
+    # the base with lui+ori here, not lui+addiu. The branch between the constant construction and the
+    # dispatch models Toy Story 2's renderer: it does not write t9 and therefore cannot invalidate the
+    # table base. A missing recovery routes the mid-function slot through rec_dispatch instead of
+    # keeping it inside this emitted function.
     a = Asm(0x80010000)
     a.lui("t9", 0x8001)
-    a.ori("t9", "t9", 0x0020)
+    a.ori("t9", "t9", 0x0028)
+    a.bltz("a1", "dispatch_prep")
+    a.nop()
+    a.label("dispatch_prep")
     a.andi("t1", "a0", 3)
     a.sll("t1", "t1", 3)
     a.addu("t1", "t1", "t9")
     a.jr("t1")
     a.nop()
-    a.nop()  # align table to 0x80010020
+    a.nop()  # align table to 0x80010028
     a.label("slot0")
     a.j("case0")
     a.nop()
@@ -769,7 +814,7 @@ def test_exec_inline_trampoline_table_with_ori_base():
     e = exe_of(data)
     ins = {x: decode(x, e.word(x)) for x in range(e.load, e.text_end, 4)}
     recovered = emit.find_jump_tables(e, ins, e.load, e.text_end)
-    jr = a.base + 5 * 4
+    jr = a.base + 7 * 4
     slots = [a.labels[f"slot{index}"] for index in range(4)]
     assert recovered[jr] == slots
     assert a.labels["case0"] not in recovered[jr], "shared body label is not a table slot"
@@ -783,10 +828,9 @@ def test_exec_inline_trampoline_table_with_ori_base():
 
 def test_computed_offset_rejects_partial_lui_and_clobbered_low_half():
     # A duplicated tail can contain a jr below the containing function's `lo`. Recovery must not
-    # pair that jr with unrelated constants in the containing body. In particular, a bare lui is a
-    # partial address, and a load kills that partial value before the later addiu. The old forward
-    # map retained the stale high half; counting the lui itself as a second target then turned this
-    # pair into the false local target set {0x80010000, 0x8001006A}.
+    # pair that jr with unrelated constants in the containing body. A load kills the prior lui value
+    # before the later addiu. The old forward map retained that stale value; newly counting the bare
+    # lui as a target too then turned the pair into the false set {0x80010000, 0x8001006A}.
     a = Asm(0x8000FFF0)
     a.jr("v0")
     a.nop()
@@ -813,6 +857,25 @@ def test_computed_offset_rejects_unaligned_masked_targets():
     a = Asm(0x80010000)
     a.lui("t9", 0x8001)
     a.ori("t9", "t9", 0x0022)
+    a.andi("t1", "a0", 3)
+    a.sll("t1", "t1", 3)
+    a.addu("t1", "t1", "t9")
+    a.jr("t1")
+    a.nop()
+    for _ in range(12):
+        a.nop()
+    data, _ = a.assemble()
+    e = exe_of(data)
+    ins = {x: decode(x, e.word(x)) for x in range(e.load, e.text_end, 4)}
+    assert a.base + 5 * 4 not in emit.find_jump_tables(e, ins, e.load, e.text_end)
+
+
+def test_computed_offset_rejects_clobbered_base_constant():
+    # The candidate base must still be live at the add. Remembering the last constant ever assigned
+    # to t9 after a load overwrote it fabricates a table at the old address.
+    a = Asm(0x80010000)
+    a.lui("t9", 0x8001)
+    a.lw("t9", 0x20, "t9")
     a.andi("t1", "a0", 3)
     a.sll("t1", "t1", 3)
     a.addu("t1", "t1", "t9")
@@ -1608,10 +1671,6 @@ def test_noreturn_code_needs_an_explicit_seed():
         assert "case 0x" in disp, "an explicit seed vouches for noreturn code — it must recompile"
 
 
-if __name__ == "__main__":
-    _main()
-
-
 def test_ra_computed_jump_vs_real_return():
     # RE-16: `jr $ra` does NOT always mean "return". Hand-written assembly can use `jal`/`jr $ra` as an
     # internal COROUTINE mechanism inside one frame, in which case $ra holds a mid-body resume point and
@@ -1776,3 +1835,7 @@ def test_ra_save_slot_is_matched_by_BASE_not_just_offset():
     assert got == {0x8001001C}, \
         ("a store to a different global must not vouch for this load, got "
          f"{[hex(x) for x in sorted(got)]}")
+
+
+if __name__ == "__main__":
+    _main()

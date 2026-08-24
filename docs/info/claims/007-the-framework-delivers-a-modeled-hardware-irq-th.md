@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags: bios,irq,hookentryint
 depends: runtime/recomp/bios_interrupt.cpp#bios_interrupt_dispatch_custom_exit, runtime/recomp/hle.cpp#Hle::irqPoll, tools/recomp/emit.py#main
-reconfirmed: 2026-08-21
-verified_at: 2026-08-21 11:37:46
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:52:55
 ---
 
 ## Claim
@@ -28,3 +28,7 @@ Any retail-backed consumer whose installed HookEntryInt continuation is skipped,
 ## Re-confirmed 2026-08-21
 
 Post-string-extraction Clang build and 76/76 CTests passed, including the shipping bios_interrupt suite; Hle::irqPoll behavior is unchanged.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 1e3afdfb: test_bios_interrupt passed in the full 99/99 suite.

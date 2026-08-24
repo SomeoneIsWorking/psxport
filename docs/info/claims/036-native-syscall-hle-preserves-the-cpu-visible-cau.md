@@ -6,7 +6,7 @@ created: 2026-08-25
 tags: syscall,cp0,oracle
 depends: runtime/recomp/syscall_exception.cpp#enter, runtime/recomp/hle.cpp#rec_dispatch_miss, tools/oracle/oracle_shim.c#oracle_resume_syscall_return
 reconfirmed: 2026-08-25
-verified_at: 2026-08-25 00:33:40
+verified_at: 2026-08-25 00:53:01
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ if the independent CPU and shipping Core disagree on Cause/EPC/Status or the fir
 ## Re-confirmed 2026-08-25
 
 Crash direct differential agrees 34/34 at B0:56 after modeled Cause/EPC/resume; current Clang syscall, dispatch-observer, oracle-trace, and 42/42 emitter gates all pass, including generated-target deduplication and wrong-selector negatives.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 1e3afdfb: test_syscall_exception, test_dispatch_observer, oracle_spike, and oracle_trace_selftest passed in full 99/99.

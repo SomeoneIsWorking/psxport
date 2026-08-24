@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-22
 tags: bios,hle,libc,toupper
 depends: runtime/recomp/bios_libc_string.cpp#bios_libc_string_dispatch, runtime/recomp/hle.cpp#Hle::dispatchBios, tests/test_bios_libc_string.cpp
-reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:02:18
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:53:00
 ---
 
 ## Claim
@@ -28,3 +28,7 @@ Shipping-dispatch toupper controls pass in full Clang framework CTest 84/84: t->
 ## Re-confirmed 2026-08-22
 
 Post-commit full Clang CTest passed the ASCII toupper shipping-HLE controls within 85/85.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 1e3afdfb: test_bios_libc_string passed in the full 99/99 suite.

@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: oracle,harness,trace
 depends: tools/oracle/oracle_trace.c#main, tools/oracle/test_oracle_trace.py#main
 reconfirmed: 2026-08-25
-verified_at: 2026-08-25 00:11:05
+verified_at: 2026-08-25 00:52:57
 ---
 
 ## Claim
@@ -33,3 +33,7 @@ successor writes a boundary.
 ## Re-confirmed 2026-08-25
 
 Reconfirmed after exact-PC capture commit: oracle_trace selftest passes 12/12 across distinct ordinals, alias, canonical register blocks, indirect capture-at, unreachable denominator, modeled-return positive/opposite, and unsupported-predecessor refusal.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 1e3afdfb: oracle_trace_selftest passed in the full 99/99 suite.

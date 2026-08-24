@@ -6,7 +6,7 @@ created: 2026-08-21
 tags:
 depends: tools/oracle/crossvalidate_crt0.py#main, tools/oracle/oracle_trace.c#main
 reconfirmed: 2026-08-25
-verified_at: 2026-08-25 00:11:05
+verified_at: 2026-08-25 00:52:54
 ---
 
 ## Claim
@@ -31,3 +31,7 @@ crossvalidate_crt0_selftest, and oracle_trace_selftest as part of 74/74.
 ## Re-confirmed 2026-08-25
 
 Reconfirmed after exact-PC capture commit and generic DPCR/CP0 shim work: crossvalidate_crt0 --selftest passes 5/5; oracle_trace CLI selftest passes 12/12.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 1e3afdfb: ctest crossvalidate_crt0_selftest and oracle_trace_selftest passed in the full 99/99 suite.

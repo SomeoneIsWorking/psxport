@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-22.1"   # lui+ori computed tables; canonical COP2 moves only
+RECOMP_VERSION = "2026-08-24.2"   # branches preserve computed-offset base constants
 
 R = lambda n: f"c->r[{n}]"
 
@@ -708,13 +708,45 @@ def _fold_immediate_constant(i, known):
     return None
 
 
+def _definite_gpr_write(i):
+    """Return the GPR written by a decoded instruction, None for no GPR write, or -1 if unknown.
+
+    This is intentionally separate from `defines_reg`: that helper is a depth-attribution safety
+    predicate which treats every control instruction as a possible write to every queried register.
+    Reaching-constant analysis needs the architectural answer instead. In particular, an ordinary
+    branch does not clobber the register holding a computed-jump base; using `defines_reg` here made
+    any branch between `lui`/`ori` and `jr` erase every known constant.
+    """
+    if i.kind in (D.ALU_RRR, D.SHIFT_I, D.SHIFT_V):
+        return i.rd
+    if i.kind in (D.ALU_RRI, D.LUI, D.LOAD):
+        return i.rt
+    if i.kind == D.HILO:
+        return i.rd if i.op in ("mfhi", "mflo") else None
+    if i.kind == D.GTE_MOVE:
+        return i.rt if i.op in ("mfc2", "cfc2") else None
+    if i.kind == D.COP0:
+        return i.rt if i.op == "mfc0" else None
+    if i.kind == D.BRANCH:
+        return 31 if i.op in ("bltzal", "bgezal") else None
+    if i.kind == D.JUMP:
+        return 31 if i.op == "jal" else None
+    if i.kind == D.JUMPR:
+        return i.rd if i.op == "jalr" else None
+    if i.kind in (D.STORE, D.GTE_STORE, D.GTE_LOAD, D.GTE_OP, D.MULDIV, D.NOP):
+        return None
+    return -1
+
+
 def _advance_immediate_constants(i, known):
     """Advance a conservative reaching-constant map through one instruction."""
     value = _fold_immediate_constant(i, known)
-    for reg in tuple(known):
-        if defines_reg(i, reg):
-            del known[reg]
-    if value is not None:
+    written = _definite_gpr_write(i)
+    if written == -1:
+        known.clear()
+    elif written in known:
+        del known[written]
+    if value is not None and i.rt:
         known[i.rt] = value
     return value
 
@@ -763,27 +795,27 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
             if i is None:
                 continue
             v = _advance_immediate_constants(i, hi_v)
-            # A lui is only the high half of a standard address construction. Count the completed
-            # low-half assignment, never the partial value; this preserves the pre-ori detector's
-            # semantics and prevents one stale candidate from becoming a two-target false positive.
+            # This heuristic historically required a completed low-half assignment. A bare lui can
+            # itself be a full constant when the low half is zero, but adding support for that is a
+            # separate control-flow proof; silently counting it here turned one stale candidate into
+            # a two-target false positive while adding ori support.
             if v is not None and i.op != "lui" and i.rt == dst and not (v & 3) and lo <= v < hi:
                 consts.add(v)
         return sorted(consts) if len(consts) >= 2 else None
 
     # 2. the immediate base. FORWARD, because `lui rB,HI ; addiu/ori rB,rB,LO` cannot be resolved
     #    walking backward — the low-half instruction is met before the lui that gives it meaning.
-    base = base_reg = None
     hi_val = {}
     for a in range(max(lo, add_a - window * 4), add_a, 4):
         i = ins.get(a)
         if i is None:
             continue
-        v = _advance_immediate_constants(i, hi_val)
-        if v is not None:
-            if i.rt in srcs:
-                base, base_reg = v, i.rt
-    if base_reg is None or not (lo <= base < hi):
+        _advance_immediate_constants(i, hi_val)
+    base_candidates = [(value, reg) for reg, value in hi_val.items()
+                       if reg in srcs and lo <= value < hi]
+    if len(base_candidates) != 1:
         return None
+    base, base_reg = base_candidates[0]
 
     # 3. the scale. The add's operands ARE the base and the scaled index, so the `sll` must write the
     #    OTHER addend — keying on "any sll writing either operand" picked up an unrelated `sll` on the
@@ -1882,9 +1914,14 @@ def overlay_funcs(exe, overlay_dir, base=None):
     raw to `base` at runtime). Those overlays `jal` into resident MAIN.EXE functions (the cooperative
     scheduler, file loaders, etc.) that direct-jal discovery within MAIN.EXE never sees. We scan each
     overlay's words for `jal` targets landing in MAIN.EXE text whose first word decodes as a real
-    instruction (filters data/jump-table false positives), and seed them; discover_funcs then follows
-    their call graph. Pure binary input (the overlays are game data, like MAIN.EXE) — no Ghidra.
-    Skipped if absent.
+    instruction, and seed them; discover_funcs then follows their call graph. A target that is the
+    resident control instruction immediately before it is a DELAY SLOT, however, can never be a
+    separate function entry: the control instruction executes that word as part of its own flow.
+    Mixed code/data overlays can contain jal-shaped payload words, and promoting one of those delay
+    slots splits the resident body before the slot so the real branch loses it. Reject that
+    structurally impossible class here; this is independent of prologue style and therefore retains
+    legitimate stackless resident callees. Pure binary input (the overlays are game data, like
+    MAIN.EXE) — no Ghidra. Skipped if absent.
 
     `base` is only the PC used to decode each word, and a `jal` target is
     `(PC & 0xF0000000) | (imm26 << 2)` — so only its top nibble can matter, and every overlay shares
@@ -1904,7 +1941,11 @@ def overlay_funcs(exe, overlay_dir, base=None):
             w = int.from_bytes(data[off:off + 4], "little")
             ins = decode(base + off, w)
             if ins.op == "jal" and lo <= ins.target < hi:
-                if decode(ins.target, exe.word(ins.target)).kind != D.UNKNOWN:
+                previous = decode(ins.target - 4, exe.word(ins.target - 4)) \
+                    if ins.target - 4 >= lo else None
+                is_delay_slot = previous is not None and previous.kind in (
+                    D.BRANCH, D.JUMP, D.JUMPR)
+                if not is_delay_slot and decode(ins.target, exe.word(ins.target)).kind != D.UNKNOWN:
                     targets.add(ins.target)
     return targets
 

@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-22
 tags: recompiler,control-flow
 depends: tools/recomp/emit.py#_scan_computed_offset, tools/recomp/test_emit.py, tools/recomp/decode.py
-reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:02:18
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:53:01
 ---
 
 ## Claim
@@ -24,3 +24,8 @@ Any supported executable loses a legitimate computed target, admits an extra or 
 ## Re-confirmed 2026-08-22
 
 Post-commit 55/55 focused pytest and 85/85 Clang CTest pass; Toy exact 32-slot/local execution and Vagrant fresh 799-resident plus 137-TITLE emission are green.
+
+## Re-confirmed 2026-08-25
+
+At 1e3afdfb the direct emitter passed 49/49 and decoder 9/9; fresh Clang CTest
+`recomp_emitter` and `recomp_decoder` also passed in the full 99/99 suite.

@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: oracle,harness,bios
 depends: tools/oracle/oracle_shim.c#oracle_resume_call_return, tools/oracle/oracle_trace.c#main, tools/oracle/oracle_spike.c#modeled_call_return_case
 reconfirmed: 2026-08-25
-verified_at: 2026-08-25 00:33:38
+verified_at: 2026-08-25 00:52:56
 ---
 
 ## Claim
@@ -28,3 +28,7 @@ Reconfirmed by oracle_spike's 17 modeled-call-return checks inside the complete 
 ## Re-confirmed 2026-08-25
 
 oracle_trace_selftest passes 14/14 after the same oracle shim change, covering both successful modeled BIOS/syscall returns and wrong-selector refusals.
+
+## Re-confirmed 2026-08-25
+
+Fresh Clang 22 build at 1e3afdfb: oracle_trace_selftest passed and exact CPU/device capture remained green in full 99/99 CTest.
