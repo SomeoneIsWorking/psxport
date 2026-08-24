@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags: cmake,testing
 depends: CMakeLists.txt, tools/oracle/CMakeLists.txt, tests/test_cmake_test_ownership.py
-reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:40:56
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:33:38
 ---
 
 ## Claim
@@ -34,3 +34,7 @@ Reverified after runtime/painter changes: full Clang framework CTest passes 83/8
 ## Re-confirmed 2026-08-22
 
 Post-oracle integration Clang CTest 90/90 passed cmake_test_ownership and the complete standalone framework test inventory.
+
+## Re-confirmed 2026-08-25
+
+After oracle CMake composition and syscall integration, cmake_test_ownership passes in the real Clang build; embedded consumers remain isolated from framework CTests.

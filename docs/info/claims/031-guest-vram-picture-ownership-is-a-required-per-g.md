@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-24
 tags: renderer,inheritance,vram
 depends: runtime/recomp/game_runtime.cpp#game_guest_vram_is_picture, runtime/recomp/gpu_vk.cpp#GpuVkState::present, runtime/recomp/guest_vram_composite_policy.h, tests/test_guest_vram_composite_policy.cpp
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:33:40
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ Clang build and full 93/93 CTest gate passed; production-policy tests exercised 
 ## What would falsify it
 
 if a renderer path reads the legacy static backdrop bit, a missing runtime receives an implicit ownership answer, or either ownership transition can reuse a composite built under the opposite policy
+
+## Re-confirmed 2026-08-25
+
+test_guest_vram_composite_policy, test_guest_vram_policy_ownership, and test_present_backdrop_clear all pass after Gte page persistence was added as an independent ownership policy.

@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-22
 tags: oracle,irq,harness
 depends: tools/oracle/oracle_shim.c, tools/oracle/oracle_spike.c
-reconfirmed: 2026-08-22
-verified_at: 2026-08-22 19:40:57
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:33:39
 ---
 
 ## Claim
@@ -32,3 +32,7 @@ Post-cleanup final gate: oracle_spike passed 43/43 with same-CPU I_MASK/I_STAT c
 ## Re-confirmed 2026-08-22
 
 Post-landing Clang CTest 90/90 passed oracle_spike 43/43, same-CPU I_MASK/I_STAT continuation, and the unsupported GPUSTAT opposite answer.
+
+## Re-confirmed 2026-08-25
+
+Current Clang oracle_spike passes 84/84 including DPCR, CP0, provenance, and sticky hardware/event-taint opposites; crossvalidate passes too.

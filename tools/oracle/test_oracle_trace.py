@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Both-answer regression for oracle_trace call capture and explicit modeled return."""
+"""Both-answer regression for oracle_trace capture and explicit modeled returns."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ FUNCTION_TWO = LOAD_ADDRESS + 0x50
 BIOS_THUNK = LOAD_ADDRESS + 0x60
 POST_MODEL_CALL = LOAD_ADDRESS + 0x70
 INDIRECT_TARGET = LOAD_ADDRESS + 0x80
+POST_SYSCALL_CALL = LOAD_ADDRESS + 0x90
 
 
 def jal(target: int) -> int:
@@ -45,6 +46,10 @@ def jalr(rd: int, rs: int) -> int:
 
 def sw(rt: int, base: int, immediate: int) -> int:
     return (0x2B << 26) | (base << 21) | (rt << 16) | (immediate & 0xFFFF)
+
+
+def syscall(code: int = 0) -> int:
+    return ((code & 0xFFFFF) << 6) | 0x0C
 
 
 def make_executable(path: pathlib.Path) -> None:
@@ -108,6 +113,24 @@ def make_indirect_call_executable(path: pathlib.Path) -> None:
 
 def make_hardware_stop_executable(path: pathlib.Path) -> None:
     words = [lui(8, 0x1F80), ori(8, 8, 0x1814), sw(0, 8, 0), 0]
+    payload = b"".join(struct.pack("<I", word) for word in words)
+    header = bytearray(0x800)
+    header[:8] = b"PS-X EXE"
+    struct.pack_into("<I", header, 0x10, LOAD_ADDRESS)
+    struct.pack_into("<I", header, 0x18, LOAD_ADDRESS)
+    struct.pack_into("<I", header, 0x1C, len(payload))
+    struct.pack_into("<I", header, 0x30, 0x801FFF00)
+    path.write_bytes(header + payload)
+
+
+def make_syscall_return_executable(path: pathlib.Path) -> None:
+    words = [0] * 40
+    words[0] = addiu(4, 0, 1)
+    words[1] = syscall()
+    words[2] = jal(POST_SYSCALL_CALL)
+    words[3] = 0
+    words[(POST_SYSCALL_CALL - LOAD_ADDRESS) // 4] = addiu(8, 0, 0x5151)
+
     payload = b"".join(struct.pack("<I", word) for word in words)
     header = bytearray(0x800)
     header[:8] = b"PS-X EXE"
@@ -213,6 +236,31 @@ def run_modeled_return(
     )
 
 
+def run_modeled_syscall_return(
+    tracer: pathlib.Path,
+    executable: pathlib.Path,
+    trace: pathlib.Path,
+    selector: int,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            str(tracer),
+            str(executable),
+            "--steps",
+            "64",
+            "--model-syscall-return",
+            f"{selector}:1",
+            "--summary-only",
+            "--out",
+            str(trace),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("tracer", type=pathlib.Path)
@@ -242,6 +290,17 @@ def main() -> int:
     modeled = run_modeled_return(arguments.tracer, modeled_executable, modeled_trace, 0x39)
     wrong_model = run_modeled_return(arguments.tracer, modeled_executable, wrong_model_trace, 0x38)
 
+    syscall_executable = arguments.scratch / "modeled-syscall-return-fixture.exe"
+    make_syscall_return_executable(syscall_executable)
+    syscall_trace = arguments.scratch / "modeled-syscall-return.trace"
+    wrong_syscall_trace = arguments.scratch / "wrong-modeled-syscall-return.trace"
+    modeled_syscall = run_modeled_syscall_return(
+        arguments.tracer, syscall_executable, syscall_trace, 1
+    )
+    wrong_syscall = run_modeled_syscall_return(
+        arguments.tracer, syscall_executable, wrong_syscall_trace, 2
+    )
+
     indirect_executable = arguments.scratch / "indirect-call-fixture.exe"
     make_indirect_call_executable(indirect_executable)
     indirect_trace = arguments.scratch / "capture-at-indirect-target.trace"
@@ -264,6 +323,10 @@ def main() -> int:
     missing_text = missing_trace.read_text(encoding="utf-8") if missing_trace.is_file() else ""
     modeled_text = modeled_trace.read_text(encoding="utf-8") if modeled_trace.is_file() else ""
     wrong_model_text = wrong_model_trace.read_text(encoding="utf-8") if wrong_model_trace.is_file() else ""
+    syscall_text = syscall_trace.read_text(encoding="utf-8") if syscall_trace.is_file() else ""
+    wrong_syscall_text = (
+        wrong_syscall_trace.read_text(encoding="utf-8") if wrong_syscall_trace.is_file() else ""
+    )
     indirect_text = indirect_trace.read_text(encoding="utf-8") if indirect_trace.is_file() else ""
     missing_pc_text = missing_pc_trace.read_text(encoding="utf-8") if missing_pc_trace.is_file() else ""
     hardware_successor_text = (
@@ -300,6 +363,22 @@ def main() -> int:
             and "not requested function 0x38" in wrong_model.stderr
             and "# MODELED-BIOS-RETURN" not in wrong_model_text
             and "# POST-RETURN-CAPTURED-CALL" not in wrong_model_text,
+        ),
+        (
+            "explicit syscall model records Cause/EPC and resumes to the next call",
+            modeled_syscall.returncode == 0
+            and "# SYSCALL-EXCEPTION vector=0xBFC00180 selector=0x00000001" in syscall_text
+            and "cause=0x00000020" in syscall_text
+            and f"epc=0x{LOAD_ADDRESS + 4:08X}" in syscall_text
+            and f"# MODELED-SYSCALL-RETURN selector=0x00000001 resume=0x{LOAD_ADDRESS + 8:08X}" in syscall_text
+            and f"# POST-RETURN-CAPTURED-CALL target=0x{POST_SYSCALL_CALL:08X}" in syscall_text,
+        ),
+        (
+            "wrong syscall selector refuses without modeled/post evidence",
+            wrong_syscall.returncode == 2
+            and "selector $a0=0x00000001 (expected 0x00000002)" in wrong_syscall.stderr
+            and "# MODELED-SYSCALL-RETURN" not in wrong_syscall_text
+            and "# POST-RETURN-CAPTURED-CALL" not in wrong_syscall_text,
         ),
         (
             "capture-at reaches an indirect-call target before its first instruction",
@@ -343,6 +422,10 @@ def main() -> int:
         print(modeled.stderr, file=sys.stderr)
         print("--- wrong modeled return stderr ---", file=sys.stderr)
         print(wrong_model.stderr, file=sys.stderr)
+        print("--- modeled syscall return stderr ---", file=sys.stderr)
+        print(modeled_syscall.stderr, file=sys.stderr)
+        print("--- wrong modeled syscall return stderr ---", file=sys.stderr)
+        print(wrong_syscall.stderr, file=sys.stderr)
         print("--- capture-at indirect target stderr ---", file=sys.stderr)
         print(indirect.stderr, file=sys.stderr)
         print("--- capture-at missing target stderr ---", file=sys.stderr)

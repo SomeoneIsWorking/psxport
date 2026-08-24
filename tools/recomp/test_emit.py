@@ -197,6 +197,11 @@ def test_diagnostic_checkpoint_empty_set_is_byte_identical_to_legacy_output():
         assert _emit_checkpoint_fixture(legacy) == _emit_checkpoint_fixture(explicit, set())
 
 
+def test_syscall_emission_carries_the_exact_guest_pc():
+    instruction = decode(0x80012340, (0x54321 << 6) | 0x0C)
+    assert emit.emit_simple(instruction) == "rec_syscall(c, 344865u, 0x80012340u);"
+
+
 def test_diagnostic_checkpoints_precede_two_selected_ordinary_instructions():
     with scratch_tempdir() as td:
         files = _emit_checkpoint_fixture(td, {0x80010000, 0x80010004})

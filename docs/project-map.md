@@ -88,6 +88,9 @@ clears rebuilt frames, and Psx/guest-VRAM picture ownership remains independent)
 the absent-table zero/no-fade presentation state); temporal-only guarded callbacks live separately in
 `fps60_game_hooks.{h,cpp}` so a direct runtime does not link them,
 `bios_interrupt.{h,cpp}` (the HookEntryInt saved-context contract),
+`syscall_exception.{h,cpp}` (the R3000A syscall Cause/EPC and Status-stack transition shared by the
+emitter, interpreter, and native HLE; `rec_dispatch_miss` owns pre-HLE observation of external BIOS
+targets while generated entries retain their emitted checkpoint owner),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
 REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp`

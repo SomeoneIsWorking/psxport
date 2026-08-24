@@ -47,8 +47,11 @@ public:
   // ---- Per-Core host-only render substrate (framework-side; the 9 GAME-side subsystems that used to
   // sit here — ScreenFade/Engine/Rng/Trig/Math/Mtx/Inventory/SaveMenu/Render — now live in the game's
   // opaque per-Core aggregate reached via gameCtx above; the framework no longer names them). ----
-  RenderSubstrate rsub;  // host-only per-Core render substrate (by value; binds lazily, no ctor wiring)
-  PcObserver pcObserver; // selected generated instruction boundaries only; diagnostic and per-Core
+  RenderSubstrate rsub; // host-only per-Core render substrate (by value; binds lazily, no ctor wiring)
+  // Explicitly selected generated instruction or dynamic-dispatch boundaries; diagnostic and
+  // per-Core. Generated instruction owners call pc_observer_at themselves; rec_dispatch_miss owns
+  // the pre-callee boundary for targets without a generated owner, including BIOS/HLE vectors.
+  PcObserver pcObserver;
 
   uint32_t io_gpustat_toggle = 0; // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 
@@ -258,7 +261,9 @@ extern "C" {
 // ---- Dispatch & traps (dispatch.cpp / hle.cpp) ----
 void rec_dispatch(Core *c, uint32_t addr);
 void rec_dispatch_miss(Core *c, uint32_t addr);
-void rec_syscall(Core *c, uint32_t code);
+// New emitted/interpreted code supplies the exact syscall instruction PC. The default keeps older
+// generated trees source-compatible until their normal regeneration, using their current Core::pc.
+void rec_syscall(Core *c, uint32_t code, uint32_t syscallPc = 0);
 void rec_break(Core *c, uint32_t code);
 void rec_irq_poll(Core *c); // service Core::pending_work at a guest call boundary
 void rec_guest_instruction_ticks(Core *c,

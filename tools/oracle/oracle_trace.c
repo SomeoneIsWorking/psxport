@@ -59,6 +59,12 @@ typedef struct ModeledBiosReturn {
   uint32_t v0;
 } ModeledBiosReturn;
 
+typedef struct ModeledSyscallReturn {
+  int enabled;
+  uint32_t selector;
+  uint32_t v0;
+} ModeledSyscallReturn;
+
 static int parse_u32(const char *text, const char **end, uint32_t *value) {
   char *parsed_end = NULL;
   const unsigned long parsed = strtoul(text, &parsed_end, 0);
@@ -101,6 +107,21 @@ static int parse_modeled_bios_return(const char *text, ModeledBiosReturn *model)
   return 1;
 }
 
+static int parse_modeled_syscall_return(const char *text, ModeledSyscallReturn *model) {
+  const char *end = NULL;
+  uint32_t selector = 0, v0 = 0;
+  if (!parse_u32(text, &end, &selector) || *end != ':') {
+    return 0;
+  }
+  if (!parse_u32(end + 1, &end, &v0) || *end != '\0') {
+    return 0;
+  }
+  model->enabled = 1;
+  model->selector = selector;
+  model->v0 = v0;
+  return 1;
+}
+
 static void
 dump_register_block(FILE *out, const char *tag, const char *position_name, long position, const OracleState *state) {
   fprintf(out, "# %s-REGS %s=%ld pc=0x%08X\n", tag, position_name, position, state->pc);
@@ -119,7 +140,7 @@ static void usage(void) {
   fprintf(stderr,
           "usage: oracle_trace <PS-X EXE> [--steps N] [--out FILE] [--entry 0xADDR]\n"
           "                    [--capture-first-call | --capture-call N | --capture-at 0xADDR]\n"
-          "                    [--model-bios-return TABLE:FN:V0]\n"
+          "                    [--model-bios-return TABLE:FN:V0 | --model-syscall-return A0:V0]\n"
           "\n"
           "Steps a real game executable in the independent reference emulator (the vendored Mednafen PSX\n"
           "CPU, no libretro.c) and writes a per-instruction trace for a differential compare.\n"
@@ -139,6 +160,10 @@ static void usage(void) {
           "                 explicit $v0 (preserving $v1), resume at the observed $ra, and capture the\n"
           "                 first subsequent call or hardware access. The consumer owns the BIOS\n"
           "                 semantics; this tool only validates and applies the modeled return.\n"
+          "  --model-syscall-return A0:V0\n"
+          "                 at a checked syscall exception, require selector $a0, install explicit\n"
+          "                 $v0 (preserving $v1), perform one RFE-equivalent Status pop, resume at\n"
+          "                 EPC+4, and capture the first subsequent call or hardware access.\n"
           "  --summary-only omit per-step lines; keep the headers, the boundary register dump and the\n"
           "                 summary. For long windows (a bss-zeroing loop is ~200k instructions) where the\n"
           "                 per-step detail would be gigabytes and only the boundary is of interest.\n"
@@ -160,6 +185,7 @@ int main(int argc, char **argv) {
   int capture_pc_enabled = 0;
   int summary_only = 0;
   ModeledBiosReturn modeled_bios = {0};
+  ModeledSyscallReturn modeled_syscall = {0};
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--steps") && i + 1 < argc) {
@@ -187,15 +213,20 @@ int main(int argc, char **argv) {
       const char *end = NULL;
       uint32_t parsed_pc = 0;
       if (!parse_u32(argv[++i], &end, &parsed_pc) || *end != '\0' || (parsed_pc & 3u) != 0 || capture_call_ordinal ||
-          modeled_bios.enabled || (capture_pc_enabled && capture_pc != parsed_pc)) {
+          modeled_bios.enabled || modeled_syscall.enabled || (capture_pc_enabled && capture_pc != parsed_pc)) {
         fprintf(stderr, "oracle_trace: invalid, unaligned, or conflicting --capture-at address %s.\n", argv[i]);
         return 2;
       }
       capture_pc = parsed_pc;
       capture_pc_enabled = 1;
     } else if (!strcmp(argv[i], "--model-bios-return") && i + 1 < argc) {
-      if (capture_pc_enabled || !parse_modeled_bios_return(argv[++i], &modeled_bios)) {
+      if (capture_pc_enabled || modeled_syscall.enabled || !parse_modeled_bios_return(argv[++i], &modeled_bios)) {
         fprintf(stderr, "oracle_trace: invalid --model-bios-return %s (expected A:0x39:0 style).\n", argv[i]);
+        return 2;
+      }
+    } else if (!strcmp(argv[i], "--model-syscall-return") && i + 1 < argc) {
+      if (capture_pc_enabled || modeled_bios.enabled || !parse_modeled_syscall_return(argv[++i], &modeled_syscall)) {
+        fprintf(stderr, "oracle_trace: invalid --model-syscall-return %s (expected 1:1 style).\n", argv[i]);
         return 2;
       }
     } else if (!strcmp(argv[i], "--summary-only")) {
@@ -338,6 +369,12 @@ int main(int argc, char **argv) {
             modeled_bios.function,
             modeled_bios.target,
             modeled_bios.v0);
+  }
+  if (modeled_syscall.enabled) {
+    fprintf(out,
+            "# requested modeled syscall return: selector=0x%08X, explicit v0=0x%08X, v1 preserved\n",
+            modeled_syscall.selector,
+            modeled_syscall.v0);
   }
   fprintf(out, "# format: <n> <pc> <cycles> [reg=value ...]  — only CHANGED registers are listed\n");
 
@@ -488,6 +525,37 @@ int main(int argc, char **argv) {
         dump_register_block(out, "MODELED-RETURN", "step", n, &now);
       }
     }
+    if (modeled_syscall.enabled && modeled_return_step < 0 && now.pc == 0xBFC00180u) {
+      const uint32_t preserved_v1 = now.gpr[3];
+      fprintf(out,
+              "# SYSCALL-EXCEPTION vector=0x%08X selector=0x%08X status=0x%08X cause=0x%08X "
+              "epc=0x%08X step=%ld\n",
+              now.pc,
+              now.gpr[4],
+              now.cp0_status,
+              now.cp0_cause,
+              now.cp0_epc,
+              n);
+      if (!oracle_resume_syscall_return(modeled_syscall.selector, modeled_syscall.v0, preserved_v1)) {
+        modeled_return_refused = 1;
+      } else {
+        modeled_return_step = n;
+        post_call_pending = 0;
+        oracle_capture(&now);
+        fprintf(out,
+                "# MODELED-SYSCALL-RETURN selector=0x%08X resume=0x%08X v0=0x%08X "
+                "v1=0x%08X status=0x%08X cause=0x%08X epc=0x%08X step=%ld\n",
+                modeled_syscall.selector,
+                now.pc,
+                modeled_syscall.v0,
+                preserved_v1,
+                now.cp0_status,
+                now.cp0_cause,
+                now.cp0_epc,
+                n);
+        dump_register_block(out, "MODELED-RETURN", "step", n, &now);
+      }
+    }
     if (executed_jal) {
       jal_pending = 1;
       jal_pending_ra = now.gpr[31];
@@ -587,10 +655,10 @@ int main(int argc, char **argv) {
               capture_pc);
     }
   }
-  if (modeled_bios.enabled) {
+  if (modeled_bios.enabled || modeled_syscall.enabled) {
     if (modeled_return_step < 0) {
       fprintf(out,
-              "# MODELED BIOS RETURN WAS NOT APPLIED in %ld traced step(s); no post-return comparison\n"
+              "# MODELED RETURN WAS NOT APPLIED in %ld traced step(s); no post-return comparison\n"
               "#   can be performed\n",
               traced);
     } else if (post_return_call_step >= 0) {
@@ -663,8 +731,9 @@ int main(int argc, char **argv) {
             steps);
   }
 
+  const int modeled_enabled = modeled_bios.enabled || modeled_syscall.enabled;
   const int modeled_incomplete =
-      modeled_bios.enabled && (modeled_return_step < 0 || (post_return_call_step < 0 && post_return_hardware_step < 0));
+      modeled_enabled && (modeled_return_step < 0 || (post_return_call_step < 0 && post_return_hardware_step < 0));
   if (modeled_incomplete || modeled_return_refused) {
     fprintf(stderr,
             "oracle_trace: REFUSING — the requested modeled return and post-return boundary were not both proven.\n");

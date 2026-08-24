@@ -515,7 +515,7 @@ def emit_simple(ins):
         if o == "rfe":
             return "/* rfe (no-op under HLE) */"
     if k == D.SYSCALL:
-        return f"rec_syscall(c, {(ins.raw >> 6) & 0xFFFFF}u);"
+        return f"rec_syscall(c, {(ins.raw >> 6) & 0xFFFFF}u, 0x{ins.addr:08X}u);"
     if k == D.BREAK:
         return f"rec_break(c, {(ins.raw >> 6) & 0xFFFFF}u);"
     return f"/* UNHANDLED {o} raw=0x{ins.raw:08X} */"

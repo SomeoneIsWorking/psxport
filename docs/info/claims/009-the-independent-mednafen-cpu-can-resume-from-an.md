@@ -6,7 +6,7 @@ created: 2026-08-21
 tags: oracle,harness,bios
 depends: tools/oracle/oracle_shim.c#oracle_resume_call_return, tools/oracle/oracle_trace.c#main, tools/oracle/oracle_spike.c#modeled_call_return_case
 reconfirmed: 2026-08-25
-verified_at: 2026-08-25 00:11:05
+verified_at: 2026-08-25 00:33:38
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ A change to oracle_resume_call_return, oracle_trace modeled-return dispatch, CPU
 ## Re-confirmed 2026-08-25
 
 Reconfirmed by oracle_spike's 17 modeled-call-return checks inside the complete 84/84 run, plus oracle_trace CLI modeled-return positive/wrong-function checks in the 12/12 selftest.
+
+## Re-confirmed 2026-08-25
+
+oracle_trace_selftest passes 14/14 after the same oracle shim change, covering both successful modeled BIOS/syscall returns and wrong-selector refusals.

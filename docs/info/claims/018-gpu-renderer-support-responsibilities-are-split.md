@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-22
 tags:
 depends: runtime/recomp/gpu_vk.cpp#GpuVkState::present, runtime/recomp/gpu_painter.cpp#GpuVkState::painter_command
-reconfirmed: 2026-08-24
-verified_at: 2026-08-24 19:59:55
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:33:39
 ---
 
 ## Claim
@@ -40,3 +40,7 @@ Post-hook-fix Clang CTest 90/90 passed cpp_style, structure and all renderer own
 ## Re-confirmed 2026-08-24
 
 Post-policy Clang build and full 93/93 CTest passed cpp_style/structure; renderer ownership change stayed within present policy and the critical legacy file cap did not grow
+
+## Re-confirmed 2026-08-25
+
+X4 exact Gte capture renders 29921/691200 nonblack pixels after the page-persistence fix; focused guest composite/ownership/backdrop tests all pass in the current Clang build.

@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-22
 tags: runtime,presentation,hooks
 depends: runtime/recomp/game_hooks_opt.cpp#game_render_fade_state, runtime/recomp/gpu_vk.cpp, tests/test_optional_hook_guards.cpp#test_fade_reader_handles_absent_table_and_calls_present_hook
-reconfirmed: 2026-08-24
-verified_at: 2026-08-24 19:59:56
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:33:40
 ---
 
 ## Claim
@@ -31,3 +31,7 @@ Post-hook-fix Clang CTest 90/90 passed absent-table, absent-hook and present-hoo
 ## Re-confirmed 2026-08-24
 
 Post-policy full 93/93 CTest passed optional-hook guards and complete renderer build; zero/no-fade behavior remains valid with no legacy hooks table
+
+## Re-confirmed 2026-08-25
+
+Current Clang test_direct_runtime_no_temporal_link and the guest composite/ownership tests pass after the renderer change; X4 clean-pin 11/11 consumer CTests also pass.

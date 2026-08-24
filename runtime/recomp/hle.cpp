@@ -18,6 +18,7 @@
 #include "guest_call.h"   // rc0 — invoke an EvMdINTR handler
 #include "memcard.h"      // card_hle_a0 / card_hle_b0 — libcard BIOS dispatch (class Memcard)
 #include "platform_hle.h" // class PlatformHle — sync-primitive HLE consulted on a RAM-code miss
+#include "syscall_exception.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1027,8 +1028,9 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
 // ---- Recomp-ABI C-linkage entry points -----------------------------------------------
 // The `syscall` instruction: the kernel op is selected by $a0 (not the code field). Boot uses
 // Enter/ExitCriticalSection around setup. Thread ops (a0=3) need the recomp thread model.
-void rec_syscall(Core *c, uint32_t code) {
+void rec_syscall(Core *c, uint32_t code, uint32_t syscallPc) {
   (void)code;
+  psx::syscall_exception::enter(c->cop0, syscallPc ? syscallPc : c->pc);
   int &irq_enabled = c->game->hle.irq_enabled;
   switch (c->r[A0]) {
   case 0:
@@ -1039,17 +1041,18 @@ void rec_syscall(Core *c, uint32_t code) {
   case 1:
     c->r[V0] = irq_enabled ? 1 : 0;
     irq_enabled = 0;
-    c->cop0[12] &= ~1u;
+    psx::syscall_exception::setReturnInterruptEnabled(c->cop0, false);
     break; // EnterCritical
   case 2:
     irq_enabled = 1;
-    c->cop0[12] |= 1u;
+    psx::syscall_exception::setReturnInterruptEnabled(c->cop0, true);
     c->r[V0] = 0;
     break; // ExitCritical
   default:
     lucent::info("syscall", "a0={} (unhandled kernel op)", c->r[A0]);
     c->r[V0] = 0;
   }
+  psx::syscall_exception::leave(c->cop0);
 }
 void rec_break(Core *c, uint32_t code) {
   lucent::info("break", "code {}", code);
@@ -1057,6 +1060,11 @@ void rec_break(Core *c, uint32_t code) {
 }
 
 void rec_dispatch_miss(Core *c, uint32_t addr) {
+  // Generated entries own their exact-PC observer calls in emitted code. A target that reaches this
+  // miss path has no generated body to own the boundary, so observe it exactly once here, before a
+  // BIOS/HLE leaf can mutate registers. Keeping this out of the generic router prevents an indirect
+  // call to generated code from being counted once by the router and again by its emitted owner.
+  pc_observer_at(c, addr);
   uint32_t a = addr & 0x1FFFFFFF;
   char tbl = a == 0xA0 ? 'A' : a == 0xB0 ? 'B' : a == 0xC0 ? 'C' : 0;
   if (tbl) {

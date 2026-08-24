@@ -24,9 +24,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-void rec_dispatch(Core *c, uint32_t addr);
-void rec_syscall(Core *c, uint32_t code);
-void rec_break(Core *c, uint32_t code);
 // ORACLE engine (later-278): this file is recompiled back in as the INTERPRETER ENGINE for the oracle
 // Core only (docs/oracle.md). The native port Core still runs the recomp substrate; a per-Core flag
 // `c->use_interp` routes the oracle Core's dispatch here instead. The public entries are renamed
@@ -395,7 +392,7 @@ static void exec_simple(Core *c, uint32_t in) {
       W(rd, (uint32_t)(c->r[rs] < c->r[rt]));
       break; // sltu
     case 0x0C:
-      rec_syscall(c, (in >> 6) & 0xFFFFF);
+      rec_syscall(c, (in >> 6) & 0xFFFFF, c->pc);
       break; // syscall
     case 0x0D:
       rec_break(c, (in >> 6) & 0xFFFFF);
