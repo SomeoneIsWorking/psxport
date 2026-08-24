@@ -858,8 +858,9 @@ void Pad::serviceFrame() {
       c->mem_w8(b + i, pk[i]);
     }
   }
-  // Slot 1: report "no controller" so single-pad logic ignores it (status 0xFF).
-  if (c->cfg->padSlot1Buf) {
+  // Slot 1 is absent by default so existing single-pad games ignore it. A title that has measured
+  // guest-side slot-1 handling can opt into the packet fillBuffer wrote above.
+  if (c->cfg->padSlot1Buf && !mSlot1Connected) {
     c->mem_w8(c->cfg->padSlot1Buf, 0xFF);
   }
 }

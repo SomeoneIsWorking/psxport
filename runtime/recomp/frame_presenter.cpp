@@ -139,13 +139,26 @@ void FramePresenter::commit(Core *core, int guestFields, TemporalFramePresentati
   }
   CoreFramePresentationBackend backend(*core, dumpSequence_);
   if (core->game->diff_mode) {
-    ++fence_;
-    backend.reconcile(fence_);
-    backend.beginLedgerFrame();
-    resetCapture();
+    commitUnpresented(backend);
     return;
   }
   commit(backend, core, guestFields, temporal);
+}
+
+void FramePresenter::commitUnpresented(Core *core) {
+  if (!core || !core->game) {
+    lucent::error("presentation", "FramePresenter::commitUnpresented requires a bound Core/Game");
+    std::abort();
+  }
+  CoreFramePresentationBackend backend(*core, dumpSequence_);
+  commitUnpresented(backend);
+}
+
+void FramePresenter::commitUnpresented(FramePresentationBackend &backend) {
+  ++fence_;
+  backend.reconcile(fence_);
+  backend.beginLedgerFrame();
+  resetCapture();
 }
 
 void FramePresenter::commit(FramePresentationBackend &backend, int guestFields) {

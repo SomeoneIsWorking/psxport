@@ -134,8 +134,11 @@ MENU's 0x800B5244 target instead of first-matching BOOT.
 `ot_attr.{h,cpp}` owns the logic-frame stamp contract: pre-loop boot stores are counted, and the
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
 **GPU/present:** `frame_presenter.{h,cpp}` owns non-temporal current-frame capture, one real present,
-diagnostics, explicit field pacing, and ledger reconciliation. `Fps60` is an optional temporal decorator,
-not the frame-lifecycle owner; direct runtimes neither instantiate nor link it. `guest_widescreen_projection.h`
+diagnostics, explicit field pacing, and ledger reconciliation. Its `commitUnpresented` entry rotates the
+same fence, ledger, and capture state for a deliberately hidden field without emitting, presenting, pacing,
+or recording a diagnostic; the injected-backend test proves both that path and the next visible commit.
+`Fps60` is an optional temporal decorator, not the frame-lifecycle owner; direct runtimes neither
+instantiate nor link it. `guest_widescreen_projection.h`
 owns the typed, frame-latched title projection/presentation plan; the GTE-only positive contract remains
 separate from Native-only `RenderMode::enhancementsAllowed()`. `gpu_display_mode.h` is the pure GP1(08h)
 horizontal decoder, including bit 6's 368-dot mode. Full ownership and consumer rules are in
@@ -242,7 +245,8 @@ framework's legacy projection probe delegates to the same implementation through
 isolated vendor RTPS, including all hardware FLAG contributors, saturation, a zero-FLAG control, and
 forced endpoint/FLAG mismatch discriminators. `mdec_beetle.c` (mdec.c),
 `native_fmv.cpp` (STR/MDEC FMV + shared XA decoder; direct movie presents report watchdog progress), `pad_input.cpp`
-(final effective mask + shared `ActiveLowEdges`; game/sequence code owns every resulting transition).
+(final effective mask + shared `ActiveLowEdges`; game/sequence code owns every resulting transition;
+slot 1 remains absent by default and a title with measured two-slot guest handling opts in explicitly).
 
 ## Tools — ONE LINE EACH, and what is wrong with this list
 

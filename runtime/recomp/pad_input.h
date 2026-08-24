@@ -103,8 +103,15 @@ public:
     return mRecFc;
   }
 
+  // Slot-1 controller presence is game policy. The default remains absent so existing single-pad
+  // ports retain their current guest-visible packet; a title whose guest reads both slots opts in.
+  void setSlot1Connected(bool connected) {
+    mSlot1Connected = connected;
+  }
+
 private:
   ActiveLowEdges mButtonEdges;
+  bool mSlot1Connected = false;
   // ---- SDL gamepad handles (hotswap-aware; SDL build only) ----
   static const int PAD_MAX_GC = 4;
   SDL_Gamepad *mGc[PAD_MAX_GC] = {};

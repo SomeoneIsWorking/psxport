@@ -57,6 +57,13 @@ public:
   // Same state machine with an injected host backend. This is a real seam, not a test reimplementation.
   void commit(FramePresentationBackend &backend, int guestFields = 0);
 
+  // Rotate one delivered-but-deliberately-unpresented field: the fence advances, the ledger rotates,
+  // and the capture resets exactly as commit() does, but nothing is emitted, presented, paced, or
+  // captured diagnostically. This is also the existing SBS/diff-mode behavior, exposed so a
+  // single-core title can suppress presentation without skipping required frame bookkeeping.
+  void commitUnpresented(Core *core);
+  void commitUnpresented(FramePresentationBackend &backend);
+
   CapturedFrameView capturedFrame() const;
   int capturedCount() const {
     return count_;
