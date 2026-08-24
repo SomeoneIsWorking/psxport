@@ -288,7 +288,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 | `disasm.py` | disassemble a region of a 2 MB main-RAM dump (capstone) | |
 | `dbgclient.py` | REPL client for the debug server | needs a live server |
 | `ghidra_decomp.py` · `symdump_re.py` · `symwidth_re.py` | Ghidra headless scripts | run only inside Ghidra |
-| `oracle/oracle_trace` | run a real executable in the independent reference emulator; trace instructions, capture canonical ordinal-call or exact pre-execution PC boundaries, resume from an explicit modeled BIOS return, and continue through I_STAT/I_MASK accesses on the same CPU | + `oracle_spike` (43-check CPU/resume/IRQ gate), `test_oracle_trace.py` (12-check both-answer CLI gate: distinct ordinals, indirect `jalr` target, exact 33-register block, unreachable and hardware-tainted refusals), `crossvalidate_crt0.py --selftest` |
+| `oracle/oracle_trace` | run a real executable in the independent reference emulator; trace instructions, capture canonical ordinal-call or exact pre-execution PC plus I_STAT/I_MASK/DPCR boundaries, resume from explicit modeled BIOS or validated syscall returns, and refuse sticky hardware/event-tainted continuation | + `oracle_spike` (84-check CPU/resume/IRQ/DPCR/event/CP0 gate), `test_oracle_trace.py` (both-answer CLI gate: distinct ordinals, indirect `jalr` target, exact CPU/device blocks, unreachable and hardware-tainted refusals), `crossvalidate_crt0.py --selftest` |
 | `crt0_extract` | report a PS-X EXE's crt0 boot group through the shipping decoder | |
 | `discdump` | extract files from a CHD/ISO without `run.sh` | |
 | `smoke/psxport_smoke` | the agnosticism proof: link libpsxport against a stub, zero game symbols | |

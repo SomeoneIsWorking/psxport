@@ -37,7 +37,25 @@ typedef struct OracleState {
   int32_t timestamp; // the core's own cycle count
   OracleStop stop;
   uint32_t stop_addr; // the offending address when stop == ORACLE_STOP_HARDWARE
+  uint32_t cp0_status;
+  uint32_t cp0_cause;
+  uint32_t cp0_epc;
 } OracleState;
+
+enum {
+  ORACLE_DEVICE_I_STAT = 1u << 0,
+  ORACLE_DEVICE_I_MASK = 1u << 1,
+  ORACLE_DEVICE_DPCR = 1u << 2,
+  ORACLE_DEVICE_ALL = ORACLE_DEVICE_I_STAT | ORACLE_DEVICE_I_MASK | ORACLE_DEVICE_DPCR,
+};
+
+typedef struct OracleDeviceState {
+  uint32_t i_stat;
+  uint32_t i_mask;
+  uint32_t dpcr;
+  uint32_t valid;
+  uint32_t writes;
+} OracleDeviceState;
 
 // Bring up main RAM + scratchpad and the CPU. Returns 0 and explains itself on failure; a failed init
 // never leaves a half-initialised core behind for a caller to step. Idempotent.
@@ -54,6 +72,7 @@ int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr, uint32_t p
 // OracleStop reasons. Returns the stop reason; `oracle_capture` reads the resulting state out.
 OracleStop oracle_run(int32_t cycles);
 void oracle_capture(OracleState *out);
+int oracle_capture_devices(OracleDeviceState *out);
 
 // Advance by the smallest amount the core will advance — the substrate for milestone 2's register-level
 // differential, where a divergence must localise to ONE instruction rather than one frame.
@@ -82,6 +101,11 @@ int oracle_resume_call_return(uint32_t expected_target,
                               uint32_t expected_return_pc,
                               uint32_t return_v0,
                               uint32_t return_v1);
+
+// Resume a syscall exception only after validating the Mednafen-produced exception state and the
+// syscall instruction at EPC. The selector is the caller-owned $a0 policy; this mechanism restores the
+// R3000 SR mode stack exactly once and resumes at EPC+4 without executing a BIOS vector.
+int oracle_resume_syscall_return(uint32_t expected_selector, uint32_t return_v0, uint32_t return_v1);
 
 // How many cycles the core has consumed since the last load. Carried across `oracle_step` calls, so a
 // trace can report where in the window a divergence sat.

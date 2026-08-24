@@ -10,18 +10,19 @@
 // MEASURED GLUE SURFACE (2026-08-13, by linking rather than by reading): stepping needs `cpu.o`,
 // `gte.o` and the six PGXP objects, and those reference exactly FIFTEEN symbols nobody in that set
 // defines — `ScratchRAM`, the eight `PSX_MemRead/Write*`, `PSX_EventHandler`, `psx_gte_overclock`,
-// `MDFNSS_StateAction`, `widescreen_hack`, `widescreen_hack_aspect_ratio_setting`. The narrow IRQ bus
-// extension also links Mednafen's `irq.o`; the CD, GPU, DMA, timer, SIO and filestream layers remain
-// outside this stepping library.
+// `MDFNSS_StateAction`, `widescreen_hack`, `widescreen_hack_aspect_ratio_setting`. The narrow bus
+// extensions also link Mednafen's `irq.o` and the factored DPCR register owner; DMA channels, DICR,
+// CD, GPU, timer, SIO and filestream layers remain outside this stepping library.
 // `MainRAM` is here because THIS file owns the RAM, not because the CPU asks for it — the CPU reaches
 // main memory through `PSX_MemRead*` and through the FastMap set up in `oracle_init`.
 //
 // ═══ THE RULE HERE: A STUB THAT IS REACHED MUST SAY SO, NEVER RETURN ZERO ═════════════════════════════
 // Milestone 1 began with straight-line code; the oracle now models only the PSX interrupt controller's
-// I_STAT/I_MASK bus range so a real write/read/write sequence can stay on the same Mednafen CPU. Every
-// other hardware access remains a measurement boundary: `PSX_MemRead*`/`PSX_MemWrite*` name the address
-// and report `ORACLE_STOP_HARDWARE` rather than inventing a value. Returning 0 there would make "the
-// window ended" indistinguishable from "a device held zero".
+// I_STAT/I_MASK range and DPCR's four byte lanes. Those owners let real register sequences stay on the
+// same Mednafen CPU without pulling in unrelated devices. Every other hardware access remains a
+// measurement boundary: `PSX_MemRead*`/`PSX_MemWrite*` name the address and report
+// `ORACLE_STOP_HARDWARE` rather than inventing a value. Returning 0 there would make "the window ended"
+// indistinguishable from "a device held zero".
 //
 // ═══ DETERMINISM ═════════════════════════════════════════════════════════════════════════════════════
 // The plan makes determinism a precondition, so: nothing here reads host time or host entropy, and
@@ -34,6 +35,7 @@
 #include <string.h>
 
 #include "cpu.h"
+#include "dma_dpcr.h"
 #include "irq.h"
 #include "oracle_shim.h"
 #include "psx.h"
@@ -72,11 +74,20 @@ uint8_t widescreen_hack_aspect_ratio_setting = 0;
 #define SPAD_SIZE 0x00000400u
 #define IRQ_BASE 0x1F801070u
 #define IRQ_END 0x1F801078u
+#define DMA_DPCR_BASE 0x1F8010F0u
+#define DMA_DPCR_END 0x1F8010F4u
+#define SYSCALL_VECTOR 0xBFC00180u
+#define CP0_STATUS 12u
+#define CP0_CAUSE 13u
+#define CP0_EPC 14u
 
 // Where the window stood when it ended. File-scope because the memory callbacks discover it while
 // `oracle_run` reports it, and Mednafen's callback signatures have nowhere to thread it through.
 static OracleStop s_stop = ORACLE_STOP_NONE;
 static uint32_t s_stop_addr = 0;
+static OracleStop s_taint = ORACLE_STOP_NONE;
+static uint32_t s_taint_addr = 0;
+static uint32_t s_device_writes = 0;
 
 // Whether THIS file has brought the oracle up. It cannot be inferred from `PSX_CPU`: cpu.c defines it as
 // `PS_CPU *PSX_CPU = &s_cpu;` (line 111), i.e. non-NULL from program start, and `CPU_New` hands back that
@@ -127,6 +138,10 @@ static inline int in_irq(uint32_t a) {
   const uint32_t phys = a & 0x1FFFFFFFu;
   return phys >= IRQ_BASE && phys < IRQ_END;
 }
+static inline int in_dma_dpcr(uint32_t a) {
+  const uint32_t phys = a & 0x1FFFFFFFu;
+  return phys >= DMA_DPCR_BASE && phys < DMA_DPCR_END;
+}
 static inline uint8_t *ram(void) {
   return (uint8_t *)MultiAccessSizeMem_get_data32(MainRAM);
 }
@@ -141,10 +156,12 @@ static void hw_access(uint32_t addr, int is_write, int bits) {
     s_stop = ORACLE_STOP_HARDWARE;
     s_stop_addr = addr;
   }
+  s_taint = ORACLE_STOP_HARDWARE;
+  s_taint_addr = addr;
   fprintf(stderr,
           "oracle: UNSUPPORTED HARDWARE %s%d at 0x%08X.\n"
-          "        Only main RAM, scratchpad, and the I_STAT/I_MASK interrupt-controller range are\n"
-          "        modeled. The window is OVER at this instruction; a comparison past it would invent\n"
+          "        Only main RAM, scratchpad, I_STAT/I_MASK, and DPCR are modeled. The window is\n"
+          "        OVER at this instruction; a comparison past it would invent\n"
           "        device behavior. Reported instead of returning 0, because a zero here cannot be\n"
           "        distinguished from a device that really held zero.\n",
           is_write ? "WRITE" : "READ",
@@ -165,6 +182,13 @@ uint8_t MDFN_FASTCALL PSX_MemRead8(int32_t *ts, uint32_t A) {
     (*ts)++;
     return (uint8_t)IRQ_Read(A);
   }
+  if (in_dma_dpcr(A)) {
+    uint32_t value = 0;
+    (*ts)++;
+    if (DMA_DPCR_Read(A, &value)) {
+      return (uint8_t)value;
+    }
+  }
   hw_access(A, 0, 8);
   return 0;
 }
@@ -183,6 +207,13 @@ uint16_t MDFN_FASTCALL PSX_MemRead16(int32_t *ts, uint32_t A) {
     (*ts)++;
     return (uint16_t)IRQ_Read(A);
   }
+  if (in_dma_dpcr(A)) {
+    uint32_t value = 0;
+    (*ts)++;
+    if (DMA_DPCR_Read(A, &value)) {
+      return (uint16_t)value;
+    }
+  }
   hw_access(A, 0, 16);
   return 0;
 }
@@ -199,6 +230,13 @@ uint32_t MDFN_FASTCALL PSX_MemRead32(int32_t *ts, uint32_t A) {
   if (in_irq(A)) {
     (*ts)++;
     return IRQ_Read(A);
+  }
+  if (in_dma_dpcr(A)) {
+    uint32_t value = 0;
+    (*ts)++;
+    if (DMA_DPCR_Read(A, &value)) {
+      return value;
+    }
   }
   hw_access(A, 0, 32);
   return 0;
@@ -220,7 +258,16 @@ void MDFN_FASTCALL PSX_MemWrite8(int32_t ts, uint32_t A, uint32_t V) {
     return;
   }
   if (in_irq(A)) {
-    IRQ_Write(A, (uint8_t)V);
+    IRQ_Write(A, V);
+    s_device_writes |= ((A & 0x1FFFFFFFu) < 0x1F801074u) ? ORACLE_DEVICE_I_STAT : ORACLE_DEVICE_I_MASK;
+    return;
+  }
+  if (in_dma_dpcr(A)) {
+    if (!DMA_DPCR_Write(A, V)) {
+      hw_access(A, 1, 8);
+    } else {
+      s_device_writes |= ORACLE_DEVICE_DPCR;
+    }
     return;
   }
   hw_access(A, 1, 8);
@@ -238,7 +285,16 @@ void MDFN_FASTCALL PSX_MemWrite16(int32_t ts, uint32_t A, uint32_t V) {
     return;
   }
   if (in_irq(A)) {
-    IRQ_Write(A, v);
+    IRQ_Write(A, V);
+    s_device_writes |= ((A & 0x1FFFFFFFu) < 0x1F801074u) ? ORACLE_DEVICE_I_STAT : ORACLE_DEVICE_I_MASK;
+    return;
+  }
+  if (in_dma_dpcr(A)) {
+    if (!DMA_DPCR_Write(A, V)) {
+      hw_access(A, 1, 16);
+    } else {
+      s_device_writes |= ORACLE_DEVICE_DPCR;
+    }
     return;
   }
   hw_access(A, 1, 16);
@@ -256,6 +312,15 @@ void MDFN_FASTCALL PSX_MemWrite32(int32_t ts, uint32_t A, uint32_t V) {
   }
   if (in_irq(A)) {
     IRQ_Write(A, V);
+    s_device_writes |= ((A & 0x1FFFFFFFu) < 0x1F801074u) ? ORACLE_DEVICE_I_STAT : ORACLE_DEVICE_I_MASK;
+    return;
+  }
+  if (in_dma_dpcr(A)) {
+    if (!DMA_DPCR_Write(A, V)) {
+      hw_access(A, 1, 32);
+    } else {
+      s_device_writes |= ORACLE_DEVICE_DPCR;
+    }
     return;
   }
   hw_access(A, 1, 32);
@@ -290,6 +355,12 @@ void PSX_SetEventNT(const int type, const int32_t next_timestamp) {
           "        docs/plans/oracle-against-beetle.md\n",
           type,
           next_timestamp);
+  if (s_taint == ORACLE_STOP_NONE) {
+    s_taint = ORACLE_STOP_EVENT;
+    s_taint_addr = 0;
+  }
+  s_stop = ORACLE_STOP_EVENT;
+  cpu_next_event_ts = 0;
 }
 
 // `MDFNSS_StateAction` reaches the CPU only from `CPU_StateAction`, which milestone 1 never calls: the
@@ -324,6 +395,14 @@ int oracle_init(void) {
             "Nothing was initialised; do not step.\n",
             RAM_SIZE,
             SPAD_SIZE);
+    if (MainRAM) {
+      MultiAccessSizeMem_Free(MainRAM);
+      MainRAM = NULL;
+    }
+    if (ScratchRAM) {
+      MultiAccessSizeMem_Free(ScratchRAM);
+      ScratchRAM = NULL;
+    }
     return 0;
   }
   memset(ram(), 0, RAM_SIZE);
@@ -336,6 +415,7 @@ int oracle_init(void) {
   }
   CPU_Power(PSX_CPU);
   IRQ_Power();
+  DMA_DPCR_Power();
 
   // Instruction fetch does NOT go through PSX_MemRead32: cpu.c reads opcodes straight out of `FastMap`
   // (lines 794 and 810), so a core with an unpopulated FastMap fetches from `DummyPage` and executes
@@ -350,6 +430,9 @@ int oracle_init(void) {
 
   s_stop = ORACLE_STOP_NONE;
   s_stop_addr = 0;
+  s_taint = ORACLE_STOP_NONE;
+  s_taint_addr = 0;
+  s_device_writes = 0;
   s_ts = 0;
   s_up = 1;
   return 1;
@@ -388,6 +471,14 @@ int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr, uint32_t p
             RAM_SIZE);
     return 0;
   }
+  // Loading an executable is a fresh-console boundary, not an overlay operation. Re-power every state
+  // owner and clear both memories before copying so a second load on one initialized oracle cannot
+  // inherit GPRs, IRQ/DPCR state, scratch contents, or bytes outside the new image.
+  CPU_Power(PSX_CPU);
+  IRQ_Power();
+  DMA_DPCR_Power();
+  memset(ram(), 0, RAM_SIZE);
+  memset(spad(), 0, SPAD_SIZE);
   memcpy(ram() + off, image, len);
 
   uint32_t *r = CPU_GPR(PSX_CPU);
@@ -399,6 +490,9 @@ int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr, uint32_t p
 
   s_stop = ORACLE_STOP_NONE;
   s_stop_addr = 0;
+  s_taint = ORACLE_STOP_NONE;
+  s_taint_addr = 0;
+  s_device_writes = 0;
   s_ts = 0; // a fresh image starts a fresh clock; carrying one over would make two runs of
             // the same fixture report different cycle positions for the same instruction
   return 1;
@@ -408,6 +502,11 @@ int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr, uint32_t p
 // Shared by `oracle_run` and `oracle_step` so a whole window and a single instruction cannot drift apart
 // in how they treat the clock — the budget is the only difference between them.
 static OracleStop oracle_slice(int32_t budget) {
+  if (s_taint != ORACLE_STOP_NONE) {
+    s_stop = s_taint;
+    s_stop_addr = s_taint_addr;
+    return s_stop;
+  }
   s_stop = ORACLE_STOP_NONE;
   s_stop_addr = 0;
   cpu_next_event_ts = s_ts + budget;
@@ -443,6 +542,13 @@ int oracle_resume_call_return(uint32_t expected_target,
                               uint32_t return_v1) {
   if (!s_up) {
     fprintf(stderr, "oracle: REFUSING modeled call return — oracle_init() has not succeeded.\n");
+    return 0;
+  }
+  if (s_taint != ORACLE_STOP_NONE) {
+    fprintf(stderr,
+            "oracle: REFUSING modeled call return — the window is tainted by %s at 0x%08X.\n",
+            oracle_stop_name(s_taint),
+            s_taint_addr);
     return 0;
   }
 
@@ -489,6 +595,57 @@ int oracle_resume_call_return(uint32_t expected_target,
   return 1;
 }
 
+int oracle_resume_syscall_return(uint32_t expected_selector, uint32_t return_v0, uint32_t return_v1) {
+  if (!s_up) {
+    fprintf(stderr, "oracle: REFUSING syscall return — oracle_init() has not succeeded.\n");
+    return 0;
+  }
+  if (s_taint != ORACLE_STOP_NONE) {
+    fprintf(stderr,
+            "oracle: REFUSING syscall return — the window is tainted by %s at 0x%08X.\n",
+            oracle_stop_name(s_taint),
+            s_taint_addr);
+    return 0;
+  }
+  uint32_t *r = CPU_GPR(PSX_CPU);
+  const uint32_t cause = CPU_GetCOP0(CP0_CAUSE);
+  const uint32_t epc = CPU_GetCOP0(CP0_EPC);
+  uint32_t epc_offset = 0;
+  uint32_t instruction = 0;
+  if (PSX_CPU->BACKED_PC != SYSCALL_VECTOR || ((cause >> 2) & 0x1Fu) != 8u || (cause >> 31) != 0u ||
+      r[4] != expected_selector || PSX_CPU->BACKED_LDWhich != 34u || (epc & 3u) != 0u ||
+      !in_main_ram(epc, &epc_offset)) {
+    fprintf(stderr,
+            "oracle: REFUSING syscall return — pc=0x%08X cause=0x%08X epc=0x%08X "
+            "selector $a0=0x%08X (expected 0x%08X) ld=%u do not match the requested "
+            "non-delay-slot syscall boundary.\n",
+            PSX_CPU->BACKED_PC,
+            cause,
+            epc,
+            r[4],
+            expected_selector,
+            PSX_CPU->BACKED_LDWhich);
+    return 0;
+  }
+  memcpy(&instruction, ram() + epc_offset, sizeof(instruction));
+  if ((instruction & 0xFC00003Fu) != 0x0000000Cu) {
+    fprintf(stderr,
+            "oracle: REFUSING syscall return — EPC 0x%08X holds 0x%08X, not a syscall instruction.\n",
+            epc,
+            instruction);
+    return 0;
+  }
+  const uint32_t status = CPU_GetCOP0(CP0_STATUS);
+  CPU_SetCOP0(CP0_STATUS, (status & ~0x0Fu) | ((status >> 2) & 0x0Fu));
+  r[2] = return_v0;
+  r[3] = return_v1;
+  PSX_CPU->BACKED_PC = epc + 4u;
+  PSX_CPU->BACKED_new_PC = epc + 8u;
+  s_stop = ORACLE_STOP_NONE;
+  s_stop_addr = 0;
+  return 1;
+}
+
 int32_t oracle_timestamp(void) {
   return s_ts;
 }
@@ -509,6 +666,26 @@ void oracle_capture(OracleState *out) {
                          // capture claim the window ran to completion even when hardware cut it short
   out->stop = s_stop;
   out->stop_addr = s_stop_addr;
+  out->cp0_status = CPU_GetCOP0(CP0_STATUS);
+  out->cp0_cause = CPU_GetCOP0(CP0_CAUSE);
+  out->cp0_epc = CPU_GetCOP0(CP0_EPC);
+}
+
+int oracle_capture_devices(OracleDeviceState *out) {
+  memset(out, 0, sizeof(*out));
+  if (!s_up || s_taint != ORACLE_STOP_NONE) {
+    return 0;
+  }
+  uint32_t dpcr = 0;
+  if (!DMA_DPCR_Read(DMA_DPCR_BASE, &dpcr)) {
+    return 0;
+  }
+  out->i_stat = IRQ_Read(IRQ_BASE) & 0x7FFu;
+  out->i_mask = IRQ_Read(IRQ_BASE + 4u) & 0x7FFu;
+  out->dpcr = dpcr;
+  out->valid = ORACLE_DEVICE_ALL;
+  out->writes = s_device_writes;
+  return 1;
 }
 
 uint8_t *oracle_main_ram(void) {

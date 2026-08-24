@@ -6,8 +6,9 @@
 #
 # WHAT IS IN IT, and why it is this short. The glue surface was MEASURED by linking (2026-08-13), not
 # estimated: a CPU that only has to STEP needs cpu.c, gte.c and the six PGXP translation units, and those
-# leave exactly fifteen symbols undefined — which oracle_shim.c provides. The I_STAT/I_MASK bus range is
-# backed by Mednafen's irq.c; CD, GPU, DMA, timer, SIO and filestream remain outside this stepping library.
+# leave exactly fifteen symbols undefined — which oracle_shim.c provides. I_STAT/I_MASK use Mednafen's
+# irq.c and DPCR uses the register owner factored from dma.c; DMA channels/DICR, CD, GPU, timer, SIO and
+# filestream remain outside this stepping library.
 #
 # ═══ WHY THIS IS A SEPARATE LIBRARY FROM `psxport`, AND THE COLLISION MILESTONE 2 MUST SOLVE ═══════════
 # libpsxport ALREADY compiles gte.c (cmake/psxport.cmake) for its own GTE backend. Linking both archives
@@ -19,6 +20,7 @@
 add_library(psxport_oracle STATIC
   oracle_shim.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/mednafen/psx/cpu.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/mednafen/psx/dma_dpcr.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/mednafen/psx/gte.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/mednafen/psx/irq.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/pgxp/pgxp_cpu.c

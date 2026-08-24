@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-21
 tags: oracle,harness,trace
 depends: tools/oracle/oracle_trace.c#main, tools/oracle/test_oracle_trace.py#main
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:11:05
 ---
 
 ## Claim
@@ -27,3 +29,7 @@ A change to oracle_trace call decoding/delay-slot tracking, capture-selector par
 test_oracle_trace.py; falsify if two ordinals alias, an insufficient window exits success, a PC target
 is captured after its instruction, the register block is not canonical, or a hardware-tainted
 successor writes a boundary.
+
+## Re-confirmed 2026-08-25
+
+Reconfirmed after exact-PC capture commit: oracle_trace selftest passes 12/12 across distinct ordinals, alias, canonical register blocks, indirect capture-at, unreachable denominator, modeled-return positive/opposite, and unsupported-predecessor refusal.

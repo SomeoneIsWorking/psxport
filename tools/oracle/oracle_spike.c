@@ -20,12 +20,17 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cpu.h"
+#include "dma_dpcr.h"
 #include "oracle_shim.h"
+#include "psx.h"
 
 // ── MIPS R3000A encoders, so the fixture reads as instructions rather than hex ────────────────────
 #define R_ZERO 0
 #define R_V0 2
 #define R_V1 3
+#define R_A0 4
+#define R_A1 5
 #define R_T0 8
 #define R_T1 9
 #define R_T2 10
@@ -66,9 +71,12 @@ static uint32_t i_jal(uint32_t target) {
 static uint32_t i_jr(int rs) {
   return ((uint32_t)rs << 21) | 0x08u;
 }
+static uint32_t i_syscall(void) {
+  return 0x0000000Cu;
+}
 
 // ── check bookkeeping: a plan up front, so a run that stops early cannot read as a pass ──────────
-#define PLANNED_CHECKS 43
+#define PLANNED_CHECKS 84
 static int s_ran = 0, s_failed = 0;
 
 static void check_u32(const char *what, uint32_t got, uint32_t want) {
@@ -262,6 +270,231 @@ static int irq_bus_case(void) {
   check_u32("IRQ bus: exact I_MASK address", st.gpr[R_T0], 0x1F801074u);
   check_u32("IRQ bus: controller supplied mask readback", st.gpr[R_T2], 0x00003333u);
   check_u32("IRQ bus: caller continued after I_STAT write", st.gpr[R_T3], 0x00004444u);
+
+  oracle_teardown();
+  return 1;
+}
+
+// ── DMA BUS: DPCR must use the vendored controller without claiming every device register ─────────
+//
+//   lui  $t0, 0x1F80
+//   ori  $t0, $t0, 0x10F0  $t0 = DPCR
+//   lui  $t1, 0x3333
+//   ori  $t1, $t1, 0x3333
+//   sw   $t1, 0($t0)       DPCR = 0x33333333
+//   lw   $t2, 0($t0)       $t2 = the real controller's readback after its load delay
+//   nop
+//   addiu $t3, $zero, 0x4444 proves execution continued beyond the complete sequence
+//
+// The address and value are generic controller facts, not a title PC or serial. The adjacent DICR
+// remains the unsupported opposite answer, so adding DPCR cannot silently absorb the rest of DMA.
+static int dma_bus_case(void) {
+  uint32_t prog[9];
+  int n = 0;
+  prog[n++] = i_lui(R_T0, 0x1F80);
+  prog[n++] = i_ori(R_T0, R_T0, 0x10F0);
+  prog[n++] = i_lui(R_T1, 0x3333);
+  prog[n++] = i_ori(R_T1, R_T1, 0x3333);
+  prog[n++] = i_sw(R_T1, 0, R_T0);
+  prog[n++] = i_lw(R_T2, 0, R_T0);
+  prog[n++] = i_nop();
+  prog[n++] = i_addiu(R_T3, R_ZERO, 0x4444);
+  prog[n++] = i_nop();
+
+  if (!oracle_init()) {
+    return 0;
+  }
+  uint32_t reset_dpcr = 0;
+  const int reset_owned = DMA_DPCR_Read(0x1F8010F0u, &reset_dpcr);
+  check_u32("DMA bus: DPCR reset address is owned", (uint32_t)reset_owned, 1u);
+  check_u32("DMA bus: DPCR uses the hardware reset value", reset_dpcr, DMA_DPCR_RESET);
+
+  DMA_DPCR_Write(0x1F8010F1u, 0xAABBCCDDu);
+  check_u32("DMA bus: byte-lane 1 shifts the full source", DMA_DPCR_SaveStateValue(), 0xBBCCDD00u);
+  DMA_DPCR_Write(0x1F8010F2u, 0xAABBCCDDu);
+  check_u32("DMA bus: byte-lane 2 shifts the full source", DMA_DPCR_SaveStateValue(), 0xCCDD0000u);
+  DMA_DPCR_Power();
+  if (!oracle_load_exe(prog, (uint32_t)(n * 4), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) {
+    return 0;
+  }
+
+  const OracleStop stop = oracle_run(200);
+  OracleState st;
+  oracle_capture(&st);
+  check_stop("DMA bus: sequence stayed on the same CPU", stop, ORACLE_STOP_BUDGET);
+  check_u32("DMA bus: exact DPCR address", st.gpr[R_T0], 0x1F8010F0u);
+  check_u32("DMA bus: controller supplied DPCR readback", st.gpr[R_T2], 0x33333333u);
+  check_u32("DMA bus: caller continued after DPCR read", st.gpr[R_T3], 0x00004444u);
+
+  oracle_teardown();
+
+  uint32_t unowned[7];
+  n = 0;
+  unowned[n++] = i_lui(R_T0, 0x1F80);
+  unowned[n++] = i_ori(R_T0, R_T0, 0x10F4);
+  unowned[n++] = i_lui(R_T1, 0x5555);
+  unowned[n++] = i_ori(R_T1, R_T1, 0x5555);
+  unowned[n++] = i_sw(R_T1, 0, R_T0);
+  unowned[n++] = i_addiu(R_T3, R_ZERO, 0x6666);
+  unowned[n++] = i_nop();
+
+  if (!oracle_init()) {
+    return 0;
+  }
+  if (!oracle_load_exe(unowned, (uint32_t)(n * 4), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) {
+    return 0;
+  }
+
+  printf("  (the `oracle: UNSUPPORTED HARDWARE WRITE32` block below is expected for DICR)\n");
+  const OracleStop unowned_stop = oracle_run(200);
+  oracle_capture(&st);
+  check_stop("DMA bus: unowned DICR ended the window", unowned_stop, ORACLE_STOP_HARDWARE);
+  check_u32("DMA bus: DICR was the offending address", st.stop_addr, 0x1F8010F4u);
+  check_u32("DMA bus: execution did not cross unowned DICR", st.gpr[R_T3], 0u);
+  OracleDeviceState refused_devices;
+  check_u32("DMA bus: tainted device snapshot is refused", (uint32_t)oracle_capture_devices(&refused_devices), 0u);
+  check_stop("DMA bus: a later step remains tainted", oracle_step(), ORACLE_STOP_HARDWARE);
+
+  oracle_teardown();
+  return 1;
+}
+
+// ─── DEVICE BOUNDARY: capture only after the exact generic IRQ/DPCR write sequence ───────────────
+//
+// This is the architectural shape a consumer needs: I_MASK write/read, I_STAT write, DPCR write,
+// then a real jal whose delay slot has executed while the callee has not. The snapshot is deliberately
+// separate from OracleState, because CPU equality must not imply device equality.
+static int device_boundary_case(void) {
+  enum { TARGET_INDEX = 16 };
+  const uint32_t target = FIX_ADDR + TARGET_INDEX * 4u;
+  uint32_t prog[20] = {0};
+  int n = 0;
+  prog[n++] = i_lui(R_T0, 0x1F80);
+  prog[n++] = i_ori(R_T0, R_T0, 0x1074);
+  prog[n++] = i_sh(R_ZERO, 0, R_T0);
+  prog[n++] = i_lhu(R_T1, 0, R_T0);
+  prog[n++] = i_nop();
+  prog[n++] = i_sh(R_ZERO, -4, R_T0);
+  prog[n++] = i_lui(R_T2, 0x3333);
+  prog[n++] = i_ori(R_T2, R_T2, 0x3333);
+  prog[n++] = i_sw(R_T2, 0x7C, R_T0);
+  prog[n++] = i_jal(target);
+  prog[n++] = i_addiu(R_A1, R_ZERO, 0x041A);
+  prog[TARGET_INDEX] = i_addiu(R_T3, R_ZERO, 0x7777);
+
+  if (!oracle_init()) {
+    return 0;
+  }
+  if (!oracle_load_exe(prog, sizeof(prog), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) {
+    return 0;
+  }
+
+  OracleState state;
+  int steps = 0;
+  do {
+    oracle_step();
+    oracle_capture(&state);
+    steps++;
+  } while (state.pc != target && steps < 24);
+
+  OracleDeviceState devices;
+  const int captured = oracle_capture_devices(&devices);
+  check_u32("device boundary: reached the jal target", state.pc, target);
+  check_u32("device boundary: jal delay slot executed", state.gpr[R_A1], 0x0000041Au);
+  check_u32("device boundary: callee has not executed", state.gpr[R_T3], 0u);
+  check_u32("device boundary: clean device state captured", (uint32_t)captured, 1u);
+  check_u32("device boundary: every register is valid", devices.valid, ORACLE_DEVICE_ALL);
+  check_u32("device boundary: every register was written", devices.writes, ORACLE_DEVICE_ALL);
+  check_u32("device boundary: I_STAT is masked to 11 bits", devices.i_stat, 0u);
+  check_u32("device boundary: I_MASK is masked to 11 bits", devices.i_mask, 0u);
+  check_u32("device boundary: DPCR kept all 32 bits", devices.dpcr, 0x33333333u);
+
+  oracle_teardown();
+  return 1;
+}
+
+// ─── EVENT TAINT: a dropped scheduler request can never become clean device evidence ────────────────
+static int event_taint_case(void) {
+  const uint32_t prog[] = {0};
+  if (!oracle_init()) {
+    return 0;
+  }
+  if (!oracle_load_exe(prog, sizeof(prog), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) {
+    return 0;
+  }
+
+  PSX_SetEventNT(0, 1);
+  OracleDeviceState devices;
+  check_u32("event taint: device snapshot is refused", (uint32_t)oracle_capture_devices(&devices), 0u);
+  check_stop("event taint: a later step remains tainted", oracle_step(), ORACLE_STOP_EVENT);
+
+  oracle_teardown();
+  return 1;
+}
+
+// ─── SYSCALL RETURN: validate the CPU-produced CP0 exception before resuming ────────────────────────
+static int syscall_return_case(void) {
+  uint32_t prog[8] = {0};
+  prog[0] = i_addiu(R_A0, R_ZERO, 1);
+  prog[1] = i_syscall();
+  prog[2] = i_addiu(R_T0, R_ZERO, 0x1234);
+
+  if (!oracle_init()) {
+    return 0;
+  }
+  if (!oracle_load_exe(prog, sizeof(prog), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) {
+    return 0;
+  }
+
+  // Exercise nonzero mode-stack bits so exception push and RFE pop cannot both pass by preserving zero.
+  CPU_SetCOP0(12u, CPU_GetCOP0(12u) | 0x3u);
+  OracleState before_exception;
+  oracle_capture(&before_exception);
+  OracleState exception;
+  int steps = 0;
+  do {
+    oracle_step();
+    oracle_capture(&exception);
+    steps++;
+  } while (exception.pc != 0xBFC00180u && steps < 8);
+
+  check_u32("syscall return: CPU reached the BEV vector", exception.pc, 0xBFC00180u);
+  check_u32("syscall return: CP0 ExcCode is syscall", (exception.cp0_cause >> 2) & 0x1Fu, 8u);
+  check_u32("syscall return: exception is not in a delay slot", exception.cp0_cause >> 31, 0u);
+  check_u32("syscall return: CP0 EPC names the syscall", exception.cp0_epc, FIX_ADDR + 4u);
+  check_u32("syscall return: exception pushed the SR mode stack",
+            exception.cp0_status,
+            (before_exception.cp0_status & ~0x3Fu) | ((before_exception.cp0_status << 2) & 0x3Fu));
+
+  const int wrong_selector = oracle_resume_syscall_return(2u, 0x11111111u, 0x22222222u);
+  OracleState refused;
+  oracle_capture(&refused);
+  check_u32("syscall return: wrong selector is refused", (uint32_t)wrong_selector, 0u);
+  check_u32("syscall return: refusal preserves vector PC", refused.pc, exception.pc);
+
+  CPU_SetCOP0(13u, exception.cp0_cause | 0x80000000u);
+  const int delayed_exception = oracle_resume_syscall_return(1u, 0x11111111u, 0x22222222u);
+  check_u32("syscall return: delay-slot exception is refused", (uint32_t)delayed_exception, 0u);
+  CPU_SetCOP0(13u, exception.cp0_cause);
+
+  const int resumed = oracle_resume_syscall_return(1u, 0x11111111u, 0x22222222u);
+  OracleState after_resume;
+  oracle_capture(&after_resume);
+  check_u32("syscall return: exact boundary is accepted", (uint32_t)resumed, 1u);
+  check_u32("syscall return: resumes after syscall", after_resume.pc, FIX_ADDR + 8u);
+  check_u32("syscall return: next PC is sequential", after_resume.next_pc, FIX_ADDR + 12u);
+  check_u32("syscall return: explicit $v0 is installed", after_resume.gpr[R_V0], 0x11111111u);
+  check_u32("syscall return: explicit $v1 is installed", after_resume.gpr[R_V1], 0x22222222u);
+  check_u32("syscall return: RFE pops the SR mode stack once",
+            after_resume.cp0_status,
+            (exception.cp0_status & ~0x0Fu) | ((exception.cp0_status >> 2) & 0x0Fu));
+  check_u32("syscall return: Cause is preserved", after_resume.cp0_cause, exception.cp0_cause);
+  check_u32("syscall return: EPC is preserved", after_resume.cp0_epc, exception.cp0_epc);
+
+  oracle_step();
+  OracleState continued;
+  oracle_capture(&continued);
+  check_u32("syscall return: caller executes after resume", continued.gpr[R_T0], 0x00001234u);
 
   oracle_teardown();
   return 1;
@@ -511,7 +744,7 @@ int main(void) {
   setvbuf(stderr, NULL, _IONBF, 0); // printed, and stderr/stdout must interleave in the real order
 
   printf("psxport oracle spike — milestone 1 of docs/plans/oracle-against-beetle.md\n");
-  printf("PLAN: %d checks across 6 program classes.\n", PLANNED_CHECKS);
+  printf("PLAN: %d checks across 10 program classes.\n", PLANNED_CHECKS);
   printf("  POSITIVE (9 checks): inject 8 hand-assembled instructions at 0x%08X, run 200 cycles,\n"
          "    assert $t0-$t3, $gp, $sp, the stored word in RAM, a clean stop, and that PC advanced within RAM.\n",
          FIX_ADDR);
@@ -519,15 +752,23 @@ int main(void) {
          "    stop at that address, rather than reading 0 and continuing.\n");
   printf("  IRQ BUS (4 checks): write/read I_MASK and write I_STAT through the vendored controller,\n"
          "    then prove the same CPU continues; GPUSTAT remains the opposite answer.\n");
+  printf("  DMA BUS (13 checks): require the hardware reset and partial-lane semantics, write/read DPCR\n"
+         "    through the vendored controller, and require adjacent DICR to stop and taint later capture.\n");
+  printf("  DEVICE BOUNDARY (9 checks): run the generic I_MASK/I_STAT/DPCR sequence through a real jal,\n"
+         "    then capture distinct valid/write provenance and all three device values before the callee.\n");
+  printf("  EVENT TAINT (2 checks): schedule an unsupported event and require both device capture and a\n"
+         "    later step to retain the event refusal instead of laundering the invalid window.\n");
   printf("  STEPPING (6 checks): run the SAME fixture one instruction at a time and require it to land\n"
          "    exactly where the bulk run landed, having actually stepped through the program.\n");
   printf("  MIRRORING (4 checks): store through 0x807FFFF8 — the address Spider-Man's crt0 really uses as\n"
          "    its stack pointer — and require it to be RAM via the 4th mirror, not a hardware access.\n");
   printf("  MODELED RETURN (17 checks): reach an external leaf through a real call/thunk, require wrong\n"
          "    target/return and pending-load boundaries to refuse, then explicitly return and execute the caller.\n");
+  printf("  SYSCALL RETURN (17 checks): let the CPU produce CP0 exception state, refuse wrong selector\n"
+         "    and delay-slot state, then pop SR once, install results, and resume after EPC.\n");
   printf("  BLIND SPOTS, stated so this is not mistaken for more than it is: no BIOS is mapped, no\n"
          "    real game executable is loaded, no comparison against psxport's own paths is performed,\n"
-         "    and nothing here exercises the GTE, DMA, CD or timers.\n\n");
+         "    and nothing here exercises the GTE, DMA channels/DICR, CD or timers.\n\n");
 
   printf("POSITIVE — a program whose results are derived by hand in this file:\n");
   if (!positive_case()) {
@@ -547,6 +788,24 @@ int main(void) {
     return 2;
   }
 
+  printf("\nDMA BUS — the vendored controller must execute DPCR write/read without leaving this CPU:\n");
+  if (!dma_bus_case()) {
+    printf("  REFUSED: oracle setup failed; the DMA-bus case did not run.\n");
+    return 2;
+  }
+
+  printf("\nDEVICE BOUNDARY — CPU and device state remain independent evidence surfaces:\n");
+  if (!device_boundary_case()) {
+    printf("  REFUSED: oracle setup failed; the device-boundary case did not run.\n");
+    return 2;
+  }
+
+  printf("\nEVENT TAINT — a dropped scheduled event stays a refusal until reload:\n");
+  if (!event_taint_case()) {
+    printf("  REFUSED: oracle setup failed; the event-taint case did not run.\n");
+    return 2;
+  }
+
   printf("\nSTEPPING — one instruction at a time must equal one bulk run:\n");
   if (!stepping_case()) {
     printf("  REFUSED: oracle setup failed; the stepping case did not run.\n");
@@ -562,6 +821,12 @@ int main(void) {
   printf("\nMODELED RETURN — explicit external-leaf semantics resume this same CPU:\n");
   if (!modeled_call_return_case()) {
     printf("  REFUSED: oracle setup failed; the modeled-return case did not run.\n");
+    return 2;
+  }
+
+  printf("\nSYSCALL RETURN — CP0 validates an exception before the caller supplies semantics:\n");
+  if (!syscall_return_case()) {
+    printf("  REFUSED: oracle setup failed; the syscall-return case did not run.\n");
     return 2;
   }
 

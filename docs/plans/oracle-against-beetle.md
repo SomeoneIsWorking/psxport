@@ -106,17 +106,23 @@ into `ctest`. What was actually established, by running it:
   that only has to STEP needs `cpu.c`, `gte.c` and the six PGXP translation units, and those leave undefined only
   `ScratchRAM`, the eight `PSX_MemRead/Write*`, `PSX_EventHandler`, `psx_gte_overclock`,
   `MDFNSS_StateAction`, `widescreen_hack`, `widescreen_hack_aspect_ratio_setting`. The narrow I_STAT /
-  I_MASK extension additionally links Mednafen's `irq.c`; CD, GPU, DMA, timer, SIO and filestream remain
-  outside the stepping library. `gte.c` compiles once `runtime/recomp` is on the include path, exactly as
-  the feasibility section predicted.
+  I_MASK extension additionally links Mednafen's `irq.c`; DPCR uses a factored owner shared with the
+  vendored DMA controller. DMA channels/DICR, CD, GPU, timer, SIO and filestream remain outside the
+  stepping library. `gte.c` compiles once `runtime/recomp` is on the include path, exactly as the
+  feasibility section predicted.
 - **An unsupported hardware access is REPORTED, not absorbed.** The spike's second program reads GPUSTAT at
   `0x1F801814`; the run must come back `ORACLE_STOP_HARDWARE` naming that address. A shim that returned 0
   for device reads would report a clean window instead, and milestone 2 would then compare instructions
   nobody executed.
-- **The narrow IRQ model stays on the same CPU.** A shipping fixture writes I_MASK, reads it back after
+- **The narrow IRQ/DPCR model stays on the same CPU.** A shipping fixture writes I_MASK, reads it back after
   the real load delay, writes I_STAT, and proves caller execution continues. The adjacent GPUSTAT case
   remains the opposite answer, so adding one modeled register block cannot silently turn every unknown
-  device into zero. The complete spike now plans and passes 43/43 checks across six program classes.
+  device into zero. DPCR has its hardware reset value and on-die partial-write semantics, while adjacent
+  DICR remains an unsupported sticky stop. A separate device snapshot carries validity and actual-write
+  provenance for I_STAT/I_MASK/DPCR; it refuses after any unsupported device or scheduled event instead
+  of laundering a tainted window. CP0 Status/Cause/EPC capture and a checked syscall-return seam likewise
+  validate the CPU-produced exception before resuming. The complete spike now plans and passes 84/84
+  checks across ten program classes, including scheduled-event stickiness and nonzero SR push/pop.
 
 Three things milestone 1 taught that were NOT in the design:
 

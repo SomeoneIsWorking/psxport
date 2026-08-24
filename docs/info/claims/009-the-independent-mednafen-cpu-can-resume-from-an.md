@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-21
 tags: oracle,harness,bios
 depends: tools/oracle/oracle_shim.c#oracle_resume_call_return, tools/oracle/oracle_trace.c#main, tools/oracle/oracle_spike.c#modeled_call_return_case
+reconfirmed: 2026-08-25
+verified_at: 2026-08-25 00:11:05
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ Clang-built oracle_spike planned and passed 39/39 checks. Its modeled-return cas
 ## What would falsify it
 
 A change to oracle_resume_call_return, oracle_trace modeled-return dispatch, CPU boundary state, or the spike/CLI fixtures; falsify if a wrong or unsettled boundary mutates state, vector code executes, timestamp resets, or the resumed caller does not run.
+
+## Re-confirmed 2026-08-25
+
+Reconfirmed by oracle_spike's 17 modeled-call-return checks inside the complete 84/84 run, plus oracle_trace CLI modeled-return positive/wrong-function checks in the 12/12 selftest.
