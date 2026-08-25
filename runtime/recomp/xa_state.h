@@ -11,10 +11,18 @@
 #pragma once
 #include <stdint.h>
 
-#define XA_RING_FRAMES 16384
+// 65536 frames ≈ 1.7 s of 37800 Hz source audio. The drive produces in sector bursts (one audio
+// sector every ~8th LBA) while the SPU pulls continuously; too small a ring turns normal burst
+// jitter into drops (measured on Vagrant Story's intro: 16384 frames filled and dropped within the
+// first second of playback even though consumption matched production overall).
+#define XA_RING_FRAMES 65536
 
 typedef struct XaState {
   int active;                       // 1 while ReadS streaming with XA-ADPCM enabled  (was s_active)
+  int push_mode;                    // 1 = the CDC drive decodes INTO this ring (Vagrant-style native
+                                    //     controller model): pulls must NOT self-fetch sectors. 0 =
+                                    //     pull-driven cd_override model (Tomba!2), where the pull
+                                    //     advances s_lba itself.
   uint32_t lba;                     // next CHD sector to read                        (was s_lba)
   uint8_t mode;                     // last Setmode                                   (was s_mode)
   int filter_set;                   // a Setfilter was issued                         (was s_filter_set)
@@ -48,6 +56,11 @@ void xa_state_init(XaState *s);
 // context-free vendor callback, so it reads the bound instance (sanctioned vendor interop).
 // All xa_stream_* entry points take their XaState explicitly.
 void xa_bind_state(XaState *s);
+// Decode one ALREADY-READ raw 2352-byte Mode2 XA-ADPCM sector into the ring (push mode). The
+// caller owns the disc cursor: this never advances s_lba and never reads the disc. Returns the
+// frames decoded (0 when the sector is not decodable audio). Beetle-parity routing lives in the
+// caller (cdc_native.cpp decides FIFO-vs-decoder from mode/subheader bytes).
+int xa_push_audio_sector(XaState *s, const uint8_t *raw, uint32_t drive_lba);
 #ifdef __cplusplus
 }
 #endif

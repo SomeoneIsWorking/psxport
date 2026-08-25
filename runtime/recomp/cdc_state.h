@@ -18,6 +18,8 @@ typedef struct CdcIrqEnt {
 } CdcIrqEnt;
 
 typedef uint64_t (*CdcTickNowFn)(void *context);
+typedef int (*CdcDiscReadRawFn)(struct DiscState *, uint32_t, uint8_t *, uint32_t);
+typedef int (*CdcDiscReadSectorFn)(struct DiscState *, uint32_t, uint8_t *);
 
 typedef struct CdcState {
   int index;                      // 0x1F801800 low 2 bits (register bank)       (was s_index)
@@ -45,17 +47,21 @@ typedef struct CdcState {
   uint64_t command_deadline_ticks;
   void *tick_context;
   CdcTickNowFn tick_now;
-  CdcIrqEnt q[8];              // pending-interrupt queue                     (was s_q)
-  int q_head, q_tail, resp_rd; //                                     (was s_q_head/s_q_tail/s_resp_rd)
-  uint64_t irq_sequence;       // increments whenever a response becomes current
-  uint8_t irq_edge;            // 1 = the controller just RAISED an interrupt and nothing has latched
-                               // it yet. The MMIO dispatcher (mem.cpp) consumes this and sets I_STAT
-                               // bit 2, which is edge-triggered on real hardware: acking the CD
-                               // controller at 0x1F801803 does NOT clear I_STAT, and a queued second
-                               // response raises a FRESH edge as it becomes current. Kept here rather
-                               // than reaching for I_STAT directly because this model has no Game
-                               // pointer.
-  struct DiscState *disc;      // Game-owned disc backend (wired by Game())
+  CdcIrqEnt q[8];                          // pending-interrupt queue                     (was s_q)
+  int q_head, q_tail, resp_rd;             //                                     (was s_q_head/s_q_tail/s_resp_rd)
+  uint64_t irq_sequence;                   // increments whenever a response becomes current
+  uint8_t irq_edge;                        // 1 = the controller just RAISED an interrupt and nothing has latched
+                                           // it yet. The MMIO dispatcher (mem.cpp) consumes this and sets I_STAT
+                                           // bit 2, which is edge-triggered on real hardware: acking the CD
+                                           // controller at 0x1F801803 does NOT clear I_STAT, and a queued second
+                                           // response raises a FRESH edge as it becomes current. Kept here rather
+                                           // than reaching for I_STAT directly because this model has no Game
+                                           // pointer.
+  struct DiscState *disc;                  // Game-owned disc backend (wired by Game())
+  struct XaState *xa;                      // Game-owned XA-ADPCM ring (wired by Game()): the drive decodes
+                                           // audio sectors into it when STRSND routing applies (beetle parity)
+  CdcDiscReadRawFn disc_read_raw_fn;       // sector source; cdc_state_init defaults these to the
+  CdcDiscReadSectorFn disc_read_sector_fn; // real disc.cpp readers so tests can inject fake sectors
 } CdcState;
 
 #ifdef __cplusplus

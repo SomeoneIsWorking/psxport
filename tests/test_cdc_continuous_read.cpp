@@ -71,10 +71,28 @@ void issue_command(CdcState *cdc, uint8_t command) {
   cdc_write(cdc, 0x1F801801u, command);
 }
 
+// Sector source injected through CdcState (the struct's function pointers), NOT linker symbols:
+// the test links all of libpsxport, whose real disc.cpp must stay out of the way. The fake serves
+// two canned sectors and refuses everything else.
+extern "C" int test_fake_disc_read_raw(struct DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+  const auto *sector = lba == kFirstLba ? &kFirstSector : lba == kFirstLba + 1 ? &kSecondSector : nullptr;
+  if (sector == nullptr || count > sector->size()) {
+    return 0;
+  }
+  std::copy_n(sector->data(), count, out);
+  return 1;
+}
+
+extern "C" int test_fake_disc_read_sector(struct DiscState *, uint32_t, uint8_t *) {
+  return 0;
+}
+
 CdcState begin_read(DiscState *disc, CdcTestClock *clock, uint8_t mode = 0xA0) {
   CdcState cdc{};
   cdc.disc = disc;
   cdc_state_init(&cdc);
+  cdc.disc_read_raw_fn = test_fake_disc_read_raw;
+  cdc.disc_read_sector_fn = test_fake_disc_read_sector;
   cdc_test_bind(&cdc, clock);
   cdc_set_mode(&cdc, mode);
   cdc_begin_read(&cdc, kFirstLba);
@@ -236,19 +254,6 @@ void test_setmode_selects_single_and_double_speed_deadlines(void) {
 }
 
 } // namespace
-
-extern "C" int disc_read_raw(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
-  const auto *sector = lba == kFirstLba ? &kFirstSector : lba == kFirstLba + 1 ? &kSecondSector : nullptr;
-  if (sector == nullptr || count > sector->size()) {
-    return 0;
-  }
-  std::copy_n(sector->data(), count, out);
-  return 1;
-}
-
-extern "C" int disc_read_sector(DiscState *, uint32_t, uint8_t *) {
-  return 0;
-}
 
 int main() {
   RUN(first_sector_waits_one_drive_period);

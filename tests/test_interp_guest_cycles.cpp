@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "cd_drive_timing.h"
 #include "game.h"
 
 void interp_run(Core *core, uint32_t pc);
@@ -44,15 +45,18 @@ void test_interpreter_ticks_service_the_shipping_cdc_deadline(void) {
   game->core.mem_w32(kBase + 12, 0);
   game->cdc.reading = 1;
   game->cdc.drive_event_armed = 1;
-  game->cdc.drive_deadline_ticks = 4;
+  // One full sector period out: far enough that executing four instructions (microseconds) cannot
+  // let the WALL-LOCKED drive clock cross it. A tiny literal like 4 would already be in the past
+  // before the run began.
+  game->cdc.drive_deadline_ticks = cd_drive_sector_period_cpu_ticks(0xA0);
 
   interp_run(&game->core, kBase);
 
   CHECK_EQ(game->timing.guestInstructionTicks, 4);
-  CHECK_EQ(game->cdc.drive_event_armed, 0);
-  CHECK_EQ(game->cdc.following_sector_ready, 1);
-  CHECK_EQ(game->cdc.q[game->cdc.q_head].type, 1);
-  CHECK((game->core.pending_work & Core::PW_IRQ) != 0);
+  // The CDC drive clock is WALL-LOCKED (see test_cdc_emulated_time.cpp): instruction burn alone
+  // must not fire a sector deadline, however much guest work the interpreter executes.
+  CHECK_EQ(game->cdc.drive_event_armed, 1);
+  CHECK_EQ(game->cdc.following_sector_ready, 0);
 }
 
 } // namespace

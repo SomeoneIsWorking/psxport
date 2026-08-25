@@ -49,10 +49,27 @@ void write_bfrd(CdcState *cdc, uint8_t value) {
   cdc_write(cdc, 0x1F801803u, value);
 }
 
+// Fakes injected through CdcState's function pointers (the test links all of libpsxport; defining
+// the real symbol names would collide with libpsxport's disc.cpp).
+extern "C" int test_fake_disc_read_raw(struct DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+  const auto *sector = lba == kPvdLba ? &kPvdSector : lba == kPvdLba + 1 ? &kNextSector : nullptr;
+  if (sector == nullptr || count > sector->size()) {
+    return 0;
+  }
+  std::copy_n(sector->data(), count, out);
+  return 1;
+}
+
+extern "C" int test_fake_disc_read_sector(struct DiscState *, uint32_t, uint8_t *) {
+  return 0;
+}
+
 CdcState begin_whole_sector_read(DiscState *disc, CdcTestClock *clock) {
   CdcState cdc{};
   cdc.disc = disc;
   cdc_state_init(&cdc);
+  cdc.disc_read_raw_fn = test_fake_disc_read_raw;
+  cdc.disc_read_sector_fn = test_fake_disc_read_sector;
   cdc_test_bind(&cdc, clock);
   cdc_set_mode(&cdc, 0xA0); // double-speed, whole-sector FIFO
   cdc_begin_read(&cdc, kPvdLba);
@@ -125,19 +142,6 @@ void test_deasserted_latch_blocks_fifo_access(void) {
 }
 
 } // namespace
-
-extern "C" int disc_read_raw(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
-  const auto *sector = lba == kPvdLba ? &kPvdSector : lba == kPvdLba + 1 ? &kNextSector : nullptr;
-  if (sector == nullptr || count > sector->size()) {
-    return 0;
-  }
-  std::copy_n(sector->data(), count, out);
-  return 1;
-}
-
-extern "C" int disc_read_sector(DiscState *, uint32_t, uint8_t *) {
-  return 0;
-}
 
 int main() {
   RUN(repeated_assertion_preserves_split_dma_cursor);

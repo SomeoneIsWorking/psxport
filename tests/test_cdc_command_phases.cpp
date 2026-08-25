@@ -49,10 +49,30 @@ void issue_command(CdcState *cdc, uint8_t command) {
   cdc_write(cdc, 0x1F801801u, command);
 }
 
+// Fakes injected through CdcState's function pointers (see test_cdc_continuous_read.cpp).
+extern "C" int test_fake_disc_read_raw(struct DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+  const uint8_t filler[12] = {0};
+  uint32_t i = 0;
+  for (; i + sizeof filler <= count; i += sizeof filler) {
+    memcpy(out + i, filler, sizeof filler);
+  }
+  if (i < count) {
+    memset(out + i, 0, count - i);
+  }
+  return 1;
+}
+
+extern "C" int test_fake_disc_read_sector(struct DiscState *, uint32_t, uint8_t *out) {
+  memset(out, 0, 2048);
+  return 1;
+}
+
 CdcState controller(DiscState *disc, CdcTestClock *clock) {
   CdcState cdc{};
   cdc.disc = disc;
   cdc_state_init(&cdc);
+  cdc.disc_read_raw_fn = test_fake_disc_read_raw;
+  cdc.disc_read_sector_fn = test_fake_disc_read_sector;
   cdc_test_bind(&cdc, clock);
   return cdc;
 }
@@ -216,18 +236,6 @@ void test_command_queued_behind_current_irq_does_not_raise_an_early_edge(void) {
 }
 
 } // namespace
-
-extern "C" int disc_read_raw(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
-  if (lba != kSectorLba || count > kRawSectorBytes) {
-    return 0;
-  }
-  std::fill_n(out, count, uint8_t{0x5A});
-  return 1;
-}
-
-extern "C" int disc_read_sector(DiscState *, uint32_t, uint8_t *) {
-  return 0;
-}
 
 int main() {
   RUN(zero_argument_command_waits_for_execution_phase);

@@ -23,8 +23,22 @@ uint64_t Timing::readEmulatedCpuTicks(void *context) {
   return static_cast<Timing *>(context)->mEmulatedTime.nowTicks();
 }
 
+// CDC drive clock: wall-locked (see timing.h). Nominal-rate ticks since bind; no state cached.
+uint64_t Timing::readWallLockedCdcTicks(void *context) {
+  const auto *t = static_cast<const Timing *>(context);
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  const uint64_t ns =
+      static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ull + static_cast<uint64_t>(ts.tv_nsec) - t->wallClockOriginNs;
+  // The 128-bit intermediate overflows only after ~570 years of uptime.
+  return static_cast<uint64_t>((static_cast<unsigned __int128>(ns) * kNominalPsxCpuHz) / 1'000'000'000ull);
+}
+
 void Timing::bindCdcClock(CdcState *cdc) {
-  cdc_bind_tick_source(cdc, this, readEmulatedCpuTicks);
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  wallClockOriginNs = static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ull + static_cast<uint64_t>(ts.tv_nsec);
+  cdc_bind_tick_source(cdc, this, readWallLockedCdcTicks);
 }
 
 void Timing::advanceGuestInstructionTicks(uint32_t ticks) {
@@ -92,8 +106,8 @@ extern "C" void rec_guest_instruction_ticks(Core *core, uint32_t ticks) {
 // any call boundary for the whole window), and the pc stayed within one ±32KB region of the
 // anchor. Anything else resets: host serviced, or execution moved on. When the run reaches
 // `max_run` consecutive starved in-region decisions the process fail-fasts NAMING the region —
-// measured live as Vagrant's movie-wait spinning inside resident 0x80022484 while CD sectors
-// flowed (issue #25).
+// measured live as Vagrant's movie-wait spinning inside a single resident libcd poll body while
+// CD sectors flowed (issue #25; the concrete pc lives in that issue's record, not here).
 bool spin_detector_sample(
     SpinDetectorState &st, uint32_t pc, bool host_starved, uint32_t ticks, uint64_t window_ticks, int max_run) {
   if (window_ticks == 0 || max_run <= 0) {

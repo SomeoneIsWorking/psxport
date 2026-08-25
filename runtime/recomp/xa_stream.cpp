@@ -271,6 +271,58 @@ static int xa_decode_next_sector(XaState *xs) {
   return 0; // 64 consecutive non-passing sectors: give up this pump, try again next sample
 }
 
+// Push mode: the CDC drive model (cdc_native.cpp) has already read the sector from the disc and
+// decided it is XA-ADPCM audio under beetle's routing rule; decode it into the ring here. The disc
+// cursor belongs to the drive — this NEVER touches s_lba. `drive_lba` is diagnostic-only.
+// Returns frames decoded (>0), 0 when the sector is not decodable audio, or -1 when the ring is
+// full: NOTHING is decoded or dropped in that case (the XA history must stay coherent for the
+// retry), and the CALLER holds the sector — a real drive cannot deliver into a full buffer, so
+// backpressure, not loss, is the faithful behaviour. A held sector also makes a stopped SPU pull
+// visible as a stalled stream rather than silent corruption.
+int xa_push_audio_sector(XaState *xs, const uint8_t *raw, uint32_t drive_lba) {
+  if (!xs->push_mode || raw[15] != 2 || !(raw[18] & 0x04)) {
+    return 0;
+  }
+  static uint32_t g_defer_streak = 0; // log-throttle only: consecutive full-ring deferrals
+  if ((uint32_t)(s_wr - (uint32_t)s_rd) >= XA_RING_FRAMES - 4096) {
+    g_defer_streak++;
+    if ((g_defer_streak & (g_defer_streak - 1)) == 0) { // report at 1,2,4,8... — every doubling
+      lucent::warn("xa",
+                   "ring FULL (wr={} rd={}) — holding audio sector LBA {} ({} consecutive); "
+                   "the SPU pull is not draining CD audio",
+                   s_wr,
+                   (uint32_t)s_rd,
+                   drive_lba,
+                   g_defer_streak);
+    }
+    return -1;
+  }
+  g_defer_streak = 0;
+  int16_t pcm[4032 * 2]; // mono sectors yield up to 4032 frames (see xa_decode_sector)
+  int freq = s_src_freq;
+  int n = xa_decode_sector(raw, pcm, s_hist, &freq);
+  s_src_freq = freq;
+  for (int i = 0; i < n; i++) {
+    uint32_t idx = (s_wr + (uint32_t)i) % XA_RING_FRAMES;
+    s_ring[idx][0] = pcm[2 * i];
+    s_ring[idx][1] = pcm[2 * i + 1];
+  }
+  s_wr += (uint32_t)n;
+  s_sectors++;
+  xs->active = 1; // pulls see a live stream as long as the drive keeps delivering
+  lucent::debug("xasec",
+                "push LBA {} file={} chan={} submode={:02X} n={} freq={} (wr={} rd={})",
+                drive_lba,
+                raw[16],
+                raw[17],
+                raw[18],
+                n,
+                freq,
+                s_wr,
+                (uint32_t)s_rd);
+  return n;
+}
+
 // Beetle spu.c CD-audio source: one stereo pair per 44.1kHz output sample. Both channels are
 // always written (silence when not streaming). Resamples the XA source rate to 44100 via a
 // fractional read cursor with linear interpolation.
@@ -283,7 +335,9 @@ extern "C" void CDC_GetCDAudioSample(int32_t *samples) { // called from the vend
   s_pulls++;
 
   // Keep at least 2 frames decoded ahead of the read cursor (linear interp needs the next one).
-  while (s_active && (s_wr - (uint32_t)s_rd) < 2) {
+  // PUSH mode never self-fetches: the CDC drive owns the cursor and fills the ring (xa_push_audio_sector);
+  // a pull-side fetch here would read sectors the drive has not reached and desync A/V.
+  while (s_active && !xs->push_mode && (s_wr - (uint32_t)s_rd) < 2) {
     if (xa_decode_next_sector(xs) == 0 && !s_active) {
       break;
     }
@@ -292,6 +346,17 @@ extern "C" void CDC_GetCDAudioSample(int32_t *samples) { // called from the vend
   if (avail < 1) {
     samples[0] = samples[1] = 0;
     return;
+  }
+  // Push-mode rate servo: the drive paces production off the guest-tick domain while pulls arrive
+  // per SPU field advance — two clocks whose relative drift (measured ~1.1% on this host) would
+  // otherwise walk the ring to full (holding the drive, stretching playback) or empty. Trim the
+  // consumption rate toward a half-ring backlog: up to ±3% pitch transiently, far below audibility,
+  // and it pins A/V sync by construction instead of by calibration. Pull mode keeps the exact fixed
+  // ratio (its cursor IS the drive cursor).
+  double ratio = (double)s_src_freq / 44100.0;
+  if (xs->push_mode) {
+    const double err = ((double)(s_wr - (uint32_t)s_rd) - (double)XA_RING_FRAMES * 0.5) / (double)XA_RING_FRAMES;
+    ratio *= (1.0 + err * 0.06);
   }
 
   uint32_t i0 = (uint32_t)s_rd;
@@ -308,5 +373,5 @@ extern "C" void CDC_GetCDAudioSample(int32_t *samples) { // called from the vend
     }
     samples[ch] = s;
   }
-  s_rd += (double)s_src_freq / 44100.0; // advance source cursor at the resample ratio
+  s_rd += ratio;
 }

@@ -41,6 +41,7 @@ Game::Game() {
   gte.dbg.sxhist_on = gte.dbg.gteprobe = gte.dbg.projprobe = gte.dbg.rtpcaller_on = -1;
   disc.env_key = core.cfg ? core.cfg->discEnvVar : 0;
   cdc.disc = &disc;
+  cdc.xa = &xa;
   xa.disc = &disc;
 
   // Factories receive a fully wired Game. Direct runtimes create no temporal decorator by default;

@@ -1,18 +1,22 @@
-// test_cdc_emulated_time.cpp — CD deadlines live in emulated CPU time, including time spent waiting
-// for a display field.
+// test_cdc_emulated_time.cpp — the CDC drive clock is WALL-LOCKED: sector deadlines advance with
+// real time at the nominal rate, NOT with executed-instruction costs.
 //
-// Static-recompiled instructions already advance Timing and service the shipping CDC. Mega Man X4's
-// loader instead yields once per VSync, so only counting the few instructions between yields makes a
-// 2x sector take roughly 250 fields. These cases require the same deadline to become due under an
-// instruction-heavy loop and a yield-heavy loop. The mixed case forbids adding one whole field after
-// instructions have already consumed part of that field: display delivery advances TO the boundary,
-// not BY an unrelated delay.
+// Rationale (issue #25, Vagrant Story FMV): during streaming the guest busy-polls the CD status
+// register instead of display-waiting, so an instruction-cost-driven drive clock runs at HOST speed
+// while the SPU pull advances per display field — the two A/V halves drifted up to ~6% and the XA
+// ring saturated. A pure field-count lock was also rejected: libcd's synchronous boot waits on a
+// command deadline BEFORE any field boundary, which deadlocked. Wall time advances everywhere,
+// always — exactly what a crystal-driven drive needs. These cases pin that contract: instruction
+// burn alone never fires a deadline (it must not be able to), and a real-time wait of one sector
+// period does.
 #include "testutil.h"
 
 #include "cd_drive_timing.h"
 #include "emulated_time.h"
 #include "field_rate.h"
 #include "game.h"
+
+#include <thread>
 
 namespace {
 
@@ -25,31 +29,26 @@ void arm_sector_deadline(Game *game) {
   game->cdc.drive_deadline_ticks = cd_drive_sector_period_cpu_ticks(0xA0);
 }
 
-void test_instruction_heavy_loop_reaches_the_shipping_deadline() {
+void test_instruction_burn_alone_never_fires_the_wall_locked_deadline() {
   auto *game = new Game();
   arm_sector_deadline(game);
   const uint64_t deadline = game->cdc.drive_deadline_ticks;
 
-  game->timing.advanceGuestInstructionTicks(static_cast<uint32_t>(deadline - 1));
+  // Far more guest work than one sector period: the deadline must NOT move — the drive is not
+  // paced by how fast the host executes guest instructions.
+  game->timing.advanceGuestInstructionTicks(static_cast<uint32_t>(deadline * 4));
   CHECK_EQ(game->cdc.drive_event_armed, 1);
   CHECK_EQ(game->cdc.following_sector_ready, 0);
-
-  game->timing.advanceGuestInstructionTicks(1);
-  CHECK_EQ(game->cdc.drive_event_armed, 0);
-  CHECK_EQ(game->cdc.following_sector_ready, 1);
-  CHECK_EQ(game->cdc.q[game->cdc.q_head].type, 1);
 }
 
-void test_yield_heavy_loop_reaches_the_same_shipping_deadline() {
+void test_real_time_reaches_the_shipping_deadline() {
   auto *game = new Game();
   arm_sector_deadline(game);
-  const uint64_t deadline = game->cdc.drive_deadline_ticks;
 
-  CHECK_EQ(game->cdc.drive_event_armed, 1);
-  CHECK_EQ(game->cdc.following_sector_ready, 0);
-  CHECK(game->timing.advanceDisplayFields(1, 1, FIELD_RATE_NTSC_MILLIHZ));
-  CHECK_EQ(game->timing.guestInstructionTicks, 0);
-  CHECK(game->timing.emulatedCpuTicks() >= deadline);
+  // One single-speed sector period is ~13.3 ms; sleep two and service. No field advance is
+  // involved — this is the property that un-deadlocks synchronous CD boot.
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  game->timing.serviceCdcTickSource();
   CHECK_EQ(game->cdc.drive_event_armed, 0);
   CHECK_EQ(game->cdc.following_sector_ready, 1);
   CHECK_EQ(game->cdc.q[game->cdc.q_head].type, 1);
@@ -94,8 +93,8 @@ void test_zero_or_fractionally_invalid_field_input_is_refused() {
 } // namespace
 
 int main() {
-  RUN(instruction_heavy_loop_reaches_the_shipping_deadline);
-  RUN(yield_heavy_loop_reaches_the_same_shipping_deadline);
+  RUN(instruction_burn_alone_never_fires_the_wall_locked_deadline);
+  RUN(real_time_reaches_the_shipping_deadline);
   RUN(instruction_work_is_not_added_on_top_of_the_field_boundary);
   RUN(two_half_field_deliveries_equal_one_full_field);
   RUN(a_late_cpu_resynchronizes_the_next_field_boundary);
