@@ -73,6 +73,33 @@ static void on_fault(int sig) {
   _exit(139);
 }
 
+// SPIN DETECTOR fatal path (called from timing.cpp spin_detector_sample). The guest burned a huge
+// instruction budget without ever yielding to the host and without leaving one code region — the
+// definition of a hang that would otherwise freeze the window with a dead close button. Report
+// the region so the poll is findable, then abort. Exit code 137 distinguishes it from the
+// frame-watchdog's 134 and faults' 139.
+void watchdog_spin_fault(unsigned anchor_pc, unsigned last_pc, unsigned long long instructions) {
+  static const char msg[] = "\n[spin] FATAL: guest burned instruction time without yielding to the host — likely "
+                            "polling an unmodeled device/status. Region:\n";
+  write(2, msg, sizeof(msg) - 1);
+  static char buf[160];
+  int n = snprintf(buf,
+                   sizeof buf,
+                   "[spin]   anchor pc=0x%08X  last pc=0x%08X  ~%llu instructions\n",
+                   anchor_pc,
+                   last_pc,
+                   instructions);
+  if (n > 0) {
+    write(2, buf, (size_t)n);
+  }
+#ifdef HAVE_BACKTRACE
+  void *bt2[64];
+  int nbt = backtrace(bt2, 64);
+  backtrace_symbols_fd(bt2, nbt, 2);
+#endif
+  _exit(137);
+}
+
 // SIGINT/SIGTERM (Ctrl+C / kill): a hung interpreter loop never returns to the windowing event
 // pump, so the window's own close/Ctrl+C handling is dead and the process is unkillable from the
 // UI. Install our OWN handler so Ctrl+C always force-exits IMMEDIATELY — and report where it was

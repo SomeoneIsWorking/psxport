@@ -46,6 +46,8 @@ extern BoolVar cv_repl;
 // PSXPORT_WATCHDOG — frame-progress timeout in seconds. Default 3, ON even when unset, so a hang
 // self-aborts with a backtrace instead of wedging. 0 disables it.
 extern IntVar cv_watchdog;
+extern IntVar cv_spin_ticks; // guest instructions per spin-detector sample (0 = off)
+extern IntVar cv_spin_runs;  // consecutive starved in-region samples that declare a spin
 // PSXPORT_WATCHDOG_BOOT — the larger grace for the FIRST present, which legitimately blocks while
 // the driver compiles every pipeline. -1 (the default) means "derive": max(PSXPORT_WATCHDOG, 45).
 // An explicit 0 still means 0, which is why the sentinel is -1 and not 0.

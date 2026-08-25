@@ -288,6 +288,14 @@ IntVar cv_watchdog("PSXPORT_WATCHDOG",
                    3,
                    "frame-progress timeout, seconds (0 = off)",
                    /*persistable=*/false);
+IntVar cv_spin_ticks("PSXPORT_SPIN_TICKS",
+                     8000000,
+                     "guest instructions per spin-detector sample (0 = spin detection off)",
+                     /*persistable=*/false);
+IntVar cv_spin_runs("PSXPORT_SPIN_RUNS",
+                    48,
+                    "consecutive host-starved in-region samples that declare a guest spin",
+                    /*persistable=*/false);
 IntVar cv_watchdog_boot("PSXPORT_WATCHDOG_BOOT",
                         -1,
                         "main-presenter cold-init grace, seconds (-1 = derive: max(WATCHDOG, 45))",

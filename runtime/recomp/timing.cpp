@@ -5,10 +5,14 @@
 // returns it; VSync(-1) queries it. This is the standard static-recomp frame model: one logic
 // frame per VSync(0). Each tick also DeliverEvents the VBlank event class for any TestEvent-
 // based waiter. Reached via c->game->timing.method().
+#include "c_subsys.h" // watchdog_spin_fault — the spin fatal path
 #include "cdc_state.h"
+#include "config_vars.h" // cv_spin_ticks / cv_spin_runs — the spin-detector thresholds
 #include "core.h"
 #include "field_rate.h"
 #include "game.h"
+#include <algorithm> // std::min
+#include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -56,8 +60,70 @@ void Timing::serviceCdc() {
   }
 }
 
+bool spin_detector_sample(
+    SpinDetectorState &st, uint32_t pc, bool host_starved, uint32_t ticks, uint64_t window_ticks, int max_run);
+static bool spin_detector_sample_core(Core *core, uint32_t ticks, uint64_t window_ticks, int max_run) {
+  const bool spun = spin_detector_sample(
+      core->spin, core->pc, (core->pending_work & Core::PW_HOST) != 0, ticks, window_ticks, max_run);
+  if (spun) {
+    // Report here, in real context, then die loudly — never return to the spinning guest.
+    watchdog_spin_fault(core->spin.anchor, core->pc, (unsigned long long)window_ticks * (unsigned long long)max_run);
+  }
+  return spun;
+}
 extern "C" void rec_guest_instruction_ticks(Core *core, uint32_t ticks) {
   core->game->timing.advanceGuestInstructionTicks(ticks);
+  // Thresholds are read once per process: they are configuration, not something a run changes.
+  static const uint64_t kWindow = [] {
+    const long v = psx::config::cv_spin_ticks.get();
+    return v > 0 ? (uint64_t)v : 0;
+  }();
+  static const int kMaxRun = (int)psx::config::cv_spin_runs.get();
+  if (spin_detector_sample_core(core, ticks, kWindow, kMaxRun)) {
+    // spin_detector_sample already reported through watchdog_spin_fault and aborted; this line
+    // exists only so the compiler knows control does not continue.
+    return;
+  }
+}
+
+// ---- SPIN DETECTOR (see Core::spin_* and tests/test_spin_detector.cpp) -----------------------
+// One decision per `window_ticks` guest instructions. A decision counts toward a spin only when
+// BOTH hold: the host is still owed turns it never took (PW_HOST set — the guest has not reached
+// any call boundary for the whole window), and the pc stayed within one ±32KB region of the
+// anchor. Anything else resets: host serviced, or execution moved on. When the run reaches
+// `max_run` consecutive starved in-region decisions the process fail-fasts NAMING the region —
+// measured live as Vagrant's movie-wait spinning inside resident 0x80022484 while CD sectors
+// flowed (issue #25).
+bool spin_detector_sample(
+    SpinDetectorState &st, uint32_t pc, bool host_starved, uint32_t ticks, uint64_t window_ticks, int max_run) {
+  if (window_ticks == 0 || max_run <= 0) {
+    return false; // detection disabled by configuration
+  }
+  st.window_ticks += ticks;
+  if (st.window_ticks < window_ticks) {
+    return false;
+  }
+  st.window_ticks = 0;
+
+  constexpr uint32_t kRegionMask =
+      ~0x7FFFFu; // same ±512KB region (measured: Vagrant's movie-wait chain spans ~100KB across dispatcher blocks)
+  const bool same_region = st.anchor != 0 && (pc & kRegionMask) == (st.anchor & kRegionMask);
+  if (!host_starved) {
+    // Host got its turn: healthy frame loop, whatever the code is doing. Full reset.
+    st.anchor = pc;
+    st.run = 0;
+    return false;
+  }
+  if (!same_region) {
+    // Starved but MOVED: execution is walking other functions — forward progress of a kind, but
+    // also the first decision of a fresh candidate run anchored HERE (a migrating spin must not
+    // get a free ride by hopping regions every window).
+    st.anchor = pc;
+    st.run = 1;
+    return st.run >= max_run;
+  }
+  st.run = std::min(st.run + 1, max_run + 1); // saturate; never overflow
+  return st.run >= max_run;
 }
 
 // 0x80085BB0 FUN_80085bb0 VSyncCallback(func): no-op. The original routes the per-vblank

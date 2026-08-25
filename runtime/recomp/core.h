@@ -18,6 +18,7 @@
 #include "pc_observer.h"
 #include "r3000.h"
 #include "render_substrate.h" // Core owns a RenderSubstrate (host-only per-Core render substrate)
+#include "spin_detector.h"
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -100,6 +101,9 @@ public:
   //           exactly that (see spider1 docs/re-frontier.md RE-05).
   enum : int { PW_IRQ = 1, PW_HOST = 2 };
   int pending_work = 0;
+
+  // ---- SPIN DETECTOR state (runtime/recomp/spin_detector.h; fatal path watchdog_spin_fault) ----
+  SpinDetectorState spin;
 
   // ---- RELOCATABLE OVERLAY MODULES: where each one is living right now ----
   //

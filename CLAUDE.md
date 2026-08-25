@@ -196,8 +196,9 @@ they are the other two loops a game's `main()` dispatches to that own the proces
 and each names its own drive mechanism, not the SBS one.
 
 Common knobs: `PSXPORT_NOAUDIO=1` · `PSXPORT_DEBUG=cd,gpu` (channel-gated diagnostics) ·
-`PSXPORT_FORCE_RECOMP=1` · `PSXPORT_WATCHDOG=<sec>` · `PSXPORT_REPL=1` · `PSXPORT_SNAP_AT=<frames>` ·
-`PSXPORT_WWATCH=<lo>,<hi>`.
+`PSXPORT_FORCE_RECOMP=1` · `PSXPORT_WATCHDOG=<sec>` · `PSXPORT_SPIN_TICKS`/`PSXPORT_SPIN_RUNS`
+(guest spin detector: a starved-host, one-region instruction burn aborts naming the region) ·
+`PSXPORT_REPL=1` · `PSXPORT_SNAP_AT=<frames>` · `PSXPORT_WWATCH=<lo>,<hi>`.
 
 ## Architecture — the same two halves in every game repo
 

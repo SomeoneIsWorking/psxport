@@ -16,6 +16,9 @@ void watchdog_main_present_complete(void); // main presenter complete: leave boo
 void watchdog_resume(void);                // resume after intentional idle without claiming frame progress
 void watchdog_suspend(void);               // cancel the timeout during intentional idle (pause / REPL input wait)
 void watchdog_disable(void);               // permanently disable (SBS debugger pauses indefinitely on a divergence)
+void watchdog_spin_fault(unsigned anchor_pc,
+                         unsigned last_pc,
+                         unsigned long long instructions); // guest spin: report + abort (timing.cpp)
 
 // gpu_vk.cpp — is a live on-screen window up (the single windowed/headless discriminator; replaces
 // the old PSXPORT_GPU_WINDOW env gate). C-linkage so C and C++ subsystems share one source of truth.
