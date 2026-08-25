@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-25.4"   # dispatch bases are not constructed function pointers
+RECOMP_VERSION = "2026-08-25.7"   # cross-fragment completion covers recovered-switch arrivals
 
 R = lambda n: f"c->r[{n}]"
 
@@ -2442,10 +2442,13 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         k = _bisect.bisect_right(fs, addr)
         return fs[k] if k < len(fs) else exe.text_end
     xb = set()
+    jt_sites = {}
     for a in fs:
         hi_f = _fn_hi(a)
         ins_f = {x: decode(x, exe.word(x)) for x in range(a, hi_f, 4)}
         for jr, tgts in find_jump_tables(exe, ins_f, a, hi_f, validate=False).items():
+            if tgts:
+                jt_sites[jr] = tgts
             for t in tgts:
                 if not (a <= t < hi_f) and t not in fs_set and exe.load <= t < exe.text_end \
                         and decode(t, exe.word(t)).kind != D.UNKNOWN:
@@ -2453,6 +2456,39 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     if xb:
         funcs = sorted(set(funcs) | xb)
         print(f"[{N.wrap}] seeded {len(xb)} cross-boundary switch targets (else recomp-MISS via switch default)")
+    # CROSS-FRAGMENT DISPATCH COMPLETION (issue #23): a non-ra `jr` whose register holds a DEFINITE
+    # value only reachable by flowing THROUGH earlier fragments (Sony's GTE chains carry a dispatch
+    # base across jr-ra boundaries) recovers nowhere per-function. Walk the module's control graph
+    # — sequential + branch + recovered-switch-case edges — for the must-value at each such site,
+    # and seed every definite target as an entry so the runtime dispatch resolves. Additive-only:
+    # a site with no definite value keeps today's fail-fast, which names itself.
+    flow_report = []
+    flow_sites = unrecovered_jr_targets(exe, funcs, set(seeds), jt_sites, report=flow_report)
+    seeded_flow = {}
+    covered_static = 0
+    no_value = 0
+    for a, vals in sorted(flow_sites.items()):
+        good = {v for v in vals if not (v & 3) and exe.load <= v < exe.text_end
+                and decode(v, exe.word(v)).kind != D.UNKNOWN}
+        need = {v for v in good - set(jt_sites.get(a, ())) if v not in fs_set}
+        if need:
+            seeded_flow[a] = need
+        elif good:
+            covered_static += 1             # every flow value the switch or an entry already handles
+        else:
+            no_value += 1                   # nothing flowed here — the residual fail-fast class
+    if seeded_flow or no_value:
+        if seeded_flow:
+            funcs = sorted(set(funcs) | set().union(*seeded_flow.values()))
+        print(f"[{N.wrap}] cross-fragment dispatch: {len(flow_sites)} non-ra jr(s) analyzed "
+              f"over {flow_report[0] if flow_report else 0} state-pops -> "
+              f"{sum(len(v) for v in seeded_flow.values())} new dispatch target(s) at "
+              f"{len(seeded_flow)} site(s) ["
+              + " ".join(f"{a:08X}->" + ",".join(f"{v:08X}" for v in sorted(vs))
+                         for a, vs in sorted(seeded_flow.items())[:6])
+              + (f" (+{len(seeded_flow) - 6} more)" if len(seeded_flow) > 6 else "")
+              + f"]; {covered_static} fully covered statically; {no_value} with no flow value "
+                f"(left fail-fast)")
     print(f"[{N.wrap}] functions: {len(seeds)} seeds -> {len(funcs)} recompiled after jal "
           f"discovery (a call to any non-recompiled address fails fast at runtime)")
     funcset = set(funcs)
@@ -2931,6 +2967,95 @@ def prune_case_label_entries(exe, funcs, hard_seeds, text_end, jal_targets):
             return sorted(set(funcs) - pruned), pruned, guarded
         guarded |= newly_guarded
         pruned |= newly
+
+
+def unrecovered_jr_targets(exe, funcs, entries, jt_edges, states_per_addr=4,
+                           report=None):
+    """May-constant flow over ONE module's control graph, answering issue #23: EVERY value the
+    register of a non-`ra` `jr` can DEFINITELY-CODE hold at the jump, across all graph paths.
+
+    Per-function reaching-constant analysis structurally cannot see bases carried across `jr ra`
+    fragment boundaries — Sony's hand-written GTE chains materialise a dispatch base in one block
+    (`lui t9,0x800B ; addiu t9,t9,0x180C`) and consume it blocks later (`addiu t9,t9,32 ; jr t9`),
+    across what the emitter treats as separate function fragments. This walk propagates constants
+    along the graph instead: sequential edges (delay slots included), branch/j targets, and the
+    RECOVERED switch cases in `jt_edges` ({jr_addr: [targets]}); calls kill state, returns and
+    UNKNOWN words end paths. Seeds are the image entry plus every entry/case label.
+
+    Deliberately MAY-semantics (values UNION at each site, never intersected): the same fragment
+    serves several dispatch families on different executions (measured on Vagrant BATTLE —
+    jr t9 @0x800B1704 recovers the 0x80098xxx family statically while other arrivals carry
+    0x800B182C), so the question is "what can this register possibly hold", and the consumer of
+    the answer only ADDS entries. An extra candidate is inert unless the guest actually jumps
+    there — in which case executing it is precisely what the guest does. A MISSING one is the
+    runtime fail-fast this analysis exists to prevent. States per address are capped
+    (`states_per_addr`) so loops cannot explode the worklist; exceeding the cap drops the incoming
+    state, which only ever loses candidates.
+
+    Returns {jr_addr: set of possible values}; `report` (a list) receives diagnostic tuples.
+    """
+    lo, hi = exe.load, exe.text_end
+    empty = tuple([None] * 32)
+    frontier = [(a, empty) for a in sorted({lo} | set(funcs or ()) | set(entries or ())
+                                           | {t for ts in jt_edges.values() for t in ts})
+                if lo <= a < hi]
+    states_at = {}
+    sites = {}
+    pops = 0
+    while frontier:
+        a, st = frontier.pop()
+        pops += 1
+        seen_here = states_at.setdefault(a, [])
+        if st in seen_here:
+            continue                      # already processed with this exact state
+        if len(seen_here) >= states_per_addr:
+            continue                      # too many distinct states here — drop conservatively
+        seen_here.append(st)
+        raw = exe.word(a)
+        i = decode(a, raw)
+        if i.kind == D.UNKNOWN:
+            continue                      # data walked as code — end this path
+        rs = getattr(i, "rs", None)
+        # None means "no definite value" — _fold expects absent keys, not None entries.
+        st2 = {k: v for k, v in enumerate(st) if v is not None}
+        _advance_immediate_constants(i, st2)     # mutates in place (clear-on-unknown semantics)
+        nxt = tuple(st2.get(k) for k in range(32))
+        succs = []
+        if i.kind == D.JUMPR:
+            if i.op == "jalr":
+                succs.append((a + 8, empty))        # call: temporaries die in the callee
+            elif rs == 31:
+                continue                            # return ends this path
+            else:
+                # RECORD AT RECOVERED SITES TOO: their static case set comes from ONE construction
+                # family sharing the span, while other executions arrive carrying a different base
+                # (measured: Vagrant BATTLE jr t9 @0x800B1704 recovers {0x80098xxx} statically yet
+                # receives 0x800B182C from the 0x800B180C construction upstream). The consumer of
+                # the recording decides per value whether the switch already covers it.
+                val = st[rs] if isinstance(rs, int) and 0 <= rs < 32 else None
+                if val is not None:
+                    sites.setdefault(a, set()).add(val)
+                if a in jt_edges:
+                    for t in jt_edges[a]:           # recovered switch: walk its cases
+                        succs.append((t, st))
+                succs.append((a + 4, nxt))          # the delay slot still runs
+        elif i.kind == D.JUMP:
+            if i.op == "jal":
+                succs.append((a + 8, empty))
+            else:
+                succs.append((i.target, nxt))
+                succs.append((a + 4, nxt))
+        elif i.kind == D.BRANCH:
+            succs.append((i.target, nxt))
+            succs.append((a + 4, nxt))
+        else:
+            succs.append((a + 4, nxt))
+        for t, s in succs:
+            if t is not None and lo <= t < hi:
+                frontier.append((t, s))
+    if report is not None:
+        report.append(pops)
+    return sites
 
 
 def area_indexed_overlay_tables(main_exe, area_exes, min_valid_frac=0.8):

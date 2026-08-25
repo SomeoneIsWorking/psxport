@@ -672,6 +672,69 @@ def test_constructed_pointer_that_feeds_a_computed_jump_is_not_a_function_seed()
         "stored constructed pointer lost its function seed"
 
 
+def _fragment_chain_fixture(base=0x80010000):
+    """The issue-#23 shape: a dispatch base carried ACROSS a `jr ra` fragment boundary.
+
+    Block A materialises t9 = TGT and branches into block B (the analyzer walks branch targets as
+    edges exactly as it walks recovered-switch cases). B sits behind a jr-ra boundary, consumes t9
+    with `addiu t9,t9,32` and jumps: the definite target TGT+32 can only come from cross-fragment
+    flow."""
+    d = Asm(base)
+    d.lui("t9", base >> 16)         # 0x00 A: t9 = TGT
+    d.addiu("t9", "t9", 0x60)       # 0x04
+    d.beq("zero", "zero", "B")      # 0x08 transfer into B — an edge the analyzer walks
+    d.nop()                         # 0x0C delay
+    d.jr("ra")                      # 0x10 boundary filler: B looks like a fresh entry
+    d.nop()                         # 0x14
+    assert len(d.items) == 6        # B begins at the next word, base+0x18
+    d.label("B")
+    d.addiu("t9", "t9", 32)         # 0x18 B: t9 = TGT+32 — base flows in from A
+    d.jr("t9")                      # 0x1C the unrecovered computed jump under test
+    d.nop()                         # 0x20
+    d.jr("ra")                      # 0x24
+    d.nop()                         # 0x28
+    while len(d.items) < 24:        # filler up to TGT = base+0x60
+        d.addu("s0", "s0", "s0")
+    d.label("TGT")
+    d.addiu("v0", "v0", 1)          # base+0x60
+    d.addiu("v0", "v0", 2)
+    d.jr("ra")
+    d.nop()
+    data, _ = d.assemble()
+    return exe_of(data, base), base + 0x60, base + 0x80
+
+
+def test_cross_fragment_dispatch_base_is_recovered_and_seeded():
+    # The register holding a computed-jump target can be materialised in an EARLIER fragment and
+    # consumed after a `jr ra` boundary (Sony's hand-written GTE chains pass registers across what
+    # look like function ends). Must-constant flow along the control graph — sequential edges plus
+    # branch/recovered-switch targets — recovers the definite value where per-function analysis
+    # structurally cannot. Measured on Vagrant BATTLE: recomp-MISS 0x800B182C from jr t9 @0x800B1704.
+    e, tgt, tgt32 = _fragment_chain_fixture()
+    sites = emit.unrecovered_jr_targets(
+        e, funcs=[e.load], entries={e.load}, jt_edges={})
+    assert sites, "analyzer found no unrecovered jr site at all"
+    a, consts = next(iter(sites.items()))
+    assert tgt32 in consts, (
+        f"cross-fragment base lost: site {a:#x} consts={sorted(hex(c) for c in consts)}")
+
+
+def test_cross_fragment_flow_dies_at_unknown_overwrite():
+    # If the register is RELOADED before the jump, no constant flows to the jump at all — nothing
+    # may be seeded for that path. (Extra candidates would be inert; a MISSING one fail-fasts, so
+    # the flow must not invent values out of loads.)
+    e, tgt, tgt32 = _fragment_chain_fixture()
+    jr_site = e.load + 0x1C
+    # patch the addiu t9,t9,32 at +0x18 into a lw t9,0(a0): kills the definite constant
+    lw_t9 = (0x23 << 26) | (4 << 21) | (25 << 16) | 0   # lw r25, 0(r4)
+    words = bytearray(e.text)
+    words[0x18:0x1C] = lw_t9.to_bytes(4, "little")
+    e2 = exe_of(bytes(words), e.load)
+    sites = emit.unrecovered_jr_targets(e2, funcs=[e.load], entries={e.load}, jt_edges={})
+    assert tgt32 not in sites.get(jr_site, set()), \
+        "reloaded register must not yield a dispatch target"
+
+
 def test_is_func_entry():
     # (a) addiu sp,sp,-N prologue ; (b) preceded by `jr ra; <delay>`.
     a = Asm(0x80010000)
