@@ -16,6 +16,29 @@ class Game;
 // OverrideFn is defined in scheduler.h — the (Core*)->void signature every HLE handler obeys.
 typedef void (*OverrideFn)(Core *c);
 
+// One game-declared hardware-sync primitive: the measured address of a SCEI library leaf (libetc /
+// libcd / libmdec / libgpu sync glue) and the native handler that owns it. Addresses are GAME data.
+struct PlatformHleBinding {
+  uint32_t addr;
+  OverrideFn fn;
+};
+
+// The consumer-owned fact slice for DIRECT runtimes (core.cfg == nullptr, no legacy GameConfig):
+// which hardware-sync primitives the game's binary links and which address windows admit them.
+// The windows are what keep engine FUN_xxxx out of this table — the same guard
+// GameConfig::hle.windowLo/windowHi provides for adapter runtimes. A runtime that declares nothing
+// (nullptr plan or zero windows) installs nothing, and initBuiltins() announces that out loud:
+// the guest then spins in any real sync loop it reaches, which is the honest signal that RE is
+// outstanding. docs/plans/game-seam-redesign.md, "platform-library entry tables".
+struct PlatformHlePlan {
+  static constexpr int kMaxBindings = 8;
+  PlatformHleBinding bindings[kMaxBindings] = {};
+  int bindingCount = 0;
+  // Up to two accepted windows; a zero hi disables a slot. Addresses are KSEG0 (0x8xxxxxxx).
+  uint32_t windowLo[2] = {0, 0};
+  uint32_t windowHi[2] = {0, 0};
+};
+
 class PlatformHle {
 public:
   Game *game = nullptr; // back-pointer wired by Game()

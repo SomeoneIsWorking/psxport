@@ -109,3 +109,46 @@ void Timing::frameTick() {
   vblank += 1u;
   game->core.mem_w32(VBLANK_COUNT, vblank);
 }
+
+// ---- vsyncHle: libetc VSync(mode) for DIRECT whole-program runtimes ------------------------------
+//
+// A port whose PC-native frame loop owns all timing TRAPS VSync (vsync_trap above; Tomba!2). A
+// direct runtime running the WHOLE guest program cannot: its retail code CALLS VSync and consumes
+// the result — the query form feeds deadline arithmetic (Tekken 3's CdSync spins on VSync(-1)
+// against a count + 0x3C0 deadline), so the counter must move with emulated display fields or the
+// wait can never end. Unlike the trap policy this is the FAITHFUL leaf, derived from the same RE as
+// Timing::vsync() but sourced from EmulatedTime (which advances with guest instruction ticks) so it
+// works before any presenter exists:
+//   mode < 0   -> $v0 = display fields elapsed (query, no wait); mirror written to DAT_…abde0.
+//   mode >= 1  -> consume `mode` (or one, for 0) display field(s) of emulated time, then answer as
+//                 the query form. Waiting IS consuming the field interval on real hardware.
+// The mode == 1 hblank-delta form stays answered by the caller-facing vsync() semantics via the
+// hsync counter; both share mEmulatedTime so they cannot disagree.
+
+uint32_t Timing::emulatedDisplayFields(bool pal) const {
+  const uint64_t hsyncs = mEmulatedTime.hSyncCount(field_rate_millihz(pal), display_lines_per_field(pal));
+  return static_cast<uint32_t>(hsyncs / display_lines_per_field(pal));
+}
+
+void Timing::vsyncHle(Core *c) {
+  Timing &t = c->game->timing;
+  const bool pal = c->game->gpu.s_disp_pal != 0;
+  int32_t mode = static_cast<int32_t>(c->r[A0]);
+  if (mode < 0) {
+    t.vblank = t.emulatedDisplayFields(pal);
+    c->r[V0] = t.vblank;
+    c->mem_w32(VBLANK_COUNT, t.vblank);
+    return;
+  }
+  const uint32_t fields = (mode == 0) ? 1u : static_cast<uint32_t>(mode);
+  if (!t.advanceDisplayFields(static_cast<int>(fields), 1, field_rate_millihz(pal))) {
+    lucent::warn("plat-hle", "VSync({}) field advance refused (invalid cadence)", mode);
+  }
+  if (mode != 1) { // the delta form reports hsyncs, not the shared counter
+    t.vblank += fields;
+    deliver_vblank_events(c);
+  }
+  c->r[V0] = (mode == 1) ? static_cast<uint16_t>(t.hSyncCounter() - t.mVSyncHSyncBaseline) : t.vblank;
+  t.mVSyncHSyncBaseline = t.hSyncCounter();
+  c->mem_w32(VBLANK_COUNT, t.vblank);
+}

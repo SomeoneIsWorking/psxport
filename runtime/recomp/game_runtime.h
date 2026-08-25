@@ -18,6 +18,7 @@ class GuestWidescreenProjection;
 class TemporalFramePresentation;
 struct GameConfig;
 struct GameHooks;
+struct PlatformHlePlan;
 
 class FrameDriver {
 public:
@@ -54,6 +55,14 @@ public:
   // at least the lifetime of every Core. Null is an honest answer for tools/smoke clients that never
   // boot or route guest code; those algorithms refuse by name when invoked without it.
   virtual const GuestProgramImage *guestProgramImage() const {
+    return nullptr;
+  }
+
+  // Hardware-sync primitives for DIRECT runtimes (core.cfg == nullptr): the measured SCEI library
+  // leaves this binary links and the windows that admit them. Null means "declares nothing" — the
+  // honest default, announced by PlatformHle::initBuiltins(). Adapter runtimes never consult this:
+  // they keep GameConfig::hle. See platform_hle.h for the fact-slice contract.
+  virtual const PlatformHlePlan *platformHlePlan() const {
     return nullptr;
   }
 

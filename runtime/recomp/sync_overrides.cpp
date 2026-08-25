@@ -12,7 +12,8 @@
 // 2026-07-07). The registrar asserts each address here lies in the resident BIOS-library code window.
 
 #include "core.h"
-#include "game.h" // Game::core — register_/initBuiltins read the game's config off the Core
+#include "game.h"         // Game::core — register_/initBuiltins read the game's config off the Core
+#include "game_runtime.h" // psxport_game_runtime — the direct-runtime PlatformHlePlan source
 #include "platform_hle.h"
 #include "proj_params.h"  // libgte_set_geom_offset / _screen — the camera projection setters
 #include "recomp_iface.h" // seam: psxport_recomp()->shard_set_override (generated MAIN override setter)
@@ -202,6 +203,30 @@ static void vsync_trap(Core *c) {
 // deliberate: silently accepting any address would turn the one guard protecting this table into a
 // no-op for exactly the games that forgot to state their map.
 bool PlatformHle::inBiosWindow(const GameConfig *cfg, uint32_t a) {
+  // DIRECT runtime: the windows come from the runtime's own PlatformHlePlan (same guard, different
+  // source — which windows admit registrations is a game memory-map fact either way).
+  if (!cfg) {
+    const GameRuntime *const runtime = psxport_game_runtime();
+    const PlatformHlePlan *const plan = runtime ? runtime->platformHlePlan() : nullptr;
+    bool anyDirect = false;
+    if (plan) {
+      for (int i = 0; i < 2; i++) {
+        if (!plan->windowHi[i]) {
+          continue;
+        }
+        anyDirect = true;
+        if (a >= plan->windowLo[i] && a < plan->windowHi[i]) {
+          return true;
+        }
+      }
+    }
+    if (!anyDirect) {
+      lucent::error("plat-hle",
+                    "no BIOS-library address window declared "
+                    "(GameRuntime::platformHlePlan windows) — refusing every registration");
+    }
+    return false;
+  }
   bool any = false;
   for (int i = 0; i < 2; i++) {
     if (!cfg->hle.windowHi[i]) {
@@ -260,7 +285,11 @@ void PlatformHle::register_(uint32_t addr, OverrideFn fn) {
   // OVERRIDE table too (func_<addr>'s wrapper checks g_override[idx] FIRST), so the native sync
   // resolves it before the recompiled wait ever runs. No-op if `addr` isn't recompiled. The MAIN
   // module setter is a generated symbol reached through the RecompRegistry seam (recomp_iface.h).
-  psxport_recomp()->shard_set_override(addr, fn);
+  // A missing registry means NO SUBSTRATE was installed (hermetic tests, tools/smoke) — nothing
+  // exists to override, so only the wiring is skipped, never the table entry above.
+  if (const RecompRegistry *const rec = psxport_recomp()) {
+    rec->shard_set_override(addr, fn);
+  }
 }
 
 OverrideFn PlatformHle::lookup(uint32_t addr) const {
@@ -276,15 +305,40 @@ OverrideFn PlatformHle::lookup(uint32_t addr) const {
 }
 
 void PlatformHle::initBuiltins() {
-  // Every address here is GAME data (GameConfig::hle) — the framework ships none. A zero entry means
-  // "this game has no such primitive, or it has not been RE'd yet" and is skipped; the game then
-  // hangs in the real spin loop if it needs it, which is the honest signal that RE is outstanding.
-  const GameConfig::PlatformHleCfg &h = game->core.cfg->hle;
   auto reg = [&](uint32_t addr, OverrideFn fn) {
     if (addr) {
       register_(addr, fn);
     }
   };
+
+  // DIRECT runtimes (core.cfg == nullptr) declare their own hardware-sync primitives through
+  // GameRuntime::platformHlePlan() — the consumer-owned fact slice from
+  // docs/plans/game-seam-redesign.md. register_ applies the same inBiosWindow guard, sourcing the
+  // windows from the plan (see inBiosWindow). A null plan is the honest "declares nothing": install
+  // nothing, announce it, and let the guest spin in any real sync loop it reaches — the visible
+  // signal that RE is outstanding.
+  if (!game->core.cfg) {
+    const GameRuntime *const runtime = psxport_game_runtime();
+    const PlatformHlePlan *const plan = runtime ? runtime->platformHlePlan() : nullptr;
+    if (plan) {
+      for (int i = 0; i < plan->bindingCount && i < PlatformHlePlan::kMaxBindings; i++) {
+        if (plan->bindings[i].addr && plan->bindings[i].fn) {
+          reg(plan->bindings[i].addr, plan->bindings[i].fn);
+        }
+      }
+    }
+    lucent::info("plat-hle",
+                 "{} hardware-sync primitive(s) installed from GameRuntime::platformHlePlan{}",
+                 mN,
+                 mN ? "" : " — NONE declared; the guest will spin in any real sync loop it reaches");
+    return;
+  }
+
+  // Adapter path: every address here is GAME data (GameConfig::hle) — the framework ships none. A
+  // zero entry means "this game has no such primitive, or it has not been RE'd yet" and is skipped;
+  // the game then hangs in the real spin loop if it needs it, which is the honest signal that RE is
+  // outstanding.
+  const GameConfig::PlatformHleCfg &h = game->core.cfg->hle;
 
   // libmdec sync — MDEC decode + its DMAs are synchronous here, so the sync is already done.
   reg(h.decDctInSync, sync_ok);

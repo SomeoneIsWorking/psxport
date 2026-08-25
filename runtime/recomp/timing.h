@@ -32,6 +32,13 @@ public:
   //   traps VSync (all pacing is PC-native). Kept for RE reference / future re-enable.
   void vsync();
 
+  // vsyncHle(): the FAITHFUL libetc VSync(mode) for DIRECT whole-program runtimes, sourced from
+  //   EmulatedTime so it answers before any presenter exists. Query (mode<0) reports display
+  //   fields elapsed; waits consume the field interval. Static OverrideFn-shaped so a game can
+  //   bind its measured VSync address through PlatformHlePlan. See timing.cpp for the full
+  //   rationale and the trap-policy contrast.
+  static void vsyncHle(Core *c);
+
   // frameTick(): advance the canonical libetc VSync counter once per native frame. Called from
   //   the PC-native frame loop (native_step_frame) so recomp code reading DAT_800abde0 for
   //   pacing/idle-timers keeps advancing.
@@ -43,4 +50,5 @@ private:
 
   static uint64_t readEmulatedCpuTicks(void *context);
   void serviceCdc();
+  [[nodiscard]] uint32_t emulatedDisplayFields(bool pal) const;
 };
