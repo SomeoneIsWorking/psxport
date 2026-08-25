@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-25.2"   # cross-overlay call seeds; delay slots are never dropped
+RECOMP_VERSION = "2026-08-25.4"   # dispatch bases are not constructed function pointers
 
 R = lambda n: f"c->r[{n}]"
 
@@ -831,6 +831,26 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
             idx_reg, shift, scale_op, scale_a = i.rt, i.shamt, i.op, a
     if idx_reg is None:
         return None
+    # POST-SCALE MASK REFINEMENT. An `andi` BETWEEN the shift and the add masks the ADDEND itself:
+    #     sll/srl other,X,k ; andi other,other,M ; add dst,base,other ; jr dst
+    # The reachable offsets are then exactly the multiples of M's lowest set bit up to M — stride
+    # and case count read straight off the mask, for either shift direction. Measured on Vagrant's
+    # resident libgte macro chain (`srl t1,t8,4 ; andi t1,t1,0xE0 ; addu t1,t1,t7 ; jr t1`, eight
+    # 32-byte blocks): the run walk below probes at stride 8 and reads two instructions per probe,
+    # so it proves nothing about that family and recovery returned None — the hop became a runtime
+    # register dispatch that fail-fasts on the first block that is not also a callable entry.
+    for a in range(scale_a + 4, add_a, 4):
+        i = ins.get(a)
+        if i is None:
+            continue
+        if i.op == "andi" and i.rt == other:
+            if not i.imm:
+                break
+            tz = (i.imm & -i.imm).bit_length() - 1
+            cand = [base + k * (1 << tz) for k in range((i.imm >> tz) + 1)]
+            if len(cand) >= 2 and all(not (t & 3) and lo <= t < hi for t in cand):
+                return cand
+            break
     # For a right-shifted bitfield the constant-index route is meaningless (the constants feeding it are
     # pre-shift field values), so the run walk is the only sound bound — it is unioned in below anyway.
     stride = (1 << shift) if scale_op == "sll" else 8
@@ -2113,12 +2133,45 @@ def code_pointer_tables(exe, min_run=4, exclude=None):
     return out
 
 
+def _constructed_pointer_reaches_pointer_sink(exe, lo, hi, after_a, rd):
+    """Decide what a `lui/addiu`-constructed value in `rd` is USED AS, by its first decisive sink
+    within a short forward window: a STORE or an INDIRECT CALL means the value is a function/data
+    pointer (seed it); a computed `jr` of a derived register means it is a JUMP-TABLE BASE, not a
+    callback (do not seed). Measured on Vagrant's resident libgte dispatcher
+    (`lui t7,0x8004 ; addiu t7,t7,0x1104 ... addu t1,t1,t7 ; jr t1`): the pair reconstructed the
+    dispatch base, is_func_entry liked the first case block behind its `jr ra` boundary, and the
+    scanner hard-seeded 0x80041104 — truncating the containing body so neither the outer
+    mask-stride dispatch nor any inner block-to-block hop could recover ([recomp-MISS 0x80040FC8]).
+    Inconclusive windows keep the old behaviour (seed) — this predicate may only narrow."""
+    derived = {rd}
+    for a in range(after_a + 4, min(after_a + 4 + 32 * 4, hi - 3), 4):
+        i = decode(a, exe.word(a))
+        rs, rt, rdd = getattr(i, "rs", None), getattr(i, "rt", None), getattr(i, "rd", None)
+        if i.kind in (D.STORE, D.GTE_STORE):
+            if rt in derived or rs in derived:      # stored value / addressed through
+                return True
+        elif i.kind == D.LOAD:
+            if rs in derived:                       # read THROUGH the pointer
+                return True
+        elif i.kind == D.JUMPR:
+            if rs in derived:
+                return rs == 31                     # `jr ra`: tail-call; else computed jump
+        elif i.kind in (D.ALU_RRR, D.ALU_RRI, D.SHIFT_I, D.SHIFT_V, D.HILO, D.LUI):
+            if rs in derived or rt in derived:
+                if isinstance(rdd, int) and rdd:
+                    derived.add(rdd)                # derivation flows through copies/arithmetic
+    return True                                     # no decisive sink — keep the old answer
+
+
 def constructed_func_pointers(exe):
     """Seed functions whose pointer is BUILT IN CODE (`lui rD, H; addiu/ori rD, rD, L`) and stored into
     a vtable / passed as a callback — so the address never appears as a single data word (pointer_table_
     funcs misses it) and it is reached only by jalr (direct-jal discovery misses it). For each `lui`
     followed (within a short window, same dest reg) by an `addiu`/`ori`, reconstruct the 32-bit value
-    and seed it if it is a function entry (is_func_entry). addiu sign-extends L; ori zero-extends."""
+    and seed it if it is a function entry (is_func_entry). addiu sign-extends L; ori zero-extends.
+    A pair whose value feeds a COMPUTED JUMP instead is a dispatch base, not a callback — seeding it
+    would hard-split the containing body at its own first case block — see
+    _constructed_pointer_reaches_pointer_sink."""
     lo, hi = exe.load, exe.text_end
     out = set()
     for a in range(lo, hi, 4):
@@ -2131,7 +2184,7 @@ def constructed_func_pointers(exe):
             if getattr(j, "op", None) in ("addiu", "ori") and getattr(j, "rt", None) == rd \
                and getattr(j, "rs", None) == rd:
                 val = ((H << 16) + j.simm) & 0xFFFFFFFF if j.op == "addiu" else ((H << 16) | (j.imm & 0xFFFF))
-                if is_func_entry(exe, val):
+                if is_func_entry(exe, val) and _constructed_pointer_reaches_pointer_sink(exe, lo, hi, b, rd):
                     out.add(val)
                 break
     return out
@@ -2328,14 +2381,19 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         hard |= set(ghidra_funcs(exe.load, exe.text_end))
     seeds = hard                                  # for the jt-prune "keep seeds" guard below
     funcs = discover_funcs(exe, hard | soft)
-    # PRUNE jump-table case labels wrongly seeded/discovered as functions: they are mid-function code,
-    # and leaving them in truncates the containing function so its switch can't be recovered (the
-    # substrate-derail root cause). Keep any that ARE a seed entry (defensive: a real fn shouldn't be a
-    # case label, but never drop an explicit seed).
-    jt_labels = collect_jt_targets(exe, funcs, exe.text_end) - set(seeds)
-    if jt_labels:
-        funcs = [f for f in funcs if f not in jt_labels]
-        print(f"[{N.wrap}] pruned {len(jt_labels)} jump-table case labels from the function set")
+    # PRUNE case-label entries out of the function set: they are mid-run code, and leaving one in
+    # truncates the containing body so neither its dispatcher nor its block-to-block hops recover
+    # (the substrate-derail root cause, see prune_case_label_entries). Hard seeds are never touched;
+    # direct-called or prologue-bearing boundaries are guarded as genuine entries.
+    jal_tgts = {decode(a, exe.word(a)).target for a in range(exe.load, exe.text_end, 4)
+                if decode(a, exe.word(a)).op == "jal"}
+    funcs, pruned_labels, guarded_labels = prune_case_label_entries(
+        exe, funcs, set(seeds), exe.text_end, jal_tgts)
+    if pruned_labels or guarded_labels:
+        print(f"[{N.wrap}] case-label entries: pruned {len(pruned_labels)} proven mid-run; "
+              f"kept {len(guarded_labels)} named by a direct call"
+              + ("" if not pruned_labels else
+                 " (" + " ".join(f"0x{a:08X}" for a in sorted(pruned_labels)) + ")"))
     # DEMOTE INTERNAL LABELS. `jal` discovery is eager, and hand-written assembly using `jal`/`jr $ra`
     # as an internal coroutine inside ONE frame gets its inner block promoted to a function entry,
     # splitting the real body. The emitter then renders the routine's own back-edge — an unconditional
@@ -2353,8 +2411,6 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     # a mid-body `jr ra`). removable = soft seeds that are NOT a real call target (jal/pointer entry).
     if soft_seeds:
         lo, hi = exe.load, exe.text_end
-        jal_tgts = {decode(a, exe.word(a)).target for a in range(lo, hi, 4)
-                    if decode(a, exe.word(a)).op == "jal"}
         # A soft boundary that allocates its OWN stack frame (`addiu sp, sp, -N` prologue) is a GENUINE
         # function entry, not a mid-body early-return continuation (which keeps using the existing frame).
         # NEVER merge it: an overlay handler reached ONLY via a runtime object-method pointer is invisible
@@ -2835,6 +2891,46 @@ def cross_overlay_call_targets(images):
                          for stem, v in sorted(out.items()) if v)
              + "]" if seeded else ""))
     return out
+
+
+def prune_case_label_entries(exe, funcs, hard_seeds, text_end, jal_targets):
+    """Soft-discovered boundaries INSIDE a recovered computed-jump run are its case labels, not
+    functions. Leaving one in splits the containing body at the label, which kills recovery twice
+    over: the dispatcher's own scan window ends before its target set (its base address reads as
+    out-of-range), and every register constant the blocks chain through each other is lost at the
+    split. Measured on Vagrant's resident libgte macro chain: soft entries 0x80041104/0x80041200
+    truncated func_80040F8C exactly there, eight inner dispatchers went unrecovered, execution
+    limped through runtime register dispatch between fragments, and the first hop whose landing
+    block was not itself an entry fail-fasted ([recomp-MISS 0x80040FC8]).
+
+    Iterates because pruning widens spans and wider spans recover more: round 1 forms spans from
+    HARD entries only (a soft boundary is MERGEABLE-BY-CONTRACT, so it must not truncate the very
+    scan that adjudicates it), then surviving softs rejoin for round 2 until nothing new is proven.
+
+    A candidate is pruned only when it is NOT a hard seed, NOT named by any direct `jal`, and has
+    NO stack-frame prologue — the same three guards merge_early_return_boundaries ships, because a
+    direct-called or frame-allocating boundary is a genuine entry even mid-run. Returns
+    (funcs, pruned, guarded); `guarded` reports the direct-called twins left callable.
+    """
+    hard_seeds = set(hard_seeds)
+    softs = sorted(set(funcs) - hard_seeds)
+    keep = sorted(hard_seeds & set(funcs))
+    has_prologue = {f for f in softs if (exe.word(f) & 0xFFFF8000) == 0x27BD8000}
+    pruned, guarded = set(), set()
+    while True:
+        # Spans form from HARD entries plus softs already VINDICATED by a direct call — never from
+        # the softs this loop is still adjudicating, whose truncation is precisely the failure.
+        labels = collect_jt_targets(exe, sorted(set(keep) | guarded), text_end)
+        cand = {a for a in labels if a not in hard_seeds and a not in has_prologue
+                and a not in pruned}
+        newly_guarded = cand & jal_targets
+        newly = cand - jal_targets
+        if not newly and not newly_guarded - guarded:
+            # Unadjudicated softs survive: no recovery named them, which is not evidence against
+            # them — the old single-pass prune already worked that way for the same reason.
+            return sorted(set(funcs) - pruned), pruned, guarded
+        guarded |= newly_guarded
+        pruned |= newly
 
 
 def area_indexed_overlay_tables(main_exe, area_exes, min_valid_frac=0.8):

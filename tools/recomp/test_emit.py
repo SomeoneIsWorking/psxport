@@ -544,6 +544,134 @@ def test_delay_slot_on_a_function_boundary_is_still_emitted():
         f"H's delay slot (lui t0,0x800F) was dropped at the function boundary:\n{h}"
 
 
+def _mask_stride_fixture(base=0x80010000, with_jal_twin=False):
+    """The Vagrant resident-libgte dispatcher shape (recomp-MISS 0x80040FC8).
+
+    D computes its jump target as `srl t1,t8,4 ; andi t1,t1,0x60 ; addu t1,t1,t7 ; jr t1` — the
+    POST-SCALE MASK family: the reachable offsets are exactly the multiples of 0x20 inside 0x60,
+    i.e. four 32-byte run blocks R0..R3. Each block ends in `jr ra`, so func_entries_after_return
+    soft-seeds every block start; a leaf tail before R0 makes R0 such a candidate too."""
+    d = Asm(base)
+    RUN = base + 11 * 4             # eleven D-instructions precede the run; R0 sits there
+    d.addiu("sp", "sp", -8)         # D: prologue
+    d.lw("t8", 0, "a0")             # dynamic index source
+    d.lui("t7", RUN >> 16)
+    d.addiu("t7", "t7", RUN & 0xFFFF)
+    d.srl("t1", "t8", 4)
+    d.andi("t1", "t1", 0x60)        # stride 0x20, 4 slots
+    d.addu("t1", "t1", "t7")
+    d.jr("t1")
+    d.nop()
+    d.jr("ra")                      # leaf tail of D's body -> the next word looks like an entry
+    d.nop()
+    for k in range(4):              # R0..R3: four 32-byte blocks, each returns
+        d.addiu("v0", "v0", 1 + k)
+        d.sw("v0", 0, "a1")
+        d.lw("v1", 4, "a1")
+        d.addiu("v1", "v1", 1)
+        d.sw("v1", 4, "a1")
+        d.addiu("a2", "a2", k)
+        d.jr("ra")
+        d.nop()                     # 8 words = 32 bytes per block
+    data, end = d.assemble()
+    if with_jal_twin:
+        g = Asm(end)
+        g.jal(RUN + 0x40)           # direct call evidence for R2 -> it must survive pruning
+        g.jr("ra")
+        g.nop()
+        data += g.assemble()[0]
+    return exe_of(data, base), RUN
+
+
+def test_masked_shifted_index_dispatcher_recovers_mask_stride_cases():
+    # The post-scale mask IS the case bound: `srl other,X,k ; andi other,other,M` reaches exactly
+    # the multiples of M's lowest set bit below M. Measured on Vagrant: resident libgte dispatches
+    # through `srl t1,t8,4 ; andi t1,t1,0xE0 ; addu t1,t1,t7 ; jr t1` into eight 32-byte macro
+    # blocks; the generic run-walk reads only two instructions per probe at stride 8 and proves
+    # nothing there, so recovery returned None and the hop became a runtime register dispatch.
+    e, run = _mask_stride_fixture()
+    ins = {a: decode(a, e.word(a)) for a in range(e.load, e.text_end, 4)}
+    got = emit.find_jump_tables(e, ins, e.load, e.text_end)
+    jrs = [a for a, t in got.items()]
+    targets = set()
+    for t in got.values():
+        targets.update(t or ())
+    expected = {run + k * 0x20 for k in range(4)}
+    assert expected <= targets, (
+        f"mask-stride cases missing: want "
+        f"{', '.join(f'{t:08X}' for t in sorted(expected))}; got "
+        f"{', '.join(f'{a:08X}' for a in jrs)} -> {sorted(targets)}")
+
+
+def test_soft_entry_inside_recovered_run_is_pruned_but_call_evidence_survives():
+    # A soft-discovered boundary that sits INSIDE a recovered computed-jump run is one of its case
+    # labels, not a function — leaving it in splits the containing body so neither the outer
+    # dispatcher nor the inner block-to-block hops recover (the Vagrant 0x80041104 split). But a
+    # direct `jal` names a REAL entry even mid-run: that twin must survive.
+    for with_twin, want_case in ((False, False), (True, True)):
+        e, run = _mask_stride_fixture(with_jal_twin=with_twin)
+        twin = run + 0x40
+        hard = {e.load}                       # only the image entry is hard here
+        soft = emit.func_entries_after_return(e)
+        assert run in soft, "fixture must present the first run block as a soft boundary"
+        with scratch_tempdir() as td:
+            emit.emit_module(e, td, emit.MAIN_NAMES, hard, shards=1, soft_seeds=soft)
+            disp = open(os.path.join(td, "shard_disp.c")).read()
+            body = open(os.path.join(td, "shard_0.c")).read()
+        case = f"case 0x{twin & 0x1FFFFFFF:08X}u"   # main_dispatch switches on the 27-bit address
+        if want_case:
+            assert case in disp, \
+                f"direct-called twin wrongly pruned out of the callable set:\n{disp[:2000]}"
+        else:
+            assert case not in disp, \
+                f"case label left a callable entry — the containing body stays truncated:\n{disp[:2000]}"
+            assert f"L_{twin:08X}" in body, "pruned case label lost from the containing body"
+
+
+def test_constructed_pointer_that_feeds_a_computed_jump_is_not_a_function_seed():
+    # The Vagrant resident-libgte shape (recomp-MISS 0x80040FC8): the dispatcher materialises its
+    # jump-table BASE with `lui t7,0x8004 ; addiu t7,t7,0x1104` and consumes it through
+    # add-with-index into `jr t1`. constructed_func_pointers saw the same lui/addiu pair, liked
+    # is_func_entry at the base address (the preceding block ends jr ra + delay), and HARD-seeded
+    # the run's first case block — truncating the containing body so neither the outer dispatcher
+    # nor any inner hop could recover. A value whose sink is a computed JUMP is a jump base, not a
+    # callback; only a store or jalr sink makes it a function pointer.
+    d = Asm(0x80010000)
+    d.lw("t8", 0, "a0")
+    d.lui("t7", 0x8001)             # base = 0x8001002C: the first case block below
+    d.addiu("t7", "t7", 0x2C)
+    d.srl("t1", "t8", 4)
+    d.andi("t1", "t1", 0x60)
+    d.addu("t1", "t1", "t7")
+    d.jr("t1")
+    d.nop()
+    d.jr("ra")                      # block boundary -> is_func_entry(0x8001002C) true
+    d.nop()
+    for _ in range(3):              # three case blocks, each returning
+        d.addiu("v0", "v0", 1)
+        d.jr("ra")
+        d.nop()
+    data, _ = d.assemble()
+    e = exe_of(data)
+    assert (0x8001002C) not in emit.constructed_func_pointers(e), \
+        "jump-table base hard-seeded as a constructed function pointer"
+
+    # Control: the SAME kind of value STORED as a callback keeps seeding — the sink decides.
+    c = Asm(0x80010000)
+    c.lui("t7", 0x8001)
+    c.addiu("t7", "t7", 0x14)       # value = the entry-shaped word below
+    c.sw("t7", 0, "a0")             # stored into a vtable/callback slot
+    c.jr("ra")
+    c.nop()
+    c.addiu("sp", "sp", -8)         # entry-shaped word at 0x80010014
+    c.jr("ra")
+    c.nop()
+    data, _ = c.assemble()
+    e = exe_of(data)
+    assert (0x80010014) in emit.constructed_func_pointers(e), \
+        "stored constructed pointer lost its function seed"
+
+
 def test_is_func_entry():
     # (a) addiu sp,sp,-N prologue ; (b) preceded by `jr ra; <delay>`.
     a = Asm(0x80010000)
