@@ -138,6 +138,7 @@ void Timing::vsyncHle(Core *c) {
     t.vblank = t.emulatedDisplayFields(pal);
     c->r[V0] = t.vblank;
     c->mem_w32(VBLANK_COUNT, t.vblank);
+    lucent::debug("vsync", "query -> {} fields (ticks {})", t.vblank, t.emulatedCpuTicks());
     return;
   }
   const uint32_t fields = (mode == 0) ? 1u : static_cast<uint32_t>(mode);
