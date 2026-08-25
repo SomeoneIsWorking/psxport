@@ -98,9 +98,11 @@ inline const lucent::Channel g_otchain_channel{"otchain"};
 // against the 2.54% of total CPU the OUT-OF-LINE version of this gate once cost (see below). And the
 // work is real, not optimised away: the same run records 10,188 spans with 0 overflow, which is printed
 // at run end precisely so "no cost" can never be mistaken for "no work happened".
-// Set once at boot from PSXPORT_PRODUCERS (config.cpp), which defaults TRUE so behaviour is
-// unchanged. It stays a plain global rather than a CVar read because trackStore's inline gate is on
-// the path of EVERY guest store — the whole point of that gate is that it is two relaxed loads.
+// Set once per Game construction from PSXPORT_PRODUCERS (game.cpp), which defaults TRUE so behaviour
+// is unchanged; Game's constructor is on every runtime's boot route, including direct-boot ones that
+// never reach native_boot_run. It stays a plain global rather than a CVar read because trackStore's
+// inline gate is on the path of EVERY guest store — the whole point of that gate is that it is two
+// relaxed loads.
 inline bool g_producer_census_armed = true;
 
 class OtAttr {

@@ -28,7 +28,7 @@
 #include "hostprof.h"
 #include "hw_bind.h" // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "memcensus.h"
-#include "ot_attr.h"           // g_producer_census_armed — the producer-census arm, set at boot below
+#include "ot_attr.h"           // OtAttr — the producer-census tables (armed by Game's ctor, game.cpp)
 #include "override_registry.h" // overrides::query — per-row ownership for the producer-census JSONL
 #include "scheduler.h"         // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "standalone_frame_boundary.h"
@@ -878,9 +878,6 @@ void native_boot_run(Core *c) {
   // which has now produced two wrong conclusions on kanban #118 because it cannot name the CALLER.
   // Armed here, beside the profiler, for the same reason.
   memcensus_init();
-  // The producer census arm, from the CVar rather than a hardcoded true. Read ONCE here: trackStore's
-  // inline gate is on the path of every guest store, so it must stay two relaxed loads.
-  g_producer_census_armed = psx::config::cv_producers.get();
   {
     void cfg_dump(void);
     cfg_dump();
