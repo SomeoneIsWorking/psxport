@@ -427,6 +427,123 @@ def test_prologue_soft_seed_survives_merge():
 
 
 
+def _cross_overlay_fixture():
+    """Two co-resident overlay images plus a same-slot sibling.
+
+    DEST holds a null handler T (`jr ra` + delay slot) that a NEIGHBOURING body branches to — the
+    shape demote_internal_labels proves an internal label — while SRC, a disjoint image, `jal`s it
+    directly. SIB overlaps DEST (same slot, so the two can never be resident together) and holds
+    ordinary arithmetic at T's address, i.e. no callable entry there."""
+    d = Asm(0x80100000)
+    d.addiu("sp", "sp", -0x10)      # 0x00  a real function, so T is preceded by `jr ra` + delay
+    d.jr("ra")                      # 0x04
+    d.nop()                         # 0x08
+    d.label("T")
+    d.jr("ra")                      # 0x0C  T: the null handler SRC calls
+    d.addiu("t0", "zero", 7)        # 0x10  delay slot
+    d.addiu("sp", "sp", -0x10)      # 0x14  the neighbouring body...
+    d.beq("a0", "zero", "T")        # 0x18  ...which branches BACK into T (non-linking, conditional)
+    d.nop()                         # 0x1C
+    d.jal(0x80100030)               # 0x20  into SIB's range — but they SHARE a slot, so this call
+    d.nop()                         # 0x24  is not executable and must not seed SIB
+    d.jr("ra")                      # 0x28
+    d.nop()                         # 0x2C
+    dest, _ = d.assemble()
+    T = 0x8010000C
+
+    s_ = Asm(0x80200000)
+    s_.addiu("sp", "sp", -0x10)
+    s_.jal(T)                       # the cross-image direct call — the evidence T is an entry
+    s_.nop()
+    s_.jr("ra")
+    s_.nop()
+    src, _ = s_.assemble()
+
+    b = Asm(0x80100000)             # SAME base as DEST: the other image in that slot
+    for _ in range(12):
+        b.addu("v0", "v0", "v1")    # nothing at T's address that could be an entry
+    b.addiu("sp", "sp", -0x10)      # 0x30: a PERFECTLY VALID entry here — rejected on the slot proof
+    for _ in range(3):
+        b.addu("v0", "v0", "v1")
+    sib, _ = b.assemble()
+
+    return (T,
+            exe_of(dest, 0x80100000),
+            exe_of(src, 0x80200000),
+            exe_of(sib, 0x80100000))
+
+
+def test_cross_overlay_call_target_seeds_only_the_co_resident_image():
+    # Issue #22 (Vagrant): INITBTL `jal`s BATTLE 0x800E6EAC, which BATTLE's own 0x800E6EB4 also
+    # branches to. Each module's jal scan is internal, so the destination never discovered the entry,
+    # and demote_internal_labels then dropped it as a local label — INITBTL's call fail-fasted with
+    # `recomp-MISS 0x800E6EAC`. The two filters must accept the co-resident image and reject the
+    # same-slot sibling that spans the same address.
+    T, dest, src, sib = _cross_overlay_fixture()
+    seeds = emit.cross_overlay_call_targets([("DEST", dest), ("SIB", sib), ("SRC", src)])
+    assert seeds["DEST"] == {T}, f"co-resident destination not seeded: {seeds}"
+    assert seeds["SIB"] == set(), f"same-slot sibling wrongly seeded: {seeds}"
+    assert seeds["SRC"] == set(), f"caller wrongly seeded: {seeds}"
+    # And the slot proof carries its own weight: DEST calls a REAL entry inside SIB, which the entry
+    # test would happily accept — it is rejected because the two images can never be resident together.
+    assert emit.is_func_entry(sib, 0x80100030), "fixture must offer SIB a genuine entry to reject"
+
+
+def test_cross_overlay_call_target_survives_internal_label_demotion():
+    # The dual role: the SAME address is a callable entry (a cross-image `jal` names it) and a branch
+    # target of a neighbouring body. Without the cross-image seed, rule 1 of demote_internal_labels
+    # proves it an internal label and the destination module emits no callable entry for it.
+    T, dest, src, sib = _cross_overlay_fixture()
+    soft = emit.func_entries_after_return(dest)
+    assert T in soft, "fixture must present T as a function boundary in the first place"
+    internal_only = emit.overlay_internal_jal_targets(dest)
+    assert T not in internal_only, "fixture must not discover T from inside DEST"
+
+    entry = f"ov_dest_func_{T:08X}"
+    with scratch_tempdir() as td:
+        emit.emit_module(dest, td, emit.overlay_names("dest"), internal_only, None, None,
+                         shards=1, soft_seeds=soft)
+        without = open(os.path.join(td, "ov_dest_disp.c")).read()
+    assert entry not in without, "control failed: T was already a callable entry without the seed"
+
+    seeds = emit.cross_overlay_call_targets([("DEST", dest), ("SIB", sib), ("SRC", src)])
+    with scratch_tempdir() as td:
+        emit.emit_module(dest, td, emit.overlay_names("dest"), internal_only | seeds["DEST"], None,
+                         None, shards=1, soft_seeds=soft)
+        with_seed = open(os.path.join(td, "ov_dest_disp.c")).read()
+        body = open(os.path.join(td, "ov_dest_shard_0.c")).read()
+    assert entry in with_seed, "cross-image call target is still not dispatchable in the destination"
+    # The neighbouring body must still REACH T — as a call to the entry or as its own local label.
+    assert (f"{entry}(c)" in body or f"L_{T:08X}" in body), \
+        "the neighbouring body lost its transfer into T"
+
+
+def test_delay_slot_on_a_function_boundary_is_still_emitted():
+    # A delay slot belongs to its CONTROL INSTRUCTION, not to an address range. When the next function
+    # entry starts ON the slot — the compiler filled the preceding `jr ra`'s slot with that entry's
+    # first instruction, and something `jal`s the entry — the slot sits outside the owning function's
+    # [lo,hi). Emitting nothing there DROPS a real guest instruction, silently. Measured on Vagrant:
+    # 28 emitted functions ended on a control instruction whose slot was a live non-nop word,
+    # including a `sh` store (0x80082C0C) — a guest memory write that never happened.
+    a = Asm(0x80010000)
+    a.addiu("sp", "sp", -0x10)      # 0x00  fn H
+    a.jr("ra")                      # 0x04  H's epilogue...
+    a.lui("t0", 0x800F)             # 0x08  ...whose delay slot is ALSO the next entry
+    a.addiu("t0", "t0", 0x1928)     # 0x0C  the rest of that next function
+    a.jr("ra")                      # 0x10
+    a.nop()                         # 0x14
+    data, _ = a.assemble()
+    e = exe_of(data)
+    H, G = 0x80010000, 0x80010008
+
+    with scratch_tempdir() as td:
+        emit.emit_module(e, td, emit.MAIN_NAMES, {H, G}, shards=1)
+        body = open(os.path.join(td, "shard_0.c")).read()
+    h = body.split("void gen_func_80010000")[1].split("void gen_func")[0]
+    assert "32783" in h or "0x800F" in h.upper(), \
+        f"H's delay slot (lui t0,0x800F) was dropped at the function boundary:\n{h}"
+
+
 def test_is_func_entry():
     # (a) addiu sp,sp,-N prologue ; (b) preceded by `jr ra; <delay>`.
     a = Asm(0x80010000)

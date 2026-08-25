@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-24.2"   # branches preserve computed-offset base constants
+RECOMP_VERSION = "2026-08-25.2"   # cross-overlay call seeds; delay slots are never dropped
 
 R = lambda n: f"c->r[{n}]"
 
@@ -916,6 +916,14 @@ def collect_jt_targets(exe, funcs, text_end):
 # 3D content" look identical at runtime — so the BUILD says how many stores it found.
 g_pz_tapped = 0
 g_pz_skipped = 0
+# A DELAY SLOT BELONGS TO ITS CONTROL INSTRUCTION, NOT TO AN ADDRESS RANGE. When the next function
+# entry starts ON the slot (the entry is a `jal` target in its own right, and the preceding function's
+# `jr ra` fills its slot with that first instruction), the slot falls outside the owning function's
+# [lo,hi) — and emitting nothing there silently DROPS a real instruction. Counted per module and
+# printed with its denominator, because an emitter that quietly discards guest instructions is
+# indistinguishable from one that had none to emit.
+g_ds_borrowed = 0        # delay slots emitted from beyond the owning function's body
+g_ds_unemittable = []    # (addr, category) — see the emit_module print for what each category means
 
 
 def defines_reg(i, r):
@@ -1375,9 +1383,26 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
                     for key in checkpoint_keys:
                         emitted_diagnostic_pcs[key] = emitted_diagnostic_pcs.get(key, 0) + 1
             if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
+                global g_ds_borrowed
                 slot = ins.get(a + 4)
-                ds_c = emit_simple(slot) if (slot and slot.kind not in
-                       (D.BRANCH, D.JUMP, D.JUMPR)) else "/* DS */"
+                if slot is None and a + 4 < exe.text_end:
+                    # BORROW IT. The hardware runs this word before the transfer no matter which
+                    # function the address list says owns it, so the only faithful emission is the
+                    # instruction itself. (A borrowed slot is outside the pz_* maps computed over
+                    # [lo,hi), so a vertex store sitting here is not depth-tapped — g_ds_borrowed is
+                    # what makes that visible rather than silent.)
+                    slot = decode(a + 4, exe.word(a + 4))
+                    g_ds_borrowed += 1
+                if slot is None or slot.kind in (D.BRANCH, D.JUMP, D.JUMPR):
+                    # Off the end of the image, or a control instruction in a slot — a shape the
+                    # hardware does not define, so in practice a word of DATA being walked as code.
+                    # Nothing faithful to emit; SAY so rather than emitting silence.
+                    g_ds_unemittable.append((a + 4, "off-image" if slot is None else "control"))
+                    ds_c = "/* DS */"
+                else:
+                    if slot.kind == D.UNKNOWN:
+                        g_ds_unemittable.append((a + 4, "undecodable"))
+                    ds_c = emit_simple(slot)
                 # NATIVE-DEPTH TAPS FOR A DELAY-SLOT INSTRUCTION. A delay slot is emitted INSIDE the
                 # control statement, so a tap appended after that statement would run on the wrong
                 # path — or not at all. Splicing it into the delay-slot text puts it exactly where
@@ -2492,6 +2517,28 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     # has no 3D" are the same observation, so the number of taps the emitter actually placed has to be
     # visible here — a game whose submit idiom neither form matches shows up as 0 now, not as a mystery
     # later. `swc2` sites are inline (GTE_SCREEN_XY_REGS); `mfc2->sw` pairs come from vertex_pz_stores.
+    global g_ds_borrowed, g_ds_unemittable
+    # A dropped delay slot is a guest instruction that never runs, so this line prints EVERY run with
+    # its denominators. `borrowed` is the fixed class (the slot lay outside the owning function).
+    # `off-image` is the only remaining class that could still lose a real instruction, so it is
+    # listed in full; `control`/`undecodable` slots are trailing DATA walked as code — a pre-existing
+    # and expected condition in every image, so those are capped at a few examples rather than
+    # dumping thousands of addresses over the interesting ones.
+    by_cat = {}
+    for a, cat in g_ds_unemittable:
+        by_cat.setdefault(cat, []).append(a)
+    def _sample(cat, cap):
+        xs = sorted(set(by_cat.get(cat, ())))
+        shown = xs if cap is None else xs[:cap]
+        return (" ".join(f"0x{x:08X}" for x in shown)
+                + (f" (+{len(xs) - len(shown)} more)" if len(shown) < len(xs) else "")) or "(none)"
+    print(f"[{N.wrap}] delay slots: {g_ds_borrowed} borrowed from beyond the owning function's body "
+          f"(a function entry starts ON a slot); not emitted: "
+          f"{len(by_cat.get('off-image', ()))} off-image [{_sample('off-image', None)}], "
+          f"{len(by_cat.get('control', ()))} control-in-slot [{_sample('control', 4)}], "
+          f"{len(by_cat.get('undecodable', ()))} undecodable [{_sample('undecodable', 4)}] "
+          f"— the last two are trailing data walked as code")
+    g_ds_borrowed = 0; g_ds_unemittable = []
     global g_pz_tapped, g_pz_skipped
     print(f"[{N.wrap}] native-depth: {g_pz_tapped} mfc2->sw vertex store(s) tapped"
           + (f", {g_pz_skipped} skipped (store sits in a branch delay slot)" if g_pz_skipped else ""))
@@ -2609,6 +2656,12 @@ def main():
     area_exes = [(stem, ovexe) for stem, _, _, _, ovexe, _ in ov_images
                  if re.fullmatch(r"A0[0-9A-Z]", stem)]
     area_tbl_seeds = area_indexed_overlay_tables(exe, area_exes)
+    # Overlay -> overlay direct calls. A fixed-base image that calls into another co-resident image
+    # leaves that entry undiscovered in the DESTINATION module (each module's jal scan is internal),
+    # and demote_internal_labels then drops it entirely when the destination also branches there.
+    # Relocatable modules have no static address, so they take no part.
+    cross_ov_seeds = cross_overlay_call_targets(
+        [(stem, ovexe) for stem, _, _, _, ovexe, hi16 in ov_images if hi16 is None])
 
     # ---- pass 2: emit each overlay module.
     overlays = []   # (tag, NAME, base, end, sig32 bytes, Names, relocatable)
@@ -2651,9 +2704,11 @@ def main():
             # test; the game's explicit seeds vouch for it. Say so, so the override is auditable.
             print(f"[recomp] overlay {fn}: no jr-ra in image, but {len(explicit)} explicit seed(s) "
                   f"vouch for code — recompiling")
+        # Cross-overlay call targets are real function ENTRIES (a direct `jal` names them), not
+        # mid-function re-entry points, so they join `hard_ov` and stay out of `reentry`.
         hard_ov = (pointer_table_funcs(ovexe) | constructed_func_pointers(ovexe)
                    | code_pointer_tables(ovexe) | overlay_internal_jal_targets(ovexe)
-                   | explicit)
+                   | cross_ov_seeds.get(stem, set()) | explicit)
         soft_ov = func_entries_after_return(ovexe)   # jr-ra boundaries (mergeable if false)
         src_files += emit_module(ovexe, out_dir, N, hard_ov, None, None, shards=2,
                                  soft_seeds=soft_ov, reentry=explicit)
@@ -2687,6 +2742,99 @@ def overlay_internal_jal_targets(exe):
     return {ins.target for a in range(lo, hi, 4)
             for ins in (decode(a, exe.word(a)),)
             if ins.op == "jal" and lo <= ins.target < hi}
+
+
+def cross_overlay_call_targets(images):
+    """Direct-`jal` targets that leave one overlay image and land inside ANOTHER overlay's image.
+
+    `overlay_internal_jal_targets` only sees calls that stay inside one module, so an overlay that
+    calls a fixed entry in a DIFFERENT, co-resident overlay leaves that entry undiscovered in the
+    destination module. The destination is then emitted without it — and worse, when the destination
+    also *branches* to that address from a neighbouring body, `demote_internal_labels` proves it an
+    internal label and drops the callable entry outright. Its rule 1 ("control arrives with no return
+    address, so it cannot be a function") is sound only over the references it can see; a direct
+    `jal` from another module is exactly the counter-example, and it is direct evidence rather than
+    an inference. So these targets are returned as HARD seeds — they enter `keep` and survive
+    demotion, while the neighbouring body keeps using the same address through the ordinary
+    cross-function paths. Measured: Vagrant INITBTL `0x800FA4A0` calls BATTLE `0x800E6EAC`
+    (`jr ra` + delay slot — a null handler), which BATTLE's `0x800E6EB4` also branches to four times.
+
+    TWO IMAGES THAT OVERLAP CANNOT BOTH BE RESIDENT, and that is the whole difficulty: the overlays
+    live in a handful of fixed slots, so several images span any given address and only one of them
+    is the real destination. Vagrant's BATTLE and TITLE share base `0x80068800` and BOTH span
+    `0x800E6EAC`. Two filters decide it, and both are proofs rather than thresholds:
+
+      1. RANGE DISJOINTNESS. A call from A to an address inside B is only executable when A and B are
+         resident together, which requires their images not to overlap. This alone rejects every
+         same-slot sibling as a *source*, but not as a *destination* candidate.
+      2. THE DESTINATION MUST LOOK LIKE AN ENTRY THERE — `is_func_entry` (own prologue, or preceded
+         by `jr ra` + delay slot), plus the bare `jr ra` null handler, the same test
+         `area_indexed_overlay_tables` uses to reject a stale table slot. A slot sibling holds
+         DIFFERENT code at the same address, so it fails this test except by coincidence.
+
+    Measured on Vagrant, and run against both classes rather than reasoned about: of INITBTL's 26
+    cross-image call targets, 26/26 pass the entry test in BATTLE and 0/26 pass it in TITLE. In the
+    other direction BATTLE calls eight addresses in the `0x800F9800` slot that INITBTL spans, and
+    0/8 pass there — correctly, because those calls belong to MAINMENU/SCREFF2, the other images
+    that load into that slot and are not provisioned here.
+
+    A RELOCATABLE module (one with a reloc sidecar) has no static address at all — its live base is
+    chosen by the game's allocator — so it is neither a source nor a destination here; a caller
+    reaches it through the router's per-Core delta instead.
+
+    `images` is [(stem, PsxExe)] for the FIXED-BASE overlay images. Returns {stem: {addr, ...}}.
+    Resident MAIN is deliberately not a source: a MAIN->overlay absolute call has its own declared
+    mechanism (`overlay_seeds` in the game's seed file, plus `area_indexed_overlay_tables`), and
+    MAIN is never ambiguous about which image is resident.
+    """
+    out = {stem: set() for stem, _ in images}
+    if len(images) < 2:
+        return out
+
+    def overlaps(a, b):
+        return a.load < b.text_end and b.load < a.text_end
+
+    def callable_entry(ex, w):
+        # A word that is the DELAY SLOT of the preceding control instruction can never be a separate
+        # entry — that word executes as part of the branch's own flow (the same structurally
+        # impossible class overlay_funcs rejects for resident targets).
+        if w - 4 >= ex.load and decode(w - 4, ex.word(w - 4)).kind in (D.BRANCH, D.JUMP, D.JUMPR):
+            return False
+        return is_func_entry(ex, w) or ex.word(w) == 0x03E00008
+
+    sites = 0            # cross-image call sites seen
+    rejected_slot = 0    # destination candidate overlaps the source: they can never be co-resident
+    rejected_entry = 0   # destination candidate is co-resident but holds no callable entry there
+    for src_stem, sx in images:
+        for a in range(sx.load, sx.text_end, 4):
+            i = decode(a, sx.word(a))
+            if i.op != "jal" or i.target is None or sx.load <= i.target < sx.text_end:
+                continue
+            hit = False
+            for dst_stem, dx in images:
+                if dst_stem == src_stem or not (dx.load <= i.target < dx.text_end):
+                    continue
+                hit = True
+                if overlaps(sx, dx):
+                    rejected_slot += 1
+                elif callable_entry(dx, i.target):
+                    out[dst_stem].add(i.target)
+                else:
+                    rejected_entry += 1
+            sites += hit
+    # PRINTED WITH ITS DENOMINATORS, ALWAYS. "0 seeded" is the right answer for a game whose overlays
+    # never call each other, and it has to be distinguishable from "the scan never ran" and from "it
+    # ran and rejected everything".
+    seeded = sum(len(v) for v in out.values())
+    print(f"[overlays] cross-overlay call scan: {sites} call site(s) into another image -> "
+          f"{seeded} hard seed(s) in {sum(1 for v in out.values() if v)} destination module(s); "
+          f"rejected {rejected_slot} same-slot candidate(s) (never co-resident) and "
+          f"{rejected_entry} co-resident candidate(s) with no callable entry there"
+          + (" ["
+             + "; ".join(f"{stem}: " + " ".join(f"0x{x:08X}" for x in sorted(v))
+                         for stem, v in sorted(out.items()) if v)
+             + "]" if seeded else ""))
+    return out
 
 
 def area_indexed_overlay_tables(main_exe, area_exes, min_valid_frac=0.8):
