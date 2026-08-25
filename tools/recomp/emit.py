@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-25.7"   # cross-fragment completion covers recovered-switch arrivals
+RECOMP_VERSION = "2026-08-25.13"   # cross-fragment completion converges over the full partition
 
 R = lambda n: f"c->r[{n}]"
 
@@ -775,7 +775,14 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
         if i.kind == D.ALU_RRR and i.op in ("add", "addu") and i.rd == dst:
             add_a, srcs = a, (i.rs, i.rt)
             break
-        if (i.rd == dst or i.rt == dst) and i.op != "sll":
+        # Shifts of dst are part of the idiom itself (dst = shifted(index) + base), and CONSECUTIVE
+        # dispatcher blocks reuse the same register: walking back from one block's `jr` crosses the
+        # PREVIOUS block's own `srl/srlv dst` before reaching this block's add. Only `sll` was
+        # exempted when this walk was written; adding srl support to scale detection (below) without
+        # extending this exemption made every srl-masked chain unscannable — measured on Vagrant's
+        # resident libgte macro run, where all 11 corridor dispatchers returned None for exactly
+        # this reason. A genuine redefinition by anything else still disqualifies.
+        if (i.rd == dst or i.rt == dst) and i.op not in ("sll", "srl", "sllv", "srlv", "srav"):
             # dst rewritten by something that is not the base+index `add`. If that write is IMMEDIATE
             # construction (lui/addiu), this is the no-index form and the constants below are the
             # answer — bailing here made the scan blind to it, because the very instruction that
@@ -2448,7 +2455,7 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         ins_f = {x: decode(x, exe.word(x)) for x in range(a, hi_f, 4)}
         for jr, tgts in find_jump_tables(exe, ins_f, a, hi_f, validate=False).items():
             if tgts:
-                jt_sites[jr] = tgts
+                jt_sites[jr] = set(tgts)
             for t in tgts:
                 if not (a <= t < hi_f) and t not in fs_set and exe.load <= t < exe.text_end \
                         and decode(t, exe.word(t)).kind != D.UNKNOWN:
@@ -2456,39 +2463,84 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     if xb:
         funcs = sorted(set(funcs) | xb)
         print(f"[{N.wrap}] seeded {len(xb)} cross-boundary switch targets (else recomp-MISS via switch default)")
-    # CROSS-FRAGMENT DISPATCH COMPLETION (issue #23): a non-ra `jr` whose register holds a DEFINITE
-    # value only reachable by flowing THROUGH earlier fragments (Sony's GTE chains carry a dispatch
-    # base across jr-ra boundaries) recovers nowhere per-function. Walk the module's control graph
-    # — sequential + branch + recovered-switch-case edges — for the must-value at each such site,
-    # and seed every definite target as an entry so the runtime dispatch resolves. Additive-only:
-    # a site with no definite value keeps today's fail-fast, which names itself.
-    flow_report = []
-    flow_sites = unrecovered_jr_targets(exe, funcs, set(seeds), jt_sites, report=flow_report)
-    seeded_flow = {}
-    covered_static = 0
-    no_value = 0
-    for a, vals in sorted(flow_sites.items()):
-        good = {v for v in vals if not (v & 3) and exe.load <= v < exe.text_end
-                and decode(v, exe.word(v)).kind != D.UNKNOWN}
-        need = {v for v in good - set(jt_sites.get(a, ())) if v not in fs_set}
-        if need:
-            seeded_flow[a] = need
-        elif good:
-            covered_static += 1             # every flow value the switch or an entry already handles
-        else:
-            no_value += 1                   # nothing flowed here — the residual fail-fast class
-    if seeded_flow or no_value:
-        if seeded_flow:
-            funcs = sorted(set(funcs) | set().union(*seeded_flow.values()))
-        print(f"[{N.wrap}] cross-fragment dispatch: {len(flow_sites)} non-ra jr(s) analyzed "
-              f"over {flow_report[0] if flow_report else 0} state-pops -> "
-              f"{sum(len(v) for v in seeded_flow.values())} new dispatch target(s) at "
-              f"{len(seeded_flow)} site(s) ["
-              + " ".join(f"{a:08X}->" + ",".join(f"{v:08X}" for v in sorted(vs))
-                         for a, vs in sorted(seeded_flow.items())[:6])
-              + (f" (+{len(seeded_flow) - 6} more)" if len(seeded_flow) > 6 else "")
-              + f"]; {covered_static} fully covered statically; {no_value} with no flow value "
-                f"(left fail-fast)")
+    # CROSS-FRAGMENT DISPATCH COMPLETION (issue #23): Sony's hand-written GTE chains materialise a
+    # dispatch base in one block and consume it after a `jr ra` boundary, so per-function recovery
+    # cannot see either the dispatchers (their case families live in a NEIGHBOURING body — measured:
+    # jr t1 @0x800B1824 sits above entry 0x800B17F0 while its entire case family lies below it) or
+    # the runtime values (t9 = base+32 arrives from an earlier fragment's construction). Two pieces:
+    # (1) MODULE-WIDE dispatch discovery — the whole image as one span — supplies edges no per-span
+    # scan can; its targets are used ONLY as graph edges, never seeded wholesale (adding them as
+    # entries would re-split bodies whose switches already handle them statically).
+    # (2) The constant flow over those edges yields the runtime values each unrecovered/under-
+    # covered `jr` can receive; only THOSE become new entries. Additive-only: a value that is wrong
+    # is inert unless the guest jumps there — in which case executing it is what the guest does.
+    ins_full = {x: decode(x, exe.word(x)) for x in range(exe.load, exe.text_end, 4)}
+    gjt = {a: set(t) for a, t in
+           find_jump_tables(exe, ins_full, exe.load, exe.text_end, validate=False).items() if t}
+    import bisect as _b2
+    def _round_edges(cur_funcs):
+        """Span-recovered edges over the CURRENT entry set plus module-wide edges. Returns
+        (span_edges, merged): the span map is the ONLY map whose targets render as in-body switch
+        labels; module-wide targets belong to other fragments and can only be reached through the
+        router, which needs them seeded as entries."""
+        f2 = sorted(cur_funcs)
+        span = {}
+        out = {}
+        for a in f2:
+            k2 = _b2.bisect_right(f2, a)
+            hi_f = f2[k2] if k2 < len(f2) else exe.text_end
+            ins_f = {x: decode(x, exe.word(x)) for x in range(a, hi_f, 4)}
+            for jr, tgts in find_jump_tables(exe, ins_f, a, hi_f, validate=False).items():
+                if tgts:
+                    out[jr] = out.get(jr, set()) | set(tgts)
+                    span[jr] = span.get(jr, set()) | set(tgts)
+        for a, ts in gjt.items():
+            out[a] = out.get(a, set()) | ts
+        return span, out
+
+    def _uncovered(cur_funcs, cur_span):
+        """Every dispatch target reachable on this partition that is NOT dispatchable: neither an
+        entry nor an in-body switch label of its own site. Includes both runtime-flow values and
+        statically enumerated module-wide cases."""
+        span_out, merged = _round_edges(cur_funcs)
+        report = []
+        sites = unrecovered_jr_targets(exe, cur_funcs, set(seeds), merged, report=report)
+        need = set()
+        for a, vals in sites.items():
+            need |= {v for v in vals
+                     if not (v & 3) and exe.load <= v < exe.text_end
+                     and v not in cur_funcs and v not in cur_span.get(a, set())}
+        for a, ts in gjt.items():
+            need |= {v for v in ts
+                     if not (v & 3) and exe.load <= v < exe.text_end
+                     and decode(v, exe.word(v)).kind != D.UNKNOWN
+                     and v not in cur_funcs and v not in cur_span.get(a, set())}
+        return need, sites, merged, report
+
+    fs_set_orig = set(fs_set)
+    rounds = 0
+    flow_sites = {}
+    while rounds < 8:
+        span_jt, merged = _round_edges(funcs)
+        need, flow_sites, _, _ = _uncovered(funcs, span_jt)
+        newly = need - fs_set
+        rounds += 1
+        if not newly:
+            break
+        fs_set |= newly
+        funcs = sorted(set(funcs) | newly)
+    else:
+        print(f"[{N.wrap}] cross-fragment dispatch: WARNING round cap hit with targets still "
+              f"appearing — the partition has not converged")
+    total_added = len(fs_set) - len(fs_set_orig)
+    no_value = sum(1 for a, vals in flow_sites.items() if not vals)
+    if total_added or no_value:
+        added_sample = sorted(fs_set - fs_set_orig)
+        print(f"[{N.wrap}] cross-fragment dispatch: converged after {rounds} round(s), "
+              f"{len(gjt)} global edge site(s), {total_added} dispatch target(s) added as entries ["
+              + " ".join(f"0x{x:08X}" for x in added_sample[:8])
+              + (f" (+{total_added - 8} more)" if total_added > 8 else "")
+              + f"]; {no_value} non-ra jr(s) with no flow value (left fail-fast)")
     print(f"[{N.wrap}] functions: {len(seeds)} seeds -> {len(funcs)} recompiled after jal "
           f"discovery (a call to any non-recompiled address fails fast at runtime)")
     funcset = set(funcs)
