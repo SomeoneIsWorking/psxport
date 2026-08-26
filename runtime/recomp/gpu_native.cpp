@@ -2963,7 +2963,7 @@ static void shot_triggers(Core *core, uint32_t frame); // capture triggers (defi
 // gpu_present_ex: the per-frame present + bookkeeping. `do_blit` blits the live front buffer to the
 // window; fps60 passes 0 (it owns presentation: it blits the previous real frame + the interpolated
 // frame itself) but still wants the bookkeeping (watchdog, s_frame++, diagnostics).
-void GpuState::gpu_present_ex(Core *core, int do_blit) {
+void GpuState::gpu_present_ex(Core *core, int do_blit, GpuPresentCompletion completion) {
   // GUARD KEPT: a full 1024x512 VRAM sweep, not a log call. Once per frame, so the string_view
   // form's ~19 ns is irrelevant next to the 512k-pixel scan it gates.
   if (lucent::channel_on("vramscan")) {
@@ -3299,8 +3299,12 @@ void GpuState::gpu_present_ex(Core *core, int do_blit) {
                    s_fade_bigsemi);
     }
   }
-  frame_finalize(core);             // depth-table reset, batch reset, s_frame++ / s_prim_order / s_seen3d bookkeeping
-  watchdog_main_present_complete(); // completion, not entry: cold initialization retains cold-init grace
+  frame_finalize(core); // depth-table reset, batch reset, s_frame++ / s_prim_order / s_seen3d bookkeeping
+  if (completion == GpuPresentCompletion::MainFrame) {
+    watchdog_main_present_complete(); // first real main present ends cold-init grace
+  } else {
+    watchdog_progress(); // bootstrap/transition black is progress, not main-present readiness
+  }
 }
 // Per-frame render finalize: the "advance to the next frame" work that is INDEPENDENT of the window blit â€”
 // native per-vertex depth-table reset, geometry-batch reset, and the per-frame GpuState counters
@@ -3465,7 +3469,7 @@ static void shot_triggers(Core *core, uint32_t frame) {
   }
 }
 void GpuState::gpu_present(Core *core) {
-  gpu_present_ex(core, 1);
+  gpu_present_ex(core, 1, GpuPresentCompletion::MainFrame);
 }
 // FMV / SCEA-splash teardown (issues #7/#11): black out the DISPLAYED framebuffer region of s_vram and
 // present once, so no FMV last-frame or SCEA white-fill survives into the front-end. The resident
@@ -3497,9 +3501,9 @@ void GpuState::gpu_blank_display() { // zero the display FB rect (NO present) â€
     }
   }
 }
-void GpuState::gpu_clear_display(Core *core) {
+void GpuState::gpu_clear_display(Core *core, int do_blit) {
   gpu_blank_display();
-  gpu_present(core);
+  gpu_present_ex(core, do_blit, GpuPresentCompletion::Transition);
 }
 void GpuState::gpu_native_init() {
   if (lucent::channel_on("gpu") || cfg_on("PSXPORT_GPU_LOG")) {
@@ -3875,7 +3879,7 @@ void gpu_present(Core *core) {
   core->game->gpu.gpu_present(core);
 }
 void gpu_present_ex(Core *core, int do_blit) {
-  core->game->gpu.gpu_present_ex(core, do_blit);
+  core->game->gpu.gpu_present_ex(core, do_blit, GpuPresentCompletion::MainFrame);
 }
 // SBS per-core frame finalize: the readback grab renders + reads this core's frame but skips gpu_present,
 // so it must run the same per-frame reset/bookkeeping standalone's present does (else s_prim_order etc.

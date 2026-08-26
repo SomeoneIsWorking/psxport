@@ -16,6 +16,11 @@
 struct Core; // CPU/RAM handle (core.h); methods below take Core* but only by pointer
 struct Game; // back-pointer target (game.h); blit_src reaches gpu_vk via game->core
 
+enum class GpuPresentCompletion {
+  MainFrame,
+  Transition,
+};
+
 #define VRAM_W 1024
 #define VRAM_H 512
 
@@ -350,13 +355,13 @@ struct GpuState {
   void present_window();
   void gpu_repaint();
   void gpu_native_shot(Core *core, const char *path);
-  void gpu_present_ex(Core *core, int do_blit);
+  void gpu_present_ex(Core *core, int do_blit, GpuPresentCompletion completion);
   void gpu_present(Core *core);
   void frame_finalize(Core *core); // per-frame reset/bookkeeping (no window blit) — shared by
                                    // gpu_present_ex AND the SBS per-core grab (which skips present)
   uint16_t gpu_vram_peek(int x, int y);
-  void gpu_blank_display();           // zero the display FB rect (no present)
-  void gpu_clear_display(Core *core); // gpu_blank_display + present (FMV teardown)
+  void gpu_blank_display();                            // zero the display FB rect (no present)
+  void gpu_clear_display(Core *core, int do_blit = 1); // gpu_blank_display + present (FMV teardown)
   void gpu_vram_load(const uint16_t *src);
   void gpu_vram_save(uint16_t *dst);
   void gpu_provat_enable();
