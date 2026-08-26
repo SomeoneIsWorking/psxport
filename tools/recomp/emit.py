@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-25.13"   # cross-fragment completion converges over the full partition
+RECOMP_VERSION = "2026-08-26.14"   # shared-epilogue tail branches dispatch to $ra after the call
 
 R = lambda n: f"c->r[{n}]"
 
@@ -943,6 +943,10 @@ def collect_jt_targets(exe, funcs, text_end):
 # 3D content" look identical at runtime — so the BUILD says how many stores it found.
 g_pz_tapped = 0
 g_pz_skipped = 0
+# Shared-epilogue tail branches (ra_branch_continuations): counted per module and PRINTED, so "0
+# sites" is a measurement with a denominator rather than silence — the same discipline as the
+# native-depth taps above.
+g_ra_branch_conts = 0
 # A DELAY SLOT BELONGS TO ITS CONTROL INSTRUCTION, NOT TO AN ADDRESS RANGE. When the next function
 # entry starts ON the slot (the entry is a `jal` target in its own right, and the preceding function's
 # `jr ra` fills its slot with that first instruction), the slot falls outside the owning function's
@@ -1307,6 +1311,11 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
         if x in ins:
             all_targets |= {t for t in tgts if t in ins}
     labels = {t for t in all_targets if t in standalone}
+    # Shared-epilogue tail branches (ra_branch_continuations): decided AFTER `labels` exists, since
+    # an in-fragment target is a plain goto and never this idiom.
+    ra_branch_conts = ra_branch_continuations(exe, ins, lo, hi, labels)
+    global g_ra_branch_conts
+    g_ra_branch_conts += len(ra_branch_conts)
     # BACK-EDGE targets: a branch/jump whose target is at or below its own address closes a LOOP.
     #
     # These are where the deferred-work gate has to be re-tested. The gate is otherwise only at
@@ -1451,7 +1460,8 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
                 ds_c += f" rec_guest_instruction_ticks(c, {block_ticks + 2}u);"
                 block_ticks = 0
                 out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a), a in ra_tails,
-                                        a in ra_computed, intra_links.get(a), ra_conts))
+                                        a in ra_computed, intra_links.get(a), ra_conts,
+                                        a in ra_branch_conts))
                 if (a + 4) in ds_label_targets:        # the delay slot is also a branch target
                     out.append(f"  goto L_DSAFTER_{a:08X};")
                     out.append(f"L_{a + 4:08X}:; {delay_body} rec_guest_instruction_ticks(c, 1u);")
@@ -1769,8 +1779,37 @@ def ra_computed_jumps(exe, bounds, stats=None):
     return out
 
 
+def ra_branch_continuations(exe, ins, lo, hi, labels):
+    """Branch sites in [lo,hi) where `$ra` provably holds a link-time constant that is NOT this
+    branch's natural return address (addr+8) AND whose target lies OUTSIDE this fragment.
+
+    This is GCC's shared-epilogue tail idiom: `lui $ra,H; ori $ra,$ra,L` then an unconditional
+    branch to a helper. The callee returns via `jr $ra` — INTO THE EPILOGUE BLOCK at H|L, which is
+    a mid-function address of some OTHER fragment (Vagrant Story 0x800E6F9C: ra=0x800DB888, the
+    register-restore block). Rendering the branch as `call + return;` — the ordinary out-of-fragment
+    translation — therefore SKIPS that epilogue: callee-saved registers and `sp` are never restored,
+    and the first caller up the chain reads a clobbered $s0 (measured: Vagrant's BATTLE init
+    dereferenced garbage through `vs_battle_characterState`, issue #24).
+
+    For these sites the emitted call must be followed by dispatching to `$ra`. Conservative by
+    construction: only a PROVEN constant (`ra_const_base`) differing from the natural link qualifies;
+    anything unresolved keeps today's call+return.
+    """
+    out = set()
+    for a in range(lo, hi, 4):
+        i = ins.get(a)
+        if i is None or i.kind != D.BRANCH or i.op in ("bltzal", "bgezal"):
+            continue
+        if i.target in labels:
+            continue                       # in-fragment: goto, no call, idiom irrelevant
+        c = ra_const_base(exe, a, 31)
+        if c is not None and c != i.addr + 8 and not (lo <= c < hi):
+            out.add(a)
+    return out
+
+
 def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False, ra_computed=False,
-                 intra_link=None, ra_conts=()):
+                 intra_link=None, ra_conts=(), ra_branch_cont=False):
     """Lines for a control instruction `i` whose delay-slot C is `ds_c`. `jtargets` (if set) = the
     recovered jump-table case-label addresses for a computed `jr` -> emit a C switch on the target
     value (auto-dedupes repeated entries) so the jump stays inside this compiled body."""
@@ -1807,6 +1846,12 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False, ra_c
         cond = BRANCH_COND[i.op](i)
         if i.target in labels:
             tgt = f"goto L_{i.target:08X};"
+        elif ra_branch_cont:
+            # Shared-epilogue tail (see ra_branch_continuations): the callee returns to the address
+            # in $ra, not here — dispatch there instead of returning. A missing fragment for that
+            # address fail-fasts in the router NAMING it, which is the discoverable failure.
+            tgt = ("{ " + call_or_dispatch(i.target, funcset, N)
+                   + f" {N.router}(c, {link_space(R(31))}); return; }}")
         else:
             tgt = "{ " + call_or_dispatch(i.target, funcset, N) + " return; }"
         L.append(f"  {{ int _t = ({cond}); {ds_c} if (_t) {tgt} }}")
@@ -2683,10 +2728,12 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
           f"{len(by_cat.get('undecodable', ()))} undecodable [{_sample('undecodable', 4)}] "
           f"— the last two are trailing data walked as code")
     g_ds_borrowed = 0; g_ds_unemittable = []
-    global g_pz_tapped, g_pz_skipped
+    global g_pz_tapped, g_pz_skipped, g_ra_branch_conts
     print(f"[{N.wrap}] native-depth: {g_pz_tapped} mfc2->sw vertex store(s) tapped"
           + (f", {g_pz_skipped} skipped (store sits in a branch delay slot)" if g_pz_skipped else ""))
-    g_pz_tapped = 0; g_pz_skipped = 0
+    print(f"[{N.wrap}] shared-epilogue tails: {g_ra_branch_conts} branch(es) dispatch to $ra after the call"
+          if g_ra_branch_conts else f"[{N.wrap}] shared-epilogue tails: 0")
+    g_pz_tapped = 0; g_pz_skipped = 0; g_ra_branch_conts = 0
     # The source TUs this module wrote (basenames) — collected into generated/rec_sources.cmake so
     # the build links exactly what was emitted (overlay count is dynamic).
     return [f"{N.disp}.c"] + [f"{N.shardpfx}_{s}.c" for s in range(shards)]
