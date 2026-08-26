@@ -24,8 +24,10 @@
 #include "config_vars.h"
 #include "mod_row_model.h"
 #include "mods.h"
+#include "render_capabilities.h"
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -237,6 +239,30 @@ static void test_unknown_id_reports_rather_than_pretending(void) {
   CHECK_STREQ(text_of(m, RowKind::Adjust, "ssao_strength").c_str(), "1.00");
 }
 
+static void test_temporal_capability_controls_row_mutation_and_persistence(void) {
+  Mods unsupported;
+  unsupported.init(RenderCapabilities::widescreenOnly());
+  CHECK(!unsupported.temporalInterpolationSupported());
+  CHECK(!ModRowModel::available(unsupported, RowKind::Toggle, "fps60"));
+  CHECK(ModRowModel::available(unsupported, RowKind::Toggle, "aspect"));
+  ModRowModel::toggle(unsupported, "fps60");
+  CHECK_EQ(unsupported.fps60, 0);
+
+  // Saving another setting rewrites the file without an unsupported fps60 key. A stale preference
+  // therefore cannot look like an option this title still owns.
+  ModRowModel::toggle(unsupported, "aspect");
+  std::ifstream saved(psx::config::cv_settings_path.get());
+  const std::string text((std::istreambuf_iterator<char>(saved)), std::istreambuf_iterator<char>());
+  CHECK(text.find("fps60=") == std::string::npos);
+
+  Mods capable;
+  capable.init(RenderCapabilities::interpolatedNative());
+  CHECK(capable.temporalInterpolationSupported());
+  CHECK(ModRowModel::available(capable, RowKind::Toggle, "fps60"));
+  ModRowModel::toggle(capable, "fps60");
+  CHECK_EQ(capable.fps60, 1);
+}
+
 int main(void) {
   // Redirect the settings file the persisting rows write, so this test cannot clobber a real one.
   // Setting the Override layer directly is the hermetic form — no environment, no process state.
@@ -251,6 +277,7 @@ int main(void) {
   RUN(toggle_cycles_and_wraps);
   RUN(adjust_clamps_at_both_ends);
   RUN(unknown_id_reports_rather_than_pretending);
+  RUN(temporal_capability_controls_row_mutation_and_persistence);
 
   std::error_code ec;
   std::filesystem::remove(kSettings, ec); // best-effort; the rows above may never have saved

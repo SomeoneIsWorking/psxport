@@ -53,6 +53,10 @@ static int g_failed = 0;
 
 class SmokeRuntime final : public GameRuntime {
 public:
+  RenderCapabilities renderCapabilities() const override {
+    return RenderCapabilities::direct();
+  }
+
   bool guestVramIsPicture(const Game &) const override {
     return false;
   }

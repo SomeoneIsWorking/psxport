@@ -33,7 +33,7 @@ Game::Game() {
   if (!GpuDevice::sInstance) {
     GpuDevice::sInstance = &gpu_dev;
   }
-  mods.init();
+  mods.init(runtime ? runtime->renderCapabilities() : RenderCapabilities::direct());
   disc_state_init(&disc);
   cdc_state_init(&cdc);
   timing.bindCdcClock(&cdc);

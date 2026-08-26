@@ -34,6 +34,12 @@ class RowBinding {
 public:
   virtual ~RowBinding() = default;
 
+  // False removes the authored row from both layout and navigation. This is a declared capability
+  // absence, distinct from a null/unknown binding, which remains visible and is reported as inert.
+  virtual bool available() const {
+    return true;
+  }
+
   // Current display text. `false` means "leave the authored placeholder alone" — an action row
   // has no state to show, and its `<value>` in menu.rml is a glyph the document chose.
   virtual bool text(std::string &out) const {

@@ -576,15 +576,24 @@ static void dbg_exec(FILE *out, const char *line) {
                 render_path_name(s_ctx->rsub.mode.path()));
       } else {
         if (!named) {
-          p = render_path_next(p); // bare form CYCLES — same order as RmlUi and the REPL
+          p = render_path_next_supported(p, g->runtime->renderCapabilities(), RenderPathAudience::Diagnostic);
         }
-        s_ctx->rsub.mode.setPath(p);
-        psx::config::cv_render_path.set(psx::config::Layer::Runtime,
-                                        render_path_name(p)); // `cvars` reports the LIVE value
-        fprintf(out,
-                "render path = %s (enhancements %s)\n",
-                render_path_name(p),
-                s_ctx->rsub.mode.enhancementsAllowed() ? "ALLOWED" : "locked out — guest render stays pure");
+        const RenderPathSelectionResult selection = render_path_apply(*g, p, RenderPathAudience::Diagnostic);
+        if (selection == RenderPathSelectionResult::Unsupported) {
+          fprintf(out,
+                  "renderpath '%s' REFUSED: this title does not support it (unchanged: %s)\n",
+                  render_path_name(p),
+                  render_path_name(s_ctx->rsub.mode.path()));
+        } else if (selection == RenderPathSelectionResult::ReferenceLocked) {
+          fprintf(out,
+                  "renderpath REFUSED: this Game is a reference leg (unchanged: %s)\n",
+                  render_path_name(s_ctx->rsub.mode.path()));
+        } else {
+          fprintf(out,
+                  "render path = %s (enhancements %s)\n",
+                  render_path_name(p),
+                  s_ctx->rsub.mode.enhancementsAllowed() ? "ALLOWED" : "locked out — guest render stays pure");
+        }
       }
     }
   } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {

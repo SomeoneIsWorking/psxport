@@ -2,7 +2,7 @@
 #ifndef PSXPORT_UI_RENDER_PATH_CONTROL_H
 #define PSXPORT_UI_RENDER_PATH_CONTROL_H
 
-#include "render_mode.h"
+#include "render_capabilities.h"
 
 #include <string>
 
@@ -13,12 +13,13 @@ namespace psx::ui {
 // The player menu deliberately excludes RenderPath::Psx. That software-rasterized path is retained
 // for oracle and diagnostic runs, but it is not a supported live gameplay renderer. If a diagnostic
 // run opens the menu while already on it, the next activation returns to the shipping renderer.
-RenderPath player_render_path_next(RenderPath current);
+RenderPath player_render_path_next(RenderPath current, const RenderCapabilities &capabilities);
 
 class RenderPathControl {
 public:
   explicit RenderPathControl(Game *game) : mGame(game) {}
 
+  bool available() const;
   std::string currentLabel() const;
   void cycle();
 

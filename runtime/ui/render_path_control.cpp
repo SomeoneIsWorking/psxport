@@ -1,14 +1,18 @@
 #include "render_path_control.h"
 
-#include "config_vars.h"
 #include "game.h"
+#include "game_runtime.h"
 
 #include <lucent/log.h>
 
 namespace psx::ui {
 
-RenderPath player_render_path_next(RenderPath current) {
-  return current == RenderPath::Native ? RenderPath::Gte : RenderPath::Native;
+RenderPath player_render_path_next(RenderPath current, const RenderCapabilities &capabilities) {
+  return render_path_next_supported(current, capabilities, RenderPathAudience::Player);
+}
+
+bool RenderPathControl::available() const {
+  return mGame && mGame->runtime && mGame->runtime->renderCapabilities().playerPathCount() > 1;
 }
 
 std::string RenderPathControl::currentLabel() const {
@@ -27,21 +31,27 @@ std::string RenderPathControl::currentLabel() const {
 }
 
 void RenderPathControl::cycle() {
-  if (!mGame) {
+  if (!mGame || !mGame->runtime) {
     return;
   }
-  if (mGame->oracle || mGame->sbs) {
+
+  Core &core = mGame->core;
+  const RenderCapabilities capabilities = mGame->runtime->renderCapabilities();
+  const RenderPath next = player_render_path_next(core.rsub.mode.path(), capabilities);
+  const RenderPathSelectionResult result = render_path_apply(*mGame, next, RenderPathAudience::Player);
+  if (result == RenderPathSelectionResult::ReferenceLocked) {
     lucent::warn("render",
                  "RmlUi renderer change REFUSED: this run is {} and exists to be the reference — "
                  "changing the renderer mid-run would invalidate it",
                  mGame->oracle ? "ORACLE" : "an SBS compare");
     return;
   }
-
-  Core &core = mGame->core;
-  const RenderPath next = player_render_path_next(core.rsub.mode.path());
-  core.rsub.mode.setPath(next);
-  psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(next));
+  if (result == RenderPathSelectionResult::Unsupported) {
+    lucent::warn("render",
+                 "RmlUi renderer change REFUSED: this title does not expose render path '{}' to players",
+                 render_path_name(next));
+    return;
+  }
   lucent::info("render",
                "RmlUi -> render path = {} — PC enhancements {}",
                render_path_name(next),

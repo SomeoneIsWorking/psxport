@@ -36,6 +36,10 @@ namespace {
 
 class ArmRuntime final : public GameRuntime {
 public:
+  RenderCapabilities renderCapabilities() const override {
+    return RenderCapabilities::direct();
+  }
+
   const GuestProgramImage *guestProgramImage() const override {
     return &programImage;
   }

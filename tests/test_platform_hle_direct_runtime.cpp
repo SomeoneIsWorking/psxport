@@ -44,6 +44,10 @@ void recorded_handler(Core *) {
 
 class SilentRuntime : public GameRuntime {
 public:
+  RenderCapabilities renderCapabilities() const override {
+    return RenderCapabilities::direct();
+  }
+
   const GuestProgramImage *guestProgramImage() const override {
     return &image_;
   }

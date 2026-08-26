@@ -121,7 +121,7 @@ bool enh_named(const char *name);
 // PSXPORT_RENDER_PATH — the render path: native | gte | psx (docs/plans/render-path-tristate.md).
 // Read it through render_path() below, never by parsing the text at a call site.
 extern TextVar cv_render_path;
-RenderPath render_path();
+RenderPath render_path(RenderPath fallback = RenderPath::Native);
 
 // ── the graphics-producer DB ────────────────────────────────────────────────────────────────────
 // PSXPORT_PRODUCERS_DIR — where the per-run producer-census JSONL and the accumulated claim set are

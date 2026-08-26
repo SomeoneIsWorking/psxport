@@ -14,6 +14,9 @@ namespace {
 class ModToggleBinding final : public RowBinding {
 public:
   ModToggleBinding(Mods *mods, std::string id) : mMods(mods), mId(std::move(id)) {}
+  bool available() const override {
+    return mMods && ModRowModel::available(*mMods, RowKind::Toggle, mId);
+  }
   bool text(std::string &out) const override {
     return mMods && ModRowModel::value_text(*mMods, RowKind::Toggle, mId, out);
   }
@@ -74,6 +77,9 @@ private:
 class RenderPathBinding final : public RowBinding {
 public:
   explicit RenderPathBinding(RenderPathControl *render_path) : mRenderPath(render_path) {}
+  bool available() const override {
+    return mRenderPath && mRenderPath->available();
+  }
   bool text(std::string &out) const override {
     if (!mRenderPath) {
       return false;

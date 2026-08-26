@@ -22,6 +22,24 @@ This follows Dusklight's ownership shape: the game-clock/presentation boundary i
 interpolation is composed only on the path that needs previous/current temporal state. It copies the
 separation, not Dusklight's platform-specific names or implementation.
 
+## Title-declared presentation capabilities
+
+Every `GameRuntime` returns a `RenderCapabilities` profile. This is the single title-owned answer for
+whether Native producers exist, whether temporal interpolation exists, which render path ships by
+default, and which paths a player may select. Direct runtimes must answer explicitly; the legacy
+adapter explicitly preserves Native plus temporal interpolation while its consumers migrate.
+
+An already-60fps widescreen-only runtime returns `RenderCapabilities::widescreenOnly()`: GTE is the
+shipping/player path, PSX remains a diagnostic path, and Native plus temporal interpolation are
+unsupported. `render_path_install`, RmlUi, REPL, and the debug server all consult this same policy.
+An unsupported launch request resolves to the declared default and the live CVar reports that
+effective path rather than the rejected request.
+
+`Mods` consumes the temporal declaration before loading settings. Unsupported titles refuse an
+enabled saved/environment fps60 request, keep the live field off, omit `fps60=` on the next save, and
+publish no fps60 row binding. `MenuPane` removes unavailable bindings from both layout and navigation.
+This is capability absence, not a disabled implementation and not a game-owned menu fork.
+
 ## Title-owned guest widescreen
 
 The broad `RenderMode::enhancementsAllowed()` gate remains Native-only. Guest widescreen does not
@@ -57,7 +75,8 @@ title geometry refuses instead of inventing a plausible default.
 An already-60fps direct runtime should:
 
 1. derive `GameRuntime`, not use the legacy compatibility bags;
-2. leave `createTemporalFramePresentation` at its null default;
+2. return `RenderCapabilities::widescreenOnly()` and leave
+   `createTemporalFramePresentation` at its null default;
 3. implement and return a title-owned `GuestWidescreenProjection` only after locating the real guest
    projection/culling owners;
 4. latch positive projection and draw geometry at that publication boundary, then apply the returned

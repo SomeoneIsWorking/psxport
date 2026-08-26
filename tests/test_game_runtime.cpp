@@ -1,6 +1,9 @@
+#include "config_vars.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "guest_program_image.h"
+#include "menu_row.h"
+#include "render_path_control.h"
 #include "testutil.h"
 
 #include <memory>
@@ -39,6 +42,10 @@ public:
 
 class TestRuntime final : public GameRuntime {
 public:
+  RenderCapabilities renderCapabilities() const override {
+    return capabilities;
+  }
+
   const GuestProgramImage *guestProgramImage() const override {
     return &programImage;
   }
@@ -101,6 +108,7 @@ public:
   bool factoriesSawWiredGame = true;
   bool guestVramPicture = false;
   const Game *pictureGame = nullptr;
+  RenderCapabilities capabilities = RenderCapabilities::direct();
 };
 
 class MigratingRuntime final : public LegacyGameRuntimeAdapter {
@@ -259,6 +267,91 @@ void test_only_legacy_adapter_installs_the_temporal_compatibility_decorator() {
   CHECK(game->temporalPresentation != nullptr);
 }
 
+void test_runtime_capabilities_are_explicit_and_preserve_legacy_temporal_titles() {
+  TestRuntime direct;
+  const RenderCapabilities directCapabilities = direct.renderCapabilities();
+  CHECK(directCapabilities.supports(RenderPath::Native));
+  CHECK(!directCapabilities.temporalInterpolation);
+
+  static const GameConfig config{};
+  static GameHooks hooks{};
+  LegacyGameRuntimeAdapter legacy(config, hooks);
+  const RenderCapabilities legacyCapabilities = legacy.renderCapabilities();
+  CHECK(legacyCapabilities.supports(RenderPath::Native));
+  CHECK(legacyCapabilities.temporalInterpolation);
+
+  const RenderCapabilities widescreenOnly = RenderCapabilities::widescreenOnly();
+  CHECK(!widescreenOnly.supports(RenderPath::Native));
+  CHECK(!widescreenOnly.temporalInterpolation);
+}
+
+void test_live_render_path_validator_separates_player_diagnostic_and_reference_use() {
+  TestRuntime runtime;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+
+  CHECK(render_path_apply(*game, RenderPath::Gte, RenderPathAudience::Player) == RenderPathSelectionResult::Applied);
+  CHECK(game->core.rsub.mode.path() == RenderPath::Gte);
+  CHECK(render_path_apply(*game, RenderPath::Psx, RenderPathAudience::Player) ==
+        RenderPathSelectionResult::Unsupported);
+  CHECK(game->core.rsub.mode.path() == RenderPath::Gte);
+  CHECK(render_path_apply(*game, RenderPath::Psx, RenderPathAudience::Diagnostic) ==
+        RenderPathSelectionResult::Applied);
+  CHECK(game->core.rsub.mode.path() == RenderPath::Psx);
+
+  game->oracle = 1;
+  CHECK(render_path_apply(*game, RenderPath::Native, RenderPathAudience::Diagnostic) ==
+        RenderPathSelectionResult::ReferenceLocked);
+  CHECK(game->core.rsub.mode.path() == RenderPath::Psx);
+}
+
+void test_widescreen_only_runtime_refuses_native_through_shipping_validator() {
+  TestRuntime runtime;
+  runtime.capabilities = RenderCapabilities::widescreenOnly();
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+  game->core.rsub.mode.setPath(RenderPath::Gte);
+
+  CHECK(render_path_apply(*game, RenderPath::Native, RenderPathAudience::Diagnostic) ==
+        RenderPathSelectionResult::Unsupported);
+  CHECK(game->core.rsub.mode.path() == RenderPath::Gte);
+  CHECK(render_path_apply(*game, RenderPath::Psx, RenderPathAudience::Diagnostic) ==
+        RenderPathSelectionResult::Applied);
+}
+
+void test_startup_rewrites_unsupported_native_config_to_effective_gte_path() {
+  TestRuntime runtime;
+  runtime.capabilities = RenderCapabilities::widescreenOnly();
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+  psx::config::cv_render_path.set(psx::config::Layer::Runtime, "native");
+
+  render_path_install(&game->core);
+
+  CHECK(game->core.rsub.mode.path() == RenderPath::Gte);
+  CHECK_STREQ(psx::config::cv_render_path.get().c_str(), "gte");
+  CHECK(psx::config::cv_render_path.layer() == psx::config::Layer::Runtime);
+}
+
+void test_capability_absence_removes_player_bindings_while_capable_titles_retain_them() {
+  TestRuntime unsupportedRuntime;
+  unsupportedRuntime.capabilities = RenderCapabilities::widescreenOnly();
+  psxport_install_game(unsupportedRuntime);
+  auto unsupportedGame = std::make_unique<Game>();
+  psx::ui::RenderPathControl unsupportedControl(unsupportedGame.get());
+  CHECK(!psx::ui::make_render_path_binding(&unsupportedControl)->available());
+  CHECK(!psx::ui::make_mod_toggle_binding(&unsupportedGame->mods, "fps60")->available());
+
+  static const GameConfig config{};
+  static GameHooks hooks{};
+  LegacyGameRuntimeAdapter capableRuntime(config, hooks);
+  psxport_install_game(capableRuntime);
+  auto capableGame = std::make_unique<Game>();
+  psx::ui::RenderPathControl capableControl(capableGame.get());
+  CHECK(psx::ui::make_render_path_binding(&capableControl)->available());
+  CHECK(psx::ui::make_mod_toggle_binding(&capableGame->mods, "fps60")->available());
+}
+
 void test_guest_vram_picture_policy_is_runtime_owned_and_dynamic() {
   TestRuntime runtime;
   psxport_install_game(runtime);
@@ -308,6 +401,11 @@ int main() {
   RUN(legacy_adapter_supports_incremental_inheritance);
   RUN(game_owns_runtime_products_and_context);
   RUN(only_legacy_adapter_installs_the_temporal_compatibility_decorator);
+  RUN(runtime_capabilities_are_explicit_and_preserve_legacy_temporal_titles);
+  RUN(live_render_path_validator_separates_player_diagnostic_and_reference_use);
+  RUN(widescreen_only_runtime_refuses_native_through_shipping_validator);
+  RUN(startup_rewrites_unsupported_native_config_to_effective_gte_path);
+  RUN(capability_absence_removes_player_bindings_while_capable_titles_retain_them);
   RUN(guest_vram_picture_policy_is_runtime_owned_and_dynamic);
   RUN(guest_vram_picture_policy_is_per_game);
   RUN(legacy_adapter_projects_static_backdrop_policy_only_for_migration);

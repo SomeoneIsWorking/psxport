@@ -61,7 +61,8 @@ Every subfolder is on the include path, so `#include "foo.h"` resolves regardles
 One file pair per component on `psx::ui::Component`, modelled on Dusklight's `src/dusk/ui/` (CC0):
 `ui_event` (scoped listeners), `ui_component` (the base + the ONE data->DOM text boundary),
 `ui_assets` (asset resolution that refuses to report success), `mod_row_model` (what a row means),
-`warp_control`, `render_path_control` (Native/PC ↔ GTE/PC player cycle; PSX stays diagnostic-only),
+`warp_control`, `render_path_control` (the title-capability-filtered player cycle; PSX stays
+diagnostic-only),
 `menu_row`, `menu_pane`, `menu_tab_bar`, `menu_readouts`,
 `menu_document`.
 `runtime/recomp/rmlui_overlay.{h,cpp}` keeps RmlUi's LIFETIME only and knows no elements.
@@ -71,7 +72,9 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 
 ## `runtime/recomp/` — the PSX→PC PLATFORM (common; future `psxport` submodule)
 **Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (bus dispatch + watchpoints PSXPORT_WWATCH/CW),
-`game_runtime.{h,cpp}` + `guest_program_image.h` + `game_iface.{h,cpp}` (derived `GameRuntime` install,
+`game_runtime.{h,cpp}` + `render_capabilities.h` + `guest_program_image.h` + `game_iface.{h,cpp}`
+(derived `GameRuntime` install, one required title declaration for Native/temporal availability,
+shared startup/live-selection policy,
 the immutable executable-image fact owner, per-Game driver/scheduler and optional temporal-presentation
 factories, and the bounded legacy projection), `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and
 callback bags kept source-compatible while consumers migrate), `core.h`/`game.h` (the `Core`/`Game` objects;
@@ -150,8 +153,9 @@ run-end report distinguishes satisfied, failed, and unexercised rather than warn
 diagnostics, explicit field pacing, and ledger reconciliation. Its `commitUnpresented` entry rotates the
 same fence, ledger, and capture state for the diff-mode field path without emitting, presenting, pacing,
 or recording a diagnostic; the injected-backend test proves both that path and the next visible commit.
-`Fps60` is an optional temporal decorator, not the frame-lifecycle owner; direct runtimes neither
-instantiate nor link it. `fps60_gpu_present.{h,cpp}` owns the intermediate-pass renderer reset and is
+`Fps60` is an optional temporal decorator, not the frame-lifecycle owner. Direct runtimes declare
+their presentation products through `RenderCapabilities`; unsupported fps60 requests and UI bindings
+are refused before reaching the decorator. `fps60_gpu_present.{h,cpp}` owns the intermediate-pass renderer reset and is
 referenced only by `fps60.cpp`; the neutral presenter has no temporal renderer operation.
 `guest_widescreen_projection.h`
 owns the typed, frame-latched title projection/presentation plan; the GTE-only positive contract remains

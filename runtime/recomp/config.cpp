@@ -536,15 +536,16 @@ TextVar cv_render_path("PSXPORT_RENDER_PATH",
 // render_path() — the resolved path, with a NAMED refusal rather than a silent default. A value that
 // parses to nothing is a knob that did nothing, and the CVar audit's whole purpose is that such a knob
 // says so out loud (docs/config.md).
-RenderPath render_path() {
+RenderPath render_path(RenderPath fallback) {
   const std::string &s = cv_render_path.get();
-  RenderPath p = RenderPath::Native;
+  RenderPath p = fallback;
   if (!render_path_parse(s.c_str(), &p)) {
     lucent::warn("cfg",
-                 "PSXPORT_RENDER_PATH='{}' matched NO render path — falling back to 'native'. "
+                 "PSXPORT_RENDER_PATH='{}' matched NO render path — falling back to '{}'. "
                  "Valid: native | gte | psx.",
-                 s);
-    return RenderPath::Native;
+                 s,
+                 render_path_name(fallback));
+    return fallback;
   }
   return p;
 }

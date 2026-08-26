@@ -240,6 +240,12 @@ the F1 overlay + `psxport_settings.ini` (`runtime/recomp/mods.c`), not env. Diag
 `debug <chan>` command (below), not env. `cfg_*` remains only for genuine launch config (disc path,
 window/headless run mode).
 
+The framework inventory is broader than any one title. `GameRuntime::renderCapabilities()` filters
+the render-path and temporal options at the consuming title boundary. An unsupported Native request
+is named and resolves to the title's declared path; an unsupported saved/environment fps60 request is
+named, remains off, and is omitted when settings are next saved. The F1 menu removes both unsupported
+rows from layout and navigation rather than displaying controls that cannot affect the product.
+
 ### `PSXPORT_ASSET_DIR` (framework disk assets, `cfg_str`)
 The RmlUi debug/mod overlay disk-loads its fonts + `menu.rml` from `<PSXPORT_ASSET_DIR>/assets/rml/`
 (the SPIR-V shaders are embedded, but these are not). Default (unset) = cwd-relative `assets/rml/…`,

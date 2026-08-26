@@ -55,6 +55,10 @@ const GuestProgramImage *LegacyGameRuntimeAdapter::guestProgramImage() const {
   return &guestProgramImage_;
 }
 
+RenderCapabilities LegacyGameRuntimeAdapter::renderCapabilities() const {
+  return RenderCapabilities::interpolatedNative();
+}
+
 bool LegacyGameRuntimeAdapter::guestVramIsPicture(const Game &) const {
   const GameConfig *config = legacyConfigForMigration();
   return config && config->preserveVramBackdrop != 0;

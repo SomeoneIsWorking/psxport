@@ -17,7 +17,7 @@ decisions.
     runtime/ui/ui_assets.{h,cpp}           asset resolution that refuses to report success
     runtime/ui/mod_row_model.{h,cpp}       what a row MEANS (the Mods toggle/adjust tables)
     runtime/ui/warp_control.{h,cpp}        the Debug tab's dev area warp
-    runtime/ui/render_path_control.{h,cpp} the Display tab's two supported player renderers;
+    runtime/ui/render_path_control.{h,cpp} the Display tab's title-capability-filtered player paths;
                                            the PSX software path stays diagnostic-only
     runtime/ui/menu_row.{h,cpp}            one <select-button> + its binding
     runtime/ui/menu_pane.{h,cpp}           one tab's page of rows
@@ -115,6 +115,12 @@ a driving surface — host UI state only, no guest state, like `press`/`tap`:
 `menu dump` is the instrument that answers "did a change lose a row?" by measuring instead of by
 counting two files by hand. It prints its counts first, so the enumeration always arrives with its
 denominator.
+
+An authored row is content, but it is not proof that a title implements the feature. Bindings ask
+the title's `RenderCapabilities`/`Mods` policy whether they are available. `MenuPane` removes an
+unavailable binding from layout and navigation; it does not leave a disabled or inert row. Unknown
+authored ids remain visible and loudly inert because those are document defects, not capability
+absences.
 
 ## Rules for adding to the menu
 

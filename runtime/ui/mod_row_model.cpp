@@ -243,6 +243,10 @@ bool ModRowModel::knows(RowKind kind, std::string_view id) {
   return false;
 }
 
+bool ModRowModel::available(const Mods &m, RowKind kind, std::string_view id) {
+  return kind != RowKind::Toggle || id != "fps60" || m.temporalInterpolationSupported();
+}
+
 bool ModRowModel::value_text(const Mods &m, RowKind kind, std::string_view id, std::string &out) {
   // The tables' accessors take a non-const Mods& because they are shared with the mutating paths;
   // reading through them here is const in effect, and casting once at the single read site is
@@ -272,6 +276,9 @@ bool ModRowModel::value_text(const Mods &m, RowKind kind, std::string_view id, s
 }
 
 void ModRowModel::toggle(Mods &m, std::string_view id) {
+  if (!available(m, RowKind::Toggle, id)) {
+    return;
+  }
   const ToggleRow *r = find_toggle(id);
   if (!r) {
     return;

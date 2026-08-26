@@ -14,13 +14,36 @@
 #include "config_vars.h" // psx::config::render_path() — the CVar ladder
 #include "core.h"
 #include "game.h"
+#include "game_runtime.h"
+#include "render_capabilities.h"
 #include "render_substrate.h"
 #include <lucent/log.h>
 #include <stdlib.h>
 
+RenderPathSelectionResult render_path_apply(Game &game, RenderPath requested, RenderPathAudience audience) {
+  if (game.oracle || game.sbs) {
+    return RenderPathSelectionResult::ReferenceLocked;
+  }
+  if (!game.runtime) {
+    return RenderPathSelectionResult::Unsupported;
+  }
+
+  const RenderCapabilities capabilities = game.runtime->renderCapabilities();
+  const bool supported = audience == RenderPathAudience::Player ? capabilities.playerSelectable(requested)
+                                                                : capabilities.supports(requested);
+  if (!supported) {
+    return RenderPathSelectionResult::Unsupported;
+  }
+
+  game.core.rsub.mode.setPath(requested);
+  psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(requested));
+  return RenderPathSelectionResult::Applied;
+}
+
 void render_path_install(Core *c) {
+  const RenderCapabilities capabilities = c->runtime->renderCapabilities();
   // 1. The CVar: Default < Value (settings file) < Override (PSXPORT_RENDER_PATH) < Runtime (REPL).
-  RenderPath p = psx::config::render_path();
+  RenderPath p = psx::config::render_path(capabilities.defaultPath);
 
   // 2. PSXPORT_RENDER_PSX — COMPATIBILITY ALIAS, and it does NOT mean what it used to. It selected the
   //    guest's geometry with the PC enhancements STILL LIVE; that configuration is exactly what
@@ -44,6 +67,21 @@ void render_path_install(Core *c) {
   //    asked for the reference must get the reference, not whatever the settings file had persisted.
   if (oracle_mode()) {
     p = RenderPath::Gte;
+  }
+
+  const RenderPath requested = p;
+  p = render_path_resolve(requested, capabilities);
+  if (p != requested) {
+    lucent::warn("render",
+                 "render path '{}' is UNSUPPORTED by this title — using its declared '{}' path. "
+                 "Supported: {}gte | psx.",
+                 render_path_name(requested),
+                 render_path_name(p),
+                 capabilities.nativeRenderPath ? "native | " : "");
+    // Reflect the effective answer at the highest live layer. Otherwise `cvars` would keep reporting
+    // the unsupported persisted/environment request even though the running Core uses the title's
+    // declared path, which is the same misleading half-application this capability boundary removes.
+    psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(p));
   }
 
   c->rsub.mode.setPath(p);

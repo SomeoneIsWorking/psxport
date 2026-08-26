@@ -13,6 +13,8 @@ enum { ASPECT_4_3 = 0, ASPECT_16_9 = 1, ASPECT_21_9 = 2, ASPECT_AUTO = 3 };
 // How overlapping world faces are ordered — see Mods::face_order.
 enum { FACE_ORDER_DEPTH = 0, FACE_ORDER_AUTHORED = 1 };
 
+struct RenderCapabilities;
+
 class Mods {
 public:
   int ui = 0;      // overlay system enabled (always on): keeps the deferred SSAO/light infra built
@@ -50,9 +52,12 @@ public:
   int debug_quads = 0;          // DEBUG: box+label BILLBOARD objects (2D sprites at 3D positions). Not persisted.
   int debug_objects = 0;        // DEBUG: box+label 3D-MESH objects. Not persisted.
 
-  void init();       // factory defaults + settings-file load (idempotent)
-  void save() const; // persist the live settings (called by the overlay on change)
-  void load();       // load the settings file over the current values, if it exists
+  void init(const RenderCapabilities &capabilities); // title capabilities + settings-file load (idempotent)
+  void save() const;                                 // persist the live settings (called by the overlay on change)
+  void load();                                       // load the settings file over the current values, if it exists
+  bool temporalInterpolationSupported() const {
+    return mTemporalInterpolationSupported;
+  }
   // Force the PSX-neutral state (4:3, 1x, every enhancement off). Used by Game::setOracle (the pure
   // PSX reference must not be touched by any enhancement) and by the SBS harness on BOTH cores (a
   // guest-poking enhancement — e.g. the widescreen cull re-include — on one core would break the
@@ -68,4 +73,5 @@ public:
 
 private:
   bool mInited = false;
+  bool mTemporalInterpolationSupported = false;
 };

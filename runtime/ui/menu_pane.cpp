@@ -9,7 +9,12 @@ MenuPane::MenuPane(Rml::Element *root, RowBuilder &builder) : Component(root) {
   Rml::ElementList rows;
   mRoot->GetElementsByTagName(rows, "select-button");
   for (Rml::Element *r : rows) {
-    MenuRow &row = adopt<MenuRow>(r, builder.bind_row(r), [&builder](MenuRow &clicked) {
+    std::unique_ptr<RowBinding> binding = builder.bind_row(r);
+    if (binding && !binding->available()) {
+      r->SetProperty("display", "none");
+      continue;
+    }
+    MenuRow &row = adopt<MenuRow>(r, std::move(binding), [&builder](MenuRow &clicked) {
       builder.on_row_clicked(clicked);
     });
     mRows.push_back(&row);

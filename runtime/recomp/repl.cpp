@@ -492,11 +492,22 @@ long Repl::read(Core *c, uint32_t f) {
           continue;
         }
       } else {
-        p = render_path_next(p); // bare form CYCLES — same order as the RmlUi selector
+        p = render_path_next_supported(p, c->runtime->renderCapabilities(), RenderPathAudience::Diagnostic);
       }
-      c->rsub.mode.setPath(p);
-      psx::config::cv_render_path.set(psx::config::Layer::Runtime,
-                                      render_path_name(p)); // so `cvars` reports the live value
+      const RenderPathSelectionResult selection = render_path_apply(*c->game, p, RenderPathAudience::Diagnostic);
+      if (selection == RenderPathSelectionResult::Unsupported) {
+        lucent::warn("repl",
+                     "renderpath '{}' REFUSED: this title does not support it (unchanged: {})",
+                     render_path_name(p),
+                     render_path_name(c->rsub.mode.path()));
+        continue;
+      }
+      if (selection == RenderPathSelectionResult::ReferenceLocked) {
+        lucent::warn("repl",
+                     "renderpath REFUSED: this Game is a reference leg (unchanged: {})",
+                     render_path_name(c->rsub.mode.path()));
+        continue;
+      }
       lucent::info("repl",
                    "render path = {} (enhancements {})",
                    render_path_name(c->rsub.mode.path()),
@@ -510,8 +521,16 @@ long Repl::read(Core *c, uint32_t f) {
       const bool have_arg = sscanf(line, "%*s %15s", st) == 1;
       const bool want = have_arg ? !(!strcmp(st, "off") || !strcmp(st, "0")) : !c->rsub.mode.psxRender();
       const RenderPath p = want ? RenderPath::Gte : RenderPath::Native;
-      c->rsub.mode.setPath(p);
-      psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(p));
+      const RenderPathSelectionResult selection = render_path_apply(*c->game, p, RenderPathAudience::Diagnostic);
+      if (selection != RenderPathSelectionResult::Applied) {
+        lucent::warn("repl",
+                     "renderpsx -> '{}' REFUSED: {} (unchanged: {})",
+                     render_path_name(p),
+                     selection == RenderPathSelectionResult::ReferenceLocked ? "this Game is a reference leg"
+                                                                             : "this title does not support that path",
+                     render_path_name(c->rsub.mode.path()));
+        continue;
+      }
       lucent::warn("repl",
                    "renderpsx is DEPRECATED -> `renderpath {}`. The guest render is now PURE "
                    "(fps60/wide/ires are native-only), which is NOT what this flag used to mean.",

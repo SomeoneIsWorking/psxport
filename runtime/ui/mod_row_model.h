@@ -30,6 +30,10 @@ public:
   // rather than discovering them when a user presses a dead button.
   static bool knows(RowKind kind, std::string_view id);
 
+  // Whether a known row exists for this title. Unsupported capabilities are omitted from the DOM
+  // and navigation rather than left behind as inert controls.
+  static bool available(const Mods &m, RowKind kind, std::string_view id);
+
   // Current display text for a row. Returns false (leaving `out` untouched) when the id is
   // unknown — the caller has already reported that at load time.
   static bool value_text(const Mods &m, RowKind kind, std::string_view id, std::string &out);

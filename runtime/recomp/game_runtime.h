@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "guest_program_image.h"
+#include "render_capabilities.h"
 
 class Core;
 class Game;
@@ -71,6 +72,11 @@ public:
   virtual const GuestWidescreenProjection *guestWidescreenProjection() const {
     return nullptr;
   }
+
+  // Which presentation products this title actually owns. Direct runtimes default to a native path
+  // without temporal interpolation; a capable direct title opts in explicitly. The legacy adapter
+  // preserves existing native+temporal consumers while they migrate.
+  virtual RenderCapabilities renderCapabilities() const = 0;
 
   // Whether guest VRAM is picture content for the current frame. This is deliberately a runtime
   // policy, not an immutable configuration bit: a title may use guest uploads for boot logos and
