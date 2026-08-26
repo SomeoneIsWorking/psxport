@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags: cdc,cdrom,dma
 depends: runtime/recomp/cdc_native.cpp#write_request_register, tests/test_cdc_bfrd_split_dma.cpp#test_repeated_assertion_preserves_split_dma_cursor
-reconfirmed: 2026-08-21
-verified_at: 2026-08-21 13:02:10
+reconfirmed: 2026-08-26
+verified_at: 2026-08-26 22:24:51
 ---
 
 ## Claim
@@ -37,3 +37,7 @@ continuous ReadN suite 5/5 with 64 checks.
 ## Re-confirmed 2026-08-21
 
 Post-landing Clang CTest passed 77/77; the shipping BFRD suite passed its repeated-assertion, split-DMA, deasserted-access, and following-sector answers.
+
+## Re-confirmed 2026-08-26
+
+Fresh Clang full suite at the typed PlatformHle milestone passed test_cdc_bfrd_split_dma and test_cdc_continuous_read in 105/105 CTests after the XA wall-clock CDC change.

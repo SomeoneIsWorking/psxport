@@ -310,6 +310,10 @@ void PlatformHle::initBuiltins() {
       register_(addr, fn);
     }
   };
+  auto regProjectionLeaves = [&](uint32_t setGeomOffset, uint32_t setGeomScreen) {
+    reg(setGeomOffset, set_geom_offset);
+    reg(setGeomScreen, set_geom_screen);
+  };
 
   // DIRECT runtimes (core.cfg == nullptr) declare their own hardware-sync primitives through
   // GameRuntime::platformHlePlan() — the consumer-owned fact slice from
@@ -321,6 +325,7 @@ void PlatformHle::initBuiltins() {
     const GameRuntime *const runtime = psxport_game_runtime();
     const PlatformHlePlan *const plan = runtime ? runtime->platformHlePlan() : nullptr;
     if (plan) {
+      regProjectionLeaves(plan->setGeomOffset, plan->setGeomScreen);
       for (int i = 0; i < plan->bindingCount && i < PlatformHlePlan::kMaxBindings; i++) {
         if (plan->bindings[i].addr && plan->bindings[i].fn) {
           reg(plan->bindings[i].addr, plan->bindings[i].fn);
@@ -358,8 +363,7 @@ void PlatformHle::initBuiltins() {
   // owns timing. A game reimplementing VSync registers its own handler instead and leaves this zero.
   reg(h.vsyncTrap, vsync_trap);
   // libgte SetGeomOffset / SetGeomScreen — the camera projection, recorded where the game STATES it.
-  reg(h.setGeomOffset, set_geom_offset);
-  reg(h.setGeomScreen, set_geom_screen);
+  regProjectionLeaves(h.setGeomOffset, h.setGeomScreen);
 
   // State the wiring's own reach. Now that the addresses come from the game, "the table is empty
   // because the game configured nothing" and "the table is full" fail IDENTICALLY at a glance — the

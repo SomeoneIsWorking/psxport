@@ -364,19 +364,25 @@ deleting them before those consumer changes would knowingly break every pinned p
 migrations and final field deletion are one follow-up milestone, not a second framework authority.
 The following
 fact slices use the same consumer-owned rule (`DiscIdentity`, `RenderMemoryLayout`, platform-library
-entry tables), each with a named algorithm and deletion set. Any fact used only by derived behavior
+entry tables). The platform-library slice has landed as `PlatformHlePlan`: standard libgte projection
+leaves are typed address facts whose handlers remain framework-owned, while genuinely title-specific
+sync behavior uses explicit `{addr, fn}` rows. The remaining slices each need a named algorithm and
+deletion set. Any fact used only by derived behavior
 moves directly beside that behavior instead of entering one of these values.
 
 Until the remaining slices land, a real consumer derives `LegacyGameRuntimeAdapter`; deriving
 `GameRuntime` directly is valid only for a consumer whose framework paths require no remaining legacy
-facts. Crt0/routing/backtrace no longer impose that limitation; disc, render-memory, platform-library,
-and other live config reads still do. This limitation is explicit so `core.cfg == nullptr` is never
+facts. Crt0/routing/backtrace no longer impose that limitation; disc, render-memory, and other live
+config reads still do. Platform HLE itself no longer imposes that limitation on a
+direct runtime that supplies a complete `PlatformHlePlan`. This limitation is explicit so
+`core.cfg == nullptr` is never
 mistaken for a completed consumer migration.
 
 **What stays in GameConfig, and why that is not a cop-out.** Everything that passes Q1 with a
 living framework consumer: `discEnvVar`,
 `bootFmv`, `cardEnvVar/cardDefaultPath`, `windowTitle`, `paceQuota`, the
-`hle` platform-sync group (PlatformHle::initBuiltins), the pad group, the CD chokepoint group
+`hle` platform-sync group (adapter input for PlatformHle::initBuiltins; direct runtimes own the
+equivalent `PlatformHlePlan`), the pad group, the CD chokepoint group
 (cd_override.cpp), `overlaySlots`, `packetPool*/otRegion*/poolPtr*` (render_noise.h — the harness
 mask is a genuinely generic consumer even after the frame loop leaves), `taskTableBase/
 taskSlotStride/taskCount` (SBS snapshot/restore of the task table region). These are facts a
@@ -515,6 +521,14 @@ kinds at once.
    `Core` snapshots it beside the runtime; the adapter projects legacy fields once in its constructor.
    `test_guest_program_image_ownership` prevents those algorithms and `GameHooks` from reclaiming it.
    Remaining follow-up: migrate each consumer's constants, then delete the adapter-only legacy fields.
+4b. **`PlatformHlePlan` — IMPLEMENTED, direct-runtime platform-library fact slice.** The plan owns
+   the measured SCEI-library windows, typed SetGeomOffset/SetGeomScreen addresses, and bounded
+   `{addr, fn}` rows for title-specific sync behavior. `PlatformHle::initBuiltins()` maps both direct
+   and legacy projection addresses through the same private framework handlers and the same
+   half-open-window guard. `test_platform_hle_direct_runtime` drives the shipping lookup/handler seam
+   and includes an out-of-window opposite control. Remaining follow-up: migrate legacy consumers,
+   then delete the adapter-only `GameConfig::hle` fields; do not expose or duplicate standard handlers
+   in game repositories.
 5. **SchedBody death.** `pc_scheduler.{h,cpp}` + scheduler.cpp's stanzas move to Tomba2Engine as
    `TombaScheduler`; enum + 3 hooks + `Game::pcSched` deleted; PlatformHle's ChangeThread routes
    to `sched->yield`. Gates: Tomba SBS byte-compare (the stanzas' cadence — the Slip #1-#4

@@ -16,6 +16,7 @@
 #include "field_rate.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "hw_bind.h"
 #include "platform_hle.h"
 #include "testutil.h"
 #include "timing.h"
@@ -29,6 +30,12 @@ namespace {
 // needs addresses that are inside/outside a declared window.
 constexpr uint32_t kVSyncAddr = 0x800859A8u;
 constexpr uint32_t kVSyncEnd = 0x80085B20u;
+
+// Measured CTR (SCUS_944.26) libgte projection leaves. They share one verified SCEI-library
+// window: SetGeomScreen [0x8007781C,0x8007782C), SetGeomOffset [0x8007782C,0x80077844).
+constexpr uint32_t kSetGeomScreenAddr = 0x8007781Cu;
+constexpr uint32_t kSetGeomOffsetAddr = 0x8007782Cu;
+constexpr uint32_t kSetGeomLeavesEnd = 0x80077844u;
 
 int g_handlerCalls = 0;
 void recorded_handler(Core *) {
@@ -116,6 +123,62 @@ static void test_direct_runtime_plan_binds_entries_inside_the_declared_window() 
   CHECK(game->platform_hle.lookup(0x80050000u | 0x80000000u) == nullptr);
 }
 
+static void test_direct_runtime_plan_binds_standard_libgte_projection_leaves() {
+  PlannedRuntime runtime;
+  runtime.image_ = makeImage();
+  runtime.plan_.setGeomOffset = kSetGeomOffsetAddr;
+  runtime.plan_.setGeomScreen = kSetGeomScreenAddr;
+  runtime.plan_.windowLo[0] = kSetGeomScreenAddr;
+  runtime.plan_.windowHi[0] = kSetGeomLeavesEnd;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+
+  game->platform_hle.initBuiltins();
+
+  OverrideFn setScreen = game->platform_hle.lookup(kSetGeomScreenAddr);
+  OverrideFn setOffset = game->platform_hle.lookup(kSetGeomOffsetAddr);
+  CHECK(setScreen != nullptr);
+  CHECK(setOffset != nullptr);
+
+  Core &core = game->core;
+  gte_bind(&core);
+  core.r[4] = 401u;
+  if (setScreen) {
+    setScreen(&core);
+  }
+  CHECK_EQ(core.rsub.projParams.geomH(), 401.0f);
+  CHECK_EQ(core.r[4], 401u); // SetGeomScreen does not mutate its argument register.
+  CHECK(!core.rsub.projParams.geomValid());
+
+  core.r[4] = 172u;
+  core.r[5] = 119u;
+  if (setOffset) {
+    setOffset(&core);
+  }
+  CHECK_EQ(core.rsub.projParams.geomOfx(), 172.0f);
+  CHECK_EQ(core.rsub.projParams.geomOfy(), 119.0f);
+  CHECK_EQ(core.r[4], 172u << 16);
+  CHECK_EQ(core.r[5], 119u << 16);
+  CHECK(core.rsub.projParams.geomValid());
+}
+
+static void test_direct_runtime_standard_libgte_leaves_still_require_the_declared_window() {
+  PlannedRuntime runtime;
+  runtime.image_ = makeImage();
+  runtime.plan_.setGeomOffset = kSetGeomOffsetAddr;
+  runtime.plan_.setGeomScreen = kSetGeomScreenAddr;
+  // Admit only SetGeomOffset. The typed SetGeomScreen field must not bypass the standard guard.
+  runtime.plan_.windowLo[0] = kSetGeomOffsetAddr;
+  runtime.plan_.windowHi[0] = kSetGeomLeavesEnd;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+
+  game->platform_hle.initBuiltins();
+
+  CHECK(game->platform_hle.lookup(kSetGeomOffsetAddr) != nullptr);
+  CHECK(game->platform_hle.lookup(kSetGeomScreenAddr) == nullptr);
+}
+
 static void test_vsync_hle_query_returns_emulated_display_fields() {
   PlannedRuntime runtime; // any runtime; the VSync HLE is generic framework behavior
   runtime.image_ = makeImage();
@@ -158,6 +221,8 @@ static void test_vsync_hle_wait_consumes_the_field_interval() {
 int main(void) {
   RUN(direct_runtime_without_plan_installs_nothing_and_says_so);
   RUN(direct_runtime_plan_binds_entries_inside_the_declared_window);
+  RUN(direct_runtime_plan_binds_standard_libgte_projection_leaves);
+  RUN(direct_runtime_standard_libgte_leaves_still_require_the_declared_window);
   RUN(vsync_hle_query_returns_emulated_display_fields);
   RUN(vsync_hle_wait_consumes_the_field_interval);
   return pt_summary();

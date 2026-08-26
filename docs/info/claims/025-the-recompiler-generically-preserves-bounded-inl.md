@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-22
 tags: recompiler,control-flow
 depends: tools/recomp/emit.py#_scan_computed_offset, tools/recomp/test_emit.py, tools/recomp/decode.py
-reconfirmed: 2026-08-25
-verified_at: 2026-08-25 01:02:40
+reconfirmed: 2026-08-26
+verified_at: 2026-08-26 22:24:52
 ---
 
 ## Claim
@@ -34,3 +34,8 @@ At 1e3afdfb the direct emitter passed 49/49 and decoder 9/9; fresh Clang CTest
 
 After the CDC phase integration, fresh Clang CTest `recomp_emitter` and `recomp_decoder`
 passed again in the full 100/100 suite.
+
+## Re-confirmed 2026-08-26
+
+Fresh Clang full framework build passed `recomp_emitter` and `recomp_decoder` in 105/105 CTests
+after the shared-epilogue tail-dispatch and computed-offset emitter changes.

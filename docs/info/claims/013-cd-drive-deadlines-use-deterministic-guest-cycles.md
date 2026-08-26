@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-21
 tags: timing,cdc,determinism,recompiler,interpreter,display
 depends: runtime/recomp/emulated_time.cpp#EmulatedTime::advanceDisplayFields, runtime/recomp/timing.cpp#Timing::advanceGuestInstructionTicks, runtime/recomp/frame_pacer.cpp#gpu_pace_subframe_fields, runtime/recomp/interp.cpp#interp_flat, tools/recomp/emit.py#emit_run, tests/test_cdc_emulated_time.cpp#test_yield_heavy_loop_reaches_the_same_shipping_cdc_deadline, tests/test_interp_guest_cycles.cpp#test_interpreter_ticks_service_the_shipping_cdc_deadline, tools/recomp/test_emit.py#test_exec_loop_sum
-reconfirmed: 2026-08-25
-verified_at: 2026-08-25 01:02:39
+reconfirmed: 2026-08-26
+verified_at: 2026-08-26 22:24:52
 ---
 
 ## Claim
@@ -73,3 +73,7 @@ Fresh Clang 22 build at 1e3afdfb: test_cdc_emulated_time and interpreter-cycle c
 ## Re-confirmed 2026-08-25
 
 Fresh Clang 22 build at 73bb5338: test_cdc_emulated_time, test_interp_guest_cycles, and recomp_emitter passed in the full 100/100 CTest suite.
+
+## Re-confirmed 2026-08-26
+
+Fresh Clang full suite passed test_cdc_emulated_time, test_interp_guest_cycles, pace-plan coverage, recomp_emitter, and recomp_decoder in 105/105 CTests after the emitter and XA CDC changes.

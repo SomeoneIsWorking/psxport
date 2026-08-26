@@ -95,7 +95,11 @@ targets while generated entries retain their emitted checkpoint owner),
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics;
 `standalone_frame_boundary.h` owns present-pending -> begin-capture -> optional cold-warp -> guest-work
 ordering, while SBS never services that standalone warp phase; the interactive REPL was extracted to
-`repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.cpp`
+`repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`),
+`platform_hle.h` + `sync_overrides.cpp` (the guarded SCEI-library HLE table; direct
+`PlatformHlePlan` consumers supply typed addresses for framework-owned standard leaves such as
+SetGeomOffset/SetGeomScreen and explicit `{addr, fn}` rows only for title-specific sync behavior;
+legacy consumers retain the same handler mappings through `GameConfig::hle`), `watchdog.cpp`
 (SCEA/FMV image progress retains cold-init grace until the first main-VRAM presentation completes; every later
 heartbeat uses steady timing), `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.

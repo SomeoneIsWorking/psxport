@@ -32,6 +32,16 @@ struct PlatformHleBinding {
 // outstanding. docs/plans/game-seam-redesign.md, "platform-library entry tables".
 struct PlatformHlePlan {
   static constexpr int kMaxBindings = 8;
+
+  // Standard SCEI library leaves whose native behavior is game-independent and framework-owned.
+  // A direct runtime supplies only the measured addresses from its executable; initBuiltins()
+  // selects the existing framework handlers. Zero means the leaf has not been located.
+  uint32_t setGeomOffset = 0;
+  uint32_t setGeomScreen = 0;
+
+  // Title-specific sync leaves remain explicit address/function bindings. Do not use this table to
+  // expose a framework-owned standard handler: add a typed address above so games cannot duplicate
+  // or reach private handler implementations.
   PlatformHleBinding bindings[kMaxBindings] = {};
   int bindingCount = 0;
   // Up to two accepted windows; a zero hi disables a slot. Addresses are KSEG0 (0x8xxxxxxx).
