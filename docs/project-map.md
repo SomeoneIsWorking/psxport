@@ -123,6 +123,12 @@ conversion while uppercase, digits, and `0xE0` remain unchanged.
 host `rand()`: host sequences differ and process-global state would couple SBS/dual-core Games.
 `test_bios_rand` reaches the shipping `Hle::dispatchBios` seam and gates the exact seed-1 sequence,
 restart behavior, per-Game isolation, and negative wrong-table plus neighboring-function cases.
+`Hle::workAreaInit` owns the guest-visible B0/C0 work tables returned by `B(57h)`/`B(56h)`. They live
+in ordinary `Core` main RAM, so guest rewrites remain authoritative after initialization. The C0
+table preserves its existing `jr ra; nop` fallback at slots 0/1 and publishes slot 6 as
+`0x00000C80`, the `C(06h)` ExceptionHandler entry address. `test_bios_work_area` drives the shipping
+`Hle::dispatchBios` B56 boundary, checks both adjacent-zero answers, and proves a guest table rewrite
+and the handler words at `0x00000C80` survive a repeated B56 call.
 `Hle::irqPoll` walks the measured SysEnqIntRP element chain and then enters the optional custom
 exception exit installed by `B0:0x19 HookEntryInt`. `bios_interrupt.{h,cpp}` owns the jmp-buffer
 layout (`ra/sp/fp/s0..s7/gp`) and makes the saved setjmp continuation return non-zero.
@@ -312,7 +318,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 | `disasm.py` | disassemble a region of a 2 MB main-RAM dump (capstone) | |
 | `dbgclient.py` | REPL client for the debug server | needs a live server |
 | `ghidra_decomp.py` · `symdump_re.py` · `symwidth_re.py` | Ghidra headless scripts | run only inside Ghidra |
-| `oracle/oracle_trace` | run a real executable in the independent reference emulator; trace instructions, capture canonical ordinal-call or exact pre-execution PC plus I_STAT/I_MASK/DPCR boundaries, resume from explicit modeled BIOS or validated syscall returns, and refuse sticky hardware/event-tainted continuation | + `oracle_spike` (84-check CPU/resume/IRQ/DPCR/event/CP0 gate), `test_oracle_trace.py` (both-answer CLI gate: distinct ordinals, indirect `jalr` target, exact CPU/device blocks, unreachable and hardware-tainted refusals), `crossvalidate_crt0.py --selftest` |
+| `oracle/oracle_trace` | run a real executable in the independent reference emulator; trace instructions, capture canonical ordinal-call or exact pre-execution PC plus I_STAT/I_MASK/DPCR boundaries, resume through explicit ordered syscall/BIOS models, seed explicit consumer-owned main-RAM words at the BIOS stage, and refuse wrong order or sticky hardware/event-tainted continuation | + `oracle_spike` (84-check CPU/resume/IRQ/DPCR/event/CP0 gate), `test_oracle_trace.py` (17-answer CLI gate: distinct ordinals, indirect `jalr` target, exact CPU/device blocks, single and ordered modeled returns, alternate RAM seed, wrong order, unreachable and hardware-tainted refusals), `crossvalidate_crt0.py --selftest` |
 | `crt0_extract` | report a PS-X EXE's crt0 boot group through the shipping decoder | |
 | `discdump` | extract files from a CHD/ISO without `run.sh` | |
 | `smoke/psxport_smoke` | the agnosticism proof: link libpsxport against a stub, zero game symbols | |

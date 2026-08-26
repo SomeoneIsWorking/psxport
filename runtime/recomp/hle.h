@@ -90,7 +90,8 @@ public:
   uint32_t heapAlloc(uint32_t size);
   void heapFree(uint32_t addr);
   uint32_t heapBlockSize(uint32_t addr) const;
-  // work area (B0:0x56/0x57 GetC0Table/GetB0Table): publish a self-consistent native page.
+  // work area (B0:0x56/0x57 GetC0Table/GetB0Table): publish self-consistent, guest-writable BIOS
+  // tables, including the C(06h) ExceptionHandler entry address.
   void workAreaInit();
 
   // ---- BIOS DEVICE TABLE (kernel 0x150/0x154) --------------------------------------------------

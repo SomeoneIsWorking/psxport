@@ -4,9 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-25
 tags: syscall,cp0,oracle
-depends: runtime/recomp/syscall_exception.cpp#enter, runtime/recomp/hle.cpp#rec_dispatch_miss, tools/oracle/oracle_shim.c#oracle_resume_syscall_return
-reconfirmed: 2026-08-25
-verified_at: 2026-08-25 00:53:01
+depends: runtime/recomp/syscall_exception.cpp#enter, runtime/recomp/hle.cpp#rec_dispatch_miss, tools/oracle/oracle_shim.c#oracle_resume_syscall_return, tools/oracle/test_oracle_trace.py#main
+reconfirmed: 2026-08-26
+verified_at: 2026-08-26 23:30:36
 ---
 
 ## Claim
@@ -28,3 +28,10 @@ Crash direct differential agrees 34/34 at B0:56 after modeled Cause/EPC/resume; 
 ## Re-confirmed 2026-08-25
 
 Fresh Clang 22 build at 1e3afdfb: test_syscall_exception, test_dispatch_observer, oracle_spike, and oracle_trace_selftest passed in full 99/99.
+
+## Re-confirmed 2026-08-26
+
+Full Clang CTest passes 106/106 after oracle_trace gained ordered selector-1 syscall then BIOS continuation;
+its 17/17 selftest retains the standalone syscall answer, refuses the wrong selector, and reaches B56
+only after the validated resume. Dependency coverage spans syscall entry, HLE external dispatch, the
+oracle resume mechanism, and the ordered CLI control.

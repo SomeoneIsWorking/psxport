@@ -177,7 +177,10 @@ uint32_t Hle::heapBlockSize(uint32_t addr) const {
 }
 
 // ---- Native work area for GetB0Table()/GetC0Table() ---------------------------------
-// Tomba2 reads B0table[+0x16C] -> control struct; publish a self-consistent native page.
+// These are guest-visible BIOS tables, not opaque HLE bookkeeping. Guests read entries and may then
+// replace them in ordinary RAM. Preserve the existing callable C0 fallback at the table base,
+// publish B0[0x5B]'s native control area, and publish C0[0x06] as the BIOS ExceptionHandler entry
+// address documented by the PSX BIOS and consumed through GetC0Table.
 enum { HLE_B0TABLE = 0x8000F000u, HLE_C0TABLE = 0x8000F800u, HLE_WORK_BASE = 0x8000E000u };
 void Hle::workAreaInit() {
   Core *c = &game->core;
@@ -188,6 +191,7 @@ void Hle::workAreaInit() {
   c->mem_w32(HLE_B0TABLE + 0x16Cu, HLE_WORK_BASE);
   c->mem_w32(HLE_C0TABLE + 0, 0x03E00008u); // jr $ra
   c->mem_w32(HLE_C0TABLE + 4, 0);           // nop
+  c->mem_w32(HLE_C0TABLE + 0x06u * sizeof(uint32_t), 0x00000C80u);
 }
 
 // ---- BIOS DEVICE TABLE (kernel 0x150/0x154 + the DeviceControlBlocks they point at) --------------

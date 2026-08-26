@@ -18,6 +18,8 @@ BIOS_THUNK = LOAD_ADDRESS + 0x60
 POST_MODEL_CALL = LOAD_ADDRESS + 0x70
 INDIRECT_TARGET = LOAD_ADDRESS + 0x80
 POST_SYSCALL_CALL = LOAD_ADDRESS + 0x90
+MODELED_C0_SLOT = 0x8000F818
+BIOS_C0_TABLE = 0x8000F800
 
 
 def jal(target: int) -> int:
@@ -46,6 +48,10 @@ def jalr(rd: int, rs: int) -> int:
 
 def sw(rt: int, base: int, immediate: int) -> int:
     return (0x2B << 26) | (base << 21) | (rt << 16) | (immediate & 0xFFFF)
+
+
+def lw(rt: int, base: int, immediate: int) -> int:
+    return (0x23 << 26) | (base << 21) | (rt << 16) | (immediate & 0xFFFF)
 
 
 def syscall(code: int = 0) -> int:
@@ -130,6 +136,36 @@ def make_syscall_return_executable(path: pathlib.Path) -> None:
     words[2] = jal(POST_SYSCALL_CALL)
     words[3] = 0
     words[(POST_SYSCALL_CALL - LOAD_ADDRESS) // 4] = addiu(8, 0, 0x5151)
+
+    payload = b"".join(struct.pack("<I", word) for word in words)
+    header = bytearray(0x800)
+    header[:8] = b"PS-X EXE"
+    struct.pack_into("<I", header, 0x10, LOAD_ADDRESS)
+    struct.pack_into("<I", header, 0x18, LOAD_ADDRESS)
+    struct.pack_into("<I", header, 0x1C, len(payload))
+    struct.pack_into("<I", header, 0x30, 0x801FFF00)
+    path.write_bytes(header + payload)
+
+
+def make_modeled_sequence_executable(path: pathlib.Path, bios_before_syscall: bool = False) -> None:
+    words = [0] * 48
+    if bios_before_syscall:
+        words[0] = addiu(8, 0, 0xB0)
+        words[1] = jalr(31, 8)
+        words[2] = addiu(9, 0, 0x56)
+    else:
+        words[0] = addiu(4, 0, 1)
+        words[1] = syscall()
+        words[2] = addiu(8, 0, 0xB0)
+        words[3] = jalr(31, 8)
+        words[4] = addiu(9, 0, 0x56)
+        words[5] = lui(8, MODELED_C0_SLOT >> 16)
+        words[6] = ori(8, 8, MODELED_C0_SLOT)
+        words[7] = lw(10, 8, 0)
+        words[8] = 0
+        words[9] = addiu(8, 0, 0xA0)
+        words[10] = jalr(31, 8)
+        words[11] = addiu(9, 0, 0x44)
 
     payload = b"".join(struct.pack("<I", word) for word in words)
     header = bytearray(0x800)
@@ -261,6 +297,35 @@ def run_modeled_syscall_return(
     )
 
 
+def run_modeled_sequence(
+    tracer: pathlib.Path,
+    executable: pathlib.Path,
+    trace: pathlib.Path,
+    seeded_word: int,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            str(tracer),
+            str(executable),
+            "--steps",
+            "64",
+            "--model-syscall-return",
+            "1:1",
+            "--model-bios-return",
+            f"B:0x56:0x{BIOS_C0_TABLE:08X}",
+            "--model-main-ram-word",
+            f"0x{MODELED_C0_SLOT:08X}:0x{seeded_word:08X}",
+            "--summary-only",
+            "--out",
+            str(trace),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("tracer", type=pathlib.Path)
@@ -301,6 +366,24 @@ def main() -> int:
         arguments.tracer, syscall_executable, wrong_syscall_trace, 2
     )
 
+    sequence_executable = arguments.scratch / "modeled-sequence-fixture.exe"
+    make_modeled_sequence_executable(sequence_executable)
+    sequence_trace = arguments.scratch / "modeled-sequence.trace"
+    alternate_seed_trace = arguments.scratch / "modeled-sequence-alternate-seed.trace"
+    sequence = run_modeled_sequence(
+        arguments.tracer, sequence_executable, sequence_trace, 0x00000C80
+    )
+    alternate_seed = run_modeled_sequence(
+        arguments.tracer, sequence_executable, alternate_seed_trace, 0x00000C84
+    )
+
+    wrong_order_executable = arguments.scratch / "modeled-sequence-wrong-order-fixture.exe"
+    make_modeled_sequence_executable(wrong_order_executable, bios_before_syscall=True)
+    wrong_order_trace = arguments.scratch / "modeled-sequence-wrong-order.trace"
+    wrong_order = run_modeled_sequence(
+        arguments.tracer, wrong_order_executable, wrong_order_trace, 0x00000C80
+    )
+
     indirect_executable = arguments.scratch / "indirect-call-fixture.exe"
     make_indirect_call_executable(indirect_executable)
     indirect_trace = arguments.scratch / "capture-at-indirect-target.trace"
@@ -326,6 +409,15 @@ def main() -> int:
     syscall_text = syscall_trace.read_text(encoding="utf-8") if syscall_trace.is_file() else ""
     wrong_syscall_text = (
         wrong_syscall_trace.read_text(encoding="utf-8") if wrong_syscall_trace.is_file() else ""
+    )
+    sequence_text = sequence_trace.read_text(encoding="utf-8") if sequence_trace.is_file() else ""
+    alternate_seed_text = (
+        alternate_seed_trace.read_text(encoding="utf-8")
+        if alternate_seed_trace.is_file()
+        else ""
+    )
+    wrong_order_text = (
+        wrong_order_trace.read_text(encoding="utf-8") if wrong_order_trace.is_file() else ""
     )
     indirect_text = indirect_trace.read_text(encoding="utf-8") if indirect_trace.is_file() else ""
     missing_pc_text = missing_pc_trace.read_text(encoding="utf-8") if missing_pc_trace.is_file() else ""
@@ -381,6 +473,36 @@ def main() -> int:
             and "# POST-RETURN-CAPTURED-CALL" not in wrong_syscall_text,
         ),
         (
+            "ordered syscall and B56 models seed C0 slot 6 before capturing A44",
+            sequence.returncode == 0
+            and "# MODELED-SYSCALL-RETURN selector=0x00000001" in sequence_text
+            and "# MODELED-BIOS-RETURN table=B function=0x56" in sequence_text
+            and "# MODELED-MAIN-RAM-WORD address=0x8000F818 physical=0x0000F818 value=0x00000C80"
+            in sequence_text
+            and "# POST-RETURN-CAPTURED-CALL target=0x000000A0" in sequence_text
+            and "# POST-RETURN-CALL-BOUNDARY-REG v0=0x8000F800" in sequence_text
+            and "# POST-RETURN-CALL-BOUNDARY-REG t1=0x00000044" in sequence_text
+            and "# POST-RETURN-CALL-BOUNDARY-REG t2=0x00000C80" in sequence_text,
+        ),
+        (
+            "the modeled RAM seed instrument reports the opposite word at the same A44 boundary",
+            alternate_seed.returncode == 0
+            and "# MODELED-MAIN-RAM-WORD address=0x8000F818 physical=0x0000F818 value=0x00000C84"
+            in alternate_seed_text
+            and "# POST-RETURN-CALL-BOUNDARY-REG t2=0x00000C84" in alternate_seed_text
+            and "# POST-RETURN-CALL-BOUNDARY-REG t2=0x00000C80" not in alternate_seed_text,
+        ),
+        (
+            "a B56 boundary before the requested syscall refuses the ordered model",
+            wrong_order.returncode == 2
+            and "reached B0" in wrong_order.stderr
+            and "before the requested syscall return" in wrong_order.stderr
+            and "# MODELED-SYSCALL-RETURN" not in wrong_order_text
+            and "# MODELED-BIOS-RETURN" not in wrong_order_text
+            and "# MODELED-MAIN-RAM-WORD" not in wrong_order_text
+            and "# POST-RETURN-CAPTURED-CALL" not in wrong_order_text,
+        ),
+        (
             "capture-at reaches an indirect-call target before its first instruction",
             indirect.returncode == 0
             and f"# CAPTURED-PC target=0x{INDIRECT_TARGET:08X} executed=4" in indirect_text
@@ -426,6 +548,12 @@ def main() -> int:
         print(modeled_syscall.stderr, file=sys.stderr)
         print("--- wrong modeled syscall return stderr ---", file=sys.stderr)
         print(wrong_syscall.stderr, file=sys.stderr)
+        print("--- modeled sequence stderr ---", file=sys.stderr)
+        print(sequence.stderr, file=sys.stderr)
+        print("--- modeled sequence alternate seed stderr ---", file=sys.stderr)
+        print(alternate_seed.stderr, file=sys.stderr)
+        print("--- modeled sequence wrong order stderr ---", file=sys.stderr)
+        print(wrong_order.stderr, file=sys.stderr)
         print("--- capture-at indirect target stderr ---", file=sys.stderr)
         print(indirect.stderr, file=sys.stderr)
         print("--- capture-at missing target stderr ---", file=sys.stderr)

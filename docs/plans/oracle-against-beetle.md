@@ -173,14 +173,28 @@ table/function/result, verifies `$t1`, and captures the first subsequent call or
 successful/wrong-function answers. CTR is the first real consumer: two repeat oracle runs were identical,
 then oracle and generated execution agreed on 108/108 pre-call, modeled-return, and next-call fields.
 
+The same boundary mechanism can model a grounded ordered chain: `--model-syscall-return` then
+`--model-bios-return`. When both are requested, the tracer refuses a BIOS vector reached before the
+syscall and does not capture an intermediate call; only the first call or hardware boundary after both
+checked returns is evidence. `--model-main-ram-word ADDRESS:VALUE` seeds one explicit consumer-owned
+word through `oracle_main_ram()` at the BIOS stage. It accepts aligned physical, KSEG0, or KSEG1
+main-RAM aliases and owns no rule for what that word means. Crash 1 supplied the concrete grounding:
+selector 1 resumes from EPC `0x8003E1FC` at `0x8003E200`; B(56h) at `0x000000B0` returns
+`0x8000F800`; its slot-6 word at `0x8000F818` is `0x00000C80`; the next dynamic boundary is A(44h)
+at `0x000000A0`. The CLI fixture exercises that order and observes the seed at A44, observes a
+different `0x00000C84` seed as the opposite answer, and refuses B56-before-syscall without modeled or
+post-return evidence.
+
 The same tracer now owns ordinal direct-call decoding through `--capture-call N` (`--capture-first-call`
 is its compatibility alias), plus exact pre-execution boundaries through `--capture-at ADDR`. The latter
 is what makes an indirect `jalr` target observable without teaching the framework a game's address or
 call graph. It captures the initial PC or a clean post-step successor only; an unsupported hardware
-predecessor cannot masquerade as a trustworthy boundary. The 12-check CLI gate proves calls 1 and 2
+predecessor cannot masquerade as a trustworthy boundary. The 17-check CLI gate proves calls 1 and 2
 produce different targets, call 3 refuses with `reached 2 of 3`, an indirect target carries exactly 33
 canonical register records before its first instruction, and unreachable or hardware-tainted targets
-exit 2 without a boundary block.
+exit 2 without a boundary block. It also preserves single BIOS/syscall modeled-return controls and
+proves the ordered syscall/B56/RAM-seed/A44 chain, an observably different seed, and wrong-order
+refusal.
 
 ### Milestone 2, part one: the crt0 constants are now confirmed BY EXECUTION
 
