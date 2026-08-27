@@ -2568,8 +2568,8 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
 
     def _uncovered(cur_funcs, cur_span):
         """Every dispatch target reachable on this partition that is NOT dispatchable: neither an
-        entry nor an in-body switch label of its own site. Includes both runtime-flow values and
-        statically enumerated module-wide cases."""
+        entry nor an in-body switch label of its own site. Module-wide switch recovery supplies
+        graph EDGES to the constant-flow analysis; its permissive target set is not entry evidence."""
         span_out, merged = _round_edges(cur_funcs)
         report = []
         sites = unrecovered_jr_targets(exe, cur_funcs, set(seeds), merged, report=report)
@@ -2577,11 +2577,6 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         for a, vals in sites.items():
             need |= {v for v in vals
                      if not (v & 3) and exe.load <= v < exe.text_end
-                     and v not in cur_funcs and v not in cur_span.get(a, set())}
-        for a, ts in gjt.items():
-            need |= {v for v in ts
-                     if not (v & 3) and exe.load <= v < exe.text_end
-                     and decode(v, exe.word(v)).kind != D.UNKNOWN
                      and v not in cur_funcs and v not in cur_span.get(a, set())}
         return need, sites, merged, report
 

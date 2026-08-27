@@ -20,6 +20,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 import decode as D
@@ -700,6 +701,12 @@ def _fragment_chain_fixture(base=0x80010000):
     d.addiu("v0", "v0", 2)
     d.jr("ra")
     d.nop()
+    for _ in range(5):              # keep the flow-proven TGT+32 inside the executable image
+        d.addu("s1", "s1", "s1")
+    d.label("TGT32")
+    d.addiu("v1", "v1", 1)
+    d.jr("ra")
+    d.nop()
     data, _ = d.assemble()
     return exe_of(data, base), base + 0x60, base + 0x80
 
@@ -717,6 +724,54 @@ def test_cross_fragment_dispatch_base_is_recovered_and_seeded():
     a, consts = next(iter(sites.items()))
     assert tgt32 in consts, (
         f"cross-fragment base lost: site {a:#x} consts={sorted(hex(c) for c in consts)}")
+
+    with scratch_tempdir("emit-cross-fragment-") as td:
+        emit.emit_module(e, td, emit.MAIN_NAMES, {e.load, e.load + 0x18}, shards=1)
+        disp = open(os.path.join(td, "shard_disp.c")).read()
+    assert f"case 0x{tgt32 & 0x1FFFFFFF:08X}u:" in disp, \
+        "flow-proven cross-fragment target was not emitted as a dispatchable entry"
+
+
+def test_module_wide_switch_guess_is_not_seeded_without_flow_evidence():
+    # Module-wide switch recovery is deliberately permissive: its targets are graph EDGES that let
+    # constant flow cross hand-written GTE fragments, not proof that every guessed target is a
+    # callable entry. Spyro's jr s1 @0x8004D2D8 produced 50 module-wide candidates while its local
+    # span proved only five; wholesale seeding made the unrelated 0x8004D710 branch delay slot a
+    # function and executed its `sll t1,t1,2` twice on fallthrough.
+    d = Asm(0x80010000)
+    d.addiu("t0", "zero", 0)
+    d.jr("t0")
+    d.nop()
+    d.addiu("v0", "v0", 1)
+    d.beq("zero", "zero", "done")
+    d.label("false_entry")
+    d.sll("t1", "t1", 2)  # branch delay slot: valid code, but not a callable entry
+    d.label("done")
+    d.jr("ra")
+    d.nop()
+    data, _ = d.assemble()
+    e = exe_of(data)
+    jr_site = e.load + 4
+    false_entry = d.labels["false_entry"]
+
+    real_find = emit.find_jump_tables
+
+    def global_guess_only(exe, ins, lo, hi, validate=True, tbl_spans=None):
+        if lo == e.load and hi == e.text_end:
+            return {jr_site: [false_entry]}
+        return real_find(exe, ins, lo, hi, validate=validate, tbl_spans=tbl_spans)
+
+    with scratch_tempdir("emit-global-guess-") as td, \
+            mock.patch.object(emit, "find_jump_tables", side_effect=global_guess_only), \
+            mock.patch.object(emit, "unrecovered_jr_targets", return_value={}):
+        emit.emit_module(e, td, emit.MAIN_NAMES, {e.load}, shards=1)
+        disp = open(os.path.join(td, "shard_disp.c")).read()
+        body = open(os.path.join(td, "shard_0.c")).read()
+
+    assert f"func_{false_entry:08X}" not in disp, \
+        "unproven module-wide switch guess became a callable entry"
+    assert "c->r[9] = c->r[9] << 2;" in body, \
+        "the branch delay slot disappeared instead of remaining in its containing body"
 
 
 def test_cross_fragment_flow_dies_at_unknown_overwrite():
