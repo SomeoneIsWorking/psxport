@@ -5,6 +5,17 @@ frame, rebases ordering metadata across those flushes, emits one real picture, c
 paces the measured display fields, reconciles the presentation ledger, and resets current-frame
 capture. None of those responsibilities is interpolation.
 
+`FrameLoopShell` is the product entry boundary above that fence. After the title has registered its
+generated overrides, `prepareProduct(Game&)` validates the mandatory `Game::frameDriver`, reinstalls
+the framework-owned fatal VSync trap as the last generated override at that address, and requires the
+measured VSync fact. It performs no implicit pad, audio, render, or present service; `step` delegates
+exactly one finite `stepFrame(Core&, frame)` and refuses if that preflight was skipped. The title driver owns the measured ordering of those services and
+must call `Game::presentation.commit(...)` exactly once, or implement a measured unpresented fence.
+The shell snapshots `FramePresenter::fence()` around the call and aborts unless it advances by exactly
+one, so both a missing fence and accidental double presentation are product-contract violations.
+This keeps harness stepping and standalone stepping on one host-owned route without inventing one
+console-engine frame recipe for every title.
+
 `GameRuntime::createTemporalFramePresentation(Game&)` is an optional decorator factory. Direct
 runtimes get `nullptr`; `LegacyGameRuntimeAdapter` creates `Fps60` only to preserve temporal consumers
 during migration. An already-60fps title commits with:

@@ -1,20 +1,9 @@
-// PC-PSX hybrid native boot driver.
+// PC-PSX hybrid native boot and host-loop orchestration.
 //
-// Architecture (locked): the PC engine is the driver. It runs the game's INIT calls (the
-// prefix of game-main FUN_80050b08) via the recompiler, then OWNS the frame loop, replacing
-// the PSX cooperative-task scheduler (FUN_80051e60) with native per-frame stepping of the
-// current stage's state machine. No BIOS threads, no ucontext: leaf logic fns are normal
-// recompiled fns that RETURN; the stage sequencers' infinite yield-loops are reimplemented
-// natively (one state-machine iteration per frame == one original FUN_80051f80 yield).
-//
-// We do NOT call FUN_80050b08 directly (it ends in the infinite scheduler loop). Instead we
-// override it: crt0 (func_800896E0) does BSS-zero + SP/gp/heap setup and calls main, which is
-// now this native driver. The init prefix below is transcribed 1:1 from FUN_80050b08
-// (ram_f1000_all.c:31275-31299); each call is dispatched into the recompiled/overridden body,
-// whose CD/sync/vsync/pad/thread dependencies are already native overrides.
-//
-// MILESTONE 1 (this file, current): run the init prefix and confirm it executes cleanly via
-// PC/RAM probes. The native frame loop + per-stage stepping land next.
+// Architecture: the host owns product iteration and delegates exactly one finite frame through
+// FrameLoopShell to the title-created FrameDriver. Title state-machine, input, audio, render, and
+// present ordering does not live here. This file retains generic crt0/boot, diagnostics, REPL pause,
+// watchdog, and frame-budget scaffolding around that delegation.
 #include "c_subsys.h"
 #include "cfg.h"
 #include "config.h"      // psx::config::report_once — arms the exit audit at BOOT, for every port
@@ -23,234 +12,21 @@
 #include "crt0_boot.h"   // crt0_plan/crt0_apply — THE crt0 derivation + the required/ABSENT decision
 #include "crt0_verify.h" // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
 #include "fntrace.h"
-#include "game.h"       // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
-#include "game_iface.h" // GameHooks — game-owned dev warp + frame-loop hooks
+#include "frame_loop_shell.h"
+#include "game.h"
+#include "game_iface.h"
 #include "hostprof.h"
 #include "hw_bind.h" // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "memcensus.h"
-#include "ot_attr.h"           // OtAttr — the producer-census tables (armed by Game's ctor, game.cpp)
-#include "override_registry.h" // overrides::query — per-row ownership for the producer-census JSONL
-#include "scheduler.h"         // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
-#include "standalone_frame_boundary.h"
-#include <lucent/log.h>
-#include <sys/stat.h>          // mkdir — create scratch/producers/ on a fresh clone
-#include <time.h>              // run stamp for the producer-census JSONL filename
-                               // (rsub substrate members come via core.h -> render_substrate.h)
-#include "coro.h"              // thread-fiber for full-PSX mid-function resume (later-264)
-#include "dualview_snapshot.h" // dv_capture_post/dv_restore_pre/dv_restore_post (extern "C" linkage)
-#include "gpu_vk.h"            // gpu_vk_wide_engine / _ofx — the widescreen projection centre
-#include "guest_call.h"        // rc0-4 guest-call helpers (shared with repl.cpp)
-#include "mods.h"              // g_mods.fps60 / g_mods.aspect — forced off in PSXPORT_ORACLE
-#include "producer_db.h"       // producer_db_begin/_finish — the producer-DB run lifecycle
-#include "proj_params.h"       // ProjParams::setGeomOfxForAspect — the camera's copy of that centre
+#include "mods.h"        // oracle_mode — forces the pure guest reference presentation path
+#include "ot_attr.h"     // OtAttr — the producer-census tables (armed by Game's ctor, game.cpp)
+#include "producer_db.h" // producer_db_begin/_finish — the producer-DB run lifecycle
 #include "repl.h"
-#include <execinfo.h>
-#include <setjmp.h>
+#include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h> // usleep (debug-server pause/step idle wait)
-                    // class Repl — REPL driver + auto-drive request state (per-Core, on Game)
-
-// Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
-// streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
-// into the task-2 state byte (the cutscene waits `while (DAT_801fe0e0 != 0)`).
-// class MusicCoord (game/audio/music_coord.h) — reached as c->engine.musicCoord.tick() per frame
-
-// The native cooperative-task scheduler (scheduler_yield + PcScheduler::step — the FUN_80080880/
-// FUN_80051e60 replacements) lives in scheduler.cpp + game/core/pc_scheduler.cpp; TASKBASE/
-// TASKSTRIDE/CUR_TASK (used by the REPL/debug state probes below) are reached via "scheduler.h".
-
-// ---- BGM frame counter (PSXPORT_BGMDBG trace shared with cd_override.cpp) --------------------
-// FUN_80074BF8(idx) starts BGM #idx; FUN_80074E48() stops it. These are now OWNED PC-native by
-// game/audio/sfx.cpp, which also carries the instant-CD dialog-music cut hook. Only
-// the shared frame counter remains here (cd_override.cpp externs it for its own BGM trace).
-// g_bgm_frame retired 2026-07-03 — per-Core Timing::logicFrame (c->game->timing.logicFrame).
-void rec_super_call(Core *, uint32_t); // interpret the original PSX body (A/B oracle / super-call)
-
-// ONE frame of deterministic guest work — the steppable core of the native frame loop, factored out so
-// the in-process dual-core diff can step TWO cores in lockstep (it calls this on `a` then `b`). It is
-// EXACTLY the guest-mutating body of the loop below (per-frame IRQ events, draw/display-env setup, the
-// FUN_800788ac frame update + native scheduler pass + dialog-music coord + draw sync + buffer flip); the
-// loop's driver scaffolding (REPL, auto-navigation/input, pause/step, diagnostics, dbg_server) stays in
-// the loop and runs ONCE around this call. No input is injected here — drive pads before calling it.
-// gpu_perf.cpp — per-frame CPU phase / frame-time profiler (REPL `debug perf`), default off.
-#include "gpu_perf.h"
-
-// ---- DUAL-VIEW guest-state snapshots (native | PSX side-by-side render of ONE game state) -------------
-// Save/restore of full guest state (main RAM + scratchpad + GTE regs) lives in dualview_snapshot.cpp
-// (dv_snapshot / dv_capture_post / dv_restore_pre / dv_restore_post + g_dv_have_pre). See
-// native_step_frame's dual-view block below for how the sequence is driven.
-// g_dualview retired 2026-07-02 — per-Core Render::mDualview / dualview() / setDualview(bool).
-#include "sbs.h" // class Sbs — the PSXPORT_SBS two-core side-by-side harness
-
-static void apply_armed_dev_warp(Core *c, uint32_t f) {
-  if (!c->game->repl.warpArmed) {
-    return;
-  }
-
-  c->game->repl.warpArmed = 0;
-  const uint32_t dest = c->game->repl.warpDest & 0x1fu;
-  if (!c->hooks || !c->hooks->devWarp) {
-    lucent::error("repl", "warp: this game has no complete dev-warp operation");
-    return;
-  }
-
-  c->hooks->devWarp(c, (int)dest, (int)(c->game->repl.warpSub & 0x3fu));
-  lucent::info("repl", "warp: cold area {} sub {} loaded at f{}", dest, c->game->repl.warpSub, f);
-}
-
-static void native_step_frame(Core *c, uint32_t f, bool serviceStandaloneWarp) {
-  const GameConfig *cfg = c->cfg;
-  void gte_bind(Core *);
-  gte_bind(c); // bind THIS core's GTE register file (per-instance — no shared GTE)
-  // #42 widescreen symmetry: re-assert the projection center (GTE CR24 = OFX) from the LIVE present
-  // width every frame. Engine::initDisplay baked OFX once at boot, but the SDL window is lazy-created
-  // (first present), so at boot win_w=320 -> AUTO nw=320 -> OFX=160 (the 4:3 center) got baked, and the
-  // wide view then expanded only to the RIGHT. Re-asserting nw/2 each frame centers it symmetrically
-  // (the middle 4:3 band stays pixel-identical). CR24 is a GTE control reg, not guest RAM -> read-only-
-  // overlay compliant; gated on wide_engine so 4:3 (OFX=160, margin==0) and the oracle are untouched.
-  //
-  // The native camera's copy moves WITH it (ProjParams::setGeomOfxForAspect). It reads the projection
-  // centre from ProjParams rather than from CR24, so re-asserting only the control register would
-  // leave the 3D reprojecting against the stale boot centre while the guest packets used the wide one
-  // — the ~54px double-image this re-assert exists to prevent, reintroduced one layer up.
-  if (gpu_vk_wide_engine(c)) {
-    const int ofx = gpu_vk_wide_engine_ofx(c);
-    gte_write_ctrl(24u, (uint32_t)ofx << 16);
-    c->rsub.projParams.setGeomOfxForAspect((float)ofx);
-  }
-  c->rsub.projprim.bind(c); // bind THIS core's native-depth cache (class ProjPrim on Render)
-  spu_bind(c);              // bind THIS core's SPU state (per-instance — no shared SPU)
-  mdec_bind(c);             // bind THIS core's MDEC state (per-instance — no shared MDEC)
-  xa_bind(c);               // bind THIS core's XA streamer state (per-instance — no shared XA)
-  void gpu_set_disp_origin(Core * c, int x, int y);
-  // Timing::logicFrame is the per-Core frame counter several subsystems consult (audio trace tags,
-  // BGM-director gating, findings/debug instrumentation). The standalone frame loop (below, in main())
-  // used to be the ONLY writer (`c->game->timing.logicFrame = f` right before calling this function),
-  // so under SBS — which reaches this function via dc_step_frame()/stepCore() without ever running that
-  // loop — logicFrame silently stayed 0 for the whole run. Set it here, at the single per-frame entry
-  // point both the standalone loop and SBS funnel through, so it is correct under every caller.
-  c->game->timing.logicFrame = f;
-  c->game->perf.frameBegin(); // perf: start the frame clock (top of the deterministic per-frame work)
-  // Advance the libetc VSync counter (DAT_800abde0) — one vblank per native frame. VSync(0) is trapped,
-  // so this is the only thing that ticks the recomp timebase (recomp tasks read it to pace animations).
-  c->game->timing.frameTick();
-  // Per-frame IRQ-driven events the game's waits poll via TestEvent (VBlank classes + sound-DMA-complete).
-  c->game->hle.deliverEvent(cfg->irqEventClasses[0], 0xFFFFFFFFu);
-  c->game->hle.deliverEvent(cfg->irqEventClasses[1], 0xFFFFFFFFu);
-  c->game->hle.deliverEvent(cfg->irqEventClasses[2], 0xFFFFFFFFu);
-  // SINGLE-BUFFERED (PC-native) — the game's own PSX double-buffering is REMOVED (user: "remove the
-  // game's own double buffering, it causes problems"). The PSX flips between two VRAM pages each frame:
-  // OT region 0x800e80a8 + parity*0x2070 and packet pool 0x800bfe68 + parity*0x14000, with the display/
-  // draw env following parity. That page-flip is pointless on PC — the VK renderer composites a COMPLETE
-  // frame and the present provides the display buffering — and it actively caused aliasing: the native
-  // display-list buckets are keyed by OT address (ndl_alloc on otaddr & 0x1FFFFC), so they alternated
-  // between the two pages, and the present could sample the page being drawn. Pin the back-buffer parity
-  // to 0: one OT region, one packet pool, the same env every frame, and NO flip below. 0x1f800135 stays
-  // 0 (set by eng_init_framestate), so any guest code that reads it also sees a stable single buffer.
-  const uint32_t parity = 0;                                        // was mem_r8(0x1f800135) — pinned single-buffer
-  uint32_t envp = cfg->otRegionBase + parity * cfg->otRegionStride; // the one VRAM region we DRAW into every frame
-  c->mem_w32(cfg->otBasePtr, envp);                                 // PTR_DAT_800ed8c8 (OT base, now constant)
-  rc2(c, cfg->clearOtagR, envp, 0x800);                             // ClearOTagR(ot, 0x800)
-  c->mem_w16(cfg->dwellCounter, 0);                                 // DAT_800e809c = 0 (dwell counter)
-  c->mem_w32(cfg->poolPtrLast, c->mem_r32(cfg->poolPtrCur));        // keep last pool ptr (read by some submitters)
-  c->mem_w32(cfg->poolPtrCur,
-             (parity * cfg->packetPoolStride + cfg->packetPoolBase) & 0xffffff); // packet pool (now constant)
-  c->game->pad.serviceFrame();   // host input -> game pad buffer (pre-read)
-  c->game->cd.audioTrace("pre"); // CD-vol fade state BEFORE tick+mix
-  c->game->perf.markPre();       // perf: charge the pre-tick host work (input/IRQ/OT-clear) to `pre`
-  // PC-driven frame body: per-frame state update (still-PSX leaf) + per-vblank audio + fps60 commit +
-  // present + pace. Called as a plain C call (top-down PC-driven model) — NOT an override. This is where
-  // gpu_present / gpu_pace_frame / the per-vblank sequencer+SPU tick are reached every live frame; before
-  // this was wired they were orphaned with the override table (a live window ran uncapped + stale). The
-  // present happens here (before the OT submit below) so the VK batch shown is the one DrawOTag built last
-  // frame, exactly as the override-era ordering did.
-  standalone_frame_boundary(
-      [&] {
-        c->hooks->frameUpdate(c);
-      }, // tick + per-vblank audio + present + pace
-      [&] {
-        // Billboard-record frame boundary (#67): the records the guest render walk (pcSched.step
-        // below) is about to capture belong to the NEW logic frame; the presents above (fps60's
-        // interp re-run included) consumed last frame's. Reset here — after present, before the walk
-        // and before the optional warp operation — mirroring the mObjCur rotation. The field-area-init
-        // capture predicate is game-owned; this generic reset does not infer scene existence.
-        c->hooks->renderBbFrameReset(c);
-      },
-      [&] {
-        // Dual-core/SBS owns its warp transaction separately. The standalone REPL command is serviced
-        // only after presentation has consumed the pending old-scene capture.
-        if (serviceStandaloneWarp) {
-          apply_armed_dev_warp(c, f);
-        }
-      },
-      [&] {
-        c->game->cd.audioTrace("post"); // CD-vol fade state AFTER tick+mix
-        c->game->perf.phaseBegin(
-            3); // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
-        // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields
-        // are setjmp/longjmp coroutines, CD loads are synchronous). It stays native at every gate
-        // level. What the gate controls is whether the TASK BODIES it steps run as native stage
-        // dispatchers + content (full native) or as pure PSX recomp coroutines (psx_fallback on) — see
-        // the gate checks inside PcScheduler::step.
-        c->game->pcSched.step(); // <- replaces FUN_80051e60 (BIOS scheduler)
-        c->game->perf.phaseEnd(3);
-      });
-  c->hooks->musicCoordTick(c);           // dialogs stop/restore ingame music
-  c->game->cd.audioTrace("coord");       // CD-vol fade state AFTER coord
-  rc1(c, cfg->drawSync, 0);              // draw sync
-  c->game->pcSched.tickSleepCountdown(); // was rc0(c, 0x800506d0) — task sleep-countdown (re-arm 1->2)
-  // Display + OT submit (LAB_80050c6c, DAT_1f80019c==0 branch). Single-buffered, PC-native display.
-  // The PSX disp-env dance is GONE: we draw page `parity` (env0 → VRAM (0,0)) and tell the PC present to
-  // scan that very page DIRECTLY via gpu_set_disp_origin, instead of routing through PutDispEnv and the
-  // opposite buffer's disp-env struct (the later-161 (1-parity) trick — a band-aid over the env pairing
-  // that depended on the two structs lining up). One fixed page, drawn and displayed; nothing PSX in the
-  // display path. (env0's draw area starts at VRAM (0,0); the display W/H stay as the boot env's mode set.)
-  // Dual-core diff mode skips the whole display/OT-submit block (host render output, shared VK singleton).
-  // SBS: both cores set diff_mode=1 (suppress per-core present at the engine frame tail) but ALSO
-  // sbs_render=1 to re-enable THIS render-submit block, so each core EMITS its geometry into its own VK
-  // batch (the SBS composite then draws each into its pane). So gate on "not-diff-mode OR sbs_render".
-  if ((!c->game->diff_mode || c->game->sbs_render) && c->mem_r16(0x1f80019c) == 0) {
-    rc1(c, cfg->putDrawEnv, envp + 0x2014); // PutDrawEnv (draw area/offset/clip for page 0)
-    gpu_set_disp_origin(c, 0, 0);           // PC-native: present scans the page we draw
-    // DrawOTag, PC-native: call Engine::drawOTag DIRECTLY (top-down) instead of interpreting the PSX FUN_80081560.
-    // drawOTag walks the OT to ENUMERATE the leftover guest prims (its draw ORDER is discarded), QUEUES
-    // them into the engine render queue (rq_active() is always on), then rq_flush()es the queue in ENGINE
-    // order. The interpreted PSX DrawOTag did the walk+queue but NOT the flush (rq_flush only lives in
-    // Engine::drawOTag, orphaned by the override-table removal) — so the queue filled every frame and never
-    // drained, and NOTHING 2D reached the VK renderer (the whole front-end rendered black). OT head arg.
-    c->hooks->drawOTag(c, envp + 0x1ffcu);
-    // ---- DUAL-VIEW second render pass: render the SAME game state via the PSX recomp path into render
-    // target 1 (right panel). The engine render is NOT idempotent (its per-frame queues/OT get consumed),
-    // so the PSX pass must run from the PRE-render state captured in ov_field_frame (dv_snapshot, before
-    // the native render ran), not from the post-native-render state. We then restore the POST-FRAME state
-    // so the canonical game (which includes the post-render per-frame area update) is undisturbed.
-    extern void gpu_vk_select_target(int);
-    // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
-    // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
-    DualviewSnapshot &dv = c->rsub.dualviewSnapshot;
-    if (c->rsub.mode.dualview() && dv.havePre() && !c->game->sbs) {
-      dv.capturePost(c);                    // save the real post-frame canonical state
-      dv.restorePre(c);                     // rewind to the pre-render (post-gameplay) state the PSX pass needs
-      rc2(c, cfg->clearOtagR, envp, 0x800); // ClearOTagR(ot, 0x800)
-      c->mem_w32(cfg->otBasePtr, envp);     // OT base
-      c->mem_w16(cfg->dwellCounter, 0);     // dwell counter
-      c->mem_w32(cfg->poolPtrLast, c->mem_r32(cfg->poolPtrCur));
-      c->mem_w32(cfg->poolPtrCur, (cfg->packetPoolBase) & 0xffffff); // reset packet pool ptr
-      gpu_vk_select_target(1);
-      rec_dispatch(c, cfg->dualviewRenderOrch); // PSX field render orchestrator (full OT build)
-      rec_dispatch(c, cfg->dualviewSubmit);     // render submit (faithful to ov_field_frame)
-      c->hooks->drawOTag(c, envp + 0x1ffcu);    // walk PSX OT -> target-1 batch
-      gpu_vk_select_target(0);
-      dv.restorePost(c); // restore the real canonical state (PSX pass fully undone)
-      dv.clearPre();
-    }
-  }
-  c->game->perf.frameEnd(); // perf: close the frame (post-tick remainder + full wall time) + emit rolling avg
-}
-
-// Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.
+                    // class Repl — REPL driver + title-owned request state (per-Core, on Game)
 
 static void game_main(Core *c);
 
@@ -388,23 +164,19 @@ void dc_boot_init(Core *c) {
   // CdlSync/CdlSetloc IRQ waits forever.  Register the CD command/read seams first, then the generic
   // BIOS-library waits, matching the standalone boot order.
   c->game->cd.overridesInit();
-  c->game->platform_hle.initBuiltins();
+  FrameLoopShell{}.prepareProduct(*c->game);
   fntrace_init();
   render_path_install(c);
   crt0_setup(c);
   game_init(c);
 }
 void dc_step_frame(Core *c, uint32_t f) {
-  native_step_frame(c, f, false);
+  FrameLoopShell{}.step(*c, f);
 }
 
 static void game_main(Core *c) {
-  // ARM THE CONFIG AUDIT AT BOOT, not after the frame loop. It used to be armed only by the cfg_dump()
-  // call below the loop, so a port whose bootInit NEVER RETURNS (spider1 dispatches the guest main; spyro
-  // does not enter this function at all) got NO startup report and NO exit audit — while psxport/CLAUDE.md
-  // instructs every reader to judge an UNKNOWN-knob warning on the EXIT audit. The instruction pointed at
-  // an instrument that, in those ports, had never been registered. report_once() is idempotent, so the
-  // call below the loop is harmless and stays as the place the FULL dump happens.
+  // Arm the config audit before title initialization. report_once() is idempotent; the complete dump
+  // remains after the loop for bounded diagnostic runs.
   psx::config::report_once();
   void gte_bind(Core *);
   gte_bind(c);              // bind this core's GTE before the init prefix / frame loop
@@ -413,19 +185,8 @@ static void game_main(Core *c) {
   mdec_bind(c);             // and this core's MDEC
   xa_bind(c);               // and this core's XA streamer
   game_init(c);
-  // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
-  // body but with the scheduler call FUN_80051e60 replaced by native stage stepping (added
-  // incrementally). native_step_frame calls ov_frame_update DIRECTLY (PC-driven, top-down): real
-  // per-frame update (still-PSX leaf FUN_800788ac) + per-vblank audio + fps60 commit + gpu_present +
-  // gpu_pace_frame + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the run (headless). ---
-  // switch (the cooperative task-switch) is wired via the platform-HLE table — see
-  // PlatformHle::initBuiltins: FUN_80080880 (ChangeThread, the universal yield/task-end primitive that
-  // FUN_80051f80/FUN_80051fb4 funnel through) -> switch, so a yield from an interpreted task
-  // coroutine longjmps back to the native scheduler. (Was the removed address-keyed override table.)
-  // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native in game/audio/music_coord.cpp
-  // (sound_register, called from games_tomba2_init). The instant-CD "cut looping ingame music when a
-  // dialog tone starts" hook (MusicCoord::cutIfDialog) moved into ov_sound_play_bgm there. The REPL
-  // `bgm`/`bgmstop` commands still rc1/rc0 those addresses directly (now routed through the overrides).
+  // The host owns iteration; FrameLoopShell delegates one finite frame. The title FrameDriver owns
+  // the measured input/audio/simulation/render/present order and any cooperative task service.
 
   // Frame budget: an explicit PSXPORT_NATIVE_FRAMES always wins (headless tests). Otherwise, when
   // a window is up this is the real interactive game loop — run until the user closes the window
@@ -442,11 +203,6 @@ static void game_main(Core *c) {
       nframes = 120;
     }
   } // headless smoke default
-  // PSXPORT_AUTO_SKIP needs time to tap through title -> GAME -> field: raise the headless smoke cap so a
-  // no-REPL run actually reaches free-roam before the loop ends (REPL runs gate frames via `run N` instead).
-  if (!repl_mode && !gpu_windowed() && cfg_str("PSXPORT_AUTO_SKIP")) {
-    nframes = 1500;
-  }
   // PSXPORT_NATIVE_FRAMES: the comment above (and docs/driving-the-game.md) promised "an explicit
   // NATIVE_FRAMES always wins" but nothing ever READ the var — every headless PAD_REPLAY/no-REPL run
   // silently hit the smoke cap regardless. Explicit request now wins over every default above.
@@ -475,7 +231,7 @@ static void game_main(Core *c) {
   }
   // When the debug server is up (headless, no REPL), the run is INTERACTIVELY DRIVEN over the socket
   // (rw/w16/press/shot/dumpram, step/play) — do NOT cap it, or it exits before we can drive. The
-  // server's `quit` command (or SIGINT) ends it. AUTO_SKIP still auto-drives to free-roam first.
+  // server's `quit` command (or SIGINT) ends it.
   if (!repl_mode && !gpu_windowed() && cfg_on("PSXPORT_DEBUG_SERVER")) {
     nframes = 0;
   }
@@ -484,22 +240,7 @@ static void game_main(Core *c) {
       "native_boot", "entering native frame loop ({})", nframes ? "capped" : "interactive (until window close)");
   c->game->dbg_server.start(c); // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.cpp)
   long repl_budget = 0;         // frames remaining in the current REPL `run N`
-  // Per-loop state carried across frames (plain locals — one frame loop per Core, no hidden globals):
-  int as_phase = -1;              // autoskip: -1 uninit, 0 reach-GAME, 1 await-cutscene, 2 skip, 3 done
-  int as_idle = 0;                // autoskip: consecutive flag==0 frames in phase 2
-  uint32_t seq_last = 0xFFFFFFFF; // seqdbg change detector
-  uint64_t state_last_sig = 0;    // `debug state` change detector
-  uint32_t bgm_rd[14] = {};       // bgmtick per-slot read-pointer change detector
-  uint32_t last_entry = 0;        // stage/sm change detector
-  uint32_t last_sm = 0xFFFFFFFF;
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
-    // The OT/GTE attribution span table describes THIS frame's packets only, so its lifetime is one
-    // logic frame. Driven here rather than off gpu.s_frame, which counts presents — on a path where
-    // presents are rare that reset never fired and the table saturated with stale spans, making the
-    // producer DB's guest leg attribute nothing (see OtAttr::beginLogicFrame).
-    c->rsub.otAttr.beginLogicFrame(f);
-    // c->game->timing.logicFrame = f is now set centrally in native_step_frame() itself (so SBS's
-    // dc_step_frame() path gets it too, not just this standalone loop).
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
     // it (immediate commands — r/w/watch/input/regs/seq — execute between frames). Quit/EOF breaks.
     if (repl_mode) {
@@ -518,85 +259,6 @@ static void game_main(Core *c) {
         break;
       }
       repl_budget--;
-    }
-    // PSXPORT_AUTO_SKIP=1 — headless AUTO-DRIVE into the real GAME free-roam FIELD (NOT the attract DEMO, NOT
-    // the intro cutscene). The dead PSXPORT_AUTO_GAMEPLAY/AUTO_SKIP env vars previously did nothing, so a
-    // no-input run only ever reached the attract demo (stage 0x801062E4, fully interpreted), never player
-    // control. Self-contained state machine driven by the CUTSCENE-ACTIVE flag *(0x1F800137) — verified 1
-    // throughout the post-NewGame intro cutscene (scripted camera pan + dialog) and 0 in free-roam:
-    //   (0) REACH GAME: tap Cross until task0 enters the GAME stage (0x8010637C).
-    //   (1) WAIT FOR CUTSCENE: hold until the flag first reads 1 (skips the early loading 0-window before the
-    //       cutscene starts), so a flag==0 later is unambiguously free-roam, not "not started yet".
-    //   (2) SKIP: the cutscene does NOT end on its own — pulse START (every ~40 frames) while the flag is 1.
-    //       Start ends it (it can take a few taps until the cutscene reaches a skippable point). Pressing
-    //       Start ONLY while the flag is 1 is what keeps us OUT of the pause menu (Start in free-roam opens
-    //       it). Done once the flag has been 0 for a short persistence window (survives any brief beat gap).
-    // Works with or without the REPL (the REPL's `run N` still gates frame budget).
-    if (as_phase == -1) {
-      const char *s = cfg_str("PSXPORT_AUTO_SKIP");
-      as_phase = (s && strcmp(s, "0")) ? 0 : 3;
-      if (as_phase == 0) {
-        lucent::info("autoskip", "armed: drive into GAME free-roam");
-      }
-    }
-    if (as_phase < 3) {
-      uint32_t stg = c->mem_r32(TASKBASE + 0xc);
-      uint8_t cut = c->mem_r8(0x1F800137u); // cutscene-active flag
-      if (as_phase == 0) {                  // tap Cross until the GAME stage
-        if (stg != c->cfg->stageGame) {
-          if ((f % 12u) == 0) {
-            c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6);
-          }
-        } else {
-          as_phase = 1;
-          lucent::info("autoskip", "reached GAME at frame {}", f);
-        }
-      } else if (as_phase == 1) { // wait for the cutscene to actually start (flag -> 1)
-        if (cut) {
-          as_phase = 2;
-          lucent::warn("autoskip", "intro cutscene up at frame {}; skipping (Start)", f);
-        }
-      } else { // phase 2: pulse Start while the cutscene is active
-        if (cut) {
-          as_idle = 0;
-          if ((f % 40u) == 0) {
-            c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6);
-          }
-        } else if (++as_idle >= 60) { // ~2s after the flag clears: lets the cutscene-END FADE finish before
-          c->game->pad.driveRelease();
-          as_phase = 3; // hand-off, so a Start right after skip opens the pause menu
-          lucent::info("autoskip", "free-roam reached at frame {} (cutscene ended)", f); // (not mid-fade)
-        }
-      }
-    }
-    // REPL-armed auto-drive (the `newgame` / `skip` commands). One way to drive the game: pipe REPL
-    // commands. `newgame` pulses Cross at the title until task0 enters the GAME prologue (0x8010637C),
-    // then returns to the REPL prompt. `skip N` then pulses Start each frame for N frames to advance the
-    // post-newgame fisherman dialog cutscene into the field. Manual walking = `press`/`run`/`release`.
-    if (c->game->repl.navNewgame) {
-      if (c->mem_r32(0x801fe00c) != c->cfg->stageGame) {
-        if ((f % 12u) == 0) {
-          c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6); // tap Cross
-        }
-      } else {
-        lucent::info("repl", "newgame: reached GAME prologue at frame {}", f);
-        c->game->repl.navNewgame = 0;
-        repl_budget = 0; // back to the REPL prompt
-        // Do NOT run this frame's native_step_frame: it would advance into the GAME loop body (area
-        // INIT -> running sub-mode) and, with the area-code overlay not yet loaded, derail before the
-        // REPL prompt regains control. `continue` freezes task0 right after the GAME prologue (before
-        // INIT runs) so immediate `r`/`rw`/`dumpram` reads see a clean GAME-entry state.
-        continue;
-      }
-    }
-    if (c->game->repl.skipFrames > 0) {
-      if ((f % 24u) == 0) {
-        c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6); // pulse Start
-      }
-      if (--c->game->repl.skipFrames == 0) {
-        c->game->pad.driveRelease();
-        lucent::info("repl", "skip done at frame {}", f);
-      }
     }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
@@ -620,154 +282,14 @@ static void game_main(Core *c) {
         usleep(15000);
       }
     }
-    watchdog_resume();             // re-arm after idle without falsely claiming this frame completed; the
-                                   // completed present switches first-frame grace to the steady budget
-    native_step_frame(c, f, true); // one frame of deterministic guest work (steppable core; see fn above).
-    // native_step_frame -> ov_frame_update OWNS present + pace + per-vblank audio (PC-driven frame body),
-    // so this loop runs no pacer of its own.
-    // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
-    // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
-    // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the
-    // missing-BGM root cause is upstream (song open/play not happening), not the SPU/tick.
-    { // Two guest reads — cheap enough to do unconditionally; the ON-CHANGE guard is what keeps this
-      // quiet, and it is real work (it updates seq_last), so it stays.
-      uint32_t st = (c->mem_r16(0x801054B0) << 16) | (c->mem_r32(0x80104C28) & 0xFFFF);
-      if (st != seq_last) {
-        lucent::debug("seq",
-                      "[seqdbg] f{} open={} playmask=0x{:04X} tickmode={} seqfn=0x{:08X} stage=0x{:08X}",
-                      f,
-                      c->mem_r16s(0x801054B0),
-                      c->mem_r32(0x80104C28) & 0xFFFF,
-                      c->mem_r8(0x800AC424),
-                      c->mem_r32(0x800AC42C),
-                      c->mem_r32(TASKBASE + 0xc));
-        seq_last = st;
-      }
+    watchdog_resume(); // re-arm after idle without falsely claiming this frame completed; the
+                       // completed present switches first-frame grace to the steady budget
+    FrameLoopShell{}.step(*c, f);
+    if (c->game->repl.consumePromptRequest()) {
+      repl_budget = 0;
     }
-    // PSXPORT_DEBUG=state — RELIABLE game-state probe (replaces the old `nav` camera guess, which
-    // disagreed with the screen). Dumps all 3 cooperative-task slots (state@+0x00, entry@+0x0c) so a
-    // PAUSE MENU (a separate task spawned in the GAME overlay, entry 0x80108xxx, page byte that task+0x6B)
-    // is DETECTABLE: when one of the 3 slots has a 0x80108xxx entry and is alive, a menu is open and
-    // gameplay input is going to the menu, NOT the player. Also prints the GAME stage sm + camera pos.
-    // Logged only on change of the (slot-state/entry + page) signature to stay quiet.
-    // PSXPORT_DEBUG=cam — per-frame camera pos (tracks Tomba). Used to determine controls empirically:
-    // hold one button and watch for a vertical (Y) excursion = a JUMP, vs a planar (X/Z) shift = walking.
-    lucent::debug(
-        "cam", "f{} ({},{},{})", f, c->mem_r16s(0x1f8000d2u), c->mem_r16s(0x1f8000d6u), c->mem_r16s(0x1f8000dau));
-    // Per-frame, and the body is a 3-slot walk of guest memory plus a signature hash — real work, so
-    // the channel gate stays (hoisted onto a Channel handle: the loop runs every frame).
-    static const lucent::Channel ch_state{"state"};
-    if (ch_state) {
-      uint64_t sig = 0;
-      int menu_slot = -1;
-      uint8_t menu_page = 0;
-      for (int i = 0; i < 3; i++) {
-        uint32_t base = 0x801fe000u + (uint32_t)i * 0x70u;
-        uint16_t st = c->mem_r16(base);
-        uint32_t ent = c->mem_r32(base + 0xc);
-        sig = sig * 1099511628211ull + ((uint64_t)st << 32 | ent);
-        if (st && (ent & 0xFFFFF000u) == 0x80108000u) {
-          menu_slot = i;
-          menu_page = c->mem_r8(base + 0x6bu);
-        }
-      }
-      sig = sig * 31 + ((uint64_t)menu_slot << 8 | menu_page);
-      if (sig != state_last_sig) {
-        state_last_sig = sig;
-        lucent::Line ln;
-        ln.add("f{}", f);
-        for (int i = 0; i < 3; i++) {
-          uint32_t base = 0x801fe000u + (uint32_t)i * 0x70u;
-          ln.add(" | s{} st={} ent=0x{:08X}", i, c->mem_r16(base), c->mem_r32(base + 0xc));
-        }
-        ln.add("  MENU={}", menu_slot >= 0 ? "OPEN" : "no");
-        if (menu_slot >= 0) {
-          ln.add("(slot{} page={})", menu_slot, menu_page);
-        }
-        ln.add("  cam=({},{},{}) sm[0x4a]={}",
-               c->mem_r16s(0x1f8000d2u),
-               c->mem_r16s(0x1f8000d6u),
-               c->mem_r16s(0x1f8000dau),
-               c->mem_r16(0x801fe000u + 0x4au));
-        ln.flush_debug(ch_state);
-      }
-    }
-    // BGM-active probe (PSXPORT_BGMDBG): each frame scan the 14 libsnd sequence slots
-    // (0x800be3d8 + i*0xB0) for the active/play flag (+0x98 bit0). For any active slot, log
-    // its read pointer (+0x00) vs base (+0x04) — if the read ptr ADVANCES frame-to-frame the
-    // sequence is genuinely ticking (audible); if it stays == base the SsSeqCalled tick isn't
-    // advancing it (frozen, the handoff's hypothesis). Scene-independent: catches any window
-    // where a BGM is active, without needing to reach a specific scene.
-    if (cfg_str("PSXPORT_BGMDBG")) {
-      for (int i = 0; i < 14; i++) {
-        uint32_t s = 0x800be3d8u + (uint32_t)i * 0xB0u;
-        uint32_t flag = c->mem_r32(s + 0x98), rd = c->mem_r32(s);
-        if ((flag & 1) && rd != bgm_rd[i]) {
-          lucent::info("bgmtick",
-                       "f{} slot{} active rdptr={:08X} base={:08X} ({:+})",
-                       f,
-                       i,
-                       rd,
-                       c->mem_r32(s + 4),
-                       (int)(rd - c->mem_r32(s + 4)));
-          bgm_rd[i] = rd;
-        }
-        if (!(flag & 1)) {
-          bgm_rd[i] = 0;
-        }
-      }
-    }
-    uint32_t t0e = c->mem_r32(TASKBASE + 0xc), s48 = c->mem_r16(TASKBASE + 0x48);
-    // GAME runs a 4-level nested state machine (task +0x48/4a/4c/4e). Track all of it so a
-    // stuck leaf is visible, not just the outer s48.
-    uint32_t sm =
-        (c->mem_r16(TASKBASE + 0x48) << 24) | (c->mem_r16(TASKBASE + 0x4a) << 16) | (c->mem_r16(TASKBASE + 0x4c) << 8) |
-        c->mem_r16(TASKBASE + 0x4e) ^ (c->mem_r16(TASKBASE + 0x50) << 12) ^ (c->mem_r16(TASKBASE + 0x52) << 4);
-    if (t0e != last_entry || sm != last_sm) {
-      const char *stg = t0e == c->cfg->stageStart  ? "START"
-                        : t0e == c->cfg->stageDemo ? "DEMO"
-                        : t0e == c->cfg->stageGame ? "GAME"
-                                                   : "?";
-      lucent::info("native_boot",
-                   "  frame {}: stage={}(0x{:08X}) sm[48={} 4a={} 4c={} 4e={} 50={} 52={}] @0x80109450={:08X}",
-                   f,
-                   stg,
-                   t0e,
-                   c->mem_r16(TASKBASE + 0x48),
-                   c->mem_r16(TASKBASE + 0x4a),
-                   c->mem_r16(TASKBASE + 0x4c),
-                   c->mem_r16(TASKBASE + 0x4e),
-                   c->mem_r16(TASKBASE + 0x50),
-                   c->mem_r16(TASKBASE + 0x52),
-                   c->mem_r32(0x80109450));
-      last_entry = t0e;
-      last_sm = sm;
-    }
-    // One-shot: when GAME has settled, dump the CD-streaming contract (FUN_8001cfc8, task
-    // slot 2). task2 obj @0x801fe0e0; +0x54=start LBA, +0x58=end LBA (= globals
-    // DAT_801fe134/138). DAT_801fe146=channel/type. _DAT_1f8001f8=dest, _DAT_1f8001f4=words.
-    // One-shot condition (the GAME stage, at exactly frame 75) — that part is real logic and stays;
-    // only the channel test folded into the logger.
-    if (t0e == c->cfg->stageGame && f == 75) {
-      lucent::debug("stream",
-                    "[streamdbg] task2 obj @0x801fe0e0 state={} entry=0x{:08X}",
-                    c->mem_r16(0x801fe0e0),
-                    c->mem_r32(0x801fe0ec));
-      lucent::debug("stream",
-                    "[streamdbg] startLBA(+54/801fe134)={} endLBA(+58/801fe138)={} "
-                    "chan(801fe146)={} be0e4=0x{:02X}",
-                    c->mem_r32(0x801fe134),
-                    c->mem_r32(0x801fe138),
-                    c->mem_r8(0x801fe146),
-                    c->mem_r8(0x800be0e4));
-      lucent::debug("stream",
-                    "[streamdbg] dest(_DAT_1f8001f8)=0x{:08X} words(_DAT_1f8001f4)={} "
-                    "f0={} f1f800224=0x{:08X}",
-                    c->mem_r32(0x1f8001f8),
-                    c->mem_r32(0x1f8001f4),
-                    c->mem_r32(0x1f8001f0),
-                    c->mem_r32(0x1f800224));
-    }
+    // The title FrameDriver owns its measured present, pace, and audio order, so this shell loop
+    // performs none of those services around step().
     // PSXPORT_RAMDUMP_FRAME=N — dump RAM mid-run at native frame N (overlay state during gameplay
     // differs from end-of-run; needed to disasm the LIVE level/stage overlay at 0x8010/0x8011xxxx).
     {
@@ -785,31 +307,6 @@ static void game_main(Core *c) {
           lucent::info("native_boot", "mid-run RAM dump @frame {} -> {}", f, rd);
         }
       }
-    }
-    lucent::debug("schedf",
-                  "f{} t0[st={} e={:08X} s48={} s4a={} s4c={} s5c={}] t1[st={}] t2[st={}]",
-                  f,
-                  c->mem_r16(TASKBASE),
-                  c->mem_r32(TASKBASE + 0xc),
-                  c->mem_r16(TASKBASE + 0x48),
-                  c->mem_r16(TASKBASE + 0x4a),
-                  c->mem_r16(TASKBASE + 0x4c),
-                  c->mem_r16(TASKBASE + 0x5c),
-                  c->mem_r16(TASKBASE + 0x70),
-                  c->mem_r16(TASKBASE + 0xe0));
-    // RATE LIMIT (kept): the normal-run frame milestone — every frame for the first 10, then every 30th.
-    // It used to be the ELSE of the `schedf` channel test, i.e. asking for the schedf trace SUPPRESSED
-    // the milestone line. That coupling is gone with the guard: both now print when schedf is on.
-    if (f < 10 || (f % 30) == 0) {
-      lucent::info("native_boot",
-                   "  frame {}: t0[st={} e=0x{:08X} s48={}] t1[st={}] t2[st={}] f135={}",
-                   f,
-                   c->mem_r16(TASKBASE),
-                   c->mem_r32(TASKBASE + 0xc),
-                   c->mem_r16(TASKBASE + 0x48),
-                   c->mem_r16(TASKBASE + 0x70),
-                   c->mem_r16(TASKBASE + 0xe0),
-                   c->mem_r8(0x1f800135));
     }
     c->game->dbg_server.service(c); // service one queued live-debug-server command (non-blocking)
   }
@@ -844,11 +341,7 @@ static void game_main(Core *c) {
       lucent::info("padrec", "run-end: replay fully consumed — {} of {} pad frame(s)", used, total);
     }
   }
-  lucent::info("native_boot",
-               "frame loop done; task0 state={} entry=0x{:08X} obj+0x48={}",
-               c->mem_r16(TASKBASE),
-               c->mem_r32(TASKBASE + 0xc),
-               c->mem_r16(TASKBASE + 0x48));
+  lucent::info("native_boot", "frame loop done");
   const char *rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {
 
@@ -861,9 +354,13 @@ static void game_main(Core *c) {
   }
 }
 
-// Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main override and enters
-// crt0; crt0's call to FUN_80050b08 lands in game_main.
+// Wired from the title bootstrap when native boot is selected. Enters framework crt0 and then the
+// host-owned product loop.
 void native_boot_run(Core *c) {
+  // Refuse before diagnostics, FMVs, or a title boot hook can dispatch a non-returning guest main.
+  // Product execution has exactly one frame owner: the title's finite native FrameDriver.
+  FrameLoopShell{}.prepareProduct(*c->game);
+
   // Standalone game mains install their override clusters immediately before entering here. Developer
   // diagnostics must install last or a working game override can silently displace them. dc_boot_init
   // performs the same ordering for dual-core and selftest boot paths.

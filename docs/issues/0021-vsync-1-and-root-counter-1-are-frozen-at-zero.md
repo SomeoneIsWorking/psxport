@@ -5,7 +5,14 @@ status: resolved
 symptom: Guests polling Sony libetc VSync(1) for an intra-field scanline never leave the loop even while VBlank advances.
 tags: timing,vsync,hsync,root-counter,guest-time
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-27
 ---
 
-Root cause: the framework's Timing::vsync(mode=1) explicitly returned a dummy zero and Core::io_read left root counter 1 (0x1F801110) unmapped. Sony libetc VSync samples that HBlank-clocked 16-bit counter and subtracts a saved baseline, so intact guest code could never observe an intra-field phase. The shared EmulatedTime owner now derives one deterministic NTSC/PAL HSync count used by both MMIO and the direct Timing seam. test_hsync_counter exercises the shipping MMIO path, direct query/reset behavior, line-248 progression, NTSC/PAL field geometry, and invalid cadence. No consumer address, scanline threshold, or forced transition is encoded.
+Root cause at resolution time: the framework's `Timing::vsync(mode=1)` returned a dummy zero and
+`Core::io_read` left root counter 1 (`0x1F801110`) unmapped. The root-counter half remains resolved:
+shared `EmulatedTime` supplies the deterministic NTSC/PAL HSync count and `test_hsync_counter` covers
+the shipping MMIO path, line-248 progression, field geometry, and invalid cadence.
+
+The VSync half was superseded on 2026-08-27 by issue 31's stronger ownership contract. There is no
+successful direct Timing seam now: every product's measured libetc VSync entry aborts for every mode,
+and only the host-native frame driver may advance fields.

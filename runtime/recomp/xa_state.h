@@ -2,7 +2,7 @@
 // Cores keep SEPARATE streaming state (active stream, position, decode ring, clip bookkeeping). This
 // used to be file-scope statics in xa_stream.c; it now lives in this struct, one per Game (game.h
 // embeds it). xa_stream.c is BOUND to one instance at a time via xa_bind(Core*) — set from the explicit
-// Core before that core runs (native_step_frame), like gte_bind/spu_bind/mdec_bind. The
+// Core by its title FrameDriver before that core runs, like gte_bind/spu_bind/mdec_bind. The
 // decoded PCM still feeds the per-instance SPU which mixes to the SHARED host audio sink (one physical
 // speaker; a lockstep RAM/state diff is unaffected by the host device, shared by design — same policy
 // as the FMV audio sink and SPU output).

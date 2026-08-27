@@ -20,6 +20,7 @@ typedef struct CdcIrqEnt {
 typedef uint64_t (*CdcTickNowFn)(void *context);
 typedef int (*CdcDiscReadRawFn)(struct DiscState *, uint32_t, uint8_t *, uint32_t);
 typedef int (*CdcDiscReadSectorFn)(struct DiscState *, uint32_t, uint8_t *);
+typedef int (*CdcDiscGetSubqPositionFn)(struct DiscState *, uint32_t, uint8_t *);
 
 typedef struct CdcState {
   int index;                      // 0x1F801800 low 2 bits (register bank)       (was s_index)
@@ -62,6 +63,7 @@ typedef struct CdcState {
                                            // audio sectors into it when STRSND routing applies (beetle parity)
   CdcDiscReadRawFn disc_read_raw_fn;       // sector source; cdc_state_init defaults these to the
   CdcDiscReadSectorFn disc_read_sector_fn; // real disc.cpp readers so tests can inject fake sectors
+  CdcDiscGetSubqPositionFn disc_get_subq_position_fn;
 } CdcState;
 
 #ifdef __cplusplus

@@ -34,6 +34,7 @@
 #include "core.h"
 #include "fs_util.h" // Fs::writeFile — host file writes go through the shared util
 #include "game.h"    // class Pad lives on Game; reached via c->game->pad (see class docs)
+#include "guest_pad_buffer_layout.h"
 #include <lucent/log.h>
 #include <stdint.h>
 
@@ -71,6 +72,31 @@ void Pad::fillBuffer(uint8_t *buf) {
   buf[2] = (uint8_t)(buttons & 0xFF);        // button mask low  (active-low)
   buf[3] = (uint8_t)((buttons >> 8) & 0xFF); // button mask high (active-low)
 }
+
+namespace {
+
+GuestPadBufferLayout resolveGuestPadBufferLayout(const Core &core) {
+  if (core.cfg) {
+    return {
+        .slot0Buffer = core.cfg->padSlot0Buf,
+        .slot1Buffer = core.cfg->padSlot1Buf,
+        .slotPointerTable = core.cfg->padSlotPtrTable,
+        .slotPointerStride = core.cfg->padSlotPtrStride ? core.cfg->padSlotPtrStride : 4u,
+    };
+  }
+  if (core.runtime) {
+    if (const GuestPadBufferLayout *layout = core.runtime->guestPadBufferLayout()) {
+      GuestPadBufferLayout resolved = *layout;
+      if (!resolved.slotPointerStride) {
+        resolved.slotPointerStride = 4u;
+      }
+      return resolved;
+    }
+  }
+  return {};
+}
+
+} // namespace
 
 // --- Optional SDL host input ------------------------------------------------
 // DEFAULT (no host input) works headlessly: s_buttons stays 0xFFFF (no presses)
@@ -840,28 +866,27 @@ void Pad::serviceFrame() {
 
   uint8_t pk[4];
   fillBuffer(pk);
-  uint32_t bufs[2] = {c->cfg->padSlot0Buf, c->cfg->padSlot1Buf}; // fixed game pad buffers
-  const uint32_t tbl = c->cfg->padSlotPtrTable;
-  const uint32_t stride = c->cfg->padSlotPtrStride ? c->cfg->padSlotPtrStride : 4u;
+  const GuestPadBufferLayout layout = resolveGuestPadBufferLayout(*c);
+  const uint32_t bufs[2] = {layout.slot0Buffer, layout.slot1Buffer};
   for (int slot = 0; slot < 2; slot++) {
     // Only consult the driver's table when the port HAS one. Reading it unconditionally means a
     // game with no known table reads guest address 0 (and 0+stride) and calls whatever garbage is
     // there a buffer pointer — writing the pad packet into an arbitrary address.
-    uint32_t b = tbl ? c->mem_r32(tbl + (uint32_t)slot * stride) : 0u;
+    uint32_t b =
+        layout.slotPointerTable ? c->mem_r32(layout.slotPointerTable + (uint32_t)slot * layout.slotPointerStride) : 0u;
     if (!b) {
       b = bufs[slot]; // fall back to the fixed buffer
     }
     if (!b) {
       continue; // neither known: nothing to fill
     }
-    for (int i = 0; i < 4; i++) {
-      c->mem_w8(b + i, pk[i]);
+    if (slot == 1 && !mSlot1Connected) {
+      c->mem_w8(b, 0xFF);
+    } else {
+      for (int i = 0; i < 4; i++) {
+        c->mem_w8(b + i, pk[i]);
+      }
     }
-  }
-  // Slot 1 is absent by default so existing single-pad games ignore it. A title that has measured
-  // guest-side slot-1 handling can opt into the packet fillBuffer wrote above.
-  if (c->cfg->padSlot1Buf && !mSlot1Connected) {
-    c->mem_w8(c->cfg->padSlot1Buf, 0xFF);
   }
 }
 

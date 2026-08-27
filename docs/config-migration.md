@@ -452,7 +452,7 @@ quoting a call). The class map prints any framework-live knob it does not cover;
 
 | knob | type | sites | read at | doc |
 |---|---|---|---|---|
-| `PSXPORT_AUTO_SKIP` | string | 2 | `runtime/recomp/native_boot.cpp:297` · `runtime/recomp/native_boot.cpp:344` | config.md:697 |
+| `PSXPORT_AUTO_SKIP` | string | game:Tomba2Engine | `game/core/auto_drive.cpp` in Tomba2Engine | Tomba2Engine/docs/driving-the-game.md |
 | `PSXPORT_DEBUG_SERVER` | bool | 3 | `runtime/recomp/dbg_server.cpp:461` · `runtime/recomp/sbs.cpp:2091` · `runtime/recomp/native_boot.cpp:305` | config.md:559 |
 | `PSXPORT_DUALVIEW` | string | 1 | `runtime/recomp/native_boot.cpp:615` | **none** |
 | `PSXPORT_ENH` | string | 1 | **MIGRATED 2026-08-12** — `cv_enh`, gate `psx::config::enh_gate` (`runtime/recomp/config.cpp`) | config.md "PC enhancements" |
@@ -517,7 +517,7 @@ quoting a call). The class map prints any framework-live knob it does not cover;
 
 | knob | type | sites | read at | doc |
 |---|---|---|---|---|
-| `PSXPORT_BGMDBG` | string | 1 | `runtime/recomp/native_boot.cpp:513` | config.md:724 |
+| `PSXPORT_BGMDBG` | string | game:Tomba2Engine | `game/core/frame_diagnostics.cpp` in Tomba2Engine | Tomba2Engine/docs/driving-the-game.md |
 | `PSXPORT_CLOBBERDUMP` | path | 3 | `runtime/recomp/gpu_native.cpp:1393` · `runtime/recomp/gpu_native.cpp:1398` · `runtime/recomp/gpu_native.cpp:1400` | config.md:723 |
 | `PSXPORT_CLUTWATCH` | string | 1 | `runtime/recomp/gpu_native.cpp:1926` | config.md:723 |
 | `PSXPORT_CW` | string | 1 | `runtime/recomp/mem.cpp:52` | config.md:723,741 |

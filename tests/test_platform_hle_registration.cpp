@@ -82,8 +82,24 @@ static void test_duplicates_do_not_fill_the_table(void) {
   CHECK_EQ(g_override_calls, 65);
 }
 
+static void test_legacy_adapter_consumes_the_last_exact_window_slot(void) {
+  static GameConfig cfg{};
+  static const GameHooks hooks{};
+  cfg = {};
+  cfg.hle.windowLo[kPlatformHleWindowCapacity - 1] = kSecond;
+  cfg.hle.windowHi[kPlatformHleWindowCapacity - 1] = kSecond + 4u;
+  psxport_install_game(&cfg, &hooks);
+  auto game = std::make_unique<Game>();
+
+  CHECK(game->platform_hle.register_(kSecond, second_handler));
+  CHECK(game->platform_hle.lookup(kSecond) == second_handler);
+  CHECK(!game->platform_hle.register_(kSecond + 4u, second_handler));
+  CHECK(game->platform_hle.lookup(kSecond + 4u) == nullptr);
+}
+
 int main() {
   RUN(duplicate_replaces_and_reinstalls);
   RUN(duplicates_do_not_fill_the_table);
+  RUN(legacy_adapter_consumes_the_last_exact_window_slot);
   return pt_summary();
 }

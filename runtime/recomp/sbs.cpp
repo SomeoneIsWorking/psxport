@@ -2194,7 +2194,7 @@ void Sbs::Impl::storeCb(Core *c, uint32_t a, uint32_t v, uint32_t w) {
       lucent::info("sbs-ww", "    guest bt (core {}):\n{}", which ? 'B' : 'A', gbt);
     }
     // Host-side C backtrace — names the actual C function that called mem_w*. This is what pins a
-    // NATIVE write vs a SUBSTRATE write (line-105 native_step_frame vs func_XXXX substrate). Even
+    // NATIVE write vs a SUBSTRATE write (title FrameDriver vs func_XXXX substrate). Even
     // when the guest stack is empty, this is populated (it's the C call stack of the store).
     void **hbt = which ? mWwHostBtB : mWwHostBtA;
     int nbt = which ? mWwHostBtNB : mWwHostBtNA;

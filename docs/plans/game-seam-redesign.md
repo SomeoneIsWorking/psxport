@@ -3,7 +3,11 @@
 **Status: PARTIAL.** The inheritance slice and first immutable fact slice are implemented:
 `GameRuntime` installation, `GuestProgramImage`, per-Core
 context lifecycle, override registration, boot initialization, and per-Game `FrameDriver` /
-`TaskScheduler` factories. `Game` owns the factory products. Current ports remain source-compatible
+`TaskScheduler` factories. `Game` owns the factory products. `FrameLoopShell` now requires a driver
+and delegates `dc_step_frame`/standalone stepping to it; product boot rejects the former guest-owned
+loop route. `PlatformHlePlan::vsyncAddress` is mandatory for direct products, with the legacy adapter
+carrying the same measured fact, and all VSync modes bind to one fatal non-replaceable framework trap.
+Current ports remain source-compatible
 through a bounded `LegacyGameRuntimeAdapter`; the adapter exposes no virtual config getter, and the
 new smoke derives `GameRuntime` with both legacy views null. The crt0, resident-MAIN router, and
 backtrace heuristic now consume the runtime-owned image rather than `c->cfg`; the legacy adapter owns
@@ -196,8 +200,10 @@ Boundary cases the audit hit, decided:
   offsets.
 * **Slot/struct OFFSETS are game data exactly like bases** (`task_slot_layout.h`'s own STOPGAP
   banner says so). Q1 if a generic consumer reads them; they die with their consumer if Q2 moves it.
-* **A per-game POLICY switch is Q1 only while its answer is immutable** (`paceQuota`,
-  `hle.vsyncTrap`): the framework's code path is generic; the game states which leg. A title that
+* **A per-game POLICY switch is Q1 only while its answer is immutable** (`paceQuota`): the
+  framework's code path is generic; the game states which leg. `hle.vsyncTrap` is no longer a policy
+  switch: it is the adapter's mandatory measured-address fact and every product receives the same
+  fatal handler. A title that
   changes ownership by frame is Q2. `preserveVramBackdrop` crossed that boundary in issue 0022:
   Spyro needs guest VRAM for upload-only boot screens and rejects it under complete native frames,
   so the live owner is now the required pure virtual
@@ -228,15 +234,13 @@ namespace lucent { class Line; }
 // Overriding-to-silence is the one banned move (it is spider1's unstood_up() convention,
 // promoted from a per-port discipline to the type's default).
 
-// One frame of deterministic guest work + the game's own auto-drive and probes. The frame LOOP
-// is the game's (measured, §1.2/§1.3); the framework supplies loop FURNITURE (below) and the
-// harness contract "step exactly one frame".
+// One frame of deterministic guest work, including the game's own auto-drive and probes. The frame
+// LOOP is host-owned; the title supplies one finite measured engine step and the framework supplies
+// loop FURNITURE (below) plus the contract "step and present exactly once".
 class FrameDriver {
 public:
   virtual ~FrameDriver() = default;
-  virtual void stepFrame(Core& c, uint32_t f) = 0;   // the dc_step_frame unit. Deterministic.
-  virtual void autoDrive(Core& c, uint32_t f) {}     // AUTO_SKIP / newgame / warp state machines
-  virtual void frameProbes(Core& c, uint32_t f) {}   // per-frame diagnostics (seqdbg/state/bgm…)
+  virtual void stepFrame(Core& c, uint32_t f) = 0; // the complete finite title frame
 };
 
 // The game's cooperative-task scheduler, if it has one the framework must be able to tick.
@@ -283,10 +287,9 @@ public:
   virtual void  registerOverrides(Game& g) = 0;   // overrides + PC-tap rows + anything registered
   virtual void  bootInit(Core& c) = 0;
 
-  // Kind 2 factories. nullptr is a REAL ANSWER with defined consequences, logged at boot:
-  //   no FrameDriver   -> the framework loop shell refuses to loop; the game drives its own loop
-  //                       (spyro) or the guest main owns control (spider1 Phase 0). Harnesses
-  //                       that need stepping REFUSE, naming this (dualcore precedent).
+  // Kind 2 factories. A null FrameDriver is permitted only for smoke/tools that never enter product
+  // boot. Product preflight refuses it before bootInit can dispatch guest main; there is no
+  // guest-owned or game-side bypass around the framework shell.
   //   no TaskScheduler -> PlatformHle's ChangeThread routing refuses registration of a yield
   //                       funnel; nothing silently no-ops.
   virtual std::unique_ptr<FrameDriver>   createFrameDriver(Game& g)       { return nullptr; }
@@ -319,20 +322,21 @@ the legacy adapter also fills `c->cfg`/`c->hooks`. `Game::pcSched`
 (game.h:70) — a Tomba class held by value in a framework object — is deleted; its replacement is
 the `sched` unique_ptr.
 
-**The loop furniture.** What remains of native_boot.cpp's loop after Tomba's body leaves is real
-and stays framework: watchdog arm/pet, REPL budget/blocking, debug-server pause/step, frame-budget
-resolution (NATIVE_FRAMES/headless caps), the boot-FMV playback, `crt0_setup`, `render_path_install`.
-It is packaged as `FrameLoopShell` with two entry styles, because the two shipping shapes need both:
+**The loop entry.** The implemented `FrameLoopShell` owns no title services. It is the mandatory
+preflight plus the one finite stepping route used by `dc_step_frame` and the standalone loop:
 
 ```cpp
-class FrameLoopShell {          // native_boot.cpp keeps this; it owns NO game knowledge
+class FrameLoopShell {
 public:
-  void run(Core* c, FrameDriver& d);          // Tomba: shell owns the loop, calls d.stepFrame/
-                                              // d.autoDrive/d.frameProbes once per iteration
-  bool beginFrame(Core* c, uint32_t f);       // spyro: the game's own loop brackets each frame
-  void endFrame(Core* c, uint32_t f);         //        with the same services, piecemeal
+  FrameDriver& requireDriver(Game& game) const;
+  void step(Core& core, uint32_t frame) const;
 };
 ```
+
+The shell does not bracket pad/audio/present around the driver. Each title's driver owns its measured
+service order and one presentation commit (or a measured unpresented fence). Boot diagnostics, FMV,
+watchdog, REPL pause/step, frame-budget resolution, `crt0_setup`, and `render_path_install` remain
+framework scaffolding in their existing cohesive owners; they are not copied into title drivers.
 
 **Transitional adapter, so migration is per-member.** Step 4 of §6 introduces
 `LegacyGameRuntimeAdapter : GameRuntime` (framework-side, temporary) built over an installed
@@ -522,11 +526,13 @@ kinds at once.
    `test_guest_program_image_ownership` prevents those algorithms and `GameHooks` from reclaiming it.
    Remaining follow-up: migrate each consumer's constants, then delete the adapter-only legacy fields.
 4b. **`PlatformHlePlan` — IMPLEMENTED, direct-runtime platform-library fact slice.** The plan owns
-   the measured SCEI-library windows, typed SetGeomOffset/SetGeomScreen addresses, and bounded
-   `{addr, fn}` rows for title-specific sync behavior. `PlatformHle::initBuiltins()` maps both direct
+   the measured SCEI-library windows, typed SetGeomOffset/SetGeomScreen and mandatory VSync addresses,
+   and bounded `{addr, fn}` rows for other title-specific sync behavior. `PlatformHle::initBuiltins()` maps both direct
    and legacy projection addresses through the same private framework handlers and the same
-   half-open-window guard. `test_platform_hle_direct_runtime` drives the shipping lookup/handler seam
-   and includes an out-of-window opposite control. Remaining follow-up: migrate legacy consumers,
+   half-open-window guard; VSync always maps to the private all-mode abort and refuses replacement.
+   `test_platform_hle_direct_runtime` drives the projection lookup/handler seam and
+   `test_vsync_ownership` covers both runtime shapes, all mode classes, and opposite controls.
+   Remaining follow-up: migrate legacy consumers,
    then delete the adapter-only `GameConfig::hle` fields; do not expose or duplicate standard handlers
    in game repositories.
 5. **SchedBody death.** `pc_scheduler.{h,cpp}` + scheduler.cpp's stanzas move to Tomba2Engine as
@@ -536,12 +542,12 @@ kinds at once.
    move, a framework grep-level check cannot be the test (grep counts text) — the RED is the smoke
    target extended with `-Wl,--no-undefined` proving `libpsxport` resolves with no `SchedBody`
    symbol, failing while the enum's users exist.
-6. **FrameDriver split.** `TombaFrameDriver` takes `native_step_frame`'s body + autoskip + warp +
-   probes; `FrameLoopShell` keeps the furniture; `dc_step_frame` delegates and REFUSES (loudly)
-   when `driver==nullptr` — which converts §1.2's silent-zero preamble hazard into an error
-   message on spider1/spyro selftest paths. spyro may adopt `FrameLoopShell::beginFrame/endFrame`
-   in its own loop, unforced. Gates: all three boot gates, Tomba SBS, and spyro's
-   `PSXPORT_SPYRO_FRAME_LOOP=1` run unchanged.
+6. **FrameDriver split — FRAMEWORK HALF IMPLEMENTED.** `FrameLoopShell` requires the factory product,
+   `dc_step_frame` and the standalone loop delegate exactly once, and product entry refuses before a
+   non-returning guest main. The framework title-frame body has been deleted; a static ownership test
+   rejects its defining operations in `native_boot.cpp`. Consumer work remains: each title supplies its
+   finite driver and proves its measured body + diagnostics locally. Gates: each title's real boot/frame/
+   present gate plus relevant harnesses; a guest-owned loop or VSync presenter is not a supported state.
 7. **`GameplayProbe`.** dualcore/SBS/selftest navigation asks the probe; Tomba's gameplay
    selftests move behind `selftestGame`; `task_slot_layout.h` + `stage*` fields deleted. RED:
    dualcore under a stub config must still REFUSE (it does today — keep that test) but now with

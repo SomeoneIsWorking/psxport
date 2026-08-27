@@ -16,6 +16,11 @@ class Game;
 // OverrideFn is defined in scheduler.h — the (Core*)->void signature every HLE handler obeys.
 typedef void (*OverrideFn)(Core *c);
 
+// Both direct runtimes and the legacy adapter use this one capacity for exact, half-open library
+// entry windows. Keep the storage and every validation loop tied to it; a duplicated array bound
+// silently made the third measured leaf impossible to declare through one of the two seams.
+inline constexpr int kPlatformHleWindowCapacity = 4;
+
 // One game-declared hardware-sync primitive: the measured address of a SCEI library leaf (libetc /
 // libcd / libmdec / libgpu sync glue) and the native handler that owns it. Addresses are GAME data.
 struct PlatformHleBinding {
@@ -39,14 +44,19 @@ struct PlatformHlePlan {
   uint32_t setGeomOffset = 0;
   uint32_t setGeomScreen = 0;
 
+  // Measured libetc VSync entry. Product boot requires this fact and the framework always binds it
+  // to its fatal native-frame-loop ownership trap. A title supplies no handler and cannot replace
+  // the trap through `bindings`.
+  uint32_t vsyncAddress = 0;
+
   // Title-specific sync leaves remain explicit address/function bindings. Do not use this table to
-  // expose a framework-owned standard handler: add a typed address above so games cannot duplicate
-  // or reach private handler implementations.
+  // expose a framework-owned standard handler (including VSync): add a typed address above so games
+  // cannot duplicate or reach private handler implementations.
   PlatformHleBinding bindings[kMaxBindings] = {};
   int bindingCount = 0;
-  // Up to two accepted windows; a zero hi disables a slot. Addresses are KSEG0 (0x8xxxxxxx).
-  uint32_t windowLo[2] = {0, 0};
-  uint32_t windowHi[2] = {0, 0};
+  // Exact accepted windows; a zero hi disables a slot. Addresses are KSEG0 (0x8xxxxxxx).
+  uint32_t windowLo[kPlatformHleWindowCapacity] = {};
+  uint32_t windowHi[kPlatformHleWindowCapacity] = {};
 };
 
 class PlatformHle {
@@ -58,9 +68,18 @@ public:
   // matching addresses in place and reinstalls their generated overrides without growing the table.
   void initBuiltins();
 
+  // Product preflight. A missing measured VSync address would let a retail busy-wait run and report
+  // a misleading timeout, so boot refuses before title initialization can enter guest main.
+  void requireNativeFrameLoopContract() const;
+
+  [[nodiscard]] uint32_t vsyncAddress() const {
+    return mVSyncAddress;
+  }
+
   // Register a single (addr → handler) pair. The addr MUST lie in the PSX BIOS-library / I/O-glue
-  // window (game/engine FUN_xxxx are top-down owned, never HLE'd here).
-  void register_(uint32_t addr, OverrideFn fn);
+  // window (game/engine FUN_xxxx are top-down owned, never HLE'd here). Returns false when the
+  // address is refused or the local table cannot accept it.
+  bool register_(uint32_t addr, OverrideFn fn);
 
   // Fast lookup — called on every interpreted call target. Uses a [min,max] gate for the common case.
   // Returns nullptr for a miss.
@@ -70,6 +89,7 @@ private:
   // The accepted address windows are GAME data (GameConfig::hle.windowLo/windowHi), so the guard
   // takes the config rather than baking one game's memory map into the framework.
   static bool inBiosWindow(const struct GameConfig *cfg, uint32_t a);
+  void bindVSyncTrap(uint32_t addr);
 
   static constexpr int kMax = 32;
 
@@ -78,4 +98,5 @@ private:
   int mN = 0;
   uint32_t mLo = 0xFFFFFFFFu;
   uint32_t mHi = 0;
+  uint32_t mVSyncAddress = 0;
 };

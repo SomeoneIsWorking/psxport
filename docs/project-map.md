@@ -72,12 +72,14 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 
 ## `runtime/recomp/` — the PSX→PC PLATFORM (common; future `psxport` submodule)
 **Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (bus dispatch + watchpoints PSXPORT_WWATCH/CW),
-`game_runtime.{h,cpp}` + `render_capabilities.h` + `guest_program_image.h` + `game_iface.{h,cpp}`
+`game_runtime.{h,cpp}` + `render_capabilities.h` + `guest_program_image.h` +
+`guest_pad_buffer_layout.h` + `game_iface.{h,cpp}`
 (derived `GameRuntime` install, one required title declaration for Native/temporal availability,
 shared startup/live-selection policy,
-the immutable executable-image fact owner, per-Game driver/scheduler and optional temporal-presentation
-factories, and the bounded legacy projection), `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and
-callback bags kept source-compatible while consumers migrate), `core.h`/`game.h` (the `Core`/`Game` objects;
+the immutable executable-image and direct-runtime guest-pad-buffer fact owners, per-Game
+driver/scheduler and optional temporal-presentation factories, and the bounded legacy projection),
+`legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and callback bags kept
+source-compatible while consumers migrate), `core.h`/`game.h` (the `Core`/`Game` objects;
 `Game` owns the runtime-created products), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
 `GameRuntime::guestVramIsPicture(const Game&)` (the required inherited current-frame authority for
 whether guest VRAM is picture content beneath native geometry; the checked renderer query refuses a
@@ -94,15 +96,20 @@ the absent-table zero/no-fade presentation state); temporal-only guarded callbac
 `syscall_exception.{h,cpp}` (the R3000A syscall Cause/EPC and Status-stack transition shared by the
 emitter, interpreter, and native HLE; `rec_dispatch_miss` owns pre-HLE observation of external BIOS
 targets while generated entries retain their emitted checkpoint owner),
-`threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
-`native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics;
-`standalone_frame_boundary.h` owns present-pending -> begin-capture -> optional cold-warp -> guest-work
-ordering, while SBS never services that standalone warp phase; the interactive REPL was extracted to
-`repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`),
+`threads.cpp`/`timing.cpp` (cooperative threads + host-advanced display time),
+`frame_loop_shell.{h,cpp}` (mandatory title-driver preflight, exactly-one-frame delegation, and
+mechanical exactly-one-presentation-fence enforcement),
+`boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
+`native_boot.cpp` (boot + host loop scaffolding + diagnostics; `dc_step_frame` delegates through
+`FrameLoopShell` and contains no title frame body or fallback; the interactive REPL is owned by
+`repl.cpp`/`repl.h`),
 `platform_hle.h` + `sync_overrides.cpp` (the guarded SCEI-library HLE table; direct
 `PlatformHlePlan` consumers supply typed addresses for framework-owned standard leaves such as
-SetGeomOffset/SetGeomScreen and explicit `{addr, fn}` rows only for title-specific sync behavior;
-legacy consumers retain the same handler mappings through `GameConfig::hle`), `watchdog.cpp`
+SetGeomOffset/SetGeomScreen, plus the mandatory measured `vsyncAddress`; both direct and adapter
+runtimes bind that address to one non-replaceable all-mode abort, while explicit `{addr, fn}` rows are
+only for other title-specific sync behavior; legacy consumers retain the corresponding address facts
+through `GameConfig::hle`. Direct and legacy exact half-open address-window storage and validation use
+the one `kPlatformHleWindowCapacity` constant), `watchdog.cpp`
 (SCEA/FMV image progress retains cold-init grace until the first main-VRAM presentation completes; every later
 heartbeat uses steady timing), `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
@@ -110,12 +117,16 @@ heartbeat uses steady timing), `stubs.cpp`,
 task addresses and continuation PCs come from `GameConfig`, the spawned task is pumped to its authored close,
 and completion returns without manufacturing loading frames. `pc_scheduler.cpp` delegates to that owner; the
 generated multi-frame routine remains an explicit oracle rather than a second product launch mode.
-`bios_libc_string.{h,cpp}` owns Sony libc's string/character leaves behind the narrow dispatch called by
+`bios_libc_string.{h,cpp}` owns Sony libc's string/character/memory-compare leaves behind the narrow dispatch called by
 `hle.cpp`. It implements `A0:0x15` (`strcat`) as a guest-address byte loop: it scans the
 destination, copies the source through `Core::mem_r8`/`mem_w8` including the terminator, and returns
-the original destination. `test_bios_libc_string` reaches the shipping dispatch seam and gates the
+the original destination. `A0:0x1A` (`memcmp`) compares guest bytes in ascending order and returns the
+signed difference of the first unequal unsigned-byte pair; zero length reads nothing. CTR first
+falsified the missing leaf live at caller RA `0x8001C5D4` with a three-byte startup comparison.
+`test_bios_libc_string` reaches the shipping dispatch seam and gates the
 return value, terminating write and surrounding bytes, KSEG aliasing, forward guest alias copy order,
-empty inputs, and opposite answers for a wrong table and the unimplemented neighboring leaf. The same
+empty inputs, `memcmp` equality/positive/negative/alias/zero-length behavior, and opposite answers for
+a wrong table and the unimplemented neighboring leaf. The same
 shipping seam owns locale-independent ASCII `A0:0x25` (`toupper`); its controls prove lowercase
 conversion while uppercase, digits, and `0xE0` remain unchanged.
 `hle.cpp` also implements Sony libc `A0:0x2F/0x30` (`rand`/`srand`) with per-`Hle` state and the exact
@@ -142,9 +153,11 @@ entry.
 The runtime seam is partial: shipping consumers inherit `LegacyGameRuntimeAdapter` until typed fact
 groups replace every generic `c->cfg` read. `GuestProgramImage` is the first landed group: derived
 runtimes own crt0, resident MAIN routing, and backtrace-code facts; `Core` snapshots that immutable view,
-and those algorithms no longer read `GameConfig`. The adapter's one-way projection keeps unmigrated
-consumers source-compatible. `DiscIdentity` is the next candidate group; the consumer follow-up and
-deletion set live in `docs/plans/game-seam-redesign.md`.
+and those algorithms no longer read `GameConfig`. `GuestPadBufferLayout` is another landed group:
+direct runtimes declare the measured Sony receive buffers while `Pad` retains config-first resolution
+for adapters. The adapter's one-way projection keeps unmigrated consumers source-compatible.
+`DiscIdentity` is the next candidate group; the consumer follow-up and deletion set live in
+`docs/plans/game-seam-redesign.md`.
 `overlay_router.{h,cpp}` owns both live-range relocatable modules and signature-identified fixed
 modules. Fixed ranges may nest: the router evaluates every containing resident identity (a current RAM
 signature, or a loader-recorded slot identity after the game mutates its header), chooses the smallest
@@ -159,6 +172,8 @@ run-end report distinguishes satisfied, failed, and unexercised rather than warn
 diagnostics, explicit field pacing, and ledger reconciliation. Its `commitUnpresented` entry rotates the
 same fence, ledger, and capture state for the diff-mode field path without emitting, presenting, pacing,
 or recording a diagnostic; the injected-backend test proves both that path and the next visible commit.
+`frame_dump_window.h` owns the pure late-start predicate used by the capped per-present diagnostic, so
+long boot routes can select a target fence without changing presentation or consuming the file budget.
 `Fps60` is an optional temporal decorator, not the frame-lifecycle owner. Direct runtimes declare
 their presentation products through `RenderCapabilities`; unsupported fps60 requests and UI bindings
 are refused before reaching the decorator. `fps60_gpu_present.{h,cpp}` owns the intermediate-pass renderer reset and is
@@ -234,22 +249,29 @@ rounding every NTSC field to the exact-60 Hz legacy values of 564,480 clocks and
 `test_spu_field_cadence` exercises the shipping accumulator at exact 60 Hz, NTSC, and an NTSC→PAL
 rate change; 60,000 NTSC fields total exactly 44,144,100 stereo frames (44.1 kHz for 1,001 seconds).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
-game-validated blocking-control seam), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
+game-validated blocking-control seam plus direct-runtime binding targets for the shared synchronous
+stock `CdRead`/`CdReadSync` owners), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
 latch and command effects), `cdc_command_phase.{h,cpp}` (oracle-derived command receive, argument,
 execution, and completion scheduler), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),
 `emulated_time.{h,cpp}` + `timing.cpp` (per-Game deterministic emulated CPU-time owner and the
 NTSC/PAL HBlank phase exposed through root counter 1 at `0x1F801110`),
 `frame_pacer.{h,cpp}` (display cadence + guest field delivery + optional host sleep), `disc.cpp`
-(libchdr), `memcard.cpp`. Generated blocks and the oracle interpreter advance the same deterministic
+(libchdr plus the parsed CHD track layout and Sub-Q position synthesis), `memcard.cpp`. Native CDC
+command `0x11` (`GetlocP`) returns all eight BCD track/index/relative/absolute position bytes from
+that layout; a missing disc position is an `INT5` error, never a successful all-zero position.
+`test_cdc_getlocp` exercises the shipping command path, metadata1/metadata2 parsing, multi-track
+selection, and malformed metadata refusal. Generated blocks and the oracle interpreter advance the same deterministic
 clock; a shared display-field delivery advances it to the guest-programmed NTSC/PAL boundary even
 when host sleeping is disabled. ReadN schedules its first and following INT1 at nominal 451,584 ticks
 (1x) or 225,792 ticks (Setmode bit 0x80, 2x). One instruction currently contributes one tick, so this
 is deterministic ordering rather than cycle-accurate physical timing.
-Sony libetc `VSync(1)` samples root counter 1 and subtracts its saved baseline; it therefore observes
-the same free-running low-16-bit HSync count as direct guest MMIO, without a title-specific override.
-`test_hsync_counter` gates both shipping seams, an intra-field line-248 progression, NTSC/PAL field
-geometry, and invalid-cadence refusal. The clock uses nominal non-interlaced field geometry; alternating
-interlaced field parity is not modeled.
+Root counter 1 remains the read-only guest observation of the free-running low-16-bit HSync count.
+No Sony libetc `VSync` mode is a shipping observation or field-delivery seam: every product declares
+its measured address and all modes abort there. `test_hsync_counter` gates the MMIO observation,
+intra-field line-248 progression, NTSC/PAL field geometry, and invalid-cadence refusal;
+`test_vsync_ownership` gates direct and adapter trap installation, modes -1/0/1/N, replacement refusal,
+missing-address refusal, and address-window refusal. The clock uses nominal non-interlaced field
+geometry; alternating interlaced field parity is not modeled.
 BFRD never creates an event:
 reasserting it preserves a partial DMA cursor, and a later transition only installs a sector whose
 drive deadline already elapsed. Command writes arm a 12,315-tick receive deadline; arguments transfer
@@ -285,9 +307,11 @@ framework's legacy projection probe delegates to the same implementation through
 `test_native_projection` differentially covers the producer mode plus the probe's sf=0/lm=1 modes against
 isolated vendor RTPS, including all hardware FLAG contributors, saturation, a zero-FLAG control, and
 forced endpoint/FLAG mismatch discriminators. `mdec_beetle.c` (mdec.c),
-`native_fmv.cpp` (STR/MDEC FMV + shared XA decoder; direct movie presents report watchdog progress), `pad_input.cpp`
-(final effective mask + shared `ActiveLowEdges`; game/sequence code owns every resulting transition;
-slot 1 remains absent by default and a title with measured two-slot guest handling opts in explicitly).
+`native_fmv.cpp` (STR/MDEC FMV + shared XA decoder; direct movie presents report watchdog progress),
+`pad_input.cpp` (final effective mask + shared `ActiveLowEdges`; the standard packet writer resolves
+legacy config first or the direct runtime's typed `GuestPadBufferLayout`, while a missing layout writes
+no invented guest address; game/sequence code owns every resulting transition; slot 1 remains absent
+by default and a title with measured two-slot guest handling opts in explicitly).
 
 ## Tools — ONE LINE EACH, and what is wrong with this list
 
@@ -411,6 +435,10 @@ creates exactly one `FrameDriver` and `TaskScheduler` per `Game`, and that the b
 delegates while consumers migrate. It also proves direct and adapter runtimes expose the same typed
 program-image view. `test_guest_program_image_ownership` mechanically rejects any crt0/router/backtrace
 consumer that reaches back into the legacy config or lets `GameHooks` own executable facts.
+`test_frame_loop_shell` proves the shared product preflight refuses a missing driver, reinstalls the
+fatal VSync trap after a title displaces the generated override, and then delegates each product frame
+exactly once to its title-owned finite driver before checking the one-fence invariant. A shell step
+that bypasses preflight aborts before invoking the driver.
 `psxport_smoke` derives the new seam with both legacy views null, so
 link-level agnosticism no longer depends on constructing the deprecated bags.
 

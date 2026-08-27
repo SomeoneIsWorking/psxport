@@ -5,8 +5,8 @@
 // the per-frame CPU phase breakdown of the GUEST-LOGIC half of the frame, plus the overall
 // present-to-present frame time, so "CPU-bound vs GPU-bound" is answerable directly.
 //
-// THE FRAME, as the native loop runs it (native_boot.cpp native_step_frame -> ov_frame_update):
-//   FRAME boundary  -- perf.frameBegin()  (top of native_step_frame)
+// THE FRAME, as the title's native FrameDriver runs it:
+//   FRAME boundary  -- perf.frameBegin()  (top of FrameDriver::stepFrame)
 //     [pre-tick host work: input, IRQ events, OT clear]
 //     PADFENCE       = the ONE call phase 0 brackets: rec_dispatch(0x800788AC).
 //
@@ -26,7 +26,7 @@
 //     PRESENT        = gpu_present(): VRAM mirror upload + VK record/submit (the CPU cost of present;
 //                      the GPU-side ms is what vkprof's timestamp query reports separately).
 //     [post-tick host work: scheduler step, draw sync, OT submit]
-//   FRAME boundary  -- perf.frameEnd()    (bottom of native_step_frame): wall delta = full frame time.
+//   FRAME boundary  -- perf.frameEnd()    (bottom of FrameDriver::stepFrame): wall delta = full frame time.
 //
 // All timing is std::chrono::steady_clock (monotonic, portable to macOS/MoltenVK — NOT gettimeofday /
 // wall-clock-of-day). Default OFF: enabled at runtime via the REPL `debug perf` channel (or
@@ -72,7 +72,7 @@ int GpuPerf::perfOn() {
   return mPerf;
 }
 
-// Top of native_step_frame: start the frame clock.
+// Top of the title-owned frame step: start the frame clock.
 void GpuPerf::frameBegin() {
   if (!perfOn()) {
     return;
@@ -113,7 +113,7 @@ void GpuPerf::phaseEnd(int phase) {
   mTMark = n; // anything after the last closed phase counts toward `post`
 }
 
-// Bottom of native_step_frame: close the frame, accumulate the post-tick remainder + the full frame
+// Bottom of the title-owned frame step: close the frame, accumulate the post-tick remainder + the full frame
 // wall time, and emit the rolling average every 60 frames.
 void GpuPerf::frameEnd() {
   if (mPerf <= 0) {

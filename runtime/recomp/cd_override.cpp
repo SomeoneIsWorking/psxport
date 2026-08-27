@@ -14,6 +14,7 @@
 //     bytes from the disc image at lba straight into buf, return 1 (its bool success value).
 //     This bypasses the whole FUN_8008c960/c5d8/cafc/ac34 command+IRQ machinery for data.
 #include "c_subsys.h"
+#include "cd_control.h"
 #include "cd_drive_timing.h"
 #include "core.h"
 #include "game.h"
@@ -429,7 +430,7 @@ static void cd_getsector_stock(Core *c) {
 //   otherwise             -> 0x246 words (2328)
 // Mirroring the guest's selection matters: hand it 2048-byte payloads when it asked for whole
 // sectors and every header it reads back is misframed.
-static void cd_read_stock(Core *c) {
+void cd_read_stock_sync(Core *c) {
   const uint32_t sectors = c->r[A0], buf = c->r[A1], mode = c->r[A2];
   Cd &cd = c->game->cd;
   if (cd.setloc_lba < 0) {
@@ -444,6 +445,9 @@ static void cd_read_stock(Core *c) {
   uint8_t raw[2352];
   for (uint32_t i = 0; i < sectors; i++) {
     const uint32_t lba = (uint32_t)cd.setloc_lba + i;
+    // disc_read_raw owns the lazy disc_open transition, using this Game's DiscState::env_key before
+    // the generic fallbacks. A direct runtime therefore binds its title key once on DiscState; it
+    // does not need a title-local open wrapper before calling this shared stock-read owner.
     if (!disc_read_raw(&c->game->disc, lba, raw, sizeof raw)) {
       lucent::error("cd",
                     "CdRead: LBA {} unreadable at sector {}/{} — {} sector(s) delivered, the rest "
@@ -479,7 +483,7 @@ static void cd_read_stock(Core *c) {
 // CdReadSync(mode, result) -> sectors REMAINING. cd_read_stock already transferred everything
 // synchronously, so the honest answer is zero. This is not a fabricated completion: the data is in
 // guest memory, read from the real disc, before this ever returns.
-static void cd_readsync_stock(Core *c) {
+void cd_readsync_stock_sync(Core *c) {
   zero_result(c, c->r[A1]);
   c->r[V0] = 0;
 }
@@ -905,8 +909,8 @@ void Cd::overridesInit() {
   reg(cfg->cdCmdStream, cd_cmd_stream);         // streaming CD-cmd wrapper (GetlocL pos in range)
   reg(cfg->cdReadPrim, cd_read);                // libcd by-LBA read -> native sync
   reg(cfg->cdGetSector, cd_getsector_stock);    // STOCK libcd CdGetSector(dest, words) -> native
-  reg(cfg->cdReadStock, cd_read_stock);         // STOCK libcd CdRead(sectors, buf, mode) -> native
-  reg(cfg->cdReadSync, cd_readsync_stock);      // STOCK libcd CdReadSync -> complete
+  reg(cfg->cdReadStock, cd_read_stock_sync);    // STOCK libcd CdRead(sectors, buf, mode) -> native
+  reg(cfg->cdReadSync, cd_readsync_stock_sync); // STOCK libcd CdReadSync -> complete
   reg(cfg->cdSearchFile, cd_searchfile_native); // STOCK libcd CdSearchFile -> native ISO9660 lookup
   reg(cfg->cdAsyncRead, cd_async_read);         // async streaming reader -> sync (area-DATA load)
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader

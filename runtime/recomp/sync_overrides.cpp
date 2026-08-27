@@ -183,12 +183,11 @@ static void trap_abort(Core *c, const char *what, uint32_t addr) {
   abort();
 }
 
-// VSync TRAP (user 2026-06-22): for a port whose PC-native frame loop OWNS all timing, NOTHING may
-// reach libetc VSync — not to WAIT for a vblank and not to QUERY the counter. Every mode traps.
-// This is opt-in per game (GameConfig::hle.vsyncTrap); see the field comment for why it is a policy
-// rather than a universal.
+// VSync TRAP: every product has a PC-native frame loop, so NOTHING may reach libetc VSync — not to
+// wait for a vblank and not to query the counter. The title supplies only the measured address; this
+// framework handler is universal and direct-runtime safe (Core::cfg is legitimately null there).
 static void vsync_trap(Core *c) {
-  trap_abort(c, "VSYNC", c->cfg->hle.vsyncTrap);
+  trap_abort(c, "GUEST VSYNC VIOLATION", c->game->platform_hle.vsyncAddress());
 }
 
 // ---- class PlatformHle ---------------------------------------------------------------------------
@@ -196,8 +195,8 @@ static void vsync_trap(Core *c) {
 // The platform windows are I/O / hardware-service address ranges, NEVER game logic — the guard is
 // what keeps engine FUN_xxxx out of this table (those are owned top-down via the override registry).
 // WHICH ranges those are is a fact about the game's memory map, so it comes from GameConfig
-// (hle.windowLo/windowHi). Tomba!2's two, for reference, are the engine's CD/SPU I/O glue and the
-// SCEI library text; another game's layout will differ.
+// (hle.windowLo/windowHi). Each half-open range may be one exact library body; another game's
+// measured layout will differ.
 //
 // A game that configures NO window gets everything refused, with a diagnostic saying so. That is
 // deliberate: silently accepting any address would turn the one guard protecting this table into a
@@ -210,7 +209,7 @@ bool PlatformHle::inBiosWindow(const GameConfig *cfg, uint32_t a) {
     const PlatformHlePlan *const plan = runtime ? runtime->platformHlePlan() : nullptr;
     bool anyDirect = false;
     if (plan) {
-      for (int i = 0; i < 2; i++) {
+      for (int i = 0; i < kPlatformHleWindowCapacity; i++) {
         if (!plan->windowHi[i]) {
           continue;
         }
@@ -228,7 +227,7 @@ bool PlatformHle::inBiosWindow(const GameConfig *cfg, uint32_t a) {
     return false;
   }
   bool any = false;
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < kPlatformHleWindowCapacity; i++) {
     if (!cfg->hle.windowHi[i]) {
       continue;
     }
@@ -245,13 +244,20 @@ bool PlatformHle::inBiosWindow(const GameConfig *cfg, uint32_t a) {
   return false;
 }
 
-void PlatformHle::register_(uint32_t addr, OverrideFn fn) {
+bool PlatformHle::register_(uint32_t addr, OverrideFn fn) {
+  if (mVSyncAddress != 0 && (addr & 0x1FFFFFFFu) == (mVSyncAddress & 0x1FFFFFFFu) && fn != vsync_trap) {
+    lucent::error("plat-hle",
+                  "REFUSED replacement of mandatory VSync trap at 0x{:08X}; guest VSync has no "
+                  "successful shipping handler",
+                  mVSyncAddress);
+    std::abort();
+  }
   if (!inBiosWindow(game->core.cfg, addr)) {
     lucent::error(
         "plat-hle",
         "REFUSED 0x{:08X} — not an I/O / BIOS-library address (game/engine logic is owned top-down, never HLE'd here)",
         addr);
-    return;
+    return false;
   }
   // Boot setup is deliberately repeatable: some ports initialise the primary Game before entering
   // the shared boot path, while SBS constructs two fresh Games and initialises each there. Reusing an
@@ -261,13 +267,15 @@ void PlatformHle::register_(uint32_t addr, OverrideFn fn) {
   for (int i = 0; i < mN; ++i) {
     if (mAddr[i] == addr) {
       mFn[i] = fn;
-      psxport_recomp()->shard_set_override(addr, fn);
-      return;
+      if (const RecompRegistry *const rec = psxport_recomp()) {
+        rec->shard_set_override(addr, fn);
+      }
+      return true;
     }
   }
   if (mN >= kMax) {
     lucent::info("plat-hle", "table full");
-    return;
+    return false;
   }
   mAddr[mN] = addr;
   mFn[mN] = fn;
@@ -290,6 +298,37 @@ void PlatformHle::register_(uint32_t addr, OverrideFn fn) {
   if (const RecompRegistry *const rec = psxport_recomp()) {
     rec->shard_set_override(addr, fn);
   }
+  return true;
+}
+
+void PlatformHle::bindVSyncTrap(uint32_t addr) {
+  if (!addr) {
+    return;
+  }
+  if (mVSyncAddress != 0 && (addr & 0x1FFFFFFFu) != (mVSyncAddress & 0x1FFFFFFFu)) {
+    lucent::error("plat-hle",
+                  "conflicting VSync addresses 0x{:08X} and 0x{:08X}; one title has one measured "
+                  "libetc entry",
+                  mVSyncAddress,
+                  addr);
+    std::abort();
+  }
+  mVSyncAddress = addr;
+  if (!register_(addr, vsync_trap)) {
+    mVSyncAddress = 0;
+    lucent::error("plat-hle", "failed to install mandatory VSync trap at 0x{:08X}", addr);
+    std::abort();
+  }
+}
+
+void PlatformHle::requireNativeFrameLoopContract() const {
+  if (mVSyncAddress != 0) {
+    return;
+  }
+  lucent::error("plat-hle",
+                "GameRuntime declares no measured libetc VSync address; refusing product boot "
+                "before guest code can enter a VSync wait/query");
+  std::abort();
 }
 
 OverrideFn PlatformHle::lookup(uint32_t addr) const {
@@ -307,7 +346,7 @@ OverrideFn PlatformHle::lookup(uint32_t addr) const {
 void PlatformHle::initBuiltins() {
   auto reg = [&](uint32_t addr, OverrideFn fn) {
     if (addr) {
-      register_(addr, fn);
+      (void)register_(addr, fn);
     }
   };
   auto regProjectionLeaves = [&](uint32_t setGeomOffset, uint32_t setGeomScreen) {
@@ -326,6 +365,7 @@ void PlatformHle::initBuiltins() {
     const PlatformHlePlan *const plan = runtime ? runtime->platformHlePlan() : nullptr;
     if (plan) {
       regProjectionLeaves(plan->setGeomOffset, plan->setGeomScreen);
+      bindVSyncTrap(plan->vsyncAddress);
       for (int i = 0; i < plan->bindingCount && i < PlatformHlePlan::kMaxBindings; i++) {
         if (plan->bindings[i].addr && plan->bindings[i].fn) {
           reg(plan->bindings[i].addr, plan->bindings[i].fn);
@@ -359,9 +399,9 @@ void PlatformHle::initBuiltins() {
   // scheduler_yield so a yield from an interpreted task coroutine saves the task's resume context and
   // longjmps back to the native scheduler. No-ops outside a task run.
   reg(h.changeThread, scheduler_yield);
-  // libetc VSync — trap every caller, every mode. Opt-in: only for a port whose native frame loop
-  // owns timing. A game reimplementing VSync registers its own handler instead and leaves this zero.
-  reg(h.vsyncTrap, vsync_trap);
+  // libetc VSync — every title supplies only its measured address; all modes hit the one fatal
+  // native-frame-loop ownership trap above.
+  bindVSyncTrap(h.vsyncTrap);
   // libgte SetGeomOffset / SetGeomScreen — the camera projection, recorded where the game STATES it.
   regProjectionLeaves(h.setGeomOffset, h.setGeomScreen);
 

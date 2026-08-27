@@ -217,6 +217,13 @@ only the temporary adapter/install boundary; the deprecated bags are isolated in
 do not add a field or callback there. `psxport_smoke` and `test_game_runtime` keep the derived seam and
 its temporary adapter honest.
 
+Every product supplies a finite title-owned `FrameDriver`; `FrameLoopShell` performs only mandatory
+preflight and one `stepFrame` delegation. The driver owns its measured input/audio/simulation/render/
+present order and one presentation commit. A product also supplies its measured libetc VSync address
+through `PlatformHlePlan::vsyncAddress` (direct runtime) or the legacy adapter fact. The framework
+installs one non-replaceable abort at that address for every mode: guest code never waits on, queries,
+or advances VSync, and a missing driver or address refuses before guest main.
+
 A shipping port still uses `LegacyGameRuntimeAdapter` until every generic `c->cfg` consumer has moved
 to a narrow typed fact group. `GuestProgramImage` is the first completed group: crt0, overlay routing,
 and the resident-code backtrace heuristic consume the immutable value owned by `GameRuntime`; only the

@@ -233,7 +233,7 @@ void gte_probe_dump(const char *tag) {
 
 // per-frame projection constants moved to `class ProjParams` on Render (per-Core, SBS-safe) —
 // reach via `c->rsub.projParams.projH()` etc. Callers below without a Core* in scope go through
-// `ProjParams::current()` — the currently-bound instance, set by `bind()` at native_step_frame.
+// `ProjParams::current()` — the currently-bound instance, set by the title FrameDriver.
 
 // proj_pz_to_ord + the camview + projection-plane accessors moved to game/render/proj_params.cpp — see
 // the free-function bridges at the bottom of that file. They forward to ProjParams::current() (bound
@@ -721,7 +721,7 @@ void gte_record_pz(Core *c, uint32_t addr, int gpr) {
 }
 
 // Bind the GTE math to THIS core's register file (game.h GteRegs) so two cores keep separate GTE state.
-// Called per core frame-step (native_step_frame) + at boot, from the explicit Core — no shared regs.
+// Called by the title FrameDriver for each core step and by boot setup, from the explicit Core — no shared regs.
 void gte_bind(Core *c) {
   GTE_BindState(&c->game->gte);
   // Also bind THIS core's per-Core PGXP cache + projection-constant/camview state (both were file-scope

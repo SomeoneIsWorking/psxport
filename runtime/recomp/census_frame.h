@@ -12,7 +12,7 @@
 // (ot_attr.cpp). Fixing that reset without fixing the row STAMP left the identical defect in the field a
 // human reads. Hence one shared definition rather than a second correct-looking local choice.
 //
-// The logic frame advances once per native_step_frame, which is the tick a producer's lifetime is actually
+// The logic frame advances once per title-owned FrameDriver step, which is the tick a producer's lifetime is actually
 // measured in: "this effect drew for 54 frames" is a statement about game time, not about how often the
 // host chose to present.
 #pragma once

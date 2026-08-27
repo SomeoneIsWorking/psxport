@@ -44,6 +44,7 @@ void cdc_state_init(CdcState *s) {
   s->disc = disc;
   s->disc_read_raw_fn = disc_read_raw;
   s->disc_read_sector_fn = disc_read_sector;
+  s->disc_get_subq_position_fn = disc_get_subq_position;
 }
 
 static void cdc_irq(CdcState *s, uint8_t type, const uint8_t *resp, int len) {
@@ -441,7 +442,17 @@ static uint64_t exec_command(CdcState *s, uint8_t cmd) {
   case 0x0E:
     cdc_set_mode(s, s->command_args[0]);
     cdc_irq(s, 3, r1, 1);
-    return 0; // Setmode
+    return 0;  // Setmode
+  case 0x11: { // GetlocP: current Sub-Q track/index and relative/absolute position.
+    uint8_t position[8] = {};
+    if (!s->disc_get_subq_position_fn || !s->disc_get_subq_position_fn(s->disc, s->loc_lba, position)) {
+      const uint8_t error[2] = {static_cast<uint8_t>(s->stat | 0x01), 0x80};
+      cdc_irq(s, 5, error, 2);
+      return 0;
+    }
+    cdc_irq(s, 3, position, 8);
+    return 0;
+  }
   case 0x06:
   case 0x1B: // ReadN / ReadS
     cdc_irq(s, 3, r1, 1);

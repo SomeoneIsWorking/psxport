@@ -1,33 +1,34 @@
 ---
 id: 27
 title: Standalone REPL warp replaces guest state before presenting the pending frame
-status: fix-verified
+status: resolved
 symptom: a cold dev warp makes presentation consume old-scene capture metadata against destination-scene guest state
 tags: repl,warp,presentation,frame-boundary,tomba2
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-27
 ---
 
 ## Root cause
 
-The standalone `game_main` loop serviced an armed REPL warp before calling `native_step_frame`.
-`native_step_frame` owns the presentation of the queue captured during the prior guest tick, so the
-warp replaced the scene first. A temporal presenter then tried to rebuild the pending old picture
-from destination-scene state and dropped the old world layer.
+The former shared loop serviced an armed REPL warp before delegating the title frame. Presentation of
+the queue captured during the prior title tick therefore ran only after the warp had replaced the
+scene. A temporal presenter then tried to rebuild the pending old picture from destination-scene
+state and dropped the old world layer.
 
-The fault was ownership order, not Tomba-specific loading policy: the framework decides when the
-standalone command is serviced, while the title's `GameHooks::devWarp` owns the cold operation itself.
+The fault was ownership order. It was temporarily implemented in shared boot code even though both
+the cold operation and its presentation boundary are properties of Tomba! 2's frame transaction.
 
 ## Resolution
 
-`standalone_frame_boundary` is the one explicit owner of the order: present pending, begin capture,
-apply optional standalone warp, run guest frame. `native_step_frame` uses it; direct dual-core stepping
-passes `serviceStandaloneWarp=false`, preserving SBS's separate transaction.
+The current owner is `Tomba2Engine/game/core/frame_driver.cpp#TombaFrameDriver::stepFrame`. Its finite
+order commits the pending presentation, resets Tomba's capture epoch, applies the armed standalone
+warp, and only then steps destination guest work. SBS is excluded inside
+`applyArmedStandaloneWarp`. `Tomba2Engine/tools/verify_native_frame_contract.py` checks this title-local
+order and produces an opposite answer for reversed fixtures. The obsolete shared helper and its test
+were deleted when the framework frame body moved to the title.
 
-The red-first hermetic trace rejects the old order and accepts armed plus unarmed corrected paths. In
-the bounded Tomba! 2 consumer run, f3015 presents all 168 old-scene items before the cold Area 21 warp,
-and f3016 contains no stale old-scene capture. The candidate is verified in this isolated worktree but
-is not landed on current psxport main.
+The bounded Tomba! 2 consumer evidence remains: f3015 presented all 168 old-scene items before the
+cold Area 21 warp, and f3016 contained no stale old-scene capture.
 
 ## Ruled out
 

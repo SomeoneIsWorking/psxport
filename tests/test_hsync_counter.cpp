@@ -1,7 +1,6 @@
-// Sony libetc VSync(1) samples root counter 1, which is clocked once per HBlank. The framework
-// used to return zero both from Timing::vsync(mode=1) and from the shipping 0x1F801110 MMIO read,
-// so a guest waiting for scanline 248 could never leave its loop. These cases drive both shipping
-// seams from the same deterministic emulated-time owner and reject that old constant-zero answer.
+// Root counter 1 is a read-only hardware observation of deterministic emulated time. It remains
+// available to guest code, but it neither delivers a field nor licenses libetc VSync: product VSync
+// calls are trapped by PlatformHle.
 #include "testutil.h"
 
 #include "emulated_time.h"
@@ -11,8 +10,6 @@
 namespace {
 
 constexpr uint32_t kRootCounter1 = 0x1F801110u;
-constexpr unsigned kVSyncModeRegister = 4;
-constexpr unsigned kReturnValueRegister = 2;
 
 void test_root_counter_one_advances_by_the_video_standard() {
   auto *ntsc = new Game();
@@ -26,27 +23,18 @@ void test_root_counter_one_advances_by_the_video_standard() {
   CHECK_EQ(pal->core.mem_r16(kRootCounter1), DISPLAY_LINES_PAL);
 }
 
-void test_vsync_one_reports_hsyncs_since_the_last_wait() {
+void test_root_counter_reports_intra_field_progress() {
   auto *game = new Game();
   game->timing.advanceDisplayFields(1, 1, FIELD_RATE_NTSC_MILLIHZ);
-
-  game->core.r[kVSyncModeRegister] = 1;
-  game->timing.vsync();
-  CHECK_EQ(game->core.r[kReturnValueRegister], DISPLAY_LINES_NTSC);
-
-  game->core.r[kVSyncModeRegister] = 0;
-  game->timing.vsync();
-  game->core.r[kVSyncModeRegister] = 1;
-  game->timing.vsync();
-  CHECK_EQ(game->core.r[kReturnValueRegister], 0);
+  CHECK_EQ(game->core.mem_r16(kRootCounter1), DISPLAY_LINES_NTSC);
 
   const uint64_t ticksPerField = display_field_cpu_ticks(1, 1, FIELD_RATE_NTSC_MILLIHZ);
   const uint32_t ticksThroughLine248 =
       static_cast<uint32_t>((ticksPerField + DISPLAY_LINES_NTSC - 1) / DISPLAY_LINES_NTSC * 248u);
   game->timing.advanceGuestInstructionTicks(ticksThroughLine248);
-  game->timing.vsync();
-  CHECK(game->core.r[kReturnValueRegister] >= 248u);
-  CHECK(game->core.r[kReturnValueRegister] < DISPLAY_LINES_NTSC);
+  const uint16_t observed = game->core.mem_r16(kRootCounter1);
+  CHECK(observed >= DISPLAY_LINES_NTSC + 248u);
+  CHECK(observed < DISPLAY_LINES_NTSC * 2u);
 }
 
 void test_invalid_hsync_cadence_does_not_invent_a_counter() {
@@ -60,7 +48,7 @@ void test_invalid_hsync_cadence_does_not_invent_a_counter() {
 
 int main() {
   RUN(root_counter_one_advances_by_the_video_standard);
-  RUN(vsync_one_reports_hsyncs_since_the_last_wait);
+  RUN(root_counter_reports_intra_field_progress);
   RUN(invalid_hsync_cadence_does_not_invent_a_counter);
   return pt_summary();
 }

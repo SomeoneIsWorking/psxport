@@ -1,4 +1,4 @@
-// Sony BIOS libc string/character leaves. String bytes travel through Core's guest-memory map:
+// Sony BIOS libc string/character/memory-compare leaves. Bytes travel through Core's guest-memory map:
 // guest addresses are not host pointers, and KSEG0/KSEG1 aliases retain console copy order.
 #include "bios_libc_string.h"
 
@@ -67,6 +67,19 @@ bool bios_libc_string_dispatch(Core *core, uint32_t fn) {
       i++;
     } while (ch);
     core->r[V0] = a0;
+    return true;
+  }
+  case 0x1A: { // memcmp(s1, s2, n)
+    int difference = 0;
+    for (uint32_t i = 0; i < a2; i++) {
+      const uint8_t x = core->mem_r8(a0 + i);
+      const uint8_t y = core->mem_r8(a1 + i);
+      difference = static_cast<int>(x) - static_cast<int>(y);
+      if (difference) {
+        break;
+      }
+    }
+    core->r[V0] = static_cast<uint32_t>(static_cast<int32_t>(difference));
     return true;
   }
   case 0x1B: { // strlen(s)

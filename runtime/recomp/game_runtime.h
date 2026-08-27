@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "guest_pad_buffer_layout.h"
 #include "guest_program_image.h"
 #include "render_capabilities.h"
 
@@ -25,9 +26,10 @@ class FrameDriver {
 public:
   virtual ~FrameDriver() = default;
 
+  // One finite native frame. The title owns its measured input/audio/simulation/render/present order
+  // and commits presentation exactly once (or supplies a measured unpresented fence). It must never
+  // dispatch a guest-owned frame loop or call libetc VSync.
   virtual void stepFrame(Core &core, uint32_t frame) = 0;
-  virtual void autoDrive(Core &, uint32_t) {}
-  virtual void frameProbes(Core &, uint32_t) {}
 };
 
 class TaskScheduler {
@@ -60,10 +62,19 @@ public:
   }
 
   // Hardware-sync primitives for DIRECT runtimes (core.cfg == nullptr): the measured SCEI library
-  // leaves this binary links and the windows that admit them. Null means "declares nothing" — the
-  // honest default, announced by PlatformHle::initBuiltins(). Adapter runtimes never consult this:
-  // they keep GameConfig::hle. See platform_hle.h for the fact-slice contract.
+  // leaves this binary links and the windows that admit them. A product runtime must declare its
+  // measured libetc VSync address: the framework installs the mandatory fatal guest-VSync trap.
+  // Adapter runtimes keep the equivalent GameConfig::hle fact slice. Null remains valid only for
+  // non-product smoke/tool clients that never enter `dc_boot_init`.
   virtual const PlatformHlePlan *platformHlePlan() const {
+    return nullptr;
+  }
+
+  // Guest receive buffers for DIRECT runtimes (core.cfg == nullptr). The returned immutable facts
+  // live for the runtime's process lifetime. Null is an honest answer for smoke/tool clients that
+  // never ask Pad to publish input; serviceFrame then advances host/replay state without writing an
+  // invented guest address. Adapter runtimes keep the equivalent legacy GameConfig fields.
+  virtual const GuestPadBufferLayout *guestPadBufferLayout() const {
     return nullptr;
   }
 

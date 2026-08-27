@@ -1,8 +1,9 @@
 ---
 id: I018
 kind: instrument
-status: trusted
+status: DISTRUSTED
 created: 2026-08-22
+distrusted_on: 2026-08-27
 ---
 
 ## Instrument
@@ -16,3 +17,9 @@ The Clang-built test drives the shipping Core::mem_r16(0x1F801110) and Timing::v
 ## Known failure modes
 
 (none recorded yet)
+
+## DISTRUSTED 2026-08-27
+
+The instrument description depended on the removed successful Timing::vsync path. test_hsync_counter now validates root-counter MMIO only; guest VSync behavior is separately falsified by test_vsync_ownership.
+
+> Every result this instrument produced is suspect until it is re-validated.

@@ -1,8 +1,9 @@
 // repl.cpp — interactive REPL driver (PSXPORT_REPL=1): read commands from stdin and drive the native
 // port (run/step, memory peek/poke, input, screenshots, RAM dumps, entity/scene inspection, area warp,
 // audio dumps). Extracted from native_boot.cpp (later-288) so the boot + scheduler file is not crammed
-// with the debug driver. The scheduler (native_boot.cpp) calls c->game->repl.read() between frames and
-// consumes the class Repl's auto-drive request fields (navNewgame / skipFrames / warpArmed / warpDest).
+// with the debug driver. The generic loop (native_boot.cpp) calls c->game->repl.read() between frames;
+// the title's FrameDriver consumes the class Repl's auto-drive requests and can ask the generic loop
+// to return to the prompt after the current frame.
 #include "repl.h"
 #include "c_subsys.h"
 #include "config.h"      // `cvars` / `cvar` — the layered CVar registry + env audit
@@ -136,7 +137,7 @@ static void repl_xadump(DiscState *disc, uint8_t chan, uint32_t start_lba, const
 }
 
 // REPL auto-drive state (navNewgame / skipFrames / warpArmed / warpDest) lives on class Repl (repl.h) —
-// arm here on the appropriate command, the native scheduler frame loop consumes on subsequent frames.
+// arm here on the appropriate command; the title's FrameDriver consumes it on subsequent frames.
 // `warp <id>` (dev/diagnostic): arm an AREA WARP. The GAME-stage area machine loads the area whose id is
 // in the current-area global 0x800bf870; an area CHANGE is driven by FUN_80044bd4(area_task_entry=0x800452c0,
 // dest_area_id, mode, phase) from inside the GAME stage SM (the steady handler 0x801088d8 case0 calls it with

@@ -2,6 +2,7 @@
 
 #include "cfg.h"
 #include "core.h"
+#include "frame_dump_window.h"
 #include "fs_util.h"
 #include "game.h"
 #include "gpu_native_internal.h"
@@ -26,6 +27,9 @@ void dump_present(Core *core, uint64_t fence, int &sequence, bool interpolated) 
   static const lucent::Channel channel{"fps60dump"};
   if (!channel) {
     sequence = 0;
+    return;
+  }
+  if (!frame_dump_window_contains(fence, cfg_int("PSXPORT_FPS60_DUMP_FROM", 0))) {
     return;
   }
   if (sequence >= kDumpMax) {

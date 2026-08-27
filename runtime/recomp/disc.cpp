@@ -22,6 +22,73 @@ void disc_state_init(DiscState *d) {
   d->cached_hunk = 0xFFFFFFFFu;
 }
 
+static void discard_media(DiscState *d) {
+  if (d->chd) {
+    chd_close(d->chd);
+    d->chd = nullptr;
+  }
+  free(d->hunk_buf);
+  d->hunk_buf = nullptr;
+  d->frames_per_hunk = 0;
+  d->hunk_count = 0;
+  d->hunk_bytes = 0;
+  d->cached_hunk = 0xFFFFFFFFu;
+  memset(d->tracks, 0, sizeof d->tracks);
+  d->track_count = 0;
+}
+
+int disc_parse_track_metadata(const char *metadata, int metadata2, int32_t *physical_lba, DiscTrackInfo *out_track) {
+  if (!metadata || !physical_lba || !out_track) {
+    return 0;
+  }
+
+  int track_number = 0;
+  int frames = 0;
+  int pregap = 0;
+  int postgap = 0;
+  char type[64] = {};
+  char subtype[32] = {};
+  char pregap_type[32] = {};
+  char pregap_subtype[32] = {};
+  const int fields =
+      metadata2 ? sscanf(metadata,
+                         "TRACK:%d TYPE:%63s SUBTYPE:%31s FRAMES:%d PREGAP:%d PGTYPE:%31s "
+                         "PGSUB:%31s POSTGAP:%d",
+                         &track_number,
+                         type,
+                         subtype,
+                         &frames,
+                         &pregap,
+                         pregap_type,
+                         pregap_subtype,
+                         &postgap)
+                : sscanf(metadata, "TRACK:%d TYPE:%63s SUBTYPE:%31s FRAMES:%d", &track_number, type, subtype, &frames);
+  if (fields != (metadata2 ? 8 : 4) || track_number <= 0 || track_number > 99 || frames <= 0 || pregap < 0 ||
+      postgap < 0 || (strcmp(type, "MODE2_RAW") != 0 && strcmp(type, "AUDIO") != 0) || strcmp(subtype, "NONE") != 0) {
+    return 0;
+  }
+
+  const int pregap_in_file = metadata2 && pregap_type[0] == 'V' ? pregap : 0;
+  if (frames < pregap_in_file) {
+    return 0;
+  }
+  DiscTrackInfo track{};
+  track.number = static_cast<uint8_t>(track_number);
+  track.pregap = track_number == 1 ? 150 : (pregap_in_file ? 0 : pregap);
+  track.pregap_dv = pregap_in_file;
+  const int64_t start = static_cast<int64_t>(*physical_lba) + track.pregap + track.pregap_dv;
+  track.sectors = static_cast<uint32_t>(frames - track.pregap_dv);
+  track.postgap = postgap;
+  const int64_t next = start + track.sectors + track.postgap;
+  if (start < INT32_MIN || start > INT32_MAX || next < INT32_MIN || next > INT32_MAX) {
+    return 0;
+  }
+  track.lba = static_cast<int32_t>(start);
+  *physical_lba = static_cast<int32_t>(next);
+  *out_track = track;
+  return 1;
+}
+
 // Resolve the disc path: the CONSUMING GAME's own key (DiscState::env_key, from
 // GameConfig::discEnvVar), then the generic PSXPORT_DISC, each as an environment variable and then
 // as a KEY=VALUE line in ./.env. Kept minimal (no parent-walk) since boot runs from the repo root.
@@ -114,9 +181,101 @@ int disc_open(DiscState *d) {
   d->frames_per_hunk = h->hunkbytes / RAW_FRAME;
   d->hunk_count = h->totalhunks;
   d->hunk_buf = (uint8_t *)malloc(d->hunk_bytes);
+  if (!d->hunk_buf || d->frames_per_hunk == 0) {
+    lucent::error("disc", "invalid CHD hunk geometry or allocation failure: {}", path);
+    discard_media(d);
+    free(path);
+    return 0;
+  }
+  memset(d->tracks, 0, sizeof d->tracks);
+  d->track_count = 0;
+  int32_t physical_lba = -150;
+  uint32_t metadata_index = 0;
+  while (metadata_index < DISC_MAX_TRACKS) {
+    char metadata[256] = {};
+    uint32_t metadata_length = 0;
+    chd_error error = chd_get_metadata(d->chd,
+                                       CDROM_TRACK_METADATA2_TAG,
+                                       metadata_index,
+                                       metadata,
+                                       sizeof metadata,
+                                       &metadata_length,
+                                       nullptr,
+                                       nullptr);
+    bool metadata2 = error == CHDERR_NONE;
+    if (!metadata2) {
+      error = chd_get_metadata(d->chd,
+                               CDROM_TRACK_METADATA_TAG,
+                               metadata_index,
+                               metadata,
+                               sizeof metadata,
+                               &metadata_length,
+                               nullptr,
+                               nullptr);
+      if (error != CHDERR_NONE) {
+        break;
+      }
+    }
+    DiscTrackInfo track{};
+    if (!disc_parse_track_metadata(metadata, metadata2, &physical_lba, &track)) {
+      lucent::error("disc", "invalid or unsupported CHD track metadata {}: {}", metadata_index, metadata);
+      discard_media(d);
+      free(path);
+      return 0;
+    }
+    d->tracks[d->track_count] = track;
+    ++d->track_count;
+    ++metadata_index;
+  }
+  if (d->track_count == 0) {
+    lucent::error("disc", "CHD contains no CD track metadata");
+    discard_media(d);
+    free(path);
+    return 0;
+  }
   lucent::info("disc", "opened {} ({} hunks, {} frames/hunk)", path, d->hunk_count, d->frames_per_hunk);
   free(path);
-  return d->frames_per_hunk > 0;
+  return 1;
+}
+
+static uint8_t to_bcd(uint32_t value) {
+  return static_cast<uint8_t>(((value / 10u) << 4u) | (value % 10u));
+}
+
+int disc_get_subq_position(DiscState *d, uint32_t lba, uint8_t out[8]) {
+  if (!d || !out || (d->track_count == 0 && !disc_open(d))) {
+    return 0;
+  }
+
+  const int64_t position = lba;
+  const DiscTrackInfo *track = &d->tracks[0];
+  bool found = false;
+  for (uint8_t index = 0; index < d->track_count; ++index) {
+    const DiscTrackInfo &candidate = d->tracks[index];
+    const int64_t begin = static_cast<int64_t>(candidate.lba) - candidate.pregap_dv - candidate.pregap;
+    const int64_t end = static_cast<int64_t>(candidate.lba) + candidate.sectors + candidate.postgap;
+    if (position >= begin && position < end) {
+      track = &candidate;
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    track = &d->tracks[0];
+  }
+
+  const uint32_t relative =
+      static_cast<uint32_t>(position >= track->lba ? position - track->lba : track->lba - position);
+  const uint32_t absolute = lba + 150u;
+  out[0] = to_bcd(track->number);
+  out[1] = to_bcd(position < track->lba ? 0u : 1u);
+  out[2] = to_bcd(relative / (60u * 75u));
+  out[3] = to_bcd((relative / 75u) % 60u);
+  out[4] = to_bcd(relative % 75u);
+  out[5] = to_bcd(absolute / (60u * 75u));
+  out[6] = to_bcd((absolute / 75u) % 60u);
+  out[7] = to_bcd(absolute % 75u);
+  return 1;
 }
 
 // Read one sector's 2048-byte user data. Returns 1 on success.

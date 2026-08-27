@@ -3781,7 +3781,7 @@ void GpuState::gpu_dma2_linked_list(Core *core, uint32_t madr) {
   // submission, so its end is exactly the right boundary.
   //
   // This was missing for the GUEST-DRIVEN path only. rq_flush lived solely in Engine::drawOTag, which
-  // native_step_frame calls (native_boot.cpp) — so a port whose frame loop owns rendering drained the
+  // the title FrameDriver calls — so a port whose native frame owner drained the
   // queue every frame, while a port still running the game's OWN main() on the substrate (Phase 0,
   // where DrawOTag reaches the GPU through DMA2 rather than through the hook) never did. The same
   // omission is already described in native_boot.cpp's drawOTag comment as a past bug that rendered
@@ -3860,7 +3860,7 @@ void gpu_gp1(Core *core, uint32_t w) {
 }
 // PC-NATIVE single display: set the displayed VRAM origin directly (what GP1(0x05) would set), so the
 // present can scan a fixed page without going through the PSX disp-env / PutDispEnv struct dance. Used by
-// native_step_frame to display the single buffer the engine draws into. The display W/H are unchanged
+// a title FrameDriver to display the single buffer its engine draws into. The display W/H are unchanged
 // (still driven by the mode/range GP1(0x07/0x08) the boot env sets once).
 void gpu_set_disp_origin(Core *core, int x, int y) {
   core->game->gpu.s_disp_x = x;

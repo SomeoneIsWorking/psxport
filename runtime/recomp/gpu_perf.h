@@ -6,11 +6,11 @@
 
 class GpuPerf {
 public:
-  void frameBegin();          // top of native_step_frame: start the frame clock
+  void frameBegin();          // top of the title FrameDriver: start the frame clock
   void markPre();             // boundary between pre-tick host work and the guest tick
   void phaseBegin(int phase); // open a timed phase
   void phaseEnd(int phase);   // close it, charging elapsed time to the phase slot
-  void frameEnd();            // bottom of native_step_frame: close frame + rolling avg
+  void frameEnd();            // bottom of the title FrameDriver: close frame + rolling avg
 
 private:
   using clk = std::chrono::steady_clock;

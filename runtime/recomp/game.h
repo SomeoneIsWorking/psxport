@@ -34,7 +34,7 @@
 #include "pad_input.h"                   // class Pad — native controller input + REPL drive
 #include "platform_hle.h"                // class PlatformHle — HW-sync HLE table (VSync/CdSync/…)
 #include "render_queue.h"                // RenderQueue — the engine-owned draw-order authority
-#include "repl.h"                        // class Repl — REPL driver + auto-drive request state
+#include "repl.h"                        // class Repl — REPL driver + title-owned request state
 #include "rmlui_overlay.h"               // class RmlOverlay — mod/debug HTML UI + world readout HUD
 #include "spu_audio.h"                   // class SpuAudio — host audio output sink (SDL3 + WAV capture)
 #include "spu_device.h"                  // class SpuDevice — per-instance SPU state handle (Beetle spu.c)
@@ -42,6 +42,7 @@
 #include "verify_harness.h"              // class VerifyHarness — shared A/B verify scaffold (game/core)
 #include "xa_state.h"                    // XaState  — per-instance native XA-ADPCM CD-audio streamer (xa_stream.c)
 
+class FrameLoopShell;
 class Sbs; // forward decl — Game holds `sbs` back-pointer set by Sbs::run
 #include <setjmp.h>
 #include <stdint.h>
@@ -66,7 +67,7 @@ public:
   XaState xa;     // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
   Hle hle;
   Pad pad;
-  Repl repl;                           // interactive REPL driver + REPL-armed auto-drive requests (repl.cpp)
+  Repl repl;                           // interactive REPL driver + title-consumed requests (repl.cpp)
   Fmv fmv;                             // native .STR movie player (native_fmv.cpp)
   BootStub stub;                       // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
   PcScheduler pcSched;                 // native cooperative task scheduler (game/core/pc_scheduler.cpp)
@@ -152,8 +153,8 @@ public:
   // In the side-by-side dual-core debugger BOTH cores must EMIT their frame geometry into their own VK
   // batch (so the SBS composite can draw each into its pane), but NEITHER core may PRESENT to the window
   // (the SBS loop owns the single composite present). diff_mode=1 suppresses the per-core present (and
-  // pace/audio) at the engine frame tail; sbs_render=1 RE-enables ONLY the render-submit block in
-  // native_step_frame (native_boot.cpp) that diff_mode would otherwise skip. So SBS sets BOTH: present
+  // pace/audio) at the engine frame tail; sbs_render=1 RE-enables ONLY the title FrameDriver's
+  // render-submit block that diff_mode would otherwise skip. So SBS sets BOTH: present
   // off (diff_mode), geometry emit on (sbs_render). Default 0 (the shipped single-core game presents).
   int sbs_render = 0;
 
@@ -175,4 +176,8 @@ public:
   // gpu_vk.game->core). Set once here so no file-scope global is needed.
   Game();
   ~Game();
+
+private:
+  friend class FrameLoopShell;
+  bool productFrameLoopPrepared_ = false;
 };

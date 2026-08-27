@@ -456,8 +456,8 @@ producers emit, as a HALF-OPEN rect `x[XL,XR) y[YT,YB)` plus its u/v range, unde
 `pieces=N` denominator and a `fieldHudItemRing ENTER` line carrying that producer's own wedge counts.
 The half-open printing is the point: two pieces TILE when one's XR equals the next's XL and OVERLAP
 when it exceeds it, which is how the HP ring's shared-column seam was measured. The ENTER line prints
-even when nothing is drawn, so "the ring drew nothing" and "the ring never ran" cannot be confused) · `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
-trace, native_boot.cpp — for stage/scheduler debugging) · `stage` (GAME stage-machine native-ownership log,
+even when nothing is drawn, so "the ring drew nothing" and "the ring never ran" cannot be confused) · `schedf` (Tomba! 2 per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
+trace, owned by `Tomba2Engine/game/core/frame_diagnostics.cpp`) · `stage` (GAME stage-machine native-ownership log,
 game/core/engine.cpp) · `rqhist` (per-frame render-queue layer×opaque/semi histogram, render_queue.cpp — "is
 the world even being queued?") · `rqflush` (ONE line per `RenderQueue::flush`: `n=` items, `reemit=` — this
 flush re-sent an already-consumed queue because nothing was pushed since the last one — `seq=`, and
@@ -825,12 +825,15 @@ in ≥6 consecutive presents that OSCILLATES (sign-alternating jitter) or STALL-
 present) — the two signatures of a badly-interpolated 60fps object — and prints a FAIL/PASS summary. This is
 the instrument the operator runs to verify the fps60 per-object work; see docs/findings/render.md.
 
-`fps60dump` (per-present frame dump, `Fps60::dumpPresent` in game/render/fps60.cpp, called from
-`Fps60::present_vk` right after each present pass) — when on, writes EVERY presented frame (the
+`fps60dump` (per-present frame dump, `FramePresenter`'s presentation backend, called by the temporal
+presenter right after each present pass) — when on, writes EVERY presented frame (the
 interpolated in-between AND the real frame) to `scratch/framedump/f<logicframe>_<seq>_<real|interp>.png`,
 via the same VRAM-readback writer REPL `shot` uses (`gpu_vk_shot`/`gpu_native_shot` — no new pixel path).
-Capped at `Fps60::kDumpMax` (600) files so a long headless run can't fill disk; toggling the channel off
-then back on (REPL `debug fps60dump`) resets the cap. Feed the sequence to `scratch/check_stage2.py` (or
+Capped at `frame_presenter.cpp`'s `kDumpMax` (600) files so a long headless run can't fill disk; toggling the channel off
+then back on (REPL `debug fps60dump`) resets the cap. `PSXPORT_FPS60_DUMP_FROM=<fence>` leaves the
+sequence and cap untouched until that presentation fence, so a long deterministic route can capture
+the relevant midpoint/endpoint pair instead of exhausting all 600 files during boot. Feed the sequence
+to `scratch/check_stage2.py` (or
 a similar centroid/pixel-diff script) to check whether interp frames sit BETWEEN their real neighbors
 (correct) or teleport (bug) — this is the harness for verifying `Fps60::matchAndLerp`'s match+lerp
 quality, complementing `preseqobj`'s per-object oscillation gate above (this one is pixel-ground-truth,

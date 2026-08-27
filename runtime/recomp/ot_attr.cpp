@@ -15,7 +15,7 @@
 // holding Tomba!2's addresses (0x800BFE68..0x800E7E68) inside game-agnostic framework code — so on any
 // other consumer this whole table silently matched nothing and reported no attributions, which is
 // indistinguishable from "the guest submitted no packets". GameConfig::packetPoolBase/Stride already
-// carry it (native_step_frame's per-frame OT/pool dance uses them); this reads the same fields.
+// carry it (the title FrameDriver's measured OT/pool sequence uses them); this reads the same fields.
 //
 // TWO PARITY POOLS: base + 2*stride is the pair, which reproduces Tomba!2's old constants exactly
 // (0x800BFE68 + 2*0x14000 = 0x800E7E68) — verified against them rather than re-derived.

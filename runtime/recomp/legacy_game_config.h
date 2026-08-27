@@ -4,6 +4,8 @@
 
 #ifdef __cplusplus
 
+#include "platform_hle.h"
+
 // SchedBody — which game stage body the framework scheduler (PcScheduler, now framework) is asking the
 // game to run. PcScheduler owns the framework-side task/coro/yield machinery; the actual stage bodies are
 // game code (Engine::*), reached through the single schedStageBody hook so the framework names no Engine
@@ -59,7 +61,7 @@ struct GameConfig {
   // the framework must not invent an intro it was never asked for.
   const char *bootFmv[4];
 
-  // --- per-frame OT / packet-pool dance (native_boot.cpp native_step_frame) ---
+  // --- measured per-frame OT / packet-pool facts consumed by an adapter title's FrameDriver ---
   uint32_t otRegionBase, otRegionStride;     // per-parity OT region
   uint32_t packetPoolBase, packetPoolStride; // per-parity packet pool
   uint32_t otBasePtr;                        // OT-base pointer global
@@ -164,9 +166,10 @@ struct GameConfig {
   struct PlatformHleCfg {
     // The address windows register_() will accept. Everything outside them is refused, which is what
     // keeps GAME/engine logic out of this table (game logic is owned top-down through the override
-    // registry instead). Two windows; an unused one is left {0,0}. If NO window is configured,
-    // register_() refuses everything and says so — a game must state its own memory map.
-    uint32_t windowLo[2], windowHi[2];
+    // registry instead). Each slot is one exact half-open range; an unused one is left {0,0}. If NO
+    // window is configured, register_() refuses everything and says so — a game must state its own
+    // memory map. Direct and adapter storage share the one framework capacity constant.
+    uint32_t windowLo[kPlatformHleWindowCapacity], windowHi[kPlatformHleWindowCapacity];
 
     // Adapter input only for GuestProgramImage::backtraceText. Physical range; zero means the typed
     // image falls back to residentText.
@@ -191,12 +194,10 @@ struct GameConfig {
     // for an un-RE'd port, not a gap to paper over.
     uint32_t setGeomOffset, setGeomScreen;
 
-    // libetc VSync, as a TRAP: "nothing may reach VSync, in any mode, because the native frame loop
-    // owns all timing". That is a per-game POLICY, not a framework universal — it holds only for a
-    // port whose native loop actually drives the frame. A game still running the guest's own loop on
-    // the substrate must instead reimplement VSync faithfully and register it itself via
-    // PlatformHle::register_(). Leave this ZERO in that case; setting both is a contradiction, and
-    // initBuiltins would clobber the game's handler with the trap.
+    // Measured libetc VSync entry. Product boot requires this address and binds it to the framework's
+    // all-mode fatal trap: every port's frame loop is native-owned, so neither guest waits nor guest
+    // queries are valid shipping paths. The legacy field name is retained only to preserve aggregate
+    // layout while adapter consumers migrate to PlatformHlePlan::vsyncAddress.
     uint32_t vsyncTrap;
   } hle;
 

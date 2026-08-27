@@ -95,7 +95,7 @@ public:
 
   // WIDESCREEN re-assert of the horizontal centre only. The window is created lazily (first present),
   // so the boot-time offset is baked at the 4:3 centre and the real one is only knowable once a width
-  // exists; native_step_frame re-asserts it per frame. Vertical centre never moves, and this does NOT
+  // exists; the title FrameDriver re-asserts it per frame. Vertical centre never moves, and this does NOT
   // mark the projection as set — an aspect adjustment is not the game stating a projection, and if the
   // game never stated one this must not make it look like it did.
   void setGeomOfxForAspect(float ofx) {
