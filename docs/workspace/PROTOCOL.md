@@ -14,6 +14,18 @@ Seven game repos share ONE framework, and there are seven checkouts of it — on
 Two agents fixing the same framework bug in two checkouts is the expensive failure: invisible until merge
 time, and whichever lands second is thrown away with its testing.
 
+## Agent allocation: three concurrent subagents, assigned by the work
+
+USER 2026-08-27: "remove the 1 agent per game instruction, you are allowed 3 subagents from now on, you decide what they work on"
+
+USER 2026-08-27: "Depending on the task, all 3 can be working on the same game or however you like"
+
+- The operator may run at most three subagents concurrently across this workspace.
+- There is no standing one-agent-per-game assignment. Allocate the three slots to the current root causes;
+  one, two, or all three may work on the same game when the ownership boundaries are independent.
+- Reassign a slot when its current work reaches a recorded boundary. A rebuild, repeated broad gate, or
+  revalidation of an unchanged capability is not progress and does not justify keeping a slot.
+
 ## The rule: ONE WRITABLE CHECKOUT, and it is `$PSX/psxport`
 
 **Framework edits happen in the dev clone. Never in a game's `external/psxport`** — no edit, no commit,
