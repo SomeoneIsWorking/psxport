@@ -1142,117 +1142,26 @@ void RenderQueue::emitItem(Core *core, const RqItem *it) {
   const unsigned char *bs = it->bs;
   const float *depth = it->depth;
   int mode = it->mode, raw = it->raw, nv = it->nv ? it->nv : 4;
-  // PSXPORT_PRIMAT="x,y" (DISPLAY coords): also log WORLD/queue prims (drawWorldQuad etc.) that cover
-  // that pixel — primat in gp0_exec is blind to these (they bypass the OT walk). Shows the real-depth
-  // occluders. (diag, 2026-06-24)
-  {
-    static int qx = -2, qy = -1, qf0 = 0;
-    if (qx == -2) {
-      qx = -1;
-      const char *pa = cfg_str("PSXPORT_PRIMAT");
-      if (pa) {
-        sscanf(pa, "%d,%d,%d", &qx, &qy, &qf0);
-      }
-    }
-    if (qx >= 0 && (int)s.s_frame >= qf0) {
-      int ax = s.s_disp_x + qx, ay = s.s_disp_y + qy;
-      auto edge = [](int ax_, int ay_, int x0, int y0, int x1, int y1) {
-        return (int64_t)(x1 - x0) * (ay_ - y0) - (int64_t)(y1 - y0) * (ax_ - x0);
-      };
-      auto intri = [&](int i0, int i1, int i2) {
-        int64_t w0 = edge(ax, ay, xs[i1], ys[i1], xs[i2], ys[i2]);
-        int64_t w1 = edge(ax, ay, xs[i2], ys[i2], xs[i0], ys[i0]);
-        int64_t w2 = edge(ax, ay, xs[i0], ys[i0], xs[i1], ys[i1]);
-        return (w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0);
-      };
-      int t0 = intri(0, 1, 2) ? 0 : ((nv == 4 && intri(1, 2, 3)) ? 1 : -1);
-      if (t0 >= 0) {
-        static int n = 0;
-        if (n++ < 6000) {
-          // Interpolated depth at (ax,ay) = the value the D32 buffer actually receives, so a z-fight shows as
-          // two prims with (near-)equal INTERPOLATED ord3d here. Barycentric on the float verts the rasterizer
-          // uses (has_xyf) else the rounded xs/ys. ord3d(d)=NATIVE_3D_MIN+d*(NATIVE_3D_MAX-NATIVE_3D_MIN) for
-          // RQ_OM_DEPTH; 2D-band prims store a screen-space band value (not depth) so print raw.
-          const float *fx = it->has_xyf ? it->xsf : nullptr;
-          const float *fy = it->has_xyf ? it->ysf : nullptr;
-          int i0 = t0, i1 = t0 + 1, i2 = t0 + 2;
-          float ax0 = fx ? fx[i0] : (float)xs[i0], ay0 = fy ? fy[i0] : (float)ys[i0];
-          float ax1 = fx ? fx[i1] : (float)xs[i1], ay1 = fy ? fy[i1] : (float)ys[i1];
-          float ax2 = fx ? fx[i2] : (float)xs[i2], ay2 = fy ? fy[i2] : (float)ys[i2];
-          float d0 = depth ? depth[i0] : -1.f, d1 = depth ? depth[i1] : -1.f, d2 = depth ? depth[i2] : -1.f;
-          float den = (ay1 - ay2) * (ax0 - ax2) + (ax2 - ax1) * (ay0 - ay2);
-          float interp_ord = -1.f, d32 = -1.f;
-          if (depth && den != 0.f) {
-            float l0 = ((ay1 - ay2) * (ax - ax2) + (ax2 - ax1) * (ay - ay2)) / den;
-            float l1 = ((ay2 - ay0) * (ax - ax2) + (ax0 - ax2) * (ay - ay2)) / den;
-            float l2 = 1.f - l0 - l1;
-            interp_ord = l0 * d0 + l1 * d1 + l2 * d2;
-            d32 = 0.0625f + interp_ord * (0.9375f - 0.0625f); // ord3d
-          }
-          // Texture identity is part of "what am I looking at": a face that draws BLACK is either losing a
-          // depth contest or sampling the wrong page/CLUT, and the two are indistinguishable without it.
-          lucent::info("primat-rq",
-                       "f{} seq={} dbgnode={:08X} layer={} om={} semi={} tri={} nv={} vdepth=[{:.6f} {:.6f} {:.6f}] "
-                       "interp_ord={:.6f} D32={:.6f} col=({},{},{}) raw={} mode={} tp=({},{}) clut=({},{}) uv=[({},{}) "
-                       "({},{}) ({},{}) ({},{})] xy=[({},{}) ({},{}) ({},{}) ({},{})]",
-                       s.s_frame,
-                       it->seq,
-                       it->dbg_node,
-                       it->layer,
-                       it->order_mode,
-                       it->semi,
-                       t0,
-                       nv,
-                       d0,
-                       d1,
-                       d2,
-                       interp_ord,
-                       d32,
-                       rs[0],
-                       gs[0],
-                       bs[0],
-                       raw,
-                       mode,
-                       it->tp_x,
-                       it->tp_y,
-                       it->clut_x,
-                       it->clut_y,
-                       us[0],
-                       vs[0],
-                       us[1],
-                       vs[1],
-                       us[2],
-                       vs[2],
-                       us[3],
-                       vs[3],
-                       xs[0],
-                       ys[0],
-                       xs[1],
-                       ys[1],
-                       xs[2],
-                       ys[2],
-                       xs[3],
-                       ys[3]);
-        }
-      }
-    }
-  }
   mLedger.noteEmitted(it->layer); // present_ledger.h — the single funnel every drawn prim passes
   unsigned ord = s.s_prim_order++;
+  uint32_t depthBiasOrder = ord;
   // Physical-flush-local presentation rank, applied at the last possible point so an earlier
   // diagnostic/filter return cannot leak an override into the next item. Regrouped painter emission
   // therefore keeps exact-depth ties in original order without consuming bias on fps60's global seq base.
   if (mPainterRegrouping) {
     gpu_vk_set_order_override(core, mPainterPresentationRank);
+    depthBiasOrder = mPainterPresentationRank;
   }
   // The generic paint bias makes later native emissions win near-equal real-depth contests. An
   // authored depth has already encoded the guest OT's answer, including AddPrim's opposite same-bucket
   // LIFO rule, so adding native emission order here would overwrite that answer.
   if (it->authored_depth) {
     gpu_vk_set_order_override(core, 0);
+    depthBiasOrder = 0;
   }
   gpu_vk_set_painter_material(core, it->shade_gouraud, it->dither);
   gpu_vk_set_order(core, ord);
+  pixelProbeEmit(core, *it, ord, depthBiasOrder);
   // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near
   // screen-space band (preserving the existing 2D depth semantics — only the ORDER is now engine-decided).
   int om = it->order_mode;
@@ -1533,7 +1442,9 @@ void RenderQueue::emitOrQueue(Core *core,
                               float key_ord,
                               int shade_gouraud,
                               int dither,
-                              PainterReplayOrder painter_replay) {
+                              PainterReplayOrder painter_replay,
+                              uint32_t guest_packet,
+                              uint32_t guest_ot_order) {
   // ---- graphics-producer DB, NATIVE leg (docs/plans/graphics-producer-db.md stage 3) -------------
   // THE one chokepoint: drawWorldQuad and push2dQuad both funnel here, so counting once here covers
   // every native push and cannot double-count. An open ProducerScope names the producer; with none
@@ -1648,7 +1559,8 @@ void RenderQueue::emitOrQueue(Core *core,
       }
     }
   }
-  RqItem it;
+  // Zero-init: only the later key-order resolver may promote authored_depth from ordinary real depth.
+  RqItem it{};
   it.flush_ordinal = 0;
   it.layer = (uint8_t)layer;
   it.semi = semi ? 1 : 0;
@@ -1657,6 +1569,8 @@ void RenderQueue::emitOrQueue(Core *core,
   it.order_mode = (uint8_t)order_mode;
   it.painter_object = mPainterObject;
   it.painter_replay = painter_replay;
+  it.guest_packet = guest_packet;
+  it.guest_ot_order = guest_ot_order;
   it.painter_flags = mPainterFlags;
   it.shade_gouraud = shade_gouraud ? 1 : 0;
   it.dither = (dither || (mPainterFlags & PAINTER_OBJECT_DITHER)) ? 1 : 0;

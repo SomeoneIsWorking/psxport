@@ -126,6 +126,7 @@ struct PresentPC {
 // comment for the per-mode blend-factor derivation. Single batch (SBS dual-pane is Pass 3).
 #define NATIVE_3D_MIN 0.0625f
 #define NATIVE_3D_MAX 0.9375f
+static constexpr SDL_GPUCompareOp kWorldDepthCompare = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
 static inline float ord3d(float d) {
   return NATIVE_3D_MIN + d * (NATIVE_3D_MAX - NATIVE_3D_MIN);
 }
@@ -730,7 +731,7 @@ static SDL_GPUGraphicsPipeline *make_geom_pipeline(const uint32_t *vs_code,
                                                    bool depth_write,
                                                    Uint32 num_uniforms = 0,
                                                    bool depth_only = false,
-                                                   SDL_GPUCompareOp compare = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL) {
+                                                   SDL_GPUCompareOp compare = kWorldDepthCompare) {
   SDL_GPUShader *vs = make_shader(vs_code, vs_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
   SDL_GPUShader *fs = make_shader(fs_code, fs_len, SDL_GPU_SHADERSTAGE_FRAGMENT, num_samplers, num_uniforms);
   SDL_GPUVertexBufferDescription vbd = {};
@@ -779,7 +780,7 @@ static SDL_GPUGraphicsPipeline *make_painter_composite_pipeline() {
   gp.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
   gp.depth_stencil_state.enable_depth_test = true;
   gp.depth_stencil_state.enable_depth_write = true;
-  gp.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
+  gp.depth_stencil_state.compare_op = kWorldDepthCompare;
   gp.target_info.color_target_descriptions = &ct;
   gp.target_info.num_color_targets = 1;
   gp.target_info.has_depth_stencil_target = true;
@@ -802,7 +803,7 @@ static SDL_GPUGraphicsPipeline *make_semi_pipeline(int mode,
                                                    Uint32 n_attr,
                                                    Uint32 pitch,
                                                    bool depth_write = false,
-                                                   SDL_GPUCompareOp compare = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL) {
+                                                   SDL_GPUCompareOp compare = kWorldDepthCompare) {
   SDL_GPUShader *vs = make_shader(spv_g_tritex_vert, spv_g_tritex_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
   SDL_GPUShader *fs = make_shader(spv_g_trisemi_hw_frag,
                                   spv_g_trisemi_hw_frag_len,
@@ -3015,6 +3016,10 @@ static float zbias_max() {
     }
   }
   return m;
+}
+float gpu_vk_map_ordered_3d_depth(float depth, uint32_t order) {
+  const float cap = zbias_max(), raw_bias = (float)order * gpu_zbias_unit();
+  return ord3d_b(depth, raw_bias > cap ? cap : raw_bias);
 }
 bool gpu_vk_order_bias_distinguishes(uint32_t seq) {
   float u = gpu_zbias_unit(), m = zbias_max();

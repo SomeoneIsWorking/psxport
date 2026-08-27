@@ -299,23 +299,32 @@ static inline uint16_t blend555(uint16_t bg, int fr, int fg, int fb, int mode) {
   return (uint16_t)(rr | (rg << 5) | (rb << 10));
 }
 
-// Sample a texel at texture coords (u,v) through the current texpage/CLUT. Returns 0 if the
-// texel is fully transparent (PSX: a 16-bit value of 0 = transparent).
+// The one explicit texture/CLUT sampler. The shipping rasterizer supplies its current state; queue
+// diagnostics supply the state captured on an RqItem, so both answers use identical wrap/index rules.
+GpuTextureSample GpuState::sample_tex_at(
+    int u, int v, int tp_x, int tp_y, int mode, int clut_x, int clut_y, int tw_mx, int tw_my, int tw_ox, int tw_oy) {
+  GpuTextureSample sample;
+  sample.u = (u & ~(tw_mx * 8)) | ((tw_ox & tw_mx) * 8);
+  sample.v = (v & ~(tw_my * 8)) | ((tw_oy & tw_my) * 8);
+  if (mode == 2) {
+    sample.source_word = *vram(tp_x + sample.u, tp_y + sample.v);
+    sample.texel = sample.source_word;
+    return sample;
+  }
+  if (mode == 1) {
+    sample.source_word = *vram(tp_x + (sample.u >> 1), tp_y + sample.v);
+    sample.palette_index = (sample.u & 1) ? (sample.source_word >> 8) : (sample.source_word & 0xFF);
+  } else {
+    sample.source_word = *vram(tp_x + (sample.u >> 2), tp_y + sample.v);
+    sample.palette_index = (sample.source_word >> ((sample.u & 3) * 4)) & 0xF;
+  }
+  sample.texel = *vram(clut_x + sample.palette_index, clut_y);
+  return sample;
+}
+
+// Sample through the current draw state. A zero texel is transparent on the PSX.
 uint16_t GpuState::sample_tex(int u, int v) {
-  u = (u & ~(s_tw_mx * 8)) | ((s_tw_ox & s_tw_mx) * 8); // texture window wrap
-  v = (v & ~(s_tw_my * 8)) | ((s_tw_oy & s_tw_my) * 8);
-  int bx = s_tp_x, by = s_tp_y;
-  if (s_tp_mode == 2) {
-    return *vram(bx + u, by + v); // 15bpp direct
-  }
-  if (s_tp_mode == 1) { // 8bpp: index -> CLUT
-    uint16_t w = *vram(bx + (u >> 1), by + v);
-    int idx = (u & 1) ? (w >> 8) : (w & 0xFF);
-    return *vram(s_clut_x + idx, s_clut_y);
-  }
-  uint16_t w = *vram(bx + (u >> 2), by + v); // 4bpp: nibble -> CLUT
-  int idx = (w >> ((u & 3) * 4)) & 0xF;
-  return *vram(s_clut_x + idx, s_clut_y);
+  return sample_tex_at(u, v, s_tp_x, s_tp_y, s_tp_mode, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy).texel;
 }
 
 // Write one pixel. If `semi` is set, blend the source (r,g,b) over the existing VRAM pixel
@@ -1283,24 +1292,10 @@ void GpuState::gp0_exec(Core *core) {
         // VK polys), this is the gp0 tee, so it sees the actual occlusion contestants. Frontmost opaque =
         // max ord. Tagged f%d so a multi-frame run can be grepped for the shot frame. (diag, 2026-06-24)
         {
-          static int qx = -2, qy = -1, qf0 = 0;
-          if (qx == -2) {
-            qx = -1;
-            const char *pa = cfg_str("PSXPORT_PRIMAT");
-            if (pa) {
-              sscanf(pa, "%d,%d,%d", &qx, &qy, &qf0);
-            }
-          }
-          if (qx >= 0 && (int)s_frame >= qf0) {
-            int ax = s_disp_x + qx, ay = s_disp_y + qy;
-            auto edge = [](int ax_, int ay_, int x0, int y0, int x1, int y1) {
-              return (int64_t)(x1 - x0) * (ay_ - y0) - (int64_t)(y1 - y0) * (ax_ - x0);
-            };
+          int ax = 0, ay = 0;
+          if (pixel_probe_target(ax, ay)) {
             auto intri = [&](int i0, int i1, int i2) {
-              int64_t w0 = edge(ax, ay, xs[i1], ys[i1], xs[i2], ys[i2]);
-              int64_t w1 = edge(ax, ay, xs[i2], ys[i2], xs[i0], ys[i0]);
-              int64_t w2 = edge(ax, ay, xs[i0], ys[i0], xs[i1], ys[i1]);
-              return (w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0);
+              return rq_point_in_triangle(ax, ay, xs[i0], ys[i0], xs[i1], ys[i1], xs[i2], ys[i2]);
             };
             int cover = intri(0, 1, 2) || (nv == 4 && intri(1, 2, 3));
             if (cover) {
@@ -1309,7 +1304,7 @@ void GpuState::gp0_exec(Core *core) {
                 lucent::info("primat",
                              "f{} objnode={:08X} pktnode={:08X} op={:02X} is3d={} bg={} semi={} tex={} mode={} raw={} "
                              "tp=({},{}) clut=({},{}) uv0=({},{}) da=({},{})-({},{}) off=({},{}) col=({},{},{}) "
-                             "bbox=({},{})-({},{})",
+                             "bbox=({},{})-({},{}) xy=[({},{}) ({},{}) ({},{}) ({},{})]",
                              s_frame,
                              core->rsub.diag.currentNode(),
                              s_cur_node,
@@ -1338,7 +1333,15 @@ void GpuState::gp0_exec(Core *core) {
                              bx0,
                              by0,
                              bx1,
-                             by1);
+                             by1,
+                             xs[0],
+                             ys[0],
+                             xs[1],
+                             ys[1],
+                             xs[2],
+                             ys[2],
+                             xs[3],
+                             ys[3]);
               }
             }
           }
@@ -1439,7 +1442,15 @@ void GpuState::gp0_exec(Core *core) {
                                            s_da_y0,
                                            s_da_x1,
                                            s_da_y1,
-                                           s_tp_blend);
+                                           s_tp_blend,
+                                           nullptr,
+                                           -1,
+                                           0.0f,
+                                           0,
+                                           0,
+                                           {},
+                                           s_cur_node,
+                                           ord_idx);
       } else {
         gpu_vk_set_order(core, ord_idx); // OT submission order -> depth (preserve opaque/semi order)
         if (!is3d) {                     // 2D band select
@@ -1959,7 +1970,15 @@ void GpuState::gp0_exec(Core *core) {
                                            s_da_y0,
                                            s_da_x1,
                                            s_da_y1,
-                                           s_tp_blend);
+                                           s_tp_blend,
+                                           nullptr,
+                                           -1,
+                                           0.0f,
+                                           0,
+                                           0,
+                                           {},
+                                           s_cur_node,
+                                           ord_idx);
       } else {
         gpu_vk_set_order(core, ord_idx); // OT submission order -> depth (preserve opaque/semi order)
         if (bg) {

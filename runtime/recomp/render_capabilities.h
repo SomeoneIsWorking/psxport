@@ -21,20 +21,29 @@ enum class RenderPathSelectionResult {
   ReferenceLocked,
 };
 
+// The PSX authored polygon order in an ordering table. Depth is the PC-native enhancement;
+// Authored reproduces the title's frame-wide OT buckets and AddPrim insertion order.
+enum FaceOrder {
+  FACE_ORDER_DEPTH = 0,
+  FACE_ORDER_AUTHORED = 1,
+};
+
 struct RenderCapabilities {
   RenderPath defaultPath = RenderPath::Native;
   bool nativeRenderPath = true;
   bool temporalInterpolation = false;
+  FaceOrder defaultFaceOrder = FACE_ORDER_DEPTH;
 
   static constexpr RenderCapabilities direct() {
     return {};
   }
 
-  static constexpr RenderCapabilities interpolatedNative() {
+  static constexpr RenderCapabilities interpolatedNative(FaceOrder defaultFaceOrder = FACE_ORDER_DEPTH) {
     return {
         .defaultPath = RenderPath::Native,
         .nativeRenderPath = true,
         .temporalInterpolation = true,
+        .defaultFaceOrder = defaultFaceOrder,
     };
   }
 
@@ -43,6 +52,7 @@ struct RenderCapabilities {
         .defaultPath = RenderPath::Gte,
         .nativeRenderPath = false,
         .temporalInterpolation = false,
+        .defaultFaceOrder = FACE_ORDER_DEPTH,
     };
   }
 

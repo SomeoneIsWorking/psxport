@@ -35,6 +35,7 @@
 
 #include "render_queue.h"
 
+#include "game.h"
 #include "gpu_vk.h"
 #include "mods.h" // FACE_ORDER_DEPTH — the ordering mode the rule is driven with
 
@@ -175,6 +176,58 @@ SnapCompare run_and_compare(RenderQueue &q) {
 
 } // namespace
 
+static void test_pixel_predicate_rejects_degenerate_faces(void) {
+  CHECK(rq_point_in_triangle(4, 4, 0, 0, 8, 0, 0, 8));
+  CHECK(rq_point_in_triangle(4, 4, 0, 8, 8, 0, 0, 0));
+  CHECK(!rq_point_in_triangle(9, 9, 0, 0, 8, 0, 0, 8));
+  CHECK(!rq_point_in_triangle(4, 4, 2, 2, 2, 2, 2, 2));
+  CHECK(!rq_point_in_triangle(4, 4, 0, 0, 4, 4, 8, 8));
+}
+
+static void test_shipping_capture_starts_with_real_depth_ownership(void) {
+  static Game game;
+  RenderQueue &q = game.rq;
+  q.reset();
+  const int xs[4] = {0, 8, 8, 0};
+  const int ys[4] = {0, 0, 8, 8};
+  const int uv[4] = {0, 0, 0, 0};
+  const unsigned char rgb[4] = {64, 64, 64, 64};
+  const float depth[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+  q.emitOrQueue(&game.core,
+                1,
+                RQ_WORLD,
+                RQ_OM_DEPTH,
+                4,
+                0,
+                0,
+                xs,
+                ys,
+                nullptr,
+                nullptr,
+                uv,
+                uv,
+                rgb,
+                rgb,
+                rgb,
+                depth,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                320,
+                240,
+                0);
+  CHECK_EQ(q.n, 1);
+  CHECK_EQ(q.items[0].authored_depth, 0);
+}
+
 // ---- 1. the contradiction rule: two faces of one object whose depth inverts the game's key order --
 static void test_contradicting_pair_snaps_both(void) {
   std::unique_ptr<RenderQueue> q = make_queue();
@@ -266,7 +319,49 @@ static void test_authored_bucket_depths_match_addprim_lifo(void) {
   CHECK_EQ(q->items[kFaces - 1].authored_depth, 1);
 }
 
-// ---- 6. a mixed group: both rules and non-participants together ---------------------------------
+// ---- 6. authored order is frame-wide: OT buckets and AddPrim LIFO cross object boundaries -------
+static void test_authored_order_crosses_objects(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  push_face(*q, 0x800FD850u, 500, 0, 0, 40, 40, 0.10f, 0.90f);
+  push_face(*q, 0x800FD860u, 540, 0, 0, 40, 40, 0.90f, 0.10f);
+  push_face(*q, 0x800FD870u, 500, 0, 0, 40, 40, 0.50f, 0.50f);
+  q->resolveKeyOrderFaces(0, "test", FACE_ORDER_AUTHORED);
+
+  // A PSX ordering table is frame-wide, not per object: the smaller bucket wins even when the
+  // competing packets came from different object submitters. Same-bucket AddPrim ties likewise
+  // reverse native submission order, so seq 0 wins over the later seq 2 packet.
+  CHECK_EQ(q->items[0].authored_depth, 1);
+  CHECK_EQ(q->items[1].authored_depth, 1);
+  CHECK_EQ(q->items[2].authored_depth, 1);
+  CHECK(q->items[0].depth[0] > q->items[1].depth[0]);
+  CHECK(q->items[0].depth[0] > q->items[2].depth[0]);
+  CHECK(q->items[2].depth[0] > q->items[1].depth[0]);
+}
+
+// ---- 7. Crash Bash f300: the measured cross-object pair follows the retail OT -------------------
+static void test_authored_order_matches_crash_bash_frame_300_pair(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  constexpr uint32_t kDarkObject = 0x800A0C74u;
+  constexpr uint32_t kRedObject = 0x801E18B0u;
+  constexpr int kDarkOtBucket = 3312;
+  constexpr int kRedOtBucket = 3160;
+
+  // The native D32 witness selected the dark face from object 0x800A0C74, while the retail packet
+  // walk selected the red face from object 0x801E18B0. They are in different OT buckets, so the
+  // smaller red bucket is nearer regardless of object identity or same-bucket insertion order.
+  push_face(*q, kDarkObject, kDarkOtBucket, 0, 0, 80, 160, 0.028896261f, 0.028896261f);
+  push_face(*q, kRedObject, kRedOtBucket, 0, 0, 80, 160, 0.022926982f, 0.022926982f);
+  q->resolveKeyOrderFaces(300, "crashbash-f300", FACE_ORDER_AUTHORED);
+
+  CHECK_EQ(q->items[0].dbg_node, kDarkObject);
+  CHECK_EQ(q->items[1].dbg_node, kRedObject);
+  CHECK_EQ(q->items[0].authored_depth, 1);
+  CHECK_EQ(q->items[1].authored_depth, 1);
+  CHECK(q->items[1].depth[0] > q->items[0].depth[0]);
+  CHECK(gpu_vk_map_3d_depth(q->items[1].depth[0]) > gpu_vk_map_3d_depth(q->items[0].depth[0]));
+}
+
+// ---- 8. a mixed group: both rules and non-participants together ---------------------------------
 static void test_mixed_group_matches_oracle(void) {
   std::unique_ptr<RenderQueue> q = make_queue();
   // A contesting pair, a coincident same-key pair, and four faces that touch nothing — all in one
@@ -284,7 +379,7 @@ static void test_mixed_group_matches_oracle(void) {
   CHECK_EQ(r.disagreements, 0);
 }
 
-// ---- 7. THE WEDGE: cost must scale with the group, not with its square --------------------------
+// ---- 9. THE WEDGE: cost must scale with the group, not with its square --------------------------
 static void test_large_group_work_is_not_quadratic(void) {
   std::unique_ptr<RenderQueue> q = make_queue();
   // The shape measured on the wedge frame: ONE object node, tens of thousands of keyed faces, all
@@ -318,11 +413,15 @@ static void test_large_group_work_is_not_quadratic(void) {
 }
 
 int main(void) {
+  RUN(pixel_predicate_rejects_degenerate_faces);
+  RUN(shipping_capture_starts_with_real_depth_ownership);
   RUN(contradicting_pair_snaps_both);
   RUN(disjoint_faces_never_snap);
   RUN(contest_does_not_cross_objects);
   RUN(coincident_same_key_pair_snaps);
   RUN(authored_bucket_depths_match_addprim_lifo);
+  RUN(authored_order_crosses_objects);
+  RUN(authored_order_matches_crash_bash_frame_300_pair);
   RUN(mixed_group_matches_oracle);
   RUN(large_group_work_is_not_quadratic);
   return pt_summary();

@@ -145,9 +145,12 @@ void Mods::init(const RenderCapabilities &capabilities) {
   }
   mInited = true;
   mTemporalInterpolationSupported = capabilities.temporalInterpolation;
-  // One PC-native build: every visual enhancement starts OFF (the in-class initializers are the
-  // factory state). The F1 overlay toggles them LIVE and persists the choice to the settings file,
-  // restored next launch.
+  // The title owns the factory answer for OT-authored versus native per-pixel depth. Seed it before
+  // load so an explicit persisted player choice remains the higher-precedence answer.
+  face_order = capabilities.defaultFaceOrder;
+  // One PC-native build: every other visual enhancement starts OFF (the in-class initializers are
+  // the factory state). The F1 overlay toggles them LIVE and persists the choice to the settings
+  // file, restored next launch.
   ui = 1; // overlay always available (live-toggle + the deferred SSAO/light infra)
   load(); // the player's persisted choices win over the factory defaults
   // ...and PSXPORT_FPS60 wins over those. THIS LINE IS THE WHOLE POINT OF THE CVar WORK: the

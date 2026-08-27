@@ -10,6 +10,7 @@
 #ifndef GPU_NATIVE_INTERNAL_H
 #define GPU_NATIVE_INTERNAL_H
 #include "gpu_display_mode.h"
+#include <array>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -32,11 +33,34 @@ typedef struct {
 } ProvMeta;
 #define PROVRING 16384
 
+struct GpuProvenancePacket {
+  uint32_t node = 0;
+  uint32_t word_count = 0;
+  std::array<uint32_t, 256> words{};
+};
+
+GpuProvenancePacket gpu_provenance_packet(Core &core, uint32_t node);
+
 typedef struct {
   int x, y;
   uint8_t r, g, b;
   int u, v;
 } Vtx; // rasterizer vertex (was local to gpu_native)
+
+struct GpuTextureSample {
+  int u = 0;
+  int v = 0;
+  uint16_t source_word = 0;
+  uint16_t palette_index = 0;
+  uint16_t texel = 0;
+};
+
+struct GpuPixelProbeTarget {
+  bool configured = false;
+  int x = -1;
+  int y = -1;
+  int from_frame = 0;
+};
 
 // ---- CPU<->VRAM transfer header ----------------------------------------------------------------
 // The two parameter words that follow GP0(0xA0) (CPU->VRAM) and GP0(0xC0) (VRAM->CPU): destination/
@@ -292,6 +316,7 @@ struct GpuState {
   // silently served, because a wrong answer that looks like an answer is the failure mode this whole
   // feature exists to remove.
   long s_c0_stale = 0;
+  GpuPixelProbeTarget s_pixel_probe;
   // ---- GP0(0xC0) VRAM->CPU transfer cursor ------------------------------------------------------
   // Mirrors s_xfer* (the A0 CPU->VRAM cursor) exactly: same rect decode, same row-major 2-pixels-per-
   // word stream, same VRAM wrap. Drained by the GPUREAD register (0x1F801810) and by DMA2 in the
@@ -316,6 +341,9 @@ struct GpuState {
   uint32_t s_dma_src = 0;  // last block-DMA source (was global g_dma_src)
 
   // ---- rasterizer / GP0 / present methods (bodies in gpu_native.cpp) ----
+  GpuTextureSample sample_tex_at(
+      int u, int v, int tp_x, int tp_y, int mode, int clut_x, int clut_y, int tw_mx, int tw_my, int tw_ox, int tw_oy);
+  bool pixel_probe_target(int &absolute_x, int &absolute_y);
   uint16_t sample_tex(int u, int v);
   void put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int semi);
   void put_px(int x, int y, uint8_t r, uint8_t g, uint8_t b);

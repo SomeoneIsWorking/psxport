@@ -185,7 +185,10 @@ or recording a diagnostic; the injected-backend test proves both that path and t
 long boot routes can select a target fence without changing presentation or consuming the file budget.
 `Fps60` is an optional temporal decorator, not the frame-lifecycle owner. Direct runtimes declare
 their presentation products through `RenderCapabilities`; unsupported fps60 requests and UI bindings
-are refused before reaching the decorator. `fps60_gpu_present.{h,cpp}` owns the intermediate-pass renderer reset and is
+are refused before reaching the decorator. The same capabilities own the title's face-order factory
+default: `Mods::init` applies it before loading `psxport_settings.ini`, so a title can ship faithful
+frame-wide authored OT order without overriding an explicit persisted player choice. The generic
+factory remains PC-native per-pixel depth. `fps60_gpu_present.{h,cpp}` owns the intermediate-pass renderer reset and is
 referenced only by `fps60.cpp`; the neutral presenter has no temporal renderer operation.
 `guest_widescreen_projection.h`
 owns the typed, frame-latched title projection/presentation plan; the GTE-only positive contract remains

@@ -115,6 +115,8 @@ struct RqItem {
   PainterObjectId painter_object;    // 0 = ordinary path; non-zero = local authored-order object
   PainterReplayOrder painter_replay; // optional frame-wide guest replay position
   uint32_t seq;                      // submission order — stable layer order; OT ties reverse it explicitly
+  uint32_t guest_packet;             // guest OT packet address, or 0 for a native source-owned face
+  uint32_t guest_ot_order;           // packet's draw position in the guest's actual OT walk
   // Physical flush boundary inside a captured presentation. Layers restart at each DrawOTag/flush, so
   // painter planning may regroup only items sharing this ordinal. Live queues use zero; fps60 stamps it.
   uint32_t flush_ordinal;
@@ -158,6 +160,42 @@ struct RqItem {
   float sh_vx[4], sh_vy[4], sh_vz[4]; // view-space verts (the shadow VBO input)
 };
 
+struct RqPixelSample {
+  bool covered = false;
+  bool writes = false;
+  bool blends = false;
+  int triangle = -1;
+  int u = 0;
+  int v = 0;
+  uint16_t source_word = 0;
+  uint16_t palette_index = 0;
+  uint16_t texel = 0;
+  float interpolated_depth = 0.0f;
+};
+
+struct RqPixelProbeWinner {
+  bool valid = false;
+  uint32_t final_order = 0;
+  uint32_t seq = 0;
+  uint32_t dbg_node = 0;
+  uint32_t guest_packet = 0;
+  uint32_t guest_ot_order = 0;
+  int32_t sort_key = -1;
+  float key_ord = 0.0f;
+  float d32 = 0.0f;
+  RqPixelSample sample;
+};
+
+struct RqPixelProbeState {
+  int x = -1;
+  int y = -1;
+  int frame = -1;
+  bool semi_seen = false;
+  RqPixelProbeWinner shipping;
+  RqPixelProbeWinner source_ot;
+  RqPixelProbeWinner guest_ot;
+};
+
 // Per-frame prim capacity. Measured worst case in real play (later-273): steady-state field ≈ 1k prims/frame,
 // but the AREA-TRANSITION frame (first field-load frame, sm[0x4e]→9) spikes to ≈ 43k as the whole area's
 // geometry is submitted at once. 32768 was too small for that transient (it silently dropped prims). Sized
@@ -172,6 +210,26 @@ struct RqItem {
 // a brute-force existence oracle built from this same predicate.
 bool rq_faces_in_contest(const RqItem &A, const RqItem &B);
 
+// True when the integer point lies inside or on a non-degenerate triangle. This is the shared
+// predicate used by pixel-targeted queue diagnostics; rejecting zero-area input is essential because
+// three coincident projected vertices otherwise satisfy both edge-sign tests and masquerade as a
+// full-screen coverer.
+inline bool rq_point_in_triangle(int px, int py, int x0, int y0, int x1, int y1, int x2, int y2) {
+  const auto edge = [](int ax, int ay, int bx, int by, int cx, int cy) -> int64_t {
+    return (int64_t)(bx - ax) * (cy - ay) - (int64_t)(by - ay) * (cx - ax);
+  };
+  if (edge(x0, y0, x1, y1, x2, y2) == 0) {
+    return false;
+  }
+  const int64_t w0 = edge(x1, y1, x2, y2, px, py);
+  const int64_t w1 = edge(x2, y2, x0, y0, px, py);
+  const int64_t w2 = edge(x0, y0, x1, y1, px, py);
+  return (w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0);
+}
+
+RqPixelSample rq_probe_item_pixel(class GpuState &gpu, const RqItem &item, int x, int y);
+bool rq_source_ot_candidate_wins(const RqItem &candidate, const RqPixelProbeWinner &current);
+
 // Per-instance (on Game) so two cores keep independent queues; pure host render data (never guest RAM),
 // so it does not affect a Core::ram lockstep diff.
 struct RenderQueue {
@@ -179,6 +237,7 @@ struct RenderQueue {
   RqItem items[RQ_MAX];
   int n = 0;
   uint32_t seq = 0;
+  RqPixelProbeState pixelProbe;
   // MONOTONIC PUSH ODOMETER — never reset, by design. `n` and `seq` both go back to 0 on the lazy
   // first-push-of-a-frame reset inside push(), so "prims this call emitted" measured as a delta of `n`
   // reads NEGATIVE whenever the call straddles that reset. That is not hypothetical: it is how the
@@ -299,6 +358,7 @@ struct RenderQueue {
   // emitItem: emit one resolved item to the VK rasterizer. Used by both the inline path and the
   // queue flush so emission logic lives in one place.
   void emitItem(Core *core, const RqItem *it);
+  void pixelProbeEmit(Core *core, const RqItem &item, uint32_t final_order, uint32_t depth_bias_order);
 
   // emitOrQueue: build an RqItem from already-resolved quad/tri data + material snapshot, then either
   // queue it (`capture`, engine owns the order, flushed at the draw kick) or emit it now. The ONE place
@@ -339,7 +399,9 @@ struct RenderQueue {
                    float key_ord = 0.0f,
                    int shade_gouraud = 0,
                    int dither = 0,
-                   PainterReplayOrder painter_replay = {});
+                   PainterReplayOrder painter_replay = {},
+                   uint32_t guest_packet = 0,
+                   uint32_t guest_ot_order = 0);
 
   // drawWorldQuad: PC-native world-quad draw — a quad already projected to FLOAT screen coords + real
   // per-vertex depth, teed as two triangles to the VK rasterizer through the queue. No GP0 packet, no

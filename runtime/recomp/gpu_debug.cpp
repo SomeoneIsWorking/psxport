@@ -1,4 +1,6 @@
+#include "cfg.h"
 #include "core.h"
+#include "gpu_vk.h"
 #include "ot_attr.h" // OtAttr::Span — `otattr` packet->submitter attribution
 // gpu_debug.c — read-only diagnostic dumps of the native GPU state (carved out of gpu_native.c).
 //
@@ -8,8 +10,272 @@
 // read the shared GPU state defined in gpu_native.c via gpu_native_internal.h; they never mutate VRAM.
 #include "game.h"
 #include "gpu_native_internal.h"
+#include "render_queue.h"
+#include <algorithm>
 #include <lucent/log.h>
+#include <math.h>
 #include <stdio.h>
+
+namespace {
+
+float rqProbeX(const RqItem &item, int vertex) {
+  return item.has_xyf ? item.xsf[vertex] : (float)item.xs[vertex];
+}
+
+float rqProbeY(const RqItem &item, int vertex) {
+  return item.has_xyf ? item.ysf[vertex] : (float)item.ys[vertex];
+}
+
+bool rqProbeBarycentric(const RqItem &item, int triangle, float x, float y, float weights[3]) {
+  const int i0 = triangle, i1 = triangle + 1, i2 = triangle + 2;
+  const float x0 = rqProbeX(item, i0), y0 = rqProbeY(item, i0);
+  const float x1 = rqProbeX(item, i1), y1 = rqProbeY(item, i1);
+  const float x2 = rqProbeX(item, i2), y2 = rqProbeY(item, i2);
+  const float denominator = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+  if (denominator == 0.0f) {
+    return false;
+  }
+  weights[0] = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / denominator;
+  weights[1] = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / denominator;
+  weights[2] = 1.0f - weights[0] - weights[1];
+  return weights[0] >= 0.0f && weights[1] >= 0.0f && weights[2] >= 0.0f;
+}
+
+float rqProbeInterpolate(const float weights[3], float v0, float v1, float v2) {
+  return weights[0] * v0 + weights[1] * v1 + weights[2] * v2;
+}
+
+int rqProbeUv(const RqItem &item, int triangle, const float weights[3], const int values[4]) {
+  const float interpolated =
+      rqProbeInterpolate(weights, (float)values[triangle], (float)values[triangle + 1], (float)values[triangle + 2]);
+  float lo = (float)values[triangle], hi = lo;
+  for (int i = 1; i < 3; ++i) {
+    const float value = (float)values[triangle + i];
+    lo = value < lo ? value : lo;
+    hi = value > hi ? value : hi;
+  }
+  const float snapped = floorf(interpolated * 4096.0f + 0.5f) / 4096.0f;
+  return (int)(snapped < lo ? lo : snapped > hi ? hi : snapped);
+}
+
+RqPixelProbeWinner rqProbeWinner(const RqItem &item, const RqPixelSample &sample, uint32_t finalOrder, float d32) {
+  RqPixelProbeWinner winner;
+  winner.valid = true;
+  winner.final_order = finalOrder;
+  winner.seq = item.seq;
+  winner.dbg_node = item.dbg_node;
+  winner.guest_packet = item.guest_packet;
+  winner.guest_ot_order = item.guest_ot_order;
+  winner.sort_key = item.sort_key;
+  winner.key_ord = item.key_ord;
+  winner.d32 = d32;
+  winner.sample = sample;
+  return winner;
+}
+
+void rqProbeLogFinal(const RqPixelProbeState &probe) {
+  const RqPixelProbeWinner &native = probe.shipping;
+  const RqPixelProbeWinner &source = probe.source_ot;
+  const RqPixelProbeWinner &guest = probe.guest_ot;
+  lucent::info("primat-rq",
+               "FINAL f{} @({},{}) compare={} semi_seen={} shipping(valid={} order={} seq={} "
+               "node={:08X} packet={:08X} ot_order={} key={} key_ord={:.9f} D32={:.9f} texel={:04X} writes={}) "
+               "source_OT(valid={} order={} seq={} node={:08X} key={} key_ord={:.9f} texel={:04X} writes={}) "
+               "guest_OT(valid={} order={} seq={} packet={:08X} ot_order={} key={} texel={:04X} writes={})",
+               probe.frame,
+               probe.x,
+               probe.y,
+               gpu_vk_world_depth_compare_name(),
+               probe.semi_seen,
+               native.valid,
+               native.final_order,
+               native.seq,
+               native.dbg_node,
+               native.guest_packet,
+               native.guest_ot_order,
+               native.sort_key,
+               native.key_ord,
+               native.d32,
+               native.sample.texel,
+               native.sample.writes,
+               source.valid,
+               source.final_order,
+               source.seq,
+               source.dbg_node,
+               source.sort_key,
+               source.key_ord,
+               source.sample.texel,
+               source.sample.writes,
+               guest.valid,
+               guest.final_order,
+               guest.seq,
+               guest.guest_packet,
+               guest.guest_ot_order,
+               guest.sort_key,
+               guest.sample.texel,
+               guest.sample.writes);
+}
+
+} // namespace
+
+GpuProvenancePacket gpu_provenance_packet(Core &core, uint32_t node) {
+  GpuProvenancePacket packet;
+  packet.node = node;
+  if (node == 0) {
+    return packet;
+  }
+  const uint32_t address = node & 0x1FFFFCu;
+  packet.word_count = std::min(core.mem_r32(address) >> 24u, static_cast<uint32_t>(packet.words.size()));
+  for (uint32_t word = 0; word < packet.word_count; ++word) {
+    packet.words[word] = core.mem_r32(address + 4u + word * 4u);
+  }
+  return packet;
+}
+
+bool GpuState::pixel_probe_target(int &absoluteX, int &absoluteY) {
+  if (!s_pixel_probe.configured) {
+    s_pixel_probe.configured = true;
+    const char *setting = cfg_str("PSXPORT_PRIMAT");
+    if (setting) {
+      sscanf(setting, "%d,%d,%d", &s_pixel_probe.x, &s_pixel_probe.y, &s_pixel_probe.from_frame);
+    }
+  }
+  if (s_pixel_probe.x < 0 || s_frame < s_pixel_probe.from_frame) {
+    return false;
+  }
+  absoluteX = s_disp_x + s_pixel_probe.x;
+  absoluteY = s_disp_y + s_pixel_probe.y;
+  return true;
+}
+
+RqPixelSample rq_probe_item_pixel(GpuState &gpu, const RqItem &item, int x, int y) {
+  RqPixelSample sample;
+  if (x < item.da_x0 || x > item.da_x1 || y < item.da_y0 || y > item.da_y1) {
+    return sample;
+  }
+  float centerWeights[3];
+  const int vertexCount = item.nv ? item.nv : 4;
+  int triangle = rqProbeBarycentric(item, 0, (float)x + 0.5f, (float)y + 0.5f, centerWeights) ? 0 : -1;
+  if (triangle < 0 && vertexCount == 4 &&
+      rqProbeBarycentric(item, 1, (float)x + 0.5f, (float)y + 0.5f, centerWeights)) {
+    triangle = 1;
+  }
+  if (triangle < 0) {
+    return sample;
+  }
+  sample.covered = true;
+  sample.triangle = triangle;
+  sample.interpolated_depth =
+      rqProbeInterpolate(centerWeights, item.depth[triangle], item.depth[triangle + 1], item.depth[triangle + 2]);
+  if (item.mode == 3) {
+    sample.writes = true;
+    sample.blends = item.semi != 0;
+    return sample;
+  }
+
+  float integerWeights[3];
+  if (!rqProbeBarycentric(item, triangle, (float)x, (float)y, integerWeights)) {
+    integerWeights[0] = centerWeights[0];
+    integerWeights[1] = centerWeights[1];
+    integerWeights[2] = centerWeights[2];
+  }
+  const int u = rqProbeUv(item, triangle, integerWeights, item.us);
+  const int v = rqProbeUv(item, triangle, integerWeights, item.vs);
+  const GpuTextureSample texture = gpu.sample_tex_at(
+      u, v, item.tp_x, item.tp_y, item.mode, item.clut_x, item.clut_y, item.tw_mx, item.tw_my, item.tw_ox, item.tw_oy);
+  sample.u = texture.u;
+  sample.v = texture.v;
+  sample.source_word = texture.source_word;
+  sample.palette_index = texture.palette_index;
+  sample.texel = texture.texel;
+  sample.writes = texture.texel != 0;
+  sample.blends = sample.writes && item.semi && (texture.texel & 0x8000);
+  return sample;
+}
+
+bool rq_source_ot_candidate_wins(const RqItem &candidate, const RqPixelProbeWinner &current) {
+  return candidate.sort_key >= 0 && (!current.valid || candidate.key_ord > current.key_ord ||
+                                     (candidate.key_ord == current.key_ord && candidate.seq < current.seq));
+}
+
+void RenderQueue::pixelProbeEmit(Core *core, const RqItem &item, uint32_t finalOrder, uint32_t depthBiasOrder) {
+  GpuState &gpu = core->game->gpu;
+  int x = 0;
+  int y = 0;
+  if (!gpu.pixel_probe_target(x, y)) {
+    return;
+  }
+  if (pixelProbe.frame != gpu.s_frame) {
+    if (pixelProbe.frame >= 0) {
+      rqProbeLogFinal(pixelProbe);
+    }
+    pixelProbe.frame = gpu.s_frame;
+    pixelProbe.x = x - gpu.s_disp_x;
+    pixelProbe.y = y - gpu.s_disp_y;
+    pixelProbe.semi_seen = false;
+    pixelProbe.shipping = {};
+    pixelProbe.source_ot = {};
+    pixelProbe.guest_ot = {};
+  }
+  const RqPixelSample sample = rq_probe_item_pixel(gpu, item, x, y);
+  if (!sample.covered) {
+    return;
+  }
+  const float d32 =
+      item.order_mode == RQ_OM_DEPTH ? gpu_vk_map_ordered_3d_depth(sample.interpolated_depth, depthBiasOrder) : -1.0f;
+  lucent::info("primat-rq",
+               "f{} final_order={} depth_bias_order={} seq={} node={:08X} packet={:08X} ot_order={} layer={} om={} "
+               "semi={} tri={} "
+               "nv={} key={} key_ord={:.6f} authored={} compare={} interp={:.9f} D32={:.9f} "
+               "mode={} raw={} tp=({},{}) clut=({},{}) uv=({},{}) source={:04X} index={} texel={:04X} "
+               "transparent={} writes={} blends={}",
+               pixelProbe.frame,
+               finalOrder,
+               depthBiasOrder,
+               item.seq,
+               item.dbg_node,
+               item.guest_packet,
+               item.guest_ot_order,
+               item.layer,
+               item.order_mode,
+               item.semi,
+               sample.triangle,
+               item.nv,
+               item.sort_key,
+               (double)item.key_ord,
+               item.authored_depth,
+               gpu_vk_world_depth_compare_name(),
+               sample.interpolated_depth,
+               d32,
+               item.mode,
+               item.raw,
+               item.tp_x,
+               item.tp_y,
+               item.clut_x,
+               item.clut_y,
+               sample.u,
+               sample.v,
+               sample.source_word,
+               sample.palette_index,
+               sample.texel,
+               sample.texel == 0 && item.mode != 3,
+               sample.writes,
+               sample.blends);
+
+  if (sample.blends) {
+    pixelProbe.semi_seen = true;
+  }
+  if (sample.writes && !sample.blends && item.order_mode == RQ_OM_DEPTH &&
+      (!pixelProbe.shipping.valid || gpu_vk_world_depth_test_passes(d32, pixelProbe.shipping.d32))) {
+    pixelProbe.shipping = rqProbeWinner(item, sample, finalOrder, d32);
+  }
+  if (sample.writes && !sample.blends && rq_source_ot_candidate_wins(item, pixelProbe.source_ot)) {
+    pixelProbe.source_ot = rqProbeWinner(item, sample, finalOrder, d32);
+  }
+  if (item.guest_packet && sample.writes && !sample.blends) {
+    pixelProbe.guest_ot = rqProbeWinner(item, sample, finalOrder, d32);
+  }
+}
 
 // Provenance query at an ABSOLUTE VRAM coord (the differ replays into the back buffer at off=(0,256),
 // so query e.g. vram y = display y + 256 — no double-buffer confound, unlike the live-run PROVAT).
@@ -109,6 +375,19 @@ void gpu_provat_display(Core *core, FILE *out, int qx, int qy) {
                 m->y0,
                 m->u0,
                 m->v0);
+        // The node is the guest OT packet owner, not merely a diagnostic label. Dump its bounded GP0
+        // payload so the exact geometry and per-vertex colours behind the winning PSX pixel can be
+        // decoded without guessing a packet-pool base/stride or relying on the VK-only polygon tee.
+        // PSX packets carry their payload length in the OT tag's high byte; cap corrupt input at the
+        // parser FIFO's 256-word capacity.
+        if (dx == 0 && dy == 0) {
+          const GpuProvenancePacket packet = gpu_provenance_packet(*core, m->node);
+          fprintf(out, "    packet=%08X words=%u gp0=", packet.node, packet.word_count);
+          for (uint32_t word = 0; word < packet.word_count; ++word) {
+            fprintf(out, "%s%08X", word == 0 ? "" : "/", packet.words[word]);
+          }
+          fprintf(out, "\n");
+        }
       }
     }
   }

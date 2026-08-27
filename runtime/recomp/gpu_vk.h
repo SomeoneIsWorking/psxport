@@ -40,6 +40,15 @@ bool gpu_vk_order_bias_distinguishes(uint32_t seq);
 // The exact normalized-depth mapping used by world vertices, and the next input whose mapped D32
 // value is representably distinct. Key-order ties use these instead of guessing an input epsilon.
 float gpu_vk_map_3d_depth(float depth);
+float gpu_vk_map_ordered_3d_depth(float depth, uint32_t order);
+enum class GpuWorldDepthCompare { GreaterOrEqual };
+inline constexpr GpuWorldDepthCompare kGpuWorldDepthCompare = GpuWorldDepthCompare::GreaterOrEqual;
+inline bool gpu_vk_world_depth_test_passes(float candidate, float current) {
+  return candidate >= current;
+}
+inline const char *gpu_vk_world_depth_compare_name() {
+  return "GREATER_OR_EQUAL";
+}
 float gpu_vk_next_distinct_3d_depth(float depth, float nearer_limit);
 
 // Dynamic shadow mapping: capture one OPAQUE world-geometry triangle's VIEW-SPACE positions (v0/v1/v2,

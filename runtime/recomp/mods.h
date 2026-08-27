@@ -1,4 +1,6 @@
 #pragma once
+
+#include "render_capabilities.h"
 // class Mods — live PC-native mod toggles + params, PER-GAME state (member `Game::mods`).
 // The single source of truth shared by the renderer (gpu_vk.cpp) and the RmlUi overlay
 // (rmlui_overlay.cpp): seeded by init() in the Game ctor (factory defaults, then the settings
@@ -9,11 +11,6 @@
 
 // Aspect mode for the PC-native widescreen (wider FOV, no stretch). AUTO = match the live window aspect.
 enum { ASPECT_4_3 = 0, ASPECT_16_9 = 1, ASPECT_21_9 = 2, ASPECT_AUTO = 3 };
-
-// How overlapping world faces are ordered — see Mods::face_order.
-enum { FACE_ORDER_DEPTH = 0, FACE_ORDER_AUTHORED = 1 };
-
-struct RenderCapabilities;
 
 class Mods {
 public:
