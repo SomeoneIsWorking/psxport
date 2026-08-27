@@ -11,6 +11,7 @@
 // overrides::install/overrides::dispatch, consulted at rec_dispatch top for every caller — user
 // 2026-07-07). The registrar asserts each address here lies in the resident BIOS-library code window.
 
+#include "cd_control.h"
 #include "core.h"
 #include "game.h"         // Game::core — register_/initBuiltins read the game's config off the Core
 #include "game_runtime.h" // psxport_game_runtime — the direct-runtime PlatformHlePlan source
@@ -365,6 +366,8 @@ void PlatformHle::initBuiltins() {
     const PlatformHlePlan *const plan = runtime ? runtime->platformHlePlan() : nullptr;
     if (plan) {
       regProjectionLeaves(plan->setGeomOffset, plan->setGeomScreen);
+      reg(plan->cdReadAddress, cd_read_stock_sync);
+      reg(plan->cdReadSyncAddress, cd_readsync_stock_sync);
       bindVSyncTrap(plan->vsyncAddress);
       for (int i = 0; i < plan->bindingCount && i < PlatformHlePlan::kMaxBindings; i++) {
         if (plan->bindings[i].addr && plan->bindings[i].fn) {

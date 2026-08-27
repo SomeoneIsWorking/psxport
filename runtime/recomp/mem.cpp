@@ -1319,27 +1319,3 @@ void guest_memset_install() {
   extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
   engine_set_override_main(0x8009A420u, ov_guestMemset, psxport_recomp()->guestMemset_gen);
 }
-
-// R3000 integer division semantics (no traps; defined results for /0 and overflow).
-extern "C" void cpu_div(Core *c, uint32_t n, uint32_t d) {
-  int32_t sn = (int32_t)n, sd = (int32_t)d;
-  if (sd == 0) {
-    c->lo = sn < 0 ? 1u : 0xFFFFFFFFu;
-    c->hi = (uint32_t)sn;
-  } else if (n == 0x80000000u && sd == -1) {
-    c->lo = 0x80000000u;
-    c->hi = 0;
-  } else {
-    c->lo = (uint32_t)(sn / sd);
-    c->hi = (uint32_t)(sn % sd);
-  }
-}
-extern "C" void cpu_divu(Core *c, uint32_t n, uint32_t d) {
-  if (d == 0) {
-    c->lo = 0xFFFFFFFFu;
-    c->hi = n;
-  } else {
-    c->lo = n / d;
-    c->hi = n % d;
-  }
-}

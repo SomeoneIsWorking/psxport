@@ -526,7 +526,8 @@ kinds at once.
    `test_guest_program_image_ownership` prevents those algorithms and `GameHooks` from reclaiming it.
    Remaining follow-up: migrate each consumer's constants, then delete the adapter-only legacy fields.
 4b. **`PlatformHlePlan` — IMPLEMENTED, direct-runtime platform-library fact slice.** The plan owns
-   the measured SCEI-library windows, typed SetGeomOffset/SetGeomScreen and mandatory VSync addresses,
+   the measured SCEI-library windows, typed SetGeomOffset/SetGeomScreen, stock CdRead/CdReadSync,
+   and mandatory VSync addresses,
    and bounded `{addr, fn}` rows for other title-specific sync behavior. `PlatformHle::initBuiltins()` maps both direct
    and legacy projection addresses through the same private framework handlers and the same
    half-open-window guard; VSync always maps to the private all-mode abort and refuses replacement.

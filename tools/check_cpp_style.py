@@ -35,7 +35,7 @@ PSXPORT_CAPS = {
     "runtime/recomp/gpu_vk_texture_phase_selftest.h": 40,
     "runtime/recomp/hle.cpp": 1259,
     "runtime/recomp/interp.cpp": 1242,
-    "runtime/recomp/mem.cpp": 1333,
+    "runtime/recomp/mem.cpp": 1321,
     "runtime/recomp/pc_scheduler.cpp": 661,
     "runtime/recomp/pc_scheduler.h": 177,
     "runtime/recomp/render_queue.cpp": 2547,

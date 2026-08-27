@@ -23,6 +23,7 @@
 
 #ifdef __cplusplus
 
+#include "cpu_divide.h"
 #include "frame_pacer.h"
 
 class Game; // the whole-machine owner (game.h); Core::game points back to it so any code holding a
@@ -342,10 +343,6 @@ void gte_copy_pz(Core *c, int gpr, uint32_t dst);
 // Move a hold between GPRs when the guest DERIVES a value (shift/mask/add) rather than copying it —
 // the packing these renderers do between projecting a vertex and writing it into a packet.
 void gte_hold_move(int dst, int src);
-
-// R3000 integer division semantics (no traps; defined /0 + overflow results).
-void cpu_div(Core *c, uint32_t n, uint32_t d);
-void cpu_divu(Core *c, uint32_t n, uint32_t d);
 
 // ---- Subsystem entry points that read/write this instance's RAM (need the Core) ----
 void gpu_dma2_linked_list(Core *c, uint32_t madr);

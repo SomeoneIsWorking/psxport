@@ -71,12 +71,14 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 `menu tab` / `menu nav`), and the decision NOT to stand an ImGui developer stack up yet.
 
 ## `runtime/recomp/` — the PSX→PC PLATFORM (common; future `psxport` submodule)
-**Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (bus dispatch + watchpoints PSXPORT_WWATCH/CW),
+**Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (guest-memory access, hardware-bus
+dispatch, and watchpoints PSXPORT_WWATCH/CW), `cpu_divide.{h,cpp}` (the narrow R3000 DIV/DIVU
+quotient/remainder owner shared by emitted and interpreted code),
 `game_runtime.{h,cpp}` + `render_capabilities.h` + `guest_program_image.h` +
-`guest_pad_buffer_layout.h` + `game_iface.{h,cpp}`
+`guest_pad_buffer_layout.h` + `guest_cd_stream_callback_layout.h` + `game_iface.{h,cpp}`
 (derived `GameRuntime` install, one required title declaration for Native/temporal availability,
 shared startup/live-selection policy,
-the immutable executable-image and direct-runtime guest-pad-buffer fact owners, per-Game
+the immutable executable-image and direct-runtime guest pad/CD-stream callback fact owners, per-Game
 driver/scheduler and optional temporal-presentation factories, and the bounded legacy projection),
 `legacy_game_config.h` / `legacy_game_hooks.h` (the deprecated data and callback bags kept
 source-compatible while consumers migrate), `core.h`/`game.h` (the `Core`/`Game` objects;
@@ -105,7 +107,8 @@ mechanical exactly-one-presentation-fence enforcement),
 `repl.cpp`/`repl.h`),
 `platform_hle.h` + `sync_overrides.cpp` (the guarded SCEI-library HLE table; direct
 `PlatformHlePlan` consumers supply typed addresses for framework-owned standard leaves such as
-SetGeomOffset/SetGeomScreen, plus the mandatory measured `vsyncAddress`; both direct and adapter
+SetGeomOffset/SetGeomScreen and stock `CdRead`/`CdReadSync`, plus the mandatory measured
+`vsyncAddress`; both direct and adapter
 runtimes bind that address to one non-replaceable all-mode abort, while explicit `{addr, fn}` rows are
 only for other title-specific sync behavior; legacy consumers retain the corresponding address facts
 through `GameConfig::hle`. Direct and legacy exact half-open address-window storage and validation use
@@ -250,7 +253,10 @@ rounding every NTSC field to the exact-60 Hz legacy values of 564,480 clocks and
 rate change; 60,000 NTSC fields total exactly 44,144,100 stereo frames (44.1 kHz for 1,001 seconds).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
 game-validated blocking-control seam plus direct-runtime binding targets for the shared synchronous
-stock `CdRead`/`CdReadSync` owners), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
+stock `CdSync`/`CdRead`/`CdReadSync` owners and the typed native finite-read ownership query),
+`guest_cd_stream_callback_layout.h` (the typed direct-runtime
+guest-RAM slot containing the current CD-ready callback; `Cd::pumpStream` shares this with legacy
+`GameConfig::cdReadyCbPtr` consumers), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
 latch and command effects), `cdc_command_phase.{h,cpp}` (oracle-derived command receive, argument,
 execution, and completion scheduler), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),
 `emulated_time.{h,cpp}` + `timing.cpp` (per-Game deterministic emulated CPU-time owner and the
@@ -396,6 +402,15 @@ must validate its command class before calling it. The helper applies the existi
 `cd_command` effects, zeroes a non-null result buffer through that path, and changes the return value
 to blocking-control success (`V0 = 1`); it does not claim query, read, callback, or game-specific
 wrapper semantics.
+
+`cd_sync_stock_sync(Core*)` is the single synchronous Sony `CdSync` owner for direct runtimes: it
+reports ready (`V0 = 2`) and clears the optional result bytes without entering the guest library's
+VSync timeout loop. Direct runtimes declare stock finite-read ownership through
+`PlatformHlePlan::cdReadAddress`/`cdReadSyncAddress`; this same typed fact prevents a subsequent
+continuous ReadN/ReadS from entering the callback-driven finite-read burst. Continuous STR/XA
+readers publish `GuestCdStreamCallbackLayout` from a direct
+runtime (or retain `GameConfig::cdReadyCbPtr` while migrating); `Cd::pumpStream` reads the live guest
+function value from that slot and delivers only the drive-paced sector budget.
 
 - `FUN_8008AC34` (libcd `CdControl`) → `ov_cd_command`. Boot/menu uses this.
 - `FUN_8001CE90` (the **engine's streaming** CD-command wrapper, used by the streaming reader

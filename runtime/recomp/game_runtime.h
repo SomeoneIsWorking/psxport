@@ -17,6 +17,7 @@
 class Core;
 class Game;
 class GuestWidescreenProjection;
+struct GuestCdStreamCallbackLayout;
 class TemporalFramePresentation;
 struct GameConfig;
 struct GameHooks;
@@ -75,6 +76,13 @@ public:
   // never ask Pad to publish input; serviceFrame then advances host/replay state without writing an
   // invented guest address. Adapter runtimes keep the equivalent legacy GameConfig fields.
   virtual const GuestPadBufferLayout *guestPadBufferLayout() const {
+    return nullptr;
+  }
+
+  // Guest CD-ready callback slot for DIRECT runtimes (core.cfg == nullptr). The native continuous
+  // stream pump reads the current function value from this measured slot on each field. Adapter
+  // runtimes keep the equivalent legacy GameConfig::cdReadyCbPtr fact.
+  virtual const GuestCdStreamCallbackLayout *guestCdStreamCallbackLayout() const {
     return nullptr;
   }
 

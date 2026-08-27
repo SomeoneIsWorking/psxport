@@ -18,6 +18,8 @@
 #include "cd_drive_timing.h"
 #include "core.h"
 #include "game.h"
+#include "game_runtime.h"
+#include "guest_cd_stream_callback_layout.h"
 #include "overlay_router.h"
 #include "platform_hle.h" // class PlatformHle — CD-subsystem HLE registrations go through the singleton
 #include <chrono>
@@ -49,6 +51,24 @@ static void zero_result(Core *c, uint32_t p) {
   }
 }
 
+std::uint32_t cd_ready_callback_pointer(const Core &core) {
+  if (core.cfg && core.cfg->cdReadyCbPtr) {
+    return core.cfg->cdReadyCbPtr;
+  }
+  const GameRuntime *runtime = core.game ? core.game->runtime : nullptr;
+  const GuestCdStreamCallbackLayout *layout = runtime ? runtime->guestCdStreamCallbackLayout() : nullptr;
+  return layout && layout->valid() ? layout->readyCallbackPointer : 0u;
+}
+
+bool cd_native_stock_read_owned(const Core &core) {
+  if (core.cfg) {
+    return core.cfg->cdReadStock != 0;
+  }
+  const GameRuntime *runtime = core.game ? core.game->runtime : nullptr;
+  const PlatformHlePlan *plan = runtime ? runtime->platformHlePlan() : nullptr;
+  return plan && plan->cdReadAddress != 0;
+}
+
 // 0x8008AC34 FUN_8008ac34(cmd, param, result, mode) CdCommand -> 0 (success).
 // Drive a STOCK-libcd read to completion, natively, with no interrupt.
 //
@@ -65,8 +85,8 @@ static void zero_result(Core *c, uint32_t p) {
 // is reported LOUDLY rather than silently truncating a read — a short read that looks successful is
 // exactly the failure this layer must never produce.
 static void cd_drive_stock_read(Core *c) {
-  const GameConfig *cfg = c->cfg;
-  if (!cfg || !cfg->cdReadyCbPtr) {
+  const uint32_t readyCallbackPointer = cd_ready_callback_pointer(*c);
+  if (!readyCallbackPointer) {
     return; // not a stock-libcd game, or not RE'd yet
   }
 
@@ -84,7 +104,7 @@ static void cd_drive_stock_read(Core *c) {
   enum { kMaxSectors = 65536 }; // ~150 MB; larger than any single PSX read
   unsigned n = 0;
   for (; n < kMaxSectors && cd.stock_reading; n++) {
-    const uint32_t cb = c->mem_r32(cfg->cdReadyCbPtr);
+    const uint32_t cb = c->mem_r32(readyCallbackPointer);
     if (!cb) {
       break; // no callback installed -> nothing to drive
     }
@@ -186,27 +206,20 @@ static void cd_command(Core *c) {
     if (c->game->cd.setloc_lba >= 0) {
       cdc_begin_read(&c->game->cdc, (uint32_t)c->game->cd.setloc_lba);
     }
-    // A ReadN reaching this handler is a CONTINUOUS read. File reads no longer arrive here at all:
-    // CdRead is served natively above, so the guest's finite read state machine never issues one.
-    // That makes this a clean discriminator rather than a guess — mark the stream and let the
-    // periodic pump drive it, instead of the self-terminating burst a file read wants.
+    // Native CdRead owners never route finite reads through this command, so their ReadN/ReadS is a
+    // continuous stream. Legacy substrate readers may still route finite reads here; the typed
+    // ownership query below keeps their self-terminating callback burst intact.
     c->game->cd.stream_active = 1;
     // Fresh pacing budget per stream, so a new movie cannot inherit the previous one's credit and
     // burst its opening sectors.
     c->game->cd.stream_t0_ns = 0;
     c->game->cd.stream_delivered = 0;
-    // Run the file-read burst ONLY for a game that has not taken over CdRead. Where CdRead is
-    // served natively (cdReadStock set), a finite read never issues ReadN, so every ReadN arriving
-    // here is a CONTINUOUS read — which has no end for the burst to reach. It ran away to its
-    // 65536-sector bound and wedged the boot, doing the streaming reader's job badly instead of
-    // letting it drive itself through the controller.
-    if (!c->cfg || !c->cfg->cdReadStock) {
+    // Run the file-read burst ONLY for a runtime that has not declared native CdRead ownership.
+    // Native ownership is explicit in either runtime shape; direct runtime shape (`cfg == nullptr`)
+    // is not itself a behavioral fact.
+    if (!cd_native_stock_read_owned(*c)) {
       cd_drive_stock_read(c);
     }
-    // Deliberately NOT running the file-read burst otherwise. That burst drives a finite
-    // read's per-sector callback to completion, and it was correct while CdRead ran on the
-    // substrate. CdRead is now served natively, so a finite read never issues ReadN — every ReadN
-    // reaching this handler is a CONTINUOUS read, which has no end for the burst to reach. It ran
     break;
   case 0x08:
   case 0x09: // Stop / Pause
@@ -227,8 +240,10 @@ void cd_control_sync(Core *c) {
   cd_command(c);
   c->r[V0] = 1;
 }
-// 0x8008A6EC FUN_8008a6ec(noblock, result) CdSync -> 2 (status: complete/ready).
-static void cd_sync(Core *c) {
+// Stock Sony libcd CdSync(noblock, result) -> 2 (status: complete/ready). This is public so direct
+// runtimes can bind title-measured wrapper/body addresses without duplicating the synchronous-disc
+// contract.
+void cd_sync_stock_sync(Core *c) {
   zero_result(c, c->r[A1]);
   c->r[V0] = 2;
 }
@@ -821,11 +836,11 @@ int cd_stream_sectors_due(uint64_t elapsed_ns, int sectors_per_sec, uint32_t alr
 }
 
 void Cd::pumpStream(Core *c, int sectors) {
-  const GameConfig *cfg = c->cfg;
-  if (!stream_active || !cfg || !cfg->cdReadyCbPtr) {
+  const uint32_t readyCallbackPointer = cd_ready_callback_pointer(*c);
+  if (!stream_active || !readyCallbackPointer) {
     return;
   }
-  const uint32_t cb = c->mem_r32(cfg->cdReadyCbPtr);
+  const uint32_t cb = c->mem_r32(readyCallbackPointer);
   if (!cb) {
     return;
   }
@@ -905,7 +920,7 @@ void Cd::overridesInit() {
   reg(cfg->voiceStop, voice_stop);              // stop voice/BGM -> native
   reg(cfg->cdFileLoad, cd_loadfile);            // engine file loader -> sync sector read
   reg(cfg->cdCommand, cd_command);              // libcd CdCommand -> success (no controller)
-  reg(cfg->cdSync, cd_sync);                    // libcd CdSync -> complete (CD is synchronous)
+  reg(cfg->cdSync, cd_sync_stock_sync);         // libcd CdSync -> complete (CD is synchronous)
   reg(cfg->cdCmdStream, cd_cmd_stream);         // streaming CD-cmd wrapper (GetlocL pos in range)
   reg(cfg->cdReadPrim, cd_read);                // libcd by-LBA read -> native sync
   reg(cfg->cdGetSector, cd_getsector_stock);    // STOCK libcd CdGetSector(dest, words) -> native

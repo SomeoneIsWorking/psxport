@@ -68,9 +68,27 @@ static void test_stock_readsync_reports_completed_and_zeros_result() {
   }
 }
 
+static void test_stock_cdsync_reports_ready_and_zeros_result() {
+  auto game = std::make_unique<Game>();
+  for (uint32_t i = 0; i < 8; i++) {
+    game->core.mem_w8(kResult + i, static_cast<uint8_t>(0x90u + i));
+  }
+  game->core.r[A0] = 0;
+  game->core.r[A1] = kResult;
+  game->core.r[V0] = 0xDEADBEEFu;
+
+  cd_sync_stock_sync(&game->core);
+
+  CHECK_EQ(game->core.r[V0], 2u);
+  for (uint32_t i = 0; i < 8; i++) {
+    CHECK_EQ(game->core.mem_r8(kResult + i), 0u);
+  }
+}
+
 int main() {
   RUN(stock_read_refuses_without_a_position);
   RUN(zero_sector_stock_read_completes_without_inventing_drive_work);
   RUN(stock_readsync_reports_completed_and_zeros_result);
+  RUN(stock_cdsync_reports_ready_and_zeros_result);
   return pt_summary();
 }

@@ -1,6 +1,8 @@
+#include "cd_control.h"
 #include "config_vars.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "guest_cd_stream_callback_layout.h"
 #include "guest_program_image.h"
 #include "menu_row.h"
 #include "render_path_control.h"
@@ -48,6 +50,10 @@ public:
 
   const GuestProgramImage *guestProgramImage() const override {
     return &programImage;
+  }
+
+  const GuestCdStreamCallbackLayout *guestCdStreamCallbackLayout() const override {
+    return &cdStreamCallbacks;
   }
 
   bool guestVramIsPicture(const Game &game) const override {
@@ -99,6 +105,7 @@ public:
       .backtraceText = {0x00010000u, 0x00120000u},
       .stackBias = {true, -8},
   };
+  GuestCdStreamCallbackLayout cdStreamCallbacks{0x80123450u};
   int contextsCreated = 0;
   int contextsDestroyed = 0;
   int overrideRegistrations = 0;
@@ -127,6 +134,18 @@ void test_installation_reaches_derived_runtime() {
   psxport_install_game(runtime);
 
   CHECK_EQ(psxport_game_runtime(), &runtime);
+}
+
+void test_direct_runtime_publishes_cd_ready_callback_slot() {
+  TestRuntime runtime;
+  psxport_install_game(runtime);
+  const auto game = std::make_unique<Game>();
+
+  CHECK_EQ(game->core.cfg, nullptr);
+  CHECK_EQ(cd_ready_callback_pointer(game->core), runtime.cdStreamCallbacks.readyCallbackPointer);
+
+  runtime.cdStreamCallbacks.readyCallbackPointer = 0;
+  CHECK_EQ(cd_ready_callback_pointer(game->core), 0u);
 }
 
 void test_guest_address_ranges_are_validated_and_physically_normalized() {
@@ -396,6 +415,7 @@ void test_legacy_adapter_projects_static_backdrop_policy_only_for_migration() {
 
 int main() {
   RUN(installation_reaches_derived_runtime);
+  RUN(direct_runtime_publishes_cd_ready_callback_slot);
   RUN(guest_address_ranges_are_validated_and_physically_normalized);
   RUN(legacy_pair_is_bounded_by_runtime_adapter);
   RUN(legacy_adapter_supports_incremental_inheritance);

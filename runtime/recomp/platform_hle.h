@@ -44,6 +44,13 @@ struct PlatformHlePlan {
   uint32_t setGeomOffset = 0;
   uint32_t setGeomScreen = 0;
 
+  // Stock Sony libcd finite-read leaves. When cdReadAddress is declared, the framework owns the
+  // whole finite read synchronously; a later ReadN/ReadS command is therefore a continuous stream,
+  // never the callback-driven finite-read state machine. Keep this typed so the command owner can
+  // distinguish the two paths without treating `core.cfg == nullptr` as game behavior.
+  uint32_t cdReadAddress = 0;
+  uint32_t cdReadSyncAddress = 0;
+
   // Measured libetc VSync entry. Product boot requires this fact and the framework always binds it
   // to its fatal native-frame-loop ownership trap. A title supplies no handler and cannot replace
   // the trap through `bindings`.

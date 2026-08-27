@@ -5,6 +5,7 @@
 // docs/plans/game-seam-redesign.md ("platform-library entry tables"), consumed by initBuiltins()
 // when core.cfg is null.
 
+#include "cd_control.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "hw_bind.h"
@@ -25,6 +26,9 @@ constexpr uint32_t kCustomBindingEnd = 0x80085B20u;
 constexpr uint32_t kSetGeomScreenAddr = 0x8007781Cu;
 constexpr uint32_t kSetGeomOffsetAddr = 0x8007782Cu;
 constexpr uint32_t kSetGeomLeavesEnd = 0x80077844u;
+constexpr uint32_t kCdReadAddr = 0x80066A50u;
+constexpr uint32_t kCdReadSyncAddr = 0x80066B30u;
+constexpr uint32_t kCdReadLeavesEnd = 0x80066C20u;
 
 static_assert(std::extent_v<decltype(PlatformHlePlan::windowLo)> == kPlatformHleWindowCapacity);
 static_assert(std::extent_v<decltype(GameConfig::PlatformHleCfg::windowLo)> == kPlatformHleWindowCapacity);
@@ -175,6 +179,23 @@ static void test_direct_runtime_standard_libgte_leaves_still_require_the_declare
   CHECK(game->platform_hle.lookup(kSetGeomScreenAddr) == nullptr);
 }
 
+static void test_direct_runtime_plan_binds_standard_stock_cd_read_leaves() {
+  PlannedRuntime runtime;
+  runtime.image_ = makeImage();
+  runtime.plan_.cdReadAddress = kCdReadAddr;
+  runtime.plan_.cdReadSyncAddress = kCdReadSyncAddr;
+  runtime.plan_.windowLo[0] = kCdReadAddr;
+  runtime.plan_.windowHi[0] = kCdReadLeavesEnd;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+
+  game->platform_hle.initBuiltins();
+
+  CHECK(game->platform_hle.lookup(kCdReadAddr) == cd_read_stock_sync);
+  CHECK(game->platform_hle.lookup(kCdReadSyncAddr) == cd_readsync_stock_sync);
+  CHECK(cd_native_stock_read_owned(game->core));
+}
+
 static void test_every_exact_window_slot_is_consumed_without_admitting_overflow() {
   PlannedRuntime runtime;
   runtime.image_ = makeImage();
@@ -206,6 +227,7 @@ int main(void) {
   RUN(direct_runtime_plan_binds_entries_inside_the_declared_window);
   RUN(direct_runtime_plan_binds_standard_libgte_projection_leaves);
   RUN(direct_runtime_standard_libgte_leaves_still_require_the_declared_window);
+  RUN(direct_runtime_plan_binds_standard_stock_cd_read_leaves);
   RUN(every_exact_window_slot_is_consumed_without_admitting_overflow);
   return pt_summary();
 }
