@@ -326,6 +326,13 @@ legacy config first or the direct runtime's typed `GuestPadBufferLayout`, while 
 no invented guest address; game/sequence code owns every resulting transition; slot 1 remains absent
 by default and a title with measured two-slot guest handling opts in explicitly).
 
+## `tools/port/` — portable game-launch policy
+
+`launch_environment.py` owns the process-environment split between the shipping player and agent
+automation. A player product exec is explicitly windowed, audible, and paced even when its parent
+environment contains agent-only runtime flags. An agent run explicitly requests headless rendering,
+no audio device, and no pacing; window visibility never decides pacing.
+
 ## Tools — ONE LINE EACH, and what is wrong with this list
 
 **32 tool files here; 172 across the workspace.** USER, 2026-08-13: *"I think you made the project too

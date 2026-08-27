@@ -104,3 +104,7 @@ add_test(NAME gpu_shader_build_ownership
 add_test(NAME cmake_test_ownership
          COMMAND ${CMAKE_COMMAND} -E env python3
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_cmake_test_ownership.py)
+
+add_test(NAME launch_environment_policy
+         COMMAND ${CMAKE_COMMAND} -E env python3
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/test_launch_environment.py)
