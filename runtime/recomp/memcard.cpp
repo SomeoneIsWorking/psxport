@@ -718,6 +718,12 @@ static void file_firstfile(Core *c) {
   // rather than dispatching a pointer with no code behind it. See the DCB note in hle.cpp.
   c->game->hle.deviceUnhook(c->game->hle.deviceFind("bu"));
   c->r[V0] = m.dirScanNext(c, dirent) ? dirent : 0;
+  // Directory enumeration is a completed card operation even when the card contains no matching
+  // entry. Stock libmcrd observes BOTH results: V0 carries DIRENTRY-or-zero, then its zero-result
+  // path waits for the HwCARD completion callback before deciding that the directory is empty.
+  // Omitting this event leaves that callback flag at zero and turns a valid empty scan into an
+  // unbounded guest wait (Crash Bash FUN_8003A554 -> FUN_800476EC).
+  Memcard::deliverComplete(c);
   if (m.verbose()) {
     lucent::info("card", "firstfile '{}' dirent=0x{:08X} -> 0x{:08X}", name, dirent, c->r[V0]);
   }
@@ -727,6 +733,7 @@ static void file_nextfile(Core *c) {
   Memcard &m = c->game->memcard;
   const uint32_t dirent = c->r[A0];
   c->r[V0] = m.dirScanNext(c, dirent) ? dirent : 0;
+  Memcard::deliverComplete(c);
   if (m.verbose()) {
     lucent::info("card", "nextfile dirent=0x{:08X} -> 0x{:08X}", dirent, c->r[V0]);
   }

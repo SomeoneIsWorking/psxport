@@ -30,9 +30,12 @@
 // and that contract is what these cases pin.
 //
 // HERMETIC: a Game is constructed in-process and the card is a temp file in the CWD. No disc, no
-// GPU, no window, no guest code — every event is opened with EvMdNOINTR so nothing dispatches.
+// GPU or window. Most events use EvMdNOINTR; the directory-completion regression installs one
+// synthetic guest handler through the shipping override/dispatch path so it can prove the exact
+// EvMdINTR callback Crash Bash waits on.
 #include "../runtime/recomp/game.h"
 #include "../runtime/recomp/memcard.h"
+#include "../runtime/recomp/override_registry.h"
 #include "testutil.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,8 +53,14 @@ static const char *kCardPath = "test_memcard_file_api.mcr";
 
 // A guest RAM window well clear of anything the framework touches, used as the transfer buffer.
 static constexpr uint32_t kBuf = 0x80100000u;
+static constexpr uint32_t kDirectoryCallback = 0x80001000u;
 
 static GameConfig g_cfg{};
+static uint32_t g_directory_callbacks = 0;
+
+static void directory_callback(Core *) {
+  g_directory_callbacks++;
+}
 
 static Game *gam() {
   static Game *g = nullptr;
@@ -92,6 +101,21 @@ static uint32_t open_event(Game *g, uint32_t cls, uint32_t spec) {
   g->core.r[R_A3] = 0; // no handler: EvMdNOINTR marks the slot and runs nothing
   const uint32_t h = bios_b0(g, 0x08, cls, spec, 0x2000u);
   bios_b0(g, 0x0C, h, 0, 0); // EnableEvent — deliverEvent ignores a disabled slot
+  return h;
+}
+
+// EvMdINTR (0x1000): delivery dispatches the registered guest handler immediately. The synthetic
+// address is installed through the same override interception point used by a real port, so this
+// exercises Hle::deliverEvent's shipping callback path without linking a title substrate.
+static uint32_t open_callback_event(Game *g, uint32_t cls, uint32_t spec) {
+  static bool installed = false;
+  if (!installed) {
+    overrides::install(kDirectoryCallback, "MemcardDirectoryCompletionTest", directory_callback, directory_callback);
+    installed = true;
+  }
+  g->core.r[R_A3] = kDirectoryCallback;
+  const uint32_t h = bios_b0(g, 0x08, cls, spec, 0x1000u);
+  bios_b0(g, 0x0C, h, 0, 0);
   return h;
 }
 
@@ -273,13 +297,20 @@ static void test_device_table_is_published(void) {
 // below is a measured empty directory rather than an unarmed scan.
 static void test_firstfile_on_an_empty_card_finds_nothing(void) {
   Game *g = gam();
+  const uint32_t hw_io = open_callback_event(g, kHwCard, kSpecIoEnd);
+  CHECK(hw_io != 0xFFFFFFFFu);
   uint32_t va = kBuf + 0xA00u;
   for (uint32_t i = 0; "bu00:*"[i]; i++) {
     g->core.mem_w8(va + i, (uint8_t)"bu00:*"[i]);
   }
   g->core.mem_w8(va + 6, 0);
+  g_directory_callbacks = 0;
   CHECK_EQ(bios_b0(g, 0x42, va, kBuf + 0xB00u, 0), 0u);
+  CHECK_EQ(g_directory_callbacks, 1u); // completed empty scan, exactly once
+
+  g_directory_callbacks = 0;
   CHECK_EQ(bios_b0(g, 0x43, kBuf + 0xB00u, 0, 0), 0u); // nextfile agrees
+  CHECK_EQ(g_directory_callbacks, 1u);                 // completed end-of-scan, exactly once
 }
 
 // …and the same call on a card that HAS files returns them, in the DIRENTRY layout the guest reads
