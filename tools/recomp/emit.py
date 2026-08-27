@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-26.14"   # shared-epilogue tail branches dispatch to $ra after the call
+RECOMP_VERSION = "2026-08-27.1"    # direct calls into a nested module's range route, never bind statically
 
 R = lambda n: f"c->r[{n}]"
 
@@ -212,6 +212,26 @@ class ModuleReloc:
 
 
 g_mod = None      # the ModuleReloc being emitted, or None for an ordinary (fixed-base) module
+
+# Address ranges of OTHER fixed modules that are NARROWER than the module currently being emitted and
+# overlap it — i.e. modules that LOAD ON TOP of part of this one. A direct `jal` into such a range must
+# NOT be bound to this module's own body: at runtime the bytes there belong to whichever module is
+# resident, and only the router knows which that is.
+#
+# Crash Bash is the case that proved it. Its MENU module [0x800B32B4,0x800BB2B4) loads INSIDE the BOOT
+# module [0x80078C90,0x800D7490), and BOOT contains a real `jal 0x800B5A40` at 0x80096130. Because
+# 0x800B5A40 is also in BOOT's own funcset, that call was emitted as a static ov_boot_func_800B5A40 —
+# so once MENU was loaded the port executed BOOT's STALE bytes for an address whose RAM held MENU code.
+# It ran ~500 frames before that path was taken, then dispatched through a pointer read out of the
+# wrong module and fail-fasted on a garbage target (0x80070000, which is all zeros in both RAM and the
+# retail image). The router already resolves this correctly — it picks the narrowest RESIDENT overlay
+# containing the address — it was simply never consulted.
+g_shadow = ()     # tuple of (lo, hi) guest ranges that must route instead of binding statically
+
+
+def shadowed_by_nested_module(target):
+    """True when `target` lies in a narrower overlapping module's range (see g_shadow)."""
+    return any(lo <= target < hi for lo, hi in g_shadow)
 
 # Core::ovDelta[] capacity (runtime/recomp/core.h, kRecMaxOverlays). A relocatable module's delta is
 # reached from generated code as `c->ovDelta[<ordinal>]`, so the table has to be a fixed-size member.
@@ -1550,8 +1570,11 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
 
 
 def call_or_dispatch(target, funcset, N):
-    return (f"{N.wrap}_{target:08X}(c);" if target in funcset
-            else f"{N.router}(c, {addr_const(target)});")
+    # `target in funcset` is NOT sufficient to bind statically: another module may load on top of that
+    # address, in which case the resident module owns the bytes and only the router can pick it.
+    if target in funcset and not shadowed_by_nested_module(target):
+        return f"{N.wrap}_{target:08X}(c);"
+    return f"{N.router}(c, {addr_const(target)});"
 
 
 
@@ -2784,29 +2807,11 @@ def main():
     # overlay_funcs() seeding (resident fns the overlays jal into) is still useful, so keep it:
     # Mid-function re-entry seeds — an entry inside another function whose body must fall THROUGH
     # into the seed (not `return`) — come from the game's seed file (`main_reentry`).
-    src_files = emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS,
-                            reentry=gs["main_reentry"], diagnostic_pcs=gs["diagnostic_pcs"])
-
-    # The disc's boot stub (SCUS_944.54): the real PSX entry — draws SCEA, then LoadExec's MAIN.
-    # It overlaps MAIN.EXE's address space, so it is emitted as a SEPARATE module (STUB_NAMES) with
-    # its own dispatch/override symbols (stub_dispatch/stub_set_override) — see native_stub.c. Its
-    # only seed is its entry; discovery follows the stub's own jal graph. (NOT linked today —
-    # native_stub.cpp renders SCEA natively — so it stays out of the source manifest.)
-    if "--stub" in sys.argv:
-        stub = psexe.load(sys.argv[sys.argv.index("--stub") + 1])
-        emit_module(stub, out_dir, STUB_NAMES, {stub.entry}, None, None, shards=2)
-
-    # ---- OVERLAYS (two stacked stage slots) -----------------------------------------------------
-    # The \BIN\*.BIN overlays are read RAW to a FIXED per-overlay base and run in place. They OVERLAP:
-    # a given guest address is different code depending on which overlay is resident, so each is its OWN
-    # module (ov_<tag>_*) keyed at its base+offset, and the runtime router (overlay_router.cpp) routes a
-    # slot address to the CURRENTLY resident overlay (identified by a content signature of guest RAM at
-    # the base). A base is therefore a fact about the SPECIFIC DISC, and the game supplies it in its
-    # own seed file (`overlay_bases`, or `overlay_base_patterns` for a whole family that shares one
-    # slot — e.g. interchangeable per-area code overlays). Capture the real load destinations with
-    # PSXPORT_DEBUG=cd over a boot->field run; they are deterministic game facts, NOT magic offsets.
-    # A base that is merely GUESSED is unrecoverable garbage rather than an error, so a missing one
-    # fails fast below instead of defaulting.
+    # Overlay images are loaded BEFORE MAIN is emitted, not because MAIN needs their code, but
+    # because MAIN needs their RANGES: the executable's declared text can extend into the region an
+    # overlay loads over (Crash Bash's text ends at 0x80079000 while BOOT loads at 0x80078C90), and a
+    # direct call into that overlap must route to whatever module is resident rather than bind to
+    # MAIN's own stale bytes. See g_shadow.
     def overlay_base(stem):
         if stem in gs["overlay_bases"]:
             return gs["overlay_bases"][stem]
@@ -2842,6 +2847,53 @@ def main():
                               psexe.PsxExe(base, 0, base, len(data), 0, 0, data),
                               load_reloc_sidecar(os.path.join(ov_dir, fn[:-4] + ".reloc.json"), base,
                                                  len(data), fn)))
+
+    # Every FIXED module's live range. Relocatable modules are excluded: their live base is decided by
+    # the game's allocator at load time, so nothing static can be said about what they overlap.
+    fixed_ranges = [(ovbase, ovbase + len(ovdata))
+                    for _stem, _fn, ovbase, ovdata, _ovexe, ovhi16 in ov_images if ovhi16 is None]
+
+    def shadow_for(own_lo, own_hi):
+        """Ranges of fixed modules that overlap [own_lo,own_hi) and are NARROWER than it — the ones
+        that load ON TOP of part of this module. Equal-width overlaps are excluded: those are
+        alternative modules sharing one slot, which the router already distinguishes by signature,
+        and neither shadows the other."""
+        own_size = own_hi - own_lo
+        return tuple((lo, hi) for lo, hi in fixed_ranges
+                     if (lo, hi) != (own_lo, own_hi) and lo < own_hi and own_lo < hi
+                     and (hi - lo) < own_size)
+
+    global g_shadow
+    g_shadow = shadow_for(exe.load, exe.text_end)
+    if g_shadow:
+        print(f"[recomp] MAIN: {len(g_shadow)} module range(s) load on top of its declared text — "
+              f"direct calls into {', '.join(f'[0x{lo:08X},0x{hi:08X})' for lo, hi in g_shadow)} "
+              f"route through the resident-overlay router instead of binding to MAIN's body")
+
+    src_files = emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS,
+                            reentry=gs["main_reentry"], diagnostic_pcs=gs["diagnostic_pcs"])
+    g_shadow = ()
+
+    # The disc's boot stub (SCUS_944.54): the real PSX entry — draws SCEA, then LoadExec's MAIN.
+    # It overlaps MAIN.EXE's address space, so it is emitted as a SEPARATE module (STUB_NAMES) with
+    # its own dispatch/override symbols (stub_dispatch/stub_set_override) — see native_stub.c. Its
+    # only seed is its entry; discovery follows the stub's own jal graph. (NOT linked today —
+    # native_stub.cpp renders SCEA natively — so it stays out of the source manifest.)
+    if "--stub" in sys.argv:
+        stub = psexe.load(sys.argv[sys.argv.index("--stub") + 1])
+        emit_module(stub, out_dir, STUB_NAMES, {stub.entry}, None, None, shards=2)
+
+    # ---- OVERLAYS (two stacked stage slots) -----------------------------------------------------
+    # The \BIN\*.BIN overlays are read RAW to a FIXED per-overlay base and run in place. They OVERLAP:
+    # a given guest address is different code depending on which overlay is resident, so each is its OWN
+    # module (ov_<tag>_*) keyed at its base+offset, and the runtime router (overlay_router.cpp) routes a
+    # slot address to the CURRENTLY resident overlay (identified by a content signature of guest RAM at
+    # the base). A base is therefore a fact about the SPECIFIC DISC, and the game supplies it in its
+    # own seed file (`overlay_bases`, or `overlay_base_patterns` for a whole family that shares one
+    # slot — e.g. interchangeable per-area code overlays). Capture the real load destinations with
+    # PSXPORT_DEBUG=cd over a boot->field run; they are deterministic game facts, NOT magic offsets.
+    # A base that is merely GUESSED is unrecoverable garbage rather than an error, so a missing one
+    # fails fast below instead of defaulting.
     # A0<n> sorts lexicographically in area order (A00..A09, A0A..A0L), which is the index order the
     # game's area byte uses; sorted(os.listdir) already put them that way.
     area_exes = [(stem, ovexe) for stem, _, _, _, ovexe, _ in ov_images
@@ -2901,8 +2953,14 @@ def main():
                    | code_pointer_tables(ovexe) | overlay_internal_jal_targets(ovexe)
                    | cross_ov_seeds.get(stem, set()) | explicit)
         soft_ov = func_entries_after_return(ovexe)   # jr-ra boundaries (mergeable if false)
+        g_shadow = shadow_for(base, base + len(data)) if hi16 is None else ()
+        if g_shadow:
+            print(f"[recomp] overlay {fn}: {len(g_shadow)} nested module range(s) load on top of it — "
+                  f"direct calls into {', '.join(f'[0x{lo:08X},0x{hi:08X})' for lo, hi in g_shadow)} "
+                  f"route through the resident-overlay router instead of binding to this module's body")
         src_files += emit_module(ovexe, out_dir, N, hard_ov, None, None, shards=2,
                                  soft_seeds=soft_ov, reentry=explicit)
+        g_shadow = ()
         overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N, hi16 is not None))
         g_mod = None
 
