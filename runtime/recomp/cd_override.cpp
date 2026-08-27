@@ -911,8 +911,14 @@ void Cd::overridesInit() {
   // natively + synchronously, so the libcd IRQ/VSync busy-waits (CdSync/CdCommand) are never reached.
   //   0x8008B2D8 (CdInit handshake) is owned by PlatformHle::initBuiltins (cdinit_hs) — don't
   //   double-register here.
-  PlatformHle &hle = game->platform_hle;
   const GameConfig *cfg = game->core.cfg;
+  // Direct runtimes publish stock-libcd leaves through their typed PlatformHlePlan. This method is
+  // only the legacy GameConfig adapter; an absent compatibility view therefore means an explicit
+  // empty legacy registration group, not a missing object to dereference.
+  if (!cfg) {
+    return;
+  }
+  PlatformHle &hle = game->platform_hle;
   // Skip an address the game has not configured. Zero means "this game has no such CD primitive, or
   // it has not been RE'd yet" — the same convention GameConfig::hle uses. Passing 0 straight through
   // made register_() emit "REFUSED 0x00000000" once per unconfigured entry, which is pure noise that
