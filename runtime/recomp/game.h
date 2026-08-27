@@ -16,6 +16,7 @@
 #include "core.h"
 #include "dbg_server.h"                  // class DbgServer — live TCP debug endpoint (127.0.0.1)
 #include "disc.h"                        // DiscState — native by-LBA CHD disc backend (disc.c)
+#include "dma_callbacks.h"               // DmaCallbackRegistry — direct-runtime DMACallback state
 #include "frame_presenter.h"             // FramePresenter — neutral current-frame capture/present/cadence fence
 #include "game_runtime.h"                // GameRuntime + per-Game polymorphic behavior products
 #include "gpu_native_internal.h"         // GpuState — the native GPU's per-instance render machine state
@@ -66,6 +67,7 @@ public:
   CdcState cdc;   // native CD-controller register model (per-instance; cdc_native.c, explicit param)
   XaState xa;     // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
   Hle hle;
+  DmaCallbackRegistry dmaCallbacks;
   Pad pad;
   Repl repl;                           // interactive REPL driver + title-consumed requests (repl.cpp)
   Fmv fmv;                             // native .STR movie player (native_fmv.cpp)

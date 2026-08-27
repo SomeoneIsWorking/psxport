@@ -12,6 +12,7 @@
 #include "bios_libc_string.h"
 #include "cfg.h"
 #include "core.h"
+#include "dma_callbacks.h"
 #include "dma_irq.h" // dma_irq_ack — the CD DMA completion dispatch below stands in for the
 #include "fs_util.h" // Fs::writeFile — the miss RAM dump below
 #include "game.h"
@@ -378,11 +379,13 @@ void Hle::irqPoll(Core *c) {
       continue;
     }
     const uint32_t slot = dma_callback_slot(table, ch);
-    const uint32_t cb = slot ? c->mem_r32(slot) : 0;
+    const uint32_t cb =
+        c->cfg ? (slot ? c->mem_r32(slot) : 0) : c->game->dmaCallbacks.current(static_cast<DmaChannel>(ch));
     lucent::debug("dmairq",
-                  "owed ch{} -> callback {:08X} (slot {:08X}){}",
+                  "owed ch{} -> callback {:08X} ({} {:08X}){}",
                   ch,
                   cb,
+                  c->cfg ? "guest slot" : "direct registry",
                   slot,
                   in_irq ? "  DEFERRED: a guest callback is running" : "");
     // A COMPLETION IS ONLY CONSUMED WHEN IT IS DELIVERED. Taking it first and then declining the

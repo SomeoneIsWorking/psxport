@@ -153,6 +153,12 @@ shipping BIOS entry points and proves context restoration, zero-buffer/zero-RA r
 unwind, and the illegal normal-return answer. A consumer must seed the measured saved RA as
 `main_reentry`, because it is usually inside the interrupt bootstrap rather than a natural function
 entry.
+`dma_callbacks.{h,cpp}` owns direct-runtime Sony `DMACallback` registrations as typed, per-`Game`
+host state. A title-native `DMACallback` body exchanges one channel entry there and retains ownership
+of its measured DICR update; `Hle::irqPoll` resolves this registry only when `Core::cfg` is null, while
+legacy adapters continue reading their measured guest callback table. `test_direct_dma_callbacks`
+drives the shipping DMA3 completion and interrupt-delivery path, proving previous-callback return,
+single delivery, register preservation, and the no-registration result.
 The runtime seam is partial: shipping consumers inherit `LegacyGameRuntimeAdapter` until typed fact
 groups replace every generic `c->cfg` read. `GuestProgramImage` is the first landed group: derived
 runtimes own crt0, resident MAIN routing, and backtrace-code facts; `Core` snapshots that immutable view,
