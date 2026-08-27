@@ -77,6 +77,10 @@ void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now);
 // Service due drive and command events on the guest thread. Returns 1 only when a response became
 // current and raised a new controller IRQ edge; an early wake leaves existing deadlines armed.
 int cdc_drive_service(CdcState *s);
+// Read the current controller response type without consuming its response FIFO. Zero means the
+// queue is empty. Stream callback owners use this to dispatch only for a real INT1 data-ready
+// response, never from a host-side pacing estimate alone.
+uint8_t cdc_current_irq_type(const CdcState *s);
 // MMIO 0x1F801800-3 register model — the instance is explicit (mem.cpp passes &game->cdc).
 uint32_t cdc_read(CdcState *s, uint32_t p);
 void cdc_write(CdcState *s, uint32_t p, uint8_t v);

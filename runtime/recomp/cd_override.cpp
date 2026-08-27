@@ -882,9 +882,17 @@ void Cd::pumpStream(Core *c, int sectors) {
   }
 
   // The callback runs as an ordinary guest function; save and restore the whole register context
-  // around it so whatever the port interrupted sees nothing.
+  // around it so whatever the port interrupted sees nothing. Pacing is only a maximum budget: a
+  // callback is legal only when the controller's deterministic drive clock has made a real INT1
+  // data-ready response current. The former unconditional first callback ran StCdInterrupt against
+  // an empty response, consumed the sector transition out of order, and left the subsequent genuine
+  // INT1 with no data. Never count a delivery until this controller fact exists.
   const R3000 saved = *static_cast<R3000 *>(c);
   for (int i = 0; i < sectors && stream_active; i++) {
+    game->timing.serviceCdcTickSource();
+    if (cdc_current_irq_type(&game->cdc) != 1u) {
+      break;
+    }
     stream_delivered++;
     c->r[A0] = 1; // libcd passes the completion status as arg 1
     c->r[A1] = 0;

@@ -256,7 +256,8 @@ game-validated blocking-control seam plus direct-runtime binding targets for the
 stock `CdSync`/`CdRead`/`CdReadSync` owners and the typed native finite-read ownership query),
 `guest_cd_stream_callback_layout.h` (the typed direct-runtime
 guest-RAM slot containing the current CD-ready callback; `Cd::pumpStream` shares this with legacy
-`GameConfig::cdReadyCbPtr` consumers), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
+`GameConfig::cdReadyCbPtr` consumers and dispatches it only while the controller reports a current
+INT1 data-ready response), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
 latch and command effects), `cdc_command_phase.{h,cpp}` (oracle-derived command receive, argument,
 execution, and completion scheduler), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),
 `emulated_time.{h,cpp}` + `timing.cpp` (per-Game deterministic emulated CPU-time owner and the

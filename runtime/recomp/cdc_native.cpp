@@ -67,8 +67,12 @@ static void cdc_irq(CdcState *s, uint8_t type, const uint8_t *resp, int len) {
     s->irq_edge = 1; // -> I_STAT bit 2, latched by the MMIO dispatcher
   }
 }
-static int q_empty(CdcState *s) {
+static int q_empty(const CdcState *s) {
   return s->q_head == s->q_tail;
+}
+
+uint8_t cdc_current_irq_type(const CdcState *s) {
+  return !s || q_empty(s) ? 0u : s->q[s->q_head].type;
 }
 
 static uint32_t lba_from_command_args(const CdcState *s) {
