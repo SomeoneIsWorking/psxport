@@ -58,8 +58,15 @@ void Core::cw_check_slow(uint32_t a, uint32_t v, int width) {
     if (w) {
       unsigned long lo = 0, hi = 0;
       if (sscanf(w, "%lx,%lx", &lo, &hi) == 2) {
-        s_cw_lo = lo;
-        s_cw_hi = hi;
+        // Mask to PHYSICAL exactly like mem_set_watch does. The comparison below masks the store's
+        // address, so a KSEG0 range recorded raw here can never match and the watchpoint silently
+        // never fires — a diagnostic whose negative is indistinguishable from "nothing wrote it".
+        // This is the same address-form trap wwatch_arm documents for the scratchpad.
+        s_cw_lo = (uint32_t)lo & 0x1FFFFFFF;
+        s_cw_hi = (uint32_t)hi & 0x1FFFFFFF;
+        lucent::info("cw", "watch [{:08X},{:08X}) from PSXPORT_CW", 0x80000000u | s_cw_lo, 0x80000000u | s_cw_hi);
+      } else {
+        lucent::error("cw", "PSXPORT_CW='{}' is not a 'lo,hi' pair — NO watchpoint is armed", w);
       }
     }
   }
@@ -111,8 +118,14 @@ void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
     if (w) {
       unsigned long lo = 0, hi = 0;
       if (sscanf(w, "%lx,%lx", &lo, &hi) == 2) {
-        s_ww_lo = lo;
-        s_ww_hi = hi;
+        // KSEG form, deliberately: the comparison below ORs 0x80000000 into the store address
+        // rather than masking it. Say so out loud, because a range given in PHYSICAL form here
+        // matches nothing and would read as "no store ever landed".
+        s_ww_lo = (uint32_t)lo | 0x80000000u;
+        s_ww_hi = hi ? ((uint32_t)hi | 0x80000000u) : 0u;
+        lucent::info("wwatch", "watch [{:08X},{:08X}) from PSXPORT_WWATCH", s_ww_lo, s_ww_hi);
+      } else {
+        lucent::error("wwatch", "PSXPORT_WWATCH='{}' is not a 'lo,hi' pair — NO watchpoint is armed", w);
       }
     }
   }
