@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-28.1"    # jalr non-ra link continuations are dispatchable re-entries
+RECOMP_VERSION = "2026-08-28.2"    # alternate-link continuations derive from discovered code only
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1308,7 +1308,10 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
     DUPLICATED tail blocks for shared-epilogue targets that live outside [lo,hi) (collect_tail_dups).
     The [lo,hi) emission is unchanged; the entry (lo) is always first; tails are reached only by goto.
     (A whole-function CFG flood-fill was tried and reverted — it mis-recompiled a register-jump-table
-    state machine into an infinite loop; this is the additive, minimal version.)"""
+    state machine into an infinite loop; this is the additive, minimal version.)
+    Returns the size of the C this function appended to `out`, in bytes — emit_module's size guard
+    totals these to refuse data-into-code blowups before any shard is written."""
+    out_start = len(out)
     ins = {a: decode(a, exe.word(a)) for a in range(lo, hi, 4)}
     jt = find_jump_tables(exe, ins, lo, hi)
     ra_tails = ra_tail_returns(ins, lo, hi)
@@ -1568,6 +1571,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
             out.append("  return;")
     out.append("}")
     out.append("")
+    return sum(len(x) + 1 for x in out[out_start:])
 
 
 def call_or_dispatch(target, funcset, N):
@@ -2465,6 +2469,8 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     soft = set(soft_seeds or ())                 # func_entries_after_return boundaries (mergeable)
     if os.environ.get("PSXPORT_USE_GHIDRA"):
         hard |= set(ghidra_funcs(exe.load, exe.text_end))
+    seeds = hard                                  # for the jt-prune "keep seeds" guard below
+    funcs = discover_funcs(exe, hard | soft)
     # ALTERNATE-LINK CALL CONTINUATIONS. `jalr rd, rs` with rd neither $zero nor $ra is a CALL whose
     # return address lands in a NONSTANDARD link register: CTR's hand-written GTE library calls its
     # helpers `jalr t2, v1` because $ra holds the caller's inline parameter block, and the helper
@@ -2472,25 +2478,38 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     # addr+8, mid-body of the caller) registered as a dispatchable re-entry. No `jal` names it and
     # no pointer table holds it, and the constant-flow pass cannot see the value either (the call
     # target is memory-loaded, so there is no static edge to carry it) — hence this derivation, from
-    # the binary, not from a hand seed. Additive-only: an entry the guest never reaches costs only
-    # its own emission; a jalr split point is always AFTER its own delay slot (addr+8, never addr+4).
-    # rd=$zero is a tail call — the return address is discarded — and rd=$ra returns through the C
-    # call stack (`jr ra` is emitted as a plain return), so neither contributes a continuation.
+    # the binary, not from a hand seed. rd=$zero is a tail call — the return address is discarded —
+    # and rd=$ra returns through the C call stack (`jr ra` is emitted as a plain return), so neither
+    # contributes a continuation.
+    # SCANNED ONLY OVER THE FRAGMENTS DISCOVERY REACHED, AFTER discover_funcs: a jalr is evidence
+    # only where control can be. Scanning the whole image instead let garbage jalr encodings inside
+    # a DATA overlay manufacture hard seeds — the empty-module guard passes zero seeds precisely so
+    # that nothing is emitted, and this derivation runs inside emit_module (measured 2026-08-28:
+    # spyro's 512KB OV_18F800 data slice, an empty module in every emission since Aug 5, became
+    # 104MB of garbage C). The restriction also keeps data islands inside a code module from
+    # manufacturing seeds. A continuation is a SPLIT of an already-discovered body, so one pass
+    # needs no re-discovery; the only coverage a split could add is a gap between fragments, which
+    # the router fail-fast names at runtime if the guest ever jumps there.
     alt_sites, jalr_conts = 0, set()
-    for a in range(exe.load, exe.text_end, 4):
-        i = decode(a, exe.word(a))
-        if i.kind == D.JUMPR and i.op == "jalr" and i.rd not in (0, 31):
-            alt_sites += 1
-            if a + 8 < exe.text_end:
-                jalr_conts.add(a + 8)
-    fresh_conts = len(jalr_conts - set(hard))
-    hard |= jalr_conts
-    reentry = set(reentry) | jalr_conts     # keep the continuation fragments out of the
-    # ra_computed_jumps partition, exactly like the game-supplied main_reentry seeds
-    print(f"[{N.wrap}] alternate-link calls: {alt_sites} jalr(s) with a non-ra link register; "
-          f"{len(jalr_conts)} link continuation(s) dispatchable ({fresh_conts} newly seeded)")
-    seeds = hard                                  # for the jt-prune "keep seeds" guard below
-    funcs = discover_funcs(exe, hard | soft)
+    fs = sorted(set(funcs))
+    for k, a in enumerate(fs):
+        hi_f = fs[k + 1] if k + 1 < len(fs) else exe.text_end
+        for x in range(a, hi_f, 4):
+            i = decode(x, exe.word(x))
+            if i.kind == D.JUMPR and i.op == "jalr" and i.rd not in (0, 31):
+                alt_sites += 1
+                if x + 8 < exe.text_end:
+                    jalr_conts.add(x + 8)
+    fresh_conts = len(jalr_conts - set(funcs))
+    if jalr_conts:
+        hard |= jalr_conts
+        seeds = hard
+        reentry = set(reentry) | jalr_conts     # keep the continuation fragments out of the
+        # ra_computed_jumps partition, exactly like the game-supplied main_reentry seeds
+        funcs = sorted(set(funcs) | jalr_conts)
+    print(f"[{N.wrap}] alternate-link calls: {alt_sites} jalr(s) with a non-ra link register in "
+          f"discovered code; {len(jalr_conts)} link continuation(s) dispatchable "
+          f"({fresh_conts} newly seeded)")
     # PRUNE case-label entries out of the function set: they are mid-run code, and leaving one in
     # truncates the containing body so neither its dispatcher nor its block-to-block hops recover
     # (the substrate-derail root cause, see prune_case_label_entries). Hard seeds are never touched;
@@ -2678,9 +2697,34 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
 
     shard = [["// GENERATED — DO NOT EDIT.", f'#include "{N.decls}"', ""] for _ in range(shards)]
     emitted_diagnostic_pcs = {}
+    body_bytes, worst = 0, []
     for k, a in enumerate(funcs):
-        emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N, reentry,
+        func_bytes = emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N, reentry,
                   ra_computed, diagnostic_pcs, emitted_diagnostic_pcs)
+        body_bytes += func_bytes
+        worst.append((func_bytes, a))
+    # SIZE GUARD — refuse BEFORE writing any shard. The measured failure class: data decoded as code
+    # (a data island a seed derivation or pointer scan reaches) flood-fills to the module end, and
+    # shared-tail duplication re-emits the whole module PER FUNCTION. Real incidents: spyro's 480KB
+    # data read -> ~144MB of C (one shard 83MB, Aug 2025) and its 512KB OV_18F800 -> 104MB (Aug 28,
+    # the alternate-link derivation seeding garbage `jalr` encodings inside a NOT-CODE module).
+    # Legit emissions measure well below the cap: spyro MAIN 14.2x, CTR MAIN 14.5x of their image
+    # size. A guard ratio is not a magic constant that makes output line up — it is a measured bound
+    # on an otherwise-silent pathology, overridable only by an explicit env with the same intent.
+    image_bytes = max(1, exe.text_end - exe.load)
+    ratio_cap = float(os.environ.get("PSXPORT_EMIT_MAX_RATIO", "40"))
+    worst.sort(reverse=True)
+    worst_names = ", ".join(f"{N.gen}_{a:08X} ({b} B)" for b, a in worst[:3])
+    print(f"[{N.wrap}] emission size: {body_bytes} bytes of C from a {image_bytes}-byte image "
+          f"({body_bytes / image_bytes:.1f}x, cap {ratio_cap:.0f}x); biggest: {worst_names}")
+    if body_bytes > ratio_cap * image_bytes:
+        raise SystemExit(
+            f"[{N.wrap}] SIZE GUARD: function bodies total {body_bytes} bytes of C from a "
+            f"{image_bytes}-byte image ({body_bytes / image_bytes:.0f}x > cap {ratio_cap:.0f}x). "
+            f"Data has leaked into code — the substrate would be garbage. Biggest fragments: "
+            f"{worst_names}. Find the seed source that reached the data (a derivation, pointer scan "
+            f"or hand seed) instead of raising the cap; PSXPORT_EMIT_MAX_RATIO exists only for a "
+            f"measured legit case above the default.")
     requested = set(diagnostic_pcs)
     missing = sorted((key for key in requested if emitted_diagnostic_pcs.get(key, 0) == 0),
                      key=lambda key: (-1 if key[0] is None else key[0], key[1]))

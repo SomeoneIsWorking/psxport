@@ -2103,6 +2103,110 @@ def test_data_overlay_emits_an_empty_module():
         assert "NOT CODE" in r.stdout + r.stderr, \
             "a skipped data overlay must be ANNOUNCED, not silent — silence is how this hid"
 
+
+def test_data_overlay_with_jalr_shaped_words_stays_empty():
+    """The empty-module guard passes ZERO seeds so a data overlay emits nothing; a seed derivation
+    inside emit_module must not defeat it. Measured 2026-08-28: spyro's 512KB OV_18F800 data slice
+    (empty module in every emission since Aug 5, `NOT CODE (18% undecodable, 0 jr-ra, 0 prologues)`)
+    became 104MB of garbage C when the alternate-link derivation seeded the ~32 garbage `jalr`
+    encodings that compressed data decodes to — one per ~4096 random words, so the 4096-word
+    negative above cannot see the class. This image plants them deliberately (rd=t2, CTR's link
+    register, making the lookalike maximally convincing)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with scratch_tempdir() as td:
+        a = Asm()                                   # minimal valid MAIN.EXE
+        a.addiu("sp", "sp", -0x10)
+        a.jr("ra")
+        a.nop()
+        text, _ = a.assemble()
+        exe_path = os.path.join(td, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)
+        struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))
+        open(exe_path, "wb").write(bytes(hdr) + text)
+        ovdir = os.path.join(td, "ovl")
+        os.makedirs(ovdir)
+        data = bytearray(_garbage_image(8192))
+        # plant 32 jalr rd=t2, rs=v0 encodings — the alternate-link lookalike — inside the data
+        jalr_word = (2 << 21) | (10 << 11) | 9
+        for i in range(32):
+            struct.pack_into("<I", data, (i * 251) % 8192 * 4, jalr_word)
+        open(os.path.join(ovdir, "DATAOVL1.BIN"), "wb").write(bytes(data))
+        seeds_path = os.path.join(td, "seeds.json")
+        open(seeds_path, "w").write('{"overlay_bases": {"DATAOVL1": "0x8007AA38"}}')
+        gen = os.path.join(td, "gen")
+        os.makedirs(gen)
+        r = subprocess.run([sys.executable, os.path.join(here, "emit.py"),
+                            exe_path, os.path.join(gen, "rec.c"),
+                            "--seeds", seeds_path, "--overlays", ovdir],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, f"emit.py failed:\n{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+        shards = [f for f in os.listdir(gen) if f.startswith("ov_dataovl1_shard_")]
+        total = sum(os.path.getsize(os.path.join(gen, f)) for f in shards)
+        assert total < 4096, \
+            f"data overlay with jalr-shaped words emitted {total} bytes of C across {shards} — " \
+            "a seed derivation manufactured entries inside a NOT-CODE module (the spyro " \
+            "OV_18F800 104MB regression)"
+        disp = open(os.path.join(gen, "ov_dataovl1_disp.c")).read()
+        assert "case 0x" not in disp, \
+            "a data overlay must have ZERO dispatchable functions even when its bytes " \
+            "decode as alternate-link calls"
+
+
+def test_size_guard_refuses_a_vouched_data_flood():
+    """The size guard is the class-wide backstop: whenever data reaches code — by ANY seed path —
+    flood-fill and tail duplication inflate the C far beyond the image (measured: spyro 480KB ->
+    ~144MB = ~300x; OV_18F800 512KB -> 104MB = ~200x; legit MAIN emissions measure 14-15x). The
+    inflation multiplier is garbage-shape-specific (tail duplication re-emits per branch target),
+    so this test does not rebuild 200x literally: it vouches 8 seeds into a return-free data image
+    — 8 full-span floods of the kind that produced both incidents, measured 17.8x — and lowers the
+    guard's knob to 2x so the REFUSAL MECHANISM itself is what is under test: non-zero exit, the
+    SIZE GUARD message naming the biggest fragments, and NO shard written."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with scratch_tempdir() as td:
+        a = Asm()                                   # minimal valid MAIN.EXE
+        a.addiu("sp", "sp", -0x10)
+        a.jr("ra")
+        a.nop()
+        text, _ = a.assemble()
+        exe_path = os.path.join(td, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)
+        struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))
+        open(exe_path, "wb").write(bytes(hdr) + text)
+        ovdir = os.path.join(td, "ovl")
+        os.makedirs(ovdir)
+        nwords = 16384                              # 64KB of data, return-free
+        data = bytearray(_garbage_image(nwords))
+        base = 0x8007AA38
+        # EIGHT explicit vouched seeds in a return-free image: each seed floods to the next entry
+        # (nothing terminates the walk), giving full-span garbage bodies of the incident shape.
+        seeds = [f"0x{base + (i * nwords // 8) * 4:08X}" for i in range(8)]
+        open(os.path.join(ovdir, "FLOODOVL.BIN"), "wb").write(bytes(data))
+        seeds_path = os.path.join(td, "seeds.json")
+        open(seeds_path, "w").write(
+            '{"overlay_bases": {"FLOODOVL": "0x8007AA38"},'
+            ' "overlay_seeds": {"FLOODOVL": [' + ", ".join(f'"{s}"' for s in seeds) + ']}}')
+        gen = os.path.join(td, "gen")
+        os.makedirs(gen)
+        env = dict(os.environ, PSXPORT_EMIT_MAX_RATIO="2")
+        r = subprocess.run([sys.executable, os.path.join(here, "emit.py"),
+                            exe_path, os.path.join(gen, "rec.c"),
+                            "--seeds", seeds_path, "--overlays", ovdir],
+                           capture_output=True, text=True, env=env)
+        combined = r.stdout + r.stderr
+        assert "SIZE GUARD" in combined, \
+            f"emission of a vouched return-free data flood was not refused (rc={r.returncode}) — " \
+            "the size guard did not fire"
+        assert r.returncode != 0, "the size guard must refuse (non-zero exit), not just warn"
+        assert "Biggest fragments" in combined, \
+            "the refusal must NAME the biggest fragments — a bare size is not diagnosable"
+        shards = [f for f in os.listdir(gen) if f.startswith("ov_floodovl_shard_")]
+        assert not shards, \
+            f"the guard refused but shards were already written ({shards}) — refuse BEFORE writing"
+
 def test_mixed_code_and_data_image_is_code():
     # Tomba!2's area overlays are the shape that kills a naive criterion: real functions (hundreds
     # of jr-ra) followed by embedded graphics/tables that decode 20-30% undecodable. The undecodable
