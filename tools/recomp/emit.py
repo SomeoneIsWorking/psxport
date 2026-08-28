@@ -2061,7 +2061,12 @@ def overlay_funcs(exe, overlay_dir, base=None):
     `base` is only the PC used to decode each word, and a `jal` target is
     `(PC & 0xF0000000) | (imm26 << 2)` — so only its top nibble can matter, and every overlay shares
     that nibble with the resident image. Default to the image's own load address rather than naming
-    any particular game's overlay slot."""
+    any particular game's overlay slot.
+
+    The target must also pass `is_func_entry`. Overlay blobs contain data as well as code, so a
+    jal-shaped data word can name an arbitrary decodable instruction in MAIN. Promoting that word
+    into the function partition splits the resident body and loses the state that crosses the split;
+    a real overlay call target is required to have an independent entry boundary."""
     lo, hi = exe.load, exe.text_end
     if base is None:
         base = exe.load
@@ -2080,7 +2085,7 @@ def overlay_funcs(exe, overlay_dir, base=None):
                     if ins.target - 4 >= lo else None
                 is_delay_slot = previous is not None and previous.kind in (
                     D.BRANCH, D.JUMP, D.JUMPR)
-                if not is_delay_slot and decode(ins.target, exe.word(ins.target)).kind != D.UNKNOWN:
+                if not is_delay_slot and is_func_entry(exe, ins.target):
                     targets.add(ins.target)
     return targets
 

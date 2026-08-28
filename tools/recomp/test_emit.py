@@ -821,6 +821,35 @@ def test_is_func_entry():
     assert not emit.is_func_entry(e, 0x80010004)   # the `jr ra` itself is not an entry
 
 
+def test_overlay_jal_shaped_data_only_seeds_real_entries():
+    # An overlay is a mixed code/data blob. A data word that decodes as `jal` must not promote an
+    # arbitrary instruction in MAIN into the function partition: that splits the resident body at
+    # a point with no independent entry contract. A genuine prologue remains seedable.
+    a = Asm(0x80010000)
+    a.addiu("t0", "zero", 1)
+    a.addiu("t1", "zero", 2)
+    a.jr("ra")
+    a.nop()
+    a.addiu("sp", "sp", -16)  # real entry: follows `jr ra; nop`
+    a.addiu("t2", "zero", 3)   # non-entry instruction in that function
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    e = exe_of(data)
+    real_entry = 0x80010010
+    non_entry = 0x80010014
+    assert emit.is_func_entry(e, real_entry)
+    assert not emit.is_func_entry(e, non_entry)
+    fake_jals = struct.pack(
+        "<2I",
+        (3 << 26) | ((real_entry >> 2) & 0x03FFFFFF),
+        (3 << 26) | ((non_entry >> 2) & 0x03FFFFFF),
+    )
+    with scratch_tempdir("overlay-jal-seeds-") as td:
+        open(os.path.join(td, "MIXED.BIN"), "wb").write(fake_jals)
+        assert emit.overlay_funcs(e, td) == {real_entry}
+
+
 def test_switch_table_excluded_from_code_pointer_tables():
     # A recovered switch jump-table's case-label array must NOT be mistaken for a vtable and seeded.
     a = Asm(0x80010000)
