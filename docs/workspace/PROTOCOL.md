@@ -44,6 +44,13 @@ do not move a vendor pin** (`vendor/beetle-psx`, `vendor/lucent`).
 **Landing is the operator's** — only the operator sees the whole tree and the other agents in flight. An
 agent's job ends at a verified change plus a report: no `git add`, no commit, no push.
 
+**The session the USER tasked owns the landing, across BOTH trees.** USER 2026-08-28: "Take full
+ownership please, not 'for you'" and "when I tell you 'Work on <game>' or anything else, it means
+both game and the framework together". A user-tasked session must not stop at "the framework change
+is dirty for the operator": it IS the operator for this work. Land the framework change, bump the
+consuming game's pin, re-run the game's gates against the committed framework, and push both repos.
+This does not weaken the subagent rule above — subagents still report dirty and never land.
+
 ## Before you touch a framework file: CLAIM THE AREA
 
 `mkdir` is atomic on POSIX, so it is the lock. No tool, no daemon, no race:
