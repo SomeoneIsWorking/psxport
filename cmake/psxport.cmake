@@ -99,6 +99,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/gpu_debug.cpp
   ${PSXPORT_ROOT}/runtime/recomp/vram_xfer.cpp
   ${PSXPORT_ROOT}/runtime/recomp/spu_audio.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/audio_field_report.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/sbs_audio_compare.cpp
   ${PSXPORT_ROOT}/runtime/recomp/pad_input.cpp
   ${PSXPORT_ROOT}/runtime/recomp/snapshot.cpp
   ${PSXPORT_ROOT}/runtime/recomp/native_diff.cpp

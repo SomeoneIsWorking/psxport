@@ -41,7 +41,8 @@
 #include "render_noise.h"      // THE one GameConfig-derived pool/OT window (addrLabel)
 #include "render_substrate.h"  // Render::setPsxRender (per-Core render-path switch)
 #include "repl_service.h"      // refuse_if_unserviced — this loop has NO Repl::read() pump
-#include "task_slot_layout.h"  // task0_*_addr() / task_slot_base() (STOPGAP: the slot-field offsets)
+#include "sbs_audio_compare.h"
+#include "task_slot_layout.h" // task0_*_addr() / task_slot_base() (STOPGAP: the slot-field offsets)
 #include <algorithm>
 #include <csignal>
 #include <cstdio>
@@ -600,6 +601,7 @@ public:
   // wrong. PSXPORT_SBS_RENDERDIFF=<pct> arms it (default threshold 2.0% of pixels); worst frames are
   // dumped to scratch/screenshots/renderdiff/ for the user to eyeball.
   void checkPaneDiff();
+  SbsAudioCompare mAudioCompare;
   bool mRdiffOn = false;
   int mRdiffChecked = 0;
   double mRdiffThreshPct = 2.0;
@@ -1592,13 +1594,7 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
 void Sbs::Impl::stepCore(Game *g, int which) {
   g->core.game->diff_mode = 1;
   g->core.game->sbs_render = 1;
-  // (The old DEMO intro-FMV guest poke — mem_w8(0x1f80019d,1) while DEMO SM[0x48]==1 — is REMOVED,
-  //  2026-07-10: it force-tore-down the demo machine's FMV sub-state in ~1 frame while a standalone
-  //  run spends the guest's own strNext timeout there, so the SBS lockstep timeline ran AHEAD of both
-  //  standalone configs and no pane could ever match a standalone picture at the same frame index.
-  //  The guest's own timeout path (the same one standalone PSXPORT_ORACLE=1 takes — "skips OP.FMV")
-  //  is slower in wall-clock but keeps frame-for-frame parity with the standalone timeline, which is
-  //  the whole point of the panes.)
+  // Do not inject a DEMO/FMV shortcut here: standalone and SBS must share the guest timeout path.
   applyMode(g, which);
   gpu_vk_select_target(which);
   dc_step_frame(&g->core, mFrame);
@@ -3111,6 +3107,7 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
                "{} — then drive both panes with the window keyboard (WASD/arrows, K=Cross, Enter=Start, …) or the "
                "debug server; inspect via `sbs` cmds.",
                sbsAutonav ? "AUTO-NAV to the field" : "LOCKSTEP from boot (no auto-nav)");
+  mAudioCompare.configure(mMode == M_ORACLE);
 
   for (;;) {
     if (sbs_rl_should_close()) {
@@ -3356,9 +3353,10 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
         lucent::info("sbs", "FORCES4C fired at f{}: sm[0x4c]={} (both cores)", mFrame, fs4cVal);
       }
     }
-    // Reset per-Core SPU write logs so this frame's writes accumulate cleanly.
+    // Reset per-Core SPU write logs and audio reports for this lockstep frame.
     spu_log_reset(mA->spu.writeLog);
     spu_log_reset(mB->spu.writeLog);
+    mAudioCompare.clear(mA, mB);
     // MODE=skip steps the oracle first so its asynchronous progress for this frame is visible to the
     // observable-window comparison. Other modes keep A-first (wwatch transcripts are ordered around it).
     if (mMode == M_SKIP) {
@@ -3372,6 +3370,7 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
       stepCore(mB, 1);
       grabPane(mB, mRgbaB, &mWb, &mHb);
     }
+    mAudioCompare.compare(mA, mB, mFrame);
     checkPaneDiff(); // PICTURE compare: port pane (A) vs oracle pane (B) — render bugs
     // PSXPORT_SBS_SHOT=<frame>:<prefix> — dump each pane SEPARATELY at one lockstep frame, as
     // <prefix>_A.ppm / <prefix>_B.ppm. Mechanical pane-vs-standalone-`shot` comparison (the

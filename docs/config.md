@@ -173,6 +173,9 @@ spec REFUSES loudly and names how many entries it rejected, rather than quietly 
   per-frame cadence while `./run.sh` completes owned waits synchronously, so a frame-indexed
   `replays/*.pad` lands inputs at the wrong moments and does NOT raise coverage. Capture on the strict
   leg or use a game-state-driven route.
+- `PSXPORT_SBS_AUDIO=1` — compare every captured SPU field between SBS cores, including exact stereo
+  PCM samples, cadence, and XA counters. `PSXPORT_SBS_MODE=oracle` enables this automatically; a run
+  with no captured fields is not an audio verdict.
 
 ### `PSXPORT_REPL` is serviced by ONE loop — every other run REFUSES it (exit 2)
 

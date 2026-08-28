@@ -289,6 +289,26 @@ void SpuAudio::frameEx(bool output) {
     memset(buf, 0, (size_t)frames * 2 * sizeof(int16_t));
   }
   const PcmSummary pcm = summarizePcm(buf, frames);
+  mFieldReports.push_back(AudioFieldReport{
+      traceField,
+      advance.samples,
+      advance.clocks,
+      static_cast<uint32_t>(renderedFrames),
+      static_cast<uint32_t>(frames),
+      pcm.hash,
+      pcm.nonzero,
+      pcm.peak,
+      game->xa.wr,
+      game->xa.rd,
+      game->xa.pulls,
+      game->xa.sectors,
+      game->xa.wr - xaWrBefore,
+      game->xa.rd - xaRdBefore,
+      game->xa.pulls - xaPullsBefore,
+      game->xa.sectors - xaSectorsBefore,
+      game->gpu.s_disp_pal != 0,
+      std::vector<int16_t>(buf, buf + static_cast<size_t>(frames) * 2u),
+  });
   lucent::debug("audiofield",
                 "field={} advanced=1 output={} pal={} expected_samples={} expected_clocks={} "
                 "rendered_samples={} queued_samples={} pcm_hash={:08X} pcm_nonzero={} "

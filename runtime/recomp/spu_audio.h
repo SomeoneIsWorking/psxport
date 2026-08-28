@@ -17,11 +17,13 @@
 //                                  spu_audio.frameLogic()          (SBS diff: advance XA only, no output)
 //   - repl.cpp `wav <path>`       → spu_audio.wavReopen(path)      (mid-run WAV capture handoff)
 #pragma once
+#include "audio_field_report.h"
 #include "spu_field_cadence.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
+#include <vector>
 #ifdef PSXPORT_SDL
 #include <SDL3/SDL.h>
 #endif
@@ -54,6 +56,13 @@ public:
     frameEx(false);
   } // SBS/dual-core: advance XA for game logic only, no output
   void wavReopen(const char *path); // REPL music-dump: finalize current WAV, start a fresh one
+
+  void clearFieldReports() {
+    mFieldReports.clear();
+  }
+  [[nodiscard]] const std::vector<AudioFieldReport> &fieldReports() const {
+    return mFieldReports;
+  }
 
 private:
   void frameEx(bool output);
@@ -106,4 +115,5 @@ private:
   // Monotonic field ordinal for the optional audio-field trace. This is per SpuAudio so SBS can
   // distinguish the two cores without adding shared state to the comparator.
   uint64_t mTraceField = 0;
+  std::vector<AudioFieldReport> mFieldReports;
 };

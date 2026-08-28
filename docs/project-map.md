@@ -256,7 +256,9 @@ projection path asks for it—there is no framework camera-address fallback.
 `GameHooks::fps60TemporalRotate` is the separate post-two-present lifecycle seam for game-owned immutable
 render recipes; it is optional and does not alias the transitional billboard-history hook.
 **Audio:** `spu_beetle.cpp` (Beetle spu.c mixer lift), `spu_audio.cpp` (SDL sink +
-`PSXPORT_WAV` + opt-in `audiofield` per-field trace), `spu_field_cadence.h` (exact display-field-rate → SPU-clock/sample schedule), and
+`PSXPORT_WAV` + opt-in `audiofield` per-field trace), `audio_field_report.{h,cpp}` (exact PCM/cadence/XA
+reports), and `sbs_audio_compare.{h,cpp}` (opt-in SBS per-field oracle comparison),
+`spu_field_cadence.h` (exact display-field-rate → SPU-clock/sample schedule), and
 `xa_stream.cpp` (in-game XA-ADPCM streaming). The sink reads the same exact NTSC 60,000/1,001 or
 PAL 50/1 rational owned by `field_rate.h`; it carries integer remainders between fields instead of
 rounding every NTSC field to the exact-60 Hz legacy values of 564,480 clocks and 735 samples.
