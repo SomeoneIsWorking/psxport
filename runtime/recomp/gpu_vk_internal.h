@@ -46,7 +46,7 @@ struct VkRect {
 // 2D order bands (bug #55 fix): content submitted via RQ_OM_2D_BG / RQ_OM_2D_FG (render_queue.cpp) is NOT
 // part of the 3D world — it must render at NATIVE VRAM resolution regardless of the live ires scale (see
 // gpu_vk.cpp render_geom's band split). Kept as two bands, not one, because the engine's existing order
-// scheme (NATIVE_3D_MIN/MAX in gpu_vk.cpp) already draws 2D_BG strictly BEHIND the 3D world and 2D_FG
+// scheme (kGpuNative3dMin/Max in gpu_vk.h) already draws 2D_BG strictly BEHIND the 3D world and 2D_FG
 // strictly IN FRONT of it — the render_geom band order (2D_BG -> 3D -> 2D_FG) reproduces that without a
 // depth test shared across targets.
 #define GGS_2D_BG 0
@@ -71,9 +71,11 @@ struct GpuVkState {
   SDL_GPUTexture *s_depth = nullptr;      // D32 depth (ordering)
   SDL_GPUTexture *s_color_rgba = nullptr; // float RGBA semi-blend intermediate
   SDL_GPUBuffer *s_tri_vbuf = nullptr;
+  SDL_GPUBuffer *s_line_vbuf = nullptr;
   SDL_GPUBuffer *s_tex_vbuf = nullptr;
   SDL_GPUBuffer *s_semi_vbuf[GGS_NUM_BLEND_MODES] = {};
   SDL_GPUTransferBuffer *s_tri_xfer = nullptr;
+  SDL_GPUTransferBuffer *s_line_xfer = nullptr;
   SDL_GPUTransferBuffer *s_tex_xfer = nullptr;
   SDL_GPUTransferBuffer *s_semi_xfer[GGS_NUM_BLEND_MODES] = {};
   int s_have_3d = 0;     // THIS Game's targets created
@@ -181,6 +183,8 @@ struct GpuVkState {
   // internally. Buffers are heap-allocated on first use (create_3d) and freed at process exit.
   void *s_tri_buf = nullptr;
   int s_tri_n = 0;
+  void *s_line_buf = nullptr;
+  int s_line_n = 0;
   void *s_tex_buf = nullptr;
   int s_tex_n = 0;
   // Painter staging. Each range is either one legacy isolated object or one frame-wide authored
@@ -254,6 +258,20 @@ struct GpuVkState {
   void set_vd(const float *d3);
   void set_vd_n(const float *d3);
   void set_xyf(const float *xf, const float *yf); // sub-pixel screen XY for the world path (#15)
+  void draw_line(int x0,
+                 int y0,
+                 int r0,
+                 int g0,
+                 int b0,
+                 int x1,
+                 int y1,
+                 int r1,
+                 int g1,
+                 int b1,
+                 int dax0,
+                 int day0,
+                 int dax1,
+                 int day1);
   void set_order(unsigned idx);
   void set_order_2d(unsigned idx);
   void set_order_2d_n(unsigned idx);

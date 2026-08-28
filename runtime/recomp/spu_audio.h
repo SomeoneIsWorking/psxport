@@ -49,9 +49,7 @@ public:
   Game *game = nullptr; // back-pointer wired by Game(); reaches this Core's SPU/XA/native-music state
 
   void init();
-  void frame() {
-    frameEx(true);
-  }
+  void frame();
   void frameLogic() {
     frameEx(false);
   } // SBS/dual-core: advance XA for game logic only, no output

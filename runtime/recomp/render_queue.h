@@ -106,7 +106,7 @@ static constexpr uint32_t kBackdropDbgNode = 0xFFFF0003u;
 struct RqItem {
   uint8_t layer;                     // RqLayer
   uint8_t semi;                      // semi-transparent (blended) quad
-  uint8_t nv;                        // vertex count: 3 = triangle (one tri), 4 = quad (two tris)
+  uint8_t nv;                        // vertex count: 2 = line, 3 = triangle, 4 = quad (two tris)
   uint8_t raw;                       // raw texel (no color modulation)
   uint8_t order_mode;                // RqOrderMode — how depth is applied at emit
   uint8_t painter_flags;             // legacy scope flags, mapped into explicit per-item state at capture

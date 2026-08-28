@@ -15,6 +15,8 @@ namespace {
 
 constexpr uint32_t kDirectCdRead = 0x80066A50u;
 constexpr uint32_t kDirectCdWindowEnd = 0x80066B30u;
+constexpr uint32_t kDirectDrawSync = 0x80066C00u;
+constexpr uint32_t kDirectDrawSyncWindowEnd = 0x80066C10u;
 constexpr uint32_t kLegacyCdSync = 0x800647A0u;
 constexpr uint32_t kLegacyCdWindowEnd = 0x80064810u;
 
@@ -58,6 +60,9 @@ void test_direct_runtime_cd_plan_remains_owned_by_platform_hle() {
   runtime.plan.cdReadAddress = kDirectCdRead;
   runtime.plan.windowLo[0] = kDirectCdRead;
   runtime.plan.windowHi[0] = kDirectCdWindowEnd;
+  runtime.plan.drawSyncAddress = kDirectDrawSync;
+  runtime.plan.windowLo[1] = kDirectDrawSync;
+  runtime.plan.windowHi[1] = kDirectDrawSyncWindowEnd;
   psxport_install_game(runtime);
   auto game = std::make_unique<Game>();
 
@@ -68,6 +73,7 @@ void test_direct_runtime_cd_plan_remains_owned_by_platform_hle() {
 
   CHECK(game->core.cfg == nullptr);
   CHECK(game->platform_hle.lookup(kDirectCdRead) == cd_read_stock_sync);
+  CHECK(game->platform_hle.lookup(kDirectDrawSync) != nullptr);
 }
 
 void test_legacy_runtime_keeps_existing_cd_registration() {

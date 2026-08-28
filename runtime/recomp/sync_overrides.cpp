@@ -368,6 +368,7 @@ void PlatformHle::initBuiltins() {
       regProjectionLeaves(plan->setGeomOffset, plan->setGeomScreen);
       reg(plan->cdReadAddress, cd_read_stock_sync);
       reg(plan->cdReadSyncAddress, cd_readsync_stock_sync);
+      reg(plan->drawSyncAddress, sync_ok);
       bindVSyncTrap(plan->vsyncAddress);
       for (int i = 0; i < plan->bindingCount && i < PlatformHlePlan::kMaxBindings; i++) {
         if (plan->bindings[i].addr && plan->bindings[i].fn) {
@@ -398,6 +399,10 @@ void PlatformHle::initBuiltins() {
   // libgpu GPU-DMA-completion timeout — native no-ops, never read VSync (the GPU is synchronous).
   reg(h.gpuTimeoutArm, gpu_timeout_arm);
   reg(h.gpuTimeoutCheck, gpu_timeout_chk);
+  // libgpu DrawSync — the host GPU consumes GP0/DMA work synchronously, so there is no pending
+  // hardware queue to wait for. Returning success is the same hardware event as a completed DMA,
+  // and prevents the retained library body from falling into its VSync-based timeout loop.
+  reg(h.drawSync, sync_ok);
   // Cooperative task-switch (ChangeThread): the universal yield/task-end primitive. Wired to
   // scheduler_yield so a yield from an interpreted task coroutine saves the task's resume context and
   // longjmps back to the native scheduler. No-ops outside a task run.

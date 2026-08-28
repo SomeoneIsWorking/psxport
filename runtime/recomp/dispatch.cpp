@@ -1,15 +1,12 @@
 // Dispatch entry points for the recomp-substrate runtime.
 //
-// The interpreter is GONE (2026-06-30). The static recompiler (tools/recomp/emit.py ->
-// generated/shard_*.c) is the SUBSTRATE: every non-native guest function runs as recompiled C.
-// shard_disp.c GENERATES rec_dispatch (an address->func_<addr> switch) and rec_func_index; this file
-// only provides the remaining dispatch entry points the engine/runtime call (rec_super_call /
-// rec_interp / rec_coro_run / stub_dispatch), routing them all to the generated rec_dispatch — a
-// recompiled body is invoked as a plain C call. A MISS (overlay code, a non-recompiled address, a
-// computed jump target) falls through rec_dispatch_miss, which FAILS FAST (abort + guest backtrace).
-// There is NO interpreter fallback. (User directive 2026-06-30: drop the interpreter; every recomp
-// miss must crash with a log so we can see what to port/recompile next.)
+// The static recompiler (tools/recomp/emit.py -> generated/shard_*.c) is the native SUBSTRATE:
+// every ordinary game function runs as recompiled C. The interpreter is compiled back in only for
+// the SBS oracle Core, where c->use_interp selects the reference execution path. Explicit
+// hardware/data owners are dispatched before that interpreter path; ordinary recompiler misses still
+// fail fast through rec_dispatch_miss so missing coverage stays visible.
 #include "core.h"
+#include "override_registry.h"
 
 void rec_dispatch(Core *c, uint32_t addr);      // global router (overlay_router.cpp): range-routes
                                                 // to main_dispatch / the resident overlay's switch
@@ -29,6 +26,9 @@ void interp_coro_run(Core *c, uint32_t addr); // interp.cpp — cooperative-task
 // gen_func_XXXX(c) super-call); rec_coro_run was a cooperative-task entry.
 void rec_super_call(Core *c, uint32_t addr) {
   if (c->use_interp) {
+    if (overrides::dispatchOracle(c, addr)) {
+      return;
+    }
     interp_run(c, addr);
     return;
   }
@@ -36,6 +36,9 @@ void rec_super_call(Core *c, uint32_t addr) {
 }
 void rec_interp(Core *c, uint32_t addr) {
   if (c->use_interp) {
+    if (overrides::dispatchOracle(c, addr)) {
+      return;
+    }
     interp_run(c, addr);
     return;
   }
@@ -43,6 +46,9 @@ void rec_interp(Core *c, uint32_t addr) {
 }
 void rec_coro_run(Core *c, uint32_t addr) {
   if (c->use_interp) {
+    if (overrides::dispatchOracle(c, addr)) {
+      return;
+    }
     interp_coro_run(c, addr);
     return;
   }
@@ -60,6 +66,9 @@ void rec_coro_redirect(Core *c, uint32_t target) {
 // through the same substrate (interpreter when this is the oracle Core).
 void stub_dispatch(Core *c, uint32_t addr) {
   if (c->use_interp) {
+    if (overrides::dispatchOracle(c, addr)) {
+      return;
+    }
     interp_run(c, addr);
     return;
   }

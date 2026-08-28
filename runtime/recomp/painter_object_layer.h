@@ -130,6 +130,9 @@ struct PainterPlaybackRange {
 struct PainterObjectPlan {
   PainterObjectStats stats;
   std::vector<size_t> ordinary_items;
+  // Non-face primitives cannot participate in a painter replay. A trailing world line can still be
+  // preserved after the replayed faces, which is the ordering needed by line-producing native effects.
+  std::vector<size_t> ordinary_items_after_ranges;
   std::vector<PainterCommand> commands;
   std::vector<PainterPlaybackRange> ranges;
   // Dense rank of each input item's original sequence inside this physical flush. Captured frames

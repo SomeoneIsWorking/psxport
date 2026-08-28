@@ -51,6 +51,10 @@ struct PlatformHlePlan {
   uint32_t cdReadAddress = 0;
   uint32_t cdReadSyncAddress = 0;
 
+  // Measured libgpu DrawSync entry. The host GPU consumes GP0/DMA work synchronously, so the
+  // framework can complete this hardware wait without entering the guest's VSync-based body.
+  uint32_t drawSyncAddress = 0;
+
   // Measured libetc VSync entry. Product boot requires this fact and the framework always binds it
   // to its fatal native-frame-loop ownership trap. A title supplies no handler and cannot replace
   // the trap through `bindings`.

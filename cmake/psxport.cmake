@@ -78,6 +78,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/recomp_iface.cpp     # framework↔generated seam storage (RecompRegistry install)
   ${PSXPORT_ROOT}/runtime/recomp/dispatch.cpp
   ${PSXPORT_ROOT}/runtime/recomp/interp.cpp           # ORACLE engine: pure-MIPS interpreter for the oracle Core
+  ${PSXPORT_ROOT}/runtime/recomp/interp_diagnostics.cpp # interpreter trace and native-call diagnostics
   ${PSXPORT_ROOT}/runtime/recomp/coro.cpp
   ${PSXPORT_ROOT}/runtime/recomp/overlay_router.cpp
   ${PSXPORT_ROOT}/runtime/recomp/cfg.cpp
@@ -131,6 +132,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/frame_pacer.cpp
   ${PSXPORT_ROOT}/runtime/recomp/timing.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_depth.cpp # normalized 3D depth and per-primitive order policy
   ${PSXPORT_ROOT}/runtime/recomp/gpu_painter.cpp # painter target lifecycle + authored command staging
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_semi_selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_texture_phase_selftest.cpp

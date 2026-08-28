@@ -25,11 +25,10 @@ reinstating an oracle, specifically this in-process divergence-diff form. It is 
 behavior (like sbs.cpp / dualcore.cpp): one PC-native game still ships; this is a debugger.
 
 ## Building blocks (all in-tree)
-- **Interpreter:** `runtime/recomp/interp.cpp` (662 lines), removed in commit **6e3951d** ("Drop the
-  interpreter"). Self-contained MIPS R3000 flat interpreter operating on `Core` memory (`c->mem_*`, `c->r[]`).
-  `is_bios` + `exec_simple` + `coro_next_pc` + `ldhaz_step` + `g_callring` + `ifn_record` are internal to it;
-  externals it needs (`gte_op`, `CORO_SENTINEL`, `platform_hle_lookup`, `cfg_str`, `rec_func_index`,
-  `rec_dispatch_miss`) all still exist. Recover from `git show 6e3951d^:runtime/recomp/interp.cpp`.
+- **Interpreter:** `runtime/recomp/interp.cpp` plus `runtime/recomp/interp_diagnostics.cpp` (the instruction
+  engine is 1,171 lines). The self-contained MIPS R3000 flat interpreter operates on per-Core memory
+  (`c->mem_*`, `c->r[]`) and is live in `PSXPORT_SBS_MODE=oracle`; its trace/native-call file handling is
+  kept in the diagnostics module so the instruction engine does not grow past the structure cap.
 - **Software GPU:** Beetle's vendored-but-uncompiled rasterizer `vendor/beetle-psx/mednafen/psx/gpu.c` +
   `gpu_polygon.c` / `gpu_sprite.c` / `gpu_line.c` (full GP0 processor + VRAM). Compile for the oracle Core;
   route the oracle's GP0 stream into it → an oracle VRAM image to diff vs the native VRAM.
@@ -77,7 +76,11 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
   recomp-body routing (that was a hybrid optimization). Result: pure interpretation of game+overlay code with
   only BIOS + hardware HLE native. Crucially it must NOT call `rec_dispatch` in oracle mode (would re-enter
   the interpreter via the gated entry → recursion).
-- The oracle core takes NO native game-overrides (it is the PSX ground truth) — only BIOS + hardware leaves.
+- The oracle core takes no game-logic overrides. A measured hardware/data owner may explicitly opt into the
+  interpreter bridge with `overrides::install(..., oracleAllowed=true)`; Spyro uses this only for synchronous
+  archive-read boundaries `0x80016500`/`0x80016698`, whose native owners copy disc data and publish loader
+  state. Ordinary native overrides remain invisible to the oracle. The framework's measured libgpu DrawSync
+  entries are platform HLE `sync_ok` leaves, not game overrides.
 
 ## Phases
 1. **Interpreter oracle (RAM/state divergence).** Restore interp.cpp adapted to per-Core; add `use_interp` +
@@ -162,6 +165,12 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
   Tomba is in a non-interactive scripted "caught" pose right at the free-roam onset checkpoint; simple held
   D-pad input doesn't move him there) — recommend driving `PSXPORT_SBS_MODE=oracle` interactively via a real
   windowed run instead of headless scripting for this specific check.
+- 2026-08-28: Framework oracle dispatch now has an explicit `oracleAllowed` opt-in for measured
+  hardware/data owners; Spyro uses it only for the two synchronous archive-read boundaries. The SPU
+  mixer also advances on both SBS cores while output is discarded, so audio state remains observable
+  instead of freezing on the oracle leg. Spyro's clean 120-field oracle boot (`scratch/logs/spyro-sbs-oracle-clean-20260828.log`)
+  still has five persistent stack-only byte differences and one registered owner never reached; this
+  is limited boot evidence, not a claim of whole-game convergence.
 
 ---
 
@@ -186,7 +195,7 @@ pixels do not.
 | **`PSXPORT_ORACLE=1`** | Implies GATE + RENDER_PSX and forces pure OT painter order, so no native band/depth/widescreen/fps60 decision reaches the picture. **The best in-tree picture reference.** | Still the native rasterizer, at native precision, at ires>1. It answers "what does the SUBSTRATE draw", never "what does the HARDWARE draw". |
 | **The guest's own DISPATCH TABLES** (e.g. `0x80014DB8`, `0x80014A70`, with their no-op arms) | **"Does vanilla submit/draw this node?" — a TRUE oracle**, because it is DATA IN THE GAME, not a render path, so no renderer decision can contaminate it. | Answers submission, not appearance. Says nothing about colour, order or occlusion. **This is what kanban #77 fell back on when psx_render turned out dead, and it is the only thing in that investigation that held up.** |
 | **beetle-psx** (`vendor/beetle-psx`) | It is a real PSX rasterizer and would be a TRUE PIXEL oracle. | Deliberately used only as a GTE/MDEC/SPU/CHD hardware backend, never as a reference renderer. Standing it up as a diagnostic-only reference is the one unexplored route to an actual picture oracle. |
-| **The interpreter + software-GPU second Core** (this document) | Would answer pixels AND state, in lockstep, reaching scenes the recomp cannot. | **Not built.** |
+| **The interpreter + software-GPU second Core** (this document) | Answers pixels AND state for scenes reached by the live `PSXPORT_SBS_MODE=oracle` harness. | Its boot-window proof is limited: the 2026-08-28 Spyro run reaches 120 fields and exits cleanly, but retains five stack-only differing bytes and leaves one owned address unreached; it is not whole-game equivalence. |
 
 **THE WORKING RULE, from the one investigation where this bit hardest:** when you catch yourself asking
 "does vanilla draw this?", do not reach for a renderer. Reach for the guest's submission path — the

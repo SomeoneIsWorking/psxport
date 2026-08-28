@@ -199,6 +199,10 @@ struct GameConfig {
     // queries are valid shipping paths. The legacy field name is retained only to preserve aggregate
     // layout while adapter consumers migrate to PlatformHlePlan::vsyncAddress.
     uint32_t vsyncTrap;
+
+    // Measured libgpu DrawSync entry. The host GPU consumes GP0/DMA work synchronously, so the
+    // framework can complete this hardware wait without entering the guest's VSync-based body.
+    uint32_t drawSync;
   } hle;
 
   // --- adapter-only rendering policy --------------------------------------------------------------

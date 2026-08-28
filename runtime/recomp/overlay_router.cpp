@@ -413,6 +413,9 @@ void rec_dispatch(Core *c, uint32_t addr) {
   // interpreter handles overlay/non-recompiled code natively (no fail-fast miss), which is exactly why
   // the oracle uses it. The native port Core (use_interp==0) takes the substrate route below.
   if (c->use_interp) {
+    if (overrides::dispatchOracle(c, addr)) {
+      return;
+    }
     interp_run(c, addr);
     return;
   }

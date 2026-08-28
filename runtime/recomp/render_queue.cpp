@@ -528,15 +528,21 @@ void RenderQueue::emitItemStream(Core *core, std::span<const RqItem *const> stre
     }
     PainterObjectPlan plan = planPainterItemStream(run);
     if (!plan.accepted() || plan.stats.partitioned_items != run.size()) {
+      const RqItem *bad = plan.stats.refusal_item < run.size() ? run[plan.stats.refusal_item] : nullptr;
       lucent::error("rq",
-                    "FATAL: painter plan refused={} flush={} scanned={} grouped={} partitioned={}/{} item={}",
+                    "FATAL: painter plan refused={} flush={} scanned={} grouped={} partitioned={}/{} item={} nv={} "
+                    "layer={} order={} painter={:08X}",
                     (int)plan.stats.refusal,
                     run.front()->flush_ordinal,
                     plan.stats.items_scanned,
                     plan.stats.grouped_faces,
                     plan.stats.partitioned_items,
                     run.size(),
-                    plan.stats.refusal_item);
+                    plan.stats.refusal_item,
+                    bad ? bad->nv : 0,
+                    bad ? bad->layer : 0,
+                    bad ? bad->order_mode : 0,
+                    bad ? bad->painter_object : 0);
       abort();
     }
     static const lucent::Channel painterPlanChannel{"painterplan"};
@@ -629,6 +635,10 @@ void RenderQueue::emitItemStream(Core *core, std::span<const RqItem *const> stre
         abort();
       }
     }
+    for (size_t i : plan.ordinary_items_after_ranges) {
+      mPainterPresentationRank = plan.presentation_ranks[i];
+      emitItem(core, run[i]);
+    }
     mPainterRegrouping = false;
     runBegin = runEnd;
   }
@@ -694,8 +704,11 @@ void RenderQueue::zfightScan(Core *core) {
     if (it->semi || it->order_mode != RQ_OM_DEPTH || !it->depth) {
       continue;
     }
-    ++candidates;
     int nv = it->nv ? it->nv : 4;
+    if (nv < 3) {
+      continue; // line-list items have no triangle area to scan
+    }
+    ++candidates;
     const float *fx = it->has_xyf ? it->xsf : nullptr;
     const float *fy = it->has_xyf ? it->ysf : nullptr;
     for (int t = 0; t < (nv == 4 ? 2 : 1); t++) { // tris: (0,1,2) and for a quad also (1,2,3)
@@ -1254,6 +1267,24 @@ void RenderQueue::emitItem(Core *core, const RqItem *it) {
                        it->da_y1,
                        it->tp_blend);
     }
+  } else if (nv == 2) {
+    RQ_SETVD(depth);
+    RQ_SETXYF(0);
+    gpu_vk_draw_line(core,
+                     xs[0],
+                     ys[0],
+                     rs[0],
+                     gs[0],
+                     bs[0],
+                     xs[1],
+                     ys[1],
+                     rs[1],
+                     gs[1],
+                     bs[1],
+                     it->da_x0,
+                     it->da_y0,
+                     it->da_x1,
+                     it->da_y1);
   } else {
     RQ_SETVD(depth);
     RQ_SETXYF(0);
@@ -1716,6 +1747,9 @@ struct RqFaceSetup {
 static RqFaceSetup rq_face_setup(const RqItem &it) {
   const int nv = it.nv ? it.nv : 4;
   RqFaceSetup f;
+  if (nv < 3) {
+    return f;
+  }
   f.ntri = (nv == 4 ? 2 : 1);
   for (int t = 0; t < f.ntri; t++) {
     const int i0 = t, i1 = t + 1, i2 = t + 2;

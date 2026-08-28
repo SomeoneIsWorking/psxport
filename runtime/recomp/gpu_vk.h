@@ -9,6 +9,9 @@
 #include <stdint.h>
 struct Core;
 
+inline constexpr float kGpuNative3dMin = 0.0625f;
+inline constexpr float kGpuNative3dMax = 0.9375f;
+
 // Widescreen geometry. Per-core, because widescreen never touches the PSX oracle: one process can
 // hold a wide user core and a pure 4:3 oracle core at the same time.
 //   wide_engine     — is this core rendering wider than 4:3 (and not the oracle)?
@@ -37,9 +40,11 @@ void gpu_vk_set_xyf(Core *core, const float *xf, const float *yf); // sub-pixel 
 void gpu_vk_set_order_override(Core *core, uint32_t seq);
 void gpu_vk_set_painter_material(Core *core, int gouraud, int dither);
 bool gpu_vk_order_bias_distinguishes(uint32_t seq);
+float gpu_zbias_unit();
 // The exact normalized-depth mapping used by world vertices, and the next input whose mapped D32
 // value is representably distinct. Key-order ties use these instead of guessing an input epsilon.
 float gpu_vk_map_3d_depth(float depth);
+float gpu_vk_map_biased_3d_depth(float depth, float bias);
 float gpu_vk_map_ordered_3d_depth(float depth, uint32_t order);
 enum class GpuWorldDepthCompare { GreaterOrEqual };
 inline constexpr GpuWorldDepthCompare kGpuWorldDepthCompare = GpuWorldDepthCompare::GreaterOrEqual;
@@ -82,6 +87,21 @@ void gpu_vk_draw_tri(Core *core,
                      int day0,
                      int dax1,
                      int day1);
+void gpu_vk_draw_line(Core *core,
+                      int x0,
+                      int y0,
+                      int r0,
+                      int g0,
+                      int b0,
+                      int x1,
+                      int y1,
+                      int r1,
+                      int g1,
+                      int b1,
+                      int dax0,
+                      int day0,
+                      int dax1,
+                      int day1);
 void gpu_vk_draw_tritri(Core *core,
                         const int *xs,
                         const int *ys,

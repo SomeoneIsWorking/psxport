@@ -79,6 +79,7 @@ static inline GpuDevice &gdev() {
 #define s_img_w (gdev().s_img_w)
 #define s_img_h (gdev().s_img_h)
 #define s_tri_pipe (gdev().s_tri_pipe)
+#define s_line_pipe (gdev().s_line_pipe)
 #define s_tritex_pipe (gdev().s_tritex_pipe)
 #define s_semi_pipe (gdev().s_semi_pipe)
 #define s_decode_pipe (gdev().s_decode_pipe)
@@ -124,38 +125,7 @@ struct PresentPC {
 // near-black semi vertex was meant to fade invisibly into whatever was behind it (2026-07-01 dark-outline
 // root cause). See shaders_gpu/{tri,tritex,decode,encode,trisemi_hw}.{vert,frag} + trisemi_hw.frag's header
 // comment for the per-mode blend-factor derivation. Single batch (SBS dual-pane is Pass 3).
-#define NATIVE_3D_MIN 0.0625f
-#define NATIVE_3D_MAX 0.9375f
 static constexpr SDL_GPUCompareOp kWorldDepthCompare = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
-static inline float ord3d(float d) {
-  return NATIVE_3D_MIN + d * (NATIVE_3D_MAX - NATIVE_3D_MIN);
-}
-float gpu_vk_map_3d_depth(float depth) {
-  return ord3d(depth);
-}
-float gpu_vk_next_distinct_3d_depth(float depth, float nearer_limit) {
-  const float mapped = ord3d(depth);
-  while (depth < nearer_limit) {
-    const float next = std::nextafter(depth, nearer_limit);
-    if (!(next < nearer_limit)) {
-      return nearer_limit;
-    }
-    depth = next;
-    if (ord3d(depth) > mapped) {
-      return depth;
-    }
-  }
-  return nearer_limit;
-}
-// 3D-band depth with the paint-order tiebreak folded in and clamped to the 3D band. When two world prims
-// share a (near-)equal real depth, the later-emitted one gets a marginally larger value and wins the
-// GREATER_OR_EQUAL depth test uniformly (deterministic, motion-stable), replacing the per-pixel
-// interpolation-noise coin-flip that produced the barrel/decoration z-fight flicker. Clamp to NATIVE_3D_MAX:
-// two prims that both hit the ceiling still resolve later-wins (paint order), and stay below the 2D bands.
-static inline float ord3d_b(float d, float bias) {
-  float o = ord3d(d) + bias;
-  return o < NATIVE_3D_MIN ? NATIVE_3D_MIN : (o > NATIVE_3D_MAX ? NATIVE_3D_MAX : o);
-}
 #define TRI_CAP 196608 // max batched vertices (= 65536 tris)
 #define TEX_CAP 196608
 // 2D (non-world) batch caps — bug #55: HUD/menu/2D-layer content is a small fraction of the 3D world's
@@ -720,18 +690,20 @@ static SDL_GPUGraphicsPipeline *make_fullscreen_offscreen_pipeline(const uint32_
 // A geometry pipeline: a vertex-buffer pipeline rendering into the R16_UINT VRAM color target + a D32
 // depth target. `depth_write` distinguishes opaque (test+write) from semi (test, no write). `depth_only`
 // (bug #55 part 3, s_semi_cover_pipe) drops the color target entirely — a pure depth-marking pass.
-static SDL_GPUGraphicsPipeline *make_geom_pipeline(const uint32_t *vs_code,
-                                                   unsigned vs_len,
-                                                   const uint32_t *fs_code,
-                                                   unsigned fs_len,
-                                                   Uint32 pitch,
-                                                   const SDL_GPUVertexAttribute *attrs,
-                                                   Uint32 n_attr,
-                                                   Uint32 num_samplers,
-                                                   bool depth_write,
-                                                   Uint32 num_uniforms = 0,
-                                                   bool depth_only = false,
-                                                   SDL_GPUCompareOp compare = kWorldDepthCompare) {
+static SDL_GPUGraphicsPipeline *
+make_geom_pipeline(const uint32_t *vs_code,
+                   unsigned vs_len,
+                   const uint32_t *fs_code,
+                   unsigned fs_len,
+                   Uint32 pitch,
+                   const SDL_GPUVertexAttribute *attrs,
+                   Uint32 n_attr,
+                   Uint32 num_samplers,
+                   bool depth_write,
+                   Uint32 num_uniforms = 0,
+                   bool depth_only = false,
+                   SDL_GPUCompareOp compare = kWorldDepthCompare,
+                   SDL_GPUPrimitiveType primitive = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST) {
   SDL_GPUShader *vs = make_shader(vs_code, vs_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
   SDL_GPUShader *fs = make_shader(fs_code, fs_len, SDL_GPU_SHADERSTAGE_FRAGMENT, num_samplers, num_uniforms);
   SDL_GPUVertexBufferDescription vbd = {};
@@ -747,7 +719,7 @@ static SDL_GPUGraphicsPipeline *make_geom_pipeline(const uint32_t *vs_code,
   gp.vertex_input_state.num_vertex_buffers = 1;
   gp.vertex_input_state.vertex_attributes = attrs;
   gp.vertex_input_state.num_vertex_attributes = n_attr;
-  gp.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+  gp.primitive_type = primitive;
   gp.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
   gp.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
   gp.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
@@ -922,6 +894,7 @@ void GpuVkState::ensure_targets() {
     GPUCHK(*x, "vbuf xfer");
   };
   mkbuf(sizeof(TriVtx) * TRI_CAP, &s_tri_vbuf, &s_tri_xfer);
+  mkbuf(sizeof(TriVtx) * TRI_CAP, &s_line_vbuf, &s_line_xfer);
   mkbuf(sizeof(TexVtx) * TEX_CAP, &s_tex_vbuf, &s_tex_xfer);
   mkbuf(sizeof(TexVtx) * TEX_CAP, &s_painter_tex_vbuf, &s_painter_tex_xfer);
   mkbuf(sizeof(TriVtx) * TRI_CAP, &s_painter_tri_vbuf, &s_painter_tri_xfer);
@@ -1050,6 +1023,19 @@ static void create_3d_pipelines(void) {
                                   0,
                                   true,
                                   1); // +1 fragment uniform: ires scale (the draw-area clip needs it)
+  s_line_pipe = make_geom_pipeline(spv_g_tri_vert,
+                                   spv_g_tri_vert_len,
+                                   spv_g_tri_frag,
+                                   spv_g_tri_frag_len,
+                                   sizeof(TriVtx),
+                                   tri_attr,
+                                   6,
+                                   0,
+                                   true,
+                                   1,
+                                   false,
+                                   kWorldDepthCompare,
+                                   SDL_GPU_PRIMITIVETYPE_LINELIST);
   s_tritex_pipe = make_geom_pipeline(spv_g_tritex_vert,
                                      spv_g_tritex_vert_len,
                                      spv_g_tritex_frag,
@@ -1416,7 +1402,9 @@ static void render_pass_set(SDL_GPUCommandBuffer *cmd,
                             const int semiN[GGS_NUM_BLEND_MODES],
                             bool stampSemiCoverage = false,
                             bool clearColorBlack = false,
-                            int phase = 0) {
+                            int phase = 0,
+                            SDL_GPUBuffer *lineVbuf = nullptr,
+                            int lineN = 0) {
   int semiTotal = 0;
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     semiTotal += semiN[m];
@@ -1450,6 +1438,14 @@ static void render_pass_set(SDL_GPUCommandBuffer *cmd,
       int32_t ires_scale_pc = scale;
       SDL_PushGPUFragmentUniformData(cmd, 0, &ires_scale_pc, sizeof ires_scale_pc);
       SDL_DrawGPUPrimitives(rp, triN, 1, 0, 0);
+    }
+    if (lineN) {
+      SDL_BindGPUGraphicsPipeline(rp, s_line_pipe);
+      bb.buffer = lineVbuf;
+      SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+      int32_t ires_scale_pc = scale;
+      SDL_PushGPUFragmentUniformData(cmd, 0, &ires_scale_pc, sizeof ires_scale_pc);
+      SDL_DrawGPUPrimitives(rp, lineN, 1, 0, 0);
     }
     if (texN) {
       SDL_BindGPUGraphicsPipeline(rp, s_tritex_pipe);
@@ -1568,7 +1564,7 @@ static void render_pass_set(SDL_GPUCommandBuffer *cmd,
 // True when this frame's geometry batch received nothing — the same accounting render_geom does for
 // its `total`, hoisted so the present path can decide whether there is anything new to composite.
 static bool geom_batch_empty(GpuVkState &g) {
-  int total = g.s_tri_n + g.s_tex_n + g.s_painter_tex_n + g.s_painter_tri_n;
+  int total = g.s_tri_n + g.s_line_n + g.s_tex_n + g.s_painter_tex_n + g.s_painter_tri_n;
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     total += g.s_semi_n[m];
   }
@@ -1602,11 +1598,11 @@ static void render_geom(GpuVkState &g,
       semi2d_total[band] += g.s_semi2d_n[band][m];
     }
   }
-  *dtri = g.s_tri_n;
+  *dtri = g.s_tri_n + g.s_line_n;
   *dtex = g.s_tex_n;
   *dsemi = semi_total; // 3D-world-only counts, as before the split
-  const bool has3d = (g.s_tri_n + g.s_tex_n + semi_total) > 0;
-  int total = g.s_tri_n + g.s_tex_n + g.s_painter_tex_n + g.s_painter_tri_n + semi_total;
+  const bool has3d = (g.s_tri_n + g.s_line_n + g.s_tex_n + semi_total) > 0;
+  int total = g.s_tri_n + g.s_line_n + g.s_tex_n + g.s_painter_tex_n + g.s_painter_tri_n + semi_total;
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
     total += g.s_tri2d_n[band] + g.s_tex2d_n[band] + semi2d_total[band];
   }
@@ -1677,6 +1673,11 @@ static void render_geom(GpuVkState &g,
     memcpy(p, g.s_tri_buf, (size_t)g.s_tri_n * sizeof(TriVtx));
     SDL_UnmapGPUTransferBuffer(s_dev, g.s_tri_xfer);
   }
+  if (g.s_line_n) {
+    void *p = SDL_MapGPUTransferBuffer(s_dev, g.s_line_xfer, true);
+    memcpy(p, g.s_line_buf, (size_t)g.s_line_n * sizeof(TriVtx));
+    SDL_UnmapGPUTransferBuffer(s_dev, g.s_line_xfer);
+  }
   if (g.s_tex_n) {
     void *p = SDL_MapGPUTransferBuffer(s_dev, g.s_tex_xfer, true);
     memcpy(p, g.s_tex_buf, (size_t)g.s_tex_n * sizeof(TexVtx));
@@ -1744,6 +1745,7 @@ static void render_geom(GpuVkState &g,
     SDL_UploadToGPUBuffer(cp, &s, &d, false);
   };
   upv(g.s_tri_xfer, g.s_tri_vbuf, g.s_tri_n, sizeof(TriVtx));
+  upv(g.s_line_xfer, g.s_line_vbuf, g.s_line_n, sizeof(TriVtx));
   upv(g.s_tex_xfer, g.s_tex_vbuf, g.s_tex_n, sizeof(TexVtx));
   upv(g.s_painter_tex_xfer, g.s_painter_tex_vbuf, g.s_painter_tex_n, sizeof(TexVtx));
   upv(g.s_painter_tri_xfer, g.s_painter_tri_vbuf, g.s_painter_tri_n, sizeof(TriVtx));
@@ -1823,7 +1825,9 @@ static void render_geom(GpuVkState &g,
                   g.s_semi_n,
                   false,
                   false,
-                  1);
+                  1,
+                  g.s_line_vbuf,
+                  g.s_line_n);
   // Painter objects: clear the reusable local target per object, replay that object's unified authored
   // range with ALWAYS/write, then export the winning fragment's packed color + actual interpolated D32
   // through the ordinary world GE/write test. TexVtx ord carries the same global submit-order epsilon as
@@ -1991,7 +1995,9 @@ static void render_geom(GpuVkState &g,
                   g.s_semi_n,
                   false,
                   false,
-                  2);
+                  2,
+                  g.s_line_vbuf,
+                  g.s_line_n);
   render_pass_set(cmd,
                   C,
                   Cd,
@@ -2976,105 +2982,6 @@ void gpu_vk_vram_raw(Core *core, const char *path) {
   lucent::info("gpu_vram", "wrote RAW {} ({}x{} u16)", path ? path : "(null)", VRAM_W, VRAM_H);
 }
 
-// ---- per-prim state setters (depth/order; consumed by the 3D raster) --------------------------------
-void GpuVkState::set_vd(const float *d3) {
-  s_vd = d3;
-}
-void GpuVkState::set_vd_n(const float *d3) {
-  s_vdn = d3;
-}
-void GpuVkState::set_xyf(const float *xf, const float *yf) {
-  s_xf = xf;
-  s_yf = yf;
-}
-// Paint-order z-fight TIEBREAK. ZBIAS_UNIT = the depth nudge per emit-order step; ZBIAS_MAX = the reserved
-// headroom cap (the accumulated bias never exceeds this, so it can never push a 3D prim past NATIVE_3D_MAX
-// into the 2D/HUD band nor overrun a genuine world depth separation — measured world separations near the
-// camera are ~1e-3+, an order of magnitude above ZBIAS_MAX). Tunable via PSXPORT_ZBIAS for sweeps.
-// Exposed (non-static) for the zfight scanner (render_queue.cpp) so it can model the fix without a re-run.
-float gpu_zbias_unit() {
-  static float u = -1.f;
-  if (u < 0.f) {
-    const char *e = cfg_str("PSXPORT_ZBIAS");
-    u = e ? (float)atof(e) : 4e-7f;
-    if (u < 0.f) {
-      u = 0.f;
-    }
-  }
-  return u;
-}
-// The cap is a SWEEP knob too (PSXPORT_ZBIAS_MAX): raising the unit alone changes nothing once the
-// accumulated bias saturates, so a "can paint order resolve this at all?" experiment needs both. The
-// shipped default is unchanged; only a deliberate sweep moves it.
-static float zbias_max() {
-  static float m = -1.f;
-  if (m < 0.f) {
-    const char *e = cfg_str("PSXPORT_ZBIAS_MAX");
-    m = e ? (float)atof(e) : 1.5e-3f;
-    if (m < 0.f) {
-      m = 0.f;
-    }
-  }
-  return m;
-}
-float gpu_vk_map_ordered_3d_depth(float depth, uint32_t order) {
-  const float cap = zbias_max(), raw_bias = (float)order * gpu_zbias_unit();
-  return ord3d_b(depth, raw_bias > cap ? cap : raw_bias);
-}
-bool gpu_vk_order_bias_distinguishes(uint32_t seq) {
-  float u = gpu_zbias_unit(), m = zbias_max();
-  return u > 0.f && (double)seq * u < m;
-}
-void GpuVkState::set_order(unsigned idx) {
-  if (s_order_override >= 0) {
-    idx = (unsigned)s_order_override;
-    s_order_override = -1;
-  }
-  s_cur_ord = (float)(idx + 1) / 65536.0f;
-  if (s_cur_ord > 1.0f) {
-    s_cur_ord = 1.0f;
-  }
-  s_cur_ordn = s_cur_ord;
-  s_vd = 0;
-  s_vdn = 0;
-  s_xf = 0;
-  s_yf = 0;
-  const float cap = zbias_max();
-  float b = (float)idx * gpu_zbias_unit();
-  s_depth_bias = b > cap ? cap : b;
-}
-void GpuVkState::set_order_2d(unsigned idx) {
-  float t = (float)(idx + 1) / 65536.0f;
-  if (t > 1.0f) {
-    t = 1.0f;
-  }
-  s_cur_ord = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t;
-  s_vd = 0;
-}
-void GpuVkState::set_order_2d_n(unsigned idx) {
-  float t = (float)(idx + 1) / 65536.0f;
-  if (t > 1.0f) {
-    t = 1.0f;
-  }
-  s_cur_ordn = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t;
-  s_vdn = 0;
-}
-void GpuVkState::set_order_2d_bg(unsigned idx) {
-  float t = (float)(idx + 1) / 65536.0f;
-  if (t > 1.0f) {
-    t = 1.0f;
-  }
-  s_cur_ord = NATIVE_3D_MIN * t;
-  s_vd = 0;
-}
-void GpuVkState::set_order_2d_bg_n(unsigned idx) {
-  float t = (float)(idx + 1) / 65536.0f;
-  if (t > 1.0f) {
-    t = 1.0f;
-  }
-  s_cur_ordn = NATIVE_3D_MIN * t;
-  s_vdn = 0;
-}
 void GpuVkState::semi_group(int x0, int y0, int x1, int y1) {
   (void)x0;
   (void)y0;
@@ -3120,7 +3027,7 @@ void GpuVkState::frame_end(const uint16_t *svram, int frame) {
       lucent::info("preseq", "done: {} frames -> {}", s_preseq_idx, s_preseq_dir);
     }
   }
-  s_tri_n = s_tex_n = 0;
+  s_tri_n = s_line_n = s_tex_n = 0;
   s_painter_tex_n = s_painter_tri_n = s_painter_cmd_n = s_painter_ranges = s_painter_active = s_painter_overflow = 0;
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     s_semi_n[m] = 0;
@@ -3141,6 +3048,9 @@ void GpuVkState::frame_end(const uint16_t *svram, int frame) {
 static inline void ggs_alloc_batches(GpuVkState &g) {
   if (!g.s_tri_buf) {
     g.s_tri_buf = (TriVtx *)malloc(sizeof(TriVtx) * TRI_CAP);
+  }
+  if (!g.s_line_buf) {
+    g.s_line_buf = (TriVtx *)malloc(sizeof(TriVtx) * TRI_CAP);
   }
   if (!g.s_tex_buf) {
     g.s_tex_buf = (TexVtx *)malloc(sizeof(TexVtx) * TEX_CAP);
@@ -3176,13 +3086,13 @@ static inline void ggs_alloc_batches(GpuVkState &g) {
 // RQ_OM_DEPTH world prims (render_queue.cpp RQ_SETVD) and freshly cleared by set_order()/set_order_2d*
 // before every draw (see those bodies below) — so it is a reliable, always-current per-draw signal.
 // Non-3D prims are banded by their already-assigned order value: RQ_OM_2D_BG's set_order_2d_bg() writes
-// s_cur_ord in (0, NATIVE_3D_MIN], RQ_OM_2D_FG's set_order_2d() writes it in (NATIVE_3D_MAX, 1] — the
-// SAME non-overlapping bands render_geom's 3D-band clamp (ord3d_b) already relies on.
+// s_cur_ord in (0, kGpuNative3dMin], RQ_OM_2D_FG's set_order_2d() writes it in (kGpuNative3dMax, 1] — the
+// SAME non-overlapping bands render_geom's 3D-band clamp already relies on.
 static inline bool ggs_is_3d(const GpuVkState &g) {
   return g.s_vd != nullptr;
 }
 static inline int ggs_2d_band(const GpuVkState &g) {
-  return g.s_cur_ord <= NATIVE_3D_MIN ? GGS_2D_BG : GGS_2D_FG;
+  return g.s_cur_ord <= kGpuNative3dMin ? GGS_2D_BG : GGS_2D_FG;
 }
 
 void GpuVkState::draw_tri(int x0,
@@ -3218,7 +3128,7 @@ void GpuVkState::draw_tri(int x0,
             r0 / 255.f,
             g0 / 255.f,
             b0 / 255.f,
-            ord3d_b(s_vd[0], s_depth_bias),
+            gpu_vk_map_biased_3d_depth(s_vd[0], s_depth_bias),
             gf,
             df,
             {da[0], da[1], da[2], da[3]}};
@@ -3227,7 +3137,7 @@ void GpuVkState::draw_tri(int x0,
             r1 / 255.f,
             g1 / 255.f,
             b1 / 255.f,
-            ord3d_b(s_vd[1], s_depth_bias),
+            gpu_vk_map_biased_3d_depth(s_vd[1], s_depth_bias),
             gf,
             df,
             {da[0], da[1], da[2], da[3]}};
@@ -3236,7 +3146,7 @@ void GpuVkState::draw_tri(int x0,
             r2 / 255.f,
             g2 / 255.f,
             b2 / 255.f,
-            ord3d_b(s_vd[2], s_depth_bias),
+            gpu_vk_map_biased_3d_depth(s_vd[2], s_depth_bias),
             gf,
             df,
             {da[0], da[1], da[2], da[3]}};
@@ -3266,7 +3176,7 @@ void GpuVkState::draw_tri(int x0,
           r0 / 255.f,
           g0 / 255.f,
           b0 / 255.f,
-          ord3d_b(s_vd[0], s_depth_bias),
+          gpu_vk_map_biased_3d_depth(s_vd[0], s_depth_bias),
           0,
           0,
           {da[0], da[1], da[2], da[3]}};
@@ -3275,7 +3185,7 @@ void GpuVkState::draw_tri(int x0,
           r1 / 255.f,
           g1 / 255.f,
           b1 / 255.f,
-          ord3d_b(s_vd[1], s_depth_bias),
+          gpu_vk_map_biased_3d_depth(s_vd[1], s_depth_bias),
           0,
           0,
           {da[0], da[1], da[2], da[3]}};
@@ -3284,11 +3194,52 @@ void GpuVkState::draw_tri(int x0,
           r2 / 255.f,
           g2 / 255.f,
           b2 / 255.f,
-          ord3d_b(s_vd[2], s_depth_bias),
+          gpu_vk_map_biased_3d_depth(s_vd[2], s_depth_bias),
           0,
           0,
           {da[0], da[1], da[2], da[3]}};
   s_tri_n += 3;
+}
+
+void GpuVkState::draw_line(int x0,
+                           int y0,
+                           int r0,
+                           int g0,
+                           int b0,
+                           int x1,
+                           int y1,
+                           int r1,
+                           int g1,
+                           int b1,
+                           int dax0,
+                           int day0,
+                           int dax1,
+                           int day1) {
+  ggs_alloc_batches(*this);
+  if (s_line_n + 2 > TRI_CAP) {
+    return;
+  }
+  TriVtx *v = ((TriVtx *)s_line_buf) + s_line_n;
+  const int xs[2] = {x0, x1};
+  const int ys[2] = {y0, y1};
+  const int rs[2] = {r0, r1};
+  const int gs[2] = {g0, g1};
+  const int bs[2] = {b0, b1};
+  const int32_t da[4] = {dax0, day0, dax1, day1};
+  const float ord0 = s_vd ? gpu_vk_map_biased_3d_depth(s_vd[0], s_depth_bias) : s_cur_ord;
+  const float ord1 = s_vd ? gpu_vk_map_biased_3d_depth(s_vd[1], s_depth_bias) : s_cur_ord;
+  for (int i = 0; i < 2; ++i) {
+    v[i] = {(float)xs[i],
+            (float)ys[i],
+            rs[i] / 255.f,
+            gs[i] / 255.f,
+            bs[i] / 255.f,
+            i == 0 ? ord0 : ord1,
+            0,
+            0,
+            {da[0], da[1], da[2], da[3]}};
+  }
+  s_line_n += 2;
 }
 // Fill 3 textured vertices: per-vertex pos/uv/color + shared page/CLUT/window/clip/semi/blend state. Uses
 // the sub-pixel float XY (s_xf/s_yf) for the world path when set, else the integer xs/ys (2D/HUD).
@@ -3352,7 +3303,7 @@ void GpuVkState::tex_emit(TexVtx *t,
     t[i].da[1] = day0;
     t[i].da[2] = dax1;
     t[i].da[3] = day1;
-    t[i].ord = s_vd ? ord3d_b(s_vd[i], s_depth_bias) : s_cur_ord;
+    t[i].ord = s_vd ? gpu_vk_map_biased_3d_depth(s_vd[i], s_depth_bias) : s_cur_ord;
   }
 }
 void GpuVkState::draw_tritri(const int *xs,
@@ -3800,10 +3751,10 @@ void GpuVkState::tritest() {
     };
     lucent::info("gpu_selftest",
                  "painter ord inputs ordinary-left={:.9f} painter-near={:.9f} painter-far={:.9f} ordinary-right={:.9f}",
-                 ord3d_b(.20f, 0),
-                 ord3d_b(.80f, gpu_zbias_unit()),
-                 ord3d_b(.30f, 2 * gpu_zbias_unit()),
-                 ord3d_b(.70f, 3 * gpu_zbias_unit()));
+                 gpu_vk_map_biased_3d_depth(.20f, 0),
+                 gpu_vk_map_biased_3d_depth(.80f, gpu_zbias_unit()),
+                 gpu_vk_map_biased_3d_depth(.30f, 2 * gpu_zbias_unit()),
+                 gpu_vk_map_biased_3d_depth(.70f, 3 * gpu_zbias_unit()));
     tri(false, 20, 150, .20f, 0, 0, 1);
     tri(false, 170, 310, .70f, 3, 0, 1);
     if (!painter_begin(77)) {
@@ -4300,6 +4251,23 @@ void gpu_vk_draw_tri(Core *core,
                      int dax1,
                      int day1) {
   core->game->gpu_vk.draw_tri(x0, y0, r0, g0, b0, x1, y1, r1, g1, b1, x2, y2, r2, g2, b2, dax0, day0, dax1, day1);
+}
+void gpu_vk_draw_line(Core *core,
+                      int x0,
+                      int y0,
+                      int r0,
+                      int g0,
+                      int b0,
+                      int x1,
+                      int y1,
+                      int r1,
+                      int g1,
+                      int b1,
+                      int dax0,
+                      int day0,
+                      int dax1,
+                      int day1) {
+  core->game->gpu_vk.draw_line(x0, y0, r0, g0, b0, x1, y1, r1, g1, b1, dax0, day0, dax1, day1);
 }
 void gpu_vk_draw_tritri(Core *core,
                         const int *xs,

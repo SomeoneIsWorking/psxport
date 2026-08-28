@@ -43,6 +43,7 @@ public:
 
   // ---- Pass 2: native 3D / textured raster PIPELINES (shared; per-Game targets on GpuVkState) ----
   SDL_GPUGraphicsPipeline *s_tri_pipe = nullptr;                  // flat opaque (depth test + write)
+  SDL_GPUGraphicsPipeline *s_line_pipe = nullptr;                 // flat opaque line (depth test + write)
   SDL_GPUGraphicsPipeline *s_tritex_pipe = nullptr;               // textured opaque (depth test + write)
   SDL_GPUGraphicsPipeline *s_semi_pipe[GGS_NUM_BLEND_MODES] = {}; // textured semi, real HW blend
   SDL_GPUGraphicsPipeline *s_decode_pipe = nullptr;               // fullscreen: packed 1555 -> float RGBA

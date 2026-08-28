@@ -23,6 +23,7 @@ struct Entry {
   const char *name;    // trace/ovhit label, or nullptr
   OverrideFn native;   // runs on the game core
   OverrideFn gen;      // runs on the oracle leg (== native for oracle-allowed primitives)
+  bool oracleAllowed;  // interpreter oracle may use native only for an explicit hardware/data owner
   uint64_t nativeHits; // core A (game) hit count
   uint64_t oracleHits; // core B (substrate) hit count
 };
@@ -152,7 +153,7 @@ void thunk(Core *c) {
 
 namespace overrides {
 
-void install(uint32_t addr, const char *name, OverrideFn native, OverrideFn gen, Setter setter) {
+void install(uint32_t addr, const char *name, OverrideFn native, OverrideFn gen, Setter setter, bool oracleAllowed) {
   const uint32_t k = norm(addr);
   int slot = lookup(k);
   if (slot < 0) {
@@ -187,7 +188,7 @@ void install(uint32_t addr, const char *name, OverrideFn native, OverrideFn gen,
     // by design (a `static bool done` guard, or register_overrides running per Game), and re-running
     // one is not an ownership conflict. Only a CHANGE of owner aborts.
     const Entry &e = g_tab[slot];
-    if (e.native != native || e.gen != gen) {
+    if (e.native != native || e.gen != gen || e.oracleAllowed != oracleAllowed) {
       // Most call sites reach here through engine_set_override_<mod>, which passes no name — so print
       // the handler POINTERS too (resolve with `addr2line -fe scratch/bin/tomba2_port <ptr>`) and name
       // the tool that lists both owners from source. A fatal you cannot act on is only half a fix.
@@ -216,6 +217,7 @@ void install(uint32_t addr, const char *name, OverrideFn native, OverrideFn gen,
   g_tab[slot].name = name;
   g_tab[slot].native = native;
   g_tab[slot].gen = gen;
+  g_tab[slot].oracleAllowed = oracleAllowed;
 
   // setter == nullptr: rec_dispatch interception only (no direct-call thunk) — see the header.
   if (setter) {
@@ -259,6 +261,28 @@ bool dispatch(Core *c, uint32_t addr) {
     return false;
   }
   runEntry(c, slot);
+  return true;
+}
+
+bool dispatchOracle(Core *c, uint32_t addr) {
+  int slot = lookup(norm(addr));
+  if (slot < 0 || !g_tab[slot].oracleAllowed) {
+    return false;
+  }
+  if (lucent::channel_on("dispatch")) {
+    Sbs *sbs = c->game ? c->game->sbs : nullptr;
+    lucent::debug("dispatch",
+                  "f{} core=B oracle-owner 0x{:08X} {} a0={:08X} a1={:08X} a2={:08X} a3={:08X}",
+                  sbs ? sbs->frame() : 0,
+                  g_tab[slot].addr,
+                  g_tab[slot].name ? g_tab[slot].name : "?",
+                  c->r[4],
+                  c->r[5],
+                  c->r[6],
+                  c->r[7]);
+  }
+  g_tab[slot].oracleHits++;
+  g_tab[slot].native(c);
   return true;
 }
 

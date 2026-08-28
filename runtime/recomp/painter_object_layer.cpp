@@ -122,6 +122,7 @@ PainterObjectPlan planPainterItemStream(std::span<const RqItem *const> stream, P
     out.refusal = why;
     out.refusal_item = item;
     plan.ordinary_items.clear();
+    plan.ordinary_items_after_ranges.clear();
     plan.commands.clear();
     plan.ranges.clear();
     plan.presentation_ranks.clear();
@@ -168,7 +169,32 @@ PainterObjectPlan planPainterItemStream(std::span<const RqItem *const> stream, P
     return refuse(PainterObjectRefusal::MixedReplayPolicy);
   }
   if (hasAuthored && firstOrdinaryWorld != SIZE_MAX) {
-    return refuse(PainterObjectRefusal::UnorderedWorldMix, firstOrdinaryWorld);
+    plan.ordinary_items.clear();
+    size_t lastGrouped = 0;
+    bool haveGrouped = false;
+    for (size_t i = 0; i < stream.size(); ++i) {
+      if (stream[i]->painter_object) {
+        lastGrouped = i;
+        haveGrouped = true;
+      }
+    }
+    for (size_t i = 0; i < stream.size(); ++i) {
+      const RqItem &item = *stream[i];
+      if (item.painter_object) {
+        continue;
+      }
+      if (item.layer == RQ_WORLD) {
+        // A line has no face area or material state for the painter replay. It is admissible only
+        // when it is already a trailing item; moving an interleaved line around the replay would
+        // change the guest's paint order, so retain the refusal for that case.
+        if (item.nv != 2 || !haveGrouped || i < lastGrouped) {
+          return refuse(PainterObjectRefusal::UnorderedWorldMix, i);
+        }
+        plan.ordinary_items_after_ranges.push_back(i);
+      } else {
+        plan.ordinary_items.push_back(i);
+      }
+    }
   }
 
   std::vector<uint32_t> sequences;
@@ -279,7 +305,7 @@ PainterObjectPlan planPainterItemStream(std::span<const RqItem *const> stream, P
       plan.ranges.push_back(range);
     }
   }
-  out.partitioned_items = plan.ordinary_items.size() + plan.commands.size();
+  out.partitioned_items = plan.ordinary_items.size() + plan.ordinary_items_after_ranges.size() + plan.commands.size();
   if (out.partitioned_items != stream.size()) {
     return refuse(PainterObjectRefusal::TooManyFaces);
   }

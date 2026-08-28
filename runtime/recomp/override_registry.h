@@ -60,7 +60,12 @@ typedef void (*Setter)(uint32_t, OverrideFn);
 //   - nullptr: rec_dispatch interception ONLY. Direct `func_X(c)` callers fall through to the gen body
 //     (substrate) unchanged — required where a direct call must stay on the substrate (e.g. an
 //     intra-shard call the port deliberately leaves unhooked).
-void install(uint32_t addr, const char *name, OverrideFn native, OverrideFn gen, Setter setter = nullptr);
+void install(uint32_t addr,
+             const char *name,
+             OverrideFn native,
+             OverrideFn gen,
+             Setter setter = nullptr,
+             bool oracleAllowed = false);
 
 // rec_dispatch interception point. Runs the entry (native or gen, per the oracle leg) and returns true
 // if `addr` is registered; false lets rec_dispatch route normally. Intercepting here — rather than only
@@ -68,6 +73,12 @@ void install(uint32_t addr, const char *name, OverrideFn native, OverrideFn gen,
 // not resident in guest RAM" property that the old EngineOverrides::run() provided (gen bodies are
 // always linked, independent of overlay residency).
 bool dispatch(Core *c, uint32_t addr);
+
+// Interpreter-oracle interception point for explicitly hardware/data-only owners. The flat
+// interpreter does not execute generated wrappers, so ordinary raw shard overrides are invisible
+// there. An owner opts in by passing oracleAllowed=true; all game-logic owners remain unavailable
+// to the oracle and continue to execute as guest instructions.
+bool dispatchOracle(Core *c, uint32_t addr);
 
 // COVERAGE — how much of what we OWN did a run actually execute? Fills `total` with the number of
 // registered addresses and `unreached` with how many were never dispatched on either core.

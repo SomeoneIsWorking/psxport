@@ -169,6 +169,15 @@ static void test_authored_domain_refuses_incomplete_or_ambiguous_order(void) {
 
   q = make_queue();
   add(*q, 1, 0, 0, 0, 0, 0, 0, replay(7, 9, 1, 0));
+  add(*q, 0, 1, 0);
+  q->items[1].nv = 2;
+  p = q->buildPainterObjectPlan();
+  CHECK(p.accepted());
+  CHECK_EQ(p.ordinary_items_after_ranges.size(), 1);
+  CHECK_EQ(p.ordinary_items_after_ranges[0], 1);
+
+  q = make_queue();
+  add(*q, 1, 0, 0, 0, 0, 0, 0, replay(7, 9, 1, 0));
   add(*q, 2, 1, 0);
   p = q->buildPainterObjectPlan();
   CHECK_EQ((int)p.stats.refusal, (int)PainterObjectRefusal::MixedReplayPolicy);

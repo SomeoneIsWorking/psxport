@@ -17,7 +17,9 @@
 // div/mult via cpu_div/mult helpers; GTE via gte_op/gte_read/write.
 #include "cfg.h"
 #include "core.h"
-#include "game.h"         // c->game->platform_hle
+#include "game.h" // c->game->platform_hle
+#include "interp_diagnostics.h"
+#include "override_registry.h"
 #include "platform_hle.h" // class PlatformHle — sync-primitive HLE lookup on an interpreted call target
 #include "recomp_iface.h" // seam: psxport_recomp()->rec_func_index (generated MAIN entry index)
 #include <lucent/log.h>
@@ -30,83 +32,6 @@
 // interp_coro_run / interp_run so they do NOT collide with dispatch.cpp's substrate shims of the old
 // rec_coro_run / rec_interp names (those shims now forward HERE when c->use_interp).
 void interp_run(Core *c, uint32_t pc);
-
-// Diagnostics: the PC currently being interpreted (read by the watchdog on a stall to report
-// WHERE the interpreter is spinning). Optional call trace (PSXPORT_INTERP_TRACE=<path>) logs
-// jal/jalr targets — used to follow the boot stub and find where it wedges.
-// g_interp_pc retired 2026-07-03 — Core::pc is set together on every interp step; no need for a shadow.
-// Entry address of the override currently being dispatched — set right before an override fn runs, so a
-// bracket override (one fn registered at SEVERAL scanned overlay entries) can super-call the exact body
-// it intercepted instead of a stale stored address. Read immediately on override entry.
-// g_override_tgt retired — per-Core Core::override_tgt (see core.h). Referenced here via c->override_tgt.
-void interp_trace_open(Core *c, const char *path) {
-  FILE *&fp = c->idiag.trace_fp;
-  if (path && *path) {
-    fp = fopen(path, "w");
-    if (!fp) {
-      perror(path);
-    } else {
-      setvbuf(fp, 0, _IOLBF, 0);
-    }
-  } else if (fp) {
-    fclose(fp);
-    fp = 0;
-  } // empty path = close
-}
-static inline void trace_call(InterpDiag &d, uint32_t from, uint32_t to) {
-  if (d.trace_fp) {
-    fprintf(d.trace_fp, "%08X -> %08X\n", from, to);
-  }
-}
-
-// ---- Differential NATIVE-CALL tracer (PSXPORT_NCALL_TRACE=<path>) ---------------------------------
-// Every native override / BIOS call the interpreter makes is logged with its inputs (a0-a3) and
-// outputs (v0/v1). Since the interpreter + memory are deterministic and (after the OOP refactor)
-// byte-identical, two builds produce the SAME native-call sequence until a native function behaves
-// differently. Diffing two traces, the FIRST line with identical inputs but different outputs is the
-// exact override whose conversion broke (a different return value / register effect); the first line
-// with differing INPUTS means an earlier call's memory side-effect diverged. tools/ncall_diff.py
-// runs both builds and reports that first divergence. Zero cost when the env var is unset.
-static void ncall_open_once(InterpDiag &d) {
-  if (d.ncall_init) {
-    return;
-  }
-  d.ncall_init = 1;
-  const char *p = cfg_str("PSXPORT_NCALL_TRACE");
-  if (p && *p) {
-    d.ncall_fp = fopen(p, "w");
-    if (!d.ncall_fp) {
-      perror(p);
-    } else {
-      setvbuf(d.ncall_fp, 0, _IOLBF, 0);
-    }
-  }
-}
-// kind: 'O' = address-keyed override, 'B' = BIOS vector. Logged AFTER the native fn runs.
-static inline void ncall_log(InterpDiag &d,
-                             char kind,
-                             uint32_t tgt,
-                             uint32_t a0,
-                             uint32_t a1,
-                             uint32_t a2,
-                             uint32_t a3,
-                             uint32_t v0,
-                             uint32_t v1) {
-  if (!d.ncall_fp) {
-    return;
-  }
-  fprintf(d.ncall_fp,
-          "%ld %c %08X  a:%08X %08X %08X %08X -> v:%08X %08X\n",
-          d.ncall_seq++,
-          kind,
-          tgt,
-          a0,
-          a1,
-          a2,
-          a3,
-          v0,
-          v1);
-}
 
 #define RS(i) (((i) >> 21) & 31)
 #define RT(i) (((i) >> 16) & 31)
@@ -740,11 +665,11 @@ void prof_dump(Core *c, const char *path) {
 static int coro_native_call(Core *c, uint32_t tgt) {
   if (is_bios(tgt)) {
     if (!c->idiag.ncall_init) {
-      ncall_open_once(c->idiag);
+      interp_ncall_open_once(c->idiag);
     }
     uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6], a3 = c->r[7];
     rec_dispatch_miss(c, tgt);
-    ncall_log(c->idiag, 'B', tgt, a0, a1, a2, a3, c->r[2], c->r[3]);
+    interp_ncall_log(c->idiag, 'B', tgt, a0, a1, a2, a3, c->r[2], c->r[3]);
     return 1;
   }
   // PLATFORM HLE (sync_overrides.cpp): PSX BIOS-library HW-sync leaves (libcd/libetc/libmdec) that
@@ -756,6 +681,13 @@ static int coro_native_call(Core *c, uint32_t tgt) {
       pf(c);
       return 1;
     }
+  }
+  // Explicit hardware/data-only owners are also visible to the interpreter oracle. Ordinary game
+  // overrides are intentionally excluded: letting the oracle call those would turn the comparison
+  // into native-vs-native execution. The registry opt-in is the narrow seam for synchronous disc
+  // boundaries that cannot be represented by the guest's no-IRQ wait loops.
+  if (overrides::dispatchOracle(c, tgt)) {
+    return 1;
   }
   // No-interpreter SUBSTRATE: if `tgt` is a statically-recompiled function, run its COMPILED body
   // (rec_dispatch -> the generated addr->func_XXXX switch -> gen_func / g_override) instead of letting
@@ -1112,7 +1044,7 @@ static void interp_flat(Core *c, uint32_t pc, uint32_t stop_ra) {
       uint32_t tgt = TGT(in, pc);
       if (op == 0x03) {
         c->r[31] = pc + 8;
-        trace_call(d, pc, tgt);
+        interp_trace_call(d, pc, tgt);
       } // jal: link + optional call trace
       ldhaz_step(d, c->mem_r32(pc + 4), pc + 4); // delay slot executes next
       exec_simple(c, c->mem_r32(pc + 4));
@@ -1139,7 +1071,7 @@ static void interp_flat(Core *c, uint32_t pc, uint32_t stop_ra) {
         if (rd) {
           c->r[rd] = link;
         }
-        trace_call(d, pc, tgt); // optional call trace (PSXPORT_INTERP_TRACE)
+        interp_trace_call(d, pc, tgt); // optional call trace (PSXPORT_INTERP_TRACE)
         if (coro_native_call(c, tgt)) {
           pc = coro_next_pc(c);
           continue;
@@ -1158,7 +1090,7 @@ static void interp_flat(Core *c, uint32_t pc, uint32_t stop_ra) {
         pc = coro_next_pc(c);
         continue;
       } // computed tail-call
-      trace_call(d, pc, tgt); // computed jump (switch table / jr-dispatch) — traced too
+      interp_trace_call(d, pc, tgt); // computed jump (switch table / jr-dispatch) — traced too
       pc = tgt;
       continue; // computed jump (switch table etc.)
     }

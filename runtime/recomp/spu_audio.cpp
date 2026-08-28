@@ -174,8 +174,16 @@ void spu_mix_game_audio(Core *c, const GameHooks *hooks, int16_t *buf, int frame
 // Called once per delivered display field: advance the SPU by that field's fractional share of its
 // clock and sample rates, drain the resulting frames, and queue them to the device. No-op when audio
 // is disabled/failed. Bounds the device queue: if the backlog exceeds kAudioQueueCapBytes we still
-// advance the SPU (so its mixer state
-// stays correct) but drop the rendered samples instead of queueing, letting the device drain.
+// advance the SPU (so its mixer state stays correct) but drop the rendered samples instead of
+// queueing, letting the device drain.
+void SpuAudio::frame() {
+  // SBS/dual-core sets diff_mode before stepping each Game. Those cores must advance their private
+  // SPU mixers even though neither is allowed to open or feed the host device; otherwise ordinary
+  // voice state is never evolved and the per-Core SPU write log cannot prove audio parity. The
+  // frameEx(false) path is deliberately logic-only and still renders into the discarded mix buffer.
+  frameEx(!(game && game->diff_mode));
+}
+
 void SpuAudio::frameEx(bool output) {
   // We advance + drain the SPU when SOMETHING consumes it: the SDL device (playback) OR a WAV
   // capture (PSXPORT_WAV, works headless). We ALSO advance it (output discarded) when an XA clip
@@ -190,7 +198,7 @@ void SpuAudio::frameEx(bool output) {
   bool sdl_on = false;
 #endif
   bool wav_on = output && mWav;
-  if (!sdl_on && !wav_on && !xa_stream_is_active(&game->xa)) {
+  if (!sdl_on && !wav_on && !xa_stream_is_active(&game->xa) && output) {
     return;
   }
 
