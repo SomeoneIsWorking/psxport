@@ -562,24 +562,25 @@ class Names:
     recompiled body CALLS for any target outside its own function set (the hand-written rec_dispatch
     in overlay_router.cpp, which range-routes to the right module's switch). All modules share the
     single router so a call from overlay code into MAIN (or vice versa) resolves correctly."""
-    def __init__(self, gen, wrap, dispatch, index, setov, ovtab, decls, shardpfx, disp,
+    def __init__(self, gen, wrap, dispatch, index, setov, getov, ovtab, decls, shardpfx, disp,
                  router="rec_dispatch"):
         self.gen, self.wrap, self.dispatch = gen, wrap, dispatch
-        self.index, self.setov, self.ovtab = index, setov, ovtab
+        self.index, self.setov, self.getov, self.ovtab = index, setov, getov, ovtab
         self.decls, self.shardpfx, self.disp = decls, shardpfx, disp
         self.router = router
 
 MAIN_NAMES = Names("gen_func", "func", "main_dispatch", "rec_func_index", "shard_set_override",
-                   "g_override", "rec_decls.h", "shard", "shard_disp")
+                   "shard_get_override", "g_override", "rec_decls.h", "shard", "shard_disp")
 STUB_NAMES = Names("stub_gen_func", "stub_func", "stub_dispatch", "stub_func_index",
-                   "stub_set_override", "g_stub_override", "stub_decls.h", "stub_shard", "stub_disp")
+                   "stub_set_override", "stub_get_override", "g_stub_override", "stub_decls.h",
+                   "stub_shard", "stub_disp")
 
 def overlay_names(tag):
     """Per-overlay module names keyed by a short tag (e.g. 'demo' from DEMO.BIN). All overlays share
     the global router (rec_dispatch); each has its own switch ov_<tag>_dispatch."""
     return Names(f"ov_{tag}_gen", f"ov_{tag}_func", f"ov_{tag}_dispatch", f"ov_{tag}_func_index",
-                 f"ov_{tag}_set_override", f"g_ov_{tag}_override", f"ov_{tag}_decls.h",
-                 f"ov_{tag}_shard", f"ov_{tag}_disp")
+                 f"ov_{tag}_set_override", f"ov_{tag}_get_override", f"g_ov_{tag}_override",
+                 f"ov_{tag}_decls.h", f"ov_{tag}_shard", f"ov_{tag}_disp")
 
 
 def _scan_jt_idiom(ins, a, jr_reg, lo, enhanced):
@@ -2622,6 +2623,7 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     hdr.append(f"extern OverrideFn {N.ovtab}[];")
     hdr.append(f"void {N.dispatch}(Core* c, uint32_t addr);")
     hdr.append(f"void {N.setov}(uint32_t addr, OverrideFn fn);")
+    hdr.append(f"OverrideFn {N.getov}(uint32_t addr);")
     write_if_changed(os.path.join(out_dir, N.decls), "\n".join(hdr) + "\n")
 
     # COROUTINE `jr $ra` sites, decided ONCE over the whole module. The partition is the function set
@@ -2713,6 +2715,8 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     d.append("    default: return -1;\n  }\n}")
     d.append(f"void {N.setov}(uint32_t addr, OverrideFn fn) "
              f"{{ int i = {N.index}(addr); if (i >= 0) {N.ovtab}[i] = fn; }}")
+    d.append(f"OverrideFn {N.getov}(uint32_t addr) "
+             f"{{ int i = {N.index}(addr); return i >= 0 ? {N.ovtab}[i] : nullptr; }}")
     d.append(f"void {N.dispatch}(Core* c, uint32_t addr) {{\n  switch ({link_space('addr')} & 0x1FFFFFFFu) {{")
     for a in funcs:
         d.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: {N.wrap}_{a:08X}(c); return;")

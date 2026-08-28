@@ -198,6 +198,20 @@ def test_diagnostic_checkpoint_empty_set_is_byte_identical_to_legacy_output():
         assert _emit_checkpoint_fixture(legacy) == _emit_checkpoint_fixture(explicit, set())
 
 
+def test_generated_raw_override_getter_reads_the_exact_slot():
+    with scratch_tempdir() as td:
+        files = _emit_checkpoint_fixture(td)
+        header = files[emit.MAIN_NAMES.decls].decode()
+        dispatch = files[emit.MAIN_NAMES.disp + ".c"].decode()
+
+        assert "OverrideFn shard_get_override(uint32_t addr);" in header
+        assert (
+            "OverrideFn shard_get_override(uint32_t addr) "
+            "{ int i = rec_func_index(addr); return i >= 0 ? g_override[i] : nullptr; }"
+            in dispatch
+        )
+
+
 def test_syscall_emission_carries_the_exact_guest_pc():
     instruction = decode(0x80012340, (0x54321 << 6) | 0x0C)
     assert emit.emit_simple(instruction) == "rec_syscall(c, 344865u, 0x80012340u);"

@@ -537,20 +537,22 @@ is reported as `<non-literal>` rather than dropped. It exits non-zero on a scan 
 
 ### Function reachability tracer
 
-`runtime/recomp/fntrace.cpp` owns `PSXPORT_FNTRACE=<main-entry>[,...]`. The tracer must claim a
-generated override slot, so installation order is semantic: both framework boot spines call
-`fntrace_init()` only after the game registers its overrides. The initializer parses and installs
-reporting once, then re-applies the same hooks after each later Core registration; this prevents a
-second Core from silently displacing a working diagnostic. `tests/test_fntrace_init.cpp` exercises
-that public shipping initializer with a synthetic `RecompRegistry`, including the other answer: a
-modeled game override displaces one hook and the second initializer call restores both hooks.
+`runtime/recomp/fntrace.cpp` owns `PSXPORT_FNTRACE=<main-entry>[,...]`. The tracer claims a generated
+override slot only after reading its exact current raw owner through the optional generated
+`shard_get_override` seam. Its hook temporarily restores and chains that owner, then reinstalls
+itself; only a genuinely empty prior slot redispatches to the retained generated body. Installation
+order remains semantic: both framework boot spines call `fntrace_init()` after game registration,
+and repeat initialization refreshes a site whose title/PlatformHle owner changed while retaining the
+prior owner where the tracer is still installed. Old generated substrates remain source-compatible
+through the getter's null default, but FNTRACE loudly installs nothing until they are regenerated.
+`tests/test_fntrace_init.cpp` exercises registry-owned and raw PlatformHle-shaped owners, repeat
+initialization, one-shot parsing/range rejection, and the missing-getter refusal.
 
 The initial wiring was also exercised in the Vagrant consumer: one bounded shipping run reported
 five requested boot/CD entries as `REACHED` and one valid but later entry as `NEVER CALLED`. Before
 this fix the same declared configuration was unread and printed neither class because no boot path
-called the initializer. The tracer still deliberately supports MAIN entries only and replaces an
-existing game override for the diagnostic run; those limits are stated in `fntrace.cpp` and are not
-papered over by a fallback.
+called the initializer. The tracer still deliberately supports MAIN entries only; that limit is
+stated in `fntrace.cpp` and is not papered over by a fallback.
 
 **Adding a test = adding ONE file.** `tests/CMakeLists.txt` GLOBs `tests/test_*.c` and
 `tests/test_*.cpp` (`CONFIGURE_DEPENDS`, so a plain `cmake --build` re-configures and picks up a new

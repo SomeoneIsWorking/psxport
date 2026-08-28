@@ -9,8 +9,9 @@
 //
 // This is the LINK-level half of the split: after conversion NO framework .cpp carries an undefined
 // reference to main_dispatch / rec_func_index / g_rec_overlays / g_rec_overlay_count /
-// shard_set_override / ov_*_set_override / gen_func_8009A420 — the standalone libpsxport.a archive
-// stops depending on generated/ symbols (proved by tools/smoke/psxport_smoke.cpp).
+// shard_set_override / shard_get_override / ov_*_set_override / gen_func_8009A420 — the standalone
+// libpsxport.a archive stops depending on generated/ symbols (proved by
+// tools/smoke/psxport_smoke.cpp).
 #pragma once
 #include <stdint.h>
 
@@ -54,6 +55,9 @@ struct RecompRegistry {
   void (*ov_a00_set_override)(uint32_t, RecOverrideFn);  // generated A00-overlay override setter
   void (*ov_game_set_override)(uint32_t, RecOverrideFn); // generated GAME-overlay override setter
   void (*guestMemset_gen)(Core *);                       // generated gen_func_8009A420 (guest memset body)
+  // Optional so existing generated substrates remain source-compatible. Diagnostics that must
+  // preserve an already-installed raw owner refuse to arm until the substrate is regenerated.
+  RecOverrideFn (*shard_get_override)(uint32_t) = nullptr;
 };
 
 // Install once at startup (before the first frame). Process-global; both SBS cores share it. Returns

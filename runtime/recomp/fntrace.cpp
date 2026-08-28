@@ -14,19 +14,15 @@
 // change, no per-block instrumentation, and no cost on any run that does not ask for it. Pick a callee
 // that is UNIQUE to the path you are asking about; a callee shared with other paths answers nothing.
 //
-// HOW IT RUNS THE REAL BODY. The generated dispatcher is `pc = addr; if (override) { override(c);
-// return; } gen(c);`, so an override cannot super-call without naming the generated symbol. Instead the
-// hook clears ITSELF, re-dispatches (which now finds no override and runs the real body), then puts
-// itself back. Behaviour is unchanged; only the log is added.
+// HOW IT PRESERVES THE SHIPPING OWNER. A generated raw-slot getter captures the exact handler already
+// installed at each address. The hook temporarily restores and calls that handler, then puts itself
+// back. Only a genuinely empty prior slot redispatches to the retained generated body. This is raw-slot
+// ownership, not a second interpretation of the title/PlatformHle registries.
 //
 // THREE LIMITS, STATED BECAUSE A SILENT ONE WOULD BE WORSE THAN THE GAP:
-//   * IT CLAIMS THE OVERRIDE SLOT, so tracing an address the port already overrides REPLACES that
-//     override for the run. The first version of this file installed before the game's registrations
-//     and was silently displaced by them: it reported "NEVER CALLED" for the CD loader, which runs 14
-//     times a boot. That is the worst failure a tracer can have, so init now runs LAST and wins. The
-//     cost is the mirror hazard: do NOT trace an address whose override DOES work (the game's CD
-//     loader serves disc data — replacing it stops loading). Tracing a VERIFIED native body is
-//     harmless, since re-dispatch runs the recompiled body the differential proved equivalent.
+//   * IT REQUIRES A GENERATED RAW-SLOT GETTER. Old generated substrates expose only a setter, so the
+//     tracer cannot know whether null redispatch would bypass a native title/PlatformHle owner. It
+//     loudly refuses to arm until those substrates are regenerated; it never guesses.
 //   * MAIN-module entries only. Overlay modules expose disp/idx through RecompRegistry but no
 //     per-overlay override setter, so an overlay address cannot be hooked this way. Trace a MAIN
 //     function the overlay path calls instead — which is the common case anyway.
@@ -60,6 +56,7 @@ struct Site {
   int first_frame;
   int abi_reported;
   unsigned long abi_violations;
+  RecOverrideFn prior;
 };
 
 // Callee-saved under the MIPS o32 ABI: a function that returns with any of these changed has broken
@@ -136,8 +133,12 @@ void hook(Core *c) {
   }
 
   const RecompRegistry *R = psxport_recomp();
-  R->shard_set_override(addr, nullptr); // step aside so the dispatcher runs the real body
-  R->main_dispatch(c, addr);
+  R->shard_set_override(addr, g_sites[i].prior); // step aside for the exact shipping owner
+  if (g_sites[i].prior) {
+    g_sites[i].prior(c);
+  } else {
+    R->main_dispatch(c, addr); // an empty slot authoritatively means the retained generated body
+  }
   R->shard_set_override(addr, hook); // and back, for the next call
 
   // PSXPORT_FNTRACE_SELFTEST=1 — deliberately clobber s0 after the call so the check below MUST fire.
@@ -234,6 +235,12 @@ void fntrace_init() {
     lucent::error("fntrace", "recomp registry not installed yet — call fntrace_init() after it");
     return;
   }
+  if (!R->shard_get_override) {
+    lucent::error("fntrace",
+                  "generated substrate has no raw override getter — FNTRACE is unavailable until "
+                  "the title is regenerated; no hooks were installed");
+    return;
+  }
   g_initialized = true;
   if (first_init) {
     char buf[512];
@@ -261,6 +268,13 @@ void fntrace_init() {
     return;
   }
   for (int i = 0; i < g_n; ++i) {
+    const RecOverrideFn current = R->shard_get_override(g_sites[i].addr);
+    // A repeated init sees our own hook on sites that no later registration touched. Retain the
+    // original owner there; otherwise capture the exact newly installed owner before taking back
+    // the diagnostic slot.
+    if (current != hook) {
+      g_sites[i].prior = current;
+    }
     R->shard_set_override(g_sites[i].addr, hook);
   }
   if (!first_init) {

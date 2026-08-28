@@ -1,86 +1,154 @@
-// test_fntrace_init — function tracing is installed after game overrides and
-// restored per Core.
-//
-// The tracer used to have a complete implementation and documented environment
-// variables, but no boot path called fntrace_init(). It therefore produced the
-// most dangerous diagnostic answer: silence that looked like an unreached
-// function. This test drives the same public initializer the shipping boot
-// paths call through a synthetic RecompRegistry.
+// test_fntrace_init — function tracing preserves the exact handler already installed in the
+// generated MAIN override slot, then restores its own hook after later title registration.
 #include "testutil.h"
 
+#include "core.h"
 #include "fntrace.h"
+#include "game.h"
+#include "override_registry.h"
 #include "recomp_iface.h"
 
 #include <cstdlib>
+#include <memory>
 
 namespace {
 
-constexpr uint32_t kFirst = 0x80001000u;
-constexpr uint32_t kSecond = 0x80002000u;
+constexpr uint32_t kRegistryOwned = 0x80001000u;
+constexpr uint32_t kRawOwned = 0x80002000u;
 
-struct Install {
-  uint32_t address;
-  RecOverrideFn handler;
-};
+RecOverrideFn g_slots[2] = {};
+int gSetCount = 0;
+int gDispatchCalls = 0;
+int gRegistryNativeCalls = 0;
+int gRegistryGenCalls = 0;
+int gRawOwnerCalls = 0;
+int gReplacementOwnerCalls = 0;
 
-Install g_installs[8] = {};
-int g_install_count = 0;
-
-void dispatch_stub(Core *, uint32_t) {}
-
-int index_stub(uint32_t address) {
-  return address == kFirst || address == kSecond ? 0 : -1;
-}
-
-void set_override_stub(uint32_t address, RecOverrideFn handler) {
-  if (g_install_count < static_cast<int>(sizeof g_installs / sizeof g_installs[0])) {
-    g_installs[g_install_count] = {address, handler};
+int slotFor(uint32_t address) {
+  if (address == kRegistryOwned) {
+    return 0;
   }
-  ++g_install_count;
+  if (address == kRawOwned) {
+    return 1;
+  }
+  return -1;
 }
 
-void game_override_stub(Core *) {}
+void dispatchStub(Core *, uint32_t) {
+  ++gDispatchCalls;
+}
+
+int indexStub(uint32_t address) {
+  return slotFor(address);
+}
+
+void setOverrideStub(uint32_t address, RecOverrideFn handler) {
+  const int slot = slotFor(address);
+  if (slot >= 0) {
+    g_slots[slot] = handler;
+  }
+  ++gSetCount;
+}
+
+RecOverrideFn getOverrideStub(uint32_t address) {
+  const int slot = slotFor(address);
+  return slot >= 0 ? g_slots[slot] : nullptr;
+}
+
+void registryNative(Core *) {
+  ++gRegistryNativeCalls;
+}
+
+void registryGen(Core *) {
+  ++gRegistryGenCalls;
+}
+
+void rawOwner(Core *) {
+  ++gRawOwnerCalls;
+}
+
+void replacementOwner(Core *) {
+  ++gReplacementOwnerCalls;
+}
 
 const RecompRegistry kRegistry = {
-    dispatch_stub,
-    index_stub,
+    dispatchStub,
+    indexStub,
     nullptr,
     0,
-    set_override_stub,
+    setOverrideStub,
+    nullptr,
+    nullptr,
+    nullptr,
+    getOverrideStub,
+};
+
+const RecompRegistry kMissingGetterRegistry = {
+    dispatchStub,
+    indexStub,
+    nullptr,
+    0,
+    setOverrideStub,
     nullptr,
     nullptr,
     nullptr,
 };
+
+void invokeSlot(Game &game, uint32_t address) {
+  const int slot = slotFor(address);
+  CHECK(slot >= 0);
+  CHECK(g_slots[slot] != nullptr);
+  game.core.pc = address;
+  g_slots[slot](&game.core);
+}
 
 } // namespace
 
-static void test_installs_and_reinstalls_after_game_overrides(void) {
-  CHECK_EQ(setenv("PSXPORT_FNTRACE", "80001000,80002000", 1), 0);
+static void test_preserves_registry_and_raw_owners(void) {
+  CHECK_EQ(setenv("PSXPORT_FNTRACE", "80001000,80002000,80003000", 1), 0);
   psxport_install_recomp(&kRegistry);
 
-  fntrace_init();
-  CHECK_EQ(g_install_count, 2);
-  CHECK_EQ(g_installs[0].address, kFirst);
-  CHECK_EQ(g_installs[1].address, kSecond);
-  CHECK(g_installs[0].handler != nullptr);
-  CHECK(g_installs[1].handler != nullptr);
-
-  // Model a later Core's game registration displacing one traced address. The
-  // next initializer call must restore both tracer hooks; merely remembering
-  // that initialization happened is insufficient.
-  set_override_stub(kFirst, game_override_stub);
-  CHECK_EQ(g_install_count, 3);
-  CHECK(g_installs[2].handler == game_override_stub);
+  overrides::install(kRegistryOwned, "test registry owner", registryNative, registryGen, setOverrideStub);
+  setOverrideStub(kRawOwned, rawOwner);
+  const int ownerInstallCount = gSetCount;
 
   fntrace_init();
-  CHECK_EQ(g_install_count, 5);
-  CHECK_EQ(g_installs[3].address, kFirst);
-  CHECK_EQ(g_installs[4].address, kSecond);
-  CHECK(g_installs[3].handler == g_installs[0].handler);
-  CHECK(g_installs[4].handler == g_installs[1].handler);
+  CHECK_EQ(gSetCount, ownerInstallCount + 2);
+  CHECK(g_slots[0] != nullptr);
+  CHECK(g_slots[1] != nullptr);
+
+  auto game = std::make_unique<Game>();
+  invokeSlot(*game, kRegistryOwned);
+  invokeSlot(*game, kRawOwned);
+  CHECK_EQ(gRegistryNativeCalls, 1);
+  CHECK_EQ(gRegistryGenCalls, 0);
+  CHECK_EQ(gRawOwnerCalls, 1);
+  CHECK_EQ(gDispatchCalls, 0);
+
+  // A later Core may reinstall a title/HLE owner. Repeat initialization must capture that new exact
+  // owner before restoring the tracer; an already-installed tracer on the other site keeps its
+  // original chained owner.
+  setOverrideStub(kRegistryOwned, replacementOwner);
+  const int replacementInstallCount = gSetCount;
+  CHECK_EQ(setenv("PSXPORT_FNTRACE", "80003000", 1), 0); // parsing is one-shot
+
+  fntrace_init();
+  CHECK_EQ(gSetCount, replacementInstallCount + 2);
+  invokeSlot(*game, kRegistryOwned);
+  invokeSlot(*game, kRawOwned);
+  CHECK_EQ(gReplacementOwnerCalls, 1);
+  CHECK_EQ(gRawOwnerCalls, 2);
+  CHECK_EQ(gDispatchCalls, 0);
+
+  // Old generated substrates have no getter. The initialized tracer must refuse to touch either
+  // raw slot rather than guessing that generated redispatch is equivalent to its current owner.
+  psxport_install_recomp(&kMissingGetterRegistry);
+  const int beforeRefusal = gSetCount;
+  fntrace_init();
+  CHECK_EQ(gSetCount, beforeRefusal);
 }
 
 int main(void) {
-  RUN(installs_and_reinstalls_after_game_overrides);
+  RUN(preserves_registry_and_raw_owners);
   return pt_summary();
 }
