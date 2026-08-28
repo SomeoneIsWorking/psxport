@@ -125,6 +125,9 @@ class Asm:
         if mn == "jr":
             return R(args[0], 0, 0, 0, 8)
         if mn == "jalr":
+            # `jalr rs` (rd=$ra) or `jalr rd, rs` — CTR's GTE library links calls through t2
+            if len(args) == 2:
+                return R(_r(args[1]), 0, _r(args[0]), 0, 9)
             return R(args[0], 0, 31, 0, 9)
         if mn in ("addiu", "addi", "andi", "ori", "xori", "slti", "sltiu"):
             op = {"addi": 8, "addiu": 9, "slti": 0xA, "sltiu": 0xB, "andi": 0xC, "ori": 0xD, "xori": 0xE}[mn]
@@ -1705,6 +1708,142 @@ def test_main_reentry_emits_a_wrapper_body_and_dispatch_case():
         negative = run(td, False)
         assert f"func_{reentry:08X}" not in negative, "unseeded interior PC was emitted"
         assert f"case 0x{reentry & 0x1FFFFFFF:08X}u:" not in negative, "unseeded interior PC was dispatchable"
+
+
+def test_jalr_alternate_link_continuation_is_dispatchable():
+    """`jalr t2, v1` is a CALL whose return address lands in t2, not $ra — CTR's hand-written GTE
+    library calls its helpers this way because $ra holds the caller's inline parameter block, and
+    the helper returns through `jr t2`. That `jr t2` routes through the dispatcher, so the link
+    value (the jalr's own addr+8, mid-body of the caller) must be a DISPATCHABLE ENTRY even though
+    no `jal` names it, no pointer table holds it, and no flow analysis can see the value cross the
+    memory-loaded call edge. Measured live: recomp-MISS 0x8006ACE0 from `jr t2` at 0x8006C948
+    (docs/issues/0022 in the ctr repo) — the link of `jalr t2, v1` at 0x8006ACD8.
+
+    Discriminators, both directions: a `jalr ra, rs` call returns through the C call stack (its
+    `jr ra` is a plain return) and a `jalr zero, rs` is a tail call (the link is discarded), so
+    NEITHER may manufacture a continuation entry."""
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    def run(td, text, seeds):
+        exe_path = os.path.join(td, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)
+        struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))
+        open(exe_path, "wb").write(bytes(hdr) + text)
+        seeds_path = os.path.join(td, "seeds.json")
+        open(seeds_path, "w").write('{"main": [' +
+                                    ", ".join(f'"0x{a:08X}"' for a in seeds) + "]}")
+        gen = os.path.join(td, "generated")
+        os.makedirs(gen)
+        env = dict(os.environ, PSXPORT_SHARDS="1", PSXPORT_USE_GHIDRA="0")
+        result = subprocess.run([sys.executable, os.path.join(here, "emit.py"), exe_path,
+                                 os.path.join(gen, "rec.c"), "--seeds", seeds_path],
+                                capture_output=True, text=True, env=env)
+        assert result.returncode == 0, f"emit.py failed:\n{result.stdout}\n{result.stderr}"
+        return "\n".join(open(os.path.join(gen, name)).read() for name in sorted(os.listdir(gen)))
+
+    # POSITIVE: helper address loaded from the caller's parameter block through $ra (no static
+    # constant for the flow analysis to ride), called with the link in t2.
+    a = Asm()
+    a.lui("ra", 0x8001)             # ra = the inline parameter block pointer
+    a.ori("ra", "ra", 0x0200)
+    a.lw("v1", 0, "ra")             # v1 = helper address — memory-loaded, invisible to flow
+    a.jalr("t2", "v1")              # 0x8001000C: link t2 = 0x80010014
+    a.nop()
+    a.addiu("v0", "zero", 7)        # 0x80010014: the continuation — never seeded by hand
+    a.jr("ra")
+    a.nop()
+    a.label("callee")               # 0x80010020: reached only through the block pointer
+    a.jr("t2")                      # return through the alternate link
+    a.nop()
+    text, end = a.assemble()
+    assert end == 0x80010028, f"layout moved: end={end:#x}"
+
+    with scratch_tempdir("emit-altlink-positive-") as td:
+        out = run(td, text, [0x80010000, 0x80010020])
+        cont = 0x80010014
+        assert f"void func_{cont:08X}(Core*)" in out, \
+            "jalr link continuation was not declared as a dispatchable entry"
+        assert f"void gen_func_{cont:08X}(Core* c)" in out, \
+            "jalr link continuation body was not emitted"
+        assert f"case 0x{cont & 0x1FFFFFFF:08X}u:" in out, \
+            "jalr link continuation is not routable through the dispatcher"
+        assert "c->r[10] = 0x80010014u" in out, \
+            "the caller no longer writes the t2 link before dispatching"
+
+    # NEGATIVE: rd=$ra (normal link — the callee's `jr ra` is a plain C return) and rd=$zero
+    # (tail call — the link is discarded) must NOT manufacture entries.
+    b = Asm()
+    b.jalr("ra", "v0")              # 0x80010000: normal-link dynamic call, link = 0x80010008
+    b.nop()
+    b.addiu("v0", "zero", 7)        # 0x80010008: ordinary fall-through, NOT an entry
+    b.jr("ra")
+    b.nop()
+    b.addiu("v0", "zero", 9)        # 0x80010018: a second caller shape
+    b.jalr("zero", "v0")            # tail call: link discarded
+    b.nop()
+    b.addiu("v0", "zero", 11)
+    b.jr("ra")
+    b.nop()
+    text2, end2 = b.assemble()
+
+    with scratch_tempdir("emit-altlink-negative-") as td:
+        out2 = run(td, text2, [0x80010000, 0x80010018])
+        assert "void func_80010008" not in out2, \
+            "a jalr $ra link continuation was wrongly made dispatchable"
+        assert "case 0x00010008u:" not in out2, \
+            "a jalr $ra continuation is routable — the discriminator regressed"
+        assert "void func_80010020" not in out2, \
+            "a jalr $zero tail-call link was wrongly made dispatchable"
+
+
+def test_reentry_boundary_forgets_ra_for_the_coroutine_proof():
+    """A mid-body re-entry seed is a real dispatch edge: control can arrive FRESH there with the
+    incoming caller's link in $ra, so a `jr $ra` DOWNSTREAM of a re-entry boundary must not be
+    proven a coroutine resume from link-writes that reached it only THROUGH the re-entry's address
+    span. Measured live: CTR's GTE macro library — `jalr ra, s6` at 0x8006A534 calls the parameter
+    block slot, and the callee fragment 0x8006A8E0's `jr $ra` (0x8006AA94/0x8006AAA0) must be a
+    plain return to the incoming link; emitted as a "coroutine resume" dispatch instead, it
+    recomp-MISSed on 0x8006A53C (that incoming link, mid-body of the caller fragment)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    a = Asm()
+    a.lw("v0", 0, "ra")             # 0x80010000: call target read from the parameter block
+    a.jalr("ra", "v0")              # 0x80010004: writes ra = 0x8001000C — a 'computed' state
+    a.nop()
+    a.addiu("v0", "zero", 1)        # 0x8001000C
+    a.nop()
+    a.nop()
+    reentry = 0x80010018            # seeded main_reentry: fresh arrivals have an unknown $ra
+    a.addiu("v0", "v0", 1)          # 0x80010018
+    a.jr("ra")                      # 0x8001001C: plain return on BOTH arrival paths
+    a.nop()
+    text, end = a.assemble()
+    assert end == 0x80010024, f"layout moved: end={end:#x}"
+
+    with scratch_tempdir("emit-reentry-ra-forget-") as td:
+        exe_path = os.path.join(td, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)
+        struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))
+        open(exe_path, "wb").write(bytes(hdr) + text)
+        seeds_path = os.path.join(td, "seeds.json")
+        open(seeds_path, "w").write(
+            '{"main": ["0x80010000"], "main_reentry": ["0x%08X"]}' % reentry)
+        gen = os.path.join(td, "generated")
+        os.makedirs(gen)
+        env = dict(os.environ, PSXPORT_SHARDS="1", PSXPORT_USE_GHIDRA="0")
+        result = subprocess.run([sys.executable, os.path.join(here, "emit.py"), exe_path,
+                                 os.path.join(gen, "rec.c"), "--seeds", seeds_path],
+                                capture_output=True, text=True, env=env)
+        assert result.returncode == 0, f"emit.py failed:\n{result.stdout}\n{result.stderr}"
+        out = "\n".join(open(os.path.join(gen, n)).read() for n in sorted(os.listdir(gen)))
+        body = out.split(f"void gen_func_{reentry:08X}(Core* c) {{", 1)[1].split("\n}", 1)[0]
+        assert "coroutine resume" not in body, \
+            "the jr $ra downstream of a re-entry boundary was still proven a coroutine resume — " \
+            "the proof did not forget the state at the fresh-entry edge"
+        assert "return;" in body, "the jr $ra downstream of the boundary did not emit a plain return"
 
 
 # ----------------------------------------------------------------------------------------------------

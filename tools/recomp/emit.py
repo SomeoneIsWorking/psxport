@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-27.1"    # direct calls into a nested module's range route, never bind statically
+RECOMP_VERSION = "2026-08-28.1"    # jalr non-ra link continuations are dispatchable re-entries
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1653,7 +1653,7 @@ def ra_global_save_slots(exe):
     return slots
 
 
-def ra_computed_jumps(exe, bounds, stats=None):
+def ra_computed_jumps(exe, bounds, stats=None, reentry=frozenset()):
     """Addresses of `jr $ra` that are COMPUTED JUMPS, not returns — decided per-`jr` by
     reaching-definitions on `$ra` over each guest function in `bounds`.
 
@@ -1755,6 +1755,16 @@ def ra_computed_jumps(exe, bounds, stats=None):
         seen = set()
         while work:
             a, st = work.pop()
+            if a in reentry:
+                # A mid-body RE-ENTRY boundary is a real dispatchable entry edge: control can arrive
+                # here FRESH (the router dispatched it), with $ra holding the incoming caller's link
+                # rather than whatever this fragment's own flow last wrote. The live proof of that is
+                # CTR's GTE macro library: `jalr ra, s6` at 0x8006A534 calls the block slot, and the
+                # callee's `jr $ra` (0x8006AA94, inside re-entry fragment 0x8006A8E0) must be a plain
+                # C-return to the incoming link — the analysis-span proof that "ra was internally
+                # written on every path" does not survive a fresh entry edge, so the state FORGETS here
+                # and disagreeing paths merge to the `return` default below.
+                st = None
             if not (lo <= a < hi) or (a, st) in seen:
                 continue
             seen.add((a, st))
@@ -2455,6 +2465,30 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     soft = set(soft_seeds or ())                 # func_entries_after_return boundaries (mergeable)
     if os.environ.get("PSXPORT_USE_GHIDRA"):
         hard |= set(ghidra_funcs(exe.load, exe.text_end))
+    # ALTERNATE-LINK CALL CONTINUATIONS. `jalr rd, rs` with rd neither $zero nor $ra is a CALL whose
+    # return address lands in a NONSTANDARD link register: CTR's hand-written GTE library calls its
+    # helpers `jalr t2, v1` because $ra holds the caller's inline parameter block, and the helper
+    # returns through `jr t2` — a ROUTER dispatch, which needs the link value (the jalr's own
+    # addr+8, mid-body of the caller) registered as a dispatchable re-entry. No `jal` names it and
+    # no pointer table holds it, and the constant-flow pass cannot see the value either (the call
+    # target is memory-loaded, so there is no static edge to carry it) — hence this derivation, from
+    # the binary, not from a hand seed. Additive-only: an entry the guest never reaches costs only
+    # its own emission; a jalr split point is always AFTER its own delay slot (addr+8, never addr+4).
+    # rd=$zero is a tail call — the return address is discarded — and rd=$ra returns through the C
+    # call stack (`jr ra` is emitted as a plain return), so neither contributes a continuation.
+    alt_sites, jalr_conts = 0, set()
+    for a in range(exe.load, exe.text_end, 4):
+        i = decode(a, exe.word(a))
+        if i.kind == D.JUMPR and i.op == "jalr" and i.rd not in (0, 31):
+            alt_sites += 1
+            if a + 8 < exe.text_end:
+                jalr_conts.add(a + 8)
+    fresh_conts = len(jalr_conts - set(hard))
+    hard |= jalr_conts
+    reentry = set(reentry) | jalr_conts     # keep the continuation fragments out of the
+    # ra_computed_jumps partition, exactly like the game-supplied main_reentry seeds
+    print(f"[{N.wrap}] alternate-link calls: {alt_sites} jalr(s) with a non-ra link register; "
+          f"{len(jalr_conts)} link continuation(s) dispatchable ({fresh_conts} newly seeded)")
     seeds = hard                                  # for the jt-prune "keep seeds" guard below
     funcs = discover_funcs(exe, hard | soft)
     # PRUNE case-label entries out of the function set: they are mid-run code, and leaving one in
@@ -2632,7 +2666,8 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     # so a per-fragment analysis finds no definition and silently answers "return", which is the
     # right-looking answer for the wrong reason. See ra_computed_jumps.
     ra_stats = {}
-    ra_computed = ra_computed_jumps(exe, [a for a in funcs if a not in set(reentry)], ra_stats)
+    ra_computed = ra_computed_jumps(exe, [a for a in funcs if a not in set(reentry)], ra_stats,
+                                    reentry=set(reentry))
     # PRINTED UNCONDITIONALLY, WITH ITS DENOMINATORS. "0 coroutines" is the answer for most games and
     # it has to be distinguishable from "the analysis never ran" — and from "it ran but could not see".
     print(f"[{N.wrap}] `jr $ra`: {len(ra_computed)} of {ra_stats['jr_sites']} emitted as a COMPUTED "
