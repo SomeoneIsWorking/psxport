@@ -173,6 +173,7 @@ static void cd_command(Core *c) {
     break;
   case 0x0D:
     xa_stream_setfilter(&c->game->xa, p0, param ? (uint8_t)c->mem_r8(param + 1) : 0);
+    cdc_set_filter(&c->game->cdc, p0, param ? (uint8_t)c->mem_r8(param + 1) : 0);
     break; // Setfilter
   case 0x02:
     if (param) { // Setloc
@@ -292,6 +293,7 @@ static void cd_cmd_stream(Core *c) {
       break;
     case 0x0D:
       xa_stream_setfilter(&c->game->xa, p0, pp ? (uint8_t)c->mem_r8(pp + 1) : 0);
+      cdc_set_filter(&c->game->cdc, p0, pp ? (uint8_t)c->mem_r8(pp + 1) : 0);
       break;
     case 0x02:
       if (pp) {

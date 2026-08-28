@@ -445,7 +445,11 @@ Decodes CD-XA from the ReadS-streamed sectors and feeds the SPU's CD-audio input
 `CDC_GetCDAudioSample()` (Beetle `spu.c` calls it once per 44.1kHz sample, scaled by the game's
 `CDVol` + gated on `SPUControl` bit0 — both game-set). Pull-driven (decode on consumption →
 self-paces to realtime). `xa_decode_sector()` lives in `native_fmv.c`. The SPU mixes XA only when
-the game enabled CD audio; sequenced (libsnd) BGM is a SEPARATE working path. Debug: `PSXPORT_DEBUG=xa` (add `xasec` for a line per sector).
+the game enabled CD audio; sequenced (libsnd) BGM is a SEPARATE working path. Push-mode controller
+routing mirrors Beetle's `PS_CDC_XA_Test`: when MODE_SF is set, only the programmed file/channel is
+decoded, while non-selected audio remains in the controller data path. The hermetic
+`test_cdc_xa_filter` regression covers both filtered and unfiltered modes. Debug: `PSXPORT_DEBUG=xa`
+(add `xasec` for a line per sector).
 
 ## Tests — `ctest`, the framework gate (`tests/`)
 

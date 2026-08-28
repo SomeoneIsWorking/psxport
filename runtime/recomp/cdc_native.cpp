@@ -145,11 +145,18 @@ static bool command_accepts_argument_count(uint8_t command, uint8_t count) {
 
 // Beetle-parity XA routing test (vendor cdc.c DS_READING data path): with Setmode's STRSND bit
 // (0x40) set, a Mode2 sector whose submode has ALL of RT|form2|audio (0x64) belongs to the ADPCM
-// decoder -> SPU CD-audio input and must NEVER enter the data FIFO. The game's movie demuxer counts
-// on this: Vagrant Story's player wedges into a seek-restart loop when audio sectors pollute its
-// video FIFO (issue #25), because on hardware it never saw them here.
+// decoder -> SPU CD-audio input. MODE_SF (0x08) then selects exactly one file/channel; without that
+// filter every matching XA audio sector is selected. The game's movie demuxer counts on non-selected
+// sectors continuing through the data path, while selected sectors never enter its data FIFO.
+int cdc_xa_sector_selected(const CdcState *s, const uint8_t *raw) {
+  if ((s->mode & 0x40) == 0 || raw[15] != 2 || (raw[18] & 0x64) != 0x64) {
+    return 0;
+  }
+  return (s->mode & 0x08) == 0 || (raw[16] == s->filter_file && raw[17] == s->filter_chan);
+}
+
 static bool sector_is_xa_audio(const CdcState *s, const uint8_t *raw) {
-  return (s->mode & 0x40) != 0 && raw[15] == 2 && (raw[18] & 0x64) == 0x64;
+  return cdc_xa_sector_selected(s, raw) != 0;
 }
 
 // Hand one audio sector to the SPU ring. First routing also flips the ring into PUSH mode: from
@@ -395,6 +402,12 @@ void cdc_set_mode(CdcState *s, uint8_t mode) {
   }
 }
 
+void cdc_set_filter(CdcState *s, uint8_t file, uint8_t channel) {
+  s->filter_file = file;
+  s->filter_chan = channel;
+  lucent::debug("cdc", "setfilter file={} chan={}", file, channel);
+}
+
 void cdc_begin_read(CdcState *s, uint32_t lba) {
   s->loc_lba = lba;
   s->command_lba = lba;
@@ -446,7 +459,11 @@ static uint64_t exec_command(CdcState *s, uint8_t cmd) {
   case 0x0E:
     cdc_set_mode(s, s->command_args[0]);
     cdc_irq(s, 3, r1, 1);
-    return 0;  // Setmode
+    return 0; // Setmode
+  case 0x0D:
+    cdc_set_filter(s, s->command_args[0], s->command_args[1]);
+    cdc_irq(s, 3, r1, 1);
+    return 0;  // Setfilter
   case 0x11: { // GetlocP: current Sub-Q track/index and relative/absolute position.
     uint8_t position[8] = {};
     if (!s->disc_get_subq_position_fn || !s->disc_get_subq_position_fn(s->disc, s->loc_lba, position)) {
@@ -509,7 +526,6 @@ static uint64_t exec_command(CdcState *s, uint8_t cmd) {
     s->stat = kCdlStatStandby;
     cdc_irq(s, 3, r1, 1);
     return 3'386'880u;
-  case 0x0D:
   case 0x03:
   case 0x17:
   case 0x18: // MotorOn/SetFilter/Play/SetSession

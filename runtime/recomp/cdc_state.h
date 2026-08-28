@@ -33,6 +33,8 @@ typedef struct CdcState {
   uint32_t loc_lba;               // current physical sector
   uint32_t command_lba;           // Setloc target, applied by ReadN/ReadS/Seek
   uint8_t mode;                   // Setmode                                     (was s_mode)
+  uint8_t filter_file;            // Setfilter file
+  uint8_t filter_chan;            // Setfilter channel
   int reading;                    // ReadN/ReadS active                          (was s_reading)
   uint8_t first_sector_pending;   // ReadN accepted; first data sector waits for its drive deadline
   uint8_t bfrd;                   // request-register BFRD latch (bit 7): 1 until explicitly deasserted
@@ -96,6 +98,12 @@ void cdc_begin_read(CdcState *s, uint32_t lba);
 // whether the data FIFO presents whole sectors (header + subheader + data) or user data only, and a
 // streaming reader depends on that framing to identify sector types.
 void cdc_set_mode(CdcState *s, uint8_t mode);
+// Mirror Setfilter into the controller model. MODE_SF uses this pair to route only the selected
+// XA file/channel to the SPU, matching the vendor CDC's PS_CDC_XA_Test predicate.
+void cdc_set_filter(CdcState *s, uint8_t file, uint8_t channel);
+// Return whether a raw Mode2 sector is the selected XA stream under the current controller mode.
+// This is the exact production routing predicate, exposed for a hermetic regression test.
+int cdc_xa_sector_selected(const CdcState *s, const uint8_t *raw);
 #ifdef __cplusplus
 }
 #endif
