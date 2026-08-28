@@ -198,7 +198,9 @@ horizontal decoder, including bit 6's 368-dot mode. Full ownership and consumer 
 present — 4,404 lines), `gpu_primitive_dump.{h,cpp}` (primitive-census CSV lifecycle and row encoding),
 and `image_writer.{h,cpp}` (the checked RGB24-to-PPM/PNG host-file boundary shared by software and GPU
 captures). The two legacy renderer files remain critical extraction territory and are shrink-only.
-`render_queue.{h,cpp}` + `painter_object_layer.{h,cpp}` own atomic painter admission and command planning.
+`render_queue.{h,cpp}` + `painter_object_layer.{h,cpp}` own atomic painter admission and command planning;
+`RenderQueue::preflightPainterObjectBatch` admits a complete multi-object publication without mutating
+the queue, so callers can validate shared transactions before publishing any object.
 Legacy painter objects retain one sequence-stable local stream across textured/untextured and
 opaque/semitransparent material variants. Authored replay domains merge several producer objects into one
 guest OT stream with the single `(ot_bin descending, link_ordinal descending, chain_suborder ascending)`
@@ -254,7 +256,7 @@ projection path asks for it—there is no framework camera-address fallback.
 `GameHooks::fps60TemporalRotate` is the separate post-two-present lifecycle seam for game-owned immutable
 render recipes; it is optional and does not alias the transitional billboard-history hook.
 **Audio:** `spu_beetle.cpp` (Beetle spu.c mixer lift), `spu_audio.cpp` (SDL sink +
-`PSXPORT_WAV`), `spu_field_cadence.h` (exact display-field-rate → SPU-clock/sample schedule), and
+`PSXPORT_WAV` + opt-in `audiofield` per-field trace), `spu_field_cadence.h` (exact display-field-rate → SPU-clock/sample schedule), and
 `xa_stream.cpp` (in-game XA-ADPCM streaming). The sink reads the same exact NTSC 60,000/1,001 or
 PAL 50/1 rational owned by `field_rate.h`; it carries integer remainders between fields instead of
 rounding every NTSC field to the exact-60 Hz legacy values of 564,480 clocks and 735 samples.

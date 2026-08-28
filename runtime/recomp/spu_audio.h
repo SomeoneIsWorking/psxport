@@ -102,4 +102,8 @@ private:
   double mRateT0 = 0;
   long mRateSamp = 0, mRateDrops = 0, mRateCalls = 0;
   int mRateHave = 0;
+
+  // Monotonic field ordinal for the optional audio-field trace. This is per SpuAudio so SBS can
+  // distinguish the two cores without adding shared state to the comparator.
+  uint64_t mTraceField = 0;
 };

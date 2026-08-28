@@ -48,6 +48,24 @@ PainterObjectAdmission RenderQueue::preflightPainterObject(PainterObjectId objec
                                                            size_t new_faces,
                                                            PainterReplayDomainId replay_domain,
                                                            PainterObjectLimits limits) const {
+  // Keep the single-object entry point's historical validation order. In particular, invalid
+  // caller input must be reported before an unrelated active scope, just as it was before the batch
+  // seam existed.
+  PainterObjectAdmission admission;
+  if (!object) {
+    admission.refusal = PainterObjectAdmissionRefusal::InvalidObjectId;
+    return admission;
+  }
+  if (!new_faces) {
+    admission.refusal = PainterObjectAdmissionRefusal::Empty;
+    return admission;
+  }
+  const PainterObjectBatchEntry entry{object, new_faces, replay_domain};
+  return preflightPainterObjectBatch(std::span<const PainterObjectBatchEntry>(&entry, 1), limits);
+}
+
+PainterObjectAdmission RenderQueue::preflightPainterObjectBatch(std::span<const PainterObjectBatchEntry> entries,
+                                                                PainterObjectLimits limits) const {
   PainterObjectAdmission admission;
   admission.queued_items = consumed ? 0 : (size_t)n;
   auto refuse = [&](PainterObjectAdmissionRefusal why, size_t item = SIZE_MAX) {
@@ -55,10 +73,7 @@ PainterObjectAdmission RenderQueue::preflightPainterObject(PainterObjectId objec
     admission.refusal_item = item;
     return admission;
   };
-  if (!object) {
-    return refuse(PainterObjectAdmissionRefusal::InvalidObjectId);
-  }
-  if (!new_faces) {
+  if (entries.empty()) {
     return refuse(PainterObjectAdmissionRefusal::Empty);
   }
   if (mPainterScopeDepth) {
@@ -70,30 +85,55 @@ PainterObjectAdmission RenderQueue::preflightPainterObject(PainterObjectId objec
   if (!limits.max_objects || limits.max_objects > 256) {
     return refuse(PainterObjectAdmissionRefusal::TooManyObjects);
   }
-  if (!limits.max_faces || new_faces > limits.max_faces) {
-    return refuse(PainterObjectAdmissionRefusal::TooManyFaces);
-  }
-  if (new_faces > (size_t)RQ_MAX - admission.queued_items) {
-    return refuse(PainterObjectAdmissionRefusal::QueueCapacity);
-  }
 
   std::array<PainterObjectId, 256> ids{};
   size_t id_count = 0;
+  size_t new_faces = 0;
+  bool replay_policy_set = false;
+  bool authored_replay = false;
+  const auto entry_index = [&](size_t index) {
+    return entries.size() == 1 ? SIZE_MAX : index;
+  };
+  for (size_t i = 0; i < entries.size(); ++i) {
+    const PainterObjectBatchEntry &entry = entries[i];
+    if (!entry.object) {
+      return refuse(PainterObjectAdmissionRefusal::InvalidObjectId, entry_index(i));
+    }
+    if (!entry.new_faces) {
+      return refuse(PainterObjectAdmissionRefusal::Empty, entry_index(i));
+    }
+    if (!limits.max_faces || entry.new_faces > limits.max_faces - new_faces) {
+      return refuse(PainterObjectAdmissionRefusal::TooManyFaces, entry_index(i));
+    }
+    new_faces += entry.new_faces;
+    if (new_faces > (size_t)RQ_MAX - admission.queued_items) {
+      return refuse(PainterObjectAdmissionRefusal::QueueCapacity, entry_index(i));
+    }
+    const bool entry_authored = entry.replay_domain != 0;
+    if (replay_policy_set && entry_authored != authored_replay) {
+      return refuse(PainterObjectAdmissionRefusal::MixedReplayPolicy, entry_index(i));
+    }
+    replay_policy_set = true;
+    authored_replay = entry_authored;
+  }
+
   for (size_t i = 0; i < admission.queued_items; ++i) {
     const RqItem &item = items[i];
     if (!item.painter_object) {
-      if (replay_domain && item.layer == RQ_WORLD) {
+      if (authored_replay && item.layer == RQ_WORLD) {
         return refuse(PainterObjectAdmissionRefusal::UnorderedWorldMix, i);
       }
       continue;
     }
-    if (item.painter_object == object) {
-      return refuse(PainterObjectAdmissionRefusal::DuplicateObject, i);
+    for (const PainterObjectBatchEntry &entry : entries) {
+      if (item.painter_object == entry.object) {
+        return refuse(PainterObjectAdmissionRefusal::DuplicateObject, i);
+      }
     }
     if (validateFace(item) != PainterObjectRefusal::None) {
       return refuse(PainterObjectAdmissionRefusal::InvalidExistingFace, i);
     }
-    if (item.painter_replay.authored() != (replay_domain != 0)) {
+    if (item.painter_replay.authored() != authored_replay) {
       return refuse(PainterObjectAdmissionRefusal::MixedReplayPolicy, i);
     }
     ++admission.existing_faces;
@@ -108,6 +148,19 @@ PainterObjectAdmission RenderQueue::preflightPainterObject(PainterObjectId objec
   admission.existing_objects = id_count;
   if (id_count >= limits.max_objects) {
     return refuse(PainterObjectAdmissionRefusal::TooManyObjects);
+  }
+  std::array<PainterObjectId, 256> batch_ids{};
+  size_t batch_id_count = 0;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    const PainterObjectId object = entries[i].object;
+    if (std::find(batch_ids.begin(), batch_ids.begin() + (ptrdiff_t)batch_id_count, object) !=
+        batch_ids.begin() + (ptrdiff_t)batch_id_count) {
+      return refuse(PainterObjectAdmissionRefusal::DuplicateObject, entry_index(i));
+    }
+    if (batch_id_count >= limits.max_objects - id_count) {
+      return refuse(PainterObjectAdmissionRefusal::TooManyObjects, entry_index(i));
+    }
+    batch_ids[batch_id_count++] = object;
   }
   if (new_faces > limits.max_faces - admission.existing_faces) {
     return refuse(PainterObjectAdmissionRefusal::TooManyFaces);

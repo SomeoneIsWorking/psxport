@@ -230,6 +230,54 @@ static void test_atomic_admission_accepts_existing_semitransparency(void) {
   CHECK_EQ(refused.refusal_item, 0);
 }
 
+static void test_batch_admission_is_atomic(void) {
+  auto q = make_queue();
+  add(*q, 4, 0, 1, 1);
+  q->items[0].tp_blend = 3;
+  const std::array<PainterObjectBatchEntry, 2> entries = {{{8, 2, 0}, {9, 3, 0}}};
+  const int queued_before = q->n;
+  const uint32_t first_seq_before = q->items[0].seq;
+  const PainterObjectAdmission accepted = q->preflightPainterObjectBatch(entries);
+  CHECK(accepted.accepted());
+  CHECK_EQ(accepted.queued_items, 1);
+  CHECK_EQ(accepted.existing_objects, 1);
+  CHECK_EQ(accepted.existing_faces, 1);
+  CHECK_EQ(q->n, queued_before);
+  CHECK_EQ(q->items[0].seq, first_seq_before);
+
+  const std::array<PainterObjectBatchEntry, 2> duplicate = {{{8, 1, 0}, {8, 1, 0}}};
+  const PainterObjectAdmission refused = q->preflightPainterObjectBatch(duplicate);
+  CHECK_EQ((int)refused.refusal, (int)PainterObjectAdmissionRefusal::DuplicateObject);
+  CHECK_EQ(refused.refusal_item, 1);
+  CHECK_EQ(q->n, queued_before);
+  CHECK_EQ(q->items[0].seq, first_seq_before);
+}
+
+static void test_batch_admission_preserves_refusal_semantics(void) {
+  auto q = make_queue();
+  add(*q, 0, 0, 3);
+  const std::array<PainterObjectBatchEntry, 2> authored = {{{8, 1, 77}, {9, 1, 77}}};
+  PainterObjectAdmission refused = q->preflightPainterObjectBatch(authored);
+  CHECK_EQ((int)refused.refusal, (int)PainterObjectAdmissionRefusal::UnorderedWorldMix);
+  CHECK_EQ(refused.refusal_item, 0);
+
+  q = make_queue();
+  add(*q, 4, 0, 3);
+  q->items[0].painter_replay = replay(77, 1, 0, 0);
+  const std::array<PainterObjectBatchEntry, 2> isolated = {{{8, 1, 0}, {9, 1, 0}}};
+  refused = q->preflightPainterObjectBatch(isolated);
+  CHECK_EQ((int)refused.refusal, (int)PainterObjectAdmissionRefusal::MixedReplayPolicy);
+  CHECK_EQ(refused.refusal_item, 0);
+
+  q = make_queue();
+  const std::array<PainterObjectBatchEntry, 2> too_many = {{{8, 1, 0}, {9, 1, 0}}};
+  PainterObjectLimits limits;
+  limits.max_objects = 1;
+  refused = q->preflightPainterObjectBatch(too_many, limits);
+  CHECK_EQ((int)refused.refusal, (int)PainterObjectAdmissionRefusal::TooManyObjects);
+  CHECK_EQ(refused.refusal_item, 1);
+}
+
 static void test_refusals_and_denominators(void) {
   auto q = make_queue();
   PainterObjectPlan p = q->buildPainterObjectPlan();
@@ -363,6 +411,8 @@ int main(void) {
   RUN(authored_domain_refuses_incomplete_or_ambiguous_order);
   RUN(authored_admission_refuses_unknown_world_mix);
   RUN(atomic_admission_accepts_existing_semitransparency);
+  RUN(batch_admission_is_atomic);
+  RUN(batch_admission_preserves_refusal_semantics);
   RUN(refusals_and_denominators);
   RUN(painter_depth_is_not_key_flattened);
   RUN(lazy_reset_preserves_scopes);

@@ -9,12 +9,43 @@
 #include "cfg.h"
 #include "config_vars.h"
 #include "game.h"
+#include "xa_state.h"
 #include <lucent/log.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+
+namespace {
+
+struct PcmSummary {
+  uint32_t hash = 2166136261u;
+  uint32_t nonzero = 0;
+  uint32_t peak = 0;
+};
+
+PcmSummary summarizePcm(const int16_t *samples, int frames) {
+  PcmSummary summary;
+  const size_t count = static_cast<size_t>(frames > 0 ? frames : 0) * 2u;
+  for (size_t i = 0; i < count; ++i) {
+    const uint16_t value = static_cast<uint16_t>(samples[i]);
+    summary.hash ^= value & 0xffu;
+    summary.hash *= 16777619u;
+    summary.hash ^= value >> 8;
+    summary.hash *= 16777619u;
+    if (samples[i] != 0) {
+      ++summary.nonzero;
+    }
+    const int magnitude = samples[i] < 0 ? -static_cast<int>(samples[i]) : samples[i];
+    if (magnitude > summary.peak) {
+      summary.peak = static_cast<uint32_t>(magnitude);
+    }
+  }
+  return summary;
+}
+
+} // namespace
 
 extern "C" {
 // SPU lift interface (spu_beetle.c).
@@ -185,6 +216,7 @@ void SpuAudio::frame() {
 }
 
 void SpuAudio::frameEx(bool output) {
+  const uint64_t traceField = ++mTraceField;
   // We advance + drain the SPU when SOMETHING consumes it: the SDL device (playback) OR a WAV
   // capture (PSXPORT_WAV, works headless). We ALSO advance it (output discarded) when an XA clip
   // is streaming, because game LOGIC blocks until the clip's read head passes its end LBA and that
@@ -199,10 +231,24 @@ void SpuAudio::frameEx(bool output) {
 #endif
   bool wav_on = output && mWav;
   if (!sdl_on && !wav_on && !xa_stream_is_active(&game->xa) && output) {
+    lucent::debug("audiofield",
+                  "field={} advanced=0 output={} reason=no-consumer xa_active={} xa_wr={} "
+                  "xa_rd={:.3f} xa_pulls={} xa_sectors={}",
+                  traceField,
+                  output ? 1 : 0,
+                  game->xa.active,
+                  game->xa.wr,
+                  game->xa.rd,
+                  game->xa.pulls,
+                  game->xa.sectors);
     return;
   }
 
   const SpuFieldAdvance advance = mCadence.advance(display_field_rate(game->gpu.s_disp_pal != 0));
+  const uint32_t xaWrBefore = game->xa.wr;
+  const double xaRdBefore = game->xa.rd;
+  const uint32_t xaPullsBefore = game->xa.pulls;
+  const uint32_t xaSectorsBefore = game->xa.sectors;
 
   // Advance the mixer by exactly one display field's share of system clocks.
   int16_t *buf = mMixBuf;
@@ -236,16 +282,42 @@ void SpuAudio::frameEx(bool output) {
     spu_update(static_cast<int32_t>(advance.clocks));
   }
 
-  int frames = spu_render(buf, static_cast<int>(advance.samples + kRenderSlack));
+  const int renderedFrames = spu_render(buf, static_cast<int>(advance.samples + kRenderSlack));
+  int frames = renderedFrames;
+  if (frames <= 0) {
+    frames = static_cast<int>(advance.samples);
+    memset(buf, 0, (size_t)frames * 2 * sizeof(int16_t));
+  }
+  const PcmSummary pcm = summarizePcm(buf, frames);
+  lucent::debug("audiofield",
+                "field={} advanced=1 output={} pal={} expected_samples={} expected_clocks={} "
+                "rendered_samples={} queued_samples={} pcm_hash={:08X} pcm_nonzero={} "
+                "pcm_peak={} xa_wr={} xa_rd={:.3f} xa_pulls={} xa_sectors={} "
+                "delta_wr={} delta_rd={:.3f} delta_pulls={} delta_sectors={}",
+                traceField,
+                output ? 1 : 0,
+                game->gpu.s_disp_pal ? 1 : 0,
+                advance.samples,
+                advance.clocks,
+                renderedFrames,
+                frames,
+                pcm.hash,
+                pcm.nonzero,
+                pcm.peak,
+                game->xa.wr,
+                game->xa.rd,
+                game->xa.pulls,
+                game->xa.sectors,
+                game->xa.wr - xaWrBefore,
+                game->xa.rd - xaRdBefore,
+                game->xa.pulls - xaPullsBefore,
+                game->xa.sectors - xaSectorsBefore);
   // Logic-only (SBS): rendered PCM is discarded; XA head has advanced (clip progresses).
   if (!output) {
     return;
   }
-  if (frames <= 0) {
-    // The SPU produced nothing this frame, but native music may still need output.
-    frames = static_cast<int>(advance.samples);
-    memset(buf, 0, (size_t)frames * 2 * sizeof(int16_t));
-  }
+  // A zero-frame SPU result is represented by the expected-duration silent buffer above so native
+  // music and the host sink still receive one complete field.
 
   // Mix the game's native music engine on top of the SPU's output (game-owned; the framework names
   // no game audio type). The hook renders the game's NativeMusic into its own scratch and saturating-

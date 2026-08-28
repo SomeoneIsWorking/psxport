@@ -262,6 +262,11 @@ struct RenderQueue {
                                                 size_t new_faces,
                                                 PainterReplayDomainId replay_domain = 0,
                                                 PainterObjectLimits limits = {}) const;
+  // Atomically preflight several distinct painter objects against the current queue. This is an
+  // admission check only: it does not reserve slots or mutate the queue, so producers must push the
+  // complete admitted batch before another producer changes the queue.
+  PainterObjectAdmission preflightPainterObjectBatch(std::span<const PainterObjectBatchEntry> entries,
+                                                     PainterObjectLimits limits = {}) const;
   PainterObjectPlan buildPainterObjectPlan(PainterObjectLimits limits = {}) const;
 
   // The screen space of the 2D quads being pushed RIGHT NOW. Producers that author 4:3 layout — the

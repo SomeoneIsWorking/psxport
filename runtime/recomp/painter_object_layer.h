@@ -116,6 +116,14 @@ struct PainterObjectAdmission {
   }
 };
 
+// One producer's declaration for a painter object that has not been queued yet. A batch may contain
+// several distinct objects; all entries are checked together before the producer starts pushing.
+struct PainterObjectBatchEntry {
+  PainterObjectId object = 0;
+  size_t new_faces = 0;
+  PainterReplayDomainId replay_domain = 0;
+};
+
 enum class PainterPlaybackKind : uint8_t { IsolatedObject, AuthoredDomain };
 
 struct PainterPlaybackRange {
