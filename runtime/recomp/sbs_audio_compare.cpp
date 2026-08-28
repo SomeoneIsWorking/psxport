@@ -35,5 +35,8 @@ void SbsAudioCompare::compare(Game *a, Game *b, uint32_t frame) {
   if (!result.equal && !mMismatch) {
     mMismatch = true;
     lucent::error("sbs-audio", "f{}: {}", frame, result.reason);
+  } else if (result.equal && !mReportedPass) {
+    mReportedPass = true;
+    lucent::info("sbs-audio", "f{}: compared {} exact PCM field reports with no mismatch", frame, aReports.size());
   }
 }

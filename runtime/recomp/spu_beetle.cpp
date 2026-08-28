@@ -1,7 +1,7 @@
 // SPU (Sound Processing Unit — PSX audio), lifted from the Beetle GPL-2 fork
 // (mednafen/psx/spu.c, compiled as-is). All of the game's audio — 24 ADPCM voices,
 // ADSR enveloping, pitch/sweeps, noise, reverb, and CD-DA mixing — flows through here;
-// the SPU mixes 44.1 kHz stereo into Beetle's global IntermediateBuffer. This adapts a
+// the SPU mixes 44.1 kHz stereo into the bound Beetle SpuState output buffer. This adapts a
 // CLEAN recomp interface (spu_*) to Beetle's SPU_* API and provides definitions for the
 // handful of externs spu.c references (the SPU IRQ line, the CD-DA source, savestate) so
 // the mixed output matches the oracle exactly.
@@ -43,11 +43,9 @@ void SPU_WriteDMA(uint32_t V);
 uint32_t SPU_ReadDMA(void);
 int32_t SPU_UpdateFromCDC(int32_t clocks);
 
-// Beetle's global audio output ring: SPU mixes 44.1 kHz stereo samples into this
-// buffer; the frontend drains it. IntermediateBufferPos is the write cursor (in
-// stereo frames). Defined in spu.c — we only read/reset it here.
-extern uint32_t IntermediateBufferPos;
-extern int16_t IntermediateBuffer[4096][2];
+// Bound-state audio output ring. SPU_Render reads the buffer belonging to the state selected by
+// SPU_BindState; keeping the drain inside the vendor unit prevents SBS cores from sharing a ring.
+int SPU_Render(int16_t *out, int max_frames);
 
 // ---------------------------------------------------------------------------
 // Externs spu.c references — faithful-first definitions.
@@ -286,19 +284,13 @@ int32_t spu_update(int32_t clocks) {
 // returning the number of frames produced. Sample rate is 44100 Hz, stereo, signed 16.
 // (Buffer holds at most 4096 frames; mix often enough that it doesn't overrun.)
 int spu_render(int16_t *out, int max_frames) {
-  uint32_t avail = IntermediateBufferPos;
-  uint32_t n = avail;
-  if (max_frames >= 0 && n > (uint32_t)max_frames) {
-    n = (uint32_t)max_frames;
-  }
-
-  memcpy(out, IntermediateBuffer, (size_t)n * 2 * sizeof(int16_t));
+  const int n = SPU_Render(out, max_frames);
 
   static const lucent::Channel spu_ch{"spu"};
   if (spu_ch) { // guards the peak SCAN over n*2 samples, not the print
     static long fr;
     int peak = 0; // process-wide `debug spu` print counter (see spu_write)
-    for (uint32_t i = 0; i < n * 2; i++) {
+    for (int i = 0; i < n * 2; i++) {
       int v = out[i];
       if (v < 0) {
         v = -v;
@@ -312,15 +304,7 @@ int spu_render(int16_t *out, int max_frames) {
     }
   }
 
-  if (n < avail) {
-    // Keep the unread tail for the next pull (shouldn't normally happen if the PM
-    // sizes max_frames >= a frame's worth, ~735 NTSC / ~882 PAL samples).
-    memmove(IntermediateBuffer, &IntermediateBuffer[n], (size_t)(avail - n) * 2 * sizeof(int16_t));
-    IntermediateBufferPos = avail - n;
-  } else {
-    IntermediateBufferPos = 0;
-  }
-  return (int)n;
+  return n;
 }
 
 } // extern "C"

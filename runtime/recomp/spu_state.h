@@ -17,6 +17,7 @@ void SPU_PokeRAM(const uint8_t *src); // restore it (SV_CHECK leg isolation)
 // I_STAT bit 9 that raise latches into (null -> the line is dropped, e.g. before the first bind).
 // Bound per core frame-step alongside the SPU state itself, so two cores never cross interrupt lines.
 void spu_bind_irq_core(void *core);
+int SPU_Render(int16_t *out, int max_frames);
 
 // SBS SPU write log (spu_beetle.c). Per-Game log buffer of (addr, val) pairs — spu_write appends
 // to the currently-bound log via spu_bind_log. SBS resets both cores' logs at frame start and

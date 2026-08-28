@@ -1588,10 +1588,11 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   ln.flush(lucent::Level::Info, "sbs");
 }
 
-// Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
-// (the SBS loop owns the single window present); sbs_render=1 re-enables the render-submit so it EMITS its
-// geometry into VK batch `which` (gpu_vk_select_target). Neither core presents; the SBS composite does.
+// SBS steps one bound SPU state and emits into the selected batch without presenting.
 void Sbs::Impl::stepCore(Game *g, int which) {
+  // The Beetle SPU API is bound-state based. Rebind before every core step so the global adapter
+  // dispatches both update and drain to this Game's state, not whichever core stepped previously.
+  g->spu.bind(&g->core);
   g->core.game->diff_mode = 1;
   g->core.game->sbs_render = 1;
   // Do not inject a DEMO/FMV shortcut here: standalone and SBS must share the guest timeout path.

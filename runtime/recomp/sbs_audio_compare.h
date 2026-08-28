@@ -14,4 +14,5 @@ public:
 private:
   bool mEnabled = false;
   bool mMismatch = false;
+  bool mReportedPass = false;
 };
