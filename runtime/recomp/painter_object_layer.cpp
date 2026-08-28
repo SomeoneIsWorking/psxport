@@ -184,10 +184,10 @@ PainterObjectPlan planPainterItemStream(std::span<const RqItem *const> stream, P
         continue;
       }
       if (item.layer == RQ_WORLD) {
-        // A line has no face area or material state for the painter replay. It is admissible only
-        // when it is already a trailing item; moving an interleaved line around the replay would
-        // change the guest's paint order, so retain the refusal for that case.
-        if (item.nv != 2 || !haveGrouped || i < lastGrouped) {
+        // An ordinary world primitive cannot participate in a painter replay. It is admissible only
+        // when it is already a trailing item; moving an interleaved primitive around the replay
+        // would change the guest's paint order, so retain the refusal for that case.
+        if (!haveGrouped || i < lastGrouped) {
           return refuse(PainterObjectRefusal::UnorderedWorldMix, i);
         }
         plan.ordinary_items_after_ranges.push_back(i);
