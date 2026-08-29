@@ -1067,6 +1067,9 @@ void rec_break(Core *c, uint32_t code) {
 }
 
 void rec_dispatch_miss(Core *c, uint32_t addr) {
+  // Ring the miss itself (crashbash-0018): pairing this marker against the last dispatch decision in
+  // the ring is the discriminator — see InterpDiag::dispdec.
+  c->idiag.dispdecRecord(addr, c->r[31], InterpDiag::DISPDEC_MISS);
   // Generated entries own their exact-PC observer calls in emitted code. A target that reaches this
   // miss path has no generated body to own the boundary, so observe it exactly once here, before a
   // BIOS/HLE leaf can mutate registers. Keeping this out of the generic router prevents an indirect
@@ -1174,6 +1177,12 @@ void rec_dispatch_miss(Core *c, uint32_t addr) {
                  resov ? resov : "(addr not in any slot range)");
     guest_backtrace_to(c, stderr);
     guest_find_word_to(c, stderr, addr | 0x80000000u);
+    // DUMP THE DISPATCH-DECISION RING (crashbash-0018). The canned explanation above is wrong for a
+    // miss whose addr IS a recompiled main_dispatch case (0x80012840 fired exactly that way, flakily,
+    // only in plain runs). The ring is the same shape as the failing run because it records with no
+    // I/O: the last DISPDEC_* entry before this MISS marker names the branch — or the absence of any
+    // entry for this addr names a bypass caller — that actually produced the miss.
+    c->idiag.dumpDispdec();
     // DUMP RAM BEFORE DYING. A miss is exactly the moment worth analysing offline — the missing code
     // is RESIDENT right now, along with whatever overlay brought it in, and the process is about to
     // take that state to the grave. Reconstructing it afterwards from image slices means guessing
