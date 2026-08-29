@@ -821,6 +821,39 @@ def test_is_func_entry():
     assert not emit.is_func_entry(e, 0x80010004)   # the `jr ra` itself is not an entry
 
 
+def test_is_func_entry_after_padded_return():
+    # Crash Bash 0x8004718C: a stackless leaf whose predecessor ends `jr ra; <real delay>` and is
+    # then PADDED with nops before the entry. The previous signal (b) only accepted `jr ra` at
+    # w-8; padding pushed it out of reach, the overlay-seed filter dropped the entry, and the
+    # substrate fail-fasted on the runtime callback. A `jr ra` followed by its delay slot and a
+    # bounded run of nops is the same function boundary.
+    a = Asm(0x80010000)
+    a.addiu("v0", "zero", 1)     # 0x80010000: body of the padded entry's predecessor
+    a.jr("ra")                   # 0x80010004: predecessor returns
+    a.addiu("v1", "zero", 2)     # 0x80010008: non-nop delay slot (the Crash Bash shape)
+    a.nop()                      # 0x8001000C: padding
+    a.nop()                      # 0x80010010: padding
+    a.addiu("a0", "zero", 3)     # 0x80010014: stackless leaf entry after the padded return
+    a.jr("ra")                   # 0x80010018
+    a.nop()
+    a.addiu("a1", "zero", 4)     # 0x80010020: entry right after jr-ra+delay (signal (b), unpadded)
+    data, end = a.assemble()
+    e = exe_of(data)
+    assert emit.is_func_entry(e, 0x80010014)   # padded boundary -> entry
+    assert emit.is_func_entry(e, 0x80010020)   # unpadded signal (b) still works
+    assert not emit.is_func_entry(e, 0x80010004)   # the `jr ra` itself is not an entry
+    # A long nop run with NO preceding `jr ra` is data, not a boundary: the scan must refuse when
+    # the run exceeds the padding bound instead of walking back into arbitrary code.
+    big = Asm(0x80010000)
+    big.addiu("v0", "zero", 1)
+    for _ in range(12):
+        big.nop()
+    big.addiu("a0", "zero", 2)
+    data2, _ = big.assemble()
+    e2 = exe_of(data2)
+    assert not emit.is_func_entry(e2, 0x80010034)   # 12 nops exceed the padding bound
+
+
 def test_overlay_jal_shaped_data_only_seeds_real_entries():
     # An overlay is a mixed code/data blob. A data word that decodes as `jal` must not promote an
     # arbitrary instruction in MAIN into the function partition: that splits the resident body at

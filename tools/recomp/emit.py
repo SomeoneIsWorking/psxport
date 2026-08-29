@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-28.2"    # alternate-link continuations derive from discovered code only
+RECOMP_VERSION = "2026-08-29.1"    # is_func_entry accepts a jr-ra boundary behind bounded nop padding
 
 R = lambda n: f"c->r[{n}]"
 
@@ -2133,10 +2133,14 @@ def overlay_data_func_pointers(exe, overlay_dir):
 
 
 def is_func_entry(exe, w):
-    """Does in-text address `w` look like a FUNCTION ENTRY? Two strong, independent signals:
-      (a) standard prologue `addiu sp, sp, -N` (0x27BD8000 mask, negative imm), or
+    """Does in-text address `w` look like a FUNCTION ENTRY? Three signals:
+      (a) standard prologue `addiu sp, sp, -N` (0x27BD8000 mask, negative imm),
       (b) the word at w-8 is `jr ra` (0x03E00008) — i.e. w starts right after the previous function's
-          return + delay slot (catches STACKLESS LEAF fns that start with lui/lw, no frame setup).
+          return + delay slot (catches STACKLESS LEAF fns that start with lui/lw, no frame setup), or
+      (c) the same boundary with PADDING: `jr ra` + its (decodable) delay slot, then a bounded run of
+          nops, then w. Linkers pad function tails, and entries that only ever run from a computed
+          jump (registered event callbacks) sit behind that padding — signal (b) misses them and a
+          dropped legitimate entry is a runtime recomp-MISS.
     Requires w in text, 4-aligned, and decoding as a real instruction (filters data)."""
     lo, hi = exe.load, exe.text_end
     if not (lo <= w < hi and (w & 3) == 0):
@@ -2145,7 +2149,16 @@ def is_func_entry(exe, w):
         return False
     if (exe.word(w) & 0xFFFF8000) == 0x27BD8000:        # (a) addiu sp, sp, -N
         return True
-    if w - 8 >= lo and exe.word(w - 8) == 0x03E00008:   # (b) preceded by `jr ra; <delay>`
+    back = 4
+    while (w - back >= lo and exe.word(w - back) == 0    # trailing nop padding ...
+           and back < 8 * 4 + 4):                        # ... bounded, so a zero run is not a scan
+        back += 4
+    if w - back < lo:
+        return False
+    if exe.word(w - back) == 0x03E00008:                 # (c) `jr ra` whose nop delay/padding w follows
+        return True
+    if (exe.word(w - back) != 0 and w - back - 4 >= lo
+            and exe.word(w - back - 4) == 0x03E00008):   # (b)/(c) `jr ra` + non-nop delay [+ nops]
         return True
     return False
 
