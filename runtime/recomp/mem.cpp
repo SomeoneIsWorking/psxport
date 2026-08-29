@@ -6,6 +6,7 @@
 #include "core.h"
 #include "dma_irq.h" // DPCR/DICR semantics — which DMA completions the guest hears about
 #include "game.h"
+#include "io_peripherals.h"
 #include "recomp_iface.h"     // seam: psxport_recomp()->guestMemset_gen (generated gen_func_8009A420)
 #include "render_substrate.h" // RenderMode::displayPassArmed() — pc_render read-only-overlay guard
 #include <execinfo.h>
@@ -604,28 +605,13 @@ static void warn_unmapped_ram(Core *gc, uint32_t a, uint32_t bytes, const char *
 
 uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
-  if (p == 0x1F801110) { // root counter 1: HBlank-clocked free-running 16-bit counter
-    return game->timing.hSyncCounter();
+  uint32_t peripheral = 0; // SIO0 + the root counters own their decode (io_peripherals.h)
+  if (io_peripheral_read(*this, a, peripheral)) {
+    return peripheral;
   }
   if (p == 0x1F801814) {              // GPUSTAT: report ready; toggle even/odd line
     io_gpustat_toggle ^= 0x80000000u; // per-instance (Core member), not a shared static
     return 0x1C000000u | io_gpustat_toggle;
-  }
-  if (p == 0x1F801070 || p == 0x1F801074) { // I_STAT / I_MASK — see hle.h
-    const uint32_t rv = (p == 0x1F801070) ? irqStatLatch() : game->hle.i_mask;
-    // `PSXPORT_DEBUG=irq` — the interrupt controller's whole traffic. Worth a channel because both
-    // of the questions this subsystem raises are invisible otherwise: whether a guest VERIFIER is
-    // even reaching I_STAT (before this model existed the read fell through to unmapped I/O and
-    // returned 0, so every verifier rejected and nothing said so), and whether a bit the framework
-    // asserted was ever acknowledged. `ra` names the verifier or handler doing the read.
-    lucent::debug("irq",
-                  "r {} = 0x{:03X} (stat=0x{:03X} mask=0x{:03X}) ra={:08X}",
-                  p == 0x1F801070 ? "I_STAT" : "I_MASK",
-                  rv,
-                  game->hle.i_stat,
-                  game->hle.i_mask,
-                  r[31]);
-    return rv;
   }
   if (p >= 0x1F801800 && p <= 0x1F801803) { // CD controller registers
     const uint32_t rv = cdc_read(&game->cdc, p);
@@ -747,40 +733,9 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   return 0;
 }
 
-// Fold any interrupt edge the CD controller has raised since the last look into I_STAT, then return
-// it. Bit 2 is EDGE-triggered on real hardware: the guest acks the CD controller at 0x1F801803 and
-// acks I_STAT separately by writing a 0 to the bit, so deriving the bit LEVEL-style from "is the
-// response queue non-empty" would be wrong in both directions — it would re-assert after an I_STAT
-// ack and drop while a response is still pending. Called from every I_STAT read and write so the
-// latch cannot be missed regardless of which the guest does first.
-uint32_t Core::irqStatLatch() {
-  if (game->cdc.irq_edge) {
-    game->cdc.irq_edge = 0;
-    game->hle.i_stat |= 1u << 2;
-    pending_work |= PW_IRQ; // arm the per-function-entry delivery gate
-    lucent::debug("irq",
-                  "CD raised IRQ2 -> I_STAT=0x{:03X} (mask=0x{:03X}, {})",
-                  game->hle.i_stat,
-                  game->hle.i_mask,
-                  (game->hle.i_mask & 4) ? "ENABLED" : "masked off by the guest");
-  }
-  return game->hle.i_stat;
-}
-
 void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
-  if (p == 0x1F801070) {                      // I_STAT: acknowledge. A bit written as 0 is
-    irqStatLatch();                           // cleared; a bit written as 1 is left alone. This
-    const uint32_t before = game->hle.i_stat; // is the PSX's semantic, NOT write-1-to-clear.
-    game->hle.i_stat &= v & 0x7FFu;
-    lucent::debug(
-        "irq", "w I_STAT 0x{:03X}: 0x{:03X} -> 0x{:03X} ra={:08X}", v & 0x7FFu, before, game->hle.i_stat, r[31]);
-    return;
-  }
-  if (p == 0x1F801074) { // I_MASK
-    game->hle.i_mask = v & 0x7FFu;
-    pending_work |= PW_IRQ; // unmasking may have made a latched bit deliverable
-    lucent::debug("irq", "w I_MASK 0x{:03X} ra={:08X}", game->hle.i_mask, r[31]);
+  if (io_peripheral_write(*this, a, v)) { // SIO0 + root counter 2 (io_peripherals.h)
     return;
   }
   if (p >= 0x1F801800 && p <= 0x1F801803) { // CD controller

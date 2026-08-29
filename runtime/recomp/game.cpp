@@ -19,6 +19,7 @@ Game::Game() {
   timing.game = this;
   pad.game = this;
   hle.game = this;
+  sio.game = this;
   rq.game = this;
   pcSched.game = this;
   cd.game = this;

@@ -71,8 +71,11 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 `menu tab` / `menu nav`), and the decision NOT to stand an ImGui developer stack up yet.
 
 ## `runtime/recomp/` — the PSX→PC PLATFORM (common; future `psxport` submodule)
-**Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (guest-memory access, hardware-bus
-dispatch, and watchpoints PSXPORT_WWATCH/CW), `cpu_divide.{h,cpp}` (the narrow R3000 DIV/DIVU
+**Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (guest-memory access, top-level
+hardware-bus dispatch, and watchpoints PSXPORT_WWATCH/CW), `io_peripherals.{h,cpp}` (SIO0,
+I_STAT/I_MASK, and root-counter address decode), `sio_pad.{h,cpp}` (one digital controller on SIO0,
+including full-duplex response order, transfer and /ACK deadlines, interrupt request, and port
+selection), `cpu_divide.{h,cpp}` (the narrow R3000 DIV/DIVU
 quotient/remainder owner shared by emitted and interpreted code),
 `game_runtime.{h,cpp}` + `render_capabilities.h` + `guest_program_image.h` +
 `guest_pad_buffer_layout.h` + `guest_cd_stream_callback_layout.h` + `game_iface.{h,cpp}`
@@ -273,8 +276,9 @@ guest-RAM slot containing the current CD-ready callback; `Cd::pumpStream` shares
 INT1 data-ready response), `cdc_native.cpp` (per-Game register/FIFO/IRQ model, BFRD
 latch and command effects), `cdc_command_phase.{h,cpp}` (oracle-derived command receive, argument,
 execution, and completion scheduler), `cd_drive_timing.cpp` (nominal 75/150-sector thresholds),
-`emulated_time.{h,cpp}` + `timing.cpp` (per-Game deterministic emulated CPU-time owner and the
-NTSC/PAL HBlank phase exposed through root counter 1 at `0x1F801110`),
+`emulated_time.{h,cpp}` + `timing.cpp` (per-Game deterministic emulated CPU-time owner, exact
+fractional-display-field VBlank delivery, the NTSC/PAL HBlank phase exposed through root counter 1
+at `0x1F801110`, and timer-2 stopwatch value/mode/target registers at `0x1F801120..128`),
 `frame_pacer.{h,cpp}` (display cadence + guest field delivery + optional host sleep), `disc.cpp`
 (libchdr plus the parsed CHD track layout and Sub-Q position synthesis), `memcard.cpp`. Native CDC
 command `0x11` (`GetlocP`) returns all eight BCD track/index/relative/absolute position bytes from
@@ -286,10 +290,18 @@ when host sleeping is disabled. ReadN schedules its first and following INT1 at 
 (1x) or 225,792 ticks (Setmode bit 0x80, 2x). One instruction currently contributes one tick, so this
 is deterministic ordering rather than cycle-accurate physical timing.
 Root counter 1 remains the read-only guest observation of the free-running low-16-bit HSync count.
+Root counter 2 supports system-clock and clock/8 stopwatches, its four timer-2 sync modes, and
+bit-3 reset at the programmed target period; its target/wrap IRQ and reached-target/reached-max
+status bits remain deliberately unmodelled.
 No Sony libetc `VSync` mode is a shipping observation or field-delivery seam: every product declares
 its measured address and all modes abort there. `test_hsync_counter` gates the MMIO observation,
 intra-field line-248 progression, NTSC/PAL field geometry, and invalid-cadence refusal;
-`test_vsync_ownership` gates direct and adapter trap installation, modes -1/0/1/N, replacement refusal,
+`test_root_counter2` gates the shipping MMIO path, clock sources, sync-mode stop/free matrix, writes,
+wrap, target storage, and the measured latch/spin timeout. `test_vblank_irq` gates full and fractional
+field cadence plus masked/later-unmasked SysEnq chain delivery. `test_sio_pad` gates the shipping SIO0
+MMIO response sequence, absent devices/port 2, transfer and /ACK timing, interrupt gating/re-arming,
+and the measured JOY_STAT pulse/CTRL acknowledge order. `test_vsync_ownership` gates direct and adapter
+trap installation, modes -1/0/1/N, replacement refusal,
 missing-address refusal, and address-window refusal. The clock uses nominal non-interlaced field
 geometry; alternating interlaced field parity is not modeled.
 BFRD never creates an event:

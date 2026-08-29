@@ -49,11 +49,12 @@ public:
   // to test `I_MASK & bit` then `I_STAT & bit` — rejected unconditionally. Per-Game, like the rest of
   // the hardware state, so two Cores never share an interrupt controller.
   //
-  // Only sources the framework ACTUALLY models may set a bit here. Today that is bit 2 (CDROM),
-  // latched from CdcState::irq_edge, and bit 9 (SPU), latched from the vendored Beetle SPU's own
-  // address-match logic by spu_irq_raise (hw_bind.cpp). The rest stay 0 — and 0 means "this framework
-  // has no source for that interrupt", NOT "the hardware did not raise it". Do not assert a bit from a
-  // free-running timer to make some guest wait finish; that is fabricating an event.
+  // Only sources the framework ACTUALLY models may set a bit here: display-field completion raises
+  // bit 0 (VBlank), Sio0's enabled controller /ACK request raises bit 7, CdcState::irq_edge raises bit
+  // 2 (CDROM), and the vendored Beetle SPU's address-match logic raises bit 9 through spu_irq_raise
+  // (hw_bind.cpp). The rest stay 0 — and 0 means "this framework has no source for that interrupt",
+  // NOT "the hardware did not raise it". In particular, root-counter IRQ/status semantics remain
+  // unmodelled; do not fabricate a timer event to make a guest wait finish.
   uint32_t i_stat = 0;
   uint32_t i_mask = 0;
 

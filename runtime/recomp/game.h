@@ -37,6 +37,7 @@
 #include "render_queue.h"                // RenderQueue — the engine-owned draw-order authority
 #include "repl.h"                        // class Repl — REPL driver + title-owned request state
 #include "rmlui_overlay.h"               // class RmlOverlay — mod/debug HTML UI + world readout HUD
+#include "sio_pad.h"                     // class Sio0 — the controller port and the device on it
 #include "spu_audio.h"                   // class SpuAudio — host audio output sink (SDL3 + WAV capture)
 #include "spu_device.h"                  // class SpuDevice — per-instance SPU state handle (Beetle spu.c)
 #include "timing.h"                      // class Timing — native VBlank/VSync frame clock
@@ -67,6 +68,7 @@ public:
   CdcState cdc;   // native CD-controller register model (per-instance; cdc_native.c, explicit param)
   XaState xa;     // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
   Hle hle;
+  Sio0 sio; // controller port (SIO0) hardware: the pad protocol and its transfer/ack deadlines
   DmaCallbackRegistry dmaCallbacks;
   Pad pad;
   Repl repl;                           // interactive REPL driver + title-consumed requests (repl.cpp)

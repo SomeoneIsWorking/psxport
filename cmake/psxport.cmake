@@ -83,6 +83,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/overlay_router.cpp
   ${PSXPORT_ROOT}/runtime/recomp/cfg.cpp
   ${PSXPORT_ROOT}/runtime/recomp/memcensus.cpp      # --wrap=memcpy call-site attribution (PSXPORT_MEMCENSUS)
+  ${PSXPORT_ROOT}/runtime/recomp/io_peripherals.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/sio_pad.cpp
   ${PSXPORT_ROOT}/runtime/recomp/mem.cpp
   ${PSXPORT_ROOT}/runtime/recomp/dma_callbacks.cpp # direct-runtime per-Game DMACallback registration state
   ${PSXPORT_ROOT}/runtime/recomp/cpu_divide.cpp     # R3000 DIV/DIVU quotient/remainder semantics

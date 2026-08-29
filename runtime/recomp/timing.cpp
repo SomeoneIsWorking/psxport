@@ -40,6 +40,7 @@ void Timing::bindCdcClock(CdcState *cdc) {
 void Timing::advanceGuestInstructionTicks(uint32_t ticks) {
   guestInstructionTicks += ticks;
   mEmulatedTime.advanceInstructions(ticks);
+  game->sio.service(mEmulatedTime.nowTicks());
   serviceCdc();
 }
 
@@ -51,12 +52,119 @@ bool Timing::advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilli
           static_cast<uint32_t>(fields), static_cast<uint32_t>(parts), fieldRateMilliHz)) {
     return false;
   }
+  game->sio.service(mEmulatedTime.nowTicks());
+  raiseVBlank(consumeCompletedDisplayFields(static_cast<uint32_t>(fields), static_cast<uint32_t>(parts)));
   serviceCdc();
   return true;
 }
 
+namespace {
+
+unsigned __int128 gcd128(unsigned __int128 a, unsigned __int128 b) {
+  while (b != 0) {
+    const unsigned __int128 remainder = a % b;
+    a = b;
+    b = remainder;
+  }
+  return a;
+}
+
+} // namespace
+
+uint32_t Timing::consumeCompletedDisplayFields(uint32_t fields, uint32_t parts) {
+  const unsigned __int128 common = gcd128(mDisplayFieldPhaseDenominator, parts);
+  const unsigned __int128 leftScale = parts / common;
+  const unsigned __int128 rightScale = mDisplayFieldPhaseDenominator / common;
+  const unsigned __int128 denominator = mDisplayFieldPhaseDenominator * leftScale;
+  const unsigned __int128 numerator = mDisplayFieldPhaseNumerator * leftScale + fields * rightScale;
+  const unsigned __int128 completed = numerator / denominator;
+  mDisplayFieldPhaseNumerator = numerator % denominator;
+  mDisplayFieldPhaseDenominator = denominator;
+  if (mDisplayFieldPhaseNumerator == 0) {
+    mDisplayFieldPhaseDenominator = 1;
+  } else {
+    const unsigned __int128 reduction = gcd128(mDisplayFieldPhaseNumerator, mDisplayFieldPhaseDenominator);
+    mDisplayFieldPhaseNumerator /= reduction;
+    mDisplayFieldPhaseDenominator /= reduction;
+  }
+  return static_cast<uint32_t>(completed);
+}
+
+// Every display field ends in a VBlank, and the display controller raises I_STAT bit 0 for it
+// whether or not anything is listening. The port owns FRAME PACING natively and traps every guest
+// VSync wait (see sync_overrides.cpp) — that is unchanged. What this asserts is only the INTERRUPT
+// EDGE, which is a separate thing a guest can own and which several drivers do: Crash Bash patches
+// its own pad engine into the kernel C0 table and does the whole controller handshake inside the
+// interrupt element it registers, so with no VBlank edge its verifier never ran, no SIO transfer
+// ever started, and no button state reached guest RAM (crashbash issue 0019).
+//
+// It costs nothing where nobody is listening: Hle::irqPoll delivers only when the guest has both
+// unmasked bit 0 in I_MASK and registered a chain element, and the bit stays latched until the
+// guest acknowledges it exactly as hardware does. A title that leaves VBlank masked — every one
+// whose vblank work the port already owns natively — sees no behavior change at all.
+void Timing::raiseVBlank(uint32_t fields) {
+  if (fields == 0) {
+    return;
+  }
+  // A latch, not a count: a guest that has not acknowledged the previous edge sees one pending
+  // VBlank, which is what the hardware bit does. Missed edges are the guest's own problem.
+  game->hle.i_stat |= 1u;
+  game->core.pending_work |= Core::PW_IRQ; // arm the per-function-entry delivery gate
+}
+
 uint64_t Timing::emulatedCpuTicks() const {
   return mEmulatedTime.nowTicks();
+}
+
+// ---- root counter 2 ------------------------------------------------------------------------
+// Counts the same emulated CPU time everything else here is measured in, so it advances exactly
+// when the guest executes instructions or waits out a display field, and it wraps at 16 bits like
+// the hardware register. Mode bit 9 selects system-clock/8. With sync enabled (bit 0), sync modes
+// 0 and 3 stop timer 2 while modes 1 and 2 free-run; without sync it always runs.
+//
+// Crash Bash's pad driver is why this exists (crashbash issue 0019): its inter-byte delays and its
+// per-byte /ACK timeout are both `latch counter 2, spin until the delta exceeds N` (guest
+// 0x8003C688 / 0x8003C6A8), so with the register unmapped and reading 0 the delta was always 0,
+// the budget was never reached, and the SIO transfer hung in its first delay forever.
+//
+// NOT modelled, deliberately, because nothing has yet demanded it: the target/wrap IRQ (mode bits
+// 4-5 and 10, I_STAT bit 6) and the reached-target/reached-max status bits 11-12. A guest that
+// waits on a timer INTERRUPT still gets nothing, and will hang visibly rather than being handed a
+// fabricated event.
+uint16_t Timing::rootCounter2() const {
+  const uint32_t syncMode = (rootCounter2Mode >> 1u) & 0x3u;
+  const bool stopped = (rootCounter2Mode & 0x1u) != 0 && (syncMode == 0u || syncMode == 3u);
+  if (stopped) {
+    return rootCounter2BaseValue;
+  }
+  const unsigned shift = (rootCounter2Mode & 0x200u) ? 3u : 0u; // bit 9: system clock / 8
+  const uint64_t count = rootCounter2BaseValue + ((mEmulatedTime.nowTicks() - rootCounter2OriginTicks) >> shift);
+  if (rootCounter2Mode & 0x008u) { // reset on target: the programmed target is the wrap period
+    const uint32_t period = rootCounter2Target > 1u ? rootCounter2Target : 1u;
+    return static_cast<uint16_t>(count % period);
+  }
+  return static_cast<uint16_t>(count);
+}
+
+void Timing::rootCounter2Write(uint32_t reg, uint32_t v) {
+  const uint64_t now = mEmulatedTime.nowTicks();
+  switch (reg & 0xCu) {
+  case 0x0: { // counter value: writing it restarts counting from that value
+    rootCounter2BaseValue = static_cast<uint16_t>(v);
+    rootCounter2OriginTicks = now;
+    return;
+  }
+  case 0x4: // mode: a write resets the counter to zero, as on hardware
+    rootCounter2Mode = v & 0x3FFu;
+    rootCounter2BaseValue = 0;
+    rootCounter2OriginTicks = now;
+    return;
+  case 0x8:
+    rootCounter2Target = v & 0xFFFFu;
+    return;
+  default:
+    return;
+  }
 }
 
 uint16_t Timing::hSyncCounter() const {

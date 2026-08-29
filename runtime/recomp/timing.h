@@ -26,6 +26,16 @@ public:
   // Wall time advances everywhere, always, which is precisely the property a drive needs.
   uint64_t wallClockOriginNs = 0; // bind instant for the wall-locked CDC clock
 
+  // ---- root counter 2 (0x1F801120 value / 0x1F801124 mode / 0x1F801128 target) ----------------
+  // A free-running system-clock counter. Guest code uses it as a stopwatch: latch the value, spin
+  // until the delta exceeds a budget. Contract and its measured limits are in timing.cpp.
+  uint32_t rootCounter2Mode = 0;
+  uint32_t rootCounter2Target = 0;
+  uint16_t rootCounter2BaseValue = 0;
+  uint64_t rootCounter2OriginTicks = 0;
+  [[nodiscard]] uint16_t rootCounter2() const;
+  void rootCounter2Write(uint32_t reg, uint32_t v);
+
   void bindCdcClock(CdcState *cdc);
   void advanceGuestInstructionTicks(uint32_t ticks);
   bool advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilliHz);
@@ -47,8 +57,14 @@ public:
 
 private:
   EmulatedTime mEmulatedTime;
+  // Exact rational phase for display pacing subdivisions. fps60 delivers two 1/2-field pacing
+  // calls for one physical field; only the completed whole field raises VBlank.
+  unsigned __int128 mDisplayFieldPhaseNumerator = 0;
+  unsigned __int128 mDisplayFieldPhaseDenominator = 1;
 
   static uint64_t readEmulatedCpuTicks(void *context);
   static uint64_t readWallLockedCdcTicks(void *context);
+  uint32_t consumeCompletedDisplayFields(uint32_t fields, uint32_t parts);
+  void raiseVBlank(uint32_t fields);
   void serviceCdc();
 };

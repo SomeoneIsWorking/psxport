@@ -187,8 +187,8 @@ public:
   // Core's storeWatchCb (installed by sbs.cpp) with (this, addr, value) —
   void wwatch_arm(uint32_t lo, uint32_t hi);
 
-  // Fold the CDC's pending interrupt edge into I_STAT, then read it. PUBLIC because interrupt
-  // delivery (Hle::irqPoll) has to test the same latch the guest would see.
+  // Service pending peripheral interrupt deadlines/edges into I_STAT, then read it. PUBLIC because
+  // interrupt delivery (Hle::irqPoll) has to test the same latch the guest would see.
   uint32_t irqStatLatch();
 
   // Fault-reporter helper: print any GPR that points at a printable C string in mapped RAM, with
