@@ -196,7 +196,11 @@ PainterObjectPlan planPainterItemStream(std::span<const RqItem *const> stream, P
       return refuse(PainterObjectRefusal::MixedFlushEpoch, i);
     }
     const RqItem *previous = i ? stream[i - 1] : nullptr;
-    if (previous && (previous->layer > item.layer || (previous->layer == item.layer && previous->seq > item.seq))) {
+    // draw_seq, not seq: this validates the queue is in the order sortQueue left it, and that is
+    // (layer, draw_seq). They differ only for an OT bucket's ties, which the resolver reorders --
+    // and painter objects are excluded from that resolver, so their two orders always agree.
+    if (previous &&
+        (previous->layer > item.layer || (previous->layer == item.layer && previous->draw_seq > item.draw_seq))) {
       return refuse(PainterObjectRefusal::UnsortedQueue, i);
     }
     if (!item.painter_object) {
@@ -286,7 +290,7 @@ PainterObjectPlan planPainterItemStream(std::span<const RqItem *const> stream, P
         }
       }
       std::stable_sort(members.begin(), members.end(), [&](size_t left, size_t right) {
-        return stream[left]->seq < stream[right]->seq;
+        return stream[left]->draw_seq < stream[right]->draw_seq; // queue draw order, as sorted
       });
       for (size_t i : members) {
         const RqItem &item = *stream[i];

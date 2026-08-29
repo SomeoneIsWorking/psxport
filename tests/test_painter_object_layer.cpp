@@ -26,6 +26,7 @@ static void add(RenderQueue &q,
   it.painter_object = id;
   it.painter_flags = flags;
   it.seq = seq;
+  it.draw_seq = seq; // what push() does; these fixtures build items directly
   it.layer = RQ_WORLD;
   it.order_mode = RQ_OM_DEPTH;
   it.nv = 3;

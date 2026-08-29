@@ -70,6 +70,7 @@ void push_face(RenderQueue &q,
   RqItem &it = q.items[q.n];
   memset(&it, 0, sizeof(it));
   it.seq = q.seq++;
+  it.draw_seq = it.seq; // what push() does; these fixtures build items directly
   it.layer = RQ_WORLD;
   it.order_mode = RQ_OM_DEPTH;
   it.nv = 4;
@@ -175,6 +176,18 @@ SnapCompare run_and_compare(RenderQueue &q) {
 }
 
 } // namespace
+
+// Which of two same-layer items is VISIBLE where they overlap, per the shipped renderer: the world
+// depth test is GREATER_OR_EQUAL with depth write, and the queue draws in (layer, draw_seq) order.
+// So a strictly nearer depth wins outright, and at EQUAL depth the one drawn LATER overwrites and
+// wins. Tests assert this rather than a depth inequality, because an OT bucket's ties are resolved
+// by draw order now and by depth separation before — the mechanism is what changed, not the answer.
+static bool wins_over(const RqItem &a, const RqItem &b) {
+  if (a.depth[0] != b.depth[0]) {
+    return a.depth[0] > b.depth[0];
+  }
+  return a.draw_seq > b.draw_seq;
+}
 
 static void test_pixel_predicate_rejects_degenerate_faces(void) {
   CHECK(rq_point_in_triangle(4, 4, 0, 0, 8, 0, 0, 8));
@@ -283,6 +296,7 @@ static void test_coincident_same_key_pair_snaps(void) {
   RqItem &rot = q->items[q->n];
   rot = q->items[0];
   rot.seq = q->seq++;
+  rot.draw_seq = rot.seq;
   // Rotate the vertex listing by one: same multiset of corners, different diagonal.
   for (int k = 0; k < 4; k++) {
     rot.xsf[k] = q->items[0].xsf[(k + 1) & 3];
@@ -294,9 +308,9 @@ static void test_coincident_same_key_pair_snaps(void) {
   CHECK_EQ(r.faces, 2);
   CHECK_EQ(r.oracle_snapped, 2);
   CHECK_EQ(r.disagreements, 0);
-  // Native emits seq 0 then seq 1. The PSX bucket walk is seq 1 then seq 0 because AddPrim inserts
-  // each packet at the head, so seq 0 must be nearer and win despite being emitted first.
-  CHECK(q->items[0].depth[0] > q->items[1].depth[0]);
+  // Native submits seq 0 then seq 1. The PSX bucket walk is seq 1 then seq 0 because AddPrim
+  // inserts each packet at the head, so seq 0 must WIN despite being submitted first.
+  CHECK(wins_over(q->items[0], q->items[1]));
 }
 
 // ---- 5. AddPrim head insertion: every same-bucket group reverses submission order ----------------
@@ -308,11 +322,12 @@ static void test_authored_bucket_depths_match_addprim_lifo(void) {
   }
   q->resolveKeyOrderFaces(0, "test", FACE_ORDER_AUTHORED);
 
-  // The linked-list oracle after repeated head insertion is [16..0]. Native still emits [0..16],
-  // so its depth order must be strictly [nearest..farthest] to make the same seq 0 packet win.
+  // The linked-list oracle after repeated head insertion is [16..0]. Native still submits [0..16],
+  // so every earlier submission must win over the next — which makes seq 0 the bucket's winner.
+  // One bucket costs ONE depth value: the whole group shares its band and draw order decides.
   for (int seq = 0; seq + 1 < kFaces; seq++) {
-    CHECK(q->items[seq].depth[0] > q->items[seq + 1].depth[0]);
-    CHECK(gpu_vk_map_3d_depth(q->items[seq].depth[0]) > gpu_vk_map_3d_depth(q->items[seq + 1].depth[0]));
+    CHECK(wins_over(q->items[seq], q->items[seq + 1]));
+    CHECK_EQ(q->items[seq].depth[0], q->items[seq + 1].depth[0]);
     CHECK_EQ(q->items[seq].authored_depth, 1);
   }
   CHECK_EQ(q->items[kFaces - 1].depth[0], q->items[kFaces - 1].key_ord);
@@ -333,9 +348,13 @@ static void test_authored_order_crosses_objects(void) {
   CHECK_EQ(q->items[0].authored_depth, 1);
   CHECK_EQ(q->items[1].authored_depth, 1);
   CHECK_EQ(q->items[2].authored_depth, 1);
+  CHECK(wins_over(q->items[0], q->items[1]));
+  CHECK(wins_over(q->items[0], q->items[2]));
+  CHECK(wins_over(q->items[2], q->items[1]));
+  // items 0 and 2 are the same bucket (500), so they tie on depth and draw order separates them;
+  // item 1 is a farther bucket (540) and is separated by depth.
+  CHECK_EQ(q->items[0].depth[0], q->items[2].depth[0]);
   CHECK(q->items[0].depth[0] > q->items[1].depth[0]);
-  CHECK(q->items[0].depth[0] > q->items[2].depth[0]);
-  CHECK(q->items[2].depth[0] > q->items[1].depth[0]);
 }
 
 // ---- 7. Crash Bash f300: the measured cross-object pair follows the retail OT -------------------

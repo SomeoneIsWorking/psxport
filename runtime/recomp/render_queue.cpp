@@ -104,8 +104,10 @@ bool RenderQueue::objidSolid(
     return false;
   }
   uint32_t seq = it->seq; // push() stamped the submission seq — preserve it
-  *it = RqItem{};         // zero every field (fps_*, sh_cast, has_xyf, depth, ...)
+  uint32_t draw_seq = it->draw_seq;
+  *it = RqItem{}; // zero every field (fps_*, sh_cast, has_xyf, depth, ...)
   it->seq = seq;
+  it->draw_seq = draw_seq;
   it->layer = RQ_HUD;
   it->order_mode = RQ_OM_2D_FG;
   it->nv = 4;
@@ -362,6 +364,7 @@ RqItem *RenderQueue::push() {
   pushed_total++; // monotonic; see render_queue.h — the only sound basis for a per-call prim count
   RqItem *it = &items[n++];
   it->seq = seq++;
+  it->draw_seq = it->seq; // draw order defaults to submission order; the OT resolver may permute it
   it->flush_ordinal = 0;
   it->painter_object = mPainterObject;
   it->painter_replay = {};
@@ -407,9 +410,10 @@ void RenderQueue::sortQueue() {
   if (n <= 1) {
     return;
   }
-  // Packed sort key: layer in the high word, seq in the low. Both are small non-negative ints (seq
-  // counts pushes from 0 and the queue caps far below 2^31), so unsigned comparison of the packed
-  // value is layer-major-then-seq by construction.
+  // Packed sort key: layer in the high word, DRAW seq in the low. Both are small non-negative ints
+  // (draw_seq is seeded from the push counter and the queue caps far below 2^31), so unsigned
+  // comparison of the packed value is layer-major-then-draw-order by construction. draw_seq, not
+  // seq: an OT bucket's ties are drawn in reverse submission order (see rq_apply_ot_lifo_depths).
   struct Key {
     uint64_t k;
     uint32_t idx;
@@ -419,7 +423,7 @@ void RenderQueue::sortQueue() {
   keys.reserve((size_t)n);
   bool already = true;
   for (int i = 0; i < n; i++) {
-    const uint64_t k = ((uint64_t)(uint32_t)items[i].layer << 32) | (uint32_t)items[i].seq;
+    const uint64_t k = ((uint64_t)(uint32_t)items[i].layer << 32) | (uint32_t)items[i].draw_seq;
     if (i && k < keys[(size_t)i - 1].k) {
       already = false;
     }
@@ -1657,8 +1661,10 @@ void RenderQueue::emitOrQueue(Core *core,
     RqItem *slot = push();
     if (slot) {
       uint32_t sq = slot->seq;
+      uint32_t dsq = slot->draw_seq;
       *slot = it;
       slot->seq = sq;
+      slot->draw_seq = dsq;
     }
   } else {
     emitItem(core, &it);

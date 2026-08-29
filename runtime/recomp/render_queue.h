@@ -114,9 +114,15 @@ struct RqItem {
   uint8_t dither;                    // original draw-mode DTD bit, carried per item
   PainterObjectId painter_object;    // 0 = ordinary path; non-zero = local authored-order object
   PainterReplayOrder painter_replay; // optional frame-wide guest replay position
-  uint32_t seq;                      // submission order — stable layer order; OT ties reverse it explicitly
-  uint32_t guest_packet;             // guest OT packet address, or 0 for a native source-owned face
-  uint32_t guest_ot_order;           // packet's draw position in the guest's actual OT walk
+  uint32_t seq;                      // submission order — stamped once at push(), never rewritten
+  // DRAW order, which is NOT submission order. sortQueue() sorts by (layer, draw_seq), and push()
+  // seeds it from `seq` so the default is submission order. rq_apply_ot_lifo_depths permutes it
+  // WITHIN one OT bucket to replay the guest's LIFO paint order. Keep the two separate: `seq` is
+  // what the guest actually submitted, and the source-OT oracle and fps60 pairing reason about that,
+  // so overloading it would silently redefine their answers.
+  uint32_t draw_seq;
+  uint32_t guest_packet;   // guest OT packet address, or 0 for a native source-owned face
+  uint32_t guest_ot_order; // packet's draw position in the guest's actual OT walk
   // Physical flush boundary inside a captured presentation. Layers restart at each DrawOTag/flush, so
   // painter planning may regroup only items sharing this ordinal. Live queues use zero; fps60 stamps it.
   uint32_t flush_ordinal;

@@ -344,7 +344,7 @@ static void cd_read(Core *c) {
       c->mem_w8(buf + i * 2048u + j, sec[j]);
     }
   }
-  if (c->game->cd.verbose) {
+  if (c->game->cd.verbose || lucent::channel_on("cd")) {
     lucent::info("cd", "read {} blk @ LBA {} -> 0x{:08X}", blocks, lba, buf);
   }
   c->r[V0] = 1; // bool: success
@@ -576,7 +576,7 @@ static void cd_loadfile(Core *c) {
   if (nsec) {
     c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1);
   }
-  if (c->game->cd.verbose) {
+  if (c->game->cd.verbose || lucent::channel_on("cd")) {
     lucent::info("cd", "loadfile {} B @ LBA {} -> 0x{:08X} ra=0x{:08X}", size, lba, dest, c->r[31]);
   }
   overlay_note_load(c, dest); // record the resident overlay now (fresh image matches its signature)
@@ -632,7 +632,7 @@ void Cd::asyncRead() {
   if (nsec) {
     c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1); // last sector read (pos tracker)
   }
-  if (verbose) {
+  if (verbose || lucent::channel_on("cd")) {
     lucent::info("cd", "async read {} words ({} B) @ LBA {} -> 0x{:08X}", words, bytes, lba, dest);
   }
   overlay_note_load(c, dest); // an A0* field-area code overlay may load here (MODE slot) — note it
