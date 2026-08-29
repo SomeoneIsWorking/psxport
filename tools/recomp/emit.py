@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-29.1"    # is_func_entry accepts a jr-ra boundary behind bounded nop padding
+RECOMP_VERSION = "2026-08-30.1"    # MAIN uses the mergeable jr-ra boundary scan already used by overlays
 
 R = lambda n: f"c->r[{n}]"
 
@@ -2164,7 +2164,7 @@ def is_func_entry(exe, w):
 
 
 def func_entries_after_return(exe):
-    """Overlay function-boundary scan: every in-text address whose preceding two words are
+    """Stripped-module function-boundary scan: every in-text address whose preceding two words are
     `jr ra; <delay>` — i.e. a function starts right after the previous one returns. For a self-
     contained overlay blob (no symbol table, reached via computed `jr`/`j` not just `jal`) this
     recovers the contiguous function layout directly. Unlike a blanket is_func_entry scan it does
@@ -2868,16 +2868,12 @@ def main():
     if "--limit" in sys.argv:
         limit = int(sys.argv[sys.argv.index("--limit") + 1])
 
-    # Seed purely from the BINARY — the entry point + the pointer scans — plus the GAME's OWN seed
-    # file (--seeds). Functions reached only indirectly (jalr through a function pointer), or entered
-    # as a runtime-computed re-entry point, are invisible to direct-jal discovery, and WHICH ones
-    # those are is a fact about the specific executable, not about the framework. Discovery then
-    # grows the recompiled set by following direct jal targets (discover_funcs).
-    #
-    # The interpreter is GONE (later-254): a fn reached only via a function pointer that no scan sees
-    # is NOT recompiled, so a call to it FAILS FAST at runtime — add it to the game's seed file when
-    # the boot surfaces it as a [recomp-MISS], with a note on how it is reached. (Set
-    # PSXPORT_USE_GHIDRA=1 to additionally seed from the Ghidra decomp, recompiling more up-front.)
+    # Seed from the BINARY first: entry point, pointer/constructed-pointer/table scans, mergeable
+    # jr-ra function boundaries, then direct-jal closure. The GAME's OWN seed file (--seeds) is only
+    # for measured residuals those generic analyses cannot derive, plus true mid-function re-entry
+    # points. A native-product call to an uncompiled target still FAILS FAST: classify the miss and
+    # improve the shared analysis when the binary contains generic evidence; add an explicit seed only
+    # when it does not. PSXPORT_USE_GHIDRA=1 additionally seeds from a Ghidra decomp for diagnosis.
     if "--seeds" in sys.argv:
         gs = load_seeds(sys.argv[sys.argv.index("--seeds") + 1])
     else:
@@ -2966,8 +2962,15 @@ def main():
               f"direct calls into {', '.join(f'[0x{lo:08X},0x{hi:08X})' for lo, hi in g_shadow)} "
               f"route through the resident-overlay router instead of binding to MAIN's body")
 
+    # MAIN and overlays have the same stripped-binary problem: runtime-patched callback/vtable slots
+    # contain no file pointer for pointer_table_funcs() to discover. A handler laid out after another
+    # function's `jr ra` is nevertheless a generic callable boundary. Overlays already feed these
+    # candidates through emit_module's merge/prune machinery; MAIN must use the same owner instead of
+    # forcing every observed runtime selector value into a title seed file.
+    soft_main = func_entries_after_return(exe)
     src_files = emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS,
-                            reentry=gs["main_reentry"], diagnostic_pcs=gs["diagnostic_pcs"])
+                            soft_seeds=soft_main, reentry=gs["main_reentry"],
+                            diagnostic_pcs=gs["diagnostic_pcs"])
     g_shadow = ()
 
     # The disc's boot stub (SCUS_944.54): the real PSX entry — draws SCEA, then LoadExec's MAIN.

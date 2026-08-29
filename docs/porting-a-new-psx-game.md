@@ -58,12 +58,16 @@ with owned native code*, gated by the harness.
 
 ### The game's seed file (`emit.py --seeds`)
 
-The recompiler discovers functions from the binary itself — the entry point, the pointer/table scans,
-then the direct-`jal` call graph. What it *cannot* see is anything reached only through a function
-pointer, or entered at a runtime-computed re-entry point (a cooperative loop top, a stage entry the
-native path owns, a hard-coded absolute call into another overlay's slot). Which addresses those are
-is a fact about **the specific executable**, and each overlay's load base is a fact about **the
-specific disc**. So the framework ships none of them and every game supplies its own seed file:
+The recompiler discovers functions from the binary itself — the entry point, pointer/constructed-
+pointer/table scans, mergeable function boundaries after `jr ra`, then the direct-`jal` call graph.
+This includes ordinary handlers whose runtime-patched callback slots are zero in the file: the
+address need not appear as data when the stripped module's own layout proves a callable boundary.
+
+What it still cannot derive is a target with no generic file evidence, or a runtime-computed
+**mid-function** re-entry point (a cooperative loop top, a saved interrupt continuation, a stage
+entry the native path owns). Those addresses are facts about **the specific executable**, and each
+overlay's load base is a fact about **the specific disc**. Every game supplies only those residual
+facts in its seed file:
 
 ```sh
 python3 tools/recomp/emit.py MAIN.EXE generated/rec.c --seeds game/recomp_seeds.json [--overlays DIR]
@@ -95,8 +99,11 @@ Two rules this enforces, both learned the hard way:
   dispatcher and leaves CD/SPU callbacks unreachable. Its eventual `B0:0x17 ReturnFromException`
   is non-returning; psxport unwinds generated frames back to the interrupted register context.
 
-Grow the file empirically: boot, and when the substrate fail-fasts with a `[recomp-MISS]`, add that
-address with a note on how it is reached.
+Treat a `[recomp-MISS]` as a discovery failure, not automatically as a new seed. First classify the
+live module and target: if the retail bytes contain a generic function boundary, pointer construction,
+table entry, direct call, or other repeatable evidence, extend the shared emitter and gate its false
+answer. Add a commented game seed only when that analysis proves the file carries no derivable entry
+evidence. This keeps title seed files as measured residuals instead of a miss/rebuild work log.
 
 ---
 

@@ -442,6 +442,54 @@ def test_prologue_soft_seed_survives_merge():
     assert g not in merged, "expected the branch-cross to merge g when it is removable"
 
 
+def test_main_cli_discovers_unreferenced_return_boundary_handlers():
+    """The shipping MAIN path must use the same mergeable return-boundary discovery as overlays.
+
+    Runtime-patched callback/vtable slots are zero in the executable, so neither pointer scanning nor
+    direct-call closure can discover their handlers. The handlers are still ordinary functions laid
+    out immediately after a preceding ``jr ra`` and delay slot. Crash Bash's 0x80012420 method family
+    has exactly this shape; denying MAIN the boundary pass forced one fatal miss and manual seed per
+    selector value even though overlays already use the generic analysis.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    a = Asm()
+    a.addiu("sp", "sp", -8)         # executable entry: the only hard seed
+    a.jr("ra")
+    a.nop()
+    handler_a = 0x8001000C           # unreferenced, but starts after jr-ra + delay
+    a.addiu("v0", "zero", 1)
+    a.jr("ra")
+    a.nop()
+    handler_b = 0x80010018           # a second runtime selector value
+    a.addiu("sp", "sp", -8)         # independent prologue: unquestionably callable
+    a.jr("ra")
+    a.nop()
+    text, _ = a.assemble()
+
+    with scratch_tempdir("emit-main-soft-boundary-") as td:
+        exe_path = os.path.join(td, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)
+        struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))
+        open(exe_path, "wb").write(bytes(hdr) + text)
+        seeds_path = os.path.join(td, "seeds.json")
+        open(seeds_path, "w").write("{}")
+        gen = os.path.join(td, "generated")
+        os.makedirs(gen)
+        env = dict(os.environ, PSXPORT_SHARDS="1", PSXPORT_USE_GHIDRA="0")
+        result = subprocess.run([sys.executable, os.path.join(here, "emit.py"), exe_path,
+                                 os.path.join(gen, "rec.c"), "--seeds", seeds_path],
+                                capture_output=True, text=True, env=env)
+        assert result.returncode == 0, f"emit.py failed:\n{result.stdout}\n{result.stderr}"
+        dispatch = open(os.path.join(gen, "shard_disp.c")).read()
+
+    for handler in (handler_a, handler_b):
+        case = f"case 0x{handler & 0x1FFFFFFF:08X}u:"
+        assert case in dispatch, \
+            f"MAIN return-boundary handler 0x{handler:08X} was not dispatchable through the shipping CLI"
+
+
 
 
 
