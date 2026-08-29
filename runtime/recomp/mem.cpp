@@ -739,7 +739,11 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   warn_unmapped_ram(this, a, bytes, "read");
   // `PSXPORT_DEBUG=io` — an unmapped PERIPHERAL access (a RAM address never gets here; the call above
   // fail-fasts on those). Reads back 0, which is what an unimplemented register looks like to a guest.
-  lucent::debug("io", "read{} @ 0x{:08X} -> 0", bytes * 8, a);
+  // `ra` is included because "which function spins on this register" is usually the whole question —
+  // it names the guest routine whose hardware model is missing (the SIO poll family, for one). Static
+  // gen-to-gen calls do not refresh pc/ra, so treat these as hints and confirm a cold call site
+  // through a dispatch or super boundary before RE-ing against them.
+  lucent::debug("io", "read{} @ 0x{:08X} -> 0 (ra={:08X} pc={:08X})", bytes * 8, a, r[31], pc);
   return 0;
 }
 
