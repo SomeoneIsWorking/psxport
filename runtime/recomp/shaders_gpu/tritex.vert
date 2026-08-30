@@ -22,5 +22,9 @@ void main() {
     // Negate Y: SDL_GPU offscreen targets are Y-up, so VRAM row 0 -> NDC y=+1 -> texture row 0 (matches the
     // uploaded backdrop). gl_FragCoord.y then equals the VRAM row, which the draw-area clip + in-shader
     // semi blend (vram_at(px,py)) rely on. See tri.vert.
-    gl_Position = vec4(i_pos.x / 512.0 - 1.0, -(i_pos.y / 256.0 - 1.0), i_ord, 1.0);
+    // PSX coverage is evaluated at the pixel's INTEGER coordinate, while Vulkan samples pixel centres.
+    // Shift by half a native pixel exactly as tri.vert does, so both pipelines carry one coverage rule.
+    // psxUvAtIntegerPixel() rewinds UV against this same convention.
+    vec2 psx_sample_center = i_pos + vec2(0.5);
+    gl_Position = vec4(psx_sample_center.x / 512.0 - 1.0, -(psx_sample_center.y / 256.0 - 1.0), i_ord, 1.0);
 }

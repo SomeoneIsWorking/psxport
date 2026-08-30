@@ -138,6 +138,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_depth.cpp # normalized 3D depth and per-primitive order policy
   ${PSXPORT_ROOT}/runtime/recomp/gpu_painter.cpp # painter target lifecycle + authored command staging
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_texture_coverage_selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_modulation_selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_semi_selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_texture_phase_selftest.cpp

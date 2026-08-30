@@ -16,7 +16,10 @@
 // for every axis-aligned prim and every interior fragment, and a hard stop at the primitive's own
 // texels everywhere else.
 vec2 psxUvAtIntegerPixel(vec2 centerUv, int scale, ivec4 uvbb) {
-    vec2 subpixel = vec2(ivec2(gl_FragCoord.xy) % scale) + vec2(0.5);
+    // tritex.vert already shifted the primitive by half a NATIVE pixel to put PSX integer-coordinate
+    // coverage on Vulkan pixel centres, so the rewind is measured from the native pixel's own centre
+    // rather than from its top-left corner: at 1x the fragment centre already IS the PSX sample point.
+    vec2 subpixel = vec2(ivec2(gl_FragCoord.xy) % scale) + vec2(0.5 - float(scale) * 0.5);
     vec2 integerPixelUv = centerUv - subpixel.x * dFdx(centerUv) - subpixel.y * dFdy(centerUv);
     // The PSX rasterizer carries affine UV with 12 fractional bits, then adds half a texel before
     // converting to integer. Snap the float reconstruction to that representable grid before the

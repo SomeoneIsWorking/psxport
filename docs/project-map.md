@@ -243,9 +243,12 @@ integer-coordinate edge coverage, 8-bit interpolation rounding, 5-bit truncation
 the DTD matrix. `gpu_vk_modulation_selftest.cpp` owns the texture*color modulation discriminator: a
 dark texel whose additive, average, and opaque cases separate the PSX's truncating `(texel5*color8)/128`
 from round-to-nearest, each seeded so a case that never rasterized cannot read as a pass.
-`shaders_gpu/tri.vert` owns the half-pixel transform that aligns those PSX integer
-sample coordinates with Vulkan pixel centers; the textured pipeline retains its separately verified
-phase. `shaders_gpu/tritex.frag` and `shaders_gpu/trisemi_hw.frag` own that integer modulation. All four use
+`gpu_vk_texture_coverage_selftest.cpp` owns the textured
+counterpart: a narrow triangle whose vertex sits exactly on a PSX integer pixel coordinate, with an
+interior control probe so a draw that never rasterized cannot read as a pass.
+`shaders_gpu/tri.vert` and `shaders_gpu/tritex.vert` own the same half-pixel transform that aligns PSX
+integer sample coordinates with Vulkan pixel centers — one coverage rule for both pipelines — and
+`shaders_gpu/psx_uv.glsl` rewinds affine UV against that same convention. `shaders_gpu/tritex.frag` and `shaders_gpu/trisemi_hw.frag` own that integer modulation. All five use
 `gpu_vk_selftest_support.h`; `Game` construction makes the selftest reachable from
 every port, and `gpu_vk.cpp` supplies only the shipping
 upload/`render_geom`/readback operation. `shaders_gpu/psx_uv.glsl` is the one 12-fractional-bit

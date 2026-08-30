@@ -1,20 +1,21 @@
 #include "gpu_vk.h" // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
 #include "core.h"
-#include "game.h"                          // Game / GpuVkState (per-instance render state)
-#include "game_hooks_opt.h"                // guarded optional fade-state reader
-#include "gpu_painter.h"                   // authored painter staging + focused GPU discriminator
-#include "gpu_vk_modulation_selftest.h"    // PSX texture*color modulation truncation through shipping shaders
-#include "gpu_vk_present_mode.h"           // preferred_present_mode — the sink must not stall the guest thread
-#include "gpu_vk_present_policy.h"         // present_rebuild_decision — when a present must rebuild the composite
-#include "gpu_vk_semi_selftest.h"          // semi-textured PSX equations through shipping shaders + blend state
-#include "gpu_vk_texture_phase_selftest.h" // integer-pixel UV phase through opaque + semi shipping paths
-#include "gpu_vk_untextured_selftest.h"    // untextured G3 interpolation through the shipping opaque path
-#include "image_writer.h"                  // one checked RGB24 capture-file boundary
-#include "present_plan.h"                  // plan_present — the presented picture, decided identically in both legs
-#include "render_substrate.h"              // Render::stats (RenderStats — was g_dbg_world_quads)
-#include "sbs_pane_layout.h"               // pane_letterbox / sbs_pane_rect — where each frame lands in the window
-#include "wide_margin_plan.h"              // renderer-only coverage for host-visible VRAM extension
-#include <lucent/log.h>                    // diagnostics: lucent::debug (channel-gated internally — never guard it)
+#include "game.h"                             // Game / GpuVkState (per-instance render state)
+#include "game_hooks_opt.h"                   // guarded optional fade-state reader
+#include "gpu_painter.h"                      // authored painter staging + focused GPU discriminator
+#include "gpu_vk_modulation_selftest.h"       // PSX texture*color modulation truncation through shipping shaders
+#include "gpu_vk_present_mode.h"              // preferred_present_mode — the sink must not stall the guest thread
+#include "gpu_vk_present_policy.h"            // present_rebuild_decision — when a present must rebuild the composite
+#include "gpu_vk_semi_selftest.h"             // semi-textured PSX equations through shipping shaders + blend state
+#include "gpu_vk_texture_coverage_selftest.h" // PSX integer-pixel coverage through the shipping textured path
+#include "gpu_vk_texture_phase_selftest.h"    // integer-pixel UV phase through opaque + semi shipping paths
+#include "gpu_vk_untextured_selftest.h"       // untextured G3 interpolation through the shipping opaque path
+#include "image_writer.h"                     // one checked RGB24 capture-file boundary
+#include "present_plan.h"                     // plan_present — the presented picture, decided identically in both legs
+#include "render_substrate.h"                 // Render::stats (RenderStats — was g_dbg_world_quads)
+#include "sbs_pane_layout.h"                  // pane_letterbox / sbs_pane_rect — where each frame lands in the window
+#include "wide_margin_plan.h"                 // renderer-only coverage for host-visible VRAM extension
+#include <lucent/log.h>                       // diagnostics: lucent::debug (channel-gated internally — never guard it)
 // gpu_vk.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
 //
 // This is the PC-native renderer re-expressed on the SDL3 GPU API (SDL_gpu.h), replacing gpu_vk.cpp
@@ -3705,6 +3706,8 @@ void GpuVkState::tritest() {
   ok &= gpu_vk_run_semi_selftest(
       *this, pat, sizeof(gdev().s_selftest_pat) / sizeof(gdev().s_selftest_pat[0]), render_semi_selftest);
   ok &= gpu_vk_run_modulation_selftest(
+      *this, pat, sizeof(gdev().s_selftest_pat) / sizeof(gdev().s_selftest_pat[0]), render_semi_selftest);
+  ok &= gpu_vk_run_texture_coverage_selftest(
       *this, pat, sizeof(gdev().s_selftest_pat) / sizeof(gdev().s_selftest_pat[0]), render_semi_selftest);
 
   // Shipping painter discriminator: two authored textured faces cross at the same pixels; the later
