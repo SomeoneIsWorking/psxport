@@ -239,7 +239,10 @@ owns the 16-case PSX semi-textured equation matrix, packet setup, integer refere
 `gpu_vk_texture_phase_selftest.cpp` separately owns the 28-case 1x/3x opaque/semi integer-pixel UV-phase
 matrix, including positive and negative fractional slopes that distinguish PSX round-to-nearest from
 truncation. `gpu_vk_untextured_selftest.cpp` owns the ordinary opaque G3 discriminator for PSX
-8-bit interpolation rounding, 5-bit truncation, and both signs of the DTD matrix. All three use
+integer-coordinate edge coverage, 8-bit interpolation rounding, 5-bit truncation, and both signs of
+the DTD matrix. `shaders_gpu/tri.vert` owns the half-pixel transform that aligns those PSX integer
+sample coordinates with Vulkan pixel centers; the textured pipeline retains its separately verified
+phase. All three use
 `gpu_vk_selftest_support.h`; `Game` construction makes the selftest reachable from
 every port, and `gpu_vk.cpp` supplies only the shipping
 upload/`render_geom`/readback operation. `shaders_gpu/psx_uv.glsl` is the one 12-fractional-bit
