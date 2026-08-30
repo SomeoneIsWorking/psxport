@@ -178,7 +178,9 @@ for adapters. The adapter's one-way projection keeps unmigrated consumers source
 modules. Fixed ranges may nest: the router evaluates every containing resident identity (a current RAM
 signature, or a loader-recorded slot identity after the game mutates its header), chooses the smallest
 range, and refuses equal-specificity ambiguity. Dispatch, entry validation, and resident-name
-diagnostics share that one resolver. `test_overlay_reloc` includes Crash Bash's measured BOOT/MENU
+diagnostics share that one resolver. Its recdep histogram remains per-Core; `Game::~Game` invokes the
+router's dump before any `Game` member is destroyed, so the diagnostic never retains a Core or
+PlatformHle pointer past its owner. `test_overlay_reloc` includes Crash Bash's measured BOOT/MENU
 nested ranges and signatures, reverses and renames their registry, removes the nested signature where
 no loader identity exists, and constructs an equal-width ambiguity; the real consumer now routes
 MENU's 0x800B5244 target instead of first-matching BOOT.

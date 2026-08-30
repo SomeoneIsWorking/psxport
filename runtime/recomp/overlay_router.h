@@ -65,3 +65,7 @@ FixedOverlayResolution overlay_resolve_fixed(Core *c, uint32_t addr);
 // slot is empty or its content matches no known overlay, and null when `addr` is in no slot range.
 // Diagnostic only (the dispatch-miss reporter uses it to say which overlay was routed to).
 const char *overlay_router_resident_name(Core *c, uint32_t addr);
+
+// Emit this Core's substrate-dispatch dependency histogram while its owning Game and PlatformHle
+// registry are still alive. Game::~Game calls this before member destruction begins.
+void recdep_dump(Core *core);

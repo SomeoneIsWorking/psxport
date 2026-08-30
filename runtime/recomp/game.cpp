@@ -1,6 +1,7 @@
 #include "game.h"
-#include "config_vars.h" // cv_producers — PSXPORT_PRODUCERS, read once per Game below
-#include "ot_attr.h"     // g_producer_census_armed — armed by every Game's constructor, below
+#include "config_vars.h"    // cv_producers — PSXPORT_PRODUCERS, read once per Game below
+#include "ot_attr.h"        // g_producer_census_armed — armed by every Game's constructor, below
+#include "overlay_router.h" // recdep_dump — must run before Game member destruction
 
 Game::Game() {
   // THE PRODUCER-CENSUS ARM, from PSXPORT_PRODUCERS. This used to be assigned only inside
@@ -54,4 +55,6 @@ Game::Game() {
   }
 }
 
-Game::~Game() = default;
+Game::~Game() {
+  recdep_dump(&core);
+}

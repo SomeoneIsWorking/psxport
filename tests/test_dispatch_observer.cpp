@@ -14,6 +14,7 @@
 #include "game_iface.h"
 #include "recomp_iface.h"
 
+#include <lucent/log.h>
 #include <memory>
 
 void rec_dispatch(Core *c, uint32_t addr);
@@ -135,11 +136,23 @@ void test_generated_entry_is_not_double_observed_by_router() {
   CHECK_EQ(core.pcObserver.matched(), 1u);
 }
 
+void test_recdep_dump_precedes_core_destruction() {
+  // This is deliberately the last case and leaves recdep-all enabled through process exit. The old
+  // atexit design retained this Game's Core pointer, then dereferenced it after the unique_ptr had
+  // destroyed the Game; the test body passed and the executable exited with SIGSEGV.
+  lucent::enable_channels("recdep-all");
+  auto game = fresh_game();
+  rec_dispatch(&game->core, kGeneratedTarget);
+  CHECK_EQ(game->core.idiag.recdep.at(kGeneratedTarget), 1u);
+  game.reset();
+}
+
 } // namespace
 
 int main() {
   RUN(bios_boundary_is_observed_before_hle);
   RUN(unrelated_dynamic_target_does_not_call_observer);
   RUN(generated_entry_is_not_double_observed_by_router);
+  RUN(recdep_dump_precedes_core_destruction);
   return pt_summary();
 }

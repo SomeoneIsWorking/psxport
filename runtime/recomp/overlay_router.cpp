@@ -364,9 +364,8 @@ void interp_run(Core *c, uint32_t addr); // interp.cpp — pure-interpreter engi
 // exists because the two used to be independent, so `PSXPORT_DEBUG=recdep-all` alone armed nothing and
 // printed nothing — and an empty histogram is indistinguishable from "the run dispatched nothing".
 // A diagnostic whose failure mode is silence has to be impossible to arm halfway.
-// The histogram lives on Core (c->idiag.recdep); the atexit hook needs a static Core* because
-// atexit handlers take no context — documented signal/atexit exception, set once on first use.
-static Core *s_recdepCore = nullptr;
+// The histogram lives on Core (c->idiag.recdep). Its owning Game emits it from Game::~Game, before
+// Core or PlatformHle destruction; retaining a Core* for a process-exit callback is a use-after-free.
 static bool recdep_enabled() {
   return lucent::channel_on("recdep") || lucent::channel_on("recdep-all");
 }
@@ -376,13 +375,13 @@ static bool recdep_enabled() {
 static const char *recdep_chan() {
   return lucent::channel_on("recdep") ? "recdep" : "recdep-all";
 }
-extern "C" void recdep_dump() {
-  if (!recdep_enabled() || !s_recdepCore) {
+void recdep_dump(Core *core) {
+  if (!recdep_enabled() || !core) {
     return;
   }
   std::vector<std::pair<uint64_t, uint32_t>> v;
-  v.reserve(s_recdepCore->idiag.recdep.size());
-  for (auto &kv : s_recdepCore->idiag.recdep) {
+  v.reserve(core->idiag.recdep.size());
+  for (auto &kv : core->idiag.recdep) {
     v.push_back({kv.second, kv.first});
   }
   std::sort(v.rbegin(), v.rend());
@@ -397,7 +396,7 @@ extern "C" void recdep_dump() {
   // list is read as "what to own next". That misreads directly into wasted work: 0x800834A0
   // (gpuTimeoutArm) sat at the TOP of this histogram at 33,152 calls while PlatformHle had owned it
   // all along, and porting it would have been a double-install. Say so on the line instead.
-  PlatformHle *hle = s_recdepCore->game ? &s_recdepCore->game->platform_hle : nullptr;
+  PlatformHle *hle = core->game ? &core->game->platform_hle : nullptr;
   lucent::debug(chan, "top substrate dispatch targets (addr: calls), {} unique:", v.size());
   for (size_t i = 0; i < v.size() && i < cap; i++) {
     const bool owned = hle && hle->lookup(v[i].second) != nullptr;
@@ -441,10 +440,6 @@ void rec_dispatch(Core *c, uint32_t addr) {
     return;
   }
   if (recdep_enabled()) {
-    if (!s_recdepCore) {
-      s_recdepCore = c;
-      atexit(recdep_dump);
-    }
     c->idiag.recdep[(addr & 0x1FFFFFFF) | 0x80000000]++;
   }
   // Attack (a) probe: attribute rec_dispatch calls to specific overlay handlers. Env=hex address, e.g.
