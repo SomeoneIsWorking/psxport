@@ -56,6 +56,11 @@ Before any game logic (see `recomp-init`):
 You now have a byte-gated recomp running. Everything after is *progressively replacing substrate
 with owned native code*, gated by the harness.
 
+The emitter also writes `.recomp_identity` and compiled `g_rec_substrate_id`, derived from the exact
+emitted translation units and routing metadata. Expose that symbol through the game's
+`RecompRegistry::substrate_id`. App/framework Git IDs cannot describe ignored generated code; a runtime
+that reports the substrate as `UNKNOWN` is not valid evidence until the adapter is wired and regenerated.
+
 ### The game's seed file (`emit.py --seeds`)
 
 The recompiler discovers functions from the binary itself — the entry point, pointer/constructed-

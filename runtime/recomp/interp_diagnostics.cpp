@@ -2,7 +2,6 @@
 #include "interp_diagnostics.h"
 #include "cfg.h"
 #include "interp_diag.h"
-#include <lucent/log.h>
 #include <stdio.h>
 
 void interp_trace_open(Core *core, const char *path) {
@@ -65,45 +64,4 @@ void interp_ncall_log(InterpDiag &diag,
           a3,
           v0,
           v1);
-}
-
-// ── Dispatch-decision ring dump (crashbash-0018) ──────────────────────────────────────────────
-// Emitted at a fatal recomp-MISS: pairs the MISS marker against the decision that preceded it, so
-// the log names the router branch (or the bypass) that actually produced the miss instead of the
-// canned — and for 0x80012840 provably wrong — explanation in the miss diagnostic itself.
-void InterpDiag::dumpDispdec() const {
-  auto kindName = [](uint32_t k) -> const char * {
-    switch (k) {
-    case DISPDEC_ENTER:
-      return "ENTER";
-    case DISPDEC_MAIN:
-      return "MAIN";
-    case DISPDEC_LIVE:
-      return "LIVE";
-    case DISPDEC_FIXED:
-      return "FIXED";
-    case DISPDEC_AMBIG:
-      return "AMBIG";
-    case DISPDEC_OVERRIDE:
-      return "OVERRIDE";
-    case DISPDEC_MISSDROP:
-      return "MISSDROP";
-    case DISPDEC_MISS:
-      return "MISS";
-    default:
-      return "?";
-    }
-  };
-  lucent::info("dispdec", "dispatch-decision ring, oldest first, {} of {} slots:", dispdec_n, DISPDEC_CAP);
-  for (int i = 0; i < dispdec_n; i++) {
-    const int slot = (dispdec_pos + DISPDEC_CAP - dispdec_n + i) % DISPDEC_CAP;
-    const DispDecision &e = dispdec[slot];
-    lucent::info("dispdec",
-                 "  [{}] {} addr=0x{:08X} ra=0x{:08X}{}",
-                 i,
-                 kindName(e.kind),
-                 e.addr,
-                 e.ra,
-                 e.aux ? lucent::format(" aux=0x{:08X}", e.aux) : std::string());
-  }
 }

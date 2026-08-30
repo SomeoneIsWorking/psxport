@@ -50,38 +50,6 @@ struct InterpDiag {
   long pctrap_skip = 0;
   long pctrap_hit = 0;
 
-  // Dispatch-decision ring (issue crashbash-0018 discriminator). The flaky first-boot recomp-MISS at
-  // 0x80012840 prints an addr whose main_dispatch case EXISTS, so the canned miss diagnostic provably
-  // misreports the mechanism — but the miss only fires in plain runs and never under channel
-  // instrumentation, so a printf-at-decision-time probe changes the timing it is meant to observe.
-  // This ring records EVERY rec_dispatch entry and the branch it took (ENTER/MAIN/LIVE/FIXED/AMBIG/
-  // OVERRIDE/MISSDROP), plus rec_dispatch_miss entries, into a fixed per-core buffer with NO I/O —
-  // the same shape as a plain run. When the fatal miss fires, hle.cpp dumps the ring in order, and
-  // the last decision before the MISS marker names the branch (or the bypass) that produced it.
-  // Ring order: index walks oldest->newest; dispdec_pos is the NEXT write slot.
-  struct DispDecision {
-    uint32_t addr; // dispatch target as rec_dispatch received it (KSEG0)
-    uint32_t ra;   // c->r[31] at entry
-    uint32_t kind; // DISPDEC_* below
-    uint32_t aux;  // branch detail: overlay index for LIVE/FIXED, else 0
-  };
-  static constexpr uint32_t DISPDEC_ENTER = 1, DISPDEC_MAIN = 2, DISPDEC_LIVE = 3, DISPDEC_FIXED = 4, DISPDEC_AMBIG = 5,
-                            DISPDEC_OVERRIDE = 6, DISPDEC_MISSDROP = 7, DISPDEC_MISS = 8;
-  static constexpr int DISPDEC_CAP = 128;
-  DispDecision dispdec[DISPDEC_CAP] = {};
-  int dispdec_pos = 0; // next write slot; == dispdec_n while not yet wrapped
-  int dispdec_n = 0;   // entries recorded (saturates at DISPDEC_CAP once wrapped)
-  void dispdecRecord(uint32_t addr, uint32_t ra, uint32_t kind, uint32_t aux = 0) {
-    dispdec[dispdec_pos] = {addr, ra, kind, aux};
-    dispdec_pos = (dispdec_pos + 1) % DISPDEC_CAP;
-    if (dispdec_n < DISPDEC_CAP) {
-      dispdec_n++;
-    }
-  }
-  // Oldest-first dump on the "dispdec" channel; implemented out-of-line in interp_diagnostics.cpp
-  // so a unit test can drive record+dump without linking the dispatch/router substrate.
-  void dumpDispdec() const;
-
   // rec_dispatch diagnostics (overlay_router.cpp):
   // `debug recdep` — histogram of substrate dispatch targets (top-40 dumped at exit).
   std::map<uint32_t, uint64_t> recdep;

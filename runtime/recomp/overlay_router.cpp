@@ -409,17 +409,11 @@ extern "C" void recdep_dump() {
   }
 }
 void rec_dispatch(Core *c, uint32_t addr) {
-  // Dispatch-decision ring (crashbash-0018): recorded UNCONDITIONALLY — the flake this discriminates
-  // never fires under channel instrumentation, so any gated recording would change the thing it
-  // observes. Exactly ONE struct write per rec_dispatch call, at the DECISION point (the MISS marker
-  // written by rec_dispatch_miss pairs against the decision that preceded it); no I/O on this path.
   // ORACLE Core (later-278): interpret the target instead of routing to a recompiled body. The
   // interpreter handles overlay/non-recompiled code natively (no fail-fast miss), which is exactly why
   // the oracle uses it. The native port Core (use_interp==0) takes the substrate route below.
   if (c->use_interp) {
-    c->idiag.dispdecRecord(addr, c->r[31], InterpDiag::DISPDEC_ENTER);
     if (overrides::dispatchOracle(c, addr)) {
-      c->idiag.dispdecRecord(addr, c->r[31], InterpDiag::DISPDEC_OVERRIDE);
       return;
     }
     interp_run(c, addr);
@@ -444,7 +438,6 @@ void rec_dispatch(Core *c, uint32_t addr) {
   // owns the oracle gate: the psx_fallback / inSubstrateLeg leg runs the gen body, so SBS core B stays
   // the pure substrate reference. Hit counting + `dispatch`/`ovhit` tracing live inside the registry.
   if (overrides::dispatch(c, addr)) {
-    c->idiag.dispdecRecord(addr, c->r[31], InterpDiag::DISPDEC_OVERRIDE);
     return;
   }
   if (recdep_enabled()) {
@@ -519,7 +512,6 @@ void rec_dispatch(Core *c, uint32_t addr) {
   const RecompRegistry *R = psxport_recomp();
   const GuestProgramImage &image = program_image_for_routing(c);
   if (image.residentText.containsPhysical(a)) {
-    c->idiag.dispdecRecord(addr, c->r[31], InterpDiag::DISPDEC_MAIN);
     R->main_dispatch(c, addr); // pushes/pops inside the wrapper now — see the note above
     return;
   }
@@ -528,18 +520,15 @@ void rec_dispatch(Core *c, uint32_t addr) {
   // delta itself, so nothing is translated here.
   const int live = overlay_live_index(c, addr);
   if (live >= 0) {
-    c->idiag.dispdecRecord(addr, c->r[31], InterpDiag::DISPDEC_LIVE, (uint32_t)live);
     R->overlays[live].disp(c, addr); // pushes/pops inside the wrapper now
     return;
   }
   const FixedOverlayResolution fixed = overlay_resolve_fixed(c, addr);
   if (fixed.overlay) {
-    c->idiag.dispdecRecord(addr, c->r[31], InterpDiag::DISPDEC_FIXED, (uint32_t)fixed.overlay->base);
     fixed.overlay->disp(c, addr); // pushes/pops inside the wrapper now
     return;
   }
   if (fixed.addressInOverlayRange) {
-    c->idiag.dispdecRecord(addr, c->r[31], InterpDiag::DISPDEC_AMBIG);
     lucent::error("overlay-router",
                   "addr 0x{:08X} has {} fixed-overlay signature match; refusing to guess.",
                   addr,
@@ -560,6 +549,5 @@ void rec_dispatch(Core *c, uint32_t addr) {
                    signatureMatches ? "matches" : "does not match");
     }
   }
-  c->idiag.dispdecRecord(addr, c->r[31], InterpDiag::DISPDEC_MISSDROP);
   rec_dispatch_miss(c, addr);
 }

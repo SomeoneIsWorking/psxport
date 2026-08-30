@@ -16,6 +16,7 @@ Run: python3 tools/recomp/test_emit.py   (or: python3 -m pytest tools/recomp/tes
 """
 import os
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -488,6 +489,53 @@ def test_main_cli_discovers_unreferenced_return_boundary_handlers():
         case = f"case 0x{handler & 0x1FFFFFFF:08X}u:"
         assert case in dispatch, \
             f"MAIN return-boundary handler 0x{handler:08X} was not dispatchable through the shipping CLI"
+
+
+def test_main_cli_embeds_the_exact_generated_substrate_identity():
+    """The running binary must identify the generated code it actually compiled.
+
+    App/framework git IDs cannot describe ``generated/`` because it is deliberately ignored. A log
+    from an older binary can therefore be compared with a newer generated switch and make an ordinary
+    discovery miss look impossible. The shipping emitter must publish a deterministic identity derived
+    from its actual emitted output, and that identity must change when the output changes.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    def run_fixture(directory, result_value):
+        a = Asm()
+        a.addiu("v0", "zero", result_value)
+        a.jr("ra")
+        a.nop()
+        text, _ = a.assemble()
+        exe_path = os.path.join(directory, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)
+        struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))
+        open(exe_path, "wb").write(bytes(hdr) + text)
+        seeds_path = os.path.join(directory, "seeds.json")
+        open(seeds_path, "w").write("{}")
+        generated = os.path.join(directory, f"generated-{result_value}")
+        os.makedirs(generated)
+        env = dict(os.environ, PSXPORT_SHARDS="1", PSXPORT_USE_GHIDRA="0")
+        result = subprocess.run([sys.executable, os.path.join(here, "emit.py"), exe_path,
+                                 os.path.join(generated, "rec.c"), "--seeds", seeds_path],
+                                capture_output=True, text=True, env=env)
+        assert result.returncode == 0, f"emit.py failed:\n{result.stdout}\n{result.stderr}"
+        header = open(os.path.join(generated, "overlay_table.h")).read()
+        table = open(os.path.join(generated, "overlay_table.c")).read()
+        stamp = open(os.path.join(generated, ".recomp_identity")).read().strip()
+        match = re.search(r'const char g_rec_substrate_id\[\] = "([^"]+)";', table)
+        assert "extern const char g_rec_substrate_id[];" in header
+        assert match is not None, table
+        assert stamp == match.group(1)
+        assert re.fullmatch(r"recomp-[0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+-[0-9a-f]{64}", stamp)
+        return stamp
+
+    with scratch_tempdir("emit-substrate-identity-") as td:
+        first = run_fixture(td, 1)
+        changed = run_fixture(td, 2)
+    assert first != changed, "different emitted bodies must never report the same substrate identity"
 
 
 

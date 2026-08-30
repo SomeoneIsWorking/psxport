@@ -568,6 +568,13 @@ through the getter's null default, but FNTRACE loudly installs nothing until the
 `tests/test_fntrace_init.cpp` exercises registry-owned and raw PlatformHle-shaped owners, repeat
 initialization, one-shot parsing/range rejection, and the missing-getter refusal.
 
+`RecompRegistry::substrate_id` separately owns exact generated-code provenance. `emit.py` hashes the
+translation units named by the generated source manifest plus MAIN/overlay routing metadata, emits the
+full versioned SHA-256 as `g_rec_substrate_id`, and the consumer adapter passes that symbol through the
+registry. Installation logs the identity unconditionally; a pre-identity substrate is `UNKNOWN`, never
+silently equated with the generated files currently on disk. `test_emit.py` exercises the shipping
+emitter with two different bodies and `test_recomp_identity.cpp` covers the runtime install seam.
+
 The initial wiring was also exercised in the Vagrant consumer: one bounded shipping run reported
 five requested boot/CD entries as `REACHED` and one valid but later entry as `NEVER CALLED`. Before
 this fix the same declared configuration was unread and printed neither class because no boot path

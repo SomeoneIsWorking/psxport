@@ -58,6 +58,11 @@ struct RecompRegistry {
   // Optional so existing generated substrates remain source-compatible. Diagnostics that must
   // preserve an already-installed raw owner refuse to arm until the substrate is regenerated.
   RecOverrideFn (*shard_get_override)(uint32_t) = nullptr;
+  // Generated from the exact emitted translation units and routing metadata. App/framework git
+  // commits cannot identify generated/ because consumers deliberately ignore it; this value says
+  // which substrate the running binary actually compiled. Optional only for source compatibility
+  // with pre-identity generated trees, which are reported as UNKNOWN at installation.
+  const char *substrate_id = nullptr;
 };
 
 // Install once at startup (before the first frame). Process-global; both SBS cores share it. Returns
