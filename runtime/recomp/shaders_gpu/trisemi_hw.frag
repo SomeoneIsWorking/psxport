@@ -60,9 +60,13 @@ void main() {
         else                { texel = vram_at(tpx+u, tpy+v); }
         if (texel == 0u) discard;
         stp = (texel >> 15) & 1u;
-        float tr = float(texel & 31u) / 31.0, tg = float((texel>>5)&31u) / 31.0, tb = float((texel>>10)&31u) / 31.0;
-        if (v_tp.w == 0) F = floor(clamp(vec3(tr,tg,tb) * v_col * (255.0/128.0), 0.0, 1.0) * 31.0 + 0.5) / 31.0;
-        else             F = vec3(tr, tg, tb);
+        uvec3 texel5 = uvec3(texel & 31u, (texel >> 5) & 31u, (texel >> 10) & 31u);
+        if (v_tp.w == 0) {
+            uvec3 color8 = uvec3(clamp(v_col, 0.0, 1.0) * 255.0 + 0.5);
+            F = vec3(min(uvec3(31u), (texel5 * color8) / 128u)) / 31.0;
+        } else {
+            F = vec3(texel5) / 31.0;
+        }
     }
     int blend = v_clut.w & 3;
     float a = (stp == 0u) ? 0.0 : ((blend == 0) ? 0.5 : 1.0);

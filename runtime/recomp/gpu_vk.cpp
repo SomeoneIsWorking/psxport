@@ -3,6 +3,7 @@
 #include "game.h"                          // Game / GpuVkState (per-instance render state)
 #include "game_hooks_opt.h"                // guarded optional fade-state reader
 #include "gpu_painter.h"                   // authored painter staging + focused GPU discriminator
+#include "gpu_vk_modulation_selftest.h"    // PSX texture*color modulation truncation through shipping shaders
 #include "gpu_vk_present_mode.h"           // preferred_present_mode — the sink must not stall the guest thread
 #include "gpu_vk_present_policy.h"         // present_rebuild_decision — when a present must rebuild the composite
 #include "gpu_vk_semi_selftest.h"          // semi-textured PSX equations through shipping shaders + blend state
@@ -3702,6 +3703,8 @@ void GpuVkState::tritest() {
   ok &= gpu_vk_run_texture_phase_selftest(
       *this, pat, sizeof(gdev().s_selftest_pat) / sizeof(gdev().s_selftest_pat[0]), render_semi_selftest);
   ok &= gpu_vk_run_semi_selftest(
+      *this, pat, sizeof(gdev().s_selftest_pat) / sizeof(gdev().s_selftest_pat[0]), render_semi_selftest);
+  ok &= gpu_vk_run_modulation_selftest(
       *this, pat, sizeof(gdev().s_selftest_pat) / sizeof(gdev().s_selftest_pat[0]), render_semi_selftest);
 
   // Shipping painter discriminator: two authored textured faces cross at the same pixels; the later

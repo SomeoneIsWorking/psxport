@@ -51,9 +51,10 @@ void main() {
         stp = (texel >> 15) & 1u;
         uint tr = texel & 31u, tg = (texel>>5)&31u, tb = (texel>>10)&31u;
         if (v_tp.w == 0) {                            // modulate by vertex color
-            tr = min(31u, uint(float(tr)*v_col.r*(255.0/128.0)+0.5));
-            tg = min(31u, uint(float(tg)*v_col.g*(255.0/128.0)+0.5));
-            tb = min(31u, uint(float(tb)*v_col.b*(255.0/128.0)+0.5));
+            uvec3 color8 = uvec3(clamp(v_col, 0.0, 1.0) * 255.0 + 0.5);
+            tr = min(31u, (tr * color8.r) / 128u);
+            tg = min(31u, (tg * color8.g) / 128u);
+            tb = min(31u, (tb * color8.b) / 128u);
         }
         texel = tr | (tg<<5) | (tb<<10) | (stp<<15);
     }
