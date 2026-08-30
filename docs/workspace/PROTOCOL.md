@@ -264,6 +264,43 @@ the tested code and the shipping code were different code.
 **A negative result must carry its denominator.** "No divergence" means nothing without "compared N frames,
 M fields each, and here is the case that WOULD have tripped it".
 
+## PIXEL MATCHING IS NOT THE BAR — DRIVE THE GAME AND LOOK AT IT. USER RULE.
+
+> *"Change the directive, pixel matching doesn't matter. I just want working game that looks correct."*
+> — USER, 2026-08-30
+> *"It's pretty frustrating that all the previous work went to pixel matching (I mean before you)
+> instead of just verifying it works fine and looks fine wide/60, this correction should apply to all
+> PSX projects."* — USER, 2026-08-30
+
+**The incident.** Crash Bash's frame-300 difference count was driven from 98,280 pixels to 6 across many
+sessions and several framework fixes. The work was real — five shared Vulkan/PSX raster boundaries were
+genuinely wrong and are now fixed with shipping discriminators — but nobody in any of those sessions had
+ever driven the game to a playable frame or looked at it. When it was finally driven to a live Crashball
+match, two things fell out in twenty minutes that no difference count could ever have surfaced:
+
+- **Widescreen worked, and the registry said `missing`.** Its 2D layers did not follow the widened frame:
+  the briefing dimmer and border kept a 4:3 extent and the HUD moved inboard off the screen edges.
+- **`PSXPORT_FPS60=1` was inserting a DUPLICATE frame, not an interpolated one.** It reported
+  `tier1=0 backdrop=0` on every extra present — 60Hz pacing of 30Hz motion. The captures with and without
+  the knob were byte-identical, which is exactly why a pixel comparison rates it perfect.
+
+A difference count is a comparison of one frame of one scene against an emulator. It cannot see a mode you
+never reached, an enhancement that does nothing, motion, or pacing. **It is a diagnostic for finding the
+CAUSE of a visible defect, never a completion condition, and it never blocks anything.**
+
+**So the standing rule for every port in this workspace:**
+
+1. **Reach the content and look at it, early.** Before deep work on a layer, drive the game to where that
+   layer is actually on screen. A pad replay that reaches gameplay is worth more than any frame comparator.
+2. **Check that an enhancement DOES something before believing it works.** Widescreen must change the
+   picture; fps60 must report interpolated prims. `tools/port/looks_right.py` makes all three checks —
+   reaches / widescreen / fps60 — and writes PNGs, because "looks right" is a judgement only a human makes.
+   Its `--selftest` is in ctest; the per-repo invocation needs a disc and a GPU, so run it by hand.
+3. **Faithfulness of EXECUTION is unchanged.** Real executable, real assets, real simulation, no fabricated
+   picture, no title-local shortcut. What is retired is only the pixel-agreement bar on presentation.
+4. **A registry entry about a picture is stale until someone has looked.** `missing` was wrong for Crash
+   Bash's widescreen for as long as nobody ran it.
+
 ## THE PICTURE COMES FROM GAME STATE, NEVER FROM WHAT THE GTE PRODUCED. USER RULE.
 
 > *"never do this please NEVER, just leaving the effect as is is better than this"* — USER, 2026-08-04

@@ -25,7 +25,7 @@ more, two of them carrying the same latent linkage mismatch:
 declaration. `python3` one-liner that finds these is in the session log — re-run it after any header
 churn.
 
-## The two bars everything else answers to — the USER's own
+## The three bars everything else answers to — the USER's own
 
 1. **STRUCTURE — the port is built PROPERLY, and DUSKLIGHT is the model.** USER, 2026-08-12: *"My only
    rules are properly structured (like Dusklight) and RE driven work"* — the same sentence that states
@@ -39,7 +39,18 @@ churn.
    still reads as guest-memory soup is not finished work. Decompile first (section below), then write
    code that says what it does.
 
-Everything further down is the mechanics of satisfying those two.
+3. **THE BAR IS A WORKING GAME THAT LOOKS RIGHT — verify that, not a difference count.** USER,
+   2026-08-30: *"Change the directive, pixel matching doesn't matter. I just want working game that
+   looks correct."* and, on what the previous sessions had spent themselves on: *"It's pretty
+   frustrating that all the previous work went to pixel matching (I mean before you) instead of just
+   verifying it works fine and looks fine wide/60, this correction should apply to all PSX projects."*
+   This applies to EVERY port in the workspace. Frame comparison, the oracle and the SBS harness stay
+   as DIAGNOSTICS for finding the cause of a visible defect; a difference count is never a completion
+   condition and never blocks anything. Drive the game, look at it, and check that the enhancements
+   actually do something: `tools/port/looks_right.py`. The incident that cost this rule is in
+   `docs/workspace/PROTOCOL.md`.
+
+Everything further down is the mechanics of satisfying those three.
 
 This repo is the **game-agnostic framework** extracted from the Tomba!2 port: the static recompiler
 (`tools/recomp/`), the `runtime/recomp/` substrate (MIPS interp + Beetle GTE/MDEC/SPU backends + the

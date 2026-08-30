@@ -81,6 +81,13 @@ add_test(NAME tool_selftests_classifier
          COMMAND ${CMAKE_COMMAND} -E env python3
                  ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/tool_selftests.py --selftest)
 
+# The "does it look right" checks a difference count structurally cannot make: widescreen that changes
+# nothing, and an fps60 that inserts a duplicate frame. Only the tool's own verdict selftest is hermetic;
+# driving a port needs a disc and a GPU, so that invocation is per-repo and by hand (see its --help).
+add_test(NAME looks_right_selftest
+         COMMAND ${CMAKE_COMMAND} -E env python3
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/looks_right.py --selftest)
+
 add_test(NAME psexe_loader
          COMMAND ${CMAKE_COMMAND} -E env python3
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/test_psexe.py)

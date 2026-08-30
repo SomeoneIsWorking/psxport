@@ -376,6 +376,12 @@ automation. A player product exec is explicitly windowed, audible, and paced eve
 environment contains agent-only runtime flags. An agent run explicitly requests headless rendering,
 no audio device, and no pacing; window visibility never decides pacing.
 
+`looks_right.py` owns the three checks a frame-difference count structurally cannot make, for any port:
+the run REACHES its frames without a miss or fatal trap, widescreen actually CHANGES the picture, and
+fps60's extra presents carry interpolated prims rather than replaying the previous queue. It writes PNGs
+because the remaining judgement is a human's. `--selftest` proves both answers for every verdict and is in
+ctest; the invocation that drives a real port needs a disc and a GPU and is per-repo, by hand.
+
 ## Tools — ONE LINE EACH, and what is wrong with this list
 
 **32 tool files here; 172 across the workspace.** USER, 2026-08-13: *"I think you made the project too
