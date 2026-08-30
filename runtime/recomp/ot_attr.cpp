@@ -17,8 +17,9 @@
 // indistinguishable from "the guest submitted no packets". GameConfig::packetPoolBase/Stride already
 // carry it (the title FrameDriver's measured OT/pool sequence uses them); this reads the same fields.
 //
-// TWO PARITY POOLS: base + 2*stride is the pair, which reproduces Tomba!2's old constants exactly
-// (0x800BFE68 + 2*0x14000 = 0x800E7E68) — verified against them rather than re-derived.
+// Fixed-pool games declare base + stride. Heap-pool games instead declare the guest globals holding
+// each parity pool's live base/end; collapsing those allocations into one range would classify an
+// arbitrary gap between them as render output.
 //
 // A GAME THAT HAS NOT RE'd ITS POOL LEAVES THE FIELDS 0 (spyro, spider1 — an honest zero with a TODO,
 // per their own rules). Then this feed CANNOT attribute anything, and it says so once instead of
@@ -28,38 +29,115 @@
 // their OWN copy of it with Tomba!2's literals still in them — three copies meant fixing one left two
 // lying. This function is now just the pool window of that shared mask.
 namespace {
-// DERIVED ONCE PER CONFIG, not once per store. This is called from trackStoreSlow, i.e. on EVERY
-// guest memory write, and it used to rebuild the whole RenderNoiseMask each time — measured at 1.53%
-// of a 3D field frame purely to recompute a constant. The mask is a pure function of `cfg`, and
-// `Core::cfg` is set once, so the answer cannot change while the pointer does not.
+// CACHED until the config changes or a live descriptor is rewritten, not derived once per store. This
+// is called from trackStoreSlow, i.e. on EVERY guest memory write, and it used to rebuild the whole
+// RenderNoiseMask each time — measured at 1.53% of a 3D field frame purely to recompute a constant.
 //
-// KEYED ON THE cfg POINTER rather than cached in a bare static, and that is load-bearing: SBS runs
-// two Cores, and render_noise.h exists precisely because a mask inherited across games does not just
-// drop ranges, it makes a harness blind to real divergence. A changed pointer re-derives.
-OtAttr::PoolWindow pool_range_uncached(Core *c) {
+// KEYED ON the cfg pointer and invalidated on dynamic-descriptor writes rather than cached in a bare
+// static. SBS runs two Cores, and a window inherited across games does not just drop ranges, it makes a
+// harness blind to real divergence.
+uint32_t main_ram_address(uint32_t value) {
+  return (value & 0x1FFFFFFFu) | 0x80000000u;
+}
+
+bool descriptor_overlap(const GameConfig *cfg, uint32_t addr, uint32_t bytes) {
+  if (!cfg) {
+    return false;
+  }
+  const uint32_t physical = addr & 0x1FFFFFFFu;
+  if (physical >= 0x00200000u) {
+    return false;
+  }
+  const uint32_t lo = physical | 0x80000000u;
+  const uint32_t hi = lo + bytes;
+  for (uint32_t i = 0; i < 2; i++) {
+    const uint32_t basePtr = main_ram_address(cfg->packetPoolBasePtrs[i]);
+    const uint32_t endPtr = main_ram_address(cfg->packetPoolEndPtrs[i]);
+    if ((cfg->packetPoolBasePtrs[i] && lo < basePtr + 4u && basePtr < hi) ||
+        (cfg->packetPoolEndPtrs[i] && lo < endPtr + 4u && endPtr < hi)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+OtAttr::PoolWindows pool_range_uncached(Core *c) {
+  OtAttr::PoolWindows result{};
+  const GameConfig *cfg = c->cfg;
+  bool dynamicDeclared = false;
+  bool dynamicComplete = true;
+  bool completePair = false;
+  if (cfg) {
+    for (uint32_t i = 0; i < 2; i++) {
+      const uint32_t basePtr = cfg->packetPoolBasePtrs[i];
+      const uint32_t endPtr = cfg->packetPoolEndPtrs[i];
+      dynamicDeclared |= basePtr || endPtr;
+      if (!basePtr || !endPtr) {
+        dynamicComplete &= !basePtr && !endPtr;
+        continue;
+      }
+      completePair = true;
+      const uint32_t rawLo = c->mem_r32(basePtr);
+      const uint32_t rawHi = c->mem_r32(endPtr);
+      if (!rawLo || !rawHi) {
+        continue; // a declared heap pool may legitimately not be allocated during boot
+      }
+      const uint32_t lo = main_ram_address(rawLo);
+      const uint32_t hi = main_ram_address(rawHi);
+      if (lo >= hi || hi > 0x80200000u) {
+        continue; // descriptor words are rewritten separately, so transient mixed bounds are normal
+      }
+      result.lo[result.count] = lo;
+      result.hi[result.count] = hi;
+      result.count++;
+    }
+  }
+  if (dynamicDeclared) {
+    result.dynamic = true;
+    result.known = dynamicComplete && completePair;
+    if (!result.known) {
+      static bool warnedPartial = false;
+      if (!warnedPartial) {
+        warnedPartial = true;
+        lucent::warn("otattr",
+                     "GameConfig::packetPoolBasePtrs/EndPtrs are partial — each declared parity "
+                     "needs both pointer globals");
+      }
+    }
+    return result;
+  }
+
   const RenderNoiseMask m = RenderNoiseMask::from(c->cfg, "otattr");
   if (!m.poolLo && !m.poolHi) {
     static bool warned = false;
     if (!warned) {
       warned = true;
       lucent::warn("otattr",
-                   "GameConfig::packetPoolBase/Stride are 0 for this game — packet-pool "
-                   "attribution is STRUCTURALLY BLIND here, so an empty span table means "
-                   "'not measured', NOT 'the guest submitted nothing'. RE the pool and fill "
-                   "those fields to turn this on.");
+                   "GameConfig has neither fixed packetPoolBase/Stride nor live "
+                   "packetPoolBasePtrs/EndPtrs — packet-pool attribution is STRUCTURALLY BLIND "
+                   "here, so an empty span table means 'not measured', NOT 'the guest submitted "
+                   "nothing'. RE the pool and fill one representation to turn this on.");
     }
-    return {0, 0, false};
+    return result;
   }
-  return {m.poolLo, m.poolHi, true};
+  result.lo[0] = m.poolLo;
+  result.hi[0] = m.poolHi;
+  result.count = 1;
+  result.known = true;
+  return result;
 }
 } // namespace
 
 void OtAttr::poolRangeMiss(Core *c) {
-  const PoolWindow r = pool_range_uncached(c);
+  const PoolWindows r = pool_range_uncached(c);
   mPoolCfg = c->cfg;
-  mPoolLo = r.lo;
-  mPoolHi = r.hi;
+  for (uint32_t i = 0; i < 2; i++) {
+    mPoolLo[i] = r.lo[i];
+    mPoolHi[i] = r.hi[i];
+  }
+  mPoolCount = r.count;
   mPoolKnown = r.known;
+  mPoolDynamic = r.dynamic;
 }
 
 // The frame stamp every table here shares — see ot_attr.h for the null-deref this replaced and for why
@@ -146,14 +224,24 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
   }
   trackWatch(fn, caller, phys, bytes, frame);
 
-  const uint32_t k = addr | 0x80000000u;
+  const uint32_t k = phys | 0x80000000u;
   // The cache CHECK is here, not behind a call: one pointer compare, then three member loads. See
   // poolRangeMiss in the header for the measurement that made this split necessary — a tidier
   // compare-inside-a-member-function version was measurably SLOWER than no cache at all.
   if (c->cfg != mPoolCfg) {
     poolRangeMiss(c);
   }
-  if (!mPoolKnown || k < mPoolLo || k >= mPoolHi) {
+  // Core calls this before committing the guest store. Invalidate now so the NEXT store resolves the
+  // just-written descriptors; attributing the descriptor write itself would be a category error.
+  if (mPoolDynamic && descriptor_overlap(c->cfg, addr, bytes)) {
+    mPoolCfg = nullptr;
+    return;
+  }
+  bool inPool = false;
+  for (uint32_t i = 0; i < mPoolCount; i++) {
+    inPool |= k >= mPoolLo[i] && k < mPoolHi[i];
+  }
+  if (!mPoolKnown || !inPool) {
     return;
   }
 

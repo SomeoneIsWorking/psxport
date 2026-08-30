@@ -173,6 +173,10 @@ runtimes own crt0, resident MAIN routing, and backtrace-code facts; `Core` snaps
 and those algorithms no longer read `GameConfig`. `GuestPadBufferLayout` is another landed group:
 direct runtimes declare the measured Sony receive buffers while `Pad` retains config-first resolution
 for adapters. The adapter's one-way projection keeps unmigrated consumers source-compatible.
+`OtAttr` accepts either the legacy fixed `packetPoolBase/Stride` pair or two measured guest
+`packetPoolBasePtrs/EndPtrs` descriptor pairs for heap-allocated parity pools. It caches live bounds and
+invalidates them on descriptor writes; the pools remain separate so an allocation gap is never treated
+as render memory.
 `DiscIdentity` is the next candidate group; the consumer follow-up and deletion set live in
 `docs/plans/game-seam-redesign.md`.
 `overlay_router.{h,cpp}` owns both live-range relocatable modules and signature-identified fixed

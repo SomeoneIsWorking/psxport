@@ -343,6 +343,16 @@ struct GameConfig {
   // GP1 value, which is the correct behaviour for a game whose GPU registers are really programmed.
   // Appended at the end: GameConfig is initialised POSITIONALLY by some consumers.
   uint16_t guestDisplayHeight;
+
+  // --- runtime-allocated packet pools ----------------------------------------------------------
+  // Optional alternative to packetPoolBase/packetPoolStride for engines whose two parity pools are
+  // allocated from the guest heap. Each value is the guest address of a u32 global holding the live
+  // inclusive base or exclusive end. OtAttr reads the pointed-to values and invalidates its cache when
+  // the guest rewrites any descriptor. Leave all four zero for a fixed-pool game.
+  //
+  // Appended because positional GameConfig consumers must retain their existing field mapping.
+  uint32_t packetPoolBasePtrs[2];
+  uint32_t packetPoolEndPtrs[2];
 };
 
 // Look up a task entry PC in the game's declared table. Returns null when the game declared none or the

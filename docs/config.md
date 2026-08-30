@@ -516,7 +516,8 @@ deliberately not claims. Verdict line: `N of M shape(s) have a producer key some
 
 `otattr` (OT/GTE SUBMISSION ATTRIBUTION, `runtime/recomp/ot_attr.{h,cpp}`, USER 2026-07-14 — serves bug
 #45 "multi-quad batching" + bug #34 dialog-panel emitter): traces every guest-submitted packet-pool store
-(the GameConfig-derived pool window) and every GTE RTPS/RTPT back to (a) the emitting guest FN — a
+(either GameConfig's fixed pool window or its two live guest base/end descriptor pairs) and every GTE
+RTPS/RTPT back to (a) the emitting guest FN — a
 per-Core shadow stack of guest addrs (`InterpDiag::otattr*`) pushed/popped in EVERY guest function's
 recompiler-emitted WRAPPER since 2026-08-12, so it covers DIRECT `func_XXXX(c)` calls as well as
 INDIRECT/jalr dispatch. **This paragraph previously said the opposite** — pushed only around
