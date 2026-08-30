@@ -7,6 +7,7 @@
 #include "gpu_vk_present_policy.h"         // present_rebuild_decision — when a present must rebuild the composite
 #include "gpu_vk_semi_selftest.h"          // semi-textured PSX equations through shipping shaders + blend state
 #include "gpu_vk_texture_phase_selftest.h" // integer-pixel UV phase through opaque + semi shipping paths
+#include "gpu_vk_untextured_selftest.h"    // untextured G3 interpolation through the shipping opaque path
 #include "image_writer.h"                  // one checked RGB24 capture-file boundary
 #include "present_plan.h"                  // plan_present — the presented picture, decided identically in both legs
 #include "render_substrate.h"              // Render::stats (RenderStats — was g_dbg_world_quads)
@@ -3116,13 +3117,13 @@ void GpuVkState::draw_tri(int x0,
                           int day1) {
   ggs_alloc_batches(*this);
   const int32_t da[4] = {dax0, day0, dax1, day1};
+  const float gf = (float)s_untextured_gouraud, df = (float)s_untextured_dither;
   if (s_painter_active) {
     if (s_painter_tri_n + 3 > TRI_CAP || !painter_command(0, s_painter_tri_n, 3)) {
       s_painter_overflow = 1;
       return;
     }
     TriVtx *v = ((TriVtx *)s_painter_tri_buf) + s_painter_tri_n;
-    const float gf = (float)s_painter_item_gouraud, df = (float)s_painter_item_dither;
     v[0] = {(float)x0,
             (float)y0,
             r0 / 255.f,
@@ -3161,9 +3162,9 @@ void GpuVkState::draw_tri(int x0,
       return;
     }
     TriVtx *v = ((TriVtx *)s_tri2d_buf[band]) + s_tri2d_n[band];
-    v[0] = {(float)x0, (float)y0, r0 / 255.f, g0 / 255.f, b0 / 255.f, s_cur_ord, 0, 0, {da[0], da[1], da[2], da[3]}};
-    v[1] = {(float)x1, (float)y1, r1 / 255.f, g1 / 255.f, b1 / 255.f, s_cur_ord, 0, 0, {da[0], da[1], da[2], da[3]}};
-    v[2] = {(float)x2, (float)y2, r2 / 255.f, g2 / 255.f, b2 / 255.f, s_cur_ord, 0, 0, {da[0], da[1], da[2], da[3]}};
+    v[0] = {(float)x0, (float)y0, r0 / 255.f, g0 / 255.f, b0 / 255.f, s_cur_ord, gf, df, {da[0], da[1], da[2], da[3]}};
+    v[1] = {(float)x1, (float)y1, r1 / 255.f, g1 / 255.f, b1 / 255.f, s_cur_ord, gf, df, {da[0], da[1], da[2], da[3]}};
+    v[2] = {(float)x2, (float)y2, r2 / 255.f, g2 / 255.f, b2 / 255.f, s_cur_ord, gf, df, {da[0], da[1], da[2], da[3]}};
     s_tri2d_n[band] += 3;
     return;
   }
@@ -3177,8 +3178,8 @@ void GpuVkState::draw_tri(int x0,
           g0 / 255.f,
           b0 / 255.f,
           gpu_vk_map_biased_3d_depth(s_vd[0], s_depth_bias),
-          0,
-          0,
+          gf,
+          df,
           {da[0], da[1], da[2], da[3]}};
   v[1] = {(float)x1,
           (float)y1,
@@ -3186,8 +3187,8 @@ void GpuVkState::draw_tri(int x0,
           g1 / 255.f,
           b1 / 255.f,
           gpu_vk_map_biased_3d_depth(s_vd[1], s_depth_bias),
-          0,
-          0,
+          gf,
+          df,
           {da[0], da[1], da[2], da[3]}};
   v[2] = {(float)x2,
           (float)y2,
@@ -3195,8 +3196,8 @@ void GpuVkState::draw_tri(int x0,
           g2 / 255.f,
           b2 / 255.f,
           gpu_vk_map_biased_3d_depth(s_vd[2], s_depth_bias),
-          0,
-          0,
+          gf,
+          df,
           {da[0], da[1], da[2], da[3]}};
   s_tri_n += 3;
 }
@@ -3745,8 +3746,8 @@ void GpuVkState::tritest() {
       float d[3] = {z, z, z};
       set_order(seq);
       set_vd(d);
-      s_painter_item_gouraud = gouraud;
-      s_painter_item_dither = dither;
+      s_untextured_gouraud = gouraud;
+      s_untextured_dither = dither;
       draw_tri(x0, 20, r, g, b, x1, 20, r, g, b, (x0 + x1) / 2, 180, r, g, b, 0, 0, 1023, 511);
     };
     lucent::info("gpu_selftest",
@@ -3757,6 +3758,7 @@ void GpuVkState::tritest() {
                  gpu_vk_map_biased_3d_depth(.70f, 3 * gpu_zbias_unit()));
     tri(false, 20, 150, .20f, 0, 0, 1);
     tri(false, 170, 310, .70f, 3, 0, 1);
+    gpu_vk_stage_untextured_gouraud_selftest(*this);
     if (!painter_begin(77)) {
       lucent::error("gpu_selftest", "painter begin failed");
       ok = 0;
@@ -3885,6 +3887,7 @@ void GpuVkState::tritest() {
                  pos1,
                  dither_ok ? "PASS" : "FAIL");
     ok &= dither_ok;
+    ok &= gpu_vk_check_untextured_gouraud_selftest(cpix, VRAM_W);
     ok &= gpu_vk_painter_check_draw_area_selftest(lcpix, sw, 2);
     SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer);
     SDL_UnmapGPUTransferBuffer(s_dev, ddl);
@@ -4155,9 +4158,9 @@ void gpu_vk_set_xyf(Core *core, const float *xf, const float *yf) {
 void gpu_vk_set_order_override(Core *core, uint32_t seq) {
   core->game->gpu_vk.s_order_override = seq;
 }
-void gpu_vk_set_painter_material(Core *core, int gouraud, int dither) {
-  core->game->gpu_vk.s_painter_item_gouraud = gouraud;
-  core->game->gpu_vk.s_painter_item_dither = dither;
+void gpu_vk_set_untextured_material(Core *core, int gouraud, int dither) {
+  core->game->gpu_vk.s_untextured_gouraud = gouraud;
+  core->game->gpu_vk.s_untextured_dither = dither;
 }
 void gpu_vk_set_order(Core *core, unsigned idx) {
   core->game->gpu_vk.set_order(idx);

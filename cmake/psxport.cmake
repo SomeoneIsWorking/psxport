@@ -140,6 +140,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/gpu_painter.cpp # painter target lifecycle + authored command staging
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_semi_selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_texture_phase_selftest.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_untextured_selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_perf.cpp
   ${PSXPORT_ROOT}/runtime/recomp/mods.cpp
   ${PSXPORT_ROOT}/runtime/recomp/config.cpp   # layered CVar registry + the environment audit (docs/config.md)

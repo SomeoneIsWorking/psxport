@@ -96,8 +96,8 @@ bool GpuVkState::painter_command(int material, int first, int count, int semi, i
   // the producer's painter order, and each semitransparent command consumes the preceding packed result.
   if (!semi && s_painter_cmd_n > s_painter_first[s_painter_ranges]) {
     const int previous = s_painter_cmd_n - 1;
-    if (s_painter_cmd_material[previous] == material && s_painter_cmd_gouraud[previous] == s_painter_item_gouraud &&
-        s_painter_cmd_dither[previous] == s_painter_item_dither && s_painter_cmd_semi[previous] == semi &&
+    if (s_painter_cmd_material[previous] == material && s_painter_cmd_gouraud[previous] == s_untextured_gouraud &&
+        s_painter_cmd_dither[previous] == s_untextured_dither && s_painter_cmd_semi[previous] == semi &&
         s_painter_cmd_blend[previous] == blend && s_painter_cmd_object[previous] == s_painter_current_object &&
         s_painter_cmd_first[previous] + s_painter_cmd_count[previous] == first) {
       s_painter_cmd_count[previous] += count;
@@ -110,8 +110,8 @@ bool GpuVkState::painter_command(int material, int first, int count, int semi, i
   }
   const int command = s_painter_cmd_n++;
   s_painter_cmd_material[command] = (uint8_t)material;
-  s_painter_cmd_gouraud[command] = (uint8_t)s_painter_item_gouraud;
-  s_painter_cmd_dither[command] = (uint8_t)s_painter_item_dither;
+  s_painter_cmd_gouraud[command] = (uint8_t)s_untextured_gouraud;
+  s_painter_cmd_dither[command] = (uint8_t)s_untextured_dither;
   s_painter_cmd_semi[command] = (uint8_t)semi;
   s_painter_cmd_blend[command] = (uint8_t)blend;
   s_painter_cmd_object[command] = s_painter_current_object;
@@ -148,8 +148,8 @@ void gpu_vk_painter_stage_draw_area_selftest(GpuVkState &gpu, uint16_t *vram, in
   float depth[3] = {.40f, .40f, .40f};
   gpu.set_order(7);
   gpu.set_vd(depth);
-  gpu.s_painter_item_gouraud = 0;
-  gpu.s_painter_item_dither = 0;
+  gpu.s_untextured_gouraud = 0;
+  gpu.s_untextured_dither = 0;
   // The triangle covers both readback probes, but only the inner draw area is eligible to paint.
   gpu.draw_tri(200, 190, 255, 0, 0, 280, 190, 255, 0, 0, 240, 230, 255, 0, 0, 220, 200, 260, 220);
   for (int y = 190; y <= 230; ++y) {

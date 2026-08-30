@@ -195,7 +195,7 @@ struct GpuVkState {
   void *s_painter_tri_buf = nullptr;
   int s_painter_tri_n = 0;
   int s_painter_active = 0;
-  int s_painter_item_gouraud = 0, s_painter_item_dither = 0;
+  int s_untextured_gouraud = 0, s_untextured_dither = 0;
   uint32_t s_painter_current_object = 0;
   uint32_t s_painter_range_id[256] = {};
   int s_painter_first[256] = {};

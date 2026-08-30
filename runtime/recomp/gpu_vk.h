@@ -38,7 +38,7 @@ void gpu_vk_set_vd(Core *core, const float *d3);
 void gpu_vk_set_vd_n(Core *core, const float *d3);
 void gpu_vk_set_xyf(Core *core, const float *xf, const float *yf); // sub-pixel screen XY (#15 smoothing)
 void gpu_vk_set_order_override(Core *core, uint32_t seq);
-void gpu_vk_set_painter_material(Core *core, int gouraud, int dither);
+void gpu_vk_set_untextured_material(Core *core, int gouraud, int dither);
 bool gpu_vk_order_bias_distinguishes(uint32_t seq);
 float gpu_zbias_unit();
 // The exact normalized-depth mapping used by world vertices, and the next input whose mapped D32
