@@ -106,8 +106,9 @@ targets while generated entries retain their emitted checkpoint owner),
 mechanical exactly-one-presentation-fence enforcement),
 `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
 `native_boot.cpp` (boot + host loop scaffolding + diagnostics; `dc_step_frame` delegates through
-`FrameLoopShell` and contains no title frame body or fallback; the interactive REPL is owned by
-`repl.cpp`/`repl.h`),
+`FrameLoopShell` and contains no title frame body or fallback; `repl.cpp`/`repl.h` own only generic
+interactive command transport and framework diagnostics, while `GameRuntime::replCommand` owns every
+title-specific command and the legacy adapter forwards that boundary without assuming a callback),
 `platform_hle.h` + `sync_overrides.cpp` (the guarded SCEI-library HLE table; direct
 `PlatformHlePlan` consumers supply typed addresses for framework-owned standard leaves such as
 SetGeomOffset/SetGeomScreen and stock `CdRead`/`CdReadSync`, plus the mandatory measured

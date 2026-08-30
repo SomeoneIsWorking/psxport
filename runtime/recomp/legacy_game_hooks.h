@@ -31,7 +31,6 @@ struct GameHooks {
   void (*registerOverrides)(Game *g);
 
   void (*renderFadeState)(Core *c, FadeState *out);
-  const char *(*replBehaviorName)(Core *c, unsigned int handle);
   void (*replCamTeleport)(Core *c, int x, int y, int z);
   void (*replCamTeleportOff)(Core *c);
   void (*renderBbFrameReset)(Core *c);

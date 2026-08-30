@@ -115,6 +115,12 @@ public:
     return nullptr;
   }
 
+  // Title-specific developer commands. The framework REPL owns parsing for framework state only;
+  // guest addresses, object layouts, and title subsystems stay behind this game-owned boundary.
+  virtual bool replCommand(Core &, const char *, const char *) {
+    return false;
+  }
+
   // Non-virtual compatibility views. Direct runtimes return null; only
   // LegacyGameRuntimeAdapter binds them while a consumer migrates.
   const GameConfig *legacyConfigForMigration() const {

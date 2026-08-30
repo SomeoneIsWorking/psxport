@@ -138,14 +138,8 @@ static void repl_xadump(DiscState *disc, uint8_t chan, uint32_t start_lba, const
 
 // REPL auto-drive state (navNewgame / skipFrames / warpArmed / warpDest) lives on class Repl (repl.h) —
 // arm here on the appropriate command; the title's FrameDriver consumes it on subsequent frames.
-// `warp <id>` (dev/diagnostic): arm an AREA WARP. The GAME-stage area machine loads the area whose id is
-// in the current-area global 0x800bf870; an area CHANGE is driven by FUN_80044bd4(area_task_entry=0x800452c0,
-// dest_area_id, mode, phase) from inside the GAME stage SM (the steady handler 0x801088d8 case0 calls it with
-// a1 = the current/destination area id). That registers/restarts the AREA-LOAD TASK (0x800452c0) which, via
-// FUN_8004514c, commits 0x800bf870 = translate(dest), pulls the area overlay (disc LBA/size from the area
-// table at 0x800be118, stride 8, indexed by id+3) to 0x80182000, and walks the per-area asset table at
-// area_base+0x51000. We arm the dest id here and fire FUN_80044bd4 from the frame loop (scheduler context
-// active, like `newgame`). See docs/engine_re.md "Area WARP / destination mechanism".
+// `warp <id>` (dev/diagnostic) only records a requested destination. The title owns whether a warp is
+// currently legal, its area inventory, and the complete operation consumed by its frame driver.
 
 // Read+execute REPL commands until a `run N` (returns N), `quit`/EOF (returns -1) or `end`
 // (returns -2).
@@ -259,53 +253,11 @@ long Repl::read(Core *c, uint32_t f) {
             "repl",
             "cvar <PSXPORT_NAME> <value> — set for this run only; `cvar <name>` clears it; `cvars` lists everything");
       }
-    } else if (!strcmp(cmd, "ents")) { // enumerate live GAME OBJECTS across the 3 entity lists, with identity
-      // Each object is a node in a doubly-linked list (next @ +0x24). Identity fields: type @+0xc, render
-      // intrinsic @+0xb (0x10..0x14 = sprite/billboard, 0/0xf = mesh), behavior handler @+0x1c (the object's
-      // "what is it" — different per Tomba / enemy / prop), model id @+0xe & 0x3fff, world pos @+0x2e/32/36,
-      // and the 3D MODEL = geomblk of render cmd[0] (cmd @+0xc0, geomblk @ cmd+0x40). later-241.
-      // OWNERSHIP + IDENTITY (later-287, for drive/diagnose): flag each object's behavior handler as
-      // native-OWNED (readable C, shown by name) or still-PSX substrate; and mark the PLAYER node (the one
-      // whose int16 pos mirrors Tomba's 16.16 master position at 0x800E7EAC/B0/B4). This makes "what is
-      // this object and is its logic ours" answerable at a glance.
-      int16_t px = (int16_t)(c->mem_r32(0x800E7EACu) >> 16), pz = (int16_t)(c->mem_r32(0x800E7EB4u) >> 16);
-      const uint32_t heads[3] = {0x800FB168u, 0x800F2624u, 0x800F2738u};
-      int total = 0, owned = 0;
-      for (int h = 0; h < 3; h++) {
-        uint32_t n = c->mem_r32(heads[h]);
-        lucent::info("ents", "-- list {} head={:08X} --", h, n);
-        for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
-          uint32_t cmd0 = c->mem_r8(n + 8) ? c->mem_r32(n + 0xC0) : 0;
-          uint32_t hh = c->mem_r32(n + 0x1c);
-          const char *bn = c->hooks->replBehaviorName(c, hh);
-          int16_t nx = c->mem_r16s(n + 0x2e), nz = c->mem_r16s(n + 0x36);
-          int is_player = (c->mem_r32(n + 0x38) == 0) && (nx == px) && (nz == pz);
-          if (bn) {
-            owned++;
-          }
-          lucent::info(
-              "ents",
-              " {:08X} t={:02X} ri={:02X} model={:04X} h={:08X} pos=({:6},{:6},{:6}) rf={} cmds={} gb0={:08X}  {}{}",
-              n,
-              c->mem_r8(n + 0xc),
-              c->mem_r8(n + 0xb),
-              c->mem_r16(n + 0xe) & 0x3fff,
-              hh,
-              c->mem_r16s(n + 0x2e),
-              c->mem_r16s(n + 0x32),
-              nz,
-              c->mem_r8(n + 1),
-              c->mem_r8(n + 8),
-              cmd0 ? c->mem_r32(cmd0 + 0x40) : 0,
-              bn ? bn : "PSX",
-              is_player ? "  <== PLAYER" : "");
-          total++;
-        }
-      }
-      lucent::info("ents", "({} nodes; {} native-owned, {} still-PSX)", total, owned, total - owned);
     } else if (!strcmp(cmd, "tp")) {
       int x = 0, y = 0, z = 0;
-      if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) {
+      if (!c->hooks || !c->hooks->replCamTeleport || !c->hooks->replCamTeleportOff) {
+        lucent::info("repl", "tp: unavailable for this game");
+      } else if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) {
         c->hooks->replCamTeleport(c, x, y, z);
         lucent::info("repl", "tp camera -> ({},{},{})", x, y, z);
       } else {
@@ -326,36 +278,30 @@ long Repl::read(Core *c, uint32_t f) {
       lucent::info("repl", "skip {} frames", a);
       return (long)a;
     } else if (!strcmp(cmd, "warp")) {
-      // warp <area_id> [sub] — load a different area on demand via the REAL DOOR RECORD (foundation for a
-      // level/boss selector). Only valid from the field (GAME stage 0x8010637C, sm[0x48]==2). Arms the
-      // destination; the frame loop invokes the game's one complete cold-warp operation. Area-machine
-      // layout and load/entry ordering are game facts and do not belong in this generic command parser.
+      // The frame loop invokes the game's complete cold-warp operation. Area-machine layout and
+      // load/entry ordering are deliberately absent from this generic command parser.
       unsigned sub = 0;
       int nargs = sscanf(line, "%*s %u %u", &a, &sub);
       if (nargs >= 1) {
-        if (c->mem_r32(0x801fe00c) != 0x8010637Cu) {
-          lucent::info("repl",
-                       "warp: not in GAME stage (stage={:08X}) — reach the field first (newgame/skip)",
-                       c->mem_r32(0x801fe00c));
-        } else if (c->hooks && c->hooks->devAreaCount && (int)a >= c->hooks->devAreaCount(c)) {
-          // Out-of-range ids are NOT areas: the load is file index `area+3` into the table at
-          // 0x800BE118, so an id past the last area loads a non-area file (START/DEMO/GAME) into the
-          // mode slot and produces out-of-range CD reads and a wander/hang. `warp` used to accept them
-          // silently, which is how kanban #24 came to be filed against an "area 22" that does not
-          // exist. Reject instead. (kanban #36)
-          lucent::info("repl",
-                       "warp: area {} is out of range — this game has {} areas (0..{})",
-                       a,
-                       c->hooks->devAreaCount(c),
-                       c->hooks->devAreaCount(c) - 1);
+        if (!c->hooks || !c->hooks->devAreaCount || !c->hooks->devWarpAllowed) {
+          lucent::info("repl", "warp: unavailable for this game");
+        } else if (!c->hooks->devWarpAllowed(c)) {
+          lucent::info("repl", "warp: refused by the game in its current state");
         } else {
-          this->warpDest = a;
-          this->warpSub = (nargs == 2) ? sub : 0;
-          this->warpArmed = 1;
-          lucent::info("repl", "warp: armed cold destination area id={} sub={}", a, this->warpSub);
+          const int count = c->hooks->devAreaCount(c);
+          if (count <= 0) {
+            lucent::info("repl", "warp: this game exposes no areas");
+          } else if ((int)a >= count) {
+            lucent::info("repl", "warp: area {} is out of range — this game has {} areas (0..{})", a, count, count - 1);
+          } else {
+            this->warpDest = a;
+            this->warpSub = (nargs == 2) ? sub : 0;
+            this->warpArmed = 1;
+            lucent::info("repl", "warp: armed cold destination area id={} sub={}", a, this->warpSub);
+          }
         }
       } else {
-        lucent::info("repl", "warp <area_id> [sub]  (area table @0x800be118, ids 0..0x1f; sub = 0x800BF871 sub-state)");
+        lucent::info("repl", "warp <area_id> [sub]");
       }
     } else if (!strcmp(cmd, "preseq")) { // arm a PRESENT-sequence dump: next N presented frames (real + fps60 interp)
       unsigned n = 0;
@@ -910,8 +856,6 @@ long Repl::read(Core *c, uint32_t f) {
         ov.setVisible(on);
         lucent::info("repl", "menu: {}", on ? "shown" : "hidden");
       }
-    } else if (!strcmp(cmd, "stage")) {
-      lucent::info("repl", "stage={:08X} sm48={}", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     } else if (!strcmp(cmd, "regs")) {
       lucent::Line ln; // 4 registers per row
       for (int i = 0; i < 32; i++) {
@@ -921,18 +865,10 @@ long Repl::read(Core *c, uint32_t f) {
         }
       }
       lucent::info("repl", " hi={:08X} lo={:08X}", c->hi, c->lo);
-    } else if (!strcmp(cmd, "seq")) {
-      lucent::info("repl",
-                   "seq open={} playmask={:04X} tickmode={} seqfn={:08X} stage={:08X}",
-                   c->mem_r16s(0x801054B0),
-                   c->mem_r32(0x80104C28) & 0xFFFF,
-                   c->mem_r8(0x800AC424),
-                   c->mem_r32(0x800AC42C),
-                   c->mem_r32(0x801fe00c));
     }
-    // game-side commands (invtest/bgm/bgmstop/seqsolo/musictest) — game classes / Tomba guest addrs,
-    // dispatched into game/core/repl_commands.cpp so the framework REPL names no game type.
-    else if (c->hooks->replCommand(c, cmd, line)) { /* handled game-side */
+    // Title-side commands cross the runtime boundary so this parser never names a game's guest
+    // addresses or object layout. Legacy consumers are forwarded to GameHooks by their adapter.
+    else if (c->runtime && c->runtime->replCommand(*c, cmd, line)) { /* handled game-side */
     } else {
       lucent::info("repl", "? {}", cmd);
     }

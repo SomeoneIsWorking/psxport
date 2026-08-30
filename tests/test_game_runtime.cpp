@@ -8,6 +8,7 @@
 #include "render_path_control.h"
 #include "testutil.h"
 
+#include <cstring>
 #include <memory>
 
 namespace {
@@ -16,6 +17,9 @@ int legacyContextToken;
 int legacyContextsCreated;
 int legacyContextsDestroyed;
 int legacyBootInitializations;
+int legacyReplCommands;
+const char *legacyReplCommandName;
+const char *legacyReplCommandLine;
 
 void *legacy_create_context(Core *) {
   ++legacyContextsCreated;
@@ -29,6 +33,13 @@ void legacy_destroy_context(void *context) {
 
 void legacy_boot_init(Core *) {
   ++legacyBootInitializations;
+}
+
+bool legacy_repl_command(Core *, const char *command, const char *line) {
+  legacyReplCommandName = command;
+  legacyReplCommandLine = line;
+  ++legacyReplCommands;
+  return true;
 }
 
 class TestFrameDriver final : public FrameDriver {
@@ -146,6 +157,31 @@ void test_direct_runtime_publishes_cd_ready_callback_slot() {
 
   runtime.cdStreamCallbacks.readyCallbackPointer = 0;
   CHECK_EQ(cd_ready_callback_pointer(game->core), 0u);
+}
+
+void test_repl_commands_are_game_owned_and_legacy_forwarding_is_optional() {
+  TestRuntime direct;
+  psxport_install_game(direct);
+  auto directCore = std::make_unique<Core>();
+  CHECK(!direct.replCommand(*directCore, "ents", "ents"));
+
+  static const GameConfig config{};
+  GameHooks emptyHooks{};
+  LegacyGameRuntimeAdapter emptyLegacy(config, emptyHooks);
+  psxport_install_game(emptyLegacy);
+  auto emptyCore = std::make_unique<Core>();
+  CHECK(!emptyLegacy.replCommand(*emptyCore, "ents", "ents"));
+
+  GameHooks forwardingHooks{};
+  forwardingHooks.replCommand = legacy_repl_command;
+  LegacyGameRuntimeAdapter forwardingLegacy(config, forwardingHooks);
+  psxport_install_game(forwardingLegacy);
+  auto forwardingCore = std::make_unique<Core>();
+  legacyReplCommands = 0;
+  CHECK(forwardingLegacy.replCommand(*forwardingCore, "title-command", "title-command argument"));
+  CHECK_EQ(legacyReplCommands, 1);
+  CHECK(!std::strcmp(legacyReplCommandName, "title-command"));
+  CHECK(!std::strcmp(legacyReplCommandLine, "title-command argument"));
 }
 
 void test_guest_address_ranges_are_validated_and_physically_normalized() {
@@ -416,6 +452,7 @@ void test_legacy_adapter_projects_static_backdrop_policy_only_for_migration() {
 int main() {
   RUN(installation_reaches_derived_runtime);
   RUN(direct_runtime_publishes_cd_ready_callback_slot);
+  RUN(repl_commands_are_game_owned_and_legacy_forwarding_is_optional);
   RUN(guest_address_ranges_are_validated_and_physically_normalized);
   RUN(legacy_pair_is_bounded_by_runtime_adapter);
   RUN(legacy_adapter_supports_incremental_inheritance);

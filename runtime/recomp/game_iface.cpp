@@ -68,6 +68,11 @@ std::unique_ptr<TemporalFramePresentation> LegacyGameRuntimeAdapter::createTempo
   return std::make_unique<Fps60>(game);
 }
 
+bool LegacyGameRuntimeAdapter::replCommand(Core &core, const char *command, const char *line) {
+  const GameHooks *hooks = legacyHooks();
+  return hooks && hooks->replCommand && hooks->replCommand(&core, command, line);
+}
+
 void psxport_install_game(const GameConfig *cfg, const GameHooks *hooks) {
   if (!cfg || !hooks) {
     g_ownedLegacyRuntime.reset();
