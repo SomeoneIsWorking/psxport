@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-30.2"    # emitted substrate carries an exact compiled-output identity
+RECOMP_VERSION = "2026-08-30.3"    # generated attribution scopes are unwind-safe
 
 R = lambda n: f"c->r[{n}]"
 
@@ -2786,7 +2786,8 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         # unchanged: still a single load-and-test, however many kinds of work exist.
         # OT/GTE SUBMISSION ATTRIBUTION ON DIRECT CALLS (docs/plans/graphics-producer-db.md, guest leg).
         # Every direct call is emitted as this wrapper (call_or_dispatch) and the dispatch switch calls it
-        # too, so ONE push/pop here covers every guest call of BOTH kinds. Before this, the attribution
+        # too, so ONE scoped attribution lifetime here covers every guest call of BOTH kinds. Before
+        # this, the attribution
         # stack was pushed only around INDIRECT dispatch, and the packet-pool stores are performed by
         # shared SDK-adjacent routines reached by direct jal — so the stack was empty for exactly the
         # stores that mattered and the guest leg attributed 1.61% of its prims.
@@ -2803,9 +2804,10 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         # That is precisely how the removed PC route scored 100% coverage and ~0% truth
         # (Tomba2Engine/docs/findings/render.md) — it named SDK libgs builders as the producers.
         d.append(f"void {N.wrap}_{a:08X}(Core* c) {{ c->pc = {addr_const(a)}; "
-                 f"if (c->pending_work) rec_irq_poll(c); c->idiag.otattrPush({addr_const(a)}); "
-                 f"if ({N.ovtab}[{i}]) {{ {N.ovtab}[{i}](c); c->idiag.otattrPop(); return; }} "
-                 f"{N.gen}_{a:08X}(c); c->idiag.otattrPop(); }}")
+                 f"if (c->pending_work) rec_irq_poll(c); "
+                 f"auto otattr_scope = c->idiag.otattrScope({addr_const(a)}); "
+                 f"if ({N.ovtab}[{i}]) {{ {N.ovtab}[{i}](c); return; }} "
+                 f"{N.gen}_{a:08X}(c); }}")
     d.append(f"int {N.index}(uint32_t addr) {{\n  switch (addr & 0x1FFFFFFFu) {{")
     for a in funcs:
         d.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: return {idx[a]};")

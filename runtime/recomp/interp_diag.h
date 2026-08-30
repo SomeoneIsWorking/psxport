@@ -59,10 +59,10 @@ struct InterpDiag {
 
   // OT/GTE submission-attribution shadow stack — "who is this GP0/GTE submission attributed to".
   //
-  // MAINTAINED ON EVERY GUEST CALL, both kinds, since 2026-08-12: the recompiler emits the push/pop in
-  // each guest function's WRAPPER (tools/recomp/emit.py), and both direct calls and the generated
-  // dispatch switches go through that wrapper. It is NOT channel-gated, so the attribution has the same
-  // shape in a normal run as in a diagnostic one.
+  // MAINTAINED ON EVERY GUEST CALL, both kinds, since 2026-08-12: the recompiler acquires an OtAttrScope
+  // in each guest function's WRAPPER (tools/recomp/emit.py), and both direct calls and the generated
+  // dispatch switches go through that wrapper. It is NOT channel-gated, so the attribution has the
+  // same shape in a normal run as in a diagnostic one.
   //
   // THE INVARIANT USED TO BE THE OPPOSITE and it is worth knowing why it changed, because the old shape
   // produced a measured failure rather than merely being incomplete: pushes happened only around INDIRECT
@@ -92,6 +92,24 @@ struct InterpDiag {
     if (otattr_depth > 0) {
       otattr_depth--;
     }
+  }
+  class OtAttrScope {
+  public:
+    OtAttrScope(InterpDiag &diag, uint32_t addr) : diag_(diag) {
+      diag_.otattrPush(addr);
+    }
+    ~OtAttrScope() {
+      diag_.otattrPop();
+    }
+
+    OtAttrScope(const OtAttrScope &) = delete;
+    OtAttrScope &operator=(const OtAttrScope &) = delete;
+
+  private:
+    InterpDiag &diag_;
+  };
+  [[nodiscard]] OtAttrScope otattrScope(uint32_t addr) {
+    return OtAttrScope(*this, addr);
   }
   uint32_t otattrTop() const {
     int d = otattr_depth;

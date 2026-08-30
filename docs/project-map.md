@@ -151,9 +151,13 @@ exception exit installed by `B0:0x19 HookEntryInt`. `bios_interrupt.{h,cpp}` own
 layout (`ra/sp/fp/s0..s7/gp`) and makes the saved setjmp continuation return non-zero.
 `B0:0x17 ReturnFromException` raises a private scoped unwind through generated C, so the continuation
 cannot fall through into its one-time initialization; only then does the outer injection restore the
-interrupted `R3000`. `B0:0x18 ResetEntryInt` clears the context. `test_bios_interrupt` drives the
-shipping BIOS entry points and proves context restoration, zero-buffer/zero-RA refusal, non-returning
-unwind, and the illegal normal-return answer. A consumer must seed the measured saved RA as
+interrupted `R3000`. Generated wrappers acquire their diagnostic attribution owner through
+`InterpDiag::OtAttrScope`, so that unwind releases every crossed wrapper without an IRQ-specific repair
+path. `B0:0x18 ResetEntryInt` clears the context. `test_bios_interrupt` drives the shipping BIOS entry
+points and the full `irqPoll -> rec_dispatch -> B0:0x17` seam, proving CPU and diagnostic-owner context
+restoration, zero-buffer/zero-RA refusal, non-returning unwind, and the illegal normal-return answer. An
+emitter regression separately requires the generated wrapper to use the shared scope. A consumer must
+seed the measured saved RA as
 `main_reentry`, because it is usually inside the interrupt bootstrap rather than a natural function
 entry.
 `dma_callbacks.{h,cpp}` owns direct-runtime Sony `DMACallback` registrations as typed, per-`Game`

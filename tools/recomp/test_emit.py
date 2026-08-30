@@ -1020,6 +1020,16 @@ struct InterpDiagFixture {
   uint32_t otattr_pushes = 0, otattr_pops = 0, otattr_depth = 0;
   void otattrPush(uint32_t){ ++otattr_pushes; ++otattr_depth; }
   void otattrPop(){ if (!otattr_depth) std::abort(); ++otattr_pops; --otattr_depth; }
+  class OtAttrScope {
+   public:
+    OtAttrScope(InterpDiagFixture& diag, uint32_t addr): diag_(diag){ diag_.otattrPush(addr); }
+    ~OtAttrScope(){ diag_.otattrPop(); }
+    OtAttrScope(const OtAttrScope&) = delete;
+    OtAttrScope& operator=(const OtAttrScope&) = delete;
+   private:
+    InterpDiagFixture& diag_;
+  };
+  OtAttrScope otattrScope(uint32_t addr){ return OtAttrScope(*this, addr); }
 };
 struct Core {
   uint32_t r[32]; uint32_t lo, hi, pc;
@@ -1862,6 +1872,10 @@ def test_main_reentry_emits_a_wrapper_body_and_dispatch_case():
         assert f"void func_{reentry:08X}(Core*)" in positive, "main_reentry wrapper was not declared"
         assert f"void gen_func_{reentry:08X}(Core* c)" in positive, "main_reentry body was not emitted"
         assert f"case 0x{reentry & 0x1FFFFFFF:08X}u:" in positive, "main_reentry was not dispatchable"
+        assert f"c->idiag.otattrScope(0x{reentry:08X}u)" in positive, \
+            "generated wrapper did not use the shipping unwind-safe attribution scope"
+        assert "c->idiag.otattrPush(" not in positive and "c->idiag.otattrPop(" not in positive, \
+            "generated wrapper retained manual attribution lifetime management"
     with scratch_tempdir("emit-reentry-negative-") as td:
         negative = run(td, False)
         assert f"func_{reentry:08X}" not in negative, "unseeded interior PC was emitted"

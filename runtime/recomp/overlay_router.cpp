@@ -501,7 +501,7 @@ void rec_dispatch(Core *c, uint32_t addr) {
   }
   // THE OT-ATTRIBUTION PUSHES THAT USED TO LIVE HERE ARE GONE, and their absence is the fix rather than a
   // regression. They wrapped the generated dispatch switches, which reach a guest function through its
-  // WRAPPER — and the wrapper now pushes and pops for itself (tools/recomp/emit.py), on direct calls as
+  // WRAPPER — and the wrapper now scopes attribution itself (tools/recomp/emit.py), on direct calls as
   // well as indirect. Keeping these would push the same address TWICE for every indirect dispatch, which
   // breaks otattrCaller(): the caller of a span would be read back as the span's own function.
   //
