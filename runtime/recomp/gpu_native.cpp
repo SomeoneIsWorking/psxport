@@ -334,11 +334,44 @@ void GpuState::put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int semi)
   if (x < s_da_x0 || x > s_da_x1 || y < s_da_y0 || y > s_da_y1) {
     return;
   }
+  const uint16_t before = *fb(x, y);
   uint16_t out;
   if (semi) {
-    out = blend555(*fb(x, y) & 0x7FFF, r >> 3, g >> 3, b >> 3, s_tp_blend);
+    out = blend555(before & 0x7FFF, r >> 3, g >> 3, b >> 3, s_tp_blend);
   } else {
     out = to555(r, g, b);
+  }
+  if (lucent::channel_on("provchain")) {
+    if (!s_provenance_chain_probe.configured) {
+      s_provenance_chain_probe.configured = true;
+      if (const char *setting = cfg_str("PSXPORT_PROVCHAIN")) {
+        sscanf(setting,
+               "%d,%d,%d",
+               &s_provenance_chain_probe.x,
+               &s_provenance_chain_probe.y,
+               &s_provenance_chain_probe.from_frame);
+      }
+    }
+    if (s_frame >= s_provenance_chain_probe.from_frame && x == s_provenance_chain_probe.x &&
+        y == s_provenance_chain_probe.y) {
+      const ProvMeta &meta = s_provmeta[s_prim_gid % PROVRING];
+      lucent::debug("provchain",
+                    "f{} ({},{}) gid={} node={:08X} op={:02X} semi={} blend={} rgb=({},{},{}) "
+                    "before={:04X} after={:04X}",
+                    s_frame,
+                    x,
+                    y,
+                    s_prim_gid,
+                    meta.node,
+                    meta.op,
+                    semi,
+                    s_tp_blend,
+                    r,
+                    g,
+                    b,
+                    before,
+                    out | 0x8000u);
+    }
   }
   *fb(x, y) = out | 0x8000;
   if (s_prov_on > 0) {
@@ -835,7 +868,7 @@ void GpuState::set_clut(uint16_t cl) {
 void GpuState::prov_begin(
     uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint8_t b, int x0, int y0, int u0, int v0) {
   if (s_prov_on < 0) {
-    s_prov_on = cfg_str("PSXPORT_PROVAT") ? 1 : 0;
+    s_prov_on = (cfg_str("PSXPORT_PROVAT") || cfg_str("PSXPORT_PROVCHAIN")) ? 1 : 0;
   }
   if (!s_prov_on) {
     return;

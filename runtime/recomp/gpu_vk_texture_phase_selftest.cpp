@@ -5,12 +5,11 @@
 #include <string.h>
 
 namespace {
-
 constexpr int kVramWidth = 1024;
 constexpr int kVramHeight = 512;
 constexpr int kTextureX = 512;
 constexpr int kTextureY = 256;
-constexpr int kCaseCount = 5;
+constexpr int kCaseCount = 7;
 constexpr int kPathCount = 2;
 
 struct TexturePhaseCase {
@@ -29,8 +28,12 @@ uint16_t texturePhasePattern(int u, int v) {
   return gpu_vk_selftest_pack555(1 + u % 30, 1 + v % 30, 1 + (u + 3 * v) % 30);
 }
 
-} // namespace
+int uvAt(int base, int dx, int dy, int sampleX, int sampleY, int extent) {
+  const int numerator = dx * sampleX + dy * sampleY;
+  return (base * extent + numerator + extent / 2) / extent;
+}
 
+} // namespace
 bool gpu_vk_run_texture_phase_selftest(GpuVkState &gpu, uint16_t *vram, size_t vramWords, GpuVkSelftestRender render) {
   constexpr size_t requiredWords = static_cast<size_t>(kVramWidth) * kVramHeight;
   if (!vram || vramWords < requiredWords || !render) {
@@ -40,10 +43,8 @@ bool gpu_vk_run_texture_phase_selftest(GpuVkState &gpu, uint16_t *vram, size_t v
     return false;
   }
 
-  // The PSX interpolates UV at integer pixel coordinates. SDL_GPU supplies the affine varying at the
-  // fragment centre instead. Positive unit slopes happened to survive int() truncation; negative slopes
-  // sampled the preceding texel, which shifted Tomba! 2's vertically mirrored health segment by one row.
-  // Each expected texel below is evaluated at the integer display pixel, not at +0.5.
+  // PSX UVs round at integer pixel coordinates; SDL_GPU supplies affine UVs at fragment centres.
+  // These controls distinguish the PSX answer from truncation at both integer and fractional slopes.
   constexpr int kExtent = 16;
   constexpr int kBaseU = 96;
   constexpr int kBaseV = 112;
@@ -53,6 +54,8 @@ bool gpu_vk_run_texture_phase_selftest(GpuVkState &gpu, uint16_t *vram, size_t v
       {"positive Y", 112, 40, 0, 0, 0, 16, 3, 3},
       {"negative Y", 160, 40, 0, 0, 0, -16, 3, 3},
       {"mixed non-unit", 208, 40, -8, 4, 4, -8, 4, 4},
+      {"positive fractional round", 256, 40, 12, 0, 0, 12, 1, 1},
+      {"negative fractional round", 304, 40, -4, 0, 0, -4, 1, 1},
   };
 
   int passed = 0;
@@ -70,8 +73,8 @@ bool gpu_vk_run_texture_phase_selftest(GpuVkState &gpu, uint16_t *vram, size_t v
     unsigned order = 1;
     unsigned char neutral[3] = {128, 128, 128};
     for (const TexturePhaseCase &testCase : cases) {
-      const int expectedU = kBaseU + (testCase.uDx * testCase.sampleDx + testCase.uDy * testCase.sampleDy) / kExtent;
-      const int expectedV = kBaseV + (testCase.vDx * testCase.sampleDx + testCase.vDy * testCase.sampleDy) / kExtent;
+      const int expectedU = uvAt(kBaseU, testCase.uDx, testCase.uDy, testCase.sampleDx, testCase.sampleDy, kExtent);
+      const int expectedV = uvAt(kBaseV, testCase.vDx, testCase.vDy, testCase.sampleDx, testCase.sampleDy, kExtent);
       auto drawCase = [&](int yOffset, bool semi, bool constantUv) {
         int xs[3] = {testCase.x, testCase.x + kExtent, testCase.x};
         int ys[3] = {testCase.y + yOffset, testCase.y + yOffset, testCase.y + yOffset + kExtent};
@@ -139,8 +142,8 @@ bool gpu_vk_run_texture_phase_selftest(GpuVkState &gpu, uint16_t *vram, size_t v
 
     if (render(gpu, vram)) {
       for (const TexturePhaseCase &testCase : cases) {
-        const int expectedU = kBaseU + (testCase.uDx * testCase.sampleDx + testCase.uDy * testCase.sampleDy) / kExtent;
-        const int expectedV = kBaseV + (testCase.vDx * testCase.sampleDx + testCase.vDy * testCase.sampleDy) / kExtent;
+        const int expectedU = uvAt(kBaseU, testCase.uDx, testCase.uDy, testCase.sampleDx, testCase.sampleDy, kExtent);
+        const int expectedV = uvAt(kBaseV, testCase.vDx, testCase.vDy, testCase.sampleDx, testCase.sampleDy, kExtent);
         for (int path = 0; path < kPathCount; ++path) {
           const int phaseYOffset = path == 0 ? 0 : 72;
           const int controlYOffset = path == 0 ? 32 : 104;
@@ -169,7 +172,7 @@ bool gpu_vk_run_texture_phase_selftest(GpuVkState &gpu, uint16_t *vram, size_t v
   const int totalCases = kCaseCount * kPathCount * 2;
   const bool ok = passed == totalCases;
   lucent::info("gpu_selftest",
-               "textured PSX UV phase: {}/{} cases (ires 1/3 x opaque/semi x +/-X, +/-Y, mixed non-unit) => {}",
+               "textured PSX UV phase: {}/{} cases (ires 1/3 x opaque/semi x integer/fractional slopes) => {}",
                passed,
                totalCases,
                ok ? "PASS" : "FAIL");

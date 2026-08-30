@@ -3591,7 +3591,7 @@ static bool render_semi_selftest(GpuVkState &gpu, uint16_t *vram) {
 //   (1) ORIENTATION — VRAM row 0 (top) lands at the TOP of the output, not the bottom. This is the
 //       regression guard for the SDL_GPU swapchain Y-flip (the "rendering upside down" bug).
 //   (2) 1555 UNPACK — the present.frag 1555→RGB decode is correct (red marker decodes red, blue→blue).
-// No disc/game needed (boot.cpp calls this before load_exe). Prints PASS/FAIL and exits with that status.
+// Game construction calls this before any title frame executes. Prints PASS/FAIL and exits with that status.
 void GpuVkState::tritest() {
   if (!cfg_on("PSXPORT_GPU_SELFTEST")) {
     return;

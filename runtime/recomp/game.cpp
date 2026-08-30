@@ -53,6 +53,11 @@ Game::Game() {
     frameDriver = runtime->createFrameDriver(*this);
     taskScheduler = runtime->createTaskScheduler(*this);
   }
+
+  // Every port constructs a Game, including ports that bypass native_boot_run. Keep the shipping GPU
+  // self-test reachable from that common boundary; leaving tritest compiled but uncalled made
+  // PSXPORT_GPU_SELFTEST audit as an unknown no-op and falsely implied its shader checks were running.
+  gpu_vk.tritest();
 }
 
 Game::~Game() {

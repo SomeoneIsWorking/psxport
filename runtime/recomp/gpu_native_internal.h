@@ -210,7 +210,7 @@ struct GpuState {
   uint32_t s_prim_order = 0;             // OT submission index of the current prim (VK depth)
   uint32_t s_prim_gid = 0;               // monotonic primitive counter (provenance)
   uint32_t s_prov[VRAM_W * VRAM_H] = {}; // gid of last writer per pixel
-  int s_prov_on = -1;                    // lazily 1 if PSXPORT_PROVAT set
+  int s_prov_on = -1;                    // lazily 1 if a pixel-provenance probe is configured
   ProvMeta s_provmeta[PROVRING] = {};    // gid -> prim details (ring)
 
   // GP0 command FIFO + VRAM transfer
@@ -317,6 +317,7 @@ struct GpuState {
   // feature exists to remove.
   long s_c0_stale = 0;
   GpuPixelProbeTarget s_pixel_probe;
+  GpuPixelProbeTarget s_provenance_chain_probe;
   // ---- GP0(0xC0) VRAM->CPU transfer cursor ------------------------------------------------------
   // Mirrors s_xfer* (the A0 CPU->VRAM cursor) exactly: same rect decode, same row-major 2-pixels-per-
   // word stream, same VRAM wrap. Drained by the GPUREAD register (0x1F801810) and by DMA2 in the

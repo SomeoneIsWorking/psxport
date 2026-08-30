@@ -236,8 +236,10 @@ and runs decode -> fixed-function PSX blend -> encode for every semitransparent 
 the immediately preceding authored result at 5-bit precision. The resolved packed color + real D32 then
 depth-composite into the world. `gpu_vk_semi_selftest.cpp`
 owns the 16-case PSX semi-textured equation matrix, packet setup, integer reference equations, and verdict;
-`gpu_vk_texture_phase_selftest.cpp` separately owns the 20-case 1x/3x opaque/semi integer-pixel UV-phase
-matrix. Both use `gpu_vk_selftest_support.h` and `gpu_vk.cpp` supplies only the shipping
+`gpu_vk_texture_phase_selftest.cpp` separately owns the 28-case 1x/3x opaque/semi integer-pixel UV-phase
+matrix, including positive and negative fractional slopes that distinguish PSX round-to-nearest from
+truncation. Both use `gpu_vk_selftest_support.h`; `Game` construction makes the selftest reachable from
+every port, and `gpu_vk.cpp` supplies only the shipping
 upload/`render_geom`/readback operation. `shaders_gpu/psx_uv.glsl` is the one 12-fractional-bit
 integer-native-pixel reconstruction shared by opaque, semi, and semi-cover fragment shaders. The remaining
 shipping GPU selftest reads both local and post-composite D32 boundaries. The untextured companion pipeline

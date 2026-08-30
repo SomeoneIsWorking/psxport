@@ -886,9 +886,10 @@ or level — they can't be a bare channel:
 - **SDL_GPU renderer (gpu_vk.cpp):** `GPU_TRACE` (per-present src-VRAM occupancy + sampled disp region +
   readback nonzero count), `GPU_DEBUG` (enable the SDL_GPU device validation layer — slows pipeline
   compile, can trip the boot watchdog; raise `WATCHDOG_BOOT` when using it), `GPU_SELFTEST` (headless
-  renderer regression test: render a known VRAM pattern through the present pipeline into an offscreen
-  RGBA8 target and assert orientation + 1555 unpack, then exit 0=PASS/1=FAIL — runs `tools/test_gpu_render.sh`;
-  no disc needed). `VK_HEADLESS` (offscreen, no window) and `FULLSCREEN`/`WINDOWED` are honored unchanged.
+  renderer regression test reached from common `Game` construction: render known VRAM patterns through
+  the shipping present, textured, and semi-textured pipelines into offscreen targets; assert orientation,
+  1555 unpack, integer/fractional affine UV phase, and blend equations; then exit 0=PASS/1=FAIL before any
+  title frame executes). `VK_HEADLESS` (offscreen, no window) and `FULLSCREEN`/`WINDOWED` are honored unchanged.
 - **Boot / automation:** `NO_FMV`, `NOAUDIO`, `NOPACE`, `NOSKIP`, `NATIVE_FRAMES`, `AUTO_GAMEPLAY`,
   `AUTO_NEWGAME`, `SCEA_SKIP`, `WATCHDOG`, `REPL`, `DEBUG_SERVER`, `T2_NOSEQTICK`, `FMV_*`, `FORCE_*`.
 - **Pad record / replay / resume (`pad_input.cpp`):** `PAD_RECORD=<path|0>` (append the finalized
@@ -1080,7 +1081,7 @@ or level — they can't be a bare channel:
     guest `sp`/`ra` at entry, and the first ~16 differing RAM/scratchpad bytes or ABI registers
     (addr, native value, substrate value) — enough to root-cause without re-running under a
     debugger.
-- **Valued diagnostics (still named, gfx-debug.md documents them):** `SCENEDUMP`, `PROVAT`, `GTEPROBE`,
+- **Valued diagnostics (still named, gfx-debug.md documents them):** `SCENEDUMP`, `PROVAT`, `PROVCHAIN`, `GTEPROBE`,
   `POLYDUMP`/`POLYAT`, `FADEDBG`, `SEMIDUMP`, `VK_SHOT`/`VK_SHOTSEQ`, `VK_DIFF`, `GPUTRACE`,
   `VRAMDUMP`/`VRAMDUMP_AT`, `RAMDUMP`/`RAMDUMP_FRAME`, `CLOBBERDUMP`, `CLUTWATCH`, `WWATCH`, `CW`/`CW_BT`,
   `XA_DBG` (level), `BGMDBG` (level), `GPU_DUMP`, `WAV`, `SS`, `SBS`.
@@ -1089,6 +1090,10 @@ or level — they can't be a bare channel:
     conclusions. `PSXPORT_WWATCH_BT=1` adds a host backtrace per hit (names the gen_func_*/native
     chain even where guest pc/ra are stale under native execution) plus a `[wwatch-regs]` line with
     a0-a3/s0-s7 — the fastest way to attribute a write when pc/ra lie.
+  - `PSXPORT_PROVCHAIN="x,y[,f0]"` with `PSXPORT_DEBUG=provchain` logs every software-GPU write to
+    absolute VRAM pixel `(x,y)` from frame `f0` onward, including primitive id, packet node/opcode,
+    blend mode, incoming RGB, and the before/after 1555 values. It enables its own provenance stamping;
+    `PSXPORT_PROVAT` is not required.
   - `PSXPORT_DEBUG=script` — one line per ScriptInterp::step opcode dispatch (obj, cursor, opword,
     ret), PLUS one `advance` line per entry advance from `ScriptInterp::loadNextEntry` (cursor, opword,
     advance kind, new cursor, advanceStep index). The dispatch line is native-step configs only, but the

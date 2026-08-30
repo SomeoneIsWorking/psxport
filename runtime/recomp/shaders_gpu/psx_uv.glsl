@@ -18,9 +18,11 @@
 vec2 psxUvAtIntegerPixel(vec2 centerUv, int scale, ivec4 uvbb) {
     vec2 subpixel = vec2(ivec2(gl_FragCoord.xy) % scale) + vec2(0.5);
     vec2 integerPixelUv = centerUv - subpixel.x * dFdx(centerUv) - subpixel.y * dFdy(centerUv);
-    // The PSX rasterizer carries affine UV with 12 fractional bits. Snap the float reconstruction to
-    // that representable grid before int() truncation; otherwise ires interpolation error can put an
-    // exact fixed-point integer just below its texel boundary. uvbb bounds the result to the primitive's own texels.
+    // The PSX rasterizer carries affine UV with 12 fractional bits, then adds half a texel before
+    // converting to integer. Snap the float reconstruction to that representable grid before the
+    // round-to-nearest step; otherwise ires interpolation error can put an exact half-texel on the
+    // wrong side. uvbb bounds the result to the primitive's own texels.
     vec2 snapped = floor(integerPixelUv * 4096.0 + vec2(0.5)) / 4096.0;
-    return clamp(snapped, vec2(uvbb.xy), vec2(uvbb.zw));
+    vec2 rounded = floor(snapped + vec2(0.5));
+    return clamp(rounded, vec2(uvbb.xy), vec2(uvbb.zw));
 }

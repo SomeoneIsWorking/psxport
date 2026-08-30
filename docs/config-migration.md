@@ -560,6 +560,7 @@ quoting a call). The class map prints any framework-live knob it does not cover;
 | `PSXPORT_PROF_HZ` | int(str) | 1 | `runtime/recomp/hostprof.cpp:109` | **none** |
 | `PSXPORT_PROF_OUT` | path | 1 | `runtime/recomp/hostprof.cpp:81` | **none** |
 | `PSXPORT_PROJPROBE` | bool | 2 | `runtime/recomp/gte_beetle.cpp:402` · `runtime/recomp/gpu_native.cpp:1635` | config.md:550 |
+| `PSXPORT_PROVCHAIN` | tuple | 2 | `runtime/recomp/gpu_native.cpp` | config.md |
 | `PSXPORT_PROVAT` | string | 2 | `runtime/recomp/gpu_native.cpp:603` · `runtime/recomp/gpu_native.cpp:1679` | config.md:721 |
 | `PSXPORT_RAMDUMP` | path | 2 | `runtime/recomp/native_boot.cpp:558` · `runtime/recomp/native_boot.cpp:577` | config.md:723 |
 | `PSXPORT_RAMDUMP_FRAME` | path | 1 | `runtime/recomp/native_boot.cpp:555` | config.md:723 |
