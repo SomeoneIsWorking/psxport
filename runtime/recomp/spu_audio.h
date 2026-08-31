@@ -50,6 +50,7 @@ class SpuAudio {
 public:
   Game *game = nullptr; // back-pointer wired by Game(); reaches this Core's SPU/XA/native-music state
 
+  ~SpuAudio();
   void init();
   void frame();
   void frameLogic() {

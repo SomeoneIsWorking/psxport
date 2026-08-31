@@ -72,6 +72,12 @@ void SpuAudio::wavCloseAtExit() {
   }
 }
 
+SpuAudio::~SpuAudio() {
+  // Game owns this object.  It is destroyed before process atexit handlers run, so the capture
+  // must be finalized here rather than leaving a stale Game-owned pointer for wavCloseAtExit().
+  wavClose();
+}
+
 // ---- WAV capture (PSXPORT_WAV=path) -------------------------------------------------------------
 // Dumps the SPU's mixed 44.1 kHz stereo int16 output to a WAV file, INDEPENDENT of SDL — works
 // headless / under PSXPORT_NOAUDIO. Header sizes patched at exit. Capped so a runaway run can't
