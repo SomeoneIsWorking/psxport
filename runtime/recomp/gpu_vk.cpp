@@ -2141,16 +2141,12 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   if (!s_inited) {
     init_gpu(game);
   }
-  // Widescreen: the engine renders a wider FOV into VRAM columns [sx, sx+nw). Everything downstream (the
-  // windowed present sample region AND the `shot`/vkshot readback, which use s_last_w) must span that wide
-  // width, else the wide FB is cropped back to the 4:3 s_disp_w. At 4:3 nw==320 so w is unchanged.
-  // The PC renderer composites native submits over BLACK (render_geom), so a frame with no native
-  // content is already black here — sampling the wide width just shows black, never the atlas. So the
-  // present can unconditionally span the wide FB when widescreen; no frame-type heuristic needed.
-  int disp_w = w;
-  if (gpu_vk_wide_presentation(&game->core)) {
-    disp_w = gpu_vk_wide_presentation_w(&game->core);
-  }
+  // Widescreen world frames sample the widened FOV. A static 2D frame has no authored side columns,
+  // so keep the native source width; plan_present then centres the unchanged 4:3 picture with black
+  // side bars. The census is current-frame state (s_seen3d), never a prior-frame heuristic.
+  const bool widePresentation = gpu_vk_wide_presentation(&game->core);
+  const int wideWidth = gpu_vk_wide_presentation_w(&game->core);
+  const int disp_w = present_display_width(widePresentation, wideWidth, w, gpu_seen3d_this_frame(&game->core) != 0);
   s_present_sx = sx;
   s_present_sy = sy;
   s_last_sx = sx;

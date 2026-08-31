@@ -66,6 +66,18 @@ struct PresentPlan {
   int src_ires;       // 0 = sample the native target, >1 = sample the ires target
 };
 
+// A widescreen framebuffer is only a wider presentation when the current frame actually contains
+// native world geometry. A title-owned static 2D frame (license/logo/menu still, or an upload-only
+// screen) has no authored side columns to expose: sample the game's native display width so the
+// normal 4:3 letterbox centres it and paints black side bars. The caller supplies the current-frame
+// 3D census; this is a same-frame presentation fact, not a temporal heuristic.
+inline int present_display_width(bool widePresentation, int wideWidth, int nativeWidth, bool hasNativeWorld) {
+  if (!widePresentation || !hasNativeWorld || wideWidth <= nativeWidth) {
+    return nativeWidth;
+  }
+  return wideWidth;
+}
+
 inline bool present_plan_same_picture(const PresentPlan &a, const PresentPlan &b) {
   if (a.build != b.build || a.src_ires != b.src_ires) {
     return false;
