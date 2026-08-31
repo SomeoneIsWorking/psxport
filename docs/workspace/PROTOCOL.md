@@ -14,7 +14,7 @@ Seven game repos share ONE framework, and there are seven checkouts of it — on
 Two agents fixing the same framework bug in two checkouts is the expensive failure: invisible until merge
 time, and whichever lands second is thrown away with its testing.
 
-## Agent allocation: three concurrent subagents, assigned by the work
+## Agent allocation: unbounded subagents, assigned by the work
 
 USER 2026-08-27: "remove the 1 agent per game instruction, you are allowed 3 subagents from now on, you decide what they work on"
 
@@ -23,11 +23,14 @@ USER 2026-08-27: "Depending on the task, all 3 can be working on the same game o
 USER 2026-08-30: "Change the global subagents directive, I'm revoking it, no subagent access unless specified, you are still allowed subagents, 3 max concurrent
 All projects must keep their own allowed counts starting from 0, yours is again 3"
 
-- Subagent access is project-owned and globally defaults to zero. This PSX workspace explicitly
-  allows at most three concurrently active subagents across `psxport` and every sibling game repo;
-  nested delegation consumes the same pool and cannot expand it.
-- There is no standing one-agent-per-game assignment. Allocate the three slots to the current root causes;
-  one, two, or all three may work on the same game when the ownership boundaries are independent.
+USER 2026-08-31: "Removing your subagent limit, use as many as you want"
+
+- Subagent access is project-owned and globally defaults to zero. This PSX workspace has no fixed
+  concurrent-subagent cap across `psxport` and every sibling game repo. Allocate only distinct,
+  bounded tasks with non-overlapping writers; serialize builds, emulators, and other singleton
+  runtimes that cannot safely run concurrently.
+- There is no standing one-agent-per-game assignment. Any number may work on the same game when the
+  ownership boundaries are independent.
 - Reassign a slot when its current work reaches a recorded boundary. A rebuild, repeated broad gate, or
   revalidation of an unchanged capability is not progress and does not justify keeping a slot.
 
