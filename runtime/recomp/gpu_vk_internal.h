@@ -15,6 +15,7 @@
 #define GPU_GPU_INTERNAL_H
 #include "gpu_vk_semi_order.h"           // world semi-transparent submission runs
 #include "guest_vram_composite_policy.h" // persistent-composite ownership transition latch
+#include "native_composite_capture.h"    // native pause/backdrop capture lifetime policy
 #include "vram_dirty.h"                  // class VramDirty — which parts of guest VRAM a present must re-upload
 #include <stdint.h>
 
@@ -71,6 +72,11 @@ struct GpuVkState {
   SDL_GPUTransferBuffer *s_snap_xfer = nullptr;
   SDL_GPUTexture *s_depth = nullptr;      // D32 depth (ordering)
   SDL_GPUTexture *s_color_rgba = nullptr; // float RGBA semi-blend intermediate
+  // A retained copy of the completed native composite. This is deliberately renderer-private: titles
+  // request capture but never receive an SDL texture, so presentation and lifetime stay with this
+  // per-Game GPU owner.
+  SDL_GPUTexture *s_native_composite_capture_tex = nullptr;
+  NativeCompositeCapture s_native_composite_capture;
   SDL_GPUBuffer *s_tri_vbuf = nullptr;
   SDL_GPUBuffer *s_line_vbuf = nullptr;
   SDL_GPUBuffer *s_tex_vbuf = nullptr;
@@ -283,6 +289,11 @@ struct GpuVkState {
   void semi_group(int x0, int y0, int x1, int y1);
   void stats(int *tri, int *tex, int *semi);
   void dirty(int x, int y, int w, int h);
+  bool request_native_composite_capture();
+  void note_native_composite_completed(bool ires, int width, int height);
+  void capture_native_composite(SDL_GPUCommandBuffer *cmd);
+  void release_native_composite_capture();
+  ~GpuVkState();
   void present(const uint16_t *src, int sx, int sy, int w, int h);
   // Re-show the last BUILT frame (no VRAM upload, no geometry re-render, no batch reset) — the debug-server
   // pause loop's window keep-alive. See the body in gpu_vk.cpp for why a pause must never re-render.

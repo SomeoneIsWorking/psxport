@@ -62,4 +62,8 @@ Game::Game() {
 
 Game::~Game() {
   recdep_dump(&core);
+  // GpuDevice is declared after gpu_vk and therefore dies first during member teardown. Release this
+  // per-Game retained texture while its owning SDL device is still alive; GpuVkState's destructor then
+  // only clears the already-empty policy state.
+  gpu_vk.release_native_composite_capture();
 }

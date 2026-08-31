@@ -2032,6 +2032,7 @@ static void render_geom(GpuVkState &g,
                   g.s_semi2d_vbuf[GGS_2D_FG],
                   g.s_semi2d_n[GGS_2D_FG]);
   g.s_present_ires = scale; // present() samples C (native s_vram_tex at 1x, s_ires_color at >1x)
+  g.note_native_composite_completed(ires, cw, ch);
 
   // Headless `shot` / VRAM-space readback: plain box-downsample C's display sub-rect -> s_vram_tex. No-op
   // at 1x (C IS s_vram_tex). The WINDOW never uses this — it presents from C directly (present()).
@@ -2325,6 +2326,7 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // REUSE_LAST skips REBUILDING THE FRAME (no VRAM upload, no geometry) — it does not skip PRESENTING
   // one. The composite below still runs, because the picture depends on live state the frame does not:
   // the fade ramps every field, and the window can be resized under a completely idle guest.
+  capture_native_composite(cmd);
   if (decision != PRESENT_REUSE_LAST) {
     // SOFTWARE RASTERIZER: the whole of s_vram is new, every present. The dirty list is the OTHER half
     // of the same blindness the decision above just fixed — both are fed exclusively by

@@ -163,6 +163,11 @@ void gpu_vk_repaint(Core *core);
 // only uploads (no present) — verify headless via the caller's own CPU-side dump.
 void gpu_vk_present_image(Core *core, const uint8_t *rgba, int iw, int ih, float fade);
 void gpu_vk_frame_end(Core *core, const uint16_t *svram, int frame);
+// Retain the last completed native composite before the next present can rebuild the live target.
+// This is a request-only title boundary; the retained SDL texture remains private to GpuVkState.
+// Returns false when no completed composite fence exists, rather than capturing a later scene.
+bool gpu_vk_request_native_composite_capture(Core *core);
+bool gpu_vk_native_composite_capture_ready(Core *core);
 // preseqobj (per-object motion tracker): the present index this emit pass will dump, or -1 if no preseq
 // capture is armed. Lets RenderQueue::emitItem key each [preseqobj] line to its present frame.
 int gpu_vk_preseq_present_index(Core *core);
