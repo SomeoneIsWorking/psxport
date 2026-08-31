@@ -205,6 +205,7 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
   const uint32_t frame = stampFrame();
   const uint32_t fn = c->idiag.otattrTop();
   const uint32_t caller = c->idiag.otattrCaller();
+  const uint32_t guestProducer = c->rsub.guestPacketFilter.currentOwner();
   // Physical form: mask off the segment bits (KUSEG/KSEG0/KSEG1 mirror main RAM at 0x000xxxxx/0x800xxxxx/
   // 0xA00xxxxx — masking with 0x1FFFFFFF collapses all three to the same physical offset) — this is the
   // SAME normalization display_pass_write_guard (mem.cpp) uses, and unlike the pool-only `k = addr |
@@ -260,7 +261,8 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
   // keeps SPAN_CAP from blowing out on a normal frame.
   if (mSpanCount > 0) {
     Span &last = mSpans[mSpanCount - 1];
-    if (last.fn == fn && last.caller == caller && last.node == node && k >= last.lo && k <= last.hi) {
+    if (last.fn == fn && last.caller == caller && last.node == node && last.guestProducer == guestProducer &&
+        k >= last.lo && k <= last.hi) {
       if (k + bytes > last.hi) {
         last.hi = k + bytes;
       }
@@ -278,7 +280,7 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
     if (mSpanCount && k < mSpans[mSpanCount - 1].lo) {
       mSpansSorted = false;
     }
-    mSpans[mSpanCount++] = Span{k, k + bytes, fn, caller, node, c->pc, claimed};
+    mSpans[mSpanCount++] = Span{k, k + bytes, fn, caller, node, c->pc, claimed, guestProducer};
   } else {
     mSpanOverflow++;
   }

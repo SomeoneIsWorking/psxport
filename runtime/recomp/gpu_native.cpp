@@ -1134,6 +1134,11 @@ void GpuState::gp0_exec(Core *core) {
   GuestGp0Scope guestGp0(&core->rsub);
   uint32_t c = s_fifo[0];
   uint8_t op = c >> 24;
+  // The owner tag was captured when this packet was written, while the guest producer's call
+  // frame still existed.  DMA/OT execution happens after that call returned, so no current-stack
+  // lookup could identify it now.  A miss deliberately stays visible: incomplete provenance must
+  // never suppress a plausible-but-unrelated packet.
+  const bool suppressDraw = core->rsub.guestPacketFilter.suppressesPacket(core->rsub.otAttr, s_fifo_addr[0]);
   if (op >= 0x20 && op <= 0x3F) { // polygon
     int gouraud = op & 0x10, quad = op & 0x08, textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
     int raw = textured && (op & 0x01); // bit0 = texture-blend-disable (raw texel, no modulation)
@@ -1206,7 +1211,7 @@ void GpuState::gp0_exec(Core *core) {
     }
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
-    if (vk_path()) {
+    if (vk_path() && !suppressDraw) {
       unsigned ord_idx = s_prim_order++;
       int xs[4], ys[4], us[4], vs[4];
       unsigned char rs[4], gs[4], bs[4];
@@ -1763,7 +1768,7 @@ void GpuState::gp0_exec(Core *core) {
                    s_clut_x,
                    s_clut_y);
     }
-    if (sw_path()) { // VK owns poly raster now (tee'd above); SW does the rest
+    if (sw_path() && !suppressDraw) { // VK owns poly raster now (tee'd above); SW does the rest
       tri(v[0], v[1], v[2], textured, shade, semi, raw);
       if (quad) {
         tri(v[1], v[2], v[3], textured, shade, semi, raw);
@@ -1897,11 +1902,11 @@ void GpuState::gp0_exec(Core *core) {
                      s_clut_y);
       }
     }
-    if (sw_path()) {
+    if (sw_path() && !suppressDraw) {
       raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi); // VK owns it (tee'd below)
     }
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
-    if (vk_path()) {
+    if (vk_path() && !suppressDraw) {
       unsigned ord_idx = s_prim_order++;
       // sprites/rects are screen-space (no GTE projection) -> 2D backdrop/HUD band by screen coverage.
       int use_rq = rq_active();
@@ -2317,7 +2322,7 @@ void GpuState::gp0_exec(Core *core) {
         ln.flush_debug(lp_ch);
       }
     }
-    for (int s = 0; s + 1 < nv; s++) { // flat colour = start vertex
+    for (int s = 0; !suppressDraw && s + 1 < nv; s++) { // flat colour = start vertex
       if (sw_path()) {
         raster_line(vx[s], vy[s], vx[s + 1], vy[s + 1], vr[s], vg[s], vb[s], semi);
       } else { // VK: tee the segment as a 1px-thick quad (mode 3 flat)

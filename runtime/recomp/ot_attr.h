@@ -105,6 +105,11 @@ inline const lucent::Channel g_otchain_channel{"otchain"};
 // relaxed loads.
 inline bool g_producer_census_armed = true;
 
+// A GuestPacketOwnerScope is active only while a title intentionally super-calls a guest producer
+// whose delayed OT packets may later be replaced by native output.  This retains packet-pool spans
+// even when the diagnostic census is disabled; the per-Core owner itself lives in GuestPacketFilter.
+inline thread_local int g_guest_packet_owner_scope_depth = 0;
+
 class OtAttr {
 public:
   // A single terrain-heavy field frame can produce well over 4096 attribution-distinct spans (terrain
@@ -128,7 +133,7 @@ public:
   // resolution bug becomes invisible.
   struct Span {
     uint32_t lo, hi;
-    uint32_t fn, caller, node, pc, claimed;
+    uint32_t fn, caller, node, pc, claimed, guestProducer;
   };
 
   // The chain walk is BOUNDED — an unclaimed chain would otherwise pay a full-depth scan on every new
@@ -152,7 +157,7 @@ public:
   void trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes);
   inline void trackStore(Core *c, uint32_t addr, uint32_t bytes) {
     // Steady state with both off: two relaxed loads and two compares, still no call.
-    if (!g_otattr_channel && !g_producer_census_armed) {
+    if (!g_otattr_channel && !g_producer_census_armed && !g_guest_packet_owner_scope_depth) {
       return;
     }
     trackStoreSlow(c, addr, bytes);

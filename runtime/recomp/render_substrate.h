@@ -12,6 +12,7 @@
 #pragma once
 #include "dualview_snapshot.h"
 #include "gte_preop_observer.h"
+#include "guest_packet_filter.h"
 #include "ot_attr.h"
 #include "pgxp.h"
 #include "producer_census.h"
@@ -28,6 +29,9 @@ public:
   RenderMode mode; // compare-mode toggles (psxRender / dualview)
   RenderDiag diag; // per-object walk-scope tags (currentNode, currentGeomblk)
   OtAttr otAttr;   // OT/GTE submission attribution (`debug otattr`; ot_attr.h)
+  // Per-Core owner stack + filter for guest packets whose execution must survive a native producer
+  // replacement.  Stores no guest state and is consumed only by delayed GP0 presentation.
+  GuestPacketFilter guestPacketFilter;
   // The graphics-producer DB's two legs (docs/plans/graphics-producer-db.md). `census` is the per-run
   // table of "which producer drew what, on which leg"; `producerScope` is the native leg's current-
   // producer stack, which is how an otherwise-anonymous drawWorldQuad push acquires an identity. Both

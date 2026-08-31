@@ -191,6 +191,11 @@ no loader identity exists, and constructs an equal-width ambiguity; the real con
 MENU's 0x800B5244 target instead of first-matching BOOT.
 `ot_attr.{h,cpp}` owns the logic-frame stamp contract: pre-loop boot stores are counted, and the
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
+`guest_packet_filter.h` is the narrow guest/native producer replacement seam: a title brackets the
+intentional guest super-call with a per-Core owner scope, `OtAttr` keeps that key with the packet-pool
+span until the later DMA/OT walk, and GP0 rasterization suppresses only enabled, attributed visual
+packets. Missing or unowned provenance remains visible; the seam does not alter guest registers,
+scratchpad, GTE state, packet-pool stores, OT links, or GP0 parsing/VRAM-transfer execution.
 **GPU/present:** `frame_presenter.{h,cpp}` owns non-temporal current-frame capture, one real present,
 diagnostics, explicit field pacing, and ledger reconciliation. Its `commitUnpresented` entry rotates the
 same fence, ledger, and capture state for the diff-mode field path without emitting, presenting, pacing,
