@@ -91,6 +91,32 @@ static void test_unscoped_native_pushes_are_counted(void) {
   CHECK_EQ(c.primsAttributed(), 0);
 }
 
+// The native queue sees the guest OT's pushes too. `guest-origin` is a provenance marker for those
+// existing GP0 primitives, not another category in the total. It may overlap either a normally
+// attributed guest row or an inherently unattributable GP0 packet; neither case is allowed to distort
+// the report equation.
+static void test_guest_origin_is_an_overlap_not_a_second_primitive(void) {
+  ProducerCensus attributed;
+  attributed.noteGuest(0x8002BC9Cu, 3, 7);
+  attributed.noteGuestOriginPush(3);
+  CHECK_EQ(attributed.primsSeen(), 3);
+  CHECK_EQ(attributed.primsAttributed(), 3);
+  CHECK_EQ(attributed.guestOrigin(), 3);
+  CHECK_EQ(attributed.primsSeen(),
+           attributed.primsAttributed() + attributed.unscopedNative() + attributed.gp0Anon() + attributed.spanMiss() +
+               attributed.spanNoFn());
+
+  ProducerCensus unattributable;
+  unattributable.noteUnattributable(ProducerCensus::WHY_GP0_ANON, 2);
+  unattributable.noteGuestOriginPush(2);
+  CHECK_EQ(unattributable.primsSeen(), 2);
+  CHECK_EQ(unattributable.primsAttributed(), 0);
+  CHECK_EQ(unattributable.guestOrigin(), 2);
+  CHECK_EQ(unattributable.primsSeen(),
+           unattributable.primsAttributed() + unattributable.unscopedNative() + unattributable.gp0Anon() +
+               unattributable.spanMiss() + unattributable.spanNoFn());
+}
+
 // A census that has never been fed must be able to SAY SO, distinctly from one that was fed and found
 // nothing. This is the "(none)" vs "I never looked" case, as an assertion.
 static void test_empty_is_distinguishable_from_clean(void) {
@@ -134,6 +160,7 @@ int main(void) {
   RUN(guest_and_native_share_one_row);
   RUN(unattributable_prims_are_counted_not_dropped);
   RUN(unscoped_native_pushes_are_counted);
+  RUN(guest_origin_is_an_overlap_not_a_second_primitive);
   RUN(empty_is_distinguishable_from_clean);
   RUN(overflow_is_reported);
   RUN(two_censuses_are_independent);

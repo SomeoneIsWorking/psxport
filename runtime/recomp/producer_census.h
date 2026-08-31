@@ -178,8 +178,8 @@ public:
     return mGuestViaPc;
   }
 
-  // GUEST-ORIGIN prims arriving at the NATIVE queue's chokepoint, counted apart from undeclared native
-  // work — and this distinction is not cosmetic, it decides whether a number can ever reach zero.
+  // GUEST-ORIGIN marks arriving at the NATIVE queue's chokepoint. This is PROVENANCE ON a primitive
+  // the guest GP0 leg already counted, never another primitive in the denominator.
   //
   // `unscopedNative()` means "real drawing by a native producer nobody has DECLARED yet", and its whole
   // value is that it names remaining work. But the guest's own GP0 linked-list walk also pushes into this
@@ -192,10 +192,10 @@ public:
   // a ProducerScope on the guest function that pushed — which mints exactly the false row the producer DB
   // exists to prevent. So this is a SEPARATE, REPORTED number rather than a silent exclusion: it says
   // "these prims came from the guest, they are not yours to declare", which is a different sentence from
-  // "these are attributed".
+  // "these are attributed". Keep it out of `primsSeen()` and `primsAttributed()`: a guest-origin prim
+  // may already be attributed to a guest row OR be unattributable because its GP0 provenance was missing.
   void noteGuestOriginPush(uint32_t prims) {
     mFed = true;
-    mPrimsSeen += prims;
     mGuestOrigin += prims;
   }
   uint64_t guestOrigin() const {
@@ -553,7 +553,7 @@ public:
     return mPrimsSeen;
   }
   uint64_t primsAttributed() const {
-    return mPrimsSeen - mGp0Anon - mSpanMiss - mSpanNoFn - mUnscopedNative - mGuestOrigin;
+    return mPrimsSeen - mGp0Anon - mSpanMiss - mSpanNoFn - mUnscopedNative;
   }
   uint64_t gp0Anon() const {
     return mGp0Anon;
@@ -830,17 +830,17 @@ public:
       return;
     }
     lucent::info("producers",
-                 "{}: {} row(s); prims seen {} = attributed {} + unscoped-native {} + guest-origin {} + "
-                 "gp0-anon {} + span-miss {} + span-no-fn {}{}",
+                 "{}: {} row(s); prims seen {} = attributed {} + unscoped-native {} + gp0-anon {} + "
+                 "span-miss {} + span-no-fn {}; guest-origin overlap {}{}",
                  who,
                  mRowCount,
                  (unsigned long long)mPrimsSeen,
                  (unsigned long long)primsAttributed(),
                  (unsigned long long)mUnscopedNative,
-                 (unsigned long long)mGuestOrigin,
                  (unsigned long long)mGp0Anon,
                  (unsigned long long)mSpanMiss,
                  (unsigned long long)mSpanNoFn,
+                 (unsigned long long)mGuestOrigin,
                  mOverflow ? " [ROW TABLE OVERFLOWED — rows were DROPPED]" : "");
     // THE ROWS THEMSELVES, ranked. Totals alone say how much is attributed but not TO WHAT, and "which
     // producers did this run actually see" is the question the DB exists to answer — `producers.py
@@ -1152,5 +1152,5 @@ private:
   int mOverflow = 0;
   bool mFed = false;
   uint64_t mPrimsSeen = 0, mGp0Anon = 0, mSpanMiss = 0, mUnscopedNative = 0;
-  uint64_t mGuestOrigin = 0; // guest-origin pushes at the native chokepoint (see noteGuestOriginPush)
+  uint64_t mGuestOrigin = 0; // provenance overlap at the native chokepoint (see noteGuestOriginPush)
 };
