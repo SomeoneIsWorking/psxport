@@ -2094,6 +2094,73 @@ def test_jalr_alternate_link_continuation_is_dispatchable():
             "a jalr $zero tail-call link was wrongly made dispatchable"
 
 
+def test_context_save_caller_continuation_is_dispatchable():
+    """A direct caller of an R3000 context-save routine can later resume at its post-call PC.
+
+    A context save stores the caller's return PC plus every callee-saved register in the ABI's
+    context layout.  A later context restore abandons the current C stack and dispatches that
+    saved PC, so the normal direct-call graph cannot discover it.  The continuation is an entry,
+    not a title seed or a synthetic return route.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    a = Asm()
+    a.jal("context_save")             # 0x80010000: $ra = 0x80010008
+    a.nop()
+    continuation = 0x80010008
+    a.addiu("v0", "zero", 7)         # later context restore resumes HERE
+    a.jal("partial_save")             # an ordinary partial copy is not a context save
+    a.nop()
+    partial_continuation = 0x80010014
+    a.addiu("v0", "zero", 9)
+    a.jr("ra")
+    a.nop()
+    a.label("context_save")           # 0x80010020
+    a.sw("ra", 0, "a0")
+    a.sw("sp", 4, "a0")
+    a.sw("fp", 8, "a0")
+    for register, offset in (("s0", 12), ("s1", 16), ("s2", 20), ("s3", 24),
+                             ("s4", 28), ("s5", 32), ("s6", 36), ("s7", 40),
+                             ("gp", 44)):
+        a.sw(register, offset, "a0")
+    a.addu("v0", "zero", "zero")
+    a.jr("ra")
+    a.nop()
+    a.label("partial_save")
+    a.sw("ra", 0, "a0")
+    a.sw("sp", 4, "a0")
+    a.jr("ra")
+    a.nop()
+    text, end = a.assemble()
+    assert end == 0x8001006C, f"layout moved: end={end:#x}"
+
+    with scratch_tempdir("emit-context-save-reentry-") as td:
+        exe_path = os.path.join(td, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)
+        struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))
+        open(exe_path, "wb").write(bytes(hdr) + text)
+        seeds_path = os.path.join(td, "seeds.json")
+        open(seeds_path, "w").write('{"main": ["0x80010000"]}')
+        gen = os.path.join(td, "generated")
+        os.makedirs(gen)
+        env = dict(os.environ, PSXPORT_SHARDS="1", PSXPORT_USE_GHIDRA="0")
+        result = subprocess.run([sys.executable, os.path.join(here, "emit.py"), exe_path,
+                                 os.path.join(gen, "rec.c"), "--seeds", seeds_path],
+                                capture_output=True, text=True, env=env)
+        assert result.returncode == 0, f"emit.py failed:\n{result.stdout}\n{result.stderr}"
+        output = "\n".join(open(os.path.join(gen, name)).read() for name in sorted(os.listdir(gen)))
+
+    assert f"void func_{continuation:08X}(Core*)" in output, \
+        "context-save caller continuation was not declared as a dispatchable entry"
+    assert f"void gen_func_{continuation:08X}(Core* c)" in output, \
+        "context-save caller continuation body was not emitted"
+    assert f"case 0x{continuation & 0x1FFFFFFF:08X}u:" in output, \
+        "context-save caller continuation was not routable through the dispatcher"
+    assert f"void func_{partial_continuation:08X}(Core*)" not in output, \
+        "partial register-copy routine was wrongly treated as a resumable context save"
+
+
 def test_reentry_boundary_forgets_ra_for_the_coroutine_proof():
     """A mid-body re-entry seed is a real dispatch edge: control can arrive FRESH there with the
     incoming caller's link in $ra, so a `jr $ra` DOWNSTREAM of a re-entry boundary must not be

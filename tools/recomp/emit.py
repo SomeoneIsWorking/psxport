@@ -2330,6 +2330,60 @@ def discover_funcs(exe, seeds):
 LINKING_OPS = ("jal", "bltzal", "bgezal")
 
 
+_CONTEXT_SAVE_WORDS = frozenset({
+    (31, 0),   # ra
+    (29, 4),    # sp
+    (30, 8),    # fp
+    (16, 12), (17, 16), (18, 20), (19, 24),
+    (20, 28), (21, 32), (22, 36), (23, 40),  # s0-s7
+    (28, 44),  # gp
+})
+
+
+def context_save_reentries(exe, funcs):
+    """Find post-call PCs that a complete R3000 saved context can later restore.
+
+    A context-save helper writes the caller's `$ra` and every callee-saved register to the exact
+    R3000 context layout rooted at `$a0`, then returns normally.  Its direct caller proceeds on the
+    C stack, but a later context restore abandons that stack and dispatches the saved `$ra` directly.
+    That post-call PC is therefore a genuine router entry even though ordinary direct-call discovery
+    sees it only as an in-body continuation.
+
+    The exact layout plus `jr $ra` is intentional: a partial register-copy routine is not evidence
+    of a resumable execution context.  As with alternate-link discovery, inspect only code fragments
+    already reached by normal discovery so data words cannot manufacture entries.
+    """
+    fs = sorted(set(funcs))
+    helpers = set()
+    for k, a in enumerate(fs):
+        hi_f = fs[k + 1] if k + 1 < len(fs) else exe.text_end
+        writes = set()
+        returns_normally = False
+        for x in range(a, hi_f, 4):
+            i = decode(x, exe.word(x))
+            if i.kind == D.UNKNOWN:
+                break
+            if i.op == "sw" and i.rs == 4:
+                writes.add((i.rt, i.simm))
+            if i.op == "jr" and i.rs == 31:
+                returns_normally = True
+        if returns_normally and _CONTEXT_SAVE_WORDS <= writes:
+            helpers.add(a)
+
+    continuations = set()
+    if not helpers:
+        return helpers, continuations
+    for k, a in enumerate(fs):
+        hi_f = fs[k + 1] if k + 1 < len(fs) else exe.text_end
+        for x in range(a, hi_f, 4):
+            i = decode(x, exe.word(x))
+            if i.kind == D.UNKNOWN:
+                break
+            if i.op in LINKING_OPS and i.target in helpers and x + 8 < exe.text_end:
+                continuations.add(x + 8)
+    return helpers, continuations
+
+
 def demote_internal_labels(exe, funcs, keep):
     """Remove entries that are INTERNAL LABELS of a larger guest function, not functions.
 
@@ -2489,6 +2543,19 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         hard |= set(ghidra_funcs(exe.load, exe.text_end))
     seeds = hard                                  # for the jt-prune "keep seeds" guard below
     funcs = discover_funcs(exe, hard | soft)
+    # SAVED-CONTEXT CONTINUATIONS.  A direct call to the exact R3000 context-save ABI records the
+    # caller's post-call PC in a buffer; a later context restore enters that PC through the router,
+    # outside the ordinary C call stack.  Make that real mid-function entry dispatchable based on
+    # the helper's complete binary structure, never a title-specific seed or a fabricated return.
+    context_helpers, context_conts = context_save_reentries(exe, funcs)
+    fresh_context_conts = len(context_conts - set(funcs))
+    if context_conts:
+        hard |= context_conts
+        seeds = hard
+        reentry = set(reentry) | context_conts
+        funcs = sorted(set(funcs) | context_conts)
+    print(f"[{N.wrap}] saved-context calls: {len(context_helpers)} complete save helper(s); "
+          f"{len(context_conts)} continuation(s) dispatchable ({fresh_context_conts} newly seeded)")
     # ALTERNATE-LINK CALL CONTINUATIONS. `jalr rd, rs` with rd neither $zero nor $ra is a CALL whose
     # return address lands in a NONSTANDARD link register: CTR's hand-written GTE library calls its
     # helpers `jalr t2, v1` because $ra holds the caller's inline parameter block, and the helper
