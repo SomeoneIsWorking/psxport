@@ -5,12 +5,12 @@
 #include "cfg.h"
 #include "game.h"
 #include "gpu_vk.h"
+#include "host_backtrace.h"
 #include "mods.h"
 #include "ot_lifo_depth.h"
 #include "proj_params.h" // class ProjParams — proj_camview_world_screen / camview_publish bridges
 #include <algorithm>
 #include <cmath>
-#include <execinfo.h>
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>

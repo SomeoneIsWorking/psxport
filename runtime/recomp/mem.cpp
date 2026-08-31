@@ -6,10 +6,10 @@
 #include "core.h"
 #include "dma_irq.h" // DPCR/DICR semantics — which DMA completions the guest hears about
 #include "game.h"
+#include "host_backtrace.h"
 #include "io_peripherals.h"
 #include "recomp_iface.h"     // seam: psxport_recomp()->guestMemset_gen (generated gen_func_8009A420)
 #include "render_substrate.h" // RenderMode::displayPassArmed() — pc_render read-only-overlay guard
-#include <execinfo.h>
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +35,12 @@ void spu_write(uint32_t addr, uint32_t val);
 uint32_t spu_read(uint32_t addr);
 void spu_dma_write(const uint32_t *words, int count);
 int spu_dma_read(uint32_t *words, int count);
+}
+
+static void dumpHostBacktrace(int depth) {
+  void *frames[32];
+  const int count = psxport::host::captureBacktrace(frames, depth);
+  psxport::host::emitBacktrace(frames, count);
 }
 
 // Core::Core / ~Core moved to runtime/recomp/core.cpp (lifetime + subsystem wiring live there).
@@ -91,9 +97,7 @@ void Core::cw_check_slow(uint32_t a, uint32_t v, int width) {
                    pc,
                    r[29]);
       if (cfg_str("PSXPORT_CW_BT")) {
-        void *bt[32];
-        int n = backtrace(bt, 32);
-        backtrace_symbols_fd(bt, n, 2);
+        dumpHostBacktrace(32);
         lucent::info("mem", "----");
       }
     }
@@ -161,9 +165,7 @@ void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
                      r[21],
                      r[22],
                      r[23]);
-        void *bt[32];
-        int n = backtrace(bt, 32);
-        backtrace_symbols_fd(bt, n, 2);
+        dumpHostBacktrace(32);
         lucent::info("mem", "----");
       }
     }
@@ -596,9 +598,7 @@ static void warn_unmapped_ram(Core *gc, uint32_t a, uint32_t bytes, const char *
                 bytes * 8,
                 a,
                 p);
-  void *bt[32];
-  int nbt = backtrace(bt, 32);
-  backtrace_symbols_fd(bt, nbt, 2);
+  dumpHostBacktrace(32);
   fflush(stderr);
   abort();
 }
@@ -762,9 +762,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     // cheap tests first, then the two channel lookups, then the (non-logging) unwind.
     if ((p & 3) == 1 && game->cdc.index == 0 && // command-register write only
         lucent::channel_on("cdcbt") && lucent::channel_on("cdcw")) {
-      void *bt[24];
-      int n = backtrace(bt, 24);
-      backtrace_symbols_fd(bt, n, 2);
+      dumpHostBacktrace(24);
     }
     cdc_write(&game->cdc, p, (uint8_t)v);
     irqStatLatch(); // An ACK may make a queued controller response current and raise a fresh edge;

@@ -31,11 +31,22 @@ function(psxport_configure_presentation_dependencies)
         "dependency prefix through shared/android-port, then configure with "
         "-DPSXPORT_ANDROID_DEPENDENCY_PREFIX=<prefix>.")
     endif()
-    list(PREPEND CMAKE_PREFIX_PATH "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}")
-
-    find_package(SDL3 CONFIG REQUIRED)
-    find_package(SDL3_image CONFIG REQUIRED)
-    find_package(Freetype CONFIG REQUIRED)
+    # Android's toolchain searches package prefixes beneath its sysroot. This prefix is a separately
+    # cross-compiled target dependency tree, so resolve its exported configs directly instead.
+    find_package(SDL3 CONFIG REQUIRED
+      PATHS "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}"
+      NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    find_package(SDL3_image CONFIG REQUIRED
+      PATHS "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}"
+      NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    find_package(Freetype CONFIG REQUIRED
+      PATHS "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}"
+      NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    find_package(fmt CONFIG REQUIRED
+      PATHS "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}"
+      NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    set(fmt_DIR "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}/lib/cmake/fmt" CACHE PATH
+      "Android fmt package supplied by PSXPORT_ANDROID_DEPENDENCY_PREFIX" FORCE)
     _psxport_android_target(_psxport_sdl3 "SDL3" SDL3::SDL3 SDL3::SDL3-shared SDL3::SDL3-static)
     _psxport_android_target(_psxport_sdl3_image "SDL3_image"
       SDL3_image::SDL3_image SDL3_image::SDL3_image-shared SDL3_image::SDL3_image-static)

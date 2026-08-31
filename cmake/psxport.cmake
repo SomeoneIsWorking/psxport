@@ -274,6 +274,10 @@ endif()
 # silently. tests/test_lucent_channel_env.cpp is the gate that keeps it defused.
 set(LUCENT_CHANNEL_ENV  "PSXPORT_DEBUG")
 set(LUCENT_LOG_FILE_ENV "PSXPORT_LOG_FILE")
+if(ANDROID)
+  set(LUCENT_FORMAT_BACKEND fmt CACHE STRING
+    "Use the Android prefix's fmt package for Lucent's formatted logger" FORCE)
+endif()
 # EXPLICIT BINARY DIR, like rmlui's above (line 58). add_subdirectory with a source dir OUTSIDE the
 # consuming project's tree is an error unless one is given — so without it the framework could only be
 # built from a PSXPORT_ROOT nested under the consumer, and `-DPSXPORT_DIR=<a psxport clone elsewhere>`

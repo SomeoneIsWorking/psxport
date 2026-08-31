@@ -9,6 +9,7 @@
 #include <cstring>
 #include <lucent/log.h>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {

@@ -17,7 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#if defined(__GLIBC__) || defined(__linux__)
+#if !defined(__ANDROID__) && (defined(__GLIBC__) || defined(__linux__))
 #include <execinfo.h>
 #define HAVE_BACKTRACE 1
 #endif

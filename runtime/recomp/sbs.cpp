@@ -36,7 +36,8 @@
 #include "sbs.h"
 #include "cfg.h"
 #include "game.h"
-#include "game_iface.h"        // psxport_game_config() — the nav predicate + every guest address here
+#include "game_iface.h" // psxport_game_config() — the nav predicate + every guest address here
+#include "host_backtrace.h"
 #include "override_registry.h" // overrides::coverage — the gate reports its own reach
 #include "render_noise.h"      // THE one GameConfig-derived pool/OT window (addrLabel)
 #include "render_substrate.h"  // Render::setPsxRender (per-Core render-path switch)
@@ -48,7 +49,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <execinfo.h>
 #include <lucent/log.h>
 #include <map>
 #include <set>

@@ -14,6 +14,7 @@
 //   MDFNSS_StateAction(...)    — savestate (unused)
 // Each is shimmed faithful-first below; none pull in another .c file.
 #include "cfg.h" // cfg_str (PSXPORT_SPUBT) — the CONFIG half of cfg.h
+#include "host_backtrace.h"
 #include <lucent/log.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -230,8 +231,6 @@ void spu_write(uint32_t addr, uint32_t val) {
   {
     const char *bt = cfg_str("PSXPORT_SPUBT");
     if (bt && (addr & 0x3FF) == (uint32_t)strtoul(bt, 0, 16)) {
-      extern int backtrace(void **, int);
-      extern void backtrace_symbols_fd(void *const *, int, int);
       void *frames[32];
       int n = backtrace(frames, 32);
       lucent::info("spubt", "off={:03X} val={:04X}", addr & 0x3FF, val & 0xFFFF);

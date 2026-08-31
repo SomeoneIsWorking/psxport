@@ -4,8 +4,8 @@
 // `ProjParams::current()`. They exist so callers with no `Core*` in scope (inner projection loops,
 // callback bodies) can still reach the currently-bound per-Core state.
 #include "proj_params.h"
-#include "core.h"     // Core::rsub.projParams — the per-Core projection record
-#include <execinfo.h> // backtrace() — the unset-projection fail-fast in requireGeom
+#include "core.h" // Core::rsub.projParams — the per-Core projection record
+#include "host_backtrace.h"
 #include <lucent/log.h>
 #include <stdio.h>  // fflush
 #include <stdlib.h> // abort

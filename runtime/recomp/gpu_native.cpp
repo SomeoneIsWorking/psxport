@@ -18,7 +18,8 @@
 #include "field_rate.h"          // THE display field rate, in milli-hertz (one definition)
 #include "gpu_native_internal.h" // shared VRAM/state/helpers (also used by gpu_debug.cpp)
 #include "gpu_primitive_dump.h"  // primitive-census CSV diagnostic owner
-#include "image_writer.h"        // one checked RGB24 capture-file boundary
+#include "host_backtrace.h"
+#include "image_writer.h" // one checked RGB24 capture-file boundary
 #include "r3000.h"
 #include <lucent/log.h>
 
@@ -34,7 +35,6 @@ void gpu_beetle_load_image(int x, int y, int w, int h, const uint16_t *pixels);
 #include "mods.h"             // g_mods.fps60 (was g_fps60_on)
 #include "render_substrate.h" // Render::mDbgRenderNode (was g_dbg_render_node)
 #include "scea_asset.h"       // baked SCEA license-screen texture+CLUT (PC-native boot splash)
-#include <execinfo.h>         // PSXPORT_TEXWATCH_BT host backtrace (guest pc is fiction, INST-23)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2676,8 +2676,8 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
             if (n_bt++ < 3) {
               lucent::info("texwatch", "backtrace #{} for {}x{} upload:", n_bt, bw, bh);
               void *b[32];
-              int n = backtrace(b, 32);
-              backtrace_symbols_fd(b, n, 2);
+              int n = psxport::host::captureBacktrace(b, 32);
+              psxport::host::emitBacktrace(b, n);
             }
           }
         }
