@@ -30,8 +30,27 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <cctype>
 #include <string>
 #include <vector>
+
+static bool is_timestamped_line(std::string_view line, std::string_view payload) {
+  // Lucent's sink and file contracts include its UTC timestamp. Check its fixed shape while
+  // keeping the wall-clock portion dynamic, then require the exact channel/message payload.
+  constexpr std::size_t kTimestampLength = 24;                // YYYY-MM-DDTHH:MM:SS.mmmZ
+  constexpr std::size_t kPrefixLength = kTimestampLength + 3; // '[' + timestamp + "] "
+  if (line.size() < kPrefixLength || line[0] != '[' || line[kTimestampLength + 1] != ']' ||
+      line[kTimestampLength + 2] != ' ') {
+    return false;
+  }
+  for (const std::size_t index : {0u, 1u, 2u, 3u, 5u, 6u, 8u, 9u, 11u, 12u, 14u, 15u, 17u, 18u, 20u, 21u, 22u}) {
+    if (!std::isdigit(static_cast<unsigned char>(line[index + 1]))) {
+      return false;
+    }
+  }
+  return line[5] == '-' && line[8] == '-' && line[11] == 'T' && line[14] == ':' && line[17] == ':' && line[20] == '.' &&
+         line[24] == 'Z' && line.substr(kPrefixLength) == payload;
+}
 
 // Set only in the child process spawned by case 2. Checked with getenv — NOT with lucent::config —
 // so that in the parent this whole block touches nothing in lucent and the parent's first lucent
@@ -79,7 +98,7 @@ static int run_as_child(void) {
   if (g_early_lines.size() != 1) {
     return 1;
   }
-  return g_early_lines[0] == "[tbomb] pre-main line on an enabled channel" ? 0 : 1;
+  return is_timestamped_line(g_early_lines[0], "[tbomb] pre-main line on an enabled channel") ? 0 : 1;
 }
 
 // ── case 1: the first logging call in this process ──────────────────────────────────────────────
@@ -107,7 +126,7 @@ static void test_psxport_debug_is_honoured_by_the_first_log_call(void) {
 
   lucent::set_sink(nullptr);
   CHECK_EQ((int)lines.size(), 1);
-  CHECK(lines.size() == 1 && lines[0] == "[tbomb] sector 17 -> 80010000");
+  CHECK(lines.size() == 1 && is_timestamped_line(lines[0], "[tbomb] sector 17 -> 80010000"));
 }
 
 // ── case 2: before main(), in a child process with no setup at all ──────────────────────────────
@@ -150,7 +169,7 @@ static void test_psxport_log_file_still_redirects_output(void) {
   fclose(f);
   remove(path);
   fprintf(stderr, "  %s holds %zu byte(s): %s", path, n, n ? buf : "<empty>\n");
-  CHECK_STREQ(buf, "[tbomb] redirected line 42\n");
+  CHECK(is_timestamped_line(buf, "[tbomb] redirected line 42\n"));
 }
 
 int main(void) {

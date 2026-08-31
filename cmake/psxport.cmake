@@ -19,26 +19,8 @@
 
 option(PSXPORT_BUILD_SMOKE "Build headless game-agnostic framework smoke (psxport_smoke)" OFF)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL3 sdl3)
-pkg_check_modules(SDL3_IMAGE sdl3-image)
-pkg_check_modules(FREETYPE freetype2)
-if(NOT (SDL3_FOUND AND SDL3_IMAGE_FOUND AND FREETYPE_FOUND))
-  # Hard stop with the fix, not a skip: a skipped target surfaces later as make's baffling
-  # "No rule to make target" instead of naming the missing library.
-  set(_missing "")
-  if(NOT SDL3_FOUND)
-    string(APPEND _missing "  sdl3        — Fedora: SDL3-devel | Debian/Ubuntu: libsdl3-dev | macOS: brew install sdl3\n")
-  endif()
-  if(NOT SDL3_IMAGE_FOUND)
-    string(APPEND _missing "  sdl3-image  — Fedora: SDL3_image-devel | Debian/Ubuntu: libsdl3-image-dev | macOS: brew install sdl3_image\n")
-  endif()
-  if(NOT FREETYPE_FOUND)
-    string(APPEND _missing "  freetype2   — Fedora: freetype-devel | Debian/Ubuntu: libfreetype-dev | macOS: brew install freetype\n")
-  endif()
-  message(FATAL_ERROR "psxport: missing pkg-config dependencies:\n${_missing}"
-                      "Install the package(s) above and re-run ./run.sh")
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/psxport_presentation_dependencies.cmake")
+psxport_configure_presentation_dependencies()
 
 if(TARGET psxport)
   return()  # already built (idempotent include from both the root and the game cmake)
@@ -245,8 +227,7 @@ target_include_directories(psxport PUBLIC
   ${MED} ${MED}/psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr/include
-  ${PSXPORT_ROOT}/vendor/rmlui/Include ${PSXPORT_ROOT}/vendor/rmlui/Backends
-  ${SDL3_INCLUDE_DIRS} ${SDL3_IMAGE_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS})
+  ${PSXPORT_ROOT}/vendor/rmlui/Include ${PSXPORT_ROOT}/vendor/rmlui/Backends)
 # NO game include dirs: as of P1.7c the framework owns Fps60/RenderQueue/PcScheduler/VerifyHarness/FfSpan
 # (their headers moved to runtime/recomp/; the game reaches into them only through the GameHooks seam). The
 # framework #includes no game/ header — the psxport_smoke link proves it (no game/** symbol resolves).
@@ -254,8 +235,7 @@ target_include_directories(psxport PUBLIC
 target_compile_definitions(psxport PUBLIC
   PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)
 
-target_compile_options(psxport PRIVATE -w -O2 -g
-  ${SDL3_CFLAGS_OTHER} ${FREETYPE_CFLAGS_OTHER})
+target_compile_options(psxport PRIVATE -w -O2 -g)
 
 # WHICH CALL SITES MOVE THE BYTES (runtime/recomp/memcensus.cpp). --wrap is a LINK-time rewrite, and
 # it must be on the final executable's link rather than this static library's, so it is INTERFACE:
@@ -303,10 +283,8 @@ add_subdirectory(${PSXPORT_ROOT}/vendor/lucent ${CMAKE_BINARY_DIR}/lucent_build)
 target_link_libraries(psxport PUBLIC
   lucent::lucent
   rmlui_debugger rmlui_core chdr-static
-  ${SDL3_LIBRARIES} ${SDL3_IMAGE_LIBRARIES} ${FREETYPE_LIBRARIES}
+  psxport_presentation_dependencies
   Threads::Threads m)
-target_link_directories(psxport PUBLIC
-  ${SDL3_LIBRARY_DIRS} ${SDL3_IMAGE_LIBRARY_DIRS} ${FREETYPE_LIBRARY_DIRS})
 
 # ---- headless game-agnostic smoke (PSXPORT_BUILD_SMOKE=ON) ------------------------------------
 # Links ONLY libpsxport.a (+ its inherited system deps) — NO game/, NO generated/. Any undefined
