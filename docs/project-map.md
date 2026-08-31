@@ -217,9 +217,10 @@ horizontal decoder, including bit 6's 368-dot mode. Full ownership and consumer 
 present — 4,404 lines), `gpu_primitive_dump.{h,cpp}` (primitive-census CSV lifecycle and row encoding),
 and `image_writer.{h,cpp}` (the checked RGB24-to-PPM/PNG host-file boundary shared by software and GPU
 captures). `native_composite_capture.{h,cpp}` owns the per-`GpuVkState` completed-composite token and
-private retained SDL texture: a title may request only a completed native/ires source, and the next
-presentation fence copies that exact full target before it can be rebuilt. The two legacy renderer files
-remain critical extraction territory and are shrink-only.
+private retained SDL texture: a title may request only a completed native/ires display rectangle, and the
+next compatible renderer target receives that exact rectangle once before its UI bands draw. A changed
+scale, canvas, or display rectangle discards the retained base rather than reviving stale pixels. The two
+legacy renderer files remain critical extraction territory and are shrink-only.
 `render_queue.{h,cpp}` + `painter_object_layer.{h,cpp}` own atomic painter admission and command planning;
 `RenderQueue::preflightPainterObjectBatch` admits a complete multi-object publication without mutating
 the queue, so callers can validate shared transactions before publishing any object.

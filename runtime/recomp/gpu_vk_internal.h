@@ -290,8 +290,10 @@ struct GpuVkState {
   void stats(int *tri, int *tex, int *semi);
   void dirty(int x, int y, int w, int h);
   bool request_native_composite_capture();
-  void note_native_composite_completed(bool ires, int width, int height);
+  void note_native_composite_completed(bool ires, int scale, int sx, int sy, int width, int height);
   void capture_native_composite(SDL_GPUCommandBuffer *cmd);
+  bool
+  apply_native_composite_base(SDL_GPUCommandBuffer *cmd, bool ires, int scale, int sx, int sy, int width, int height);
   void release_native_composite_capture();
   ~GpuVkState();
   void present(const uint16_t *src, int sx, int sy, int w, int h);

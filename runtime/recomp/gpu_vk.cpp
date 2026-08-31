@@ -1648,7 +1648,6 @@ static void render_geom(GpuVkState &g,
     return; // s_present_ires is already 0 above → present() samples the native s_vram_tex either way
   }
   g.ensure_targets();
-
   int native_w = 0, ires_i = 1, fbw = 0, fbh = 0, ww = 0, wh = 0, ires_cap = 0;
   gpu_vk_video_status(&g.game->core, &native_w, &ires_i, &fbw, &fbh, &ww, &wh, &ires_cap);
   g.ensure_ires_targets(ires_i);
@@ -1802,6 +1801,7 @@ static void render_geom(GpuVkState &g,
     bi.filter = SDL_GPU_FILTER_LINEAR;
     SDL_BlitGPUTexture(cmd, &bi);
   }
+  const bool retainedBase = g.apply_native_composite_base(cmd, ires, scale, sx, sy, disp_w, h);
   // Viewport spans the full (scaled) canvas — tri.vert's NDC divisors are fixed to the 1024x512 canvas, so
   // the viewport is what scales. 2D bands cover the whole canvas; the 3D band restricts to the display rect.
   SDL_GPUViewport vp = {0, 0, (float)cw, (float)ch, 0.0f, 1.0f};
@@ -1822,7 +1822,7 @@ static void render_geom(GpuVkState &g,
                   g.s_semi2d_vbuf[GGS_2D_BG],
                   g.s_semi2d_n[GGS_2D_BG],
                   /*stampSemiCoverage=*/false,
-                  /*clearColorBlack=*/!preserveBackdrop);
+                  /*clearColorBlack=*/!preserveBackdrop && !retainedBase);
   // Native renderers clear to black; guest-drawn upload-only screens retain VRAM (guestVramIsPicture()).
   render_pass_set(cmd,
                   C,
@@ -2032,7 +2032,7 @@ static void render_geom(GpuVkState &g,
                   g.s_semi2d_vbuf[GGS_2D_FG],
                   g.s_semi2d_n[GGS_2D_FG]);
   g.s_present_ires = scale; // present() samples C (native s_vram_tex at 1x, s_ires_color at >1x)
-  g.note_native_composite_completed(ires, cw, ch);
+  g.note_native_composite_completed(ires, scale, sx, sy, disp_w, h);
 
   // Headless `shot` / VRAM-space readback: plain box-downsample C's display sub-rect -> s_vram_tex. No-op
   // at 1x (C IS s_vram_tex). The WINDOW never uses this — it presents from C directly (present()).
