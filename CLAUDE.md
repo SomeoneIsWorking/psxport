@@ -140,7 +140,7 @@ Agents build explicitly and drive the ALREADY-BUILT binary:
 
 ```sh
 cmake -S . -B build && cmake --build build --target <spyro_port|spiderman_port|tomba2_port> -j$(nproc)
-./scratch/bin/<port> scratch/bin/<game>/<EXECUTABLE>     # the binary is HEADLESS BY DEFAULT
+./build/bin/<port> scratch/bin/<game>/<EXECUTABLE>       # the binary is HEADLESS BY DEFAULT
 PSXPORT_NOPACE=1 python3 tools/gate.py boot --frames 400 \
     --expect-stage <entry> --expect-sm48 <n>             # Tomba!2's agent gate
 ```
@@ -159,8 +159,9 @@ the ADVANCE past the prologue plus the END STATE. Games without a gate tool grow
 
 The disc image is never in a repo. Resolution order is **CLI arg > env var > `.env` > a `*.chd` dropped
 in the repo root**; the env var is `PSXPORT_SPYRO_DISC` / `PSXPORT_SPIDERMAN_DISC` /
-`PSXPORT_TOMBA2_DISC`. Every repo already has a `.env` pointing at its disc. Binaries land in the
-git-ignored `scratch/bin/`; `generated/` (the recompiled substrate, ~200 MB of C) is git-ignored.
+`PSXPORT_TOMBA2_DISC`. Every repo already has a `.env` pointing at its disc. Compiled binaries land
+under the git-ignored top-level `build/`; verified extracted game inputs may live under
+`scratch/bin/<game>/`. `generated/` (the recompiled substrate, ~200 MB of C) is git-ignored.
 To extract a boot executable or inspect a disc WITHOUT run.sh, use the framework's own tool:
 `cmake --build build --target discdump`, then `discdump list|get <NAME> <disc> [outdir]`.
 
@@ -340,8 +341,9 @@ never a log call per byte.
 
 Disc images (`*.chd`), extracted executables, `generated/`, or machine-specific absolute paths
 (`/home/<user>/…`). Every game repo ships `tools/go_public.py` to audit the full history for exactly
-this. Everything transient goes in the git-ignored `scratch/`, split by kind (`scratch/logs/`,
-`scratch/bin/`, `scratch/raw/`) — **never `/tmp`**, a small RAM-backed tmpfs on this machine; diagnose
+this. Runtime captures, logs, extracted restricted inputs, and other disposable diagnostics go in the
+git-ignored `scratch/`, split by kind (`scratch/logs/`, `scratch/bin/`, `scratch/raw/`). Compiler and
+package output belongs under top-level `build/` — **never `/tmp`**, a small RAM-backed tmpfs here; diagnose
 "disk quota exceeded" with `quota -s`, not `df`.
 
 ## Other people are working on these binaries — `docs/prior-art.md`

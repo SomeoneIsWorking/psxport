@@ -15,11 +15,13 @@ inline constexpr float kGpuNative3dMax = 0.9375f;
 // Widescreen geometry. Per-core, because widescreen never touches the PSX oracle: one process can
 // hold a wide user core and a pure 4:3 oracle core at the same time.
 //   wide_engine     — is this core rendering wider than 4:3 (and not the oracle)?
+//   native_w        — this title's current 4:3 framebuffer width
 //   wide_engine_w   — the native render width in that aspect
 //   wide_engine_ofx — the projection centre for that width (w/2), i.e. the GTE OFX to use
 // These were forward-declared inline at each call site, which is how three separate writers of the
 // projection centre grew without anything tying them together. One declaration site now.
 int gpu_vk_wide_engine(Core *core);
+int gpu_vk_native_w(Core *core);
 int gpu_vk_wide_engine_w(Core *core);
 int gpu_vk_wide_engine_ofx(Core *core);
 int gpu_vk_wide_presentation(Core *core);

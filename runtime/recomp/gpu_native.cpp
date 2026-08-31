@@ -3515,7 +3515,7 @@ static void shot_triggers(Core *core, uint32_t frame) {
     if (pat[i] == frame) {
       void gpu_vk_present_shot(Core *, const char *);
       char pth[128];
-      snprintf(pth, sizeof pth, "scratch/screenshots/present_%u.ppm", frame);
+      snprintf(pth, sizeof pth, "scratch/screenshots/present_%u.png", frame);
       gpu_vk_present_shot(core, pth); // logs its own path, size, leg and non-black coverage
     }
   }

@@ -19,19 +19,16 @@ So the checks here are the ones a difference count structurally cannot make:
   widescreen   the widened picture actually DIFFERS from the 4:3 one (a no-op aspect knob FAILS)
   fps60        the extra presents carry interpolated prims (`tier1=N>0`); an inserted duplicate FAILS
 
-It writes PNGs next to the captures for a human to look at, because "looks right" is a judgement no
-tool makes. It reports what it could not assert instead of passing quietly: a missing disc, a binary
+It keeps the port's directly written PNGs for a human to look at, because "looks right" is a judgement
+no tool makes. It reports what it could not assert instead of passing quietly: a missing disc, a binary
 that never launched, or a title that declares no interpolation product is REFUSED (exit 2), never a
 green tick.
 """
 
 import argparse
 import os
-import struct
 import subprocess
 import sys
-import tempfile
-import zlib
 from pathlib import Path
 
 PASS, FAIL, REFUSED = 0, 1, 2
@@ -42,55 +39,21 @@ FPS60_REFUSED_MARK = "interpolated 60fps REFUSED"
 FAILURE_MARKS = ("recomp MISS", "recomp-MISS", "FATAL", "fatal trap", "watchdog STUCK", "VSync timeout")
 
 
-class Ppm:
-    """A P6 capture. The port writes PPM; a human wants a PNG."""
+class Capture:
+    """The port's final PNG bytes; visual interpretation remains a human responsibility."""
 
-    def __init__(self, width, height, pixels):
-        self.width = width
-        self.height = height
-        self.pixels = pixels
+    def __init__(self, encoded):
+        self.encoded = encoded
 
     @classmethod
     def read(cls, path):
-        data = Path(path).read_bytes()
-        fields, offset = [], 0
-        while len(fields) < 4:
-            while offset < len(data) and data[offset : offset + 1].isspace():
-                offset += 1
-            if data[offset : offset + 1] == b"#":
-                while data[offset : offset + 1] != b"\n":
-                    offset += 1
-                continue
-            start = offset
-            while offset < len(data) and not data[offset : offset + 1].isspace():
-                offset += 1
-            fields.append(data[start:offset])
-        offset += 1
-        width, height = int(fields[1]), int(fields[2])
-        return cls(width, height, data[offset : offset + width * height * 3])
+        encoded = Path(path).read_bytes()
+        if not encoded.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError(f"{path} is not a PNG capture")
+        return cls(encoded)
 
-    def write_png(self, path):
-        rows = b"".join(
-            b"\x00" + self.pixels[y * self.width * 3 : (y + 1) * self.width * 3] for y in range(self.height)
-        )
-
-        def chunk(tag, payload):
-            body = tag + payload
-            return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body))
-
-        header = struct.pack(">IIBBBBB", self.width, self.height, 8, 2, 0, 0, 0)
-        Path(path).write_bytes(
-            b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b"")
-        )
-
-    def differing_pixels(self, other, threshold=8):
-        if (self.width, self.height) != (other.width, other.height):
-            return self.width * self.height
-        return sum(
-            1
-            for i in range(0, len(self.pixels), 3)
-            if max(abs(self.pixels[i + c] - other.pixels[i + c]) for c in range(3)) > threshold
-        )
+    def differs_from(self, other):
+        return self.encoded != other.encoded
 
 
 def fps60_verdict(log_text):
@@ -124,7 +87,7 @@ def run_failures(log_text):
 
 
 def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, extra_env):
-    """One headless run. Returns (log_text, {frame: Ppm})."""
+    """One headless run. Returns (log_text, {frame: Capture})."""
     settings = Path(scratch) / f"{name}.ini"
     settings.write_text(f"aspect={aspect}\n")
     log = Path(scratch) / f"{name}.log"
@@ -151,21 +114,21 @@ def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, 
         # emitted one every frame — a false FAILURE, which is the same class of lie as a false pass.
         channels = env.get("PSXPORT_DEBUG", "")
         env["PSXPORT_DEBUG"] = f"{channels},fps60" if channels else "fps60"
-    # The port writes present shots relative to its own working directory, so run it there and collect.
-    subprocess.run([str(binary)], env=env, cwd=str(Path(binary).parent.parent.parent), capture_output=True, check=False)
+    # Shipping port binaries live in <repo>/build/bin. Present shots are repository-relative.
+    repository = Path(binary).resolve().parents[2]
+    subprocess.run([str(binary)], env=env, cwd=repository, capture_output=True, check=False)
     text = log.read_text(errors="replace") if log.exists() else ""
     captured = {}
     for frame in shot_frames:
         for candidate in (
-            Path(binary).parent.parent.parent / "scratch" / "screenshots" / f"present_{frame}.ppm",
-            Path("scratch/screenshots") / f"present_{frame}.ppm",
+            repository / "scratch" / "screenshots" / f"present_{frame}.png",
+            Path("scratch/screenshots") / f"present_{frame}.png",
         ):
             if candidate.exists():
-                target = shots / f"present_{frame}.ppm"
+                target = shots / f"present_{frame}.png"
                 target.write_bytes(candidate.read_bytes())
                 candidate.unlink()
-                image = Ppm.read(target)
-                image.write_png(shots / f"present_{frame}.png")
+                image = Capture.read(target)
                 captured[frame] = image
                 break
     return text, captured
@@ -216,11 +179,11 @@ def main(argv=None):
     wide_log, wide = run_port(binary, out, "aspect-16x9", args.frames, shot_frames, args.replay, 1, False, extra_env)
     frame = shot_frames[0]
     if frame in wide and frame in standard:
-        changed = wide[frame].differing_pixels(standard[frame])
+        changed = wide[frame].differs_from(standard[frame])
         ok &= report(
             "widescreen",
-            changed > 0,
-            f"f{frame} differs from 4:3 in {changed} pixel(s)" + ("" if changed else " — the aspect knob did NOTHING"),
+            changed,
+            f"f{frame} PNG differs from 4:3" + ("" if changed else " — the aspect knob did NOTHING"),
         )
     else:
         ok &= report("widescreen", False, "the 16:9 run produced no capture to compare")
@@ -267,20 +230,12 @@ def selftest():
     checks.append(("a clean log has no failure marks", run_failures("all good") == []))
     checks.append(("a recomp MISS is a failure mark", run_failures("[recomp] recomp MISS at 0x8001") != []))
 
-    flat = Ppm(2, 2, bytes([10, 20, 30] * 4))
-    same = Ppm(2, 2, bytes([12, 22, 32] * 4))  # within the 8-step threshold
-    other = Ppm(2, 2, bytes([200, 20, 30] * 4))
-    checks.append(("an identical widescreen picture is a FAILURE", flat.differing_pixels(same) == 0))
-    checks.append(("a widened picture differs", flat.differing_pixels(other) == 4))
-    checks.append(("a size change counts as differing", flat.differing_pixels(Ppm(1, 1, bytes([10, 20, 30]))) == 4))
-
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "x.ppm"
-        path.write_bytes(b"P6\n2 2\n255\n" + bytes([1, 2, 3] * 4))
-        loaded = Ppm.read(path)
-        checks.append(("PPM round-trip", (loaded.width, loaded.height, loaded.pixels[:3]) == (2, 2, bytes([1, 2, 3]))))
-        loaded.write_png(Path(tmp) / "x.png")
-        checks.append(("PNG is written for a human", (Path(tmp) / "x.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"))
+    png_header = b"\x89PNG\r\n\x1a\n"
+    flat = Capture(png_header + b"same picture")
+    same = Capture(png_header + b"same picture")
+    other = Capture(png_header + b"wider picture")
+    checks.append(("an identical widescreen picture is a FAILURE", not flat.differs_from(same)))
+    checks.append(("a widened picture differs", flat.differs_from(other)))
 
     passed = sum(1 for _, ok in checks if ok)
     for name, ok in checks:
