@@ -1798,7 +1798,10 @@ static void render_geom(GpuVkState &g,
     bi.destination.w = (Uint32)cw;
     bi.destination.h = (Uint32)ch;
     bi.load_op = SDL_GPU_LOADOP_DONT_CARE;
-    bi.filter = SDL_GPU_FILTER_LINEAR;
+    // s_vram_tex stores each PSX 1555 word as two packed RG8 bytes. Linear filtering would
+    // interpolate those byte lanes before decode, manufacturing colours that are not present in
+    // guest VRAM (especially visible when the 4x geometry target is seeded).
+    bi.filter = SDL_GPU_FILTER_NEAREST;
     SDL_BlitGPUTexture(cmd, &bi);
   }
   const bool retainedBase = g.apply_native_composite_base(cmd, ires, scale, sx, sy, disp_w, h);
