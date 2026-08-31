@@ -6,6 +6,7 @@
 // Game's SpuAudio actually drives the host device.
 #include "spu_audio.h"
 #include "audio_policy.h" // audio_may_open — ONE definition, shared with native_fmv.cpp
+#include "audio_queue_policy.h"
 #include "cfg.h"
 #include "config_vars.h"
 #include "game.h"
@@ -59,9 +60,6 @@ int xa_stream_is_active(struct XaState *xs);
 int gpu_windowed(void);
 }
 
-// SDL_QueueAudio backlog cap: if the device queue grows past this many bytes we skip a render to
-// let it drain, so audio can't accumulate unbounded latency when the producer outruns the consumer.
-constexpr int kAudioQueueCapBytes = 4 * (SpuFieldCadence::kSampleRateHz / 60) * 2 * static_cast<int>(sizeof(int16_t));
 constexpr uint32_t kWavMaxBytes = 600u * SpuFieldCadence::kSampleRateHz * 2u * 2u;
 
 // ---- WAV capture ownership (atexit hook) --------------------------------------------------------
@@ -187,7 +185,8 @@ void SpuAudio::init() {
     mState = -1;
     return;
   }
-  SDL_ResumeAudioStreamDevice(mStream); // start playback (streams are paused at open)
+  // Streams are paused at open. frameEx() primes a bounded cushion before starting playback; an
+  // empty start made render/load stalls audible and the old four-field cap then discarded tails.
   mState = 1;
 #else
   mState = -1;
@@ -211,8 +210,8 @@ void spu_mix_game_audio(Core *c, const GameHooks *hooks, int16_t *buf, int frame
 // Called once per delivered display field: advance the SPU by that field's fractional share of its
 // clock and sample rates, drain the resulting frames, and queue them to the device. No-op when audio
 // is disabled/failed. Bounds the device queue: if the backlog exceeds kAudioQueueCapBytes we still
-// advance the SPU (so its mixer state stays correct) but drop the rendered samples instead of
-// queueing, letting the device drain.
+// advance the SPU (so its mixer state stays correct) but drop rendered samples only after the
+// bounded catch-up reserve is full, letting the device drain without accumulating unlimited delay.
 void SpuAudio::frame() {
   // SBS/dual-core sets diff_mode before stepping each Game. Those cores must advance their private
   // SPU mixers even though neither is allowed to open or feed the host device; otherwise ordinary
@@ -397,7 +396,7 @@ void SpuAudio::frameEx(bool output) {
       }
       mRateSamp += frames;
       mRateCalls++;
-      if (SDL_GetAudioStreamQueued(mStream) > kAudioQueueCapBytes) {
+      if (AudioQueuePolicy::shouldDrop(SDL_GetAudioStreamQueued(mStream))) {
         mRateDrops++;
       }
       double dt = now - mRateT0;
@@ -417,8 +416,14 @@ void SpuAudio::frameEx(bool output) {
       }
     }
   }
-  // Drop (don't queue) when the backlog is already too deep — keeps latency bounded.
-  if (SDL_GetAudioStreamQueued(mStream) > kAudioQueueCapBytes) {
+  int queuedBytes = SDL_GetAudioStreamQueued(mStream);
+  if (AudioQueuePolicy::needsReprime(mStreamStarted, queuedBytes)) {
+    SDL_PauseAudioStreamDevice(mStream);
+    mStreamStarted = false;
+  }
+
+  // Drop (don't queue) only when the bounded catch-up reserve is already full.
+  if (AudioQueuePolicy::shouldDrop(queuedBytes)) {
     return;
   }
 
@@ -433,6 +438,12 @@ void SpuAudio::frameEx(bool output) {
 
   SDL_PutAudioStreamData(mStream, buf, (int)(frames * 2 * sizeof(int16_t)));
 
-  lucent::debug("audio", "[spu_audio] rendered {} frames, queued={} bytes", frames, SDL_GetAudioStreamQueued(mStream));
+  queuedBytes = SDL_GetAudioStreamQueued(mStream);
+  if (!mStreamStarted && AudioQueuePolicy::readyToStart(queuedBytes)) {
+    SDL_ResumeAudioStreamDevice(mStream);
+    mStreamStarted = true;
+  }
+
+  lucent::debug("audio", "[spu_audio] rendered {} frames, queued={} bytes", frames, queuedBytes);
 #endif
 }

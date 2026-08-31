@@ -70,6 +70,13 @@ Gap: drawing and title coverage remains incremental across consumers.
 
 The production runtime owns SPU execution and audio output.
 
+The SDL playback sink primes a 180 ms queue before starting, bounds catch-up audio at 360 ms, and
+re-primes after a confirmed underrun. This replaces the former four-field (~67 ms) queue that both
+starved during ordinary render/load stalls and then discarded the catch-up PCM. An isolated Crash
+Bash SDL-device run sustained 44,097 samples/s against the 44,100 Hz target with zero dropped fields;
+the corresponding 600-frame WAV remained byte-identical, proving the host-delivery change did not
+alter SPU clocks, sequencing, or samples.
+
 Gap: complete audio behavior is established title by title rather than for every PSX program.
 
 ### S008 — Native GTE

@@ -85,6 +85,7 @@ private:
 
 #ifdef PSXPORT_SDL
   SDL_AudioStream *mStream = nullptr; // NULL = not open / failed / disabled
+  bool mStreamStarted = false;        // playback begins only after the bounded cushion is primed
 #endif
   int mState = 0;          // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
   FILE *mWav = nullptr;    // open WAV file, or NULL
