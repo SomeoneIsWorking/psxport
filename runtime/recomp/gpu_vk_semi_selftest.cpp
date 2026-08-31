@@ -10,7 +10,8 @@ constexpr int kVramWidth = 1024;
 constexpr int kVramHeight = 512;
 constexpr int kTextureX = 512;
 constexpr int kTextureY = 256;
-constexpr int kCaseCount = 16;
+constexpr int kBlendEquationCaseCount = 16;
+constexpr int kCaseCount = kBlendEquationCaseCount + 1;
 
 struct SemiCase {
   int x;
@@ -75,7 +76,7 @@ bool gpu_vk_run_semi_selftest(GpuVkState &gpu, uint16_t *vram, size_t vramWords,
   vram[kTextureY * kVramWidth + kTextureX] = foreground | 0x8000u;
   vram[kTextureY * kVramWidth + kTextureX + 1] = foreground;
 
-  SemiCase cases[kCaseCount];
+  SemiCase cases[kBlendEquationCaseCount];
   int caseCount = 0;
   for (int mode = 0; mode < 4; ++mode) {
     for (int stp = 1; stp >= 0; --stp) {
@@ -117,6 +118,46 @@ bool gpu_vk_run_semi_selftest(GpuVkState &gpu, uint16_t *vram, size_t vramWords,
     }
   }
 
+  // World semi primitives need their title order preserved even when they select different ABR
+  // pipelines. This is intentionally not a 2D case: the renderer keeps HUD batches separate.
+  constexpr int orderedX = 8;
+  constexpr int orderedY = 150;
+  const uint16_t orderedBackground = backgrounds[0];
+  vram[(orderedY + 2) * kVramWidth + orderedX + 2] = orderedBackground;
+  int orderedXs[3] = {orderedX, orderedX + 8, orderedX};
+  int orderedYs[3] = {orderedY, orderedY, orderedY + 8};
+  int orderedUvs[3] = {0, 0, 0};
+  unsigned char orderedColor[3] = {128, 128, 128};
+  float orderedDepth[3] = {0.5f, 0.5f, 0.5f};
+  const auto drawOrdered = [&](int blend, unsigned order) {
+    gpu.set_order(order);
+    gpu.set_vd(orderedDepth);
+    gpu.draw_semi(orderedXs,
+                  orderedYs,
+                  orderedUvs,
+                  orderedUvs,
+                  orderedColor,
+                  orderedColor,
+                  orderedColor,
+                  kTextureX,
+                  kTextureY,
+                  2,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  kVramWidth - 1,
+                  kVramHeight - 1,
+                  blend);
+  };
+  drawOrdered(1, 100);
+  drawOrdered(0, 101);
+
   int passed = 0;
   if (render(gpu, vram)) {
     for (const SemiCase &testCase : cases) {
@@ -134,13 +175,25 @@ bool gpu_vk_run_semi_selftest(GpuVkState &gpu, uint16_t *vram, size_t vramWords,
                       expected);
       }
     }
+    const uint16_t first = referenceBlend({0, 0, 1, true, orderedBackground}, foreground);
+    const uint16_t expected = referenceBlend({0, 0, 0, true, first}, foreground);
+    const uint16_t got = vram[(orderedY + 2) * kVramWidth + orderedX + 2] & 0x7FFFu;
+    if (got == expected) {
+      ++passed;
+    } else {
+      lucent::error("gpu_selftest",
+                    "world semi ABR submission order 1->0 bg={:04X}: got {:04X}, expected {:04X}",
+                    orderedBackground,
+                    got,
+                    expected);
+    }
   }
 
-  const bool ok = passed == caseCount;
+  const bool ok = passed == kCaseCount;
   lucent::info("gpu_selftest",
                "semi textured PSX equations: {}/{} cases (ABR0..3 x dark/bright x STP1/STP0) => {}",
                passed,
-               caseCount,
+               kCaseCount,
                ok ? "PASS" : "FAIL");
   return ok;
 }

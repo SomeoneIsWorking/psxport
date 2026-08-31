@@ -130,7 +130,6 @@ struct PresentPC {
 // comment for the per-mode blend-factor derivation. Single batch (SBS dual-pane is Pass 3).
 static constexpr SDL_GPUCompareOp kWorldDepthCompare = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
 #define TRI_CAP 196608 // max batched vertices (= 65536 tris)
-#define TEX_CAP 196608
 // 2D (non-world) batch caps — bug #55: HUD/menu/2D-layer content is a small fraction of the 3D world's
 // vertex count per frame; generous headroom without doubling the 3D buffers' GPU memory footprint.
 #define TRI2D_CAP 32768
@@ -898,11 +897,11 @@ void GpuVkState::ensure_targets() {
   };
   mkbuf(sizeof(TriVtx) * TRI_CAP, &s_tri_vbuf, &s_tri_xfer);
   mkbuf(sizeof(TriVtx) * TRI_CAP, &s_line_vbuf, &s_line_xfer);
-  mkbuf(sizeof(TexVtx) * TEX_CAP, &s_tex_vbuf, &s_tex_xfer);
-  mkbuf(sizeof(TexVtx) * TEX_CAP, &s_painter_tex_vbuf, &s_painter_tex_xfer);
+  mkbuf(sizeof(TexVtx) * kGpuVkTextureVertexCapacity, &s_tex_vbuf, &s_tex_xfer);
+  mkbuf(sizeof(TexVtx) * kGpuVkTextureVertexCapacity, &s_painter_tex_vbuf, &s_painter_tex_xfer);
   mkbuf(sizeof(TriVtx) * TRI_CAP, &s_painter_tri_vbuf, &s_painter_tri_xfer);
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
-    mkbuf(sizeof(TexVtx) * TEX_CAP, &s_semi_vbuf[m], &s_semi_xfer[m]);
+    mkbuf(sizeof(TexVtx) * kGpuVkTextureVertexCapacity, &s_semi_vbuf[m], &s_semi_xfer[m]);
   }
   // 2D (non-world) buffers — bug #55: one independent set per band (GGS_2D_BG/GGS_2D_FG) so 2D content
   // never shares a vertex buffer with 3D-world geometry (see gpu_vk_internal.h).
@@ -1407,7 +1406,9 @@ static void render_pass_set(SDL_GPUCommandBuffer *cmd,
                             bool clearColorBlack = false,
                             int phase = 0,
                             SDL_GPUBuffer *lineVbuf = nullptr,
-                            int lineN = 0) {
+                            int lineN = 0,
+                            const GpuVkSemiRun *semiRuns = nullptr,
+                            int semiRunN = 0) {
   int semiTotal = 0;
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     semiTotal += semiN[m];
@@ -1482,8 +1483,7 @@ static void render_pass_set(SDL_GPUCommandBuffer *cmd,
     SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
     SDL_EndGPURenderPass(rp);
   }
-  // ---- Pass B: textured-semi, one draw call per non-empty blend-mode bucket, REAL HW blend, testing
-  //      (not clearing/writing) Pass A's depth ----------------------------------------------------------
+  // ---- Pass B: semi-transparent primitives in title order, REAL HW blend -------------------------------
   {
     SDL_GPUColorTargetInfo ct = {};
     ct.texture = rgbaTgt;
@@ -1491,9 +1491,8 @@ static void render_pass_set(SDL_GPUCommandBuffer *cmd,
     ct.store_op = SDL_GPU_STOREOP_STORE;
     SDL_GPUDepthStencilTargetInfo dt = {};
     dt.texture = depthTgt;
-    // STORE (not DONT_CARE): Pass B itself never writes depth (depth_write=false, test-only), but the
-    // bug #55 part-3 coverage stamp right after this pass DOES need to read Pass A's already-written
-    // opaque depth via the SAME GREATER_OR_EQUAL test — DONT_CARE would let the driver discard it.
+    // STORE (not DONT_CARE): bug #55's later coverage stamp reads Pass A's opaque depth with the
+    // same GREATER_OR_EQUAL test; DONT_CARE would let the driver discard it.
     dt.load_op = SDL_GPU_LOADOP_LOAD;
     dt.store_op = SDL_GPU_STOREOP_STORE;
     dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
@@ -1505,13 +1504,29 @@ static void render_pass_set(SDL_GPUCommandBuffer *cmd,
       int32_t ires_scale_pc = scale;
       SDL_PushGPUFragmentUniformData(cmd, 0, &ires_scale_pc, sizeof ires_scale_pc);
     }
-    for (int m = 0; m < NUM_BLEND_MODES; m++) {
-      if (semiN[m]) {
-        SDL_BindGPUGraphicsPipeline(rp, s_semi_pipe[m]);
-        bb.buffer = semiVbuf[m];
+    if (semiRuns) {
+      int activeBlend = -1;
+      for (int runIndex = 0; runIndex < semiRunN; ++runIndex) {
+        const GpuVkSemiRun &run = semiRuns[runIndex];
+        if (activeBlend != run.blend) {
+          SDL_BindGPUGraphicsPipeline(rp, s_semi_pipe[run.blend]);
+          SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1);
+          activeBlend = run.blend;
+        }
+        bb.buffer = semiVbuf[run.blend];
+        bb.offset = run.first * sizeof(TexVtx);
         SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
-        SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1);
-        SDL_DrawGPUPrimitives(rp, semiN[m], 1, 0, 0);
+        SDL_DrawGPUPrimitives(rp, run.count, 1, 0, 0);
+      }
+    } else {
+      for (int m = 0; m < NUM_BLEND_MODES; m++) {
+        if (semiN[m]) {
+          SDL_BindGPUGraphicsPipeline(rp, s_semi_pipe[m]);
+          bb.buffer = semiVbuf[m];
+          SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+          SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1);
+          SDL_DrawGPUPrimitives(rp, semiN[m], 1, 0, 0);
+        }
       }
     }
     SDL_EndGPURenderPass(rp);
@@ -1808,10 +1823,7 @@ static void render_geom(GpuVkState &g,
                   g.s_semi2d_n[GGS_2D_BG],
                   /*stampSemiCoverage=*/false,
                   /*clearColorBlack=*/!preserveBackdrop);
-  // Clearing to black shows ONLY what was submitted, which is right when a native
-  // renderer owns the frame. A port still running the guest's drawing needs the
-  // uploaded VRAM to survive, or its upload-only screens render black — see
-  // GameRuntime::guestVramIsPicture().
+  // Native renderers clear to black; guest-drawn upload-only screens retain VRAM (guestVramIsPicture()).
   render_pass_set(cmd,
                   C,
                   Cd,
@@ -1830,7 +1842,9 @@ static void render_geom(GpuVkState &g,
                   false,
                   1,
                   g.s_line_vbuf,
-                  g.s_line_n);
+                  g.s_line_n,
+                  g.s_semi_runs,
+                  g.s_semi_run_n);
   // Painter objects: clear the reusable local target per object, replay that object's unified authored
   // range with ALWAYS/write, then export the winning fragment's packed color + actual interpolated D32
   // through the ordinary world GE/write test. TexVtx ord carries the same global submit-order epsilon as
@@ -2000,7 +2014,9 @@ static void render_geom(GpuVkState &g,
                   false,
                   2,
                   g.s_line_vbuf,
-                  g.s_line_n);
+                  g.s_line_n,
+                  g.s_semi_runs,
+                  g.s_semi_run_n);
   render_pass_set(cmd,
                   C,
                   Cd,
@@ -3035,6 +3051,7 @@ void GpuVkState::frame_end(const uint16_t *svram, int frame) {
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     s_semi_n[m] = 0;
   }
+  s_semi_run_n = 0;
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
     s_tri2d_n[band] = s_tex2d_n[band] = 0;
     for (int m = 0; m < NUM_BLEND_MODES; m++) {
@@ -3056,17 +3073,17 @@ static inline void ggs_alloc_batches(GpuVkState &g) {
     g.s_line_buf = (TriVtx *)malloc(sizeof(TriVtx) * TRI_CAP);
   }
   if (!g.s_tex_buf) {
-    g.s_tex_buf = (TexVtx *)malloc(sizeof(TexVtx) * TEX_CAP);
+    g.s_tex_buf = (TexVtx *)malloc(sizeof(TexVtx) * kGpuVkTextureVertexCapacity);
   }
   if (!g.s_painter_tex_buf) {
-    g.s_painter_tex_buf = (TexVtx *)malloc(sizeof(TexVtx) * TEX_CAP);
+    g.s_painter_tex_buf = (TexVtx *)malloc(sizeof(TexVtx) * kGpuVkTextureVertexCapacity);
   }
   if (!g.s_painter_tri_buf) {
     g.s_painter_tri_buf = (TriVtx *)malloc(sizeof(TriVtx) * TRI_CAP);
   }
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     if (!g.s_semi_buf[m]) {
-      g.s_semi_buf[m] = (TexVtx *)malloc(sizeof(TexVtx) * TEX_CAP);
+      g.s_semi_buf[m] = (TexVtx *)malloc(sizeof(TexVtx) * kGpuVkTextureVertexCapacity);
     }
   }
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
@@ -3309,6 +3326,7 @@ void GpuVkState::tex_emit(TexVtx *t,
     t[i].ord = s_vd ? gpu_vk_map_biased_3d_depth(s_vd[i], s_depth_bias) : s_cur_ord;
   }
 }
+
 void GpuVkState::draw_tritri(const int *xs,
                              const int *ys,
                              const int *us,
@@ -3332,7 +3350,7 @@ void GpuVkState::draw_tritri(const int *xs,
                              int day1) {
   ggs_alloc_batches(*this);
   if (s_painter_active) {
-    if (s_painter_tex_n + 3 > TEX_CAP) {
+    if (s_painter_tex_n + 3 > kGpuVkTextureVertexCapacity) {
       s_painter_overflow = 1;
       return;
     }
@@ -3400,7 +3418,7 @@ void GpuVkState::draw_tritri(const int *xs,
     s_tex2d_n[band] += 3;
     return;
   }
-  if (s_tex_n + 3 > TEX_CAP) {
+  if (s_tex_n + 3 > kGpuVkTextureVertexCapacity) {
     return;
   }
   tex_emit(((TexVtx *)s_tex_buf) + s_tex_n,
@@ -3454,7 +3472,7 @@ void GpuVkState::draw_semi(const int *xs,
   int m = blend & 3; // bucket by PSX blend mode: one HW-blend pipeline/vertex-buffer per mode (see render_geom)
   ggs_alloc_batches(*this);
   if (s_painter_active) {
-    if (s_painter_tex_n + 3 > TEX_CAP || !painter_command(1, s_painter_tex_n, 3, 1, m)) {
+    if (s_painter_tex_n + 3 > kGpuVkTextureVertexCapacity || !painter_command(1, s_painter_tex_n, 3, 1, m)) {
       s_painter_overflow = 1;
       return;
     }
@@ -3518,7 +3536,10 @@ void GpuVkState::draw_semi(const int *xs,
     s_semi2d_n[band][m] += 3;
     return;
   }
-  if (s_semi_n[m] + 3 > TEX_CAP) {
+  if (s_semi_n[m] + 3 > kGpuVkTextureVertexCapacity) {
+    return;
+  }
+  if (!gpu_vk_append_semi_run(s_semi_runs, s_semi_run_n, m, s_semi_n[m])) {
     return;
   }
   tex_emit(((TexVtx *)s_semi_buf[m]) + s_semi_n[m],

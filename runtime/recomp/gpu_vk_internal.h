@@ -13,6 +13,7 @@
 // NOT a public API; internal to the GPU TUs.
 #ifndef GPU_GPU_INTERNAL_H
 #define GPU_GPU_INTERNAL_H
+#include "gpu_vk_semi_order.h"           // world semi-transparent submission runs
 #include "guest_vram_composite_policy.h" // persistent-composite ownership transition latch
 #include "vram_dirty.h"                  // class VramDirty — which parts of guest VRAM a present must re-upload
 #include <stdint.h>
@@ -222,6 +223,8 @@ struct GpuVkState {
   void ensure_painter_targets(int w, int h);
   void *s_semi_buf[GGS_NUM_BLEND_MODES] = {nullptr, nullptr, nullptr, nullptr};
   int s_semi_n[GGS_NUM_BLEND_MODES] = {0, 0, 0, 0};
+  GpuVkSemiRun s_semi_runs[kGpuVkSemiRunCap] = {};
+  int s_semi_run_n = 0;
   // 2D (non-world) CPU-side batches — bug #55 fix. Same lifetime/reset contract as the 3D ones above
   // (lazily allocated, reset every frame_end); routed here instead of s_tri_buf/s_tex_buf/s_semi_buf
   // whenever the emitting draw call is NOT tagged world-3D (s_vd unset) — see draw_tri/draw_tritri/
