@@ -29,6 +29,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PASS, FAIL, REFUSED = 0, 1, 2
@@ -86,13 +87,26 @@ def run_failures(log_text):
     return [mark for mark in FAILURE_MARKS if mark in log_text]
 
 
+def reset_run_outputs(log, capture_paths):
+    """Prevent an incomplete run from inheriting evidence from an earlier run."""
+    Path(log).write_text("")
+    for path in capture_paths:
+        Path(path).unlink(missing_ok=True)
+
+
 def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, extra_env):
     """One headless run. Returns (log_text, {frame: Capture})."""
-    settings = Path(scratch) / f"{name}.ini"
+    scratch = Path(scratch).resolve()
+    settings = scratch / f"{name}.ini"
     settings.write_text(f"aspect={aspect}\n")
-    log = Path(scratch) / f"{name}.log"
-    shots = Path(scratch) / name
+    log = scratch / f"{name}.log"
+    shots = scratch / name
     shots.mkdir(parents=True, exist_ok=True)
+    repository = Path(binary).resolve().parents[2]
+    capture_paths = {
+        frame: repository / "scratch" / "screenshots" / f"present_{frame}.png" for frame in shot_frames
+    }
+    reset_run_outputs(log, capture_paths.values())
     env = dict(os.environ)
     env.update(extra_env)
     env.update(
@@ -115,22 +129,16 @@ def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, 
         channels = env.get("PSXPORT_DEBUG", "")
         env["PSXPORT_DEBUG"] = f"{channels},fps60" if channels else "fps60"
     # Shipping port binaries live in <repo>/build/bin. Present shots are repository-relative.
-    repository = Path(binary).resolve().parents[2]
     subprocess.run([str(binary)], env=env, cwd=repository, capture_output=True, check=False)
     text = log.read_text(errors="replace") if log.exists() else ""
     captured = {}
     for frame in shot_frames:
-        for candidate in (
-            repository / "scratch" / "screenshots" / f"present_{frame}.png",
-            Path("scratch/screenshots") / f"present_{frame}.png",
-        ):
-            if candidate.exists():
-                target = shots / f"present_{frame}.png"
-                target.write_bytes(candidate.read_bytes())
-                candidate.unlink()
-                image = Capture.read(target)
-                captured[frame] = image
-                break
+        candidate = capture_paths[frame]
+        if candidate.exists():
+            target = shots / f"present_{frame}.png"
+            target.write_bytes(candidate.read_bytes())
+            candidate.unlink()
+            captured[frame] = Capture.read(target)
     return text, captured
 
 
@@ -236,6 +244,14 @@ def selftest():
     other = Capture(png_header + b"wider picture")
     checks.append(("an identical widescreen picture is a FAILURE", not flat.differs_from(same)))
     checks.append(("a widened picture differs", flat.differs_from(other)))
+
+    with tempfile.TemporaryDirectory() as directory:
+        stale = Path(directory) / "run.log"
+        stale_capture = Path(directory) / "present.png"
+        stale.write_text("stale run\n")
+        stale_capture.write_bytes(png_header + b"stale picture")
+        reset_run_outputs(stale, [stale_capture])
+        checks.append(("a run starts without stale evidence", stale.read_text() == "" and not stale_capture.exists()))
 
     passed = sum(1 for _, ok in checks if ok)
     for name, ok in checks:
