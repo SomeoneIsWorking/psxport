@@ -33,6 +33,12 @@ public:
   virtual void stepFrame(Core &core, uint32_t frame) = 0;
 };
 
+// The no-customization execution baseline for a newly scaffolded port. The generated program owns
+// its ordinary game code and calls libetc VSync; psxport preserves that call stack in a coroutine
+// and makes VSync the host-frame yield boundary.  The generated substrate supplies both addresses
+// through RecWholeProgramMetadata, so a scaffold has no title-address configuration to maintain.
+struct GenericWholeProgramProfile {};
+
 class TaskScheduler {
 public:
   virtual ~TaskScheduler() = default;
@@ -63,10 +69,10 @@ public:
   }
 
   // Hardware-sync primitives for DIRECT runtimes (core.cfg == nullptr): the measured SCEI library
-  // leaves this binary links and the windows that admit them. A product runtime must declare its
-  // measured libetc VSync address: the framework installs the mandatory fatal guest-VSync trap.
-  // Adapter runtimes keep the equivalent GameConfig::hle fact slice. Null remains valid only for
-  // non-product smoke/tool clients that never enter `dc_boot_init`.
+  // leaves this binary links and the windows that admit them. A native-frame product declares its
+  // libetc VSync address here; GenericWholeProgramProfile instead uses emitted whole-program
+  // metadata. Adapter runtimes keep the equivalent GameConfig::hle fact slice. Null remains valid
+  // for generic bare products and non-product smoke/tool clients that never enter `dc_boot_init`.
   virtual const PlatformHlePlan *platformHlePlan() const {
     return nullptr;
   }
@@ -108,7 +114,11 @@ public:
   // LegacyGameRuntimeAdapter until they declare the narrower contract directly.
   virtual std::unique_ptr<TemporalFramePresentation> createTemporalFramePresentation(Game &game);
 
-  virtual std::unique_ptr<FrameDriver> createFrameDriver(Game &) {
+  // Native ports override this with their measured finite driver. A bare scaffold instead declares
+  // genericWholeProgramProfile(); this default then supplies the framework-owned yielding driver.
+  virtual std::unique_ptr<FrameDriver> createFrameDriver(Game &);
+
+  virtual const GenericWholeProgramProfile *genericWholeProgramProfile() const {
     return nullptr;
   }
   virtual std::unique_ptr<TaskScheduler> createTaskScheduler(Game &) {

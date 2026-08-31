@@ -79,6 +79,10 @@ public:
   // matching addresses in place and reinstalls their generated overrides without growing the table.
   void initBuiltins();
 
+  // Select and bind the framework-owned VSync yield handler used by GenericWholeProgramProfile.
+  // The address comes exclusively from emitted RecWholeProgramMetadata, never a title plan.
+  void useGenericWholeProgramVSync();
+
   // Product preflight. A missing measured VSync address would let a retail busy-wait run and report
   // a misleading timeout, so boot refuses before title initialization can enter guest main.
   void requireNativeFrameLoopContract() const;
@@ -100,7 +104,8 @@ private:
   // The accepted address windows are GAME data (GameConfig::hle.windowLo/windowHi), so the guard
   // takes the config rather than baking one game's memory map into the framework.
   static bool inBiosWindow(const struct GameConfig *cfg, uint32_t a);
-  void bindVSyncTrap(uint32_t addr);
+  void bindVSyncTrap(uint32_t addr, bool generatedMetadata = false);
+  bool registerGenerated_(uint32_t addr, OverrideFn fn);
 
   static constexpr int kMax = 32;
 
@@ -110,4 +115,5 @@ private:
   uint32_t mLo = 0xFFFFFFFFu;
   uint32_t mHi = 0;
   uint32_t mVSyncAddress = 0;
+  bool mGenericWholeProgramVSync = false;
 };

@@ -15,10 +15,13 @@
 #include "core.h"
 #include "game.h"         // Game::core — register_/initBuiltins read the game's config off the Core
 #include "game_runtime.h" // psxport_game_runtime — the direct-runtime PlatformHlePlan source
+#include "generic_whole_program.h"
 #include "platform_hle.h"
 #include "proj_params.h"  // libgte_set_geom_offset / _screen — the camera projection setters
 #include "recomp_iface.h" // seam: psxport_recomp()->shard_set_override (generated MAIN override setter)
 #include "scheduler.h"
+
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <lucent/log.h>
@@ -246,9 +249,10 @@ bool PlatformHle::inBiosWindow(const GameConfig *cfg, uint32_t a) {
 }
 
 bool PlatformHle::register_(uint32_t addr, OverrideFn fn) {
-  if (mVSyncAddress != 0 && (addr & 0x1FFFFFFFu) == (mVSyncAddress & 0x1FFFFFFFu) && fn != vsync_trap) {
+  const OverrideFn requiredVSyncHandler = mGenericWholeProgramVSync ? generic_whole_program_vsync : vsync_trap;
+  if (mVSyncAddress != 0 && (addr & 0x1FFFFFFFu) == (mVSyncAddress & 0x1FFFFFFFu) && fn != requiredVSyncHandler) {
     lucent::error("plat-hle",
-                  "REFUSED replacement of mandatory VSync trap at 0x{:08X}; guest VSync has no "
+                  "REFUSED replacement of mandatory VSync handler at 0x{:08X}; guest VSync has no "
                   "successful shipping handler",
                   mVSyncAddress);
     std::abort();
@@ -302,7 +306,35 @@ bool PlatformHle::register_(uint32_t addr, OverrideFn fn) {
   return true;
 }
 
-void PlatformHle::bindVSyncTrap(uint32_t addr) {
+bool PlatformHle::registerGenerated_(uint32_t addr, OverrideFn fn) {
+  // A generated recognizer has already proved this exact guest function is libetc VSync.  It is a
+  // stronger guard than a consumer-maintained address window, so keep the metadata route separate
+  // from ordinary HLE registration rather than weakening that guard for arbitrary title bindings.
+  for (int i = 0; i < mN; ++i) {
+    if (mAddr[i] == addr) {
+      mFn[i] = fn;
+      if (const RecompRegistry *const rec = psxport_recomp()) {
+        rec->shard_set_override(addr, fn);
+      }
+      return true;
+    }
+  }
+  if (mN >= kMax) {
+    lucent::error("plat-hle", "table full while binding emitted VSync metadata");
+    return false;
+  }
+  mAddr[mN] = addr;
+  mFn[mN] = fn;
+  ++mN;
+  mLo = std::min(mLo, addr);
+  mHi = std::max(mHi, addr);
+  if (const RecompRegistry *const rec = psxport_recomp()) {
+    rec->shard_set_override(addr, fn);
+  }
+  return true;
+}
+
+void PlatformHle::bindVSyncTrap(uint32_t addr, bool generatedMetadata) {
   if (!addr) {
     return;
   }
@@ -315,11 +347,29 @@ void PlatformHle::bindVSyncTrap(uint32_t addr) {
     std::abort();
   }
   mVSyncAddress = addr;
-  if (!register_(addr, vsync_trap)) {
+  const OverrideFn handler = mGenericWholeProgramVSync ? generic_whole_program_vsync : vsync_trap;
+  if ((generatedMetadata ? registerGenerated_(addr, handler) : register_(addr, handler)) == false) {
     mVSyncAddress = 0;
     lucent::error("plat-hle", "failed to install mandatory VSync trap at 0x{:08X}", addr);
     std::abort();
   }
+}
+
+void PlatformHle::useGenericWholeProgramVSync() {
+  if (mVSyncAddress != 0) {
+    if (mGenericWholeProgramVSync) {
+      return; // Product preflight is repeatable; keep the already-installed generic handler intact.
+    }
+    lucent::error("plat-hle", "generic whole-program VSync selected after the measured VSync was installed");
+    std::abort();
+  }
+  const RecompRegistry *const rec = psxport_recomp();
+  if (!rec || !rec->wholeProgram || !rec->wholeProgram->vsyncAddress) {
+    lucent::error("plat-hle", "generic whole-program execution requires emitted RecWholeProgramMetadata::vsyncAddress");
+    std::abort();
+  }
+  mGenericWholeProgramVSync = true;
+  bindVSyncTrap(rec->wholeProgram->vsyncAddress, true);
 }
 
 void PlatformHle::requireNativeFrameLoopContract() const {

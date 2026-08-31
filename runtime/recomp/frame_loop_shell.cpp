@@ -3,6 +3,7 @@
 #include "core.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "generic_whole_program.h"
 
 #include <cstdlib>
 #include <lucent/log.h>
@@ -23,9 +24,18 @@ FrameDriver &FrameLoopShell::requireDriver(Game &game) const {
 
 FrameDriver &FrameLoopShell::prepareProduct(Game &game) const {
   FrameDriver &driver = requireDriver(game);
+  const bool genericWholeProgram = game.runtime->genericWholeProgramProfile() != nullptr;
+  if (genericWholeProgram && !is_generic_whole_program_driver(driver)) {
+    lucent::error("frame-loop",
+                  "GameRuntime declares GenericWholeProgramProfile but replaced the framework generic driver");
+    std::abort();
+  }
+  if (genericWholeProgram) {
+    game.platform_hle.useGenericWholeProgramVSync();
+  }
   // Title registration writes the process-global generated override table. Reinstall the mandatory
-  // VSync trap afterwards so a title cannot accidentally leave its own handler (or the retail body)
-  // as the last writer at this address.
+  // VSync handler afterwards so a title cannot accidentally leave its own handler (or the retail
+  // body) as the last writer at this address.
   game.platform_hle.initBuiltins();
   game.platform_hle.requireNativeFrameLoopContract();
   game.productFrameLoopPrepared_ = true;

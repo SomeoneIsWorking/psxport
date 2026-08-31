@@ -2,6 +2,7 @@
 
 #include "frame_presenter.h"
 #include "game.h"
+#include "generic_whole_program.h"
 
 #include <lucent/log.h>
 
@@ -12,6 +13,13 @@ GameRuntime *installedRuntime;
 }
 
 std::unique_ptr<TemporalFramePresentation> GameRuntime::createTemporalFramePresentation(Game &) {
+  return nullptr;
+}
+
+std::unique_ptr<FrameDriver> GameRuntime::createFrameDriver(Game &game) {
+  if (const GenericWholeProgramProfile *profile = genericWholeProgramProfile()) {
+    return std::make_unique<GenericWholeProgramFrameDriver>(game, *profile);
+  }
   return nullptr;
 }
 

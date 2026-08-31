@@ -15,6 +15,19 @@ Companion skills/docs (generic): `recomp-init`, `recomp-recompiler`, `recomp-ove
 
 ## 1. The two-layer model
 
+### Start with the bare scaffold
+
+Use `tools/psx_port_scaffold.py` to create the consumer repository rather than copying an existing
+game's launcher, CMake, disc path, or title facts. It resolves the framework, asks `discdump` to follow
+the supplied disc's `SYSTEM.CNF`, emits that discovered PS-X EXE into ignored `generated/`, and leaves
+all title-specific enhancement work opt-in. The user disc is recorded only in ignored `.env`.
+
+The scaffold uses the shared generic whole-program profile. The emitter records the PS-X EXE PC0 and
+proves exactly one generic libetc VSync route in ignored generated output; the framework starts PC0
+once, yields at that VSync, and resumes the same generated stack after each host field. Re-entering
+guest main each host frame or suppressing VSync would create a fake port. Title RE replaces the generic
+profile only when measured ownership requires it.
+
 **Generic (~80% of the infrastructure — lift and reuse):**
 
 - **Static recompiler** (`tools/`) — MIPS→C for any `MAIN.EXE` + overlays. N64Recomp-style.

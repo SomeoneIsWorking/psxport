@@ -538,6 +538,130 @@ def test_main_cli_embeds_the_exact_generated_substrate_identity():
     assert first != changed, "different emitted bodies must never report the same substrate identity"
 
 
+def _append_psyq_vsync(a, tag):
+    """Append a link-address-independent PsyQ VSync(mode) fixture and return its entry label.
+
+    The fixture preserves the implementation contract the shipping recognizer proves: stable-counter
+    sampling, negative/one/positive mode split, and positive-mode helper wait.  It contains no game
+    address or title data, so both the positive and ambiguity answers stay hermetic.
+    """
+    entry = f"{tag}_entry"
+    sample = f"{tag}_sample"
+    nonnegative = f"{tag}_nonnegative"
+    nonpositive = f"{tag}_nonpositive"
+    wait_count = f"{tag}_wait_count"
+    wait_done = f"{tag}_wait_done"
+    done = f"{tag}_done"
+    helper = f"{tag}_helper"
+    a.label(entry)
+    a.lui("v0", 0x8001)
+    a.lw("v0", 0, "v0")
+    a.lui("v1", 0x8001)
+    a.lw("a1", 4, "a1")
+    a.addiu("sp", "sp", -0x20)
+    a.sw("ra", 0x1C, "sp")
+    a.sw("s1", 0x18, "sp")
+    a.sw("s0", 0x14, "sp")
+    a.lw("s0", 0, "v0")
+    a.label(sample)
+    a.lw("v0", 0, "a1")
+    a.nop()
+    a.sw("v0", 0x10, "sp")
+    a.lw("v1", 0x10, "sp")
+    a.lw("v0", 0, "a1")
+    a.nop()
+    a.bne("v1", "v0", sample)
+    a.nop()
+    a.lw("v0", 0x10, "sp")
+    a.subu("v0", "v0", "v1")
+    a.bgez("a0", nonnegative)
+    a.andi("s1", "v0", 0xFFFF)
+    a.lui("v0", 0x8001)
+    a.lw("v0", 8, "v0")
+    a.j(done)
+    a.nop()
+    a.label(nonnegative)
+    a.addiu("v0", "zero", 1)
+    a.beq("a0", "v0", done)
+    a.nop()
+    a.blez("a0", nonpositive)
+    a.nop()
+    a.lui("v0", 0x8001)
+    a.lw("v0", 12, "v0")
+    a.nop()
+    a.addiu("v0", "v0", -1)
+    a.j(wait_count)
+    a.addu("v0", "v0", "a0")
+    a.label(nonpositive)
+    a.lui("v0", 0x8001)
+    a.lw("v0", 12, "v0")
+    a.label(wait_count)
+    a.blez("a0", wait_done)
+    a.addu("a1", "zero", "zero")
+    a.addiu("a1", "a0", -1)
+    a.jal(helper)
+    a.addu("a0", "v0", "zero")
+    a.label(wait_done)
+    a.addu("v0", "s1", "zero")
+    a.label(done)
+    a.lw("ra", 0x1C, "sp")
+    a.lw("s1", 0x18, "sp")
+    a.lw("s0", 0x14, "sp")
+    a.jr("ra")
+    a.addiu("sp", "sp", 0x20)
+    a.label(helper)
+    a.jr("ra")
+    a.nop()
+    return entry
+
+
+def _psyq_vsync_fixture(count):
+    a = Asm()
+    # A genuine preceding return makes each following library body a callable function entry.
+    a.jr("ra")
+    a.nop()
+    labels = [_append_psyq_vsync(a, f"vsync_{index}") for index in range(count)]
+    data, _ = a.assemble()
+    return exe_of(data), [a.labels[label] for label in labels]
+
+
+def test_libetc_vsync_recognizer_emits_generic_whole_program_metadata():
+    """The shipping CLI exports PC0 plus the one generic PsyQ VSync result, never a title fact."""
+    exe, (vsync,) = _psyq_vsync_fixture(1)
+    assert emit.libetc_vsync_candidates(exe) == [vsync]
+    assert emit.require_libetc_vsync(exe) == vsync
+    here = os.path.dirname(os.path.abspath(__file__))
+    with scratch_tempdir("emit-vsync-metadata-") as td:
+        exe_path = os.path.join(td, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, vsync, 0)
+        struct.pack_into("<II", hdr, 0x18, exe.load, exe.text_size)
+        open(exe_path, "wb").write(bytes(hdr) + exe.text)
+        generated = os.path.join(td, "generated")
+        os.makedirs(generated)
+        result = subprocess.run([sys.executable, os.path.join(here, "emit.py"), exe_path,
+                                 os.path.join(generated, "rec.c"), "--whole-program"],
+                                capture_output=True, text=True,
+                                env=dict(os.environ, PSXPORT_SHARDS="1", PSXPORT_USE_GHIDRA="0"))
+        assert result.returncode == 0, f"emit.py failed:\n{result.stdout}\n{result.stderr}"
+        header = open(os.path.join(generated, "overlay_table.h")).read()
+        table = open(os.path.join(generated, "overlay_table.c")).read()
+    assert "extern const RecWholeProgramMetadata g_rec_whole_program;" in header
+    assert f".entryAddress = 0x{vsync:08X}u," in table
+    assert f".vsyncAddress = 0x{vsync:08X}u," in table
+
+
+def test_libetc_vsync_recognizer_refuses_both_zero_and_ambiguous_answers():
+    no_vsync = exe_of(Asm().addiu("v0", "zero", 0).jr("ra").nop().assemble()[0])
+    for exe, expected in ((no_vsync, "found 0: (none)"), (_psyq_vsync_fixture(2)[0], "found 2:")):
+        try:
+            emit.require_libetc_vsync(exe)
+            assert False, "a bare port must refuse an unproven VSync yield boundary"
+        except SystemExit as error:
+            assert expected in str(error), str(error)
+
+
 
 
 

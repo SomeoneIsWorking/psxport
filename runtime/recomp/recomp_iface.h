@@ -43,6 +43,15 @@ struct RecOverlay {
   unsigned relocatable;
 };
 
+// Facts mechanically emitted from the executable together with the generated substrate.  They are
+// not title runtime configuration: `entryAddress` is the PS-X EXE PC0, while `vsyncAddress` is the
+// recompiler's libetc recognizer result.  A bare port refuses to boot when the emitter cannot prove
+// either fact instead of asking a scaffold author to copy an address into native source.
+struct RecWholeProgramMetadata {
+  uint32_t entryAddress = 0;
+  uint32_t vsyncAddress = 0;
+};
+
 // RecompRegistry — the game's generated substrate, presented to the framework as function/table
 // pointers. Filled by the game (game/core/recomp_register.cpp) from the generated symbols and
 // installed once at startup, before any Core runs a frame.
@@ -63,6 +72,9 @@ struct RecompRegistry {
   // which substrate the running binary actually compiled. Optional only for source compatibility
   // with pre-identity generated trees, which are reported as UNKNOWN at installation.
   const char *substrate_id = nullptr;
+  // Optional for compatibility with older generated substrates.  Generic whole-program execution
+  // requires this generated fact bundle; title-specific drivers do not.
+  const RecWholeProgramMetadata *wholeProgram = nullptr;
 };
 
 // Install once at startup (before the first frame). Process-global; both SBS cores share it. Returns

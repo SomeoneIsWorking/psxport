@@ -153,7 +153,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-30.3"    # generated attribution scopes are unwind-safe
+RECOMP_VERSION = "2026-08-31.1"    # whole-program metadata derives the linked libetc VSync
 
 R = lambda n: f"c->r[{n}]"
 
@@ -2860,10 +2860,96 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     return [f"{N.disp}.c"] + [f"{N.shardpfx}_{s}.c" for s in range(shards)]
 
 
+def _psyq_vsync_mode_dispatch(exe, address):
+    """Whether ``address`` is PsyQ libetc's VSync(mode) dispatch, not merely a wait loop.
+
+    PsyQ VSync has three externally visible mode classes in one fixed control shape: negative
+    values return the sampled vblank counter, mode 1 takes the single-field route, and positive
+    values enter a decrementing helper loop.  Link addresses and globals differ per executable,
+    but this argument/control/data-flow contract survives the library builds used by retail PSX
+    games.  The surrounding function-entry and lock-sampling checks in ``libetc_vsync_candidates``
+    rule out a copied branch fragment in a game routine.
+    """
+    if address + 23 * 4 >= exe.text_end:
+        return False
+    ins = [decode(address + i * 4, exe.word(address + i * 4)) for i in range(24)]
+    one = ins[6]
+    return (
+        ins[0].op == "bgez" and ins[0].rs == 4 and ins[0].target == address + 0x18
+        and ins[1].op == "andi" and ins[1].rs == 2 and ins[1].rt == 17 and ins[1].imm == 0xFFFF
+        and ins[2].op == "lui" and ins[2].rt == 2
+        and ins[3].op == "lw" and ins[3].rs == 2 and ins[3].rt == 2
+        and ins[4].op == "j" and ins[5].op == "nop"
+        and one.op == "addiu" and one.rs == 0 and one.rt == 2 and one.simm == 1
+        and ins[7].op == "beq" and ins[7].rs == 4 and ins[7].rt == 2
+        and (ins[8].op == "nop" or (ins[8].op == "addu" and ins[8].rs == 17 and ins[8].rt == 0
+                                  and ins[8].rd == 2))
+        and ins[9].op == "blez" and ins[9].rs == 4 and ins[10].op == "nop"
+        and ins[11].op == "lui" and ins[11].rt == 2
+        and ins[12].op == "lw" and ins[12].rs == 2 and ins[12].rt == 2 and ins[13].op == "nop"
+        and ins[14].op == "addiu" and ins[14].rs == 2 and ins[14].rt == 2 and ins[14].simm == -1
+        and ins[15].op == "j" and ins[16].op == "addu" and ins[16].rs == 2 and ins[16].rt == 4
+        and ins[16].rd == 2
+        and ins[17].op == "lui" and ins[17].rt == 2
+        and ins[18].op == "lw" and ins[18].rs == 2 and ins[18].rt == 2
+        and ins[19].op == "blez" and ins[19].rs == 4
+        and ins[20].op == "addu" and ins[20].rs == 0 and ins[20].rt == 0 and ins[20].rd == 5
+        and ins[21].op == "addiu" and ins[21].rs == 4 and ins[21].rt == 5 and ins[21].simm == -1
+        and ins[22].op == "jal"
+        and ins[23].op == "addu" and ins[23].rs == 2 and ins[23].rt == 0 and ins[23].rd == 4
+    )
+
+
+def _function_entry_before(exe, address):
+    """Return the immediately preceding ``jr ra`` boundary for a linked library body."""
+    for tail in range(address - 8, max(exe.load - 4, address - 0x200), -4):
+        if exe.word(tail) == 0x03E00008:
+            entry = tail + 8
+            return entry if is_func_entry(exe, entry) else None
+    return None
+
+
+def libetc_vsync_candidates(exe):
+    """Find linked PsyQ ``VSync(mode)`` bodies by their generic implementation contract.
+
+    The result contains callable function entries, not the middle-of-body mode-dispatch PCs.  A
+    candidate must have both the VSync mode contract and the library's protected vblank-counter
+    sampling prefix (stack/RA frame plus the counter delta).  Some PsyQ revisions retry an unstable
+    sample and others rely on the interrupt-side critical section, so a retry branch is not part of
+    the cross-version contract. This intentionally uses no
+    title, executable name, address, or global address heuristic.
+    """
+    candidates = set()
+    for dispatch in range(exe.load, exe.text_end, 4):
+        if not _psyq_vsync_mode_dispatch(exe, dispatch):
+            continue
+        entry = _function_entry_before(exe, dispatch)
+        if entry is None:
+            continue
+        prefix = [decode(a, exe.word(a)) for a in range(entry, dispatch, 4)]
+        has_frame = any(i.op == "addiu" and i.rs == 29 and i.rt == 29 and i.simm < 0 for i in prefix)
+        has_ra_save = any(i.op == "sw" and i.rs == 29 and i.rt == 31 for i in prefix)
+        has_sample_delta = any(i.op == "subu" and i.rs == 2 and i.rt == 3 and i.rd == 2 for i in prefix)
+        if has_frame and has_ra_save and has_sample_delta:
+            candidates.add(entry)
+    return sorted(candidates)
+
+
+def require_libetc_vsync(exe):
+    """Return the one generically proven libetc VSync entry, or make emission fail loudly."""
+    candidates = libetc_vsync_candidates(exe)
+    if len(candidates) == 1:
+        return candidates[0]
+    rendered = ", ".join(f"0x{address:08X}" for address in candidates) or "(none)"
+    sys.exit(f"[recomp] generic whole-program metadata: expected exactly one PsyQ libetc VSync(mode) "
+             f"candidate in MAIN.EXE, found {len(candidates)}: {rendered}. Refusing to guess the "
+             "guest frame-yield boundary.")
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit("usage: emit.py <MAIN.EXE> <out.c> [--seeds FILE] [--overlays DIR] "
-                 "[--stub SCUS.EXE] [--limit N]")
+                 "[--stub SCUS.EXE] [--whole-program] [--limit N]")
     exe = psexe.load(sys.argv[1])
     out_path = sys.argv[2]
     limit = None
@@ -2891,7 +2977,17 @@ def main():
                               for address in checkpoint if address is not None},
                         "--seeds diagnostic_pcs owner/pc")
     ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
-    seeds = ({exe.entry} | gs["main"] | gs["main_reentry"] | pointer_table_funcs(exe)
+    # A bare whole-program port has no title runtime code in which to copy a libetc address. Its
+    # explicit `--whole-program` contract therefore requires PsyQ's generic VSync recognizer and
+    # makes that emitted fact part of the substrate. Ordinary title-specific emissions deliberately
+    # do not run this classifier: their native frame drivers own separately measured boundaries, and
+    # a synthetic emitter fixture should not need to impersonate a complete PSX executable.
+    whole_program = None
+    if "--whole-program" in sys.argv:
+        vsync_address = require_libetc_vsync(exe)
+        whole_program = (exe.entry, vsync_address)
+    whole_program_seeds = {whole_program[1]} if whole_program else set()
+    seeds = ({exe.entry} | whole_program_seeds | gs["main"] | gs["main_reentry"] | pointer_table_funcs(exe)
              | constructed_func_pointers(exe) | code_pointer_tables(exe)
              | overlay_data_func_pointers(exe, ov_dir))   # object-behavior handlers in overlay templates
     out_dir = os.path.dirname(out_path) or "."
@@ -3070,10 +3166,10 @@ def main():
     # before writing the table that carries the hash; excluding that carrier avoids a circular
     # identity. A stale binary now names the stale substrate it actually compiled instead of being
     # compared with whatever generated files happen to be on disk later.
-    substrate_id = generated_substrate_identity(out_dir, src_files, exe, overlays)
+    substrate_id = generated_substrate_identity(out_dir, src_files, exe, overlays, whole_program)
 
     # Overlay routing table consumed by overlay_router.cpp.
-    write_overlay_table(out_dir, exe, overlays, substrate_id)
+    write_overlay_table(out_dir, exe, overlays, substrate_id, whole_program)
     src_files.append("overlay_table.c")
 
     # Source manifest: cmake reads generated/rec_sources.cmake to link exactly the emitted TUs (the
@@ -3387,7 +3483,7 @@ def area_indexed_overlay_tables(main_exe, area_exes, min_valid_frac=0.8):
     return out
 
 
-def generated_substrate_identity(out_dir, src_files, main_exe, overlays):
+def generated_substrate_identity(out_dir, src_files, main_exe, overlays, whole_program):
     """Fingerprint the exact generated behavior that a consumer compiles.
 
     ``src_files`` is the authoritative CMake manifest input, excluding the identity carrier itself.
@@ -3403,6 +3499,9 @@ def generated_substrate_identity(out_dir, src_files, main_exe, overlays):
         with open(os.path.join(out_dir, name), "rb") as source:
             digest.update(source.read())
     digest.update(f"MAIN:{main_exe.load:08X}:{main_exe.text_end:08X}\n".encode())
+    if whole_program:
+        entry, vsync = whole_program
+        digest.update(f"WHOLE:{entry:08X}:{vsync:08X}\n".encode())
     for tag, name, base, end, signature, _names, relocatable in overlays:
         digest.update(
             f"OV:{tag}:{name}:{base:08X}:{end:08X}:{int(relocatable)}:".encode()
@@ -3412,7 +3511,7 @@ def generated_substrate_identity(out_dir, src_files, main_exe, overlays):
     return f"recomp-{RECOMP_VERSION}-{digest.hexdigest()}"
 
 
-def write_overlay_table(out_dir, main_exe, overlays, substrate_id):
+def write_overlay_table(out_dir, main_exe, overlays, substrate_id, whole_program):
     """Emit generated/overlay_table.{h,c}: MAIN text range + per-overlay descriptor for the runtime
     router (overlay_router.cpp).
 
@@ -3429,7 +3528,10 @@ def write_overlay_table(out_dir, main_exe, overlays, substrate_id):
         h.append(f"void {N.dispatch}(Core*, uint32_t);")
         h.append(f"int {N.index}(uint32_t);")
     h += ["extern const RecOverlay g_rec_overlays[];", "extern const int g_rec_overlay_count;",
-          "extern const char g_rec_substrate_id[];", ""]
+          "extern const char g_rec_substrate_id[];"]
+    if whole_program:
+        h.append("extern const RecWholeProgramMetadata g_rec_whole_program;")
+    h.append("")
     write_if_changed(os.path.join(out_dir, "overlay_table.h"), "\n".join(h) + "\n")
 
     c = ["// GENERATED by tools/recomp/emit.py — DO NOT EDIT.", '#include "overlay_table.h"', ""]
@@ -3444,6 +3546,12 @@ def write_overlay_table(out_dir, main_exe, overlays, substrate_id):
     c.append("};")
     c.append(f"const int g_rec_overlay_count = {len(overlays)};")
     c.append(f'const char g_rec_substrate_id[] = "{substrate_id}";')
+    if whole_program:
+        entry, vsync = whole_program
+        c.append("const RecWholeProgramMetadata g_rec_whole_program = {")
+        c.append(f"  .entryAddress = 0x{entry:08X}u,")
+        c.append(f"  .vsyncAddress = 0x{vsync:08X}u,")
+        c.append("};")
     write_if_changed(os.path.join(out_dir, "overlay_table.c"), "\n".join(c) + "\n")
     print(f"[overlays] {len(overlays)} overlay module(s) -> overlay_table.c")
 
