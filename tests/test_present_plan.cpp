@@ -234,10 +234,9 @@ static void test_an_empty_sink_builds_nothing(void) {
   CHECK(!plan(zero_w, false).to_swapchain); // nothing built, so nothing to show
 }
 
-static void test_static_2d_uses_native_source_width(void) {
-  CHECK_EQ(present_display_width(true, 428, 320, true), 428);
-  CHECK_EQ(present_display_width(true, 428, 320, false), 320);
-  CHECK_EQ(present_display_width(false, 320, 320, false), 320);
+static void test_widescreen_extent_is_not_sampled_from_one_frame(void) {
+  CHECK_EQ(present_display_width(true, 428, 320), 428);
+  CHECK_EQ(present_display_width(false, 320, 320), 320);
 }
 
 int main(void) {
@@ -253,6 +252,6 @@ int main(void) {
   RUN(a_320_wide_game_is_bit_identical_to_the_old_rule);
   RUN(unknown_native_width_degrades_to_4_3);
   RUN(an_empty_sink_builds_nothing);
-  RUN(static_2d_uses_native_source_width);
+  RUN(widescreen_extent_is_not_sampled_from_one_frame);
   return pt_summary();
 }

@@ -182,9 +182,11 @@ void gpu_vk_stats(Core *core, int *tri, int *tex, int *semi);
 // game/render/screen_fade.h. The old gpu_set_fade / gpu_clear_fade / engine_fade_set entries
 // lived here — deleted; native present path reads ScreenFade::get(core).)
 
-// this-/last-frame native-geometry status (defined in gpu_native.cpp; read by the gpu_vk present path)
-// — now per-instance. A frame with neither 3D nor a full-screen 2D backdrop is a raw framebuffer (FMV).
-int gpu_seen3d_this_frame(Core *core);
+// this-/last-frame native-geometry status (defined in gpu_native.cpp; read by the gpu_vk present path
+// and by consuming games) — now per-instance. A frame with neither 3D nor a full-screen 2D backdrop is
+// a raw framebuffer (FMV). BOTH belong here: gpu_seen3d_this_frame was previously declared only at its
+// call sites, so a caller audit could not see it and the de-globalization deleted it as dead.
 int gpu_had3d_last_frame(Core *core);
+int gpu_seen3d_this_frame(Core *core);
 
 #endif // GPU_GPU_H

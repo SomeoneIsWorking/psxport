@@ -211,7 +211,9 @@ factory remains PC-native per-pixel depth. `fps60_gpu_present.{h,cpp}` owns the 
 referenced only by `fps60.cpp`; the neutral presenter has no temporal renderer operation.
 `guest_widescreen_projection.h`
 owns the typed, frame-latched title projection/presentation plan; the GTE-only positive contract remains
-separate from Native-only `RenderMode::enhancementsAllowed()`. `gpu_display_mode.h` is the pure GP1(08h)
+separate from Native-only `RenderMode::enhancementsAllowed()`. `present_plan.h` owns the final sampled
+framebuffer extent and never derives it from a per-field primitive census; native images use the separate
+explicit 4:3 image presenter. `gpu_display_mode.h` is the pure GP1(08h)
 horizontal decoder, including bit 6's 368-dot mode. Full ownership and consumer rules are in
 `docs/presentation-contract.md`. `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 4,121 ln), `gpu_vk.cpp` (SDL_GPU backend +
 present — 4,404 lines), `gpu_primitive_dump.{h,cpp}` (primitive-census CSV lifecycle and row encoding),

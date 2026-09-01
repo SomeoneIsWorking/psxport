@@ -291,6 +291,19 @@ static void test_dirty_canvas_change_rearms_full_upload(void) {
   CHECK_EQ(d.whole().h, 256);
 }
 
+static void test_dirty_intersection_distinguishes_scanout_from_offscreen_vram(void) {
+  VramDirty d;
+  d.setCanvas(W, H);
+  CHECK(d.intersects(0, 0, 512, 240)); // unknown initial composite covers the display
+  d.clear();
+  d.add(896, 256, 32, 32); // texture/CLUT area, outside both 512-wide display pages
+  CHECK(!d.intersects(0, 0, 512, 240));
+  CHECK(!d.intersects(0, 256, 512, 240));
+  d.add(0, 256, 512, 240);              // exact back display page
+  CHECK(!d.intersects(0, 0, 512, 240)); // edge contact at y=256 is not overlap
+  CHECK(d.intersects(0, 256, 512, 240));
+}
+
 int main(void) {
   RUN(displayed_buffer_keeps_last_frames_geometry);
   RUN(whole_canvas_upload_destroys_it);
@@ -301,5 +314,6 @@ int main(void) {
   RUN(dirty_dedupes_contained_writes);
   RUN(dirty_overflow_never_loses_coverage);
   RUN(dirty_canvas_change_rearms_full_upload);
+  RUN(dirty_intersection_distinguishes_scanout_from_offscreen_vram);
   return pt_summary();
 }

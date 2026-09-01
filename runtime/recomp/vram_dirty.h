@@ -127,6 +127,24 @@ public:
     return VramDirtyRect{0, 0, cw_, ch_};
   }
 
+  // Whether any pending guest write can change the specified display rectangle. Offscreen
+  // texture/CLUT writes remain pending for the next composite build but cannot change scanout.
+  bool intersects(int x, int y, int w, int h) const {
+    if (w <= 0 || h <= 0 || cw_ <= 0 || ch_ <= 0) {
+      return false;
+    }
+    const VramDirtyRect target{x, y, w, h};
+    if (all_) {
+      return overlaps(whole(), target);
+    }
+    for (int i = 0; i < n_; ++i) {
+      if (overlaps(r_[i], target)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Called once the composite has been brought up to date with everything recorded so far.
   void clear() {
     all_ = false;
@@ -147,6 +165,9 @@ public:
 private:
   static bool contains(const VramDirtyRect &a, const VramDirtyRect &b) {
     return b.x >= a.x && b.y >= a.y && b.x + b.w <= a.x + a.w && b.y + b.h <= a.y + a.h;
+  }
+  static bool overlaps(const VramDirtyRect &a, const VramDirtyRect &b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
   static long area(const VramDirtyRect &a) {
     return (long)a.w * (long)a.h;

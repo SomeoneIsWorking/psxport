@@ -19,9 +19,10 @@
 // clear to black"), fixed by the title runtime's guest-VRAM-picture policy. The empty-batch early-out then landed
 // ABOVE upload_vram, so the preserve control could not be reached and the screens went black again.
 //
-// So the predicate is deliberately about CHANGE, not about who owns rendering: rebuild when EITHER
-// source of a new picture fired. It carries the reason rather than a bool, so a caller (and a log)
-// can say WHICH input made it decide, instead of a bare "skipped".
+// So the predicate is deliberately about VISIBLE CHANGE, not activity: rebuild when either source
+// of a new picture fired. A texture/CLUT upload outside the displayed rectangle is real VRAM work,
+// but it cannot change scanout and must not replace the current composite. It remains pending until
+// the next real build. The decision carries the reason so diagnostics can name it.
 enum PresentRebuild {
   // Neither the geometry batch nor guest VRAM changed since the composite was built. Re-show it.
   PRESENT_REUSE_LAST = 0,
@@ -46,6 +47,8 @@ enum PresentRebuild {
 // vramWrites: a monotonically increasing count of guest CPU->VRAM write operations (the gpu_vk_dirty()
 //   chokepoint). vramWritesAtLastBuild: its value when the composite currently on screen was built.
 //   Compared with != rather than > so wraparound cannot wedge the decision into "never rebuild".
+// guestDisplayChanged: pending dirty rectangles intersect the displayed framebuffer. This is exact
+//   VRAM address ownership, not a classifier inferred from frame contents or primitive activity.
 // swRasterIsPicture: GpuState::sw_path() — the PSX SOFTWARE rasterizer drew this frame into s_vram
 //   (RenderPath::Psx). Then s_vram IS the picture at EVERY present and there is nothing to detect: the
 //   two inputs above are both structurally blind on that path. `batchEmpty` is permanently true (the
@@ -103,7 +106,8 @@ static inline PresentRebuild present_rebuild_decision(bool batchEmpty,
                                                       uint32_t vramWrites,
                                                       uint32_t vramWritesAtLastBuild,
                                                       bool rebuildForOwnership = false,
-                                                      bool swRasterIsPicture = false) {
+                                                      bool swRasterIsPicture = false,
+                                                      bool guestDisplayChanged = true) {
   if (swRasterIsPicture) {
     return PRESENT_REBUILD_VRAM;
   }
@@ -113,7 +117,7 @@ static inline PresentRebuild present_rebuild_decision(bool batchEmpty,
   if (rebuildForOwnership) {
     return PRESENT_REBUILD_OWNERSHIP;
   }
-  if (guestVramIsPicture && vramWrites != vramWritesAtLastBuild) {
+  if (guestVramIsPicture && guestDisplayChanged && vramWrites != vramWritesAtLastBuild) {
     return PRESENT_REBUILD_VRAM;
   }
   return PRESENT_REUSE_LAST;

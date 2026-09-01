@@ -8,7 +8,7 @@
 // composite was never built and the screen showed black for its whole duration.
 //
 // The predicate must therefore distinguish TWO ways a frame can be new (primitives, or a direct
-// framebuffer write) from the one way it can be unchanged (neither). Hermetic by construction: the
+// displayed-framebuffer write) from activity elsewhere in VRAM. Hermetic by construction: the
 // rule is pure integer/bool logic in gpu_vk_present_policy.h, so this needs no GPU, no window, no
 // disc image.
 //
@@ -63,6 +63,16 @@ int main(void) {
   check("upload-only screen: many VRAM writes since the build",
         present_rebuild_decision(true, true, 37, 0),
         PRESENT_REBUILD_VRAM);
+
+  check("off-display texture write does not replace the visible composite",
+        present_rebuild_decision(true,
+                                 true,
+                                 1,
+                                 0,
+                                 /*rebuildForOwnership=*/false,
+                                 /*swRasterIsPicture=*/false,
+                                 /*guestDisplayChanged=*/false),
+        PRESENT_REUSE_LAST);
 
   // ---- 2. What afca817d bought, which the fix must NOT give back. ---------------------------------
   // The Spider-Man 30Hz case: the guest built no ordering table for this field AND touched no VRAM.

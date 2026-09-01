@@ -2141,12 +2141,12 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   if (!s_inited) {
     init_gpu(game);
   }
-  // Widescreen world frames sample the widened FOV. A static 2D frame has no authored side columns,
-  // so keep the native source width; plan_present then centres the unchanged 4:3 picture with black
-  // side bars. The census is current-frame state (s_seen3d), never a prior-frame heuristic.
+  // Present the framebuffer extent the renderer owns. Do not infer the screen type from this
+  // field's primitive census: a persistent 3D composition may legitimately submit no world geometry
+  // while it is paused or updating only VRAM, and its extent must not change underneath it.
   const bool widePresentation = gpu_vk_wide_presentation(&game->core);
   const int wideWidth = gpu_vk_wide_presentation_w(&game->core);
-  const int disp_w = present_display_width(widePresentation, wideWidth, w, gpu_seen3d_this_frame(&game->core) != 0);
+  const int disp_w = present_display_width(widePresentation, wideWidth, w);
   s_present_sx = sx;
   s_present_sy = sy;
   s_last_sx = sx;
@@ -2274,12 +2274,14 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // …and a THIRD source, on which both of the inputs above are structurally blind: the PSX software
   // rasterizer (RenderPath::Psx) draws the frame into s_vram with no VK geometry and no dirty mark, so
   // s_vram is the picture at every present. See the policy header for the measurement.
+  const bool guestDisplayChanged = s_dirty.intersects(sx, sy, w, h);
   const PresentRebuild decision = present_rebuild_decision(geom_batch_empty(*this),
                                                            guestVramIsPicture,
                                                            s_vram_writes,
                                                            s_vram_writes_built,
                                                            ownershipPlan.rebuildForOwnership,
-                                                           game->gpu.sw_path());
+                                                           game->gpu.sw_path(),
+                                                           guestDisplayChanged);
   // `debug presentskip`: the decision's running DISTRIBUTION with its denominator. This is the
   // measurement that sizes the change for a given port: REUSE_LAST is what afca817d bought (an idle
   // field costing nothing), REBUILD_VRAM is what this predicate restored (an upload-only screen that
@@ -3951,8 +3953,6 @@ void gpu_vk_shadow_push_tri(Core *core, const float *v0, const float *v1, const 
   (void)v1;
   (void)v2;
 }
-int gpu_seen3d_this_frame(Core *core); // defined in gpu_native.cpp
-int gpu_had3d_last_frame(Core *core);
 
 // ---- dual-view / SBS target selection (single target in Pass 1) -------------------------------------
 void gpu_vk_select_target(int t) {

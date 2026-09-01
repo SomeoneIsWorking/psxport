@@ -57,6 +57,11 @@ int gpu_vk_enabled(void); // gpu_vk.c (declared early for the gp0 tee)
 int gpu_had3d_last_frame(Core *core) {
   return core->game->gpu.s_prev_had3d;
 }
+// KEPT DESPITE having no in-framework caller: Tomba2Engine's render_walk.cpp calls it, declaring it
+// LOCALLY (`int gpu_seen3d_this_frame(Core *);` at its call site) rather than including a framework
+// header. A grep of psxport's headers therefore finds no caller and reads as dead — which is exactly
+// how the GpuState de-globalization deleted it and broke the reference consumer's link. A consumer's
+// local forward declaration is invisible to a framework-side caller audit; check the game trees too.
 int gpu_seen3d_this_frame(Core *core) {
   return core->game->gpu.s_seen3d;
 }

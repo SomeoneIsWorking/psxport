@@ -245,8 +245,8 @@ struct GpuVkState {
   // s_vram_writes counts CPU->VRAM write operations as they arrive at the dirty() chokepoint that
   // every such path already calls (GP0 0xA0 upload, GP0 0x02 fill, VRAM->VRAM copy, and the native
   // gpu_native_load_image). s_vram_writes_built records its value when the composite currently on
-  // screen was built. Equal means the guest has not touched the framebuffer since, which — together
-  // with an empty geometry batch — is the only state in which there is genuinely nothing new to show.
+  // screen was built. A difference is visible only when the pending dirty rectangles intersect the
+  // displayed framebuffer; offscreen texture/CLUT writes remain pending without replacing scanout.
   // See gpu_vk_present_policy.h for why the batch alone is not that test.
   uint32_t s_vram_writes = 0;
   uint32_t s_vram_writes_built = 0;
