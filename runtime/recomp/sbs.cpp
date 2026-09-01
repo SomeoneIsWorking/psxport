@@ -52,10 +52,8 @@
 #include <lucent/log.h>
 #include <map>
 #include <set>
-#include <string>
 #include <tuple>
 #include <unistd.h>
-#include <unordered_map>
 #include <vector>
 
 // --- runtime entry points reused from the normal boot path / dual-core harness ---
@@ -2967,6 +2965,8 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
   mB->spu.writeLog = spu_new_log();
   lucent::info("sbs",
                "core A pc_faithful (hard-wired): native faithful path, byte-exact strict — B recomp is the oracle");
+  // A is the port under test: pinned to the substrate whatever PSXPORT_ENGINE says, or this harness
+  mA->core.engine = psx::exec::Engine::Substrate; // ...would compare an engine against itself.
   if (mMode == M_ORACLE) {
     mB->core.engine = psx::exec::Engine::Interpreter;
   }

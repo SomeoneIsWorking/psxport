@@ -523,6 +523,41 @@ bool enh_named(const char *name) {
   return enh_gate(name, selected);
 }
 
+// PSXPORT_ENGINE — which engine executes guest code (engine_select.h). A TextVar for the same reason
+// as cv_render_path: the settings file and the REPL read as the thing they select, and a typo is
+// rejected by engine_parse rather than resolving to a plausible number. NOT persistable — the engine
+// is a measurement/bring-up choice during the migration off static recompilation, not a user
+// preference, and a stale `engine=` line in a settings file silently selecting a slow or unfinished
+// engine is exactly the confusion this knob exists to end.
+TextVar cv_engine("PSXPORT_ENGINE",
+                  psx::exec::name(psx::exec::kDefault),
+                  "guest execution engine: substrate (statically recompiled C) | interpreter (the flat "
+                  "MIPS interpreter, also the divergence oracle) | jit (runtime translation)",
+                  /*persistable=*/false);
+
+// selected_engine() — the resolved engine, REFUSING rather than falling back. See the comment in
+// config_vars.h for why this one aborts where render_path() warns.
+psx::exec::Engine selected_engine() {
+  const std::string &s = cv_engine.get();
+  psx::exec::Engine e = psx::exec::kDefault;
+  if (!psx::exec::engine_parse(s.c_str(), &e)) {
+    std::string valid;
+    for (int i = 0; i < psx::exec::kNameCount; ++i) {
+      valid += (i ? " | " : "");
+      valid += psx::exec::kNames[i];
+    }
+    lucent::error("cfg",
+                  "PSXPORT_ENGINE='{}' names none of the {} engines this build has. Valid: {}. "
+                  "Refusing rather than running the default, which would report a run of an engine "
+                  "that never executed an instruction.",
+                  s,
+                  psx::exec::kNameCount,
+                  valid);
+    abort();
+  }
+  return e;
+}
+
 // PSXPORT_RENDER_PATH — the RENDER PATH tri-state: native | gte | psx
 // (docs/plans/render-path-tristate.md). A TextVar rather than an int so the settings file and the REPL
 // both read as the thing they select, and so a typo is REJECTED by render_path_parse instead of

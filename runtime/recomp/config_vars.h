@@ -13,11 +13,24 @@
 // pre-migration one in tests/test_config_cvar.cpp — the compatibility gate is the point of the
 // exercise, not a formality.
 #include "config_var.h"
-#include "render_mode.h" // RenderPath — the type cv_render_path resolves to
+#include "engine_select.h" // psx::exec::Engine — the type cv_engine resolves to
+#include "render_mode.h"   // RenderPath — the type cv_render_path resolves to
 
 namespace psx::config {
 
 // ── run mode ────────────────────────────────────────────────────────────────────────────────────
+// PSXPORT_ENGINE=substrate|interpreter|jit — WHICH ENGINE executes guest code, for every Core that
+// does not demand a specific one (the SBS/selftest oracle panes assign theirs explicitly). Read it
+// through selected_engine(), never by parsing the text at a call site.
+//
+// It REFUSES an unrecognised name instead of warning and falling back, which is the one place this
+// knob deliberately differs from cv_render_path below. Falling back would run the shipping substrate
+// while the operator believed they were measuring another engine — and "the engine was selected" and
+// "the engine never ran" producing the same run is the exact defect I001 removed from the routing
+// table. A knob that can lie about which engine ran is worse than no knob.
+extern TextVar cv_engine;
+psx::exec::Engine selected_engine();
+
 // PSXPORT_ORACLE — the pure PSX reference mode (recomp gameplay + UNENHANCED PSX render). Consulted
 // by every enhancement gate that could contaminate the PSX render. Launch-time only; there is no
 // coherent meaning to flipping it mid-run, so it is not persistable.

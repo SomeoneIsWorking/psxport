@@ -68,6 +68,43 @@ static void test_names_are_distinct(void) {
   CHECK(name((Engine)((int)Engine::kCount + 1)) != nullptr); // never returns null
 }
 
+// name() and engine_parse() must be inverses over the WHOLE enum. A new engine that gains a route
+// but no spelling is an engine nobody can select from PSXPORT_ENGINE, which reads at runtime exactly
+// like an engine that was selected and never ran.
+static void test_name_parse_round_trips(void) {
+  CHECK_EQ(kNameCount, (int)Engine::kCount);
+  for (int i = 0; i < kEngineCount; ++i) {
+    Engine got = Engine::kCount;
+    CHECK(engine_parse(name(kAllEngines[i]), &got));
+    CHECK(got == kAllEngines[i]);
+  }
+}
+
+// Case-insensitive, matching PSXPORT_RENDER_PATH — a knob that works only in lower case is a knob
+// that silently did nothing for whoever shouted it.
+static void test_parse_ignores_case(void) {
+  Engine got = Engine::kCount;
+  CHECK(engine_parse("INTERPRETER", &got));
+  CHECK(got == Engine::Interpreter);
+  CHECK(engine_parse("Jit", &got));
+  CHECK(got == Engine::Jit);
+}
+
+// THE SECOND NEGATIVE: nothing unrecognised may resolve. `*out` must also survive untouched, so a
+// caller that ignores the false still cannot end up running an engine it did not ask for.
+static void test_unparseable_names_are_rejected(void) {
+  const char *kBad[] = {nullptr, "", " ", "substrat", "substratee", "0", "1", "true", "interp", "recomp", "lightrec"};
+  const int kBadCount = (int)(sizeof(kBad) / sizeof(kBad[0]));
+  int rejected = 0;
+  for (int i = 0; i < kBadCount; ++i) {
+    Engine got = Engine::Jit; // a sentinel that is NOT the default, so a silent write is visible
+    if (!engine_parse(kBad[i], &got) && got == Engine::Jit) {
+      rejected++;
+    }
+  }
+  CHECK_EQ(rejected, kBadCount); // denominator: every bad spelling probed
+}
+
 // The shipping default must remain the substrate: this refactor changes no behaviour.
 static void test_default_engine_is_substrate(void) {
   CHECK(kDefault == Engine::Substrate);
@@ -79,6 +116,9 @@ int main(void) {
   RUN(route_mapping);
   RUN(unknown_engine_refuses);
   RUN(names_are_distinct);
+  RUN(name_parse_round_trips);
+  RUN(parse_ignores_case);
+  RUN(unparseable_names_are_rejected);
   RUN(default_engine_is_substrate);
   return pt_summary();
 }

@@ -518,7 +518,8 @@ static int run_oraclediff(const char *path) {
   }
   const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
   Game *A = new Game();
-  A->psx_fallback = 0; // native port core (renders via VK)
+  A->psx_fallback = 0;                           // native port core (renders via VK)
+  A->core.engine = psx::exec::Engine::Substrate; // ...and the port under test, whatever PSXPORT_ENGINE says
   Game *B = new Game();
   B->psx_fallback = 1;
   B->core.engine = psx::exec::Engine::Interpreter; // pure-PSX interpreter oracle core

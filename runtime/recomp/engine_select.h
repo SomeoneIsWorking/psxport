@@ -19,6 +19,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <strings.h> // strcasecmp — engine_parse
 
 namespace psx::exec {
 
@@ -75,6 +76,29 @@ inline constexpr const char *name(Engine e) {
     break;
   }
   return "unknown";
+}
+
+// The valid spellings, in enum order, as ONE list. It is what a refusal prints and what the
+// round-trip test counts against, so a new engine that forgets its name fails a test rather than
+// becoming an unspellable engine nobody can select.
+inline constexpr const char *kNames[] = {"substrate", "interpreter", "jit"};
+inline constexpr int kNameCount = (int)(sizeof(kNames) / sizeof(kNames[0]));
+static_assert(kNameCount == (int)Engine::kCount, "every Engine needs a spelling in kNames");
+
+// Text -> Engine. Returns false and leaves *out untouched for anything it does not recognise,
+// INCLUDING null and empty: an unrecognised engine name must never resolve to a plausible engine.
+// Case-insensitive, matching the other text knobs (render_path_parse).
+inline bool engine_parse(const char *s, Engine *out) {
+  if (!s || !*s || !out) {
+    return false;
+  }
+  for (int i = 0; i < kNameCount; ++i) {
+    if (strcasecmp(s, kNames[i]) == 0) {
+      *out = (Engine)i;
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace psx::exec

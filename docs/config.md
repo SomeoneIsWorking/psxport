@@ -125,6 +125,31 @@ output to say why.
 Read this before adding a new `getenv("PSXPORT_…")`. The repo accumulated ~105 ad-hoc env flags, each
 with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now centralized.
 
+## `PSXPORT_ENGINE` — which engine executes guest code
+
+`PSXPORT_ENGINE=substrate|interpreter|jit` picks the execution engine for every Core that does not
+demand a specific one. It is orthogonal to the render flags below: those choose who draws the picture,
+this chooses who runs the instructions.
+
+| value | engine |
+|---|---|
+| `substrate` (default) | the statically recompiled C in `generated/shard_*.c` — what ships today |
+| `interpreter` | the flat MIPS interpreter (`runtime/recomp/interp.cpp`), also the divergence oracle |
+| `jit` | runtime translation. Not built in yet; selecting it aborts by name rather than pretending |
+
+**It refuses an unrecognised name instead of warning and falling back**, which is the one place it
+deliberately differs from `PSXPORT_RENDER_PATH`. Falling back would run the shipping substrate while
+the operator believed they were measuring another engine — and a run where "the engine was selected"
+and "the engine never ran" look identical is exactly the defect the selector (`engine_select.h`,
+jit-common I001) was built to remove. It is **not persistable**: the engine is a measurement and
+bring-up choice during the migration off static recompilation, not a user preference, and a stale
+`engine=` line silently selecting a slow or unfinished engine is the confusion this knob exists to end.
+
+The two-core harnesses pin their own panes and ignore this knob: SBS core A and the `oraclediff`
+core A are the port under test and stay on the substrate; the oracle panes stay on the interpreter.
+Otherwise setting the knob would turn a divergence harness into two copies of one engine, which
+reports no divergence for the wrong reason.
+
 ## The 5 canonical run flags (path selection) — see AGENTS.md for full vocab
 
 | flag | selects | notes |
