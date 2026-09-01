@@ -1,10 +1,16 @@
-// The runtime's ONE execution substrate: a flat Core interpreter that runs all guest code
-// (the boot stub, MAIN.EXE, and the disc code overlays) directly from g_ram. The static
-// recompiler was dropped from the build (see docs/journal.md "later-101"); emit.py survives
-// only as an offline analysis aid. There is a single instruction core (exec_simple) and a
-// single control-flow loop (interp_flat); the two public entry points — rec_coro_run (a
-// cooperative task) and rec_interp (a synchronous nested call / super-call) — are thin
+// A flat Core interpreter that runs guest code (the boot stub, MAIN.EXE, and the disc code
+// overlays) directly from g_ram. There is a single instruction core (exec_simple) and a
+// single control-flow loop (interp_flat); the two public entry points — interp_coro_run (a
+// cooperative task) and interp_run (a synchronous nested call / super-call) — are thin
 // wrappers over it that differ only in their return sentinel. See the wrappers at the bottom.
+//
+// WHICH SUBSTRATE SHIPS: the static recompiler is NOT retired. `generated/shard_*.c` is the
+// native port Core's substrate and dispatch.cpp routes there whenever Core::engine is Substrate, which
+// is the default (core.h). This interpreter is compiled in as the ORACLE engine only — see the
+// later-278 note below. An earlier version of this header claimed the recompiler had been
+// dropped from the build at later-101 and that emit.py was an offline aid; that was true for one
+// era and is contradicted today by dispatch.cpp, by core.h's Substrate engine default, and by
+// every consuming title's CMakeLists compiling its generated shards.
 //
 // The loop is FLAT (not C-recursive): jal/jalr set the link reg and JUMP; the called code keeps
 // its own frame on the PSX stack in g_ram and returns by `jr ra`. This lets a cooperative yield
@@ -17,6 +23,7 @@
 // div/mult via cpu_div/mult helpers; GTE via gte_op/gte_read/write.
 #include "cfg.h"
 #include "core.h"
+#include "engine_select.h"
 #include "game.h" // c->game->platform_hle
 #include "interp_diagnostics.h"
 #include "override_registry.h"
@@ -28,9 +35,9 @@
 
 // ORACLE engine (later-278): this file is recompiled back in as the INTERPRETER ENGINE for the oracle
 // Core only (docs/oracle.md). The native port Core still runs the recomp substrate; a per-Core flag
-// `c->use_interp` routes the oracle Core's dispatch here instead. The public entries are renamed
-// interp_coro_run / interp_run so they do NOT collide with dispatch.cpp's substrate shims of the old
-// rec_coro_run / rec_interp names (those shims now forward HERE when c->use_interp).
+// `Core::engine == Engine::Interpreter` routes the oracle Core's dispatch here instead. The public entries are
+// renamed interp_coro_run / interp_run so they do NOT collide with dispatch.cpp's substrate shims of the old
+// rec_coro_run / rec_interp names (those shims now forward HERE for the Interpreter engine).
 void interp_run(Core *c, uint32_t pc);
 
 #define RS(i) (((i) >> 21) & 31)
@@ -712,9 +719,9 @@ static int coro_native_call(Core *c, uint32_t tgt) {
   }
   // ORACLE: the pure-PSX oracle Core interprets EVERY game/overlay function — it must NOT drop into a
   // recompiled body (that is the thing under test, and freezes in the cutscene). Skip the substrate route
-  // for use_interp cores; only is_bios + platform_hle (above) run native. Non-oracle (hybrid) cores keep
+  // for interpreter cores; only is_bios + platform_hle (above) run native. Non-oracle (hybrid) cores keep
   // the recomp-body fast path.
-  if (!c->use_interp && psxport_recomp()->rec_func_index(tgt) >= 0 &&
+  if (psx::exec::route(c->engine) != psx::exec::Route::Interpreter && psxport_recomp()->rec_func_index(tgt) >= 0 &&
       (!(d.sg_lo | d.sg_hi) || (tgt >= d.sg_lo && tgt < d.sg_hi))) {
     d.callring[d.callring_pos++ & 63] = tgt; // derail diagnostics: last compiled entries
     rec_dispatch(c, tgt);

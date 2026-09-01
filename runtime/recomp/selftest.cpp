@@ -10,6 +10,7 @@
 #include "c_subsys.h" // mdec_* primitives (run_mdecpump)
 #include "cfg.h"
 #include "core.h"
+#include "engine_select.h"
 #include "game.h"
 #include "game_iface.h"       // psxport_game_config() — the stage predicate is GAME data, not framework data
 #include "hle.h"              // Hle::i_stat — the interrupt controller run_spuirq asserts on
@@ -315,7 +316,7 @@ static int run_narration(const char *path) {
 }
 
 // ORACLE smoke test (later-278) — boot ONE core as the pure-PSX INTERPRETER oracle (psx_fallback + the new
-// use_interp engine) and prove it runs the intro cutscene WITHOUT the recomp substrate's two failure modes:
+// Interpreter engine) and prove it runs the intro cutscene WITHOUT the recomp substrate's two failure modes:
 // the recomp-MISS on the un-recompiled overlay code (the interpreter interprets it) and the mis-emitted
 // in-function `jr` freeze that stuck the full-PSX GAME loop counter at ~34 (later-272 — the interpreter runs
 // the jump directly, so no corruption). PASS = reaches GAME, the loop counter advances FAR past 34 over a
@@ -331,8 +332,8 @@ static int run_oracle(const char *path) {
   }
   const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
   Game *game = new Game();
-  game->psx_fallback = 1;    // FULL PSX: cooperative tasks run as coroutine-resumed bodies...
-  game->core.use_interp = 1; // ...but INTERPRETED (the oracle engine), not the recomp substrate
+  game->psx_fallback = 1;                             // FULL PSX: cooperative tasks run as coroutine-resumed bodies...
+  game->core.engine = psx::exec::Engine::Interpreter; // ...but INTERPRETED (the oracle engine), not the substrate
   game->core.rsub.mode.setPath(
       RenderPath::Psx); // ...and SOFTWARE-rasterized (docs/oracle.md Phase 2) into its own s_vram
   Core *c = &game->core;
@@ -520,7 +521,7 @@ static int run_oraclediff(const char *path) {
   A->psx_fallback = 0; // native port core (renders via VK)
   Game *B = new Game();
   B->psx_fallback = 1;
-  B->core.use_interp = 1; // pure-PSX interpreter oracle core
+  B->core.engine = psx::exec::Engine::Interpreter; // pure-PSX interpreter oracle core
   B->core.rsub.mode.setPath(
       RenderPath::Psx); // ...soft-rasterized into its own s_vram (render-diff decoupled from A's VK)
   void gpu_native_shot(Core *, const char *);

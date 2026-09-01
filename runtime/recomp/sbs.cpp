@@ -7,7 +7,7 @@
 //   render   (default): A = native gameplay + NATIVE render,  B = native gameplay + PSX render
 //   gameplay:           A = native gameplay,  B = PSX gameplay (psx_fallback); render IDENTICAL (PSX) on both
 //   full:               A = full native (native gp + native render),  B = full PSX (PSX gp + PSX render)
-//   oracle:             A = full native,  B = PURE ORACLE — the interpreter engine (use_interp) + the
+//   oracle:             A = full native,  B = PURE ORACLE — the Interpreter engine + the
 //                       software rasterizer (soft_gpu), NOT the recomp substrate (psx_fallback alone). B's
 //                       render|gameplay|full psx_fallback pane shares A's native rasterizer so it can't
 //                       isolate a native-render-only bug (docs/oracle.md).
@@ -2968,7 +2968,7 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
   lucent::info("sbs",
                "core A pc_faithful (hard-wired): native faithful path, byte-exact strict — B recomp is the oracle");
   if (mMode == M_ORACLE) {
-    mB->core.use_interp = 1;
+    mB->core.engine = psx::exec::Engine::Interpreter;
   }
   load_exe(exePath, &mA->core);
   dc_boot_init(&mA->core);

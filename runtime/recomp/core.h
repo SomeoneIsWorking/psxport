@@ -24,6 +24,7 @@
 #ifdef __cplusplus
 
 #include "cpu_divide.h"
+#include "engine_select.h"
 #include "frame_pacer.h"
 
 class Game; // the whole-machine owner (game.h); Core::game points back to it so any code holding a
@@ -137,13 +138,17 @@ public:
   // shared between two Cores. Status bit 0 is the master interrupt enable — see stubs.cpp.
   uint32_t cop0[16] = {};
 
-  // ORACLE engine select (later-278, docs/oracle.md). 0 = run guest code as the recomp SUBSTRATE
-  // (the shipping native port). 1 = run guest code through the pure MIPS INTERPRETER (interp.cpp) —
-  // used ONLY by the oracle Core in the divergence harness, which must interpret the real overlay
-  // cutscene code the recompiler has no entry for (so it neither freezes nor hits a recomp-MISS).
-  // The four engine entry points (rec_dispatch / rec_coro_run / rec_interp / rec_super_call) check
-  // this and route to interp_run / interp_coro_run when set.
-  int use_interp = 0;
+  // WHICH ENGINE executes this Core's guest code (engine_select.h owns the enum and the routing
+  // policy; do not branch on it directly — call rec_* and let dispatch.cpp route).
+  //   Substrate   — the recompiled C (generated/shard_*.c): the shipping native port.
+  //   Interpreter — the pure MIPS interpreter (interp.cpp), used by the oracle Core in the
+  //                 divergence harness (later-278, docs/oracle.md). It interprets the real overlay
+  //                 cutscene code the recompiler has no entry for, so it neither freezes nor hits a
+  //                 recomp-MISS.
+  //   Jit         — runtime translation; not yet implemented (shared/jit-common).
+  // Was `int use_interp` until I001; a boolean could not name a third engine and routed anything it
+  // did not recognise into the substrate.
+  psx::exec::Engine engine = psx::exec::kDefault;
 
   // Interpreter trace/profile/diagnostic state (interp.cpp) — per-Core so SBS profiles never
   // interleave. Pure diagnostics; no guest-state effect.

@@ -15,6 +15,7 @@
 // overlay, or an address no module recompiled, still FAILS FAST in rec_dispatch_miss by design.
 #include "overlay_router.h"
 #include "core.h"
+#include "engine_select.h"
 #include "game.h"              // PcScheduler::resident_ov (per-core resident-overlay-by-slot map)
 #include "override_registry.h" // overrides::dispatch — native engine/game override interception
 #include "recomp_iface.h"      // seam: psxport_recomp() -> main_dispatch / rec_func_index / overlay table
@@ -410,8 +411,10 @@ void recdep_dump(Core *core) {
 void rec_dispatch(Core *c, uint32_t addr) {
   // ORACLE Core (later-278): interpret the target instead of routing to a recompiled body. The
   // interpreter handles overlay/non-recompiled code natively (no fail-fast miss), which is exactly why
-  // the oracle uses it. The native port Core (use_interp==0) takes the substrate route below.
-  if (c->use_interp) {
+  // the oracle uses it. A Substrate Core takes the substrate route below. This is a genuine SECOND
+  // entry point (generated code calls rec_dispatch directly), not a duplicated decision: the policy
+  // still lives once, in engine_select.h.
+  if (psx::exec::route(c->engine) == psx::exec::Route::Interpreter) {
     if (overrides::dispatchOracle(c, addr)) {
       return;
     }
