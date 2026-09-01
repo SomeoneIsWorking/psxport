@@ -1,7 +1,7 @@
 # Faithful-port framework — `port_gen.py` / `guest_abi.h` / `port_check.py`
 
 Three layers, built together, that make the #1 recurring porting bug class (ABI/stack-frame
-transcription errors — see `docs/abi-extract.md`'s bug catalog, and CLAUDE.md's "MIRROR THE GUEST
+transcription errors — see `docs/abi-extract.md`'s bug catalog, and AGENTS.md's "MIRROR THE GUEST
 STACK") structurally hard to write in the first place, instead of catching it after the fact. All
 three build on `tools/abi_extract.py`'s parser of `generated/*.c` (the recompiler's ground-truth
 output) — nothing here forks a second parser of that dialect.
@@ -128,7 +128,7 @@ python3 tools/port_check.py game/render/perobj_dispatch.cpp game/audio/sequencer
   unrolling-boundary effect as `cmdListDispatch` (gen's linear text carries BOTH the `mode==1` and
   `mode==2` `sz`-minmax write blocks as separate labeled regions — see `docs/abi-extract.md`'s own
   documented gap on this exact function — while the native port correctly consolidates them into one
-  parameterized write, per CLAUDE.md's anti-duplication rule), but **not fully re-verified
+  parameterized write, per AGENTS.md's anti-duplication rule), but **not fully re-verified
   line-by-line within this session's budget** — flagged here as a genuine open finding for a
   follow-up RE pass, not dismissed as tool noise. Recorded as an OPEN finding, not a confirmed bug or
   a confirmed non-bug.
@@ -140,7 +140,7 @@ real loop, the textual counts differ even though the runtime behavior is identic
 still reports FAIL (never a false PASS) in this situation; a human must distinguish "unrolling
 artifact" from "real missing store" by inspecting `generated/*.c` directly, exactly as done above.
 Recording this explicitly rather than silently special-casing it away — a special case here would be
-the same "no bandaids" violation CLAUDE.md bans elsewhere.
+the same "no bandaids" violation AGENTS.md bans elsewhere.
 
 ### 4. Demo migration to `guest_abi.h` — SBS-full 0-diff
 

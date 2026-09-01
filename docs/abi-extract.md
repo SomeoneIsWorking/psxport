@@ -19,7 +19,7 @@ save spill / `c->r[31]`-before-call / callee-saved-register-liveness boilerplate
   bug, `docs/findings/render.md`)
 
 `tools/abi_extract.py` parses the RECOMPILED C TEXT under `generated/` (ground truth — never Ghidra's
-pseudo-C, which garbles COP2/delay slots per CLAUDE.md's "Ghidra first, never disas.py walk" rule) for a
+pseudo-C, which garbles COP2/delay slots per AGENTS.md's "Ghidra first, never disas.py walk" rule) for a
 given guest address and emits the contract mechanically, so these stop being hand-derived from scratch
 every time.
 
@@ -273,7 +273,7 @@ per-branch scratch groups with their guard chains.
    expressions that are provably equal (e.g. `c->r[2] + c->r[0]` vs `c->r[2]`) are NOT recognized as
    the same value and can spuriously show up as "conditionally live" when they're actually identical.
    This trades a few false "conditional" flags for never silently collapsing a genuinely different pair
-   of values into one wrong answer — the safe direction per CLAUDE.md's "no bandaids."
+   of values into one wrong answer — the safe direction per AGENTS.md's "no bandaids."
 2. **`--audit` is still a literal-substring grep, not scope-aware.** It cannot tell whether a matching
    offset/constant is in the right call-site scope in the native file, or is an unrelated use of the
    same number. Treat every `[!!]` as "investigate" and every `[ok]` as "no obvious problem found," not

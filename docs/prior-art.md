@@ -14,7 +14,7 @@ decomp is an excellent source of function boundaries and names; it is not eviden
 | `theMagicalKarp/open-spyro` | **CC0-1.0** | take code AND ideas freely, cite as courtesy |
 | `TheMobyCollective/spyro-1` | **CC0-1.0** | same — the primary Spyro decomp reference (vendored `spyro/external/spyro-1`) |
 | `OpenDriver2/PsyCross` | **MIT** | code AND ideas freely — the Psy-Q SDK reference (vendored `psxport/external/psycross`) |
-| `TwilitRealm/dusklight` | **CC0** | same (see `CLAUDE.md`) |
+| `TwilitRealm/dusklight` | **CC0** | same (see `AGENTS.md`) |
 | `mstan/psxrecomp` | **PolyForm Noncommercial 1.0.0** | **READ AND LEARN ONLY.** Copying code drags the noncommercial term into this repo. Take the SHAPE, never the text |
 | `hansbonini/psx_tomba` | check before use | not yet verified — do that before taking anything |
 

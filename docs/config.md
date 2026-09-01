@@ -125,7 +125,7 @@ output to say why.
 Read this before adding a new `getenv("PSXPORT_…")`. The repo accumulated ~105 ad-hoc env flags, each
 with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now centralized.
 
-## The 5 canonical run flags (path selection) — see CLAUDE.md for full vocab
+## The 5 canonical run flags (path selection) — see AGENTS.md for full vocab
 
 | flag | selects | notes |
 |---|---|---|
@@ -362,7 +362,7 @@ cfg_loge("chan", fmt, …)  // ("[cd:warn]" / "[cd:error]") so they stay greppab
 - `cfg_dump()` logs every active `PSXPORT_*` var once (boot-time visibility).
 
 ## PC enhancements: the gate is `psx::config::enh*` (USER 2026-07-16; ON THE LADDER 2026-08-12)
-The third behavior class (see CLAUDE.md vocabulary): deliberate, MEANINGFUL guest-state changes on
+The third behavior class (see AGENTS.md vocabulary): deliberate, MEANINGFUL guest-state changes on
 top of the faithful engine — unlike pc_render (host-only picture) and synchronous task completion
 (multi-step wait collapse with the same authored end state).
 

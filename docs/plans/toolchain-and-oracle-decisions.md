@@ -10,7 +10,7 @@ records the FINAL position, not the history of it.
 | add **clang-tidy** | **STANDS** — done; the normal gate checks every compile-backed first-party C++ TU |
 | drop **`extern "C"`** | **REVERSED** — *"revert ... extern C"*. Kept. |
 | drop **beetle** | **REVERSED** — *"revert 'Don't use beetle'"*. Kept, GPU oracle included. |
-| **never duplicate code, no matter the reason** | new, standing — see `CLAUDE.md` |
+| **never duplicate code, no matter the reason** | new, standing — see `AGENTS.md` |
 
 ## clang-format — applied, and now enforced
 

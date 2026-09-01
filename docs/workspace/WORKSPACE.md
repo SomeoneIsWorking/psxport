@@ -11,11 +11,11 @@ All of these live in the psxport repo, so they reach every game tree and every s
 
 | read this | for |
 |---|---|
-| **`psxport/CLAUDE.md`** | **how a game consumes the framework** — build/run, CVars, the seam, `generated/`, RE-first, diagnostics, registries, Dusklight. THE authority |
+| **`psxport/AGENTS.md`** | **how a game consumes the framework** — build/run, CVars, the seam, `generated/`, RE-first, diagnostics, registries, Dusklight. THE authority |
 | **`docs/workspace/PROTOCOL.md`** | the multi-agent protocol (area claims) and the standing rules |
 | `docs/workspace/LAYOUT.md` · `docs/plans/*.md` | target directory organization · designs not yet implemented |
 | `docs/findings/*.md` | measured findings, and the incidents the rules came from |
-| `<game>/CLAUDE.md` | that game's own specifics — the authority for that repo |
+| `<game>/AGENTS.md` | that game's own specifics — the authority for that repo (its `CLAUDE.md` is a symlink) |
 
 ## What is here
 

@@ -3,7 +3,7 @@
 **Unlabeled content is machine convention, revisable by any session. USER lines are verbatim dated
 quotes, and only those.** Each rule's measurement lives in `docs/findings/workspace-incidents.md` — this
 file keeps the rule, that file keeps the evidence. How a game *consumes* the framework (build, CVars,
-seam, `generated/`, RE tooling, diagnostics) is `psxport/CLAUDE.md`; this file is about several agents
+seam, `generated/`, RE tooling, diagnostics) is `psxport/AGENTS.md`; this file is about several agents
 changing one framework at once.
 
 Seven game repos share ONE framework, and there are seven checkouts of it — one writable, six not:
@@ -456,7 +456,7 @@ not finished work.** At any of these triggers — a magic offset, a `sub_XXXX`/`
 call, a mystery `obj[+0xNN]`, a value you cannot name — **STOP and decompile the surrounding function.**
 The shared tool inventory (`decomp.sh` — over `ghidra_decomp.py`, the underlying decompile driver —
 `abi_extract.py`, `port_gen.py`, `port_check.py`) and the `port_check` static-store trap are in
-`psxport/CLAUDE.md`. What is only here:
+`psxport/AGENTS.md`. What is only here:
 
 - **Per-repo tooling:** `spider1/tools/` (`ghidra_export.py`, `ghidra_import.sh`, `ghidra_query.py`,
   `ghidra_seed.py`), `Tomba2Engine/tools/` (`ghidra_overlay.py`, `ghidra_xrefs.py`, `disasm_overlay.py`),
@@ -476,7 +476,7 @@ The shared tool inventory (`decomp.sh` — over `ghidra_decomp.py`, the underlyi
 
 ## Diagnostics and the boot gate — two pointers and the two things agents get wrong
 
-Diagnostics rules are in `psxport/CLAUDE.md`. The two agents keep violating: new and touched code calls
+Diagnostics rules are in `psxport/AGENTS.md`. The two agents keep violating: new and touched code calls
 `lucent::` not `cfg_*`, and **never wrap a log call in a condition** — it is channel-gated internally and
 does not evaluate its arguments when off, so a guard re-creates the `if (dbg) fprintf(...)` idiom the
 logger exists to abolish. The one legitimate guard is around expensive NON-LOGGING work, guarding a BLOCK.
@@ -487,7 +487,7 @@ the end. Going backwards is a regression even if your own test is green.
     cd <yourgame> && cmake --build build --target <port> -j$(nproc)   # build EXPLICITLY, never run.sh
     PSXPORT_NOPACE=1 python3 tools/gate.py boot --frames 400 --expect-stage <entry> --expect-sm48 <n>
 
-**NEVER `./run.sh` — that is the USER's play launcher** (USER 2026-08-11, quoted in `psxport/CLAUDE.md`),
+**NEVER `./run.sh` — that is the USER's play launcher** (USER 2026-08-11, quoted in `psxport/AGENTS.md`),
 and its submodule re-sync silently reverts in-progress framework work to the recorded pin under you.
 `PSXPORT_NOPACE=1` because a headless run is paced now, and without it the gate measures ~60 presents per
 second instead of several hundred, making every before/after number incomparable. Assert the ADVANCE past
