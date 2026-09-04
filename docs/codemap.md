@@ -48,6 +48,9 @@ library never depends on a test oracle.
 | Maintenance tooling | Formatting, lint, source-layout, diagnostics, and analysis commands | `tools/`, `tools/lint/`, `tools/fmv_compare/`, `tools/fmv_export/` | Cohesive Python tool; reusable tools move to shared/re-harness | `AGENTS.md` |
 | Build composition | Framework library, dependency, tool, and test targets | `CMakeLists.txt`, `cmake/`, `tools/CMakeLists.txt` | Existing CMake owner; gameplay and oracle targets remain disjoint | `README.md` |
 | Host utilities | Title-neutral environment/process helpers | `common/` | Small cohesive module under `common/` | `common/env.h` |
+| External source checkout | Existing psycross checkout used by historical development flows | `external/psycross/` | No new framework ownership; replace any live dependency with an explicit pinned resolver or remove it when unused | `external/psycross/README.md` |
+| Legacy workspace scripts | Existing shell bootstrap/submodule/OpenBIOS helpers and Python self-test entry | `scripts/` | Migrate any touched live shell workflow into the owning Python tool, then delete the shell entry rather than extending it | `AGENTS.md` |
+| Stale build trees | Disposable generated compiler output from prior verification | ignored `build-*/`, `build_*/` | No new work; clean with an explicit repository-scoped build cleanup tool | `AGENTS.md` |
 
 ## Where does new work go?
 
@@ -84,4 +87,7 @@ tools/
   fmv_export/   focused FMV extraction/verification tool
 cmake/          framework build composition
 vendor/         pinned third-party/fork dependencies
+external/       historical external checkout pending dependency audit
+scripts/        legacy workspace helpers; touched shell flows migrate to Python
+build-*/        ignored stale build output; cleanup target, never source ownership
 ```
