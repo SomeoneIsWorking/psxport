@@ -21,6 +21,24 @@ The resolved value, source layer, and complete `PSXPORT_*` environment denominat
 through `psx::config::report()` and the `cvars` runtime command. `PSXPORT_LOG_FILE` selects the log
 sink. `PSXPORT_DEBUG` is the comma-separated diagnostic-channel set.
 
+## Diagnostic runs and bounded fallback
+
+`PSXPORT_DIAGNOSTIC_RUN` accepts `product`, `compare-candidate`, or `compare-reference`. It labels
+the role of the same dynarec/native runtime; it is not a CPU-engine selector. Consumer code reads
+`psx::config::diagnostic_run_mode()` and harnesses use the typed, nestable
+`psx::config::ScopedDiagnosticRun`. Both comparison roles suppress requested enhancements through
+the shared `psx::config::enh()` / `enh_named()` gate so title code does not duplicate comparison
+configuration semantics. Invalid roles fail closed at that gate and are logged by name.
+
+`PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT` is the maximum automatic interpreter-fallback blocks one
+bounded executor call may admit. Its default is `1`, matching the verified difficult-block escape;
+a second fallback block in the same call is a typed execution fault. `0` disables automatic
+fallback admission without creating a selectable interpreter mode. Negative values are invalid and
+fault before guest execution. Lightrec asks the executor before entering any fallback block, so a
+zero limit executes zero interpreter instructions. Lightrec shutdown and explicit turn-end reports
+name executor calls, executed blocks/instructions, admitted and refused fallback blocks, every
+admitted/refused reason count, and the policy applied to the most recent execution.
+
 ## Logging
 
 Runtime code logs through `cfg_logi`, `cfg_logw`, `cfg_loge`, or channel-gated `cfg_logf`. A call
@@ -36,5 +54,8 @@ checkout, current directory, and environment are not player-storage defaults.
 ## Verification
 
 `tests/test_config_cvar.cpp` exercises precedence, invalid input, environment auditing, and runtime
-mutation through the production registry. The product-boundary check rejects CPU-engine selectors
-and explicit interpreter mode independently of configuration tests.
+mutation through the production registry. `tests/test_diagnostic_run.cpp` proves product,
+comparison, nesting, and invalid-role behavior through the shipping enhancement gate;
+`tests/test_dynarec_contract.cpp` proves zero/nonzero telemetry and both sides of fallback threshold
+enforcement. The product-boundary check rejects CPU-engine selectors and explicit interpreter mode
+independently of configuration tests.

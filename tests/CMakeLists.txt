@@ -107,6 +107,8 @@ add_test(NAME cmake_test_ownership
 add_test(NAME lightrec_dependency_ownership
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_lightrec_dependency_ownership.py)
+set_tests_properties(cmake_test_ownership lightrec_dependency_ownership PROPERTIES
+  ENVIRONMENT "PSXPORT_LIGHTREC_DIR=${PSXPORT_LIGHTREC_DIR}")
 
 add_test(NAME psx_exe_reader
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
@@ -130,3 +132,15 @@ add_test(NAME execution_boundary_product
 add_test(NAME launch_environment_policy
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/test_launch_environment.py)
+
+add_test(NAME consumer_verify_policy
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/test_consumer_verify.py)
+
+add_test(NAME lightning_prefix_policy
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_project_lightning_prefix.py)
+
+add_test(NAME lightrec_path_policy
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_project_lightrec_path.py)

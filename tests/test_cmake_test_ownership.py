@@ -8,9 +8,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from cmake_fixture_paths import configured_lightrec
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRATCH = ROOT / "scratch" / "cmake-test-ownership"
+LIGHTREC = configured_lightrec()
 
 
 class Checks:
@@ -29,7 +32,13 @@ class Checks:
 
 
 def run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, cwd=cwd, check=True, text=True, capture_output=True)
+    completed = subprocess.run(args, cwd=cwd, check=False, text=True, capture_output=True)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"command failed ({completed.returncode}): {' '.join(args)}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+    return completed
 
 
 def test_names(build: Path) -> list[str]:
@@ -62,6 +71,7 @@ def configure(source: Path, build: Path, framework_tests: bool | None = None) ->
         str(build),
         "-DCMAKE_C_COMPILER=clang",
         "-DCMAKE_CXX_COMPILER=clang++",
+        f"-DPSXPORT_LIGHTREC_DIR={LIGHTREC}",
     ]
     if framework_tests is not None:
         args.append(f"-DPSXPORT_BUILD_TESTS={'ON' if framework_tests else 'OFF'}")

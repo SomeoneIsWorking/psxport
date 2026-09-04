@@ -2,10 +2,12 @@
 
 #include "dynarec_capabilities.h"
 #include "execution_exit.h"
+#include "fallback_policy.h"
 #include "guest_program_image.h"
 
 #include <cstdint>
 #include <memory>
+#include <string_view>
 
 class Core;
 
@@ -22,17 +24,24 @@ enum class InterpreterFallbackReason : std::uint8_t {
 struct InterpreterFallbackCounters {
   std::uint64_t calls = 0;
   std::uint64_t instructions = 0;
+  std::uint64_t refusedCalls = 0;
   std::uint64_t compilationFailed = 0;
   std::uint64_t selfModifyingCode = 0;
   std::uint64_t unsupportedBlock = 0;
   std::uint64_t loadDelayHazard = 0;
   std::uint64_t unsafeInstructionFetch = 0;
+  std::uint64_t refusedCompilationFailed = 0;
+  std::uint64_t refusedSelfModifyingCode = 0;
+  std::uint64_t refusedUnsupportedBlock = 0;
+  std::uint64_t refusedLoadDelayHazard = 0;
+  std::uint64_t refusedUnsafeInstructionFetch = 0;
 };
 
 struct ExecutorCounters {
   std::uint64_t calls = 0;
   std::uint64_t translatedBlocks = 0;
   std::uint64_t executedBlocks = 0;
+  std::uint64_t executedInstructions = 0;
   std::uint64_t cacheHits = 0;
   std::uint64_t cacheMisses = 0;
   std::uint64_t invalidations = 0;
@@ -42,7 +51,7 @@ struct ExecutorCounters {
 
 class LightrecExecutor {
 public:
-  explicit LightrecExecutor(Core &core);
+  explicit LightrecExecutor(Core &core, FallbackPolicyProvider fallbackPolicyProvider = defaultFallbackPolicy);
   ~LightrecExecutor();
   LightrecExecutor(const LightrecExecutor &) = delete;
   LightrecExecutor &operator=(const LightrecExecutor &) = delete;
@@ -53,6 +62,7 @@ public:
   void invalidate(GuestAddressRange range);
   void invalidateAll();
   const ExecutorCounters &counters() const;
+  void reportFallbackTelemetry(std::string_view phase) const;
   bool available() const;
   static constexpr DynarecBackendCapabilities backendCapabilities() {
     return kLightrecBackendCapabilities;

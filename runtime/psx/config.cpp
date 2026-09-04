@@ -336,26 +336,86 @@ TextVar cv_enh("PSXPORT_ENH",
 
 namespace {
 
-// The gate's whole mutable state, behind ONE mutex. Three parts, and each is here rather than in a
-// local static for a stated reason:
+// These knobs have typed public APIs instead of public raw CVars. That keeps consumer titles from
+// duplicating their parsers or mutating diagnostic/runtime policy through implementation details.
+TextVar cv_diagnostic_run("PSXPORT_DIAGNOSTIC_RUN",
+                          "product",
+                          "diagnostic role: product | compare-candidate | compare-reference",
+                          /*persistable=*/false);
+IntVar cv_lightrec_fallback_block_limit(
+    "PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT",
+    static_cast<long>(psx::cpu::kDefaultMaxFallbackBlocksPerExecution),
+    "maximum automatic interpreter-fallback blocks admitted by one bounded Lightrec execution",
+    /*persistable=*/false);
+
+} // namespace
+
+const char *diagnostic_run_mode_name(DiagnosticRunMode mode) {
+  switch (mode) {
+  case DiagnosticRunMode::Product:
+    return "product";
+  case DiagnosticRunMode::CompareCandidate:
+    return "compare-candidate";
+  case DiagnosticRunMode::CompareReference:
+    return "compare-reference";
+  case DiagnosticRunMode::Invalid:
+    return "invalid";
+  }
+  return "invalid";
+}
+
+DiagnosticRunMode diagnostic_run_mode() {
+  const std::string &mode = cv_diagnostic_run.get();
+  if (mode == diagnostic_run_mode_name(DiagnosticRunMode::Product)) {
+    return DiagnosticRunMode::Product;
+  }
+  if (mode == diagnostic_run_mode_name(DiagnosticRunMode::CompareCandidate)) {
+    return DiagnosticRunMode::CompareCandidate;
+  }
+  if (mode == diagnostic_run_mode_name(DiagnosticRunMode::CompareReference)) {
+    return DiagnosticRunMode::CompareReference;
+  }
+  return DiagnosticRunMode::Invalid;
+}
+
+bool diagnostic_run_is_comparison(DiagnosticRunMode mode) {
+  return mode == DiagnosticRunMode::CompareCandidate || mode == DiagnosticRunMode::CompareReference;
+}
+
+ScopedDiagnosticRun::ScopedDiagnosticRun(DiagnosticRunMode mode)
+    : hadRuntimeValue_(cv_diagnostic_run.has(Layer::Runtime)),
+      previousRuntimeValue_(cv_diagnostic_run.layer_text(Layer::Runtime)) {
+  cv_diagnostic_run.set(Layer::Runtime, diagnostic_run_mode_name(mode));
+}
+
+ScopedDiagnosticRun::~ScopedDiagnosticRun() {
+  if (hadRuntimeValue_) {
+    cv_diagnostic_run.set(Layer::Runtime, previousRuntimeValue_);
+  } else {
+    cv_diagnostic_run.clear(Layer::Runtime);
+  }
+}
+
+psx::cpu::FallbackPolicy lightrec_fallback_policy() {
+  return psx::cpu::fallbackPolicyFromConfigured(cv_lightrec_fallback_block_limit.get());
+}
+
+namespace {
+
+// The gate's whole mutable state, behind ONE mutex. Two parts, and each is here rather than in a local
+// static for a stated reason:
 //
-//  * THE SBS ENVIRONMENT CACHE. compare_run() is called on every gate call, and note_legacy_read()
-//    takes the registry lock and inserts into a map — paying that per call on a per-frame gate is not
-//    acceptable. The two SBS names are ENV-ONLY knobs (they are not CVars, so no Value or Runtime layer
-//    can move them mid-run), so binding them once is not a shortcut, it is their actual lifetime; the
-//    legacy-read note is recorded once, which is exactly what "this knob was read this run" means.
-//    cv_oracle is NOT cached here — it is a CVar and the REPL can move it, so it is read every call.
-//  * THE WARN-ONCE REGISTERS, keyed on the KNOB. Two of them, because a run can legitimately have one
-//    enhancement suppressed and another honoured, and neither announcement may silence the other.
-//    Keyed by NAME, since the name is a knob's identity (a cfg_enh caller passes only a name, and the
-//    same knob must not warn twice through the two entry points) — and a vector has no fixed capacity
-//    to overflow silently.
+//  * THE WARN-ONCE REGISTERS, keyed on the KNOB and outcome. A run can legitimately suppress one
+//    enhancement and honour another, and neither announcement may silence the other. Keying by NAME
+//    also makes the two public enhancement entry points share one announcement record.
 //  * THE PARSED PSXPORT_ENH LIST, cached against the TEXT the ladder resolved rather than behind a
 //    one-shot "seeded" flag. A Runtime-layer (REPL) write changes the text and the cache must notice.
 //    That one-shot seeding is precisely the pre-migration defect: after the first call nothing could
 //    change the answer for the rest of the process.
 struct EnhState {
   std::mutex mutex;
+  std::vector<std::string> warned_suppressed;
+  std::vector<std::string> warned_invalid_mode;
   std::vector<std::string> warned_active;
   bool warned_nameless = false;
   std::string parsed_text = "\x01"; // a value no environment can produce: the first call always parses
@@ -398,13 +458,33 @@ bool enh_gate(const char *key, bool asked) {
     }
     return false;
   }
+  const DiagnosticRunMode runMode = diagnostic_run_mode();
   EnhState &s = enh_state();
   std::lock_guard<std::mutex> lock(s.mutex);
+  if (asked && diagnostic_run_is_comparison(runMode)) {
+    if (first_time(s.warned_suppressed, key)) {
+      lucent::warn("cfg",
+                   "{} enhancement suppressed: diagnostic run '{}' must remain enhancement-free",
+                   key,
+                   diagnostic_run_mode_name(runMode));
+    }
+    return false;
+  }
+  if (asked && runMode == DiagnosticRunMode::Invalid) {
+    if (first_time(s.warned_invalid_mode, key)) {
+      lucent::error("cfg",
+                    "{} enhancement refused: PSXPORT_DIAGNOSTIC_RUN='{}' is invalid; expected "
+                    "product, compare-candidate, or compare-reference",
+                    key,
+                    cv_diagnostic_run.get());
+    }
+    return false;
+  }
   // THE POSITIVE PRINTS TOO. "No SUPPRESSED line" is otherwise indistinguishable from "the gate was
   // never reached", and a pc_enh changes canon guest state — a run that had one on must name it, or a
   // later byte-compare against that run reads the deliberate divergence as a port bug.
   if (asked && first_time(s.warned_active, key)) {
-    lucent::info("cfg", "{} enhancement active", key);
+    lucent::info("cfg", "{} enhancement active in product run", key);
   }
   return asked;
 }
@@ -773,12 +853,13 @@ void reset_for_test() {
     v->clear(Layer::Override);
     v->mEnvBound = false;
   }
-  // The enhancement gate's state is an environment binding too — the SBS cache literally is one, and
-  // the warn-once registers are "what this configuration has already announced". A test that
-  // re-configures the environment and then measures the previous configuration's silence would be
-  // measuring the reset it forgot to ask for, so this is not separable.
+  // The enhancement warn-once registers are "what this configuration has already announced". A test
+  // that reconfigures the environment and then measures the previous configuration's silence would
+  // be measuring the reset it forgot to ask for, so this is not separable.
   EnhState &s = enh_state();
   std::lock_guard<std::mutex> lock(s.mutex);
+  s.warned_suppressed.clear();
+  s.warned_invalid_mode.clear();
   s.warned_active.clear();
   s.warned_nameless = false;
   s.parsed_text = "\x01";

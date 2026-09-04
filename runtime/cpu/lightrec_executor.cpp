@@ -36,7 +36,7 @@ std::uint32_t targetCycle(ExecutionBudget budget) {
 } // namespace
 
 struct LightrecExecutor::Impl {
-  explicit Impl(Core &owner) : core(owner) {
+  explicit Impl(Core &owner, FallbackPolicyProvider provider) : core(owner), fallbackPolicyProvider(provider) {
     operations = {
         .cop2_notify = nullptr,
         .cop2_op = cop2Operation,
@@ -45,6 +45,8 @@ struct LightrecExecutor::Impl {
         .code_inv = nullptr,
         .block_boundary = blockBoundary,
         .block_boundary_data = this,
+        .fallback_admission = fallbackAdmission,
+        .fallback_admission_data = this,
     };
     initializeMaps();
   }
@@ -172,6 +174,19 @@ struct LightrecExecutor::Impl {
     PendingWork,
   };
 
+  static lightrec_fallback_action
+  fallbackAdmission(lightrec_state *lightrec, const lightrec_fallback_event *event, void *userData) {
+    auto &impl = *static_cast<Impl *>(userData);
+    const auto &stats = *lightrec_get_execution_stats(lightrec);
+    const std::uint64_t admitted = stats.fallback_blocks - impl.fallbackBaselineBlocks;
+    if (admitted < impl.fallbackPolicy.maxBlocksPerExecution) {
+      return LIGHTREC_FALLBACK_ALLOW;
+    }
+    impl.fallbackRefusalPc = event->guest_pc;
+    impl.fallbackRefusalReason = event->reason;
+    return LIGHTREC_FALLBACK_REFUSE;
+  }
+
   static lightrec_block_boundary_action
   blockBoundary(lightrec_state *, std::uint32_t guestPc, std::uint32_t *, void *userData) {
     auto &impl = *static_cast<Impl *>(userData);
@@ -196,15 +211,25 @@ struct LightrecExecutor::Impl {
 
   class BoundarySession {
   public:
-    BoundarySession(Impl &impl, std::optional<std::uint32_t> returnAddress, bool dispatchHostServices)
+    BoundarySession(Impl &impl,
+                    std::optional<std::uint32_t> returnAddress,
+                    bool dispatchHostServices,
+                    FallbackPolicy fallbackPolicy)
         : impl_(impl), previousReturnAddress_(impl.returnAddress), previousDispatch_(impl.dispatchHostServices),
           previousSkipPending_(impl.skipPendingBoundaryOnce), previousReason_(impl.boundaryReason),
-          previousPc_(impl.boundaryPc) {
+          previousPc_(impl.boundaryPc), previousFallbackPolicy_(impl.fallbackPolicy),
+          previousFallbackBaselineBlocks_(impl.fallbackBaselineBlocks),
+          previousFallbackRefusalPc_(impl.fallbackRefusalPc),
+          previousFallbackRefusalReason_(impl.fallbackRefusalReason) {
       impl_.returnAddress = returnAddress;
       impl_.dispatchHostServices = dispatchHostServices;
       impl_.skipPendingBoundaryOnce = false;
       impl_.boundaryReason = BoundaryReason::None;
       impl_.boundaryPc = 0;
+      impl_.fallbackPolicy = fallbackPolicy;
+      impl_.fallbackBaselineBlocks = lightrec_get_execution_stats(impl_.state)->fallback_blocks;
+      impl_.fallbackRefusalPc = 0;
+      impl_.fallbackRefusalReason = LIGHTREC_FALLBACK_NONE;
     }
 
     ~BoundarySession() {
@@ -213,6 +238,10 @@ struct LightrecExecutor::Impl {
       impl_.skipPendingBoundaryOnce = previousSkipPending_;
       impl_.boundaryReason = previousReason_;
       impl_.boundaryPc = previousPc_;
+      impl_.fallbackPolicy = previousFallbackPolicy_;
+      impl_.fallbackBaselineBlocks = previousFallbackBaselineBlocks_;
+      impl_.fallbackRefusalPc = previousFallbackRefusalPc_;
+      impl_.fallbackRefusalReason = previousFallbackRefusalReason_;
     }
 
   private:
@@ -222,6 +251,10 @@ struct LightrecExecutor::Impl {
     bool previousSkipPending_ = false;
     BoundaryReason previousReason_ = BoundaryReason::None;
     std::uint32_t previousPc_ = 0;
+    FallbackPolicy previousFallbackPolicy_{};
+    std::uint64_t previousFallbackBaselineBlocks_ = 0;
+    std::uint32_t previousFallbackRefusalPc_ = 0;
+    lightrec_fallback_reason previousFallbackRefusalReason_ = LIGHTREC_FALLBACK_NONE;
   };
 
   void invalidateGuestStore(std::uint32_t address, std::uint32_t length) {
@@ -319,15 +352,70 @@ struct LightrecExecutor::Impl {
   void updateCounters(const lightrec_execution_stats &stats) {
     counters.translatedBlocks = stats.translated_blocks;
     counters.executedBlocks = stats.executed_blocks;
+    counters.executedInstructions = stats.executed_instructions + stats.fallback_instructions;
     counters.cacheHits = stats.cache_hits;
     counters.cacheMisses = stats.cache_misses;
     counters.fallback.calls = stats.fallback_blocks;
     counters.fallback.instructions = stats.fallback_instructions;
+    counters.fallback.refusedCalls = stats.refused_fallback_blocks;
     counters.fallback.selfModifyingCode = stats.fallback_blocks_by_reason[LIGHTREC_FALLBACK_SELF_MODIFYING_CODE];
     counters.fallback.unsupportedBlock = stats.fallback_blocks_by_reason[LIGHTREC_FALLBACK_UNSUPPORTED_CONTROL_FLOW];
     counters.fallback.compilationFailed = stats.fallback_blocks_by_reason[LIGHTREC_FALLBACK_JIT_COMPILE_FAILURE];
     counters.fallback.loadDelayHazard = stats.fallback_blocks_by_reason[LIGHTREC_FALLBACK_LOAD_DELAY_HAZARD];
     counters.fallback.unsafeInstructionFetch = stats.fallback_blocks_by_reason[LIGHTREC_FALLBACK_UNSAFE_FETCH];
+    counters.fallback.refusedSelfModifyingCode =
+        stats.refused_fallback_blocks_by_reason[LIGHTREC_FALLBACK_SELF_MODIFYING_CODE];
+    counters.fallback.refusedUnsupportedBlock =
+        stats.refused_fallback_blocks_by_reason[LIGHTREC_FALLBACK_UNSUPPORTED_CONTROL_FLOW];
+    counters.fallback.refusedCompilationFailed =
+        stats.refused_fallback_blocks_by_reason[LIGHTREC_FALLBACK_JIT_COMPILE_FAILURE];
+    counters.fallback.refusedLoadDelayHazard =
+        stats.refused_fallback_blocks_by_reason[LIGHTREC_FALLBACK_LOAD_DELAY_HAZARD];
+    counters.fallback.refusedUnsafeInstructionFetch =
+        stats.refused_fallback_blocks_by_reason[LIGHTREC_FALLBACK_UNSAFE_FETCH];
+  }
+
+  void reportFallbackTelemetry(std::string_view phase, lucent::Level level) const {
+    lucent::log(level,
+                "executor",
+                lucent::format("Lightrec fallback telemetry [{}]: executor_calls={} executed_blocks={} "
+                               "executed_instructions={} fallback_blocks={} fallback_instructions={} "
+                               "reasons{{compilation_failed={},self_modifying_code={},unsupported_block={},"
+                               "load_delay_hazard={},unsafe_instruction_fetch={}}} refused_fallback_blocks={} "
+                               "refused_reasons{{compilation_failed={},self_modifying_code={},unsupported_block={},"
+                               "load_delay_hazard={},unsafe_instruction_fetch={}}} "
+                               "max_fallback_blocks_per_execution={}",
+                               phase,
+                               counters.calls,
+                               counters.executedBlocks,
+                               counters.executedInstructions,
+                               counters.fallback.calls,
+                               counters.fallback.instructions,
+                               counters.fallback.compilationFailed,
+                               counters.fallback.selfModifyingCode,
+                               counters.fallback.unsupportedBlock,
+                               counters.fallback.loadDelayHazard,
+                               counters.fallback.unsafeInstructionFetch,
+                               counters.fallback.refusedCalls,
+                               counters.fallback.refusedCompilationFailed,
+                               counters.fallback.refusedSelfModifyingCode,
+                               counters.fallback.refusedUnsupportedBlock,
+                               counters.fallback.refusedLoadDelayHazard,
+                               counters.fallback.refusedUnsafeInstructionFetch,
+                               lastExecutionFallbackPolicy.configuredMaxBlocks));
+  }
+
+  ExecutionResult fallbackThresholdFault(std::uint64_t cycles) {
+    ++counters.faults;
+    reportFallbackTelemetry("threshold-exceeded", lucent::Level::Error);
+    return {ExecutionExitReason::Fault,
+            fallbackRefusalPc,
+            cycles,
+            lucent::format("Lightrec fallback refused before interpreter execution: reason={}, "
+                           "admitted_blocks={}, limit={}",
+                           lightrec_fallback_reason_name(fallbackRefusalReason),
+                           counters.fallback.calls - fallbackBaselineBlocks,
+                           fallbackPolicy.maxBlocksPerExecution)};
   }
 
   Core &core;
@@ -336,16 +424,26 @@ struct LightrecExecutor::Impl {
   std::array<lightrec_mem_map, PSX_MAP_CODE_BUFFER + 1> maps{};
   lightrec_state *state = nullptr;
   bool initializationAttempted = false;
+  FallbackPolicyProvider fallbackPolicyProvider = defaultFallbackPolicy;
+  FallbackPolicy lastExecutionFallbackPolicy = defaultFallbackPolicy();
   std::optional<std::uint32_t> returnAddress;
   bool dispatchHostServices = false;
   bool skipPendingBoundaryOnce = false;
   BoundaryReason boundaryReason = BoundaryReason::None;
   std::uint32_t boundaryPc = 0;
+  FallbackPolicy fallbackPolicy{};
+  std::uint64_t fallbackBaselineBlocks = 0;
+  std::uint32_t fallbackRefusalPc = 0;
+  lightrec_fallback_reason fallbackRefusalReason = LIGHTREC_FALLBACK_NONE;
   ExecutorCounters counters;
 };
 
-LightrecExecutor::LightrecExecutor(Core &core) : impl_(std::make_unique<Impl>(core)) {}
-LightrecExecutor::~LightrecExecutor() = default;
+LightrecExecutor::LightrecExecutor(Core &core, FallbackPolicyProvider fallbackPolicyProvider)
+    : impl_(std::make_unique<Impl>(core, fallbackPolicyProvider ? fallbackPolicyProvider : defaultFallbackPolicy)) {}
+
+LightrecExecutor::~LightrecExecutor() {
+  reportFallbackTelemetry("shutdown");
+}
 
 namespace {
 
@@ -375,8 +473,20 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     return {ExecutionExitReason::Fault, guestAddress, 0, "Lightrec initialization failed"};
   }
 
+  const FallbackPolicy fallbackPolicy = impl.fallbackPolicyProvider();
+  impl.lastExecutionFallbackPolicy = fallbackPolicy;
+  if (!fallbackPolicy.valid) {
+    ++impl.counters.faults;
+    impl.reportFallbackTelemetry("invalid-policy", lucent::Level::Error);
+    return {ExecutionExitReason::Fault,
+            guestAddress,
+            0,
+            lucent::format("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT={} is invalid; expected a non-negative integer",
+                           fallbackPolicy.configuredMaxBlocks)};
+  }
+
   const std::optional<std::uint32_t> returnTarget = stopAtReturn ? std::optional{returnAddress} : std::nullopt;
-  Impl::BoundarySession session(impl, returnTarget, stopAtReturn);
+  Impl::BoundarySession session(impl, returnTarget, stopAtReturn, fallbackPolicy);
   std::uint64_t consumedCycles = 0;
   std::uint32_t nextPc = guestAddress;
   while (consumedCycles < budget.cycles) {
@@ -396,13 +506,15 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       accountExecutedInstructions(impl.core, executedInstructionCount(after) - executedInstructionCount(before));
     }
 
+    const std::uint32_t flags = lightrec_exit_flags(impl.state);
+    if (flags & LIGHTREC_EXIT_FALLBACK_REFUSED) {
+      return impl.fallbackThresholdFault(consumedCycles);
+    }
     if (auto requested = impl.core.executionControl().consume()) {
       requested->cycles += consumedCycles;
       requested->guestPc = impl.core.pc;
       return *requested;
     }
-
-    const std::uint32_t flags = lightrec_exit_flags(impl.state);
     if (flags & (LIGHTREC_EXIT_SEGFAULT | LIGHTREC_EXIT_NOMEM | LIGHTREC_EXIT_UNKNOWN_OP)) {
       ++impl.counters.faults;
       return {ExecutionExitReason::Fault, nextPc, consumedCycles, "Lightrec execution fault"};
@@ -501,6 +613,13 @@ void LightrecExecutor::invalidateAll() {
 
 const ExecutorCounters &LightrecExecutor::counters() const {
   return impl_->counters;
+}
+
+void LightrecExecutor::reportFallbackTelemetry(std::string_view phase) const {
+  const lucent::Level level = impl_->counters.fallback.calls == 0 && impl_->counters.fallback.refusedCalls == 0
+                                  ? lucent::Level::Info
+                                  : lucent::Level::Warn;
+  impl_->reportFallbackTelemetry(phase, level);
 }
 
 bool LightrecExecutor::available() const {

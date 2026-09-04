@@ -1,7 +1,9 @@
 #ifndef PSXPORT_CONFIG_VARS_H
 #define PSXPORT_CONFIG_VARS_H
-// config_vars.h — THE INVENTORY. Every knob that has been migrated onto a CVar is declared here,
-// one line each, and defined in config.cpp. This is the file you grep to answer "what knobs exist".
+// config_vars.h — THE INVENTORY. Every migrated knob is listed here and defined in config.cpp.
+// Ordinary values expose a CVar; policy values expose only their typed API so consumers cannot
+// duplicate parsing or couple themselves to the backing storage. This is the file you grep to answer
+// "what knobs exist".
 //
 // A knob that is NOT here still works: cfg_on / cfg_int / cfg_str fall through to the environment
 // exactly as they always did (runtime/psx/cfg.cpp), and the registry records the read so the
@@ -13,6 +15,8 @@
 // pre-migration one in tests/test_config_cvar.cpp — the compatibility gate is the point of the
 // exercise, not a formality.
 #include "config_var.h"
+#include "diagnostic_run.h"
+#include "fallback_policy.h"
 #include "render_mode.h" // RenderPath — the type cv_render_path resolves to
 
 namespace psx::config {
@@ -68,6 +72,16 @@ extern BoolVar cv_fps60;
 // the static was seeded on the first call and never re-read — no way for anything to change the answer
 // later in the process, including the suppression below. Gate: tests/test_config_enh.cpp.
 extern TextVar cv_enh;
+
+// PSXPORT_DIAGNOSTIC_RUN — product | compare-candidate | compare-reference. This is a diagnostic
+// role for the same shipping dynarec/native runtime, never an interpreter/backend selector. The
+// backing TextVar is intentionally private: consumers use this typed API and ScopedDiagnosticRun.
+// The API is declared once in diagnostic_run.h, included above.
+
+// PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT — maximum automatic interpreter-fallback blocks admitted
+// during one bounded executor call. The compiled default is one: the known difficult-block escape
+// remains available, while a second block is a typed fault instead of an interpreter-dominated run.
+psx::cpu::FallbackPolicy lightrec_fallback_policy();
 
 // Resolve one enhancement and announce an active selection once per key.
 bool enh_gate(const char *key, bool asked);

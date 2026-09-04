@@ -1,3 +1,4 @@
+#include "config.h"
 #include "dynarec_capabilities.h"
 #include "game.h"
 #include "game_runtime.h"
@@ -6,7 +7,12 @@
 
 #include "testutil.h"
 
+#include <lucent/log.h>
+
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -97,6 +103,30 @@ std::uint32_t innerActiveAddress = 0;
 std::uint32_t outerPcAfterNested = 0;
 psx::cpu::ExecutionResult nestedNativeResult{};
 
+std::vector<std::pair<lucent::Level, std::string>> telemetryLines;
+
+class TelemetryCapture final {
+public:
+  TelemetryCapture() {
+    telemetryLines.clear();
+    lucent::set_sink([](lucent::Level level, std::string_view line) {
+      telemetryLines.emplace_back(level, std::string(line));
+    });
+  }
+  ~TelemetryCapture() {
+    lucent::set_sink(nullptr);
+  }
+};
+
+bool telemetryContains(lucent::Level level, std::string_view needle) {
+  for (const auto &[actualLevel, line] : telemetryLines) {
+    if (actualLevel == level && line.find(needle) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void innerNativeCallee(Core *core) {
   ++innerNativeCalls;
   innerActiveAddress = core->active_native_address;
@@ -122,7 +152,7 @@ static void test_backend_reports_verified_host_properties() {
   CHECK(capabilities.dynarecDefault);
   CHECK(capabilities.boundedInterpreterFallback);
   CHECK(capabilities.fallbackTelemetry);
-  CHECK(!capabilities.fallbackThresholdEnforcement);
+  CHECK(capabilities.fallbackThresholdEnforcement);
   CHECK(!capabilities.aarch64CodeGeneration);
   CHECK(capabilities.executableMemoryPublication);
   CHECK(capabilities.instructionCacheCoherence);
@@ -155,7 +185,18 @@ static void test_real_executor_translates_and_runs_guest_instructions() {
   CHECK(executor.counters().executedBlocks > 0u);
   CHECK_EQ(executor.counters().fallback.calls, 0u);
   CHECK_EQ(executor.counters().fallback.instructions, 0u);
+  CHECK(executor.counters().executedInstructions > 0u);
   CHECK_EQ(game->timing.guestInstructionTicks * 2u, result.cycles);
+
+  TelemetryCapture capture;
+  executor.reportFallbackTelemetry("negative-test");
+  CHECK(telemetryContains(lucent::Level::Info, "Lightrec fallback telemetry [negative-test]"));
+  CHECK(telemetryContains(lucent::Level::Info, "executor_calls=1"));
+  CHECK(telemetryContains(lucent::Level::Info, "fallback_blocks=0 fallback_instructions=0"));
+  CHECK(telemetryContains(lucent::Level::Info,
+                          "reasons{compilation_failed=0,self_modifying_code=0,unsupported_block=0,"
+                          "load_delay_hazard=0,unsafe_instruction_fetch=0}"));
+  CHECK(telemetryContains(lucent::Level::Info, "refused_fallback_blocks=0"));
 }
 
 static void test_translated_call_dispatches_image_scoped_native_and_resumes_caller() {
@@ -380,6 +421,72 @@ static void test_backend_fallback_is_classified_and_counted() {
   CHECK(executor.counters().fallback.unsupportedBlock > 0u);
   CHECK_EQ(executor.counters().fallback.compilationFailed, 0u);
   CHECK_EQ(executor.counters().fallback.unsafeInstructionFetch, 0u);
+  CHECK_EQ(executor.counters().fallback.refusedCalls, 0u);
+  CHECK(executor.counters().executedBlocks > 0u);
+
+  TelemetryCapture capture;
+  executor.reportFallbackTelemetry("positive-test");
+  CHECK(telemetryContains(lucent::Level::Warn, "Lightrec fallback telemetry [positive-test]"));
+  CHECK(telemetryContains(lucent::Level::Warn, "executor_calls=1"));
+  CHECK(telemetryContains(lucent::Level::Warn, "fallback_blocks="));
+  CHECK(telemetryContains(lucent::Level::Warn, "fallback_instructions="));
+  CHECK(telemetryContains(lucent::Level::Warn, "compilation_failed=0"));
+  CHECK(telemetryContains(lucent::Level::Warn, "self_modifying_code=0"));
+  CHECK(telemetryContains(lucent::Level::Warn, "unsupported_block="));
+  CHECK(telemetryContains(lucent::Level::Warn, "load_delay_hazard=0"));
+  CHECK(telemetryContains(lucent::Level::Warn, "unsafe_instruction_fetch=0"));
+  CHECK(telemetryContains(lucent::Level::Warn, "refused_fallback_blocks=0"));
+  CHECK(telemetryContains(lucent::Level::Warn, "max_fallback_blocks_per_execution=1"));
+}
+
+static void test_fallback_threshold_refusal_prevents_interpreter_execution() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  constexpr std::uint32_t entry = 0x00010000u;
+  core.mem_w32(entry, 0x10000001u);      // beq with a branch in its delay slot
+  core.mem_w32(entry + 4u, 0x08004003u); // j entry+12 in the delay slot
+  core.mem_w32(entry + 8u, 0u);
+  core.mem_w32(entry + 12u, 0x1000ffffu);
+  core.mem_w32(entry + 16u, 0u);
+
+  CHECK(psx::config::set_runtime("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT", "0"));
+  TelemetryCapture capture;
+  auto &executor = core.lightrecExecutor();
+  const auto result = executor.execute(entry, psx::cpu::ExecutionBudget::fromCycles(20));
+  CHECK(psx::config::clear_runtime("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT"));
+
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::Fault);
+  CHECK_EQ(result.guestPc, entry);
+  CHECK_EQ(result.cycles, 0u);
+  CHECK(result.detail.find("fallback refused before interpreter execution") != std::string::npos);
+  CHECK_EQ(executor.counters().fallback.calls, 0u);
+  CHECK_EQ(executor.counters().fallback.instructions, 0u);
+  CHECK_EQ(executor.counters().fallback.unsupportedBlock, 0u);
+  CHECK_EQ(executor.counters().fallback.refusedCalls, 1u);
+  CHECK_EQ(executor.counters().fallback.refusedUnsupportedBlock, 1u);
+  CHECK(telemetryContains(lucent::Level::Error, "refused_fallback_blocks=1"));
+  CHECK(result.detail.find("admitted_blocks=0, limit=0") != std::string::npos);
+}
+
+static void test_invalid_fallback_limit_faults_before_guest_execution() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  constexpr std::uint32_t entry = 0x00010000u;
+  core.mem_w32(entry, 0x2402002au); // addiu v0, zero, 42
+
+  CHECK(psx::config::set_runtime("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT", "-1"));
+  auto &executor = core.lightrecExecutor();
+  const auto result = executor.execute(entry, psx::cpu::ExecutionBudget::fromCycles(20));
+  CHECK(psx::config::clear_runtime("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT"));
+
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::Fault);
+  CHECK_EQ(result.cycles, 0u);
+  CHECK_EQ(core.r[2], 0u);
+  CHECK_EQ(executor.counters().fallback.calls, 0u);
+  CHECK_EQ(executor.counters().fallback.refusedCalls, 0u);
+  CHECK(result.detail.find("expected a non-negative integer") != std::string::npos);
 }
 
 int main() {
@@ -393,5 +500,7 @@ int main() {
   RUN(deferred_pending_work_does_not_prevent_guest_progress);
   RUN(invalid_fetch_is_a_typed_hard_fault);
   RUN(backend_fallback_is_classified_and_counted);
+  RUN(fallback_threshold_refusal_prevents_interpreter_execution);
+  RUN(invalid_fallback_limit_faults_before_guest_execution);
   return pt_summary();
 }

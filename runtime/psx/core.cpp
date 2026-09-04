@@ -9,6 +9,7 @@
 // Lived in mem.cpp historically (right next to the memory-access primitives) — moved out into its
 // own file so Core lifetime concerns aren't tangled with the memory-window helpers.
 #include "core.h"
+#include "config_vars.h"
 #include "execution_control.h"
 #include "game_runtime.h"
 #include "image_identity.h"
@@ -22,7 +23,7 @@ Core::Core() {
   memset(scratch, 0, sizeof(scratch));
   executionControl_ = std::make_unique<psx::cpu::ExecutionControl>();
   imageCatalog_ = std::make_unique<psx::cpu::ImageCatalog>();
-  lightrecExecutor_ = std::make_unique<psx::cpu::LightrecExecutor>(*this);
+  lightrecExecutor_ = std::make_unique<psx::cpu::LightrecExecutor>(*this, psx::config::lightrec_fallback_policy);
   nativeDispatcher_ = std::make_unique<psx::cpu::NativeDispatcher>(*this);
   // Snapshot the game-owned polymorphic runtime. The two legacy views are non-null only when the
   // bounded adapter was installed by a consumer that has not migrated this seam yet.

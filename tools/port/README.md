@@ -33,3 +33,11 @@ false green is now a false green in every repo at once.
 | engine | reads (per game) | hoisted |
 |---|---|---|
 | `re_frontier.py` | `docs/re-frontier.md` | 2026-08-11 — from spider1's copy, the most developed of the three |
+| `consumer_verify.py` | a title-provided `ConsumerVerifyConfig` | 2026-09-04 — one Clang/Ninja configure, build, focused CTest, and shipping execution-boundary sequence for PSXPort consumers |
+
+After a title's existing bootstrap resolves its pinned PSXPort checkout, its verifier imports
+`port.consumer_verify` from that checkout and constructs one `ConsumerVerifyConfig`. The bootstrap
+step necessarily stays title-owned because the shared module does not exist before it completes.
+Wrappers otherwise own only title paths, CMake definitions, focused test selection, and any explicit
+extra build targets; the shared engine owns command ordering, compiler, generator,
+maintained-Lightning prefix derivation, error propagation, and both execution-boundary checks.

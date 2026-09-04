@@ -25,7 +25,7 @@ inline constexpr DynarecBackendCapabilities kLightrecBackendCapabilities{
     .dynarecDefault = true,
     .boundedInterpreterFallback = true,
     .fallbackTelemetry = true,
-    .fallbackThresholdEnforcement = false,
+    .fallbackThresholdEnforcement = true,
     .aarch64CodeGeneration = false,
     .executableMemoryPublication = true,
     .instructionCacheCoherence = true,

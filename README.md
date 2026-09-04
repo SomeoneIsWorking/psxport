@@ -7,9 +7,9 @@ and the legally obtained game files.
 
 The product architecture has one CPU policy: host-native functions plus dynarec-translated R3000A
 code from the authenticated user image. A backend-owned interpreter fallback is automatic only for
-classified translation failures, counted, and never player-selectable. Fallback threshold
-enforcement remains an open product gate. Independent emulators may be built as test tools, but are
-never linked into gameplay.
+classified translation failures, counted, bounded by pre-execution admission, and never
+player-selectable. Independent emulators may be built as test tools, but are never linked into
+gameplay.
 
 ## Current state
 
@@ -18,12 +18,12 @@ per-`Core` typed execution exits, execution control, image/generation identity, 
 original calls, guest ABI helpers, centralized invalidation, and measurable executor counters.
 
 The Linux x86-64 path consumes the maintained Lightrec fork at revision
-`c9f0a37dbbc7e24d841c84751d9619ad1bfcb7d8`. `LightrecExecutor` runs translated guest blocks,
+`b764c4c9f4bc425a56bfc4c32333ff8200ce8ab9`. `LightrecExecutor` runs translated guest blocks,
 synchronizes architectural state, intercepts image-scoped native/HLE calls at block boundaries,
 stops original calls at their exact guest continuation, publishes exact execution/cache/fallback
-telemetry, and participates in cache invalidation. Multi-`Core` backend qualification, fallback
-thresholds, complete executable-writer coverage, and both AArch64 hosts remain open; this is not yet
-a playable title claim.
+telemetry, and participates in cache invalidation. Multi-`Core` backend qualification, complete
+executable-writer coverage, and both AArch64 hosts remain open; this is not yet a playable title
+claim.
 
 See [project state](docs/project-state.md), [migration requirements](docs/migration.md), and the
 [codemap](docs/codemap.md).
@@ -34,12 +34,12 @@ Framework verification uses the canonical Python owner, which configures a Clang
 runs the complete asset-free suite:
 
 ```sh
-python tools/verify.py
+uv run --frozen python tools/verify.py
 ```
 
-`python tools/build.py` performs the same configure/build without running tests. Hosted CI exercises
-the real synthetic Lightrec runtime on Linux x86-64 with full repository history and the exact fork
-revision. Unsupported platforms are not represented by green placeholder jobs.
+`uv run --frozen python tools/build.py` performs the same configure/build without running tests.
+Hosted CI exercises the real synthetic Lightrec runtime on Linux x86-64 with full repository history
+and the exact fork revision. Unsupported platforms are not represented by green placeholder jobs.
 
 Consumers supply the runnable product and launcher. A consumer must authenticate user media, link
 the dynarec-default backend, and register image-qualified native overrides before entering guest

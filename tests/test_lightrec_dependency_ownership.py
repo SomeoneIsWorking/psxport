@@ -8,15 +8,17 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from cmake_fixture_paths import configured_lightrec
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "cmake" / "lightrec_dependency.cmake"
-LIGHTREC = (ROOT / "../../shared/lightrec").resolve()
+LIGHTREC = configured_lightrec()
 SCRATCH = ROOT / "scratch" / "lightrec-dependency-ownership"
 
 
 def run_cmake(source: Path, build: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    completed = subprocess.run(
         [
             "cmake",
             "-S",
@@ -25,10 +27,16 @@ def run_cmake(source: Path, build: Path, *, check: bool = True) -> subprocess.Co
             str(build),
             "-DCMAKE_C_COMPILER=clang",
         ],
-        check=check,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if check and completed.returncode != 0:
+        raise RuntimeError(
+            f"CMake configure failed ({completed.returncode}) for {source}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+    return completed
 
 
 def write_project(source: Path, body: str, *, lightrec: Path = LIGHTREC) -> None:

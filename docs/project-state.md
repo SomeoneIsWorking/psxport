@@ -33,9 +33,13 @@ translated control flow without restoring an offline dispatch substrate.
 
 ### S012 — Per-`Core` dynarec-default Lightrec backend
 
-The maintained fork is pinned at `c9f0a37dbbc7e24d841c84751d9619ad1bfcb7d8`; Linux x86-64 executes
-a nonzero translated block and reports typed fallback telemetry. Gap: GNU Lightning's process-wide
-lifecycle currently permits only one initialized machine, and both AArch64 hosts remain refused.
+The maintained fork is pinned at `b764c4c9f4bc425a56bfc4c32333ff8200ce8ab9`; Linux x86-64 executes
+a nonzero translated block. The shipping executor reports calls, executed blocks/instructions,
+fallback blocks/instructions, refusals, and all five admitted/refused reason counts, while the typed
+configurable per-call threshold admits the verified single difficult-block escape and refuses a
+zero-limit block before any interpreter instruction executes. Gap: GNU Lightning's process-wide
+lifecycle currently permits only one initialized
+machine, and both AArch64 hosts remain refused.
 
 ### S013 — Explicit architectural state and bounded exits
 
@@ -78,8 +82,10 @@ state bridge and a seeded first-divergence proof remain absent.
 
 ### S019 — Narrow multi-title framework seam
 
-The shared runtime API exists. Gap: consumers still require coordinated pins and representative
-gameplay requalification without copied framework code.
+The shared runtime API includes typed product/compare-candidate/compare-reference roles and owns
+comparison-run enhancement suppression without title-local environment parsing. Gap: consumers
+still require coordinated pins and representative gameplay requalification without copied
+framework code.
 
 ### S020 — Native rendering and title-owned enhancements
 
@@ -94,15 +100,20 @@ x86-64 synthetic runtime; unsupported hosts have no green placeholder jobs.
 
 ### S022 — Mechanical structure/config/logging/tooling policy
 
-Canonical Python build/verification tooling, pinned full-history Linux CI, product-boundary checks,
-and seeded whole-tree architecture, deleted-path, and current-runtime policy checks exist. Gap:
-remaining large runtime owners still need responsibility-driven extraction.
+Canonical Python build/verification tooling runs through the checked-in `pyproject.toml`/`uv.lock`;
+a shared declarative consumer verifier, pinned full-history Linux CI with exact Lightrec and
+maintained-Lightning inputs, product-boundary checks, and seeded whole-tree architecture,
+deleted-path, and current-runtime policy checks exist. Gap: remaining large runtime owners still
+need responsibility-driven extraction.
 
 ## Blocking dependency
 
-The direct maintained Lightrec fork is now the Linux x86-64 product dependency. Gameplay is still
-blocked on multi-`Core` lifecycle support, complete executable-write invalidation coverage, fallback
-threshold enforcement, and representative title/device integration. Its AArch64 dependency also
+The direct maintained Lightrec fork is now the Linux x86-64 product dependency. Hosted verification
+builds the maintained GNU Lightning fork at exact revision
+`f305e50483e9794e8fb0b99fb77d82954a4924e5` and passes its validated installed prefix explicitly to
+Lightrec instead of relying on a distribution package or ambient sibling checkout. Gameplay is still
+blocked on multi-`Core` lifecycle support, complete executable-write invalidation coverage, and
+representative title/device integration. Its AArch64 dependency also
 needs Android x18 reservation and macOS `MAP_JIT`/per-thread write-protection coverage for allocator
 metadata, code, and alternate buffers.
 
@@ -110,8 +121,9 @@ metadata, code, and alternate buffers.
 
 - x86-64 Linux: real translated/native/original-call/resume control flow, architectural register
   transfer, exact return stopping, measured timing, pending work, self-modifying-code retranslation,
-  typed unsafe-fetch fault, and fallback telemetry pass in `test_dynarec_contract`; representative
-  gameplay is absent.
+  typed unsafe-fetch fault, zero/nonzero per-reason fallback telemetry, and pre-execution threshold
+  admission/refusal behavior pass in `test_dynarec_contract`; typed comparison enhancement suppression passes in
+  `test_diagnostic_run`; representative gameplay is absent.
 - Apple Silicon macOS: no build, executable-memory, instruction-cache, ABI, or device evidence.
 - Android `arm64-v8a`: no NDK build, executable-memory, instruction-cache, ABI, APK, or device evidence.
 - Windows: not a declared supported host because neither the maintained Lightrec dependency nor

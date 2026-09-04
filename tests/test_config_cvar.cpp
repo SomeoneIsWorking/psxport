@@ -287,6 +287,8 @@ static void test_the_declared_inventory_is_not_empty(void) {
   CHECK(n >= 7);
   CHECK(psx::config::find("PSXPORT_NOAUDIO") != nullptr);
   CHECK(psx::config::find("PSXPORT_FPS60") != nullptr); // documented since forever, read by NOTHING
+  CHECK(psx::config::find("PSXPORT_DIAGNOSTIC_RUN") != nullptr);
+  CHECK(psx::config::find("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT") != nullptr);
 }
 
 int main(void) {
