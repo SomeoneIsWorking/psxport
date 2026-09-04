@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-24
 tags: architecture,linkage,fps60,presentation
-depends: runtime/recomp/frame_presenter.cpp#CoreFramePresentationBackend, runtime/recomp/fps60.cpp#Fps60::present_vk, runtime/recomp/fps60_game_hooks.cpp, runtime/recomp/fps60_gpu_present.cpp, tests/test_direct_runtime_no_temporal_link.cpp
+depends: runtime/psx/frame_presenter.cpp#CoreFramePresentationBackend, runtime/psx/fps60.cpp#Fps60::present_vk, runtime/psx/fps60_game_hooks.cpp, runtime/psx/fps60_gpu_present.cpp, tests/test_direct_runtime_no_temporal_link.cpp
 ---
 
 ## Claim

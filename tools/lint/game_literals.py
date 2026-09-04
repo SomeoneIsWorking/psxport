@@ -4,7 +4,7 @@
 WHAT IT GATES.  psxport is a game-agnostic framework; a hardcoded GUEST address in framework code is
 a fact about ONE game's executable compiled into the library every port links.  `psxport_smoke`
 cannot see this class of leak (a byte-faithful transcription of another game's functions contains no
-game SYMBOLS), which is exactly why this lint exists.  Spec: docs/plans/game-seam-redesign.md §7.
+game SYMBOLS), which is exactly why this lint exists. Ownership is defined by docs/codemap.md.
 
 HOW IT GATES.  RATCHET, not big-bang.  `tools/lint/game_literals_baseline.txt` records the flagged
 (file, value) -> count that exists TODAY.  The gate fails when a count GROWS or a new entry appears,
@@ -38,14 +38,14 @@ from dataclasses import dataclass, field
 # Scope (§7): framework code only.
 # ---------------------------------------------------------------------------------------------
 
-SCAN_ROOTS = ("runtime", "tools/recomp")
+SCAN_ROOTS = ("runtime",)
 
 C_LIKE_EXTS = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".inc", ".frag", ".vert"}
 PY_EXTS = {".py"}
 SCANNED_EXTS = C_LIKE_EXTS | PY_EXTS
 
-# Directory components never scanned. `generated/` is the recompiled guest itself, `vendor/` is not
-# ours, `tests/` deliberately uses synthetic guest addresses to exercise the substrate.
+# Directory components never scanned. Build/generated/vendor content is not first-party framework
+# source; tests deliberately use synthetic guest addresses to exercise the substrate.
 SKIP_DIR_COMPONENTS = {"generated", "vendor", "tests", "build", "scratch", ".git"}
 
 # A test file is out of scope wherever it lives, for the same reason tests/ is: its guest addresses
@@ -314,11 +314,11 @@ def ignored_paths(repo: str, roots: tuple[str, ...]) -> tuple[set[str], bool]:
         r = subprocess.run(
             ["git", "-C", repo, "ls-files", "--others", "--ignored", "--exclude-standard", "-z",
              "--", *roots],
-            capture_output=True, text=True, timeout=60)
+            check=False, capture_output=True, text=True, timeout=60)
         if r.returncode != 0:
             return set(), False
         return {p for p in r.stdout.split("\0") if p}, True
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return set(), False
 
 
@@ -672,12 +672,12 @@ def main(argv: list[str]) -> int:
     print("\n  Two legal remedies, and only two:")
     print("   1. Move the fact to where it belongs: a GameConfig scalar the framework reads via")
     print("      `cfg->`, game code behind an abstract class, or a diagnostic ROW the game registers")
-    print("      at init (docs/plans/game-seam-redesign.md §2 decides which, by three questions).")
+    print("      at init; docs/codemap.md defines the framework/title ownership boundary.")
     print("   2. If it is genuinely a CONSOLE constant this classifier cannot know, annotate the line")
     print("      `// psx-console: <the console fact>` — the reason must state the fact, not that you")
     print("      need the number here.")
-    print(f"   For a deliberate BURN-DOWN (a count went down), regenerate the ratchet:")
-    print(f"      python3 tools/lint/game_literals.py --write-baseline")
+    print("   For a deliberate BURN-DOWN (a count went down), regenerate the ratchet:")
+    print("      python3 tools/lint/game_literals.py --write-baseline")
     return 1
 
 

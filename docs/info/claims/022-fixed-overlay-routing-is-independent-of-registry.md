@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: overlay,routing,signature,crashbash
-depends: runtime/recomp/overlay_router.cpp#overlay_resolve_fixed, tests/test_overlay_reloc.cpp
+depends: runtime/psx/overlay_router.cpp#overlay_resolve_fixed, tests/test_overlay_reloc.cpp
 reconfirmed: 2026-08-22
 verified_at: 2026-08-22 19:02:18
 ---

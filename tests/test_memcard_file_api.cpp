@@ -1,12 +1,12 @@
 // test_memcard_file_api.cpp — the BIOS memory-card FILE API is ASYNCHRONOUS, and its return value
 // says so.
 //
-// WHAT IS BROKEN. `runtime/recomp/memcard.cpp` `file_read` / `file_write` (B0:0x34 / B0:0x35) do the
+// WHAT IS BROKEN. `runtime/psx/memcard.cpp` `file_read` / `file_write` (B0:0x34 / B0:0x35) do the
 // host I/O synchronously and return the byte COUNT. Sony's stock libmcrd does not accept a byte count
 // there: its READ and WRITE op state machines retry the BIOS call until it returns ZERO, and only
 // then move to the state that waits for the card completion EVENT. Transcribed from Spyro's own
-// executable (`SCUS_942.28`, generated/shard_2.c gen_func_800671F0 case 0x14, generated/shard_0.c
-// gen_func_80066F34 case 0x14 — Ghidra rendering in the game repo's docs/issues/0051):
+// executable (`SCUS_942.28`, write state 0x800671F0 case 0x14 and read state 0x80066F34 case 0x14,
+// confirmed by the title's binary analysis):
 //
 //     case 0x14:                                   // "start the transfer"
 //       clear_card_events();                       // 0x8006815C: TestEvent x8, clears the flags
@@ -33,9 +33,10 @@
 // GPU or window. Most events use EvMdNOINTR; the directory-completion regression installs one
 // synthetic guest handler through the shipping override/dispatch path so it can prove the exact
 // EvMdINTR callback Crash Bash waits on.
-#include "../runtime/recomp/game.h"
-#include "../runtime/recomp/memcard.h"
-#include "../runtime/recomp/override_registry.h"
+#include "../runtime/cpu/image_identity.h"
+#include "../runtime/cpu/native_dispatch.h"
+#include "../runtime/psx/game.h"
+#include "../runtime/psx/memcard.h"
 #include "testutil.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -104,13 +105,20 @@ static uint32_t open_event(Game *g, uint32_t cls, uint32_t spec) {
   return h;
 }
 
+static void install_directory_callback(Game *g) {
+  const auto image = g->core.imageCatalog().activate(
+      "test-main", {kDirectoryCallback & 0x1FFFFFFFu, (kDirectoryCallback & 0x1FFFFFFFu) + 4u}, 1u);
+  CHECK(g->core.nativeDispatcher().install(
+      {{image, kDirectoryCallback}, "memcard-directory-completion", directory_callback}));
+}
+
 // EvMdINTR (0x1000): delivery dispatches the registered guest handler immediately. The synthetic
 // address is installed through the same override interception point used by a real port, so this
-// exercises Hle::deliverEvent's shipping callback path without linking a title substrate.
+// exercises Hle::deliverEvent's shipping callback path without linking a title runtime.
 static uint32_t open_callback_event(Game *g, uint32_t cls, uint32_t spec) {
   static bool installed = false;
   if (!installed) {
-    overrides::install(kDirectoryCallback, "MemcardDirectoryCompletionTest", directory_callback, directory_callback);
+    install_directory_callback(g);
     installed = true;
   }
   g->core.r[R_A3] = kDirectoryCallback;

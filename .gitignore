@@ -1,6 +1,3 @@
-# Generated recompiler output — regenerable from the ROM
-generated
-
 # Build dirs
 build/
 build-*/
@@ -29,26 +26,17 @@ memory/
 *.psexe
 bios/scph5501.bin
 
-# OpenBIOS source: reproducible build input (scripts/build-openbios.sh clones it); not vendored
+# OpenBIOS source: reproducible build input (scripts/build_openbios.py clones it); not vendored
 vendor/openbios-src/
 
-# recompiler generated output (regenerable; never hand-edit)
-/generated
 __pycache__/
 *.pyc
 
-# Ghidra-derived function list (optional local speed seed; never committed — keep repo public-clean)
-tools/recomp/tomba2_funcs.txt
 .claude/
 
-# generated Vulkan SPIR-V header (tools/gen_vk_shaders.sh)
-runtime/recomp/gpu_vk_shaders.h
-# generated SDL_GPU SPIR-V header (tools/gen_gpu_shaders.sh)
-runtime/recomp/gpu_vk_shaders.h
-
-# standalone offline XA extractor binary (built by tools/build_xa_wavdump.sh)
+# standalone offline XA extractor binary (built by tools/build_xa_wavdump.py)
 tools/xa_wavdump
-# FMV STR extract/decode binaries (built by tools/fmv_export/build.sh)
+# FMV STR extract/decode binaries (built by tools/fmv_export/build.py)
 tools/fmv_export/fmv_export
 tools/fmv_export/test_fmv_decode
 psxport_settings.ini

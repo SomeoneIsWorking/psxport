@@ -1,6 +1,6 @@
 // test_producer_census.cpp — the GRAPHICS PRODUCER CENSUS's table and, above all, its DENOMINATORS.
 //
-// What the census is for: docs/plans/graphics-producer-db.md. USER 2026-08-11 — "I need a DB for each
+// The census records observed native graphics producers. USER 2026-08-11 — "I need a DB for each
 // game to keep track of native graphics producers, framework should do this automatically, when the
 // game renders an effect, if it's not in the DB then a DB entry gets created", populated by ordinary
 // play ("should also be populated when I'm playing"), comparing GTE/OT against native producers.

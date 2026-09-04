@@ -1,0 +1,152 @@
+// gpu_perf.cpp — PORTABLE per-frame CPU phase / frame-time profiler for the native port.
+// ----------------------------------------------------------------------------------------------------
+// Companion to the `vkprof` channel in gpu_vk.cpp (which times the GPU present side: VRAM upload, the
+// VK render pass via timestamp queries, and prim counts). This module fills the gap vkprof can't see:
+// the per-frame CPU phase breakdown of the GUEST-LOGIC half of the frame, plus the overall
+// present-to-present frame time, so "CPU-bound vs GPU-bound" is answerable directly.
+//
+// THE FRAME, as the title's native FrameDriver runs it:
+//   FRAME boundary  -- perf.frameBegin()  (top of FrameDriver::stepFrame)
+//     [pre-tick host work: input, IRQ events, OT clear]
+//     PADFENCE       = the ONE call phase 0 brackets: guest dispatch(0x800788AC).
+//
+//                      THIS PHASE USED TO BE CALLED "LOGIC" AND DESCRIBED AS "ALL guest CPU
+//                      work + render-command submit". That was true when the port ran the guest's own
+//                      frame loop through a super-call there. It is not true now: 0x800788AC is
+//                      natively owned (Engine::padEdgeFence, a per-frame INPUT-EDGE FENCE) and the
+//                      per-frame game work moved to PcScheduler, which phase 3 brackets.
+//
+//                      So the phase kept reporting ~0.00 ms under a name that claimed to cover the
+//                      whole game, and 0.00 under that name reads as "the game is free" rather than
+//                      "the work is not here any more". It misled a session on 2026-08-20 into
+//                      reporting exactly that. Renamed to what it measures. If a phase name and the
+//                      code it brackets ever drift again, rename the phase — do not leave a label
+//                      that a zero can be misread through.
+//     AUDIO          = the per-vblank sequencer tick + SPU field advance (ov_frame_update).
+//     PRESENT        = gpu_present(): VRAM mirror upload + VK record/submit (the CPU cost of present;
+//                      the GPU-side ms is what vkprof's timestamp query reports separately).
+//     [post-tick host work: scheduler step, draw sync, OT submit]
+//   FRAME boundary  -- perf.frameEnd()    (bottom of FrameDriver::stepFrame): wall delta = full frame time.
+//
+// All timing is std::chrono::steady_clock (monotonic, portable to macOS/MoltenVK — NOT gettimeofday /
+// wall-clock-of-day). Default OFF: enabled at runtime via the REPL `debug perf` channel (or
+// PSXPORT_DEBUG=perf). When OFF the hooks cost one cached-int branch each — no clock reads, no overhead.
+// Emits a rolling average every 60 frames through the configured logger, e.g.:
+//
+//   [perf] 60f avg 4.42ms (226.2 fps) | frame 4.42 = pre 0.02 padfence 0.00 audio 0.30 PRESENT-cpu 2.42
+//   idle/pace 0.89 | <-CPU sum 7.53ms
+//
+// Read it against vkprof's "GPU X.XXms": if the CPU phase sum ~= frame time and GPU ms << frame time,
+// the port is CPU-BOUND. The lever is whichever phase actually holds the time — read the line, do not
+// GPU ms ~= frame time while CPU phases are small, it is GPU-BOUND (the present/raster path is the lever).
+
+#include "gpu_perf.h"
+#include <cstdio>
+#include <lucent/log.h>
+
+static inline double ms_between(std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
+  return std::chrono::duration<double, std::milli>(b - a).count();
+}
+
+enum Phase { PH_PADFENCE = 0, PH_AUDIO = 1, PH_PRESENT = 2, PH_SCHED = 3 };
+double *GpuPerf::phaseSlot(int p) {
+  switch (p) {
+  case PH_PADFENCE:
+    return &mAcc.logic;
+  case PH_AUDIO:
+    return &mAcc.audio;
+  case PH_PRESENT:
+    return &mAcc.present;
+  case PH_SCHED:
+    return &mAcc.sched;
+  default:
+    return nullptr;
+  }
+}
+
+int GpuPerf::perfOn() {
+  if (--mPerfRecheck <= 0) {
+    mPerf = lucent::channel_on("perf");
+    mPerfRecheck = 30;
+  }
+  return mPerf;
+}
+
+// Top of the title-owned frame step: start the frame clock.
+void GpuPerf::frameBegin() {
+  if (!perfOn()) {
+    return;
+  }
+  mTFrame = mTMark = clk::now();
+}
+
+// Mark the boundary between the pre-tick host work and the next phase (charges elapsed since the last
+// mark to `pre`). Called just before the guest tick begins.
+void GpuPerf::markPre() {
+  if (mPerf <= 0) {
+    return;
+  }
+  clk::time_point n = clk::now();
+  mAcc.pre += ms_between(mTMark, n);
+  mTMark = n;
+}
+
+// Open a timed phase (PADFENCE / AUDIO / PRESENT / SCHED).
+void GpuPerf::phaseBegin(int phase) {
+  if (mPerf <= 0) {
+    return;
+  }
+  (void)phase;
+  mTPhase = clk::now();
+}
+
+// Close the open phase, charging its elapsed time to the phase slot and advancing the post-mark.
+void GpuPerf::phaseEnd(int phase) {
+  if (mPerf <= 0) {
+    return;
+  }
+  clk::time_point n = clk::now();
+  double *s = phaseSlot(phase);
+  if (s) {
+    *s += ms_between(mTPhase, n);
+  }
+  mTMark = n; // anything after the last closed phase counts toward `post`
+}
+
+// Bottom of the title-owned frame step: close the frame, accumulate the post-tick remainder + the full frame
+// wall time, and emit the rolling average every 60 frames.
+void GpuPerf::frameEnd() {
+  if (mPerf <= 0) {
+    return;
+  }
+  clk::time_point n = clk::now();
+  mAcc.post += ms_between(mTMark, n);
+  mAcc.frame += ms_between(mTFrame, n);
+  if (++mAcc.frames < 60) {
+    return;
+  }
+
+  double nf = (double)mAcc.frames;
+  double frame = mAcc.frame / nf;
+  double pre = mAcc.pre / nf, logic = mAcc.logic / nf, audio = mAcc.audio / nf;
+  double present = mAcc.present / nf, sched = mAcc.sched / nf, post = mAcc.post / nf;
+  double cpu_sum = pre + logic + audio + present + sched + post;
+  double idle = frame - cpu_sum; // pacing / vsync sleep / anything outside the measured spans
+  lucent::info("perf",
+               "{:.0f}f avg {:.2f}ms ({:.1f} fps) | frame {:.2f} = pre {:.2f} padfence {:.2f} audio {:.2f} "
+               "PRESENT-cpu {:.2f} GAME-LOGIC {:.2f} post {:.2f} + idle/pace {:.2f} | CPU-sum {:.2f}ms",
+               nf,
+               frame,
+               frame > 0 ? 1000.0 / frame : 0.0,
+               frame,
+               pre,
+               logic,
+               audio,
+               present,
+               sched,
+               post,
+               idle,
+               cpu_sum);
+
+  mAcc = Acc{};
+}

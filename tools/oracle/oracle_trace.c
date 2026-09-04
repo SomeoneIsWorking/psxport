@@ -1,5 +1,5 @@
 // oracle_trace.c — run a REAL game executable in the independent reference emulator and write a
-// per-instruction trace. Milestone 2 of `docs/plans/oracle-against-beetle.md`.
+// per-instruction trace. Architecture and evidence limits are documented in `docs/oracle.md`.
 //
 // ═══ WHY A TRACE FILE, AND NOT ONE PROCESS RUNNING BOTH SIDES ════════════════════════════════════════
 // The plan recorded two ways to keep the reference independent of the thing being tested — a separate
@@ -11,7 +11,7 @@
 //   * it needs no IPC protocol, no lockstep handshake, and no ordering assumptions between two running
 //     emulators;
 //   * it is REPRODUCIBLE and INSPECTABLE. A pipe's contents exist only while both ends live; a trace can
-//     be diffed, re-diffed after a recompiler change, read by a human, and checked into an issue.
+//     be diffed, re-diffed after an executor change, read by a human, and checked into an issue.
 //   * a compare that fails can be re-run against the SAME reference bytes, so "did the oracle change or
 //     did we?" is answerable. With two live processes it is not.
 // The port still cannot steer this process. A CONSUMER can explicitly model checked external
@@ -214,7 +214,7 @@ static void usage(void) {
           "unchanged step must not look the same to a diff.\n"
           "\n"
           "It writes NO trace and exits 2 if the image cannot be loaded — a truncated trace that looks\n"
-          "complete is worse than none. docs/plans/oracle-against-beetle.md\n");
+          "complete is worse than none. See docs/oracle.md.\n");
 }
 
 int main(int argc, char **argv) {

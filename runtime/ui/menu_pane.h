@@ -1,7 +1,6 @@
 // psx::ui::MenuPane — one tab's page of rows.
 //
-// SHAPE FROM DUSKLIGHT (CC0), `src/dusk/ui/pane.{hpp,cpp}`: the pane is the component that owns the
-// rows, so "which rows exist" and "which pane is shown" are one object's business rather than two
+// The pane owns its rows, so "which rows exist" and "which pane is shown" are one object's business rather than two
 // `GetElementsByTagName` sweeps of the whole document indexed by a bare `int`.
 //
 // WHAT THAT REPLACES: `setActiveTab()` used to call `GetElementsByTagName(panes, "pane")` and

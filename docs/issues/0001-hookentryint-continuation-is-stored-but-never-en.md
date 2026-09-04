@@ -16,8 +16,8 @@ The observed chain elements are VBlank-only and correctly decline CD bit 2; the 
 continuation is never entered.
 
 Vagrant Story supplied a third independent saved context: `0x80031084` contains RA `0x8001FAD0`,
-the instruction after libetc's setjmp call at `0x8001FAC8`. Entering the fixed framework path exposed
-that address as a fail-fast recompiler miss, proving the formerly skipped path was now executing.
+the instruction after libetc's setjmp call at `0x8001FAC8`. Entering the fixed framework path reached
+that address, proving the formerly skipped path was now executing.
 
 ## Root cause
 
@@ -25,16 +25,10 @@ that address as a fail-fast recompiler miss, proving the formerly skipped path w
 restored that buffer and dispatched its saved return address. Consequently the guest master interrupt
 dispatcher could not scan its IRQ source table and invoke the CD callback.
 
-A second shared defect blocked the required static-recompiler entry: `emit.py` validated
-`main_reentry` and passed it as boundary metadata, but omitted it from the resident seed union, so it
-emitted no wrapper, body, or dispatcher case. `test_emit.py` constructs a synthetic executable
-whose continuation lies inside a natural function and proves both the seeded and unseeded answers.
-
 The first executable consumer then exposed the other half of the control contract:
-`B0:0x17 ReturnFromException` must not return to generated C. In Vagrant Story, returning fell through
+`B0:0x17 ReturnFromException` must return through the typed execution boundary. In Vagrant Story, falling through
 from the saved `0x8001FAD0` path into one-time interrupt initialization at `0x8001FAE0`, repeatedly
-cleared DMA4's DICR enable, and left `_waitTransferAvailable` stuck. A private scoped exception now
-unwinds only the custom-exit dispatch; normal return is a fail-fast contract violation.
+cleared DMA4's DICR enable and left `_waitTransferAvailable` stuck.
 
 ## Falsifier
 
@@ -45,9 +39,9 @@ saved continuation must remain undispatched.
 ### Resolution (2026-08-21)
 
 Resolved by restoring the measured HookEntryInt jmp_buf after the SysEnq chain, dispatching its
-main_reentry continuation, and making B0:0x17 a scoped non-returning unwind. MMX4 calls IRQ2
+saved continuation, and making B0:0x17 a non-returning execution exit. MMX4 calls IRQ2
 0x800E7944 and clears I_STAT; Crash Bash reaches 0x8003F5F0 and its CD drain; Vagrant retains DICR
 0x00900000, repeatedly dispatches DMA4 0x8001DE94, and advances VBlank 0 to 179. Hermetic gates prove
-restored/refused contexts, non-return versus fallthrough, and emitted versus absent main_reentry.
+restored/refused contexts and non-return versus fallthrough.
 Vagrant durable evidence: `tools/re_vblank.py`, `docs/re-frontier.md` RE-02/RE-10, claims 012/014,
 issues 0014/0015.

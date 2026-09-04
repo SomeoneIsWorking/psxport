@@ -2,9 +2,9 @@
 // GameRuntime layout. A missing direct-runtime declaration is a safe no-write answer, not a null
 // GameConfig dereference.
 
-#include "../runtime/recomp/game.h"
-#include "../runtime/recomp/game_runtime.h"
-#include "../runtime/recomp/legacy_game_config.h"
+#include "../runtime/psx/game.h"
+#include "../runtime/psx/game_runtime.h"
+#include "../runtime/psx/legacy_game_config.h"
 #include "testutil.h"
 
 #include <memory>

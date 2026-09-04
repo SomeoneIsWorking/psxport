@@ -2,7 +2,7 @@
 // through the same Hle::dispatchBios seam as the guest's tail-jump stubs. The
 // sequence is Sony's libc LCG: state = state * 0x41C64E6D + 0x3039; return
 // (state >> 16) & 0x7FFF.
-#include "../runtime/recomp/game.h"
+#include "../runtime/psx/game.h"
 #include "testutil.h"
 
 namespace {

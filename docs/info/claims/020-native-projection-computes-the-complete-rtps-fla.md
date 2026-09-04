@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: native-projection,gte
-depends: runtime/recomp/native_projection.cpp, tests/test_native_projection.cpp
+depends: runtime/psx/native_projection.cpp, tests/test_native_projection.cpp
 ---
 
 ## Claim

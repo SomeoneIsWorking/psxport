@@ -24,7 +24,7 @@
 // DENOMINATORS: every case asserts the COUNT of halfwords/words it compared, so a case that
 // compared nothing cannot read as a pass (testutil.h also fails a case that asserts nothing).
 
-#include "../runtime/recomp/game.h"
+#include "../runtime/psx/game.h"
 #include "testutil.h"
 
 // ---- helpers ----------------------------------------------------------------------------------

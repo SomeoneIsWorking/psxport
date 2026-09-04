@@ -10,12 +10,21 @@ updated: 2026-08-25
 
 ## Root cause
 
-`rec_syscall` changed the HLE interrupt flag directly and returned. It did not model R3000A syscall exception entry/return, and generated syscall sites did not supply their exact instruction PC. The diagnostic observer also covered only emitted instruction sites, so an external BIOS target such as B0:56 could execute before comparison.
+The syscall HLE changed the interrupt flag directly and returned. It did not model R3000A syscall
+exception entry/return, and the execution boundary did not supply the exact instruction PC. The
+diagnostic observer also missed external BIOS targets such as B0:56 before comparison.
 
 ## Resolution
 
-The emitter and interpreter pass the exact syscall PC to one `syscall_exception` owner. It records EPC and Cause code 8, pushes/pops the low Status mode stack, and applies the requested return interrupt state. Non-generated dispatch misses are observed immediately before BIOS/HLE mutation; generated entries remain owned by emitted checkpoints, avoiding double counts. The independent oracle has a checked syscall-return seam with explicit selector/v0 and CP0 evidence.
+The guest executor passes the exact syscall PC to one `syscall_exception` owner. It records EPC and
+Cause code 8, pushes/pops the low Status mode stack, and applies the requested return interrupt
+state. Calls crossing into BIOS/HLE are observed immediately before mutation without double-counting
+the executor checkpoint. The independent oracle has a checked syscall-return seam with explicit
+selector/v0 and CP0 evidence.
 
 ## Evidence
 
-Crash direct differential agrees 34/34 at the first post-syscall boundary: PC 0x000000B0, t1=0x56, ra=0x800431B8. Both legs report Cause 0x20, EPC 0x8003E1FC, and resume 0x8003E200. Focused runtime/observer/oracle tests pass, the emitter suite passes 42/42, and a wrong syscall selector is refused without post-return evidence.
+Crash direct differential agrees 34/34 at the first post-syscall boundary: PC 0x000000B0, t1=0x56,
+ra=0x800431B8. Both legs report Cause 0x20, EPC 0x8003E1FC, and resume 0x8003E200. Focused
+runtime/observer/oracle tests pass, and a wrong syscall selector is refused without post-return
+evidence.

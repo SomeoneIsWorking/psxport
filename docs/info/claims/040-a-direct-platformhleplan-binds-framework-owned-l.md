@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-26
 tags: runtime,architecture,platform-hle,projection
-depends: runtime/recomp/platform_hle.h#PlatformHlePlan, runtime/recomp/sync_overrides.cpp#PlatformHle::initBuiltins, tests/test_platform_hle_direct_runtime.cpp#test_direct_runtime_plan_binds_standard_libgte_projection_leaves
+depends: runtime/psx/platform_hle.h#PlatformHlePlan, runtime/psx/sync_overrides.cpp#PlatformHle::initBuiltins, tests/test_platform_hle_direct_runtime.cpp#test_direct_runtime_plan_binds_standard_libgte_projection_leaves
 ---
 
 ## Claim

@@ -20,7 +20,7 @@
 // NEGATIVE-RESULT DISCIPLINE: both signs of the doubled area are asserted (a triangle's winding
 // makes `aa` negative half the time, and rounding must not become floor-toward-negative there), and
 // exact cases are asserted alongside the .5 cases so a fix that simply added +1 everywhere fails.
-#include "../runtime/recomp/gpu_native_internal.h"
+#include "../runtime/psx/gpu_native_internal.h"
 #include "testutil.h"
 
 static void test_exact_values_are_unchanged(void) {

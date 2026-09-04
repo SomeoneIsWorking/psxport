@@ -1,7 +1,7 @@
 // xa_demux_all: ONE pass over the CHD, split EVERY XA-ADPCM audio channel (file==1, chan 0..31) into
 // its own WAV. Fast (single disc scan). The decoder is the same as xa_wavdump/native_fmv. The Tomba!2
 // music/voice is 32 interleaved channels; this dumps them all so a track (e.g. the conversation BGM)
-// can be identified. Run: PSXPORT_TOMBA2_DISC=<chd> xa_demux_all <outdir>
+// can be identified. Run: xa_demux_all <disc.chd> [outdir]
 #include <libchdr/chd.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -107,10 +107,13 @@ static int xa_decode_sector(const uint8_t *raw, int16_t *out, int16_t hist[2][2]
 
 #define NCH 32
 int main(int argc, char **argv) {
-  const char *outdir = argc > 1 ? argv[1] : "scratch/ref/xa";
-  const char *disc = getenv("PSXPORT_TOMBA2_DISC");
-  if (!disc || !disc_open(disc)) {
-    fprintf(stderr, "set PSXPORT_TOMBA2_DISC\n");
+  if (argc < 2 || argc > 3) {
+    fprintf(stderr, "usage: %s <disc.chd> [outdir]\n", argv[0]);
+    return 2;
+  }
+  const char *outdir = argc > 2 ? argv[2] : "scratch/ref/xa";
+  if (!disc_open(argv[1])) {
+    fprintf(stderr, "cannot open CHD: %s\n", argv[1]);
     return 1;
   }
   FILE *f[NCH] = {0};

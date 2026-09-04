@@ -4,7 +4,7 @@
 // budget. While it was unmapped I/O reading 0, every such delta was 0, every budget was unreachable,
 // and the spin never ended. These cases assert the two properties that makes it usable — it advances
 // with emulated CPU time, and it wraps at 16 bits — plus the mode/target plumbing around it.
-#include "../runtime/recomp/game.h"
+#include "../runtime/psx/game.h"
 #include "testutil.h"
 
 namespace {

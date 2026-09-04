@@ -3,12 +3,12 @@
 // spu_beetle.c's IRQ_Assert used to be an unconditional no-op marked STOPGAP: the vendored Beetle SPU
 // computed the SPU IRQ correctly (SPUCNT bit 6 + IRQAddr matched against SPU-RAM addresses) and the
 // runtime simply threw the line away, so a guest that services the SPU interrupt never ran its
-// handler. The delivery rule now lives in runtime/recomp/irq_edge.h and hw_bind.cpp routes the line
+// handler. The delivery rule now lives in runtime/psx/irq_edge.h and hw_bind.cpp routes the line
 // through it into Game::hle.i_stat bit 9.
 //
 // The no-op stopgap fails every case below that asserts a bit ever appears; the LEVEL-driven mistake
 // (the obvious wrong "fix") fails the ack cases.
-#include "../runtime/recomp/irq_edge.h"
+#include "../runtime/psx/irq_edge.h"
 #include "testutil.h"
 
 // A source going low->high sets its bit. That is the whole point, and it is what the no-op dropped.

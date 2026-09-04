@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-24
 tags: cdc,command,guest-time
-depends: runtime/recomp/cdc_command_phase.cpp#cdc_command_service, runtime/recomp/cdc_native.cpp#cdc_drive_service, tests/test_cdc_command_phases.cpp
+depends: runtime/psx/cdc_command_phase.cpp#cdc_command_service, runtime/psx/cdc_native.cpp#cdc_drive_service, tests/test_cdc_command_phases.cpp
 ---
 
 ## Claim

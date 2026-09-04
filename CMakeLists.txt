@@ -1,8 +1,6 @@
-# psxport — a PSX→PC static-recompilation FRAMEWORK. This repo builds the game-agnostic pieces: the
-# recompiler tooling, the runtime/recomp substrate (interp + HW backends + SBS harness + VK renderer),
-# and the psxport STATIC library a game links. A game (e.g. Tomba2Engine) vendors this repo as a
-# submodule, derives GameRuntime (runtime/recomp/game_runtime.h), provides the recompiled substrate
-# (generated/), and links libpsxport. See docs/porting-a-new-psx-game.md.
+# psxport — a native/Lightrec PSX→PC runtime. The product library contains native platform owners
+# and the runtime guest-execution boundary; offline derived guest source and selectable fallback
+# engines are not product inputs.
 cmake_minimum_required(VERSION 3.21)
 project(psxport CXX C)
 
@@ -11,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Threads REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 # libchdr (CHD access for tools/discdump) — from the Beetle PSX submodule (bundles its own lzma).
 add_subdirectory(vendor/beetle-psx/deps/libchdr EXCLUDE_FROM_ALL)

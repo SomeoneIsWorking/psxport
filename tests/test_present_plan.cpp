@@ -1,6 +1,6 @@
 // test_present_plan.cpp — the presented picture must not depend on which leg built it.
 //
-// WHAT THIS GATES. `runtime/recomp/present_plan.h` decides everything about a presented frame:
+// WHAT THIS GATES. `runtime/psx/present_plan.h` decides everything about a presented frame:
 // whether the composite runs, where it lands in the sink, which target it samples, the fade, and the
 // 24bpp flag. The rule is that ONLY `to_swapchain` may differ between headless and windowed. If any
 // other field can, then a headless measurement is a measurement of a different program — which is
@@ -15,7 +15,7 @@
 // go red. A test that has never been seen red proves nothing about what it covers, and a test whose
 // red is a story rather than a command cannot be re-checked by the next session.
 //
-//   RED : g++ -std=c++20 -I runtime/recomp -I tests -DPSXPORT_TEST_LEGACY_PRESENT_PLAN
+//   RED : g++ -std=c++20 -I runtime/psx -I tests -DPSXPORT_TEST_LEGACY_PRESENT_PLAN
 //              -o scratch/bin/t tests/test_present_plan.cpp && scratch/bin/t
 //   GREEN: same without the define, or `ctest -R test_present_plan`.
 //

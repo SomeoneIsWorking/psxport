@@ -3,9 +3,9 @@
 Generic port-tooling ENGINES live here; the DATA they read stays in each game repo. Every game vendors
 this repo as `external/psxport`, so an engine here reaches all of them:
 
-```sh
+```text
 cd <game-repo>
-python3 external/psxport/tools/port/re_frontier.py next
+uv run --frozen python external/psxport/tools/port/re_frontier.py next
 ```
 
 **Why these were hoisted (measured, not tidiness).** `re_frontier.py`'s green-over-nothing bug — printing

@@ -14,8 +14,6 @@ decomp is an excellent source of function boundaries and names; it is not eviden
 | `theMagicalKarp/open-spyro` | **CC0-1.0** | take code AND ideas freely, cite as courtesy |
 | `TheMobyCollective/spyro-1` | **CC0-1.0** | same — the primary Spyro decomp reference (vendored `spyro/external/spyro-1`) |
 | `OpenDriver2/PsyCross` | **MIT** | code AND ideas freely — the Psy-Q SDK reference (vendored `psxport/external/psycross`) |
-| `TwilitRealm/dusklight` | **CC0** | same (see `AGENTS.md`) |
-| `mstan/psxrecomp` | **PolyForm Noncommercial 1.0.0** | **READ AND LEARN ONLY.** Copying code drags the noncommercial term into this repo. Take the SHAPE, never the text |
 | `hansbonini/psx_tomba` | check before use | not yet verified — do that before taking anything |
 
 ## decomp.dev — the matching-decompilation progress tracker
@@ -37,27 +35,8 @@ site and commenting on PRs.
 **psxport cannot report to decomp.dev, and the reason is structural, not administrative.** That metric is
 matched bytes against the original objects. Our verification axis is SBS byte-exact *RAM parity* — a real
 guarantee, arguably a harder one, but not object identity, so there is nothing for `objdiff` to measure. I
-found no stated policy on whether the site accepts non-matching or recompilation projects; `psxrecomp` is
-not listed either, which is suggestive and not proof. **Treat eligibility as UNKNOWN rather than settled.**
-
-## `mstan/psxrecomp` — the same technique, a different destination
-
-A PS1 static-recompiler ecosystem whose architecture is strikingly close to ours: recompiler + runtime
-split, per-game repos pinning the framework as a submodule, generated C never hand-edited (fixes go in the
-recompiler), a recompiled BIOS as the correctness oracle, and a MIPS interpreter fallback that is compiled
-away as coverage grows. It already ships **Tomba! and Tomba! 2** ports (`mstan/tombarecomp`), plus Ape
-Escape, Mega Man X4–X6 and a community Xenogears port.
-
-**The goals diverge and the difference is worth keeping straight.** psxrecomp aims at a faithful
-hardware-accurate runtime plus enhancements. psxport's stated goal is the other end — *rebuild as a
-PC-native engine, do NOT simulate the PSX* — with the recomp as oracle and scaffolding to be replaced.
-Use it only as prior-art evidence for solved problem classes such as overlay identity, BIOS boundaries,
-and per-game repository layout. psxport's own codemap and verified behavior decide its architecture;
-do not import that project's static pipeline or code.
-
-**USER DECISION 2026-08-12: we are NOT engaging with their community (R.A.I.D.).** *"I won't contact
-R.A.I.D, I don't like their workflow either."* Do not propose it again, and do not route contributions
-through it.
+found no stated policy on whether the site accepts non-matching projects. Treat eligibility as unknown
+rather than settled.
 
 ## Per-title prior art
 
@@ -78,7 +57,7 @@ single game** — it is a from-scratch native reimplementation of the **Psy-Q SD
 `libspu`, `libcd`), plus the PSX GTE in software (with the PGXP-Z vertex cache) and a modern renderer
 (OpenGL/PSX VRAM emulation), built to run PSYQ-based PS1 games on PC. That makes it the closest thing to a
 reference implementation of the SDK every game in this workspace links against — the same SDK surface
-psxport HLEs in `runtime/recomp/` and its vendored beetle-psx backends. Read it for the SHAPE of a clean
+psxport HLEs in `runtime/psx/` and its vendored beetle-psx backends. Read it for the SHAPE of a clean
 native SDK (function semantics, how the GPU linked-list / polygon pipeline is structured, how libcd
 read-scheduling is modelled) when designing native ownership of SDK layers; MIT means code can be taken,
 but psxport's own SDK layer is a different architecture, so treat it as a behavioural oracle, not a

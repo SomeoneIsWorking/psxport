@@ -717,11 +717,11 @@ measured any more.
 
 ## Frontier
 
-### RE-00 — Provision + statically recompile the executable
+### RE-00 — Provision and authenticate the executable
 - status: re-verified
 - deps:
 - where-2: a hand-added field this tool has no schema for; INST-14 recorded one being deleted
-- evidence: PS-X EXE header: entry 0x8008739C, load 0x80010000, text 0xB6800
+- evidence: PS-X EXE header and authenticated image identity
 - where:
 - gap:
 - notes:

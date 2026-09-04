@@ -1,0 +1,44 @@
+name: Asset-free native runtime contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64:
+    name: Linux x86-64 native/Lightrec contract
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    env:
+      PSXPORT_LIGHTREC_DIR: ${{ github.workspace }}/shared/lightrec
+    steps:
+      - name: Check out psxport with full history
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+      - name: Check out the exact maintained Lightrec revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: SomeoneIsWorking/lightrec
+          ref: c9f0a37dbbc7e24d841c84751d9619ad1bfcb7d8
+          path: shared/lightrec
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select Python 3.13
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13.7"
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            clang clang-format clang-tidy cmake glslc libfreetype-dev liblightning-dev \
+            libsdl3-dev libsdl3-image-dev ninja-build pkg-config zlib1g-dev
+      - name: Run the asset-free product and repository contracts
+        run: python tools/verify.py

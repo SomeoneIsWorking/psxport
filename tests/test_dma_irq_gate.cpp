@@ -1,6 +1,6 @@
 // test_dma_irq_gate.cpp — DICR decides WHICH DMA completions the guest hears about.
 //
-// The rule under test is `runtime/recomp/dma_irq.h`. Before it existed, DPCR and DICR were not
+// The rule under test is `runtime/psx/dma_irq.h`. Before it existed, DPCR and DICR were not
 // modelled at all — reads returned 0, writes fell through to the stray-I/O path — so the runtime
 // signalled the guest's DMA-completion callback on EVERY transfer. That is the bug this file pins:
 // a port that cannot see the guest's per-channel interrupt enable cannot tell a transfer the guest
@@ -18,7 +18,7 @@
 //     an STR frame only, so one frame of N sectors owes the guest exactly ONE completion.
 //
 // Hermetic: pure integer rules, no Core, no disc, no GPU.
-#include "../runtime/recomp/dma_irq.h"
+#include "../runtime/psx/dma_irq.h"
 #include "testutil.h"
 
 // Channel 3 is the CD-ROM's. Named rather than spelled 3 at fifteen call sites.

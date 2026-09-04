@@ -7,9 +7,9 @@
 // This is the gate for a measured incident. beetle-psx 190021cc made gte_cur/gte_default_regs
 // _Thread_local; a task fiber then saw gte_cur == NULL, fell back to its own zeroed gte_default_regs
 // whose CR/DR are NULL, and the first guest GTE write on that fiber stored through NULL. Effect:
-// PSXPORT_ORACLE=1 segfaulted in every 3D scene (8 of 9 replays in Tomba2Engine's library), because
-// ORACLE's GATE component runs the recompiled guest bodies inside the fiber rather than intercepting
-// them with natives on the scheduler thread. tests/test_gte_isolated.cpp is entirely single-threaded,
+// Concurrent execution segfaulted in every 3D scene (8 of 9 replays in Tomba2Engine's library), because
+// A guest-execution component runs guest bodies inside the fiber rather than intercepting them with
+// native calls on the scheduler thread. tests/test_gte_isolated.cpp is entirely single-threaded,
 // which is exactly why that shipped green.
 //
 // Note what this asserts: not merely "it does not crash", but that the write LANDS IN THE BOUND STATE.

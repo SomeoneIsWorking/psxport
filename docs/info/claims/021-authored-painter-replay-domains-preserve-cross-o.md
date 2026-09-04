@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: gpu,renderer,painter,order
-depends: runtime/recomp/shaders_gpu/painter_tri.frag#main, runtime/recomp/gpu_painter.cpp#gpu_vk_painter_stage_draw_area_selftest
+depends: runtime/psx/shaders_gpu/painter_tri.frag#main, runtime/psx/gpu_painter.cpp#gpu_vk_painter_stage_draw_area_selftest
 reconfirmed: 2026-08-22
 verified_at: 2026-08-22 18:00:09
 ---

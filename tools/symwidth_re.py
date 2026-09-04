@@ -9,7 +9,7 @@
 # register value across unrelated code regions in a switch-heavy function — see the psxport
 # ActorReward session, docs/findings/tooling.md, for a case where that happened).
 #
-# USAGE (see tools/decomp.sh for the pyghidraRun invocation shape):
+# USAGE: invoke as a pyghidraRun -H post-script.
 #   DW_ADDRS="800bf874,800e7fee,1f80017c" \
 #   pyghidraRun -H scratch/ghidra <project> -process -noanalysis \
 #     -scriptPath tools -postScript symwidth_re.py -scriptlog scratch/logs/symwidth.log \

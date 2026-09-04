@@ -21,11 +21,11 @@ std::string read_source(const std::filesystem::path &path) {
 void test_program_image_consumers_do_not_read_legacy_bag() {
   const std::filesystem::path root = std::filesystem::path(__FILE__).parent_path().parent_path();
   const char *consumers[] = {
-      "runtime/recomp/crt0_boot.h",
-      "runtime/recomp/crt0_verify.h",
-      "runtime/recomp/native_boot.cpp",
-      "runtime/recomp/overlay_router.cpp",
-      "runtime/recomp/sync_overrides.cpp",
+      "runtime/psx/crt0_boot.h",
+      "runtime/psx/crt0_verify.h",
+      "runtime/psx/native_boot.cpp",
+      "runtime/cpu/image_identity.cpp",
+      "runtime/cpu/native_dispatch.cpp",
   };
 
   for (const char *relative : consumers) {
@@ -42,9 +42,14 @@ void test_program_image_consumers_do_not_read_legacy_bag() {
   }
 }
 
+void test_missing_owner_file_cannot_produce_a_vacuous_pass() {
+  const std::filesystem::path root = std::filesystem::path(__FILE__).parent_path().parent_path();
+  CHECK(read_source(root / "runtime/psx/deleted-image-owner.cpp").empty());
+}
+
 void test_legacy_hooks_cannot_own_program_image() {
   const std::filesystem::path root = std::filesystem::path(__FILE__).parent_path().parent_path();
-  const std::string hooks = read_source(root / "runtime/recomp/legacy_game_hooks.h");
+  const std::string hooks = read_source(root / "runtime/psx/legacy_game_hooks.h");
   CHECK(!hooks.empty());
   CHECK(hooks.find("GuestProgramImage") == std::string::npos);
   CHECK(hooks.find("guestProgramImage") == std::string::npos);
@@ -54,6 +59,7 @@ void test_legacy_hooks_cannot_own_program_image() {
 
 int main() {
   RUN(program_image_consumers_do_not_read_legacy_bag);
+  RUN(missing_owner_file_cannot_produce_a_vacuous_pass);
   RUN(legacy_hooks_cannot_own_program_image);
   return pt_summary();
 }

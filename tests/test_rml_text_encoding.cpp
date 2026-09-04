@@ -26,7 +26,7 @@
 //       the comparison `GetInnerRML() != raw_markup` was ALWAYS true and the element was reparsed
 //       and relaid-out every single frame.
 //
-// So the unit under test is the DATA->MARKUP boundary: rml_text_markup() in runtime/recomp/
+// So the unit under test is the DATA->MARKUP boundary: rml_text_markup() in runtime/psx/
 // rml_text.h. Encoding there makes both defects structurally impossible — a data string can no
 // longer be read as markup, and the round trip through the DOM is stable so the guard works.
 //
@@ -268,7 +268,7 @@ static void test_shipped_rml_assets_use_only_decodable_entities(void) {
 // cannot reintroduce data-as-markup without this test going red.
 //
 // THE CORPUS IS ENUMERATED, NOT LISTED. This test used to name one file,
-// `runtime/recomp/rmlui_overlay.cpp`, because at the time the whole UI was that file. When the UI
+// `runtime/psx/rmlui_overlay.cpp`, because at the time the whole UI was that file. When the UI
 // was split into components under `runtime/ui/`, the boundary moved with it and the test went red
 // reporting "0 call sites" — the right failure, but only because the count had to be EXACTLY one.
 // Had it been written as "at most one" it would have gone green while covering nothing. A
@@ -294,7 +294,7 @@ static void test_overlay_routes_all_text_through_one_boundary(void) {
     }
   }
   // The overlay shell still owns RmlUi's lifetime and could reintroduce a raw setter on its own.
-  corpus.push_back("runtime/recomp/rmlui_overlay.cpp");
+  corpus.push_back("runtime/psx/rmlui_overlay.cpp");
   std::sort(corpus.begin(), corpus.end());
 
   // A corpus this small means the walk broke, not that the subsystem shrank. Stated as a floor so

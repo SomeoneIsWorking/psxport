@@ -38,4 +38,4 @@ Crash Bash witness pair.
 
 Measured on the consuming port: Crash Bash's exact frame-300 diff>8 against its retained PSX reference
 falls from 5,546 to 45 of 691,200 pixels (upper 39, subtitle 0, lower 6), on a 301-frame run that
-reconciles every frame with no recompilation miss, fatal trap, or guest-VSync violation.
+reconciles every frame with no executor fault, fatal trap, or guest-VSync violation.

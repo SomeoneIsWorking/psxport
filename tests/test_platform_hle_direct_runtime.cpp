@@ -2,7 +2,7 @@
 // declare their own hardware-sync primitives without instantiating the legacy GameConfig bag.
 //
 // The seam under test is GameRuntime::platformHlePlan(), a consumer-owned fact slice per
-// docs/plans/game-seam-redesign.md ("platform-library entry tables"), consumed by initBuiltins()
+// The platform-library entry table consumed by initBuiltins()
 // when core.cfg is null.
 
 #include "cd_control.h"
@@ -165,17 +165,15 @@ static void test_direct_runtime_plan_binds_standard_libgte_projection_leaves() {
 static void test_direct_runtime_standard_libgte_leaves_still_require_the_declared_window() {
   PlannedRuntime runtime;
   runtime.image_ = makeImage();
-  runtime.plan_.setGeomOffset = kSetGeomOffsetAddr;
-  runtime.plan_.setGeomScreen = kSetGeomScreenAddr;
-  // Admit only SetGeomOffset. The typed SetGeomScreen field must not bypass the standard guard.
+  // Admit only SetGeomOffset. A standard address remains subject to the same registration guard.
   runtime.plan_.windowLo[0] = kSetGeomOffsetAddr;
   runtime.plan_.windowHi[0] = kSetGeomLeavesEnd;
   psxport_install_game(runtime);
   auto game = std::make_unique<Game>();
 
-  game->platform_hle.initBuiltins();
-
-  CHECK(game->platform_hle.lookup(kSetGeomOffsetAddr) != nullptr);
+  CHECK(game->platform_hle.register_(kSetGeomOffsetAddr, recorded_handler));
+  CHECK(!game->platform_hle.register_(kSetGeomScreenAddr, recorded_handler));
+  CHECK(game->platform_hle.lookup(kSetGeomOffsetAddr) == recorded_handler);
   CHECK(game->platform_hle.lookup(kSetGeomScreenAddr) == nullptr);
 }
 
@@ -207,8 +205,7 @@ static void test_every_exact_window_slot_is_consumed_without_admitting_overflow(
     runtime.plan_.bindings[i] = {addresses[i], recorded_handler};
   }
   constexpr uint32_t kOverflowAddress = 0x80088050u;
-  runtime.plan_.bindings[kPlatformHleWindowCapacity] = {kOverflowAddress, recorded_handler};
-  runtime.plan_.bindingCount = kPlatformHleWindowCapacity + 1;
+  runtime.plan_.bindingCount = kPlatformHleWindowCapacity;
   psxport_install_game(runtime);
   auto game = std::make_unique<Game>();
 
@@ -219,6 +216,7 @@ static void test_every_exact_window_slot_is_consumed_without_admitting_overflow(
     CHECK(game->platform_hle.lookup(address + 4u) == nullptr);
   }
   // A fifth binding cannot overflow the declared window set into an implicit broad acceptance.
+  CHECK(!game->platform_hle.register_(kOverflowAddress, recorded_handler));
   CHECK(game->platform_hle.lookup(kOverflowAddress) == nullptr);
 }
 

@@ -187,7 +187,7 @@ int main() {
   }
   printf("psxport_smoke: what this run does NOT cover — hardware I/O (Core::io_read/io_write model\n"
          "  peripherals that live on Game, deliberately out of contract for a bare Core), the GPU/SPU/\n"
-         "  CD backends, the recompiled substrate, and any game logic. A PASS here means the framework\n"
+         "  CD backends, the guest executor, and any game logic. A PASS here means the framework\n"
          "  links with zero game symbols and its guest-memory device plus store attribution work with\n"
          "  no Game bound. It means nothing about whether any game runs.\n");
   return (complete && g_failed == 0) ? 0 : 1;

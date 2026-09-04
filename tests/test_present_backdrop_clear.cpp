@@ -26,7 +26,7 @@
 // input are asserted — a predicate hardcoded to "never clear" would pass a suite that only checked
 // the preserve cases, and would reintroduce issue 0029's raw-VRAM reveal on the native path.
 
-#include "../runtime/recomp/gpu_vk_present_policy.h"
+#include "../runtime/psx/gpu_vk_present_policy.h"
 #include <stdio.h>
 
 static int g_checks = 0, g_fail = 0;

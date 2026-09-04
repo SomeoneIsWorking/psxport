@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-24
 tags:
-depends: runtime/recomp/frame_presenter.cpp#FramePresenter::commitUnpresented, runtime/recomp/pad_input.cpp#Pad::serviceFrame
+depends: runtime/psx/frame_presenter.cpp#FramePresenter::commitUnpresented, runtime/psx/pad_input.cpp#Pad::serviceFrame
 reconfirmed: 2026-08-24
 verified_at: 2026-08-24 23:01:26
 ---

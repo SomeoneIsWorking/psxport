@@ -1,8 +1,5 @@
-# psxport_oracle — the INDEPENDENT reference emulator, built from the vendored Mednafen PSX core WITHOUT
-# vendor/beetle-psx/libretro.c. Milestone 1 of docs/plans/oracle-against-beetle.md, which exists because
-# today's side-by-side compare uses our own `recomp_path` as its reference: a wrong assumption shared with
-# `pc_faithful` reads as SUCCESS. USER, 2026-08-12: "oracle compare should be done against a verified
-# emulator like beetle imo, not our unverified 'faithful' path".
+# psxport_oracle — the independent reference emulator, built from the vendored Mednafen PSX core
+# without vendor/beetle-psx/libretro.c. A product-owned reference can share product mistakes.
 #
 # WHAT IS IN IT, and why it is this short. The glue surface was MEASURED by linking (2026-08-13), not
 # estimated: a CPU that only has to STEP needs cpu.c, gte.c and the six PGXP translation units, and those
@@ -13,10 +10,10 @@
 # ═══ WHY THIS IS A SEPARATE LIBRARY FROM `psxport`, AND THE COLLISION MILESTONE 2 MUST SOLVE ═══════════
 # libpsxport ALREADY compiles gte.c (cmake/psxport.cmake) for its own GTE backend. Linking both archives
 # into one executable would therefore hit duplicate symbols — and, worse, would have the reference and the
-# thing being tested SHARING state, which destroys the independence that is the entire point. Milestone 2
-# has to resolve that deliberately, and the two honest options are: run the oracle in a separate PROCESS
+# thing being tested SHARING state, which destroys the independence that is the entire point. A consumer
+# must resolve that deliberately, and the two honest options are: run the oracle in a separate PROCESS
 # and compare over a pipe (also isolates determinism), or prefix the archive's symbols
-# (`objcopy --prefix-symbols=oracle_`). Recorded here rather than discovered later — see the plan.
+# (`objcopy --prefix-symbols=oracle_`). See docs/oracle.md.
 add_library(psxport_oracle STATIC
   oracle_shim.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/mednafen/psx/cpu.c
@@ -30,8 +27,8 @@ add_library(psxport_oracle STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/pgxp/pgxp_mem.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/pgxp/pgxp_value.c)
 
-# gte.c reaches for psxport's own runtime/recomp/gte_state.h — which is why psxport builds it too, and why
-# the oracle must have runtime/recomp on its path. PGXP is RUNTIME-gated (`PGXP_GetModes()`), not
+# gte.c reaches for psxport's own runtime/psx/gte_state.h — which is why psxport builds it too, and why
+# the oracle must have runtime/psx on its path. PGXP is RUNTIME-gated (`PGXP_GetModes()`), not
 # compile-time, so its objects must be present even though the oracle never enables it.
 target_include_directories(psxport_oracle PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
@@ -42,7 +39,7 @@ target_include_directories(psxport_oracle PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/libretro-common/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/deps/libchdr/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/pgxp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/recomp)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx)
 
 # -fno-strict-aliasing: Mednafen's memory paths type-pun through MultiAccessSizeMem, and the vendor build
 # uses it. Dropping it would let the optimiser reorder RAM accesses the reference must perform exactly.
@@ -72,16 +69,16 @@ target_link_libraries(oracle_trace PRIVATE psxport_oracle)
 target_compile_options(oracle_trace PRIVATE -O2 -g)
 if(PSXPORT_BUILD_TESTS)
   add_test(NAME crossvalidate_crt0_selftest
-           COMMAND ${CMAKE_COMMAND} -E env python3
+           COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                    ${CMAKE_CURRENT_SOURCE_DIR}/crossvalidate_crt0.py --selftest)
   add_test(NAME oracle_trace_selftest
-           COMMAND ${CMAKE_COMMAND} -E env python3
+           COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                    ${CMAKE_CURRENT_SOURCE_DIR}/test_oracle_trace.py
                    $<TARGET_FILE:oracle_trace>
                    --scratch ${CMAKE_BINARY_DIR}/scratch/oracle-trace-selftest)
 endif()
 
-# NO mutation harness here. `prove_spike_can_fail.sh` used to rebuild the shim with one thing broken and
+# NO mutation harness here. The retired mutation harness rebuilt the shim with one thing broken and
 # require oracle_spike to fail. It earned its keep once — it is what exposed the unpopulated-FastMap and
 # the missing RAM-mirror bugs — but it was a test OF A TEST, and USER, 2026-08-13: *"we have too much meta
 # imo, so deep that the base gets ignored among all of it"*. The coverage that actually matters did not

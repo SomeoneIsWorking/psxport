@@ -1,7 +1,7 @@
 // crt0_extract — report a PSX executable's crt0 boot group, using THE SHIPPING DECODER.
 //
 // WHY THIS IS A C++ TOOL AND NOT A PYTHON SCRIPT. Every value it prints becomes a constant in some
-// game's derived runtime, and `crt0_audit` (runtime/recomp/crt0_verify.h) re-derives those same
+// game's derived runtime, and `crt0_audit` (runtime/psx/crt0_verify.h) re-derives those same
 // values from the guest's own instruction stream at boot and REFUSES a disagreement. If this tool had
 // its own MIPS decoder, the two would drift, and the drift would present as the audit refusing a boot
 // over a constant this tool had just "measured" — the gate blaming the game for the tool's bug. So it
@@ -34,7 +34,7 @@
 // Exit 0 = scanned and reported (or the selftest passed) · 1 = scanned but the boot group is incomplete
 // (fields unresolved), or a selftest check failed · 2 = REFUSED, nothing was scanned (bad magic, short
 // file, entry outside the mapped image).
-#include "../runtime/recomp/crt0_verify.h"
+#include "../runtime/psx/crt0_verify.h"
 #include "../tests/crt0_fixture.h"
 #include <map>
 #include <stdint.h>
@@ -73,7 +73,7 @@ struct Crt0xOutcome {
   int resolved = 0, total = 0;
   Crt0Observed o;
 
-  // What the SHIPPING arithmetic makes of the scan: `crt0_plan` from runtime/recomp/crt0_boot.h, run on
+  // What the SHIPPING arithmetic makes of the scan: `crt0_plan` from runtime/psx/crt0_boot.h, run on
   // this image's own words. Carried out of `extract_from_image` so `--selftest` asserts on the same values
   // the human report prints, and so `tools/oracle/crossvalidate_crt0.py` can diff a1 (the heap SIZE)
   // against what the oracle MEASURED at the InitHeap call. Before this existed, a1 was the one field the

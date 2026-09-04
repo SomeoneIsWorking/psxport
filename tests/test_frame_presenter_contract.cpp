@@ -111,8 +111,8 @@ std::string read_source(const std::filesystem::path &path) {
 
 void test_neutral_game_header_does_not_include_or_embed_fps60() {
   const auto root = std::filesystem::path(__FILE__).parent_path().parent_path();
-  const std::string game = read_source(root / "runtime/recomp/game.h");
-  const std::string presenter = read_source(root / "runtime/recomp/frame_presenter.h");
+  const std::string game = read_source(root / "runtime/psx/game.h");
+  const std::string presenter = read_source(root / "runtime/psx/frame_presenter.h");
   CHECK(game.find("#include \"fps60.h\"") == std::string::npos);
   CHECK(game.find("Fps60 fps60") == std::string::npos);
   CHECK(presenter.find("fps60.h") == std::string::npos);

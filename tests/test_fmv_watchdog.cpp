@@ -9,7 +9,7 @@ static std::string read_runtime_source(const char *name) {
   std::string self = __FILE__;
   const size_t slash = self.find_last_of('/');
   const std::string tests = slash == std::string::npos ? "." : self.substr(0, slash);
-  const std::string path = tests + "/../runtime/recomp/" + name;
+  const std::string path = tests + "/../runtime/psx/" + name;
   FILE *file = fopen(path.c_str(), "rb");
   if (!file) {
     return {};

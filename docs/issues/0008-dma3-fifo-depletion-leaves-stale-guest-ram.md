@@ -46,7 +46,7 @@ pre-fix short-write mutation fails 0/3; the candidate passes 3/3 with 1,518 chec
   zero-argument project route independently reaches dem1 at frame 315 and l1a1 at frame 456. Both
   stop later at the already-separate FPS60 render-queue capacity boundary, not CDC or allocator code.
 - Crash Bash preserves its split 3+512-word PVD read and one 189-sector load, with zero
-  controller-zero words observed, then reaches its existing 0x80092BDC recompilation boundary.
+  controller-zero words observed, then reaches its existing 0x80092BDC execution boundary.
 - Toy Story 2 remains bounded at 358 sectors over 11 phases, with zero controller-zero words and no
   LBA burst, then reaches its existing BITS/MEMORY boundary.
 - Vagrant Story completes five ReadN ranges totalling 384 sectors and preserves Pause arbitration;

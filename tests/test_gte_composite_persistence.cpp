@@ -9,7 +9,7 @@
 // cleared both pages. This pure policy test guards the ownership distinction without needing a disc or
 // GPU: Gte preserves an already-built composite, but the cold ownership build still initializes it.
 
-#include "../runtime/recomp/gpu_vk_present_policy.h"
+#include "../runtime/psx/gpu_vk_present_policy.h"
 #include "testutil.h"
 
 namespace {

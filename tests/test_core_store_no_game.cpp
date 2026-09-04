@@ -48,7 +48,7 @@ static std::unique_ptr<Core> bare_core(void) {
   return std::make_unique<Core>();
 }
 
-// (1) main RAM round-trips at all three widths, through the KSEG0 mirror the substrate uses.
+// (1) main RAM round-trips at all three widths, through the KSEG0 mirror guest execution uses.
 static void test_main_ram_roundtrip_without_game(void) {
   auto c = bare_core();
   CHECK(c->game == nullptr); // the precondition under test — not an incidental detail

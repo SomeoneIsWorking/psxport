@@ -15,7 +15,7 @@ pixel comparison ever run, and visible in one log line.
 
 So the checks here are the ones a difference count structurally cannot make:
 
-  reaches      the requested frame count is presented, with no recompilation miss or fatal trap
+  reaches      the requested frame count is presented, with no executor fault or fatal trap
   widescreen   the widened picture actually DIFFERS from the 4:3 one (a no-op aspect knob FAILS)
   fps60        the extra presents carry interpolated prims (`tier1=N>0`); an inserted duplicate FAILS
 
@@ -37,7 +37,7 @@ PASS, FAIL, REFUSED = 0, 1, 2
 FPS60_SLOT_MARK = "slotA:"
 FPS60_ON_MARK = "interpolated 60fps ON"
 FPS60_REFUSED_MARK = "interpolated 60fps REFUSED"
-FAILURE_MARKS = ("recomp MISS", "recomp-MISS", "FATAL", "fatal trap", "watchdog STUCK", "VSync timeout")
+FAILURE_MARKS = ("executor fault", "unsupported translation", "FATAL", "fatal trap", "watchdog STUCK", "VSync timeout")
 
 
 class Capture:
@@ -236,7 +236,7 @@ def selftest():
     checks.append(("fps60 off is named, not assumed", fps60_verdict("quiet log")[0] == "not-enabled"))
 
     checks.append(("a clean log has no failure marks", run_failures("all good") == []))
-    checks.append(("a recomp MISS is a failure mark", run_failures("[recomp] recomp MISS at 0x8001") != []))
+    checks.append(("an executor fault is a failure mark", run_failures("executor fault at 0x8001") != []))
 
     png_header = b"\x89PNG\r\n\x1a\n"
     flat = Capture(png_header + b"same picture")

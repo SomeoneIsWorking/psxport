@@ -45,8 +45,10 @@ Exit:   0 = every tool that has a selftest passed, and at least one ran.
 """
 import argparse
 import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 # Substrings that mean "this tool does not know the flag", i.e. it has no selftest — as opposed to a
 # selftest that ran and failed. Kept explicit and few; anything else nonzero is treated as a real FAILURE,
@@ -93,7 +95,8 @@ PARSE_CRASH_EXCEPTIONS = ("valueerror", "indexerror", "typeerror", "keyerror", "
 ENV_MISSING_MARKERS = ("connectionrefusederror", "connection refused", "could not connect",
                        "no display", "cannot connect to")
 
-# A PASS must show a real VERDICT, not merely contain the word "selftest". Measured: `symres.py` exits 0
+# A PASS must show a real VERDICT, not merely contain the word "selftest". A retired symbol resolver
+# once exited 0
 # printing "--selftest  <not a number>" — the flag echoed back — and a bare `"selftest" in output` test
 # read that as a passing selftest. A false PASS is worse than a false FAIL: it manufactures confidence.
 VERDICT_TOKENS = ("pass", "passed", "ok", "green", "0 failed", "all checks")
@@ -102,8 +105,13 @@ VERDICT_TOKENS = ("pass", "passed", "ok", "green", "0 failed", "all checks")
 def classify(path, timeout):
     """Run `<tool> --selftest` and return (verdict, detail) with verdict in PASS/FAIL/NONE/ERROR."""
     try:
-        p = subprocess.run([sys.executable, path, "--selftest"],
-                           capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(
+            [sys.executable, path, "--selftest"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         return "FAIL", f"timed out after {timeout}s — a selftest that cannot finish cannot vouch for anything"
     except OSError as e:
@@ -170,15 +178,19 @@ FIXTURES = [
 
 
 def run_selftest():
-    import tempfile
-    print("tool_selftests --selftest: classifying %d fixture tool(s) whose verdict is known by "
-          "construction." % len(FIXTURES))
+    print(
+        f"tool_selftests --selftest: classifying {len(FIXTURES)} fixture tool(s) whose verdict is "
+        "known by construction."
+    )
     print("  Every class the classifier can emit is exercised, including the two that were WRONG in")
     print("  practice: a tool echoing the flag back at exit 0, and one crashing while parsing it.\n")
     ran = failed = 0
-    with tempfile.TemporaryDirectory() as d:
+    fixture_root = Path(__file__).resolve().parent.parent / "build/tool-selftests/tool-selftests"
+    shutil.rmtree(fixture_root, ignore_errors=True)
+    fixture_root.mkdir(parents=True)
+    try:
         for name, body, want in FIXTURES:
-            path = os.path.join(d, name)
+            path = fixture_root / name
             with open(path, "w") as f:
                 f.write(body)
             got, detail = classify(path, 60)
@@ -186,11 +198,13 @@ def run_selftest():
             ok = got == want
             if not ok:
                 failed += 1
-            print("  %s %-16s want %-10s got %-10s %s" % ("ok  " if ok else "FAIL", name, want, got,
-                                                          detail[:60]))
-    print("\n  %d fixture(s) classified, %d wrong." % (ran, failed))
+            marker = "ok  " if ok else "FAIL"
+            print(f"  {marker} {name:<16} want {want:<10} got {got:<10} {detail[:60]}")
+    finally:
+        shutil.rmtree(fixture_root, ignore_errors=True)
+    print(f"\n  {ran} fixture(s) classified, {failed} wrong.")
     if ran != len(FIXTURES):
-        print("REFUSING: %d fixtures ran but %d are declared." % (ran, len(FIXTURES)))
+        print(f"REFUSING: {ran} fixtures ran but {len(FIXTURES)} are declared.")
         return 2
     if failed:
         print("FAILED: the classifier does not agree with fixtures whose answer is known. Its verdicts on")

@@ -22,7 +22,7 @@ guest had reached a primitive that the product architecture must never call.
 `FrameLoopShell::prepareProduct` now runs after title override registration, requires
 `Game::frameDriver`, reinstalls and requires the fatal VSync trap, and is the one product preflight used
 by both `dc_boot_init` and `native_boot_run`. This order matters because title registration writes the
-same generated override table. The shell then delegates exactly one finite frame; `dc_step_frame` and the standalone loop use the same route. The title driver owns its
+same native override registry. The shell then delegates exactly one finite frame; `dc_step_frame` and the standalone loop use the same route. The title driver owns its
 measured pad/audio/simulation/render/present order and one presentation commit. The framework's former
 title-shaped frame body was deleted; a static ownership test rejects its defining operations in
 `native_boot.cpp`.
@@ -38,5 +38,5 @@ display-field advancement path.
 `test_frame_loop_shell` covers exactly-once delegation, missing-driver refusal, and the bad ordering in
 which title registration displaces VSync before the product preflight reinstalls the fatal handler.
 `test_vsync_ownership` covers direct and adapter initialization, all mode classes, repeated direct
-initialization without a generated substrate, replacement refusal, missing-address refusal, and
+initialization without a title override installed, replacement refusal, missing-address refusal, and
 out-of-window refusal. `test_hsync_counter` now covers root-counter MMIO only.

@@ -1,4 +1,4 @@
-// test_sync_submodules.cpp — scripts/sync-submodules.sh must never certify what it did not look at.
+// test_sync_submodules.cpp — scripts/sync_submodules.py must never certify what it did not look at.
 //
 // WHY THIS TEST EXISTS
 // --------------------
@@ -20,11 +20,10 @@
 // builds died in one day: ot_attr.h needs lucent >= 07c5836 and the checkout was at 02ea34b, while
 // the sync step said everything matched.
 //
-// WHY A C++ FILE FOR A SHELL SCRIPT
+// WHY A C++ DRIVER FOR A PYTHON SCRIPT
 // ---------------------------------
 // Because tests/CMakeLists.txt globs `test_*.c` / `test_*.cpp` into ctest and nothing else, so a
-// `.sh` here would be a file nobody runs — which is the same defect one level up. This binary is a
-// driver: it builds real throwaway git repositories in its own working directory and runs the real
+// This binary builds real throwaway git repositories in its own working directory and runs the real
 // script against them. Nothing here links or includes framework code.
 //
 // HERMETIC: no network (every remote is a local path), no disc, no GPU, no wall-clock sleeps. Each
@@ -33,7 +32,7 @@
 //
 // THE FIXTURE IS THE WORKSPACE IN MINIATURE
 //
-//     game/                              <- sync-submodules.sh runs here (like spyro/)
+//     game/                              <- sync_submodules.py runs here (like spyro/)
 //       external/framework/              <- like external/psxport
 //         vendor/beetle/                 <- like vendor/beetle-psx
 //           deps/lightning/gnulib        <- a gitlink in the tree, NOT in .gitmodules: THE POISON
@@ -104,7 +103,7 @@ static std::string script_path(void) {
   if (b == std::string::npos) {
     return "";
   }
-  return f.substr(0, b) + "/scripts/sync-submodules.sh";
+  return f.substr(0, b) + "/scripts/sync_submodules.py";
 }
 
 /* ---- fixture ----------------------------------------------------------------------------------- */
@@ -269,7 +268,7 @@ static std::string lucent_gitlink(const Fixture &fx) {
 }
 /* popen() has no cwd argument, so the `cd` is part of the command line. */
 static Run script_in(const Fixture &fx) {
-  return run("cd '" + fx.root + "/game' && " + fx.env + "bash '" + script_path() + "'");
+  return run("cd '" + fx.root + "/game' && " + fx.env + "python3 '" + script_path() + "'");
 }
 
 static void cleanup(const Fixture &fx) {

@@ -1,0 +1,437 @@
+// gpu_native_internal.h — shared internals of the native GPU, split across translation units.
+//
+// gpu_native.cpp owns the rasterizer, GP0 parser, present/window and the canonical definitions of the
+// render state below. De-globalization (2026-06-19): all MUTABLE render machine state now lives on a
+// `GpuState` instance owned by `Game` (game.h), not in file-scope globals — so two cores can render
+// independently and be diffed. The rasterizer functions are methods of GpuState; any code holding a
+// `Core* c` reaches the state via `c->game->gpu`. The auxiliary module carved out of gpu_native —
+// gpu_debug.cpp (scene/provenance dumps) — takes a `Core*` and reads the per-instance state through
+// it. NOT a public API; internal to the GPU TUs.
+#ifndef GPU_NATIVE_INTERNAL_H
+#define GPU_NATIVE_INTERNAL_H
+#include "gpu_display_mode.h"
+#include <array>
+#include <stdint.h>
+#include <stdio.h>
+
+struct Core; // CPU/RAM handle (core.h); methods below take Core* but only by pointer
+struct Game; // back-pointer target (game.h); blit_src reaches gpu_vk via game->core
+
+enum class GpuPresentCompletion {
+  MainFrame,
+  Transition,
+};
+
+#define VRAM_W 1024
+#define VRAM_H 512
+
+// ---- Per-pixel primitive provenance (shared between the rasterizer and gpu_debug.cpp) -------
+typedef struct {
+  uint32_t gid, frame, node;
+  int clut_x, clut_y, tp_x, tp_y, x0, y0, u0, v0;
+  uint8_t op, r, g, b, semi, tex, mode, blend;
+} ProvMeta;
+#define PROVRING 16384
+
+struct GpuProvenancePacket {
+  uint32_t node = 0;
+  uint32_t word_count = 0;
+  std::array<uint32_t, 256> words{};
+};
+
+GpuProvenancePacket gpu_provenance_packet(Core &core, uint32_t node);
+
+typedef struct {
+  int x, y;
+  uint8_t r, g, b;
+  int u, v;
+} Vtx; // rasterizer vertex (was local to gpu_native)
+
+struct GpuTextureSample {
+  int u = 0;
+  int v = 0;
+  uint16_t source_word = 0;
+  uint16_t palette_index = 0;
+  uint16_t texel = 0;
+};
+
+struct GpuPixelProbeTarget {
+  bool configured = false;
+  int x = -1;
+  int y = -1;
+  int from_frame = 0;
+};
+
+// ---- CPU<->VRAM transfer header ----------------------------------------------------------------
+// The two parameter words that follow GP0(0xA0) (CPU->VRAM) and GP0(0xC0) (VRAM->CPU): destination/
+// source coords, then width/height. Decoded HERE, once, so the two directions cannot drift apart —
+// a readback whose rect decode disagreed with the upload's would corrupt exactly the save/restore
+// round-trip it exists to serve, and would do it silently. A zero size field means the maximum
+// (1024 / 512), which is the convention the A0 arm has always used.
+typedef struct {
+  int x, y, w, h;
+} VramRect;
+static inline VramRect vram_xfer_rect(uint32_t coord, uint32_t size) {
+  VramRect r;
+  r.x = (int)(coord & 0x3FF);
+  r.y = (int)((coord >> 16) & 0x1FF);
+  r.w = (int)(size & 0x3FF);
+  if (!r.w) {
+    r.w = VRAM_W;
+  }
+  r.h = (int)((size >> 16) & 0x1FF);
+  if (!r.h) {
+    r.h = VRAM_H;
+  }
+  return r;
+}
+
+// ---- GpuState — the native GPU's per-instance render machine state + rasterizer ----------------
+// Owned by Game (game.h has `GpuState gpu;`). Field names keep their historical `s_`/`g_` spelling so
+// the rasterizer bodies are unchanged by the move (they now read members via implicit `this`).
+// Barycentric interpolation, ROUNDED TO NEAREST — the rule beetle's DDA follows by seeding every
+// interpolant with a half-LSB bias (gpu_polygon.c:904 for u/v, :945 for r/g/b):
+//
+//     ig.r = (COORD_MF_INT(vertices[cv].r) + (1 << (COORD_FBS - 1))) << COORD_POST_PADDING;
+//
+// A plain integer divide truncates toward zero instead, which is a SYSTEMATIC bias, not noise:
+// measured at f1090 of Tomba!2's ingame-options-page replay, 97.6% of the surviving one-LSB
+// differences against the beetle GPU oracle were ours-LOW. The UV path already rounded; colour did
+// not.
+//
+// `aa` is the DOUBLED SIGNED area, so it flips sign with the triangle's winding and every weight
+// flips with it. Round in sign-normalized form — floor() would round the wrong way for one winding
+// and simply move the bias rather than remove it.
+static inline int bary_round(long l0, int v0, long l1, int v1, long l2, int v2, long aa) {
+  long num = l0 * v0 + l1 * v1 + l2 * v2;
+  long den = aa;
+  if (den < 0) {
+    num = -num;
+    den = -den;
+  }
+  return (int)((num + den / 2) / den);
+}
+
+struct GpuState {
+  Game *game = nullptr; // set by Game(); blit_src uses &game->core to reach the gpu_vk present wrapper
+
+  // WHICH RASTERIZER — derived from this Game's Core RENDER PATH, never stored here. RenderPath::Psx
+  // rasterizes the GP0 stream into s_vram in SOFTWARE (the existing tri()/raster_sprite()/raster_line()
+  // path) and NEVER touches the VK backend, even though the process keeps the VK backend up
+  // (gpu_vk_enabled()==1 is global); every other path tees prims to VK.
+  //
+  // This WAS `int soft_gpu`, a GpuState field only the SBS oracle leg and the selftest could set. It
+  // moved because it is one half of an answer whose other half (which geometry) lived somewhere else —
+  // two independent switches that must agree, i.e. a pair that could be set to a black screen. See
+  // render_mode.h and tests/test_render_path.cpp.
+  bool soft_gpu() const; // = game->core.rsub.mode.softGpu()  (out-of-line: needs Game/Core)
+  inline bool vk_path() const {
+    extern int gpu_vk_enabled(void);
+    return gpu_vk_enabled() && !soft_gpu();
+  }
+  inline bool sw_path() const {
+    extern int gpu_vk_enabled(void);
+    return soft_gpu() || !gpu_vk_enabled();
+  }
+
+  // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_vk present path via Core).
+  int s_seen3d = 0; // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
+  int bg_2d(int bx0, int by0, int bx1, int by1); // FALLBACK 2D backdrop-vs-HUD by screen coverage (un-owned scenes)
+  int s_prev_had3d = 0; // did LAST frame draw any 3D? = "this is a gameplay (3D) frame" (wide pillarbox gate)
+  // #54: a pure-2D screen (title/menu) never sets s_seen3d, so s_prev_had3d alone left the widen mechanism
+  // permanently OFF there — nothing ever painted the wide-margin VRAM columns, so present() sampled raw
+  // adjacent VRAM (texture-atlas garbage) instead of a clean widened/blanked margin. A full-screen 2D
+  // BACKDROP (fill==1 in the widen sites below: node_is_bg / sprite_is_bg_texpage / bg_2d coverage, or a
+  // full-screen fade) is exactly as legitimate a "this frame owns and redraws the whole width" signal as
+  // 3D world geometry — track it the same lagged way so the title backdrop widens like the field backdrop.
+  int s_seen_bg2d = 0;     // did a full-screen 2D backdrop prim get classified fill=1 this frame?
+  int s_prev_had_bg2d = 0; // did LAST frame draw one? (wide-widen gate, mirrors s_prev_had3d)
+
+  // M3 provenance — own the 2D layer by WHO submitted it, not per-prim size. The engine's screen-space
+  // BACKGROUND drawer(s) (e.g. the field's scrolling-tilemap backdrop FUN_80115598) are bracketed by a
+  // native override that records the OT-node (packet-pool) span they produce each frame here. A leftover
+  // 2D prim whose OT node falls in a span is the BACKDROP (RQ_BACKGROUND); everything else is HUD. This
+  // replaces the bg_2d screen-coverage guess, which is blind to a TILED background (352 sub-threshold
+  // tiles all mis-classified as HUD → painted over the world). Stamped per frame; honored only for the
+  // frame that filled it. (bg_2d stays as the fallback for scenes whose background drawer isn't owned yet.)
+  static const int BG_RANGE_MAX = 8;
+  uint32_t s_bg_lo[BG_RANGE_MAX] = {}, s_bg_hi[BG_RANGE_MAX] = {}; // KSEG0 packet-pool spans [lo,hi)
+  int s_bg_nrange = 0;
+  int s_bg_frame = -1;
+  void bg_range_add(uint32_t lo, uint32_t hi); // record a background drawer's pool span for the current frame
+  int node_is_bg(uint32_t node);               // is this OT node inside a background span this frame?
+
+  // VRAM (textures + framebuffers)
+  uint16_t s_vram[VRAM_W * VRAM_H] = {};
+  uint16_t *vram(int x, int y) {
+    return &s_vram[(y & 511) * VRAM_W + (x & 1023)];
+  }
+  uint16_t *fb(int x, int y) {
+    return &s_vram[(y & 511) * VRAM_W + (x & 1023)];
+  }
+
+  // Draw env (GP0 E1..E6)
+  int s_da_x0 = 0, s_da_y0 = 0, s_da_x1 = 1023, s_da_y1 = 511; // draw clip area
+  int s_off_x = 0, s_off_y = 0;                                // draw offset
+  int s_tp_x = 0, s_tp_y = 0;                                  // texpage base
+  int s_tp_mode = 0, s_tp_blend = 0, s_tp_dither = 0;          // texture color mode / blend / dither
+  int s_tw_mx = 0, s_tw_my = 0, s_tw_ox = 0, s_tw_oy = 0;      // texture window mask/offset
+  int s_clut_x = 0, s_clut_y = 0;                              // CLUT base
+
+  // Display control (GP1)
+  int s_disp_x = 0, s_disp_y = 0; // VRAM top-left of the displayed region
+  int s_disp_w = 320, s_disp_h = 240;
+  int presentedHeight(Core *core) const; // s_disp_h, or the port-declared guest height on guest paths
+  int s_disp_vy0 = 0, s_disp_vy1 = 240;  // GP1(0x07) vertical display range
+  // Has GP1(0x07) been written AT ALL? Without this, `s_disp_h == 240` is unreadable: it is either the
+  // height the game asked for or the height nobody asked for, and those are opposite answers when the
+  // question is "should those bottom 16 lines be on screen". Same reason s_disp_std_seen exists.
+  bool s_disp_vrange_seen = false;
+  int s_disp_480i = 0; // GP1(0x08) interlace + 480-line
+  // GP1(0x08) bit 4 — display-area colour depth, 0 = 15-bit, 1 = 24-bit. Was decoded NOWHERE, so a
+  // game switching to 24bpp for a still had its VRAM read as 15-bit: every colour scrambled and only
+  // two thirds of the width shown, since 24bpp packs 1.5 halfwords per pixel.
+  int s_disp_rgb24 = 0;
+  // GP1(0x08) bit 3 — the DISPLAY STANDARD the guest programmed: 0 = NTSC, 1 = PAL. This is the
+  // game's own statement of its field rate, and the port's ONLY honest source for one. The frame
+  // pacer used to divide by a hardcoded 60.0 while the consumer of the pacing counted fields at the
+  // real NTSC rate (60000/1001 = 59.940 Hz); two clocks at different rates across one wait loop is a
+  // beat, and the beat is what reaches the screen. Decoded here so the rate is READ rather than
+  // assumed. Defaults to NTSC, which is what the field rate is until the guest says otherwise.
+  int s_disp_pal = 0;
+  // Has GP1(0x08) been decoded at all? The standard is logged on the FIRST write as well as on a
+  // change, because an NTSC game never changes it away from the default and a log that only fires on
+  // a change would print NOTHING for it — leaving "what field rate is this run pacing on?" answerable
+  // only by reading the source. A diagnostic that cannot print the ordinary answer is not a
+  // diagnostic.
+  bool s_disp_std_seen = false;
+
+  // Per-frame prim ordering + provenance
+  uint32_t s_prim_order = 0;             // OT submission index of the current prim (VK depth)
+  uint32_t s_prim_gid = 0;               // monotonic primitive counter (provenance)
+  uint32_t s_prov[VRAM_W * VRAM_H] = {}; // gid of last writer per pixel
+  int s_prov_on = -1;                    // lazily 1 if a pixel-provenance probe is configured
+  ProvMeta s_provmeta[PROVRING] = {};    // gid -> prim details (ring)
+
+  // GP0 command FIFO + VRAM transfer
+  uint32_t s_fifo[256] = {};      // big enough for variable-length poly-lines
+  uint32_t s_fifo_addr[256] = {}; // guest source addr of each FIFO word
+  uint32_t s_gp0_src = 0;         // OT walk sets this per word (Phase-1 attach)
+  // How many GP0 words this frame arrived WITH a guest source address vs without. Only addressed
+  // words can ever get native depth (see the counter's banner in gpu_native.cpp). Reset per frame
+  // alongside s_gp0_words.
+  long s_gp0_addressed = 0;
+  long s_gp0_anon = 0;
+  int s_fcount = 0, s_fneed = 0;
+  int s_pl = 0, s_pl_g = 0; // poly-line in progress / gouraud
+  int s_xfer = 0, s_xfer_x = 0, s_xfer_y = 0, s_xfer_w = 0, s_xfer_h = 0, s_xfer_px = 0;
+
+  // ---- PC-native VRAM TRANSFER GUARD (atlas-clobber catcher) ------------------------------------
+  // The texture/VRAM manager owns every CPU->VRAM and VRAM->VRAM transfer through ONE guarded entry
+  // (vram_xfer.cpp). It (1) bounds-validates the rect so a garbage descriptor can never silently fold
+  // onto a live texpage via the VRAM wrap, and (2) keeps a registry of the populated TEXTURE-GROUP
+  // regions (the big atlas/font/CLUT uploads). Under `debug vramguard` it logs any transfer that lands
+  // on a registered, still-resident atlas region from an UNEXPECTED path (a stray render-OT copy / a
+  // bad upload) — catching the non-deterministic stripe-corruption clobber deterministically the moment
+  // it fires live, with full provenance (source path, rect, OT node), even though it is rare. The
+  // registry is pure diagnostic bookkeeping (no guest-RAM write) so it never perturbs content state.
+  static const int VG_MAX = 64;
+  struct VgRegion {
+    int x, y, w, h;
+    int frame;
+    uint8_t live;
+    char tag[12];
+  };
+  VgRegion s_vg[VG_MAX] = {};
+  int s_vg_n = 0;
+  long s_vg_oob_log = 0, s_vg_clobber_log = 0; // vramguard log-rate counters (vram_xfer.cpp)
+  // vramguard CENSUS. A "0 clobbers" result is meaningless without its denominator: the clobber test
+  // can only fire if atlas regions were ever REGISTERED and non-atlas writes were ever CHECKED, and
+  // for two of the five writers it could not fire at all until 2026-08-05 because they never called
+  // the guard. These make the negative self-describing — see vram_guard_report().
+  long s_vg_checks[5] = {0}; // per writer: native, A0, 80copy, fill, blank
+  long s_vg_clobbers = 0, s_vg_oob = 0;
+  // Log DEDUP key set: one line per (writer, atlas region) pair. Without it the 80-line cap is spent
+  // on whatever clobbers first — boot — and a NEW clobber later (the one being hunted) never prints.
+  unsigned char s_vg_seen[8][VG_MAX] = {};
+  int s_vg_reported_frame = -1;
+  // Register a texture-group/atlas upload rect as a protected, populated region (called from the native
+  // upload). label distinguishes atlas vs CLUT vs framebuffer. Overlapping re-uploads refresh in place.
+  void vram_register_atlas(int x, int y, int w, int h, const char *tag);
+  // Guard a transfer: validate bounds; under vramguard, log if it clobbers a protected atlas region.
+  // `path` names the writer (e.g. "A0", "80copy", "native"); src is the guest source addr (0 if N/A).
+  // Validate a VRAM-writing transfer against the registered atlas regions (diagnostic only).
+  // Takes NO Core*: it reads only GpuState members, and the unused parameter it used to carry made it
+  // uncallable from the writers that have no Core in scope — which is precisely why the display blank
+  // went unguarded.
+  // Register a page/CLUT the GAME ACTUALLY SAMPLED as live atlas (port-agnostic — see gpu_native.cpp
+  // set_texpage). Skips anything overlapping the displayed framebuffer, which is not atlas.
+  void vram_register_sampled(int x, int y, int w, int h, const char *tag);
+  void vram_guard_report(); // census line: what the guard actually watched (see vram_xfer.cpp)
+  void vram_guard_check(const char *path, int x, int y, int w, int h, uint32_t src);
+
+  // ---- diagnostics (per-Core so SBS cores never share dedupe/log state) -----------------------
+  int s_log = 0;              // PSXPORT_GPU_LOG / `debug gpu` per-frame prim log
+  int s_reddbg = 0;           // PSXPORT_REDDBG: dark-red output anomaly probe
+  int s_oracle_prim_log = 0;  // ORACLE diag: when >0, log each soft_gpu primitive
+  long s_nd2d_hist[256] = {}; // op histogram of prims that fall to the 2D band (was g_nd2d_hist)
+  // PSXPORT_PRIMDUMP=frame: one-frame CSV dump of every OT prim (see primdump_open).
+  FILE *s_primdump_f = nullptr;
+  int s_primdump_frame = -2;   // -2 = env not read, -1 = off
+  int s_primdump_end = -1;     // last frame of the armed window (PSXPORT_PRIMDUMP="a:b")
+  long s_primdump_seen = 0;    // prims offered inside the window (the CSV's denominator)
+  int s_primdump_reported = 0; // the window's outcome (wrote N / ZERO) has been logged
+  FILE *primdump_open(int frame);
+  // Fade-flash diagnostic (PSXPORT_FADEDBG) accumulators, reset per present.
+  int s_fade_maxc = 0, s_fade_npoly = 0, s_fade_nsemi = 0, s_fade_lasty = 0;
+  int s_fade_semimax = -1, s_fade_semimin = 999, s_fade_bigsemi = 0;
+  void fade_note(int r, int g, int b, int offy, int semi);
+  void fade_note_size(int w, int h, int semi);
+  // PSXPORT_CLUTWATCH[=x,y] watched CLUT point + pending-A0 latch.
+  int s_cw_x = -1, s_cw_y = 0, s_cw_pending = 0;
+  int clutwatch_covers(int rx, int ry, int rw, int rh);
+  // PSXPORT_TEXWATCH="x0,y0,x1,y1" watched VRAM rect.
+  int s_tw_init = 0, s_tw_x0 = -1, s_tw_y0 = 0, s_tw_x1 = 0, s_tw_y1 = 0;
+  int texwatch_overlap(int rx, int ry, int rw, int rh);
+  // TEXWATCH PAYLOAD TRUTH. `src`/`srcbytes` above are read from s_dma_src, which ONLY gpu_dma2_block
+  // sets — an A0 arriving through the OT linked-list walk (or a direct GP0 register write) reports a
+  // STALE address and therefore fictitious source bytes. These fields instead summarise the halfwords
+  // the transfer ACTUALLY streamed into VRAM, plus the guest address stamped on the first payload word
+  // (s_gp0_src, which the OT walk and block DMA both set per word). A watched transfer always emits its
+  // summary line, including the uniform case, with px written / px expected as the denominator.
+  int s_twp_active = 0;         // this A0 transfer overlaps the watched rect
+  long s_twp_px = 0;            // payload halfwords seen
+  uint32_t s_twp_addr0 = 0;     // s_gp0_src of the first payload word (0 = unstamped path)
+  uint16_t s_twp_vals[8] = {0}; // first up-to-8 DISTINCT halfword values
+  int s_twp_nvals = 0;          // distinct values recorded (capped at 8)
+  int s_twp_more = 0;           // 1 = more than 8 distinct values existed
+  void twp_note(uint16_t v);
+  void twp_flush(const char *tag);
+  // GP0(0xC0) VRAM->CPU readback counters. Reported PERIODICALLY EVEN WHEN ZERO while TEXWATCH is
+  // armed, so "the guest never reads VRAM back" is a measurement rather than an absence of output.
+  long s_c0_n = 0, s_c0_frame = 0;
+  // How many readbacks asked for a rect that overlaps the DISPLAY area while the VK backend owns the
+  // picture. Those pixels live in the GPU texture and are never written back to s_vram (issue 0006 /
+  // INST-18), so such a readback returns STALE CPU-side data. Counted and reported rather than
+  // silently served, because a wrong answer that looks like an answer is the failure mode this whole
+  // feature exists to remove.
+  long s_c0_stale = 0;
+  GpuPixelProbeTarget s_pixel_probe;
+  GpuPixelProbeTarget s_provenance_chain_probe;
+  // ---- GP0(0xC0) VRAM->CPU transfer cursor ------------------------------------------------------
+  // Mirrors s_xfer* (the A0 CPU->VRAM cursor) exactly: same rect decode, same row-major 2-pixels-per-
+  // word stream, same VRAM wrap. Drained by the GPUREAD register (0x1F801810) and by DMA2 in the
+  // VRAM->CPU direction; both call gpu_read_word(), so there is ONE implementation, not two.
+  int s_rd = 0, s_rd_x = 0, s_rd_y = 0, s_rd_w = 0, s_rd_h = 0, s_rd_px = 0;
+  uint32_t gpu_read_word(); // next word of the readback stream (0 when no transfer is active)
+  void gpu_native_init();   // seed the diag gates from cfg (boot + FMV player)
+
+  // Frame + OT bookkeeping
+  int s_frame = 0; // present-frame counter
+  // Per-frame draw stats — moved off file-scope in gpu_native.cpp so SBS's two cores keep separate
+  // per-frame counters (a core reading its own stats or a debug-server `frame` query wouldn't see the
+  // other core's contribution) (deglobalize 2026-07-03).
+  long s_prims = 0;     // primitives drawn since last present
+  long s_gp0_words = 0; // GP0 words this frame
+  long s_dma2 = 0;      // DMA2 (OT linked-list) triggers this frame
+  // Backdrop texpage provenance (per-core — SBS runs two cores): published by ov_bg_tilemap_native each
+  // field frame; the OT walk drops guest backdrop sprites sampling it (render.md OPEN #1). -1 = unset.
+  int s_bgtp_x = -1, s_bgtp_y = -1, s_bgtp_frame = -1;
+  uint32_t s_cur_node = 0; // RAM addr of the OT node being fed to GP0
+  uint32_t s_ot_madr = 0;  // last OT DMA root (was global g_ot_madr)
+  uint32_t s_dma_src = 0;  // last block-DMA source (was global g_dma_src)
+
+  // ---- rasterizer / GP0 / present methods (bodies in gpu_native.cpp) ----
+  GpuTextureSample sample_tex_at(
+      int u, int v, int tp_x, int tp_y, int mode, int clut_x, int clut_y, int tw_mx, int tw_my, int tw_ox, int tw_oy);
+  bool pixel_probe_target(int &absolute_x, int &absolute_y);
+  uint16_t sample_tex(int u, int v);
+  void put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int semi);
+  void put_px(int x, int y, uint8_t r, uint8_t g, uint8_t b);
+  void tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int semi, int raw, long aa);
+  void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw);
+  void semi_dump(const char *kind, int blend, int r, int g, int b, int x0, int y0, int x1, int y1, int offy);
+  void clutwatch_dump(const char *tag, int rx, int ry, int rw, int rh);
+  void clutwatch_xfer(const char *tag, int rx, int ry, int rw, int rh);
+  void prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint8_t b, int x0, int y0, int u0, int v0);
+  void raster_sprite(
+      int op, int x, int y, int u0, int v0, int w, int h, uint8_t cr, uint8_t cg, uint8_t cb, int textured, int semi);
+  // PC-native texture EXPORT: decode w×h texels at the current texpage/CLUT (mode 0=4bpp/1=8bpp/2=15bpp)
+  // through MY OWN decoder (not the rasterizer) and write an RGB PPM. Proves the texture decode is owned.
+  void tex_export(const char *name, int u0, int v0, int w, int h);
+  void raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, uint8_t cb, int semi);
+  // A texpage word reaches the GPU by two routes that are NOT equivalent, and conflating them is
+  // what switched dithering off mid-frame (kanban #113). On real hardware — and in beetle, where the
+  // two are literally different functions — GP0(0xE1) DrawMode owns the dither-enable bit, while a
+  // primitive's embedded texpage word carries page / colour-mode / blend / tex-disable and nothing
+  // else. Bit 9 of an embedded word is meaningless; honouring it let the first textured polygon that
+  // happened to have it clear disable dither for everything drawn afterwards.
+  enum class TexPageFrom {
+    DrawMode,  // GP0(0xE1) — the only command permitted to change the dither enable
+    Primitive, // a textured polygon/sprite's embedded word (vertex 1's UV slot high half)
+  };
+  void set_texpage(uint16_t tp, TexPageFrom from);
+  void set_clut(uint16_t cl);
+  void gp0_exec(Core *core);
+  void gpu_gp0(Core *core, uint32_t w);
+  void gpu_gp1(uint32_t w);
+  void gpu_dma2_linked_list(Core *core, uint32_t madr);
+  void gpu_dma2_block(Core *core, uint32_t madr, int count, int to_gpu);
+  void gpu_native_load_image(Core *core, int x, int y, int w, int h, uint32_t src);
+  int gpu_native_load_vram(const char *path);
+  void ensure_window();
+  void blit_src(const uint16_t *src, int sx, int sy);
+  void present_window();
+  void gpu_repaint();
+  void gpu_native_shot(Core *core, const char *path);
+  void gpu_present_ex(Core *core, int do_blit, GpuPresentCompletion completion);
+  void gpu_present(Core *core);
+  void frame_finalize(Core *core); // per-frame reset/bookkeeping (no window blit) — shared by
+                                   // gpu_present_ex AND the SBS per-core grab (which skips present)
+  uint16_t gpu_vram_peek(int x, int y);
+  void gpu_blank_display();                            // zero the display FB rect (no present)
+  void gpu_clear_display(Core *core, int do_blit = 1); // gpu_blank_display + present (FMV teardown)
+  void gpu_vram_load(const uint16_t *src);
+  void gpu_vram_save(uint16_t *dst);
+  void gpu_provat_enable();
+  int gpu_frame_no();
+  // Graphics-producer DB, GUEST leg: attribute ONE completed prim to the guest fn that submitted it,
+  // by joining this packet's pool address (s_fifo_addr[0], stamped by the OT walk) against OtAttr's
+  // store-span table. Called at every prim-completion site. Both ways of failing to attribute are
+  // COUNTED and DISTINGUISHED (no source address at all vs an address no span covers) because they have
+  // different fixes: one is inherent to a packet the walk never stamped, the other means the span feed
+  // missed. See runtime/psx/producer_census.h.
+  void censusGuestPrim(Core *core);
+};
+
+// ---- Diagnostic dumps (gpu_debug.cpp) — read the per-instance state via Core* -----------------
+void gpu_scene_dump(Core *core, FILE *out, uint32_t madr); // classify an OT's display list (PSXPORT_SCENEDUMP)
+void gpu_scene_log(Core *core, uint32_t madr);
+
+// ---- Public GPU API (free functions; thin wrappers over GpuState methods, reached via Core*) ---
+void gpu_gp0(Core *core, uint32_t w);
+void gpu_gp1(Core *core, uint32_t w);
+void gpu_dma2_linked_list(Core *core, uint32_t madr);
+void gpu_dma2_block(Core *core, uint32_t madr, int count, int to_gpu);
+uint32_t gpu_read_word(Core *core); // GPUREAD (0x1F801810 read) — GP0(0xC0) VRAM->CPU pixel stream
+void gpu_present(Core *core);
+void gpu_present_ex(Core *core, int do_blit);
+void gpu_clear_display(Core *core); // FMV/splash teardown: black the display FB + present (no stale pixels)
+void gpu_native_load_image(Core *core, int x, int y, int w, int h, uint32_t src);
+int gpu_native_load_vram(Core *core, const char *path);
+void gpu_native_shot(Core *core, const char *path);
+int gpu_frame_no(Core *core);
+uint16_t gpu_vram_peek(Core *core, int x, int y);
+// PC-native SCEA decode: baked 4bpp+CLUT asset -> flat RGBA8 at the 640x468 screen positions (text =
+// CLUT color, else transparent black). PSX-free source for gpu_vk_present_image. `out` = 640*468*4 bytes.
+void gpu_scea_decode_rgba(uint8_t *out);
+void gpu_vram_load(Core *core, const uint16_t *src);
+void gpu_vram_save(Core *core, uint16_t *dst);
+// gpu_provat_display / gpu_prov_dump (gpu_debug.cpp) take Core* too:
+void gpu_provat_display(Core *core, FILE *out, int qx, int qy);
+void gpu_provat_log(Core *core, int qx, int qy);
+void gpu_prov_dump(Core *core, int vx, int vy);
+
+uint32_t mem_r32(uint32_t);
+
+#endif // GPU_NATIVE_INTERNAL_H

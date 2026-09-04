@@ -3,7 +3,7 @@
 // WHAT IT GATES. Every constant in a game's `GuestProgramImage` crt0 group is a value somebody measured out of
 // the executable and typed into `game/core/game_config.cpp`. Nothing compared the typed copy to the
 // measurement, which is the defect shape found independently in four of five ports here. `crt0_audit`
-// (runtime/recomp/crt0_verify.h) closes it by re-deriving the group from the guest's OWN instruction
+// (runtime/psx/crt0_verify.h) closes it by re-deriving the group from the guest's OWN instruction
 // stream at boot and refusing a confirmed disagreement. This file gates the auditor in BOTH directions:
 // an agreeing config must pass and say how many fields it checked, and a disagreeing one must REFUSE and
 // name the field — including the exact disagreement the pre-fix framework shipped (a hardcoded -8 stack

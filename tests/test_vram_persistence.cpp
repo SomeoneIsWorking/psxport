@@ -27,7 +27,7 @@
 // Both arms are asserted, in opposite directions. The WHOLE_CANVAS arm is the NEGATIVE CONTROL: it is
 // asserted to LOSE the previous frame's geometry, so this file cannot pass while modelling nothing.
 //
-// HERMETIC: no GPU, no window, no disc. The unit under test is VramDirty (runtime/recomp/vram_dirty.h);
+// HERMETIC: no GPU, no window, no disc. The unit under test is VramDirty (runtime/psx/vram_dirty.h);
 // the framebuffer, the fills and the rasterizer around it are a model.
 
 #include "testutil.h"

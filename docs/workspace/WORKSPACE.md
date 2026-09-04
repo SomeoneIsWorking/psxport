@@ -13,7 +13,7 @@ All of these live in the psxport repo, so they reach every game tree and every s
 |---|---|
 | **`psxport/AGENTS.md`** | **how a game consumes the framework** — the per-Core Lightrec/native seam, state/exits, image-scoped calls, invalidation, RE-first, diagnostics, and registries. THE authority |
 | **`docs/workspace/PROTOCOL.md`** | the multi-agent protocol (area claims) and the standing rules |
-| `docs/workspace/LAYOUT.md` · `docs/plans/*.md` | target directory organization · designs not yet implemented |
+| `docs/codemap.md` | current responsibility ownership and placement |
 | `docs/findings/*.md` | measured findings, and the incidents the rules came from |
 | `<game>/AGENTS.md` | that game's own specifics — the authority for that repo (its `CLAUDE.md` is a symlink) |
 
@@ -55,9 +55,10 @@ interpolation support is implied by repository existence.
 
 `$PSX` in any doc means this workspace root. To reproduce the workspace on a fresh machine:
 
-```sh
+```text
 git clone https://github.com/SomeoneIsWorking/psxport.git ~/repo/psx/psxport
-~/repo/psx/psxport/scripts/bootstrap-workspace.sh   # clones the games, inits vendors, relinks CLAUDE.md
+cd ~/repo/psx/psxport
+uv run --frozen python scripts/bootstrap_workspace.py
 ```
 
 All active target repositories are in that script's `REMOTE_BACKED` list. `toystory2` is not because
@@ -86,8 +87,8 @@ because there is no second copy.
    CMake writes at configure time.
 3. **Ports are deliberately NOT all on framework HEAD.** Measured 2026-08-16: six ports spanned 55
    commits of framework history. With one maintainer that is a feature — it is what lets one port be
-   worked on daily while the others sit untouched, and it is why the beetle GTE commit that broke
-   `PSXPORT_ORACLE=1` in every 3D scene broke one tree rather than six. Bump a port when you are ready
+   worked on daily while the others sit untouched, and it is why a Beetle GTE regression in every
+   3D scene broke one tree rather than six. Bump a port when you are ready
    to re-verify it.
 4. **Parallel framework work** is still one `git worktree` off `psxport/` per claim area, with that
    agent's `PSXPORT_DIR` pointing at it (PROTOCOL's).
@@ -99,8 +100,8 @@ Two incidents in one day, both caused by the mechanism rather than by anyone's m
 - Tomba2Engine was **built against psxport `25dd7826` while recording `a1c53d7c`**, so a bare clone did
   not compile — the game's hook table named a `GameHooks` field the pinned framework did not have.
   Nothing noticed, because a submodule working tree and its recorded gitlink drift silently.
-- "Fixing" that drift by syncing to the recorded pin is what pulled a **broken beetle GTE commit** into
-  the working build; it had already broken `PSXPORT_ORACLE=1` in every 3D scene for two days (8 of 9
+- "Fixing" that drift by syncing to the recorded pin is what pulled a **broken Beetle GTE commit** into
+  the working build; it had already broken concurrent 3D execution for two days (8 of 9
   replays segfaulting). That commit was made on a **detached HEAD inside the submodule** — the default
   state of a submodule checkout, and the reason it was never reviewed.
 
@@ -111,7 +112,7 @@ one repo, and with a single psxport tree there is no duplication to drift.
 
 ## The two things to know even if you read nothing else
 
-- **Never commit** disc images (`*.chd`), extracted executables, `generated/`, or machine-specific
+- **Never commit** disc images (`*.chd`), extracted executables, or machine-specific
   absolute paths (`/home/<user>/…`). Every game repo ships `tools/go_public.py` to audit history.
 - **Never write run artifacts to `/tmp`** — small RAM-backed tmpfs here. Use the repo's git-ignored
   `scratch/`, split by kind. Diagnose "disk quota exceeded" with `quota -s`, not `df`.
@@ -147,7 +148,7 @@ and `spyro/` had not converted to multi-title, so nothing was defended by inerti
 
 ## Submodule sync: FIXED, and what it now guarantees
 
-`scripts/sync-submodules.sh` used to certify pins it never checked. It now enumerates gitlinks DIRECTLY
+`scripts/sync_submodules.py` enumerates gitlinks directly
 (`ls-files -s`, filtering mode 160000) instead of trusting `git submodule status --recursive`, which
 aborts on beetle-psx's URL-less nested `deps/lightning/gnulib` and so never reached `vendor/lucent`.
 It prints a DENOMINATOR and names what it cannot cover:
@@ -156,7 +157,5 @@ It prints a DENOMINATOR and names what it cannot cover:
     (gitlink(s) no .gitmodules declares, so git itself cannot sync them):
     vendor/beetle-psx/deps/lightning/gnulib
 
-Verified 2026-08-13: all SEVEN trees carry the fixed script (md5 `535fd152dba6…`), and
-`tests/test_sync_submodules.cpp` passes. The lesson it cost is in
-`docs/findings/workspace-incidents.md` — the check had no denominator, so a short enumeration read as a
-clean bill of health.
+Its focused self-test covers complete, missing, and undeclared gitlinks. The printed denominator keeps
+a partial enumeration from reading as a clean bill of health.

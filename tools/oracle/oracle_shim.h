@@ -1,15 +1,13 @@
 // oracle_shim.h — the INDEPENDENT reference emulator's control surface.
 //
-// WHY: `docs/plans/oracle-against-beetle.md`. Today's differential harness compares our `pc_faithful`
-// path against our `recomp_path`; both are ours, so a shared wrong assumption reads as SUCCESS. USER,
-// 2026-08-12: *"oracle compare should be done against a verified emulator like beetle imo, not our
-// unverified 'faithful' path"*. This is milestone 1 of that plan: the vendored Mednafen PSX CPU, hosted
+// A reference implemented by the product can share the product's mistakes. This boundary hosts the
+// vendored Mednafen PSX CPU
 // WITHOUT `vendor/beetle-psx/libretro.c` (which drags in the disc, BIOS, video and option system), able
 // to execute a window of GAME instructions out of a RAM image we inject.
 //
 // SCOPE, stated so it cannot be overclaimed: this steps instructions and exposes registers and RAM. It
 // performs NO comparison against our port. A working `oracle_step()` proves nothing about the port until
-// milestone 2 puts a real window through both.
+// a real authenticated window is compared through the production executor boundary.
 #ifndef PSXPORT_ORACLE_SHIM_H
 #define PSXPORT_ORACLE_SHIM_H
 

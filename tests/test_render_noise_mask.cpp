@@ -1,5 +1,5 @@
 // test_render_noise_mask.cpp — the ONE definition of "guest RAM the render path legitimately differs
-// in" (runtime/recomp/render_noise.h), which every compare harness masks out of its verdict.
+// in" (runtime/psx/render_noise.h), which every compare harness masks out of its verdict.
 //
 // WHY THIS TEST IS THE IMPORTANT HALF OF THAT CHANGE. The mask decides which bytes a divergence report
 // is allowed to IGNORE. Get it too small and render noise is reported as a gameplay bug; get it too

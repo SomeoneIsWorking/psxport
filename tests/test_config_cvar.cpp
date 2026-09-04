@@ -156,13 +156,13 @@ static void test_producer_db_knobs_resolve_with_their_pre_migration_defaults(voi
 
 // An UNMIGRATED knob — the compatibility path that carries the other ~190 — must be untouched too.
 static void test_unmigrated_knob_still_resolves_through_the_env(void) {
-  set_env("PSXPORT_SBS_AUTONAV", "1");
-  CHECK_EQ(cfg_on("PSXPORT_SBS_AUTONAV"), 1);
-  CHECK(psx::config::find("PSXPORT_SBS_AUTONAV") == nullptr); // deliberately NOT migrated yet
-  set_env("PSXPORT_SBS_AUTONAV", "0");
-  CHECK_EQ(cfg_on("PSXPORT_SBS_AUTONAV"), 0);
-  set_env("PSXPORT_SBS_AUTONAV", nullptr);
-  CHECK_EQ(cfg_on("PSXPORT_SBS_AUTONAV"), 0);
+  set_env("PSXPORT_TEST_UNMIGRATED", "1");
+  CHECK_EQ(cfg_on("PSXPORT_TEST_UNMIGRATED"), 1);
+  CHECK(psx::config::find("PSXPORT_TEST_UNMIGRATED") == nullptr);
+  set_env("PSXPORT_TEST_UNMIGRATED", "0");
+  CHECK_EQ(cfg_on("PSXPORT_TEST_UNMIGRATED"), 0);
+  set_env("PSXPORT_TEST_UNMIGRATED", nullptr);
+  CHECK_EQ(cfg_on("PSXPORT_TEST_UNMIGRATED"), 0);
 }
 
 // ── 2. PRECEDENCE: Default < Value < Override < Runtime ─────────────────────────────────────────
@@ -196,7 +196,7 @@ static void test_layer_ladder_resolves_and_unresolves_in_the_documented_order(vo
   CHECK_EQ(v.get(), false);
 }
 
-// The one place psxport DEVIATES from Dusklight's ladder, so it gets its own case: their Override
+// Runtime commands intentionally outrank launch-time overrides, so this precedence gets its own case:
 // (launch arg) outranks their Speedrun layer; our Runtime layer outranks Override, because
 // docs/config.md has always said a REPL `debug ...` "still overrides the environment for the rest of
 // the run" and that behaviour must not change. A human typing at a live console is later and more
@@ -237,44 +237,34 @@ static void test_a_knob_set_in_the_environment_that_nothing_reads_is_reported(vo
 // must be classified `declared` and must NOT appear as unknown. Without this case the audit could
 // pass case 1 by simply calling everything unknown.
 static void test_a_registered_knob_set_in_the_environment_is_not_reported_as_unknown(void) {
-  set_env("PSXPORT_ORACLE", "1");
+  set_env("PSXPORT_NOAUDIO", "1");
   const psx::config::EnvAudit a = psx::config::audit_environment();
   print_audit(a);
-  CHECK(contains(a.declared, "PSXPORT_ORACLE"));
-  CHECK(!contains(a.unknown, "PSXPORT_ORACLE"));
-  set_env("PSXPORT_ORACLE", nullptr);
+  CHECK(contains(a.declared, "PSXPORT_NOAUDIO"));
+  CHECK(!contains(a.unknown, "PSXPORT_NOAUDIO"));
+  set_env("PSXPORT_NOAUDIO", nullptr);
 }
 
 // ...and the third class: an UNMIGRATED knob is only observable once something reads it. Before the
 // read it is indistinguishable from a typo — which is honest, and is exactly why the audit reports
 // the legacy count separately instead of folding it into `declared`.
 static void test_an_unmigrated_knob_is_classified_legacy_once_it_has_been_read(void) {
-  set_env("PSXPORT_SBS_KEYS", "1");
+  set_env("PSXPORT_TEST_LEGACY", "1");
   const psx::config::EnvAudit before = psx::config::audit_environment();
   print_audit(before);
-  CHECK(contains(before.unknown, "PSXPORT_SBS_KEYS")); // nothing has read it yet
-  (void)cfg_on("PSXPORT_SBS_KEYS");                    // the legacy compatibility path
+  CHECK(contains(before.unknown, "PSXPORT_TEST_LEGACY"));
+  (void)cfg_on("PSXPORT_TEST_LEGACY");
   const psx::config::EnvAudit after = psx::config::audit_environment();
   print_audit(after);
-  CHECK(contains(after.legacy, "PSXPORT_SBS_KEYS"));
-  CHECK(!contains(after.unknown, "PSXPORT_SBS_KEYS"));
-  set_env("PSXPORT_SBS_KEYS", nullptr);
+  CHECK(contains(after.legacy, "PSXPORT_TEST_LEGACY"));
+  CHECK(!contains(after.unknown, "PSXPORT_TEST_LEGACY"));
+  set_env("PSXPORT_TEST_LEGACY", nullptr);
 }
 
 // The audit ships with its own proof that it can produce a positive. A `selftest()` that lives in
 // the library (not only here) is what stops the audit from quietly degrading into a function that
 // returns an empty list forever.
 static void test_the_audit_selftest_fires_in_the_shipping_library(void) {
-  // HERMETIC, deliberately: selftest() now also drives the enhancement gate, and it REFUSES (returns
-  // false, naming what it did not exercise) in a process that is already a byte-compare run — reaching
-  // the honour class there would mean forcing the oracle off in a run that IS one. Verified by running
-  // this binary with PSXPORT_SBS=1 before adding these three lines: `[cfg:error] selftest FAILED: the
-  // enhancement gate cannot be exercised in a byte-compare run (PSXPORT_SBS)`. That refusal is correct
-  // and must stay, but a developer with PSXPORT_SBS exported in their shell is not a regression in the
-  // framework, so the case clears the three inputs rather than inheriting the ambient environment.
-  set_env("PSXPORT_ORACLE", nullptr);
-  set_env("PSXPORT_SBS", nullptr);
-  set_env("PSXPORT_SBS_MODE", nullptr);
   const bool ok = psx::config::selftest();
   fprintf(stderr, "  psx::config::selftest() -> %s\n", ok ? "true (audit produced its positive)" : "FALSE");
   CHECK(ok);
@@ -295,7 +285,7 @@ static void test_the_declared_inventory_is_not_empty(void) {
   });
   fprintf(stderr, "  %d CVar(s) registered\n", n);
   CHECK(n >= 7);
-  CHECK(psx::config::find("PSXPORT_ORACLE") != nullptr);
+  CHECK(psx::config::find("PSXPORT_NOAUDIO") != nullptr);
   CHECK(psx::config::find("PSXPORT_FPS60") != nullptr); // documented since forever, read by NOTHING
 }
 

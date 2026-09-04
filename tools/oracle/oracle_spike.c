@@ -1,10 +1,9 @@
-// oracle_spike.c — milestone 1 of `docs/plans/oracle-against-beetle.md`, and its own proof.
+// oracle_spike.c — independent CPU reference smoke test.
 //
 // WHAT THIS PROVES: that the vendored Mednafen PSX CPU, hosted without `libretro.c`, executes MIPS
 // instructions we inject into a RAM image and produces the register and memory results we can compute by
 // hand. WHAT IT DOES NOT PROVE: anything at all about our port. No comparison happens here. A working
-// oracle is a working reference, not a verified port — the plan says so and it stays true until
-// milestone 2 puts one window through both sides.
+// oracle is a working reference, not a verified port; a real window must pass through both sides.
 //
 // WHY IT RUNS TWO CLASSES OF PROGRAM. A checker that has only ever seen the case it expects is not an
 // instrument, and this workspace has been burned by exactly that (`docs/findings/`: a discriminator that
@@ -743,7 +742,7 @@ int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0); // unbuffered: a crash mid-run must not swallow the checks already
   setvbuf(stderr, NULL, _IONBF, 0); // printed, and stderr/stdout must interleave in the real order
 
-  printf("psxport oracle spike — milestone 1 of docs/plans/oracle-against-beetle.md\n");
+  printf("psxport independent CPU oracle smoke\n");
   printf("PLAN: %d checks across 10 program classes.\n", PLANNED_CHECKS);
   printf("  POSITIVE (9 checks): inject 8 hand-assembled instructions at 0x%08X, run 200 cycles,\n"
          "    assert $t0-$t3, $gp, $sp, the stored word in RAM, a clean stop, and that PC advanced within RAM.\n",

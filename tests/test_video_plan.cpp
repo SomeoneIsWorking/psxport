@@ -1,6 +1,6 @@
 // test_video_plan.cpp — the RESOLUTION decisions must not depend on whether a window exists.
 //
-// WHAT THIS GATES. `runtime/recomp/video_plan.h` owns the two decisions that used to read the live
+// WHAT THIS GATES. `runtime/psx/video_plan.h` owns the two decisions that used to read the live
 // WINDOW size: the AUTO internal-resolution scale, and the widened framebuffer width under
 // ASPECT_AUTO. The shipped rule (gpu_vk.cpp:229/252) called `win_h()` / `win_w()`, which are
 // documented as "live window size in pixels, falling back to native 4:3 before the window exists":
@@ -24,7 +24,7 @@
 // run this suite against it and watch it go red; the default build additionally asserts that the
 // legacy rule FAILS the property, so this file cannot pass while modelling nothing.
 //
-//   RED  : g++ -std=c++20 -I runtime/recomp -I tests -DPSXPORT_TEST_LEGACY_VIDEO_PLAN -o
+//   RED  : g++ -std=c++20 -I runtime/psx -I tests -DPSXPORT_TEST_LEGACY_VIDEO_PLAN -o
 //          scratch/bin/t_video tests/test_video_plan.cpp && scratch/bin/t_video
 //   GREEN: the same without the define, or `ctest -R test_video_plan`.
 //

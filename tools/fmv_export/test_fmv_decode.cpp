@@ -7,11 +7,11 @@
 // — fails loudly instead of shipping.
 //
 // Hermetic tests need no disc (synthetic MDEC code streams + oracle-embedded
-// expected colors). Disc-gated tests (LOGO.STR frame 1 / frame 31) run when
-// PSXPORT_TOMBA2_DISC or PSXPORT_DISC is set and SKIP otherwise.
+// expected colors). Disc-gated tests (LOGO.STR frame 1 / frame 31) run when a
+// disc path is passed as the sole argument and SKIP otherwise.
 //
-// build: tools/fmv_export/build.sh also builds tools/fmv_export/test_fmv_decode
-// run:   tools/fmv_export/test_fmv_decode
+// build: cmake --build build/clang --target test_fmv_decode
+// run:   build/clang/tools/fmv_export/test_fmv_decode [disc.chd]
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +41,12 @@ extern "C" int MDFNSS_StateAction(void *st, int load, int data_only, void *sf, c
 // Tiny test framework
 // ====================================================================================
 static int s_pass = 0, s_fail = 0, s_skip = 0;
+
+struct TestInputs {
+  const char *disc_path = nullptr;
+};
+
+static TestInputs s_inputs;
 
 #define CHECK(cond)                                                                                                    \
   do {                                                                                                                 \
@@ -327,12 +333,9 @@ collect_frames(uint32_t lba, uint32_t size, int from, int to, std::vector<std::v
 // matches the oracle's SHA1, then the full bs_decode -> MDEC path decodes to all
 // 0x7FFF. Previously the drain stall made this garbage.
 static void test_logo_frame1_white() {
-  const char *disc = getenv("PSXPORT_TOMBA2_DISC");
-  if (!disc) {
-    disc = getenv("PSXPORT_DISC");
-  }
+  const char *disc = s_inputs.disc_path;
   if (!disc || !*disc) {
-    skip("no disc (set PSXPORT_TOMBA2_DISC / PSXPORT_DISC)");
+    skip("no disc path argument");
     return;
   }
   if (!disc_open(disc)) {
@@ -374,12 +377,9 @@ static void test_logo_frame1_white() {
 // Disc-gated: LOGO.STR frame 31 (first AC-content frame). Asserts the decoded frame
 // matches the oracle's unique-color count, top-color histogram, and pixel SHA1.
 static void test_logo_frame31_content() {
-  const char *disc = getenv("PSXPORT_TOMBA2_DISC");
-  if (!disc) {
-    disc = getenv("PSXPORT_DISC");
-  }
+  const char *disc = s_inputs.disc_path;
   if (!disc || !*disc) {
-    skip("no disc (set PSXPORT_TOMBA2_DISC / PSXPORT_DISC)");
+    skip("no disc path argument");
     return;
   }
   if (!disc_open(disc)) {
@@ -445,7 +445,12 @@ static void test_logo_frame31_content() {
   CHECK(got == "9fd25626e8138e5b3438bda41cb29250f3d7e88c");
 }
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc > 2) {
+    fprintf(stderr, "usage: %s [disc.chd]\n", argv[0]);
+    return 2;
+  }
+  s_inputs.disc_path = argc == 2 ? argv[1] : nullptr;
   RUN(mdec_drain_hermetic);
   RUN(mdec_flat_color_blocks);
   RUN(logo_frame1_white);

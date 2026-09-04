@@ -1,10 +1,10 @@
 # psxport — native/dynarec PlayStation port framework
 
 This file is the canonical project-local authority for psxport. `CLAUDE.md` is a discovery symlink;
-never edit it separately. The portfolio-wide native/dynarec contract and migration order live in
-`../../shared/jit-common/docs/migration.md`. Local intent, factual capability state, ownership, and
-atomic work live in `docs/project-goals.md`, `docs/project-state.md`, `docs/codemap.md`, and
-`docs/issues/` respectively.
+never edit it separately. The portfolio-wide native/dynarec methodology lives in the shared
+`dynarec-*` skills. Local migration requirements, intent, factual capability state, ownership, and
+atomic work live in `docs/migration.md`, `docs/project-goals.md`, `docs/project-state.md`,
+`docs/codemap.md`, and `docs/issues/` respectively.
 
 Before concurrent framework work, read `docs/workspace/PROTOCOL.md` completely. Before non-trivial
 work, run the shared `info.py brief <terms>` entry point from the repository root and read the issue
@@ -23,17 +23,18 @@ psxport's intended product is a game-agnostic native/dynarec hybrid:
 - the user's authenticated PSX image remains runtime data. No build, install, provisioning, or
   release path emits guest functions as C/C++, object files, or a precompiled title substrate.
 
-PSX is not evaluating an interpreter against a JIT. Lightrec is the product CPU executor. Any
-interpreter is a separately built test-only oracle and must be absent from the gameplay library's
-objects, link graph, configuration, UI, command line, and fallback paths. Lightrec configurations
-that interpret difficult or not-yet-compiled blocks are not acceptable for the gameplay target:
-the maintained fork must provide a dynarec-only product build, and an untranslatable block must
-produce a named executor failure rather than silently interpreting it.
+PSX is not exposing an interpreter-vs-JIT product choice. Lightrec/native execution is the product
+default. After successful dynarec initialization, the maintained backend may use automatic
+interpreter fallback only when translation explicitly refuses a classified compilation failure,
+unsafe instruction fetch, or rare unsupported block. A missing or unsupported dynarec backend is a
+named failure, never a fallback mode. Fallback is bounded per call and by total guest share, reports
+per-reason calls and instructions, and returns a typed fault on a threshold breach. An explicit
+interpreter mode remains test-only and cannot enter product configuration, UI, or command line.
 
-The repository has not implemented this architecture yet. Generated-C dispatch, the in-library
-interpreter, and the `PSXPORT_ENGINE` selector are current migration gaps, not extension points.
-Follow `docs/migration.md`; do not add another generated-code feature, engine choice, or compatibility
-fallback while replacing them.
+The repository has a partial Linux x86-64 Lightrec adapter, not a gameplay-ready hybrid. The removed
+guest-source pipeline and `PSXPORT_ENGINE` selector are not extension points. Follow
+`docs/migration.md`; do not add another derived guest-source feature, engine choice, or static
+compatibility path while completing the runtime path.
 
 ## Lightrec dependency boundary
 
@@ -100,10 +101,10 @@ tests are required; a diagnostic that only prints on invalidation is not evidenc
 Use `docs/codemap.md` as the placement authority. The target CPU integration is split by ownership,
 not accumulated in `Core`, `native_boot.cpp`, `dispatch.cpp`, or a replacement god class:
 
-- `runtime/cpu/lightrec_executor.*`: one per-`Core` Lightrec lifetime and bounded run orchestration;
-- `runtime/cpu/state_bridge.*`: explicit architectural-state synchronization;
+- `runtime/cpu/lightrec_executor.*`: Lightrec lifetime, bounded execution, and architectural-state
+  transfer;
 - `runtime/cpu/execution_exit.*`: typed exit reasons and budgets;
-- `runtime/cpu/code_identity.*`: authenticated resident/module identity and generation;
+- `runtime/cpu/image_identity.*`: authenticated resident/module identity and generation;
 - `runtime/cpu/native_dispatch.*`: image-scoped overrides and one-call original dispatch;
 - `runtime/cpu/invalidation.*`: normalized executable-write notification and Lightrec invalidation;
 - `tests/oracle/`: separately built interpreter/oracle support, never a product dependency.

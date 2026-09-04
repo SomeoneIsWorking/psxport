@@ -1,86 +1,33 @@
-# Renderer backend: Vulkan → SDL3 GPU API (one PC-native render API)
+# SDL3 GPU renderer contract
 
-**Decision (user, 2026-06-25):** the sole renderer is the **SDL3 GPU API** (`SDL_gpu.h`), PC-native.
-- macOS / iOS → **native Metal** (NO MoltenVK — this was the original bug: the SBS two-pane VK composite
-  rendered black on MoltenVK).
-- Android / Linux / Windows → Vulkan (Win also D3D12).
-- ONE stack for window + input + audio + GPU (SDL3), replacing SDL2 + Vulkan + the SDL window.
+SDL3 owns the product window, input, audio, and GPU integration. The renderer uses SDL's native
+backend for each platform: Metal on Apple platforms and Vulkan or D3D12 where SDL supports them. The
+product does not carry a second windowing or graphics stack.
 
-## Why SDL_GPU
-**SDL_GPU maps ~1:1 onto the EXISTING `runtime/recomp/gpu_vk.cpp`** (the renderer that already WORKS on
-Linux/AMD and in single-core on the user's Mac via MoltenVK — only the SBS composite was MoltenVK-black).
-That makes it a clean translation, and on the Mac it runs native Metal so the original problem is gone.
-(An OpenGL-backed presenter was tried first and abandoned — DEAD END: OpenGL is deprecated on macOS /
-absent on iOS, and its immediate-mode batch fought a custom integer-VRAM PSX rasterizer. Do not retry it.)
+## Ownership
 
-## Asset reuse (big)
-- **Shaders:** reuse `runtime/recomp/shaders_vk/*.{vert,frag}` as-is. `tools/gen_vk_shaders.sh` already
-  compiles them GLSL→SPIR-V→the consumer build's `psxport_generated/gpu_vk_shaders.h` (embedded).
-  SDL_GPU's Vulkan backend consumes SPIR-V
-  directly (`SDL_CreateGPUShader` with `SDL_GPU_SHADERFORMAT_SPIRV`). For Metal (Mac): transpile the same
-  SPIR-V via **SDL_shadercross** (offline or at load) — add for the Mac build.
-- **Renderer design:** `gpu_vk.cpp` is the behavioral reference — VRAM R16_UINT image, the tri/tritex/semi
-  pipelines + CLUT decode, depth bands, present (region+letterbox+fade), headless readback, dirty-rects.
+- `runtime/psx/gpu_vk.cpp` owns the SDL GPU device, window claim, swapchain, VRAM textures, transfer
+  buffers, pipelines, presentation, readback, and dirty-region synchronization.
+- `runtime/psx/shaders_gpu/` owns first-party GLSL sources. `tools/gen_gpu_shaders.py` compiles and
+  embeds them in a consumer-owned build directory; no shader header is written to the source tree.
+- `runtime/psx/gpu_native.cpp` and the render-queue owners provide primitive and presentation work
+  through the renderer's narrow interfaces.
+- `runtime/psx/sbs_pane_layout.h` owns side-by-side pane geometry. Each Game renders independently;
+  composition consumes the completed panes without sharing per-Core renderer state.
 
-## VK → SDL_GPU object mapping
-| Vulkan (gpu_vk.cpp) | SDL3 GPU |
-|---|---|
-| VkInstance/VkDevice/VkQueue | `SDL_GPUDevice` (`SDL_CreateGPUDevice`, claim window) |
-| SDL2 VkSurface + swapchain | `SDL_ClaimWindowForGPUDevice` + `SDL_AcquireGPUSwapchainTexture` |
-| VkImage s_tex (R16_UINT VRAM, color targets, depth) | `SDL_GPUTexture` (R16_UINT sampler tex; RGBA/color-target; D32 depth) |
-| staging buffers + vkCmdCopy | `SDL_GPUTransferBuffer` + `SDL_UploadToGPUTexture` / `SDL_DownloadFromGPUTexture` |
-| VkBuffer vertex buffers | `SDL_GPUBuffer` (vertex) + transfer upload |
-| VkPipeline (tri/tritex/semi/present/shadow) | `SDL_GPUGraphicsPipeline` (blend states incl. the 4 PSX semi modes via blend factors) |
-| vkCmdBeginRenderPass | `SDL_BeginGPURenderPass` (color+depth targets) / `SDL_BeginGPUCopyPass` |
-| push constants | `SDL_PushGPUVertexUniformData` / `...FragmentUniformData` |
-| readback (vk_readback_to_rb) | `SDL_DownloadFromGPUTexture` + `SDL_MapGPUTransferBuffer` |
+## Behavioral requirements
 
-## SDL2 → SDL3 migration surface
-- `pkg-config sdl2` → `sdl3` (installed: 3.4.10; `SDL3/SDL_gpu.h` present; `glslc`/`glslang` present).
-- Audio sink `spu_audio.c` (SDL2 audio → SDL3 `SDL_AudioStream` / new callback API).
-- Window + input: SDL3 owns the window; `SDL_GPU` claims it. `pad_input.cpp pad_poll_sdl` → SDL3 input
-  (`SDL_GetKeyboardState`, gamepad API renamed `SDL_Gamepad*`). Event/quit poll.
-- `-DPSXPORT_SDL` stays. memcard/other SDL uses → SDL3 equivalents.
+- Preserve the 16-bit PSX VRAM representation, CLUT decode, semitransparency modes, primitive order,
+  depth policy, display-region selection, letterboxing, fades, and bounded readback.
+- Headless and windowed execution use the same rendering pipeline. Only the final sink differs.
+- Build-owned generated headers are namespaced by consumer so configuring or cleaning one build
+  cannot affect another.
+- Apple shader delivery uses SDL_shadercross from the same authored shader sources; platform-specific
+  shader copies are not permitted.
 
-## Phasing (this is the plan the swarm executes)
-1. **Module + build:** new `runtime/recomp/gpu_vk.cpp` providing EVERY `gpu_vk_*`/`gpu_*` entry point from
-   `gpu_vk.h` on SDL_GPU. SDL2→SDL3 in CFLAGS/link. Reuse the build-owned shader header (SPIR-V).
-   Build green.
-2. **Single-core game renders:** VRAM 2D + native 3D (depth) + present + fade + `shot`. Verify on Linux
-   (Vulkan backend) + USER eyeballs Mac (Metal).
-3. **SBS:** two offscreen targets composited side-by-side (native Metal → no MoltenVK black).
-4. **Delete:** `gpu_vk.cpp` + SDL2 once Pass 2/3 verified.
-5. Shadows/SSAO (enhancements) port or defer.
+## Remaining capability gaps
 
-## Status
-- [x] Feasibility: SDL3 3.4.10 + SDL_gpu.h + glslc present on the linux box
-- [x] **Pass 1 — gpu_vk.cpp on SDL_GPU + SDL3 migration + build green + 2D screens render.**
-  - `runtime/recomp/gpu_vk.cpp`: device/window/swapchain on SDL_GPU; VRAM R16_UINT sampler texture
-    uploaded each present; present pass (sample VRAM 1555 → swapchain, letterbox 4:3 + fade); fullscreen
-    IMAGE present (SCEA/FMV); headless VRAM readback (`shot`). All `gpu_vk_*` symbols provided.
-  - shaders: `runtime/recomp/shaders_gpu/{present,image}.{vert,frag}` (SDL_GPU binding convention —
-    frag samplers set=2, frag uniform buffers set=3) → build-owned `gpu_vk_shaders.h` via
-    `tools/gen_gpu_shaders.py`.
-  - SDL2→SDL3: `pad_input.cpp` (SDL_Gamepad + bool keyboard), `spu_audio.c` + `native_fmv.cpp`
-    (SDL_AudioStream), `gpu_native.cpp` (retired the SDL_Renderer SW window — GPU path is THE present).
-  - RmlUi overlay dropped (`rmlui_overlay_stub.cpp`); SBS two-pane present is now SDL_GPU (`sbs_present_sdl.cpp` + `gpu_vk_present_sbs2`). Build wires
-    `sdl3` (no sdl2/vulkan/GL); `ldd` shows only `libSDL3.so`. Verified WINDOWED on Linux/Vulkan-backend:
-    the intro FMV renders correctly (scratch/screenshots/window_grab*.png). gpu_vk.cpp kept for reference.
-  - Diagnostics (tracked): `PSXPORT_GPU_TRACE` (per-present src occupancy + disp region; readback nz),
-    `PSXPORT_GPU_DEBUG` (SDL_GPU device validation — slows boot, can trip the watchdog).
-  - NOTE: at the time of Pass 1 the 3D `draw_*` were no-ops (Pass 2 built them). Headless `shot` can
-    read the BACK buffer (display page x=320 vs the sampled 0,0) at some frames; the WINDOWED present
-    samples the live front buffer correctly — that quirk is pre-existing display-page behavior, not a
-    renderer bug.
-- [ ] Pass 2 — native 3D raster (draw_tri/tritri/semi) on an R16_UINT color target with IN-SHADER semi
-  blend against a VRAM snapshot (no HW blend / no format alias) + a real depth buffer + the 3 ordering
-  bands. This is the bulk of gpu_vk.cpp's tri/tritex/semi pipelines re-expressed; rewrite tri/tritex
-  fragments to OUTPUT the packed 1555 uint (not the A1R5G5B5 swizzle).
-- [x] **Pass 3 — SBS two-pane compose.** Landed in a different shape than planned, and the plan's
-  "two render targets" is not what it needs: the two panes come from two DIFFERENT `Game`s, so each core
-  renders and reads its own frame back to a CPU RGBA pane (`gpu_vk_render_readback`) and the free
-  function `gpu_vk_present_sbs2` composites them into one window frame. Pane geometry (A left, B right,
-  each letterboxed by its own aspect) is `runtime/recomp/sbs_pane_layout.h`, pinned by
-  `tests/test_sbs_pane_layout.cpp`.
-- [ ] delete VK (gpu_vk.cpp) + SDL2 once Pass 2/3 verified.
-- [ ] Mac Metal shaders via SDL_shadercross.
+The authoritative status is `docs/project-state.md`. At present, native 3D parity and Apple Metal
+shader delivery still require complete verification. A renderer capability is not verified by a
+device-creation check, an internal trace, or a single boot/FMV scene; representative interactive
+rendering and the declared platform matrix are required.

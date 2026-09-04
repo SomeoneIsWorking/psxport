@@ -14,6 +14,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from repository_policy import (
+    deleted_path_references,
+    forbidden_architecture_references,
+    product_boundary_bypasses,
+    stale_execution_references,
+)
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CAP = 1200
@@ -25,26 +31,24 @@ EXCLUDED_TOP_LEVEL = {"build", "external", "generated", "scratch", "vendor"}
 # down after an extraction; it never moves up to accommodate growth. Consumer repos use the same
 # implementation through --root and declare their own legacy exceptions with --cap.
 PSXPORT_CAPS = {
-    "runtime/recomp/game_iface.h": 500,
-    "runtime/recomp/gpu_native.cpp": 4121,
-    "runtime/recomp/gpu_vk.cpp": 4404,
-    "runtime/recomp/gpu_vk_semi_selftest.cpp": 200,
-    "runtime/recomp/gpu_vk_semi_selftest.h": 40,
-    "runtime/recomp/gpu_vk_selftest_support.h": 40,
-    "runtime/recomp/gpu_vk_texture_phase_selftest.cpp": 180,
-    "runtime/recomp/gpu_vk_texture_phase_selftest.h": 40,
-    "runtime/recomp/hle.cpp": 1259,
-    "runtime/recomp/interp.cpp": 1242,
-    "runtime/recomp/mem.cpp": 1321,
-    "runtime/recomp/pc_scheduler.cpp": 661,
-    "runtime/recomp/pc_scheduler.h": 177,
-    "runtime/recomp/render_queue.cpp": 2547,
-    "runtime/recomp/sbs.cpp": 4255,
-    "runtime/recomp/synchronous_task_wait.cpp": 220,
-    "runtime/recomp/synchronous_task_wait.h": 80,
-    "runtime/ui/render_path_control.cpp": 100,
-    "runtime/ui/render_path_control.h": 50,
-    "tests/test_synchronous_task_wait.cpp": 180,
+    "runtime/psx/game_iface.h": 37,
+    "runtime/psx/gpu_native.cpp": 4051,
+    "runtime/psx/gpu_vk.cpp": 4288,
+    "runtime/psx/gpu_vk_semi_selftest.cpp": 199,
+    "runtime/psx/gpu_vk_semi_selftest.h": 12,
+    "runtime/psx/gpu_vk_selftest_support.h": 15,
+    "runtime/psx/gpu_vk_texture_phase_selftest.cpp": 180,
+    "runtime/psx/gpu_vk_texture_phase_selftest.h": 10,
+    "runtime/psx/hle.cpp": 1046,
+    "runtime/psx/mem.cpp": 1212,
+    "runtime/psx/pc_scheduler.cpp": 550,
+    "runtime/psx/pc_scheduler.h": 148,
+    "runtime/psx/render_queue.cpp": 2490,
+    "runtime/psx/synchronous_task_wait.cpp": 188,
+    "runtime/psx/synchronous_task_wait.h": 24,
+    "runtime/ui/render_path_control.cpp": 54,
+    "runtime/ui/render_path_control.h": 32,
+    "tests/test_synchronous_task_wait.cpp": 71,
 }
 
 
@@ -144,6 +148,13 @@ def check_caps(root: Path, sources: list[Path], caps: dict[str, int]) -> int:
                 file=sys.stderr,
             )
             failed = True
+        elif relative in caps and lines < cap:
+            print(
+                f"cpp-policy: FAIL — {relative} shrank to {lines} lines but retains a {cap}-line cap; "
+                "ratchet the cap to the current size",
+                file=sys.stderr,
+            )
+            failed = True
         if lines >= CRITICAL_LINES:
             critical += 1
     print(
@@ -151,6 +162,41 @@ def check_caps(root: Path, sources: list[Path], caps: dict[str, int]) -> int:
         f"{len(caps)} explicit cap(s), {critical} critical legacy file(s)"
     )
     return 1 if failed else 0
+
+
+def check_repository_policy(root: Path) -> int:
+    architecture_findings = forbidden_architecture_references(root)
+    deleted_path_findings = deleted_path_references(root)
+    stale_execution_findings = stale_execution_references(root)
+    boundary_bypasses = product_boundary_bypasses(root)
+    if architecture_findings:
+        print(
+            "cpp-policy: FAIL — external game template is referenced by first-party file(s): "
+            + ", ".join(architecture_findings),
+            file=sys.stderr,
+        )
+    if deleted_path_findings:
+        print(
+            "cpp-policy: FAIL — deleted framework path is referenced by first-party file(s): "
+            + ", ".join(deleted_path_findings),
+            file=sys.stderr,
+        )
+    if stale_execution_findings:
+        print(
+            "cpp-policy: FAIL — retired guest-generation/backend-fallback vocabulary is referenced by "
+            "first-party file(s): " + ", ".join(stale_execution_findings),
+            file=sys.stderr,
+        )
+    if boundary_bypasses:
+        print(
+            "cpp-policy: FAIL — product logging/configuration boundary bypass(es): "
+            + ", ".join(boundary_bypasses),
+            file=sys.stderr,
+        )
+    if architecture_findings or deleted_path_findings or stale_execution_findings or boundary_bypasses:
+        return 1
+    print("cpp-policy: whole-tree architecture/execution/logging/configuration policy checked")
+    return 0
 
 
 def touched_cpp_tus(root: Path) -> list[str]:
@@ -399,16 +445,83 @@ def selftest() -> int:
         (root / "deleted.cpp").unlink()
         selftest_write_database(root)
 
+        cases = 0
+
         def expect(name: str, want_code: int, needle: str, *extra: str) -> None:
+            nonlocal cases
             code, output = selftest_run(root, *extra)
             if code != want_code or needle not in output:
                 raise RuntimeError(
                     f"{name}: expected rc={want_code} and {needle!r}; got rc={code}\n{output}"
                 )
+            cases += 1
             print(f"cpp-policy selftest: PASS {name}")
 
         expect("happy clean tree lints one TU", 0, "checked 1 of 1 first-party C++ TU")
         expect("tracked deletion is excluded", 0, "1 worktree-deleted file(s)")
+
+        docs = root / "docs"
+        docs.mkdir()
+        forbidden_name = "Dusk" + "light"
+        forbidden_file = docs / "template.md"
+        forbidden_file.write_text(f"Copy the {forbidden_name} architecture.\n", encoding="utf-8")
+        expect("external architecture template fails", 1, "external game template")
+        forbidden_file.unlink()
+
+        deleted_path = "runtime/" + "recomp/core.h"
+        deleted_path_file = docs / "old-path.md"
+        deleted_path_file.write_text(f"Include {deleted_path}.\n", encoding="utf-8")
+        expect("deleted framework path fails", 1, "deleted framework path")
+        deleted_path_file.unlink()
+
+        stale_execution_file = docs / "old-executor.md"
+        stale_execution_file.write_text("Run " + "emit" + ".py before launch.\n", encoding="utf-8")
+        expect("retired guest-generation method fails", 1, "retired guest-generation")
+        stale_execution_file.unlink()
+
+        backend_fallback_file = docs / "backend-fallback.md"
+        backend_fallback_file.write_text("Reason: Backend" + "Unavailable.\n", encoding="utf-8")
+        expect("missing backend fallback reason fails", 1, "backend-fallback vocabulary")
+        backend_fallback_file.unlink()
+
+        bundled_backend_file = docs / "bundled-backend.md"
+        bundled_backend_file.write_text(
+            "The currently bundled " + "Lightrec is the product dependency.\n",
+            encoding="utf-8",
+        )
+        expect("stale bundled Lightrec claim fails", 1, "backend-fallback vocabulary")
+        bundled_backend_file.unlink()
+
+        unavailable_fallback_file = docs / "unavailable-fallback.md"
+        unavailable_fallback_file.write_text(
+            "Unavailable initialization may " + "enter an interpreter fallback.\n",
+            encoding="utf-8",
+        )
+        expect("unavailable backend fallback claim fails", 1, "backend-fallback vocabulary")
+        unavailable_fallback_file.unlink()
+
+        nonexistent_owner_file = docs / "nonexistent-owner.md"
+        nonexistent_owners = (
+            ("state bridge", "runtime/cpu/" + "state_bridge.*"),
+            ("code identity", "runtime/cpu/" + "code_identity.*"),
+            ("retired shared JIT layer", "shared/" + "jit-common"),
+        )
+        for name, owner in nonexistent_owners:
+            nonexistent_owner_file.write_text(f"Subsystem owner: {owner}.\n", encoding="utf-8")
+            expect(f"nonexistent {name} owner fails", 1, "deleted framework path")
+        nonexistent_owner_file.unlink()
+
+        runtime = root / "runtime/psx"
+        runtime.mkdir(parents=True)
+        stderr_file = runtime / "bad_sink.cpp"
+        stderr_file.write_text("#include <cstdio>\nvoid f(){fflush(stderr);}\n", encoding="utf-8")
+        expect("direct product diagnostic sink fails", 1, "direct diagnostic sink")
+        stderr_file.unlink()
+
+        getenv_file = runtime / "bad_config.cpp"
+        getenv_file.write_text("#include <cstdlib>\nvoid f(){(void)getenv(\"X\");}\n", encoding="utf-8")
+        expect("direct product environment read fails", 1, "direct process environment")
+        getenv_file.unlink()
 
         (root / ".clang-tidy").unlink()
         expect("missing clang-tidy config refuses", 2, "tracked .clang-tidy is missing")
@@ -437,11 +550,12 @@ def selftest() -> int:
         (root / "a.cpp").write_text(source_text, encoding="utf-8")
         selftest_write_database(root)
         expect("explicit size cap fails", 1, "above its 1-line cap", "--cap", "a.cpp=1")
+        expect("stale size cap fails", 1, "ratchet the cap", "--cap", "a.cpp=4")
 
         (root / "a.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         expect("format drift fails", 1, "run clang-format")
 
-    print("cpp-policy selftest: 8/8 cases passed")
+    print(f"cpp-policy selftest: {cases}/{cases} cases passed")
     return 0
 
 
@@ -472,6 +586,11 @@ def main() -> int:
         action="store_true",
         help="fast local mode: lint only worktree-touched C++ TUs (normal CTest must omit this)",
     )
+    parser.add_argument(
+        "--repository-only",
+        action="store_true",
+        help="run the whole-tree first-party policy scan without format, size, or clang-tidy checks",
+    )
     args = parser.parse_args()
 
     if args.selftest:
@@ -496,6 +615,12 @@ def main() -> int:
         "cpp-policy: excluded vendor/generated trees, "
         f"{len(generated)} generated file(s), and {len(deleted)} worktree-deleted file(s)"
     )
+
+    result = check_repository_policy(root)
+    if result:
+        return result
+    if args.repository_only:
+        return 0
 
     caps = dict(PSXPORT_CAPS) if root == SCRIPT_ROOT else {}
     caps.update(dict(args.cap))

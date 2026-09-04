@@ -1,12 +1,12 @@
 # The game-agnostic framework has 19 hardcoded Tomba! 2 guest addresses in it
 
-**Measured 2026-08-13**, by grep over `runtime/recomp/`, then read site by site to separate diagnostics from
+**Measured 2026-08-13**, by grep over `runtime/psx/`, then read site by site to separate diagnostics from
 behaviour. Found while looking for a single-step hook for the oracle differential, not by auditing for it.
 
 ## The contract this breaks
 
 `psxport/CLAUDE.md`: the framework *"carries **no game code** — the framework `#include`s nothing from a
-game; a game provides `GameConfig` + `GameHooks` + the recompiled substrate and links `libpsxport`"*, and
+game; a game provides its typed runtime configuration and hooks and links `libpsxport`"*, and
 `psxport_smoke` exists to keep that seam honest by linking the library against a stub and proving zero game
 symbols resolve.
 
@@ -23,7 +23,7 @@ game-address debt is *tracked*, not unnoticed. `pc_scheduler.cpp` alone carries 
 
 ## What is actually there
 
-**`runtime/recomp/interp.cpp` — 11 sites, all DIAGNOSTIC**, inside `interp_flat`'s per-instruction loop:
+An earlier product CPU implementation held 11 diagnostic-only address probes inside its instruction loop:
 
 | address(es) | what the comment says it is |
 |---|---|
@@ -34,11 +34,10 @@ game-address debt is *tracked*, not unnoticed. `pc_scheduler.cpp` alone carries 
 | `0x800914D0`, `0x800909C0`, `0x80090BD0`, `0x80091460`, `0x80090210`, `0x80090560`, `0x8008E390` | further audio/seq probes |
 | `0x8007E998` | `text` channel |
 
-These are channel-gated logging only — they cannot change guest state. Their cost is structural (game
-knowledge in the framework) plus a per-instruction comparison chain in the hottest loop in the runtime.
-Several are explicitly labelled temporary RE probes.
+Those probes were removed with the obsolete product CPU implementation. Their lasting lesson is that
+title-address diagnostics belong in the title, not in a framework instruction loop.
 
-**`runtime/recomp/pc_scheduler.cpp` — 8 addresses, and these are BEHAVIOUR**, not diagnostics:
+**`runtime/psx/pc_scheduler.cpp` — 8 addresses, and these are BEHAVIOUR**, not diagnostics:
 
 ```
 entry_pc == 0x801062E4   // DEMO
@@ -58,7 +57,7 @@ it.
 
 **This is an UNFINISHED MIGRATION, not a design disagreement**, which is why it is cheap to finish.
 `cmake/psxport.cmake:213` records the intent: *"as of P1.7c the framework owns
-Fps60/RenderQueue/PcScheduler/VerifyHarness/FfSpan (their headers moved to runtime/recomp/; the game
+Fps60/RenderQueue/PcScheduler/VerifyHarness/FfSpan (their headers moved to runtime/psx/; the game
 reaches into them only through the GameHooks seam)"*. The behaviour half of that seam DID move — the
 scheduler calls `hooks->schedStageBody(...)` with a `SCHED_CORO_*` kind, so the game supplies the task
 bodies. What never moved is the mapping from ENTRY PC to kind. The seam has the verb and is missing the
@@ -89,7 +88,7 @@ seam, then re-gate.
 Note what the gate itself says it does NOT cover: *"This says NOTHING about pixels or SBS parity."* So it
 catches a scheduler regression that changes which stage the run ends on, or that trips one of its 8 failure
 patterns — it would not catch a change that keeps the stage identical while altering rendering. A
-byte-compare (SBS) run is the stronger check for the behavioural half.
+  representative title execution is the stronger check for the behavioural half.
 
 ## The fix, when it is done
 
@@ -136,5 +135,5 @@ proves nothing about the table. It was tried in the destructor first and that di
 headless run leaves through `_exit`, so static teardown never happens. A diagnostic that only fires on a
 clean shutdown does not fire.
 
-**What would actually exercise it:** a run with un-ported tasks reaching the substrate fallback —
+**What would actually exercise it:** a run with un-ported tasks reaching the guest-execution path —
 the SBS strict byte-compare leg. That is the check this refactor still owes.

@@ -1,8 +1,7 @@
 # psxport change coordination — read before changing the framework
 
 **Unlabeled content is machine convention, revisable by any session. USER lines are verbatim dated
-quotes, and only those.** Each rule's measurement lives in `docs/findings/workspace-incidents.md` — this
-file keeps the rule, that file keeps the evidence. How a game *consumes* the framework (the
+quotes, and only those.** How a game *consumes* the framework (the
 Lightrec/native seam, configuration, RE tooling, and diagnostics) is `psxport/AGENTS.md`; this file is
 about several agents changing one framework at once.
 
@@ -72,12 +71,12 @@ This does not weaken the subagent rule above — subagents still report dirty an
   edits to one framework area is the outcome this protocol exists to prevent.
 
 `<area>` is the framework concern, not a filename — one claim covers every file a single fix touches.
-Vocabulary in use: `render-queue`, `fmv-decode`, `mdec-dma`, `recomp-emitter`, `gpu-vk-present`,
+Vocabulary in use: `render-queue`, `fmv-decode`, `mdec-dma`, `cpu-executor`, `gpu-vk-present`,
 `cd-path`, `logging-lucent`, `tests-harness`. Invent a new one if none fits; lowercase-kebab.
 
 ```markdown
 area: render-queue          # + agent, game, opened: <date>
-files: runtime/recomp/render_queue.cpp, runtime/recomp/render_queue.h
+files: runtime/psx/render_queue.cpp, runtime/psx/render_queue.h
 why: resolveKeyOrder wedges the frame loop at ~f1819 (watchdog backtrace in scratch/logs/…)
 shape: <one line on the intended change — enough that another agent can tell if it covers them>
 status: ready               # when done, plus:
@@ -95,7 +94,7 @@ and let the operator land it and bump psxport's gitlink.
 
 ## OPERATOR: RECORD THE GITLINK **BEFORE** YOU BUILD, not after
 
-`run.sh` calls `scripts/sync-submodules.sh`, which syncs the submodule to the **recorded** gitlink — so a
+The launch bootstrap calls `scripts/sync_submodules.py`, which syncs the submodule to the **recorded** gitlink — so a
 concurrent agent run silently reverts an un-recorded checkout and everything measured afterwards describes
 a different framework (measured 2026-08-06). **Order: `git -C external/psxport checkout <sha>` →
 `git add external/psxport` → commit → THEN build and gate.** Verify with
@@ -312,9 +311,9 @@ CAUSE of a visible defect, never a completion condition, and it never blocks any
 "The no-taps rule" is retired as a term — it needed case-by-case adjudication every time, the signature of
 an underspecified rule. It is TWO checkable rules.
 
-**1. The shipping picture path runs NO guest body.** A native producer draws from the game's own state; it
-does not run a `gen_func_*` body to make pixels. Check it by reading the call path. The mechanical gate: a
-producer running a gen body CANNOT interpolate (re-running it under a lerped camera would write guest RAM),
+**1. The shipping picture path runs no guest body.** A native producer draws from the game's own state;
+it does not invoke guest execution to make pixels. Check it by reading the call path. The mechanical gate: a
+producer running guest code cannot interpolate (re-running it under a lerped camera would write guest RAM),
 so anything that must move smoothly at 60 fps is a real port by construction. **READS ARE NOT THE
 PROBLEM** — a producer reads the node's own fields, and diagnostics (`OtAttr`, `PSXPORT_PRIMAT`,
 `debug objid`/`otattr`) read anything they like. The line is *produce the picture* vs *answer a question*.
@@ -346,13 +345,13 @@ measured, and reverted the same session. The reason it cannot work is structural
 fixed with more care:
 
 > **OT/GP0 content is POST-PROJECTION 2D at the guest's own 320x240.** The guest has already thrown away
-> world position and depth by the time a packet exists. So a re-emitted prim cannot be re-projected for a
+> world position and depth by the time a packet exists. So a replayed prim cannot be re-projected for a
 > wide frame, cannot join the depth buffer, and cannot be interpolated at 60fps.
 
 What that looked like on screen, measured: with the engine wide (draw clip 0..693), the native pass drew
-the world at 694 px and the re-emitted guest prims drew the SAME world again at 4:3 coordinates — the
+the world at 694 px and replayed guest prims drew the SAME world again at 4:3 coordinates — the
 scene rendered TWICE, side by side, in the user's window. An earlier revision with a weaker
-already-drawn test re-emitted 832 of 1034 OT nodes and buried the player behind duplicate terrain.
+already-drawn test replayed 832 of 1034 OT nodes and buried the player behind duplicate terrain.
 Replaying GP0 words also drags the CPU rasterizer along with it (110 fps -> 25 fps), and USER,
 2026-08-19: *"no CPU raster ever"*.
 
@@ -454,14 +453,13 @@ it**, not disabling it behind a flag and not leaving a comment saying it used to
 **A change that makes the symptom vanish while the surrounding code still reads as guest-memory soup is
 not finished work.** At any of these triggers — a magic offset, a `sub_XXXX`/`FUN_XXXX` you are about to
 call, a mystery `obj[+0xNN]`, a value you cannot name — **STOP and decompile the surrounding function.**
-The shared tool inventory (`decomp.sh` — over `ghidra_decomp.py`, the underlying decompile driver —
-`abi_extract.py`, `port_gen.py`, `port_check.py`) and the `port_check` static-store trap are in
-`psxport/AGENTS.md`. What is only here:
+The maintained Ghidra decompilation workflow and runtime observation tools are documented in the
+shared reverse-engineering skills. What is title-owned here:
 
 - **Per-repo tooling:** `spider1/tools/` (`ghidra_export.py`, `ghidra_import.sh`, `ghidra_query.py`,
   `ghidra_seed.py`), `Tomba2Engine/tools/` (`ghidra_overlay.py`, `ghidra_xrefs.py`, `disasm_overlay.py`),
-  and `spyro/tools/` has NONE — use psxport's `decomp.sh`, and if you need a Spyro-specific wrapper BUILD
-  IT and say so, because that gap is itself a workflow defect.
+  and `spyro/tools/` has no title-specific wrapper — add a cohesive Python tool there if its data or
+  query contract is genuinely title-specific, because that gap is itself a workflow defect.
 - **`disas.py` / `disasm.py` are single-instruction SPOT-CHECKS after Ghidra.** Using them to understand
   behaviour, or walking addresses backwards by hand, is the banned method — it produced five wrong
   attributions in spider1's RE-16 saga.
@@ -470,7 +468,7 @@ The shared tool inventory (`decomp.sh` — over `ghidra_decomp.py`, the underlyi
   is an opaque hex address. When you touch a body: typed struct **lenses** over guest blocks
   (`dlg.state()`, not an offset); **named constants** for every literal address, saying what it IS; enums
   for state-machine states; **method names that say what the code DOES** on real C++ classes, not `ov_*`
-  free functions; ABI plumbing through `runtime/recomp/guest_abi.h`, not open-coded `r[]` juggling.
+  free functions; ABI plumbing through `runtime/psx/guest_abi.h`, not open-coded `r[]` juggling.
   Byte-exact mechanics STAY byte-exact — this is about how the code READS. Exemplars to match rather than
   inventing a style: `Tomba2Engine/game/ui/panel_fill.cpp` and `MusicCoord::voiceMixTick`.
 

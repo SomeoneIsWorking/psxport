@@ -1,21 +1,20 @@
 # Test-only oracle architecture
 
 The oracle exists to diagnose the first divergence; it is not a gameplay engine. The production
-library always executes non-native guest code through Lightrec. Any interpreter and software-GPU
+library is intended to execute non-native guest code through Lightrec. Any interpreter and software-GPU
 reference are built into separate test/diagnostic targets that the gameplay library and consumers do
 not link and cannot select through configuration, CLI, UI, or fallback.
 
 USER, 2026-07-01: *"We need a real oracle for INTERLEAVED DIVERGENCE COMPARE"*.
 
 That requirement remains: comparison must align meaningful game state, report the first observable
-divergence, and state each instrument's blind spot. The old in-product `use_interp`/
-`PSXPORT_SBS_MODE=oracle` routing is not the target boundary and is removed by the migration in
-`docs/migration.md`.
+divergence, and state each instrument's blind spot. No product configuration selects an oracle.
 
 ## Separate targets
 
 - The gameplay `psxport` library contains the Lightrec executor, canonical `Core` state, memory/device
-  owners, native dispatch, and no interpreter objects or symbols.
+  owners and native dispatch. Backend fallback is product-owned and telemetry-bounded; the
+  independent oracle remains a separate target.
 - A test-only interpreter target may reuse the production state types and memory/service interfaces.
   Its CPU state and diagnostic provenance are per test core.
 - A test-only software-GPU target may render the oracle core's GP0 stream into independent VRAM.
@@ -23,8 +22,9 @@ divergence, and state each instrument's blind spot. The old in-product `use_inte
   with authenticated user data, and compares explicitly declared state at named barriers.
 
 Building the harness is what selects the oracle. No runtime engine selector enters the product config
-or UI. Product-link inspection names the objects/symbols examined and proves interpreter absence;
-observing zero interpreter executions in one run is insufficient.
+or UI. Product-link inspection names the objects/symbols examined and proves the absence of an
+explicit interpreter mode while allowing the backend's bounded automatic fallback; observing zero
+fallback executions in one run is insufficient.
 
 ## State-aligned comparison
 
@@ -34,7 +34,7 @@ not represent equal game progress. Comparisons use ordered, title-owned state pr
 1. Run each core toward the next checkpoint using per-core input policy.
 2. Park the first arrival without advancing its guest state.
 3. Once both arrive, compare only the declared CPU/game/device state and name every excluded field.
-4. Report both cores' frames, cycles, translated/interpreted instructions, checkpoint reachability,
+4. Report both cores' frames, cycles, executed instructions, checkpoint reachability,
    and first differing byte/register.
 5. Resume toward the next checkpoint.
 
@@ -81,6 +81,6 @@ valid inputs to later tests:
   stack-only byte differences and one registered owner never reached. This is limited boot evidence,
   not whole-game equivalence.
 
-These are evidence facts, not justification for keeping interpreter code in the gameplay library.
-Implementation moves the still-useful mechanisms to the separate test targets and revalidates them
+These are evidence facts, not justification for exposing an interpreter mode in the product.
+Implementation keeps the still-useful mechanisms in separate test targets and revalidates them
 against the production Lightrec state bridge.

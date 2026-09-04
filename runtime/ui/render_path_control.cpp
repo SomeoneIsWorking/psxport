@@ -39,13 +39,6 @@ void RenderPathControl::cycle() {
   const RenderCapabilities capabilities = mGame->runtime->renderCapabilities();
   const RenderPath next = player_render_path_next(core.rsub.mode.path(), capabilities);
   const RenderPathSelectionResult result = render_path_apply(*mGame, next, RenderPathAudience::Player);
-  if (result == RenderPathSelectionResult::ReferenceLocked) {
-    lucent::warn("render",
-                 "RmlUi renderer change REFUSED: this run is {} and exists to be the reference — "
-                 "changing the renderer mid-run would invalidate it",
-                 mGame->oracle ? "ORACLE" : "an SBS compare");
-    return;
-  }
   if (result == RenderPathSelectionResult::Unsupported) {
     lucent::warn("render",
                  "RmlUi renderer change REFUSED: this title does not expose render path '{}' to players",

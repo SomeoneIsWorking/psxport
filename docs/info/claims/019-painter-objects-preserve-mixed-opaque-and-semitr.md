@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags:
-depends: runtime/recomp/painter_object_layer.cpp#buildPainterObjectPlan, runtime/recomp/gpu_painter.cpp#GpuVkState::painter_command
+depends: runtime/psx/painter_object_layer.cpp#buildPainterObjectPlan, runtime/psx/gpu_painter.cpp#GpuVkState::painter_command
 reconfirmed: 2026-08-22
 verified_at: 2026-08-22 18:00:09
 ---

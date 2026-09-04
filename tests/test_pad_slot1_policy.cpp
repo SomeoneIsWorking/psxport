@@ -1,8 +1,8 @@
 // Slot-1 controller presence is per-game policy rather than a hardcoded "always absent" packet.
 
-#include "../runtime/recomp/game.h"
-#include "../runtime/recomp/legacy_game_config.h"
-#include "../runtime/recomp/pad_input.h"
+#include "../runtime/psx/game.h"
+#include "../runtime/psx/legacy_game_config.h"
+#include "../runtime/psx/pad_input.h"
 #include "testutil.h"
 
 #include <memory>

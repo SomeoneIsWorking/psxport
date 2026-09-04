@@ -1,32 +1,22 @@
 // psx::ui::Component — the base every overlay widget derives from.
 //
-// SHAPE TAKEN FROM DUSKLIGHT (CC0), `src/dusk/ui/component.{hpp,cpp}`. What is theirs: a component
-// owns an element subtree plus the children and event listeners hanging off it, so destroying the
-// component tears down exactly what it built; state that the stylesheet cares about lives in the
-// DOM as a PSEUDO-CLASS rather than as a C++ bool the sheet cannot see; and `focus()` walks into
-// children when the component itself is not focusable.
+// A component owns an element subtree plus its child components and event listeners, so destroying
+// it tears down exactly those lifetimes. Stylesheet-visible state lives in DOM pseudo-classes, and
+// `focus()` walks into children when the component itself is not focusable.
 //
-// THE ONE DELIBERATE DEVIATION, and it is why this is not a copy-paste. Dusklight's components
-// CREATE their DOM: `add_child<T>(args…)` news a T with `mRoot` as its parent, and T's constructor
-// calls `doc->CreateElement(…)` + `parent->AppendChild(…)`. Ours ADOPT an element that the shipped
+// Components adopt elements from the shipped
 // `assets/rml/menu.rml` already authored, because the menu's structure is content, not code — a
 // game ships its own `menu.rml` and the framework must not hard-code Tomba!2's six tabs in C++.
-// So the ownership direction is identical (parent component owns child component's lifetime; child
-// owns its subtree's listeners) and only the construction direction differs: `adopt<T>(element, …)`
-// rather than `add_child<T>(…)`. The name is different ON PURPOSE — silently redefining
-// `add_child` to mean "attach to something that already exists" would read as Dusklight's method
-// and behave as ours.
+// `adopt<T>(element, …)` makes that ownership transfer explicit.
 //
 // WHY PSEUDO-CLASS AND NOT `SetClass`. RmlUi's `class` attribute is authored content: the document
 // says `<tab class="selected">` for the initially-selected tab, and a C++ `SetClass` writes into
 // the same namespace the author is using. A pseudo-class is a separate channel the document cannot
 // spell, so runtime state can never collide with an authored class and cannot be clobbered by a
-// component that rewrites `class` for another reason. Dusklight styles `tab:selected` /
-// `button:disabled` exactly this way (`res/rml/tabbing.rcss:29`, `res/rml/window.rcss:201,212`).
+// component that rewrites `class` for another reason.
 //
-// NAMING TRAP, measured in Dusklight's own sheets: `:active` is an RmlUi BUILT-IN pseudo-class
-// meaning "mouse is held down on this element" (`res/rml/tabbing.rcss:42` uses `tab:active` for
-// exactly that, alongside `tab:selected` on line 29). So a component may NOT express "this pane is
+// `:active` is an RmlUi built-in pseudo-class meaning "mouse is held down on this element". A
+// component therefore may not express "this pane is
 // the shown one" as `:active`; ours uses `:shown`. The old `pane.active` class name was one letter
 // away from being silently overridden by a mouse press.
 #ifndef PSXPORT_UI_COMPONENT_H
@@ -98,12 +88,9 @@ public:
   }
 
 protected:
-  // ADOPT an authored element as a child component (see the header comment for why this is not
-  // Dusklight's `add_child`). `root` must be a descendant of this component's root; the returned
+  // Adopt an authored element as a child component. `root` must be a descendant of this component's root; the returned
   // reference stays valid until this component is destroyed or clear_children() is called.
-  // (Dusklight constrains the equivalent with a C++20 `requires`; the framework builds as C++17
-  // — cmake/psxport.cmake sets CXX_STANDARD 17 for the mednafen backends — so the same constraint
-  // is a static_assert. Same guarantee, same message when it fires.)
+  // The framework builds as C++17, so the type constraint is a static_assert.
   template <typename T, typename... Args> T &adopt(Rml::Element *root, Args &&...args) {
     static_assert(std::is_base_of<Component, T>::value, "adopt<T>() requires T to derive from psx::ui::Component");
     auto child = std::make_unique<T>(root, std::forward<Args>(args)...);

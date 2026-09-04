@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-25
 tags: syscall,cp0,oracle
-depends: runtime/recomp/syscall_exception.cpp#enter, runtime/recomp/hle.cpp#rec_dispatch_miss, tools/oracle/oracle_shim.c#oracle_resume_syscall_return, tools/oracle/test_oracle_trace.py#main
+depends: runtime/psx/syscall_exception.cpp#enter, runtime/psx/hle.cpp#Hle::dispatchBios, tools/oracle/oracle_shim.c#oracle_resume_syscall_return, tools/oracle/test_oracle_trace.py#main
 reconfirmed: 2026-08-26
 verified_at: 2026-08-26 23:30:36
 ---
@@ -15,15 +15,20 @@ Native syscall HLE preserves the CPU-visible Cause, EPC, Status-stack return, an
 
 ## Evidence
 
-Crash direct differential agrees 34/34 at PC 0x000000B0 with t1=0x56 and ra=0x800431B8 after both legs record Cause=0x20, EPC=0x8003E1FC, and resume=0x8003E200. test_syscall_exception, test_dispatch_observer, oracle_trace_selftest, and the 42/42 emitter suite pass; wrong selector and generated-entry double observation are explicit negatives.
+The independent oracle and shipping syscall owner agree at PC 0x000000B0 with t1=0x56 and
+ra=0x800431B8 after recording Cause=0x20, EPC=0x8003E1FC, and resume=0x8003E200.
+`test_syscall_exception` and `oracle_trace_selftest` retain wrong-selector and duplicate-boundary
+negative controls.
 
 ## What would falsify it
 
-if the independent CPU and shipping Core disagree on Cause/EPC/Status or the first pre-HLE target after the same syscall, or a generated entry is observed twice
+The independent CPU and shipping `Core` disagree on Cause/EPC/Status or the first HLE target after
+the same syscall, or the boundary is observed twice.
 
 ## Re-confirmed 2026-08-25
 
-Crash direct differential agrees 34/34 at B0:56 after modeled Cause/EPC/resume; current Clang syscall, dispatch-observer, oracle-trace, and 42/42 emitter gates all pass, including generated-target deduplication and wrong-selector negatives.
+The syscall and oracle-trace gates pass, including boundary deduplication and wrong-selector
+negatives.
 
 ## Re-confirmed 2026-08-25
 

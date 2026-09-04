@@ -3,7 +3,7 @@ id: 7
 title: CD drive instruction-time is deterministic but not cycle-accurate
 status: open
 symptom: VSync-yielding titles can take hundreds of fields to reach a ReadN deadline; ordering is stable, but nominal 75/150-sector thresholds still do not prove physical drive-rate accuracy
-tags: cdrom,timing,r3000,recompiler,interpreter,accuracy
+tags: cdrom,timing,r3000,accuracy
 created: 2026-08-21
 updated: 2026-08-22
 ---
@@ -15,7 +15,7 @@ executes a small amount of guest code and yields at every VSync. A 2x sector dea
 nominal CPU ticks, so counting only the instructions between yields delayed a sector for roughly 250
 display fields. Host sleeps and a title-specific faster drive would only mask that ownership defect.
 
-`EmulatedTime` is now the one per-Game CPU-time owner. Emitted/interpreted instructions advance it,
+`EmulatedTime` is now the one per-Game CPU-time owner. Executed guest instructions advance it,
 and the shared display-field boundary advances it to the next boundary derived from the guest's GP1
 NTSC/PAL standard, even when `PSXPORT_NOPACE` disables host sleeping. Q32 accumulation retains the
 fractional NTSC duration; instruction work already spent inside a field is not added twice, and a
@@ -30,9 +30,9 @@ request; the shared clock serviced LBA225 and continued through LBA269.
 
 ## Remaining proven limitation
 
-Executed code currently advances emulated time by one tick for an ordinary emitted/interpreted
+Executed code currently advances emulated time by one tick for an ordinary guest
 instruction and two ticks for a control instruction plus its delay slot. This makes sector ordering
-deterministic and gives emitted, interpreted, and yielded-field execution one shared time domain, but
+deterministic and gives instruction and yielded-field execution one shared time domain, but
 it does not model R3000
 opcode latency, cache effects, memory wait states, GTE occupancy/stalls, or DMA/bus contention.
 

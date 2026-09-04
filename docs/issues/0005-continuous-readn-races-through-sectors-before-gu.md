@@ -14,8 +14,8 @@ The prior FIFO/drive separation made `write_request_register()` call `announce_f
 
 ## Resolution
 
-Per-Game `Timing::guestInstructionTicks` now owns deterministic instruction-time deadlines. Generated code
-counts the guest instructions actually executed; the oracle interpreter advances the same counter.
+Per-Game `Timing::guestInstructionTicks` now owns deterministic instruction-time deadlines. The CPU
+executor accounts for the guest instructions actually executed.
 ReadN schedules the first and every following sector at nominal 451,584-tick 1x or 225,792-tick
 Setmode bit 0x80/2x thresholds. BFRD is passive, and Pause/Stop cancels the outstanding event. The clock seam is injectable,
 so the shipping CDC test exercises deadline-1, exactly-due and cancelled outcomes without sleeps.
@@ -28,16 +28,14 @@ Busy to Idle, so its queued Pause could not arbitrate before the next sector.
 
 - Toy Story 2's baseline advances 21,164 contiguous sectors in one phase. The deterministic build
   performs 358 sectors over 11 ReadN phases; its longest phase is 209, with stock ACK/DMA preserved,
-  and reaches a later BITS/MEMORY path without a recompilation miss.
+  and reaches a later BITS/MEMORY path.
 - Crash Bash returns from a 189-sector start before its first INT1, then services LBA35799..35987 at
-  +225,792-tick deadlines, prints `done loading`, and reaches recomp-MISS 0x80092BDC. Its strict
-  true-oracle completion-state comparator still refuses a later transient-state mismatch documented
-  separately as issue 0006; this resolution claims drive pacing, not oracle-exact interrupt return
-  ordering.
+  +225,792-tick deadlines, prints `done loading`, and reaches 0x80092BDC. Issue 0006 records a later
+  transient-state mismatch; this resolution claims drive pacing, not interrupt return ordering.
 - Vagrant Story completes its 17-sector read and dispatches Pause after callback 17. It completes
   five ReadN transfers: four WAVE loads plus TITLE.PRG at LBA256000..256270. The sixth
   `DsEndReadySystem` call is initialization, not another read. TITLE.PRG then exposes the later
-  overlay miss 0x80071334.
+  overlay address 0x80071334.
 
 Issue 0007 records why these deterministic thresholds do not yet establish physical drive-rate or
 cycle accuracy.

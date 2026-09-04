@@ -14,7 +14,7 @@ The shared Sony BIOS libc dispatcher did not own A0:0x1A memcmp. CTR reached the
 
 ## Resolution
 
-bios_libc_string_dispatch now compares bytes through Core guest memory in ascending order, stops at the first mismatch, and returns the signed difference of the two unsigned bytes in guest v0. Zero length performs no read. The generated guest body remains available; no title-local HLE was added.
+bios_libc_string_dispatch compares bytes through Core guest memory in ascending order, stops at the first mismatch, and returns the signed difference of the two unsigned bytes in guest v0. Zero length performs no read. The behavior remains in the shared BIOS/HLE owner rather than a title-local override.
 
 ## Evidence
 

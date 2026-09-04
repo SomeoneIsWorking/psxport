@@ -1,7 +1,7 @@
 // A delivered-but-deliberately-unpresented diff-mode field must rotate the presenter's bookkeeping
 // exactly as commit() does, without reaching any output path.
 
-#include "../runtime/recomp/frame_presenter.h"
+#include "../runtime/psx/frame_presenter.h"
 #include "testutil.h"
 
 #include <span>

@@ -1,16 +1,15 @@
 # The overlay UI — component model, and why there is only ONE stack
 
-This page is psxport's authority for UI ownership. **Provenance:** the component/listener mechanics
-were adapted from the CC0-licensed Dusklight `src/dusk/ui/` sources; the references below retain that
-attribution, while psxport's requirements and codemap decide the architecture.
+This page is psxport's authority for UI ownership. The boundaries follow psxport's lifecycle,
+headless-operation, content-authoring, and testability requirements; the codemap decides placement.
 
 ## Where it lives
 
-    runtime/recomp/rmlui_overlay.{h,cpp}   RmlUi LIFETIME ONLY — render interface, SDL system
+    runtime/psx/rmlui_overlay.{h,cpp}   RmlUi LIFETIME ONLY — render interface, SDL system
                                            interface, fonts, context, LoadDocument, SDL event
                                            routing, the GPU record call. Knows no elements.
-    runtime/recomp/overlay_glue.{h,cpp}    the four hooks gpu_vk.cpp calls
-    runtime/recomp/rml_text.{h,cpp}        the DATA -> RML markup encoder
+    runtime/psx/overlay_glue.{h,cpp}    the four hooks gpu_vk.cpp calls
+    runtime/psx/rml_text.{h,cpp}        the DATA -> RML markup encoder
 
     runtime/ui/ui_event.{h,cpp}            ScopedEventListener — registration IS lifetime
     runtime/ui/ui_component.{h,cpp}        Component base + set_text(), the ONE data->DOM boundary
@@ -31,27 +30,22 @@ attribution, while psxport's requirements and codemap decide the architecture.
 This replaced a single 592-line `rmlui_overlay.cpp` holding RmlUi setup, tab selection, row value
 formatting, the `Mods` ladders, the dev warp, the readouts, focus navigation and the SDL key switch.
 
-## Component decisions and provenance
+## Component decisions
 
-1. **A component owns its subtree** (`src/dusk/ui/component.{hpp,cpp}`). Destroying a component
+1. **A component owns its subtree.** Destroying a component
    tears down its children and every listener it registered. `RmlOverlay::shutdown()` now drops the
    component tree *before* `Rml::Shutdown()`; the old code deleted its listener objects *after*,
    and never called `RemoveEventListener` at all.
-2. **Scoped event listeners** (`src/dusk/ui/event.{hpp,cpp}`). `OnDetach` nulls the element, so a
+2. **Scoped event listeners.** `OnDetach` nulls the element, so a
    listener outliving its element is inert rather than dangling.
-3. **State as a pseudo-class, not a C++ bool or a `class`** (`res/rml/tabbing.rcss:29`,
-   `res/rml/window.rcss:201`). `class` is the document author's namespace; a runtime `SetClass`
+3. **State as a pseudo-class, not a C++ bool or a `class`.** `class` is the document author's namespace; a runtime `SetClass`
    writes into it. **Naming trap:** `:active` is an RmlUi BUILT-IN meaning "mouse held down"
-   (the attributed source uses `tab:active` in that built-in sense). A pane's
-   visibility is therefore `:shown`, never `:active`.
+   while a press is held. A pane's visibility is therefore `:shown`, never `:active`.
 
-## The one place ours deliberately differs
+## Authored DOM ownership
 
-**The attributed components CREATE their DOM; psxport's ADOPT it.** The source calls `CreateElement`
-and `AppendChild`, so `add_child<T>(args…)` constructs a T with `mRoot` as parent. psxport takes an element that
-`assets/rml/menu.rml` already authored, so the method is `adopt<T>(element, args…)` — a different
-name on purpose, because silently redefining `add_child` would read as their method and behave as
-ours.
+psxport components adopt elements already authored by `assets/rml/menu.rml`; they do not construct
+the DOM in C++. The method is therefore named `adopt<T>(element, args…)`.
 
 The reason is the framework/game seam: **the menu's structure is CONTENT.** A game ships its own
 `menu.rml`, and psxport hard-coding Tomba!2's six tabs in C++ would be the framework knowing a game
@@ -70,7 +64,7 @@ two stale comments — `rmlui_overlay.cpp:1` ("replaces the former Dear ImGui ov
 when both halves had been false for some time. Both are now gone, so there is nothing half-wired.
 
 **psxport already has the developer stack, and it is better suited than ImGui here.**
-`runtime/recomp/repl.cpp` (stdin) and `runtime/recomp/dbg_server.cpp` (TCP + `tools/dbgclient.py`)
+`runtime/psx/repl.cpp` (stdin) and `runtime/psx/dbg_server.cpp` (TCP + `tools/dbgclient.py`)
 own the developer-console responsibility and work with no window at all.
 
 **And that is the deciding constraint.** `docs/workspace/PROTOCOL.md`: *agents never run windowed*. An ImGui

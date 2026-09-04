@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-25
 tags: render-queue,presentation,lifecycle
-depends: runtime/recomp/render_queue.cpp#RenderQueue::flush, runtime/recomp/render_queue.cpp#RenderQueue::push, tests/test_render_queue_consumed_flush.cpp
+depends: runtime/psx/render_queue.cpp#RenderQueue::flush, runtime/psx/render_queue.cpp#RenderQueue::push, tests/test_render_queue_consumed_flush.cpp
 ---
 
 ## Claim

@@ -7,10 +7,9 @@
 //
 // This hermetic test pins both answers: a complete saved context is restored exactly, while a missing
 // buffer or missing continuation is refused without changing the interrupted register file.
-#include "../runtime/recomp/bios_interrupt.h"
-#include "../runtime/recomp/game.h"
-#include "../runtime/recomp/game_iface.h"
-#include "../runtime/recomp/recomp_iface.h"
+#include "../runtime/psx/bios_interrupt.h"
+#include "../runtime/psx/game.h"
+#include "../runtime/psx/game_iface.h"
 #include "testutil.h"
 #include <memory>
 
@@ -116,71 +115,6 @@ static void ordinary_return_dispatch(Core *, uint32_t resume) {
   dispatch_fell_through++;
 }
 
-static void scoped_guest_dispatch(Core *c, uint32_t address) {
-  CHECK_EQ(address, kResume);
-  c->pc = address;
-  auto attribution = c->idiag.otattrScope(address);
-  dispatch_entered++;
-  dispatch_game->hle.dispatchBios('B', 0x17);
-  dispatch_fell_through++; // unreachable: ReturnFromException unwinds the attribution scope
-}
-
-static int generated_function_index(uint32_t address) {
-  return address == kResume ? 0 : -1;
-}
-
-static void test_irq_poll_preserves_attribution_when_custom_exit_unwinds_guest_dispatch(void) {
-  static GameConfig config{};
-  static const GameHooks hooks{};
-  static const RecompRegistry registry = {
-      .main_dispatch = scoped_guest_dispatch,
-      .rec_func_index = generated_function_index,
-      .substrate_id = "test-bios-interrupt",
-  };
-  config = {};
-  config.recMainLo = kResume & 0x1FFFFFFFu;
-  config.recMainHi = config.recMainLo + 4u;
-  psxport_install_game(&config, &hooks);
-  psxport_install_recomp(&registry);
-
-  const std::unique_ptr<Game> game = std::make_unique<Game>();
-  Core *c = &game->core;
-  write_context(c, kResume);
-  for (uint32_t i = 0; i < 32; ++i) {
-    c->r[i] = 0x11000000u + i;
-  }
-  c->hi = 0x22000000u;
-  c->lo = 0x33000000u;
-  c->pc = 0x80045678u;
-  c->idiag.otattrPush(0x80011110u);
-  c->idiag.otattrPush(0x80022220u);
-
-  dispatch_entered = 0;
-  dispatch_fell_through = 0;
-  dispatch_game = game.get();
-  c->r[4] = kBuffer;
-  CHECK(game->hle.dispatchBios('B', 0x19));
-  CHECK_EQ(game->hle.exception_exit_buf, kBuffer);
-  const R3000 interrupted = *static_cast<R3000 *>(c);
-  game->hle.i_stat = 1u;
-  game->hle.i_mask = 1u;
-  c->pending_work |= Core::PW_IRQ;
-  game->hle.irqPoll(c);
-  dispatch_game = nullptr;
-
-  CHECK_EQ(dispatch_entered, 1);
-  CHECK_EQ(dispatch_fell_through, 0);
-  for (uint32_t i = 0; i < 32; ++i) {
-    CHECK_EQ(c->r[i], interrupted.r[i]);
-  }
-  CHECK_EQ(c->hi, interrupted.hi);
-  CHECK_EQ(c->lo, interrupted.lo);
-  CHECK_EQ(c->pc, interrupted.pc);
-  CHECK_EQ(c->idiag.otattr_depth, 2);
-  CHECK_EQ(c->idiag.otattrTop(), 0x80022220u);
-  CHECK_EQ(c->idiag.otattrCaller(), 0x80011110u);
-}
-
 static void test_return_from_exception_unwinds_instead_of_falling_through(void) {
   const std::unique_ptr<Game> game = std::make_unique<Game>();
   write_context(&game->core, kResume);
@@ -216,6 +150,5 @@ int main(void) {
   RUN(bios_hook_reset_and_return_entry_points);
   RUN(return_from_exception_unwinds_instead_of_falling_through);
   RUN(custom_exit_reports_an_illegal_normal_return);
-  RUN(irq_poll_preserves_attribution_when_custom_exit_unwinds_guest_dispatch);
   return pt_summary();
 }

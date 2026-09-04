@@ -32,7 +32,7 @@
 //     at all (a measured 0, not an unknown), and NEITHER heap global.
 //
 // ═══ WHY IT LIVES IN tests/ AND NOT BESIDE crt0_verify.h ════════════════════════════════════════════
-// It was written into `runtime/recomp/` first, on the argument that the corpus knowledge it encodes is
+// It was written into `runtime/psx/` first, on the argument that the corpus knowledge it encodes is
 // crt0_verify.h's. That argument is wrong, and the tree said so mechanically: the move took the guest
 // literal count in framework code from 399 to 429 and turned BOTH literal gates RED
 // (`tools/lint/game_literals.py`, `tests/test_no_game_address_literals`). They were right to fire. The

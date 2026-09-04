@@ -1,128 +1,122 @@
 # Project state
 
-This is the factual capability inventory for psxport. It does not claim that the plans in
-`docs/migration.md` are implemented.
+This inventory describes the current psxport tree. Product intent is in `project-goals.md`; remaining
+runtime work is specified in `migration.md`.
 
 ## Comparison baseline
 
-The comparison baseline is the current psxport workflow: game executables and overlays are translated
-offline into generated C, compiled into each consumer, and selected alongside an interpreter through
-runtime execution-engine policy. The intended product instead authenticates the user's original image
-and executes every non-native guest path on demand through Lightrec, with any interpreter confined to
-a separate test target.
+The baseline is the previous native PSX host framework with no usable product CPU executor. The tree
+now has a Linux x86-64 Lightrec execution path; the intended complete delta remains a dynarec-default
+Lightrec/native hybrid that executes authenticated user images at runtime and retains the existing
+native device, rendering, audio, input, HLE, and enhancement owners.
 
 ## Current focus
 
-S012 is the current focus: establish the per-`Core`, dynarec-only Lightrec product executor before
-extending other execution paths.
+S013 is the current focus: complete native-service interception and bounded exit handling inside
+translated control flow without restoring an offline dispatch substrate.
 
 ## Capability inventory
 
-| ID | Capability or outcome | State | Factual dependency | Goals |
+| ID | Capability | State | Dependencies | Goals |
 | --- | --- | --- | --- | --- |
-| S012 | A maintained pinned Lightrec dynarec executes product guest code per `Core` | missing | — | G001, G004 |
-| S013 | Architectural state crosses Lightrec/host boundaries explicitly and execution exits are bounded | missing | S012 | G001, G003 |
-| S014 | Native overrides and original calls are scoped by image/module generation and address | missing | S012, S013 | G001, G003 |
-| S015 | Executable-memory changes and override policy invalidate every affected Lightrec path | missing | S012, S014 | G001, G003 |
-| S016 | Gameplay builds contain no interpreter, generated guest corpus, engine selector, or fallback | missing | S012, S013, S014, S015 | G001, G004 |
-| S017 | Native PSX platform services are reusable across title repositories | partial | — | G002 |
-| S018 | Independent comparison and test-only oracle surfaces can diagnose guest-state divergence | partial | S013 | G003 |
-| S019 | Multiple titles consume one game-agnostic framework through narrow typed seams | partial | S014, S017 | G002 |
-| S020 | Native rendering supports PSX presentation and title-owned enhancements | partial | S017 | G003 |
-| S021 | Consumer delivery provisions user assets and launches the intended product without maintainer-only tools | partial | S016, S019 | G003, G004 |
-| S022 | Structure, configuration, logging, and verification boundaries are mechanically enforced | partial | — | G002, G004 |
+| S012 | Per-`Core` dynarec-default Lightrec backend | partial | — | G001, G004 |
+| S013 | Explicit architectural state and bounded exits | partial | S012 | G001, G003 |
+| S014 | Image/generation-scoped native and original calls | partial | S012, S013 | G001, G002, G003 |
+| S015 | Central executable-code invalidation | partial | S012 | G001, G003 |
+| S016 | Product path excludes offline guest generation and unbounded interpreter modes | verified | — | G001, G004 |
+| S017 | Reusable native PSX platform services | partial | — | G002 |
+| S018 | Independent test oracle | partial | S013 | G003 |
+| S019 | Narrow multi-title framework seam | partial | S012, S017 | G002 |
+| S020 | Native rendering and title-owned enhancements | partial | S017 | G003 |
+| S021 | Portable desktop and Android delivery | missing | S012, S019, S020 | G003, G004 |
+| S022 | Mechanical structure/config/logging/tooling policy | partial | — | G002, G004 |
 
-## Capability details
+### S012 — Per-`Core` dynarec-default Lightrec backend
 
-### S012 — Per-Core Lightrec product executor
+The maintained fork is pinned at `c9f0a37dbbc7e24d841c84751d9619ad1bfcb7d8`; Linux x86-64 executes
+a nonzero translated block and reports typed fallback telemetry. Gap: GNU Lightning's process-wide
+lifecycle currently permits only one initialized machine, and both AArch64 hosts remain refused.
 
-Missing capability: add a direct dependency on an exact maintained Lightrec revision and construct one
-dynarec-only Lightrec state for every live `Core`. The product integration must use Lightrec's own
-block cache and executable-memory owner and must not depend on the indirectly bundled Beetle copy.
+### S013 — Explicit architectural state and bounded exits
 
-Related issue: 0047.
+The production adapter transfers GPR, HI/LO, PC, CP0, and COP2 state, accounts measured Lightrec
+instruction deltas through the canonical title clock, services pending work at translated block
+boundaries, and exposes typed budget/fault/syscall/break/pending-work results. Gap: delay-slot and
+interrupt conformance still require integrated proof.
 
-### S013 — State synchronization and bounded exits
+### S014 — Image/generation-scoped native and original calls
 
-Missing capability: define and implement one explicit bridge for GPRs, HI/LO, PC/delay state, CP0,
-GTE, pending interrupts, and cycles, plus typed budget/native/HLE/interrupt/frame/thread/fault exits
-that never unwind C++ exceptions through JIT frames.
+`runtime/cpu/image_identity.*`, `native_dispatch.*`, and `guest_call.*` provide the top-level API.
+The synthetic runtime contract proves translated call interception, nested native context, translated
+resume, and an original guest body stopping at the exact caller continuation. Gap: representative
+resident/address-colliding overlay and generation-reuse coverage remains absent.
 
-Related issue: 0048.
+### S015 — Central executable-code invalidation
 
-### S014 — Image-scoped native and original calls
+Range normalization, image generations, dispatch revocation, counters, and explicit Lightrec
+range/full-cache calls exist. A translated self-modifying RAM store proves a cached block is missed,
+retranslated, and changes behavior without fallback; custom store callbacks route exact visible-byte
+ranges through this owner. Gap: complete DMA/debugger/savestate mutation coverage still requires
+proof.
 
-Missing capability: replace generated-symbol and address-only dispatch with a per-`Core` runtime key
-containing authenticated image/module identity, load generation, and guest address. A scoped original
-call must bypass only the current override while nested calls retain normal dispatch.
+### S016 — Product path excludes offline guest generation and unbounded interpreter modes
 
-Related issue: 0049. The cross-portfolio audit measured 816 unresolved generated-body/wrapper symbols
-across 109 Tomba! 2 game files when its generated corpus was removed; this is consumer-boundary
-evidence, not a psxport implementation claim.
+Evidence: the product source/link boundary scan rejects offline guest source, CPU-engine selectors,
+and player-selectable interpreter modes; only the backend's classified automatic block fallback
+remains.
 
-### S015 — Runtime invalidation
+### S017 — Reusable native PSX platform services
 
-Missing capability: route CPU stores, DMA, module loads, decompression, debugger writes, savestate
-restore, and override changes through one normalized executable-range invalidation owner that reaches
-Lightrec and revokes stale image-generation/dispatch decisions.
+GPU, SPU, GTE, MDEC, CD, DMA, timing, pad, BIOS/HLE, and host-presentation owners remain. Gap:
+complete service coverage and integration are title-driven and have not been demonstrated in the
+dynarec product path.
 
-Related issue: 0050.
+### S018 — Independent test oracle
 
-### S016 — Product-path isolation
+Beetle/Mednafen trace tools remain separate from the product. Gap: comparison through the production
+state bridge and a seeded first-divergence proof remain absent.
 
-Missing capability: remove the gameplay link and selection paths for the offline translator,
-generated dispatch, psxport interpreter, and Lightrec interpreter fallback. A separately built test
-oracle may remain, and product-link/selector inspection must prove the isolation.
+### S019 — Narrow multi-title framework seam
 
-Related issues: 0047 and 0051.
+The shared runtime API exists. Gap: consumers still require coordinated pins and representative
+gameplay requalification without copied framework code.
 
-### S017 — Native PSX services
+### S020 — Native rendering and title-owned enhancements
 
-The repository contains title-neutral GPU, SPU, GTE, MDEC, CD, DMA, timing, pad, BIOS/SDK HLE, CHD,
-audio, and host-rendering owners used by maintained consumers.
+The framework rendering and presentation owners remain. Gap: native rendering and each enhancement
+must be requalified with the dynarec product path.
 
-Gap: service coverage is established incrementally by reached title paths, and several owners still
-live in the broad `runtime/recomp/` directory or retain legacy game-configuration projections.
+### S021 — Portable desktop and Android delivery
 
-### S018 — Independent diagnostics and test oracle
+Missing capability: no gameplay-ready backend, Windows host contract, macOS arm64 evidence, Android
+`arm64-v8a` evidence, or release package exists. Hosted CI therefore runs only the proven Linux
+x86-64 synthetic runtime; unsupported hosts have no green placeholder jobs.
 
-The repository has an independent Beetle/Mednafen-oriented oracle boundary, exact-PC/call-boundary
-trace support, and an in-process interpreter used for focused state comparison.
+### S022 — Mechanical structure/config/logging/tooling policy
 
-Gap: the interpreter is still compiled into the product-facing framework and the comparison surfaces
-are coupled to static/generated execution assumptions. They must move to separately built test-only
-targets and compare against the Lightrec state boundary without entering the gameplay link.
+Canonical Python build/verification tooling, pinned full-history Linux CI, product-boundary checks,
+and seeded whole-tree architecture, deleted-path, and current-runtime policy checks exist. Gap:
+remaining large runtime owners still need responsibility-driven extraction.
 
-### S019 — Multi-title framework consumption
+## Blocking dependency
 
-Tomba, Crash, Crash Bash, Mega Man X4, Spider-Man, Spyro, Tekken 3, Toy Story 2, and Vagrant Story
-repositories consume the same framework and retain title-specific policy.
+The direct maintained Lightrec fork is now the Linux x86-64 product dependency. Gameplay is still
+blocked on multi-`Core` lifecycle support, complete executable-write invalidation coverage, fallback
+threshold enforcement, and representative title/device integration. Its AArch64 dependency also
+needs Android x18 reservation and macOS `MAP_JIT`/per-thread write-protection coverage for allocator
+metadata, code, and alternate buffers.
 
-Gap: their current call seams still include generated-body symbols and legacy configuration/override
-paths. The Lightrec executor and image-scoped native-call API do not exist yet.
+## Host evidence gaps
 
-### S020 — Native presentation
+- x86-64 Linux: real translated/native/original-call/resume control flow, architectural register
+  transfer, exact return stopping, measured timing, pending work, self-modifying-code retranslation,
+  typed unsafe-fetch fault, and fallback telemetry pass in `test_dynarec_contract`; representative
+  gameplay is absent.
+- Apple Silicon macOS: no build, executable-memory, instruction-cache, ABI, or device evidence.
+- Android `arm64-v8a`: no NDK build, executable-memory, instruction-cache, ABI, APK, or device evidence.
+- Windows: not a declared supported host because neither the maintained Lightrec dependency nor
+  psxport has a Windows build/runtime contract; no CI or delivery claim is made.
 
-The framework exposes retained PSX rendering, native scene producers, depth-aware rendering,
-widescreen projection support, interpolation infrastructure, and title-owned guest-VRAM picture
-policy.
-
-Gap: drawing and title coverage remain incremental, and representative gameplay must be requalified
-with Lightrec as the product executor before the migration can claim preservation.
-
-### S021 — Portable consumer delivery
-
-Consumers already resolve user-supplied disc images and provide player launchers; framework binaries,
-restricted inputs, and diagnostics are kept outside tracked source.
-
-Gap: current launch/build paths still provision generated guest C and may expose execution-mode flags.
-A fresh checkout cannot yet launch the intended Lightrec/native product without the offline pipeline.
-
-### S022 — Engineering boundaries
-
-The repository has tracked Clang formatting/tidy configuration, a normal style/structure gate, a CVar
-system, Lucent integration, hermetic framework tests, and a game-agnostic smoke target.
-
-Gap: direct environment reads, legacy logger call sites, broad runtime modules, engine-selection
-policy, and generated-code tests remain. The normal verifier does not yet audit that gameplay links
-contain neither interpreter nor generated guest bodies.
+No title is migrated until it runs representative interactive gameplay with nonzero translated
+blocks, native/original calls, invalidation, devices, rendering, audio, and input on the intended
+product path.

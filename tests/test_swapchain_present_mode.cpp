@@ -8,7 +8,7 @@
 // DMA completion were blocked along with the guest. Headless never blocked (no window, acquire fails
 // instantly), which is exactly why headless looked fine while the user's window was black.
 //
-// The testable unit is the present-mode CHOICE, extracted into runtime/recomp/gpu_vk_present_mode.h.
+// The testable unit is the present-mode CHOICE, extracted into runtime/psx/gpu_vk_present_mode.h.
 // It is a pure function of what the driver reports, so this test needs no GPU, no window and no disc.
 //
 // THE NEGATIVE THESE CASES WERE WRITTEN AGAINST: the pre-fix behaviour is "always VSYNC, the mode is
@@ -16,7 +16,7 @@
 // test_never_settles_for_a_blocking_mode_when_a_nonblocking_one_exists, which fails outright unless a
 // non-blocking mode is actually chosen. VSYNC is asserted in exactly ONE case (neither alternative is
 // offered), so a regression back to "always VSYNC" turns 3 of 4 cases red, not 1.
-#include "../runtime/recomp/gpu_vk_present_mode.h"
+#include "../runtime/psx/gpu_vk_present_mode.h"
 #include "testutil.h"
 
 // MAILBOX is the first choice whenever the driver offers it: newest-image-wins, no tearing, no wait.

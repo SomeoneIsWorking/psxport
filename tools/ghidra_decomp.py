@@ -1,5 +1,5 @@
 # Ghidra headless post-script: decompile functions to C.
-# Runs under Ghidra's Jython. Invoked by tools/decomp.sh.
+# Runs under Ghidra's Python provider (for example, pyghidraRun -H).
 #
 # Script args: <out.c> [lo_hex hi_hex]
 #   out.c     - output file (combined C for all decompiled functions)

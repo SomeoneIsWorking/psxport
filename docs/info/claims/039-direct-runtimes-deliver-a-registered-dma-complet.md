@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-27
 tags: dma,direct-runtime,interrupts
-depends: runtime/recomp/dma_callbacks.cpp#DmaCallbackRegistry::exchange, runtime/recomp/hle.cpp#Hle::irqPoll
+depends: runtime/psx/dma_callbacks.cpp#DmaCallbackRegistry::exchange, runtime/psx/hle.cpp#Hle::irqPoll
 ---
 
 ## Claim

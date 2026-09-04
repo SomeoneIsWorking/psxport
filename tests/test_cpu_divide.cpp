@@ -1,4 +1,4 @@
-// Exercise the shipping R3000 DIV/DIVU helpers used by both the interpreter and emitted code.
+// Exercise the shipping R3000 DIV/DIVU helpers shared by guest CPU backends.
 #include "core.h"
 #include "cpu_divide.h"
 #include "testutil.h"

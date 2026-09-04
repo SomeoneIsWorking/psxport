@@ -21,7 +21,7 @@ std::string read_source(const std::filesystem::path &path) {
 
 void test_gpu_renderer_uses_runtime_policy_not_legacy_config() {
   const std::filesystem::path root = std::filesystem::path(__FILE__).parent_path().parent_path();
-  const std::string renderer = read_source(root / "runtime/recomp/gpu_vk.cpp");
+  const std::string renderer = read_source(root / "runtime/psx/gpu_vk.cpp");
   CHECK(!renderer.empty());
   CHECK(renderer.find("preserveVramBackdrop") == std::string::npos);
   // Structural guard only: transition behavior is exercised through the production policy by

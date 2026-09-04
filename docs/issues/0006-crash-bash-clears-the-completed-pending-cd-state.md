@@ -13,7 +13,7 @@ updated: 2026-08-21
 The deterministic CDC build now agrees with the true oracle at read admission: the start and first
 read return 189 with the destination and expected-sector cursor untouched, and the first INT1 occurs
 only after one nominal 225,792-tick double-speed drive period. The full LBA35799..35987 read completes,
-prints `done loading`, and advances to recompilation miss 0x80092BDC.
+prints `done loading`, and advances to execution address 0x80092BDC.
 
 The later completion handshake is not oracle-exact. The true oracle returns completion-pending `1`
 from both the sync and poll paths while `async=1`, then returns `0` after callback drain. The port

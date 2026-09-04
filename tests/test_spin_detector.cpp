@@ -7,7 +7,7 @@
 // that precisely, so the process can fail fast NAMING the region instead of freezing a window with
 // a dead close button.
 //
-// Contract under test (spin_detector_sample, runtime/recomp/timing.cpp):
+// Contract under test (spin_detector_sample, runtime/psx/timing.cpp):
 //   * ticks accumulate across calls; a DECISION happens only when the window fills — the caller
 //     chooses the window, so tests stay fast;
 //   * declaring requires BOTH: the host stayed owed a turn through every window (PW_HOST never

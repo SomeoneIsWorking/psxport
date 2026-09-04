@@ -6,7 +6,6 @@
 #include "game.h"
 #include "game_runtime.h"
 #include "platform_hle.h"
-#include "recomp_iface.h"
 #include "testutil.h"
 
 #include <csignal>
@@ -24,27 +23,6 @@ namespace {
 
 constexpr uint32_t kVSyncAddress = 0x800859A8u;
 constexpr uint32_t kPlatformWindowEnd = 0x80085B20u;
-
-RecOverrideFn installedGeneratedHandler = nullptr;
-
-void setGeneratedOverride(uint32_t address, RecOverrideFn handler) {
-  if (address == kVSyncAddress) {
-    installedGeneratedHandler = handler;
-  }
-}
-
-const RecompRegistry kRecompRegistry = {
-    nullptr,
-    nullptr,
-    nullptr,
-    0,
-    setGeneratedOverride,
-    nullptr,
-    nullptr,
-    nullptr,
-};
-
-void displacedTitleVSyncHandler(Core *) {}
 
 class FenceBackend final : public FramePresentationBackend {
 public:
@@ -207,27 +185,6 @@ static void test_driver_committing_twice_refuses() {
   CHECK_EQ(game->presentation.fence(), 0u);
 }
 
-static void test_product_preflight_reinstalls_vsync_after_title_registration() {
-  DriverRuntime runtime(1);
-  psxport_install_game(runtime);
-  psxport_install_recomp(&kRecompRegistry);
-  auto game = std::make_unique<Game>();
-
-  // Reproduce the bad custom-loop order: platform setup happened, then the title registered a
-  // generated handler at the same address. The product preflight must be the last writer.
-  game->platform_hle.initBuiltins();
-  setGeneratedOverride(kVSyncAddress, displacedTitleVSyncHandler);
-  CHECK(installedGeneratedHandler == displacedTitleVSyncHandler);
-
-  FrameLoopShell shell;
-  shell.prepareProduct(*game);
-  CHECK(installedGeneratedHandler == game->platform_hle.lookup(kVSyncAddress));
-  CHECK(installedGeneratedHandler != displacedTitleVSyncHandler);
-  shell.step(game->core, 73u);
-
-  psxport_install_recomp(nullptr);
-}
-
 static void test_repl_prompt_request_is_one_shot() {
   Repl repl;
   CHECK(!repl.consumePromptRequest());
@@ -239,7 +196,7 @@ static void test_repl_prompt_request_is_one_shot() {
 
 static void test_native_boot_has_no_title_frame_body_or_fallback() {
   const auto root = std::filesystem::path(__FILE__).parent_path().parent_path();
-  const std::string source = read_source(root / "runtime/recomp/native_boot.cpp");
+  const std::string source = read_source(root / "runtime/psx/native_boot.cpp");
   CHECK(!source.empty());
 
   // These were the title-shaped body and its defining per-frame operations. Native boot may retain
@@ -262,7 +219,6 @@ int main() {
   RUN(step_before_product_preflight_refuses);
   RUN(driver_returning_without_a_fence_refuses);
   RUN(driver_committing_twice_refuses);
-  RUN(product_preflight_reinstalls_vsync_after_title_registration);
   RUN(repl_prompt_request_is_one_shot);
   RUN(native_boot_has_no_title_frame_body_or_fallback);
   return pt_summary();

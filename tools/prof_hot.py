@@ -8,8 +8,8 @@ Neither did a working profiler: hostprof_init() was compiled but CALLED FROM NOW
 Both are fixed together, because a profiler with no reader and a reader with no profiler are the same
 amount of evidence: none.
 
-Do not confuse this with tools/prof_report.py, which reads the INTERPRETER profiler's dump and works
-in GUEST addresses. This one works in HOST addresses and needs the binary that produced the samples.
+This works in host addresses and needs the exact binary that produced the samples. Guest-execution
+telemetry belongs to the executor counters rather than this host-symbol profiler.
 
     tools/prof_hot.py scratch/raw/prof_host.txt scratch/bin/tomba2_port [--top N]
 
@@ -72,10 +72,11 @@ def main():
     # outside the executable can only be called "unresolved", which reads as a hole in the profile
     # instead of "this much time is in the GPU driver".
     modules = []
-    for line in open(args.samples):
-        if line.startswith("# map "):
-            _, _, lo, hi, path = line.rstrip("\n").split(" ", 4)
-            modules.append((int(lo, 16), int(hi, 16), path))
+    with open(args.samples, encoding="utf-8") as sample_file:
+        for line in sample_file:
+            if line.startswith("# map "):
+                _, _, lo, hi, path = line.rstrip("\n").split(" ", 4)
+                modules.append((int(lo, 16), int(hi, 16), path))
     modules.sort()
     mod_lo = [m[0] for m in modules]
 
@@ -109,15 +110,15 @@ def main():
             src, flag = path, "-D"
             try:
                 got = subprocess.run(["debuginfod-find", "debuginfo", path],
-                                     capture_output=True, text=True, timeout=60)
+                                     check=False, capture_output=True, text=True, timeout=60)
                 if got.returncode == 0 and got.stdout.strip():
                     src, flag = got.stdout.strip(), "--defined-only"
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError):
+                src, flag = path, "-D"
             try:
                 out = subprocess.run(["nm", "-C", "--defined-only", "-S", "--no-demangle", flag, src]
                                      if flag == "-D" else ["nm", "-C", "--defined-only", "-S", src],
-                                     capture_output=True, text=True, timeout=30).stdout
+                                     check=False, capture_output=True, text=True, timeout=30).stdout
                 for ln in out.splitlines():
                     q = ln.split(None, 3)
                     # Require a SIZE column. Without it there is no way to know whether a sample is
@@ -127,7 +128,7 @@ def main():
                             table.append((int(q[0], 16), int(q[1], 16), q[3]))
                         except ValueError:
                             pass
-            except Exception:
+            except (OSError, subprocess.SubprocessError):
                 table = []
             table.sort()
             dyn_cache[path] = (table, [a for a, _, _ in table])
@@ -150,7 +151,9 @@ def main():
     unresolved = 0
     # Set from the first data line: 3 columns = memcensus (bytes), 2 = hostprof (samples).
     unit = "samples"
-    for line in open(args.samples):
+    with open(args.samples, encoding="utf-8") as sample_file:
+        sample_lines = list(sample_file)
+    for line in sample_lines:
         if line.startswith("#") or not line.strip():
             continue
         parts = line.split()

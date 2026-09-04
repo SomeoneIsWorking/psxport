@@ -17,8 +17,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-SHADER_DIR_REL = Path("runtime/recomp/shaders_gpu")
-LEGACY_SOURCE_OUTPUT_REL = Path("runtime/recomp/gpu_vk_shaders.h")
+SHADER_DIR_REL = Path("runtime/psx/shaders_gpu")
+LEGACY_SOURCE_OUTPUT_REL = Path("runtime/psx/gpu_vk_shaders.h")
 SHADERS = (
     ("present.vert", "spv_g_present_vert"),
     ("present.frag", "spv_g_present_frag"),

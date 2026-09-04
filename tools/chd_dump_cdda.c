@@ -1,7 +1,7 @@
 // chd_dump_cdda: list the CHD's CD tracks and dump every CD-DA (AUDIO) track to a WAV. Tomba!2's
 // music is Red Book CD-DA (the sequencer = jingles, the Mode2 XA = voice). CHD stores CDDA as raw
-// 2352-byte PCM sectors, big-endian; we byte-swap to little-endian WAV. Run: PSXPORT_TOMBA2_DISC=<chd>
-// chd_dump_cdda <outdir>
+// 2352-byte PCM sectors, big-endian; we byte-swap to little-endian WAV.
+// Run: chd_dump_cdda <disc.chd> [outdir]
 #include <libchdr/chd.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -38,10 +38,13 @@ static int rd(uint32_t frame, uint8_t *o) {
 }
 
 int main(int argc, char **argv) {
-  const char *outdir = argc > 1 ? argv[1] : "scratch/ref/cdda";
-  const char *p = getenv("PSXPORT_TOMBA2_DISC");
-  if (!p || !openc(p)) {
-    fprintf(stderr, "set PSXPORT_TOMBA2_DISC\n");
+  if (argc < 2 || argc > 3) {
+    fprintf(stderr, "usage: %s <disc.chd> [outdir]\n", argv[0]);
+    return 2;
+  }
+  const char *outdir = argc > 2 ? argv[2] : "scratch/ref/cdda";
+  if (!openc(argv[1])) {
+    fprintf(stderr, "cannot open CHD: %s\n", argv[1]);
     return 1;
   }
   // walk track metadata; CHD lays tracks sequentially, each padded to a multiple of 4 frames.

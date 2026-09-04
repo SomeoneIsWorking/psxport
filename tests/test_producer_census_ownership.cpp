@@ -31,7 +31,7 @@
 // is what the census WRITES for each answer, not what the registry decides.
 static const uint32_t kOwnedAndRan = 0x8002BC9Cu;   // installed, native fired
 static const uint32_t kOwnedNeverRan = 0x800288ACu; // installed, native never fired  <- the lie-catcher
-static const uint32_t kNotInstalled = 0x80146478u;  // a display-pass producer; guest fn stays substrate
+static const uint32_t kNotInstalled = 0x80146478u;  // a display-pass producer; guest function remains active
 
 static bool stub_query(uint32_t addr, uint64_t *nativeHits, uint64_t *oracleHits) {
   if (addr == kOwnedAndRan) {
@@ -105,11 +105,11 @@ static void test_ownership_distinguishes_all_three_states(void) {
   // installed and NEVER ran -> the combination that is a lie in the DB rather than a gap. It must be
   // expressible; if this line ever stops appearing, --todo's ranking silently stops working again.
   // ...and the oracle count comes with it, so "never dispatched" (0/0) is separable from "dispatched
-  // to the substrate body" (0/n). Without this the row reads as unexercised in both cases.
+  // to the guest body" (0/n). Without this the row reads as unexercised in both cases.
   CHECK(strstr(buf, "\"has_native\":true,\"native_reached\":false,\"native_hits\":0,\"oracle_hits\":3") != NULL);
 
   // NOT installed -> false, which is the CORRECT and normal answer for a display-pass producer that
-  // draws the picture from game state while the guest function stays on the substrate.
+  // draws the picture from game state while the guest function stays active.
   CHECK(strstr(buf, "\"has_native\":false,\"native_reached\":false") != NULL);
 
   // And with a query present, "unavailable" must not appear anywhere — that is the other state.

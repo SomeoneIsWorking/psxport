@@ -21,5 +21,5 @@ Pause completion status 0x02.
 ## Known failure modes
 
 This test injects the clock and disc backend, so it proves controller semantics but not that a game
-actually advances the production clock. `test_interp_guest_cycles`, emitter execution tests, and
-live cdcpace consumer traces cover that separate wiring.
+actually advances the production clock. Runtime executor cycle-accounting tests and live cdcpace
+consumer traces cover that separate wiring.

@@ -1,7 +1,7 @@
 // Sony BIOS libc leaves must operate on guest addresses through Core's memory map and preserve each
 // function's exact return contract. A0:0x15 strcat is used by Toy Story 2 asset-path composition;
 // A0:0x1A memcmp is used by CTR startup and returns the signed difference of the first unequal bytes.
-#include "../runtime/recomp/game.h"
+#include "../runtime/psx/game.h"
 #include "testutil.h"
 
 #include <array>

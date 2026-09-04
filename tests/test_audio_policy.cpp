@@ -15,7 +15,7 @@
 //
 // Hermetic: no SDL, no device, no window, no disc. The lint reads the framework's own sources.
 
-#include "../runtime/recomp/audio_policy.h"
+#include "../runtime/psx/audio_policy.h"
 #include "testutil.h"
 
 #include <stdio.h>
@@ -66,8 +66,8 @@ static void test_every_audio_open_site_consults_the_shared_predicate(void) {
   // deliberate edit here — that is the point of the lint, and a glob would silently absolve a file
   // nobody thought about.
   const char *srcs[] = {
-      "runtime/recomp/spu_audio.cpp",
-      "runtime/recomp/native_fmv.cpp",
+      "runtime/psx/spu_audio.cpp",
+      "runtime/psx/native_fmv.cpp",
   };
 
   int scanned = 0, sites = 0, guarded = 0;

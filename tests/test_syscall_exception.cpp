@@ -1,6 +1,7 @@
 // The shipping syscall HLE must retain the exception record the independent CPU produces, even
 // though the native runtime handles the kernel operation without executing a BIOS vector. Exercise
-// the public recomp ABI so this test cannot pass against a test-only copy of the transition.
+// the public runtime ABI so this test cannot pass against a test-only copy of the transition.
+#include "execution_services.h"
 #include "game.h"
 #include "testutil.h"
 
@@ -36,7 +37,7 @@ void test_enter_critical_retains_syscall_exception_and_disables_interrupts() {
   core.cop0[12] = kStatusUpper | 0x3Fu;
   core.cop0[13] = 0xABCD1234u;
 
-  rec_syscall(&core, 0, kSyscallPc);
+  psx::cpu::handleSyscall(core, 0, kSyscallPc);
 
   CHECK_EQ(core.r[kV0], 1u);
   CHECK_EQ(core.game->hle.irq_enabled, 0);
@@ -52,7 +53,7 @@ void test_exit_critical_returns_with_current_interrupt_enable_set() {
   core.cop0[12] = kStatusUpper | 0x3Eu;
   core.cop0[13] = kPendingInterruptCause;
 
-  rec_syscall(&core, 0, kSyscallPc + 0x10u);
+  psx::cpu::handleSyscall(core, 0, kSyscallPc + 0x10u);
 
   CHECK_EQ(core.r[kV0], 0u);
   CHECK_EQ(core.game->hle.irq_enabled, 1);
@@ -66,7 +67,7 @@ void test_non_interrupt_kernel_op_returns_from_exactly_one_exception_level() {
   core.r[kA0] = 0;
   core.cop0[12] = kStatusUpper | 0x15u;
 
-  rec_syscall(&core, 0x54321u, kSyscallPc + 0x20u);
+  psx::cpu::handleSyscall(core, 0x54321u, kSyscallPc + 0x20u);
 
   CHECK_EQ(core.r[kV0], 0u);
   CHECK_EQ(core.cop0[12], kStatusUpper | 0x15u);

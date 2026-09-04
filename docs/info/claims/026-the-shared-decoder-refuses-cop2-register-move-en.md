@@ -3,8 +3,8 @@ id: C026
 kind: claim
 status: holds
 created: 2026-08-22
-tags: recompiler,decoder
-depends: tools/recomp/decode.py#decode, tools/recomp/test_decode.py
+tags: tooling,decoder,mips
+depends: tools/mips/decode.py#decode
 reconfirmed: 2026-08-22
 verified_at: 2026-08-22 19:02:18
 ---
@@ -15,7 +15,8 @@ The shared decoder refuses COP2 register-move encodings whose reserved bits 10 t
 
 ## Evidence
 
-Canonical CTC2 passes, four noncanonical reserved-bit controls including Tekken data word 0x48CCCCCE decode UNKNOWN, focused emitter/decoder pytest passes 55/55, and full Clang CTest passes 85/85.
+Canonical CTC2 passes, while four noncanonical reserved-bit controls including Tekken data word
+0x48CCCCCE decode as unknown.
 
 ## What would falsify it
 
@@ -23,4 +24,4 @@ A nonzero-reserved COP2 move decodes as an instruction or a canonical register m
 
 ## Re-confirmed 2026-08-22
 
-Post-commit canonical COP2 positive plus four reserved-bit negatives pass in the focused 55/55 suite and normal 85/85 Clang CTest.
+The canonical COP2 positive and four reserved-bit negatives pass in the focused decoder suite.

@@ -1,9 +1,8 @@
 // psx::ui::MenuTabBar — the row of `<tab>`s, and which one is selected.
 //
-// SHAPE FROM DUSKLIGHT (CC0), `src/dusk/ui/tab_bar.{hpp,cpp}`: the tab bar owns its tabs and its
-// selection, and selecting a tab runs that tab's CALLBACK rather than the tab bar reaching across
-// the document to show a pane. `MenuTab` is declared here for the same reason Dusklight declares
-// `struct Tab` in `tab_bar.hpp` — a tab has no life outside its bar.
+// The tab bar owns its tabs and selection. Selecting a tab runs that tab's callback rather than the
+// tab bar reaching across the document to show a pane. `MenuTab` is private to this ownership
+// boundary because a tab has no life outside its bar.
 //
 // WHAT IT REPLACES: a heap `std::vector<std::unique_ptr<TabClick>>` behind a `void*` member of the
 // overlay, with one `TabClick` listener class per tab holding a raw `RmlOverlay*` and an index, and

@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-21
 tags: cdc,dma3,fifo,zero-fill
-depends: runtime/recomp/cdc_native.cpp#cdc_dma_read, runtime/recomp/mem.cpp#Core::io_write, tests/test_cdc_dma_depletion.cpp#test_dma3_shipping_path_commits_the_full_programmed_transfer
+depends: runtime/psx/cdc_native.cpp#cdc_dma_read, runtime/psx/mem.cpp#Core::io_write, tests/test_cdc_dma_depletion.cpp#test_dma3_shipping_path_commits_the_full_programmed_transfer
 reconfirmed: 2026-08-25
 verified_at: 2026-08-25 01:16:03
 ---

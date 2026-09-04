@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: widescreen,projection
-depends: runtime/recomp/guest_widescreen_projection.h, runtime/recomp/guest_widescreen_projection.cpp, runtime/recomp/render_mode.h, runtime/recomp/gpu_display_mode.h, tests/test_guest_widescreen_projection.cpp, tests/test_gpu_display_mode.cpp
+depends: runtime/psx/guest_widescreen_projection.h, runtime/psx/guest_widescreen_projection.cpp, runtime/psx/render_mode.h, runtime/psx/gpu_display_mode.h, tests/test_guest_widescreen_projection.cpp, tests/test_gpu_display_mode.cpp
 reconfirmed: 2026-08-22
 verified_at: 2026-08-22 19:33:48
 ---

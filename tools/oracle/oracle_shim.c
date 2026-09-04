@@ -1,9 +1,8 @@
 // oracle_shim.c — the minimum host the vendored Mednafen PSX CPU needs in order to STEP, and no more.
 //
-// WHY THIS FILE EXISTS. `docs/plans/oracle-against-beetle.md`: today's side-by-side compare uses
-// `recomp_path` as its reference, which is OUR code, so a wrong assumption shared with `pc_faithful`
-// reads as SUCCESS. The fix is an INDEPENDENT reference, and the whole Mednafen PSX core is already
-// vendored. That core's system glue lives in `vendor/beetle-psx/libretro.c`, which also owns the disc,
+// WHY THIS FILE EXISTS. A reference implemented by the product can share the product's mistakes.
+// This tool instead hosts the already-vendored independent Mednafen PSX CPU. Its system glue lives
+// in `vendor/beetle-psx/libretro.c`, which also owns the disc,
 // the BIOS, the video frontend and the libretro option system. This file replaces that glue with the
 // smallest surface that lets the CPU execute instructions out of a RAM image we control.
 //
@@ -351,8 +350,8 @@ void PSX_SetEventNT(const int type, const int32_t next_timestamp) {
   fprintf(stderr,
           "oracle: a subsystem scheduled event type %d at t=%d. Milestone 1's window is defined as\n"
           "        touching no counters, so this is dropped and flagged rather than honoured. If it\n"
-          "        fires for real, the window needs shortening, or the plan's shared-clock option.\n"
-          "        docs/plans/oracle-against-beetle.md\n",
+          "        fires for real, the window needs shortening or a device-aware oracle.\n"
+          "        See docs/oracle.md.\n",
           type,
           next_timestamp);
   if (s_taint == ORACLE_STOP_NONE) {

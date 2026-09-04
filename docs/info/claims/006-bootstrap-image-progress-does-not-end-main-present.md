@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-21
 tags: watchdog,presentation,bootstrap
-depends: runtime/recomp/gpu_native.cpp#GpuState::gpu_present_ex
+depends: runtime/psx/gpu_native.cpp#GpuState::gpu_present_ex
 verified_at: 2026-08-24 23:01:25
 reconfirmed: 2026-08-27
 ---

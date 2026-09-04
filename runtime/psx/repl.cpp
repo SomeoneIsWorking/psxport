@@ -1,0 +1,792 @@
+// repl.cpp — interactive REPL driver (PSXPORT_REPL=1): read commands from stdin and drive the native
+// port (run/step, memory peek/poke, input, screenshots, RAM dumps, entity/scene inspection, area warp,
+// audio dumps). Extracted from native_boot.cpp (later-288) so the boot + scheduler file is not crammed
+// with the debug driver. The generic loop (native_boot.cpp) calls c->game->repl.read() between frames;
+// the title's FrameDriver consumes the class Repl's auto-drive requests and can ask the generic loop
+// to return to the prompt after the current frame.
+#include "repl.h"
+#include "c_subsys.h"
+#include "config.h"      // `cvars` / `cvar` — the layered CVar registry + env audit
+#include "config_vars.h" // psx::config::cv_render_path — mirror a live switch into the Runtime layer
+#include "core.h"
+#include "game.h"
+#include "game_iface.h"       // GameHooks — game-side command dispatch (replCommand) + REPL diag hooks
+#include "ot_attr.h"          // OtAttr — `otattr` command (OT/GTE submission attribution)
+#include "render_substrate.h" // Render::psxRender / setPsxRender (per-Core render-path switch)
+#include <lucent/log.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+// ---- Interactive REPL (PSXPORT_REPL=1) — drive the native port from stdin --------------------
+// Mirrors the oracle's (wide60rt -repl) command set so one driver can step BOTH cores and diff.
+// Commands: run N | r addr [len] | rw addr [words] | w addr val | w8 addr val | watch lo hi |
+//   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit | end. Memory is the
+//   game's address space (mem_r*/mem_w*); watchpoints via mem_set_watch (reported during `run`).
+static uint16_t repl_btn(const char *n) { // name -> active-HIGH PSX pad bit
+  if (!strcmp(n, "start")) {
+    return 0x0008;
+  }
+  if (!strcmp(n, "select")) {
+    return 0x0001;
+  }
+  if (!strcmp(n, "x") || !strcmp(n, "cross")) {
+    return 0x4000;
+  }
+  if (!strcmp(n, "o") || !strcmp(n, "circle")) {
+    return 0x2000;
+  }
+  if (!strcmp(n, "triangle") || !strcmp(n, "t")) {
+    return 0x1000;
+  }
+  if (!strcmp(n, "square") || !strcmp(n, "sq")) {
+    return 0x8000;
+  }
+  if (!strcmp(n, "up")) {
+    return 0x0010;
+  }
+  if (!strcmp(n, "down")) {
+    return 0x0040;
+  }
+  if (!strcmp(n, "left")) {
+    return 0x0080;
+  }
+  if (!strcmp(n, "right")) {
+    return 0x0020;
+  }
+  return (uint16_t)strtoul(n, 0, 16);
+}
+// ---- REPL music-dump helpers (build a labeled track library to identify each tune) -------
+// Sequenced BGM is rendered through the live SPU (use `wav PATH` then `bgm N` then `run`);
+// XA tracks (CD-streamed music/voice) are decoded straight off the disc here, since they
+// never touch the sequencer. Both write standard 44100/native-rate stereo S16 WAVs.
+
+static void repl_wav_write(const char *path, const int16_t *pcm, uint32_t frames, int rate) {
+  FILE *fp = fopen(path, "wb");
+  if (!fp) {
+    lucent::error("repl", "wav write: cannot open {}", path);
+    return;
+  }
+  uint32_t data = frames * 4u, riff = 36u + data, brate = (uint32_t)rate * 4u, fmtlen = 16;
+  uint16_t pcm1 = 1, ch2 = 2, ba = 4, bits = 16;
+  uint32_t r = (uint32_t)rate;
+  fwrite("RIFF", 1, 4, fp);
+  fwrite(&riff, 4, 1, fp);
+  fwrite("WAVE", 1, 4, fp);
+  fwrite("fmt ", 1, 4, fp);
+  fwrite(&fmtlen, 4, 1, fp);
+  fwrite(&pcm1, 2, 1, fp);
+  fwrite(&ch2, 2, 1, fp);
+  fwrite(&r, 4, 1, fp);
+  fwrite(&brate, 4, 1, fp);
+  fwrite(&ba, 2, 1, fp);
+  fwrite(&bits, 2, 1, fp);
+  fwrite("data", 1, 4, fp);
+  fwrite(&data, 4, 1, fp);
+  fwrite(pcm, 4, frames, fp);
+  fclose(fp);
+  lucent::info("repl", "xadump -> {} ({} frames @ {} Hz, {:.2f}s)", path, frames, rate, frames / (double)rate);
+}
+
+// Decode ~`secs` of the XA stream on subheader channel `chan` starting at CHD `start_lba`,
+// write a WAV at the stream's native rate. Skips interleaved non-matching/non-audio sectors.
+static void repl_xadump(DiscState *disc, uint8_t chan, uint32_t start_lba, const char *path, int secs) {
+  int16_t *out = (int16_t *)calloc(400000, sizeof(int16_t)); // ~4.5s of 44100 stereo; XA max 37800*secs
+  if (!out) {
+    return;
+  }
+  uint8_t raw[2352];
+  int16_t hist[2][2] = {{0, 0}, {0, 0}};
+  int freq = 37800;
+  uint32_t frames = 0, lba = start_lba, cap = 0;
+  for (int guard = 0; guard < 20000; guard++) {
+    if (!disc_read_raw(disc, lba, raw, 2352)) {
+      break;
+    }
+    if (raw[15] != 2) {
+      break; // ran off the Mode2 stream
+    }
+    uint8_t fchan = raw[17], submode = raw[18];
+    lba++;
+    if (!(submode & 0x04) || fchan != chan) {
+      if (submode & 0x80) {
+        break;
+      }
+      continue;
+    } // not our audio
+    int16_t pcm[4032 * 2];
+    int f2 = freq;
+    int n = xa_decode_sector(raw, pcm, hist, &f2);
+    freq = f2;
+    if (!cap) {
+      cap = (uint32_t)freq * (uint32_t)secs;
+    }
+    for (int i = 0; i < n && frames < cap && frames < 200000; i++) {
+      out[2 * frames] = pcm[2 * i];
+      out[2 * frames + 1] = pcm[2 * i + 1];
+      frames++;
+    }
+    if (frames >= cap || (submode & 0x80)) {
+      break;
+    }
+  }
+  repl_wav_write(path, out, frames, freq);
+  free(out);
+}
+
+// REPL auto-drive state (navNewgame / skipFrames / warpArmed / warpDest) lives on class Repl (repl.h) —
+// arm here on the appropriate command; the title's FrameDriver consumes it on subsequent frames.
+// `warp <id>` (dev/diagnostic) only records a requested destination. The title owns whether a warp is
+// currently legal, its area inventory, and the complete operation consumed by its frame driver.
+
+// Read+execute REPL commands until a `run N` (returns N), `quit`/EOF (returns -1) or `end`
+// (returns -2).
+//
+// TWO WAYS TO STOP, because they mean different things and conflating them cost a measurement.
+// `quit` DETACHES the REPL and lets the game keep running — what an operator wants when they are
+// done typing at a windowed session. A headless CAPTURE wants the opposite: the run to END, so the
+// port's run-end reporters (the producer DB, the census denominators, every "did this body actually
+// run" counter) get to print. Under `quit` the harness has to SIGKILL the process instead, and the
+// log then stops mid-run with those questions unanswered — which is how a screenshot pair can be
+// compared while nobody can say whether the code under test executed at all.
+//
+// So `end` is the clean-shutdown request. The host decides what that means (a port with a run
+// lifecycle ends it and exits; one without can treat it as quit) — the REPL only reports the ask.
+long Repl::read(Core *c, uint32_t f) {
+  uint16_t &held = mHeldMask; // active-low held mask (persists across REPL entries)
+  char line[256];
+  lucent::info("repl", "frame={} ready", f);
+  while (fgets(line, sizeof line, stdin)) {
+    char cmd[24] = {0}, arg[32] = {0};
+    unsigned a = 0, b = 0;
+    if (sscanf(line, "%23s", cmd) != 1) {
+      continue;
+    }
+    if (!strcmp(cmd, "quit") || !strcmp(cmd, "q")) {
+      return -1;
+    } else if (!strcmp(cmd, "end")) {
+      return -2; // END the run cleanly; see the note above
+    } else if (!strcmp(cmd, "run") && sscanf(line, "%*s %u", &a) == 1) {
+      return (long)a;
+    }
+    // `step [n]` — advance n frames (default 1) and return to the prompt. Same mechanism as `run n`
+    // (the REPL only resumes the frame loop by returning a frame count); provided because `step` is the
+    // command everyone reaches for when single-stepping, and its ABSENCE previously read as "the game is
+    // frozen" (the unknown command just reprinted the prompt, advancing nothing).
+    else if (!strcmp(cmd, "step")) {
+      if (sscanf(line, "%*s %u", &a) != 1 || !a) {
+        a = 1;
+      }
+      return (long)a;
+    } else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
+      if (!b) {
+        b = 16;
+      }
+      lucent::Line ln;
+      ln.add("{:08X}:", a);
+      for (unsigned i = 0; i < b && i < 256; i++) {
+        ln.add(" {:02X}", c->mem_r8(a + i));
+      }
+      ln.flush(lucent::Level::Info, "repl");
+    } else if (!strcmp(cmd, "rw") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
+      if (!b) {
+        b = 8;
+      }
+      lucent::Line ln;
+      ln.add("{:08X}:", a);
+      for (unsigned i = 0; i < b && i < 64; i++) {
+        ln.add(" {:08X}", c->mem_r32(a + i * 4));
+      }
+      ln.flush(lucent::Level::Info, "repl");
+    } else if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
+      c->mem_w32(a, b);
+      lucent::info("repl", "ok");
+    } else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
+      c->mem_w8(a, (uint8_t)b);
+      lucent::info("repl", "ok");
+    } else if (!strcmp(cmd, "watch") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
+      c->mem_set_watch(a, b);
+    } else if (!strcmp(cmd, "unwatch")) {
+      c->mem_set_watch(0, 0);
+      lucent::info("repl", "unwatch");
+    } else if (!strcmp(cmd, "hits")) {
+      lucent::info("repl", "watch hits={}", c->mem_watch_hits());
+    } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
+      held &= ~repl_btn(arg);
+      c->game->pad.driveHold(held);
+      lucent::info("repl", "held={:04X}", held);
+    } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {
+      held |= repl_btn(arg);
+      c->game->pad.driveHold(held);
+      lucent::info("repl", "held={:04X}", held);
+    } else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) {
+      if (!a) {
+        a = 4;
+      }
+      c->game->pad.driveTap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a);
+      lucent::info("repl", "tap {} {}", arg, a);
+    } else if (!strcmp(cmd, "debug")) {
+      char ch[200] = {0};
+      sscanf(line, "%*s %199[^\n]", ch);
+      lucent::enable_channels(ch);
+      // ...and record it on PSXPORT_DEBUG's CVar at the RUNTIME layer. That layer exists precisely
+      // to give this a name: docs/config.md has always said a REPL `debug` "still overrides the
+      // environment for the rest of the run", and that was the only sentence about precedence
+      // anywhere in the repo. It is a layer now, and `cvars` will show it. The VALUE is still
+      // resolved by lucent (the CVar is marked external) — nothing about who reads PSXPORT_DEBUG
+      // changes here; see cmake/psxport.cmake and tests/test_lucent_channel_env.cpp.
+      psx::config::note_runtime_external("PSXPORT_DEBUG", ch);
+      lucent::info("repl", "debug channels = {}", ch[0] ? ch : "(none)");
+    } else if (!strcmp(cmd, "cvars")) {
+      psx::config::report();
+    } else if (!strcmp(cmd, "cvar")) {
+      char nm[128] = {0}, val[192] = {0};
+      if (sscanf(line, "%*s %127s %191[^\n]", nm, val) == 2) {
+        psx::config::set_runtime(nm, val);
+      } else if (nm[0]) {
+        psx::config::clear_runtime(nm);
+      } else {
+        lucent::info(
+            "repl",
+            "cvar <PSXPORT_NAME> <value> — set for this run only; `cvar <name>` clears it; `cvars` lists everything");
+      }
+    } else if (!strcmp(cmd, "tp")) {
+      int x = 0, y = 0, z = 0;
+      if (!c->hooks || !c->hooks->replCamTeleport || !c->hooks->replCamTeleportOff) {
+        lucent::info("repl", "tp: unavailable for this game");
+      } else if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) {
+        c->hooks->replCamTeleport(c, x, y, z);
+        lucent::info("repl", "tp camera -> ({},{},{})", x, y, z);
+      } else {
+        c->hooks->replCamTeleportOff(c);
+        lucent::info("repl", "tp off (camera follows player)");
+      }
+    } else if (!strcmp(cmd, "newgame")) {
+      this->navNewgame = 1;
+      lucent::info("repl", "newgame: pulsing to GAME prologue");
+      return 100000;
+    } else if (!strcmp(cmd, "skip")) {
+      a = 0;
+      sscanf(line, "%*s %u", &a);
+      if (!a) {
+        a = 500;
+      }
+      this->skipFrames = (long)a;
+      lucent::info("repl", "skip {} frames", a);
+      return (long)a;
+    } else if (!strcmp(cmd, "warp")) {
+      // The frame loop invokes the game's complete cold-warp operation. Area-machine layout and
+      // load/entry ordering are deliberately absent from this generic command parser.
+      unsigned sub = 0;
+      int nargs = sscanf(line, "%*s %u %u", &a, &sub);
+      if (nargs >= 1) {
+        if (!c->hooks || !c->hooks->devAreaCount || !c->hooks->devWarpAllowed) {
+          lucent::info("repl", "warp: unavailable for this game");
+        } else if (!c->hooks->devWarpAllowed(c)) {
+          lucent::info("repl", "warp: refused by the game in its current state");
+        } else {
+          const int count = c->hooks->devAreaCount(c);
+          if (count <= 0) {
+            lucent::info("repl", "warp: this game exposes no areas");
+          } else if ((int)a >= count) {
+            lucent::info("repl", "warp: area {} is out of range — this game has {} areas (0..{})", a, count, count - 1);
+          } else {
+            this->warpDest = a;
+            this->warpSub = (nargs == 2) ? sub : 0;
+            this->warpArmed = 1;
+            lucent::info("repl", "warp: armed cold destination area id={} sub={}", a, this->warpSub);
+          }
+        }
+      } else {
+        lucent::info("repl", "warp <area_id> [sub]");
+      }
+    } else if (!strcmp(cmd, "preseq")) { // arm a PRESENT-sequence dump: next N presented frames (real + fps60 interp)
+      unsigned n = 0;
+      char dir[120] = "scratch/screenshots/preseq";
+      if (sscanf(line, "%*s %u %119s", &n, dir) >= 1 && n > 0) {
+        extern void gpu_vk_preseq_arm(Core *, int, const char *);
+        gpu_vk_preseq_arm(c, (int)n, dir);
+        lucent::info("repl", "preseq armed: next {} presents -> {}/p%04d.ppm", n, dir);
+      } else {
+        lucent::info("repl", "preseq <N> [dir] — dump the next N PRESENTED frames (incl. fps60 interp)");
+      }
+    } else if (!strcmp(cmd, "shot")) { // VK-aware, same pick as dbg_server's `shot`: capture what is PRESENTED
+      char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) {
+        // PICK BY WHICH RASTERIZER DREW THE FRAME, not by whether the VK backend is up. Those are
+        // different questions the moment a render path exists: under RenderPath::Psx the picture is
+        // software-rasterized into s_vram while gpu_vk_enabled() is still 1 process-wide, so the old
+        // test captured the VK image — a buffer nothing had drawn into — and reported it as the shot.
+        // GpuState::gpu_native_shot already routes on vk_path()/sw_path(); go through it.
+        void gpu_native_shot(Core *, const char *);
+        gpu_native_shot(c, path);
+        lucent::info("repl",
+                     "shot ({}) -> {}   [render path = {}]",
+                     c->game->gpu.sw_path() ? "SW s_vram" : "VK readback",
+                     path,
+                     render_path_name(c->rsub.mode.path()));
+      }
+    } else if (!strcmp(cmd, "shotregion")) { // dump an ARBITRARY VRAM region, not just what is presented
+      // `shot` captures the PRESENT window, which is the right default and useless for the question
+      // "where in VRAM is the content?". gpu_vk_shot_region already existed and was reachable from
+      // nothing — exposing it costs four lines and answers that directly: `shotregion v.ppm 0 0 1024
+      // 512` dumps the whole of VRAM, so a black present window can be told apart from a black VRAM.
+      char path[200] = {0};
+      int x = 0, y = 0, w = 0, h = 0;
+      if (sscanf(line, "%*s %199s %d %d %d %d", path, &x, &y, &w, &h) == 5) {
+        void gpu_vk_shot_region(Core *, const char *, int, int, int, int);
+        gpu_vk_shot_region(c, path, x, y, w, h);
+      } else {
+        lucent::info("repl", "shotregion <path> <x> <y> <w> <h> — raw VRAM region (VRAM is 1024x512)");
+      }
+    } else if (!strcmp(cmd, "setires")) { // live ires toggle (same mods.ires mutation the RmlUi overlay's
+      // "ires" row does — 0=Auto, 1..cap=fixed). Exercises GpuVkState::ensure_ires_targets' teardown+
+      // rebuild path headless, without needing a windowed run to reach the overlay.
+      unsigned n = 0;
+      if (sscanf(line, "%*s %u", &n) == 1) {
+        c->game->mods.ires = (int)n;
+        lucent::info("repl", "mods.ires = {}", c->game->mods.ires);
+      } else {
+        lucent::info("repl", "setires <0..4> — live ires toggle (0=Auto)");
+      }
+    } else if (!strcmp(cmd, "iresdump")) { // DEBUG ONLY (ires bring-up): raw dump of the ires-scaled target
+      char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) {
+        void gpu_vk_ires_rawdump(Core *, const char *);
+        gpu_vk_ires_rawdump(c, path);
+      }
+    } else if (!strcmp(cmd, "vram")) {
+      char path[200] = {0};
+      unsigned x = 0, y = 0, w = 1024, h = 512;
+      if (sscanf(line, "%*s %199s %u %u %u %u", path, &x, &y, &w, &h) >= 1) {
+        void gpu_vk_vram_region(Core *, const char *, int, int, int, int);
+        gpu_vk_vram_region(c, path, (int)x, (int)y, (int)w, (int)h);
+      }
+    } else if (!strcmp(cmd, "vramraw")) {
+      char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) {
+        void gpu_vk_vram_raw(Core *, const char *);
+        gpu_vk_vram_raw(c, path);
+      }
+    } else if (!strcmp(cmd, "dumpram")) {
+      char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) {
+        FILE *fp = fopen(path, "wb");
+        if (fp) {
+          fwrite(c->ram, 1, 0x200000, fp);
+          fclose(fp);
+          lucent::info("repl", "dumpram -> {}", path);
+        } else {
+          lucent::error("repl", "dumpram: cannot open {}", path);
+        }
+        // Also dump the 1 KB scratchpad (0x1F800000) to a sidecar .spad — the main-RAM A/B diff is
+        // BLIND to scratchpad, where several engine flags live (DEMO: 0x1f80019a/19d/134/198 etc.).
+        char spath[208];
+        snprintf(spath, sizeof spath, "%s.spad", path);
+        FILE *sp = fopen(spath, "wb");
+        if (sp) {
+          fwrite(c->scratch, 1, sizeof c->scratch, sp);
+          fclose(sp);
+          lucent::info("repl", "dumpram scratchpad -> {}", spath);
+        }
+      }
+    } else if (!strcmp(cmd, "wav")) {
+      char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) {
+        c->game->spu_audio.wavReopen(path);
+      }
+    }
+    // renderpath [native|gte|psx] — the render-path switch.
+    // native = PC producers + PC rasterizer + PC enhancements; gte = the guest's own GTE+OT on the PC
+    // rasterizer; psx = the guest's own GTE+OT on the PSX software rasterizer. Both guest paths are PURE
+    // (no fps60 / wide / ires / deferred). A BARE `renderpath` CYCLES native -> gte -> psx -> native; it
+    // does not merely print, because a bare form that only printed is what turned A/B scripts into
+    // pc-vs-pc compares before (kanban #26).
+    else if (!strcmp(cmd, "renderpath")) {
+      char st[16] = {0};
+      RenderPath p = c->rsub.mode.path();
+      if (sscanf(line, "%*s %15s", st) == 1) {
+        if (!render_path_parse(st, &p)) {
+          lucent::warn("repl",
+                       "renderpath: '{}' is not a path — valid: native | gte | psx (unchanged: {})",
+                       st,
+                       render_path_name(c->rsub.mode.path()));
+          continue;
+        }
+      } else {
+        p = render_path_next_supported(p, c->runtime->renderCapabilities(), RenderPathAudience::Diagnostic);
+      }
+      const RenderPathSelectionResult selection = render_path_apply(*c->game, p, RenderPathAudience::Diagnostic);
+      if (selection == RenderPathSelectionResult::Unsupported) {
+        lucent::warn("repl",
+                     "renderpath '{}' REFUSED: this title does not support it (unchanged: {})",
+                     render_path_name(p),
+                     render_path_name(c->rsub.mode.path()));
+        continue;
+      }
+      lucent::info("repl",
+                   "render path = {} (enhancements {})",
+                   render_path_name(c->rsub.mode.path()),
+                   c->rsub.mode.enhancementsAllowed() ? "ALLOWED" : "locked out — guest render stays pure");
+    } else if (!strcmp(cmd, "xadump")) {
+      unsigned ch = 0, lba = 0, secs = 3;
+      char path[200] = {0};
+      if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) {
+        repl_xadump(&c->game->disc, (uint8_t)ch, lba, path, secs ? (int)secs : 3);
+      }
+    }
+    // otattr — dump the OT/GTE submission-attribution tables (game/render/ot_attr.h, `debug otattr`).
+    // Re-walks the LAST OT this Core drew (GpuState::s_ot_madr) READ-ONLY (header/first-word peeks
+    // only — no gpu_gp0() call, so no draw/state side effects), and for each non-empty node looks up
+    // the packet-pool store span attribution recorded during that frame's submission: {emitter fn = the
+    // otattr shadow-stack top, caller fn = one frame below it, node = the render-walk object scope open
+    // at store time}. Only produces attribution if `debug otattr` was ALREADY ON while the frame that
+    // built this OT ran — turn the channel on BEFORE the frame you want to inspect, then run this after.
+    // The report includes raw guest addresses; resolve them through the active title's symbol index.
+    else if (!strcmp(cmd, "otattr")) {
+      OtAttr &oa = c->rsub.otAttr;
+      char sub[32] = {0};
+      sscanf(line, "%*s %31s", sub);
+      // LAST-WRITER PROVENANCE sub-commands (ot_attr.h) — answer "who wrote this WORD", independent of
+      // call-flow, for the staging-buffer case where call-path attribution only names the batcher.
+      if (!strcmp(sub, "watch")) {
+        uint32_t addr = 0, len = 0;
+        if (sscanf(line, "%*s %*s %x %x", &addr, &len) != 2 || len == 0) {
+          lucent::info("otattr", "usage: otattr watch <addr-hex> <len-hex>");
+        } else {
+          int slot = oa.watchRegister(addr, len);
+          if (slot < 0) {
+            lucent::info("otattr",
+                         "watch REJECTED (slots={}/{} wordsUsed={}/{} overflow={}) — free a slot or shrink the region",
+                         oa.watchSlotCount(),
+                         (int)OtAttr::WATCH_SLOTS,
+                         oa.watchWordsUsed(),
+                         (int)OtAttr::WATCH_CAP_WORDS,
+                         oa.watchOverflow());
+          } else {
+            const OtAttr::WatchRegion *r = oa.watchAt(slot);
+            // Decorate as KSEG0 (0x800xxxxx) ONLY for main-RAM regions — scratchpad (0x1F800000-
+            // 0x1F8003FF) is NOT mirrored across segments the way RAM is, so blindly OR-ing 0x80000000
+            // onto it prints a bogus 0x9F8xxxxx address. Print scratchpad addresses as-is (their own
+            // canonical form).
+            uint32_t dlo = r->lo < 0x200000u ? (0x80000000u | r->lo) : r->lo;
+            uint32_t dhi = r->hi < 0x200000u ? (0x80000000u | r->hi) : r->hi;
+            lucent::info("otattr",
+                         "watch[{}] = [0x{:08X},0x{:08X}) ({} words) — slots {}/{}, {}/{} words used",
+                         slot,
+                         dlo,
+                         dhi,
+                         (r->hi - r->lo) / 4,
+                         oa.watchSlotCount(),
+                         (int)OtAttr::WATCH_SLOTS,
+                         oa.watchWordsUsed(),
+                         (int)OtAttr::WATCH_CAP_WORDS);
+          }
+        }
+        continue;
+      }
+      if (!strcmp(sub, "who")) {
+        uint32_t addr = 0, len = 4;
+        int got = sscanf(line, "%*s %*s %x %x", &addr, &len);
+        if (got < 1) {
+          lucent::info("otattr", "usage: otattr who <addr-hex> [len-hex]");
+          continue;
+        }
+        if (got == 1) {
+          len = 4;
+        }
+        lucent::info("otattr", "who 0x{:08X}..0x{:08X} (word-granular, coalesced runs):", addr, addr + len);
+        uint32_t w = addr & ~3u, end = addr + len;
+        bool any = false;
+        OtAttr::WordRec cur{};
+        uint32_t runLo = 0, runHi = 0;
+        bool haveRun = false;
+        auto flush_run = [&]() {
+          if (!haveRun) {
+            return;
+          }
+          if (cur.frame == 0xFFFFFFFFu) {
+            lucent::info("repl", "  [0x{:08X},0x{:08X}) NEVER WRITTEN since watch registered", runLo, runHi);
+          } else {
+            lucent::info("repl",
+                         "  [0x{:08X},0x{:08X}) fn=0x{:08X} caller=0x{:08X} frame={}",
+                         runLo,
+                         runHi,
+                         cur.fn,
+                         cur.caller,
+                         cur.frame);
+          }
+          any = true;
+          haveRun = false;
+        };
+        for (; w < end; w += 4) {
+          OtAttr::WordRec rec{};
+          uint32_t wa = 0;
+          if (!oa.watchLookup(w, &rec, &wa)) {
+            flush_run();
+            lucent::info("repl", "  [0x{:08X},0x{:08X}) NOT WATCHED — run `otattr watch` first", w, w + 4);
+            continue;
+          }
+          if (haveRun && rec.fn == cur.fn && rec.caller == cur.caller && rec.frame == cur.frame && wa == runHi) {
+            runHi = wa + 4;
+          } else {
+            flush_run();
+            cur = rec;
+            runLo = wa;
+            runHi = wa + 4;
+            haveRun = true;
+          }
+        }
+        flush_run();
+        if (!any) {
+          lucent::info("repl", "  (nothing in range)");
+        }
+        continue;
+      }
+      if (!strcmp(sub, "trace")) {
+        uint32_t addr = 0;
+        if (sscanf(line, "%*s %*s %x", &addr) != 1) {
+          lucent::info("otattr", "usage: otattr trace <addr-hex>");
+          continue;
+        }
+        OtAttr::WordRec rec{};
+        uint32_t wa = 0;
+        if (!oa.watchLookup(addr, &rec, &wa)) {
+          lucent::info("otattr", "trace 0x{:08X}: NOT in any watched region — `otattr watch <addr> <len>` first", addr);
+          continue;
+        }
+        if (rec.frame == 0xFFFFFFFFu) {
+          lucent::info("otattr", "trace 0x{:08X}: watched, but NEVER WRITTEN since registration", addr);
+          continue;
+        }
+        lucent::info("otattr",
+                     "trace 0x{:08X} (word 0x{:08X}): last writer fn=0x{:08X} caller=0x{:08X} frame={}",
+                     addr,
+                     wa,
+                     rec.fn,
+                     rec.caller,
+                     rec.frame);
+        // One-hop heuristic: does the writer LOOK like a copy loop (touches many distinct 4KB pages in
+        // the same frame, i.e. it fans out across many destinations rather than emitting one thing)?
+        const OtAttr::FnStoreStat *st = oa.fnStatFind(rec.fn);
+        if (!st) {
+          lucent::warn("repl",
+                       "  [trace] no per-fn store stat recorded for this fn this frame (stale/cross-frame lookup) — "
+                       "re-run `otattr trace` in the same frame the write happened.");
+        } else {
+          bool looksLikeCopyLoop = st->pageOverflow || st->pageCount >= 3;
+          lucent::info("repl",
+                       "  [trace] fn=0x{:08X} made {} store(s) touching {} distinct 4KB page(s) this frame{} -> {}",
+                       rec.fn,
+                       st->count,
+                       st->pageCount,
+                       st->pageOverflow ? "+" : "",
+                       looksLikeCopyLoop
+                           ? "LOOKS LIKE A COPY/BATCH LOOP (writes fan out across many destinations; "
+                             "the object identity was likely already lost by the time it reached this word)"
+                           : "looks like a direct, single-destination writer");
+          lucent::info(
+              "repl",
+              "  [trace] SOURCE not determinable from store data alone (this tool only sees "
+              "writes, not reads) — decompile fn=0x{:08X} with the maintained Ghidra workflow to find its read "
+              "pointer/source struct, then `otattr watch <src_addr> <len>` and re-run `otattr who`/`trace` on "
+              "the source to walk one more hop back.",
+              rec.fn);
+        }
+        continue;
+      }
+      lucent::info(
+          "otattr",
+          "frame={} spans={}(overflow={}) gteBuckets={}(overflow={}) watch: slots={}/{} words={}/{}(overflow={})",
+          oa.frame(),
+          oa.spanCount(),
+          oa.spanOverflow(),
+          oa.gteCount(),
+          oa.gteOverflow(),
+          oa.watchSlotCount(),
+          (int)OtAttr::WATCH_SLOTS,
+          oa.watchWordsUsed(),
+          (int)OtAttr::WATCH_CAP_WORDS,
+          oa.watchOverflow());
+      uint32_t madr = c->game->gpu.s_ot_madr;
+      if (!madr) {
+        lucent::info("otattr", "GpuState::s_ot_madr == 0 — no OT walked yet this run");
+      } else {
+        uint32_t a = madr & 0x1FFFFC;
+        for (int idx = 0; idx < 0x10000; idx++) {
+          uint32_t hdr = c->mem_r32(a);
+          unsigned n = hdr >> 24; // prim GP0-word count (tag high byte) — 0 == link-only sentinel node
+          if (n > 0) {
+            uint32_t w0 = c->mem_r32(a + 4);
+            uint8_t op = (uint8_t)(w0 >> 24);
+            int vx = 0, vy = 0;
+            if (n >= 2) {
+              uint32_t w1 = c->mem_r32(a + 8);
+              vx = (int16_t)(w1 & 0xFFFF);
+              vy = (int16_t)(w1 >> 16);
+            }
+            OtAttr::Span sp{};
+            bool found = oa.lookupStore(a, &sp);
+            uint32_t node = found ? sp.node : 0;
+            uint32_t beh = node ? c->mem_r32((node & 0x1FFFFFFF) + 0x1C) : 0;
+            lucent::info("repl",
+                         "  [{:4}] pool=0x{:08X} op=0x{:02X} n={} v0=({},{})  fn=0x{:08X} caller=0x{:08X} "
+                         "node=0x{:08X} beh@node+1C=0x{:08X}",
+                         idx,
+                         0x80000000u | a,
+                         op,
+                         n,
+                         vx,
+                         vy,
+                         found ? sp.fn : 0,
+                         found ? sp.caller : 0,
+                         node,
+                         beh);
+          }
+          uint32_t next = hdr & 0xFFFFFF;
+          if (next == 0xFFFFFF || next == 0) {
+            break;
+          }
+          a = next & 0x1FFFFC;
+        }
+      }
+      lucent::info("otattr", "GTE RTPS/RTPT per-(fn,node) call counts this frame:");
+      for (int i = 0; i < oa.gteCount(); i++) {
+        const OtAttr::GteBucket *g = oa.gteAt(i);
+        lucent::info("repl", "  fn=0x{:08X} node=0x{:08X} count={}", g->fn, g->node, g->count);
+      }
+    }
+    // otwhere <pkt-hex> <ot-base-hex> [entries] — locate a packet's OT BUCKET in the LAST-walked OT
+    // (read-only chain walk from GpuState::s_ot_madr, the same enumeration DrawOTag used; no draw/state
+    // side effects). Reports {bucket index, position within the bucket, global chain position}. The OT
+    // ARRAY base/entry-count are game data the framework does not know, so the caller supplies them
+    // (Tomba2: base = *0x800ED8C8 via `r 800ED8C8`, entries = 2048 — the guest submitter's own range
+    // check clamps indices to [4,2048)). Bucket = index of the last OT-array sentinel word the walk
+    // passed; packets hang off their bucket's head word, so every node between sentinel k and the next
+    // sentinel belongs to bucket k. Diagnostic for the kanban #11 class (which game sort key did the
+    // emitter give a prim); shipping-path OT reads remain banned — this is REPL-only.
+    else if (!strcmp(cmd, "otwhere")) {
+      uint32_t pkt = 0, base = 0;
+      int entries = 2048;
+      if (sscanf(line, "%*s %x %x %d", &pkt, &base, &entries) < 2) {
+        lucent::info("repl", "usage: otwhere <pkt-hex> <ot-base-hex> [entries=2048]");
+      } else {
+        uint32_t madr = c->game->gpu.s_ot_madr;
+        if (!madr) {
+          lucent::info("repl", "otwhere: s_ot_madr == 0 — no OT walked yet");
+          continue;
+        }
+        uint32_t a = madr & 0x1FFFFC, want = pkt & 0x1FFFFC;
+        uint32_t blo = base & 0x1FFFFF, bhi = blo + (uint32_t)entries * 4;
+        int bucket = -1, pos = 0, hits = 0;
+        for (int idx = 0; idx < 0x10000; idx++) {
+          if (a >= blo && a < bhi && ((a - blo) & 3) == 0) {
+            bucket = (int)((a - blo) >> 2);
+            pos = 0;
+          } else {
+            pos++;
+          }
+          uint32_t hdr = c->mem_r32(a);
+          if (a == want) {
+            lucent::info("repl",
+                         "otwhere 0x{:08X}: bucket={} posInBucket={} chainIdx={} hdr=0x{:08X} (len={} next=0x{:06X})",
+                         0x80000000u | a,
+                         bucket,
+                         pos,
+                         idx,
+                         hdr,
+                         hdr >> 24,
+                         hdr & 0xFFFFFF);
+            hits++;
+          }
+          uint32_t next = hdr & 0xFFFFFF;
+          if (next == 0xFFFFFF || next == 0) {
+            break;
+          }
+          a = next & 0x1FFFFC;
+        }
+        if (!hits) {
+          lucent::info("repl", "otwhere 0x{:08X}: NOT in the last-walked OT (madr=0x{:08X})", pkt, 0x80000000u | madr);
+        }
+      }
+    }
+    // `menu [on|off|toggle]` — drive the RmlUi overlay without a keyboard.
+    //
+    // WHY THIS EXISTS: the overlay could previously only be opened by an SDL ESC key event, i.e.
+    // only through a window. Agents may not run windowed (docs/workspace/PROTOCOL.md), so the entire UI was
+    // undrivable by every instrument the project actually uses, and that — together with the
+    // windowed-only init this replaced — is why a user-reported dead overlay could not be examined
+    // at all. Visibility is host UI state, not guest state, so this is a driving surface like
+    // `press`/`tap`, not a behaviour switch. Reports what it DID, including the refusal cases, so
+    // a run that changed nothing cannot read like a run that worked.
+    else if (!strcmp(cmd, "menu")) {
+      char which[16] = {0};
+      sscanf(line, "%*s %15s", which);
+      RmlOverlay &ov = c->game->rml_overlay;
+      if (!ov.inited()) {
+        lucent::info("repl", "menu: overlay NOT initialised — nothing to show");
+      } else if (!ov.hasMenu()) {
+        lucent::info("repl", "menu: overlay is up but has NO DOCUMENT (LoadDocument failed; check PSXPORT_ASSET_DIR)");
+      }
+      // `dump`, `tab <n>` and `nav <key>` make the menu's CONTENT and NAVIGATION reachable without a
+      // window. The menu is driven by SDL keyboard events, which do not exist headless, so before
+      // these the component tree could be brought up but never exercised — visibility was the only
+      // thing an agent could change, and "does the Graphics tab still have its 13 rows?" had no
+      // answer short of a windowed run. They are a DRIVING surface (like press/tap): host UI state
+      // only, no guest state, no behaviour switch.
+      else if (!strcmp(which, "dump")) {
+        ov.dumpMenu();
+      } else if (!strcmp(which, "tab")) {
+        int n = -1;
+        if (sscanf(line, "%*s %*s %d", &n) == 1) {
+          ov.selectTab(n);
+          lucent::info("repl", "menu: tab {}", n);
+        } else {
+          lucent::info("repl", "menu tab <index>");
+        }
+      } else if (!strcmp(which, "nav")) {
+        char key[16] = {0};
+        sscanf(line, "%*s %*s %15s", key);
+        const int code = !strcmp(key, "up")      ? SDLK_UP
+                         : !strcmp(key, "down")  ? SDLK_DOWN
+                         : !strcmp(key, "left")  ? SDLK_LEFT
+                         : !strcmp(key, "right") ? SDLK_RIGHT
+                         : !strcmp(key, "enter") ? SDLK_RETURN
+                                                 : 0;
+        // A key name nobody recognises must SAY so. A no-op that logged nothing would look
+        // identical to a nav that ran and changed nothing — the difference matters when the whole
+        // point of the command is to tell those two apart.
+        if (!code) {
+          lucent::info("repl", "menu nav <up|down|left|right|enter> — \"{}\" is not one of them", key);
+        } else if (!ov.visible()) {
+          lucent::info("repl", "menu nav {}: IGNORED, the menu is hidden (`menu on` first)", key);
+        } else {
+          lucent::info("repl", "menu nav {}: {}", key, ov.sendKey(code) ? "handled" : "NOT handled by the menu");
+        }
+      } else {
+        const bool on = !strcmp(which, "off")  ? false
+                        : !strcmp(which, "on") ? true
+                                               : !ov.visible(); // bare `menu` / `menu toggle`
+        ov.setVisible(on);
+        lucent::info("repl", "menu: {}", on ? "shown" : "hidden");
+      }
+    } else if (!strcmp(cmd, "regs")) {
+      lucent::Line ln; // 4 registers per row
+      for (int i = 0; i < 32; i++) {
+        ln.add(" r{:<2}={:08X}", i, c->r[i]);
+        if ((i & 3) == 3) {
+          ln.flush(lucent::Level::Info, "repl");
+        }
+      }
+      lucent::info("repl", " hi={:08X} lo={:08X}", c->hi, c->lo);
+    }
+    // Title-side commands cross the runtime boundary so this parser never names a game's guest
+    // addresses or object layout. Legacy consumers are forwarded to GameHooks by their adapter.
+    else if (c->runtime && c->runtime->replCommand(*c, cmd, line)) { /* handled game-side */
+    } else {
+      lucent::info("repl", "? {}", cmd);
+    }
+  }
+  return -1; // EOF
+}

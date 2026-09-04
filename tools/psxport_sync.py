@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resolve a consumer's psxport checkout and verify its recorded build provenance.
 
-This is the canonical resolver used by generated consumers after their minimal fresh-clone bootstrap.
+This is the canonical resolver used by psxport consumers after their minimal fresh-clone bootstrap.
 It never replaces an existing private checkout, never records a dirty framework as a pin, and checks
 the CMake-written ``build/psxport_resolved.txt`` against the consumer's immutable ``psxport.pin``.
 """

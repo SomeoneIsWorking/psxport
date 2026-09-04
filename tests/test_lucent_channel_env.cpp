@@ -1,7 +1,7 @@
 // PSXPORT_DEBUG must work without cfg_* having run first.
 //
 // THE BUG THIS EXISTS FOR. `PSXPORT_DEBUG` was loaded into lucent by exactly one thing:
-// bootstrap_once() in runtime/recomp/cfg.cpp, which is reachable only from a `cfg_*` entry point. A
+// bootstrap_once() in runtime/psx/cfg.cpp, which is reachable only from a `cfg_*` entry point. A
 // plain `lucent::debug("cd", ...)` does not go anywhere near it. That was invisible only because
 // psxport still has ~700 `cfg_log*` sites that fire during boot and load the variable as a side
 // effect. Retire those — which is the plan — and `PSXPORT_DEBUG` stops working entirely, in four

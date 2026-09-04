@@ -111,7 +111,7 @@
 			<pane>
 				<div class="section-heading">About</div>
 				<p>Tomba! 2 &#8212; PC-native engine port (Tomba2Engine).</p>
-				<p class="hint">RmlUi (HTML/CSS) menu over the Vulkan renderer. Layout from Dusklight (CC0).</p>
+				<p class="hint">RmlUi (HTML/CSS) menu over the Vulkan renderer.</p>
 			</pane>
 		</content>
 	</window>

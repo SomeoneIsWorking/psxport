@@ -1,18 +1,15 @@
-/* Tomba2Engine RmlUi mod/debug menu — Dusklight-style layout.
-   Ported from Dusklight's res/rml/window.rcss + tabbing.rcss (CC0), via soh3d's adaptation
-   (Shipwright/libultraship/assets/rml/soh3d_test.rcss). Content adapted to Tomba2's mods.
+/* Tomba2Engine RmlUi mod/debug menu.
 
-   Deliberate deviations from Dusklight (same constraints soh3d hit):
+   Renderer constraints:
    - No `box-shadow`, no `backdrop-filter: blur`, no `filter: opacity()`, no element `opacity`.
      RmlUi renders those via its layer / render-to-texture / composite path, which the port's
      minimal RmlUi Vulkan render interface does not implement (base no-op layer methods). Using
      them draws a red error placeholder / corrupts the frame. Dimming is done with rgba colors,
      which blend correctly. border-radius (plain geometry), gradients (decorators), font-effect
      glow (baked into the font texture) and rectangular scissor clipping all work and are used.
-   - Fonts: we DO vendor Dusklight's Fira family, so this uses "Fira Sans" / "Fira Sans Condensed"
-     (Dusklight's actual fonts), not a single fallback face. No "Material Symbols" icons (Unicode
-     arrows/glyphs are used in the markup instead).
-   - Units: Dusklight authors in `dp`; at density ratio 1, dp == px, so this sheet uses px. */
+   - The bundled Fira family provides "Fira Sans" and "Fira Sans Condensed". Unicode
+     arrows/glyphs are used in the markup instead of a separate icon font.
+   - The UI runs at density ratio 1, so this sheet uses px. */
 
 /* Fonts are loaded via the C++ API (Rml::LoadFontFace in the RmlUi overlay setup), NOT via @font-face:
    this RmlUi build's RCSS parser does not support the @font-face at-rule (it errored on the block and
@@ -27,8 +24,7 @@ body {
 	width: 100%;
 	height: 100%;
 	padding: 64px;
-	/* Dim the whole window so the menu reads as a modal cover over the game (Dusklight uses a
-	   backdrop blur here, which the render interface can't do yet — a scrim is the stand-in). */
+	/* Dim the whole window so the menu reads as a modal cover over the game. */
 	background-color: rgba(0, 0, 0, 82%);
 	font-family: "Fira Sans";
 	font-weight: normal;
@@ -83,9 +79,8 @@ tab:focus {
 	decorator: vertical-gradient(#c2a42d00 #c2a42d26);
 }
 
-/* Selection is RUNTIME state, so it is a PSEUDO-class (psx::ui::Component::set_selected), not a
-   class: `class` is the document author's namespace and a runtime SetClass writes into it.
-   Dusklight styles `tab-bar tab:selected` the same way (res/rml/tabbing.rcss:29). */
+/* Selection is runtime state, so it is a pseudo-class (psx::ui::Component::set_selected), not a
+   class: `class` is the document author's namespace and a runtime SetClass writes into it. */
 tab:selected {
 	color: #E0DBC8;
 	border-bottom: 4px #C2A42D;
@@ -101,10 +96,8 @@ content {
 }
 
 /* One pane per tab; only the selected tab's pane is shown. The runtime sets the `:shown`
-   PSEUDO-class (psx::ui::MenuPane::set_shown). It is NOT called `:active`: `:active` is an RmlUi
-   BUILT-IN pseudo-class meaning "the mouse is held down on this element" (Dusklight uses
-   `tab-bar tab:active` for exactly that, res/rml/tabbing.rcss:42), so a pane whose visibility was
-   spelled that way would flicker under any mouse press. */
+   pseudo-class (psx::ui::MenuPane::set_shown). It is not called `:active`: `:active` is RmlUi's
+   built-in mouse-held pseudo-class, so a pane using it for visibility would flicker on a press. */
 pane {
 	display: none;
 	flex: 1 1 0;
@@ -178,7 +171,7 @@ select-button:focus value {
 	color: #C2A42D;
 }
 
-/* --- Scrollbar (slim gold-on-cream, matches Dusklight) ----------------------------------- */
+/* --- Scrollbar --------------------------------------------------------------------------- */
 scrollbarvertical {
 	width: 8px;
 	margin: 4px 4px 4px 0;

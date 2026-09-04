@@ -42,8 +42,7 @@ bool Component::focus() {
     return false;
   }
   if (mRoot && mRoot->Focus(true)) {
-    // Nearest alignment, not Dusklight's Center: our panes are short scrolling lists and
-    // centring every focus move would scroll the list under a user who only pressed Down once.
+    // Nearest alignment keeps short panes from scrolling underneath a single Down press.
     mRoot->ScrollIntoView(Rml::ScrollIntoViewOptions(Rml::ScrollAlignment::Nearest));
     return true;
   }

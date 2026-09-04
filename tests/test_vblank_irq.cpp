@@ -1,12 +1,13 @@
-// The display controller's VBlank interrupt — Timing::raiseVBlank (runtime/recomp/timing.cpp).
+// The display controller's VBlank interrupt — Timing::raiseVBlank (runtime/psx/timing.cpp).
 //
 // The port owns frame pacing natively and traps every guest VSync wait; that is unchanged. What is
 // asserted here is the separate thing a guest can own itself: the INTERRUPT EDGE. A driver hung off
 // the BIOS interrupt chain (Crash Bash's pad engine is one) does its work in a verifier that only
 // runs when something raises an interrupt at all.
-#include "../runtime/recomp/game.h"
-#include "../runtime/recomp/game_iface.h"
-#include "../runtime/recomp/recomp_iface.h"
+#include "../runtime/cpu/image_identity.h"
+#include "../runtime/cpu/native_dispatch.h"
+#include "../runtime/psx/game.h"
+#include "../runtime/psx/game_iface.h"
 #include "testutil.h"
 
 namespace {
@@ -21,35 +22,22 @@ constexpr uint32_t kVerifier = 0x80010104u;
 int verifierCalls = 0;
 int handlerCalls = 0;
 
-void dispatch(Core *core, uint32_t address) {
-  if (address == kVerifier) {
-    ++verifierCalls;
-    core->r[2] = (core->mem_r32(kIStat) & 1u) != 0 ? 1u : 0u;
-    return;
-  }
-  CHECK_EQ(address, kHandler);
+void verifier(Core *core) {
+  ++verifierCalls;
+  core->r[2] = (core->mem_r32(kIStat) & 1u) != 0 ? 1u : 0u;
+}
+
+void handler(Core *core) {
   ++handlerCalls;
   core->mem_w32(kIStat, 0x7FEu); // handler acknowledges VBlank by writing bit 0 as zero
 }
 
-int functionIndex(uint32_t address) {
-  if (address == kHandler) {
-    return 0;
-  }
-  return address == kVerifier ? 1 : -1;
+void installInterruptCallbacks(Game &game) {
+  const auto image =
+      game.core.imageCatalog().activate("test-main", {kElement & 0x1FFFFFFFu, (kVerifier & 0x1FFFFFFFu) + 4u}, 1u);
+  CHECK(game.core.nativeDispatcher().install({{image, kHandler}, "vblank-handler", handler}));
+  CHECK(game.core.nativeDispatcher().install({{image, kVerifier}, "vblank-verifier", verifier}));
 }
-
-const RecompRegistry kRegistry = {
-    dispatch,
-    functionIndex,
-    nullptr,
-    0,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-};
 
 Game *interruptGame() {
   static GameConfig config{};
@@ -58,10 +46,10 @@ Game *interruptGame() {
   config.recMainLo = kHandler & 0x1FFFFFFFu;
   config.recMainHi = (kVerifier & 0x1FFFFFFFu) + 4u;
   psxport_install_game(&config, &hooks);
-  psxport_install_recomp(&kRegistry);
   verifierCalls = 0;
   handlerCalls = 0;
   Game *game = new Game();
+  installInterruptCallbacks(*game);
   game->core.mem_w32(kElement + 4u, kHandler);
   game->core.mem_w32(kElement + 8u, kVerifier);
   game->hle.irqEnq(2, kElement);

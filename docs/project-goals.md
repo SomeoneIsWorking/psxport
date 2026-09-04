@@ -16,8 +16,9 @@ Success conditions:
 
 - One Lightrec instance is owned by each live `Core`, with no implicit process-global CPU, image,
   override, clock, or invalidation state.
-- Gameplay objects and links contain no interpreter, generated guest bodies, static dispatcher, or
-  engine-selection/fallback surface.
+- Gameplay objects and links contain no standalone interpreter mode, offline guest bodies,
+  dispatch table, or engine-selection surface. Automatic fallback is backend-owned, bounded, counted,
+  and limited to named compilation/fetch/unsupported-block failures.
 - Native overrides use complete image/module-generation-plus-address identity. A scoped original call
   bypasses only its current override and executes the guest body through Lightrec without recursion.
 - Lightrec owns its block cache and executable memory. psxport owns explicit architectural-state
@@ -25,8 +26,8 @@ Success conditions:
 - CPU writes, DMA, module loads, debugger writes, and savestate restore invalidate every affected
   translated block and stale dispatch decision.
 
-Non-goals: designing a new MIPS JIT, choosing between an interpreter and Lightrec, wrapping Lightrec's
-cache in `jit-common`, or retaining offline guest-code generation as a compatibility mode.
+Non-goals: designing a new MIPS JIT, exposing an interpreter mode, wrapping Lightrec's cache in
+`jit-common`, or retaining offline guest-code generation as a compatibility mode.
 
 Contributing state items: S012–S016.
 
@@ -80,7 +81,7 @@ Make the framework and its consumers build from a fresh checkout with normal nat
 user-supplied game files, while keeping code ownership, configuration, logging, and verification
 mechanically enforceable.
 
-Why it matters: the intended product must not rely on a maintainer's Ghidra project, generated corpus,
+Why it matters: the intended product must not rely on a maintainer's Ghidra project or derived guest source,
 machine paths, or undocumented runtime flags.
 
 Success conditions:
@@ -88,7 +89,7 @@ Success conditions:
 - Lightrec is a direct dependency at an immutable maintained revision with recorded provenance; any
   required changes live as commits in a maintained fork, never patch files.
 - Consumer launchers authenticate user game files and start the native/Lightrec product without an
-  offline translator, generated corpus, or engine flag.
+  offline translator, derived guest source, or engine flag.
 - One typed configuration owner and Lucent logging boundary are enforced; product modules do not read
   environment/config files or print diagnostics directly.
 - Structure, format, lint, hermetic tests, product-link audits, and representative gameplay checks

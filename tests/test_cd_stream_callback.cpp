@@ -3,7 +3,8 @@
 #include "cdc_state.h"
 #include "game.h"
 #include "game_iface.h"
-#include "recomp_iface.h"
+#include "image_identity.h"
+#include "native_dispatch.h"
 #include "testutil.h"
 
 #include <memory>
@@ -17,27 +18,17 @@ int callbackCalls = 0;
 uint32_t callbackA0 = 0;
 uint32_t callbackA1 = 0;
 
-void dispatch(Core *core, uint32_t address) {
-  CHECK_EQ(address, kCallback);
+void callback(Core *core) {
   ++callbackCalls;
   callbackA0 = core->r[4];
   callbackA1 = core->r[5];
 }
 
-int functionIndex(uint32_t address) {
-  return address == kCallback ? 0 : -1;
+void installCallback(Game &game) {
+  const auto image =
+      game.core.imageCatalog().activate("test-main", {kCallback & 0x1FFFFFFFu, (kCallback & 0x1FFFFFFFu) + 4u}, 1u);
+  CHECK(game.core.nativeDispatcher().install({{image, kCallback}, "cd-stream-callback", callback}));
 }
-
-const RecompRegistry kRegistry = {
-    dispatch,
-    functionIndex,
-    nullptr,
-    0,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-};
 
 std::unique_ptr<Game> freshGame() {
   static GameConfig config{};
@@ -47,9 +38,8 @@ std::unique_ptr<Game> freshGame() {
   config.recMainHi = (kCallback & 0x1FFFFFFFu) + 4u;
   config.cdReadyCbPtr = kCallbackSlot;
   psxport_install_game(&config, &hooks);
-  psxport_install_recomp(&kRegistry);
-
   auto game = std::make_unique<Game>();
+  installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->cd.stream_active = 1;
   callbackCalls = 0;

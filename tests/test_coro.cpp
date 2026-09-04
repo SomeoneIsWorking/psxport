@@ -1,4 +1,4 @@
-// test_coro — unit test for the Coro fiber primitive (runtime/recomp/coro.{h,cpp}), the mechanism the
+// test_coro — unit test for the Coro fiber primitive (runtime/psx/coro.{h,cpp}), the mechanism the
 // cooperative scheduler resumes a guest task on. Hermetic: no disc, no GPU, no window, no game.
 //
 // It was previously an orphan built by a comment-in-the-header command line and asserted with

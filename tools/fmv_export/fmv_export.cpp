@@ -1,9 +1,9 @@
 // fmv_export — STANDALONE offline .STR (FMV) exporter for the Tomba!2 CHD.
 //
-// No game boot: opens the CHD directly (same by-LBA hunk read as runtime/recomp/disc.c) and
+// No game boot: opens the CHD directly (same by-LBA hunk read as runtime/psx/disc.c) and
 // decodes an .STR movie (MOVIE/LOGO.STR, MOVIE/OP.STR) to PNG frames + a CD-XA audio WAV + an
 // index manifest. The decode uses the SAME functions the runtime player runs — bs_decode_frame /
-// mdec_decode_to_rgb555 / xa_decode_sector from runtime/recomp/fmv_decode.cpp — so a frame that
+// mdec_decode_to_rgb555 / xa_decode_sector from runtime/psx/fmv_decode.cpp — so a frame that
 // dumps wrong here is a runtime frame that plays wrong, by construction. There is no forked copy.
 //
 // Output (all under <out-dir>):
@@ -11,9 +11,8 @@
 //   audio.wav                the movie's XA-ADPCM soundtrack, S16 stereo
 //   index.txt                per-video-frame manifest (STR frame, samples, media time)
 //
-// build: see tools/fmv_export/build.sh  (links fmv_decode.cpp + mdec_beetle.c + mednafen mdec.c +
-//        lucent + cfg + libchdr + zlib — the runtime decode, no game/SDL)
-// run:   PSXPORT_TOMBA2_DISC=<chd> tools/fmv_export/fmv_export <out-dir> [movie-path]
+// build: cmake --build build/clang --target fmv_export
+// run:   PSXPORT_TOMBA2_DISC=<chd> build/clang/tools/fmv_export/fmv_export <out-dir> [movie-path]
 //
 // Env/config (lucent, prefix-free names — cfg.cpp reads the same vars the same way):
 //   PSXPORT_TOMBA2_DISC / PSXPORT_DISC / a *.chd arg  — the disc image (env or ./.env line)
@@ -39,7 +38,7 @@
 
 // Vestigial Beetle savestate hook the vendored mdec.c references (state_helpers.h expands
 // MDFNSS_StateAction into a real call inside MDEC_StateAction, which an offline decode never
-// enters). Same `return 1` stub the runtime keeps in runtime/recomp/pgxp.cpp.
+// enters). Same `return 1` stub the runtime keeps in runtime/psx/pgxp.cpp.
 extern "C" int MDFNSS_StateAction(void *st, int load, int data_only, void *sf, const char *name) {
   (void)st;
   (void)load;
@@ -58,7 +57,7 @@ extern "C" int MDFNSS_StateAction(void *st, int load, int data_only, void *sf, c
 #define FMV_MAX_PIXELS (1024u * 512u)    // RGB555 frame scratch (VRAM-sized, like the runtime)
 
 // ====================================================================================
-// Disc — CHD by-LBA raw sector read (mirrors runtime/recomp/disc.c disc_read_raw)
+// Disc — CHD by-LBA raw sector read (mirrors runtime/psx/disc.c disc_read_raw)
 // ====================================================================================
 static chd_file *s_chd;
 static uint32_t s_fph, s_hcount, s_hbytes, s_cached = 0xFFFFFFFFu;
@@ -97,7 +96,7 @@ static bool disc_read_raw(uint32_t lba, uint8_t *out, uint32_t n) {
 }
 
 // Mode-2 sector user data (2048 bytes at raw+24; the CD-XA subheader sits at raw[16..23]).
-// Same skip as runtime/recomp/disc.c disc_read_sector.
+// Same skip as runtime/psx/disc.c disc_read_sector.
 static bool disc_read_user(uint32_t lba, uint8_t *out) {
   uint8_t raw[2352];
   if (!disc_read_raw(lba, raw, 2352)) {
@@ -109,7 +108,7 @@ static bool disc_read_user(uint32_t lba, uint8_t *out) {
 
 // ====================================================================================
 // ISO9660 — resolve an absolute path (PSX backslash style, case/";version"-insensitive)
-// to its data LBA and byte size (mirrors runtime/recomp/disc.c disc_find_file)
+// to its data LBA and byte size (mirrors runtime/psx/disc.c disc_find_file)
 // ====================================================================================
 static uint32_t rd_le32(const uint8_t *p) {
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -279,7 +278,7 @@ static void wav_u16(FILE *f, uint16_t v) {
 }
 
 // ====================================================================================
-// .env reader (mirrors runtime/recomp/disc.c env_from_dotenv)
+// .env reader (mirrors runtime/psx/disc.c env_from_dotenv)
 // ====================================================================================
 static std::string dotenv(const std::string &key) {
   FILE *f = fopen(".env", "rb");
@@ -368,9 +367,9 @@ int main(int argc, char **argv) {
     return 1;
   }
   fprintf(idx, "# fmv_export manifest: %s @ LBA %u, %u bytes\n", movie, lba, size);
-  fprintf(idx, "# str_frame  w  h  chunks  payload_bytes  codes  samples_played  time_ms\n");
+  fprintf(idx, "# output_frame  str_frame  w  h  chunks  payload_bytes  codes  samples_played  time_ms\n");
 
-  // --- scratch (same caps as runtime/recomp/native_fmv.cpp playLba) ---
+  // --- scratch (same caps as runtime/psx/native_fmv.cpp playLba) ---
   uint8_t *payload = (uint8_t *)malloc(FMV_PAYLOAD_BYTES);
   uint16_t *codes = (uint16_t *)malloc(FMV_CODES_MAX * 2);
   uint16_t *pixels = (uint16_t *)malloc(FMV_MAX_PIXELS * 2);
@@ -490,7 +489,7 @@ int main(int argc, char **argv) {
           }
           frames++;
           fprintf(idx,
-                  "%d  %d  %d  %d  %u  %d  %ld  %lld\n",
+                  "%d  %d  %d  %d  %d  %u  %d  %ld  %lld\n",
                   frames,
                   framenum,
                   fwidth,

@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: bios,hle,libc,toupper
-depends: runtime/recomp/bios_libc_string.cpp#bios_libc_string_dispatch, runtime/recomp/hle.cpp#Hle::dispatchBios, tests/test_bios_libc_string.cpp
+depends: runtime/psx/bios_libc_string.cpp#bios_libc_string_dispatch, runtime/psx/hle.cpp#Hle::dispatchBios, tests/test_bios_libc_string.cpp
 reconfirmed: 2026-08-25
 verified_at: 2026-08-25 00:53:00
 ---

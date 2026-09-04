@@ -17,7 +17,7 @@
 // each input — a predicate that returned REBUILD unconditionally would pass a suite that only ever
 // checked the rebuild cases, and would silently undo afca817d.
 
-#include "../runtime/recomp/gpu_vk_present_policy.h"
+#include "../runtime/psx/gpu_vk_present_policy.h"
 #include <stdio.h>
 
 static int g_checks = 0, g_fail = 0;

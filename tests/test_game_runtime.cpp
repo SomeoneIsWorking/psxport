@@ -340,7 +340,7 @@ void test_runtime_capabilities_are_explicit_and_preserve_legacy_temporal_titles(
   CHECK(!widescreenOnly.temporalInterpolation);
 }
 
-void test_live_render_path_validator_separates_player_diagnostic_and_reference_use() {
+void test_live_render_path_validator_separates_player_and_diagnostic_use() {
   TestRuntime runtime;
   psxport_install_game(runtime);
   auto game = std::make_unique<Game>();
@@ -354,10 +354,9 @@ void test_live_render_path_validator_separates_player_diagnostic_and_reference_u
         RenderPathSelectionResult::Applied);
   CHECK(game->core.rsub.mode.path() == RenderPath::Psx);
 
-  game->oracle = 1;
   CHECK(render_path_apply(*game, RenderPath::Native, RenderPathAudience::Diagnostic) ==
-        RenderPathSelectionResult::ReferenceLocked);
-  CHECK(game->core.rsub.mode.path() == RenderPath::Psx);
+        RenderPathSelectionResult::Applied);
+  CHECK(game->core.rsub.mode.path() == RenderPath::Native);
 }
 
 void test_widescreen_only_runtime_refuses_native_through_shipping_validator() {
@@ -459,7 +458,7 @@ int main() {
   RUN(game_owns_runtime_products_and_context);
   RUN(only_legacy_adapter_installs_the_temporal_compatibility_decorator);
   RUN(runtime_capabilities_are_explicit_and_preserve_legacy_temporal_titles);
-  RUN(live_render_path_validator_separates_player_diagnostic_and_reference_use);
+  RUN(live_render_path_validator_separates_player_and_diagnostic_use);
   RUN(widescreen_only_runtime_refuses_native_through_shipping_validator);
   RUN(startup_rewrites_unsupported_native_config_to_effective_gte_path);
   RUN(capability_absence_removes_player_bindings_while_capable_titles_retain_them);

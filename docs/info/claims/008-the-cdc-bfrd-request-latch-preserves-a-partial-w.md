@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-21
 tags: cdc,cdrom,dma
-depends: runtime/recomp/cdc_native.cpp#write_request_register, tests/test_cdc_bfrd_split_dma.cpp#test_repeated_assertion_preserves_split_dma_cursor
+depends: runtime/psx/cdc_native.cpp#write_request_register, tests/test_cdc_bfrd_split_dma.cpp#test_repeated_assertion_preserves_split_dma_cursor
 reconfirmed: 2026-08-26
 verified_at: 2026-08-26 22:24:51
 ---

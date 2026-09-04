@@ -1,10 +1,8 @@
 // psx::ui::MenuRow — ONE focusable `<select-button>` row of the overlay menu, and the bindings
 // that say what it is wired to.
 //
-// SHAPE FROM DUSKLIGHT (CC0), `src/dusk/ui/select_button.{hpp,cpp}`: a row is a component that owns
-// its `<key>`/`<value>` elements and its own listener, and it asks a BINDING for its display text
-// rather than holding the state itself (their `ControlledSelectButton` takes a `getValue` /
-// `isDisabled` / `isModified` triple for exactly this reason). Ours is a small virtual instead of
+// A row owns its `<key>`/`<value>` elements and listener, and asks a binding for its display text
+// rather than holding the state itself. The binding is a small virtual instead of
 // three `std::function`s because our four row kinds are a closed set that lives in this file, not
 // an open extension point callers configure.
 //

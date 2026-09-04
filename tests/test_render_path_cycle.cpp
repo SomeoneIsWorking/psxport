@@ -47,8 +47,8 @@ static int count_text(const std::string &text, const char *needle) {
 }
 
 static void test_renderer_selection_is_owned_by_rmlui_not_f5(void) {
-  const std::string pad = read_source("runtime/recomp/pad_input.cpp");
-  const std::string pad_header = read_source("runtime/recomp/pad_input.h");
+  const std::string pad = read_source("runtime/psx/pad_input.cpp");
+  const std::string pad_header = read_source("runtime/psx/pad_input.h");
   const std::string menu = read_source("assets/rml/menu.rml");
   const std::string document = read_source("runtime/ui/menu_document.cpp");
   const std::string control = read_source("runtime/ui/render_path_control.cpp");

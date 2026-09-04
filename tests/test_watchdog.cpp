@@ -32,7 +32,7 @@ std::string readGpuNative() {
   std::string self = __FILE__;
   const size_t slash = self.find_last_of('/');
   const std::string tests = slash == std::string::npos ? "." : self.substr(0, slash);
-  FILE *file = fopen((tests + "/../runtime/recomp/gpu_native.cpp").c_str(), "rb");
+  FILE *file = fopen((tests + "/../runtime/psx/gpu_native.cpp").c_str(), "rb");
   if (!file) {
     return {};
   }

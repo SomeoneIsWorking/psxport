@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: architecture,game-runtime,guest-program-image
-depends: runtime/recomp/game_runtime.h#GameRuntime, runtime/recomp/game_iface.cpp#LegacyGameRuntimeAdapter, runtime/recomp/native_boot.cpp, runtime/recomp/overlay_router.cpp#program_image_for_routing, runtime/recomp/sync_overrides.cpp#guest_backtrace_to, tests/test_guest_program_image_ownership.cpp
+depends: runtime/psx/game_runtime.h#GameRuntime, runtime/psx/game_iface.cpp#LegacyGameRuntimeAdapter, runtime/psx/native_boot.cpp, runtime/psx/overlay_router.cpp#program_image_for_routing, runtime/psx/sync_overrides.cpp#guest_backtrace_to, tests/test_guest_program_image_ownership.cpp
 reconfirmed: 2026-08-25
 verified_at: 2026-08-25 01:16:03
 ---

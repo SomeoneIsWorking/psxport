@@ -42,5 +42,5 @@ drive event already made ready. Pause/Stop cancels the owned deadline.
 The shipping test passes 5/5 with 64 checks, including too-early, exactly-due, partial-tail, Pause,
 full-drain and both-speed answers. Real Crash Bash returns from its 189-sector start with all 189
 still pending, then services LBA35799..35987 at +225,792-tick deadlines despite every sector
-leaving 280 bytes unread, prints `done loading`, and reaches the next recompilation boundary. Issue
+leaving 280 bytes unread, prints `done loading`, and reaches the next execution boundary. Issue
 0007 records that one tick per instruction is not a cycle-accurate physical drive model.

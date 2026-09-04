@@ -168,10 +168,9 @@ reversed.
   disc are why they *look* like one family; that is cross-promotion, not shared code.
 - **Not an engine-family LIBRARY vendored between psxport and a game.** A middle layer whose whole nature
   is "holds facts for N games" is a factory for the residence defect `pc_scheduler.cpp` already is —
-  invisible to `psxport_smoke`, outside `test_no_game_address_literals.cpp`'s scope, and a second pin to
-  sync through a `sync-submodules.sh` whose enumeration defect cost three builds in a day before it was fixed. Shared lineage code
-  lives INSIDE the lineage repo, where inheritance is the seam plan's own answer
-  (`docs/plans/game-seam-redesign.md`) and where "shared `game/` may not hold title literals" can be
+  invisible to `psxport_smoke`, outside `test_no_game_address_literals.cpp`'s scope, and a second pin
+  to synchronize. Shared lineage code lives inside the lineage repo, where inheritance is the seam
+  and where "shared `game/` may not hold title literals" can be
   linted the same way.
 
 ## Order and prerequisite for growing to a second Insomniac title
@@ -182,4 +181,4 @@ real test of the multi-title bet), then Spyro 3, then the Crash trio, then CTR/B
 **Prerequisite, not negotiable:** do not bring up a second Insomniac title while the framework still
 contains Tomba!2's frame loop and scheduler. `spyro/game/render/frame_loop.cpp` already documents "THIS
 PORT CANNOT USE THE FRAMEWORK'S FRAME LOOP"; a third consumer would fork it again. Land
-`docs/plans/game-seam-redesign.md`'s early steps first.
+the typed game/runtime seam first.

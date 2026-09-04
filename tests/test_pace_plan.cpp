@@ -1,6 +1,6 @@
 // test_pace_plan.cpp — frame pacing must not depend on a window, and must run on the GAME's clock.
 //
-// WHAT THIS GATES. `runtime/recomp/pace_plan.h` is the whole pacing decision. Two USER-flagged
+// WHAT THIS GATES. `runtime/psx/pace_plan.h` is the whole pacing decision. Two USER-flagged
 // defects lived in the code it replaces (now `frame_pacer.cpp`), and this file pins
 // both of them shut:
 //
@@ -24,7 +24,7 @@
 // that rule and watch it go red; the default build additionally asserts that the legacy rule FAILS
 // the two properties, so this file cannot pass while modelling nothing.
 //
-//   RED  : g++ -std=c++20 -I runtime/recomp -I tests -DPSXPORT_TEST_LEGACY_PACE_PLAN -o
+//   RED  : g++ -std=c++20 -I runtime/psx -I tests -DPSXPORT_TEST_LEGACY_PACE_PLAN -o
 //          scratch/bin/t_pace tests/test_pace_plan.cpp && scratch/bin/t_pace
 //   GREEN: the same without the define, or `ctest -R test_pace_plan`.
 //

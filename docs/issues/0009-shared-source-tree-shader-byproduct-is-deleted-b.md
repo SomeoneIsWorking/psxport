@@ -10,7 +10,7 @@ updated: 2026-08-21
 
 ## Root cause
 
-Every independent consumer build registered the same ignored source-tree `runtime/recomp/gpu_vk_shaders.h` as its CMake `BYPRODUCT`. Each build owned a different freshness stamp but wrote, read, and cleaned one shared header. Cleaning or regenerating one build could therefore remove the header after another build had completed `gen_gpu_shaders` and before its compiler opened `gpu_vk.cpp`. Atomic replacement did not protect against a different build deleting the shared byproduct.
+Every independent consumer build registered the same ignored source-tree `runtime/psx/gpu_vk_shaders.h` as its CMake `BYPRODUCT`. Each build owned a different freshness stamp but wrote, read, and cleaned one shared header. Cleaning or regenerating one build could therefore remove the header after another build had completed `gen_gpu_shaders` and before its compiler opened `gpu_vk.cpp`. Atomic replacement did not protect against a different build deleting the shared byproduct.
 
 ## Resolution
 

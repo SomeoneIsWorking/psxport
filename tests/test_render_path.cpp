@@ -1,11 +1,11 @@
 // test_render_path.cpp — the RENDER PATH tri-state (RenderMode::path()).
 //
 // The switch the user asked for: "a toggle to switch between PC render native, PC render from GTE and
-// pure PSX rasterizer" (2026-08-11). Design: docs/plans/render-path-tristate.md.
+// pure PSX rasterizer" (2026-08-11). The renderer boundary is documented in docs/codemap.md.
 //
 // WHAT THIS TEST IS FOR, and why it is not a tautology. Before the tri-state, the three modes existed
 // as THREE INDEPENDENT switches — RenderMode::mPsxRender (geometry source), GpuState::soft_gpu (the
-// rasterizer, reachable only from the SBS harness and the selftest), and PSXPORT_ORACLE (the
+// rasterizer, reachable only from the test harness and the selftest), while the former reference mode
 // enhancement lockout). Nothing tied them together, so the combinations that are NOT modes were
 // expressible and one of them (PSX rasterizer + native producers) draws a black screen: the native
 // producers push geometry to the VK backend while the presenter shows the software framebuffer that

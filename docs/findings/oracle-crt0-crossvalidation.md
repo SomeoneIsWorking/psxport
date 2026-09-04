@@ -8,7 +8,7 @@ The boot group each game ships in `game_config.cpp` — `bssZeroLo/Hi`, `stackTo
 `heapBase`, `gp`, `libcInit` — is derived by `tools/crt0_extract`, which DECODES the prologue
 symbolically. `crt0_audit` then re-derives it from the guest instruction stream on every boot and refuses
 on disagreement. Three checks, and **all three run the same decoder** (`crt0_scan` in
-`runtime/recomp/crt0_verify.h`). A misreading of the prologue would be confirmed by every one of them
+`runtime/psx/crt0_verify.h`). A misreading of the prologue would be confirmed by every one of them
 forever. That is this workspace's recurring failure in its purest form: an instrument that cannot show
 the other answer.
 
@@ -82,7 +82,7 @@ Spyro's boot, read off the trace instruction by instruction, is the shape all se
 
 ## What this independently confirms about the framework
 
-**`crt0_plan`'s arithmetic is right, checked against execution.** `runtime/recomp/crt0_boot.h` computes
+**`crt0_plan`'s arithmetic is right, checked against execution.** `runtime/psx/crt0_boot.h` computes
 `a0 = (heapBase & 0x1FFFFFFF | 0x80000000) + 4` and
 `a1 = (mem[stackTopBase] + bias - mem[stackTopBase2]) - (heapBase & 0x1FFFFFFF)`. For Spyro that gives
 `a0 = 0x8007AA3C` and `a1 = 0x001FF7F8 - 0x0007AA38 = 0x00184DC0` — and the executed registers hold
@@ -141,7 +141,7 @@ all use low stacks.
   the span — but the script does not assert that yet.
 - **Nothing here compares our PORT against anything.** This validates the crt0 CONSTANTS. The
   register-level differential between psxport's own execution and this reference is still ahead
-  (`docs/plans/oracle-against-beetle.md`, milestone 2).
+  (`docs/oracle.md`).
 - **The reference is Beetle, not a console.** Where Beetle and real hardware disagree the console wins.
   Nothing in this window is timing-sensitive or device-dependent, which is why it is a safe first window —
   but that is a property of this window, not a general licence.

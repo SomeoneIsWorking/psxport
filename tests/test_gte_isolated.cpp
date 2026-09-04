@@ -146,7 +146,7 @@ static void test_sequential_interleaving(void) {
 // binding is guest execution state, not host-thread state (USER, 2026-08-16: "we preserve PSX GTE as
 // is"). Guest code migrates across host threads (Coro spawns a thread per task) without ever running
 // concurrently with itself, so a per-thread binding unbinds the GTE from the guest — which segfaulted
-// PSXPORT_ORACLE=1 in every 3D scene for two days while this test stayed green. Concurrent GTE binding
+// Concurrent 3D execution failed for two days while this isolated test stayed green. GTE binding
 // from two host threads is therefore NOT a supported contract and is not tested here;
 // tests/test_gte_cross_thread.cpp pins the contract that IS real (a guest touch from an unbound thread
 // must land in the bound state). What survives from the old test is its genuinely valuable half, kept

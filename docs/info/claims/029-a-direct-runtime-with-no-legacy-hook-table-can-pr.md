@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: runtime,presentation,hooks
-depends: runtime/recomp/game_hooks_opt.cpp#game_render_fade_state, runtime/recomp/gpu_vk.cpp, tests/test_optional_hook_guards.cpp#test_fade_reader_handles_absent_table_and_calls_present_hook
+depends: runtime/psx/game_hooks_opt.cpp#game_render_fade_state, runtime/psx/gpu_vk.cpp, tests/test_optional_hook_guards.cpp#test_fade_reader_handles_absent_table_and_calls_present_hook
 reconfirmed: 2026-08-25
 verified_at: 2026-08-25 00:33:40
 ---

@@ -1,4 +1,4 @@
-// test_task_slot_layout.cpp — the scheduler task-SLOT address arithmetic (runtime/recomp/task_slot_
+// test_task_slot_layout.cpp — the scheduler task-SLOT address arithmetic (runtime/psx/task_slot_
 // layout.h), which three compare harnesses navigate and gate by: dualcore.cpp's REACH_GAME predicate,
 // selftest.cpp's stage machine, and sbs.cpp's auto-nav + MODE=skip observable gate + task-slot dump.
 //

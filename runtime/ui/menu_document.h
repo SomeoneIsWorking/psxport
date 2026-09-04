@@ -1,8 +1,7 @@
 // psx::ui::MenuDocument — the overlay menu as a component tree, and the only thing that knows the
 // DOM.
 //
-// SHAPE FROM DUSKLIGHT (CC0), `src/dusk/ui/document.{hpp,cpp}` + `window.{hpp,cpp}`: a document
-// object owns the loaded `ElementDocument`, holds the components built over it, and answers
+// A document object owns the loaded `ElementDocument`, holds the components built over it, and answers
 // show/hide/update/focus/nav — so the code that manages RmlUi's LIFETIME (contexts, interfaces,
 // fonts) never touches elements, and the code that manages ELEMENTS never touches RmlUi's lifetime.
 //
@@ -12,8 +11,7 @@
 // and the SDL key switch were all file-scope statics and member functions of one class. Nothing in
 // it could be constructed, exercised or reasoned about without an SDL_GPU device.
 //
-// WHAT THIS CLASS DELIBERATELY DOES NOT DO: build its own DOM. Dusklight's components call
-// `CreateElement`/`AppendChild`; ours adopt what `assets/rml/menu.rml` authored, because the menu's
+// This class does not build its own DOM. It adopts what `assets/rml/menu.rml` authored, because the menu's
 // structure is CONTENT — a game ships its own `menu.rml`, and the framework hard-coding Tomba!2's
 // six tabs in C++ would be the framework knowing a game. See ui_component.h.
 #ifndef PSXPORT_UI_MENU_DOCUMENT_H

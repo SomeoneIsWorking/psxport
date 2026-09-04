@@ -1,14 +1,14 @@
 // xa_wavdump — STANDALONE offline XA-ADPCM extractor for the Tomba!2 CHD.
 //
-// No game boot: opens the CHD directly (same by-LBA hunk read as runtime/recomp/disc.c) and decodes
+// No game boot: opens the CHD directly (same by-LBA hunk read as runtime/psx/disc.c) and decodes
 // a chan's XA-ADPCM audio over an LBA range to a WAV. The decoder is copied verbatim from
 // native_fmv.c (xa_decode_unit / xa_decode_sector) so the bytes match the port's playback path.
 //
 // Use: dump the gameplay area music (chan4 [84515..97979]) PLUS extra sectors past the game's end so a
 // human can hear whether the song keeps flowing past our loop point (= we loop early) and measure drift.
 //
-//   build: see tools/build_xa_wavdump.sh
-//   run:   PSXPORT_TOMBA2_DISC=<chd> tools/xa_wavdump <chan> <start_lba> <end_lba> <pad_sectors> <out.wav>
+//   build: see tools/build_xa_wavdump.py
+//   run:   tools/xa_wavdump <disc.chd> <chan> <start_lba> <end_lba> <pad_sectors> <out.wav>
 //          (the WAV holds [start .. end+pad]; it prints the timestamp where the port loops, = end+1)
 #include <libchdr/chd.h>
 #include <stdint.h>
@@ -16,7 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// ---- CHD by-LBA raw sector read (mirrors runtime/recomp/disc.c) -------------------------------
+// ---- CHD by-LBA raw sector read (mirrors runtime/psx/disc.c) -------------------------------
 #define RAW_FRAME 2448u
 static chd_file *s_chd;
 static uint32_t s_fph, s_hcount, s_hbytes, s_cached = 0xFFFFFFFFu;
@@ -134,22 +134,15 @@ static void u16(FILE *f, uint16_t v) {
 }
 
 int main(int argc, char **argv) {
-  if (argc < 6) {
-    fprintf(stderr, "usage: %s <chan> <start> <end> <pad> <out.wav>  (env PSXPORT_TOMBA2_DISC)\n", argv[0]);
+  if (argc != 7) {
+    fprintf(stderr, "usage: %s <disc.chd> <chan> <start> <end> <pad> <out.wav>\n", argv[0]);
     return 2;
   }
-  uint8_t chan = (uint8_t)atoi(argv[1]);
-  uint32_t start = (uint32_t)strtoul(argv[2], 0, 0), end = (uint32_t)strtoul(argv[3], 0, 0),
-           pad = (uint32_t)strtoul(argv[4], 0, 0);
-  const char *out = argv[5];
-  const char *disc = getenv("PSXPORT_TOMBA2_DISC");
-  if (!disc) {
-    disc = getenv("PSXPORT_DISC");
-  }
-  if (!disc) {
-    fprintf(stderr, "set PSXPORT_TOMBA2_DISC\n");
-    return 2;
-  }
+  const char *disc = argv[1];
+  uint8_t chan = (uint8_t)atoi(argv[2]);
+  uint32_t start = (uint32_t)strtoul(argv[3], 0, 0), end = (uint32_t)strtoul(argv[4], 0, 0),
+           pad = (uint32_t)strtoul(argv[5], 0, 0);
+  const char *out = argv[6];
   if (!disc_open(disc)) {
     return 1;
   }

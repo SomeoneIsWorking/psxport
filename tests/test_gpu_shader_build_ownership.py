@@ -40,14 +40,14 @@ def configure(source: Path, build: Path) -> None:
 
 
 def build_target(source: Path, build: Path, target: str = "shader_consumer") -> None:
-    run(["cmake", "--build", str(build), "--target", target], cwd=source)
+    run(["cmake", "--build", str(build), "--target", target, "--verbose"], cwd=source)
 
 
 def write_positive_fixture(repo: Path, fixture: Path) -> Path:
     fixture_root = fixture / "framework"
-    shader_dir = fixture_root / "runtime/recomp/shaders_gpu"
+    shader_dir = fixture_root / "runtime/psx/shaders_gpu"
     shader_dir.parent.mkdir(parents=True)
-    shutil.copytree(repo / "runtime/recomp/shaders_gpu", shader_dir)
+    shutil.copytree(repo / "runtime/psx/shaders_gpu", shader_dir)
     tool_dir = fixture_root / "tools"
     tool_dir.mkdir(parents=True)
     shutil.copy2(repo / "tools/gen_gpu_shaders.py", tool_dir / "gen_gpu_shaders.py")
@@ -127,7 +127,7 @@ def missing_include_answer(repo: Path, fixture: Path) -> bool:
 def write_legacy_fixture(fixture: Path) -> tuple[Path, Path]:
     source = fixture / "legacy"
     source.mkdir()
-    shared_header = fixture / "legacy-framework/runtime/recomp/gpu_vk_shaders.h"
+    shared_header = fixture / "legacy-framework/runtime/psx/gpu_vk_shaders.h"
     (source / "CMakeLists.txt").write_text(
         "\n".join(
             (
@@ -179,7 +179,7 @@ def main() -> int:
             checks["clean removes only its build-owned header"] = (
                 not headers[0].exists()
                 and headers[1].read_bytes() == peer_bytes
-                and not (fixture / "framework/runtime/recomp/gpu_vk_shaders.h").exists()
+                and not (fixture / "framework/runtime/psx/gpu_vk_shaders.h").exists()
             )
             checks["nested consumer missing include owner fails compilation"] = missing_include_answer(
                 repo, fixture

@@ -66,10 +66,14 @@ integration. Native overrides are for deliberately owned game behavior and prove
 
 ## Product and oracle separation
 
-The gameplay build has no CPU engine selector. It links Lightrec and native code only. Any interpreter
-or software-GPU oracle is built as a separate test target and cannot be selected by product config,
-command line, or UI. Lightrec's internal interpreter fallback is disabled; an unsupported block exits
-with a named error.
+The gameplay build has no CPU engine selector. Lightrec/native execution is always the default. A
+missing or unsupported dynarec backend fails by name. After successful initialization, automatic
+interpreter fallback may occur only when translation explicitly refuses a classified compilation
+failure, unsafe instruction fetch, rare unsupported block, or cache exhaustion. Each fallback call
+and instruction is counted, bounded per call and by total guest share, and exceeding either threshold
+returns a typed fault.
+An explicit interpreter mode or software-GPU oracle is test-only and cannot be selected by product
+config, command line, or UI.
 
 The oracle may share canonical state/memory interfaces, but comparison code never becomes a required
 player dependency. A consumer's `run.sh` launches the intended Lightrec/native product and never runs
@@ -95,7 +99,8 @@ A title is migrated only when:
 - relevant module reuse and executable invalidation pass positive and negative controls;
 - timing, interrupts, memory, and relevant device state are compared at named boundaries;
 - each released host architecture meets its declared correctness and frame-time budget;
-- product-link and selector audits find no interpreter or generated guest bodies; and
+- product-link and selector audits find no standalone interpreter mode or generated guest bodies,
+  and fallback counters remain below the declared threshold; and
 - the launcher, goals, state, codemap, issues, and player docs match the shipped path.
 
 Finish this title before beginning title-specific work for another PSX game.

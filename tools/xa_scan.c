@@ -1,6 +1,6 @@
 // xa_scan: walk every sector of the CHD and group XA-ADPCM AUDIO sectors by (file,channel) into
 // contiguous LBA ranges. Maps all streamed-audio streams on the disc (the conversation/event music
-// is XA, not sequenced). Run: PSXPORT_TOMBA2_DISC=<chd> xa_scan [chd]
+// is XA, not sequenced). Run: xa_scan <disc.chd>
 #include <libchdr/chd.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -36,9 +36,12 @@ static int rd(uint32_t lba, uint8_t *o) {
   return 1;
 }
 int main(int argc, char **argv) {
-  const char *p = argc > 1 ? argv[1] : getenv("PSXPORT_TOMBA2_DISC");
-  if (!p || !openc(p)) {
-    fprintf(stderr, "cannot open CHD (arg or PSXPORT_TOMBA2_DISC)\n");
+  if (argc != 2) {
+    fprintf(stderr, "usage: %s <disc.chd>\n", argv[0]);
+    return 2;
+  }
+  if (!openc(argv[1])) {
+    fprintf(stderr, "cannot open CHD: %s\n", argv[1]);
     return 1;
   }
   uint32_t total = hc * fph;

@@ -3,7 +3,7 @@
 //
 // WHAT THIS GATES, and why the old code could not be gated at all. `crt0_setup` used to compute the
 // whole crt0 inline in native_boot.cpp — a file that cannot be linked into a hermetic test (it reaches
-// rec_dispatch and the generated substrate). So the arithmetic that decides sp, gp and the InitHeap
+// runtime guest execution). So the arithmetic that decides sp, gp and the InitHeap
 // capacity for every port had NO test, and its two silent failure modes shipped:
 //   * a hardcoded `- 8` stack-top bias, right for four of five executables in this workspace;
 //   * `mem_w32(cfg->heapSizePtr, …)` with heapSizePtr == 0, i.e. a write to GUEST ADDRESS 0.

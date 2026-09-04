@@ -1,9 +1,7 @@
 // psx::ui::ScopedEventListener — an RmlUi event listener whose registration is its lifetime.
 //
-// SHAPE TAKEN FROM DUSKLIGHT (CC0), `src/dusk/ui/event.{hpp,cpp}`. Adapted only in namespace and
-// naming convention; the mechanism — register in the constructor, deregister in the destructor,
-// and null the element in OnDetach so a listener that outlives its element is inert rather than
-// dangling — is theirs and is the whole reason it is worth taking.
+// Registration is acquired in the constructor and released in the destructor. OnDetach nulls the
+// element so a listener that outlives its element becomes inert rather than dangling.
 //
 // WHAT IT REPLACES, and why that was a real hazard rather than a style nit: the overlay used to
 // hold `void* mTabListeners` (a heap `std::vector<std::unique_ptr<TabClick>>`) and `void*

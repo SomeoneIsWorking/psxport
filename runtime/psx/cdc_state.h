@@ -1,0 +1,109 @@
+// cdc_state.h — per-instance native CD-controller register state (cdc_native.cpp), so two Cores run with
+// SEPARATE CD-controller state (one native, one guest). The CXD1199-style register model
+// (index/bank, param/response/data FIFOs, the pending-interrupt queue, drive/read state) used to live
+// in file-scope statics in cdc_native.cpp; that mutable state now lives in this struct, one per Game
+// (game.h embeds it). cdc_read/cdc_write take the instance EXPLICITLY (the MMIO dispatcher in
+// mem.cpp passes &game->cdc) — no bound "current" pointer — so each core reads/writes only its own
+// CD registers; nothing is shared (the disc image itself is a read-only data source, see disc.cpp).
+//
+// Plain-aggregate struct: the vendored Beetle backends (still C) embed sibling state structs, so this
+// stays C-compatible even though cdc_native.cpp is now C++.
+#pragma once
+#include <stdint.h>
+
+typedef struct CdcIrqEnt {
+  uint8_t type;
+  uint8_t resp[16];
+  int len;
+} CdcIrqEnt;
+
+typedef uint64_t (*CdcTickNowFn)(void *context);
+typedef int (*CdcDiscReadRawFn)(struct DiscState *, uint32_t, uint8_t *, uint32_t);
+typedef int (*CdcDiscReadSectorFn)(struct DiscState *, uint32_t, uint8_t *);
+typedef int (*CdcDiscGetSubqPositionFn)(struct DiscState *, uint32_t, uint8_t *);
+
+typedef struct CdcState {
+  int index;                      // 0x1F801800 low 2 bits (register bank)       (was s_index)
+  uint8_t param[16];              // param FIFO                                  (was s_param)
+  int param_n;                    //                                            (was s_param_n)
+  uint8_t data[2340];             // sector data FIFO                            (was s_data)
+  int data_n, data_rd;            //                                            (was s_data_n/s_data_rd)
+  uint8_t irq_en;                 // interrupt enable register                   (was s_irq_en)
+  uint8_t stat;                   // drive status byte (bit1 = motor on)         (was s_stat, init 0x02)
+  uint32_t loc_lba;               // current physical sector
+  uint32_t command_lba;           // Setloc target, applied by ReadN/ReadS/Seek
+  uint8_t mode;                   // Setmode                                     (was s_mode)
+  uint8_t filter_file;            // Setfilter file
+  uint8_t filter_chan;            // Setfilter channel
+  int reading;                    // ReadN/ReadS active                          (was s_reading)
+  uint8_t first_sector_pending;   // ReadN accepted; first data sector waits for its drive deadline
+  uint8_t bfrd;                   // request-register BFRD latch (bit 7): 1 until explicitly deasserted
+  uint8_t following_sector_ready; // drive-side next-sector availability, independent of data FIFO drain
+  uint8_t drive_event_armed;      // one following-sector deadline is outstanding
+  uint64_t drive_deadline_ticks;  // absolute timestamp in the injected guest-instruction domain
+  uint8_t command_event_armed;    // command receive/execute/completion deadline is outstanding
+  uint8_t pending_command;        // command register value captured at the latest write
+  int8_t command_phase;           // -1 receive start, 0 arguments, 1 execute, 2 complete
+  uint8_t command_arg_latch;      // argument currently crossing the controller receive boundary
+  uint8_t command_args[16];       // arguments consumed by the active command
+  uint8_t command_arg_n;
+  uint64_t command_deadline_ticks;
+  void *tick_context;
+  CdcTickNowFn tick_now;
+  CdcIrqEnt q[8];                          // pending-interrupt queue                     (was s_q)
+  int q_head, q_tail, resp_rd;             //                                     (was s_q_head/s_q_tail/s_resp_rd)
+  uint64_t irq_sequence;                   // increments whenever a response becomes current
+  uint8_t irq_edge;                        // 1 = the controller just RAISED an interrupt and nothing has latched
+                                           // it yet. The MMIO dispatcher (mem.cpp) consumes this and sets I_STAT
+                                           // bit 2, which is edge-triggered on real hardware: acking the CD
+                                           // controller at 0x1F801803 does NOT clear I_STAT, and a queued second
+                                           // response raises a FRESH edge as it becomes current. Kept here rather
+                                           // than reaching for I_STAT directly because this model has no Game
+                                           // pointer.
+  struct DiscState *disc;                  // Game-owned disc backend (wired by Game())
+  struct XaState *xa;                      // Game-owned XA-ADPCM ring (wired by Game()): the drive decodes
+                                           // audio sectors into it when STRSND routing applies (beetle parity)
+  CdcDiscReadRawFn disc_read_raw_fn;       // sector source; cdc_state_init defaults these to the
+  CdcDiscReadSectorFn disc_read_sector_fn; // real disc.cpp readers so tests can inject fake sectors
+  CdcDiscGetSubqPositionFn disc_get_subq_position_fn;
+} CdcState;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+// Initialize a fresh CdcState to power-on defaults (stat=0x02, everything else 0). Called by Game().
+void cdc_state_init(CdcState *s);
+// Inject the deterministic guest-instruction clock. Production binds Timing; hermetic tests bind a fake
+// counter and call cdc_drive_service through the same controller path.
+void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now);
+// Service due drive and command events on the guest thread. Returns 1 only when a response became
+// current and raised a new controller IRQ edge; an early wake leaves existing deadlines armed.
+int cdc_drive_service(CdcState *s);
+// Read the current controller response type without consuming its response FIFO. Zero means the
+// queue is empty. Stream callback owners use this to dispatch only for a real INT1 data-ready
+// response, never from a host-side pacing estimate alone.
+uint8_t cdc_current_irq_type(const CdcState *s);
+// MMIO 0x1F801800-3 register model — the instance is explicit (mem.cpp passes &game->cdc).
+uint32_t cdc_read(CdcState *s, uint32_t p);
+void cdc_write(CdcState *s, uint32_t p, uint8_t v);
+// DMA3 (CDROM -> RAM) controller read, called by the DMA3 CHCR model in mem.cpp. Writes every
+// requested output word: FIFO data first, then the controller's zero value after depletion. Returns
+// the FIFO-sourced word count so the caller can report the exact zero-filled denominator.
+int cdc_dma_read(CdcState *s, uint32_t *out, int words);
+// Position the controller at `lba` and load that sector into the data FIFO, so a guest driving the
+// hardware directly (XA/streaming: spin on DRQSTS, then DMA3) sees real data even when the libcd
+// file-read path is served natively. Both layers read the same disc image.
+void cdc_begin_read(CdcState *s, uint32_t lba);
+// Mirror a Setmode the native CD layer intercepted into the controller model. Bit 0x20 decides
+// whether the data FIFO presents whole sectors (header + subheader + data) or user data only, and a
+// streaming reader depends on that framing to identify sector types.
+void cdc_set_mode(CdcState *s, uint8_t mode);
+// Mirror Setfilter into the controller model. MODE_SF uses this pair to route only the selected
+// XA file/channel to the SPU, matching the vendor CDC's PS_CDC_XA_Test predicate.
+void cdc_set_filter(CdcState *s, uint8_t file, uint8_t channel);
+// Return whether a raw Mode2 sector is the selected XA stream under the current controller mode.
+// This is the exact production routing predicate, exposed for a hermetic regression test.
+int cdc_xa_sector_selected(const CdcState *s, const uint8_t *raw);
+#ifdef __cplusplus
+}
+#endif

@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-24
 tags: renderer,inheritance,vram
-depends: runtime/recomp/game_runtime.cpp#game_guest_vram_is_picture, runtime/recomp/gpu_vk.cpp#GpuVkState::present, runtime/recomp/guest_vram_composite_policy.h, tests/test_guest_vram_composite_policy.cpp
+depends: runtime/psx/game_runtime.cpp#game_guest_vram_is_picture, runtime/psx/gpu_vk.cpp#GpuVkState::present, runtime/psx/guest_vram_composite_policy.h, tests/test_guest_vram_composite_policy.cpp
 reconfirmed: 2026-08-25
 verified_at: 2026-08-25 00:33:40
 ---

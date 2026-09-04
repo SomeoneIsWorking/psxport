@@ -1,4 +1,4 @@
-// test_producer_scope.cpp — stage 3 of the graphics-producer DB (docs/plans/graphics-producer-db.md):
+// test_producer_scope.cpp — native renderer producer attribution lifetime:
 // the NATIVE-LEG feed. Does a native producer's emissions get attributed to that producer, and — the
 // half that matters — are emissions with NO producer declared counted as a REAL NUMBER rather than
 // silently dropped?

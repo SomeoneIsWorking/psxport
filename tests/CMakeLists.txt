@@ -24,8 +24,7 @@ endif()
 foreach(test_src IN LISTS PSXPORT_TEST_SRCS)
   get_filename_component(test_name ${test_src} NAME_WE)
   add_executable(${test_name} ${test_src})
-  # C++17 matches the framework library (cmake/psxport.cmake), so tests compile the framework headers
-  # exactly as libpsxport.a was compiled.
+  # Match the framework's C++20 contract so tests compile public headers exactly as libpsxport.a.
   set_target_properties(${test_name} PROPERTIES
     # C++20, matching the library. 17 was a trap: the house rule is that diagnostics go through
     # lucent, and <lucent/log.h> needs std::format_string — so the first test of any logging unit
@@ -37,9 +36,8 @@ foreach(test_src IN LISTS PSXPORT_TEST_SRCS)
   # Linking libpsxport gives a test the whole framework plus its PUBLIC include dirs. It is a static
   # archive, so only the objects a test actually references are pulled in — a test of one unit does
   # not drag in the renderer. A test that reaches a unit which calls into the game substrate will
-  # fail to LINK on the generated/ symbols (main_dispatch, g_rec_overlays, rec_func_index); that is
-  # the framework/game seam telling you the unit is not framework-testable in isolation, not a bug
-  # in the harness.
+  # fail to LINK on title-owned symbols; that is the framework/game seam telling you the unit is not
+  # framework-testable in isolation, not a bug in the harness.
   target_link_libraries(${test_name} PRIVATE psxport)
 
   add_test(NAME ${test_name} COMMAND ${test_name})
@@ -56,15 +54,21 @@ endforeach()
 list(LENGTH PSXPORT_TEST_SRCS _n_tests)
 message(STATUS "psxport tests: ${_n_tests} discovered in ${CMAKE_CURRENT_SOURCE_DIR}")
 
-# Repository C++ policy: Clang formatting, structure caps, and clang-tidy against every first-party
-# C++ translation unit represented in the real compile database. This is a normal test, not a hook.
+# Repository policy: whole-tree architecture references plus Clang formatting, structure caps, and
+# clang-tidy against every first-party C++ translation unit represented in the real compile database.
+# These are normal tests, not hooks.
+add_test(NAME repository_policy
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_cpp_style.py
+                 --root ${CMAKE_CURRENT_SOURCE_DIR}/..
+                 --repository-only)
 add_test(NAME cpp_style
-         COMMAND ${CMAKE_COMMAND} -E env python3
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_cpp_style.py
                  --root ${CMAKE_SOURCE_DIR}
                  --compile-commands ${CMAKE_BINARY_DIR})
 add_test(NAME cpp_style_selftest
-         COMMAND ${CMAKE_COMMAND} -E env python3
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_cpp_style.py --selftest)
 
 # tool_selftests — run every psxport tool's own --selftest, and NAME the tools that have none.
@@ -74,44 +78,55 @@ add_test(NAME cpp_style_selftest
 # answers) — that part is hermetic and belongs in ctest. Sweeping the real tools/ directory is NOT wired
 # in here: several tools need a disc, a live debug server, or Ghidra, so a ctest over them would be
 # environment-dependent and would fail for reasons that are not defects. Run that sweep by hand:
-#     python3 scripts/tool_selftests.py tools
+#     uv run --frozen python scripts/tool_selftests.py tools
 # Measured 2026-08-13: of 24 framework tools, only 2 have a selftest that runs and passes here, 17 have
 # none at all, and 3 are Ghidra-only. That backlog is the finding, not this test.
 add_test(NAME tool_selftests_classifier
-         COMMAND ${CMAKE_COMMAND} -E env python3
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/tool_selftests.py --selftest)
 
 # The "does it look right" checks a difference count structurally cannot make: widescreen that changes
 # nothing, and an fps60 that inserts a duplicate frame. Only the tool's own verdict selftest is hermetic;
 # driving a port needs a disc and a GPU, so that invocation is per-repo and by hand (see its --help).
 add_test(NAME looks_right_selftest
-         COMMAND ${CMAKE_COMMAND} -E env python3
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/looks_right.py --selftest)
 
-add_test(NAME psexe_loader
-         COMMAND ${CMAKE_COMMAND} -E env python3
-                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/test_psexe.py)
-
-add_test(NAME recomp_emitter
-         COMMAND ${CMAKE_COMMAND} -E env python3
-                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/test_emit.py)
-
-add_test(NAME recomp_decoder
-         COMMAND ${CMAKE_COMMAND} -E env python3
-                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/test_decode.py)
-
 add_test(NAME gpu_shader_generator
-         COMMAND ${CMAKE_COMMAND} -E env python3
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/gen_gpu_shaders.py --selftest)
 
 add_test(NAME gpu_shader_build_ownership
-         COMMAND ${CMAKE_COMMAND} -E env python3
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_gpu_shader_build_ownership.py)
 
 add_test(NAME cmake_test_ownership
-         COMMAND ${CMAKE_COMMAND} -E env python3
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_cmake_test_ownership.py)
 
+add_test(NAME lightrec_dependency_ownership
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_lightrec_dependency_ownership.py)
+
+add_test(NAME psx_exe_reader
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_psx_exe.py)
+
+add_test(NAME execution_boundary_selftest
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_execution_boundary.py --selftest)
+
+set(_execution_boundary_args
+    --root ${CMAKE_CURRENT_SOURCE_DIR}/..
+    --cmake ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/psxport.cmake)
+if(TARGET psxport_smoke)
+  list(APPEND _execution_boundary_args --binary $<TARGET_FILE:psxport_smoke>)
+endif()
+add_test(NAME execution_boundary_product
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_execution_boundary.py
+                 ${_execution_boundary_args})
+
 add_test(NAME launch_environment_policy
-         COMMAND ${CMAKE_COMMAND} -E env python3
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/test_launch_environment.py)

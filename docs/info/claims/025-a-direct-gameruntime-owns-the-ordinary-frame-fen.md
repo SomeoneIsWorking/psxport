@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: presentation,runtime
-depends: runtime/recomp/frame_presenter.h, runtime/recomp/frame_presenter.cpp, runtime/recomp/game.h, runtime/recomp/game_runtime.h, runtime/recomp/game_runtime.cpp, tests/test_direct_runtime_no_temporal_link.cpp, tests/test_frame_presenter_contract.cpp
+depends: runtime/psx/frame_presenter.h, runtime/psx/frame_presenter.cpp, runtime/psx/game.h, runtime/psx/game_runtime.h, runtime/psx/game_runtime.cpp, tests/test_direct_runtime_no_temporal_link.cpp, tests/test_frame_presenter_contract.cpp
 reconfirmed: 2026-08-24
 verified_at: 2026-08-24 23:01:26
 ---

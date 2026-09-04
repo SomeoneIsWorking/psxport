@@ -3,7 +3,7 @@
 PC-native engine port. The whole top-down reimplementation needs, per engine function, the EXACT
 memory effects: which absolute addresses it reads/writes and at what WIDTH (sb/sh/sw) — guessing a
 width silently breaks the interface state the retained PSX content reads back (later-158/159). Ghidra's
-`DAT_*` decomp hides widths; the recompiler only covers part of the binary. So this resolves `lui+
+`DAT_*` decomp hides widths and no one view covers the complete binary. So this resolves `lui+
 addiu/ori` address-builds and annotates every load/store with its resolved target + width.
 
 Usage:
@@ -20,9 +20,9 @@ Resolution is intraprocedural and immediate-only (tracks regs built by lui/ori/a
 a target shows as `?` when the base isn't an immediate (e.g. a struct pointer passed in a0). That's
 expected — it still tells you the width and the base register.
 """
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "recomp"))
-import psexe
+import sys
+
+from formats import psx_exe
 
 REG = ["zero","at","v0","v1","a0","a1","a2","a3","t0","t1","t2","t3","t4","t5","t6","t7",
        "s0","s1","s2","s3","s4","s5","s6","s7","t8","t9","k0","k1","gp","sp","fp","ra"]
@@ -155,7 +155,7 @@ def main():
         print(__doc__); return 1
     start = int(pos[0], 16)
     count = int(pos[1]) if len(pos) > 1 else (65536 if follow_all else 4096)
-    exe = psexe.load_ram(exe_path) if ram else psexe.load(exe_path)
+    exe = psx_exe.load_ram(exe_path) if ram else psx_exe.load(exe_path)
     regval = [None] * 32; regval[0] = 0
     a = start
     print(f";; {exe_path}  0x{start:08x}")

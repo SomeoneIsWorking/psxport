@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-26
 tags: bios,c0,crash
-depends: runtime/recomp/hle.cpp#Hle::workAreaInit, tools/oracle/oracle_trace.c#main, tests/test_bios_work_area.cpp#main
+depends: runtime/psx/hle.cpp#Hle::workAreaInit, tools/oracle/oracle_trace.c#main, tests/test_bios_work_area.cpp#main
 reconfirmed: 2026-08-26
 verified_at: 2026-08-26 23:30:36
 ---

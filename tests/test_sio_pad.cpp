@@ -6,7 +6,7 @@
 // sequence, WHICH bytes are acknowledged, and — the part a "responds instantly" model gets wrong —
 // that the /ACK is a DEADLINE, late enough that a driver which clears I_STAT bit 7 after sending a
 // byte still sees that byte's ack afterwards.
-#include "../runtime/recomp/game.h"
+#include "../runtime/psx/game.h"
 #include "testutil.h"
 
 namespace {

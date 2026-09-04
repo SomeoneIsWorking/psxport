@@ -2,8 +2,10 @@
 #
 # Each configured build must own both the header and its dependency stamp. Registering a source-tree
 # header as a BYPRODUCT lets `clean` in any consumer delete the input of every other consumer.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
 function(psxport_add_gpu_shaders psxport_root target)
-  set(shader_runtime_dir ${psxport_root}/runtime/recomp)
+  set(shader_runtime_dir ${psxport_root}/runtime/psx)
   file(GLOB shader_sources CONFIGURE_DEPENDS
     ${shader_runtime_dir}/shaders_gpu/*.vert
     ${shader_runtime_dir}/shaders_gpu/*.frag
@@ -17,7 +19,7 @@ function(psxport_add_gpu_shaders psxport_root target)
   # change. A timestamp-only shader edit recompiles GLSL without rebuilding header consumers.
   add_custom_command(OUTPUT ${shader_stamp}
     BYPRODUCTS ${shader_header}
-    COMMAND ${shader_generator} --output ${shader_header} --stamp ${shader_stamp}
+    COMMAND "${Python3_EXECUTABLE}" ${shader_generator} --output ${shader_header} --stamp ${shader_stamp}
     DEPENDS ${shader_sources} ${shader_generator}
     WORKING_DIRECTORY ${psxport_root}
     COMMENT "Generating SDL_GPU SPIR-V header (gpu_vk_shaders.h)"
@@ -26,7 +28,7 @@ function(psxport_add_gpu_shaders psxport_root target)
   # Makefile generators do not rebuild a missing BYPRODUCT from a current stamp. This cheap
   # existence guard invokes the same authoritative generator before any C++ target can include it.
   add_custom_target(gen_gpu_shaders
-    COMMAND ${shader_generator} --output ${shader_header} --stamp ${shader_stamp}
+    COMMAND "${Python3_EXECUTABLE}" ${shader_generator} --output ${shader_header} --stamp ${shader_stamp}
     DEPENDS ${shader_stamp}
     WORKING_DIRECTORY ${psxport_root}
     VERBATIM)

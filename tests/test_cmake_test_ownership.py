@@ -88,7 +88,7 @@ def main() -> int:
         opted_in_build = work / "opted-in"
         configure(source, opted_in_build, framework_tests=True)
         opted_in_names = set(test_names(opted_in_build))
-        for expected in ("consumer_probe", "oracle_spike", "test_fmv_watchdog", "cpp_style", "psexe_loader"):
+        for expected in ("consumer_probe", "oracle_spike", "test_fmv_watchdog", "cpp_style", "psx_exe_reader"):
             checks.true(expected in opted_in_names, f"explicit opt-in did not register {expected}")
         checks.true(len(opted_in_names) >= 68, "explicit opt-in registered too few framework tests")
     finally:

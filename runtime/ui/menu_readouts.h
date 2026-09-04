@@ -6,10 +6,8 @@
 // reported, once at construction, is WHICH of them were found — so "the world line never updates"
 // can be told apart from "there is no world line in this document", which the old code could not
 // distinguish because every write went through a null-tolerant setter and said nothing either way.
-//
-// SHAPE FROM DUSKLIGHT (CC0): the readouts are their own component with their own `update()`, the
-// way `src/dusk/ui/graphics_tuner.{hpp,cpp}` owns its live rows, rather than four `GetElementById`
-// lookups repeated inside the overlay's per-frame function.
+// Keeping readouts in their own component avoids repeating four `GetElementById` lookups inside the
+// overlay's per-frame function.
 #ifndef PSXPORT_UI_MENU_READOUTS_H
 #define PSXPORT_UI_MENU_READOUTS_H
 

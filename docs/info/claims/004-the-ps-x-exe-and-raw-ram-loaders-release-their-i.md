@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-21
 tags: tooling,resource-ownership
-depends: tools/recomp/psexe.py, tools/recomp/test_psexe.py
+depends: tools/formats/psx_exe.py, tests/test_psx_exe.py
 reconfirmed: 2026-08-21
 verified_at: 2026-08-21 11:09:16
 ---
@@ -15,7 +15,8 @@ The PS-X EXE and raw-RAM loaders release their input file on successful parsing 
 
 ## Evidence
 
-2026-08-21: tools/recomp/test_psexe.py passed 12/12 using retained tracking streams for valid EXE, invalid EXE, and RAM loads.
+`tests/test_psx_exe.py` uses retained tracking streams for valid EXE, invalid EXE, and RAM
+loads.
 
 ## What would falsify it
 
@@ -23,5 +24,4 @@ A loader leaves its retained input stream open after returning or raising, or a 
 
 ## Re-confirmed 2026-08-21
 
-Retained tracking streams closed after valid EXE, invalid-magic refusal, and RAM load; the psexe
-loader passed 12/12. Post-integration standalone Clang CTest passed psexe_loader as part of 74/74.
+Retained tracking streams closed after valid EXE, invalid-magic refusal, and RAM load.

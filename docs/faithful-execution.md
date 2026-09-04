@@ -1,7 +1,7 @@
 # Faithful execution boundaries
 
 Faithful execution is the observable PSX contract the native/Lightrec product preserves before
-intentional enhancements. It is not a generated-C equivalence workflow.
+intentional enhancements.
 
 ## One architectural state
 
