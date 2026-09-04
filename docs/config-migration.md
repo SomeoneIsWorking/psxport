@@ -122,12 +122,14 @@ Facts that follow, each one checkable:
 
 ---
 
-## What is taken from Dusklight, and what is deliberately not
+## Source provenance and psxport-owned decisions
 
-Read: `~/repo/dusklight` @ HEAD, `src/dusk/config_var.hpp` (387 lines), `src/dusk/config.hpp` (194),
-`src/dusk/config.cpp` (641). CC0.
+The CVar implementation was adapted from the CC0-licensed Dusklight sources
+`src/dusk/config_var.hpp`, `src/dusk/config.hpp`, and `src/dusk/config.cpp`. This section preserves
+that provenance and identifies which mechanics crossed; psxport's requirements and tests own every
+precedence and persistence decision.
 
-**Taken.**
+**Adapted mechanics.**
 
 - **The layer enum as the single source of precedence.** `ConfigVarLayer { Default, Value, Override,
   Speedrun }` with `getValue()` a `switch` over the layer (`config_var.hpp:207-222`). One value is
@@ -151,7 +153,8 @@ Read: `~/repo/dusklight` @ HEAD, `src/dusk/config_var.hpp` (387 lines), `src/dus
   does not exist cannot quietly read as "off".
 - **`EnumerateRegistered` + `getLayer()`** (`config.hpp:139`, `config_var.hpp:127`) — the built-in
   answer to "which CVars exist and where is each one resolving from".
-- **The header split.** `config_var.hpp` = access only, safe to include widely; `config.hpp` = define,
+- **The header split.** The source separates lightweight access from mutation/load/save machinery.
+  psxport's `config_var.hpp` = access only, safe to include widely; `config.hpp` = define,
   mutate, load, save, and it pulls in `nlohmann/json`. Its own comment says "Avoid including this
   header in the entire game, it's heavier than I'd like!" psxport has ~800 files that want to *read*
   config and a dozen that want to *define* it; the same split applies unchanged.
@@ -159,12 +162,11 @@ Read: `~/repo/dusklight` @ HEAD, `src/dusk/config_var.hpp` (387 lines), `src/dus
   being ad-hoc setters. Note their explicit rule: load and launch-arg application do **not** notify,
   because subsystems read their own initial value at init.
 
-**Not taken.**
+**Rejected for psxport.**
 
 - `nlohmann::json` as the file format. psxport's settings file is `key=value` and three games ship
-  with existing files; the CVar core should keep that format (a `dumpToText`/`loadFromText` impl
-  pair) rather than orphan them. The Dusklight shape does not depend on JSON — only `ConfigImplBase`'s
-  three virtuals do.
+  with existing files; the CVar core keeps that format through its own `dumpToText`/`loadFromText`
+  implementation rather than orphaning them.
 - The `Speedrun` layer as named. psxport has no speedrun mode. The slot it occupies — *a temporary,
   never-persisted layer that a launch argument still outranks* — is exactly what the REPL /
   debug-server needs, so take the slot and call it **`Runtime`**.

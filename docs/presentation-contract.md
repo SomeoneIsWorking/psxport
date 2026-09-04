@@ -29,9 +29,9 @@ the same fence. `Fps60::frame_commit` remains a bounded compatibility entry, whi
 chokes use the checked `fps60(Game&)` accessor. A direct-runtime link falsifier proves that constructing
 and committing a neutral `Game` does not link `Fps60` symbols.
 
-This follows Dusklight's ownership shape: the game-clock/presentation boundary is neutral, while
-interpolation is composed only on the path that needs previous/current temporal state. It copies the
-separation, not Dusklight's platform-specific names or implementation.
+The ownership follows from psxport's own state boundary: the game-clock/presentation fence is neutral,
+while interpolation is composed only on a path that owns previous/current temporal state. Neither the
+neutral path nor a non-temporal title depends on interpolation code.
 
 ## Title-declared presentation capabilities
 

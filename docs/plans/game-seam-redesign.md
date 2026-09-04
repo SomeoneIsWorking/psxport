@@ -147,15 +147,14 @@ code and forces spider1 to fail-fast-fence an entire framework spine, and (c) it
 port's author read 700 lines of another game's choreography to learn which half is reusable. The
 redesign's payoff is a frame loop and scheduler the NEXT port can subclass instead of fork.
 
-### 1.3 The precedent to copy (consulted per standing instruction)
+### 1.3 Dependency direction
 
-Dusklight (`~/repo/dusklight`, CC0) splits exactly here: everything game-shaped — the loop, frame
-interpolation, config, saves — lives in the GAME tree (`src/dusk/*`) and CALLS the platform layer
-(aurora); aurora carries no Twilight Princess addresses and no callback enum naming Zelda systems.
-The dependency points one way: game → platform. Spyro's `frame_loop.cpp` converged on the same
-shape independently, under measurement pressure. That is the shape this plan adopts: **the game is
-the application; psxport is a library with a few well-typed extension points** — not a framework
-that phones one game's engine.
+The boundary follows from ownership: game loops, title interpolation, saves, and title-specific
+configuration change with the game and therefore live in the game repository. PSX devices, host
+platform services, and reusable execution mechanics change with the framework and live in psxport.
+The dependency points one way: game → framework. Spyro's measured `frame_loop.cpp` boundary confirms
+that this split works in an existing consumer. **The game is the application; psxport is a library
+with a few well-typed extension points**, not a framework that calls back into one game's engine.
 
 ---
 

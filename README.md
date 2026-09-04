@@ -1,119 +1,110 @@
 # psxport
 
-A **game-agnostic framework for porting PlayStation (PSX) games to native PC** by static
-recompilation plus a native hybrid runtime.
+psxport is the reusable PlayStation half of native PC game ports. Its intended product combines
+verified host-native functions and subsystems with a Lightrec dynamic recompiler for every remaining
+MIPS R3000A instruction. The user's original game image is authenticated and consumed at runtime;
+the shipped path does not generate or compile guest functions ahead of time.
 
-psxport statically recompiles a PSX game's MIPS R3000A machine code into native C, then runs it
-under a native platform layer — so the port behaves like a PC program, not an emulator. On top of
-that substrate, a game repo reimplements the game's own engine in native C++, growing ownership
-function by function and verifying each step for byte-exactness against the recompiled reference.
+This repository contains framework code only. It owns PSX CPU integration, GPU, SPU, GTE, MDEC, CD,
+XA/FMV, BIOS/SDK HLE, rendering, input/platform services, and title-neutral verification seams. A game
+repository supplies title identity, native overrides, frame/task policy, and the legally obtained game
+files. psxport never includes game headers or title-specific addresses.
 
-This repository is the **reusable framework only** — it carries no game code and `#include`s nothing
-from a game. It is consumed as a submodule by a game repository; the reference consumer is
-[**Tomba2Engine**](https://github.com/SomeoneIsWorking/Tomba2Engine), a native reimplementation of
-*Tomba! 2*.
+## Current status
 
----
+The native platform owners and several title seams are already exercised by maintained consumers, but
+the product CPU migration has not landed. The current tree still contains the offline MIPS-to-C
+pipeline, generated-code dispatch interfaces, an in-library interpreter, and a runtime engine selector.
+Those are open migration gaps, not the target architecture. See
+[`docs/project-state.md`](docs/project-state.md) for the factual inventory and
+[`docs/migration.md`](docs/migration.md) for the implementation order.
 
-## What it provides
+The settled target is:
 
-- **A MIPS→C static recompiler** (`tools/recomp/`) — translates a PSX executable into emitted C
-  (`shard_*.c`), the "substrate" the port runs on. The generated code is sacrosanct: mistranslations
-  are fixed in the recompiler, never by hand-editing the output.
-- **A PSX platform layer** (`runtime/recomp/`) — native implementations of the hardware a PSX game
-  needs: GPU, SPU (audio), GTE (geometry), MDEC (video), CD/XA/FMV, and BIOS/SDK HLE. The
-  GTE/MDEC/SPU/CHD hardware backend comes from a vendored **beetle-psx** fork (a nested submodule).
-- **A side-by-side (SBS) differential-compare harness** — runs the native path and the recompiled
-  reference in lockstep and byte-compares guest state each frame, so any divergence in the port is
-  caught immediately.
-- **A native (SDL_GPU) renderer** — the drawing backend for both the substrate's PSX render path and
-  a game's own native renderer.
-- **The `psxport` static library** — everything above, linkable into a game.
+- one maintained Lightrec revision pinned directly by psxport;
+- one Lightrec state per live `Core`;
+- native overrides keyed by authenticated image/module generation plus guest address;
+- normal calls that honor overrides and scoped original calls that execute the guest body through
+  Lightrec without recursion;
+- explicit state synchronization, bounded executor exits, and executable-memory invalidation; and
+- no interpreter or generated guest corpus in gameplay objects, links, selectors, UI, or fallbacks.
 
-### The game seam
+Lightrec owns its translated-block cache and executable memory. psxport does not duplicate those
+mechanisms through `jit-common`; it owns only the PSX-specific integration around the embedded core.
 
-The framework reaches a game **only** through a small interface, so it stays game-agnostic:
+## Framework boundary
 
-- `runtime/recomp/game_runtime.h` — the derived `GameRuntime` authority, including the immutable
-  `GuestProgramImage` fact group and an opaque per-Core game context. `game_iface.h` contains only the
-  bounded `GameConfig`/`GameHooks` migration adapter.
-- `runtime/recomp/recomp_iface.h` — the `RecompRegistry` for the generated substrate.
+The target CPU ownership is split under `runtime/cpu/`:
 
-The `psxport_smoke` target links the library against a zero-game stub to prove the framework builds
-and links with **no game symbols**.
+| Owner | Responsibility |
+| --- | --- |
+| Lightrec executor | One per-`Core` Lightrec lifetime and bounded execution |
+| State bridge | GPR, HI/LO, PC/delay state, CP0, GTE, interrupt, and cycle synchronization |
+| Code identity | Authenticated resident/module identity and load generation |
+| Native dispatch | Image-scoped overrides and one-call original dispatch |
+| Invalidation | CPU/DMA/loader/debugger/savestate executable-write notification |
+| Execution exit | Typed budget, native/HLE, interrupt, frame, thread, and fault exits |
 
----
+Existing console and host owners remain under `runtime/recomp/` until their responsibility-driven
+moves are implemented. The complete current/target placement map is
+[`docs/codemap.md`](docs/codemap.md).
+
+## Interpreter and oracle policy
+
+PSX is not choosing between an interpreter and a JIT. The gameplay executor is Lightrec. An
+interpreter may exist only in a separately built test/oracle target and must not be present in the
+`psxport` gameplay library or any consumer product. The product also cannot use Lightrec's internal
+interpreter fallback; difficult or unsupported blocks must fail by name until the dynarec handles
+them.
+
+Independent emulator, hardware, binary, and test-only interpreter evidence may diagnose divergence.
+Boot logos, menus, and FMV are checkpoints, not representative-gameplay conformance.
 
 ## Requirements
 
-- **Linux:** `cmake`, `pkg-config`, `SDL3`, `libzstd`, `zlib`, `python3`, a C/C++ toolchain.
-- **macOS:** `brew install cmake pkg-config sdl3 zstd zlib python3`
-- A **Vulkan-capable GPU + drivers**.
+- Linux or macOS with CMake, Ninja, pkg-config, SDL3, zstd, zlib, Python, and a supported C/C++
+  compiler.
+- A Vulkan-capable GPU and driver for the current renderer.
+- Legally obtained game files supplied by each consumer; no game data or BIOS is shipped here.
 
-## Building
+The direct Lightrec dependency and its exact maintained revision will be added by the migration. It
+must be pinned through normal dependency metadata; local patch files and an indirectly bundled copy
+inside the Beetle hardware backend are not acceptable product dependencies.
 
-psxport is a library, not a runnable game — the build produces the framework artifacts (the static
-library, the `psxport_smoke` link test, and the `discdump` CHD tool):
+## Framework development
 
-```bash
-git clone --recursive https://github.com/SomeoneIsWorking/psxport.git
-cd psxport
-cmake -S . -B build
-cmake --build build --target psxport        # the static library
-cmake --build build --target psxport_smoke  # agnosticism proof (standalone stub; no game code)
-cmake --build build && ctest --test-dir build --output-on-failure   # the framework test gate
+psxport is a library, not a standalone game. Current framework-only builds are configured explicitly;
+agents use Clang and Ninja for verification:
+
+```sh
+CXX=clang++ cmake -S . -B build -G Ninja
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-The test suite is **hermetic** — no disc image, no GPU, no window — because psxport is shared by
-several game ports and each of them needs a disc to run at all. Adding a test means dropping one
-`tests/test_*.cpp` file in (they are globbed, not listed). See
-[`docs/project-map.md`](docs/project-map.md#tests--ctest-the-framework-gate-tests).
+Do not interpret this command as proof that the dynamic product exists today. During the plans-first
+migration, use only documentation validation. Once implementation begins, focused tests cover the
+production executor seams and the combined gate runs after the semantic batch is frozen.
 
-To actually run a game, use a consumer repo (e.g. Tomba2Engine), which vendors psxport as a submodule
-and supplies the game code + the disc image.
-
-**Porting a new PSX game:** see `docs/porting-a-new-psx-game.md` and `docs/port-framework.md`.
-
----
-
-## Project structure
-
-```
-runtime/recomp/   the PSX platform + substrate glue: MIPS interp, dispatch, HLE/boot, GPU/SPU/GTE/
-                  MDEC/CD natives, the CD/XA/FMV subsystems, the SBS harness, and the game_iface seam
-tools/            the MIPS→C recompiler (tools/recomp/) + framework tooling
-                  (abi_extract.py, decomp.sh, dbgclient.py, disasm.py, …)
-common/           shared host utilities (filesystem, env, …)
-vendor/           beetle-psx (nested submodule): GTE/MDEC/SPU/CHD hardware backend
-cmake/            build definitions (psxport.cmake)
-bios/  assets/    supply-your-own inputs (BIOS, etc.) — never shipped
-docs/             framework architecture, config channels, ABI/port-framework notes
-tests/            framework tests
-```
-
----
+Consumers provide the runnable product and user-facing launcher. The launcher must authenticate the
+user's game image and start the Lightrec/native hybrid without Ghidra, an offline translator, a
+generated corpus, or an engine-selection flag.
 
 ## Contributing
 
-psxport is the framework half of a reverse-engineering + reimplementation effort; the full working
-rules are in [`CLAUDE.md`](CLAUDE.md). In short:
+Read [`AGENTS.md`](AGENTS.md), then consult the project information system before non-trivial work.
+The critical rules are:
 
-- **Keep it game-agnostic.** No game headers, no game-specific addresses. The game is reached through
-  its derived `GameRuntime` and the `RecompRegistry`; `GameConfig` / `GameHooks` are migration-only;
-  `psxport_smoke` must keep linking with zero game symbols.
-- **The generated substrate is sacrosanct** — fix mistranslations in the recompiler, not by hand-
-  editing emitted `shard_*.c`.
-- **Reverse-engineer first** — decompile and understand before reimplementing (`tools/decomp.sh`,
-  Ghidra headless). Reproduce the observable result, not the PSX mechanism.
-- **No bandaids** — fix root causes; no magic constants, no swallowed errors, no fake-sync stopgaps.
-  All I/O and timing is PC-native and synchronous, or it fails fast with a diagnostic.
-- **Diagnostics go through the `cfg` channel logger** (`PSXPORT_DEBUG=chan,chan`; see `docs/config.md`),
-  never raw `getenv` or scattered prints.
-
----
+- fix the owning cause rather than a title-address symptom;
+- keep psxport game-agnostic and split new CPU work across cohesive owners;
+- use one Lucent logging boundary and one typed configuration owner;
+- never add a gameplay interpreter, engine selector, generated-code dependency, or silent fallback;
+- preserve valid binary/runtime facts, but do not use generated C as the new reference; and
+- verify representative interactive gameplay before claiming a title migrated.
 
 ## License
 
-The framework code is provided as-is for research and preservation. The vendored **beetle-psx**
-backend (`vendor/beetle-psx`) is **GPL-2.0**; see its tree for details. No game assets, ROMs, disc
-images, or BIOS files are included or distributed — supply your own legally-obtained files.
+The framework code is provided for research and preservation. The vendored Beetle PSX backend is
+GPL-2.0; see its tree for details. Lightrec integration must retain the selected upstream/fork
+license and provenance. No copyrighted game assets, ROMs, disc images, executables, or BIOS files are
+included or distributed.

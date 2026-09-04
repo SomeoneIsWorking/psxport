@@ -1,207 +1,86 @@
-# The ORACLE — in-process interpreter + software-GPU second Core, lockstep divergence diff
+# Test-only oracle architecture
 
-**Directive (USER, 2026-07-01, firm).** We need a real oracle for INTERLEAVED DIVERGENCE COMPARE — find
-VRAM diffs, render diffs, RAM/state diffs in lockstep with the native port and pin the FIRST divergence.
-Screenshots-to-eyeball are allowed but NOT the goal. The cutscene render bugs (double fade / void-effect /
-cliff water) proved un-fixable by guessing; without a trustworthy PSX reference we are blind.
+The oracle exists to diagnose the first divergence; it is not a gameplay engine. The production
+library always executes non-native guest code through Lightrec. Any interpreter and software-GPU
+reference are built into separate test/diagnostic targets that the gameplay library and consumers do
+not link and cannot select through configuration, CLI, UI, or fallback.
 
-**Shape (what the user asked for).** A PURE INTERPRETER-driven SECOND `Core` (our Core class), with a
-SOFTWARE/CPU rasterizer, run INTERLEAVED (lockstep) with the native port Core. NOT a separate-process
-emulator, NOT screenshots-only.
+USER, 2026-07-01: *"We need a real oracle for INTERLEAVED DIVERGENCE COMPARE"*.
 
-**Why interpreter, not the existing SBS "PSX" core.** `sbs.cpp` (PSXPORT_SBS_MODE=full) already runs two
-Cores in lockstep with a per-frame RAM diff and pause-at-first-divergence — but its B core runs the RECOMP
-SUBSTRATE (`psx_fallback`), which FREEZES/aborts in the intro cutscene (recomp-coroutine limit later-272;
-recomp-MISS 0x80146478 on the un-recompiled overlay code). A PURE INTERPRETER executes whatever MIPS is in
-RAM — including the overlay cutscene code the recompiler has no entry for — so it neither freezes nor misses.
-That is the whole point: the oracle must REACH and RUN the scenes the recomp can't.
+That requirement remains: comparison must align meaningful game state, report the first observable
+divergence, and state each instrument's blind spot. The old in-product `use_interp`/
+`PSXPORT_SBS_MODE=oracle` routing is not the target boundary and is removed by the migration in
+`docs/migration.md`.
 
-**Why NOT wide60rt / external emulator.** wide60rt (the deleted Beetle standalone, runtime/main.cpp) was
-faulty, and a separate process emitting screenshots can't do byte-level interleaved divergence diffing
-against our Core's RAM/VRAM. The oracle must share our Core memory model so the diff is direct.
+## Separate targets
 
-This SUPERSEDES the "oracle is GONE, never recreate it" rule (memory oracle-harness-removed) — the user is
-reinstating an oracle, specifically this in-process divergence-diff form. It is DIAGNOSTIC, not shipping
-behavior (like sbs.cpp / dualcore.cpp): one PC-native game still ships; this is a debugger.
+- The gameplay `psxport` library contains the Lightrec executor, canonical `Core` state, memory/device
+  owners, native dispatch, and no interpreter objects or symbols.
+- A test-only interpreter target may reuse the production state types and memory/service interfaces.
+  Its CPU state and diagnostic provenance are per test core.
+- A test-only software-GPU target may render the oracle core's GP0 stream into independent VRAM.
+- A test harness links the production Lightrec library and the test-only oracle libraries, drives both
+  with authenticated user data, and compares explicitly declared state at named barriers.
 
-## Building blocks (all in-tree)
-- **Interpreter:** `runtime/recomp/interp.cpp` plus `runtime/recomp/interp_diagnostics.cpp` (the instruction
-  engine is 1,171 lines). The self-contained MIPS R3000 flat interpreter operates on per-Core memory
-  (`c->mem_*`, `c->r[]`) and is live in `PSXPORT_SBS_MODE=oracle`; its trace/native-call file handling is
-  kept in the diagnostics module so the instruction engine does not grow past the structure cap.
-- **Software GPU:** Beetle's vendored-but-uncompiled rasterizer `vendor/beetle-psx/mednafen/psx/gpu.c` +
-  `gpu_polygon.c` / `gpu_sprite.c` / `gpu_line.c` (full GP0 processor + VRAM). Compile for the oracle Core;
-  route the oracle's GP0 stream into it → an oracle VRAM image to diff vs the native VRAM.
-- **Lockstep + diff infra (EXISTS):** `runtime/recomp/sbs.cpp` — two Cores lockstep, identical input,
-  per-frame RAM+scratchpad diff, pause-at-first-divergence, debug-server `sbs diff`/`bt`/`watch`/`show`/`step`.
-- **BIOS:** `bios/scph5501.bin`, `bios/openbios-fast.bin`. GTE/SPU/MDEC already compiled from Beetle.
+Building the harness is what selects the oracle. No runtime engine selector enters the product config
+or UI. Product-link inspection names the objects/symbols examined and proves interpreter absence;
+observing zero interpreter executions in one run is insufficient.
 
-## STATE-SYNC, not frame-sync (USER, 2026-07-01 — critical)
-A pure-PSX interpreter core CANNOT be frame-lockstepped against the native port: the PSX side spends real
-frames on CD LOADS / CD waits / VSync settles that the native side does SYNCHRONOUSLY (instantly). So frame
-N on the native core is a different point in the game's progression than frame N on the PSX core — a naive
-per-frame RAM diff (what sbs.cpp does today) compares unrelated states and is meaningless across
-native-vs-true-PSX. The native core reaches a state FIRST; we must FREEZE it there until the PSX core catches
-up. (Same principle as memory drive-by-game-state-not-frames / dual-core-state-synced-diff /
-sbs-native-vs-psx-gameplay-cores "sync at the gameplay-start flag", now generalized to a checkpoint sequence.)
+## State-aligned comparison
 
-**The diff is gated on GAME STATE, not frame number.** This needs the harness to OWN the game's state machine
-enough to detect "core X reached checkpoint Y" — which we do (stage id 0x801fe00c, sm[0x48]/[0x4a]/[0x4e],
-the gameplay-start flag *(0x1f800137), the SOP scene byte 0x800bf9b4, the narration scroller, …).
+Native services may complete console waits synchronously, so equal presentation-frame numbers need
+not represent equal game progress. Comparisons use ordered, title-owned state predicates:
 
-**Barrier model:**
-1. An ordered checkpoint list C0 < C1 < … — each a predicate on guest state (e.g. "stage==GAME 0x8010637C",
-   "gameplay flag *(0x1f800137)==1", "SOP scene byte 0x800bf9b4 advanced to k", "narration beat n reached").
-2. Run each core forward — feeding the needed input (e.g. mash Start) — until it reaches the NEXT checkpoint.
-3. BARRIER: the core that arrives first PARKS (stops stepping) until the other arrives at the same checkpoint.
-   (Typically native parks and the interpreter PSX core grinds its real CD loads to catch up.)
-4. At the aligned checkpoint, DIFF only the COMPARABLE state — game-logic RAM + scene state — EXCLUDING the
-   fields that legitimately differ (CD/load progress, timing/root-counter, frame counters, render-only scratch).
-5. Release both to run to the next checkpoint. Between checkpoints the cores run a DIFFERENT number of frames;
-   only checkpoint-aligned state is diffed.
+1. Run each core toward the next checkpoint using per-core input policy.
+2. Park the first arrival without advancing its guest state.
+3. Once both arrive, compare only the declared CPU/game/device state and name every excluded field.
+4. Report both cores' frames, cycles, translated/interpreted instructions, checkpoint reachability,
+   and first differing byte/register.
+5. Resume toward the next checkpoint.
 
-Implication: input automation is PER-CORE and checkpoint-driven (each core gets Start until IT passes the
-title checkpoint), not a single mirrored host pad. The existing sbs.cpp "mirror the same host pad to both
-cores each frame" must become "drive each core toward its next checkpoint independently."
+The framework owns the barrier mechanism. The consuming title owns checkpoint predicates, legitimate
+exclusions, and representative input. An absolute frame count is not a state predicate.
 
-## Integration design
-- Per-Core flag `use_interp` (Game/Core). When set, the four engine entry points route to the interpreter
-  instead of the substrate:
-  - `rec_dispatch` (overlay_router.cpp), `rec_coro_run` / `rec_interp` / `rec_super_call` (dispatch.cpp):
-    `if (c->use_interp) interp_*(c, addr); else <substrate>`.
-- interp.cpp's public entries renamed to `interp_coro_run` / `interp_run` so they DON'T collide with the
-  substrate shims of the same `rec_*` names.
-- `coro_native_call` (inside interp.cpp) gets an ORACLE gate: keep `is_bios` (→ rec_dispatch_miss HLE) and
-  `platform_hle_lookup` (hardware sync — VSync/CD/GPU/MDEC), but SKIP the `rec_func_index>=0 → rec_dispatch`
-  recomp-body routing (that was a hybrid optimization). Result: pure interpretation of game+overlay code with
-  only BIOS + hardware HLE native. Crucially it must NOT call `rec_dispatch` in oracle mode (would re-enter
-  the interpreter via the gated entry → recursion).
-- The oracle core takes no game-logic overrides. A measured hardware/data owner may explicitly opt into the
-  interpreter bridge with `overrides::install(..., oracleAllowed=true)`; Spyro uses this only for synchronous
-  archive-read boundaries `0x80016500`/`0x80016698`, whose native owners copy disc data and publish loader
-  state. Ordinary native overrides remain invisible to the oracle. The framework's measured libgpu DrawSync
-  entries are platform HLE `sync_ok` leaves, not game overrides.
+## Evidence rules
 
-## Phases
-1. **Interpreter oracle (RAM/state divergence).** Restore interp.cpp adapted to per-Core; add `use_interp` +
-   routing; wire it as a new `PSXPORT_SBS_MODE=oracle` core (B = interpreter PSX). Verify the B core reaches +
-   runs the cutscene WITHOUT freezing. **Build the STATE-SYNC BARRIER** (above) — checkpoint list + per-core
-   checkpoint-driven input + park-the-faster-core + checkpoint-aligned diff — this is the heart of Phase 1,
-   NOT the existing frame-lockstep. Deliverable: trustworthy PSX guest state at each checkpoint — reveals what
-   the native side gets wrong (e.g. the void-scene "effect" state we're missing; confirm/deny bug-1's fade).
-2. **Software rasterizer (VRAM/render divergence).** Compile Beetle soft-GPU for the oracle Core; route its
-   GP0 to it; produce oracle VRAM. Add VRAM/render diff + an oracle present pane (see the real PSX cutscene
-   render, diff it against native). Deliverable: the render diff that fixes void-effect + cliff water.
+- Validate the comparator with a matching case and a deliberately seeded register/RAM divergence.
+- Validate reachability before interpreting the absence of a difference.
+- Keep hardware, CPU, state, and pixel questions separate; no single oracle answers all of them.
+- A boot, logo, FMV, or non-interactive scripted pose is limited checkpoint evidence, not gameplay
+  conformance.
+- Preserve exact source/target identity, settings, state fields, exclusions, and denominators in the
+  report that uses the result.
 
-## Status
-- 2026-07-01: scoped; this doc + memory written. Bug-1 (double fade-in) fixed natively (later-277, committed).
-  Bug-2 (void draws sea) reverted — pure-black was wrong, there is supposed to be an EFFECT; needs the oracle.
-  Phase 1 implementation starting.
-- 2026-07-01 (later-279): **Phase-1 RAM diff EXHAUSTED — narration state is convergent.** oraclediff with the
-  guest CdSearchFile CD-cache (0x80102xxx) excluded shows only benign drift (PRNG LCG 0x80105EE8, a 0..15
-  callback-ring counter 0x80105BAC, the stdio line buffer 0x80105EF8). The native side runs the cutscene
-  LOGIC correctly; the void-effect / cliff-water bugs are RENDER-only. → Phase 2 (software GPU) is now the
-  critical path. (docs/findings/sbs.md "oraclediff: narration GAME STATE is convergent".)
-- 2026-07-01 (later-280): **Phase 2 DONE — software-GPU oracle renders the real PSX cutscene.** Per-GpuState
-  `soft_gpu` flag routes the interpreter oracle Core's GP0 stream through the existing SW rasterizer
-  (tri/raster_sprite/fill/A0) into its own s_vram, fully decoupled from the native VK path. PSXPORT_SELFTEST=
-  oracle dumps each beat's framebuffer (+ a `g_oracle_prim_log` GP0 prim-trace). Ground truth: void = black
-  fill + semi-transparent textured swirl EFFECT + Tomba + text; cliff = full scene incl. clean sea tiles.
-- 2026-07-01 (later-281): **Bugs 2 & 3 FIXED, oracle-verified.** The narration was treated as the walkable
-  field (ov_scene_native + 2D-only OT), which drew the void's stale sea and dropped the cutscene's own
-  fills/effect. Fix (engine/game_tomba2.cpp): detect the narration by the SOP overlay sig *(0x80109450)==
-  0x3C021F80; walk the FULL guest OT; run ov_scene_native only for the 3D-world beats (skip the void scene 5).
-  Native now matches the oracle for every beat; free-roam unaffected; gates green. All three reported
-  cutscene render bugs (later-277 fade, later-281 void+cliff) are now resolved. Remaining: user eyeball on a
-  real ./run.sh is the final confirmation (docs/findings/render.md "Intro-narration cutscene rendered wrong").
-- 2026-07-01 (later-282): **Oracle extended to FREE-ROAM gameplay — native opening is convergent.** The
-  interpreter+softGPU oracle core drives PAST the narration into the walkable field (MODE overlay 0x80109450
-  → 0x801138A4, SOP scene byte → 0, reached ~f1132) and STAYS ALIVE there (ran to f3035, no freeze/MISS —
-  the interp handles the field overlay + CD area-loads). `PSXPORT_SELFTEST=oracle` now also dumps the oracle's
-  soft-GPU FIELD framebuffer (scratch/screenshots/oracle_field_h*.ppm). `PSXPORT_SELFTEST=oraclediff` now has
-  a FREE-ROAM checkpoint (both cores parked at the first walkable-field frame, engine band diffed): the ONLY
-  divergences are the same three benign ones as the narration (PRNG 0x80105EE8, ring ctr 0x80105BAC, stdio
-  0x80105EF8). ⇒ the native free-roam GAME STATE matches the real PSX. Render eyeball also matches (cliff-fall
-  → water-island → tree, all present in both cores; frame-N snapshots misalign because the opening is a
-  scripted-camera sequence — the state-sync barrier is what makes the diff meaningful). (docs/findings/sbs.md
-  "oraclediff: FREE-ROAM GAME STATE is also convergent".) NEXT: drive both cores with MATCHED input to diff
-  actual interactive play (Tomba walking/jumping), and advance the port frontier natively where convergent.
-- 2026-07-01 (later-283): **Interactive-play SCAN added to oraclediff (harness); Tomba NOT yet controllable at
-  the onset — first commit OVERCLAIMED convergence, corrected same session.** run_oraclediff now drives BOTH
-  cores with IDENTICAL pad input (hold D-pad Right) for 90 frames from the aligned onset, then dumps both
-  framebuffers. The frames match — BUT that is the SAME still-convergence already proven at the onset
-  (later-282), NOT interactive movement: verified that at this checkpoint Tomba is in the scripted "caught on
-  the fishing line" pose and does NOT respond to input (holding Right for 1400+ frames, or mashing buttons,
-  leaves him in the exact same position in the native core). So the scan currently re-confirms still-convergence
-  only; it becomes a real interactive test once Tomba is player-controllable (progress/skip the caught opening —
-  the genuinely-hard part). The RAM diff during the walk is RENDER-PATH NOISE (gameplay+render share node
-  structs; native-VK vs PSX-soft-GPU populate node render-caches / OT 0x800ED000..0x800F1000 / render-queue
-  lists 0x800F24xx differently). ALSO corrected a stale frontier claim: `ov_terrain` is NOT orphaned — it is
-  wired (ov_render_walk → ov_terrain → terrain_render_pc) and FIRING every field frame; the opening render
-  leaves are all native-or-intentionally-PSX, so the render-leaf frontier is done-or-blocked at the opening.
-  NEXT: reach actual player control, then validate interactive convergence + drive to the second AREA (effect
-  cases idx1/2/3/8). (docs/findings/sbs.md "oraclediff: interactive-play SCAN added"; port-progress later-283.)
-- 2026-07-01 (later-298): **The ORACLE wired into the LIVE interactive SBS harness (`PSXPORT_SBS_MODE=oracle`),
-  not just the one-shot `PSXPORT_SELFTEST=oracle/oraclediff`.** User finding that triggered this: running
-  `PSXPORT_SBS_MODE=full` and eyeballing a native-render silhouette-crack bug (a 1px black line tracing
-  terrain-against-sky edges — docs/findings/render.md "Screen-fade transitions"... no, see the dark-outline
-  entry) showed the artifact on BOTH panes — but `both`'s B pane is `psx_fallback` (recomp substrate), which
-  shares A's SAME native gpu_native.cpp/gpu_vk.cpp rasterizer (only the SCENE-WALK differs); it is not an
-  independent pixel oracle, so seeing the bug on both panes proved nothing about whether it's PSX-authentic.
-  Added `sbs.cpp` mode `M_ORACLE`: boots core B with `use_interp=1` + `gpu.soft_gpu=1` (the exact recipe
-  `run_oracle`/`run_oraclediff` already use) instead of `psx_fallback` — B never touches the native
-  rasterizer at all; its pixels come 100% from the software rasterizer into its own `s_vram`. `grab_pane`/
-  `gpu_vk_render_readback` needed NO changes — they already just upload a core's CPU `s_vram` + an (empty,
-  for the oracle) native geometry batch, so re-using them for the oracle core is a degenerate case of the
-  same path. Verified live (headless, `PSXPORT_SBS=1 PSXPORT_SBS_MODE=oracle PSXPORT_SBS_AUTONAV=1`): both
-  cores reach free-roam at the SAME lockstep frame (f216) via the existing per-core `nav_step`; `sbs dump`
-  shows the two panes rendering the same village scene from two fully independent pipelines (SDL_GPU native
-  vs the CPU software rasterizer). ALSO fixed a pre-existing bug found while testing this: `PSXPORT_SBS_KEYS`
-  (scripted headless input) had up/down/left/right aliased to the SAME bit values as triangle/cross/square/
-  circle (a copy-paste of the face-button table), so scripted D-pad input silently did nothing — corrected to
-  the real PSX digital-pad bits (UP=0x10 RIGHT=0x20 DOWN=0x40 LEFT=0x80), matching `dbg_server.cpp`'s
-  `dbg_btn()`. NOT yet re-verified: whether the silhouette-crack bug reproduces on the TRUE oracle pane at the
-  coastal ridge — reaching that exact spot via scripted headless taps proved fiddly (later-283 already found
-  Tomba is in a non-interactive scripted "caught" pose right at the free-roam onset checkpoint; simple held
-  D-pad input doesn't move him there) — recommend driving `PSXPORT_SBS_MODE=oracle` interactively via a real
-  windowed run instead of headless scripting for this specific check.
-- 2026-08-28: Framework oracle dispatch now has an explicit `oracleAllowed` opt-in for measured
-  hardware/data owners; Spyro uses it only for the two synchronous archive-read boundaries. The SPU
-  mixer also advances on both SBS cores while output is discarded, so audio state remains observable
-  instead of freezing on the oracle leg. Spyro's clean 120-field oracle boot (`scratch/logs/spyro-sbs-oracle-clean-20260828.log`)
-  still has five persistent stack-only byte differences and one registered owner never reached; this
-  is limited boot evidence, not a claim of whole-game convergence.
+## Available evidence and blind spots
 
----
+| Instrument | What it can answer | Blind spot |
+| --- | --- | --- |
+| Independent Beetle/Mednafen CPU trace tools under `tools/oracle/` | Instruction/call boundaries and selected CPU/device state against an independent implementation | Not automatically aligned to a native title checkpoint; scope must be declared |
+| Test-only flat MIPS interpreter | Guest CPU/RAM behavior on reached paths using psxport state/memory seams | Shares psxport platform models and is not an independent device oracle |
+| Test-only software GPU | PSX-style GP0 raster output from the oracle command stream | Does not prove native scene construction or host renderer correctness |
+| Guest dispatch tables and no-op arms | Whether original title data selects/submits a behavior or draw | Says nothing about final appearance |
+| Native renderer readback | What the current host renderer produced | Cannot establish what original hardware should produce by itself |
 
-# THE ORACLE REGISTRY — there is no single oracle, and every one we have has a blind spot
+## Retained observations
 
-> *"I knew PSX render wasn't really oracle, I don't know if there is a true oracle, last time I
-> checked all the 'oracles' we have had some sort of problems"* — USER, 2026-08-06
+The existing in-process interpreter/software-GPU work established useful, bounded facts that remain
+valid inputs to later tests:
 
-Correct, and it is STRUCTURAL rather than bad luck. **Every render path in this port ends in the
-native VK renderer** — float math, ires scaling, per-pixel depth. The so-called oracles differ in
-which NATIVE DECISIONS they bypass, not in whether the renderer is native. So none of them answers
-"what would a PSX put on screen".
+- State barriers are required because synchronous native CD/service ownership makes native and
+  console-style paths reach the same game state on different presentation frames.
+- Tomba! 2 narration and opening-field comparisons converged at their declared checkpoints except for
+  named PRNG, callback-ring, stdio, and render-cache/OT differences; those observations were used to
+  diagnose renderer ownership rather than certify whole-game parity.
+- The software-GPU oracle showed the void scene contains a black fill plus a semi-transparent textured
+  swirl, character, and text, while the cliff scene contains the complete sea tiles. Those observations
+  corrected native scene-selection behavior.
+- A later Tomba! 2 "interactive" scan held input while the character remained in a scripted caught
+  pose. It reconfirmed still-state convergence only and explicitly did not prove player-control
+  behavior.
+- A 2026-08-28 Spyro oracle boot reached 120 fields and exited cleanly while retaining five persistent
+  stack-only byte differences and one registered owner never reached. This is limited boot evidence,
+  not whole-game equivalence.
 
-The fix is not to hunt for one true oracle. It is to know WHICH QUESTION each one can answer, and to
-**reduce a picture question to a submission question**, because submission HAS a true oracle and
-pixels do not.
-
-| oracle | the question it genuinely answers | its blind spot — and how it has actually misled |
-|---|---|---|
-| **SBS full** (`PSXPORT_SBS_MODE=full`) — two Cores, byte-compare | **Guest RAM state.** A real oracle for state, and Job #1 rests on it. | Says NOTHING about pixels. Its B core runs the recomp substrate, which freezes/aborts in the intro cutscene (recomp-MISS on un-recompiled overlay code) — i.e. it cannot reach the scenes that most need checking. That is the whole reason this document proposed an interpreter core. |
-| **`PSXPORT_RENDER_PSX=1`** ("psx_render") | It walks the guest OT. | **NOT a pure reference**: it still hands every prim to the NATIVE render queue's layer split and per-pixel depth, so its fidelity depends on pc_render producers having run. MEASURED 2026-08-06: on the GATE leg it draws **sky and sea only — no world geometry at all**. An investigation nearly concluded "vanilla culls this geometry" from an instrument that draws nothing (kanban #77/#78). Positive-controlled. |
-| **`PSXPORT_ORACLE=1`** | Implies GATE + RENDER_PSX and forces pure OT painter order, so no native band/depth/widescreen/fps60 decision reaches the picture. **The best in-tree picture reference.** | Still the native rasterizer, at native precision, at ires>1. It answers "what does the SUBSTRATE draw", never "what does the HARDWARE draw". |
-| **The guest's own DISPATCH TABLES** (e.g. `0x80014DB8`, `0x80014A70`, with their no-op arms) | **"Does vanilla submit/draw this node?" — a TRUE oracle**, because it is DATA IN THE GAME, not a render path, so no renderer decision can contaminate it. | Answers submission, not appearance. Says nothing about colour, order or occlusion. **This is what kanban #77 fell back on when psx_render turned out dead, and it is the only thing in that investigation that held up.** |
-| **beetle-psx** (`vendor/beetle-psx`) | It is a real PSX rasterizer and would be a TRUE PIXEL oracle. | Deliberately used only as a GTE/MDEC/SPU/CHD hardware backend, never as a reference renderer. Standing it up as a diagnostic-only reference is the one unexplored route to an actual picture oracle. |
-| **The interpreter + software-GPU second Core** (this document) | Answers pixels AND state for scenes reached by the live `PSXPORT_SBS_MODE=oracle` harness. | Its boot-window proof is limited: the 2026-08-28 Spyro run reaches 120 fields and exits cleanly, but retains five stack-only differing bytes and leaves one owned address unreached; it is not whole-game equivalence. |
-
-**THE WORKING RULE, from the one investigation where this bit hardest:** when you catch yourself asking
-"does vanilla draw this?", do not reach for a renderer. Reach for the guest's submission path — the
-queue, the per-type dispatch table, the no-op arm — and answer it as DATA. A renderer comparison
-inherits every defect of both renderers; a table lookup inherits none.
-
-**And state each oracle's blind spot in the report that uses it.** The recurring failure here has never
-been "we had no oracle". It has been using one whose blind spot nobody had written down — which is the
-same defect as a diagnostic that cannot print the failing answer, one level up.
+These are evidence facts, not justification for keeping interpreter code in the gameplay library.
+Implementation moves the still-useful mechanisms to the separate test targets and revalidates them
+against the production Lightrec state bridge.

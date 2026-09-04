@@ -51,8 +51,9 @@ Escape, Mega Man X4–X6 and a community Xenogears port.
 **The goals diverge and the difference is worth keeping straight.** psxrecomp aims at a faithful
 hardware-accurate runtime plus enhancements. psxport's stated goal is the other end — *rebuild as a
 PC-native engine, do NOT simulate the PSX* — with the recomp as oracle and scaffolding to be replaced.
-Read theirs the way we read Dusklight: for the shape of solved problems (overlay capture-and-compile, BIOS
-as oracle, per-game repo layout), not for code.
+Use it only as prior-art evidence for solved problem classes such as overlay identity, BIOS boundaries,
+and per-game repository layout. psxport's own codemap and verified behavior decide its architecture;
+do not import that project's static pipeline or code.
 
 **USER DECISION 2026-08-12: we are NOT engaging with their community (R.A.I.D.).** *"I won't contact
 R.A.I.D, I don't like their workflow either."* Do not propose it again, and do not route contributions

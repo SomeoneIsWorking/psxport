@@ -101,9 +101,9 @@ This does not add a mode; it DELETES one. Today's four switches map onto the enu
 **Two consequences to state up front, because they are behaviour changes, not renames:**
 
 1. **There is no longer any way to interpolate or widen the guest's own render** — which is the
-   intended shape, not a cost: it agrees with the standing rule that interpolation is unlocked by
-   *execution ownership* (`docs/workspace/WORKSPACE.md` / `CLAUDE.md`, the Dusklight
-   record-and-replace caveat). You get 60fps by owning the producer, not by lerping guest output.
+   intended shape, not a cost: interpolation is unlocked only by *execution ownership*. You get
+   60fps by owning the source producer and its matching geometry provenance, not by reconstructing or
+   lerping guest raster output.
    It also means the enhancements stop being a variable in every guest-leg measurement.
 2. **Every existing `PSXPORT_RENDER_PSX` A/B changes meaning** (it becomes pure). The sites to
    re-read before flipping the switch: `dualcore.cpp:95` (per-core render path), `sbs.cpp:656-662`

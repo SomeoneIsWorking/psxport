@@ -11,7 +11,7 @@ All of these live in the psxport repo, so they reach every game tree and every s
 
 | read this | for |
 |---|---|
-| **`psxport/AGENTS.md`** | **how a game consumes the framework** — build/run, CVars, the seam, `generated/`, RE-first, diagnostics, registries, Dusklight. THE authority |
+| **`psxport/AGENTS.md`** | **how a game consumes the framework** — the per-Core Lightrec/native seam, state/exits, image-scoped calls, invalidation, RE-first, diagnostics, and registries. THE authority |
 | **`docs/workspace/PROTOCOL.md`** | the multi-agent protocol (area claims) and the standing rules |
 | `docs/workspace/LAYOUT.md` · `docs/plans/*.md` | target directory organization · designs not yet implemented |
 | `docs/findings/*.md` | measured findings, and the incidents the rules came from |

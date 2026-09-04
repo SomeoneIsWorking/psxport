@@ -1,104 +1,128 @@
 # Project state
 
+This is the factual capability inventory for psxport. It does not claim that the plans in
+`docs/migration.md` are implemented.
+
 ## Comparison baseline
 
-The baseline is implementing each PlayStation port as a one-off emulator-derived runtime or running
-the original title wholly inside a PS1 emulator. psxport instead provides a reusable fail-closed
-MIPS-to-C substrate, native console-service owners, differential comparison, and title-owned seams for
-native rendering, widescreen, and interpolation.
+The comparison baseline is the current psxport workflow: game executables and overlays are translated
+offline into generated C, compiled into each consumer, and selected alongside an interpreter through
+runtime execution-engine policy. The intended product instead authenticates the user's original image
+and executes every non-native guest path on demand through Lightrec, with any interpreter confined to
+a separate test target.
 
 ## Current focus
 
-S004 is the current focus.
+S012 is the current focus: establish the per-`Core`, dynarec-only Lightrec product executor before
+extending other execution paths.
 
 ## Capability inventory
 
 | ID | Capability or outcome | State | Factual dependency | Goals |
 | --- | --- | --- | --- | --- |
-| S001 | MIPS R3000A executables are translated into deterministic generated C | verified | — | G001 |
-| S002 | Native runtime owners provide GPU, SPU, GTE, MDEC, CD, XA/FMV, and BIOS services | partial | S001 | G001 |
-| S003 | Shipping differential infrastructure compares independent guest-state snapshots and frame boundaries | verified | S001 | G001 |
-| S004 | Game-owned native producers replace guest graphics while supporting widescreen and interpolation | partial | S002 | G001 |
-| S005 | Multiple title repositories consume the framework through narrow title-owned seams | verified | S001, S002 | G001 |
-| S006 | The native GPU owner supports PSX drawing plus title-owned widescreen presentation | partial | S001 | G001 |
-| S007 | The native SPU owner produces game sound without a PS1 emulator process | partial | S001 | G001 |
-| S008 | The native GTE owner provides geometry and lighting operations used by translated games | partial | S001 | G001 |
-| S009 | Native MDEC and FMV owners decode and present PlayStation movies | partial | S001 | G001 |
-| S010 | Native CD and XA owners provide game data and streamed audio from user-supplied media | partial | S001 | G001 |
-| S011 | Native BIOS and SDK services replace the console firmware calls exercised by ports | partial | S001 | G001 |
+| S012 | A maintained pinned Lightrec dynarec executes product guest code per `Core` | missing | — | G001, G004 |
+| S013 | Architectural state crosses Lightrec/host boundaries explicitly and execution exits are bounded | missing | S012 | G001, G003 |
+| S014 | Native overrides and original calls are scoped by image/module generation and address | missing | S012, S013 | G001, G003 |
+| S015 | Executable-memory changes and override policy invalidate every affected Lightrec path | missing | S012, S014 | G001, G003 |
+| S016 | Gameplay builds contain no interpreter, generated guest corpus, engine selector, or fallback | missing | S012, S013, S014, S015 | G001, G004 |
+| S017 | Native PSX platform services are reusable across title repositories | partial | — | G002 |
+| S018 | Independent comparison and test-only oracle surfaces can diagnose guest-state divergence | partial | S013 | G003 |
+| S019 | Multiple titles consume one game-agnostic framework through narrow typed seams | partial | S014, S017 | G002 |
+| S020 | Native rendering supports PSX presentation and title-owned enhancements | partial | S017 | G003 |
+| S021 | Consumer delivery provisions user assets and launches the intended product without maintainer-only tools | partial | S016, S019 | G003, G004 |
+| S022 | Structure, configuration, logging, and verification boundaries are mechanically enforced | partial | — | G002, G004 |
 
 ## Capability details
 
-### S001 — Static translation
+### S012 — Per-Core Lightrec product executor
 
-Evidence: the shared build path emits C shards from recovered executable functions and is consumed by
-multiple maintained PlayStation port repositories.
+Missing capability: add a direct dependency on an exact maintained Lightrec revision and construct one
+dynarec-only Lightrec state for every live `Core`. The product integration must use Lightrec's own
+block cache and executable-memory owner and must not depend on the indirectly bundled Beetle copy.
 
-### S002 — Console service replacement
+Related issue: 0047.
 
-The framework has production GPU, SPU, GTE, MDEC, CD, XA/FMV, BIOS/SDK, and CHD-backed service owners.
+### S013 — State synchronization and bounded exits
 
-Gap: service and title coverage remains incremental; unsupported semantics must still be grounded and
-implemented as new titles reach them.
+Missing capability: define and implement one explicit bridge for GPRs, HI/LO, PC/delay state, CP0,
+GTE, pending interrupts, and cycles, plus typed budget/native/HLE/interrupt/frame/thread/fault exits
+that never unwind C++ exceptions through JIT frames.
 
-### S003 — Differential verification
+Related issue: 0048.
 
-Evidence: the shipping `ndiff_run` path retains independent complete snapshots and focused tests cover
-nested snapshots, modeled returns, frame contracts, and negative controls.
+### S014 — Image-scoped native and original calls
 
-### S004 — Native presentation
+Missing capability: replace generated-symbol and address-only dispatch with a per-`Core` runtime key
+containing authenticated image/module identity, load generation, and guest address. A scoped original
+call must bypass only the current override while nested calls retain normal dispatch.
 
-The framework exposes native scene producers, depth-aware rendering, interpolation, and title-owned
-picture policy used by live ports.
+Related issue: 0049. The cross-portfolio audit measured 816 unresolved generated-body/wrapper symbols
+across 109 Tomba! 2 game files when its generated corpus was removed; this is consumer-boundary
+evidence, not a psxport implementation claim.
 
-Gap: each title still needs complete game-state producers; guest post-projection packets are not an
-acceptable fallback.
+### S015 — Runtime invalidation
 
-### S005 — Multi-title consumption
+Missing capability: route CPU stores, DMA, module loads, decompression, debugger writes, savestate
+restore, and override changes through one normalized executable-range invalidation owner that reaches
+Lightrec and revokes stale image-generation/dispatch decisions.
 
-Evidence: Tomba, Crash, Crash Bash, Mega Man X4, Spider-Man, Spyro, Tekken 3, Toy Story 2, and Vagrant
-Story repositories consume the same framework while retaining title-specific policy.
+Related issue: 0050.
 
-### S006 — Native GPU
+### S016 — Product-path isolation
 
-The production GPU owner supports the retained PSX drawing path and title-owned native scene
-producers, depth-aware rendering, widescreen, and interpolation.
+Missing capability: remove the gameplay link and selection paths for the offline translator,
+generated dispatch, psxport interpreter, and Lightrec interpreter fallback. A separately built test
+oracle may remain, and product-link/selector inspection must prove the isolation.
 
-Gap: drawing and title coverage remains incremental across consumers.
+Related issues: 0047 and 0051.
 
-### S007 — Native SPU
+### S017 — Native PSX services
 
-The production runtime owns SPU execution and audio output.
+The repository contains title-neutral GPU, SPU, GTE, MDEC, CD, DMA, timing, pad, BIOS/SDK HLE, CHD,
+audio, and host-rendering owners used by maintained consumers.
 
-The SDL playback sink primes a 180 ms queue before starting, bounds catch-up audio at 360 ms, and
-re-primes after a confirmed underrun. This replaces the former four-field (~67 ms) queue that both
-starved during ordinary render/load stalls and then discarded the catch-up PCM. An isolated Crash
-Bash SDL-device run sustained 44,097 samples/s against the 44,100 Hz target with zero dropped fields;
-the corresponding 600-frame WAV remained byte-identical, proving the host-delivery change did not
-alter SPU clocks, sequencing, or samples.
+Gap: service coverage is established incrementally by reached title paths, and several owners still
+live in the broad `runtime/recomp/` directory or retain legacy game-configuration projections.
 
-Gap: complete audio behavior is established title by title rather than for every PSX program.
+### S018 — Independent diagnostics and test oracle
 
-### S008 — Native GTE
+The repository has an independent Beetle/Mednafen-oriented oracle boundary, exact-PC/call-boundary
+trace support, and an in-process interpreter used for focused state comparison.
 
-The production runtime implements the geometry operations exercised by maintained consumers.
+Gap: the interpreter is still compiled into the product-facing framework and the comparison surfaces
+are coupled to static/generated execution assumptions. They must move to separately built test-only
+targets and compare against the Lightrec state boundary without entering the gameplay link.
 
-Gap: unsupported semantics still require evidence-driven implementation as new titles reach them.
+### S019 — Multi-title framework consumption
 
-### S009 — Native MDEC and movies
+Tomba, Crash, Crash Bash, Mega Man X4, Spider-Man, Spyro, Tekken 3, Toy Story 2, and Vagrant Story
+repositories consume the same framework and retain title-specific policy.
 
-MDEC and FMV owners are integrated into the native runtime.
+Gap: their current call seams still include generated-body symbols and legacy configuration/override
+paths. The Lightrec executor and image-scoped native-call API do not exist yet.
 
-Gap: codec, timing, and title coverage remains incomplete outside measured paths.
+### S020 — Native presentation
 
-### S010 — Native CD and XA
+The framework exposes retained PSX rendering, native scene producers, depth-aware rendering,
+widescreen projection support, interpolation infrastructure, and title-owned guest-VRAM picture
+policy.
 
-CHD-backed CD access and XA streaming owners are integrated into the native runtime.
+Gap: drawing and title coverage remain incremental, and representative gameplay must be requalified
+with Lightrec as the product executor before the migration can claim preservation.
 
-Gap: complete drive and streaming behavior remains incremental across titles.
+### S021 — Portable consumer delivery
 
-### S011 — Native BIOS and SDK services
+Consumers already resolve user-supplied disc images and provide player launchers; framework binaries,
+restricted inputs, and diagnostics are kept outside tracked source.
 
-The runtime replaces measured BIOS and SDK calls with native services.
+Gap: current launch/build paths still provision generated guest C and may expose execution-mode flags.
+A fresh checkout cannot yet launch the intended Lightrec/native product without the offline pipeline.
 
-Gap: the service surface is extended fail-closed as maintained titles exercise new semantics.
+### S022 — Engineering boundaries
+
+The repository has tracked Clang formatting/tidy configuration, a normal style/structure gate, a CVar
+system, Lucent integration, hermetic framework tests, and a game-agnostic smoke target.
+
+Gap: direct environment reads, legacy logger call sites, broad runtime modules, engine-selection
+policy, and generated-code tests remain. The normal verifier does not yet audit that gameplay links
+contain neither interpreter nor generated guest bodies.

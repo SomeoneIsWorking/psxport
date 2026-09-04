@@ -1,109 +1,45 @@
-# Faithful execution model — how pc_faithful native code achieves byte-exactness
+# Faithful execution boundaries
 
-**Standing ruling (USER 2026-07-07):** faithful strictness is non-negotiable — the strict SBS
-compare is what makes recomp_path an oracle. No exemption classes, no dead-byte probing, no
-compare masks in the SBS strict leg. Every byte of guest RAM + scratchpad must match, including
-task-stack scratch. This document derives the engineering consequences.
+Faithful execution is the observable PSX contract the native/Lightrec product preserves before
+intentional enhancements. It is not a generated-C equivalence workflow.
 
-## The rule: faithful ports execute on guest machine state — INCLUDING the guest stack
+## One architectural state
 
-A faithful native port of `FUN_xxxx` is not "a C++ function with the same effect on globals".
-It is the same algorithm executing against the same machine state:
+`Core` owns the framework-visible PSX state. The state bridge transfers that complete boundary into
+Lightrec on entry and back on every host-visible exit. GPRs, HI/LO, PC/delay state, CP0, GTE,
+interrupts, and cycles are never read from two competing authoritative copies.
 
-- **Locals live in the real guest frame.** The port descends `c->r[29]` by the RE'd frame size,
-  keeps its buffers/locals at their frame offsets (filename copies, CdlFILE results, dir-parse
-  scratch), and ascends on return. The frame layout comes from the Ghidra RE and is part of the
-  function's contract, exactly like a struct layout.
-- **ABI slots hold live values.** Where the substrate spills `ra`/`s0..s3`, the port writes the
-  *actual* values of the machine it reproduces: the guest call-site return address (a named
-  per-port constant derived from RE — the port's guest identity, not a tuning knob) and the
-  actual register contents. Values are computed by the real control flow, never emitted as
-  standalone byte-patches.
-- **Loop counts emerge from control flow.** A wait loop iterates on the real `done_flag`; its
-  per-iteration writes happen because the loop actually runs. No hardcoded iteration counts.
+Native functions receive typed access to `Core` state through the normal ABI owner. They do not
+open-code register shuffles at call sites or preserve host-stack assumptions from an offline
+translation. When native code invokes guest behavior, it calls the executor by guest identity/address:
+normal dispatch honors overrides; original dispatch suppresses only its current override and executes
+the guest body through Lightrec.
 
-Anti-pattern (banned, being removed): `emit_fun_80044BD4_prologue`-style synthetic write blobs
-at hardcoded `S0-496`-type offsets, decoupled from control flow. They can only chase the oracle;
-they can never converge (c308fd6's own commit message concedes this).
+## Explicit suspension and return
 
-## Cooperative tasks: native bodies on fibers
+Guest execution is always bounded. Lightrec returns a typed reason for budget, native/HLE/device,
+interrupt/exception, frame/VSync, thread yield/exit, or fault. Host code commits and handles that
+state, then resumes deliberately. It never unwinds a C++ exception through JIT frames or uses a host
+coroutine stack as the owner of guest continuation state.
 
-The substrate scheduler (RE: `FUN_80051e60` pass; task table at `0x801FE000`, stride 0x70) is
-cooperative BIOS threads; the recomp side (core B) runs those bodies on host fibers
-(`runtime/recomp/coro.cpp`), one resume per runnable task per frame, suspension at the yield
-primitive with guest registers saved.
+A skip or synchronous native service establishes the complete guest-visible lifecycle invariant. It
+does not fast-forward simulation, write a state-machine phase/timer/scene pointer, or omit required
+callbacks and resource transitions.
 
-pc_faithful adopts the same shape with **native bodies**: a faithful task body (e.g. STAGE-0's
-`startBinStageFaithful` arc) runs on a fiber owned by PcScheduler and suspends inside the ported
-yield primitive. Per-frame slice cadence is then identical to B **by construction** — both sides
-run one slice per runnable task per frame and park mid-body at the same semantic point with the
-same guest sp.
+## Image identity
 
-This does NOT route the strict native mirror to the substrate: the fiber is a
-suspension mechanism (same one B uses); every instruction of the body is ported native C++. What
-was banned is running the *substrate's recompiled body* and calling the result a native match.
-
-## The scheduler primitives (ported once, wired globally)
-
-Ported as PcScheduler methods, registered in `EngineOverrides` at their guest addresses so
-substrate callers inside not-yet-ported bodies reach the SAME implementation (one implementation,
-every caller — user 2026-07-07 global-dispatch directive):
-
-- `FUN_80051F80(mode)` — yield: `task[+0x02]=mode; task[+0x00]=1;` switch to scheduler. Port:
-  write the fields, spill ra at the real sp per the RE'd prologue, save guest regs, fiber-yield.
-- `FUN_80051F14(slot, fn)` — spawn: entry ptr at `+0x0C`, fresh stack ptr at `+0x10`, state=2,
-  `+0x6F`=0, thread create (native: arm the slot for the stanza/fiber).
-- `FUN_80044BD4(fn, arg, mode, flag)` — spawn-and-wait: drain-busy yield loop; `FUN_80052010(2)`;
-  clear `done_flag 0x1F80019B`; params at `0x801FE0DD/DE`; spawn slot 1; if `flag != 1`: RNG stamp
-  to `task[+0x56]`, wait loop `{ if flag==2: frame counter++ + FUN_8007FD54(); yield(1) }` until
-  `done_flag`. Port: same control flow on the guest frame (descent 40, spills at +16..+32).
-- `FUN_80052010(slot)` — force-close; `FUN_80051FB4()` — self-close.
-
-## What this closes (f0 anatomy, docs/findings/sbs.md 2026-07-07)
-
-- The CdSearchFile ";1" filename locals at 0x801FE848..0x801FEA98: `LibcdNative` chain becomes
-  guest-stack-resident (its locals move into the real frames its substrate counterpart used).
-- The wait-loop ra spills at 0x801FE808..: produced by the ported yield running in the fiber at
-  the real sp, once per real iteration.
-- The A-only frame zeros (A×37 at 0x801FE818..834): disappear once A's dispatched leaves run at
-  the same sp discipline inside the fiber instead of from the flat PcScheduler step.
+Resident code and loaded modules can reuse an address. Every dispatch, continuation, override, and
+invalidation decision therefore carries authenticated image/module identity and load generation as
+well as the address. Loading a replacement generation makes stale continuations and override keys
+unusable even if the bytes or range appear identical.
 
 ## Verification
 
-Strict gate unchanged: `PSXPORT_SBS_MODE=full` must hold zero-diff,
-frame by frame, no masks. Every port lands with the SBS run that proves its bytes.
+Use an independent emulator/hardware trace, binary evidence, or the separately built test interpreter
+to diagnose the first divergence. Tests drive the production state bridge, executor exits, dispatch,
+and invalidation; they do not reimplement those rules beside the product. Each instrument demonstrates
+both a match and a deliberately seeded mismatch and reports how many blocks, exits, ranges, or state
+fields it examined.
 
-## RECIPE GOTCHA: GuestFrame RAII is UNSAFE for functions with tail-jump returns (2026-07-15)
-A `GuestFrame<Size,N>` RAII guard restores sp + spills in its DESTRUCTOR, which fires on EVERY scope
-exit. That is WRONG for a guest fn that has early `default: rec_dispatch(target); return;` branches
-which in ground truth are MIPS `jr` TAIL-JUMPS that skip the frame restore entirely (the gen epilogue-
-restore list from `tools/abi_extract.py <addr> --contract` names only the ONE real return label). Using
-RAII there restores/ascends sp on a path gen never does -> a subtle, rarely-triggered byte-exactness bug.
-FIX: for such functions use a MANUAL (non-RAII) spill/restore, but keep it readable + documented-once via
-a named `constexpr GuestFrameSpill kSpills[]` table (the type guest_abi.h defines) driving the spill/
-restore loops — the ABI contract is spelled out once, without the lifetime model the control flow
-violates. Check the abi_extract `--contract` epilogue-restore list: if it names >1 return site OR the fn
-has rec_dispatch-return tail-jumps, do NOT use GuestFrame RAII. Reference: beh_actor_tomba_proximity_combat.cpp.
-
-## REFACTOR TARGETING: only refactor EXERCISED files (gatable) — defer unexercised ones (2026-07-15)
-A readability refactor is only landable if its byte-exactness can be proven by a NON-ARGUABLE gate —
-SBS-full 0-diff that actually EXERCISES the changed code, or MIRROR_VERIFY with the override FIRING.
-Some native files' overrides NEVER FIRE in any reachable headless scenario (autonav/replays), e.g.
-game/object/actor_sm_reward.cpp (fires only on item-pickup/reward-tally scenes — no replay covers it).
-Refactoring those is UNVERIFIABLE BY EXECUTION: a subtle offset/spill/signedness slip in a 500-line
-transform would be invisible until the user hits that scene (gameplay-relevant = user-facing bug).
-RULE: prefer refactoring files exercised by autonav/combat/replays (node_xform, sequencer — SBS-gated).
-For an unexercised file, DEFER the refactor until a repro that fires it exists (then execution-gate).
-The actor_sm_reward refactor (513->205 pokes, structurally 1:1-verified but NOT execution-exercised) is
-held at docs/deferred/actor_sm_reward-refactor.patch — apply + gate when a reward-tally repro exists.
-
-## PRE-EXISTING GAP found during engine.cpp readability pass (2026-07-15, NOT fixed — out of scope)
-Two engine.cpp natives that DO descend a guest frame in gen never mirror it: `Engine::areaLoadState`
-(FUN_80106478, abi_extract --contract: frame_size=24, ra@+20 r16@+16) and `Engine::uploadModeSprites`
-(FUN_80067DA8, frame_size=48, ra@+40 r19@+36 r18@+32 r17@+28 r16@+24) — both run with sp/registers
-untouched relative to what gen spills. Under the "MIRROR THE GUEST STACK" rule this is debt: if SBS
-ever compares those stack windows (currently 0-diff — likely because nothing downstream reads that
-scratch before the frame is overwritten, or the compared range doesn't reach it), it will fatal-diff.
-Left AS-IS in the 2026-07-15 readability pass (b7a8c52-recipe cluster: s48_0/s48_1/s48_2_frame/
-submode0/areaLoadState) because adding the frame is a BEHAVIOR change (new guest-stack bytes), not a
-readability one — record here so a future pass fixes it deliberately rather than rediscovering it.
+Representative interactive gameplay is the completion bar. Boot, logos, menus, FMV, isolated leaf
+calls, and a zero-diff frame are checkpoints only.

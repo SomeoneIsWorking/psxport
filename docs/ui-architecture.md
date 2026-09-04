@@ -1,8 +1,8 @@
 # The overlay UI — component model, and why there is only ONE stack
 
-Modelled on **Dusklight** (`github.com/TwilitRealm/dusklight`, CC0), `src/dusk/ui/`. What was taken
-and where ours deliberately differs is documented at each file; this page is the map and the
-decisions.
+This page is psxport's authority for UI ownership. **Provenance:** the component/listener mechanics
+were adapted from the CC0-licensed Dusklight `src/dusk/ui/` sources; the references below retain that
+attribution, while psxport's requirements and codemap decide the architecture.
 
 ## Where it lives
 
@@ -31,7 +31,7 @@ decisions.
 This replaced a single 592-line `rmlui_overlay.cpp` holding RmlUi setup, tab selection, row value
 formatting, the `Mods` ladders, the dev warp, the readouts, focus navigation and the SDL key switch.
 
-## The three shapes taken from Dusklight
+## Component decisions and provenance
 
 1. **A component owns its subtree** (`src/dusk/ui/component.{hpp,cpp}`). Destroying a component
    tears down its children and every listener it registered. `RmlOverlay::shutdown()` now drops the
@@ -42,13 +42,13 @@ formatting, the `Mods` ladders, the dev warp, the readouts, focus navigation and
 3. **State as a pseudo-class, not a C++ bool or a `class`** (`res/rml/tabbing.rcss:29`,
    `res/rml/window.rcss:201`). `class` is the document author's namespace; a runtime `SetClass`
    writes into it. **Naming trap:** `:active` is an RmlUi BUILT-IN meaning "mouse held down"
-   (Dusklight uses `tab:active` for exactly that, one rule away from `tab:selected`). A pane's
+   (the attributed source uses `tab:active` in that built-in sense). A pane's
    visibility is therefore `:shown`, never `:active`.
 
 ## The one place ours deliberately differs
 
-**Dusklight's components CREATE their DOM; ours ADOPT it.** Theirs call `CreateElement` /
-`AppendChild`, so `add_child<T>(args…)` news a T with `mRoot` as parent. Ours take an element that
+**The attributed components CREATE their DOM; psxport's ADOPT it.** The source calls `CreateElement`
+and `AppendChild`, so `add_child<T>(args…)` constructs a T with `mRoot` as parent. psxport takes an element that
 `assets/rml/menu.rml` already authored, so the method is `adopt<T>(element, args…)` — a different
 name on purpose, because silently redefining `add_child` would read as their method and behave as
 ours.
@@ -59,10 +59,9 @@ The reason is the framework/game seam: **the menu's structure is CONTENT.** A ga
 
 ## ONE stack, not two — the ImGui decision (2026-08-06)
 
-Dusklight runs **two** UI stacks on purpose: `src/dusk/ui/` (RmlUi, game-facing) and
-`src/dusk/imgui/` (13 .cpp of developer overlays — console, save editor, heap/process/camera,
-actor spawner). Shipped UI and debug UI have different requirements and should not share a
-framework. psxport should NOT copy that yet. Measured, not assumed:
+Shipped UI and developer tooling have different lifetimes, audiences, and headless requirements, so
+they do not share a presentation owner. psxport currently needs no second graphical developer stack.
+Measured, not assumed:
 
 **`vendor/imgui` is dead, not tangled.** 2.9 MB of source committed directly (not a submodule),
 referenced by **zero** build files and **zero** source files. The only references that existed were
@@ -72,7 +71,7 @@ when both halves had been false for some time. Both are now gone, so there is no
 
 **psxport already has the developer stack, and it is better suited than ImGui here.**
 `runtime/recomp/repl.cpp` (stdin) and `runtime/recomp/dbg_server.cpp` (TCP + `tools/dbgclient.py`)
-are the analogue of Dusklight's ImGui console, and unlike ImGui they work with no window at all.
+own the developer-console responsibility and work with no window at all.
 
 **And that is the deciding constraint.** `docs/workspace/PROTOCOL.md`: *agents never run windowed*. An ImGui
 developer stack draws into the swapchain, so the primary consumer of developer tooling in this

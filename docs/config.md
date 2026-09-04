@@ -6,8 +6,10 @@ Until 2026-08-06 this port had three configuration mechanisms and **one sentence
 precedence between them (it was "a REPL `debug` still overrides the environment for the rest of the
 run", further down this file). 201 distinct `PSXPORT_*` variables, a separate `psxport_settings.ini`,
 and the REPL/debug-server commands each resolved on their own, and which one won was whichever
-`getenv` happened to run first. There is now one answer, and it is a layer ladder
-(`runtime/recomp/config_var.h`, shape taken from Dusklight's `src/dusk/config_var.hpp`, CC0):
+`getenv` happened to run first. There is now one answer, and it is a layer ladder. **Provenance:** the
+current `runtime/recomp/config_var.h` implementation was adapted from Dusklight's CC0-licensed
+`src/dusk/config_var.hpp`; that attribution does not make another project the authority for
+psxport's precedence policy:
 
 | layer | where it comes from | persisted? |
 |---|---|---|
@@ -21,11 +23,9 @@ which is what the old sentence about the REPL already meant. The two upper layer
 written back to the settings file**: launching once with `PSXPORT_FPS60=1` must not turn into the
 player's saved configuration, and it does not (`value_for_save()`).
 
-Ours deviates from Dusklight in one place, deliberately: their ladder is
-`Default < Value < Speedrun < Override`, with the launch argument on top. Ours puts `runtime` above
-`env`, because a human typing at a live console is later and more specific than the environment the
-process was launched in — and because that is what the REPL already did, so anything else would have
-silently changed a documented behaviour.
+psxport's own precedence is `default < value < env < runtime`: a human typing at a live console is
+later and more specific than the environment the process was launched in. It also preserves the
+existing REPL behavior, so placing `env` above `runtime` would silently change the product contract.
 
 ### Ask the program, do not guess
 
@@ -104,9 +104,9 @@ that map before migrating anything; it also lists 74 names that are read by NOTH
 DELETED rather than migrated, which is 74 fewer knobs for every later step to reason about.
 
 Two places where what landed differs from that map, both deliberate:
-- **The ladder's top is `runtime`, not `env`.** The map's Group-0 line has
-  `Default < Value < Runtime < Override`, following Dusklight. The code disagrees with that today: a
-  REPL `debug` calls `lucent::enable_channels()`, and lucent's contract is that an explicit
+- **The ladder's top is `runtime`, not `env`.** The earlier inventory proposed a different order, but
+  psxport's live behavior owns the answer: a REPL `debug` calls `lucent::enable_channels()`, and
+  lucent's contract is that an explicit
   `enable_channels()` always wins over the environment variable. Putting `env` on top would have
   silently reversed a documented behaviour, so `runtime` is on top and
   `tests/test_config_cvar.cpp::runtime_layer_outranks_the_environment_override` pins it.
@@ -125,53 +125,23 @@ output to say why.
 Read this before adding a new `getenv("PSXPORT_…")`. The repo accumulated ~105 ad-hoc env flags, each
 with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now centralized.
 
-## `PSXPORT_ENGINE` — which engine executes guest code
+## CPU execution is not configurable
 
-`PSXPORT_ENGINE=substrate|interpreter|jit` picks the execution engine for every Core that does not
-demand a specific one. It is orthogonal to the render flags below: those choose who draws the picture,
-this chooses who runs the instructions.
+The intended gameplay product always executes non-native guest code through the per-`Core` Lightrec
+dynarec. There is no persisted setting, environment variable, command-line flag, UI choice, or
+fallback that selects an interpreter or offline-generated guest code. A missing backend or an
+untranslatable block is a named product failure, not permission to choose another engine.
 
-| value | engine |
-|---|---|
-| `substrate` (default) | the statically recompiled C in `generated/shard_*.c` — what ships today |
-| `interpreter` | the flat MIPS interpreter (`runtime/recomp/interp.cpp`), also the divergence oracle |
-| `jit` | runtime translation. Not built in yet; selecting it aborts by name rather than pretending |
+The current tree still contains `PSXPORT_ENGINE` and path-selection flags coupled to the generated-C
+and in-library interpreter design. They are migration gaps tracked by `docs/issues/0051-*`, not
+supported additions to the configuration contract. Do not add values, call sites, menu controls, or
+fallback rules to them. They are removed after the Lightrec executor, bounded exits, image-scoped
+native calls, and invalidation pass their production gates.
 
-**It refuses an unrecognised name instead of warning and falling back**, which is the one place it
-deliberately differs from `PSXPORT_RENDER_PATH`. Falling back would run the shipping substrate while
-the operator believed they were measuring another engine — and a run where "the engine was selected"
-and "the engine never ran" look identical is exactly the defect the selector (`engine_select.h`,
-jit-common I001) was built to remove. It is **not persistable**: the engine is a measurement and
-bring-up choice during the migration off static recompilation, not a user preference, and a stale
-`engine=` line silently selecting a slow or unfinished engine is the confusion this knob exists to end.
-
-The two-core harnesses pin their own panes and ignore this knob: SBS core A and the `oraclediff`
-core A are the port under test and stay on the substrate; the oracle panes stay on the interpreter.
-Otherwise setting the knob would turn a divergence harness into two copies of one engine, which
-reports no divergence for the wrong reason.
-
-## The 5 canonical run flags (path selection) — see AGENTS.md for full vocab
-
-| flag | selects | notes |
-|---|---|---|
-| (none) | pc_faithful + pc_render | Default. Byte-exact target for SBS. Currently broken (Job#1). |
-| `PSXPORT_GATE=1` | recomp_path + pc_render | Substrate runs gameplay; native renderer. Works, render issues. |
-| `PSXPORT_RENDER_PSX=1` | pc_faithful + psx_render | Substrate renderer only. Faithful still broken. |
-| `PSXPORT_GATE=1 PSXPORT_RENDER_PSX=1` | recomp_path + psx_render | Substrate gameplay + substrate renderer. **NOT the reference** — see below. |
-| **`PSXPORT_ORACLE=1`** | recomp_path + psx_render, enhancement-free | **THE PICTURE REFERENCE.** Implies the row above AND forces pure OT painter order, so no native band/depth/widescreen/fps60 decision reaches the picture. Every pc_enh knob is force-suppressed under it, per knob and by name — `psx::config::compare_run()`. |
-| `PSXPORT_SBS_MODE=full` | dual-core byte-compare | Core A = pc_faithful, Core B = recomp_path. Job#1 harness. |
-
-**Why the bare `PSXPORT_GATE=1 PSXPORT_RENDER_PSX=1` pair is not the reference** (this table called it
-"THE REFERENCE. Works perfectly." until 2026-08-12 — kanban #82): those two flags select the substrate
-for gameplay and the substrate rasterizer for the picture, but they do **not** suppress the native
-render decisions layered on top. Painter order, the depth band, widescreen and fps60 can all still
-reach the frame, so a picture taken that way is not enhancement-free and comparing against it can
-certify a difference as absent when a native decision produced it. `PSXPORT_ORACLE=1` is the pair
-*plus* those suppressions — it is what `docs/oracle.md` means by "the best in-tree picture reference".
-
-And its own limit, stated there rather than left implied: it is still the native rasterizer at native
-precision and at `ires>1`. It answers *"what does the SUBSTRATE draw"*, never *"what does the HARDWARE
-draw"*. For the latter there is no in-tree answer.
+An interpreter oracle is selected only by building and running a separate test target. Its controls
+belong to that test tool and never enter this product CVar inventory. Render and enhancement controls
+remain independent of CPU execution, and comparison tools must name their separately built engines so
+two identical legs cannot masquerade as a valid differential run.
 
 **`PSXPORT_GUEST_POKE=<addr>:<val>[:<width>],...` — DIAGNOSTIC ONLY.** Writes those guest locations
 EVERY frame (width 1/2/4 bytes, default 1; addr and val hex), at the platform frame tick, on whatever

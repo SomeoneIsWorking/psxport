@@ -1,329 +1,101 @@
-# Porting another PSX game with this framework
-
-This project (psxport / Tomba2Engine) is built along a deliberate seam: a **PSX-generic
-framework** plus a **game-specific reimplementation**. This doc is the map for pointing the
-framework at a *different* PSX game — what transfers as-is, what needs per-game RE, and the
-architectural patterns that make the per-game work small. It's written from the design
-conversation behind the Tomba!2 port; treat it as the north star, not a checklist to follow
-blindly.
-
-Companion skills/docs (generic): `recomp-init`, `recomp-recompiler`, `recomp-overrides`,
-`recomp-harness`, `decomp-port`, `ghidra-re`. Project-specific mechanics live in `docs/`
-(`faithful-execution.md`, `render-arch.md`, `bug-hunt-workflow.md`, `fleet-workflow.md`).
-
----
-
-## 1. The two-layer model
-
-### Start with the bare scaffold
-
-Use `tools/psx_port_scaffold.py` to create the consumer repository rather than copying an existing
-game's launcher, CMake, disc path, or title facts. It resolves the framework, asks `discdump` to follow
-the supplied disc's `SYSTEM.CNF`, emits that discovered PS-X EXE into ignored `generated/`, and leaves
-all title-specific enhancement work opt-in. The user disc is recorded only in ignored `.env`.
-
-The scaffold uses the shared generic whole-program profile. The emitter records the PS-X EXE PC0 and
-proves exactly one generic libetc VSync route in ignored generated output; the framework starts PC0
-once, yields at that VSync, and resumes the same generated stack after each host field. Re-entering
-guest main each host frame or suppressing VSync would create a fake port. Title RE replaces the generic
-profile only when measured ownership requires it.
-
-**Generic (~80% of the infrastructure — lift and reuse):**
-
-- **Static recompiler** (`tools/`) — MIPS→C for any `MAIN.EXE` + overlays. N64Recomp-style.
-- **Substrate/runtime** (`runtime/recomp/`) — `Core` (regs/RAM/scratchpad), `rec_dispatch`,
-  the engine-override table, the guest-ABI + stack machinery, the fiber scheduler, boot.
-  The whole "recompiled blob you progressively own" model.
-- **PSX hardware backends** — GTE (COP2), SPU, MDEC, CD/XA/CDDA, GPU (GP0/GP1/OT/VRAM),
-  beetle-derived. Pure PSX hardware; game-agnostic.
-- **PSX-SDK HLE** — libcd/libgs/libgpu/libgte/libspu/libpad. Generic to any Sony-SDK PSX game
-  (almost all of them). Version differences are the main caveat.
-- **Differential harness + tooling** — SBS/oracle, `port_check`/`port_gen`/
-  `abi_extract`/`codemap`/`findings`, the Ghidra pipeline. The *methodology* of byte-gating
-  native code against the recomp is fully generic.
-- **Render substrate** — the VK renderer, the read-only-overlay rule, the widescreen/60fps/
-  native-depth machinery. The *mechanism* (a PSX game's OT/GP0 stream → native picture) is generic.
-
-**Game-specific (`game/` — the actual reimplementation):**
-
-- Every RE'd object handler and its addresses (actors, AI, physics, quests, camera, the scene
-  tables). Anything that reads a specific guest address or reproduces a specific `FUN_xxxx`.
-- The area/overlay layout and specific scenes.
-
-The per-game *code* doesn't transfer — but the **workflow, tooling, and patterns for producing
-it do, completely.** The irreducible cost of a new game is RE labor, and the whole point of the
-patterns below is to shrink that labor to a well-bounded surface.
-
----
-
-## 2. Phase 0 — stand up recomp + harness FIRST
-
-Before any game logic (see `recomp-init`):
-
-1. Vendor a reference emulator (the **oracle**) and the CHD/BIOS provisioning.
-2. Recompile `MAIN.EXE` (+ overlays) to `generated/` shards. Generated code is sacrosanct.
-3. Boot the recomp under a native boot+frame loop with everything dispatched to the substrate.
-4. Stand up the **differential harness** (SBS two-core / oracle) that byte-compares the
-   native run against the oracle every frame. **This exists before you own a single function.**
-
-You now have a byte-gated recomp running. Everything after is *progressively replacing substrate
-with owned native code*, gated by the harness.
-
-The emitter also writes `.recomp_identity` and compiled `g_rec_substrate_id`, derived from the exact
-emitted translation units and routing metadata. Expose that symbol through the game's
-`RecompRegistry::substrate_id`. App/framework Git IDs cannot describe ignored generated code; a runtime
-that reports the substrate as `UNKNOWN` is not valid evidence until the adapter is wired and regenerated.
-
-### The game's seed file (`emit.py --seeds`)
-
-The recompiler discovers functions from the binary itself — the entry point, pointer/constructed-
-pointer/table scans, mergeable function boundaries after `jr ra`, then the direct-`jal` call graph.
-This includes ordinary handlers whose runtime-patched callback slots are zero in the file: the
-address need not appear as data when the stripped module's own layout proves a callable boundary.
-
-What it still cannot derive is a target with no generic file evidence, or a runtime-computed
-**mid-function** re-entry point (a cooperative loop top, a saved interrupt continuation, a stage
-entry the native path owns). Those addresses are facts about **the specific executable**, and each
-overlay's load base is a fact about **the specific disc**. Every game supplies only those residual
-facts in its seed file:
-
-```sh
-python3 tools/recomp/emit.py MAIN.EXE generated/rec.c --seeds game/recomp_seeds.json [--overlays DIR]
-```
-
-JSON with `//` comments (keep the *rationale* next to each address — it is what makes the entry
-reviewable a year later). Every key is optional:
-
-| key | meaning |
-|---|---|
-| `main` | resident-module seeds |
-| `main_reentry` | mid-function re-entry points (the body before must fall *through*, not `return`) |
-| `overlay_bases` | `{STEM: addr}` — per-overlay load base |
-| `overlay_base_patterns` | `[[regex, addr]]` — one slot shared by a family (e.g. per-area overlays) |
-| `overlay_seeds` | `{STEM: [addr]}` — per-overlay explicit seeds |
-
-Two rules this enforces, both learned the hard way:
-
-- **Never reuse another game's seed list.** A foreign seed that lands inside your text SPLITS a real
-  function at an arbitrary offset — the emit succeeds and the recomp is silently corrupt. One that
-  lands outside raises. `emit.py` range-checks seeds and names this cause in the error.
-- **Never guess an overlay base.** An overlay is keyed *by* its load address, so a wrong base emits a
-  whole module of correctly-decoded instructions at wrong addresses — every `jal` target, pointer
-  test and router lookup then silently wrong. A missing base is a hard error, not a default.
-- **Seed a measured `HookEntryInt` continuation as `main_reentry`.** `B0:0x19` receives a setjmp
-  buffer, and its `+0` word is usually the instruction after the game's setjmp call — inside the
-  interrupt bootstrap, not at a natural function boundary. Derive that return PC from the retail
-  call site and add it to `main_reentry`; a guessed function seed cannot enter the custom hardware
-  dispatcher and leaves CD/SPU callbacks unreachable. Its eventual `B0:0x17 ReturnFromException`
-  is non-returning; psxport unwinds generated frames back to the interrupted register context.
-
-Treat a `[recomp-MISS]` as a discovery failure, not automatically as a new seed. First classify the
-live module and target: if the retail bytes contain a generic function boundary, pointer construction,
-table entry, direct call, or other repeatable evidence, extend the shared emitter and gate its false
-answer. Add a commented game seed only when that analysis proves the file carries no derivable entry
-evidence. This keeps title seed files as measured residuals instead of a miss/rebuild work log.
-
----
-
-## 3. Phase 1 — faithful: byte-exact native ownership
-
-Own functions top-down along the execution spine, each gated to **byte-match the recomp**.
-
-- **Mirror the guest stack.** A recomp'd MIPS leaf spills its incoming callee-saved registers
-  onto its own guest frame; a shared callee re-spills them. So a native port of a caller must
-  reproduce the guest register/stack frame exactly — descend `sp`, spill `r16..r23/r30/r31` at
-  the RE'd offsets with the LIVE values, set `c->r[31]` to the RE'd jal-site constants before
-  each dispatch, restore + ascend. `tools/abi_extract.py <addr> --contract` derives the frame.
-  See `docs/faithful-execution.md` and `game/world/object_table.cpp`.
-- **Pass-through registers are the caller's job.** If a function never references a callee-saved
-  register (e.g. `r22/r23/r30`) but a callee spills it, that register must be maintained
-  *upstream* (by the faithful entry that set up the frame), NOT inside the pass-through function.
-  Getting this wrong looks like a divergence "in" the innocent function. (Tomba #37 lesson.)
-- **No bandaids.** No magic offsets, no compare relaxations, no residual allowlists. A
-  `rec_dispatch` MISS is fixed by seeding the recompiler, porting, or wiring an override — never
-  by papering over it.
-
-### Verification discipline — honest gates
-
-The harness only tells you about what it **exercised**. Two traps that produce fake-green:
-
-1. **Registration/override wiring** — if the native override isn't actually installed on the
-   compared core, both cores run substrate and you get a hollow 0-diff. Probe that the override
-   fired (Tomba: `PSXPORT_DEBUG=ovhit`).
-2. **Mode-gated code paths** — some native code only runs under specific stage/mode state (Tomba:
-   the faithful field-frame path only runs at `sm[0x4c]==3`; free-roam dispatches to substrate).
-   A free-roam 0-diff never touched it. **Force the mode state AND probe the native body ran**
-   (Tomba: `PSXPORT_SBS_FORCES4C` + an entry probe with count>0) before trusting the gate.
-
-A green gate means what it exercised, nothing more. See `docs/findings/sbs.md`.
-
----
-
-## 4. Phase 2 — enhancements via a read-only overlay
-
-Enhancements (widescreen, 60fps, native depth, hi-res) are a **read-only overlay**: the PSX
-render path still executes underneath (its guest-memory writes are part of the faithful state),
-and the enhancement produces the *picture* from its own pass. **The overlay MUST NOT write guest
-RAM** — a guest write from render is a bug that breaks the byte-compare. This rule is what keeps
-enhancements orthogonal to faithfulness: you don't have to finish Phase 1 to have wide/60fps.
-
-### Choose the enhancement class before building its prerequisites
-
-Do not make the 30-to-60fps interpolation stack a universal port prerequisite. Mega Man X4
-(`SLUS_005.61`), Tekken 3 (`SLUS_004.02`), and Tomba! 1 (`SCUS_942.36`) already run at the requested 60fps cadence by title scope, so their rendering
-target is **widescreen only**: no temporal interpolation, no previous/current transform capture, and
-no native-depth or native-producer work justified merely as an interpolation prerequisite. Tomba! 2
-(`SCUS_944.54`, which loads `MAIN.EXE`) is explicitly not in this class. Keep each
-title's original frame loop and recover only what its wider projection, culling, 2D layout, and edge
-presentation actually require. This is a USER scope decision (2026-08-22), not a cross-title timing
-measurement; a title may revise it only with title-specific evidence or a later scope decision.
-
-The coupled capability below applies to a title that really does need an interpolated higher display
-cadence and a moving PC-native camera. It does not apply to an already-60fps widescreen-only port.
-
-### Native depth is the north star for an interpolated native camera
-
-Painter's/OT order has no real depth — it only works for the *fixed* PSX camera because the game
-pre-sorted for that one viewpoint. The moment you widen the FOV or interpolate a frame you've
-moved the camera, and paint order is wrong (z-fighting, bad occlusion). **Native depth — real
-world-Z in a depth buffer — is the only thing that survives a moving/wider camera.**
-
-For that interpolated-native class, wide + 60fps + correct occlusion are not three features; they are one capability:
-**recovering world-space coordinates behind what's drawn.**
-
-- native depth = the world Z per vertex,
-- 60fps per-object anchor = the world XYZ per object,
-- wide = projecting those world coords through a widened camera.
-
-All three are "get the world coords."
-
-### The reusable capability: bottom-up GTE capture
-
-You do NOT need to RE every object handler top-down to get the world coords. The recomp gives
-you a **single GTE execution choke point** — every perspective transform (`RTPS`/`RTPT`) runs
-through one place. At that point you already see, per projection:
-
-- the **input** — the local vertex + the translation/rotation control regs (the world/view
-  coordinates being projected),
-- the **output** — screen X/Y + Z,
-- the **caller** — `ra` and whatever object/slot pointer is live in the arg regs.
-
-So the world data is *free*. Capturing it per-primitive (this project's `projprim`/PGXP is the
-seed) gives you native depth generically. Extend that capture with **one field — who issued this
-projection** — and the same tap feeds per-object 60fps anchors and wide, for any PSX game.
-
-**Identity is the real per-game slice.** To interpolate you must match this frame's primitive to
-last frame's *same* object. World position can't be the key (moving objects). You need a stable
-per-primitive identity read from the caller's context:
-
-- `(node address, command/slot index)` — objects are usually fixed slots in a manager array, so
-  the index is stable across frames. This is the 80% solution and it dissolves the classic
-  "manager groups all its sprites under one OT node" problem: the OT node is shared, but each
-  sprite gets its **own** GTE projection with its own coords and its own slot. The grouping never
-  existed at the GTE level.
-- a fingerprint (texture page + CLUT + relative offset) as a fallback.
-
-`RotTransPers`/`RotTransPers3`/the `ldv`+`rtps` sequences are **Sony-SDK-shared**, so the
-identity plumbing you write against them works across essentially every PSX game; game-custom
-projection wrappers exist but are few and central. "RE what writes to the GTE" is exactly this:
-understand the projection call chain well enough to read the object id out of the caller.
-
-### The anti-pattern to avoid: OT classification + per-site tagging
-
-When you render by walking the guest OT and *classifying leftover GP0 packets* — "is this a 3D
-world poly the native pass already drew (drop) or a guest-only billboard (keep)?" — you end up
-with a keep/drop gate that can't tell them apart intrinsically, so it uses a proxy: "was this
-object's dispatch site manually tagged?" That tag becomes a per-site allowlist that grows every
-time a class goes invisible (Tomba: `s_ot_2d_only` + `obj_depth`/`withDepthTag`). **It is a
-symptom of not owning the object**, not a fix.
-
-The proper fix is the project's core principle: **REBUILD from game state, don't transcribe the
-OT.** Once you *own the object's handler*, the PC renderer reads it directly and draws each
-instance from its own world position — per-object by construction (no grouping), correct depth
-(no tag), no double-draw, no classification. The object never enters the OT-classification path
-at all, so the gate has nothing to reason about. The bottom-up GTE capture above is the *cheap*
-version of this for enhancement purposes (you get per-object world+depth without a full handler
-port); a full handler port is the faithful end-state.
-
----
-
-## 5. What transfers vs what's per-game (honest)
-
-| Concern | Genericity |
-|---|---|
-| Recompiler, substrate, harness, tooling, PSX-HW, SDK-HLE | **Generic** — lift and reuse |
-| Camera | **Mostly generic** — it *is* the GTE control regs (CR24-26); reading them is game-agnostic |
-| 3D geometry through GTE (terrain, meshes, world billboards) | **Mostly generic** — world-Z recoverable from the GTE tap; heavy per-game RE here usually means the game feeds GTE pre-transformed |
-| Per-object identity for interpolation | **Small per-game RE** — which register/slot holds the object id; spawn/despawn/slot-reuse tuning |
-| **Parallax / 2D backdrops** | **Irreducibly per-game** — they *fake* depth with 2D scroll and never touch the GTE, so there is no world coordinate to recover. You must RE the game's parallax model (layers, scroll rates, pinned depth) |
-| Object gameplay logic (AI, physics, quests) | **Per-game** — this is the long tail; own it top-down for faithfulness |
-
-So the honest version of "make the next interpolated-native port easier": lean as hard as possible on the GTE tap for
-native depth → camera + 3D + billboards become mostly generic (depth, 60fps, wide fall out
-together). The per-game render RE then concentrates on the layers that don't go through GTE —
-parallax/2D — a much smaller, well-bounded surface than "RE the whole renderer top-down."
-
-Not fully automated (identity heuristics + parallax need hands), but the transferable core is
-real and already isolated.
-
----
-
-## 6. A concrete order of operations for a new game
-
-1. **Provision + recompile** the target's `MAIN.EXE`/overlays (with your own `--seeds` file — see
-   Phase 0); vendor the oracle emulator.
-2. **Stand up the harness** (SBS/oracle) and confirm byte-lockstep with everything on substrate.
-3. **Lift the framework** unchanged: substrate, PSX-HW backends, SDK-HLE, tooling, render substrate.
-4. **If the title needs interpolated native rendering, bring up the GTE tap** (`projprim`/PGXP
-   equivalent) → native depth for the 3D world. If it is already 60fps and needs widescreen only,
-   skip the temporal/native-depth machinery and RE its real projection/culling/layout path instead.
-5. **For interpolated native rendering, add per-primitive identity** from the caller context → per-object anchors (60fps) and the
-   dissolution of manager-node grouping. Start with `(node, slot)`.
-6. **RE the parallax/2D backdrop model** — the irreducible per-game render RE. Feed those layers
-   correct depth/width explicitly.
-7. **Own object handlers top-down** along the execution spine for faithfulness (Phase 1), each
-   byte-gated with honest gates (force mode state + probe). Owning a handler also removes that
-   object from any OT-classification scaffolding.
-8. **Never** grow a keep/drop tag allowlist or write guest RAM from render. If you're tempted to,
-   the object wants owning, not tagging.
-
----
-
-## 7. One-paragraph summary
-
-The framework is ~80% PSX-generic and already factored that way (`runtime/` + `tools/` + PSX-HW
-vs `game/`). A new game inherits the recompiler, substrate, harness, PSX hardware, SDK HLE, and
-render substrate on day one. The per-game work is RE labor, and the patterns keep it small:
-**native depth from the GTE tap** makes camera/3D/billboards mostly generic; **per-primitive
-identity from the caller** gives per-object 60fps/anchoring and un-groups manager sprites;
-**owning handlers** (rebuild from state, don't transcribe the OT) removes the classification
-bandaids. The irreducible per-game surface is **parallax/2D backdrops** (no GTE coords to
-recover) and **gameplay logic**. Gate everything against the oracle, and never trust a green gate
-without proving it exercised the code.
-
-## The framework compiles standalone (and that is the agnosticism proof)
-
-A bare psxport checkout builds with no game present:
-
-```sh
-cmake -S . -B build -DPSXPORT_BUILD_SMOKE=ON
-cmake --build build --target psxport_smoke     # links libpsxport against a stub game
-```
-
-`psxport_smoke` links the library against a stub, so a successful link proves no `game/**` symbol is
-required. Because the framework now builds standalone, that proof is runnable from the framework
-repo itself rather than only from inside a consumer tree.
-
-**This was broken until 2026-07-21.** `overlay_router.cpp` used to `#include "overlay_table.h"` for
-the compile-time `REC_MAIN_LO/HI` text-range macros — a header generated PER GAME. The framework
-therefore had a compile-time dependency on a consumer artifact, and a bare checkout could not
-compile, which quietly made the agnosticism claim unverifiable.
-
-The fix is the same seam every other game-specific address already uses: `GameConfig` gained
-`recMainLo` / `recMainHi`, `overlay_router` reads `c->cfg->recMainLo`, and the consumer supplies the
-values from its own `generated/overlay_table.h`. Tomba2Engine's `game_config.cpp` includes that
-header and passes the macros straight through, so the values cannot drift from the substrate they
-describe.
-
-If you add framework code, do not `#include` anything from `generated/` — that is the consumer's
-namespace. Route the value through `GameConfig` instead, and the standalone build stays honest.
+# Porting a new PlayStation game with psxport
+
+This guide describes the native/Lightrec architecture. psxport's current code is still migrating to
+it; follow `docs/project-state.md` and do not begin a new title until the active PSX title's declared
+conformance gate is complete.
+
+## What the framework provides
+
+- A per-`Core` Lightrec executor for non-native MIPS R3000A code.
+- PSX GPU, SPU, GTE, MDEC, CD/DMA/timer/pad, BIOS/SDK HLE, rendering, audio, input, configuration,
+  diagnostics, and platform seams.
+- Image-scoped native overrides, scoped original calls, bounded execution exits, and executable-code
+  invalidation.
+- Hermetic production-seam tests and separately built oracle tools.
+
+The game repository provides exact disc/executable identity, resident/module descriptions, native
+functions, title frame/task policy, presentation capabilities, user-facing setup, and legally obtained
+game data. Framework code contains no title address or header.
+
+## Initial evidence
+
+1. Authenticate the exact disc and primary executable from headers, filesystem metadata, checksums,
+   and known title/revision identity.
+2. Recover the executable load address, entry PC, initial stack/global pointer, resident executable
+   ranges, and module/overlay load behavior from the binary and runtime observation.
+3. Record address reuse by module identity and determine every path that writes executable RAM: CPU,
+   DMA, disc loader, decompressor, debugger, and savestate.
+4. Establish an independent emulator/hardware or test-only interpreter checkpoint with a positive
+   reachability signal and a deliberately differing control.
+
+Static analysis may produce symbols and reviewable metadata. It must not emit guest function bodies or
+a title-specific source/object corpus. Ghidra is a maintainer tool, not a player prerequisite.
+
+## Title seam
+
+Define the smallest typed title owner for:
+
+- authenticated resident and module identities;
+- module generation/load notifications;
+- native override registrations keyed by identity/generation/address;
+- frame and cooperative-task exit policy;
+- measured BIOS/SDK or device service boundaries;
+- renderer/presentation capabilities; and
+- representative gameplay checkpoints and legitimate oracle exclusions.
+
+Never expose a bag of arbitrary addresses to the framework or add one virtual getter per address.
+Group facts by the algorithm that consumes them. An unknown fact remains absent and fails by name;
+zero or a guessed address is not a placeholder.
+
+## Bring-up sequence
+
+1. Load and authenticate the user-supplied executable/module bytes into canonical guest memory.
+2. Construct one Lightrec executor for the title's `Core` and execute a bounded resident instruction
+   window with nonzero translated blocks.
+3. Prove state synchronization and one service exit against independent evidence.
+4. Register one resident native override and exercise normal plus scoped original calls.
+5. Load two modules that reuse an address and prove identity/generation selects the right native or
+   guest body.
+6. Exercise executable invalidation with a changed overlapping write and a controlled non-overlap.
+7. Reach boot, menu, and gameplay checkpoints while adding only evidence-backed service/native owners.
+8. Drive representative interactive gameplay with rendering, audio, input, timing, interrupts,
+   module loads, overrides, original calls, and nonzero Lightrec translation active.
+
+Do not repair a missing MIPS semantic with a title-address override. Fix Lightrec or its psxport
+integration. Native overrides are for deliberately owned game behavior and proven service boundaries.
+
+## Product and oracle separation
+
+The gameplay build has no CPU engine selector. It links Lightrec and native code only. Any interpreter
+or software-GPU oracle is built as a separate test target and cannot be selected by product config,
+command line, or UI. Lightrec's internal interpreter fallback is disabled; an unsupported block exits
+with a named error.
+
+The oracle may share canonical state/memory interfaces, but comparison code never becomes a required
+player dependency. A consumer's `run.sh` launches the intended Lightrec/native product and never runs
+tests.
+
+## Player setup
+
+Support direct game files and one bounded nested ZIP through the platform setup flow. Validate exact
+title identity and the complete required install before replacing a previous valid selection. Persist
+the choice in the OS user-data location. Developer overrides may use an explicit argument,
+environment/`.env`, then a repo drop-in, but no game data enters Git or a package.
+
+A fresh checkout with documented native dependencies, `uv`, and a compatible compiler must provision
+and launch without generated guest code, Ghidra, or private machine paths.
+
+## Completion gate
+
+A title is migrated only when:
+
+- the authenticated product reaches at least its prior verified frontier and representative
+  interactive gameplay;
+- native overrides and an original call execute through the runtime dispatcher;
+- relevant module reuse and executable invalidation pass positive and negative controls;
+- timing, interrupts, memory, and relevant device state are compared at named boundaries;
+- each released host architecture meets its declared correctness and frame-time budget;
+- product-link and selector audits find no interpreter or generated guest bodies; and
+- the launcher, goals, state, codemap, issues, and player docs match the shipped path.
+
+Finish this title before beginning title-specific work for another PSX game.

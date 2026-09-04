@@ -2,9 +2,9 @@
 
 **Unlabeled content is machine convention, revisable by any session. USER lines are verbatim dated
 quotes, and only those.** Each rule's measurement lives in `docs/findings/workspace-incidents.md` — this
-file keeps the rule, that file keeps the evidence. How a game *consumes* the framework (build, CVars,
-seam, `generated/`, RE tooling, diagnostics) is `psxport/AGENTS.md`; this file is about several agents
-changing one framework at once.
+file keeps the rule, that file keeps the evidence. How a game *consumes* the framework (the
+Lightrec/native seam, configuration, RE tooling, and diagnostics) is `psxport/AGENTS.md`; this file is
+about several agents changing one framework at once.
 
 Seven game repos share ONE framework, and there are seven checkouts of it — one writable, six not:
 
@@ -328,9 +328,9 @@ writes its result (`gte_store_xy`) is observation at the submission boundary, no
 **The test:** could this artefact be traced to code in the GAME that produces it? If not it is the port's
 own mechanism, and the fix belongs at the mechanism — never in compensating arithmetic that makes the
 number smaller. A reported "vibration" was measured 100% manufactured by the port and camera-dependent at
-0.13–1.53 px (findings, which also holds why Dusklight may lerp matrices and we may not: its are FLOATs the
-game computed, ours are s16, so interpolation is **gated on the PC owning the code that COMPUTES the
-transform**, not banned in principle).
+0.13–1.53 px. The source distinction owns the rule: interpolation may use float transforms computed by
+the game's native code, but it may not reconstruct them from s16 GTE outputs. It is therefore **gated on
+the PC owning the code that COMPUTES the transform**, not banned in principle.
 
 **BREAK FIRST, THEN REBUILD.** Delete the wrong-sourced producer, let the layer be honestly absent, then
 build the real one; never keep a WRONGLY-SOURCED producer alive alongside the replacement "to be safe". A

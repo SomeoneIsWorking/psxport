@@ -104,12 +104,11 @@ of an already-s16-quantised matrix while the display pass re-composed with the c
 is identity only in exact arithmetic, so the residue was A FUNCTION OF THE CAMERA — **0.13 px with the
 camera still, 1.53 px with 12/12 sign alternations while panning.** Nothing in the game makes it vibrate.
 
-**Rule it produced:** resolve from what SUBMITS to the GTE, never from what the GTE produced. And the
-Dusklight contrast: its frame interpolation lerps FLOAT matrices the game itself computed, in a decomp,
-before any hardware saw them; a GTE-side matrix is s16 fixed point, so recovering a transform from it means
-inverting a quantised value and the error is camera-dependent — that 1.53 px, not a rounding nit. The
-technique is fine; the SOURCE is what differs, so interpolation is gated on the PC owning the code that
-COMPUTES the transform.
+**Rule it produced:** resolve from what SUBMITS to the GTE, never from what the GTE produced. Source-level
+frame interpolation can lerp FLOAT matrices the game itself computed before any hardware saw them; a
+GTE-side matrix is s16 fixed point, so recovering a transform from it means inverting a quantised value and
+the error is camera-dependent — that 1.53 px, not a rounding nit. The technique is fine; the SOURCE is what
+differs, so interpolation is gated on the PC owning the code that COMPUTES the transform.
 
 **A separate PSX fact, often confused with the above:** the PSX has no Z-buffer. RTPS yields screen XY plus
 `OTZ`, an *averaged and shifted* Z used only to choose an ordering-table bucket — a bucket index, not a

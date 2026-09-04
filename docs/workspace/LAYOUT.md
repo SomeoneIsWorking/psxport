@@ -1,32 +1,35 @@
-# Target layout — organize like Dusklight/Aurora
+# Target responsibility layout
 
-> *"make sure to lay the projects out like Dusklight/Aurora, everything well organized"* — USER, 2026-08-06
-
-Reference: `~/repo/dusklight` (CC0). Take the SHAPE, not a copy-paste. See the workspace `CLAUDE.md`
-Dusklight section for the UI/config/interpolation specifics.
+This document applies psxport's self-contained ownership rules. Split modules where state, lifetime,
+invariants, dependency direction, platform coupling, test seams, or rates of change differ. The
+canonical placement decisions are in `docs/codemap.md`; this document describes the mechanical move
+from the current flat tree.
 
 ## Where we actually stand (measured 2026-08-06, not guessed)
 
 | tree | state | verdict |
 |---|---|---|
-| `Tomba2Engine/game/` | 373 files across `world/ render/ ai/ audio/ camera/ core/ input/ items/ math/ object/ player/ scene/ ui/ cd/` | **Already Dusklight-shaped.** Leave it. It is the exemplar the other two grow into. |
+| `Tomba2Engine/game/` | 373 files across `world/ render/ ai/ audio/ camera/ core/ input/ items/ math/ object/ player/ scene/ ui/ cd/` | Already split by cohesive game responsibility. Leave it; other consumers add only owners their verified behavior requires. |
 | `spyro/game/`, `spider1/game/` | 21 and 12 files across `core/ render/` | Proportionate. Do NOT pre-create empty subsystem dirs — split a directory when it earns it, on Tomba2's names so the three ports stay legible together. |
 | `psxport/runtime/recomp/` | **149 files, FLAT** — GPU, SPU, CD, MDEC, HLE, memcard, SBS harness, debug server, config, RmlUi overlay all siblings | **This is the whole problem.** Everything below is about this directory. |
 
 ## Target for `psxport/runtime/`
 
-One directory per subsystem, mirroring how Dusklight splits `src/dusk/` into `audio/ imgui/ ui/ mods/`
-rather than one bag of files:
+One directory per cohesive owner. Each directory has a narrow public boundary and one reason to
+change; the list is derived from psxport's own state and dependencies rather than another project's
+tree:
 
-    runtime/cpu/       dispatch, coro, core, the MIPS interpreter — execution substrate
+    runtime/cpu/       per-Core Lightrec executor, state bridge, bounded exits, code identity,
+                       image-scoped native/original calls, and invalidation
     runtime/gpu/       gpu_vk, gpu_native, render_queue, present/video plans, shaders_gpu/
     runtime/audio/     SPU
     runtime/media/     CD, disc, XA, FMV, MDEC
     runtime/hle/       BIOS/SDK HLE, memcard
     runtime/harness/   SBS, dualcore, dualview, verify, native_diff — the differential machinery
     runtime/config/    cfg/config/config_var (the CVar work lands here)
-    runtime/ui/        RmlUi overlay + glue  — componentised per Dusklight `src/dusk/ui/`
+    runtime/ui/        componentized RmlUi overlay + glue, per `docs/ui-architecture.md`
     runtime/dbg/       dbg_server, fntrace, hostprof — developer tooling, the ImGui-side analogue
+    tests/oracle/      separately built interpreter and comparison support; never gameplay linkage
 
 `game_iface.h` / `recomp_iface.h` stay at `runtime/` root: they are THE SEAM, and burying a seam in a
 subsystem directory hides what a game is allowed to touch. `psxport_smoke` keeps proving it.
@@ -164,8 +167,9 @@ Measured, not assumed: `gte_state.h` is the ONLY framework header any file under
 
 ### The include convention the move installs
 
-Taken from Dusklight (`~/repo/dusklight/src/dusk/ui/*.cpp`, CC0): **siblings bare, cross-subsystem
-qualified.**
+**Provenance:** the include convention below was adapted from the CC0-licensed Dusklight sources at
+`src/dusk/ui/*.cpp`: **siblings bare, cross-subsystem qualified.** This attribution records the source
+of the installed convention; Dusklight is not an architecture authority for future placement.
 
 ```cpp
 // in runtime/gpu/gpu_vk.cpp
