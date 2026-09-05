@@ -20,7 +20,6 @@
 #include "guest_call.h"   // rc0 — invoke an EvMdINTR handler
 #include "memcard.h"      // card_hle_a0 / card_hle_b0 — libcard BIOS dispatch (class Memcard)
 #include "platform_hle.h" // class PlatformHle — sync-primitive HLE consulted on a RAM-code miss
-#include "syscall_exception.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1011,35 +1010,6 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
   return false;
 }
 
-// The `syscall` instruction: the kernel op is selected by $a0 (not the code field). Boot uses
-// Enter/ExitCriticalSection around setup.
-void psx::cpu::handleSyscall(Core &core, uint32_t code, uint32_t instructionPc) {
-  Core *c = &core;
-  (void)code;
-  psx::syscall_exception::enter(c->cop0, instructionPc ? instructionPc : c->pc);
-  int &irq_enabled = c->game->hle.irq_enabled;
-  switch (c->r[A0]) {
-  case 0:
-    c->r[V0] = 0;
-    break;
-  // Keep COP0 Status in agreement with the flag: the guest may leave a critical section by poking
-  // SR directly rather than calling ExitCriticalSection, and the two views must not diverge.
-  case 1:
-    c->r[V0] = irq_enabled ? 1 : 0;
-    irq_enabled = 0;
-    psx::syscall_exception::setReturnInterruptEnabled(c->cop0, false);
-    break; // EnterCritical
-  case 2:
-    irq_enabled = 1;
-    psx::syscall_exception::setReturnInterruptEnabled(c->cop0, true);
-    c->r[V0] = 0;
-    break; // ExitCritical
-  default:
-    lucent::info("syscall", "a0={} (unhandled kernel op)", c->r[A0]);
-    c->r[V0] = 0;
-  }
-  psx::syscall_exception::leave(c->cop0);
-}
 void psx::cpu::handleBreak(Core &core, uint32_t code) {
   lucent::info("break", "code {}", code);
   (void)core;

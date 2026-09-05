@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 class Core;
@@ -42,6 +43,7 @@ struct ExecutorCounters {
   std::uint64_t translatedBlocks = 0;
   std::uint64_t executedBlocks = 0;
   std::uint64_t executedInstructions = 0;
+  std::uint64_t hostDispatches = 0;
   std::uint64_t cacheHits = 0;
   std::uint64_t cacheMisses = 0;
   std::uint64_t invalidations = 0;
@@ -57,6 +59,8 @@ public:
   LightrecExecutor &operator=(const LightrecExecutor &) = delete;
 
   ExecutionResult execute(std::uint32_t guestAddress, ExecutionBudget budget);
+  // Service native/HLE boundaries until a requested typed exit, fault, or finite budget exhaustion.
+  ExecutionResult executeUntilExit(std::uint32_t guestAddress, ExecutionBudget budget);
   ExecutionResult executeFunction(std::uint32_t guestAddress, std::uint32_t returnAddress, ExecutionBudget budget);
   void requestStop();
   void invalidate(GuestAddressRange range);
@@ -70,8 +74,8 @@ public:
 
 private:
   ExecutionResult executeWithBoundary(std::uint32_t guestAddress,
-                                      std::uint32_t returnAddress,
-                                      bool stopAtReturn,
+                                      std::optional<std::uint32_t> returnAddress,
+                                      bool dispatchHostServices,
                                       ExecutionBudget budget);
   struct Impl;
   std::unique_ptr<Impl> impl_;

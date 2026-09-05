@@ -21,9 +21,12 @@ enum class ExecutionExitReason : std::uint8_t {
 
 struct ExecutionBudget {
   std::uint64_t cycles = 0;
+  std::uint64_t maxHostDispatches = 0;
 
   static constexpr ExecutionBudget fromCycles(std::uint64_t value) {
-    return {value};
+    // Initialize separate finite allowances; callers may set maxHostDispatches independently.
+    // Host transitions consume dispatch allowance, never fabricated guest cycles.
+    return {value, value};
   }
   static ExecutionBudget currentTurn(const Core &core);
 };

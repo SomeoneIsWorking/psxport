@@ -2,7 +2,7 @@
 # copied into each port, and the pinned revision prevents accidentally accepting an unrelated tree.
 include_guard(GLOBAL)
 
-set(PSXPORT_LIGHTREC_REVISION "b764c4c9f4bc425a56bfc4c32333ff8200ce8ab9")
+set(PSXPORT_LIGHTREC_REVISION "b1457137c31cedff5f440d59da29401d021ba2da")
 set(PSXPORT_LIGHTREC_DIR "" CACHE PATH "Path to the maintained shared/lightrec checkout")
 
 function(psxport_configure_lightrec_dependency)

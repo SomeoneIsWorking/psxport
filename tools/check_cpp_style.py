@@ -39,7 +39,7 @@ PSXPORT_CAPS = {
     "runtime/psx/gpu_vk_selftest_support.h": 15,
     "runtime/psx/gpu_vk_texture_phase_selftest.cpp": 180,
     "runtime/psx/gpu_vk_texture_phase_selftest.h": 10,
-    "runtime/psx/hle.cpp": 1046,
+    "runtime/psx/hle.cpp": 1016,
     "runtime/psx/mem.cpp": 1212,
     "runtime/psx/pc_scheduler.cpp": 550,
     "runtime/psx/pc_scheduler.h": 148,

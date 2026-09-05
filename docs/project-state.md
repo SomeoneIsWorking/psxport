@@ -33,7 +33,7 @@ translated control flow without restoring an offline dispatch substrate.
 
 ### S012 — Per-`Core` dynarec-default Lightrec backend
 
-The maintained fork is pinned at `b764c4c9f4bc425a56bfc4c32333ff8200ce8ab9`; Linux x86-64 executes
+The maintained fork is pinned at `b1457137c31cedff5f440d59da29401d021ba2da`; Linux x86-64 executes
 a nonzero translated block. The shipping executor reports calls, executed blocks/instructions,
 fallback blocks/instructions, refusals, and all five admitted/refused reason counts, while the typed
 configurable per-call threshold admits the verified single difficult-block escape and refuses a
@@ -45,8 +45,13 @@ machine, and both AArch64 hosts remain refused.
 
 The production adapter transfers GPR, HI/LO, PC, CP0, and COP2 state, accounts measured Lightrec
 instruction deltas through the canonical title clock, services pending work at translated block
-boundaries, and exposes typed budget/fault/syscall/break/pending-work results. Gap: delay-slot and
-interrupt conformance still require integrated proof.
+boundaries, and exposes typed budget/fault/syscall/break/pending-work results. `execute` retains
+individual syscall checkpoints; bounded function calls and `dispatchGuestUntilExit` resume supported
+syscalls and serviced pending work, with native/HLE routing independent of the optional return
+address. A separate typed host-dispatch allowance bounds native-only loops without fabricating guest
+cycles. Unknown syscall selectors and delay-slot exceptions are refused before native syscall state
+mutation. The synthetic runtime tests cover these paths; complete delay-slot exception continuation
+and interrupt conformance still require integrated proof.
 
 ### S014 — Image/generation-scoped native and original calls
 
@@ -54,6 +59,10 @@ interrupt conformance still require integrated proof.
 The synthetic runtime contract proves translated call interception, nested native context, translated
 resume, and an original guest body stopping at the exact caller continuation. Gap: representative
 resident/address-colliding overlay and generation-reuse coverage remains absent.
+
+`callOriginalUntilExit` uses the same scoped suppression and native caller-context restoration while
+allowing a translated polling body to end at a requested frame/yield/process exit. A synthetic
+nested native frame exit proves that suppression and requested-exit state do not leak after return.
 
 ### S015 — Central executable-code invalidation
 

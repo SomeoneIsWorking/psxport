@@ -45,7 +45,6 @@ private:
   bool suppressed(NativeKey key) const;
   void pushSuppression(NativeKey key);
   void popSuppression();
-  friend ExecutionResult callOriginal(Core &, NativeKey, ExecutionBudget);
   friend class SuppressionScope;
 
   Core &core_;
@@ -64,9 +63,12 @@ ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress)
 ExecutionResult
 invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction function, std::string_view name);
 ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionBudget budget);
+ExecutionResult dispatchGuestUntilExit(Core &core, std::uint32_t guestAddress, ExecutionBudget budget);
 void dispatchGuestToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view owner);
 ExecutionResult callOriginal(Core &core, NativeKey key, ExecutionBudget budget);
 ExecutionResult callOriginal(Core &core, std::uint32_t guestAddress, ExecutionBudget budget);
+ExecutionResult callOriginalUntilExit(Core &core, NativeKey key, ExecutionBudget budget);
+ExecutionResult callOriginalUntilExit(Core &core, std::uint32_t guestAddress, ExecutionBudget budget);
 void callOriginalToReturn(Core &core, NativeKey key, ExecutionBudget budget, std::string_view owner);
 void callOriginalToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view owner);
 

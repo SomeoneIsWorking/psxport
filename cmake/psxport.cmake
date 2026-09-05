@@ -68,6 +68,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/bios_libc_string.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle.cpp
   ${PSXPORT_ROOT}/runtime/psx/syscall_exception.cpp
+  ${PSXPORT_ROOT}/runtime/psx/kernel_syscall.cpp
   ${PSXPORT_ROOT}/runtime/psx/host_turn.cpp
   ${PSXPORT_ROOT}/runtime/psx/threads.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_native.cpp

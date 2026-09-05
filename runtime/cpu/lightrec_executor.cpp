@@ -463,8 +463,8 @@ void accountExecutedInstructions(Core &core, std::uint64_t instructions) {
 } // namespace
 
 ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress,
-                                                      std::uint32_t returnAddress,
-                                                      bool stopAtReturn,
+                                                      std::optional<std::uint32_t> returnAddress,
+                                                      bool dispatchHostServices,
                                                       ExecutionBudget budget) {
   Impl &impl = *impl_;
   ++impl.counters.calls;
@@ -485,9 +485,9 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
                            fallbackPolicy.configuredMaxBlocks)};
   }
 
-  const std::optional<std::uint32_t> returnTarget = stopAtReturn ? std::optional{returnAddress} : std::nullopt;
-  Impl::BoundarySession session(impl, returnTarget, stopAtReturn, fallbackPolicy);
+  Impl::BoundarySession session(impl, returnAddress, dispatchHostServices, fallbackPolicy);
   std::uint64_t consumedCycles = 0;
+  std::uint64_t hostDispatches = 0;
   std::uint32_t nextPc = guestAddress;
   while (consumedCycles < budget.cycles) {
     impl.boundaryReason = LightrecExecutor::Impl::BoundaryReason::None;
@@ -519,10 +519,26 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       ++impl.counters.faults;
       return {ExecutionExitReason::Fault, nextPc, consumedCycles, "Lightrec execution fault"};
     }
+    if (flags & LIGHTREC_EXIT_EXCEPTION_DELAY_SLOT) {
+      ++impl.counters.faults;
+      return {ExecutionExitReason::Fault, nextPc, consumedCycles, "delay-slot exception continuation is unsupported"};
+    }
     if (flags & LIGHTREC_EXIT_SYSCALL) {
       const std::uint32_t instruction = impl.core.mem_r32(nextPc);
-      handleSyscall(impl.core, (instruction >> 6u) & 0xfffffu, nextPc);
+      const auto syscall = handleSyscall(impl.core, (instruction >> 6u) & 0xfffffu, nextPc);
+      if (syscall != SyscallResult::Handled) {
+        ++impl.counters.faults;
+        return {ExecutionExitReason::Fault,
+                nextPc,
+                consumedCycles,
+                syscall == SyscallResult::UnsupportedSelector ? "unsupported syscall selector"
+                                                              : "syscall without game context"};
+      }
       impl.core.pc = nextPc + 4u;
+      if (dispatchHostServices) {
+        nextPc = impl.core.pc;
+        continue;
+      }
       return {ExecutionExitReason::InterruptOrException, impl.core.pc, consumedCycles, "syscall"};
     }
     if (flags & LIGHTREC_EXIT_BREAK) {
@@ -536,6 +552,12 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       case LightrecExecutor::Impl::BoundaryReason::GuestReturn:
         return {ExecutionExitReason::GuestReturn, impl.boundaryPc, consumedCycles, "guest return"};
       case LightrecExecutor::Impl::BoundaryReason::HostDispatch: {
+        if (hostDispatches >= budget.maxHostDispatches) {
+          return {
+              ExecutionExitReason::BudgetExhausted, impl.boundaryPc, consumedCycles, "host dispatch budget exhausted"};
+        }
+        ++hostDispatches;
+        ++impl.counters.hostDispatches;
         ExecutionResult result = dispatchGuestHostService(impl.core, impl.boundaryPc);
         result.cycles += consumedCycles;
         if (!result.returned()) {
@@ -551,7 +573,7 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
           requested->guestPc = impl.core.pc;
           return *requested;
         }
-        if (!stopAtReturn) {
+        if (!dispatchHostServices) {
           return {ExecutionExitReason::HostService, impl.core.pc, consumedCycles, "pending work"};
         }
         impl.skipPendingBoundaryOnce = __atomic_load_n(&impl.core.pending_work, __ATOMIC_RELAXED) != 0;
@@ -571,7 +593,7 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
         requested->guestPc = impl.core.pc;
         return *requested;
       }
-      if (stopAtReturn) {
+      if (dispatchHostServices) {
         nextPc = impl.core.pc;
         continue;
       }
@@ -583,7 +605,11 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
 }
 
 ExecutionResult LightrecExecutor::execute(std::uint32_t guestAddress, ExecutionBudget budget) {
-  return executeWithBoundary(guestAddress, 0, false, budget);
+  return executeWithBoundary(guestAddress, std::nullopt, false, budget);
+}
+
+ExecutionResult LightrecExecutor::executeUntilExit(std::uint32_t guestAddress, ExecutionBudget budget) {
+  return executeWithBoundary(guestAddress, std::nullopt, true, budget);
 }
 
 ExecutionResult

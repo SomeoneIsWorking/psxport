@@ -223,6 +223,12 @@ ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionB
   return core.lightrecExecutor().executeFunction(guestAddress, core.r[31], budget);
 }
 
+ExecutionResult dispatchGuestUntilExit(Core &core, std::uint32_t guestAddress, ExecutionBudget budget) {
+  NativeCallerContextScope callerContext(core);
+  auto attribution = core.callAttribution.scope(guestAddress);
+  return core.lightrecExecutor().executeUntilExit(guestAddress, budget);
+}
+
 std::optional<ExecutionResult> NativeDispatcher::invoke(NativeKey key) {
   const auto entry = entries_.find(key);
   if (entry == entries_.end() || suppressed(key)) {
@@ -237,18 +243,39 @@ void dispatchGuestToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudg
   }
 }
 
-ExecutionResult callOriginal(Core &core, NativeKey key, ExecutionBudget budget) {
+namespace {
+
+ExecutionResult executeOriginal(Core &core, NativeKey key, ExecutionBudget budget, bool stopAtReturn) {
   NativeCallerContextScope callerContext(core);
   SuppressionScope suppression(core.nativeDispatcher(), key);
-  return core.lightrecExecutor().executeFunction(key.address, core.r[31], budget);
+  return stopAtReturn ? core.lightrecExecutor().executeFunction(key.address, core.r[31], budget)
+                      : core.lightrecExecutor().executeUntilExit(key.address, budget);
 }
 
-ExecutionResult callOriginal(Core &core, std::uint32_t guestAddress, ExecutionBudget budget) {
+ExecutionResult executeOriginal(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, bool stopAtReturn) {
   const auto identity = core.currentImageIdentity(guestAddress);
   if (!identity) {
     return {ExecutionExitReason::Fault, guestAddress, 0, "ambiguous code-image identity"};
   }
-  return callOriginal(core, NativeKey{*identity, guestAddress}, budget);
+  return executeOriginal(core, NativeKey{*identity, guestAddress}, budget, stopAtReturn);
+}
+
+} // namespace
+
+ExecutionResult callOriginal(Core &core, NativeKey key, ExecutionBudget budget) {
+  return executeOriginal(core, key, budget, true);
+}
+
+ExecutionResult callOriginal(Core &core, std::uint32_t guestAddress, ExecutionBudget budget) {
+  return executeOriginal(core, guestAddress, budget, true);
+}
+
+ExecutionResult callOriginalUntilExit(Core &core, NativeKey key, ExecutionBudget budget) {
+  return executeOriginal(core, key, budget, false);
+}
+
+ExecutionResult callOriginalUntilExit(Core &core, std::uint32_t guestAddress, ExecutionBudget budget) {
+  return executeOriginal(core, guestAddress, budget, false);
 }
 
 void callOriginalToReturn(Core &core, NativeKey key, ExecutionBudget budget, std::string_view owner) {

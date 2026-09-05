@@ -1,5 +1,6 @@
 #include "config.h"
 #include "dynarec_capabilities.h"
+#include "execution_control.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "lightrec_executor.h"
@@ -74,6 +75,11 @@ void nativeCallee(Core *core) {
   core->r[2] = 40u;
 }
 
+void nativeFrameExit(Core *core) {
+  core->r[17] = 7u;
+  psx::cpu::requestExecutionExit(*core, psx::cpu::ExecutionExitReason::FrameBoundary);
+}
+
 int callOriginalOverrideCalls = 0;
 std::uint32_t callOriginalActiveAddress = 0;
 std::uint32_t callOriginalActiveAddressAfter = 0;
@@ -145,6 +151,184 @@ void outerNativeCallee(Core *core) {
 }
 
 } // namespace
+
+static void test_supported_syscall_resumes_function_and_retains_checkpoint_exit() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  installTestImage(core);
+  core.mem_w32(kCaller, 0x0000000cu);      // syscall
+  core.mem_w32(kCaller + 4u, 0x24500005u); // addiu s0, v0, 5
+  core.mem_w32(kCaller + 8u, 0x03e00008u); // jr ra
+  core.mem_w32(kCaller + 12u, 0u);
+  core.r[4] = 1u;
+  core.r[31] = kOuterReturn;
+  game->hle.irq_enabled = 1;
+  const auto checkpoint = core.lightrecExecutor().execute(kCaller, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(checkpoint.reason, psx::cpu::ExecutionExitReason::InterruptOrException);
+  CHECK_EQ(checkpoint.guestPc, kCaller + 4u);
+  CHECK_EQ(core.r[16], 0u);
+  CHECK_EQ(core.cop0[14], kCaller);
+
+  game->hle.irq_enabled = 1;
+  const auto result = psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::GuestReturn);
+  CHECK_EQ(result.guestPc, kOuterReturn);
+  CHECK_EQ(core.r[16], 6u);
+  CHECK_EQ(game->hle.irq_enabled, 0);
+  CHECK_EQ(core.cop0[13] & 0x7cu, 0x20u);
+  CHECK_EQ(core.cop0[14], kCaller);
+  CHECK(core.lightrecExecutor().counters().executedBlocks > 0u);
+  CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
+}
+
+static void test_unsupported_syscall_preserves_state_and_refuses_continuation() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  installTestImage(core);
+  core.mem_w32(kCaller, 0x0000000cu);
+  core.mem_w32(kCaller + 4u, 0x24100005u); // must not run: addiu s0, zero, 5
+  core.r[4] = 99u;
+  core.r[2] = 42u;
+  core.r[31] = kOuterReturn;
+  core.cop0[12] = 0x00600001u;
+  core.cop0[14] = 0x100u;
+  const auto result = psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::Fault);
+  CHECK_EQ(result.guestPc, kCaller);
+  CHECK_EQ(core.r[2], 42u);
+  CHECK_EQ(core.r[16], 0u);
+  CHECK_EQ(core.cop0[12], 0x00600001u);
+  CHECK_EQ(core.cop0[14], 0x100u);
+}
+
+static void test_until_exit_routes_native_entry_syscall_pending_work_and_frame_exit() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  const auto image = installTestImage(core);
+  nativeOverrideCalls = 0;
+  CHECK(core.nativeDispatcher().install({{image, kCallee}, "native-entry", nativeCallee}));
+  CHECK(core.nativeDispatcher().install({{image, kInnerCallee}, "native-frame-exit", nativeFrameExit}));
+  core.mem_w32(kCaller, 0x0000000cu);      // syscall ExitCriticalSection
+  core.mem_w32(kCaller + 4u, 0x24500005u); // addiu s0, v0, 5
+  core.mem_w32(kCaller + 8u, encodeJal(kInnerCallee));
+  core.mem_w32(kCaller + 12u, 0u);
+  core.mem_w32(kCaller + 16u, 0x24177badu); // must not run after requested frame exit
+  core.r[4] = 2u;
+  core.r[31] = kCaller;
+  core.pending_work = Core::PW_HOST;
+
+  const auto result = psx::cpu::dispatchGuestUntilExit(core, kCallee, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::FrameBoundary);
+  CHECK_EQ(nativeOverrideCalls, 1);
+  CHECK_EQ(core.r[16], 5u);
+  CHECK_EQ(core.r[17], 7u);
+  CHECK_EQ(core.r[23], 0u);
+  CHECK_EQ(core.pending_work & Core::PW_HOST, 0);
+  CHECK(core.lightrecExecutor().counters().executedBlocks > 0u);
+  CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
+}
+
+static void test_delay_slot_syscall_is_refused_without_sequential_resume() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  installTestImage(core);
+  core.mem_w32(kCaller, 0x10000002u);      // beq zero, zero, caller+12
+  core.mem_w32(kCaller + 4u, 0x0000000cu); // syscall in taken branch delay slot
+  core.mem_w32(kCaller + 8u, 0x24100005u); // must not run as sequential continuation
+  core.mem_w32(kCaller + 12u, 0x24110006u);
+  core.r[4] = 1u;
+  core.r[31] = kOuterReturn;
+  game->hle.irq_enabled = 1;
+  const auto result = psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::Fault);
+  CHECK_EQ(result.guestPc, kCaller + 4u);
+  CHECK_EQ(game->hle.irq_enabled, 1);
+  CHECK_EQ(core.r[16], 0u);
+  CHECK_EQ(core.r[17], 0u);
+  CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
+}
+
+static void test_syscall_continuation_remains_bounded() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  installTestImage(core);
+  core.mem_w32(kCaller, 0x0000000cu);
+  core.mem_w32(kCaller + 4u, 0x08000000u | (kCaller >> 2u)); // j syscall
+  core.mem_w32(kCaller + 8u, 0u);
+  core.r[4] = 2u;
+  core.r[31] = kOuterReturn;
+  const auto result = psx::cpu::dispatchGuestUntilExit(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(20));
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::BudgetExhausted);
+  CHECK(result.cycles >= 20u);
+  CHECK(result.cycles <= 24u);
+  CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
+}
+
+static void test_native_only_self_loop_exhausts_dispatch_budget_without_fabricated_cycles() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  const auto image = installTestImage(core);
+  nativeOverrideCalls = 0;
+  CHECK(core.nativeDispatcher().install({{image, kCallee}, "native-loop", nativeCallee}));
+  core.r[31] = kCallee;
+  auto budget = psx::cpu::ExecutionBudget::fromCycles(100);
+  budget.maxHostDispatches = 3;
+  const auto result = psx::cpu::dispatchGuestUntilExit(core, kCallee, budget);
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::BudgetExhausted);
+  CHECK_EQ(result.guestPc, kCallee);
+  CHECK_EQ(result.cycles, 0u);
+  CHECK_EQ(nativeOverrideCalls, 3);
+  CHECK_EQ(core.lightrecExecutor().counters().hostDispatches, 3u);
+  CHECK_EQ(core.lightrecExecutor().counters().executedInstructions, 0u);
+  budget.maxHostDispatches = 0;
+  const auto refused = psx::cpu::dispatchGuestUntilExit(core, kCallee, budget);
+  CHECK_EQ(refused.reason, psx::cpu::ExecutionExitReason::BudgetExhausted);
+  CHECK_EQ(nativeOverrideCalls, 3);
+  CHECK_EQ(refused.cycles, 0u);
+}
+
+static void test_explicit_function_continuation_is_independent_of_incoming_ra() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  installTestImage(core);
+  core.mem_w32(kCaller, 0x02200008u); // jr s1
+  core.mem_w32(kCaller + 4u, 0u);
+  core.r[17] = kOuterReturn;
+  core.r[31] = kCallee;
+  const auto result =
+      core.lightrecExecutor().executeFunction(kCaller, kOuterReturn, psx::cpu::ExecutionBudget::fromCycles(20));
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::GuestReturn);
+  CHECK_EQ(result.guestPc, kOuterReturn);
+}
+
+static void test_original_until_exit_suppresses_only_its_entry_and_restores_on_frame_exit() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  const auto image = installTestImage(core);
+  nativeOverrideCalls = 0;
+  CHECK(core.nativeDispatcher().install({{image, kCaller}, "suppressed-entry", nativeCallee}));
+  CHECK(core.nativeDispatcher().install({{image, kInnerCallee}, "native-frame-exit", nativeFrameExit}));
+  core.mem_w32(kCaller, encodeJal(kInnerCallee));
+  core.mem_w32(kCaller + 4u, 0u);
+  core.r[31] = kCaller;
+  const auto result = psx::cpu::callOriginalUntilExit(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::FrameBoundary);
+  CHECK_EQ(nativeOverrideCalls, 0);
+  CHECK_EQ(core.r[17], 7u);
+  CHECK(core.nativeDispatcher().intercepts({image, kCaller}));
+  CHECK_EQ(core.active_native_address, 0u);
+  CHECK(!core.executionControl().pending());
+  CHECK(core.lightrecExecutor().counters().executedBlocks > 0u);
+  CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
+}
 
 static void test_backend_reports_verified_host_properties() {
   constexpr auto capabilities = psx::cpu::kLightrecBackendCapabilities;
@@ -490,6 +674,14 @@ static void test_invalid_fallback_limit_faults_before_guest_execution() {
 }
 
 int main() {
+  RUN(supported_syscall_resumes_function_and_retains_checkpoint_exit);
+  RUN(unsupported_syscall_preserves_state_and_refuses_continuation);
+  RUN(until_exit_routes_native_entry_syscall_pending_work_and_frame_exit);
+  RUN(delay_slot_syscall_is_refused_without_sequential_resume);
+  RUN(syscall_continuation_remains_bounded);
+  RUN(native_only_self_loop_exhausts_dispatch_budget_without_fabricated_cycles);
+  RUN(explicit_function_continuation_is_independent_of_incoming_ra);
+  RUN(original_until_exit_suppresses_only_its_entry_and_restores_on_frame_exit);
   RUN(backend_reports_verified_host_properties);
   RUN(real_executor_translates_and_runs_guest_instructions);
   RUN(translated_call_dispatches_image_scoped_native_and_resumes_caller);

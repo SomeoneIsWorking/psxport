@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: SomeoneIsWorking/lightrec
-          ref: b764c4c9f4bc425a56bfc4c32333ff8200ce8ab9
+          ref: b1457137c31cedff5f440d59da29401d021ba2da
           path: shared/lightrec
           fetch-depth: 0
           persist-credentials: false
