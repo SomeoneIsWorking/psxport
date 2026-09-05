@@ -4,7 +4,6 @@
 #include "execution_control.h"
 #include "execution_services.h"
 #include "hw_bind.h"
-#include "invalidation.h"
 #include "native_dispatch.h"
 
 #include <lightrec.h>
@@ -100,26 +99,22 @@ struct LightrecExecutor::Impl {
   static void storeByte(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.core.mem_w8(address, static_cast<std::uint8_t>(value));
-    impl.invalidateGuestStore(address, 1);
   }
 
   static void storeHalf(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.core.mem_w16(address, static_cast<std::uint16_t>(value));
-    impl.invalidateGuestStore(address, 2);
   }
 
   static void storeWord(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.core.mem_w32(address, value);
-    impl.invalidateGuestStore(address, 4);
   }
 
   static void
   storeUnalignedWord(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.core.mem_w32(address, value);
-    impl.invalidateGuestStore(address, 4);
   }
 
   static std::uint8_t loadByte(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address) {
@@ -256,13 +251,6 @@ struct LightrecExecutor::Impl {
     std::uint32_t previousFallbackRefusalPc_ = 0;
     lightrec_fallback_reason previousFallbackRefusalReason_ = LIGHTREC_FALLBACK_NONE;
   };
-
-  void invalidateGuestStore(std::uint32_t address, std::uint32_t length) {
-    if (address >= 0x00800000u) {
-      return;
-    }
-    notifyExecutableWrite(core, {address, address + length}, ExecutableWriteSource::Cpu);
-  }
 
   static std::unordered_map<lightrec_state *, Impl *> &registry() {
     static std::unordered_map<lightrec_state *, Impl *> instances;

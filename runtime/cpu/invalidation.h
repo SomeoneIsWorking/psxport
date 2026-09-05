@@ -10,6 +10,7 @@ namespace psx::cpu {
 
 enum class ExecutableWriteSource : std::uint8_t {
   Cpu,
+  MappedStore,
   Dma,
   ModuleLoad,
   Debugger,

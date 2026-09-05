@@ -146,6 +146,7 @@ private:
   uint8_t *host_ptr(uint32_t a, uint32_t bytes);
   uint32_t io_read(uint32_t a, uint32_t bytes);
   void io_write(uint32_t a, uint32_t v, uint32_t bytes);
+  template <class Value> void writeGuestMemory(uint32_t address, Value value);
 
   // WATCH HOOKS — every guest store calls these, so their DISABLED path is on the hottest path in
   // the runtime. Profiling put cw_check at 3.1-3.7% and wwatch_check at 1.8% of total CPU with no

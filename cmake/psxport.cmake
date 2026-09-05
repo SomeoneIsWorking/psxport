@@ -61,6 +61,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/io_peripherals.cpp
   ${PSXPORT_ROOT}/runtime/psx/sio_pad.cpp
   ${PSXPORT_ROOT}/runtime/psx/mem.cpp
+  ${PSXPORT_ROOT}/runtime/psx/guest_memory.cpp
   ${PSXPORT_ROOT}/runtime/psx/dma_callbacks.cpp # direct-runtime per-Game DMACallback registration state
   ${PSXPORT_ROOT}/runtime/psx/cpu_divide.cpp     # R3000 DIV/DIVU quotient/remainder semantics
   ${PSXPORT_ROOT}/runtime/psx/cop0.cpp

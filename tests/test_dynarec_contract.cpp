@@ -330,6 +330,46 @@ static void test_original_until_exit_suppresses_only_its_entry_and_restores_on_f
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
+static void test_native_store_widths_and_ram_aliases_invalidate_translated_code() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  installTestImage(core);
+  core.mem_w32(kCaller, 0x24020001u);      // addiu v0, zero, 1
+  core.mem_w32(kCaller + 4u, 0x03e00008u); // jr ra
+  core.mem_w32(kCaller + 8u, 0u);
+  core.r[31] = kOuterReturn;
+  CHECK(psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100)).returned());
+  CHECK_EQ(core.r[2], 1u);
+  std::uint32_t value = 1;
+  for (const std::uint32_t width : {1u, 2u, 4u}) {
+    for (const std::uint32_t segment : {0u, 0x80000000u, 0xa0000000u}) {
+      for (const std::uint32_t mirror : {0u, 0x200000u, 0x400000u, 0x600000u}) {
+        ++value;
+        const auto before = core.lightrecExecutor().counters().translatedBlocks;
+        const auto address = segment | mirror | kCaller;
+        if (width == 1u) {
+          core.mem_w8(address, static_cast<std::uint8_t>(value));
+        } else if (width == 2u) {
+          core.mem_w16(address, static_cast<std::uint16_t>(value));
+        } else {
+          core.mem_w32(address, 0x24020000u | value);
+        }
+        CHECK(psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100)).returned());
+        CHECK_EQ(core.r[2], value);
+        CHECK(core.lightrecExecutor().counters().translatedBlocks > before);
+      }
+    }
+  }
+  const auto before = core.lightrecExecutor().counters().translatedBlocks;
+  core.mem_w32(kCaller, 0x24020000u | value); // same bytes must not require new translated code
+  core.mem_w32(kWriter, 0xdeadbeefu);         // outside the translated function
+  CHECK(psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100)).returned());
+  CHECK_EQ(core.r[2], value);
+  CHECK_EQ(core.lightrecExecutor().counters().translatedBlocks, before);
+  CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
+}
+
 static void test_backend_reports_verified_host_properties() {
   constexpr auto capabilities = psx::cpu::kLightrecBackendCapabilities;
   CHECK(capabilities.available);
@@ -682,6 +722,7 @@ int main() {
   RUN(native_only_self_loop_exhausts_dispatch_budget_without_fabricated_cycles);
   RUN(explicit_function_continuation_is_independent_of_incoming_ra);
   RUN(original_until_exit_suppresses_only_its_entry_and_restores_on_frame_exit);
+  RUN(native_store_widths_and_ram_aliases_invalidate_translated_code);
   RUN(backend_reports_verified_host_properties);
   RUN(real_executor_translates_and_runs_guest_instructions);
   RUN(translated_call_dispatches_image_scoped_native_and_resumes_caller);
