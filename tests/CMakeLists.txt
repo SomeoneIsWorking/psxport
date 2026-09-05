@@ -51,6 +51,9 @@ foreach(test_src IN LISTS PSXPORT_TEST_SRCS)
     TIMEOUT 60)
 endforeach()
 
+target_compile_definitions(test_sync_submodules PRIVATE
+  PSXPORT_TEST_PYTHON_EXECUTABLE="${Python3_EXECUTABLE}")
+
 list(LENGTH PSXPORT_TEST_SRCS _n_tests)
 message(STATUS "psxport tests: ${_n_tests} discovered in ${CMAKE_CURRENT_SOURCE_DIR}")
 
@@ -108,7 +111,7 @@ add_test(NAME lightrec_dependency_ownership
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_lightrec_dependency_ownership.py)
 set_tests_properties(cmake_test_ownership lightrec_dependency_ownership PROPERTIES
-  ENVIRONMENT "PSXPORT_LIGHTREC_DIR=${PSXPORT_LIGHTREC_DIR}")
+  ENVIRONMENT "PSXPORT_LIGHTREC_DIR=${PSXPORT_LIGHTREC_DIR};PSXPORT_FIXTURE_LIGHTNING_LIBRARY=${LIBLIGHTNING};PSXPORT_FIXTURE_LIGHTNING_INCLUDE=${LIBLIGHTNING_INCLUDE_DIR};PSXPORT_FIXTURE_C_COMPILER=${CMAKE_C_COMPILER};PSXPORT_FIXTURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
 
 add_test(NAME psx_exe_reader
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"

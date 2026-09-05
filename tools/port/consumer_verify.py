@@ -124,7 +124,8 @@ class ConsumerVerifier:
             test_regex=config.test_regex,
             cmake_definitions=config.cmake_definitions,
             build_targets=config.build_targets,
-            python=config.python.resolve(),
+            # A virtual environment's executable is often a symlink; resolving it escapes the lock.
+            python=config.python.absolute(),
         )
 
     def _run(self, command: Sequence[object], environment: Mapping[str, str]) -> None:

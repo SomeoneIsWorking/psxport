@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
-from cmake_fixture_paths import configured_lightrec
+from cmake_fixture_paths import configured_cmake_arguments, configured_lightrec, fixture_workspace
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRATCH = ROOT / "scratch" / "cmake-test-ownership"
 LIGHTREC = configured_lightrec()
 
 
@@ -69,8 +66,7 @@ def configure(source: Path, build: Path, framework_tests: bool | None = None) ->
         str(source),
         "-B",
         str(build),
-        "-DCMAKE_C_COMPILER=clang",
-        "-DCMAKE_CXX_COMPILER=clang++",
+        *configured_cmake_arguments(),
         f"-DPSXPORT_LIGHTREC_DIR={LIGHTREC}",
     ]
     if framework_tests is not None:
@@ -80,9 +76,7 @@ def configure(source: Path, build: Path, framework_tests: bool | None = None) ->
 
 def main() -> int:
     checks = Checks()
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="run-", dir=SCRATCH))
-    try:
+    with fixture_workspace("cmake-test-ownership") as work:
         source = work / "source"
         write_fixture(source)
 
@@ -101,8 +95,6 @@ def main() -> int:
         for expected in ("consumer_probe", "oracle_spike", "test_fmv_watchdog", "cpp_style", "psx_exe_reader"):
             checks.true(expected in opted_in_names, f"explicit opt-in did not register {expected}")
         checks.true(len(opted_in_names) >= 68, "explicit opt-in registered too few framework tests")
-    finally:
-        shutil.rmtree(work)
 
     print(f"cmake test ownership: PASS ({checks.count} checks; embedded default + explicit opt-in)")
     return 0

@@ -3,18 +3,15 @@
 
 from __future__ import annotations
 
-import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
-from cmake_fixture_paths import configured_lightrec
+from cmake_fixture_paths import configured_cmake_arguments, configured_lightrec, fixture_workspace
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "cmake" / "lightrec_dependency.cmake"
 LIGHTREC = configured_lightrec()
-SCRATCH = ROOT / "scratch" / "lightrec-dependency-ownership"
 
 
 def run_cmake(source: Path, build: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -25,7 +22,7 @@ def run_cmake(source: Path, build: Path, *, check: bool = True) -> subprocess.Co
             str(source),
             "-B",
             str(build),
-            "-DCMAKE_C_COMPILER=clang",
+            *configured_cmake_arguments(),
         ],
         check=False,
         capture_output=True,
@@ -61,10 +58,8 @@ def main() -> int:
     if not (LIGHTREC / "lightrec.h").is_file():
         raise RuntimeError(f"maintained Lightrec checkout is missing: {LIGHTREC}")
 
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="run-", dir=SCRATCH))
     checks = 0
-    try:
+    with fixture_workspace("lightrec-dependency-ownership") as work:
         clean_lightrec = work / "clean-lightrec"
         subprocess.run(
             ["git", "clone", "--quiet", "--no-local", str(LIGHTREC), str(clean_lightrec)],
@@ -176,8 +171,6 @@ def main() -> int:
         output = untracked.stdout + untracked.stderr
         if untracked.returncode == 0 or "has worktree changes" not in output:
             raise AssertionError(f"untracked pinned source was not refused:\n{output}")
-    finally:
-        shutil.rmtree(work)
 
     print(f"lightrec dependency ownership: PASS ({checks} checks)")
     return 0

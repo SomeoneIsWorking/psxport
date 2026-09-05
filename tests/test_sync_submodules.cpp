@@ -145,7 +145,9 @@ static Fixture make_fixture(const char *name, bool ghost, bool arm_drift, bool l
   fx.env = "env HOME='" + fx.root + "/home' GIT_CONFIG_GLOBAL='" + fx.root +
            "/home/.gitconfig' GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 "
            "GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t ";
-  fx.git = "git -c init.defaultBranch=main -c protocol.file.allow=always -c advice.detachedHead=false";
+  // Each command in a shell chain needs the identity: the env prefix only covers its first command.
+  fx.git = "git -c user.name=Fixture -c user.email=fixture@example.invalid -c init.defaultBranch=main "
+           "-c protocol.file.allow=always -c advice.detachedHead=false";
 
   const std::string R = "'" + fx.root + "'";
   const std::string G = fx.git;
@@ -268,7 +270,7 @@ static std::string lucent_gitlink(const Fixture &fx) {
 }
 /* popen() has no cwd argument, so the `cd` is part of the command line. */
 static Run script_in(const Fixture &fx) {
-  return run("cd '" + fx.root + "/game' && " + fx.env + "python3 '" + script_path() + "'");
+  return run("cd '" + fx.root + "/game' && " + fx.env + "'" PSXPORT_TEST_PYTHON_EXECUTABLE "' '" + script_path() + "'");
 }
 
 static void cleanup(const Fixture &fx) {

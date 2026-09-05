@@ -106,6 +106,11 @@ maintained-Lightning inputs, product-boundary checks, and seeded whole-tree arch
 deleted-path, and current-runtime policy checks exist. Gap: remaining large runtime owners still
 need responsibility-driven extraction.
 
+Nested CMake tests receive the parent configure's exact Lightning library/include paths and compiler
+inputs, use stable directories under `build/test-fixtures`, and preserve the locked Python executable
+symlink. Submodule-sync fixtures supply their own Git identity for every command. These repair the
+three fixture failures in hosted run `33893969146`; a subsequent hosted run must establish CI success.
+
 ## Blocking dependency
 
 The direct maintained Lightrec fork is now the Linux x86-64 product dependency. Hosted verification

@@ -57,6 +57,7 @@ class ConsumerVerifierTests(unittest.TestCase):
     def test_sequence_uses_one_explicit_title_configuration(self) -> None:
         with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
             config = self.fixture(Path(directory))
+            config.python.symlink_to(Path(sys.executable).resolve())
             lightning_prefix = config.root / "build" / "deps" / "lightning-install"
             lightning_header = lightning_prefix / "include" / "lightning.h"
             lightning_library = lightning_prefix / "lib" / "liblightning.a"
@@ -83,6 +84,10 @@ class ConsumerVerifierTests(unittest.TestCase):
             self.assertIn("Ninja", runner.commands[0])
             self.assertIn("-DCMAKE_C_COMPILER=clang", runner.commands[0])
             self.assertIn("-DCMAKE_CXX_COMPILER=clang++", runner.commands[0])
+            self.assertNotEqual(config.python, config.python.resolve())
+            self.assertIn(f"-DPython3_EXECUTABLE={config.python}", runner.commands[0])
+            self.assertEqual(runner.commands[4][0], str(config.python))
+            self.assertEqual(runner.commands[5][0], str(config.python))
             self.assertIn(f"-DPSXPORT_LIGHTREC_DIR={lightrec}", runner.commands[0])
             self.assertIn(
                 f"-DLIBLIGHTNING_INCLUDE_DIR={lightning_prefix / 'include'}", runner.commands[0]
