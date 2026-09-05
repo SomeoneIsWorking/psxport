@@ -551,7 +551,8 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
         if (!result.returned()) {
           return result;
         }
-        nextPc = impl.core.pc;
+        // Nested native calls restore their C++ caller's scoped PC; the result owns the guest continuation.
+        nextPc = result.guestPc;
         continue;
       }
       case LightrecExecutor::Impl::BoundaryReason::PendingWork:

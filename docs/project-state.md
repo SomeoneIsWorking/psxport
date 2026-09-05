@@ -63,6 +63,9 @@ resident/address-colliding overlay and generation-reuse coverage remains absent.
 `callOriginalUntilExit` uses the same scoped suppression and native caller-context restoration while
 allowing a translated polling body to end at a requested frame/yield/process exit. A synthetic
 nested native frame exit proves that suppression and requested-exit state do not leak after return.
+An enclosing native override running its original body through an ordinary native call and a later
+frame exit proves guest execution resumes from the returned continuation, independently of the
+scoped C++ caller PC restored by nested native dispatch.
 
 ### S015 — Central executable-code invalidation
 

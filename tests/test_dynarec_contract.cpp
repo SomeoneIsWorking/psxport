@@ -101,6 +101,13 @@ void nativeCalleeCallingOriginal(Core *core) {
   }
 }
 
+void nativeCallerRunningOriginalUntilExit(Core *core) {
+  callOriginalResult = psx::cpu::callOriginalUntilExit(*core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100));
+  callOriginalPcAfter = core->pc;
+  callOriginalActiveAddressAfter = core->active_native_address;
+  psx::cpu::requestExecutionExit(*core, callOriginalResult);
+}
+
 int outerNativeCalls = 0;
 int innerNativeCalls = 0;
 std::uint32_t outerActiveAddressBeforeNested = 0;
@@ -367,6 +374,41 @@ static void test_native_store_widths_and_ram_aliases_invalidate_translated_code(
   CHECK(psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100)).returned());
   CHECK_EQ(core.r[2], value);
   CHECK_EQ(core.lightrecExecutor().counters().translatedBlocks, before);
+  CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
+}
+
+static void test_nested_original_resumes_native_return_result_not_scoped_caller_pc() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  const auto image = installTestImage(core);
+  nativeOverrideCalls = 0;
+  callOriginalResult = {};
+  callOriginalPcAfter = 0;
+  callOriginalActiveAddressAfter = 0;
+  CHECK(
+      core.nativeDispatcher().install({{image, kCaller}, "original-until-exit", nativeCallerRunningOriginalUntilExit}));
+  CHECK(core.nativeDispatcher().install({{image, kCallee}, "ordinary-native-return", nativeCallee}));
+  CHECK(core.nativeDispatcher().install({{image, kInnerCallee}, "frame-exit", nativeFrameExit}));
+  core.mem_w32(kCaller, encodeJal(kCallee));
+  core.mem_w32(kCaller + 4u, 0u);
+  core.mem_w32(kCaller + 8u, 0x26520001u); // addiu s2, s2, 1: translated continuation runs once
+  core.mem_w32(kCaller + 12u, encodeJal(kInnerCallee));
+  core.mem_w32(kCaller + 16u, 0u);
+  core.r[31] = kCaller;
+  const auto result = psx::cpu::dispatchGuestUntilExit(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::FrameBoundary);
+  CHECK_EQ(callOriginalResult.reason, psx::cpu::ExecutionExitReason::FrameBoundary);
+  CHECK_EQ(result.guestPc, kInnerCallee);
+  CHECK_EQ(nativeOverrideCalls, 1);
+  CHECK_EQ(core.r[18], 1u);
+  CHECK_EQ(core.r[17], 7u);
+  CHECK_EQ(callOriginalPcAfter, kCaller);
+  CHECK_EQ(callOriginalActiveAddressAfter, kCaller);
+  CHECK_EQ(core.active_native_address, 0u);
+  CHECK(core.nativeDispatcher().intercepts({image, kCaller}));
+  CHECK(!core.executionControl().pending());
+  CHECK(core.lightrecExecutor().counters().executedBlocks > 0u);
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
@@ -723,6 +765,7 @@ int main() {
   RUN(explicit_function_continuation_is_independent_of_incoming_ra);
   RUN(original_until_exit_suppresses_only_its_entry_and_restores_on_frame_exit);
   RUN(native_store_widths_and_ram_aliases_invalidate_translated_code);
+  RUN(nested_original_resumes_native_return_result_not_scoped_caller_pc);
   RUN(backend_reports_verified_host_properties);
   RUN(real_executor_translates_and_runs_guest_instructions);
   RUN(translated_call_dispatches_image_scoped_native_and_resumes_caller);
