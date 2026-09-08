@@ -86,10 +86,11 @@ def forbidden_architecture_references(root: Path) -> list[str]:
 
 def reference_content(path: Path) -> bytes:
     content = path.read_bytes()
-    if path.suffix != ".py" or b"STATIC_PRODUCT_MARKERS" not in content:
+    declarations = ("STATIC_PRODUCT_MARKERS", "RETIRED_TRACKED_PATHS")
+    if path.suffix != ".py" or not any(name.encode("ascii") in content for name in declarations):
         return content.lower()
-    # STATIC_PRODUCT_MARKERS declares rejection data, wherever a consumer owns
-    # its policy. Exclude only that literal tuple, never executable expressions
+    # These declarations hold rejection data, wherever a consumer owns its policy.
+    # Exclude only their literal tuples, never executable expressions
     # or other references in the same file. File placement is not a dependency.
     tree = ast.parse(content, filename=str(path))
     lines = content.splitlines(keepends=True)
@@ -98,7 +99,7 @@ def reference_content(path: Path) -> bytes:
             isinstance(statement, ast.Assign)
             and len(statement.targets) == 1
             and isinstance(statement.targets[0], ast.Name)
-            and statement.targets[0].id == "STATIC_PRODUCT_MARKERS"
+            and statement.targets[0].id in declarations
             and isinstance(statement.value, ast.Tuple)
             and all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in statement.value.elts)
         ):
