@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -12,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from repository_policy import (
     deleted_path_references,
@@ -316,7 +319,6 @@ def check_tidy(root: Path, compile_commands: Path, sources: list[Path], touched_
         command = [
             runner,
             "-quiet",
-            "-hide-progress",
             "-j",
             str(jobs),
             "-clang-tidy-binary",
@@ -383,6 +385,36 @@ def selftest_run(root: Path, *extra: str) -> tuple[int, str]:
     return result.returncode, result.stdout + result.stderr
 
 
+def selftest_runner_arguments(root: Path) -> None:
+    # Older LLVM runners have -h but no -hide-progress: argparse treats that
+    # cosmetic option as help and exits successfully without invoking clang-tidy.
+    parser = argparse.ArgumentParser()
+    runner = "selftest-run-clang-tidy"
+    original_run = subprocess.run
+    original_which = shutil.which
+    invoked = False
+
+    def which(name: str) -> str | None:
+        return runner if name == "run-clang-tidy" else original_which(name)
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        nonlocal invoked
+        if command[0] != runner:
+            return original_run(command, **kwargs)
+        with contextlib.redirect_stdout(io.StringIO()):
+            try:
+                parser.parse_known_args(command[1:])
+            except SystemExit as exc:
+                return subprocess.CompletedProcess(command, exc.code)
+        invoked = True
+        return subprocess.CompletedProcess(command, 0)
+
+    with patch.object(shutil, "which", which), patch.object(subprocess, "run", run):
+        code = check_tidy(root, root / "build", [root / "a.cpp"], False)
+    if code != 0 or not invoked:
+        raise RuntimeError("runner argument parsing exited before invoking clang-tidy")
+
+
 def selftest() -> int:
     scratch = SCRIPT_ROOT / "scratch"
     scratch.mkdir(exist_ok=True)
@@ -431,6 +463,10 @@ def selftest() -> int:
             cases += 1
             print(f"cpp-policy selftest: PASS {name}")
 
+        selftest_runner_arguments(root)
+        cases += 1
+        print("cpp-policy selftest: PASS runner without progress option reaches execution")
+
         expect("happy clean tree lints one TU", 0, "checked 1 of 1 first-party C++ TU")
         expect("tracked deletion is excluded", 0, "1 worktree-deleted file(s)")
 
@@ -447,6 +483,16 @@ def selftest() -> int:
         deleted_path_file.write_text(f"Include {deleted_path}.\n", encoding="utf-8")
         expect("deleted framework path fails", 1, "deleted framework path")
         deleted_path_file.unlink()
+
+        policy_file = root / "tools/structure/policy.py"
+        policy_file.parent.mkdir(parents=True)
+        policy_marker = "runtime/" + "recomp/"
+        policy_source = f"STATIC_PRODUCT_MARKERS = ({policy_marker!r},)\n"
+        policy_file.write_text(policy_source, encoding="utf-8")
+        expect("declared rejection marker is not a deleted-path dependency", 0, "checked 1 of 1")
+        policy_file.write_text(policy_source + f"USED_PATH = {policy_marker!r}\n", encoding="utf-8")
+        expect("actual reference in policy source still fails", 1, "deleted framework path")
+        policy_file.unlink()
 
         stale_execution_file = docs / "old-executor.md"
         stale_execution_file.write_text("Run " + "emit" + ".py before launch.\n", encoding="utf-8")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from pathlib import Path
@@ -83,13 +84,37 @@ def forbidden_architecture_references(root: Path) -> list[str]:
     return findings
 
 
+def reference_content(path: Path, root: Path) -> bytes:
+    content = path.read_bytes()
+    if path.relative_to(root).as_posix() != "tools/structure/policy.py":
+        return content.lower()
+    # This exact declarative owner lists forbidden product tokens. Exclude only
+    # its literal marker tuple, never other references in the file or directory.
+    tree = ast.parse(content, filename=str(path))
+    lines = content.splitlines(keepends=True)
+    for statement in tree.body:
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id == "STATIC_PRODUCT_MARKERS"
+            and isinstance(statement.value, ast.Tuple)
+            and all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in statement.value.elts)
+        ):
+            value = statement.value
+            begin = sum(map(len, lines[: value.lineno - 1])) + value.col_offset
+            end = sum(map(len, lines[: value.end_lineno - 1])) + value.end_col_offset
+            content = content[:begin] + b" " * (end - begin) + content[end:]
+    return content.lower()
+
+
 def deleted_path_references(root: Path) -> list[str]:
     """Find references to paths removed by the framework migration."""
     needles = tuple(path.casefold().encode("ascii") for path in _DELETED_PATHS)
     findings: list[str] = []
     for path in first_party_files(root):
         try:
-            content = path.read_bytes().lower()
+            content = reference_content(path, root)
         except OSError as exc:
             raise RuntimeError(f"cannot inspect first-party file {path}: {exc}") from exc
         if any(needle in content for needle in needles):
@@ -106,7 +131,7 @@ def stale_execution_references(root: Path) -> list[str]:
         if relative in {"tools/repository_policy.py", "tools/check_execution_boundary.py"}:
             continue
         try:
-            content = path.read_bytes().lower()
+            content = reference_content(path, root)
         except OSError as exc:
             raise RuntimeError(f"cannot inspect first-party file {path}: {exc}") from exc
         if any(needle in content for needle in needles):
