@@ -83,7 +83,7 @@ bool cd_native_stock_read_owned(const Core &core) {
 // read. It needs to call the callback the game already registered. That is the whole mechanism.
 //
 // TERMINATION is the guest's own signal, not a guess: its callback issues Pause/Stop through this
-// same cd_command, which clears `reading`. The loop is additionally bounded, and hitting the bound
+// same command owner, which clears `reading`. The loop is additionally bounded, and hitting the bound
 // is reported LOUDLY rather than silently truncating a read — a short read that looks successful is
 // exactly the failure this layer must never produce.
 static void cd_drive_stock_read(Core *c) {
@@ -133,7 +133,7 @@ static void cd_drive_stock_read(Core *c) {
   }
 }
 
-static void cd_command(Core *c) {
+void cd_command_stock_sync(Core *c) {
   if (lucent::channel_on("cdcmd")) {
     uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
     uint8_t p[4] = {0, 0, 0, 0};
@@ -246,9 +246,10 @@ static void cd_command(Core *c) {
 // Report blocking-control success after applying the synchronous command
 // effects.
 void cd_control_sync(Core *c) {
-  cd_command(c);
+  cd_command_stock_sync(c);
   c->r[V0] = 1;
 }
+
 // Stock Sony libcd CdSync(noblock, result) -> 2 (status: complete/ready). This is public so direct
 // runtimes can bind title-measured wrapper/body addresses without duplicating the synchronous-disc
 // contract.
@@ -942,7 +943,7 @@ void Cd::overridesInit() {
   reg(cfg->voicePlay, voice_play);              // voice/BGM clip player -> native xa_stream
   reg(cfg->voiceStop, voice_stop);              // stop voice/BGM -> native
   reg(cfg->cdFileLoad, cd_loadfile);            // engine file loader -> sync sector read
-  reg(cfg->cdCommand, cd_command);              // libcd CdCommand -> success (no controller)
+  reg(cfg->cdCommand, cd_command_stock_sync);   // libcd CdCommand -> success (no controller)
   reg(cfg->cdSync, cd_sync_stock_sync);         // libcd CdSync -> complete (CD is synchronous)
   reg(cfg->cdCmdStream, cd_cmd_stream);         // streaming CD-cmd wrapper (GetlocL pos in range)
   reg(cfg->cdReadPrim, cd_read);                // libcd by-LBA read -> native sync

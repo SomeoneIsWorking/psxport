@@ -39,7 +39,7 @@ Game::Game() {
   timing.bindCdcClock(&cdc);
   xa_state_init(&xa);
   gte.dbg.sxhist_on = gte.dbg.gteprobe = gte.dbg.projprobe = gte.dbg.rtpcaller_on = -1;
-  disc.env_key = core.cfg ? core.cfg->discEnvVar : 0;
+  disc.env_key = core.cfg ? core.cfg->discEnvVar : (runtime ? runtime->discEnvVar() : nullptr);
   cdc.disc = &disc;
   cdc.xa = &xa;
   xa.disc = &disc;

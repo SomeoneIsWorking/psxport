@@ -55,6 +55,10 @@ public:
 
 class TestRuntime final : public GameRuntime {
 public:
+  const char *discEnvVar() const override {
+    return discEnvironmentKey;
+  }
+
   RenderCapabilities renderCapabilities() const override {
     return capabilities;
   }
@@ -100,6 +104,7 @@ public:
     return std::make_unique<TestTaskScheduler>();
   }
 
+  const char *discEnvironmentKey = nullptr;
   int contextToken = 0;
   GuestProgramImage programImage{
       .bss = {0x800BE0D8u, 0x80106228u},
@@ -157,6 +162,38 @@ void test_direct_runtime_publishes_cd_ready_callback_slot() {
 
   runtime.cdStreamCallbacks.readyCallbackPointer = 0;
   CHECK_EQ(cd_ready_callback_pointer(game->core), 0u);
+}
+
+void test_direct_runtime_publishes_disc_key_to_shared_disc_owner() {
+  TestRuntime runtime;
+  runtime.discEnvironmentKey = "TEST_TITLE_DISC";
+  psxport_install_game(runtime);
+  const auto game = std::make_unique<Game>();
+
+  CHECK_EQ(game->core.cfg, nullptr);
+  CHECK_STREQ(game->disc.env_key, "TEST_TITLE_DISC");
+  CHECK_EQ(game->cdc.disc, &game->disc);
+  CHECK_EQ(game->xa.disc, &game->disc);
+}
+
+void test_absent_runtime_disc_key_retains_generic_resolution() {
+  TestRuntime runtime;
+  psxport_install_game(runtime);
+  const auto game = std::make_unique<Game>();
+
+  CHECK_EQ(game->disc.env_key, nullptr);
+}
+
+void test_legacy_disc_key_survives_runtime_migration() {
+  GameConfig config{};
+  config.discEnvVar = "TEST_LEGACY_DISC";
+  const GameHooks hooks{};
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  psxport_install_game(runtime);
+  const auto game = std::make_unique<Game>();
+
+  CHECK_EQ(game->core.cfg, &config);
+  CHECK_STREQ(game->disc.env_key, "TEST_LEGACY_DISC");
 }
 
 void test_repl_commands_are_game_owned_and_legacy_forwarding_is_optional() {
@@ -451,6 +488,9 @@ void test_legacy_adapter_projects_static_backdrop_policy_only_for_migration() {
 int main() {
   RUN(installation_reaches_derived_runtime);
   RUN(direct_runtime_publishes_cd_ready_callback_slot);
+  RUN(direct_runtime_publishes_disc_key_to_shared_disc_owner);
+  RUN(absent_runtime_disc_key_retains_generic_resolution);
+  RUN(legacy_disc_key_survives_runtime_migration);
   RUN(repl_commands_are_game_owned_and_legacy_forwarding_is_optional);
   RUN(guest_address_ranges_are_validated_and_physically_normalized);
   RUN(legacy_pair_is_bounded_by_runtime_adapter);

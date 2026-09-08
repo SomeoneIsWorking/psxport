@@ -19,6 +19,10 @@ bool cd_native_stock_read_owned(const Core &core);
 // command acceptor.
 void cd_control_sync(Core *c);
 
+// Complete low-level Sony libcd CD_cw(cmd, param, result) -> 0 (success)
+// through the synchronous native disc owner.
+void cd_command_stock_sync(Core *c);
+
 // Complete stock Sony libcd CdSync(noblock, result) through the synchronous native disc owner.
 // Direct runtimes bind their measured wrapper/body to this owner so the guest's VSync timeout loop
 // is never entered.

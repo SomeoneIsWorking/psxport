@@ -177,21 +177,26 @@ void psx::cpu::serviceHostTurn(Core &core) {
   // Do NOT clear PW_HOST when deferring: hardware would leave the VBlank latched and deliver it when
   // the guest re-enables. Leaving the bit set reproduces that — the turn is taken at the first gate
   // after the critical section ends, rather than being silently dropped.
-  if (!c->game->hle.irq_enabled) {
+  if (c->game->hle.in_irq || !c->game->hle.irq_enabled) {
     return;
   }
 
-  // Clear only once the turn is actually being taken. The timer may set it again while the handler
-  // runs — that is correct and means another field elapsed during the turn.
-  __atomic_and_fetch(&c->pending_work, ~Core::PW_HOST, __ATOMIC_RELAXED);
-
-  if (s_in_turn || !s_fn || c != s_core) {
+  const bool ownsHandler = s_fn && c == s_core;
+  if (ownsHandler && s_in_turn) {
     return;
   }
   // The same transient-state check interrupt delivery makes (hle.cpp): if either is live we are in
   // the middle of the dispatch machinery, not at a clean boundary, and running guest code here could
   // lose a pending redirect.
   if (c->active_native_address || c->pending_guest_redirect) {
+    return;
+  }
+
+  // At an eligible boundary, consume this Core's request. A Core without a registered handler
+  // retires a stale request here; it must never invoke another Core's callback. The timer may set
+  // a new request while the handler runs, and that request remains owed afterward.
+  __atomic_and_fetch(&c->pending_work, ~Core::PW_HOST, __ATOMIC_RELAXED);
+  if (!ownsHandler) {
     return;
   }
 

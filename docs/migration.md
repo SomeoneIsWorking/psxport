@@ -30,6 +30,11 @@ remaining product contract requires it and the psxport adapter together to:
 There is no player-selectable interpreter mode. A diagnostic interpreter mode remains a separately
 built test tool. Automatic fallback is a rare product recovery path, not a second gameplay engine.
 
+WebAssembly is part of the migration release contract: the project must also provide a browser-
+capable runtime path that uses the same dynarec-first execution path, boundary identity, and
+telemetry/threshold semantics as the native hosts. A release claim stays blocked until web
+parity is represented in the acceptance gates.
+
 ## Host backends
 
 The maintained fork must support x86-64 Linux and AArch64. AArch64 qualification is separate for
@@ -94,3 +99,22 @@ original guest body stopping at the exact caller continuation, measured timing/p
 self-modifying-code retranslation, typed unsafe-fetch failure, and fallback telemetry. Items 2
 through 8 remain open at representative-title scope, as do Apple Silicon and Android AArch64
 qualification. Complete executable-writer coverage and fallback threshold enforcement remain open.
+
+## Direct-runtime service contracts
+
+Direct titles publish their disc environment key through `GameRuntime::discEnvVar()`; `Game` passes
+it to the shared disc resolver during construction. The legacy adapter continues to use
+`GameConfig::discEnvVar`, and an absent key retains generic disc resolution. Title code must not
+introduce another disc-open or environment-parsing path.
+
+Measured stock CD bindings use the shared command body `cd_command_stock_sync` for the low-level
+zero-on-success ABI and `cd_control_sync` for the public one-on-success ABI. Both apply the same
+command effects. The distinction belongs at the measured SDK boundary, never in a title-local
+copy of drive policy.
+
+Host-turn callbacks execute only outside guest IRQ handlers, masked critical sections, native
+dispatch, pending redirects, and another host-turn callback. All deferred requests retain
+`Core::PW_HOST`; at an eligible boundary the bit is acknowledged for delivery, or retired if that
+Core has no registered handler. A request never dispatches another Core's callback. A request raised
+during a callback remains pending for the next eligible boundary. Production-boundary regressions live in
+`tests/test_host_turn_irq.cpp`, `tests/test_cd_stock_read.cpp`, and `tests/test_game_runtime.cpp`.

@@ -92,6 +92,12 @@ public:
     return nullptr;
   }
 
+  // Disc environment key for DIRECT runtimes (core.cfg == nullptr). The disc resolver checks this
+  // variable in the environment and ./.env before falling back to generic PSXPORT_DISC.
+  virtual const char *discEnvVar() const {
+    return nullptr;
+  }
+
   // Which presentation products this title actually owns. Direct runtimes default to a native path
   // without temporal interpolation; a capable direct title opts in explicitly. The legacy adapter
   // preserves existing native+temporal consumers while they migrate.

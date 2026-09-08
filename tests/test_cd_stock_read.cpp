@@ -85,7 +85,61 @@ static void test_stock_cdsync_reports_ready_and_zeros_result() {
   }
 }
 
+static void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
+  auto game = std::make_unique<Game>();
+  auto &core = game->core;
+  core.mem_w8(kBuffer, 0x00u);
+  core.mem_w8(kBuffer + 1, 0x03u);
+  core.mem_w8(kBuffer + 2, 0x20u);
+  core.mem_w8(kBuffer + 3, 0u);
+  for (uint32_t i = 0; i < 8; ++i) {
+    core.mem_w8(kResult + i, 0xA5u);
+  }
+  game->cd.sec_pos = 40;
+  game->cd.sec_len = 2352;
+  game->cd.sec_lba = 320;
+  core.r[A0] = 0x02u; // Setloc 00:03:20 => LBA 95.
+  core.r[A1] = kBuffer;
+  core.r[A2] = kResult;
+  core.r[V0] = 0xDEADBEEFu;
+
+  cd_command_stock_sync(&core);
+
+  CHECK_EQ(core.r[V0], 0u);
+  CHECK_EQ(game->cd.setloc_lba, 95);
+  CHECK_EQ(game->cd.sec_pos, 0);
+  CHECK_EQ(game->cd.sec_len, 0);
+  CHECK_EQ(game->cd.sec_lba, -1);
+  for (uint32_t i = 0; i < 8; ++i) {
+    CHECK_EQ(core.mem_r8(kResult + i), 0u);
+  }
+
+  // CdControl is a distinct public ABI over the same command effects: its success result is 1.
+  core.r[V0] = 0xDEADBEEFu;
+  cd_control_sync(&core);
+  CHECK_EQ(core.r[V0], 1u);
+  CHECK_EQ(game->cd.setloc_lba, 95);
+}
+
+static void test_stock_pause_stops_stream_and_accepts_null_output() {
+  auto game = std::make_unique<Game>();
+  game->cd.stock_reading = 1;
+  game->cd.stream_active = 1;
+  game->core.r[A0] = 0x09u;
+  game->core.r[A1] = 0;
+  game->core.r[A2] = 0;
+  game->core.r[V0] = 0xDEADBEEFu;
+
+  cd_command_stock_sync(&game->core);
+
+  CHECK_EQ(game->core.r[V0], 0u);
+  CHECK_EQ(game->cd.stock_reading, 0);
+  CHECK_EQ(game->cd.stream_active, 0);
+}
+
 int main() {
+  RUN(stock_command_uses_low_level_success_abi_and_applies_setloc);
+  RUN(stock_pause_stops_stream_and_accepts_null_output);
   RUN(stock_read_refuses_without_a_position);
   RUN(zero_sector_stock_read_completes_without_inventing_drive_work);
   RUN(stock_readsync_reports_completed_and_zeros_result);
