@@ -7,7 +7,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -240,20 +239,6 @@ def compile_file(entry: dict[str, object]) -> Path:
     return path.resolve()
 
 
-def command_uses_clang(entry: dict[str, object]) -> bool:
-    if isinstance(entry.get("arguments"), list):
-        words = [str(word) for word in entry["arguments"]]
-    else:
-        words = shlex.split(str(entry.get("command", "")))
-    wrappers = {"ccache", "distcc", "env", "sccache"}
-    for word in words:
-        base = Path(word).name
-        if base in wrappers or ("=" in word and not word.startswith("-")):
-            continue
-        return base == "clang-cl" or base.startswith("clang++")
-    return False
-
-
 def check_tidy(root: Path, compile_commands: Path, sources: list[Path], touched_only: bool) -> int:
     tidy = shutil.which("clang-tidy")
     if tidy is None:
@@ -294,7 +279,6 @@ def check_tidy(root: Path, compile_commands: Path, sources: list[Path], touched_
             by_file.setdefault(compile_file(entry), []).append(entry)
 
     missing: list[str] = []
-    non_clang: list[str] = []
     paths: list[Path] = []
     for relative in candidates:
         path = (root / relative).resolve()
@@ -302,21 +286,12 @@ def check_tidy(root: Path, compile_commands: Path, sources: list[Path], touched_
         if not entries:
             missing.append(relative)
             continue
-        if not all(command_uses_clang(entry) for entry in entries):
-            non_clang.append(relative)
-            continue
         paths.append(path)
     required_missing = missing if touched_only else sorted(set(missing) & touched)
     if required_missing:
         print(
             "cpp-policy: REFUSED — touched C++ TU(s) absent from compile_commands.json: "
             f"{', '.join(required_missing)}",
-            file=sys.stderr,
-        )
-        return 2
-    if non_clang:
-        print(
-            f"cpp-policy: REFUSED — touched C++ TU(s) were not compiled with clang++: {', '.join(non_clang)}",
             file=sys.stderr,
         )
         return 2
@@ -535,7 +510,10 @@ def selftest() -> int:
         )
 
         selftest_write_database(root, compiler="g++")
-        expect("non-Clang compile command refuses", 2, "were not compiled with clang++")
+        expect("GCC compile command reaches clang-tidy", 0, "checked 1 of 1 first-party C++ TU")
+        (root / "a.cpp").write_text("int main() {\n  return missing_value;\n}\n", encoding="utf-8")
+        expect("GCC compile command preserves real diagnostics", 1, "undeclared identifier")
+        (root / "a.cpp").write_text(source_text, encoding="utf-8")
 
         selftest_write_database(root, include_source=False)
         (root / "a.cpp").write_text(source_text + "// touched\n", encoding="utf-8")
