@@ -37,6 +37,7 @@
 #include "dma_dpcr.h"
 #include "irq.h"
 #include "oracle_shim.h"
+#include "oracle_snapshot.h"
 #include "psx.h"
 
 // `cpu_next_event_ts` is a non-static global in cpu.c (line 112). CPU_Run's inner loop is
@@ -362,24 +363,6 @@ void PSX_SetEventNT(const int type, const int32_t next_timestamp) {
   cpu_next_event_ts = 0;
 }
 
-// `MDFNSS_StateAction` reaches the CPU only from `CPU_StateAction`, which milestone 1 never calls: the
-// starting state comes from injecting an executable, not from thawing a savestate. It aborts rather than
-// returning success, because a savestate that silently did nothing would leave a zeroed core that would
-// still step, and still compare, and mean nothing.
-int MDFNSS_StateAction(void *st, int load, int data_only, SFORMAT *sf, const char *name) {
-  (void)st;
-  (void)load;
-  (void)data_only;
-  (void)sf;
-  fprintf(stderr,
-          "oracle: REACHED MDFNSS_StateAction(\"%s\") — savestate serialisation. Milestone 1 neither\n"
-          "        saves nor loads state; its start point is an injected executable. Aborting rather\n"
-          "        than reporting success.\n",
-          name ? name : "(unnamed)");
-  fflush(stderr);
-  abort();
-}
-
 // ── lifecycle ─────────────────────────────────────────────────────────────────────────────────────
 int oracle_init(void) {
   if (s_up) {
@@ -413,6 +396,9 @@ int oracle_init(void) {
     return 0;
   }
   CPU_Power(PSX_CPU);
+  // The deadline is file-scope state outside CPU_New/CPU_Power. A new isolated session starts
+  // without elapsed time; oracle_slice sets the actual single-step budget before execution.
+  CPU_SetEventNT(0);
   IRQ_Power();
   DMA_DPCR_Power();
 
@@ -692,4 +678,20 @@ uint8_t *oracle_main_ram(void) {
 }
 uint32_t oracle_ram_size(void) {
   return RAM_SIZE;
+}
+
+int oracle_snapshot_visit_shim(OracleSnapshotFieldVisitor visitor, void *context, int restoring) {
+  (void)restoring;
+  if (!s_up || !visitor) {
+    fprintf(stderr, "oracle snapshot: shim is not initialized or visitor is missing\n");
+    return 0;
+  }
+  _Static_assert(sizeof(s_stop) == sizeof(uint32_t), "snapshot stop enum must be 32-bit");
+  visitor(context, "shim/timestamp", &s_ts, sizeof(s_ts), 4);
+  visitor(context, "shim/stop", &s_stop, sizeof(s_stop), 4);
+  visitor(context, "shim/stop_address", &s_stop_addr, sizeof(s_stop_addr), 4);
+  visitor(context, "shim/taint", &s_taint, sizeof(s_taint), 4);
+  visitor(context, "shim/taint_address", &s_taint_addr, sizeof(s_taint_addr), 4);
+  visitor(context, "shim/device_writes", &s_device_writes, sizeof(s_device_writes), 4);
+  return 1;
 }

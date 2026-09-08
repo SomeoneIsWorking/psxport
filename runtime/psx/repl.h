@@ -7,6 +7,7 @@
 // g_nav_newgame / g_skip_frames / g_warp_armed / g_warp_dest.
 #pragma once
 #include <cstdint>
+#include <span>
 struct Core;
 
 class Repl {
@@ -29,10 +30,16 @@ public:
     return requested;
   }
 
-  // Read+execute REPL commands from stdin until a `run N` (returns N) or quit/EOF (returns -1).
-  long read(Core *c, uint32_t f);
+  // A line reader fills one bounded command and returns false on EOF. The default reads stdin;
+  // alternate input sources use the same command loop and intentional-idle lifecycle.
+  using LineReader = bool (*)(std::span<char> line);
+
+  // Read+execute commands until `run N` (returns N), quit/EOF (-1), or end (-2).
+  long read(Core *c, uint32_t f, LineReader readLine = readStdinLine);
 
 private:
+  static bool readStdinLine(std::span<char> line);
+
   bool promptRequested_ = false;
   uint16_t mHeldMask = 0xFFFF; // active-low held pad mask (all released); `press`/`release` edit it
 };

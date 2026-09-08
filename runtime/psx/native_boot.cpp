@@ -215,11 +215,6 @@ static void game_main(Core *c) {
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
     // it (immediate commands — r/w/watch/input/regs/seq — execute between frames). Quit/EOF breaks.
     if (repl_mode) {
-      // Blocking on stdin for the next command is an intentional idle, not a hang — suspend the
-      // frame-progress watchdog while waiting so it doesn't fire at a paused REPL prompt.
-      if (repl_budget <= 0) {
-        watchdog_suspend();
-      }
       while (repl_budget <= 0) {
         repl_budget = c->game->repl.read(c, f);
         if (repl_budget < 0) {

@@ -153,11 +153,41 @@ static void repl_xadump(DiscState *disc, uint8_t chan, uint32_t start_lba, const
 //
 // So `end` is the clean-shutdown request. The host decides what that means (a port with a run
 // lifecycle ends it and exits; one without can treat it as quit) — the REPL only reports the ask.
-long Repl::read(Core *c, uint32_t f) {
+namespace {
+
+class WatchdogInputWait {
+public:
+  WatchdogInputWait() {
+    watchdog_suspend();
+  }
+  ~WatchdogInputWait() {
+    watchdog_resume();
+  }
+  WatchdogInputWait(const WatchdogInputWait &) = delete;
+  WatchdogInputWait &operator=(const WatchdogInputWait &) = delete;
+};
+
+} // namespace
+
+bool Repl::readStdinLine(std::span<char> line) {
+  return fgets(line.data(), static_cast<int>(line.size()), stdin) != nullptr;
+}
+
+long Repl::read(Core *c, uint32_t f, LineReader readLine) {
   uint16_t &held = mHeldMask; // active-low held mask (persists across REPL entries)
   char line[256];
   lucent::info("repl", "frame={} ready", f);
-  while (fgets(line, sizeof line, stdin)) {
+  while (true) {
+    bool receivedLine;
+    {
+      // The REPL owns this intentional idle even when a title calls it from inside a host turn.
+      // Resume before executing commands so a command that stalls still gets diagnosed.
+      const WatchdogInputWait wait;
+      receivedLine = readLine(line);
+    }
+    if (!receivedLine) {
+      break;
+    }
     char cmd[24] = {0}, arg[32] = {0};
     unsigned a = 0, b = 0;
     if (sscanf(line, "%23s", cmd) != 1) {

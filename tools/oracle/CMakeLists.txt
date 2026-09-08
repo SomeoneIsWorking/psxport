@@ -14,8 +14,7 @@
 # must resolve that deliberately, and the two honest options are: run the oracle in a separate PROCESS
 # and compare over a pipe (also isolates determinism), or prefix the archive's symbols
 # (`objcopy --prefix-symbols=oracle_`). See docs/oracle.md.
-add_library(psxport_oracle STATIC
-  oracle_shim.c
+set(ORACLE_VENDOR_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/mednafen/psx/cpu.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/mednafen/psx/dma_dpcr.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/mednafen/psx/gte.c
@@ -26,6 +25,13 @@ add_library(psxport_oracle STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/pgxp/pgxp_main.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/pgxp/pgxp_mem.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/pgxp/pgxp_value.c)
+add_library(psxport_oracle STATIC
+  oracle_shim.c
+  oracle_snapshot.cpp
+  oracle_boundary.cpp
+  ${ORACLE_VENDOR_SOURCES})
+# Keep the dependency warning policy scoped to dependency translation units.
+set_source_files_properties(${ORACLE_VENDOR_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
 # gte.c reaches for psxport's own runtime/psx/gte_state.h — which is why psxport builds it too, and why
 # the oracle must have runtime/psx on its path. PGXP is RUNTIME-gated (`PGXP_GetModes()`), not
@@ -43,7 +49,7 @@ target_include_directories(psxport_oracle PUBLIC
 
 # -fno-strict-aliasing: Mednafen's memory paths type-pun through MultiAccessSizeMem, and the vendor build
 # uses it. Dropping it would let the optimiser reorder RAM accesses the reference must perform exactly.
-target_compile_options(psxport_oracle PRIVATE -w -O2 -g -fno-strict-aliasing)
+target_compile_options(psxport_oracle PRIVATE -Wall -Wextra -O2 -g -fno-strict-aliasing)
 target_link_libraries(psxport_oracle PUBLIC m)
 
 # oracle_spike — the proof that the library above actually executes injected MIPS, and refuses to hide a
@@ -85,3 +91,17 @@ endif()
 # live in it: oracle_spike's own 22 checks are what catch a broken FastMap, a reset step clock, an
 # unmirrored RAM window and a silently-swallowed device access. Deleting the harness loses the assurance
 # that those checks would notice, not the checks themselves.
+
+# Snapshot/window tools remain separate diagnostic processes; the player never links this library.
+target_compile_features(psxport_oracle PRIVATE cxx_std_20)
+add_executable(oracle_window oracle_window.cpp)
+target_compile_features(oracle_window PRIVATE cxx_std_20)
+target_compile_options(oracle_window PRIVATE -Wall -Wextra)
+target_link_libraries(oracle_window PRIVATE psxport_oracle)
+add_executable(test_oracle_snapshot test_oracle_snapshot.cpp)
+target_compile_features(test_oracle_snapshot PRIVATE cxx_std_20)
+target_compile_options(test_oracle_snapshot PRIVATE -Wall -Wextra)
+target_link_libraries(test_oracle_snapshot PRIVATE psxport_oracle)
+if(PSXPORT_BUILD_TESTS)
+  add_test(NAME oracle_snapshot COMMAND test_oracle_snapshot ${CMAKE_CURRENT_SOURCE_DIR}/../../scratch/oracle-snapshot)
+endif()

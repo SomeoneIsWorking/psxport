@@ -3,6 +3,8 @@
 #include "core.h"
 #include "execution_control.h"
 #include "execution_services.h"
+#include "game.h"
+#include "gte_register_transfer.h"
 #include "hw_bind.h"
 #include "native_dispatch.h"
 
@@ -133,15 +135,9 @@ struct LightrecExecutor::Impl {
     Impl &impl = owner(lightrec);
     lightrec_registers *registers = lightrec_get_registers(lightrec);
     gte_bind(&impl.core);
-    for (std::uint32_t index = 0; index < 32; ++index) {
-      gte_write_data(index, registers->cp2d[index]);
-      gte_write_ctrl(index, registers->cp2c[index]);
-    }
+    gte_import_registers(impl.core.game->gte, registers->cp2d, registers->cp2c);
     gte_op_at(&impl.core, opcode, impl.core.pc);
-    for (std::uint32_t index = 0; index < 32; ++index) {
-      registers->cp2d[index] = gte_read_data(index);
-      registers->cp2c[index] = gte_read_ctrl(index);
-    }
+    gte_export_registers(impl.core.game->gte, registers->cp2d, registers->cp2c);
   }
 
   static void enableRam(lightrec_state *, bool) {
@@ -316,10 +312,7 @@ struct LightrecExecutor::Impl {
     registers->gpr[33] = core.hi;
     std::copy_n(core.cop0, 16, registers->cp0);
     gte_bind(&core);
-    for (std::uint32_t index = 0; index < 32; ++index) {
-      registers->cp2d[index] = gte_read_data(index);
-      registers->cp2c[index] = gte_read_ctrl(index);
-    }
+    gte_export_registers(core.game->gte, registers->cp2d, registers->cp2c);
   }
 
   void copyLightrecToCore(std::uint32_t nextPc) {
@@ -331,10 +324,7 @@ struct LightrecExecutor::Impl {
     core.pc = nextPc;
     std::copy_n(registers->cp0, 16, core.cop0);
     gte_bind(&core);
-    for (std::uint32_t index = 0; index < 32; ++index) {
-      gte_write_data(index, registers->cp2d[index]);
-      gte_write_ctrl(index, registers->cp2c[index]);
-    }
+    gte_import_registers(core.game->gte, registers->cp2d, registers->cp2c);
   }
 
   void updateCounters(const lightrec_execution_stats &stats) {
