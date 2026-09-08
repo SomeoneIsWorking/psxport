@@ -117,6 +117,10 @@ add_test(NAME psx_exe_reader
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_psx_exe.py)
 
+add_test(NAME ram_disassembler_cli
+         COMMAND "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/test_disasm.py)
+set_tests_properties(ram_disassembler_cli PROPERTIES TIMEOUT 60)
+
 add_test(NAME execution_boundary_selftest
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_execution_boundary.py --selftest)
