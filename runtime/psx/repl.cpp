@@ -183,7 +183,7 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
       // The REPL owns this intentional idle even when a title calls it from inside a host turn.
       // Resume before executing commands so a command that stalls still gets diagnosed.
       const WatchdogInputWait wait;
-      receivedLine = readLine(line);
+      receivedLine = readLine(std::span<char>{line});
     }
     if (!receivedLine) {
       break;
