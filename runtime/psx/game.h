@@ -6,9 +6,10 @@
 #include "cd.h"        // class Cd — native CD subsystem (sync reads + libcd HLE + music state)
 #include "cdc_state.h" // CdcState — per-instance native CD-controller register model (cdc_native.c)
 #include "core.h"
-#include "dbg_server.h"                  // class DbgServer — live TCP debug endpoint (127.0.0.1)
-#include "disc.h"                        // DiscState — native by-LBA CHD disc backend (disc.c)
-#include "dma_callbacks.h"               // DmaCallbackRegistry — direct-runtime DMACallback state
+#include "dbg_server.h"    // class DbgServer — live TCP debug endpoint (127.0.0.1)
+#include "disc.h"          // DiscState — native by-LBA CHD disc backend (disc.c)
+#include "dma_callbacks.h" // DmaCallbackRegistry — direct-runtime DMACallback state
+#include "frame_pacer.h"
 #include "frame_presenter.h"             // FramePresenter — neutral current-frame capture/present/cadence fence
 #include "game_runtime.h"                // GameRuntime + per-Game polymorphic behavior products
 #include "gpu_native_internal.h"         // GpuState — the native GPU's per-instance render machine state
@@ -52,6 +53,7 @@ public:
 
   // ---- migrated subsystem state (one member per migrated subsystem) ----
   Timing timing;
+  FramePacer framePacer;
   Cd cd;          // native CD subsystem: sync reads + libcd HLE + deferred-music state (cd_override.cpp)
   DiscState disc; // native CHD disc backend: handle + hunk cache (per-instance; disc.c)
   CdcState cdc;   // native CD-controller register model (per-instance; cdc_native.c, explicit param)

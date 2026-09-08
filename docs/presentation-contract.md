@@ -33,6 +33,25 @@ The ownership follows from psxport's own state boundary: the game-clock/presenta
 while interpolation is composed only on a path that owns previous/current temporal state. Neither the
 neutral path nor a non-temporal title depends on interpolation code.
 
+## Display time and host pacing
+
+`GameRuntime::pacePresentation` decides who advances simulated display time. Its default uses
+`gpu_pace_subframe_fields`: the represented rational field count advances Timing, devices and the
+VBlank latch, then waits for the host deadline. Existing consumers and neutral framework instances
+retain that combined behavior.
+
+A title with an explicit field scheduler advances `Timing::advanceDisplayFields` once for each
+field it delivers, including fields without a new picture. That runtime overrides presentation
+pacing with `gpu_wait_presented_fields`. This waits for the same cadence without creating another
+emulated field or interrupt. Temporal subdivisions distribute host waiting over the existing field
+quota; they do not deliver a second copy of the scheduler's fields. NOPACE suppresses host waiting
+only, whichever owner delivers simulated time.
+
+Each `Game` owns a `FramePacer` and its running host deadline. Both pacing entry points use the same
+pure `pace_plan` decision and steady-clock waiting; instances do not share deadline state. Timing
+retains ownership of rational field accumulation and hardware IRQ latching. Titles retain their
+callback, input, audio and interrupt-service order; the host pacer does not synthesize callbacks.
+
 ## Temporal scene ownership
 
 A direct runtime opts into interpolation with `Fps60(game, std::make_unique<TitleSceneSource>(...))`.

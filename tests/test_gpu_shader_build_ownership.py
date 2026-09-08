@@ -33,7 +33,6 @@ def configure(source: Path, build: Path) -> None:
             str(build),
             "-G",
             "Ninja",
-            "-DCMAKE_CXX_COMPILER=clang++",
         ],
         cwd=source,
     )

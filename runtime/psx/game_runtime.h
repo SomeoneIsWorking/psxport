@@ -114,6 +114,10 @@ public:
   // LegacyGameRuntimeAdapter until they declare the narrower contract directly.
   virtual std::unique_ptr<TemporalFramePresentation> createTemporalFramePresentation(Game &game);
 
+  // The default presenter delivers simulated fields and waits for their host deadline. A title
+  // whose field scheduler already advances devices overrides this with host waiting only.
+  virtual void pacePresentation(Core &core, int guestFields, int parts);
+
   // Native ports override this with their measured finite driver. A runtime guest-execution product
   // may instead drive bounded turns explicitly through psx::cpu::dispatchGuest.
   virtual std::unique_ptr<FrameDriver> createFrameDriver(Game &);

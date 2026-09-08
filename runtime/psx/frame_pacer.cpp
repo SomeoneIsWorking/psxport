@@ -9,22 +9,32 @@
 
 #include <lucent/log.h>
 
-#include <ctime>
+#include <chrono>
+#include <cstdlib>
+#include <thread>
 
 unsigned gpu_field_rate_millihz(Core *core) {
   return field_rate_millihz(core && core->game ? core->game->gpu.s_disp_pal != 0 : false);
 }
 
-// The game loop runs unthrottled unless it is held to the game's own field interval. Cadence comes
-// from the port's declared display-field quota and the standard programmed by the guest. This is
-// called once per game frame, not from gpu_present, which boot paths may drive many times per frame.
-void gpu_pace_subframe_fields(Core *core, int guestFields, int parts) {
-  static double next = 0.0;
-  static bool seeded = false;
+PacePlan FramePacer::plan(PaceInputs inputs) {
+  inputs.nextMs = nextMs_;
+  inputs.seeded = seeded_;
+  const PacePlan result = pace_plan(inputs);
+  if (result.paced) {
+    nextMs_ = result.nextMs;
+    seeded_ = true;
+  }
+  return result;
+}
 
-  timespec timestamp{};
-  clock_gettime(CLOCK_MONOTONIC, &timestamp);
+namespace {
 
+PacePlan preparePace(Core *core, int guestFields, int parts) {
+  if (!core || !core->game) {
+    lucent::error("pacer", "display-field pacing requires an owning Game instance");
+    std::abort();
+  }
   PaceInputs inputs;
   // NOPACE and resume fast-forward suppress host sleeping only. Neither changes windowing, the
   // guest display cadence, or the emulated time delivered below.
@@ -34,11 +44,9 @@ void gpu_pace_subframe_fields(Core *core, int guestFields, int parts) {
                      : ((core && core->cfg && core->cfg->paceQuota) ? static_cast<int>(core->cfg->paceQuota) : 0);
   inputs.parts = parts;
   inputs.fieldRateMilliHz = gpu_field_rate_millihz(core);
-  inputs.nowMs = timestamp.tv_sec * 1000.0 + timestamp.tv_nsec / 1e6;
-  inputs.nextMs = next;
-  inputs.seeded = seeded;
+  inputs.nowMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
-  const PacePlan plan = pace_plan(inputs);
+  const PacePlan plan = core->game->framePacer.plan(inputs);
 
   if (plan.quotaUnset) {
     static bool warned = false;
@@ -59,30 +67,40 @@ void gpu_pace_subframe_fields(Core *core, int guestFields, int parts) {
     }
   }
 
-  if (core && core->game && !plan.rateUnset) {
-    core->game->timing.advanceDisplayFields(plan.effectiveQuota, plan.effectiveParts, inputs.fieldRateMilliHz);
-  }
+  return plan;
+}
+
+void waitForPlan(const PacePlan &plan, unsigned fieldRateMilliHz) {
   if (!plan.paced) {
     return;
   }
-
-  next = plan.nextMs;
-  seeded = true;
   lucent::debug("pacer",
                 "interval={:.4f}ms sleep={:.4f}ms quota={} parts={} rate={}mHz{}",
                 plan.intervalMs,
                 plan.sleepMs,
-                inputs.quota,
-                parts,
-                inputs.fieldRateMilliHz,
+                plan.effectiveQuota,
+                plan.effectiveParts,
+                fieldRateMilliHz,
                 plan.resync ? " RESYNC" : "");
   if (plan.sleepMs <= 0.0) {
     return;
   }
-  const auto seconds = static_cast<time_t>(plan.sleepMs / 1000.0);
-  const auto nanoseconds = static_cast<long>((plan.sleepMs - static_cast<long>(seconds) * 1000.0) * 1e6);
-  const timespec request = {seconds, nanoseconds};
-  nanosleep(&request, nullptr);
+  std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(plan.sleepMs));
+}
+
+} // namespace
+
+void gpu_pace_subframe_fields(Core *core, int guestFields, int parts) {
+  const PacePlan plan = preparePace(core, guestFields, parts);
+  if (!plan.rateUnset) {
+    core->game->timing.advanceDisplayFields(plan.effectiveQuota, plan.effectiveParts, gpu_field_rate_millihz(core));
+  }
+  waitForPlan(plan, gpu_field_rate_millihz(core));
+}
+
+void gpu_wait_presented_fields(Core *core, int guestFields, int parts) {
+  const PacePlan plan = preparePace(core, guestFields, parts);
+  waitForPlan(plan, gpu_field_rate_millihz(core));
 }
 
 void gpu_pace_subframe(Core *core, int parts) {

@@ -38,7 +38,7 @@
 
 // Vestigial Beetle savestate hook the vendored mdec.c references (state_helpers.h expands
 // MDFNSS_StateAction into a real call inside MDEC_StateAction, which an offline decode never
-// enters). Same `return 1` stub the runtime keeps in runtime/psx/pgxp.cpp.
+// enters). Same `return 1` stub the runtime keeps in runtime/psx/gte_vendor_hooks.cpp.
 extern "C" int MDFNSS_StateAction(void *st, int load, int data_only, void *sf, const char *name) {
   (void)st;
   (void)load;

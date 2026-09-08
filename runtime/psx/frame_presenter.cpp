@@ -82,7 +82,12 @@ public:
   }
 
   void pace(int guestFields, int parts) override {
-    gpu_pace_subframe_fields(&core_, guestFields, parts);
+    if (core_.game->runtime) {
+      core_.game->runtime->pacePresentation(core_, guestFields, parts);
+    } else {
+      // A neutral framework instance has no title scheduler and retains combined field pacing.
+      gpu_pace_subframe_fields(&core_, guestFields, parts);
+    }
   }
 
   void reconcile(uint64_t fence) override {

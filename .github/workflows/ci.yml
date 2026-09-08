@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
+      CC: clang
+      CXX: clang++
       PSXPORT_LIGHTREC_DIR: ${{ github.workspace }}/shared/lightrec
       PSXPORT_LIGHTNING_PREFIX: ${{ github.workspace }}/shared/lightning/build/install/linux-x86_64
     steps:

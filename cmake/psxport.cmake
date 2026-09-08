@@ -68,6 +68,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/bios_interrupt.cpp
   ${PSXPORT_ROOT}/runtime/psx/bios_libc_string.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle.cpp
+  ${PSXPORT_ROOT}/runtime/psx/hle_interrupt.cpp
   ${PSXPORT_ROOT}/runtime/psx/syscall_exception.cpp
   ${PSXPORT_ROOT}/runtime/psx/kernel_syscall.cpp
   ${PSXPORT_ROOT}/runtime/psx/host_turn.cpp
@@ -126,7 +127,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/native_boot.cpp
   ${PSXPORT_ROOT}/runtime/psx/render_path.cpp   # render_path_install — the render-path tri-state, one parser for every boot spine
   ${PSXPORT_ROOT}/runtime/psx/proj_prim.cpp
-  ${PSXPORT_ROOT}/runtime/psx/pgxp.cpp
+  ${PSXPORT_ROOT}/runtime/psx/gte_vendor_hooks.cpp
   ${PSXPORT_ROOT}/runtime/psx/proj_params.cpp
   ${PSXPORT_ROOT}/runtime/psx/ot_attr.cpp
   ${PSXPORT_ROOT}/runtime/psx/hw_bind.cpp

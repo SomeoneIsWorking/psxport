@@ -30,11 +30,12 @@ See [project state](docs/project-state.md), [migration requirements](docs/migrat
 
 ## Development
 
-Framework verification uses the canonical Python owner, which configures a Clang/Ninja build and
-runs the complete asset-free suite:
+Framework verification uses the canonical Python owner, which configures Ninja and runs the
+complete asset-free suite. Maintainers select Clang explicitly; the project accepts supported
+compilers through CMake and the usual CC/CXX environment:
 
 ```sh
-uv run --frozen python tools/verify.py
+CC=clang CXX=clang++ uv run --frozen python tools/verify.py
 ```
 
 `uv run --frozen python tools/build.py` performs the same configure/build without running tests.

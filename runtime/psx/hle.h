@@ -1,10 +1,11 @@
 // hle.h — class Hle — BIOS HLE subsystem (event control blocks, native first-fit heap, IRQ /
 // work-area flags), owned by Game (`c->game->hle`, back-pointer wired in Game()). Implemented in
-// hle.cpp. The deliverEvent method promotes the former free function hle_deliver_event (called by
+// hle.cpp and hle_interrupt.cpp. The deliverEvent method promotes the former free function hle_deliver_event (called by
 // timing/native_boot/memcard/asset for VBlank + memcard + sound-DMA event delivery) so callers do
 // c->game->hle.deliverEvent(class, spec) — no Core* arg on the surface.
 #pragma once
 #include <cstdint>
+class Core;
 class Game;
 
 // OpenEvent modes: EvMdINTR means 'call the handler', EvMdNOINTR means 'mark it and let TestEvent poll'.
@@ -77,6 +78,8 @@ public:
   // point where guest state is call-coherent — a guest function boundary — never from inside a
   // native routine that is midway through mutating hardware state.
   void irqPoll(Core *c);
+  // Full CPU-context readiness for dispatch. Pending sources and guest masks remain separate.
+  bool canDispatchInterrupt(const Core &core) const;
   void irqEnq(uint32_t prio, uint32_t elem);
   void irqDeq(uint32_t elem);
 

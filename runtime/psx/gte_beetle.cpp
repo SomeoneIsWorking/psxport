@@ -7,10 +7,9 @@
 #include "cfg.h"
 #include "core.h"
 #include "game.h"             // Core::game->gte (per-instance GTE register file) for gte_bind
-#include "pgxp.h"             // class Pgxp — subpixel-cache currently-bound accessor
 #include "proj_params.h"      // class ProjParams — camview + per-frame projection constants
 #include "proj_vtx.h"         // ProjVtx — proj_native_vertex's POD out-struct (was reached via render.h)
-#include "render_substrate.h" // rsub.pgxp / rsub.projParams / rsub.otAttr — per-Core substrate
+#include "render_substrate.h" // per-Core projection parameters and submission attribution
 #include <lucent/log.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -33,20 +32,6 @@ bool psx_gte_overclock = false;
 uint8_t widescreen_hack = 0; // GTE widescreen-scale hack OFF (faithful)
 uint8_t widescreen_hack_aspect_ratio_setting = 0;
 uint32_t gMode = 0; // PGXP mode 0 = off
-
-// --- PGXP subpixel cache (vertex-smoothing / PSX-wobble fix) -------------------------------------
-// PSX projected vertices to INTEGER screen coords, so 3D geometry jitters ("wobbles") as the
-// camera/object moves — the classic PS1 look. Beetle's GTE already computes the SUBPIXEL-precise
-// projected x/y/z (gte.c TransformXY: precise_x/precise_y/precise_z) and hands them to this hook,
-// keyed `v` = the packed integer SXY the game then copies verbatim into its GP0 vertex packets.
-// We cache (precise_x,y,z) keyed by that packed int; the GPU tee (gpu_native.c) looks the precise
-// coords back up by each vertex's integer (sx,sy) and rasterizes with FLOAT positions instead of
-// the integer-snapped ones. This is value-keyed "PGXP-lite": on a key collision we simply fall
-// back to the integer coords (a miss), so a wrong match can only ever cost smoothing, not correctness.
-// The cache is reset each presented frame (pgxp_frame_reset) so a stale precise value from a prior
-// frame can't be re-applied to a freshly-placed integer vertex (kills cross-frame wobble artifacts).
-// PGXP-lite subpixel cache moved to `class Pgxp` on Render (game/render/pgxp.h). The `PGXP_pushSXYZ2f`
-// Beetle callback + the `PGXP_NCLIP*` / `MDFNSS_StateAction` vestigial stubs live in pgxp.cpp now.
 
 // Guest GTE interface (r3000.h) -> Beetle GTE. mfc2/cfc2/mtc2/ctc2/lwc2/swc2 map to the
 // data/control register ports; the COP2 ops map to GTE_Instruction.
@@ -724,10 +709,7 @@ void gte_record_pz(Core *c, uint32_t addr, int gpr) {
 // Called by the title FrameDriver for each core step and by boot setup, from the explicit Core — no shared regs.
 void gte_bind(Core *c) {
   GTE_BindState(&c->game->gte);
-  // Also bind THIS core's per-Core PGXP cache + projection-constant/camview state (both were file-scope
-  // process-wide before deglobalize-2026-07-03 → SBS's two cores would clobber each other's per-frame
-  // subpixel cache and projection center).
-  c->rsub.pgxp.bind(c);
+  // Binding selects the per-Core projection owner; its lifetime follows frame presentation.
   c->rsub.projParams.bind(c);
 }
 void gte_init(void) {

@@ -67,8 +67,6 @@ def configure(build: Path) -> None:
             "-G",
             "Ninja",
             "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-            "-DCMAKE_C_COMPILER=clang",
-            "-DCMAKE_CXX_COMPILER=clang++",
             f"-DPython3_EXECUTABLE={sys.executable}",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DPSXPORT_BUILD_SMOKE=ON",

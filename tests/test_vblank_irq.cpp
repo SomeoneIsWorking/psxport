@@ -10,6 +10,8 @@
 #include "../runtime/psx/game_iface.h"
 #include "testutil.h"
 
+#include <memory>
+
 namespace {
 
 constexpr uint32_t kNtscFieldMilliHz = 59940u;
@@ -147,6 +149,59 @@ void test_masked_edge_dispatches_once_after_guest_unmasks_it() {
   delete game;
 }
 
+enum class DispatchGuard { Disabled, Nested, NativeCall, Redirect };
+
+void setGuard(Game &game, DispatchGuard guard, bool blocked) {
+  switch (guard) {
+  case DispatchGuard::Disabled:
+    game.hle.irq_enabled = !blocked;
+    break;
+  case DispatchGuard::Nested:
+    game.hle.in_irq = blocked;
+    break;
+  case DispatchGuard::NativeCall:
+    game.core.active_native_address = blocked ? kHandler : 0u;
+    break;
+  case DispatchGuard::Redirect:
+    game.core.pending_guest_redirect = blocked ? kHandler : 0u;
+    break;
+  }
+}
+
+void test_each_cpu_context_guard_defers_the_shipping_irq_dispatch() {
+  for (const auto guard :
+       {DispatchGuard::Disabled, DispatchGuard::Nested, DispatchGuard::NativeCall, DispatchGuard::Redirect}) {
+    const std::unique_ptr<Game> game(interruptGame());
+    game->core.mem_w32(kIMask, 1u);
+    CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
+    setGuard(*game, guard, true);
+    CHECK(!game->hle.canDispatchInterrupt(game->core));
+    game->hle.irqPoll(&game->core);
+    CHECK_EQ(verifierCalls, 0);
+    CHECK_EQ(handlerCalls, 0);
+    CHECK_EQ(game->core.mem_r32(kIStat) & 1u, 1u);
+    CHECK((game->core.pending_work & Core::PW_IRQ) != 0u);
+
+    setGuard(*game, guard, false);
+    CHECK(game->hle.canDispatchInterrupt(game->core));
+    game->hle.irqPoll(&game->core);
+    CHECK_EQ(verifierCalls, 1);
+    CHECK_EQ(handlerCalls, 1);
+    CHECK_EQ(game->core.mem_r32(kIStat) & 1u, 0u);
+  }
+}
+
+void test_idle_gate_retirement_precedes_transient_native_context_guard() {
+  const std::unique_ptr<Game> game(interruptGame());
+  game->core.active_native_address = kHandler;
+  game->core.pending_work = Core::PW_IRQ;
+  CHECK(!game->hle.canDispatchInterrupt(game->core));
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(game->core.pending_work & Core::PW_IRQ, 0u);
+  CHECK_EQ(verifierCalls, 0);
+  CHECK_EQ(handlerCalls, 0);
+}
+
 } // namespace
 
 int main() {
@@ -157,5 +212,7 @@ int main() {
   RUN(two_field_quota_split_in_half_raises_each_call);
   RUN(a_refused_advance_raises_nothing);
   RUN(masked_edge_dispatches_once_after_guest_unmasks_it);
+  RUN(each_cpu_context_guard_defers_the_shipping_irq_dispatch);
+  RUN(idle_gate_retirement_precedes_transient_native_context_guard);
   return pt_summary();
 }
