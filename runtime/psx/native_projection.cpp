@@ -82,6 +82,19 @@ void check_mac0_overflow(int64_t value, uint32_t &flags) {
 
 } // namespace
 
+ContinuousProjectedVertex project_view(const std::array<float, 3> &raw_view, const ProjectionParams &projection) {
+  ContinuousProjectedVertex out{};
+  out.pz = std::max((float)projection.h * 0.5f, raw_view[2]);
+  const float scale = out.pz > 0.0f ? (float)projection.h / out.pz : 0.0f;
+  const float centerX = (float)projection.ofx / 65536.0f;
+  const float centerY = (float)projection.ofy / 65536.0f;
+  const float x = std::clamp(raw_view[0], -32768.0f, 32767.0f);
+  const float y = std::clamp(raw_view[1], -32768.0f, 32767.0f);
+  out.px = std::clamp(centerX + x * scale, -1024.0f, 1023.0f);
+  out.py = std::clamp(centerY + y * scale, -1024.0f, 1023.0f);
+  return out;
+}
+
 NativeProjectedVertex detail::project_gte_mode(const FixedAffine &affine,
                                                const ProjectionParams &projection,
                                                ModelVertex vertex,
@@ -124,12 +137,15 @@ NativeProjectedVertex detail::project_gte_mode(const FixedAffine &affine,
     out.flags |= 1u << 31;
   }
 
-  out.pz = std::max((float)projection.h * 0.5f, out.raw_view[2]);
-  const float scale = out.pz > 0.0f ? (float)projection.h / out.pz : 0.0f;
-  const float centerX = (float)projection.ofx / 65536.0f;
-  const float centerY = (float)projection.ofy / 65536.0f;
-  out.px = std::clamp(centerX + (float)out.ir[0] * scale, -1024.0f, 1023.0f);
-  out.py = std::clamp(centerY + (float)out.ir[1] * scale, -1024.0f, 1023.0f);
+  // The producer endpoint preserves fractional affine coordinates. Other sf/lm
+  // modes belong to the diagnostic adapter and retain their existing IR inputs.
+  const std::array<float, 3> view = shift == 12 && !limit_mode
+                                        ? out.raw_view
+                                        : std::array<float, 3>{(float)out.ir[0], (float)out.ir[1], out.raw_view[2]};
+  const auto projected = project_view(view, projection);
+  out.px = projected.px;
+  out.py = projected.py;
+  out.pz = projected.pz;
   return out;
 }
 

@@ -241,8 +241,8 @@ static void test_fractional_endpoint_channels(void) {
       {4097, -4097, 409601},
       {1, 4095, 1},
       {1.0f + 1.0f / 4096.0f, -1.0f - 1.0f / 4096.0f, 100.0f + 1.0f / 4096.0f},
-      162.0f,
-      116.0f,
+      162.0f + 1.0f / 2048.0f,
+      118.0f - 1.0f / 2048.0f,
       128.0f,
   };
   CHECK_EQ(compare_fractional(near, near_expected), 0u);
@@ -256,15 +256,58 @@ static void test_fractional_endpoint_channels(void) {
       {18432, -11264, 2097155},
       {2048, 1024, 3},
       {4.5f, -2.75f, far_z},
-      160.0f + 4.0f * 256.0f / far_z,
-      120.0f - 3.0f * 256.0f / far_z,
+      160.0f + 4.5f * 256.0f / far_z,
+      120.0f - 2.75f * 256.0f / far_z,
       far_z,
   };
   CHECK_EQ(compare_fractional(far, far_expected), 0u);
+  // Native float channels retain fractions, while hardware channels remain independently exact.
+  check_case(near_affine, projection, {1, 1, 1});
+  check_case(far_affine, projection, {1, 1, 1});
 
   ++far.raw_view_fixed[2];
   far.px += 0.25f;
   CHECK_EQ(compare_fractional(far, far_expected), 3u);
+}
+
+static void test_continuous_view_projection_limits(void) {
+  const ProjectionParams projection{160 << 16, 120 << 16, 256};
+  const auto near = project_view({1.25f, -1.25f, -100.0f}, projection);
+  CHECK_EQ(near.px, 162.5f);
+  CHECK_EQ(near.py, 117.5f);
+  CHECK_EQ(near.pz, 128.0f);
+
+  // Depth exceeds both signed IR3 and unsigned SZ. It remains usable for native projection.
+  const auto far = project_view({40000.5f, -40000.5f, 131072.0f}, projection);
+  CHECK_EQ(far.px, 160.0f + 32767.0f / 512.0f);
+  CHECK_EQ(far.py, 56.0f);
+  CHECK_EQ(far.pz, 131072.0f);
+  const auto fractional_depth = project_view({0.0f, 0.0f, 40000.25f}, projection);
+  CHECK_EQ(fractional_depth.pz, 40000.25f);
+
+  const auto clipped = project_view({32767.0f, -32768.0f, 0.0f}, projection);
+  CHECK_EQ(clipped.px, 1023.0f);
+  CHECK_EQ(clipped.py, -1024.0f);
+  const auto zero = project_view({1.0f, -1.0f, 0.0f}, {160 << 16, 120 << 16, 0});
+  CHECK_EQ(zero.px, 160.0f);
+  CHECK_EQ(zero.py, 120.0f);
+  CHECK_EQ(zero.pz, 0.0f);
+}
+
+static void test_diagnostic_float_inputs_remain_ir_values(void) {
+  FixedAffine affine{};
+  affine.m = {{{2048, 0, 0}, {0, -2048, 0}, {0, 0, 4096}}};
+  affine.t = {{0, 0, 512}};
+  const ProjectionParams projection{160 << 16, 120 << 16, 128};
+  const auto unshifted = detail::project_gte_mode(affine, projection, {1, 1, 0}, 0, false);
+  CHECK_EQ(unshifted.px, 672.0f);
+  CHECK_EQ(unshifted.py, -392.0f);
+  const auto limited = detail::project_gte_mode(affine, projection, {1, 1, 0}, 0, true);
+  CHECK_EQ(limited.px, 672.0f);
+  CHECK_EQ(limited.py, 120.0f);
+  const auto shifted_limited = detail::project_gte_mode(affine, projection, {1, 1, 0}, 12, true);
+  CHECK_EQ(shifted_limited.px, 160.0f);
+  CHECK_EQ(shifted_limited.py, 120.0f);
 }
 
 } // namespace
@@ -276,5 +319,7 @@ int main() {
   RUN(flag_output_and_negative_control);
   RUN(diagnostic_modes);
   RUN(fractional_endpoint_channels);
+  RUN(continuous_view_projection_limits);
+  RUN(diagnostic_float_inputs_remain_ir_values);
   return pt_summary();
 }

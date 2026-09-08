@@ -24,6 +24,18 @@ struct ModelVertex {
   int16_t z = 0;
 };
 
+struct ContinuousProjectedVertex {
+  float px = 0.0f;
+  float py = 0.0f;
+  float pz = 0.0f;
+};
+
+// Project finite, unsaturated view coordinates for native rendering. XY retain
+// fractions within the signed IR range; Z clamps only to H/2, without hardware
+// SZ/IR narrowing. Screen coordinates retain the PSX [-1024,1023] clamp.
+// This pure projection owns no temporal history or ambient GTE state.
+ContinuousProjectedVertex project_view(const std::array<float, 3> &raw_view, const ProjectionParams &projection);
+
 struct NativeProjectedVertex {
   std::array<int64_t, 3> raw_view_fixed{}; // signed wrapped 44-bit, 12 fractional bits
   std::array<float, 3> raw_view{};

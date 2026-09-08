@@ -120,6 +120,23 @@ The plan is frame-stable: host presentation reads only the stored latch. Changin
 widen an old guest projection; the title must publish the matching projection again. Invalid or zero
 title geometry refuses instead of inventing a plausible default.
 
+## Native projection precision
+
+`native_projection::project` preserves the exact PSX integer SXY, SZ, IR and FLAG results while
+its native floating screen/depth channels retain fractional transformed coordinates. Both those
+endpoint channels and title-owned intermediate samples call `project_view`: it clamps source X/Y
+to the signed IR bounds, clamps depth to H/2 without narrowing it to an integer register, and
+applies the screen bounds after projection. The nondefault sf/lm diagnostic adapter retains its
+previous IR-based float inputs.
+
+A title captures authored geometry and transforms, then derives any intermediate raw view
+coordinates from matching sources. `project_view` owns neither matching nor temporal history.
+Mixing integer-IR endpoint projection with fractional midpoint projection makes a stationary
+source move between presentation slots; narrowing midpoint depth additionally changes perspective
+at fractional or greater-than-32767 depths. The native projection test preserves hardware outputs
+while exercising fractional endpoints, clamps, and large floating depths. Spyro's actual Fps60
+presenter regression checks stationary fractional geometry at both ordinary and large depth.
+
 ## Consumer migration
 
 An already-60fps direct runtime should:
