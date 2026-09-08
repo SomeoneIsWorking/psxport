@@ -154,6 +154,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/overlay_glue.cpp
   ${PSXPORT_ROOT}/runtime/psx/fps60_game_hooks.cpp  # guarded callbacks used only by temporal presentation
   ${PSXPORT_ROOT}/runtime/psx/fps60_gpu_present.cpp # renderer pass used only by temporal presentation
+  ${PSXPORT_ROOT}/runtime/psx/fps60_legacy_scene_source.cpp # explicit hook/capture adapter
   ${PSXPORT_ROOT}/runtime/psx/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
   ${PSXPORT_ROOT}/runtime/psx/ot_lifo_depth.cpp    # PSX AddPrim head-insertion ties -> raster-distinct native depths
   ${PSXPORT_ROOT}/runtime/psx/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)

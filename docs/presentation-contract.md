@@ -17,8 +17,8 @@ This keeps harness stepping and standalone stepping on one host-owned route with
 console-engine frame recipe for every title.
 
 `GameRuntime::createTemporalFramePresentation(Game&)` is an optional decorator factory. Direct
-runtimes get `nullptr`; `LegacyGameRuntimeAdapter` creates `Fps60` only to preserve temporal consumers
-during migration. An already-60fps title commits with:
+runtimes get `nullptr` by default; `LegacyGameRuntimeAdapter` explicitly installs its hook-based
+scene source into `Fps60` to preserve existing temporal consumers. An already-60fps title commits with:
 
 ```cpp
 core->game->presentation.commit(core, guestFields);
@@ -32,6 +32,26 @@ and committing a neutral `Game` does not link `Fps60` symbols.
 The ownership follows from psxport's own state boundary: the game-clock/presentation fence is neutral,
 while interpolation is composed only on a path that owns previous/current temporal state. Neither the
 neutral path nor a non-temporal title depends on interpolation code.
+
+## Temporal scene ownership
+
+A direct runtime opts into interpolation with `Fps60(game, std::make_unique<TitleSceneSource>(...))`.
+`TemporalSceneSource` owns the paired scene inputs, frame eligibility, reconstruction at `t`, and exact
+primitive producer membership. Its `reconstruct` method submits through `Game::rqRedirect`; Fps60
+supplies the isolated queue, read-only display guard, projection-state restoration, ordering resolution,
+and merge with the captured frame. Both slots use `presentPass`; only source-owned captured primitives
+are replaced. Unrelated native world, backgrounds, and overlays survive with their captured values.
+A false eligibility result preserves the complete queue and does not reuse an earlier reconstruction.
+No source means ordinary single-frame replay, even when a temporal setting is enabled.
+
+`rotate` runs once after the real presentation, including disabled or ineligible frames. The title owns
+clearing missing endpoints and refusing incompatible pairs; the presenter does not infer identity from
+adjacent geometry. Reconstruction runs only on the native path and, ordinarily, only while fps60 is
+active. A source whose guest-time walk deliberately captures inputs without emitting its geometry can
+explicitly request `requiresEndpointReconstruction()`: this preserves its current-endpoint draw at
+`t=1` while interpolation is disabled, without scheduling an intermediate callback. The GameHooks
+adapter uses that policy and retains its camera/object/backdrop captures and existing producer filter.
+Direct scene sources do not depend on those hooks or the adapter's `mTier1EligibleCur` latch.
 
 ## Title-declared presentation capabilities
 
