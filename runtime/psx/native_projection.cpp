@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 #include <compat/intrinsics.h>
 
@@ -82,6 +83,19 @@ void check_mac0_overflow(int64_t value, uint32_t &flags) {
 
 } // namespace
 
+RawViewVertex transform(const FixedAffine &affine, ModelVertex vertex) {
+  RawViewVertex out{};
+  const int32_t v[3] = {vertex.x, vertex.y, vertex.z};
+  for (unsigned row = 0; row < 3; ++row) {
+    int64_t accumulator = (int64_t)affine.t[row] * 4096;
+    for (unsigned column = 0; column < 3; ++column) {
+      accumulator = wrap44(accumulator + (int64_t)affine.m[row][column] * v[column], row, out.mac_flags);
+    }
+    out.raw_view_fixed[row] = accumulator;
+  }
+  return out;
+}
+
 ContinuousProjectedVertex project_view(const std::array<float, 3> &raw_view, const ProjectionParams &projection) {
   ContinuousProjectedVertex out{};
   out.pz = std::max((float)projection.h * 0.5f, raw_view[2]);
@@ -95,21 +109,19 @@ ContinuousProjectedVertex project_view(const std::array<float, 3> &raw_view, con
   return out;
 }
 
-NativeProjectedVertex detail::project_gte_mode(const FixedAffine &affine,
+namespace {
+
+NativeProjectedVertex project_transformed_mode(const RawViewVertex &transformed,
                                                const ProjectionParams &projection,
-                                               ModelVertex vertex,
                                                unsigned shift,
                                                bool limit_mode) {
   NativeProjectedVertex out{};
   if (shift != 0 && shift != 12) {
     return out;
   }
-  const int32_t v[3] = {vertex.x, vertex.y, vertex.z};
+  out.flags = transformed.mac_flags;
   for (unsigned row = 0; row < 3; ++row) {
-    int64_t accumulator = (int64_t)affine.t[row] * 4096;
-    for (unsigned column = 0; column < 3; ++column) {
-      accumulator = wrap44(accumulator + (int64_t)affine.m[row][column] * v[column], row, out.flags);
-    }
+    const int64_t accumulator = transformed.raw_view_fixed[row];
     out.raw_view_fixed[row] = accumulator;
     out.raw_view[row] = (float)accumulator / 4096.0f;
     const int32_t mac = (int32_t)(accumulator >> shift);
@@ -149,8 +161,48 @@ NativeProjectedVertex detail::project_gte_mode(const FixedAffine &affine,
   return out;
 }
 
+bool sampleable(const RawViewVertex &view) {
+  constexpr int64_t bound = INT64_C(1) << 43;
+  return view.mac_flags == 0 && std::all_of(view.raw_view_fixed.begin(), view.raw_view_fixed.end(), [](int64_t value) {
+           return value >= -bound && value < bound;
+         });
+}
+
+} // namespace
+
+NativeProjectedVertex detail::project_gte_mode(const FixedAffine &affine,
+                                               const ProjectionParams &projection,
+                                               ModelVertex vertex,
+                                               unsigned shift,
+                                               bool limit_mode) {
+  return project_transformed_mode(transform(affine, vertex), projection, shift, limit_mode);
+}
+
 NativeProjectedVertex project(const FixedAffine &affine, const ProjectionParams &projection, ModelVertex vertex) {
-  return detail::project_gte_mode(affine, projection, vertex, 12, false);
+  return project_transformed(transform(affine, vertex), projection);
+}
+
+NativeProjectedVertex project_transformed(const RawViewVertex &view, const ProjectionParams &projection) {
+  return project_transformed_mode(view, projection, 12, false);
+}
+
+std::optional<NativeProjectedVertex>
+sample_view(const RawViewVertex &previous, const RawViewVertex &current, const ProjectionParams &projection, double t) {
+  if (!std::isfinite(t) || t < 0.0 || t > 1.0 || !sampleable(previous) || !sampleable(current)) {
+    return std::nullopt;
+  }
+  if (t == 0.0) {
+    return project_transformed(previous, projection);
+  }
+  if (t == 1.0) {
+    return project_transformed(current, projection);
+  }
+  RawViewVertex sampled{};
+  for (unsigned row = 0; row < 3; ++row) {
+    sampled.raw_view_fixed[row] =
+        (int64_t)std::floor(std::lerp((double)previous.raw_view_fixed[row], (double)current.raw_view_fixed[row], t));
+  }
+  return project_transformed(sampled, projection);
 }
 
 } // namespace psxport::native_projection

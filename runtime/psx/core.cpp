@@ -62,3 +62,7 @@ psx::cpu::NativeDispatcher &Core::nativeDispatcher() {
 std::optional<psx::cpu::ImageIdentity> Core::currentImageIdentity(uint32_t guestAddress) const {
   return imageCatalog_->resolve(guestAddress);
 }
+
+std::optional<psx::cpu::ImageIdentity> Core::currentImageIdentity(GuestAddressRange physicalRange) const {
+  return imageCatalog_->resolve(physicalRange);
+}

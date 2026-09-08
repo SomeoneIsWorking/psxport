@@ -153,3 +153,13 @@ An already-60fps direct runtime should:
 Consumer verification must include 4:3 identity, the requested wide aspect, reference-path
 suppression, and a real-frame A/B proving the original central picture is not rescaled and that H,
 vertical center, UV, color, depth/order, and unrelated guest state remain unchanged.
+
+`transform` retains each signed 44-bit affine accumulator and its MAC overflow history;
+`project_transformed` owns the subsequent IR/SZ saturation, reciprocal division, screen/depth-cue
+classification and flags. Ordinary `project` composes those same owners. `sample_view` interpolates
+matching raw fixed inputs in double precision, floors interior values to 1/4096 view units and
+passes them through that projection owner. Exact endpoints retain the ordinary result. It refuses
+nonfinite/out-of-range fractions, malformed signed-44 values and either endpoint's affine overflow:
+a final wrapped accumulator cannot reveal a canceled intermediate overflow. Titles must retain
+source/resource identity, constant projection parameters and independently transformed inputs for
+authored precision/refinement streams; scaling a projected vertex does not meet this contract.

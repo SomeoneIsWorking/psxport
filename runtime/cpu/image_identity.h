@@ -33,6 +33,9 @@ public:
   ImageIdentity activate(std::string_view name, GuestAddressRange range, std::uint64_t contentIdentity);
   bool deactivate(ImageIdentity identity);
   std::optional<ImageIdentity> resolve(std::uint32_t guestAddress) const;
+  // Physical half-open ranges resolve only when one active residency owns every
+  // byte. Empty, invalid, and virtual-alias ranges do not resolve.
+  std::optional<ImageIdentity> resolve(GuestAddressRange physicalRange) const;
   std::size_t activeCount() const;
 
 private:

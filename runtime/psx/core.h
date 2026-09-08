@@ -93,6 +93,7 @@ public:
   psx::cpu::LightrecExecutor &lightrecExecutor();
   psx::cpu::NativeDispatcher &nativeDispatcher();
   std::optional<psx::cpu::ImageIdentity> currentImageIdentity(uint32_t guestAddress) const;
+  std::optional<psx::cpu::ImageIdentity> currentImageIdentity(GuestAddressRange physicalRange) const;
 
   // Memory access (delegates to host_ptr / the I/O map). PSX is little-endian == host.
   uint8_t mem_r8(uint32_t a);

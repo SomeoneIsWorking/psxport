@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 extern "C" void GTE_Init(void);
 
@@ -26,6 +27,11 @@ struct FractionalExpected {
   float py = 0.0f;
   float pz = 0.0f;
 };
+
+static bool same_projection(const NativeProjectedVertex &a, const NativeProjectedVertex &b) {
+  return a.raw_view_fixed == b.raw_view_fixed && a.raw_view == b.raw_view && a.ir == b.ir && a.sz == b.sz &&
+         a.sx == b.sx && a.sy == b.sy && a.flags == b.flags && a.px == b.px && a.py == b.py && a.pz == b.pz;
+}
 
 static unsigned compare_fractional(const NativeProjectedVertex &actual, const FractionalExpected &expected) {
   unsigned mismatched = 0;
@@ -126,6 +132,13 @@ static void check_case(const FixedAffine &affine, const ProjectionParams &projec
   const CompareResult result = compare(native, guest);
   CHECK_EQ(result.compared, 10u);
   CHECK_EQ(result.mismatched, 0u);
+  const auto raw = transform(affine, vertex);
+  CHECK(same_projection(project_transformed(raw, projection), native));
+  if (raw.mac_flags == 0) {
+    const auto stationary = sample_view(raw, raw, projection, 0.5);
+    CHECK(stationary.has_value());
+    CHECK(same_projection(*stationary, native));
+  }
 }
 
 static void test_random_and_edges(void) {
@@ -310,6 +323,109 @@ static void test_diagnostic_float_inputs_remain_ir_values(void) {
   CHECK_EQ(shifted_limited.py, 120.0f);
 }
 
+static void test_raw_sample_fractional_floor_and_exact_endpoints(void) {
+  const ProjectionParams projection{160 << 16, 120 << 16, 256};
+  FixedAffine previous{};
+  previous.m = {{{1, 0, 0}, {0, -1, 0}, {0, 0, 1}}};
+  previous.t = {{1, -1, 100}};
+  FixedAffine current = previous;
+  current.m = {{{4, 0, 0}, {0, -4, 0}, {0, 0, 4}}};
+  const ModelVertex vertex{1, 1, 1};
+  const auto a = transform(previous, vertex);
+  const auto b = transform(current, vertex);
+  const auto start = sample_view(a, b, projection, 0.0);
+  const auto end = sample_view(a, b, projection, 1.0);
+  CHECK(start && end);
+  CHECK(same_projection(*start, project(previous, projection, vertex)));
+  CHECK(same_projection(*end, project(current, projection, vertex)));
+  const auto midpoint = sample_view(a, b, projection, 0.5);
+  CHECK(midpoint.has_value());
+  CHECK_EQ(midpoint->raw_view_fixed[0], 4098);
+  CHECK_EQ(midpoint->raw_view_fixed[1], -4099);
+  CHECK_EQ(midpoint->raw_view_fixed[2], 409602);
+  // These coefficients independently encode the floored midpoint, including
+  // -4098.5 -> -4099 rather than truncation toward zero.
+  FixedAffine expected = previous;
+  expected.m = {{{2, 0, 0}, {0, -3, 0}, {0, 0, 2}}};
+  GteRegs guest = make_guest(expected, projection, vertex);
+  CHECK(GTE_ExecuteIsolated(&guest, 0x4a180001u) >= 0);
+  CHECK_EQ(compare(*midpoint, guest).mismatched, 0u);
+  CHECK(same_projection(*midpoint, project(expected, projection, vertex)));
+  CHECK_EQ(midpoint->ir[1], -2);
+  CHECK_EQ(midpoint->sz, 100u);
+  CHECK_EQ(midpoint->pz, 128.0f);
+}
+
+static void test_raw_sample_reclassifies_unsaturated_depth_and_flags(void) {
+  const ProjectionParams projection{160 << 16, 120 << 16, 256};
+  FixedAffine previous{};
+  previous.t = {{40000, -40000, 40000}};
+  FixedAffine current{};
+  current.t = {{80000, -80000, 120000}};
+  const auto a = transform(previous, {});
+  const auto b = transform(current, {});
+  const auto midpoint = sample_view(a, b, projection, 0.5);
+  CHECK(midpoint.has_value());
+  CHECK_EQ(midpoint->raw_view[2], 80000.0f);
+  CHECK_EQ(midpoint->pz, 80000.0f);
+  CHECK_EQ(midpoint->sz, 65535u);
+  CHECK_EQ(midpoint->ir[0], 32767);
+  CHECK_EQ(midpoint->ir[1], -32768);
+  CHECK((midpoint->flags & (1u << 18)) != 0);
+  FixedAffine expected{};
+  expected.t = {{60000, -60000, 80000}};
+  GteRegs guest = make_guest(expected, projection, {});
+  CHECK(GTE_ExecuteIsolated(&guest, 0x4a180001u) >= 0);
+  CHECK_EQ(compare(*midpoint, guest).mismatched, 0u);
+
+  previous.t = {{0, 0, -1}};
+  current.t = {{0, 0, 513}};
+  const auto near = sample_view(transform(previous, {}), transform(current, {}), projection, 0.25);
+  const auto far = sample_view(transform(previous, {}), transform(current, {}), projection, 0.5);
+  CHECK(near && far);
+  CHECK_EQ(near->sz, 127u);
+  CHECK_EQ(near->pz, 128.0f);
+  CHECK((near->flags & (1u << 17)) != 0);
+  CHECK_EQ(far->sz, 256u);
+  CHECK_EQ(far->flags, 0u);
+}
+
+static void test_raw_sample_refuses_invalid_interval_and_overflow_history(void) {
+  const ProjectionParams projection{160 << 16, 120 << 16, 256};
+  FixedAffine ordinary{};
+  ordinary.t[2] = 512;
+  const auto valid = transform(ordinary, {});
+  for (double t : {-0.01,
+                   1.01,
+                   std::numeric_limits<double>::infinity(),
+                   -std::numeric_limits<double>::infinity(),
+                   std::numeric_limits<double>::quiet_NaN()}) {
+    CHECK(!sample_view(valid, valid, projection, t));
+  }
+  for (int64_t invalid : {INT64_C(1) << 43, -(INT64_C(1) << 43) - 1, INT64_MAX, INT64_MIN}) {
+    auto malformed = valid;
+    malformed.raw_view_fixed[1] = invalid;
+    CHECK(!sample_view(malformed, valid, projection, 0.0));
+    CHECK(!sample_view(valid, malformed, projection, 1.0));
+    CHECK(!sample_view(valid, malformed, projection, 0.5));
+  }
+
+  // The first add overflows MAC1, the second cancels it: final raw44 alone
+  // looks valid and cannot recover the two overflow flags.
+  FixedAffine overflow = ordinary;
+  overflow.t[0] = INT32_MAX;
+  overflow.m[0] = {{32767, -32767, 0}};
+  const auto wrapped = transform(overflow, {32767, 32767, 0});
+  CHECK_EQ(wrapped.raw_view_fixed[0], (int64_t)INT32_MAX * 4096);
+  CHECK_EQ(wrapped.mac_flags, (1u << 30) | (1u << 27));
+  CHECK((project_transformed(wrapped, projection).flags & wrapped.mac_flags) == wrapped.mac_flags);
+  CHECK(!sample_view(wrapped, valid, projection, 0.5));
+  CHECK(!sample_view(valid, wrapped, projection, 0.5));
+  CHECK(!sample_view(wrapped, valid, projection, 0.0));
+  CHECK(!sample_view(valid, wrapped, projection, 1.0));
+  CHECK(sample_view(valid, valid, projection, 0.5).has_value());
+}
+
 } // namespace
 
 int main() {
@@ -321,5 +437,8 @@ int main() {
   RUN(fractional_endpoint_channels);
   RUN(continuous_view_projection_limits);
   RUN(diagnostic_float_inputs_remain_ir_values);
+  RUN(raw_sample_fractional_floor_and_exact_endpoints);
+  RUN(raw_sample_reclassifies_unsaturated_depth_and_flags);
+  RUN(raw_sample_refuses_invalid_interval_and_overflow_history);
   return pt_summary();
 }

@@ -35,6 +35,25 @@ std::optional<ImageIdentity> ImageCatalog::resolve(std::uint32_t guestAddress) c
   return std::nullopt;
 }
 
+std::optional<ImageIdentity> ImageCatalog::resolve(GuestAddressRange physicalRange) const {
+  if (!physicalRange.valid() || physicalRange.end > 0x20000000u) {
+    return std::nullopt;
+  }
+  for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry) {
+    if (!entry->active || !entry->range.valid() || entry->range.end <= physicalRange.begin ||
+        entry->range.begin >= physicalRange.end) {
+      continue;
+    }
+    // The newest overlap owns at least one requested byte. Unless it owns all
+    // of them, the range crosses a residency boundary or an uncovered gap.
+    if (entry->range.begin <= physicalRange.begin && entry->range.end >= physicalRange.end) {
+      return entry->identity;
+    }
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 std::size_t ImageCatalog::activeCount() const {
   return std::count_if(entries_.begin(), entries_.end(), [](const Entry &entry) {
     return entry.active;

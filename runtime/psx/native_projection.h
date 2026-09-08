@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace psxport::native_projection {
 
@@ -23,6 +24,14 @@ struct ModelVertex {
   int16_t y = 0;
   int16_t z = 0;
 };
+
+struct RawViewVertex {
+  std::array<int64_t, 3> raw_view_fixed{}; // signed wrapped 44-bit, 12 fractional bits
+  uint32_t mac_flags = 0;                  // MAC1-3 overflow history (FLAG bits 30..25)
+};
+
+// Preserve the raw affine result and overflow history before IR/SZ saturation.
+RawViewVertex transform(const FixedAffine &affine, ModelVertex vertex);
 
 struct ContinuousProjectedVertex {
   float px = 0.0f;
@@ -56,5 +65,19 @@ struct NativeProjectedVertex {
 // output is not a temporal recipe and must not be stored/lerped in place of
 // authored model, transform, and camera inputs.
 NativeProjectedVertex project(const FixedAffine &affine, const ProjectionParams &projection, ModelVertex vertex);
+
+// The same sf=1,lm=0 projection/classification stage used by project(). Input
+// must retain the signed-44 values and MAC flags produced by transform().
+NativeProjectedVertex project_transformed(const RawViewVertex &view, const ProjectionParams &projection);
+
+// Sample matching source transforms, never projected endpoints. Reject invalid
+// t/ranges and either endpoint's MAC overflow: wrapped accumulator history has
+// no defined interpolation. Exact t=0/1 projects that endpoint unchanged;
+// interior raw fixed values interpolate in double and round toward -infinity
+// to 1/4096 view units before the shared integer/FLAG and float projection.
+// Callers own source identity and must sample each authored precision stream
+// independently. Projection parameters are constant throughout this interval.
+std::optional<NativeProjectedVertex>
+sample_view(const RawViewVertex &previous, const RawViewVertex &current, const ProjectionParams &projection, double t);
 
 } // namespace psxport::native_projection
