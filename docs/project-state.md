@@ -91,8 +91,18 @@ dynarec product path.
 
 ### S018 — Independent test oracle
 
-Beetle/Mednafen trace tools remain separate from the product. Gap: comparison through the production
-state bridge and a seeded first-divergence proof remain absent.
+Beetle/Mednafen CPU-window tools remain separate from the product. The isolated libretro software
+console host in `tools/oracle/console.py` also boots user-supplied CHDs with explicitly admitted BIOS
+firmware and exposes live pad input, RAM reads, framebuffer capture and audio-consumption counters.
+Its seven synthetic host tests cover real callback boundaries and failure cases. A Linux x86_64
+Clang build at Beetle `054dd6a7` boots Spyro 1 through the supplied North American SCPH-1001 v2.2
+BIOS into Artisans and responds to held Left; title comparison evidence belongs to Spyro's state
+inventory. No BIOS or disc bytes enter the source or package.
+
+Gap: full-console checkpoint alignment and device/timing divergence localization remain incomplete.
+The console has independent CPU execution and scheduling but shares Beetle device implementation
+lineage with the product, so agreement cannot rule out a shared device bug. CPU-window snapshots
+do not claim full-console state parity. See `tools/oracle/CONSOLE.md` for scope and commands.
 
 ### S019 — Narrow multi-title framework seam
 

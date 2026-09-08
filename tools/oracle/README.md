@@ -1,5 +1,9 @@
 # Isolated CPU windows and snapshots
 
+For a separately hosted complete console, including video, CD, audio and controller input, see
+[the full-console diagnostic host](CONSOLE.md). The CPU-window tools below retain their narrower
+hardware-free contract.
+
 These executables run the independent Mednafen CPU in a separate process. They do **not** implement
 full-console saves or gameplay-frame comparison: GPU, CD, SPU, timers, SIO and DMA channels remain
 unsupported, and touching them stops and taints the window. No tool here is a player CPU selector.

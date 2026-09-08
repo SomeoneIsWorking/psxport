@@ -104,4 +104,7 @@ target_compile_options(test_oracle_snapshot PRIVATE -Wall -Wextra)
 target_link_libraries(test_oracle_snapshot PRIVATE psxport_oracle)
 if(PSXPORT_BUILD_TESTS)
   add_test(NAME oracle_snapshot COMMAND test_oracle_snapshot ${CMAKE_CURRENT_SOURCE_DIR}/../../scratch/oracle-snapshot)
+  add_test(NAME oracle_console_host
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_console_host.py)
+  set_tests_properties(oracle_console_host PROPERTIES TIMEOUT 60)
 endif()
