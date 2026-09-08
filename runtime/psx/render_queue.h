@@ -239,6 +239,14 @@ bool rq_source_ot_candidate_wins(const RqItem &candidate, const RqPixelProbeWinn
 // Per-instance (on Game) so two cores keep independent queues; pure host render data (never guest RAM),
 // so it does not affect a Core::ram lockstep diff.
 struct RenderQueue {
+  // Admission runs the same producer/item path in an isolated queue without
+  // recording another production draw in the Core census or unscoped diagnostics.
+  // This selects observations only: capture still selects queue versus direct
+  // emission. Isolated admission callers submit with capture=1.
+  enum class Observation { Live, Admission };
+  RenderQueue() = default;
+  explicit RenderQueue(Observation observation) : observation(observation), items{} {}
+  const Observation observation = Observation::Live;
   Game *game = nullptr; // back-pointer wired in Game() so methods can reach Core (game->core)
   RqItem items[RQ_MAX];
   int n = 0;

@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[1]
@@ -13,7 +14,7 @@ ROOT = TOOLS.parent
 SCRATCH = ROOT / "scratch" / "consumer-verify-policy"
 sys.path.insert(0, str(TOOLS))
 
-from automation.process import ToolError
+from automation.process import ToolError, run
 from port.consumer_verify import ConsumerVerifier, ConsumerVerifyConfig
 
 
@@ -82,8 +83,6 @@ class ConsumerVerifierTests(unittest.TestCase):
             self.assertEqual(len(runner.commands), 6)
             self.assertIn("-G", runner.commands[0])
             self.assertIn("Ninja", runner.commands[0])
-            self.assertIn("-DCMAKE_C_COMPILER=clang", runner.commands[0])
-            self.assertIn("-DCMAKE_CXX_COMPILER=clang++", runner.commands[0])
             self.assertNotEqual(config.python, config.python.resolve())
             self.assertIn(f"-DPython3_EXECUTABLE={config.python}", runner.commands[0])
             self.assertEqual(runner.commands[4][0], str(config.python))
@@ -139,6 +138,25 @@ class ConsumerVerifierTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ToolError, "refuses an empty CTest regex"):
                 ConsumerVerifier(invalid, RecordingRunner()).verify({})
+
+    def test_ctest_requires_a_reached_test(self) -> None:
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
+            config = self.fixture(Path(directory))
+            config.build.mkdir(parents=True)
+            (config.build / "CTestTestfile.cmake").write_text(
+                f'add_test(fixture_positive "{sys.executable}" "-c" "pass")\n',
+                encoding="utf-8",
+            )
+
+            def ctest_only(command, *, cwd, environment):
+                if command[0] == "ctest":
+                    run(command, cwd=cwd, environment=environment)
+
+            ConsumerVerifier(config, ctest_only).verify()
+            with self.assertRaises(ToolError):
+                ConsumerVerifier(
+                    replace(config, test_regex="^misspelled_title_test$"), ctest_only
+                ).verify()
 
 
 if __name__ == "__main__":

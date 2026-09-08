@@ -1,57 +1,53 @@
-// runtime/psx/boot.cpp (framework) — the MAIN.EXE loader. The process entry point main() is GAME-side
-// (game/core/main.cpp): it installs the game seam then constructs+drives the framework machine. This file
-// keeps only load_exe (the PS-EXE loader), which the game main AND the harnesses (DualCore/Sbs) all call.
-// The framework provides no main(): the standalone psxport_smoke supplies its own.
+// File-based PS-X EXE startup. Structural mapping belongs to psx_exe_image;
+// callers needing exact revision authentication must authenticate and map the
+// same buffer through loadPsxExeImage instead of reopening a validated path.
+#include "psx_exe_image.h"
+
 #include "core.h"
-#include "image_identity.h"
-#include "invalidation.h"
+
+#include <cstdlib>
+#include <fstream>
 #include <lucent/log.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <vector>
 
-static uint32_t rd32(const uint8_t *p) {
-  return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24;
-}
-
-void load_exe(const char *path, Core *c) { // non-static: the dual-core harness loads two cores
-  FILE *f = fopen(path, "rb");
-  if (!f) {
-    lucent::error("boot", "cannot open PS-X EXE '{}'", path ? path : "(null)");
-    exit(1);
+void load_exe(const char *path, Core *core) {
+  if (!path || !core) {
+    lucent::error("boot", "PS-X EXE startup requires a path and Core");
+    std::exit(1);
   }
-  fseek(f, 0, SEEK_END);
-  long n = ftell(f);
-  fseek(f, 0, SEEK_SET);
-  uint8_t *buf = (uint8_t *)malloc(n);
-  if (fread(buf, 1, n, f) != (size_t)n) {
-    lucent::error("boot", "short read on {}", path ? path : "(null)");
-    exit(1);
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file) {
+    lucent::error("boot", "cannot open PS-X EXE '{}'", path);
+    std::exit(1);
   }
-  fclose(f);
-  uint32_t entry = rd32(buf + 0x10), gp = rd32(buf + 0x14);
-  uint32_t load = rd32(buf + 0x18), tsize = rd32(buf + 0x1C), sp = rd32(buf + 0x30);
-  memcpy(&c->ram[load & 0x1FFFFF], buf + 0x800, tsize);
-  std::uint64_t contentIdentity = 1469598103934665603ull;
-  for (std::uint32_t i = 0; i < tsize; ++i) {
-    contentIdentity ^= buf[0x800u + i];
-    contentIdentity *= 1099511628211ull;
+  const auto size = file.tellg();
+  if (size < static_cast<std::streamoff>(psx::cpu::kPsxExeHeaderBytes) ||
+      size > static_cast<std::streamoff>(psx::cpu::kPsxExeMaxBytes)) {
+    lucent::error("boot", "PS-X EXE '{}' has an unreadable or out-of-bounds size", path);
+    std::exit(1);
   }
-  free(buf);
-  const GuestAddressRange loadedRange{load & 0x1fffffffu, (load & 0x1fffffffu) + tsize};
-  psx::cpu::notifyExecutableWrite(*c, loadedRange, psx::cpu::ExecutableWriteSource::ModuleLoad);
-  c->imageCatalog().activate(path ? path : "PS-X EXE", loadedRange, contentIdentity);
-  c->r[28] = gp;                    // gp
-  c->r[29] = sp ? sp : 0x801FFFF0u; // sp
-  c->r[30] = c->r[29];              // fp
-  c->r[31] = 0xDEAD0000u;           // ra sentinel (top-level return)
+  std::vector<uint8_t> bytes(static_cast<std::size_t>(size));
+  file.seekg(0);
+  file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  if (!file || file.peek() != std::ifstream::traits_type::eof()) {
+    lucent::error("boot", "PS-X EXE '{}' changed size or could not be read completely", path);
+    std::exit(1);
+  }
+  const auto loaded = psx::cpu::loadPsxExeImage(*core, bytes, path);
+  if (!loaded) {
+    lucent::error("boot", "cannot load PS-X EXE '{}': {}", path, loaded.detail);
+    std::exit(1);
+  }
+  if (loaded.image.stackBase == 0) {
+    core->r[29] = 0x801ffff0u;
+    core->r[30] = core->r[29];
+  }
+  core->r[31] = 0xdead0000u; // top-level return sentinel
   lucent::info("boot",
                "loaded {}: entry 0x{:08X} load 0x{:08X} text 0x{:X} sp 0x{:08X}",
-               path ? path : "(null)",
-               entry,
-               load,
-               tsize,
-               c->r[29]);
+               path,
+               loaded.image.entry,
+               loaded.image.textAddress,
+               loaded.image.textBytes,
+               core->r[29]);
 }
-
-// guest dispatch_miss now lives in hle.c (routes A0/B0/C0 to the HLE BIOS).

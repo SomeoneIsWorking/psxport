@@ -5,6 +5,8 @@ from __future__ import annotations
 import ctypes as ct
 from pathlib import Path
 
+from console_observer import bind as bind_observer
+
 Environment = ct.CFUNCTYPE(ct.c_bool, ct.c_uint, ct.c_void_p)
 VideoRefresh = ct.CFUNCTYPE(None, ct.c_void_p, ct.c_uint, ct.c_uint, ct.c_size_t)
 AudioSample = ct.CFUNCTYPE(None, ct.c_int16, ct.c_int16)
@@ -62,4 +64,5 @@ def load_library(path: Path) -> ct.CDLL:
         function.argtypes = arguments
     if library.retro_api_version() != 1:
         raise ValueError("unsupported libretro API version; expected 1")
+    bind_observer(library)
     return library

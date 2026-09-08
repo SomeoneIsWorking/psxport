@@ -40,19 +40,51 @@ def integer(value) -> int:
     raise ValueError("expected an integer or prefixed integer string")
 
 
+def observation_config(session: ConsoleSession, message: dict) -> dict:
+    if not session.loaded:
+        raise ValueError("PC observation requires loaded console content")
+    targets, ranges = message["targets"], message["ranges"]
+    if not isinstance(targets, list) or not isinstance(ranges, list):
+        raise ValueError("observer targets/ranges must be lists")
+    if any(not isinstance(item, dict) or set(item) != {"pc", "return"} for item in targets):
+        raise ValueError("observer target fields are exactly pc and return")
+    if any(not isinstance(item, dict) or set(item) != {"address", "bytes"} for item in ranges):
+        raise ValueError("observer range fields are exactly address and bytes")
+    return session.observer.configure(
+        [(integer(item["pc"]), item["return"]) for item in targets],
+        [(integer(item["address"]), integer(item["bytes"])) for item in ranges],
+        integer(message["capacity"]))
+
+
 def command(session: ConsoleSession, message: dict, output_directory: Path) -> dict:
     if not isinstance(message, dict):
         raise ValueError("command must be a JSON object")
     operation = message.get("command")
     allowed = {"status": {"command"}, "buttons": {"command", "buttons"},
                "step": {"command", "frames"}, "read": {"command", "address", "bytes"},
-               "capture": {"command"}, "ram": {"command"}, "quit": {"command"}}
+               "capture": {"command"}, "ram": {"command"}, "quit": {"command"},
+               "observe": {"command", "targets", "ranges", "capacity"},
+               "observe_read": {"command"}, "observe_off": {"command"},
+               "hashes_begin": {"command"}, "hashes": {"command"}}
     if not isinstance(operation, str) or operation not in allowed or set(message) != allowed[operation]:
-        raise ValueError("unknown command or missing/extra fields: status, buttons, step, read, capture, ram, quit")
+        raise ValueError("unknown command or missing/extra fields: " + ", ".join(allowed))
     if operation == "buttons":
         session.set_buttons(message["buttons"])
     elif operation == "step":
         return session.step(message["frames"])
+    elif operation == "observe":
+        return observation_config(session, message)
+    elif operation == "observe_read":
+        return session.observer.drain()
+    elif operation == "observe_off":
+        session.library.retro_psx_observer_disable()
+        return session.observer.status()
+    elif operation == "hashes_begin":
+        return session.begin_hashes()
+    elif operation == "hashes":
+        if session.hashes is None:
+            raise ValueError("scanned 0 hash fields; hashes_begin has not started an observation")
+        return session.hashes.status()
     elif operation == "read":
         size = integer(message["bytes"])
         if not 1 <= size <= 256:

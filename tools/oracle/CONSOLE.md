@@ -16,12 +16,15 @@ From the framework checkout, use its locked Python environment:
 
 ```sh
 uv run --frozen python tools/oracle/test_console_host.py
+uv run --frozen python tools/oracle/test_console_observer.py
 uv run --frozen python tools/oracle/console.py build --cc clang --cxx clang++ --jobs 6
 ```
 
 The builder requires Git, Make, a C/C++ compiler, pkg-config and zlib development files. It exports
 only the recorded Beetle gitlink, verifies required full-core inputs, and never modifies the vendor
-checkout. Hardware rendering and Lightrec are disabled at build time. The fork's GTE state declaration
+checkout. Hardware rendering and Lightrec are disabled at build time. This diagnostic build explicitly selects
+`PSX_PC_OBSERVER=1`; product and default upstream core builds omit the observer module and all
+CPU-loop references. The framework verifier separately enables its CPU-only diagnostic regression. The manifest records the observer ABI. Uncommitted fork edits are not build inputs. The fork's GTE state declaration
 is supplied from `runtime/psx/gte_state.h`; its digest is part of the build identity. Source exports,
 objects, library and identity manifests live in `build/oracle-console`. Linux `.so` and macOS `.dylib`
 are recognized; other platforms refuse explicitly. Recognizing a platform is not runtime qualification.
@@ -89,6 +92,82 @@ frame dimensions, timing and all queried option values. Unknown commands or fiel
 Read commands allow 1..256 bytes from main RAM, including its guest aliases. Capture writes only the
 latest copied framebuffer as `frame.png`; RAM writes the current 2 MiB as `ram.bin`. These stable paths
 are overwritten on request, with hashes in the reply. There are no per-frame image/RAM disk writes.
+
+## Bounded PC observations
+
+The optional fork extension copies active CPU-local state before opcode semantics and pending-load
+commit, after instruction fetch and cycle/read-absorb bookkeeping. Interrupt/halt dispatch is not a
+guest-instruction observation. Registers are r0..r31 followed by LO and HI; PC, next PC, instruction,
+branch-delay state, pending-load register/value, field-local CPU timestamp, CP0 Status/Cause/EPC and
+requested RAM bytes are explicit. This is an observation record, not a resumable CPU/device snapshot.
+A field label is the upcoming `retro_run` call; it does not mean display-phase alignment.
+
+Configure only while the console is paused between commands. For example, with synthetic addresses:
+
+```json
+{"command":"observe","targets":[{"pc":"0x80001020","return":true}],"ranges":[{"address":"0x80002000","bytes":8}],"capacity":64}
+{"command":"step","frames":1}
+{"command":"observe_read"}
+{"command":"observe_off"}
+```
+
+A return observation means arrival at the entry's saved RA with its saved SP and no branch delay,
+before the caller's next opcode. It does not redirect execution or install a guest breakpoint.
+Reentry while a return is pending is explicitly unsupported and makes the census incomplete. A
+non-returning function leaves a pending pair. Select at most four unique aligned PCs, eight nonempty
+main-RAM spans (physical, KSEG0 or KSEG1 only) totaling 512 bytes, and a capacity of 1..128 records. The C CPU loop copies RAM directly;
+there are no per-instruction Python callbacks, device reads, writes, or forced pipeline changes.
+
+`observe_read` drains copied records and reports cumulative scanned instructions, matched events,
+retained records, dropped events, pairing errors and each target's entry/return counts. A full buffer
+continues execution and counting, while dropped events make the result incomplete. Drain between
+bounded steps to keep complete coverage. Zero matches explicitly report a nonzero scanned denominator
+and incomplete status. Every configured target must be observed and every requested return paired;
+all counters remain visible after `observe_off`. A valid new configuration starts a new census; an
+invalid one preserves the previous configuration and census.
+
+The canonical asset-free verifier (`tools/verify.py`, also used by hosted CI) explicitly configures
+`PSXPORT_ORACLE_PC_OBSERVER=ON` through `tools/project.py`. The raw CMake option defaults off.
+For focused qualification in the configured `build/ci` tree, build `test_console_pc_observer`
+and run CTest `^oracle_pc_observer$`. It executes the actual Mednafen loop
+and checks observer on/off state preservation, active pending-load capture, saved return arrival,
+unreachable PC, buffer overflow and invalid-configuration preservation. This is CPU-boundary evidence;
+it cannot qualify full-console devices. The option affects only the separately linked oracle library,
+never the product CPU or its runtime linkage.
+
+## Canonical on/off capture windows
+
+```json
+{"command":"hashes_begin"}
+{"command":"step","frames":2}
+{"command":"hashes"}
+```
+
+Hash windows consume the existing audio sink's actual samples. They hash canonical little-endian
+signed 16-bit stereo samples, every completed field's full 2 MiB RAM, and its canonical RGB rows
+(including zero row-filter bytes) preceded by little-endian width and height. Frame pitch padding and
+native pixel representation are excluded. Counters report completed fields and stereo sample frames;
+an empty window is incomplete. Hashing is opt-in and retains no growing frame/audio history.
+
+To qualify observational behavior, use separate fresh full-console sessions with the same authentic
+firmware, disc, starting persistence, options and input sequence. Start hash windows at the same
+reached boundary, enabling the observer in only one run. Compare all three hashes and their counters,
+and require complete positive observer entry/return coverage. Repeat with an unreachable PC to prove
+`scanned > 0`, `matched = 0`, incomplete observation while hashes still agree. Host synthetic tests
+prove hashing distinguishes changed RAM, pixels and samples; only this real full-console experiment
+can establish that observer instrumentation preserves that scenario. Matching counts alone do not.
+
+Qualified on Linux x86-64 with Clang 22.1.8 and fork commit
+`5791d27a41e7ffd759f68e88114b50a1c6a168c0`: Spyro USA CHD SHA-256
+`8fe0a6e735ee399a8251f2173cf61c6e20fa565611b934fa3d90788beab9d6cb`, authentic North American
+BIOS SHA-1 `10155d8d6e6e832d6ea66db9bc098321fb5e8ebf`, empty saves and identical recorded inputs.
+At Artisans fields 6739–6746, all 48 cumulative RAM/video/audio comparisons matched across observer
+off, camera observation and unreachable-target sessions. Each window contained eight fields and
+5,897 stereo sample frames. Camera observation scanned 2,822,621 instructions and retained four
+entries at `0x80033c50` with four saved-return arrivals at `0x8001ede0`; drops, pairing errors and
+pending returns were zero. The unreachable `0xfffffffc` target scanned the same instruction count,
+matched zero and explicitly reported incomplete observation. This qualifies instrumentation in
+that reached scenario; native-port parity and performance still require their own comparisons.
 
 ## Comparison validity
 

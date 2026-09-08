@@ -16,33 +16,12 @@ jobs:
     env:
       CC: clang
       CXX: clang++
-      PSXPORT_LIGHTREC_DIR: ${{ github.workspace }}/shared/lightrec
-      PSXPORT_LIGHTNING_PREFIX: ${{ github.workspace }}/shared/lightning/build/install/linux-x86_64
     steps:
       - name: Check out psxport with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Restore exact first-level dependency revisions
-        run: git submodule update --init external/psycross vendor/beetle-psx vendor/lucent
-      - name: Check out the exact maintained Lightrec revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: SomeoneIsWorking/lightrec
-          ref: b1457137c31cedff5f440d59da29401d021ba2da
-          path: shared/lightrec
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Check out the exact maintained GNU Lightning revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: SomeoneIsWorking/lightning
-          ref: f305e50483e9794e8fb0b99fb77d82954a4924e5
-          path: shared/lightning
-          fetch-depth: 0
-          persist-credentials: false
-          submodules: recursive
       - name: Select Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -52,15 +31,7 @@ jobs:
         with:
           version: "0.10.12"
           enable-cache: false
-      - name: Install native build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes \
-            autoconf automake clang clang-format clang-tidy cmake glslc libfreetype-dev \
-            libtool make \
-            libsdl3-dev libsdl3-image-dev ninja-build pkg-config zlib1g-dev
-      - name: Build the exact maintained GNU Lightning prefix
-        working-directory: shared/lightning
-        run: uv run --frozen python tools/build_lightning.py --clean --cc clang --skip-upstream-tests
+      - name: Provision the shared Linux build inputs
+        uses: ./.github/actions/setup-linux
       - name: Run the asset-free product and repository contracts
         run: uv run --frozen python tools/verify.py

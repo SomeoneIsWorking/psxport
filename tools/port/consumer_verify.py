@@ -52,8 +52,6 @@ class ConsumerVerifier:
             "-G",
             "Ninja",
             "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-            "-DCMAKE_C_COMPILER=clang",
-            "-DCMAKE_CXX_COMPILER=clang++",
             f"-DPython3_EXECUTABLE={config.python}",
             f"-DPSXPORT_DIR={config.psxport}",
             *lightrec_cmake_definitions(process_environment),
@@ -65,7 +63,10 @@ class ConsumerVerifier:
         for target in config.build_targets:
             self._run(["cmake", "--build", config.build, "--target", target], process_environment)
         self._run(
-            ["ctest", "--test-dir", config.build, "--output-on-failure", "-R", config.test_regex],
+            [
+                "ctest", "--test-dir", config.build, "--output-on-failure",
+                "--no-tests=error", "-R", config.test_regex,
+            ],
             process_environment,
         )
 

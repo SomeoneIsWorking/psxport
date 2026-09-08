@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build" / "oracle-console"
 SCRATCH = ROOT / "scratch" / "oracle-console"
 VENDOR = ROOT / "vendor" / "beetle-psx"
-BUILD_SCHEMA = 1
+BUILD_SCHEMA = 2
 
 
 def file_sha256(path: Path) -> str:
@@ -48,7 +48,8 @@ def source_identity() -> dict:
     return {"schema": BUILD_SCHEMA, "vendor_revision": revision,
             "gte_state_sha256": file_sha256(ROOT / "runtime/psx/gte_state.h"),
             "system": sys.platform, "machine": platform.machine(),
-            "software_renderer": True, "mednafen_interpreter": True, "lightrec": False}
+            "software_renderer": True, "mednafen_interpreter": True, "lightrec": False,
+            "pc_observer_abi": 1}
 
 
 @contextmanager
@@ -99,7 +100,8 @@ def extract_source(destination: Path, revision: str) -> None:
                     shutil.copyfileobj(content, output)
                 path.chmod(member.mode & 0o777)
     required = ("Makefile", "Makefile.common", "libretro.c", "deps/openbios/openbios.bin.h",
-                "deps/libchdr/src/libchdr_chd.c", "mednafen/psx/cpu.c", "mednafen/psx/gpu.c")
+                "deps/libchdr/src/libchdr_chd.c", "mednafen/psx/cpu.c", "mednafen/psx/gpu.c",
+                "mednafen/psx/pc_observer.c", "mednafen/psx/pc_observer.h")
     missing = [name for name in required if not (destination / name).is_file()]
     if missing:
         raise ValueError("pinned full-core sub-inputs missing: " + ", ".join(missing))
@@ -134,7 +136,7 @@ def build_core(cc: str, cxx: str, jobs: int) -> Path:
     SCRATCH.mkdir(parents=True, exist_ok=True)
     command = ["make", "-C", str(source), f"-j{jobs}", f"CC={cc}", f"CXX={cxx}",
                "HAVE_HW=0", "HAVE_OPENGL=0", "HAVE_VULKAN=0", "HAVE_LIGHTREC=0",
-               "HAVE_CHD=1", "SYSTEM_ZLIB=1", "LINK_STATIC_LIBCPLUSPLUS=0",
+               "HAVE_CHD=1", "PSX_PC_OBSERVER=1", "SYSTEM_ZLIB=1", "LINK_STATIC_LIBCPLUSPLUS=0",
                f"TARGET={name}", f"GIT_VERSION={identity['vendor_revision']}",
                "EXTRA_INCLUDES=-I" + shlex.quote(str(ROOT / "runtime/psx"))]
     with (SCRATCH / "build.log").open("w") as log:

@@ -1,0 +1,44 @@
+name: Set up the pinned Linux runtime dependencies
+description: Provision the shared asset-free Linux x86-64 build boundary
+inputs:
+  framework-directory:
+    description: psxport checkout relative to the workspace
+    default: .
+  dependency-directory:
+    description: workspace-relative dependency root beneath build/
+    default: build/deps
+runs:
+  using: composite
+  steps:
+    - name: Validate setup paths before checkout
+      shell: bash
+      env:
+        PSXPORT_CI_FRAMEWORK: ${{ inputs.framework-directory }}
+        PSXPORT_CI_DEPENDENCIES: ${{ inputs.dependency-directory }}
+      run: uv run --frozen python "${{ github.action_path }}/setup.py" --validate-only
+    - name: Check out the exact maintained Lightrec revision
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: SomeoneIsWorking/lightrec
+        ref: b1457137c31cedff5f440d59da29401d021ba2da
+        path: ${{ inputs.dependency-directory }}/lightrec
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Check out the exact maintained GNU Lightning revision
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: SomeoneIsWorking/lightning
+        ref: f305e50483e9794e8fb0b99fb77d82954a4924e5
+        path: ${{ inputs.dependency-directory }}/lightning
+        fetch-depth: 0
+        persist-credentials: false
+        submodules: recursive
+    - name: Check the setup policy
+      shell: bash
+      run: uv run --frozen python "${{ github.action_path }}/test_setup.py"
+    - name: Provision the Linux build environment
+      shell: bash
+      env:
+        PSXPORT_CI_FRAMEWORK: ${{ inputs.framework-directory }}
+        PSXPORT_CI_DEPENDENCIES: ${{ inputs.dependency-directory }}
+      run: uv run --frozen python "${{ github.action_path }}/setup.py"

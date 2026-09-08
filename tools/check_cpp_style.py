@@ -44,7 +44,7 @@ PSXPORT_CAPS = {
     "runtime/psx/hle.cpp": 784,
     "runtime/psx/pc_scheduler.cpp": 550,
     "runtime/psx/pc_scheduler.h": 148,
-    "runtime/psx/render_queue.cpp": 2490,
+    "runtime/psx/render_queue.cpp": 2260,
     "runtime/psx/synchronous_task_wait.cpp": 188,
     "runtime/psx/synchronous_task_wait.h": 24,
     "runtime/ui/render_path_control.cpp": 54,

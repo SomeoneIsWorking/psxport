@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Callable
 
 import console_abi as abi
-from console_capture import Framebuffer
+from console_capture import CaptureHashes, Framebuffer
+from console_observer import Observer
 
 EXPERIMENTAL = 0x10000
 SYSTEM_RAM = 2
@@ -48,6 +49,8 @@ class ConsoleSession:
         self.initialized = False
         self.loaded = False
         self.av = abi.SystemAvInfo()
+        self.observer = Observer(library)
+        self.hashes: CaptureHashes | None = None
         # CFUNCTYPE pointers do not keep their Python callables alive through a C owner. These
         # references intentionally outlive retro_unload_game/retro_deinit and every foreign call.
         self.callbacks = {
@@ -156,13 +159,17 @@ class ConsoleSession:
             return
         self.framebuffer = Framebuffer.capture(pointer, width, height, pitch, self.pixel_format)
 
-    def _audio_sample(self, _left: int, _right: int) -> None:
+    def _audio_sample(self, left: int, right: int) -> None:
         self.audio_frames += 1
+        if self.hashes is not None:
+            self.hashes.audio_sample(left, right)
 
     def _audio_batch(self, data, frames: int) -> int:
         if frames > 1_000_000 or (frames and not data):
             raise ValueError("invalid libretro audio batch")
         self.audio_frames += frames
+        if self.hashes is not None:
+            self.hashes.audio_batch(ct.string_at(data, frames * 4))
         return frames  # All frames consumed. SPU/audio timing advances without a playback device.
 
     def _input_poll(self) -> None:
@@ -200,6 +207,7 @@ class ConsoleSession:
 
     def close(self) -> None:
         if self.loaded:
+            self.library.retro_psx_observer_disable()
             self.library.retro_unload_game()
             self.loaded = False
         if self.initialized:
@@ -221,12 +229,21 @@ class ConsoleSession:
         self._check_callbacks()
         for _ in range(frames):
             before = self.video_refreshes
+            self.library.retro_psx_observer_field(self.frames + 1)
             self.library.retro_run()
             self._check_callbacks()
             if self.video_refreshes == before:
                 raise RuntimeError("retro_run returned without a video refresh; no field evidence")
             self.frames += 1
+            if self.hashes is not None:
+                self.hashes.field(self.read_ram(0, RAM_BYTES), self.framebuffer)
         return self.status()
+
+    def begin_hashes(self) -> dict:
+        if not self.loaded:
+            raise ValueError("hash observation requires loaded console content")
+        self.hashes = CaptureHashes()
+        return self.hashes.status()
 
     def read_ram(self, address: int, size: int) -> bytes:
         if not self.loaded:

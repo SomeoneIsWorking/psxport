@@ -151,3 +151,11 @@ add_test(NAME lightning_prefix_policy
 add_test(NAME lightrec_path_policy
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_project_lightrec_path.py)
+
+add_test(NAME guest_task_unsupported_exit
+         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_guest_task_exit.py"
+                 "$<TARGET_FILE:test_guest_task_lifecycle>")
+
+add_test(NAME linux_ci_setup_policy
+         COMMAND "${Python3_EXECUTABLE}"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/../.github/actions/setup-linux/test_setup.py")

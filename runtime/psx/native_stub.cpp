@@ -9,14 +9,14 @@
 #include "c_subsys.h"
 #include "cfg.h"
 #include "core.h"
-#include "game.h"       // class BootStub lives on Game (game->stub); this TU implements its run()
+#include "game.h" // class BootStub lives on Game (game->stub); this TU implements its run()
+#include "psx_exe_image.h"
 #include "scea_asset.h" // SCEA_DISP_W/H (the decoded RGBA splash dims)
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 void native_boot_run(Core *c);
-void load_exe(const char *path, Core *c);
 
 // PC-native SCEA license screen (replaces the interpreted PSX boot stub SCUS_944.54). The stub's
 // only jobs were: draw SCEA, then CdInit + LoadExec MAIN. Its CD/VSync waits used to be unstalled by

@@ -1,29 +1,22 @@
-// scheduler.cpp — the substrate half of the native cooperative-task-switch harness (replaces the
-// PSX BIOS scheduler FUN_80051e60 and its ChangeThread primitive FUN_80080880). Generic platform
-// mechanism: task-slot bookkeeping + the setjmp/longjmp (native path) and Coro-fiber (full-PSX
-// path) task-switch primitives, plus the two substrate stanzas (coro-fiber + generic dispatch)
-// for tasks the port does not own natively. The per-frame slot loop and the PC-native stanzas
-// (DEMO/SOP/GAME/task-1/STAGE-0) live on PcScheduler (game/core/pc_scheduler.cpp), which calls
-// the two stanzas exported here.
+// scheduler.cpp — task-slot bookkeeping and cooperative guest/native task execution.
+// Coroutines retain suspended native call stacks across authored cooperative yields. The JIT can
+// resume any instruction boundary; budget exhaustion saves that exact guest context for the next
+// scheduler turn. PcScheduler owns the per-frame slot loop and title-declared native stanzas.
 #include "scheduler.h"
 #include "core.h"
 #include "coro.h" // thread-fiber for full-PSX mid-function resume (later-264)
 #include "execution_control.h"
 #include "game.h" // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "host_backtrace.h"
+#include "lightrec_executor.h"
 #include "native_dispatch.h"
 #include <lucent/log.h>
 #include <setjmp.h>
 #include <stdlib.h>
 
-// Generic cooperative-task entry: this is guest dispatch
-// (dispatch.cpp) — it can only ENTER a guest function at its top, NOT resume a yielded task at a
-// saved mid-function PC. So it only works for a FRESH task entry; resuming a full-PSX (guest execution)
-// task whose saved r31 is mid-body fail-fasts (no guest entry there). That is why the full-PSX
-// reference modes (test configuration core B) abort at the first scheduler yield-return
-// (e.g. 0x80051FA4). The native path avoids this entirely: each stage runs as a synchronous per-frame
-// native dispatcher (DEMO/GAME/SOP) and the GAME field re-enters at its loop top (game_coop), never a
-// mid-function resume. See docs/findings/guest.md "full-PSX coroutine resume".
+// Guest tasks retain one outer function-return boundary across JIT turns. A cooperative native
+// yield preserves its C++ call stack on the task's Coro; an exhausted JIT budget returns normally
+// through executor guards before that Coro parks. Neither boundary completes the guest task.
 // --- Native cooperative scheduler (replaces FUN_80051e60) without ucontext ------------------
 // Tomba2 runs up to 3 cooperative tasks (objs @0x801fe000, stride 0x70): task0 = the stage
 // sequencer (START/DEMO/GAME), task1/2 = sub-tasks it spawns (asset loaders etc.). Each is an
@@ -148,20 +141,50 @@ void scheduler_yield(Core *c) {
   longjmp(c->game->pcSched.yield_jmp, 1); // native path: unwind to the scheduler's setjmp
 }
 
-// ---- Substrate task-slot stanzas ------------------------------------------------------------------
-// PcScheduler::step's main loop is a dispatch over per-entry-PC stanzas. Each stanza returns
-// 1 (handled) when it processed the tick (caller does `continue` to the next slot), or 0
-// (not mine) to fall through to the next stanza. The PC-native stanzas live on PcScheduler
-// (game/core/pc_scheduler.cpp); the two below are the substrate fallbacks it calls.
+namespace {
 
-// FULL-PSX (guest execution) task — thread-fiber coroutine. The substrate can't re-enter mid-fn, so
-// each task runs on its own Coro thread that BLOCKS at a yield (preserving its C stack) and
-// CONTINUES on resume through the executor boundary. cur_is_coro tells scheduler_yield to
-// coro-yield vs longjmp. Active when guest execution is on (native_content==0) — OR, under
-// pc_faithful (native execution=false, differential test gameplay/full mode on core A), when the task's entry PC has no
-// native handler, so substrate-only wakes like task-1 preload (0x80044F58) execute on A same as
-// core B and the FUN_80044BD4 spawn-and-wait cycle actually runs (dropping the completion-shim
-// override in engine.cpp).
+bool executeGuestTaskTurn(Core &core, std::uint32_t &resumePc, std::uint32_t returnAddress) {
+  const auto result =
+      core.lightrecExecutor().executeFunction(resumePc, returnAddress, psx::cpu::ExecutionBudget::currentTurn(core));
+  if (result.returned()) {
+    return false;
+  }
+  if (result.reason == psx::cpu::ExecutionExitReason::BudgetExhausted) {
+    resumePc = result.guestPc;
+    return true;
+  }
+  // This scheduler has no typed host-loop exit channel. An unsupported task exit
+  // must stop at its owner, never become the next unrelated service's exit.
+  if (!psx::cpu::requireGuestReturn(result, "guest coroutine task")) {
+    std::abort();
+  }
+  return false;
+}
+
+void runGuestTask(Core &core, int slot, std::uint32_t base, std::uint32_t entry) {
+  const std::uint32_t returnAddress = core.r[31];
+  std::uint32_t resumePc = entry;
+  while (executeGuestTaskTurn(core, resumePc, returnAddress)) {
+    const std::uint16_t state = core.mem_r16(base);
+    if (state == 0u) {
+      return; // authored cancellation can precede its cooperative yield instruction
+    }
+    core.game->pcSched.task_ctx[slot] = static_cast<R3000 &>(core);
+    core.game->pcSched.task_ctx[slot].pc = resumePc;
+    if (state == 4u) {
+      core.mem_w16(base, 2u); // only a still-running task becomes runnable
+    }
+    // executeGuestTaskTurn destroyed its result string and executor guards before
+    // this cancellation boundary: Coro::yield can longjmp to the coroutine root.
+    core.game->pcSched.coro[slot]->yield();
+  }
+}
+
+} // namespace
+
+// Guest task-slot stanzas are called when no native stanza claims the slot.
+// The coroutine owns authored native yields and JIT budget suspensions separately;
+// only an actual guest return or authored task cancellation ends its lifetime.
 int guest_run_coro_fiber_stanza(Core *c, int i, uint32_t base, uint32_t st, bool preferNative, const R3000 &loop) {
   if (preferNative) {
     if (c->hooks->hasNativeHandlerForEntry(c, c->mem_r32(base + 0xc))) {
@@ -185,9 +208,8 @@ int guest_run_coro_fiber_stanza(Core *c, int i, uint32_t base, uint32_t st, bool
     c->game->pcSched.game_coop[i] = 0;
     Core *cc = c;
     co = new Coro();
-    co->start([cc, entry] {
-      const auto result = psx::cpu::dispatchGuest(*cc, entry, psx::cpu::ExecutionBudget::currentTurn(*cc));
-      (void)psx::cpu::completeOrPropagate(*cc, result);
+    co->start([cc, i, base, entry] {
+      runGuestTask(*cc, i, base, entry);
     });
   } else if (st == 2 && co && !co->done()) {
     /* resume the suspended fiber (regs restored below) */

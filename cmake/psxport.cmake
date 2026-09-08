@@ -136,6 +136,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/native_stub.cpp
   ${PSXPORT_ROOT}/runtime/psx/watchdog.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot.cpp
+  ${PSXPORT_ROOT}/runtime/psx/psx_exe_image.cpp
   ${PSXPORT_ROOT}/runtime/psx/rmlui_overlay.cpp  # RmlUi LIFETIME only — the UI itself is runtime/ui/
   ${PSXPORT_ROOT}/runtime/psx/rmlui_render_gpu.cpp
   ${PSXPORT_ROOT}/runtime/psx/rml_text.cpp       # DATA -> RML markup boundary (see rml_text.h)
@@ -159,6 +160,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
   ${PSXPORT_ROOT}/runtime/psx/ot_lifo_depth.cpp    # PSX AddPrim head-insertion ties -> raster-distinct native depths
   ${PSXPORT_ROOT}/runtime/psx/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)
+  ${PSXPORT_ROOT}/runtime/psx/render_submission.cpp # resolved items and queue-local production observation
   ${PSXPORT_ROOT}/runtime/psx/painter_object_layer.cpp # atomic painter admission + authored command plan
   ${PSXPORT_ROOT}/runtime/psx/pc_scheduler.cpp     # PC-native cooperative task scheduler; stage bodies via hooks (P1.7c)
   ${PSXPORT_ROOT}/runtime/psx/synchronous_task_wait.cpp # one native synchronous FUN_80044BD4 owner

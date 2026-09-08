@@ -71,6 +71,7 @@ def configure(build: Path) -> None:
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DPSXPORT_BUILD_SMOKE=ON",
             "-DPSXPORT_BUILD_TESTS=ON",
+            "-DPSXPORT_ORACLE_PC_OBSERVER=ON",
             *lightrec_definitions,
             *lightning_definitions,
         ],

@@ -99,7 +99,7 @@ static int pt_expect_fail = 0;  /* self-test only: suppress the FAIL print for a
  * The fix is to do the whole comparison inside ONE full-expression, so every temporary in `got` and
  * `want` is still alive: the call below is that expression. Kept as a plain function (not a lambda,
  * not a statement expression) so C tests can use this header too. */
-static int pt_streq_failed(
+static inline int pt_streq_failed(
     const char *got_expr, const char *want_expr, const char *got, const char *want, const char *file, int line) {
   if (got && want && strcmp(got, want) == 0) {
     return 0;

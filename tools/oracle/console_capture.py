@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import ctypes as ct
+from array import array
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import struct
+import sys
 import zlib
 
 MAX_WIDTH = 2048
@@ -65,3 +68,43 @@ class Framebuffer:
         payload = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) +
                    chunk(b"IDAT", zlib.compress(self.rgb_rows())) + chunk(b"IEND", b""))
         path.write_bytes(payload)
+
+
+class CaptureHashes:
+    """One explicit observation window; hashes own copied bytes, never emulator state."""
+
+    def __init__(self):
+        self.ram = hashlib.sha256()
+        self.video = hashlib.sha256()
+        self.audio = hashlib.sha256()
+        self.fields = 0
+        self.audio_frames = 0
+
+    def audio_sample(self, left: int, right: int) -> None:
+        self.audio.update(struct.pack("<hh", left, right))
+        self.audio_frames += 1
+
+    def audio_batch(self, native_bytes: bytes) -> None:
+        if len(native_bytes) % 4:
+            raise ValueError("audio hash requires complete stereo int16 frames")
+        samples = array("h")
+        samples.frombytes(native_bytes)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        self.audio.update(samples.tobytes())
+        self.audio_frames += len(native_bytes) // 4
+
+    def field(self, ram: bytes, framebuffer: Framebuffer) -> None:
+        if len(ram) != 0x200000:
+            raise ValueError("RAM hash requires the complete 2 MiB console RAM")
+        self.ram.update(ram)
+        # Canonical RGB excludes pitch padding, unused pixel bits and native endianness.
+        self.video.update(struct.pack("<II", framebuffer.width, framebuffer.height))
+        self.video.update(framebuffer.rgb_rows())
+        self.fields += 1
+
+    def status(self) -> dict:
+        return {"fields": self.fields, "audio_frames": self.audio_frames,
+                "ram_sha256": self.ram.hexdigest(), "frame_sha256": self.video.hexdigest(),
+                "audio_sha256": self.audio.hexdigest(),
+                "complete": self.fields > 0 and self.audio_frames > 0}
