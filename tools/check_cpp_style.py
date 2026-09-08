@@ -484,15 +484,18 @@ def selftest() -> int:
         expect("deleted framework path fails", 1, "deleted framework path")
         deleted_path_file.unlink()
 
-        policy_file = root / "tools/structure/policy.py"
-        policy_file.parent.mkdir(parents=True)
         policy_marker = "runtime/" + "recomp/"
         policy_source = f"STATIC_PRODUCT_MARKERS = ({policy_marker!r},)\n"
-        policy_file.write_text(policy_source, encoding="utf-8")
-        expect("declared rejection marker is not a deleted-path dependency", 0, "checked 1 of 1")
-        policy_file.write_text(policy_source + f"USED_PATH = {policy_marker!r}\n", encoding="utf-8")
-        expect("actual reference in policy source still fails", 1, "deleted framework path")
-        policy_file.unlink()
+        for relative in ("tools/structure/policy.py", "tools/source_policy.py"):
+            policy_file = root / relative
+            policy_file.parent.mkdir(parents=True, exist_ok=True)
+            policy_file.write_text(policy_source, encoding="utf-8")
+            expect(f"declared rejection data in {relative}", 0, "checked 1 of 1")
+            policy_file.write_text(policy_source + f"USED_PATH = {policy_marker!r}\n", encoding="utf-8")
+            expect(f"actual reference in {relative} still fails", 1, "deleted framework path")
+            policy_file.write_text(f"STATIC_PRODUCT_MARKERS = (str({policy_marker!r}),)\n", encoding="utf-8")
+            expect(f"executable marker expression in {relative} still fails", 1, "deleted framework path")
+            policy_file.unlink()
 
         stale_execution_file = docs / "old-executor.md"
         stale_execution_file.write_text("Run " + "emit" + ".py before launch.\n", encoding="utf-8")

@@ -84,12 +84,13 @@ def forbidden_architecture_references(root: Path) -> list[str]:
     return findings
 
 
-def reference_content(path: Path, root: Path) -> bytes:
+def reference_content(path: Path) -> bytes:
     content = path.read_bytes()
-    if path.relative_to(root).as_posix() != "tools/structure/policy.py":
+    if path.suffix != ".py" or b"STATIC_PRODUCT_MARKERS" not in content:
         return content.lower()
-    # This exact declarative owner lists forbidden product tokens. Exclude only
-    # its literal marker tuple, never other references in the file or directory.
+    # STATIC_PRODUCT_MARKERS declares rejection data, wherever a consumer owns
+    # its policy. Exclude only that literal tuple, never executable expressions
+    # or other references in the same file. File placement is not a dependency.
     tree = ast.parse(content, filename=str(path))
     lines = content.splitlines(keepends=True)
     for statement in tree.body:
@@ -114,7 +115,7 @@ def deleted_path_references(root: Path) -> list[str]:
     findings: list[str] = []
     for path in first_party_files(root):
         try:
-            content = reference_content(path, root)
+            content = reference_content(path)
         except OSError as exc:
             raise RuntimeError(f"cannot inspect first-party file {path}: {exc}") from exc
         if any(needle in content for needle in needles):
@@ -131,7 +132,7 @@ def stale_execution_references(root: Path) -> list[str]:
         if relative in {"tools/repository_policy.py", "tools/check_execution_boundary.py"}:
             continue
         try:
-            content = reference_content(path, root)
+            content = reference_content(path)
         except OSError as exc:
             raise RuntimeError(f"cannot inspect first-party file {path}: {exc}") from exc
         if any(needle in content for needle in needles):
