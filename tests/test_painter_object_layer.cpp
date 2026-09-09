@@ -355,6 +355,36 @@ static void test_refusals_and_denominators(void) {
   CHECK_EQ(p.commands.size(), 0);
 }
 
+// A GP0 line primitive is a painter face like any other: RqItem has carried nv = 2 through
+// emitItem's line path all along, and only this admission rule kept a producer that draws lines --
+// Spyro's sparkles -- from grouping them. The texture rule is the other half: the line path passes
+// no texture state on, so a textured line must be refused rather than drawn with its material
+// quietly dropped.
+static void test_line_faces_are_admitted_untextured_only(void) {
+  auto q = make_queue();
+  add(*q, 1, 0, 3);
+  q->items[0].nv = 2;
+  PainterObjectPlan p = q->buildPainterObjectPlan();
+  CHECK(p.accepted());
+  CHECK_EQ(p.stats.grouped_faces, 1);
+  CHECK_EQ((int)p.commands[0].material, (int)PainterMaterial::Untextured);
+
+  q = make_queue();
+  add(*q, 1, 0, 0);
+  q->items[0].nv = 2;
+  p = q->buildPainterObjectPlan();
+  CHECK_EQ((int)p.stats.refusal, (int)PainterObjectRefusal::UnsupportedMaterial);
+
+  // The same rule at the admission seam: an already-queued line must not refuse the next producer.
+  q = make_queue();
+  add(*q, 4, 0, 3);
+  q->items[0].nv = 2;
+  q->n = 1;
+  const PainterObjectAdmission accepted = q->preflightPainterObject(8, 1);
+  CHECK(accepted.accepted());
+  CHECK_EQ(accepted.existing_faces, 1);
+}
+
 static void test_painter_depth_is_not_key_flattened(void) {
   auto q = make_queue();
   add(*q, 3, 0, 0);
@@ -415,6 +445,7 @@ int main(void) {
   RUN(batch_admission_is_atomic);
   RUN(batch_admission_preserves_refusal_semantics);
   RUN(refusals_and_denominators);
+  RUN(line_faces_are_admitted_untextured_only);
   RUN(painter_depth_is_not_key_flattened);
   RUN(lazy_reset_preserves_scopes);
   return pt_summary();

@@ -14,8 +14,15 @@ PainterObjectRefusal validateFace(const RqItem &item) {
   if (item.order_mode != RQ_OM_DEPTH) {
     return PainterObjectRefusal::NonDepth;
   }
-  if ((item.nv != 3 && item.nv != 4) || item.mode < 0 || item.mode > 3 ||
-      (item.semi && (item.tp_blend < 0 || item.tp_blend > 3))) {
+  if (item.nv != 2 && item.nv != 3 && item.nv != 4) {
+    return PainterObjectRefusal::UnsupportedMaterial;
+  }
+  // A GP0 line has no texture word on the hardware and emitItem's line path carries none, so a
+  // textured line would be admitted here and then drawn with its material silently dropped.
+  if (item.nv == 2 && item.mode != 3) {
+    return PainterObjectRefusal::UnsupportedMaterial;
+  }
+  if (item.mode < 0 || item.mode > 3 || (item.semi && (item.tp_blend < 0 || item.tp_blend > 3))) {
     return PainterObjectRefusal::UnsupportedMaterial;
   }
   return PainterObjectRefusal::None;
