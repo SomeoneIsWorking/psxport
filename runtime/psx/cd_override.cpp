@@ -133,7 +133,10 @@ static void cd_drive_stock_read(Core *c) {
   }
 }
 
-void cd_command_stock_sync(Core *c) {
+// Everything a controller command does to native state. Split out so the entries that carry a
+// result buffer and the one that does not can share it without either duplicating the command
+// switch or inheriting the other's result contract.
+static void cd_apply_command(Core *c) {
   if (lucent::channel_on("cdcmd")) {
     uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
     uint8_t p[4] = {0, 0, 0, 0};
@@ -239,6 +242,10 @@ void cd_command_stock_sync(Core *c) {
   default:
     break;
   }
+}
+
+void cd_command_stock_sync(Core *c) {
+  cd_apply_command(c);
   zero_result(c, c->r[A2]);
   c->r[V0] = 0;
 }
@@ -246,7 +253,13 @@ void cd_command_stock_sync(Core *c) {
 // Report blocking-control success after applying the synchronous command
 // effects.
 void cd_control_sync(Core *c) {
-  cd_command_stock_sync(c);
+  cd_apply_command(c);
+  zero_result(c, c->r[A2]);
+  c->r[V0] = 1;
+}
+
+void cd_control_fire_sync(Core *c) {
+  cd_apply_command(c);
   c->r[V0] = 1;
 }
 

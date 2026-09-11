@@ -35,7 +35,7 @@ struct PlatformHleBinding {
 // the guest then spins in any real sync loop it reaches, which is the honest signal that RE is
 // outstanding. The consuming title supplies its platform-library entry table.
 struct PlatformHlePlan {
-  static constexpr int kMaxBindings = 8;
+  static constexpr int kMaxBindings = 16;
 
   // Standard SCEI library leaves whose native behavior is game-independent and framework-owned.
   // A direct runtime supplies only the measured addresses from its executable; initBuiltins()

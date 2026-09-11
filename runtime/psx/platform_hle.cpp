@@ -167,7 +167,18 @@ void PlatformHle::initBuiltins() {
     install(plan->cdReadSyncAddress, cd_readsync_stock_sync);
     install(plan->drawSyncAddress, syncComplete);
     bindVSyncBoundary(plan->vsyncAddress);
-    for (int index = 0; index < plan->bindingCount && index < PlatformHlePlan::kMaxBindings; ++index) {
+    // A plan that declares more bindings than the array holds has services the runtime silently
+    // would not install — a hardware entry left executing guest code with no owner, which shows up
+    // far from here as a fault inside the unowned routine. Name it instead of truncating.
+    if (plan->bindingCount > PlatformHlePlan::kMaxBindings) {
+      lucent::error("plat-hle",
+                    "direct runtime declares {} bindings but PlatformHlePlan holds {}; the excess "
+                    "would be dropped unbound",
+                    plan->bindingCount,
+                    PlatformHlePlan::kMaxBindings);
+      return;
+    }
+    for (int index = 0; index < plan->bindingCount; ++index) {
       install(plan->bindings[index].addr, plan->bindings[index].fn);
     }
     lucent::info("plat-hle", "{} direct-runtime hardware services installed", mN);

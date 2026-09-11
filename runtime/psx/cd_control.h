@@ -19,6 +19,12 @@ bool cd_native_stock_read_owned(const Core &core);
 // command acceptor.
 void cd_control_sync(Core *c);
 
+// Apply one controller command and report success WITHOUT touching a result buffer. This is the
+// owner for libcd's CdControlF(com, param), which takes two arguments: at its call sites a2 holds
+// whatever the caller last left there, so a handler that writes a result through it scribbles on an
+// arbitrary address. CdControlF is the fire-and-forget entry and has no result contract at all.
+void cd_control_fire_sync(Core *c);
+
 // Complete low-level Sony libcd CD_cw(cmd, param, result) -> 0 (success)
 // through the synchronous native disc owner.
 void cd_command_stock_sync(Core *c);
