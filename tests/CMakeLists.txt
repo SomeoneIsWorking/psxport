@@ -51,8 +51,9 @@ foreach(test_src IN LISTS PSXPORT_TEST_SRCS)
     TIMEOUT 60)
 endforeach()
 
-target_compile_definitions(test_sync_submodules PRIVATE
-  PSXPORT_TEST_PYTHON_EXECUTABLE="${Python3_EXECUTABLE}")
+add_test(NAME test_sync_submodules
+         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sync_submodules.py")
+set_tests_properties(test_sync_submodules PROPERTIES TIMEOUT 60)
 
 list(LENGTH PSXPORT_TEST_SRCS _n_tests)
 message(STATUS "psxport tests: ${_n_tests} discovered in ${CMAKE_CURRENT_SOURCE_DIR}")

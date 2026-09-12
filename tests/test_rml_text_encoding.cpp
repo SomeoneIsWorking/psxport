@@ -53,9 +53,9 @@
 
 // ---- corpus location ---------------------------------------------------------------------------
 // __FILE__ is the absolute path CMake passed the compiler (tests/CMakeLists.txt globs absolute
-// paths), so <this file>/../.. is the psxport checkout under test. Same idiom as
-// test_sync_submodules.cpp. If the layout ever moves, the reads below fail loudly with the path
-// they computed rather than quietly scanning nothing.
+// paths), so <this file>/../.. is the psxport checkout under test. If the layout ever moves,
+// the reads below fail loudly
+// with the path they computed rather than quietly scanning nothing.
 static std::string repo_root() {
   std::string f = __FILE__;
   size_t slash = f.find_last_of('/');         // .../tests/test_rml_text_encoding.cpp

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synchronize stale submodule checkouts without clobbering local or deliberate work."""
+"""Synchronize declared top-level submodules without clobbering deliberate work."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from pathlib import Path
 from submodule_state import (
     Git,
     Inventory,
-    add_recursive_crosscheck,
+    add_top_level_crosscheck,
     dirty_paths,
     enumerate_submodules,
     protected_checkouts,
-    update_recursive,
+    update_declared,
 )
 
 
@@ -26,26 +26,25 @@ def warn(message: str) -> None:
     print(f"[submodules] {message}", file=sys.stderr)
 
 
-def unmanaged_note(inventory: Inventory) -> str:
-    if not inventory.unmanaged:
-        return ""
-    paths = " ".join(inventory.unmanaged)
-    return (
-        " — NOT covered (gitlink(s) no .gitmodules declares, so git itself cannot sync them): "
-        + paths
-    )
+def coverage_note(inventory: Inventory) -> str:
+    notes = []
+    if inventory.unmanaged:
+        notes.append("unmapped top-level gitlink(s) NOT covered: " + " ".join(inventory.unmanaged))
+    if inventory.excluded_nested:
+        notes.append("nested gitlink(s) outside this sync: " + " ".join(inventory.excluded_nested))
+    return " — " + " — ".join(notes) if notes else ""
 
 
 def enumerate_complete(root: Path, git: Git) -> Inventory:
     inventory = enumerate_submodules(root, git)
-    add_recursive_crosscheck(root, git, inventory)
+    add_top_level_crosscheck(root, git, inventory)
     return inventory
 
 
 def report_blind(inventory: Inventory, *, after_sync: bool = False) -> int:
     prefix = "the sync left submodules this script can no longer see" if after_sync else (
         f"checked {len(inventory.resolved_paths)} of {len(inventory.declared_paths)} submodule(s)"
-        f"{unmanaged_note(inventory)} — CANNOT SEE"
+        f"{coverage_note(inventory)} — CANNOT SEE"
     )
     warn(prefix + ":")
     for item in inventory.blind:
@@ -53,7 +52,7 @@ def report_blind(inventory: Inventory, *, after_sync: bool = False) -> int:
     if not after_sync:
         warn("refusing to certify: this script cannot tell whether those are at their recorded gitlinks,")
         warn("and reporting 'all in sync' over a partial enumeration is the defect this check exists for.")
-        warn("fix the listed paths (usually: git submodule update --init --recursive), then re-run.")
+        warn("fix the listed top-level paths (usually: git submodule update --init -- <path>), then re-run.")
     return 1
 
 
@@ -70,17 +69,20 @@ def main() -> int:
     try:
         inventory = enumerate_submodules(root, git)
         if inventory.uninitialized:
-            say("initializing submodules…")
-            result = update_recursive(root, git, initialize=True)
-            if result.returncode:
-                warn("some nested submodules did not init (expected for unmapped nested gitlinks)")
+            say("initializing declared top-level submodules…")
+            result = update_declared(root, git, (item.path for item in inventory.uninitialized), initialize=True)
             inventory = enumerate_submodules(root, git)
-        add_recursive_crosscheck(root, git, inventory)
+            if result.returncode:
+                warn(f"top-level initialization failed: {result.stderr.strip()}")
+                if inventory.blind:
+                    return report_blind(inventory)
+                return 1
+        add_top_level_crosscheck(root, git, inventory)
         if inventory.blind:
             return report_blind(inventory)
 
         denominator = len(inventory.declared_paths)
-        note = unmanaged_note(inventory)
+        note = coverage_note(inventory)
         if not inventory.off_pin:
             say(
                 f"checked {denominator} of {denominator} submodule(s), "
@@ -105,13 +107,14 @@ def main() -> int:
             warn("the build will use the CHECKED-OUT commits, not this repo's recorded gitlinks.")
             warn("if the checkout is what you want, RECORD it and the sync will move toward it instead:")
             warn("    git add <path> && git commit")
-            warn("if you really want the recorded pin back: git submodule update --recursive")
+            warn("if you really want the recorded pin back: git submodule update -- <path>")
             return 0
 
         before = {item.path: item.checkout for item in inventory.submodules}
-        result = update_recursive(root, git, initialize=False)
+        result = update_declared(root, git, (item.path for item in inventory.off_pin), initialize=False)
         if result.returncode:
-            warn("some nested submodules did not update (expected for unmapped nested gitlinks)")
+            warn(f"top-level update failed: {result.stderr.strip()}")
+            return 1
         current = enumerate_complete(root, git)
         if current.blind:
             return report_blind(current, after_sync=True)

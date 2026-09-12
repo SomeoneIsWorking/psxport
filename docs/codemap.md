@@ -65,7 +65,7 @@ library never depends on a test oracle.
 | Build and hosted verification | Framework library/dependency/test targets, exact Lightrec checkout, exact maintained-Lightning installed prefix, and canonical asset-free gate | `CMakeLists.txt`, `cmake/`, `tools/project.py`, `tools/build.py`, `tools/verify.py`, `.github/workflows/ci.yml`, `.github/actions/setup-linux/` | CMake owns targets; Python owns orchestration and installed-prefix validation; the shared setup action owns Linux CI package/dependency policy for framework and consumers under `build/deps/` | `README.md` |
 | Host utilities | Title-neutral environment/process helpers | `common/` | Small cohesive module under `common/` | `common/env.h` |
 | External source checkout | Existing psycross checkout used by historical development flows | `external/psycross/` | No new framework ownership; replace any live dependency with an explicit pinned resolver or remove it when unused | `external/psycross/README.md` |
-| Workspace scripts | Python bootstrap, submodule, and OpenBIOS helpers | `scripts/` | Modular Python operations with thin command entry points | `AGENTS.md` |
+| Workspace scripts | Python bootstrap, declared top-level submodule sync, and OpenBIOS helpers | `scripts/`; submodule inventory/update policy in `scripts/submodule_state.py` | Modular Python operations with thin command entry points; nested dependency gitlinks remain outside launcher sync | `docs/workspace/WORKSPACE.md` |
 | Stale build trees | Disposable generated compiler output from prior verification | ignored `build-*/`, `build_*/` | No new work; clean with an explicit repository-scoped build cleanup tool | `AGENTS.md` |
 
 ## Where does new work go?

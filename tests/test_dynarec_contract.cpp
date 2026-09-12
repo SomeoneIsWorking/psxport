@@ -11,7 +11,11 @@
 
 #include <lucent/log.h>
 
+#include <cinttypes>
+#include <cstddef>
+#include <cstdio>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -54,6 +58,7 @@ constexpr std::uint32_t kNestedReturn = 0x00010180u;
 constexpr std::uint32_t kWriter = 0x00010200u;
 constexpr std::uint32_t kMainFallback = 0x00010300u;
 constexpr std::uint32_t kOuterReturn = 0x00010f00u;
+constexpr std::uint32_t kObservedWriter = 0x80010500u;
 constexpr std::uint32_t kMainRegisterValue = 0x13579bdfu;
 constexpr std::uint32_t kTaskRegisterValue = 0x2468ace0u;
 
@@ -132,6 +137,38 @@ bool exerciseCrossThreadFallback = false;
 psx::cpu::ExecutionResult mainFallbackResult{};
 
 std::vector<std::pair<lucent::Level, std::string>> telemetryLines;
+
+struct StoreTrace {
+  Core *core = nullptr;
+  psx::cpu::LightrecExecutor *executor = nullptr;
+  std::uint32_t pc[2]{};
+  std::uint32_t value[2]{};
+  std::uint32_t source[2]{};
+  std::uint32_t cycle[2]{};
+  psx::cpu::StoreObservationPhase phase[2]{};
+  std::size_t calls = 0;
+  std::size_t sentinelCalls = 0;
+  psx::cpu::StoreObserverStatus reentrantDisarm = psx::cpu::StoreObserverStatus::Configured;
+};
+
+void captureStore(const psx::cpu::StoreObservation &observation, void *data) noexcept {
+  auto &trace = *static_cast<StoreTrace *>(data);
+  if (observation.guestPc == 0xfffffffcu) {
+    ++trace.sentinelCalls;
+  }
+  const auto index = trace.calls++;
+  if (index == 0) {
+    trace.reentrantDisarm = trace.executor->configureStoreObserver({}, nullptr, nullptr);
+  }
+  if (index >= 2) {
+    return;
+  }
+  trace.pc[index] = observation.guestPc;
+  trace.value[index] = trace.core->mem_r32(0x40u);
+  trace.source[index] = observation.gpr[9];
+  trace.cycle[index] = observation.guestCycle;
+  trace.phase[index] = observation.phase;
+}
 
 class TelemetryCapture final {
 public:
@@ -554,6 +591,112 @@ static void test_real_executor_translates_and_runs_guest_instructions() {
   CHECK(telemetryContains(lucent::Level::Info, "refused_fallback_blocks=0"));
 }
 
+static void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupported_target() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  auto &executor = core.lightrecExecutor();
+  installTestImage(core);
+  constexpr std::uint32_t selected = kObservedWriter + 8u;
+  constexpr std::uint32_t sentinel = 0xfffffffcu;
+  constexpr std::uint32_t unsupported = kObservedWriter + 4u;
+  const std::uint32_t targets[] = {selected, sentinel};
+  core.mem_w32(kObservedWriter, 0x24080040u);      // addiu t0, zero, 0x40
+  core.mem_w32(kObservedWriter + 4u, 0x24090007u); // addiu t1, zero, 7
+  core.mem_w32(selected, 0xad090000u);             // sw t1, 0(t0)
+  core.mem_w32(kObservedWriter + 12u, 0x240a0009u);
+  core.mem_w32(kObservedWriter + 16u, 0x03e00008u); // jr ra
+  core.mem_w32(kObservedWriter + 20u, 0u);
+  core.mem_w32(0x40u, 0u);
+  core.r[31] = kOuterReturn;
+  const auto plain =
+      executor.executeFunction(kObservedWriter, kOuterReturn, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(plain.reason, psx::cpu::ExecutionExitReason::GuestReturn);
+  CHECK_EQ(core.mem_r32(0x40u), 7u);
+  CHECK_EQ(core.r[10], 9u);
+  const auto warmTranslations = executor.counters().translatedBlocks;
+  const auto baselineInstructions = executor.counters().executedInstructions;
+
+  core.mem_w32(0x40u, 0u);
+  core.r[8] = core.r[9] = core.r[10] = 0u;
+  StoreTrace trace{.core = &core, .executor = &executor};
+  CHECK_EQ(executor.configureStoreObserver(targets, captureStore, &trace), psx::cpu::StoreObserverStatus::Configured);
+  const auto observed =
+      executor.executeFunction(kObservedWriter, kOuterReturn, psx::cpu::ExecutionBudget::fromCycles(100));
+  const auto report = executor.storeObserverReport();
+  CHECK_EQ(observed.reason, psx::cpu::ExecutionExitReason::GuestReturn);
+  CHECK_EQ(trace.calls, 2u);
+  CHECK_EQ(trace.sentinelCalls, 0u);
+  CHECK_EQ(trace.reentrantDisarm, psx::cpu::StoreObserverStatus::Busy);
+  CHECK_EQ(trace.pc[0], selected);
+  CHECK_EQ(trace.pc[1], selected);
+  CHECK_EQ(trace.phase[0], psx::cpu::StoreObservationPhase::Before);
+  CHECK_EQ(trace.phase[1], psx::cpu::StoreObservationPhase::After);
+  CHECK_EQ(trace.value[0], 0u);
+  CHECK_EQ(trace.value[1], 7u);
+  CHECK_EQ(trace.source[0], 7u);
+  CHECK_EQ(trace.source[1], 7u);
+  CHECK(trace.cycle[1] > trace.cycle[0]);
+  CHECK_EQ(core.r[10], 9u);
+  CHECK_EQ(observed.cycles, plain.cycles);
+  CHECK(executor.counters().translatedBlocks > warmTranslations);
+  CHECK_EQ(report.targetCount, 2u);
+  CHECK(report.armed);
+  CHECK_EQ(report.targets[0].guestPc, selected);
+  CHECK_EQ(report.targets[0].before, 1u);
+  CHECK_EQ(report.targets[0].after, 1u);
+  CHECK_EQ(report.targets[1].guestPc, sentinel);
+  CHECK_EQ(report.targets[1].before, 0u);
+  CHECK_EQ(report.targets[1].after, 0u);
+  CHECK(report.executedJitInstructions > 0u);
+  CHECK_EQ(report.executedJitInstructions, executor.counters().executedInstructions - baselineInstructions);
+  CHECK_EQ(report.fallbackInstructions, 0u);
+  std::fprintf(stderr,
+               "  selected store: before=%" PRIu64 " after=%" PRIu64 " sentinel=%" PRIu64 "/%" PRIu64
+               " JIT instructions fallback=%" PRIu64 "\n",
+               report.targets[0].before,
+               report.targets[0].after,
+               report.targets[1].before + report.targets[1].after,
+               report.executedJitInstructions,
+               report.fallbackInstructions);
+
+  CHECK_EQ(executor.configureStoreObserver({}, nullptr, nullptr), psx::cpu::StoreObserverStatus::Configured);
+  CHECK(!executor.storeObserverReport().armed);
+  core.mem_w32(0x40u, 0u);
+  core.r[8] = core.r[9] = core.r[10] = 0u;
+  const auto disarmed =
+      executor.executeFunction(kObservedWriter, kOuterReturn, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(disarmed.reason, psx::cpu::ExecutionExitReason::GuestReturn);
+  CHECK_EQ(trace.calls, 2u);
+  CHECK_EQ(disarmed.cycles, plain.cycles);
+  CHECK_EQ(core.mem_r32(0x40u), 7u);
+  CHECK_EQ(core.r[10], 9u);
+  CHECK_EQ(executor.storeObserverReport().executedJitInstructions, report.executedJitInstructions);
+
+  core.mem_w32(0x40u, 0u);
+  core.r[8] = core.r[9] = core.r[10] = 0u;
+  CHECK_EQ(executor.configureStoreObserver(std::span(&unsupported, 1), captureStore, &trace),
+           psx::cpu::StoreObserverStatus::Configured);
+  const auto instructionsBefore = executor.counters().executedInstructions;
+  const auto fallbackBefore = executor.counters().fallback.calls;
+  const auto rejected =
+      executor.executeFunction(kObservedWriter, kOuterReturn, psx::cpu::ExecutionBudget::fromCycles(100));
+  CHECK_EQ(rejected.reason, psx::cpu::ExecutionExitReason::Fault);
+  CHECK(rejected.detail.find("selected-store observer") != std::string::npos);
+  CHECK_EQ(core.mem_r32(0x40u), 0u);
+  CHECK_EQ(executor.counters().executedInstructions, instructionsBefore);
+  CHECK_EQ(executor.counters().fallback.calls, fallbackBefore);
+  CHECK_EQ(trace.calls, 2u);
+  const auto rejectedReport = executor.storeObserverReport();
+  CHECK(rejectedReport.armed);
+  CHECK_EQ(rejectedReport.targetCount, 1u);
+  CHECK_EQ(rejectedReport.targets[0].guestPc, unsupported);
+  CHECK_EQ(rejectedReport.targets[0].before, 0u);
+  CHECK_EQ(rejectedReport.targets[0].after, 0u);
+  CHECK_EQ(rejectedReport.executedJitInstructions, 0u);
+  CHECK_EQ(rejectedReport.fallbackInstructions, 0u);
+}
+
 static void test_translated_call_dispatches_image_scoped_native_and_resumes_caller() {
   Runtime runtime;
   auto game = makeGame(runtime);
@@ -931,6 +1074,7 @@ int main() {
   RUN(nested_original_resumes_native_return_result_not_scoped_caller_pc);
   RUN(backend_reports_verified_host_properties);
   RUN(real_executor_translates_and_runs_guest_instructions);
+  RUN(selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupported_target);
   RUN(translated_call_dispatches_image_scoped_native_and_resumes_caller);
   RUN(call_original_runs_guest_body_to_exact_caller_continuation);
   RUN(nested_native_dispatch_restores_outer_context_and_continuations);

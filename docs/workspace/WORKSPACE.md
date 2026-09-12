@@ -100,10 +100,11 @@ Two incidents in one day, both caused by the mechanism rather than by anyone's m
   replays segfaulting). That commit was made on a **detached HEAD inside the submodule** — the default
   state of a submodule checkout, and the reason it was never reviewed.
 
-Add to that: `git submodule update --recursive` **fails outright** on this tree, because beetle-psx
-carries a URL-less nested gitlink (`deps/lightning/gnulib`) git itself cannot resolve. `psxport`'s own
-`vendor/beetle-psx` and `vendor/lucent` remain submodules — that is genuine third-party vendoring inside
-one repo, and with a single psxport tree there is no duplication to drift.
+Recursive updates also entered Beetle's nested `deps/lightning/gnulib` dependency. Its mapping was
+absent in an earlier checkout, causing Git to abort; a mapped checkout instead cloned a large unrelated
+repository during launcher setup. `psxport` still manages its own declared top-level vendor submodules
+without recursing into their dependencies. With a single psxport tree there is no duplicate framework
+checkout to drift.
 
 ## The two things to know even if you read nothing else
 
@@ -131,14 +132,15 @@ evidence; revise the grouping only when new evidence changes the ownership bound
 
 ## Submodule sync: FIXED, and what it now guarantees
 
-`scripts/sync_submodules.py` enumerates gitlinks directly
-(`ls-files -s`, filtering mode 160000) instead of trusting `git submodule status --recursive`, which
-aborts on beetle-psx's URL-less nested `deps/lightning/gnulib` and so never reached `vendor/lucent`.
-It prints a DENOMINATOR and names what it cannot cover:
+`scripts/sync_submodules.py` manages only this repository's declared top-level gitlinks. It enumerates
+them directly from `.gitmodules` and `ls-files -s`, updates only named top-level paths, and never uses
+recursive Git updates. Thus first-run setup does not clone Beetle's nested
+`deps/lightning/gnulib`, even when that nested dependency has a valid URL. The verdict gives a
+denominator and names nested gitlinks it saw but deliberately excluded:
 
-    [submodules] checked 2 of 2 submodule(s), all at this repo's recorded gitlinks — NOT covered
-    (gitlink(s) no .gitmodules declares, so git itself cannot sync them):
-    vendor/beetle-psx/deps/lightning/gnulib
+    [submodules] checked 2 of 2 submodule(s), all at this repo's recorded gitlinks — nested
+    gitlink(s) outside this sync: vendor/beetle-psx/deps/lightning/gnulib
 
-Its focused self-test covers complete, missing, and undeclared gitlinks. The printed denominator keeps
-a partial enumeration from reading as a clean bill of health.
+The focused test covers cold initialization, warm pin correction, missing declared paths, dirty and
+deliberately advanced checkouts, and both mapped and unmapped nested gitlinks. A clean verdict applies
+to the declared top-level set only.

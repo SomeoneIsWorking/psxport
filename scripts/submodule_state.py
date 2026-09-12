@@ -1,4 +1,4 @@
-"""Complete, explicit submodule-state enumeration and safe pin synchronization."""
+"""Declared top-level submodule inventory and safe pin synchronization."""
 
 from __future__ import annotations
 
@@ -50,6 +50,7 @@ class Inventory:
     submodules: list[Submodule] = field(default_factory=list)
     blind: list[BlindPath] = field(default_factory=list)
     unmanaged: list[str] = field(default_factory=list)
+    excluded_nested: list[str] = field(default_factory=list)
 
     @property
     def declared_paths(self) -> list[str]:
@@ -101,46 +102,39 @@ def _gitlinks(git: Git, repo: Path) -> dict[str, str]:
 
 def enumerate_submodules(root: Path, git: Git) -> Inventory:
     inventory = Inventory()
+    declared = _declared_paths(git, root)
+    links = _gitlinks(git, root)
+    declared_set = set(declared)
+    inventory.unmanaged = sorted(path for path in links if path not in declared_set)
 
-    def walk(repo: Path, prefix: str) -> None:
-        declared = _declared_paths(git, repo)
-        declared_set = set(declared)
-        links = _gitlinks(git, repo)
-        inventory.unmanaged.extend(prefix + path for path in links if path not in declared_set)
+    for path in declared:
+        recorded = links.get(path)
+        if recorded is None:
+            inventory.blind.append(BlindPath(path, "declared in .gitmodules but no gitlink in this repo's index"))
+            continue
 
-        for relative in declared:
-            display = prefix + relative
-            recorded = links.get(relative)
-            if recorded is None:
-                inventory.blind.append(
-                    BlindPath(display, "declared in .gitmodules but no gitlink in this repo's index")
-                )
-                continue
+        checkout_root = root / path
+        if not (checkout_root / ".git").exists():
+            inventory.submodules.append(Submodule(path, recorded, None))
+            inventory.blind.append(BlindPath(path, "top-level checkout is not initialized"))
+            continue
 
-            checkout_root = repo / relative
-            if not (checkout_root / ".git").exists():
-                inventory.submodules.append(Submodule(display, recorded, None))
-                inventory.blind.append(
-                    BlindPath(display, "not checked out — and nothing IT declares can be seen from here")
-                )
-                continue
+        head = git.run(checkout_root, ["rev-parse", "HEAD"])
+        if head.returncode or not head.stdout.strip():
+            inventory.blind.append(BlindPath(path, "checkout exists but is not a readable git repo (HEAD unreadable)"))
+            continue
+        inventory.submodules.append(Submodule(path, recorded, head.stdout.strip()))
+        inventory.excluded_nested.extend(f"{path}/{nested}" for nested in _gitlinks(git, checkout_root))
 
-            head = git.run(checkout_root, ["rev-parse", "HEAD"])
-            if head.returncode or not head.stdout.strip():
-                inventory.blind.append(
-                    BlindPath(display, "checkout exists but is not a readable git repo (HEAD unreadable)")
-                )
-                continue
-            inventory.submodules.append(Submodule(display, recorded, head.stdout.strip()))
-            walk(checkout_root, display + "/")
-
-    walk(root, "")
     inventory.unmanaged = sorted(set(inventory.unmanaged))
+    inventory.excluded_nested = sorted(set(inventory.excluded_nested))
     return inventory
 
 
-def add_recursive_crosscheck(root: Path, git: Git, inventory: Inventory) -> None:
-    result = git.run(root, ["submodule", "status", "--recursive"])
+def add_top_level_crosscheck(root: Path, git: Git, inventory: Inventory) -> None:
+    result = git.run(root, ["submodule", "status"])
+    if result.returncode:
+        raise RuntimeError(f"cannot cross-check top-level submodules: {result.stderr.strip()}")
     observed: set[str] = set()
     for line in result.stdout.splitlines():
         fields = line.lstrip("-+U ").split()
@@ -187,9 +181,9 @@ def protected_checkouts(root: Path, git: Git, items: Iterable[Submodule]) -> lis
     return protected
 
 
-def update_recursive(root: Path, git: Git, *, initialize: bool) -> CommandResult:
+def update_declared(root: Path, git: Git, paths: Iterable[str], *, initialize: bool) -> CommandResult:
     arguments = ["submodule", "update"]
     if initialize:
         arguments.append("--init")
-    arguments.append("--recursive")
+    arguments.extend(["--", *sorted(paths)])
     return git.run(root, arguments)

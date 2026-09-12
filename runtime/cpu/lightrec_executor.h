@@ -5,14 +5,61 @@
 #include "fallback_policy.h"
 #include "guest_program_image.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 
 class Core;
 
 namespace psx::cpu {
+
+inline constexpr std::size_t kMaxObservedStoreTargets = 8;
+
+enum class StoreObservationPhase : std::uint8_t {
+  Before,
+  After,
+};
+
+// Views are valid only during the read-only callback. Core's cached registers are not synchronized
+// until the translated segment exits; these are Lightrec's flushed architectural registers.
+struct StoreObservation {
+  std::uint32_t guestPc = 0;
+  StoreObservationPhase phase = StoreObservationPhase::Before;
+  std::uint32_t guestCycle = 0; // Relative to the current translated execution segment.
+  std::span<const std::uint32_t, 34> gpr;
+  std::span<const std::uint32_t, 32> cp0;
+  std::span<const std::uint32_t, 32> cp2Data;
+  std::span<const std::uint32_t, 32> cp2Control;
+};
+
+using StoreObserverCallback = void (*)(const StoreObservation &, void *) noexcept;
+
+enum class StoreObserverStatus : std::uint8_t {
+  Configured,
+  InvalidConfiguration,
+  Busy,
+  InitializationFailed,
+  InternalFailure,
+};
+
+struct StoreObserverTargetCounts {
+  std::uint32_t guestPc = 0;
+  std::uint64_t before = 0;
+  std::uint64_t after = 0;
+};
+
+struct StoreObserverReport {
+  // Counts start at the last successful arm and remain readable after disarm.
+  std::array<StoreObserverTargetCounts, kMaxObservedStoreTargets> targets{};
+  std::size_t targetCount = 0;
+  bool armed = false;
+  std::uint64_t executedJitInstructions = 0;
+  std::uint64_t fallbackInstructions = 0;
+};
 
 enum class InterpreterFallbackReason : std::uint8_t {
   SelfModifyingCode,
@@ -65,6 +112,12 @@ public:
   void requestStop();
   void invalidate(GuestAddressRange range);
   void invalidateAll();
+  // Diagnostic only. Empty targets plus null callback/context disarm. The callback must not mutate
+  // guest state, re-enter the executor, or retain snapshot views beyond the call. Context must
+  // outlive the armed period; disarm before destroying it.
+  StoreObserverStatus
+  configureStoreObserver(std::span<const std::uint32_t> targets, StoreObserverCallback callback, void *context);
+  StoreObserverReport storeObserverReport() const;
   const ExecutorCounters &counters() const;
   void reportFallbackTelemetry(std::string_view phase) const;
   bool available() const;

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <limits>
 #include <mutex>
@@ -30,6 +31,7 @@ constexpr std::uint32_t kScratchBase = 0x1f800000u;
 constexpr std::uint32_t kScratchSize = 0x400u;
 constexpr std::uint32_t kHardwareBase = 0x1f801000u;
 constexpr std::uint32_t kHardwareSize = 0x2000u;
+static_assert(kMaxObservedStoreTargets == LIGHTREC_STORE_OBSERVER_TARGETS);
 
 std::uint32_t targetCycle(ExecutionBudget budget) {
   return static_cast<std::uint32_t>(std::min<std::uint64_t>(budget.cycles, std::numeric_limits<std::uint32_t>::max()));
@@ -210,6 +212,37 @@ struct LightrecExecutor::Impl {
     boundary.fallbackRefusalPc = event->guest_pc;
     boundary.fallbackRefusalReason = event->reason;
     return LIGHTREC_FALLBACK_REFUSE;
+  }
+
+  static void observeStore(const lightrec_registers *registers,
+                           std::uint32_t guestPc,
+                           lightrec_store_observer_phase phase,
+                           std::uint32_t cycle,
+                           void *userData) noexcept {
+    auto &impl = *static_cast<Impl *>(userData);
+    for (std::size_t i = 0; i < impl.storeReport.targetCount; ++i) {
+      auto &target = impl.storeReport.targets[i];
+      if (target.guestPc != guestPc) {
+        continue;
+      }
+      if (phase == LIGHTREC_STORE_BEFORE) {
+        ++target.before;
+      } else {
+        ++target.after;
+      }
+      const StoreObservation observation{
+          guestPc,
+          phase == LIGHTREC_STORE_BEFORE ? StoreObservationPhase::Before : StoreObservationPhase::After,
+          cycle,
+          std::span(registers->gpr),
+          std::span(registers->cp0),
+          std::span(registers->cp2d),
+          std::span(registers->cp2c),
+      };
+      impl.storeCallback(observation, impl.storeContext);
+      return;
+    }
+    std::abort(); // A translated callback for an unregistered PC violates the per-state target contract.
   }
 
   static lightrec_block_boundary_action
@@ -421,6 +454,9 @@ struct LightrecExecutor::Impl {
   FallbackPolicy lastExecutionFallbackPolicy = defaultFallbackPolicy();
   const std::uint64_t boundaryOwnerId = nextBoundaryOwnerId();
   ExecutorCounters counters;
+  StoreObserverCallback storeCallback = nullptr;
+  void *storeContext = nullptr;
+  StoreObserverReport storeReport{};
 };
 
 LightrecExecutor::LightrecExecutor(Core &core, FallbackPolicyProvider fallbackPolicyProvider)
@@ -488,6 +524,10 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     impl.copyLightrecToCore(nextPc);
     const lightrec_execution_stats after = *lightrec_get_execution_stats(impl.state);
     impl.updateCounters(after);
+    if (impl.storeReport.armed) {
+      impl.storeReport.executedJitInstructions += after.executed_instructions - before.executed_instructions;
+      impl.storeReport.fallbackInstructions += after.fallback_instructions - before.fallback_instructions;
+    }
     if (impl.core.game) {
       accountExecutedInstructions(impl.core, executedInstructionCount(after) - executedInstructionCount(before));
     }
@@ -495,6 +535,13 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     const std::uint32_t flags = lightrec_exit_flags(impl.state);
     if (flags & LIGHTREC_EXIT_FALLBACK_REFUSED) {
       return impl.fallbackThresholdFault(consumedCycles);
+    }
+    if (flags & LIGHTREC_EXIT_OBSERVER_UNSUPPORTED) {
+      ++impl.counters.faults;
+      return {ExecutionExitReason::Fault,
+              nextPc,
+              consumedCycles,
+              "Lightrec selected-store observer rejected unsupported translated PC"};
     }
     if (auto requested = impl.core.executionControl().consume()) {
       requested->cycles += consumedCycles;
@@ -621,6 +668,51 @@ void LightrecExecutor::invalidateAll() {
   if (impl_->state) {
     lightrec_invalidate_all(impl_->state);
   }
+}
+
+StoreObserverStatus LightrecExecutor::configureStoreObserver(std::span<const std::uint32_t> targets,
+                                                             StoreObserverCallback callback,
+                                                             void *context) {
+  Impl &impl = *impl_;
+  if (targets.empty() && (callback || context)) {
+    return StoreObserverStatus::InvalidConfiguration;
+  }
+  if (!impl.ensureInitialized()) {
+    return StoreObserverStatus::InitializationFailed;
+  }
+  const int result = lightrec_set_store_observer(impl.state,
+                                                 targets.empty() ? nullptr : targets.data(),
+                                                 targets.size(),
+                                                 callback ? Impl::observeStore : nullptr,
+                                                 callback ? &impl : nullptr);
+  if (result == -EINVAL) {
+    return StoreObserverStatus::InvalidConfiguration;
+  }
+  if (result == -EBUSY) {
+    return StoreObserverStatus::Busy;
+  }
+  if (result != 0) {
+    return StoreObserverStatus::InternalFailure;
+  }
+  if (targets.empty()) {
+    impl.storeReport.armed = false;
+    impl.storeCallback = nullptr;
+    impl.storeContext = nullptr;
+    return StoreObserverStatus::Configured;
+  }
+  impl.storeReport = {};
+  impl.storeReport.targetCount = targets.size();
+  impl.storeReport.armed = true;
+  for (std::size_t i = 0; i < targets.size(); ++i) {
+    impl.storeReport.targets[i].guestPc = targets[i];
+  }
+  impl.storeCallback = callback;
+  impl.storeContext = context;
+  return StoreObserverStatus::Configured;
+}
+
+StoreObserverReport LightrecExecutor::storeObserverReport() const {
+  return impl_->storeReport;
 }
 
 const ExecutorCounters &LightrecExecutor::counters() const {
