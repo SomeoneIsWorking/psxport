@@ -1,6 +1,6 @@
-// Native display-time source. The host frame loop advances fields through frame_pacer.cpp and mirrors
-// one canonical counter tick through frameTick(). libetc VSync is not implemented here: every guest
-// wait/query is trapped by PlatformHle because only the native loop may own field advancement.
+// Native display-time source. The host frame loop advances fields through frame_pacer.cpp and
+// advances one title-neutral counter through frameTick(). A title that mirrors it into guest RAM
+// owns the guest address and write order at its frame boundary.
 #include "cdc_state.h"
 #include "core.h"
 #include "field_rate.h"
@@ -11,7 +11,6 @@
 #include <stdlib.h>
 
 enum { V0 = 2 };
-#define VBLANK_COUNT 0x800ABDE0u // DAT_800abde0: libetc VSync counter (FUN_80085900 returns it)
 
 uint64_t Timing::readEmulatedCpuTicks(void *context) {
   return static_cast<Timing *>(context)->mEmulatedTime.nowTicks();
@@ -226,10 +225,8 @@ void Timing::vsyncCallback() {
   game->core.r[V0] = 0;
 }
 
-// Advance the canonical libetc VSync counter once per native frame. The PC-native frame loop owns
-// timing (one logic frame == one vblank). Native code ignores this compatibility mirror, but finite
-// guest leaves may read it for animations/idle timers. They may not call VSync to advance or query it.
+// Advance the host field count once per title-owned native frame. Guest memory layout is title
+// policy: a frame driver that needs a libetc compatibility mirror writes its measured address.
 void Timing::frameTick() {
   vblank += 1u;
-  game->core.mem_w32(VBLANK_COUNT, vblank);
 }

@@ -1,4 +1,4 @@
-// timing.h — native display-time and compatibility-counter state, owned by Game.
+// timing.h — native display-time state, owned by Game.
 #pragma once
 #include "emulated_time.h"
 
@@ -9,7 +9,7 @@ struct CdcState;
 class Timing {
 public:
   Game *game = nullptr;
-  uint32_t vblank = 0;     // libetc VSync counter mirror (was g_vblank)
+  uint32_t vblank = 0;     // Host field count; titles own any guest-memory mirror.
   uint32_t logicFrame = 0; // logic-frame counter, advanced by the title's native FrameDriver.
                            // Read by Cd::audioTrace / [bgmreq]-style diags. Was global g_bgm_frame.
   // Diagnostic raw instruction count. CDC deadlines use mEmulatedTime, which also crosses display
@@ -51,8 +51,7 @@ public:
   //   owns pacing; the libapi per-vblank IRQ vector isn't modeled. Was ov_vsync_callback.
   void vsyncCallback();
 
-  // frameTick(): mirror one title-owned native frame into the compatibility counter so finite guest
-  //   leaves reading DAT_800abde0 for pacing/idle-timers keep advancing.
+  // Advance the host field count once at the title's native frame boundary.
   void frameTick();
 
 private:

@@ -8,6 +8,7 @@
 // init, read on every guest call target). In SBS with two Games each has its own table; both
 // register the same builtins so lookups are identical.
 #pragma once
+#include "stock_cd_work_area.h"
 #include <cstdint>
 struct Core;
 class Game;
@@ -55,6 +56,10 @@ struct PlatformHlePlan {
   uint32_t cdCommandAddress = 0;
   uint32_t cdSyncAddress = 0;
   uint32_t cdSearchFileAddress = 0;
+
+  // A direct runtime has no legacy GameConfig. Its measured stock-libcd guest work area must be
+  // declared here so the shared native command path can preserve CdLastPos/last-mode state.
+  psx::cd::StockCommandWorkArea stockCdWorkArea{};
 
   // Measured libgpu DrawSync entry. The host GPU consumes GP0/DMA work synchronously, so the
   // framework can complete this hardware wait without entering the guest's VSync-based body.

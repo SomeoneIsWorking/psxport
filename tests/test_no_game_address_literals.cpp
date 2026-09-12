@@ -352,7 +352,6 @@ static Scan scan_framework(void) {
  *   scheduler.h (2)        inline accessors of Tomba task state.
  *   overlay_router.cpp (1) one Tomba scratchpad field.
  *   render_node.h (1)      one Tomba scratchpad field.
- *   timing.cpp (1)         one Tomba global.
  *
  * Fields to prefer when fixing: GameConfig already has otRegionBase/otRegionStride, packetPoolBase/
  * packetPoolStride, otBasePtr, poolPtrCur/poolPtrLast, taskTableBase/taskSlotStride/taskCount,
@@ -398,9 +397,8 @@ static const BaselineRow kBaseline[] = {
     {"runtime/psx/render_queue.cpp", 0x800f2738u, 1}, {"runtime/psx/render_queue.cpp", 0x800fb168u, 1},
     {"runtime/psx/scheduler.cpp", 0x8010637cu, 1},    {"runtime/psx/scheduler.cpp", 0x801063f4u, 2},
     {"runtime/psx/scheduler.cpp", 0x801fe0e0u, 1},    {"runtime/psx/scheduler.h", 0x1f800138u, 1},
-    {"runtime/psx/scheduler.h", 0x801fe000u, 1},      {"runtime/psx/timing.cpp", 0x800abde0u, 1},
-    {"runtime/ui/menu_readouts.cpp", 0x801062e4u, 1}, {"runtime/ui/menu_readouts.cpp", 0x8010637cu, 1},
-    {"runtime/ui/menu_readouts.cpp", 0x8010649cu, 1},
+    {"runtime/psx/scheduler.h", 0x801fe000u, 1},      {"runtime/ui/menu_readouts.cpp", 0x801062e4u, 1},
+    {"runtime/ui/menu_readouts.cpp", 0x8010637cu, 1}, {"runtime/ui/menu_readouts.cpp", 0x8010649cu, 1},
 };
 
 /* ---- checks ---------------------------------------------------------------------------------- */

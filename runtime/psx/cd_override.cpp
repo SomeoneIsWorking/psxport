@@ -25,6 +25,7 @@
 #include "invalidation.h"
 #include "platform_hle.h" // class PlatformHle — CD-subsystem HLE registrations go through the singleton
 #include "stock_cd_response.h"
+#include "stock_cd_work_area.h"
 #include <chrono>
 #include <lucent/log.h>
 #include <stdio.h>
@@ -157,15 +158,7 @@ static void cd_apply_command(Core *c) {
   // Setloc parameter and the Setmode byte in guest RAM, and its own read path reads them back later
   // (CdPosToInt(CdLastPos()) seeds the expected-sector counter). An override that acknowledges the
   // command without maintaining that state leaves the guest reasoning from stale bytes.
-  if (const uint32_t lp = c->cfg ? c->cfg->cdLastPosBuf : 0) {
-    if (cmd == 0x02 && param) { // Setloc: the 4-byte position parameter
-      for (uint32_t i = 0; i < 4; i++) {
-        c->mem_w8(lp + i, c->mem_r8(param + i));
-      }
-    } else if (cmd == 0x0E && param) { // Setmode: the mode byte, stored just after the position
-      c->mem_w8(lp + 4, p0);
-    }
-  }
+  psx::cd::publishStockCommandWorkArea(*c, static_cast<uint8_t>(cmd), param);
   switch (cmd) {
   case 0x0E: // Setmode
     xa_stream_setmode(&c->game->xa, p0);
