@@ -74,8 +74,9 @@ public:
   int stream_active = 0;
 
   // Drive-rate pacing for that stream (see cd_stream_sectors_due above). `stream_t0_ns` is the
-  // steady-clock reading when the stream started and `stream_delivered` counts the sectors handed to
-  // the guest since then; together they say whether the drive is ahead of or behind real time.
+  // steady-clock reading when the stream started and `stream_delivered` counts host-dispatched ready
+  // callback attempts since then; together they cap the direct-callback path's host rate. Guest
+  // interrupt delivery uses the controller's own deadline and does not increment this count.
   // Reset on every ReadN/ReadS so a new movie starts with a fresh budget rather than inheriting the
   // last one's credit.
   uint64_t stream_t0_ns = 0;
@@ -115,9 +116,9 @@ public:
   void hleInit();
   // overridesInit(): register every CD-subsystem PlatformHle handler with this Game's table.
   void overridesInit();
-  // pumpStream(c, sectors): deliver up to `sectors` more streamed sectors to the guest by invoking
-  //   the ready callback it registered. No-op unless a continuous read is active. Call from the
-  //   port's per-field timing so the stream advances at roughly the drive's rate; a file read must
-  //   NOT be pumped this way (it terminates itself).
+  // pumpStream(c, sectors): service an active continuous read. A host-owned path invokes the guest's
+  //   registered ready callback at the drive's rate; a guest-interrupt-owned path only advances the
+  //   controller, leaving INT1 consumption and callback delivery to the guest ISR. File reads are
+  //   finite and must not be pumped this way.
   void pumpStream(Core *c, int sectors);
 };

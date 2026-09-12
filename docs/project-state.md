@@ -94,6 +94,13 @@ The typed direct-runtime HLE plan now installs the existing stock `CdCommand`, `
 same handlers. Crash Bash's authenticated executable reaches its native loop through this route;
 its BOOT overlay publication remains title work.
 
+Continuous reads now declare whether the host pump or the guest interrupt path owns ready-callback
+delivery. The default direct callback path remains available; the guest-owned path advances the
+controller to a due INT1 and lets the existing guest ISR consume its response before invoking the
+callback. The synthetic callback contract covers both owners, an empty/non-INT1 queue, and deferred
+delivery across a native override (5/5 cases, 49 checks). Spider-Man's retail ISR-to-libstr ring
+sequence remains unverified.
+
 ### S018 — Independent test oracle
 
 Beetle/Mednafen CPU-window tools remain separate from the product. The isolated libretro software

@@ -79,9 +79,10 @@ public:
     return nullptr;
   }
 
-  // Guest CD-ready callback slot for DIRECT runtimes (core.cfg == nullptr). The native continuous
-  // stream pump reads the current function value from this measured slot on each field. Adapter
-  // runtimes keep the equivalent legacy GameConfig::cdReadyCbPtr fact.
+  // Guest CD-ready callback slot and delivery owner for DIRECT runtimes (core.cfg == nullptr).
+  // HostPump reads the current function value on each field; GuestInterrupt leaves delivery to the
+  // guest's libcd ISR after the controller raises INT1. Adapter runtimes retain the legacy direct
+  // GameConfig::cdReadyCbPtr behavior.
   virtual const GuestCdStreamCallbackLayout *guestCdStreamCallbackLayout() const {
     return nullptr;
   }

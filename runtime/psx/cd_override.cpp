@@ -813,12 +813,14 @@ void Cd::hleInit() {
   }
 }
 
-// Deliver more streamed sectors by invoking the ready callback the guest registered.
+// Service a continuous read through its declared callback owner. A direct consumer receives a
+// host-dispatched ready callback; a stock-libcd consumer receives controller INT1 through its guest
+// ISR, which consumes the response before invoking the same registered callback.
 //
 // A stream is not a file read. A file read is finite and terminates itself, which is why
 // cd_drive_stock_read can run it to completion in one burst. A stream runs until the guest says
-// stop, and it expects its callback invoked repeatedly at roughly the drive's sector rate — so it
-// must be pumped from the port's timing, not from the command that started it.
+// stop, and it expects repeated data-ready events at roughly the drive's sector rate — so it must
+// be serviced from runtime timing, not from the command that started it.
 //
 // The guest's own Pause/Stop clears stream_active, so this never outlives what the game asked for.
 // ---- streamed-read drive pacing (declared in cd.h; gated by tests/test_cd_stream_drive_rate.cpp) --
@@ -838,8 +840,21 @@ int cd_stream_sectors_due(uint64_t elapsed_ns, int sectors_per_sec, uint32_t alr
 }
 
 void Cd::pumpStream(Core *c, int sectors) {
+  if (!stream_active || sectors <= 0) {
+    return;
+  }
+  const GameRuntime *runtime = c->game ? c->game->runtime : nullptr;
+  const GuestCdStreamCallbackLayout *layout = runtime ? runtime->guestCdStreamCallbackLayout() : nullptr;
+  if (!c->cfg && layout && layout->valid() &&
+      layout->owner == GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt) {
+    // The controller, not the host pump, raises INT1. The guest libcd ISR must consume its response
+    // before invoking the ready callback; irqPoll delivers it at a safe boundary after this native
+    // call returns. The controller owns its own drive deadline, so host callback pacing is inapplicable.
+    game->timing.serviceCdcTickSource();
+    return;
+  }
   const uint32_t readyCallbackPointer = cd_ready_callback_pointer(*c);
-  if (!stream_active || !readyCallbackPointer) {
+  if (!readyCallbackPointer) {
     return;
   }
   const uint32_t cb = c->mem_r32(readyCallbackPointer);
