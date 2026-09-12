@@ -89,6 +89,11 @@ GPU, SPU, GTE, MDEC, CD, DMA, timing, pad, BIOS/HLE, and host-presentation owner
 complete service coverage and integration are title-driven and have not been demonstrated in the
 dynarec product path.
 
+The typed direct-runtime HLE plan now installs the existing stock `CdCommand`, `CdSync`, and
+`CdSearchFile` services alongside `CdRead`/`CdReadSync`, while the legacy registration retains the
+same handlers. Crash Bash's authenticated executable reaches its native loop through this route;
+its BOOT overlay publication remains title work.
+
 ### S018 — Independent test oracle
 
 Beetle/Mednafen CPU-window tools remain separate from the product. The isolated libretro software

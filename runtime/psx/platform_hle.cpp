@@ -165,6 +165,9 @@ void PlatformHle::initBuiltins() {
     installProjection(plan->setGeomOffset, plan->setGeomScreen);
     install(plan->cdReadAddress, cd_read_stock_sync);
     install(plan->cdReadSyncAddress, cd_readsync_stock_sync);
+    install(plan->cdCommandAddress, cd_command_stock_sync);
+    install(plan->cdSyncAddress, cd_sync_stock_sync);
+    install(plan->cdSearchFileAddress, cd_searchfile_stock_sync);
     install(plan->drawSyncAddress, syncComplete);
     bindVSyncBoundary(plan->vsyncAddress);
     // A plan that declares more bindings than the array holds has services the runtime silently

@@ -539,7 +539,7 @@ void cd_readsync_stock_sync(Core *c) {
 // count from the field at +4.
 //
 // Returns the loc pointer on success and 0 on failure, which is what the guest tests.
-static void cd_searchfile_native(Core *c) {
+void cd_searchfile_stock_sync(Core *c) {
   const uint32_t loc = c->r[A0], namep = c->r[A1];
   char name[80];
   unsigned n = 0;
@@ -952,19 +952,19 @@ void Cd::overridesInit() {
       hle.register_(addr, fn);
     }
   };
-  reg(cfg->cdInlineLoad, cd_dc40);              // inline async loader -> sync
-  reg(cfg->voicePlay, voice_play);              // voice/BGM clip player -> native xa_stream
-  reg(cfg->voiceStop, voice_stop);              // stop voice/BGM -> native
-  reg(cfg->cdFileLoad, cd_loadfile);            // engine file loader -> sync sector read
-  reg(cfg->cdCommand, cd_command_stock_sync);   // libcd CdCommand -> success (no controller)
-  reg(cfg->cdSync, cd_sync_stock_sync);         // libcd CdSync -> complete (CD is synchronous)
-  reg(cfg->cdCmdStream, cd_cmd_stream);         // streaming CD-cmd wrapper (GetlocL pos in range)
-  reg(cfg->cdReadPrim, cd_read);                // libcd by-LBA read -> native sync
-  reg(cfg->cdGetSector, cd_getsector_stock);    // STOCK libcd CdGetSector(dest, words) -> native
-  reg(cfg->cdReadStock, cd_read_stock_sync);    // STOCK libcd CdRead(sectors, buf, mode) -> native
-  reg(cfg->cdReadSync, cd_readsync_stock_sync); // STOCK libcd CdReadSync -> complete
-  reg(cfg->cdSearchFile, cd_searchfile_native); // STOCK libcd CdSearchFile -> native ISO9660 lookup
-  reg(cfg->cdAsyncRead, cd_async_read);         // async streaming reader -> sync (area-DATA load)
+  reg(cfg->cdInlineLoad, cd_dc40);                  // inline async loader -> sync
+  reg(cfg->voicePlay, voice_play);                  // voice/BGM clip player -> native xa_stream
+  reg(cfg->voiceStop, voice_stop);                  // stop voice/BGM -> native
+  reg(cfg->cdFileLoad, cd_loadfile);                // engine file loader -> sync sector read
+  reg(cfg->cdCommand, cd_command_stock_sync);       // libcd CdCommand -> success (no controller)
+  reg(cfg->cdSync, cd_sync_stock_sync);             // libcd CdSync -> complete (CD is synchronous)
+  reg(cfg->cdCmdStream, cd_cmd_stream);             // streaming CD-cmd wrapper (GetlocL pos in range)
+  reg(cfg->cdReadPrim, cd_read);                    // libcd by-LBA read -> native sync
+  reg(cfg->cdGetSector, cd_getsector_stock);        // STOCK libcd CdGetSector(dest, words) -> native
+  reg(cfg->cdReadStock, cd_read_stock_sync);        // STOCK libcd CdRead(sectors, buf, mode) -> native
+  reg(cfg->cdReadSync, cd_readsync_stock_sync);     // STOCK libcd CdReadSync -> complete
+  reg(cfg->cdSearchFile, cd_searchfile_stock_sync); // STOCK libcd CdSearchFile -> native ISO9660 lookup
+  reg(cfg->cdAsyncRead, cd_async_read);             // async streaming reader -> sync (area-DATA load)
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
   // _DAT_1f8001f8/f0/f4 read state — but runs the reader INLINE (calls FUN_8001d940 directly,

@@ -14,10 +14,15 @@
 namespace {
 
 constexpr uint32_t kDirectCdRead = 0x80066A50u;
+constexpr uint32_t kDirectCdCommand = 0x80066A60u;
+constexpr uint32_t kDirectCdSync = 0x80066A70u;
+constexpr uint32_t kDirectCdSearchFile = 0x80066A80u;
 constexpr uint32_t kDirectCdWindowEnd = 0x80066B30u;
 constexpr uint32_t kDirectDrawSync = 0x80066C00u;
 constexpr uint32_t kDirectDrawSyncWindowEnd = 0x80066C10u;
 constexpr uint32_t kLegacyCdSync = 0x800647A0u;
+constexpr uint32_t kLegacyCdCommand = 0x800647B0u;
+constexpr uint32_t kLegacyCdSearchFile = 0x800647C0u;
 constexpr uint32_t kLegacyCdWindowEnd = 0x80064810u;
 
 class DirectRuntime : public GameRuntime {
@@ -58,6 +63,9 @@ void test_empty_direct_runtime_cd_registration_is_valid() {
 void test_direct_runtime_cd_plan_remains_owned_by_platform_hle() {
   PlannedDirectRuntime runtime;
   runtime.plan.cdReadAddress = kDirectCdRead;
+  runtime.plan.cdCommandAddress = kDirectCdCommand;
+  runtime.plan.cdSyncAddress = kDirectCdSync;
+  runtime.plan.cdSearchFileAddress = kDirectCdSearchFile;
   runtime.plan.windowLo[0] = kDirectCdRead;
   runtime.plan.windowHi[0] = kDirectCdWindowEnd;
   runtime.plan.drawSyncAddress = kDirectDrawSync;
@@ -73,6 +81,10 @@ void test_direct_runtime_cd_plan_remains_owned_by_platform_hle() {
 
   CHECK(game->core.cfg == nullptr);
   CHECK(game->platform_hle.lookup(kDirectCdRead) == cd_read_stock_sync);
+  CHECK(game->platform_hle.lookup(kDirectCdCommand) == cd_command_stock_sync);
+  CHECK(game->platform_hle.lookup(kDirectCdSync) == cd_sync_stock_sync);
+  CHECK(game->platform_hle.lookup(kDirectCdSearchFile) == cd_searchfile_stock_sync);
+  CHECK(game->platform_hle.lookup(kDirectCdSearchFile + 4u) == nullptr);
   CHECK(game->platform_hle.lookup(kDirectDrawSync) != nullptr);
 }
 
@@ -81,6 +93,8 @@ void test_legacy_runtime_keeps_existing_cd_registration() {
   static const GameHooks hooks{};
   config = {};
   config.cdSync = kLegacyCdSync;
+  config.cdCommand = kLegacyCdCommand;
+  config.cdSearchFile = kLegacyCdSearchFile;
   config.hle.windowLo[0] = kLegacyCdSync;
   config.hle.windowHi[0] = kLegacyCdWindowEnd;
   psxport_install_game(&config, &hooks);
@@ -89,6 +103,8 @@ void test_legacy_runtime_keeps_existing_cd_registration() {
   CHECK_EQ(game->core.cfg, &config);
   game->cd.overridesInit();
   CHECK(game->platform_hle.lookup(kLegacyCdSync) == cd_sync_stock_sync);
+  CHECK(game->platform_hle.lookup(kLegacyCdCommand) == cd_command_stock_sync);
+  CHECK(game->platform_hle.lookup(kLegacyCdSearchFile) == cd_searchfile_stock_sync);
 }
 
 } // namespace

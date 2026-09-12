@@ -39,3 +39,6 @@ void cd_sync_stock_sync(Core *c);
 // callers supply the original guest ABI in a0/a1/a2 and receive the original result in v0.
 void cd_read_stock_sync(Core *c);
 void cd_readsync_stock_sync(Core *c);
+
+// Resolve stock Sony libcd CdSearchFile through the authenticated disc's ISO9660 index.
+void cd_searchfile_stock_sync(Core *c);
