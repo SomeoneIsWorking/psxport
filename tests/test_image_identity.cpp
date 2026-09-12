@@ -3,6 +3,7 @@
 #include "testutil.h"
 
 #include <memory>
+#include <stdexcept>
 
 namespace {
 
@@ -105,6 +106,60 @@ void test_core_forwards_range_resolution_to_its_own_catalog() {
   CHECK(core->currentImageIdentity(whole) == base);
 }
 
+void test_subtraction_preserves_only_unwritten_fragments_of_one_generation() {
+  psx::cpu::ImageCatalog catalog;
+  const auto boot = catalog.activate("boot", {0x1000u, 0x2000u}, 11u);
+  CHECK_EQ(catalog.subtractRange(boot, {0x1400u, 0x1600u}), 2u);
+  CHECK_EQ(catalog.activeCount(), 1u);
+  CHECK(catalog.resolve(0x13ffu) == boot);
+  CHECK(!catalog.resolve(0x1400u));
+  CHECK(!catalog.resolve(0x15ffu));
+  CHECK(catalog.resolve(0x1600u) == boot);
+  CHECK(catalog.resolve(GuestAddressRange{0x1000u, 0x1400u}) == boot);
+  CHECK(!catalog.resolve(GuestAddressRange{0x13ffu, 0x1601u}));
+
+  const auto menu = catalog.activate("menu", {0x1400u, 0x1600u}, 22u);
+  CHECK_EQ(catalog.activeCount(), 2u);
+  CHECK(catalog.resolve(0x1500u) == menu);
+  CHECK(catalog.deactivate(menu));
+  CHECK_EQ(catalog.activeCount(), 1u);
+  CHECK(!catalog.resolve(0x1500u)); // overwritten BOOT bytes never reappear on MENU unload
+  CHECK(catalog.resolve(0x1600u) == boot);
+
+  CHECK_EQ(catalog.subtractRange(boot, {0u, 0x1200u}), 2u);
+  CHECK(!catalog.resolve(0x1100u));
+  CHECK(catalog.resolve(0x1200u) == boot);
+  CHECK_EQ(catalog.subtractRange(boot, {0x1e00u, 0x3000u}), 2u);
+  CHECK(catalog.resolve(0x1dffu) == boot);
+  CHECK(!catalog.resolve(0x1e00u));
+  CHECK_EQ(catalog.subtractRange(boot, {0x1200u, 0x1e00u}), 0u);
+  CHECK_EQ(catalog.activeCount(), 0u);
+  CHECK(!catalog.resolve(0x1200u));
+  CHECK(!catalog.deactivate(boot));
+}
+
+void test_subtraction_rejects_invalid_ranges_and_preserves_unrelated_images() {
+  psx::cpu::ImageCatalog catalog;
+  const auto boot = catalog.activate("boot", {0x1000u, 0x2000u}, 11u);
+  const auto unrelated = catalog.activate("unrelated", {0x3000u, 0x4000u}, 22u);
+  CHECK_EQ(catalog.subtractRange(boot, {0x3000u, 0x3100u}), 1u);
+  CHECK(catalog.resolve(0x1800u) == boot);
+  CHECK(catalog.resolve(0x3000u) == unrelated);
+  CHECK_EQ(catalog.activeCount(), 2u);
+  for (const GuestAddressRange invalid :
+       {GuestAddressRange{0x1000u, 0x1000u}, {0x1100u, 0x1000u}, {0x80001000u, 0x80001100u}}) {
+    bool refused = false;
+    try {
+      catalog.subtractRange(boot, invalid);
+    } catch (const std::invalid_argument &) {
+      refused = true;
+    }
+    CHECK(refused);
+  }
+  CHECK_EQ(catalog.subtractRange({boot.id, boot.generation + 1u}, {0x1000u, 0x1100u}), 0u);
+  CHECK(catalog.resolve(0x1000u) == boot);
+}
+
 } // namespace
 
 int main() {
@@ -113,5 +168,7 @@ int main() {
   RUN(reload_and_adjacent_generations_do_not_merge);
   RUN(gaps_empty_invalid_and_nonphysical_ranges_refuse);
   RUN(core_forwards_range_resolution_to_its_own_catalog);
+  RUN(subtraction_preserves_only_unwritten_fragments_of_one_generation);
+  RUN(subtraction_rejects_invalid_ranges_and_preserves_unrelated_images);
   return pt_summary();
 }

@@ -32,6 +32,9 @@ class ImageCatalog {
 public:
   ImageIdentity activate(std::string_view name, GuestAddressRange range, std::uint64_t contentIdentity);
   bool deactivate(ImageIdentity identity);
+  // Remove written physical bytes from one authenticated generation without changing the identity
+  // of its untouched fragments. Returns the count of surviving disjoint ranges.
+  std::size_t subtractRange(ImageIdentity identity, GuestAddressRange physicalRange);
   std::optional<ImageIdentity> resolve(std::uint32_t guestAddress) const;
   // Physical half-open ranges resolve only when one active residency owns every
   // byte. Empty, invalid, and virtual-alias ranges do not resolve.
@@ -41,7 +44,7 @@ public:
 private:
   struct Entry {
     std::string name;
-    GuestAddressRange range;
+    std::vector<GuestAddressRange> ranges;
     std::uint64_t contentIdentity = 0;
     ImageIdentity identity;
     bool active = false;
