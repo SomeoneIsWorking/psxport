@@ -173,6 +173,24 @@ void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
   }
 }
 
+std::optional<GuestAddressRange> Core::mappedMainRamRange(uint32_t address, uint32_t bytes) {
+  if (bytes == 0u) {
+    return std::nullopt;
+  }
+  const auto *mapped = host_ptr(address, bytes);
+  if (!mapped) {
+    return std::nullopt;
+  }
+  const auto ramBegin = reinterpret_cast<std::uintptr_t>(ram);
+  const auto mappedAddress = reinterpret_cast<std::uintptr_t>(mapped);
+  if (mappedAddress < ramBegin || mappedAddress >= ramBegin + sizeof(ram) ||
+      bytes > ramBegin + sizeof(ram) - mappedAddress) {
+    return std::nullopt;
+  }
+  const auto begin = static_cast<uint32_t>(mappedAddress - ramBegin);
+  return GuestAddressRange{begin, begin + bytes};
+}
+
 // Map a virtual address to a RAM/scratchpad host pointer, or NULL for I/O.
 uint8_t *Core::host_ptr(uint32_t a, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;

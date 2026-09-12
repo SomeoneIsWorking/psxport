@@ -95,6 +95,10 @@ public:
   std::optional<psx::cpu::ImageIdentity> currentImageIdentity(uint32_t guestAddress) const;
   std::optional<psx::cpu::ImageIdentity> currentImageIdentity(GuestAddressRange physicalRange) const;
 
+  // Resolve a contiguous guest span to its physical main-RAM bytes using the same mapping as
+  // mem_r*/mem_w*. Scratchpad, I/O, zero-length, and mirror-straddling spans have no such range.
+  std::optional<GuestAddressRange> mappedMainRamRange(uint32_t address, uint32_t bytes);
+
   // Memory access (delegates to host_ptr / the I/O map). PSX is little-endian == host.
   uint8_t mem_r8(uint32_t a);
   uint16_t mem_r16(uint32_t a);
