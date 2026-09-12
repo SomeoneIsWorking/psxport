@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <limits>
 #include <mutex>
@@ -32,6 +33,11 @@ constexpr std::uint32_t kHardwareSize = 0x2000u;
 
 std::uint32_t targetCycle(ExecutionBudget budget) {
   return static_cast<std::uint32_t>(std::min<std::uint64_t>(budget.cycles, std::numeric_limits<std::uint32_t>::max()));
+}
+
+std::uint64_t nextBoundaryOwnerId() {
+  static std::atomic<std::uint64_t> next{1};
+  return next.fetch_add(1, std::memory_order_relaxed);
 }
 
 } // namespace
@@ -165,38 +171,67 @@ struct LightrecExecutor::Impl {
     PendingWork,
   };
 
+  struct BoundaryContext {
+    std::optional<std::uint32_t> returnAddress;
+    bool dispatchHostServices = false;
+    bool skipPendingBoundaryOnce = false;
+    BoundaryReason reason = BoundaryReason::None;
+    std::uint32_t pc = 0;
+    FallbackPolicy fallbackPolicy{};
+    std::uint64_t admittedFallbackBlocks = 0;
+    std::uint32_t fallbackRefusalPc = 0;
+    lightrec_fallback_reason fallbackRefusalReason = LIGHTREC_FALLBACK_NONE;
+    bool active = false;
+  };
+
+  static std::unordered_map<std::uint64_t, BoundaryContext> &threadBoundaries() {
+    static thread_local std::unordered_map<std::uint64_t, BoundaryContext> boundaries;
+    return boundaries;
+  }
+
+  BoundaryContext &activeBoundary() {
+    auto &boundaries = threadBoundaries();
+    const auto found = boundaries.find(boundaryOwnerId);
+    if (found == boundaries.end() || !found->second.active) {
+      lucent::error("executor", "Lightrec callback reached without a boundary on its host thread");
+      std::abort();
+    }
+    return found->second;
+  }
+
   static lightrec_fallback_action
-  fallbackAdmission(lightrec_state *lightrec, const lightrec_fallback_event *event, void *userData) {
+  fallbackAdmission(lightrec_state *, const lightrec_fallback_event *event, void *userData) {
     auto &impl = *static_cast<Impl *>(userData);
-    const auto &stats = *lightrec_get_execution_stats(lightrec);
-    const std::uint64_t admitted = stats.fallback_blocks - impl.fallbackBaselineBlocks;
-    if (admitted < impl.fallbackPolicy.maxBlocksPerExecution) {
+    auto &boundary = impl.activeBoundary();
+    if (boundary.admittedFallbackBlocks < boundary.fallbackPolicy.maxBlocksPerExecution) {
+      ++boundary.admittedFallbackBlocks;
       return LIGHTREC_FALLBACK_ALLOW;
     }
-    impl.fallbackRefusalPc = event->guest_pc;
-    impl.fallbackRefusalReason = event->reason;
+    boundary.fallbackRefusalPc = event->guest_pc;
+    boundary.fallbackRefusalReason = event->reason;
     return LIGHTREC_FALLBACK_REFUSE;
   }
 
   static lightrec_block_boundary_action
   blockBoundary(lightrec_state *, std::uint32_t guestPc, std::uint32_t *, void *userData) {
     auto &impl = *static_cast<Impl *>(userData);
-    if (impl.returnAddress && guestPc == *impl.returnAddress) {
-      impl.boundaryReason = BoundaryReason::GuestReturn;
-    } else if (impl.skipPendingBoundaryOnce) {
-      impl.skipPendingBoundaryOnce = false;
+    auto &boundary = impl.activeBoundary();
+    if (boundary.returnAddress && guestPc == *boundary.returnAddress) {
+      boundary.reason = BoundaryReason::GuestReturn;
+    } else if (boundary.skipPendingBoundaryOnce) {
+      boundary.skipPendingBoundaryOnce = false;
     } else if (impl.core.game && impl.core.active_native_address == 0 && impl.core.pending_guest_redirect == 0 &&
                __atomic_load_n(&impl.core.pending_work, __ATOMIC_RELAXED) != 0) {
-      impl.boundaryReason = BoundaryReason::PendingWork;
+      boundary.reason = BoundaryReason::PendingWork;
     }
-    if (impl.boundaryReason == BoundaryReason::None && impl.dispatchHostServices &&
+    if (boundary.reason == BoundaryReason::None && boundary.dispatchHostServices &&
         classifyGuestHostDispatch(impl.core, guestPc) != GuestHostDispatchKind::ExecuteGuest) {
-      impl.boundaryReason = BoundaryReason::HostDispatch;
+      boundary.reason = BoundaryReason::HostDispatch;
     }
-    if (impl.boundaryReason == BoundaryReason::None) {
+    if (boundary.reason == BoundaryReason::None) {
       return LIGHTREC_BLOCK_CONTINUE;
     }
-    impl.boundaryPc = guestPc;
+    boundary.pc = guestPc;
     return LIGHTREC_BLOCK_STOP;
   }
 
@@ -206,46 +241,25 @@ struct LightrecExecutor::Impl {
                     std::optional<std::uint32_t> returnAddress,
                     bool dispatchHostServices,
                     FallbackPolicy fallbackPolicy)
-        : impl_(impl), previousReturnAddress_(impl.returnAddress), previousDispatch_(impl.dispatchHostServices),
-          previousSkipPending_(impl.skipPendingBoundaryOnce), previousReason_(impl.boundaryReason),
-          previousPc_(impl.boundaryPc), previousFallbackPolicy_(impl.fallbackPolicy),
-          previousFallbackBaselineBlocks_(impl.fallbackBaselineBlocks),
-          previousFallbackRefusalPc_(impl.fallbackRefusalPc),
-          previousFallbackRefusalReason_(impl.fallbackRefusalReason) {
-      impl_.returnAddress = returnAddress;
-      impl_.dispatchHostServices = dispatchHostServices;
-      impl_.skipPendingBoundaryOnce = false;
-      impl_.boundaryReason = BoundaryReason::None;
-      impl_.boundaryPc = 0;
-      impl_.fallbackPolicy = fallbackPolicy;
-      impl_.fallbackBaselineBlocks = lightrec_get_execution_stats(impl_.state)->fallback_blocks;
-      impl_.fallbackRefusalPc = 0;
-      impl_.fallbackRefusalReason = LIGHTREC_FALLBACK_NONE;
+        : impl_(impl), boundary_(threadBoundaries()[impl.boundaryOwnerId]), previous_(boundary_) {
+      boundary_ = {.returnAddress = returnAddress,
+                   .dispatchHostServices = dispatchHostServices,
+                   .fallbackPolicy = fallbackPolicy,
+                   .active = true};
     }
 
     ~BoundarySession() {
-      impl_.returnAddress = previousReturnAddress_;
-      impl_.dispatchHostServices = previousDispatch_;
-      impl_.skipPendingBoundaryOnce = previousSkipPending_;
-      impl_.boundaryReason = previousReason_;
-      impl_.boundaryPc = previousPc_;
-      impl_.fallbackPolicy = previousFallbackPolicy_;
-      impl_.fallbackBaselineBlocks = previousFallbackBaselineBlocks_;
-      impl_.fallbackRefusalPc = previousFallbackRefusalPc_;
-      impl_.fallbackRefusalReason = previousFallbackRefusalReason_;
+      if (previous_.active) {
+        boundary_ = previous_;
+      } else {
+        threadBoundaries().erase(impl_.boundaryOwnerId);
+      }
     }
 
   private:
     Impl &impl_;
-    std::optional<std::uint32_t> previousReturnAddress_;
-    bool previousDispatch_ = false;
-    bool previousSkipPending_ = false;
-    BoundaryReason previousReason_ = BoundaryReason::None;
-    std::uint32_t previousPc_ = 0;
-    FallbackPolicy previousFallbackPolicy_{};
-    std::uint64_t previousFallbackBaselineBlocks_ = 0;
-    std::uint32_t previousFallbackRefusalPc_ = 0;
-    lightrec_fallback_reason previousFallbackRefusalReason_ = LIGHTREC_FALLBACK_NONE;
+    BoundaryContext &boundary_;
+    BoundaryContext previous_;
   };
 
   static std::unordered_map<lightrec_state *, Impl *> &registry() {
@@ -384,16 +398,17 @@ struct LightrecExecutor::Impl {
   }
 
   ExecutionResult fallbackThresholdFault(std::uint64_t cycles) {
+    const auto &boundary = activeBoundary();
     ++counters.faults;
     reportFallbackTelemetry("threshold-exceeded", lucent::Level::Error);
     return {ExecutionExitReason::Fault,
-            fallbackRefusalPc,
+            boundary.fallbackRefusalPc,
             cycles,
             lucent::format("Lightrec fallback refused before interpreter execution: reason={}, "
                            "admitted_blocks={}, limit={}",
-                           lightrec_fallback_reason_name(fallbackRefusalReason),
-                           counters.fallback.calls - fallbackBaselineBlocks,
-                           fallbackPolicy.maxBlocksPerExecution)};
+                           lightrec_fallback_reason_name(boundary.fallbackRefusalReason),
+                           boundary.admittedFallbackBlocks,
+                           boundary.fallbackPolicy.maxBlocksPerExecution)};
   }
 
   Core &core;
@@ -404,15 +419,7 @@ struct LightrecExecutor::Impl {
   bool initializationAttempted = false;
   FallbackPolicyProvider fallbackPolicyProvider = defaultFallbackPolicy;
   FallbackPolicy lastExecutionFallbackPolicy = defaultFallbackPolicy();
-  std::optional<std::uint32_t> returnAddress;
-  bool dispatchHostServices = false;
-  bool skipPendingBoundaryOnce = false;
-  BoundaryReason boundaryReason = BoundaryReason::None;
-  std::uint32_t boundaryPc = 0;
-  FallbackPolicy fallbackPolicy{};
-  std::uint64_t fallbackBaselineBlocks = 0;
-  std::uint32_t fallbackRefusalPc = 0;
-  lightrec_fallback_reason fallbackRefusalReason = LIGHTREC_FALLBACK_NONE;
+  const std::uint64_t boundaryOwnerId = nextBoundaryOwnerId();
   ExecutorCounters counters;
 };
 
@@ -464,12 +471,13 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
   }
 
   Impl::BoundarySession session(impl, returnAddress, dispatchHostServices, fallbackPolicy);
+  Impl::BoundaryContext &boundary = impl.activeBoundary();
   std::uint64_t consumedCycles = 0;
   std::uint64_t hostDispatches = 0;
   std::uint32_t nextPc = guestAddress;
   while (consumedCycles < budget.cycles) {
-    impl.boundaryReason = LightrecExecutor::Impl::BoundaryReason::None;
-    impl.boundaryPc = 0;
+    boundary.reason = LightrecExecutor::Impl::BoundaryReason::None;
+    boundary.pc = 0;
     impl.copyCoreToLightrec();
     lightrec_reset_cycle_count(impl.state, 0);
     const lightrec_execution_stats before = *lightrec_get_execution_stats(impl.state);
@@ -526,17 +534,16 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       return {ExecutionExitReason::HostService, impl.core.pc, consumedCycles, "break"};
     }
     if (flags & LIGHTREC_EXIT_BLOCK_BOUNDARY) {
-      switch (impl.boundaryReason) {
+      switch (boundary.reason) {
       case LightrecExecutor::Impl::BoundaryReason::GuestReturn:
-        return {ExecutionExitReason::GuestReturn, impl.boundaryPc, consumedCycles, "guest return"};
+        return {ExecutionExitReason::GuestReturn, boundary.pc, consumedCycles, "guest return"};
       case LightrecExecutor::Impl::BoundaryReason::HostDispatch: {
         if (hostDispatches >= budget.maxHostDispatches) {
-          return {
-              ExecutionExitReason::BudgetExhausted, impl.boundaryPc, consumedCycles, "host dispatch budget exhausted"};
+          return {ExecutionExitReason::BudgetExhausted, boundary.pc, consumedCycles, "host dispatch budget exhausted"};
         }
         ++hostDispatches;
         ++impl.counters.hostDispatches;
-        ExecutionResult result = dispatchGuestHostService(impl.core, impl.boundaryPc);
+        ExecutionResult result = dispatchGuestHostService(impl.core, boundary.pc);
         result.cycles += consumedCycles;
         if (!result.returned()) {
           return result;
@@ -555,7 +562,7 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
         if (!dispatchHostServices) {
           return {ExecutionExitReason::HostService, impl.core.pc, consumedCycles, "pending work"};
         }
-        impl.skipPendingBoundaryOnce = __atomic_load_n(&impl.core.pending_work, __ATOMIC_RELAXED) != 0;
+        boundary.skipPendingBoundaryOnce = __atomic_load_n(&impl.core.pending_work, __ATOMIC_RELAXED) != 0;
         nextPc = impl.core.pc;
         continue;
       case LightrecExecutor::Impl::BoundaryReason::None:

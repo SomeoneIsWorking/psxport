@@ -1,4 +1,5 @@
 #include "config.h"
+#include "coro.h"
 #include "dynarec_capabilities.h"
 #include "execution_control.h"
 #include "game.h"
@@ -42,12 +43,19 @@ constexpr std::uint32_t encodeJal(std::uint32_t target) {
   return 0x0c000000u | ((target >> 2u) & 0x03ffffffu);
 }
 
+constexpr std::uint32_t encodeJ(std::uint32_t target) {
+  return 0x08000000u | ((target >> 2u) & 0x03ffffffu);
+}
+
 constexpr std::uint32_t kCaller = 0x00010000u;
 constexpr std::uint32_t kCallee = 0x00010100u;
 constexpr std::uint32_t kInnerCallee = 0x00010140u;
 constexpr std::uint32_t kNestedReturn = 0x00010180u;
 constexpr std::uint32_t kWriter = 0x00010200u;
+constexpr std::uint32_t kMainFallback = 0x00010300u;
 constexpr std::uint32_t kOuterReturn = 0x00010f00u;
+constexpr std::uint32_t kMainRegisterValue = 0x13579bdfu;
+constexpr std::uint32_t kTaskRegisterValue = 0x2468ace0u;
 
 psx::cpu::ImageIdentity installTestImage(Core &core) {
   return core.imageCatalog().activate("dynarec-contract", {kCaller, kOuterReturn + 12u}, 0x44594e41524543ull);
@@ -115,6 +123,13 @@ std::uint32_t outerActiveAddressAfterNested = 0;
 std::uint32_t innerActiveAddress = 0;
 std::uint32_t outerPcAfterNested = 0;
 psx::cpu::ExecutionResult nestedNativeResult{};
+std::unique_ptr<Coro> parkedFiber;
+R3000 parkedTaskRegisters{};
+std::uint32_t parkedTaskNativeAddress = 0;
+psx::cpu::ExecutionResult parkedTaskResult{};
+bool parkedTaskResumedIntact = false;
+bool exerciseCrossThreadFallback = false;
+psx::cpu::ExecutionResult mainFallbackResult{};
 
 std::vector<std::pair<lucent::Level, std::string>> telemetryLines;
 
@@ -155,6 +170,80 @@ void outerNativeCallee(Core *core) {
   outerActiveAddressAfterNested = core->active_native_address;
   outerPcAfterNested = core->pc;
   core->r[31] = savedReturn;
+}
+
+void nativeParkTask(Core *core) {
+  core->r[18] = kTaskRegisterValue;
+  parkedFiber->yield();
+  parkedTaskResumedIntact = core->r[18] == kTaskRegisterValue && core->active_native_address == kWriter;
+  core->r[2] = 40u;
+}
+
+void nativeLaunchParkedTask(Core *core) {
+  const R3000 mainRegisters = *static_cast<R3000 *>(core);
+  const std::uint32_t mainNativeAddress = core->active_native_address;
+  core->r[29] = 0x001ff000u;
+  core->r[31] = kNestedReturn;
+  core->active_native_address = 0;
+  parkedFiber = std::make_unique<Coro>();
+  parkedFiber->start([core] {
+    parkedTaskResult = psx::cpu::dispatchGuest(*core, kInnerCallee, psx::cpu::ExecutionBudget::fromCycles(100));
+  });
+  parkedFiber->resume();
+  parkedTaskRegisters = *static_cast<R3000 *>(core);
+  parkedTaskNativeAddress = core->active_native_address;
+  *static_cast<R3000 *>(core) = mainRegisters;
+  core->active_native_address = mainNativeAddress;
+  if (exerciseCrossThreadFallback) {
+    mainFallbackResult = core->lightrecExecutor().execute(kMainFallback, psx::cpu::ExecutionBudget::fromCycles(20));
+    *static_cast<R3000 *>(core) = mainRegisters;
+    core->active_native_address = mainNativeAddress;
+  }
+}
+
+void installParkedTaskFixture(Core &core, const psx::cpu::ImageIdentity &image, bool fallbackAfterResume) {
+  writeReturningCaller(core);
+  core.mem_w32(kInnerCallee, 0x03e08821u);             // addu s1, ra, zero
+  core.mem_w32(kInnerCallee + 4u, encodeJal(kWriter)); // task parks in native callback
+  core.mem_w32(kInnerCallee + 8u, 0u);
+  if (fallbackAfterResume) {
+    core.mem_w32(kInnerCallee + 12u, 0x10000001u); // branch in delay slot requires fallback
+    core.mem_w32(kInnerCallee + 16u, encodeJ(kInnerCallee + 24u));
+    core.mem_w32(kInnerCallee + 20u, 0u);
+    core.mem_w32(kInnerCallee + 24u, 0x02200008u); // jr s1
+    core.mem_w32(kInnerCallee + 28u, 0u);
+    core.mem_w32(kMainFallback, 0x10000001u);
+    core.mem_w32(kMainFallback + 4u, encodeJ(kMainFallback + 12u));
+    core.mem_w32(kMainFallback + 8u, 0u);
+    core.mem_w32(kMainFallback + 12u, 0x1000ffffu); // stable self-loop
+    core.mem_w32(kMainFallback + 16u, 0u);
+  } else {
+    core.mem_w32(kInnerCallee + 12u, 0x02200008u); // jr s1
+    core.mem_w32(kInnerCallee + 16u, 0u);
+  }
+  core.mem_w32(kNestedReturn, 0x24177badu); // must not execute
+  CHECK(core.nativeDispatcher().install({{image, kCallee}, "launch-parked-task", nativeLaunchParkedTask}));
+  CHECK(core.nativeDispatcher().install({{image, kWriter}, "park-task", nativeParkTask}));
+  exerciseCrossThreadFallback = fallbackAfterResume;
+  mainFallbackResult = {};
+  parkedTaskResult = {};
+  parkedTaskResumedIntact = false;
+  core.r[18] = kMainRegisterValue;
+  core.r[29] = 0x001fffe0u;
+  core.r[31] = kOuterReturn;
+}
+
+std::uint32_t resumeParkedTask(Core &core) {
+  const R3000 mainRegisters = *static_cast<R3000 *>(&core);
+  const std::uint32_t mainNativeAddress = core.active_native_address;
+  *static_cast<R3000 *>(&core) = parkedTaskRegisters;
+  core.active_native_address = parkedTaskNativeAddress;
+  parkedFiber->resume();
+  parkedTaskRegisters = *static_cast<R3000 *>(&core);
+  const std::uint32_t taskNativeAddress = core.active_native_address;
+  *static_cast<R3000 *>(&core) = mainRegisters;
+  core.active_native_address = mainNativeAddress;
+  return taskNativeAddress;
 }
 
 } // namespace
@@ -568,6 +657,80 @@ static void test_nested_native_dispatch_restores_outer_context_and_continuations
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
+static void test_parked_native_task_keeps_main_and_task_return_boundaries() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  const auto image = installTestImage(core);
+  installParkedTaskFixture(core, image, false);
+  const auto outer = psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(1000));
+  const bool mainIntact = outer.returned() && outer.guestPc == kOuterReturn && core.r[23] == 0u &&
+                          core.r[18] == kMainRegisterValue && core.r[29] == 0x001fffe0u &&
+                          core.active_native_address == 0u && parkedTaskRegisters.r[18] == kTaskRegisterValue;
+  std::uint32_t taskNativeAddressAfterResume = 0;
+  if (mainIntact) {
+    taskNativeAddressAfterResume = resumeParkedTask(core);
+  }
+  const bool taskIntact = mainIntact && parkedFiber->done() && parkedTaskResult.returned() &&
+                          parkedTaskResult.guestPc == kNestedReturn && parkedTaskResumedIntact &&
+                          parkedTaskRegisters.r[18] == kTaskRegisterValue && taskNativeAddressAfterResume == 0u &&
+                          core.r[18] == kMainRegisterValue;
+  parkedFiber->cancel();
+  parkedFiber.reset();
+
+  bool cancellationIntact = false;
+  if (taskIntact) {
+    parkedTaskResult = {};
+    parkedTaskResumedIntact = false;
+    core.r[31] = kOuterReturn;
+    const auto cancelledOuter = psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(1000));
+    const bool returnedBeforeCancel = cancelledOuter.returned() && cancelledOuter.guestPc == kOuterReturn &&
+                                      core.active_native_address == 0u && !parkedFiber->done();
+    parkedFiber->cancel(); // longjmp abandons the task's nested BoundarySession on its ending host thread.
+    parkedFiber.reset();
+    const bool abandonedTaskDidNotResume = !parkedTaskResult.returned() && !parkedTaskResumedIntact;
+
+    core.r[31] = kOuterReturn;
+    const auto nextOuter = psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(1000));
+    const bool returnedAfterCancel = nextOuter.returned() && nextOuter.guestPc == kOuterReturn &&
+                                     core.r[18] == kMainRegisterValue && core.active_native_address == 0u;
+    parkedFiber->cancel();
+    parkedFiber.reset();
+    cancellationIntact = returnedBeforeCancel && abandonedTaskDidNotResume && returnedAfterCancel;
+  }
+
+  CHECK(mainIntact);
+  CHECK(taskIntact);
+  CHECK(cancellationIntact);
+  CHECK(core.lightrecExecutor().counters().executedBlocks > 0u);
+  CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
+}
+
+static void test_parked_task_fallback_allowance_excludes_main_thread_fallback() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  const auto image = installTestImage(core);
+  installParkedTaskFixture(core, image, true);
+  const auto outer = psx::cpu::dispatchGuest(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(1000));
+  const bool mainIntact = outer.returned() && outer.guestPc == kOuterReturn &&
+                          mainFallbackResult.reason == psx::cpu::ExecutionExitReason::BudgetExhausted &&
+                          core.lightrecExecutor().counters().fallback.calls == 1u;
+  if (mainIntact) {
+    resumeParkedTask(core);
+  }
+  const bool taskIntact = mainIntact && parkedFiber->done() && parkedTaskResult.returned() &&
+                          parkedTaskResult.guestPc == kNestedReturn && parkedTaskResumedIntact &&
+                          core.lightrecExecutor().counters().fallback.calls == 2u &&
+                          core.lightrecExecutor().counters().fallback.refusedCalls == 0u;
+  parkedFiber->cancel();
+  parkedFiber.reset();
+  exerciseCrossThreadFallback = false;
+
+  CHECK(mainIntact);
+  CHECK(taskIntact);
+}
+
 static void test_guest_self_modifying_store_invalidates_and_retranslates() {
   Runtime runtime;
   auto game = makeGame(runtime);
@@ -771,6 +934,8 @@ int main() {
   RUN(translated_call_dispatches_image_scoped_native_and_resumes_caller);
   RUN(call_original_runs_guest_body_to_exact_caller_continuation);
   RUN(nested_native_dispatch_restores_outer_context_and_continuations);
+  RUN(parked_native_task_keeps_main_and_task_return_boundaries);
+  RUN(parked_task_fallback_allowance_excludes_main_thread_fallback);
   RUN(guest_self_modifying_store_invalidates_and_retranslates);
   RUN(pending_host_work_is_serviced_at_a_bounded_execution_exit);
   RUN(deferred_pending_work_does_not_prevent_guest_progress);
