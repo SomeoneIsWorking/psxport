@@ -10,9 +10,6 @@ Before concurrent framework work, read `docs/workspace/PROTOCOL.md` completely. 
 work, run the shared `info.py brief <terms>` entry point from the repository root and read the issue
 catalog before re-deriving a symptom.
 
-**Unlabeled content is machine convention, revisable by any session. USER lines are verbatim dated
-quotes and only those.**
-
 ## Product architecture is settled
 
 psxport's intended product is a game-agnostic native/dynarec hybrid:
@@ -117,8 +114,6 @@ default cap, shrink-only legacy limits, forbidden dependency checks, and exact-f
 
 ## Never duplicate declarations or policy
 
-USER, 2026-08-20: *"Never duplicate code no matter the reason"*.
-
 Include the owning header. Do not redeclare another module's function at a call site, and do not copy
 an ABI declaration, state-transfer formula, dispatch rule, memory mapping, or config parse into a test
 or diagnostic. Tests exercise production seams. A circular include is a boundary defect to resolve,
@@ -162,9 +157,6 @@ uses named types and state transitions; opaque guest-memory soup is not complete
 runs.
 
 ## Faithful behavior and presentation
-
-USER, 2026-08-30: *"Change the directive, pixel matching doesn't matter. I just want working game
-that looks correct."*
 
 Faithful execution comes before intentional enhancements. The completion bar is representative,
 interactive gameplay with correct behavior, rendering, audio, input, timing, and native overrides—not

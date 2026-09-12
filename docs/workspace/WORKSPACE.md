@@ -1,11 +1,9 @@
 # `~/repo/psx` — the PSX-port WORKSPACE
 
-**Unlabeled content is machine convention, revisable by any session. USER lines are verbatim dated
-quotes, and only those.**
-
 **This file is a MAP AND A POINTER, nothing else.** It lives in the psxport repo so it survives a machine
-switch and reaches every game tree through that repo's `external/psxport` submodule; `~/repo/psx/CLAUDE.md`
-is a SYMLINK to it. The workspace directory itself is NOT a git repo and holds nothing durable.
+switch and reaches every game tree through that repo's `external/psxport` submodule; the workspace
+`AGENTS.md` and `CLAUDE.md` entries are symlinks to it. The workspace directory itself is not a git
+repo and holds nothing durable.
 
 All of these live in the psxport repo, so they reach every game tree and every subagent by `grep`:
 
@@ -27,9 +25,6 @@ every game commit, and a recursive clone would pull seven copies of psxport + be
 
 The target ports are Spyro 1/2/3; Crash 1/2/3; Crash Bash; Crash Team Racing; Vagrant Story; Mega Man
 X4; Tomba! 1/2; Tekken 3; and Spider-Man 1/2.
-
-USER 2026-08-22: "For already 60fps games, Tekken 3, Tomba! (first game, not 2), Mega Man X4, we don't
-need lerp or anything that lerp needs, they just need widescreen"
 
 Tekken 3 (`SLUS_004.02`), Tomba! 1 (`SCUS_942.36`), and Mega Man X4 (`SLUS_005.61`) are already 60 fps, so their rendering-enhancement scope is
 widescreen only: no fps60 mode, interpolation/lerp, or temporal pipeline added solely to support
@@ -123,20 +118,8 @@ Evidence for every verdict below — matrices, null distributions, the per-decis
 `docs/findings/lineage-metric.md`. A bare similarity percentage means nothing without its multiple of the
 measured cross-studio null.
 
-**This call was DELEGATED and is now USER-CONFIRMED, so do not re-litigate it.** USER, 2026-08-11:
-*"I'm not gonna decide, maybe Fable should decide"*, then *"it's yours"*. A session may still revise the
-shape on new MEASUREMENT, but must not re-open it as a question for the USER.
-
-**USER CONFIRMED the four-repo shape on 2026-08-12** — not a quote: they asked whether Crash would be
-bundled with Spyro "like I asked", were shown three concrete layouts (one repo holding all 8
-Spyro/Crash/CTR/Bash titles · two repos split by studio · the four repos below), and chose the four. Two
-things were put in front of them and did not change the answer: that **their original ask WAS one repo
-for Spyro AND Crash** (`docs/findings/lineage-metric.md` records it as "what was first asked for"), and
-that the measured family signal is weak in BOTH directions — `SPYRO1↔SPYRO2` reads 2.25× the null on the
-whole-function tool but **5.6% = 0.8×, BELOW the floor** on Jaccard, with `CRASH1↔CRASH2` inverted the
-same way, so the evidence for grouping the Spyro trio is barely stronger than the evidence against
-adding Crash to it. Reversal was also free at that moment: no `crash/`, `ctr/` or `crashbash/` existed
-and `spyro/` had not converted to multi-title, so nothing was defended by inertia.
+The accepted repository grouping is listed below. `docs/findings/lineage-metric.md` holds its measured
+evidence; revise the grouping only when new evidence changes the ownership boundary.
 
 - Spider-Man 1 + 2 share a repo · Spyro 1 + 2 + 3 share a repo (`titles/<t>/` over a shared `game/`), each
   converting to multi-title WHEN that title's work starts, not before.
