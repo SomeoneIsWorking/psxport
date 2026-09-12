@@ -24,6 +24,7 @@
 #include "guest_cd_stream_callback_layout.h"
 #include "invalidation.h"
 #include "platform_hle.h" // class PlatformHle — CD-subsystem HLE registrations go through the singleton
+#include "stock_cd_response.h"
 #include <chrono>
 #include <lucent/log.h>
 #include <stdio.h>
@@ -43,16 +44,8 @@ static void cdinit(Core *c) {
 // IRQ-set status DAT_800ac298 (never set — no controller). Since every DATA read is served
 // natively by cd_read, the remaining CdControl/CdSync calls (Setmode, Pause, Nop, ...)
 // only need to report success so their waits fall through. We replace, not super-call: the
-// real bodies cannot return without the IRQ. Result bytes (drive status) the caller may copy
-// are zeroed — callers on the boot path branch on the return value, not the status bytes.
-static void zero_result(Core *c, uint32_t p) {
-  if (p) {
-    for (int i = 0; i < 8; i++) {
-      c->mem_w8(p + i, 0);
-    }
-  }
-}
-
+// real bodies cannot return without the IRQ. Ordinary command results are zeroed; stock
+// GetTN/GetTD results come from the disc's parsed TOC and survive the following CdSync.
 std::uint32_t cd_ready_callback_pointer(const Core &core) {
   if (core.cfg && core.cfg->cdReadyCbPtr) {
     return core.cfg->cdReadyCbPtr;
@@ -246,28 +239,26 @@ static void cd_apply_command(Core *c) {
 
 void cd_command_stock_sync(Core *c) {
   cd_apply_command(c);
-  zero_result(c, c->r[A2]);
-  c->r[V0] = 0;
+  c->r[V0] = stock_cd_begin_command(*c, static_cast<uint8_t>(c->r[A0]), c->r[A1], c->r[A2]) ? 0u : 1u;
 }
 
 // Report blocking-control success after applying the synchronous command
 // effects.
 void cd_control_sync(Core *c) {
   cd_apply_command(c);
-  zero_result(c, c->r[A2]);
-  c->r[V0] = 1;
+  c->r[V0] = stock_cd_begin_command(*c, static_cast<uint8_t>(c->r[A0]), c->r[A1], c->r[A2]) ? 1u : 0u;
 }
 
 void cd_control_fire_sync(Core *c) {
   cd_apply_command(c);
-  c->r[V0] = 1;
+  c->r[V0] = stock_cd_begin_command(*c, static_cast<uint8_t>(c->r[A0]), c->r[A1], 0u) ? 1u : 0u;
 }
 
 // Stock Sony libcd CdSync(noblock, result) -> 2 (status: complete/ready). This is public so direct
 // runtimes can bind title-measured wrapper/body addresses without duplicating the synchronous-disc
 // contract.
 void cd_sync_stock_sync(Core *c) {
-  zero_result(c, c->r[A1]);
+  stock_cd_publish_sync(*c, c->r[A1]);
   c->r[V0] = 2;
 }
 
@@ -523,7 +514,7 @@ void cd_read_stock_sync(Core *c) {
 // synchronously, so the honest answer is zero. This is not a fabricated completion: the data is in
 // guest memory, read from the real disc, before this ever returns.
 void cd_readsync_stock_sync(Core *c) {
-  zero_result(c, c->r[A1]);
+  stock_cd_zero_result(*c, c->r[A1]);
   c->r[V0] = 0;
 }
 

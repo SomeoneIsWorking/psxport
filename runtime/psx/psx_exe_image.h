@@ -54,6 +54,11 @@ PsxExeParseResult parsePsxExeImage(std::span<const std::uint8_t> bytes);
 // remain unchanged. A zero stack base leaves the caller's stack intact.
 PsxExeLoadResult loadPsxExeImage(Core &core, std::span<const std::uint8_t> bytes, std::string_view imageName);
 
+// Complete a top-level PS-X EXE startup after successful image mapping. A
+// declared stack was established by loadPsxExeImage; absent one, use the
+// conventional boot stack. Overlay callers do not use this startup policy.
+void applyPsxExeTopLevelRegisters(Core &core, const PsxExeImage &image);
+
 } // namespace psx::cpu
 
 // File-based startup entry: structural admission only, with default stack and

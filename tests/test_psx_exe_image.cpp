@@ -70,6 +70,27 @@ void test_absent_stack_preserves_caller() {
   CHECK_EQ(game->core.r[30], 0x801fe100u);
 }
 
+void test_top_level_registers_after_mapping() {
+  for (uint32_t stack : {0u, 0x801ff000u}) {
+    auto game = std::make_unique<Game>();
+    auto bytes = executable();
+    word(bytes, 0x30, stack);
+    word(bytes, 0x34, stack ? 0xff0u : 0u);
+    game->core.r[29] = 0x801fa000u;
+    game->core.r[30] = 0x801fa100u;
+    game->core.r[31] = 0x80020000u;
+    const auto loaded = loadPsxExeImage(game->core, bytes, "top-level");
+    CHECK(loaded);
+    CHECK_EQ(game->core.r[29], stack ? 0x801ffff0u : 0x801fa000u);
+    CHECK_EQ(game->core.r[30], stack ? 0x801ffff0u : 0x801fa100u);
+    CHECK_EQ(game->core.r[31], 0x80020000u);
+    applyPsxExeTopLevelRegisters(game->core, loaded.image);
+    CHECK_EQ(game->core.r[29], 0x801ffff0u);
+    CHECK_EQ(game->core.r[30], 0x801ffff0u);
+    CHECK_EQ(game->core.r[31], 0xdead0000u);
+  }
+}
+
 void test_refusals_preserve_core() {
   auto game = std::make_unique<Game>();
   auto &core = game->core;
@@ -184,6 +205,7 @@ void test_input_alias_is_refused_before_copy() {
 int main() {
   RUN(load_and_aliases);
   RUN(absent_stack_preserves_caller);
+  RUN(top_level_registers_after_mapping);
   RUN(refusals_preserve_core);
   RUN(reload_invalidates_executed_code);
   RUN(input_alias_is_refused_before_copy);

@@ -4,6 +4,7 @@
 // leaves), and the deferred ingame-music state (a looping clip suppressed during a dialog is
 // remembered here and resumed by MusicCoord::tick).
 #pragma once
+#include <array>
 #include <cstdint>
 class Game;
 class Core;
@@ -39,6 +40,11 @@ public:
   uint32_t pm_start = 0; // was s_pm_start
   uint32_t pm_end = 0;   // was s_pm_end
   int verbose = 0;       // [cd] read/loadfile trace (was s_cd_verbose)
+
+  // Last synchronous stock-libcd command response. CdSync can receive a distinct guest
+  // buffer after CdCommand and must publish the same completed result there.
+  std::array<uint8_t, 8> stock_command_response{};
+  bool stock_command_response_valid = false;
 
   // Drive position last set by CdlSetloc (command 0x02), as an LBA; -1 = none set yet.
   //
