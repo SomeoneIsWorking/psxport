@@ -503,6 +503,39 @@ def selftest() -> int:
         expect("retired guest-generation method fails", 1, "retired guest-generation")
         stale_execution_file.unlink()
 
+        historical_issue = docs / "issues" / "0001-retired-boundary.md"
+        historical_issue.parent.mkdir(parents=True)
+        historical_issue.write_text(
+            "The old runner used " + deleted_path + " and " + "emit" + ".py.\n",
+            encoding="utf-8",
+        )
+        expect("dated issue provenance is not a live reference", 0, "checked 1 of 1")
+        historical_issue.unlink()
+
+        historical_claim = docs / "info" / "claims" / "001-retired-proof.md"
+        historical_claim.parent.mkdir(parents=True)
+        historical_claim.write_text("Historical path: " + deleted_path + ".\n", encoding="utf-8")
+        expect("dated claim provenance is not a live reference", 0, "checked 1 of 1")
+        historical_claim.unlink()
+
+        policy_file = root / "tools" / "quality" / "structure.py"
+        policy_file.parent.mkdir(parents=True, exist_ok=True)
+        policy_source = (
+            "import re\nRETIRED_PRODUCT_PATTERNS = "
+            "{'old owner': re.compile('" + deleted_path + "')}\n"
+        )
+        policy_file.write_text(policy_source, encoding="utf-8")
+        expect("literal rejection pattern is not a live reference", 0, "checked 1 of 1")
+        policy_file.write_text(policy_source + "ACTIVE_OWNER = '" + deleted_path + "'\n", encoding="utf-8")
+        expect("live reference beside rejection pattern still fails", 1, "deleted framework path")
+        policy_file.write_text(
+            "import re\nRETIRED_PRODUCT_PATTERNS = "
+            "{'old owner': re.compile(str('" + deleted_path + "'))}\n",
+            encoding="utf-8",
+        )
+        expect("dynamic rejection pattern expression still fails", 1, "deleted framework path")
+        policy_file.unlink()
+
         backend_fallback_file = docs / "backend-fallback.md"
         backend_fallback_file.write_text("Reason: Backend" + "Unavailable.\n", encoding="utf-8")
         expect("missing backend fallback reason fails", 1, "backend-fallback vocabulary")

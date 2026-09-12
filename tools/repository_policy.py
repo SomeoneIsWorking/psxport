@@ -44,6 +44,7 @@ _DELETED_PATHS = (
     "runtime/cpu/" + "state_bridge",
     "runtime/cpu/" + "code_identity",
 )
+_HISTORICAL_EVIDENCE_DIRS = ("docs/issues/", "docs/info/claims/")
 
 
 def first_party_files(root: Path) -> list[Path]:
@@ -86,35 +87,67 @@ def forbidden_architecture_references(root: Path) -> list[str]:
 
 def reference_content(path: Path) -> bytes:
     content = path.read_bytes()
-    declarations = ("STATIC_PRODUCT_MARKERS", "RETIRED_TRACKED_PATHS")
+    declarations = ("STATIC_PRODUCT_MARKERS", "RETIRED_TRACKED_PATHS", "RETIRED_PRODUCT_PATTERNS")
     if path.suffix != ".py" or not any(name.encode("ascii") in content for name in declarations):
         return content.lower()
     # These declarations hold rejection data, wherever a consumer owns its policy.
-    # Exclude only their literal tuples, never executable expressions
-    # or other references in the same file. File placement is not a dependency.
+    # Exclude only literal rejection data, never dynamic expressions or other
+    # references in the same file. File placement is not a dependency.
     tree = ast.parse(content, filename=str(path))
     lines = content.splitlines(keepends=True)
     for statement in tree.body:
-        if (
+        if not (
             isinstance(statement, ast.Assign)
             and len(statement.targets) == 1
             and isinstance(statement.targets[0], ast.Name)
             and statement.targets[0].id in declarations
-            and isinstance(statement.value, ast.Tuple)
-            and all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in statement.value.elts)
         ):
-            value = statement.value
+            continue
+        name = statement.targets[0].id
+        value = statement.value
+        literal_tuple = (
+            name != "RETIRED_PRODUCT_PATTERNS"
+            and isinstance(value, ast.Tuple)
+            and all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in value.elts)
+        )
+        literal_patterns = (
+            name == "RETIRED_PRODUCT_PATTERNS"
+            and isinstance(value, ast.Dict)
+            and all(isinstance(key, ast.Constant) and isinstance(key.value, str) for key in value.keys)
+            and all(
+                isinstance(item, ast.Call)
+                and isinstance(item.func, ast.Attribute)
+                and isinstance(item.func.value, ast.Name)
+                and item.func.value.id == "re"
+                and item.func.attr == "compile"
+                and len(item.args) == 1
+                and isinstance(item.args[0], ast.Constant)
+                and isinstance(item.args[0].value, str)
+                and not item.keywords
+                for item in value.values
+            )
+        )
+        if literal_tuple or literal_patterns:
             begin = sum(map(len, lines[: value.lineno - 1])) + value.col_offset
             end = sum(map(len, lines[: value.end_lineno - 1])) + value.end_col_offset
             content = content[:begin] + b" " * (end - begin) + content[end:]
     return content.lower()
 
 
+def live_reference_files(root: Path) -> list[Path]:
+    """Exclude dated evidence; current docs and source remain policy inputs."""
+    return [
+        path
+        for path in first_party_files(root)
+        if not path.relative_to(root).as_posix().startswith(_HISTORICAL_EVIDENCE_DIRS)
+    ]
+
+
 def deleted_path_references(root: Path) -> list[str]:
     """Find references to paths removed by the framework migration."""
     needles = tuple(path.casefold().encode("ascii") for path in _DELETED_PATHS)
     findings: list[str] = []
-    for path in first_party_files(root):
+    for path in live_reference_files(root):
         try:
             content = reference_content(path)
         except OSError as exc:
@@ -128,7 +161,7 @@ def stale_execution_references(root: Path) -> list[str]:
     """Find retired guest-generation and missing-backend-as-fallback vocabulary."""
     needles = tuple(term.casefold().encode("utf-8") for term in _STALE_EXECUTION_TERMS)
     findings: list[str] = []
-    for path in first_party_files(root):
+    for path in live_reference_files(root):
         relative = path.relative_to(root).as_posix()
         if relative in {"tools/repository_policy.py", "tools/check_execution_boundary.py"}:
             continue
