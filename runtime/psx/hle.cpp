@@ -179,14 +179,14 @@ uint32_t Hle::heapBlockSize(uint32_t addr) const {
 // replace them in ordinary RAM. Preserve the existing callable C0 fallback at the table base,
 // publish B0[0x5B]'s native control area, and publish C0[0x06] as the BIOS ExceptionHandler entry
 // address documented by the PSX BIOS and consumed through GetC0Table.
-enum { HLE_B0TABLE = 0x8000F000u, HLE_C0TABLE = 0x8000F800u, HLE_WORK_BASE = 0x8000E000u };
+enum { HLE_C0TABLE = 0x8000F800u };
 void Hle::workAreaInit() {
   Core *c = &game->core;
   if (work_ok) {
     return;
   }
   work_ok = 1;
-  c->mem_w32(HLE_B0TABLE + 0x16Cu, HLE_WORK_BASE);
+  c->mem_w32(kB0Table + 0x16Cu, kWorkBase);
   c->mem_w32(HLE_C0TABLE + 0, 0x03E00008u); // jr $ra
   c->mem_w32(HLE_C0TABLE + 4, 0);           // nop
   c->mem_w32(HLE_C0TABLE + 0x06u * sizeof(uint32_t), 0x00000C80u);
@@ -565,6 +565,9 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     }
   }
   if (table == 'B') {
+    if (dispatchPadBios(fn)) {
+      return true;
+    }
     switch (fn) {
     case 0x07:
       deliverEvent(a0, a1);
@@ -668,11 +671,8 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       c->r[V0] = 0;
       return true;
     }
-    case 0x12:
-    case 0x13:
-    case 0x14:
     case 0x15:
-    case 0x16: // BIOS pad — no-op (native)
+    case 0x16: // Legacy PAD_init2/PAD_dr remain outside this callback contract.
       c->r[V0] = 0;
       return true;
     case 0x17: // ReturnFromException — non-returning unwind to irqPoll's saved R3000 context
@@ -719,7 +719,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       return true; // GetC0Table
     case 0x57:
       workAreaInit();
-      c->r[V0] = HLE_B0TABLE;
+      c->r[V0] = kB0Table;
       return true; // GetB0Table
     case 0x5B:
       c->r[V0] = 0;

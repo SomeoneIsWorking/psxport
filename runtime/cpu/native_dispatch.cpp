@@ -134,6 +134,7 @@ struct ResolvedHostDispatch {
   GuestHostDispatchKind kind = GuestHostDispatchKind::ExecuteGuest;
   NativeKey nativeKey{};
   NativeFunction platformFunction = nullptr;
+  std::optional<Hle::PadWorkAreaAction> padWorkAreaAction;
   char biosTable = 0;
 };
 
@@ -146,6 +147,9 @@ ResolvedHostDispatch resolveHostDispatch(Core &core, std::uint32_t guestAddress)
     const char biosTable = physical == 0xa0u ? 'A' : physical == 0xb0u ? 'B' : physical == 0xc0u ? 'C' : 0;
     if (biosTable) {
       return {.kind = GuestHostDispatchKind::HostService, .biosTable = biosTable};
+    }
+    if (auto action = core.game->hle.padWorkAreaAction(guestAddress)) {
+      return {.kind = GuestHostDispatchKind::HostService, .padWorkAreaAction = action};
     }
   }
   if ((guestAddress & 0x1fffffffu) == 0) {
@@ -191,6 +195,12 @@ ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress)
   }
   if (resolved.platformFunction) {
     return invokeNativeFunction(core, guestAddress, resolved.platformFunction, "platform-hle");
+  }
+  if (resolved.padWorkAreaAction) {
+    NativeExecutionScope execution(core, guestAddress);
+    core.game->hle.applyPadWorkAreaAction(*resolved.padWorkAreaAction);
+    execution.completeReturn();
+    return {ExecutionExitReason::GuestReturn, core.pc, 0, "BIOS pad work area"};
   }
   if (resolved.biosTable) {
     NativeExecutionScope execution(core, guestAddress);

@@ -5,6 +5,7 @@
 // c->game->hle.deliverEvent(class, spec) — no Core* arg on the surface.
 #pragma once
 #include <cstdint>
+#include <optional>
 class Core;
 class Game;
 
@@ -21,6 +22,9 @@ struct HleHeapBlock {
 }; // was HeapBlock
 class Hle {
 public:
+  static constexpr uint32_t kB0Table = 0x8000F000u;
+  static constexpr uint32_t kWorkBase = 0x8000E000u;
+  enum class PadWorkAreaAction { Enable, Disable };
   Game *game = nullptr;
   HleEvCB ev[16] = {}; // was s_ev[EVCB_MAX]
   // EvMdINTR events are delivered by CALLING their handler; this guards against a handler
@@ -39,7 +43,11 @@ public:
   // BIOS libc rand/srand (A0:0x2F/0x30). Per Hle, hence per Game/Core: host rand() would introduce
   // process-global cross-core state and a host-specific sequence. Sony's libc starts from seed 1.
   uint32_t rand_state = 1;
-  int work_ok = 0;                 // was s_work_ok
+  int work_ok = 0; // was s_work_ok
+  // B0:12/13/14 controls the BIOS PadCardIrq lifecycle. The linked libpad can also call
+  // B0[5B]+884/+894 to enable or disable pad reads without dequeuing that handler.
+  bool bios_pad_initialized = false;
+  bool bios_pad_irq_started = false;
   int dcb_n = 0;                   // installed BIOS devices (see deviceAdd)
   uint32_t exception_exit_buf = 0; // B0:0x19 HookEntryInt guest jmp_buf; restored after chain walk
   int irq_enabled = 1;             // was s_irq_enabled
@@ -97,6 +105,10 @@ public:
   // work area (B0:0x56/0x57 GetC0Table/GetB0Table): publish self-consistent, guest-writable BIOS
   // tables, including the C(06h) ExceptionHandler entry address.
   void workAreaInit();
+  bool dispatchPadBios(uint32_t function);
+  std::optional<PadWorkAreaAction> padWorkAreaAction(uint32_t guestAddress) const;
+  void applyPadWorkAreaAction(PadWorkAreaAction action);
+  bool biosPadShouldService() const;
 
   // ---- BIOS DEVICE TABLE (kernel 0x150/0x154) --------------------------------------------------
   // The installed-device array guest code walks to resolve a path prefix ("bu00:*" -> the memory

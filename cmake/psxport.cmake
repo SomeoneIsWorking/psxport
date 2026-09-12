@@ -66,6 +66,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cpu_divide.cpp     # R3000 DIV/DIVU quotient/remainder semantics
   ${PSXPORT_ROOT}/runtime/psx/cop0.cpp
   ${PSXPORT_ROOT}/runtime/psx/bios_interrupt.cpp
+  ${PSXPORT_ROOT}/runtime/psx/bios_pad_work_area.cpp
   ${PSXPORT_ROOT}/runtime/psx/bios_libc_string.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle_interrupt.cpp

@@ -859,6 +859,13 @@ void Pad::serviceFrame() {
 
   applyGuestPoke(c);
 
+  // A BIOS InitPAD2/StartPAD2 user receives packets only while its PadCardIrq handler is
+  // enqueued and the work-area pad-enable flag is set. Title-native SIO drivers never enter
+  // this BIOS lifecycle and retain their existing host packet path.
+  if (!game->hle.biosPadShouldService()) {
+    return;
+  }
+
   uint8_t pk[4];
   fillBuffer(pk);
   const GuestPadBufferLayout layout = resolveGuestPadBufferLayout(*c);
