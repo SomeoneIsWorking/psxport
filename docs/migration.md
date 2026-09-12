@@ -7,7 +7,7 @@ replacement backend is accepted. `runtime/cpu/` is the sole guest-execution boun
 ## Maintained-fork requirements
 
 psxport consumes `https://github.com/SomeoneIsWorking/lightrec.git` directly at
-`b1457137c31cedff5f440d59da29401d021ba2da`. The dependency resolver validates the selected source
+`9a982a6475884f7059edb74a73d9a22c0060f18f`. The dependency resolver validates the selected source
 tree, its clean tracked state, and revision, including when a parent project already created the
 `lightrec` target.
 That fork provides synchronous native translation, a callback at every translated block boundary,

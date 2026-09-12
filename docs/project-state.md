@@ -33,7 +33,7 @@ translated control flow without restoring an offline dispatch substrate.
 
 ### S012 — Per-`Core` dynarec-default Lightrec backend
 
-The maintained fork is pinned at `b1457137c31cedff5f440d59da29401d021ba2da`; Linux x86-64 executes
+The maintained fork is pinned at `9a982a6475884f7059edb74a73d9a22c0060f18f`; Linux x86-64 executes
 a nonzero translated block. The shipping executor reports calls, executed blocks/instructions,
 fallback blocks/instructions, refusals, and all five admitted/refused reason counts, while the typed
 configurable per-call threshold admits the verified single difficult-block escape and refuses a

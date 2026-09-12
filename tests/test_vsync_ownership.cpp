@@ -1,5 +1,5 @@
-// libetc VSync is never a shipping source of fields. Every title supplies only its measured address;
-// the framework binds that address to one typed frame-boundary exit which a game cannot replace.
+// libetc VSync is never a shipping source of fields. A measured negative query reads the title's
+// libetc field counter; nonnegative calls remain protected typed frame boundaries.
 #include "execution_control.h"
 #include "game.h"
 #include "game_iface.h"
@@ -7,13 +7,17 @@
 #include "platform_hle.h"
 #include "testutil.h"
 
+#include <csignal>
 #include <cstdint>
 #include <memory>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace {
 
 constexpr uint32_t kVSyncAddress = 0x800859A8u;
 constexpr uint32_t kWindowEnd = 0x80085B20u;
+constexpr uint32_t kSyntheticVBlankCounter = 0x80018000u;
 
 class DirectRuntime final : public GameRuntime {
 public:
@@ -38,10 +42,10 @@ public:
 
 void harmless_handler(Core *) {}
 
-void assert_all_modes_request_frame_boundary(Game &game) {
+void assert_wait_modes_request_frame_boundary(Game &game) {
   const OverrideFn handler = game.platform_hle.lookup(kVSyncAddress);
   CHECK(handler != nullptr);
-  for (const int32_t mode : {-1, 0, 1, 4}) {
+  for (const int32_t mode : {0, 1, 4}) {
     game.core.r[4] = static_cast<uint32_t>(mode);
     handler(&game.core);
     const auto result = game.core.executionControl().consume();
@@ -52,11 +56,26 @@ void assert_all_modes_request_frame_boundary(Game &game) {
   }
 }
 
+void assert_missing_counter_aborts(Game &game) {
+  const pid_t child = fork();
+  CHECK(child >= 0);
+  if (child == 0) {
+    game.core.r[4] = static_cast<uint32_t>(-1);
+    game.platform_hle.lookup(kVSyncAddress)(&game.core);
+    _exit(0);
+  }
+  int status = 0;
+  CHECK_EQ(waitpid(child, &status, 0), child);
+  CHECK(WIFSIGNALED(status));
+  CHECK_EQ(WTERMSIG(status), SIGABRT);
+}
+
 } // namespace
 
-static void test_direct_runtime_installs_one_all_mode_boundary() {
+static void test_direct_runtime_installs_one_wait_boundary_and_measured_query() {
   DirectRuntime runtime;
   runtime.plan.vsyncAddress = kVSyncAddress;
+  runtime.plan.vsyncQueryCounterAddress = kSyntheticVBlankCounter;
   runtime.plan.windowLo[0] = kVSyncAddress;
   runtime.plan.windowHi[0] = kWindowEnd;
   psxport_install_game(runtime);
@@ -66,10 +85,23 @@ static void test_direct_runtime_installs_one_all_mode_boundary() {
   game->platform_hle.initBuiltins(); // repeatable even when no title override is installed
   CHECK(game->platform_hle.hasNativeFrameLoopContract());
   game->platform_hle.requireNativeFrameLoopContract();
-  assert_all_modes_request_frame_boundary(*game);
+  game->core.mem_w32(kSyntheticVBlankCounter, 73u);
+  const OverrideFn handler = game->platform_hle.lookup(kVSyncAddress);
+  CHECK(handler != nullptr);
+  game->core.r[4] = static_cast<uint32_t>(-1);
+  game->core.r[2] = 0xDEADBEEFu;
+  handler(&game->core);
+  CHECK_EQ(game->core.r[2], 73u);
+  CHECK(!game->core.executionControl().pending());
+  CHECK_EQ(game->core.mem_r32(kSyntheticVBlankCounter), 73u);
+  game->core.mem_w32(kSyntheticVBlankCounter, 74u);
+  handler(&game->core);
+  CHECK_EQ(game->core.r[2], 74u);
+  CHECK(!game->core.executionControl().pending());
+  assert_wait_modes_request_frame_boundary(*game);
 }
 
-static void test_legacy_adapter_installs_the_same_all_mode_boundary() {
+static void test_legacy_adapter_installs_the_same_wait_boundary() {
   static GameConfig config{};
   static const GameHooks hooks{};
   config = {};
@@ -82,7 +114,7 @@ static void test_legacy_adapter_installs_the_same_all_mode_boundary() {
   game->platform_hle.initBuiltins();
   CHECK(game->platform_hle.hasNativeFrameLoopContract());
   game->platform_hle.requireNativeFrameLoopContract();
-  assert_all_modes_request_frame_boundary(*game);
+  assert_wait_modes_request_frame_boundary(*game);
 }
 
 static void test_vsync_boundary_cannot_be_replaced() {
@@ -95,7 +127,20 @@ static void test_vsync_boundary_cannot_be_replaced() {
   game->platform_hle.initBuiltins();
 
   CHECK(!game->platform_hle.register_(kVSyncAddress, harmless_handler));
-  assert_all_modes_request_frame_boundary(*game);
+  assert_wait_modes_request_frame_boundary(*game);
+}
+
+static void test_negative_query_without_measured_counter_refuses() {
+  DirectRuntime runtime;
+  runtime.plan.vsyncAddress = kVSyncAddress;
+  runtime.plan.windowLo[0] = kVSyncAddress;
+  runtime.plan.windowHi[0] = kWindowEnd;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+  game->platform_hle.initBuiltins();
+
+  assert_missing_counter_aborts(*game);
+  CHECK(!game->core.executionControl().pending());
 }
 
 static void test_missing_direct_vsync_address_has_no_product_contract() {
@@ -121,9 +166,10 @@ static void test_vsync_address_outside_the_declared_window_is_refused() {
 }
 
 int main() {
-  RUN(direct_runtime_installs_one_all_mode_boundary);
-  RUN(legacy_adapter_installs_the_same_all_mode_boundary);
+  RUN(direct_runtime_installs_one_wait_boundary_and_measured_query);
+  RUN(legacy_adapter_installs_the_same_wait_boundary);
   RUN(vsync_boundary_cannot_be_replaced);
+  RUN(negative_query_without_measured_counter_refuses);
   RUN(missing_direct_vsync_address_has_no_product_contract);
   RUN(vsync_address_outside_the_declared_window_is_refused);
   return pt_summary();

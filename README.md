@@ -18,7 +18,7 @@ per-`Core` typed execution exits, execution control, image/generation identity, 
 original calls, guest ABI helpers, centralized invalidation, and measurable executor counters.
 
 The Linux x86-64 path consumes the maintained Lightrec fork at revision
-`b1457137c31cedff5f440d59da29401d021ba2da`. `LightrecExecutor` runs translated guest blocks,
+`9a982a6475884f7059edb74a73d9a22c0060f18f`. `LightrecExecutor` runs translated guest blocks,
 synchronizes architectural state, intercepts image-scoped native/HLE calls at block boundaries,
 stops original calls at their exact guest continuation, publishes exact execution/cache/fallback
 telemetry, and participates in cache invalidation. Multi-`Core` backend qualification, complete

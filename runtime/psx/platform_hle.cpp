@@ -54,10 +54,21 @@ void gpuTimeoutArm(Core *core) {
   }
 }
 
-void frameBoundary(Core *core) {
+} // namespace
+
+void PlatformHle::vsync(Core *core) {
+  PlatformHle &owner = core->game->platform_hle;
+  if (static_cast<std::int32_t>(core->r[A0]) < 0) {
+    if (!owner.mVSyncQueryCounterAddress) {
+      lucent::error(
+          "plat-hle", "VSync negative query at 0x{:08X} has no measured libetc field counter", owner.mVSyncAddress);
+      std::abort();
+    }
+    core->r[V0] = core->mem_r32(owner.mVSyncQueryCounterAddress);
+    return;
+  }
   psx::cpu::requestExecutionExit(*core, psx::cpu::ExecutionExitReason::FrameBoundary);
 }
-} // namespace
 
 bool PlatformHle::inBiosWindow(const GameConfig *config, std::uint32_t address) {
   if (!config) {
@@ -110,7 +121,7 @@ bool PlatformHle::register_(std::uint32_t address, OverrideFn function) {
   return true;
 }
 
-void PlatformHle::bindVSyncBoundary(std::uint32_t address) {
+void PlatformHle::bindVSyncBoundary(std::uint32_t address, std::uint32_t queryCounterAddress) {
   if (!address) {
     return;
   }
@@ -118,9 +129,18 @@ void PlatformHle::bindVSyncBoundary(std::uint32_t address) {
     lucent::error("plat-hle", "conflicting VSync addresses 0x{:08X} and 0x{:08X}", mVSyncAddress, address);
     std::abort();
   }
+  if (mVSyncAddress && mVSyncQueryCounterAddress != queryCounterAddress) {
+    lucent::error("plat-hle",
+                  "conflicting VSync query counters 0x{:08X} and 0x{:08X}",
+                  mVSyncQueryCounterAddress,
+                  queryCounterAddress);
+    std::abort();
+  }
   mVSyncAddress = address;
-  if (!register_(address, frameBoundary)) {
+  mVSyncQueryCounterAddress = queryCounterAddress;
+  if (!register_(address, vsync)) {
     mVSyncAddress = 0;
+    mVSyncQueryCounterAddress = 0;
     std::abort();
   }
 }
@@ -169,7 +189,7 @@ void PlatformHle::initBuiltins() {
     install(plan->cdSyncAddress, cd_sync_stock_sync);
     install(plan->cdSearchFileAddress, cd_searchfile_stock_sync);
     install(plan->drawSyncAddress, syncComplete);
-    bindVSyncBoundary(plan->vsyncAddress);
+    bindVSyncBoundary(plan->vsyncAddress, plan->vsyncQueryCounterAddress);
     // A plan that declares more bindings than the array holds has services the runtime silently
     // would not install — a hardware entry left executing guest code with no owner, which shows up
     // far from here as a fault inside the unowned routine. Name it instead of truncating.
@@ -198,7 +218,7 @@ void PlatformHle::initBuiltins() {
   install(config.gpuTimeoutCheck, syncComplete);
   install(config.drawSync, syncComplete);
   install(config.changeThread, scheduler_yield);
-  bindVSyncBoundary(config.vsyncTrap);
+  bindVSyncBoundary(config.vsyncTrap, 0);
   installProjection(config.setGeomOffset, config.setGeomScreen);
   lucent::info("plat-hle", "{} legacy-adapter hardware services installed", mN);
 }

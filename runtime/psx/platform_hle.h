@@ -65,10 +65,11 @@ struct PlatformHlePlan {
   // framework can complete this hardware wait without entering the guest's VSync-based body.
   uint32_t drawSyncAddress = 0;
 
-  // Measured libetc VSync entry. Product boot requires this fact and the framework always binds it
-  // to a typed native-frame boundary. A title supplies no handler and cannot replace that boundary
-  // through `bindings`.
+  // Measured libetc VSync entry. Nonnegative waits are protected native-frame boundaries. Some
+  // libetc bodies return a field count for negative queries without waiting; declare that body's
+  // measured guest counter address to permit the query. An undeclared query refuses explicitly.
   uint32_t vsyncAddress = 0;
+  uint32_t vsyncQueryCounterAddress = 0;
 
   // Title-specific sync leaves remain explicit address/function bindings. Do not use this table to
   // expose a framework-owned standard handler (including VSync): add a typed address above so games
@@ -114,7 +115,8 @@ private:
   // The accepted address windows are GAME data (GameConfig::hle.windowLo/windowHi), so the guard
   // takes the config rather than baking one game's memory map into the framework.
   static bool inBiosWindow(const struct GameConfig *cfg, uint32_t a);
-  void bindVSyncBoundary(uint32_t addr);
+  void bindVSyncBoundary(uint32_t addr, uint32_t queryCounterAddr);
+  static void vsync(Core *core);
 
   static constexpr int kMax = 32;
 
@@ -124,4 +126,5 @@ private:
   uint32_t mLo = 0xFFFFFFFFu;
   uint32_t mHi = 0;
   uint32_t mVSyncAddress = 0;
+  uint32_t mVSyncQueryCounterAddress = 0;
 };
