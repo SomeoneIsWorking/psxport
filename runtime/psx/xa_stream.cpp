@@ -258,14 +258,19 @@ static int xa_decode_next_sector(XaState *xs) {
       }
       return n;
     }
-    // Ditto for an EOF on a NON-matching (other channel's) sector: a spurious interleaved EOF (e.g. a
-    // narration/voice file ending mid-range) was killing the chan4 music ~18 s early (LBA 95338 of the
-    // [84515..97979] area-music clip) -> the dialog-coord resume restarted it from the top = "loops
-    // early". For a bounded clip, ignore it and keep scanning toward end_lba.
-    if (eof && !s_end_lba) {
-      lucent::debug("xa", "EOF (non-audio) @ LBA {}", s_lba - 1);
-      s_active = 0;
-      return 0;
+    // An EOF on a NON-matching (other file/channel's) sector belongs to THAT stream, not ours: a
+    // real drive skips it and keeps playing (the narration/voice file that ends mid-range, e.g. at
+    // LBA 95338 of Tomba!2's [84515..97979] chan4 music clip, must not cut the music). Terminating
+    // here also killed every OPEN-ENDED CdControl stream at the first foreign EOF: Spyro's sound
+    // driver sets XA mode + a file/chan filter and reads without a Setloc — it scans forward and
+    // polls GetlocL — so the stream started at LBA 0 and died at the first other-channel EOF 17
+    // sectors later, leaving no music and a DC-only sink. Only our OWN channel's EOF ends the
+    // stream (handled above, for open-ended streams only); a bounded clip ends at end_lba.
+    if (eof) {
+      lucent::debug("xa", "skipping non-matching EOF @ LBA {} (file={} chan={}) — still streaming",
+                    s_lba - 1,
+                    file,
+                    chan);
     }
   }
   return 0; // 64 consecutive non-passing sectors: give up this pump, try again next sample
