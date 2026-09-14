@@ -267,10 +267,8 @@ static int xa_decode_next_sector(XaState *xs) {
     // sectors later, leaving no music and a DC-only sink. Only our OWN channel's EOF ends the
     // stream (handled above, for open-ended streams only); a bounded clip ends at end_lba.
     if (eof) {
-      lucent::debug("xa", "skipping non-matching EOF @ LBA {} (file={} chan={}) — still streaming",
-                    s_lba - 1,
-                    file,
-                    chan);
+      lucent::debug(
+          "xa", "skipping non-matching EOF @ LBA {} (file={} chan={}) — still streaming", s_lba - 1, file, chan);
     }
   }
   return 0; // 64 consecutive non-passing sectors: give up this pump, try again next sample
