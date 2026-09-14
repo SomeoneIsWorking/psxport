@@ -13,6 +13,7 @@
 // NOT a public API; internal to the GPU TUs.
 #ifndef GPU_GPU_INTERNAL_H
 #define GPU_GPU_INTERNAL_H
+#include "gpu_present_sink.h"            // SinkIdleState — the sink may not wait for the window
 #include "gpu_vk_semi_order.h"           // world semi-transparent submission runs
 #include "guest_vram_composite_policy.h" // persistent-composite ownership transition latch
 #include "native_composite_capture.h"    // native pause/backdrop capture lifetime policy
@@ -99,6 +100,7 @@ struct GpuVkState {
   // what makes a headless capture a statement about the presented picture rather than about guest VRAM.
   SDL_GPUTexture *s_present_img = nullptr;       // RGBA8 sink-resolution composite (SAMPLER|COLOR_TARGET)
   SDL_GPUTransferBuffer *s_present_rb = nullptr; // s_present_img → host download (present shot)
+  SinkIdleState s_sink;                          // idle/resume latch for an unavailable swapchain image
   int s_present_img_w = 0, s_present_img_h = 0;  // its current size; rebuilt when the sink resizes
   void ensure_present_img(int w, int h);         // (re)create the composite target at this sink size
 

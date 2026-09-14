@@ -2443,16 +2443,16 @@ void GpuVkState::build_present_image(SDL_GPUCommandBuffer *cmd, const PresentPla
 
 // ---- show_present_image: THE SINK — blit the finished picture into the window swapchain. -------------
 // The one place in the renderer a leg difference is legitimate, and it does no picture work at all: the
-// letterbox, fade, source selection and 24bpp decode are already baked into s_present_img, so this is a
-// 1:1 fullscreen copy. If this function ever starts DECIDING something, the split has been lost.
-// Consumes `cmd` (submits it).
+// letterbox, fade, source selection and 24bpp decode are already baked into s_present_img. It ACQUIRES
+// WITHOUT WAITING, because a window nobody is showing never becomes ready (gpu_present_sink.h).
 void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd) {
   SDL_GPUTexture *swaptex = NULL;
   Uint32 sw = 0, sh = 0;
-  if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) {
+  swaptex = sink_acquire(s_sink, cmd, s_win, &sw, &sh);
+  if (swaptex == NULL) {
     gpu_submit(cmd, "show_present_image");
     poll_quit(game);
-    return; // minimized / no swapchain image this frame
+    return; // occluded window / frames in flight: an idle sink, not a stuck guest
   }
   SDL_GPUColorTargetInfo cti = {};
   cti.texture = swaptex;
