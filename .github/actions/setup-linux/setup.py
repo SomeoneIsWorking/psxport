@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -16,7 +17,22 @@ PACKAGES = (
     "ninja-build", "pkg-config", "zlib1g-dev",
 )
 FRAMEWORK_SUBMODULES = ("external/psycross", "vendor/beetle-psx", "vendor/lucent")
+LIGHTREC_REVISION_DECLARATION = re.compile(r'set\(PSXPORT_LIGHTREC_REVISION "([0-9a-f]{40})"\)')
 Runner = Callable[[Sequence[str], Path], None]
+
+
+def framework_revisions(framework: Path) -> dict[str, str]:
+    # cmake/lightrec_dependency.cmake is the single authority for the maintained Lightrec revision;
+    # the CI checkout must never carry a second copy of that literal.
+    declaration = framework / "cmake" / "lightrec_dependency.cmake"
+    if not declaration.is_file():
+        raise RuntimeError(f"framework Lightrec dependency owner is missing: {declaration}")
+    revisions = set(LIGHTREC_REVISION_DECLARATION.findall(declaration.read_text(encoding="utf-8")))
+    if len(revisions) != 1:
+        raise RuntimeError(
+            f"expected exactly one PSXPORT_LIGHTREC_REVISION in {declaration}, found {len(revisions)}"
+        )
+    return {"lightrec": revisions.pop()}
 
 
 @dataclass(frozen=True)
@@ -84,9 +100,14 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="[setup-linux] %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument("--print-revisions", action="store_true")
     args = parser.parse_args()
     try:
         paths = SetupPaths.from_environment(os.environ)
+        if args.print_revisions:
+            for name, revision in framework_revisions(paths.framework).items():
+                print(f"{name}={revision}")
+            return 0
         if not args.validate_only:
             export_environment(paths.environment_file, provision(paths))
     except (KeyError, OSError, RuntimeError, subprocess.CalledProcessError) as error:

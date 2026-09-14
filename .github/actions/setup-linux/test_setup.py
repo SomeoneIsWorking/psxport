@@ -7,7 +7,13 @@ import unittest
 import subprocess
 from pathlib import Path
 
-from setup import PACKAGES, SetupPaths, export_environment, provision
+from setup import (
+    PACKAGES,
+    SetupPaths,
+    export_environment,
+    framework_revisions,
+    provision,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -81,6 +87,38 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(self.paths.environment_file.read_text(), "PSXPORT_LIGHTREC_DIR=bounded/path\n")
         with self.assertRaisesRegex(RuntimeError, "line breaks"):
             export_environment(self.paths.environment_file, {"PSXPORT_LIGHTREC_DIR": "path\nBAD=1"})
+
+
+    def test_framework_revisions_parse_the_single_pin(self) -> None:
+        cmake = self.root / "cmake" / "lightrec_dependency.cmake"
+        cmake.write_text(
+            'set(PSXPORT_LIGHTREC_REVISION "9a982a6475884f7059edb74a73d9a22c0060f18f")\n',
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            framework_revisions(self.root),
+            {"lightrec": "9a982a6475884f7059edb74a73d9a22c0060f18f"},
+        )
+
+    def test_framework_revisions_refuse_absent_or_doubled_pins(self) -> None:
+        cmake = self.root / "cmake" / "lightrec_dependency.cmake"
+        with self.assertRaisesRegex(RuntimeError, "missing"):
+            framework_revisions(self.root)
+        cmake.write_text("message(STATUS 'no pin here')\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "exactly one"):
+            framework_revisions(self.root)
+        cmake.write_text(
+            'set(PSXPORT_LIGHTREC_REVISION "9a982a6475884f7059edb74a73d9a22c0060f18f")\n'
+            'set(PSXPORT_LIGHTREC_REVISION "b1457137c31cedff5f440d59da29401d021ba2da")\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(RuntimeError, "exactly one"):
+            framework_revisions(self.root)
+
+    def test_action_reads_the_shipping_framework_pin(self) -> None:
+        revisions = framework_revisions(ROOT)
+        self.assertEqual(list(revisions), ["lightrec"])
+        self.assertRegex(revisions["lightrec"], r"^[0-9a-f]{40}$")
 
 
 if __name__ == "__main__":

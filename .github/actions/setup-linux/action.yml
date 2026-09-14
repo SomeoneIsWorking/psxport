@@ -16,11 +16,18 @@ runs:
         PSXPORT_CI_FRAMEWORK: ${{ inputs.framework-directory }}
         PSXPORT_CI_DEPENDENCIES: ${{ inputs.dependency-directory }}
       run: uv run --frozen python "${{ github.action_path }}/setup.py" --validate-only
+    - name: Resolve the framework-pinned Lightrec revision
+      id: revisions
+      shell: bash
+      env:
+        PSXPORT_CI_FRAMEWORK: ${{ inputs.framework-directory }}
+        PSXPORT_CI_DEPENDENCIES: ${{ inputs.dependency-directory }}
+      run: uv run --frozen python "${{ github.action_path }}/setup.py" --print-revisions >> "$GITHUB_OUTPUT"
     - name: Check out the exact maintained Lightrec revision
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: SomeoneIsWorking/lightrec
-        ref: b1457137c31cedff5f440d59da29401d021ba2da
+        ref: ${{ steps.revisions.outputs.lightrec }}
         path: ${{ inputs.dependency-directory }}/lightrec
         fetch-depth: 0
         persist-credentials: false
