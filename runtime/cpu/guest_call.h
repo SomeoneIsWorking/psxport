@@ -3,6 +3,7 @@
 #include "native_dispatch.h"
 
 #include <array>
+#include <concepts>
 #include <cstdint>
 #include <span>
 #include <string_view>
@@ -95,6 +96,17 @@ inline void dispatchGuestToReturn4(Core &core,
                                    std::string_view owner) {
   const std::array arguments{a0, a1, a2, a3};
   dispatchGuestWithArgumentsToReturn(core, address, arguments, budget, owner);
+}
+
+// The common native-to-guest leaf call: the guest function must return within the current host turn
+// (ExecutionBudget::currentTurn), `owner` names the native caller for the failure report, and every
+// argument lands in r4..r7 in order. This is the one home of that budget policy; callers do not spell
+// the budget themselves.
+template <typename... Args>
+  requires(sizeof...(Args) <= 4 && (std::convertible_to<Args, std::uint32_t> && ...))
+void callGuestNow(Core &core, std::string_view owner, std::uint32_t address, Args... args) {
+  const std::array<std::uint32_t, sizeof...(Args)> arguments{static_cast<std::uint32_t>(args)...};
+  dispatchGuestWithArgumentsToReturn(core, address, arguments, ExecutionBudget::currentTurn(core), owner);
 }
 
 } // namespace psx::cpu
