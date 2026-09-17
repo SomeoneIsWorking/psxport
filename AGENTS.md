@@ -86,6 +86,11 @@ active authenticated image/module identity, its load generation, and guest addre
   unreachable. Equal addresses in resident code and two overlays must be independently testable.
 - Installing, removing, or replacing an override invalidates every Lightrec path that captured the
   old dispatch decision. Do not leave patched/chained host calls pointing at stale policy.
+- An override key names a function entry that guest code reaches by `jal`/`jalr`. A label inside a
+  function body that guest code reaches by `j` or by falling through is never an override: the
+  override returns to its entry `r31`, which a tail jump does not set, so execution resumes at the
+  jumping stub and re-enters the label after its own epilogue ran. Own the enclosing function and
+  reproduce the labels as arms of its loop (Tomba! 2 `FUN_8003BCF4`, 2026-09-17).
 
 All writes that can modify executable bytes use one invalidation owner. CPU stores, DMA, CD/module
 loads, decompression into executable RAM, debugger writes, and savestate restore report normalized
