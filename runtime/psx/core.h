@@ -8,6 +8,7 @@
 #include "r3000.h"
 #include "render_substrate.h" // Core owns a RenderSubstrate (host-only per-Core render substrate)
 #include "spin_detector.h"
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -115,6 +116,9 @@ public:
   void mem_w8(uint32_t a, uint8_t v);
   void mem_w16(uint32_t a, uint16_t v);
   void mem_w32(uint32_t a, uint32_t v);
+  // Copy a NUL-terminated guest string into `out` (at most cap-1 bytes, always NUL-terminated).
+  // The one owner of this read; title code and runtime services call it instead of re-looping mem_r8.
+  void readCString(uint32_t address, char *out, size_t cap);
   uint32_t mem_lwl(uint32_t cur, uint32_t a);
   uint32_t mem_lwr(uint32_t cur, uint32_t a);
   void mem_swl(uint32_t a, uint32_t v);

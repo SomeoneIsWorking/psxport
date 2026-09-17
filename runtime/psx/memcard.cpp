@@ -389,18 +389,6 @@ static inline uint32_t mc_data_frame(int block, uint32_t off) {
   return (uint32_t)block * Memcard::kBlockFrames + 1u + (off / Memcard::kFrameSize);
 }
 
-static void mc_read_guest_str(Core *c, uint32_t va, char *out, size_t cap) {
-  size_t i = 0;
-  for (; i + 1 < cap; i++) {
-    uint8_t ch = c->mem_r8(va + (uint32_t)i);
-    out[i] = (char)ch;
-    if (!ch) {
-      break;
-    }
-  }
-  out[i < cap ? i : cap - 1] = 0;
-}
-
 // Deliver the libcard I/O-complete event so callers waiting on TestEvent (SwCARD-0x8000 SUCCESS +
 // EvSpIOE for save/load and card-detect flows) fall through immediately.
 void Memcard::deliverComplete(Core *c) {
@@ -476,7 +464,7 @@ static void card_status(Core *c) {
 static void file_open(Core *c) {
   Memcard &m = c->game->memcard;
   char name[0x100];
-  mc_read_guest_str(c, c->r[A0], name, sizeof name);
+  c->readCString(c->r[A0], name, sizeof name);
   uint32_t mode = c->r[A1];
   int blk = m.dirFind(name);
   if (blk < 0 && (mode & 0x0200u)) {
@@ -666,7 +654,7 @@ static void file_close(Core *c) {
 static void file_erase(Core *c) {
   Memcard &m = c->game->memcard;
   char name[0x100];
-  mc_read_guest_str(c, c->r[A0], name, sizeof name);
+  c->readCString(c->r[A0], name, sizeof name);
   int blk = m.dirFind(name);
   if (blk < 0) {
     c->r[V0] = 0;
@@ -708,7 +696,7 @@ static void file_erase(Core *c) {
 static void file_firstfile(Core *c) {
   Memcard &m = c->game->memcard;
   char name[0x100];
-  mc_read_guest_str(c, c->r[A0], name, sizeof name);
+  c->readCString(c->r[A0], name, sizeof name);
   const uint32_t dirent = c->r[A1];
   m.dirScanBegin(mc_strip_dev(name));
   // Guest code patches the DCB's firstfile slot with its own restore-trampoline before calling here

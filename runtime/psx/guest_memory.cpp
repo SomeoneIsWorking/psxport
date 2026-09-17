@@ -10,6 +10,17 @@ uint8_t Core::mem_r8(uint32_t a) {
   uint8_t *p = host_ptr(a, 1);
   return p ? *p : (uint8_t)io_read(a, 1);
 }
+void Core::readCString(uint32_t address, char *out, size_t cap) {
+  size_t i = 0;
+  for (; i + 1 < cap; i++) {
+    const uint8_t ch = mem_r8(address + (uint32_t)i);
+    out[i] = (char)ch;
+    if (!ch) {
+      break;
+    }
+  }
+  out[i < cap ? i : cap - 1] = 0;
+}
 uint16_t Core::mem_r16(uint32_t a) {
   uint8_t *p = host_ptr(a, 2);
   if (!p) {
