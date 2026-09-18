@@ -5,6 +5,7 @@
 #include "core.h"
 #include "field_rate.h"
 #include "game.h"
+#include "host_turn.h"
 #include <algorithm> // std::min
 #include <lucent/log.h>
 #include <stdio.h>
@@ -16,22 +17,8 @@ uint64_t Timing::readEmulatedCpuTicks(void *context) {
   return static_cast<Timing *>(context)->mEmulatedTime.nowTicks();
 }
 
-// CDC drive clock: wall-locked (see timing.h). Nominal-rate ticks since bind; no state cached.
-uint64_t Timing::readWallLockedCdcTicks(void *context) {
-  const auto *t = static_cast<const Timing *>(context);
-  timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  const uint64_t ns =
-      static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ull + static_cast<uint64_t>(ts.tv_nsec) - t->wallClockOriginNs;
-  // The 128-bit intermediate overflows only after ~570 years of uptime.
-  return static_cast<uint64_t>((static_cast<unsigned __int128>(ns) * kNominalPsxCpuHz) / 1'000'000'000ull);
-}
-
 void Timing::bindCdcClock(CdcState *cdc) {
-  timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  wallClockOriginNs = static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ull + static_cast<uint64_t>(ts.tv_nsec);
-  cdc_bind_tick_source(cdc, this, readWallLockedCdcTicks);
+  cdc_bind_tick_source(cdc, this, readEmulatedCpuTicks);
 }
 
 void Timing::advanceGuestInstructionTicks(uint32_t ticks) {
@@ -49,6 +36,11 @@ bool Timing::advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilli
           static_cast<uint32_t>(fields), static_cast<uint32_t>(parts), fieldRateMilliHz)) {
     return false;
   }
+  // A delivered display field is the host field clock's boundary. Re-anchor it here, before the
+  // field's guest callbacks run: the advance above lands exactly on the deadline this field was
+  // owed at, and a callback that accounted guest time against the stale deadline would request
+  // the very field it is inside.
+  psx::cpu::notifyDisplayField(game->core);
   game->sio.service(mEmulatedTime.nowTicks());
   raiseVBlank(consumeCompletedDisplayFields(static_cast<uint32_t>(fields), static_cast<uint32_t>(parts)));
   serviceCdc();

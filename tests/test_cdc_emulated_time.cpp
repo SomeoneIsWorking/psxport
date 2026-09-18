@@ -1,14 +1,14 @@
-// test_cdc_emulated_time.cpp — the CDC drive clock is WALL-LOCKED: sector deadlines advance with
-// real time at the nominal rate, NOT with executed-instruction costs.
+// test_cdc_emulated_time.cpp — the CDC drive clock is the EMULATED CPU clock: sector deadlines
+// advance with executed instructions and with the display fields the native frame loop delivers,
+// never with host wall time.
 //
-// Rationale (issue #25, Vagrant Story FMV): during streaming the guest busy-polls the CD status
-// register instead of display-waiting, so an instruction-cost-driven drive clock runs at HOST speed
-// while the SPU pull advances per display field — the two A/V halves drifted up to ~6% and the XA
-// ring saturated. A pure field-count lock was also rejected: libcd's synchronous boot waits on a
-// command deadline BEFORE any field boundary, which deadlocked. Wall time advances everywhere,
-// always — exactly what a crystal-driven drive needs. These cases pin that contract: instruction
-// burn alone never fires a deadline (it must not be able to), and a real-time wait of one sector
-// period does.
+// A guest that busy-polls the drive advances that same clock, so a synchronous libcd wait before
+// any field boundary still reaches its deadline (no boot deadlock), and it costs the guest the
+// console's number of ticks rather than however many the host executes per millisecond. The field
+// clock that owes host turns and the per-field SPU pull read the same clock, so drive, fields and
+// audio stay in the console's ratio at any host speed (the A/V drift Vagrant Story issue #25 saw
+// came from an instruction-cost drive beside a host-paced SPU pull, not from the clock domain).
+// These cases pin the contract: instruction work reaches a deadline, host time alone never does.
 #include "testutil.h"
 
 #include "cd_drive_timing.h"
@@ -29,29 +29,39 @@ void arm_sector_deadline(Game *game) {
   game->cdc.drive_deadline_ticks = cd_drive_sector_period_cpu_ticks(0xA0);
 }
 
-void test_instruction_burn_alone_never_fires_the_wall_locked_deadline() {
+void test_instruction_work_reaches_the_sector_deadline() {
   auto *game = new Game();
   arm_sector_deadline(game);
   const uint64_t deadline = game->cdc.drive_deadline_ticks;
 
-  // Far more guest work than one sector period: the deadline must NOT move — the drive is not
-  // paced by how fast the host executes guest instructions.
-  game->timing.advanceGuestInstructionTicks(static_cast<uint32_t>(deadline * 4));
+  game->timing.advanceGuestInstructionTicks(static_cast<uint32_t>(deadline - 1));
   CHECK_EQ(game->cdc.drive_event_armed, 1);
   CHECK_EQ(game->cdc.following_sector_ready, 0);
-}
-
-void test_real_time_reaches_the_shipping_deadline() {
-  auto *game = new Game();
-  arm_sector_deadline(game);
-
-  // One single-speed sector period is ~13.3 ms; sleep two and service. No field advance is
-  // involved — this is the property that un-deadlocks synchronous CD boot.
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
-  game->timing.serviceCdcTickSource();
+  game->timing.advanceGuestInstructionTicks(1);
   CHECK_EQ(game->cdc.drive_event_armed, 0);
   CHECK_EQ(game->cdc.following_sector_ready, 1);
   CHECK_EQ(game->cdc.q[game->cdc.q_head].type, 1);
+}
+
+void test_delivered_fields_reach_the_sector_deadline() {
+  auto *game = new Game();
+  arm_sector_deadline(game);
+  // One single-speed sector period is ~13.3 ms, under one NTSC field: the field boundary alone
+  // crosses it, which is what lets a display-waiting title receive sectors without spinning.
+  CHECK(game->timing.advanceDisplayFields(1, 1, FIELD_RATE_NTSC_MILLIHZ));
+  CHECK_EQ(game->cdc.drive_event_armed, 0);
+  CHECK_EQ(game->cdc.following_sector_ready, 1);
+}
+
+void test_host_time_alone_never_fires_a_deadline() {
+  auto *game = new Game();
+  arm_sector_deadline(game);
+  // Negative arm: two sector periods of real time with no guest progress. The old wall-locked
+  // clock fired here; the emulated clock must not, or a fast host would starve a slow guest.
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  game->timing.serviceCdcTickSource();
+  CHECK_EQ(game->cdc.drive_event_armed, 1);
+  CHECK_EQ(game->cdc.following_sector_ready, 0);
 }
 
 void test_instruction_work_is_not_added_on_top_of_the_field_boundary() {
@@ -93,8 +103,9 @@ void test_zero_or_fractionally_invalid_field_input_is_refused() {
 } // namespace
 
 int main() {
-  RUN(instruction_burn_alone_never_fires_the_wall_locked_deadline);
-  RUN(real_time_reaches_the_shipping_deadline);
+  RUN(instruction_work_reaches_the_sector_deadline);
+  RUN(delivered_fields_reach_the_sector_deadline);
+  RUN(host_time_alone_never_fires_a_deadline);
   RUN(instruction_work_is_not_added_on_top_of_the_field_boundary);
   RUN(two_half_field_deliveries_equal_one_full_field);
   RUN(a_late_cpu_resynchronizes_the_next_field_boundary);

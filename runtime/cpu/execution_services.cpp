@@ -28,6 +28,7 @@ int maximumSpinRun() {
 
 void accountGuestInstructions(Core &core, std::uint32_t instructions) {
   core.game->timing.advanceGuestInstructionTicks(instructions);
+  requestHostTurnWhenDue(core);
   if (spin_detector_sample(
           core.spin, core.pc, (core.pending_work & Core::PW_HOST) != 0, instructions, spinWindow(), maximumSpinRun())) {
     watchdog_spin_fault(core.spin.anchor,

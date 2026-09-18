@@ -16,15 +16,14 @@ public:
   // waits; neither counter is yet a cycle-accurate R3000 model (issue 0007).
   uint64_t guestInstructionTicks = 0;
 
-  // Wall-locked CDC drive clock: nominal-rate CPU ticks derived from the host monotonic clock,
-  // NOT from executed-instruction costs. A real drive and its crystal run in real time regardless
-  // of what the CPU is doing; modelling the drive on instruction costs made it run at HOST speed
-  // whenever the guest busy-polls instead of display-waiting — Vagrant Story's FMV player does
-  // exactly that, which drove the CD up to ~6% hot vs the field-paced SPU pull and saturated the
-  // XA ring (issue #25). Pure field-count locking was tried first and DEADLOCKED boot: libcd's
-  // synchronous init waits on a command completion, i.e. on a deadline, before any field boundary.
-  // Wall time advances everywhere, always, which is precisely the property a drive needs.
-  uint64_t wallClockOriginNs = 0; // bind instant for the wall-locked CDC clock
+  // The CDC drive clock is the emulated CPU clock: executed instructions plus the display fields
+  // the native frame loop delivers. The drive, the display field clock that owes host turns, and
+  // the per-field SPU pull therefore share one time base, so a guest that busy-polls the drive
+  // sees fields, sectors, and audio advance in the console's ratio at any host speed. A previous
+  // wall-locked drive clock (Vagrant Story issue #25) fixed an A/V drift that came from mixing an
+  // instruction-cost drive with a host-paced SPU pull; it also made every synchronous CD wait cost
+  // the guest a host-speed-dependent number of fields (Spyro 1's loader hand-off spun through
+  // ~60 fields at JIT speed) and made loads non-reproducible between runs and against the console.
 
   // ---- root counter 2 (0x1F801120 value / 0x1F801124 mode / 0x1F801128 target) ----------------
   // A free-running system-clock counter. Guest code uses it as a stopwatch: latch the value, spin
@@ -39,7 +38,7 @@ public:
   void bindCdcClock(CdcState *cdc);
   void advanceGuestInstructionTicks(uint32_t ticks);
   bool advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilliHz);
-  // Service CDC deadlines against the wall-locked drive clock without advancing anything else
+  // Service CDC deadlines against the emulated drive clock without advancing anything else
   // (test + REPL entry point; the run loop reaches the same path via the two advance methods).
   void serviceCdcTickSource() {
     serviceCdc();
@@ -62,7 +61,6 @@ private:
   unsigned __int128 mDisplayFieldPhaseDenominator = 1;
 
   static uint64_t readEmulatedCpuTicks(void *context);
-  static uint64_t readWallLockedCdcTicks(void *context);
   uint32_t consumeCompletedDisplayFields(uint32_t fields, uint32_t parts);
   void raiseVBlank(uint32_t fields);
   void serviceCdc();

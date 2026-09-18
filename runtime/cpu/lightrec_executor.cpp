@@ -5,6 +5,7 @@
 #include "execution_services.h"
 #include "game.h"
 #include "gte_register_transfer.h"
+#include "host_turn.h"
 #include "hw_bind.h"
 #include "native_dispatch.h"
 
@@ -517,8 +518,17 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     impl.copyCoreToLightrec();
     lightrec_reset_cycle_count(impl.state, 0);
     const lightrec_execution_stats before = *lightrec_get_execution_stats(impl.state);
-    nextPc =
-        lightrec_execute(impl.state, nextPc, targetCycle(ExecutionBudget::fromCycles(budget.cycles - consumedCycles)));
+    // A segment ends at the host field clock's deadline as well as at the caller's budget: the clock
+    // raises its request from instruction accounting, which only runs between segments, so a guest
+    // loop waiting on the field's work would otherwise spin through the whole budget in one segment.
+    std::uint64_t segmentCycleBudget = budget.cycles - consumedCycles;
+    if (impl.core.game) {
+      const std::uint64_t untilFieldDue = hostTurnTicksUntilDue(impl.core);
+      if (untilFieldDue != 0) {
+        segmentCycleBudget = std::min(segmentCycleBudget, untilFieldDue);
+      }
+    }
+    nextPc = lightrec_execute(impl.state, nextPc, targetCycle(ExecutionBudget::fromCycles(segmentCycleBudget)));
     const std::uint64_t segmentCycles = lightrec_current_cycle_count(impl.state);
     consumedCycles += segmentCycles;
     impl.copyLightrecToCore(nextPc);
@@ -631,6 +641,11 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
         continue;
       }
       return {ExecutionExitReason::HostService, nextPc, consumedCycles, "pending work"};
+    }
+    if (consumedCycles < budget.cycles) {
+      // The segment ended at the host field clock's deadline, not at the caller's budget. The
+      // accounting above raised the owed turn; the next block boundary takes it.
+      continue;
     }
     return {ExecutionExitReason::BudgetExhausted, nextPc, consumedCycles, "cycle budget exhausted"};
   }
