@@ -125,4 +125,7 @@ if(PSXPORT_BUILD_TESTS)
   add_test(NAME oracle_console_observer
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_console_observer.py)
   set_tests_properties(oracle_console_observer PROPERTIES TIMEOUT 60)
+  add_test(NAME oracle_compare
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_compare.py)
+  set_tests_properties(oracle_compare PROPERTIES TIMEOUT 60)
 endif()

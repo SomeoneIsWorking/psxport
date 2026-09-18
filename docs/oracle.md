@@ -41,6 +41,27 @@ not represent equal game progress. Comparisons use ordered, title-owned state pr
 The framework owns the barrier mechanism. The consuming title owns checkpoint predicates, legitimate
 exclusions, and representative input. An absolute frame count is not a state predicate.
 
+## Shared comparison driver
+
+`tools/oracle/compare.py` implements the procedure above once for every consumer, over
+`tools/oracle/compare_cores.py`'s two core sessions: the product under `PSXPORT_REPL=1` and the
+full-console host (`CONSOLE.md`). A title supplies a module satisfying `compare.Title`: its declared
+main-RAM ranges (decisive or informational), named exclusions with reasons, ordered checkpoints with
+a reach policy each, a game-frame barrier (`advance`: the console is VBlank-stepped, and a product
+whose REPL step is one field is too, so the title steps such a core until its guest main loop has
+run exactly one frame, usually with `step_until_counter_resets` on the guest's per-field counter),
+the per-core pad latency between a park point and the frame whose input read sees a hold
+(`lookahead`), a held-input gameplay schedule, and one selftest seed. The title's thin `tools/oracle_compare.py` builds a
+`compare.Product` from its own launch owner and calls `compare.run`.
+
+The driver delivers the same pad to the same game frame's input read on both cores (`Driver`,
+`Playback`), drives the console first at each checkpoint so the product's settle frame reads the
+console's arrival pad, and treats the title's pad words as decisive so a delivery difference fails
+before anything downstream. `test_compare.py` proves both answers over fake cores: the matching
+lookahead matches every checkpoint, a wrong lookahead is reported as a `pad` divergence, and the
+seeded selftest is detected. Tomba! 2 (`Tomba2Engine/tools/oracle_tomba2.py`) and Spyro 1
+(`spyro/tools/oracle_spyro1.py`) are the consumers.
+
 ## Evidence rules
 
 - Validate the comparator with a matching case and a deliberately seeded register/RAM divergence.

@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""Drivable core sessions for the state-aligned oracle comparison (docs/oracle.md, compare.py).
+
+Two cores, one narrow interface: a Lightrec product driven through the framework REPL over pipes,
+and the independent Beetle full-console reference driven through `tools/oracle/console.py`'s JSON
+protocol. A title's comparison policy drives either without knowing which it is: `hold(buttons)`,
+`step(frames)`, `read(address, size)`.
+
+Both sessions refuse rather than guess: a REPL reply that does not arrive, a button name the REPL
+mapped to the wrong bit, a console reply without `ok`, or a read outside the reference's main RAM
+each raise `CoreError` with what was seen.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import queue
+import struct
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Protocol
+
+# PSX digital pad bit order; the wire (and the REPL's `held=` echo) is active-low.
+PSX_BUTTON_BITS = {
+    "select": 0x0001, "l3": 0x0002, "r3": 0x0004, "start": 0x0008,
+    "up": 0x0010, "right": 0x0020, "down": 0x0040, "left": 0x0080,
+    "l2": 0x0100, "r2": 0x0200, "l1": 0x0400, "r1": 0x0800,
+    "triangle": 0x1000, "circle": 0x2000, "cross": 0x4000, "square": 0x8000,
+}
+
+
+class CoreError(RuntimeError):
+    """A core did not do what the driver asked, with the evidence seen."""
+
+
+class CoreSession(Protocol):
+    name: str
+    frames: int          # steps taken so far, in this session's own unit
+    reference: bool      # True for the independent console reference, False for the product
+
+    @property
+    def held(self) -> frozenset[str]: ...
+    def hold(self, buttons: frozenset[str]) -> None: ...
+    def step(self, frames: int) -> None: ...
+    def read(self, address: int, size: int) -> bytes: ...
+    def close(self) -> None: ...
+
+
+def _validate_buttons(buttons: frozenset[str]) -> None:
+    unknown = sorted(buttons - PSX_BUTTON_BITS.keys())
+    if unknown:
+        raise CoreError(f"unknown pad button name(s) {unknown}; allowed: {sorted(PSX_BUTTON_BITS)}")
+
+
+class NativeReplSession:
+    """A built product binary, driven through PSXPORT_REPL=1 over stdin with its lucent log on
+    stderr. Each REPL command is followed by a read whose echo is the barrier, so `step` returns
+    only once the requested frames have run."""
+
+    name = "native"
+    reference = False  # the title's frame driver decides what one REPL step runs (a frame or a field)
+    _REPLY_TIMEOUT = 180.0
+    _WORDS_PER_READ = 64  # the REPL's `rw` prints at most 64 words
+    _BARRIER_ADDRESS = 0x80000000  # any readable main-RAM word serves as the post-step reply barrier
+
+    def __init__(self, binary: str, executable: str, environment: dict, cwd: str, log_path: Path):
+        self.frames = 0
+        self._held: frozenset[str] = frozenset()
+        self._log = open(log_path, "w")
+        self._lines: queue.Queue[str | None] = queue.Queue()
+        self._process = subprocess.Popen(
+            [binary, executable], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, env=environment, cwd=cwd, text=True, bufsize=1)
+        self._reader = threading.Thread(target=self._pump, daemon=True)
+        self._reader.start()
+
+    def _pump(self) -> None:
+        assert self._process.stderr is not None
+        for line in self._process.stderr:
+            self._log.write(line)
+            self._lines.put(line.rstrip("\n"))
+        self._lines.put(None)
+
+    def _send(self, command: str) -> None:
+        assert self._process.stdin is not None
+        self._process.stdin.write(command + "\n")
+        self._process.stdin.flush()
+
+    def _expect(self, marker: str) -> str:
+        deadline = time.monotonic() + self._REPLY_TIMEOUT
+        seen: list[str] = []
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                tail = "\n".join(seen[-5:])
+                raise CoreError(f"native REPL: no line containing {marker!r} within "
+                                f"{self._REPLY_TIMEOUT:.0f}s ({len(seen)} lines seen); last lines:\n{tail}")
+            try:
+                line = self._lines.get(timeout=remaining)
+            except queue.Empty:
+                continue
+            if line is None:
+                raise CoreError(f"native REPL exited (code {self._process.poll()}) while waiting for "
+                                f"{marker!r}; see the native log")
+            seen.append(line)
+            if marker in line:
+                return line
+
+    @property
+    def held(self) -> frozenset[str]:
+        return self._held
+
+    def hold(self, buttons: frozenset[str]) -> None:
+        _validate_buttons(buttons)
+        echo = ""
+        for name in sorted(self._held - buttons):
+            self._send(f"release {name}")
+            echo = self._expect("held=")
+        for name in sorted(buttons - self._held):
+            self._send(f"press {name}")
+            echo = self._expect("held=")
+        self._held = buttons
+        if echo:
+            expected = 0xFFFF & ~sum(PSX_BUTTON_BITS[name] for name in buttons)
+            held = int(echo.rsplit("held=", 1)[1][:4], 16)
+            if held != expected:
+                raise CoreError(f"native REPL held mask {held:04X} after holding {sorted(buttons)}, "
+                                f"expected {expected:04X}: a button name mapped to the wrong bit")
+
+    def step(self, frames: int) -> None:
+        if frames <= 0:
+            raise CoreError(f"step needs a positive frame count, got {frames}")
+        self._send(f"run {frames}")
+        self.read(self._BARRIER_ADDRESS, 4)  # the reply is the barrier: it prints only after the frames ran
+        self.frames += frames
+
+    def read(self, address: int, size: int) -> bytes:
+        if size <= 0:
+            raise CoreError(f"read needs a positive size, got {size}")
+        out = bytearray()
+        cursor = address & ~3
+        end = address + size
+        while cursor < end:
+            words = min(self._WORDS_PER_READ, (end - cursor + 3) // 4)
+            self._send(f"rw {cursor:08X} {words}")
+            line = self._expect(f"{cursor:08X}:")
+            values = line.rsplit(f"{cursor:08X}:", 1)[1].split()
+            if len(values) != words:
+                raise CoreError(f"native REPL printed {len(values)} words for rw {cursor:08X} {words}")
+            out += b"".join(struct.pack("<I", int(value, 16)) for value in values)
+            cursor += words * 4
+        skip = address & 3
+        return bytes(out[skip:skip + size])
+
+    def write8(self, address: int, value: int) -> None:
+        self._send(f"w8 {address:08X} {value & 0xFF:02X}")
+        self._expect("[repl] ok")
+
+    def close(self) -> None:
+        if self._process.poll() is None:
+            try:
+                self._send("quit")
+                self._process.wait(timeout=60)
+            except (OSError, subprocess.TimeoutExpired):
+                self._process.kill()
+        self._log.close()
+
+
+class ConsoleSession:
+    """psxport's Beetle full-console reference (`tools/oracle/console.py run`), one JSON command per
+    line on stdin and one JSON reply per line on stdout."""
+
+    name = "console"
+    reference = True  # Beetle steps by VBlank; the title decides what a game frame is
+    _MAX_STEP = 3600
+    _MAX_READ = 256
+
+    def __init__(self, psxport_dir: Path, disc: Path, bios: Path, region: str, log_path: Path):
+        self.frames = 0
+        self._log = open(log_path, "w")
+        command = ["uv", "run", "--frozen", "python", "tools/oracle/console.py", "run",
+                   "--disc", str(disc), "--region", region, "--bios", str(bios)]
+        environment = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
+        self._held: frozenset[str] = frozenset()
+        self._process = subprocess.Popen(command, cwd=psxport_dir, stdin=subprocess.PIPE, env=environment,
+                                         stdout=subprocess.PIPE, stderr=self._log, text=True, bufsize=1)
+        ready = self._receive()
+        if not ready.get("ready"):
+            raise CoreError(f"console reference did not report ready: {ready}")
+        self.manifest = ready["manifest"]
+
+    def _receive(self) -> dict:
+        assert self._process.stdout is not None
+        line = self._process.stdout.readline()
+        if not line:
+            raise CoreError(f"console reference exited (code {self._process.poll()}); see its log")
+        reply = json.loads(line)
+        if "error" in reply:
+            raise CoreError(f"console reference refused: {reply['error']}")
+        return reply
+
+    def _call(self, message: dict) -> dict:
+        assert self._process.stdin is not None
+        self._process.stdin.write(json.dumps(message) + "\n")
+        self._process.stdin.flush()
+        reply = self._receive()
+        if not reply.get("ok"):
+            raise CoreError(f"console reference replied without ok to {message}: {reply}")
+        return reply["result"]
+
+    @property
+    def held(self) -> frozenset[str]:
+        return self._held
+
+    def hold(self, buttons: frozenset[str]) -> None:
+        _validate_buttons(buttons)
+        if buttons != self._held:
+            self._call({"command": "buttons", "buttons": sorted(buttons)})
+            self._held = buttons
+
+    def step(self, frames: int) -> None:
+        if frames <= 0:
+            raise CoreError(f"step needs a positive frame count, got {frames}")
+        remaining = frames
+        while remaining:
+            chunk = min(self._MAX_STEP, remaining)
+            status = self._call({"command": "step", "frames": chunk})
+            remaining -= chunk
+        self.frames = status["frames"]
+
+    def read(self, address: int, size: int) -> bytes:
+        out = bytearray()
+        cursor = address
+        while cursor < address + size:
+            chunk = min(self._MAX_READ, address + size - cursor)
+            result = self._call({"command": "read", "address": f"0x{cursor:08X}", "bytes": chunk})
+            out += bytes.fromhex(result["bytes"])
+            cursor += chunk
+        return bytes(out)
+
+    def close(self) -> None:
+        if self._process.poll() is None:
+            try:
+                self._call({"command": "quit"})
+                self._process.wait(timeout=60)
+            except (CoreError, OSError, subprocess.TimeoutExpired):
+                self._process.kill()
+        self._log.close()
