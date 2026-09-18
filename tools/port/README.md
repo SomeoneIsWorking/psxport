@@ -33,6 +33,7 @@ false green is now a false green in every repo at once.
 | engine | reads (per game) | hoisted |
 |---|---|---|
 | `re_frontier.py` | `docs/re-frontier.md` | 2026-08-11 — from spider1's copy, the most developed of the three |
+| `present_geometry.py` | a capture the caller names (PPM or PNG) | 2026-09-19 — from the repaired spyro/Tomba2 version. Measured that day: `spyro/tools/`, `Tomba2Engine/tools/` and `spider1/tools/` held THREE different md5s of one game-agnostic PPM/PNG reader, and spider1's printed a confident `STRETCHED 1.714x` on a frame the others refuse. All three copies deleted; `--selftest` is 16/16 and writes to the CALLER's `scratch/` |
 | `consumer_verify.py` | a title-provided `ConsumerVerifyConfig` | One Ninja configure, build, focused CTest, and shipping execution-boundary sequence; callers select compilers through `CC`/`CXX`, and a test filter matching zero tests fails |
 
 After a title's existing bootstrap resolves its pinned PSXPort checkout, its verifier imports
