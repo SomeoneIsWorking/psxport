@@ -94,15 +94,21 @@ def reset_run_outputs(log, capture_paths):
         Path(path).unlink(missing_ok=True)
 
 
-def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, extra_env):
-    """One headless run. Returns (log_text, {frame: Capture})."""
+def default_repository(binary):
+    """Shipping port binaries live in <repo>/build/bin; a verifier build such as <repo>/build/ci/bin
+    names its repository with --repository instead."""
+    return Path(binary).resolve().parents[2]
+
+
+def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, extra_env, repository):
+    """One headless run with cwd at the repository (present shots are repository-relative).
+    Returns (log_text, {frame: Capture})."""
     scratch = Path(scratch).resolve()
     settings = scratch / f"{name}.ini"
     settings.write_text(f"aspect={aspect}\n")
     log = scratch / f"{name}.log"
     shots = scratch / name
     shots.mkdir(parents=True, exist_ok=True)
-    repository = Path(binary).resolve().parents[2]
     capture_paths = {
         frame: repository / "scratch" / "screenshots" / f"present_{frame}.png" for frame in shot_frames
     }
@@ -128,7 +134,6 @@ def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, 
         # emitted one every frame — a false FAILURE, which is the same class of lie as a false pass.
         channels = env.get("PSXPORT_DEBUG", "")
         env["PSXPORT_DEBUG"] = f"{channels},fps60" if channels else "fps60"
-    # Shipping port binaries live in <repo>/build/bin. Present shots are repository-relative.
     subprocess.run([str(binary)], env=env, cwd=repository, capture_output=True, check=False)
     text = log.read_text(errors="replace") if log.exists() else ""
     captured = {}
@@ -150,6 +155,8 @@ def report(label, ok, detail):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary", help="the already-built port executable (agents never run run.sh)")
+    parser.add_argument("--repository", help="the port repository the run is rooted at (default: two "
+                                             "directories above the binary's bin/, i.e. <repo>/build/bin)")
     parser.add_argument("--frames", type=int, default=400, help="frames to present")
     parser.add_argument("--shot-at", default="", help="comma-separated frames to capture (default: the last frame)")
     parser.add_argument("--replay", help="pad replay that reaches gameplay; without one this only sees attract")
@@ -169,13 +176,18 @@ def main(argv=None):
         print(f"[looks-right] REFUSED: {binary} is not a built binary; this run asserted NOTHING")
         return REFUSED
 
+    repository = Path(args.repository).resolve() if args.repository else default_repository(binary)
+    if not (repository / "scratch").is_dir() and not (repository / "run.sh").is_file():
+        print(f"[looks-right] REFUSED: {repository} does not look like a port repository (no run.sh or "
+              f"scratch/); pass --repository")
+        return REFUSED
     shot_frames = [int(f) for f in args.shot_at.split(",") if f.strip()] or [args.frames - 1]
     extra_env = dict(pair.split("=", 1) for pair in args.env)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"[looks-right] {binary} — {args.frames} frame(s), shots at {shot_frames}, replay {args.replay or 'none'}")
-    standard_log, standard = run_port(binary, out, "aspect-4x3", args.frames, shot_frames, args.replay, 0, False, extra_env)
+    standard_log, standard = run_port(binary, out, "aspect-4x3", args.frames, shot_frames, args.replay, 0, False, extra_env, repository)
     if not standard:
         print(f"[looks-right] REFUSED: no capture from the 4:3 run — see {out}/aspect-4x3.log")
         return REFUSED
@@ -184,7 +196,7 @@ def main(argv=None):
     failures = run_failures(standard_log)
     ok &= report("reaches", not failures, f"{len(standard)} shot(s) captured, failure marks: {failures or 'none'}")
 
-    wide_log, wide = run_port(binary, out, "aspect-16x9", args.frames, shot_frames, args.replay, 1, False, extra_env)
+    wide_log, wide = run_port(binary, out, "aspect-16x9", args.frames, shot_frames, args.replay, 1, False, extra_env, repository)
     frame = shot_frames[0]
     if frame in wide and frame in standard:
         changed = wide[frame].differs_from(standard[frame])
@@ -199,7 +211,7 @@ def main(argv=None):
     if args.skip_fps60:
         print("[looks-right] fps60        SKIPPED — caller declares no interpolation product for this title")
     else:
-        fps_log, _ = run_port(binary, out, "fps60", args.frames, shot_frames, args.replay, 0, True, extra_env)
+        fps_log, _ = run_port(binary, out, "fps60", args.frames, shot_frames, args.replay, 0, True, extra_env, repository)
         state, interpolated, extras = fps60_verdict(fps_log)
         detail = {
             "interpolating": f"{interpolated} interpolated prim(s) over {extras} extra present(s)",
