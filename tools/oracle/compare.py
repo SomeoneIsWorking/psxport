@@ -27,13 +27,19 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, Sequence
+from typing import Any, Optional, Protocol
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from compare_cores import ConsoleSession, CoreError, CoreSession, NativeReplSession  # noqa: E402
+from compare_cores import (  # noqa: E402
+    ConsoleSession,
+    CoreError,
+    CoreSession,
+    NativeReplSession,
+)
 
 PSXPORT = Path(__file__).resolve().parents[2]
 
