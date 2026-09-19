@@ -33,7 +33,10 @@ from pathlib import Path
 from typing import Any, Optional, Protocol
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# tools/ — psx_pad owns the pad bit table and the .pad replay format for every tool here.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import psx_pad  # noqa: E402
 from compare_cores import (  # noqa: E402
     ConsoleSession,
     CoreError,
@@ -307,13 +310,14 @@ class Comparison:
               f"{'DETECTED it' if hit else 'MISSED it'}")
         return hit
 
-    def gameplay(self, frame_step: int) -> bool:
-        """Feed both cores the title's held-input segments frame by frame and compare after every
+    def gameplay(self, frame_step: int, segments: Segments | None = None) -> bool:
+        """Feed both cores the held-input segments frame by frame and compare after every
         `frame_step` frames of a segment (once per segment when 0); stop at the first decisive
-        divergence."""
-        schedule = [buttons for buttons, frames in self.title.gameplay for _ in range(frames)]
+        divergence. `segments` defaults to the title's own scripted route."""
+        segments = self.title.gameplay if segments is None else segments
+        schedule = [buttons for buttons, frames in segments for _ in range(frames)]
         players = [Playback(self.driver, core, schedule) for core in (self.native, self.console)]
-        for index, (buttons, frames) in enumerate(self.title.gameplay):
+        for index, (buttons, frames) in enumerate(segments):
             for done in range(1, frames + 1):
                 for player in players:
                     player.step()
@@ -325,6 +329,35 @@ class Comparison:
 
 
 SessionFactory = Callable[[Product, argparse.Namespace, Path], tuple[CoreSession, CoreSession]]
+Segments = Sequence[tuple[frozenset[str], int]]
+
+
+def recorded_route(path: Path, start: int) -> Segments:
+    """A recorded .pad replay, from frame `start`, as held-input segments.
+
+    WHY A SUFFIX IS SOUND HERE AND NOT IN THE RUNTIME. `runtime/psx/pad_input.h` says a replay is
+    "only valid from boot", and that is about the runtime's own replay cursor: resuming it mid-file
+    would feed the guest frames it never ran. This is a different use — the buttons are read out and
+    delivered to BOTH cores through the same Playback that delivers a scripted route, from a state
+    the checkpoints put both cores in and verified equal. Identical input from an equal state is the
+    whole requirement, and it holds for any offset.
+
+    What a wrong offset costs is MEANING, not soundness: the route still runs identically on both
+    cores, so the comparison is still valid, but it stops doing what the recording's name says. That
+    is why the caller states the offset rather than this guessing one, and why reaching the intended
+    scene is checked by looking at the game, not assumed.
+
+    Consecutive identical frames are collapsed into one segment so the progress lines read like a
+    scripted route instead of one line per frame.
+    """
+    frames = psx_pad.schedule(path, start)
+    segments: list[tuple[frozenset[str], int]] = []
+    for buttons in frames:
+        if segments and segments[-1][0] == buttons:
+            segments[-1] = (buttons, segments[-1][1] + 1)
+        else:
+            segments.append((buttons, 1))
+    return tuple(segments)
 
 
 def launch_sessions(product: Product, args: argparse.Namespace, out_dir: Path) -> tuple[CoreSession, CoreSession]:
@@ -378,7 +411,15 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
         for checkpoint in rest:
             comparison.reach(checkpoint, args.budget)
             ok = comparison.checkpoint(checkpoint.name) and ok
-        ok = comparison.gameplay(args.frame_step) and ok
+        route = getattr(args, "route", None)
+        segments = recorded_route(route, getattr(args, "route_from", 0)) if route else None
+        if segments is not None:
+            frames = sum(count for _, count in segments)
+            report["route"] = {"replay": str(route), "from_frame": getattr(args, "route_from", 0),
+                               "frames": frames, "segments": len(segments)}
+            print(f"[oracle] route: {route} from frame {getattr(args, 'route_from', 0)} — "
+                  f"{frames} frame(s) in {len(segments)} segment(s)")
+        ok = comparison.gameplay(args.frame_step, segments) and ok
         report["complete"] = True
         exit_code = 0 if ok else 1
         return exit_code
@@ -409,6 +450,12 @@ def build_parser(description: str, default_bios: Path) -> argparse.ArgumentParse
     parser.add_argument("--frame-step", type=int, default=0,
                         help="compare every N frames inside a gameplay segment (0 = once per segment)")
     parser.add_argument("--selftest", action="store_true", help="validate the comparator with a seeded divergence")
+    parser.add_argument("--route", type=Path,
+                        help="a recorded .pad replay to drive BOTH cores with instead of the title's "
+                             "scripted route, so a long recorded scene can be compared")
+    parser.add_argument("--route-from", type=int, default=0, metavar="FRAME",
+                        help="start the recorded route at this frame, skipping the recording's own "
+                             "boot/intro input that the checkpoints already performed")
     return parser
 
 

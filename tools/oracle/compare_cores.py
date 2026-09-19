@@ -17,6 +17,7 @@ import json
 import os
 import queue
 import struct
+import sys
 import shutil
 import subprocess
 import threading
@@ -24,13 +25,12 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-# PSX digital pad bit order; the wire (and the REPL's `held=` echo) is active-low.
-PSX_BUTTON_BITS = {
-    "select": 0x0001, "l3": 0x0002, "r3": 0x0004, "start": 0x0008,
-    "up": 0x0010, "right": 0x0020, "down": 0x0040, "left": 0x0080,
-    "l2": 0x0100, "r2": 0x0200, "l1": 0x0400, "r1": 0x0800,
-    "triangle": 0x1000, "circle": 0x2000, "cross": 0x4000, "square": 0x8000,
-}
+# The PSX digital pad bit order lives in tools/psx_pad.py, with the .pad replay format that uses the
+# same table. It was duplicated here and in a consumer's replay decoder; an incomplete copy of a bit
+# table drops input silently, so there is one.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from psx_pad import PSX_BUTTON_BITS  # noqa: E402
 
 
 class CoreError(RuntimeError):

@@ -59,6 +59,7 @@ from compare import (
     Title,
     build_parser,
     fresh_card,
+    recorded_route,
 )
 from compare_cores import ConsoleSession, CoreError, CoreSession, NativeReplSession
 
@@ -157,9 +158,11 @@ class PictureRun:
             used, settle = checkpoint.reach(self.driver, core, budget, settle)
             print(f"[picture] {core.name}: {checkpoint.name} after {used} game frames")
 
-    def play(self, frames: int) -> None:
-        """Run the title's gameplay schedule on both cores so a later state can be compared too."""
-        schedule = [buttons for buttons, count in self.title.gameplay for _ in range(count)]
+    def play(self, frames: int, segments=None) -> None:
+        """Run a held-input schedule on both cores so a later state can be compared too. `segments`
+        defaults to the title's own scripted route; a recorded replay can stand in for it."""
+        segments = self.title.gameplay if segments is None else segments
+        schedule = [buttons for buttons, count in segments for _ in range(count)]
         players = [Playback(self.driver, core, schedule) for core in (self.native, self.console)]
         for _ in range(min(frames, len(schedule))):
             for player in players:
@@ -295,9 +298,12 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
                 report["complete"] = True
                 return 0 if run_state.selftest() else 1
             ok = run_state.at(checkpoint.name) and ok
+        route = getattr(args, "route", None)
+        segments = recorded_route(route, getattr(args, "route_from", 0)) if route else None
         if args.play:
-            run_state.play(args.play)
-            ok = run_state.at(f"played-{args.play}f") and ok
+            run_state.play(args.play, segments)
+            label = f"{route.stem}-{args.play}f" if route else f"played-{args.play}f"
+            ok = run_state.at(label) and ok
         report["complete"] = True
         return 0 if ok else 1
     except CoreError as error:
