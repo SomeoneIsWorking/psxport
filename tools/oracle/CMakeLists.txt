@@ -131,4 +131,7 @@ if(PSXPORT_BUILD_TESTS)
   add_test(NAME oracle_picture
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_picture.py)
   set_tests_properties(oracle_picture PROPERTIES TIMEOUT 60)
+  add_test(NAME oracle_widescreen
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_widescreen.py)
+  set_tests_properties(oracle_widescreen PROPERTIES TIMEOUT 60)
 endif()
