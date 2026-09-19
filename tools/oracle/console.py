@@ -206,10 +206,12 @@ def parse_arguments():
     execute.add_argument("--region", choices=tuple(FIRMWARE), default="na")
     execute.add_argument("--crop-overscan", action="store_true",
                          help="publish the core's active display area instead of the padded "
-                              "scanline: crop_overscan=static, the core's HORIZONTAL-only crop "
-                              "(350x240 -> 320x240). Not `smart`, which also crops vertically and "
-                              "would change the height the product presents. Video only; RAM is "
-                              "unaffected")
+                              "scanline: crop_overscan=smart, which crops horizontally AND "
+                              "vertically (350x240 -> 320x224 on Tomba! 2). The vertical crop is the "
+                              "point: the native path deliberately presents more rows than a console "
+                              "scans out, so the product is cropped to the guest_scan count it "
+                              "reports and the reference to its own active area, and the two agree "
+                              "independently. Video only; RAM is unaffected")
     firmware = execute.add_mutually_exclusive_group(required=True)
     firmware.add_argument("--bios", type=Path)
     firmware.add_argument("--openbios", action="store_true")
