@@ -279,7 +279,7 @@ class PictureRun:
             handle.convert("RGB").crop((0, 0, native.size[0], rows)).save(cropped)
         return Picture.load(cropped), console
 
-    def state_divergence(self) -> tuple[list[dict], list[dict]]:
+    def state_divergence(self) -> tuple[list[dict], list[dict], list[dict]]:
         """Every declared range that disagrees between the two cores right now, split into the ones
         that invalidate a PICTURE comparison and the ones merely worth reporting.
 
@@ -294,19 +294,28 @@ class PictureRun:
         20px below the reference and 87% of pixels differed -- one camera difference, wearing the
         costume of a rendering defect. A title therefore declares `picture_decisive` for the ranges
         that must match before a pixel count means anything; without it the RAM set is used, which is
-        the old behaviour."""
+        the old behaviour.
+
+        Returns (blocking, differing, decisive). The third list is EVERY picture-decisive range with
+        its value, agreeing ones included, because a report that prints only what differs cannot be
+        told apart from one whose ranges are inert. Measured on Tomba! 2 (2026-09-19): four ranges
+        were added to its picture set and two of them -- the fade sequencer's outer state and its ramp
+        level -- agreed at every checkpoint. Reading the values showed why, and it was not that the
+        two cores' fades matched. Without them in the report, "no fade row" and "this range is never
+        populated here" are the same silence."""
         native = snapshot(self.title, self.native)
         console = snapshot(self.title, self.console)
         names = getattr(self.title, "picture_decisive", None)
-        rows = [row for row in compare_state(self.title, native, console) if not row["equal"]]
-        blocking = [row for row in rows
-                    if (row["range"] in names if names is not None else row["decisive"])]
-        return blocking, rows
+        everything = compare_state(self.title, native, console)
+        chosen = (lambda row: row["range"] in names) if names is not None else (lambda row: row["decisive"])
+        rows = [row for row in everything if not row["equal"]]
+        blocking = [row for row in rows if chosen(row)]
+        return blocking, rows, [row for row in everything if chosen(row)]
 
     def at(self, name: str) -> bool:
         """Capture both cores here and report. Returns whether the pictures are comparable AND
         matched well enough not to name a defect; a refusal is False and says why."""
-        diverged, all_diverged = self.state_divergence()
+        diverged, all_diverged, decisive_state = self.state_divergence()
         native, console = self.capture(name)
         row: dict = {
             "checkpoint": name,
@@ -315,6 +324,9 @@ class PictureRun:
             "console": {"path": str(console.path), "size": list(console.size), "non_black": console.non_black,
                         "colours": console.distinct_colours},
         }
+        # Recorded before any refusal below can return: the values the comparison was gated on are
+        # evidence whichever way the checkpoint goes, and a refusal is exactly when they are wanted.
+        row["decisive_state"] = decisive_state
         self.report["pictures"].append(row)
         for label, picture in (("product", native), ("reference", console)):
             if picture.blank or picture.uniform:
