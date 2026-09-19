@@ -209,7 +209,11 @@ def default_repository(binary):
 def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, extra_env, repository,
              route=None):
     """One headless run with cwd at the repository (present shots are repository-relative).
-    Returns (log_text, {frame: Capture})."""
+    Returns (log_text, {frame: Capture}, exit_code). The exit code is RETURNED, not merely printed:
+    a leg that died mid-run can still leave behind the shots and the telemetry it wrote before it
+    died, and every verdict built from those reads as if the run had finished. Measured 2026-09-19
+    on Tomba! 2 — the 16:9 and fps60 legs both aborted at exit 139 on a render-queue overflow, and
+    `fps60` still reported PASS from the presents that preceded the abort."""
     scratch = Path(scratch).resolve()
     settings = scratch / f"{name}.ini"
     settings.write_text(f"aspect={aspect}\n")
@@ -270,7 +274,17 @@ def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, 
             target.write_bytes(candidate.read_bytes())
             candidate.unlink()
         captured[frame] = Capture.read(target)
-    return text, captured
+    return text, captured, completed.returncode
+
+
+def crashed(exit_code):
+    """Whether a leg died. Anything but a clean exit means the run did not finish, so nothing it
+    produced describes a completed frame sequence."""
+    return exit_code != 0
+
+
+def crash_detail(name, exit_code):
+    return f"the {name} run exited {exit_code} — it did not finish, so this check cannot pass"
 
 
 def report(label, ok, detail):
@@ -326,7 +340,7 @@ def main(argv=None):
     else:
         print(f"[looks-right] {binary} — {args.frames} frame(s), shots at {shot_frames}, "
               f"replay {args.replay or 'none'}")
-    standard_log, standard = run_port(binary, out, "aspect-4x3", args.frames, shot_frames, args.replay, 0, False, extra_env, repository, args.route)
+    standard_log, standard, standard_exit = run_port(binary, out, "aspect-4x3", args.frames, shot_frames, args.replay, 0, False, extra_env, repository, args.route)
     if not standard:
         where = "the route" if args.route else "the 4:3 run"
         print(f"[looks-right] REFUSED: no capture from {where} — see {out}/aspect-4x3.log")
@@ -346,11 +360,15 @@ def main(argv=None):
         if fences is not None:
             detail += (f"; the run produced {fences} presentation fence(s) from {args.frames} field(s), "
                        f"and --shot-at counts FENCES — raise --frames")
-    ok &= report("reaches", not failures and not missing, detail)
+    if crashed(standard_exit):
+        detail += f" — but {crash_detail('4:3', standard_exit)}"
+    ok &= report("reaches", not failures and not missing and not crashed(standard_exit), detail)
 
-    wide_log, wide = run_port(binary, out, "aspect-16x9", args.frames, shot_frames, args.replay, 1, False, extra_env, repository, args.route)
+    wide_log, wide, wide_exit = run_port(binary, out, "aspect-16x9", args.frames, shot_frames, args.replay, 1, False, extra_env, repository, args.route)
     frame = shot_frames[0]
-    if frame in wide and frame in standard:
+    if crashed(wide_exit):
+        ok &= report("widescreen", False, crash_detail("16:9", wide_exit))
+    elif frame in wide and frame in standard:
         changed = wide[frame].differs_from(standard[frame])
         ok &= report(
             "widescreen",
@@ -365,7 +383,7 @@ def main(argv=None):
     if args.skip_fps60:
         print("[looks-right] fps60        SKIPPED — caller declares no interpolation product for this title")
     else:
-        fps_log, _ = run_port(binary, out, "fps60", args.frames, shot_frames, args.replay, 0, True, extra_env, repository, args.route)
+        fps_log, _, fps_exit = run_port(binary, out, "fps60", args.frames, shot_frames, args.replay, 0, True, extra_env, repository, args.route)
         state, interpolated, extras = fps60_verdict(fps_log)
         # A run with neither a replay nor a route only ever sees boot and attract, and a boot picture
         # can be an upload-only guest-VRAM present with no geometry at all (Spyro's 24bpp Universal
@@ -383,7 +401,12 @@ def main(argv=None):
             "not-enabled": "PSXPORT_FPS60=1 was set but the run never reported interpolation on",
             "refused": "the title declares no temporal interpolation product",
         }[state]
-        if unjudged:
+        if crashed(fps_exit):
+            # The prims and presents below were counted from a log that STOPS at the crash. They are a
+            # real count of a partial run, which is exactly what makes them dangerous: they look like a
+            # complete measurement. Say both.
+            ok &= report("fps60", False, f"{detail}, but {crash_detail('fps60', fps_exit)}")
+        elif unjudged:
             print(f"[looks-right] fps60        UNJUDGED — {detail}")
             ok = False
         else:
@@ -423,6 +446,14 @@ def selftest():
     checks.append(("no extra present over a route is judged", fps60_unjudged("no-extra-present", routed=True) is False))
     checks.append(("no extra present with no route is UNJUDGED", fps60_unjudged("no-extra-present", routed=False) is True))
     checks.append(("a duplicate frame is judged even with no route", fps60_unjudged("duplicate-frame", routed=False) is False))
+
+    # A leg's exit status, both answers. Measured 2026-09-19 on Tomba! 2: the 16:9 and fps60 legs both
+    # died at 139 on a render-queue overflow, and fps60 still printed PASS from the 2,271,143 prims the
+    # run had emitted before it died. A partial run's counts are real numbers about an unfinished run.
+    checks.append(("a clean exit is believed", crashed(0) is False))
+    checks.append(("a SIGSEGV leg is NOT believed", crashed(139) is True))
+    checks.append(("a nonzero exit is NOT believed", crashed(1) is True))
+    checks.append(("the crash detail names the exit", "139" in crash_detail("fps60", 139)))
 
     checks.append(("a clean log has no failure marks", run_failures("all good") == []))
     checks.append(("an executor fault is a failure mark", run_failures("executor fault at 0x8001") != []))
