@@ -104,6 +104,24 @@ def best_shift(pa, pc, tx, ty, tile, radius=2):
     return best
 
 
+SHOT_RE = re.compile(r'wrote (\S+) \((\d+)x(\d+) @ (-?\d+),(-?\d+)\)')
+
+
+def load_shot_origins(path):
+    """{dump basename: (sx, sy)} — where in VRAM each captured frame was read from.
+
+    The dump is the DISPLAY region, but a run's extent is in the draw space the queue built, which
+    for a double-buffered title is the OTHER buffer half the time. Tomba! 2 always displays at 0,0
+    and so needs no correction; Spyro 1 alternates 0,0 and 0,240 every present, which silently put
+    half its frames 240 rows away from their own geometry."""
+    origins = {}
+    for line in open(path, errors="replace"):
+        m = SHOT_RE.search(line)
+        if m:
+            origins[os.path.basename(m.group(1))] = (int(m.group(4)), int(m.group(5)))
+    return origins
+
+
 SEQ_FENCE_RE = re.compile(r'\[fps60seq\] f(\d+) t=')
 SEQ_RUN_RE = re.compile(
     r'rqcur layer=(\d+) (TIER1|verbatim)\s+n=(\d+) seq=\[\S+\] producer=([0-9A-F]+) '
@@ -255,6 +273,8 @@ def main():
     n_triples = totals = 0
     counts = defaultdict(int)
     sequence_runs = load_sequence_runs(args.seq) if args.seq else None
+    shot_origins = load_shot_origins(args.seq) if args.seq else {}
+    origins_missing = 0
     # owner -> [moved-endpoint tiles, 0px-endpoint tiles, lerped tiles]
     by_owner = defaultdict(lambda: [0, 0, 0])
     unattributed = [0, 0]  # moved-endpoint, lerped
@@ -270,6 +290,11 @@ def main():
             print(f"  skip {os.path.basename(b[2])}: size mismatch", file=sys.stderr)
             continue
         grid = classify(ia, ib, ic, w, h, args.tile)
+        # A tile's image coordinate is display-relative; a run's extent is VRAM-absolute in the
+        # buffer that fence drew into, which is the one this real frame displays.
+        origin = shot_origins.get(os.path.basename(c[2]), (0, 0))
+        if sequence_runs is not None and os.path.basename(c[2]) not in shot_origins:
+            origins_missing += 1
         n_triples += 1
         for tile, verdict in grid.items():
             counts[verdict] += 1
@@ -287,7 +312,8 @@ def main():
             if sequence_runs is not None and verdict != "STATIC":
                 if c[3] not in sequence_runs:
                     uncovered_fences.add(c[3])
-                run = owner_of(sequence_runs.get(c[3], ()), tile[0], tile[1], args.tile)
+                run = owner_of(sequence_runs.get(c[3], ()),
+                               tile[0] + origin[0], tile[1] + origin[1], args.tile)
                 if run is None:
                     unattributed[0 if (shift or 0) >= 1 else 1] += 1
                 else:
@@ -361,6 +387,11 @@ def main():
                   f"Do not read the shares below as a breakdown of the whole.\n"
                   f"    frames    {w}x{h}\n"
                   f"    run bbox  x=[{bx0}..{bx1}) y=[{by0}..{by1})")
+        if origins_missing:
+            print(f"  WARNING: {origins_missing} of {n_triples} triple(s) had no gpu_shot line in "
+                  f"the log,\n  so their runs were read at VRAM origin 0,0. A double-buffered title "
+                  f"will mis-attribute\n  those. Capture fps60dump and fps60seq in ONE run so both "
+                  f"land in the same log.")
         if uncovered_fences:
             print(f"  WARNING: {len(uncovered_fences)} of the {n_triples} triple(s) name a fence "
                   f"the log never described\n  (first: f{min(uncovered_fences)}) — their tiles are "
