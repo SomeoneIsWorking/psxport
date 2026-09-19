@@ -2,6 +2,7 @@
 #include "cfg.h"
 #include "core.h"
 #include "fps60_gpu_present.h"
+#include "fps60_sequence_runs.h"
 #include "game.h"        // Game-owned optional temporal product and RenderQueue
 #include "mods.h"        // Mods (game->mods.fps60)
 #include "proj_params.h" // ProjParams — the camera's projection constants + Snapshot save/restore
@@ -11,6 +12,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <utility>
+#include <vector>
 
 extern "C" {
 uint32_t GTE_ReadDR(unsigned);
@@ -87,24 +89,27 @@ const lucent::Channel sequenceChannel{"fps60seq"};
 
 void dumpSequenceRuns(CapturedFrameView frame, float t, const TemporalSceneSource *source) {
   lucent::debug(sequenceChannel, "f{} t={:.3f} captured n={}", frame.fence, t, frame.items.size());
-  size_t i = 0;
-  while (i < frame.items.size()) {
-    const auto &first = frame.items[i];
-    const bool owned = source && source->owns(first);
-    size_t end = i + 1;
-    while (end < frame.items.size() && frame.items[end].layer == first.layer &&
-           (source && source->owns(frame.items[end])) == owned) {
-      ++end;
-    }
+  // The painter object is part of the run key, so a verbatim run names the producer that emitted
+  // it. Grouping by layer alone made "verbatim n=478" span every producer drawing into RQ_WORLD and
+  // name none of them, which is the one thing a reader needs before choosing what to reconstruct
+  // next.
+  std::vector<psxport::fps60::SequenceRun> runs;
+  psxport::fps60::groupSequenceRuns(
+      frame.items,
+      [source](const RqItem &item) {
+        return source != nullptr && source->owns(item);
+      },
+      runs);
+  for (const auto &run : runs) {
     lucent::debug(sequenceChannel,
-                  "  rqcur layer={} {:<9} n={} seq=[{}..{}] node0={:08X}",
-                  first.layer,
-                  owned ? "TIER1" : "verbatim",
-                  end - i,
-                  first.seq,
-                  frame.items[end - 1].seq,
-                  first.dbg_node);
-    i = end;
+                  "  rqcur layer={} {:<9} n={} seq=[{}..{}] producer={:08X} node0={:08X}",
+                  run.layer,
+                  run.owned ? "TIER1" : "verbatim",
+                  run.count(),
+                  frame.items[run.begin].seq,
+                  frame.items[run.end - 1].seq,
+                  (uint32_t)run.painterObject,
+                  frame.items[run.begin].dbg_node);
   }
 }
 
