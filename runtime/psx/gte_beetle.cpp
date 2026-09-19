@@ -235,9 +235,7 @@ void proj_native_xform(int vx, int vy, int vz, ProjVtx *out) {
   const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
   const uint16_t H = (uint16_t)gte_read_ctrl(26);
   FixedAffine affine{};
-  affine.m = {{{(int16_t)c0, (int16_t)(c0 >> 16), (int16_t)c1},
-               {(int16_t)(c1 >> 16), (int16_t)c2, (int16_t)(c2 >> 16)},
-               {(int16_t)c3, (int16_t)(c3 >> 16), (int16_t)c4}}};
+  affine.m = rotationFromControlWords({c0, c1, c2, c3, c4});
   affine.t = {{(int32_t)gte_read_ctrl(5), (int32_t)gte_read_ctrl(6), (int32_t)gte_read_ctrl(7)}};
   const NativeProjectedVertex p = project(affine, {OFX, OFY, H}, {(int16_t)vx, (int16_t)vy, (int16_t)vz});
   out->ir1 = p.ir[0];
@@ -294,9 +292,7 @@ static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx *out) {
   const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
   const uint16_t H = (uint16_t)gte_read_ctrl(26);
   FixedAffine affine{};
-  affine.m = {{{(int16_t)c0, (int16_t)(c0 >> 16), (int16_t)c1},
-               {(int16_t)(c1 >> 16), (int16_t)c2, (int16_t)(c2 >> 16)},
-               {(int16_t)c3, (int16_t)(c3 >> 16), (int16_t)c4}}};
+  affine.m = rotationFromControlWords({c0, c1, c2, c3, c4});
   affine.t = {{(int32_t)gte_read_ctrl(5), (int32_t)gte_read_ctrl(6), (int32_t)gte_read_ctrl(7)}};
   const NativeProjectedVertex p = detail::project_gte_mode(affine,
                                                            {OFX, OFY, H},

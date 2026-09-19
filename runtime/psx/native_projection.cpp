@@ -205,4 +205,11 @@ sample_view(const RawViewVertex &previous, const RawViewVertex &current, const P
   return project_transformed(sampled, projection);
 }
 
+std::array<std::array<int16_t, 3>, 3> rotationFromControlWords(const std::array<uint32_t, 5> &words) {
+  const uint32_t c0 = words[0], c1 = words[1], c2 = words[2], c3 = words[3], c4 = words[4];
+  return {{{(int16_t)c0, (int16_t)(c0 >> 16), (int16_t)c1},
+           {(int16_t)(c1 >> 16), (int16_t)c2, (int16_t)(c2 >> 16)},
+           {(int16_t)c3, (int16_t)(c3 >> 16), (int16_t)c4}}};
+}
+
 } // namespace psxport::native_projection

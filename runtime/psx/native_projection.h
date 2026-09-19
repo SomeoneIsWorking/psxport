@@ -11,6 +11,14 @@ struct FixedAffine {
   std::array<int32_t, 3> t{};
 };
 
+// The rotation the GTE's five packed matrix control words CR0..CR4 describe. The guest stores a
+// SHORTMATRIX as those five words and every producer that transforms by one has to unpack them the
+// same way; six hand-written copies of the same nine casts and shifts is six chances to transpose a
+// column into geometry that looks skewed rather than into a compile error. `words[i]` is CR(i), and
+// the ninth entry is the LOW half of CR4 — its high half is CR30 in a Moby record and is not part
+// of the rotation.
+std::array<std::array<int16_t, 3>, 3> rotationFromControlWords(const std::array<uint32_t, 5> &words);
+
 struct ProjectionParams {
   int32_t ofx = 0;
   int32_t ofy = 0;
