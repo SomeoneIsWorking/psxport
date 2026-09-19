@@ -16,9 +16,9 @@ buffers and printed "differing 0/524288 (0.00%)" as a pass — measured on Tomba
 
 WHAT THIS COMPARES. The frame each core PRESENTS, captured through each core's own present path:
 the product through the REPL's `shot` (gpu_native_shot, so it follows the active render path and the
-wide presentation region), the reference through its libretro framebuffer. Both cores are driven to
-the same state by the same title checkpoints `compare.py` uses, so the two pictures are of the same
-moment in the same route.
+wide presentation region), the reference through its libretro framebuffer. Both cores are driven by
+the same title checkpoints `compare.py` uses -- but reaching the same checkpoint is NOT the same as
+standing at the same moment, so every comparison below CHECKS that before it believes a number.
 
 WHAT IT REFUSES, and why each refusal exists rather than a number:
 
@@ -28,6 +28,14 @@ WHAT IT REFUSES, and why each refusal exists rather than a number:
     not a defect, and scaling one onto the other would invent pixels and then measure them. Compare
     the product's 4:3 output against the reference, and judge the widescreen extra area by coverage.
   * A capture either core did not write.
+  * THE TWO CORES ARE NOT AT THE SAME GUEST STATE. Measured 2026-09-19 on Spyro 1: at the `playing`
+    checkpoint the reference was showing the "The Adventure Begins..." card while the product had
+    already faded the world in, and a 600-frame held-input schedule from there reported 58-89% of
+    pixels differing. None of that was a rendering defect -- the two cores were photographed at
+    different moments of the same route. A picture difference is only evidence about rendering when
+    the simulation underneath it agrees, so this compares the title's own DECISIVE declared ranges
+    (the same ones `compare.py` gates on, read through the same owner) and refuses rather than
+    printing a percentage that ranks nothing.
 
 WHAT A DIFFERENCE MEANS, stated so it cannot be overread. The two cores are different renderers:
 the reference rasterises the guest's own command stream at native resolution, the product draws
@@ -60,7 +68,9 @@ from compare import (
     build_parser,
     fresh_card,
     recorded_route,
+    snapshot,
 )
+from compare import compare as compare_state
 from compare_cores import ConsoleSession, CoreError, CoreSession, NativeReplSession
 
 try:
@@ -210,9 +220,23 @@ class PictureRun:
             handle.convert("RGB").crop((0, 0, native.size[0], rows)).save(cropped)
         return Picture.load(cropped), console
 
+    def state_divergence(self) -> list[dict]:
+        """The decisive declared ranges that disagree between the two cores, right now.
+
+        Read through `compare.snapshot`/`compare.compare` -- the same owner the RAM comparison
+        gates on -- so there is one definition of what "the same state" means and no second copy
+        of it to drift. Informational ranges are excluded deliberately: Spyro's level-tick counter
+        keeps a VSync-phase offset the host clock cannot reproduce (issue 0114), so requiring it to
+        match would refuse every gameplay comparison forever."""
+        native = snapshot(self.title, self.native)
+        console = snapshot(self.title, self.console)
+        return [row for row in compare_state(self.title, native, console)
+                if row["decisive"] and not row["equal"]]
+
     def at(self, name: str) -> bool:
         """Capture both cores here and report. Returns whether the pictures are comparable AND
         matched well enough not to name a defect; a refusal is False and says why."""
+        diverged = self.state_divergence()
         native, console = self.capture(name)
         row: dict = {
             "checkpoint": name,
@@ -235,6 +259,16 @@ class PictureRun:
             row["refused"] = (f"the product presents {native.size[0]}x{native.size[1]} and the reference "
                               f"{console.size[0]}x{console.size[1]}; scaling one onto the other would invent "
                               f"the pixels this tool then measured. Compare the product's 4:3 output here")
+            print(f"[picture] {name}: REFUSED — {row['refused']}", file=sys.stderr)
+            return False
+        if diverged:
+            row["state_divergence"] = diverged
+            names = ", ".join(f"{d['range']} (+{d['first_diff_offset']}: "
+                              f"native {d['native_byte']:02X} console {d['console_byte']:02X})"
+                              for d in diverged)
+            row["refused"] = (f"the two cores are not at the same guest state here, so a picture "
+                              f"difference would not be about rendering: {names}. Drive both to a "
+                              f"state the RAM comparison calls equal before photographing them")
             print(f"[picture] {name}: REFUSED — {row['refused']}", file=sys.stderr)
             return False
         diff = compare_pictures(native.path, console.path)

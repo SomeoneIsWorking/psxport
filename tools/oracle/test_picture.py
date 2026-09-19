@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import compare  # noqa: E402
 import picture  # noqa: E402
-from test_compare import FakeConsole, FakeNative, FakeTitle  # noqa: E402
+from test_compare import SCRATCH, FakeConsole, FakeNative, FakeTitle  # noqa: E402
 
 from PIL import Image  # noqa: E402
 
@@ -156,6 +156,44 @@ class PictureTests(unittest.TestCase):
         diff = self._row(report)["diff"]
         self.assertGreater(diff["differing"], 0)
         self.assertFalse(diff["concentrated"], diff)
+
+    def test_a_decisive_state_divergence_is_refused_rather_than_scored(self) -> None:
+        """The refusal that was missing, and what it cost. On Spyro 1 (2026-09-19) the two cores
+        reached the same `playing` checkpoint at different moments -- the reference still on the
+        "The Adventure Begins..." card, the product already showing the world -- and the tool
+        reported 18% of pixels differing, then 58-89% over the 600 frames that followed. Every one
+        of those numbers was about WHEN each core was photographed, not about rendering."""
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        native.paint_with(SCENE_WITH_A_BLOT)
+        console.paint_with(SCENE)
+        console.memory[0:4] = (999).to_bytes(4, "little")  # a decisive range: the frame counter
+        code = picture.run(FakeTitle(console_lookahead=1), self.product,
+                           arguments(bios=self.bios), self.out,
+                           sessions=lambda product, args, out_dir: (native, console))
+        report = json.loads((self.out / "picture.json").read_text())
+        self.assertEqual(code, 1, report)
+        row = self._row(report)
+        self.assertIn("refused", row)
+        self.assertIn("not at the same guest state", row["refused"])
+        self.assertNotIn("diff", row)  # no percentage that ranks nothing
+        self.assertEqual([d["range"] for d in row["state_divergence"]], ["frame"])
+
+    def test_an_informational_range_diverging_does_not_block_the_comparison(self) -> None:
+        """The other answer. Spyro's level-tick counter keeps a VSync-phase offset the host clock
+        cannot reproduce (issue 0114), so a check that required every declared range to match would
+        refuse every gameplay comparison forever and this instrument would print one answer only."""
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        native.paint_with(SCENE_WITH_A_BLOT)
+        console.paint_with(SCENE)
+        console.write8(SCRATCH, 0x5A)  # declared, but not decisive
+        code = picture.run(FakeTitle(console_lookahead=1), self.product,
+                           arguments(bios=self.bios), self.out,
+                           sessions=lambda product, args, out_dir: (native, console))
+        report = json.loads((self.out / "picture.json").read_text())
+        self.assertEqual(code, 0, report)
+        row = self._row(report)
+        self.assertNotIn("refused", row)
+        self.assertEqual(row["diff"]["differing"], 64)
 
     def test_the_selftest_requires_both_answers(self) -> None:
         code, report = self._run(SCENE, SCENE, selftest=True)
