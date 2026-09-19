@@ -33,9 +33,11 @@ WHAT IT REFUSES, and why each refusal exists rather than a number:
     already faded the world in, and a 600-frame held-input schedule from there reported 58-89% of
     pixels differing. None of that was a rendering defect -- the two cores were photographed at
     different moments of the same route. A picture difference is only evidence about rendering when
-    the simulation underneath it agrees, so this compares the title's own DECISIVE declared ranges
-    (the same ones `compare.py` gates on, read through the same owner) and refuses rather than
-    printing a percentage that ranks nothing.
+    the simulation underneath it agrees, so this compares the title's declared ranges through
+    `compare.py`'s own owner and refuses rather than printing a percentage that ranks nothing.
+    Which ranges block is the title's `picture_decisive`, NOT the RAM gate's `decisive`: a title
+    marks its camera informational because a camera difference cannot change whether the game
+    behaves, and it moves every pixel. Every diverging range is reported either way.
 
 WHAT A DIFFERENCE MEANS, stated so it cannot be overread. The two cores are different renderers:
 the reference rasterises the guest's own command stream at native resolution, the product draws
@@ -220,23 +222,34 @@ class PictureRun:
             handle.convert("RGB").crop((0, 0, native.size[0], rows)).save(cropped)
         return Picture.load(cropped), console
 
-    def state_divergence(self) -> list[dict]:
-        """The decisive declared ranges that disagree between the two cores, right now.
+    def state_divergence(self) -> tuple[list[dict], list[dict]]:
+        """Every declared range that disagrees between the two cores right now, split into the ones
+        that invalidate a PICTURE comparison and the ones merely worth reporting.
 
-        Read through `compare.snapshot`/`compare.compare` -- the same owner the RAM comparison
-        gates on -- so there is one definition of what "the same state" means and no second copy
-        of it to drift. Informational ranges are excluded deliberately: Spyro's level-tick counter
-        keeps a VSync-phase offset the host clock cannot reproduce (issue 0114), so requiring it to
-        match would refuse every gameplay comparison forever."""
+        Read through `compare.snapshot`/`compare.compare` -- the same owner the RAM comparison gates
+        on -- so there is one definition of what "the same state" means and no second copy to drift.
+
+        WHY THE PICTURE'S SET IS NOT THE RAM COMPARISON'S. `DeclaredRange.decisive` answers "may the
+        simulation differ here", and a title marks the camera informational precisely because a small
+        camera difference does not change whether the game BEHAVES. It changes every pixel. Measured
+        on Spyro 1 (2026-09-19): at a dragon-cutscene frame with gamestate, level, game_tick,
+        state_switch and player.position all equal, the product framed the dragon about 25px left and
+        20px below the reference and 87% of pixels differed -- one camera difference, wearing the
+        costume of a rendering defect. A title therefore declares `picture_decisive` for the ranges
+        that must match before a pixel count means anything; without it the RAM set is used, which is
+        the old behaviour."""
         native = snapshot(self.title, self.native)
         console = snapshot(self.title, self.console)
-        return [row for row in compare_state(self.title, native, console)
-                if row["decisive"] and not row["equal"]]
+        names = getattr(self.title, "picture_decisive", None)
+        rows = [row for row in compare_state(self.title, native, console) if not row["equal"]]
+        blocking = [row for row in rows
+                    if (row["range"] in names if names is not None else row["decisive"])]
+        return blocking, rows
 
     def at(self, name: str) -> bool:
         """Capture both cores here and report. Returns whether the pictures are comparable AND
         matched well enough not to name a defect; a refusal is False and says why."""
-        diverged = self.state_divergence()
+        diverged, all_diverged = self.state_divergence()
         native, console = self.capture(name)
         row: dict = {
             "checkpoint": name,
@@ -261,8 +274,9 @@ class PictureRun:
                               f"the pixels this tool then measured. Compare the product's 4:3 output here")
             print(f"[picture] {name}: REFUSED — {row['refused']}", file=sys.stderr)
             return False
+        if all_diverged:
+            row["state_divergence"] = all_diverged
         if diverged:
-            row["state_divergence"] = diverged
             names = ", ".join(f"{d['range']} (+{d['first_diff_offset']}: "
                               f"native {d['native_byte']:02X} console {d['console_byte']:02X})"
                               for d in diverged)

@@ -195,6 +195,45 @@ class PictureTests(unittest.TestCase):
         self.assertNotIn("refused", row)
         self.assertEqual(row["diff"]["differing"], 64)
 
+    def test_a_title_can_declare_a_range_decisive_for_the_picture_that_the_ram_gate_ignores(self) -> None:
+        """The two questions are not the same question. A title marks its camera informational
+        because a small camera difference cannot change whether the game BEHAVES -- and it moves
+        every pixel. Measured on Spyro 1: 87% of pixels differed at a dragon-cutscene frame with
+        every RAM-decisive range equal, because the product framed the shot ~25px left of the
+        reference. Without this the picture tool reports that as a rendering defect."""
+
+        class PictureStrictTitle(FakeTitle):
+            picture_decisive = ("scratch",)  # informational for RAM, decisive for the picture
+
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        native.paint_with(SCENE_WITH_A_BLOT)
+        console.paint_with(SCENE)
+        console.write8(SCRATCH, 0x5A)
+        code = picture.run(PictureStrictTitle(console_lookahead=1), self.product,
+                           arguments(bios=self.bios), self.out,
+                           sessions=lambda product, args, out_dir: (native, console))
+        report = json.loads((self.out / "picture.json").read_text())
+        self.assertEqual(code, 1, report)
+        row = self._row(report)
+        self.assertIn("not at the same guest state", row.get("refused", ""))
+        self.assertNotIn("diff", row)
+
+    def test_every_diverging_range_is_reported_even_when_it_does_not_block(self) -> None:
+        """A comparison that passes still says what was not equal underneath it, so a number is
+        never read without the state it was taken at."""
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        native.paint_with(SCENE_WITH_A_BLOT)
+        console.paint_with(SCENE)
+        console.write8(SCRATCH, 0x5A)
+        code = picture.run(FakeTitle(console_lookahead=1), self.product,
+                           arguments(bios=self.bios), self.out,
+                           sessions=lambda product, args, out_dir: (native, console))
+        report = json.loads((self.out / "picture.json").read_text())
+        self.assertEqual(code, 0, report)
+        row = self._row(report)
+        self.assertNotIn("refused", row)
+        self.assertEqual([d["range"] for d in row["state_divergence"]], ["scratch"])
+
     def test_the_selftest_requires_both_answers(self) -> None:
         code, report = self._run(SCENE, SCENE, selftest=True)
         # The fake core paints the same picture whatever the state, so 60 frames change nothing and
