@@ -186,10 +186,14 @@ void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFr
     backend.captureDiagnostic(frame.fence, /*interpolated=*/true);
     // Was an info line behind a latched `fps60` channel test — a per-present line that only ever appeared
     // when the channel was asked for, so it is debug audience, not info.
+    // This used to say "replay prev=Q[N-1]", which is not what happens and sent an analysis the
+    // wrong way for a session. There is no previous queue here: FramePresenter::capturedFrame()
+    // returns THIS fence's items and both passes run over it, so an item no producer reconstructs
+    // is drawn in the in-between present at the position the next real frame will show it. n is
+    // that captured queue, tier1 is how much of it was replaced by reconstruction.
     lucent::debug("fps60",
-                  "f{} slotA: replay prev={} n={} tier1={} backdrop={} t={:.3f}",
+                  "f{} slotA: in-between over Q[N] n={} tier1={} backdrop={} t={:.3f}",
                   frame.fence,
-                  mHavePrev ? "Q[N-1]" : "Q[N] (first frame)",
                   frame.items.size(),
                   mTier1PrimsThisFrame,
                   mBackdropPrimsThisFrame,

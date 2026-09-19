@@ -282,11 +282,13 @@ def selftest():
     """Both answers, on constructed inputs, for every verdict this tool makes."""
     checks = []
 
+    # The shape the product actually emits (runtime/psx/fps60.cpp). It said "replay prev=Q[N-1]"
+    # until 2026-09-19, which was never true: both presents run over the current fence's queue.
     duplicate = "[fps60] TRUE per-object interpolated 60fps ON (source: env)\n" + "".join(
-        f"[fps60] f{f} slotA: replay prev=Q[N-1] n=3613 tier1=0 backdrop=0 t=0.500\n" for f in range(3)
+        f"[fps60] f{f} slotA: in-between over Q[N] n=3613 tier1=0 backdrop=0 t=0.500\n" for f in range(3)
     )
     live = "[fps60] TRUE per-object interpolated 60fps ON (source: env)\n" + "".join(
-        f"[fps60] f{f} slotA: replay prev=Q[N-1] n=3613 tier1=1800 backdrop=12 t=0.500\n" for f in range(3)
+        f"[fps60] f{f} slotA: in-between over Q[N] n=3613 tier1=1800 backdrop=12 t=0.500\n" for f in range(3)
     )
     checks.append(("fps60 duplicate frame is a FAILURE", fps60_verdict(duplicate)[0] == "duplicate-frame"))
     checks.append(("fps60 interpolating is a PASS", fps60_verdict(live)[0] == "interpolating"))

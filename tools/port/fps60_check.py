@@ -38,9 +38,21 @@ cutscene, 299 triples, is the other answer: 1,547 endpoint tiles moved a whole p
 WHOSE tiles those are is the next question, and --seq answers it. Given an fps60seq log from the
 SAME run, every moving tile is credited to the smallest run covering it (smallest, because the
 full-screen sky fill covers everything drawn in front of it). That turned the cutscene's 1,547 into
-one line: 1,471 of them belong to LAYER-2 VERBATIM runs — content no native producer reconstructs,
-so the interpolated present replays it from the previous queue and it can only ever sit on an
-endpoint. TIER1 entities own 73.
+one line: 1,471 of them belong to LAYER-2 VERBATIM runs — content no native producer reconstructs.
+TIER1 entities own 73.
+
+WHAT THAT CONTENT ACTUALLY DOES was got wrong here first, and the correction is the reason this tool
+splits the two endpoints. It does NOT replay from the previous queue: FramePresenter::capturedFrame()
+returns the CURRENT fence's items and both presents run over it, so an unreconstructed item is drawn
+in the in-between present at the position the NEXT real frame will show it — a whole frame early, not
+a frame late. It reads AHEAD, not STALE.
+
+Measured 2026-09-19 on Spyro 1, 238 gameplay triples, by forcing the interpolation factor
+(PSXPORT_FPS60_TFORCE=0) over the same deterministic route: 105,836 tiles moved to the previous
+endpoint, and the forward-snapping population did not move at all — 5,617 at t=0.5 against 5,542 at
+t=0.0, matching owner by owner to within a few tiles. Content that does not respond to t is not being
+interpolated. That is the discriminator to reach for when a defect needs a cause, and it needs no new
+instrument: run the same capture twice with the factor forced.
 
 USAGE (from a consuming game, where external/psxport is the framework)
   PSXPORT_DEBUG=fps60dump ... <the game binary> ...   # capture (cap 600 files)
