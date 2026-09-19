@@ -102,8 +102,47 @@ ENV_MISSING_MARKERS = ("connectionrefusederror", "connection refused", "could no
 VERDICT_TOKENS = ("pass", "passed", "ok", "green", "0 failed", "all checks")
 
 
-def classify(path, timeout):
-    """Run `<tool> --selftest` and return (verdict, detail) with verdict in PASS/FAIL/NONE/ERROR."""
+# A module that is IMPORTED, never invoked. Discovery started walking subdirectories on 2026-09-19 and
+# reached library modules alongside tools: `automation/cleanup.py` is a package member, and
+# `port/consumer_verify.py` is imported as `port.consumer_verify` (tools/port/README.md). Running those
+# as scripts raises an import error that is a fact about the INVOCATION, not a defect in the module.
+#
+# The test is exact rather than a guess from source text. An earlier attempt classified by the presence
+# of an `if __name__ == "__main__":` guard and was wrong in both directions: it filed the three
+# Ghidra-only tools and `vramcmp.py`'s genuinely undeclared numpy dependency as "library modules",
+# turning four real findings into silence. So: a relative import with no parent package is unambiguous,
+# and a missing module is LIB only when that module NAME exists inside the tools tree -- meaning the file
+# wants a sys.path this invocation did not give it. A missing THIRD-PARTY module stays a FAIL, because an
+# undeclared dependency is a defect no matter which file has it.
+RELATIVE_IMPORT_MARKER = "attempted relative import with no known parent package"
+
+
+def missing_module_name(output):
+    """The module name from a ModuleNotFoundError, or None."""
+    marker = "no module named "
+    low = output.lower()
+    i = low.find(marker)
+    if i < 0:
+        return None
+    rest = output[i + len(marker):].lstrip()
+    if not rest or rest[0] not in "'\"":
+        return None
+    quote = rest[0]
+    end = rest.find(quote, 1)
+    return rest[1:end] if end > 0 else None
+
+
+def is_local_module(name, tools_root):
+    """True when `name` names a module that lives in the tools tree being swept."""
+    if not name:
+        return False
+    head = name.split(".", 1)[0]
+    base = Path(tools_root)
+    return (base / head).is_dir() or (base / f"{head}.py").is_file()
+
+
+def classify(path, timeout, tools_root="."):
+    """Run `<tool> --selftest` and return (verdict, detail) with verdict in PASS/FAIL/NONE/ERROR/LIB."""
     try:
         p = subprocess.run(
             [sys.executable, path, "--selftest"],
@@ -119,6 +158,11 @@ def classify(path, timeout):
 
     out = (p.stdout or "") + (p.stderr or "")
     low = out.lower()
+    if RELATIVE_IMPORT_MARKER in low:
+        return "LIB", "an imported module, not a runnable tool (relative import, no parent package)"
+    missing = missing_module_name(out)
+    if missing and is_local_module(missing, tools_root):
+        return "LIB", f"an imported module, not a runnable tool (wants {missing!r} on sys.path)"
     if p.returncode == 0:
         # Distinguish "ran a selftest and passed" from "ignored the flag and did its normal job, exit 0".
         # A tool that silently ignores --selftest would otherwise be counted as covered when it is not.
@@ -173,6 +217,16 @@ FIXTURES = [
     ("echoes.py",      "import sys\nprint(sys.argv[1], '<not a number>')\n",                    "NONE"),
     ("crashes.py",     "import sys\nint(sys.argv[1], 16)\n",                                    "NONE"),
     ("needsinput.py",  "import sys\nprint('--selftest needs a corpus')\nsys.exit(2)\n",         "UNCHECKED"),
+    # The LIB class and its negative. `sibling_pkg` is created beside the fixtures so `is_local_module`
+    # can see it; `numpy_like` deliberately names a module that is NOT in the tree, which must stay a
+    # FAIL. Without that second fixture the local-module test could return True unconditionally and
+    # every undeclared dependency in the repo would read as "just a library module".
+    ("relimport.py",   "from .sibling_pkg import thing\n",                                      "LIB"),
+    # In a SUBDIRECTORY on purpose: Python puts a script's own directory on sys.path, so a fixture beside
+    # sibling_pkg would import it happily and prove nothing. One level down reproduces the real shape --
+    # tools/port/consumer_verify.py importing `automation` from tools/.
+    ("sub/wantspath.py", "import sibling_pkg\n",                                               "LIB"),
+    ("thirdparty.py",  "import a_module_not_in_this_tree\n",                                   "FAIL"),
     ("hostonly.py",    "import ghidra\n",                                                        "HOST"),
 ]
 
@@ -188,18 +242,21 @@ def run_selftest():
     fixture_root = Path(__file__).resolve().parent.parent / "build/tool-selftests/tool-selftests"
     shutil.rmtree(fixture_root, ignore_errors=True)
     fixture_root.mkdir(parents=True)
+    (fixture_root / "sibling_pkg").mkdir()
+    (fixture_root / "sibling_pkg" / "__init__.py").write_text("thing = 1\n")
     try:
         for name, body, want in FIXTURES:
             path = fixture_root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "w") as f:
                 f.write(body)
-            got, detail = classify(path, 60)
+            got, detail = classify(path, 60, fixture_root)
             ran += 1
             ok = got == want
             if not ok:
                 failed += 1
             marker = "ok  " if ok else "FAIL"
-            print(f"  {marker} {name:<16} want {want:<10} got {got:<10} {detail[:60]}")
+            print(f"  {marker} {name:<18} want {want:<10} got {got:<10} {detail[:60]}")
     finally:
         shutil.rmtree(fixture_root, ignore_errors=True)
     print(f"\n  {ran} fixture(s) classified, {failed} wrong.")
@@ -214,6 +271,28 @@ def run_selftest():
     print("  whether the marker lists cover a phrasing no fixture here uses — a new tool that fails in a")
     print("  new way can still be misclassified, which is why every verdict prints its evidence.")
     return 0
+
+
+def _discover(root):
+    """Every Python tool under `root`, at any depth, named relative to it.
+
+    This walks rather than listing one directory. It listed only the top level until 2026-09-19, so
+    `tools/port/` -- five tools, three of them with a working --selftest -- was outside every sweep and
+    outside the denominator this runner exists to print. A report that says "24 tools scanned" while
+    silently omitting a whole directory is the exact failure mode the docstring above warns about, so
+    the fix is in discovery and not a second ctest entry per tool.
+
+    Dot-directories and __pycache__ are skipped: they hold no tools, and running whatever is inside one
+    would produce verdicts about files nobody ships.
+    """
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(n for n in dirnames
+                             if not n.startswith(".") and n != "__pycache__")
+        for f in filenames:
+            if f.endswith(".py") and not f.startswith("_"):
+                found.append(os.path.relpath(os.path.join(dirpath, f), root))
+    return found
 
 
 def main():
@@ -235,11 +314,12 @@ def main():
               f"not a pass.")
         return 2
 
-    tools = sorted(f for f in os.listdir(d)
-                   if f.endswith(".py") and not f.startswith("_"))
+    tools = sorted(_discover(d))
     if a.only:
         want = set(a.only)
-        tools = [t for t in tools if t in want or os.path.splitext(t)[0] in want]
+        tools = [t for t in tools
+                 if want & {t, os.path.splitext(t)[0],
+                            os.path.basename(t), os.path.splitext(os.path.basename(t))[0]}]
     if not tools:
         print(f"tool_selftests: REFUSING (exit 2) — {d!r} contains no Python tools to check"
               + (" matching --only" if a.only else "") + ". Nothing was checked; this is not a pass.")
@@ -248,33 +328,36 @@ def main():
     print(f"tool_selftests: {len(tools)} tool(s) in {d}/  (detection is by RUNNING --selftest, not by grep)")
     print()
 
-    passed, failed, none, errored, unchecked, host = [], [], [], [], [], []
+    passed, failed, none, errored, unchecked, host, lib = [], [], [], [], [], [], []
     bucket = {"PASS": passed, "FAIL": failed, "NONE": none, "ERROR": errored,
-              "UNCHECKED": unchecked, "HOST": host}
+              "UNCHECKED": unchecked, "HOST": host, "LIB": lib}
     for t in tools:
-        verdict, detail = classify(os.path.join(d, t), a.timeout)
+        verdict, detail = classify(os.path.join(d, t), a.timeout, d)
         bucket[verdict].append((t, detail))
         if verdict == "PASS":
-            print(f"  ok    {t:<26} {detail}")
+            print(f"  ok    {t:<30} {detail}")
         elif verdict == "FAIL":
-            print(f"  FAIL  {t:<26} {detail}")
+            print(f"  FAIL  {t:<30} {detail}")
         elif verdict == "UNCHECKED":
-            print(f"  ??    {t:<26} {detail}")
+            print(f"  ??    {t:<30} {detail}")
         elif verdict == "HOST":
-            print(f"  host  {t:<26} {detail}")
+            print(f"  host  {t:<30} {detail}")
         elif verdict == "ERROR":
-            print(f"  ERR   {t:<26} {detail}")
+            print(f"  ERR   {t:<30} {detail}")
+        elif verdict == "LIB":
+            print(f"  lib   {t:<30} {detail}")
 
     have = len(passed) + len(failed) + len(unchecked)
     print()
-    print(f"  {len(tools)} tool(s) scanned: {have} have a --selftest ({len(passed)} passed, "
-          f"{len(failed)} FAILED, {len(unchecked)} could not be checked), {len(none)} have none, "
-          f"{len(host)} are Ghidra-only, {len(errored)} could not run.")
+    print(f"  {len(tools)} file(s) scanned: {len(lib)} are imported modules, not tools, leaving "
+          f"{len(tools) - len(lib)} runnable tool(s), of which {have} have a --selftest "
+          f"({len(passed)} passed, {len(failed)} FAILED, {len(unchecked)} could not be checked); "
+          f"{len(none)} have none, {len(host)} are Ghidra-only, {len(errored)} could not run.")
     if unchecked:
         print(f"\n  UNCHECKED ({len(unchecked)} tool(s)) — a real selftest that needs fixtures this run did")
         print("  not supply. NOT a pass: give it the inputs it names and run it directly.")
         for t, why in unchecked:
-            print(f"    {t:<26} {why}")
+            print(f"    {t:<30} {why}")
 
     # The missing half, NAMED. Without this the report reads as a clean bill of health for the whole
     # directory when it only ever covered part of it.
@@ -282,11 +365,11 @@ def main():
         print(f"\n  NO SELFTEST ({len(none)} tool(s)) — nothing here vouches for these, and this runner")
         print("  cannot tell a working one from a broken one:")
         for t, why in none:
-            print(f"    {t:<26} {why}")
+            print(f"    {t:<30} {why}")
     if errored:
         print(f"\n  COULD NOT RUN ({len(errored)}):")
         for t, why in errored:
-            print(f"    {t:<26} {why}")
+            print(f"    {t:<30} {why}")
 
     if failed:
         print(f"\nFAILED: {len(failed)} tool selftest(s) do not pass. A tool whose own selftest fails must")

@@ -83,8 +83,11 @@ add_test(NAME cpp_style_selftest
 # in here: several tools need a disc, a live debug server, or Ghidra, so a ctest over them would be
 # environment-dependent and would fail for reasons that are not defects. Run that sweep by hand:
 #     uv run --frozen python scripts/tool_selftests.py tools
-# Measured 2026-08-13: of 24 framework tools, only 2 have a selftest that runs and passes here, 17 have
-# none at all, and 3 are Ghidra-only. That backlog is the finding, not this test.
+# Measured 2026-09-19, after discovery was changed to WALK the tree: 60 files, of which 2 are imported
+# modules and 58 runnable tools; 12 have a selftest (10 pass, 2 need fixtures), 43 have none, 3 are
+# Ghidra-only. The earlier figure of "24 framework tools" came from a single-directory listing that never
+# descended into tools/port, tools/oracle, tools/formats or tools/mips -- more than half the tree was
+# outside a report whose entire point is an honest denominator. That backlog is the finding, not this test.
 add_test(NAME tool_selftests_classifier
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/tool_selftests.py --selftest)
@@ -104,6 +107,23 @@ add_test(NAME looks_right_selftest
 add_test(NAME fps60_check_selftest
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/fps60_check.py --selftest)
+
+# The single-image geometry instrument. It had a --selftest and NO ctest, so nothing ran it -- the
+# same "a selftest nobody runs is not a check" gap its own runner was written to close. It is named
+# here rather than left to tool_selftests.py because that sweep is deliberately not a ctest (see above):
+# it reaches this directory now, but several of its tools need a disc, a server, or Ghidra.
+add_test(NAME present_geometry_selftest
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/present_geometry.py --selftest)
+
+# The PAIRED widescreen check: is the wide picture a projection widening or a stretch? Its sibling
+# above measures one picture's shape and is invariant under a whole-frame stretch, which is the
+# failure this one exists to catch, so both are registered. The hermetic part is the verdict on two
+# constructed pictures; comparing a real title's 4:3 and wide captures needs a disc and a GPU, so
+# that invocation is per-repo and by hand (see its --help).
+add_test(NAME widescreen_pair_selftest
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/widescreen_pair.py --selftest)
 
 add_test(NAME gpu_shader_generator
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"

@@ -20,6 +20,7 @@ Resolution is intraprocedural and immediate-only (tracks regs built by lui/ori/a
 a target shows as `?` when the base isn't an immediate (e.g. a struct pointer passed in a0). That's
 expected — it still tells you the width and the base register.
 """
+import os
 import sys
 
 from formats import psx_exe
@@ -150,6 +151,14 @@ def main():
         if args[i] == "--mem": mem_only = True; i += 1; continue
         if args[i] == "--raw": raw = True; i += 1; continue
         if args[i] == "--all": follow_all = True; i += 1; continue
+        # An unknown flag is a REFUSAL, not an address. This loop used to append anything it did not
+        # recognise to the positionals, so `--selftest` became the start address and the tool died with
+        # "invalid literal for int() with base 16: '--selftest'" -- a typo'd flag would have been read as
+        # a hex number just as silently. Silently-accepted input is a failure, not a filter.
+        if args[i].startswith("--"):
+            print(f"disas: REFUSING -- unknown option {args[i]!r}. Nothing was disassembled.",
+                  file=sys.stderr)
+            return 2
         pos.append(args[i]); i += 1
     if not pos:
         print(__doc__); return 1
