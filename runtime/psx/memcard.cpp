@@ -420,13 +420,23 @@ void Memcard::deliverError(Core *c) {
 // B0:0x4E _card_read(chan, sector, buf).
 static void card_read(Core *c) {
   Memcard &m = c->game->memcard;
-  uint32_t sector = c->r[A1], buf = c->r[A2];
+  const uint32_t sector = c->r[A1], buf = c->r[A2];
   uint8_t f[Memcard::kFrameSize];
-  m.readFrame(sector, f);
-  for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
-    c->mem_w8(buf + i, f[i]);
+  const bool moved = m.readFrame(sector, f);
+  // A NULL destination is a presence PROBE, not a transfer. Spyro 1 asks _card_read(chan, 0x3F, 0)
+  // once per slot at boot purely to see whether a card answers, and this used to copy 128 bytes to
+  // guest address 0 for it -- over the exception-vector page, twice every boot, silently. Measured
+  // 2026-09-19 (issue 0123); the same probe runs 1,084 times on the unformatted-card path.
+  if (buf != 0) {
+    for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
+      c->mem_w8(buf + i, f[i]);
+    }
   }
-  lucent::debug("card", "read  frame {} -> 0x{:08X}", sector, buf);
+  lucent::debug("card",
+                "read  frame {} -> {}{}",
+                sector,
+                buf != 0 ? lucent::format("0x{:08X}", buf) : std::string("(probe, no destination)"),
+                moved ? "" : " — BACKEND DID NOT MOVE THE FRAME, yet this call reports success");
 
   c->r[V0] = 1;
 }
