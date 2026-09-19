@@ -54,6 +54,11 @@ SCENE_DITHERED = paint(lambda x, y: (x * 3 % 256, y * 5 % 256, ((x + y) % 256) ^
 # Differs from SCENE everywhere by several colour steps: a real difference that happens to be spread.
 SCENE_RECOLOURED = paint(lambda x, y: ((x * 3 + 40) % 256, y * 5 % 256, (x + y) % 256))
 WIDE = paint(lambda x, y: (x % 256, y % 256, 0), (96, 48))
+# A flash: nearly the whole frame one colour, with faint detail left in it. NOT `uniform` -- that is
+# exactly why it needed its own refusal.
+WHITEOUT = paint(lambda x, y: (248, 248, 248) if (x + y) % 16 else (248, 240, 232))
+# The same scene one flash-step further on, so a test can show the two differ and are still refused.
+WHITEOUT_LATER = paint(lambda x, y: (248, 248, 248) if (x + y) % 16 else (240, 232, 216))
 
 
 class Painter:
@@ -518,3 +523,50 @@ class WithheldCheckpointTests(PictureFixture):
         settled = self._named(report, "settled")
         self.assertIn("diff", settled)
         self.assertIn("settled", report["presented"])
+
+
+class WashedOutTests(PictureFixture):
+    """A frame that is nearly all one colour carries as little as a blank one, and the cores can be
+    at the SAME declared state on different moments of the same fade -- the phase of a whiteout is
+    in no declared range, just as the level intro's was (Spyro's issue 0126). Measured on Spyro 1
+    at f180 of its played route: reference 56.76% one colour, product 87.76%, reported as 23.94% of
+    pixels "a different COLOUR". Real Artisans scenes in the same run measured 6.67%-14.82%."""
+
+    def test_a_washed_out_product_frame_is_refused_not_scored(self) -> None:
+        code, report = self._run(WHITEOUT, SCENE)
+        self.assertEqual(code, 1, report)
+        self.assertIn("single colour", self._row(report)["refused"])
+        self.assertNotIn("diff", self._row(report))
+
+    def test_a_washed_out_reference_frame_is_refused(self) -> None:
+        code, report = self._run(SCENE, WHITEOUT)
+        self.assertEqual(code, 1, report)
+        self.assertIn("single colour", self._row(report)["refused"])
+
+    def test_two_different_moments_of_one_flash_are_refused_although_they_differ(self) -> None:
+        """The exact shape of the Spyro measurement: both washed out, genuinely different, and the
+        difference is about the flash rather than the renderer."""
+        code, report = self._run(WHITEOUT, WHITEOUT_LATER)
+        self.assertEqual(code, 1, report)
+        self.assertNotIn("diff", self._row(report))
+
+    def test_a_real_scene_is_not_called_washed_out(self) -> None:
+        """The other answer. Without it a refusal that fired on everything would pass the three
+        tests above and silently end every comparison this tool exists to make."""
+        code, report = self._run(SCENE, SCENE)
+        self.assertEqual(code, 0, report)
+        self.assertNotIn("refused", self._row(report))
+        self.assertIn("diff", self._row(report))
+
+    def test_the_modal_share_is_measured_on_the_colour_grid_not_on_raw_values(self) -> None:
+        """A dithered fade is one colour to a player and 16 to a byte comparison; measured raw, the
+        frame the refusal exists for would not look like one colour at all."""
+        dithered_fade = paint(lambda x, y: (248 - ((x + y) % 8), 248, 248))
+        self.assertGreater(picture.Picture.load(self._drawn(dithered_fade)).distinct_colours, 1)
+        self.assertTrue(picture.Picture.load(self._drawn(dithered_fade)).washed_out)
+        self.assertFalse(picture.Picture.load(self._drawn(SCENE)).washed_out)
+
+    def _drawn(self, render) -> Path:
+        destination = self.out / "probe.png"
+        render(destination)
+        return destination

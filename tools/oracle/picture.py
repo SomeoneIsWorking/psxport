@@ -96,35 +96,6 @@ except ImportError:  # pragma: no cover - the message is the whole value
 
 TILE = 16
 
-
-@dataclass(frozen=True)
-class Picture:
-    """One captured frame and the two facts every refusal below is decided on."""
-
-    path: Path
-    size: tuple[int, int]
-    distinct_colours: int
-    non_black: int
-
-    @property
-    def blank(self) -> bool:
-        return self.non_black == 0
-
-    @property
-    def uniform(self) -> bool:
-        return self.distinct_colours <= 1
-
-    @classmethod
-    def load(cls, path: Path) -> "Picture":
-        if not path.is_file():
-            raise CoreError(f"no capture at {path}")
-        with Image.open(path) as handle:
-            image = handle.convert("RGB")
-            colours = image.getcolors(maxcolors=1 << 20)
-            non_black = sum(count for count, pixel in colours if pixel != (0, 0, 0))
-            return cls(path, image.size, len(colours), non_black)
-
-
 # One representable step of PSX colour, in the 8-bit values these PNGs carry. The console composits
 # in 15 bits per pixel, so a channel takes 32 values spaced 255/31 = 8.22 apart. Two renderers that
 # round or dither the same 15-bit colour differently therefore differ by EXACTLY one step, in a
@@ -137,6 +108,58 @@ class Picture:
 # what docs/issues/0120 is looking for, would have been invisible inside it.
 COLOUR_STEP = 8
 SIGNIFICANT = COLOUR_STEP  # a difference must EXCEED one step to count as a different colour
+
+
+@dataclass(frozen=True)
+class Picture:
+    """One captured frame and the facts every refusal below is decided on."""
+
+    path: Path
+    size: tuple[int, int]
+    distinct_colours: int
+    non_black: int
+    modal_share: float  # how much of the frame the single commonest colour covers
+
+    # A frame more than half of which is ONE colour carries almost nothing to compare, exactly as a
+    # blank one does, and `uniform` misses it because a fade is not a single colour -- it is one
+    # colour plus faint tints. Measured on Spyro 1, 2026-09-20: at f180 of the played route the two
+    # cores were mid-WHITEOUT with every decisive range equal, the reference 56.76% one colour and
+    # the product 87.76%, and the comparison reported 23.94% "a different COLOUR" -- a number about
+    # two flashes, not about rendering. Real Artisans scenes in the same run measured 6.67% to
+    # 14.82%, the 6.67% being the letterbox bar, so "over half the frame is one colour" separates
+    # them by a factor of three and is a statement rather than a fitted threshold.
+    WASHED_OUT = 0.5
+
+    @property
+    def blank(self) -> bool:
+        return self.non_black == 0
+
+    @property
+    def uniform(self) -> bool:
+        return self.distinct_colours <= 1
+
+    @property
+    def washed_out(self) -> bool:
+        return self.modal_share > self.WASHED_OUT
+
+    @classmethod
+    def load(cls, path: Path) -> "Picture":
+        if not path.is_file():
+            raise CoreError(f"no capture at {path}")
+        with Image.open(path) as handle:
+            image = handle.convert("RGB")
+            colours = image.getcolors(maxcolors=1 << 20)
+            non_black = sum(count for count, pixel in colours if pixel != (0, 0, 0))
+            pixels = image.size[0] * image.size[1]
+            # Counted on the console's own 15-bit colour grid: a fade dithers, and on raw 8-bit
+            # values its neighbouring tints would each be a separate colour, so a frame that is
+            # visibly one colour would not look like one here.
+            quantised: dict[tuple[int, ...], int] = {}
+            for count, pixel in colours:
+                key = tuple(channel // COLOUR_STEP for channel in pixel)
+                quantised[key] = quantised.get(key, 0) + count
+            modal = max(quantised.values()) / pixels if pixels else 0.0
+            return cls(path, image.size, len(colours), non_black, modal)
 
 
 @dataclass(frozen=True)
@@ -387,6 +410,15 @@ class PictureRun:
                                   f"({picture.non_black}/{picture.size[0] * picture.size[1]} non-black, "
                                   f"{picture.distinct_colours} distinct colour(s)), so there is nothing to "
                                   f"compare and a zero difference would not be a match")
+                print(f"[picture] {name}: REFUSED — {row['refused']}", file=sys.stderr)
+                return False
+        for label, picture in (("product", native), ("reference", console)):
+            if picture.washed_out:
+                row["refused"] = (f"{100 * picture.modal_share:.2f}% of the {label} picture at {name} "
+                                  f"is a single colour, so it is a fade or a flash rather than a scene "
+                                  f"and a difference here would be about which moment of it each core "
+                                  f"is on. The cores can be at the same declared state and different "
+                                  f"points of the same whiteout: that phase is in no declared range")
                 print(f"[picture] {name}: REFUSED — {row['refused']}", file=sys.stderr)
                 return False
         if native.size != console.size:
