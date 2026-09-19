@@ -162,6 +162,22 @@ def runs_bbox(runs_by_fence):
     return (x0, y0, x1, y1)
 
 
+def any_verbatim_over(runs, tx, ty, tile):
+    """Does a NON-reconstructed run also cover this tile?
+
+    Attribution credits a tile to the smallest run covering it, which can be a TIER1 run whose
+    screen area happens to contain verbatim pixels drawn by a different item. Those pixels cannot
+    lerp, so they snap forward, and the tile is then filed under a producer that is doing its job.
+    This is what separates the two readings.
+    """
+    for area, owned, node, layer, x0, x1, y0, y1 in runs:
+        if owned:
+            continue
+        if tx < x1 and x0 < tx + tile and ty < y1 and y0 < ty + tile:
+            return True
+    return False
+
+
 def owner_of(runs, tx, ty, tile):
     """The smallest run covering this tile, or None when no run does."""
     best = None
@@ -184,7 +200,15 @@ def selftest():
            "x=[-320..641) y=[0..241)\n"
            "  rqcur layer=1 TIER1     n=9 seq=[2..10] producer=0000ABCD node0=800E7E80 "
            "x=[100..140) y=[100..140)\n"
-           "[fps60seq] f8 t=0.500 captured n=0\n")
+           "[fps60seq] f8 t=0.500 captured n=0\n"
+           # f9 is the negative the overlap question needs: a reconstructed run with NO verbatim
+           # run anywhere near it. Without this fence, dropping the ownership filter entirely still
+           # passes, because every other tile that a TIER1 run covers is under the full-screen
+           # verbatim fill as well. Measured 2026-09-19: the filter was disconnected and the
+           # selftest stayed green.
+           "[fps60seq] f9 t=0.500 captured n=1\n"
+           "  rqcur layer=1 TIER1     n=4 seq=[0..3] producer=0000BEEF node0=800E7E80 "
+           "x=[10..50) y=[10..50)\n")
     import tempfile
     with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
         fh.write(log)
@@ -202,7 +226,7 @@ def selftest():
     # f8 has a marker but no runs, so it gets no entry at all: a fence the log never described and
     # a fence the log described as empty are the same answer to "who drew here", and both must land
     # in the (no run) row rather than being credited to a neighbouring fence.
-    check("fences with runs", sorted(runs), [7])
+    check("fences with runs", sorted(runs), [7, 9])
     check("runs at f7", len(runs[7]), 2)
 
     # inside the small run: the SMALL one must win even though the big one also covers it
@@ -216,12 +240,20 @@ def selftest():
     # and a tile outside every run in a populated fence is also unowned
     check("no owner above the full-screen run", owner_of(runs[7], 16, 300, 16), None)
 
+    # The TIER1-vs-verbatim overlap question needs both answers too: a tile inside the small
+    # reconstructed run also has the full-screen verbatim run drawn over it, while one outside
+    # every verbatim extent does not. Without the negative, "they all overlap" is unfalsifiable.
+    check("verbatim also covers the reconstructed tile",
+          any_verbatim_over(runs[7], 112, 112, 16), True)
+    check("no verbatim over a tile only a reconstructed run covers",
+          any_verbatim_over(runs[9], 16, 16, 16), False)
+
     if failures:
         print("fps60_check selftest: FAIL")
         print("\n".join(failures))
         return 1
-    print("fps60_check selftest: PASS (5 checks: fence parsing, smallest-run wins, "
-          "big-run-only, empty fence, out-of-range tile)")
+    print("fps60_check selftest: PASS (7 checks: fence parsing, smallest-run wins, "
+          "big-run-only, empty fence, out-of-range tile, verbatim overlap both ways)")
     return 0
 
 
@@ -275,10 +307,16 @@ def main():
     sequence_runs = load_sequence_runs(args.seq) if args.seq else None
     shot_origins = load_shot_origins(args.seq) if args.seq else {}
     origins_missing = 0
-    # owner -> [moved-endpoint tiles, 0px-endpoint tiles, lerped tiles]
-    by_owner = defaultdict(lambda: [0, 0, 0])
-    unattributed = [0, 0]  # moved-endpoint, lerped
+    # An endpoint tile that MOVED is split by WHICH endpoint it landed on, because the two mean
+    # opposite things. A moved STALE tile lerped to the wrong place or lerped too little. A moved
+    # AHEAD tile shows the NEXT real frame's content a whole frame early, which is what content
+    # that is never interpolated at all looks like: the extra frame draws it at its new position.
+    # owner -> [moved STALE, moved AHEAD, 0px-endpoint, lerped]
+    by_owner = defaultdict(lambda: [0, 0, 0, 0])
+    unattributed = [0, 0, 0]  # moved STALE, moved AHEAD, lerped
     uncovered_fences = set()  # dump fences the fps60seq log never described
+    # moved-AHEAD tiles filed under a TIER1 run, split by whether verbatim content is drawn there too
+    tier1_ahead = [0, 0]  # [verbatim also covers this tile, TIER1 runs only]
     attribution_refused = False
 
     for a, b, c in triples(frames):
@@ -314,11 +352,21 @@ def main():
                     uncovered_fences.add(c[3])
                 run = owner_of(sequence_runs.get(c[3], ()),
                                tile[0] + origin[0], tile[1] + origin[1], args.tile)
-                if run is None:
-                    unattributed[0 if (shift or 0) >= 1 else 1] += 1
+                if shift is not None and shift >= 1:
+                    slot = 0 if verdict == "STALE" else 1
+                elif shift is not None:
+                    slot = 2
                 else:
-                    slot = 0 if (shift is not None and shift >= 1) else (1 if shift is not None else 2)
+                    slot = 3
+                if run is None:
+                    unattributed[slot if slot < 2 else 2] += 1
+                else:
                     by_owner[("TIER1" if run[1] else "verbatim", run[3], run[2])][slot] += 1
+                    if slot == 1 and run[1]:
+                        fence_runs = sequence_runs.get(c[3], ())
+                        covered = any_verbatim_over(fence_runs, tile[0] + origin[0],
+                                                    tile[1] + origin[1], args.tile)
+                        tier1_ahead[0 if covered else 1] += 1
         if args.triple:
             print(f"tile map for {os.path.basename(b[2])} ({w}x{h}, tile={args.tile}):")
             sym = {"STATIC": ".", "BETWEEN": "-", "STALE": "S", "AHEAD": "A"}
@@ -365,11 +413,11 @@ def main():
         print(f"\nowners of the moving tiles ({len(sequence_runs)} fence(s) in {args.seq}), "
               f"credited to the smallest covering run:")
         attributed = sum(sum(v) for v in by_owner.values())
-        total_moving = attributed + unattributed[0] + unattributed[1]
+        total_moving = attributed + sum(unattributed)
         coverage = (100.0 * attributed / total_moving) if total_moving else 0.0
         bx0, by0, bx1, by1 = runs_bbox(sequence_runs)
-        moved_attributed = sum(v[0] for v in by_owner.values())
-        moved_total = moved_attributed + unattributed[0]
+        moved_attributed = sum(v[0] + v[1] for v in by_owner.values())
+        moved_total = moved_attributed + unattributed[0] + unattributed[1]
         moved_coverage = (100.0 * moved_attributed / moved_total) if moved_total else 100.0
         print(f"  {attributed} of {total_moving} moving tile(s) got an owner ({coverage:.1f}%); "
               f"of the MOVED endpoint tiles, {moved_attributed} of {moved_total} "
@@ -396,20 +444,32 @@ def main():
             print(f"  WARNING: {len(uncovered_fences)} of the {n_triples} triple(s) name a fence "
                   f"the log never described\n  (first: f{min(uncovered_fences)}) — their tiles are "
                   f"all in the (no run) row. Is this the same run?")
-        rows = [] if attribution_refused else sorted(by_owner.items(), key=lambda kv: -(kv[1][0]))
+        rows = ([] if attribution_refused
+                else sorted(by_owner.items(), key=lambda kv: -(kv[1][0] + kv[1][1])))
         if rows:
             print(f"  {'ownership':<10} {'layer':>5} {'node':<10} {'lerped':>8} {'endpoint':>9} "
-                  f"{'of those,':>10}")
-            print(f"  {'':<10} {'':>5} {'':<10} {'':>8} {'':>9} {'MOVED':>10}")
-        for (ownership, layer, node), (moved, still, lerped) in rows:
-            print(f"  {ownership:<10} {layer:5d} {node:<10} {lerped:8d} {moved + still:9d} "
-                  f"{moved:10d}")
+                  f"{'MOVED to':>9} {'MOVED to':>9}")
+            print(f"  {'':<10} {'':>5} {'':<10} {'':>8} {'':>9} {'prev':>9} {'next':>9}")
+        for (ownership, layer, node), (mstale, mahead, still, lerped) in rows:
+            print(f"  {ownership:<10} {layer:5d} {node:<10} {lerped:8d} "
+                  f"{mstale + mahead + still:9d} {mstale:9d} {mahead:9d}")
         if not attribution_refused:
-            print(f"  {'(no run)':<10} {'':>5} {'':<10} {unattributed[1]:8d} {unattributed[0]:9d} "
-                  f"{unattributed[0]:10d}")
+            print(f"  {'(no run)':<10} {'':>5} {'':<10} {unattributed[2]:8d} "
+                  f"{sum(unattributed[:2]):9d} {unattributed[0]:9d} {unattributed[1]:9d}")
         print("  a MOVED endpoint tile is content that translated a whole pixel or more between the "
               "two real\n  frames and was still drawn at one of them. Those are the defects; the "
-              "rest of the endpoint\n  column is sub-pixel quantisation and is correct output.")
+              "rest of the endpoint\n  column is sub-pixel quantisation and is correct output.\n"
+              "  MOVED-to-next is the stronger signal: that content appeared at the NEXT real "
+              "frame's\n  position a whole frame early, which is what never being interpolated "
+              "looks like.")
+        t1 = tier1_ahead[0] + tier1_ahead[1]
+        if t1:
+            share = 100.0 * tier1_ahead[0] / t1
+            print(f"\n  of the {t1} MOVED-to-next tile(s) filed under a TIER1 run, {tier1_ahead[0]} "
+                  f"({share:.1f}%)\n  also have verbatim content drawn over them, and "
+                  f"{tier1_ahead[1]} do not. A tile in the first\n  group is filed under a "
+                  f"producer that may be working correctly: the pixels that snapped\n  forward "
+                  f"can be the verbatim item sharing its screen area, not the reconstruction.")
 
     if moved_endpoint == 0:
         print("  every endpoint tile had a 0px shift: sub-pixel change quantised onto one side, "
