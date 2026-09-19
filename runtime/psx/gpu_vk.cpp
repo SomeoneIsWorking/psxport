@@ -2328,23 +2328,8 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
       s_dirty.markAll();
     }
 
-    // WIDESCREEN STORAGE IS NOT A FRAMEBUFFER. The guest owns only [sx,sx+w); the extra host-visible
-    // columns [sx+w,sx+disp_w) are ordinary PSX VRAM and commonly hold textures/CLUTs. Loading that
-    // region into the persistent composite leaks atlas pixels wherever no later primitive covers it.
-    // Put an opaque black base behind the extension in the 2D-background band. This changes only the
-    // host render batch: guest VRAM remains byte-for-byte intact, and authored backdrop/world/HUD
-    // geometry draws over it in the normal three-band order. Index 0 is the back of the background
-    // band, so this cannot cover an authored background primitive.
-    const WideMarginPlan margin = plan_wide_margin(sx, sy, w, disp_w, h);
-    if (margin.draw) {
-      set_order_2d_bg(0);
-      // FULL CANVAS clip, deliberately: the wide margin exists to paint the strip OUTSIDE the
-      // guest's own draw area, so clipping it to that area would erase exactly what it is for.
-      draw_tri(
-          margin.x0, margin.y0, 0, 0, 0, margin.x1, margin.y0, 0, 0, 0, margin.x0, margin.y1, 0, 0, 0, 0, 0, 1023, 511);
-      draw_tri(
-          margin.x1, margin.y0, 0, 0, 0, margin.x1, margin.y1, 0, 0, 0, margin.x0, margin.y1, 0, 0, 0, 0, 0, 1023, 511);
-    }
+    // The wide margin's rect is in VRAM halfwords, so it needs the display depth (spyro issue 0118).
+    draw_wide_margin(sx, sy, w, disp_w, h, game->gpu.s_disp_rgb24 != 0);
     // Only the regions the guest actually wrote (vram_dirty.h). Uploading all of VRAM here is what
     // erased the rasterized picture out of the buffer that was about to be displayed.
     VramDirtyRect up[VramDirty::CAP + 1];

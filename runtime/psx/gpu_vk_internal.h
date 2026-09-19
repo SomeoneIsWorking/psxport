@@ -282,6 +282,8 @@ struct GpuVkState {
                  int day0,
                  int dax1,
                  int day1);
+  // Opaque base behind the host-visible VRAM beside a widened display — gpu_vk_wide_margin.cpp.
+  void draw_wide_margin(int sx, int sy, int native_w, int disp_w, int h, bool rgb24);
   void set_order(unsigned idx);
   void set_order_2d(unsigned idx);
   void set_order_2d_n(unsigned idx);

@@ -26,3 +26,25 @@ zero unscoped-native primitives. Captures and logs are local run evidence under
 
 `tests/test_wide_margin_plan.cpp` pins both the negative (4:3/invalid inputs draw nothing) and
 positive geometry of the renderer-only extension.
+
+## The rect is in VRAM halfwords, not display columns (2026-09-19)
+
+The 2026-08-13 verification above ran on a 15bpp display, where one display pixel IS one VRAM
+halfword and the two spaces coincide. At 24bpp a pixel is RGB888 packed across 1.5 halfwords
+(`present.frag` reads display column x at byte `disp.x*2 + x*3`), so a rect built from display widths
+alone lands at two thirds of its intended position.
+
+Measured on Spyro's Universal boot logo — an upload-only guest-VRAM picture, 512×240 24bpp, widened
+to 684 (spyro issue 0118). VRAM was byte-identical between the 4:3 and 16:9 legs (0 of 524288 words
+differ) and the guest programmed GP1(08)=08000012 24-BIT identically in both, so this was purely a
+presentation defect. The plan returned halfwords [512,684), which the 24bpp present samples as
+display columns [341,456): a black band straight through the picture, while the real margin was never
+covered. The band was measured at columns 342..454 against 341.3 and 456.0 predicted, and outside it
+the picture matched a correct 24bpp read to a mean |diff| of 1.29.
+
+`plan_wide_margin` now takes the display depth and converts display columns to halfwords, clamping to
+VRAM's 1024-halfword width (reached by this real case: 684 columns need halfword 1026). Seeding the
+old identity conversion back in fails 4 of the 7 tests in `tests/test_wide_margin_plan.cpp`, which is
+what makes them evidence rather than decoration. The drawing itself moved out of the
+4,253-line `gpu_vk.cpp` into `runtime/psx/gpu_vk_wide_margin.cpp`; the file's legacy cap ratcheted to
+4,238.

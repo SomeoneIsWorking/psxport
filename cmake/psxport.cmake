@@ -121,6 +121,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu_painter.cpp # painter target lifecycle + authored command staging
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_texture_coverage_selftest.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_modulation_selftest.cpp
+  ${PSXPORT_ROOT}/runtime/psx/gpu_vk_wide_margin.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_semi_selftest.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_texture_phase_selftest.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_untextured_selftest.cpp
