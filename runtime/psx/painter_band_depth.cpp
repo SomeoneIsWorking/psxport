@@ -73,7 +73,12 @@ PainterBandDepthResult rq_check_painter_band_depths(std::span<const RqItem *cons
       // key and then submits a per-vertex depth would be ordered by the depth buffer exactly as
       // before, and the band would be a comment rather than a contract.
       const RqItem &item = *stream[command.item_index];
-      for (int vertex = 0; vertex < 4; ++vertex) {
+      // Only the vertices the primitive HAS, taken from `nv` rather than assumed. A triangle never
+      // writes `depth[3]` and a line never writes `depth[2]`, so a fixed count refuses real frames:
+      // assuming four refused a triangle at bin 778, and then assuming three refused a sparkle line
+      // at bin 51, both against an unwritten zero.
+      const int vertices = item.nv < 0 ? 0 : (item.nv > 4 ? 4 : item.nv);
+      for (int vertex = 0; vertex < vertices; ++vertex) {
         if (item.depth[vertex] != ord) {
           return fail(out, PainterBandDepthResult::Fault::DepthNotBanded, command_index, bin, ord, item.depth[vertex]);
         }

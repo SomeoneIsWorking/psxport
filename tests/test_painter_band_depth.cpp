@@ -158,10 +158,43 @@ void test_declared_band_must_be_the_submitted_depth(void) {
 }
 
 // One vertex out of four is enough: a face is banded or it is not.
+// The product found this one: every face in the queue is a triangle or a quad, and a triangle never
+// writes depth[3]. Requiring four matching vertices refused the whole frame.
+void test_triangle_leaves_its_fourth_vertex_unwritten(void) {
+  auto queue = makeQueue();
+  addCleanDomain(*queue);
+  for (int i = 0; i < queue->n; ++i) {
+    queue->items[i].nv = 3;
+    queue->items[i].depth[3] = 0.0f; // never assigned by a 3-vertex emit
+  }
+  bool accepted = false;
+  const PainterBandDepthResult result = check(*queue, accepted);
+  CHECK(accepted);
+  CHECK(result.ok());
+  CHECK_EQ(result.banded, 3);
+}
+
+// The product found this one too, right after the triangle: a sparkle emits a LINE, so `depth[2]` is
+// unwritten as well. The count has to come from `nv`, not from a guess about the smallest primitive.
+void test_line_leaves_its_third_and_fourth_vertices_unwritten(void) {
+  auto queue = makeQueue();
+  addCleanDomain(*queue);
+  for (int i = 0; i < queue->n; ++i) {
+    queue->items[i].nv = 2;
+    queue->items[i].depth[2] = 0.0f;
+    queue->items[i].depth[3] = 0.0f;
+  }
+  bool accepted = false;
+  const PainterBandDepthResult result = check(*queue, accepted);
+  CHECK(accepted);
+  CHECK(result.ok());
+  CHECK_EQ(result.banded, 3);
+}
+
 void test_one_stray_vertex_depth_is_refused(void) {
   auto queue = makeQueue();
   addCleanDomain(*queue);
-  queue->items[queue->n - 1].depth[2] = 0.0399f;
+  queue->items[queue->n - 1].depth[2] = 0.0399f; // vertex 2 exists on a triangle
   bool accepted = false;
   const PainterBandDepthResult result = check(*queue, accepted);
   CHECK(accepted);
@@ -176,10 +209,14 @@ int main(void) {
   RUN(farther_bin_with_nearer_depth_is_refused);
   RUN(equal_depths_on_different_bins_are_refused);
   RUN(declared_band_must_be_the_submitted_depth);
+  RUN(triangle_leaves_its_fourth_vertex_unwritten);
+  RUN(line_leaves_its_third_and_fourth_vertices_unwritten);
   RUN(one_stray_vertex_depth_is_refused);
   printf("test_painter_band_depth: a clean banded domain, an unbanded domain counted rather than "
          "passed silently, and five refusals: one bin with two depths, the issue-0120 shape of a "
          "farther bin given a nearer depth, two bins merged onto one depth, a declared band the "
-         "queue does not carry, and a single stray vertex\n");
+         "queue does not carry, and a single stray vertex — and a triangle whose unwritten fourth "
+         "vertex must NOT be refused, nor a line's unwritten third, both of which the product found "
+         "before the fixtures did\n");
   return pt_summary();
 }
