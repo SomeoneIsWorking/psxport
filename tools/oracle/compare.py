@@ -77,6 +77,15 @@ Reach = Callable[["Driver", CoreSession, int, Settle], tuple[int, frozenset[str]
 class Checkpoint:
     name: str
     reach: Reach  # drive one core to this checkpoint: (driver, core, budget, settle) -> (used, settle)
+    # Why photographing this checkpoint would mean nothing, or None when it is picture-comparable.
+    # A predicate that becomes true DURING an animation puts the two cores in the same guest state
+    # at different moments of it, so picture.py would compare two frames of one sequence and print
+    # a percentage that ranks nothing while every decisive range agrees (docs/issues/0126 in the
+    # Spyro repo, where `playing` reported 18.49% because the reference was still on the level
+    # intro card and the product was already in the lit courtyard). The RAM comparison is unaffected
+    # -- it asks about state, which is exactly what such a checkpoint does align -- so this field
+    # withholds the picture only, and names the reason in the report instead of a number.
+    not_picture_comparable: str | None = None
 
 
 class Title(Protocol):

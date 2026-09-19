@@ -48,7 +48,11 @@ UNIFORM = paint(lambda x, y: (7, 7, 7))
 SCENE = paint(lambda x, y: (x * 3 % 256, y * 5 % 256, (x + y) % 256))
 SCENE_WITH_A_BLOT = paint(lambda x, y: (255, 0, 0) if 8 <= x < 16 and 8 <= y < 16
                           else (x * 3 % 256, y * 5 % 256, (x + y) % 256))
+# Differs from SCENE in the LOW BIT of one channel: a rounding difference, well inside one 15-bit
+# colour step, and invisible to a player.
 SCENE_DITHERED = paint(lambda x, y: (x * 3 % 256, y * 5 % 256, ((x + y) % 256) ^ ((x + y) & 1)))
+# Differs from SCENE everywhere by several colour steps: a real difference that happens to be spread.
+SCENE_RECOLOURED = paint(lambda x, y: ((x * 3 + 40) % 256, y * 5 % 256, (x + y) % 256))
 WIDE = paint(lambda x, y: (x % 256, y % 256, 0), (96, 48))
 
 
@@ -160,11 +164,59 @@ class PictureTests(PictureFixture):
         self.assertEqual(diff["worst_tiles"][0]["tile"], [0, 0])
 
     def test_an_everywhere_difference_is_reported_as_spread_not_concentrated(self) -> None:
+        code, report = self._run(SCENE_RECOLOURED, SCENE)
+        self.assertEqual(code, 0, report)
+        diff = self._row(report)["diff"]
+        self.assertGreater(diff["significant"], 0)
+        self.assertFalse(diff["concentrated"], diff)
+
+    # --- rounding is not rendering ---------------------------------------------------------
+    #
+    # Both answers, because the whole point is a discriminator. Spyro 1's settled_play reported
+    # 54.62% of pixels differing while 29.45% of the frame differed by exactly one colour step;
+    # read as rendering, that number said the courtyard was half wrong, and it was not.
+
+    def test_a_sub_step_difference_is_counted_but_not_called_a_colour_difference(self) -> None:
         code, report = self._run(SCENE_DITHERED, SCENE)
         self.assertEqual(code, 0, report)
         diff = self._row(report)["diff"]
-        self.assertGreater(diff["differing"], 0)
+        self.assertGreater(diff["differing"], 0, "the frames are not bit-identical")
+        self.assertEqual(diff["significant"], 0, diff)
+        self.assertEqual(diff["tiles_touched"], 0, "a rounding difference must touch no tile")
         self.assertFalse(diff["concentrated"], diff)
+
+    def test_a_real_difference_of_several_steps_is_significant(self) -> None:
+        code, report = self._run(SCENE_WITH_A_BLOT, SCENE)
+        self.assertEqual(code, 0, report)
+        diff = self._row(report)["diff"]
+        self.assertGreater(diff["significant"], 0, diff)
+        self.assertTrue(diff["concentrated"], diff)
+
+    def test_the_magnitude_buckets_are_monotonic_and_bounded_by_the_bare_count(self) -> None:
+        """A bucket that counted the wrong thing would still look plausible alone; the shape of the
+        whole distribution is what catches it."""
+        code, report = self._run(SCENE_WITH_A_BLOT, SCENE)
+        diff = self._row(report)["diff"]
+        counts = [entry["pixels"] for entry in diff["beyond"]]
+        thresholds = [entry["threshold"] for entry in diff["beyond"]]
+        self.assertEqual(thresholds, sorted(thresholds))
+        self.assertEqual(counts, sorted(counts, reverse=True))
+        self.assertLessEqual(counts[0], diff["differing"])
+        self.assertEqual(counts[0], diff["significant"])
+
+    def test_worst_tiles_rank_by_colour_difference_not_by_rounding(self) -> None:
+        """The failure this ordering exists to prevent: a frame that rounds differently everywhere
+        and has lost an object in one place must name the place, not the rounding."""
+        blot_and_dither = paint(lambda x, y: (255, 0, 0) if 8 <= x < 16 and 8 <= y < 16
+                                else (x * 3 % 256, y * 5 % 256, ((x + y) % 256) ^ ((x + y) & 1)))
+        code, report = self._run(blot_and_dither, SCENE)
+        self.assertEqual(code, 0, report)
+        diff = self._row(report)["diff"]
+        tiles = [tuple(entry["tile"]) for entry in diff["worst_tiles"]]
+        self.assertTrue(tiles, diff)
+        for tile in tiles:
+            self.assertLess(tile[0], 16, f"tile {tile} is outside the blot")
+            self.assertLess(tile[1], 16, f"tile {tile} is outside the blot")
 
     def test_a_decisive_state_divergence_is_refused_rather_than_scored(self) -> None:
         """The refusal that was missing, and what it cost. On Spyro 1 (2026-09-19) the two cores
@@ -406,3 +458,63 @@ class AdvanceToPresentedTests(PictureFixture):
         self.assertEqual(presented["extra_frames"], picture.PictureRun.PRESENT_BUDGET)
         self.assertEqual(code, 1)
         self.assertIn("refused", self._row(report))
+
+
+class WithheldCheckpointTests(PictureFixture):
+    """A checkpoint whose predicate holds DURING an animation aligns state but not presentation, so
+    photographing it produces a percentage that ranks nothing (Spyro's issue 0126). The title says
+    so on the checkpoint; both answers are checked here, because a tool that quietly stopped
+    photographing everything would pass a one-sided test."""
+
+    REASON = "the predicate holds mid-intro, so the two cores are at different moments of it"
+
+    def _two_checkpoints(self, withhold_first: bool) -> FakeTitle:
+        title = FakeTitle(console_lookahead=1)
+        reach = title.checkpoints[0].reach
+        title.checkpoints = (
+            compare.Checkpoint("arrival", reach,
+                               not_picture_comparable=self.REASON if withhold_first else None),
+            compare.Checkpoint("settled", reach),
+        )
+        return title
+
+    def _run_title(self, title: FakeTitle):
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        native.paint_with(SCENE)
+        console.paint_with(SCENE)
+        code = picture.run(title, self.product, arguments(bios=self.bios), self.out,
+                           sessions=lambda product, args, out_dir: (native, console))
+        return code, json.loads((self.out / "picture.json").read_text())
+
+    def _named(self, report, name: str) -> dict:
+        rows = [row for row in report["pictures"] if row["checkpoint"] == name]
+        self.assertEqual(len(rows), 1, report["pictures"])
+        return rows[0]
+
+    def test_a_withheld_checkpoint_is_reported_with_its_reason_and_not_scored(self) -> None:
+        code, report = self._run_title(self._two_checkpoints(withhold_first=True))
+        self.assertEqual(code, 0, report)
+        withheld = self._named(report, "arrival")
+        self.assertFalse(withheld["photographed"])
+        self.assertEqual(withheld["withheld"], self.REASON)
+        # No number at all: the point is that a percentage here would be read as a verdict.
+        self.assertNotIn("diff", withheld)
+        self.assertNotIn("refused", withheld)
+        # Nor the per-core advance made solely so a photo could be taken.
+        self.assertNotIn("arrival", report["presented"])
+
+    def test_the_same_checkpoint_is_photographed_when_the_title_does_not_withhold_it(self) -> None:
+        """The other answer: without the field, `arrival` is compared like any other checkpoint."""
+        code, report = self._run_title(self._two_checkpoints(withhold_first=False))
+        self.assertEqual(code, 0, report)
+        photographed = self._named(report, "arrival")
+        self.assertNotIn("withheld", photographed)
+        self.assertIn("diff", photographed)
+        self.assertIn("arrival", report["presented"])
+
+    def test_withholding_one_checkpoint_leaves_the_others_compared(self) -> None:
+        code, report = self._run_title(self._two_checkpoints(withhold_first=True))
+        self.assertEqual(code, 0, report)
+        settled = self._named(report, "settled")
+        self.assertIn("diff", settled)
+        self.assertIn("settled", report["presented"])

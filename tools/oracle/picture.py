@@ -125,28 +125,56 @@ class Picture:
             return cls(path, image.size, len(colours), non_black)
 
 
+# One representable step of PSX colour, in the 8-bit values these PNGs carry. The console composits
+# in 15 bits per pixel, so a channel takes 32 values spaced 255/31 = 8.22 apart. Two renderers that
+# round or dither the same 15-bit colour differently therefore differ by EXACTLY one step, in a
+# pixel a player cannot tell apart; anything larger is a different colour, not a different rounding.
+#
+# Measured on Spyro 1's settled_play, 2026-09-20: 54.62% of pixels differed at all, but the
+# magnitudes were banded on multiples of 8 and 29.45% of the frame differed by exactly one step.
+# Only 8.28% differed by more than four. A single count conflates the two, so "54.62%" read as a
+# rendering verdict when most of it was rounding -- and an object drawn in the wrong place, which is
+# what docs/issues/0120 is looking for, would have been invisible inside it.
+COLOUR_STEP = 8
+SIGNIFICANT = COLOUR_STEP  # a difference must EXCEED one step to count as a different colour
+
+
 @dataclass(frozen=True)
 class PictureDiff:
-    """How two pictures of the same moment differ, per pixel and per tile."""
+    """How two pictures of the same moment differ, per pixel, by magnitude, and per tile.
+
+    `differing` counts any inequality at all and `significant` counts the pixels whose colour really
+    differs (see COLOUR_STEP). Both are reported: the first says whether the frames are bit-identical,
+    which is the only thing a selftest may key on, and the second is the one to read as rendering."""
 
     pixels: int
     differing: int
+    significant: int
+    magnitudes: tuple[tuple[int, int], ...]  # (threshold, pixels differing by MORE than it)
     worst_tiles: tuple[tuple[tuple[int, int], int], ...]
     tiles_touched: int
     tiles_total: int
+
+    THRESHOLDS = (COLOUR_STEP, 2 * COLOUR_STEP, 4 * COLOUR_STEP, 8 * COLOUR_STEP)
 
     @property
     def share(self) -> float:
         return self.differing / self.pixels if self.pixels else 0.0
 
     @property
+    def significant_share(self) -> float:
+        return self.significant / self.pixels if self.pixels else 0.0
+
+    @property
     def concentrated(self) -> bool:
-        """Is the difference in a few places rather than spread over the frame?
+        """Is the SIGNIFICANT difference in a few places rather than spread over the frame?
 
         A renderer difference (dither, sub-pixel sampling) touches most tiles a little. A defect —
         a missing panel, a mislaid menu — touches few tiles a lot. This is the discriminator that
-        makes the number actionable, and it is deliberately not a verdict on its own."""
-        return self.differing > 0 and self.tiles_touched * 4 <= self.tiles_total
+        makes the number actionable, and it is deliberately not a verdict on its own. It is computed
+        over significant pixels only: ranked by bare inequality, every tile that merely rounds
+        differently competes with the tile that actually lost an object."""
+        return self.significant > 0 and self.tiles_touched * 4 <= self.tiles_total
 
 
 def compare_pictures(native: Path, console: Path) -> PictureDiff:
@@ -156,15 +184,25 @@ def compare_pictures(native: Path, console: Path) -> PictureDiff:
         a_pixels, b_pixels = a.load(), b.load()
         per_tile: dict[tuple[int, int], int] = {}
         differing = 0
+        beyond = {threshold: 0 for threshold in PictureDiff.THRESHOLDS}
         for y in range(height):
             for x in range(width):
-                if a_pixels[x, y] != b_pixels[x, y]:
-                    differing += 1
+                here, there = a_pixels[x, y], b_pixels[x, y]
+                if here == there:
+                    continue
+                differing += 1
+                magnitude = max(abs(one - other) for one, other in zip(here, there))
+                for threshold in beyond:
+                    if magnitude > threshold:
+                        beyond[threshold] += 1
+                if magnitude > SIGNIFICANT:
                     key = (x // TILE * TILE, y // TILE * TILE)
                     per_tile[key] = per_tile.get(key, 0) + 1
         tiles_total = ((width + TILE - 1) // TILE) * ((height + TILE - 1) // TILE)
         worst = tuple(sorted(per_tile.items(), key=lambda item: -item[1])[:8])
-        return PictureDiff(width * height, differing, worst, len(per_tile), tiles_total)
+        magnitudes = tuple((threshold, beyond[threshold]) for threshold in PictureDiff.THRESHOLDS)
+        return PictureDiff(width * height, differing, beyond[SIGNIFICANT], magnitudes, worst,
+                           len(per_tile), tiles_total)
 
 
 class PictureRun:
@@ -199,6 +237,11 @@ class PictureRun:
         for core in (self.console, self.native):
             used, settle = checkpoint.reach(self.driver, core, budget, settle)
             print(f"[picture] {core.name}: {checkpoint.name} after {used} game frames")
+        if checkpoint.not_picture_comparable:
+            # Advancing to a presented frame is a per-core, unequal advance made solely so a photo
+            # can be taken. A checkpoint that will not be photographed must not pay it, or the two
+            # cores would leave it at different game frames for no reason at all.
+            return
         self.report.setdefault("presented", {})[checkpoint.name] = {
             core.name: self.advance_to_presented(checkpoint.name, core)
             for core in (self.console, self.native)
@@ -312,6 +355,15 @@ class PictureRun:
         blocking = [row for row in rows if chosen(row)]
         return blocking, rows, [row for row in everything if chosen(row)]
 
+    def withhold(self, checkpoint) -> None:
+        """Record that this checkpoint was reached and deliberately not photographed, and why.
+
+        A skipped checkpoint must still appear in the report: silence here would be
+        indistinguishable from a checkpoint the run never got to, and the reason is the finding."""
+        print(f"[picture] {checkpoint.name}: not photographed — {checkpoint.not_picture_comparable}")
+        self.report["pictures"].append({"checkpoint": checkpoint.name, "photographed": False,
+                                        "withheld": checkpoint.not_picture_comparable})
+
     def at(self, name: str) -> bool:
         """Capture both cores here and report. Returns whether the pictures are comparable AND
         matched well enough not to name a defect; a refusal is False and says why."""
@@ -356,12 +408,25 @@ class PictureRun:
             return False
         diff = compare_pictures(native.path, console.path)
         row["diff"] = {"pixels": diff.pixels, "differing": diff.differing, "share": round(diff.share, 6),
+                       "significant": diff.significant,
+                       "significant_share": round(diff.significant_share, 6),
+                       "colour_step": COLOUR_STEP,
+                       "beyond": [{"threshold": threshold, "pixels": count}
+                                  for threshold, count in diff.magnitudes],
                        "tiles_touched": diff.tiles_touched, "tiles_total": diff.tiles_total,
                        "concentrated": diff.concentrated,
                        "worst_tiles": [{"tile": list(tile), "differing": count} for tile, count in diff.worst_tiles]}
-        shape = "CONCENTRATED" if diff.concentrated else "spread"
-        print(f"[picture] {name}: {diff.differing}/{diff.pixels} pixels differ ({100 * diff.share:.2f}%), "
-              f"{diff.tiles_touched}/{diff.tiles_total} tiles touched — {shape}")
+        shape = ("nothing beyond rounding" if not diff.significant
+                 else "CONCENTRATED" if diff.concentrated else "spread")
+        print(f"[picture] {name}: {diff.significant}/{diff.pixels} pixels are a different COLOUR "
+              f"({100 * diff.significant_share:.2f}%), {diff.tiles_touched}/{diff.tiles_total} tiles "
+              f"touched — {shape}")
+        # The bare count is kept beside it rather than replaced: it is the difference between "these
+        # frames are bit-identical" and "these frames agree to within rounding", and only the first
+        # clears a comparator selftest.
+        rounding = diff.differing - diff.significant
+        print(f"[picture] {name}: {diff.differing} differ at all; {rounding} of those by one "
+              f"{COLOUR_STEP}-value colour step or less (rounding/dither, not rendering)")
         if diff.worst_tiles:
             worst = ", ".join(f"({tile[0]},{tile[1]}):{count}" for tile, count in diff.worst_tiles[:4])
             print(f"[picture]   worst tiles {worst}")
@@ -428,6 +493,9 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
             if args.selftest and checkpoint is title.checkpoints[-1]:
                 report["complete"] = True
                 return 0 if run_state.selftest() else 1
+            if checkpoint.not_picture_comparable:
+                run_state.withhold(checkpoint)
+                continue
             ok = run_state.at(checkpoint.name) and ok
         route = getattr(args, "route", None)
         if route and not args.play:
