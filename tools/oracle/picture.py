@@ -20,6 +20,19 @@ wide presentation region), the reference through its libretro framebuffer. Both 
 the same title checkpoints `compare.py` uses -- but reaching the same checkpoint is NOT the same as
 standing at the same moment, so every comparison below CHECKS that before it believes a number.
 
+BEFORE IT PHOTOGRAPHS, IT WAITS FOR EACH CORE TO BE PRESENTING SOMETHING. A checkpoint predicate
+is satisfied by guest STATE, and a title can enter that state well before it draws anything. The
+product's host-file I/O also completes far sooner than the reference's emulated disc, so the two
+reach the same state at very different moments. Measured 2026-09-19 on Tomba! 2: all three
+checkpoints refused as blank on one side -- the product had the complete title screen at game frame
+27 while the reference was still black at 302 -- so the run produced no comparison at all, in either
+direction. Each core is now advanced with no input, bounded, until it presents a non-blank frame,
+and the report records the extra frames and the probes taken (including for a core that never
+presents, so "never drew" stays distinguishable from "never looked"). This does NOT invent
+alignment: when only one core needed advancing, its guest state moves and the state refusal below
+fires instead -- which names ranges, where a blank refusal named nothing. When both settle
+together, the comparison proceeds; that is what produced Tomba! 2's first picture number.
+
 WHAT IT REFUSES, and why each refusal exists rather than a number:
 
   * EITHER picture blank, or both uniform. A zero difference between two pictures that hold nothing
@@ -165,11 +178,54 @@ class PictureRun:
         self.out_dir = out_dir
         self.report = report
 
+    # How far a core may be advanced, with no input, to reach a frame it is actually PRESENTING.
+    #
+    # A checkpoint predicate is satisfied by GUEST STATE, and a title can enter that state well
+    # before it draws anything. The two cores then arrive at very different moments, because the
+    # product's host-file I/O completes far sooner than the reference's emulated disc. Measured
+    # 2026-09-19: all three of Tomba! 2's checkpoints refused as blank on one side -- the product
+    # had the complete title screen at game frame 27 while the reference was still black at 302 --
+    # so the tool produced no comparison at all, on either side of the question. Spyro 1's `playing`
+    # photographed the reference on its intro card and the product already in the lit courtyard.
+    #
+    # A blank refusal is a dead end: it says neither "these match" nor "these differ". Advancing to
+    # a presented frame turns it into one of the two answers the run can act on -- a real comparison,
+    # or a state divergence named by range.
+    PRESENT_BUDGET = 600
+    PRESENT_STEP = 10
+
     def reach(self, checkpoint, budget: int) -> None:
         settle = None
         for core in (self.console, self.native):
             used, settle = checkpoint.reach(self.driver, core, budget, settle)
             print(f"[picture] {core.name}: {checkpoint.name} after {used} game frames")
+        self.report.setdefault("presented", {})[checkpoint.name] = {
+            core.name: self.advance_to_presented(checkpoint.name, core)
+            for core in (self.console, self.native)
+        }
+
+    def advance_to_presented(self, name: str, core: CoreSession) -> dict:
+        """Advance `core` with no input until it presents a non-blank frame, and say what it took.
+
+        Reports the frames spent and the frames SCANNED even when nothing was ever presented, so a
+        core that never draws is distinguishable from one that was never looked at. Returns rather
+        than raises: `at` owns the refusal, and a core that never presents still has to be reported
+        beside the one that did.
+        """
+        probe = self.out_dir / f"{name}.{core.name}.presented.png"
+        scanned = 0
+        for advanced in range(0, self.PRESENT_BUDGET + 1, self.PRESENT_STEP):
+            core.capture(probe)
+            scanned += 1
+            if not Picture.load(probe).blank:
+                if advanced:
+                    print(f"[picture] {core.name}: {name} presented after {advanced} more game frame(s)")
+                return {"presented": True, "extra_frames": advanced, "probes": scanned}
+            core.hold(frozenset())
+            self.title.advance(core, self.PRESENT_STEP)
+        print(f"[picture] {core.name}: {name} NEVER presented — {scanned} probe(s) over "
+              f"{self.PRESENT_BUDGET} game frames were all blank", file=sys.stderr)
+        return {"presented": False, "extra_frames": self.PRESENT_BUDGET, "probes": scanned}
 
     def play(self, frames: int, segments=None, frame_step: int = 0, label: str = "played") -> bool:
         """Run a held-input schedule on both cores and compare the picture along the way. `segments`

@@ -76,7 +76,10 @@ def arguments(**overrides) -> argparse.Namespace:
     return argparse.Namespace(**values)
 
 
-class PictureTests(unittest.TestCase):
+class PictureFixture(unittest.TestCase):
+    """Fixture only -- no tests. Two test classes share it; inheriting PictureTests instead would
+    re-run every one of its cases under the second class's name."""
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
@@ -104,6 +107,12 @@ class PictureTests(unittest.TestCase):
         self.assertTrue(report["pictures"], report)
         return report["pictures"][-1]
 
+    def _presented(self, report, core: str) -> dict:
+        checkpoints = report["presented"]
+        return checkpoints[list(checkpoints)[-1]][core]
+
+
+class PictureTests(PictureFixture):
     # --- the refusals, each shown to fire -------------------------------------------------
 
     def test_a_blank_product_picture_is_refused_not_scored_as_a_match(self) -> None:
@@ -334,3 +343,66 @@ class PictureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AdvanceToPresentedTests(PictureFixture):
+    """A checkpoint predicate is guest STATE; a title can enter it before it draws anything, and the
+    product's host-file I/O gets there long before the reference's emulated disc. Photographing at
+    arrival then compares a blank frame against a drawn one, which answers neither question."""
+
+    def _painter(self, blank_probes: int):
+        """Paint BLANK for the first `blank_probes` captures, then the scene. Counts its calls so a
+        test can prove the loop really probed rather than got the answer for free."""
+
+        state = {"calls": 0}
+
+        def paint(destination: Path) -> None:
+            (BLANK if state["calls"] < blank_probes else SCENE)(destination)
+            state["calls"] += 1
+
+        return paint, state
+
+    def test_a_core_that_starts_blank_is_advanced_until_it_presents(self) -> None:
+        native, state = self._painter(blank_probes=3)
+        code, report = self._run(native, SCENE)
+        presented = self._presented(report, "native")
+        self.assertTrue(presented["presented"])
+        self.assertEqual(presented["extra_frames"], 3 * picture.PictureRun.PRESENT_STEP)
+        self.assertGreater(state["calls"], 3)  # it really probed; it did not get the answer free
+        # Both pictures are now drawn, so the old "blank" refusal is gone. What is left is the
+        # HONEST consequence: advancing one core and not the other moves its guest state, and the
+        # state guard says so by name. Settling converts a dead end into a named diagnosis; it
+        # cannot invent an alignment the run does not have.
+        row = self._row(report)
+        self.assertNotIn("blank", row.get("refused", ""))
+        self.assertIn("not at the same guest state", row["refused"])
+        self.assertIn("frame", row["refused"])
+
+    def test_when_both_cores_need_the_same_advance_the_comparison_proceeds(self) -> None:
+        native, _ = self._painter(blank_probes=3)
+        console, _ = self._painter(blank_probes=3)
+        code, report = self._run(native, console)
+        row = self._row(report)
+        self.assertNotIn("refused", row)
+        self.assertEqual(row["diff"]["differing"], 0)
+        for core in ("native", "console"):
+            self.assertEqual(self._presented(report, core)["extra_frames"],
+                             3 * picture.PictureRun.PRESENT_STEP)
+
+    def test_a_core_already_presenting_is_not_advanced_at_all(self) -> None:
+        code, report = self._run(SCENE, SCENE)
+        for core in ("native", "console"):
+            presented = self._presented(report, core)
+            self.assertTrue(presented["presented"])
+            self.assertEqual(presented["extra_frames"], 0)
+
+    def test_a_core_that_never_presents_is_reported_with_what_was_scanned(self) -> None:
+        never = self._painter(blank_probes=10**6)[0]
+        code, report = self._run(never, SCENE)
+        presented = self._presented(report, "native")
+        self.assertFalse(presented["presented"])
+        # The negative must carry a denominator: "never presented" is not "never looked".
+        self.assertGreater(presented["probes"], 1)
+        self.assertEqual(presented["extra_frames"], picture.PictureRun.PRESENT_BUDGET)
+        self.assertEqual(code, 1)
+        self.assertIn("refused", self._row(report))
