@@ -17,6 +17,7 @@ import json
 import os
 import queue
 import struct
+import shutil
 import subprocess
 import threading
 import time
@@ -46,6 +47,10 @@ class CoreSession(Protocol):
     def hold(self, buttons: frozenset[str]) -> None: ...
     def step(self, frames: int) -> None: ...
     def read(self, address: int, size: int) -> bytes: ...
+    # The picture this core PRESENTS, written to `destination`. Not the emulated VRAM: on a native
+    # render path the picture is never in VRAM, and comparing VRAM there compares two blank buffers
+    # and calls them equal (psxport issue 0121).
+    def capture(self, destination: Path) -> None: ...
     def close(self) -> None: ...
 
 
@@ -159,6 +164,18 @@ class NativeReplSession:
         self._send(f"w8 {address:08X} {value & 0xFF:02X}")
         self._expect("[repl] ok")
 
+    def capture(self, destination: Path) -> None:
+        """The REPL's `shot`, which routes through gpu_native_shot and so follows whichever render
+        path is active and the wide presentation region when widescreen is on. A shot the product
+        reported but did not write is refused here rather than compared as an old file."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            destination.unlink()
+        self._send(f"shot {destination}")
+        self._expect("shot (")
+        if not destination.is_file():
+            raise CoreError(f"native REPL reported a shot but {destination} was not written")
+
     def close(self) -> None:
         if self._process.poll() is None:
             try:
@@ -178,11 +195,17 @@ class ConsoleSession:
     _MAX_STEP = 3600
     _MAX_READ = 256
 
-    def __init__(self, psxport_dir: Path, disc: Path, bios: Path, region: str, log_path: Path):
+    def __init__(self, psxport_dir: Path, disc: Path, bios: Path, region: str, log_path: Path,
+                 crop_overscan: bool = False):
         self.frames = 0
         self._log = open(log_path, "w")
         command = ["uv", "run", "--frozen", "python", "tools/oracle/console.py", "run",
                    "--disc", str(disc), "--region", region, "--bios", str(bios)]
+        if crop_overscan:
+            # Picture comparison only: the reference then publishes its active display area rather
+            # than the padded scanline, so both cores present the same rect. RAM is unaffected, and
+            # the RAM comparison keeps the pinned contract by not passing this.
+            command.append("--crop-overscan")
         environment = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
         self._held: frozenset[str] = frozenset()
         self._process = subprocess.Popen(command, cwd=psxport_dir, stdin=subprocess.PIPE, env=environment,
@@ -240,6 +263,13 @@ class ConsoleSession:
             out += bytes.fromhex(result["bytes"])
             cursor += chunk
         return bytes(out)
+
+    def capture(self, destination: Path) -> None:
+        """The reference's own framebuffer. console.py writes it to one fixed path and overwrites it
+        every time, so it is copied out immediately."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        result = self._call({"command": "capture"})
+        shutil.copyfile(result["capture"], destination)
 
     def close(self) -> None:
         if self._process.poll() is None:

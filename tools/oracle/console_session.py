@@ -29,10 +29,16 @@ REFERENCE_OPTIONS = {
 
 
 class ConsoleSession:
-    def __init__(self, library, system_directory: Path, save_directory: Path):
+    def __init__(self, library, system_directory: Path, save_directory: Path,
+                 option_overrides: dict[str, str] | None = None):
         self.library = library
         self.system_directory = str(system_directory).encode()
         self.save_directory = str(save_directory).encode()
+        # The pinned reference contract above, with any caller override. The only override in use is
+        # the picture oracle's `crop_overscan`, which asks the CORE to publish exactly its active
+        # display area instead of the padded scanline. Copying the core's own 350->320 offset table
+        # into Python would be a second source of truth for it; asking the core is not.
+        self.option_overrides = dict(option_overrides or {})
         self.options: dict[bytes, bytes] = {}
         self.requested_options: dict[str, str] = {}
         self.unsupported_environment: dict[int, int] = {}
@@ -102,7 +108,7 @@ class ConsoleSession:
                 raise ValueError(f"malformed core option {key}")
             values = choices.split("|")
             suffix = key.removeprefix("beetle_psx_")
-            chosen = REFERENCE_OPTIONS.get(suffix, values[0])
+            chosen = self.option_overrides.get(suffix, REFERENCE_OPTIONS.get(suffix, values[0]))
             if chosen not in values:
                 raise ValueError(f"pinned core cannot supply reference option {key}={chosen}")
             self.options[entry.key] = chosen.encode()

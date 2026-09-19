@@ -150,7 +150,8 @@ def run(args, output: ProtocolOutput) -> None:
         with (SCRATCH / "core.log").open("w") as core_log:
             os.dup2(core_log.fileno(), 1)
             os.dup2(core_log.fileno(), 2)
-            session = ConsoleSession(load_library(library_path), system_directory, save_directory)
+            session = ConsoleSession(load_library(library_path), system_directory, save_directory,
+                                     {"crop_overscan": "static"} if args.crop_overscan else None)
             session.open(disc)
             flush_native_output()
             manifest["firmware_observation"] = verify_loaded_firmware(
@@ -190,6 +191,12 @@ def parse_arguments():
     execute.add_argument("--disc", type=Path, required=True)
     execute.add_argument("--disc-sha256", help="refuse a disc differing from this externally verified hash")
     execute.add_argument("--region", choices=tuple(FIRMWARE), default="na")
+    execute.add_argument("--crop-overscan", action="store_true",
+                         help="publish the core's active display area instead of the padded "
+                              "scanline: crop_overscan=static, the core's HORIZONTAL-only crop "
+                              "(350x240 -> 320x240). Not `smart`, which also crops vertically and "
+                              "would change the height the product presents. Video only; RAM is "
+                              "unaffected")
     firmware = execute.add_mutually_exclusive_group(required=True)
     firmware.add_argument("--bios", type=Path)
     firmware.add_argument("--openbios", action="store_true")
