@@ -27,9 +27,18 @@ struct PainterReplayKey {
 struct PainterReplayOrder {
   PainterReplayDomainId domain = 0;
   PainterReplayKey key{};
+  // The single normalized depth every face at this `key.ot_bin` is drawn at, so the depth buffer
+  // separates BINS and never contradicts the replay. The game owns it because only the game knows how
+  // its ordering table quantises view Z. 0 = not authored: those faces keep their per-vertex depth,
+  // and `rq_apply_painter_band_depths` reports how many did. See painter_band_depth.h for the
+  // measurement that made this necessary.
+  float band_ord = 0.0f;
 
   bool authored() const {
     return domain != 0;
+  }
+  bool banded() const {
+    return band_ord > 0.0f;
   }
 };
 
@@ -155,5 +164,10 @@ struct PainterObjectPlan {
 // queue (the fps60 present merge does exactly that), but every item must already be sorted by
 // (layer, seq). This is the one planner used by both direct queue emission and presentation-time replay.
 PainterObjectPlan planPainterItemStream(std::span<const RqItem *const> items, PainterObjectLimits limits = {});
+
+// The plan's own diagnostic line (channel `painterplan`): its object counts, and each range's first,
+// last and object transitions by replay key. It lives with the plan rather than at the flush that
+// consumes it, so the vocabulary and the structure it describes have one owner.
+void painterPlanReport(int frame, uint32_t flush_ordinal, const PainterObjectPlan &plan);
 
 #endif

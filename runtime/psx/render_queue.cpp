@@ -7,6 +7,7 @@
 #include "gpu_vk.h"
 #include "mods.h"
 #include "ot_lifo_depth.h"
+#include "painter_band_depth.h"
 #include "proj_params.h"              // class ProjParams — proj_camview_world_screen / camview_publish bridges
 #include "render_queue_attribution.h" // who filled the queue — the fatal reports, never guesses
 #include <algorithm>
@@ -538,63 +539,7 @@ void RenderQueue::emitItemStream(Core *core, std::span<const RqItem *const> stre
                     bad ? bad->painter_object : 0);
       abort();
     }
-    static const lucent::Channel painterPlanChannel{"painterplan"};
-    if (painterPlanChannel) {
-      lucent::Line line;
-      line.add("f{} flush={} items={} objects={} domains={} ranges={}",
-               census_frame(core),
-               run.front()->flush_ordinal,
-               plan.commands.size(),
-               plan.stats.objects,
-               plan.stats.authored_domains,
-               plan.ranges.size());
-      std::vector<std::pair<PainterObjectId, size_t>> objectCounts;
-      for (const PainterCommand &command : plan.commands) {
-        const auto found = std::find_if(objectCounts.begin(), objectCounts.end(), [&](const auto &entry) {
-          return entry.first == command.object;
-        });
-        if (found == objectCounts.end()) {
-          objectCounts.push_back({command.object, 1});
-        } else {
-          ++found->second;
-        }
-      }
-      line.add(" counts=");
-      for (const auto &[object, count] : objectCounts) {
-        line.add("{:08X}:{} ", object, count);
-      }
-      for (const PainterPlaybackRange &range : plan.ranges) {
-        const PainterCommand &first = plan.commands[range.first_command];
-        const PainterCommand &last = plan.commands[range.first_command + range.command_count - 1];
-        line.add("range {:08X}/{} first={:08X}@{}/{}/{} last={:08X}@{}/{}/{} transitions=",
-                 range.identity,
-                 range.command_count,
-                 first.object,
-                 first.replay.key.ot_bin,
-                 first.replay.key.link_ordinal,
-                 first.replay.key.chain_suborder,
-                 last.object,
-                 last.replay.key.ot_bin,
-                 last.replay.key.link_ordinal,
-                 last.replay.key.chain_suborder);
-        PainterObjectId previous = first.object;
-        size_t reported = 0;
-        for (size_t k = 1; k < range.command_count && reported < 12; ++k) {
-          const PainterCommand &command = plan.commands[range.first_command + k];
-          if (command.object == previous) {
-            continue;
-          }
-          line.add("{:08X}@{}/{}/{} ",
-                   command.object,
-                   command.replay.key.ot_bin,
-                   command.replay.key.link_ordinal,
-                   command.replay.key.chain_suborder);
-          previous = command.object;
-          ++reported;
-        }
-      }
-      line.flush_debug(painterPlanChannel);
-    }
+    painterPlanReport(census_frame(core), run.front()->flush_ordinal, plan);
     // Regrouping changes physical pass order. Exact-real-depth painter/ordinary ties are preserved by
     // a dense rank of original sequence values inside THIS physical flush. Fps60 rebases RqItem::seq
     // across captured flushes, but that global offset carries no ordering information inside this run
@@ -609,6 +554,9 @@ void RenderQueue::emitItemStream(Core *core, std::span<const RqItem *const> stre
         abort();
       }
     }
+    // The authored replay is the game's ordering table, and a banded domain declares that the depth
+    // buffer only separates its bins. Verified before anything is drawn (Spyro issue 0120).
+    rq_verify_painter_band_depths(core, run, plan);
     mPainterRegrouping = true;
     for (size_t i : plan.ordinary_items) {
       mPainterPresentationRank = plan.presentation_ranks[i];

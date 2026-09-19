@@ -2,6 +2,8 @@
 
 #include "render_queue.h"
 
+#include <lucent/log.h>
+
 #include <algorithm>
 #include <array>
 
@@ -392,4 +394,64 @@ PainterObjectPlan RenderQueue::buildPainterObjectPlan(PainterObjectLimits limits
     stream.push_back(&items[i]);
   }
   return planPainterItemStream(stream, limits);
+}
+
+void painterPlanReport(int frame, uint32_t flush_ordinal, const PainterObjectPlan &plan) {
+  static const lucent::Channel painterPlanChannel{"painterplan"};
+  if (painterPlanChannel) {
+    lucent::Line line;
+    line.add("f{} flush={} items={} objects={} domains={} ranges={}",
+             frame,
+             flush_ordinal,
+             plan.commands.size(),
+             plan.stats.objects,
+             plan.stats.authored_domains,
+             plan.ranges.size());
+    std::vector<std::pair<PainterObjectId, size_t>> objectCounts;
+    for (const PainterCommand &command : plan.commands) {
+      const auto found = std::find_if(objectCounts.begin(), objectCounts.end(), [&](const auto &entry) {
+        return entry.first == command.object;
+      });
+      if (found == objectCounts.end()) {
+        objectCounts.push_back({command.object, 1});
+      } else {
+        ++found->second;
+      }
+    }
+    line.add(" counts=");
+    for (const auto &[object, count] : objectCounts) {
+      line.add("{:08X}:{} ", object, count);
+    }
+    for (const PainterPlaybackRange &range : plan.ranges) {
+      const PainterCommand &first = plan.commands[range.first_command];
+      const PainterCommand &last = plan.commands[range.first_command + range.command_count - 1];
+      line.add("range {:08X}/{} first={:08X}@{}/{}/{} last={:08X}@{}/{}/{} transitions=",
+               range.identity,
+               range.command_count,
+               first.object,
+               first.replay.key.ot_bin,
+               first.replay.key.link_ordinal,
+               first.replay.key.chain_suborder,
+               last.object,
+               last.replay.key.ot_bin,
+               last.replay.key.link_ordinal,
+               last.replay.key.chain_suborder);
+      PainterObjectId previous = first.object;
+      size_t reported = 0;
+      for (size_t k = 1; k < range.command_count && reported < 12; ++k) {
+        const PainterCommand &command = plan.commands[range.first_command + k];
+        if (command.object == previous) {
+          continue;
+        }
+        line.add("{:08X}@{}/{}/{} ",
+                 command.object,
+                 command.replay.key.ot_bin,
+                 command.replay.key.link_ordinal,
+                 command.replay.key.chain_suborder);
+        previous = command.object;
+        ++reported;
+      }
+    }
+    line.flush_debug(painterPlanChannel);
+  }
 }
