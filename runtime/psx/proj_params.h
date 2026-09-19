@@ -35,8 +35,10 @@ public:
   // The near plane every depth normalisation is measured against (pzToOrd). It is per-frame state a
   // producer may install for the length of its own submission, so a frame in which producers disagree
   // puts their faces on two different depth scales in ONE shared D32 buffer — the shape of a
-  // wrong-occlusion report. reportProjH says which plane was installed by whom, so "they all agree"
-  // and "nobody measured" are different answers (channel `projplane`).
+  // wrong-occlusion report. reportProjH prints every install as `previous -> next` on channel
+  // `projplane`, so a frame's distinct planes are countable. It does NOT name the installer, so
+  // "they all agree" and "one producer never installed a plane" still read the same; a verdict that
+  // needs the owner has to add it here and at every setProjH call site.
   void setProjH(uint16_t H) {
     reportProjH(mProjH, H);
     mProjH = H;
