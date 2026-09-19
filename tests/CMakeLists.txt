@@ -96,6 +96,15 @@ add_test(NAME looks_right_selftest
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/looks_right.py --selftest)
 
+# The fps60 endpoint/owner analysis. Its hermetic part is the attribution: given a constructed
+# fps60seq log, does a tile go to the SMALLEST run covering it rather than to whichever run came
+# first? Crediting the first one hands every tile to the full-screen sky fill and quietly zeroes
+# every other row, which is a wrong answer that looks like a clean one. Walking a real capture needs
+# a disc and a GPU, so that invocation is per-repo and by hand (see its --help).
+add_test(NAME fps60_check_selftest
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/fps60_check.py --selftest)
+
 add_test(NAME gpu_shader_generator
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/gen_gpu_shaders.py --selftest)

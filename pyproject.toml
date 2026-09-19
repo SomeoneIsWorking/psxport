@@ -5,6 +5,8 @@ description = "Locked Python environment for PSXPort build and verification tool
 requires-python = ">=3.11"
 dependencies = [
     "capstone>=5,<6",
+    # tools/port/fps60_check.py compares captured frames pixel-for-pixel.
+    "pillow>=10,<12",
 ]
 
 [tool.uv]
