@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import ctypes as ct
 import gc
+import json
 from pathlib import Path
 import shutil
 import struct
+import tempfile
 import unittest
 from unittest.mock import patch
 import zlib
@@ -198,3 +200,89 @@ class ConsoleHostTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InsertCardTests(unittest.TestCase):
+    """The reference's memory card decides a title's menu route, so the harness must be able to set
+    it and must REFUSE every way of setting it that would quietly compare two different cards."""
+
+    CARD = 128 * 1024
+
+    class FakeLibrary:
+        """The two libretro entry points a card insertion uses, over a real 128 KiB buffer."""
+
+        def __init__(self, size: int = 128 * 1024, present: bool = True):
+            self.buffer = ct.create_string_buffer(size) if present else None
+            self.size = size
+
+        def retro_get_memory_size(self, kind: int) -> int:
+            return self.size if kind == 0 else 0
+
+        def retro_get_memory_data(self, kind: int):
+            if kind != 0 or self.buffer is None:
+                return None
+            return ct.addressof(self.buffer)
+
+    def session(self, library=None, loaded: bool = True, frames: int = 0):
+        session = ConsoleSession(None, Path("system"), Path("saves"))
+        session.library = library if library is not None else self.FakeLibrary()
+        session.loaded = loaded
+        session.frames = frames
+        return session
+
+    def image(self, magic: bytes = b"MC") -> bytes:
+        return magic + bytes(self.CARD - len(magic))
+
+    def test_the_card_reaches_the_core_buffer_and_is_read_back(self):
+        library = self.FakeLibrary()
+        session = self.session(library)
+        result = session.insert_card(self.image())
+        self.assertEqual(ct.string_at(ct.addressof(library.buffer), self.CARD), self.image())
+        self.assertEqual((result["card_bytes"], result["magic"]), (self.CARD, "MC"))
+        # A DIFFERENT card must produce a different digest, or the digest proves nothing.
+        other = self.session(self.FakeLibrary()).insert_card(self.image(b"\x00\x00"))
+        self.assertNotEqual(other["card_sha256"], result["card_sha256"])
+
+    def test_refuses_a_card_that_is_not_a_psx_card(self):
+        for size in (self.CARD - 1, self.CARD + 1, 0):
+            with self.assertRaises(ValueError) as raised:
+                self.session().insert_card(bytes(size))
+            self.assertIn("exactly", str(raised.exception))
+
+    def test_refuses_after_the_console_has_already_run(self):
+        with self.assertRaises(ValueError) as raised:
+            self.session(frames=1).insert_card(self.image())
+        self.assertIn("before the console is stepped", str(raised.exception))
+
+    def test_refuses_without_loaded_content(self):
+        with self.assertRaises(ValueError):
+            self.session(loaded=False).insert_card(self.image())
+
+    def test_refuses_a_core_that_exposes_no_card(self):
+        for library in (self.FakeLibrary(present=False), self.FakeLibrary(size=1024)):
+            with self.assertRaises(ValueError) as raised:
+                self.session(library).insert_card(self.image())
+            self.assertIn("memory card through save RAM", str(raised.exception))
+
+    def test_the_protocol_command_carries_the_image_by_path(self):
+        library = self.FakeLibrary()
+        session = self.session(library)
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        card = directory / "card.mcr"
+        card.write_bytes(self.image())
+        message = {"command": "insert_card", "card": str(card)}
+        # The card travels as a path because the control protocol bounds one command line at 65,536
+        # characters and a 128 KiB card is 262,144 hex characters. Measured 2026-09-19: sending the
+        # hex made the reference refuse the line and exit, and the controlling process saw only a
+        # broken pipe. Keep the command far inside the bound.
+        self.assertLess(len(json.dumps(message)), 65536)
+        result = command(session, message, Path("unused"))
+        self.assertEqual(result["card_bytes"], self.CARD)
+        self.assertEqual(ct.string_at(ct.addressof(library.buffer), 2), b"MC")
+        with self.assertRaises(ValueError):
+            command(session, {"command": "insert_card", "card": 5}, Path("unused"))
+        with self.assertRaises(ValueError) as raised:
+            command(session, {"command": "insert_card", "card": str(directory / "absent.mcr")},
+                    Path("unused"))
+        self.assertIn("does not exist", str(raised.exception))

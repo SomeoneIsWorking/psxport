@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -255,3 +256,54 @@ class CompareTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MatchConsoleCardTest(unittest.TestCase):
+    """The reference's memory card is an INPUT to the comparison, so the harness must be able to
+    make it equal to the product's -- and must say so, both when it did and when it did not."""
+
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.directory, ignore_errors=True)
+        self.card = self.directory / "card.mcr"
+        self.image = b"MC" + bytes(128 * 1024 - 2)
+
+    def console(self):
+        class Console:
+            def __init__(self):
+                self.received = None
+
+            def insert_card(self, card) -> dict:
+                self.received = card
+                image = card.read_bytes()
+                return {"card_bytes": len(image), "card_sha256": "abc", "magic": "MC"}
+
+        return Console()
+
+    def test_off_by_default_and_says_the_reference_kept_its_own_card(self) -> None:
+        console = self.console()
+        self.card.write_bytes(self.image)
+        result = compare.match_console_card(console, None)
+        self.assertFalse(result["matched"])
+        self.assertIn("--console-card", result["reason"])
+        self.assertIsNone(console.received)  # the NEGATIVE really did nothing
+
+    def test_on_hands_the_reference_the_product_bytes_verbatim(self) -> None:
+        console = self.console()
+        self.card.write_bytes(self.image)
+        result = compare.match_console_card(console, self.card)
+        self.assertTrue(result["matched"])
+        self.assertEqual(console.received, self.card)
+        self.assertEqual(result["source"], str(self.card))
+
+    def test_refuses_a_missing_card_instead_of_comparing_different_cards(self) -> None:
+        console = self.console()
+        with self.assertRaises(compare.CoreError) as raised:
+            compare.match_console_card(console, self.card)
+        self.assertIn("does not exist", str(raised.exception))
+        self.assertIsNone(console.received)
+
+    def test_refuses_a_reference_that_cannot_take_a_card(self) -> None:
+        self.card.write_bytes(self.image)
+        with self.assertRaises(compare.CoreError):
+            compare.match_console_card(object(), self.card)

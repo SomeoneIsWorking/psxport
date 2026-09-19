@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes as ct
+import hashlib
 from pathlib import Path
 from typing import Callable
 
@@ -12,7 +13,13 @@ from console_observer import Observer
 
 EXPERIMENTAL = 0x10000
 SYSTEM_RAM = 2
+SAVE_RAM = 0
 RAM_BYTES = 2 * 1024 * 1024
+# Memory-card slot 1 is 16 blocks x 64 frames x 128 bytes. The core owns slot 1 through the
+# libretro save-RAM pointer rather than a file (libretro.c: retro_get_memory_data returns the slot-0
+# device's NV data whenever use_mednafen_memcard0_method is false, which is its default and ours),
+# so this reference's card never reaches the saves directory and is never named by a filename.
+CARD_BYTES = 128 * 1024
 MAX_STEP_FRAMES = 3600
 BUTTONS = {"cross": 0, "square": 1, "select": 2, "start": 3, "up": 4, "down": 5,
            "left": 6, "right": 7, "circle": 8, "triangle": 9, "l1": 10, "r1": 11,
@@ -210,6 +217,36 @@ class ConsoleSession:
         self._check_callbacks()
         if self.library.retro_get_memory_size(SYSTEM_RAM) != RAM_BYTES:
             raise ValueError("full-console core did not expose its 2 MiB main RAM owner")
+
+    def insert_card(self, image: bytes) -> dict:
+        """Replace memory-card slot 1's contents with `image`, so this reference can be started from
+        the SAME card state the product was given instead of the blank card a fresh core comes up
+        with. Card state changes a title's menu route -- Spyro shows its card-creation page on an
+        unformatted card and its save picker on a formatted one -- so when the two cores are given
+        different cards, a comparison of that menu measures the harness, not the product.
+
+        This writes the core's own non-volatile buffer; it is the same buffer a libretro frontend
+        restores a save into. Slot 1 is deliberately never flushed to disk by the core, so nothing
+        here leaves a file behind for the next run to inherit.
+        """
+        if not self.loaded:
+            raise ValueError("inserting a card requires loaded console content")
+        if self.frames:
+            raise ValueError(f"the card must be inserted before the console is stepped; this session "
+                             f"has already run {self.frames} field(s)")
+        if len(image) != CARD_BYTES:
+            raise ValueError(f"a PSX memory card is exactly {CARD_BYTES} bytes; got {len(image)}")
+        size = self.library.retro_get_memory_size(SAVE_RAM)
+        pointer = self.library.retro_get_memory_data(SAVE_RAM)
+        if not pointer or size != CARD_BYTES:
+            raise ValueError(f"core does not expose a {CARD_BYTES}-byte memory card through save RAM "
+                             f"(pointer {bool(pointer)}, size {size}); it cannot be given a card")
+        ct.memmove(pointer, image, CARD_BYTES)
+        written = ct.string_at(pointer, CARD_BYTES)
+        if written != image:
+            raise ValueError("the core's card buffer did not take the image that was written to it")
+        return {"card_bytes": CARD_BYTES, "card_sha256": hashlib.sha256(image).hexdigest(),
+                "magic": written[:2].decode("latin-1")}
 
     def close(self) -> None:
         if self.loaded:

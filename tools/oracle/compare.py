@@ -124,6 +124,39 @@ def fresh_card(product: Product, out_dir: Path) -> Product:
     return Product(product.binary, product.executable, environment, product.cwd, product.disc)
 
 
+def match_console_card(console: CoreSession, card: Optional[Path]) -> dict:
+    """Start the reference from the memory-card image at `card`, or record that it kept its own.
+
+    The two cores otherwise start from DIFFERENT cards, and that is not a detail: the product formats
+    the blank image it creates (runtime/psx/memcard.cpp) while the reference comes up with the
+    unformatted card a real console has when a new card is inserted. A title branches on that --
+    Spyro 1 draws its card-creation page on an unformatted card and its save picker on a formatted
+    one -- so comparing a save menu across that difference measures the harness.
+
+    Defaulting this OFF is deliberate. The product's pre-format is a stopgap standing in for a guest
+    path it does not serve, and mirroring the card into the reference by default would hide exactly
+    that. Passing a card the product wrote isolates the remaining question: given the SAME card, does
+    the menu match?
+
+    There is one memory-card layout in the system and this is not a second copy of it: this reads an
+    image the PRODUCT produced. The report records its digest so the run names the card it used.
+    """
+    if card is None:
+        return {"matched": False,
+                "reason": "the reference kept the unformatted card a console powers up with; pass "
+                          "--console-card CARD.MCR to start it from a card the product wrote"}
+    if not hasattr(console, "insert_card"):
+        raise CoreError("--console-card needs a reference that accepts a card; this session does not")
+    if not card.is_file():
+        raise CoreError(f"--console-card {card} does not exist; there is nothing to give the reference")
+    result = dict(console.insert_card(card))
+    result["matched"] = True
+    result["source"] = str(card)
+    print(f"[oracle] console card: {result.get('card_bytes')} bytes from {card} "
+          f"(magic {result.get('magic')!r}, sha256 {result.get('card_sha256', '')[:12]})")
+    return result
+
+
 class Unreached(CoreError):
     """A checkpoint predicate never held within its frame budget."""
 
@@ -399,6 +432,7 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
             raise CoreError(f"the console reference starts with existing save files {existing}; the product "
                             f"starts with a blank card, so the title's menu route would differ. Remove them "
                             f"from the reference's saves directory (see its manifest) and rerun")
+        report["console_card"] = match_console_card(console, getattr(args, "console_card", None))
         report["lookahead"] = {core.name: title.lookahead(core) for core in (native, console)}
         comparison = Comparison(title, native, console, report)
         first, *rest = title.checkpoints
@@ -450,6 +484,13 @@ def build_parser(description: str, default_bios: Path) -> argparse.ArgumentParse
     parser.add_argument("--frame-step", type=int, default=0,
                         help="compare every N frames inside a gameplay segment (0 = once per segment)")
     parser.add_argument("--selftest", action="store_true", help="validate the comparator with a seeded divergence")
+    parser.add_argument("--console-card", type=Path, metavar="CARD.MCR",
+                        help="start the reference from this 128 KiB memory-card image instead of the "
+                             "unformatted card a console powers up with. Card state selects a title's "
+                             "menu route, so a save-menu comparison across two different cards measures "
+                             "the harness; point this at a card the PRODUCT wrote to make that input "
+                             "equal. Leave it off to keep seeing a product that cannot serve the card "
+                             "state the reference starts from")
     parser.add_argument("--route", type=Path,
                         help="a recorded .pad replay to drive BOTH cores with instead of the title's "
                              "scripted route, so a long recorded scene can be compared")

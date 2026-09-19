@@ -65,7 +65,8 @@ def command(session: ConsoleSession, message: dict, output_directory: Path) -> d
                "capture": {"command"}, "ram": {"command"}, "quit": {"command"},
                "observe": {"command", "targets", "ranges", "capacity"},
                "observe_read": {"command"}, "observe_off": {"command"},
-               "hashes_begin": {"command"}, "hashes": {"command"}}
+               "hashes_begin": {"command"}, "hashes": {"command"},
+               "insert_card": {"command", "card"}}
     if not isinstance(operation, str) or operation not in allowed or set(message) != allowed[operation]:
         raise ValueError("unknown command or missing/extra fields: " + ", ".join(allowed))
     if operation == "buttons":
@@ -79,6 +80,18 @@ def command(session: ConsoleSession, message: dict, output_directory: Path) -> d
     elif operation == "observe_off":
         session.library.retro_psx_observer_disable()
         return session.observer.status()
+    elif operation == "insert_card":
+        # The image travels as a PATH, not as bytes: a 128 KiB card is 262,144 hex characters and
+        # the control protocol bounds a command line at 65,536. Both ends of this protocol are the
+        # same machine by construction (the controlling process spawns this one), so the file is
+        # readable here.
+        card = message["card"]
+        if not isinstance(card, str):
+            raise ValueError("insert_card takes the path of a memory-card image")
+        path = Path(card)
+        if not path.is_file():
+            raise ValueError(f"memory-card image {path} does not exist")
+        return session.insert_card(path.read_bytes())
     elif operation == "hashes_begin":
         return session.begin_hashes()
     elif operation == "hashes":

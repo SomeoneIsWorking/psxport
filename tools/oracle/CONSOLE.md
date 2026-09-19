@@ -80,6 +80,7 @@ stdout; native core messages go to the stable `scratch/oracle-console/core.log`.
 {"command":"buttons","buttons":[]}
 {"command":"step","frames":120}
 {"command":"read","address":"0x800757d8","bytes":4}
+{"command":"insert_card","card":"/abs/path/blank-formatted.mcr"}
 {"command":"capture"}
 {"command":"ram"}
 {"command":"quit"}
@@ -92,6 +93,28 @@ frame dimensions, timing and all queried option values. Unknown commands or fiel
 Read commands allow 1..256 bytes from main RAM, including its guest aliases. Capture writes only the
 latest copied framebuffer as `frame.png`; RAM writes the current 2 MiB as `ram.bin`. These stable paths
 are overwritten on request, with hashes in the reply. There are no per-frame image/RAM disk writes.
+
+### Memory card
+
+`insert_card` replaces slot 1's contents with a 128 KiB image before the first `step`, so a
+comparison can start both cores from the SAME card. It is refused after stepping, for any size other
+than 128 KiB, and when the core exposes no save RAM; the reply carries the byte count, the image's
+SHA-256 and its first two bytes, so a run names the card it used.
+
+The card travels as a PATH, not as bytes: the control protocol bounds one command line at 65,536
+characters and a 128 KiB card is 262,144 hex characters. Both ends are the same machine by
+construction, since the controlling process spawns this one.
+
+This is needed because card state selects a title's menu route, and the two cores do not otherwise
+start from the same card. Note what is NOT the difference: this core comes up with a card that is
+already FORMATTED (`InputDevice_Memcard_Ctor` in `mednafen/psx/frontio.c` calls
+`InputDevice_Memcard_Format`). What it does carry is `presence_new`, the PSX device flag byte bit 3
+that a card asserts from power-on until a frame is written to it, cleared only in the write-end
+path. A title branches on that flag, not on the format -- Spyro 1's `CREATING SAVE FILE...` page is
+the flag, not an unformatted card (spyro issue 0123).
+
+`--console-card CARD.MCR` on `compare.py` and `picture.py` drives this. It defaults OFF: mirroring a
+card by default would hide a product that cannot serve the card state the reference starts from.
 
 ## Bounded PC observations
 
@@ -182,7 +205,8 @@ The reference has independent CPU execution and full-console scheduling, but sha
 Beetle device implementation lineage used by PSXPort. Agreement cannot independently validate a bug
 shared by those devices. Main-RAM output is a diagnostic dump, not an exact console save state; it
 omits CPU registers, device state and timing. The host does not implement libretro save-RAM
-persistence, so saved-game progression parity is not qualified. Existing core-managed save filenames
+persistence, so saved-game progression parity is not qualified; `insert_card` sets the starting card
+but nothing writes it back. Existing core-managed save filenames
 are recorded in `run.json`; establish the same starting save state before any relevant comparison.
 
 Build provenance and `run.json` are evidence metadata, not evidence that a game booted or played.

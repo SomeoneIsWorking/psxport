@@ -69,6 +69,7 @@ from compare import (
     Title,
     build_parser,
     fresh_card,
+    match_console_card,
     recorded_route,
     snapshot,
 )
@@ -351,6 +352,7 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
         product = fresh_card(product, out_dir)
         report["product_card"] = product.environment[CARD_ENV]
         native, console = sessions(product, args, out_dir)
+        report["console_card"] = match_console_card(console, getattr(args, "console_card", None))
         run_state = PictureRun(title, native, console, out_dir, report)
         ok = True
         for checkpoint in title.checkpoints:

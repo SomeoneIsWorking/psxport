@@ -255,6 +255,12 @@ class ConsoleSession:
             self._call({"command": "buttons", "buttons": sorted(buttons)})
             self._held = buttons
 
+    def insert_card(self, card: Path) -> dict:
+        """Start this reference from the memory-card image at `card`. See ConsoleSession.insert_card
+        in tools/oracle/console_session.py for why card state is an input that must be equal. The
+        path is sent, not the bytes: the protocol bounds a command line well below a 128 KiB card."""
+        return self._call({"command": "insert_card", "card": str(card.resolve())})
+
     def step(self, frames: int) -> None:
         if frames <= 0:
             raise CoreError(f"step needs a positive frame count, got {frames}")
