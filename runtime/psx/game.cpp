@@ -63,6 +63,10 @@ Game::~Game() {
   // stalled three seconds in one chd_read and a run that never touched the disc are different
   // facts, and only the denominators tell them apart (Spyro issue 0115).
   disc_read_report(&disc, "disc hunk cache at shutdown");
+  // Same reason, and the case that prompted it: a Spyro run that reached gameplay through the
+  // save menu and one that stalled in the title for 12,000 fields produced identical card
+  // output, because nothing counted the syscalls either made (issue 0123).
+  memcard.syscallLog().report("at shutdown");
   // GpuDevice is declared after gpu_vk and therefore dies first during member teardown. Release this
   // per-Game retained texture while its owning SDL device is still alive; GpuVkState's destructor then
   // only clears the already-empty policy state.

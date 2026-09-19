@@ -87,6 +87,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/pad_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/snapshot.cpp
   ${PSXPORT_ROOT}/runtime/psx/memcard.cpp
+  ${PSXPORT_ROOT}/runtime/psx/card_syscall_log.cpp
   ${PSXPORT_ROOT}/runtime/psx/native_fmv.cpp
   ${PSXPORT_ROOT}/runtime/psx/fmv_decode.cpp   # pure .STR decode (VLC/MDEC/XA), shared by the player + offline tools
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gte.c

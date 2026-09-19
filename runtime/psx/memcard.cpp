@@ -350,19 +350,11 @@ bool Memcard::dirScanNext(Core *c, uint32_t direntVa) {
     c->mem_w32(direntVa + kDirEntSize, size);
     c->mem_w32(direntVa + kDirEntNext, 0);
     c->mem_w32(direntVa + kDirEntHead, mScanBlk);
-    if (mVerbose) {
-      lucent::info("card", "dir scan '{}' -> '{}' (block {}, {} bytes)", mScanPat, fn, mScanBlk, size);
-    }
+    lucent::debug("card", "dir scan '{}' -> '{}' (block {}, {} bytes)", mScanPat, fn, mScanBlk, size);
     mScanBlk++;
     return true;
   }
-  if (mVerbose) {
-    lucent::info("card",
-                 "dir scan '{}' -> no (further) match; {} directory block(s) "
-                 "examined",
-                 mScanPat,
-                 kBlocks - 1);
-  }
+  lucent::debug("card", "dir scan '{}' -> no (further) match; {} directory block(s) examined", mScanPat, kBlocks - 1);
   return false;
 }
 
@@ -434,9 +426,8 @@ static void card_read(Core *c) {
   for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
     c->mem_w8(buf + i, f[i]);
   }
-  if (m.verbose()) {
-    lucent::info("card", "read  frame {} -> 0x{:08X}", sector, buf);
-  }
+  lucent::debug("card", "read  frame {} -> 0x{:08X}", sector, buf);
+
   c->r[V0] = 1;
 }
 
@@ -449,9 +440,8 @@ static void card_write(Core *c) {
     f[i] = c->mem_r8(buf + i);
   }
   m.writeFrame(sector, f);
-  if (m.verbose()) {
-    lucent::info("card", "write frame {} <- 0x{:08X}", sector, buf);
-  }
+  lucent::debug("card", "write frame {} <- 0x{:08X}", sector, buf);
+
   c->r[V0] = 1;
 }
 
@@ -476,9 +466,8 @@ static void file_open(Core *c) {
   }
   if (blk < 0) {
     c->r[V0] = 0xFFFFFFFFu;
-    if (m.verbose()) {
-      lucent::info("card", "open '{}' mode={:X} -> FAIL", name, mode);
-    }
+    lucent::debug("card", "open '{}' mode={:X} -> FAIL", name, mode);
+
     return;
   }
   uint8_t e[Memcard::kFrameSize];
@@ -486,9 +475,7 @@ static void file_open(Core *c) {
   uint32_t sz = (uint32_t)e[4] | ((uint32_t)e[5] << 8) | ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24);
   int fd = m.fdAlloc(blk, sz);
   c->r[V0] = (fd < 0) ? 0xFFFFFFFFu : (uint32_t)fd;
-  if (m.verbose()) {
-    lucent::info("card", "open '{}' mode={:X} -> fd={} block={} size={}", name, mode, fd, blk, sz);
-  }
+  lucent::debug("card", "open '{}' mode={:X} -> fd={} block={} size={}", name, mode, fd, blk, sz);
 }
 
 // B0:0x33 lseek(fd, off, whence).
@@ -509,9 +496,7 @@ static void file_lseek(Core *c) {
   uint32_t base = (whence == 1) ? f->pos : (whence == 2) ? f->size : 0u;
   f->pos = base + (uint32_t)off;
   c->r[V0] = f->pos;
-  if (m.verbose()) {
-    lucent::info("card", "lseek fd={} off={} whence={} -> pos={}", fd, off, whence, f->pos);
-  }
+  lucent::debug("card", "lseek fd={} off={} whence={} -> pos={}", fd, off, whence, f->pos);
 }
 
 // B0:0x34 read(fd, buf, len).
@@ -565,10 +550,9 @@ static void file_read(Core *c) {
   }
   f->pos += len;
   c->r[V0] = 0; // accepted; the result is the event below
-  if (m.verbose()) {
-    lucent::info(
-        "card", "read  fd={} -> 0x{:08X} len={} (pos now {}) {}", fd, buf, len, f->pos, ok ? "-> IOEND" : "-> ERROR");
-  }
+  lucent::debug(
+      "card", "read  fd={} -> 0x{:08X} len={} (pos now {}) {}", fd, buf, len, f->pos, ok ? "-> IOEND" : "-> ERROR");
+
   if (ok) {
     Memcard::deliverComplete(c);
   } else {
@@ -621,10 +605,9 @@ static void file_write(Core *c) {
   }
   f->pos += len;
   c->r[V0] = 0; // accepted; see file_read for why this is not `len`
-  if (m.verbose()) {
-    lucent::info(
-        "card", "write fd={} <- 0x{:08X} len={} (pos now {}) {}", fd, buf, len, f->pos, ok ? "-> IOEND" : "-> ERROR");
-  }
+  lucent::debug(
+      "card", "write fd={} <- 0x{:08X} len={} (pos now {}) {}", fd, buf, len, f->pos, ok ? "-> IOEND" : "-> ERROR");
+
   if (ok) {
     Memcard::deliverComplete(c);
   } else {
@@ -645,9 +628,7 @@ static void file_close(Core *c) {
     m.fdFree(fd);
   }
   c->r[V0] = ok ? (uint32_t)fd : 0xFFFFFFFFu;
-  if (m.verbose()) {
-    lucent::info("card", "close fd={}", fd);
-  }
+  lucent::debug("card", "close fd={}", fd);
 }
 
 // B0:0x45 erase(name).
@@ -658,9 +639,8 @@ static void file_erase(Core *c) {
   int blk = m.dirFind(name);
   if (blk < 0) {
     c->r[V0] = 0;
-    if (m.verbose()) {
-      lucent::info("card", "erase '{}' -> not found", name);
-    }
+    lucent::debug("card", "erase '{}' -> not found", name);
+
     return;
   }
   uint8_t e[Memcard::kFrameSize];
@@ -675,9 +655,7 @@ static void file_erase(Core *c) {
   e[0x7F] = x;
   m.writeFrame((uint32_t)blk, e);
   c->r[V0] = 1;
-  if (m.verbose()) {
-    lucent::info("card", "erase '{}' (block {}) -> ok", name, blk);
-  }
+  lucent::debug("card", "erase '{}' (block {}) -> ok", name, blk);
 }
 
 // B0:0x42 firstfile(name, dirent) / B0:0x43 nextfile(dirent) — DIRECTORY ENUMERATION.
@@ -710,9 +688,7 @@ static void file_firstfile(Core *c) {
   // Omitting this event leaves that callback flag at zero and turns a valid empty scan into an
   // unbounded guest wait (Crash Bash FUN_8003A554 -> FUN_800476EC).
   Memcard::deliverComplete(c);
-  if (m.verbose()) {
-    lucent::info("card", "firstfile '{}' dirent=0x{:08X} -> 0x{:08X}", name, dirent, c->r[V0]);
-  }
+  lucent::debug("card", "firstfile '{}' dirent=0x{:08X} -> 0x{:08X}", name, dirent, c->r[V0]);
 }
 
 static void file_nextfile(Core *c) {
@@ -720,9 +696,7 @@ static void file_nextfile(Core *c) {
   const uint32_t dirent = c->r[A0];
   c->r[V0] = m.dirScanNext(c, dirent) ? dirent : 0;
   Memcard::deliverComplete(c);
-  if (m.verbose()) {
-    lucent::info("card", "nextfile dirent=0x{:08X} -> 0x{:08X}", dirent, c->r[V0]);
-  }
+  lucent::debug("card", "nextfile dirent=0x{:08X} -> 0x{:08X}", dirent, c->r[V0]);
 }
 
 // B0:0x4C _card_info(chan): host-backed card is always healthy/present.
@@ -739,34 +713,22 @@ extern "C" int card_hle_a0(uint32_t fn, Core *c) {
   switch (fn) {
   case 0xABu: // _card_info(port)
   case 0xACu: // _card_load(slot)
-    if (m.verbose()) {
-      lucent::info("card", "A0:0x{:02X}(a0={:X} a1={:X} a2={:X})", fn, c->r[A0], c->r[A1], c->r[A2]);
-    }
+    lucent::debug("card", "A0:0x{:02X}(a0={:X} a1={:X} a2={:X})", fn, c->r[A0], c->r[A1], c->r[A2]);
+    m.syscallLog().record(psxport::card::Vector::A0, fn, true);
     Memcard::deliverComplete(c);
     c->r[V0] = 1;
     return 1;
   default:
+    m.syscallLog().record(psxport::card::Vector::A0, fn, false);
     return 0;
   }
 }
 
 // B0 libcard: _card_info/_card_read/_card_write/_card_chan/_card_status + the file API used by the
 // save/load menu (open/lseek/read/write/close/erase/firstfile).
-extern "C" int card_hle_b0(uint32_t fn, Core *c) {
-  Memcard &m = c->game->memcard;
-  switch (fn) {
-  case 0x4Cu:
-  case 0x4Eu:
-  case 0x4Fu:
-  case 0x50u:
-  case 0x5Cu:
-    if (m.verbose()) {
-      lucent::info("card", "B0:0x{:02X}(a0={:X} a1={:X} a2={:X})", fn, c->r[A0], c->r[A1], c->r[A2]);
-    }
-    break;
-  default:
-    break;
-  }
+// The dispatch itself, separated from the accounting so every outcome -- including the
+// `default` that tells the guest the call was NOT taken -- is recorded at exactly one site.
+static int card_dispatch_b0(uint32_t fn, Core *c) {
   switch (fn) {
   case 0x32u:
     file_open(c);
@@ -814,11 +776,25 @@ extern "C" int card_hle_b0(uint32_t fn, Core *c) {
   }
 }
 
+extern "C" int card_hle_b0(uint32_t fn, Core *c) {
+  switch (fn) {
+  case 0x4Cu:
+  case 0x4Eu:
+  case 0x4Fu:
+  case 0x50u:
+  case 0x5Cu:
+    lucent::debug("card", "B0:0x{:02X}(a0={:X} a1={:X} a2={:X})", fn, c->r[A0], c->r[A1], c->r[A2]);
+    break;
+  default:
+    break;
+  }
+  const int handled = card_dispatch_b0(fn, c);
+  c->game->memcard.syscallLog().record(psxport::card::Vector::B0, fn, handled != 0);
+  return handled;
+}
+
 void card_overrides_init(Game *game) {
   Memcard &m = game->memcard;
-  if (lucent::channel_on("card")) {
-    m.setVerbose(true);
-  }
   m.init();
   // Publish the card as an installed BIOS device. Guest code that resolves a path prefix walks the
   // kernel device table itself instead of calling a BIOS vector (Tomba!2's card browser does, in

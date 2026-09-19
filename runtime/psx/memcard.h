@@ -6,6 +6,7 @@
 // file APIs, and why every I/O completes synchronously against a real host file (no SIO IRQ = no
 // spin).
 #pragma once
+#include "card_syscall_log.h"
 #include <cstdint>
 #include <cstdio>
 struct Core;
@@ -77,14 +78,11 @@ public:
     }
   }
 
-  // Diagnostics
-  bool verbose() const {
-    return mVerbose;
+  // Diagnostics. The syscall log accounts for every dispatched BIOS card call, handled or not;
+  // see card_syscall_log.h for why an unhandled call must leave a record.
+  psxport::card::SyscallLog &syscallLog() {
+    return mSyscallLog;
   }
-  void setVerbose(bool v) {
-    mVerbose = v;
-  }
-
   // Deliver the libcard I/O-complete event (SwCARD/HwCARD EvSpIOE) so callers waiting on TestEvent
   // fall through immediately. Static — routes to the Core's per-Game `class Hle`.
   static void deliverComplete(Core *c);
@@ -96,7 +94,7 @@ public:
 private:
   FILE *mCard = nullptr;
   char mPath[1024] = {0};
-  bool mVerbose = false;
+  psxport::card::SyscallLog mSyscallLog;
   McFd mFd[kFdMax] = {};
   char mScanPat[64] = {0};     // firstfile/nextfile pattern, device prefix already stripped
   uint32_t mScanBlk = kBlocks; // next directory block to examine; kBlocks = scan exhausted/unarmed
