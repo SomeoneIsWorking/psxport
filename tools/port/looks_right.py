@@ -110,6 +110,24 @@ def fps60_verdict(log_text):
     return "interpolating", interpolated, extras
 
 
+def presentation_fences(log_text):
+    """How many presentation fences the run actually produced, or None if it never said.
+
+    --frames bounds FIELDS; --shot-at names PRESENTATION FENCES, and a title that presents on some
+    fields and not others produces fewer fences than fields. Measured 2026-09-19 on Spyro: 1,300
+    fields produced 868 fences, so shots requested at 900/1100/1250 could not exist. Without this the
+    short-capture failure reads as a product fault and sends the next person hunting one.
+    """
+    for line in reversed(log_text.splitlines()):
+        for token in line.split():
+            if token.startswith("presentation_fences="):
+                try:
+                    return int(token.split("=", 1)[1])
+                except ValueError:
+                    return None
+    return None
+
+
 def fps60_unjudged(state, routed):
     """Whether a `no-extra-present` verdict is a product failure or a run that could not see one.
 
@@ -316,7 +334,19 @@ def main(argv=None):
 
     ok = True
     failures = run_failures(standard_log)
-    ok &= report("reaches", not failures, f"{len(standard)} shot(s) captured, failure marks: {failures or 'none'}")
+    # A run that captured FEWER frames than were asked for did not reach them, and every later verdict
+    # here is then about a different picture than the one requested. Measured 2026-09-19 on Spyro: four
+    # frames requested, one captured, and this line said PASS. Name the denominator and fail on a short
+    # capture even when the log carries no failure mark, because "it stopped early" leaves none.
+    missing = [f for f in shot_frames if f not in standard]
+    detail = f"{len(standard)}/{len(shot_frames)} shot(s) captured, failure marks: {failures or 'none'}"
+    if missing:
+        fences = presentation_fences(standard_log)
+        detail += f" — never reached frame(s) {missing}"
+        if fences is not None:
+            detail += (f"; the run produced {fences} presentation fence(s) from {args.frames} field(s), "
+                       f"and --shot-at counts FENCES — raise --frames")
+    ok &= report("reaches", not failures and not missing, detail)
 
     wide_log, wide = run_port(binary, out, "aspect-16x9", args.frames, shot_frames, args.replay, 1, False, extra_env, repository, args.route)
     frame = shot_frames[0]
@@ -385,6 +415,9 @@ def selftest():
         ("fps60 refusal is not a pass", fps60_verdict("[fps60] interpolated 60fps REFUSED")[0] == "refused")
     )
     checks.append(("fps60 off is named, not assumed", fps60_verdict("quiet log")[0] == "not-enabled"))
+    fence_log = "[runtime] run complete: fields=1300 product_steps=868 presentation_fences=868 faults=0"
+    checks.append(("the fence count is read from the run", presentation_fences(fence_log) == 868))
+    checks.append(("a log that never says is not guessed", presentation_fences("quiet log") is None))
     # The unjudged/failing split is a property of the run, not of the log, so it is checked here on
     # the two inputs that decide it. Both answers, as every verdict in this file must have.
     checks.append(("no extra present over a route is judged", fps60_unjudged("no-extra-present", routed=True) is False))

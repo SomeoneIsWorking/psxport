@@ -16,6 +16,10 @@
 // throws the requested position away: the XA cursor stayed at LBA 0 while the guest had asked for
 // LBA 113,448, and the stream scanned 53,874 sectors (~122 MB of CHD decompression, 3.0 s, no frame
 // presented) before latching onto unrelated audio.
+// CONSUMER NOTE: every port whose runtime binds cd_control_sync / the CdControl override inherits
+// this. Tomba! 1's cd_native_startup.cpp does. It is libcd's own contract, so honouring it is the
+// faithful behaviour, but only Spyro 1 has been re-verified against it — re-check a consumer's CD
+// startup when its psxport.pin crosses 892e9550.
 namespace psx::cd {
 
 // The CD's first data sector is at 00:02:00, so an MSF carries a 150-sector lead-in offset.
