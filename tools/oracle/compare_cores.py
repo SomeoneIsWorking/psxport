@@ -74,6 +74,7 @@ class NativeReplSession:
     def __init__(self, binary: str, executable: str, environment: dict, cwd: str, log_path: Path):
         self.frames = 0
         self._held: frozenset[str] = frozenset()
+        self.scan_rows: int | None = None  # set by capture(): rows a console would scan out
         self._log = open(log_path, "w")
         self._lines: queue.Queue[str | None] = queue.Queue()
         self._process = subprocess.Popen(
@@ -167,14 +168,24 @@ class NativeReplSession:
     def capture(self, destination: Path) -> None:
         """The REPL's `shot`, which routes through gpu_native_shot and so follows whichever render
         path is active and the wide presentation region when widescreen is on. A shot the product
-        reported but did not write is refused here rather than compared as an old file."""
+        reported but did not write is refused here rather than compared as an old file.
+
+        The reply carries `guest_scan=<rows>`: how many of the captured rows a console would scan
+        out, which the native path may exceed deliberately. It is recorded in `scan_rows` for a
+        picture comparison to crop by, so that alignment comes from the GPU state rather than from
+        fitting an offset to the pixels being compared."""
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             destination.unlink()
         self._send(f"shot {destination}")
-        self._expect("shot (")
+        reply = self._expect("shot (")
         if not destination.is_file():
             raise CoreError(f"native REPL reported a shot but {destination} was not written")
+        marker = "guest_scan="
+        if marker not in reply:
+            raise CoreError(f"native REPL's shot reply did not state guest_scan=; this build predates "
+                            f"the scanned-row report, so a picture comparison cannot align: {reply.strip()}")
+        self.scan_rows = int(reply.rsplit(marker, 1)[1].split()[0])
 
     def close(self) -> None:
         if self._process.poll() is None:

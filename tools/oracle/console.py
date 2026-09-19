@@ -151,7 +151,7 @@ def run(args, output: ProtocolOutput) -> None:
             os.dup2(core_log.fileno(), 1)
             os.dup2(core_log.fileno(), 2)
             session = ConsoleSession(load_library(library_path), system_directory, save_directory,
-                                     {"crop_overscan": "static"} if args.crop_overscan else None)
+                                     {"crop_overscan": "smart"} if args.crop_overscan else None)
             session.open(disc)
             flush_native_output()
             manifest["firmware_observation"] = verify_loaded_firmware(

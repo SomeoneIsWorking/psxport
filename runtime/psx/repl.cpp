@@ -351,11 +351,15 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
         // GpuState::gpu_native_shot already routes on vk_path()/sw_path(); go through it.
         void gpu_native_shot(Core *, const char *);
         gpu_native_shot(c, path);
+        // Report the scanned-row count with the shot. A picture oracle needs to know which rows of
+        // this capture a console would have shown, and the GPU state is the only thing that knows;
+        // a tool that fitted the offset from the pixels would be measuring the answer it wanted.
         lucent::info("repl",
-                     "shot ({}) -> {}   [render path = {}]",
+                     "shot ({}) -> {}   [render path = {}] guest_scan={}",
                      c->game->gpu.sw_path() ? "SW s_vram" : "VK readback",
                      path,
-                     render_path_name(c->rsub.mode.path()));
+                     render_path_name(c->rsub.mode.path()),
+                     c->game->gpu.guestScanHeight(c));
       }
     } else if (!strcmp(cmd, "shotregion")) { // dump an ARBITRARY VRAM region, not just what is presented
       // `shot` captures the PRESENT window, which is the right default and useless for the question

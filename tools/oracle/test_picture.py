@@ -165,6 +165,40 @@ class PictureTests(unittest.TestCase):
         self.assertFalse(report["selftest"]["detected"])
         self.assertEqual(report["selftest"]["changed_pixels"], 0)
 
+    def test_the_product_is_cropped_to_the_rows_it_reports_as_scanned(self) -> None:
+        """The native path presents more rows than a console scans out, and the product says how
+        many. Comparing the raw frames instead cost a retracted defect report (Tomba! 2 issue 0012):
+        the unscanned rows alone read as a 92% difference and an apparent 7-pixel offset."""
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        # The product presents 48 rows; the top 32 are the scene, the rest is below the scan window.
+        native.paint_with(paint(lambda x, y: (x * 3 % 256, y * 5 % 256, (x + y) % 256)
+                                if y < 32 else (255, 255, 0), (64, 48)))
+        native.scan_rows = 32
+        console.paint_with(paint(lambda x, y: (x * 3 % 256, y * 5 % 256, (x + y) % 256), (64, 32)))
+        code = picture.run(FakeTitle(console_lookahead=1), self.product,
+                           arguments(bios=self.bios), self.out,
+                           sessions=lambda product, args, out_dir: (native, console))
+        report = json.loads((self.out / "picture.json").read_text())
+        row = report["pictures"][-1]
+        self.assertEqual(code, 0, report)
+        self.assertNotIn("refused", row)
+        self.assertEqual(row["native"]["size"], [64, 32])
+        self.assertEqual(row["diff"]["differing"], 0)
+
+    def test_without_a_reported_scan_count_the_frames_are_compared_as_captured(self) -> None:
+        """No crop is invented when the product did not state one: a tool that guessed the count
+        would be fitting the alignment that made its own number look best."""
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        native.paint_with(paint(lambda x, y: (x * 3 % 256, y * 5 % 256, (x + y) % 256), (64, 48)))
+        native.scan_rows = None
+        console.paint_with(paint(lambda x, y: (x * 3 % 256, y * 5 % 256, (x + y) % 256), (64, 32)))
+        code = picture.run(FakeTitle(console_lookahead=1), self.product,
+                           arguments(bios=self.bios), self.out,
+                           sessions=lambda product, args, out_dir: (native, console))
+        report = json.loads((self.out / "picture.json").read_text())
+        self.assertEqual(code, 1, report)
+        self.assertIn("invent", report["pictures"][-1]["refused"])
+
     def test_a_missing_capture_is_refused(self) -> None:
         code, report = self._run(lambda destination: None, SCENE)
         self.assertEqual(code, 1, report)

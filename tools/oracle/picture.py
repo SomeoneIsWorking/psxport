@@ -171,7 +171,28 @@ class PictureRun:
             path = self.out_dir / f"{name}.{core.name}.png"
             core.capture(path)
             pictures.append(Picture.load(path))
-        return pictures[0], pictures[1]
+        return self._align(*pictures)
+
+    def _align(self, native: Picture, console: Picture) -> tuple[Picture, Picture]:
+        """Crop the product to the rows a console would scan out, which it reported itself.
+
+        The native render path deliberately presents more rows than the console showed — the port
+        declares the real count and the framework keeps drawing the rest (psxport gpu_native.cpp,
+        USER 2026-08-19: "PC is fine, oracle isn't"). Comparing the raw frames therefore measures a
+        difference nobody considers a defect, and on Tomba! 2 that alone accounted for a 92% pixel
+        difference and an apparent 7-pixel vertical offset that was not one.
+
+        The crop count comes from the PRODUCT (`guest_scan=` on its shot reply, from the GPU state),
+        never from fitting the pictures to each other. The reference is asked for its own active
+        area (`crop_overscan=smart`), so both sides state their geometry and neither is inferred.
+        """
+        rows = getattr(self.native, "scan_rows", None)
+        if not rows or rows >= native.size[1]:
+            return native, console
+        cropped = native.path.with_suffix(".scanned.png")
+        with Image.open(native.path) as handle:
+            handle.convert("RGB").crop((0, 0, native.size[0], rows)).save(cropped)
+        return Picture.load(cropped), console
 
     def at(self, name: str) -> bool:
         """Capture both cores here and report. Returns whether the pictures are comparable AND

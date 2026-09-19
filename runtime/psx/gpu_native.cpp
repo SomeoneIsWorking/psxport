@@ -15,6 +15,7 @@
 // primitives via texpage+CLUT) and the framebuffer regions the game composes & displays.
 #include "cfg.h"
 #include "config_vars.h"
+#include "display_scanout.h"
 #include "field_rate.h"          // THE display field rate, in milli-hertz (one definition)
 #include "fs_util.h"             // host diagnostic-output directory creation
 #include "gpu_native_internal.h" // shared VRAM/state/helpers (also used by gpu_debug.cpp)
@@ -2935,28 +2936,6 @@ void GpuState::ensure_window() {}
 // scans out, and it applies to the GUEST-SOURCED paths only: those claim to show what the console
 // showed, while a native renderer owns its own frame and may present more (USER 2026-08-19: "PC is
 // fine, oracle isn't"). See the GameConfig field for the measurement behind it.
-int GpuState::presentedHeight(Core *core) const {
-  const uint16_t declared = (core->cfg && core->cfg->guestDisplayHeight) ? core->cfg->guestDisplayHeight : 0;
-  if (!declared) {
-    return s_disp_h;
-  }
-  if (core->rsub.mode.path() == RenderPath::Native) {
-    return s_disp_h;
-  }
-  if (declared != s_disp_h) {
-    static bool said = false;
-    if (!said) {
-      said = true;
-      lucent::info("gpu",
-                   "guest render path presents {} lines, not {} — GameConfig::guestDisplayHeight. "
-                   "The extra rows are framebuffer this game never scans out.",
-                   declared,
-                   s_disp_h);
-    }
-  }
-  return declared;
-}
-
 void GpuState::blit_src(const uint16_t *src, int sx, int sy) {
   gpu_vk_present(
       &game->core, src, sx, sy, s_disp_w, presentedHeight(&game->core)); // SDL_GPU present (incl. headless upload)

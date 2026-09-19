@@ -75,6 +75,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host_turn.cpp
   ${PSXPORT_ROOT}/runtime/psx/threads.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_native.cpp
+  ${PSXPORT_ROOT}/runtime/psx/gpu_native_scanout.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_primitive_dump.cpp # primitive-census CSV diagnostic owner
   ${PSXPORT_ROOT}/runtime/psx/image_writer.cpp      # one checked RGB24 capture-file boundary
   ${PSXPORT_ROOT}/runtime/psx/gpu_debug.cpp

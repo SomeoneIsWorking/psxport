@@ -51,14 +51,37 @@ blank-vs-blank comparison wherever it arises.
 The comparator was shown both answers before any zero from it was believed: 60 frames of the title's
 own route change 76,781 pixels, and a picture compared with itself differs in 0.
 
+## The first result was half my own misalignment, and the fix is in the product's hands
+
+The native render path deliberately presents MORE rows than the console scanned out — the port
+declares the real count in `GameConfig::guestDisplayHeight` and the framework keeps drawing the rest
+(USER 2026-08-19: "PC is fine, oracle isn't"). Comparing the raw frames therefore measures a
+difference nobody considers a defect. On Tomba! 2 it alone accounted for half the reported
+difference and produced an apparent 7-pixel vertical offset that does not exist.
+
+The alignment now comes from what each core reports about ITSELF, never from fitting the two
+pictures to each other. The product states `guest_scan=<rows>` on its shot reply, from the GPU
+state; the reference is asked for its own active area (`crop_overscan=smart`) and publishes 320x224,
+agreeing with the title's declared 224 independently. A fitted offset would have been the tool
+finding the answer that made its own number look best.
+
+The policy behind those two counts is now one pure function, `runtime/psx/display_scanout.h`, split
+out of `gpu_native.cpp` with its resolution in `gpu_native_scanout.cpp` rather than raising that
+file's line cap (ratcheted 4051 -> 4030). `tests/test_display_scanout.cpp` asserts the presented and
+scanned counts separately in every combination that produced a wrong answer once, 21 checks; it was
+falsified by making a native path present its declared count, which fails it.
+
 ## What it found immediately
 
 Tomba! 2, free-roam gameplay, 400 frames into the title's route, both rects 320x240, guest RAM
-byte-identical at 405 checkpoints in the same route: **70,958 of 76,800 pixels differ (92.39%)**, and
-two separate defects are visible and measured. The sky and sea carry brightness discontinuities at
-columns 16, 80, 96, 112, 128, 144, 160 — exact multiples of 16 — where the reference's only column
-spikes sit on real content edges. And the land/horizon boundary is at row 87 in the product against
-row 94 on the reference, so the world is drawn seven pixels high. See Tomba! 2 issue 0012.
+byte-identical at 405 checkpoints in the same route, both sides 320x224 after the alignment above:
+**33,786 of 71,680 pixels differ (47.13%)**, mean absolute difference 24.7/765 and **median 0** —
+most of the picture matches exactly, and no whole-pixel shift improves it.
+
+One defect is measured rather than eyeballed: the product's sky shows brightness discontinuities at
+columns 16, 80, 96, 112, 128, 144, 160 — exact multiples of 16 — where the reference's column spikes
+over the same band sit only on content edges. The remaining 4,528 pixels differing by more than 96,
+concentrated in the ground, are not yet attributed. See Tomba! 2 issue 0012.
 
 ## What this does not establish
 
