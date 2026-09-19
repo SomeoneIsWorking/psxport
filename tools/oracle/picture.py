@@ -299,6 +299,16 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
                 return 0 if run_state.selftest() else 1
             ok = run_state.at(checkpoint.name) and ok
         route = getattr(args, "route", None)
+        if route and not args.play:
+            # A SILENTLY IGNORED INPUT IS A FAILURE, NOT A FILTER. --route only feeds the post-checkpoint
+            # gameplay segment, so without --play it changed nothing and the run printed the ordinary
+            # checkpoint comparison as if it had honoured the flag — measured 2026-09-19, where a
+            # 113-second run over a recorded Artisans replay reported the same two checkpoint numbers as
+            # a run with no route at all, and only the identical figures gave it away.
+            print(f"REFUSED: --route {route} needs --play N; the recorded route drives the gameplay "
+                  f"segment AFTER the last checkpoint, and with --play 0 it would have been ignored",
+                  file=sys.stderr)
+            return 2
         segments = recorded_route(route, getattr(args, "route_from", 0)) if route else None
         if args.play:
             run_state.play(args.play, segments)

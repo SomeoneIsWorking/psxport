@@ -32,7 +32,13 @@ public:
   bool camWorldScreen(float wx, float wy, float wz, float *sx, float *sy) const;
 
   // -- projection constants (per-frame; captured inside proj_native_xform) -----
+  // The near plane every depth normalisation is measured against (pzToOrd). It is per-frame state a
+  // producer may install for the length of its own submission, so a frame in which producers disagree
+  // puts their faces on two different depth scales in ONE shared D32 buffer — the shape of a
+  // wrong-occlusion report. reportProjH says which plane was installed by whom, so "they all agree"
+  // and "nobody measured" are different answers (channel `projplane`).
   void setProjH(uint16_t H) {
+    reportProjH(mProjH, H);
     mProjH = H;
   }
   void setProjCenter(float cx, float cy) {
@@ -192,6 +198,9 @@ public:
   }
 
 private:
+  // Out of line so the header carries no logging dependency; see proj_params.cpp for what it prints.
+  static void reportProjH(uint16_t previous, uint16_t next);
+
   static ProjParams *sCurrent;
 
   // camview state

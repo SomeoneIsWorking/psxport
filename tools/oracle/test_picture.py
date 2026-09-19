@@ -216,6 +216,24 @@ class PictureTests(unittest.TestCase):
         self.assertEqual(picture.run(bare, self.product, arguments(bios=self.bios), self.out,
                                      sessions=sessions), 2)
 
+    def test_a_recorded_route_without_play_is_refused_rather_than_ignored(self) -> None:
+        """--route only drives the post-checkpoint segment, so --play 0 silently discarded it and the
+        run printed the ordinary checkpoint comparison as though the flag had been honoured."""
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        for core in (native, console):
+            core.paint_with(SCENE)
+        sessions = lambda product, args, out_dir: (native, console)  # noqa: E731
+        route = self.root / "route.pad"
+        route.write_bytes(b"\xff\xff" * 4)  # four frames of "nothing held" (a PSX pad mask is active-low)
+        self.assertEqual(picture.run(FakeTitle(1), self.product,
+                                     arguments(bios=self.bios, route=route, route_from=0, play=0),
+                                     self.out, sessions=sessions), 2)
+        # ... and the SAME arguments with a play budget are NOT refused, so the refusal is about the
+        # missing budget and not about passing a route at all.
+        self.assertEqual(picture.run(FakeTitle(1), self.product,
+                                     arguments(bios=self.bios, route=route, route_from=0, play=2),
+                                     self.out, sessions=sessions), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

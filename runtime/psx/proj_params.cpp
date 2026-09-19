@@ -27,6 +27,14 @@ void ProjParams::bind(Core * /*c*/) {
 
 // Depth-normalize (was file-scope proj_pz_to_ord in gte_beetle.cpp). Affine in 1/pz; nearer (smaller pz)
 // -> larger value, matching the renderer's GREATER_OR_EQUAL compare + 0.0 clear.
+// Every depth this port writes is normalised against the near plane below (H/2), so two producers
+// submitting into the SAME D32 buffer with different planes put their faces on different scales and
+// the nearer one can lose. Reporting the transitions — with both values — is what separates "one
+// plane all frame" from "three producers, three scales", which a depth value alone cannot say.
+void ProjParams::reportProjH(uint16_t previous, uint16_t next) {
+  lucent::debug("projplane", "projH {} -> {}{}", previous, next, previous == next ? " (unchanged)" : " CHANGED");
+}
+
 float ProjParams::pzToOrd(float pz) const {
   float nearp = projNearPz();
   if (pz < nearp) {
