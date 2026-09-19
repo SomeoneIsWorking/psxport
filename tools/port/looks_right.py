@@ -27,6 +27,7 @@ green tick.
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -94,13 +95,30 @@ def reset_run_outputs(log, capture_paths):
         Path(path).unlink(missing_ok=True)
 
 
+def route_command(template, shot, settings, log):
+    """A title's own command for reaching the state worth judging, with this run's paths in it.
+
+    A recorded pad is a fixed list of frame numbers, so it describes wherever the game happened to
+    be when it was recorded and rots the moment anything before that point changes length. Spyro's
+    only gameplay pad ended up sitting on the save-file warning for the whole run, and every verdict
+    taken through it described a dialog (spyro issue 0116). An observed route asks the running game
+    where it is instead, so it keeps meaning what it says. This tool stays title-neutral: what the
+    route knows about menus and game states belongs to the title that wrote it.
+    """
+    missing = [field for field in ("{shot}",) if field not in template]
+    if missing:
+        raise ValueError(f"--route must contain {' and '.join(missing)} so the capture has a path")
+    return shlex.split(template.format(shot=shot, settings=settings, log=log))
+
+
 def default_repository(binary):
     """Shipping port binaries live in <repo>/build/bin; a verifier build such as <repo>/build/ci/bin
     names its repository with --repository instead."""
     return Path(binary).resolve().parents[2]
 
 
-def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, extra_env, repository):
+def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, extra_env, repository,
+             route=None):
     """One headless run with cwd at the repository (present shots are repository-relative).
     Returns (log_text, {frame: Capture})."""
     scratch = Path(scratch).resolve()
@@ -109,23 +127,30 @@ def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, 
     log = scratch / f"{name}.log"
     shots = scratch / name
     shots.mkdir(parents=True, exist_ok=True)
-    capture_paths = {
-        frame: repository / "scratch" / "screenshots" / f"present_{frame}.png" for frame in shot_frames
-    }
+    # A route decides for itself when the game is worth looking at, so it names one capture rather
+    # than a list of frame numbers this tool chose in advance.
+    routed_shot = shots / "present.png"
+    capture_paths = (
+        {shot_frames[0]: routed_shot} if route
+        else {frame: repository / "scratch" / "screenshots" / f"present_{frame}.png"
+              for frame in shot_frames}
+    )
     reset_run_outputs(log, capture_paths.values())
     env = dict(os.environ)
     env.update(extra_env)
-    env.update(
-        {
-            "PSXPORT_LOG_FILE": str(log),
-            "PSXPORT_NATIVE_FRAMES": str(frames),
-            "PSXPORT_NOAUDIO": "1",
-            "PSXPORT_NOPACE": "1",
-            "PSXPORT_PRESENT_SHOT_AT": ",".join(str(f) for f in shot_frames),
-            "PSXPORT_SETTINGS": str(settings),
-        }
-    )
-    if replay:
+    env.update({"PSXPORT_NOAUDIO": "1", "PSXPORT_NOPACE": "1", "PSXPORT_SETTINGS": str(settings)})
+    if not route:
+        # A route runs the game from its own REPL, so a frame cap would cut the drive short and a
+        # fixed shot frame would fire wherever the route had got to. It also launches the port
+        # itself and is handed {log}, so it owns where the log goes: setting PSXPORT_LOG_FILE for
+        # it is worse than redundant, because it diverts the port's own REPL banner into the file
+        # and a driver waiting for that banner on stdout then waits forever. Measured 2026-09-19 —
+        # driver and port both sat at 0% CPU, one waiting for a prompt that had been written to a
+        # file, the other waiting for the command that prompt would have triggered.
+        env["PSXPORT_LOG_FILE"] = str(log)
+        env["PSXPORT_NATIVE_FRAMES"] = str(frames)
+        env["PSXPORT_PRESENT_SHOT_AT"] = ",".join(str(f) for f in shot_frames)
+    if replay and not route:
         env["PSXPORT_PAD_REPLAY"] = str(replay)
     if fps60:
         env["PSXPORT_FPS60"] = "1"
@@ -134,16 +159,28 @@ def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, 
         # emitted one every frame — a false FAILURE, which is the same class of lie as a false pass.
         channels = env.get("PSXPORT_DEBUG", "")
         env["PSXPORT_DEBUG"] = f"{channels},fps60" if channels else "fps60"
-    subprocess.run([str(binary)], env=env, cwd=repository, capture_output=True, check=False)
+    command = (route_command(route, routed_shot, settings, log) if route else [str(binary)])
+    # Not capture_output: that gives the child a pipe, and a pipe that nobody drains blocks its
+    # writer once the kernel buffer fills. Measured 2026-09-19 — a routed run sat at 0% CPU on
+    # "[repl] frame=0 ready" for as long as it was left, because the port had filled 64 KB of
+    # stderr and stopped. A file also leaves the reason behind when a route fails, which a
+    # discarded pipe does not.
+    console = scratch / f"{name}.out"
+    with console.open("wb") as sink:
+        completed = subprocess.run(command, env=env, cwd=repository, stdout=sink,
+                                   stderr=subprocess.STDOUT, check=False)
+    if completed.returncode != 0:
+        print(f"[looks-right] {name}: command exited {completed.returncode} — see {console}")
     text = log.read_text(errors="replace") if log.exists() else ""
     captured = {}
-    for frame in shot_frames:
-        candidate = capture_paths[frame]
-        if candidate.exists():
-            target = shots / f"present_{frame}.png"
+    for frame, candidate in capture_paths.items():
+        if not candidate.exists():
+            continue
+        target = shots / f"present_{frame}.png"
+        if candidate != target:
             target.write_bytes(candidate.read_bytes())
             candidate.unlink()
-            captured[frame] = Capture.read(target)
+        captured[frame] = Capture.read(target)
     return text, captured
 
 
@@ -160,6 +197,10 @@ def main(argv=None):
     parser.add_argument("--frames", type=int, default=400, help="frames to present")
     parser.add_argument("--shot-at", default="", help="comma-separated frames to capture (default: the last frame)")
     parser.add_argument("--replay", help="pad replay that reaches gameplay; without one this only sees attract")
+    parser.add_argument("--route", help="the title's own command for reaching the state worth judging, "
+                                        "with {shot} (required), {settings} and {log} placeholders. It "
+                                        "replaces --replay, which describes wherever the game happened "
+                                        "to be when the pad was recorded")
     parser.add_argument("--out", default="scratch/looks-right", help="where captures, PNGs and logs land")
     parser.add_argument("--env", action="append", default=[], metavar="K=V", help="extra environment, repeatable")
     parser.add_argument("--skip-fps60", action="store_true", help="title declares no interpolation product")
@@ -186,17 +227,27 @@ def main(argv=None):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    print(f"[looks-right] {binary} — {args.frames} frame(s), shots at {shot_frames}, replay {args.replay or 'none'}")
-    standard_log, standard = run_port(binary, out, "aspect-4x3", args.frames, shot_frames, args.replay, 0, False, extra_env, repository)
+    if args.route:
+        try:
+            route_command(args.route, "shot.png", "settings.ini", "run.log")
+        except ValueError as bad:
+            print(f"[looks-right] REFUSED: {bad}; this run asserted NOTHING")
+            return REFUSED
+        print(f"[looks-right] {binary} — observed route: {args.route}")
+    else:
+        print(f"[looks-right] {binary} — {args.frames} frame(s), shots at {shot_frames}, "
+              f"replay {args.replay or 'none'}")
+    standard_log, standard = run_port(binary, out, "aspect-4x3", args.frames, shot_frames, args.replay, 0, False, extra_env, repository, args.route)
     if not standard:
-        print(f"[looks-right] REFUSED: no capture from the 4:3 run — see {out}/aspect-4x3.log")
+        where = "the route" if args.route else "the 4:3 run"
+        print(f"[looks-right] REFUSED: no capture from {where} — see {out}/aspect-4x3.log")
         return REFUSED
 
     ok = True
     failures = run_failures(standard_log)
     ok &= report("reaches", not failures, f"{len(standard)} shot(s) captured, failure marks: {failures or 'none'}")
 
-    wide_log, wide = run_port(binary, out, "aspect-16x9", args.frames, shot_frames, args.replay, 1, False, extra_env, repository)
+    wide_log, wide = run_port(binary, out, "aspect-16x9", args.frames, shot_frames, args.replay, 1, False, extra_env, repository, args.route)
     frame = shot_frames[0]
     if frame in wide and frame in standard:
         changed = wide[frame].differs_from(standard[frame])
@@ -211,7 +262,7 @@ def main(argv=None):
     if args.skip_fps60:
         print("[looks-right] fps60        SKIPPED — caller declares no interpolation product for this title")
     else:
-        fps_log, _ = run_port(binary, out, "fps60", args.frames, shot_frames, args.replay, 0, True, extra_env, repository)
+        fps_log, _ = run_port(binary, out, "fps60", args.frames, shot_frames, args.replay, 0, True, extra_env, repository, args.route)
         state, interpolated, extras = fps60_verdict(fps_log)
         detail = {
             "interpolating": f"{interpolated} interpolated prim(s) over {extras} extra present(s)",
@@ -264,6 +315,18 @@ def selftest():
         stale_capture.write_bytes(png_header + b"stale picture")
         reset_run_outputs(stale, [stale_capture])
         checks.append(("a run starts without stale evidence", stale.read_text() == "" and not stale_capture.exists()))
+
+    built = route_command("drive.py --shot {shot} --settings {settings} --log {log}",
+                          "/s/present.png", "/s/a.ini", "/s/a.log")
+    checks.append(("a route command carries this run's paths",
+                   built == ["drive.py", "--shot", "/s/present.png", "--settings", "/s/a.ini",
+                             "--log", "/s/a.log"]))
+    try:
+        route_command("drive.py gameplay", "/s/present.png", "/s/a.ini", "/s/a.log")
+        refused_no_shot = False
+    except ValueError:
+        refused_no_shot = True
+    checks.append(("a route with nowhere to put the capture is REFUSED", refused_no_shot))
 
     passed = sum(1 for _, ok in checks if ok)
     for name, ok in checks:
