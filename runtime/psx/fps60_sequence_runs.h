@@ -8,9 +8,12 @@
 // replayed verbatim while every producer the project had left on its list drew about 32 faces per
 // logic frame between them — so the number the dump could not attribute was the whole question.
 //
-// The painter object is therefore part of the run key, not decoration on the line. Runs are also
-// what the dump iterates, so extracting them makes the grouping testable without a window, a guest
-// program, or a frame.
+// The painter object is therefore part of the run key, not decoration on the line. The entity node
+// is part of it for the same reason one level down: measured 2026-09-19 on Tomba! 2's hut interior,
+// every world prim in the frame shares painter object 0, so the whole reconstructed world came out
+// as ONE run of 643 items whose extent covered the picture. A run that spans the entire world names
+// no more than a run that spans the entire layer. Runs are also what the dump iterates, so
+// extracting them makes the grouping testable without a window, a guest program, or a frame.
 //
 // PURE. It reads the captured items and an ownership predicate. No Core, no queue, no logging.
 #pragma once
@@ -19,21 +22,58 @@
 #include "render_queue.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <span>
 #include <vector>
 
 namespace psxport::fps60 {
 
-// One maximal stretch of adjacent captured items that share a layer, an ownership answer and a
-// painter object. `begin` and `end` index the captured frame, so a caller can reach the items
-// themselves without this owner copying any.
+// The screen rectangle a span of captured items covers, in the same pixel coordinates the presented
+// picture uses. Half-open: `x1`/`y1` are one past the rightmost/bottom-most vertex, so `width()` and
+// `height()` are pixel counts and an empty extent is zero-sized rather than one pixel wide.
+//
+// WHY A RUN CARRIES ONE. `tools/fps60_check.py` reports the screen TILE that failed to interpolate;
+// this dump reports the PRODUCER of every verbatim run. Until the run carried an extent the two
+// could not be joined, so a reproducible stale tile named no owner and the answer had to be guessed
+// from cropped pixels. Measured 2026-09-19: Tomba! 2's hut interior is stale at tile (112,160) in 12
+// of 120 triples, and project-state recorded that no stale share in either dumped scene had been
+// attributed to a layer.
+struct ScreenExtent {
+  int x0 = 0;
+  int y0 = 0;
+  int x1 = 0;
+  int y1 = 0;
+
+  bool empty() const {
+    return x1 <= x0 || y1 <= y0;
+  }
+  int width() const {
+    return empty() ? 0 : x1 - x0;
+  }
+  int height() const {
+    return empty() ? 0 : y1 - y0;
+  }
+  // Whether the half-open pixel rectangle [x,x+w) x [y,y+h) meets this one. A tile query asks with
+  // the tile's own size, so the answer is "this run drew something inside that tile", not "the run
+  // starts there".
+  bool intersects(int x, int y, int w, int h) const {
+    return !empty() && x < x1 && x0 < x + w && y < y1 && y0 < y + h;
+  }
+};
+
+// One maximal stretch of adjacent captured items that share a layer, an ownership answer, a painter
+// object and an entity node. `begin` and `end` index the captured frame, so a caller can reach the
+// items themselves without this owner copying any. `extent` is the union of those items' screen
+// vertices, so a run answers both "whose prims are these" and "where on the screen were they".
 struct SequenceRun {
   int layer = 0;
   bool owned = false;
   PainterObjectId painterObject = 0;
+  std::uint32_t dbgNode = 0;
   std::size_t begin = 0;
   std::size_t end = 0;
+  ScreenExtent extent{};
 
   std::size_t count() const {
     return end - begin;

@@ -102,14 +102,19 @@ void dumpSequenceRuns(CapturedFrameView frame, float t, const TemporalSceneSourc
       runs);
   for (const auto &run : runs) {
     lucent::debug(sequenceChannel,
-                  "  rqcur layer={} {:<9} n={} seq=[{}..{}] producer={:08X} node0={:08X}",
+                  "  rqcur layer={} {:<9} n={} seq=[{}..{}] producer={:08X} node0={:08X} "
+                  "x=[{}..{}) y=[{}..{})",
                   run.layer,
                   run.owned ? "TIER1" : "verbatim",
                   run.count(),
                   frame.items[run.begin].seq,
                   frame.items[run.end - 1].seq,
                   (uint32_t)run.painterObject,
-                  frame.items[run.begin].dbg_node);
+                  run.dbgNode,
+                  run.extent.x0,
+                  run.extent.x1,
+                  run.extent.y0,
+                  run.extent.y1);
   }
 }
 
