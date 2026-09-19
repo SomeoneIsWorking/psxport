@@ -96,6 +96,10 @@ except ImportError:  # pragma: no cover - the message is the whole value
 
 TILE = 16
 
+# The product settings a picture comparison must run under; the file states why. Consumers pass this
+# to their launch environment instead of their shipping settings, so the reasoning is written once.
+REFERENCE_SETTINGS = Path(__file__).resolve().parent / "reference_settings.ini"
+
 # One representable step of PSX colour, in the 8-bit values these PNGs carry. The console composits
 # in 15 bits per pixel, so a channel takes 32 values spaced 255/31 = 8.22 apart. Two renderers that
 # round or dither the same 15-bit colour differently therefore differ by EXACTLY one step, in a

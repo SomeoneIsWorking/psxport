@@ -598,3 +598,20 @@ class MagnitudeMapTests(PictureFixture):
         painted = Image.open(Path(self._row(report)["magnitude_map"])).convert("RGB")
         colours = {colour for _, colour in painted.getcolors(maxcolors=1 << 16)}
         self.assertEqual(colours, {(0, 0, 0)}, "every pixel is within one colour step")
+
+
+class ReferenceSettingsTests(unittest.TestCase):
+    """A data file referenced by path is exactly what goes missing without anyone noticing, and a
+    missing settings file means the product runs on built-in defaults while the run looks like one
+    that honoured it -- the failure agent_environment already refuses for."""
+
+    def test_the_reference_settings_exist_and_turn_both_enhancements_off(self) -> None:
+        self.assertTrue(picture.REFERENCE_SETTINGS.is_file(), picture.REFERENCE_SETTINGS)
+        values = dict(line.split("=", 1) for line in
+                      picture.REFERENCE_SETTINGS.read_text().splitlines()
+                      if line.strip() and not line.startswith("#"))
+        # 4:3, because a widescreen frame is a different size than the console's and the comparison
+        # refuses rather than scale; one frame per guest update, because an interpolated frame
+        # corresponds to no guest state.
+        self.assertEqual(values["aspect"], "0", values)
+        self.assertEqual(values["fps60"], "0", values)
