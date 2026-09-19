@@ -82,30 +82,6 @@ class Capture:
         x0, y0, x1, y1 = box
         return None if y1 == y0 else (x1 - x0) / (y1 - y0)
 
-    # The aspect of what was drawn, which is the number that moves when a picture genuinely widens.
-    def drawn_aspect(self):
-        box, _, _ = self.drawn_extent()
-        if box is None:
-            return None
-        x0, y0, x1, y1 = box
-        return None if y1 == y0 else (x1 - x0) / (y1 - y0)
-
-    # The aspect of what was drawn, which is the number that moves when a picture genuinely widens.
-    def drawn_aspect(self):
-        box, _, _ = self.drawn_extent()
-        if box is None:
-            return None
-        x0, y0, x1, y1 = box
-        return None if y1 == y0 else (x1 - x0) / (y1 - y0)
-
-    # The aspect of what was drawn, which is the number that moves when a picture genuinely widens.
-    def drawn_aspect(self):
-        box, _, _ = self.drawn_extent()
-        if box is None:
-            return None
-        x0, y0, x1, y1 = box
-        return None if y1 == y0 else (x1 - x0) / (y1 - y0)
-
 
 def fps60_verdict(log_text):
     """(state, interpolated_prims, extra_presents) from a run's own fps60 telemetry.
