@@ -321,7 +321,16 @@ void RenderQueue::observeEmittedPrim(Core *core, const RqItem &item, uint32_t fi
       "f{} final_order={} depth_bias_order={} seq={} node={:08X} painter={:08X} packet={:08X} "
       "ot_order={} layer={} om={} "
       "semi={} tri={} "
-      "nv={} key={} key_ord={:.6f} authored={} compare={} interp={:.9f} D32={:.9f} "
+      "nv={} key={} key_ord={:.6f} authored_depth={} "
+      // The PRODUCER-AUTHORED replay position -- the guest OT bin the game's own submitter
+      // computed for this face. Distinct from authored_depth (which only says whether depth[]
+      // already encodes OT order) and from sort_key (the guest-derived key, -1 for most prims).
+      // Omitting it made "authored=0" read as "this face carries no authored order" when every
+      // actor producer passes scene_painter_order::...(otBin, ...) on every submit; the probe
+      // could not show the other answer, so it could only mislead. replay_domain=0 means the
+      // face genuinely has none.
+      "replay_domain={:08X} replay_ot={} replay_link={} replay_sub={} "
+      "compare={} interp={:.9f} D32={:.9f} "
       "mode={} raw={} tp=({},{}) clut=({},{}) uv=({},{}) source={:04X} index={} texel={:04X} "
       "transparent={} writes={} blends={} rgb0=({},{},{}) shaded=({},{},{}) bbox=({},{})-({},{}) viewZ_ord={:.6f}",
       pixelProbe.frame,
@@ -346,6 +355,10 @@ void RenderQueue::observeEmittedPrim(Core *core, const RqItem &item, uint32_t fi
       item.sort_key,
       (double)item.key_ord,
       item.authored_depth,
+      item.painter_replay.domain,
+      item.painter_replay.key.ot_bin,
+      item.painter_replay.key.link_ordinal,
+      item.painter_replay.key.chain_suborder,
       gpu_vk_world_depth_compare_name(),
       sample.interpolated_depth,
       d32,
