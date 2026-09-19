@@ -302,27 +302,41 @@ class PictureRun:
         }
 
     def advance_to_presented(self, name: str, core: CoreSession) -> dict:
-        """Advance `core` with no input until it presents a non-blank frame, and say what it took.
+        """Advance `core` with no input until it presents a SCENE, and say what it took.
 
-        Reports the frames spent and the frames SCANNED even when nothing was ever presented, so a
-        core that never draws is distinguishable from one that was never looked at. Returns rather
-        than raises: `at` owns the refusal, and a core that never presents still has to be reported
+        A scene is a frame that is neither blank nor mostly one colour. "Non-blank" was the old
+        condition and it is the wrong one: the first non-blank frame of a fade-in is the fade, so
+        this stopped each core at whatever point of one it happened to reach and handed `at` two
+        frames that differ by fade phase. Measured 2026-09-20, all three of Tomba! 2's checkpoints
+        refused that way -- game_stage's reference 99.53% one colour, field's product 51.15%,
+        free_roam's product 76.41%, the last a recognisable scene still fading up.
+
+        Reports the frames spent and the frames SCANNED even when no scene was ever reached, and
+        which condition was still failing, so a core that never draws is distinguishable from one
+        that never finished fading and from one that was never looked at. Returns rather than
+        raises: `at` owns the refusal, and a core that never presents still has to be reported
         beside the one that did.
         """
         probe = self.out_dir / f"{name}.{core.name}.presented.png"
         scanned = 0
+        last = None
         for advanced in range(0, self.PRESENT_BUDGET + 1, self.PRESENT_STEP):
             core.capture(probe)
             scanned += 1
-            if not Picture.load(probe).blank:
+            last = Picture.load(probe)
+            if not last.blank and not last.washed_out:
                 if advanced:
                     print(f"[picture] {core.name}: {name} presented after {advanced} more game frame(s)")
-                return {"presented": True, "extra_frames": advanced, "probes": scanned}
+                return {"presented": True, "extra_frames": advanced, "probes": scanned,
+                        "modal_share": round(last.modal_share, 4)}
             core.hold(frozenset())
             self.title.advance(core, self.PRESENT_STEP)
-        print(f"[picture] {core.name}: {name} NEVER presented — {scanned} probe(s) over "
-              f"{self.PRESENT_BUDGET} game frames were all blank", file=sys.stderr)
-        return {"presented": False, "extra_frames": self.PRESENT_BUDGET, "probes": scanned}
+        stuck = "blank" if last is None or last.blank else (
+            f"{100 * last.modal_share:.2f}% a single colour")
+        print(f"[picture] {core.name}: {name} NEVER presented a scene — {scanned} probe(s) over "
+              f"{self.PRESENT_BUDGET} game frames, still {stuck}", file=sys.stderr)
+        return {"presented": False, "extra_frames": self.PRESENT_BUDGET, "probes": scanned,
+                "still": stuck, "modal_share": round(last.modal_share, 4) if last else None}
 
     def play(self, frames: int, segments=None, frame_step: int = 0, label: str = "played") -> bool:
         """Run a held-input schedule on both cores and compare the picture along the way. `segments`

@@ -615,3 +615,70 @@ class ReferenceSettingsTests(unittest.TestCase):
         # corresponds to no guest state.
         self.assertEqual(values["aspect"], "0", values)
         self.assertEqual(values["fps60"], "0", values)
+
+
+class AdvanceToSceneTests(PictureFixture):
+    """The stopping condition is "a scene", not "anything at all". Stopping at the first non-blank
+    frame stops inside a fade, which is how all three of Tomba! 2's checkpoints came to refuse."""
+
+    def _fading(self, steps: int):
+        """A core that is black, then washed out, then a real scene."""
+        state = {"n": 0}
+
+        def render(destination: Path) -> None:
+            n = state["n"]
+            state["n"] += 1
+            if n == 0:
+                BLANK(destination)
+            elif n <= steps:
+                WHITEOUT(destination)
+            else:
+                SCENE(destination)
+
+        return render
+
+    def test_a_core_is_advanced_past_the_fade_not_stopped_inside_it(self) -> None:
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        # BOTH cores fade, because the advance is per-core: a core advanced further than the other
+        # has run more game frames, which moves its declared state and is then caught by the state
+        # guard rather than compared. That is the correct outcome and it is what the next test
+        # covers; here the two fade alike so the advance itself is what is under test.
+        native.paint_with(self._fading(2))
+        console.paint_with(self._fading(2))
+        code = picture.run(FakeTitle(console_lookahead=1), self.product,
+                           arguments(bios=self.bios), self.out,
+                           sessions=lambda product, args, out_dir: (native, console))
+        report = json.loads((self.out / "picture.json").read_text())
+        presented = self._presented(report, "native")
+        self.assertTrue(presented["presented"], presented)
+        # Three probes were rejected -- one blank and two washed out -- before a scene appeared.
+        self.assertEqual(presented["extra_frames"], 3 * picture.PictureRun.PRESENT_STEP, presented)
+        self.assertEqual(code, 0, report)
+        self.assertNotIn("refused", self._row(report))
+
+    def test_advancing_one_core_further_than_the_other_is_caught_by_the_state_guard(self) -> None:
+        """Not a defect in the advance -- the point is that it cannot quietly buy a comparison by
+        running one core on. The frames it spends are real game frames and they show up in state."""
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        native.paint_with(self._fading(2))
+        console.paint_with(SCENE)
+        code = picture.run(FakeTitle(console_lookahead=1), self.product,
+                           arguments(bios=self.bios), self.out,
+                           sessions=lambda product, args, out_dir: (native, console))
+        report = json.loads((self.out / "picture.json").read_text())
+        self.assertEqual(code, 1, report)
+        self.assertIn("not at the same guest state", self._row(report)["refused"])
+
+    def test_a_core_that_never_stops_fading_says_so_rather_than_blank(self) -> None:
+        """The negative has to name WHICH condition failed: "never presented" would send a reader
+        looking for a producer that draws nothing, and this core draws every frame."""
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        native.paint_with(WHITEOUT)
+        console.paint_with(SCENE)
+        picture.run(FakeTitle(console_lookahead=1), self.product, arguments(bios=self.bios),
+                    self.out, sessions=lambda product, args, out_dir: (native, console))
+        report = json.loads((self.out / "picture.json").read_text())
+        presented = self._presented(report, "native")
+        self.assertFalse(presented["presented"], presented)
+        self.assertIn("single colour", presented["still"])
+        self.assertGreater(presented["probes"], 1, "the negative needs its denominator")
