@@ -20,7 +20,8 @@ class Game;
 
 // Explicit engine draw layers, painted low->high. The depth buffer resolves occlusion WITHIN RQ_WORLD;
 // the backdrop/HUD layers exist so screen-space 2D is ordered by what it IS, not by OT position.
-enum RqLayer { RQ_BACKGROUND = 0, RQ_WORLD = 1, RQ_OVERLAY = 2, RQ_HUD = 3 };
+// RQ_LAYER_COUNT is part of the enum so anything sizing a per-layer array cannot drift from it.
+enum RqLayer { RQ_BACKGROUND = 0, RQ_WORLD = 1, RQ_OVERLAY = 2, RQ_HUD = 3, RQ_LAYER_COUNT = 4 };
 
 // How the rasterizer gets this item's depth at emit. DEPTH = real per-vertex view-Z (3D world);
 // the 2D_* modes select the renderer's far/near screen-space bands (set_order_2d_bg / set_order_2d),

@@ -5,10 +5,10 @@
 #include "cfg.h"
 #include "game.h"
 #include "gpu_vk.h"
-#include "host_backtrace.h"
 #include "mods.h"
 #include "ot_lifo_depth.h"
-#include "proj_params.h" // class ProjParams — proj_camview_world_screen / camview_publish bridges
+#include "proj_params.h"              // class ProjParams — proj_camview_world_screen / camview_publish bridges
+#include "render_queue_attribution.h" // who filled the queue — the fatal reports, never guesses
 #include <algorithm>
 #include <cmath>
 #include <lucent/log.h>
@@ -346,19 +346,9 @@ RqItem *RenderQueue::push() {
     }
   }
   if (n >= RQ_MAX) {
-    // FAIL-FAST (user 2026-06-30): never silently drop prims. RQ_MAX already covers the real worst-case
-    // scene (the area-transition spike, ~43k — see render_queue.h); exceeding it means a submit path is
-    // running away (e.g. a stuck render walk re-submitting the same scene every frame — the bug-1 / later-273
-    // symptom). Abort with a C backtrace so that submit path is visible rather than hidden behind a drop.
-    lucent::error("rq",
-                  "\nFATAL: render queue full ({} items) — refusing to drop prims (fail-fast).\n  A submit path "
-                  "produced > {} prims this frame (runaway re-submission?). Backtrace:",
-                  RQ_MAX,
-                  RQ_MAX);
-    void *bt[32];
-    int nbt = backtrace(bt, 32);
-    psxport::host::emitBacktrace(lucent::Level::Error, "rq", bt, nbt, 1);
-    abort();
+    // FAIL-FAST (user 2026-06-30): never silently drop prims. What a full queue MEANS — runaway
+    // re-submission or a genuine capacity shortfall — is attributed and reported by its own owner.
+    psxport::render::abortOnFullRenderQueue(items, n);
   }
   pushed_total++; // monotonic; see render_queue.h — the only sound basis for a per-call prim count
   RqItem *it = &items[n++];
@@ -973,25 +963,9 @@ void RenderQueue::flush(Core *core) {
   // schema compatibility but is now necessarily zero: consumed queues return above, while push() lazily
   // clears the lifecycle bit before appending a real submission. `n=0` says the active queue is genuinely
   // empty, not that the instrument was silent.
-  // The y RANGE is what says WHICH FRAMEBUFFER this queue was drawn into: ys[] carries the guest's
-  // draw offset, so a double-buffered guest's two buffers show up as two disjoint bands. Computed
-  // only when the channel is on — this is a walk of the whole queue, the one case the project's
-  // logging rule allows a guard around, using an interned Channel.
-  static const lucent::Channel rqflush_ch{"rqflush"};
-  if (rqflush_ch) {
-    int ylo = 1 << 30, yhi = -(1 << 30);
-    for (int i = 0; i < n; i++) {
-      for (int v = 0; v < items[i].nv; v++) {
-        if (items[i].ys[v] < ylo) {
-          ylo = items[i].ys[v];
-        }
-        if (items[i].ys[v] > yhi) {
-          yhi = items[i].ys[v];
-        }
-      }
-    }
-    lucent::debug(rqflush_ch, "n={} reemit={} seq={} y=[{}..{}]", n, 0, seq, n ? ylo : 0, n ? yhi : 0);
-  }
+  // Both whole-queue diagnostics live with the attribution owner (`rqflush` and `rqattr`), which is the
+  // one case the project's logging rule allows a channel guard around a walk.
+  psxport::render::logFlushedRenderQueue(static_cast<int>(census_frame(core)), items, n, seq);
   // debug: label each object with its engine ID. Appended BEFORE finalize so the overlay's quads take
   // part in the same sort as everything else; resolveKeyOrder ignores them (HUD, no game sort key).
   if (n && objid_on(core)) {
