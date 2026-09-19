@@ -570,3 +570,31 @@ class WashedOutTests(PictureFixture):
         destination = self.out / "probe.png"
         render(destination)
         return destination
+
+
+class MagnitudeMapTests(PictureFixture):
+    """The map is what a human reads; a percentage only tells them to go and look. So it has to be
+    written, and it has to distinguish the bands it claims to -- a map painted one colour would be
+    as useless as the single number it exists to qualify."""
+
+    def test_the_map_is_written_beside_the_captures_and_named_in_the_report(self) -> None:
+        code, report = self._run(SCENE_WITH_A_BLOT, SCENE)
+        self.assertEqual(code, 0, report)
+        map_path = Path(self._row(report)["magnitude_map"])
+        self.assertTrue(map_path.is_file(), map_path)
+
+    def test_the_map_paints_the_blot_worst_and_the_rest_untouched(self) -> None:
+        code, report = self._run(SCENE_WITH_A_BLOT, SCENE)
+        self.assertEqual(code, 0, report)
+        painted = Image.open(Path(self._row(report)["magnitude_map"])).convert("RGB")
+        pixels = painted.load()
+        self.assertEqual(pixels[10, 10], picture.MAGNITUDE_WORST, "inside the blot")
+        self.assertEqual(pixels[40, 40], (0, 0, 0), "outside it, and identical there")
+
+    def test_a_rounding_difference_paints_as_rounding_not_as_a_defect(self) -> None:
+        """The negative that matters: the map must not make dither look like a lost object."""
+        code, report = self._run(SCENE_DITHERED, SCENE)
+        self.assertEqual(code, 0, report)
+        painted = Image.open(Path(self._row(report)["magnitude_map"])).convert("RGB")
+        colours = {colour for _, colour in painted.getcolors(maxcolors=1 << 16)}
+        self.assertEqual(colours, {(0, 0, 0)}, "every pixel is within one colour step")

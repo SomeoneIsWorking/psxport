@@ -200,7 +200,28 @@ class PictureDiff:
         return self.significant > 0 and self.tiles_touched * 4 <= self.tiles_total
 
 
-def compare_pictures(native: Path, console: Path) -> PictureDiff:
+# How the magnitude map paints each pixel. A percentage says how much of the frame differs; only the
+# map says WHERE and HOW BADLY, and that is the difference between "edges and dither everywhere" and
+# "one object is in the wrong place", which is the question Spyro's issue 0120 asks of every scene.
+MAGNITUDE_BANDS = (
+    (SIGNIFICANT, (0, 0, 0)),             # rounding: a step or less, invisible to a player
+    (4 * COLOUR_STEP, (0, 0, 160)),       # a shade out
+    (12 * COLOUR_STEP, (220, 180, 0)),    # a different colour
+)
+MAGNITUDE_WORST = (255, 0, 0)
+
+
+def _band(magnitude: int) -> tuple[int, int, int]:
+    for limit, colour in MAGNITUDE_BANDS:
+        if magnitude <= limit:
+            return colour
+    return MAGNITUDE_WORST
+
+
+def compare_pictures(native: Path, console: Path, magnitude_map: Path | None = None) -> PictureDiff:
+    """Compare two captures, and optionally paint where and how badly they differ.
+
+    The map is written for a human to look at, which the printed numbers exist to send them to."""
     with Image.open(native) as a_handle, Image.open(console) as b_handle:
         a, b = a_handle.convert("RGB"), b_handle.convert("RGB")
         width, height = a.size
@@ -208,6 +229,8 @@ def compare_pictures(native: Path, console: Path) -> PictureDiff:
         per_tile: dict[tuple[int, int], int] = {}
         differing = 0
         beyond = {threshold: 0 for threshold in PictureDiff.THRESHOLDS}
+        painted = Image.new("RGB", (width, height)) if magnitude_map else None
+        paint = painted.load() if painted else None
         for y in range(height):
             for x in range(width):
                 here, there = a_pixels[x, y], b_pixels[x, y]
@@ -215,12 +238,16 @@ def compare_pictures(native: Path, console: Path) -> PictureDiff:
                     continue
                 differing += 1
                 magnitude = max(abs(one - other) for one, other in zip(here, there))
+                if paint is not None:
+                    paint[x, y] = _band(magnitude)
                 for threshold in beyond:
                     if magnitude > threshold:
                         beyond[threshold] += 1
                 if magnitude > SIGNIFICANT:
                     key = (x // TILE * TILE, y // TILE * TILE)
                     per_tile[key] = per_tile.get(key, 0) + 1
+        if painted is not None:
+            painted.save(magnitude_map)
         tiles_total = ((width + TILE - 1) // TILE) * ((height + TILE - 1) // TILE)
         worst = tuple(sorted(per_tile.items(), key=lambda item: -item[1])[:8])
         magnitudes = tuple((threshold, beyond[threshold]) for threshold in PictureDiff.THRESHOLDS)
@@ -438,7 +465,9 @@ class PictureRun:
                               f"state the RAM comparison calls equal before photographing them")
             print(f"[picture] {name}: REFUSED — {row['refused']}", file=sys.stderr)
             return False
-        diff = compare_pictures(native.path, console.path)
+        magnitude_map = self.out_dir / f"{name}.magnitude.png"
+        diff = compare_pictures(native.path, console.path, magnitude_map)
+        row["magnitude_map"] = str(magnitude_map)
         row["diff"] = {"pixels": diff.pixels, "differing": diff.differing, "share": round(diff.share, 6),
                        "significant": diff.significant,
                        "significant_share": round(diff.significant_share, 6),
