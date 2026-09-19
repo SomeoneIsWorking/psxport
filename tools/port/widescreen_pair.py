@@ -49,6 +49,8 @@ rather than quoting the margin as if it were the menu's.
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import sys
 
 from present_geometry import Unreadable, read_image
@@ -119,6 +121,17 @@ def stretch_score(nw, h, npx, ww, wpx):
 
 
 def report(narrow_path, wide_path, out=print) -> int:
+    # A capture that is not on disk is a REFUSAL by name, not a traceback. Measured 2026-09-19 on
+    # Tomba! 2: the product hit a fatal invariant at frame 2700 and wrote no PNG, and this tool died
+    # with `FileNotFoundError: scratch/wspair/f2700_a0.png` -- which reads as a broken tool when the
+    # actual news is that the RUN failed. Naming the missing file and saying nothing was compared
+    # puts the reader back on the run.
+    missing = [p for p in (narrow_path, wide_path) if not os.path.isfile(p)]
+    if missing:
+        out(f"REFUSED: no capture at {', '.join(missing)}. The run that was supposed to write it "
+            f"either never reached the checkpoint or failed before the shot -- read ITS log, not "
+            f"this one. NOTHING WAS COMPARED, and this is not a pass.")
+        return 2
     nw, nh, npx = read_image(narrow_path)
     ww, wh, wpx = read_image(wide_path)
     if nh != wh:
@@ -235,20 +248,52 @@ def selftest(out=print) -> int:
     widened = (wide_w, h, _translated(pixels, narrow_w, wide_w, h, expected_dx))
     stretched = (wide_w, h, _stretched(pixels, narrow_w, wide_w, h))
 
+    # The fixtures are written to REAL files. They used to exist only in a dict handed to a stubbed
+    # reader, which meant the shipping path's "is this file even there?" refusal was never on the
+    # selftest's route -- and when that refusal was added, the selftest went 0/2 while the tool was
+    # working correctly. A selftest that a correct change breaks is testing its own scaffolding.
+    directory = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "..", "build", "widescreen-pair-selftest")
+    directory = os.path.normpath(directory)
+    shutil.rmtree(directory, ignore_errors=True)
+    os.makedirs(directory)
+    narrow_path = os.path.join(directory, "N.png")
+    wide_path = os.path.join(directory, "W.png")
+    for path in (narrow_path, wide_path):
+        with open(path, "wb") as handle:
+            handle.write(b"fixture")
+
     failures = []
-    for name, wide, want in (("widened", widened, 0), ("stretched", stretched, 1)):
+    cases = (("widened", widened, 0), ("stretched", stretched, 1))
+    try:
+        for name, wide, want in cases:
+            lines = []
+            images = {narrow_path: narrow, wide_path: wide}
+            global read_image
+            original = read_image
+            read_image = lambda path: images[path]  # noqa: E731 — swap the reader, keep the report
+            try:
+                code = report(narrow_path, wide_path, out=lines.append)
+            finally:
+                read_image = original
+            if code != want:
+                failures.append(f"{name} pair returned {code}, expected {want}:\n    "
+                                + "\n    ".join(lines))
+
+        # The negative the other two cannot give: a capture that is not there at all must REFUSE by
+        # name and must not be mistaken for either verdict. This is the case that fired for real on
+        # Tomba! 2 f2700, where the product died before writing the shot.
         lines = []
-        images = {"N.png": narrow, "W.png": wide}
-        global read_image
-        original = read_image
-        read_image = lambda path: images[path]  # noqa: E731 — swap the reader, keep the report
-        try:
-            code = report("N.png", "W.png", out=lines.append)
-        finally:
-            read_image = original
-        if code != want:
-            failures.append(f"{name} pair returned {code}, expected {want}:\n    "
+        code = report(os.path.join(directory, "absent.png"), wide_path, out=lines.append)
+        if code != 2:
+            failures.append(f"a missing capture returned {code}, expected 2 (REFUSED):\n    "
                             + "\n    ".join(lines))
+        elif not any("NOTHING WAS COMPARED" in line for line in lines):
+            failures.append("a missing capture refused but never said NOTHING WAS COMPARED, so a "
+                            "reader could take the refusal for a result:\n    "
+                            + "\n    ".join(lines))
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
 
     # The verdict line follows the shape scripts/tool_selftests.py recognises, the same as
     # looks_right.py ("28/28 => PASS") and present_geometry.py ("16/16 checks passed"). A selftest
@@ -257,10 +302,11 @@ def selftest(out=print) -> int:
     for failure in failures:
         out(f"widescreen_pair selftest: FAIL — {failure}")
     if failures:
-        out(f"widescreen_pair selftest: {2 - len(failures)}/2 => FAIL")
+        out(f"widescreen_pair selftest: {3 - len(failures)}/3 => FAIL")
         return 1
-    out(f"widescreen_pair selftest: 2/2 => PASS (a pair translated by {expected_dx:+d} reads "
-        f"WIDENED; the same picture resampled to {wide_w} reads STRETCHED)")
+    out(f"widescreen_pair selftest: 3/3 => PASS (a pair translated by {expected_dx:+d} reads "
+        f"WIDENED; the same picture resampled to {wide_w} reads STRETCHED; a capture that is not "
+        f"on disk REFUSES by name)")
     return 0
 
 
