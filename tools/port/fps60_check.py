@@ -132,6 +132,18 @@ def load_sequence_runs(path):
     return runs
 
 
+def runs_bbox(runs_by_fence):
+    """The union of every run's extent, in whatever space the log wrote them."""
+    x0 = y0 = x1 = y1 = None
+    for runs in runs_by_fence.values():
+        for _area, _owned, _node, _layer, rx0, rx1, ry0, ry1 in runs:
+            x0 = rx0 if x0 is None else min(x0, rx0)
+            y0 = ry0 if y0 is None else min(y0, ry0)
+            x1 = rx1 if x1 is None else max(x1, rx1)
+            y1 = ry1 if y1 is None else max(y1, ry1)
+    return (x0, y0, x1, y1)
+
+
 def owner_of(runs, tx, ty, tile):
     """The smallest run covering this tile, or None when no run does."""
     best = None
@@ -247,6 +259,7 @@ def main():
     by_owner = defaultdict(lambda: [0, 0, 0])
     unattributed = [0, 0]  # moved-endpoint, lerped
     uncovered_fences = set()  # dump fences the fps60seq log never described
+    attribution_refused = False
 
     for a, b, c in triples(frames):
         if args.triple and args.triple not in os.path.basename(a[2]):
@@ -325,19 +338,44 @@ def main():
                      f"set for that run?")
         print(f"\nowners of the moving tiles ({len(sequence_runs)} fence(s) in {args.seq}), "
               f"credited to the smallest covering run:")
-        print(f"  {'ownership':<10} {'layer':>5} {'node':<10} {'lerped':>8} {'endpoint':>9} "
-              f"{'of those,':>10}")
-        print(f"  {'':<10} {'':>5} {'':<10} {'':>8} {'':>9} {'MOVED':>10}")
+        attributed = sum(sum(v) for v in by_owner.values())
+        total_moving = attributed + unattributed[0] + unattributed[1]
+        coverage = (100.0 * attributed / total_moving) if total_moving else 0.0
+        bx0, by0, bx1, by1 = runs_bbox(sequence_runs)
+        moved_attributed = sum(v[0] for v in by_owner.values())
+        moved_total = moved_attributed + unattributed[0]
+        moved_coverage = (100.0 * moved_attributed / moved_total) if moved_total else 100.0
+        print(f"  {attributed} of {total_moving} moving tile(s) got an owner ({coverage:.1f}%); "
+              f"of the MOVED endpoint tiles, {moved_attributed} of {moved_total} "
+              f"({moved_coverage:.1f}%)")
+        # Every drawn item belongs to exactly one run by construction, so a MOVING tile with no
+        # owner is not a normal outcome — it means the run extents and the presented frame are not
+        # describing the same pixels. Off-screen geometry makes the bbox legitimately larger than
+        # the frame, so this cannot be turned into a clean refusal without a proven mapping; what it
+        # CAN do is refuse to let the table be read as complete.
+        if coverage < 90.0:
+            print(f"\n  INCOMPLETE — {100.0 - coverage:.1f}% of the moving tiles, and "
+                  f"{100.0 - moved_coverage:.1f}% of the defects,\n  landed in the (no run) row. "
+                  f"Every drawn item belongs to exactly one run, so this is\n  not geometry that "
+                  f"nothing drew: the extents and the frame are not describing the\n  same pixels. "
+                  f"Do not read the shares below as a breakdown of the whole.\n"
+                  f"    frames    {w}x{h}\n"
+                  f"    run bbox  x=[{bx0}..{bx1}) y=[{by0}..{by1})")
         if uncovered_fences:
             print(f"  WARNING: {len(uncovered_fences)} of the {n_triples} triple(s) name a fence "
                   f"the log never described\n  (first: f{min(uncovered_fences)}) — their tiles are "
                   f"all in the (no run) row. Is this the same run?")
-        rows = sorted(by_owner.items(), key=lambda kv: -(kv[1][0]))
+        rows = [] if attribution_refused else sorted(by_owner.items(), key=lambda kv: -(kv[1][0]))
+        if rows:
+            print(f"  {'ownership':<10} {'layer':>5} {'node':<10} {'lerped':>8} {'endpoint':>9} "
+                  f"{'of those,':>10}")
+            print(f"  {'':<10} {'':>5} {'':<10} {'':>8} {'':>9} {'MOVED':>10}")
         for (ownership, layer, node), (moved, still, lerped) in rows:
             print(f"  {ownership:<10} {layer:5d} {node:<10} {lerped:8d} {moved + still:9d} "
                   f"{moved:10d}")
-        print(f"  {'(no run)':<10} {'':>5} {'':<10} {unattributed[1]:8d} {unattributed[0]:9d} "
-              f"{unattributed[0]:10d}")
+        if not attribution_refused:
+            print(f"  {'(no run)':<10} {'':>5} {'':<10} {unattributed[1]:8d} {unattributed[0]:9d} "
+                  f"{unattributed[0]:10d}")
         print("  a MOVED endpoint tile is content that translated a whole pixel or more between the "
               "two real\n  frames and was still drawn at one of them. Those are the defects; the "
               "rest of the endpoint\n  column is sub-pixel quantisation and is correct output.")
