@@ -415,6 +415,7 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
         return 2
     report = {"title": title.name, "binary": binary_identity(product.binary), "disc": str(product.disc),
               "bios": str(args.bios), "product_env": dict(getattr(args, "product_env_pairs", {})),
+              "product_settings": effective_settings(product.environment),
               "lookahead": {},
               "declared": [{"range": d.name, "address": f"0x{d.address:08X}", "bytes": d.size,
                             "decisive": d.decisive} for d in title.declared],
@@ -498,6 +499,34 @@ def build_parser(description: str, default_bios: Path) -> argparse.ArgumentParse
                         help="start the recorded route at this frame, skipping the recording's own "
                              "boot/intro input that the checkpoints already performed")
     return parser
+
+
+def effective_settings(environment: dict) -> dict:
+    """What the product was actually configured with, for the report header.
+
+    A comparison whose report does not say which presentation configuration ran cannot be read back:
+    the Spyro tree spent weeks of green evidence not knowing that its enhancements were off, because
+    the answer only ever existed in a run log nobody opened. PSXPORT_SETTINGS also overrides the
+    product's own working-directory discovery, so an unset variable means "whatever file happened to
+    be there", which is not a recordable configuration at all.
+    """
+    path = environment.get("PSXPORT_SETTINGS")
+    if not path:
+        return {"path": None, "note": "unset: the product discovers its own settings file, so this "
+                                      "run's configuration is not reproducible from this report"}
+    file = Path(path)
+    if not file.is_file():
+        return {"path": path, "exists": False,
+                "note": "named a file that does not exist, so the product ran on built-in defaults"}
+    values = {}
+    for line in file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, separator, value = line.partition("=")
+        if separator:
+            values[name.strip()] = value.strip()
+    return {"path": path, "exists": True, "values": values}
 
 
 def product_env(args: argparse.Namespace) -> dict[str, str]:

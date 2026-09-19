@@ -254,10 +254,6 @@ class CompareTests(unittest.TestCase):
             compare.Playback(compare.Driver(FakeTitle(1)), native, [frozenset()])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class MatchConsoleCardTest(unittest.TestCase):
     """The reference's memory card is an INPUT to the comparison, so the harness must be able to
     make it equal to the product's -- and must say so, both when it did and when it did not."""
@@ -307,3 +303,40 @@ class MatchConsoleCardTest(unittest.TestCase):
         self.card.write_bytes(self.image)
         with self.assertRaises(compare.CoreError):
             compare.match_console_card(object(), self.card)
+
+
+class EffectiveSettingsTest(unittest.TestCase):
+    """What a report says the product was configured with.
+
+    The Spyro tree collected weeks of green evidence without knowing its enhancements were off,
+    because the answer existed only in a run log nobody opened. A report that records the CLI
+    overrides but not the effective configuration reproduces exactly that failure, so the three
+    answers below must stay distinguishable -- including the two that are not a working file.
+    """
+
+    def setUp(self) -> None:
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def test_unset_says_the_run_is_not_reproducible_rather_than_reporting_nothing(self) -> None:
+        result = compare.effective_settings({})
+        self.assertIsNone(result["path"])
+        self.assertIn("not reproducible", result["note"])
+        self.assertNotIn("values", result)
+
+    def test_a_named_file_that_does_not_exist_is_not_silently_a_configuration(self) -> None:
+        missing = self.dir / "absent.ini"
+        result = compare.effective_settings({"PSXPORT_SETTINGS": str(missing)})
+        self.assertFalse(result["exists"])
+        self.assertIn("built-in defaults", result["note"])
+
+    def test_a_real_file_is_recorded_by_value_so_the_report_stands_alone(self) -> None:
+        settings = self.dir / "shipping.ini"
+        settings.write_text("# the enhancements under test\naspect=3\n\nfps60=1\n")
+        result = compare.effective_settings({"PSXPORT_SETTINGS": str(settings)})
+        self.assertTrue(result["exists"])
+        self.assertEqual(result["values"], {"aspect": "3", "fps60": "1"})
+
+
+if __name__ == "__main__":
+    unittest.main()
