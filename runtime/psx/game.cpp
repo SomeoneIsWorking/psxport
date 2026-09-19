@@ -59,6 +59,10 @@ Game::Game() {
 }
 
 Game::~Game() {
+  // Unconditional, because the interesting answer is often "nothing was ever read". A run that
+  // stalled three seconds in one chd_read and a run that never touched the disc are different
+  // facts, and only the denominators tell them apart (Spyro issue 0115).
+  disc_read_report(&disc, "disc hunk cache at shutdown");
   // GpuDevice is declared after gpu_vk and therefore dies first during member teardown. Release this
   // per-Game retained texture while its owning SDL device is still alive; GpuVkState's destructor then
   // only clears the already-empty policy state.

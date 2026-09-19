@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define RAW_FRAME 2448u // 2352 raw + 96 subcode, CHD CD unit
 #define USER_DATA 2048u
@@ -278,6 +279,64 @@ int disc_get_subq_position(DiscState *d, uint32_t lba, uint8_t out[8]) {
   return 1;
 }
 
+// ---- THE ONE PLACE A HUNK BECOMES RESIDENT ---------------------------------------------------
+// Both readers used to carry their own copy of "is this the cached hunk? if not, chd_read into the
+// single buffer", which is the same policy written twice and the reason the cache could not be
+// changed in one place.
+//
+// It reports DENOMINATORS, because a cache that only says "hit" cannot be told from one that is
+// never asked. `disc_read_report` prints lookups, hits, fills and the time spent inside chd_read
+// whether or not anything missed.
+static uint64_t disc_now_ns() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static const uint8_t *disc_hunk_resident(DiscState *d, uint32_t hunk, uint32_t lba, const char *reader) {
+  d->lookups++;
+  if (hunk == d->cached_hunk) {
+    d->hits++;
+    return d->hunk_buf;
+  }
+  const uint64_t started = disc_now_ns();
+  if (chd_read(d->chd, hunk, d->hunk_buf) != CHDERR_NONE) {
+    return nullptr;
+  }
+  const uint64_t elapsed = disc_now_ns() - started;
+  d->fills++;
+  d->fill_ns += elapsed;
+  if (elapsed > d->worst_fill_ns) {
+    d->worst_fill_ns = elapsed;
+  }
+  d->cached_hunk = hunk;
+  // The ACCESS TRACE, one line per fill. Sizing the cache is a question about the working set, and
+  // the working set is not something to guess at: with the channel on, the hunk sequence is the
+  // measurement that answers how many ways are needed.
+  lucent::debug("dischunk",
+                "fill hunk={} lba={} by={} us={} lookups={} fills={}",
+                hunk,
+                lba,
+                reader,
+                elapsed / 1000,
+                d->lookups,
+                d->fills);
+  return d->hunk_buf;
+}
+
+void disc_read_report(DiscState *d, const char *when) {
+  lucent::info("disc",
+               "{}: {} hunk lookup(s), {} hit(s), {} fill(s) ({:.1f}% miss), {:.1f} ms in chd_read, "
+               "worst fill {:.1f} ms",
+               when,
+               d->lookups,
+               d->hits,
+               d->fills,
+               d->lookups ? 100.0 * (double)d->fills / (double)d->lookups : 0.0,
+               (double)d->fill_ns / 1e6,
+               (double)d->worst_fill_ns / 1e6);
+}
+
 // Read one sector's 2048-byte user data. Returns 1 on success.
 int disc_read_sector(DiscState *d, uint32_t lba, uint8_t *out) {
   if (!d->chd && !disc_open(d)) {
@@ -289,13 +348,11 @@ int disc_read_sector(DiscState *d, uint32_t lba, uint8_t *out) {
     lucent::info("disc", "LBA {} out of range", lba);
     return 0;
   }
-  if (hunk != d->cached_hunk) {
-    if (chd_read(d->chd, hunk, d->hunk_buf) != CHDERR_NONE) {
-      return 0;
-    }
-    d->cached_hunk = hunk;
+  const uint8_t *hunk_base = disc_hunk_resident(d, hunk, lba, "sector");
+  if (!hunk_base) {
+    return 0;
   }
-  const uint8_t *raw = d->hunk_buf + off;
+  const uint8_t *raw = hunk_base + off;
   // Mode byte at raw[15]; mode-2 sectors carry an 8-byte subheader before user data.
   uint32_t data_off = (raw[15] == 2) ? 24 : 16;
   memcpy(out, raw + data_off, USER_DATA);
@@ -318,13 +375,11 @@ int disc_read_raw(DiscState *d, uint32_t lba, uint8_t *out, uint32_t n) {
   if (hunk >= d->hunk_count) {
     return 0;
   }
-  if (hunk != d->cached_hunk) {
-    if (chd_read(d->chd, hunk, d->hunk_buf) != CHDERR_NONE) {
-      return 0;
-    }
-    d->cached_hunk = hunk;
+  const uint8_t *hunk_base = disc_hunk_resident(d, hunk, lba, "raw");
+  if (!hunk_base) {
+    return 0;
   }
-  memcpy(out, d->hunk_buf + off, n);
+  memcpy(out, hunk_base + off, n);
   return 1;
 }
 

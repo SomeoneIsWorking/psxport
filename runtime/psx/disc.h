@@ -23,8 +23,16 @@ typedef struct DiscState {
   uint32_t frames_per_hunk;
   uint32_t hunk_count;
   uint32_t hunk_bytes;
-  uint8_t *hunk_buf;                     // one-hunk read cache
-  uint32_t cached_hunk;                  // 0xFFFFFFFF = cache empty
+  uint8_t *hunk_buf;    // one-hunk read cache
+  uint32_t cached_hunk; // 0xFFFFFFFF = cache empty
+  // Denominators for that cache. A cache that reports only hits cannot be told from one nothing
+  // ever asks, and the cost this measures is a user-visible stall: Spyro issue 0115 has the first
+  // gameplay step spending ~3.0 s inside chd_read on the field-delivery path.
+  uint64_t lookups;
+  uint64_t hits;
+  uint64_t fills;
+  uint64_t fill_ns;
+  uint64_t worst_fill_ns;
   const char *env_key;                   // GameConfig::discEnvVar — the consuming game's disc env/.env key.
                                          // Wired by Game(); NULL falls back to the generic keys only.
   DiscTrackInfo tracks[DISC_MAX_TRACKS]; // CHD TOC, indexed densely in metadata order
@@ -43,6 +51,8 @@ int disc_read_raw(DiscState *d, uint32_t lba, uint8_t *out, uint32_t n); // raw 
 // track-relative MM:SS:FF, and absolute MM:SS:FF, all BCD. This is the same Sub-Q
 // position synthesis used by the vendored Beetle CHD backend.
 int disc_get_subq_position(DiscState *d, uint32_t lba, uint8_t out[8]);
+// Print the hunk-cache denominators, whatever they are. `when` labels the moment.
+void disc_read_report(DiscState *d, const char *when);
 int disc_find_file(DiscState *d, const char *path, uint32_t *out_lba, uint32_t *out_size);
 int disc_extract_file(DiscState *d,
                       const char *iso_path,
