@@ -175,7 +175,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/render_queue_attribution.cpp # attributes a FULL queue: runaway vs capacity
   ${PSXPORT_ROOT}/runtime/psx/render_submission.cpp # resolved items and queue-local production observation
   ${PSXPORT_ROOT}/runtime/psx/painter_object_layer.cpp # atomic painter admission + authored command plan
-  ${PSXPORT_ROOT}/runtime/psx/painter_band_depth.cpp   # an authored domain's depth may separate bins, never contradict them
   ${PSXPORT_ROOT}/runtime/psx/pc_scheduler.cpp     # PC-native cooperative task scheduler; stage bodies via hooks (P1.7c)
   ${PSXPORT_ROOT}/runtime/psx/synchronous_task_wait.cpp # one native synchronous FUN_80044BD4 owner
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)

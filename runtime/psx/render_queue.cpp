@@ -7,7 +7,6 @@
 #include "gpu_vk.h"
 #include "mods.h"
 #include "ot_lifo_depth.h"
-#include "painter_band_depth.h"
 #include "proj_params.h"              // class ProjParams — proj_camview_world_screen / camview_publish bridges
 #include "render_queue_attribution.h" // who filled the queue — the fatal reports, never guesses
 #include <algorithm>
@@ -554,9 +553,6 @@ void RenderQueue::emitItemStream(Core *core, std::span<const RqItem *const> stre
         abort();
       }
     }
-    // The authored replay is the game's ordering table, and a banded domain declares that the depth
-    // buffer only separates its bins. Verified before anything is drawn (Spyro issue 0120).
-    rq_verify_painter_band_depths(core, run, plan);
     mPainterRegrouping = true;
     for (size_t i : plan.ordinary_items) {
       mPainterPresentationRank = plan.presentation_ranks[i];

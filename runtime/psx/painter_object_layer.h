@@ -24,21 +24,18 @@ struct PainterReplayKey {
   uint32_t chain_suborder = 0;
 };
 
+// MEASURED (Spyro issue 0120, 2026-09-19): for a regrouped painter range this order is the ONLY
+// authority. `emitItem` overrides the emission order with the presentation rank, and the submitted
+// `RqItem::depth` does not reach the picture: forcing one producer's faces to 0.0 and then to 0.99 --
+// the widest spread the band allows -- produced byte-identical frames, while changing the same
+// producer's colour did change them, so the probe was proven able to show both answers. Do not add a
+// per-bin depth "band" here on the theory that the depth buffer is a competing authority; it is not,
+// and a contract that says so can only ever print one answer.
 struct PainterReplayOrder {
   PainterReplayDomainId domain = 0;
   PainterReplayKey key{};
-  // The single normalized depth every face at this `key.ot_bin` is drawn at, so the depth buffer
-  // separates BINS and never contradicts the replay. The game owns it because only the game knows how
-  // its ordering table quantises view Z. 0 = not authored: those faces keep their per-vertex depth,
-  // and `rq_apply_painter_band_depths` reports how many did. See painter_band_depth.h for the
-  // measurement that made this necessary.
-  float band_ord = 0.0f;
-
   bool authored() const {
     return domain != 0;
-  }
-  bool banded() const {
-    return band_ord > 0.0f;
   }
 };
 
