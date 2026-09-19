@@ -13,6 +13,8 @@
 #define RENDER_QUEUE_H
 #include "painter_object_layer.h"
 #include "present_ledger.h"
+#include "prim_color_census.h"
+#include "queue_row_probe.h"
 #include <stdint.h>
 
 struct Core;
@@ -178,6 +180,14 @@ struct RqPixelSample {
   uint16_t palette_index = 0;
   uint16_t texel = 0;
   float interpolated_depth = 0.0f;
+  // The colour the probe believes this prim paints at the sampled pixel: the Gouraud-interpolated
+  // vertex colour, modulated by the texel when the prim is textured. This is the one field that can be
+  // compared with a captured frame, which is what makes the probe checkable instead of merely
+  // self-consistent — a winner whose colour is nowhere near the pixel on screen is a probe that is
+  // explaining a different frame or a different prim, and nothing else in the line reveals that.
+  int shaded_r = 0;
+  int shaded_g = 0;
+  int shaded_b = 0;
 };
 
 struct RqPixelProbeWinner {
@@ -197,6 +207,12 @@ struct RqPixelProbeState {
   int x = -1;
   int y = -1;
   int frame = -1;
+  // The display rect the target coordinates were resolved against, captured with the frame so the
+  // verdict carries the mapping it used rather than leaving the reader to assume one.
+  int display_x = 0;
+  int display_y = 0;
+  int display_w = 0;
+  int display_h = 0;
   bool semi_seen = false;
   RqPixelProbeWinner shipping;
   RqPixelProbeWinner source_ot;
@@ -253,6 +269,11 @@ struct RenderQueue {
   int n = 0;
   uint32_t seq = 0;
   RqPixelProbeState pixelProbe;
+  // Colour-keyed companion to pixelProbe: answers "who drew that coloured thing" when the artefact is
+  // too small for a coordinate to find it. Off unless PSXPORT_PRIMRGB is set.
+  PrimColorCensus colorCensus;
+  // Whole-row companion to pixelProbe. Off unless PSXPORT_QROW is set.
+  QueueRowProbe rowProbe;
   // MONOTONIC PUSH ODOMETER — never reset, by design. `n` and `seq` both go back to 0 on the lazy
   // first-push-of-a-frame reset inside push(), so "prims this call emitted" measured as a delta of `n`
   // reads NEGATIVE whenever the call straddles that reset. That is not hypothetical: it is how the
@@ -386,7 +407,10 @@ struct RenderQueue {
   // emitItem: emit one resolved item to the VK rasterizer. Used by both the inline path and the
   // queue flush so emission logic lives in one place.
   void emitItem(Core *core, const RqItem *it);
-  void pixelProbeEmit(Core *core, const RqItem &item, uint32_t final_order, uint32_t depth_bias_order);
+  // THE per-prim diagnostics fan-out. Every observer that wants to see each emitted prim hangs off
+  // this one call, so the flush loop names one thing and a new instrument does not grow the emit
+  // path. Each observer is inert unless its own knob is set.
+  void observeEmittedPrim(Core *core, const RqItem &item, uint32_t final_order, uint32_t depth_bias_order);
 
   // emitOrQueue: build an RqItem from already-resolved quad/tri data + material snapshot, then either
   // queue it (`capture`, engine owns the order, flushed at the draw kick) or emit it now. The ONE place

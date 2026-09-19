@@ -234,6 +234,26 @@ class PictureTests(unittest.TestCase):
                                      arguments(bios=self.bios, route=route, route_from=0, play=2),
                                      self.out, sessions=sessions), 0)
 
+    def test_frame_step_compares_along_the_route_not_only_at_its_end(self) -> None:
+        """A single end-of-route picture answers only for the moment the route stops at. --frame-step
+        was accepted and ignored in picture mode, so a run asking for a series silently got one."""
+        native, console = PaintingNative("native"), PaintingConsole(1)
+        for core in (native, console):
+            core.paint_with(SCENE)
+        sessions = lambda product, args, out_dir: (native, console)  # noqa: E731
+        route = self.root / "route.pad"
+        route.write_bytes(b"\xff\xff" * 8)
+        self.assertEqual(picture.run(FakeTitle(1), self.product,
+                                     arguments(bios=self.bios, route=route, route_from=0, play=8,
+                                               frame_step=2),
+                                     self.out, sessions=sessions), 0)
+        report = json.loads((self.out / "picture.json").read_text())
+        names = [picture_report["checkpoint"] for picture_report in report["pictures"]]
+        # Three interior samples (f2, f4, f6) plus the end; f8 is the end and must not be compared twice.
+        self.assertEqual([name for name in names if "-f" in name],
+                         ["route-8f-f2", "route-8f-f4", "route-8f-f6"])
+        self.assertEqual(names[-1], "route-8f")
+
 
 if __name__ == "__main__":
     unittest.main()

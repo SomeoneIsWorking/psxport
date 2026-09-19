@@ -12,6 +12,8 @@
 #include "gpu_native_internal.h"
 #include "render_queue.h"
 #include <algorithm>
+#include <climits>
+#include <cmath>
 #include <cstdlib>
 #include <lucent/log.h>
 #include <math.h>
@@ -67,6 +69,17 @@ bool rqProbeBarycentric(const RqItem &item, int triangle, float x, float y, floa
   return weights[0] >= 0.0f && weights[1] >= 0.0f && weights[2] >= 0.0f;
 }
 
+// The PSX modulation rule for a textured prim: texel channel (5-bit, expanded to 8) scaled by the
+// vertex colour about 0x80, saturating. `raw` prims skip modulation entirely.
+int rqProbeModulate(int texelChannel5, int vertexChannel, bool raw) {
+  const int expanded = (texelChannel5 << 3) | (texelChannel5 >> 2);
+  if (raw) {
+    return expanded;
+  }
+  const int scaled = expanded * vertexChannel / 128;
+  return scaled > 255 ? 255 : scaled;
+}
+
 float rqProbeInterpolate(const float weights[3], float v0, float v1, float v2) {
   return weights[0] * v0 + weights[1] * v1 + weights[2] * v2;
 }
@@ -104,13 +117,23 @@ void rqProbeLogFinal(const RqPixelProbeState &probe) {
   const RqPixelProbeWinner &source = probe.source_ot;
   const RqPixelProbeWinner &guest = probe.guest_ot;
   lucent::info("primat-rq",
-               "FINAL f{} @({},{}) compare={} semi_seen={} shipping(valid={} order={} seq={} "
+               "FINAL f{} @({},{}) display=({},{})+{}x{} compare={} semi_seen={} shipping(valid={} order={} seq={} "
                "node={:08X} packet={:08X} ot_order={} key={} key_ord={:.9f} D32={:.9f} texel={:04X} writes={}) "
                "source_OT(valid={} order={} seq={} node={:08X} key={} key_ord={:.9f} texel={:04X} writes={}) "
                "guest_OT(valid={} order={} seq={} packet={:08X} ot_order={} key={} texel={:04X} writes={})",
                probe.frame,
                probe.x,
                probe.y,
+               // THE COORDINATE FRAME THE TARGET WAS INTERPRETED IN. A probe answer is only as good as
+               // the mapping between the pixel a human picked off a captured image and the pixel this
+               // walk explained; getting that mapping wrong produces a confident report about a
+               // different prim, with nothing in the output to show it (Spyro issue 0120, 2026-09-19,
+               // where an 8-row disagreement about the display origin sent the probe into the hedge
+               // beside the artefact). Printing the display rect makes the mapping checkable.
+               probe.display_x,
+               probe.display_y,
+               probe.display_w,
+               probe.display_h,
                gpu_vk_world_depth_compare_name(),
                probe.semi_seen,
                native.valid,
@@ -174,6 +197,30 @@ bool GpuState::pixel_probe_target(int &absoluteX, int &absoluteY) {
   return true;
 }
 
+// The prim's screen footprint, in the same coordinates the probe's target is given in. World prims
+// carry sub-pixel xsf/ysf and everything else carries the rounded xs/ys, so reading one of the two
+// unconditionally would report a plausible box for the other kind rather than refusing — the bounds
+// are taken from whichever pair the rasterizer itself uses.
+struct RqProbeBounds {
+  int min_x;
+  int min_y;
+  int max_x;
+  int max_y;
+};
+
+RqProbeBounds rq_probe_item_bounds(const RqItem &item) {
+  RqProbeBounds bounds{INT_MAX, INT_MAX, INT_MIN, INT_MIN};
+  for (int i = 0; i < (int)item.nv; ++i) {
+    const int x = item.has_xyf ? (int)std::lround(item.xsf[i]) : item.xs[i];
+    const int y = item.has_xyf ? (int)std::lround(item.ysf[i]) : item.ys[i];
+    bounds.min_x = std::min(bounds.min_x, x);
+    bounds.min_y = std::min(bounds.min_y, y);
+    bounds.max_x = std::max(bounds.max_x, x);
+    bounds.max_y = std::max(bounds.max_y, y);
+  }
+  return bounds;
+}
+
 RqPixelSample rq_probe_item_pixel(GpuState &gpu, const RqItem &item, int x, int y) {
   RqPixelSample sample;
   if (x < item.da_x0 || x > item.da_x1 || y < item.da_y0 || y > item.da_y1) {
@@ -193,9 +240,19 @@ RqPixelSample rq_probe_item_pixel(GpuState &gpu, const RqItem &item, int x, int 
   sample.triangle = triangle;
   sample.interpolated_depth =
       rqProbeInterpolate(centerWeights, item.depth[triangle], item.depth[triangle + 1], item.depth[triangle + 2]);
+  const auto shadeChannel = [&](const uint8_t channels[4]) {
+    return (int)lrintf(rqProbeInterpolate(
+        centerWeights, (float)channels[triangle], (float)channels[triangle + 1], (float)channels[triangle + 2]));
+  };
+  const int vertexR = shadeChannel(item.rs);
+  const int vertexG = shadeChannel(item.gs);
+  const int vertexB = shadeChannel(item.bs);
   if (item.mode == 3) {
     sample.writes = true;
     sample.blends = item.semi != 0;
+    sample.shaded_r = vertexR;
+    sample.shaded_g = vertexG;
+    sample.shaded_b = vertexB;
     return sample;
   }
 
@@ -216,6 +273,9 @@ RqPixelSample rq_probe_item_pixel(GpuState &gpu, const RqItem &item, int x, int 
   sample.texel = texture.texel;
   sample.writes = texture.texel != 0;
   sample.blends = sample.writes && item.semi && (texture.texel & 0x8000);
+  sample.shaded_r = rqProbeModulate(texture.texel & 0x1f, vertexR, item.raw != 0);
+  sample.shaded_g = rqProbeModulate((texture.texel >> 5) & 0x1f, vertexG, item.raw != 0);
+  sample.shaded_b = rqProbeModulate((texture.texel >> 10) & 0x1f, vertexB, item.raw != 0);
   return sample;
 }
 
@@ -224,8 +284,10 @@ bool rq_source_ot_candidate_wins(const RqItem &candidate, const RqPixelProbeWinn
                                      (candidate.key_ord == current.key_ord && candidate.seq < current.seq));
 }
 
-void RenderQueue::pixelProbeEmit(Core *core, const RqItem &item, uint32_t finalOrder, uint32_t depthBiasOrder) {
+void RenderQueue::observeEmittedPrim(Core *core, const RqItem &item, uint32_t finalOrder, uint32_t depthBiasOrder) {
   GpuState &gpu = core->game->gpu;
+  colorCensus.observe(gpu, item);
+  rowProbe.observe(gpu, item);
   int x = 0;
   int y = 0;
   if (!gpu.pixel_probe_target(x, y)) {
@@ -238,55 +300,86 @@ void RenderQueue::pixelProbeEmit(Core *core, const RqItem &item, uint32_t finalO
     pixelProbe.frame = gpu.s_frame;
     pixelProbe.x = x - gpu.s_disp_x;
     pixelProbe.y = y - gpu.s_disp_y;
+    pixelProbe.display_x = gpu.s_disp_x;
+    pixelProbe.display_y = gpu.s_disp_y;
+    pixelProbe.display_w = gpu.s_disp_w;
+    pixelProbe.display_h = gpu.s_disp_h;
     pixelProbe.semi_seen = false;
     pixelProbe.shipping = {};
     pixelProbe.source_ot = {};
     pixelProbe.guest_ot = {};
   }
+  const RqProbeBounds bounds = rq_probe_item_bounds(item);
   const RqPixelSample sample = rq_probe_item_pixel(gpu, item, x, y);
   if (!sample.covered) {
     return;
   }
   const float d32 =
       item.order_mode == RQ_OM_DEPTH ? gpu_vk_map_ordered_3d_depth(sample.interpolated_depth, depthBiasOrder) : -1.0f;
-  lucent::info("primat-rq",
-               "f{} final_order={} depth_bias_order={} seq={} node={:08X} packet={:08X} ot_order={} layer={} om={} "
-               "semi={} tri={} "
-               "nv={} key={} key_ord={:.6f} authored={} compare={} interp={:.9f} D32={:.9f} "
-               "mode={} raw={} tp=({},{}) clut=({},{}) uv=({},{}) source={:04X} index={} texel={:04X} "
-               "transparent={} writes={} blends={}",
-               pixelProbe.frame,
-               finalOrder,
-               depthBiasOrder,
-               item.seq,
-               item.dbg_node,
-               item.guest_packet,
-               item.guest_ot_order,
-               item.layer,
-               item.order_mode,
-               item.semi,
-               sample.triangle,
-               item.nv,
-               item.sort_key,
-               (double)item.key_ord,
-               item.authored_depth,
-               gpu_vk_world_depth_compare_name(),
-               sample.interpolated_depth,
-               d32,
-               item.mode,
-               item.raw,
-               item.tp_x,
-               item.tp_y,
-               item.clut_x,
-               item.clut_y,
-               sample.u,
-               sample.v,
-               sample.source_word,
-               sample.palette_index,
-               sample.texel,
-               sample.texel == 0 && item.mode != 3,
-               sample.writes,
-               sample.blends);
+  lucent::info(
+      "primat-rq",
+      "f{} final_order={} depth_bias_order={} seq={} node={:08X} painter={:08X} packet={:08X} "
+      "ot_order={} layer={} om={} "
+      "semi={} tri={} "
+      "nv={} key={} key_ord={:.6f} authored={} compare={} interp={:.9f} D32={:.9f} "
+      "mode={} raw={} tp=({},{}) clut=({},{}) uv=({},{}) source={:04X} index={} texel={:04X} "
+      "transparent={} writes={} blends={} rgb0=({},{},{}) shaded=({},{},{}) bbox=({},{})-({},{}) viewZ_ord={:.6f}",
+      pixelProbe.frame,
+      finalOrder,
+      depthBiasOrder,
+      item.seq,
+      item.dbg_node,
+      // WHICH PRODUCER SUBMITTED IT. dbg_node is the guest object and is 0 for any prim not
+      // wrapped in a beginObject scope, which is most of them — so a probe line could name
+      // neither the object nor the code that emitted it, and "who drew this" stayed a guess
+      // (Spyro issue 0120, where an untextured quad beating terrain could not be attributed
+      // to a producer at all). painter_object is the producer key every native submitter
+      // already opens its PainterObjectScope with.
+      (uint32_t)item.painter_object,
+      item.guest_packet,
+      item.guest_ot_order,
+      item.layer,
+      item.order_mode,
+      item.semi,
+      sample.triangle,
+      item.nv,
+      item.sort_key,
+      (double)item.key_ord,
+      item.authored_depth,
+      gpu_vk_world_depth_compare_name(),
+      sample.interpolated_depth,
+      d32,
+      item.mode,
+      item.raw,
+      item.tp_x,
+      item.tp_y,
+      item.clut_x,
+      item.clut_y,
+      sample.u,
+      sample.v,
+      sample.source_word,
+      sample.palette_index,
+      sample.texel,
+      sample.texel == 0 && item.mode != 3,
+      sample.writes,
+      sample.blends,
+      // WHAT IT ACTUALLY PAINTED, AND WHERE. For an untextured prim (mode 3) the probe's
+      // `texel` is 0000 by construction, which reads exactly like a black texel — so the one
+      // question a wrong-occlusion report asks ("is THIS the coloured blob I can see?")
+      // could not be answered from the line at all. The vertex colour answers it, and the
+      // screen bounding box separates "drawn in the wrong place" from "drawn at all",
+      // which is the fork Spyro issue 0120 is stuck on.
+      item.rs[0],
+      item.gs[0],
+      item.bs[0],
+      sample.shaded_r,
+      sample.shaded_g,
+      sample.shaded_b,
+      bounds.min_x,
+      bounds.min_y,
+      bounds.max_x,
+      bounds.max_y,
+      item.depth[0]);
 
   if (sample.blends) {
     pixelProbe.semi_seen = true;

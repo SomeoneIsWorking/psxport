@@ -78,6 +78,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu_native_scanout.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_primitive_dump.cpp # primitive-census CSV diagnostic owner
   ${PSXPORT_ROOT}/runtime/psx/image_writer.cpp      # one checked RGB24 capture-file boundary
+  ${PSXPORT_ROOT}/runtime/psx/queue_row_probe.cpp
+  ${PSXPORT_ROOT}/runtime/psx/prim_color_census.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_debug.cpp
   ${PSXPORT_ROOT}/runtime/psx/vram_xfer.cpp
   ${PSXPORT_ROOT}/runtime/psx/spu_audio.cpp

@@ -158,15 +158,28 @@ class PictureRun:
             used, settle = checkpoint.reach(self.driver, core, budget, settle)
             print(f"[picture] {core.name}: {checkpoint.name} after {used} game frames")
 
-    def play(self, frames: int, segments=None) -> None:
-        """Run a held-input schedule on both cores so a later state can be compared too. `segments`
-        defaults to the title's own scripted route; a recorded replay can stand in for it."""
+    def play(self, frames: int, segments=None, frame_step: int = 0, label: str = "played") -> bool:
+        """Run a held-input schedule on both cores and compare the picture along the way. `segments`
+        defaults to the title's own scripted route; a recorded replay can stand in for it.
+
+        `frame_step` compares every N frames INSIDE the segment as well as at its end. One picture at
+        the end of a long route can only answer for the moment the route happens to stop at, which on
+        Spyro's recorded Artisans replay is a cutscene close-up with nothing of the scene in view; a
+        defect that appears while the player walks past it is invisible to that single comparison.
+        Stepping is what turns one sample into a series, and it is the same knob name the RAM
+        comparison uses for the same reason.
+        """
         segments = self.title.gameplay if segments is None else segments
         schedule = [buttons for buttons, count in segments for _ in range(count)]
         players = [Playback(self.driver, core, schedule) for core in (self.native, self.console)]
-        for _ in range(min(frames, len(schedule))):
+        ok = True
+        total = min(frames, len(schedule))
+        for done in range(1, total + 1):
             for player in players:
                 player.step()
+            if frame_step > 0 and done % frame_step == 0 and done != total:
+                ok = self.at(f"{label}-f{done}") and ok
+        return ok
 
     def capture(self, name: str) -> tuple[Picture, Picture]:
         pictures = []
@@ -311,8 +324,8 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
             return 2
         segments = recorded_route(route, getattr(args, "route_from", 0)) if route else None
         if args.play:
-            run_state.play(args.play, segments)
             label = f"{route.stem}-{args.play}f" if route else f"played-{args.play}f"
+            ok = run_state.play(args.play, segments, args.frame_step, label) and ok
             ok = run_state.at(label) and ok
         report["complete"] = True
         return 0 if ok else 1

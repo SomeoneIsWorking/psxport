@@ -1145,7 +1145,7 @@ void RenderQueue::emitItem(Core *core, const RqItem *it) {
   }
   gpu_vk_set_untextured_material(core, it->shade_gouraud, it->dither);
   gpu_vk_set_order(core, ord);
-  pixelProbeEmit(core, *it, ord, depthBiasOrder);
+  observeEmittedPrim(core, *it, ord, depthBiasOrder);
   // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near
   // screen-space band (preserving the existing 2D depth semantics — only the ORDER is now engine-decided).
   int om = it->order_mode;
