@@ -17,7 +17,7 @@ So the checks here are the ones a difference count structurally cannot make:
 
   reaches      the requested frame count is presented, with no executor fault or fatal trap
   widescreen   the widened picture actually DIFFERS from the 4:3 one (a no-op aspect knob FAILS)
-  coverage     a full-screen picture actually got WIDER, not the same picture rescaled
+  coverage     MEASURES how much wider the drawn picture became (a rescale reads no-gain)
   fps60        the extra presents carry interpolated prims (`tier1=N>0`); an inserted duplicate FAILS
 
 It keeps the port's directly written PNGs for a human to look at, because "looks right" is a judgement
@@ -74,15 +74,29 @@ class Capture:
             return None, width, height
         return box, width, height
 
-    # Did the drawn content reach essentially the whole frame? Only a FULL-SCREEN element can be
-    # asked to widen — a bordered window or a centred page is legitimately smaller than the frame in
-    # both legs, and demanding that it widen would fail correct output.
-    def fills_frame(self, threshold=0.97):
-        box, width, height = self.drawn_extent()
+    # The aspect of what was drawn, which is the number that moves when a picture genuinely widens.
+    def drawn_aspect(self):
+        box, _, _ = self.drawn_extent()
         if box is None:
-            return False
+            return None
         x0, y0, x1, y1 = box
-        return (x1 - x0) >= threshold * width and (y1 - y0) >= threshold * height
+        return None if y1 == y0 else (x1 - x0) / (y1 - y0)
+
+    # The aspect of what was drawn, which is the number that moves when a picture genuinely widens.
+    def drawn_aspect(self):
+        box, _, _ = self.drawn_extent()
+        if box is None:
+            return None
+        x0, y0, x1, y1 = box
+        return None if y1 == y0 else (x1 - x0) / (y1 - y0)
+
+    # The aspect of what was drawn, which is the number that moves when a picture genuinely widens.
+    def drawn_aspect(self):
+        box, _, _ = self.drawn_extent()
+        if box is None:
+            return None
+        x0, y0, x1, y1 = box
+        return None if y1 == y0 else (x1 - x0) / (y1 - y0)
 
     # The aspect of what was drawn, which is the number that moves when a picture genuinely widens.
     def drawn_aspect(self):
@@ -119,29 +133,39 @@ def fps60_verdict(log_text):
     return "interpolating", interpolated, extras
 
 
-def coverage_verdict(standard, wide):
-    """(state, detail) for "did the widened leg actually render a wider picture".
+def coverage_measure(standard, wide):
+    """(state, detail): how much wider the picture this scene actually DREW became.
 
     `widescreen` above asks only whether the two PNGs DIFFER, and rescaling the whole picture
     satisfies that. Measured 2026-09-19 on Tomba! 2's title options page: the 4:3 leg drew 960x720
     (ratio 1.333) and the 16:9 leg drew 718x538 (ratio 1.335) — the same 320-wide page, scaled down
     because the target around it got wider, with black pillars either side on a real 16:9 display.
-    `widescreen` passed it. This tool's own docstring names that failure ("its 2D layers kept a 4:3
-    extent") and could not detect it.
+    `widescreen` called that a PASS. This tool's own docstring names that failure ("its 2D layers
+    kept a 4:3 extent") and the check it shipped with could not see it.
 
-    The discriminator is the drawn content's ASPECT, compared between the two legs of one scene. It
-    applies only when the 4:3 leg filled its frame, because only a full-screen element is obliged to
-    widen; a bordered window (Tomba! 2's item menu, 1.420 in both legs) is correctly centred and is
-    reported as not-applicable rather than failed.
+    A MEASUREMENT, NOT A VERDICT, and that is deliberate on evidence. Two rules were tried and both
+    were wrong:
+
+      - "judge only when the 4:3 leg fills the frame" excluded the cases that matter most. A PSX
+        picture is letterboxed inside the sink, so Spyro's genuinely widened 3D scene reaches 93.3%
+        of the sink's height; all eleven of Spyro's paired captures came back not-applicable.
+      - "abstain when the content is sparse" does not separate the populations. Over 15 real paired
+        captures, `spyro/secondary` f399 at 27.8% density correctly reads flat while `spyro/lr`
+        f3000 at 30.6% correctly reads widened. Adjacent densities, opposite right answers.
+
+    What remains true is the number itself, and a scene that legitimately draws black (Spyro's
+    level-intro card, 1.992 -> 2.000) reports no gain because there was no content to gain. Whether
+    a given scene SHOULD widen is a judgement about that scene, so this prints what it measured and
+    leaves the judgement where this tool always leaves it — with the person looking at the PNGs.
     """
-    if not standard.fills_frame():
-        return "not-applicable", "the 4:3 leg draws a window, not a full-screen picture"
     flat, widened = standard.drawn_aspect(), wide.drawn_aspect()
     if flat is None or widened is None:
         return "blank", "a leg drew nothing at all"
     if widened <= flat * 1.02:
-        return "unwidened", f"drawn aspect {flat:.3f} -> {widened:.3f}: the same picture, rescaled"
-    return "widened", f"drawn aspect {flat:.3f} -> {widened:.3f}"
+        return "no-gain", (f"drawn aspect {flat:.3f} -> {widened:.3f} — the same picture rescaled, no "
+                           f"horizontal gain. Correct for a scene that draws black; a DEFECT for a "
+                           f"full-screen page (Tomba! 2 issue 0010)")
+    return "wider", f"drawn aspect {flat:.3f} -> {widened:.3f}"
 
 
 def run_failures(log_text):
@@ -316,14 +340,10 @@ def main(argv=None):
             changed,
             f"f{frame} PNG differs from 4:3" + ("" if changed else " — the aspect knob did NOTHING"),
         )
-        state, detail = coverage_verdict(standard[frame], wide[frame])
-        if state == "not-applicable":
-            print(f"[looks-right] coverage     N/A — {detail}")
-        else:
-            ok &= report("coverage", state == "widened", detail)
+        state, detail = coverage_measure(standard[frame], wide[frame])
+        print(f"[looks-right] coverage     {'WIDER' if state == 'wider' else 'NO GAIN'} — {detail}")
     else:
         ok &= report("widescreen", False, "the 16:9 run produced no capture to compare")
-        ok &= report("coverage", False, "the 16:9 run produced no capture to measure")
 
     if args.skip_fps60:
         print("[looks-right] fps60        SKIPPED — caller declares no interpolation product for this title")
@@ -376,31 +396,37 @@ def selftest():
     checks.append(("an identical widescreen picture is a FAILURE", not flat.differs_from(same)))
     checks.append(("a widened picture differs", flat.differs_from(other)))
 
-    # coverage, on constructed pictures, both answers. `draw` paints a white box of the given size
-    # centred in a 400x300 frame, which is the shape every one of these verdicts is about.
+    # coverage, on constructed pictures, both answers. `drawn` paints a white box of the given size
+    # centred in a 400x300 frame, which is the shape every one of these measurements is about.
     def drawn(box_w, box_h, frame=(400, 300)):
         from PIL import Image
 
         image = Image.new("RGB", frame, (0, 0, 0))
-        Image.new("RGB", (box_w, box_h), (255, 255, 255))
         image.paste(Image.new("RGB", (box_w, box_h), (255, 255, 255)),
                     ((frame[0] - box_w) // 2, (frame[1] - box_h) // 2))
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         return Capture(buffer.getvalue())
 
-    full43 = drawn(400, 300)          # a full-screen 4:3 picture
-    rescaled = drawn(300, 225)        # the SAME picture, smaller — Tomba! 2's options page
-    widened = drawn(400, 225)         # genuinely wider content
-    window = drawn(280, 200)          # a bordered window, centred in both legs
-    checks.append(("coverage: a rescaled full-screen picture is a FAILURE",
-                   coverage_verdict(full43, rescaled)[0] == "unwidened"))
-    checks.append(("coverage: a genuinely widened picture PASSES",
-                   coverage_verdict(full43, widened)[0] == "widened"))
-    checks.append(("coverage: a centred window is not-applicable, not a failure",
-                   coverage_verdict(window, window)[0] == "not-applicable"))
-    checks.append(("coverage: a blank leg is named, not passed",
-                   coverage_verdict(full43, Capture(drawn(1, 1).encoded))[0] in ("unwidened", "blank")))
+    full43 = drawn(400, 300)      # a full-screen 4:3 picture
+    rescaled = drawn(300, 225)    # the SAME picture, smaller — Tomba! 2's options page
+    widened = drawn(400, 225)     # genuinely wider content
+    window = drawn(280, 200)      # a bordered window: unchanged between legs
+    # Spyro's real shape: a picture letterboxed INSIDE the sink. An earlier "must fill the frame"
+    # rule excluded exactly this from judgement; it must be measured, and it must read wider.
+    letterboxed43, letterboxed169 = drawn(400, 280), drawn(400, 209)
+    checks.append(("coverage: a rescaled full-screen picture reads no-gain",
+                   coverage_measure(full43, rescaled)[0] == "no-gain"))
+    checks.append(("coverage: a genuinely widened picture reads wider",
+                   coverage_measure(full43, widened)[0] == "wider"))
+    checks.append(("coverage: a letterboxed picture is MEASURED, not skipped",
+                   coverage_measure(letterboxed43, letterboxed169)[0] == "wider"))
+    checks.append(("coverage: an unchanged window reads no-gain",
+                   coverage_measure(window, window)[0] == "no-gain"))
+    checks.append(("coverage: a near-blank leg reads no-gain, never wider",
+                   coverage_measure(full43, drawn(1, 1))[0] == "no-gain"))
+    checks.append(("coverage: a leg that drew nothing at all is named",
+                   coverage_measure(full43, drawn(0, 0))[0] == "blank"))
 
     with tempfile.TemporaryDirectory() as directory:
         stale = Path(directory) / "run.log"
