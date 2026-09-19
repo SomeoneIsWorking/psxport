@@ -272,6 +272,14 @@ struct RenderQueue {
   void histogram();            // `debug rqhist` layer x opaque/semi census; called from flush(),
                                // never emitQueue() — fps60 never reaches emitQueue (see the .cpp)
   void zfightScan(Core *core); // PSXPORT_ZFIGHT diag: SW-rasterize opaque depth prims, find near-equal top-2 contests
+  // End the current queue frame. Two legitimate callers: a path that has just EMITTED these prims, and
+  // a frame that will never present them at all. The second is not a detail — Tomba! 2's StrPlayer holds
+  // at state 3 ("stay") for over a thousand consecutive frames during a cutscene, during which the frame
+  // driver skips the draw kick while guest execution keeps submitting. Without ending the queue frame,
+  // push() never performs its lazy reset and prims accumulate across every skipped frame until RQ_MAX
+  // (measured: 1,016 frames, 64,792 world prims, 29,343 of them bit-identical repeats of a held scene).
+  // A queue frame lasts one FRAME, not one presentation. Guarded on `n`, so an already-empty queue is
+  // left alone; the reset itself is push()'s, lazily, on the first submission of the next frame.
   void mark_consumed();
   PainterObjectAdmission preflightPainterObject(PainterObjectId object,
                                                 size_t new_faces,
