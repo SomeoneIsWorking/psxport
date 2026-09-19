@@ -18,7 +18,8 @@ So the checks here are the ones a difference count structurally cannot make:
   reaches      the requested frame count is presented, with no executor fault or fatal trap
   widescreen   the widened picture actually DIFFERS from the 4:3 one (a no-op aspect knob FAILS)
   coverage     MEASURES how much wider the drawn picture became (a rescale reads no-gain)
-  fps60        the extra presents carry interpolated prims (`tier1=N>0`); an inserted duplicate FAILS
+  fps60        the extra presents carry interpolated prims (`tier1=N>0`); an inserted duplicate FAILS,
+               and a run with no --replay/--route that sees no in-between at all is UNJUDGED, not passed
 
 It keeps the port's directly written PNGs for a human to look at, because "looks right" is a judgement
 no tool makes. It reports what it could not assert instead of passing quietly: a missing disc, a binary
@@ -107,6 +108,16 @@ def fps60_verdict(log_text):
     if interpolated == 0:
         return "duplicate-frame", 0, extras
     return "interpolating", interpolated, extras
+
+
+def fps60_unjudged(state, routed):
+    """Whether a `no-extra-present` verdict is a product failure or a run that could not see one.
+
+    Boot and attract can present pictures with no geometry — Spyro's 24bpp Universal logo is an
+    upload-only guest-VRAM present — so with no replay and no route the absence of an in-between
+    frame is not evidence about interpolation. Every other state is judged regardless of route.
+    """
+    return state == "no-extra-present" and not routed
 
 
 def coverage_measure(standard, wide):
@@ -326,14 +337,27 @@ def main(argv=None):
     else:
         fps_log, _ = run_port(binary, out, "fps60", args.frames, shot_frames, args.replay, 0, True, extra_env, repository, args.route)
         state, interpolated, extras = fps60_verdict(fps_log)
+        # A run with neither a replay nor a route only ever sees boot and attract, and a boot picture
+        # can be an upload-only guest-VRAM present with no geometry at all (Spyro's 24bpp Universal
+        # logo). "no extra present" then says nothing about whether interpolation works, and reading
+        # it as a product failure is exactly the misreading this tool exists to prevent. It is still
+        # not a pass — an unrunnable check is a named failure, never a green tick.
+        unjudged = fps60_unjudged(state, routed=bool(args.replay or args.route))
         detail = {
             "interpolating": f"{interpolated} interpolated prim(s) over {extras} extra present(s)",
             "duplicate-frame": f"{extras} extra present(s), ALL with tier1=0 — the in-between frame is a DUPLICATE",
-            "no-extra-present": "enabled but no extra present was ever emitted",
+            "no-extra-present": ("enabled, but this run had no --replay and no --route, so it saw only boot/attract, "
+                                 "where there may be no interpolatable geometry — supply one to judge this"
+                                 if unjudged else
+                                 "enabled over a gameplay route and no extra present was ever emitted"),
             "not-enabled": "PSXPORT_FPS60=1 was set but the run never reported interpolation on",
             "refused": "the title declares no temporal interpolation product",
         }[state]
-        ok &= report("fps60", state == "interpolating", detail)
+        if unjudged:
+            print(f"[looks-right] fps60        UNJUDGED — {detail}")
+            ok = False
+        else:
+            ok &= report("fps60", state == "interpolating", detail)
 
     print(f"[looks-right] PNGs for a human to judge: {out}/*/present_*.png")
     print("[looks-right] LOOKING AT THEM IS THE REST OF THE CHECK — this tool cannot tell you it looks right.")
@@ -361,6 +385,11 @@ def selftest():
         ("fps60 refusal is not a pass", fps60_verdict("[fps60] interpolated 60fps REFUSED")[0] == "refused")
     )
     checks.append(("fps60 off is named, not assumed", fps60_verdict("quiet log")[0] == "not-enabled"))
+    # The unjudged/failing split is a property of the run, not of the log, so it is checked here on
+    # the two inputs that decide it. Both answers, as every verdict in this file must have.
+    checks.append(("no extra present over a route is judged", fps60_unjudged("no-extra-present", routed=True) is False))
+    checks.append(("no extra present with no route is UNJUDGED", fps60_unjudged("no-extra-present", routed=False) is True))
+    checks.append(("a duplicate frame is judged even with no route", fps60_unjudged("duplicate-frame", routed=False) is False))
 
     checks.append(("a clean log has no failure marks", run_failures("all good") == []))
     checks.append(("an executor fault is a failure mark", run_failures("executor fault at 0x8001") != []))
