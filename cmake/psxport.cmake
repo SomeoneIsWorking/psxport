@@ -102,6 +102,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/spu_beetle.cpp
   ${PSXPORT_ROOT}/runtime/psx/disc.cpp
   ${PSXPORT_ROOT}/runtime/psx/disc_provision.cpp
+  ${PSXPORT_ROOT}/runtime/psx/cd_position.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd_override.cpp
   ${PSXPORT_ROOT}/runtime/psx/stock_cd_work_area.cpp
   ${PSXPORT_ROOT}/runtime/psx/stock_cd_response.cpp

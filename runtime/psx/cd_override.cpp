@@ -16,6 +16,7 @@
 #include "c_subsys.h"
 #include "cd_control.h"
 #include "cd_drive_timing.h"
+#include "cd_position.h"
 #include "core.h"
 #include "execution_control.h"
 #include "game.h"
@@ -127,6 +128,33 @@ static void cd_drive_stock_read(Core *c) {
   }
 }
 
+// Apply a controller command's POSITION parameter to both drive cursors. One owner, because the
+// explicit Setloc and the implicit one libcd performs for a position-carrying command must leave the
+// drive in exactly the same state; two copies of this drifted into a three-second disc scan once
+// already (issue 0115).
+static void cd_position_from_param(Core *c, uint32_t param, const char *why) {
+  if (param == 0) {
+    return;
+  }
+  const uint8_t mm = (uint8_t)c->mem_r8(param);
+  const uint8_t ss = (uint8_t)c->mem_r8(param + 1);
+  const uint8_t ff = (uint8_t)c->mem_r8(param + 2);
+  xa_stream_setloc(&c->game->xa, mm, ss, ff);
+  // ALSO remember it as a DATA read position. The XA streamer above is the audio path; a game on
+  // stock libcd positions the drive here and then issues a read that carries no LBA argument, so
+  // this is the only place that target sector is ever stated. Pure bookkeeping — see Cd::setloc_lba.
+  // Repositioning the drive INVALIDATES whatever sector is buffered. Without this the cursor keeps
+  // popping the previously loaded sector, so the next header read returns mid-sector user data and
+  // the guest's drive-position check compares against garbage.
+  c->game->cd.sec_pos = 0;
+  c->game->cd.sec_len = 0;
+  c->game->cd.sec_lba = -1;
+  c->game->cd.setloc_lba = psx::cd::msfToLba(mm, ss, ff);
+  if (c->game->cd.verbose) {
+    lucent::info("cd", "{} {:02X}:{:02X}:{:02X} -> LBA {}", why, mm, ss, ff, c->game->cd.setloc_lba);
+  }
+}
+
 // Everything a controller command does to native state. Split out so the entries that carry a
 // result buffer and the one that does not can share it without either duplicating the command
 // switch or inheriting the other's result contract.
@@ -173,30 +201,21 @@ static void cd_apply_command(Core *c) {
     cdc_set_filter(&c->game->cdc, p0, param ? (uint8_t)c->mem_r8(param + 1) : 0);
     break; // Setfilter
   case 0x02:
-    if (param) { // Setloc
-      const uint8_t mm = p0, ss = (uint8_t)c->mem_r8(param + 1), ff = (uint8_t)c->mem_r8(param + 2);
-      xa_stream_setloc(&c->game->xa, mm, ss, ff);
-      // ALSO remember it as a DATA read position. The XA streamer above is the audio path; a game on
-      // stock libcd positions the drive here and then issues a read that carries no LBA argument, so
-      // this is the only place that target sector is ever stated. Pure bookkeeping — see Cd::setloc_lba.
-      // Repositioning the drive INVALIDATES whatever sector is buffered. Without this the cursor
-      // keeps popping the previously loaded sector, so the next header read returns mid-sector user
-      // data and the guest's drive-position check compares against garbage.
-      c->game->cd.sec_pos = 0;
-      c->game->cd.sec_len = 0;
-      c->game->cd.sec_lba = -1;
-      auto bcd = [](uint8_t v) {
-        return (v >> 4) * 10 + (v & 0x0F);
-      };
-      const int lba = (bcd(mm) * 60 + bcd(ss)) * 75 + bcd(ff) - 150; // MSF -> LBA (sector 0 == 00:02:00)
-      c->game->cd.setloc_lba = lba >= 0 ? lba : -1;
-      if (c->game->cd.verbose) {
-        lucent::info("cd", "setloc {:02X}:{:02X}:{:02X} -> LBA {}", mm, ss, ff, c->game->cd.setloc_lba);
-      }
-    }
+    cd_position_from_param(c, param, "setloc");
+    break;
+  case 0x03: // SetlocL
+  case 0x15: // SeekL
+  case 0x16: // SeekP
+    // Position-carrying, but they move the head without starting a stream.
+    cd_position_from_param(c, param, "implicit setloc");
     break;
   case 0x06:
   case 0x1B: // ReadN / ReadS
+    // libcd's CdControl sends an implicit Setloc for these BEFORE the command itself, so a game may
+    // legitimately never issue one of its own (psx::cd::commandCarriesPosition). This override
+    // replaced CdControl, so unless the position is applied here it is simply lost — which is how
+    // Spyro's XA cursor sat at LBA 0 and scanned the disc inside one audio sample (issue 0115).
+    cd_position_from_param(c, param, "implicit setloc");
     xa_stream_start(&c->game->xa);
     // Position and load the CONTROLLER too. Streaming code bypasses libcd and waits on the CD
     // status DRQSTS bit before kicking DMA3; with only the native path served, that bit never set
