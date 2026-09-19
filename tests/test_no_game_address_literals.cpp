@@ -341,7 +341,6 @@ static Scan scan_framework(void) {
  *   pad_input.cpp (11)     Tomba's pad-state globals.
  *   hle.cpp (8)            HLE entry points identified by Tomba guest address.
  *   dbg_server.cpp (6)     debug-server default watch set.
- *   gpu_vk.cpp (5)         presentation hooks reading Tomba scratchpad fields.
  *   overlay_glue.cpp (4)   overlay bookkeeping at Tomba scratchpad fields.
  *   scheduler.cpp (4)      framework scheduler reading Tomba task state.
  *   dualcore.cpp (3)       dual-core compare window (the packet-pool range literal).
@@ -373,7 +372,6 @@ static const BaselineRow kBaseline[] = {
     {"runtime/psx/dbg_server.cpp", 0x800f2624u, 1},   {"runtime/psx/dbg_server.cpp", 0x800fb168u, 1},
     {"runtime/psx/dbg_server.cpp", 0x801fe00cu, 1},   {"runtime/psx/dbg_server.cpp", 0x801fe048u, 1},
     {"runtime/psx/gpu_native.cpp", 0x800bf544u, 1},   {"runtime/psx/gpu_native.cpp", 0x801fe00cu, 2},
-    {"runtime/psx/gpu_vk.cpp", 0x1f800138u, 1},       {"runtime/psx/gpu_vk.cpp", 0x80100400u, 4},
     {"runtime/psx/mem.cpp", 0x801fe00cu, 2},          {"runtime/psx/overlay_glue.cpp", 0x1f8000d2u, 1},
     {"runtime/psx/overlay_glue.cpp", 0x1f8000d6u, 1}, {"runtime/psx/overlay_glue.cpp", 0x1f8000dau, 1},
     {"runtime/psx/overlay_glue.cpp", 0x801fe00cu, 1}, {"runtime/psx/pad_input.cpp", 0x1f800138u, 1},

@@ -4,6 +4,7 @@
 #include "game.h"                             // Game / GpuVkState (per-instance render state)
 #include "game_hooks_opt.h"                   // guarded optional fade-state reader
 #include "gpu_painter.h"                      // authored painter staging + focused GPU discriminator
+#include "gpu_vk_fadewatch.h"                 // `debug fadewatch` guest-state tap (extracted 2026-09-19)
 #include "gpu_vk_modulation_selftest.h"       // PSX texture*color modulation truncation through shipping shaders
 #include "gpu_vk_present_mode.h"              // preferred_present_mode — the sink must not stall the guest thread
 #include "gpu_vk_present_policy.h"            // present_rebuild_decision — when a present must rebuild the composite
@@ -12,6 +13,7 @@
 #include "gpu_vk_texture_phase_selftest.h"    // integer-pixel UV phase through opaque + semi shipping paths
 #include "gpu_vk_untextured_selftest.h"       // untextured G3 interpolation through the shipping opaque path
 #include "image_writer.h"                     // one checked RGB24 capture-file boundary
+#include "picture_announce.h"                 // per-Core `[wide] native picture:` line, reported on change
 #include "present_plan.h"                     // plan_present — the presented picture, decided identically in both legs
 #include "render_substrate.h"                 // Render::stats (RenderStats — was g_dbg_world_quads)
 #include "wide_margin_plan.h"                 // renderer-only coverage for host-visible VRAM extension
@@ -4098,46 +4100,9 @@ void gpu_vk_dirty(Core *core, int x, int y, int w, int h) {
 }
 void gpu_vk_present(Core *core, const uint16_t *src, int sx, int sy, int w, int h) {
   overlay_glue_frame_begin(core);
+  psx::picture::announceOnChange(*core);
   core->game->gpu_vk.present(src, sx, sy, w, h);
-  // `debug fadewatch` state-byte tap (2026-07-01, "garbage during fade" investigation): whenever the fade
-  // print fires, also dump the two overlapping fade drivers' guest state — bg_scene_transition_sm's struct
-  // P=0x80100400 (P+4=state,P+8,P+0xA=ramp counters,P+3=dir) and ov_sop_field_mode's sm+0x50/0x6c (outer
-  // field-mode state / its own ramp counter) — to see which driver (if either) is live during the glitch
-  // frame where the fade unexpectedly reads back to mode=0 mid-ramp.
-  static const lucent::Channel fadewatch_state_ch{"fadewatch"};
-  if (fadewatch_state_ch) {
-    GpuDevice &gd = gdev();
-    int &lm = gd.s_fws_lastmode;
-    uint8_t &lr = gd.s_fws_lr;
-    uint8_t &lg = gd.s_fws_lg;
-    uint8_t &lb = gd.s_fws_lb;
-    int &lsx = gd.s_fws_lsx;
-    int &lsy = gd.s_fws_lsy;
-    int &lw = gd.s_fws_lw;
-    int &lh = gd.s_fws_lh;
-    FadeState f = game_render_fade_state(core, core ? core->hooks : nullptr);
-    int m = f.mode;
-    uint8_t r = f.r, g = f.g, b = f.b;
-    if (m != lm || r != lr || g != lg || b != lb || sx != lsx || sy != lsy || w != lw || h != lh) {
-      uint32_t sm = core->mem_r32(0x1f800138u);
-      lucent::debug("fadewatch",
-                    "[fadewatch-state] P.st={} P8={} P0xA={} P3={} | sm50={} sm6c={}",
-                    core->mem_r8(0x80100400u + 4),
-                    core->mem_r16(0x80100400u + 8),
-                    core->mem_r16(0x80100400u + 0xa),
-                    core->mem_r8(0x80100400u + 3),
-                    core->mem_r16(sm + 0x50),
-                    core->mem_r8(sm + 0x6c));
-      lm = m;
-      lr = r;
-      lg = g;
-      lb = b;
-      lsx = sx;
-      lsy = sy;
-      lw = w;
-      lh = h;
-    }
-  }
+  gpu_vk_fadewatch_tap(core, sx, sy, w, h);
 }
 void gpu_vk_repaint(Core *core) {
   overlay_glue_frame_begin(core); // the RmlUi overlay stays interactive while the game is frozen

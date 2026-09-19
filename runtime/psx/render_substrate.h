@@ -13,6 +13,7 @@
 #include "gte_preop_observer.h"
 #include "guest_packet_filter.h"
 #include "ot_attr.h"
+#include "picture_announce.h"
 #include "producer_census.h"
 #include "producer_scope.h"
 #include "proj_params.h"
@@ -47,6 +48,9 @@ public:
   ProjPrim projprim;         // vertex-depth cache for native depth path (per-Core; SBS-safe)
   ProjParams projParams;     // camview + per-frame projection constants (per-Core)
   GtePreOpObserver gtePreOp; // explicitly armed pre-GTE diagnostic observer (per-Core)
+  // The picture geometry last announced for this Core (the `[wide] native picture:` line;
+  // picture_announce.h owns why it is per-Core and why it reports changes rather than once).
+  psx::picture::Geometry announcedPicture;
 };
 
 // Marks the guest's own GP0 execution for the producer census. Nesting-safe by depth rather than a bool:

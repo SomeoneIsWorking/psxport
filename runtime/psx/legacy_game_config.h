@@ -352,6 +352,20 @@ struct GameConfig {
   // Appended because positional GameConfig consumers must retain their existing field mapping.
   uint32_t packetPoolBasePtrs[2];
   uint32_t packetPoolEndPtrs[2];
+
+  // --- `debug fadewatch` guest-state tap (gpu_vk_fadewatch.cpp) --------------------------------
+  // The two overlapping fade drivers whose state the tap dumps on every fade transition. These were
+  // Tomba! 2 literals sitting in gpu_vk_present until 2026-09-19, so the framework read one title's
+  // addresses on every game that turned the channel on. Leave both zero and the tap says it is BLIND
+  // rather than reading address 0 and printing plausible nonsense.
+  //
+  // `fadewatchDriverStruct` is the scene-transition driver's struct base (+3 dir, +4 state, +8 and
+  // +0xA ramp counters). `fadewatchFieldModeSmPtr` is the guest address of a word holding the outer
+  // field-mode state machine, whose +0x50 and +0x6C the tap reads.
+  //
+  // Appended because positional GameConfig consumers must retain their existing field mapping.
+  uint32_t fadewatchDriverStruct;
+  uint32_t fadewatchFieldModeSmPtr;
 };
 
 // Look up a task entry PC in the game's declared table. Returns null when the game declared none or the
