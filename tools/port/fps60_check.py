@@ -143,9 +143,14 @@ SEQ_RUN_RE = re.compile(
 def load_sequence_runs(path):
     """{fence: [run]} from a PSXPORT_DEBUG=fps60seq log.
 
-    A run is (area, owned, node, layer, x0, x1, y0, y1). Area is precomputed because every
+    A run is (area, owned, producer, node, layer, x0, x1, y0, y1). Area is precomputed because every
     lookup wants the SMALLEST covering run: crediting a tile to whatever run happens to come first
-    credits the full-screen sky fill for everything drawn in front of it."""
+    credits the full-screen sky fill for everything drawn in front of it.
+
+    The PRODUCER is carried as well as the entity node because they answer different questions. The
+    node names which instance was drawn; the producer names the code that drew it, which is the thing
+    somebody has to write a temporal source for. Reporting only the node leaves a defect with no
+    actionable owner."""
     runs, fence = defaultdict(list), None
     for line in open(path, errors="replace"):
         m = SEQ_FENCE_RE.search(line)
@@ -156,17 +161,75 @@ def load_sequence_runs(path):
         if m and fence is not None:
             x0, x1, y0, y1 = (int(m.group(i)) for i in (6, 7, 8, 9))
             entry = (max(0, (x1 - x0)) * max(0, (y1 - y0)), m.group(2) == "TIER1",
-                     m.group(5), int(m.group(1)), x0, x1, y0, y1)
+                     m.group(4), m.group(5), int(m.group(1)), x0, x1, y0, y1)
             if entry not in runs[fence]:
                 runs[fence].append(entry)
     return runs
+
+
+def covered_by_specific_run(runs, tx, ty, tile, frame_area):
+    """Is this tile covered by a run that is NOT a screen-sized fill?
+
+    Comparing the widest run to the frame width does not work: the widest run is a clip guard, three
+    screens across on both Tomba! 2 and Spyro 1, not a fill the size of the screen. What DOES
+    distinguish a right mapping from a wrong one is whether the SPECIFIC runs land on the pixels
+    that moved. A full-screen fill covers every tile under any mapping, so it can never disagree;
+    a run around one actor either sits on that actor or it does not."""
+    for area, _owned, _producer, _node, _layer, x0, x1, y0, y1 in runs:
+        if area * 2 >= frame_area:
+            continue
+        if tx < x1 and x0 < tx + tile and ty < y1 and y0 < ty + tile:
+            return True
+    return False
+
+
+def mapping_lift(counts):
+    """P(tile moved | inside a specific run) / P(tile moved | inside none), or None.
+
+    An absolute rate cannot judge a mapping. A title whose moving content is a scrolling
+    full-screen backdrop legitimately has most of its motion outside every specific run, and Tomba!
+    2 scores 43.9% for that reason while being correctly mapped. What a WRONG mapping cannot
+    produce is a difference: if a run around one actor is not where that actor's pixels are, then
+    being inside it says nothing about whether those pixels moved, and the ratio collapses to 1.
+    """
+    inside_moved, inside_total, outside_moved, outside_total = counts
+    if not inside_total or not outside_total:
+        return None
+    inside = inside_moved / inside_total
+    outside = outside_moved / outside_total
+    if outside <= 0.0:
+        return None
+    return inside / outside
+
+
+def mapping_verdict(scores, minimum_lift=2.0):
+    """(agree, detail) from {offset name: counts} — is the chosen mapping telling us anything?
+
+    This is the check that was missing when attribution reported 100% coverage on a mapping that was
+    wrong: coverage counted the screen-sized fill, which covers everything either way."""
+    if not scores or "display" not in scores:
+        return False, "no mapping was scored"
+    lifts = {name: mapping_lift(counts) for name, counts in scores.items()}
+    chosen = lifts.get("display")
+    detail = ", ".join(f"{name} {'n/a' if lift is None else format(lift, '.2f')}x"
+                       for name, lift in sorted(lifts.items()))
+    if chosen is None:
+        return False, f"the chosen mapping could not be scored ({detail})"
+    if chosen < minimum_lift:
+        return False, (f"a tile inside a specific run is only {chosen:.2f}x as likely to have moved "
+                       f"as one inside none, so the runs are not landing on the pixels ({detail})")
+    best = max(lift for lift in lifts.values() if lift is not None)
+    if chosen < best * 0.9:
+        return False, f"another offset explains the moving pixels better ({detail})"
+    return True, (f"a tile inside a specific run is {chosen:.2f}x as likely to have moved as one "
+                  f"inside none ({detail})")
 
 
 def runs_bbox(runs_by_fence):
     """The union of every run's extent, in whatever space the log wrote them."""
     x0 = y0 = x1 = y1 = None
     for runs in runs_by_fence.values():
-        for _area, _owned, _node, _layer, rx0, rx1, ry0, ry1 in runs:
+        for _area, _owned, _producer, _node, _layer, rx0, rx1, ry0, ry1 in runs:
             x0 = rx0 if x0 is None else min(x0, rx0)
             y0 = ry0 if y0 is None else min(y0, ry0)
             x1 = rx1 if x1 is None else max(x1, rx1)
@@ -182,7 +245,7 @@ def any_verbatim_over(runs, tx, ty, tile):
     lerp, so they snap forward, and the tile is then filed under a producer that is doing its job.
     This is what separates the two readings.
     """
-    for area, owned, node, layer, x0, x1, y0, y1 in runs:
+    for area, owned, producer, node, layer, x0, x1, y0, y1 in runs:
         if owned:
             continue
         if tx < x1 and x0 < tx + tile and ty < y1 and y0 < ty + tile:
@@ -194,7 +257,7 @@ def owner_of(runs, tx, ty, tile):
     """The smallest run covering this tile, or None when no run does."""
     best = None
     for run in runs:
-        area, _owned, _node, _layer, x0, x1, y0, y1 = run
+        area, _owned, _producer, _node, _layer, x0, x1, y0, y1 = run
         if tx < x1 and x0 < tx + tile and ty < y1 and y0 < ty + tile:
             if best is None or area < best[0]:
                 best = run
@@ -243,10 +306,14 @@ def selftest():
 
     # inside the small run: the SMALL one must win even though the big one also covers it
     inside = owner_of(runs[7], 112, 112, 16)
-    check("small run wins where both cover", (inside[1], inside[2]), (True, "800E7E80"))
+    check("small run wins where both cover", (inside[1], inside[2], inside[3]),
+          (True, "0000ABCD", "800E7E80"))
     # outside it, only the full-screen run covers
     outside = owner_of(runs[7], 16, 200, 16)
-    check("big run owns what only it covers", (outside[1], outside[2]), (False, "00000000"))
+    check("big run owns what only it covers", (outside[1], outside[2], outside[3]),
+          (False, "00000000", "00000000"))
+    # the producer is what a defect is actionable by, so it must not collapse into the node
+    check("producer is carried apart from the node", inside[2] != inside[3], True)
     # a fence with no runs attributes nothing — the branch that prints "(no run)"
     check("no owner when no run covers", owner_of(runs.get(8, ()), 16, 16, 16), None)
     # and a tile outside every run in a populated fence is also unowned
@@ -260,12 +327,30 @@ def selftest():
     check("no verbatim over a tile only a reconstructed run covers",
           any_verbatim_over(runs[9], 16, 16, 16), False)
 
+    # The mapping check needs both answers or it is decoration.
+    check("a mapping where runs predict motion is accepted",
+          mapping_verdict({"display": (80, 100, 10, 100)})[0], True)
+    check("a mapping where they predict nothing is refused",
+          mapping_verdict({"display": (30, 100, 30, 100)})[0], False)
+    check("a mapping another offset beats is refused",
+          mapping_verdict({"display": (30, 100, 10, 100),
+                           "raw": (90, 100, 10, 100)})[0], False)
+    check("nothing scored is a refusal, not an agreement", mapping_verdict({})[0], False)
+
+    # The fill must not be able to vouch for a mapping: f7's full-screen run covers everything.
+    big_area = 961 * 241
+    check("a screen-sized fill is not a specific run",
+          covered_by_specific_run(runs[7], 16, 200, 16, big_area), False)
+    check("a small run is a specific run",
+          covered_by_specific_run(runs[7], 112, 112, 16, big_area), True)
+
     if failures:
         print("fps60_check selftest: FAIL")
         print("\n".join(failures))
         return 1
-    print("fps60_check selftest: PASS (7 checks: fence parsing, smallest-run wins, "
-          "big-run-only, empty fence, out-of-range tile, verbatim overlap both ways)")
+    print("fps60_check selftest: PASS (14 checks: fence parsing, smallest-run wins, "
+          "big-run-only, empty fence, out-of-range tile, verbatim overlap both ways, "
+          "producer kept apart from node, mapping verdict four ways, fill is not specific)")
     return 0
 
 
@@ -329,6 +414,9 @@ def main():
     uncovered_fences = set()  # dump fences the fps60seq log never described
     # moved-AHEAD tiles filed under a TIER1 run, split by whether verbatim content is drawn there too
     tier1_ahead = [0, 0]  # [verbatim also covers this tile, TIER1 runs only]
+    # {offset name: [hits, total]} — how well each candidate mapping explains the moving pixels
+    # per candidate: [moved inside a specific run, tiles inside one, moved outside, tiles outside]
+    mapping_scores = {"display": [0, 0, 0, 0], "raw": [0, 0, 0, 0]}
     attribution_refused = False
 
     for a, b, c in triples(frames):
@@ -359,6 +447,16 @@ def main():
             if verdict in endpoint_shifts:
                 shift = best_shift(ia, ic, tile[0], tile[1], args.tile)
                 endpoint_shifts[verdict][shift] += 1
+            if sequence_runs is not None:
+                # Every tile is scored, moving or not: the question is whether being inside a run
+                # PREDICTS motion, which a wrong mapping cannot make it do.
+                fence_runs = sequence_runs.get(c[3], ())
+                moved = 1 if verdict != "STATIC" else 0
+                for name, (ox, oy) in (("display", origin), ("raw", (0, 0))):
+                    base = 0 if covered_by_specific_run(fence_runs, tile[0] + ox, tile[1] + oy,
+                                                        args.tile, w * h) else 2
+                    mapping_scores[name][base] += moved
+                    mapping_scores[name][base + 1] += 1
             if sequence_runs is not None and verdict != "STATIC":
                 if c[3] not in sequence_runs:
                     uncovered_fences.add(c[3])
@@ -373,7 +471,7 @@ def main():
                 if run is None:
                     unattributed[slot if slot < 2 else 2] += 1
                 else:
-                    by_owner[("TIER1" if run[1] else "verbatim", run[3], run[2])][slot] += 1
+                    by_owner[("TIER1" if run[1] else "verbatim", run[4], run[2], run[3])][slot] += 1
                     if slot == 1 and run[1]:
                         fence_runs = sequence_runs.get(c[3], ())
                         covered = any_verbatim_over(fence_runs, tile[0] + origin[0],
@@ -422,8 +520,19 @@ def main():
         if not sequence_runs:
             sys.exit(f"fps60_check: {args.seq} holds no fps60seq runs — was PSXPORT_DEBUG=fps60seq "
                      f"set for that run?")
+        agree, detail = mapping_verdict({k: tuple(v) for k, v in mapping_scores.items()})
+        attribution_refused = not agree
         print(f"\nowners of the moving tiles ({len(sequence_runs)} fence(s) in {args.seq}), "
               f"credited to the smallest covering run:")
+        if attribution_refused:
+            print(f"  REFUSED — {detail}.\n"
+                  f"  Runs and image pixels are not describing the same place, so a tile would be\n"
+                  f"  credited to whichever misaligned run happens to cover it. A screen-sized fill\n"
+                  f"  covers every tile under any mapping, which is why coverage alone reported "
+                  f"100%.\n  No owner table is printed. The classification above does not use "
+                  f"attribution and\n  is unaffected.")
+        else:
+            print(f"  mapping checked: {detail}")
         attributed = sum(sum(v) for v in by_owner.values())
         total_moving = attributed + sum(unattributed)
         coverage = (100.0 * attributed / total_moving) if total_moving else 0.0
@@ -431,15 +540,16 @@ def main():
         moved_attributed = sum(v[0] + v[1] for v in by_owner.values())
         moved_total = moved_attributed + unattributed[0] + unattributed[1]
         moved_coverage = (100.0 * moved_attributed / moved_total) if moved_total else 100.0
-        print(f"  {attributed} of {total_moving} moving tile(s) got an owner ({coverage:.1f}%); "
-              f"of the MOVED endpoint tiles, {moved_attributed} of {moved_total} "
-              f"({moved_coverage:.1f}%)")
+        if not attribution_refused:
+            print(f"  {attributed} of {total_moving} moving tile(s) got an owner ({coverage:.1f}%); "
+                  f"of the MOVED endpoint tiles, {moved_attributed} of {moved_total} "
+                  f"({moved_coverage:.1f}%)")
         # Every drawn item belongs to exactly one run by construction, so a MOVING tile with no
         # owner is not a normal outcome — it means the run extents and the presented frame are not
         # describing the same pixels. Off-screen geometry makes the bbox legitimately larger than
         # the frame, so this cannot be turned into a clean refusal without a proven mapping; what it
         # CAN do is refuse to let the table be read as complete.
-        if coverage < 90.0:
+        if coverage < 90.0 and not attribution_refused:
             print(f"\n  INCOMPLETE — {100.0 - coverage:.1f}% of the moving tiles, and "
                   f"{100.0 - moved_coverage:.1f}% of the defects,\n  landed in the (no run) row. "
                   f"Every drawn item belongs to exactly one run, so this is\n  not geometry that "
@@ -447,26 +557,26 @@ def main():
                   f"Do not read the shares below as a breakdown of the whole.\n"
                   f"    frames    {w}x{h}\n"
                   f"    run bbox  x=[{bx0}..{bx1}) y=[{by0}..{by1})")
-        if origins_missing:
+        if origins_missing and not attribution_refused:
             print(f"  WARNING: {origins_missing} of {n_triples} triple(s) had no gpu_shot line in "
                   f"the log,\n  so their runs were read at VRAM origin 0,0. A double-buffered title "
                   f"will mis-attribute\n  those. Capture fps60dump and fps60seq in ONE run so both "
                   f"land in the same log.")
-        if uncovered_fences:
+        if uncovered_fences and not attribution_refused:
             print(f"  WARNING: {len(uncovered_fences)} of the {n_triples} triple(s) name a fence "
                   f"the log never described\n  (first: f{min(uncovered_fences)}) — their tiles are "
                   f"all in the (no run) row. Is this the same run?")
         rows = ([] if attribution_refused
                 else sorted(by_owner.items(), key=lambda kv: -(kv[1][0] + kv[1][1])))
         if rows:
-            print(f"  {'ownership':<10} {'layer':>5} {'node':<10} {'lerped':>8} {'endpoint':>9} "
-                  f"{'MOVED to':>9} {'MOVED to':>9}")
-            print(f"  {'':<10} {'':>5} {'':<10} {'':>8} {'':>9} {'prev':>9} {'next':>9}")
-        for (ownership, layer, node), (mstale, mahead, still, lerped) in rows:
-            print(f"  {ownership:<10} {layer:5d} {node:<10} {lerped:8d} "
+            print(f"  {'ownership':<10} {'layer':>5} {'producer':<10} {'node':<10} "
+                  f"{'lerped':>8} {'endpoint':>9} {'MOVED to':>9} {'MOVED to':>9}")
+            print(f"  {'':<10} {'':>5} {'':<10} {'':<10} {'':>8} {'':>9} {'prev':>9} {'next':>9}")
+        for (ownership, layer, producer, node), (mstale, mahead, still, lerped) in rows:
+            print(f"  {ownership:<10} {layer:5d} {producer:<10} {node:<10} {lerped:8d} "
                   f"{mstale + mahead + still:9d} {mstale:9d} {mahead:9d}")
         if not attribution_refused:
-            print(f"  {'(no run)':<10} {'':>5} {'':<10} {unattributed[2]:8d} "
+            print(f"  {'(no run)':<10} {'':>5} {'':<10} {'':<10} {unattributed[2]:8d} "
                   f"{sum(unattributed[:2]):9d} {unattributed[0]:9d} {unattributed[1]:9d}")
         print("  a MOVED endpoint tile is content that translated a whole pixel or more between the "
               "two real\n  frames and was still drawn at one of them. Those are the defects; the "
@@ -474,8 +584,20 @@ def main():
               "  MOVED-to-next is the stronger signal: that content appeared at the NEXT real "
               "frame's\n  position a whole frame early, which is what never being interpolated "
               "looks like.")
+        by_producer = defaultdict(int)
+        for (ownership, _layer, producer, _node), counts in by_owner.items():
+            if ownership == "verbatim":
+                by_producer[producer] += counts[1]
+        ranked = sorted((n, p) for p, n in by_producer.items() if n)
+        if ranked and not attribution_refused:
+            total_snap = sum(n for n, _ in ranked)
+            print(f"\n  verbatim producers by forward snap — this is the list of temporal sources "
+                  f"still to write:")
+            for n, producer in sorted(ranked, reverse=True)[:10]:
+                print(f"    {producer:<10} {n:7d}  ({100.0 * n / total_snap:.1f}% of the verbatim snap)")
+
         t1 = tier1_ahead[0] + tier1_ahead[1]
-        if t1:
+        if t1 and not attribution_refused:
             share = 100.0 * tier1_ahead[0] / t1
             print(f"\n  of the {t1} MOVED-to-next tile(s) filed under a TIER1 run, {tier1_ahead[0]} "
                   f"({share:.1f}%)\n  also have verbatim content drawn over them, and "
