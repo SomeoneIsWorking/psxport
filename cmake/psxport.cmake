@@ -123,6 +123,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_texture_phase_selftest.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_untextured_selftest.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_perf.cpp
+  ${PSXPORT_ROOT}/runtime/psx/frame_time_histogram.cpp  # the frame-time distribution gpu_perf reports percentiles from
   ${PSXPORT_ROOT}/runtime/psx/mods.cpp
   ${PSXPORT_ROOT}/runtime/psx/config.cpp   # layered CVar registry + the environment audit (docs/config.md)
   ${PSXPORT_ROOT}/runtime/psx/platform_hle.cpp
