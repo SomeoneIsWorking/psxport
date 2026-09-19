@@ -35,11 +35,18 @@ Measured 2026-09-19 on Tomba! 2's hut interior, 120 triples: all 105 STALE and a
 had a 0px shift, so that scene has no interpolation failure left at this granularity. The opening
 cutscene, 299 triples, is the other answer: 1,547 endpoint tiles moved a whole pixel or more.
 
-WHOSE tiles those are is the next question, and --seq answers it. Given an fps60seq log from the
-SAME run, every moving tile is credited to the smallest run covering it (smallest, because the
-full-screen sky fill covers everything drawn in front of it). That turned the cutscene's 1,547 into
-one line: 1,471 of them belong to LAYER-2 VERBATIM runs — content no native producer reconstructs.
-TIER1 entities own 73.
+WHOSE tiles those are is the next question, and --seq is the attempt to answer it: given an fps60seq
+log from the SAME run, every moving tile is credited to the smallest run covering it (smallest,
+because the full-screen sky fill covers everything drawn in front of it).
+
+IT IS CURRENTLY REFUSED, and the owner tables that were once printed here have been retracted — see
+psxport issue 0120. The dump described the CAPTURED queue while the picture is drawn from the merged
+stream that replaces every reconstructed item, so the runs were not on the pixels; and the 16x16 tile
+statistic saturates (72% of pixels identical between consecutive real frames, but 88.7% of tiles hold
+at least one change), so nothing could score above chance anyway. The dump now describes the emitted
+stream, which is what made the true mapping beat its wrong-offset controls for the first time (1.32x
+vs 1.20x/0.93x), but 1.32x still is not enough to name an owner on a panning scene. mapping_verdict
+keeps the refusal, control and all, so the retracted tables cannot come back quietly.
 
 WHAT THAT CONTENT ACTUALLY DOES was got wrong here first, and the correction is the reason this tool
 splits the two endpoints. It does NOT replay from the previous queue: FramePresenter::capturedFrame()
@@ -215,14 +222,25 @@ def mapping_verdict(scores, minimum_lift=2.0):
                        for name, lift in sorted(lifts.items()))
     if chosen is None:
         return False, f"the chosen mapping could not be scored ({detail})"
-    if chosen < minimum_lift:
+    control = lifts.get("shifted")
+    # The control is the bar, not the constant: a weak measure that raises no mapping above 1.2 is
+    # not evidence the mapping is wrong, and a measure that puts the deliberately-wrong offset level
+    # with the real one is not evidence it is right.
+    if control is not None and chosen < control * 1.25:
+        return False, (f"the deliberately-wrong control mapping scores as well as the real one, so "
+                       f"the runs are not landing on the pixels ({detail})")
+    if control is None and chosen < minimum_lift:
         return False, (f"a tile inside a specific run is only {chosen:.2f}x as likely to have moved "
-                       f"as one inside none, so the runs are not landing on the pixels ({detail})")
-    best = max(lift for lift in lifts.values() if lift is not None)
+                       f"as one inside none, and there is no control to compare it to ({detail})")
+    candidates = {name: lift for name, lift in lifts.items()
+                  if name != "shifted" and lift is not None}
+    best = max(candidates.values()) if candidates else chosen
     if chosen < best * 0.9:
         return False, f"another offset explains the moving pixels better ({detail})"
     return True, (f"a tile inside a specific run is {chosen:.2f}x as likely to have moved as one "
-                  f"inside none ({detail})")
+                  f"inside none, against {control:.2f}x for a deliberately-wrong offset ({detail})"
+                  if control is not None else
+                  f"a tile inside a specific run is {chosen:.2f}x as likely to have moved ({detail})")
 
 
 def runs_bbox(runs_by_fence):
@@ -270,18 +288,18 @@ def selftest():
     The failure this guards is silent: owner_of returning the FIRST covering run instead of the
     smallest credits the full-screen sky fill for everything drawn in front of it, and every row but
     one goes to zero without anything looking wrong."""
-    log = ("[fps60seq] f7 t=0.500 captured n=3\n"
+    log = ("[fps60seq] f7 t=0.500 emitted n=3\n"
            "  rqcur layer=2 verbatim  n=2 seq=[0..1] producer=00000000 node0=00000000 "
            "x=[-320..641) y=[0..241)\n"
            "  rqcur layer=1 TIER1     n=9 seq=[2..10] producer=0000ABCD node0=800E7E80 "
            "x=[100..140) y=[100..140)\n"
-           "[fps60seq] f8 t=0.500 captured n=0\n"
+           "[fps60seq] f8 t=0.500 emitted n=0\n"
            # f9 is the negative the overlap question needs: a reconstructed run with NO verbatim
            # run anywhere near it. Without this fence, dropping the ownership filter entirely still
            # passes, because every other tile that a TIER1 run covers is under the full-screen
            # verbatim fill as well. Measured 2026-09-19: the filter was disconnected and the
            # selftest stayed green.
-           "[fps60seq] f9 t=0.500 captured n=1\n"
+           "[fps60seq] f9 t=0.500 emitted n=1\n"
            "  rqcur layer=1 TIER1     n=4 seq=[0..3] producer=0000BEEF node0=800E7E80 "
            "x=[10..50) y=[10..50)\n")
     import tempfile
@@ -332,6 +350,14 @@ def selftest():
           mapping_verdict({"display": (80, 100, 10, 100)})[0], True)
     check("a mapping where they predict nothing is refused",
           mapping_verdict({"display": (30, 100, 30, 100)})[0], False)
+    # The control decides, not the constant: the SAME 1.25x lift is a pass when a wrong offset
+    # scores 0.9 and a refusal when it scores 1.2. Without this pair the threshold is a guess.
+    check("a weak lift the control cannot match is accepted",
+          mapping_verdict({"display": (25, 100, 20, 100),
+                           "shifted": (18, 100, 20, 100)})[0], True)
+    check("a weak lift the control matches is refused",
+          mapping_verdict({"display": (25, 100, 20, 100),
+                           "shifted": (24, 100, 20, 100)})[0], False)
     check("a mapping another offset beats is refused",
           mapping_verdict({"display": (30, 100, 10, 100),
                            "raw": (90, 100, 10, 100)})[0], False)
@@ -348,9 +374,10 @@ def selftest():
         print("fps60_check selftest: FAIL")
         print("\n".join(failures))
         return 1
-    print("fps60_check selftest: PASS (14 checks: fence parsing, smallest-run wins, "
+    print("fps60_check selftest: PASS (16 checks: fence parsing, smallest-run wins, "
           "big-run-only, empty fence, out-of-range tile, verbatim overlap both ways, "
-          "producer kept apart from node, mapping verdict four ways, fill is not specific)")
+          "producer kept apart from node, mapping verdict six ways incl. a wrong-offset "
+          "control, fill is not specific)")
     return 0
 
 
@@ -416,7 +443,10 @@ def main():
     tier1_ahead = [0, 0]  # [verbatim also covers this tile, TIER1 runs only]
     # {offset name: [hits, total]} — how well each candidate mapping explains the moving pixels
     # per candidate: [moved inside a specific run, tiles inside one, moved outside, tiles outside]
-    mapping_scores = {"display": [0, 0, 0, 0], "raw": [0, 0, 0, 0]}
+    # "shifted" is a NEGATIVE CONTROL, not a candidate: the display mapping moved half a frame
+    # sideways and down, which cannot be right. It is what chance looks like on this data, and
+    # without it a lift of 1.25 cannot be told from a lift the measure is simply too weak to raise.
+    mapping_scores = {"display": [0, 0, 0, 0], "raw": [0, 0, 0, 0], "shifted": [0, 0, 0, 0]}
     attribution_refused = False
 
     for a, b, c in triples(frames):
@@ -452,7 +482,9 @@ def main():
                 # PREDICTS motion, which a wrong mapping cannot make it do.
                 fence_runs = sequence_runs.get(c[3], ())
                 moved = 1 if verdict != "STATIC" else 0
-                for name, (ox, oy) in (("display", origin), ("raw", (0, 0))):
+                candidates = (("display", origin), ("raw", (0, 0)),
+                              ("shifted", (origin[0] + w // 2, origin[1] + h // 2)))
+                for name, (ox, oy) in candidates:
                     base = 0 if covered_by_specific_run(fence_runs, tile[0] + ox, tile[1] + oy,
                                                         args.tile, w * h) else 2
                     mapping_scores[name][base] += moved

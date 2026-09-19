@@ -29,9 +29,14 @@
 
 namespace psxport::fps60 {
 
-// The screen rectangle a span of captured items covers, in the same pixel coordinates the presented
-// picture uses. Half-open: `x1`/`y1` are one past the rightmost/bottom-most vertex, so `width()` and
-// `height()` are pixel counts and an empty extent is zero-sized rather than one pixel wide.
+// The rectangle a span of items covers, in VRAM pixel coordinates — the space the rasterizer draws
+// in (tritex.vert: `i_pos` is "VRAM pixel coords (post draw-offset)"). It is NOT the dump's own
+// pixel coordinates: `gpu_vk_shot` writes the display region [s_last_sx, s_last_sy) sized
+// s_last_w x s_last_h, so a reader joining an extent to dumped pixels subtracts that origin, which
+// the shot line reports. This comment used to claim the two spaces were the same; they coincide
+// only for a title that displays at 0,0. Half-open: `x1`/`y1` are one past the rightmost/bottom-most
+// vertex, so `width()` and `height()` are pixel counts and an empty extent is zero-sized rather than
+// one pixel wide.
 //
 // WHY A RUN CARRIES ONE. `tools/fps60_check.py` reports the screen TILE that failed to interpolate;
 // this dump reports the PRODUCER of every verbatim run. Until the run carried an extent the two
@@ -62,8 +67,8 @@ struct ScreenExtent {
   }
 };
 
-// One maximal stretch of adjacent captured items that share a layer, an ownership answer, a painter
-// object and an entity node. `begin` and `end` index the captured frame, so a caller can reach the
+// One maximal stretch of adjacent items that share a layer, an ownership answer, a painter object
+// and an entity node. `begin` and `end` index the span that was grouped, so a caller can reach the
 // items themselves without this owner copying any. `extent` is the union of those items' screen
 // vertices, so a run answers both "whose prims are these" and "where on the screen were they".
 struct SequenceRun {
@@ -85,7 +90,15 @@ struct SequenceRun {
 // always returns false when no source is active. The result is empty only for an empty input, which
 // is what tells a reader that a frame captured nothing rather than that the grouping matched
 // nothing.
-void groupSequenceRuns(std::span<const RqItem> items,
+//
+// TAKES POINTERS because the span that matters is the one the presenter EMITS. Fps60::presentPass
+// merges the reconstructed sink over the captured queue — every item the scene source owns is
+// REPLACED before anything is rasterised — and that merged stream is a vector of pointers into two
+// different queues. Grouping the captured queue instead described items that were never drawn:
+// measured 2026-09-19 on Tomba! 2's outdoor replay, the captured queue reported 132 items whose
+// boxes covered 39% of the picture while the picture was 100% painted and its world visibly
+// interpolated, so the runs could not be joined to the pixels they were supposed to explain.
+void groupSequenceRuns(std::span<const RqItem *const> items,
                        const std::function<bool(const RqItem &)> &owned,
                        std::vector<SequenceRun> &runs);
 

@@ -55,8 +55,14 @@ RqItem &atInt(RqItem &target, int x, int y, int w, int h) {
 }
 
 std::vector<SequenceRun> group(const std::vector<RqItem> &items, const std::function<bool(const RqItem &)> &owned) {
+  // The grouper takes the EMITTED stream, which the presenter holds as pointers into two queues.
+  std::vector<const RqItem *> stream;
+  stream.reserve(items.size());
+  for (const RqItem &item : items) {
+    stream.push_back(&item);
+  }
   std::vector<SequenceRun> runs;
-  groupSequenceRuns(items, owned, runs);
+  groupSequenceRuns(stream, owned, runs);
   return runs;
 }
 

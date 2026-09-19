@@ -9,6 +9,7 @@
 #include "render_mode.h" // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
 #include "render_queue.h"
 #include <lucent/log.h>
+#include <span>
 #include <stdint.h>
 #include <stdlib.h>
 #include <utility>
@@ -87,15 +88,23 @@ static void rate_tick(RateDet *d, uint64_t set_hash) {
 namespace {
 const lucent::Channel sequenceChannel{"fps60seq"};
 
-void dumpSequenceRuns(CapturedFrameView frame, float t, const TemporalSceneSource *source) {
-  lucent::debug(sequenceChannel, "f{} t={:.3f} captured n={}", frame.fence, t, frame.items.size());
+// The EMITTED stream, not the captured queue. presentPass replaces every item the scene source owns
+// with the reconstruction before anything is rasterised, so the captured queue describes prims that
+// were never drawn — on Tomba! 2's outdoor replay it named 132 items covering 39% of a picture that
+// was fully painted and visibly interpolating. `stream` is what emitItemStream hands the rasterizer,
+// so its runs are the only ones a reader can join to pixels.
+void dumpSequenceRuns(uint64_t fence,
+                      float t,
+                      std::span<const RqItem *const> stream,
+                      const TemporalSceneSource *source) {
+  lucent::debug(sequenceChannel, "f{} t={:.3f} emitted n={}", fence, t, stream.size());
   // The painter object is part of the run key, so a verbatim run names the producer that emitted
   // it. Grouping by layer alone made "verbatim n=478" span every producer drawing into RQ_WORLD and
   // name none of them, which is the one thing a reader needs before choosing what to reconstruct
   // next.
   std::vector<psxport::fps60::SequenceRun> runs;
   psxport::fps60::groupSequenceRuns(
-      frame.items,
+      stream,
       [source](const RqItem &item) {
         return source != nullptr && source->owns(item);
       },
@@ -107,8 +116,8 @@ void dumpSequenceRuns(CapturedFrameView frame, float t, const TemporalSceneSourc
                   run.layer,
                   run.owned ? "TIER1" : "verbatim",
                   run.count(),
-                  frame.items[run.begin].seq,
-                  frame.items[run.end - 1].seq,
+                  stream[run.begin]->seq,
+                  stream[run.end - 1]->seq,
                   (uint32_t)run.painterObject,
                   run.dbgNode,
                   run.extent.x0,
@@ -229,9 +238,6 @@ void Fps60::presentPass(Core *c, float t, CapturedFrameView frame) {
   const bool tier1 = sceneSource_ && c->rsub.mode.enhancementsAllowed() &&
                      (active() || (t == 1.0f && sceneSource_->requiresEndpointReconstruction())) &&
                      sceneSource_->eligible(*c);
-  if (sequenceChannel) { // guards the queue scan, not a logging call
-    dumpSequenceRuns(frame, t, tier1 ? sceneSource_.get() : nullptr);
-  }
   if (tier1) {
     tier1Render(c, t);
   }
@@ -265,6 +271,9 @@ void Fps60::presentPass(Core *c, float t, CapturedFrameView frame) {
     } else {
       mPresentStream.push_back(&frame.items[ib++]);
     }
+  }
+  if (sequenceChannel) { // guards the queue scan, not a logging call
+    dumpSequenceRuns(frame.fence, t, mPresentStream, tier1 ? sceneSource_.get() : nullptr);
   }
   q.emitItemStream(c, mPresentStream);
 }
