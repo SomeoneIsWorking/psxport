@@ -112,12 +112,22 @@ checkout to drift.
   absolute paths (`/home/<user>/…`). Every game repo ships `tools/go_public.py` to audit history.
 - **Never write run artifacts to `/tmp`** — small RAM-backed tmpfs here. Use the repo's git-ignored
   `scratch/`, split by kind. Diagnose "disk quota exceeded" with `quota -s`, not `df`.
-- **`scratch/bin/` is the exception: it holds PROVISIONED INPUTS, not artifacts.** The runtime images
-  extracted from the user's disc live there, so a `scratch_gc.py --days 0` over a game repo deletes
-  them and the next gate refuses with "MAIN.EXE does not exist — NOTHING WAS RUN". Re-provision with
-  that title's tool (`tools/tomba2_provision.py --discdump external/psxport/build/tools/discdump
-  "$DISC"`); it re-authenticates every image, so nothing is lost but the minute it takes. Pass
-  `--keep 'bin/*'` when sweeping a game's scratch.
+- **Some `scratch/` subdirectories hold PROVISIONED INPUTS, not artifacts, and THE DIRECTORY IS NOT
+  THE SAME IN EVERY REPO.** The runtime images extracted from the user's disc live there, so a
+  `scratch_gc.py --days 0` over a game repo deletes them and the next run refuses. **Check the repo
+  before sweeping it**, because this line used to name only `bin/` and that is Tomba! 2's layout:
+
+  | repo | provisioned inputs | re-provision with |
+  |---|---|---|
+  | `Tomba2Engine` | `scratch/bin/` | `tools/tomba2_provision.py --discdump external/psxport/build/tools/discdump "$DISC"` |
+  | `spyro` | `scratch/assets/<title>/` | `tools/provision_title.py --title spyro1 --discdump external/psxport/build/tools/discdump "$DISC"` |
+
+  Measured 2026-09-20: a sweep carrying `--keep 'bin/*'`, taken straight from this line, removed
+  `scratch/assets/spyro1/SCUS_942.28` and the next drive died with `[boot:error] cannot read
+  .../scratch/assets/spyro1/SCUS_942.28: No such file or directory`. Nothing is lost but the minute
+  re-provisioning takes — it re-authenticates every image — but the refusal reads like a broken
+  port rather than a missing input, which is the part that costs time. Pass every provisioned path
+  this table names for the repo you are sweeping.
 
 ## Repo shape: one repo per ENGINE LINEAGE, multiple titles inside it. No third vendored layer
 
