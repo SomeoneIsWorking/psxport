@@ -4,7 +4,7 @@
 #include "game.h"                             // Game / GpuVkState (per-instance render state)
 #include "game_hooks_opt.h"                   // guarded optional fade-state reader
 #include "gpu_painter.h"                      // authored painter staging + focused GPU discriminator
-#include "gpu_vk_fadewatch.h"                 // `debug fadewatch` guest-state tap (extracted 2026-09-19)
+#include "gpu_vk_fadewatch.h"                 // `debug fadewatch` transition taps (extracted out of present)
 #include "gpu_vk_modulation_selftest.h"       // PSX texture*color modulation truncation through shipping shaders
 #include "gpu_vk_present_mode.h"              // preferred_present_mode — the sink must not stall the guest thread
 #include "gpu_vk_present_policy.h"            // present_rebuild_decision — when a present must rebuild the composite
@@ -14,6 +14,7 @@
 #include "gpu_vk_untextured_selftest.h"       // untextured G3 interpolation through the shipping opaque path
 #include "image_writer.h"                     // one checked RGB24 capture-file boundary
 #include "picture_announce.h"                 // per-Core `[wide] native picture:` line, reported on change
+#include "present_fade_state.h"               // the fade a present composites, resolved for this Core
 #include "present_plan.h"                     // plan_present — the presented picture, decided identically in both legs
 #include "render_substrate.h"                 // Render::stats (RenderStats — was g_dbg_world_quads)
 #include "wide_margin_plan.h"                 // renderer-only coverage for host-visible VRAM extension
@@ -2182,47 +2183,10 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
           s_dbg_semi_c);
     }
   }
-  // `debug fadewatch`: per-present log of the ScreenFade state (the PC-native subsystem that owns fade).
-  // A game that owns no fade subsystem leaves this hook null — the seam documents null hooks as
-  // tolerated, and other call sites guard. These did not, so presenting from such a game jumped to
-  // address 0. It stayed hidden because the reference consumer always supplies the hook; a second
-  // consumer (Spyro, whose Phase-0 hook table is almost entirely null) segfaulted on its first
-  // present. Default to "no fade" — zeroed, i.e. mode 0 / rgb 0 — which is exactly the state a game
-  // without a fade subsystem is in.
-  const FadeState fade = game_render_fade_state(&game->core, game->core.hooks);
-  static const lucent::Channel fadewatch_ch{"fadewatch"};
-  if (fadewatch_ch) {
-    GpuDevice &gd = gdev();
-    int &lastmode = gd.s_fw_lastmode;
-    uint8_t &lr = gd.s_fw_lr;
-    uint8_t &lg = gd.s_fw_lg;
-    uint8_t &lb = gd.s_fw_lb;
-    int &lsx = gd.s_fw_lsx;
-    int &lsy = gd.s_fw_lsy;
-    int &lw = gd.s_fw_lw;
-    int &lh = gd.s_fw_lh;
-    if (fade.mode != lastmode || fade.r != lr || fade.g != lg || fade.b != lb || sx != lsx || sy != lsy || w != lw ||
-        h != lh) {
-      lucent::debug("fadewatch",
-                    "present disp={},{} {}x{} fade mode={} rgb=({},{},{})",
-                    sx,
-                    sy,
-                    w,
-                    h,
-                    fade.mode,
-                    fade.r,
-                    fade.g,
-                    fade.b);
-      lastmode = fade.mode;
-      lr = fade.r;
-      lg = fade.g;
-      lb = fade.b;
-      lsx = sx;
-      lsy = sy;
-      lw = w;
-      lh = h;
-    }
-  }
+  // The fade THIS present composites — resolved against the previous logic frame's endpoint, so an
+  // in-between present is not a whole frame ahead of the picture under it (see present_fade_state.h).
+  const FadeState fade = present_fade_state(&game->core);
+  gpu_vk_fadewatch_present(fade, sx, sy, w, h);
   SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
   GPUCHK(cmd, "AcquireGPUCommandBuffer");
 
@@ -2827,7 +2791,7 @@ void GpuVkState::shot(const char *path) {
     lucent::warn("gpu_shot", "GPU not active — NOTHING captured");
     return;
   }
-  FadeState f = game_render_fade_state(&game->core, game->core.hooks);
+  FadeState f = present_fade_state(&game->core);
   const bool wrote = dump_to(*this, path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
   if (!wrote) {
     lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)");
@@ -2852,7 +2816,7 @@ void gpu_vk_shot_region(Core *core, const char *path, int sx, int sy, int w, int
   if (!gpu_vk_enabled() || !s_inited) {
     return;
   }
-  FadeState f = game_render_fade_state(core, core ? core->hooks : nullptr);
+  FadeState f = present_fade_state(core);
   if (!dump_to(core->game->gpu_vk, path, sx, sy, w, h, f.mode, f.r, f.g, f.b)) {
     lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)");
     return;
@@ -3017,7 +2981,7 @@ void GpuVkState::frame_end(const uint16_t *svram, int frame) {
   if (s_preseq_left > 0) {
     char p[192];
     snprintf(p, sizeof p, "%s/p%04d.ppm", s_preseq_dir, s_preseq_idx++);
-    FadeState f = game_render_fade_state(&game->core, game->core.hooks);
+    FadeState f = present_fade_state(&game->core);
     dump_to(*this, p, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
     if (--s_preseq_left == 0) {
       lucent::info("preseq", "done: {} frames -> {}", s_preseq_idx, s_preseq_dir);

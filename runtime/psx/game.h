@@ -6,9 +6,10 @@
 #include "cd.h"        // class Cd — native CD subsystem (sync reads + libcd HLE + music state)
 #include "cdc_state.h" // CdcState — per-instance native CD-controller register model (cdc_native.c)
 #include "core.h"
-#include "dbg_server.h"    // class DbgServer — live TCP debug endpoint (127.0.0.1)
-#include "disc.h"          // DiscState — native by-LBA CHD disc backend (disc.c)
-#include "dma_callbacks.h" // DmaCallbackRegistry — direct-runtime DMACallback state
+#include "dbg_server.h"         // class DbgServer — live TCP debug endpoint (127.0.0.1)
+#include "disc.h"               // DiscState — native by-LBA CHD disc backend (disc.c)
+#include "dma_callbacks.h"      // DmaCallbackRegistry — direct-runtime DMACallback state
+#include "fade_interpolation.h" // psxport::fade::PresentFade — the present-time fade owner
 #include "frame_pacer.h"
 #include "frame_presenter.h"             // FramePresenter — neutral current-frame capture/present/cadence fence
 #include "game_runtime.h"                // GameRuntime + per-Game polymorphic behavior products
@@ -62,15 +63,19 @@ public:
   Sio0 sio; // controller port (SIO0) hardware: the pad protocol and its transfer/ack deadlines
   DmaCallbackRegistry dmaCallbacks;
   Pad pad;
-  Repl repl;                           // interactive REPL driver + title-consumed requests (repl.cpp)
-  Fmv fmv;                             // native .STR movie player (native_fmv.cpp)
-  BootStub stub;                       // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
-  PcScheduler pcSched;                 // native cooperative task scheduler (game/core/pc_scheduler.cpp)
-  GpuState gpu;                        // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
-  GpuVkState gpu_vk;                   // Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
-  GpuDevice gpu_dev;                   // SDL3 GPU host device/window/pipelines (ONE per process; first Game claims it)
-  RenderQueue rq;                      // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
-  FramePresenter presentation;         // non-temporal current-frame fence, present and pacing owner
+  Repl repl;                   // interactive REPL driver + title-consumed requests (repl.cpp)
+  Fmv fmv;                     // native .STR movie player (native_fmv.cpp)
+  BootStub stub;               // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
+  PcScheduler pcSched;         // native cooperative task scheduler (game/core/pc_scheduler.cpp)
+  GpuState gpu;                // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
+  GpuVkState gpu_vk;           // Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
+  GpuDevice gpu_dev;           // SDL3 GPU host device/window/pipelines (ONE per process; first Game claims it)
+  RenderQueue rq;              // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
+  FramePresenter presentation; // non-temporal current-frame fence, present and pacing owner
+  // The screen fade of the present in flight. A fade is a present-time composite rather than a
+  // queue item, so it needs its own endpoints; it lives here and not on the interpolation tier
+  // because a product without one still composites a fade. See fade_interpolation.h.
+  psxport::fade::PresentFade presentFade;
   GuestPresentationState guestDisplay; // latched only when the title publishes matching guest projection
   // Tier-1 capture-target redirect (docs/fps60-rework.md "Object-tier attempt ... Why Tier 1 isn't
   // built"): non-null ONLY while Fps60::present_vk re-invokes Render::terrainRenderAll() at the interp

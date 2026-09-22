@@ -3,10 +3,11 @@
 #include "core.h"
 #include "fps60_gpu_present.h"
 #include "fps60_sequence_runs.h"
-#include "game.h"        // Game-owned optional temporal product and RenderQueue
-#include "mods.h"        // Mods (game->mods.fps60)
-#include "proj_params.h" // ProjParams — the camera's projection constants + Snapshot save/restore
-#include "render_mode.h" // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
+#include "game.h"           // Game-owned optional temporal product and RenderQueue
+#include "game_hooks_opt.h" // game_render_fade_state — the title's current fade, the endpoint source
+#include "mods.h"           // Mods (game->mods.fps60)
+#include "proj_params.h"    // ProjParams — the camera's projection constants + Snapshot save/restore
+#include "render_mode.h"    // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
 #include "render_queue.h"
 #include <lucent/log.h>
 #include <span>
@@ -151,6 +152,7 @@ void Fps60::tier1Render(Core *core, float t) {
     mSink->game = game;
   }
   mSink->reset();
+  mObjLerp.reset();
   {
     ReconstructionScope scope(*core, *mSink);
     sceneSource_->reconstruct(*core, t);
@@ -180,10 +182,24 @@ void Fps60::present(FramePresentationBackend &backend, Core &core, CapturedFrame
   mFrameGeom = 0;
 }
 
+namespace {
+// The three fade channels as one 0xRRGGBB word, so a per-present diagnostic line carries the whole
+// endpoint without six fields of noise. A previous mode of -1 in that line means "no prev yet".
+uint32_t fade_rgb(const FadeState &f) {
+  return (static_cast<uint32_t>(f.r) << 16) | (static_cast<uint32_t>(f.g) << 8) | static_cast<uint32_t>(f.b);
+}
+} // namespace
+
 // Both slots use the source's same reconstruction and captured-queue merge; only t differs.
 void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFrameView frame) {
   Core *c = core;
   RenderQueue &q = c->game->rq;
+
+  // Once per LOGIC frame, before either present runs: roll the fade endpoints. This is the frame
+  // boundary for every consumer, including one whose frame driver calls presentation.commit itself
+  // rather than going through Fps60::frame_commit (measured: Tomba! 2 does, so a capture there
+  // never ran at all and the endpoints stayed zero).
+  c->game->presentFade.capture(game_render_fade_state(c, c->hooks));
 
   const int tforce = cfg_int("PSXPORT_FPS60_TFORCE", -1);
   const float tInterp = (tforce == 0) ? 0.0f : (tforce == 1) ? 1.0f : 0.5f;
@@ -201,12 +217,21 @@ void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFr
     // is drawn in the in-between present at the position the next real frame will show it. n is
     // that captured queue, tier1 is how much of it was replaced by reconstruction.
     lucent::debug("fps60",
-                  "f{} slotA: in-between over Q[N] n={} tier1={} backdrop={} t={:.3f}",
+                  "f{} slotA: in-between over Q[N] n={} tier1={} backdrop={} t={:.3f} "
+                  "objs={} lerped={} noprev={} uncaptured={} fade={}->{} 0x{:06X}->0x{:06X}",
                   frame.fence,
                   frame.items.size(),
                   mTier1PrimsThisFrame,
                   mBackdropPrimsThisFrame,
-                  mT);
+                  mT,
+                  mObjLerp.total(),
+                  mObjLerp.lerped,
+                  mObjLerp.noPrev,
+                  mObjLerp.uncaptured,
+                  c->game->presentFade.havePrevious() ? c->game->presentFade.previous().mode : -1,
+                  c->game->presentFade.current().mode,
+                  fade_rgb(c->game->presentFade.previous()),
+                  fade_rgb(c->game->presentFade.current()));
     backend.pace(mCommitGuestFields, 2);
   }
 
@@ -233,6 +258,7 @@ void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFr
 void Fps60::presentPass(Core *c, float t, CapturedFrameView frame) {
   RenderQueue &q = c->game->rq;
   mT = t;
+  c->game->presentFade.setFactor(t);
   mTier1PrimsThisFrame = 0;
   mBackdropPrimsThisFrame = 0;
   const bool tier1 = sceneSource_ && c->rsub.mode.enhancementsAllowed() &&

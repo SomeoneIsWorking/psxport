@@ -79,6 +79,25 @@ struct Fps60 final : TemporalFramePresentation {
   };
   std::unordered_map<uint32_t, Fps60Obj> mObjCur, mObjPrev;
   bool mObjOverrideOn = false;
+  // WHAT THE INTERP PRESENT COULD ACTUALLY LERP, with its denominator. projObj has three outcomes and
+  // two of them draw the object at its CURRENT transform, which is the next real frame's position a
+  // whole frame early. Without these counts a scene reconstructing hundreds of prims and a scene
+  // lerping none of them print the same `tier1=` number, and the picture cannot tell them apart
+  // either (measured: Tomba! 2's opening narration, 233 prims reconstructed per present, every
+  // changed pixel at the next endpoint whatever t is).
+  struct ObjLerpCensus {
+    uint32_t lerped = 0;     // prev and cur both present: the object genuinely interpolated
+    uint32_t noPrev = 0;     // captured this frame, but the previous frame never drew this cmd
+    uint32_t uncaptured = 0; // not in mObjCur at all — fell through to a live guest read
+    uint32_t total() const {
+      return lerped + noPrev + uncaptured;
+    }
+    void reset() {
+      lerped = noPrev = uncaptured = 0;
+    }
+  };
+  ObjLerpCensus mObjLerp;
+
   // Capture-only producers omit their guest-time draw even with interpolation disabled. The adapter
   // therefore requests a current-endpoint reconstruction for those frames as well.
   bool mWorldCaptureOnly = false;

@@ -229,6 +229,7 @@ void Fps60::projObj(Core *c, uint32_t cmd, float Robj[3][3], float Tobj[3]) {
       auto pp = mObjPrev.find(cmd);
       const Fps60Obj &C = pc->second;
       if (pp != mObjPrev.end()) {
+        ++mObjLerp.lerped;
         const Fps60Obj &P = pp->second;
         for (int i = 0; i < 3; i++) {
           for (int j = 0; j < 3; j++) {
@@ -237,6 +238,7 @@ void Fps60::projObj(Core *c, uint32_t cmd, float Robj[3][3], float Tobj[3]) {
           Tobj[i] = P.T[i] + (C.T[i] - P.T[i]) * mT;
         }
       } else { // new object this frame — no prev to lerp from, use cur
+        ++mObjLerp.noPrev;
         for (int i = 0; i < 3; i++) {
           for (int j = 0; j < 3; j++) {
             Robj[i][j] = C.R[i][j];
@@ -246,6 +248,7 @@ void Fps60::projObj(Core *c, uint32_t cmd, float Robj[3][3], float Tobj[3]) {
       }
       return;
     }
+    ++mObjLerp.uncaptured;
     // cmd not captured this frame (shouldn't happen for a live-walked object) — fall through to a live read.
   }
   // Real frame: read live from guest RAM (the exact read projComposeObject used to do inline).

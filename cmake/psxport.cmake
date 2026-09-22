@@ -166,6 +166,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
   ${PSXPORT_ROOT}/runtime/psx/game_hooks_opt.cpp
   ${PSXPORT_ROOT}/runtime/psx/overlay_glue.cpp
+  ${PSXPORT_ROOT}/runtime/psx/fade_interpolation.cpp # how two screen-fade endpoints resolve at t
+  ${PSXPORT_ROOT}/runtime/psx/present_fade_state.cpp  # the fade a present composites, resolved for one Core
   ${PSXPORT_ROOT}/runtime/psx/fps60_game_hooks.cpp  # guarded callbacks used only by temporal presentation
   ${PSXPORT_ROOT}/runtime/psx/fps60_gpu_present.cpp # renderer pass used only by temporal presentation
   ${PSXPORT_ROOT}/runtime/psx/fps60_legacy_scene_source.cpp # explicit hook/capture adapter

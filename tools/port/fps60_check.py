@@ -411,7 +411,7 @@ def forced_factor_report(product_dir, forced_dir, out=print):
         used += 1
         changed = sum(got)
         if changed:
-            per_triple.append((got[1] / changed, b[3], _mean_abs_diff(ia, ic)))
+            per_triple.append((got[1] / changed, b[3], _mean_abs_diff(ia, ic), changed))
 
     if used == 0:
         out(f"REFUSED: no real/interp/real triple of {product_dir} has a matching in-between "
@@ -444,8 +444,8 @@ def forced_factor_report(product_dir, forced_dir, out=print):
         out(f"  per triple: {clean} of {len(per_triple)} are <=1% unresponsive, {len(broken)} are "
             f">=99%, median {per_triple[len(per_triple) // 2][0] * 100:.2f}%")
         worst = per_triple[-1]
-        out(f"    worst triple: fence {worst[1]} at {worst[0] * 100:.2f}% unresponsive, endpoints "
-            f"{worst[2]:.1f} apart")
+        out(f"    worst triple: fence {worst[1]} at {worst[0] * 100:.2f}% unresponsive of "
+            f"{worst[3]} changed pixel(s), endpoints {worst[2]:.1f} apart")
         if broken:
             cuts = [t for t in broken if t[2] > CUT_MAD]
             same = [t for t in broken if t[2] <= CUT_MAD]
@@ -453,9 +453,16 @@ def forced_factor_report(product_dir, forced_dir, out=print):
                 f"DISCONTINUITY (endpoints more than {CUT_MAD:g} apart: a cut, a load or a "
                 f"screen-filling fade step), where refusing to interpolate is correct")
             if same:
+                # WITH ITS DENOMINATOR. A 100% share over 50 pixels and over 50,000 are different
+                # findings, and a share alone cannot tell them apart: a nearly black fade-in frame
+                # has almost nothing changing, so every pixel that does change carries the whole
+                # percentage. Report the changed-pixel count alongside it or the verdict overstates.
+                px = sorted(t[3] for t in same)
                 out(f"    and {len(same)} are CONTINUOUS and still did not respond — the defect, at "
                     f"fence(s) " + ", ".join(str(t[1]) for t in sorted(same, key=lambda t: t[1])[:8])
                     + (f" and {len(same) - 8} more" if len(same) > 8 else ""))
+                out(f"      those cover {sum(px)} changed pixel(s): median {px[len(px) // 2]} per "
+                    f"triple, smallest {px[0]}, largest {px[-1]}, against {w * h} in a frame")
             else:
                 out(f"    and none is continuous, so nothing here is a failure to interpolate")
         if broken and clean:
@@ -552,6 +559,13 @@ def _forced_factor_selftest(check):
         check("a snap on continuous content is a defect",
               "1 are CONTINUOUS and still did not respond — the defect, at fence(s) 100" in text,
               True)
+        # The share needs its denominator beside it or a nearly-black frame reads as a whole-screen
+        # defect; the box is 3x4 at two positions, so 24 pixels changed out of 48x24.
+        check("the defect carries its denominator",
+              "those cover 24 changed pixel(s): median 24 per triple, smallest 24, largest 24, "
+              "against 1152 in a frame" in text, True)
+        check("the worst triple carries it too",
+              "at 100.00% unresponsive of 24 changed pixel(s)" in text, True)
         check("and is not filed as a cut", "0 are across a DISCONTINUITY" in text, True)
         check("fence runs collapse", _fence_runs([1, 2, 3, 9, 20, 21]),
               "6 fence(s) in 3 run(s): 1..3, 9, 20..21")
@@ -736,7 +750,7 @@ def selftest():
         print("fps60_check selftest: FAIL")
         print("\n".join(failures))
         return 1
-    print("fps60_check selftest: PASS (41 checks: fence parsing, smallest-run wins, "
+    print("fps60_check selftest: PASS (43 checks: fence parsing, smallest-run wins, "
           "big-run-only, empty fence, out-of-range tile, verbatim overlap both ways, "
           "producer kept apart from node, mapping verdict six ways incl. a wrong-offset "
           "control, fill is not specific; forced-factor responds/snaps/still/drifted/"
