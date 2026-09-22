@@ -141,6 +141,7 @@ NativeProjectedVertex project_transformed_mode(const RawViewVertex &transformed,
 
   const int64_t depth_cue = (int64_t)projection.dqb + (int64_t)projection.dqa * ratio;
   check_mac0_overflow(depth_cue, out.flags);
+  out.mac0 = (int32_t)depth_cue;
   const int32_t ir0 = (int32_t)(depth_cue >> 12);
   if (ir0 < 0 || ir0 > 4096) {
     out.flags |= 1u << 12;

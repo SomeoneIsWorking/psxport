@@ -57,6 +57,13 @@ struct NativeProjectedVertex {
   std::array<int64_t, 3> raw_view_fixed{}; // signed wrapped 44-bit, 12 fractional bits
   std::array<float, 3> raw_view{};
   std::array<int32_t, 3> ir{};
+  // MAC0 after RTPS: the depth cue DQB + DQA * (H / SZ3), as the 32-bit register holds it. It is
+  // the factor a screen-space sprite scales its extents by, so a producer that sizes a billboard
+  // from depth reads it here instead of re-running the divide. The REGISTER, not the derived IR0:
+  // hardware clamps the RTPS-written IR0 to 0..1000h, and a guest is free to compute its own from
+  // MAC0 without that clamp — Spyro's particle renderer does exactly that (`mfc2 MAC0 / srl 12 /
+  // mtc2 IR0`), so handing out a clamped value would silently disagree on the vertices that matter.
+  int32_t mac0 = 0;
   uint16_t sz = 0;
   int16_t sx = 0;
   int16_t sy = 0;

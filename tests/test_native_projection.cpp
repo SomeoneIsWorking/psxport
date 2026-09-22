@@ -16,7 +16,7 @@ using namespace psxport::native_projection;
 struct CompareResult {
   unsigned compared = 0;
   unsigned mismatched = 0;
-  unsigned first = 10;
+  unsigned first = 11;
 };
 
 struct FractionalExpected {
@@ -47,7 +47,7 @@ static unsigned compare_fractional(const NativeProjectedVertex &actual, const Fr
 }
 
 static CompareResult compare(const NativeProjectedVertex &native, const GteRegs &guest, unsigned shift = 12) {
-  const std::array<int64_t, 10> expected = {
+  const std::array<int64_t, 11> expected = {
       (int16_t)guest.REG[9],
       (int16_t)guest.REG[10],
       (int16_t)guest.REG[11],
@@ -58,8 +58,12 @@ static CompareResult compare(const NativeProjectedVertex &native, const GteRegs 
       (int16_t)guest.REG[14],
       (int16_t)(guest.REG[14] >> 16),
       guest.FLAGS,
+      // MAC0 itself, not the clamped IR0 the hardware derives from it. A producer sizing a sprite
+      // from depth reads the register, the way Spyro's particle renderer does; comparing against
+      // REG[8] would agree on every ordinary vertex and hide exactly the case that matters.
+      (int32_t)guest.REG[24],
   };
-  const std::array<int64_t, 10> actual = {
+  const std::array<int64_t, 11> actual = {
       native.ir[0],
       native.ir[1],
       native.ir[2],
@@ -70,6 +74,7 @@ static CompareResult compare(const NativeProjectedVertex &native, const GteRegs 
       native.sx,
       native.sy,
       native.flags,
+      native.mac0,
   };
   CompareResult result{};
   for (unsigned i = 0; i < actual.size(); ++i) {
@@ -121,7 +126,7 @@ static void check_diagnostic_mode(const FixedAffine &affine,
   CHECK(GTE_ExecuteIsolated(&guest, insn) >= 0);
   const NativeProjectedVertex native = detail::project_gte_mode(affine, projection, vertex, shift, limit_mode);
   const CompareResult result = compare(native, guest, shift);
-  CHECK_EQ(result.compared, 10u);
+  CHECK_EQ(result.compared, 11u);
   CHECK_EQ(result.mismatched, 0u);
 }
 
@@ -130,7 +135,7 @@ static void check_case(const FixedAffine &affine, const ProjectionParams &projec
   CHECK(GTE_ExecuteIsolated(&guest, 0x4a180001u) >= 0);
   const NativeProjectedVertex native = project(affine, projection, vertex);
   const CompareResult result = compare(native, guest);
-  CHECK_EQ(result.compared, 10u);
+  CHECK_EQ(result.compared, 11u);
   CHECK_EQ(result.mismatched, 0u);
   const auto raw = transform(affine, vertex);
   CHECK(same_projection(project_transformed(raw, projection), native));
@@ -184,9 +189,18 @@ static void test_forced_mismatch_other_answer(void) {
   CHECK_EQ(compare(native, guest).mismatched, 0u);
   ++native.sx;
   const CompareResult corrupt = compare(native, guest);
-  CHECK_EQ(corrupt.compared, 10u);
+  CHECK_EQ(corrupt.compared, 11u);
   CHECK_EQ(corrupt.mismatched, 1u);
   CHECK_EQ(corrupt.first, 7u);
+
+  // The depth-cue channel needs its own forced mismatch, or a producer sizing a sprite from MAC0
+  // would be reading a value nothing in this comparison ever looked at.
+  NativeProjectedVertex depth = project(affine, projection, vertex);
+  ++depth.mac0;
+  const CompareResult corrupt_depth = compare(depth, guest);
+  CHECK_EQ(corrupt_depth.compared, 11u);
+  CHECK_EQ(corrupt_depth.mismatched, 1u);
+  CHECK_EQ(corrupt_depth.first, 10u);
 }
 
 static void test_flag_output_and_negative_control(void) {
@@ -209,7 +223,7 @@ static void test_flag_output_and_negative_control(void) {
 
   clipped.flags ^= 1u << 17;
   const CompareResult corrupt = compare(clipped, clipped_guest);
-  CHECK_EQ(corrupt.compared, 10u);
+  CHECK_EQ(corrupt.compared, 11u);
   CHECK_EQ(corrupt.mismatched, 1u);
   CHECK_EQ(corrupt.first, 9u);
 }
