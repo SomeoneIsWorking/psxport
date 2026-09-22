@@ -54,12 +54,20 @@ returns the CURRENT fence's items and both presents run over it, so an unreconst
 in the in-between present at the position the NEXT real frame will show it — a whole frame early, not
 a frame late. It reads AHEAD, not STALE.
 
-Measured 2026-09-19 on Spyro 1, 238 gameplay triples, by forcing the interpolation factor
-(PSXPORT_FPS60_TFORCE=0) over the same deterministic route: 105,836 tiles moved to the previous
-endpoint, and the forward-snapping population did not move at all — 5,617 at t=0.5 against 5,542 at
-t=0.0, matching owner by owner to within a few tiles. Content that does not respond to t is not being
-interpolated. That is the discriminator to reach for when a defect needs a cause, and it needs no new
-instrument: run the same capture twice with the factor forced.
+THE DISCRIMINATOR THAT SURVIVES ALL OF THAT is --forced, and it is the mode to reach for when a
+defect needs a cause. Run the same deterministic route twice, once at the product's own factor and
+once with PSXPORT_FPS60_TFORCE=0, and ask every pixel whose two real endpoints differ WHICH endpoint
+it landed on. It needs no attribution, no run extents and no mapping between renderer space and
+pixels. Measured 2026-09-22:
+
+  Spyro 1, gameplay at 16:9, 81 triples   99.94% responded to t · 0.03% did not · all 81 triples <=1%
+  Tomba! 2, gameplay, 299 triples         96.35% responded · 2.19% did not · no triple >=99%
+  Tomba! 2, opening cutscene, 247 triples 64.66% responded · 30.21% did not · 66 CONTINUOUS triples
+                                          wholly unresponsive (Tomba2Engine issue 0021)
+
+Report the whole capture as one number and those three read as one blurred answer, which is why this
+mode splits per triple and separates a discontinuity from continuous content: refusing to interpolate
+across a cut is correct, and a capture spanning menus, a cutscene and gameplay is full of them.
 
 USAGE (from a consuming game, where external/psxport is the framework)
   PSXPORT_DEBUG=fps60dump ... <the game binary> ...   # capture (cap 600 files)
@@ -68,6 +76,7 @@ USAGE (from a consuming game, where external/psxport is the framework)
   external/psxport/tools/port/fps60_check.py --dir scratch/framedump --tile 16 --top 12
   external/psxport/tools/port/fps60_check.py --dir scratch/framedump --seq scratch/seq.log
   external/psxport/tools/port/fps60_check.py --triple f001234    # one triple, with a tile map
+  external/psxport/tools/port/fps60_check.py --dir <product> --forced <t=0 capture>
   external/psxport/tools/port/fps60_check.py --selftest          # the attribution's own fixtures
 
 Filenames come from Fps60::dumpPresent: scratch/framedump/f<fence>_<seq>_<real|interp>.png.
@@ -282,6 +291,357 @@ def owner_of(runs, tx, ty, tile):
     return best
 
 
+
+# ---------------------------------------------------------------------------------------------
+# Did the in-between present RESPOND to the interpolation factor?
+# ---------------------------------------------------------------------------------------------
+#
+# The tile classification above asks where a region SITS. This asks something the single capture
+# cannot: whether it MOVES when the factor does. Run the same deterministic route twice, once at
+# the product's own factor and once with PSXPORT_FPS60_TFORCE=0, and every pixel whose two real
+# endpoints differ has to answer for itself.
+#
+# A pixel that is interpolated sits at the PREVIOUS endpoint when the factor is forced to 0. One
+# that is not interpolated is drawn from the current update's queue in both presents, so it sits
+# at the NEXT endpoint whatever the factor is: a whole frame early, every frame, unmoved by t.
+#
+# This needs no attribution, no run extents and no mapping between renderer space and pixels, which
+# is why it survives psxport issue 0120. It replaces an earlier two-way version that asked only
+# whether the two runs DIFFER at a pixel: measured on Spyro 1 that read 33% invariant and spread
+# evenly over the screen, because a pixel can land on the same colour at both factors. Asking WHICH
+# endpoint it landed on instead read 0.03%, concentrated in one region.
+
+FORCED_BANDS = 12
+# Above this mean per-pixel channel difference the two real endpoints are not the same shot. A cut,
+# a scene load and a screen-filling fade step all land here, and declining to interpolate across one
+# is CORRECT: interpolation blends matching source geometry with explicit provenance, and across a
+# discontinuity there is no match to blend. Only a continuous triple that still failed to respond is
+# a defect, so the two populations are never reported as one number.
+CUT_MAD = 24.0
+
+
+def _changed_pixel_verdicts(pa, pc, p0, w, h, at_next_counts):
+    """(previous, next, neither) over pixels whose two real endpoints differ."""
+    prev = nxt = neither = 0
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            va, vc = pa[x, y], pc[x, y]
+            if va == vc:
+                continue
+            v0 = p0[x, y]
+            if v0 == va:
+                prev += 1
+            elif v0 == vc:
+                nxt += 1
+                at_next_counts[row + x] += 1
+            else:
+                neither += 1
+    return prev, nxt, neither
+
+
+
+def _mean_abs_diff(a, b):
+    """Mean per-pixel channel difference between two frames — how far apart the endpoints are."""
+    return ImageStat.Stat(ImageChops.difference(a, b)).mean[0]
+
+
+def _fence_runs(fences, cap=8):
+    """"12..40, 77, 903..910" — contiguous fence runs, so a stretch reads as a stretch."""
+    runs = []
+    for f in fences:
+        if runs and f == runs[-1][1] + 1:
+            runs[-1][1] = f
+        else:
+            runs.append([f, f])
+    shown = ", ".join(f"{a}" if a == b else f"{a}..{b}" for a, b in runs[:cap])
+    if len(runs) > cap:
+        shown += f", and {len(runs) - cap} more run(s)"
+    return f"{len(fences)} fence(s) in {len(runs)} run(s): {shown}"
+
+
+def forced_factor_report(product_dir, forced_dir, out=print):
+    """Compare a product-factor dump against a forced-factor dump of the SAME route."""
+    for d in (product_dir, forced_dir):
+        if not os.path.isdir(d):
+            out(f"REFUSED: no capture dir {d}. NOTHING WAS COMPARED, and this is not a pass.")
+            return 2
+    product = load_frames(product_dir)
+    forced = {(f[3], f[0], f[1]): f[2] for f in load_frames(forced_dir)}
+
+    # THE CONTROL, and it is not optional: the factor must reach only the in-between present. If a
+    # single real frame differs between the runs, the route drifted and every number below is
+    # comparing two different journeys.
+    checked = drifted = 0
+    for fence, seq, kind, path in [(f[3], f[0], f[1], f[2]) for f in product if f[1] == "real"]:
+        other = forced.get((fence, seq, kind))
+        if other is None:
+            continue
+        checked += 1
+        with open(path, "rb") as a, open(other, "rb") as b:
+            if a.read() != b.read():
+                drifted += 1
+    if checked == 0:
+        out(f"REFUSED: {product_dir} and {forced_dir} share no real frame by fence and sequence, "
+            f"so they are not two runs of one route. NOTHING WAS COMPARED.")
+        return 2
+    if drifted:
+        out(f"REFUSED: {drifted} of {checked} real frames differ between the two runs, so the "
+            f"route drifted and the interpolation factor is not the only thing that changed. "
+            f"NOTHING WAS COMPARED.")
+        return 2
+
+    w = h = None
+    at_next = None
+    totals = [0, 0, 0]
+    used = 0
+    per_triple = []  # (share of changed pixels that did NOT respond, fence)
+    for a, b, c in triples(product):
+        other = forced.get((b[3], b[0], b[1]))
+        if other is None:
+            continue
+        ia, ic, i0 = (Image.open(a[2]).convert("RGB"), Image.open(c[2]).convert("RGB"),
+                      Image.open(other).convert("RGB"))
+        if w is None:
+            w, h = ia.size
+            at_next = [0] * (w * h)
+        got = _changed_pixel_verdicts(ia.load(), ic.load(), i0.load(), w, h, at_next)
+        for i in range(3):
+            totals[i] += got[i]
+        used += 1
+        changed = sum(got)
+        if changed:
+            per_triple.append((got[1] / changed, b[3], _mean_abs_diff(ia, ic)))
+
+    if used == 0:
+        out(f"REFUSED: no real/interp/real triple of {product_dir} has a matching in-between "
+            f"frame in {forced_dir}. NOTHING WAS COMPARED.")
+        return 2
+    total = sum(totals)
+    if total == 0:
+        out(f"REFUSED: across {used} triples no pixel changed between the two real endpoints, so "
+            f"nothing in this capture could have been interpolated either way. This is a still "
+            f"scene, not a passing one. NOTHING WAS MEASURED.")
+        return 2
+
+    prev, nxt, neither = totals
+    out(f"{used} triples, {w}x{h}, real frames identical across both runs: {checked}/{checked}")
+    out(f"  responded to t (at the PREVIOUS endpoint when forced) : {prev:9d} "
+        f"({100.0 * prev / total:5.2f}%)")
+    out(f"  did NOT respond (at the NEXT endpoint whatever t is)   : {nxt:9d} "
+        f"({100.0 * nxt / total:5.2f}%)")
+    out(f"  neither endpoint (partial coverage, blending)          : {neither:9d} "
+        f"({100.0 * neither / total:5.2f}%)")
+
+    # WHEN, not only where. A capture that spans menus, a cutscene and gameplay can average 30%
+    # unresponsive out of a handful of wholly unresponsive triples and a majority of clean ones, and
+    # the spatial bands cannot tell those two apart: content that is never interpolated for one
+    # PHASE of a run spreads over the whole screen exactly like a picture that never interpolates.
+    if per_triple:
+        per_triple.sort()
+        clean = sum(1 for t in per_triple if t[0] <= 0.01)
+        broken = [t for t in per_triple if t[0] >= 0.99]
+        out(f"  per triple: {clean} of {len(per_triple)} are <=1% unresponsive, {len(broken)} are "
+            f">=99%, median {per_triple[len(per_triple) // 2][0] * 100:.2f}%")
+        worst = per_triple[-1]
+        out(f"    worst triple: fence {worst[1]} at {worst[0] * 100:.2f}% unresponsive, endpoints "
+            f"{worst[2]:.1f} apart")
+        if broken:
+            cuts = [t for t in broken if t[2] > CUT_MAD]
+            same = [t for t in broken if t[2] <= CUT_MAD]
+            out(f"    of the {len(broken)} wholly unresponsive triples, {len(cuts)} are across a "
+                f"DISCONTINUITY (endpoints more than {CUT_MAD:g} apart: a cut, a load or a "
+                f"screen-filling fade step), where refusing to interpolate is correct")
+            if same:
+                out(f"    and {len(same)} are CONTINUOUS and still did not respond — the defect, at "
+                    f"fence(s) " + ", ".join(str(t[1]) for t in sorted(same, key=lambda t: t[1])[:8])
+                    + (f" and {len(same) - 8} more" if len(same) > 8 else ""))
+            else:
+                out(f"    and none is continuous, so nothing here is a failure to interpolate")
+        if broken and clean:
+            # WHICH fences, because that is the difference between a defect and a phase. A run that
+            # covers a title card, a cutscene and gameplay contains stretches that are not supposed
+            # to interpolate at all, and they are indistinguishable from broken gameplay in every
+            # number above. Contiguous fence runs name the stretch to go and look at.
+            out(f"    Two populations, so this capture is not one behaviour. The >=99% fences:")
+            out("      " + _fence_runs(sorted(t[1] for t in broken)))
+            out("    and the <=1% fences:")
+            out("      " + _fence_runs(sorted(t[1] for t in per_triple if t[0] <= 0.01)))
+            out(f"    Re-measure each stretch on its own before reading the totals above as one "
+                f"number; a stretch that is not meant to interpolate is not a defect.")
+
+    if nxt:
+        rows = [0] * FORCED_BANDS
+        cols = [0] * FORCED_BANDS
+        xs = []
+        ys = []
+        for y in range(h):
+            for x in range(w):
+                v = at_next[y * w + x]
+                if v:
+                    rows[min(FORCED_BANDS - 1, y * FORCED_BANDS // h)] += v
+                    cols[min(FORCED_BANDS - 1, x * FORCED_BANDS // w)] += v
+                    xs.append(x)
+                    ys.append(y)
+        out(f"  the unresponsive pixels are {len(xs)} distinct positions in "
+            f"x {min(xs)}..{max(xs)} y {min(ys)}..{max(ys)}")
+        out("    by row band (top to bottom): "
+            + " ".join(f"{100.0 * v / nxt:4.1f}%" for v in rows))
+        out("    by col band (left to right): "
+            + " ".join(f"{100.0 * v / nxt:4.1f}%" for v in cols))
+        out(f"  A population spread evenly over both bands is the whole picture failing to "
+            f"interpolate; one concentrated in a band or two is specific content, and the bbox "
+            f"says where to look.")
+    else:
+        out("  Every changed pixel responded to the interpolation factor. Nothing in this capture "
+            "is drawn at the next endpoint regardless of t.")
+    return 0
+
+
+
+def _forced_factor_selftest(check):
+    """Drive forced_factor_report over dumps whose right answer is known by construction.
+
+    Every branch here can print a number, so every branch gets a case: the responding scene, the
+    snapping scene, the still scene, the drifted route, and the two empty-input refusals. The one
+    that matters is the SNAP — a measure that says "interpolated" on content drawn at the next
+    endpoint regardless of t would be exactly as reassuring as a correct one."""
+    import shutil, tempfile
+
+    def frame(path, boxes):
+        im = Image.new("RGB", (48, 24), (0, 0, 0))
+        px = im.load()
+        for (x0, colour) in boxes:
+            for y in range(2, 6):
+                for x in range(x0, x0 + 3):
+                    px[x, y] = colour
+        im.save(path)
+
+    def dump(d, interp_at):
+        """real(A) has the box at x=2, real(C) at x=8; the in-between sits where told."""
+        os.makedirs(d, exist_ok=True)
+        frame(os.path.join(d, "f100_0_real.png"), [(2, (200, 30, 30))])
+        frame(os.path.join(d, "f100_1_interp.png"), [(interp_at, (200, 30, 30))])
+        frame(os.path.join(d, "f101_2_real.png"), [(8, (200, 30, 30))])
+        return d
+
+    root = tempfile.mkdtemp(prefix="fps60_forced_")
+    try:
+        product = dump(os.path.join(root, "product"), 5)   # halfway: the product's own factor
+        responds = dump(os.path.join(root, "responds"), 2)  # forced to 0 -> at the PREVIOUS endpoint
+        snaps = dump(os.path.join(root, "snaps"), 8)        # unmoved by t -> at the NEXT endpoint
+
+        def run(a, b):
+            lines = []
+            code = forced_factor_report(a, b, out=lines.append)
+            return code, "\n".join(lines)
+
+        code, text = run(product, responds)
+        check("responding scene passes", code, 0)
+        check("responding scene is all previous", "100.00%)" in text
+              and "PREVIOUS endpoint when forced) :        24 (100.00%" in text, True)
+        check("responding scene says so", "Every changed pixel responded" in text, True)
+        check("a clean triple is counted clean",
+              "per triple: 1 of 1 are <=1% unresponsive, 0 are >=99%" in text, True)
+
+        code, text = run(product, snaps)
+        check("one triple is counted once", "per triple: 0 of 1 are <=1% unresponsive, 1 are >=99%"
+              in text, True)
+        # The snapping fixture moves a small box, so its endpoints are close: a continuous triple
+        # that did not respond, which is the defect and must not be excused as a cut.
+        check("a snap on continuous content is a defect",
+              "1 are CONTINUOUS and still did not respond — the defect, at fence(s) 100" in text,
+              True)
+        check("and is not filed as a cut", "0 are across a DISCONTINUITY" in text, True)
+        check("fence runs collapse", _fence_runs([1, 2, 3, 9, 20, 21]),
+              "6 fence(s) in 3 run(s): 1..3, 9, 20..21")
+        check("snapping scene still returns 0", code, 0)
+        check("snapping scene is all next",
+              "at the NEXT endpoint whatever t is)   :        24 (100.00%" in text, True)
+        check("snapping scene localises", "distinct positions in x 2..10 y 2..5" in text, True)
+        # The bands have to place it, not just count it: the box occupies four of twelve row bands
+        # and none of the outer ones, so a localisation that files everything under one band or
+        # spreads it evenly is wrong even though the totals above are right.
+        check("row bands place the box",
+              "by row band (top to bottom):  0.0% 50.0% 50.0%  0.0%  0.0%  0.0%  0.0%  0.0% "
+              " 0.0%  0.0%  0.0%  0.0%" in text, True)
+        check("col bands place the box",
+              "by col band (left to right): 33.3% 16.7% 50.0%  0.0%" in text, True)
+
+        # Across a CUT the same non-response is correct, and the split has to say so, or every
+        # scene change in a capture reads as an interpolation failure.
+        cut = os.path.join(root, "cut")
+        os.makedirs(cut)
+        Image.new("RGB", (48, 24), (0, 0, 0)).save(os.path.join(cut, "f100_0_real.png"))
+        Image.new("RGB", (48, 24), (255, 255, 255)).save(os.path.join(cut, "f100_1_interp.png"))
+        Image.new("RGB", (48, 24), (255, 255, 255)).save(os.path.join(cut, "f101_2_real.png"))
+        cut_product = os.path.join(root, "cut_product")
+        os.makedirs(cut_product)
+        Image.new("RGB", (48, 24), (0, 0, 0)).save(os.path.join(cut_product, "f100_0_real.png"))
+        Image.new("RGB", (48, 24), (128, 128, 128)).save(os.path.join(cut_product, "f100_1_interp.png"))
+        Image.new("RGB", (48, 24), (255, 255, 255)).save(os.path.join(cut_product, "f101_2_real.png"))
+        code, text = run(cut_product, cut)
+        check("a cut is not called a defect", "1 are across a DISCONTINUITY" in text, True)
+        check("a cut says nothing is continuous", "none is continuous" in text, True)
+
+        # Several triples at once, because every statistic above is a single number over a list and
+        # a one-triple fixture cannot tell a sorted list from an unsorted one. Here the FIRST triple
+        # is the broken one, so "worst triple" naming the last fence would be the tell.
+        def series(d, interp_at):
+            """Five reals with the box at 2, 8, 14, 20, 26; interp_at(k) places the in-between."""
+            os.makedirs(d)
+            for k in range(5):
+                frame(os.path.join(d, f"f{200 + k}_{2 * k}_real.png"), [(2 + 6 * k, (200, 30, 30))])
+            for k in range(4):
+                frame(os.path.join(d, f"f{200 + k}_{2 * k + 1}_interp.png"),
+                      [(interp_at(k), (200, 30, 30))])
+            return d
+
+        many_product = series(os.path.join(root, "many_product"), lambda k: 5 + 6 * k)
+        # forced: triple 0 snaps to the NEXT endpoint, the other three fall back to the previous.
+        many_forced = series(os.path.join(root, "many_forced"),
+                             lambda k: 8 if k == 0 else 2 + 6 * k)
+        code, text = run(many_product, many_forced)
+        check("four triples are all used", "4 triples" in text, True)
+        check("the broken one is 1 of 4",
+              "per triple: 3 of 4 are <=1% unresponsive, 1 are >=99%" in text, True)
+        check("the worst triple is the FIRST fence, not the last",
+              "worst triple: fence 200 at 100.00% unresponsive" in text, True)
+
+        # A still scene must REFUSE, not score 100%: with no pixel changing between the endpoints
+        # there is nothing for the factor to move, and reporting a pass there is the silent lie.
+        still = os.path.join(root, "still")
+        os.makedirs(still)
+        for name in ("f100_0_real.png", "f100_1_interp.png", "f101_2_real.png"):
+            frame(os.path.join(still, name), [(2, (200, 30, 30))])
+        code, text = run(still, still)
+        check("still scene refuses", code, 2)
+        check("still scene says nothing was measured", "NOTHING WAS MEASURED" in text, True)
+
+        # The control: if a real frame differs, the two runs are not one route.
+        drift = dump(os.path.join(root, "drift"), 2)
+        frame(os.path.join(drift, "f101_2_real.png"), [(9, (200, 30, 30))])
+        code, text = run(product, drift)
+        check("a drifted route refuses", code, 2)
+        check("drift names the count", "1 of 2 real frames differ" in text, True)
+
+        # No shared fence at all is a different refusal from a drifted one.
+        apart = os.path.join(root, "apart")
+        os.makedirs(apart)
+        frame(os.path.join(apart, "f900_0_real.png"), [(2, (200, 30, 30))])
+        frame(os.path.join(apart, "f900_1_interp.png"), [(2, (200, 30, 30))])
+        frame(os.path.join(apart, "f901_2_real.png"), [(8, (200, 30, 30))])
+        code, text = run(product, apart)
+        check("no shared fence refuses", code, 2)
+        check("no shared fence says why", "share no real frame" in text, True)
+
+        code, text = run(product, os.path.join(root, "absent"))
+        check("a missing dir refuses", code, 2)
+        check("a missing dir says nothing was compared", "NOTHING WAS COMPARED" in text, True)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def selftest():
     """Prove the attribution can say every answer it is capable of printing.
 
@@ -370,14 +730,17 @@ def selftest():
     check("a small run is a specific run",
           covered_by_specific_run(runs[7], 112, 112, 16, big_area), True)
 
+    _forced_factor_selftest(check)
+
     if failures:
         print("fps60_check selftest: FAIL")
         print("\n".join(failures))
         return 1
-    print("fps60_check selftest: PASS (16 checks: fence parsing, smallest-run wins, "
+    print("fps60_check selftest: PASS (41 checks: fence parsing, smallest-run wins, "
           "big-run-only, empty fence, out-of-range tile, verbatim overlap both ways, "
           "producer kept apart from node, mapping verdict six ways incl. a wrong-offset "
-          "control, fill is not specific)")
+          "control, fill is not specific; forced-factor responds/snaps/still/drifted/"
+          "disjoint/missing, band and per-triple placement, fence runs, cut vs continuous)")
     return 0
 
 
@@ -407,12 +770,18 @@ def main():
     ap.add_argument("--triple", help="analyse only the triple starting at this fence/seq prefix")
     ap.add_argument("--seq", help="an fps60seq log for the same run: credits every MOVED endpoint "
                                   "tile to the smallest run covering it, so the defect has an owner")
+    ap.add_argument("--forced", help="a second capture of the SAME route taken with "
+                                     "PSXPORT_FPS60_TFORCE=0: reports, per pixel, whether the "
+                                     "in-between present responded to the interpolation factor")
     ap.add_argument("--selftest", action="store_true",
                     help="check the attribution against fixtures with a known answer")
     args = ap.parse_args()
 
     if args.selftest:
         return selftest()
+
+    if args.forced:
+        return forced_factor_report(args.dir, args.forced)
 
     if not os.path.isdir(args.dir):
         sys.exit(f"fps60_check: no capture dir {args.dir} — run with PSXPORT_DEBUG=fps60dump first")
