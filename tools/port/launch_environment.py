@@ -8,6 +8,8 @@ offscreen, silent, unpaced run.
 
 from __future__ import annotations
 
+import os
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -23,13 +25,66 @@ _LEGACY_HEADLESS_KEYS = (
 )
 
 
-def player_environment(environment: Mapping[str, str]) -> dict[str, str]:
-    """Return the windowed, audible, real-time-paced shipping environment."""
+def player_environment(environment: Mapping[str, str], *, product: str) -> dict[str, str]:
+    """Return the windowed, audible, real-time-paced shipping environment.
+
+    ``product`` names the port, and is REQUIRED because it is what keeps one title's run log out
+    of another's. It is not decorative: the log below is the only copy of what the product said.
+
+    WHY THE LOG. A player's run wrote its diagnostics to the terminal and nowhere else, so a crash
+    the operator saw was a crash nobody could read. Spyro's issue 0128 is a user-visible abort
+    before gameplay that eight agent runs across build, window, pacing, settings, audio and a
+    900-frame overrun have all failed to reproduce; the abort prints the stage and the refusing
+    producer, which is the entire diagnosis, and it has never been captured because it scrolled
+    past in a terminal that was then closed. The next occurrence leaves the file behind without the
+    player being told to run anything special.
+
+    It is a DEFAULT, not a policy: a caller that already set ``PSXPORT_LOG_FILE`` keeps its value,
+    and only the path invented here is prepared on disk.
+    """
     result = dict(environment)
     for key in (*AGENT_RUNTIME_KEYS, *_LEGACY_HEADLESS_KEYS):
         result.pop(key, None)
     result["PSXPORT_VK_WINDOW"] = "1"
+    if "PSXPORT_LOG_FILE" not in result:
+        result["PSXPORT_LOG_FILE"] = str(_prepared_player_log(product, result))
     return result
+
+
+def _prepared_player_log(product: str, environment: Mapping[str, str]) -> Path:
+    """The default log path, with its directory made and the previous run's file cleared.
+
+    Both halves matter and neither is incidental. The logger opens the path with ``fopen(.., "a")``
+    and falls back to stderr when that fails, so a missing directory would turn this into exactly
+    the silent no-op it exists to replace; and appending would make "last-run" a growing pile of
+    runs with no boundary between them, which is worse to read than the terminal was.
+
+    A failure here is not fatal: the product still runs and still says everything on stderr. It is
+    reported so a run that has no log file says so, instead of leaving one to be looked for later.
+    """
+    path = player_log_path(product, environment)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    except OSError as error:
+        print(f"[run] no run log at {path}: {error}", file=sys.stderr)
+    return path
+
+
+def player_log_path(product: str, environment: Mapping[str, str] | None = None) -> Path:
+    """Where a player's run log for ``product`` belongs, per the host's user-data conventions.
+
+    Never the checkout, an AppImage mount or the working directory: a packaged player may have no
+    write access to any of them, and a log that silently failed to open would be worse than none.
+    """
+    env = os.environ if environment is None else environment
+    if sys.platform == "darwin":
+        base = Path(env.get("HOME", "~")).expanduser() / "Library" / "Logs"
+    elif sys.platform == "win32":
+        base = Path(env.get("LOCALAPPDATA") or Path(env.get("USERPROFILE", "~")).expanduser()) / "Logs"
+    else:
+        base = Path(env.get("XDG_STATE_HOME") or (Path(env.get("HOME", "~")).expanduser() / ".local/state"))
+    return base / "psxport" / product / "last-run.log"
 
 
 def agent_environment(environment: Mapping[str, str],

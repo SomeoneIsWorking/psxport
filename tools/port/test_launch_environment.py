@@ -12,6 +12,7 @@ from launch_environment import (
     AGENT_RUNTIME_KEYS,
     agent_environment,
     player_environment,
+    player_log_path,
 )
 
 
@@ -21,6 +22,7 @@ class LaunchEnvironmentTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
         self.settings = directory / "shipping.ini"
         self.settings.write_text("aspect=3\nfps60=1\n")
+        self.state = directory / "state"
 
     def test_player_strips_ambient_agent_policy_and_preserves_unrelated_values(self) -> None:
         source = {
@@ -32,7 +34,7 @@ class LaunchEnvironmentTests(unittest.TestCase):
             "PSXPORT_DEBUG": "frame",
         }
 
-        result = player_environment(source)
+        result = player_environment(source, product="spyro1")
 
         self.assertEqual(result["PSXPORT_VK_WINDOW"], "1")
         self.assertEqual(result["PSXPORT_DEBUG"], "frame")
@@ -41,9 +43,74 @@ class LaunchEnvironmentTests(unittest.TestCase):
         self.assertNotIn("PSXPORT_VK_WINDOW", source)
 
     def test_player_overrides_a_false_window_value_without_inventing_other_knobs(self) -> None:
-        result = player_environment({"PSXPORT_VK_WINDOW": "0", "KEEP": "yes"})
+        result = player_environment(
+            {"PSXPORT_VK_WINDOW": "0", "KEEP": "yes", "XDG_STATE_HOME": str(self.state)},
+            product="spyro1",
+        )
 
-        self.assertEqual(result, {"PSXPORT_VK_WINDOW": "1", "KEEP": "yes"})
+        self.assertEqual(
+            result,
+            {
+                "PSXPORT_VK_WINDOW": "1",
+                "KEEP": "yes",
+                "XDG_STATE_HOME": str(self.state),
+                "PSXPORT_LOG_FILE": str(self.state / "psxport/spyro1/last-run.log"),
+            },
+        )
+
+
+    def test_player_log_is_per_title_under_the_user_state_directory(self) -> None:
+        env = {"XDG_STATE_HOME": str(self.state)}
+
+        one = player_environment(env, product="spyro1")["PSXPORT_LOG_FILE"]
+        other = player_environment(env, product="tomba2")["PSXPORT_LOG_FILE"]
+
+        self.assertEqual(one, str(self.state / "psxport/spyro1/last-run.log"))
+        self.assertNotEqual(one, other)
+
+    def test_player_log_falls_back_to_the_home_state_directory(self) -> None:
+        path = player_log_path("spyro1", {"HOME": "/home/someone"})
+
+        self.assertEqual(str(path), "/home/someone/.local/state/psxport/spyro1/last-run.log")
+
+    def test_player_keeps_a_log_file_the_caller_already_chose(self) -> None:
+        result = player_environment(
+            {"XDG_STATE_HOME": str(self.state), "PSXPORT_LOG_FILE": "/tmp/mine.log"}, product="spyro1"
+        )
+
+        self.assertEqual(result["PSXPORT_LOG_FILE"], "/tmp/mine.log")
+
+    def test_player_refuses_without_a_product_to_name_the_log_after(self) -> None:
+        with self.assertRaises(TypeError):
+            player_environment({"XDG_STATE_HOME": str(self.state)})  # type: ignore[call-arg]
+
+    def test_an_agent_run_gets_no_player_log(self) -> None:
+        result = agent_environment({"XDG_STATE_HOME": str(self.state)}, self.settings)
+
+        self.assertNotIn("PSXPORT_LOG_FILE", result)
+
+
+    def test_the_default_log_is_ready_to_be_written_and_starts_empty(self) -> None:
+        stale = self.state / "psxport" / "spyro1" / "last-run.log"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("a previous run\n")
+
+        result = player_environment({"XDG_STATE_HOME": str(self.state)}, product="spyro1")
+
+        written = Path(result["PSXPORT_LOG_FILE"])
+        self.assertTrue(written.parent.is_dir())
+        self.assertEqual(written.read_text(), "")
+
+    def test_a_log_file_the_caller_chose_is_not_touched(self) -> None:
+        chosen = self.state / "mine.log"
+        chosen.parent.mkdir(parents=True)
+        chosen.write_text("keep me\n")
+
+        player_environment(
+            {"XDG_STATE_HOME": str(self.state), "PSXPORT_LOG_FILE": str(chosen)}, product="spyro1"
+        )
+
+        self.assertEqual(chosen.read_text(), "keep me\n")
 
     def test_agent_forces_all_three_agent_knobs_and_removes_window_policy(self) -> None:
         source = {
