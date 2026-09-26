@@ -78,11 +78,24 @@ static void test_the_measured_case_from_the_repositories(void) {
   CHECK(silent(psx::picture::classifyWide(ASPECT_AUTO, true, 320, 428)));
 }
 
+// AUTO's reason must win over the render mode's, because both are true on a GTE-path title and only
+// one is operative. Measured 2026-09-26 on Tekken 3: an `aspect=3` leg was told "this Core's render
+// mode is PURE" when the real cause was that AUTO resolves to the sink and a headless sink is 4:3. A
+// reader sent to the wrong knob loses the run a second time.
+static void test_auto_outranks_the_render_mode_as_the_reason(void) {
+  const psx::picture::WideOutcome both = psx::picture::classifyWide(ASPECT_AUTO, /*enhancements=*/false, 368, 368);
+  CHECK(mentions(both, "ASPECT_AUTO"));
+  CHECK_EQ(mentions(both, "PURE"), false);
+  // ...and with AUTO out of the picture, the render mode IS the reason.
+  CHECK(mentions(psx::picture::classifyWide(ASPECT_16_9, false, 368, 368), "PURE"));
+}
+
 int main(void) {
   RUN(auto_is_told_apart_from_a_real_wide_run);
   RUN(a_named_wide_aspect_that_did_not_widen_is_not_blamed_on_auto);
   RUN(four_three_three_is_quiet);
   RUN(pure_core_is_refused_for_its_own_reason);
   RUN(the_measured_case_from_the_repositories);
+  RUN(auto_outranks_the_render_mode_as_the_reason);
   return pt_summary();
 }

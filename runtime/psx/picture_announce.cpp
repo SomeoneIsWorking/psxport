@@ -3,7 +3,8 @@
 #include "core.h"
 #include "game.h"
 #include "gpu_vk.h"
-#include "mods.h" // ASPECT_4_3 / ASPECT_AUTO — which aspect was actually asked for
+#include "mods.h"         // ASPECT_4_3 / ASPECT_AUTO — which aspect was actually asked for
+#include "present_plan.h" // present_display_width — the presenter's OWN rule, not a second one
 
 #include <lucent/log.h>
 
@@ -16,11 +17,15 @@ WideOutcome classifyWide(int aspect, bool enhancementsAllowed, int nativeWidth, 
   if (aspect == ASPECT_4_3) {
     return WideOutcome::NotRequested; // nobody asked for a wide picture
   }
-  if (!enhancementsAllowed) {
-    return WideOutcome::RefusedPure;
-  }
+  // AUTO is tested BEFORE the render mode, and the order is the point. Measured 2026-09-26 on
+  // Tekken 3: its `aspect=3` leg was told "this Core's render mode is PURE" when the real cause was
+  // that AUTO resolves to the sink and a headless run's sink is 4:3. A reason that is true but not
+  // the operative one sends the reader to the wrong knob.
   if (aspect == ASPECT_AUTO) {
     return WideOutcome::RefusedAuto;
+  }
+  if (!enhancementsAllowed) {
+    return WideOutcome::RefusedPure;
   }
   return WideOutcome::RefusedUnexplained;
 }
@@ -42,9 +47,14 @@ const char *wideOutcomeReason(WideOutcome outcome) {
   return "";
 }
 
-void announceOnChange(Core &core) {
-  const Geometry now{
-      core.game->mods.aspect, gpu_vk_wide_engine(&core), (int)core.game->gpu.s_disp_w, gpu_vk_wide_engine_w(&core)};
+void announceOnChange(Core &core, int presentedFramebufferWidth) {
+  // The native width is what the title's own 4:3 framebuffer is, and the render width is what the
+  // presenter will actually draw — both through the presenter's own helpers, so this line cannot
+  // disagree with the picture it describes.
+  const int nativeWidth = (int)core.game->gpu.s_disp_w;
+  const int renderWidth = present_display_width(
+      gpu_vk_wide_presentation(&core) != 0, gpu_vk_wide_presentation_w(&core), presentedFramebufferWidth);
+  const Geometry now{core.game->mods.aspect, gpu_vk_wide_engine(&core), nativeWidth, renderWidth};
   if (now == core.rsub.announcedPicture) {
     return;
   }

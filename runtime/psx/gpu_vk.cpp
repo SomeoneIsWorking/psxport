@@ -4049,7 +4049,7 @@ void gpu_vk_dirty(Core *core, int x, int y, int w, int h) {
 }
 void gpu_vk_present(Core *core, const uint16_t *src, int sx, int sy, int w, int h) {
   overlay_glue_frame_begin(core);
-  psx::picture::announceOnChange(*core);
+  psx::picture::announceOnChange(*core, w); // `w` is why: see picture_announce.h
   core->game->gpu_vk.present(src, sx, sy, w, h);
   gpu_vk_fadewatch_tap(core, sx, sy, w, h);
 }

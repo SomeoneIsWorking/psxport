@@ -50,7 +50,16 @@ struct Geometry {
 // whenever this Core's picture geometry differs from the last line emitted for it, and nothing when
 // it is unchanged. The previous tuple lives on `Core::rsub` (render_substrate.h) because it is
 // per-Core host-only render state, like everything else there.
-void announceOnChange(Core &core);
+//
+// `presentedFramebufferWidth` is the width of the framebuffer being handed to the presenter THIS call,
+// and `render_width` is derived from it by the presenter's own `present_display_width`, so the
+// announced number is the width that reaches the screen rather than a re-derivation of it. Passing it
+// in is what makes that true: measured 2026-09-26 on Tekken 3, a title that widens through the
+// guest-projection path, the previous `render_width` read the host wide engine and reported 368 for a
+// picture the presenter drew at 492 — and the warning below then declared a correct run's widescreen
+// claim void. Two widening mechanisms exist (the host PC enhancement, and the title-owned
+// `GuestWidescreenProjection`), and only the second one widens a GTE-path title.
+void announceOnChange(Core &core, int presentedFramebufferWidth);
 
 // What a resolved picture geometry MEANS, as a decision rather than as arithmetic.
 //

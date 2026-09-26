@@ -58,6 +58,15 @@ public:
   // Process entry — installed by boot when PSXPORT_DEBUG_SERVER names a port. NO-OP otherwise.
   void start(Core *c);
 
+  // Attach the live endpoint to a boot spine that is NOT the framework's own, and answer the frame cap
+  // that spine should use. This is the one call a title-owned spine needs before its loop; `start`
+  // alone leaves the cap question unanswered, and getting that wrong ends the process before a client
+  // can drive it.
+  //
+  // Returns 0 (uncapped) when PSXPORT_DEBUG_SERVER names a port, because the cap exists to bound an
+  // unattended smoke run and a client-driven one is neither; otherwise the requested cap unchanged.
+  int attach(Core *c, int requested_frame_cap);
+
   // The once-per-frame half of a live session, called BEFORE the frame runs: while the client has
   // frozen the game, do not advance it — pump host input, re-show the last presented frame, and keep
   // servicing commands so `step` and `play` can arrive. One implementation for every boot spine,

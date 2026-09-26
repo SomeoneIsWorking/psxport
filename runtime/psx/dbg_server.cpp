@@ -870,6 +870,12 @@ static void *dbg_thread(void *arg) {
   return NULL;
 }
 
+int DbgServer::attach(Core *c, int requested_frame_cap) {
+  const int cap = debug_server_live() ? 0 : requested_frame_cap;
+  start(c);
+  return cap;
+}
+
 // A client froze the game: hold here until it says `play` or `step`. The loop keeps the window (or
 // the headless host input) alive and keeps servicing commands, and it re-shows the last REAL frame
 // rather than re-rendering — a pause must never rebuild: the framework's own loop spins at ~66 Hz

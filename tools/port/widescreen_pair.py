@@ -175,8 +175,16 @@ def column_gaps(w, h, px) -> list[float]:
 def seams(gaps, w, margin) -> list[Seam] | None:
     """Both joins, each scored against the ordinary column pairs immediately around it.
 
-    None when a join has too few neighbours to say what this part of the picture's column-to-column
-    variation normally is -- a refusal, not a pass.
+    None when a join cannot say what this part of the picture's column-to-column variation normally
+    is -- a refusal, not a pass. There are TWO ways to be unable to say it, and both were measured:
+
+    - too few neighbours, which the original guard covered; and
+    - a neighbourhood whose maximum variation is ZERO, i.e. a perfectly flat region. The ratio is
+      gap/local_max, so a flat neighbourhood divides by zero, the ratio becomes inf, and `inf > limit`
+      reads as a BREAK. Measured 2026-09-26 on Tekken 3's `NAMCO PRESENTS` card, where the text glyphs
+      sit on a flat black field: both joins reported `gap 0.00 against a neighbourhood of 0.00 (infx)`
+      and were called broken. Nothing broke; the question was unaskable. "Cannot tell" is the honest
+      answer and it is the one the too-few-neighbours case already returns.
 
     KNOWN FALSE POSITIVE, stated rather than hidden: a scene whose own hard vertical edge falls
     exactly on a join reads as a break, because at that one column the check cannot tell the
@@ -190,7 +198,13 @@ def seams(gaps, w, margin) -> list[Seam] | None:
         local = [gaps[i] for i in window if i != x]
         if len(local) < 2 * SEAM_WINDOW:
             return None
-        found.append(Seam(side, x, gaps[x], max(local)))
+        local_max = max(local)
+        if local_max <= 0.0:
+            # A neighbourhood with no variation at all: the ratio would divide by zero and every
+            # join would read as an infinite break. Refuse the same way the too-few-neighbours case
+            # does, because both mean the same thing -- this picture cannot answer the question here.
+            return None
+        found.append(Seam(side, x, gaps[x], local_max))
     return found
 
 
@@ -567,6 +581,26 @@ def selftest(out=print) -> int:
                 failures.append(f"{name} failed, but not for the reason it was built to fail for "
                                 f"-- no verdict said {fragment!r}, so the check that was meant to "
                                 f"catch it did not:\n    " + "\n    ".join(lines))
+
+        # A join whose neighbourhood has NO variation at all. Measured 2026-09-26 on Tekken 3's
+        # NAMCO PRESENTS card, where text glyphs sit on a flat black field: the ratio divided by a
+        # local_max of 0, became inf, and both joins printed BREAKS. Nothing was broken; the ratio
+        # was unaskable. The tool must REFUSE, exactly as it does for too few neighbours, because
+        # "cannot tell" is the one honest answer and reporting a break there is how a real defect
+        # gets buried under a fake one.
+        flat = bytearray(wide_w * coverage_h * 3)  # a wholly uniform picture: every gap is 0.0
+        lines = []
+        code = _report_on({narrow_path: smooth, wide_path: (wide_w, coverage_h, bytes(flat))},
+                          narrow_path, wide_path, lines)
+        joined = "\n    ".join(lines)
+        if code != 2:
+            failures.append(f"a wholly flat capture returned {code}, expected a refusal (2); a "
+                            f"zero-variation neighbourhood must not be scored:\n    {joined}")
+        elif "BREAKS" in joined:
+            failures.append(f"a flat capture REFUSED but still called a join broken, which is the "
+                            f"false positive this case exists to catch:\n    {joined}")
+        elif "NOTHING WAS COMPARED at the joins" not in joined:
+            failures.append(f"a flat capture refused for the wrong reason:\n    {joined}")
 
         # The negative the other two cannot give: a capture that is not there at all must REFUSE by
         # name and must not be mistaken for either verdict. This is the case that fired for real on
