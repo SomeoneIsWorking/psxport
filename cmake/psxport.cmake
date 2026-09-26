@@ -176,7 +176,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/ot_lifo_depth.cpp    # PSX AddPrim head-insertion ties -> raster-distinct native depths
   ${PSXPORT_ROOT}/runtime/psx/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)
   ${PSXPORT_ROOT}/runtime/psx/render_queue_attribution.cpp # attributes a FULL queue: runaway vs capacity
-  ${PSXPORT_ROOT}/runtime/psx/render_submission.cpp # resolved items and queue-local production observation
+  ${PSXPORT_ROOT}/runtime/psx/render_submission.cpp
+  ${PSXPORT_ROOT}/runtime/psx/wide_2d_layout.cpp # the 2D layout transform for a Core, by either widening mechanism
   ${PSXPORT_ROOT}/runtime/psx/painter_object_layer.cpp # atomic painter admission + authored command plan
   ${PSXPORT_ROOT}/runtime/psx/pc_scheduler.cpp     # PC-native cooperative task scheduler; stage bodies via hooks (P1.7c)
   ${PSXPORT_ROOT}/runtime/psx/synchronous_task_wait.cpp # one native synchronous FUN_80044BD4 owner

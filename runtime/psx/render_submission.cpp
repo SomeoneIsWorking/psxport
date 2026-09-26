@@ -4,6 +4,7 @@
 #include "census_frame.h"
 #include "game.h"
 #include "host_backtrace.h"
+#include "wide_2d_layout.h" // the 2D layout transform for a Core, by EITHER widening mechanism
 
 #include <cstdlib>
 #include <lucent/log.h>
@@ -147,16 +148,19 @@ void RenderQueue::emitOrQueue(Core *core,
   int wxs[4];
   float wxsf[4];
   {
-    int gpu_vk_wide_engine(Core *), gpu_vk_wide_engine_w(Core *), gpu_vk_native_w(Core *);
-    if (order_mode != RQ_OM_DEPTH && gpu_vk_wide_engine(core)) {
+    if (order_mode != RQ_OM_DEPTH && wide_2d_layout_active(*core)) {
       // The material shape selects the background stretch: only a UNIFORM SOLID FILL (flat vertex
       // colour AND untextured) may be spread across the wide FB.
       const bool flat = rs && gs && bs && rs[0] == rs[1] && rs[1] == rs[2] && rs[2] == rs[3] && gs[0] == gs[1] &&
                         gs[1] == gs[2] && gs[2] == gs[3] && bs[0] == bs[1] && bs[1] == bs[2] && bs[2] == bs[3];
       const bool untextured = (!us || (us[0] == 0 && us[1] == 0 && us[2] == 0 && us[3] == 0)) &&
                               (!vs || (vs[0] == 0 && vs[1] == 0 && vs[2] == 0 && vs[3] == 0));
-      const Rq2dXform t =
-          rq_2d_xform(gpu_vk_wide_engine_w(core), gpu_vk_native_w(core), m2dSpace, layer, flat, untextured);
+      // wide_2d_layout asks BOTH widening mechanisms whether this Core is wider than its own 4:3
+      // width. It used to ask only the host wide engine, which is `path == RenderPath::Native`, so on
+      // every GTE-path widescreen-only title the conjunction was false on every frame and this rule
+      // never ran: Mega Man X4's all-2D composition sat 164 px left of centre with 635/635 sprites 2D
+      // and 0/635 3D. See wide_2d_layout.h.
+      const Rq2dXform t = wide_2d_layout(*core, m2dSpace, layer, flat, untextured);
       for (int i = 0; i < nv; i++) {
         wxs[i] = t.apply(xs[i]);
         if (xsf) {

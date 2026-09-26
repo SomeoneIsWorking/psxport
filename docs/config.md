@@ -78,15 +78,29 @@ A run that asked for a wide picture and did not get one is told so, by name and 
 `[wide]` announcement: `classifyWide()` in `runtime/psx/picture_announce.h` decides between "widened",
 "nobody asked", "this Core is PURE", "ASPECT_AUTO resolved to a sink that is not wide", and "a wide
 aspect was allowed and the width still did not grow", and a refused outcome is a warning rather than a
-number to be noticed later. This exists because two titles each published a body of widescreen evidence
-that was not widescreen, for the ASPECT_AUTO reason, and corrected the claim in their own docs rather
-than at the moment it happened.
+number to be noticed later. The announced `render_width` is the width the presenter will actually
+draw, derived with the presenter's own `present_display_width` from the framebuffer being handed
+over — because there are TWO widening mechanisms and only one of them is visible from the host wide
+engine. The host PC enhancement widens a native-render title; the title-owned
+`GuestWidescreenProjection` widens a GTE-path title, which is every widescreen-only title, since those
+declare `RenderCapabilities::widescreenOnly()`. Reading only the first is how two titles measured a
+false negative, and how the warning above then declared a correct run's claim void.
+
+`runtime/psx/wide_2d_layout.{h,cpp}` owns the matching 2D question. The layout rule itself is
+`rq_2d_xform` (centring authored-4:3 coordinates by (ww − native_w)/2, with a uniform untextured fill
+stretching instead) and it is correct; what was wrong is the question its application site asked, which
+was answered from the host wide engine alone and so was false on every frame of a Gte-path title. The
+owner asks about both mechanisms in the order the presenter prefers, treats them as alternatives rather
+than a sum, and exposes the decision as a pure function so it can be asked without a product.
 
 `tests/test_config_cvar.cpp` exercises precedence, invalid input, environment auditing, and runtime
 mutation through the production registry. `tests/test_debug_server_port.cpp` pins the endpoint's port
 contract, including the `1` sentinel and every shape of text that must not bind a port.
 `tests/test_picture_announce.cpp` drives the shipping `classifyWide` over the exact geometries two
 repositories recorded, and the mutation that silences the AUTO verdict fails it.
+`tests/test_wide_2d_layout.cpp` drives the shipping 2D-layout decision over both mechanisms at the
+geometries that were affected, and the mutation that restores the pre-fix host-engine-only question
+fails it.
 `tests/test_diagnostic_run.cpp` proves product,
 comparison, nesting, and invalid-role behavior through the shipping enhancement gate;
 `tests/test_dynarec_contract.cpp` proves zero/nonzero telemetry and both sides of fallback threshold

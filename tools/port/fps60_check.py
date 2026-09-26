@@ -630,6 +630,20 @@ def _forced_factor_selftest(check):
             frame(os.path.join(still, name), [(2, (200, 30, 30))])
         code, text = run(still, still)
         check("still scene refuses", code, 2)
+        # ...and so must the TILE path, which had no such guard. The decision is
+        # `tile_census_is_still`, driven here over the class counts a census produces, so both answers
+        # are pinned: a still census refuses, and a census with any motion at all does not. The two
+        # failure classes matter most -- an all-AHEAD or all-STALE census is a DEFECT (everything moved
+        # and nothing was reconstructed), and the guard must not swallow it into "nothing measured",
+        # because that would hide the very defect it exists to surface.
+        check("tile census calls an all-STATIC census still",
+              tile_census_is_still({"STATIC": 480, "BETWEEN": 0, "STALE": 0, "AHEAD": 0}), True)
+        check("tile census does not call a reconstructed census still",
+              tile_census_is_still({"STATIC": 100, "BETWEEN": 380, "STALE": 0, "AHEAD": 0}), False)
+        check("tile census does not swallow an all-AHEAD defect into still",
+              tile_census_is_still({"STATIC": 0, "BETWEEN": 0, "STALE": 0, "AHEAD": 480}), False)
+        check("tile census does not swallow an all-STALE defect into still",
+              tile_census_is_still({"STATIC": 0, "BETWEEN": 0, "STALE": 480, "AHEAD": 0}), False)
         check("still scene says nothing was measured", "NOTHING WAS MEASURED" in text, True)
 
         # The control: if a real frame differs, the two runs are not one route.
@@ -756,6 +770,26 @@ def selftest():
           "control, fill is not specific; forced-factor responds/snaps/still/drifted/"
           "disjoint/missing, band and per-triple placement, fence runs, cut vs continuous)")
     return 0
+
+
+def tile_census_is_still(counts):
+    """True when the census saw no motion at all, and so has nothing to say about interpolation.
+
+    A still scene must REFUSE, not pass. The forced-factor path already refuses one correctly ("no
+    pixel changed between the two real endpoints ... NOTHING WAS MEASURED"); the tile path had no
+    equivalent, so a census over a capture where NOTHING MOVED reported "no STALE tiles -- everything
+    that moved was interpolated" and "No interpolation failure at this tile size", and exited 0.
+    Measured 2026-09-26 on Crash Bash, where the product reaches no game scene: four byte-identical
+    black 512x234 presents, one triple, 480/480 tiles STATIC, and a pass-shaped verdict with a zero
+    denominator for anything that moved.
+
+    "No STALE and no AHEAD" is only good news if something moved AND was interpolated. BETWEEN being
+    zero as well is what makes the census empty rather than clean: BETWEEN is the class that means
+    "differed from BOTH endpoints", i.e. genuinely reconstructed, and STALE (identical to the older
+    real frame) and AHEAD (identical to the newer one) are the two ways a MOVING tile can fail. A
+    census with none of the three has measured nothing.
+    """
+    return counts["BETWEEN"] == 0 and counts["STALE"] == 0 and counts["AHEAD"] == 0
 
 
 def classify(pa, pb, pc, w, h, tile):
@@ -900,6 +934,18 @@ def main():
 
     if not n_triples:
         sys.exit("fps60_check: no real/interp/real triples found (is fps60 actually on?)")
+
+    # A STILL SCENE MUST REFUSE, not pass -- see `tile_census_is_still` for the measurement that
+    # motivated it. The guard is a named predicate rather than an inline test so the selftest drives
+    # the same decision this path makes.
+    if tile_census_is_still(counts):
+        print(f"\n{n_triples} triple(s), tile={args.tile}px")
+        print(f"  STATIC      {counts['STATIC']:6d}  (100.0%)")
+        print(f"\nREFUSED: across {n_triples} triple(s) no tile was BETWEEN, STALE or AHEAD -- every tile "
+              f"was STATIC, so nothing in this capture moved between the two real endpoints and nothing "
+              f"could have been interpolated either way. This is a still scene, not a passing one. "
+              f"NOTHING WAS MEASURED.")
+        sys.exit(2)
 
     print(f"\n{n_triples} triple(s), tile={args.tile}px")
     for k in ("STATIC", "BETWEEN", "STALE", "AHEAD"):
