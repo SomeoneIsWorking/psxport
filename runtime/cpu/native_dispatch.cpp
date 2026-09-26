@@ -299,22 +299,29 @@ ExecutionResult executeOriginal(Core &core, std::uint32_t guestAddress, Executio
 // caller attribution correct across the boundary. Both must be re-established on every resume, which
 // is exactly what `executeOriginal` does at the three lines above.
 //
-// NOT YET COVERED BY A HERMETIC TEST, and the reason is worth recording rather than guessing at. The
-// contract wants a case that truncates a long guest call MID-LOOP and resumes it. The only bound the
-// executor consults between segments is Lightrec's HOST cycle counter (`lightrec_current_cycle_count`),
-// not an instruction count, so a cycle-sized budget is machine-dependent: the same loop finishes inside
-// one segment on a fast host and straddles two on a slow one. A loop Lightrec closes over runs to
-// completion in one segment regardless of the budget, and a guest loop that calls into a host override
-// never reaches a segment boundary, because the override is only consulted at one. The bounded exits a
-// test CAN produce deterministically — `Core::PW_HOST` servicing, `maxHostDispatches` — all land at a
-// point where a resume has no guest work left to distinguish it from a restart.
+// COVERAGE. There is still no HERMETIC test for this, and the reason is worth recording rather than
+// guessing at. The contract wants a case that truncates a long guest call MID-LOOP and resumes it. The
+// only bound the executor consults between segments is Lightrec's HOST cycle counter
+// (`lightrec_current_cycle_count`), not an instruction count, so a cycle-sized budget is
+// machine-dependent: the same loop finishes inside one segment on a fast host and straddles two on a
+// slow one. A loop Lightrec closes over runs to completion in one segment regardless of the budget, and
+// a guest loop that calls into a host override never reaches a segment boundary, because the override
+// is only consulted at one. The bounded exits a test CAN produce deterministically — `Core::PW_HOST`
+// servicing, `maxHostDispatches` — all land at a point where a resume has no guest work left to
+// distinguish it from a restart.
 //
-// `executeFunction`'s ability to start at an arbitrary pc and stop at a supplied return address IS
-// covered, by `test_explicit_function_continuation_is_independent_of_incoming_ra`. What is missing is
-// the composition: a truncated call, then a resume. The honest place to close that is a product-level
-// case — Mega Man X4's `DecDCTvlc`, which is measured to need 1.082 fields and to return correctly on
-// its own once it is allowed to — not a synthetic loop here. Adding a test that only looks like that
-// coverage would be worse than the acknowledged gap.
+// The composition IS covered, at the product level, which is where it was always going to have to be.
+// Mega Man X4 measured it on 2026-09-27: `DecDCTvlc` (0x800ED574) returning to 0x80018AA0 needs
+// 610,746 cycles — 1.082 fields — and resumes across exactly two host turns, 1 resume in 684 completed
+// guest calls, with 0 `executor:error` over 200 fields. The A/B is the part that makes it evidence
+// rather than assertion: rebuilding the same source with the cap at one turn reproduces the original
+// failure byte-for-byte (564,510 cycles, still at 0x800ED744, SIGABRT), and nothing else differs
+// between the two binaries. `executeFunction`'s arbitrary-entry / supplied-return-address behaviour is
+// covered hermetically by `test_explicit_function_continuation_is_independent_of_incoming_ra`.
+//
+// One property the product case taught, which is easy to get wrong and is NOT enforced here: the
+// return address must be captured BEFORE the first dispatch. A resume must not adopt the nested `$ra`
+// the guest left behind, which is a different address and would end the call in the wrong place.
 ExecutionResult
 resumeOriginal(Core &core, NativeKey key, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
