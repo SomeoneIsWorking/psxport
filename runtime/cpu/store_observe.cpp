@@ -146,6 +146,18 @@ void store_observe_report(Core &core) {
                g_armed.observations);
   for (std::size_t i = 0; i < report.targetCount && i < report.targets.size(); ++i) {
     const StoreObserverTargetCounts &target = report.targets[i];
+    if (target.before + target.after == 0) {
+      // Say "matched none" in words, and do NOT print a guest PC: with no observation there is no last
+      // guest PC, and echoing the target address back in that column reads exactly like a hit. The
+      // instrument's own scan size is what makes this line meaningful rather than merely empty.
+      lucent::info("store-observe",
+                   "  [{}] 0x{:08X} stores before=0 after=0 — MATCHED NONE of the {} executed JIT "
+                   "instruction(s); this address was not written in this run",
+                   i,
+                   g_armed.addresses[i],
+                   report.executedJitInstructions);
+      continue;
+    }
     lucent::info("store-observe",
                  "  [{}] 0x{:08X} stores before={} after={} last_guest_pc=0x{:08X}",
                  i,

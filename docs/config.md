@@ -107,10 +107,20 @@ fails it.
 `PSXPORT_STORE_OBSERVE` is a comma- or space-separated list of hex guest addresses, up to
 `kMaxObservedStoreTargets` of them, e.g. `0x80078AE0,0x80076B80`. Empty is the default and disarms, so
 an ordinary run pays one string compare and nothing per instruction. It arms the dynarec store
-observer, which is the only instrument that names the **guest** PC of a translated store together with
-the full register file; `PSXPORT_CW` sees host-side stores only, so before this the question "which
-instruction wrote this word" was unaskable outside a unit test, and a live divergence investigation was
-blocked on it.
+observer, which names the **guest** PC of a translated store together with the full register file.
+
+**A correction, because the belief it replaced was measured false and that belief is what cost time.**
+This section previously said `PSXPORT_CW` "sees host-side stores only" and therefore "cannot attribute a
+guest-executed one". That is wrong: `PSXPORT_CW` *does* fire for guest stores that Lightrec routes
+through its slow `lightrec_rw` path, because that path re-enters `Core::writeGuestMemory` — measured on
+Spyro 1, where watching `g_Spyro + 0x88` logged 38 host-reaching stores with a guest PC, 35 of them
+`= 00000001`. What is true is narrower: *most* stores to a hot word are inlined by Lightrec and never
+reach the host at all, so `PSXPORT_CW`'s coverage is **unbiased toward the slow path** and a quiet watch
+means "no store took the slow path", not "no store happened". A store observer that watches the
+translated block has no such bias, which is what this surface is for. An earlier note here also claimed
+`PSXPORT_STORE_OBSERVE` was blocked because nothing could arm it — true of the *first* version, which
+was compiled, documented, and reachable from nothing; it is now called from `native_boot.cpp` beside the
+live endpoint, and the product's own symbol table was checked to prove it.
 
 Two honest limits, both stated in `runtime/cpu/store_observe.cpp` rather than papered over:
 

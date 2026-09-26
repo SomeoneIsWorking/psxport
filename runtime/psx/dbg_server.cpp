@@ -152,6 +152,45 @@ DbgServer *DbgServerInternals::sInstance = nullptr;
 #define s_ctx (DbgServerInternals::ctx())
 #define s_started (DbgServerInternals::started())
 
+namespace {
+
+// A DEBUG READ THAT REFUSES INSTEAD OF ABORTING.
+//
+// `Core::mem_r32` is the right reader for a KNOWN guest address, but it falls through to `io_read` for
+// an unmapped one, and `io_read` aborts the product on a refusal. So any diagnostic that walks an
+// untrusted guest structure — a linked list whose next pointer is whatever the guest last wrote —
+// kills the very product it is diagnosing.
+//
+// Measured 2026-09-26: `ents` on Mega Man X4 dereferenced an unmapped node pointer and took the
+// product down mid-census, losing the run. These helpers check the span is main RAM first, so an
+// untrusted address yields a refusal the caller can report instead of a crash. `mappedMainRamRange` is
+// the framework's own mapper, so this agrees with what the CPU would actually execute from.
+bool probeR32(Core &core, uint32_t address, uint32_t &out) {
+  if (!core.mappedMainRamRange(address, 4).has_value()) {
+    return false;
+  }
+  out = core.mem_r32(address);
+  return true;
+}
+
+bool probeR8(Core &core, uint32_t address, uint8_t &out) {
+  if (!core.mappedMainRamRange(address, 1).has_value()) {
+    return false;
+  }
+  out = core.mem_r8(address);
+  return true;
+}
+
+bool probeR16(Core &core, uint32_t address, uint16_t &out) {
+  if (!core.mappedMainRamRange(address, 2).has_value()) {
+    return false;
+  }
+  out = core.mem_r16(address);
+  return true;
+}
+
+} // namespace
+
 // main<->server handoff (a single pending request, serviced on the main thread once per frame) lives
 // on `class DbgServer` with the rest of the state; access via the DbgServerInternals aliases below.
 #define s_mtx (DbgServerInternals::mtx())
@@ -361,28 +400,66 @@ static void dbg_exec(FILE *out, const char *line) {
       fprintf(out, "    cmd[%u]=%08X geomblk=%08X\n", i, cmdp, cmdp ? s_ctx->mem_r32(cmdp + 0x40) : 0);
     }
   } else if (!strcmp(cmd, "ents")) {
+    // Every read below is a REFUSING one. The next-pointer is guest-written, so a stale or cyclic list
+    // is a matter of when, not if — and this command used to abort the product on one. The walk also
+    // reports WHY it stopped and whether the bound was reached, so a truncated dump is never mistaken
+    // for a complete one.
     const uint32_t heads[2] = {s_ctx->mem_r32(0x800fb168u), s_ctx->mem_r32(0x800f2624u)};
     int total = 0;
     for (int h = 0; h < 2; h++) {
       fprintf(out, "-- list %d head=%08X --\n", h, heads[h]);
       uint32_t n = heads[h];
-      for (int guard = 0; n && guard < 300; guard++, n = s_ctx->mem_r32(n + 0x24)) {
-        uint32_t cmd0 = s_ctx->mem_r8(n + 8) ? s_ctx->mem_r32(n + 0xc0) : 0;
+      bool stopped_on_bad_address = false;
+      bool stopped_on_bound = false;
+      uint32_t bad = 0;
+      for (int guard = 0; n && guard < 300; guard++) {
+        uint32_t next = 0;
+        uint32_t hflag = 0;
+        uint8_t type = 0, cmds = 0;
+        uint16_t px = 0, py = 0, pz = 0;
+        if (!probeR32(*s_ctx, n + 0x24, next) || !probeR8(*s_ctx, n + 0xc, type) || !probeR16(*s_ctx, n + 0x2e, px) ||
+            !probeR16(*s_ctx, n + 0x32, py) || !probeR16(*s_ctx, n + 0x36, pz) || !probeR32(*s_ctx, n + 0x1c, hflag) ||
+            !probeR8(*s_ctx, n + 1, cmds)) {
+          stopped_on_bad_address = true;
+          bad = n;
+          break;
+        }
         fprintf(out,
-                "  %08X t=%02X pos=(%6d,%6d,%6d) h=%08X rf=%u cmds=%u gb0=%08X\n",
+                "  %08X t=%02X pos=(%6d,%6d,%6d) h=%08X rf=%u cmds=%u\n",
                 n,
-                s_ctx->mem_r8(n + 0xc),
-                (int16_t)s_ctx->mem_r16(n + 0x2e),
-                (int16_t)s_ctx->mem_r16(n + 0x32),
-                (int16_t)s_ctx->mem_r16(n + 0x36),
-                s_ctx->mem_r32(n + 0x1c),
-                s_ctx->mem_r8(n + 1),
-                s_ctx->mem_r8(n + 8),
-                cmd0 ? s_ctx->mem_r32(cmd0 + 0x40) : 0);
+                type,
+                (int16_t)px,
+                (int16_t)py,
+                (int16_t)pz,
+                hflag,
+                cmds);
+        // The per-node command pointer is one more indirection into guest-written memory, so it is
+        // read through the same refusing path and simply reported as absent when it is not readable.
+        uint32_t cmd0 = 0;
+        uint8_t hasCmds = 0;
+        if (probeR8(*s_ctx, n + 8, hasCmds) && hasCmds && probeR32(*s_ctx, n + 0xc0, cmd0)) {
+          uint32_t gb = 0;
+          if (probeR32(*s_ctx, cmd0 + 0x40, gb)) {
+            fprintf(out, "          gb0=%08X\n", gb);
+          }
+        }
         total++;
+        n = next;
+        if (guard == 299) {
+          stopped_on_bound = true;
+        }
+      }
+      if (stopped_on_bad_address) {
+        fprintf(out, "  STOPPED: node %08X is not in main RAM (refused, not read)\n", bad);
+      }
+      if (stopped_on_bound) {
+        fprintf(out, "  STOPPED: reached the 300-node bound, so this list is LONGER than shown\n");
+      }
+      if (!stopped_on_bad_address && !stopped_on_bound) {
+        fprintf(out, "  complete: reached the list's own null terminator\n");
       }
     }
-    fprintf(out, "(%d nodes)\n", total);
+    fprintf(out, "(%d nodes read; a partial walk is NOT a complete dump)\n", total);
   } else if (!strcmp(cmd, "stage")) {
     fprintf(out,
             "stage(0x801fe00c)=%08X sm48(0x801fe048)=%d scene-active(0x800BE258)=%08X\n",

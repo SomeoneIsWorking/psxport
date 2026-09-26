@@ -21,6 +21,7 @@
 #include "mods.h"
 #include "ot_attr.h" // OtAttr — the producer-census tables (armed by Game's ctor, game.cpp)
 #include "repl.h"
+#include "store_observe.h" // store_observe_configure/report — the one reading of PSXPORT_STORE_OBSERVE
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -211,7 +212,13 @@ static void game_main(Core *c) {
   lucent::info(
       "native_boot", "entering native frame loop ({})", nframes ? "capped" : "interactive (until window close)");
   c->game->dbg_server.start(c); // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.cpp)
-  long repl_budget = 0;         // frames remaining in the current REPL `run N`
+  // PSXPORT_STORE_OBSERVE: arm the dynarec store observer for this Core. It is HERE, beside the live
+  // endpoint, because a surface nobody calls is not a surface: the first version of
+  // runtime/cpu/store_observe.cpp was compiled, documented, and reachable from nothing — the knob was
+  // linked and audited as known, and no run could ever arm it. Measured 2026-09-27 on Spyro 1, where
+  // `nm` on the product showed both symbols ABSENT because the linker never pulled the object in.
+  store_observe_configure(*c);
+  long repl_budget = 0; // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
     // it (immediate commands — r/w/watch/input/regs/seq — execute between frames). Quit/EOF breaks.
@@ -292,6 +299,10 @@ static void game_main(Core *c) {
     }
   }
   lucent::info("native_boot", "frame loop done");
+  // The observer's own denominators, beside the other run-end reports. A "the observer saw nothing"
+  // claim is only meaningful against these counters, and an unarmed observer's silence is not evidence
+  // of anything — so the numbers that distinguish the two are printed here rather than left implicit.
+  store_observe_report(*c);
   const char *rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {
 
