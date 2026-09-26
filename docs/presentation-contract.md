@@ -120,6 +120,49 @@ The plan is frame-stable: host presentation reads only the stored latch. Changin
 widen an old guest projection; the title must publish the matching projection again. Invalid or zero
 title geometry refuses instead of inventing a plausible default.
 
+## What counts as a widening, and what actually breaks one
+
+Read this before diagnosing a title's widescreen, because the obvious diagnosis is the wrong one and
+it has been reached independently on more than one title.
+
+**On a PSX the horizontal field of view is the ratio `OFX / H`, not `H`.** `native_projection.cpp`
+computes `sx = ofx + ir[0] * (h / sz)`, so the visible horizontal half-extent at depth `pz` is
+`ofx * pz / h` and the half-angle is governed by `ofx/h`. Therefore:
+
+- **Moving OFX outward at unchanged H IS a widening.** It grows the frustum by exactly the canvas
+  ratio, leaves the centre pixel mapping to `x/z = 0`, and leaves central scale and vertical FOV
+  untouched. Mega Man X4 widens OFX 160 -> 214 at H = 512 (ratio 428/320), Tekken 3 widens 192 -> 256 at
+  a title-owned H = 500, Tomba! 1 widens 160 -> 214 at H = 544. All three are 4/3 widenings by this
+  rule, and all three keep `OFX = W/2` so the retail frustum is symmetric.
+- **Substituting a SMALLER H is a zoom, not a widening.** It changes central scale. The unique pair
+  that widens by 4/3 at unchanged central scale is `OFX = W/2, H` unchanged.
+- **No register combination is a bare translation while also centring the picture,** because centring
+  forces `OFX = W/2` and that *is* the FOV change. A picture that sits off-centre in a wider canvas is
+  the opposite defect, not this one.
+- `tools/port/widescreen_pair.py` already names the passing case and rules on it: "TRANSLATION — the
+  wide frame contains the 4:3 frame at its ORIGINAL SCALE, offset by `(wide_w - narrow_w)//2`, with
+  genuinely new content at the sides. This is a real horizontal FOV widening." Widening by moving OFX
+  and widening by reducing H produce byte-identical frames, so no pixel tool can and should separate
+  them.
+
+So when a title's wide picture is wrong, the projection registers are usually right. The two defect
+classes that actually produce a bad wide picture, both verified in this workspace:
+
+1. **A horizontal culling owner still comparing against a retail 4:3 literal.** The frustum widens,
+   the cull does not, and the new margins are empty. Measured, pending fix: Mega Man X4's
+   `is_on_screen` (`0x8002B288`) compares `-32`/`352` and `quad_is_on_screen` (`0x800D46F4`) compares
+   `w < 320` four times; Tekken 3's stage-tile selector `FUN_8006D95C` is fed authored 600/780
+   visibility-wedge angles from `FUN_8006D014` (`0x8006D1C4`, `0x8006D24C`) while the stage and effect
+   clippers have already been ported to `guestDrawWidth`. A widened picture is only as wide as the
+   narrowest culling owner still allows.
+2. **An authored 4:3 2D composition that never consumes the margin.** See `wide_2d_layout.h`: the
+   layout rule existed and was correct, but its one application site asked only the host wide engine
+   and so was false on every frame of a `RenderPath::Gte` title.
+
+Both are the same shape of mistake — a retail constant that widens nothing — and `widescreen_pair.py`
+has a distinct verdict for each: `WIDENED BUT OFF-CENTRE`, and `WIDENED BUT … MARGIN IS NOT COVERAGE`.
+Diagnose with those two verdicts in mind before touching a register.
+
 ## Native projection precision
 
 `native_projection::project` preserves the exact PSX integer SXY, SZ, IR and FLAG results while
