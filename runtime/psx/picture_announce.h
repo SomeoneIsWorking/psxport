@@ -52,4 +52,32 @@ struct Geometry {
 // per-Core host-only render state, like everything else there.
 void announceOnChange(Core &core);
 
+// What a resolved picture geometry MEANS, as a decision rather than as arithmetic.
+//
+// WHY THIS IS DECLARED HERE AND NOT ONLY BURIED IN THE .cpp. Two titles each published a body of
+// "widescreen on" evidence that was not, for the same reason: their settings file asked for
+// ASPECT_AUTO, which resolves to the SINK's aspect, and a headless run has no wide sink, so the
+// picture rendered at its 4:3 width while the log said `wide_engine=1`. Both corrected the claim in
+// their own docs. The announcement printed the deciding number, so a careful reader could catch it;
+// nothing said so at the time. This is the same shape the `cvar` command already refuses for
+// PSXPORT_RENDER_PATH: a knob that reads as applied while changing nothing must name which of the
+// reasons it did nothing — and only a title-neutral decision can be asked "would this run have
+// claimed widescreen?" by anything other than the announcement itself.
+enum class WideOutcome {
+  NotRequested,      // 4:3, or a width that already matched: nothing to say
+  Widened,           // render_width > native_width: the enhancement happened
+  RefusedPure,       // a non-4:3 aspect on a PURE Core, where no PC enhancement may touch the picture
+  RefusedAuto,       // ASPECT_AUTO, which resolves to the sink, and this run had no wide sink
+  RefusedUnexplained // a wide aspect was requested and allowed, and the width still did not grow
+};
+
+// `aspect` is `Mods::aspect` (see the ASPECT_* enum), `enhancementsAllowed` is
+// `Core::rsub.mode.enhancementsAllowed()`. Both are passed in so the decision is a pure function of
+// facts and can be asked directly.
+WideOutcome classifyWide(int aspect, bool enhancementsAllowed, int nativeWidth, int renderWidth);
+
+// The reason a non-Widened, non-NotRequested outcome happened, in one sentence. Empty for the two
+// quiet outcomes, so a caller can print it unconditionally.
+const char *wideOutcomeReason(WideOutcome outcome);
+
 } // namespace psx::picture

@@ -74,9 +74,19 @@ checkout, current directory, and environment are not player-storage defaults.
 
 ## Verification
 
+A run that asked for a wide picture and did not get one is told so, by name and by reason, in the same
+`[wide]` announcement: `classifyWide()` in `runtime/psx/picture_announce.h` decides between "widened",
+"nobody asked", "this Core is PURE", "ASPECT_AUTO resolved to a sink that is not wide", and "a wide
+aspect was allowed and the width still did not grow", and a refused outcome is a warning rather than a
+number to be noticed later. This exists because two titles each published a body of widescreen evidence
+that was not widescreen, for the ASPECT_AUTO reason, and corrected the claim in their own docs rather
+than at the moment it happened.
+
 `tests/test_config_cvar.cpp` exercises precedence, invalid input, environment auditing, and runtime
 mutation through the production registry. `tests/test_debug_server_port.cpp` pins the endpoint's port
 contract, including the `1` sentinel and every shape of text that must not bind a port.
+`tests/test_picture_announce.cpp` drives the shipping `classifyWide` over the exact geometries two
+repositories recorded, and the mutation that silences the AUTO verdict fails it.
 `tests/test_diagnostic_run.cpp` proves product,
 comparison, nesting, and invalid-role behavior through the shipping enhancement gate;
 `tests/test_dynarec_contract.cpp` proves zero/nonzero telemetry and both sides of fallback threshold
