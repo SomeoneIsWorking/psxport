@@ -26,6 +26,34 @@ A skip or synchronous native service establishes the complete guest-visible life
 does not fast-forward simulation, write a state-machine phase/timer/scene pointer, or omit required
 callbacks and resource transitions.
 
+### Resuming, which is the whole point of a bounded exit
+
+`ExecutionBudget::currentTurn` is one display field — `33'868'800/60 = 564,480` cycles — by
+construction, so exceeding it is routine rather than exceptional. The two entry points for continuing
+are `psx::cpu::resumeOriginal` and `psx::cpu::resumeGuestToReturn`
+(`runtime/cpu/native_dispatch.h`): pass the `ExecutionResult::guestPc` a bounded turn reported, the
+return address the call must stop at, and a fresh budget. On `GuestReturn` the call has completed; on
+`BudgetExhausted` the new `guestPc` is the next resume point. `resumeOriginal` additionally re-establishes
+the native-suppression scope for its `NativeKey`, so an override cannot be re-entered by guest code
+running inside the original it is resuming.
+
+**A host that aborts on `BudgetExhausted` is a defect, not caution.** Measured 2026-09-26: two titles
+aborted at 564,5xx cycles for calls that were finite compute. Mega Man X4's `DecDCTvlc` terminates on its
+own after 610,746 cycles — 1.082 fields — and returns `GuestReturn` at the correct return address
+`0x80018AA0`; it was being killed for needing 8% more than a field. Crash Bash's MENU image channel swap
+at `0x80018AA0` is a bounded full-image loop whose body is only `lhu`/`sh` on RAM, so it cannot be
+blocked at all. The budget constant is deliberately not a tuning knob, so resuming is the only route.
+
+The same investigation found three repositories had each written their own suspend/resume for this one
+contract, and a fourth could not compile because the wrappers did not exist. There is now one
+implementation. Its hermetic coverage is a real gap and is recorded as one: the only bound the executor
+consults between segments is Lightrec's HOST cycle counter, so a cycle-sized budget is
+machine-dependent, a loop Lightrec closes over completes in one segment regardless, and a guest loop
+calling a host override never reaches a segment boundary. The composition — truncate a call mid-loop,
+then resume it — is therefore closed at the product level rather than by a synthetic loop that only
+looks like coverage. `executeFunction`'s arbitrary-entry / supplied-return-address behaviour is covered
+by `test_explicit_function_continuation_is_independent_of_incoming_ra`.
+
 ## Image identity
 
 Resident code and loaded modules can reuse an address. Every dispatch, continuation, override, and
