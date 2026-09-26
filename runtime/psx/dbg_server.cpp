@@ -19,9 +19,10 @@
 //
 // Drive it from the repo with tools/dbgclient.py (or `nc 127.0.0.1 5959`).
 #define _GNU_SOURCE
+#include "dbg_server.h" // class DbgServer + `debug_server_port`, which interprets the knob once
 #include "cfg.h"
 #include "config.h"      // `cvars` / `cvar` — the layered CVar registry + env audit
-#include "config_vars.h" // cv_render_path — mirror a live switch into the CVar Runtime layer
+#include "config_vars.h" // cv_debug_server — the endpoint's port, and cv_render_path's live switch
 #include "render_mode.h" // `renderpath` — RenderPath + render_path_parse/name/next
 #include <arpa/inet.h>
 #include <errno.h>
@@ -45,11 +46,12 @@
 #endif
 
 // --- guest RAM + GPU primitives provided by the rest of the port ---------------------------------
-#include "core.h"       // Core, mem_*, guest dispatch — for the RE commands (call/ents/node)
-#include "dbg_server.h" // class DbgServer — singleton state holder
+#include "c_subsys.h" // watchdog_suspend / watchdog_resume — a debug pause is intentional idle
+#include "core.h"     // Core, mem_*, guest dispatch — for the RE commands (call/ents/node)
 #include "execution_control.h"
 #include "game.h" // Core::game->gpu (render state is per-instance now)
 #include "guest_call.h"
+#include "lightrec_executor.h" // `guest`: the executor's own counters, asked live
 void gpu_scene_dump_now(Core *c, FILE *out);
 void gpu_disp_dump_now(Core *c, FILE *out);                     // `disp` — the display rect + draw clip, in one place
 void gpu_otattr_dump_now(Core *c, FILE *out, uint32_t oneAddr); // `otattr` — who submitted this geometry
@@ -248,6 +250,9 @@ static void dbg_exec(FILE *out, const char *line) {
             "                   same as a 240 the game chose, and they mean opposite things\n"
             "  cvars            every declared config knob: value, WHICH LAYER it came from, plus the\n"
             "                   PSXPORT_* variables in this process's environment that matched NOTHING\n"
+            "  guest            the guest-execution denominators as they stand NOW: translated/executed\n"
+            "                   blocks and instructions, cache hit/miss, host dispatches, invalidations,\n"
+            "                   faults, and interpreter fallback by reason\n"
             "  cvar N [V]       set knob N to V at the runtime layer (this run only, never persisted);\n"
             "                   bare `cvar N` clears that layer. Ladder: default < value < env < runtime\n"
             "  renderpath [P]   switch the LIVE render path: native | gte | psx; bare form CYCLES.\n"
@@ -504,6 +509,51 @@ static void dbg_exec(FILE *out, const char *line) {
     lucent::enable_channels(ch);
     psx::config::note_runtime_external("PSXPORT_DEBUG", ch); // the RUNTIME layer; see repl.cpp
     fprintf(out, "debug channels = %s\n", ch[0] ? ch : "(none)");
+  } else if (!strcmp(cmd, "guest")) {
+    // The guest-execution denominators, live. A gameplay gate has to show that the dynarec actually
+    // executed the guest, with its invalidations and its bounded fallback accounted for, and until
+    // this command existed the only way to read those numbers out of a running product was to scrape
+    // its log — which is a text format, not an interface, and cannot be asked a question.
+    if (!s_ctx) {
+      fprintf(out, "guest: no core in this frame\n");
+    } else {
+      const psx::cpu::ExecutorCounters &k = s_ctx->lightrecExecutor().counters();
+      fprintf(out,
+              "guest: calls=%llu translated_blocks=%llu executed_blocks=%llu "
+              "executed_instructions=%llu host_dispatches=%llu cache_hits=%llu cache_misses=%llu "
+              "invalidations=%llu faults=%llu\n",
+              (unsigned long long)k.calls,
+              (unsigned long long)k.translatedBlocks,
+              (unsigned long long)k.executedBlocks,
+              (unsigned long long)k.executedInstructions,
+              (unsigned long long)k.hostDispatches,
+              (unsigned long long)k.cacheHits,
+              (unsigned long long)k.cacheMisses,
+              (unsigned long long)k.invalidations,
+              (unsigned long long)k.faults);
+      const psx::cpu::InterpreterFallbackCounters &f = k.fallback;
+      // Every reason the fallback counters carry, because a report that names three of six reasons
+      // reads as "the other three are zero" when it means "the other three were never asked".
+      fprintf(out,
+              "fallback: calls=%llu instructions=%llu refused_calls=%llu compilation_failed=%llu "
+              "self_modifying_code=%llu unsupported_block=%llu load_delay_hazard=%llu "
+              "unsafe_instruction_fetch=%llu refused_compilation_failed=%llu "
+              "refused_self_modifying_code=%llu refused_unsupported_block=%llu "
+              "refused_load_delay_hazard=%llu refused_unsafe_instruction_fetch=%llu\n",
+              (unsigned long long)f.calls,
+              (unsigned long long)f.instructions,
+              (unsigned long long)f.refusedCalls,
+              (unsigned long long)f.compilationFailed,
+              (unsigned long long)f.selfModifyingCode,
+              (unsigned long long)f.unsupportedBlock,
+              (unsigned long long)f.loadDelayHazard,
+              (unsigned long long)f.unsafeInstructionFetch,
+              (unsigned long long)f.refusedCompilationFailed,
+              (unsigned long long)f.refusedSelfModifyingCode,
+              (unsigned long long)f.refusedUnsupportedBlock,
+              (unsigned long long)f.refusedLoadDelayHazard,
+              (unsigned long long)f.refusedUnsafeInstructionFetch);
+    }
   } else if (!strcmp(cmd, "cvars")) {
     // The configuration, answered where the question gets asked. Same three facts as report(): what
     // each knob resolved to, WHICH LAYER that came from, and which PSXPORT_* variables in this
@@ -820,15 +870,33 @@ static void *dbg_thread(void *arg) {
   return NULL;
 }
 
-// Start the debug server thread if PSXPORT_DEBUG_SERVER is set (=1 -> default port, =<n> -> port n).
-void DbgServer::start(Core *c) {
-  const char *e = cfg_str("PSXPORT_DEBUG_SERVER");
-  if (!e || !atoi(e)) {
+// A client froze the game: hold here until it says `play` or `step`. The loop keeps the window (or
+// the headless host input) alive and keeps servicing commands, and it re-shows the last REAL frame
+// rather than re-rendering — a pause must never rebuild: the framework's own loop spins at ~66 Hz
+// here, and at fps60 there is no geometry batch left to re-render at all.
+void DbgServer::honourPause(Core *c) {
+  if (!isPaused()) {
     return;
   }
-  int port = atoi(e);
-  if (port == 1) {
-    port = 5959;
+  watchdog_suspend(); // a debug pause is intentional idle, not a hang
+  while (isPaused()) {
+    if (stepPending()) {
+      consumeStep();
+      break; // run exactly one frame
+    }
+    c->game->pad.pumpHostInput(); // host input ONLY — must not tick the pad-frame clock here
+    c->game->gpu.gpu_repaint();
+    service(c); // receive step/play/capture commands
+    usleep(15000);
+  }
+  watchdog_resume(); // re-arm after idle without falsely claiming this frame completed
+}
+
+// Start the debug server thread if PSXPORT_DEBUG_SERVER names a port (=1 -> default port).
+void DbgServer::start(Core *c) {
+  const int port = debug_server_port(psx::config::cv_debug_server.get());
+  if (port == 0) {
+    return;
   }
   // Claim the process-wide endpoint. In SBS the FIRST Game to reach start() wins the TCP port +
   // the impl-TU accessors below; the other Game's start() no-ops (its listener bind would fail).

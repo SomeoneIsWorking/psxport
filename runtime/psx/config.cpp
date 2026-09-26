@@ -278,6 +278,16 @@ BoolVar cv_repl("PSXPORT_REPL",
                 false,
                 "interactive REPL on stdin, serviced by the product frame loop",
                 /*persistable=*/false);
+// PSXPORT_DEBUG_SERVER — the live, non-blocking TCP debug endpoint. Its VALUE is a port, with 1
+// meaning the default: "1" asks for the default port and a number asks for that port, so it is a
+// TextVar rather than a BoolVar, and the meaning of "1" belongs to dbg_server.h's
+// `debug_server_port`, which both call sites use. It was read through the legacy cfg_str() path and
+// declared NOWHERE, so the boot audit named it UNKNOWN and it did nothing at all: a run with
+// PSXPORT_DEBUG_SERVER=1 started no server and had said so in its own log.
+TextVar cv_debug_server("PSXPORT_DEBUG_SERVER",
+                        "",
+                        "live debug TCP port on 127.0.0.1 (1 = default 5959, empty = off)",
+                        /*persistable=*/false);
 
 IntVar cv_watchdog("PSXPORT_WATCHDOG",
                    3,

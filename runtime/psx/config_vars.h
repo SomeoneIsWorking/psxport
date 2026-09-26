@@ -33,6 +33,13 @@ extern BoolVar cv_producers; // arm the producer census (ot_attr.h) — see conf
 // PSXPORT_REPL — the interactive REPL on stdin, serviced by the product frame loop.
 extern BoolVar cv_repl;
 
+// PSXPORT_DEBUG_SERVER — the live, non-blocking TCP debug endpoint on 127.0.0.1, which is how a game
+// is driven and inspected WHILE it runs. The value is a port, and 1 means the default port, so the
+// text is interpreted once, in dbg_server.h's `debug_server_port`. Declared here because a knob the
+// audit cannot see is a knob that does nothing: this one was read through cfg_str() and matched
+// nothing, which the boot audit reported as UNKNOWN while the server never started.
+extern TextVar cv_debug_server;
+
 // ── watchdog ────────────────────────────────────────────────────────────────────────────────────
 // PSXPORT_WATCHDOG — frame-progress timeout in seconds. Default 3, ON even when unset, so a hang
 // self-aborts with a backtrace instead of wedging. 0 disables it.

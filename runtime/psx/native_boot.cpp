@@ -11,6 +11,7 @@
 #include "core.h"
 #include "crt0_boot.h"   // crt0_plan/crt0_apply — THE crt0 derivation + the required/ABSENT decision
 #include "crt0_verify.h" // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
+#include "dbg_server.h"  // debug_server_port — the one reading of PSXPORT_DEBUG_SERVER
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_iface.h"
@@ -204,7 +205,7 @@ static void game_main(Core *c) {
   // When the debug server is up (headless, no REPL), the run is INTERACTIVELY DRIVEN over the socket
   // (rw/w16/press/shot/dumpram, step/play) — do NOT cap it, or it exits before we can drive. The
   // server's `quit` command (or SIGINT) ends it.
-  if (!repl_mode && !gpu_windowed() && cfg_on("PSXPORT_DEBUG_SERVER")) {
+  if (!repl_mode && !gpu_windowed() && debug_server_live()) {
     nframes = 0;
   }
   lucent::info(
@@ -229,25 +230,9 @@ static void game_main(Core *c) {
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
-    {
-      DbgServer &dbg = c->game->dbg_server;
-      if (dbg.isPaused()) {
-        watchdog_suspend(); // a debug pause is intentional idle, not a hang
-      }
-      while (dbg.isPaused()) {
-        if (dbg.stepPending()) {
-          dbg.consumeStep();
-          break;
-        } // run exactly one frame
-        c->game->pad.pumpHostInput(); // host input ONLY — must not tick the pad-frame clock here
-        // Re-SHOW the last real frame (no rebuild) so the window stays live and the readback target keeps
-        // holding it — see GpuState::gpu_repaint. A pause must never re-render: this loop spins at ~66 Hz,
-        // and at fps60 there is no geometry batch left to re-render at all (kanban #20's black screen).
-        c->game->gpu.gpu_repaint();
-        dbg.service(c); // receive step/play/capture commands
-        usleep(15000);
-      }
-    }
+    // The policy lives in DbgServer::honourPause because a title's own frame driver owes the same
+    // behaviour, and two copies of "what a pause does" would be free to disagree.
+    c->game->dbg_server.honourPause(c);
     watchdog_resume(); // re-arm after idle without falsely claiming this frame completed; the
                        // completed present switches first-frame grace to the steady budget
     FrameLoopShell{}.step(*c, f);

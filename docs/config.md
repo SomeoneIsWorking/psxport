@@ -21,6 +21,27 @@ The resolved value, source layer, and complete `PSXPORT_*` environment denominat
 through `psx::config::report()` and the `cvars` runtime command. `PSXPORT_LOG_FILE` selects the log
 sink. `PSXPORT_DEBUG` is the comma-separated diagnostic-channel set.
 
+## The live debug endpoint
+
+`PSXPORT_DEBUG_SERVER` names a loopback TCP port for the live, non-blocking debug endpoint, where `1`
+asks for the default port 5959 and a number asks for that port; unset, empty, `0` and anything that is
+not a number in range leave it off. The text is interpreted once, by `debug_server_port()` in
+`runtime/psx/dbg_server.h`, and both of its readers use it: `DbgServer::start` binds the port, and
+`debug_server_live()` tells a boot spine that a client will drive the run, which is why such a run is
+not frame-capped.
+
+The endpoint is a framework service, not a property of one boot spine. A title that owns its own frame
+driver still has to call `DbgServer::start()` once, `DbgServer::honourPause()` before each frame, and
+`DbgServer::service()` after it; the pause policy itself lives in the framework so the spines cannot
+disagree about what a pause does. A title that omits those calls has no endpoint, and the symptom is a
+connection refused against a product that is otherwise running normally.
+
+`tools/dbgclient.py` is the client: a one-shot CLI, and `LiveClient` for a driver that keeps a session.
+Two commands exist so a running product can be QUERIED rather than read out of its log: `cvars` answers
+the effective configuration with the layer each value came from, and `guest` answers the dynarec's own
+denominators (translated and executed blocks and instructions, cache hit/miss, host dispatches,
+invalidations, faults, and interpreter fallback by every reason it counts).
+
 ## Diagnostic runs and bounded fallback
 
 `PSXPORT_DIAGNOSTIC_RUN` accepts `product`, `compare-candidate`, or `compare-reference`. It labels
@@ -54,7 +75,9 @@ checkout, current directory, and environment are not player-storage defaults.
 ## Verification
 
 `tests/test_config_cvar.cpp` exercises precedence, invalid input, environment auditing, and runtime
-mutation through the production registry. `tests/test_diagnostic_run.cpp` proves product,
+mutation through the production registry. `tests/test_debug_server_port.cpp` pins the endpoint's port
+contract, including the `1` sentinel and every shape of text that must not bind a port.
+`tests/test_diagnostic_run.cpp` proves product,
 comparison, nesting, and invalid-role behavior through the shipping enhancement gate;
 `tests/test_dynarec_contract.cpp` proves zero/nonzero telemetry and both sides of fallback threshold
 enforcement. The product-boundary check rejects CPU-engine selectors and explicit interpreter mode
