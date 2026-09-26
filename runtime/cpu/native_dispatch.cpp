@@ -272,6 +272,62 @@ ExecutionResult executeOriginal(Core &core, std::uint32_t guestAddress, Executio
 
 } // namespace
 
+// ---- RESUMING AN ORIGINAL CALL THAT OUTLIVED ONE HOST TURN -----------------------------------------
+// WHY THIS EXISTS. `ExecutionBudget::currentTurn` is one display field, 33'868'800/60 = 564,480
+// cycles, by construction (execution_exit.cpp:9-16). The executor contract says that is FINE:
+// "Budget exhaustion is an ordinary bounded exit" and "Host code commits and handles that state,
+// then resumes deliberately" (AGENTS.md, Executor contract; docs/faithful-execution.md:20-23). So a
+// guest function that legitimately needs more than one field is supposed to be resumed across the
+// boundary, not aborted.
+//
+// Two titles were aborting instead, and both are finite compute rather than a spin:
+//   - Mega Man X4's `DecDCTvlc` (0x800ED574) was measured terminating on its OWN after 610,746
+//     cycles — 1.082 fields, 8.2% over — returning `GuestReturn` at the correct return address
+//     0x80018AA0. It was killed for needing 8% more than a field.
+//   - Crash Bash's MENU image channel swap at 0x80018AA0 is a bounded full-image loop whose body is
+//     only `lhu`/`sh` on RAM: no I/O register, no VSync poll, no CD access, so it cannot be blocked.
+//
+// The primitive to resume them already existed and is correct — `executeFunction` runs from an
+// arbitrary address and stops when `guestPc == returnAddress` (lightrec_executor.cpp:253, :664). What
+// was missing was the thin wrapper that also re-establishes the two scopes the initial call had, and
+// its absence is why three repositories had each written their own suspend/resume: tekken3's
+// `BoundedCall`, crashbash's `FrameGuestCall`, and X4 about to write a third.
+//
+// The scopes are the whole reason this is not just `executeFunction`. `SuppressionScope` stops the
+// native override at `key` from being re-entered while guest code that is INSIDE that original runs —
+// without it a resumed original could re-enter its own override. `NativeCallerContextScope` keeps
+// caller attribution correct across the boundary. Both must be re-established on every resume, which
+// is exactly what `executeOriginal` does at the three lines above.
+//
+// NOT YET COVERED BY A HERMETIC TEST, and the reason is worth recording rather than guessing at. The
+// contract wants a case that truncates a long guest call MID-LOOP and resumes it. The only bound the
+// executor consults between segments is Lightrec's HOST cycle counter (`lightrec_current_cycle_count`),
+// not an instruction count, so a cycle-sized budget is machine-dependent: the same loop finishes inside
+// one segment on a fast host and straddles two on a slow one. A loop Lightrec closes over runs to
+// completion in one segment regardless of the budget, and a guest loop that calls into a host override
+// never reaches a segment boundary, because the override is only consulted at one. The bounded exits a
+// test CAN produce deterministically — `Core::PW_HOST` servicing, `maxHostDispatches` — all land at a
+// point where a resume has no guest work left to distinguish it from a restart.
+//
+// `executeFunction`'s ability to start at an arbitrary pc and stop at a supplied return address IS
+// covered, by `test_explicit_function_continuation_is_independent_of_incoming_ra`. What is missing is
+// the composition: a truncated call, then a resume. The honest place to close that is a product-level
+// case — Mega Man X4's `DecDCTvlc`, which is measured to need 1.082 fields and to return correctly on
+// its own once it is allowed to — not a synthetic loop here. Adding a test that only looks like that
+// coverage would be worse than the acknowledged gap.
+ExecutionResult
+resumeOriginal(Core &core, NativeKey key, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget) {
+  NativeCallerContextScope callerContext(core);
+  SuppressionScope suppression(core.nativeDispatcher(), key);
+  return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
+}
+
+ExecutionResult
+resumeGuestToReturn(Core &core, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget) {
+  NativeCallerContextScope callerContext(core);
+  return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
+}
+
 ExecutionResult callOriginal(Core &core, NativeKey key, ExecutionBudget budget) {
   return executeOriginal(core, key, budget, true);
 }
