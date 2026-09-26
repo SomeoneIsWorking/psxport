@@ -50,6 +50,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/cpu/invalidation.cpp
   ${PSXPORT_ROOT}/runtime/cpu/lightrec_executor.cpp
   ${PSXPORT_ROOT}/runtime/cpu/native_dispatch.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/store_observe.cpp # arms the dynarec store observer from PSXPORT_STORE_OBSERVE
   ${PSXPORT_ROOT}/runtime/psx/frame_loop_shell.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame_presenter.cpp
   ${PSXPORT_ROOT}/runtime/psx/guest_widescreen_projection.cpp

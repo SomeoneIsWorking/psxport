@@ -101,6 +101,32 @@ repositories recorded, and the mutation that silences the AUTO verdict fails it.
 `tests/test_wide_2d_layout.cpp` drives the shipping 2D-layout decision over both mechanisms at the
 geometries that were affected, and the mutation that restores the pre-fix host-engine-only question
 fails it.
+
+## PSXPORT_STORE_OBSERVE — which instruction wrote this guest word
+
+`PSXPORT_STORE_OBSERVE` is a comma- or space-separated list of hex guest addresses, up to
+`kMaxObservedStoreTargets` of them, e.g. `0x80078AE0,0x80076B80`. Empty is the default and disarms, so
+an ordinary run pays one string compare and nothing per instruction. It arms the dynarec store
+observer, which is the only instrument that names the **guest** PC of a translated store together with
+the full register file; `PSXPORT_CW` sees host-side stores only, so before this the question "which
+instruction wrote this word" was unaskable outside a unit test, and a live divergence investigation was
+blocked on it.
+
+Two honest limits, both stated in `runtime/cpu/store_observe.cpp` rather than papered over:
+
+- `StoreObservation` does **not** carry the address that was written. With several addresses armed, run
+  them one at a time, or read `store_observe_report`, whose per-target rows do carry each address's
+  store counts and the guest PC of its last one. The callback line therefore does not invent a target.
+- An unarmed observer reports **nothing**, so its silence is not evidence. `store_observe_report` prints
+  the executor's own `executedJitInstructions` / `fallbackInstructions` beside the per-target counts, and
+  the arming lines print how many addresses were accepted — so "ran and matched nothing" is
+  distinguishable from "never ran". An unparsable or over-long list is REFUSED with the offending token
+  named, rather than silently watching a prefix, which is the failure this area has already produced
+  once.
+
+A title wanting richer handling than a log line calls
+`LightrecExecutor::configureStoreObserver` itself with its own callback; this is the
+configuration-driven path, so an investigation needs no product edit.
 `tests/test_diagnostic_run.cpp` proves product,
 comparison, nesting, and invalid-role behavior through the shipping enhancement gate;
 `tests/test_dynarec_contract.cpp` proves zero/nonzero telemetry and both sides of fallback threshold

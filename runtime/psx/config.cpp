@@ -289,6 +289,19 @@ TextVar cv_debug_server("PSXPORT_DEBUG_SERVER",
                         "live debug TCP port on 127.0.0.1 (1 = default 5959, empty = off)",
                         /*persistable=*/false);
 
+// PSXPORT_STORE_OBSERVE — guest addresses whose translated stores are observed, as a comma- or
+// space-separated hex list (e.g. "0x80078AE0,0x80076B80"), up to kMaxObservedStoreTargets of them.
+// Empty is the default and disarms, so an ordinary run pays nothing. It exists because the dynarec
+// store observer is the only instrument that names the GUEST instruction behind a store together with
+// the register file, and it previously had no way to be armed from a product run at all: `PSXPORT_CW`
+// sees host-side stores only, so a live divergence investigation could not ask which instruction wrote
+// a given guest word (Spyro 1 docs/issues/0133). The meaning of the list belongs to
+// runtime/cpu/store_observe.cpp's `store_observe_configure`, which both this and the live endpoint's
+// pattern follow: declare it ONCE here, interpret it ONCE there.
+TextVar cv_store_observe("PSXPORT_STORE_OBSERVE",
+                         "",
+                         "hex guest addresses whose stores are observed, comma-separated (empty = off)",
+                         /*persistable=*/false);
 IntVar cv_watchdog("PSXPORT_WATCHDOG",
                    3,
                    "frame-progress timeout, seconds (0 = off)",

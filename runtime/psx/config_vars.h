@@ -39,6 +39,10 @@ extern BoolVar cv_repl;
 // audit cannot see is a knob that does nothing: this one was read through cfg_str() and matched
 // nothing, which the boot audit reported as UNKNOWN while the server never started.
 extern TextVar cv_debug_server;
+// PSXPORT_STORE_OBSERVE — hex guest addresses whose translated stores the dynarec store observer
+// watches. Interpreted once by runtime/cpu/store_observe.cpp; see the declaration in config.cpp for why
+// it exists and what it is for.
+extern TextVar cv_store_observe;
 
 // ── watchdog ────────────────────────────────────────────────────────────────────────────────────
 // PSXPORT_WATCHDOG — frame-progress timeout in seconds. Default 3, ON even when unset, so a hang
