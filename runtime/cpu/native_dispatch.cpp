@@ -138,12 +138,48 @@ struct ResolvedHostDispatch {
   char biosTable = 0;
 };
 
+// THE ORDER HERE IS THE CONTRACT, and it was backwards.
+//
+// `platform_hle` is the table of MEASURED HARDWARE-SERVICE LEAVES — VSync, CdReadSync, MDEC
+// synchronisation, wait. It is a fallback for a service nobody has claimed, not a prior claim on an
+// address. The image-scoped native override table is a TITLE's own recovered behaviour at a specific
+// (image, generation, address) key, and the documented contract is that "a normal guest call resolves
+// that complete key and invokes the native override when one is active" (AGENTS.md, Image-scoped
+// native calls).
+//
+// Consulting the HLE table first therefore made a title-owned override UNREACHABLE for any address the
+// HLE also claimed, silently. Measured on Mega Man X4, where the title installs its own movie VSync
+// boundary at `0x800E4DB0` (`x4::movie::fieldBoundary`, via `movie::registerOverrides`) while the
+// legacy `GameConfig::hle` window's `.vsyncTrap = 0x800E4DB0` also installs the framework's
+// `PlatformHle::vsync` there: the framework's builtin won, it requested the bounded exit with `core.pc`
+// (the VSync ENTRY) instead of `core.r[31]` (the call's return address), and so the movie task resumed at
+// the VSync entry forever. The guest's STR frame pull could never execute its retry increment, `StGetNext`
+// was never re-entered, the libstr ring filled to READY and was never read, and the completion
+// transaction at `0x80018E50` — the only path that stops the drive and lets the gameplay prefix run —
+// was never entered. The result was 200 fields, 0 prims offered, and 7 of 7 presents 100% black.
+//
+// So: the title's own override is consulted FIRST. Every other outcome below is unchanged, and an
+// address no title overrides still resolves exactly as it did — the HLE table still answers for it,
+// which is what it is for.
 ResolvedHostDispatch resolveHostDispatch(Core &core, std::uint32_t guestAddress) {
+  const std::uint32_t physical = guestAddress & 0x1fffffffu;
+  const bool isRam = physical != 0;
+
+  // 1. The title's own image-scoped override, before any host-service table.
+  if (isRam) {
+    if (const auto identity = core.currentImageIdentity(guestAddress)) {
+      const NativeKey key{*identity, guestAddress};
+      if (core.nativeDispatcher().intercepts(key)) {
+        return {.kind = GuestHostDispatchKind::HostService, .nativeKey = key};
+      }
+    }
+  }
+
+  // 2. The measured host-service leaves, for every address no title has claimed.
   if (core.game) {
     if (NativeFunction service = core.game->platform_hle.lookup(guestAddress)) {
       return {.kind = GuestHostDispatchKind::HostService, .platformFunction = service};
     }
-    const std::uint32_t physical = guestAddress & 0x1fffffffu;
     const char biosTable = physical == 0xa0u ? 'A' : physical == 0xb0u ? 'B' : physical == 0xc0u ? 'C' : 0;
     if (biosTable) {
       return {.kind = GuestHostDispatchKind::HostService, .biosTable = biosTable};
@@ -152,16 +188,12 @@ ResolvedHostDispatch resolveHostDispatch(Core &core, std::uint32_t guestAddress)
       return {.kind = GuestHostDispatchKind::HostService, .padWorkAreaAction = action};
     }
   }
-  if ((guestAddress & 0x1fffffffu) == 0) {
+  if (!isRam) {
     return {.kind = GuestHostDispatchKind::HostService};
   }
-  const auto identity = core.currentImageIdentity(guestAddress);
-  if (!identity) {
+  // 3. A RAM address in no active image is still the typed fault it was, not a guess.
+  if (!core.currentImageIdentity(guestAddress)) {
     return {.kind = GuestHostDispatchKind::Fault};
-  }
-  const NativeKey key{*identity, guestAddress};
-  if (core.nativeDispatcher().intercepts(key)) {
-    return {.kind = GuestHostDispatchKind::HostService, .nativeKey = key};
   }
   return {};
 }
