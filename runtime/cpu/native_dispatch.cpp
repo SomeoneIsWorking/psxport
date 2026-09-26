@@ -358,12 +358,33 @@ ExecutionResult
 resumeOriginal(Core &core, NativeKey key, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
   SuppressionScope suppression(core.nativeDispatcher(), key);
+  // The key already carries the call's entry, so attribution can be scoped EXACTLY as a fresh original
+  // call scopes it — which is why this entry needs no second form.
+  auto attribution = core.callAttribution.scope(key.address);
+  return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
+}
+
+ExecutionResult resumeGuestToReturnFrom(
+    Core &core, std::uint32_t entry, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget) {
+  NativeCallerContextScope callerContext(core);
+  // A FRESH dispatch scopes call attribution on the entry (`dispatchGuest` does exactly this), so a
+  // resume that omits it reports a submission against the wrong frame. `ot_attr.cpp` reads
+  // `callAttribution.top()` / `caller()` / `visibleDepth()` for the OT submission attribution report, so
+  // this is a reporting defect, not a cosmetic one: primitives submitted during a resumed turn would be
+  // attributed to the enclosing frame rather than the call being resumed. Tekken 3 hand-rolled this scope
+  // because the entry-less form could not express it.
+  auto attribution = core.callAttribution.scope(entry);
   return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
 }
 
 ExecutionResult
 resumeGuestToReturn(Core &core, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget) {
+  // WITHOUT the entry, call attribution cannot be scoped correctly: the resume point is MID-function, so
+  // it is not the call this turn belongs to. This form therefore scopes on the resume point, which is the
+  // best available and is NOT what a fresh dispatch would produce. A caller that reports OT submission
+  // attribution across a resume must use `resumeGuestToReturnFrom` with the call's ENTRY.
   NativeCallerContextScope callerContext(core);
+  auto attribution = core.callAttribution.scope(resumePc);
   return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
 }
 

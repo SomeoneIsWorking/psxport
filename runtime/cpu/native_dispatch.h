@@ -80,6 +80,15 @@ void dispatchGuestToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudg
 ExecutionResult
 resumeOriginal(Core &core, NativeKey key, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget);
 ExecutionResult resumeGuestToReturn(Core &core, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget);
+// The CORRECT form when the run reports OT submission attribution across a resume. Call attribution is per
+// CALL, so it must be scoped on the call's entry — the address a fresh `dispatchGuest` would have used —
+// and `resumePc` is MID-FUNCTION, so it cannot stand in for it. Without this, primitives submitted during a
+// resumed turn are attributed to the enclosing frame instead of the call being resumed, which
+// `runtime/psx/ot_attr.cpp` reports (`callAttribution.top()`, `caller()`, `visibleDepth()`). The
+// entry-less form still works and still resumes correctly; it just cannot attribute. `resumeOriginal` needs
+// no second form because its `NativeKey` already carries the entry.
+ExecutionResult resumeGuestToReturnFrom(
+    Core &core, std::uint32_t entry, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget);
 ExecutionResult callOriginal(Core &core, NativeKey key, ExecutionBudget budget);
 ExecutionResult callOriginal(Core &core, std::uint32_t guestAddress, ExecutionBudget budget);
 ExecutionResult callOriginalUntilExit(Core &core, NativeKey key, ExecutionBudget budget);
