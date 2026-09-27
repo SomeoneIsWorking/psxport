@@ -115,30 +115,55 @@ A cap is only half a contract; the CLIENT has to survive it. Two shapes exist in
 The second shape is the pattern to copy, and it costs nothing: a client that loops until it has what it
 asked for cannot be confused by a cap, because it never assumes one reply was sufficient.
 
-### 6. A gate that could not detect the drift it exists to catch (`psxport_pin`)
+### 6. A gate hole that was not a gate hole — and the method that produced it
 
-Not a measurement instrument, but the same species, and found the same way: by reading what a green
-result actually compared.
+`psxport_resolved.txt` is written by CMake at CONFIGURE time, so a plain `cmake --build` does not rewrite
+it. From that fact alone I concluded that `psxport_sync.py --check` "would pass" against a framework it
+never saw, wrote that into `docs/workspace/WORKSPACE.md` and into this document, and moved on.
 
-`--check` compares `psxport.pin` against `build/psxport_resolved.txt`, and CMake writes that file **at
-configure time**. A plain `cmake --build` does not rewrite it. So after framework motion a port can
-relink against newer framework code, its resolved file still naming the older commit, and the check
-passes — the one thing the pin is for.
+**It does not pass.** `do_check` reads the resolved file and then compares it against the framework's
+CURRENT head, failing when they differ or the tree is dirty:
 
-Measured 2026-09-27 on `crash`: `psxport_resolved.txt` written at 11:30 naming framework `492adace`,
-binary relinked at 16:05 against framework `2b07a8f6`, check green. `crash` does not register a pin test
-at all, so its 22/22 never consulted one; `ctr` does register one, and correctly failed.
+```python
+current = head_of(bdir)
+if current != bsha or dirty(bdir):
+    print("check FAILED — framework ... is dirty or changed since configure "
+          "(configured {bsha}, current {current}).")
+```
 
-*Rule added, recorded in `docs/workspace/WORKSPACE.md`:* **`--check` is only meaningful after a
-reconfigure**, so the order is `reconfigure → build → test → --bump`, never `build → --bump`. And a gate
-that is not registered is not a gate — the uneven coverage is named there rather than assumed away.
+Verified rather than assumed, by pointing `--check` at a build directory whose resolved file names a
+stale commit. It refuses:
+
+```
+[psxport] check FAILED — framework /home/bhamil/repo/psx/psxport is dirty or changed since configure
+(configured 00000000000...
+```
+
+**What is actually wrong is one line narrower:** `crash` registers no pin test at all — `ctest -N` finds
+zero tests matching `pin` — so its green 22/22 never runs the check. `ctr`, `crashbash`, `spider1`,
+`Tomba2Engine` and `megamanx4` do register one, and all of them failed correctly when the framework moved.
+That part of the original claim stands; the fix is to register the test in `crash`.
+
+This entry is here rather than deleted because the failure mode is the same species as the five above and
+is worth naming precisely: **I read a gate's happy path, inferred a failure mode from it, and published the
+inference as a measurement.** The tell was available and unused — a claim phrased "would pass", about a
+safety gate, with a concrete counter-example already in hand, is a claim to TEST before writing it down.
+The cost was two documents carrying a false statement about a gate, which is worse than no document,
+because the next reader would have trusted it.
+
+*Rule added:* when a conclusion is about what a check does NOT catch, run the check against an input that
+should trip it. A gate's silence is not evidence about the gate, and neither is its happy path.
 
 ## What this costs, and why it is worth a document
 
-Each of these was found by **doing the measurement wrong and then being suspicious of the result** —
-which is not a process anyone can be asked to follow reliably. The durable form is the rule above plus
-the tests that now encode it, so the suspicion is not required: `test_control_read_limits` fails if a
-short answer is silent, and `test_dynarec_contract` fails if a data address matches a store PC.
+Five of these were found by **doing the measurement wrong and then being suspicious of the result**, which
+is not a process anyone can be asked to follow reliably. The sixth was found the other way round: by
+suspecting a gate, writing the suspicion down, and only then reading the gate's code — which showed the
+suspicion was wrong. **Being suspicious is not the durable part; testing the suspicion is.** The durable
+form is the rule above plus the tests that now encode it, so neither the luck nor the scepticism is
+required: `test_control_read_limits` fails if a short answer is silent, `test_dynarec_contract` fails if a
+data address matches a store PC, and `test_wide_left_margin` fails if the two spellings of the margin are
+ever allowed to drift apart.
 
 The general statement: **a diagnostic is not finished when it works, and it is not safe until it has been
 observed to fail correctly.** An instrument that has only ever produced the answer you wanted is
