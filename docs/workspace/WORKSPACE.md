@@ -108,31 +108,56 @@ because there is no second copy.
    built against is not the one the repo records, comparing against `build/psxport_resolved.txt`, which
    CMake writes at configure time.
 
-   **Coverage is uneven, and that IS the whole finding.** `ctr`, `crashbash`, `spider1`, `Tomba2Engine`
-   and `megamanx4` register a pin test; **`crash` registers none** — `ctest -N` finds zero tests matching
-   `pin` — so `crash`'s green 22/22 says nothing about framework provenance at all. Registering it is the
-   cheap fix and has not been done.
+   **MEASURED 2026-09-27 — and the coverage is worse than "uneven", because the pin was never
+   CALLED.** Two claims in an earlier revision of this file were wrong, both the same way:
 
-   **MEASURED 2026-09-27: the gate's own staleness guard was MISSING FROM 7 OF THE 10 COPIES OF THIS
-   TOOL, and is now present in 9.** `--check` reads `build/psxport_resolved.txt`, which CMake writes at
-   CONFIGURE time, so a plain `cmake --build` never refreshes it. A check that reads only that file
-   compares a stale snapshot to the pin, and a tree rebuilt against newer framework code passes. The
-   discriminating experiment, same input, `psxport_resolved.txt` naming a repo's own pin while the shared
-   framework sat eight commits later:
+   - *"`crash` registers none — `ctest -N` finds zero tests matching `pin`."* It does register one, as
+     **`crash_dependency_provenance`** (`crash/CMakeLists.txt:348`). The name simply lacks the substring
+     `pin`. That is a grep for a string reported as a fact about a port — the same class of error as
+     arming a store observer on a data address and reading the guaranteed `MATCHED NONE` as absence.
+   - *"No pin was bumped; the bumps are outstanding work."* They were done that day, in the required
+     `reconfigure → build → test → --bump` order, once the guard below was in place.
 
-       crash      (guarded):   check FAILED — ... dirty or changed since configure (configured 436c3762,
-                                current ba48b103)
-       crashbash  (unguarded): check OK — built against e0485d33, which is the recorded pin.
+   **The real finding is one level down: NO PORT EVER RAN THE CHECK.** Every occurrence of `--check` in
+   all ten `CMakeLists.txt` files was inside a CMake **comment**. The registered "pin tests" were
+   **selftests of the check *function***, run against a temporary fixture with a fabricated receipt: they
+   assert the function behaves and cannot fail when the repository's real pin is stale. That is why all
+   ten ports reported green while four pins were demonstrably stale. A gate that cannot fail on the
+   thing it gates is not a gate. The fix is a *live* test per port — registered in `Tomba2Engine` as
+   `tomba_psxport_pin`:
 
-   Fixed in `crashbash`, `spider1`, `megamanx4`, `tekken3`, `toystory2`, `vagrant` and `Tomba2Engine`,
-   each verified against its own copy. `spyro` needs the same one-hunk change and does not have it — that
-   tree is being worked by another agent. A second half of the same hole: an ABSENT receipt printed
-   "Asserting nothing" and returned 0 in five copies, so an unconfigured tree passed a provenance check that
-   had asserted nothing; those now exit 2.
+   ```cmake
+   add_test(NAME tomba_psxport_pin
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/psxport_sync.py"
+                    --check --build "${CMAKE_BINARY_DIR}")
+   ```
 
-   **The cause is the duplication itself, and it is deliberate** — a port must build from a bare clone, so
-   the tool travels with it. That makes "keep the copies in step" an obligation rather than an accident, and
-   the check for that obligation is ITSELF duplicated. Consolidating is the next thing to fix here.
+   `--build ${CMAKE_BINARY_DIR}` is the directory CTest is running in, configured moments earlier, so its
+   receipt is current by construction and the staleness guard cannot fire spuriously. **Verified it can
+   fail:** perturbing `psxport.pin` to a zero commit turns it red, restoring it turns it green.
+   **The other nine ports still have no live check.**
+
+   **AND THE BUMP ITSELF COULD RE-CREATE THE ORIGINAL INCIDENT.** `do_bump` recorded
+   `head_of(external/psxport)` — the framework's *current* HEAD — and never read a build receipt. So the
+   documented order was a convention nothing enforced, and `--bump` alone, with no build at all, recorded
+   a commit the tree had never compiled against. **That is exactly how this workspace came to record
+   `a1c53d7c` while building against `25dd7826`.** `do_bump` now reads the same receipt, applies the same
+   staleness guard and selects the same build as `--check`, and refuses a receipt naming a framework
+   other than the one `external/psxport` links. The regression test is
+   `test_bump_refuses_when_the_framework_advanced_since_configure`.
+
+   **The staleness guard is now in 10 of 10 copies**, verified per repo against each repo's own copy. Its
+   absence was measurable: with `psxport_resolved.txt` naming a repo's own pin while the shared
+   framework sat eight commits later, a guarded copy refuses and an unguarded one answers `check OK` —
+   same input, opposite answers, and the wrong one is a pass. A second half of the same hole: an ABSENT
+   receipt printed "Asserting nothing" and returned 0 in five copies; those now exit 2.
+
+   **The cause is the duplication itself, and it is deliberate** — a port must build from a bare clone,
+   so the tool travels with it. That makes "keep the copies in step" an obligation rather than an
+   accident. **MEASURED 2026-09-27: the ten copies have TEN DISTINCT HASHES and 298–322 lines each.** The
+   check for that obligation is itself duplicated, which is why the guard could go missing from seven of
+   them unnoticed. The fix belongs in psxport as a canonical source plus a registered drift check, not as
+   a tenth hand edit. **Not done.**
 
    **MEASURED 2026-09-27, every port rebuilt and gated against the framework as it stood during that
    session, after the store-observer and control-surface changes. NO REGRESSIONS:**
@@ -140,7 +165,7 @@ because there is no second copy.
    | port | gate | the failures, and what each one is |
    |---|---|---|
    | `psxport` | 168/168 | — |
-   | `crash` | 22/22 | — (registers no pin test at all) |
+   | `crash` | 22/22 | — (registers `crash_dependency_provenance`, a selftest; see above) |
    | `ctr` | 13/14 | `ctr_framework_pin` — **correct**: framework moved, pin not bumped |
    | `crashbash` | 28/29 | `crashbash_psxport_pin` — **correct**, same reason |
    | `spider1` | 20/21 | `psxport_pin` — **correct**, same reason |
@@ -150,9 +175,17 @@ because there is no second copy.
    | `vagrant` | 8/8 | — |
    | `toystory2` | 16/18 | both are **refusals for a missing provisioned corpus**: `scratch/flat` is empty, so `overlay_map_selftest` and `verify_fmv_boundary_selftest` each print `REFUSED: … provision the verified images` and fail. `toystory2` is outside the active title scope and was never provisioned here. |
 
-   No pin was bumped, deliberately: a bump records a verification, and no port has been re-verified by a
-   product run against this session's framework. The pin bumps are the outstanding work, and the order is
-   `reconfigure → build → test → --bump`.
+   **SUPERSEDED LATER THE SAME DAY, and the supersession is the finding.** The four red pin rows above were
+   correct while they stood, and every one of them was then made green by
+   `reconfigure → build → test → --bump`: `spyro` 86/86, `ctr` 15/15, `crashbash` 29/29, `spider1` 21/21,
+   `megamanx4` 27/27, `tekken3` 18/18, `Tomba2Engine` 34/34. `vagrant` and `toystory2` were not reconfigured
+   that round. `toystory2`'s two failures remain the missing-corpus refusals, which are correct.
+
+   The row that did NOT change is the one about the gate itself: those "pin" rows were selftests, so
+   **making them green proved nothing about this port's real pin** — which is why adding the live check
+   in `Tomba2Engine` immediately found a genuinely stale receipt in `build/ci` (configured against
+   `2b07a8f6` while the tree sat at `9c962c08`), five build directories into the tree, none of which any
+   test had been reading.
 3. **Ports are deliberately NOT all on framework HEAD.** Measured 2026-08-16: six ports spanned 55
    commits of framework history. With one maintainer that is a feature — it is what lets one port be
    worked on daily while the others sit untouched, and it is why a Beetle GTE regression in every
