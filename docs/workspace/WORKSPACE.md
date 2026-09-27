@@ -108,17 +108,31 @@ because there is no second copy.
    built against is not the one the repo records, comparing against `build/psxport_resolved.txt`, which
    CMake writes at configure time.
 
-   **KNOWN LIMIT, measured 2026-09-27: that file is written at CONFIGURE time, so a plain
-   `cmake --build` does not refresh it.** A port can therefore relink against newer framework code while
-   its `psxport_resolved.txt` still names the older commit, and `--check` passes — which is precisely the
-   drift the pin exists to catch. Measured on `crash`: the resolved file was written at 11:30 naming
-   framework `492adace`, the binary was relinked at 16:05 against framework `2b07a8f6`, and the check
-   would have passed. **`--check` is only meaningful after a reconfigure**, so a pin bump must be
-   `reconfigure → build → test → --bump`, never `build → --bump`.
+   **Coverage is uneven, and that IS the whole finding.** `ctr`, `crashbash`, `spider1`, `Tomba2Engine`
+   and `megamanx4` register a pin test; **`crash` registers none** — `ctest -N` finds zero tests matching
+   `pin` — so `crash`'s green 22/22 says nothing about framework provenance at all. Registering it is the
+   cheap fix and has not been done.
 
-   Coverage is also uneven: `ctr`, `spider1`, `Tomba2Engine` and `megamanx4` register a pin test and
-   `crash` does not, so `crash`'s green gate says nothing about framework drift at all. Registering it
-   everywhere is the cheap half of this fix and has not been done.
+   **A limit I claimed here on 2026-09-27 was WRONG, and is retracted rather than edited away.**
+   `psxport_resolved.txt` is written at CONFIGURE time, so a plain `cmake --build` does not refresh it, and
+   I concluded from that alone that `--check` "would pass" against a framework it never saw. It does not.
+   `psxport_sync.py::do_check` reads the resolved file, then **compares it against the framework's CURRENT
+   head and fails if they differ or the tree is dirty**:
+
+       current = head_of(bdir)
+       if current != bsha or dirty(bdir):
+           print("check FAILED — framework ... is dirty or changed since configure "
+                 "(configured {bsha}, current {current}).")
+
+   Verified rather than assumed, by pointing `--check` at a build directory whose resolved file names a
+   stale commit:
+
+       [psxport] check FAILED — framework /home/bhamil/repo/psx/psxport is dirty or changed since
+       configure (configured 00000000000...
+
+   So the gate does detect the stale-snapshot case, and what looked like a gate hole is entirely the
+   missing registration in `crash`. The lesson worth keeping is the method, not the conclusion: I read the
+   check's happy path, inferred a failure mode from it, and wrote it into two documents before testing it.
 
    **MEASURED 2026-09-27, every port rebuilt and gated against the framework as it stood during that
    session, after the store-observer and control-surface changes. NO REGRESSIONS:**
