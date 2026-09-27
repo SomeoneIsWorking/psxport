@@ -115,44 +115,49 @@ A cap is only half a contract; the CLIENT has to survive it. Two shapes exist in
 The second shape is the pattern to copy, and it costs nothing: a client that loops until it has what it
 asked for cannot be confused by a cap, because it never assumes one reply was sufficient.
 
-### 6. A gate hole that was not a gate hole — and the method that produced it
+### 6. A gate hole that is real — in seven of the ten copies of the gate
 
-`psxport_resolved.txt` is written by CMake at CONFIGURE time, so a plain `cmake --build` does not rewrite
-it. From that fact alone I concluded that `psxport_sync.py --check` "would pass" against a framework it
-never saw, wrote that into `docs/workspace/WORKSPACE.md` and into this document, and moved on.
+`psxport_resolved.txt` is written by CMake at CONFIGURE time, so a plain `cmake --build` never refreshes it.
+A pin check that reads only that file compares a STALE SNAPSHOT to the pin, and a tree rebuilt against
+newer framework code still reports the old commit, matches its pin, and passes. A fresh clone would then
+build a different framework than the one just tested — the single failure the pin exists to prevent.
 
-**It does not pass.** `do_check` reads the resolved file and then compares it against the framework's
-CURRENT head, failing when they differ or the tree is dirty:
+**I got this wrong twice, in opposite directions, and both errors are worth keeping.**
 
-```python
-current = head_of(bdir)
-if current != bsha or dirty(bdir):
-    print("check FAILED — framework ... is dirty or changed since configure "
-          "(configured {bsha}, current {current}).")
-```
+*First attempt:* I saw that `psxport_resolved.txt` is configure-time-only, concluded the check "would pass",
+and published that in two documents.
 
-Verified rather than assumed, by pointing `--check` at a build directory whose resolved file names a
-stale commit. It refuses:
+*Retraction:* I read `crash`'s copy of the tool, found it compares the resolved snapshot against the
+framework's CURRENT head, and concluded the hole was not real at all — the whole finding reduced to "`crash`
+registers no pin test". **That was wrong, and wrong in the mirror image of the first error:** I verified the
+guard on a copy that HAS it and generalised to all ten.
 
-```
-[psxport] check FAILED — framework /home/bhamil/repo/psx/psxport is dirty or changed since configure
-(configured 00000000000...
-```
+*The experiment that settles it.* `tools/psxport_sync.py` is copied into every port so each builds from a
+bare clone, and the copies have DIVERGED. With `psxport_resolved.txt` naming a repo's own recorded pin while
+the shared framework sat eight commits later, same input, two answers:
 
-**What is actually wrong is one line narrower:** `crash` registers no pin test at all — `ctest -N` finds
-zero tests matching `pin` — so its green 22/22 never runs the check. `ctr`, `crashbash`, `spider1`,
-`Tomba2Engine` and `megamanx4` do register one, and all of them failed correctly when the framework moved.
-That part of the original claim stands; the fix is to register the test in `crash`.
+    crash       (guarded):   check FAILED — framework .../psxport is dirty or changed since configure
+                              (configured 436c3762, current ba48b103)
+    crashbash   (unguarded): check OK — built against e0485d33, which is the recorded pin
 
-This entry is here rather than deleted because the failure mode is the same species as the five above and
-is worth naming precisely: **I read a gate's happy path, inferred a failure mode from it, and published the
-inference as a measurement.** The tell was available and unused — a claim phrased "would pass", about a
-safety gate, with a concrete counter-example already in hand, is a claim to TEST before writing it down.
-The cost was two documents carrying a false statement about a gate, which is worse than no document,
-because the next reader would have trusted it.
+**So the hole is real, and it is a divergence artefact: the guard was present in 3 of 10 copies and absent
+from 7.** A second, quieter half sat in the same function — an absent receipt printed "Asserting nothing"
+and returned 0, so an unconfigured tree PASSED a provenance check that had asserted nothing. Five of the
+seven did that.
 
-*Rule added:* when a conclusion is about what a check does NOT catch, run the check against an input that
-should trip it. A gate's silence is not evidence about the gate, and neither is its happy path.
+**Now fixed in 7 of 10** (`crashbash`, `spider1`, `megamanx4`, `tekken3`, `toystory2`, `vagrant`,
+`Tomba2Engine`), each verified by re-running the experiment above against that repo's own copy. The eighth,
+`spyro`, is the same one-hunk change and is deliberately NOT applied: that tree is being worked by another
+agent. `crash` and `ctr` already had it.
+
+*Rules this earns, which are the same rule twice:*
+- **A passing check on one copy is not evidence about the other nine.** Verify the claim against the copy
+  that is SUSPECTED, not the one that is known-good.
+- **Absence of evidence is not a pass.** A check with nothing to compare must exit non-zero; "asserting
+  nothing" must never be spelled `return 0`.
+- **Duplication is only free when the copies cannot drift.** Ten copies of a safety gate is ten gates. The
+  duplication is a deliberate consequence of "a port must build from a bare clone", so the obligation moves
+  to keeping them in step — and the check for that is itself duplicated, which is the next thing to fix.
 
 ## What this costs, and why it is worth a document
 

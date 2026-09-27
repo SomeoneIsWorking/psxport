@@ -113,26 +113,26 @@ because there is no second copy.
    `pin` — so `crash`'s green 22/22 says nothing about framework provenance at all. Registering it is the
    cheap fix and has not been done.
 
-   **A limit I claimed here on 2026-09-27 was WRONG, and is retracted rather than edited away.**
-   `psxport_resolved.txt` is written at CONFIGURE time, so a plain `cmake --build` does not refresh it, and
-   I concluded from that alone that `--check` "would pass" against a framework it never saw. It does not.
-   `psxport_sync.py::do_check` reads the resolved file, then **compares it against the framework's CURRENT
-   head and fails if they differ or the tree is dirty**:
+   **MEASURED 2026-09-27: the gate's own staleness guard was MISSING FROM 7 OF THE 10 COPIES OF THIS
+   TOOL, and is now present in 9.** `--check` reads `build/psxport_resolved.txt`, which CMake writes at
+   CONFIGURE time, so a plain `cmake --build` never refreshes it. A check that reads only that file
+   compares a stale snapshot to the pin, and a tree rebuilt against newer framework code passes. The
+   discriminating experiment, same input, `psxport_resolved.txt` naming a repo's own pin while the shared
+   framework sat eight commits later:
 
-       current = head_of(bdir)
-       if current != bsha or dirty(bdir):
-           print("check FAILED — framework ... is dirty or changed since configure "
-                 "(configured {bsha}, current {current}).")
+       crash      (guarded):   check FAILED — ... dirty or changed since configure (configured 436c3762,
+                                current ba48b103)
+       crashbash  (unguarded): check OK — built against e0485d33, which is the recorded pin.
 
-   Verified rather than assumed, by pointing `--check` at a build directory whose resolved file names a
-   stale commit:
+   Fixed in `crashbash`, `spider1`, `megamanx4`, `tekken3`, `toystory2`, `vagrant` and `Tomba2Engine`,
+   each verified against its own copy. `spyro` needs the same one-hunk change and does not have it — that
+   tree is being worked by another agent. A second half of the same hole: an ABSENT receipt printed
+   "Asserting nothing" and returned 0 in five copies, so an unconfigured tree passed a provenance check that
+   had asserted nothing; those now exit 2.
 
-       [psxport] check FAILED — framework /home/bhamil/repo/psx/psxport is dirty or changed since
-       configure (configured 00000000000...
-
-   So the gate does detect the stale-snapshot case, and what looked like a gate hole is entirely the
-   missing registration in `crash`. The lesson worth keeping is the method, not the conclusion: I read the
-   check's happy path, inferred a failure mode from it, and wrote it into two documents before testing it.
+   **The cause is the duplication itself, and it is deliberate** — a port must build from a bare clone, so
+   the tool travels with it. That makes "keep the copies in step" an obligation rather than an accident, and
+   the check for that obligation is ITSELF duplicated. Consolidating is the next thing to fix here.
 
    **MEASURED 2026-09-27, every port rebuilt and gated against the framework as it stood during that
    session, after the store-observer and control-surface changes. NO REGRESSIONS:**
