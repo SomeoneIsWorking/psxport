@@ -27,7 +27,20 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CAP = 1200
 CRITICAL_LINES = 2000
 SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp")
-EXCLUDED_TOP_LEVEL = {"build", "external", "generated", "scratch", "vendor"}
+# Directory names whose contents are never first-party source, matched at ANY DEPTH rather than only as
+# the repository's top-level directory. The workspace convention is that `scratch/` holds run artifacts
+# and `build/`, `external/`, `generated/` and `vendor/` hold derived or third-party code — and a title
+# project under a `titles/<t>/` prefix has its own `titles/<t>/scratch/`, which a top-level-only test
+# never excluded.
+#
+# WHY THIS IS NOT REDUNDANT WITH GIT. The file list comes from `git ls-files` plus
+# `git ls-files --others --exclude-standard`, so a correctly-gitignored scratch tree is already absent.
+# This exclusion is for the case where a repository's ignore rules DO NOT cover its own nested scratch
+# tree: measured 2026-09-27 on Tomba! 1, where Ghidra output written under `titles/tomba1/scratch/`
+# failed `tomba_cpp_policy` on clang-format violations. A linter that fails on generated analysis output
+# is a linter whose red is not evidence about the code, and the workspace rule is explicit that a check
+# failing for a reason unrelated to the change under test is noise.
+EXCLUDED_COMPONENTS = {"build", "external", "generated", "scratch", "vendor"}
 
 # psxport's pre-policy legacy files are frozen at their measured adoption sizes. A cap only moves
 # down after an extraction; it never moves up to accommodate growth. Consumer repos use the same
@@ -80,7 +93,9 @@ def source_files(root: Path) -> tuple[list[Path], list[str], list[str]]:
     deleted: list[str] = []
     for relative in sorted(listed):
         parts = Path(relative).parts
-        if not parts or parts[0] in EXCLUDED_TOP_LEVEL:
+        # ANY component, not just the first: a title project's `titles/<t>/scratch/` is a run-artifact
+        # tree by the same convention as the repository's own `scratch/`.
+        if not parts or any(part in EXCLUDED_COMPONENTS for part in parts):
             continue
         path = root / relative
         if not path.is_file():
@@ -230,7 +245,7 @@ def touched_cpp_tus(root: Path) -> list[str]:
         relative
         for relative in changed
         if Path(relative).parts
-        and Path(relative).parts[0] not in EXCLUDED_TOP_LEVEL
+        and not any(part in EXCLUDED_COMPONENTS for part in Path(relative).parts)
         and not is_generated(root / relative)
     )
 
@@ -466,6 +481,30 @@ def selftest() -> int:
         selftest_runner_arguments(root)
         cases += 1
         print("cpp-policy selftest: PASS runner without progress option reaches execution")
+
+        # A NESTED scratch tree is run artifacts by the same convention as the repository's own, and must
+        # not be counted as first-party source. This is the case that failed on Tomba! 1, where Ghidra
+        # output under `titles/tomba1/scratch/` was reported for clang-format violations. The fixture
+        # writes an UNTRACKED, NOT-gitignored file there, because a correctly-ignored tree is already
+        # absent from `git ls-files --others --exclude-standard` and would not exercise the exclusion at
+        # all — which is exactly why the top-level-only version of this rule passed unnoticed.
+        nested = root / "titles" / "title1" / "scratch"
+        nested.mkdir(parents=True)
+        (nested / "generated_analysis.cpp").write_text(
+            "int  badly_formatted( int x ) {return   x;}\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "-C", str(root), "add", "-f", "titles"], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(root), "-c", "user.name=cpp-policy-selftest",
+                "-c", "user.email=selftest@example.invalid", "-c", "commit.gpgsign=false",
+                "commit", "-qm", "nested scratch",
+            ],
+            check=True,
+        )
+        expect("a nested scratch tree is not first-party source", 0, "checked 1 of 1 first-party C++ TU")
+        cases += 1
+        print("cpp-policy selftest: PASS nested scratch excluded at any depth")
 
         expect("happy clean tree lints one TU", 0, "checked 1 of 1 first-party C++ TU")
         expect("tracked deletion is excluded", 0, "1 worktree-deleted file(s)")

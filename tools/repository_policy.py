@@ -7,7 +7,12 @@ import re
 import subprocess
 from pathlib import Path
 
-EXCLUDED_TOP_LEVEL = {"build", "external", "scratch", "third_party", "vendor"}
+# Matched at ANY DEPTH, not only as the repository's top-level directory. A title project under a
+# `titles/<t>/` prefix carries its own `titles/<t>/scratch/`, and a top-level-only test never excluded
+# it — so a repository whose ignore rules do not cover its own nested scratch tree had generated run
+# artifacts reported as first-party repository surface. A policy check that fires on run artifacts is
+# noise, not evidence about the code.
+EXCLUDED_COMPONENTS = {"build", "external", "scratch", "third_party", "vendor"}
 _FORBIDDEN_TEMPLATE_NAME = "Dusk" + "light"
 _STALE_EXECUTION_TERMS = (
     "emit" + ".py",
@@ -66,7 +71,7 @@ def first_party_files(root: Path) -> list[Path]:
     for relative in sorted(relative_paths):
         parts = Path(relative).parts
         path = root / relative
-        if parts and parts[0] not in EXCLUDED_TOP_LEVEL and path.is_file():
+        if parts and not any(part in EXCLUDED_COMPONENTS for part in parts) and path.is_file():
             files.append(path)
     return files
 
