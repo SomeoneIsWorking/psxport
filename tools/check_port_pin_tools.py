@@ -20,12 +20,24 @@ The obligation to keep the copies in step was real; the check for that obligatio
 which is why the guard could go missing from seven of them unnoticed. This is that check, made
 mechanical and registered.
 
-WHAT IT DOES, AND WHAT IT DELIBERATELY DOES NOT CLAIM
------------------------------------------------------
-It compares **bytes**. It does not judge whether a port's copy is *correct*, only whether it is the
-canonical text — a copy can be faithfully propagated and still be wrong, and then the fix belongs in
-`tools/psxport_sync.py` here, where all ten get it at once. A checker that reported "port X's pin tool is
-fine" would be claiming something this file cannot know.
+WHAT IT COMPARES, AND WHY THAT IS NOT ENOUGH ON ITS OWN
+--------------------------------------------------------
+It compares **bytes**, and then — because of how this was actually caught — it also **runs** each copy.
+
+The byte comparison alone was demonstrably insufficient, on this very file. Building the canonical dropped
+an `import argparse` that only `main()` reaches. The result propagated to all ten ports, and **every one
+of them reported "in step" while being identically broken**: each repo's test imports the module and never
+calls `main()`, so the missing import raised nothing, and no test anywhere invoked the tool as a command.
+Ten identical copies of a file that could not run is the exact failure duplication produces, and a
+byte-equality gate endorsed it.
+
+So the gate is two questions, and it must pass both:
+
+  1. is this copy the canonical text?   (byte comparison — what the copies are FOR)
+  2. does this copy actually run?       (`--help` in a subprocess, exit 0 — whether it WORKS)
+
+It still does not judge whether a copy is *correct*. A copy can be faithful and still wrong, and then the
+fix belongs in `tools/psxport_sync.py` here, where all ten get it at once.
 
 The canonical copy is never executed as a port tool. `REPO` is derived from the file's own path, so the
 text runs unchanged from any port's `tools/`, and this repo's copy is only ever compared and copied.
@@ -49,6 +61,7 @@ import argparse
 import difflib
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -100,6 +113,27 @@ def compare(canonical: Path, copy: Path) -> tuple[bool, str]:
     )
 
 
+def runs(copy: Path) -> tuple[bool, str]:
+    """Can this copy be invoked as a command at all?
+
+    `--help` is the cheapest invocation that still resolves every module-level import and builds the
+    argument parser, which is precisely the surface a missing import breaks. A module-import test is NOT
+    enough: the original defect was invisible to one, because the import that failed lives inside
+    `main()`.
+    """
+    try:
+        done = subprocess.run(
+            [sys.executable, str(copy), "--help"],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"CANNOT RUN: {type(exc).__name__}: {exc}"
+    if done.returncode != 0:
+        tail = (done.stderr.strip().splitlines() or ["<no stderr>"])[-1]
+        return False, f"DOES NOT RUN: `--help` exited {done.returncode}: {tail}"
+    return True, "runs (`--help` exit 0)"
+
+
 def report(workspace: Path, canonical: Path, allow_empty: bool = False) -> tuple[int, int, int]:
     """Print the full table. Returns (scanned, in_step, drifted)."""
     ports = find_ports(workspace)
@@ -120,13 +154,25 @@ def report(workspace: Path, canonical: Path, allow_empty: bool = False) -> tuple
               "pass. A port is a directory containing " + str(PORT_MARKER) + ".")
         return 0, 0, 0
     in_step = 0
+    in_step_and_runs = 0
     for port in ports:
-        ok, detail = compare(canonical, port / PORT_MARKER)
+        copy = port / PORT_MARKER
+        ok, detail = compare(canonical, copy)
+        if ok:
+            # Only ask the second question when the first passed. A drifted copy is already reported, and
+            # running it would describe a file that is not the canonical one.
+            runnable, run_detail = runs(copy)
+            if not runnable:
+                ok, detail = False, f"{detail}; IN STEP BUT {run_detail}"
+            else:
+                detail = f"{detail}, {run_detail}"
+                in_step_and_runs += 1
         print(f"[pin-tools]   {port.name:<14} {'OK  ' if ok else 'FAIL'} {detail}")
         in_step += ok
     scanned = len(ports)
     drifted = scanned - in_step
-    print(f"[pin-tools] {in_step} of {scanned} in step, {drifted} drifted")
+    print(f"[pin-tools] {in_step} of {scanned} in step, {drifted} drifted; "
+          f"{in_step_and_runs} of {scanned} both in step AND runnable")
     return scanned, in_step, drifted
 
 
@@ -192,6 +238,56 @@ def selftest() -> int:
         expect(find_ports(empty) == [], "an empty workspace finds no ports")
         missing = root / "does-not-exist"
         expect(find_ports(missing) == [], "a missing workspace finds no ports, and must not raise")
+
+        # THE LESSON THIS TOOL EXISTS TO ENCODE, as a test. A copy can be byte-identical to the
+        # canonical and still not run — that is not hypothetical, it is how the canonical shipped without
+        # `import argparse` into all ten ports with every one reporting "in step". So `runs()` is tested on
+        # its OWN terms, with real runnable programs, because a byte stub cannot exercise a subprocess.
+        runnable = root / "runnable.py"
+        runnable.write_text(
+            "import argparse\n"
+            "if __name__ == '__main__':\n"
+            "    argparse.ArgumentParser(description='x').parse_args()\n",
+            encoding="utf-8",
+        )
+        expect(runs(runnable)[0] is True, "a real argparse script must be reported runnable")
+
+        # The exact shape of the real defect: the module IMPORTS fine, and only `main()` raises, because
+        # the missing import is reached from there. A module-import test cannot see this; `--help` can.
+        late = root / "late_failure.py"
+        late.write_text(
+            "def main():\n"
+            "    import argparse\n"
+            "    argparse.ArgumentParser()\n"
+            "if __name__ == '__main__':\n"
+            "    argparse.ArgumentParser()   # NameError: not imported at module level\n",
+            encoding="utf-8",
+        )
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location("late_failure", late)
+        mod = _ilu.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+            imported_cleanly = True
+        except NameError:
+            imported_cleanly = False
+        expect(imported_cleanly is True,
+               "the late-failure script must IMPORT cleanly, or this fixture is not the real defect")
+        ok_late, detail_late = runs(late)
+        expect(ok_late is False, "a script that imports but cannot run must fail `runs()`")
+        expect("DOES NOT RUN" in detail_late, f"the run failure must say why, got {detail_late!r}")
+
+        ok_absent, detail_absent = runs(root / "no-such-file.py")
+        expect(ok_absent is False, "a missing copy must fail `runs()`, not raise")
+        # The property is that a missing copy is REFUSED and does not raise. Which of the two labels it
+        # gets depends on how far the interpreter got — a missing FILE is reported by python itself
+        # (nonzero exit, so "DOES NOT RUN"), while an unreadable one surfaces as OSError ("CANNOT RUN").
+        # Asserting a specific label would pin an accident of the interpreter, not the property.
+        expect("RUN:" in detail_absent or "CANNOT RUN" in detail_absent,
+               f"a missing copy must be refused, got {detail_absent!r}")
+
+        # And a port holding the real canonical is the only combination that counts as in step AND usable.
+        expect(compare(canonical, good / PORT_MARKER)[0] is True, "a faithful copy compares in step")
 
         # The empty case has TWO correct answers, and which one applies is the whole point: psxport's own
         # ctest must pass on a bare clone (skip), while a human pointing the CLI at the wrong directory

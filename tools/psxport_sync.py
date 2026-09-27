@@ -26,6 +26,7 @@ The check is a registered gate, not a habit. See `tools/check_port_pin_tools.py 
 The canonical copy in psxport is never executed as a port tool; it is only compared and copied.
 """
 
+import argparse
 import os
 import re
 import subprocess
