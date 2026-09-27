@@ -95,6 +95,10 @@ bool parseTargets(std::string_view text, std::array<std::uint32_t, kMaxObservedS
 
 } // namespace
 
+void store_observe_attach(Core &core) {
+  store_observe_configure(core);
+}
+
 void store_observe_configure(Core &core) {
   const std::string_view requested = psx::config::cv_store_observe.get();
   if (requested.empty()) {

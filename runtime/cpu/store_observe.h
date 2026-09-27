@@ -27,6 +27,17 @@ class Core;
 // the default. An unparsable or over-long list is REFUSED with the offending text named, rather than
 // silently watching a prefix of it — a diagnostic that quietly watched less than it was told to is the
 // failure mode this whole area has already produced once.
+//
+// *** A TITLE-OWNED SPINE MUST CALL THIS ITSELF, beside `DbgServer::attach`. ***
+// `native_boot_run` calls it, so every product that enters the framework's own spine is armed. A title
+// with its own frame loop does NOT reach that line, and was therefore silently unarmed while the boot
+// audit printed `PSXPORT_STORE_OBSERVE = ... [env]` — an audit line that says a knob is BOUND, not that
+// anything reads it. Measured 2026-09-27 on Spyro 1: `nm -C` showed `store_observe_configure` linked
+// into the product, the audit showed the variable set, and a run with `PSXPORT_STORE_OBSERVE=nothex`
+// produced NOT ONE line — not even the `refusing PSXPORT_STORE_OBSERVE` error that parsing a bad token
+// emits unconditionally. The only silent path is `requested.empty()`, so the reader never ran. That is
+// the same class of defect as a title with no live endpoint at all: a diagnostic that cannot be reached
+// is not a diagnostic, and an audit that cannot distinguish "bound" from "read" will keep saying yes.
 void store_observe_configure(Core &core);
 
 // Log what the observer saw, with the executor's own counters beside it. `StoreObservation` does not
@@ -35,3 +46,8 @@ void store_observe_configure(Core &core);
 // observer was never armed — the arming line already said so, and an unarmed observer's silence is not
 // evidence of anything.
 void store_observe_report(Core &core);
+
+// A title-owned spine calls THIS once instead of remembering the pair, because forgetting the report is
+// how a run ends with the observer armed and nothing said about what it saw — the same silence the
+// configuration path is trusted not to have.
+void store_observe_attach(Core &core);
