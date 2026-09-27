@@ -92,6 +92,26 @@ because there is no second copy.
    Coverage is also uneven: `ctr`, `spider1`, `Tomba2Engine` and `megamanx4` register a pin test and
    `crash` does not, so `crash`'s green gate says nothing about framework drift at all. Registering it
    everywhere is the cheap half of this fix and has not been done.
+
+   **MEASURED 2026-09-27, every port rebuilt and gated against the framework as it stood during that
+   session, after the store-observer and control-surface changes. NO REGRESSIONS:**
+
+   | port | gate | the failures, and what each one is |
+   |---|---|---|
+   | `psxport` | 168/168 | — |
+   | `crash` | 22/22 | — (registers no pin test at all) |
+   | `ctr` | 13/14 | `ctr_framework_pin` — **correct**: framework moved, pin not bumped |
+   | `crashbash` | 28/29 | `crashbash_psxport_pin` — **correct**, same reason |
+   | `spider1` | 20/21 | `psxport_pin` — **correct**, same reason |
+   | `megamanx4` | 27/27 | — |
+   | `tekken3` | 18/18 | — |
+   | `Tomba2Engine` | 33/33 | — (`tools/verify_ci.py`'s pin check fails separately, same reason) |
+   | `vagrant` | 8/8 | — |
+   | `toystory2` | 16/18 | both are **refusals for a missing provisioned corpus**: `scratch/flat` is empty, so `overlay_map_selftest` and `verify_fmv_boundary_selftest` each print `REFUSED: … provision the verified images` and fail. `toystory2` is outside the active title scope and was never provisioned here. |
+
+   No pin was bumped, deliberately: a bump records a verification, and no port has been re-verified by a
+   product run against this session's framework. The pin bumps are the outstanding work, and the order is
+   `reconfigure → build → test → --bump`.
 3. **Ports are deliberately NOT all on framework HEAD.** Measured 2026-08-16: six ports spanned 55
    commits of framework history. With one maintainer that is a feature — it is what lets one port be
    worked on daily while the others sit untouched, and it is why a Beetle GTE regression in every
