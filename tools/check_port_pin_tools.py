@@ -67,8 +67,22 @@ import tempfile
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
-CANONICAL = TOOLS / "psxport_sync.py"
-RELATIVE_COPY = Path("tools") / "psxport_sync.py"
+TESTS = Path(__file__).resolve().parent.parent / "tests"
+
+# Two files travel with every port: the tool itself, and the test that gates its behaviour. The tool has
+# one home (`tools/`); the test was placed in `tools/` by some ports and `tests/` by others, so it is
+# matched at either. Both are canonical here, and both are checked, because a canonical test that drifts
+# is how a behaviour fix quietly stops applying to the ports that matter.
+CANONICAL_FILES = {
+    Path("tools") / "psxport_sync.py": TOOLS / "psxport_sync.py",
+    Path("tests") / "test_psxport_sync.py": TESTS / "test_psxport_sync.py",
+}
+# The paths a port may hold the behaviour test at, most-preferred first.
+TEST_ALTERNATIVES = (
+    Path("tests") / "test_psxport_sync.py",
+    Path("tools") / "test_psxport_sync.py",
+)
+CANONICAL = CANONICAL_FILES[Path("tools") / "psxport_sync.py"]
 
 # The workspace is psxport's parent: independent repos side by side, no superproject. Overridable so the
 # checker is testable and so a differently-laid-out workspace still works.
@@ -77,7 +91,7 @@ DEFAULT_WORKSPACE = CANONICAL.parent.parent.parent  # .../psxport/tools -> psxpo
 # A port is a directory holding this file. Naming the marker rather than listing the ports is deliberate:
 # a hard-coded roster goes stale and then reports the wrong denominator, which is the failure mode this
 # whole tool exists to remove.
-PORT_MARKER = RELATIVE_COPY
+PORT_MARKER = Path("tools") / "psxport_sync.py"
 
 
 def find_ports(workspace: Path) -> list[Path]:
@@ -134,6 +148,13 @@ def runs(copy: Path) -> tuple[bool, str]:
     return True, "runs (`--help` exit 0)"
 
 
+def behaviour_test_path(port: Path) -> Path | None:
+    for rel in TEST_ALTERNATIVES:
+        if (port / rel).is_file():
+            return port / rel
+    return None
+
+
 def report(workspace: Path, canonical: Path, allow_empty: bool = False) -> tuple[int, int, int]:
     """Print the full table. Returns (scanned, in_step, drifted)."""
     ports = find_ports(workspace)
@@ -158,6 +179,17 @@ def report(workspace: Path, canonical: Path, allow_empty: bool = False) -> tuple
     for port in ports:
         copy = port / PORT_MARKER
         ok, detail = compare(canonical, copy)
+        # The behaviour test is checked in the same pass, at whichever of the two paths this port uses.
+        test_copy = behaviour_test_path(port)
+        canonical_test = CANONICAL_FILES[Path("tests") / "test_psxport_sync.py"]
+        if test_copy is None:
+            ok, detail = False, f"NO BEHAVIOUR TEST at {' or '.join(str(r) for r in TEST_ALTERNATIVES)}"
+        else:
+            test_ok, test_detail = compare(canonical_test, test_copy)
+            if not test_ok:
+                ok, detail = False, f"{detail}; behaviour test {test_detail}"
+            else:
+                detail = f"{detail}; behaviour test in step"
         if ok:
             # Only ask the second question when the first passed. A drifted copy is already reported, and
             # running it would describe a file that is not the canonical one.
