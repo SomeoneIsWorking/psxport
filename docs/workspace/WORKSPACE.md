@@ -94,6 +94,38 @@ drop-in co-op goals. All planned lineage repositories now have public, reproduci
 added titles are honest harness-first scaffolds, not implementation coverage; no widescreen or
 interpolation support is implied by repository existence.
 
+### MEASURED 2026-09-28 — AN OWNER FILE IS NOT A WIDENED PICTURE, and three titles prove it
+
+The table below counts owner files. It was being read as a capability table, and on measurement
+**three of the titles it counts as covered have never presented a widened frame.** So the count now
+carries the picture evidence beside it, and the distinction is stated where a reader would otherwise
+take the count for the capability.
+
+| title | owner files | canvas widens (measured) | **a widened PICTURE exists** |
+|---|---|---|---|
+| Spyro 1 | 24 | yes, `render_width=684` vs `native_width=512` | **yes** — 684x240, real content in all 684 columns |
+| Tomba! 1/2 | 14 | yes, 428 vs 320 | **yes** — 428x240, and the `interp` split is measured too |
+| Crash Bash | 2 | yes, 684 vs 512 | **yes** — 512x234 vs 684x234, margins 99.1%/77.2% non-black |
+| **Spider-Man 1** | 4 | **yes, 428 vs 320** | **NO — both frames entirely black.** 0 of 25,920 pixels non-black at either aspect. The owner fires; the product presents 14,000 black frames and stops on issue 0024's armed-but-never-started CD channel, which is upstream of every pixel |
+| **Crash 1** | 2 | **yes, 428 vs 320** | **NO — no frame at either aspect.** Both legs abort at frame 0 on `unimplemented BIOS service` (pre-existing; reproduced in a build predating the owners) |
+| **Tekken 3** | 2 | **yes, 492 vs 368** | **PARTIAL.** The content band is **exactly 133x16 in both legs** at the same y, shifted by +62 = the centring margin: the card is RE-CENTRED, not re-projected, and both 62px margins are 0.0% non-black with 61/61 repeated columns |
+| Mega Man X4 | 2 | not reached | n/a — the guest faults loading the first stage |
+| **CTR** | **0** | no producer | separate arms |
+| **Vagrant Story** | 0, deliberately | no | n/a — no dynarec adapter |
+
+**THE DISTINCTION IS THE FINDING, and it is the one CTR's and Vagrant's own reports already made about
+themselves: an owner that is never seen is a MECHANISM, not a capability.** Three owners are measured
+firing and widening the canvas, and none has been seen widening a *scene*. A Tekken card re-centred
+into a wider frame is not widescreen; it is the same picture in a bigger box, and the margin census
+with a denominator is what says so.
+
+**A measurement trap worth propagating, because it yields a CORRECT conclusion for the WRONG reason:
+quote the LAST `[wide]` line, not the first.** `picture_announce` prints on CHANGE, and Spider-Man's
+16:9 log carries `native_width=512 render_width=512` at line 24 AND line 66. Quoting the first gives
+`512 == 512` and reads "not widened" on a leg that is. Both probes now count occurrences, and the
+selftests pin that log shape. The only validation that a census is doing anything is that the same
+code reads NOT-widened on the 4:3 leg of all three titles, and that was exercised.
+
 ### MEASURED 2026-09-27 — which titles actually HAVE a widescreen owner
 
 The sentence above is a POLICY, stated where a reader would take it for a measurement. This is what the
