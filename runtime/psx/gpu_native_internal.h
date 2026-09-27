@@ -333,6 +333,17 @@ struct GpuState {
 
   // Frame + OT bookkeeping
   int s_frame = 0; // present-frame counter
+  // In-BETWEEN presents, counted separately because they are presentations that do NOT advance
+  // `s_frame`: `gpu_fps60_present_pass` re-presents through the same window without the per-present
+  // bookkeeping a real present does. So `s_frame` alone counts REAL presents only, and any question of
+  // the form "is this product presenting at 60 Hz" read off it answers a different question.
+  //
+  // Measured 2026-09-27: a live Spyro 1 run with interpolated 60fps ON presented 713 real frames for 709
+  // guest updates — a ratio of 1.006, which reads as "the feature does not present" — while the same
+  // run emitted 3,915 in-between passes. Both were true and the ratio was the wrong instrument, because
+  // it never counted the frames the feature exists to add. This counter is what makes the claim
+  // answerable, and it lives beside `s_frame` because both are present counters owned here.
+  int s_interpolated_frames = 0;
   // Per-frame draw stats — moved off file-scope in gpu_native.cpp so SBS's two cores keep separate
   // per-frame counters (a core reading its own stats or a debug-server `frame` query wouldn't see the
   // other core's contribution) (deglobalize 2026-07-03).

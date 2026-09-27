@@ -64,12 +64,36 @@ class LiveClient:
             raise RuntimeError(f"rw {address:08X} {count} returned {reply.strip()!r}") from error
 
     def frame(self) -> int:
-        """The product's present-frame counter, parsed out of `frame`'s reply."""
+        """REAL presented frames, parsed out of `frame`'s reply.
+
+        This is the real-present counter and nothing else. An interpolated 60fps in-between reaches the
+        screen WITHOUT advancing it, so a cadence question read off this number measures 30 Hz on a
+        product genuinely presenting 60 — measured 2026-09-27 on Spyro 1, where `frame` reported a ratio
+        of 1.006 per guest update while the same run emitted 3,915 in-betweens. Use `frames()` for a
+        cadence claim and this only to wait for a real frame boundary."""
         reply = self.send("frame")
         for token in reply.split():
             if token.startswith("frame="):
                 return int(token.split("=", 1)[1])
         raise RuntimeError(f"frame reply carried no counter: {reply.strip()!r}")
+
+    def frames(self) -> dict:
+        """ALL presented frames, split by kind: real, in-between, and their sum.
+
+        The sum is the number a "is this presenting at 60 Hz" question wants, and the split is what says
+        whether the extra frames are interpolated presentations or something else entirely."""
+        reply = self.send("frame")
+        found = {}
+        for token in reply.split():
+            for key in ("frame", "interp", "total"):
+                if token.startswith(key + "="):
+                    found[key] = int(token.split("=", 1)[1])
+        if "total" not in found:
+            raise RuntimeError(
+                f"the endpoint's `frame` reply carries no `total=` counter, so this binary cannot answer "
+                f"a presentation-cadence question: {reply.strip()!r}"
+            )
+        return found
 
     def tap(self, button: str, frames: int = 4) -> str:
         """Press and release across `frames` presented frames. A pad EDGE has to span a frame the guest

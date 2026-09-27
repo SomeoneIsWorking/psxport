@@ -765,9 +765,20 @@ static void dbg_exec(FILE *out, const char *line) {
     s_step += (int)a;
     fprintf(out, "step +%u (frame %d)\n", a, gpu_frame_no(s_ctx));
   } else if (!strcmp(cmd, "frame")) {
+    // BOTH present counters, because one of them alone answers a different question. `frame` counts
+    // REAL presents; an interpolated 60fps in-between reaches the screen without advancing it, so a
+    // cadence claim read off `frame` measures 30 Hz on a product genuinely presenting 60. `interp` is
+    // that second counter and `total` is the sum, which is the number a "is this presenting at 60 Hz"
+    // question actually wants. See GpuState::s_interpolated_frames for the measured case.
+    const int real_frames = gpu_frame_no(s_ctx);
+    // Read straight off the owner, as this command already does for the display fields, rather
+    // than through a second accessor in a file under a shrink-only cap.
+    const int inbetweens = s_ctx->game->gpu.s_interpolated_frames;
     fprintf(out,
-            "frame=%d paused=%d disp=(%d,%d)\n",
-            gpu_frame_no(s_ctx),
+            "frame=%d interp=%d total=%d paused=%d disp=(%d,%d)\n",
+            real_frames,
+            inbetweens,
+            real_frames + inbetweens,
             s_paused,
             s_ctx->game->gpu.s_disp_x,
             s_ctx->game->gpu.s_disp_y);
