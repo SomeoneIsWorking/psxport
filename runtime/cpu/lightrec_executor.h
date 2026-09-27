@@ -30,6 +30,19 @@ struct StoreObservation {
   std::uint32_t guestPc = 0;
   StoreObservationPhase phase = StoreObservationPhase::Before;
   std::uint32_t guestCycle = 0; // Relative to the current translated execution segment.
+  // THE STORE INSTRUCTION ITSELF, read from guest memory at `guestPc`. Added 2026-09-27 because its
+  // ABSENCE is what stopped this instrument answering the question it is constantly used for.
+  //
+  // Without it a caller learns a store ran at a PC and can read the general registers, but cannot learn
+  // WHERE it went: the target is `gpr[(instruction >> 21) & 0x1F] + sign_extend16(instruction)` for the
+  // load/store family, and the stored value is `gpr[(instruction >> 16) & 0x1F]`. Both are one shift
+  // and one add from this word, and both were previously unreachable — so a store PC could be confirmed
+  // but its EFFECT could not be read, and "what wrote this guest word" stalled one step short.
+  //
+  // Read from the Core rather than from translated code, so it is the real guest image and stays right
+  // across a recompile. Cost is one 32-bit read per observation, and observations only happen for armed
+  // PCs, so an ordinary run pays nothing.
+  std::uint32_t instruction = 0;
   std::span<const std::uint32_t, 34> gpr;
   std::span<const std::uint32_t, 32> cp0;
   std::span<const std::uint32_t, 32> cp2Data;

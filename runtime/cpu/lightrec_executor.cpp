@@ -236,6 +236,7 @@ struct LightrecExecutor::Impl {
           guestPc,
           phase == LIGHTREC_STORE_BEFORE ? StoreObservationPhase::Before : StoreObservationPhase::After,
           cycle,
+          impl.core.mem_r32(guestPc),
           std::span(registers->gpr),
           std::span(registers->cp0),
           std::span(registers->cp2d),

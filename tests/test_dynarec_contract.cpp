@@ -146,10 +146,45 @@ struct StoreTrace {
   std::uint32_t source[2]{};
   std::uint32_t cycle[2]{};
   psx::cpu::StoreObservationPhase phase[2]{};
+  std::uint32_t instruction[2]{};
+  // Derived AT OBSERVATION TIME from the observation's own register file. Deriving afterwards
+  // from `core.r` is wrong — the general registers are caller-saved and the Core holds whatever
+  // the call left behind — and the first version of this test did exactly that and failed. A real
+  // caller reads the observation, so the check must too.
+  std::uint32_t derivedTarget[2]{};
+  std::uint32_t derivedValue[2]{};
   std::size_t calls = 0;
   std::size_t sentinelCalls = 0;
   psx::cpu::StoreObserverStatus reentrantDisarm = psx::cpu::StoreObserverStatus::Configured;
 };
+
+// Derive a store's TARGET ADDRESS and STORED VALUE from the instruction word alone, the way a caller
+// reading the observation has to. This is the capability `StoreObservation::instruction` was added for:
+// before it, a caller could confirm a store PC ran but could not learn where that store went.
+//
+// These are written out rather than shared with production code on purpose: their job is to be an
+// INDEPENDENT restatement. If they were the production code they would agree with it by construction
+// and the assertions below would prove nothing. What they must agree with is the HARDCODED `0x40` and
+// `gpr[9]` this test already asserts — the address and register it set up by hand — which is a fact the
+// derivation cannot influence.
+std::uint32_t store_base_register(std::uint32_t instruction) {
+  return (instruction >> 21) & 0x1Fu;
+}
+std::uint32_t store_source_register(std::uint32_t instruction) {
+  return (instruction >> 16) & 0x1Fu;
+}
+std::int32_t store_displacement(std::uint32_t instruction) {
+  // Sign-extend the 16-bit field. The XOR-then-subtract is the whole point and the naive form is wrong:
+  // subtracting 0x10000 UNCONDITIONALLY turns a displacement of 0 into -0x10000, so a `sw rt, 0(base)`
+  // — the commonest store there is — computes an address 64 KiB below the word it wrote. That is a
+  // plausible-looking address that is not the field, which is the same failure the store-site probe
+  // documents and the reason this derivation is asserted against a hand-set address rather than trusted.
+  const std::uint32_t low = instruction & 0xFFFFu;
+  return static_cast<std::int32_t>((low ^ 0x8000u) - 0x8000u);
+}
+std::uint32_t store_target(std::uint32_t instruction, std::span<const std::uint32_t, 34> gpr) {
+  return gpr[store_base_register(instruction)] + static_cast<std::uint32_t>(store_displacement(instruction));
+}
 
 void captureStore(const psx::cpu::StoreObservation &observation, void *data) noexcept {
   auto &trace = *static_cast<StoreTrace *>(data);
@@ -168,6 +203,9 @@ void captureStore(const psx::cpu::StoreObservation &observation, void *data) noe
   trace.source[index] = observation.gpr[9];
   trace.cycle[index] = observation.guestCycle;
   trace.phase[index] = observation.phase;
+  trace.instruction[index] = observation.instruction;
+  trace.derivedTarget[index] = store_target(observation.instruction, observation.gpr);
+  trace.derivedValue[index] = observation.gpr[store_source_register(observation.instruction)];
 }
 
 class TelemetryCapture final {
@@ -676,6 +714,21 @@ static void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupp
   // armed address still saw nothing. Both halves are asserted because either alone is misleading: the
   // write alone looks like a match, and the miss alone looks like the store never ran.
   CHECK_EQ(core.mem_r32(writtenDataAddress), 7u);
+  // The derivation must land on the address and value this test set up BY HAND. These are the point of
+  // adding `StoreObservation::instruction`: a caller can now take a store PC, read the word there, and
+  // learn where it wrote — the step that was missing when a moby list at 0x800700F4 could not be traced
+  // to a writer.
+  CHECK_EQ(trace.instruction[0], 0xad090000u);               // sw t1, 0(t0), as written into the image
+  CHECK_EQ(store_base_register(trace.instruction[0]), 8u);   // t0, which this test set to 0x40
+  CHECK_EQ(store_source_register(trace.instruction[0]), 9u); // t1, which this test set to 7
+  CHECK_EQ(trace.derivedTarget[0], writtenDataAddress);
+  CHECK_EQ(trace.derivedValue[0], 7u);
+  // The sign extension is load-bearing, exactly as it is in the store-site probe: read the displacement
+  // unsigned and every negative-offset store lands 0x10000 above the word it wrote, which is a
+  // plausible-looking address that is not the field.
+  CHECK_EQ(store_displacement(0xad090000u), 0);      // a zero displacement stays zero
+  CHECK_EQ(store_displacement(0xad08f7f0u), -0x810); // a negative one sign-extends
+  CHECK_EQ(store_displacement(0xad0807f0u), 0x7f0);  // and a positive one does not sign-flip
   CHECK_EQ(report.targets[2].guestPc, writtenDataAddress);
   CHECK_EQ(report.targets[2].before, 0u);
   CHECK_EQ(report.targets[2].after, 0u);
