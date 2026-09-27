@@ -216,6 +216,20 @@ struct LightrecExecutor::Impl {
     return LIGHTREC_FALLBACK_REFUSE;
   }
 
+  // The load/store destination, derived from the instruction word and the register file. See
+  // `ResolvedStoreTarget` for why the sign extension is the whole ball game.
+  static ResolvedStoreTarget resolveStore(std::uint32_t instruction, std::span<const std::uint32_t, 34> gpr) {
+    const std::uint32_t low = instruction & 0xFFFFu;
+    ResolvedStoreTarget resolved;
+    resolved.baseRegister = (instruction >> 21) & 0x1Fu;
+    resolved.sourceRegister = (instruction >> 16) & 0x1Fu;
+    resolved.displacement = static_cast<std::int32_t>((low ^ 0x8000u) - 0x8000u);
+    resolved.address = gpr[resolved.baseRegister] + static_cast<std::uint32_t>(resolved.displacement);
+    resolved.value = gpr[resolved.sourceRegister];
+    resolved.valid = true;
+    return resolved;
+  }
+
   static void observeStore(const lightrec_registers *registers,
                            std::uint32_t guestPc,
                            lightrec_store_observer_phase phase,
@@ -229,6 +243,14 @@ struct LightrecExecutor::Impl {
       }
       if (phase == LIGHTREC_STORE_BEFORE) {
         ++target.before;
+        const ResolvedStoreTarget resolved = resolveStore(impl.core.mem_r32(guestPc), registers->gpr);
+        if (target.lastTarget.valid && target.lastTarget.address != resolved.address) {
+          ++target.distinctTargets;
+        } else if (!target.lastTarget.valid) {
+          target.firstTarget = resolved;
+        }
+        target.previousTarget = target.lastTarget;
+        target.lastTarget = resolved;
       } else {
         ++target.after;
       }
@@ -245,7 +267,26 @@ struct LightrecExecutor::Impl {
       impl.storeCallback(observation, impl.storeContext);
       return;
     }
-    std::abort(); // A translated callback for an unregistered PC violates the per-state target contract.
+    // A store in an INSTRUMENTED BLOCK whose PC nobody asked for. This used to `std::abort()`, on the
+    // reasoning that a translated callback for an unregistered PC violates the per-state contract. That
+    // reasoning is WRONG, and it cost a product run to find out.
+    //
+    // Lightrec instruments at BLOCK granularity: arming one PC makes the whole basic block containing it
+    // report every store it executes, not just the armed one. So an armed block legitimately contains
+    // stores at other PCs, and the assertion fired on the first of them.
+    //
+    // MEASURED 2026-09-27 on Spyro 1. `PSXPORT_STORE_OBSERVE=80051FF8,8005205C,8005210C,800523E8` drove the
+    // product to
+    //   [executor:error] frame-update required a completed guest call, but execution exited as fault at
+    //   0x8005207C
+    //   [watchdog] FAULT (signal): signal = 06
+    // 0x8005207C is `lb $v1, 0x52($at)` — the far-moby path entry, three instructions past the armed
+    // append at 0x8005205C and in the same basic block. THE PRODUCT DIED FOR BEING WATCHED.
+    //
+    // An unrequested store in an armed block is counted and reported, never fatal. It also happens to be
+    // evidence: execution was inside `func_80051FEC` when this fired, so the moby-list filler RUNS on the
+    // product, which the previous data-address arming had reported as never running.
+    ++impl.storeReport.unrequestedObservations;
   }
 
   static lightrec_block_boundary_action

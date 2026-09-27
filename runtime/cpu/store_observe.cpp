@@ -191,5 +191,27 @@ void store_observe_report(Core &core) {
                  i,
                  g_armed.addresses[i],
                  target.before);
+    // WHERE it wrote, not just how often. A count cannot distinguish a store that always lands on one
+    // address from one that MOVES, and "it ran 276 times" does not answer "which word did it change" —
+    // which is the question that matters once something has gone wrong. Resolved from the instruction
+    // word and the register file, sign extension included.
+    if (target.lastTarget.valid) {
+      lucent::info("store-observe",
+                   "      last write: address=0x{:08X} value=0x{:08X} (base $r{}, disp {:+d}, from $r{}){}",
+                   target.lastTarget.address,
+                   target.lastTarget.value,
+                   target.lastTarget.baseRegister,
+                   target.lastTarget.displacement,
+                   target.lastTarget.sourceRegister,
+                   target.distinctTargets == 0
+                       ? ""
+                       : lucent::format("; {} further address change(s) observed", target.distinctTargets));
+      if (target.firstTarget.valid && target.firstTarget.address != target.lastTarget.address) {
+        lucent::info("store-observe",
+                     "      first write: address=0x{:08X} value=0x{:08X} — THIS STORE MOVED",
+                     target.firstTarget.address,
+                     target.firstTarget.value);
+      }
+    }
   }
 }

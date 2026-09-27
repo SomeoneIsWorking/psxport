@@ -59,10 +59,40 @@ enum class StoreObserverStatus : std::uint8_t {
   InternalFailure,
 };
 
+// Resolved destination of a load/store, from the instruction word and the register file.
+//
+// WHY IT IS NOT A GUESS. For the load/store family the encoding is fixed: `rs = (word >> 21) & 0x1F`,
+// `rt = (word >> 16) & 0x1F`, and the displacement is the low 16 bits SIGN-EXTENDED, so the target is
+// `gpr[rs] + sign_extend16(word)`. Reading the displacement unsigned puts every negative-offset store
+// 0x10000 above the word it wrote, which is a plausible-looking address that is not the field — so the
+// sign extension is load-bearing and `tests/test_dynarec_contract.cpp` pins all three of its edges.
+struct ResolvedStoreTarget {
+  std::uint32_t address = 0;
+  std::uint32_t value = 0;
+  std::uint32_t baseRegister = 0;
+  std::uint32_t sourceRegister = 0;
+  std::int32_t displacement = 0;
+  bool valid = false;
+};
+
+enum class InterpreterFallbackReason : std::uint8_t {
+  SelfModifyingCode,
+  UnsupportedBlock,
+  CompilationFailed,
+  LoadDelayHazard,
+  UnsafeInstructionFetch,
+};
+
 struct StoreObserverTargetCounts {
   std::uint32_t guestPc = 0;
   std::uint64_t before = 0;
   std::uint64_t after = 0;
+  // The LAST resolved destination seen at this PC, and the first, because a store that always lands on
+  // one address and a store that MOVES are different findings and a count alone cannot tell them apart.
+  ResolvedStoreTarget lastTarget{};
+  ResolvedStoreTarget firstTarget{};
+  std::uint64_t distinctTargets = 0;
+  ResolvedStoreTarget previousTarget{};
 };
 
 struct StoreObserverReport {
@@ -72,14 +102,12 @@ struct StoreObserverReport {
   bool armed = false;
   std::uint64_t executedJitInstructions = 0;
   std::uint64_t fallbackInstructions = 0;
-};
-
-enum class InterpreterFallbackReason : std::uint8_t {
-  SelfModifyingCode,
-  UnsupportedBlock,
-  CompilationFailed,
-  LoadDelayHazard,
-  UnsafeInstructionFetch,
+  // Stores reported from an INSTRUMENTED BLOCK whose PC nobody asked for. Lightrec instruments per basic
+  // block, so arming one PC makes every store in that block report itself, not only the armed one. This
+  // counts the surplus, which is the denominator that says how much of an armed block's traffic was
+  // actually requested — without it a caller cannot distinguish a quiet block from a block that was
+  // never instrumented at all.
+  std::uint64_t unrequestedObservations = 0;
 };
 
 struct InterpreterFallbackCounters {
