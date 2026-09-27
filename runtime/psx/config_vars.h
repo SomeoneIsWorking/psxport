@@ -43,6 +43,15 @@ extern TextVar cv_debug_server;
 // watches. Interpreted once by runtime/cpu/store_observe.cpp; see the declaration in config.cpp for why
 // it exists and what it is for.
 extern TextVar cv_store_observe;
+// PSXPORT_RAMDUMP — write main RAM to this path AFTER the frame loop returns. It is here because it
+// was read with `cfg_str` and declared nowhere, so it had no help text and the env audit could not
+// describe it; and it is separated from the frame knob because the two are different tools.
+// PSXPORT_RAMDUMP_FRAME=N writes from INSIDE the loop at native frame N, which is the one that works
+// while a title is playing: overlay state during gameplay is not end-of-run state, and not every
+// product returns from the frame loop at all (measured 2026-09-27 on Spyro 1, where the end-of-run
+// dump silently did nothing). See the declarations in config.cpp.
+extern TextVar cv_ramdump;
+extern TextVar cv_ramdump_frame;
 
 // ── watchdog ────────────────────────────────────────────────────────────────────────────────────
 // PSXPORT_WATCHDOG — frame-progress timeout in seconds. Default 3, ON even when unset, so a hang

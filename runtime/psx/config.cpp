@@ -302,6 +302,31 @@ TextVar cv_store_observe("PSXPORT_STORE_OBSERVE",
                          "",
                          "hex guest addresses whose stores are observed, comma-separated (empty = off)",
                          /*persistable=*/false);
+// PSXPORT_RAMDUMP / PSXPORT_RAMDUMP_FRAME — write main RAM to a file, for disassembly of whatever
+// image is resident. They were read with `cfg_str` and DECLARED NOWHERE, which is the same defect the
+// STORE_OBSERVE comment above describes: an undeclared knob has no help text, the end-of-run env
+// audit cannot say what it does, and a reader who sets it and gets no file cannot tell whether the
+// knob is broken or the path is unreachable. Measured 2026-09-27 on Spyro 1, where the second reading
+// was about to be recorded as a broken feature: `PSXORT_RAMDUMP` set a path, no file appeared, and
+// the conclusion "the RAM dump does not work" was wrong — it works, at a different frame.
+//
+// THE TWO PATHS DIFFER AND THE DIFFERENCE IS THE POINT. `PSXPORT_RAMDUMP_FRAME=N` writes from INSIDE
+// the frame loop, at native frame N, which is what a live-state question needs: overlay state during
+// gameplay differs from end-of-run, and a resident overlay is usually only resident DURING play.
+// `PSXPORT_RAMDUMP` on its own writes AFTER the frame loop returns — and that return is not a path
+// every product takes. Spyro 1's run reaches the loop's shutdown telemetry (from ~LightrecExecutor)
+// and never prints `frame loop done`, so the end-of-run dump silently does nothing there. Reach for
+// RAMDUMP_FRAME, or the live channel's `dumpram <path>` verb, which dumps on demand at any point.
+TextVar cv_ramdump("PSXPORT_RAMDUMP",
+                   "",
+                   "write main RAM to this path AFTER the frame loop returns; a path not every product "
+                   "reaches — prefer PSXPORT_RAMDUMP_FRAME, or the live channel's `dumpram`",
+                   /*persistable=*/false);
+TextVar cv_ramdump_frame("PSXPORT_RAMDUMP_FRAME",
+                         "",
+                         "native frame N at which to write the PSXPORT_RAMDUMP path mid-run; this is "
+                         "the one that works while a title is playing",
+                         /*persistable=*/false);
 IntVar cv_watchdog("PSXPORT_WATCHDOG",
                    3,
                    "frame-progress timeout, seconds (0 = off)",

@@ -252,18 +252,28 @@ static void game_main(Core *c) {
     // PSXPORT_RAMDUMP_FRAME=N — dump RAM mid-run at native frame N (overlay state during gameplay
     // differs from end-of-run; needed to disasm the LIVE level/stage overlay at 0x8010/0x8011xxxx).
     {
-      const char *rdf = cfg_str("PSXPORT_RAMDUMP_FRAME");
-      if (rdf && f == (uint32_t)strtoul(rdf, 0, 0)) {
-
-        const char *rd = cfg_str("PSXPORT_RAMDUMP");
-        if (!rd) {
+      // The two knob values are held in const references, not `const char *` into a temporary:
+      // `TextVar::get()` returns by VALUE, so a `const char *` bound to `.c_str()` of the temporary
+      // would dangle before the first use. A const reference to a prvalue lifetime-EXTENDS the
+      // temporary, which is both the safe form and the copy-free one the style check requires.
+      const std::string &rdf = psx::config::cv_ramdump_frame.get();
+      if (!rdf.empty() && f == (uint32_t)strtoul(rdf.c_str(), nullptr, 0)) {
+        std::string rd = psx::config::cv_ramdump.get();
+        if (rd.empty()) {
           rd = "scratch/bin/midrun_ram.bin";
         }
-        FILE *mf = fopen(rd, "wb");
+        FILE *mf = fopen(rd.c_str(), "wb");
         if (mf) {
           fwrite(c->ram, 1, 0x200000, mf);
           fclose(mf);
           lucent::info("native_boot", "mid-run RAM dump @frame {} -> {}", f, rd);
+        } else {
+          lucent::error("native_boot",
+                        "mid-run RAM dump @frame {} could not open {} — the path is "
+                        "relative to the working directory, which for an agent run is "
+                        "the repository root",
+                        f,
+                        rd);
         }
       }
     }
@@ -306,14 +316,19 @@ static void game_main(Core *c) {
   // through two drivers and a clean exit, because this line was the report's only call site. Called
   // from here as well it would have double-reported on the paths that DO return, which is how a
   // denominator stops being one.
-  const char *rd = cfg_str("PSXPORT_RAMDUMP");
-  if (rd) {
-
-    FILE *f = fopen(rd, "wb");
+  // NOTE: this is the END-OF-RUN dump, and it only happens on the paths that return from the frame
+  // loop — not every product does (measured 2026-09-27 on Spyro 1, which never prints
+  // `frame loop done`). A missing file from this knob is therefore NOT evidence that RAM dumping is
+  // broken; use PSXPORT_RAMDUMP_FRAME=N, or the live channel's `dumpram <path>`, which work mid-run.
+  const std::string &rd = psx::config::cv_ramdump.get();
+  if (!rd.empty()) {
+    FILE *f = fopen(rd.c_str(), "wb");
     if (f) {
       fwrite(c->ram, 1, 0x200000, f);
       fclose(f);
       lucent::info("native_boot", "dumped 2MB RAM -> {}", rd);
+    } else {
+      lucent::error("native_boot", "end-of-run RAM dump could not open {}", rd);
     }
   }
 }
