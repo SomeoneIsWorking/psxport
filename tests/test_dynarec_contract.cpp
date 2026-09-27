@@ -612,7 +612,19 @@ static void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupp
   constexpr std::uint32_t selected = kObservedWriter + 8u;
   constexpr std::uint32_t sentinel = 0xfffffffcu;
   constexpr std::uint32_t unsupported = kObservedWriter + 4u;
-  const std::uint32_t targets[] = {selected, sentinel};
+  // THE DATA ADDRESS THIS FUNCTION WRITES, armed as a target ON PURPOSE. The store above is
+  // `sw t1, 0(t0)` with t0 = 0x40, so 0x40 is the guest word that gets written — and it must record
+  // ZERO observations, because the matcher compares the store's PC, not its target address.
+  //
+  // This case exists because of a real investigation failure on 2026-09-27. Chasing why Spyro 1's moby
+  // list at 0x800700F4 was never filled, `PSXPORT_STORE_OBSERVE=800700F4,800700F8,800700FC` armed DATA
+  // addresses, reported MATCHED NONE over 116,056,872 executed JIT instructions, and that tautology was
+  // published as "the product never writes that word". The positives in this test already implied the
+  // distinction — they arm `selected`, a PC, while writing 0x40 — but nothing ever ARMED 0x40 and
+  // asserted the miss, so a reader had no way to learn it except by making the mistake. It is armed here
+  // so the semantics are stated by a test rather than by a sentence in a header.
+  constexpr std::uint32_t writtenDataAddress = 0x40u;
+  const std::uint32_t targets[] = {selected, sentinel, writtenDataAddress};
   core.mem_w32(kObservedWriter, 0x24080040u);      // addiu t0, zero, 0x40
   core.mem_w32(kObservedWriter + 4u, 0x24090007u); // addiu t1, zero, 7
   core.mem_w32(selected, 0xad090000u);             // sw t1, 0(t0)
@@ -652,7 +664,7 @@ static void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupp
   CHECK_EQ(core.r[10], 9u);
   CHECK_EQ(observed.cycles, plain.cycles);
   CHECK(executor.counters().translatedBlocks > warmTranslations);
-  CHECK_EQ(report.targetCount, 2u);
+  CHECK_EQ(report.targetCount, 3u);
   CHECK(report.armed);
   CHECK_EQ(report.targets[0].guestPc, selected);
   CHECK_EQ(report.targets[0].before, 1u);
@@ -660,6 +672,14 @@ static void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupp
   CHECK_EQ(report.targets[1].guestPc, sentinel);
   CHECK_EQ(report.targets[1].before, 0u);
   CHECK_EQ(report.targets[1].after, 0u);
+  // The word WAS written — the earlier assertion on `core.mem_r32(0x40) == 7` is the proof — and the
+  // armed address still saw nothing. Both halves are asserted because either alone is misleading: the
+  // write alone looks like a match, and the miss alone looks like the store never ran.
+  CHECK_EQ(core.mem_r32(writtenDataAddress), 7u);
+  CHECK_EQ(report.targets[2].guestPc, writtenDataAddress);
+  CHECK_EQ(report.targets[2].before, 0u);
+  CHECK_EQ(report.targets[2].after, 0u);
+  CHECK_EQ(trace.sentinelCalls, 0u);
   CHECK(report.executedJitInstructions > 0u);
   CHECK_EQ(report.executedJitInstructions, executor.counters().executedInstructions - baselineInstructions);
   CHECK_EQ(report.fallbackInstructions, 0u);
