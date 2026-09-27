@@ -80,6 +80,18 @@ because there is no second copy.
    --bump` records it; `--check` (wired into each game's precommit gate) FAILS when the framework you
    built against is not the one the repo records, comparing against `build/psxport_resolved.txt`, which
    CMake writes at configure time.
+
+   **KNOWN LIMIT, measured 2026-09-27: that file is written at CONFIGURE time, so a plain
+   `cmake --build` does not refresh it.** A port can therefore relink against newer framework code while
+   its `psxport_resolved.txt` still names the older commit, and `--check` passes — which is precisely the
+   drift the pin exists to catch. Measured on `crash`: the resolved file was written at 11:30 naming
+   framework `492adace`, the binary was relinked at 16:05 against framework `2b07a8f6`, and the check
+   would have passed. **`--check` is only meaningful after a reconfigure**, so a pin bump must be
+   `reconfigure → build → test → --bump`, never `build → --bump`.
+
+   Coverage is also uneven: `ctr`, `spider1`, `Tomba2Engine` and `megamanx4` register a pin test and
+   `crash` does not, so `crash`'s green gate says nothing about framework drift at all. Registering it
+   everywhere is the cheap half of this fix and has not been done.
 3. **Ports are deliberately NOT all on framework HEAD.** Measured 2026-08-16: six ports spanned 55
    commits of framework history. With one maintainer that is a feature — it is what lets one port be
    worked on daily while the others sit untouched, and it is why a Beetle GTE regression in every

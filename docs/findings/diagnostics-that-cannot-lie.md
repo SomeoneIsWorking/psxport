@@ -115,6 +115,24 @@ A cap is only half a contract; the CLIENT has to survive it. Two shapes exist in
 The second shape is the pattern to copy, and it costs nothing: a client that loops until it has what it
 asked for cannot be confused by a cap, because it never assumes one reply was sufficient.
 
+### 6. A gate that could not detect the drift it exists to catch (`psxport_pin`)
+
+Not a measurement instrument, but the same species, and found the same way: by reading what a green
+result actually compared.
+
+`--check` compares `psxport.pin` against `build/psxport_resolved.txt`, and CMake writes that file **at
+configure time**. A plain `cmake --build` does not rewrite it. So after framework motion a port can
+relink against newer framework code, its resolved file still naming the older commit, and the check
+passes — the one thing the pin is for.
+
+Measured 2026-09-27 on `crash`: `psxport_resolved.txt` written at 11:30 naming framework `492adace`,
+binary relinked at 16:05 against framework `2b07a8f6`, check green. `crash` does not register a pin test
+at all, so its 22/22 never consulted one; `ctr` does register one, and correctly failed.
+
+*Rule added, recorded in `docs/workspace/WORKSPACE.md`:* **`--check` is only meaningful after a
+reconfigure**, so the order is `reconfigure → build → test → --bump`, never `build → --bump`. And a gate
+that is not registered is not a gate — the uneven coverage is named there rather than assumed away.
+
 ## What this costs, and why it is worth a document
 
 Each of these was found by **doing the measurement wrong and then being suspicious of the result** —
