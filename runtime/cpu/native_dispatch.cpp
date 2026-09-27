@@ -220,12 +220,18 @@ invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction func
     // sites share that leaf, and the one after the movie completed was `VSync(-1)`, which made the
     // title look stalled rather than mis-resumed.
     //
-    // The requester's own PC wins when it stated one, so a leaf that deliberately resumes somewhere
-    // else (a nested original call that already owns a continuation) is not overruled here.
+    // The requester's own PC wins when it stated one, and then `core.pc` is left exactly as the body
+    // left it: a leaf that resumes somewhere it chose is being resumed by its caller's own scope,
+    // which restores the enclosing PC on scope exit. Measured 2026-09-27 on Spider-Man 1: a
+    // `CooperativeYield` that stated the original body's entry must leave `core.pc` at that entry,
+    // and completing the return here overwrote it with the leaf's r[31] instead.
     if (requested->guestPc == 0u) {
+      // Nothing was stated, so this leaf's continuation IS the answer — and `core.pc` is brought
+      // into agreement with it, because a consumer that reads one and not the other must not find
+      // two different places.
       requested->guestPc = execution.continuation();
+      execution.completeReturn();
     }
-    execution.completeReturn();
     return *requested;
   }
   execution.completeReturn();
