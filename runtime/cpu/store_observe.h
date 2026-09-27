@@ -3,10 +3,28 @@
 // WHY THIS EXISTS. `LightrecExecutor::configureStoreObserver` has been implemented and hermetically
 // tested (tests/test_dynarec_contract.cpp) and is the only instrument that reports a translated
 // GUEST store's guest PC together with the full register file. It also had no way to be armed from a
-// product run: `PSXPORT_CW` sees host-side stores only. So the one question it exists to answer — which
-// instruction wrote this guest word — was unaskable outside a unit test, and a live divergence
-// investigation in a real title was blocked on it (Spyro 1, docs/issues/0133: the product executed a
-// store to `g_Spyro + 0x88` that the reference did not, and nothing could name the instruction).
+// product run: `PSXPORT_CW` sees host-side stores only, so no live divergence investigation could ask
+// anything about a translated store at all (Spyro 1, docs/issues/0133).
+//
+// WHAT IT ACTUALLY ANSWERS, because the previous version of this comment claimed the opposite and the
+// claim cost a real investigation. The armed list is matched against the PC OF each executed translated
+// store — `target.guestPc != guestPc` in `LightrecExecutor::Impl::observeStore` — so the list is STORE
+// PCs. Therefore:
+//
+//   * "did the store instruction at PC X run, how many times, and what did it write?"  YES. This is
+//     the instrument's real strength, and it is how a suspected never-executed function is caught: its
+//     first `sw $ra, off($sp)` in the prologue is enough.
+//   * "which instruction wrote THIS GUEST WORD W?"  NO. The callback receives the store's PC and the
+//     register file, not the store's resolved target address, so there is no lookup from a word back to
+//     an instruction. Finding the writer of W is a SEARCH over candidate store PCs, not a query.
+//
+// The old comment said the instrument existed to answer the second question, and the old report line
+// said "this address was not written in this run". On 2026-09-27 that was acted on: Spyro 1 armed
+// `PSXPORT_STORE_OBSERVE=800700F4,...` — DATA addresses, while investigating why the moby list at
+// 0x800700F4 was never filled — got MATCHED NONE, and recorded that the product "never executes a
+// translated store to the list base" over 116M instructions. 0x800700F4 is not an instruction, so no
+// store instruction can be AT it: MATCHED NONE was guaranteed before the game started, and a
+// guaranteed answer was published as a measurement. Every line this module prints now names STORE PC.
 //
 // The observer itself stays where it belongs, in the executor. This owns only the ARMING and the
 // REPORTING: which guest addresses to watch, and what to say about what was seen. A title that wants

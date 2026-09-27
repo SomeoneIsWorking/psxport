@@ -134,9 +134,12 @@ void store_observe_configure(Core &core) {
   }
   // The denominator, stated at arming: how many addresses, and which. A later "the observer saw
   // nothing" means something only against this line.
-  lucent::info("store-observe", "watching {} guest address(es) for stores:", armed.count);
+  lucent::info("store-observe",
+               "watching {} guest STORE-INSTRUCTION PC(s). These are the PCs OF STORES, not the guest "
+               "words they write: `sw $at, 0($t6)` is watched as the PC of that `sw`.",
+               armed.count);
   for (std::size_t i = 0; i < armed.count; ++i) {
-    lucent::info("store-observe", "  [{}] 0x{:08X}", i, armed.addresses[i]);
+    lucent::info("store-observe", "  [{}] store PC 0x{:08X}", i, g_armed.addresses[i]);
   }
 }
 
@@ -148,7 +151,8 @@ void store_observe_report(Core &core) {
   // The executor's own counters, so "the observer ran and matched nothing" is distinguishable from
   // "the instrument never ran" — the distinction this area has got wrong before.
   lucent::info("store-observe",
-               "report: armed={} targets={} jit_instructions={} fallback_instructions={} callback_lines={}",
+               "report: armed={} store_pcs={} jit_instructions={} fallback_instructions={} "
+               "callback_lines={}",
                report.armed ? "yes" : "no",
                report.targetCount,
                report.executedJitInstructions,
@@ -160,20 +164,32 @@ void store_observe_report(Core &core) {
       // Say "matched none" in words, and do NOT print a guest PC: with no observation there is no last
       // guest PC, and echoing the target address back in that column reads exactly like a hit. The
       // instrument's own scan size is what makes this line meaningful rather than merely empty.
+      // The wording matters more than usual here, and it was WRONG until 2026-09-27. The matcher is
+      // `target.guestPc != guestPc` in LightrecExecutor::Impl::observeStore — this instrument watches
+      // GUEST STORE INSTRUCTION PCs, not guest DATA addresses. The old text said "this address was not
+      // written in this run", which reads as a statement about memory. Someone then armed it with a DATA
+      // address (Spyro 1, `PSXPORT_STORE_OBSERVE=800700F4,800700F8,800700FC` while investigating why the
+      // moby list at 0x800700F4 was never filled), got MATCHED NONE, and recorded "the product never
+      // writes that word". It never tested that. 0x800700F4 is not an instruction, so no store
+      // instruction can ever be AT it, and MATCHED NONE was guaranteed before the game started.
+      // A diagnostic that reports a guaranteed answer as a measurement is the failure this project
+      // treats as worst, so the line now says what was actually counted.
       lucent::info("store-observe",
-                   "  [{}] 0x{:08X} stores before=0 after=0 — MATCHED NONE of the {} executed JIT "
-                   "instruction(s); this address was not written in this run",
+                   "  [{}] store PC 0x{:08X} stores before=0 after=0 — no STORE INSTRUCTION at this PC "
+                   "executed, of the {} executed JIT instruction(s). This says NOTHING about any guest "
+                   "DATA address: to ask what wrote a word, put the STORE'S OWN PC here",
                    i,
                    g_armed.addresses[i],
                    report.executedJitInstructions);
       continue;
     }
+    // `target.guestPc` equals the armed PC BY CONSTRUCTION — the matcher compares them — so echoing it
+    // in a second column labelled "last_guest_pc" implied a second, independently-obtained fact and
+    // invited reading it as one. The COUNT is the measurement; the PC is the key it was measured at.
     lucent::info("store-observe",
-                 "  [{}] 0x{:08X} stores before={} after={} last_guest_pc=0x{:08X}",
+                 "  [{}] store PC 0x{:08X} EXECUTED: {} store(s) observed at this PC",
                  i,
                  g_armed.addresses[i],
-                 target.before,
-                 target.after,
-                 target.guestPc);
+                 target.before);
   }
 }

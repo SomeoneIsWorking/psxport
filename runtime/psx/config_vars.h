@@ -39,9 +39,11 @@ extern BoolVar cv_repl;
 // audit cannot see is a knob that does nothing: this one was read through cfg_str() and matched
 // nothing, which the boot audit reported as UNKNOWN while the server never started.
 extern TextVar cv_debug_server;
-// PSXPORT_STORE_OBSERVE — hex guest addresses whose translated stores the dynarec store observer
-// watches. Interpreted once by runtime/cpu/store_observe.cpp; see the declaration in config.cpp for why
-// it exists and what it is for.
+// PSXPORT_STORE_OBSERVE — hex guest STORE-INSTRUCTION PCs the dynarec store observer watches. The list
+// is matched against the PC OF each executed translated store (`target.guestPc != guestPc` in
+// LightrecExecutor::Impl::observeStore), so it is NOT a list of guest data addresses; arming a data
+// address produces a guaranteed MATCHED NONE. Interpreted once by runtime/cpu/store_observe.cpp; see the
+// declaration in config.cpp for what it is for and what it cannot answer.
 extern TextVar cv_store_observe;
 // PSXPORT_RAMDUMP — write main RAM to this path AFTER the frame loop returns. It is here because it
 // was read with `cfg_str` and declared nowhere, so it had no help text and the env audit could not

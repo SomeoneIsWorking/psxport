@@ -300,7 +300,8 @@ TextVar cv_debug_server("PSXPORT_DEBUG_SERVER",
 // pattern follow: declare it ONCE here, interpret it ONCE there.
 TextVar cv_store_observe("PSXPORT_STORE_OBSERVE",
                          "",
-                         "hex guest addresses whose stores are observed, comma-separated (empty = off)",
+                         "hex guest STORE-INSTRUCTION PCs to observe, comma-separated (empty = off) — "
+                         "these are the PCs OF store instructions, NOT the guest words they write",
                          /*persistable=*/false);
 // PSXPORT_RAMDUMP / PSXPORT_RAMDUMP_FRAME — write main RAM to a file, for disassembly of whatever
 // image is resident. They were read with `cfg_str` and DECLARED NOWHERE, which is the same defect the
