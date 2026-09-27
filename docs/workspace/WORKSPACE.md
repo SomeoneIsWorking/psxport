@@ -43,7 +43,7 @@ what a title-owned widening owner actually contains.
 | title | repo | widescreen owner files | note |
 |---|---|---|---|
 | Spyro 1 | `spyro` | 24 | verified live: `render_width=684` against `native_width=512` |
-| Crash 1 | `crash` | 2 | retail `H=1000, OFX=0, OFY=0`; no literal horizontal cull in 72,192 instructions |
+| Crash 1 | `crash` | 2 | retail `H=1000, OFX=0, OFY=0`. **CORRECTED 2026-09-27: the old note here — "no literal horizontal cull in 72,192 instructions", read as "widening cannot clip new geometry" — was right about the scan and wrong about the inference.** The bound is a main-RAM global `0x800578D0` (1 writer, 20 readers), so a literal-immediate scan cannot see it, and it is **not a screen-space cull: `FUN_8003A144` uses it as the GTE NEAR PLANE** (`H < Z < 12000`). Widening is safe only because the port widens the GPU projection and leaves that global at retail's value; a change that raised it would cull near geometry. See `crash/docs/issues/0016`. |
 | Crash Bash | `crashbash` | 2 | widens in BOTH the model producer (OFX moved to the new left margin, draw area clamped so the authored briefing keeps its centred viewport) and the sprite-quad producer (authored canvas shift) |
 | Mega Man X4 | `megamanx4` | 2 | widescreen-only profile, as its 60 fps status requires |
 | Tekken 3 | `tekken3` | 2 | widescreen-only; the stage wedge is a direction, so widening is `atan(k·tan θ)` |
