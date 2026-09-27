@@ -48,3 +48,53 @@ old identity conversion back in fails 4 of the 7 tests in `tests/test_wide_margi
 what makes them evidence rather than decoration. The drawing itself moved out of the
 4,253-line `gpu_vk.cpp` into `runtime/psx/gpu_vk_wide_margin.cpp`; the file's legacy cap ratcheted to
 4,238.
+
+## The projection centre and the left margin are the framework's numbers; ask for them by name (2026-09-27)
+
+Two quantities decide where a widened picture begins, and both are computed by the framework:
+
+- the **horizontal centre** — `gpu_vk_wide_engine_ofx`, the render width for the selected aspect over two;
+- the **left margin** — `gpu_vk_wide_left_margin`, `(wide_w - native_w) / 2`, the columns the widening adds.
+
+Both were being recomputed at call sites, and the failure mode is identical in both cases: the copy is
+equal to the original **today** and diverges the moment the original's definition moves, with nothing to
+signal it. Two instances found by grepping for the recomputation rather than for the concept:
+
+**1. Crash Bash, three sites, two spellings.** The model producer wrote
+`gpu_vk_wide_engine_ofx(&core) - gpu_vk_native_w(&core) / 2` and the sprite producer wrote
+`(gpu_vk_wide_engine_w(&core) - gpu_vk_native_w(&core)) / 2` twice. These differ whenever the wide width
+is even and the native width is odd, by exactly one column — measured, and pinned by
+`tests/test_wide_left_margin.cpp` over a parity sweep. They are equal now because
+`video_wide_native_w` ends with `w &= ~1` and every PSX display mode has an even width, neither of which
+is a property of the margin. All three now call `gpu_vk_wide_left_margin`.
+
+**2. Spyro 1, one site the title's own consolidation missed — NOT FIXED, and why.** Spyro already hit this
+class of bug and fixed it: issue 0124 had the paired actor drawn about the 4:3 centre while the world around
+it was drawn about the widened one. The fix introduced `spyro::wide_screen_space::horizontalCenter(Core*)`,
+which returns `gpu_vk_wide_engine_ofx`, with a comment recording that it "used to spell the wide half-width
+here and fall back to `projParams.geomOfx()`, which is a second implementation of the same number".
+
+**`game/render/fx_field_tracers.cpp` still spells it itself**, at the line that overrides the projection
+centre when the wide engine is on:
+
+```cpp
+if (gpu_vk_wide_engine(core)) {
+  projection.ofx = (gpu_vk_wide_engine_w(core) / 2) << 16;   // should be horizontalCenter(core)
+}
+```
+
+The value is correct today, because `gpu_vk_wide_engine_ofx` is *literally* `wide_native_w / 2` — so this
+is the same latent coupling as Crash Bash's, one file narrower.
+
+**It is deliberately NOT fixed in this commit.** `spyro` is being worked by another agent right now, and the
+workspace rule is explicit ownership so that no two agents edit the same tree. The change is one line and is
+mechanically equivalent today; it is recorded here so it is a known item rather than a fresh discovery, and
+it should be landed by whoever next owns that repository:
+
+    projection.ofx = spyro::wide_screen_space::horizontalCenter(core) << 16;
+
+**The generalisable rule, which is why this is written here rather than as a Crash Bash commit note:** when
+the framework computes a number, a title should call the accessor, not re-derive it. A grep for the CONCEPT
+finds almost nothing — the copies spell the arithmetic, not the name — so the census has to be for the
+expression (`wide_engine_w(...) / 2`, `wide_engine_ofx(...) - ... / 2`), which is how both instances above
+were found.
