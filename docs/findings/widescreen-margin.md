@@ -93,8 +93,22 @@ it should be landed by whoever next owns that repository:
 
     projection.ofx = spyro::wide_screen_space::horizontalCenter(core) << 16;
 
+**THE CENSUS IS CLOSED, with its denominator.** Both accessors were grepped across every in-scope title's
+`game/` and `titles/` for the recomputation EXPRESSION — `wide_engine_w(...) / 2` and
+`wide_engine_ofx(...) - ... / 2` — and every `ofx =` assignment site was read to see whether it asks or
+computes. Result: **two instances in the whole workspace, the two above.**
+
+| title | `ofx =` sites | verdict |
+|---|---|---|
+| Spyro 1 | many | one recomputation, `fx_field_tracers.cpp` — the finding above |
+| Crash Bash | 3 | three recomputations, all fixed to `gpu_vk_wide_left_margin` |
+| Tomba! 1 / 2 | 3 | **asks.** `projection.cpp` takes `ofx` as a parameter and `native_terrain.cpp` reads it from `fps60(*c->game).sceneCam(...)`, so one owner supplies `ofx`/`ofy`/`H` together and nothing re-derives them |
+| Mega Man X4 | 0 | no `ofx =` site; widening goes through its own widescreen profile |
+| Tekken 3 | 0 | same |
+| Spider-Man 1 | 0 | same |
+| Crash Team Racing | 0 | no widescreen owner at all, so nothing to re-derive |
+
 **The generalisable rule, which is why this is written here rather than as a Crash Bash commit note:** when
 the framework computes a number, a title should call the accessor, not re-derive it. A grep for the CONCEPT
 finds almost nothing — the copies spell the arithmetic, not the name — so the census has to be for the
-expression (`wide_engine_w(...) / 2`, `wide_engine_ofx(...) - ... / 2`), which is how both instances above
-were found.
+expression, which is how both instances above were found.
