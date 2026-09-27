@@ -61,6 +61,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/memcensus.cpp      # --wrap=memcpy call-site attribution (PSXPORT_MEMCENSUS)
   ${PSXPORT_ROOT}/runtime/psx/io_peripherals.cpp
   ${PSXPORT_ROOT}/runtime/psx/sio_pad.cpp
+  ${PSXPORT_ROOT}/runtime/psx/dma_linked_list.cpp
   ${PSXPORT_ROOT}/runtime/psx/mem.cpp
   ${PSXPORT_ROOT}/runtime/psx/guest_memory.cpp
   ${PSXPORT_ROOT}/runtime/psx/dma_callbacks.cpp # direct-runtime per-Game DMACallback registration state

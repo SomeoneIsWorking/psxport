@@ -4,7 +4,8 @@
 // peripheral modules. Host is little-endian (PSX is LE), so word access is a memcpy.
 #include "cfg.h"
 #include "core.h"
-#include "dma_irq.h" // DPCR/DICR semantics — which DMA completions the guest hears about
+#include "dma_irq.h"         // DPCR/DICR semantics — which DMA completions the guest hears about
+#include "dma_linked_list.h" // what BCR sync mode 2 means, and the chain walk
 #include "game.h"
 #include "host_backtrace.h"
 #include "io_peripherals.h"
@@ -264,6 +265,20 @@ static int dma_block_words(uint32_t bcr) { // sync-mode-1 block DMA total word c
   uint32_t bs = bcr & 0xFFFF, bc = bcr >> 16;
   return (int)(bs * (bc ? bc : 1));
 }
+
+// BCR bits 0-1 are the SYNC MODE, and this function used to read BCR as if they were not there. So a
+// guest that programmed a channel for mode 2 got `blockSize * blockCount` taken from a word that is not a
+// size at all: in linked-list mode BCR is IGNORED by the hardware and MADR points at a chain of
+// `{next, count}` header words instead. The runtime therefore transferred a wrong number of words to a
+// wrong place, cleared busy, and announced completion — so the guest was told its chain had run when no
+// chain had been walked.
+//
+// MEASURED consequence, and this is why it is worth the shared fix rather than a title workaround:
+// Mega Man X4's post-movie task writes DPCR and starts a 6,144-byte chain, then polls a guest flag byte
+// (`0x801721D7`) for completion. With no mode-2 walk the flag never arrives, the guest waits forever, and
+// every post-movie frame is one flat clear colour — which is why that title had no widescreen picture
+// pair and no product evidence at all for its seven widened culling owners. Any title whose media path
+// chains its transfers hits the same wall, which is why this is in the DMA owner rather than in a game.
 
 // MDEC pending-channel pump — the ping-pong real hardware gets from DMA0 (MDEC-in) and DMA1
 // (MDEC-out) running CONCURRENTLY around the decoder. In vendor beetle-psx dma.c both channels sit
@@ -819,25 +834,73 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F8010B8) {
     s_dma3_chcr = v;
     if (v & 0x01000000u) { // start/busy
-      int n = dma_block_words(s_dma3_bcr);
+      // Sync mode decides what MADR and BCR even MEAN, and mode 2 ignores BCR entirely. Reading a
+      // chain as a block count transferred the wrong words and then announced completion, which is
+      // worse than not transferring: the guest stops waiting for something that never ran.
+      const unsigned mode = psx::dma::syncMode(s_dma3_bcr);
+      uint32_t endMadr = s_dma3_madr & 0x1FFFFC;
+      bool chainRefused = false;
+      int n = mode == psx::dma::kLinkedList ? psx::dma::chainWords(*this, s_dma3_madr, &endMadr, &chainRefused)
+                                            : dma_block_words(s_dma3_bcr);
+      if (mode != psx::dma::kLinkedList) {
+        endMadr = (s_dma3_madr & 0x1FFFFC) + (unsigned)n * 4u;
+      }
       if (n > 0x10000) {
         n = 0x10000;
       }
-      const uint32_t da = s_dma3_madr & 0x1FFFFC;
-      const int fifo_words = cdc_dma_read(&game->cdc, s_dma_buf, n);
-      for (int i = 0; i < n; i++) {
-        mem_w32(da + i * 4, s_dma_buf[i]);
-      }
+      uint32_t da = s_dma3_madr & 0x1FFFFC;
       // CDC DMA returns zero after the FIFO empties (Beetle PS_CDC_DMARead) and still completes.
       // Keep both populations visible so a normal libstr tail flush cannot masquerade as disc data
       // and an unexpected depletion cannot disappear silently.
-      lucent::debug("cdc",
-                    "DMA3 {} words -> 0x{:08X}: FIFO {} + controller-zero {} (head LBA {})",
-                    n,
-                    0x80000000u | da,
-                    fifo_words,
-                    n - fifo_words,
-                    game->cdc.loc_lba);
+      if (mode == psx::dma::kLinkedList) {
+        // A chain fills each node's payload from the FIFO in turn, because the sector stream is
+        // consumed in order and the chain is how the guest says where consecutive sectors land. A
+        // single FIFO read of the whole total would put every word at the head, which is the block
+        // behaviour wearing a chain's address.
+        int remaining = n;
+        uint32_t node = da;
+        for (int hops = 0; hops < psx::dma::kChainWordCap && remaining > 0; hops++) {
+          const uint32_t header = mem_r32(node);
+          const int count = (int)(header >> 24);
+          const uint32_t next = header & 0x00FFFFFFu;
+          const int take = count < remaining ? count : remaining;
+          const int got = cdc_dma_read(&game->cdc, s_dma_buf + (n - remaining), take);
+          for (int i = 0; i < take; i++) {
+            mem_w32(node + 4 + (unsigned)i * 4u, s_dma_buf[n - remaining + i]);
+          }
+          lucent::debug("cdc",
+                        "DMA3 chain node 0x{:08X}: {} words, FIFO {} + controller-zero {} (head LBA {})",
+                        0x80000000u | node,
+                        take,
+                        got,
+                        take - got,
+                        game->cdc.loc_lba);
+          remaining -= take;
+          if (next == 0x00FFFFFFu || remaining <= 0) {
+            break;
+          }
+          node = next & 0x1FFFFC;
+        }
+      } else {
+        const int fifo_words = cdc_dma_read(&game->cdc, s_dma_buf, n);
+        for (int i = 0; i < n; i++) {
+          mem_w32(da + (unsigned)i * 4u, s_dma_buf[i]);
+        }
+        lucent::debug("cdc",
+                      "DMA3 {} words -> 0x{:08X}: FIFO {} + controller-zero {} (head LBA {})",
+                      n,
+                      0x80000000u | da,
+                      fifo_words,
+                      n - fifo_words,
+                      game->cdc.loc_lba);
+      }
+      if (mode == psx::dma::kLinkedList && !chainRefused) {
+        // A guest that reads MADR back after a chain expects the end of the chain, which is what
+        // hardware leaves there. Leaving the head behind made a resume-from-MADR guest restart the
+        // whole chain, and a guest walking `next` itself never saw where the transfer stopped.
+        s_dma3_madr = endMadr;
+        lucent::debug("cdc", "DMA3 chain {} words, MADR advanced to 0x{:08X}", n, 0x80000000u | endMadr);
+      }
       s_dma3_chcr &= ~0x01000000u; // clear busy: the completion poll must pass
       irqStatLatch();              // draining a sector queues the next INT1
       // Announce completion — but ONLY if the guest asked to hear about THIS transfer. DICR is where
