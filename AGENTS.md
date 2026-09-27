@@ -147,6 +147,28 @@ distinguish "scanned and found none" from "instrument never ran". Product-link i
 the interpreter and generated guest corpus are absent; observing no fallback in one scenario is not
 enough.
 
+Two further obligations, both added 2026-09-27 after measuring the same defect five ways across four
+titles (`docs/findings/diagnostics-that-cannot-lie.md`, which carries the incidents):
+
+- **A SHORT ANSWER MUST DECLARE ITSELF.** Any read or search that can return fewer items than asked for
+  must say how many it served and how many were asked for, and must state that the missing ones were not
+  fetched — never pad them with zeros. A silent short read is a mechanism for manufacturing a result,
+  because the caller's most natural reading of the absent tail is "zero". This bit a real probe: an `rw`
+  for 1408 words returned 64 with no notice, and "the tail is zero" is exactly the answer that probe was
+  built to look for. The cap both control surfaces share lives in one header
+  (`runtime/psx/control_surface_limits.h`), because two transports with two literals drift silently.
+- **THE REPORT MUST NAME WHAT WAS COMPARED, NOT WHAT A READER WILL ASSUME IT MEANT.** The store observer
+  matched store instruction PCs while every line it printed said "address", so a data address was armed,
+  produced a guaranteed "matched none", and that tautology was published as a measurement over 116M
+  instructions. A denominator does not redeem this: a real denominator attached to a guaranteed answer
+  reads as a strong result. Where an instrument cannot answer a question, its output has to say so in the
+  same sentence, and where it can only answer a narrower one, the narrower one is what the words name.
+
+A diagnostic is not finished when it works, and it is not safe until it has been **observed to fail
+correctly**: a negative case, a stated denominator, and a report that cannot be read as the other
+question. Knobs an instrument reads belong in `runtime/psx/config.cpp` and `config_vars.h`, so the
+end-of-run audit can describe them — an undeclared knob is one whose absence a reader cannot interpret.
+
 ## Reverse-engineer first
 
 Decompile before changing a mystery guest address, offset, state field, call boundary, or overlay
