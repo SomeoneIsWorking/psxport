@@ -21,6 +21,32 @@ Independent repos live side by side, all public under `github.com/SomeoneIsWorki
 and no superproject: a game must build from a bare clone of itself, a gitlink at this level would churn on
 every game commit, and a recursive clone would pull seven copies of psxport + beetle-psx.
 
+### MEASURED 2026-09-27 — the horizontal projection parameter is GAMEPLAY STATE in at least one title
+
+**`vs_main_projectionDistance` is not only a projection parameter in Vagrant Story.** It is `0x8005E248`
+(verified against the decomp's own `symbol_addrs.txt:798`), and two BATTLE functions BRANCH on it:
+
+    146C.c:4209   if (vs_main_projectionDistance < 272) {
+    146C.c:4266   if (vs_main_projectionDistance > 272) {
+
+**Retail's resting value is `0x100` = 256, BELOW that threshold.** So a widening implemented by raising the
+horizontal projection past 272 would **flip a gameplay decision**, and the same word also scales GTE fog
+(`SetFogNear(768, vs_main_projectionDistance)`). Vagrant's owner therefore widens the CANVAS and never `H`,
+and `guestWidescreenProjection()` is deliberately not overridden there at all — the absence is the
+enforcement, asserted by a test. See `vagrant/docs/issues/0037`.
+
+**This is the opposite of Crash 1**, where the horizontal bound turned out to BE the GTE near plane
+(`H < Z < 12000`). Two titles, two different hazards from the same "widen the projection" instruction, which
+is why the hazard has to be measured per title rather than assumed.
+
+**METHOD REQUIREMENT, and only ONE title has been checked.** Before a title's widening touches any
+gameplay-visible scalar — the horizontal projection, the near plane, the clip, a distance word — that scalar
+must be searched for GAMEPLAY READS (a branch, a compare, a threshold), not just for render reads. A
+literal-immediate scan does not find these: Crash 1's bound is a main-RAM global reached by `lui` plus a
+16-bit displacement, and Vagrant's is a named global read by ordinary C. **Do not read "no cull" as "safe to
+widen".** Only Vagrant Story has been checked this way; the others have not, and a loose grep is not a
+substitute — the one that was tried here matched a camera variable, not a projection scalar.
+
 ### MEASURED 2026-09-27 — three titles' 60 fps SCOPE IS UNKNOWN, and I asserted it anyway
 
 **Correction first, because I got this wrong in conversation and nearly acted on it.** A survey of the
