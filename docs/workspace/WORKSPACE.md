@@ -21,6 +21,41 @@ Independent repos live side by side, all public under `github.com/SomeoneIsWorki
 and no superproject: a game must build from a bare clone of itself, a gitlink at this level would churn on
 every game commit, and a recursive clone would pull seven copies of psxport + beetle-psx.
 
+### MEASURED 2026-09-27 — three titles' 60 fps SCOPE IS UNKNOWN, and I asserted it anyway
+
+**Correction first, because I got this wrong in conversation and nearly acted on it.** A survey of the
+per-title docs produced `ctr 60 fps`, `spider1 60fps`, `vagrant 60fps`, and I was about to use that to
+declare all three outside lerp scope. **It is false.** Every one of those strings is a GOAL, not a
+measurement — `ctr/docs/project-goals.md:59` "## G003 — Interpolated presentation at 60 fps and above",
+`spider1/docs/project-goals.md:54` "The 60fps outcome is true interpolation", `vagrant/docs/project-goals.md:35`
+"the only 60fps difference is insertion of the additional lerped presentation". Reading a goal as a
+measurement is the same error as arming the store observer on a data address, and it is the reason this
+paragraph exists.
+
+**What is actually recorded, by method — the VSync argument, which IS a field count:**
+
+| title | `VSync(n)` sites found in its docs and sources | verdict |
+|---|---|---|
+| `vagrant` | `VSync(2)` x3, `VSync(3)` x2, plus 0 and -1 | **leads to 30 fps** (2 fields/frame) |
+| `ctr` | `VSync(2)` x1, plus 0 and -1 | **leads to 30 fps**, one site only |
+| `spider1` | `VSync(0)` x3, `VSync(-1)` x7 — **no waiting call at all** | **unknown**, and see below |
+
+The method is established, not assumed: `crashbash` is now MEASURED at 2 fields per game frame
+(`crashbash/docs/issues/0031`), and it was established by reading the argument reaching the display owner
+and by the wait routine branching to NO-WAIT for `a0 == 1` and `a0 <= 0` and only waiting for `a0 >= 2`.
+**A `VSync(0)` or `VSync(-1)` site therefore says nothing about rate** — 0 and -1 are the return-current and
+query modes. `spyro` is a confirmed 30 fps title and has ONLY `VSync(0)` and `VSync(-1)`, which is exactly
+why `spider1` having no waiting call proves nothing either way.
+
+**So: `vagrant` and `ctr` each have ONE lead toward 30 fps, and `spider1` has none. None of the three has a
+measured rate, and all three carry an interpolation goal whose scope depends on it.** `spider1` has a
+provisioned image, so its rate is measurable and simply has not been measured. `ctr` and `vagrant` have no
+disc image on this machine, so for those two the rate cannot be established from the retail binary at all
+until media is provisioned — **which also means the two remaining widescreen gaps and this scope question
+share one blocker.**
+
+**Do not add an interpolation path to, or rule one out of, any of these three until the rate is measured.**
+
 ### Target title scope
 
 The target ports are Spyro 1/2/3; Crash 1/2/3; Crash Bash; Crash Team Racing; Vagrant Story; Mega Man
