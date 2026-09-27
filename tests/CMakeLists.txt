@@ -213,3 +213,14 @@ add_test(NAME pin_tools_selftest
 add_test(NAME pin_sync_behaviour
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_psxport_sync.py)
+
+# settings_persistence needs no registration here: `tests/CMakeLists.txt` GLOBs `test_*.cpp` and
+# creates both the executable and the ctest entry per file. It is named in this comment because the
+# DEFECT it covers is not obvious from the filename, and because a reader looking for "where is the
+# settings-persistence gate" should not have to know the glob.
+#
+# MEASURED 2026-09-27: `PSXPORT_SETTINGS` is both the launch-configuration input and the persistence
+# target, and every agent run and the launcher point it at a TRACKED file. Opening the options overlay
+# therefore rewrote `spyro/tools/shipping_settings.ini` with a live serialisation of the mod state:
+# `aspect=1` became `aspect=3` (ASPECT_AUTO, which resolves to the sink's aspect, so 4:3 headless) and
+# 21 lines of documentation were deleted. Every later run silently lost widescreen.

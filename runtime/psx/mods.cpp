@@ -18,8 +18,74 @@ static const char *mods_path(void) {
   return psx::config::cv_settings_path.get().c_str();
 }
 
+namespace {
+
+// Is `path` inside a source checkout? Walks up looking for a `.git` entry, which is what makes a
+// directory a working tree. Returns the directory it stopped at, or nullptr.
+//
+// WHY THIS EXISTS, AND IT IS A MEASURED INCIDENT. `PSXPORT_SETTINGS` is BOTH the launch configuration
+// input and the persistence target, and every agent run and the launcher point it at a TRACKED file —
+// `spyro/tools/shipping_settings.ini`. So opening the options overlay and changing anything called
+// `Mods::save()`, which rewrote that tracked file with a full serialisation of the live mod state.
+//
+// Measured 2026-09-27: `spyro/tools/shipping_settings.ini` was found rewritten from `aspect=1` to
+// `aspect=3` with 21 lines of documentation deleted, mtime coincident with a player run. `aspect=3` is
+// ASPECT_AUTO, which resolves to the SINK's aspect — and a headless agent run has no wide sink, so it
+// resolves to 4:3. **Every subsequent run, and the player's own run, silently lost widescreen**, and the
+// comment explaining precisely that hazard was the thing that got deleted.
+//
+// The fix is not "stop pointing at it": the agent runs NEED the tracked file as their configuration
+// input, and that is the whole reason it is tracked. The fix is that a save must never LAND in a
+// checkout. Reading configuration from the tree is fine; writing a player's saved state into it is not,
+// and the standing rule is explicit that settings live in the OS user-data location, never the checkout.
+const char *insideCheckout(const char *path) {
+  if (path == nullptr || *path == '\0') {
+    return nullptr;
+  }
+  char buffer[4096];
+  const size_t length = strlen(path);
+  if (length + 1 >= sizeof(buffer)) {
+    return nullptr; // too long to walk safely; do not guess
+  }
+  memcpy(buffer, path, length + 1);
+  for (;;) {
+    char probe[4200];
+    const size_t dirLength = strlen(buffer);
+    if (dirLength + 6 >= sizeof(probe)) {
+      return nullptr;
+    }
+    memcpy(probe, buffer, dirLength);
+    memcpy(probe + dirLength, "/.git", 6);
+    FILE *git = fopen(probe, "r");
+    if (git != nullptr) {
+      fclose(git);
+      return buffer;
+    }
+    char *slash = strrchr(buffer, '/');
+    if (slash == nullptr) {
+      return nullptr; // reached the filesystem root without finding one
+    }
+    if (slash == buffer) {
+      return nullptr; // buffer is now "/" and its parent is itself
+    }
+    *slash = '\0';
+  }
+}
+
+} // namespace
+
 void Mods::save() const {
-  FILE *f = fopen(mods_path(), "w");
+  const char *path = mods_path();
+  if (const char *root = insideCheckout(path); root != nullptr) {
+    lucent::warn("mods",
+                 "REFUSED to save settings into a source checkout: {}. Settings belong in the OS "
+                 "user-data location, never the checkout — a save here overwrites a tracked file. "
+                 "Point PSXPORT_SETTINGS at a user-data path, or unset it to use the default.",
+                 path);
+    (void)root;
+    return;
+  }
+  FILE *f = fopen(path, "w");
   if (!f) {
     return;
   }
