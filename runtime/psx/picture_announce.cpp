@@ -2,30 +2,37 @@
 
 #include "core.h"
 #include "game.h"
+#include "game_runtime.h" // GameRuntime::guestWidescreenProjection — the TITLE's own answer
 #include "gpu_vk.h"
-#include "mods.h"         // ASPECT_4_3 / ASPECT_AUTO — which aspect was actually asked for
-#include "present_plan.h" // present_display_width — the presenter's OWN rule, not a second one
+#include "guest_widescreen_projection.h" // GuestWidescreenProjection::presentationAspect
+#include "mods.h"                        // ASPECT_4_3 / ASPECT_AUTO — which aspect was actually asked for
+#include "present_plan.h"                // present_display_width — the presenter's OWN rule, not a second one
 
 #include <lucent/log.h>
 
 namespace psx::picture {
 
-WideOutcome classifyWide(int aspect, bool enhancementsAllowed, int nativeWidth, int renderWidth) {
+WideOutcome classifyWide(int aspect, bool enhancementsAllowed, int nativeWidth, int renderWidth, int guestAspect) {
   if (renderWidth > nativeWidth) {
     return WideOutcome::Widened;
   }
-  if (aspect == ASPECT_4_3) {
+  // A guest-owned request is asked FIRST, before the host aspect, because it is a different owner and
+  // reporting it as "nobody asked" would be false: the title asked, through its own projection.
+  const bool guestWantsWide = guestAspect != ASPECT_4_3;
+  if (aspect == ASPECT_4_3 && !guestWantsWide) {
     return WideOutcome::NotRequested; // nobody asked for a wide picture
   }
   // AUTO is tested BEFORE the render mode, and the order is the point. Measured 2026-09-26 on
   // Tekken 3: its `aspect=3` leg was told "this Core's render mode is PURE" when the real cause was
   // that AUTO resolves to the sink and a headless run's sink is 4:3. A reason that is true but not
   // the operative one sends the reader to the wrong knob.
-  if (aspect == ASPECT_AUTO) {
+  // AUTO is a HOST-side resolution, so it only decides a host-owned request.
+  if (aspect == ASPECT_AUTO && !guestWantsWide) {
     return WideOutcome::RefusedAuto;
   }
   if (!enhancementsAllowed) {
-    return WideOutcome::RefusedPure;
+    // Two different owners, two different reasons, and conflating them is what voided Crash 1's claim.
+    return guestWantsWide ? WideOutcome::RefusedGuestPure : WideOutcome::RefusedPure;
   }
   return WideOutcome::RefusedUnexplained;
 }
@@ -37,6 +44,10 @@ const char *wideOutcomeReason(WideOutcome outcome) {
     return "";
   case WideOutcome::RefusedPure:
     return "this Core's render mode is PURE, where no PC enhancement may touch the picture";
+  case WideOutcome::RefusedGuestPure:
+    return "the title's OWN guest projection asked for a wider projection, and this Core's render mode "
+           "is PURE, so the host presenter did not widen — which is a different question from whether "
+           "the guest widened, and the guest's own published values are the evidence for that";
   case WideOutcome::RefusedAuto:
     return "aspect=3 is ASPECT_AUTO, which resolves to the SINK's aspect, and this run has no wide "
            "sink to resolve to";
@@ -65,8 +76,29 @@ void announceOnChange(Core &core, int presentedFramebufferWidth) {
                now.wideEngine,
                now.nativeWidth,
                now.renderWidth);
+  // The TITLE's own answer to "is this wide?", which is a different owner from the host aspect. A
+  // title with no guest projection contributes ASPECT_4_3 and this behaves exactly as it did before.
+  // The title's own answer is a PresentationAspect, and only its WIDE arms count as a request.
+  // MatchSink is deliberately NOT one: it resolves to whatever the run's sink is, which is the same
+  // trap ASPECT_AUTO has, and a headless run has no wide sink to resolve to.
+  int guestAspect = ASPECT_4_3;
+  if (const GameRuntime *runtime = psxport_game_runtime(); runtime != nullptr) {
+    if (const GuestWidescreenProjection *projection = runtime->guestWidescreenProjection()) {
+      switch (projection->presentationAspect(core)) {
+      case PresentationAspect::Wide16x9:
+        guestAspect = ASPECT_16_9;
+        break;
+      case PresentationAspect::UltraWide21x9:
+        guestAspect = ASPECT_21_9;
+        break;
+      case PresentationAspect::Standard4x3:
+      case PresentationAspect::MatchSink:
+        break;
+      }
+    }
+  }
   const WideOutcome outcome =
-      classifyWide(now.aspect, core.rsub.mode.enhancementsAllowed(), now.nativeWidth, now.renderWidth);
+      classifyWide(now.aspect, core.rsub.mode.enhancementsAllowed(), now.nativeWidth, now.renderWidth, guestAspect);
   if (const char *why = wideOutcomeReason(outcome); why[0] != '\0') {
     lucent::warn("wide",
                  "a wide picture was REQUESTED and did not happen: render_width={} is not greater than "

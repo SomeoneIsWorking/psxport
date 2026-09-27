@@ -30,6 +30,8 @@
 // interesting case, so they are never capped.
 #pragma once
 
+#include "mods.h" // ASPECT_4_3 — the default a title with no guest projection contributes
+
 class Core;
 
 namespace psx::picture {
@@ -77,13 +79,31 @@ enum class WideOutcome {
   Widened,           // render_width > native_width: the enhancement happened
   RefusedPure,       // a non-4:3 aspect on a PURE Core, where no PC enhancement may touch the picture
   RefusedAuto,       // ASPECT_AUTO, which resolves to the sink, and this run had no wide sink
+  RefusedGuestPure,  // the TITLE's own guest projection asked for wide, on a PURE Core
   RefusedUnexplained // a wide aspect was requested and allowed, and the width still did not grow
 };
 
 // `aspect` is `Mods::aspect` (see the ASPECT_* enum), `enhancementsAllowed` is
 // `Core::rsub.mode.enhancementsAllowed()`. Both are passed in so the decision is a pure function of
 // facts and can be asked directly.
-WideOutcome classifyWide(int aspect, bool enhancementsAllowed, int nativeWidth, int renderWidth);
+//
+// `guestAspect` is the TITLE's own answer, from `GuestWidescreenProjection::presentationAspect`, or
+// ASPECT_4_3 when the title has no guest projection. It is a SEPARATE fact from the host aspect and it
+// changes the verdict, because the two are different owners of a wide picture:
+//
+//   - the HOST aspect asks the presenter for a wide framebuffer, which a PURE render mode forbids;
+//   - the TITLE's guest projection asks the GUEST's own code for a wider projection, which a PURE host
+//     render mode does not forbid at all — the guest is drawing its own picture either way, and
+//     `docs/presentation-contract.md` ("Title-owned guest widescreen") allows exactly this on a Gte path.
+//
+// MEASURED 2026-09-27 on Crash 1, and it voided a correct claim: that title renders on the Gte path and
+// declares `RenderCapabilities::widescreenOnly()`, so `enhancementsAllowed()` was false, so a genuine
+// guest-owned widening was classified `RefusedPure` and the run logged "any widescreen claim from this
+// run is void" — for a widening the contract permits. A diagnostic that voids a legitimate claim is worse
+// than one that says nothing, because the reader cannot tell it apart from a real refusal. The two
+// outcomes are now distinguishable, and a title with no guest projection behaves exactly as before.
+WideOutcome
+classifyWide(int aspect, bool enhancementsAllowed, int nativeWidth, int renderWidth, int guestAspect = ASPECT_4_3);
 
 // The reason a non-Widened, non-NotRequested outcome happened, in one sentence. Empty for the two
 // quiet outcomes, so a caller can print it unconditionally.
