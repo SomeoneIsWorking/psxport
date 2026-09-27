@@ -6,8 +6,9 @@
 // to return to the prompt after the current frame.
 #include "repl.h"
 #include "c_subsys.h"
-#include "config.h"      // `cvars` / `cvar` — the layered CVar registry + env audit
-#include "config_vars.h" // psx::config::cv_render_path — mirror a live switch into the Runtime layer
+#include "config.h"                 // `cvars` / `cvar` — the layered CVar registry + env audit
+#include "config_vars.h"            // psx::config::cv_render_path — mirror a live switch into the Runtime layer
+#include "control_surface_limits.h" // kMaxControlReadWords — the one home for the cap both surfaces obey
 #include "core.h"
 #include "game.h"
 #include "game_iface.h"       // GameHooks — game-side command dispatch (replCommand) + REPL diag hooks
@@ -223,12 +224,28 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
       if (!b) {
         b = 8;
       }
+      // Same cap and the same obligation as the live endpoint, from the same header — see
+      // control_surface_limits.h for why two transports must not each carry their own literal.
+      const unsigned asked = b;
+      const unsigned served = b > psx::control::kMaxControlReadWords ? psx::control::kMaxControlReadWords : b;
       lucent::Line ln;
       ln.add("{:08X}:", a);
-      for (unsigned i = 0; i < b && i < 64; i++) {
+      for (unsigned i = 0; i < served; i++) {
         ln.add(" {:08X}", c->mem_r32(a + i * 4));
       }
       ln.flush(lucent::Level::Info, "repl");
+      if (served < asked) {
+        lucent::warn("repl",
+                     "[rw] SHORT ANSWER: served {} of {} word(s) requested; this surface returns at "
+                     "most {} word(s) per command and the REST WAS NOT READ. Words from 0x{:08X} to "
+                     "0x{:08X} are NOT zero — they were not fetched. Issue {} more `rw` command(s).",
+                     served,
+                     asked,
+                     psx::control::kMaxControlReadWords,
+                     a + served * 4u,
+                     a + asked * 4u - 4u,
+                     (asked - served + psx::control::kMaxControlReadWords - 1u) / psx::control::kMaxControlReadWords);
+      }
     } else if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
       c->mem_w32(a, b);
       lucent::info("repl", "ok");

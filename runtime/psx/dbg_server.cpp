@@ -22,7 +22,8 @@
 #include "dbg_server.h" // class DbgServer + `debug_server_port`, which interprets the knob once
 #include "cfg.h"
 #include "config.h"      // `cvars` / `cvar` — the layered CVar registry + env audit
-#include "config_vars.h" // cv_debug_server — the endpoint's port, and cv_render_path's live switch
+#include "config_vars.h" // cv_debug_server
+#include "control_surface_limits.h" // kMaxControlReadWords — the one home for the cap — the endpoint's port, and cv_render_path's live switch
 #include "render_mode.h" // `renderpath` — RenderPath + render_path_parse/name/next
 #include <arpa/inet.h>
 #include <errno.h>
@@ -314,14 +315,28 @@ static void dbg_exec(FILE *out, const char *line) {
     if (!b) {
       b = 8;
     }
-    if (b > 64) {
-      b = 64;
-    }
+    // The cap and the obligation to announce a short answer are stated ONCE, in
+    // control_surface_limits.h. The data line is unchanged, so a caller that parses one line still
+    // parses it; the notice is a SEPARATE line, so it cannot be mistaken for a word.
+    const unsigned asked = b;
+    const unsigned served = b > psx::control::kMaxControlReadWords ? psx::control::kMaxControlReadWords : b;
     fprintf(out, "%08X:", a);
-    for (unsigned i = 0; i < b; i++) {
+    for (unsigned i = 0; i < served; i++) {
       fprintf(out, " %08X", s_ctx->mem_r32(a + i * 4));
     }
     fprintf(out, "\n");
+    if (served < asked) {
+      fprintf(out,
+              "[rw] SHORT ANSWER: served %u of %u word(s) requested; this surface returns at most %u "
+              "word(s) per command and the REST WAS NOT READ. Words from 0x%08X to 0x%08X are NOT "
+              "zero — they were not fetched. Issue %u more `rw` command(s).\n",
+              served,
+              asked,
+              psx::control::kMaxControlReadWords,
+              a + served * 4u,
+              a + asked * 4u - 4u,
+              (asked - served + psx::control::kMaxControlReadWords - 1u) / psx::control::kMaxControlReadWords);
+    }
   } else if (!strcmp(cmd, "w32") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
     s_ctx->mem_w32(a, b);
     fprintf(out, "[%08X] <- %08X\n", a, b);
