@@ -111,12 +111,29 @@ what a title-owned widening owner actually contains.
 | Spider-Man 1 | `spider1` | 4 | the viewport window is a projection INPUT; `H` re-derived from the span |
 | Tomba! 1 | `Tomba2Engine` | 14 (shared) | widescreen-only, `RenderCapabilities::widescreenOnly()` |
 | Tomba! 2 | `Tomba2Engine` | 14 (shared) | in the lerp scope |
-| **Crash Team Racing** | `ctr` | **0** | **no owner.** `game/video/projection_owner.h` captures the retail projection publication and says "Widescreen begins here later" — an honest seam, not a capability |
-| **Vagrant Story** | `vagrant` | **0** | **no owner**, and no dynarec adapter, so nothing runs yet |
+| **Crash Team Racing** | `ctr` | **0** | **no owner.** `game/video/projection_owner.h` captures the retail projection publication and says "Widescreen begins here later" — an honest seam, not a capability. **Was recorded as blocked on absent media; that was wrong** — the image is now provisioned (`scratch/raw/ctr/SCUS_944.26`, SHA-256 verified) and the owner work is in progress |
+| **Vagrant Story** | `vagrant` | 1 | an owner, a derivation and five refusals (`game/render/battle_projection.*`) that **deliberately does not widen**: `H` is gameplay state there (branches at `<272`/`>272` against a resting 256) and the clip rectangle cannot be re-derived without bytes. **The absence is the enforcement** and a test asserts it. Verified against `scratch/bin/vagrant/SLUS_010.40` (SHA-1 matches the decomp) and `BATTLE.BIN`. Still no dynarec adapter, so nothing runs yet |
 
-**Both remaining gaps are blocked on a missing disc image on this machine, not on effort.** `ctr/scratch`
-and `vagrant/scratch` hold no authenticated images, and recovering a projection or cull owner requires
-reading the retail binary — guessing an address is forbidden, so neither can be started honestly.
+**CORRECTION 2026-09-27. THE BLOCKER WAS NEVER THE MEDIA, AND I RECORDED IT AS IF IT WERE.** This
+paragraph said both remaining gaps are "blocked on a missing disc image on this machine". **The CHDs were
+there the whole time**, in `/mnt/Boy/ROM/PSX CHD/` — the operator pointed at them directly. What was missing
+was PROVISIONING: the extracted, identity-verified images inside each repository's gitignored `scratch/`.
+I read "not provisioned into the repo" as "not on this machine", wrote that into the map as a blocker, and
+then cited it as the reason two titles could not be advanced. **A title that was merely un-extracted was
+reported as un-attemptable, and that is the same error as reading a goal string as a measurement.**
+
+Both are now provisioned, from the media that was already here:
+
+| title | provisioned | identity |
+|---|---|---|
+| `ctr` | `scratch/raw/ctr/SCUS_944.26` | SHA-256 `7b4aac0b…b838` via `tools/provision.py` |
+| `vagrant` | `scratch/bin/vagrant/SLUS_010.40` | SHA-1 `fababcfd…e48c` **matching rood-reverse's target** |
+| `vagrant` overlays | `BATTLE.BIN` 577,828 B, `INITBTL.BIN`, `TITLE.BIN` | 3 of 3 required modules verified |
+
+**`vagrant`'s SHA-1 matching the decompilation's own target means its symbol addresses are now confirmed
+against real bytes rather than trusted** — and `BATTLE.PRG` is the overlay that holds `func_800760CC`, the
+projection owner, which is exactly the body that could not be read before.
+
 `crashbash` shows the contrast: its images ARE present at `scratch/bin/crashbash/SCUS_945.70` with seven
 overlays, which is why it has a widening owner and the other two do not. Note the main image has **no file
 extension**, so `find -iname 'SCUS*.BIN'` misses it; the correct probe is `-size +100k`.
