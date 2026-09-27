@@ -189,3 +189,27 @@ add_test(NAME guest_task_unsupported_exit
 add_test(NAME linux_ci_setup_policy
          COMMAND "${Python3_EXECUTABLE}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/../.github/actions/setup-linux/test_setup.py")
+
+# pin_tools_in_step — every port's tools/psxport_sync.py must match the canonical copy here.
+#
+# MEASURED 2026-09-27: the ten port copies had TEN DISTINCT HASHES and 61-226 changed lines each. The
+# staleness guard was MISSING FROM SEVEN of the ten; only one had a `--build` flag, so the live pin check
+# that actually CALLS the function could not be registered in the other nine; and only one had the
+# do_bump fix, so the rest could still record a framework commit the tree was never built against.
+#
+# The obligation to keep the copies in step was real and the check for it was itself duplicated, which is
+# why the guard could go missing from seven of them unnoticed. This is that check, made mechanical. It
+# REFUSES (exit 2) when it finds no ports, so "0 of 0 in step" can never be read as a pass.
+add_test(NAME pin_tools_in_step
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_port_pin_tools.py --allow-empty)
+add_test(NAME pin_tools_selftest
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_port_pin_tools.py --selftest)
+
+# pin_sync_behaviour — the canonical psxport_sync's own behaviour: the staleness guard, and a bump that
+# records the commit the build RESOLVED rather than the framework's current HEAD. This is the test that
+# makes the canonical trustworthy; each port keeps its own copy of it, but a change lands here first.
+add_test(NAME pin_sync_behaviour
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_psxport_sync.py)
