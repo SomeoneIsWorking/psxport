@@ -21,7 +21,8 @@
 #include "mods.h"
 #include "ot_attr.h" // OtAttr — the producer-census tables (armed by Game's ctor, game.cpp)
 #include "repl.h"
-#include "store_observe.h" // store_observe_configure/report — the one reading of PSXPORT_STORE_OBSERVE
+#include "store_observe.h" // store_observe_configure — the one reading of PSXPORT_STORE_OBSERVE
+                           // (the REPORT is emitted by ~LightrecExecutor, on every exit path)
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -299,10 +300,12 @@ static void game_main(Core *c) {
     }
   }
   lucent::info("native_boot", "frame loop done");
-  // The observer's own denominators, beside the other run-end reports. A "the observer saw nothing"
-  // claim is only meaningful against these counters, and an unarmed observer's silence is not evidence
-  // of anything — so the numbers that distinguish the two are printed here rather than left implicit.
-  store_observe_report(*c);
+  // The store observer's report is NOT here any more: it now lives in ~LightrecExecutor, beside the
+  // fallback telemetry, because this function's return is not a path every product takes. Measured
+  // 2026-09-27 on Spyro 1 — an armed observer printed its watching lines and then no report at all,
+  // through two drivers and a clean exit, because this line was the report's only call site. Called
+  // from here as well it would have double-reported on the paths that DO return, which is how a
+  // denominator stops being one.
   const char *rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {
 

@@ -8,6 +8,7 @@
 #include "host_turn.h"
 #include "hw_bind.h"
 #include "native_dispatch.h"
+#include "store_observe.h"
 
 #include <lightrec.h>
 #include <lucent/log.h>
@@ -465,6 +466,19 @@ LightrecExecutor::LightrecExecutor(Core &core, FallbackPolicyProvider fallbackPo
 
 LightrecExecutor::~LightrecExecutor() {
   reportFallbackTelemetry("shutdown");
+  // The store observer's report belongs HERE, beside the executor's own shutdown telemetry, and not
+  // on one caller's exit path. Measured 2026-09-27 on Spyro 1: `PSXPORT_STORE_OBSERVE=...` printed
+  // `watching 3 guest address(es) for stores` and then nothing at all, through two different drivers
+  // and a clean `exit 0`. The reason was placement, not the instrument — the report was called from
+  // exactly one place in `native_boot`, immediately after that function's frame loop, and this title
+  // does not leave through it: its run printed `Lightrec fallback telemetry [shutdown]`, which comes
+  // from THIS destructor, while `frame loop done` from the report's own function never appeared.
+  //
+  // An armed observer that reports nothing is worse than an unarmed one, because the log already said
+  // it was watching: the silence reads as "matched none of the stores" when the truth is "never
+  // looked". So the report is emitted from the teardown that every exit path reaches, and the
+  // one-call-site version is deleted rather than left to double-report on the paths that did take it.
+  store_observe_report(impl_->core);
 }
 
 namespace {
