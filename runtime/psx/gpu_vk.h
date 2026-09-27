@@ -24,6 +24,28 @@ int gpu_vk_wide_engine(Core *core);
 int gpu_vk_native_w(Core *core);
 int gpu_vk_wide_engine_w(Core *core);
 int gpu_vk_wide_engine_ofx(Core *core);
+// The LEFT MARGIN of the columns a wider projection exposes: `(wide_w - native_w) / 2`. One owner,
+// because the quantity was spelled two ways at three call sites in one title — the model producer wrote
+// `wide_ofx - native_w / 2` and the sprite producer wrote `(wide_w - native_w) / 2`.
+//
+// Those two agree ONLY when the NATIVE width is odd-free and the wide width is even: with wide even,
+// `wide / 2` is exact, and a native width that is odd loses a half to `native / 2`, so the old spelling
+// comes out exactly one greater. Measured condition, pinned by `tests/test_wide_left_margin.cpp`:
+// the two differ if and only if wide is even and native is odd. They are equal today by TWO independent
+// accidents — `video_wide_native_w` ends with `w &= ~1`, and every PSX display mode has an even width —
+// neither of which is a property of this quantity. Break either and two producers in the same frame sit a
+// column apart, which is a visible seam rather than an error anywhere.
+//
+// The arithmetic is a separate constexpr so the contract is testable with no Core, no sink and no window,
+// and the Core form is inline here rather than in the .cpp because `gpu_vk.cpp` is a CRITICAL legacy file
+// under the repository's size gate: three lines added there fail the gate for a function this header can
+// express without touching it.
+constexpr int wide_left_margin_from(int wide_w, int native_w) {
+  return (wide_w - native_w) / 2;
+}
+inline int gpu_vk_wide_left_margin(Core *core) {
+  return wide_left_margin_from(gpu_vk_wide_engine_w(core), gpu_vk_native_w(core));
+}
 int gpu_vk_wide_presentation(Core *core);
 int gpu_vk_wide_presentation_w(Core *core);
 GuestProjectionPlan gpu_vk_latch_guest_projection(Core *core, GuestProjectionGeometry geometry);
