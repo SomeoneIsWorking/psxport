@@ -154,10 +154,43 @@ because there is no second copy.
 
    **The cause is the duplication itself, and it is deliberate** — a port must build from a bare clone,
    so the tool travels with it. That makes "keep the copies in step" an obligation rather than an
-   accident. **MEASURED 2026-09-27: the ten copies have TEN DISTINCT HASHES and 298–322 lines each.** The
-   check for that obligation is itself duplicated, which is why the guard could go missing from seven of
-   them unnoticed. The fix belongs in psxport as a canonical source plus a registered drift check, not as
-   a tenth hand edit. **Not done.**
+   accident. **MEASURED 2026-09-27: the ten copies had TEN DISTINCT HASHES, 298–322 lines each, and 61–226
+   changed lines against each other.** The check for that obligation was itself duplicated, which is why the
+   guard could go missing from seven of them unnoticed.
+
+   **DONE, and the consolidation found two more defects the duplicated check had been hiding.** There is now a
+   canonical `psxport/tools/psxport_sync.py` and a canonical `psxport/tests/test_psxport_sync.py`, and
+   `psxport/tools/check_port_pin_tools.py` gates every port against both (`pin_tools_in_step`,
+   `pin_sync_behaviour`, `pin_tools_selftest` in psxport's CTest). All ten ports are in step and pinned. Four
+   things came out of making the copies identical:
+
+   - **The canonical was missing `import argparse`, and the byte gate reported all ten ports "in step" while
+     every copy was unable to run.** The import is reached only from `main()`, so each port's test — which
+     imports the module and never calls `main()` — raised nothing. The gate therefore asks **two** questions:
+     is this copy the canonical text, *and* does it run (`--help`, exit 0). On the same ten files the
+     byte-only gate answered `10 of 10 in step` and the two-question gate answers `0 of 10 in step AND
+     runnable`. Byte-equality is not workingness, and the selftest pins the case: a script that imports
+     cleanly and still fails `--help` is exactly the real defect, and a module-import test cannot see it.
+   - **7 of the 10 ports shipped the pin tool with NO test gating it at all.** The six that had one were the
+     six whose copies had drifted least — the ports nobody revisited are the ports nobody guarded, so the
+     drift and the missing tests are one fact seen twice.
+   - **Three call sites passed `--build-dir` and one `--resolved` to a tool that has neither flag**
+     (`crashbash`, `spider1`, `crash/tools/verify.py`, `ctr`). They were calling a flag that did not exist,
+     which is precisely what duplication produces.
+   - **`ctr` had a second, older copy of the behaviour test under `tools/`** that the canonical is not
+     installed over, and its registration pointed at it — a test reading as present while exercising a file the
+     canonical no longer governed.
+
+   **`tekken3`'s registrations are unguarded on purpose**: it calls `enable_testing()` directly and never
+   defines `BUILD_TESTING`, so an `if(BUILD_TESTING) add_test(...)` there is silently inert. `ctest -N` went
+   17 → 18 when that was corrected.
+
+   **An operational cost of the guard, stated rather than left to be discovered later:** any commit to
+   psxport — including a documentation-only one — moves HEAD, so every port's receipt goes stale and all ten
+   need a `reconfigure → build → test → --bump` round. That is the guard working, not misbehaving: the pin
+   records "the framework commit this tree was built and verified against", and after a framework commit that
+   is genuinely no longer true. Whether a non-runtime commit should invalidate a *build* pin would need a
+   build-relevance classifier — a larger design question, deliberately not attempted here.
 
    **MEASURED 2026-09-27, every port rebuilt and gated against the framework as it stood during that
    session, after the store-observer and control-surface changes. NO REGRESSIONS:**
