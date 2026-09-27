@@ -726,6 +726,23 @@ void report_exit_audit() {
   // headless run ends in SIGTERM, which watchdog.cpp's handler answers with _exit(130). For those
   // runs the boot audit plus its blind-spot line is all you get; ask the live process instead, with
   // `cvars` over the debug server.
+  //
+  // *** HOW TO READ `UNKNOWN PSXPORT_VK_HEADLESS`, because it is routinely misread. *** It is a TRUE
+  // report of a knob whose value did nothing, and that is correct rather than a gap. gpu_vk.cpp:178 is
+  // `s_headless = (cfg_on("PSXPORT_VK_WINDOW") && !cfg_on("PSXPORT_VK_HEADLESS")) ? 0 : 1;` — the
+  // WINDOW is the switch and this is its override, so with no window requested the `&&` short-circuits
+  // and the override is never consulted. An agent run is therefore headless without setting it, which
+  // is the documented "a forgotten flag fails SAFE, not intrusive" design. Measured 2026-09-27 on
+  // Crash Bash: the exit audit's `UNKNOWN ... NOTHING ever read it` was read for a moment as evidence
+  // that the renderer had failed to initialise, while the same log carried `[gpu_vk] headless renderer
+  // up` and `present image 960x720 (headless sink)`. It had initialised. Before concluding from this
+  // line that a subsystem is missing, grep the log for that subsystem's own startup line.
+  //
+  // The mirror-image trap is `PSXPORT_NATIVE_FRAMES`, which IS read but through the legacy `cfg_int`
+  // path rather than a declared CVar — so the BOOT audit calls it UNKNOWN (nothing has read it yet at
+  // boot) and this exit audit calls it `legacy (observed when read)`. Both are true. Reading only the
+  // boot line concludes a frame cap did nothing and a run was unbounded, when the guest may simply have
+  // finished first.
   const EnvAudit a = audit_environment();
   lucent::info("cfg",
                "env audit AT EXIT (everything that was going to be read has been): {} PSXPORT_* set "
