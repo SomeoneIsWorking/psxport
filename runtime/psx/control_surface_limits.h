@@ -20,6 +20,14 @@
 // it got and treated the remaining 1344 as zero — which for that probe would have been reported as
 // "the moby list is empty", the exact shape of the answer it was built to check.
 //
+// HOW A CLIENT SURVIVES THIS. Send one request per `kMaxControlReadWords`, then LOOP: re-request from
+// `address + 4 * words_assembled` until the count you asked for is in hand. The cap becomes an iteration
+// count instead of a ceiling. The reference implementation is
+// `spider1/tools/probe_wide_geometry.py`; the wrong shape, for contrast, is `spyro/tools/drive.py`,
+// which sends one request and then reports "the port exited before answering" when a short answer
+// arrives — a message that sends the reader to debug the product instead of its own request. See
+// `docs/findings/diagnostics-that-cannot-lie.md`.
+//
 // THE CONTRACT, for anyone adding a verb that reads a caller-specified span:
 //   * serve at most kMaxControlReadWords words;
 //   * if the request asked for more, SAY SO on its own line, naming how many were served and how many

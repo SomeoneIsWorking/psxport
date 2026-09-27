@@ -99,6 +99,22 @@ message. The same "undeclared means unaskable" defect as instance 1, in a differ
 near-identical names, and the failure mode of choosing wrong is silence. Both help texts and both
 `fopen` failure paths now name the alternative.
 
+### 3b. The consumer side, and the reference pattern for fixing it
+
+A cap is only half a contract; the CLIENT has to survive it. Two shapes exist in this workspace today:
+
+- **Wrong (Spyro 1, `tools/drive.py`):** send `rw ADDR COUNT` once, then wait for a line whose word count
+  equals COUNT. Over the cap, the port returns 64, the wait never matches, and the reader falls out of its
+  loop reporting **"the port exited before answering rw"** — which is false. The port answered; it
+  answered partially, and with the framework fix above it also said so on a line the regex ignored. A
+  reader that turns a short answer into "the port died" sends the next person to debug the product.
+- **Right (Spider-Man 1, `tools/probe_wide_geometry.py`):** loop, re-requesting from
+  `address + 4 * len(out)` until the requested count is assembled. The cap becomes an iteration count
+  rather than a ceiling, and a genuinely refused read still surfaces as a refusal with the reply text.
+
+The second shape is the pattern to copy, and it costs nothing: a client that loops until it has what it
+asked for cannot be confused by a cap, because it never assumes one reply was sufficient.
+
 ## What this costs, and why it is worth a document
 
 Each of these was found by **doing the measurement wrong and then being suspicious of the result** —
