@@ -33,6 +33,33 @@ drop-in co-op goals. All planned lineage repositories now have public, reproduci
 added titles are honest harness-first scaffolds, not implementation coverage; no widescreen or
 interpolation support is implied by repository existence.
 
+### MEASURED 2026-09-27 — which titles actually HAVE a widescreen owner
+
+The sentence above is a POLICY, stated where a reader would take it for a measurement. This is what the
+trees contain. Method, so it can be falsified: for each title, the number of first-party source files under
+`game/` and `titles/` matching `wide_engine|wideEngine|wide_project|presentationAspect|Wide16x9`, which is
+what a title-owned widening owner actually contains.
+
+| title | repo | widescreen owner files | note |
+|---|---|---|---|
+| Spyro 1 | `spyro` | 24 | verified live: `render_width=684` against `native_width=512` |
+| Crash 1 | `crash` | 2 | retail `H=1000, OFX=0, OFY=0`; no literal horizontal cull in 72,192 instructions |
+| Crash Bash | `crashbash` | 2 | widens in BOTH the model producer (OFX moved to the new left margin, draw area clamped so the authored briefing keeps its centred viewport) and the sprite-quad producer (authored canvas shift) |
+| Mega Man X4 | `megamanx4` | 2 | widescreen-only profile, as its 60 fps status requires |
+| Tekken 3 | `tekken3` | 2 | widescreen-only; the stage wedge is a direction, so widening is `atan(k·tan θ)` |
+| Spider-Man 1 | `spider1` | 4 | the viewport window is a projection INPUT; `H` re-derived from the span |
+| Tomba! 1 | `Tomba2Engine` | 14 (shared) | widescreen-only, `RenderCapabilities::widescreenOnly()` |
+| Tomba! 2 | `Tomba2Engine` | 14 (shared) | in the lerp scope |
+| **Crash Team Racing** | `ctr` | **0** | **no owner.** `game/video/projection_owner.h` captures the retail projection publication and says "Widescreen begins here later" — an honest seam, not a capability |
+| **Vagrant Story** | `vagrant` | **0** | **no owner**, and no dynarec adapter, so nothing runs yet |
+
+**Both remaining gaps are blocked on a missing disc image on this machine, not on effort.** `ctr/scratch`
+and `vagrant/scratch` hold no authenticated images, and recovering a projection or cull owner requires
+reading the retail binary — guessing an address is forbidden, so neither can be started honestly.
+`crashbash` shows the contrast: its images ARE present at `scratch/bin/crashbash/SCUS_945.70` with seven
+overlays, which is why it has a widening owner and the other two do not. Note the main image has **no file
+extension**, so `find -iname 'SCUS*.BIN'` misses it; the correct probe is `-size +100k`.
+
 | path | what it is |
 |---|---|
 | `psxport/` | **the framework DEV CLONE — the one writable framework checkout.** Also the home of every doc listed above |
