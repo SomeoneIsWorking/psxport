@@ -108,9 +108,16 @@ void store_observe_configure(Core &core) {
     return;
   }
 
-  ArmedTargets armed;
+  // THE CALLBACK CONTEXT MUST OUTLIVE THE CALL, and the context here is read on EVERY observation,
+  // long after this function returns. It used to be a function-local `ArmedTargets` whose address was
+  // handed to the executor and which was then copied to `g_armed` — so every callback incremented a
+  // dead stack object. Measured 2026-09-27 on Spyro 1: the first callback printed
+  // `seen=140723098021161`, a value a freshly-zeroed local cannot produce, which is what a use-after-
+  // scope looks like from the outside. `g_armed` has static storage duration, so IT is the context.
+  ArmedTargets &armed = g_armed;
+  armed = {};
   if (!parseTargets(requested, armed.addresses, armed.count) || armed.count == 0) {
-    lucent::error("store-observe", "store observation is OFF; no addresses were watched");
+    lucent::error("store-observe", "store observation is OFF; no store instruction was watched");
     core.lightrecExecutor().configureStoreObserver({}, nullptr, nullptr);
     return;
   }
@@ -125,7 +132,6 @@ void store_observe_configure(Core &core) {
     core.lightrecExecutor().configureStoreObserver({}, nullptr, nullptr);
     return;
   }
-  g_armed = armed;
   // The denominator, stated at arming: how many addresses, and which. A later "the observer saw
   // nothing" means something only against this line.
   lucent::info("store-observe", "watching {} guest address(es) for stores:", armed.count);

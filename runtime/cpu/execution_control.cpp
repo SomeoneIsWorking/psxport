@@ -26,7 +26,10 @@ const std::optional<ExecutionResult> &ExecutionControl::pending() const {
 }
 
 void requestExecutionExit(Core &core, ExecutionExitReason reason) {
-  requestExecutionExit(core, ExecutionResult{reason, core.pc, 0, {}});
+  // guestPc 0 means "unstated", and the consumer supplies the correct continuation. See the contract
+  // in execution_control.h: stamping `core.pc` here is wrong for every request raised inside a
+  // `jal`ed native override, because that is the override's own entry.
+  requestExecutionExit(core, ExecutionResult{reason, 0, 0, {}});
 }
 
 void requestExecutionExit(Core &core, ExecutionResult result) {

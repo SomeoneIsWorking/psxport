@@ -257,6 +257,82 @@ static void test_a_host_service_leaf_still_answers_an_unclaimed_address(void) {
   CHECK(game->core.executionControl().pending());
 }
 
+// THE OTHER HALF OF THE SAME MMX4 INCIDENT, and the half that was still open.
+//
+// `a_title_override_is_dispatched_before_a_host_service_leaf` above settles WHICH function runs at an
+// address both tables claim. This settles WHERE the guest continues when the function that runs asks
+// for a bounded exit. Both halves were needed: the framework's `PlatformHle::vsync` builtin is the
+// answer for every address no title claims, and on Mega Man X4 42 call sites share that one leaf. It
+// requested its frame boundary through the reason-only overload, which stamped `core.pc` — and while a
+// `jal`ed leaf's body runs, `core.pc` is that leaf's own ENTRY. Resuming at the entry re-enters the
+// leaf, so the boundary the guest asked for can never be delivered and the call spins forever.
+//
+// So the previous fix moved the symptom's cause from "the wrong function ran" to "the right function
+// resumed at the wrong address", which is the same stall with a better story. This pins the address.
+static void test_a_frame_boundary_leaf_resumes_after_its_call_not_at_its_entry() {
+  DirectRuntime runtime;
+  runtime.plan.vsyncAddress = kVSyncAddress;
+  runtime.plan.windowLo[0] = kVSyncAddress;
+  runtime.plan.windowHi[0] = kWindowEnd;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+  game->platform_hle.initBuiltins();
+  // An image is active but no title claims this address, so the framework's own leaf is reached —
+  // the situation the previous test deliberately does NOT create.
+  (void)game->core.imageCatalog().activate(
+      "vsync-resume", {kVSyncAddress & 0x1fffffffu, kWindowEnd & 0x1fffffffu}, 0x564f5753ull);
+  CHECK(game->platform_hle.lookup(kVSyncAddress) != nullptr);
+
+  // Where the guest's own `jal` wanted to continue. `r[31]` is the only address that is correct: it is
+  // what the guest stored, and what a return from this leaf would have resumed at.
+  constexpr uint32_t kAfterTheJal = 0x8007A934u;
+  game->core.r[31] = kAfterTheJal;
+  game->core.r[4] = 0u; // VSync(0): a protected typed frame boundary
+
+  const psx::cpu::ExecutionResult result = psx::cpu::dispatchGuestHostService(game->core, kVSyncAddress);
+
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::FrameBoundary);
+  // The load-bearing assertion. `kVSyncAddress` here is the spin, and it is the value this case was
+  // written because the product actually produced.
+  CHECK_EQ(result.guestPc, kAfterTheJal);
+  // The architectural PC must agree with the result, so a consumer that reads one or the other cannot
+  // resume somewhere the other does not.
+  CHECK_EQ(game->core.pc, kAfterTheJal);
+}
+
+// ...and the seam does not OVERRULE a leaf that deliberately resumes somewhere else. A title boundary
+// that resumes into its own caller-supplied address knows something this scope does not, so the
+// stated address wins over the `r[31]` default. Without this, the default would be a silent ceiling.
+void boundaryStatingItsOwnResume(Core *core) {
+  constexpr uint32_t kStated = 0x80012345u;
+  psx::cpu::requestExecutionExit(
+      *core, psx::cpu::ExecutionResult{psx::cpu::ExecutionExitReason::FrameBoundary, kStated, 0, {}});
+}
+
+static void test_a_leaf_that_states_its_own_resume_address_keeps_it() {
+  DirectRuntime runtime;
+  runtime.plan.vsyncAddress = kVSyncAddress;
+  runtime.plan.windowLo[0] = kVSyncAddress;
+  runtime.plan.windowHi[0] = kWindowEnd;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+  game->platform_hle.initBuiltins();
+
+  constexpr uint32_t kStated = 0x80012345u;
+  constexpr uint32_t kReturn = 0x8007A934u;
+  (void)game->core.imageCatalog().activate(
+      "vsync-stated", {kVSyncAddress & 0x1fffffffu, kWindowEnd & 0x1fffffffu}, 0x564f5354ull);
+  const psx::cpu::ImageIdentity identity =
+      game->core.currentImageIdentity(kVSyncAddress).value_or(psx::cpu::ImageIdentity{});
+  game->core.r[31] = kReturn;
+  CHECK(
+      game->core.nativeDispatcher().install({{identity, kVSyncAddress}, "stated-resume", boundaryStatingItsOwnResume}));
+
+  const psx::cpu::ExecutionResult result = psx::cpu::dispatchGuestHostService(game->core, kVSyncAddress);
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::FrameBoundary);
+  CHECK_EQ(result.guestPc, kStated);
+}
+
 int main() {
   RUN(direct_runtime_installs_one_wait_boundary_and_measured_query);
   RUN(legacy_adapter_installs_the_same_wait_boundary);
@@ -266,5 +342,7 @@ int main() {
   RUN(vsync_address_outside_the_declared_window_is_refused);
   RUN(a_title_override_is_dispatched_before_a_host_service_leaf);
   RUN(a_host_service_leaf_still_answers_an_unclaimed_address);
+  RUN(a_frame_boundary_leaf_resumes_after_its_call_not_at_its_entry);
+  RUN(a_leaf_that_states_its_own_resume_address_keeps_it);
   return pt_summary();
 }

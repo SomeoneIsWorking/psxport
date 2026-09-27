@@ -555,7 +555,12 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     }
     if (auto requested = impl.core.executionControl().consume()) {
       requested->cycles += consumedCycles;
-      requested->guestPc = impl.core.pc;
+      // A request that did not state a resume address gets the standing architectural PC. One that
+      // DID state one keeps it: overwriting it unconditionally discarded the requester's deliberate
+      // continuation. See the contract in execution_control.h.
+      if (requested->guestPc == 0u) {
+        requested->guestPc = impl.core.pc;
+      }
       return *requested;
     }
     if (flags & (LIGHTREC_EXIT_SEGFAULT | LIGHTREC_EXIT_NOMEM | LIGHTREC_EXIT_UNKNOWN_OP)) {
@@ -613,7 +618,9 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
         servicePendingWork(impl.core);
         if (auto requested = impl.core.executionControl().consume()) {
           requested->cycles += consumedCycles;
-          requested->guestPc = impl.core.pc;
+          if (requested->guestPc == 0u) {
+            requested->guestPc = impl.core.pc;
+          }
           return *requested;
         }
         if (!dispatchHostServices) {
@@ -633,7 +640,9 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       }
       if (auto requested = impl.core.executionControl().consume()) {
         requested->cycles += consumedCycles;
-        requested->guestPc = impl.core.pc;
+        if (requested->guestPc == 0u) {
+          requested->guestPc = impl.core.pc;
+        }
         return *requested;
       }
       if (dispatchHostServices) {

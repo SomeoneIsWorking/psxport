@@ -106,6 +106,13 @@ public:
     core_.pc = continuation_;
   }
 
+  // WHERE THE GUEST CONTINUES after this leaf, which is `r[31]` — the address the guest's own `jal`
+  // left there. It is captured at scope entry precisely because `core.pc` is the leaf's ENTRY while
+  // the body runs, so the entry is never a valid resume point for anything this leaf does.
+  [[nodiscard]] std::uint32_t continuation() const {
+    return continuation_;
+  }
+
 private:
   Core &core_;
   std::uint32_t previousPc_ = 0;
@@ -205,6 +212,20 @@ invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction func
   NativeExecutionScope execution(core, guestAddress);
   function(&core);
   if (auto requested = core.executionControl().consume()) {
+    // A leaf the guest reached by `jal` that asks for a bounded exit still resumes where a RETURN
+    // would have resumed it, and `r[31]` is the only address that is correct for that: `core.pc` is
+    // this leaf's own entry for the whole body, so an exit stamped with it resumes INSIDE the leaf it
+    // just ran and spins forever. Measured 2026-09-27 on Mega Man X4: a positive-mode VSync exited
+    // as `frame-boundary` carrying its own entry, so the boundary could never be crossed — 42 call
+    // sites share that leaf, and the one after the movie completed was `VSync(-1)`, which made the
+    // title look stalled rather than mis-resumed.
+    //
+    // The requester's own PC wins when it stated one, so a leaf that deliberately resumes somewhere
+    // else (a nested original call that already owns a continuation) is not overruled here.
+    if (requested->guestPc == 0u) {
+      requested->guestPc = execution.continuation();
+    }
+    execution.completeReturn();
     return *requested;
   }
   execution.completeReturn();

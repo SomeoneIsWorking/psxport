@@ -22,11 +22,22 @@ class Core;
 // Arm the store observer on this Core from configuration, and log what it sees. Idempotent, and safe
 // to call from a product's setup: it is the whole product surface.
 //
-// `PSXPORT_STORE_OBSERVE` is a comma- or space-separated list of guest addresses in hex, e.g.
-// `0x80078AE0,0x80076B80`, up to `kMaxObservedStoreTargets` of them. Empty or unset disarms, which is
-// the default. An unparsable or over-long list is REFUSED with the offending text named, rather than
-// silently watching a prefix of it — a diagnostic that quietly watched less than it was told to is the
-// failure mode this whole area has already produced once.
+// `PSXPORT_STORE_OBSERVE` is a comma- or space-separated list of GUEST ADDRESSES OF STORE
+// INSTRUCTIONS in hex, e.g. `0x80083884,0x8007DB3C`, up to `kMaxObservedStoreTargets` of them. Empty or
+// unset disarms, which is the default. An unparsable or over-long list is REFUSED with the offending
+// text named, rather than silently watching a prefix of it.
+//
+// *** THESE ARE STORE PCs, NOT DATA ADDRESSES, AND THE DIFFERENCE IS THE WHOLE USABILITY QUESTION. ***
+// `LightrecExecutor::Impl::observeStore` matches `target.guestPc != guestPc` — the pc of the translated
+// STORE — so the instrument answers "what does this store instruction write, and with what registers",
+// NOT "which instruction wrote this word". Arming a DATA address therefore matches nothing, and the
+// zero that follows is not evidence: measured 2026-09-27, arming `0x8007DB3C` and `0x8007DB54` (store
+// PCs) produced 24,332 correctly-attributed callback lines, while arming `0x80078AE0` (a data address)
+// produced `MATCHED NONE of the 9,366,306 executed JIT instruction(s)` on a word that demonstrably
+// changes every frame. A per-target report row echoes the armed value in a column that reads like an
+// address, which is what makes the mistake easy. **If you want to know which instruction wrote a word,
+// you must already know the instruction** — use `PSXPORT_CW` for host-reaching stores, or read the store
+// instruction out of the listing.
 //
 // *** A TITLE-OWNED SPINE MUST CALL THIS ITSELF, beside `DbgServer::attach`. ***
 // `native_boot_run` calls it, so every product that enters the framework's own spine is armed. A title

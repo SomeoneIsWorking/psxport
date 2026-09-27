@@ -104,10 +104,25 @@ fails it.
 
 ## PSXPORT_STORE_OBSERVE — which instruction wrote this guest word
 
-`PSXPORT_STORE_OBSERVE` is a comma- or space-separated list of hex guest addresses, up to
-`kMaxObservedStoreTargets` of them, e.g. `0x80078AE0,0x80076B80`. Empty is the default and disarms, so
-an ordinary run pays one string compare and nothing per instruction. It arms the dynarec store
-observer, which names the **guest** PC of a translated store together with the full register file.
+`PSXPORT_STORE_OBSERVE` is a comma- or space-separated list of hex **guest addresses of store
+instructions**, up to `kMaxObservedStoreTargets` of them, e.g. `0x80083884,0x8007DB3C`. Empty is the
+default and disarms, so an ordinary run pays one string compare and nothing per instruction. It arms the
+dynarec store observer, which names the **guest** PC of a translated store together with the full
+register file.
+
+**THESE ARE STORE PCs, NOT DATA ADDRESSES — and that is the whole usability question.**
+`LightrecExecutor::Impl::observeStore` matches `target.guestPc != guestPc`, the pc of the translated
+STORE. So the instrument answers "what does this store instruction write, and with what registers", NOT
+"which instruction wrote this word". Arming a data address matches nothing and the resulting zero is not
+evidence. Measured 2026-09-27 on Spyro 1: arming the two store PCs `0x8007DB3C` and `0x8007DB54` produced
+**24,332 correctly attributed callback lines** with both positive controls firing, while arming the data
+address `0x80078AE0` produced `MATCHED NONE of the 9,366,306 executed JIT instruction(s)` on a word that
+demonstrably changes every frame. The per-target report row echoes the armed value in a column that
+reads like an address, which is exactly what makes the mistake easy. **To find which instruction wrote a
+word you must already know the instruction**: use `PSXPORT_CW` for host-reaching stores, or read the
+store out of the listing. An earlier version of this section claimed the surface named "the instruction
+that wrote this word", and that claim was wrong in the way that matters — it invited arming a data
+address and reading the silence as a result.
 
 **A correction, because the belief it replaced was measured false and that belief is what cost time.**
 This section previously said `PSXPORT_CW` "sees host-side stores only" and therefore "cannot attribute a

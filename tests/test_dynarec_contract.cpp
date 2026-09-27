@@ -525,7 +525,19 @@ static void test_nested_original_resumes_native_return_result_not_scoped_caller_
   const auto result = psx::cpu::dispatchGuestUntilExit(core, kCaller, psx::cpu::ExecutionBudget::fromCycles(100));
   CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::FrameBoundary);
   CHECK_EQ(callOriginalResult.reason, psx::cpu::ExecutionExitReason::FrameBoundary);
-  CHECK_EQ(result.guestPc, kInnerCallee);
+  // The guest reached `kInnerCallee` by the `jal` at kCaller+12, with its delay slot at kCaller+16, so
+  // the address the guest expects to continue at is kCaller+20 — which is what that `jal` left in r[31].
+  //
+  // THIS ASSERTION USED TO EXPECT `kInnerCallee`, the inner leaf's own ENTRY, and it was pinning the
+  // bug rather than the contract. `core.pc` is a `jal`ed leaf's entry for the whole body, so stamping
+  // the request with it produced a resume that re-entered `nativeFrameExit`, which requests another
+  // FrameBoundary with the same address: an unbounded spin that makes no guest progress and reports a
+  // clean frame boundary every turn. On Mega Man X4 that shape presented as a title that had stalled
+  // (S006: `render_width` settling at 320 with the wide plan latched and reachable). The point of this
+  // case is still what its name says — the propagating result is the inner native call's, not the
+  // scoped caller PC — and kCaller+20 distinguishes those two properly: it is neither kCaller nor
+  // kInnerCallee.
+  CHECK_EQ(result.guestPc, kCaller + 20u);
   CHECK_EQ(nativeOverrideCalls, 1);
   CHECK_EQ(core.r[18], 1u);
   CHECK_EQ(core.r[17], 7u);
