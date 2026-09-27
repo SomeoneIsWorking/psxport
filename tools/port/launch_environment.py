@@ -25,7 +25,9 @@ _LEGACY_HEADLESS_KEYS = (
 )
 
 
-def player_environment(environment: Mapping[str, str], *, product: str) -> dict[str, str]:
+def player_environment(environment: Mapping[str, str], *,
+                       product: str,
+                       settings: str | Path | None = None) -> dict[str, str]:
     """Return the windowed, audible, real-time-paced shipping environment.
 
     ``product`` names the port, and is REQUIRED because it is what keeps one title's run log out
@@ -41,11 +43,39 @@ def player_environment(environment: Mapping[str, str], *, product: str) -> dict[
 
     It is a DEFAULT, not a policy: a caller that already set ``PSXPORT_LOG_FILE`` keeps its value,
     and only the path invented here is prepared on disk.
+
+    ``settings`` names the repository's TRACKED shipping configuration, and it exists because the
+    asymmetry with :func:`agent_environment` was a real defect rather than a style choice. The agent
+    path REFUSES to run without a settings file, and says why: an unset ``PSXPORT_SETTINGS`` "hands the
+    product back its own working-directory discovery, so the run is configured by whichever untracked
+    settings file happens to sit beside it" — measured on Spyro 2026-09-19, when a body of green oracle
+    evidence turned out to have been collected from the operator's personal file. The PLAYER path named
+    no file at all, so the run whose output the operator actually sees was the one configured by
+    whatever happened to be lying in the working directory.
+
+    Measured 2026-09-27 on Spyro 1, and the consequence is not subtle: the tracked shipping file says
+    ``aspect=1`` and the product printed ``native_width=512 render_width=684`` — 16:9. The untracked
+    drop-in beside the binary said ``aspect=3`` (ASPECT_AUTO, which resolves to the SINK's aspect) and
+    the same build printed ``native_width=512 render_width=512`` — no widening at all, with the warning
+    going to a log file nobody opens. So the shipping path silently had no widescreen while every
+    measurement said it did.
+
+    An explicit ``PSXPORT_SETTINGS`` in the caller's environment still wins, and a missing tracked file
+    is not fatal — it falls back to the previous discovery behaviour rather than refusing a player's
+    launch over a launcher default.
     """
     result = dict(environment)
     for key in (*AGENT_RUNTIME_KEYS, *_LEGACY_HEADLESS_KEYS):
         result.pop(key, None)
     result["PSXPORT_VK_WINDOW"] = "1"
+    if settings is not None and "PSXPORT_SETTINGS" not in result:
+        chosen = Path(settings)
+        if chosen.is_file():
+            result["PSXPORT_SETTINGS"] = str(chosen.resolve())
+        else:
+            print(f"[run] no tracked shipping settings at {chosen}; the product will use its own "
+                  f"working-directory discovery, which is whichever untracked file sits beside it",
+                  file=sys.stderr)
     if "PSXPORT_LOG_FILE" not in result:
         result["PSXPORT_LOG_FILE"] = str(_prepared_player_log(product, result))
     return result
