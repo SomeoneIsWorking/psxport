@@ -147,7 +147,7 @@ measurement, and each names what would unblock it.**
 | **Tekken 3** | yes, 492 vs 368 | **partial** | the only content is an authored 4:3 card: the band is **exactly 133x16 in both legs**, shifted +62 = the centring margin, and both margins are 0.0% non-black. **A card re-centred into a wider frame is not widescreen.** Unblocked by reaching gameplay (S003 / issue 0011) |
 | **Spider-Man 1** | yes, 428 vs 320 | **no — all black** | 0 of 25,920 pixels non-black at either aspect. Cause: **an unowned CD callback pointer**, not a missing BIOS event. The guest's routine `0x8008C3E0` reads `0x1F801803`, dispatches through the table at `0x80096670` and calls `*[0x800B3B18]`; `GuestCdStreamCallbackLayout::readyCallbackPointer` is the declared seam and is UNIMPLEMENTED. The BIOS-event route cannot substitute — nothing ever OPENS class `0xF0000003`, and `deliverEvent` matches on the class the guest opened. Framework gap, `psxport` issue 0123 |
 | **Crash 1** | yes, 428 vs 320 | **no — no frame at all** | was `unimplemented BIOS A0:0x27` — the BIOS libc family's missing fourth member, which **every** title emits. Implemented (`67f1af1c`); the leg now runs **8,177,050 guest cycles** against 2,252 before. The next stop is a Lightrec budget exit at `0x800159A8`, not a BIOS fault |
-| **CTR** | yes, 684 vs 512 | **no — margins black, band SHRANK** | **0 of 73,695 prims is 3D.** Every prim is flat 2D from the guest's ordering table, which `AGENTS.md` bans as a native source — so **no native producer can be justified**, and the widened `H` has nothing to reveal. The attract sequence itself presents at 99.43% non-black; the earlier "black" note was true of the FIRST present only. Unblocked by the guest submitting 3D |
+| **CTR** | yes, 684 vs 512 | **no — margins black, band SHRANK** | ~~**0 of 73,695 prims is 3D.**~~ **CORRECTED 2026-09-28 — that number was a DEAD TAP, not a measurement.** `is3d` means "every packet vertex resolved a per-vertex view-Z in psxport's `ProjPrim` cache", and the only writers of that cache (`gte_store_xy`, `gte_record_pz`, `gte_copy_pz`) have **no callers anywhere in the framework** — verified: every non-definition occurrence of all three in `psxport/runtime` and four ports' `game/` trees is a **comment**. They were fed by the static translator, which is deleted. **So `is3d` is 0 by construction for EVERY title on Lightrec, and no 3D census taken from it measured anything.** Counting the GP0 command byte instead: **73,547 of 73,695 (99.8%) of CTR's submitted prims are Gouraud-shaded polygons**, 46,213 textured, and the guest's own `H` has **18 writers** (16 raw `ctc2 $26` + 2 `jal SetGeomScreen`). The submission path is recovered and owned (`ctr` `448516f`, `ctr/docs/issues/0031`): 10 `jal`-reachable submitters with a common `ctc2 $24/25/26` tail, and a native owner that widens **911** perspective transforms in 16:9 against **0** in 4:3, moving the rightmost submitted `x1` **812 → 894**. **Widening is still NOT visibly working**: the 241-column right margin is 0/173,520 non-black and did not move, because the limit is now 2D content a projection change cannot reach. `ctr` S005 stays `missing` |. Unblocked by the guest submitting 3D |
 | **Mega Man X4** | not reached | n/a | the guest faults at presented frame ~14,757. Cause measured: `decompress_player_gfx` appends **nine** 12-byte records into the **eight**-entry array at `0x801659D0`; the writer is `0x80015FE0 sw $a1,0x1F68($at)`, one of exactly three instructions in 1,177,600 bytes that write the word. **Whether RETAIL's per-field count is also 9 decides whether this is a port defect at all** — a runtime count, not a byte in the file |
 | **Vagrant Story** | deliberately does not | n/a | `H` is gameplay state: branches at `<272` and `>272` and a **768** clamp the decompilation never recorded. No dynarec adapter, so nothing runs |
 
@@ -162,6 +162,37 @@ only one of them has been made for the titles above.**
 `picture_announce` prints on CHANGE. Spider-Man's 16:9 log carries `native_width=512 render_width=512`
 at line 24 AND line 66, so quoting the first gives `512 == 512` and a correct "not widened" on a leg
 that is. Both probes count occurrences and their selftests pin that log shape.
+
+### MEASURED 2026-09-28 — `is3d` is a DEAD TAP, so EVERY title's "N of M prims is 3D" was a vacuous zero
+
+**This one is a framework defect, not a CTR defect, and it invalidates a class of published number.**
+
+`is3d` (`runtime/psx/gpu_primitive_dump.cpp`, consumed in `gpu_native.cpp`) does not ask whether the
+guest submitted 3D work. It asks whether **every packet vertex resolved a per-vertex view-Z in
+psxport's `ProjPrim` cache** — a *native-depth* classification of psxport's own bookkeeping.
+
+The only writers of that cache are `gte_store_xy`, `gte_record_pz` and `gte_copy_pz`. **None of the
+three has a caller anywhere in the framework.** Verified 2026-09-28: across `psxport/runtime` and the
+`game/` trees of `ctr`, `spyro` and `Tomba2Engine`, every non-definition occurrence of all three
+names is a **comment**. They were fed by the static translator, which was deliberately deleted.
+
+**So `is3d` is 0 by construction for every title running on Lightrec.** A census reporting
+`0 of 73,695` was reporting that nobody calls a function — not that the guest drew no 3D. The number
+was published as a measurement in this map twice, in `ctr/docs/project-state.md`, and in
+`ctr/docs/issues/0026`, and the *reasoning* built on it ("every prim is flat 2D from the guest's
+ordering table, so no native producer can be justified") was built on the vacuous zero.
+
+**THE GENERAL RULE, which is what makes this worth a section rather than a table edit:** a metric that
+reads a tap nothing writes returns a confident answer about the wrong subject, and **the zero it
+returns is the most believable possible output** — it looks like a clean measurement of absence. The
+question "is the tap fed?" is a **different** question from "is any prim 3D?", and nothing in the
+number distinguished them. Before trusting any counter here, **ask what feeds it and show the feeder
+running**; a census that cannot name its feeder is not a measurement.
+
+**What the guest actually does, measured instead by counting the GP0 command byte:** 73,547 of 73,695
+(99.8%) of CTR's submitted prims are **Gouraud-shaded polygons**, 46,213 of them textured, and 55
+`RTPS` sites carry the perspective transform. Gouraud is the only 3D primitive form the hardware has.
+The guest's horizontal projection has **18 writers**, not the 0 this map's reasoning assumed.
 
 ### MEASURED 2026-09-27 — which titles actually HAVE a widescreen owner
 
@@ -180,7 +211,7 @@ what a title-owned widening owner actually contains.
 | Spider-Man 1 | `spider1` | 4 | the viewport window is a projection INPUT; `H` re-derived from the span |
 | Tomba! 1 | `Tomba2Engine` | 14 (shared) | widescreen-only, `RenderCapabilities::widescreenOnly()` |
 | Tomba! 2 | `Tomba2Engine` | 14 (shared) | in the lerp scope |
-| **Crash Team Racing** | `ctr` | 3 | **owner measured and firing 176 of 176 publications, and the widening is INVISIBLE** because `PSXPORT_PRIMDUMP` counts **0 of 73,695 prims as 3D** — every prim is flat 2D from the guest's ordering table, which `AGENTS.md` bans as a native source, so no native producer can be justified. The attract sequence presents at 99.43% non-black; the earlier "black" note was true of the first present only. `game/video/widescreen_owner.*` written. The image was recorded as absent and was not |
+| **Crash Team Racing** | `ctr` | 3 | ~~owner measured and firing 176 of 176 publications, and the widening is INVISIBLE because `PSXPORT_PRIMDUMP` counts 0 of 73,695 prims as 3D~~ — **the 3D census was a dead tap; see the CTR row above for the correction and its evidence.** Owner fires (176/176); the submission path is now recovered and owned; the widening reaches 3D geometry (911 transforms, `x1` 812 → 894) but **the presented right margin is still 0/173,520 non-black and did not move**, so the widening is still not visibly working. The attract sequence presents at 99.43% non-black; the earlier "black" note was true of the first present only. `game/video/widescreen_owner.*` written. The image was recorded as absent and was not |
 | **Vagrant Story** | `vagrant` | 1 | an owner, a derivation and five refusals (`game/render/battle_projection.*`) that **deliberately does not widen**: `H` is gameplay state there (branches at `<272`/`>272` against a resting 256) and the clip rectangle cannot be re-derived without bytes. **The absence is the enforcement** and a test asserts it. Verified against `scratch/bin/vagrant/SLUS_010.40` (SHA-1 matches the decomp) and `BATTLE.BIN`. Still no dynarec adapter, so nothing runs yet |
 
 **CORRECTION 2026-09-27. THE BLOCKER WAS NEVER THE MEDIA, AND I RECORDED IT AS IF IT WERE.** This
