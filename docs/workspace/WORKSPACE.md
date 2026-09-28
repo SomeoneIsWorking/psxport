@@ -94,37 +94,35 @@ drop-in co-op goals. All planned lineage repositories now have public, reproduci
 added titles are honest harness-first scaffolds, not implementation coverage; no widescreen or
 interpolation support is implied by repository existence.
 
-### MEASURED 2026-09-28 — AN OWNER FILE IS NOT A WIDENED PICTURE, and three titles prove it
+### MEASURED 2026-09-28 — WHY each title without a widened picture does not have one
 
-The table below counts owner files. It was being read as a capability table, and on measurement
-**three of the titles it counts as covered have never presented a widened frame.** So the count now
-carries the picture evidence beside it, and the distinction is stated where a reader would otherwise
-take the count for the capability.
+The table above says three owners are measured firing and widening a canvas, and none has been seen
+widening a *scene*. This is the per-title cause, so nobody re-derives it. **Every entry is a
+measurement, and each names what would unblock it.**
 
-| title | owner files | canvas widens (measured) | **a widened PICTURE exists** |
+| title | canvas widens | picture | WHY NOT, measured |
 |---|---|---|---|
-| Spyro 1 | 24 | yes, `render_width=684` vs `native_width=512` | **yes** — 684x240, real content in all 684 columns |
-| Tomba! 1/2 | 14 | yes, 428 vs 320 | **yes** — 428x240, and the `interp` split is measured too |
-| Crash Bash | 2 | yes, 684 vs 512 | **yes** — 512x234 vs 684x234, margins 99.1%/77.2% non-black |
-| **Spider-Man 1** | 4 | **yes, 428 vs 320** | **NO — both frames entirely black.** 0 of 25,920 pixels non-black at either aspect. The owner fires; the product presents 14,000 black frames and stops on issue 0024's armed-but-never-started CD channel, which is upstream of every pixel |
-| **Crash 1** | 2 | **yes, 428 vs 320** | **NO — no frame at either aspect.** Both legs abort at frame 0 on `unimplemented BIOS service` (pre-existing; reproduced in a build predating the owners) |
-| **Tekken 3** | 2 | **yes, 492 vs 368** | **PARTIAL.** The content band is **exactly 133x16 in both legs** at the same y, shifted by +62 = the centring margin: the card is RE-CENTRED, not re-projected, and both 62px margins are 0.0% non-black with 61/61 repeated columns |
-| Mega Man X4 | 2 | not reached | n/a — the guest faults loading the first stage |
-| **CTR** | **0** | no producer | separate arms |
-| **Vagrant Story** | 0, deliberately | no | n/a — no dynarec adapter |
+| Spyro 1 | yes | **yes** | — 684x240, real content in all 684 columns |
+| Tomba! 1/2 | yes | **yes** | — 428x240; `interp` split also measured (50.0% reconstructed, control leg 0) |
+| Crash Bash | yes | **yes** | — 512x234 vs 684x234, margins 99.1%/77.2% non-black |
+| **Tekken 3** | yes, 492 vs 368 | **partial** | the only content is an authored 4:3 card: the band is **exactly 133x16 in both legs**, shifted +62 = the centring margin, and both margins are 0.0% non-black. **A card re-centred into a wider frame is not widescreen.** Unblocked by reaching gameplay (S003 / issue 0011) |
+| **Spider-Man 1** | yes, 428 vs 320 | **no — all black** | 0 of 25,920 pixels non-black at either aspect. Cause: **an unowned CD callback pointer**, not a missing BIOS event. The guest's routine `0x8008C3E0` reads `0x1F801803`, dispatches through the table at `0x80096670` and calls `*[0x800B3B18]`; `GuestCdStreamCallbackLayout::readyCallbackPointer` is the declared seam and is UNIMPLEMENTED. The BIOS-event route cannot substitute — nothing ever OPENS class `0xF0000003`, and `deliverEvent` matches on the class the guest opened. Framework gap, `psxport` issue 0123 |
+| **Crash 1** | yes, 428 vs 320 | **no — no frame at all** | was `unimplemented BIOS A0:0x27` — the BIOS libc family's missing fourth member, which **every** title emits. Implemented (`67f1af1c`); the leg now runs **8,177,050 guest cycles** against 2,252 before. The next stop is a Lightrec budget exit at `0x800159A8`, not a BIOS fault |
+| **CTR** | yes, 684 vs 512 | **no — margins black, band SHRANK** | **0 of 73,695 prims is 3D.** Every prim is flat 2D from the guest's ordering table, which `AGENTS.md` bans as a native source — so **no native producer can be justified**, and the widened `H` has nothing to reveal. The attract sequence itself presents at 99.43% non-black; the earlier "black" note was true of the FIRST present only. Unblocked by the guest submitting 3D |
+| **Mega Man X4** | not reached | n/a | the guest faults at presented frame ~14,757. Cause measured: `decompress_player_gfx` appends **nine** 12-byte records into the **eight**-entry array at `0x801659D0`; the writer is `0x80015FE0 sw $a1,0x1F68($at)`, one of exactly three instructions in 1,177,600 bytes that write the word. **Whether RETAIL's per-field count is also 9 decides whether this is a port defect at all** — a runtime count, not a byte in the file |
+| **Vagrant Story** | deliberately does not | n/a | `H` is gameplay state: branches at `<272` and `>272` and a **768** clamp the decompilation never recorded. No dynarec adapter, so nothing runs |
 
-**THE DISTINCTION IS THE FINDING, and it is the one CTR's and Vagrant's own reports already made about
-themselves: an owner that is never seen is a MECHANISM, not a capability.** Three owners are measured
-firing and widening the canvas, and none has been seen widening a *scene*. A Tekken card re-centred
-into a wider frame is not widescreen; it is the same picture in a bigger box, and the margin census
-with a denominator is what says so.
+**THE RECURRING SHAPE, and it is worth more than any single row.** Four titles widen a canvas and show
+no widening, and **three of the four are blocked on the same class of thing — a frontier, not a
+projection.** The projection owners are correct and measured in every case. What is missing is
+something for a wider projection to reveal: 3D geometry (CTR), a scene (Tekken), a frame (Crash 1), or
+a running game (MMX4). **"The owner fires" and "the player sees a wider game" are different claims, and
+only one of them has been made for the titles above.**
 
-**A measurement trap worth propagating, because it yields a CORRECT conclusion for the WRONG reason:
-quote the LAST `[wide]` line, not the first.** `picture_announce` prints on CHANGE, and Spider-Man's
-16:9 log carries `native_width=512 render_width=512` at line 24 AND line 66. Quoting the first gives
-`512 == 512` and reads "not widened" on a leg that is. Both probes now count occurrences, and the
-selftests pin that log shape. The only validation that a census is doing anything is that the same
-code reads NOT-widened on the 4:3 leg of all three titles, and that was exercised.
+**A measurement trap that has now bitten twice: quote the LAST `[wide]` line, not the first.**
+`picture_announce` prints on CHANGE. Spider-Man's 16:9 log carries `native_width=512 render_width=512`
+at line 24 AND line 66, so quoting the first gives `512 == 512` and a correct "not widened" on a leg
+that is. Both probes count occurrences and their selftests pin that log shape.
 
 ### MEASURED 2026-09-27 — which titles actually HAVE a widescreen owner
 
@@ -143,7 +141,7 @@ what a title-owned widening owner actually contains.
 | Spider-Man 1 | `spider1` | 4 | the viewport window is a projection INPUT; `H` re-derived from the span |
 | Tomba! 1 | `Tomba2Engine` | 14 (shared) | widescreen-only, `RenderCapabilities::widescreenOnly()` |
 | Tomba! 2 | `Tomba2Engine` | 14 (shared) | in the lerp scope |
-| **Crash Team Racing** | `ctr` | **0** | **no owner.** `game/video/projection_owner.h` captures the retail projection publication and says "Widescreen begins here later" — an honest seam, not a capability. **Was recorded as blocked on absent media; that was wrong** — the image is now provisioned (`scratch/raw/ctr/SCUS_944.26`, SHA-256 verified) and the owner work is in progress |
+| **Crash Team Racing** | `ctr` | 3 | **owner measured and firing 176 of 176 publications, and the widening is INVISIBLE** because `PSXPORT_PRIMDUMP` counts **0 of 73,695 prims as 3D** — every prim is flat 2D from the guest's ordering table, which `AGENTS.md` bans as a native source, so no native producer can be justified. The attract sequence presents at 99.43% non-black; the earlier "black" note was true of the first present only. `game/video/widescreen_owner.*` written. The image was recorded as absent and was not |
 | **Vagrant Story** | `vagrant` | 1 | an owner, a derivation and five refusals (`game/render/battle_projection.*`) that **deliberately does not widen**: `H` is gameplay state there (branches at `<272`/`>272` against a resting 256) and the clip rectangle cannot be re-derived without bytes. **The absence is the enforcement** and a test asserts it. Verified against `scratch/bin/vagrant/SLUS_010.40` (SHA-1 matches the decomp) and `BATTLE.BIN`. Still no dynarec adapter, so nothing runs yet |
 
 **CORRECTION 2026-09-27. THE BLOCKER WAS NEVER THE MEDIA, AND I RECORDED IT AS IF IT WERE.** This
