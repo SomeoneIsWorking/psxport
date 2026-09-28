@@ -1,7 +1,7 @@
 ---
 id: 38
 title: A budget resume that STARTS on a host-service leaf completes it with a STALE $ra
-status: open
+status: refuted
 symptom: A guest task's continuation becomes a non-code address and execution faults with "ambiguous code-image identity"
 state_items: MMX4-S002
 tags: psxport,native-dispatch,resume,root-cause
@@ -9,7 +9,49 @@ created: 2026-09-29
 updated: 2026-09-29
 ---
 
-## The root cause, read from the shipping code
+## PREMISE REFUTED 2026-09-29 — the leaves are GUEST code, not host-service leaves
+
+**The account below rests on a range boundary that was assumed rather than derived, and it is wrong.
+The original text is kept because the wrong premise is the attractive one.**
+
+The claim classified resume addresses in `0x800E0000..0x80100000` as "the BIOS range". **They are
+not.** Mega Man X4's EXE loads its text at `0x80010000` with size `0x11F800`, so the loaded image
+spans **`0x80010000..0x8012F800`** — which *contains* the whole range I called BIOS. Every address I
+flagged is inside the game's own image, and they decode as clean guest code:
+
+    800EA0F4  lui  $v0, 0x8012      <- the address the fault followed
+    800EA0F8  lbu  $v0, -0x1e78($v0)
+    800EA0FC  jr   $ra              <- a guest leaf that RETURNS THROUGH $ra
+
+    800ED744  srl $t0, $v0, 0x13    <- 583 resumes; mid-function decoder code
+    800ED748  sll $t0, $t0, 3
+    800ED74C  add $t0, $t0, $a2
+    800ED750  lw  $t1, ($t0)
+
+So these resumes do **not** enter `invokeNativeFunction`, `NativeExecutionScope` is never constructed
+for them, and the stale-`$ra` mechanism below does not apply to them. "Four in five resumes continue
+at an HLE entry" is false — they continue at the game's own code. The "known framework BIOS constant"
+framing is also wrong: those constants simply fall inside this title's image.
+
+**The resume-count table below is also void.** Its "BIOS range" and "game text" rows are not disjoint —
+the loaded text contains the former entirely. The only honest reading is **1,561 of 1,561 resumes land
+inside the loaded guest image and none lands outside it.** The 300/1,261 split is an artifact of
+overlapping ranges and must not be quoted.
+
+**What survives points somewhere else.** The leaf at `0x800EA0F4` ends in `jr $ra`, so the continuation
+after a resume that lands there **is the task's `$ra`**, whatever that register holds. The account
+below is right about the *consequence* and wrong about the *owner*: the register is the guest task's
+own `r[31]`, and the place that would initialize it is `megamanx4`'s `Service::open`, which sets
+`r[29]`, `r[28]` and `pc` and **never touches `r[31]`**. That is tracked in
+`megamanx4/docs/issues/0037`; **this run does not implicate the framework**, and the fix proposed
+below should not be applied on this evidence.
+
+**The transferable lesson is the mistake itself.** A range boundary was assumed rather than derived,
+and a complete account was built on it. The EXE's own headers state where its text lives; that was
+available the whole time. **Derive the image extent from the image, never from a remembered constant** —
+and check that classification buckets are disjoint before quoting a share.
+
+## The root cause, read from the shipping code (PREMISE REFUTED — see above)
 
 `NativeExecutionScope` (`runtime/cpu/native_dispatch.cpp`) captures its continuation at scope entry:
 
