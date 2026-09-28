@@ -136,6 +136,15 @@ struct ExecutorCounters {
   std::uint64_t cacheMisses = 0;
   std::uint64_t invalidations = 0;
   std::uint64_t faults = 0;
+  // Memory callbacks psxport received from translated code, device addresses and not. The
+  // denominator for the two counters below: without it, "no device access committed anything" and
+  // "no memory access happened" are the same zero, and the second is a broken instrument.
+  std::uint64_t memoryCallbacks = 0;
+  // Device accesses that committed guest time mid-segment, and the instructions they committed. A
+  // commit of 0 instructions is not counted (the cycle counter had not moved), so a count of 0 with a
+  // non-zero `memoryCallbacks` is a real "no commit happened", not a missing measurement.
+  std::uint64_t deviceClockCommits = 0;
+  std::uint64_t deviceClockCommitInstructions = 0;
   InterpreterFallbackCounters fallback;
 };
 
