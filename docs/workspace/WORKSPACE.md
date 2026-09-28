@@ -167,6 +167,25 @@ zero looks exactly like a clean measurement of absence, which is why every one o
 long enough to be published.** The rule that generalises: before quoting a counter, name its FEEDER
 and show the feeder running.
 
+**The tenth trap, and it is the mirror image of the other nine: a lead that MATCHES when nothing
+should match.** Every dead tap above produced a convincing zero. This one produced a convincing
+match, and it was wrong for the same reason — nobody compared it to the null first. `megamanx4`'s
+corruption target `0x0113D7D0` shares its low 16 bits exactly with the valid guest address
+`0x8001D7D0`, which sits in a tagged handler table at `0x800F2174` alongside ASCII (`"PQRS"`) and
+small integers. "The pointer lost its top halfword" is a complete, specific, satisfying explanation
+and it explains exactly the value observed. **Measured: halfword `0xD7D0` occurs 1 time in 294,400
+text words, where chance predicts `294,400 x 2 / 65,536 = 8.98` — a ratio of 0.11, i.e. BELOW
+chance.** Every byte-aligned 2- and 4-byte read within ±128 B of that entry yields the target 0 times,
+so the misaligned-read mechanism cannot produce it either.
+
+**So the rule is the null, in both directions, and it is the same null the lineage metric already
+demands.** A bare similarity percentage means nothing without its multiple of the measured
+cross-studio null (`docs/findings/lineage-metric.md`); the identical discipline applied to a single
+halfword is what separates "the pointer lost its top half" from "two numbers share sixteen bits".
+**Compute the expected count before naming a lead — whether the observation is a zero or a match.**
+A refutation with a denominator belongs in the issue file, because the attractive wrong lead is
+exactly the one that gets re-derived.
+
 **A measurement trap that has now bitten twice: quote the LAST `[wide]` line, not the first.**
 `picture_announce` prints on CHANGE. Spider-Man's 16:9 log carries `native_width=512 render_width=512`
 at line 24 AND line 66, so quoting the first gives `512 == 512` and a correct "not widened" on a leg
