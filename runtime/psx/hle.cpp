@@ -392,42 +392,6 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       heapInit(a0, a1);
       c->r[V0] = 0;
       return true; // InitHeap
-    // --- BIOS libc string/memory leaves -------------------------------------------------------
-    // These were absent, and absence here is SILENT DATA LOSS, not a missing feature: an
-    // unhandled BIOS call logs UNIMPL, leaves $v0 holding whatever the previous call left there,
-    // and — crucially — DOES NOT PERFORM THE WRITE. A guest bzero() that quietly does nothing
-    // leaves a structure full of garbage that surfaces arbitrarily far away. Spider-Man's boot
-    // calls A(28h) and A(2Ah) twice each; every PSX title that uses the BIOS libc calls them.
-    case 0x28: // bzero(dst, n)
-      for (uint32_t i = 0; i < a1; i++) {
-        c->mem_w8(a0 + i, 0);
-      }
-      c->r[V0] = a0;
-      return true;
-    case 0x2A: // memcpy(dst, src, n)
-      for (uint32_t i = 0; i < a2; i++) {
-        c->mem_w8(a0 + i, c->mem_r8(a1 + i));
-      }
-      c->r[V0] = a0;
-      return true;
-    case 0x2B: // memset(dst, c, n)
-      for (uint32_t i = 0; i < a2; i++) {
-        c->mem_w8(a0 + i, (uint8_t)a1);
-      }
-      c->r[V0] = a0;
-      return true;
-    case 0x2C:       // memmove(dst, src, n) —
-      if (a0 > a1) { // overlap-correct, unlike 2Ah
-        for (uint32_t i = a2; i-- > 0;) {
-          c->mem_w8(a0 + i, c->mem_r8(a1 + i));
-        }
-      } else {
-        for (uint32_t i = 0; i < a2; i++) {
-          c->mem_w8(a0 + i, c->mem_r8(a1 + i));
-        }
-      }
-      c->r[V0] = a0;
-      return true;
     // setjmp: fill the guest's jmp_buf with the real callee-saved set and return 0 (the
     // direct-call result). The layout is the BIOS's: ra, sp, fp, s0..s7, gp. Writing it truthfully
     // matters even though longjmp is unsupported below — a guest that INSPECTS the buffer, or
