@@ -82,6 +82,45 @@ share one blocker.**
 
 **Do not add an interpolation path to, or rule one out of, any of these three until the rate is measured.**
 
+### MEASURED 2026-09-28 — all three are now measured, and NONE of them is a 60 fps title
+
+The paragraph above is now **SUPERSEDED on its facts, and its blocker is gone**: the images it said were
+absent are provisioned (see the provisioning table further down this file). Each answer is read from guest
+bytes, each carries a registered instrument, and each instrument's selftest is shown red on its own subject.
+
+| title | fields per game frame | fps | lerp scope | how established |
+|---|---|---|---|---|
+| `vagrant` | **2, or 4 at run time — never 1** | **30 or 15** | **IN** | `vs_gametime_tickspeed` `0x8005E24C` is the argument; 368,826 words scanned across the resident + 3 overlays, 10 writers, and the public setter `func_8007C36C` admits **only 2 and 4** — so 60 fps is structurally impossible, not merely unobserved. `vagrant/docs/issues/0039` |
+| `ctr` | **2** | **30** | **IN** | a two-field countdown at `[gp+0x348]`, armed with a literal 2 and drained by 1 per field by the vblank callback; **exactly 4** accesses in 128,512 words, and the census refuses at 5. `ctr/docs/issues/0030` |
+| `spider1` | **NOT ESTABLISHED** | **neither 30 nor 60** | **UNDECIDED — do not start and do not rule out** | it does not pace through VSync at all; the frame body's second wait site is inside a `DrawSync(1)` back-edge loop, so the per-frame field count is not a compile-time constant. `spider1/docs/issues/0030` |
+
+**No title in this workspace that has been measured is already 60 fps**, so no title is currently excluded
+from lerp scope on rate grounds. That is a real answer, not a dead end.
+
+**TWO OF THE THREE EARLIER NUMBERS HAD THE WRONG REASON, AND ONE HAD A WRONG COUNT.**
+
+- `vagrant`'s `VSync(2)` x3 / `VSync(3)` x2 was a census of **decompiled source text**, not of the image, and
+  it mixed CD/sound wait loops into a rate question. The rate-bearing argument is exactly one variable with
+  two legal values. `VSync(3)` does not pace anything in this image at all.
+- `ctr`'s single `VSync(2)` is a **boot resource load** (`FUN_80031FDC`'s `param_5 == -1` branch), not the
+  frame loop. The 30 fps number was right and the reasoning was wrong. The frame loop's only VSync is
+  `VSync(0)`.
+- `spider1`'s `VSync(-1)` x7 was a **`jal`-only** census. This image reaches its routines through
+  `jalr $ra,$vN` function pointers, so a `jal`-only view reports **0 for every library routine** — including
+  VSync. The zero was a property of the scan, not of the title.
+
+**THE `n >= 2` RULE WAS RE-ESTABLISHED PER TITLE, NOT INHERITED.** Each of the three reads its own VSync's
+argument branches out of its own image (`bgez a0` / `beq a0,1` / `blez a0` for the no-wait cases,
+`addiu a1,a0,-1` for `a0 >= 2`, and a wait helper that returns at once on a count of 0). All three agree
+with `crashbash`, which makes it a corroboration across five images rather than a rule transported once.
+
+**WHAT WOULD SETTLE `spider1`**, named precisely because "cannot be determined" is only a real result if the
+next step is concrete: a headless run reporting game-frames-per-second **and** the per-frame advance of
+`[gp+0x0C74]` **together**. Frames/s alone cannot separate 30 from 60 without the field rate; the counter
+delta alone says nothing about how many frames the CPU retires between waits. The image is provisioned and
+the port runs headless, so this is **a live measurement away, not a blocked one**. If it measures ~30 fps
+with 1 field per frame, `spider1` is a 30 fps title and joins the other two in scope.
+
 ### Target title scope
 
 The target ports are Spyro 1/2/3; Crash 1/2/3; Crash Bash; Crash Team Racing; Vagrant Story; Mega Man
