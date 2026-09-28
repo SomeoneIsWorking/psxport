@@ -38,35 +38,49 @@ namespace {
 // input, and that is the whole reason it is tracked. The fix is that a save must never LAND in a
 // checkout. Reading configuration from the tree is fine; writing a player's saved state into it is not,
 // and the standing rule is explicit that settings live in the OS user-data location, never the checkout.
-const char *insideCheckout(const char *path) {
+// IT ANSWERS YES/NO, AND THAT IS A FIX RATHER THAN A SIMPLIFICATION. This used to return
+// `const char *` pointing at its own local `buffer`, which is undefined behaviour — the object dies
+// at return, so the pointer is dangling. Clang tolerated that and GCC 16.2.1 at -O2 did not: it
+// concluded the return value could never be usefully non-null and optimized the entire ancestor walk
+// away, so the guard silently stopped refusing and `Mods::save()` overwrote a tracked file in a
+// source checkout again — the exact incident this function was written to prevent (006eb917).
+//
+// The project's OWN test is what found it, and the way it found it is the point: `test_settings_-
+// persistence` is 4/4 green under Clang and 2/4 red under GCC, same source, same flags bar the
+// compiler. A guard that only works on the toolchain the agents happen to use is not a guard, and
+// `AGENTS.md` requires the project to stay compatible with its supported GCC, Clang and AppleClang
+// toolchains. The discarded `(void)root` at the only call site means nothing is lost by this change.
+// A future caller that needs the directory must be handed a caller-owned buffer, never a pointer
+// into this frame.
+bool insideCheckout(const char *path) {
   if (path == nullptr || *path == '\0') {
-    return nullptr;
+    return false;
   }
   char buffer[4096];
   const size_t length = strlen(path);
   if (length + 1 >= sizeof(buffer)) {
-    return nullptr; // too long to walk safely; do not guess
+    return false; // too long to walk safely; do not guess
   }
   memcpy(buffer, path, length + 1);
   for (;;) {
     char probe[4200];
     const size_t dirLength = strlen(buffer);
     if (dirLength + 6 >= sizeof(probe)) {
-      return nullptr;
+      return false;
     }
     memcpy(probe, buffer, dirLength);
     memcpy(probe + dirLength, "/.git", 6);
     FILE *git = fopen(probe, "r");
     if (git != nullptr) {
       fclose(git);
-      return buffer;
+      return true;
     }
     char *slash = strrchr(buffer, '/');
     if (slash == nullptr) {
-      return nullptr; // reached the filesystem root without finding one
+      return false; // reached the filesystem root without finding one
     }
     if (slash == buffer) {
-      return nullptr; // buffer is now "/" and its parent is itself
+      return false; // buffer is now "/" and its parent is itself
     }
     *slash = '\0';
   }
@@ -76,13 +90,12 @@ const char *insideCheckout(const char *path) {
 
 void Mods::save() const {
   const char *path = mods_path();
-  if (const char *root = insideCheckout(path); root != nullptr) {
+  if (insideCheckout(path)) {
     lucent::warn("mods",
                  "REFUSED to save settings into a source checkout: {}. Settings belong in the OS "
                  "user-data location, never the checkout — a save here overwrites a tracked file. "
                  "Point PSXPORT_SETTINGS at a user-data path, or unset it to use the default.",
                  path);
-    (void)root;
     return;
   }
   FILE *f = fopen(path, "w");
