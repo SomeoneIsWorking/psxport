@@ -8,6 +8,7 @@
 #include "host_turn.h"
 #include "hw_bind.h"
 #include "native_dispatch.h"
+#include "segment_clock.h"
 #include "store_observe.h"
 
 #include <lightrec.h>
@@ -37,6 +38,19 @@ static_assert(kMaxObservedStoreTargets == LIGHTREC_STORE_OBSERVER_TARGETS);
 
 std::uint32_t targetCycle(ExecutionBudget budget) {
   return static_cast<std::uint32_t>(std::min<std::uint64_t>(budget.cycles, std::numeric_limits<std::uint32_t>::max()));
+}
+
+// Is this address a DEVICE access? The hardware-register map is the one the executor itself installs
+// above (`kHardwareBase`/`kHardwareSize`), and it is exactly the set of addresses `Core::host_ptr`
+// does not resolve, so every access in it reaches `Core::io_read`/`io_write`. That is the seam the
+// executor contract names ("an HLE/device callback ... is observed by host code"), and it is the only
+// place a guest can observe elapsed time.
+//
+// The other out-of-line accesses — an unresolvable RAM or scratchpad address, which reaches the same
+// callbacks because those maps carry ops too — are NOT device accesses, and charging them would tax
+// the JIT's hottest memory path for state no guest can read.
+bool isDeviceAddress(std::uint32_t address) {
+  return address >= kHardwareBase && address < kHardwareBase + kHardwareSize;
 }
 
 std::uint64_t nextBoundaryOwnerId() {
@@ -110,35 +124,45 @@ struct LightrecExecutor::Impl {
 
   static void storeByte(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
+    impl.commitDeviceClock(lightrec, address);
     impl.core.mem_w8(address, static_cast<std::uint8_t>(value));
   }
 
   static void storeHalf(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
+    impl.commitDeviceClock(lightrec, address);
     impl.core.mem_w16(address, static_cast<std::uint16_t>(value));
   }
 
   static void storeWord(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
+    impl.commitDeviceClock(lightrec, address);
     impl.core.mem_w32(address, value);
   }
 
   static void
   storeUnalignedWord(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
+    impl.commitDeviceClock(lightrec, address);
     impl.core.mem_w32(address, value);
   }
 
   static std::uint8_t loadByte(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address) {
-    return owner(lightrec).core.mem_r8(address);
+    Impl &impl = owner(lightrec);
+    impl.commitDeviceClock(lightrec, address);
+    return impl.core.mem_r8(address);
   }
 
   static std::uint16_t loadHalf(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address) {
-    return owner(lightrec).core.mem_r16(address);
+    Impl &impl = owner(lightrec);
+    impl.commitDeviceClock(lightrec, address);
+    return impl.core.mem_r16(address);
   }
 
   static std::uint32_t loadWord(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address) {
-    return owner(lightrec).core.mem_r32(address);
+    Impl &impl = owner(lightrec);
+    impl.commitDeviceClock(lightrec, address);
+    return impl.core.mem_r32(address);
   }
 
   static void cop2Operation(lightrec_state *lightrec, std::uint32_t opcode) {
@@ -152,6 +176,45 @@ struct LightrecExecutor::Impl {
 
   static void enableRam(lightrec_state *, bool) {
     // Core owns one coherent RAM image and does not expose a separate cache-isolation byte array.
+  }
+
+  // Commit the guest time elapsed since the last device access, so the device about to be observed
+  // reads a clock that has moved. See `SegmentClockLedger` for the delta and for why it cannot run
+  // backwards; this is the call site that feeds it Lightrec's live cycle count.
+  //
+  // IT CANNOT RE-ENTER. Nothing reachable from here calls back into the Lightrec memory callbacks:
+  // `Timing::advanceGuestInstructionTicks` reaches the SIO service and `serviceCdc`, and
+  // `cdc_drive_service` decodes a sector or executes a command entirely in host state. The memory
+  // callbacks are invoked by generated code, not by `Core::mem_r*`/`mem_w*`, so host code calling
+  // those cannot come back here. (Scanned 2026-09-28: every `dispatchGuest*`/`executeFunction` call
+  // site in `runtime/` is a function-entry, interrupt, scheduler or task boundary — none is
+  // reachable from `Core::io_read`/`io_write`.)
+  //
+  // IT DELIBERATELY DOES NOT RAISE THE HOST TURN OR SAMPLE THE SPIN DETECTOR, which is what the
+  // segment-boundary `accountGuestInstructions` does beyond the clock. A host turn is TAKEN at an
+  // eligible boundary (`serviceHostTurn` refuses mid-critical-section states), and raising the
+  // request here would only make the block-boundary callback end this segment early for it. The
+  // spin detector samples `Core::pc`, and inside a segment that is the PC the segment ENTERED at —
+  // the architectural PC is synchronized back only after `lightrec_execute` returns — so sampling it
+  // here would pin the anchor to a stale address. Both still run, unchanged, at the segment boundary
+  // where their inputs are real.
+  void commitDeviceClock(lightrec_state *lightrec, std::uint32_t address) {
+    // Every memory callback psxport received, device or not. This is the DENOMINATOR the charge
+    // count is meaningless without: `deviceClockCommits == 0` on a run that made no memory callback
+    // at all and on a run that made many and charged none are different facts, and only this number
+    // tells them apart. It is also what makes the address gate testable — a gate that rejected
+    // everything would report 0/0 here and look identical to a run that never reached the callbacks.
+    ++counters.memoryCallbacks;
+    if (core.game == nullptr || !isDeviceAddress(address)) {
+      return;
+    }
+    const std::uint32_t instructions = segmentClock.commitThrough(lightrec_current_cycle_count(lightrec));
+    if (instructions == 0) {
+      return;
+    }
+    ++counters.deviceClockCommits;
+    counters.deviceClockCommitInstructions += instructions;
+    core.game->timing.advanceGuestInstructionTicks(instructions);
   }
 
   static const lightrec_mem_map_ops &memoryOps() {
@@ -448,7 +511,9 @@ struct LightrecExecutor::Impl {
     lucent::log(level,
                 "executor",
                 lucent::format("Lightrec fallback telemetry [{}]: executor_calls={} executed_blocks={} "
-                               "executed_instructions={} fallback_blocks={} fallback_instructions={} "
+                               "executed_instructions={} memory_callbacks={} device_clock_commits={} "
+                               "device_clock_commit_instructions={} fallback_blocks={} "
+                               "fallback_instructions={} "
                                "reasons{{compilation_failed={},self_modifying_code={},unsupported_block={},"
                                "load_delay_hazard={},unsafe_instruction_fetch={}}} refused_fallback_blocks={} "
                                "refused_reasons{{compilation_failed={},self_modifying_code={},unsupported_block={},"
@@ -458,6 +523,9 @@ struct LightrecExecutor::Impl {
                                counters.calls,
                                counters.executedBlocks,
                                counters.executedInstructions,
+                               counters.memoryCallbacks,
+                               counters.deviceClockCommits,
+                               counters.deviceClockCommitInstructions,
                                counters.fallback.calls,
                                counters.fallback.instructions,
                                counters.fallback.compilationFailed,
@@ -498,6 +566,7 @@ struct LightrecExecutor::Impl {
   FallbackPolicy lastExecutionFallbackPolicy = defaultFallbackPolicy();
   const std::uint64_t boundaryOwnerId = nextBoundaryOwnerId();
   ExecutorCounters counters;
+  SegmentClockLedger segmentClock;
   StoreObserverCallback storeCallback = nullptr;
   void *storeContext = nullptr;
   StoreObserverReport storeReport{};
@@ -573,6 +642,10 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     boundary.pc = 0;
     impl.copyCoreToLightrec();
     lightrec_reset_cycle_count(impl.state, 0);
+    // The ledger's baseline and Lightrec's counter are two views of one sequence: both are zeroed
+    // here, in the same breath, or the first device access of the next segment would measure its
+    // delta against the previous segment's total.
+    impl.segmentClock.beginSegment();
     const lightrec_execution_stats before = *lightrec_get_execution_stats(impl.state);
     // A segment ends at the host field clock's deadline as well as at the caller's budget: the clock
     // raises its request from instruction accounting, which only runs between segments, so a guest
@@ -595,7 +668,14 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       impl.storeReport.fallbackInstructions += after.fallback_instructions - before.fallback_instructions;
     }
     if (impl.core.game) {
-      accountExecutedInstructions(impl.core, executedInstructionCount(after) - executedInstructionCount(before));
+      // The segment's own accounting is still the EXACT instruction count, less whatever the
+      // device-access commits already put on the clock. So a consumer that only ever looks at the
+      // clock between segments — the CDC drive clock, the display fields, the host turn,
+      // `rootCounter2OriginTicks` — sees exactly the values it saw before this charge existed, and
+      // the only thing that changes is that a guest reading a device register mid-segment now sees
+      // progress instead of a frozen value.
+      accountExecutedInstructions(
+          impl.core, impl.segmentClock.uncommitted(executedInstructionCount(after) - executedInstructionCount(before)));
     }
 
     const std::uint32_t flags = lightrec_exit_flags(impl.state);
