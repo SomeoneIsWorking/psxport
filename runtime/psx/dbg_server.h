@@ -123,7 +123,8 @@ private:
   unsigned short mHeld = 0xFFFF; // active-low held mask (all released)
 
   // Handoff between the TCP server thread and the MAIN thread. mMtx guards mReqPending/mRespReady/
-  // mCmd/mRespBuf/mRespLen. See dbg_server.cpp for the timed-wait dance in dbg_submit.
+  // mCmd/mRespBuf/mRespLen/mReqGen/mRespGen. See dbg_server.cpp for the timed-wait dance in
+  // dbg_submit, and there for why the generation pair exists.
   bool mStarted = false;
   Core *mCtx = nullptr;
   pthread_mutex_t mMtx = PTHREAD_MUTEX_INITIALIZER;
@@ -133,5 +134,14 @@ private:
   int mRespReady = 0;                              // 1 once the main thread has produced a result
   char *mRespBuf = nullptr;                        // malloc'd result (main -> server); server frees after sending
   size_t mRespLen = 0;
+  // WHICH REQUEST a queued command and a produced result belong to. Without this pair an ABANDONED
+  // request (dbg_submit's timeout) is unrecoverable: the main thread finishes servicing it later and
+  // sets mRespReady for nobody, and the next submitter's guard loop then spins to its own timeout
+  // forever. Measured on a stuck run: the endpoint served exactly ONE command for the rest of the
+  // process and every later read spun to timeout, so the surface reported a timeout where a reader
+  // expected a value. Bumping the generation abandons the request AND invalidates the answer the
+  // in-flight service is about to publish, so the slot is usable again on the next command.
+  uint64_t mReqGen = 0;
+  uint64_t mRespGen = 0;
   friend class DbgServerInternals; // dbg_server.cpp accessor helper (see impl file)
 };

@@ -82,6 +82,15 @@ public:
   int in_irq = 0;             // re-entrancy guard: an ISR's own BIOS calls must not re-deliver
   int custom_exit_active = 0; // B0:0x17 may unwind only the scoped HookEntryInt dispatch
 
+  // CD-ROM ready-callback delivery census (cd_ready_delivery.cpp). Counted only when a completion was
+  // ACTUALLY owed, never per poll: the arm is reached at every guest function entry once the CD line
+  // is latched, so a per-attempt count would measure polling rather than work. `delivered +
+  // declined` is therefore the number of completions the controller handed this Core and the
+  // denominator both `cdirq` log lines carry, and a run where the channel is off can still be
+  // distinguished from a run where the arm never fired.
+  uint32_t cd_ready_delivered = 0;
+  uint32_t cd_ready_declined = 0;
+
   // Deliver one pending interrupt, if any, to the guest's registered chain. MUST only be called at a
   // point where guest state is call-coherent — a guest function boundary — never from inside a
   // native routine that is midway through mutating hardware state.

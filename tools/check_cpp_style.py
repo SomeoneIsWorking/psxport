@@ -47,7 +47,7 @@ EXCLUDED_COMPONENTS = {"build", "external", "generated", "scratch", "vendor"}
 # implementation through --root and declare their own legacy exceptions with --cap.
 PSXPORT_CAPS = {
     "runtime/psx/game_iface.h": 37,
-    "runtime/psx/gpu_native.cpp": 4030,
+    "runtime/psx/gpu_native.cpp": 3592,
     "runtime/psx/gpu_vk.cpp": 4202,
     "runtime/psx/gpu_vk_semi_selftest.cpp": 199,
     "runtime/psx/gpu_vk_semi_selftest.h": 12,
@@ -57,7 +57,7 @@ PSXPORT_CAPS = {
     "runtime/psx/hle.cpp": 748,
     "runtime/psx/pc_scheduler.cpp": 550,
     "runtime/psx/pc_scheduler.h": 148,
-    "runtime/psx/render_queue.cpp": 2178,
+    "runtime/psx/render_queue.cpp": 1819,
     "runtime/psx/synchronous_task_wait.cpp": 188,
     "runtime/psx/synchronous_task_wait.h": 24,
     "runtime/ui/render_path_control.cpp": 54,

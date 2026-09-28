@@ -816,9 +816,16 @@ static void voice_stop(Core *c) {
 // IRQ ever sets → "CD timeout" → "CdInit: Init failed". None of that HW state is read by our native
 // CD path (cd_loadfile_native / disc_find_file / the ov_cd_* HLE), so we skip the entire handshake
 // and just leave RAM in the state FUN_800898a0's SUCCESS path leaves it: the four CD-event callback
-// pointers installed (matching the proven-good path where the low-level reset returned ready). The
-// callbacks are dead in our model (no IRQ invokes them; every command completes inline), but we
-// install them so any code that inspects the table sees the same values as on real hardware.
+// pointers installed (matching the proven-good path where the low-level reset returned ready).
+//
+// WHETHER THOSE CALLBACKS ARE DEAD DEPENDS ON THE DECLARED DELIVERY OWNER, and this is the one place
+// the answer differs between the two. For a legacy `GameConfig` consumer they are dead: every command
+// completes inline, nothing raises a CD-ROM interrupt, and no IRQ invokes them. For a DIRECT runtime
+// that declares `GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt` they are NOT dead —
+// `cd_ready_delivery.cpp` is the framework's stand-in for the BIOS's own CD-ROM interrupt handler,
+// and it dispatches the registered ready-callback slot at the interrupt. They are installed either
+// way so any code that inspects the table sees the same values as on real hardware; what changed is
+// only whether something ever calls them.
 void Cd::hleInit() {
   Core *c = &game->core;
   // FUN_800898a0 success path (0x800898c4..0x800898fc): install the CD-event callback table.
@@ -866,9 +873,15 @@ void Cd::pumpStream(Core *c, int sectors) {
   const GuestCdStreamCallbackLayout *layout = runtime ? runtime->guestCdStreamCallbackLayout() : nullptr;
   if (!c->cfg && layout && layout->valid() &&
       layout->owner == GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt) {
-    // The controller, not the host pump, raises INT1. The guest libcd ISR must consume its response
-    // before invoking the ready callback; irqPoll delivers it at a safe boundary after this native
-    // call returns. The controller owns its own drive deadline, so host callback pacing is inapplicable.
+    // The controller, not the host pump, raises INT1, and the response must be consumed before the
+    // ready callback runs or CdReady observes a stale libcd result. That promise is now KEPT, by
+    // `Hle::irqPoll`: once the guest's registered interrupt elements have declined the CD bit,
+    // `cd_ready_delivery.cpp` — the framework's stand-in for the BIOS's own CD-ROM interrupt
+    // handler, which is ROM code this port does not have — acknowledges the controller and dispatches
+    // the CURRENT value of the registered slot. It is gated on this same declaration, so the two
+    // paths are exclusive rather than additive, and it defers on `in_irq`, so a chained sector
+    // cannot deliver twice. The controller owns its own drive deadline, so host callback pacing is
+    // inapplicable.
     game->timing.serviceCdcTickSource();
     return;
   }

@@ -226,12 +226,12 @@ struct RqPixelProbeState {
 // e.g. a stuck render walk re-submitting forever — is a real bug, not a drop-and-continue).
 #define RQ_MAX 65536
 
-// CONTEST — are two faces of ONE object a pair whose relative order the depth buffer cannot be
-// trusted with? Symmetric in A and B. Two distinct rules (same OT bucket + exactly coincident, or
-// differing keys with the farther-keyed face interpolating nearer somewhere both cover) — see the
-// definition in render_queue.cpp. Exposed so the test suite can assert resolveKeyOrderFaces against
-// a brute-force existence oracle built from this same predicate.
-bool rq_faces_in_contest(const RqItem &A, const RqItem &B);
+// The CONTEST — whether two faces of ONE object are a pair whose relative order the depth buffer cannot
+// be trusted with — is `psx::gpu::facesInContest` in face_contest.h. It is declared THERE, next to the
+// geometry and the two decisions, rather than here next to the queue that asks the question: a reader
+// auditing the rule should not have to open a 2,000-line file to find how a pair is decided, and the
+// rule is not queue state. tests/test_render_queue_keyorder.cpp asserts resolveKeyOrderFaces against a
+// brute-force existence oracle built from it.
 
 // True when the integer point lies inside or on a non-degenerate triangle. This is the shared
 // predicate used by pixel-targeted queue diagnostics; rejecting zero-area input is essential because

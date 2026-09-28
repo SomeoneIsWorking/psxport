@@ -77,6 +77,9 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host_turn.cpp
   ${PSXPORT_ROOT}/runtime/psx/threads.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_native.cpp
+  ${PSXPORT_ROOT}/runtime/psx/ordering_table.cpp # the guest DrawOTag chain: node header decoded by field name
+  ${PSXPORT_ROOT}/runtime/psx/gpu_native_raster.cpp # the software rasterizer: texel sample, blend, dither, triangle walk
+  ${PSXPORT_ROOT}/runtime/psx/face_contest.cpp      # the face-contest rule: can the depth buffer be trusted to order this pair
   ${PSXPORT_ROOT}/runtime/psx/gpu_native_scanout.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_primitive_dump.cpp # primitive-census CSV diagnostic owner
   ${PSXPORT_ROOT}/runtime/psx/image_writer.cpp      # one checked RGB24 capture-file boundary
@@ -110,6 +113,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/disc_provision.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd_position.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd_override.cpp
+  ${PSXPORT_ROOT}/runtime/psx/cd_ready_delivery.cpp
   ${PSXPORT_ROOT}/runtime/psx/stock_cd_work_area.cpp
   ${PSXPORT_ROOT}/runtime/psx/stock_cd_response.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd_drive_timing.cpp

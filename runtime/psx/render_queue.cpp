@@ -3,6 +3,7 @@
 #include "render_queue.h"
 #include "census_frame.h" // census_frame — the ONE frame number a producer row is stamped with
 #include "cfg.h"
+#include "face_contest.h" // the pair rule: can the depth buffer be trusted to order these two faces?
 #include "game.h"
 #include "gpu_vk.h"
 #include "mods.h"
@@ -1380,387 +1381,20 @@ Rq2dXform rq_2d_xform(int ww, int native_w, Rq2dSpace space, int layer, bool fla
 // ordinary mesh is left entirely on real per-vertex depth. This is what makes it a discriminator rather
 // than the reverted rank ramp, which re-ordered every face of every object by view-independent storage
 // order (measured net-negative: 95/6 in the barrel but 173/311 of unintended winner flips elsewhere).
-
-// The vertex position the RASTERIZER consumes: sub-pixel float XY when the producer supplied it
-// (drawWorldQuad's vertex smoothing), the rounded integer XY otherwise. Every geometric test below
-// must agree with the rasterizer on this or it is reasoning about a different polygon.
-static inline float rq_vx(const RqItem &it, int k) {
-  return it.has_xyf ? it.xsf[k] : (float)it.xs[k];
-}
-static inline float rq_vy(const RqItem &it, int k) {
-  return it.has_xyf ? it.ysf[k] : (float)it.ys[k];
-}
-
-// A real guest entity-node pointer always lies inside the 2 MB main-RAM window; the reserved
-// dbg_node sentinels (kTerrainDbgNode / kSceneTableDbgNode / kBackdropDbgNode, render_queue.h) sit
-// far above it, which is what lets the gather below take "is this a real object" as an address test.
-static constexpr uint32_t kGuestRamBase = 0x80000000u;
-static constexpr uint32_t kGuestRamEnd = 0x80200000u;
-
-// Interpolated ord of item `it` at screen point (x,y), using the same triangle split + barycentric the
-// rasterizer applies (tri 0 = verts 0,1,2; tri 1 = verts 1,2,3). Returns false when outside both tris.
-// TEMPORARY CENSUS (kanban #118) — how far does a pair actually get? The contest's cost is the 8x8
-// interior grid, and the grid only runs for pairs that pass BOTH cheap rejects. These four counters
-// say whether the expensive path is rare-and-worth-it or common-and-wasteful, which decides whether
-// the fix is a better filter or a different design.
-uint64_t g_contest_reject_bbox = 0, g_contest_reject_depth = 0, g_contest_reject_sat = 0, g_contest_grid = 0,
-         g_contest_grid_hit = 0;
-
-// BROADPHASE DENOMINATORS. Without these, "the pair tests dropped by 90%" and "the search silently
-// stopped looking" print the same number. `examined` counts every candidate the sweep actually looked
-// at, `skip_settled` those both of whose faces were already snapped (testing them could only re-set a
-// bit that is already set), and `reject_y` those the sweep rejected on the y axis before offering the
-// pair to the contest. examined = skip_settled + reject_y + (pairs offered to the contest).
-uint64_t g_bp_examined = 0, g_bp_skip_settled = 0, g_bp_reject_y = 0;
-
-// EVERYTHING IN THE BARYCENTRIC SETUP THAT DEPENDS ONLY ON THE FACE, lifted out of the per-sample
-// loop. The interior contest samples an 8x8 grid and asks each face for its interpolated ord at every
-// point, so the six vertex fetches and the determinant were being recomputed 64 times per face per
-// PAIR — and the host profile put rq_ord_at at 18.81% of the whole frame, the single largest entry.
-// The arithmetic below is character-for-character what the per-sample code did, including keeping the
-// DIVISION by `den` rather than multiplying by a reciprocal: this must stay bit-identical, because
-// the contest's answer is a comparison and a boundary case that rounds the other way flips a face's
-// snap decision. tests/test_render_queue_keyorder.cpp checks the rule against a brute-force oracle.
-struct RqTriSetup {
-  float x0, y0, x1, y1, x2, y2;
-  float den; // 0 means degenerate — the sampler skips this triangle, as the old code did
-  float d0, d1, d2;
-};
-struct RqFaceSetup {
-  int ntri = 0;
-  RqTriSetup tri[2];
-};
-
-static RqFaceSetup rq_face_setup(const RqItem &it) {
-  const int nv = it.nv ? it.nv : 4;
-  RqFaceSetup f;
-  if (nv < 3) {
-    return f;
-  }
-  f.ntri = (nv == 4 ? 2 : 1);
-  for (int t = 0; t < f.ntri; t++) {
-    const int i0 = t, i1 = t + 1, i2 = t + 2;
-    RqTriSetup &tri = f.tri[t];
-    tri.x0 = rq_vx(it, i0);
-    tri.y0 = rq_vy(it, i0);
-    tri.x1 = rq_vx(it, i1);
-    tri.y1 = rq_vy(it, i1);
-    tri.x2 = rq_vx(it, i2);
-    tri.y2 = rq_vy(it, i2);
-    tri.den = (tri.y1 - tri.y2) * (tri.x0 - tri.x2) + (tri.x2 - tri.x1) * (tri.y0 - tri.y2);
-    tri.d0 = it.depth[i0];
-    tri.d1 = it.depth[i1];
-    tri.d2 = it.depth[i2];
-  }
-  return f;
-}
-
-// WHY THERE IS NO SEPARATING-AXIS PRE-FILTER HERE, having tried one (2026-08-20). A 2D SAT over the
-// two faces' triangles is a correct way to skip the grid — the grid can only fire at a point admissible
-// to both faces — and it was implemented, verified to produce IDENTICAL snap decisions (109/262 faces,
-// 152,304 inversions, 0 of 524,288 pixels differing), and then REMOVED, because it is not worth it:
 //
-//     grid runs without it   2,374,502     with it   1,964,280      -17.3%
-//     wall clock             5.044 s                 4.962 s        -1.6%
-//
-// It pays ~150 float ops on every pair that reaches here to skip 64 samples on 17% of them. The census
-// says why the yield is low: pairs that get this far are genuinely OVERLAPPING faces of one object, so
-// separation is the uncommon case, not the common one.
-//
-// IT ALSO CARRIED A REAL BUG WORTH REMEMBERING. The first version separated on `<=`, treating faces
-// that touch exactly at an edge as disjoint. rq_ord_at_setup admits samples with barycentrics >= 0 —
-// points ON the edge — so touching faces DO share admissible points, and the filter silently dropped
-// inversions: 98 of 262 faces snapped instead of 109. The hermetic oracle test passed either way,
-// because it does not exercise edge-touching pairs. Only the real scene's snap count showed it.
-//
-// THE FIX THAT WOULD ACTUALLY WORK is not a better filter but a better test. Each triangle interpolates
-// ord LINEARLY in screen space, so (ord_far - ord_near) is a linear function over the region where both
-// are defined; its extreme over a convex overlap lies at a VERTEX of that overlap. That replaces 64
-// samples with a handful of evaluations AND removes the documented sub-sample sliver miss, because it
-// is exact rather than sampled. That is the next move on this code, not another pre-filter.
+// THE RULE ITSELF IS NOT HERE. It is `psx::gpu::facesInContest` (face_contest.h): the geometry, the two
+// decisions and their census. This function owns WHEN the question is asked — the gather, the grouping
+// by object, the witness search, and the snap — which is queue state and cannot be moved. What moved is
+// one rule out of a 2,178-line file, so "which pairs the depth buffer cannot be trusted with" is now
+// readable without reading the sweep that consumes it.
 
-// ORD IS AFFINE IN SCREEN SPACE, so the contest does not need sampling at all.
-//
-// A triangle interpolates ord with barycentrics that are themselves affine in (x,y), so
-// ord(x,y) = A*x + B*y + C over that triangle. Derived from rq_ord_at_setup's own expression:
-//     ord = d2 + l0*(d0-d2) + l1*(d1-d2),  l0,l1 affine  =>  A,B,C below.
-// The contest asks whether the far-keyed face is ever NEARER inside the region both faces cover.
-// diff = ord_far - ord_near is then affine too, the region is the intersection of two convex
-// triangles (convex), and an affine function's maximum over a convex polygon is attained at a
-// VERTEX. So evaluating diff at the intersection's vertices answers it exactly — no grid.
-struct RqOrdPlane {
-  float a, b, c;
-};
-static RqOrdPlane rq_ord_plane(const RqTriSetup &t) {
-  const float e0 = t.d0 - t.d2, e1 = t.d1 - t.d2;
-  RqOrdPlane p;
-  p.a = ((t.y1 - t.y2) * e0 + (t.y2 - t.y0) * e1) / t.den;
-  p.b = ((t.x2 - t.x1) * e0 + (t.x0 - t.x2) * e1) / t.den;
-  p.c = t.d2 - p.a * t.x2 - p.b * t.y2;
-  return p;
-}
-
-// Does the far triangle interpolate NEARER than the near one anywhere both cover? Exact, by clipping
-// one triangle against the other (Sutherland-Hodgman, convex) and evaluating the affine difference at
-// the surviving vertices. Winding is normalised from `den`'s sign so "inside" is consistent for either
-// orientation — a PSX quad's two triangles need not wind the same way.
-static bool rq_tri_pair_inverts(const RqTriSetup &nearT, const RqTriSetup &farT) {
-  float px[8], py[8];
-  int n = 3;
-  px[0] = nearT.x0;
-  py[0] = nearT.y0;
-  px[1] = nearT.x1;
-  py[1] = nearT.y1;
-  px[2] = nearT.x2;
-  py[2] = nearT.y2;
-
-  const float fx[3] = {farT.x0, farT.x1, farT.x2};
-  const float fy[3] = {farT.y0, farT.y1, farT.y2};
-  const float wind = farT.den >= 0.f ? 1.f : -1.f;
-  for (int e = 0; e < 3 && n; e++) {
-    const int e1 = (e + 1) % 3;
-    const float ex = fx[e1] - fx[e], ey = fy[e1] - fy[e];
-    float qx[8], qy[8];
-    int m = 0;
-    for (int i = 0; i < n; i++) {
-      const int j = (i + 1) % n;
-      // Signed area of (edge, point): >= 0 is inside for the normalised winding.
-      const float di = wind * (ex * (py[i] - fy[e]) - ey * (px[i] - fx[e]));
-      const float dj = wind * (ex * (py[j] - fy[e]) - ey * (px[j] - fx[e]));
-      if (di >= 0.f) {
-        qx[m] = px[i];
-        qy[m] = py[i];
-        m++;
-      }
-      if ((di >= 0.f) != (dj >= 0.f) && m < 8) {
-        const float t = di / (di - dj);
-        qx[m] = px[i] + t * (px[j] - px[i]);
-        qy[m] = py[i] + t * (py[j] - py[i]);
-        m++;
-      }
-    }
-    n = m;
-    for (int i = 0; i < n; i++) {
-      px[i] = qx[i];
-      py[i] = qy[i];
-    }
-  }
-  if (n < 3) {
-    return false; // interiors disjoint — nothing to contest
-  }
-  // THE SHARED REGION MUST HAVE AREA. Clipping admits points ON the boundary, so two mesh-adjacent
-  // faces meeting along an edge survive as a degenerate sliver — three or more vertices, zero area —
-  // and the affine difference is generally non-zero along that edge, which would report an inversion
-  // for every adjacent pair in a mesh. The sampled grid never did: a measure-zero region contains no
-  // sample point, and the file's own comment says adjacent faces must not hit. Measured when this was
-  // missing: 221 of 262 faces snapped instead of 109, and inversions found went 152,304 -> 385,622.
-  float area2 = 0.f;
-  for (int i = 0; i < n; i++) {
-    const int j = (i + 1) % n;
-    area2 += px[i] * py[j] - px[j] * py[i];
-  }
-  if (area2 < 0.f) {
-    area2 = -area2;
-  }
-  if (area2 <= 0.f) {
-    return false;
-  }
-  const RqOrdPlane pn = rq_ord_plane(nearT), pf = rq_ord_plane(farT);
-  const float da = pf.a - pn.a, db = pf.b - pn.b, dc = pf.c - pn.c;
-  for (int i = 0; i < n; i++) {
-    if (da * px[i] + db * py[i] + dc > 0.f) {
-      return true; // the far face interpolates nearer here
-    }
-  }
-  return false;
-}
-
-static bool rq_faces_invert(const RqFaceSetup &nearF, const RqFaceSetup &farF) {
-  for (int a = 0; a < nearF.ntri; a++) {
-    if (nearF.tri[a].den == 0.f) {
-      continue;
-    }
-    for (int b = 0; b < farF.ntri; b++) {
-      if (farF.tri[b].den == 0.f) {
-        continue;
-      }
-      if (rq_tri_pair_inverts(nearF.tri[a], farF.tri[b])) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-static bool rq_ord_at_setup(const RqFaceSetup &f, float x, float y, float *out) {
-  for (int t = 0; t < f.ntri; t++) {
-    const RqTriSetup &tri = f.tri[t];
-    if (tri.den == 0.f) {
-      continue;
-    }
-    const float l0 = ((tri.y1 - tri.y2) * (x - tri.x2) + (tri.x2 - tri.x1) * (y - tri.y2)) / tri.den;
-    const float l1 = ((tri.y2 - tri.y0) * (x - tri.x2) + (tri.x0 - tri.x2) * (y - tri.y2)) / tri.den;
-    const float l2 = 1.f - l0 - l1;
-    if (l0 < 0.f || l1 < 0.f || l2 < 0.f) {
-      continue; // outside this triangle (strict interior sampling)
-    }
-    *out = l0 * tri.d0 + l1 * tri.d1 + l2 * tri.d2;
-    return true;
-  }
-  return false;
-}
-
-// Do two faces occupy the IDENTICAL polygon — same vertex count, and every vertex of one matching a
-// vertex of the other in screen position AND depth? Exact comparison on the values the rasterizer
-// actually consumes (float XY when the producer supplied sub-pixel XY, integer XY otherwise), so this
-// is a structural test, not a proximity test: a decal filed on the face it decorates matches, ordinary
-// neighbouring or overlapping geometry does not. Vertex ORDER is deliberately ignored — a rotated
-// listing of the same corners is precisely the case that defeats the depth buffer (see the caller).
-static bool rq_faces_coincident(const RqItem &A, const RqItem &B) {
-  const int nv = A.nv ? A.nv : 4;
-  if ((B.nv ? B.nv : 4) != nv) {
-    return false;
-  }
-  if (A.has_xyf != B.has_xyf) {
-    return false;
-  }
-  bool used[4] = {false, false, false, false};
-  for (int i = 0; i < nv; i++) {
-    int m = -1;
-    for (int j = 0; j < nv && m < 0; j++) {
-      if (!used[j] && rq_vx(A, i) == rq_vx(B, j) && rq_vy(A, i) == rq_vy(B, j) && A.depth[i] == B.depth[j]) {
-        m = j;
-      }
-    }
-    if (m < 0) {
-      return false;
-    }
-    used[m] = true;
-  }
-  return true;
-}
-
-// The screen bbox + ord range of one face, as the cheap contest rejects consume them. `omin`/`omax`
-// are the face's near/far bounds in the renderer's ord convention (LARGER = NEARER).
-struct RqFaceExtent {
-  float x0, y0, x1, y1, omin, omax;
-};
-
-static RqFaceExtent rq_face_extent(const RqItem &it) {
-  const int nv = it.nv ? it.nv : 4;
-  RqFaceExtent e;
-  e.x0 = e.x1 = rq_vx(it, 0);
-  e.y0 = e.y1 = rq_vy(it, 0);
-  e.omin = e.omax = it.depth[0];
-  for (int k = 1; k < nv; k++) {
-    const float x = rq_vx(it, k), y = rq_vy(it, k);
-    if (x < e.x0) {
-      e.x0 = x;
-    }
-    if (x > e.x1) {
-      e.x1 = x;
-    }
-    if (y < e.y0) {
-      e.y0 = y;
-    }
-    if (y > e.y1) {
-      e.y1 = y;
-    }
-    if (it.depth[k] < e.omin) {
-      e.omin = it.depth[k];
-    }
-    if (it.depth[k] > e.omax) {
-      e.omax = it.depth[k];
-    }
-  }
-  return e;
-}
-
-// CONTEST — are these two faces of one object a pair the depth buffer cannot be trusted to order?
-// There are exactly TWO ways, and they are different rules with different evidence:
-//
-//   SAME KEY   — the game filed both in the SAME OT bucket, so the key expresses no order at all and
-//                real depth is normally the right answer. The one exception is a pair that is EXACTLY
-//                coincident (a decal quad filed on the wall quad it decorates: same corners, same
-//                depths) but listed with a ROTATED vertex order. The quad triangulation is fixed at
-//                (0,1,2)+(1,2,3), so a rotation splits the two faces on OPPOSITE diagonals; their
-//                interiors then interpolate differently and the earlier face wins the half where its
-//                diagonal runs nearer. Such a pair carries no depth information to preserve.
-//
-//   KEYS DIFFER — the game DECLARED an order (smaller OT index = nearer). They are in contest when
-//                the depth buffer would INVERT that declaration: at some point strictly inside both
-//                polygons, the farther-keyed face interpolates nearer.
-//
-// Both rules are symmetric in A and B, which is what lets the caller treat "is this face in contest
-// with anything" as an existence question and stop at the first witness.
-// The real body, taking PRECOMPUTED extents. An extent depends only on the face, but the contest is
-// asked about PAIRS, so recomputing it per call recomputes one face's extent once per partner it is
-// tested against. Measured on Tomba!2's native path at f1201: 14,772 pair tests over 262 keyed faces
-// = 29,544 extent computations of 262 distinct values, and rq_face_extent was 16.18% of the frame in
-// the host profile. The caller that has the whole group in hand computes each once; the public
-// two-argument form below keeps working for callers (and tests) that do not.
-static bool rq_faces_in_contest_ext(const RqItem &A,
-                                    const RqItem &B,
-                                    const RqFaceExtent &extA,
-                                    const RqFaceExtent &extB,
-                                    const RqFaceSetup &setA,
-                                    const RqFaceSetup &setB) {
-  if (A.sort_key == B.sort_key) { // SAME OT BUCKET (kanban #29 — hut wall decals)
-    return rq_faces_coincident(A, B);
-  }
-
-  // near = the face the game files NEARER (smaller OT index); far = the other.
-  const bool a_is_near = A.sort_key < B.sort_key;
-  const RqItem &near_face = a_is_near ? A : B;
-  const RqItem &far_face = a_is_near ? B : A;
-  const RqFaceExtent &near_ext = a_is_near ? extA : extB;
-  const RqFaceExtent &far_ext = a_is_near ? extB : extA;
-  const RqFaceSetup &near_set = a_is_near ? setA : setB;
-  const RqFaceSetup &far_set = a_is_near ? setB : setA;
-
-  // Cheap rejects. No screen overlap at all, or the far face can never out-depth the near one (ord:
-  // larger = nearer, so an inversion requires far.omax > near.omin).
-  const float ox0 = near_ext.x0 > far_ext.x0 ? near_ext.x0 : far_ext.x0;
-  const float ox1 = near_ext.x1 < far_ext.x1 ? near_ext.x1 : far_ext.x1;
-  const float oy0 = near_ext.y0 > far_ext.y0 ? near_ext.y0 : far_ext.y0;
-  const float oy1 = near_ext.y1 < far_ext.y1 ? near_ext.y1 : far_ext.y1;
-  if (ox0 >= ox1 || oy0 >= oy1) {
-    g_contest_reject_bbox++;
-    return false;
-  }
-  if (far_ext.omax <= near_ext.omin) {
-    g_contest_reject_depth++;
-    return false;
-  }
-  // Counted ONCE. This increment used to appear twice with no branch between (here and again just
-  // before rq_faces_invert), so every "REACHED GRID" figure this census ever printed was exactly 2x
-  // the truth — including the ones quoted on kanban #118.
-  g_contest_grid++;
-
-  // EXACT INTERIOR CONTEST. This was an 8x8 SAMPLED grid: 64 points over the bbox intersection, two
-  // barycentric interpolations each, returning true on the first inversion found. It cost 20.8% of a
-  // 3D frame in the host profile — the single largest entry — and it could MISS, because a sampled
-  // test only sees inversions wide enough to contain a sample point (the "sub-pixel slivers"
-  // documented as a known residual).
-  //
-  // Both problems have the same cause: sampling something that does not need to be sampled. ord is
-  // AFFINE per triangle, so the difference between the two faces is affine over the region they
-  // share, that region is convex, and an affine function's maximum over a convex polygon is at a
-  // VERTEX. Clip one triangle by the other and test the surviving vertices — exact, and a handful of
-  // evaluations instead of 128.
-  if (rq_faces_invert(near_set, far_set)) {
-    g_contest_grid_hit++;
-    return true;
-  }
-  return false;
-}
-
-// PUBLIC ENTRY POINT — computes the two extents and delegates. One implementation of the rule lives
-// above; this is the convenience form for anyone who does not already have the extents, including
-// tests/test_render_queue_keyorder.cpp, which checks the rule against a brute-force oracle.
-bool rq_faces_in_contest(const RqItem &A, const RqItem &B) {
-  return rq_faces_in_contest_ext(A, B, rq_face_extent(A), rq_face_extent(B), rq_face_setup(A), rq_face_setup(B));
-}
+namespace {
+// A real guest entity node always lies inside the 2 MB main-RAM window; the reserved dbg_node sentinels
+// (kTerrainDbgNode / kSceneTableDbgNode / kBackdropDbgNode, render_queue.h) sit far above it, which is
+// what lets the gather below take "is this a real object" as an address test.
+constexpr uint32_t kGuestRamBase = 0x80000000u;
+constexpr uint32_t kGuestRamEnd = 0x80200000u;
+} // namespace
 
 void RenderQueue::resolveKeyOrder(Core *core, const char *who) {
   // The MODE is read here and passed down, not read inside the rule: resolveKeyOrderFaces is
@@ -1903,12 +1537,12 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who, int face
   // EACH FACE'S EXTENT ONCE, not once per partner it is contested against. This is pure memoisation
   // — the same values in the same order — so the snap set is unchanged and the brute-force oracle in
   // tests/test_render_queue_keyorder.cpp still gates it.
-  std::vector<RqFaceExtent> extents(faces.size());
-  std::vector<RqFaceSetup> setups(faces.size());
+  std::vector<psx::gpu::FaceExtent> extents(faces.size());
+  std::vector<psx::gpu::FaceSetup> setups(faces.size());
   for (size_t i = 0; i < faces.size(); i++) {
     const RqItem &it = items[faces[i].idx];
-    extents[i] = rq_face_extent(it);
-    setups[i] = rq_face_setup(it);
+    extents[i] = psx::gpu::faceExtent(it);
+    setups[i] = psx::gpu::faceSetup(it);
   }
 
   // SWEEP AND PRUNE, not an all-pairs scan. MEASURED on the 1,100-frame field scene: the all-pairs
@@ -1930,6 +1564,13 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who, int face
   // that are set. tests/test_render_queue_keyorder.cpp gates the equivalence against a brute-force
   // oracle, and the REAL SCENE'S PER-FRAME SNAP COUNT is the gate for any change here.
   static thread_local std::vector<uint32_t> order; // scratch: group positions sorted by bbox x0
+  // The BROADPHASE denominators. These belong to the sweep below, not to the rule: they count what this
+  // function looked at, and they used to be process-global variables in this file, which meant a reader
+  // could not tell them from the rule's own counters. Local to the sweep, and printed with them.
+  //
+  // examined = skip-settled + y-reject + (the pairs offered to the rule). Stated because a broken
+  // identity here would make every "the sweep got faster" number unfalsifiable.
+  uint64_t bp_examined = 0, bp_skip_settled = 0, bp_reject_y = 0;
   for (size_t group_start = 0; group_start < faces.size();) {
     size_t group_end = group_start + 1;
     while (group_end < faces.size() && faces[group_end].node == faces[group_start].node) {
@@ -1951,17 +1592,17 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who, int face
         if (extents[b].x0 >= extents[a].x1) {
           break;
         }
-        g_bp_examined++;
+        bp_examined++;
         if (snap[a] && snap[b]) {
-          g_bp_skip_settled++;
+          bp_skip_settled++;
           continue;
         }
         if (extents[a].y0 >= extents[b].y1 || extents[b].y0 >= extents[a].y1) {
-          g_bp_reject_y++;
+          bp_reject_y++;
           continue;
         }
         keyOrderPairTests++;
-        if (rq_faces_in_contest_ext(
+        if (psx::gpu::facesInContest(
                 items[faces[a].idx], items[faces[b].idx], extents[a], extents[b], setups[a], setups[b])) {
           snap[a] = 1;
           snap[b] = 1;
@@ -2000,14 +1641,14 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame, const char *who, int face
                 faces.size(),
                 keyOrderPairTests,
                 n,
-                g_bp_examined,
-                g_bp_skip_settled,
-                g_bp_reject_y,
-                g_contest_reject_bbox,
-                g_contest_reject_depth,
-                g_contest_reject_sat,
-                g_contest_grid,
-                g_contest_grid_hit,
+                bp_examined,
+                bp_skip_settled,
+                bp_reject_y,
+                psx::gpu::contestCensus().rejectedByBounds,
+                psx::gpu::contestCensus().rejectedByDepth,
+                psx::gpu::contestCensus().rejectedBySeparation,
+                psx::gpu::contestCensus().reachedExactTest,
+                psx::gpu::contestCensus().foundInversion,
                 tied);
   if (!snapped_seqs.empty()) {
     lucent::Line detail;

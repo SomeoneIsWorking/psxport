@@ -142,6 +142,12 @@ public:
   static size_t &respLen() {
     return sInstance->mRespLen;
   }
+  static uint64_t &reqGen() {
+    return sInstance->mReqGen;
+  }
+  static uint64_t &respGen() {
+    return sInstance->mRespGen;
+  }
 };
 DbgServer *DbgServerInternals::sInstance = nullptr;
 
@@ -201,6 +207,8 @@ bool probeR16(Core &core, uint32_t address, uint16_t &out) {
 #define s_resp_ready (DbgServerInternals::respReady())
 #define s_resp_buf (DbgServerInternals::respBuf())
 #define s_resp_len (DbgServerInternals::respLen())
+#define s_req_gen (DbgServerInternals::reqGen())
+#define s_resp_gen (DbgServerInternals::respGen())
 
 // Per-command SBS core targeting. A leading "@a " / "@b " token (or "@A "/"@B ") swaps s_ctx to that
 // SBS core for the duration of ONE command, then restores the frame-loop's context. Lets one debug
@@ -816,6 +824,10 @@ void DbgServer::service(Core *c) {
   pthread_mutex_lock(&s_mtx);
   if (s_req_pending) {
     char cmd[512];
+    // The generation this command was submitted under, captured WITH the command text. If the
+    // submitter abandons it while `dbg_exec` runs, the generation is bumped and the result below is
+    // discarded instead of being published for whoever comes next.
+    const uint64_t gen = s_req_gen;
     memcpy(cmd, s_cmd, sizeof cmd);
     pthread_mutex_unlock(&s_mtx); // run the (possibly slow) dump outside the lock
     char *buf = NULL;
@@ -826,10 +838,15 @@ void DbgServer::service(Core *c) {
       fclose(out);
     }
     pthread_mutex_lock(&s_mtx);
-    s_resp_buf = buf;
-    s_resp_len = len;
     s_req_pending = 0;
-    s_resp_ready = 1;
+    if (gen != s_req_gen) {
+      free(buf); // abandoned: this is nobody's answer, and holding it would wedge the next command
+    } else {
+      s_resp_buf = buf;
+      s_resp_len = len;
+      s_resp_gen = gen;
+      s_resp_ready = 1;
+    }
     pthread_cond_broadcast(&s_done);
   }
   pthread_mutex_unlock(&s_mtx);
@@ -844,18 +861,35 @@ static char *dbg_submit(const char *line, size_t *out_len) {
   ts.tv_sec += 4;
   char *buf = NULL; // declared before any `goto timeout` so the jump doesn't cross its init (C++)
   pthread_mutex_lock(&s_mtx);
-  while (s_req_pending || s_resp_ready) {
+  // THE SLOT IS FREE when nothing is queued and no result is owed TO THIS GENERATION. The
+  // generation is what makes an abandoned request recoverable: the old test was
+  // `s_req_pending || s_resp_ready`, and a result published for an abandoned request left
+  // `s_resp_ready` set for good, so the NEXT command spun in this loop to its own timeout and the
+  // endpoint served one command per process for the rest of the run.
+  while (s_req_pending || (s_resp_ready && s_resp_gen == s_req_gen)) {
     if (pthread_cond_timedwait(&s_done, &s_mtx, &ts) == ETIMEDOUT) {
       pthread_mutex_unlock(&s_mtx);
       goto timeout;
     }
   }
+  if (s_resp_buf) { // a result for an ABANDONED generation: drop it, never hand it to this request
+    free(s_resp_buf);
+    s_resp_buf = nullptr;
+    s_resp_len = 0;
+  }
   snprintf(s_cmd, sizeof s_cmd, "%s", line);
+  ++s_req_gen; // this request's identity; only a result tagged with it is this request's answer
   s_req_pending = 1;
   s_resp_ready = 0;
-  while (!s_resp_ready) {
+  while (s_resp_gen != s_req_gen || !s_resp_ready) {
     if (pthread_cond_timedwait(&s_done, &s_mtx, &ts) == ETIMEDOUT) {
-      s_req_pending = 0; // abandon: main may service a stale slot harmlessly
+      // Abandon. Clearing s_req_pending alone was not enough — the main thread finishes servicing
+      // the slot and sets s_resp_ready for nobody — so bump the generation too, which makes that
+      // in-flight result stale and lets the next command take the slot.
+      s_req_pending = 0;
+      ++s_req_gen;
+      s_resp_ready = 0;
+      pthread_cond_broadcast(&s_done);
       pthread_mutex_unlock(&s_mtx);
       goto timeout;
     }

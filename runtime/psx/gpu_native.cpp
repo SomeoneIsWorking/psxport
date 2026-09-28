@@ -18,10 +18,12 @@
 #include "display_scanout.h"
 #include "field_rate.h"          // THE display field rate, in milli-hertz (one definition)
 #include "fs_util.h"             // host diagnostic-output directory creation
+#include "gp0_command.h"         // the guest's GP0 word, decoded by field name
 #include "gpu_native_internal.h" // shared VRAM/state/helpers (also used by gpu_debug.cpp)
 #include "gpu_primitive_dump.h"  // primitive-census CSV diagnostic owner
 #include "host_backtrace.h"
-#include "image_writer.h" // one checked RGB24 capture-file boundary
+#include "image_writer.h"   // one checked RGB24 capture-file boundary
+#include "ordering_table.h" // the guest DrawOTag chain: node header decoded by field name
 #include "r3000.h"
 #include <lucent/log.h>
 
@@ -37,6 +39,7 @@ void gpu_beetle_load_image(int x, int y, int w, int h, const uint16_t *pixels);
 #include "mods.h"             // g_mods.fps60 (was g_fps60_on)
 #include "render_substrate.h" // Render::mDbgRenderNode (was g_dbg_render_node)
 #include "scea_asset.h"       // baked SCEA license-screen texture+CLUT (PC-native boot splash)
+#include "vram_pixel.h"       // the VRAM halfword channel layout, in named pieces
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +49,24 @@ void gpu_beetle_load_image(int x, int y, int w, int h, const uint16_t *pixels);
 
 // g_fps60_on retired — read g_mods.fps60 (mods.h; #included above)
 // VRAM_W/VRAM_H and vram() now live in gpu_native_internal.h
+
+namespace {
+// The GP0 command FIFO's capacity, and the number of words held back from it. The capacity is the
+// hardware's own command-FIFO depth rounded up for the longest packet this port assembles; the
+// headroom is what a poly-line with no terminator can never consume, so a malformed guest stream is
+// refused before it can run off the end of the buffer rather than after.
+constexpr int kGp0FifoCapacity = 256; // GpuState::s_fifo / s_fifo_addr (gpu_native_internal.h)
+constexpr int kGp0FifoHeadroom = 6;   // the longest fixed command's words, plus slack
+// The most vertices one poly-line may contribute. This is the PORT's limit, not the guest's: the
+// hardware's poly-line length is not decoded, so a longer list is truncated here. Stated so a reader
+// does not mistake it for a hardware constant.
+constexpr int kMaxPolyLineVertices = 64;
+} // namespace
+
+// The guest address of a main-RAM offset, from the one owner that defines the mapping. Used wherever
+// this file prints an address the guest itself wrote, so a diagnostic names a location guest code can
+// go and read rather than a bare offset.
+using psx::gpu::guestAddressOf;
 
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
 int gpu_vk_enabled(void); // gpu_vk.c (declared early for the gp0 tee)
@@ -262,481 +283,6 @@ void GpuState::semi_dump(const char *kind, int blend, int r, int g, int b, int x
 void gpu_provat_log(Core *core, int qx, int qy); // present-time provenance through Lucent (gpu_debug.cpp)
 // (gpu_provat_enable is a method on GpuState — no free-function fwd decl needed here)
 
-static inline int clampi(int v, int lo, int hi) {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-static inline uint16_t to555(uint8_t r, uint8_t g, uint8_t b) {
-  return (uint16_t)((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10));
-}
-
-// ---- Semi-transparency (blend) ------------------------------------------------------
-// PSX blends a source pixel (foreground, F) over the existing VRAM pixel (background, B)
-// in 5-bit-per-channel space, using one of four modes selected by the texpage blend bits
-// (s_tp_blend, also reachable per-poly via the prim's texpage). The formulas (per channel):
-//   mode0: B/2 + F/2   mode1: B + F   mode2: B - F   mode3: B + F/4
-// All results saturate to [0,31]. blend555() takes already-5-bit dest (existing VRAM 555,
-// mask bit stripped) and 5-bit source channels, returns the blended 555 word.
-static inline int sat5(int v) {
-  return v < 0 ? 0 : v > 31 ? 31 : v;
-}
-static inline uint16_t blend555(uint16_t bg, int fr, int fg, int fb, int mode) {
-  int br = bg & 31, bgn = (bg >> 5) & 31, bb = (bg >> 10) & 31, rr, rg, rb;
-  switch (mode) {
-  case 0:
-    rr = (br + fr) >> 1;
-    rg = (bgn + fg) >> 1;
-    rb = (bb + fb) >> 1;
-    break;
-  case 1:
-    rr = sat5(br + fr);
-    rg = sat5(bgn + fg);
-    rb = sat5(bb + fb);
-    break;
-  case 2:
-    rr = sat5(br - fr);
-    rg = sat5(bgn - fg);
-    rb = sat5(bb - fb);
-    break;
-  default:
-    rr = sat5(br + (fr >> 2));
-    rg = sat5(bgn + (fg >> 2));
-    rb = sat5(bb + (fb >> 2));
-    break;
-  }
-  return (uint16_t)(rr | (rg << 5) | (rb << 10));
-}
-
-// The one explicit texture/CLUT sampler. The shipping rasterizer supplies its current state; queue
-// diagnostics supply the state captured on an RqItem, so both answers use identical wrap/index rules.
-GpuTextureSample GpuState::sample_tex_at(
-    int u, int v, int tp_x, int tp_y, int mode, int clut_x, int clut_y, int tw_mx, int tw_my, int tw_ox, int tw_oy) {
-  GpuTextureSample sample;
-  sample.u = (u & ~(tw_mx * 8)) | ((tw_ox & tw_mx) * 8);
-  sample.v = (v & ~(tw_my * 8)) | ((tw_oy & tw_my) * 8);
-  if (mode == 2) {
-    sample.source_word = *vram(tp_x + sample.u, tp_y + sample.v);
-    sample.texel = sample.source_word;
-    return sample;
-  }
-  if (mode == 1) {
-    sample.source_word = *vram(tp_x + (sample.u >> 1), tp_y + sample.v);
-    sample.palette_index = (sample.u & 1) ? (sample.source_word >> 8) : (sample.source_word & 0xFF);
-  } else {
-    sample.source_word = *vram(tp_x + (sample.u >> 2), tp_y + sample.v);
-    sample.palette_index = (sample.source_word >> ((sample.u & 3) * 4)) & 0xF;
-  }
-  sample.texel = *vram(clut_x + sample.palette_index, clut_y);
-  return sample;
-}
-
-// Sample through the current draw state. A zero texel is transparent on the PSX.
-uint16_t GpuState::sample_tex(int u, int v) {
-  return sample_tex_at(u, v, s_tp_x, s_tp_y, s_tp_mode, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy).texel;
-}
-
-// Write one pixel. If `semi` is set, blend the source (r,g,b) over the existing VRAM pixel
-// using the current texpage blend mode (s_tp_blend); otherwise overwrite. The mask bit is
-// always set on the written pixel (we don't model mask-test reads).
-void GpuState::put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int semi) {
-  if (x < s_da_x0 || x > s_da_x1 || y < s_da_y0 || y > s_da_y1) {
-    return;
-  }
-  const uint16_t before = *fb(x, y);
-  uint16_t out;
-  if (semi) {
-    out = blend555(before & 0x7FFF, r >> 3, g >> 3, b >> 3, s_tp_blend);
-  } else {
-    out = to555(r, g, b);
-  }
-  if (lucent::channel_on("provchain")) {
-    if (!s_provenance_chain_probe.configured) {
-      s_provenance_chain_probe.configured = true;
-      if (const char *setting = cfg_str("PSXPORT_PROVCHAIN")) {
-        sscanf(setting,
-               "%d,%d,%d",
-               &s_provenance_chain_probe.x,
-               &s_provenance_chain_probe.y,
-               &s_provenance_chain_probe.from_frame);
-      }
-    }
-    if (s_frame >= s_provenance_chain_probe.from_frame && x == s_provenance_chain_probe.x &&
-        y == s_provenance_chain_probe.y) {
-      const ProvMeta &meta = s_provmeta[s_prim_gid % PROVRING];
-      lucent::debug("provchain",
-                    "f{} ({},{}) gid={} node={:08X} op={:02X} semi={} blend={} rgb=({},{},{}) "
-                    "before={:04X} after={:04X}",
-                    s_frame,
-                    x,
-                    y,
-                    s_prim_gid,
-                    meta.node,
-                    meta.op,
-                    semi,
-                    s_tp_blend,
-                    r,
-                    g,
-                    b,
-                    before,
-                    out | 0x8000u);
-    }
-  }
-  *fb(x, y) = out | 0x8000;
-  if (s_prov_on > 0) {
-    s_prov[(y & 511) * VRAM_W + (x & 1023)] = s_prim_gid;
-  }
-}
-void GpuState::put_px(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
-  put_px_b(x, y, r, g, b, 0);
-}
-
-// PSX ordered 4x4 dither matrix (applied to 8-bit channels before 5-bit truncation, when
-// the texpage dither bit is set, on gouraud + texture-modulated pixels). We add the per-pixel
-// bias then clamp to [0,255] so the subsequent >>3 truncation effectively rounds.
-static const int s_dither4[4][4] = {
-    {-4, 0, -3, 1},
-    {2, -2, 3, -1},
-    {-3, 1, -4, 0},
-    {3, -1, 2, -2},
-};
-static inline uint8_t dith(int v, int x, int y) {
-  v += s_dither4[y & 3][x & 3];
-  return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
-}
-
-// ---- mednafen-exact triangle coverage (integer scanline edge-walk) ------------------
-// To match the oracle's rasterizer COVERAGE exactly (which pixels a triangle claims), we
-// replicate Beetle/mednafen's gpu_polygon.c edge-walk verbatim, rather than a half-space
-// test. mednafen walks scanlines computing a fixed-point left/right edge per row and fills
-// the span [x_start, x_bound) (left/top inclusive, right/bottom exclusive). A generic
-// top-left half-space rule gets the DIRECTION right but not the exact sub-pixel endpoint
-// rounding (MakePolyXFP/Step), so abutting prims still mis-claim a pixel here and there
-// (journal: text-banner residual — our coverage over-claimed one edge, under-claimed
-// another). Porting the exact integer math removes that variable entirely. These three
-// helpers are mednafen's fixed-point edge primitives (COORD_FBS world, 32-frac fixed point).
-static inline int64_t MakePolyXFP(int x) {
-  return ((int64_t)x << 32) + (((int64_t)1 << 32) - (1 << 11));
-}
-static inline int64_t MakePolyXFPStep(int dx, int dy) { // dy is always > 0 at our call sites
-  int64_t dx_ex = (int64_t)dx << 32;
-  if (dx_ex < 0) {
-    dx_ex -= dy - 1;
-  }
-  if (dx_ex > 0) {
-    dx_ex += dy - 1;
-  }
-  return dx_ex / dy;
-}
-static inline int GetPolyXFP_Int(int64_t xfp) {
-  return (int)(xfp >> 32);
-}
-
-// Shade + write ONE covered pixel of triangle (a,b,c) at integer screen (x,y). Coverage is
-// decided by the caller (tri()); this only does the per-pixel math, which stays barycentric
-// off the ORIGINAL (unsorted) a,b,c and the doubled signed area `aa` — already validated to
-// match Beetle's per-pixel output (modulation/UV-round/dither). `tex`/`shade`/`semi` as tri().
-void GpuState::tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int semi, int raw, long aa) {
-  long l0 = (long)((b.x - x) * (c.y - y) - (b.y - y) * (c.x - x));
-  long l1 = (long)((c.x - x) * (a.y - y) - (c.y - y) * (a.x - x));
-  long l2 = aa - l0 - l1;
-  uint8_t r, g, bl;
-  int px_semi = semi; // whether THIS pixel blends
-  int dithered = 0;   // PSX dithers gouraud + modulated-texture
-  int pt_u = 0, pt_v = 0;
-  uint16_t pt_t = 0;                         // PSXPORT_PIXTRACE capture
-  int pt_cr = a.r, pt_cg = a.g, pt_cb = a.b; // interpolated modulation color (set below)
-  if (tex) {
-    // Affine UV, ROUND-TO-NEAREST (not truncate): PSX/Beetle add a +0.5-texel bias before the
-    // integer truncation (gpu_polygon.c affine seed `+(1<<(COORD_FBS-1))`), i.e. sample the
-    // nearest texel. Truncating instead biases sampling half a texel toward the origin, picking a
-    // neighbouring texel at fractional coords (journal later-44 residual). Round in sign-
-    // normalized form since `aa` (doubled area) may be negative.
-    long su = l0 * a.u + l1 * b.u + l2 * c.u, sv = l0 * a.v + l1 * b.v + l2 * c.v, den = aa;
-    if (den < 0) {
-      su = -su;
-      sv = -sv;
-      den = -den;
-    }
-    int u = (int)((su + den / 2) / den);
-    int v = (int)((sv + den / 2) / den);
-    uint16_t t = sample_tex(u, v);
-    pt_u = u;
-    pt_v = v;
-    pt_t = t;
-    if (t == 0) {
-      return; // transparent texel — skip this pixel
-    }
-    // PSX: a textured pixel blends only when its bit15 is set AND the prim semi bit is set.
-    px_semi = semi && (t & 0x8000);
-    r = (t & 31) << 3;
-    g = ((t >> 5) & 31) << 3;
-    bl = ((t >> 10) & 31) << 3;
-    // RAW TEXTURE (PSX poly cmd bit0 = texture-blend-disable): output the texel verbatim — NO
-    // modulation by vertex color and NO dither. Beetle's TM0 template path does exactly this
-    // (journal: the op-2D banner-board residual — ours modulated raw texel 2E12 by the command
-    // color (168,72,31) → near-black, while Beetle left it raw (18,16,11)). Same bit0 gating
-    // the sprite path already honors (commit fb0c228); the polygon path was missing it.
-    if (!raw) {
-      // texture*color modulation (texel * vertexcolor / 128). PSX textured polygons modulate
-      // the texel by the vertex color, INTERPOLATED per pixel across the face (the command color
-      // for flat-shaded prims, where all vertices carry it). The modulation color must be the
-      // barycentric-interpolated (cr,cg,cb), NOT vertex A's color held flat — using v0 flat
-      // collapses a gouraud gradient (a soft shadow quad: dark center vertex, bright edges) into
-      // a uniform block (journal later 44: black-wedge shadow). PSX hardware SATURATES the
-      // product to 0xFF; doing it in uint8_t wraps mod 256, turning a bright grass texel red, so
-      // compute wide and clamp (the grass red-block bug, journal later 42).
-      // ROUNDED, not truncated — beetle seeds its colour DDA with a half-LSB bias exactly as it
-      // does for u/v above (gpu_polygon.c:945). Truncating here biased every modulated pixel
-      // LOW; see bary_round().
-      int cr = bary_round(l0, a.r, l1, b.r, l2, c.r, aa);
-      int cg = bary_round(l0, a.g, l1, b.g, l2, c.g, aa);
-      int cb = bary_round(l0, a.b, l1, b.b, l2, c.b, aa);
-      pt_cr = cr;
-      pt_cg = cg;
-      pt_cb = cb;
-      int rr = r * cr / 128, gg = g * cg / 128, bb = bl * cb / 128;
-      r = rr > 255 ? 255 : rr;
-      g = gg > 255 ? 255 : gg;
-      bl = bb > 255 ? 255 : bb;
-      dithered = 1;
-    } else {
-      pt_cr = pt_cg = pt_cb = 128;
-    } // raw: undithered texel, modulation color = neutral
-  } else if (shade) {
-    // Untextured gouraud: same rounding rule as the modulated path above.
-    r = (uint8_t)bary_round(l0, a.r, l1, b.r, l2, c.r, aa);
-    g = (uint8_t)bary_round(l0, a.g, l1, b.g, l2, c.g, aa);
-    bl = (uint8_t)bary_round(l0, a.b, l1, b.b, l2, c.b, aa);
-    dithered = 1;
-  } else {
-    r = a.r;
-    g = a.g;
-    bl = a.b;
-  }
-  if (s_tp_dither && dithered) {
-    r = dith(r, x, y);
-    g = dith(g, x, y);
-    bl = dith(bl, x, y);
-  }
-  // PSXPORT_PIXTRACE="vx,vy": dump every prim that writes this absolute VRAM pixel (post-offset),
-  // with its sampled texel + interpolated color + modulated output — for per-pixel-math diffing
-  // against Beetle's gpu_polygon.c (which carries the matching [pixtrace beetle] log).
-  {
-    static int tx = -2, ty;
-    if (tx == -2) {
-      const char *e = cfg_str("PSXPORT_PIXTRACE");
-      if (e) {
-        sscanf(e, "%d,%d", &tx, &ty);
-      } else {
-        tx = -1;
-      }
-    }
-    if (tx >= 0 && x == tx && y == ty) {
-      lucent::info("gpu_native",
-                   "[pixtrace ours] ({},{}) tex={} shade={} semi={} px_semi={} blend={} dith={} uv=({},{}) "
-                   "texel={:04X} out8=({},{},{}) out5=({},{},{}) vcol=({},{},{})",
-                   x,
-                   y,
-                   tex,
-                   shade,
-                   semi,
-                   px_semi,
-                   s_tp_blend,
-                   (s_tp_dither && dithered),
-                   pt_u,
-                   pt_v,
-                   pt_t,
-                   r,
-                   g,
-                   bl,
-                   r >> 3,
-                   g >> 3,
-                   bl >> 3,
-                   pt_cr,
-                   pt_cg,
-                   pt_cb);
-    }
-  }
-  // REDDBG: dark-red output anomaly probe (grass blocks). Log the prim's params once.
-  if (s_reddbg && tex && r >= 64 && g < 24 && bl < 24 && x >= s_da_x0 && x <= s_da_x1) {
-    static int n = 0;
-    if (n++ < 6) {
-      int uu = (int)((l0 * a.u + l1 * b.u + l2 * c.u) / aa);
-      int vv = (int)((l0 * a.v + l1 * b.v + l2 * c.v) / aa);
-      lucent::info("reddbg",
-                   "@({},{}) out=({},{},{}) tpmode={} clut=({},{}) tp=({},{}) uv=({},{})",
-                   x,
-                   y,
-                   r,
-                   g,
-                   bl,
-                   s_tp_mode,
-                   s_clut_x,
-                   s_clut_y,
-                   s_tp_x,
-                   s_tp_y,
-                   uu,
-                   vv);
-      lucent::Line ln;
-      ln.add("  palette[16]@({},{}):", s_clut_x, s_clut_y);
-      for (int k = 0; k < 16; k++) {
-        ln.add(" {:04X}", *vram(s_clut_x + k, s_clut_y));
-      }
-      ln.flush(lucent::Level::Info, "reddbg");
-      ln.add("  texrow@({},{}) words:", s_tp_x + (uu >> 2), s_tp_y + vv);
-      for (int k = 0; k < 8; k++) {
-        ln.add(" {:04X}", *vram(s_tp_x + (uu >> 2) + k, s_tp_y + vv));
-      }
-      ln.flush(lucent::Level::Info, "reddbg");
-    }
-  }
-  put_px_b(x, y, r, g, bl, px_semi);
-}
-
-// Rasterize a gouraud/textured triangle. `tex` selects textured sampling, `semi` requests
-// semi-transparency. Coverage = mednafen's exact integer edge-walk (so it matches the oracle
-// pixel-for-pixel); per-pixel shading = tri_px (barycentric off the original a,b,c).
-void GpuState::tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw) {
-  a.x += s_off_x;
-  a.y += s_off_y;
-  b.x += s_off_x;
-  b.y += s_off_y;
-  c.x += s_off_x;
-  c.y += s_off_y;
-  long aa = (long)((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
-  if (aa == 0) {
-    return; // degenerate (zero area)
-  }
-
-  // --- Exact port of mednafen's DEFINE_DrawTriangle coverage (gpu_polygon.c). Operates on a
-  // y-sorted copy of the vertices; shading (tri_px) still uses the original a,b,c order. ---
-  int vx[3] = {a.x, b.x, c.x}, vy[3] = {a.y, b.y, c.y};
-  unsigned cvtemp; // "core vertex" select (rasterisation order)
-  if (vx[1] <= vx[0]) {
-    cvtemp = (vx[2] <= vx[1]) ? (1u << 2) : (1u << 1);
-  } else if (vx[2] < vx[0]) {
-    cvtemp = (1u << 2);
-  } else {
-    cvtemp = (1u << 0);
-  }
-#define VSWAP(i, j)                                                                                                    \
-  do {                                                                                                                 \
-    int t;                                                                                                             \
-    t = vx[i];                                                                                                         \
-    vx[i] = vx[j];                                                                                                     \
-    vx[j] = t;                                                                                                         \
-    t = vy[i];                                                                                                         \
-    vy[i] = vy[j];                                                                                                     \
-    vy[j] = t;                                                                                                         \
-  } while (0)
-  if (vy[2] < vy[1]) {
-    VSWAP(2, 1);
-    cvtemp = ((cvtemp >> 1) & 0x2) | ((cvtemp << 1) & 0x4) | (cvtemp & 0x1);
-  }
-  if (vy[1] < vy[0]) {
-    VSWAP(1, 0);
-    cvtemp = ((cvtemp >> 1) & 0x1) | ((cvtemp << 1) & 0x2) | (cvtemp & 0x4);
-  }
-  if (vy[2] < vy[1]) {
-    VSWAP(2, 1);
-    cvtemp = ((cvtemp >> 1) & 0x2) | ((cvtemp << 1) & 0x4) | (cvtemp & 0x1);
-  }
-#undef VSWAP
-  unsigned core_vertex = cvtemp >> 1;
-  if (vy[0] == vy[2]) {
-    return; // 0-height after sort
-  }
-
-  int64_t base_coord = MakePolyXFP(vx[0]);
-  int64_t base_step = MakePolyXFPStep(vx[2] - vx[0], vy[2] - vy[0]);
-  int64_t bound_coord_us, bound_coord_ls;
-  int right_facing;
-  if (vy[1] == vy[0]) {
-    bound_coord_us = 0;
-    right_facing = (vx[1] > vx[0]);
-  } else {
-    bound_coord_us = MakePolyXFPStep(vx[1] - vx[0], vy[1] - vy[0]);
-    right_facing = (bound_coord_us > base_step);
-  }
-  bound_coord_ls = (vy[2] == vy[1]) ? 0 : MakePolyXFPStep(vx[2] - vx[1], vy[2] - vy[1]);
-
-  unsigned vo = core_vertex ? 1 : 0;
-  unsigned vp = (core_vertex == 2) ? 3 : 0;
-  struct {
-    int64_t x_coord[2], x_step[2];
-    int y_coord, y_bound, dec_mode;
-  } tp[2];
-  {
-    int k = vo;
-    tp[k].y_coord = vy[0 ^ vo];
-    tp[k].y_bound = vy[1 ^ vo];
-    tp[k].x_coord[right_facing] = MakePolyXFP(vx[0 ^ vo]);
-    tp[k].x_step[right_facing] = bound_coord_us;
-    tp[k].x_coord[!right_facing] = base_coord + (int64_t)(vy[vo] - vy[0]) * base_step;
-    tp[k].x_step[!right_facing] = base_step;
-    tp[k].dec_mode = (vo != 0);
-  }
-  {
-    int k = vo ^ 1;
-    tp[k].y_coord = vy[1 ^ vp];
-    tp[k].y_bound = vy[2 ^ vp];
-    tp[k].x_coord[right_facing] = MakePolyXFP(vx[1 ^ vp]);
-    tp[k].x_step[right_facing] = bound_coord_ls;
-    tp[k].x_coord[!right_facing] = base_coord + (int64_t)(vy[1 ^ vp] - vy[0]) * base_step;
-    tp[k].x_step[!right_facing] = base_step;
-    tp[k].dec_mode = (vp != 0);
-  }
-
-  for (int i = 0; i < 2; i++) {
-    int yi = tp[i].y_coord, yb = tp[i].y_bound;
-    int64_t lc = tp[i].x_coord[0], ls = tp[i].x_step[0];
-    int64_t rc = tp[i].x_coord[1], rs = tp[i].x_step[1];
-    if (tp[i].dec_mode) {
-      while (yi > yb) {
-        yi--;
-        lc -= ls;
-        rc -= rs;
-        if (yi < s_da_y0) {
-          break;
-        }
-        if (yi > s_da_y1) {
-          continue;
-        }
-        int xs = GetPolyXFP_Int(lc), xb = GetPolyXFP_Int(rc);
-        if (xs < s_da_x0) {
-          xs = s_da_x0;
-        }
-        if (xb > s_da_x1 + 1) {
-          xb = s_da_x1 + 1;
-        }
-        for (int x = xs; x < xb; x++) {
-          tri_px(a, b, c, x, yi, tex, shade, semi, raw, aa);
-        }
-      }
-    } else {
-      while (yi < yb) {
-        if (yi > s_da_y1) {
-          break;
-        }
-        if (yi >= s_da_y0) {
-          int xs = GetPolyXFP_Int(lc), xb = GetPolyXFP_Int(rc);
-          if (xs < s_da_x0) {
-            xs = s_da_x0;
-          }
-          if (xb > s_da_x1 + 1) {
-            xb = s_da_x1 + 1;
-          }
-          for (int x = xs; x < xb; x++) {
-            tri_px(a, b, c, x, yi, tex, shade, semi, raw, aa);
-          }
-        }
-        yi++;
-        lc += ls;
-        rc += rs;
-      }
-    }
-  }
-}
-
 // ---- GP0 command FIFO ---------------------------------------------------------------
 // VRAM transfer state (GP0 0xA0 CPU->VRAM)
 
@@ -808,25 +354,6 @@ void GpuState::gpu_native_load_image(Core *core, int x, int y, int w, int h, uin
                  core->mem_r16(src));
   }
   lucent::debug("upload", "f{} NATIVE dest=({},{}) {}x{} src=0x{:08X}", s_frame, x, y, w, h, src);
-}
-
-// GP0 command-word color packs as 0x00BBGGRR — R in the low byte, B in the high byte.
-static inline uint8_t cmd_r(uint32_t c) {
-  return c & 0xFF;
-}
-static inline uint8_t cmd_g(uint32_t c) {
-  return (c >> 8) & 0xFF;
-}
-static inline uint8_t cmd_b(uint32_t c) {
-  return (c >> 16) & 0xFF;
-}
-static inline int cx(uint32_t w) {
-  int v = w & 0x7FF;
-  return v >= 0x400 ? v - 0x800 : v;
-}
-static inline int cy(uint32_t w) {
-  int v = (w >> 16) & 0x7FF;
-  return v >= 0x400 ? v - 0x800 : v;
 }
 
 void GpuState::set_texpage(uint16_t tp, TexPageFrom from) {
@@ -1137,48 +664,55 @@ void GpuState::gp0_exec(Core *core) {
   // discharged (a guest prim has no native producer) and which invited the one wrong fix: opening a
   // ProducerScope on a guest function. Host-only; writes no guest memory.
   GuestGp0Scope guestGp0(&core->rsub);
-  uint32_t c = s_fifo[0];
-  uint8_t op = c >> 24;
+  const uint32_t c = s_fifo[0];
+  const psx::gpu::Gp0Command command(c);
+  const uint8_t op = command.opcodeByte();
   // The owner tag was captured when this packet was written, while the guest producer's call
   // frame still existed.  DMA/OT execution happens after that call returned, so no current-stack
   // lookup could identify it now.  A miss deliberately stays visible: incomplete provenance must
   // never suppress a plausible-but-unrelated packet.
   const bool suppressDraw = core->rsub.guestPacketFilter.suppressesPacket(core->rsub.otAttr, s_fifo_addr[0]);
-  if (op >= 0x20 && op <= 0x3F) { // polygon
-    int gouraud = op & 0x10, quad = op & 0x08, textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
-    int raw = textured && (op & 0x01); // bit0 = texture-blend-disable (raw texel, no modulation)
-    int nv = quad ? 4 : 3;
+  if (command.isPolygon()) {
+    const psx::gpu::Gp0PrimitiveFlags flags = command.flags();
+    const int gouraud = flags.gouraud ? 1 : 0;
+    const int quad = flags.quadOrPolyLine ? 1 : 0;
+    // NOT const: the PSXPORT_PAINTFG diagnostic below forces a 2D-FG poly to untextured, and a
+    // const would make that override a compile error instead of the deliberate it is.
+    int textured = flags.textured ? 1 : 0;
+    const int semi = flags.semiTransparent ? 1 : 0;
+    // bit0 = texture-blend-disable (raw texel, no modulation). A FLAT polygon has no texel to disable,
+    // so the flag only means anything when there is a texture to leave alone.
+    const int raw = (textured && flags.rawTexel) ? 1 : 0;
+    const int nv = command.polygonVertexCount();
     Vtx v[4];
     uint32_t vaddr[4];
     int idx = 1;
+    const psx::gpu::Gp0Colour commandColour = command.colour();
     for (int i = 0; i < nv; i++) {
-      uint8_t cr, cg, cb;
-      if (gouraud) {
-        uint32_t col = (i == 0) ? c : s_fifo[idx++];
-        cr = cmd_r(col);
-        cg = cmd_g(col);
-        cb = cmd_b(col);
-      } else {
-        cr = cmd_r(c);
-        cg = cmd_g(c);
-        cb = cmd_b(c);
-      }
+      // A gouraud polygon's FIRST vertex colour is the command word's own colour; every later vertex
+      // carries a colour word of its own, which is why this is the one place `idx` moves for colour.
+      const psx::gpu::Gp0Colour vertexColour =
+          gouraud ? psx::gpu::Gp0Command(i == 0 ? c : s_fifo[idx++]).colour() : commandColour;
       vaddr[i] = s_fifo_addr[idx]; // guest addr of this vertex's XY word (Phase-1 attach)
-      uint32_t xy = s_fifo[idx++];
-      v[i].x = cx(xy);
-      v[i].y = cy(xy);
-      v[i].r = cr;
-      v[i].g = cg;
-      v[i].b = cb;
+      const psx::gpu::Gp0VertexPos pos = psx::gpu::Gp0Command(s_fifo[idx++]).vertexPos();
+      v[i].x = pos.x;
+      v[i].y = pos.y;
+      v[i].r = vertexColour.red;
+      v[i].g = vertexColour.green;
+      v[i].b = vertexColour.blue;
       if (textured) {
-        uint32_t uv = s_fifo[idx++];
-        v[i].u = uv & 0xFF;
-        v[i].v = (uv >> 8) & 0xFF;
+        const psx::gpu::Gp0TextureCoord tex = psx::gpu::Gp0Command(s_fifo[idx++]).textureCoord();
+        v[i].u = tex.u;
+        v[i].v = tex.v;
+        // The high halfword means DIFFERENT things at the two ends of the vertex list: vertex 0's is
+        // the CLUT this prim samples, vertex 1's is the texpage. Every other vertex repeats vertex 1's
+        // texpage in the same slot. Both binds are side effects of DECODING the packet, which is why
+        // they sit inside the loop and not in a later "apply state" pass.
         if (i == 0) {
-          set_clut((uv >> 16) & 0xFFFF);
+          set_clut(tex.selector);
         }
         if (i == 1) {
-          set_texpage((uv >> 16) & 0xFFFF, TexPageFrom::Primitive);
+          set_texpage(tex.selector, TexPageFrom::Primitive);
         }
       }
     }
@@ -1709,6 +1243,10 @@ void GpuState::gp0_exec(Core *core) {
                      "f{} stage={:08X} node=0x{:08X} op={:02X} nv={} gou={} semi={} clut=({},{}) tp=({},{}) blend={} "
                      "mode={} V[({},{})uv({},{}) ({},{})uv({},{}) ({},{})uv({},{}){}] off=({},{})",
                      s_frame,
+                     // The engine's task-0 entry latch. A TITLE global: its field, its struct, and what a
+                     // zero means are all unattributed. Named here so the reader knows the word is a
+                     // guest global rather than a GPU register. See
+                     // docs/issues/0130-title-globals-in-the-framework.md.
                      core->mem_r32(0x801fe00c),
                      s_cur_node,
                      op,
@@ -1781,26 +1319,35 @@ void GpuState::gp0_exec(Core *core) {
     }
     s_prims++;
     censusGuestPrim(core);
-  } else if (op >= 0x60 && op <= 0x7F) { // rectangle / sprite
-    int textured = op & 0x04, semi = (op & 0x02) ? 1 : 0, size = (op >> 3) & 3;
-    uint8_t cr = cmd_r(c), cg = cmd_g(c), cb = cmd_b(c);
+  } else if (command.isRectangleOrSprite()) {
+    const psx::gpu::Gp0PrimitiveFlags flags = command.flags();
+    const int textured = flags.textured ? 1 : 0;
+    const int semi = flags.semiTransparent ? 1 : 0;
+    const int size = command.rectangleSizeCode();
+    const psx::gpu::Gp0Colour colour = command.colour();
+    const uint8_t cr = colour.red, cg = colour.green, cb = colour.blue;
     int idx = 1;
-    uint32_t xy = s_fifo[idx++];
-    int x = cx(xy), y = cy(xy);
+    const psx::gpu::Gp0VertexPos topLeft = psx::gpu::Gp0Command(s_fifo[idx++]).vertexPos();
+    const int x = topLeft.x, y = topLeft.y;
     int u0 = 0, v0 = 0;
     if (textured) {
-      uint32_t uv = s_fifo[idx++];
-      u0 = uv & 0xFF;
-      v0 = (uv >> 8) & 0xFF;
-      set_clut((uv >> 16) & 0xFFFF);
+      // A rectangle's texture-coordinate word carries the CLUT in its high halfword. There is no
+      // per-vertex texpage on a rectangle: the texpage in force when the command is decoded is the one
+      // it samples, which is the whole reason an E1 state node has to precede it in the OT.
+      const psx::gpu::Gp0TextureCoord tex = psx::gpu::Gp0Command(s_fifo[idx++]).textureCoord();
+      u0 = tex.u;
+      v0 = tex.v;
+      set_clut(tex.selector);
     }
     int w, h;
     if (size == 0) {
-      uint32_t wh = s_fifo[idx++];
+      // Variable size: the width/height word. The width is 10 bits and the height 9, and NEITHER is
+      // rounded up to anything — a rectangle is exactly the size the guest asked for.
+      const uint32_t wh = s_fifo[idx++];
       w = wh & 0x3FF;
       h = (wh >> 16) & 0x1FF;
     } else {
-      w = h = (size == 1) ? 1 : (size == 2) ? 8 : 16;
+      w = h = command.rectangleFixedSize();
     }
     // PSXPORT_POLYDUMP (+POLYAT): also log sprites/rects, so the garbage-block source can be a sprite.
     {
@@ -2129,11 +1676,14 @@ void GpuState::gp0_exec(Core *core) {
     }
     s_prims++;
     censusGuestPrim(core);
-  } else if (op == 0x02) { // fill rectangle (in VRAM, ignores clip/offset)
-    uint8_t cr = cmd_r(c), cg = cmd_g(c), cb = cmd_b(c);
-    uint32_t xy = s_fifo[1], wh = s_fifo[2];
-    int x = xy & 0x3F0, y = (xy >> 16) & 0x1FF, w = ((wh & 0x3FF) + 0xF) & ~0xF, h = (wh >> 16) & 0x1FF;
-    uint16_t col = to555(cr, cg, cb);
+  } else if (command.opcode() == psx::gpu::Gp0Opcode::FillRect) {
+    // A fill rectangle, written straight into VRAM. It ignores the draw area and the draw offset by
+    // hardware design — which is why it is the one GP0 command whose pixels the clip cannot stop.
+    const psx::gpu::Gp0Colour fillColour = command.colour();
+    const uint8_t cr = fillColour.red, cg = fillColour.green, cb = fillColour.blue;
+    const psx::gpu::Gp0VramRect fill = psx::gpu::Gp0Command::fillRectRegion(s_fifo[1], s_fifo[2]);
+    const int x = fill.x, y = fill.y, w = fill.width, h = fill.height;
+    const uint16_t col = psx::gpu::toVram555(cr, cg, cb);
     // A FILL IS A VRAM WRITER, so the atlas guard has to see it. vram_xfer.cpp states that "every
     // VRAM-writing transfer calls this" — that was untrue here, and the gap sat exactly where an
     // atlas clobber is most likely: a full-screen fill is what a pause/menu/blackout does. A clobber
@@ -2255,37 +1805,46 @@ void GpuState::gp0_exec(Core *core) {
     if (vk_path()) {
       gpu_vk_dirty(core, x, y, w, h); // mirror fill to VK
     }
-  } else if (op >= 0x40 && op <= 0x5F) { // line / poly-line (flat or gouraud)
-    int semi = (op & 0x02) ? 1 : 0, gouraud = (op & 0x10) ? 1 : 0;
-    // Collect the vertex list from s_fifo (cmd carries v0's colour). Single lines have 2 verts;
-    // poly-lines have N (gouraud: cmd,xy0,(c,xy)*; mono: cmd,xy0,xy*). Then draw each segment.
-    uint8_t r0 = cmd_r(c), g0 = cmd_g(c), b0 = cmd_b(c);
-    int vx[64], vy[64];
-    uint8_t vr[64], vg[64], vb[64];
-    int nv = 0, i = 1;
-    vx[0] = cx(s_fifo[i]);
-    vy[0] = cy(s_fifo[i]);
+  } else if (command.isLineOrPolyLine()) {
+    const psx::gpu::Gp0PrimitiveFlags lineFlags = command.flags();
+    const int semi = lineFlags.semiTransparent ? 1 : 0;
+    const int gouraud = lineFlags.gouraud ? 1 : 0;
+    // Collect the vertex list from s_fifo. A line is a fixed two-vertex strip; a POLY-LINE is N
+    // vertices with no count, and the packet's word count is only the minimum before its terminator can
+    // appear — so the loop below runs to whatever s_fcount actually holds.
+    //
+    // The two layouts differ by ONE interleaved word: gouraud carries (colour, position) per vertex,
+    // mono carries position only, and the command word supplies the FIRST vertex's colour either way.
+    // A poly-line can therefore hold up to 64 vertices, and the cap is this file's, not the guest's.
+    const psx::gpu::Gp0Colour firstColour = command.colour();
+    const uint8_t r0 = firstColour.red, g0 = firstColour.green, b0 = firstColour.blue;
+    int vx[kMaxPolyLineVertices], vy[kMaxPolyLineVertices];
+    uint8_t vr[kMaxPolyLineVertices], vg[kMaxPolyLineVertices], vb[kMaxPolyLineVertices];
+    const psx::gpu::Gp0VertexPos first = psx::gpu::Gp0Command(s_fifo[1]).vertexPos();
+    vx[0] = first.x;
+    vy[0] = first.y;
     vr[0] = r0;
     vg[0] = g0;
     vb[0] = b0;
-    nv = 1;
-    i++;
-    while (i < s_fcount && nv < 64) {
+    int nv = 1;
+    int i = 2; // past the command word and vertex 0's position word
+    while (i < s_fcount && nv < kMaxPolyLineVertices) {
       uint8_t r = r0, g = g0, b = b0;
       if (gouraud) {
         if (i >= s_fcount) {
           break;
         }
-        uint32_t col = s_fifo[i++];
-        r = cmd_r(col);
-        g = cmd_g(col);
-        b = cmd_b(col);
+        const psx::gpu::Gp0Colour col = psx::gpu::Gp0Command(s_fifo[i++]).colour();
+        r = col.red;
+        g = col.green;
+        b = col.blue;
       }
       if (i >= s_fcount) {
         break;
       }
-      vx[nv] = cx(s_fifo[i]);
-      vy[nv] = cy(s_fifo[i]);
+      const psx::gpu::Gp0VertexPos pos = psx::gpu::Gp0Command(s_fifo[i]).vertexPos();
+      vx[nv] = pos.x;
+      vy[nv] = pos.y;
       vr[nv] = r;
       vg[nv] = g;
       vb[nv] = b;
@@ -2451,42 +2010,6 @@ void gp0raw_close_if_done(int frame) {
   s_gp0raw_frame = -1;
 }
 
-// Words needed to complete the packet beginning with command word `c`.
-static int gp0_len(uint32_t c) {
-  uint8_t op = c >> 24;
-  if (op >= 0x20 && op <= 0x3F) {
-    int n = 1, nv = (op & 8) ? 4 : 3;
-    n += nv * (1 + ((op & 4) ? 1 : 0)); // xy (+uv) per vertex
-    if (op & 0x10) {
-      n += nv - 1; // extra colors for gouraud (first is cmd)
-    }
-    return n;
-  }
-  if (op >= 0x60 && op <= 0x7F) {
-    int n = 2;
-    if (op & 4) {
-      n++;
-    }
-    if (((op >> 3) & 3) == 0) {
-      n++;
-    }
-    return n;
-  }
-  if (op >= 0x40 && op <= 0x5F) {
-    return (op & 0x10) ? 4 : 3; // (poly-line term not modeled)
-  }
-  if (op == 0x02) {
-    return 3; // fill
-  }
-  if (op == 0x80) {
-    return 4; // VRAM->VRAM copy: cmd + src + dst + size
-  }
-  if (op == 0xA0 || op == 0xC0) {
-    return 3; // CPU<->VRAM xfer headers (pixels stream after)
-  }
-  return 1; // env / nop / single-word
-}
-
 // One word into the GP0 port (direct write or DMA).
 void GpuState::gpu_gp0(Core *core, uint32_t w) {
   s_gp0_words++;
@@ -2518,29 +2041,41 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
     return;
   }
   if (s_fcount == 0) {
-    uint8_t op = w >> 24;
-    switch (op) { // single-word env / state commands
-    case 0x00:
+    // A word arriving on an EMPTY FIFO starts a packet, so this is where the command is recognised and
+    // the two one-word classes are handled: the draw environment (which changes state a later primitive
+    // reads) and the commands that are accepted and discarded. Everything else falls through to the
+    // FIFO and is executed once the packet is complete.
+    const psx::gpu::Gp0Command incoming(w);
+    const uint8_t op = incoming.opcodeByte();
+    switch (static_cast<psx::gpu::Gp0Opcode>(op)) { // single-word env / state commands
+    case psx::gpu::Gp0Opcode::Nop:
       return; // nop
-    case 0x01:
+    case psx::gpu::Gp0Opcode::ClearCache:
       return; // clear cache
-    case 0xE1:
-      set_texpage(w & 0xFFFF, TexPageFrom::DrawMode);
+    case psx::gpu::Gp0Opcode::SetDrawMode:
+      // The ONLY command permitted to change the dither enable: a primitive's own embedded texpage word
+      // carries page / colour-mode / blend / tex-disable and nothing else. See TexPageFrom.
+      set_texpage(incoming.lowHalfWord(), TexPageFrom::DrawMode);
       return;
-    case 0xE2:
-      s_tw_mx = w & 31;
-      s_tw_my = (w >> 5) & 31;
-      s_tw_ox = (w >> 10) & 31;
-      s_tw_oy = (w >> 15) & 31;
+    case psx::gpu::Gp0Opcode::SetTextureWindow: {
+      const psx::gpu::Gp0TextureWindow window = incoming.textureWindow();
+      s_tw_mx = window.maskX;
+      s_tw_my = window.maskY;
+      s_tw_ox = window.offsetX;
+      s_tw_oy = window.offsetY;
       return;
-    case 0xE3:
-      s_da_x0 = w & 0x3FF;
-      s_da_y0 = (w >> 10) & 0x1FF;
+    }
+    case psx::gpu::Gp0Opcode::SetDrawAreaTopLeft: {
+      const psx::gpu::Gp0VramPos corner = incoming.drawAreaCorner();
+      s_da_x0 = corner.x;
+      s_da_y0 = corner.y;
       lucent::debug("env", "E3 clip_tl=({},{})", s_da_x0, s_da_y0);
       return;
-    case 0xE4:
-      s_da_x1 = w & 0x3FF;
-      s_da_y1 = (w >> 10) & 0x1FF;
+    }
+    case psx::gpu::Gp0Opcode::SetDrawAreaBottomRight: {
+      const psx::gpu::Gp0VramPos corner = incoming.drawAreaCorner();
+      s_da_x1 = corner.x;
+      s_da_y1 = corner.y;
       // Widescreen: the guest clips the draw area to the 4:3 FB right edge (s_disp_x+319). The engine
       // renders a wider FOV (OFX shifted to nw/2) into VRAM columns up to s_disp_x+nw, so extend the
       // right clip by (nw-320) — else the wide-side world fragments are clipped and the present shows
@@ -2559,50 +2094,54 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
       }
       lucent::debug("env", "E4 clip_br=({},{})", s_da_x1, s_da_y1);
       return;
-    case 0xE5:
-      s_off_x = ((int)(w & 0x7FF) << 21) >> 21;
-      s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
+    }
+    case psx::gpu::Gp0Opcode::SetDrawOffset: {
+      const psx::gpu::Gp0VertexPos offset = incoming.drawOffset();
+      s_off_x = offset.x;
+      s_off_y = offset.y;
       lucent::debug("env", "E5 offset=({},{})", s_off_x, s_off_y);
       return;
-    case 0xE6: {
-      // PSXPORT_DEBUG=maskbit — GP0(E6) sets "set mask while drawing" (bit 0) and "CHECK mask before
-      // draw" (bit 1). Neither is modelled. Bit 1 matters for correctness: with it on, hardware SKIPS
-      // a write wherever the destination pixel is already masked, so deliberately overlapping prims
-      // composite ONCE. Print every DISTINCT word with a running total, so "the game never enables
-      // it" is a measured zero rather than an unlooked-at silence.
+    }
+    case psx::gpu::Gp0Opcode::SetMaskBits: {
+      // PSXPORT_DEBUG=maskbit — the two mask bits. NEITHER is modelled (see Gp0MaskBits), and the
+      // check-mask one is a real correctness gap rather than a missing feature. Print every DISTINCT
+      // word with a running total, so "the game never enables it" is a MEASURED ZERO rather than an
+      // unlooked-at silence — which is the only way to tell an unused feature from an unnoticed one.
+      const psx::gpu::Gp0MaskBits mask = incoming.maskBits();
       if (cfg_dbg("maskbit")) {
-        static uint32_t s_seen[8];
+        static uint8_t s_seen[4];
         static int s_n = 0, s_total = 0;
         s_total++;
-        const uint32_t v = w & 3u;
+        const std::uint8_t distinct = static_cast<std::uint8_t>((mask.setMask ? 1u : 0u) | (mask.checkMask ? 2u : 0u));
         bool known = false;
         for (int i = 0; i < s_n; i++) {
-          known = known || s_seen[i] == v;
+          known = known || s_seen[i] == distinct;
         }
-        if (!known && s_n < 8) {
-          s_seen[s_n++] = v;
+        if (!known && s_n < 4) {
+          s_seen[s_n++] = distinct;
           lucent::warn("maskbit",
                        "GP0(E6) set_mask={} check_mask={} (word {:08X}) — {} distinct value(s) in {} E6 writes",
-                       v & 1u,
-                       (v >> 1) & 1u,
+                       mask.setMask ? 1 : 0,
+                       mask.checkMask ? 1 : 0,
                        w,
                        s_n,
                        s_total);
         }
       }
-      return; // mask settings (mask-test not modeled)
+      return; // mask settings (neither bit is modelled as a pixel test)
     }
     default:
       break;
     }
-    // Poly-lines (op 0x48-0x4F mono / 0x58-0x5F gouraud — line group 0x40-0x5F with bit 0x08) are
-    // VARIABLE length: a vertex list terminated by a word with (w & 0xF000F000)==0x50005000
-    // (0x55555555). gp0_len can't know the length from the first word, so accumulate until the
-    // terminator. Mishandling this (treating it as a fixed 3/4-word single line) drifts the whole
-    // GP0 parse and makes a later data word decode as a spurious VRAM copy (atlas corruption).
-    s_pl = (op >= 0x40 && op <= 0x5F && (op & 0x08)) ? 1 : 0;
-    s_pl_g = (op & 0x10) ? 1 : 0;
-    s_fneed = gp0_len(w);
+    // A POLY-LINE is the one VARIABLE-length command: op 0x48-0x4F mono / 0x58-0x5F gouraud — the line
+    // range with bit 3 set. It is a vertex list terminated by a sentinel word, so its length is NOT in
+    // the first word and the packet-framing count below is only the minimum. The FIFO accumulates until
+    // the terminator instead. Treating a poly-line as a fixed 3/4-word line drifts the whole GP0 parse
+    // and makes a later DATA word decode as a spurious VRAM copy — which is atlas corruption, not a
+    // rendering artefact.
+    s_pl = incoming.isPolyLine() ? 1 : 0;
+    s_pl_g = incoming.flags().gouraud ? 1 : 0;
+    s_fneed = static_cast<int>(psx::gpu::Gp0Command::packetWordCount(w));
   }
   // NATIVE-DEPTH COVERAGE COUNTER. A GP0 word only CAN carry depth if we know which guest word it
   // came from (s_gp0_src), because that address is the key projprim stores view-Z against. Words fed
@@ -2618,34 +2157,39 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
   s_fifo_addr[s_fcount] = s_gp0_src;
   s_fifo[s_fcount++] = w;
   if (s_pl) {
-    int idx = s_fcount - 1; // index of the word just stored
-    // A terminator may appear at a vertex-START slot, only after the mandatory 2 vertices:
-    //   gouraud: color slots = even indices >= 4 (cmd,xy0,c1,xy1, then c2/term,xy2,...)
-    //   mono:    xy slots    = indices >= 3        (cmd,xy0,xy1, then xy2/term,...)
-    int term_slot = s_pl_g ? (idx >= 4 && !(idx & 1)) : (idx >= 3);
-    if (term_slot && (w & 0xF000F000u) == 0x50005000u) {
-      s_fcount = idx; // drop the terminator; render cmd+vertices
+    const unsigned idx = static_cast<unsigned>(s_fcount - 1); // index of the word just stored
+    // A poly-line's terminator may only appear at a VERTEX-START slot, and never before the mandatory two
+    // vertices are in — otherwise a real vertex word that happens to look like the sentinel truncates
+    // the line. The two layouts put vertex starts at different indices:
+    //   gouraud: cmd,xy0,c1,xy1, then c2/term,xy2,...  -> starts are the EVEN indices from 4
+    //   mono:    cmd,xy0,xy1, then xy2/term,xy3,...     -> starts are the indices from 3
+    if (psx::gpu::Gp0Command::isPolyLineTerminatorSlot(idx, s_pl_g != 0) &&
+        psx::gpu::Gp0Command::isPolyLineTerminator(w)) {
+      s_fcount = static_cast<int>(idx); // drop the terminator; render cmd+vertices
       gp0_exec(core);
       s_fcount = 0;
       s_fneed = 0;
       s_pl = 0;
       return;
     }
-    if (s_fcount >= 250) {
+    if (s_fcount >= kGp0FifoCapacity - kGp0FifoHeadroom) {
       s_fcount = 0;
       s_fneed = 0;
       s_pl = 0;
-    } // safety: never overflow s_fifo
+    } // safety: a poly-line with no terminator must never overflow s_fifo
     return;
   }
   if (s_fcount >= s_fneed) {
-    uint8_t op = s_fifo[0] >> 24;
-    if (op == 0xA0) { // CPU->VRAM: set up the pixel stream
-      const VramRect rc = vram_xfer_rect(s_fifo[1], s_fifo[2]);
-      s_xfer_x = rc.x;
-      s_xfer_y = rc.y;
-      s_xfer_w = rc.w;
-      s_xfer_h = rc.h;
+    const psx::gpu::Gp0Command packet(s_fifo[0]);
+    if (packet.opcode() == psx::gpu::Gp0Opcode::CpuToVramUpload) {
+      // The upload's pixel STREAM has not arrived yet: the header names a rect and every following word
+      // is two pixels of it, until the rect is full. The words are not commands and must not be decoded
+      // as such — the branch at the top of this function consumes them.
+      const psx::gpu::Gp0VramRect region = psx::gpu::Gp0Command::transferRegion(s_fifo[1], s_fifo[2]);
+      s_xfer_x = region.x;
+      s_xfer_y = region.y;
+      s_xfer_w = region.width;
+      s_xfer_h = region.height;
       s_xfer_px = 0;
       s_xfer = 1;
       if (vk_path()) {
@@ -2694,14 +2238,20 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
           }
         }
       }
-    } else if (op == 0x80) { // VRAM->VRAM copy
-      int sx = s_fifo[1] & 0x3FF, sy = (s_fifo[1] >> 16) & 0x1FF;
-      int dx = s_fifo[2] & 0x3FF, dy = (s_fifo[2] >> 16) & 0x1FF;
-      int w2 = s_fifo[3] & 0x3FF, h2 = (s_fifo[3] >> 16) & 0x1FF;
+    } else if (packet.opcode() == psx::gpu::Gp0Opcode::VramToVramCopy) {
+      // A VRAM->VRAM copy: source rect, destination rect, size — FOUR words, and the only command with
+      // two rects. Note the size word here carries a PLAIN 10/9-bit size with no zero-means-full-axis
+      // convention (a copy of "everything" is not expressible) and no 16-pixel alignment (a copy is
+      // exactly the rect the guest named).
+      const psx::gpu::Gp0VramPos source = psx::gpu::Gp0Command(s_fifo[1]).rectCorner();
+      const psx::gpu::Gp0VramPos destination = psx::gpu::Gp0Command(s_fifo[2]).rectCorner();
+      const int sx = source.x, sy = source.y;
+      const int dx = destination.x, dy = destination.y;
+      const int w2 = s_fifo[3] & 0x3FF, h2 = (s_fifo[3] >> 16) & 0x1FF;
       // Guard the DEST rect: a render-OT 0x80 copy whose dest lands on a live texpage is the classic
       // atlas-clobber (later-72 poly-line-desync family). Checked BEFORE the copy so the log names the
       // clobber even though the copy still proceeds (diagnostic, non-mutating; the catch is the point).
-      vram_guard_check("80copy", dx, dy, w2, h2, 0x80000000u | ((uint32_t)(sy * VRAM_W + sx) * 2));
+      vram_guard_check("80copy", dx, dy, w2, h2, guestAddressOf((uint32_t)(sy * VRAM_W + sx) * 2));
       for (int y = 0; y < h2; y++) {
         for (int x = 0; x < w2; x++) {
           *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
@@ -2750,16 +2300,16 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
           }
         }
       }
-    } else if (op == 0xC0) {
-      // GP0(0xC0) VRAM->CPU readback: arm the pixel stream. The guest drains it either through the
-      // GPUREAD register (0x1F801810) or through DMA2 in the VRAM->CPU direction; both end up in
-      // gpu_read_word(), so the two drains share one cursor and one addressing rule (the same one
-      // the A0 upload above uses — see vram_xfer_rect).
-      const VramRect rc = vram_xfer_rect(s_fifo[1], s_fifo[2]);
+    } else if (packet.opcode() == psx::gpu::Gp0Opcode::VramToCpuRead) {
+      // A VRAM->CPU readback: arm the pixel stream. The guest drains it either through the GPUREAD
+      // register (0x1F801810) or through DMA2 in the VRAM->CPU direction; both end up in
+      // gpu_read_word(), so the two drains share ONE cursor and ONE addressing rule — the same decode the
+      // upload above uses, which is what makes a save/restore round trip land the same rect it saved.
+      const psx::gpu::Gp0VramRect rc = psx::gpu::Gp0Command::transferRegion(s_fifo[1], s_fifo[2]);
       s_rd_x = rc.x;
       s_rd_y = rc.y;
-      s_rd_w = rc.w;
-      s_rd_h = rc.h;
+      s_rd_w = rc.width;
+      s_rd_h = rc.height;
       s_rd_px = 0;
       s_rd = 1;
       s_c0_n++;
@@ -2771,7 +2321,7 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
       // readback overlapping the displayed framebuffer returns stale CPU-side pixels. Count and name
       // that case instead of serving a wrong answer that looks like an answer.
       const int dx1 = s_disp_x + (s_disp_w > 0 ? s_disp_w : 320), dy1 = s_disp_y + (s_disp_h > 0 ? s_disp_h : 240);
-      if (vk_path() && rc.x < dx1 && rc.x + rc.w > s_disp_x && rc.y < dy1 && rc.y + rc.h > s_disp_y) {
+      if (vk_path() && rc.x < dx1 && rc.x + rc.width > s_disp_x && rc.y < dy1 && rc.y + rc.height > s_disp_y) {
         s_c0_stale++;
         static long warned = 0; // rate limit only — the running total is on the per-frame line below
         if (warned++ < 4) {
@@ -2782,8 +2332,8 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
                        s_frame,
                        rc.x,
                        rc.y,
-                       rc.w,
-                       rc.h,
+                       rc.width,
+                       rc.height,
                        s_disp_x,
                        s_disp_y,
                        s_disp_w,
@@ -2791,16 +2341,16 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
                        s_c0_stale);
         }
       }
-      if (texwatch_overlap(rc.x, rc.y, rc.w, rc.h)) {
+      if (texwatch_overlap(rc.x, rc.y, rc.width, rc.height)) {
         lucent::info("texwatch",
                      "f{} C0 readback src=({},{}) {}x{} dstaddr=0x{:08X} ({} px armed)",
                      s_frame,
                      rc.x,
                      rc.y,
-                     rc.w,
-                     rc.h,
-                     0x80000000u | s_dma_src,
-                     rc.w * rc.h);
+                     rc.width,
+                     rc.height,
+                     guestAddressOf(s_dma_src),
+                     rc.width * rc.height);
       }
     } else {
       gp0_exec(core);
@@ -3717,41 +3267,48 @@ void GpuState::gpu_dma2_linked_list(Core *core, uint32_t madr) {
   }
   s_dma2++;
   s_ot_madr = madr & 0x1FFFFC;
+  using psx::gpu::OrderingTableCursor;
   // PSXPORT_DEBUG=ot (diagnostic only — the driver no longer reads the OT): on a chain that fails to
   // terminate within an OT's worth of nodes (cyclic = malformed), dump its first 40 nodes once for diagnosis.
   // (Empty OTs are ~0x800 link-only nodes that DO terminate at the sentinel; a true cycle never terminates.)
   // GUARD KEPT: a 4096-step guest-memory chain walk to decide whether the OT terminates, then a
   // 40-node dump — all of it non-logging work, and none of it may run on an ordinary run.
+  //
+  // The probe walks with its OWN cursor rather than reading headers inline, so "does this chain
+  // terminate" is answered by the same end-of-chain rule the real walk uses. A probe that re-derived the
+  // rule could disagree with the walk it is diagnosing — and then it would report a malformed table the
+  // walk handles fine, or miss one it does not.
   if (lucent::channel_on("ot")) {
     static int dumped = 0;
-    uint32_t a = madr & 0x1FFFFC;
-    int term = 0;
-    for (int k = 0; k < 4096; k++) {
-      uint32_t next = core->mem_r32(a) & 0xFFFFFF;
-      if (next == 0xFFFFFF || next == 0) {
-        term = 1;
-        break;
+    OrderingTableCursor probe(*core, madr);
+    const bool bounded = [&probe] {
+      // A SEPARATE, SMALLER cap than the walk's own: this probe answers "does the chain terminate at
+      // all", and 4096 nodes is already far past any real table, so a chain still running here is
+      // cyclic. Stated here rather than reused from the walk so the two cannot drift into one budget.
+      constexpr int kProbeNodeBudget = 4096;
+      while (probe.nodesEntered() < kProbeNodeBudget) {
+        if (!probe.advance()) {
+          return !probe.truncated();
+        }
       }
-      a = next & 0x1FFFFC;
-    }
-    if (!term && !dumped++) {
-      a = madr & 0x1FFFFC;
-      lucent::debug("ot", "[otdbg] MALFORMED OT from madr=0x{:08X}:", 0x80000000u | (madr & 0x1FFFFC));
+      return false;
+    }();
+    if (!bounded && !dumped++) {
+      lucent::debug(
+          "ot", "[otdbg] MALFORMED OT from madr=0x{:08X}:", psx::gpu::guestAddressOf(psx::gpu::mainRamOffsetOf(madr)));
+      OrderingTableCursor dumpWalk(*core, madr);
       for (int k = 0; k < 40; k++) {
-        uint32_t hdr = core->mem_r32(a);
-        uint32_t next = hdr & 0xFFFFFF;
-        int n = hdr >> 24;
+        const psx::gpu::OtNode &node = dumpWalk.node();
         lucent::debug("ot",
                       "  [{:2}] @0x{:08X} hdr=0x{:08X} (n={}) -> 0x{:08X}",
                       k,
-                      0x80000000u | a,
-                      hdr,
-                      n,
-                      0x80000000u | (next & 0x1FFFFC));
-        if (next == 0xFFFFFF || next == 0) {
+                      node.guestAddress(),
+                      node.headerWord(),
+                      node.gp0WordCount(),
+                      node.nextGuestAddress());
+        if (!dumpWalk.advance()) {
           break;
         }
-        a = next & 0x1FFFFC;
       }
     }
   }
@@ -3769,21 +3326,18 @@ void GpuState::gpu_dma2_linked_list(Core *core, uint32_t madr) {
   // BLACK. The 3D field was unaffected only because its prims carry their texpage inline and the depth
   // buffer owns order. Owning 2D order from engine-side SCENE data — instead of replaying guest packets at
   // all — is the remaining M4 work; until then the guest draw order is the correct enumeration to replay.)
-  uint32_t addr = madr & 0x1FFFFC;
-  int guard;
-  for (guard = 0; guard < 0x10000; guard++) {
-    uint32_t hdr = core->mem_r32(addr);
-    unsigned n = hdr >> 24; // primitive GP0-word count (tag high byte)
-    s_cur_node = 0x80000000u | addr;
-    for (unsigned i = 0; i < n; i++) {
-      s_gp0_src = addr + 4 + i * 4; // guest addr of this word (Phase-1 attach)
-      gpu_gp0(core, core->mem_r32(addr + 4 + i * 4));
+  OrderingTableCursor walk(*core, madr);
+  for (;;) {
+    const psx::gpu::OtNode &node = walk.node();
+    s_cur_node = node.guestAddress();
+    for (unsigned i = 0; i < node.gp0WordCount(); i++) {
+      const uint32_t wordAddress = node.gp0WordRamOffset(i);
+      s_gp0_src = wordAddress; // guest addr of this word (Phase-1 attach)
+      gpu_gp0(core, core->mem_r32(wordAddress));
     }
-    uint32_t next = hdr & 0xFFFFFF;
-    if (next == 0xFFFFFF || next == 0) {
+    if (!walk.advance()) {
       break;
     }
-    addr = next & 0x1FFFFC;
   }
   s_gp0_src = 0; // non-OT gpu_gp0 callers (direct GP0 / FMV / block) carry no packet address
   // PSXPORT_DEBUG=pool: per-DrawOTag OT node count + the packet-pool high-water (write ptr 0x800BF544),
@@ -3794,26 +3348,34 @@ void GpuState::gpu_dma2_linked_list(Core *core, uint32_t madr) {
   // reported high-water means).
   if (lucent::channel_on("pool")) {
     static int mx = 0;
-    int nodes = guard + 1;
-    uint32_t pool = core->mem_r32(0x800BF544u);
+    // The walk this replaced counted with a loop guard, so its count was `guard + 1` — one MORE than
+    // the nodes it had actually read whenever the cap truncated it. Reproduced exactly rather than
+    // quietly corrected, because a diagnostic that changes its own numbers during a refactor is a
+    // diagnostic whose history becomes unreadable. See docs/issues/0131-ot-walk-node-count-at-cap.md.
+    const int nodes = walk.nodesEntered() + (walk.truncated() ? 1 : 0);
+    // The field overlay's packet-pool write cursor. A TITLE address, read raw: it means nothing on
+    // another title, and the two tests that seed it set it to the pool BASE rather than a packet index,
+    // so a reader must not read it as "how many packets were allocated". See
+    // docs/issues/0130-title-globals-in-the-framework.md.
+    const uint32_t pool = core->mem_r32(0x800BF544u);
     if ((int)pool > mx) {
       mx = (int)pool;
     }
     lucent::debug("pool",
                   "f{} madr=0x{:08X} nodes={} pool=0x{:08X} hi=0x{:08X}",
                   s_frame,
-                  0x80000000u | s_ot_madr,
+                  s_ot_madr | psx::gpu::kKseg0Base,
                   nodes,
                   pool,
                   (uint32_t)mx);
   }
-  if (guard >= 0x10000) {
+  if (walk.truncated()) {
     static int warned = 0;
     if (!warned++) {
       lucent::warn("gpu",
                    "WARN: OT walk hit {}-node cap (madr=0x{:08X}) — malformed/cyclic ordering table",
-                   guard,
-                   0x80000000u | s_ot_madr);
+                   psx::gpu::kOtNodeLimit,
+                   s_ot_madr | psx::gpu::kKseg0Base);
     }
   }
   // FLUSH. The walk above ENUMERATES the guest's prims and QUEUES them; something must then drain the

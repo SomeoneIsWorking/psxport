@@ -33,6 +33,7 @@
 // the RqItems are built directly.
 #include "testutil.h"
 
+#include "face_contest.h" // the rule itself: the pair test this test is an ORACLE for
 #include "render_queue.h"
 
 #include "game.h"
@@ -126,7 +127,7 @@ std::vector<uint8_t> brute_force_snap(const RenderQueue &q) {
       if (A.dbg_node != B.dbg_node) {
         continue;
       }
-      if (rq_faces_in_contest(A, B)) {
+      if (psx::gpu::facesInContest(A, B)) {
         snap[keyed[a]] = 1;
         snap[keyed[b]] = 1;
       }

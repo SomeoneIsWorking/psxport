@@ -1,6 +1,7 @@
 // BIOS interrupt-chain registration and delivery, including DMA completion service and
 // the custom HookEntryInt continuation. State and the public API remain on the per-Game Hle.
 #include "bios_interrupt.h"
+#include "cd_ready_delivery.h"
 #include "core.h"
 #include "dma_callbacks.h"
 #include "dma_irq.h"
@@ -157,6 +158,11 @@ void Hle::irqPoll(Core *c) {
   if (in_irq || !irq_enabled) {
     return;
   }
+  // The framework's own CD-ROM interrupt handler is a delivery path in its own right, so a title
+  // that registers NO SysEnq element and installs NO custom exception exit still reaches it. It
+  // decides for itself whether a completion is owed, and it only runs after the chain below has
+  // declined the interrupt — so counting it here cannot deliver anything twice.
+  const bool cd_delivery_path = cdReadyCallbackOwnedByGuestInterrupt(*c);
   const uint32_t pending = c->irqStatLatch() & i_mask;
   // Clear the gate whenever there is nothing to deliver, so the common case costs one load-and-test
   // per function entry and nothing more. Re-armed by whoever raises next.
@@ -165,7 +171,7 @@ void Hle::irqPoll(Core *c) {
   // owed. Clearing the gate then loses it, and the chain stops after one strip — measured: two
   // strips per movie decoded and then "no decode command in flight". So the gate survives while
   // anything is owed, and only the genuinely-idle case pays nothing.
-  const bool has_delivery_path = irq_n != 0 || exception_exit_buf != 0;
+  const bool has_delivery_path = irq_n != 0 || exception_exit_buf != 0 || cd_delivery_path;
   if ((!pending || !has_delivery_path) && !dma_done_any()) {
     c->pending_work &= ~Core::PW_IRQ;
     return;
@@ -219,6 +225,11 @@ void Hle::irqPoll(Core *c) {
   // Declining here only says the BIOS element chain did not own this source. Games commonly route
   // CD-ROM through the custom exception exit and a separate master table, so do not misdiagnose a
   // correct VBlank-only verifier as "the game has no CD service".
+  //
+  // IT ALSO NO LONGER IMPLIES THAT NOTHING OWNS THE SOURCE. The framework's own CD-ROM interrupt
+  // handler runs immediately below, for a title that declares the guest-interrupt delivery owner, and
+  // it is the thing that serves a declined CD bit there. Read this line as "no REGISTERED ELEMENT
+  // claimed it", which is what was measured, and not as "the source is unowned".
   if (!claimed) {
     static uint32_t last_unclaimed = 0xFFFFFFFFu;
     if (pending != last_unclaimed) {
@@ -233,6 +244,37 @@ void Hle::irqPoll(Core *c) {
   }
 
   *static_cast<R3000 *>(c) = saved;
+
+  // ---- the framework's own CD-ROM interrupt handler -------------------------------------------------
+  // THE ORDER HERE IS THE DOUBLE-DELIVERY GATE, and it is the same order the hardware uses: the
+  // guest's own registered elements get first refusal, and the framework's built-in per-source
+  // handler runs only for a source the chain DECLINED. A title that services CD-ROM through its own
+  // element therefore keeps exactly that one delivery, and a title that does not gets this one.
+  //
+  // It runs before the custom exception exit, and that ordering is a measured decision rather than
+  // a preference: the guest's general top-level handler is the LAST resort for a declined source, and
+  // this built-in handler is the BIOS's own service for the CD-ROM specifically. Nothing that
+  // reached the guest through the custom exit on this title is taken away by going first, because
+  // the guest reaches no CD-ROM service through it: the `cdcr` channel logged ZERO reads of
+  // 0x1F801800-3 over a 4,495-presented-frame run (psxport/docs/issues/0124), with the sibling `cdc`
+  // channel live at 3 lines in the same run, so that zero is "scanned, matched 0" and not "the
+  // instrument never ran".
+  //
+  // `in_irq` is released for the duration: this is a separate handler from the chain walk above, and
+  // the guest's own ready callback must be able to make BIOS calls and re-enter the CD owner without
+  // the delivery re-entering itself. The callback's OWN re-entrant polls find `in_irq` set again
+  // for its whole extent, which is what keeps a chain of sectors from delivering twice.
+  if (cd_delivery_path && !claimed) {
+    in_irq = 0; // the chain walk's handler has RETURNED; this is a separate handler
+    const CdReadyDelivery delivered = deliverCdReadyCompletionOnInterrupt(*c);
+    if (delivered == CdReadyDelivery::GuestExited) {
+      in_irq = 0;
+      return; // the guest took a typed exit out of its ready callback; stop the whole poll
+    }
+    *static_cast<R3000 *>(c) = saved;
+    in_irq = 1; // the custom exception exit below is a guest handler in its own right
+  }
+
   if (exception_exit_buf) {
     custom_exit_active = 1;
     const BiosInterruptDispatchResult result =
@@ -245,7 +287,8 @@ void Hle::irqPoll(Core *c) {
   }
   *static_cast<R3000 *>(c) = saved;
   in_irq = 0;
-  const bool still_deliverable = (c->irqStatLatch() & i_mask) && (irq_n != 0 || exception_exit_buf != 0);
+  const bool still_deliverable =
+      (c->irqStatLatch() & i_mask) && (irq_n != 0 || exception_exit_buf != 0 || cd_delivery_path);
   if (!dma_done_any() && !still_deliverable) { // an owed DMA callback or live IRQ keeps the gate armed
     c->pending_work &= ~Core::PW_IRQ;
   }
