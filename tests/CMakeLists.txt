@@ -55,6 +55,26 @@ add_test(NAME test_sync_submodules
          COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sync_submodules.py")
 set_tests_properties(test_sync_submodules PROPERTIES TIMEOUT 60)
 
+# The GLOB above gives `test_call_original_resuming` its resume-until-return cases, but the bounded
+# refusal is a SEPARATE ctest entry, and the reason is mechanical rather than stylistic: the bound
+# calls `std::abort()`, so running it in the same process would take the whole executable down and
+# there would be nothing left to assert against. Its `--never-returns` mode installs a SIGABRT handler
+# and exits 0 when the refusal fired, so this entry is an ORDINARY test and needs no inverted
+# expectation.
+#
+# WILL_FAIL would have been the wrong tool, and specifically so: ctest reports an abnormal termination
+# as an EXCEPTION rather than as a nonzero result, so WILL_FAIL turns the segfault the first attempt
+# produced into a red row rather than a green one. The refusal has to be observed by the test process
+# and re-expressed as an ordinary exit.
+#
+# Without this entry the bound is never exercised at all: a bound that is never reached is a hang
+# wearing the costume of a fix, and the positive cases pass whether or not it exists.
+add_test(NAME test_call_original_resuming_bound
+         COMMAND test_call_original_resuming --never-returns)
+set_tests_properties(test_call_original_resuming_bound PROPERTIES
+  ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+  TIMEOUT 60)
+
 list(LENGTH PSXPORT_TEST_SRCS _n_tests)
 message(STATUS "psxport tests: ${_n_tests} discovered in ${CMAKE_CURRENT_SOURCE_DIR}")
 

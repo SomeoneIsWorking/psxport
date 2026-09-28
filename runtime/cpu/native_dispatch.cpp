@@ -443,4 +443,87 @@ void callOriginalToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudge
   }
 }
 
+namespace {
+
+// The bounded resume loop, shared by both key and address forms. `enter` performs the FIRST call and
+// `resume` every later one, so this holds one copy of the bound, the return-address capture and the
+// refusal rather than one per overload.
+//
+// `returnPc` is read from `$r[31]` BEFORE `enter` runs, and that ordering is load-bearing: the guest
+// body will set `$r[31` as it calls deeper, so reading it afterwards would resume into a nested return
+// address. This is the one thing every hand-rolled copy of this loop has to get right, which is exactly
+// why it is written once. It is handed to `resume` rather than closed over because a lambda capturing
+// it by reference would read the *current* `$r[31]` at resume time — the very bug the capture prevents.
+template <typename Enter, typename Resume>
+void callOriginalResuming(Core &core, ExecutionBudget budget, std::string_view owner, Enter enter, Resume resume) {
+  const std::uint32_t returnPc = core.r[31];
+  std::uint64_t cycles = 0;
+  std::uint32_t turns = 0;
+  ExecutionResult result = enter();
+  cycles += result.cycles;
+  while (!result.returned()) {
+    // A budget exit is the ONE reason this function exists. Anything else is a real failure and keeps
+    // `requireGuestReturn`'s existing reporting, so this does not become a second error vocabulary.
+    if (result.reason != ExecutionExitReason::BudgetExhausted) {
+      (void)requireGuestReturn(result, owner);
+      std::abort();
+    }
+    if (turns >= kMaxResumedHostTurns) {
+      // Refused, not spun on. The bound is NAMED, and so is the turn count reached, so this line can be
+      // read as the measurement it is rather than as a hang.
+      lucent::error("executor",
+                    "{}: the guest call to return address 0x{:08X} consumed {} host turn(s) and {} cycles "
+                    "without returning and is still at 0x{:08X}. A guest function needing more than {} "
+                    "display fields does not exist, so this is a guest loop: reported, not spun on",
+                    owner,
+                    returnPc,
+                    turns,
+                    cycles,
+                    result.guestPc,
+                    kMaxResumedHostTurns);
+      std::abort();
+    }
+    // Each turn gets the CURRENT turn's budget, not the one the caller passed. The caller's budget
+    // sized the first turn; reusing it would silently give every later turn the original allowance.
+    result = resume(result.guestPc, returnPc, ExecutionBudget::currentTurn(core));
+    cycles += result.cycles;
+    ++turns;
+  }
+}
+
+} // namespace
+
+void callOriginalToReturnResuming(Core &core, NativeKey key, ExecutionBudget budget, std::string_view owner) {
+  callOriginalResuming(
+      core,
+      budget,
+      owner,
+      [&] {
+        return callOriginal(core, key, budget);
+      },
+      [&](std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget turn) {
+        return resumeOriginal(core, key, resumePc, returnPc, turn);
+      });
+}
+
+void callOriginalToReturnResuming(Core &core,
+                                  std::uint32_t guestAddress,
+                                  ExecutionBudget budget,
+                                  std::string_view owner) {
+  // The address form resumes through the ENTRY-based seam, which is the framework's own answer for a
+  // caller that has an address rather than a `NativeKey`. It takes the entry explicitly, so OT
+  // submission attribution during a resumed turn stays scoped to this call instead of adopting the
+  // frame that encloses it — the reason that second entry point exists at all.
+  callOriginalResuming(
+      core,
+      budget,
+      owner,
+      [&] {
+        return callOriginal(core, guestAddress, budget);
+      },
+      [&](std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget turn) {
+        return resumeGuestToReturnFrom(core, guestAddress, resumePc, returnPc, turn);
+      });
+}
+
 } // namespace psx::cpu

@@ -95,5 +95,32 @@ ExecutionResult callOriginalUntilExit(Core &core, NativeKey key, ExecutionBudget
 ExecutionResult callOriginalUntilExit(Core &core, std::uint32_t guestAddress, ExecutionBudget budget);
 void callOriginalToReturn(Core &core, NativeKey key, ExecutionBudget budget, std::string_view owner);
 void callOriginalToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view owner);
+// Calls the original and KEEPS RESUMING it across host turns until it returns.
+//
+// WHY THIS EXISTS, and it is a contract contradiction rather than a convenience. `AGENTS.md` says budget
+// exhaustion is "an ordinary bounded exit" that host code "commits and handles, then resumes
+// deliberately", and the comment above `resumeOriginal` says the same in more words. But
+// `callOriginalToReturn` cannot honour that: it returns `void`, so "exhausted, resume me at this PC"
+// is inexpressible, and its only remaining move is `std::abort()`. A guest function that legitimately
+// needs more than one host turn — Mega Man X4's `DecDCTvlc` needs 1.082 display fields, and a whole-image
+// channel swap is more — therefore has exactly two options, both wrong: abort, or hand-roll this loop.
+//
+// **Three repositories hand-rolled it**, which is the duplication this exists to end. A loop that must
+// be correct in three places at once is a loop the framework should own once.
+//
+// TWO DETAILS THAT ARE EASY TO GET WRONG AND ARE THEREFORE THIS FUNCTION'S JOB, not the caller's:
+//
+//   * `returnPc` is captured **before the first call**, from the caller's `$r[31]`. Capturing it after
+//     would let a resume adopt whatever nested `$r[31]` the guest body left behind, which is a
+//     different address and ends the call in the wrong place.
+//   * The loop is **bounded**, and exceeding the bound is a loud named refusal, never a silent spin and
+//     never an unbounded wait on a guest that will not return. A guest that needs more than this many
+//     display fields is a guest loop, and saying so is more useful than hanging.
+inline constexpr std::uint32_t kMaxResumedHostTurns = 64;
+void callOriginalToReturnResuming(Core &core, NativeKey key, ExecutionBudget budget, std::string_view owner);
+void callOriginalToReturnResuming(Core &core,
+                                  std::uint32_t guestAddress,
+                                  ExecutionBudget budget,
+                                  std::string_view owner);
 
 } // namespace psx::cpu
