@@ -379,6 +379,41 @@ because there is no second copy.
    is genuinely no longer true. Whether a non-runtime commit should invalidate a *build* pin would need a
    build-relevance classifier — a larger design question, deliberately not attempted here.
 
+   **MEASURED 2026-09-29 — and `ctr` was about to be a GREEN ZERO, which is what makes this
+   paragraph a trap rather than history.** Every port's gate is `ctest --test-dir <dir>`, and the
+   directory is **not the same in every repo**. `ctr/build/` contains no `CMakeCache.txt` at all — it
+   is not a configured build tree — so `ctest --test-dir build` there discovers **zero tests and
+   returns 0**, which reads exactly like a pass. It did: a CTR commit was written and pushed claiming
+   "Gate: ctest green" on that zero, and the real tree, `ctr/build/agent-clang`, registers **23**
+   tests, two of which were genuinely red (`ctr_framework_pin`, `ctr_psxport_pin_live`) until the pin
+   was reconfigured, rebuilt and bumped. This is the ninth dead tap in this workspace, and unlike the
+   other eight the one that produced it was running a gate rather than reading a metric.
+
+   The gate directory, MEASURED by asking each configured tree for its test count. **A directory
+   absent from this table has no `CMakeCache.txt` and is not a gate** — do not pass it to `ctest`:
+
+   | repo | gate directory | tests | note |
+   |---|---|---|---|
+   | `psxport` | `build` | 183 | `build/ci` registers 181 — not the gate |
+   | `crash` | `build` | 35 | `agent-clang` 34, `ci` 30 — smaller trees, not the gate |
+   | `ctr` | `build/agent-clang` | 23 | **`build/` is NOT a build tree** |
+   | `crashbash` | `build/player` | 29 | **`build/` is NOT a build tree** |
+   | `megamanx4` | `build` | 35 | `build/player` is configured but registers 0 — a product build |
+   | `spider1` | `build/agent-clang` | 34 | **`build/` is NOT a build tree** |
+   | `spyro` | `build` | 102 | `build/player` registers 0 — a product build |
+   | `tekken3` | `build` | 28 | `build/ci` registers 27 |
+   | `Tomba2Engine` | `build` | 41 | `build/ci` also 41 |
+   | `vagrant` | `build` | 22 | `build/player` registers 0 — a product build |
+
+   **A configured tree registering 0 tests is a product build, not a broken gate** — `megamanx4`,
+   `spyro` and `vagrant` each have one, and the test count in this table is what distinguishes the
+   two. **An UNCONFIGURED tree registering 0 is a green zero** and means the gate did not run.
+
+   **The reusable lesson, and it is the same one as the pin guard above:** a gate that cannot fail is
+   not a gate, and `ctest` on an unconfigured directory cannot fail. Read the test COUNT in the same
+   command that runs the tests, the way `psxport_sync.py` reads a receipt rather than trusting a
+   path. Reporting "green" without a number is how this happened.
+
    **MEASURED 2026-09-27, every port rebuilt and gated against the framework as it stood during that
    session, after the store-observer and control-surface changes. NO REGRESSIONS:**
 
