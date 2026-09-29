@@ -1,6 +1,8 @@
 // The direct-runtime stock-libcd binding targets are the shipping synchronous read owners, not
 // title-local copies. Exercise their guest ABI and state transitions without requiring a disc image.
 #include "cd_control.h"
+#include "invalidation.h"
+#include "lightrec_executor.h"
 #include "game.h"
 #include "testutil.h"
 
@@ -137,6 +139,57 @@ static void test_stock_pause_stops_stream_and_accepts_null_output() {
   CHECK_EQ(game->cd.stream_active, 0);
 }
 
+// ----------------------------------------------------------------------------
+// The executable-write report on the CdRead route, and what it is worth without a disc.
+//
+// `cd_read_stock_sync` writes `sectors * bytes` from a guest-chosen `buf`, and the guest is free to aim
+// that at CODE. Tomba! 1 does: `CdRead 7x2048 from LBA 103311 -> 0x800E7388`, after which the port's
+// dispatch answered "claimed by none" for the callee — a module arriving on a route that never told the
+// invalidation owner, so Lightrec could keep serving translated blocks for bytes that had just changed.
+//
+// THE POSITIVE CASE IS DISC-GATED, and this suite is hermetic, so it is NOT here: a nonzero `sectors`
+// returns early when `disc_read_raw` fails, before any byte is written. What IS provable without media is
+// the pair below, and the pair is what makes the zero meaningful — a counter that reads 0 because nothing
+// fed it and a counter that reads 0 because the route correctly reported nothing are the same number
+// unless the feeder is shown running first. That is the whole lesson of the nine dead taps in this
+// workspace, so it is asserted rather than assumed.
+static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_not_move_it() {
+  auto game = std::make_unique<Game>();
+  const uint64_t atRest = game->core.lightrecExecutor().counters().invalidations;
+
+  // POSITIVE: the owner is fed on purpose, and the counter moves. Without this line the zero below is
+  // unreadable — it would be equally consistent with "the route reported nothing" and "nothing measures".
+  psx::cpu::notifyExecutableWrite(
+      game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
+  const uint64_t afterDeliberate = game->core.lightrecExecutor().counters().invalidations;
+  CHECK(afterDeliberate > atRest);
+
+  // NEGATIVE: a positioned read of ZERO sectors transfers nothing, so it must report nothing. A route
+  // that reported an empty range unconditionally would invalidate on every poll.
+  game->cd.setloc_lba = 321;
+  game->core.r[A0] = 0;
+  game->core.r[A1] = kBuffer;
+  game->core.r[A2] = 0;
+  cd_read_stock_sync(&game->core);
+  CHECK_EQ(game->core.r[V0], 1u);
+  CHECK_EQ(game->core.lightrecExecutor().counters().invalidations, afterDeliberate);
+}
+
+// The refusal path must be just as quiet: with no Setloc the read never starts, so there is no write and
+// nothing to report. A refusal that still reported a range would invalidate on every unpositioned poll.
+static void test_a_refused_read_reports_no_executable_write() {
+  auto game = std::make_unique<Game>();
+  psx::cpu::notifyExecutableWrite(
+      game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
+  const uint64_t before = game->core.lightrecExecutor().counters().invalidations;
+  game->core.r[A0] = 4;
+  game->core.r[A1] = kBuffer;
+  game->core.r[A2] = 0;
+  cd_read_stock_sync(&game->core);
+  CHECK_EQ(game->core.r[V0], 0u);
+  CHECK_EQ(game->core.lightrecExecutor().counters().invalidations, before);
+}
+
 int main() {
   RUN(stock_command_uses_low_level_success_abi_and_applies_setloc);
   RUN(stock_pause_stops_stream_and_accepts_null_output);
@@ -144,5 +197,7 @@ int main() {
   RUN(zero_sector_stock_read_completes_without_inventing_drive_work);
   RUN(stock_readsync_reports_completed_and_zeros_result);
   RUN(stock_cdsync_reports_ready_and_zeros_result);
+  RUN(the_invalidation_counter_is_live_and_a_zero_sector_read_does_not_move_it);
+  RUN(a_refused_read_reports_no_executable_write);
   return pt_summary();
 }

@@ -504,6 +504,22 @@ void cd_read_stock_sync(Core *c) {
     for (uint32_t k = 0; k < bytes; k++) {
       c->mem_w8(buf + i * bytes + k, raw[off + k]);
     }
+    // The write becomes visible HERE, so the range is reported HERE — per sector, so a failure part way
+    // through still reports exactly the bytes that landed rather than the whole request.
+    //
+    // WHY `CdRead` REPORTS AT ALL, since it is overwhelmingly a DATA route. `AGENTS.md` puts every write
+    // that can modify executable bytes under one invalidation owner, and this is such a write: the guest
+    // chooses `buf`, and nothing stops it streaming a code module there and calling into it. Tomba! 1
+    // does exactly that — `CdRead 7x2048 from LBA 103311 -> 0x800E7388` — and the port's dispatch then
+    // answered "claimed by none" for the callee. That is a guest-streamed MODULE arriving on a route that
+    // never told the invalidation owner, so Lightrec could keep serving translated blocks for bytes that
+    // had just changed underneath it.
+    //
+    // The cost is a range comparison, not a flush: a data stream into data RAM overlaps no translated
+    // block, so the common case does nothing. The failure mode of NOT reporting is executing stale code.
+    psx::cpu::notifyExecutableWrite(*c,
+                                    {buf & 0x1fffffffu, (buf & 0x1fffffffu) + bytes},
+                                    psx::cpu::ExecutableWriteSource::ModuleLoad);
   }
   cd.setloc_lba += (int32_t)sectors; // the head ends where a real sequential read would leave it
   cd.sec_pos = 0;
