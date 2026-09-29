@@ -10,9 +10,12 @@
 #include "host_backtrace.h"
 #include "io_peripherals.h"
 #include <lucent/log.h>
+
+#include <cstdio>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 
 // Subsystem entry points reached from the I/O map. gpu_dma2_* read/write this instance's RAM and
 // take the Core (declared in core.h); the rest operate on words/buffers handed to them.
@@ -146,6 +149,30 @@ void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
                    pc,
                    r[31],
                    mem_r32(0x801fe00c));
+      // PSXPORT_WWATCH_GPR=1 — the WHOLE general register file on a hit, opt-in.
+      //
+      // The terse line above names the address, the value and the PC, which is enough to say THAT a
+      // store happened but not enough to say WHAT it was writing. Measured on Mega Man X4: a
+      // byte-wise copy overran a guest interrupt element, and the only open question left was which
+      // buffer and length it was given. Its destination is not in an argument register — it is
+      // saved to `$s3` at entry and incremented in the loop — so printing `$a0..$a3` would have
+      // shown nothing useful. The full file is dumped instead, and opt-in because it is 32 values
+      // per hit and a range can be hit thousands of times.
+      //
+      // `r[]` is the block-boundary register file, not the mid-block one, so the pointer shown is
+      // the value the block was ENTERED with. For a loop that is still the buffer being written,
+      // which is what a copy's caller needs to be told.
+      if (cfg_str("PSXPORT_WWATCH_GPR")) {
+        std::string regs;
+        for (int i = 0; i < 32; ++i) {
+          regs += " r" + std::to_string(i) + "=" + [&] {
+            char buf[16];
+            std::snprintf(buf, sizeof buf, "%08X", r[i]);
+            return std::string(buf);
+          }();
+        }
+        lucent::info("wwatch", "  gprs:{}", regs);
+      }
       // PSXPORT_WWATCH_BT=1 — host backtrace per hit. This supplements the architectural guest
       // PC/RA with the native call chain that led to the store.
       if (cfg_str("PSXPORT_WWATCH_BT")) {
