@@ -71,9 +71,24 @@ set_tests_properties(test_sync_submodules PROPERTIES TIMEOUT 60)
 # wearing the costume of a fix, and the positive cases pass whether or not it exists.
 add_test(NAME test_call_original_resuming_bound
          COMMAND test_call_original_resuming --never-returns)
+# THE ASSERTION IS THE MESSAGE, NOT THE EXIT CODE, and both the obvious alternatives were wrong here.
+#
+# Registered plainly — as this entry was in its first version — ctest expects exit 0, and the binary
+# returns 0 whenever the bound does NOT fire (the `return 0` at the end of the `--never-returns` path IS
+# the "the bound did not fire" report). So the entry passed while testing the opposite of the comment above
+# it, which claimed that without it "the bound is never exercised at all". A test that passes when the
+# behaviour is wrong is worse than no test, because it gets read as coverage.
+#
+# `WILL_FAIL TRUE` inverts that, and is ALSO wrong: **the binary exits 0 even when the bound fires.** The
+# framework does call `std::abort()` on the bound — the refusal is emitted, naming the return address,
+# the 64 host turns and the cycles — but the process still exits 0, so an exit-code assertion observes
+# nothing and `WILL_FAIL` reports red on correct behaviour. Asserting the OBSERVABLE instead makes the
+# test pass exactly when the named refusal appears and fail when the call returns, which is the property
+# this entry is for, and it does not depend on an exit code this process does not honour.
 set_tests_properties(test_call_original_resuming_bound PROPERTIES
   ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
-  TIMEOUT 60)
+  TIMEOUT 60
+  PASS_REGULAR_EXPRESSION "consumed 64 host turn\\(s\\).*without returning")
 
 list(LENGTH PSXPORT_TEST_SRCS _n_tests)
 message(STATUS "psxport tests: ${_n_tests} discovered in ${CMAKE_CURRENT_SOURCE_DIR}")
