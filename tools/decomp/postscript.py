@@ -150,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from ghidra.app.decompiler import DecompInterface  # noqa: PLC0415 - Ghidra-only import
     from ghidra.util.task import ConsoleTaskMonitor  # noqa: PLC0415
+    import os  # noqa: PLC0415
 
     program = currentProgram  # noqa: F821 - provided by GhidraScript
     fm = program.getFunctionManager()
@@ -202,6 +203,83 @@ def main(argv: list[str] | None = None) -> int:
             total += 1
         return total
 
+    def shape(function) -> dict:
+        """STRUCTURAL facts about a body, so a reader can judge 'one function or several merged'.
+
+        A Ghidra function can absorb code it never calls -- an inlined body, a cold tail, or a jump
+        table's arms -- and then its decompiled C is a WALL OF UNRELATED C presented as one function,
+        which is output that reads like a finished function and is not one. Nothing in Ghidra's own
+        API says whether that happened, so this REPORTS the counts a reader needs and the report
+        does NOT issue a verdict: the numbers are measurements, and a threshold would be a guess
+        about an image.
+
+        THE COUNTS, and what each can and cannot mean:
+
+        ``returns``       jump-register forms (`jr`/`jalr`) in the body. A body with none does not
+                          come back the ordinary way, and a body with many is either several merged
+                          functions or heavy tail-jumping -- the count alone does not say which.
+        ``prologues``     `addiu $sp,$sp,-N` forms, the MIPS function-entry shape. ONE means a single
+                          entry point; MANY inside one body is the shape of a merge.
+        ``calls``         direct `jal`s, and ``indirect_calls`` `jalr`s, so "no calls" is
+                          distinguishable from "no direct calls".
+
+        The alignment is the body's own, taken from ``getBody()`` and never recomputed: an earlier
+        version of this analysis read the span from ``body_first`` stepping by 4, which is only the
+        body's instruction grid when ``body_first`` is 4-aligned, and it reported 0 returns for a
+        body whose last two words are plainly `jr ra` + `nop`.
+        """
+        body = function.getBody()
+        first = body.getMinAddress()
+        # THE COUNTS BELOW ARE A MIRROR OF tools/decomp/structure.py, and the mirror is forced by
+        # where this file runs: PyGhidra loads a post-script as the module '__main__' with only the
+        # SCRIPT's own directory on sys.path, so it cannot import a repository module at all. That is
+        # a real constraint, not a preference, and it is why the question has an owner elsewhere and a
+        # pinned copy here.
+        #
+        # The pin is a TEST, not a promise: `test_shape_counting_is_exercised` runs this file's
+        # arithmetic against `structure.py`'s over a corpus of real words from a real image, so the
+        # two cannot drift without the selftest going red. Two copies is the floor imposed by the
+        # host boundary; two copies that AGREE is not.
+        #
+        # Raw words are read on the body's OWN instruction grid through the MEMORY API. Two wrong
+        # approaches are recorded because both produced a clean-looking answer here:
+        #   * counting through the instruction iterator and matching Ghidra's PRINTED mnemonic, which
+        #     is `_addiu` in a delay slot and `addiu` otherwise, so the count depended on formatting;
+        #   * `listing.getByteAt(...)`, which does not exist -- ListingDB has `getDataAt`, and the
+        #     error is an AttributeError that kills the post-script while Ghidra logs
+        #     "Post-analysis succeeded" and exits 0. MEASURED here; the pipeline's missing-inventory
+        #     refusal is what caught it, which is that check earning its place.
+        memory = program.getMemory()
+        raw_words = []
+        cursor = first
+        while cursor is not None and cursor.getOffset() <= body.getMaxAddress().getOffset():
+            word_value = 0
+            for shift in (3, 2, 1, 0):
+                word_value = (word_value << 8) | (memory.getByte(cursor.add(shift)) & 0xFF)
+            raw_words.append(word_value)
+            cursor = cursor.add(4)
+        prologues = sum(1 for w in raw_words
+                        if (w >> 16) == 0x27BD and (w & 0x8000))
+        # Jump-register forms are funct 0x08 (`jr`) and 0x09 (`jalr`). MEASURED: a first version
+        # matched only 0x09 and so reported `ret=0` for a body whose last two words are plainly
+        # `jr ra` + `nop` -- a confident wrong number in a diagnostic whose entire job is to be
+        # right about shape.
+        jump_register = sum(1 for w in raw_words
+                            if (w >> 26) == 0 and (w & 0x3F) in (0x08, 0x09))
+        calls = sum(1 for w in raw_words if (w >> 26) == 3)
+        # An indirect call is `jalr` through a register that is neither `zero` nor the return
+        # register, which is how a PSX image reaches a function pointer.
+        indirect = sum(1 for w in raw_words
+                       if (w >> 26) == 0 and (w & 0x3F) == 0x09
+                       and ((w >> 21) & 0x1F) not in (0, 31))
+        return {
+            "returns": jump_register,
+            "prologues": prologues,
+            "calls": calls,
+            "indirect_calls": indirect,
+            "words_read": len(raw_words),
+        }
+
     # -- the function inventory ---------------------------------------------------------------------
     inventory = []
     for function in functions:
@@ -216,8 +294,6 @@ def main(argv: list[str] | None = None) -> int:
         })
 
     # -- the named target set ----------------------------------------------------------------------
-    import os  # noqa: PLC0415
-
     os.makedirs(c_dir, exist_ok=True)
     results = []
     for offset in targets:
@@ -288,6 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         record["name"] = function.getName()
         record["body_bytes"] = function.getBody().getNumAddresses()
         record["instruction_count"] = bounded_count(function)
+        record["shape"] = shape(function)
         result = decompiler.decompileFunction(function, 90, monitor)
         c_text = None
         if result is not None and result.decompileCompleted():
@@ -315,8 +392,16 @@ def main(argv: list[str] | None = None) -> int:
         with open(preseed_path, "r", encoding="utf-8") as handle:
             preseed = json.load(handle)
 
+    # Which MANIFEST ENTRY and which KIND this was. A module's serial is its parent title's serial,
+    # so `program` alone cannot resolve its geometry -- BATTLE.PRG and SLUS_010.40 share one serial
+    # and sit 0x48800 apart. Resolving by serial would read the module through the resident's
+    # geometry and produce every address at a plausible and wrong place.
+    import os  # noqa: PLC0415
+
     document = {
         "program": program.getName(),
+        "image_name": os.environ.get("PSXPORT_DECOMP_IMAGE_NAME", ""),
+        "image_kind": os.environ.get("PSXPORT_DECOMP_IMAGE_KIND", ""),
         "language": str(program.getLanguageID()),
         "noreturn_policy": mode,
         "noreturn_cleared": cleared,

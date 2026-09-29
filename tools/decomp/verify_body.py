@@ -47,7 +47,12 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 from decomp import images  # noqa: E402
+from decomp import structure  # noqa: E402
 
+# The framework's neutral R3000A decoder, used here ONLY to format a listing for a human. Every
+# QUESTION about what a word IS is asked by :mod:`tools.decomp.structure`, which owns those; this
+# module decodes only to print, so there is one owner per question and no rule is derived twice.
+#
 # The MODULE, by explicit import: `import mips.decode as m` and `from mips import decode` BOTH
 # resolve to the FUNCTION, because `mips/__init__.py` does `from .decode import decode`, which
 # rebinds the package attribute `mips.decode` from the submodule to the function. importlib is the
@@ -89,8 +94,11 @@ def direct_call_targets(words: list) -> list[int]:
     A `jalr` is a call through a register and has no name to check, so it is EXCLUDED rather than
     counted as a missing callee -- and the denominator printed says so, so "10 sites, 0 distinct"
     cannot be read as "the C called nothing".
+
+    The `is direct call` question is asked by :mod:`tools.decomp.structure`, which owns it along
+    with every other shape question. This module deliberately does not re-derive it.
     """
-    return [ins.target for _c, _w, ins in words if ins.op.lower() == "jal"]
+    return [ins.target for _c, _w, ins in words if structure.is_direct_call(ins.raw)]
 
 
 def terminates_with_return(words: list) -> tuple[bool, str]:
@@ -136,11 +144,20 @@ def check(inventory_path: Path, c_path: Path, address: int, image_path: Path,
             "already reported as absent.")
 
     specs = images.load_manifest()
-    spec = next((s for s in specs.values() if s.serial == inventory["program"]), None)
+    # By the manifest entry's NAME, not by serial: a module's serial is its PARENT title's serial
+    # (BATTLE.PRG belongs to SLUS_010.40), so resolving by serial would find the resident entry and
+    # read the module's bytes through the resident's geometry -- every address 0x48800 out.
+    name = inventory.get("image_name")
+    spec = specs.get(name) if name else None
     if spec is None:
         raise BodyRefusal(
-            f"no manifest entry for serial {inventory['program']!r}, so there is no verified load "
-            "geometry to read the bytes with.")
+            f"the inventory names image {name!r}, which is not in the manifest"
+            + ("" if name else " (the inventory predates the image_name field)"))
+    if inventory.get("program") != spec.serial and inventory.get("image_kind") != spec.kind:
+        raise BodyRefusal(
+            f"the inventory was produced from a {inventory.get('image_kind')!r} but the manifest "
+            f"entry {name!r} is a {spec.kind!r}. Reading one through the other's geometry would put "
+            "every address somewhere plausible and wrong.")
     window = images.ImageWindow(spec, image_path)
 
     body_first, body_last = int(row["body_first"], 16), int(row["body_last"], 16)

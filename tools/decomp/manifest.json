@@ -1,27 +1,30 @@
 {
   "_comment": [
-    "Per-title load geometry for tools/decomp_pipeline.py. DATA, not code: adding a title is an",
-    "entry here, and the pipeline cross-checks every field against the image's own PS-X EXE header",
-    "before it imports anything. A wrong entry is REFUSED, because a wrong base does not fail on",
-    "its own -- Ghidra imports happily and every function lands at a plausible address that is not",
-    "the one the title's documents name.",
+    "Per-image load geometry for tools/decomp_pipeline.py. DATA, not code: adding a title or an",
+    "overlay is an entry here, and the pipeline checks what it can about each one before it imports",
+    "anything.",
     "",
-    "field: text_load_address / text_file_offset come from the header's load address and the",
-    "  fixed 0x800 PS-X EXE text offset. ghidra_base is DERIVED, not stored, so it cannot drift:",
-    "  it is text_load_address - text_file_offset, which maps file offset 0x800 onto the load",
-    "  address and leaves the executable's own header below the text window.",
-    "field: text_size is optional; when present it is checked too, and it is what bounds the",
-    "  disassembly window so the tool does not spend its attention on image data.",
-    "field: entry is the PS-X EXE entry point, recorded for reference. The pipeline seeds",
-    "  disassembly from the whole declared window rather than from this one address, because",
-    "  auto-analysis must reach the jump-table-only handlers that have no call site.",
+    "KIND decides what is checked, and it is a field rather than a branch in the code:",
+    "  'resident' -- a PS-X EXE. Load address, text size and entry come from its OWN header, and the",
+    "    numbers here are CROSS-CHECKED against it; a disagreement is a refusal, because a wrong base",
+    "    imports cleanly and puts every function at a plausible address that is not the recorded one.",
+    "  'module'   -- an overlay (.PRG / .BIN). NO header, NO entry, and no address derivable from",
+    "    the file, so load_base and the code window are the OWNING PORT'S MEASURED facts and are",
+    "    trusted as data. What the tool can still check is that the code window lies inside the FILE,",
+    "    that the base is in 2 MiB of KSEG0, and the sha1 gate below.",
     "",
-    "MEASURED 2026-09-28 from the provisioned images in each title repository. Every title in this",
-    "workspace is a PS-X EXE loading at 0x80010000 with text at file offset 0x800; they differ in",
-    "text size, which is why the size is data here rather than an assumption in the code."
+    "ghidra_base is DERIVED, never stored, so it cannot drift:",
+    "  resident -> text_load_address - text_file_offset (which maps file offset 0x800 onto the load",
+    "             address and leaves the executable's own header below the text window),",
+    "  module   -> load_base (a module's text begins at file offset 0).",
+    "",
+    "MEASURED 2026-09-28/29 from the provisioned images. Every resident title in this workspace is a",
+    "PS-X EXE loading at 0x80010000 with text at file offset 0x800; they differ in text size, which is",
+    "why the size is data here rather than an assumption in the code."
   ],
-  "titles": {
+  "images": {
     "spyro1": {
+      "kind": "resident",
       "serial": "SCUS_942.28",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
@@ -29,6 +32,7 @@
       "note": "Insomniac. Its repo verified the file-offset formula against 62,183 of 62,183 recorded instructions."
     },
     "crash1": {
+      "kind": "resident",
       "serial": "SCUS_949.00",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
@@ -36,6 +40,7 @@
       "note": "Naughty Dog. Retail projection is H=1000, OFX=0, OFY=0; widening must not raise the 0x800578D0 GTE near plane."
     },
     "crash2": {
+      "kind": "resident",
       "serial": "SCUS_941.54",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
@@ -43,6 +48,7 @@
       "note": "Naughty Dog."
     },
     "crash3": {
+      "kind": "resident",
       "serial": "SCUS_942.44",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
@@ -50,13 +56,15 @@
       "note": "Naughty Dog."
     },
     "crashbash": {
+      "kind": "resident",
       "serial": "SCUS_945.70",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
       "text_size": "0x69000",
-      "note": "Main image has no file extension; find -iname 'SCUS*.BIN' misses it."
+      "note": "Main image has no file extension; find -iname 'SCUS*.BIN' misses it. Has 7 overlays, not yet declared."
     },
     "ctr": {
+      "kind": "resident",
       "serial": "SCUS_944.26",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
@@ -64,13 +72,15 @@
       "note": "Naughty Dog. Measured 2 fields per game frame; 30 fps."
     },
     "megamanx4": {
+      "kind": "resident",
       "serial": "SLUS_005.61",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
       "text_size": "0x11F800",
-      "note": "Capcom. TRAP: `llvm-objdump --triple=mips` silently misdecodes this image; use plain `llvm-objdump -d`. Its vendored decomp is AGPL-3.0 and may NOT be lifted into psxport or any other workspace repo."
+      "note": "Capcom. Its text is 2.83x spyro1's and MEASURED to fit the 1400 MB ceiling: 4,834 functions, up to 1,089,096 KB peak RSS, 53.3 s. NOTE 0x80015FE0 is NOT a function entry (nearest entry 0x80016004, +0x24) and 0x80015FD4 is +264 INSIDE FUN_80015ecc's body; both are labels, not entries."
     },
     "spiderman1": {
+      "kind": "resident",
       "serial": "SLUS_008.75",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
@@ -78,6 +88,7 @@
       "note": "Neversoft. Reaches library routines through jalr function pointers, so a jal-only census reads 0 for every one of them."
     },
     "tekken3": {
+      "kind": "resident",
       "serial": "SLUS_004.02",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
@@ -85,6 +96,7 @@
       "note": "Namco. Already 60 fps, so widescreen-only enhancement scope."
     },
     "tomba1": {
+      "kind": "resident",
       "serial": "SCUS_942.36",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
@@ -92,18 +104,52 @@
       "note": "Whoopee Camp. Already 60 fps, so widescreen-only enhancement scope."
     },
     "tomba2": {
+      "kind": "resident",
       "serial": "SCUS_944.54",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
       "text_size": "0x28800",
-      "note": "Whoopee Camp. The resident executable is ~15% of the title; most code is in .PRG overlays loaded at run time."
+      "note": "Whoopee Camp. The resident executable is ~15% of the title; most code is in .PRG overlays loaded at run time. Has overlays, not yet declared."
     },
     "vagrant": {
+      "kind": "resident",
       "serial": "SLUS_010.40",
+      "sha1": "fababcfd4325d42f350d95b3472874affeb0e48c",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
       "text_size": "0x52000",
-      "note": "Square. SHA-1 of this image matches the CC0 rood-reverse decomp's target, so its symbol addresses are confirmed against real bytes -- a reading aid only, never copied into a shipping path. 933,925 B of its code lives in .PRG overlays, which need their own entries and are NOT covered here."
+      "note": "Square. SHA-1 of this image MATCHES the CC0 rood-reverse decomp's declared target, so its symbol addresses are confirmed against real bytes -- a reading aid only, never copied into a shipping path. 933,925 B of its code lives in .PRG overlays; see the vagrant_* modules."
+    },
+
+    "vagrant_battle": {
+      "kind": "module",
+      "title": "vagrant",
+      "serial": "SLUS_010.40",
+      "sha1": "d53aaccc3b3a2fc057d05e0dcea92f7182bc72a9",
+      "load_base": "0x80068800",
+      "code_first": "0x146C",
+      "code_last": "0x7F983",
+      "note": "BATTLE.PRG, 577,828 B on disc (BATTLE.BIN). code_first/code_last are the MEASURED CODE EXTENT (the decomp declares 0x146C..0x7F984), and code_first is NOT 0: the module's first words are a POINTER TABLE (0x8006C684 = base+0x3E84, and eight consecutive words all resolve inside the module), so disassembly seeded at file offset 0 reaches nothing. Verified here: offset 0x146C holds 0x27BDFFE8, an `addiu $sp,$sp,-N` prologue, which is what a code extent starts with. Load base is the vagrant repo's MEASURED fact (tools/re_viewport.py BATTLE_LOAD_BASE, itself derived in tools/re_overlay.py M2 from this module's own absolute jal targets and entry offsets -- 20/20 identity and address agreements, and the decomp declares the same vram). Its decomp-declared CODE extent is 0x146C..0x7F984; that is narrower than the loaded module and is where its functions live, but the pipeline seeds disassembly at the window start and reports what it finds. HOLDS func_800760CC, the port's projection owner."
+    },
+    "vagrant_title": {
+      "kind": "module",
+      "title": "vagrant",
+      "serial": "SLUS_010.40",
+      "sha1": "f74a76e6215edebf607d0c2af56481050edb139a",
+      "load_base": "0x80068800",
+      "code_first": "0x22C",
+      "code_last": "0x959B",
+      "note": "TITLE.PRG, 554,568 B (TITLE.BIN). Same measured load base as BATTLE -- they SHARE one slot, which is exactly why a guest address is meaningless without the module identity, and why a resident-only reader could never decompile both. Declared code extent 0x22C..0x959C."
+    },
+    "vagrant_initbtl": {
+      "kind": "module",
+      "title": "vagrant",
+      "serial": "SLUS_010.40",
+      "sha1": "d7ea16ef957179cad6e3b02727bb714713cfcc32",
+      "load_base": "0x800F9800",
+      "code_first": "0x18",
+      "code_last": "0x1317",
+      "note": "INITBTL.PRG, 7,036 B (INITBTL.BIN). A DIFFERENT measured base from BATTLE/TITLE -- 0x800F9800 against 0x80068800 -- which is what makes it the control: the same reader, the same code path, a base 0x91000 away. Its decomp-declared code extent is 0x18..0x1318."
     }
   }
 }

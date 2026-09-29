@@ -30,7 +30,7 @@ from . import headless, images, lock, report as report_module
 class DecompRun:
     """Everything one run needs. Values, not paths to look up later, so a refusal names them."""
 
-    title: str
+    image_name: str
     image_path: Path
     output_dir: Path
     targets: list[int]
@@ -44,7 +44,7 @@ class DecompRun:
     runner: headless.Runner = field(default_factory=headless.SubprocessRunner)
 
     def spec(self, manifest_path: Path | None = None) -> images.ImageSpec:
-        return images.select(images.load_manifest(manifest_path), self.title)
+        return images.select(images.load_manifest(manifest_path), self.image_name)
 
 
 def _assert_output_dir_is_ignored(output_dir: Path, repo_root: Path) -> None:
@@ -81,7 +81,10 @@ def execute(run: DecompRun, manifest_path: Path | None = None,
     interpreter = headless.resolve_interpreter(run.ghidra_home)
     headless.check_installation(run.ghidra_home, interpreter, run.runner)
 
-    # 2. the image and the manifest, cross-checked against the image's own header.
+    # 2. the image and the manifest. A resident EXE is cross-checked against its OWN header; a module
+    #    has no header, so its measured base and window are trusted as data and the file is gated by
+    #    the SHA-1 instead. Both go through one reader -- two implementations would drift exactly where
+    #    a re-port drifts.
     spec = run.spec(manifest_path)
     window = images.ImageWindow(spec, run.image_path)
 
@@ -95,7 +98,7 @@ def execute(run: DecompRun, manifest_path: Path | None = None,
 
     lock_dir = run.lock_dir or lock.default_lock_dir()
     handle = lock.GhidraLock(directory=Path(lock_dir), wait_seconds=run.lock_wait_seconds,
-                             holder_note=f"{run.title} {run.image_path.name}")
+                             holder_note=f"{run.image_name} {run.image_path.name}")
     # 3-5. the scarce resource, held for the invocation only.
     handle.acquire()
     try:
@@ -106,13 +109,18 @@ def execute(run: DecompRun, manifest_path: Path | None = None,
             project_name="decomp",
             import_path=Path(run.image_path),
             base_address=spec.ghidra_base,
-            text_first=window.header.load,
-            text_last=window.text_end - 1,
-            # Disassembly is seeded from the image's OWN declared entry point, not from the start
-            # of the text window. Measured on Spyro 1: the first byte of the window is DATA, so
-            # seeding there produced 0 instructions while the declared entry 0x8005B8E0 produced 670
-            # functions. ImageWindow.open refuses an image whose entry is 0, so this is never zero.
-            entry_address=window.header.entry,
+            text_first=spec.first_address,
+            text_last=spec.last_address - 1,
+            # Disassembly is seeded from the image's OWN declared entry point, not from the start of
+            # the text window. Measured on Spyro 1: the first byte of the window is DATA, so seeding
+            # there produced 0 instructions while the declared entry 0x8005B8E0 produced 670
+            # functions. A resident's entry is its header's; a MODULE has no header and no entry, so
+            # ImageWindow derives one from the measured code window's first byte. The report prints
+            # which of the two it used, because "seeded at the window start" and "seeded at the
+            # entry point" are different claims about the same address.
+            entry_address=window.entry,
+            image_name=spec.name,
+            image_kind=spec.kind,
             output_dir=output_dir,
             postscript=Path(headless.__file__).resolve().parent / "postscript.py",
             prescript=Path(headless.__file__).resolve().parent / "prescript.py",

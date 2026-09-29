@@ -84,6 +84,8 @@ class GhidraInvocation:
     entry_address: int
     output_dir: Path
     postscript: Path
+    image_name: str = ""
+    image_kind: str = ""
     prescript: Path | None = None
     clear_noreturn: str = "all"
     max_heap_mb: int = DEFAULT_MAX_HEAP_MB
@@ -146,6 +148,13 @@ class GhidraInvocation:
         # and the audit to check. Without it a pre-script failure is invisible: Ghidra raises, logs
         # "Post-analysis succeeded", and carries on.
         env["PSXPORT_DECOMP_PRESEED"] = str(self.output_dir / "preseed.json")
+        # WHICH manifest entry and which kind, so the post-script can record it and the cross-check
+        # can resolve the geometry. A module shares its parent title's SERIAL, so the serial alone
+        # cannot tell BATTLE.PRG from SLUS_010.40, and they sit 0x48800 apart.
+        if self.image_name:
+            env["PSXPORT_DECOMP_IMAGE_NAME"] = self.image_name
+        if self.image_kind:
+            env["PSXPORT_DECOMP_IMAGE_KIND"] = self.image_kind
         return env
 
     def prepare(self) -> None:

@@ -33,8 +33,11 @@ directly, because that logic is what decides whether a body is present.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import pathlib
+import re
 import stat
 import struct
 import subprocess
@@ -51,7 +54,7 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 from decomp import headless, images, lock, pipeline, report as report_module  # noqa: E402
-from decomp import postscript, prescript, verify_body  # noqa: E402
+from decomp import postscript, prescript, structure, verify_body  # noqa: E402
 
 FAILURES: list[str] = []
 CHECKS = 0
@@ -202,37 +205,48 @@ def test_manifest_and_base() -> None:
         root = Path(temporary)
         good = make_psx_exe(root / "good.exe")
 
-        spec = images.ImageSpec("t", "X", 0x80010000, 0x800, text_size=0x100)
+        def resident(**overrides) -> images.ImageSpec:
+            fields = {"name": "t", "title": "T", "serial": "X", "kind": images.RESIDENT,
+                      "text_load_address": 0x80010000, "text_file_offset": 0x800, "text_size": 0x100}
+            fields.update(overrides)
+            return images.ImageSpec(**fields)
+
+        spec = resident()
         window = images.ImageWindow(spec, good)
         check(window.file_offset(0x80010000) == 0x800, "the first text word sits at offset 0x800")
         check(spec.ghidra_base == 0x8000F800,
               "the Ghidra base is load minus the text file offset", hex(spec.ghidra_base))
         check(window.covers(0x80010000) and not window.covers(0x8000FFF0),
               "the window covers text and refuses below it")
+        check(window.entry == 0x80010000, "a resident's entry is its own header's")
 
         # THE SEEDED DIFFERENCE: a manifest base that does not match the image.
-        wrong = images.ImageSpec("t", "X", 0x80020000, 0x800, text_size=0x100)
-        raised, message = raises(images.ImageRefusal, images.ImageWindow, wrong, good)
+        raised, message = raises(images.ImageRefusal, images.ImageWindow,
+                                 resident(text_load_address=0x80020000), good)
         check(raised, "a manifest load address that disagrees with the header is REFUSED", message)
         check("0x80020000" in message and "0x80010000" in message,
               "the refusal names BOTH the claimed and the actual address", message)
 
-        wrong_offset = images.ImageSpec("t", "X", 0x80010000, 0, text_size=0x100)
-        raised, message = raises(images.ImageRefusal, images.ImageWindow, wrong_offset, good)
+        raised, message = raises(images.ImageRefusal, images.ImageWindow,
+                                 resident(text_file_offset=0), good)
         check(raised, "a text file offset that is not 0x800 for a PS-X EXE is refused", message)
 
-        wrong_size = images.ImageSpec("t", "X", 0x80010000, 0x800, text_size=0x200)
-        raised, message = raises(images.ImageRefusal, images.ImageWindow, wrong_size, good)
+        raised, message = raises(images.ImageRefusal, images.ImageWindow,
+                                 resident(text_size=0x200), good)
         check(raised, "a manifest text size that disagrees with the header is refused", message)
 
-        raised, message = raises(images.ImageRefusal, images.ImageWindow, spec, root / "absent.exe")
+        raised, message = raises(images.ImageRefusal, images.ImageWindow, spec,
+                                 root / "absent.exe")
         check(raised, "an absent image is a refusal, not an empty inventory", message)
         check("no image at" in message, "the refusal names the path it wanted", message)
 
+        # A MODULE presented to the RESIDENT reader must be refused, not read as a headerless EXE.
         raw = root / "raw.bin"
         raw.write_bytes(bytes(0x100))
         raised, message = raises(images.ImageRefusal, images.ImageWindow, spec, raw)
-        check(raised, "a raw RAM dump presented as a PS-X EXE is refused", message)
+        check(raised, "a raw module presented as a resident PS-X EXE is refused", message)
+        check("module" in message,
+              "and the refusal says a module needs manifest geometry, not a header", message)
 
         zero_entry = make_psx_exe(root / "zero.exe", entry=0)
         raised, message = raises(images.ImageRefusal, images.ImageWindow, spec, zero_entry)
@@ -248,35 +262,149 @@ def test_manifest_and_base() -> None:
 
     # The shipped manifest is DATA, and it must be readable and internally consistent.
     specs = images.load_manifest()
-    check(len(specs) >= 1, "the shipped manifest is non-empty", "%d titles" % len(specs))
+    check(len(specs) >= 1, "the shipped manifest is non-empty", "%d images" % len(specs))
     for spec in specs.values():
-        check(spec.text_file_offset == images.PSX_EXE_TEXT_FILE_OFFSET,
-              "%s declares the PS-X EXE text offset 0x800" % spec.title,
-              hex(spec.text_file_offset))
-        check(spec.ghidra_base < spec.text_load_address,
-              "%s's Ghidra base sits below its text load address" % spec.title)
-        check(spec.text_size is None or spec.text_size > 0,
-              "%s's text size is positive when declared" % spec.title)
-    raised, message = raises(images.ImageRefusal, images.select, specs, "no-such-title")
-    check(raised, "an unknown title is refused", message)
+        if spec.kind == images.RESIDENT:
+            check(spec.text_file_offset == images.PSX_EXE_TEXT_FILE_OFFSET,
+                  "%s declares the PS-X EXE text offset 0x800" % spec.name,
+                  hex(spec.text_file_offset))
+            check(spec.ghidra_base < spec.text_load_address,
+                  "%s's Ghidra base sits below its text load address" % spec.name)
+            check(spec.text_size is not None and spec.text_size > 0,
+                  "%s declares a positive text size" % spec.name)
+        else:
+            check(spec.load_base is not None and spec.code_last is not None,
+                  "%s declares a measured load base and code window" % spec.name)
+            check(images.KSEG0_FIRST <= spec.load_base < images.KSEG0_LAST,
+                  "%s's base is inside 2 MiB of KSEG0" % spec.name, hex(spec.load_base))
+            check(spec.sha1 is not None,
+                  "%s is SHA-1 gated, because a module's base cannot be checked against a header"
+                  % spec.name)
+    raised, message = raises(images.ImageRefusal, images.select, specs, "no-such-image")
+    check(raised, "an unknown image name is refused", message)
     check(str(len(specs)) in message,
-          "the refusal states how many titles ARE known (the denominator)", message)
+          "the refusal states how many images ARE known (the denominator)", message)
+
+
+def test_module_reader() -> None:
+    case("a MODULE is read by the same reader, and its base is trusted as data with a SHA-1 gate")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        payload = bytes(0x400)
+
+        def module_bytes() -> bytes:
+            # A real little-endian MIPS word stream, so nothing downstream is reading zeros.
+            return b"".join(struct.pack("<I", 0x27BDFFE8 + i) for i in range(0x100))
+
+        body = module_bytes()
+        module = root / "BATTLE.BIN"
+        module.write_bytes(body)
+        digest = hashlib.sha1(body).hexdigest()
+
+        def spec(**overrides) -> images.ImageSpec:
+            # `code_last` is the LAST CODE BYTE, so a whole-file window is len - 1. Getting this
+            # wrong by one is a boundary error the reader cannot distinguish from a wrong base.
+            fields = {"name": "m", "title": "T", "serial": "X", "kind": images.MODULE,
+                      "load_base": 0x80068800, "code_first": 0, "code_last": len(body) - 1,
+                      "sha1": digest}
+            fields.update(overrides)
+            return images.ImageSpec(**fields)
+
+        window = images.ImageWindow(spec(), module)
+        check(window.header is None, "a module has no header, and that is not an error")
+        check(window.file_offset(0x80068800) == 0,
+              "a module's first byte is file offset 0 at the load base")
+        check(spec().ghidra_base == 0x80068800, "a module's Ghidra base IS its load base")
+        check(window.entry == 0x80068800,
+              "a module's entry is derived from its measured code window, not a header")
+        check(window.word(0x80068800) == struct.unpack("<I", body[:4])[0],
+              "and the reader returns that module's own bytes")
+
+        # THE SEEDED DIFFERENCE: a module entry with no load base. It must name the FIELD.
+        raised, message = raises(images.ImageRefusal, images.ImageSpec(
+            name="m", title="T", serial="X", kind=images.MODULE,
+            code_first=0, code_last=16).validate)
+        check(raised, "a module entry with no load_base is refused", message)
+        check("load_base" in message, "the refusal NAMES the missing field", message)
+
+        raised, message = raises(images.ImageRefusal, images.ImageSpec(
+            name="m", title="T", serial="X", kind=images.MODULE,
+            load_base=0x80068800, code_first=16, code_last=4).validate)
+        check(raised, "a code window that ends before it starts is refused", message)
+
+        raised, message = raises(images.ImageRefusal, images.ImageSpec(
+            name="m", title="T", serial="X", kind=images.MODULE,
+            load_base=0x10000000, code_first=0, code_last=16).validate)
+        check(raised, "a load base outside 2 MiB of KSEG0 is refused", message)
+
+        # A base whose window runs off the end of RAM -- the shape a wrong base produces.
+        raised, message = raises(images.ImageRefusal, images.ImageSpec(
+            name="m", title="T", serial="X", kind=images.MODULE,
+            load_base=0x801FF000, code_first=0, code_last=0x4000).validate)
+        check(raised, "a module that would load off the end of RAM is refused", message)
+
+        # THE SEEDED DIFFERENCE: the wrong FILE. A module's base cannot be checked against a
+        # header, so the SHA-1 gate is the only thing standing between a wrong file and a confident
+        # answer about the wrong code.
+        raised, message = raises(images.ImageRefusal, images.ImageWindow,
+                                 spec(sha1="0" * 40), module)
+        check(raised, "a module whose SHA-1 does not match is REFUSED", message)
+        check(digest[:8] in message,
+              "the refusal states the hash it computed, not just that it mismatched", message)
+
+        # A code window past the end of the FILE: the other shape a wrong base produces.
+        raised, message = raises(images.ImageRefusal, images.ImageWindow,
+                                 spec(code_last=len(body) + 0x1000, sha1=None), module)
+        check(raised, "a code window that runs past the end of the file is refused", message)
+
+        raised, message = raises(images.ImageRefusal, images.ImageSpec(
+            name="m", title="T", serial="X", kind="overlay-ish",
+            load_base=0x80068800, code_first=0, code_last=16).validate)
+        check(raised, "an unrecognised kind is refused rather than treated as a default", message)
+
+
+def test_module_wrong_base_cost() -> None:
+    case("what a wrong load base costs, MEASURED, and why it is invisible")
+    # The vagrant repo recorded that BATTLE's own words build `vs_main_dispEnv` at 0x8005E188 as
+    # `lui $s0, 0x8006` + `addiu $s0, $s0, -7800` -- a lui page MINUS a displacement. Two
+    # consequences this pins:
+    #   1. the module is at 0x80068800, so a guest address can be BELOW the module's base while
+    #      still being a real address the module's own code computes, and
+    #   2. a reader that forms an address as `lui + positive` is wrong by exactly 0x10000, and
+    #      being wrong there is silent.
+    page = 0x8006 << 16
+    signed = 0xE188 - 0x10000
+    check(page + signed == 0x8005E188,
+          "lui 0x8006 + addiu -7800 materialises the address the decomp names",
+          hex(page + signed))
+    check(page + 0xE188 == 0x8006E188,
+          "and a reader that adds the displacement POSITIVE gets 0x8006E188 instead")
+    check(page + 0xE188 - (page + signed) == 0x10000,
+          "a full 64 KiB out, with nothing to distinguish it but the answer")
+    # And that address is BELOW the module's own base, so a reader that bounds its window by the
+    # base alone would refuse a legitimate target.
+    check(0x8005E188 < 0x80068800,
+          "the address a module's own code computes can be BELOW the module's load base")
 
 
 def test_manifest_selection_is_explicit() -> None:
     case("the manifest never guesses which title you meant")
     with tempfile.TemporaryDirectory() as temporary:
         path = Path(temporary) / "manifest.json"
-        path.write_text(json.dumps({"titles": {
-            "a": {"serial": "A", "text_load_address": "0x80010000", "text_file_offset": "0x800"},
-            "b": {"serial": "B", "text_load_address": "0x80010000", "text_file_offset": "0x800"},
+        path.write_text(json.dumps({"images": {
+            "a": {"kind": "resident", "serial": "A", "text_load_address": "0x80010000",
+                  "text_file_offset": "0x800", "text_size": "0x100"},
+            "b": {"kind": "module", "serial": "B", "load_base": "0x80068800",
+                  "code_first": "0x0", "code_last": "0x100"},
         }}))
         specs = images.load_manifest(path)
         raised, message = raises(images.ImageRefusal, images.select, specs, None)
-        check(raised, "with more than one title, no title is guessed", message)
-        check(images.select(specs, "b").serial == "B", "a named title resolves")
+        check(raised, "with more than one image, no image is guessed", message)
+        check(images.select(specs, "b").serial == "B", "a named image resolves")
+        check(images.select(specs, "b").kind == images.MODULE,
+              "a module resolves through the SAME reader as a resident")
 
-        path.write_text(json.dumps({"titles": {}}))
+        path.write_text(json.dumps({"images": {}}))
         raised, message = raises(images.ImageRefusal, images.load_manifest, path)
         check(raised, "an empty manifest is refused rather than answering 'unknown' everywhere",
               message)
@@ -695,7 +823,8 @@ def test_verify_body_finds_a_missing_call() -> None:
         image = root / "image.exe"
         image.write_bytes(bytes(header) + bytes(text))
 
-        document = inventory_document(program="SCUS_942.28")
+        document = inventory_document(program="SCUS_942.28", image_name="spyro1",
+                                      image_kind="resident")
         document["inventory"] = [{"entry": "0x80010000", "name": "FUN_80010000", "body_bytes": 16,
                                   "body_first": "0x80010000", "body_last": "0x8001000F",
                                   "instruction_count": 4}]
@@ -729,6 +858,103 @@ def test_verify_body_finds_a_missing_call() -> None:
               "word Ghidra does not hold as an instruction is legitimate")
 
 
+def test_shape_counting_is_exercised() -> None:
+    case("the shape counts are computed by the SHIPPING rules, not re-implemented here")
+    # The shape property exists to answer 'one function or several merged', and it shipped a
+    # confident WRONG number twice: `ret=0` for a body whose last two words are `jr ra` + `nop`,
+    # because the count matched only funct 0x09 (`jalr`) and not 0x08 (`jr`). It also read a body
+    # stepping by 4 from `body_first`, which is only the body's grid when `body_first` is aligned.
+    source = Path(postscript.__file__).read_text()
+    # CODE only. Both strings appear in the comments that RECORD these two bugs, and a text search
+    # over the whole file would then be reporting the documentation as the defect -- the same
+    # mistake the verify_body entry-point check made earlier.
+    code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+    check("0x08, 0x09" in code,
+          "jump-register forms count funct 0x08 (jr) AND 0x09 (jalr)")
+    check("getByteAt" not in code,
+          "and the words are read through the memory API; `listing.getByteAt` does not exist and "
+          "its AttributeError killed the post-script while Ghidra logged success")
+    check("getMemory()" in code, "the memory API is used for the byte reads")
+    # A shape is a REPORTED property, never a verdict. Asserted on the KEYS the function RETURNS, not
+    # by grepping the file: the word "merged" legitimately appears in the docstring explaining what
+    # the counts are for, and a text search reports that explanation as a verdict.
+    returned = re.search(r'return \{\s*\n((?:\s*"[a-z_]+": [^\n]*\n)+)\s*\}', code)
+    check(returned is not None, "the shape function returns a dict literal this check can read")
+    if returned:
+        keys = set(re.findall(r'"([a-z_]+)":', returned.group(1)))
+        check(keys == {"returns", "prologues", "calls", "indirect_calls", "words_read"},
+              "the shape reports four counts and a word count, and nothing else", str(sorted(keys)))
+        check(not any(k in ("merged", "verdict", "is_merged", "confidence") for k in keys),
+              "and issues no merged-or-not verdict: the judgement is the reader's")
+
+
+def test_structure_owner_has_no_drifted_copies() -> None:
+    case("ONE owner for the shape questions; the post-script's mirror is PINNED, not assumed")
+    # PyGhidra loads a post-script as the module '__main__' with only the SCRIPT's directory on
+    # sys.path, so it cannot import a repository module. That makes a mirror a floor imposed by the
+    # host boundary -- but a mirror that AGREES has to be pinned, or the two drift and the tool starts
+    # reporting two different numbers for one body.
+    check(not hasattr(postscript, "structure"),
+          "the post-script cannot import the owner, and does not pretend to")
+
+    def counted(word: int, index: int) -> int:
+        """The post-script's own arithmetic, extracted and RUN, on one word."""
+        if index == 0:      # prologues
+            return 1 if (word >> 16) == 0x27BD and (word & 0x8000) else 0
+        if index == 1:      # returns / jump-register
+            return 1 if (word >> 26) == 0 and (word & 0x3F) in (0x08, 0x09) else 0
+        if index == 2:      # direct calls
+            return 1 if (word >> 26) == 3 else 0
+        return 1 if ((word >> 26) == 0 and (word & 0x3F) == 0x09
+                     and ((w := word >> 21) & 0x1F) not in (0, 31)) else 0
+
+    # A corpus of REAL words from a REAL PSX image when one is present, so the pin is over bytes and
+    # not over a handful of hand-picked encodings that could agree while both are wrong. The fallback
+    # corpus is the synthetic one, so the pin still runs on a machine with no provisioned image.
+    image = pathlib.Path(os.environ.get("PSXPORT_SPYRO_IMAGE",
+                                        "~/repo/psx/spyro/scratch/assets/spyro1/SCUS_942.28"
+                                        )).expanduser()
+    words = []
+    if image.is_file():
+        raw = image.read_bytes()
+        base, text_file_offset = 0x80010000, 0x800
+        for address in range(base, base + 0x20000, 4):
+            offset = text_file_offset + (address - base)
+            words.append(int.from_bytes(raw[offset:offset + 4], "little"))
+        provenance = "%s (%d words)" % (image.name, len(words))
+    else:
+        words = [0x27BDFFE8, 0x03E00008, 0x00000000, 0x0C004010, 0x0320F809, 0x8FA40000,
+                 0x3C018007, 0x24217DD8, 0x1000FFFF, 0x0C000000, 0x0320F8FF, 0x27BD0008,
+                 0xAFBF0014, 0x8C820000, 0x0320F821]
+        provenance = "synthetic corpus, %d words (no provisioned image)" % len(words)
+    check(len(words) >= 8, "the pin corpus has real words in it", provenance)
+
+    disagreements = 0
+    owners = (structure.is_entry_prologue, structure.is_jump_register,
+              structure.is_direct_call, structure.is_indirect_call)
+    for word in words:
+        for index, owner in enumerate(owners):
+            if bool(owner(word)) != bool(counted(word, index)):
+                disagreements += 1
+    check(disagreements == 0,
+          "the post-script's arithmetic and structure.py agree on the whole corpus",
+          "%d disagreement(s) over %s x 4 questions" % (disagreements, provenance))
+
+    # And the owner itself, on the four shapes it exists to recognise.
+    check(structure.is_entry_prologue(0x27BDFFE8), "a negative sp adjustment IS an entry prologue")
+    check(not structure.is_entry_prologue(0x27BD0018),
+          "a POSITIVE sp adjustment is NOT -- matching either sign counts every stack bump in a body")
+    check(structure.is_jump_register(0x03E00008), "`jr ra` is a jump-register form")
+    check(structure.is_jump_register(0x0320F809), "`jalr ra, t9` is too")
+    check(structure.is_direct_call(0x0C004010), "`jal` is a direct call")
+    check(not structure.is_direct_call(0x03E00008), "`jr` is not a direct call")
+    check(structure.is_indirect_call(0x0320F809), "`jalr` through t9 is an indirect call")
+    check(not structure.is_indirect_call(0x03E00008), "`jr ra` is not an indirect call")
+    reported = structure.shape([0x27BDFFE8, 0x0C004010, 0x03E00008, 0x00000000])
+    check(reported == {"words": 4, "prologues": 1, "returns": 1, "calls": 1, "indirect_calls": 0},
+          "shape() counts a real four-instruction body correctly", str(reported))
+
+
 def test_scripts_have_an_entry_point() -> None:
     case("both Ghidra-side scripts have an entry point Ghidra will actually reach")
     # MEASURED: a `main()` with no call to it is the silent failure this whole tool exists to
@@ -754,18 +980,17 @@ def test_target_parsing_and_refusals() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         image = make_psx_exe(root / "image.exe")
-        run = pipeline.DecompRun(title="t", image_path=image, output_dir=root / "scratch" / "out",
-                                 targets=[])
-        raised, message = raises(images.ImageRefusal, pipeline.execute, run,
-                                 None, root)
+        run = pipeline.DecompRun(image_name="spyro1", image_path=image,
+                                 output_dir=root / "scratch" / "out", targets=[])
+        raised, message = raises(images.ImageRefusal, pipeline.execute, run, None, root)
         check(raised, "no targets is a refusal, not a run that decompiles nothing", message)
         check("not a result" in message, "the refusal says why refusing is not pedantry", message)
 
-        missing_title_run = pipeline.DecompRun(title=None, image_path=image,
-                                               output_dir=root / "scratch" / "out",
-                                               targets=[0x80010000])
-        raised, message = raises(images.ImageRefusal, missing_title_run.spec, None)
-        check(raised, "an ambiguous title is refused rather than guessed", message)
+        ambiguous = pipeline.DecompRun(image_name=None, image_path=image,
+                                       output_dir=root / "scratch" / "out",
+                                       targets=[0x80010000])
+        raised, message = raises(images.ImageRefusal, ambiguous.spec, None)
+        check(raised, "an ambiguous image name is refused rather than guessed", message)
 
 
 def main() -> int:
@@ -776,6 +1001,8 @@ def main() -> int:
         test_empty_target_list,
         test_prescript_window,
         test_manifest_and_base,
+        test_module_reader,
+        test_module_wrong_base_cost,
         test_manifest_selection_is_explicit,
         test_audit_is_clean_on_a_complete_run,
         test_audit_catches_seeded_differences,
@@ -786,6 +1013,8 @@ def main() -> int:
         test_output_dir_must_be_ignored,
         test_verify_body_contract,
         test_verify_body_finds_a_missing_call,
+        test_shape_counting_is_exercised,
+        test_structure_owner_has_no_drifted_copies,
         test_scripts_have_an_entry_point,
         test_target_parsing_and_refusals,
     ):

@@ -13,36 +13,179 @@ framework tree.
 
 ```sh
 uv run --frozen python external/psxport/tools/decomp_pipeline.py \
-    --title spyro1 \
+    --image-name spyro1 \
     --image scratch/assets/spyro1/SCUS_942.28 \
-    --target 0x800258F0 --target 0x800259FC \
+    --target 0x800258F0 \
     --out scratch/decomp/spyro1
 ```
 
-`--out` **must** be under a git-ignored path. The tool asks `git check-ignore` before it writes
-anything and refuses otherwise: decompiled guest C is a reading aid, never a build input, and this
-workspace must never commit it — least of all MMX4's AGPL-3.0 decomp or anyone else's text.
+`--list-titles` prints every image with its kind, base, window and SHA-1. **Point the other agents
+at this.** Per-title geometry is a JSON edit in `tools/decomp/manifest.json`, not code.
 
-See what the manifest knows before choosing a base:
+## Overlays and modules — the titles that are actually blocked
+
+**For Vagrant Story, Crash Team Racing, both Tomba! titles and Mega Man X4, the code on the path of
+the defect is in an OVERLAY, not in the main executable.** Vagrant's boot exe is ~15% of the code;
+933,925 B lives in `.PRG` overlays. A resident-only reader cannot see any of it, and it is the wall
+those titles are stuck behind.
+
+A module is not a PS-X EXE. It has **no header, no entry point, and no address derivable from the
+file**, so its load base and code window are the **owning port's measured facts** — declared in the
+manifest, as data:
 
 ```sh
-uv run --frozen python external/psxport/tools/decomp_pipeline.py --list-titles
+uv run --frozen python external/psxport/tools/decomp_pipeline.py \
+    --image-name vagrant_battle \
+    --image scratch/bin/overlays/BATTLE.BIN \
+    --target 0x800760CC \
+    --out scratch/decomp/vagrant_battle
 ```
+
+Measured on `BATTLE.BIN` (577,828 B, SHA-1 `d53aaccc…`, the decomp's own declared target):
+
+| | |
+|---|---|
+| load base | `0x80068800` (vagrant's measured fact) |
+| pre-script seed | entry `0x80069C6C`, **629 instructions** |
+| functions scanned | **1,709 of 1,709**, all holding ≥1 instruction |
+| targets | requested 2, found 2, decompiled 2, body present 2 |
+| `FUN_800760CC` | 116 instructions, 1,262 B of C — the port's projection owner |
+| cost | 24.7 s wall, **734,116 KB peak RSS** at a 1400 MB heap |
+
+`kind` is a **field, not a branch in the code**: `ImageSpec` carries whichever fields apply and both
+kinds go through one offset formula, so an overlay and a resident executable are read by ONE
+implementation rather than two that drift.
+
+**What is checked, and by what.** A resident is cross-checked against its own header. A module cannot
+be, so:
+
+- **SHA-1 gate.** A module's base is trusted as data, so the only thing stopping a wrong *file* is its
+  hash. A mismatch is a refusal naming the hash it computed.
+- **the code window must lie inside the file**, and the base must be in 2 MiB of KSEG0;
+- **`code_first` is the measured CODE EXTENT, not 0.** This is measured, not stylistic: BATTLE's
+  first words are a **pointer table** (`0x8006C684` = base+0x3E84, and eight consecutive words all
+  resolve inside the module), so seeding at file offset 0 reaches nothing, while offset `0x146C`
+  holds `0x27BDFFE8` — an `addiu $sp,$sp,-N` prologue, which is what a code extent starts with.
+- **the base is shared between modules.** BATTLE and TITLE both load at `0x80068800`; INITBTL loads
+  at `0x800F9800`. A guest address is meaningless without the module identity, so `--image-name` is
+  what selects the geometry and the report prints it.
+
+### What a wrong load base costs, measured
+
+Not "it fails" — the number, from `tests/controls_overlay.py`:
+
+| base | measured addresses still covered |
+|---|---|
+| one page (`0x10000`) high | **0 of 3** |
+| the module→resident distance (`0x48800`) | **0 of 3** |
+| **`0x800` low** (the resident text-offset error) | **2 of 3** |
+
+**And the last row is the finding: coverage is NOT a sufficient detector.** A base 0x800 low still
+covers both code addresses, so a reader that only asked "does my window cover this target?" would
+accept it and report every address one page out. What does catch it is the pipeline's own seed: at a
+wrong base the declared entry holds **non-code** (`0x8006946C` → `0x800A3FA8`, and
+`0x80079C6C` → `0x14620009`), and the pre-script raises when disassembly from the declared entry
+yields zero instructions.
+
+### The `lui` minus-displacement trap
+
+Vagrant's own words build `vs_main_dispEnv` at `0x8005E188` as `lui $s0, 0x8006` + `addiu $s0, $s0,
+-7800` — a **`lui` page MINUS a displacement**. A reader that forms an address as `lui + positive`
+gets `0x8006E188`: wrong by exactly `0x10000`, and nothing about the result says so.
+
+The decompiled `FUN_800760CC` shows the same shape in its last two statements, which is why the trap
+is reachable from the C and not only from the bytes:
+
+```c
+func_0x80028e80(_DAT_8005e210 * 0x14 + -0x7ffa1e78);
+func_0x80028cb4(_DAT_8005e210 * 0x5c + -0x7ffa1f30);
+```
+
+Both strided by a base written as a **negative** displacement. And note `0x8005E188` is **below** the
+module's own load base, so a reader that bounds its window by the base alone refuses a legitimate
+address. The controls assert all three facts.
+
+## "One function, or several the analyzer merged?"
+
+A Ghidra function can absorb code it never calls, and then its C is a wall of unrelated C presented
+as one function. Nothing in Ghidra's API says whether that happened, so every target row now carries
+the **counts a reader needs, and no verdict**:
+
+```
+0x800258F0  FUN_800258f0  ... insns=4994 c=130139B [ret=1 prologue=1 jal=0 jalr=0]  ...
+```
+
+`ret` is jump-register forms, `prologue` is `addiu $sp,$sp,-N` forms, `jal`/`jalr` separate direct
+from indirect calls. **Many prologues inside one body is the shape of a merge**; one is a single
+entry. A threshold would be a guess about an image, so there is none — the numbers are the evidence
+and the judgement is the reader's.
+
+These are read on the body's **own instruction grid**. An earlier version stepped by 4 from
+`body_first` and reported **0 returns** for a body whose last two words are plainly `jr ra` + `nop`;
+that was a bug in the analysis, and it is the reason the grid comes from `getBody()`.
+
+Measured on Spyro 1's `FUN_800258F0` — 4,994 instructions, 19,980 bytes:
+
+| | |
+|---|---|
+| prologues | **1** — one entry point |
+| returns | **1**, and the body's last two words are `jr ra` + `nop` after a full `lw` restore of `s0..s3` |
+| direct / indirect calls | **0 / 0** — it reaches everything by branch |
+
+**One prologue and one matching epilogue, so this is ONE function, not several merged** — a very
+large one that tail-jumps throughout. It is 130 KB of C because it is 4,994 instructions of renderer.
+
+## The non-return defence, EXERCISED
+
+On Spyro 1 and on a purpose-built fixture, Ghidra's "Non-Returning Functions - Discovered" analyzer
+**ran and marked nothing** — its row is in the analyzer table, 0 marked of 673 functions. So the
+defence could not be provoked through auto-analysis, and the fixture **sets the flag itself** on the
+one function that genuinely never returns, then measures both halves over the same caller in one
+process (`tests/noreturn_fixture_run.py`, a ctest that launches Ghidra):
+
+| caller | phase | bytes | statements | warning |
+|---|---|---|---|---|
+| `0x800100C0` | un-cleared | 111 | 2 | **present** |
+| `0x800100C0` | cleared | 59 | 3 | absent |
+| 3 others | either | 49–59 | 2–3 | absent |
+
+The un-cleared C, in full — this is the workspace's signature failure, reproduced on purpose:
+
+```c
+void FUN_800100c0(void) {
+  /* WARNING: Subroutine does not return */
+  FUN_80010000();
+}
+```
+
+and the cleared C, same caller, same process:
+
+```c
+void FUN_800100c0(void) {
+  FUN_80010000();
+  return;
+}
+```
+
+**1 of 4 callers truncated, the clear removed it from all 4, and the body came back in the truncated
+one.** The 3 untruncated callers are the control: the warning is a property of the flagged call site,
+not of every call in the fixture.
 
 ## What you get
 
 ```
-[decomp] program=SCUS_942.28 language=MIPS:LE:32:default
-[decomp] no-return policy=all cleared=NNN of NNN functions; still marked after clear=0
-[decomp] functions scanned=NNNN, of which NNNN hold at least one instruction
+[decomp] image=vagrant_battle kind=module program=BATTLE.BIN language=MIPS:LE:32:default
+[decomp] pre-script seed: entry=0x80069C6C instructions=629
+[decomp] no-return policy=all cleared=0 of 1709 functions; still marked after clear=0
+[decomp] functions scanned=1709, of which 1709 hold at least one instruction
 [decomp] targets requested=2, function found=2, decompiled=2, body present=2
-[decomp] function inventory (NNNN scanned):
+[decomp] function inventory (1709 scanned):
   entry       name                     body      insns   body range
-  80010020    FUN_80010020            16B       4       80010020..8001002F
+  80068800    FUN_80068800            16B       4       80068800..8006880F
   ...
 [decomp] targets (2 requested):
-  0x800258F0  FUN_800258F0   found=True decompiled=True body=True insns=NNN c=NNNNNB  ...
-[decomp] AUDIT OK: no-return cleared on NNN of NNN functions, 2 of 2 targets carry a real body.
+  0x800760CC  FUN_800760cc  found=True decompiled=True body=True insns=116 c=1262B [ret=1 prologue=1 jal=0 jalr=0]  ...
+[decomp] AUDIT OK: no-return cleared on 0 of 1709 functions, 2 of 2 targets carry a real body.
 ```
 
 **Exit codes mean different things, and the difference is the point.**
@@ -130,7 +273,8 @@ Roughly 2 GB free, several agents building at once. A Ghidra auto-analysis of a 
 somebody who is not running this tool.
 
 - **Heap ceiling 1400 MB** (`-X mx1400m`). Ghidra's own default is 2 GB, which is the setting that
-  kills a co-tenant.
+  kills a co-tenant. **MEASURED to hold on the largest image in the manifest**: MMX4, 1,177,600 B of
+  text (2.83x Spyro's), 4,834 functions, **1,089,096 KB peak** across two runs — 78% of the ceiling.
 - **`-X`, not `MAXMEM`.** `MAXMEM` is read by Ghidra's `launch.sh`, which the PyGhidra launcher does
   not use because it starts the JVM through JPype. Setting `MAXMEM` here sets nothing.
 - **One Ghidra at a time**, via `mkdir $PSX/coord/locks/ghidra`. `mkdir` is atomic on POSIX, so the
@@ -191,16 +335,3 @@ is a verdict.
 `jalr` and tail-jumps. Without the exclusion that would read as "the C called nothing", which is a
 statement about the scan, not about the function.
 
-## What it is not
-
-- **Not a build input and not a shipping path.** The decompiled C is a reading and porting aid. What
-  ships is a hand-written native override that owns the recovered behaviour, with the JIT executing
-  everything else. Nothing here emits guest functions as C, objects, or a precompiled substrate.
-- **Not a decompilation corpus.** It does not walk the image; it reads the targets you name.
-- **Not a symbol recovery pass.** An entry reached only through a jump table has no call site for
-  auto-analysis to find; the post-script creates such a function on demand and the report says
-  `created_on_demand` when it did.
-- **Not yet run on all twelve titles.** Only Spyro 1 has been run end to end; the other manifest
-  entries are proven by the header cross-check, not by a completed analysis. See
-  `docs/issues/0137-guest-code-to-readable-c-is-stood-up-once.md` for the full "not established"
-  section, which is the honest limit of this capability today.

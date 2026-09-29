@@ -183,6 +183,34 @@ add_test(NAME decomp_pipeline_must_fail
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/selftest_must_fail.py)
 set_tests_properties(decomp_pipeline_must_fail PROPERTIES TIMEOUT 900)
+
+# The overlay controls: ONE reader for a resident PS-X EXE and for a module, the SHA-1 gate, and WHAT
+# A WRONG LOAD BASE COSTS counted rather than asserted. Hermetic (no disc, no Ghidra) apart from
+# reading vagrant's authenticated overlays, and it SKIPS-with-a-said-why when they are absent rather
+# than passing a comparison it did not make.
+add_test(NAME decomp_overlay_controls
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/controls_overlay.py
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../scratch/overlay-controls)
+# The module half needs an AUTHENTICATED overlay, which is per-repo and git-ignored, so the path comes
+# from the ENVIRONMENT AT RUN TIME, not at configure time. Baking $ENV{...} into the generated
+# CTestTestfile.cmake writes this machine's absolute path into a build artefact and then needs a
+# re-configure on every other machine; the test reads the variable itself instead.
+#
+# Absent, the control prints "CONTROLS PARTIAL: 3 of 18 checks ran" and exits 0: a skipped comparison
+# is not a passing one, and ctest sees only the exit code, so the DENOMINATOR is what a reader has to
+# notice. Run the tool directly with the variable set for the full 18.
+set_tests_properties(decomp_overlay_controls PROPERTIES TIMEOUT 300)
+
+# The no-return fixture: does Ghidra's non-return truncation ACTUALLY reproduce, and does
+# PSXPORT_CLEAR_NORETURN=all remove it? This one launches Ghidra (~30 s, ~550 MB), which is why it is
+# a separate ctest rather than part of the 0.3 s hermetic selftest. It exists because the defence was
+# ASSERTED AND UNEXERCISED: on Spyro 1 the analyzer marked 0 of 673 functions, so nothing had ever
+# been seen to fail. It is skipped-with-a-said-why when there is no Ghidra, never silently passed.
+add_test(NAME decomp_noreturn_fixture
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/noreturn_fixture_run.py)
+set_tests_properties(decomp_noreturn_fixture PROPERTIES TIMEOUT 1800 RUN_SERIAL TRUE)
 add_test(NAME gpu_shader_build_ownership
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_gpu_shader_build_ownership.py)

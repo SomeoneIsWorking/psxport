@@ -41,15 +41,21 @@ class TargetResult:
     inside_function_name: str | None = None
     inside_body_range: str | None = None
     offset_into_body: int | None = None
+    shape: dict | None = None
 
     def row(self) -> str:
         inside = ""
         if self.inside_function:
             inside = " inside=%s" % self.inside_function
-        return ("  %-12s %-22s found=%-3s decompiled=%-3s body=%-3s insns=%-4d c=%sB%s  %s"
+        shape = ""
+        if self.shape:
+            shape = " [ret=%d prologue=%d jal=%d jalr=%d]" % (
+                self.shape.get("returns", 0), self.shape.get("prologues", 0),
+                self.shape.get("calls", 0), self.shape.get("indirect_calls", 0))
+        return ("  %-12s %-22s found=%-3s decompiled=%-3s body=%-3s insns=%-4d c=%sB%s%s  %s"
                 % (self.requested, self.name or "-", str(self.function_found),
                    str(self.decompiled), str(self.body_present), self.instruction_count,
-                   self.c_bytes, inside, self.body_reason))
+                   self.c_bytes, inside, shape, self.body_reason))
 
 
 @dataclass
@@ -58,11 +64,13 @@ class Report:
 
     program: str
     language: str
-    noreturn_policy: str
     noreturn_cleared: int
     functions_scanned: int
     inventory: list[dict]
     targets: list[TargetResult]
+    image_name: str = ""
+    image_kind: str = ""
+    noreturn_policy: str = ""
     noreturn_still_marked: list[str] = field(default_factory=list)
     preseed: dict | None = None
     warnings: list[str] = field(default_factory=list)
@@ -108,12 +116,13 @@ class Report:
                 "entry=%s instructions=%d" % (self.preseed.get("entry", "?"),
                                               self.preseed.get("instructions_from_entry", 0)))
         return (
-            "[decomp] program=%s language=%s\n"
+            "[decomp] image=%s kind=%s program=%s language=%s\n"
             "[decomp] pre-script seed: %s\n"
             "[decomp] no-return policy=%s cleared=%d of %d functions; still marked after clear=%d\n"
             "[decomp] functions scanned=%d, of which %d hold at least one instruction\n"
             "[decomp] targets requested=%d, function found=%d, decompiled=%d, body present=%d"
-            % (self.program, self.language, seed, self.noreturn_policy, self.noreturn_cleared,
+            % (self.image_name or "?", self.image_kind or "?", self.program, self.language,
+               seed, self.noreturn_policy, self.noreturn_cleared,
                self.functions_scanned, len(self.noreturn_still_marked), self.functions_scanned,
                self.functions_with_instructions, self.targets_requested, self.targets_found,
                self.targets_decompiled, self.targets_with_body)
@@ -157,12 +166,15 @@ def load_report(path: Path) -> Report:
             inside_function_name=t.get("inside_function_name"),
             inside_body_range=t.get("inside_body_range"),
             offset_into_body=t.get("offset_into_body"),
+            shape=t.get("shape"),
         )
         for t in raw["targets"]
     ]
     return Report(
         program=raw["program"],
         language=raw.get("language", "?"),
+        image_name=raw.get("image_name", ""),
+        image_kind=raw.get("image_kind", ""),
         noreturn_policy=raw["noreturn_policy"],
         noreturn_cleared=int(raw.get("noreturn_cleared", 0)),
         functions_scanned=int(raw["functions_scanned"]),

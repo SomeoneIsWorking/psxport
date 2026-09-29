@@ -35,9 +35,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--title", help="a title in tools/decomp/manifest.json")
-    parser.add_argument("--image", type=Path,
-                        help="the admitted PS-X EXE (or an overlay, with its own manifest entry)")
+    parser.add_argument("--image-name", help="an image entry in tools/decomp/manifest.json: a "
+                                              "resident title, or a module/overlay name")
     parser.add_argument("--target", action="append", default=[], metavar="0xADDR",
                         help="a guest entry address to decompile; repeatable")
     parser.add_argument("--out", type=Path,
@@ -54,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
                              % headless.DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--inventory-limit", type=int, default=40,
                         help="how many inventory rows to print (default 40; 0 prints all)")
+    parser.add_argument("--image", type=Path,
+                        help="the admitted image file: a title's PS-X EXE, or a module/overlay")
     parser.add_argument("--list-titles", action="store_true",
                         help="print the manifest and exit, so a caller can see what exists")
     return parser
@@ -64,15 +65,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list_titles:
         specs = images.load_manifest()
-        print("%d titles in the manifest:" % len(specs))
-        for spec in sorted(specs.values(), key=lambda s: s.title):
+        residents = [s for s in specs.values() if s.kind == images.RESIDENT]
+        modules = [s for s in specs.values() if s.kind == images.MODULE]
+        print("%d images in the manifest: %d resident, %d module" % (
+            len(specs), len(residents), len(modules)))
+        for spec in sorted(specs.values(), key=lambda s: (s.kind, s.name)):
             fields = spec.as_dict()
-            print("  %-12s %-14s load=%s offset=%s base=%s text=%s" % (
-                fields["title"], fields["serial"], fields["text_load_address"],
-                fields["text_file_offset"], fields["ghidra_base"],
-                "0x%X" % spec.text_size if spec.text_size else "?"))
+            print("  %-9s %-16s %-14s base=%s window=%s%s" % (
+                fields["kind"], fields["name"], fields["serial"] or "-", fields["ghidra_base"],
+                fields["window"], "  sha1=%s" % fields["sha1"] if fields["sha1"] else ""))
             if spec.note:
-                print("               %s" % spec.note)
+                print("             %s" % spec.note)
         return 0
 
     if not args.target:
@@ -85,8 +88,12 @@ def main(argv: list[str] | None = None) -> int:
         print("[decomp] REFUSED: %s is not a hex guest address." % error)
         return 1
 
+    if args.image is None:
+        print("[decomp] REFUSED: --image is required: the path to the admitted PS-X EXE, or to a "
+              "module/overlay. The manifest holds the load geometry, not the file.")
+        return 1
     run = pipeline.DecompRun(
-        title=args.title,
+        image_name=args.image_name,
         image_path=args.image,
         output_dir=args.out,
         targets=targets,
