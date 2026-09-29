@@ -45,6 +45,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/cpu/execution_exit.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_control.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_services.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/function_reach.cpp # PSXPORT_REACH_REPORT: guest entry pcs reached, by image
   ${PSXPORT_ROOT}/runtime/cpu/image_identity.cpp
   ${PSXPORT_ROOT}/runtime/cpu/guest_call.cpp
   ${PSXPORT_ROOT}/runtime/cpu/invalidation.cpp

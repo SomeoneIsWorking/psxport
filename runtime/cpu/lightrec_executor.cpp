@@ -3,6 +3,7 @@
 #include "core.h"
 #include "execution_control.h"
 #include "execution_services.h"
+#include "function_reach.h"
 #include "game.h"
 #include "gte_register_transfer.h"
 #include "host_turn.h"
@@ -361,6 +362,9 @@ struct LightrecExecutor::Impl {
   static lightrec_block_boundary_action
   blockBoundary(lightrec_state *, std::uint32_t guestPc, std::uint32_t *, void *userData) {
     auto &impl = *static_cast<Impl *>(userData);
+    if (impl.reach) {
+      impl.reach->observe(guestPc);
+    }
     auto &boundary = impl.activeBoundary();
     if (boundary.returnAddress && guestPc == *boundary.returnAddress) {
       boundary.reason = BoundaryReason::GuestReturn;
@@ -600,6 +604,7 @@ struct LightrecExecutor::Impl {
   StoreObserverCallback storeCallback = nullptr;
   void *storeContext = nullptr;
   StoreObserverReport storeReport{};
+  std::unique_ptr<FunctionReach> reach;
 };
 
 LightrecExecutor::LightrecExecutor(Core &core, FallbackPolicyProvider fallbackPolicyProvider)
@@ -620,6 +625,10 @@ LightrecExecutor::~LightrecExecutor() {
   // looked". So the report is emitted from the teardown that every exit path reaches, and the
   // one-call-site version is deleted rather than left to double-report on the paths that did take it.
   store_observe_report(impl_->core);
+}
+
+void LightrecExecutor::attachFunctionReach(std::unique_ptr<FunctionReach> reach) {
+  impl_->reach = std::move(reach);
 }
 
 namespace {

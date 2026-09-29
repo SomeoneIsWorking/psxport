@@ -9,8 +9,10 @@
 // Lived in mem.cpp historically (right next to the memory-access primitives) — moved out into its
 // own file so Core lifetime concerns aren't tangled with the memory-window helpers.
 #include "core.h"
+
 #include "config_vars.h"
 #include "execution_control.h"
+#include "function_reach.h"
 #include "game_runtime.h"
 #include "image_identity.h"
 #include "lightrec_executor.h"
@@ -36,6 +38,10 @@ Core::Core() {
   } else if (differential.enabled()) {
     nativeDispatcher_->attachDifferential(
         std::make_unique<psx::cpu::OverrideDifferential>(*this, std::move(differential)));
+  }
+  if (std::string reachReport = psx::config::function_reach_report_path(); !reachReport.empty()) {
+    lightrecExecutor_->attachFunctionReach(
+        std::make_unique<psx::cpu::FunctionReach>(*imageCatalog_, std::move(reachReport)));
   }
   // Snapshot the game-owned polymorphic runtime. The two legacy views are non-null only when the
   // bounded adapter was installed by a consumer that has not migrated this seam yet.

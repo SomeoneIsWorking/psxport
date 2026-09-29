@@ -3,6 +3,7 @@
 #include "dynarec_capabilities.h"
 #include "execution_exit.h"
 #include "fallback_policy.h"
+#include "function_reach.h"
 #include "guest_program_image.h"
 
 #include <array>
@@ -191,6 +192,8 @@ public:
   StoreObserverStatus
   configureStoreObserver(std::span<const std::uint32_t> targets, StoreObserverCallback callback, void *context);
   StoreObserverReport storeObserverReport() const;
+  // Record every guest pc passing the block boundary into `reach` (runtime/cpu/function_reach.h).
+  void attachFunctionReach(std::unique_ptr<FunctionReach> reach);
   const ExecutorCounters &counters() const;
   void reportFallbackTelemetry(std::string_view phase) const;
   bool available() const;

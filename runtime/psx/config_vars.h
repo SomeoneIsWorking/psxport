@@ -112,6 +112,9 @@ psx::cpu::FallbackPolicy lightrec_fallback_policy();
 // backing vars are private; this typed value is the only way to read them. Empty selectors disarm.
 psx::cpu::OverrideDifferentialConfig override_differential_config();
 
+// PSXPORT_REACH_REPORT — where the function-reach recorder writes its JSON report; empty disarms it.
+std::string function_reach_report_path();
+
 // Resolve one enhancement and announce an active selection once per key.
 bool enh_gate(const char *key, bool asked);
 // The two ways to reach it. `enh(v)` is for a game that declares its enhancements as its OWN CVars

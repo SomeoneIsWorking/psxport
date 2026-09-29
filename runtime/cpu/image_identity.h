@@ -19,6 +19,12 @@ struct ImageIdentity {
   }
 };
 
+// What a residency is, independent of when it was loaded: its name and the identity of its bytes.
+struct ImageDescription {
+  std::string name;
+  std::uint64_t contentIdentity = 0;
+};
+
 struct NativeKey {
   ImageIdentity image;
   std::uint32_t address = 0;
@@ -40,6 +46,10 @@ public:
   // byte. Empty, invalid, and virtual-alias ranges do not resolve.
   std::optional<ImageIdentity> resolve(GuestAddressRange physicalRange) const;
   std::size_t activeCount() const;
+  std::optional<ImageDescription> describe(ImageIdentity identity) const;
+  // Advances on every activation, deactivation and subtraction, so a cache of address residency can
+  // tell that it is stale without re-resolving every address.
+  std::uint64_t revision() const;
 
 private:
   struct Entry {
@@ -53,6 +63,7 @@ private:
   std::vector<Entry> entries_;
   std::uint64_t nextId_ = 1;
   std::uint64_t nextGeneration_ = 1;
+  std::uint64_t revision_ = 0;
 };
 
 } // namespace psx::cpu

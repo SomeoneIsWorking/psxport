@@ -421,6 +421,12 @@ TextVar cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT",
                                 "override differential: JSON report path (cwd-relative default is the title's "
                                 "scratch/)",
                                 /*persistable=*/false);
+// PSXPORT_REACH_REPORT — arms the function-reach recorder (runtime/cpu/function_reach.h): every
+// dispatched guest entry pc, keyed by its code image, written as JSON to this path. Empty = disarmed.
+TextVar cv_reach_report("PSXPORT_REACH_REPORT",
+                        "",
+                        "function reach: JSON report of every dispatched guest entry pc by code image (empty = off)",
+                        /*persistable=*/false);
 
 } // namespace
 
@@ -480,6 +486,10 @@ psx::cpu::OverrideDifferentialConfig override_differential_config() {
                                                   cv_override_diff_every.get(),
                                                   cv_override_diff_dead_stack.get(),
                                                   cv_override_diff_report.get());
+}
+
+std::string function_reach_report_path() {
+  return cv_reach_report.get();
 }
 
 namespace {

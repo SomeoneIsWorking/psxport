@@ -8,6 +8,7 @@ namespace psx::cpu {
 
 ImageIdentity ImageCatalog::activate(std::string_view name, GuestAddressRange range, std::uint64_t contentIdentity) {
   const ImageIdentity identity{nextId_++, nextGeneration_++};
+  ++revision_;
   entries_.push_back({std::string(name), {range}, contentIdentity, identity, true});
   return identity;
 }
@@ -38,6 +39,7 @@ std::size_t ImageCatalog::subtractRange(ImageIdentity identity, GuestAddressRang
   }
   entry->ranges = std::move(surviving);
   entry->active = !entry->ranges.empty();
+  ++revision_;
   return entry->ranges.size();
 }
 
@@ -49,6 +51,7 @@ bool ImageCatalog::deactivate(ImageIdentity identity) {
     return false;
   }
   entry->active = false;
+  ++revision_;
   return true;
 }
 
@@ -95,6 +98,20 @@ std::size_t ImageCatalog::activeCount() const {
   return std::count_if(entries_.begin(), entries_.end(), [](const Entry &entry) {
     return entry.active;
   });
+}
+
+std::optional<ImageDescription> ImageCatalog::describe(ImageIdentity identity) const {
+  const auto entry = std::find_if(entries_.begin(), entries_.end(), [identity](const Entry &candidate) {
+    return candidate.identity == identity;
+  });
+  if (entry == entries_.end()) {
+    return std::nullopt;
+  }
+  return ImageDescription{entry->name, entry->contentIdentity};
+}
+
+std::uint64_t ImageCatalog::revision() const {
+  return revision_;
 }
 
 } // namespace psx::cpu
