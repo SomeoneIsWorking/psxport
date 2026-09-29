@@ -80,18 +80,27 @@ resolution was wrong.** It was generalised from two runs of the *same* arming an
 two armings head to head. The head-to-head A/B above shows the effect is real and reproducible. The
 worry is reinstated; only the "run-length variance" explanation is withdrawn.
 
-## ADDENDUM — a second, sharper defect: arming a DELAY-SLOT store segfaults
+## ADDENDUM — the invasiveness has now been shown to reach GUEST state, and 0040's first root cause was wrong
 
-While using the observer to name the exact store that clobbers a guest interrupt element in Mega
-Man X4, every run appeared to report *nothing*. **It was not a quiet instrument — those runs were
-crashing.** A crashed process prints no teardown report, so "the observer saw no stores" and "the
-observer destroyed the process" are indistinguishable in a log, and the first was believed.
+`0040` first claimed the observer segfaults the JIT on a delay-slot store, with a mechanism in
+Lightrec's `rec_b`. That was implemented in `shared/lightrec` `8611c9c5`, built, and **it changed
+nothing**. It is reverted (`e1a6a09`) and psxport's lightrec pin restored. A shared emitter's
+branch contract must not change on a premise a test refutes.
 
-Isolated with a control matrix: arming `0x800126A8` — `sh $s1, ($v0)`, the **delay slot of `jal
-0x800EDdbc`** — alone exits 139. Arming `0x80012628` alone, four stores in `0x80015F04..0x80015F80`
-individually, and two of those together all exit 0. **The discriminating variable is the delay slot,
-not the store width and not the count.** Full reproduction in `0040`.
+The claim was wrong because `libc_start_main` appears in **every** backtrace, including a clean
+`abort()` — so "aborted=1" was really "the process died by any means" and I read it as a JIT fault.
+The trace says the aborting frame is Mega Man X4's own `callWithoutKnownReturn`, `signal = 06`.
 
-This also corrects the record on the Mega Man X4 side: the silence of the observer on the stores of
-the routine at `0x80015ECC` was never evidence about that routine, because those runs died before
-printing.
+The real finding, and the first measurement in this project showing the observer change a
+guest-visible value:
+
+    [x4-guest:error] guest call 0x80012600 exited fault at 0x80012710 after 56 cycles
+
+`0x80012710` is `lw $v0, ($s0)` — the target of the scheduler's own `j` at `0x80012658` and
+`0x80012674`. With the observer armed, that load faults: `$s0` is not what the emitter expected.
+This is exactly what `0039` predicted and nothing measured until now: an instrument that calls
+`lightrec_invalidate_all`, instruments every store in every block, and resets the register cache
+mid-emission is not a passive tap.
+
+The "delay slot" correlation across three PCs is a correlation, not a mechanism, and the mechanism
+that was supposed to explain it is refuted. A negative case is the named next step.
