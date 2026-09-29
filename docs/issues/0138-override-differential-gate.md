@@ -68,7 +68,7 @@ One `tools/drive.py gameplay` run (Artisans, 300 held frames) of a scratch spyro
 
 | override | calls seen | sampled | match | mismatch |
 |---|---|---|---|---|
-| 15 unmodified overrides (rand, fill, copyw, vadd, dist2d's peers, mvmva, …) | 58,277 | 1,044 | 1,044 | 0 |
+| 15 unmodified overrides (spin60, fill, setg3c30, copyw, rand, copy3, vsub, veclen, vadd, mvmva, isqrt, zero3, vsra, vscale, angdiff8) | 53,323 | 1,050 | 1,050 | 0 |
 | `dist2d`, deliberately wrong | 12,109 | 205 | 0 | 205 — first: `v0` original 0x2D00 native 0x2D01 |
 | `angdist` | 0 | 0 | — | — reported as a failure (no evidence) |
 
