@@ -76,6 +76,28 @@ This explains the whole control matrix at once, including the part that was hard
 - It is not the store **width** and not the **number** of armed PCs: the harmless `0x80015F7C` and
   `0x80015F18` are the same `sh` that is fatal at `0x800126A8`.
 
+## THE POSITIVE CONTROL — the observer works for an ORDINARY store, with a denominator
+
+A defect report that only shows failures proves nothing about the successes, and the claim here is
+narrow and specific: **arm a store in a delay slot and the process dies; arm an ordinary store and
+it does not.** That claim needs the second half measured, not asserted.
+
+    Mega Man X4, headless, PSXPORT_NATIVE_FRAMES=400, PSXPORT_DEBUG=store-observe
+    armed: 0x80012628   (sw $v0, -0x7d00($at) — an ordinary store in the scheduler)
+
+    run A: 400 cursor-store events, crash=0
+    run B: 400 cursor-store events, crash=0
+
+**400 frames produced exactly 400 observations, twice, with no crash.** The scheduler stores to the
+class-0 cursor once per vblank, so one event per frame is the expected count and the instrument
+recovers it. That gives the failure matrix both of its halves from the same build and the same
+frames: the instrument counts correctly where it is armed safely, and the process dies where it is
+armed on `0x800126A8`.
+
+**The denominator also retires the older "the observer reports nothing" claim on this port.** The
+runs behind that claim produced no report because the process was dead, not because the counter was
+zero. With the observer alive, the counter is non-zero and exact.
+
 ## The fix, named at the location that owns it
 
 `lightrec_rec_observed_store` must not reset the register cache while a branch backup is live. There
