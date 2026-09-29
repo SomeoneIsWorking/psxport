@@ -171,6 +171,9 @@ void RenderQueue::emitOrQueue(Core *core,
       if (xsf) {
         xsf = wxsf;
       }
+      // The draw-area clip is in the producer's space too, so it moves with the vertices it bounds.
+      da_x0 = t.apply(da_x0);
+      da_x1 = t.apply(da_x1);
     }
   }
   // Zero-init: only the later key-order resolver may promote authored_depth from ordinary real depth.
