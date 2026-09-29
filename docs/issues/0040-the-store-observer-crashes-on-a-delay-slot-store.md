@@ -98,6 +98,38 @@ armed on `0x800126A8`.
 runs behind that claim produced no report because the process was dead, not because the counter was
 zero. With the observer alive, the counter is non-zero and exact.
 
+## INDEPENDENT CONFIRMATION — the mechanism is the BRANCH, not the `jal` encoding
+
+The first crash was found on the delay slot of a `jal`. If the cause were something about that one
+instruction encoding, a second delay slot in a different branch would be free to behave. It is not.
+A clean A/B, one store PC per run, identical flags, the order alternated so neither target is
+advantaged by running first:
+
+    Mega Man X4, headless, 400 frames, PSXPORT_DEBUG=store-observe
+
+    watch 0x80012628 -> 400 events, aborted=0     sw $v0, -0x7d00($at)   ordinary store
+    watch 0x80012724 ->   0 events, aborted=1     sw $v0, ($s0)          DELAY SLOT
+    watch 0x80012628 -> 400 events, aborted=0
+    watch 0x80012724 ->   0 events, aborted=1
+
+and `0x80012724` is the delay slot of a **`beqz`**, not a `jal`:
+
+    80012720  beqz  $v1, 0x8001262c     the branch
+    80012724  sw    $v0, ($s0)          the delay slot
+
+**So the defect generalises across branch types, across blocks, and across addresses.** The first
+case was the delay slot of `jal 0x800EDdbc` at `0x800126A8`; this one is the delay slot of `beqz` at
+`0x80012720`. That is exactly what the root cause predicts — the trigger is *being inside the window
+where `rec_b` holds a branch-mode register-cache backup*, which is a property of the branch emitter
+and not of any instruction encoding. A diagnosis that only covered `jal` would have been a
+coincidence, and this rules that out.
+
+**Note the shape of the failure, because it is why this took three runs to characterise.** The
+delay-slot runs report **0 events and an abort**. Zero is the *truthful* reading — the counter never
+reached a value — but a reader scanning for "did the observer see anything" reads it as a clean
+negative measurement of the guest. It is not: the process died before it could report. This is the
+same trap as the earlier silence, and it is why the teardown report and the exit status both matter.
+
 ## The fix, named at the location that owns it
 
 `lightrec_rec_observed_store` must not reset the register cache while a branch backup is live. There
