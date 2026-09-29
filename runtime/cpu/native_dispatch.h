@@ -62,7 +62,13 @@ GuestHostDispatchKind classifyGuestHostDispatch(Core &core, std::uint32_t guestA
 ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress);
 ExecutionResult
 invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction function, std::string_view name);
-ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionBudget budget);
+// `origin` NAMES THE CALLER when `guestAddress` is not executable. Four call sites reach this
+// function and a fault raised by the callee alone cannot say which supplied the address - measured
+// on Mega Man X4, where the port's own boundary check did not fire and the address still arrived
+// here, so the supplier was the framework rather than the title. The default keeps every existing
+// caller compiling; each one passes its own name so the refusal is actionable.
+ExecutionResult
+dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view origin = "unspecified");
 ExecutionResult dispatchGuestUntilExit(Core &core, std::uint32_t guestAddress, ExecutionBudget budget);
 void dispatchGuestToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view owner);
 // Resuming an original call that outlived one host turn. `ExecutionBudget::currentTurn` is one

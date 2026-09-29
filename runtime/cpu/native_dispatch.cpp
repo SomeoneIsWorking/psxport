@@ -294,7 +294,7 @@ ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress)
   return {ExecutionExitReason::GuestReturn, core.pc, 0, "null callback"};
 }
 
-ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionBudget budget) {
+ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view origin) {
   NativeCallerContextScope callerContext(core);
   const GuestHostDispatchKind kind = classifyGuestHostDispatch(core, guestAddress);
   if (kind != GuestHostDispatchKind::ExecuteGuest) {
@@ -309,8 +309,9 @@ ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionB
     if (!core.currentImageIdentity(guestAddress).has_value()) {
       lucent::error("native-dispatch",
                     "dispatchGuest was handed 0x{:08X}, which is in no loaded code image, via the "
-                    "entry classify path (not a host-dispatch boundary)",
-                    guestAddress);
+                    "entry classify path (not a host-dispatch boundary); caller: {}",
+                    guestAddress,
+                    origin);
     }
     return dispatchGuestHostService(core, guestAddress);
   }
@@ -333,7 +334,7 @@ std::optional<ExecutionResult> NativeDispatcher::invoke(NativeKey key) {
 }
 
 void dispatchGuestToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view owner) {
-  if (!requireGuestReturn(dispatchGuest(core, guestAddress, budget), owner)) {
+  if (!requireGuestReturn(dispatchGuest(core, guestAddress, budget, "invokeNativeFunction"), owner)) {
     std::abort();
   }
 }

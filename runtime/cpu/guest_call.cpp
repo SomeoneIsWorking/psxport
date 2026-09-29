@@ -18,7 +18,7 @@ ExecutionResult dispatchGuestWithArguments(Core &core,
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     core.r[4 + index] = arguments[index];
   }
-  return dispatchGuest(core, address, budget);
+  return dispatchGuest(core, address, budget, "guest_call.cpp: callGuest");
 }
 
 void dispatchGuestWithArgumentsToReturn(Core &core,

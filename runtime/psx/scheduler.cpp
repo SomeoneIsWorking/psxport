@@ -316,7 +316,8 @@ int guest_run_dispatch_stanza(Core *c, int i, uint32_t base, uint32_t st, bool p
         c->pending_guest_redirect = 0;
       }
     }
-    const auto result = psx::cpu::dispatchGuest(*c, start, psx::cpu::ExecutionBudget::currentTurn(*c));
+    const auto result =
+        psx::cpu::dispatchGuest(*c, start, psx::cpu::ExecutionBudget::currentTurn(*c), "scheduler.cpp: start");
     if (result.returned()) {
       c->mem_w16(base, 0);
       c->game->pcSched.task_started[i] = 0;

@@ -1,5 +1,7 @@
 #include "synchronous_task_wait.h"
 
+#include "synchronous_task_wait_layout.h"
+
 #include "core.h"
 #include "coro.h"
 #include "execution_control.h"
@@ -13,39 +15,6 @@
 namespace {
 
 constexpr int kPumpLimit = 4096;
-
-struct WaitLayout {
-  uint32_t taskBase;
-  uint32_t taskStride;
-  uint32_t currentTask;
-  uint32_t doneFlag;
-  uint32_t param2;
-  uint32_t param3;
-  uint32_t taskGp;
-  uint32_t forceCloseRa;
-  uint32_t spawnRa;
-  uint32_t finishRa;
-};
-
-WaitLayout waitLayout(const Core &core) {
-  const GameConfig *config = core.cfg;
-  if (!config || !config->taskTableBase || !config->taskSlotStride || config->taskCount < 3 || !config->curTaskPtr ||
-      !config->syncWaitDoneFlag || !config->syncWaitParam2 || !config->syncWaitParam3 || !config->syncWaitTaskGp ||
-      !config->syncWaitForceCloseRa || !config->syncWaitSpawnRa || !config->syncWaitFinishRa) {
-    lucent::error("sched", "FATAL: synchronous task wait has no complete GameConfig scheduler layout");
-    std::abort();
-  }
-  return {config->taskTableBase,
-          config->taskSlotStride,
-          config->curTaskPtr,
-          config->syncWaitDoneFlag,
-          config->syncWaitParam2,
-          config->syncWaitParam3,
-          config->syncWaitTaskGp,
-          config->syncWaitForceCloseRa,
-          config->syncWaitSpawnRa,
-          config->syncWaitFinishRa};
-}
 
 } // namespace
 
@@ -68,7 +37,7 @@ SyncWaitCompletion SynchronousTaskWait::finish(PcScheduler &scheduler, uint32_t 
 
 void SynchronousTaskWait::runSlot(PcScheduler &scheduler, int slot) {
   Core *core = &scheduler.game->core;
-  const WaitLayout layout = waitLayout(*core);
+  const psx::sync_wait::WaitLayout layout = psx::sync_wait::waitLayout(*core);
   const uint32_t base = layout.taskBase + static_cast<uint32_t>(slot) * layout.taskStride;
   const uint32_t entry = core->mem_r32(base + 0x0Cu);
   const bool fresh = !scheduler.task_started[slot];
@@ -105,7 +74,8 @@ void SynchronousTaskWait::runSlot(PcScheduler &scheduler, int slot) {
   Coro *coroutine = new Coro();
   scheduler.coro[slot] = coroutine;
   coroutine->start([core, startPc] {
-    const auto result = psx::cpu::dispatchGuest(*core, startPc, psx::cpu::ExecutionBudget::currentTurn(*core));
+    const auto budget = psx::cpu::ExecutionBudget::currentTurn(*core);
+    const auto result = psx::cpu::dispatchGuest(*core, startPc, budget, "sync_task_wait");
     (void)psx::cpu::completeOrPropagate(*core, result);
   });
   int pumps = 0;
@@ -141,7 +111,7 @@ void SynchronousTaskWait::runSlot(PcScheduler &scheduler, int slot) {
 
 void SynchronousTaskWait::run(PcScheduler &scheduler, uint32_t fn, uint32_t p2, uint32_t p3, uint32_t flag) {
   Core *core = &scheduler.game->core;
-  const WaitLayout layout = waitLayout(*core);
+  const psx::sync_wait::WaitLayout layout = psx::sync_wait::waitLayout(*core);
   core->r[29] -= 40;
   core->mem_w32(core->r[29] + 24, core->r[18]);
   core->r[18] = fn;
