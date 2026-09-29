@@ -56,9 +56,24 @@ classes against a clean-report control.
 
 ## Open
 
-- Not yet run on a real title. The first real use should arm one known-good override and one
-  deliberately wrong one in the same run and show both verdicts in the report.
 - Device models a native override reaches DIRECTLY in C++ (not through `Core`'s memory API) are not
   observed; the report says so in `not_observed`.
 - A native that polls a device register in a C++ loop after its replay diverged reads the last recorded
   value (or 0) forever; such a call would hang rather than report.
+
+## First real use (2026-09-29, Spyro 1, SCUS_942.28)
+
+One `tools/drive.py gameplay` run (Artisans, 300 held frames) of a scratch spyro build whose `dist2d`
+(0x80017990) returned `v0 + 1`, with 17 overrides armed. Verdicts:
+
+| override | calls seen | sampled | match | mismatch |
+|---|---|---|---|---|
+| 15 unmodified overrides (rand, fill, copyw, vadd, dist2d's peers, mvmva, …) | 58,277 | 1,044 | 1,044 | 0 |
+| `dist2d`, deliberately wrong | 12,109 | 205 | 0 | 205 — first: `v0` original 0x2D00 native 0x2D01 |
+| `angdist` | 0 | 0 | — | — reported as a failure (no evidence) |
+
+`dllink` and `angdist` are never called on this route (the native frame driver owns the display
+list), and the gate fails such a selector rather than passing it. Megamanx4 issue 0039 is the
+second real use and found two register clobbers in a shipped owner; it also reports two framework
+gaps still open here: the final report is not written on that title's fault exit path, and a
+host-invoked override is sampled once rather than per call.
