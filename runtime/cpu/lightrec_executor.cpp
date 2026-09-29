@@ -766,20 +766,16 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       case LightrecExecutor::Impl::BoundaryReason::GuestReturn:
         return {ExecutionExitReason::GuestReturn, boundary.pc, consumedCycles, "guest return"};
       case LightrecExecutor::Impl::BoundaryReason::HostDispatch: {
-        // A host-dispatch target that is in no loaded code image is a control transfer to a
-        // non-executable address, and the block start is the only handle on the instructions that
-        // computed it. It is reported HERE, at the boundary, rather than later as a bare fault
-        // address, because a fault printed downstream cannot recover which block produced the
-        // value - and this investigation has already lost that link twice. Rare by construction,
-        // since it requires a transfer to an address that is not code, so it does not spam a
-        // healthy run.
-        if (!impl.core.currentImageIdentity(boundary.pc).has_value()) {
-          lucent::error("executor",
-                        "guest transferred control to 0x{:08X}, which is in no loaded code image; the block "
-                        "that produced this target began at 0x{:08X}",
-                        boundary.pc,
-                        blockStart);
-        }
+        // THE BOUNDARY'S BLOCK START AND EXIT TARGET ARE CAPTURED HERE, AND REPORTED ONLY IF THE
+        // DISPATCH ACTUALLY FAULTS.
+        //
+        // The first version of this diagnostic was written the other way round: it fired on a
+        // PREDICATE (`currentImageIdentity` finds no image) instead of on the OUTCOME, and it
+        // stayed silent on Mega Man X4's fatal fault at 0x0113D7D0 while reporting thousands of
+        // ordinary 0x0/0xA0/0xB0 transfers. Two sites in this same file consult the same identity
+        // lookup and it did not agree between them, so a predicate built on it cannot be trusted to
+        // fire. Keying on the outcome - the dispatch returned a Fault - cannot miss, and it is the
+        // event that actually matters. It also cannot spam: a healthy run does not fault here.
         if (hostDispatches >= budget.maxHostDispatches) {
           return {
               Impl::recordBudgetExit(impl, boundary.pc), boundary.pc, consumedCycles, "host dispatch budget exhausted"};
@@ -789,6 +785,14 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
         ExecutionResult result = dispatchGuestHostService(impl.core, boundary.pc);
         result.cycles += consumedCycles;
         if (!result.returned()) {
+          if (result.reason == ExecutionExitReason::Fault) {
+            lucent::error("executor",
+                          "host dispatch to 0x{:08X} FAILED ({}); the block that produced this target began at "
+                          "0x{:08X}",
+                          boundary.pc,
+                          result.detail,
+                          blockStart);
+          }
           return result;
         }
         // Nested native calls restore their C++ caller's scoped PC; the result owns the guest continuation.
