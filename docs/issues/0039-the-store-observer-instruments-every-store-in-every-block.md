@@ -79,3 +79,19 @@ as "run-length variance" and withdrew the worry that arming a PC perturbs execut
 resolution was wrong.** It was generalised from two runs of the *same* arming and never compared the
 two armings head to head. The head-to-head A/B above shows the effect is real and reproducible. The
 worry is reinstated; only the "run-length variance" explanation is withdrawn.
+
+## ADDENDUM — a second, sharper defect: arming a DELAY-SLOT store segfaults
+
+While using the observer to name the exact store that clobbers a guest interrupt element in Mega
+Man X4, every run appeared to report *nothing*. **It was not a quiet instrument — those runs were
+crashing.** A crashed process prints no teardown report, so "the observer saw no stores" and "the
+observer destroyed the process" are indistinguishable in a log, and the first was believed.
+
+Isolated with a control matrix: arming `0x800126A8` — `sh $s1, ($v0)`, the **delay slot of `jal
+0x800EDdbc`** — alone exits 139. Arming `0x80012628` alone, four stores in `0x80015F04..0x80015F80`
+individually, and two of those together all exit 0. **The discriminating variable is the delay slot,
+not the store width and not the count.** Full reproduction in `0040`.
+
+This also corrects the record on the Mega Man X4 side: the silence of the observer on the stores of
+the routine at `0x80015ECC` was never evidence about that routine, because those runs died before
+printing.
