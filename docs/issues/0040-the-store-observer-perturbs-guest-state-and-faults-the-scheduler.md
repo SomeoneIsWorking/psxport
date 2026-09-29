@@ -87,3 +87,79 @@ is not a measurement, and the exit status and the teardown report both have to b
 3. **Decide the instrument's status explicitly.** A diagnostic that can fault the guest is not
    usable for attribution on this port, and the port should say so at the point of use rather than
    leave a future reader to rediscover that a zero may mean "crashed".
+
+## THE ANSWER, FOUND BY INVESTIGATION: THE EXACT STORE PC IS ALREADY COMPUTED AND DISCARDED
+
+The store observer is not the only route, and it is not the cheapest. Reading the pinned Lightrec
+revision shows the exact guest store instruction's address is available at the one point where a
+guest store crosses into host code, and thrown away there.
+
+    u32 lightrec_rw(struct lightrec_state *state, union code op, u32 base,
+                    u32 data, u32 *flags, struct block *block, u16 offset)
+
+`lightrec_rw` receives `block` and `offset`. The exact store pc is `block->pc + (offset << 2)`.
+Every call it then makes drops both:
+
+    ops->sw(state, opcode, host, addr, data);
+
+**So the pc exists, is computed, and is not forwarded.** The memory-map op callbacks in
+`lightrec.h:175-178` take a second parameter named `opcode` - the store's instruction WORD, not its
+address. psxport receives the instruction and not the instruction's location.
+
+**This is the non-perturbing observer.** Forwarding `block->pc + (offset << 2)` alongside the
+existing `opcode` parameter costs nothing at runtime, instruments no block, invalidates nothing, and
+flushes no register cache. It is the exact opposite of the store observer's design, which exists
+precisely because this value is thrown away. Both callers already pass the real block and offset -
+`lightrec_rw_generic_cb` recovers the block from the LUT and takes the offset from the emitted
+argument, and the interpreter's `int_io`/`int_store` pass `inter->block, inter->offset`.
+
+### A CORRECTION TO A CORRECTION, because I made the same mistake twice
+
+I told the operator that `core.pc` "is the NEXT block's pc, not the block that executed." **That is
+imprecise, and the record now says so.** `copyLightrecToCore` sets `core.pc = nextPc` only at a
+segment boundary, and nothing writes `core.pc` during JIT execution, so during a segment it holds
+the pc the segment was ENTERED at. psxport's own code already says this - `commitDeviceClock` notes
+that the spin detector samples `Core::pc` and that "inside a segment that is the PC the segment
+ENTERED at."
+
+Both statements agree on the one thing that matters and I should have led with: **`core.pc` is not
+the store's pc, so a watchpoint cannot name the instruction.** The precise mechanism is the segment
+entry, not the next block. A third-order correction is a poor use of anyone's time, and this is the
+second time today a confident-sounding mechanism claim of mine turned out to be a plausible
+neighbour of the truth.
+
+### THE COVERAGE LIMIT, which is what makes a negative dangerous here
+
+Even with the pc forwarded, the tap is PARTIAL, and the gap is structural:
+
+- `rec_store` dispatches on the optimizer's IO mode. `LIGHTREC_IO_RAM` goes to `rec_store_ram` ->
+  `rec_store_memory` -> a **direct host store, no host call at all**, so psxport never sees it.
+- The optimizer only tags `IO_RAM` when the base register is **constant-propagated** (`optimizer.c`
+  gates on `v[list->i.rs].known`).
+- **So a store whose address is provably constant is invisible to this tap, always, by
+  construction.** `notifyExecutableWrite` is absent from the JIT's own self-modifying-code path for
+  the same reason - the emitted code NULLs the code LUT itself.
+- BIOS writes never arrive either: `PS_MAP_BIOS` has no `.ops` and goes to `lightrec_default_ops`.
+
+**For the MMX4 case specifically this is good news, and it is why the watchpoint fired at all.** The
+byte-wise copy has its destination in `$s3` and increments it in the loop, so the base is
+**not** constant-propagated, it takes the generic wrapper, and the tap sees it. The witness at
+`0x8013BC00` is real evidence that the generic path was taken.
+
+**The rule this earns, and it is the one that has cost this investigation the most:** a tap that
+fires on some writes and structurally cannot fire on others produces a zero that reads exactly like
+absence. Any census built on it must state which stores it can see. This is the same defect as
+`is3d` (feeder deleted), the dead `OtAttr` counter, `MATCHED NONE` from an unwritten tap, and an
+observer reporting 0 because the process died - all one class: **a confident answer about the wrong
+subject.**
+
+### THE NAMED FIX, at the location that owns it
+
+`shared/lightrec`: forward `block`/`offset` - or the computed `block->pc + (offset << 2)` - through
+`lightrec_rw` to the mem-map ops, widening the callback signature by one parameter. One emitter site
+also needs attention: `rec_io`'s tagged branch passes `c.opcode` as the wrapper argument instead of
+the `(lut_entry << 16) | offset` the untagged branch uses, so the offset is not available there yet.
+
+This is a change to a shared dependency's public callback signature, so it lands in `shared/lightrec`
+first and psxport's pin moves after - the same order as the reverted fix, but this time the premise
+is read out of the code rather than inferred from a crash.
