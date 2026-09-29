@@ -1,8 +1,8 @@
 ---
-id: 0138
+id: 0140
 title: The decomp pipeline can read overlays, and the no-return defence has been seen to fire
 status: open
-symptom: the shared decomp pipeline stood up in 0137 read only a resident PS-X EXE, so the titles
+symptom: the shared decomp pipeline stood up in 0139 read only a resident PS-X EXE, so the titles
   that are actually blocked could not use it — Vagrant Story's projection owner `func_800760CC`
   lives in `BATTLE.PRG`, an overlay with no header. Separately, the pipeline's no-return defence was
   ASSERTED AND UNEXERCISED: on Spyro 1 the analyzer marked 0 of 673 functions, so nothing had ever
@@ -15,7 +15,7 @@ updated: 2026-09-29
 ## Overlays, and the wall they were behind
 
 A `.PRG`/`.BIN` overlay is **not** a PS-X EXE: no header, no entry point, and no address derivable
-from the file. The 0137 reader refused one, so the code on the path of the visible defects — Vagrant's
+from the file. The 0139 reader refused one, so the code on the path of the visible defects — Vagrant's
 933,925 B of overlay code, CTR's and Tomba's overlay-scoped work — was unreachable.
 
 `ImageSpec` now carries a `kind` field, and **it is a field rather than a branch in the code**: the
@@ -156,7 +156,7 @@ in the code and both now permanent checks:
 
 ## MMX4's real memory ceiling, measured rather than assumed
 
-0137 flagged MMX4's text as possibly too large for the 1400 MB ceiling. **It fits.**
+0139 flagged MMX4's text as possibly too large for the 1400 MB ceiling. **It fits.**
 
 | | MMX4 | Spyro 1 (control) |
 |---|---|---|
@@ -167,7 +167,7 @@ in the code and both now permanent checks:
 | wall | 53.3 s | 25.3 s |
 
 **The 1400 MB ceiling HOLDS on the largest image in the manifest**, peaking at 1.09 GB across two
-runs — 78% of the ceiling. A correction to 0137's own note: MMX4's text is **2.83x** Spyro's, not the
+runs — 78% of the ceiling. A correction to 0139's own note: MMX4's text is **2.83x** Spyro's, not the
 3.6x stated there.
 
 **AND A REAL FINDING, about the addresses rather than the memory.** Two MMX4 addresses that older
