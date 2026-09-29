@@ -44,3 +44,12 @@ patching the block's FIRST word returns 2, and that form is what the test now as
 the Lightrec fork, which has to revoke every block overlapping the range (the block cache knows each
 block's span). Widening ranges on the psxport side cannot fix it because psxport does not know where
 blocks start.
+
+## 2026-09-29: the Lightrec half landed
+
+`shared/lightrec` `20bc8a2` makes `lightrec_invalidate(addr, len)` revoke every translated block whose
+extent overlaps the range (previously only a block whose FIRST word was written); its
+`invalidation_contract` test fails 4 of 11 cases on the prior tree and passes 11/11. psxport pins it.
+Still open here: `LightrecExecutor` must publish Lightrec's new denominators (`invalidation_words`,
+`invalidation_guards`, `invalidation_scans`, `invalidated_blocks`) beside `ExecutorCounters::invalidations`,
+and the per-Core owner/test list above.
