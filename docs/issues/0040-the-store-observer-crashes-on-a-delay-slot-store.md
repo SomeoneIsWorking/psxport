@@ -36,23 +36,71 @@ a `sh`, and so are `0x80015F7C` and `0x80015F18`, which are harmless. `0x800126A
 of the `jal` at `0x800126A4` — the `ChangeTh` call — and it alone reproduces the crash, alone or
 alongside a working store.
 
-## Why the mechanism is already suspected, not established
+## ROOT CAUSE — the hook resets the register cache while the branch emitter is holding a backup
 
-Issue `0039` established that the observer is invasive: arming it calls
-`lightrec_invalidate_all` and `lightrec_free_all_blocks`, the emitter instruments every store in
-every block, and `lightrec_rec_observed_store` calls `lightrec_clean_regs` followed by
-`lightrec_regcache_reset`.
+Read from `emitter.c` in the shared Lightrec tree, this is no longer a hypothesis.
 
-**A delay-slot store is the one case where those two behaviours can meet badly.** The register cache
-is written by a block's instructions, and a delay-slot instruction is emitted as part of the
-*branching* block while the branch target is the *next* block. Forcing a register clean and a regcache
-reset from inside a delay slot means the clean happens on a code path the emitter did not expect to be
-a normal instruction boundary. **This is a hypothesis with a mechanism, not a diagnosis** — the
-emitted code has not been read, and the crash has not been reduced to a failing instruction.
+`rec_b` — the branch emitter — takes a **branch-mode snapshot of the register cache** and then
+emits the delay slot *inside* that branch:
 
-**Named next step:** reduce the crash to a single emitted block by arming only `0x800126A8` and
-capturing the JIT's block for `0x800126A4..0x800126AC`; then read whether the delay-slot store's
-instrumentation is emitted into the wrong block, emitted twice, or emitted at all.
+    lightrec_free_regs(reg_cache);
+    regs_backup = lightrec_regcache_enter_branch(reg_cache);   /* regcache is now in BRANCH mode */
+    ...
+    if (op_flag_local_branch(op->flags)) {
+        if (!op_flag_no_ds(op->flags) && ds->opcode) {
+            state->no_load_delay = true;
+            lightrec_rec_delay_slot(state, block, offset + 1); /* the delay slot is emitted HERE */
+        }
+        ...
+        lightrec_clean_regs(reg_cache, _jit);
+    }
+
+and `rec_b` restores from `regs_backup` when it finishes the branch.
+
+The delay slot reaches `lightrec_rec_opcode` through `lightrec_rec_delay_slot`, which sets
+`state->in_delay_slot = true` and recurses. `lightrec_rec_opcode` computes the observer match
+**per instruction**, from `block->pc + (offset << 2)` — so **the hook is correctly emitted for a
+delay-slot store**, and `lightrec_rec_observed_store` then does what issue `0039` measured:
+`lightrec_clean_regs` followed by `lightrec_regcache_reset`.
+
+**So the observer resets the register cache while `rec_b` is mid-branch, and `rec_b` afterwards
+restores a `regs_backup` that no longer describes the cache.** The generated code then assumes
+registers are resident in the native register cache when they are not. **That is the segfault.**
+
+This explains the whole control matrix at once, including the part that was hardest to explain:
+
+- A store in a **normal** instruction boundary resets the cache where no branch backup is live, so
+  the reset is harmless — `0x80012628` and the four `0x80015Fxx` stores all exit 0.
+- A store in a **delay slot** resets the cache inside a live `regs_backup` window, so the branch's
+  restore is applied to a cache it no longer matches — `0x800126A8` exits 139.
+- It is not the store **width** and not the **number** of armed PCs: the harmless `0x80015F7C` and
+  `0x80015F18` are the same `sh` that is fatal at `0x800126A8`.
+
+## The fix, named at the location that owns it
+
+`lightrec_rec_observed_store` must not reset the register cache while a branch backup is live. There
+are three defensible shapes, and the choice belongs to the emitter, not to the observer's caller:
+
+1. **Suppress the hook in a delay slot** — `state->in_delay_slot` is already set and already
+   threaded to exactly the point that needs it, so this is the smallest change. It costs the ability
+   to watch delay-slot stores, which is the capability that was wanted.
+2. **Do the regcache reset without the branch restore** — let the observer keep its counters but
+   have `rec_b` re-take `regs_backup` after an observed store. More faithful, and it touches the
+   branch emitter's contract.
+3. **Defer the store's bookkeeping to a normal boundary** — record the match, clean up at the next
+   `op_flag_sync` boundary, which `lightrec_rec_opcode` already handles explicitly.
+
+**Option 1 alone would re-create the failure this issue exists to record**: the instrument would
+again silently not watch a common instruction class, and a log with no report would again be read as
+"nothing happened". If option 1 is chosen, the suppression must be **announced at the same place the
+armed list is printed**, naming the suppressed PCs, so an absent report is never ambiguous.
+
+## What was NOT done here, deliberately
+
+`shared/lightrec` is a shared, pinned dependency and the fix is a change to the JIT emitter's
+branch contract. It is not patched in this commit: the root cause is now precise enough that the
+change can be reviewed on its own merits, and changing a shared emitter's branch semantics on the
+strength of one port's crash is the wrong order of work.
 
 ## Why this is recorded rather than worked around
 
