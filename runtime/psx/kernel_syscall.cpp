@@ -1,6 +1,7 @@
 #include "execution_services.h"
 
 #include "game.h"
+#include "side_effect_journal.h"
 #include "syscall_exception.h"
 
 #include <cstddef>
@@ -20,6 +21,12 @@ SyscallResult handleSyscall(Core &core, std::uint32_t code, std::uint32_t instru
     return SyscallResult::MissingContext;
   }
   const auto selector = core.r[kA0];
+  // A syscall changes kernel state outside guest memory (the critical-section flag and COP0), so the
+  // override differential cannot replay it: its live path runs it and becomes incomparable, and its
+  // shadow path is refused it (side_effect_journal.h).
+  if (core.sideEffectJournal != nullptr && !core.sideEffectJournal->admitSyscall(selector, instructionPc)) {
+    return SyscallResult::Handled;
+  }
   if (selector > 2u) {
     return SyscallResult::UnsupportedSelector;
   }

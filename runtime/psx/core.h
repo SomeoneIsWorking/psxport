@@ -27,6 +27,7 @@ class ImageCatalog;
 struct ImageIdentity;
 class LightrecExecutor;
 class NativeDispatcher;
+class SideEffectJournal;
 } // namespace psx::cpu
 
 class Core : public R3000 {
@@ -62,6 +63,11 @@ public:
 
   // Address of the currently active native override, used to suppress recursive self-interception.
   uint32_t active_native_address = 0;
+
+  // The override differential's journal for the path currently executing, or null (the product
+  // state). Non-owning; set and restored only by `psx::cpu::SideEffectJournal::Scope`. The device
+  // funnel below, host-service dispatch, syscalls, pending work and guest-time accounting consult it.
+  psx::cpu::SideEffectJournal *sideEffectJournal = nullptr;
 
   // Deferred work checked by the executor at bounded guest-service points.
   //
@@ -155,6 +161,11 @@ private:
   uint8_t *host_ptr(uint32_t a, uint32_t bytes);
   uint32_t io_read(uint32_t a, uint32_t bytes);
   void io_write(uint32_t a, uint32_t v, uint32_t bytes);
+  // THE DEVICE FUNNEL: every guest-memory access with no RAM mapping, from native code and from
+  // translated Lightrec code alike, passes here on its way to io_read/io_write, so the override
+  // differential's journal sees (and on its shadow path, replays) each one in order.
+  uint32_t deviceRead(uint32_t a, uint32_t bytes);
+  void deviceWrite(uint32_t a, uint32_t v, uint32_t bytes);
   template <class Value> void writeGuestMemory(uint32_t address, Value value);
 
   // WATCH HOOKS — every guest store calls these, so their DISABLED path is on the hottest path in

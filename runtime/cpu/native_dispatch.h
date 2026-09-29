@@ -3,6 +3,7 @@
 #include "execution_exit.h"
 #include "image_identity.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +14,7 @@ class Core;
 
 namespace psx::cpu {
 
+class OverrideDifferential;
 class SuppressionScope;
 
 using NativeFunction = void (*)(Core *);
@@ -26,12 +28,19 @@ struct NativeRegistration {
 class NativeDispatcher {
 public:
   explicit NativeDispatcher(Core &core);
+  ~NativeDispatcher();
+  NativeDispatcher(const NativeDispatcher &) = delete;
+  NativeDispatcher &operator=(const NativeDispatcher &) = delete;
 
   bool install(NativeRegistration registration);
   bool remove(NativeKey key);
   std::optional<ExecutionResult> invoke(NativeKey key);
   bool isInstalled(NativeKey key) const;
   bool intercepts(NativeKey key) const;
+  // Route every call of the overrides `differential` selects through it (override_differential.h).
+  // Owned for the dispatcher's lifetime; its destructor writes the final report.
+  void attachDifferential(std::unique_ptr<OverrideDifferential> differential);
+  OverrideDifferential *differential() const;
 
 private:
   struct NativeKeyHash {
@@ -50,6 +59,7 @@ private:
   Core &core_;
   std::unordered_map<NativeKey, Entry, NativeKeyHash> entries_;
   std::vector<NativeKey> suppressions_;
+  std::unique_ptr<OverrideDifferential> differential_;
 };
 
 enum class GuestHostDispatchKind : std::uint8_t {
@@ -124,6 +134,11 @@ void callOriginalToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudge
 //     display fields is a guest loop, and saying so is more useful than hanging.
 inline constexpr std::uint32_t kMaxResumedHostTurns = 64;
 void callOriginalToReturnResuming(Core &core, NativeKey key, ExecutionBudget budget, std::string_view owner);
+// The same bounded resume loop WITHOUT the refusal: returns `GuestReturn`, the first exit that is not a
+// budget exhaustion, or the budget exhaustion at which `kMaxResumedHostTurns` was reached, with
+// `cycles` accumulated over every turn. For a caller that must report an original's non-return rather
+// than abort the process on its behalf (the override differential).
+ExecutionResult callOriginalResumingToExit(Core &core, NativeKey key, ExecutionBudget budget);
 void callOriginalToReturnResuming(Core &core,
                                   std::uint32_t guestAddress,
                                   ExecutionBudget budget,

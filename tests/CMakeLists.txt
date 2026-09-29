@@ -209,6 +209,13 @@ add_test(NAME consumer_verify_policy
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/test_consumer_verify.py)
 
+# The accept step for every new native override reads the differential's report through this gate, so
+# its failure classes (mismatch, zero samples, all-incomparable, missing selector, incomplete report) are
+# each a test, beside the clean report that makes them mean something.
+add_test(NAME override_differential_gate
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/port/test_override_differential_gate.py)
+
 add_test(NAME lightning_prefix_policy
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_project_lightning_prefix.py)

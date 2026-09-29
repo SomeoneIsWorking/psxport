@@ -4,7 +4,9 @@
 #include "execution_control.h"
 #include "game.h"
 #include "lightrec_executor.h"
+#include "override_differential.h"
 #include "platform_hle.h"
+#include "side_effect_journal.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -26,6 +28,16 @@ private:
 };
 
 NativeDispatcher::NativeDispatcher(Core &core) : core_(core) {}
+
+NativeDispatcher::~NativeDispatcher() = default;
+
+void NativeDispatcher::attachDifferential(std::unique_ptr<OverrideDifferential> differential) {
+  differential_ = std::move(differential);
+}
+
+OverrideDifferential *NativeDispatcher::differential() const {
+  return differential_.get();
+}
 
 std::size_t NativeDispatcher::NativeKeyHash::operator()(NativeKey key) const {
   const std::size_t a = static_cast<std::size_t>(key.image.id ^ (key.image.id >> 32));
@@ -205,6 +217,26 @@ ResolvedHostDispatch resolveHostDispatch(Core &core, std::uint32_t guestAddress)
   return {};
 }
 
+// How the override differential's side-effect journal names a resolved host service. A title override
+// is the one kind that is REPLAYABLE — its guest-memory and device traffic go through the same funnel —
+// so it is the one kind the journal lets both paths execute.
+SideEffectKind journaledKind(const ResolvedHostDispatch &resolved) {
+  if (resolved.nativeKey.image.id != 0) {
+    return SideEffectKind::NestedOverride;
+  }
+  if (resolved.biosTable != 0) {
+    return SideEffectKind::BiosCall;
+  }
+  if (resolved.padWorkAreaAction) {
+    return SideEffectKind::PadWorkArea;
+  }
+  return SideEffectKind::PlatformService;
+}
+
+std::uint32_t journaledSelector(const Core &core, const ResolvedHostDispatch &resolved) {
+  return resolved.biosTable != 0 ? (core.r[9] & 0xffu) : 0u;
+}
+
 } // namespace
 
 ExecutionResult
@@ -263,6 +295,15 @@ ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress)
   }
   if (resolved.kind != GuestHostDispatchKind::HostService) {
     return {ExecutionExitReason::Fault, guestAddress, 0, "guest address has no host service"};
+  }
+  if (core.sideEffectJournal != nullptr &&
+      !core.sideEffectJournal->admitHostService(
+          journaledKind(resolved), guestAddress, journaledSelector(core, resolved))) {
+    // The override differential's SHADOW path reached a host service the live path did not perform at
+    // this position (side_effect_journal.h). It is withheld, never run against live devices: the shadow
+    // path's state is already known to differ and is discarded, so returning to the caller is enough.
+    core.pc = core.r[31];
+    return {ExecutionExitReason::GuestReturn, core.pc, 0, "host service withheld from the override differential"};
   }
   if (resolved.platformFunction) {
     return invokeNativeFunction(core, guestAddress, resolved.platformFunction, "platform-hle");
@@ -329,6 +370,11 @@ std::optional<ExecutionResult> NativeDispatcher::invoke(NativeKey key) {
   const auto entry = entries_.find(key);
   if (entry == entries_.end() || suppressed(key)) {
     return std::nullopt;
+  }
+  if (differential_) {
+    if (auto shadowed = differential_->intercept(key, entry->second.name, entry->second.function)) {
+      return shadowed;
+    }
   }
   return invokeNativeFunction(core_, key.address, entry->second.function, entry->second.name);
 }
@@ -473,64 +519,83 @@ void callOriginalToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudge
 namespace {
 
 // The bounded resume loop, shared by both key and address forms. `enter` performs the FIRST call and
-// `resume` every later one, so this holds one copy of the bound, the return-address capture and the
-// refusal rather than one per overload.
+// `resume` every later one, so this holds one copy of the bound and the return-address capture rather
+// than one per overload. It STOPS rather than refuses: the result is `GuestReturn`, the first exit that
+// is not a budget exhaustion, or the budget exhaustion at which the bound was reached. The aborting
+// callers below and the override differential (which must never abort on the original's behalf) both
+// read the same loop.
 //
 // `returnPc` is read from `$r[31]` BEFORE `enter` runs, and that ordering is load-bearing: the guest
 // body will set `$r[31` as it calls deeper, so reading it afterwards would resume into a nested return
 // address. This is the one thing every hand-rolled copy of this loop has to get right, which is exactly
 // why it is written once. It is handed to `resume` rather than closed over because a lambda capturing
 // it by reference would read the *current* `$r[31]` at resume time — the very bug the capture prevents.
-template <typename Enter, typename Resume>
-void callOriginalResuming(Core &core, ExecutionBudget budget, std::string_view owner, Enter enter, Resume resume) {
-  const std::uint32_t returnPc = core.r[31];
-  std::uint64_t cycles = 0;
+struct ResumedCall {
+  ExecutionResult result;
+  std::uint32_t returnPc = 0;
   std::uint32_t turns = 0;
-  ExecutionResult result = enter();
-  cycles += result.cycles;
-  while (!result.returned()) {
-    // A budget exit is the ONE reason this function exists. Anything else is a real failure and keeps
-    // `requireGuestReturn`'s existing reporting, so this does not become a second error vocabulary.
-    if (result.reason != ExecutionExitReason::BudgetExhausted) {
-      (void)requireGuestReturn(result, owner);
-      std::abort();
-    }
-    if (turns >= kMaxResumedHostTurns) {
-      // Refused, not spun on. The bound is NAMED, and so is the turn count reached, so this line can be
-      // read as the measurement it is rather than as a hang.
-      lucent::error("executor",
-                    "{}: the guest call to return address 0x{:08X} consumed {} host turn(s) and {} cycles "
-                    "without returning and is still at 0x{:08X}. A guest function needing more than {} "
-                    "display fields does not exist, so this is a guest loop: reported, not spun on",
-                    owner,
-                    returnPc,
-                    turns,
-                    cycles,
-                    result.guestPc,
-                    kMaxResumedHostTurns);
-      std::abort();
-    }
+  std::uint64_t cycles = 0;
+};
+
+template <typename Enter, typename Resume> ResumedCall resumeUntilExit(Core &core, Enter enter, Resume resume) {
+  ResumedCall call{.result = {}, .returnPc = core.r[31]};
+  call.result = enter();
+  call.cycles += call.result.cycles;
+  while (call.result.reason == ExecutionExitReason::BudgetExhausted && call.turns < kMaxResumedHostTurns) {
     // Each turn gets the CURRENT turn's budget, not the one the caller passed. The caller's budget
     // sized the first turn; reusing it would silently give every later turn the original allowance.
-    result = resume(result.guestPc, returnPc, ExecutionBudget::currentTurn(core));
-    cycles += result.cycles;
-    ++turns;
+    call.result = resume(call.result.guestPc, call.returnPc, ExecutionBudget::currentTurn(core));
+    call.cycles += call.result.cycles;
+    ++call.turns;
   }
+  call.result.cycles = call.cycles;
+  return call;
 }
 
-} // namespace
+void refuseUnreturnedCall(const ResumedCall &call, std::string_view owner) {
+  if (call.result.returned()) {
+    return;
+  }
+  // A budget exit is the ONE reason the resume loop exists. Anything else is a real failure and keeps
+  // `requireGuestReturn`'s existing reporting, so this does not become a second error vocabulary.
+  if (call.result.reason != ExecutionExitReason::BudgetExhausted) {
+    (void)requireGuestReturn(call.result, owner);
+    std::abort();
+  }
+  // Refused, not spun on. The bound is NAMED, and so is the turn count reached, so this line can be
+  // read as the measurement it is rather than as a hang.
+  lucent::error("executor",
+                "{}: the guest call to return address 0x{:08X} consumed {} host turn(s) and {} cycles "
+                "without returning and is still at 0x{:08X}. A guest function needing more than {} "
+                "display fields does not exist, so this is a guest loop: reported, not spun on",
+                owner,
+                call.returnPc,
+                call.turns,
+                call.cycles,
+                call.result.guestPc,
+                kMaxResumedHostTurns);
+  std::abort();
+}
 
-void callOriginalToReturnResuming(Core &core, NativeKey key, ExecutionBudget budget, std::string_view owner) {
-  callOriginalResuming(
+ResumedCall resumeOriginalUntilExit(Core &core, NativeKey key, ExecutionBudget budget) {
+  return resumeUntilExit(
       core,
-      budget,
-      owner,
       [&] {
         return callOriginal(core, key, budget);
       },
       [&](std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget turn) {
         return resumeOriginal(core, key, resumePc, returnPc, turn);
       });
+}
+
+} // namespace
+
+ExecutionResult callOriginalResumingToExit(Core &core, NativeKey key, ExecutionBudget budget) {
+  return resumeOriginalUntilExit(core, key, budget).result;
+}
+
+void callOriginalToReturnResuming(Core &core, NativeKey key, ExecutionBudget budget, std::string_view owner) {
+  refuseUnreturnedCall(resumeOriginalUntilExit(core, key, budget), owner);
 }
 
 void callOriginalToReturnResuming(Core &core,
@@ -541,16 +606,15 @@ void callOriginalToReturnResuming(Core &core,
   // caller that has an address rather than a `NativeKey`. It takes the entry explicitly, so OT
   // submission attribution during a resumed turn stays scoped to this call instead of adopting the
   // frame that encloses it — the reason that second entry point exists at all.
-  callOriginalResuming(
-      core,
-      budget,
-      owner,
-      [&] {
-        return callOriginal(core, guestAddress, budget);
-      },
-      [&](std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget turn) {
-        return resumeGuestToReturnFrom(core, guestAddress, resumePc, returnPc, turn);
-      });
+  refuseUnreturnedCall(resumeUntilExit(
+                           core,
+                           [&] {
+                             return callOriginal(core, guestAddress, budget);
+                           },
+                           [&](std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget turn) {
+                             return resumeGuestToReturnFrom(core, guestAddress, resumePc, returnPc, turn);
+                           }),
+                       owner);
 }
 
 } // namespace psx::cpu

@@ -17,6 +17,7 @@
 #include "config_var.h"
 #include "diagnostic_run.h"
 #include "fallback_policy.h"
+#include "override_differential_config.h"
 #include "render_mode.h" // RenderPath — the type cv_render_path resolves to
 
 namespace psx::config {
@@ -104,6 +105,12 @@ extern TextVar cv_enh;
 // during one bounded executor call. The compiled default is one: the known difficult-block escape
 // remains available, while a second block is a typed fault instead of an interpreter-dominated run.
 psx::cpu::FallbackPolicy lightrec_fallback_policy();
+
+// PSXPORT_OVERRIDE_DIFF (+ _FIRST, _EVERY, _DEAD_STACK, _REPORT) — the per-function override
+// differential (runtime/cpu/override_differential.h): which native overrides to shadow against their
+// original guest bodies in a real run, how many calls to sample, and where the JSON report goes. The
+// backing vars are private; this typed value is the only way to read them. Empty selectors disarm.
+psx::cpu::OverrideDifferentialConfig override_differential_config();
 
 // Resolve one enhancement and announce an active selection once per key.
 bool enh_gate(const char *key, bool asked);

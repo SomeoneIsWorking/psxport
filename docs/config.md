@@ -102,6 +102,26 @@ repositories recorded, and the mutation that silences the AUTO verdict fails it.
 geometries that were affected, and the mutation that restores the pre-fix host-engine-only question
 fails it.
 
+## PSXPORT_OVERRIDE_DIFF — does this native override equal its original?
+
+`PSXPORT_OVERRIDE_DIFF` arms the per-function override differential (`runtime/cpu/override_differential.h`)
+for a comma- or space-separated list of **registered override names** or **`0x`-prefixed guest entry
+addresses**. Empty (the default) disarms. For each selected override it shadows the first
+`PSXPORT_OVERRIDE_DIFF_FIRST` calls (default 16) and every `PSXPORT_OVERRIDE_DIFF_EVERY`th call after
+that (default 64; 0 = none): the original runs live, the native runs against the restored entry state
+with the original's device traffic replayed to it, the two post-states are compared under the MIPS O32
+contract, and the run continues from the **original's** state. `PSXPORT_OVERRIDE_DIFF_DEAD_STACK`
+(default 8192) bounds the callee-frame window below the entry `sp` whose differences are counted but not
+judged. `PSXPORT_OVERRIDE_DIFF_REPORT` (default `scratch/override_differential.json`, cwd-relative) is the
+JSON report; gate on it with
+
+    uv run --frozen python tools/port/override_differential_gate.py scratch/override_differential.json --require <name>
+
+which exits nonzero on any mismatch, on a requested selector that sampled zero calls or only
+incomparable ones, and on an incomplete report. An unparsable list is refused by name and arms nothing,
+so the gate then fails on the missing report. What is and is not compared is written into the report
+itself (`compared`, `not_observed`).
+
 ## PSXPORT_STORE_OBSERVE — which instruction wrote this guest word
 
 `PSXPORT_STORE_OBSERVE` is a comma- or space-separated list of hex **guest addresses of store

@@ -396,6 +396,31 @@ IntVar cv_lightrec_fallback_block_limit(
     static_cast<long>(psx::cpu::kDefaultMaxFallbackBlocksPerExecution),
     "maximum automatic interpreter-fallback blocks admitted by one bounded Lightrec execution",
     /*persistable=*/false);
+// The override differential's knobs. Diagnostic-only, so none is persistable: a settings file must
+// never silently arm a gate that rewrites the continued run's state on every sampled call.
+TextVar cv_override_diff("PSXPORT_OVERRIDE_DIFF",
+                         "",
+                         "native overrides to shadow against their original guest bodies: registered override "
+                         "NAMES or 0x-prefixed guest entry ADDRESSES, comma-separated (empty = off)",
+                         /*persistable=*/false);
+IntVar cv_override_diff_first("PSXPORT_OVERRIDE_DIFF_FIRST",
+                              static_cast<long>(psx::cpu::kDefaultDifferentialFirstCalls),
+                              "override differential: shadow the first N calls of each selected override",
+                              /*persistable=*/false);
+IntVar cv_override_diff_every("PSXPORT_OVERRIDE_DIFF_EVERY",
+                              static_cast<long>(psx::cpu::kDefaultDifferentialEveryKth),
+                              "override differential: after the first N, shadow every Kth call (0 = none)",
+                              /*persistable=*/false);
+IntVar cv_override_diff_dead_stack("PSXPORT_OVERRIDE_DIFF_DEAD_STACK",
+                                   static_cast<long>(psx::cpu::kDefaultDifferentialDeadStackBytes),
+                                   "override differential: bytes below the entry sp treated as callee-frame "
+                                   "residue (counted and reported, not judged)",
+                                   /*persistable=*/false);
+TextVar cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT",
+                                std::string(psx::cpu::kDefaultDifferentialReportPath),
+                                "override differential: JSON report path (cwd-relative default is the title's "
+                                "scratch/)",
+                                /*persistable=*/false);
 
 } // namespace
 
@@ -447,6 +472,14 @@ ScopedDiagnosticRun::~ScopedDiagnosticRun() {
 
 psx::cpu::FallbackPolicy lightrec_fallback_policy() {
   return psx::cpu::fallbackPolicyFromConfigured(cv_lightrec_fallback_block_limit.get());
+}
+
+psx::cpu::OverrideDifferentialConfig override_differential_config() {
+  return psx::cpu::overrideDifferentialConfigFrom(cv_override_diff.get(),
+                                                  cv_override_diff_first.get(),
+                                                  cv_override_diff_every.get(),
+                                                  cv_override_diff_dead_stack.get(),
+                                                  cv_override_diff_report.get());
 }
 
 namespace {

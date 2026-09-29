@@ -27,3 +27,20 @@ only determines which PSX ranges and decisions became stale.
 Tests must cover an overlapping changed write, adjacent/out-of-range write, DMA/module replacement,
 same-address new generation, savestate restore, and override-policy change. Reports include ranges
 examined, blocks/decisions invalidated, and the zero-overlap answer.
+
+## Finding 2026-09-29: an interior-word write never revokes its block
+
+`lightrec_invalidate(addr, len)` (`shared/lightrec/lightrec.c`) only zeroes the code-LUT entries of the
+written words, and a block is re-validated (`lightrec_block_is_outdated`, `blockcache.c`) only when the
+LUT entry at the block's *start* PC is zero. So a write to any word after the first word of a translated
+block is reported to `notifyExecutableWrite`, counted in `ExecutorCounters::invalidations`, and has no
+effect: the stale block keeps executing. This applies to every writer through the owner (CPU
+`MappedStore`, DMA, module loads, savestate-style restores), not to one caller.
+
+Reproduced with `tests/test_override_differential.cpp`: a two-instruction function `jr $ra; addiu $v0,
+$zero, 1` was translated, its delay-slot word was rewritten to `addiu $v0, $zero, 2` and reported to
+the owner, the invalidation counter advanced, and the next call still returned 1. The same fixture
+patching the block's FIRST word returns 2, and that form is what the test now asserts. The fix belongs in
+the Lightrec fork, which has to revoke every block overlapping the range (the block cache knows each
+block's span). Widening ranges on the psxport side cannot fix it because psxport does not know where
+blocks start.

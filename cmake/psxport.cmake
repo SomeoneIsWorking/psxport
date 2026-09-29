@@ -49,8 +49,14 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/cpu/guest_call.cpp
   ${PSXPORT_ROOT}/runtime/cpu/invalidation.cpp
   ${PSXPORT_ROOT}/runtime/cpu/lightrec_executor.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/machine_snapshot.cpp # CPU/GTE/RAM capture and invalidating restore
   ${PSXPORT_ROOT}/runtime/cpu/native_dispatch.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/override_differential.cpp # per-function override differential (shadow mode)
+  ${PSXPORT_ROOT}/runtime/cpu/override_differential_config.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/override_differential_contract.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/override_differential_report.cpp
   ${PSXPORT_ROOT}/runtime/cpu/segment_clock.cpp   # per-segment emulated-clock commitment ledger
+  ${PSXPORT_ROOT}/runtime/cpu/side_effect_journal.cpp # device/host-service journal for the differential
   ${PSXPORT_ROOT}/runtime/cpu/store_observe.cpp # arms the dynarec store observer from PSXPORT_STORE_OBSERVE
   ${PSXPORT_ROOT}/runtime/psx/frame_loop_shell.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame_presenter.cpp

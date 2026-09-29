@@ -15,7 +15,10 @@
 #include "image_identity.h"
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
+#include "override_differential.h"
 #include <cstring>
+#include <lucent/log.h>
+#include <utility>
 
 Core::Core() {
   memset((R3000 *)this, 0, sizeof(R3000));
@@ -25,6 +28,15 @@ Core::Core() {
   imageCatalog_ = std::make_unique<psx::cpu::ImageCatalog>();
   lightrecExecutor_ = std::make_unique<psx::cpu::LightrecExecutor>(*this, psx::config::lightrec_fallback_policy);
   nativeDispatcher_ = std::make_unique<psx::cpu::NativeDispatcher>(*this);
+  // The override differential is armed here, on EVERY runtime's route, because a gate armed only on
+  // one spine is a gate some products silently never reach (store_observe.h records that incident).
+  if (psx::cpu::OverrideDifferentialConfig differential = psx::config::override_differential_config();
+      differential.error) {
+    lucent::error("override-diff", "REFUSED, not armed: {}", *differential.error);
+  } else if (differential.enabled()) {
+    nativeDispatcher_->attachDifferential(
+        std::make_unique<psx::cpu::OverrideDifferential>(*this, std::move(differential)));
+  }
   // Snapshot the game-owned polymorphic runtime. The two legacy views are non-null only when the
   // bounded adapter was installed by a consumer that has not migrated this seam yet.
   runtime = psxport_game_runtime();

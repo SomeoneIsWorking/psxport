@@ -1,6 +1,7 @@
 #include "core.h"
 #include "invalidation.h"
 #include "render_substrate.h"
+#include "side_effect_journal.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -8,7 +9,7 @@
 
 uint8_t Core::mem_r8(uint32_t a) {
   uint8_t *p = host_ptr(a, 1);
-  return p ? *p : (uint8_t)io_read(a, 1);
+  return p ? *p : (uint8_t)deviceRead(a, 1);
 }
 void Core::readCString(uint32_t address, char *out, size_t cap) {
   size_t i = 0;
@@ -24,7 +25,7 @@ void Core::readCString(uint32_t address, char *out, size_t cap) {
 uint16_t Core::mem_r16(uint32_t a) {
   uint8_t *p = host_ptr(a, 2);
   if (!p) {
-    return (uint16_t)io_read(a, 2);
+    return (uint16_t)deviceRead(a, 2);
   }
   uint16_t v;
   memcpy(&v, p, 2);
@@ -33,11 +34,27 @@ uint16_t Core::mem_r16(uint32_t a) {
 uint32_t Core::mem_r32(uint32_t a) {
   uint8_t *p = host_ptr(a, 4);
   if (!p) {
-    return io_read(a, 4);
+    return deviceRead(a, 4);
   }
   uint32_t v;
   memcpy(&v, p, 4);
   return v;
+}
+uint32_t Core::deviceRead(uint32_t a, uint32_t bytes) {
+  if (sideEffectJournal == nullptr) {
+    return io_read(a, bytes);
+  }
+  if (const auto replayed = sideEffectJournal->replayDeviceRead(a, bytes)) {
+    return *replayed;
+  }
+  const uint32_t value = io_read(a, bytes);
+  sideEffectJournal->recordDeviceRead(a, bytes, value);
+  return value;
+}
+void Core::deviceWrite(uint32_t a, uint32_t v, uint32_t bytes) {
+  if (sideEffectJournal == nullptr || sideEffectJournal->admitDeviceWrite(a, bytes, v)) {
+    io_write(a, v, bytes);
+  }
 }
 // OT/GTE submission attribution (`debug otattr`, game/render/ot_attr.h): attribute a packet-pool store
 // to the current otattr-shadow-stack fn + render-walk node. No-op unless the channel is on.
@@ -83,7 +100,7 @@ template <class Value> void Core::writeGuestMemory(uint32_t a, Value v) {
     memcpy(p, &v, width);
     psx::cpu::notifyExecutableWrite(*this, {a, a + width}, psx::cpu::ExecutableWriteSource::MappedStore);
   } else {
-    io_write(a, v, width);
+    deviceWrite(a, v, width);
   }
 }
 

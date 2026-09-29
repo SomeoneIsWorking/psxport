@@ -9,6 +9,7 @@
 #include "hw_bind.h"
 #include "native_dispatch.h"
 #include "segment_clock.h"
+#include "side_effect_journal.h"
 #include "store_observe.h"
 
 #include <lightrec.h>
@@ -206,6 +207,11 @@ struct LightrecExecutor::Impl {
     // everything would report 0/0 here and look identical to a run that never reached the callbacks.
     ++counters.memoryCallbacks;
     if (core.game == nullptr || !isDeviceAddress(address)) {
+      return;
+    }
+    // The override differential's shadow path runs with guest time held (side_effect_journal.h);
+    // its device reads are replayed, so no device can observe the clock it would have committed.
+    if (core.sideEffectJournal != nullptr && core.sideEffectJournal->withholdsGuestTime()) {
       return;
     }
     const std::uint32_t instructions = segmentClock.commitThrough(lightrec_current_cycle_count(lightrec));

@@ -67,6 +67,13 @@ An enclosing native override running its original body through an ordinary nativ
 frame exit proves guest execution resumes from the returned continuation, independently of the
 scoped C++ caller PC restored by nested native dispatch.
 
+Override correctness has a gate: `runtime/cpu/override_differential.*` shadows sampled calls of selected
+overrides in a real run (`PSXPORT_OVERRIDE_DIFF`), compares original and native under the O32 contract
+with device traffic replayed, continues from the original, and reports to
+`tools/port/override_differential_gate.py`. Verified hermetically only
+(`tests/test_override_differential.cpp`); gap: not yet exercised on a real title's override
+(`docs/issues/0138-override-differential-gate.md`).
+
 ### S015 — Central executable-code invalidation
 
 Range normalization, image generations, dispatch revocation, counters, and explicit Lightrec

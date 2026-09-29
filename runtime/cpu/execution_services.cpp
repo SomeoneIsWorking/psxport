@@ -5,6 +5,7 @@
 #include "core.h"
 #include "game.h"
 #include "host_turn.h"
+#include "side_effect_journal.h"
 
 #include <lucent/log.h>
 
@@ -27,6 +28,12 @@ int maximumSpinRun() {
 } // namespace
 
 void accountGuestInstructions(Core &core, std::uint32_t instructions) {
+  // Guest time advances ONCE per call under the override differential: on its live path. The shadow
+  // path's instructions are discarded with its state, so charging them would move every device clock
+  // for work the continued run never did (side_effect_journal.h).
+  if (core.sideEffectJournal != nullptr && core.sideEffectJournal->withholdsGuestTime()) {
+    return;
+  }
   core.game->timing.advanceGuestInstructionTicks(instructions);
   requestHostTurnWhenDue(core);
   if (spin_detector_sample(
@@ -39,6 +46,9 @@ void accountGuestInstructions(Core &core, std::uint32_t instructions) {
 }
 
 void servicePendingWork(Core &core) {
+  if (core.sideEffectJournal != nullptr && !core.sideEffectJournal->admitPendingWork()) {
+    return;
+  }
   const bool reportRegisters = lucent::channel_on("pollregs");
   std::uint32_t before[11]{};
   if (reportRegisters) {
