@@ -145,6 +145,29 @@ struct ExecutorCounters {
   // non-zero `memoryCallbacks` is a real "no commit happened", not a missing measurement.
   std::uint64_t deviceClockCommits = 0;
   std::uint64_t deviceClockCommitInstructions = 0;
+  // THE PC REPORTED AT A BUDGET EXIT, classified against the loaded code images.
+  //
+  // BOTH exit sites count, not one. `lightrec_executor.cpp` returns BudgetExhausted from the
+  // CYCLE budget and again from the HOST-DISPATCH budget, and each hands back a pc that guest
+  // execution will resume at. The first version of this census instrumented only the cycle exit
+  // and its own test caught the gap: a host-dispatch exit left `budgetExits` unmoved, so the
+  // denominator under-reported and "0 outside every code image" would have covered only half the
+  // path it claims to describe. A census with a partial feeder is the dead-tap shape again.
+  //
+  // A budget exit is an ordinary bounded exit: the caller commits the state, then resumes
+  // deliberately at the pc the executor reports. That makes the reported pc a CONTRACT - it is
+  // where guest execution will next begin - and it is the one value on that path that nothing in
+  // the framework classifies. Measured 2026-09-29 on Mega Man X4: a run faulted with a fetch at
+  // 0x0113D7D0 after "0 cycles", i.e. inside a resumed segment, and that address was in NO guest
+  // register, in neither of the call's two `j` instruction words, and was not the logged resume
+  // point. Every guest-side explanation was refuted, and the remaining candidate is this pc.
+  //
+  // The denominator is the point. "0 exits reported a bad pc" and "no budget exit ever happened" are
+  // the same zero without `budgetExits`, and this project has been bitten by exactly that shape
+  // repeatedly - a dead tap that reads as a clean measurement of absence.
+  std::uint64_t budgetExits = 0;
+  std::uint64_t budgetExitPcInCodeImage = 0;
+  std::uint64_t budgetExitPcOutsideCodeImage = 0;
   InterpreterFallbackCounters fallback;
 };
 

@@ -631,6 +631,16 @@ static void dbg_exec(FILE *out, const char *line) {
               (unsigned long long)k.cacheMisses,
               (unsigned long long)k.invalidations,
               (unsigned long long)k.faults);
+      // The pc a budget exit hands back is a contract - it is where guest execution resumes - and
+      // it is reported here so a live run can be ASKED about it rather than having it scraped out
+      // of a log. `budget_exits` is the denominator that makes the other two mean anything: with
+      // it, "0 outside" is a measurement; without it, "0 outside" is indistinguishable from a run
+      // that never took a budget exit at all.
+      fprintf(out,
+              "budget_exit: exits=%llu pc_in_code_image=%llu pc_outside_code_image=%llu\n",
+              (unsigned long long)k.budgetExits,
+              (unsigned long long)k.budgetExitPcInCodeImage,
+              (unsigned long long)k.budgetExitPcOutsideCodeImage);
       const psx::cpu::InterpreterFallbackCounters &f = k.fallback;
       // Every reason the fallback counters carry, because a report that names three of six reasons
       // reads as "the other three are zero" when it means "the other three were never asked".

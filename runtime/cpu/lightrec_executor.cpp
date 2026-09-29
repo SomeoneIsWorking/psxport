@@ -481,6 +481,30 @@ struct LightrecExecutor::Impl {
     gte_import_registers(core.game->gte, registers->cp2d, registers->cp2c);
   }
 
+  // CLASSIFY THE PC A BUDGET EXIT REPORTS, because that pc is where guest execution resumes and
+  // nothing else on the path checks it. Returns the reason unchanged so the call site reads as the
+  // ordinary bounded exit it is; the classification is the side effect.
+  static ExecutionExitReason recordBudgetExit(Impl &impl, std::uint32_t resumePc) {
+    ++impl.counters.budgetExits;
+    if (impl.core.currentImageIdentity(resumePc).has_value()) {
+      ++impl.counters.budgetExitPcInCodeImage;
+    } else {
+      ++impl.counters.budgetExitPcOutsideCodeImage;
+      // Reported IMMEDIATELY and ALWAYS, not on a stride: a budget exit that hands back an
+      // unresolvable pc resumes guest execution somewhere that is not code, and the next thing
+      // that happens is a bare fault address with no register holding it and nothing to connect
+      // it to this decision. The name and the count are what make it connectable.
+      lucent::error("lightrec",
+                    "budget exit reported resume pc 0x{:08X}, which is NOT in any loaded code "
+                    "image; guest execution will resume there. {} of {} budget exit(s) so far "
+                    "reported a pc outside every code image",
+                    resumePc,
+                    impl.counters.budgetExitPcOutsideCodeImage,
+                    impl.counters.budgetExits);
+    }
+    return ExecutionExitReason::BudgetExhausted;
+  }
+
   void updateCounters(const lightrec_execution_stats &stats) {
     counters.translatedBlocks = stats.translated_blocks;
     counters.executedBlocks = stats.executed_blocks;
@@ -737,7 +761,8 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
         return {ExecutionExitReason::GuestReturn, boundary.pc, consumedCycles, "guest return"};
       case LightrecExecutor::Impl::BoundaryReason::HostDispatch: {
         if (hostDispatches >= budget.maxHostDispatches) {
-          return {ExecutionExitReason::BudgetExhausted, boundary.pc, consumedCycles, "host dispatch budget exhausted"};
+          return {
+              Impl::recordBudgetExit(impl, boundary.pc), boundary.pc, consumedCycles, "host dispatch budget exhausted"};
         }
         ++hostDispatches;
         ++impl.counters.hostDispatches;
@@ -792,7 +817,7 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       // accounting above raised the owed turn; the next block boundary takes it.
       continue;
     }
-    return {ExecutionExitReason::BudgetExhausted, nextPc, consumedCycles, "cycle budget exhausted"};
+    return {Impl::recordBudgetExit(impl, nextPc), nextPc, consumedCycles, "cycle budget exhausted"};
   }
   return {ExecutionExitReason::BudgetExhausted, nextPc, consumedCycles, "cycle budget exhausted"};
 }

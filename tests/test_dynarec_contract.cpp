@@ -7,6 +7,8 @@
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
 
+#include "dynarec_test_fixture.h"
+
 #include "testutil.h"
 
 #include <lucent/log.h>
@@ -22,76 +24,7 @@
 
 namespace {
 
-class Runtime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-};
-
-std::unique_ptr<Game> makeGame(Runtime &runtime) {
-  psxport_install_game(runtime);
-  return std::make_unique<Game>();
-}
-
-constexpr std::uint32_t encodeJal(std::uint32_t target) {
-  return 0x0c000000u | ((target >> 2u) & 0x03ffffffu);
-}
-
-constexpr std::uint32_t encodeJ(std::uint32_t target) {
-  return 0x08000000u | ((target >> 2u) & 0x03ffffffu);
-}
-
-constexpr std::uint32_t kCaller = 0x00010000u;
-constexpr std::uint32_t kCallee = 0x00010100u;
-constexpr std::uint32_t kInnerCallee = 0x00010140u;
-constexpr std::uint32_t kNestedReturn = 0x00010180u;
-constexpr std::uint32_t kWriter = 0x00010200u;
-constexpr std::uint32_t kMainFallback = 0x00010300u;
-constexpr std::uint32_t kOuterReturn = 0x00010f00u;
-constexpr std::uint32_t kObservedWriter = 0x80010500u;
-constexpr std::uint32_t kMainRegisterValue = 0x13579bdfu;
-constexpr std::uint32_t kTaskRegisterValue = 0x2468ace0u;
-
-psx::cpu::ImageIdentity installTestImage(Core &core) {
-  return core.imageCatalog().activate("dynarec-contract", {kCaller, kOuterReturn + 12u}, 0x44594e41524543ull);
-}
-
-void writeReturningCaller(Core &core) {
-  core.mem_w32(kCaller, 0x03e08021u); // addu s0, ra, zero
-  core.mem_w32(kCaller + 4u, encodeJal(kCallee));
-  core.mem_w32(kCaller + 8u, 0u);           // delay-slot nop
-  core.mem_w32(kCaller + 12u, 0x24420002u); // addiu v0, v0, 2
-  core.mem_w32(kCaller + 16u, 0x02000008u); // jr s0
-  core.mem_w32(kCaller + 20u, 0u);          // delay-slot nop
-
-  core.mem_w32(kOuterReturn, 0x24177badu);      // must not execute: addiu s7, zero, 0x7bad
-  core.mem_w32(kOuterReturn + 4u, 0x1000ffffu); // stable self-loop if the boundary is missed
-  core.mem_w32(kOuterReturn + 8u, 0u);
-}
-
-int nativeOverrideCalls = 0;
-std::uint32_t nativeOverrideActiveAddress = 0;
-
-void nativeCallee(Core *core) {
-  ++nativeOverrideCalls;
-  nativeOverrideActiveAddress = core->active_native_address;
-  core->r[2] = 40u;
-}
-
-void nativeFrameExit(Core *core) {
-  core->r[17] = 7u;
-  psx::cpu::requestExecutionExit(*core, psx::cpu::ExecutionExitReason::FrameBoundary);
-}
+using namespace dynarec_test;
 
 int callOriginalOverrideCalls = 0;
 std::uint32_t callOriginalActiveAddress = 0;
@@ -438,6 +371,45 @@ static void test_syscall_continuation_remains_bounded() {
   CHECK(result.cycles >= 20u);
   CHECK(result.cycles <= 24u);
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
+}
+
+// THE PC A BUDGET EXIT REPORTS IS COUNTED, WITH ITS DENOMINATOR.
+//
+// A budget exit is an ordinary bounded exit whose reported pc is a CONTRACT: it is where guest
+// execution resumes. Nothing classified it, and on Mega Man X4 a run faulted at 0x0113D7D0 inside a
+// resumed segment with that address in no register, in neither `j` word, and not the logged resume
+// point. This pins the census that makes the value observable.
+//
+// The two properties that matter, both directions: the denominator really moves when an exit really
+// happens, and a bad pc is actually classified as bad. A test that only checks the "outside" counter
+// is zero would pass on a census that never ran.
+static void test_budget_exit_pc_is_classified_with_its_denominator() {
+  Runtime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  const auto image = installTestImage(core);
+  nativeOverrideCalls = 0;
+  CHECK(core.nativeDispatcher().install({{image, kCallee}, "native-loop", nativeCallee}));
+  core.r[31] = kCallee;
+
+  const auto &counters = core.lightrecExecutor().counters();
+  const auto exitsBefore = counters.budgetExits;
+  const auto inImageBefore = counters.budgetExitPcInCodeImage;
+  const auto outsideBefore = counters.budgetExitPcOutsideCodeImage;
+
+  auto budget = psx::cpu::ExecutionBudget::fromCycles(100);
+  budget.maxHostDispatches = 2;
+  const auto result = psx::cpu::dispatchGuestUntilExit(core, kCallee, budget);
+  CHECK_EQ(result.reason, psx::cpu::ExecutionExitReason::BudgetExhausted);
+
+  // THE DENOMINATOR MOVES. Without this, every assertion below is satisfied by a census that
+  // never ran - which is the dead-tap failure this project treats as worst.
+  CHECK(counters.budgetExits > exitsBefore);
+  // kCallee IS in the installed test image, so this exit must classify as in-image and the two
+  // counters must partition the exits: that identity is what makes "0 outside" mean something.
+  CHECK(counters.budgetExitPcInCodeImage > inImageBefore);
+  CHECK_EQ(counters.budgetExitPcOutsideCodeImage, outsideBefore);
+  CHECK_EQ(counters.budgetExitPcInCodeImage + counters.budgetExitPcOutsideCodeImage, counters.budgetExits);
 }
 
 static void test_native_only_self_loop_exhausts_dispatch_budget_without_fabricated_cycles() {
@@ -1172,5 +1144,6 @@ int main() {
   RUN(backend_fallback_is_classified_and_counted);
   RUN(fallback_threshold_refusal_prevents_interpreter_execution);
   RUN(invalid_fallback_limit_faults_before_guest_execution);
+  RUN(budget_exit_pc_is_classified_with_its_denominator);
   return pt_summary();
 }
