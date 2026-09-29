@@ -195,6 +195,22 @@ void Hle::irqPoll(Core *c) {
     const uint32_t handler = c->mem_r32(elem + 4);
     const uint32_t verifier = c->mem_r32(elem + 8);
     if (verifier) {
+      // THE VERIFIER IS GUARDED TOO, AND IT IS THE ONE THAT FAULTS. The guard below covers the
+      // HANDLER at elem+4; on Mega Man X4 it reported nothing, all run, while the port still faulted
+      // with a dispatch of 0x0113D7D0 - because this loop dispatches TWO words, and the VERIFIER at
+      // elem+8 is dispatched FIRST and was unguarded. A diagnostic on one of two sites is the same
+      // partial coverage as a census on one of sixteen classes, and it produced the same confident
+      // zero. Both words a guest registers are now checked, because the guest supplies the element.
+      if (!c->currentImageIdentity(verifier).has_value()) {
+        lucent::error("irq",
+                      "interrupt element 0x{:08X} has VERIFIER 0x{:08X} at [0x{:08X}], which is in "
+                      "NO loaded code image; dispatching it would fault. handler=0x{:08X} mask=0x{:08X}",
+                      elem,
+                      verifier,
+                      elem + 8,
+                      handler,
+                      c->mem_r32(elem));
+      }
       const auto result = psx::cpu::dispatchGuest0(*c, verifier, psx::cpu::ExecutionBudget::currentTurn(*c));
       if (!result.returned()) {
         *static_cast<R3000 *>(c) = saved;
@@ -211,6 +227,25 @@ void Hle::irqPoll(Core *c) {
     }
     // The BIOS passes the verifier's return to the handler; a handler that reads $a0 expects it.
     c->r[A0] = c->r[V0];
+    // A HANDLER THAT IS NOT EXECUTABLE IS REPORTED HERE, WITH THE ELEMENT IT CAME FROM.
+    //
+    // This is the delivery site the caller-naming diagnostic pointed at on Mega Man X4: the port
+    // faulted with a dispatch of 0x0113D7D0, `dispatchGuest` was HANDED that address, and this loop
+    // is the only live path that dispatches a MEMORY-READ handler. The element is a guest
+    // InterruptElement the guest registered through the BIOS (`irqEnq(a0, a1)` takes the address
+    // from the guest), so the address is not derivable from any table a title can name - only this
+    // scope knows it. Measured on MMX4: exactly ONE element is ever registered, 0x8013BBF8, so its
+    // handler word is [0x8013BBFC].
+    if (!c->currentImageIdentity(handler).has_value()) {
+      lucent::error("irq",
+                    "interrupt element 0x{:08X} has handler 0x{:08X} at [0x{:08X}], which is in NO "
+                    "loaded code image; delivering it would fault. mask=0x{:08X} verifier=0x{:08X}",
+                    elem,
+                    handler,
+                    elem + 4,
+                    c->mem_r32(elem),
+                    c->mem_r32(elem + 8));
+    }
     lucent::debug("irq", "delivering: elem 0x{:08X} handler 0x{:08X} (I_STAT&I_MASK=0x{:03X})", elem, handler, pending);
     const auto result = psx::cpu::dispatchGuest0(*c, handler, psx::cpu::ExecutionBudget::currentTurn(*c));
     if (!result.returned()) {
