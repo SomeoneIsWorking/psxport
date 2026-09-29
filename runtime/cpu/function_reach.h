@@ -28,7 +28,8 @@ namespace psx::cpu {
 class FunctionReach {
 public:
   // Writes an empty report at once, so a run that dies before any code runs still leaves one that says
-  // it reached nothing.
+  // it reached nothing, and rewrites it as it grows (kFlushEveryNewEntries), so a killed run leaves
+  // everything but its last few entries, marked incomplete.
   FunctionReach(const ImageCatalog &catalog, std::string reportPath);
   ~FunctionReach();
   FunctionReach(const FunctionReach &) = delete;
@@ -43,6 +44,7 @@ public:
   std::string reportJson(bool complete) const;
 
 private:
+  void flush();
   bool writeReport(bool complete) const;
 
   const ImageCatalog &catalog_;
@@ -51,6 +53,7 @@ private:
   std::uint64_t revision_ = 0;
   Reached reached_;
   std::uint64_t unownedDispatches_ = 0;
+  std::uint64_t newSinceFlush_ = 0;
 };
 
 } // namespace psx::cpu

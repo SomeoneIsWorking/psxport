@@ -2,6 +2,8 @@
 #include "image_identity.h"
 #include "testutil.h"
 
+#include <fstream>
+#include <iterator>
 #include <string>
 
 namespace {
@@ -62,6 +64,21 @@ void test_the_report_names_each_image_and_its_pcs() {
         std::string::npos);
 }
 
+// A run killed before the destructor must still leave its entries on disk, marked incomplete.
+void test_a_growing_report_is_flushed_before_the_end() {
+  psx::cpu::ImageCatalog catalog;
+  catalog.activate("exe", {0x10000u, 0x20000u}, 0xAAu);
+  const std::string path = reportPath("psxport_reach_flush.json");
+  psx::cpu::FunctionReach reach(catalog, path);
+  for (std::uint32_t i = 0; i < 64u; ++i) {
+    reach.observe(0x80010000u + i * 4u);
+  }
+  std::ifstream file(path);
+  const std::string written((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  CHECK(written.find("\"complete\": false") != std::string::npos);
+  CHECK(written.find("\"0x800100FC\"") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -69,5 +86,6 @@ int main() {
   RUN(address_reusing_overlays_stay_separate);
   RUN(pcs_outside_every_image_and_outside_ram_are_counted_not_recorded);
   RUN(the_report_names_each_image_and_its_pcs);
+  RUN(a_growing_report_is_flushed_before_the_end);
   return pt_summary();
 }

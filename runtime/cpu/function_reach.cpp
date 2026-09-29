@@ -15,6 +15,9 @@ namespace {
 // counted, not recorded.
 inline constexpr std::uint32_t kMainRamBytes = 0x200000u;
 inline constexpr std::size_t kBitmapWords = kMainRamBytes / 4u / 64u;
+// A run that ends by being killed never reaches the destructor, so the report is also rewritten after
+// this many new entries and at every residency change. It says `"complete": false` until the end.
+inline constexpr std::uint64_t kFlushEveryNewEntries = 64u;
 
 std::string jsonEscaped(std::string_view text) {
   std::string out;
@@ -53,6 +56,7 @@ FunctionReach::~FunctionReach() {
 void FunctionReach::observe(std::uint32_t guestPc) {
   if (catalog_.revision() != revision_) {
     revision_ = catalog_.revision();
+    flush();
     std::fill(seenUnderRevision_.begin(), seenUnderRevision_.end(), 0u);
   }
   const std::uint32_t physical = guestPc & 0x1fffffffu;
@@ -73,7 +77,17 @@ void FunctionReach::observe(std::uint32_t guestPc) {
     ++unownedDispatches_;
     return;
   }
-  reached_[{image->name, image->contentIdentity}].insert(guestPc);
+  if (reached_[{image->name, image->contentIdentity}].insert(guestPc).second &&
+      ++newSinceFlush_ >= kFlushEveryNewEntries) {
+    flush();
+  }
+}
+
+void FunctionReach::flush() {
+  if (newSinceFlush_ != 0u) {
+    newSinceFlush_ = 0u;
+    (void)writeReport(false);
+  }
 }
 
 const FunctionReach::Reached &FunctionReach::reached() const {
