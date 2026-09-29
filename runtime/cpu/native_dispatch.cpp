@@ -298,6 +298,20 @@ ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionB
   NativeCallerContextScope callerContext(core);
   const GuestHostDispatchKind kind = classifyGuestHostDispatch(core, guestAddress);
   if (kind != GuestHostDispatchKind::ExecuteGuest) {
+    // NAMED HERE, not only in the fault the callee raises. `dispatchGuestHostService` is reached
+    // from two places - this classify-then-dispatch path and the executor's host-dispatch boundary -
+    // and a fault reported by the callee alone cannot say which one produced it. On Mega Man X4 the
+    // boundary's own diagnostic was measured NOT firing on the fatal address while the fault
+    // reproduced exactly, which means the fault arrives by THIS path and the address was handed to
+    // `dispatchGuest` as its entry rather than produced by a guest branch. Naming the path is what
+    // makes that a finding instead of an inference, and it is outcome-keyed: it only prints when the
+    // address is not executable, so a healthy run is silent.
+    if (!core.currentImageIdentity(guestAddress).has_value()) {
+      lucent::error("native-dispatch",
+                    "dispatchGuest was handed 0x{:08X}, which is in no loaded code image, via the "
+                    "entry classify path (not a host-dispatch boundary)",
+                    guestAddress);
+    }
     return dispatchGuestHostService(core, guestAddress);
   }
   auto attribution = core.callAttribution.scope(guestAddress);
