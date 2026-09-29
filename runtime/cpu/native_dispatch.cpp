@@ -245,8 +245,20 @@ GuestHostDispatchKind classifyGuestHostDispatch(Core &core, std::uint32_t guestA
 ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress) {
   const ResolvedHostDispatch resolved = resolveHostDispatch(core, guestAddress);
   if (resolved.kind == GuestHostDispatchKind::Fault) {
-    lucent::error(
-        "native-dispatch", "guest address 0x{:08X} resolves to zero or multiple active code images", guestAddress);
+    // WHETHER OR NOT AN IMAGE CLAIMS THE ADDRESS IS REPORTED WITH THE FAULT, because "resolves to
+    // zero or multiple" is one message covering two opposite situations and the caller cannot tell
+    // them apart. The first version of this diagnostic only fired when `currentImageIdentity`
+    // found NO image, which meant it reported the ordinary low-address transfers (0x0, 0xA0 - a
+    // null BIOS table pointer) and stayed SILENT on the fatal Mega Man X4 fault at 0x0113D7D0,
+    // because that address happens to resolve to an identity. Silence on the case that mattered is
+    // the same dead-tap shape as a counter nothing writes, so the condition is now unconditional:
+    // every fault of this kind names what the identity lookup actually said.
+    lucent::error("native-dispatch",
+                  "guest address 0x{:08X} resolves to zero or multiple active code images; image identity "
+                  "lookup: {}",
+                  guestAddress,
+                  core.currentImageIdentity(guestAddress).has_value() ? "CLAIMED by an active image"
+                                                                      : "claimed by none");
     return {ExecutionExitReason::Fault, guestAddress, 0, "ambiguous code-image identity"};
   }
   if (resolved.kind != GuestHostDispatchKind::HostService) {

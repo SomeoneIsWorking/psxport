@@ -681,6 +681,12 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
         segmentCycleBudget = std::min(segmentCycleBudget, untilFieldDue);
       }
     }
+    // THE BLOCK START IS CAPTURED BEFORE THE CALL, because `lightrec_execute` overwrites `nextPc`
+    // with the block's EXIT pc. Without this the executor cannot say which instructions produced a
+    // wild target, only that it produced one - and on MMX4 that is the whole question. It is a
+    // segment-level quantity, exactly like the exit pc, so it carries the same block-boundary
+    // accounting that makes the live register dump trustworthy.
+    const std::uint32_t blockStart = nextPc;
     nextPc = lightrec_execute(impl.state, nextPc, targetCycle(ExecutionBudget::fromCycles(segmentCycleBudget)));
     const std::uint64_t segmentCycles = lightrec_current_cycle_count(impl.state);
     consumedCycles += segmentCycles;
@@ -760,6 +766,20 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       case LightrecExecutor::Impl::BoundaryReason::GuestReturn:
         return {ExecutionExitReason::GuestReturn, boundary.pc, consumedCycles, "guest return"};
       case LightrecExecutor::Impl::BoundaryReason::HostDispatch: {
+        // A host-dispatch target that is in no loaded code image is a control transfer to a
+        // non-executable address, and the block start is the only handle on the instructions that
+        // computed it. It is reported HERE, at the boundary, rather than later as a bare fault
+        // address, because a fault printed downstream cannot recover which block produced the
+        // value - and this investigation has already lost that link twice. Rare by construction,
+        // since it requires a transfer to an address that is not code, so it does not spam a
+        // healthy run.
+        if (!impl.core.currentImageIdentity(boundary.pc).has_value()) {
+          lucent::error("executor",
+                        "guest transferred control to 0x{:08X}, which is in no loaded code image; the block "
+                        "that produced this target began at 0x{:08X}",
+                        boundary.pc,
+                        blockStart);
+        }
         if (hostDispatches >= budget.maxHostDispatches) {
           return {
               Impl::recordBudgetExit(impl, boundary.pc), boundary.pc, consumedCycles, "host dispatch budget exhausted"};
