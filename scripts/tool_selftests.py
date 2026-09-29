@@ -81,7 +81,11 @@ NEEDS_INPUT_MARKERS = ("needs", "requires", "provide", "expects", "give me", "pa
 
 # Exceptions that mean "this script only runs inside a HOST application" (Ghidra headless), not "this tool
 # is broken". Measured 2026-08-13: symdump_re.py and symwidth_re.py raise NameError on `currentProgram` and
-# ghidra_decomp.py raises ModuleNotFoundError for `ghidra`, none of which is a defect in the tool.
+# tools/ghidra_decomp.py raised ModuleNotFoundError for `ghidra`, none of which is a defect in the tool.
+#
+# ghidra_decomp.py was RETIRED into tools/decomp/postscript.py on 2026-09-28; the marker is kept because
+# the replacement's two Ghidra-side scripts are still host-only programs, reached by
+# decomp_pipeline.py rather than run directly, and it is what keeps that sweep from calling them broken.
 HOST_ONLY_MARKERS = ("no module named 'ghidra'", "name 'currentprogram' is not defined",
                      "name 'currentProgram' is not defined".lower(), "no module named 'ghidra_bridge'")
 

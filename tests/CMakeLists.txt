@@ -164,6 +164,25 @@ add_test(NAME gpu_shader_generator
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/gen_gpu_shaders.py --selftest)
 
+# The guest-code-to-readable-C pipeline's selftest. It is hermetic -- no disc, no image, no Ghidra --
+# because every refusal is driven through the shipping modules with an injected command runner, and
+# both Ghidra-side scripts import nothing at module level so their decision logic is tested directly.
+#
+# It is registered HERE, and not left to tool_selftests.py, because that sweep deliberately is not a
+# ctest (it reaches tools/ and several of its tools need a disc, a server, or Ghidra) and
+# ghidra_decomp.py -- the script this replaces -- was reached by it only as a HOST_ONLY import
+# failure, which is a weaker gate than "the body-presence check is wrong".
+add_test(NAME decomp_pipeline_selftest
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_decomp_pipeline.py)
+
+# The negative half: a selftest that can only print "ok" is not a test. This copies tools/ and
+# tests/ into a temporary directory, removes ONE defence at a time, and requires the selftest above
+# to go red on its own subject, with an untouched control green. It needs no Ghidra and no image.
+add_test(NAME decomp_pipeline_must_fail
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/selftest_must_fail.py)
+set_tests_properties(decomp_pipeline_must_fail PROPERTIES TIMEOUT 900)
 add_test(NAME gpu_shader_build_ownership
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_gpu_shader_build_ownership.py)

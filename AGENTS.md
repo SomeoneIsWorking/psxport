@@ -178,6 +178,27 @@ game repository or `docs/migration.md`. Static generated C is not the new refere
 regenerated, built, or run as migration evidence. New comparison evidence comes from the original
 binary, an independent emulator/hardware trace, or a separately built test oracle.
 
+**Decompiling guest code to readable C is a TOOL, not a per-title project.**
+`tools/decomp_pipeline.py`, reached from a title as `external/psxport/tools/decomp_pipeline.py`, takes
+an admitted PS-X EXE and a list of guest entry addresses and returns a function inventory plus
+decompiled C under a git-ignored `scratch/` path. `docs/workspace/GHIDRA.md` has the one command and
+the refusals. Three obligations belong to that tool and are not re-derived per title:
+
+- **Its exit code is not the result.** Read `body present` on every target. A body that Ghidra
+  produced can still be missing everything after a call, which reads as a finished function and is
+  not one; the tool refuses that case and names it. Never report a decompilation without its
+  body-presence column.
+- **A per-title load base is DATA**, an entry in `tools/decomp/manifest.json`, cross-checked against
+  the image's own PS-X EXE header. Not a constant in a title's code, and not a Ghidra import base
+  copied from another title. A wrong base imports cleanly and puts every function at a plausible
+  address that is not the one the documents name.
+- **One Ghidra at a time.** The pipeline takes `coord/locks/ghidra` and bounds the heap, because a
+  Ghidra analysis of a RAM dump costs 1-2 GB on a machine with ~2 GB free and several agents
+  building, and an OOM-killed build is reported to its owner as a false red.
+
+Decompiled C is a reading and porting aid. What ships is a hand-written native override; nothing
+here may become a build input, an install-time translation, or a precompiled guest corpus.
+
 Native overrides are deliberately owned behavior or proven service boundaries, never repairs for a
 missing MIPS semantic. Fix instruction behavior in Lightrec or its integration owner. A readable port
 uses named types and state transitions; opaque guest-memory soup is not complete merely because it

@@ -72,6 +72,7 @@ library never depends on a test oracle.
 | Tool process helpers | Bounded subprocess execution and scoped cleanup used by Python tools | `tools/automation/` | Reusable tool mechanics stay in this package | `tools/automation/process.py` |
 | Binary formats | Neutral PS-X executable parsing | `tools/formats/` | Format parsing only; no product execution policy | `tools/formats/psx_exe.py` |
 | MIPS analysis | Neutral instruction decoding and complete RAM disassembly coverage for binary evidence tools | `tools/mips/`, `tools/disasm.py` | Decoder semantics and explicit unknown-word refusal; no guest-source emission | `tools/disasm.md`, `tools/mips/decode.py` |
+| Guest code to readable C | Bounded Ghidra import/analysis/inventory/decompile, per-title load geometry as data, body-presence and no-return assertions, one-Ghidra lock | `tools/decomp_pipeline.py`, `tools/decomp/` | Reading aid only: output is git-ignored, never a build input; per-title geometry is a manifest entry, not code | `docs/workspace/GHIDRA.md` |
 | Build and hosted verification | Framework library/dependency/test targets, exact Lightrec checkout, exact maintained-Lightning installed prefix, and canonical asset-free gate | `CMakeLists.txt`, `cmake/`, `tools/project.py`, `tools/build.py`, `tools/verify.py`, `.github/workflows/ci.yml`, `.github/actions/setup-linux/` | CMake owns targets; Python owns orchestration and installed-prefix validation; the shared setup action owns Linux CI package/dependency policy for framework and consumers under `build/deps/` | `README.md` |
 | Host utilities | Title-neutral environment/process helpers | `common/` | Small cohesive module under `common/` | `common/env.h` |
 | External source checkout | Existing psycross checkout used by historical development flows | `external/psycross/` | No new framework ownership; replace any live dependency with an explicit pinned resolver or remove it when unused | `external/psycross/README.md` |
@@ -89,6 +90,8 @@ library never depends on a test oracle.
 - CPU/DMA/loader/debugger/savestate code invalidation -> runtime/cpu/invalidation.*
 - Lightrec block-cache or executable-memory internals -> the pinned Lightrec fork, not psxport
 - Interpreter semantics or independent state comparison -> tools/oracle/, never the gameplay library
+- Decompiling guest code, or a title's load base / text window -> tools/decomp/ and its manifest.json
+- A decompilation that is turning into a build input, corpus, or install-time translation -> nowhere; that is a stop, not a new owner
 - Comparison-run role and enhancement suppression -> runtime/psx/diagnostic_run.h and the configuration owner
 - Fallback admission and telemetry -> runtime/cpu/fallback_policy.h and runtime/cpu/lightrec_executor.*
 - PSX device behavior -> its existing `runtime/psx/` device owner

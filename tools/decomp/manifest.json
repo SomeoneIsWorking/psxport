@@ -1,0 +1,109 @@
+{
+  "_comment": [
+    "Per-title load geometry for tools/decomp_pipeline.py. DATA, not code: adding a title is an",
+    "entry here, and the pipeline cross-checks every field against the image's own PS-X EXE header",
+    "before it imports anything. A wrong entry is REFUSED, because a wrong base does not fail on",
+    "its own -- Ghidra imports happily and every function lands at a plausible address that is not",
+    "the one the title's documents name.",
+    "",
+    "field: text_load_address / text_file_offset come from the header's load address and the",
+    "  fixed 0x800 PS-X EXE text offset. ghidra_base is DERIVED, not stored, so it cannot drift:",
+    "  it is text_load_address - text_file_offset, which maps file offset 0x800 onto the load",
+    "  address and leaves the executable's own header below the text window.",
+    "field: text_size is optional; when present it is checked too, and it is what bounds the",
+    "  disassembly window so the tool does not spend its attention on image data.",
+    "field: entry is the PS-X EXE entry point, recorded for reference. The pipeline seeds",
+    "  disassembly from the whole declared window rather than from this one address, because",
+    "  auto-analysis must reach the jump-table-only handlers that have no call site.",
+    "",
+    "MEASURED 2026-09-28 from the provisioned images in each title repository. Every title in this",
+    "workspace is a PS-X EXE loading at 0x80010000 with text at file offset 0x800; they differ in",
+    "text size, which is why the size is data here rather than an assumption in the code."
+  ],
+  "titles": {
+    "spyro1": {
+      "serial": "SCUS_942.28",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x65800",
+      "note": "Insomniac. Its repo verified the file-offset formula against 62,183 of 62,183 recorded instructions."
+    },
+    "crash1": {
+      "serial": "SCUS_949.00",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x46800",
+      "note": "Naughty Dog. Retail projection is H=1000, OFX=0, OFY=0; widening must not raise the 0x800578D0 GTE near plane."
+    },
+    "crash2": {
+      "serial": "SCUS_941.54",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x4F800",
+      "note": "Naughty Dog."
+    },
+    "crash3": {
+      "serial": "SCUS_942.44",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x51000",
+      "note": "Naughty Dog."
+    },
+    "crashbash": {
+      "serial": "SCUS_945.70",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x69000",
+      "note": "Main image has no file extension; find -iname 'SCUS*.BIN' misses it."
+    },
+    "ctr": {
+      "serial": "SCUS_944.26",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x7D800",
+      "note": "Naughty Dog. Measured 2 fields per game frame; 30 fps."
+    },
+    "megamanx4": {
+      "serial": "SLUS_005.61",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x11F800",
+      "note": "Capcom. TRAP: `llvm-objdump --triple=mips` silently misdecodes this image; use plain `llvm-objdump -d`. Its vendored decomp is AGPL-3.0 and may NOT be lifted into psxport or any other workspace repo."
+    },
+    "spiderman1": {
+      "serial": "SLUS_008.75",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0xB6800",
+      "note": "Neversoft. Reaches library routines through jalr function pointers, so a jal-only census reads 0 for every one of them."
+    },
+    "tekken3": {
+      "serial": "SLUS_004.02",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x121000",
+      "note": "Namco. Already 60 fps, so widescreen-only enhancement scope."
+    },
+    "tomba1": {
+      "serial": "SCUS_942.36",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x88000",
+      "note": "Whoopee Camp. Already 60 fps, so widescreen-only enhancement scope."
+    },
+    "tomba2": {
+      "serial": "SCUS_944.54",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x28800",
+      "note": "Whoopee Camp. The resident executable is ~15% of the title; most code is in .PRG overlays loaded at run time."
+    },
+    "vagrant": {
+      "serial": "SLUS_010.40",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x52000",
+      "note": "Square. SHA-1 of this image matches the CC0 rood-reverse decomp's target, so its symbol addresses are confirmed against real bytes -- a reading aid only, never copied into a shipping path. 933,925 B of its code lives in .PRG overlays, which need their own entries and are NOT covered here."
+    }
+  }
+}
