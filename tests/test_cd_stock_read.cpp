@@ -1,9 +1,9 @@
 // The direct-runtime stock-libcd binding targets are the shipping synchronous read owners, not
 // title-local copies. Exercise their guest ABI and state transitions without requiring a disc image.
 #include "cd_control.h"
+#include "game.h"
 #include "invalidation.h"
 #include "lightrec_executor.h"
-#include "game.h"
 #include "testutil.h"
 
 #include <memory>
@@ -159,8 +159,7 @@ static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_no
 
   // POSITIVE: the owner is fed on purpose, and the counter moves. Without this line the zero below is
   // unreadable — it would be equally consistent with "the route reported nothing" and "nothing measures".
-  psx::cpu::notifyExecutableWrite(
-      game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
+  psx::cpu::notifyExecutableWrite(game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
   const uint64_t afterDeliberate = game->core.lightrecExecutor().counters().invalidations;
   CHECK(afterDeliberate > atRest);
 
@@ -179,8 +178,7 @@ static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_no
 // nothing to report. A refusal that still reported a range would invalidate on every unpositioned poll.
 static void test_a_refused_read_reports_no_executable_write() {
   auto game = std::make_unique<Game>();
-  psx::cpu::notifyExecutableWrite(
-      game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
+  psx::cpu::notifyExecutableWrite(game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
   const uint64_t before = game->core.lightrecExecutor().counters().invalidations;
   game->core.r[A0] = 4;
   game->core.r[A1] = kBuffer;
