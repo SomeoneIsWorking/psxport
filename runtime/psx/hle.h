@@ -24,6 +24,15 @@ class Hle {
 public:
   static constexpr uint32_t kB0Table = 0x8000F000u;
   static constexpr uint32_t kWorkBase = 0x8000E000u;
+  // The stack the BIOS interrupt chain runs on. The retail exception handler saves the interrupted
+  // context in the TCB and then REPLACES `$sp` with the kernel's own exception stack before it walks
+  // the chain (SCPH1001.BIN `bfc108c8 lui $sp,0 ; bfc108d0 lw $sp,0x6cf0($sp)`, ahead of the
+  // verifier/handler `jalr`s at bfc10908/bfc10920). An interrupt therefore never pushes below the
+  // interrupted code's `$sp`, and code that repurposes `$sp` as a data pointer while interrupts are
+  // enabled (Spyro 3's scratchpad display-list culler at 0x8001C3E8 does) is safe on hardware.
+  // Every guest handler the framework dispatches as an interrupt runs on this stack for the same
+  // reason. It sits directly under the BIOS work area, in the kernel region no guest data occupies.
+  static constexpr uint32_t kExceptionStackTop = kWorkBase;
   enum class PadWorkAreaAction { Enable, Disable };
   Game *game = nullptr;
   HleEvCB ev[16] = {}; // was s_ev[EVCB_MAX]
@@ -95,6 +104,9 @@ public:
   // point where guest state is call-coherent — a guest function boundary — never from inside a
   // native routine that is midway through mutating hardware state.
   void irqPoll(Core *c);
+  // Switch the context that is about to run an interrupt handler onto the exception stack. The caller
+  // owns the saved register file the interrupted context is restored from.
+  static void enterExceptionStack(Core &core);
   // Full CPU-context readiness for dispatch. Pending sources and guest masks remain separate.
   bool canDispatchInterrupt(const Core &core) const;
   void irqEnq(uint32_t prio, uint32_t elem);

@@ -16,7 +16,7 @@
 namespace {
 
 // MIPS o32 argument and result registers used by the BIOS interrupt-chain ABI.
-enum { A0 = 4, V0 = 2 };
+enum { A0 = 4, V0 = 2, SP = 29 };
 
 static void dispatchCustomExceptionExit(Core *core, uint32_t address) {
   psx::cpu::dispatchGuestToReturn0(
@@ -24,6 +24,10 @@ static void dispatchCustomExceptionExit(Core *core, uint32_t address) {
 }
 
 } // namespace
+
+void Hle::enterExceptionStack(Core &core) {
+  core.r[SP] = kExceptionStackTop;
+}
 
 // ---- interrupt delivery -------------------------------------------------------------------------
 // Registering an element is priority-ordered and idempotent: the standard guest idiom is
@@ -122,6 +126,7 @@ void Hle::irqPoll(Core *c) {
     }
     in_irq = 1; // the callback's own BIOS calls must not re-enter
     const R3000 saved = *static_cast<R3000 *>(c);
+    enterExceptionStack(*c);
     const auto result = psx::cpu::dispatchGuest0(*c, cb, psx::cpu::ExecutionBudget::currentTurn(*c));
     *static_cast<R3000 *>(c) = saved;
     in_irq = 0;
@@ -189,6 +194,7 @@ void Hle::irqPoll(Core *c) {
   in_irq = 1;
   int claimed = 0;
   R3000 saved = *static_cast<R3000 *>(c); // r[0..31] + hi + lo + pc — the whole guest context
+  enterExceptionStack(*c);
 
   for (int i = 0; i < irq_n; i++) {
     const uint32_t elem = irq_elem[i];

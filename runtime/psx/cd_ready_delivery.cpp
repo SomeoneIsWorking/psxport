@@ -178,6 +178,7 @@ CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core) {
   // nothing — the same contract the DMA arm above and `cd_drive_stock_read` both state.
   hle.in_irq = 1; // the callback's own CD calls must not re-enter this delivery
   const R3000 saved = *static_cast<R3000 *>(&core);
+  Hle::enterExceptionStack(core);
   core.r[A0] = status;
   core.r[A1] = kNoFirstWord;
   const auto result = psx::cpu::dispatchGuest0(core, callback, psx::cpu::ExecutionBudget::currentTurn(core));

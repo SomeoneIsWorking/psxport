@@ -25,11 +25,13 @@ constexpr uint32_t kDma3Chcr = 0x1F8010B8u;
 int callbackCalls = 0;
 uint32_t callbackA0 = 0;
 uint32_t callbackA1 = 0;
+uint32_t callbackSp = 0;
 
 void callback(Core *core) {
   ++callbackCalls;
   callbackA0 = core->r[4];
   callbackA1 = core->r[5];
+  callbackSp = core->r[29];
   core->r[4] = 0x11111111u;
   core->r[5] = 0x22222222u;
 }
@@ -134,6 +136,23 @@ void test_direct_runtime_dispatches_registered_completion_once() {
   CHECK_EQ(callbackCalls, 1); // the taken completion is never delivered twice
 }
 
+// A DMA completion callback is an interrupt handler: the retail exception handler runs it on the
+// kernel's exception stack, so it must not push below an interrupted `$sp` that code is using as a
+// data pointer. See the same contract for the chain in test_cd_ready_delivery.cpp.
+void test_dma_completion_callback_runs_on_the_exception_stack() {
+  auto game = freshGame();
+  game->dmaCallbacks.exchange(DmaChannel::Cdrom, kCallback);
+  constexpr uint32_t kInterruptedSp = 0x8009ABF4u;
+  game->core.r[29] = kInterruptedSp;
+
+  completeDma3(*game);
+  game->hle.irqPoll(&game->core);
+
+  CHECK_EQ(callbackCalls, 1);
+  CHECK_EQ(callbackSp, Hle::kExceptionStackTop);
+  CHECK_EQ(game->core.r[29], kInterruptedSp);
+}
+
 void test_direct_runtime_without_registration_consumes_without_dispatch() {
   auto game = freshGame();
   completeDma3(*game);
@@ -162,6 +181,7 @@ void test_legacy_runtime_keeps_its_guest_callback_table_authoritative() {
 int main() {
   RUN(registration_exchanges_one_typed_channel_entry);
   RUN(direct_runtime_dispatches_registered_completion_once);
+  RUN(dma_completion_callback_runs_on_the_exception_stack);
   RUN(direct_runtime_without_registration_consumes_without_dispatch);
   RUN(legacy_runtime_keeps_its_guest_callback_table_authoritative);
   return pt_summary();

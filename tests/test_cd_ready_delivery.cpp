@@ -49,6 +49,9 @@ uint32_t callbackA1 = 0;
 int interruptHandlerCalls = 0;
 int verifierCalls = 0;
 uint8_t interruptResult = 0;
+uint32_t callbackSp = 0;
+uint32_t verifierSp = 0;
+uint32_t interruptHandlerSp = 0;
 
 // The guest's own ready callback. Records the arguments the framework delivered, and — the chain —
 // issues the next request from inside itself, so the response for it becomes current BEFORE the
@@ -57,11 +60,13 @@ void callback(Core *core) {
   ++callbackCalls;
   callbackA0 = core->r[4];
   callbackA1 = core->r[5];
+  callbackSp = core->r[29];
 }
 
 // A verifier that claims only the CD bit, the shape a guest's own CD service would have.
 void interruptVerifier(Core *core) {
   ++verifierCalls;
+  verifierSp = core->r[29];
   core->r[2] = (core->mem_r32(kIStat) & (1u << 2u)) != 0u && cdc_current_irq_type(&core->game->cdc) == 1u;
 }
 
@@ -70,6 +75,7 @@ void interruptVerifier(Core *core) {
 // reason the framework's arm must stay out of its way.
 void interruptHandler(Core *core) {
   ++interruptHandlerCalls;
+  interruptHandlerSp = core->r[29];
   CdcState &controller = core->game->cdc;
   const int previousBank = controller.index;
   cdc_write(&controller, 0u, 1u);
@@ -402,6 +408,54 @@ void test_a_claiming_guest_element_still_blocks_the_framework_arm() {
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(game->hle.cd_ready_delivered, 0u);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u); // untouched, because the guest took the interrupt
+  delete game.release();
+}
+
+// THE INTERRUPT RUNS ON THE EXCEPTION STACK, never below the interrupted `$sp`. The retail BIOS
+// exception handler replaces `$sp` with the kernel's exception stack before it walks the chain
+// (SCPH1001.BIN `bfc108c8..bfc108d0`), so code that repurposes `$sp` as a data pointer with
+// interrupts enabled -- Spyro 3's display-list culler walks its sorted list with `$sp` -- is never
+// written under. Delivering on the interrupted `$sp` overwrote that list with the ISR's own frames.
+// Both delivery shapes are covered: the guest's registered element (verifier, handler, and the
+// callback it calls) and the framework's built-in arm.
+constexpr uint32_t kInterruptedSp = 0x8009ABF4u;
+
+void test_a_guest_element_runs_on_the_exception_stack() {
+  auto game = freshDirectGame();
+  game->core.mem_w32(kInterruptElement + 4u, kInterruptHandler);
+  game->core.mem_w32(kInterruptElement + 8u, kVerifier);
+  game->core.mem_w32(kCallbackSlot, kCallback);
+  game->hle.irqEnq(2u, kInterruptElement);
+  armCdLine(*game);
+  queueDataReady(*game, 1);
+  latchCdLine(*game);
+  game->core.r[29] = kInterruptedSp;
+
+  game->hle.irqPoll(&game->core);
+
+  CHECK_EQ(verifierCalls, 1);
+  CHECK_EQ(interruptHandlerCalls, 1);
+  CHECK_EQ(callbackCalls, 1);
+  CHECK_EQ(verifierSp, Hle::kExceptionStackTop);
+  CHECK_EQ(interruptHandlerSp, Hle::kExceptionStackTop);
+  CHECK_EQ(callbackSp, Hle::kExceptionStackTop);
+  CHECK_EQ(game->core.r[29], kInterruptedSp); // the interrupted context is restored
+  delete game.release();
+}
+
+void test_the_framework_cd_arm_runs_on_the_exception_stack() {
+  auto game = freshDirectGame();
+  armCdLine(*game);
+  queueDataReady(*game, 1);
+  latchCdLine(*game);
+  game->core.r[29] = kInterruptedSp;
+
+  game->hle.irqPoll(&game->core);
+
+  CHECK_EQ(callbackCalls, 1);
+  CHECK_EQ(callbackSp, Hle::kExceptionStackTop);
+  CHECK(callbackSp != kInterruptedSp);
+  CHECK_EQ(game->core.r[29], kInterruptedSp);
   delete game.release();
 }
 
@@ -776,6 +830,8 @@ int main() {
   RUN(legacy_consumer_is_not_owned_by_the_interrupt);
   RUN(guest_element_keeps_its_own_single_delivery);
   RUN(a_claiming_guest_element_still_blocks_the_framework_arm);
+  RUN(a_guest_element_runs_on_the_exception_stack);
+  RUN(the_framework_cd_arm_runs_on_the_exception_stack);
   RUN(masked_cd_line_owes_the_completion);
   RUN(a_non_data_ready_response_is_not_a_ready_completion);
   RUN(no_installed_callback_leaves_the_completion_owed);

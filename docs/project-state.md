@@ -108,6 +108,11 @@ callback. The synthetic callback contract covers both owners, an empty/non-INT1 
 delivery across a native override (5/5 cases, 49 checks). Spider-Man's retail ISR-to-libstr ring
 sequence remains unverified.
 
+Guest interrupt handlers (chain verifier and handler, DMA completion callbacks, the CD ready callback)
+now run on `Hle::kExceptionStackTop` instead of the interrupted `$sp`, as the retail BIOS exception
+handler does (`docs/issues/0144`); a title that repurposes `$sp` as a data pointer with interrupts
+enabled (Spyro 3's display-list culler) was having its list overwritten by the ISR's frames.
+
 ### S018 — Independent test oracle
 
 Beetle/Mednafen CPU-window tools remain separate from the product. The isolated libretro software
