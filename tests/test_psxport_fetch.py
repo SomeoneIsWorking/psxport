@@ -453,6 +453,103 @@ class PrivateCloneTests(_FetchFixture, unittest.TestCase):
         self.assertEqual(leftovers, [], f"staging must not survive a refusal, found {leftovers}")
 
 
+class PublishedPinWithSubmoduleTests(_FetchFixture, unittest.TestCase):
+    """The pinned tree is built under a staging name and renamed. Git's own metadata records PATHS (the
+    worktree's `gitdir` link and every submodule's `core.worktree`), so a rename that does not repair them
+    leaves a tree whose `git status` dies with `cannot chdir to .../.pin-XXXX/vendor/beetle-psx`. The
+    other fixtures' frameworks have NO submodule, which is why that escaped."""
+
+    def _framework(self, name, push=False):
+        path = super()._framework(name, push=push)
+        inner = os.path.join(self.tmp, f"{name}-beetle")
+        os.makedirs(inner)
+        git("init", "-q", "-b", "main", cwd=inner)
+        Path(inner, "beetle.c").write_text("int beetle(void) { return 1; }\n", encoding="utf-8")
+        git("add", "-A", cwd=inner)
+        git("commit", "-q", "-m", "beetle", cwd=inner)
+        git("-c", "protocol.file.allow=always", "submodule", "--quiet", "add", inner,
+            "vendor/beetle-psx", cwd=path)
+        git("commit", "-q", "-m", "add beetle", cwd=path)
+        if push:
+            git("push", "-q", "origin", "main", cwd=path)
+        return path
+
+    def run_fetch(self, repo, *extra):
+        # The tool's `git submodule update` must be allowed to clone from a local path in this fixture.
+        allow = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "protocol.file.allow",
+                 "GIT_CONFIG_VALUE_0": "always", **GIT_ENV}
+        with patch.dict(os.environ, allow):
+            return super().run_fetch(repo, *extra)
+
+    def pinned(self):
+        self.write_pin(self.title)
+        status, output = self.run_fetch(self.title)
+        self.assertEqual(status, 0, output)
+        return psxport_fetch.pin_worktree_path(self.shared, self.head)
+
+    def test_the_published_pin_can_report_status_and_submodule_status(self) -> None:
+        pinned = self.pinned()
+        self.assertTrue(os.path.isfile(os.path.join(pinned, "vendor", "beetle-psx", "beetle.c")),
+                        "the fixture must really have initialised the submodule")
+        self.assertEqual(git("status", "--porcelain", cwd=pinned), "")
+        self.assertIn("vendor/beetle-psx", git("submodule", "status", cwd=pinned))
+        self.assertEqual(git("status", "--porcelain", cwd=os.path.join(pinned, "vendor", "beetle-psx")), "")
+
+    def test_no_git_metadata_still_names_the_staging_path(self) -> None:
+        self.pinned()
+        stale = []
+        for root, _, files in os.walk(os.path.join(self.shared, ".git", "worktrees")):
+            for name in files:
+                if name in ("gitdir", "config"):
+                    if ".pin-" in Path(root, name).read_text(encoding="utf-8"):
+                        stale.append(os.path.join(root, name))
+        self.assertEqual(stale, [], "metadata still names the staging path")
+
+    def test_a_reused_pin_with_a_submodule_is_still_usable(self) -> None:
+        self.pinned()
+        os.unlink(self.link_of(self.title))
+        status, output = self.run_fetch(self.title)
+        self.assertEqual(status, 0, output)
+        self.assertIn("reused", output)
+
+    def test_the_concurrent_publish_refusal_still_holds_with_a_submodule(self) -> None:
+        self.write_pin(self.title)
+        target = psxport_fetch.pin_worktree_path(self.shared, self.head)
+        real_rename = os.rename
+
+        def racing_rename(src, dst):
+            if os.path.abspath(dst) == os.path.abspath(target):
+                raise OSError(39, "Directory not empty")
+            return real_rename(src, dst)
+
+        with patch.object(psxport_fetch.os, "rename", side_effect=racing_rename):
+            status, output = self.run_fetch(self.title)
+        self.assertEqual(status, 2, output)
+        self.assertIn("another actor published it first", output)
+        self.assertFalse(os.path.lexists(target))
+        self.assertEqual([n for n in os.listdir(os.path.dirname(target)) if n != self.head], [])
+
+    def test_an_unusable_existing_pin_is_refused_untouched_and_the_git_error_is_reported(self) -> None:
+        pinned = self.pinned()
+        os.unlink(self.link_of(self.title))
+        module_config = None
+        for root, _, files in os.walk(os.path.join(self.shared, ".git", "worktrees")):
+            if "config" in files and root.endswith(os.path.join("modules", "vendor", "beetle-psx")):
+                module_config = os.path.join(root, "config")
+        self.assertIsNotNone(module_config)
+        broken = Path(module_config).read_text(encoding="utf-8").replace(
+            "worktree = ", "worktree = ../missing/")
+        Path(module_config).write_text(broken, encoding="utf-8")
+        before = worktree_digest(pinned)
+        status, output = self.run_fetch(self.title)
+        self.assertEqual(status, 2, output)
+        self.assertIn("REFUSED", output)
+        self.assertIn("state cannot be read", output)
+        self.assertIn("fatal:", output, "the refusal must carry git's own error text")
+        self.assertEqual(Path(module_config).read_text(encoding="utf-8"), broken, "must not be repaired")
+        self.assertEqual(worktree_digest(pinned), before)
+
+
 class PublishRaceTests(_FetchFixture, unittest.TestCase):
     """(d) The incident's second cause, and the destructive one. While the clone is in flight another
     actor puts a symlink at external/psxport. The old code ran its `git submodule update` with cwd
