@@ -359,19 +359,82 @@ class PrivateCloneTests(_FetchFixture, unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.join(link, ".git")))
         self.assertEqual(self.head_of(link), self.commit, "the clone must be AT the recorded pin")
 
-    def test_an_existing_private_clone_at_another_commit_is_refused_not_adopted(self) -> None:
-        """`--repo .` is the file's whole point, so a clone at the wrong commit is a stale build wearing a
-        valid path's name — and it is refused like every other wrong answer here."""
+    def clone_at_first_commit(self):
         self.assertEqual(self.run_fetch(self.lonely)[0], 0)
         link = self.link_of(self.lonely)
-        clone_head = self.head_of(link)
+        first = self.head_of(link)
+        return link, first
+
+    def test_a_clean_private_clone_at_the_old_pin_is_advanced_to_the_new_one(self) -> None:
+        """The reproduced defect: the pin moved, the tool exited 0 and left the clone behind."""
+        link, first = self.clone_at_first_commit()
+        self.write_pin(self.lonely, self.second)
+        status, output = self.run_fetch(self.lonely)
+        self.assertEqual(status, 0, output)
+        self.assertNotEqual(first, self.second, "fixture sanity: two distinct commits")
+        self.assertEqual(self.head_of(link), self.second, output)
+        self.assertIn("advanced", output)
+
+    def test_a_pin_the_clone_lacks_is_fetched_from_origin(self) -> None:
+        link, _ = self.clone_at_first_commit()
+        third = self._commit_framework("third framework commit, pushed after the clone was made")
+        has = subprocess.run(["git", "cat-file", "-e", f"{third}^{{commit}}"], cwd=link,
+                             capture_output=True, check=False)
+        self.assertNotEqual(has.returncode, 0, "fixture sanity: the clone must not have the commit yet")
+        self.write_pin(self.lonely, third)
+        status, output = self.run_fetch(self.lonely)
+        self.assertEqual(status, 0, output)
+        self.assertEqual(self.head_of(link), third, output)
+
+    def test_a_private_clone_already_at_the_pin_is_a_no_op(self) -> None:
+        link, first = self.clone_at_first_commit()
+        before = worktree_digest(link)
+        status, output = self.run_fetch(self.lonely)
+        self.assertEqual((status, output), (0, ""))
+        self.assertEqual(self.head_of(link), first)
+        self.assertEqual(worktree_digest(link), before)
+
+    def test_a_dirty_private_clone_is_refused_naming_both_commits_and_keeps_its_changes(self) -> None:
+        for change in ("tracked", "untracked"):
+            with self.subTest(change=change):
+                self.write_pin(self.lonely, self.head)
+                link, first = self.clone_at_first_commit()
+                if change == "tracked":
+                    Path(link, "README.md").write_text("local edit\n", encoding="utf-8")
+                else:
+                    Path(link, "notes.txt").write_text("local file\n", encoding="utf-8")
+                self.write_pin(self.lonely, self.second)
+                before = worktree_digest(link)
+                status, output = self.run_fetch(self.lonely)
+                self.assertEqual(status, 2, output)
+                self.assertIn(first[:12], output)
+                self.assertIn(self.second[:12], output)
+                self.assertEqual(self.head_of(link), first)
+                self.assertEqual(worktree_digest(link), before, "the local changes must be intact")
+                shutil.rmtree(link)
+
+    def test_a_pin_origin_does_not_have_is_refused_naming_both_commits_and_moves_nothing(self) -> None:
+        link, first = self.clone_at_first_commit()
         self.write_pin(self.lonely, "1" * 40)
         before = worktree_digest(link)
         status, output = self.run_fetch(self.lonely)
         self.assertEqual(status, 2, output)
-        self.assertIn("not the pinned", output)
-        self.assertEqual(self.head_of(link), clone_head)
+        self.assertIn(first[:12], output)
+        self.assertIn("1" * 12, output)
+        self.assertEqual(self.head_of(link), first)
         self.assertEqual(worktree_digest(link), before)
+
+    def test_a_symlink_to_a_live_framework_is_left_alone_when_no_shared_checkout_exists(self) -> None:
+        link = self.link_of(self.lonely)
+        os.makedirs(os.path.dirname(link))
+        os.symlink(self.shared, link)
+        self.write_pin(self.lonely, self.second)
+        before = self.head_of(self.shared)
+        status, output = self.run_fetch(self.lonely)
+        self.assertEqual(status, 0, output)
+        self.assertTrue(os.path.islink(link))
+        self.assertEqual(os.path.realpath(link), os.path.realpath(self.shared))
+        self.assertEqual(self.head_of(self.shared), before, "the live framework must not be moved")
 
     def test_a_missing_pin_refuses_rather_than_pinning_a_head(self) -> None:
         os.unlink(os.path.join(self.lonely, "psxport.pin"))

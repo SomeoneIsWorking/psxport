@@ -221,19 +221,51 @@ def do_ensure(repo, link, pin_file):
         if status == 0:
             print(f"[psxport] external/psxport -> {target}  ({note}; framework edits are NOT live here)")
         return status
-    if describe_link(link) == "clone" and is_framework(link):
-        # A private clone from an earlier run still has to BE the pin: `--repo .` is the whole point of
-        # the file, and a clone left at an older commit is a stale build wearing a valid path's name. It
-        # is not repaired here, because every other reuse answer in this tool is a refusal and one
-        # exception would be the one nobody reads.
-        head, rc = git(["rev-parse", "HEAD"], link)
-        if rc != 0 or head != pin:
-            print(f"[psxport] REFUSED: external/psxport is a private clone at "
-                  f"{head[:12] if head else 'an unreadable commit'}, not the pinned {pin[:12]}. It was "
-                  f"NOT modified. Delete external/psxport and re-run to make a clone at the pin.")
-            return 2
-        return 0                         # a private clone is already in place, at the pin
+    kind = describe_link(link)
+    if kind == "symlink" and is_framework(link):
+        # A link to a live framework checkout, left by a person or another tool: with no shared
+        # checkout discoverable from here it is the only framework this title has, and replacing it
+        # with a clone would discard a deliberate choice.
+        print(f"[psxport] external/psxport is a symlink to {os.path.realpath(link)}; left alone.")
+        return 0
+    if kind == "clone" and is_framework(link):
+        return advance_private_clone(link, pin)
     return do_clone(link, pin_file)
+
+
+def advance_private_clone(link, pin):
+    """Bring a private clone at `link` to the pinned commit, or refuse naming both commits.
+
+    MEASURED 2026-10-01: a title's private clone sat at the previous pin after `psxport.pin` moved, the
+    tool exited 0 silently, and the build failed on a header only the pinned framework has. A clone left
+    at an older commit is a stale build wearing a valid path's name, so this moves it — and it moves it
+    only when that discards nothing: a clone with uncommitted or untracked files is REFUSED and left
+    byte-for-byte as found. The commit is fetched from `origin` when the clone does not have it; one the
+    remote does not have either is a refusal, because nothing can make a fresh clone build it.
+    """
+    head, rc = git(["rev-parse", "HEAD"], link)
+    head = head if rc == 0 and head else None
+    if head == pin:
+        return 0
+    shown = head[:12] if head else "an unreadable commit"
+    changes, rc = git(["status", "--porcelain", "--untracked-files=all"], link)
+    if rc != 0 or changes:
+        count = len(changes.splitlines()) if rc == 0 else "unreadable"
+        print(f"[psxport] REFUSED: external/psxport is a private clone at {shown}, not the pinned "
+              f"{pin[:12]}, and it has {count} uncommitted change(s), so it was NOT moved. Commit or "
+              f"discard them yourself, or delete external/psxport, then re-run.")
+        return 2
+    if git(["cat-file", "-e", f"{pin}^{{commit}}"], link)[1] != 0:
+        print(f"[psxport] private clone at {shown} lacks the pinned {pin[:12]}; fetching origin")
+        git(["fetch", "origin"], link)
+    if git(["checkout", "--detach", pin], link)[1] != 0:
+        print(f"[psxport] REFUSED: external/psxport is a private clone at {shown}, not the pinned "
+              f"{pin[:12]}, and that commit is not reachable from its origin, so it was NOT moved. "
+              f"Push the framework commit, then re-pin.")
+        return 2
+    init_submodules(link)
+    print(f"[psxport] private clone advanced {shown} -> {pin[:12]}")
+    return 0
 
 
 def do_clone(link, pin_file):

@@ -204,3 +204,12 @@ run from its own `tools/psxport_fetch.py` (it reads the revision out of the fram
 strict about never resolving a moving checkout should run that once and treat the plain checkout as the
 fallback it now is.
 
+
+## Amendment 2026-10-01: a stale private clone is advanced, not refused
+
+The fresh-clone path left a private `external/psxport` at the OLD pin after `psxport.pin` moved, and the
+retired tool exited 0 silently (Spyro build failed on `cd_stock_read_completion.h`). `psxport_fetch.py`
+first refused such a clone; it now advances a CLEAN one to the pin (fetching `origin` when the commit is
+absent) and refuses, naming both commits and leaving every byte, when the clone has uncommitted or untracked
+changes or the pin is not reachable from its origin. A symlink to a live framework is left alone when no
+shared checkout is discoverable. Tests: `tests/test_psxport_fetch.py`, `PrivateCloneTests`.
