@@ -1,35 +1,43 @@
 #!/usr/bin/env python3
-"""check_port_pin_tools.py — every port's `tools/psxport_sync.py` must match the canonical copy.
+"""check_port_pin_tools.py — every port's `tools/psxport_fetch.py` must match the canonical copy.
 
 WHY THIS FILE EXISTS
 --------------------
-A port must build from a bare clone of ITSELF, so the pin tool travels with it and there are ten copies.
-That is deliberate. The cost is drift, and the drift was measured, not feared:
+A port must build from a bare clone of ITSELF, so the bootstrap tool travels with it and there are ten
+copies. That is deliberate. The cost is drift, and the drift was measured, not feared:
 
   - MEASURED 2026-09-27: **ten copies, ten distinct hashes, 298–322 lines each.**
   - The staleness guard was **missing from seven of the ten**. Where it was missing, `--check` answered
     `check OK` on exactly the input a guarded copy refused — same input, opposite answers, and the wrong
     one is a pass. A tree rebuilt against newer framework code was passing a provenance check.
-  - Only **one** of the ten had a `--build` flag, so the live pin check that actually *calls* the check
+  - Only **one of the ten** had a `--build` flag, so the live pin check that actually *calls* the check
     could not be registered in the other nine. All ten were therefore reporting green selftests of a
     function none of them ever ran.
   - Only **one** had the `do_bump` fix, so the other nine could still record a framework commit the tree
     was never built against — the original incident this mechanism exists to prevent.
 
 The obligation to keep the copies in step was real; the check for that obligation was itself duplicated,
-which is why the guard could go missing from seven of them unnoticed. This is that check, made
+which is why the guard could go missing from seven of them unnoticed. That is that check, made
 mechanical and registered.
+
+WHAT IT GATES, AND WHY THE FILE MOVED (2026-09-30, issue 0142)
+----------------------------------------------------------------
+The gated file is now `psxport_fetch.py`, not `psxport_sync.py`. A port needs ONE tool before it has the
+framework — "make `external/psxport` exist" — and that tool must live in the port. The pin check, the
+build-receipt guard, the report and the bump live in the framework's own `tools/psxport_sync.py`, which a
+port runs OUT of the fetched checkout as `external/psxport/tools/psxport_sync.py --repo .`. So the copy
+that travels is the small one, and gating the small one is gating what actually ships.
 
 WHAT IT COMPARES, AND WHY THAT IS NOT ENOUGH ON ITS OWN
 --------------------------------------------------------
 It compares **bytes**, and then — because of how this was actually caught — it also **runs** each copy.
 
-The byte comparison alone was demonstrably insufficient, on this very file. Building the canonical dropped
+The byte comparison alone was demonstrably insufficient, on this very tool. Building the canonical dropped
 an `import argparse` that only `main()` reaches. The result propagated to all ten ports, and **every one
-of them reported "in step" while being identically broken**: each repo's test imports the module and never
-calls `main()`, so the missing import raised nothing, and no test anywhere invoked the tool as a command.
-Ten identical copies of a file that could not run is the exact failure duplication produces, and a
-byte-equality gate endorsed it.
+of them reported "in step" while being identically broken**: the port's test imported the module and never
+called `main()`, so the missing import raised nothing, and no test anywhere invoked the tool as a
+command. Ten identical copies of a file that could not run is the exact failure duplication produces, and
+a byte-equality gate endorsed it.
 
 So the gate is two questions, and it must pass both:
 
@@ -37,25 +45,22 @@ So the gate is two questions, and it must pass both:
   2. does this copy actually run?       (`--help` in a subprocess, exit 0 — whether it WORKS)
 
 It still does not judge whether a copy is *correct*. A copy can be faithful and still wrong, and then the
-fix belongs in `tools/psxport_sync.py` here, where all ten get it at once.
-
-The canonical copy is never executed as a port tool. `REPO` is derived from the file's own path, so the
-text runs unchanged from any port's `tools/`, and this repo's copy is only ever compared and copied.
+fix belongs in `tools/psxport_fetch.py` here, where all ten get it at once.
 
 MODES
 -----
   (default)   report every port: in step, or drifted (with the line count of both sides)
-  --install   copy the canonical text into every port, then report again
+  --install   write the canonical text into every port, then report again
   --selftest  prove the comparison can tell the two answers apart
 
 OUTPUT IS A DENOMINATOR FIRST
 -----------------------------
 It always prints how many ports it scanned. A run that found no ports is a REFUSAL, not a pass: "0 of 0
-in step" is the shape of a checker that has been pointed at the wrong directory, and reading it as
-success is how a gate stops gating.
+in step" is the shape of a checker that has been pointed at the wrong directory, and reading it as success
+is how a gate stops gating. The same failure wears a second hat after the split: a port still carrying the
+RETIRED `tools/psxport_sync.py` is no longer a port this checker can find, so it would drop out of the
+denominator silently. Those are counted and NAMED on every run, always.
 """
-
-from __future__ import annotations
 
 import argparse
 import difflib
@@ -67,22 +72,10 @@ import tempfile
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
-TESTS = Path(__file__).resolve().parent.parent / "tests"
 
-# Two files travel with every port: the tool itself, and the test that gates its behaviour. The tool has
-# one home (`tools/`); the test was placed in `tools/` by some ports and `tests/` by others, so it is
-# matched at either. Both are canonical here, and both are checked, because a canonical test that drifts
-# is how a behaviour fix quietly stops applying to the ports that matter.
-CANONICAL_FILES = {
-    Path("tools") / "psxport_sync.py": TOOLS / "psxport_sync.py",
-    Path("tests") / "test_psxport_sync.py": TESTS / "test_psxport_sync.py",
-}
-# The paths a port may hold the behaviour test at, most-preferred first.
-TEST_ALTERNATIVES = (
-    Path("tests") / "test_psxport_sync.py",
-    Path("tools") / "test_psxport_sync.py",
-)
-CANONICAL = CANONICAL_FILES[Path("tools") / "psxport_sync.py"]
+# ONE file travels with every port now: the bootstrap tool. The pin work happens inside the fetched
+# framework, so there is nothing else to install and nothing else to drift.
+CANONICAL = TOOLS / "psxport_fetch.py"
 
 # The workspace is psxport's parent: independent repos side by side, no superproject. Overridable so the
 # checker is testable and so a differently-laid-out workspace still works.
@@ -91,20 +84,59 @@ DEFAULT_WORKSPACE = CANONICAL.parent.parent.parent  # .../psxport/tools -> psxpo
 # A port is a directory holding this file. Naming the marker rather than listing the ports is deliberate:
 # a hard-coded roster goes stale and then reports the wrong denominator, which is the failure mode this
 # whole tool exists to remove.
-PORT_MARKER = Path("tools") / "psxport_sync.py"
+PORT_MARKER = Path("tools") / "psxport_fetch.py"
+
+# The file this gate used to gate, kept as a MIGRATION marker: a directory holding it and not the new
+# marker is a real port that this gate cannot see, and must be named rather than silently uncounted.
+RETIRED_MARKER = Path("tools") / "psxport_sync.py"
+
+
+def canonical_roots() -> set[Path]:
+    """The repositories that hold the canonical text: this one, and its MAIN checkout.
+
+    This one is the SOURCE, not a port: scanning it would inflate the denominator by one "in step" that
+    says nothing about any game. It is spelled as a set rather than a single path because the tool is
+    routinely run from a LINKED WORKTREE, where `__file__`'s repository is
+    `<main>/scratch/wt/<name>` and the main checkout — the directory the workspace actually holds — is a
+    DIFFERENT path. Excluding only the worktree let psxport count itself as an unmigrated port, measured
+    on the real workspace before this line existed.
+    """
+    here = CANONICAL.parent.parent
+    roots = {here.resolve()}
+    try:
+        done = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=here, capture_output=True,
+                              text=True, timeout=60, check=False)
+        common = done.stdout.strip()
+        if done.returncode == 0 and common:
+            if not os.path.isabs(common):
+                common = str(here / common)
+            roots.add(Path(os.path.dirname(os.path.abspath(common))))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return roots
 
 
 def find_ports(workspace: Path) -> list[Path]:
     if not workspace.is_dir():
         return []
-    # psxport itself holds the canonical copy, so it would otherwise scan as its own port and inflate
-    # the denominator by one "in step" that says nothing about any game. It is the SOURCE, not a port.
-    canonical_repo = CANONICAL.parent.parent
+    sources = canonical_roots()
     return sorted(
         parent
         for parent in workspace.iterdir()
-        if parent.is_dir() and parent.resolve() != canonical_repo.resolve()
+        if parent.is_dir() and parent.resolve() not in sources
         and (parent / PORT_MARKER).is_file()
+    )
+
+
+def unmigrated_ports(workspace: Path) -> list[Path]:
+    """Directories that still carry the RETIRED copy: real ports this gate cannot see."""
+    if not workspace.is_dir():
+        return []
+    gated = {port.resolve() for port in find_ports(workspace)} | canonical_roots()
+    return sorted(
+        parent for parent in workspace.iterdir()
+        if parent.is_dir() and parent.resolve() not in gated
+        and (parent / RETIRED_MARKER).is_file()
     )
 
 
@@ -148,19 +180,19 @@ def runs(copy: Path) -> tuple[bool, str]:
     return True, "runs (`--help` exit 0)"
 
 
-def behaviour_test_path(port: Path) -> Path | None:
-    for rel in TEST_ALTERNATIVES:
-        if (port / rel).is_file():
-            return port / rel
-    return None
-
-
 def report(workspace: Path, canonical: Path, allow_empty: bool = False) -> tuple[int, int, int]:
     """Print the full table. Returns (scanned, in_step, drifted)."""
     ports = find_ports(workspace)
+    retired = unmigrated_ports(workspace)
     print(f"[pin-tools] workspace {workspace}")
     print(f"[pin-tools] canonical {canonical} ({len(canonical.read_text(encoding='utf-8').splitlines())} lines)")
-    print(f"[pin-tools] {len(ports)} port(s) scanned: " + ", ".join(p.name for p in ports) if ports else "")
+    if ports:
+        print(f"[pin-tools] {len(ports)} port(s) scanned: " + ", ".join(p.name for p in ports))
+    # Named on every run: a port that silently leaves the denominator is the same mistake as a checker
+    # pointed at the wrong directory, and it is the one this split could have introduced.
+    if retired:
+        print(f"[pin-tools] {len(retired)} port(s) NOT MIGRATED — still carrying {RETIRED_MARKER} and "
+              f"no {PORT_MARKER}, so not in the denominator above: " + ", ".join(p.name for p in retired))
     if not ports:
         # A BARE CLONE OF PSXPORT HAS NO PORTS, and that is not a failure: this repo must build and gate
         # on its own. So the registered CTest passes --allow-empty and reports a skip. The CLI does not,
@@ -179,17 +211,6 @@ def report(workspace: Path, canonical: Path, allow_empty: bool = False) -> tuple
     for port in ports:
         copy = port / PORT_MARKER
         ok, detail = compare(canonical, copy)
-        # The behaviour test is checked in the same pass, at whichever of the two paths this port uses.
-        test_copy = behaviour_test_path(port)
-        canonical_test = CANONICAL_FILES[Path("tests") / "test_psxport_sync.py"]
-        if test_copy is None:
-            ok, detail = False, f"NO BEHAVIOUR TEST at {' or '.join(str(r) for r in TEST_ALTERNATIVES)}"
-        else:
-            test_ok, test_detail = compare(canonical_test, test_copy)
-            if not test_ok:
-                ok, detail = False, f"{detail}; behaviour test {test_detail}"
-            else:
-                detail = f"{detail}; behaviour test in step"
         if ok:
             # Only ask the second question when the first passed. A drifted copy is already reported, and
             # running it would describe a file that is not the canonical one.
@@ -209,13 +230,14 @@ def report(workspace: Path, canonical: Path, allow_empty: bool = False) -> tuple
 
 
 def install(workspace: Path, canonical: Path) -> None:
-    ports = find_ports(workspace)
+    ports = find_ports(workspace) + unmigrated_ports(workspace)
     if not ports:
         print("[pin-tools] REFUSED: no port found — nothing to install into.")
         return
     for port in ports:
         target = port / PORT_MARKER
-        shutil.copyfile(canonical, target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(canonical.read_bytes())
         print(f"[pin-tools]   installed -> {target}")
 
 
@@ -259,6 +281,21 @@ def selftest() -> int:
                f"a one-line mutation is 2 changed diff lines, got {detail_bad!r}")
 
         # The port the marker is named for, and one that merely resembles it, must not both count.
+        # A directory that still carries the RETIRED tool is a real port this gate cannot see, and it
+        # must be NAMED: a port silently leaving the denominator is the failure this tool exists to
+        # prevent, and the 2026-09-30 split is exactly what could have introduced it.
+        retired = root / "oldport"
+        (retired / "tools").mkdir(parents=True)
+        (retired / RETIRED_MARKER).write_text("#!/usr/bin/env python3\nOLD\n", encoding="utf-8")
+        expect(len(find_ports(root)) == 2, "a retired copy alone must not make a port gated")
+        expect([p.name for p in unmigrated_ports(root)] == ["oldport"],
+               f"the unmigrated port must be named, got {[p.name for p in unmigrated_ports(root)]}")
+        (retired / PORT_MARKER).write_text(canonical.read_text(encoding="utf-8"), encoding="utf-8")
+        expect(unmigrated_ports(root) == [],
+               "a port holding the new marker is gated, so it is no longer unmigrated")
+        (retired / RETIRED_MARKER).unlink()
+        shutil.rmtree(retired)            # back to two ports, for the checks below
+
         (root / "notaport").mkdir()
         (root / "notaport" / "tools").mkdir()
         expect(len(find_ports(root)) == 2, "a directory with an empty tools/ is not a port")

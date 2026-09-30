@@ -294,12 +294,24 @@ it is outside the active target scope.
 
 ## The structure rule: ONE framework checkout, and every port runs off it
 
-**There is exactly ONE psxport working tree on a machine, and every game uses it.** `psxport/` is that
-tree. Each game has `external/psxport`, which is **not tracked and not a submodule** — it is a SYMLINK to
-`psxport/` when the workspace is present, or a private clone at that game's `psxport.pin` on a fresh
-machine / CI / a stranger's clone of one repo. `tools/psxport_sync.py --auto` (run by `run.sh`)
-establishes whichever applies. The PATH is unchanged, so every `external/psxport/...` reference in docs,
-tools and code keeps working.
+**There is exactly ONE psxport working tree on a machine, and every game uses it.** `psxport/` is the
+WRITING checkout. Each game has `external/psxport`, which is **not tracked and not a submodule** — it is a
+SYMLINK to that checkout's `psxport.pin` commit when the workspace is present, or a private clone at the
+same pin on a fresh machine / CI / a stranger's clone of one repo. `tools/psxport_fetch.py` (run by
+`run.sh`) establishes whichever applies, and it resolves the shared checkout from the MAIN checkout as
+well, so a linked worktree (`<title>/scratch/wt/<name>`) pins the same commit its main checkout would.
+The PATH is unchanged, so every `external/psxport/...` reference in docs, tools and code keeps working.
+
+**MEASURED CHANGE 2026-09-30 (issue 0142) — the link now points at the PINNED commit, not at the moving
+checkout.** `external/psxport` resolves to a detached worktree at `<psxport>/scratch/pins/<full-sha>/`,
+reused while it is clean and exactly at the pin, and REFUSED — never repaired — when it is dirty, at
+another commit, or belongs to another repository. With no shared checkout, a private clone at the pin is
+made the same way. So the paragraph that follows ("a framework edit is live in every port immediately")
+now describes a property of the SHARED CHECKOUT, not of a port's build: an edit there is one commit in a
+branch every title can pin, and a title sees it when it bumps its pin. `shared/lightrec` is pinned the
+same way, from `PSXPORT_LIGHTREC_REVISION` in `psxport/cmake/lightrec_dependency.cmake`, which
+`tools/psxport_fetch.py --lightrec` creates and `psxport_configure_lightrec_dependency()` resolves ahead
+of the plain checkout.
 
 **So a framework edit is live in every port immediately, with no bump, no sync and no ceremony** — which
 is the whole point. There is no longer a "read-only consumer" copy to drift from the writable one,
@@ -309,8 +321,9 @@ because there is no second copy.
    `external/psxport` symlink is the same directory; both are the dev clone. Commit and push framework
    work in `psxport/`.
 2. **`psxport.pin` records the framework commit a game was built and VERIFIED against.** It is
-   provenance and the fresh-clone fallback, not what you build against day to day. `psxport_sync.py
-   --bump` records it; `--check` (wired into each game's precommit gate) FAILS when the framework you
+   provenance and the fresh-clone fallback, not what you build against day to day.
+   `external/psxport/tools/psxport_sync.py --bump` records it; `--check` (wired into each game's precommit
+   gate, and run with `--repo <title>` against the fetched framework) FAILS when the framework you
    built against is not the one the repo records, comparing against `build/psxport_resolved.txt`, which
    CMake writes at configure time.
 
@@ -334,8 +347,8 @@ because there is no second copy.
 
    ```cmake
    add_test(NAME tomba_psxport_pin
-            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/psxport_sync.py"
-                    --check --build "${CMAKE_BINARY_DIR}")
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/external/psxport/tools/psxport_sync.py"
+                    --repo "${CMAKE_SOURCE_DIR}" --check --build "${CMAKE_BINARY_DIR}")
    ```
 
    `--build ${CMAKE_BINARY_DIR}` is the directory CTest is running in, configured moments earlier, so its
@@ -363,6 +376,15 @@ because there is no second copy.
    accident. **MEASURED 2026-09-27: the ten copies had TEN DISTINCT HASHES, 298–322 lines each, and 61–226
    changed lines against each other.** The check for that obligation was itself duplicated, which is why the
    guard could go missing from seven of them unnoticed.
+
+   **SUPERSEDED 2026-09-30 (issue 0142): the two files no longer both travel.** The port needs ONE tool
+   before it has the framework, and that is `psxport/tools/psxport_fetch.py` — make `external/psxport`
+   exist at `psxport.pin`'s commit, as a detached worktree of the shared checkout or a private clone, in a
+   staged sibling that is published by one atomic rename. The pin work stays in
+   `psxport/tools/psxport_sync.py` and a port runs it out of the pinned checkout as
+   `external/psxport/tools/psxport_sync.py --repo .`.
+   `psxport/tools/check_port_pin_tools.py` now gates `psxport_fetch.py` (bytes + `--help`) and NAMES any
+   port still carrying the retired copy, so a port cannot leave the denominator quietly.
 
    **DONE, and the consolidation found two more defects the duplicated check had been hiding.** There is now a
    canonical `psxport/tools/psxport_sync.py` and a canonical `psxport/tests/test_psxport_sync.py`, and

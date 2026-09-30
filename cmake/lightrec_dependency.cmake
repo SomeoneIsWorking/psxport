@@ -1,8 +1,20 @@
 # Resolve the maintained shared Lightrec checkout. The runtime is consumed from shared/ rather than
 # copied into each port, and the pinned revision prevents accidentally accepting an unrelated tree.
+#
+# A PINNED WORKTREE IS RESOLVED FIRST, at <checkout>/scratch/pins/<revision>, and only then the plain
+# checkout. Why: a plain checkout moves. A Lightrec commit landing under a running consumer would change
+# what that consumer builds with no edit to it, and the revision check below would turn every such landing
+# into a hard configure failure in a tree that was green a minute earlier. The pinned worktree is created
+# by `tools/psxport_fetch.py --lightrec`, which reads PSXPORT_LIGHTREC_REVISION from THIS file, so the
+# pin has exactly one home and the tool and the resolver cannot disagree about it.
+#
+# The revision and cleanliness checks below are NOT removed by that: they are what makes a plain
+# checkout usable at all, and a pinned worktree that is dirty is refused by the same comparison.
 include_guard(GLOBAL)
 
 set(PSXPORT_LIGHTREC_REVISION "20bc8a2a4405dded2b890b0291cba5a7f1a53c3c")
+set(PSXPORT_LIGHTREC_PIN_ROOT "scratch/pins" CACHE STRING
+    "Path, relative to a Lightrec checkout, holding one detached worktree per pinned revision")
 set(PSXPORT_LIGHTREC_DIR "" CACHE PATH "Path to the maintained shared/lightrec checkout")
 
 function(psxport_configure_lightrec_dependency)
@@ -22,13 +34,24 @@ function(psxport_configure_lightrec_dependency)
     "${PSXPORT_ROOT}/../../../../shared/lightrec"
     "${CMAKE_SOURCE_DIR}/../../shared/lightrec")
 
+  # Each checkout yields its PINNED worktree first, then the checkout itself, so the ordering of the
+  # explicit settings above is preserved: an explicit PSXPORT_LIGHTREC_DIR still wins, it just prefers
+  # that directory's own pinned tree over the moving one.
   set(_attempted "")
   set(_resolved "")
   foreach(_candidate IN LISTS _candidates)
-    cmake_path(ABSOLUTE_PATH _candidate NORMALIZE OUTPUT_VARIABLE _absolute)
-    list(APPEND _attempted "${_absolute}")
-    if(EXISTS "${_absolute}/CMakeLists.txt" AND EXISTS "${_absolute}/lightrec.h")
-      set(_resolved "${_absolute}")
+    cmake_path(ABSOLUTE_PATH _candidate NORMALIZE OUTPUT_VARIABLE _checkout)
+    list(APPEND _attempted "${_checkout}/${PSXPORT_LIGHTREC_PIN_ROOT}/${PSXPORT_LIGHTREC_REVISION}")
+    list(APPEND _attempted "${_checkout}")
+    foreach(_probe IN ITEMS
+            "${_checkout}/${PSXPORT_LIGHTREC_PIN_ROOT}/${PSXPORT_LIGHTREC_REVISION}"
+            "${_checkout}")
+      if(EXISTS "${_probe}/CMakeLists.txt" AND EXISTS "${_probe}/lightrec.h")
+        set(_resolved "${_probe}")
+        break()
+      endif()
+    endforeach()
+    if(_resolved)
       break()
     endif()
   endforeach()
@@ -39,7 +62,10 @@ function(psxport_configure_lightrec_dependency)
     message(FATAL_ERROR
       "psxport requires shared/lightrec at revision ${PSXPORT_LIGHTREC_REVISION}. Tried:\n"
       "  - ${_attempted_lines}\n"
-      "Clone https://github.com/SomeoneIsWorking/lightrec.git into the shared workspace or set "
+      "Clone https://github.com/SomeoneIsWorking/lightrec.git into the shared workspace, or run\n"
+      "  python3 tools/psxport_fetch.py --lightrec\n"
+      "to create the pinned worktree at "
+      "${PSXPORT_LIGHTREC_PIN_ROOT}/${PSXPORT_LIGHTREC_REVISION} beside it, or set "
       "PSXPORT_LIGHTREC_DIR.")
   endif()
 
@@ -56,7 +82,11 @@ function(psxport_configure_lightrec_dependency)
   if(NOT _revision STREQUAL PSXPORT_LIGHTREC_REVISION)
     message(FATAL_ERROR
       "shared/lightrec revision mismatch at ${_resolved}: expected ${PSXPORT_LIGHTREC_REVISION}, "
-      "found ${_revision}")
+      "found ${_revision}.\n"
+      "Create the pinned worktree beside it with\n"
+      "  python3 tools/psxport_fetch.py --lightrec\n"
+      "which writes ${PSXPORT_LIGHTREC_PIN_ROOT}/${PSXPORT_LIGHTREC_REVISION} from the same pin this "
+      "message quotes, so a commit landing in the shared checkout cannot change what a consumer builds.")
   endif()
   execute_process(
     COMMAND "${GIT_EXECUTABLE}" -C "${_resolved}" status --porcelain --untracked-files=all
@@ -70,7 +100,8 @@ function(psxport_configure_lightrec_dependency)
   if(_worktree_changes)
     message(FATAL_ERROR
       "shared/lightrec at ${_resolved} has worktree changes; psxport requires the exact clean "
-      "revision ${PSXPORT_LIGHTREC_REVISION}")
+      "revision ${PSXPORT_LIGHTREC_REVISION}. It was NOT modified. Inspect it, then remove or commit "
+      "the changes yourself and re-run.")
   endif()
 
   set(PSXPORT_LIGHTREC_DIR "${_resolved}" CACHE PATH "Path to shared/lightrec" FORCE)

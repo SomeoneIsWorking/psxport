@@ -154,6 +154,28 @@ inputs, use stable directories under `build/test-fixtures`, and preserve the loc
 symlink. Submodule-sync fixtures supply their own Git identity for every command. These repair the
 three fixture failures in hosted run `33893969146`; a subsequent hosted run must establish CI success.
 
+The framework/port link tooling is split so that the file a port SHIPS is the smallest one that has to
+exist before the framework is on disk: `tools/psxport_fetch.py` is installed into the ten ports and gated
+by bytes + `--help`; `tools/psxport_sync.py` (report, `--check`, `--bump`, `--link`) lives in the
+framework and is run as `external/psxport/tools/psxport_sync.py --repo <title>`.
+
+**Both `external/psxport` and `shared/lightrec` resolve to the PINNED commit, not the moving shared
+checkout** — a detached worktree at `<checkout>/scratch/pins/<sha>/`, reused only while clean and exactly
+at the pin, and REFUSED — never repaired — when dirty, at another commit, or belonging to another
+repository. That is what makes a framework or Lightrec commit landing under a consumer unable to change
+what it builds, and it is why a landing could otherwise surface as a configure failure in a tree that was
+green a minute earlier. `psxport_fetch.py --lightrec` reads `PSXPORT_LIGHTREC_REVISION` out of
+`cmake/lightrec_dependency.cmake`, so the pin has one home, and `psxport_configure_lightrec_dependency()`
+probes that worktree before the plain checkout for every candidate.
+
+Evidence: `tests/test_psxport_fetch.py` 17/17 and `tests/test_psxport_sync.py` 20/20, both against real git
+repositories; `tests/test_lightrec_pinned_worktree.py` 6/6 over three real CMake configures of a throwaway
+two-commit Lightrec repository and its own pin; and **7 of 12 properties measured failing against the
+pre-change code**, two of them the pin itself, where the old tool answered status 0, a symlink and the
+expected text while the build followed the moving checkout. Gap: no port has been
+migrated yet, so `check_port_pin_tools.py` reports them as NOT MIGRATED and their `--auto` call sites still
+name the retired tool.
+
 ## Blocking dependency
 
 The direct maintained Lightrec fork is now the Linux x86-64 product dependency. Hosted verification

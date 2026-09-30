@@ -225,6 +225,12 @@ add_test(NAME lightrec_dependency_ownership
 set_tests_properties(cmake_test_ownership lightrec_dependency_ownership PROPERTIES
   ENVIRONMENT "PSXPORT_LIGHTREC_DIR=${PSXPORT_LIGHTREC_DIR};PSXPORT_FIXTURE_LIGHTNING_LIBRARY=${LIBLIGHTNING};PSXPORT_FIXTURE_LIGHTNING_INCLUDE=${LIBLIGHTNING_INCLUDE_DIR};PSXPORT_FIXTURE_C_COMPILER=${CMAKE_C_COMPILER};PSXPORT_FIXTURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
 
+add_test(NAME lightrec_pinned_worktree
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_lightrec_pinned_worktree.py)
+# Fixture-only: it builds its own throwaway Lightrec repository and sets its own pin, so it is
+# independent of the resolved PSXPORT_LIGHTREC_DIR and never touches the shared checkout.
+
 add_test(NAME psx_exe_reader
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_psx_exe.py)
@@ -279,16 +285,18 @@ add_test(NAME linux_ci_setup_policy
          COMMAND "${Python3_EXECUTABLE}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/../.github/actions/setup-linux/test_setup.py")
 
-# pin_tools_in_step — every port's tools/psxport_sync.py must match the canonical copy here.
+# pin_tools_in_step — every port's tools/psxport_fetch.py must match the canonical copy here.
 #
 # MEASURED 2026-09-27: the ten port copies had TEN DISTINCT HASHES and 61-226 changed lines each. The
-# staleness guard was MISSING FROM SEVEN of the ten; only one had a `--build` flag, so the live pin check
-# that actually CALLS the function could not be registered in the other nine; and only one had the
-# do_bump fix, so the rest could still record a framework commit the tree was never built against.
+# staleness guard was MISSING FROM SEVEN OF THE TEN; only one had a `--build` flag, so the live pin check
+# that actually CALLS the check could not be registered in the other nine; and only one had the do_bump
+# fix, so the rest could still record a framework commit the tree was never built against.
 #
-# The obligation to keep the copies in step was real and the check for it was itself duplicated, which is
-# why the guard could go missing from seven of them unnoticed. This is that check, made mechanical. It
-# REFUSES (exit 2) when it finds no ports, so "0 of 0 in step" can never be read as a pass.
+# The obligation to keep the copies in step was real and the check for that obligation was itself
+# duplicated, which is why the guard could go missing from seven of them unnoticed. This is that check,
+# made mechanical. It REFUSES (exit 2) when it finds no ports, so "0 of 0 in step" can never be read as a
+# pass, and it NAMES any directory still carrying the retired tools/psxport_sync.py, so a port cannot
+# leave the denominator quietly.
 add_test(NAME pin_tools_in_step
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_port_pin_tools.py --allow-empty)
@@ -296,9 +304,22 @@ add_test(NAME pin_tools_selftest
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_port_pin_tools.py --selftest)
 
-# pin_sync_behaviour — the canonical psxport_sync's own behaviour: the staleness guard, and a bump that
-# records the commit the build RESOLVED rather than the framework's current HEAD. This is the test that
-# makes the canonical trustworthy; each port keeps its own copy of it, but a change lands here first.
+# pin_fetch_behaviour — the file a port SHIPS, against real git repositories and no network: a linked
+# worktree must PIN the shared checkout beside its main checkout rather than clone, the pin must be a
+# detached worktree at the recorded commit that a later framework commit cannot move, a machine with no
+# shared checkout must still clone privately at the pin, and a symlink that appears mid-fetch must be
+# refused, with the shared checkout's working tree AND .git/modules byte-unchanged and no git command's
+# cwd inside it. Issue 0142 is the destruction this exists for: `--auto` from a linked worktree deleted
+# the SHARED checkout's vendor/beetle-psx and .git/modules/vendor/beetle-psx.
+add_test(NAME pin_fetch_behaviour
+         COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_psxport_fetch.py)
+
+# pin_sync_behaviour — the framework's own pin tool, invoked as a port invokes it out of the fetched
+# checkout (`--repo <title>`): the staleness guard, and a bump that records the commit the build RESOLVED
+# rather than the framework's current HEAD. Nothing is mocked except the process cwd, in the one case
+# that pins the default. No port runs this file any more — psxport_fetch.py is what travels — so the
+# port-side `verify_ci` cases that used to be skipped here are gone rather than left to rot into a pass.
 add_test(NAME pin_sync_behaviour
          COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
                  ${CMAKE_CURRENT_SOURCE_DIR}/test_psxport_sync.py)

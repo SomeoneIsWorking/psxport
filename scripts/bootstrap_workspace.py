@@ -47,14 +47,19 @@ def initialize_framework_vendors(framework: Path) -> None:
 
 
 def sync_game_framework(game: Path) -> None:
-    synchronizer = game / "tools/psxport_sync.py"
-    state = "psxport_sync.py --auto" if synchronizer.is_file() else "no sync tool yet"
+    """Make external/psxport exist, with the ONE tool a port ships.
+
+    It is psxport_fetch.py, not psxport_sync.py: the pin work lives in the fetched framework
+    (external/psxport/tools/psxport_sync.py --repo .), and this step has to work before there is one.
+    """
+    fetcher = game / "tools/psxport_fetch.py"
+    state = "psxport_fetch.py" if fetcher.is_file() else "no fetch tool yet"
     say(f"{game.name}: establish external/psxport ({state})")
-    if not synchronizer.is_file():
+    if not fetcher.is_file():
         return
-    result = run([sys.executable, synchronizer, "--auto"], cwd=game, required=False)
+    result = run([sys.executable, fetcher], cwd=game, required=False)
     if result.returncode:
-        say(f"{game.name}: psxport_sync.py --auto did not resolve external/psxport")
+        say(f"{game.name}: psxport_fetch.py did not resolve external/psxport")
 
 
 def main() -> int:

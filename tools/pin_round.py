@@ -128,12 +128,21 @@ def failed_tests(out: str) -> list[str]:
 def round_port(name: str, rel_build: str, dry: bool) -> str:
     port = PSX / name
     build = port / rel_build
-    if not (port / "tools" / "psxport_sync.py").is_file():
-        return f"SKIP   {name}: no pin tool"
+    if not (port / "tools" / "psxport_fetch.py").is_file():
+        return f"SKIP   {name}: no fetch tool"
     if dry:
         return (f"PLAN   {name}: build={rel_build} pin={pin_commit(port) or '-'} "
                 f"receipt={receipt_commit(build) or '-'}")
     steps = []
+    # external/psxport must EXIST at the recorded pin before configure: the pin work lives in the
+    # fetched framework, and external/psxport is now a pinned worktree rather than the moving checkout,
+    # so a port whose pin moved forward needs a fetch before its build means anything.
+    fetch = port / "tools/psxport_fetch.py"
+    rc, out = run(["python3", str(fetch)], port)
+    steps.append(f"fetch={'ok' if rc == 0 else f'rc{rc}'}")
+    if rc != 0:
+        first = next((l for l in out.splitlines() if l.strip()), out.strip()[:90])
+        return f"STOP   {name}: fetch refused -- {first}"
     rc, _ = run(["cmake", "-S", ".", "-B", rel_build, "-DCMAKE_CXX_COMPILER=clang++",
                  "-DCMAKE_C_COMPILER=clang"], port)
     steps.append(f"configure={'ok' if rc == 0 else f'rc{rc}'}")
@@ -157,7 +166,9 @@ def round_port(name: str, rel_build: str, dry: bool) -> str:
                 + f" ({summary}) | {', '.join(others[:3])}")
     if rc != 0:
         steps.append("pin-test red before bump, as expected")
-    rc, out = run(["python3", "tools/psxport_sync.py", "--bump", "--build", str(build)], port)
+    # The pin tool is the FETCHED framework's, not the port's: it is not installed into a port any more.
+    rc, out = run(["python3", str(port / "external/psxport/tools/psxport_sync.py"),
+                   "--repo", str(port), "--bump", "--build", str(build)], port)
     if rc != 0:
         first = next((l for l in out.splitlines() if l.strip()), out.strip()[:90])
         return f"STOP   {name}: bump refused -- " + " ".join(steps) + f" | {first}"
