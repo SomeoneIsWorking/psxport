@@ -34,6 +34,24 @@ class Core;
 
 namespace psx::cd {
 
+// One whole synchronous stock `CdRead` after its bytes are visible in guest RAM: where they came from,
+// where they landed, and how many. `destination` is the guest address the read was issued with (as the
+// guest wrote it, so a KSEG0 pointer stays one); `bytes` is exactly what was written there, sector
+// payload size included, never the requested-sector count times a constant the caller assumed.
+struct StockReadLanding {
+  std::uint32_t firstLba = 0;
+  std::uint32_t sectors = 0;
+  std::uint32_t destination = 0;
+  std::uint32_t bytes = 0;
+};
+
+// Tell the direct runtime that a stock read landed, once per whole successful read, after every byte is
+// written and reported to the invalidation owner and before the read's completion is queued. A read that
+// moved no bytes, or failed part way, announces nothing: nothing has landed that a runtime could name.
+// The runtime (`GameRuntime::stockCdReadLanded`) owns what a landing means to its title, for instance
+// publishing the bytes as an authenticated code image; the framework owns only that it happened.
+void announceStockReadLanding(Core &core, const StockReadLanding &landing);
+
 // Does this title owe its guest a completion for every successful stock CdRead?
 [[nodiscard]] bool stockReadOwesCompletion(const Core &core);
 

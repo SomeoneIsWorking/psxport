@@ -17,6 +17,9 @@
 class Core;
 class Game;
 class GuestWidescreenProjection;
+namespace psx::cd {
+struct StockReadLanding;
+}
 struct GuestCdStreamCallbackLayout;
 class TemporalFramePresentation;
 struct GameConfig;
@@ -86,6 +89,13 @@ public:
   virtual const GuestCdStreamCallbackLayout *guestCdStreamCallbackLayout() const {
     return nullptr;
   }
+
+  // A synchronous stock `CdRead` just landed its whole payload in guest RAM (psx::cd::StockReadLanding).
+  // The bytes are already written and already reported to the executable-write invalidation owner, so a
+  // title that treats a streamed region as a code module or authored image publishes it here, after
+  // the write, never before (an earlier publication would be subtracted by the write's own
+  // invalidation). The default does nothing: most titles stream data.
+  virtual void stockCdReadLanded(Core &, const psx::cd::StockReadLanding &) {}
 
   // Optional title-owned guest projection. The returned object declares the aspect only; the title
   // must publish a matching guest projection plan before the host exposes a wider presentation span.

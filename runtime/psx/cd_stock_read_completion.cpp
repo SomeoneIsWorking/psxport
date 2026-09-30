@@ -21,6 +21,13 @@ bool stockReadOwesCompletion(const Core &core) {
   return core.game->runtime->guestCdStreamCallbackLayout()->stockReadRaisesCompletion;
 }
 
+void announceStockReadLanding(Core &core, const StockReadLanding &landing) {
+  if (landing.bytes == 0u || core.game == nullptr || core.game->runtime == nullptr) {
+    return;
+  }
+  core.game->runtime->stockCdReadLanded(core, landing);
+}
+
 bool raiseStockReadCompletion(Core &core, std::uint32_t sectors) {
   if (sectors == 0u || !stockReadOwesCompletion(core)) {
     return false;

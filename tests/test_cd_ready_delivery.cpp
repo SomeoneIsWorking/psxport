@@ -28,6 +28,7 @@
 #include "testutil.h"
 
 #include <memory>
+#include <vector>
 
 namespace {
 
@@ -142,6 +143,10 @@ public:
     return &callbacks;
   }
 
+  void stockCdReadLanded(Core &, const psx::cd::StockReadLanding &landing) override {
+    landings.push_back(landing);
+  }
+
   void select(GuestCdStreamCallbackLayout::DeliveryOwner owner) {
     callbacks.owner = owner;
   }
@@ -150,6 +155,7 @@ public:
   }
 
   GuestCdStreamCallbackLayout callbacks{kCallbackSlot, GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt};
+  std::vector<psx::cd::StockReadLanding> landings;
 };
 
 DirectRuntime &runtime() {
@@ -167,6 +173,7 @@ void resetCounters() {
 }
 
 std::unique_ptr<Game> freshDirectGame() {
+  runtime().landings.clear();
   runtime().select(GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt);
   runtime().dropSlot();
   runtime().callbacks.readyCallbackPointer = kCallbackSlot;
@@ -715,6 +722,50 @@ void test_a_chained_loader_completes_exactly_its_reads() {
   delete game.release();
 }
 
+// THE LANDING ANNOUNCEMENT. A runtime that publishes a streamed region as a code image must be told
+// exactly once per whole read, with what landed and where; each negative below is a read that landed
+// nothing a runtime could name, and a recorder that never ran would also print zero landings, so the
+// positive case comes first and the recorder is shown firing.
+void test_a_whole_read_announces_its_landing_once_with_exact_bytes() {
+  auto game = freshStockReadGame(true, kCdlCompleteCode);
+  stockRead(*game, 3);
+  CHECK_EQ(runtime().landings.size(), 1u);
+  CHECK_EQ(runtime().landings[0].firstLba, 100u);
+  CHECK_EQ(runtime().landings[0].sectors, 3u);
+  CHECK_EQ(runtime().landings[0].destination, kReadBuffer);
+  CHECK_EQ(runtime().landings[0].bytes, 3u * 2048u);
+  // The announcement comes after the bytes are visible: the last payload byte is already in RAM.
+  CHECK_EQ(game->core.mem_r8(kReadBuffer + 3u * 2048u - 1u), static_cast<uint8_t>(102u + 24u + 2047u));
+  stockRead(*game, 1);
+  CHECK_EQ(runtime().landings.size(), 2u);
+  CHECK_EQ(runtime().landings[1].firstLba, 100u);
+  delete game.release();
+}
+
+void test_a_failed_or_empty_read_announces_no_landing() {
+  auto game = freshStockReadGame(true, kCdlCompleteCode);
+  game->cd.setloc_lba = 100;
+  game->core.r[4] = 0;
+  game->core.r[5] = kReadBuffer;
+  game->core.r[6] = 0x80u;
+  cd_read_stock_sync(&game->core); // zero sectors
+  CHECK_EQ(runtime().landings.size(), 0u);
+
+  game->cdc.disc_read_raw_fn = [](DiscState *, uint32_t lba, uint8_t *out, uint32_t) -> int {
+    return lba == 100u ? fakeSector(nullptr, lba, out, 0u) : 0; // the second sector is unreadable
+  };
+  game->core.r[4] = 2;
+  cd_read_stock_sync(&game->core);
+  CHECK_EQ(game->core.r[2], 0u);
+  CHECK_EQ(runtime().landings.size(), 0u);
+
+  game->cd.setloc_lba = -1; // never positioned: refused before any byte is read
+  game->core.r[4] = 1;
+  cd_read_stock_sync(&game->core);
+  CHECK_EQ(runtime().landings.size(), 0u);
+  delete game.release();
+}
+
 } // namespace
 
 int main() {
@@ -740,5 +791,7 @@ int main() {
   RUN(a_failed_or_empty_read_owes_nothing);
   RUN(a_full_controller_queue_refuses_the_completion);
   RUN(a_chained_loader_completes_exactly_its_reads);
+  RUN(a_whole_read_announces_its_landing_once_with_exact_bytes);
+  RUN(a_failed_or_empty_read_announces_no_landing);
   return pt_summary();
 }
