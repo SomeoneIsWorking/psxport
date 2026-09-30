@@ -247,6 +247,14 @@ static void queue_data_ready(CdcState *s) {
   cdc_irq(s, 1, response, 1);
 }
 
+int cdc_post_data_ready(CdcState *s) {
+  if (((s->q_tail + 1) & 7) == s->q_head) {
+    return 0; // cdc_irq would drop it; say so instead of reporting a completion that was never queued
+  }
+  queue_data_ready(s);
+  return 1;
+}
+
 static void cancel_drive_event(CdcState *s) {
   if (!s->drive_event_armed) {
     return;

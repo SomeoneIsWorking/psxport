@@ -36,8 +36,8 @@ enum : int { A0 = 4, A1 = 5 };
 
 // The two arguments a stock libcd ready callback receives.
 //
-// `status` is the libcd completion code (1 = a sector is ready), not the controller's raw status
-// byte, because that is what BOTH existing delivery sites in this framework already pass —
+// `status` is the libcd completion code, not the controller's raw status byte. It defaults to 1 (a sector
+// is ready) because that is what BOTH existing delivery sites in this framework already pass —
 // `Cd::pumpStream` and `cd_drive_stock_read` — and a title that saw two different argument shapes
 // from the same slot depending on who called it would be a worse defect than a title that sees a
 // constant. `first_word` is a pointer to the sector's first word on hardware; the layout declares the
@@ -45,7 +45,6 @@ enum : int { A0 = 4, A1 = 5 };
 // controller", which is what the DMA the callback starts does. (Measured from SLUS_008.75's own
 // bytes: the two functions its CdInit installs into this slot, and libstr's replacement for it
 // during a stream, read NEITHER argument.)
-constexpr uint32_t kReadyStatus = 1u;
 constexpr uint32_t kNoFirstWord = 0u;
 
 const GuestCdStreamCallbackLayout *declaredLayout(const Core &core) {
@@ -144,6 +143,8 @@ CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core) {
     return CdReadyDelivery::NothingOwed;
   }
 
+  // Declared by the title (`readyStatus`, default 1); read from its callback's own bytes, never guessed here.
+  const uint32_t status = declaredLayout(core)->readyStatus;
   CdcState &controller = core.game->cdc;
   const int savedBank = controller.index;
   const uint8_t responseStatus = consumeCurrentResponse(controller);
@@ -167,7 +168,7 @@ CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core) {
                 callback,
                 slot,
                 responseStatus,
-                kReadyStatus,
+                status,
                 kNoFirstWord,
                 hle.cd_ready_delivered,
                 hle.cd_ready_delivered + hle.cd_ready_declined);
@@ -177,7 +178,7 @@ CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core) {
   // nothing — the same contract the DMA arm above and `cd_drive_stock_read` both state.
   hle.in_irq = 1; // the callback's own CD calls must not re-enter this delivery
   const R3000 saved = *static_cast<R3000 *>(&core);
-  core.r[A0] = kReadyStatus;
+  core.r[A0] = status;
   core.r[A1] = kNoFirstWord;
   const auto result = psx::cpu::dispatchGuest0(core, callback, psx::cpu::ExecutionBudget::currentTurn(core));
   *static_cast<R3000 *>(&core) = saved;

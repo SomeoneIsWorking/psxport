@@ -3,6 +3,7 @@
 #include "io_peripherals.h"
 #include "core.h"
 #include "game.h"
+#include "irq_edge.h"
 #include <lucent/log.h>
 
 namespace {
@@ -12,7 +13,7 @@ namespace {
 constexpr uint32_t kSio0Lo = 0x1F801040u, kSio0Hi = 0x1F80104Fu;
 constexpr uint32_t kCounter1Value = 0x1F801110u;
 constexpr uint32_t kCounter2Lo = 0x1F801120u, kCounter2Hi = 0x1F80112Bu;
-constexpr uint32_t kIrqStat = 0x1F801070u, kIrqMask = 0x1F801074u;
+constexpr uint32_t kIrqStat = kIrqStatRegister, kIrqMask = kIrqMaskRegister;
 
 bool in(uint32_t p, uint32_t lo, uint32_t hi) {
   return p >= lo && p <= hi;

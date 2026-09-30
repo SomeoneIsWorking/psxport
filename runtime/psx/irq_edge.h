@@ -27,6 +27,10 @@ enum : int {
   IRQ_BIT_PIO = 10,
 };
 
+// The two interrupt registers themselves, as guest physical addresses.
+inline constexpr uint32_t kIrqStatRegister = 0x1F801070u;
+inline constexpr uint32_t kIrqMaskRegister = 0x1F801074u;
+
 // Drive source `bit`'s line to `asserted`, updating the caller's LEVEL word in place, and return the
 // new I_STAT. Only a low->high transition of that source adds its bit; nothing here ever CLEARS an
 // I_STAT bit, because only the guest's ack does that.

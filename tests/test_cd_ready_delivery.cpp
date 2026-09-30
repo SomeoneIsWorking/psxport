@@ -13,7 +13,9 @@
 //     the framework adds none;
 //   * a completion the arm cannot deliver is left OWED, because these completions chain and a
 //     consumed-but-undelivered one ends the chain — the defect the DMA arm's own comments record.
+#include "cd_control.h"
 #include "cd_ready_delivery.h"
+#include "cd_stock_read_completion.h"
 #include "cdc_state.h"
 #include "core.h"
 #include "game.h"
@@ -34,6 +36,7 @@ constexpr uint32_t kCallback = 0x80012100u;
 constexpr uint32_t kVerifier = 0x80012104u;
 constexpr uint32_t kInterruptHandler = 0x80012108u;
 constexpr uint32_t kBareInterruptHandler = 0x80012110u;
+constexpr uint32_t kChainCallback = 0x80012114u;
 constexpr uint32_t kInterruptElement = 0x80012200u;
 constexpr uint32_t kIStat = 0x1F801070u;
 constexpr uint32_t kIMask = 0x1F801074u;
@@ -91,14 +94,34 @@ void bareInterruptHandler(Core *) {
   ++interruptHandlerCalls;
 }
 
+constexpr uint32_t kReadBuffer = 0x80130000u;
+int chainRemaining = 0;
+
+// The guest's ready callback of a chained loader: on every completion it starts the NEXT read, until the
+// module is done. It runs with `in_irq` set, so the read it issues queues a completion that must stay owed
+// until this callback has returned.
+void chainingCallback(Core *core) {
+  ++callbackCalls;
+  callbackA0 = core->r[4];
+  if (chainRemaining > 0) {
+    --chainRemaining;
+    core->game->cd.setloc_lba = 100;
+    core->r[4] = 1;
+    core->r[5] = kReadBuffer;
+    core->r[6] = 0x80u;
+    cd_read_stock_sync(core);
+  }
+}
+
 void installCallback(Game &game) {
   const auto image = game.core.imageCatalog().activate(
-      "test-main", {kCallback & 0x1FFFFFFFu, (kBareInterruptHandler & 0x1FFFFFFFu) + 4u}, 1u);
+      "test-main", {kCallback & 0x1FFFFFFFu, (kChainCallback & 0x1FFFFFFFu) + 4u}, 1u);
   CHECK(game.core.nativeDispatcher().install({{image, kCallback}, "cd-ready-callback", callback}));
   CHECK(game.core.nativeDispatcher().install({{image, kVerifier}, "cd-interrupt-verifier", interruptVerifier}));
   CHECK(game.core.nativeDispatcher().install({{image, kInterruptHandler}, "cd-interrupt-handler", interruptHandler}));
   CHECK(
       game.core.nativeDispatcher().install({{image, kBareInterruptHandler}, "cd-bare-handler", bareInterruptHandler}));
+  CHECK(game.core.nativeDispatcher().install({{image, kChainCallback}, "cd-chain-callback", chainingCallback}));
 }
 
 class DirectRuntime final : public GameRuntime {
@@ -147,6 +170,8 @@ std::unique_ptr<Game> freshDirectGame() {
   runtime().select(GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt);
   runtime().dropSlot();
   runtime().callbacks.readyCallbackPointer = kCallbackSlot;
+  runtime().callbacks.readyStatus = 1;
+  runtime().callbacks.stockReadRaisesCompletion = false;
   psxport_install_game(runtime());
   auto game = std::make_unique<Game>();
   installCallback(*game);
@@ -495,6 +520,201 @@ void test_delivery_waits_for_a_call_coherent_boundary() {
   delete game.release();
 }
 
+// ----------------------------------------------------------------------------
+// The completion a SYNCHRONOUS stock CdRead owes a guest that chains reads from its ready callback
+// (runtime/psx/cd_stock_read_completion.*). These drive the shipping `cd_read_stock_sync` with fake
+// sectors through the controller's sector-source binding, and read the answer as a CALLBACK COUNT through
+// the shipping poll. Every positive has a negative beside it, because a count of 0 is also what a
+// framework that never raised anything would print.
+
+constexpr uint32_t kCdlCompleteCode = 2u;
+int sectorsServed = 0;
+
+int fakeSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t) {
+  ++sectorsServed;
+  for (uint32_t i = 0; i < 2352u; i++) {
+    out[i] = static_cast<uint8_t>(lba + i);
+  }
+  return 1;
+}
+
+// One CdRead of `sectors` sectors, positioned, through the shipping stock owner.
+void stockRead(Game &game, uint32_t sectors) {
+  game.cd.setloc_lba = 100;
+  game.core.r[4] = sectors;
+  game.core.r[5] = kReadBuffer;
+  game.core.r[6] = 0x80u;
+  cd_read_stock_sync(&game.core);
+  CHECK_EQ(game.core.r[2], 1u);
+}
+
+std::unique_ptr<Game> freshStockReadGame(bool declareCompletion, uint8_t status) {
+  auto game = freshDirectGame();
+  runtime().callbacks.readyStatus = status;
+  runtime().callbacks.stockReadRaisesCompletion = declareCompletion;
+  game->cdc.disc_read_raw_fn = fakeSector;
+  sectorsServed = 0;
+  armCdLine(*game);
+  return game;
+}
+
+// THE POSITIVE: N stock reads, N deliveries, each with the declared completion code in $a0, the
+// controller empty afterwards.
+void test_declared_guest_interrupt_gets_one_delivery_per_stock_read() {
+  constexpr int kReads = 5;
+  auto game = freshStockReadGame(true, kCdlCompleteCode);
+  for (int i = 0; i < kReads; i++) {
+    stockRead(*game, 1);
+    game->hle.irqPoll(&game->core);
+    game->hle.irqPoll(&game->core); // a second poll must add nothing
+    CHECK_EQ(callbackCalls, i + 1);
+  }
+  CHECK_EQ(sectorsServed, kReads);
+  CHECK_EQ(callbackA0, kCdlCompleteCode);
+  CHECK_EQ(game->hle.cd_ready_delivered, static_cast<uint32_t>(kReads));
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  CHECK_EQ(game->hle.i_stat & (1u << 2u), 0u);
+  delete game.release();
+}
+
+// The line is opened by whoever replaces CdInit, and only by them: a stock read on a masked CD line leaves
+// its completion OWED (not dropped, not delivered), and arming the line through `armCdInterrupt` delivers
+// it exactly once while keeping every other enable the guest had set. This is the Spyro 2 shape, measured:
+// I_MASK 0x009 at the first stock read.
+void test_a_masked_cd_line_leaves_the_stock_completion_owed_until_armed() {
+  auto game = freshStockReadGame(true, kCdlCompleteCode);
+  game->core.mem_w32(kIMask, 0x009u);
+  stockRead(*game, 1);
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(callbackCalls, 0);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u); // still owed
+
+  CHECK_EQ(psx::cd::armCdInterrupt(game->core), true);
+  CHECK_EQ(game->core.mem_r32(kIMask), 0x00Du);         // the guest's own bits survive
+  CHECK_EQ(psx::cd::armCdInterrupt(game->core), false); // idempotent
+  game->hle.irqPoll(&game->core);
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(callbackCalls, 1);
+  CHECK_EQ(callbackA0, kCdlCompleteCode);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  delete game.release();
+}
+
+// A multi-sector read is ONE read and owes ONE completion, however many sectors it moved.
+void test_a_multi_sector_read_owes_one_completion() {
+  auto game = freshStockReadGame(true, kCdlCompleteCode);
+  stockRead(*game, 7);
+  CHECK_EQ(sectorsServed, 7);
+  game->hle.irqPoll(&game->core);
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(callbackCalls, 1);
+  CHECK_EQ(game->hle.cd_ready_delivered, 1u);
+  delete game.release();
+}
+
+// NEGATIVE 1: a GuestInterrupt title that does not opt in (Spider-Man 1's shape) gets nothing, and its
+// controller is untouched.
+void test_guest_interrupt_without_the_declaration_gets_no_completion() {
+  auto game = freshStockReadGame(false, 1);
+  stockRead(*game, 1);
+  CHECK_EQ(sectorsServed, 1); // the read itself still happened
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(callbackCalls, 0);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  CHECK_EQ(game->hle.cd_ready_delivered, 0u);
+  CHECK_EQ(psx::cd::stockReadOwesCompletion(game->core), false);
+  delete game.release();
+}
+
+// NEGATIVE 2: the flag means nothing under the host-pump owner, which keeps its own single delivery.
+void test_host_pump_owner_gets_no_stock_read_completion() {
+  runtime().select(GuestCdStreamCallbackLayout::DeliveryOwner::HostPump);
+  runtime().callbacks.readyCallbackPointer = kCallbackSlot;
+  runtime().callbacks.stockReadRaisesCompletion = true;
+  psxport_install_game(runtime());
+  auto game = std::make_unique<Game>();
+  installCallback(*game);
+  game->core.mem_w32(kCallbackSlot, kCallback);
+  game->cdc.disc_read_raw_fn = fakeSector;
+  resetCounters();
+  armCdLine(*game);
+  stockRead(*game, 1);
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(callbackCalls, 0);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  CHECK_EQ(game->hle.cd_ready_delivered, 0u);
+  runtime().callbacks.stockReadRaisesCompletion = false;
+  delete game.release();
+}
+
+// NEGATIVE 3: a legacy GameConfig consumer declares nothing.
+void test_legacy_consumer_gets_no_stock_read_completion() {
+  auto game = freshLegacyGame();
+  game->cdc.disc_read_raw_fn = fakeSector;
+  armCdLine(*game);
+  stockRead(*game, 1);
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(callbackCalls, 0);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  delete game.release();
+}
+
+// NEGATIVE 4: a read that failed, or moved no sector, completed nothing.
+void test_a_failed_or_empty_read_owes_nothing() {
+  auto game = freshStockReadGame(true, kCdlCompleteCode);
+  game->cd.setloc_lba = 100;
+  game->core.r[4] = 0;
+  game->core.r[5] = kReadBuffer;
+  game->core.r[6] = 0x80u;
+  cd_read_stock_sync(&game->core); // zero sectors
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+
+  game->cdc.disc_read_raw_fn = [](DiscState *, uint32_t, uint8_t *, uint32_t) -> int {
+    return 0;
+  };
+  game->core.r[4] = 1;
+  cd_read_stock_sync(&game->core);
+  CHECK_EQ(game->core.r[2], 0u);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(callbackCalls, 0);
+  delete game.release();
+}
+
+// A completion that cannot be queued is reported, not counted: nothing is posted and nothing is owed.
+void test_a_full_controller_queue_refuses_the_completion() {
+  auto game = freshStockReadGame(true, kCdlCompleteCode);
+  int posted = 0;
+  while (psx::cd::raiseStockReadCompletion(game->core, 1)) {
+    ++posted;
+  }
+  CHECK_EQ(posted, 7); // the 8-entry ring holds 7
+  CHECK_EQ(psx::cd::raiseStockReadCompletion(game->core, 1), false);
+  delete game.release();
+}
+
+// THE CHAIN, which is the defect: the loader issues ONE read and every further read is started from the
+// callback. One initial read plus a callback that starts `kFollowers` more must yield exactly
+// 1 + kFollowers reads and deliveries, and then stop: no delivery is lost behind the in_irq deferral and
+// none is repeated.
+void test_a_chained_loader_completes_exactly_its_reads() {
+  constexpr int kFollowers = 4;
+  auto game = freshStockReadGame(true, kCdlCompleteCode);
+  game->core.mem_w32(kCallbackSlot, kChainCallback);
+  chainRemaining = kFollowers;
+  stockRead(*game, 1);
+  for (int poll = 0; poll < 32; poll++) {
+    game->hle.irqPoll(&game->core);
+  }
+  CHECK_EQ(sectorsServed, 1 + kFollowers);
+  CHECK_EQ(callbackCalls, 1 + kFollowers);
+  CHECK_EQ(callbackA0, kCdlCompleteCode);
+  CHECK_EQ(chainRemaining, 0);
+  CHECK_EQ(game->hle.cd_ready_delivered, static_cast<uint32_t>(1 + kFollowers));
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  delete game.release();
+}
+
 } // namespace
 
 int main() {
@@ -511,5 +731,14 @@ int main() {
   RUN(reentrant_poll_defers_and_the_chain_continues);
   RUN(two_queued_completions_deliver_two_callbacks_across_polls);
   RUN(delivery_waits_for_a_call_coherent_boundary);
+  RUN(declared_guest_interrupt_gets_one_delivery_per_stock_read);
+  RUN(a_masked_cd_line_leaves_the_stock_completion_owed_until_armed);
+  RUN(a_multi_sector_read_owes_one_completion);
+  RUN(guest_interrupt_without_the_declaration_gets_no_completion);
+  RUN(host_pump_owner_gets_no_stock_read_completion);
+  RUN(legacy_consumer_gets_no_stock_read_completion);
+  RUN(a_failed_or_empty_read_owes_nothing);
+  RUN(a_full_controller_queue_refuses_the_completion);
+  RUN(a_chained_loader_completes_exactly_its_reads);
   return pt_summary();
 }

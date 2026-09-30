@@ -83,6 +83,11 @@ int cdc_drive_service(CdcState *s);
 // queue is empty. Stream callback owners use this to dispatch only for a real INT1 data-ready
 // response, never from a host-side pacing estimate alone.
 uint8_t cdc_current_irq_type(const CdcState *s);
+// Queue ONE INT1 data-ready response carrying the current drive status, raising the interrupt edge when it
+// becomes current, without starting a drive read. For a completion the native layer owes the guest for
+// work it performed itself (a synchronous stock CdRead). Returns 0, queuing nothing, when the response
+// queue is full, so the caller can refuse to count a completion that does not exist.
+int cdc_post_data_ready(CdcState *s);
 // MMIO 0x1F801800-3 register model — the instance is explicit (mem.cpp passes &game->cdc).
 uint32_t cdc_read(CdcState *s, uint32_t p);
 void cdc_write(CdcState *s, uint32_t p, uint8_t v);

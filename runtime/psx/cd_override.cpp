@@ -17,6 +17,7 @@
 #include "cd_control.h"
 #include "cd_drive_timing.h"
 #include "cd_position.h"
+#include "cd_stock_read_completion.h"
 #include "core.h"
 #include "execution_control.h"
 #include "game.h"
@@ -489,8 +490,10 @@ void cd_read_stock_sync(Core *c) {
     const uint32_t lba = (uint32_t)cd.setloc_lba + i;
     // disc_read_raw owns the lazy disc_open transition, using this Game's DiscState::env_key before
     // the generic fallbacks. A direct runtime therefore binds its title key once on DiscState; it
-    // does not need a title-local open wrapper before calling this shared stock-read owner.
-    if (!disc_read_raw(&c->game->disc, lba, raw, sizeof raw)) {
+    // does not need a title-local open wrapper before calling this shared stock-read owner. The call goes
+    // through the controller's sector-source binding, which `cdc_state_init` defaults to `disc_read_raw`,
+    // so a hermetic test drives this shipping function with fake sectors instead of a copy of it.
+    if (!c->game->cdc.disc_read_raw_fn(&c->game->disc, lba, raw, sizeof raw)) {
       lucent::error("cd",
                     "CdRead: LBA {} unreadable at sector {}/{} — {} sector(s) delivered, the rest "
                     "NOT written. This read is genuinely incomplete.",
@@ -534,6 +537,9 @@ void cd_read_stock_sync(Core *c) {
                  buf,
                  mode);
   }
+  // The read is finished and its data is in guest RAM; a guest that chains reads from its ready callback
+  // is owed the completion its interrupt handler would have delivered (cd_stock_read_completion.h).
+  psx::cd::raiseStockReadCompletion(*c, sectors);
   c->r[V0] = 1; // bool: success
 }
 
