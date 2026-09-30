@@ -673,6 +673,12 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
 
   Impl::BoundarySession session(impl, returnAddress, dispatchHostServices, fallbackPolicy);
   Impl::BoundaryContext &boundary = impl.activeBoundary();
+  // TRANSLATED CODE IS ON THE STACK FROM HERE. Every device access, host dispatch, syscall and pending
+  // service in this body runs with a generated Lightrec frame below it, so the override differential's
+  // journal must not raise its per-call bound fault out of any of them — see
+  // `SideEffectJournal::TranslatedExecutionScope`. `execute`, `executeUntilExit` and `executeFunction`
+  // all reach this point, so one mark covers every path translated code runs on.
+  const SideEffectJournal::TranslatedExecutionScope translated(impl.core);
   std::uint64_t consumedCycles = 0;
   std::uint64_t hostDispatches = 0;
   std::uint32_t nextPc = guestAddress;

@@ -32,6 +32,49 @@ class Core;
 
 namespace psx::cpu {
 
+// THE BOUND ON ONE CALL'S JOURNAL. MEASURED-SIZED, and the measurement is stated here rather than
+// left to the reader's imagination — docs/issues/0141.
+//
+// WHY A BOUND AT ALL. The journal is the differential's memory, and the differential exists to catch
+// a WRONG native override, including one that never returns. Measured in 0141: a candidate override
+// for Spyro 1 `update_player_frame` (0x8003FE40) looped inside one call, storing to a device address
+// each pass, and `effects_` — an unbounded `std::vector` — grew at ~6 MB/s under `PSXPORT_OVERRIDE_DIFF`
+// to 7.4 GB of peak address space, `std::bad_alloc` in `append` included. Eight such gates explain
+// every memory reap of 2026-09-29/30. A diagnostic that turns the worst kind of wrong override into a
+// host OOM is not a gate.
+//
+// WHY NOT SMALLER, WITH THE MEASUREMENT. The bound has to sit far above the largest REAL call, and a
+// PSX function's journaled traffic is data movement rather than waiting: the long waits (VSync,
+// CdReadSync, MDEC synchronisation, wait) are `platform_hle` services, which the journal marks
+// UNREPLAYABLE instead of counting, so they never reach a count at all.
+//
+// MEASURED 2026-09-30 over the differential's own per-call log line ("N side effect(s) replayed"),
+// kept in the port repositories' run artifacts under `scratch/`, across FIVE TITLES and every override
+// they have gated so far: 1,011 real shadowed calls — 6,574 completed differential reports covering
+// 166,098 sampled calls over 132 distinct real override names — of which the per-call effect count was
+// recorded for 1,011. The distribution is `p50 = 0`, `p99 = 94`, `max = 145` (the largest is Spyro 1's
+// `update_active_voices @0x8005637C`; the largest count any real report names as a log LENGTH is 1, and
+// the largest side-effect INDEX a real mismatch names is #12, which is a lower bound of 13). The
+// framework's own hermetic corpus adds 18 sampled calls, max 4,097 — that is
+// `tests/test_override_differential.cpp`'s deliberate many-effect case, a 4096-pass I_STAT-ack loop, and
+// it is the largest effect count this repository produces on purpose.
+//
+// So the physical headroom is stated three ways: 1,048,576 is 256x the largest effect count measured
+// in ANY real call in this workspace (145), 7,223x the framework's own largest deliberate case, and 2x
+// the largest movement one function can physically make — the machine's whole 2 MiB of VRAM in 4-byte
+// transfers, 524,288 words. A PSX function cannot journal more than it moves, so that last figure is a
+// ceiling no real override can pass, not an estimate.
+//
+// The claim is re-checkable rather than a comment nobody can test: `OverrideDifferential`'s per-key
+// summary prints the largest sampled call against this number on every real run, and the JSON report
+// carries `largest_sampled_call_effects` beside `effects_bound`.
+//
+// WHAT THE BOUND BUYS. `SideEffect` is 16 bytes, so one journal is capped at 16 MiB and one shadowed
+// call — which holds the live journal and the shadow journal at once — at 32 MiB, in place of the
+// unbounded growth above. Reaching it is a FAILURE, never a wrap and never a silent truncation: see
+// `JournalBoundViolation` and `boundViolation()`.
+inline constexpr std::size_t kMaxSideEffectsPerCall = 1u << 20;
+
 enum class SideEffectKind : std::uint8_t {
   DeviceRead,
   DeviceWrite,
@@ -41,6 +84,13 @@ enum class SideEffectKind : std::uint8_t {
   PadWorkArea,
   Syscall,
   PendingWork,
+};
+
+// WHICH PATH A JOURNAL LOGS. Namespace scope rather than nested in `SideEffectJournal` because
+// `JournalBoundViolation` names it, and a violation must be describable before the journal is.
+enum class SideEffectMode : std::uint8_t {
+  Record, // the live path: accesses reach the devices and are logged
+  Replay, // the shadow path: accesses are logged and served from, or checked against, `recorded`
 };
 
 const char *sideEffectKindName(SideEffectKind kind);
@@ -56,15 +106,33 @@ struct SideEffect {
 
 std::string describeSideEffect(const SideEffect &effect);
 
+// ONE CALL PRODUCED MORE EFFECTS THAN `kMaxSideEffectsPerCall`. This is the journal's only fault, and
+// it is recorded rather than applied: `effects_` stops growing, the refusal is COUNTED, and the
+// differential turns the record into a verdict. A truncated log compared against a whole one is the
+// silent-skip failure docs/issues/0141 forbids, so nothing here drops an entry quietly.
+struct JournalBoundViolation {
+  SideEffectMode mode = SideEffectMode::Record;
+  // The effect that reached the bound, so the report can name the device address and width rather than
+  // only a count.
+  SideEffect offending{};
+  std::size_t effects = 0; // journaled when the bound was reached; equals the bound
+  std::size_t refused = 0; // effects refused after it, counted rather than dropped silently
+  // Whether the host body was stopped by the raise. False on the live path and anywhere a translated
+  // frame is on the stack, where a `throw` is illegal — see `SideEffectJournal::TranslatedExecutionScope`.
+  bool stoppedCall = false;
+  // The whole fault as one sentence: which path, which effect, how many were journaled, the bound, and
+  // what happened to the call. The override's own name and address are NOT here — the journal does not
+  // know them, and the differential's owner composes them in.
+  std::string describe() const;
+};
+
+// Raised at the bound, and ONLY where a `throw` is legal. See `append`'s comment in the .cpp.
+class JournalBoundExceeded {};
+
 class SideEffectJournal {
 public:
-  enum class Mode : std::uint8_t {
-    Record, // the live path: accesses reach the devices and are logged
-    Replay, // the shadow path: accesses are logged and served from, or checked against, `recorded`
-  };
-
   // `recorded` is the live path's log and must outlive this journal; empty for Record mode.
-  SideEffectJournal(Mode mode, std::span<const SideEffect> recorded);
+  SideEffectJournal(SideEffectMode mode, std::span<const SideEffect> recorded);
 
   // Makes `journal` the Core's active journal for one scope and restores the previous one on exit.
   class Scope {
@@ -99,7 +167,7 @@ public:
   // Guest time is advanced once, by the live path. The shadow path runs with the clock held.
   bool withholdsGuestTime() const;
 
-  Mode mode() const;
+  SideEffectMode mode() const;
   std::span<const SideEffect> effects() const;
   // The first reason this call cannot be compared, or nullopt.
   const std::optional<std::string> &unreplayable() const;
@@ -107,18 +175,54 @@ public:
   // difference), or nullopt when the two ordered logs are equal.
   std::optional<std::size_t> firstDivergence() const;
   std::uint64_t withheldPendingWork() const;
+  // Set the first time an effect is refused at `kMaxSideEffectsPerCall`, and never cleared. A journal
+  // holding one has a TRUNCATED log, so the differential must record a failure rather than compare it.
+  const std::optional<JournalBoundViolation> &boundViolation() const;
+
+  // THE UNWIND GUARD, and the reason it exists.
+  //
+  // A `throw` from a device access is only legal while every frame between here and the shadow
+  // boundary is HOST code, and the journal cannot see that from inside itself: a translated Lightrec
+  // frame sits directly below the device callback (`Core::mem_w*` is reached from generated code), so
+  // "am I in host code" is a fact about the CALLER, not about this frame. The executor is the only
+  // thing that knows, so it marks the one place translated code runs — `executeWithBoundary`, which
+  // `execute`/`executeUntilExit`/`executeFunction` all funnel through — and the journal then refuses to
+  // raise while the mark is set. It records the violation either way, so the fault is reported whether
+  // or not the call could be stopped.
+  //
+  // This is also why the LIVE path never unwinds at all: the original's device traffic comes from
+  // translated guest code, so a `throw` there would cross JIT frames on every overrun rather than only
+  // on the rare one. The live path's growth is already bounded by the executor's cycle budget, so it
+  // terminates through the ordinary bounded-exit path and the violation is reported when it does.
+  class TranslatedExecutionScope {
+  public:
+    explicit TranslatedExecutionScope(Core &core);
+    ~TranslatedExecutionScope();
+    TranslatedExecutionScope(const TranslatedExecutionScope &) = delete;
+    TranslatedExecutionScope &operator=(const TranslatedExecutionScope &) = delete;
+
+  private:
+    SideEffectJournal *journal_ = nullptr;
+  };
 
 private:
   void markUnreplayable(std::string reason);
+  // Refuses the effect and records the fault when the call is already at `kMaxSideEffectsPerCall`. The
+  // entry is NOT stored, so a refused effect can never shift the positions the replay compares by.
   void append(SideEffect effect);
+  void refuseAtBound(SideEffect effect);
   bool matchesRecordedAt(std::size_t index, const SideEffect &effect) const;
 
-  Mode mode_;
+  SideEffectMode mode_;
   std::span<const SideEffect> recorded_;
   std::vector<SideEffect> effects_;
   std::optional<std::string> unreplayable_;
   std::optional<std::size_t> firstDivergence_;
   std::uint64_t withheldPendingWork_ = 0;
+  std::optional<JournalBoundViolation> boundViolation_;
+  // How many `TranslatedExecutionScope`s are open. Only a NATIVE body is raiseable, because only it is
+  // host code all the way down.
+  std::uint32_t translatedExecutions_ = 0;
 };
 
 } // namespace psx::cpu

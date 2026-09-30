@@ -20,6 +20,7 @@
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
 #include "override_differential.h"
+#include "side_effect_journal.h"
 
 #include <array>
 #include <cstdint>
@@ -63,6 +64,14 @@ constexpr std::uint32_t sw(std::uint32_t rt, std::uint32_t base, std::int32_t of
 constexpr std::uint32_t jal(std::uint32_t target) {
   return 0x0C000000u | ((target >> 2u) & 0x03FFFFFFu);
 }
+// A PC-relative branch, with `atBranch` the address the branch itself will be assembled at. `jal` needs
+// no such argument because its target field is absolute; a branch's is a word displacement from the
+// instruction AFTER it, and getting that wrong produces a plausible address in no loaded image — which
+// is exactly the 0x0002021C fault this helper's first version produced.
+constexpr std::uint32_t bne(std::uint32_t rs, std::uint32_t rt, std::uint32_t atBranch, std::uint32_t target) {
+  const std::uint32_t displacement = (target - (atBranch + 4u)) >> 2u;
+  return (0x05u << 26) | (rs << 21) | (rt << 16) | (displacement & 0xFFFFu);
+}
 constexpr std::uint32_t jrRa() {
   return special(rRa, rZero, rZero, 0x08u);
 }
@@ -85,10 +94,18 @@ constexpr std::uint32_t kResult = 0x00080000u;     // where the function stores 
 constexpr std::uint32_t kExtraStore = 0x00080010u; // where a wrong override adds a store
 constexpr std::uint32_t kStackTop = 0x801FFF00u;
 constexpr std::uint32_t kIrqMask = 0x1F801074u; // I_MASK: a device register whose read has no side effect
+// I_STAT, the register the guest ACKS interrupts on, and the one this file's many-effect loop writes.
+// I_MASK was the first choice and is WRONG for it: a write there sets `PW_IRQ` (io_peripherals.cpp,
+// "unmasking may have made a latched bit deliverable"), so the loop armed the per-entry delivery gate
+// and the call came out INCOMPARABLE with "original path serviced asynchronous pending work" — a real
+// answer about a real hazard, and no evidence at all about the bound. A write to I_STAT only clears
+// latched bits, so a long sequence of them is device traffic with no control-flow consequence.
+constexpr std::uint32_t kIrqStat = 0x1F801070u;
 constexpr std::uint32_t kArgA = 0x1234u;
 constexpr std::uint32_t kArgB = 0x0101u;
 constexpr std::uint32_t kSum = kArgA + kArgB;
 constexpr std::uint32_t kCallerS0 = 0x5A5A0001u;
+constexpr std::uint32_t rT2 = 10;
 
 constexpr std::array<std::uint32_t, 7> kCallerCode = {
     addiu(rSp, rSp, -16),
@@ -114,6 +131,37 @@ constexpr std::array<std::uint32_t, 8> kSumCode = {
 // The same contract, plus a device read the result depends on: v0 = a0 + a1 + I_MASK.
 constexpr std::array<std::uint32_t, 7> kDeviceCode = {
     lui(rT1, 0x1F80u),
+    lw(rT0, rT1, 0x1074),
+    addu(rV0, rA0, rA1),
+    addu(rV0, rV0, rT0),
+    sw(rV0, rA2, 0),
+    jrRa(),
+    nop(),
+};
+
+// THE NEGATIVE'S ORIGINAL, docs/issues/0141: a real guest function whose device traffic is a long
+// BOUNDED sequence — one I_MASK write per pass of a counting loop, 4096 of them, then the usual sum.
+// The loop is emitted as a real MIPS back-edge rather than a straight line so the effects come from
+// translated guest code executing the device funnel on every pass, which is the path a bound has to
+// leave alone. The counter ends at 0, so the write sequence is 4096..1 and a native that reproduces
+// it exactly produces a log of 4097 effects (4096 writes plus the one device read) — the count the
+// case asserts.
+constexpr std::uint32_t kBoundedEffectCount = 4096;
+// THE LOOP'S OWN INDICES, written out because a MIPS branch displacement is measured from the address
+// AFTER the branch: passing the loop body's address instead of the branch's own makes the back-edge
+// point at itself, and the run spends its whole budget in a loop that never exits. That is a real
+// defect this fixture hit, not a hypothetical.
+constexpr std::uint32_t kManyEffectLoopIndex = 2;
+constexpr std::uint32_t kManyEffectBranchIndex = 4;
+constexpr std::array<std::uint32_t, 12> kManyEffectCode = {
+    lui(rT1, 0x1F80u),
+    addiu(rT2, rZero, static_cast<std::int32_t>(kBoundedEffectCount)),
+    // ---- the loop body: ack I_STAT, decrement, branch back, delay slot ----
+    sw(rT2, rT1, 0x1070),
+    addiu(rT2, rT2, -1),
+    bne(rT2, rZero, kFunction + kManyEffectBranchIndex * 4u, kFunction + kManyEffectLoopIndex * 4u),
+    nop(),
+    // ---- after the loop ----
     lw(rT0, rT1, 0x1074),
     addu(rV0, rA0, rA1),
     addu(rV0, rV0, rT0),
@@ -227,6 +275,17 @@ void correctPatching(Core *core) {
   core->mem_w32(target, core->mem_r32(core->r[rA2] + 4u));
 }
 
+// THE RUNAWAY, docs/issues/0141. A native override whose body never returns and stores to a device
+// address on every pass. The guest original is `kSumCode` — a correct, two-effect-free body — so the
+// whole overrun happens on the SHADOW path, which is the path a host body runs and the only one the
+// bound may unwind out of.
+void endlessDeviceStore(Core *core) {
+  ++g_nativeCalls;
+  for (std::uint32_t pass = 0;; ++pass) {
+    core->mem_w32(kIrqMask, pass);
+  }
+}
+
 template <std::size_t N> void writeCode(Core &core, std::uint32_t at, const std::array<std::uint32_t, N> &code) {
   for (std::size_t i = 0; i < N; ++i) {
     core.mem_w32(at + static_cast<std::uint32_t>(i) * 4u, code[i]);
@@ -235,6 +294,31 @@ template <std::size_t N> void writeCode(Core &core, std::uint32_t at, const std:
 
 std::string reportPath(const char *name) {
   return std::string("override_differential_test/") + name + ".json";
+}
+
+// VmHWM from /proc/self/status: the process's PEAK resident set, in kB, which is the quantity
+// docs/issues/0141 is about. It is a high-water mark, so it only ever rises — which is what makes it
+// the right number for a bound: a runaway override that appends to the journal forever drives it up
+// without bound, and a call that stops at a named bound leaves it within a stated ceiling.
+//
+// REFUSES, never returns 0. A machine without /proc (macOS, Windows) has no VmHWM to read, and a
+// reader that got 0 there would compare 0 against a 64 MB ceiling and call the runaway bounded — the
+// silent-zero shape. So the bound is stated as "unavailable" and the case that needs it fails loudly.
+std::optional<long long> peakResidentKb() {
+  std::ifstream status("/proc/self/status");
+  std::string line;
+  while (std::getline(status, line)) {
+    const std::string_view text(line);
+    if (text.rfind("VmHWM:", 0) != 0) {
+      continue;
+    }
+    const std::size_t first = text.find_first_of("0123456789");
+    if (first == std::string_view::npos) {
+      return std::nullopt;
+    }
+    return std::stoll(std::string(text.substr(first)));
+  }
+  return std::nullopt;
 }
 
 struct Fixture {
@@ -453,6 +537,124 @@ static void test_an_address_selector_selects_the_override_at_that_entry(void) {
   CHECK_EQ(f.stats().match, 1u);
 }
 
+// THE FALSIFIER, docs/issues/0141. A native override that stores to a device address in an endless
+// loop, run under the differential, must:
+//
+//   - TERMINATE, on the bound rather than by exhausting the host's memory. Without the bound the loop
+//     appends to the shadow journal at ~6 MB/s until `std::bad_alloc`; the measurement below is the
+//     evidence that it does not.
+//   - REPORT the bound as a MISMATCH, not as an incomparable skip: an incomparable verdict is tolerated
+//     when other calls of the same key compare, which would make the worst kind of wrong override look
+//     like a call with nothing to compare.
+//   - NAME the override, its address, the path, and the bound, so the reader knows which override to
+//     look at and can tell the bound from any other failure.
+//   - LEAVE THE RUN ON THE ORIGINAL'S STATE, which is the property every other verdict has and the one
+//     that makes the process still trustworthy after a runaway sample.
+//
+// The RSS ceiling is stated against the journal's own bound rather than picked: one journal of
+// `kMaxSideEffectsPerCall` `SideEffect` records is 16 bytes each, so the shadow journal tops out at
+// 16 MiB and the whole process is given 8x that plus the snapshots, at 192 MiB. A run without the
+// bound reached 7.4 GB in 16 minutes, so this is a ceiling the unbounded case cannot approach — and
+// the case is OBSERVED TO FAIL CORRECTLY: with the bound check removed, this exact test terminates in
+// `std::bad_alloc` from `SideEffectJournal::append`, which is the incident, reproduced.
+static void test_a_native_that_loops_forever_storing_to_a_device_terminates_at_the_journal_bound(void) {
+  CHECK(peakResidentKb().has_value());
+  const std::optional<long long> before = peakResidentKb();
+  CHECK(before.has_value());
+  Fixture f("journal-bound", kSumCode, &endlessDeviceStore);
+  f.call();
+  const std::optional<long long> after = peakResidentKb();
+  CHECK(after.has_value());
+  const DifferentialKeyStats &stats = f.stats();
+  CHECK_EQ(stats.mismatch, 1u);
+  CHECK_EQ(stats.match, 0u);
+  CHECK_EQ(stats.incomparable, 0u); // the fault is NOT an incomparable skip
+  // The runaway stopped at the bound on the SHADOW path, and stopped the CALL rather than merely
+  // refusing to store: `stoppedCall` is the difference between a fault and a call that keeps running.
+  CHECK_EQ(stats.journalBoundFaults, 1u);
+  CHECK(stats.firstJournalBoundFault.has_value());
+  const psx::cpu::JournalBoundViolation &violation = *stats.firstJournalBoundFault;
+  CHECK_EQ(violation.mode, psx::cpu::SideEffectMode::Replay);
+  CHECK(violation.stoppedCall);
+  CHECK_EQ(violation.effects, psx::cpu::kMaxSideEffectsPerCall);
+  CHECK_EQ(violation.refused, 1u);
+  CHECK_EQ(violation.offending.kind, psx::cpu::SideEffectKind::DeviceWrite);
+  CHECK_EQ(violation.offending.address, kIrqMask);
+  const std::string described = violation.describe();
+  CHECK(contains(described, "native path"));
+  CHECK(contains(described, std::to_string(psx::cpu::kMaxSideEffectsPerCall)));
+  CHECK(contains(described, "not a comparison"));
+  // The fault names the override and its address, so the report points at the override to fix.
+  const std::string reason = stats.firstMismatch->reason;
+  CHECK(contains(reason, "under-test"));
+  CHECK(contains(reason, "0x00010100"));
+  CHECK(contains(reason, "journal bound"));
+  // AND IT IS IN THE REPORT, not only the log. The gate reads this file, so a bound fault that exists
+  // only in a log line would pass the gate that exists to catch it.
+  const psx::cpu::OverrideDifferential &differential = *f.core().nativeDispatcher().differential();
+  CHECK(differential.writeReport(true));
+  const std::string report = readFile(reportPath("journal-bound"));
+  CHECK(contains(report, "\"journal_bound_faults\": 1"));
+  CHECK(contains(report, "\"path\": \"native\""));
+  CHECK(contains(report, "\"stopped_call\": true"));
+  CHECK(contains(report, "\"bound\": 1048576"));
+  CHECK(contains(report, "per-call journal bound"));
+  CHECK(after.value() - before.value() < 192 * 1024);
+  // The run continues from the original: its sum is in v0 and in RAM, and the endless store never
+  // reached the device.
+  CHECK_EQ(f.core().r[rV0], kSum);
+  CHECK_EQ(f.core().mem_r32(kResult), kSum);
+  CHECK_EQ(f.game->hle.i_mask, 0u);
+}
+
+// THE NEGATIVE. A real call with MANY effects, all under the bound, must still MATCH with its journal
+// intact — otherwise the bound is not a bound on the runaway, it is a rejection of volume.
+//
+// The shape is the one a real override has: a bounded sequence of device writes with a count the
+// guest computes. `kBoundedEffectCount` effects is 4096 — 28x the largest effect count measured in any
+// real call across five titles (145, `side_effect_journal.h` names the measurement), and 1/256th of
+// the bound — so it is BOTH a call big enough that a bound fitted to real traffic would reject it and
+// a call a runaway still cannot pass.
+//
+// The native reproduces the original's write SEQUENCE, because a differential compares ordered logs:
+// making 4096 effects against an original that made 1 is a mismatch for the right reason and would say
+// nothing about the bound.
+void manyEffectSum(Core *core) {
+  ++g_nativeCalls;
+  for (std::uint32_t count = kBoundedEffectCount; count != 0; --count) {
+    core->mem_w32(kIrqStat, count);
+  }
+  const std::uint32_t value = core->r[rA0] + core->r[rA1] + core->mem_r32(kIrqMask);
+  core->r[rV0] = value;
+  core->mem_w32(core->r[rA2], value);
+}
+
+static void test_a_real_call_with_many_effects_under_the_bound_still_matches_with_its_journal_intact(void) {
+  Fixture f("many-effects", kManyEffectCode, &manyEffectSum);
+  f.game->hle.i_mask = 0x55u;
+  f.call();
+  const DifferentialKeyStats &stats = f.stats();
+  CHECK_EQ(stats.match, 1u);
+  CHECK_EQ(stats.mismatch, 0u);
+  CHECK_EQ(stats.incomparable, 0u);
+  CHECK_EQ(stats.journalBoundFaults, 0u);
+  CHECK_EQ(f.core().mem_r32(kResult), kSum + 0x55u);
+  // THE JOURNAL IS INTACT, which the verdict alone does not say. A `match` is also what a pair of EMPTY
+  // logs produces, so a funnel that had stopped journaling would report this case green; the count
+  // below is what says the effects were really recorded, and it is the ORIGINAL's log — the one the
+  // shadow path reproduces, measured on both sides of the same call.
+  // The 4096 device writes, the one device read, and the result store into RAM (not the device funnel).
+  CHECK_EQ(stats.largestSampledCallEffects, kBoundedEffectCount + 1u);
+  CHECK_EQ(stats.largestSampledCallNumber, 1u);
+  CHECK(stats.largestSampledCallEffects < psx::cpu::kMaxSideEffectsPerCall);
+  const psx::cpu::OverrideDifferential &differential = *f.core().nativeDispatcher().differential();
+  CHECK(differential.writeReport(true));
+  const std::string report = readFile(reportPath("many-effects"));
+  CHECK(contains(report, "\"largest_sampled_call_effects\": 4097"));
+  CHECK(contains(report, "\"journal_bound_faults\": 0"));
+  CHECK(contains(report, "\"first_journal_bound\": null"));
+}
+
 // RESTORED CODE IS NEVER STALE. The original patches kPatchTarget's instruction; the native (correct)
 // executes kPatchTarget from the restored, UNPATCHED bytes, so Lightrec holds a block translated from
 // them. Continuing from the original puts the patched bytes back — and a later call must execute them.
@@ -492,5 +694,7 @@ int main() {
   RUN(a_requested_override_with_zero_samples_is_a_failure);
   RUN(an_address_selector_selects_the_override_at_that_entry);
   RUN(restoring_the_originals_code_bytes_invalidates_the_translated_block);
+  RUN(a_native_that_loops_forever_storing_to_a_device_terminates_at_the_journal_bound);
+  RUN(a_real_call_with_many_effects_under_the_bound_still_matches_with_its_journal_intact);
   return pt_summary();
 }

@@ -25,6 +25,14 @@
 // is not run for it. A native that performs such a service is likewise incomparable. Device models reached
 // by native code DIRECTLY in C++, bypassing `Core`'s memory API, are not observed by any of this.
 //
+// THE JOURNAL'S PER-CALL BOUND IS A MISMATCH, not an incomparable. One call producing more than
+// `psx::cpu::kMaxSideEffectsPerCall` effects is a runaway — measured in docs/issues/0141, where a
+// candidate override looped inside one call and grew the journal to 7.4 GB — and a verdict that lets
+// such a call pass as "nothing to compare" is the failure the bound exists to prevent. Either path
+// reaching the bound is a MISMATCH naming the override, its address, the path, the effect, and the
+// bound; the run continues from the ORIGINAL's state either way, and a native stopped at the bound is
+// stopped by an unwind out of its own body, never by a `throw` across a translated Lightrec frame.
+//
 // Output: one log line per verdict CHANGE per override, a summary with denominators at shutdown, and a
 // machine-readable JSON report (`tools/override_differential_gate.py` gates on it). A requested selector
 // that sampled zero calls is a FAILURE in both.
@@ -34,6 +42,7 @@
 #include "image_identity.h"
 #include "native_dispatch.h"
 #include "override_differential_config.h"
+#include "side_effect_journal.h"
 
 #include <cstdint>
 #include <map>
@@ -88,6 +97,18 @@ struct DifferentialKeyStats {
   std::optional<std::uint64_t> firstMismatchCall;
   std::optional<DifferentialOutcome> firstMismatch;
   std::optional<DifferentialVerdict> lastVerdict;
+  // THE LARGEST SAMPLED CALL'S JOURNAL, and the total the bound above it. These are the measurement
+  // `psx::cpu::kMaxSideEffectsPerCall` is sized from, reported on every run so the constant's comment
+  // is checkable against a real corpus instead of being a number nobody can test. Both are counts
+  // across the key's sampled calls, so a key that was never sampled reports 0 of 0 — the same zero
+  // that means "scanned and found none" only when `sampled` is non-zero, which the summary states.
+  std::size_t largestSampledCallEffects = 0;
+  std::uint64_t largestSampledCallNumber = 0;
+  // Sampled calls that stopped at the journal's per-call bound, and the first of them. A non-zero count
+  // is a gate failure; it is recorded separately from `mismatch` so a reader can tell "the two paths
+  // differ" from "one path could not be journaled at all".
+  std::uint64_t journalBoundFaults = 0;
+  std::optional<psx::cpu::JournalBoundViolation> firstJournalBoundFault;
 };
 
 class OverrideDifferential {

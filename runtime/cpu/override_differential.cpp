@@ -39,6 +39,24 @@ DifferentialOutcome incomparable(std::string reason) {
   return outcome;
 }
 
+// THE JOURNAL'S PER-CALL BOUND, AS A VERDICT.
+//
+// It is a MISMATCH and not an INCOMPARABLE because those two answers mean opposite things to whoever
+// reads the gate. Incomparable is a statement about the CALL: "there was nothing here to compare", and
+// `failuresOf` treats a selector whose samples are all incomparable as a failure anyway, but a single
+// incomparable call among comparable ones is tolerated. A bound violation is a statement about a
+// LOG that could not be completed, so comparing around it would report agreement the run never
+// measured. Reporting it as mismatch makes the run FAIL, which is what docs/issues/0141 asks for: a
+// runaway override must come back as a verdict, not as a skip.
+DifferentialOutcome
+journalBoundFault(const DifferentialKeyStats &stats, const JournalBoundViolation &violation, std::size_t journaled) {
+  DifferentialOutcome outcome;
+  outcome.verdict = DifferentialVerdict::Mismatch;
+  outcome.reason = lucent::format("{} @0x{:08X}: {}", stats.name, stats.key.address, violation.describe());
+  outcome.sideEffectsOriginal = journaled;
+  return outcome;
+}
+
 std::string outcomeDetail(const DifferentialOutcome &outcome) {
   if (outcome.verdict == DifferentialVerdict::Incomparable) {
     return outcome.reason;
@@ -160,7 +178,7 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
   const MachineSnapshot entry = MachineSnapshot::capture(core_);
 
   // 1. The original, live: its device traffic reaches the devices and is journaled.
-  SideEffectJournal live(SideEffectJournal::Mode::Record, {});
+  SideEffectJournal live(SideEffectMode::Record, {});
   ExecutionResult original;
   {
     const SideEffectJournal::Scope journal(core_, live);
@@ -182,15 +200,62 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
     record(stats, incomparable(*live.unreplayable()));
     return original;
   }
+  // THE ORIGINAL OVERRAN THE JOURNAL'S PER-CALL BOUND. Its log is truncated, so there is nothing to
+  // replay and the native must not run: the verdict is the fault, and the run continues from the
+  // original's state exactly as every other outcome does.
+  if (const auto &violation = live.boundViolation()) {
+    record(stats, journalBoundFault(stats, *violation, live.effects().size()));
+    return original;
+  }
+  // The measurement `kMaxSideEffectsPerCall` is sized from, taken on the ORIGINAL's journal because
+  // that is the log the shadow path must reproduce — a native that made more effects than the original
+  // is already a mismatch the judge reports, and its own count is not what sizes the storage.
+  if (live.effects().size() > stats.largestSampledCallEffects) {
+    stats.largestSampledCallEffects = live.effects().size();
+    stats.largestSampledCallNumber = stats.callsSeen;
+  }
   const MachineSnapshot afterOriginal = MachineSnapshot::capture(core_);
 
   // 2. The native, against the restored entry state, with the original's journal replayed to it.
   stats.restoredRanges += entry.restoreInto(core_).rangesWritten;
-  SideEffectJournal replay(SideEffectJournal::Mode::Replay, live.effects());
+  SideEffectJournal replay(SideEffectMode::Replay, live.effects());
   ExecutionResult native;
+  bool stoppedAtBound = false;
   {
     const SideEffectJournal::Scope journal(core_, replay);
-    native = invokeNativeFunction(core_, key.address, function, stats.name);
+    // THE RUNAWAY CASE, docs/issues/0141. A native override that never returns kept appending to
+    // `replay` at ~6 MB/s until the host died. The journal now refuses past its per-call bound and
+    // raises out of HERE, where every frame is host code: a native body is the one place on a shadow
+    // path with no translated frame below it, which is why `refuseAtBound` throws only in that case.
+    //
+    // Nothing is decided in the catch. `NativeExecutionScope` has already restored the core's PC and
+    // active address by the time it runs, and the journal stays ATTACHED until this scope ends — so the
+    // state restore, the snapshot and the verdict all happen below with the journal detached, exactly
+    // as they do on every other path. Deciding here would mean writing to the Core and to `stats` from
+    // inside a catch, which is how a fault path ends up behaving differently from a normal one.
+    try {
+      native = invokeNativeFunction(core_, key.address, function, stats.name);
+    } catch (const JournalBoundExceeded &) {
+      stoppedAtBound = true;
+    }
+  }
+
+  if (stoppedAtBound) {
+    // 3. Continue from the original's state. The native was stopped MID-LOOP, so its state is DISCARDED
+    // rather than compared — comparing a partial body to a complete one would judge a call that never
+    // finished. Only the original's result reaches the caller.
+    stats.restoredRanges += afterOriginal.restoreInto(core_).rangesWritten;
+    ++stats.journalBoundFaults;
+    if (!stats.firstJournalBoundFault) {
+      stats.firstJournalBoundFault = replay.boundViolation();
+    }
+    // `refuseAtBound` records the violation before it raises, so it is present by construction. The
+    // `value_or` is a total function over an absent record rather than an unhandled case, and its
+    // `describe()` still names the bound — so even a lost record reports the bound rather than nothing.
+    record(
+        stats,
+        journalBoundFault(stats, replay.boundViolation().value_or(JournalBoundViolation{}), replay.effects().size()));
+    return original;
   }
   const MachineSnapshot afterNative = MachineSnapshot::capture(core_);
 

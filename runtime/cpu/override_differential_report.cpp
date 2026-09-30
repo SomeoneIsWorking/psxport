@@ -90,6 +90,26 @@ std::vector<std::string> failuresOf(const OverrideDifferential &differential) {
                                         stats.sampled));
     }
   }
+  // A BOUND FAULT IS REPORTED SEPARATELY from a mismatch, and stated in full. A mismatch means the two
+  // paths completed and disagreed; a bound fault means one of them could not be journaled at all, so a
+  // reader shown only the mismatch count would be told the wrong kind of thing happened. The first one
+  // is carried whole — path, offending effect, the bound, whether the call was stopped — because that
+  // sentence is the whole diagnosis.
+  for (const DifferentialKeyStats &stats : differential.keys()) {
+    if (stats.journalBoundFaults == 0) {
+      continue;
+    }
+    failures.push_back(lucent::format("{} @0x{:08X}: {} of {} sampled call(s) reached the {}-effect per-call journal "
+                                      "bound; first at call {}: {}",
+                                      stats.name,
+                                      stats.key.address,
+                                      stats.journalBoundFaults,
+                                      stats.sampled,
+                                      psx::cpu::kMaxSideEffectsPerCall,
+                                      stats.firstMismatchCall.value_or(0),
+                                      stats.firstJournalBoundFault ? stats.firstJournalBoundFault->describe()
+                                                                   : std::string("violation not retained")));
+  }
   return failures;
 }
 
@@ -109,6 +129,27 @@ std::string mismatchJson(const DifferentialKeyStats &stats) {
                         outcome.memoryBytesDiffering);
 }
 
+// The journal's per-call bound, as data. `null` when no sampled call reached it, which is the ordinary
+// case and must read as "no bound fault" rather than as an absent measurement: `journal_bound_faults`
+// beside it is the denominator, so 0 faults with a non-zero `sampled` means "scanned, none reached the
+// bound", and 0 of 0 means the key was never sampled.
+std::string journalBoundJson(const DifferentialKeyStats &stats) {
+  if (!stats.firstJournalBoundFault) {
+    return "null";
+  }
+  const psx::cpu::JournalBoundViolation &violation = *stats.firstJournalBoundFault;
+  return lucent::format(
+      "{{\"call\": {}, \"path\": {}, \"bound\": {}, \"effects_journaled\": {}, \"effects_refused\": {}, "
+      "\"stopped_call\": {}, \"offending\": {}}}",
+      stats.firstMismatchCall.value_or(0),
+      jsonString(violation.mode == psx::cpu::SideEffectMode::Record ? "original" : "native"),
+      psx::cpu::kMaxSideEffectsPerCall,
+      violation.effects,
+      violation.refused,
+      violation.stoppedCall ? "true" : "false",
+      jsonString(psx::cpu::describeSideEffect(violation.offending)));
+}
+
 std::string keyJson(const DifferentialKeyStats &stats) {
   std::string reasons;
   for (const auto &[reason, count] : stats.incomparableByReason) {
@@ -118,6 +159,8 @@ std::string keyJson(const DifferentialKeyStats &stats) {
       "{{\"name\": {}, \"address\": {}, \"image_id\": {}, \"image_generation\": {}, "
       "\"calls_seen\": {}, \"sampled\": {}, \"match\": {}, \"mismatch\": {}, \"incomparable\": {}, "
       "\"incomparable_by_reason\": {{{}}}, \"dead_stack_bytes_ignored\": {}, \"restored_ranges\": {}, "
+      "\"largest_sampled_call_effects\": {}, \"largest_sampled_call_number\": {}, "
+      "\"effects_bound\": {}, \"journal_bound_faults\": {}, \"first_journal_bound\": {}, "
       "\"first_mismatch\": {}}}",
       jsonString(stats.name),
       hexAddress(stats.key.address),
@@ -131,6 +174,11 @@ std::string keyJson(const DifferentialKeyStats &stats) {
       reasons,
       stats.deadStackBytesIgnored,
       stats.restoredRanges,
+      stats.largestSampledCallEffects,
+      stats.largestSampledCallNumber,
+      psx::cpu::kMaxSideEffectsPerCall,
+      stats.journalBoundFaults,
+      journalBoundJson(stats),
       mismatchJson(stats));
 }
 
@@ -202,6 +250,21 @@ void OverrideDifferential::logSummary() const {
                  stats.incomparable,
                  reasons.empty() ? "" : " — ",
                  reasons);
+    // THE MEASUREMENT THE JOURNAL'S BOUND IS SIZED FROM, with its denominator on the same line, and
+    // the two cases named apart. A key whose sampled calls journaled no effect at all (a pure-RAM
+    // function) and a key that was NEVER SAMPLED both report a largest count of 0, and those are
+    // different facts: the first is a measurement of zero, the second is no measurement.
+    lucent::info("override-diff",
+                 "summary {} @0x{:08X}: largest sampled call journaled {} effect(s) (call {} of {} "
+                 "sampled) against the {}-effect per-call bound; {} call(s) reached the bound{}",
+                 stats.name,
+                 stats.key.address,
+                 stats.largestSampledCallEffects,
+                 stats.largestSampledCallNumber,
+                 stats.sampled,
+                 psx::cpu::kMaxSideEffectsPerCall,
+                 stats.journalBoundFaults,
+                 stats.sampled == 0 ? " — NOT MEASURED, 0 call(s) were sampled" : "");
   }
   const std::vector<std::string> failures = failuresOf(*this);
   for (const std::string &failure : failures) {
