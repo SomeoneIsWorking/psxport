@@ -67,7 +67,7 @@ Success conditions:
   first divergence and reports reachability and denominators.
 - Every released host architecture demonstrates nonzero Lightrec execution, invalidation, correct
   state boundaries, and an interactive frame-time/correctness budget.
-- Enhancements such as widescreen and interpolation remain explicit intentional divergences layered
+- Enhancements such as widescreen, interpolation, and loading removal remain explicit intentional divergences layered
   on a faithful baseline.
 
 Non-goals: pixel-perfect matching as a product gate or treating the old generated-C product as a

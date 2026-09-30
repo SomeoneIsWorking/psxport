@@ -128,8 +128,14 @@ X4; Tomba! 1/2; Tekken 3; and Spider-Man 1/2.
 
 Tekken 3 (`SLUS_004.02`), Tomba! 1 (`SCUS_942.36`), and Mega Man X4 (`SLUS_005.61`) are already 60 fps, so their rendering-enhancement scope is
 widescreen only: no fps60 mode, interpolation/lerp, or temporal pipeline added solely to support
-interpolation. This does not apply to Tomba! 2 (`SCUS_944.54`, then `MAIN.EXE`). X4 separately retains its later load-removal and
-drop-in co-op goals. All planned lineage repositories now have public, reproducible trees. Most newly
+interpolation. This does not apply to Tomba! 2 (`SCUS_944.54`, then `MAIN.EXE`). X4 separately retains its drop-in co-op goal.
+
+**Loading removal is a goal of EVERY title, including the three 60 fps ones** — asynchronous loading, no
+loading-only screens, logos cancellable with Start/Cross through the recovered route, authored transitions
+kept. Each title's `docs/project-goals.md` carries it as its own goal with a state item; it is not a
+rendering enhancement, so the widescreen-only scope above does not exclude it.
+
+All planned lineage repositories now have public, reproducible trees. Most newly
 added titles are honest harness-first scaffolds, not implementation coverage; no widescreen or
 interpolation support is implied by repository existence.
 
@@ -273,11 +279,11 @@ extension**, so `find -iname 'SCUS*.BIN'` misses it; the correct probe is `-size
 | `spyro/` | Spyro 1/2/3, the Insomniac-lineage repository; Spyro 1 (`SCUS_942.28`) is the current implementation |
 | `spider1/` | Spider-Man 1/2, the Neversoft-lineage repository; Spider-Man 1 (`SLUS_008.75`, USA) is the current implementation |
 | `vagrant/` | Vagrant Story (`SLUS_010.40`, USA). Vendors the CC0 `rood-reverse` decomp. Defining fact: the boot exe is ~15% of the code, 933,925 B lives in `.PRG` overlays |
-| `megamanx4/` | Mega Man X4 (`SLUS_005.61`, USA) — already 60 fps, so no fps60, native-producer, lerp, or native-depth pipeline. Wants widescreen + load removal + drop-in co-op. Vendors the AGPL-3.0 `mmx4` decomp, which may NOT be lifted into `psxport` |
+| `megamanx4/` | Mega Man X4 (`SLUS_005.61`, USA) — already 60 fps, so no fps60, native-producer, lerp, or native-depth pipeline. Wants widescreen + drop-in co-op (plus the all-title load removal). Vendors the AGPL-3.0 `mmx4` decomp, which may NOT be lifted into `psxport` |
 | `crash/` | Crash Bandicoot 1/2/3 in one architecture repository; harness-first scaffold |
 | `ctr/` | Crash Team Racing; standalone harness-first scaffold |
 | `crashbash/` | Crash Bash; standalone harness-first scaffold |
-| `tekken3/` | Tekken 3 (`SLUS_004.02`); standalone harness-first scaffold, already 60 fps and targeting widescreen only |
+| `tekken3/` | Tekken 3 (`SLUS_004.02`); standalone harness-first scaffold, already 60 fps; widescreen is its only rendering enhancement |
 | `toystory2/` | Existing Toy Story 2 (`SLUS_008.93`, USA) checkout — not in the active title scope above |
 | `coord/` | **UNTRACKED, machine-local, EPHEMERAL ONLY**: `claims/` (the area locks — a lock coordinates the agents on THIS machine, so it must not be tracked), plus agent scratch. Nothing durable belongs here |
 
