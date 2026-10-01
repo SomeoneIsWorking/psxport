@@ -79,6 +79,9 @@ void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now);
 // Service due drive and command events on the guest thread. Returns 1 only when a response became
 // current and raised a new controller IRQ edge; an early wake leaves existing deadlines armed.
 int cdc_drive_service(CdcState *s);
+// Absolute guest-instruction timestamp of the earliest armed drive or command deadline. Returns 0,
+// writing nothing, when no deadline is armed. The deadline domain is the injected tick source's.
+int cdc_next_deadline_ticks(const CdcState *s, uint64_t *absoluteTicks);
 // Read the current controller response type without consuming its response FIFO. Zero means the
 // queue is empty. Stream callback owners use this to dispatch only for a real INT1 data-ready
 // response, never from a host-side pacing estimate alone.

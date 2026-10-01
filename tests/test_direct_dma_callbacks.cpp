@@ -7,6 +7,7 @@
 #include "game_runtime.h"
 #include "image_identity.h"
 #include "native_dispatch.h"
+#include "platform_hle.h"
 #include "testutil.h"
 
 #include <memory>
@@ -44,7 +45,8 @@ void installCallback(Game &game) {
 
 class DirectRuntime final : public GameRuntime {
 public:
-  DirectRuntime() {
+  explicit DirectRuntime(uint32_t guestDmaTable = 0) {
+    plan_.dmaCallbackTable = guestDmaTable;
     image_.residentText = {kCallback & 0x1FFFFFFFu, (kCallback & 0x1FFFFFFFu) + 4u};
     image_.backtraceText = image_.residentText;
   }
@@ -64,9 +66,13 @@ public:
   bool guestVramIsPicture(const Game &) const override {
     return true;
   }
+  const PlatformHlePlan *platformHlePlan() const override {
+    return &plan_;
+  }
 
 private:
   GuestProgramImage image_{};
+  PlatformHlePlan plan_{};
 };
 
 std::unique_ptr<Game> freshGame() {
@@ -75,6 +81,15 @@ std::unique_ptr<Game> freshGame() {
   callbackCalls = 0;
   callbackA0 = 0;
   callbackA1 = 0;
+  auto game = std::make_unique<Game>();
+  installCallback(*game);
+  return game;
+}
+
+std::unique_ptr<Game> freshGuestTableGame() {
+  static DirectRuntime runtime(kLegacyTable);
+  psxport_install_game(runtime);
+  callbackCalls = 0;
   auto game = std::make_unique<Game>();
   installCallback(*game);
   return game;
@@ -176,6 +191,30 @@ void test_legacy_runtime_keeps_its_guest_callback_table_authoritative() {
   CHECK_EQ(callbackCalls, 1);
 }
 
+// A direct runtime whose own libapi keeps the table in guest RAM declares its base on the platform
+// plan; the framework then calls the CURRENT guest word and never consults the native registry.
+void test_direct_runtime_with_a_declared_guest_table_dispatches_the_guest_word() {
+  auto game = freshGuestTableGame();
+  game->core.mem_w32(kLegacyTable + 4u * static_cast<uint32_t>(DmaChannel::Cdrom), kCallback);
+  game->dmaCallbacks.exchange(DmaChannel::Cdrom, kWrongDirectCallback);
+
+  completeDma3(*game);
+  game->hle.irqPoll(&game->core);
+
+  CHECK_EQ(callbackCalls, 1);
+}
+
+void test_direct_runtime_with_a_declared_guest_table_and_an_empty_slot_delivers_nothing() {
+  auto game = freshGuestTableGame();
+  game->dmaCallbacks.exchange(DmaChannel::Cdrom, kCallback); // ignored: the guest table is authoritative
+
+  completeDma3(*game);
+  game->hle.irqPoll(&game->core);
+
+  CHECK_EQ(callbackCalls, 0);
+  CHECK((game->core.pending_work & Core::PW_IRQ) == 0);
+}
+
 } // namespace
 
 int main() {
@@ -184,5 +223,7 @@ int main() {
   RUN(dma_completion_callback_runs_on_the_exception_stack);
   RUN(direct_runtime_without_registration_consumes_without_dispatch);
   RUN(legacy_runtime_keeps_its_guest_callback_table_authoritative);
+  RUN(direct_runtime_with_a_declared_guest_table_dispatches_the_guest_word);
+  RUN(direct_runtime_with_a_declared_guest_table_and_an_empty_slot_delivers_nothing);
   return pt_summary();
 }

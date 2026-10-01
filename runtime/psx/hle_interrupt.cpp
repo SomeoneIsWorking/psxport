@@ -7,8 +7,10 @@
 #include "dma_irq.h"
 #include "execution_control.h"
 #include "game.h"
+#include "game_runtime.h"
 #include "guest_call.h"
 #include "hle.h"
+#include "platform_hle.h"
 
 #include <cstdlib>
 #include <lucent/log.h>
@@ -17,6 +19,17 @@ namespace {
 
 // MIPS o32 argument and result registers used by the BIOS interrupt-chain ABI.
 enum { A0 = 4, V0 = 2, SP = 29 };
+
+// The guest-owned DMA callback table base, from whichever seam the runtime declared it on; 0 when the
+// title keeps its callbacks in the native registry instead.
+uint32_t guestDmaCallbackTable(const Core &core) {
+  if (core.cfg) {
+    return core.cfg->dmaCallbackTable;
+  }
+  const GameRuntime *runtime = core.game ? core.game->runtime : nullptr;
+  const PlatformHlePlan *plan = runtime ? runtime->platformHlePlan() : nullptr;
+  return plan ? plan->dmaCallbackTable : 0;
+}
 
 static void dispatchCustomExceptionExit(Core *core, uint32_t address) {
   psx::cpu::dispatchGuestToReturn0(
@@ -95,19 +108,19 @@ void Hle::irqPoll(Core *c) {
   // EVERY channel, lowest first, exactly as the BIOS handler scans them. It used to be channel 3
   // alone, and that hid a whole subsystem: Spider-Man's FMV player registers an MDEC-out (channel 1)
   // callback that uploads each decoded strip to VRAM, and it was never called once in a run.
-  const uint32_t table = c->cfg ? c->cfg->dmaCallbackTable : 0;
+  const uint32_t table = guestDmaCallbackTable(*c);
   for (int ch = 0; ch < 7; ch++) {
     if (!dma_done_owed(ch)) {
       continue;
     }
     const uint32_t slot = dma_callback_slot(table, ch);
     const uint32_t cb =
-        c->cfg ? (slot ? c->mem_r32(slot) : 0) : c->game->dmaCallbacks.current(static_cast<DmaChannel>(ch));
+        (c->cfg || table) ? (slot ? c->mem_r32(slot) : 0) : c->game->dmaCallbacks.current(static_cast<DmaChannel>(ch));
     lucent::debug("dmairq",
                   "owed ch{} -> callback {:08X} ({} {:08X}){}",
                   ch,
                   cb,
-                  c->cfg ? "guest slot" : "direct registry",
+                  (c->cfg || table) ? "guest slot" : "direct registry",
                   slot,
                   in_irq ? "  DEFERRED: a guest callback is running" : "");
     // A COMPLETION IS ONLY CONSUMED WHEN IT IS DELIVERED. Taking it first and then declining the

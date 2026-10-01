@@ -701,6 +701,14 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       if (untilFieldDue != 0) {
         segmentCycleBudget = std::min(segmentCycleBudget, untilFieldDue);
       }
+      // And at the next device deadline. Device time is folded into the clock on a device register
+      // access or at a segment end, so a guest spinning on plain RAM (an STR player's bounded pop of a
+      // ring only the CD interrupt fills) would otherwise run the whole budget before its interrupt
+      // exists. Zero means the deadline is already due: the accounting below folds it, no cap needed.
+      const std::optional<std::uint64_t> untilDeviceEvent = impl.core.game->timing.ticksUntilDeviceEvent();
+      if (untilDeviceEvent && *untilDeviceEvent != 0) {
+        segmentCycleBudget = std::min(segmentCycleBudget, *untilDeviceEvent);
+      }
     }
     // THE BLOCK START IS CAPTURED BEFORE THE CALL, because `lightrec_execute` overwrites `nextPc`
     // with the block's EXIT pc. Without this the executor cannot say which instructions produced a

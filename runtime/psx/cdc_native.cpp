@@ -22,6 +22,7 @@
 #include "disc.h"
 #include "r3000.h"
 #include "xa_state.h"
+#include <algorithm>
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -586,6 +587,20 @@ static void complete_command(CdcState *s) {
   }
   const uint8_t response[1] = {s->stat};
   cdc_irq(s, 2, response, 1);
+}
+
+int cdc_next_deadline_ticks(const CdcState *s, uint64_t *absoluteTicks) {
+  const bool drive = s->drive_event_armed != 0;
+  const bool command = s->command_event_armed != 0;
+  if (!drive && !command) {
+    return 0;
+  }
+  uint64_t earliest = drive ? s->drive_deadline_ticks : s->command_deadline_ticks;
+  if (drive && command) {
+    earliest = std::min(s->drive_deadline_ticks, s->command_deadline_ticks);
+  }
+  *absoluteTicks = earliest;
+  return 1;
 }
 
 int cdc_drive_service(CdcState *s) {

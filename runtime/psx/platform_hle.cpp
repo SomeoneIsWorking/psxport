@@ -42,15 +42,28 @@ void cdReadSync(Core *core) {
   core->r[V0] = 0;
 }
 
+// The two guest words the timeout pair owns, from whichever seam the runtime declared them on.
+struct GpuTimeoutVars {
+  std::uint32_t deadline = 0;
+  std::uint32_t flag = 0;
+};
+
+GpuTimeoutVars gpuTimeoutVars(const Core &core) {
+  if (core.cfg) {
+    return {core.cfg->hle.gpuTimeoutDeadlineVar, core.cfg->hle.gpuTimeoutFlagVar};
+  }
+  const GameRuntime *runtime = core.game ? core.game->runtime : nullptr;
+  const PlatformHlePlan *plan = runtime ? runtime->platformHlePlan() : nullptr;
+  return plan ? GpuTimeoutVars{plan->gpuTimeoutDeadlineVar, plan->gpuTimeoutFlagVar} : GpuTimeoutVars{};
+}
+
 void gpuTimeoutArm(Core *core) {
-  if (!core->cfg) {
-    return;
+  const GpuTimeoutVars vars = gpuTimeoutVars(*core);
+  if (vars.deadline) {
+    core->mem_w32(vars.deadline, 0x7fffffffu);
   }
-  if (core->cfg->hle.gpuTimeoutDeadlineVar) {
-    core->mem_w32(core->cfg->hle.gpuTimeoutDeadlineVar, 0x7fffffffu);
-  }
-  if (core->cfg->hle.gpuTimeoutFlagVar) {
-    core->mem_w32(core->cfg->hle.gpuTimeoutFlagVar, 0);
+  if (vars.flag) {
+    core->mem_w32(vars.flag, 0);
   }
 }
 
@@ -188,6 +201,9 @@ void PlatformHle::initBuiltins() {
     install(plan->cdCommandAddress, cd_command_stock_sync);
     install(plan->cdSyncAddress, cd_sync_stock_sync);
     install(plan->cdSearchFileAddress, cd_searchfile_stock_sync);
+    install(plan->cdGetSectorAddress, cd_getsector_stock);
+    install(plan->gpuTimeoutArmAddress, gpuTimeoutArm);
+    install(plan->gpuTimeoutCheckAddress, syncComplete);
     install(plan->drawSyncAddress, syncComplete);
     bindVSyncBoundary(plan->vsyncAddress, plan->vsyncQueryCounterAddress);
     // A plan that declares more bindings than the array holds has services the runtime silently

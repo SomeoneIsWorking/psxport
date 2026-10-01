@@ -101,6 +101,15 @@ void Timing::raiseVBlank(uint32_t fields) {
   game->core.pending_work |= Core::PW_IRQ; // arm the per-function-entry delivery gate
 }
 
+std::optional<uint64_t> Timing::ticksUntilDeviceEvent() const {
+  uint64_t deadline = 0;
+  if (!cdc_next_deadline_ticks(&game->cdc, &deadline)) {
+    return std::nullopt;
+  }
+  const uint64_t now = mEmulatedTime.nowTicks();
+  return deadline > now ? deadline - now : 0;
+}
+
 uint64_t Timing::emulatedCpuTicks() const {
   return mEmulatedTime.nowTicks();
 }

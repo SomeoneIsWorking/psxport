@@ -3,6 +3,7 @@
 #include "emulated_time.h"
 
 #include <cstdint>
+#include <optional>
 class Game;
 struct CdcState;
 
@@ -44,6 +45,11 @@ public:
     serviceCdc();
   }
   [[nodiscard]] uint64_t emulatedCpuTicks() const;
+  // Guest ticks until the next scheduled device deadline (today the CD controller's drive or command
+  // event); nullopt when nothing is armed, 0 when one is already due. A guest running code that touches
+  // no device register never folds a deadline into the clock, so the executor ends its segment here: the
+  // interrupt the deadline raises then reaches the guest while it spins, as it would on hardware.
+  [[nodiscard]] std::optional<uint64_t> ticksUntilDeviceEvent() const;
   [[nodiscard]] uint16_t hSyncCounter() const;
 
   // vsyncCallback(): 0x80085BB0 FUN_80085bb0 VSyncCallback(func) — no-op. Native frame loop

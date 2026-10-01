@@ -40,5 +40,10 @@ void cd_sync_stock_sync(Core *c);
 void cd_read_stock_sync(Core *c);
 void cd_readsync_stock_sync(Core *c);
 
+// Serve stock Sony libcd CdGetSector(dest, words) from the sector the drive was last positioned on
+// (Setloc), reading the authenticated disc directly. A direct runtime that streams through the
+// guest's own sector copy (an STR player) binds its measured entry to this owner.
+void cd_getsector_stock(Core *c);
+
 // Resolve stock Sony libcd CdSearchFile through the authenticated disc's ISO9660 index.
 void cd_searchfile_stock_sync(Core *c);

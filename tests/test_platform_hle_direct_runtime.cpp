@@ -29,6 +29,13 @@ constexpr uint32_t kSetGeomLeavesEnd = 0x80077844u;
 constexpr uint32_t kCdReadAddr = 0x80066A50u;
 constexpr uint32_t kCdReadSyncAddr = 0x80066B30u;
 constexpr uint32_t kCdReadLeavesEnd = 0x80066C20u;
+// Toy Story 2 (SLUS_008.93): libcd CdGetSector, and libgpu's timeout pair with the two guest words
+// the arm publishes. They are test data here; the title declares the measured values.
+constexpr uint32_t kCdGetSectorAddr = 0x80091108u;
+constexpr uint32_t kGpuTimeoutArmAddr = 0x80088380u;
+constexpr uint32_t kGpuTimeoutCheckAddr = 0x800883B4u;
+constexpr uint32_t kGpuTimeoutDeadlineWord = 0x8009EC20u;
+constexpr uint32_t kGpuTimeoutFlagWord = 0x8009EC24u;
 
 static_assert(std::extent_v<decltype(PlatformHlePlan::windowLo)> == kPlatformHleWindowCapacity);
 static_assert(std::extent_v<decltype(GameConfig::PlatformHleCfg::windowLo)> == kPlatformHleWindowCapacity);
@@ -220,6 +227,67 @@ static void test_every_exact_window_slot_is_consumed_without_admitting_overflow(
   CHECK(game->platform_hle.lookup(kOverflowAddress) == nullptr);
 }
 
+static void test_direct_runtime_plan_binds_get_sector_and_the_gpu_timeout_pair() {
+  PlannedRuntime runtime;
+  runtime.image_ = makeImage();
+  runtime.plan_.cdGetSectorAddress = kCdGetSectorAddr;
+  runtime.plan_.gpuTimeoutArmAddress = kGpuTimeoutArmAddr;
+  runtime.plan_.gpuTimeoutCheckAddress = kGpuTimeoutCheckAddr;
+  runtime.plan_.gpuTimeoutDeadlineVar = kGpuTimeoutDeadlineWord;
+  runtime.plan_.gpuTimeoutFlagVar = kGpuTimeoutFlagWord;
+  runtime.plan_.windowLo[0] = kCdGetSectorAddr;
+  runtime.plan_.windowHi[0] = kCdGetSectorAddr + 4u;
+  runtime.plan_.windowLo[1] = kGpuTimeoutArmAddr;
+  runtime.plan_.windowHi[1] = kGpuTimeoutCheckAddr + 4u;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+
+  game->platform_hle.initBuiltins();
+
+  CHECK(game->platform_hle.lookup(kCdGetSectorAddr) == cd_getsector_stock);
+  OverrideFn arm = game->platform_hle.lookup(kGpuTimeoutArmAddr);
+  OverrideFn check = game->platform_hle.lookup(kGpuTimeoutCheckAddr);
+  CHECK(arm != nullptr);
+  CHECK(check != nullptr);
+
+  Core &core = game->core;
+  core.mem_w32(kGpuTimeoutDeadlineWord, 0u);
+  core.mem_w32(kGpuTimeoutFlagWord, 9u);
+  arm(&core);
+  CHECK_EQ(core.mem_r32(kGpuTimeoutDeadlineWord), 0x7FFFFFFFu);
+  CHECK_EQ(core.mem_r32(kGpuTimeoutFlagWord), 0u);
+  core.r[2] = 0xFFFFFFFFu;
+  check(&core);
+  CHECK_EQ(core.r[2], 0u);
+}
+
+// The negative half: an undeclared word is left alone, and a plan that declares neither address
+// binds neither handler. A handler that wrote through an unset (zero) var would scribble on guest
+// address 0 and still look like it worked.
+static void test_gpu_timeout_arm_leaves_an_undeclared_word_untouched_and_unbound_when_absent() {
+  PlannedRuntime runtime;
+  runtime.image_ = makeImage();
+  runtime.plan_.gpuTimeoutArmAddress = kGpuTimeoutArmAddr;
+  runtime.plan_.gpuTimeoutDeadlineVar = kGpuTimeoutDeadlineWord; // flag word deliberately undeclared
+  runtime.plan_.windowLo[0] = kGpuTimeoutArmAddr;
+  runtime.plan_.windowHi[0] = kGpuTimeoutArmAddr + 4u;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+  game->platform_hle.initBuiltins();
+
+  Core &core = game->core;
+  core.mem_w32(kGpuTimeoutFlagWord, 7u);
+  core.mem_w32(0x80000000u, 0x5A5A5A5Au);
+  OverrideFn arm = game->platform_hle.lookup(kGpuTimeoutArmAddr);
+  CHECK(arm != nullptr);
+  arm(&core);
+  CHECK_EQ(core.mem_r32(kGpuTimeoutDeadlineWord), 0x7FFFFFFFu);
+  CHECK_EQ(core.mem_r32(kGpuTimeoutFlagWord), 7u);
+  CHECK_EQ(core.mem_r32(0x80000000u), 0x5A5A5A5Au);
+  CHECK(game->platform_hle.lookup(kGpuTimeoutCheckAddr) == nullptr);
+  CHECK(game->platform_hle.lookup(kCdGetSectorAddr) == nullptr);
+}
+
 int main(void) {
   RUN(direct_runtime_without_plan_installs_nothing_and_says_so);
   RUN(direct_runtime_plan_binds_entries_inside_the_declared_window);
@@ -227,5 +295,7 @@ int main(void) {
   RUN(direct_runtime_standard_libgte_leaves_still_require_the_declared_window);
   RUN(direct_runtime_plan_binds_standard_stock_cd_read_leaves);
   RUN(every_exact_window_slot_is_consumed_without_admitting_overflow);
+  RUN(direct_runtime_plan_binds_get_sector_and_the_gpu_timeout_pair);
+  RUN(gpu_timeout_arm_leaves_an_undeclared_word_untouched_and_unbound_when_absent);
   return pt_summary();
 }

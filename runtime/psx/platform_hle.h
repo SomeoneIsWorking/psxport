@@ -57,9 +57,29 @@ struct PlatformHlePlan {
   uint32_t cdSyncAddress = 0;
   uint32_t cdSearchFileAddress = 0;
 
+  // Stock Sony libcd CdGetSector(dest, words): the guest's own sector copy, which an STR player calls
+  // from its ready callback. The framework serves it from the sector the drive was positioned on.
+  uint32_t cdGetSectorAddress = 0;
+
   // A direct runtime has no legacy GameConfig. Its measured stock-libcd guest work area must be
   // declared here so the shared native command path can preserve CdLastPos/last-mode state.
   psx::cd::StockCommandWorkArea stockCdWorkArea{};
+
+  // libgpu's DMA timeout pair. Retail derives the deadline from VSync(-1), which a native frame loop
+  // makes illegal; the host GPU consumes GP0/DMA work synchronously, so the timeout can never be
+  // reached. `arm` publishes a far-future deadline and clears the flag in the two measured guest words,
+  // and `check` reports "no timeout" without entering the guest body. A zero var leaves that word
+  // untouched. Titles declare the four measured facts; they never carry the handler.
+  uint32_t gpuTimeoutArmAddress = 0;
+  uint32_t gpuTimeoutCheckAddress = 0;
+  uint32_t gpuTimeoutDeadlineVar = 0;
+  uint32_t gpuTimeoutFlagVar = 0;
+
+  // Base of the guest-owned per-channel DMA callback table (channel `ch` is `base + 4*ch`), for a
+  // title whose own libapi `DMACallback` writes it in guest RAM. The framework delivers each
+  // completed transfer to the CURRENT word there, exactly as the BIOS DMA handler would. Zero means
+  // the title has no guest table and its callbacks live in the native `DmaCallbackRegistry`.
+  uint32_t dmaCallbackTable = 0;
 
   // Measured libgpu DrawSync entry. The host GPU consumes GP0/DMA work synchronously, so the
   // framework can complete this hardware wait without entering the guest's VSync-based body.

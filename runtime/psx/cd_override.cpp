@@ -399,7 +399,7 @@ static void cd_read(Core *c) {
 // Data comes from the real disc image. A read that cannot be served fails LOUDLY and returns
 // non-zero, because a zero-filled buffer reported as a successful read is indistinguishable from a
 // real one to the guest and corrupts arbitrarily far downstream.
-static void cd_getsector_stock(Core *c) {
+void cd_getsector_stock(Core *c) {
   const uint32_t dest = c->r[A0], words = c->r[A1];
   Cd &cd = c->game->cd;
   if (cd.setloc_lba < 0) {
