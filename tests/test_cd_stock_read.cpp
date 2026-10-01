@@ -203,8 +203,6 @@ static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_no
   CHECK_EQ(game->core.lightrecExecutor().counters().invalidations, afterDeliberate);
 }
 
-// The refusal path must be just as quiet: with no Setloc the read never starts, so there is no write and
-// nothing to report. A refusal that still reported a range would invalidate on every unpositioned poll.
 // The positive feeder, through the controller's sector-source binding: each sector costs ONE
 // invalidation (its range, reported once), not one per byte copied.
 static void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte() {
@@ -260,6 +258,8 @@ static void test_a_multi_sector_read_invalidates_translated_code_in_a_later_sect
   CHECK(core.lightrecExecutor().counters().translatedBlocks > translated);
 }
 
+// The refusal path must be just as quiet: with no Setloc the read never starts, so there is no write and
+// nothing to report. A refusal that still reported a range would invalidate on every unpositioned poll.
 static void test_a_refused_read_reports_no_executable_write() {
   auto game = std::make_unique<Game>();
   psx::cpu::notifyExecutableWrite(game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
