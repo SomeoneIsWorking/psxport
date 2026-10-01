@@ -56,6 +56,14 @@ extern TextVar cv_store_observe;
 extern TextVar cv_ramdump;
 extern TextVar cv_ramdump_frame;
 
+// PSXPORT_PAD_RECORD / PSXPORT_PAD_REPLAY / PSXPORT_PAD_RESUME — the pad session's record sink, the
+// recording a gate replays at real speed, and the recording a player resumes from (fast-forwarded).
+// All three are phase-keyed .pad files (runtime/psx/pad_recording.h); PSXPORT_PAD_RECORD=0 disables
+// the windowed default sink. Resolved once by psx::input::PadRecordReplay on the first pad frame.
+extern TextVar cv_pad_record;
+extern TextVar cv_pad_replay;
+extern TextVar cv_pad_resume;
+
 // ── watchdog ────────────────────────────────────────────────────────────────────────────────────
 // PSXPORT_WATCHDOG — frame-progress timeout in seconds. Default 3, ON even when unset, so a hang
 // self-aborts with a backtrace instead of wedging. 0 disables it.

@@ -4,6 +4,7 @@
 // test hooks (force/hold/record/replay/shot/dump/trace schedules). Implemented in pad_input.cpp.
 #pragma once
 #include "active_low_edges.h"
+#include "pad_record_replay.h"
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -59,48 +60,39 @@ public:
     return mButtonEdges.released(mask);
   }
 
-  // ---- live capture (dbg-server `padrec`) ----
-  // Every frame's finalized mask is also kept in memory, unconditionally, so a running session can be
-  // cut into a replay WITHOUT a file sink, a restart, or racing the incremental writer. 2 bytes/frame:
-  // an hour of play is 432 KB. `saveRecording` writes the same uint16-LE format PSXPORT_PAD_REPLAY reads.
+  // ---- recording / replay (psx::input::PadRecordReplay, pad_record_replay.h) ----
+  // Every frame's finalized mask is kept in memory with its title phase, unconditionally, so a
+  // running session can be cut into a replay WITHOUT a file sink, a restart, or racing the writer.
+  // `saveRecording` writes the same phase-keyed format PSXPORT_PAD_REPLAY reads.
   size_t recordedFrames() const {
-    return mRecLog.size();
+    return mSession.recording().totalFrames();
   }
   // nframes = 0 saves everything; otherwise the FIRST nframes (the useful trim — drop the idle tail
-  // after a repro). A suffix is never offered: replays are only valid from boot.
-  bool saveRecording(const char *path, size_t nframes) const;
+  // after a repro). A suffix is never offered: a recording starts in the phase the game boots into.
+  bool saveRecording(const char *path, size_t nframes) const {
+    return mSession.saveRecording(path, nframes);
+  }
 
-  // ---- resume-from-recording (PSXPORT_PAD_RESUME) ----
-  // TRUE while a RESUME replay is still feeding the guest, i.e. while the run is replaying its way
-  // back to where the player left off and has not handed the controller over yet. It is what the
-  // rest of the runtime asks in order to fast-forward: the pacer does not sleep (gpu_native.cpp),
-  // FMVs play uncapped (native_fmv.cpp), and rendered audio is dropped instead of queued
-  // (spu_audio.cpp) — a 30-minute session replayed at wall-clock speed is not a resume.
-  //
-  // It goes FALSE the moment the recording runs out, which is the same instant the replay stops
-  // overriding the pad mask, so speed, sound and control are handed back together and there is no
-  // window in which the player is driving a fast-forwarding game. A plain PSXPORT_PAD_REPLAY is
-  // NOT fast-forwarded: watching a replay at real speed is the other legitimate use, and the two
-  // are told apart by which knob was set, never inferred.
+  // TRUE while a RESUME replay (PSXPORT_PAD_RESUME) is still feeding the guest. The pacer does not
+  // sleep (frame_pacer.cpp), FMVs play uncapped (native_fmv.cpp) and rendered audio is dropped
+  // (spu_audio.cpp) while it holds. It goes FALSE the moment the replay stops driving the pad —
+  // complete or stalled — so speed, sound and control are handed back together. A plain
+  // PSXPORT_PAD_REPLAY is NOT fast-forwarded: the two are told apart by which knob was set.
   bool fastForwarding() const {
-    return mResumeFf && mRepBuf && mRecFc < mRepN;
+    return mSession.fastForwarding();
   }
-
-  // ---- REPLAY PROGRESS, so a run cannot silently truncate a recording ----------------------------
-  // A headless run is frame-capped (native_boot.cpp's "headless smoke default"). A pad replay that is
-  // longer than that cap used to be cut off SILENTLY: the run ended with a cheerful "frame loop done"
-  // having consumed 120 frames of a 30,612-frame recording, and every measurement taken from it was a
-  // measurement of the title screen. It cost most of a session chasing that as a code regression.
-  // These three make the truncation impossible to miss — the loop uncaps itself while a replay is
-  // pending, and the run reports its own denominator at exit.
+  // True while a replay still drives the pad. The frame loop is uncapped for a replay run
+  // (native_boot.cpp), and the run-end line below reports how far the replay got.
   bool replayPending() const {
-    return mRepBuf && mRecFc < mRepN;
-  } // frames still owed to the guest
-  size_t replayTotal() const {
-    return mRepN;
+    return mSession.replayPending();
   }
-  uint32_t replayConsumed() const {
-    return mRecFc;
+  // The replay's own denominators at run end: segments and frames delivered, frames waited per phase,
+  // button frames dropped, and whether it COMPLETED, STALLED, or was TRUNCATED by the run ending.
+  // Silent when no replay was loaded.
+  void reportReplayRunEnd() const {
+    if (const psx::input::PhaseReplay *replay = mSession.replay()) {
+      replay->reportRunEnd();
+    }
   }
 
   // A host-only screen (a title picker) wants the live keyboard/controller and the control channel's
@@ -140,14 +132,8 @@ private:
   long mStopAt = -2;           // PSXPORT_FORCE_STOP_AT (-2 = not read, -1 = off)
 
   // ---- input record / replay + schedules ----
-  int mRecInit = 0;
-  FILE *mRecFp = nullptr;      // record sink
-  uint16_t *mRepBuf = nullptr; // replay source (loaded once)
-  size_t mRepN = 0;
-  uint32_t mRecFc = 0;           // shared record/replay frame index
-  int mResumeFf = 0;             // PSXPORT_PAD_RESUME: fast-forward until the replay is spent
-  int mResumeDone = 0;           // handover already announced (once-only log)
-  std::vector<uint16_t> mRecLog; // every finalized mask, always — the `padrec save` source
+  psx::input::PadRecordReplay mSession;
+  uint64_t currentPhase(Core &core) const; // the title's input phase this frame (GameRuntime::inputPhase)
   int mShotInit = 0, mShotN = 0;
   uint32_t mShotAt[64] = {};
   // PSXPORT_GUEST_POKE — guest locations rewritten every frame (see applyGuestPoke).

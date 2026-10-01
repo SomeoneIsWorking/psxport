@@ -7,10 +7,13 @@
 // spin).
 #pragma once
 #include "card_syscall_log.h"
+#include "pad_recording.h"
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 struct Core;
 struct GameConfig;
+struct HostIdentity;
 class Game;
 struct HostIdentity;
 
@@ -42,6 +45,11 @@ public:
   bool present() const {
     return mCard != nullptr;
   }
+  // The identity of the card image as it stands now (opening/formatting it first, as the first guest
+  // access would). A pad recording stores it so a replay can refuse a card that sends the title's
+  // front end down a different branch.
+  psx::input::CardIdentity identity();
+  static std::vector<uint8_t> formattedDirectory(); // frames 0..15 of a blank formatted card
   // Return TRUE only if the frame was actually moved. A card image that failed to open, or a frame
   // index off the end of the card, used to be a silent no-op that returned zeros — so a transfer the
   // backend could not perform was indistinguishable from one that worked, and the BIOS file API

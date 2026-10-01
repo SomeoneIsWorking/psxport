@@ -199,7 +199,7 @@ static void game_main(Core *c) {
   // frame, which is after this cap is decided, so asking pad.replayPending() here always answered
   // "no" and the uncap silently did nothing (measured: still 120 of 1118).
   if (!repl_mode && cfg_int("PSXPORT_NATIVE_FRAMES", 0) <= 0 &&
-      (cfg_str("PSXPORT_PAD_RESUME") || cfg_str("PSXPORT_PAD_REPLAY"))) {
+      (!psx::config::cv_pad_resume.get().empty() || !psx::config::cv_pad_replay.get().empty())) {
     nframes = 0;
     lucent::info("native_boot",
                  "frame cap LIFTED: a pad recording is being replayed, and the headless "
@@ -292,24 +292,10 @@ static void game_main(Core *c) {
   // searched window is claimed, i.e. THIS EFFECT HAS NO NATIVE PRODUCER (the DB's actual answer, not a
   // failure); too-early = the claim set was still empty, so the prim could not be resolved either way and
   // must not be counted as "no native producer".
-  // THE REPLAY'S OWN DENOMINATOR. "frame loop done" alone cannot distinguish a run that played the
-  // whole recording from one the frame cap cut off at 0.4% of it — and those mean opposite things
-  // about every number the run produced. Print it whenever a recording was loaded, consumed or not.
-  if (c->game->pad.replayTotal()) {
-    const size_t total = c->game->pad.replayTotal();
-    const uint32_t used = c->game->pad.replayConsumed();
-    if (used < total) {
-      lucent::warn("padrec",
-                   "run-end: replay TRUNCATED — consumed {} of {} pad frame(s) ({:.1f}%). "
-                   "The run ended before the recording did, so it did NOT reach the scene the "
-                   "recording was cut for. Anything measured here describes an earlier scene.",
-                   used,
-                   total,
-                   100.0 * used / (double)total);
-    } else {
-      lucent::info("padrec", "run-end: replay fully consumed — {} of {} pad frame(s)", used, total);
-    }
-  }
+  // THE REPLAY'S OWN DENOMINATOR. "frame loop done" alone cannot distinguish a run that followed the
+  // whole recording from one the frame cap cut off, or one whose route departed from the recording
+  // and stalled — and those mean opposite things about every number the run produced.
+  c->game->pad.reportReplayRunEnd();
   // THE WHOLE-RUN GUEST LEDGER. A title that never destroys its Game never reaches the executor's
   // destructor telemetry, so this is the report every clean run gets: translated blocks and
   // instructions, cache hits and misses, invalidations by source, fallback by every reason.

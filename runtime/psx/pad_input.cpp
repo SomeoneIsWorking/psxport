@@ -31,21 +31,18 @@
 
 #include "c_subsys.h" // gpu_windowed()
 #include "cfg.h"
+#include "config_vars.h"
 #include "core.h"
-#include "fs_util.h" // Fs::writeFile — host file writes go through the shared util
-#include "game.h"    // class Pad lives on Game; reached via c->game->pad (see class docs)
+#include "game.h" // class Pad lives on Game; reached via c->game->pad (see class docs)
+#include "game_runtime.h"
 #include "guest_pad_buffer_layout.h"
 #include <lucent/log.h>
 #include <stdint.h>
 
-// Cut the in-memory capture (every finalized pad mask since frame 0) into a .pad replay. Same
-// uint16-LE-per-frame format PSXPORT_PAD_REPLAY loads, so the result is directly replayable.
-bool Pad::saveRecording(const char *path, size_t nframes) const {
-  if (!path || mRecLog.empty()) {
-    return false;
-  }
-  const size_t n = (nframes && nframes < mRecLog.size()) ? nframes : mRecLog.size();
-  return Fs::writeFile(path, mRecLog.data(), n * sizeof(uint16_t));
+// The title's input phase for this pad frame. A title that declares none (the GameRuntime default,
+// and every legacy adapter) answers kUnkeyedPhase, and its recordings are absolute from boot.
+uint64_t Pad::currentPhase(Core &core) const {
+  return core.runtime ? core.runtime->inputPhase(core) : psx::input::kUnkeyedPhase;
 }
 
 // PSX digital button bits, active-low (0 = pressed). Default = nothing pressed.
@@ -600,152 +597,29 @@ void Pad::serviceFrame() {
   mFc++;
 
   // ---- INPUT RECORD / REPLAY (deterministic pad capture) ---------------------------------------
-  // The engine has no wall-clock/RNG (Date/random are banned, see CLAUDE.md), so the per-frame final
-  // pad mask fully determines a run. PSXPORT_PAD_RECORD=<path> appends the finalized active-low mask
-  // (uint16 LE) every frame from boot; PSXPORT_PAD_REPLAY=<path> forces that exact sequence back,
-  // reproducing a hand-played session (e.g. a hut entry) exactly, every time, headless. Recording
-  // captures the COMBINED result of auto-skip + host input; replay overrides the mask AFTER all other
-  // input sources so it wins. A dedicated frame counter (rec_fc) matches record↔replay (both tick once
-  // per pad_service_frame call from frame 0). Past the recording's end, replay stops overriding
-  // (hands-off) so the game free-runs.
+  // The engine has no wall-clock/RNG, so the per-frame final pad mask fully determines a run from a
+  // given card image. The session (pad_record_replay.h) records the finalized mask with the title's
+  // input phase every frame, and a replay/resume overrides the mask AFTER every other input source so
+  // it wins. Recordings are phase-keyed (pad_phase_replay.h): a recorded press is replayed at its
+  // offset from the entry of the phase it was recorded in, not at an absolute frame from boot.
   {
-    FILE *&rec_fp = mRecFp;       // record sink
-    uint16_t *&rep_buf = mRepBuf; // replay source (loaded once)
-    size_t &rep_n = mRepN;
-    uint32_t &rec_fc = mRecFc; // shared record/replay frame index
-    if (!mRecInit) {
-      mRecInit = 1;
-      // Recording is ALWAYS ON by default (so a hand-played session — e.g. on the user's macOS build —
-      // is captured and can be sent over for deterministic replay/diagnosis). Default sink:
-      // scratch/bin/pad_session.pad, overwritten each run. Override the path with PSXPORT_PAD_RECORD=<path>;
-      // disable with PSXPORT_PAD_RECORD=0. Skipped while REPLAYING (no point re-capturing the replayed input).
-      const char *rpath = cfg_str("PSXPORT_PAD_RECORD");
-      bool default_sink = false;
-      if (rpath && !strcmp(rpath, "0")) {
-        rpath = nullptr; // explicit disable
-      }
-      // Default-on recording is WINDOWED-ONLY (#56/#57): headless runs (SBS/AUTO_SKIP smoke, agent probes)
-      // have no play-session worth capturing AND were silently truncating the user's real captures every
-      // time — that is what clobbered the bucket + flame repros. Headless auto-record is OFF; an explicit
-      // PSXPORT_PAD_RECORD=<path> still records anywhere (windowed or headless).
-      else if (!rpath && !cfg_str("PSXPORT_PAD_REPLAY") && gpu_windowed()) {
-        rpath = "scratch/bin/pad_session.pad";
-        default_sink = true;
-      } // default-on (windowed)
-      // NOTE a RESUME run (PSXPORT_PAD_RESUME, below) deliberately does NOT suppress recording: the
-      // sink captures the replayed prefix and the live play that follows as ONE from-boot recording,
-      // which is what makes a resume chainable — today's session can be resumed from again tomorrow.
-      // A plain PSXPORT_PAD_REPLAY still suppresses it (re-capturing input you already have is noise).
-      if (rpath) {
-        // WORKFLOW FIX (#57): the default sink used to be truncated every windowed run, so a bug-repro
-        // session (real input) was silently destroyed by the next launch (idle or otherwise) — that is
-        // exactly how the bucket-cutscene repro was lost. Rotate the default sink 5 deep before opening
-        // (pad_session.pad -> .1 -> ... -> .5) so a clobbered capture is recoverable. An explicit
-        // PSXPORT_PAD_RECORD=<path> is not rotated (the caller chose the name). For a repro you want to
-        // keep, still record straight into replays/<cat>/<name>.pad (immutable, committed).
-        if (default_sink) {
-          char oldp[128], newp[128];
-          for (int k = 4; k >= 1; k--) {
-            snprintf(oldp, sizeof oldp, "scratch/bin/pad_session.%d.pad", k);
-            snprintf(newp, sizeof newp, "scratch/bin/pad_session.%d.pad", k + 1);
-            rename(oldp, newp); // no-op if source absent
-          }
-          rename("scratch/bin/pad_session.pad", "scratch/bin/pad_session.1.pad");
-        }
-        rec_fp = fopen(rpath, "wb");
-        lucent::info("padrec",
-                     "recording -> {}{}",
-                     rec_fp ? rpath : "(open FAILED)",
-                     default_sink
-                         ? " (prev rotated to pad_session.1..5.pad; use replays/<cat>/<name>.pad to keep a repro)"
-                         : "");
-      }
-      // PSXPORT_PAD_RESUME=<path> — CONTINUE FROM A RECORDING (USER ask, 2026-08-19: "a feature where
-      // I can continue from a pad recording instead of having to play all over again"). It is the same
-      // replay mechanism, plus fast-forward until the recording is spent; then the run just carries on
-      // with the player driving. Recording stays on, so where you stop becomes the next resume point.
-      //
-      // Why it is a SECOND knob and not a flag on PSXPORT_PAD_REPLAY: a replay is used two ways that
-      // want opposite pacing — a deterministic gate/repro (real speed, so what it measures is what the
-      // user sees) and getting back to a spot (as fast as the host can). Which one you meant is stated
-      // by which knob you set; nothing is inferred from the sink, the leg, or whether a window is open.
-      const char *resume = cfg_str("PSXPORT_PAD_RESUME");
-      const char *ppath = cfg_str("PSXPORT_PAD_REPLAY");
-      if (resume && *resume) {
-        if (ppath && *ppath) {
-          lucent::warn("padrec",
-                       "both PSXPORT_PAD_RESUME and PSXPORT_PAD_REPLAY are set — using RESUME "
-                       "({}) and IGNORING REPLAY ({}); they are two different intentions.",
-                       resume,
-                       ppath);
-        }
-        ppath = resume;
-        mResumeFf = 1;
-      }
-      if (ppath) {
-        FILE *f = fopen(ppath, "rb");
-        if (f) {
-          fseek(f, 0, SEEK_END);
-          long sz = ftell(f);
-          fseek(f, 0, SEEK_SET);
-          rep_n = (size_t)(sz / 2);
-          rep_buf = (uint16_t *)malloc(rep_n * 2);
-          if (rep_buf && fread(rep_buf, 2, rep_n, f) != rep_n) {
-            free(rep_buf);
-            rep_buf = nullptr;
-            rep_n = 0;
-          }
-          fclose(f);
-          lucent::info("padrec",
-                       "{} {} frames <- {}{}",
-                       mResumeFf ? "RESUMING from" : "replaying",
-                       rep_n,
-                       ppath,
-                       mResumeFf ? " (fast-forward: unpaced, muted, FMVs uncapped — control is handed "
-                                   "over when the recording runs out)"
-                                 : "");
-        } else {
-          lucent::error("padrec", "{} open FAILED: {}", mResumeFf ? "resume" : "replay", ppath);
-        }
-        // A resume whose file did not load is a run that silently starts a NEW GAME from boot — the
-        // exact thing the user asked not to have to do. Say so and drop the fast-forward, rather than
-        // sprinting through a fresh boot with no input.
-        if (mResumeFf && !rep_buf) {
-          lucent::error("padrec",
-                        "PSXPORT_PAD_RESUME={} produced no frames — this run starts from BOOT "
-                        "with no replayed input. Not fast-forwarding.",
-                        ppath);
-          mResumeFf = 0;
-        }
-      }
+    if (!mSession.configured()) {
+      mSession.configure(psx::input::PadSessionConfig{
+          .recordPath = psx::config::cv_pad_record.get(),
+          .replayPath = psx::config::cv_pad_replay.get(),
+          .resumePath = psx::config::cv_pad_resume.get(),
+          .windowed = have_window != 0,
+          .cardIdentity =
+              [this] {
+                return game->memcard.identity();
+              },
+      });
     }
-    if (rep_buf && rec_fc < rep_n) {
-      // Force the recorded mask (overrides host/force), but MERGE live REPL drive on top: active-low
-      // AND = union of pressed bits. A replay's idle tail no longer makes press/tap dead commands.
-      buttons = rep_buf[rec_fc] & repl_mask;
-    } else if (mResumeFf && !mResumeDone) {
-      // The recording is spent: fastForwarding() is already false for every consumer that asks this
-      // frame (it reads the same rec_fc < rep_n), so pacing, audio and control resume together. Said
-      // out loud because a resume that ends somewhere unexpected (a truncated file, a desync) is
-      // otherwise indistinguishable from one that landed — the player just sees the game speed up.
-      mResumeDone = 1;
-      lucent::info("padrec",
-                   "RESUME complete at pad frame {} — real-time pacing, sound and control "
-                   "are yours. This session keeps recording, so you can resume from here too.",
-                   rec_fc);
-    }
+    buttons = mSession.service(currentPhase(*c), buttons, repl_mask);
     // Latch edges only after every input source has resolved to the mask the guest receives. Sampling
     // host input earlier would miss replay/REPL presses or expose an edge for a mask later replaced.
     sampleButtonEdges();
-    if (rec_fp) {
-      uint16_t m = buttons;
-      fwrite(&m, 2, 1, rec_fp);
-      fflush(rec_fp);
-    }
-    // Always keep the mask in memory too, file sink or not: this is what the debug server's `padrec
-    // save` cuts a replay from, so a LIVE session (the user already playing, with the repro on screen)
-    // can be captured on demand instead of having to be re-played from boot into a chosen sink.
-    mRecLog.push_back(buttons);
+    const uint32_t rec_fc = mSession.frameIndex(); // the pad-frame axis the schedules below index
     // PSXPORT_PAD_SHOT_AT=f0,f1,... : during replay, screenshot at these EXACT replay (pad) frame
     // indices to scratch/screenshots/padshot_<frame>.ppm. The pad-frame axis (rec_fc) is the faithful
     // one (gpu_frame_no drifts because boot/FMV presents extra frames), so this captures a deterministic
@@ -854,7 +728,6 @@ void Pad::serviceFrame() {
                    c->mem_r16s(0x800fe916u),
                    c->mem_r16s(0x800fe91eu));
     }
-    rec_fc++;
   }
 
   applyGuestPoke(c);

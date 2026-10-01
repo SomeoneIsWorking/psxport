@@ -328,6 +328,19 @@ TextVar cv_ramdump_frame("PSXPORT_RAMDUMP_FRAME",
                          "native frame N at which to write the PSXPORT_RAMDUMP path mid-run; this is "
                          "the one that works while a title is playing",
                          /*persistable=*/false);
+TextVar cv_pad_record("PSXPORT_PAD_RECORD",
+                      "",
+                      "write this session's phase-keyed pad recording here (0 = no sink; windowed runs "
+                      "default to scratch/bin/pad_session.pad)",
+                      /*persistable=*/false);
+TextVar cv_pad_replay("PSXPORT_PAD_REPLAY",
+                      "",
+                      "replay this phase-keyed pad recording at real speed; refused when its card differs",
+                      /*persistable=*/false);
+TextVar cv_pad_resume("PSXPORT_PAD_RESUME",
+                      "",
+                      "replay this phase-keyed pad recording fast-forwarded, then hand control to the player",
+                      /*persistable=*/false);
 IntVar cv_watchdog("PSXPORT_WATCHDOG",
                    3,
                    "frame-progress timeout, seconds (0 = off)",

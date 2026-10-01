@@ -6,11 +6,18 @@
 #include "cfg.h"
 #include "core.h"
 #include "game.h" // c->game->hle.deliverEvent — Hle subsystem lives on Game
+#include "game_runtime.h"
+#include <filesystem>
+#include <lucent/content.h>
 #include <lucent/log.h>
+#include <optional>
+#include <span>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <system_error>
+#include <vector>
 #ifdef _WIN32
 #include <direct.h>
 #else
@@ -150,41 +157,67 @@ void Memcard::init() {
     uint8_t hdr[kFrameSize];
     fread(hdr, 1, kFrameSize, mCard);
     if (hdr[0] != 'M' || hdr[1] != 'C') {
-      uint8_t fr[kFrameSize];
-      // frame 0: "MC" + XOR checksum at byte 0x7F.
-      memset(fr, 0, sizeof fr);
-      fr[0] = 'M';
-      fr[1] = 'C';
-      {
-        uint8_t x = 0;
-        for (uint32_t i = 0; i < 0x7F; i++) {
-          x ^= fr[i];
-        }
-        fr[0x7F] = x;
-      }
+      const std::vector<uint8_t> directory = formattedDirectory();
       fseek(mCard, 0, SEEK_SET);
-      fwrite(fr, 1, kFrameSize, mCard);
-      // frames 1..15: free directory entries.
-      memset(fr, 0, sizeof fr);
-      fr[0] = kDirFree;
-      fr[8] = 0xFF;
-      fr[9] = 0xFF;
-      {
-        uint8_t x = 0;
-        for (uint32_t i = 0; i < 0x7F; i++) {
-          x ^= fr[i];
-        }
-        fr[0x7F] = x;
-      }
-      for (uint32_t blk = 1; blk < kBlocks; blk++) {
-        fseek(mCard, (long)blk * kFrameSize, SEEK_SET);
-        fwrite(fr, 1, kFrameSize, mCard);
-      }
+      fwrite(directory.data(), 1, directory.size(), mCard);
       fflush(mCard);
       lucent::info("card", "formatted blank card image (MC header + 15 free dir entries)");
     }
   }
   lucent::info("card", "{} ({} frames / 128 KB)", mPath, kFrames);
+}
+
+// Standard PSX layout for a blank card: frame 0 = "MC" magic, frames 1..15 = free directory entries,
+// each with its XOR checksum at byte 0x7F. The ONE spelling of "format", used by init() on an
+// unformatted image and by identity() to name the card a missing file will become.
+std::vector<uint8_t> Memcard::formattedDirectory() {
+  std::vector<uint8_t> frames(static_cast<size_t>(kBlocks) * kFrameSize, 0);
+  const auto seal = [](uint8_t *frame) {
+    uint8_t x = 0;
+    for (uint32_t i = 0; i < 0x7F; i++) {
+      x ^= frame[i];
+    }
+    frame[0x7F] = x;
+  };
+  frames[0] = 'M';
+  frames[1] = 'C';
+  seal(frames.data());
+  for (uint32_t blk = 1; blk < kBlocks; blk++) {
+    uint8_t *frame = frames.data() + static_cast<size_t>(blk) * kFrameSize;
+    frame[0] = kDirFree;
+    frame[8] = 0xFF;
+    frame[9] = 0xFF;
+    seal(frame);
+  }
+  return frames;
+}
+
+psx::input::CardIdentity Memcard::identity() {
+  using psx::input::CardIdentity;
+  std::string path = mPath;
+  if (mCard) {
+    fflush(mCard);
+  } else {
+    char *resolved = resolvePath(game ? game->hostIdentity() : HostIdentity{});
+    path = resolved;
+    free(resolved);
+  }
+  // A card file that does not exist yet is the blank formatted image init() will create on first
+  // access. Naming it that way keeps this query free of side effects: nothing is created to answer it.
+  std::error_code missing;
+  if (!mCard && !std::filesystem::exists(path, missing)) {
+    std::vector<uint8_t> image = formattedDirectory();
+    image.resize(kSize, 0);
+    return {.kind = CardIdentity::Kind::Image,
+            .sha256 = lucent::content::sha256(std::as_bytes(std::span<const uint8_t>(image)))};
+  }
+  std::string error;
+  const std::optional<lucent::content::Sha256> digest = lucent::content::sha256_file(path, error);
+  if (!digest) {
+    lucent::error("card", "cannot digest the card image {}: {}", path, error);
+    return {.kind = CardIdentity::Kind::Unknown, .sha256 = {}};
+  }
+  return {.kind = CardIdentity::Kind::Image, .sha256 = *digest};
 }
 
 // A frame that cannot be moved returns FALSE and says why once. It used to return silently — zeros

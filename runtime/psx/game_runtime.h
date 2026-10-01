@@ -13,6 +13,7 @@
 
 #include "guest_pad_buffer_layout.h"
 #include "guest_program_image.h"
+#include "input_phase.h"
 #include "render_capabilities.h"
 
 class Core;
@@ -119,6 +120,16 @@ public:
   // variable in the environment and ./.env before falling back to generic PSXPORT_DISC.
   virtual const char *discEnvVar() const {
     return nullptr;
+  }
+
+  // The title's INPUT PHASE for pad record/replay (input_phase.h): which screen or game state is
+  // taking input this pad frame, read from guest state the title has identified. Recordings store
+  // each frame as an offset from its phase's entry, so boot and load timing absorb at phase
+  // boundaries instead of shifting every later press. The key is opaque to the framework and must be
+  // stable for as long as the screen is — never a tick or counter. The default declares no phase:
+  // recordings are then absolute from boot, and a phase-keyed recording is refused by name.
+  virtual std::uint64_t inputPhase(Core &) const {
+    return psx::input::kUnkeyedPhase;
   }
 
   // Window title and memory-card policy for DIRECT runtimes (core.cfg == nullptr). Null is honest for
