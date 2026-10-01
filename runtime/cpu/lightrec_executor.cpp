@@ -127,26 +127,26 @@ struct LightrecExecutor::Impl {
   static void storeByte(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.commitDeviceClock(lightrec, address);
-    impl.core.mem_w8(address, static_cast<std::uint8_t>(value));
+    impl.core.mem_w8(address, static_cast<std::uint8_t>(value), ExecutableWriteSource::Cpu);
   }
 
   static void storeHalf(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.commitDeviceClock(lightrec, address);
-    impl.core.mem_w16(address, static_cast<std::uint16_t>(value));
+    impl.core.mem_w16(address, static_cast<std::uint16_t>(value), ExecutableWriteSource::Cpu);
   }
 
   static void storeWord(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.commitDeviceClock(lightrec, address);
-    impl.core.mem_w32(address, value);
+    impl.core.mem_w32(address, value, ExecutableWriteSource::Cpu);
   }
 
   static void
   storeUnalignedWord(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.commitDeviceClock(lightrec, address);
-    impl.core.mem_w32(address, value);
+    impl.core.mem_w32(address, value, ExecutableWriteSource::Cpu);
   }
 
   static std::uint8_t loadByte(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address) {

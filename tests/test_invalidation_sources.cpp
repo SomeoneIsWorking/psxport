@@ -25,6 +25,16 @@ static void test_a_guest_store_is_counted_against_mapped_store() {
   CHECK_EQ(after.invalidationsBySource[kDma], before.invalidationsBySource[kDma]);
 }
 
+static void test_a_labelled_store_is_counted_against_its_source() {
+  auto game = std::make_unique<Game>();
+  const auto before = game->core.lightrecExecutor().counters();
+  game->core.mem_w32(kRam, 1u, psx::cpu::ExecutableWriteSource::Cpu);
+  const auto after = game->core.lightrecExecutor().counters();
+  const auto cpu = static_cast<std::size_t>(psx::cpu::ExecutableWriteSource::Cpu);
+  CHECK_EQ(after.invalidationsBySource[cpu] - before.invalidationsBySource[cpu], 1u);
+  CHECK_EQ(after.invalidationsBySource[kMapped], before.invalidationsBySource[kMapped]);
+}
+
 static void test_an_unnotified_burst_costs_one_dma_invalidation() {
   auto game = std::make_unique<Game>();
   const auto before = game->core.lightrecExecutor().counters();
@@ -41,6 +51,7 @@ static void test_an_unnotified_burst_costs_one_dma_invalidation() {
 
 int main() {
   RUN(a_guest_store_is_counted_against_mapped_store);
+  RUN(a_labelled_store_is_counted_against_its_source);
   RUN(an_unnotified_burst_costs_one_dma_invalidation);
   return pt_summary();
 }

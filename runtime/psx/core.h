@@ -3,6 +3,7 @@
 // process-global active machine. Public R3000 inheritance exposes the canonical register state to the
 // dynarec state bridge and native service owners.
 #pragma once
+#include "executable_write_source.h"
 #include "game_iface.h" // Legacy GameConfig/GameHooks compatibility views.
 #include "pc_observer.h"
 #include "r3000.h"
@@ -119,9 +120,16 @@ public:
   int32_t mem_r8s(uint32_t a) {
     return (int32_t)(int8_t)mem_r8(a);
   }
-  void mem_w8(uint32_t a, uint8_t v);
-  void mem_w16(uint32_t a, uint16_t v);
-  void mem_w32(uint32_t a, uint32_t v);
+  // The optional source labels the executable-write notification each store issues: the Lightrec
+  // memory callbacks pass Cpu (a guest store), native and device paths keep the default.
+  void
+  mem_w8(uint32_t a, uint8_t v, psx::cpu::ExecutableWriteSource source = psx::cpu::ExecutableWriteSource::MappedStore);
+  void mem_w16(uint32_t a,
+               uint16_t v,
+               psx::cpu::ExecutableWriteSource source = psx::cpu::ExecutableWriteSource::MappedStore);
+  void mem_w32(uint32_t a,
+               uint32_t v,
+               psx::cpu::ExecutableWriteSource source = psx::cpu::ExecutableWriteSource::MappedStore);
   // `mem_w32` without the executable-write notification, for a burst whose caller notifies the
   // covered range once afterwards (MDEC-out DMA). Every other store check still runs. The caller
   // owns the notification: skipping it leaves stale translated code.
@@ -171,7 +179,8 @@ private:
   // differential's journal sees (and on its shadow path, replays) each one in order.
   uint32_t deviceRead(uint32_t a, uint32_t bytes);
   void deviceWrite(uint32_t a, uint32_t v, uint32_t bytes);
-  template <class Value, bool NotifyExecutable = true> void writeGuestMemory(uint32_t address, Value value);
+  template <class Value, bool NotifyExecutable = true>
+  void writeGuestMemory(uint32_t address, Value value, psx::cpu::ExecutableWriteSource source);
 
   // WATCH HOOKS — every guest store calls these, so their DISABLED path is on the hottest path in
   // the runtime. Profiling put cw_check at 3.1-3.7% and wwatch_check at 1.8% of total CPU with no

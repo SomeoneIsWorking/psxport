@@ -89,7 +89,8 @@ static void display_pass_write_guard(Core *c, uint32_t a, uint32_t v, int width)
   abort();
 }
 
-template <class Value, bool NotifyExecutable> void Core::writeGuestMemory(uint32_t a, Value v) {
+template <class Value, bool NotifyExecutable>
+void Core::writeGuestMemory(uint32_t a, Value v, psx::cpu::ExecutableWriteSource source) {
   constexpr auto width = static_cast<uint32_t>(sizeof(Value));
   uint8_t *p = host_ptr(a, width);
   display_pass_write_guard(this, a, v, width);
@@ -99,27 +100,27 @@ template <class Value, bool NotifyExecutable> void Core::writeGuestMemory(uint32
   if (p) {
     memcpy(p, &v, width);
     if constexpr (NotifyExecutable) {
-      psx::cpu::notifyExecutableWrite(*this, {a, a + width}, psx::cpu::ExecutableWriteSource::MappedStore);
+      psx::cpu::notifyExecutableWrite(*this, {a, a + width}, source);
     }
   } else {
     deviceWrite(a, v, width);
   }
 }
 
-void Core::mem_w8(uint32_t a, uint8_t v) {
-  writeGuestMemory(a, v);
+void Core::mem_w8(uint32_t a, uint8_t v, psx::cpu::ExecutableWriteSource source) {
+  writeGuestMemory(a, v, source);
 }
-void Core::mem_w16(uint32_t a, uint16_t v) {
-  writeGuestMemory(a, v);
+void Core::mem_w16(uint32_t a, uint16_t v, psx::cpu::ExecutableWriteSource source) {
+  writeGuestMemory(a, v, source);
 }
-void Core::mem_w32(uint32_t a, uint32_t v) {
-  writeGuestMemory(a, v);
+void Core::mem_w32(uint32_t a, uint32_t v, psx::cpu::ExecutableWriteSource source) {
+  writeGuestMemory(a, v, source);
 }
 void Core::mem_w8_unnotified(uint32_t a, uint8_t v) {
-  writeGuestMemory<uint8_t, false>(a, v);
+  writeGuestMemory<uint8_t, false>(a, v, psx::cpu::ExecutableWriteSource::MappedStore);
 }
 void Core::mem_w32_unnotified(uint32_t a, uint32_t v) {
-  writeGuestMemory<uint32_t, false>(a, v);
+  writeGuestMemory<uint32_t, false>(a, v, psx::cpu::ExecutableWriteSource::MappedStore);
 }
 
 // lwl/lwr/swl/swr: little-endian unaligned word merge.

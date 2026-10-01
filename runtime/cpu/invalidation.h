@@ -1,5 +1,6 @@
 #pragma once
 
+#include "executable_write_source.h"
 #include "guest_program_image.h"
 
 #include <cstddef>
@@ -8,18 +9,6 @@
 class Core;
 
 namespace psx::cpu {
-
-enum class ExecutableWriteSource : std::uint8_t {
-  Cpu,
-  MappedStore,
-  Dma,
-  ModuleLoad,
-  Debugger,
-  Savestate,
-  Native,
-};
-
-inline constexpr std::size_t kExecutableWriteSourceCount = 7;
 
 void notifyExecutableWrite(Core &core, GuestAddressRange range, ExecutableWriteSource source);
 void notifyExecutableStateReplaced(Core &core, ExecutableWriteSource source);
