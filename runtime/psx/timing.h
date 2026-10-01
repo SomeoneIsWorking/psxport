@@ -59,6 +59,20 @@ public:
   // Advance the host field count once at the title's native frame boundary.
   void frameTick();
 
+  // ---- whole-machine state (runtime/psx/state/device_bus.cpp) ---------------------------------
+  // The emulated clock and the display-pacing phase are private because only the advance methods
+  // own them. A save state still has to carry them: a loaded run that resumed on a different clock
+  // would answer every guest stopwatch, every CD deadline and every pacing wait differently from
+  // the run that took the state, which is the whole thing a state is for.
+  struct ClockSnapshot {
+    uint64_t nowQ32 = 0;
+    uint64_t displayBoundaryQ32 = 0;
+    uint64_t displayPhaseNumerator = 0;
+    uint64_t displayPhaseDenominator = 1;
+  };
+  ClockSnapshot clockSnapshot() const;
+  void restoreClockSnapshot(const ClockSnapshot &clock);
+
 private:
   EmulatedTime mEmulatedTime;
   // Exact rational phase for display pacing subdivisions. fps60 delivers two 1/2-field pacing

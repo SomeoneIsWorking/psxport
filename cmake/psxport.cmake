@@ -122,6 +122,21 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/mdec_beetle.c
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/spu.c
   ${PSXPORT_ROOT}/runtime/psx/spu_beetle.cpp
+  # Beetle's own save-state chunk codec (MDFNSS_StateAction / MDFNSS_SaveSM / MDFNSS_LoadSM). It was
+  # NOT compiled before, which is why runtime/psx/gte_vendor_hooks.cpp answered MDFNSS_StateAction
+  # with a stub returning 1: the lifted SPU and MDEC call it, and a stub that never reads a byte
+  # makes every device save state an empty section a load would accept. psx::state::BeetleDeviceState
+  # (runtime/psx/state/beetle_device_state.*) now drives the fork's real SPU/MDEC state actions, and
+  # defines the `StateAction` aggregate this unit calls.
+  ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/state.c
+  ${PSXPORT_ROOT}/runtime/psx/state/state_blob.cpp
+  ${PSXPORT_ROOT}/runtime/psx/state/state_file.cpp
+  ${PSXPORT_ROOT}/runtime/psx/state/beetle_device_state.cpp
+  ${PSXPORT_ROOT}/runtime/psx/state/machine_state.cpp
+  ${PSXPORT_ROOT}/runtime/psx/state/device_cpu.cpp
+  ${PSXPORT_ROOT}/runtime/psx/state/device_gpu.cpp
+  ${PSXPORT_ROOT}/runtime/psx/state/device_bus.cpp
+  ${PSXPORT_ROOT}/runtime/psx/state/state_command.cpp
   ${PSXPORT_ROOT}/runtime/psx/disc.cpp
   ${PSXPORT_ROOT}/runtime/psx/disc_provision.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd_position.cpp
@@ -239,6 +254,9 @@ target_include_directories(psxport PUBLIC
   # because a game's own translation units are entitled to the same identity the framework stamps.
   ${CMAKE_BINARY_DIR}
   ${PSXPORT_ROOT}/${RT} ${PSXPORT_ROOT}/runtime/cpu ${PSXPORT_ROOT}/runtime/ui
+  # The save-state owner (runtime/psx/state/). Public so a title's own NativeStatePort implementation
+  # can include machine_state.h and state_blob.h the way the framework's own sections do.
+  ${PSXPORT_ROOT}/${RT}/state
   ${MED} ${MED}/psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr/include
@@ -315,3 +333,16 @@ set_source_files_properties(
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gpu.c
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gpu_polygon_sub.c
   PROPERTIES COMPILE_OPTIONS "-include;stdio.h")
+
+# MEDNAFEN_VERSION_NUMERIC is written into the save-state stream header by the fork's MDFNSS_SaveSM,
+# and Upstream's Makefile generates it into a settings header psxport does not build. It is never
+# COMPARED on the way back in — MDFNSS_LoadSM checks the 16-byte magic and nothing else, because the
+# per-field size checks inside each chunk are what actually version a state. So this supplies the
+# symbol at the value the fork's own reader ignores, rather than forking a header to change it.
+#
+# HAVE_STRL tells the libretro compat header to use the C library's strlcpy/strlcat instead of the
+# `strlcpy_retro__` shims, which live in libretro-common/strings.c — a unit psxport does not compile.
+# state.c uses strlcpy exactly once, to copy a field LABEL into a 256-byte state buffer.
+set_source_files_properties(
+  ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/state.c
+  PROPERTIES COMPILE_DEFINITIONS "MEDNAFEN_VERSION_NUMERIC=0;HAVE_STRL;_DEFAULT_SOURCE")

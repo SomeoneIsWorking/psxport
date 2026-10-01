@@ -56,6 +56,14 @@ extern TextVar cv_store_observe;
 extern TextVar cv_ramdump;
 extern TextVar cv_ramdump_frame;
 
+// PSXPORT_LOAD_STATE — a whole-machine state file to resume from BEFORE the first field, read once
+// at boot through this configuration owner (environment, then ./.env). This is how a headless tool
+// starts inside a level instead of at power-on. Unset means the machine boots normally; a set path
+// that cannot be loaded is a REFUSAL, not a silent fall back to power-on — a run that quietly
+// booted from scratch after a broken state path would spend the whole budget re-deriving the state
+// it was asked to start from.
+extern TextVar cv_load_state;
+
 // PSXPORT_PAD_RECORD / PSXPORT_PAD_REPLAY / PSXPORT_PAD_RESUME — the pad session's record sink, the
 // recording a gate replays at real speed, and the recording a player resumes from (fast-forwarded).
 // All three are phase-keyed .pad files (runtime/psx/pad_recording.h); PSXPORT_PAD_RECORD=0 disables

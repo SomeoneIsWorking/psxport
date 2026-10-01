@@ -11,6 +11,7 @@
 // Every case runs through the PRODUCT route: a guest caller `jal`s the guest function, the executor's
 // host-dispatch boundary resolves the installed override, and `NativeDispatcher::invoke` hands the call
 // to the differential. Nothing here calls the differential's internals directly.
+#include "mips_asm.h"
 #include "testutil.h"
 
 #include "core.h"
@@ -38,49 +39,7 @@ namespace {
 using psx::cpu::DifferentialKeyStats;
 using psx::cpu::DifferentialVerdict;
 
-constexpr std::uint32_t rZero = 0, rV0 = 2, rA0 = 4, rA1 = 5, rA2 = 6, rT0 = 8, rT1 = 9, rS0 = 16, rSp = 29, rRa = 31;
-
-constexpr std::uint32_t special(std::uint32_t rs, std::uint32_t rt, std::uint32_t rd, std::uint32_t funct) {
-  return (rs << 21) | (rt << 16) | (rd << 11) | funct;
-}
-constexpr std::uint32_t addu(std::uint32_t rd, std::uint32_t rs, std::uint32_t rt) {
-  return special(rs, rt, rd, 0x21u);
-}
-constexpr std::uint32_t immediate(std::uint32_t op, std::uint32_t rt, std::uint32_t rs, std::int32_t imm) {
-  return (op << 26) | (rs << 21) | (rt << 16) | (static_cast<std::uint32_t>(imm) & 0xFFFFu);
-}
-constexpr std::uint32_t addiu(std::uint32_t rt, std::uint32_t rs, std::int32_t imm) {
-  return immediate(0x09u, rt, rs, imm);
-}
-constexpr std::uint32_t lui(std::uint32_t rt, std::uint32_t imm) {
-  return immediate(0x0Fu, rt, rZero, static_cast<std::int32_t>(imm));
-}
-constexpr std::uint32_t lw(std::uint32_t rt, std::uint32_t base, std::int32_t off) {
-  return immediate(0x23u, rt, base, off);
-}
-constexpr std::uint32_t sw(std::uint32_t rt, std::uint32_t base, std::int32_t off) {
-  return immediate(0x2Bu, rt, base, off);
-}
-constexpr std::uint32_t jal(std::uint32_t target) {
-  return 0x0C000000u | ((target >> 2u) & 0x03FFFFFFu);
-}
-// A PC-relative branch, with `atBranch` the address the branch itself will be assembled at. `jal` needs
-// no such argument because its target field is absolute; a branch's is a word displacement from the
-// instruction AFTER it, and getting that wrong produces a plausible address in no loaded image — which
-// is exactly the 0x0002021C fault this helper's first version produced.
-constexpr std::uint32_t bne(std::uint32_t rs, std::uint32_t rt, std::uint32_t atBranch, std::uint32_t target) {
-  const std::uint32_t displacement = (target - (atBranch + 4u)) >> 2u;
-  return (0x05u << 26) | (rs << 21) | (rt << 16) | (displacement & 0xFFFFu);
-}
-constexpr std::uint32_t jrRa() {
-  return special(rRa, rZero, rZero, 0x08u);
-}
-constexpr std::uint32_t syscallInstruction() {
-  return 0x0000000Cu;
-}
-constexpr std::uint32_t nop() {
-  return 0;
-}
+using namespace psx::test::mips;
 
 // The guest program. `kCaller` saves `ra`, calls the function under test and returns; the function
 // under test computes a0+a1 into v0 through callee-saved s0 (so it builds a stack frame and leaves its
@@ -108,33 +67,33 @@ constexpr std::uint32_t kCallerS0 = 0x5A5A0001u;
 constexpr std::uint32_t rT2 = 10;
 
 constexpr std::array<std::uint32_t, 7> kCallerCode = {
-    addiu(rSp, rSp, -16),
-    sw(rRa, rSp, 12),
+    addiu(kSp, kSp, -16),
+    sw(kRa, kSp, 12),
     jal(kFunction),
     nop(),
-    lw(rRa, rSp, 12),
+    lw(kRa, kSp, 12),
     jrRa(),
-    addiu(rSp, rSp, 16),
+    addiu(kSp, kSp, 16),
 };
 
 constexpr std::array<std::uint32_t, 8> kSumCode = {
-    addiu(rSp, rSp, -8),
-    sw(rS0, rSp, 4),
-    addu(rS0, rA0, rA1),
-    addu(rV0, rS0, rZero),
-    sw(rV0, rA2, 0),
-    lw(rS0, rSp, 4),
+    addiu(kSp, kSp, -8),
+    sw(kS0, kSp, 4),
+    addu(kS0, kA0, kA1),
+    addu(kV0, kS0, kZero),
+    sw(kV0, kA2, 0),
+    lw(kS0, kSp, 4),
     jrRa(),
-    addiu(rSp, rSp, 8),
+    addiu(kSp, kSp, 8),
 };
 
 // The same contract, plus a device read the result depends on: v0 = a0 + a1 + I_MASK.
 constexpr std::array<std::uint32_t, 7> kDeviceCode = {
-    lui(rT1, 0x1F80u),
-    lw(rT0, rT1, 0x1074),
-    addu(rV0, rA0, rA1),
-    addu(rV0, rV0, rT0),
-    sw(rV0, rA2, 0),
+    lui(kT1, 0x1F80u),
+    lw(kT0, kT1, 0x1074),
+    addu(kV0, kA0, kA1),
+    addu(kV0, kV0, kT0),
+    sw(kV0, kA2, 0),
     jrRa(),
     nop(),
 };
@@ -154,35 +113,35 @@ constexpr std::uint32_t kBoundedEffectCount = 4096;
 constexpr std::uint32_t kManyEffectLoopIndex = 2;
 constexpr std::uint32_t kManyEffectBranchIndex = 4;
 constexpr std::array<std::uint32_t, 12> kManyEffectCode = {
-    lui(rT1, 0x1F80u),
-    addiu(rT2, rZero, static_cast<std::int32_t>(kBoundedEffectCount)),
+    lui(kT1, 0x1F80u),
+    addiu(rT2, kZero, static_cast<std::int32_t>(kBoundedEffectCount)),
     // ---- the loop body: ack I_STAT, decrement, branch back, delay slot ----
-    sw(rT2, rT1, 0x1070),
+    sw(rT2, kT1, 0x1070),
     addiu(rT2, rT2, -1),
-    bne(rT2, rZero, kFunction + kManyEffectBranchIndex * 4u, kFunction + kManyEffectLoopIndex * 4u),
+    bne(rT2, kZero, kFunction + kManyEffectBranchIndex * 4u, kFunction + kManyEffectLoopIndex * 4u),
     nop(),
     // ---- after the loop ----
-    lw(rT0, rT1, 0x1074),
-    addu(rV0, rA0, rA1),
-    addu(rV0, rV0, rT0),
-    sw(rV0, rA2, 0),
+    lw(kT0, kT1, 0x1074),
+    addu(kV0, kA0, kA1),
+    addu(kV0, kV0, kT0),
+    sw(kV0, kA2, 0),
     jrRa(),
     nop(),
 };
 
 // An original that enters a critical section through the kernel: a syscall the journal cannot replay.
 constexpr std::array<std::uint32_t, 6> kSyscallCode = {
-    addiu(rA0, rZero, 1),
+    addiu(kA0, kZero, 1),
     syscallInstruction(),
-    addu(rV0, rA0, rZero),
-    sw(rV0, rA2, 0),
+    addu(kV0, kA0, kZero),
+    sw(kV0, kA2, 0),
     jrRa(),
     nop(),
 };
 
 // kPatchTarget returns a constant; the patching original rewrites that constant's instruction to 2.
-constexpr std::uint32_t kPatchedBefore = addiu(rV0, rZero, 1);
-constexpr std::uint32_t kPatchedAfter = addiu(rV0, rZero, 2);
+constexpr std::uint32_t kPatchedBefore = addiu(kV0, kZero, 1);
+constexpr std::uint32_t kPatchedAfter = addiu(kV0, kZero, 2);
 // The patched instruction is the block's FIRST word on purpose. Lightrec revokes a block only when the
 // code-LUT entry at its start is cleared, so a write to an interior word (here, the delay slot) is NOT
 // honoured by `lightrec_invalidate` at all — a pre-existing S015 defect recorded in
@@ -191,12 +150,12 @@ constexpr std::array<std::uint32_t, 3> kPatchTargetCode = {kPatchedBefore, jrRa(
 // v0 = a0 + a1; *a2 = v0; and *(a1_target) = the patched instruction, with the target passed in t1 so
 // the optimizer cannot see a constant store into code.
 constexpr std::array<std::uint32_t, 7> kPatchingCode = {
-    addu(rV0, rA0, rA1),
-    sw(rV0, rA2, 0),
-    lw(rT0, rA2, 4),
+    addu(kV0, kA0, kA1),
+    sw(kV0, kA2, 0),
+    lw(kT0, kA2, 4),
     nop(), // MIPS I load delay: the store must see the loaded t0, not the stale one
 
-    sw(rT0, rT1, 0),
+    sw(kT0, kT1, 0),
     jrRa(),
     nop(),
 };
@@ -221,23 +180,23 @@ int g_nativeCalls = 0;
 
 void correctSum(Core *core) {
   ++g_nativeCalls;
-  core->r[rV0] = core->r[rA0] + core->r[rA1];
-  core->mem_w32(core->r[rA2], core->r[rV0]);
+  core->r[kV0] = core->r[kA0] + core->r[kA1];
+  core->mem_w32(core->r[kA2], core->r[kV0]);
 }
 void wrongResult(Core *core) {
   ++g_nativeCalls;
-  core->r[rV0] = core->r[rA0] + core->r[rA1] + 1u;
-  core->mem_w32(core->r[rA2], core->r[rA0] + core->r[rA1]);
+  core->r[kV0] = core->r[kA0] + core->r[kA1] + 1u;
+  core->mem_w32(core->r[kA2], core->r[kA0] + core->r[kA1]);
 }
 void missingStore(Core *core) {
   ++g_nativeCalls;
-  core->r[rV0] = core->r[rA0] + core->r[rA1];
+  core->r[kV0] = core->r[kA0] + core->r[kA1];
 }
 void clobberedS0(Core *core) {
   ++g_nativeCalls;
-  core->r[rV0] = core->r[rA0] + core->r[rA1];
-  core->mem_w32(core->r[rA2], core->r[rV0]);
-  core->r[rS0] = 0xDEADBEEFu;
+  core->r[kV0] = core->r[kA0] + core->r[kA1];
+  core->mem_w32(core->r[kA2], core->r[kV0]);
+  core->r[kS0] = 0xDEADBEEFu;
 }
 void extraStore(Core *core) {
   ++g_nativeCalls;
@@ -255,24 +214,24 @@ void biosCall(Core *core) {
   ++g_nativeCalls;
   correctSum(core);
   --g_nativeCalls;
-  core->r[rT1] = 0x3Cu; // A0:3C putchar — any BIOS service; the journal must withhold it
+  core->r[kT1] = 0x3Cu; // A0:3C putchar — any BIOS service; the journal must withhold it
   psx::cpu::dispatchGuestToReturn(*core, 0xA0u, psx::cpu::ExecutionBudget::fromCycles(1000), "test bios call");
 }
 void correctDeviceSum(Core *core) {
   ++g_nativeCalls;
-  core->r[rV0] = core->r[rA0] + core->r[rA1] + core->mem_r32(kIrqMask);
-  core->mem_w32(core->r[rA2], core->r[rV0]);
+  core->r[kV0] = core->r[kA0] + core->r[kA1] + core->mem_r32(kIrqMask);
+  core->mem_w32(core->r[kA2], core->r[kV0]);
 }
 void correctPatching(Core *core) {
   ++g_nativeCalls;
   // Executes the patch target from the RESTORED entry bytes first, so Lightrec holds a block translated
   // from the unpatched instruction when the differential puts the original's bytes back.
-  const std::uint32_t target = core->r[rT1];
+  const std::uint32_t target = core->r[kT1];
   psx::cpu::dispatchGuestToReturn(
       *core, kPatchTarget, psx::cpu::ExecutionBudget::fromCycles(100000), "test patch-target warm");
-  core->r[rV0] = core->r[rA0] + core->r[rA1];
-  core->mem_w32(core->r[rA2], core->r[rV0]);
-  core->mem_w32(target, core->mem_r32(core->r[rA2] + 4u));
+  core->r[kV0] = core->r[kA0] + core->r[kA1];
+  core->mem_w32(core->r[kA2], core->r[kV0]);
+  core->mem_w32(target, core->mem_r32(core->r[kA2] + 4u));
 }
 
 // THE RUNAWAY, docs/issues/0141. A native override whose body never returns and stores to a device
@@ -362,13 +321,13 @@ struct Fixture {
   // One guest call of the function under test, through the product dispatch route.
   void call(std::uint32_t a = kArgA, std::uint32_t b = kArgB) {
     Core &c = core();
-    c.r[rA0] = a;
-    c.r[rA1] = b;
-    c.r[rA2] = kResult;
-    c.r[rT1] = kPatchTarget;
-    c.r[rS0] = kCallerS0;
-    c.r[rSp] = kStackTop;
-    c.r[rRa] = kOuterReturn;
+    c.r[kA0] = a;
+    c.r[kA1] = b;
+    c.r[kA2] = kResult;
+    c.r[kT1] = kPatchTarget;
+    c.r[kS0] = kCallerS0;
+    c.r[kSp] = kStackTop;
+    c.r[kRa] = kOuterReturn;
     psx::cpu::dispatchGuestToReturn(c, kCaller, psx::cpu::ExecutionBudget::fromCycles(1'000'000), "test caller");
   }
 
@@ -405,10 +364,10 @@ static void test_a_correct_override_matches_and_the_run_continues_from_the_origi
   CHECK_EQ(stats.mismatch, 0u);
   CHECK_EQ(stats.incomparable, 0u);
   CHECK_EQ(g_nativeCalls, 1);
-  CHECK_EQ(f.core().r[rV0], kSum);
+  CHECK_EQ(f.core().r[kV0], kSum);
   CHECK_EQ(f.core().mem_r32(kResult), kSum);
-  CHECK_EQ(f.core().r[rS0], kCallerS0);
-  CHECK_EQ(f.core().r[rSp], kStackTop);
+  CHECK_EQ(f.core().r[kS0], kCallerS0);
+  CHECK_EQ(f.core().r[kSp], kStackTop);
   // The original saved s0 below the caller's sp and the native did not: that residue is the dead-stack
   // window working, counted rather than silently dropped.
   CHECK(stats.deadStackBytesIgnored > 0u);
@@ -425,7 +384,7 @@ static void test_a_wrong_result_register_is_a_mismatch_naming_v0(void) {
   CHECK(stats.firstMismatch->difference->original == "0x00001335");
   CHECK(stats.firstMismatch->difference->native == "0x00001336");
   // The run continues from the original whatever the override did.
-  CHECK_EQ(f.core().r[rV0], kSum);
+  CHECK_EQ(f.core().r[kV0], kSum);
 }
 
 static void test_a_missing_store_is_a_mismatch_naming_the_ram_range(void) {
@@ -446,7 +405,7 @@ static void test_a_clobbered_callee_saved_register_is_a_mismatch_naming_s0(void)
   CHECK_EQ(stats.mismatch, 1u);
   CHECK(stats.firstMismatch->difference->what == "register s0");
   CHECK(stats.firstMismatch->difference->native == "0xDEADBEEF");
-  CHECK_EQ(f.core().r[rS0], kCallerS0);
+  CHECK_EQ(f.core().r[kS0], kCallerS0);
 }
 
 static void test_an_extra_store_is_a_mismatch_and_does_not_survive(void) {
@@ -479,7 +438,7 @@ static void test_an_override_replaying_the_originals_device_read_matches(void) {
   const DifferentialKeyStats &stats = f.stats();
   CHECK_EQ(stats.match, 1u);
   CHECK_EQ(stats.mismatch, 0u);
-  CHECK_EQ(f.core().r[rV0], kSum + 0x55u);
+  CHECK_EQ(f.core().r[kV0], kSum + 0x55u);
 }
 
 static void test_a_native_bios_service_is_incomparable_never_a_match(void) {
@@ -602,7 +561,7 @@ static void test_a_native_that_loops_forever_storing_to_a_device_terminates_at_t
   CHECK(after.value() - before.value() < 192 * 1024);
   // The run continues from the original: its sum is in v0 and in RAM, and the endless store never
   // reached the device.
-  CHECK_EQ(f.core().r[rV0], kSum);
+  CHECK_EQ(f.core().r[kV0], kSum);
   CHECK_EQ(f.core().mem_r32(kResult), kSum);
   CHECK_EQ(f.game->hle.i_mask, 0u);
 }
@@ -624,9 +583,9 @@ void manyEffectSum(Core *core) {
   for (std::uint32_t count = kBoundedEffectCount; count != 0; --count) {
     core->mem_w32(kIrqStat, count);
   }
-  const std::uint32_t value = core->r[rA0] + core->r[rA1] + core->mem_r32(kIrqMask);
-  core->r[rV0] = value;
-  core->mem_w32(core->r[rA2], value);
+  const std::uint32_t value = core->r[kA0] + core->r[kA1] + core->mem_r32(kIrqMask);
+  core->r[kV0] = value;
+  core->mem_w32(core->r[kA2], value);
 }
 
 static void test_a_real_call_with_many_effects_under_the_bound_still_matches_with_its_journal_intact(void) {
@@ -661,10 +620,10 @@ static void test_a_real_call_with_many_effects_under_the_bound_still_matches_wit
 static void test_restoring_the_originals_code_bytes_invalidates_the_translated_block(void) {
   Fixture f("code-restore", kPatchingCode, &correctPatching);
   f.core().mem_w32(kResult + 4u, kPatchedAfter);
-  f.core().r[rRa] = kOuterReturn;
+  f.core().r[kRa] = kOuterReturn;
   psx::cpu::dispatchGuestToReturn(
       f.core(), kPatchTarget, psx::cpu::ExecutionBudget::fromCycles(100000), "test patch-target before");
-  CHECK_EQ(f.core().r[rV0], 1u);
+  CHECK_EQ(f.core().r[kV0], 1u);
   const std::uint64_t invalidationsBefore = f.core().lightrecExecutor().counters().invalidations;
   f.call();
   const DifferentialKeyStats &stats = f.stats();
@@ -672,10 +631,10 @@ static void test_restoring_the_originals_code_bytes_invalidates_the_translated_b
   CHECK_EQ(f.core().mem_r32(kPatchTarget), kPatchedAfter);
   CHECK(stats.restoredRanges >= 2u);
   CHECK(f.core().lightrecExecutor().counters().invalidations - invalidationsBefore >= stats.restoredRanges);
-  f.core().r[rRa] = kOuterReturn;
+  f.core().r[kRa] = kOuterReturn;
   psx::cpu::dispatchGuestToReturn(
       f.core(), kPatchTarget, psx::cpu::ExecutionBudget::fromCycles(100000), "test patch-target after");
-  CHECK_EQ(f.core().r[rV0], 2u);
+  CHECK_EQ(f.core().r[kV0], 2u);
 }
 
 } // namespace

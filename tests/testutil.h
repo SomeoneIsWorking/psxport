@@ -126,6 +126,20 @@ static inline int pt_streq_failed(
       return;                                                                                                          \
   } while (0)
 
+/* A check that CARRIES ITS OWN FAILURE TEXT. For the cases where the bare condition would print
+ * `file == nullptr` and leave the reader to guess which of the four reasons applied — a refusal
+ * whose reason string IS the evidence. Three tests needed this and each had grown its own copy,
+ * which is how the copies drifted. */
+#define CHECK_MSG(cond, msg)                                                                                           \
+  do {                                                                                                                 \
+    ++pt_checks;                                                                                                       \
+    ++pt_case_checks;                                                                                                  \
+    if (!(cond)) {                                                                                                     \
+      PT_FAILED("%s", msg);                                                                                            \
+      return;                                                                                                          \
+    }                                                                                                                  \
+  } while (0)
+
 /* Buffer equality; on mismatch names the FIRST differing byte index and both bytes. */
 #define CHECK_MEM_EQ(got, want, n)                                                                                     \
   do {                                                                                                                 \

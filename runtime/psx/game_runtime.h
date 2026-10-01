@@ -28,6 +28,11 @@ class TemporalFramePresentation;
 struct GameConfig;
 struct GameHooks;
 struct PlatformHlePlan;
+namespace psx::state {
+class BlobReader;
+class BlobWriter;
+class NativeStatePort;
+} // namespace psx::state
 
 // The host-visible identity of a game: what its window is called and where its memory card lives.
 // A DIRECT runtime (core.cfg == nullptr) declares it through GameRuntime::hostIdentity(); the legacy
@@ -188,6 +193,20 @@ public:
   // the log, this answers the client that asked.
   virtual bool controlCommand(Core &, const char *, const char *, FILE *) {
     return false;
+  }
+
+  // TITLE-OWNED NATIVE STATE, for the whole-machine save state (runtime/psx/state/machine_state.h).
+  //
+  // A title whose native owners — frame driver, field scheduler, boot-sequence state, picker
+  // session — hold state outside guest RAM returns a port here; a title with none returns null and
+  // no title section is ever written. This is the ONLY way to declare native owners, so "a title has
+  // native state" and "a title implements it" cannot be two claims that come apart.
+  //
+  // A LOAD refuses rather than desyncs: a file whose title section does not match this port's name
+  // and version is rejected by name, and so is a title that owns native state the file does not
+  // carry. Neither direction is recoverable by trying harder later — the run is already wrong.
+  virtual psx::state::NativeStatePort *nativeState() const {
+    return nullptr;
   }
 
   // Non-virtual compatibility views. Direct runtimes return null; only

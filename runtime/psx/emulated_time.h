@@ -17,6 +17,21 @@ public:
   [[nodiscard]] uint64_t nowTicks() const;
   [[nodiscard]] uint64_t hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const;
 
+  // Whole-machine state (written by runtime/psx/state/device_bus.cpp, where this class's private
+  // members are reachable). Split into two 64-bit halves because the field is a 128-bit fixed-point
+  // anchor and there is no portable 128-bit serializer: a save state has to survive being written
+  // through a byte-oriented section codec.
+  [[nodiscard]] uint64_t nowQ32() const {
+    return static_cast<uint64_t>(mNowQ32);
+  }
+  [[nodiscard]] uint64_t displayBoundaryQ32() const {
+    return static_cast<uint64_t>(mDisplayBoundaryQ32);
+  }
+  void restoreQ32(uint64_t now, uint64_t boundary) {
+    mNowQ32 = static_cast<unsigned __int128>(now);
+    mDisplayBoundaryQ32 = static_cast<unsigned __int128>(boundary);
+  }
+
 private:
   // Q32 CPU ticks preserve the fractional NTSC field duration without a floating-point or host-time
   // dependency. The display boundary is a phase anchor: instructions can consume a field interval,

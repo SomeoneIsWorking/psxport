@@ -328,6 +328,11 @@ TextVar cv_ramdump_frame("PSXPORT_RAMDUMP_FRAME",
                          "native frame N at which to write the PSXPORT_RAMDUMP path mid-run; this is "
                          "the one that works while a title is playing",
                          /*persistable=*/false);
+TextVar cv_load_state("PSXPORT_LOAD_STATE",
+                      "",
+                      "whole-machine state file to resume from before the first field; unset boots "
+                      "normally, and a path that cannot be loaded refuses rather than falling back",
+                      /*persistable=*/false);
 TextVar cv_pad_record("PSXPORT_PAD_RECORD",
                       "",
                       "write this session's phase-keyed pad recording here (0 = no sink; windowed runs "

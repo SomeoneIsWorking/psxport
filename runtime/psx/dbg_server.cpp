@@ -24,7 +24,8 @@
 #include "config.h"      // `cvars` / `cvar` — the layered CVar registry + env audit
 #include "config_vars.h" // cv_debug_server
 #include "control_surface_limits.h" // kMaxControlReadWords — the one home for the cap — the endpoint's port, and cv_render_path's live switch
-#include "render_mode.h" // `renderpath` — RenderPath + render_path_parse/name/next
+#include "render_mode.h"         // `renderpath` — RenderPath + render_path_parse/name/next
+#include "state/state_command.h" // `state save|load <path>` — the whole-machine state owner
 #include <arpa/inet.h>
 #include <errno.h>
 #include <lucent/log.h>
@@ -313,6 +314,8 @@ static void dbg_exec(FILE *out, const char *line) {
             "  hold <hex>       set the raw active-low pad mask\n"
             "  padrec [save <path> [nframes]]  frames captured so far / cut the LIVE session into a .pad replay\n"
             "  preseq <N> [dir] dump the next N PRESENTED frames (fps60: real AND interp) as dir/p%04d.ppm\n"
+            "  state save <path>  write the whole machine (CPU, RAM, VRAM, devices, card, title state)\n"
+            "  state load <path>  resume it; refuses on a version, section or title mismatch rather than desync\n"
             "  tp [x y z]       pin the camera at (x,y,z); bare `tp` releases it back to the follow logic\n"
             "  sbs [0|1]        toggle/set Vulkan-vs-Software side-by-side view\n"
             "  pause            freeze the game (window holds last frame)\n"
@@ -819,6 +822,11 @@ static void dbg_exec(FILE *out, const char *line) {
     } else {
       fprintf(out, "usage: session return\n");
     }
+  } else if (!strcmp(cmd, "state")) {
+    // Whole-machine save state (runtime/psx/state/). Serviced HERE, between frames, because that is
+    // the only point at which no native override is active and every device is in a state a later run
+    // can resume from. Answers on the SAME channel, including a refusal and its reason.
+    psx::state::handleControlCommand(*s_ctx, line, out);
   } else if (s_ctx->runtime && s_ctx->runtime->controlCommand(*s_ctx, cmd, line, out)) {
     // handled by the title's own control surface (GameRuntime::controlCommand)
   } else {

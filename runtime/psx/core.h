@@ -38,6 +38,28 @@ public:
   uint8_t ram[0x200000];
   uint8_t scratch[0x400];
 
+  // ---- Whole-machine state (runtime/psx/state/device_cpu.cpp defines these) -------------------
+  //
+  // The DMA channel register shadows, the MDEC ping-pong cursors and the last SPU transfer address
+  // are private because only the MMIO dispatcher (mem.cpp) writes them. A save state still has to
+  // carry them: a channel left PENDING across a load is guest-visible (the guest polls CHCR bit 24),
+  // and the MDEC cursor is where the next decoded word is read from. They are read and written
+  // through this ONE pair rather than by making the members public, so the save-state owner cannot
+  // become a second writer of them.
+  struct DmaChannelShadow {
+    uint32_t madr = 0, bcr = 0, chcr = 0;
+  };
+  struct BusShadows {
+    DmaChannelShadow channel[7]; // 0,1,2,4,6 are modelled; 3,5 are read-only and stay zero
+    uint32_t mdec0Addr = 0;
+    int32_t mdec0Left = 0;
+    uint32_t mdec1Addr = 0;
+    int32_t mdec1Left = 0;
+    uint32_t spuXferAddr = 0;
+  };
+  BusShadows busShadows() const;
+  void restoreBusShadows(const BusShadows &shadows);
+
   Game *game = nullptr; // back-pointer to the owning Game (set by Game's constructor)
 
   // ---- Framework↔game seam. GameRuntime is the owning polymorphic interface. cfg/hooks are

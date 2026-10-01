@@ -91,6 +91,28 @@ public:
     }
   }
 
+  // ---- whole-machine state (runtime/psx/state/device_bus.cpp) ---------------------------------
+  // The descriptor table and the directory-enumeration cursor are private because only the card
+  // filesystem writes them. A save state still has to carry both — the guest holds descriptor NUMBERS
+  // across calls, and an enumeration caught mid-walk has a cursor the next BIOS call continues from —
+  // so they are read and written through this narrow pair rather than by widening the class's public
+  // surface to its whole private table.
+  const McFd *descriptorAt(int index) const {
+    return (index >= 0 && index < kFdMax) ? &mFd[index] : nullptr;
+  }
+  void restoreDescriptor(int index, const McFd &entry) {
+    if (index >= 0 && index < kFdMax) {
+      mFd[index] = entry;
+    }
+  }
+  void restoreScanCursor(const char *pattern, uint32_t block);
+  const char *scanPattern() const {
+    return mScanPat;
+  }
+  uint32_t scanBlock() const {
+    return mScanBlk;
+  }
+
   // Diagnostics. The syscall log accounts for every dispatched BIOS card call, handled or not;
   // see card_syscall_log.h for why an unhandled call must leave a record.
   psxport::card::SyscallLog &syscallLog() {

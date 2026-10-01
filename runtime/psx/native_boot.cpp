@@ -22,8 +22,9 @@
 #include "mods.h"
 #include "ot_attr.h" // OtAttr — the producer-census tables (armed by Game's ctor, game.cpp)
 #include "repl.h"
-#include "store_observe.h" // store_observe_configure — the one reading of PSXPORT_STORE_OBSERVE
-                           // (the REPORT is emitted by ~LightrecExecutor, on every exit path)
+#include "state/state_command.h" // PSXPORT_LOAD_STATE — resume a whole-machine state before field 1
+#include "store_observe.h"       // store_observe_configure — the one reading of PSXPORT_STORE_OBSERVE
+                                 // (the REPORT is emitted by ~LightrecExecutor, on every exit path)
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -161,7 +162,21 @@ static void game_main(Core *c) {
   mdec_bind(c);             // and this core's MDEC
   xa_bind(c);               // and this core's XA streamer
   game_init(c);
-  // The host owns iteration; FrameLoopShell delegates one finite frame. The title FrameDriver owns
+  // PSXPORT_LOAD_STATE: resume a whole-machine state BEFORE the first field, so a headless tool
+  // starts inside a level instead of replaying the thousands of fields between power-on and it.
+  //
+  // This is FATAL on failure rather than a fall back to booting from scratch, and the reason is
+  // specific: a run that silently booted from power-on after a broken state path would spend its
+  // entire budget re-deriving the state it was asked to start from, produce a plausible-looking
+  // trace, and be reported as a working run. The path is resolved through the configuration owner,
+  // so nothing here reads the environment itself.
+  {
+    std::string stateError;
+    if (!psx::state::applyConfiguredState(*c, stateError)) {
+      lucent::error("native_boot", "{}", stateError);
+      std::exit(1);
+    }
+  }
   // the measured input/audio/simulation/render/present order and any cooperative task service.
 
   // Frame budget: an explicit PSXPORT_NATIVE_FRAMES always wins (headless tests). Otherwise, when

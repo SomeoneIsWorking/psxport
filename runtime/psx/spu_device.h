@@ -29,12 +29,21 @@ public:
   // Make this instance the active SPU (its write log the active log, its Core the IRQ-line target),
   // lazily powering it on.
   void bind(Core *c) {
-    SPU_BindState(state);
-    spu_bind_log(writeLog); // NULL when SBS off — spu_write's null-check makes it a no-op
-    spu_bind_irq_core(c);   // the SPU IRQ raises on THIS core's I_STAT
+    bindExisting(c);
     if (!powered) {
       SPU_Power();
       powered = 1;
     }
+  }
+
+  // Bind WITHOUT powering on. The save-state owner needs the instance bound to serialize it, and
+  // powering an instance that was never powered on would fabricate the state it is about to capture
+  // (and would make a state saved before the first bind describe a machine that never existed).
+  // Deliberately separate from bind() rather than a flag on it: "bind this" and "make this live" are
+  // different decisions and only the frame step makes the second one.
+  void bindExisting(Core *c) {
+    SPU_BindState(state);
+    spu_bind_log(writeLog); // NULL when SBS off — spu_write's null-check makes it a no-op
+    spu_bind_irq_core(c);   // the SPU IRQ raises on THIS core's I_STAT
   }
 };

@@ -55,6 +55,21 @@ add_test(NAME test_sync_submodules
          COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sync_submodules.py")
 set_tests_properties(test_sync_submodules PROPERTIES TIMEOUT 60)
 
+# The cross-process half of the save-state determinism proof. `test_state_determinism` itself checks
+# only that the synthetic guest program moves guest RAM, because Lightrec allows one initialized
+# machine per process and a second `Core` in the same process cannot exist to compare against. This
+# driver runs the save/load/control phases in separate processes and applies both verdicts — including
+# the one that stops "save == load" from passing because the state file was ignored. It is registered
+# separately rather than inside the C++ binary because the separation is the point.
+add_test(NAME state_determinism_across_processes
+         COMMAND "${Python3_EXECUTABLE}"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/test_state_determinism_process.py"
+                 "${CMAKE_BINARY_DIR}/tests/test_state_determinism")
+set_tests_properties(state_determinism_across_processes PROPERTIES
+  ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+  # Each phase builds a machine and writes a ~3.9 MB whole-machine state, three times over.
+  TIMEOUT 300)
+
 # The GLOB above gives `test_call_original_resuming` its resume-until-return cases, but the bounded
 # refusal is a SEPARATE ctest entry, and the reason is mechanical rather than stylistic: the bound
 # calls `std::abort()`, so running it in the same process would take the whole executable down and

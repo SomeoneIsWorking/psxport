@@ -20,10 +20,17 @@ public:
 
   // Make this instance the active MDEC, lazily powering it on (MDEC has no separate global init).
   void bind() {
-    MDEC_BindState(state);
+    bindExisting();
     if (!powered) {
       MDEC_Power();
       powered = 1;
     }
+  }
+
+  // Bind WITHOUT powering on — the mirror of SpuDevice::bindExisting, and for the same reason: the
+  // save-state owner must be able to serialize an instance that was never powered on without
+  // fabricating the state it is about to capture.
+  void bindExisting() {
+    MDEC_BindState(state);
   }
 };

@@ -861,3 +861,11 @@ void card_overrides_init(Game *game) {
 }
 
 #endif // PSXPORT_CARD_NO_OVERRIDES
+
+// The directory-enumeration cursor, for the save-state owner (device_bus.cpp). Defined here rather
+// than inline because mScanPat/mScanBlk are private to this class's home file — the same reason the
+// descriptor table is reached through Memcard's narrow accessors.
+void Memcard::restoreScanCursor(const char *pattern, uint32_t block) {
+  std::snprintf(mScanPat, sizeof mScanPat, "%s", pattern);
+  mScanBlk = block;
+}
