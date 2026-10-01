@@ -178,16 +178,15 @@ void RenderQueue::emitOrQueue(Core *core,
     }
   }
 
-  // ---- WIDESCREEN 3D clip — the DEPTH half of the same problem, and the reason the 2D half above
-  // was not enough on a GTE-path title.
+  // ---- WIDESCREEN clip for a GUEST-WIDENED picture — the rule the plan was published for.
   //
-  // A 3D primitive's coordinates need NO transform here: they came out of the GUEST's own
-  // projection, which a title-owned `GuestProjectionPlan` has already widened (Spyro 2 sets OFX to
-  // the widened centre). What they DO need is a clip rectangle wide enough to contain them. The
-  // guest states its own rectangle through GP1 E3/E4 and it is snapshotted here, so on Spyro 2 it
-  // still says `x1 = 511` for a 684-column canvas: the extra geometry is queued, rasterises, and is
-  // discarded, and the margins present black. Measured on Spyro 2's Glimmer: 1970 prims per frame
-  // spanning x -170..652, 82 of them past 511, and 0.0 % non-black across columns 512..683.
+  // A primitive on a guest-widened frame needs no vertex transform — the 2D block above already
+  // moved it into the wide frame — but it DOES need a clip rectangle wide enough to contain the
+  // result. The guest states its rectangle through GP1 E3/E4 and it is snapshotted here, so on
+  // Spyro 2 it still says `x1 = 511` for a 684-column canvas: the extra geometry is queued,
+  // rasterises, and is discarded, and the margins present black. Measured on Spyro 2's Glimmer:
+  // 1970 prims per frame spanning x -170..652, 82 of them past 511, and ink stopping at column 597
+  // of a 684-column presentation.
   //
   // `GuestProjectionPlan::guestClipRight` was computed, published, documented and asserted by its own
   // unit test for exactly this, and consumed by nothing. This is its consumer.
@@ -195,10 +194,21 @@ void RenderQueue::emitOrQueue(Core *core,
   // INERT WHERE IT MUST BE, and both directions are load-bearing:
   //   * 4:3 — `plan.widescreen()` is false, so the branch does not execute at all;
   //   * a NATIVE-path title — `gpu_vk_wide_presentation` is false there (`guestWidescreenAllowed` is
-  //     a GTE-path permission), so its host-owned widening is untouched and no double shift is
-  //     possible: the 2D block above and this one are mutually exclusive on `order_mode`.
+  //     a GTE-path permission), so its host-owned widening is untouched.
   //   * NEVER NARROWS. A guest that already stated a wider rectangle than the plan keeps its own.
-  if (order_mode == RQ_OM_DEPTH && gpu_vk_wide_presentation(core)) {
+  // IT IS NOT KEYED ON THE ORDER MODE, and the first version was, and that version could never fire.
+  // Measured on Spyro 2 with the 2D block instrumented: 775,259 submissions per run arrive as
+  // `space = RQ_2D_AUTHORED_4_3`, `layer = RQ_HUD`, `om = RQ_OM_2D_FG`, because the pure-GTE-path
+  // policy in `gpu_native.cpp` forces `is3d = 0` and `bg = 0` for every guest prim — the picture is
+  // PSX painter order by construction, and `is3d`'s own writers have no callers, so it reads 0 for
+  // every title on Lightrec. Keying on `RQ_OM_DEPTH` therefore excluded the very primitives this rule
+  // exists for: the register was demonstrably widened (`register now (683, 227)`, and 1,337
+  // submissions per run carrying `da 86..769`) while the right margin stayed black.
+  //
+  // What is actually being asked is "were these coordinates produced by a projection the host has
+  // already widened", and `gpu_vk_wide_presentation` is that question and the same one
+  // `wide_2d_layout` asks two lines above. Every producer shape answers it identically.
+  if (gpu_vk_wide_presentation(core)) {
     const GuestProjectionPlan &plan = core->game->guestDisplay.plan();
     if (plan.widescreen() && plan.guestClipRight > da_x1) {
       da_x1 = plan.guestClipRight;
