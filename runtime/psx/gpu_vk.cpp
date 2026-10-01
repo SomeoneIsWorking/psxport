@@ -2089,6 +2089,11 @@ present_inputs(const GpuVkState &g, int sx, int sy, int disp_w, int h, int nativ
   // aspect 4:3 for a native frame of ANY width, and wider only when the port deliberately widened
   // it. See present_plan.h and issue 0008; passing disp_w here would restore the stretch.
   in.native_w = native_w;
+  // A guest picture the title says covers only the native width (Spyro 1's boot logos) is sampled
+  // over those columns alone; see present_plan.h.
+  if (g.game != nullptr && game_guest_picture_is_native_width(*g.game)) {
+    in.content_w = in.native_w;
+  }
   in.present_ires = g.s_present_ires;
   in.fade_mode = fade.mode;
   in.fade_r = fade.r;

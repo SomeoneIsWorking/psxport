@@ -176,6 +176,13 @@ public:
   // derived title runtime can answer from its actual render mode.
   virtual bool guestVramIsPicture(const Game &game) const = 0;
 
+  // Whether this frame's guest picture covers only the game's native width even when the display is
+  // widened (an upload-only boot logo drawn before any widening applies). The presenter then samples
+  // only those columns and letterboxes them at 4:3 instead of showing the unwritten ones.
+  virtual bool guestPictureIsNativeWidth(const Game &) const {
+    return false;
+  }
+
   // Optional temporal decorator. Direct runtimes default to the neutral current-frame presenter and
   // therefore instantiate no interpolation history. Legacy consumers keep their existing behavior via
   // LegacyGameRuntimeAdapter until they declare the narrower contract directly.
@@ -253,3 +260,4 @@ GameRuntime *psxport_game_runtime();
 // Checked shipping query used by every renderer path. A missing runtime is an installation defect,
 // not an implicit answer about the picture, and therefore refuses instead of returning false.
 bool game_guest_vram_is_picture(const Game &game);
+bool game_guest_picture_is_native_width(const Game &game);

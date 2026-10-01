@@ -239,6 +239,42 @@ static void test_widescreen_extent_is_not_sampled_from_one_frame(void) {
   CHECK_EQ(present_display_width(false, 320, 320), 320);
 }
 
+// A GUEST PICTURE WHOSE OWN WIDENING IS ENGAGED MUST KEEP THE WHOLE WIDTH.
+//
+// `guestVramIsPicture()` is true for EVERY field of a GTE-path title, so it cannot by itself mean
+// "this picture is only native_wide". Spyro 2 (916f4b1) answers it true and still draws all 684
+// columns through its own widened guest projection. `content_w` is the width the guest AUTHORED,
+// which for such a title is `disp_w` — and then the centring inset is exactly 0 and the sampled
+// rect is byte-identical to the pre-widening rule. Anything that cropped a guest picture to
+// `native_w` unconditionally would take Spyro 2's widescreen away, so this case pins the no-op.
+static void test_a_guest_picture_with_an_engaged_guest_widening_keeps_disp_w(void) {
+  PresentInputs in = {1280, 720, 0, 0, 684, 240, 512, 0, 0, 0, 0, 0, 0};
+  in.content_w = 684; // the guest widened its own projection and authored the full 684
+  const PresentPlan p = plan(in, true);
+  // No inset, and the whole widened width is sampled: exactly what an ordinary renderer-drawn
+  // field gets, so the guest path is a strict no-op when the guest authored every column.
+  CHECK_EQ(p.disp[0], 0);
+  CHECK_EQ(p.disp[2], 684);
+  // …and the aspect is the widened one, not the native 4:3, which is what "no crop" means:
+  // (4/3) * (684/512) is 16:9, so in a 1280x720 sink it is WIDTH-limited and 2736:1536 gives
+  // 1280 x 718. A 4:3 picture here would instead fill the sink to 1280x960, so the two are not
+  // the same rect and this really does pin the widened aspect.
+  CHECK_EQ(p.viewport.w, 1280);
+  CHECK_EQ(p.viewport.h, 718);
+
+  // The contrasting leg: the SAME picture, authored only in the guest's native columns (Spyro 1's
+  // upload-only boot logo, drawn from the display origin). The source keeps its origin and is
+  // narrowed to the authored 512 columns, and the aspect is the native 4:3, so the letterbox centres
+  // the picture with equal margins instead of presenting the columns the guest never wrote.
+  PresentInputs narrow = {1280, 720, 0, 0, 684, 240, 512, 0, 0, 0, 0, 0, 0};
+  narrow.content_w = 512;
+  const PresentPlan q = plan(narrow, true);
+  CHECK_EQ(q.disp[0], 0);
+  CHECK_EQ(q.disp[2], 512);
+  CHECK_EQ(q.viewport.w, 960);
+  CHECK_EQ(q.viewport.h, 720);
+}
+
 int main(void) {
   RUN(only_the_sink_differs_between_legs);
   RUN(the_composite_runs_in_both_legs);
@@ -253,5 +289,6 @@ int main(void) {
   RUN(unknown_native_width_degrades_to_4_3);
   RUN(an_empty_sink_builds_nothing);
   RUN(widescreen_extent_is_not_sampled_from_one_frame);
+  RUN(a_guest_picture_with_an_engaged_guest_widening_keeps_disp_w);
   return pt_summary();
 }

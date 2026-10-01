@@ -41,6 +41,10 @@ bool game_guest_vram_is_picture(const Game &game) {
   return game.runtime->guestVramIsPicture(game);
 }
 
+bool game_guest_picture_is_native_width(const Game &game) {
+  return game.runtime != nullptr && game.runtime->guestPictureIsNativeWidth(game);
+}
+
 void psxport_clear_game_runtime_for_legacy() {
   installedRuntime = nullptr;
 }

@@ -46,6 +46,11 @@ struct PresentInputs {
   int fade_mode;      // 0 none / 1 additive / 2 subtractive (ScreenFade, guest-backed)
   int fade_r, fade_g, fade_b;
   int disp_rgb24; // 1 when the display register says 24bpp
+  // APPENDED, NOT INSERTED: this struct is positionally aggregate-initialised by its callers and
+  // tests, so a field added anywhere but the end silently shifts every later one. Width of
+  // GUEST-AUTHORED content inside `disp_w`; 0 = the renderer filled `disp_w` and there is nothing
+  // narrower to honour. See plan_present.
+  int content_w = 0;
 };
 
 // The complete description of one presented frame. Two plans that compare equal produce the same
@@ -113,9 +118,17 @@ inline PresentPlan plan_present(const PresentInputs &in, bool headless) {
 
   const int scale = in.present_ires > 1 ? in.present_ires : 1;
   p.src_ires = in.present_ires > 1 ? in.present_ires : 0;
+  // A GUEST-AUTHORED PICTURE FILLS ONLY WHAT THE GUEST AUTHORED. The widening raises `disp_w` so the
+  // RENDERER can draw wider, but Spyro 1's upload-only boot logo is drawn by the guest into its
+  // native columns starting at the display origin and never widens. Sampling all of `disp_w` showed
+  // the unwritten right-hand columns as content, so the logo sat 86 px left of centre at 16:9. The
+  // source is therefore narrowed to the authored columns FROM THE ORIGIN (they are where the guest
+  // drew) and presented at its own aspect, which the letterbox centres. `content_w == disp_w` (Spyro
+  // 2, which authors all 684 columns through its widened projection) is a strict no-op.
+  const int content_w = (in.content_w > 0 && in.content_w < in.disp_w) ? in.content_w : in.disp_w;
   p.disp[0] = in.sx * scale;
   p.disp[1] = in.sy * scale;
-  p.disp[2] = in.disp_w * scale;
+  p.disp[2] = content_w * scale;
   p.disp[3] = in.disp_h * scale;
   p.fade[0] = in.fade_mode;
   p.fade[1] = in.fade_r;
@@ -144,7 +157,7 @@ inline PresentPlan plan_present(const PresentInputs &in, bool headless) {
   // says the wide width must scale from the game's own 4:3 width "not from a hardcoded 320" and
   // names Spyro's 512x240 as the case that breaks. That fix reached the WIDE side only; this is the
   // PRESENT side of the identical constant, wearing 240 instead of 320.
-  const int aspect_w = in.disp_w > 0 ? in.disp_w : 1;
+  const int aspect_w = content_w > 0 ? content_w : 1;
   // native_w <= 0 means "the game has not told us its native width". Degrade to 4:3 — every PSX
   // display mode is 4:3, so that is the only safe assumption, and it can never divide by zero.
   const int aspect_h = in.native_w > 0 ? in.native_w : aspect_w;
