@@ -50,6 +50,7 @@ struct GuestProjectionPlan {
   int projectionHorizontalMargin = 0;
   int projectionCenterX = 0;
   int projectionClipRight = 0;
+  int guestClipLeft = 0;
   int guestClipRight = 0;
 
   bool widescreen() const {
@@ -149,6 +150,12 @@ inline GuestProjectionPlan guest_projection_plan(const GuestProjectionInputs &in
   plan.projectionHorizontalMargin = (plan.projectionExtent.width - inputs.nativeProjection.extent.width) / 2;
   plan.projectionCenterX = plan.projectionExtent.width / 2;
   plan.projectionClipRight = plan.projectionExtent.width - 1;
+  // The guest's drawn window on the widened canvas, and it BRACKETS THE PRESENTATION: its right
+  // edge is the last column the guest fills, its left edge is where that run starts. The two are
+  // published together because a clip is only correct when both ends are named — the right end
+  // alone was published for a long time and the left end was left to the producer, which is what
+  // cut off one margin while widening the other.
+  plan.guestClipLeft = plan.presentationExtent.width - plan.guestDrawWidth;
   plan.guestClipRight = plan.guestDrawWidth - 1;
   return plan;
 }

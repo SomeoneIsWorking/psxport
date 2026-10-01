@@ -210,8 +210,20 @@ void RenderQueue::emitOrQueue(Core *core,
   // `wide_2d_layout` asks two lines above. Every producer shape answers it identically.
   if (gpu_vk_wide_presentation(core)) {
     const GuestProjectionPlan &plan = core->game->guestDisplay.plan();
-    if (plan.widescreen() && plan.guestClipRight > da_x1) {
-      da_x1 = plan.guestClipRight;
+    if (plan.widescreen()) {
+      if (plan.guestClipRight > da_x1) {
+        da_x1 = plan.guestClipRight;
+      }
+      // THE LEFT END IS THE SAME RULE. The 2D block above moved the clip WITH the vertices, so a
+      // guest rectangle of 0..511 arrived here as 86..597 — its left edge now sits at the margin, and
+      // every primitive that straddles the guest's own left edge is cut at column 86 instead of at
+      // column 0. That is the mirror of the bug this rule was written for: widening only the right
+      // end produced a working right margin and a hard-edged left one, which reads as "the left side
+      // has no geometry" when in fact the geometry was queued and discarded. Spyro 2's Glimmer is the
+      // measured case: the same frame that inked 49.8 % of columns 598..683 inked nothing in 0..85.
+      if (plan.guestClipLeft < da_x0) {
+        da_x0 = plan.guestClipLeft;
+      }
     }
   }
   // Zero-init: only the later key-order resolver may promote authored_depth from ordinary real depth.

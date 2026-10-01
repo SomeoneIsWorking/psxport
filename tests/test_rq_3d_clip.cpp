@@ -66,7 +66,7 @@ static const Shape kNativeWorldShape{RQ_OM_DEPTH, RQ_WORLD, RQ_2D_AUTHORED_4_3};
 static const Shape kShapes[] = {kGuestWorldShape, kNativeWorldShape};
 static const int kShapeCount = static_cast<int>(sizeof kShapes / sizeof kShapes[0]);
 
-static Submitted submit(int aspect, bool latch, Shape shape, int guestClipRight = kGuestClipRight) {
+static Submitted submit(int aspect, bool latch, Shape shape, int guestClipRight = kGuestClipRight, int guestLeft = 0) {
   auto game = std::make_unique<Game>();
   game->gpu.s_disp_w = kNativeWidth;
   game->mods.aspect = aspect;
@@ -115,7 +115,7 @@ static Submitted submit(int aspect, bool latch, Shape shape, int guestClipRight 
                        0,
                        0,
                        0,
-                       0,
+                       guestLeft,
                        0,
                        guestClipRight,
                        227,
@@ -140,6 +140,11 @@ static void test_wide_keeps_a_guest_world_prim_past_the_guest_clip(void) {
   CHECK_EQ(wide.x1, kPrimRight + kMargin); // the 2D block moved it into the wide frame
   CHECK_EQ(wide.da_x1, kWideWidth - 1);
   CHECK(wide.da_x1 > kNativeWidth - 1); // strictly wider than the guest's own rectangle
+  // AND THE LEFT END IS AT THE CANVAS ORIGIN, not at the margin. The 2D block moved this clip with
+  // its vertices, so it arrived as kMargin..597; leaving it there cuts every primitive that straddles
+  // the guest's own left edge at column 86 and produces a picture with one working margin and one
+  // hard edge, which is indistinguishable from "the level has no geometry on the left".
+  CHECK_EQ(wide.da_x0, 0);
 }
 
 // THE SAME CLAIM FOR A DEPTH-ORDERED WORLD PRIM, so the rule is not a GTE-path special case.
@@ -163,6 +168,7 @@ static void test_four_three_clips_at_the_guest_edge(void) {
     CHECK_EQ(narrow.queued, 1);
     CHECK_EQ(narrow.x1, kPrimRight);
     CHECK_EQ(narrow.da_x1, kGuestClipRight);
+    CHECK_EQ(narrow.da_x0, 0);
     CHECK(narrow.da_x1 < narrow.x1); // still cut — the 4:3 picture loses that vertex, as it must
   }
   printf("      [4:3 identity] swept %d producer shape(s)\n", kShapeCount);
@@ -194,7 +200,19 @@ static void test_a_wider_guest_rectangle_is_left_alone(void) {
   const Submitted guest = submit(ASPECT_16_9, true, kGuestWorldShape, 900);
   CHECK_EQ(guest.queued, 1);
   CHECK_EQ(guest.da_x1, 900 + kMargin);
+  // THE LEFT END IS PULLED OUT TO THE CANVAS, INCLUDING FROM A GUEST THAT ASKED FOR LESS. A guest
+  // draw area may name any left edge at or right of the canvas origin — GP0 E3's X is 10 bits
+  // unsigned, so there is no negative guest rectangle to protect — and when it names one, the widened
+  // frame still has to admit the columns to its left, which is the whole point of the rule.
+  const Submitted inset = submit(ASPECT_16_9, true, kGuestWorldShape, 900, /*left=*/200);
+  CHECK_EQ(inset.queued, 1);
+  CHECK_EQ(inset.da_x0, 0);
+  // ... and it is 4:3 that leaves it alone: there is no wider frame to admit columns for.
+  const Submitted narrow = submit(ASPECT_4_3, true, kGuestWorldShape, kGuestClipRight, /*left=*/200);
+  CHECK_EQ(narrow.queued, 1);
+  CHECK_EQ(narrow.da_x0, 200);
   printf("      [never narrows] 2 producer shapes: 900 kept, 900 kept after the 2D shift\n");
+  printf("      [left end] a guest left edge of 200 reaches the canvas at 16:9 and stands at 4:3\n");
 }
 
 int main(void) {
