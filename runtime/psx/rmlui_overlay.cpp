@@ -334,7 +334,7 @@ void RmlOverlay::recordGpu(SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int
 }
 
 // ---- the choice screen -----------------------------------------------------------------------------
-psx::ui::ChoiceScreen *RmlOverlay::showChoiceScreen(psx::ui::ChoiceContent content) {
+psx::ui::ChoiceView *RmlOverlay::showChoiceScreen(psx::ui::ChoiceContent content) {
   if (!mInited) {
     lucent::error("rmlui", "showChoiceScreen: the overlay is not up, so there is nowhere to show a screen");
     return nullptr;
@@ -365,6 +365,10 @@ psx::ui::ChoiceScreen *RmlOverlay::showChoiceScreen(psx::ui::ChoiceContent conte
   }
   mChoice = std::make_unique<psx::ui::ChoiceScreen>(ctx_(mScreenCtx), doc, std::move(content));
   mChoice->show();
+  return mChoice.get();
+}
+
+psx::ui::ChoiceView *RmlOverlay::choiceScreen() const {
   return mChoice.get();
 }
 

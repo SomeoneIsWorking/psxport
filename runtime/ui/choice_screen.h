@@ -8,6 +8,7 @@
 #define PSXPORT_UI_CHOICE_SCREEN_H
 
 #include "choice_navigator.h"
+#include "choice_view.h"
 #include "ui_component.h"
 
 #include <optional>
@@ -21,13 +22,7 @@ class ElementDocument;
 
 namespace psx::ui {
 
-struct ChoiceContent {
-  std::string heading;
-  std::string hint;
-  std::vector<ChoiceEntry> entries;
-};
-
-class ChoiceScreen : public Component {
+class ChoiceScreen : public Component, public ChoiceView {
 public:
   // `ctx` and `doc` are owned by the caller (RmlOverlay); destroy this before Rml::Shutdown().
   ChoiceScreen(Rml::Context *ctx, Rml::ElementDocument *doc, ChoiceContent content);
@@ -39,11 +34,11 @@ public:
     return mVisible;
   }
 
-  bool move(int direction);
-  std::optional<int> activate() const {
+  bool move(int direction) override;
+  std::optional<int> activate() const override {
     return mNavigator.activate();
   }
-  int selectedIndex() const {
+  int selectedIndex() const override {
     return mNavigator.selected();
   }
   const ChoiceNavigator &navigator() const {
@@ -51,7 +46,7 @@ public:
   }
   // An entry the pointer clicked since the last call, already highlighted. Clicking a disabled entry
   // yields nothing.
-  std::optional<int> takeClick();
+  std::optional<int> takeClick() override;
 
 private:
   void refreshSelection();

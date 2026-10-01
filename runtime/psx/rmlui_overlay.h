@@ -28,6 +28,7 @@ class Game;
 namespace psx::ui {
 class MenuDocument;
 class ChoiceScreen;
+class ChoiceView;
 struct ChoiceContent;
 } // namespace psx::ui
 
@@ -69,10 +70,8 @@ public:
   // lives in its own RmlUi context and is recorded by `recordScreenGpu` into the PRESENT IMAGE, so a
   // present shot sees it and the window blit carries it. The ESC menu stays a separate overlay drawn
   // over the window; the two never draw each other's documents.
-  psx::ui::ChoiceScreen *showChoiceScreen(psx::ui::ChoiceContent content);
-  psx::ui::ChoiceScreen *choiceScreen() const {
-    return mChoice.get();
-  }
+  psx::ui::ChoiceView *showChoiceScreen(psx::ui::ChoiceContent content);
+  psx::ui::ChoiceView *choiceScreen() const;
   void hideChoiceScreen();
   void recordScreenGpu(SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h);
 
