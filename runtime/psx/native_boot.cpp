@@ -9,9 +9,10 @@
 #include "config.h"      // psx::config::report_once — arms the exit audit at BOOT, for every port
 #include "config_vars.h" // psx::config::render_path() / cv_repl — knobs through the CVar ladder
 #include "core.h"
-#include "crt0_boot.h"   // crt0_plan/crt0_apply — THE crt0 derivation + the required/ABSENT decision
-#include "crt0_verify.h" // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
-#include "dbg_server.h"  // debug_server_port — the one reading of PSXPORT_DEBUG_SERVER
+#include "crt0_boot.h"        // crt0_plan/crt0_apply — THE crt0 derivation + the required/ABSENT decision
+#include "crt0_verify.h"      // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
+#include "dbg_server.h"       // debug_server_port — the one reading of PSXPORT_DEBUG_SERVER
+#include "execution_ledger.h" // logRunEndLedger — the whole-run guest ledger
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_iface.h"
@@ -309,6 +310,10 @@ static void game_main(Core *c) {
       lucent::info("padrec", "run-end: replay fully consumed — {} of {} pad frame(s)", used, total);
     }
   }
+  // THE WHOLE-RUN GUEST LEDGER. A title that never destroys its Game never reaches the executor's
+  // destructor telemetry, so this is the report every clean run gets: translated blocks and
+  // instructions, cache hits and misses, invalidations by source, fallback by every reason.
+  psx::cpu::logRunEndLedger(c->lightrecExecutor().counters());
   lucent::info("native_boot", "frame loop done");
   // The store observer's report is NOT here any more: it now lives in ~LightrecExecutor, beside the
   // fallback telemetry, because this function's return is not a path every product takes. Measured

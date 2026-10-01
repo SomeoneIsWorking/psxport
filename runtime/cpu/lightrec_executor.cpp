@@ -532,6 +532,11 @@ struct LightrecExecutor::Impl {
     counters.executedInstructions = stats.executed_instructions + stats.fallback_instructions;
     counters.cacheHits = stats.cache_hits;
     counters.cacheMisses = stats.cache_misses;
+    counters.lightrecInvalidationCalls = stats.invalidations;
+    counters.lightrecInvalidationWords = stats.invalidation_words;
+    counters.lightrecInvalidationGuards = stats.invalidation_guards;
+    counters.lightrecInvalidationBlockScans = stats.invalidation_scans;
+    counters.lightrecInvalidatedBlocks = stats.invalidated_blocks;
     counters.fallback.calls = stats.fallback_blocks;
     counters.fallback.instructions = stats.fallback_instructions;
     counters.fallback.refusedCalls = stats.refused_fallback_blocks;

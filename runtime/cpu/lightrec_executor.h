@@ -141,6 +141,17 @@ struct ExecutorCounters {
   // whether a large count is guest stores, DMA, or module loads.
   std::array<std::uint64_t, kExecutableWriteSourceCount> invalidationsBySource{};
   std::uint64_t faults = 0;
+  // Lightrec's own accounting of the ranged invalidations the calls above asked for, which is what
+  // says what they COST. `lightrecInvalidationCalls` counts the calls that reached it; a call is
+  // answered by the translated-word guard alone (`lightrecInvalidationGuards`, no block touched) or by
+  // a walk over every registered block (`lightrecInvalidationBlockScans` blocks examined,
+  // `lightrecInvalidatedBlocks` of them revoked). A large `invalidations` with few walks is cheap; a
+  // walk per store is O(blocks) per store.
+  std::uint64_t lightrecInvalidationCalls = 0;
+  std::uint64_t lightrecInvalidationWords = 0;
+  std::uint64_t lightrecInvalidationGuards = 0;
+  std::uint64_t lightrecInvalidationBlockScans = 0;
+  std::uint64_t lightrecInvalidatedBlocks = 0;
   // Memory callbacks psxport received from translated code, device addresses and not. The
   // denominator for the two counters below: without it, "no device access committed anything" and
   // "no memory access happened" are the same zero, and the second is a broken instrument.

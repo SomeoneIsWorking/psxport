@@ -50,9 +50,10 @@
 #include "c_subsys.h" // watchdog_suspend / watchdog_resume — a debug pause is intentional idle
 #include "core.h"     // Core, mem_*, guest dispatch — for the RE commands (call/ents/node)
 #include "execution_control.h"
-#include "game.h" // Core::game->gpu (render state is per-instance now)
+#include "execution_ledger.h" // `guest`: the executor's own counters, asked live
+#include "game.h"             // Core::game->gpu (render state is per-instance now)
 #include "guest_call.h"
-#include "lightrec_executor.h" // `guest`: the executor's own counters, asked live
+#include "lightrec_executor.h"
 void gpu_scene_dump_now(Core *c, FILE *out);
 void gpu_disp_dump_now(Core *c, FILE *out);                     // `disp` — the display rect + draw clip, in one place
 void gpu_otattr_dump_now(Core *c, FILE *out, uint32_t oneAddr); // `otattr` — who submitted this geometry
@@ -617,62 +618,10 @@ static void dbg_exec(FILE *out, const char *line) {
     if (!s_ctx) {
       fprintf(out, "guest: no core in this frame\n");
     } else {
-      const psx::cpu::ExecutorCounters &k = s_ctx->lightrecExecutor().counters();
-      fprintf(out,
-              "guest: calls=%llu translated_blocks=%llu executed_blocks=%llu "
-              "executed_instructions=%llu host_dispatches=%llu cache_hits=%llu cache_misses=%llu "
-              "invalidations=%llu faults=%llu\n",
-              (unsigned long long)k.calls,
-              (unsigned long long)k.translatedBlocks,
-              (unsigned long long)k.executedBlocks,
-              (unsigned long long)k.executedInstructions,
-              (unsigned long long)k.hostDispatches,
-              (unsigned long long)k.cacheHits,
-              (unsigned long long)k.cacheMisses,
-              (unsigned long long)k.invalidations,
-              (unsigned long long)k.faults);
-      fprintf(out,
-              "invalidations_by_source: cpu=%llu mapped_store=%llu dma=%llu module_load=%llu "
-              "debugger=%llu savestate=%llu native=%llu\n",
-              (unsigned long long)k.invalidationsBySource[0],
-              (unsigned long long)k.invalidationsBySource[1],
-              (unsigned long long)k.invalidationsBySource[2],
-              (unsigned long long)k.invalidationsBySource[3],
-              (unsigned long long)k.invalidationsBySource[4],
-              (unsigned long long)k.invalidationsBySource[5],
-              (unsigned long long)k.invalidationsBySource[6]);
-      // The pc a budget exit hands back is a contract - it is where guest execution resumes - and
-      // it is reported here so a live run can be ASKED about it rather than having it scraped out
-      // of a log. `budget_exits` is the denominator that makes the other two mean anything: with
-      // it, "0 outside" is a measurement; without it, "0 outside" is indistinguishable from a run
-      // that never took a budget exit at all.
-      fprintf(out,
-              "budget_exit: exits=%llu pc_in_code_image=%llu pc_outside_code_image=%llu\n",
-              (unsigned long long)k.budgetExits,
-              (unsigned long long)k.budgetExitPcInCodeImage,
-              (unsigned long long)k.budgetExitPcOutsideCodeImage);
-      const psx::cpu::InterpreterFallbackCounters &f = k.fallback;
-      // Every reason the fallback counters carry, because a report that names three of six reasons
-      // reads as "the other three are zero" when it means "the other three were never asked".
-      fprintf(out,
-              "fallback: calls=%llu instructions=%llu refused_calls=%llu compilation_failed=%llu "
-              "self_modifying_code=%llu unsupported_block=%llu load_delay_hazard=%llu "
-              "unsafe_instruction_fetch=%llu refused_compilation_failed=%llu "
-              "refused_self_modifying_code=%llu refused_unsupported_block=%llu "
-              "refused_load_delay_hazard=%llu refused_unsafe_instruction_fetch=%llu\n",
-              (unsigned long long)f.calls,
-              (unsigned long long)f.instructions,
-              (unsigned long long)f.refusedCalls,
-              (unsigned long long)f.compilationFailed,
-              (unsigned long long)f.selfModifyingCode,
-              (unsigned long long)f.unsupportedBlock,
-              (unsigned long long)f.loadDelayHazard,
-              (unsigned long long)f.unsafeInstructionFetch,
-              (unsigned long long)f.refusedCompilationFailed,
-              (unsigned long long)f.refusedSelfModifyingCode,
-              (unsigned long long)f.refusedUnsupportedBlock,
-              (unsigned long long)f.refusedLoadDelayHazard,
-              (unsigned long long)f.refusedUnsafeInstructionFetch);
+      // The text of the ledger has one owner (execution_ledger.cpp), shared with the run-end report.
+      for (const std::string &ledgerLine : psx::cpu::ledgerLines(s_ctx->lightrecExecutor().counters())) {
+        fprintf(out, "%s\n", ledgerLine.c_str());
+      }
     }
   } else if (!strcmp(cmd, "cvars")) {
     // The configuration, answered where the question gets asked. Same three facts as report(): what

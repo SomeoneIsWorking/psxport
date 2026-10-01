@@ -43,6 +43,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/game.cpp
   ${PSXPORT_ROOT}/runtime/psx/game_runtime.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_exit.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/execution_ledger.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_control.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_services.cpp
   ${PSXPORT_ROOT}/runtime/cpu/function_reach.cpp # PSXPORT_REACH_REPORT: guest entry pcs reached, by image
