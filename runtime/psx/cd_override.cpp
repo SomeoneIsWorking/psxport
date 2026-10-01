@@ -529,8 +529,9 @@ void cd_read_stock_sync(Core *c) {
     //
     // The cost is a range comparison, not a flush: a data stream into data RAM overlaps no translated
     // block, so the common case does nothing. The failure mode of NOT reporting is executing stale code.
+    const uint32_t sectorBegin = (buf + i * bytes) & 0x1fffffffu;
     psx::cpu::notifyExecutableWrite(
-        *c, {buf & 0x1fffffffu, (buf & 0x1fffffffu) + bytes}, psx::cpu::ExecutableWriteSource::ModuleLoad);
+        *c, {sectorBegin, sectorBegin + bytes}, psx::cpu::ExecutableWriteSource::ModuleLoad);
   }
   cd.setloc_lba += (int32_t)sectors; // the head ends where a real sequential read would leave it
   cd.sec_pos = 0;

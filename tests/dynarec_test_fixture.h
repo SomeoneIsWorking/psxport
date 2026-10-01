@@ -9,9 +9,11 @@
 // `inline` so the header may be included by more than one test binary without an ODR violation.
 #pragma once
 
+#include "execution_control.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "lightrec_executor.h"
+#include "native_dispatch.h"
 
 #include <cstdint>
 #include <memory>

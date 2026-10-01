@@ -1,11 +1,14 @@
 // The direct-runtime stock-libcd binding targets are the shipping synchronous read owners, not
 // title-local copies. Exercise their guest ABI and state transitions without requiring a disc image.
 #include "cd_control.h"
+#include "dynarec_test_fixture.h"
 #include "game.h"
+#include "guest_call.h"
 #include "invalidation.h"
 #include "lightrec_executor.h"
 #include "testutil.h"
 
+#include <array>
 #include <memory>
 
 namespace {
@@ -19,6 +22,24 @@ constexpr uint32_t kResult = 0x80111000u;
 int fakeSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
   for (uint32_t i = 0; i < count; ++i) {
     out[i] = static_cast<uint8_t>(lba);
+  }
+  return 1;
+}
+
+// Sector 2 of the read carries a different program from the one already translated there.
+constexpr uint32_t kSecondSectorLba = 8;
+constexpr uint32_t kPayloadOffset = 24; // user data starts after the 24-byte sync, header and subheader
+int codeInSecondSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+  for (uint32_t i = 0; i < count; ++i) {
+    out[i] = 0;
+  }
+  if (lba == kSecondSectorLba) {
+    const std::array<uint32_t, 3> program{0x24020002u, 0x03e00008u, 0u}; // addiu v0, zero, 2 ; jr ra ; nop
+    for (std::size_t word = 0; word < program.size(); ++word) {
+      for (uint32_t byte = 0; byte < 4u; ++byte) {
+        out[kPayloadOffset + word * 4u + byte] = static_cast<uint8_t>(program[word] >> (8u * byte));
+      }
+    }
   }
   return 1;
 }
@@ -206,6 +227,39 @@ static void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte()
   CHECK_EQ(after.invalidationsBySource[source] - before.invalidationsBySource[source], 3u);
 }
 
+// THE RANGE MUST FOLLOW THE SECTOR. The copy stores unnotified and reports each sector once; reporting
+// every sector at the read's FIRST address left translated code in sectors 2..n stale (Spyro 2 and 3
+// executed it after a module load and faulted at PC 0x10000000). The guest code below is translated
+// in the second sector, then the read replaces it: the next call must run the new program.
+static void test_a_multi_sector_read_invalidates_translated_code_in_a_later_sector() {
+  dynarec_test::Runtime runtime;
+  auto game = dynarec_test::makeGame(runtime);
+  Core &core = game->core;
+  dynarec_test::installTestImage(core);
+  const uint32_t second = dynarec_test::kCaller + 2048u;
+  core.mem_w32(second, 0x24020001u);      // addiu v0, zero, 1
+  core.mem_w32(second + 4u, 0x03e00008u); // jr ra
+  core.mem_w32(second + 8u, 0u);
+  core.r[31] = dynarec_test::kOuterReturn;
+  CHECK(psx::cpu::dispatchGuest(core, second, psx::cpu::ExecutionBudget::fromCycles(100)).returned());
+  CHECK_EQ(core.r[V0], 1u);
+  const auto translated = core.lightrecExecutor().counters().translatedBlocks;
+
+  game->cdc.disc_read_raw_fn = codeInSecondSector;
+  game->cd.setloc_lba = static_cast<int32_t>(kSecondSectorLba - 1u);
+  core.r[A0] = 2;                                   // sectors: LBA 7 then LBA 8
+  core.r[A1] = 0x80000000u | dynarec_test::kCaller; // buffer
+  core.r[A2] = 0;                                   // 2048-byte payloads
+  cd_read_stock_sync(&core);
+  CHECK_EQ(core.r[V0], 1u);
+  CHECK_EQ(core.mem_r32(second), 0x24020002u);
+
+  core.r[31] = dynarec_test::kOuterReturn;
+  CHECK(psx::cpu::dispatchGuest(core, second, psx::cpu::ExecutionBudget::fromCycles(100)).returned());
+  CHECK_EQ(core.r[V0], 2u);
+  CHECK(core.lightrecExecutor().counters().translatedBlocks > translated);
+}
+
 static void test_a_refused_read_reports_no_executable_write() {
   auto game = std::make_unique<Game>();
   psx::cpu::notifyExecutableWrite(game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
@@ -227,6 +281,7 @@ int main() {
   RUN(stock_cdsync_reports_ready_and_zeros_result);
   RUN(the_invalidation_counter_is_live_and_a_zero_sector_read_does_not_move_it);
   RUN(a_stock_read_reports_one_invalidation_per_sector_not_per_byte);
+  RUN(a_multi_sector_read_invalidates_translated_code_in_a_later_sector);
   RUN(a_refused_read_reports_no_executable_write);
   return pt_summary();
 }
