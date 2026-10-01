@@ -157,13 +157,55 @@ def main() -> int:
         if dirty.returncode == 0:
             failures.append("a DIRTY pinned worktree was accepted as the dependency")
 
+        # 4. With NO explicit directory, a framework that is a pinned worktree of its checkout
+        #    (`<ws>/psx/psxport/scratch/pins/<sha>/`, which is what every port builds against) finds the
+        #    shared workspace's Lightrec at `<ws>/shared/lightrec` from its MAIN checkout. No fixed `../..`
+        #    chain from the pinned worktree reaches it, so a fresh configure with nothing cached used to fail.
+        workspace = work / "ws"
+        layout_shared = workspace / "shared" / "lightrec"
+        layout_sha = make_lightrec(layout_shared)
+        layout_pin = layout_shared / "scratch" / "pins" / layout_sha
+        git("worktree", "add", "--quiet", "--detach", str(layout_pin), layout_sha, layout_shared)
+        framework = workspace / "psx" / "psxport"
+        framework.mkdir(parents=True)
+        git("init", "-q", "-b", "main", framework)
+        (framework / "README").write_text("fixture framework\n", encoding="utf-8")
+        git("add", "-A", framework)
+        git("commit", "-q", "-m", "framework", framework)
+        framework_pin = framework / "scratch" / "pins" / "fixture"
+        git("worktree", "add", "--quiet", "--detach", str(framework_pin), "HEAD", framework)
+        layout_consumer = workspace / "psx" / "title" / ".claude" / "worktrees" / "change"
+        layout_consumer.mkdir(parents=True)
+        (layout_consumer / "CMakeLists.txt").write_text(
+            "\n".join(("cmake_minimum_required(VERSION 3.21)",
+                       "project(layout_consumer LANGUAGES C)",
+                       f'set(PSXPORT_ROOT "{framework_pin}")',
+                       f'include("{MODULE}")',
+                       f'set(PSXPORT_LIGHTREC_REVISION "{layout_sha}")',
+                       "psxport_configure_lightrec_dependency()", "")),
+            encoding="utf-8")
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("PSXPORT_LIGHTREC_DIR", "SHARED_DIR")}
+        layout = subprocess.run(["cmake", "-S", str(layout_consumer), "-B", str(work / "layout-build")],
+                                check=False, capture_output=True, text=True, env=environment)
+        checks += 1
+        if layout.returncode != 0:
+            failures.append("a pinned framework worktree did not find <workspace>/shared/lightrec from "
+                            f"its main checkout:\n{layout.stdout}\n{layout.stderr}")
+        else:
+            checks += 1
+            resolved = resolved_from(work / "layout-build" / "CMakeCache.txt")
+            if os.path.realpath(resolved) != os.path.realpath(layout_pin):
+                failures.append(f"resolved {resolved}, expected the pinned worktree {layout_pin}")
+
     if failures:
         print(f"[lightrec-pin] FAIL: {len(failures)} of {checks} checks failed")
         for label in failures:
             print(f"[lightrec-pin]   - {label}")
         return 1
     print(f"[lightrec-pin] OK: {checks} checks — a consumer resolves the pinned worktree, a moved "
-          f"checkout is refused by revision, and a dirty pinned worktree is not accepted")
+          f"checkout is refused by revision, a dirty pinned worktree is not accepted, and a pinned framework worktree finds the "
+          f"workspace Lightrec from its main checkout")
     return 0
 
 

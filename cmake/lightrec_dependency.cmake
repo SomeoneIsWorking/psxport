@@ -17,7 +17,26 @@ set(PSXPORT_LIGHTREC_PIN_ROOT "scratch/pins" CACHE STRING
     "Path, relative to a Lightrec checkout, holding one detached worktree per pinned revision")
 set(PSXPORT_LIGHTREC_DIR "" CACHE PATH "Path to the maintained shared/lightrec checkout")
 
+# The MAIN checkout of the git repository holding `dir`, or "" when `dir` is not in one. A pinned framework
+# worktree (`<psxport>/scratch/pins/<sha>/`) and a port's linked worktree (`<title>/.claude/worktrees/<n>/`)
+# sit at depths no fixed `../..` chain matches, so the shared workspace is found from the checkout they
+# belong to — the same anchor tools/psxport_fetch.py uses for the shared framework checkout.
+function(_psxport_main_checkout dir out)
+  set(${out} "" PARENT_SCOPE)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" -C "${dir}" rev-parse --path-format=absolute --git-common-dir
+    RESULT_VARIABLE _result
+    OUTPUT_VARIABLE _common
+    ERROR_QUIET
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(_result EQUAL 0 AND _common MATCHES "/\\.git$")
+    cmake_path(GET _common PARENT_PATH _main)
+    set(${out} "${_main}" PARENT_SCOPE)
+  endif()
+endfunction()
+
 function(psxport_configure_lightrec_dependency)
+  find_package(Git REQUIRED)
   set(_candidates "")
   if(PSXPORT_LIGHTREC_DIR)
     list(APPEND _candidates "${PSXPORT_LIGHTREC_DIR}")
@@ -33,6 +52,12 @@ function(psxport_configure_lightrec_dependency)
     "${PSXPORT_ROOT}/../../../shared/lightrec"
     "${PSXPORT_ROOT}/../../../../shared/lightrec"
     "${CMAKE_SOURCE_DIR}/../../shared/lightrec")
+  foreach(_tree IN ITEMS "${PSXPORT_ROOT}" "${CMAKE_SOURCE_DIR}")
+    _psxport_main_checkout("${_tree}" _main)
+    if(_main)
+      list(APPEND _candidates "${_main}/../shared/lightrec" "${_main}/../../shared/lightrec")
+    endif()
+  endforeach()
 
   # Each checkout yields its PINNED worktree first, then the checkout itself, so the ordering of the
   # explicit settings above is preserved: an explicit PSXPORT_LIGHTREC_DIR still wins, it just prefers
@@ -69,7 +94,6 @@ function(psxport_configure_lightrec_dependency)
       "PSXPORT_LIGHTREC_DIR.")
   endif()
 
-  find_package(Git REQUIRED)
   execute_process(
     COMMAND "${GIT_EXECUTABLE}" -C "${_resolved}" rev-parse HEAD
     RESULT_VARIABLE _git_result
