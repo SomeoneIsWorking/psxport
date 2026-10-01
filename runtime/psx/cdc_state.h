@@ -102,6 +102,12 @@ int cdc_dma_read(CdcState *s, uint32_t *out, int words);
 // hardware directly (XA/streaming: spin on DRQSTS, then DMA3) sees real data even when the libcd
 // file-read path is served natively. Both layers read the same disc image.
 void cdc_begin_read(CdcState *s, uint32_t lba);
+// Issue one parameterless controller command (Pause, Stop) that the native CD layer intercepted, so the
+// controller does what hardware does: leave the read state at the command's execution time, answer INT3
+// with the status it had, and complete with INT2 carrying the new status. Nothing else clears the
+// controller's reading state or tells the guest's interrupt handler, so a guest that reads its libcd
+// status word after a Pause (Spyro 2's XA state machine) would otherwise see "reading" forever.
+void cdc_issue_command(CdcState *s, uint8_t command);
 // Mirror a Setmode the native CD layer intercepted into the controller model. Bit 0x20 decides
 // whether the data FIFO presents whole sectors (header + subheader + data) or user data only, and a
 // streaming reader depends on that framing to identify sector types.

@@ -244,6 +244,9 @@ static void cd_apply_command(Core *c) {
     xa_stream_stop(&c->game->xa);
     c->game->cd.stock_reading = 0; // the guest's own end-of-read signal; ends cd_drive_stock_read
     c->game->cd.stream_active = 0; // ...and ends the continuous-read pump. The guest decides.
+    // ReadN/ReadS above started the CONTROLLER reading, so its Pause/Stop must stop it too; left
+    // running it keeps announcing sectors and the guest's status word stays "reading" forever.
+    cdc_issue_command(&c->game->cdc, static_cast<uint8_t>(cmd));
     break;
   default:
     break;

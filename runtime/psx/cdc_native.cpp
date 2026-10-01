@@ -423,6 +423,11 @@ void cdc_begin_read(CdcState *s, uint32_t lba) {
   start_continuous_read(s);
 }
 
+void cdc_issue_command(CdcState *s, uint8_t command) {
+  s->index = 0;
+  cdc_command_schedule(s, command);
+}
+
 int cdc_dma_read(CdcState *s, uint32_t *out, int words) {
   if (words <= 0) {
     return 0;

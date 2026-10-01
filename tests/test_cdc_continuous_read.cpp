@@ -217,6 +217,40 @@ void test_stopped_controller_does_not_announce_sector(void) {
   CHECK_EQ(cdc.loc_lba, kFirstLba);
 }
 
+void test_native_pause_command_stops_the_controller_and_tells_the_guest(void) {
+  DiscState disc{};
+  CdcTestClock clock{};
+  CdcState cdc = begin_read(&disc, &clock);
+
+  CHECK(acknowledge_current_sector(&cdc, &clock));
+  CHECK_EQ(cdc.reading, 1);
+  // The native CdControl path never writes the command register; it forwards the command it
+  // intercepted. The effect must be the register path's, step for step.
+  cdc_issue_command(&cdc, 0x09);
+  CHECK_EQ(cdc.reading, 1); // the command has not reached its execution phase yet
+  CHECK_EQ(pending_irq_type(&cdc), 0);
+
+  clock.ticks += cdc_command_ack_delay_cpu_ticks(0);
+  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.reading, 0);
+  CHECK_EQ(pending_irq_type(&cdc), 3);
+  CHECK_EQ(response_byte(&cdc), 0x22); // INT3 observes the still-reading status
+  const uint64_t completion_deadline = cdc.command_deadline_ticks;
+  acknowledge_irq(&cdc);
+  clock.ticks = completion_deadline;
+  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(pending_irq_type(&cdc), 2);
+  CHECK_EQ(response_byte(&cdc), 0x02); // INT2 is what makes the guest's status word leave "reading"
+
+  // Negative: the same elapsed time with no command leaves the controller reading.
+  CdcTestClock idle_clock{};
+  CdcState idle = begin_read(&disc, &idle_clock);
+  CHECK(acknowledge_current_sector(&idle, &idle_clock));
+  idle_clock.ticks += cdc_command_ack_delay_cpu_ticks(0) + 1'000'000u;
+  cdc_drive_service(&idle);
+  CHECK_EQ(idle.reading, 1);
+}
+
 void test_full_drain_rearms_bfrd_for_announced_sector(void) {
   DiscState disc{};
   CdcTestClock clock{};
@@ -259,6 +293,7 @@ int main() {
   RUN(first_sector_waits_one_drive_period);
   RUN(partial_fifo_does_not_block_following_sector_event);
   RUN(stopped_controller_does_not_announce_sector);
+  RUN(native_pause_command_stops_the_controller_and_tells_the_guest);
   RUN(full_drain_rearms_bfrd_for_announced_sector);
   RUN(setmode_selects_single_and_double_speed_deadlines);
   return pt_summary();
