@@ -31,6 +31,8 @@
 // Forward decls (definitions below): the FIFO fill used by drive_consume_sector, and the
 // beetle-parity routing wrapper that decides decoder-vs-FIFO per sector.
 static bool load_sector(CdcState *s, uint32_t lba);
+static uint64_t exec_command(CdcState *s, uint8_t cmd);
+static void complete_command(CdcState *s);
 
 // PER-INSTANCE CD-controller state: the register/FIFO/IRQ-queue model lives on a CdcState (one per
 // Game, game.h) passed EXPLICITLY to every entry point — no bound "current" pointer.
@@ -461,7 +463,71 @@ void cdc_begin_read(CdcState *s, uint32_t lba) {
 
 void cdc_issue_command(CdcState *s, uint8_t command) {
   s->index = 0;
+  // This command was issued BY THE FRAMEWORK, on the guest's behalf and after the framework had
+  // already answered the guest synchronously, so no guest code will ever read the two responses it
+  // produces (INT3 from execution, INT2 from completion). They are counted as owed here so the CD
+  // interrupt owner retires exactly these: an unretired response stays current in the FIFO and
+  // hides every data-ready completion queued behind it.
+  s->command_responses_owed = (uint8_t)(s->command_responses_owed + 2u);
   cdc_command_schedule(s, command);
+  // Run this command to completion NOW. The guest was answered synchronously by the CD command
+  // owner, so from the guest's point of view the command is already done; a controller that
+  // deferred it would apply it AFTER the guest's next command. Measured on C-12: the startup read
+  // pump issues Pause, Setloc, Setmode, Read; a Pause still pending when the Read began executed
+  // afterwards and cancelled the read's own sector event, so no completion ever arrived and the
+  // title retried the same sector every 60 fields.
+  for (int guard = 0; guard < 64 && s->command_event_armed; ++guard) {
+    if (!s->tick_now) {
+      break;
+    }
+    s->command_deadline_ticks = s->tick_now(s->tick_context);
+    const CdcCommandEvent event = cdc_command_service(s, 1);
+    if (event == CdcCommandEvent::kExecute) {
+      cdc_command_finish_execution(s, exec_command(s, s->pending_command));
+    } else if (event == CdcCommandEvent::kComplete) {
+      complete_command(s);
+    }
+    // `kNone` only means this phase was not the last one; the loop keeps pulling the deadline to
+    // now until the command has executed (and its completion disarms it).
+  }
+}
+
+int cdc_take_current_response(CdcState *s, uint8_t *first_byte) {
+  const int savedBank = s->index;
+  uint8_t first = 0;
+  int taken = 0;
+  for (int i = 0;; i++) {
+    if ((cdc_read(s, CDC_REG_INDEX) & CDC_STAT_RESPONSE_READY) == 0u) {
+      break;
+    }
+    const uint8_t value = (uint8_t)cdc_read(s, CDC_REG_RESPONSE);
+    if (i == 0) {
+      first = value;
+    }
+    taken = 1;
+  }
+  cdc_write(s, CDC_REG_INDEX, (uint8_t)savedBank);
+  if (taken && first_byte) {
+    *first_byte = first;
+  }
+  return taken;
+}
+
+int cdc_take_owed_command_response(CdcState *s) {
+  if (s->command_responses_owed == 0) {
+    return 0;
+  }
+  const uint8_t type = cdc_current_irq_type(s);
+  // Only a command's own INT2/INT3/INT5 is retired here. A data-ready is the title's completion and
+  // belongs to the ready-callback owner; taking it would swallow a sector.
+  if (type != 2 && type != 3 && type != 5) {
+    return 0;
+  }
+  if (!cdc_take_current_response(s, nullptr)) {
+    return 0; // scheduled but not posted yet; it stays owed
+  }
+  s->command_responses_owed--;
+  return 1;
 }
 
 int cdc_dma_read(CdcState *s, uint32_t *out, int words) {
@@ -672,32 +738,50 @@ int cdc_drive_service(CdcState *s) {
 // A real new request is the 0 -> 1 transition. BFRD controls only software access to the data FIFO;
 // elapsed drive time owns the following-sector INT1. A transition after that event discards any
 // unread remainder and presents the already-ready sector.
+// The consumable payload of one presented sector: the 12 header/subheader bytes whole-sector
+// framing adds, then the 2048 data bytes. The EDC/ECC tail a 2352-byte raw sector carries after
+// that is not data any consumer reads, so a request that has passed this point has the sector and
+// is asking for the next one.
+static std::uint32_t sector_payload_bytes(const CdcState *s) {
+  return (s->mode & 0x20u) != 0 ? 12u + 2048u : 2048u;
+}
+
 static void write_request_register(CdcState *s, uint8_t value) {
   const uint8_t asserted = value & 0x80;
   if (!asserted) {
     s->bfrd = 0;
     return;
   }
-  if (s->bfrd) {
-    return;
-  }
 
+  // An asserted-to-asserted write leaves the active FIFO and its cursor alone: a consumer that
+  // splits one sector transfer around such a write is still reading THAT sector (psxport issue
+  // 0002). What a repeated write does carry is the request for the sector the drive has since
+  // ANNOUNCED — stock libcd writes the bit once per sector and never clears it in between, so a
+  // write that only acted on a 0 -> 1 transition left every sector after the first unanswered.
+  const bool fresh_request = s->bfrd == 0;
   s->bfrd = 1;
   if (!s->reading) {
     return;
   }
 
-  // Reasserting an untouched FIFO only re-enables access to those same bytes. A consumed or empty
-  // FIFO accepts the following sector that the continuous drive announced independently.
-  if (s->following_sector_ready && (s->data_rd > 0 || s->data_n == 0)) {
+  // The announced sector becomes the one a request presents once the guest holds all of the
+  // previous sector's payload. Measured on C-12: its read pump asked for sector N+1 while the FIFO
+  // still held N's EDC/ECC tail, read those bytes back, and its own sector-locator check reported
+  // `CdRead: sector error` once per 60 fields.
+  if (s->following_sector_ready && (s->data_n == 0 || s->data_rd >= sector_payload_bytes(s))) {
     s->loc_lba++;
     s->following_sector_ready = 0;
     if (!load_sector(s, s->loc_lba)) {
       stop_continuous_read(s);
       return;
     }
-  }
-  if (s->data_n > 0 && !s->following_sector_ready) {
+    // THE HANDOFF IS THE DRIVE'S CLOCK, not the request bit's. One buffered sector means the drive
+    // reads again only once software has taken the announced one, and this request is that handoff
+    // even when the request bit was already latched. Leaving the next sector unannounced until a
+    // 0 -> 1 transition that stock libcd never performs stalls a long read after the first sector
+    // it hands over on a repeated write (measured on C-12: a 121-sector read stopped at three).
+    schedule_sector_event(s);
+  } else if (fresh_request && s->data_n > 0 && !s->following_sector_ready) {
     schedule_sector_event(s);
   }
 }

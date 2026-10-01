@@ -22,6 +22,15 @@ typedef int (*CdcDiscReadRawFn)(struct DiscState *, uint32_t, uint8_t *, uint32_
 typedef int (*CdcDiscReadSectorFn)(struct DiscState *, uint32_t, uint8_t *);
 typedef int (*CdcDiscGetSubqPositionFn)(struct DiscState *, uint32_t, uint8_t *);
 
+// Register indices within 0x1F801800, bank 1 of the interrupt-flag register, and the status bit
+// that says a response byte is available. Shared, because the register model and the CD interrupt
+// owner both speak this register map.
+#define CDC_REG_INDEX 0u
+#define CDC_REG_RESPONSE 1u
+#define CDC_REG_IRQ_FLAG 3u
+#define CDC_BANK_IRQ 1u
+#define CDC_STAT_RESPONSE_READY 0x20u
+
 typedef struct CdcState {
   int index;                      // 0x1F801800 low 2 bits (register bank)       (was s_index)
   uint8_t param[16];              // param FIFO                                  (was s_param)
@@ -50,6 +59,7 @@ typedef struct CdcState {
   uint64_t command_deadline_ticks;
   uint8_t read_completion_n;                  // owed read completions not yet announced (<= 4)
   uint64_t read_completion_deadline_ticks[4]; // absolute announce time of each, oldest first
+  uint8_t command_responses_owed;             // responses of a FRAMEWORK-issued command with no guest consumer
   void *tick_context;
   CdcTickNowFn tick_now;
   CdcIrqEnt q[8];                          // pending-interrupt queue                     (was s_q)
@@ -118,6 +128,8 @@ void cdc_begin_read(CdcState *s, uint32_t lba);
 // controller's reading state or tells the guest's interrupt handler, so a guest that reads its libcd
 // status word after a Pause (Spyro 2's XA state machine) would otherwise see "reading" forever.
 void cdc_issue_command(CdcState *s, uint8_t command);
+int cdc_take_current_response(CdcState *s, uint8_t *first_byte);
+int cdc_take_owed_command_response(CdcState *s);
 // Mirror a Setmode the native CD layer intercepted into the controller model. Bit 0x20 decides
 // whether the data FIFO presents whole sectors (header + subheader + data) or user data only, and a
 // streaming reader depends on that framing to identify sector types.

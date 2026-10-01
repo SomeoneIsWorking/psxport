@@ -17,6 +17,7 @@
 #include "cd_control.h"
 #include "cd_drive_timing.h"
 #include "cd_position.h"
+#include "cd_ready_delivery.h"
 #include "cd_stock_read_completion.h"
 #include "core.h"
 #include "execution_control.h"
@@ -232,10 +233,16 @@ static void cd_apply_command(Core *c) {
     // burst its opening sectors.
     c->game->cd.stream_t0_ns = 0;
     c->game->cd.stream_delivered = 0;
-    // Run the file-read burst ONLY for a runtime that has not declared native CdRead ownership.
-    // Native ownership is explicit in either runtime shape; direct runtime shape (`cfg == nullptr`)
-    // is not itself a behavioral fact.
-    if (!cd_native_stock_read_owned(*c)) {
+    // Run the file-read burst ONLY for a runtime that has not declared native CdRead ownership
+    // AND does not hand ready-callback delivery to its own CD interrupt path. Native ownership is
+    // explicit in either runtime shape; direct runtime shape (`cfg == nullptr`) is not itself a
+    // behavioral fact. `Cd::pumpStream` already makes the second exclusion for a stream; a FINITE
+    // read needs it here too, and leaving it out delivers every sector twice: this burst calls the
+    // guest's ready callback without touching the controller, so the controller's own data-ready
+    // response is still owed when the burst's own Pause stops the read, and `Hle::irqPoll` then
+    // delivers that stale response to whatever callback is registered by then — which for a stock
+    // libcd title is the value the guest has just restored. The two owners are exclusive.
+    if (!cd_native_stock_read_owned(*c) && !cdReadyCallbackOwnedByGuestInterrupt(*c)) {
       cd_drive_stock_read(c);
     }
     break;

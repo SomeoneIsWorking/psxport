@@ -20,17 +20,6 @@ namespace {
 // at bank 1 of 0x1F801803. 1 is the only one this handler serves; see the scope note in the header.
 constexpr uint8_t kCdcIrqDataReady = 1;
 
-// Controller register indices within 0x1F801800, as the port's own MMIO dispatcher numbers them.
-constexpr uint32_t kCdcIndex = 0u;
-constexpr uint32_t kCdcResponse = 1u;
-// Bank 1 of the interrupt-flag register: writing 1s acknowledges the current response and advances
-// the queue. The SAME store can make a response queued behind it current, which is a fresh interrupt
-// edge, so the caller re-latches I_STAT after acknowledging.
-constexpr uint32_t kCdcIrqFlag = 3u;
-constexpr uint8_t kCdcBankIrq = 1u;
-// Status-register bit 5, RSLRRDY: a response byte is available. This is how the current response's
-// length is discovered without reaching into CdcState's queue internals.
-constexpr uint32_t kCdcStatResponseReady = 0x20u;
 // MIPS o32 argument registers for the ready-callback ABI.
 enum : int { A0 = 4, A1 = 5 };
 
@@ -56,18 +45,8 @@ const GuestCdStreamCallbackLayout *declaredLayout(const Core &core) {
 // notifies anybody. Returns the response's first byte (its status). Acknowledging is a SEPARATE
 // step, in the caller, so a caller that cannot deliver leaves the response in place.
 uint8_t consumeCurrentResponse(CdcState &controller) {
-  const int savedBank = controller.index;
   uint8_t first = 0;
-  for (int i = 0;; i++) {
-    if ((cdc_read(&controller, kCdcIndex) & kCdcStatResponseReady) == 0u) {
-      break;
-    }
-    const auto value = static_cast<uint8_t>(cdc_read(&controller, kCdcResponse));
-    if (i == 0) {
-      first = value;
-    }
-  }
-  cdc_write(&controller, kCdcIndex, static_cast<uint8_t>(savedBank));
+  cdc_take_current_response(&controller, &first);
   return first;
 }
 
@@ -108,6 +87,24 @@ CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core) {
   if (!cdReadyCallbackOwnedByGuestInterrupt(core)) {
     return CdReadyDelivery::NotOwned;
   }
+  CdcState &controller = core.game->cdc;
+  // Retire the responses of commands the FRAMEWORK issued on the guest's behalf (the synchronous
+  // command owner answers the guest before the controller can, so those INT3/INT2 responses have no
+  // guest consumer). Hardware serves the response FIFO in order, so leaving them current hides
+  // every data-ready completion queued behind one — which is exactly what a title whose libcd
+  // command leaf is native sees: its read completes once and then never completes again.
+  int retired = 0;
+  while (cdc_take_owed_command_response(&controller)) {
+    ++retired;
+  }
+  if (retired) {
+    hle.i_stat &= ~(1u << IRQ_BIT_CD);
+    const int bank = controller.index;
+    cdc_write(&controller, CDC_REG_INDEX, CDC_BANK_IRQ);
+    cdc_write(&controller, CDC_REG_IRQ_FLAG, 1u);
+    cdc_write(&controller, CDC_REG_INDEX, static_cast<uint8_t>(bank));
+    core.irqStatLatch();
+  }
   if (!cdReadyCompletionOwed(core)) {
     return CdReadyDelivery::NothingOwed;
   }
@@ -145,16 +142,15 @@ CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core) {
 
   // Declared by the title (`readyStatus`, default 1); read from its callback's own bytes, never guessed here.
   const uint32_t status = declaredLayout(core)->readyStatus;
-  CdcState &controller = core.game->cdc;
   const int savedBank = controller.index;
   const uint8_t responseStatus = consumeCurrentResponse(controller);
   // This handler has now serviced the CD interrupt, so its line is acknowledged. Done BEFORE the
   // controller acknowledge, because that acknowledge is what can raise a fresh edge for a response
   // already queued behind this one.
   hle.i_stat &= ~(1u << IRQ_BIT_CD);
-  cdc_write(&controller, kCdcIndex, kCdcBankIrq);
-  cdc_write(&controller, kCdcIrqFlag, 1u);
-  cdc_write(&controller, kCdcIndex, static_cast<uint8_t>(savedBank));
+  cdc_write(&controller, CDC_REG_INDEX, CDC_BANK_IRQ);
+  cdc_write(&controller, CDC_REG_IRQ_FLAG, 1u);
+  cdc_write(&controller, CDC_REG_INDEX, static_cast<uint8_t>(savedBank));
   // Fold an edge that acknowledge just raised, so a response queued behind this one is visible to
   // the next poll instead of waiting for an unrelated I_STAT access. This is the same
   // `irqStatLatch()` the MMIO dispatcher performs after a guest controller write.

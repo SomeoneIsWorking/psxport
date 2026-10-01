@@ -120,6 +120,16 @@ public:
     return nullptr;
   }
 
+  // The guest RAM this title loads RUNTIME code modules into, for DIRECT runtimes. A title that
+  // loads relocatable modules from the disc and calls their entries (C-12 reads `RELOCS/GT.LVB`
+  // into its heap) needs those bytes to be an executable residency; the framework establishes one
+  // when a CD transfer lands inside the declared window (`guest_code_module.h`). The default
+  // declares none, which is the honest answer for a title whose code all lives in the resident
+  // image and for a bare product.
+  virtual GuestAddressRange guestCodeModuleWindow() const {
+    return {};
+  }
+
   // A synchronous stock `CdRead` just landed its whole payload in guest RAM (psx::cd::StockReadLanding).
   // The bytes are already written and already reported to the executable-write invalidation owner, so a
   // title that treats a streamed region as a code module or authored image publishes it here, after

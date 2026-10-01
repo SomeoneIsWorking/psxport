@@ -7,6 +7,7 @@
 #include "dma_irq.h"         // DPCR/DICR semantics — which DMA completions the guest hears about
 #include "dma_linked_list.h" // what BCR sync mode 2 means, and the chain walk
 #include "game.h"
+#include "guest_code_module.h"
 #include "host_backtrace.h"
 #include "invalidation.h"
 #include "io_peripherals.h"
@@ -901,6 +902,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
           }
           psx::cpu::notifyExecutableWrite(
               *this, {node + 4, node + 4 + (unsigned)take * 4u}, psx::cpu::ExecutableWriteSource::Dma);
+          publishGuestCodeModuleLanding(*this, {node + 4, node + 4 + (unsigned)take * 4u});
           lucent::debug("cdc",
                         "DMA3 chain node 0x{:08X}: {} words, FIFO {} + controller-zero {} (head LBA {})",
                         0x80000000u | node,
@@ -920,6 +922,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
           mem_w32_unnotified(da + (unsigned)i * 4u, s_dma_buf[i]);
         }
         psx::cpu::notifyExecutableWrite(*this, {da, da + (unsigned)n * 4u}, psx::cpu::ExecutableWriteSource::Dma);
+        publishGuestCodeModuleLanding(*this, {da, da + (unsigned)n * 4u});
         lucent::debug("cdc",
                       "DMA3 {} words -> 0x{:08X}: FIFO {} + controller-zero {} (head LBA {})",
                       n,
