@@ -21,6 +21,7 @@
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
 #include "override_differential.h"
+#include "override_differential_contract.h"
 #include "side_effect_journal.h"
 
 #include <array>
@@ -373,6 +374,29 @@ static void test_a_correct_override_matches_and_the_run_continues_from_the_origi
   CHECK(stats.deadStackBytesIgnored > 0u);
 }
 
+// A 16-bit GTE register is compared by the value it holds, not by its storage word. The register file
+// has two writers that store VZ0 differently -- Lightrec's MTC2 keeps the raw word a guest `lhu` left
+// (0x0000F326), the GTE's register port sign-extends it (0xFFFFF326) -- and both read it back as the
+// same halfword. Judged on constructed states, through the shipping contract, so the case does not
+// depend on which writer a translated block happens to use. A different halfword is still a mismatch.
+static void test_a_gte_halfword_register_is_compared_by_its_value_not_its_storage_word(void) {
+  constexpr std::uint32_t kVz0 = 1;
+  psx::cpu::MachineSnapshot original;
+  original.gte[kVz0] = 0x0000F326u;
+  psx::cpu::MachineSnapshot native = original;
+  native.gte[kVz0] = 0xFFFFF326u;
+  const psx::cpu::ExecutionResult returned{psx::cpu::ExecutionExitReason::GuestReturn, kOuterReturn, 0, {}};
+  const auto judge = [&] {
+    return psx::cpu::judgeCompletedCall({original, returned, {}}, {native, returned, {}}, kStackTop, 0);
+  };
+  CHECK(judge().verdict == DifferentialVerdict::Match);
+
+  native.gte[kVz0] = 0xFFFF0326u;
+  const psx::cpu::DifferentialOutcome differs = judge();
+  CHECK(differs.verdict == DifferentialVerdict::Mismatch);
+  CHECK(differs.difference->what == "gte data register 1");
+}
+
 static void test_a_wrong_result_register_is_a_mismatch_naming_v0(void) {
   Fixture f("wrong-v0", kSumCode, &wrongResult);
   f.call();
@@ -641,6 +665,7 @@ static void test_restoring_the_originals_code_bytes_invalidates_the_translated_b
 
 int main() {
   RUN(a_correct_override_matches_and_the_run_continues_from_the_original);
+  RUN(a_gte_halfword_register_is_compared_by_its_value_not_its_storage_word);
   RUN(a_wrong_result_register_is_a_mismatch_naming_v0);
   RUN(a_missing_store_is_a_mismatch_naming_the_ram_range);
   RUN(a_clobbered_callee_saved_register_is_a_mismatch_naming_s0);

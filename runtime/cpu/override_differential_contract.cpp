@@ -59,6 +59,36 @@ std::string hexBytes(const MachineSnapshot &state, ByteRange range) {
   return text;
 }
 
+// A GTE data register's ARCHITECTURAL value -- what MFC2 returns and what every GTE command reads --
+// from its storage word. The two writers of the one register file store the 16-bit registers
+// differently: Lightrec's MTC2 keeps the raw 32-bit word (`lightrec_mtc2`), while the GTE's own
+// register port (`GTE_WriteDR`, reached by native overrides through `gte_write_data`) sign-extends
+// VZ0..2 and IR0..3 on the way in. Both read back only the low halfword, signed for VZn/IRn and
+// unsigned for OTZ/SZn (`lightrec_mfc2`, Beetle's `Vectors(...)`), so the upper half of those words is
+// not machine state, and two paths that differ only there have done the same thing. Measured on Spyro
+// 2's sector walk, where retail moves a zero-extended `lhu` into VZ0 and an exact native override
+// differed from it in that register alone.
+std::uint32_t architecturalGteWord(std::size_t index, std::uint32_t word) {
+  switch (index) {
+  case 1:
+  case 3:
+  case 5:
+  case 8:
+  case 9:
+  case 10:
+  case 11:
+    return static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(word & 0xFFFFu)));
+  case 7:
+  case 16:
+  case 17:
+  case 18:
+  case 19:
+    return word & 0xFFFFu;
+  default:
+    return word;
+  }
+}
+
 void noteFirst(DifferentialOutcome &outcome, DifferentialDifference difference) {
   if (!outcome.difference) {
     outcome.difference = std::move(difference);
@@ -84,8 +114,8 @@ void compareRegisters(const CallObservation &original, const CallObservation &na
               {"cop0 status", hexWord(original.state.cop0[kCop0Status]), hexWord(native.state.cop0[kCop0Status])});
   }
   for (std::size_t index = 0; index < kGteRegisterCount; ++index) {
-    const std::uint32_t a = original.state.gte[index];
-    const std::uint32_t b = native.state.gte[index];
+    const std::uint32_t a = architecturalGteWord(index, original.state.gte[index]);
+    const std::uint32_t b = architecturalGteWord(index, native.state.gte[index]);
     if (a != b) {
       ++outcome.registersDiffering;
       noteFirst(
