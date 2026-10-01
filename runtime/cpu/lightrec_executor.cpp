@@ -905,15 +905,17 @@ void LightrecExecutor::requestStop() {
   }
 }
 
-void LightrecExecutor::invalidate(GuestAddressRange range) {
+void LightrecExecutor::invalidate(GuestAddressRange range, ExecutableWriteSource source) {
   ++impl_->counters.invalidations;
+  ++impl_->counters.invalidationsBySource[static_cast<std::size_t>(source)];
   if (impl_->state && range.end > range.begin) {
     lightrec_invalidate(impl_->state, range.begin, range.end - range.begin);
   }
 }
 
-void LightrecExecutor::invalidateAll() {
+void LightrecExecutor::invalidateAll(ExecutableWriteSource source) {
   ++impl_->counters.invalidations;
+  ++impl_->counters.invalidationsBySource[static_cast<std::size_t>(source)];
   if (impl_->state) {
     lightrec_invalidate_all(impl_->state);
   }

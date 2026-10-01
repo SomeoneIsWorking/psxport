@@ -122,6 +122,10 @@ public:
   void mem_w8(uint32_t a, uint8_t v);
   void mem_w16(uint32_t a, uint16_t v);
   void mem_w32(uint32_t a, uint32_t v);
+  // `mem_w32` without the executable-write notification, for a burst whose caller notifies the
+  // covered range once afterwards (MDEC-out DMA). Every other store check still runs. The caller
+  // owns the notification: skipping it leaves stale translated code.
+  void mem_w32_unnotified(uint32_t a, uint32_t v);
   // Copy a NUL-terminated guest string into `out` (at most cap-1 bytes, always NUL-terminated).
   // The one owner of this read; title code and runtime services call it instead of re-looping mem_r8.
   void readCString(uint32_t address, char *out, size_t cap);
@@ -166,7 +170,7 @@ private:
   // differential's journal sees (and on its shadow path, replays) each one in order.
   uint32_t deviceRead(uint32_t a, uint32_t bytes);
   void deviceWrite(uint32_t a, uint32_t v, uint32_t bytes);
-  template <class Value> void writeGuestMemory(uint32_t address, Value value);
+  template <class Value, bool NotifyExecutable = true> void writeGuestMemory(uint32_t address, Value value);
 
   // WATCH HOOKS — every guest store calls these, so their DISABLED path is on the hottest path in
   // the runtime. Profiling put cw_check at 3.1-3.7% and wwatch_check at 1.8% of total CPU with no

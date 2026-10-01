@@ -5,6 +5,7 @@
 #include "fallback_policy.h"
 #include "function_reach.h"
 #include "guest_program_image.h"
+#include "invalidation.h"
 
 #include <array>
 #include <cstddef>
@@ -136,6 +137,9 @@ struct ExecutorCounters {
   std::uint64_t cacheHits = 0;
   std::uint64_t cacheMisses = 0;
   std::uint64_t invalidations = 0;
+  // `invalidations` split by who asked, indexed by ExecutableWriteSource. The total alone cannot say
+  // whether a large count is guest stores, DMA, or module loads.
+  std::array<std::uint64_t, kExecutableWriteSourceCount> invalidationsBySource{};
   std::uint64_t faults = 0;
   // Memory callbacks psxport received from translated code, device addresses and not. The
   // denominator for the two counters below: without it, "no device access committed anything" and
@@ -184,8 +188,8 @@ public:
   ExecutionResult executeUntilExit(std::uint32_t guestAddress, ExecutionBudget budget);
   ExecutionResult executeFunction(std::uint32_t guestAddress, std::uint32_t returnAddress, ExecutionBudget budget);
   void requestStop();
-  void invalidate(GuestAddressRange range);
-  void invalidateAll();
+  void invalidate(GuestAddressRange range, ExecutableWriteSource source = ExecutableWriteSource::Native);
+  void invalidateAll(ExecutableWriteSource source = ExecutableWriteSource::Native);
   // Diagnostic only. Empty targets plus null callback/context disarm. The callback must not mutate
   // guest state, re-enter the executor, or retain snapshot views beyond the call. Context must
   // outlive the armed period; disarm before destroying it.

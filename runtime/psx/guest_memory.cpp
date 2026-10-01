@@ -89,7 +89,7 @@ static void display_pass_write_guard(Core *c, uint32_t a, uint32_t v, int width)
   abort();
 }
 
-template <class Value> void Core::writeGuestMemory(uint32_t a, Value v) {
+template <class Value, bool NotifyExecutable> void Core::writeGuestMemory(uint32_t a, Value v) {
   constexpr auto width = static_cast<uint32_t>(sizeof(Value));
   uint8_t *p = host_ptr(a, width);
   display_pass_write_guard(this, a, v, width);
@@ -98,7 +98,9 @@ template <class Value> void Core::writeGuestMemory(uint32_t a, Value v) {
   pkt_track(this, a, width);
   if (p) {
     memcpy(p, &v, width);
-    psx::cpu::notifyExecutableWrite(*this, {a, a + width}, psx::cpu::ExecutableWriteSource::MappedStore);
+    if constexpr (NotifyExecutable) {
+      psx::cpu::notifyExecutableWrite(*this, {a, a + width}, psx::cpu::ExecutableWriteSource::MappedStore);
+    }
   } else {
     deviceWrite(a, v, width);
   }
@@ -112,6 +114,9 @@ void Core::mem_w16(uint32_t a, uint16_t v) {
 }
 void Core::mem_w32(uint32_t a, uint32_t v) {
   writeGuestMemory(a, v);
+}
+void Core::mem_w32_unnotified(uint32_t a, uint32_t v) {
+  writeGuestMemory<uint32_t, false>(a, v);
 }
 
 // lwl/lwr/swl/swr: little-endian unaligned word merge.

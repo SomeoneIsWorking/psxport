@@ -8,6 +8,7 @@
 #include "dma_linked_list.h" // what BCR sync mode 2 means, and the chain walk
 #include "game.h"
 #include "host_backtrace.h"
+#include "invalidation.h"
 #include "io_peripherals.h"
 #include <lucent/log.h>
 
@@ -358,12 +359,20 @@ void Core::mdec_dma_pump() {
         bs = 0x10000;
       }
       int burst = bs < s_mdec1_left ? bs : s_mdec1_left;
+      // One executable-write notification per burst, over the span the scatter touched, rather than
+      // one per word: the per-word form issued a Lightrec invalidation for every decoded word.
+      uint32_t burstLow = 0xFFFFFFFFu;
+      uint32_t burstHigh = 0;
       for (int k = 0; k < burst; k++) {
         uint32_t offs = 0;
         uint32_t val = mdec_dma_read_word(&offs);
-        mem_w32((s_mdec1_addr + (offs << 2)) & 0x1FFFFCu, val);
+        const uint32_t dest = (s_mdec1_addr + (offs << 2)) & 0x1FFFFCu;
+        mem_w32_unnotified(dest, val);
+        burstLow = dest < burstLow ? dest : burstLow;
+        burstHigh = dest > burstHigh ? dest : burstHigh;
         s_mdec1_addr = (s_mdec1_addr + 4) & 0xFFFFFFu;
       }
+      psx::cpu::notifyExecutableWrite(*this, {burstLow, burstHigh + 4u}, psx::cpu::ExecutableWriteSource::Dma);
       s_mdec1_left -= burst;
       progress = true;
     }

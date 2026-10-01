@@ -631,6 +631,16 @@ static void dbg_exec(FILE *out, const char *line) {
               (unsigned long long)k.cacheMisses,
               (unsigned long long)k.invalidations,
               (unsigned long long)k.faults);
+      fprintf(out,
+              "invalidations_by_source: cpu=%llu mapped_store=%llu dma=%llu module_load=%llu "
+              "debugger=%llu savestate=%llu native=%llu\n",
+              (unsigned long long)k.invalidationsBySource[0],
+              (unsigned long long)k.invalidationsBySource[1],
+              (unsigned long long)k.invalidationsBySource[2],
+              (unsigned long long)k.invalidationsBySource[3],
+              (unsigned long long)k.invalidationsBySource[4],
+              (unsigned long long)k.invalidationsBySource[5],
+              (unsigned long long)k.invalidationsBySource[6]);
       // The pc a budget exit hands back is a contract - it is where guest execution resumes - and
       // it is reported here so a live run can be ASKED about it rather than having it scraped out
       // of a log. `budget_exits` is the denominator that makes the other two mean anything: with
