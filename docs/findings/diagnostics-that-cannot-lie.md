@@ -173,3 +173,38 @@ ever allowed to drift apart.
 The general statement: **a diagnostic is not finished when it works, and it is not safe until it has been
 observed to fail correctly.** An instrument that has only ever produced the answer you wanted is
 indistinguishable from one that cannot produce the other.
+
+## MEASURED 2026-10-01 — a stale compiler-cache entry silently changed what nine source-reading tests
+were measuring
+
+**The symptom.** Nine `psxport` tests failed in a worktree and passed in the shared checkout:
+`test_audio_policy`, `test_fmv_watchdog`, `test_frame_loop_shell`,
+`test_guest_program_image_ownership`, `test_guest_vram_policy_ownership`,
+`test_no_game_address_literals`, `test_render_path_cycle`, `test_rml_text_encoding`, `test_watchdog`.
+They are the source-reading and ownership tests: they resolve a file relative to `__FILE__` and read
+it. The first plausible explanation was a working-directory problem, and it was wrong — `ctest` does
+run them from `build/tests`, but the shared checkout's binary passes from that same directory.
+
+**The real cause, one command's worth of evidence.** Those nine binaries were the only ones carrying
+a RELATIVE `__FILE__` (`strings build/tests/test_fmv_watchdog` → `../tests/test_fmv_watchdog.cpp`),
+so a path built from it resolved under `build/`, where no source lives. The shared checkout's binary
+carries the ABSOLUTE path and passes. Nothing in the worktree's *current* build command was wrong:
+`ninja -t commands` shows the absolute source path on the command line right now, and deleting the
+object and rebuilding reproduces the relative `__FILE__` again. The variable that changes the answer
+is `CCACHE_DISABLE=1`, which turns the stale object into a correct one on the first try. So a
+**ccache entry produced by an earlier configure that used a relative `-S`** was being returned for a
+current configure that uses an absolute one, and the cache key does not separate them.
+
+**Why it survived a full rebuild, which is the part worth remembering.** A stale object is the
+ordinary, boring failure, and the ordinary repair is to touch the sources and rebuild. That was
+tried, all nine files touched, `cmake --build` recompiled them, and the relative `__FILE__` came
+straight back. The evidence that the compile was not the problem is that the same command under
+`CCACHE_DISABLE=1` produced the correct object — so "it recompiled" proved nothing, and a gate that
+rebuilds cleanly can still be measuring a cached answer.
+
+**The rule this earns, and it is the same one as `__FILE__` deserves:** a test that reads the SOURCE
+TREE resolves that tree through the compiler's own record of where it was compiled from, so the
+question "does this test see the right files" has a second answer outside the source tree, in the
+build cache. `strings <binary> | grep <own source name>` is the one-line discriminator, and it
+distinguishes the two cases that look identical from the outside — a test that is looking in the wrong
+directory, and a test that is looking at a path the compiler was given a long time ago.
