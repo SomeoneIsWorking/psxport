@@ -44,6 +44,7 @@ bool Timing::advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilli
   game->sio.service(mEmulatedTime.nowTicks());
   raiseVBlank(consumeCompletedDisplayFields(static_cast<uint32_t>(fields), static_cast<uint32_t>(parts)));
   serviceCdc();
+  game->fieldDigest.recordField(*game);
   return true;
 }
 

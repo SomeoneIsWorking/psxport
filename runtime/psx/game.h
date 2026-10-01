@@ -10,6 +10,7 @@
 #include "disc.h"               // DiscState — native by-LBA CHD disc backend (disc.c)
 #include "dma_callbacks.h"      // DmaCallbackRegistry — direct-runtime DMACallback state
 #include "fade_interpolation.h" // psxport::fade::PresentFade — the present-time fade owner
+#include "field_digest.h"
 #include "frame_pacer.h"
 #include "frame_presenter.h"             // FramePresenter — neutral current-frame capture/present/cadence fence
 #include "game_runtime.h"                // GameRuntime + per-Game polymorphic behavior products
@@ -55,6 +56,7 @@ public:
   // ---- migrated subsystem state (one member per migrated subsystem) ----
   Timing timing;
   FramePacer framePacer;
+  psx::diag::FieldDigest fieldDigest; // per-field determinism trace (`PSXPORT_DEBUG=fielddigest`)
   Cd cd;          // native CD subsystem: sync reads + libcd HLE + deferred-music state (cd_override.cpp)
   DiscState disc; // native CHD disc backend: handle + hunk cache (per-instance; disc.c)
   CdcState cdc;   // native CD-controller register model (per-instance; cdc_native.c, explicit param)

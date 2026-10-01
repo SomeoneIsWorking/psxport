@@ -132,6 +132,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cdc_native.cpp
   ${PSXPORT_ROOT}/runtime/psx/xa_stream.cpp
   ${PSXPORT_ROOT}/runtime/psx/emulated_time.cpp
+  ${PSXPORT_ROOT}/runtime/psx/field_digest.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame_pacer.cpp
   ${PSXPORT_ROOT}/runtime/psx/timing.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk.cpp
