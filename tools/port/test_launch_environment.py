@@ -10,7 +10,9 @@ from pathlib import Path
 
 from launch_environment import (
     AGENT_RUNTIME_KEYS,
+    CARD_ENV,
     agent_environment,
+    blank_card_environment,
     player_environment,
     player_log_path,
 )
@@ -89,6 +91,36 @@ class LaunchEnvironmentTests(unittest.TestCase):
 
         self.assertNotIn("PSXPORT_LOG_FILE", result)
 
+
+    def test_an_agent_run_given_a_card_starts_without_one_and_is_pointed_at_it(self) -> None:
+        card = self.state / "route.mcr"
+        card.parent.mkdir(parents=True)
+        card.write_bytes(b"the previous run's save")
+
+        result = agent_environment({CARD_ENV: "/elsewhere.mcr"}, self.settings, card=card)
+
+        self.assertEqual(result[CARD_ENV], str(card))
+        self.assertFalse(card.exists())
+
+    def test_an_agent_run_given_no_card_leaves_the_callers_card_alone(self) -> None:
+        card = self.state / "mine.mcr"
+        card.parent.mkdir(parents=True)
+        card.write_bytes(b"keep me")
+
+        result = agent_environment({CARD_ENV: str(card)}, self.settings)
+
+        self.assertEqual(result[CARD_ENV], str(card))
+        self.assertEqual(card.read_bytes(), b"keep me")
+        self.assertNotIn(CARD_ENV, agent_environment({}, self.settings))
+
+    def test_a_missing_card_is_not_an_error_and_a_directory_is_refused(self) -> None:
+        absent = self.state / "never-written.mcr"
+        self.assertEqual(blank_card_environment({}, absent)[CARD_ENV], str(absent))
+
+        self.state.mkdir(parents=True)
+        with self.assertRaises(IsADirectoryError):
+            blank_card_environment({}, self.state)
+        self.assertTrue(self.state.is_dir())
 
     def test_the_default_log_is_ready_to_be_written_and_starts_empty(self) -> None:
         stale = self.state / "psxport" / "spyro1" / "last-run.log"

@@ -43,6 +43,7 @@ from compare_cores import (  # noqa: E402
     CoreSession,
     NativeReplSession,
 )
+from port.launch_environment import CARD_ENV, blank_card_environment  # noqa: E402
 
 PSXPORT = Path(__file__).resolve().parents[2]
 
@@ -116,9 +117,6 @@ class Product:
     disc: Path
 
 
-CARD_ENV = "PSXPORT_CARD"  # the framework memory-card path key every consumer honours (memcard.cpp)
-
-
 def fresh_card(product: Product, out_dir: Path) -> Product:
     """Point the product at a card image that does not exist yet, so it formats a blank card the way
     the console reference starts with one. A persistent card with a save changes the title's menu
@@ -126,10 +124,7 @@ def fresh_card(product: Product, out_dir: Path) -> Product:
     environment difference, not a product divergence. A title-specific card key in the product's
     environment or .env still takes precedence in memcard.cpp; a title tool that has one passes it
     through --product-env at this same path."""
-    card = out_dir / "card.mcr"
-    card.unlink(missing_ok=True)
-    environment = dict(product.environment)
-    environment[CARD_ENV] = str(card)
+    environment = blank_card_environment(product.environment, out_dir / "card.mcr")
     return Product(product.binary, product.executable, environment, product.cwd, product.disc)
 
 

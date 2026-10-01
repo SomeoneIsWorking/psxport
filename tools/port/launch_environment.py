@@ -19,6 +19,10 @@ AGENT_RUNTIME_KEYS = (
     "PSXPORT_NOPACE",
 )
 
+# The framework's memory-card path key (runtime/psx/memcard.cpp). Without it every run opens the same
+# `scratch/saves/card.mcr` relative to its working directory, whichever title it is.
+CARD_ENV = "PSXPORT_CARD"
+
 _LEGACY_HEADLESS_KEYS = (
     "PSXPORT_NOWINDOW",
     "PSXPORT_HEADLESS",
@@ -117,8 +121,36 @@ def player_log_path(product: str, environment: Mapping[str, str] | None = None) 
     return base / "psxport" / product / "last-run.log"
 
 
+def blank_card_environment(environment: Mapping[str, str], card: str | Path) -> dict[str, str]:
+    """Return ``environment`` pointing the product at a memory card that does not exist yet.
+
+    WHY AN AUTOMATED RUN NEEDS ONE. The card is an INPUT the guest reads at boot and a file the run
+    WRITES. With no ``PSXPORT_CARD`` every run, of every title, opens one shared
+    ``scratch/saves/card.mcr`` and leaves it changed for the next. Measured 2026-10-01 on Spyro 2/3's
+    title routes, same binary and same pad edges: Spyro 3 reached gameplay at field 4890 on a card
+    holding Spyro 1's data and at 4740 on every run after, because the first run's writes became the
+    next run's input; Spyro 2 gave 3340 after a Spyro 3 run and 3190 after a Spyro 2 one. A per-field
+    digest of the two Spyro 2 runs is identical for fields 0..244 and diverges at 245, where the guest
+    first reads the card. Nothing about host time was involved: unloaded and with the host saturated
+    the same card gave byte-identical digests.
+
+    The file is deleted here, so the product creates and formats a blank card exactly as it does for
+    a player's first run, and the run's start state is a function of the binary and the disc alone.
+    A directory at ``card`` is refused rather than removed.
+    """
+    path = Path(card)
+    if path.is_dir():
+        raise IsADirectoryError(f"card path {path} is a directory; name the card image file")
+    path.unlink(missing_ok=True)
+    result = dict(environment)
+    result[CARD_ENV] = str(path)
+    return result
+
+
 def agent_environment(environment: Mapping[str, str],
-                      settings: str | Path | None = None) -> dict[str, str]:
+                      settings: str | Path | None = None,
+                      *,
+                      card: str | Path | None = None) -> dict[str, str]:
     """Return the explicit headless, silent, unpaced automation environment.
 
     An agent run must also declare the presentation configuration it is gating, which is why
@@ -133,6 +165,10 @@ def agent_environment(environment: Mapping[str, str],
     A configuration with the enhancements OFF is a tracked file saying so, not an absent one. A path
     that does not resolve is refused for the same reason: the product would fall back to built-in
     defaults and the run would look like one that had honoured the file.
+
+    ``card`` names a memory-card image the run starts without (see :func:`blank_card_environment`).
+    Any run whose result must repeat, a route to a game state above all, passes one; the default
+    leaves the caller's own ``PSXPORT_CARD`` (or the shared default card) in force.
     """
     result = dict(environment)
     result.pop("PSXPORT_VK_WINDOW", None)
@@ -141,6 +177,8 @@ def agent_environment(environment: Mapping[str, str],
     for key in AGENT_RUNTIME_KEYS:
         result[key] = "1"
     result["PSXPORT_SETTINGS"] = str(_resolved_settings(settings, result))
+    if card is not None:
+        result = blank_card_environment(result, card)
     return result
 
 
