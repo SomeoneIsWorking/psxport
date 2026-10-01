@@ -455,31 +455,23 @@ void cdc_set_filter(CdcState *s, uint8_t file, uint8_t channel) {
   lucent::debug("cdc", "setfilter file={} chan={}", file, channel);
 }
 
-void cdc_begin_read(CdcState *s, uint32_t lba) {
-  s->loc_lba = lba;
-  s->command_lba = lba;
-  start_continuous_read(s);
-}
-
-void cdc_issue_command(CdcState *s, uint8_t command) {
-  s->index = 0;
-  // This command was issued BY THE FRAMEWORK, on the guest's behalf and after the framework had
-  // already answered the guest synchronously, so no guest code will ever read the two responses it
-  // produces (INT3 from execution, INT2 from completion). They are counted as owed here so the CD
-  // interrupt owner retires exactly these: an unretired response stays current in the FIFO and
-  // hides every data-ready completion queued behind it.
-  s->command_responses_owed = (uint8_t)(s->command_responses_owed + 2u);
-  cdc_command_schedule(s, command);
-  // Run this command to completion NOW. The guest was answered synchronously by the CD command
-  // owner, so from the guest's point of view the command is already done; a controller that
-  // deferred it would apply it AFTER the guest's next command. Measured on C-12: the startup read
-  // pump issues Pause, Setloc, Setmode, Read; a Pause still pending when the Read began executed
-  // afterwards and cancelled the read's own sector event, so no completion ever arrived and the
-  // title retried the same sector every 60 fields.
+// Retire a still-pending command through the SAME execute/complete phases the clock-driven path
+// uses, so a command keeps its own timing and its two responses. This is a QUEUE-SEAM helper, not an
+// inline execution: it runs at the point where a LATER effect must not overtake an older command,
+// never at the point the command was accepted.
+//
+// The controller executes the commands it accepted in the order it accepted them. The native CD
+// path breaks that order when it accepts a read's effect synchronously: a framework-issued Pause
+// (CdControl(Pause), answered to the guest synchronously by the CD command owner) is still pending
+// on the guest clock, and the very next CdControl(ReadN) applies `cdc_begin_read` right away — so a
+// Pause issued BEFORE the read executed AFTER the read had begun and cancelled that read's own
+// sector event. Measured on C-12: no completion ever arrived and the title retried one sector every
+// 60 fields.
+static void retire_pending_command(CdcState *s) {
+  if (!s->command_event_armed || !s->tick_now) {
+    return;
+  }
   for (int guard = 0; guard < 64 && s->command_event_armed; ++guard) {
-    if (!s->tick_now) {
-      break;
-    }
     s->command_deadline_ticks = s->tick_now(s->tick_context);
     const CdcCommandEvent event = cdc_command_service(s, 1);
     if (event == CdcCommandEvent::kExecute) {
@@ -490,6 +482,33 @@ void cdc_issue_command(CdcState *s, uint8_t command) {
     // `kNone` only means this phase was not the last one; the loop keeps pulling the deadline to
     // now until the command has executed (and its completion disarms it).
   }
+}
+
+void cdc_begin_read(CdcState *s, uint32_t lba) {
+  // The read is the NEXT command after anything still pending, so the older one runs first. The
+  // timed contract is unchanged — the command was not executed inline at issue — but a command can
+  // no longer land after the read it was issued before.
+  retire_pending_command(s);
+  s->loc_lba = lba;
+  s->command_lba = lba;
+  start_continuous_read(s);
+}
+
+void cdc_issue_command(CdcState *s, uint8_t command) {
+  s->index = 0;
+  // The responses this command produces belong to the GUEST that issued it: stock libcd polls
+  // its own status and consumes them after every command (measured on C-12: Setloc -> Setmode ->
+  // ReadN -> Pause, each followed by a GetStat poll), so the INT3 from execution and the INT2 from
+  // completion both have a real consumer. An earlier owner deleted them here on the premise that
+  // a framework-issued command has "no guest consumer", which is false for every command that
+  // reaches this function: the guest issued it through its own CdControl. Deleting them left the
+  // guest's post-Pause poll waiting for a completion that had already been thrown away.
+  cdc_command_schedule(s, command);
+  // TIMED, not inline. A controller takes its own time to accept a command and reports it in two
+  // phases; `test_cdc_continuous_read` pins that a native-issued Pause observes the still-reading
+  // status at execution and the paused status at completion. Ordering a framework-issued command
+  // against the guest's NEXT one is the queue seam's job (`retire_pending_command`), not this
+  // function's.
 }
 
 int cdc_take_current_response(CdcState *s, uint8_t *first_byte) {
@@ -511,23 +530,6 @@ int cdc_take_current_response(CdcState *s, uint8_t *first_byte) {
     *first_byte = first;
   }
   return taken;
-}
-
-int cdc_take_owed_command_response(CdcState *s) {
-  if (s->command_responses_owed == 0) {
-    return 0;
-  }
-  const uint8_t type = cdc_current_irq_type(s);
-  // Only a command's own INT2/INT3/INT5 is retired here. A data-ready is the title's completion and
-  // belongs to the ready-callback owner; taking it would swallow a sector.
-  if (type != 2 && type != 3 && type != 5) {
-    return 0;
-  }
-  if (!cdc_take_current_response(s, nullptr)) {
-    return 0; // scheduled but not posted yet; it stays owed
-  }
-  s->command_responses_owed--;
-  return 1;
 }
 
 int cdc_dma_read(CdcState *s, uint32_t *out, int words) {

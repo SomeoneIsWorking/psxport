@@ -88,23 +88,13 @@ CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core) {
     return CdReadyDelivery::NotOwned;
   }
   CdcState &controller = core.game->cdc;
-  // Retire the responses of commands the FRAMEWORK issued on the guest's behalf (the synchronous
-  // command owner answers the guest before the controller can, so those INT3/INT2 responses have no
-  // guest consumer). Hardware serves the response FIFO in order, so leaving them current hides
-  // every data-ready completion queued behind one — which is exactly what a title whose libcd
-  // command leaf is native sees: its read completes once and then never completes again.
-  int retired = 0;
-  while (cdc_take_owed_command_response(&controller)) {
-    ++retired;
-  }
-  if (retired) {
-    hle.i_stat &= ~(1u << IRQ_BIT_CD);
-    const int bank = controller.index;
-    cdc_write(&controller, CDC_REG_INDEX, CDC_BANK_IRQ);
-    cdc_write(&controller, CDC_REG_IRQ_FLAG, 1u);
-    cdc_write(&controller, CDC_REG_INDEX, static_cast<uint8_t>(bank));
-    core.irqStatLatch();
-  }
+  // Nothing is retired from the response FIFO here. Every command the controller owes a response
+  // for was issued by the GUEST through its own libcd, so the INT3/INT2 belong to that guest's status
+  // polls. A delivery that deleted them left a stock-libcd title waiting, after its own Pause, for a
+  // completion that had already been thrown away (measured on C-12, which then stalled after two
+  // sectors). A data-ready queued behind an unread command response stays behind it, exactly as
+  // hardware serves the FIFO in order: the guest consumes its own command responses, and the
+  // completion becomes current.
   if (!cdReadyCompletionOwed(core)) {
     return CdReadyDelivery::NothingOwed;
   }

@@ -59,7 +59,6 @@ typedef struct CdcState {
   uint64_t command_deadline_ticks;
   uint8_t read_completion_n;                  // owed read completions not yet announced (<= 4)
   uint64_t read_completion_deadline_ticks[4]; // absolute announce time of each, oldest first
-  uint8_t command_responses_owed;             // responses of a FRAMEWORK-issued command with no guest consumer
   void *tick_context;
   CdcTickNowFn tick_now;
   CdcIrqEnt q[8];                          // pending-interrupt queue                     (was s_q)
@@ -129,7 +128,6 @@ void cdc_begin_read(CdcState *s, uint32_t lba);
 // status word after a Pause (Spyro 2's XA state machine) would otherwise see "reading" forever.
 void cdc_issue_command(CdcState *s, uint8_t command);
 int cdc_take_current_response(CdcState *s, uint8_t *first_byte);
-int cdc_take_owed_command_response(CdcState *s);
 // Mirror a Setmode the native CD layer intercepted into the controller model. Bit 0x20 decides
 // whether the data FIFO presents whole sectors (header + subheader + data) or user data only, and a
 // streaming reader depends on that framing to identify sector types.

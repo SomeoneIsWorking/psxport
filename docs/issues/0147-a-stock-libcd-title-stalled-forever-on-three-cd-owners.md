@@ -28,10 +28,25 @@ seeing a sector.** Each was found by observing what the controller did, not by r
 
 3. **A command the framework had already answered ran AFTER the next one.** The synchronous command
    owner answers the guest inside the call, but `cdc_issue_command` scheduled the controller's Pause
-   on the guest clock. C-12's read pump issues Pause, Setloc, Setmode, Read; the Pause executed
-   after the Read and cancelled the read's own sector event, so no completion ever arrived. A
-   framework-issued command now runs receive/argument/execute/completion in line: the guest was
-   told it was done, so the controller must be done too.
+   on the guest clock. C-12's read pump issues Pause, Setloc, Setmode, ReadN; the Pause executed
+   after the ReadN had already begun the next read and cancelled that read's own sector event, so
+   no completion ever arrived. The controller takes its own time to execute a command and
+   `test_cdc_continuous_read` pins that a native-issued Pause observes the still-reading status at
+   execution and the paused status at completion, so the command stays TIMED. The ordering was the
+   actual defect: a controller executes the commands it accepted in the order it accepted them, so
+   `cdc_begin_read` now retires anything still pending through the same execute/completion phases
+   before the read it was issued after begins (`retire_pending_command`). Without that, C-12 streams
+   two sectors and stops; with it, it streams the whole 121-sector read.
+
+   An earlier attempt fixed this by completing the command in line at issue, which broke the pinned
+   timed contract and had to be undone. A second, wrong attempt then deleted the command's own
+   responses from the FIFO on the premise that a framework-issued command has "no guest consumer" —
+   it is the GUEST that issued it through its own CdControl, and stock libcd polls its status after
+   every command (measured: Setloc -> Setmode -> ReadN -> Pause, each followed by a GetStat poll).
+   Deleting those responses left the guest waiting, after its own Pause, for a completion that had
+   already been thrown away; that version stalled after two sectors as well. Both were measured and
+   removed: responses belong to the guest that asked for them, and a data-ready behind an unread
+   command response stays behind it, exactly as hardware serves the FIFO in order.
 
 4. **A repeated request-register write did nothing, then everything.** The request bit was modelled
    as a pure latch (psxport issue 0002, Crash Bash's split DMA). But stock libcd writes it once per
@@ -57,8 +72,9 @@ from `0x8011F9BC`, and the guest submitting drawing primitives.
 
 ## Notes
 
-The controller's response FIFO is strictly ordered, which is why an unretired command response hides
-every data-ready completion queued behind it. A framework-issued command's two responses (INT3 from
-execution, INT2 from completion) are counted in `CdcState::command_responses_owed` and retired by
-the CD interrupt owner in that order; a guest-written command's responses are untouched, because
-that guest's own command body consumes them.
+Nothing retires the controller's response FIFO. The delivery path only consumes the completion it is
+delivering, and it does that only when the CURRENT response is a data-ready, so an unread command
+response keeps its place in front of it — the guest's own status polls consume it and the
+completion becomes current. This is the second measured false premise of this issue, recorded here
+because the symptom (a title whose reads complete once and then never again) is the same either
+way.
