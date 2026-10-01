@@ -30,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PSX = Path("/home/bhamil/repo/psx")
+PSX = Path(__file__).resolve().parents[2]
 FRAMEWORK = PSX / "psxport"
 
 # Each port's CONFIGURED build directory, which is not always `build`: several titles configure a

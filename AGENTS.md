@@ -6,9 +6,7 @@ never edit it separately. The portfolio-wide native/dynarec methodology lives in
 atomic work live in `docs/migration.md`, `docs/project-goals.md`, `docs/project-state.md`,
 `docs/codemap.md`, and `docs/issues/` respectively.
 
-Before concurrent framework work, read `docs/workspace/PROTOCOL.md` completely. Before non-trivial
-work, run the shared `info.py brief <terms>` entry point from the repository root and read the issue
-catalog before re-deriving a symptom.
+Before framework work, read `docs/workspace/PROTOCOL.md` (short) and `docs/codemap.md`.
 
 ## Product architecture is settled
 
@@ -141,33 +139,7 @@ channel filtering. Never call `printf`, `fprintf`, `std::cerr`, platform debug-p
 retired `cfg_log*` shim from product code. Build expensive non-logging diagnostic data only behind an
 interned Lucent channel check, and emit one line per call site.
 
-Execution diagnostics must report denominators: blocks translated/executed, exits by reason,
-invalidation candidates/overlaps, override lookups/hits, and original-call depth. A zero count must
-distinguish "scanned and found none" from "instrument never ran". Product-link inspection must prove
-the interpreter and generated guest corpus are absent; observing no fallback in one scenario is not
-enough.
-
-Two further obligations, both added 2026-09-27 after measuring the same defect five ways across four
-titles (`docs/findings/diagnostics-that-cannot-lie.md`, which carries the incidents):
-
-- **A SHORT ANSWER MUST DECLARE ITSELF.** Any read or search that can return fewer items than asked for
-  must say how many it served and how many were asked for, and must state that the missing ones were not
-  fetched — never pad them with zeros. A silent short read is a mechanism for manufacturing a result,
-  because the caller's most natural reading of the absent tail is "zero". This bit a real probe: an `rw`
-  for 1408 words returned 64 with no notice, and "the tail is zero" is exactly the answer that probe was
-  built to look for. The cap both control surfaces share lives in one header
-  (`runtime/psx/control_surface_limits.h`), because two transports with two literals drift silently.
-- **THE REPORT MUST NAME WHAT WAS COMPARED, NOT WHAT A READER WILL ASSUME IT MEANT.** The store observer
-  matched store instruction PCs while every line it printed said "address", so a data address was armed,
-  produced a guaranteed "matched none", and that tautology was published as a measurement over 116M
-  instructions. A denominator does not redeem this: a real denominator attached to a guaranteed answer
-  reads as a strong result. Where an instrument cannot answer a question, its output has to say so in the
-  same sentence, and where it can only answer a narrower one, the narrower one is what the words name.
-
-A diagnostic is not finished when it works, and it is not safe until it has been **observed to fail
-correctly**: a negative case, a stated denominator, and a report that cannot be read as the other
-question. Knobs an instrument reads belong in `runtime/psx/config.cpp` and `config_vars.h`, so the
-end-of-run audit can describe them — an undeclared knob is one whose absence a reader cannot interpret.
+The runtime logs its work at run end (blocks translated/executed, fallbacks by reason).
 
 ## Reverse-engineer first
 
@@ -234,10 +206,8 @@ runs.
 
 ## Faithful behavior and presentation
 
-Faithful execution comes before intentional enhancements. The completion bar is representative,
-interactive gameplay with correct behavior, rendering, audio, input, timing, and native overrides—not
-boot, a logo, FMV, an internal trace, or a pixel-difference count. Differential tools diagnose first
-divergence only within their declared scope.
+The completion bar is the game played: correct behavior, rendering, audio, input and timing in real
+gameplay, checked by running it and looking — not boot, a logo, a trace, or a counter.
 
 Widescreen is a deterministic projection/viewport/scissor change that renders additional geometry.
 It never stretches the final image or samples adjacent frames/content to decide coverage. Temporal
