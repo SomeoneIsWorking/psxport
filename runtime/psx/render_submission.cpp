@@ -3,6 +3,7 @@
 
 #include "census_frame.h"
 #include "game.h"
+#include "gpu_vk.h" // gpu_vk_wide_presentation — is the GUEST's own projection the widened one?
 #include "host_backtrace.h"
 #include "wide_2d_layout.h" // the 2D layout transform for a Core, by EITHER widening mechanism
 
@@ -174,6 +175,33 @@ void RenderQueue::emitOrQueue(Core *core,
       // The draw-area clip is in the producer's space too, so it moves with the vertices it bounds.
       da_x0 = t.apply(da_x0);
       da_x1 = t.apply(da_x1);
+    }
+  }
+
+  // ---- WIDESCREEN 3D clip — the DEPTH half of the same problem, and the reason the 2D half above
+  // was not enough on a GTE-path title.
+  //
+  // A 3D primitive's coordinates need NO transform here: they came out of the GUEST's own
+  // projection, which a title-owned `GuestProjectionPlan` has already widened (Spyro 2 sets OFX to
+  // the widened centre). What they DO need is a clip rectangle wide enough to contain them. The
+  // guest states its own rectangle through GP1 E3/E4 and it is snapshotted here, so on Spyro 2 it
+  // still says `x1 = 511` for a 684-column canvas: the extra geometry is queued, rasterises, and is
+  // discarded, and the margins present black. Measured on Spyro 2's Glimmer: 1970 prims per frame
+  // spanning x -170..652, 82 of them past 511, and 0.0 % non-black across columns 512..683.
+  //
+  // `GuestProjectionPlan::guestClipRight` was computed, published, documented and asserted by its own
+  // unit test for exactly this, and consumed by nothing. This is its consumer.
+  //
+  // INERT WHERE IT MUST BE, and both directions are load-bearing:
+  //   * 4:3 — `plan.widescreen()` is false, so the branch does not execute at all;
+  //   * a NATIVE-path title — `gpu_vk_wide_presentation` is false there (`guestWidescreenAllowed` is
+  //     a GTE-path permission), so its host-owned widening is untouched and no double shift is
+  //     possible: the 2D block above and this one are mutually exclusive on `order_mode`.
+  //   * NEVER NARROWS. A guest that already stated a wider rectangle than the plan keeps its own.
+  if (order_mode == RQ_OM_DEPTH && gpu_vk_wide_presentation(core)) {
+    const GuestProjectionPlan &plan = core->game->guestDisplay.plan();
+    if (plan.widescreen() && plan.guestClipRight > da_x1) {
+      da_x1 = plan.guestClipRight;
     }
   }
   // Zero-init: only the later key-order resolver may promote authored_depth from ordinary real depth.
