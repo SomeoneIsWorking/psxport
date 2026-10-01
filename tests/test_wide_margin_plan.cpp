@@ -74,6 +74,37 @@ static void test_4_3_and_invalid_are_noops(void) {
   CHECK(!plan_wide_margin(0, 0, 512, 684, 0, /*rgb24=*/true).draw);
 }
 
+// A guest that draws its own margin keeps the host base out of the rows it draws in the displayed
+// buffer. Spyro 2 displays (0,0) for 240 rows and draws rows 12..227 there, so only the 12-row
+// letterbox above and below gets the base; the rows it drew one composite earlier are left alone.
+static void test_guest_drawn_rows_leave_only_the_letterbox(void) {
+  const WideMarginPlan margin = plan_wide_margin(0, 0, 512, 684, 240, /*rgb24=*/false);
+  const WideMarginBands bands = host_margin_bands(margin, psx::gpu::RowSpan{12, 228});
+  CHECK_EQ(bands.count, 2);
+  CHECK_EQ(bands.band[0].y0, 0);
+  CHECK_EQ(bands.band[0].y1, 12);
+  CHECK_EQ(bands.band[1].y0, 228);
+  CHECK_EQ(bands.band[1].y1, 240);
+  CHECK_EQ(bands.band[1].x0, 512);
+  CHECK_EQ(bands.band[1].x1, 684);
+}
+
+// With no guest-drawn rows the base is the whole margin, exactly the plan.
+static void test_no_guest_rows_is_the_whole_margin(void) {
+  const WideMarginPlan margin = plan_wide_margin(0, 228, 512, 684, 240, /*rgb24=*/false);
+  const WideMarginBands bands = host_margin_bands(margin, std::nullopt);
+  CHECK_EQ(bands.count, 1);
+  CHECK_EQ(bands.band[0].y0, 228);
+  CHECK_EQ(bands.band[0].y1, 468);
+}
+
+// A guest that draws every displayed row leaves the host nothing to cover, and a 4:3 plan never draws.
+static void test_fully_drawn_and_4_3_lay_no_base(void) {
+  const WideMarginPlan margin = plan_wide_margin(0, 0, 512, 684, 240, /*rgb24=*/false);
+  CHECK_EQ(host_margin_bands(margin, psx::gpu::RowSpan{0, 240}).count, 0);
+  CHECK_EQ(host_margin_bands(plan_wide_margin(0, 0, 512, 512, 240, false), std::nullopt).count, 0);
+}
+
 int main(void) {
   RUN(spyro_extension_only);
   RUN(origin_is_preserved);
@@ -82,5 +113,8 @@ int main(void) {
   RUN(the_two_depths_differ);
   RUN(24bpp_extension_past_vram_is_a_noop);
   RUN(4_3_and_invalid_are_noops);
+  RUN(guest_drawn_rows_leave_only_the_letterbox);
+  RUN(no_guest_rows_is_the_whole_margin);
+  RUN(fully_drawn_and_4_3_lay_no_base);
   return pt_summary();
 }

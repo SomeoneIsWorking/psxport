@@ -2280,7 +2280,7 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
     }
 
     // The wide margin's rect is in VRAM halfwords, so it needs the display depth (spyro issue 0118).
-    draw_wide_margin(sx, sy, w, disp_w, h, game->gpu.s_disp_rgb24 != 0);
+    draw_wide_margin(sx, sy, w, disp_w, h, game->gpu.s_disp_rgb24 != 0, decision == PRESENT_REBUILD_GEOM);
     // Only the regions the guest actually wrote (vram_dirty.h). Uploading all of VRAM here is what
     // erased the rasterized picture out of the buffer that was about to be displayed.
     VramDirtyRect up[VramDirty::CAP + 1];

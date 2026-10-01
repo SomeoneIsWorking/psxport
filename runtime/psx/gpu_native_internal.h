@@ -10,6 +10,7 @@
 #ifndef GPU_NATIVE_INTERNAL_H
 #define GPU_NATIVE_INTERNAL_H
 #include "gpu_display_mode.h"
+#include "guest_draw_rows.h"
 #include <array>
 #include <stdint.h>
 #include <stdio.h>
@@ -172,6 +173,7 @@ struct GpuState {
 
   // Draw env (GP0 E1..E6)
   int s_da_x0 = 0, s_da_y0 = 0, s_da_x1 = 1023, s_da_y1 = 511; // draw clip area
+  psx::gpu::RecentDrawRows s_draw_rows;                        // rows of the recent draw areas, newest first
   int s_off_x = 0, s_off_y = 0;                                // draw offset
   int s_tp_x = 0, s_tp_y = 0;                                  // texpage base
   int s_tp_mode = 0, s_tp_blend = 0, s_tp_dither = 0;          // texture color mode / blend / dither

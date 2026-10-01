@@ -1772,7 +1772,15 @@ void GpuState::gp0_exec(Core *core) {
           // in display rows 0-9 and 230-239 and nowhere else, with rows 10-229 clean. The backdrop was
           // covering rows 8-231 instead of 0-223. x was already going through ws_2d_local_x, which
           // assumes a display-local input, so the two axes disagreed about what frame they were in.
-          const int lx = x - s_disp_x, ly = y - s_disp_y;
+          //
+          // THAT FRAME IS THE HOST ENGINE'S. A guest that widened its own projection queues its
+          // primitives VRAM-ABSOLUTE (its draw offset already applied), so its backdrop clear must be
+          // queued in the same frame. Made display-local, a double-buffered guest's clear of the buffer
+          // it is NOT displaying landed a whole buffer away: Spyro 2's (0,12) 512x216 clear, issued
+          // while (0,228) was displayed, was queued at rows -216..0, so that buffer's margin never got
+          // its base and kept VRAM-atlas noise wherever no primitive reached.
+          const bool displayLocal = gpu_vk_wide_engine(core) != 0;
+          const int lx = displayLocal ? x - s_disp_x : x, ly = displayLocal ? y - s_disp_y : y;
           int x0 = ws_2d_local_x(core, lx, /*is_bg=*/1), x1 = ws_2d_local_x(core, lx + w, /*is_bg=*/1);
           int xs[4] = {x0, x1, x0, x1}, ys[4] = {ly, ly, ly + h, ly + h};
           int us[4] = {0, 0, 0, 0}, vs[4] = {0, 0, 0, 0};
@@ -2093,6 +2101,7 @@ void GpuState::gpu_gp0(Core *core, uint32_t w) {
           s_da_x1 += (gpu_vk_wide_engine_w(core) - (s_disp_w > 0 ? s_disp_w : 320));
         }
       }
+      s_draw_rows.note({s_da_y0, s_da_y1 + 1});
       lucent::debug("env", "E4 clip_br=({},{})", s_da_x1, s_da_y1);
       return;
     }

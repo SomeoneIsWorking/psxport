@@ -49,6 +49,23 @@ what makes them evidence rather than decoration. The drawing itself moved out of
 4,253-line `gpu_vk.cpp` into `runtime/psx/gpu_vk_wide_margin.cpp`; the file's legacy cap ratcheted to
 4,238.
 
+## The base belongs to whoever draws the displayed buffer (2026-10-02)
+
+The base was laid over the DISPLAYED buffer at present. On a guest that widened its own projection
+and double-buffers, that buffer was drawn one composite earlier, so the base erased the margin the
+guest had drawn there. Spyro 2 in Glimmer at 16:9, 1280x720 present: 24/24 consecutive fields had
+display columns 512..683 black, with all 81 primitives per frame that reach past column 511
+submitted under a 0..683 draw area. Its widened backdrop clear was also queued display-local in a
+VRAM-absolute queue, so the clear of the undisplayed buffer landed 228 rows off the canvas and that
+buffer's margin kept atlas noise.
+
+Now the guest's clear is queued VRAM-absolute when the guest owns the widening, and the base covers
+only the margin rows the guest does not draw in the displayed buffer: its letterbox, found from the
+newest recent draw area inside the display window (`RecentDrawRows`). Host-engine titles and
+upload-only screens keep the whole-margin base. After: 24/24 consecutive fields full-width with
+scene in columns 512..683 and a one-colour black letterbox margin. Captures:
+`spyro/scratch/s2cull/pshot_{before,after}/`.
+
 ## The projection centre and the left margin are the framework's numbers; ask for them by name (2026-09-27)
 
 Two quantities decide where a widened picture begins, and both are computed by the framework:

@@ -1,5 +1,11 @@
 #pragma once
 
+#include "guest_draw_rows.h"
+
+#include <algorithm>
+#include <array>
+#include <optional>
+
 // Renderer-only base coverage for storage added to the RIGHT of a guest framebuffer. PSX games use
 // that VRAM for textures/CLUTs, so the extension must be covered in the host composite without ever
 // clearing guest VRAM. The native framebuffer itself is deliberately excluded: preserve-backdrop
@@ -53,4 +59,47 @@ inline WideMarginPlan plan_wide_margin(int sx, int sy, int native_w, int wide_w,
   p.x1 = x1;
   p.y1 = sy + h;
   return p;
+}
+
+// WHERE THE HOST LAYS THE BASE, given the rows the guest draws into the displayed buffer itself.
+//
+// The base above is laid at present over the DISPLAYED buffer. That is right where nobody else draws
+// the margin — a host renderer building the frame it shows, an upload-only guest screen — and wrong
+// where the guest does: a guest that widened its own projection draws its frames into a widened draw
+// area, behind its own widened backdrop clear, and on a double-buffered guest the displayed buffer was
+// drawn one composite EARLIER, so a base laid over it at present erased what the guest drew there.
+// MEASURED, Spyro 2 in Glimmer at 16:9 (1280x720 present): 24/24 consecutive presented fields had
+// display columns 512..683 black, while every one of the 81 primitives per frame reaching past column
+// 511 was submitted under a 0..683 draw area.
+//
+// `guestDrawnRows` is the displayed buffer's own draw rows when the guest draws its margin, else none.
+// The base then covers only the margin rows OUTSIDE them — a letterboxed guest's border rows, which
+// it never draws and whose margin storage would otherwise show VRAM texture pages — as at most two
+// bands, above and below. With no guest rows the whole margin is one band, as before.
+struct WideMarginBands {
+  int count = 0;
+  std::array<WideMarginPlan, 2> band{};
+};
+
+inline WideMarginBands host_margin_bands(const WideMarginPlan &margin,
+                                         std::optional<psx::gpu::RowSpan> guestDrawnRows) {
+  WideMarginBands out;
+  if (!margin.draw) {
+    return out;
+  }
+  if (!guestDrawnRows) {
+    out.band[out.count++] = margin;
+    return out;
+  }
+  if (guestDrawnRows->top > margin.y0) {
+    WideMarginPlan above = margin;
+    above.y1 = std::min(margin.y1, guestDrawnRows->top);
+    out.band[out.count++] = above;
+  }
+  if (guestDrawnRows->bottom < margin.y1) {
+    WideMarginPlan below = margin;
+    below.y0 = std::max(margin.y0, guestDrawnRows->bottom);
+    out.band[out.count++] = below;
+  }
+  return out;
 }
