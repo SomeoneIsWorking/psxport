@@ -89,11 +89,11 @@ SEEDS = [
      "    if spec.code_last >= size:\n",
      "    if False:\n",
      "a code window that runs past the end of the file is refused"),
-    ("the exit-0-with-no-inventory check is gone",
-     "headless.py",
-     "        if not inventory.is_file():\n",
-     "        if False:\n",
-     "an exit-0 run with no inventory is a REFUSAL"),
+    # SUPERSEDED, and removed rather than repointed: the exit-0-with-no-inventory check is now a
+    # loop over EVERY artefact the run promised, so there is no single `if not inventory.is_file()`
+    # line left to seed. The defence it protected is seeded below ("a run is accepted without
+    # producing the artefact it promised"); leaving a seed aimed at text that no longer exists would
+    # report SEED-NOT-APPLIED forever and prove nothing about either revision.
     ("the lock no longer treats EEXIST as contention and refuses on the first try",
      "lock.py",
      "                if error.errno != errno.EEXIST:\n",
@@ -109,6 +109,45 @@ SEEDS = [
      "    if instruction_count <= 0:\n",
      "    if False:\n",
      "a function whose body holds 0 instructions is NOT present"),
+    # The query path. Each of these is a defence whose failure produces a CONFIDENT answer about the
+    # wrong thing, which is why they are seeded rather than trusted.
+    ("a query set with no questions in it is accepted",
+     "queries.py",
+     "    if not queries:\n",
+     "    if False:\n",
+     "a file that is only comments is REFUSED"),
+    ("a query answer's count is no longer checked against the sites it carries",
+     "queries.py",
+     "        if answer.references_found != len(sites):\n",
+     "        if False:\n",
+     "a count that disagrees with the sites it counts is REFUSED"),
+    ("a question that was asked and not answered is no longer caught",
+     "queries.py",
+     "        for query in report.asked:\n",
+     "        for query in []:\n",
+     "a query asked and not answered is REFUSED by name"),
+    ("a project directory with no state file is treated as an analysis",
+     "cache.py",
+     "    state = read_state(slot)\n    if state is None:\n        return False\n",
+     "    state = read_state(slot)\n    if state is None:\n        return True\n",
+     "a project directory with no state file is NOT an analysis"),
+    ("a warm run seeds the program again",
+     "headless.py",
+     "        if self.prescript is not None and not self.reuse_project:\n",
+     "        if self.prescript is not None:\n",
+     "a warm run does NOT seed again"),
+    ("a run is accepted without producing the artefact it promised",
+     "headless.py",
+     "        for artefact, description in self.expected_artifacts():\n",
+     "        for artefact, description in []:\n",
+     "an exit-0 run that wrote NO query answers is a REFUSAL"),
+    # The Ghidra-side mirror's own refusals. Removing one does NOT break the mirror's happy path;
+    # it makes the two parsers DISAGREE, which is the pin doing the work it exists for.
+    ("the Ghidra-side query parser stops refusing an empty query set",
+     "queryscript.py",
+     "    if not queries:\n",
+     "    if False:\n",
+     "the two parsers agree on '# only a comment"),
 ]
 
 

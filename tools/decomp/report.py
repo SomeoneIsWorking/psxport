@@ -113,8 +113,14 @@ class Report:
 
     def header(self) -> str:
         seed = ("no pre-script record" if self.preseed is None else
-                "entry=%s instructions=%d" % (self.preseed.get("entry", "?"),
-                                              self.preseed.get("instructions_from_entry", 0)))
+                "entry=%s instructions=%d%s" % (
+                    self.preseed.get("entry", "?"), self.preseed.get("instructions_from_entry", 0),
+                    # A warm run runs no pre-script, so this record was written by the run that
+                    # ANALYZED the image and is replayed from the project's own state. Printing it
+                    # without saying so would let a reader take it for what this run did.
+                    (" -- REPLAYED from %s, not this run"
+                     % self.preseed.get("recorded_from", "an earlier run"))
+                    if self.preseed.get("recorded_from") else ""))
         return (
             "[decomp] image=%s kind=%s program=%s language=%s\n"
             "[decomp] pre-script seed: %s\n"

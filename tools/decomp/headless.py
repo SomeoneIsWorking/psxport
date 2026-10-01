@@ -71,7 +71,17 @@ class SubprocessRunner(Runner):
 
 @dataclass
 class GhidraInvocation:
-    """One headless run: the command, where its artefacts go, and what it was allowed to cost."""
+    """One headless run: the command, where its artefacts go, and what it was allowed to cost.
+
+    TWO MODES, and the difference is the whole point of the analyzed-project cache:
+
+      ``reuse_project=False``  ``-import`` the image and ANALYZE it. Expensive: tens of minutes.
+      ``reuse_project=True``   ``-process`` an already-imported program with ``-noanalysis``, which
+                               asks its questions against an analysis a previous run paid for.
+
+    Neither mode deletes the project. Deleting it would make every question cost a full analysis,
+    which is the state this tool exists to leave.
+    """
 
     interpreter: Path
     ghidra_home: Path
@@ -91,6 +101,15 @@ class GhidraInvocation:
     max_heap_mb: int = DEFAULT_MAX_HEAP_MB
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     extra_language: str = "MIPS:LE:32:default"
+    # The query half. `queryscript` is absent on a decompile-only run; `queries_path` is the FILE the
+    # post-script reads the questions from, and it is an argument rather than a channel because a
+    # diagnostic that cannot answer a question it was not asked is not a diagnostic.
+    queryscript: Path | None = None
+    queries_path: Path | None = None
+    # False on a query-only run: with no targets there is nothing to decompile, and the decompile
+    # post-script REFUSES an empty target list, which is correct there and would be a false alarm here.
+    decompile_targets: bool = True
+    reuse_project: bool = False
     log_lines: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -111,6 +130,30 @@ class GhidraInvocation:
         self.postscript = Path(self.postscript).resolve()
         if self.prescript is not None:
             self.prescript = Path(self.prescript).resolve()
+        if self.queryscript is not None:
+            self.queryscript = Path(self.queryscript).resolve()
+        if self.queries_path is not None:
+            self.queries_path = Path(self.queries_path).resolve()
+        if self.reuse_project and self.queryscript is None:
+            raise GhidraRefusal(
+                "reuse_project asks Ghidra to open an existing program with -noanalysis, but no query "
+                "script was given, so the run would open the project, do nothing and exit 0. A warm "
+                "run with nothing to ask is a run that establishes nothing."
+            )
+        if self.reuse_project and self.prescript is not None:
+            # A warm run must NOT seed anything, and the reason is a measured difference rather than
+            # tidiness: the program is already imported, so disassembling from the entry again
+            # OVERWRITES the analysis run's own record with a different number -- Spyro 2's entry
+            # reaches 4,753 instructions before analysis and 11,674 after -- and both print as "the
+            # pre-script seed". The record belongs to the run that analyzed; the pipeline replays it
+            # with its provenance instead.
+            pass
+        if not self.reuse_project and self.prescript is None:
+            raise GhidraRefusal(
+                "an import with no pre-script cannot seed disassembly. Ghidra's Raw Binary loader "
+                "defines no entry point, so MEASURED on a real image the first byte of the text "
+                "window is DATA and auto-analysis then produces 0 functions while logging success."
+            )
 
     def command(self) -> list[str]:
         words = [
@@ -122,19 +165,34 @@ class GhidraInvocation:
             "-X", "mx%dm" % self.max_heap_mb,
             HEADLESS_CLASS,
             str(self.project_dir), self.project_name,
-            "-import", str(self.import_path),
-            "-loader", "BinaryLoader",
-            "-loader-baseAddr", "0x%08X" % self.base_address,
-            "-processor", self.extra_language,
-            "-scriptPath", str(self.postscript.parent),
         ]
-        if self.prescript is not None:
+        if self.reuse_project:
+            # `-process` opens the imported program; `-noanalysis` is what makes this a QUERY rather
+            # than a second analysis. Without `-noanalysis` Ghidra would re-run the analyzers on an
+            # already-analyzed program and cost the same minutes the cache exists to avoid.
+            words += ["-process", "-noanalysis"]
+        else:
+            words += [
+                "-import", str(self.import_path),
+                "-loader", "BinaryLoader",
+                "-loader-baseAddr", "0x%08X" % self.base_address,
+                "-processor", self.extra_language,
+            ]
+        words += ["-scriptPath", str(self.postscript.parent)]
+        if self.prescript is not None and not self.reuse_project:
             words += ["-preScript", self.prescript.name, "0x%08X" % self.text_first,
                       "0x%08X" % self.text_last, "0x%08X" % self.entry_address]
-        words += ["-postScript", self.postscript.name, str(self.output_dir / "inventory.json"),
-                  str(self.output_dir / "c"), self.clear_noreturn,
-                  str(self.output_dir / "targets.txt"),
-                  "-deleteProject"]
+        if self.decompile_targets:
+            words += ["-postScript", self.postscript.name, str(self.output_dir / "inventory.json"),
+                      str(self.output_dir / "c"), self.clear_noreturn,
+                      str(self.output_dir / "targets.txt")]
+        if self.queryscript is not None:
+            if self.queries_path is None:
+                raise GhidraRefusal(
+                    "a query script was given with no query file, so it would be handed nothing to "
+                    "answer. The questions are the input, not the script.")
+            words += ["-postScript", self.queryscript.name, str(self.output_dir / "queries.json"),
+                      str(self.queries_path)]
         return words
 
     def environment(self, base: dict[str, str] | None = None) -> dict[str, str]:
@@ -185,22 +243,42 @@ class GhidraInvocation:
                                   self.environment())
         self.log_lines.append(output)
         (self.output_dir / "ghidra.log").write_text(output, encoding="utf-8", errors="replace")
-        inventory = self.output_dir / "inventory.json"
         log_path = self.output_dir / "ghidra.log"
         if code != 0:
             raise GhidraRefusal(
                 f"Ghidra exited {code}. The full log is at {log_path}. Last lines:\n"
                 + "\n".join(output.strip().splitlines()[-14:]))
-        if not inventory.is_file():
-            raise GhidraRefusal(
-                f"Ghidra exited 0 but wrote no inventory at {inventory}, so NOTHING was decompiled. "
-                "This is measured behaviour when the Python post-script does not run under PyGhidra: "
-                "the analyzer logs 'Post-analysis succeeded' and exits 0. The full log is at "
-                f"{log_path}; look for the post-script's own line, and for whether the script has a "
-                "`if __name__ == \"__main__\"` entry point at all. Last lines:\n"
-                + "\n".join(output.strip().splitlines()[-14:])
-            )
+        # EVERY artefact this run was asked to produce must be on disk. `analyzeHeadless` exits 0 and
+        # logs "Post-analysis succeeded" while never running a script at all, so the exit code is not
+        # evidence that anything happened -- the files are. Checked per artefact rather than once,
+        # because a run can be asked for both, and a decompile that landed while the query script did
+        # not run is a run that half-succeeded and looks complete.
+        for artefact, description in self.expected_artifacts():
+            if not artefact.is_file():
+                raise GhidraRefusal(
+                    f"Ghidra exited 0 but wrote no {description} at {artefact}, so that part of the "
+                    "run did NOTHING. This is measured behaviour when a Python post-script does not "
+                    "run under PyGhidra: the analyzer logs 'Post-analysis succeeded' and exits 0. The "
+                    f"full log is at {log_path}; look for the script's own line, and for whether the "
+                    "script has an `if __name__ == \"__main__\"` entry point at all. Last lines:\\n"
+                    + "\\n".join(output.strip().splitlines()[-14:])
+                )
         return output
+
+    def expected_artifacts(self) -> list[tuple[Path, str]]:
+        """``(path, what it would mean)`` for everything this run promised to write."""
+        expected: list[tuple[Path, str]] = []
+        if self.decompile_targets:
+            expected.append((self.output_dir / "inventory.json", "inventory"))
+        if self.queryscript is not None:
+            expected.append((self.output_dir / "queries.json", "query answers"))
+        if not expected:
+            raise GhidraRefusal(
+                "this run was asked to write nothing: no --target to decompile and no query to "
+                "answer. A Ghidra launch with nothing to produce exits 0 having established nothing, "
+                "and the caller would read that as a successful run."
+            )
+        return expected
 
 
 def resolve_interpreter(ghidra_home: Path) -> Path:

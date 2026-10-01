@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,9 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "sync_submodules.py"
 SCRATCH = Path(__file__).resolve().parents[1] / "scratch" / "sync-submodules-tests"
+sys.path.insert(0, str(SCRIPT.parent))
+
+from submodule_state import Git, enumerate_submodules, local_sources  # noqa: E402
 
 
 class SyncSubmoduleTests(unittest.TestCase):
@@ -161,6 +165,94 @@ class SyncSubmoduleTests(unittest.TestCase):
         result = self.launch_sync()
         self.assertIn("AHEAD of the recorded gitlink", result.stderr)
         self.assertEqual(self.git(lucent, "rev-parse", "HEAD").stdout.strip(), advanced)
+
+    def test_new_worktree_clones_a_submodule_a_sibling_checkout_already_has(self) -> None:
+        """A new worktree must not need the network for a commit this machine already holds.
+
+        THE DISCRIMINATOR, and it is why this is not a "does it still pass" test: the ORIGINAL
+        repositories are DELETED before the second worktree syncs. So the recorded URLs resolve to
+        nothing and any run that reaches for them fails; the only way this can pass is by cloning
+        from the sibling checkout's already-initialized submodule. A test that merely asserted the
+        sync returned 0 would have passed on the network path too, which is the whole thing being
+        made cheaper.
+        """
+        self.fixture()
+        self.assert_top_level_ready(self.launch_sync())
+
+        recorded = {name: self.git(self.checkout / "vendor" / name, "rev-parse", "HEAD").stdout.strip()
+                    for name in ("beetle", "lucent")}
+        sibling = self.root / "sibling"
+        self.command("git", "-C", str(self.checkout), "worktree", "add", "-q", "-b", "wt", str(sibling))
+        self.assertFalse((sibling / "vendor/beetle/.git").exists(),
+                         "a new worktree starts with its submodules uninitialized")
+
+        # Nothing left to fetch from. The framework's submodules have RELATIVE urls, which git
+        # resolves against the superproject's own origin, so deleting the two upstream repositories
+        # makes every recorded url unusable from BOTH worktrees.
+        for name in ("beetle", "lucent"):
+            shutil.rmtree(self.source / name)
+
+        result = self.command(sys.executable, str(SCRIPT), cwd=sibling, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("from a local checkout that already has", result.stdout)
+        self.assertIn("0 from the network", result.stdout)
+        self.assertIn(f"checked 2 of 2 submodule(s)", result.stdout)
+        for name, commit in recorded.items():
+            checkout = sibling / "vendor" / name
+            self.assertTrue((checkout / ".git").exists(), name)
+            self.assertEqual(self.git(checkout, "rev-parse", "HEAD").stdout.strip(), commit, name)
+
+        # The URL override must not outlive the run: it is repository-local config shared by every
+        # worktree, and leaving it pointed at a scratch path would make a later `git submodule sync`
+        # somewhere else resolve to a directory that only exists while this test does.
+        for name in ("beetle", "lucent"):
+            url = self.git(self.checkout, "config", "--get", f"submodule.vendor/{name}.url")
+            self.assertNotIn(str(sibling), url.stdout, f"{name} left pointing at the sibling worktree")
+
+    def test_a_local_checkout_without_the_recorded_commit_is_not_used(self) -> None:
+        """A local repository that does NOT hold the gitlink's commit must not be offered to git.
+
+        THE NEGATIVE HALF of the same defence, and it is a UNIT of ``local_sources`` rather than
+        another subprocess run, because the subprocess cannot reach it: a sibling checkout that does
+        not hold the commit is indistinguishable from an initialized checkout at the wrong commit as
+        far as the inventory is concerned, so the script never even asks.
+
+        Handing git a repository without the commit produces a clone that fails at CHECKOUT, which
+        reads as "the local clone is broken" rather than as "that repository has a different
+        history". So the commit is tested first, and this is the test that says so.
+        """
+        self.fixture()
+        self.assert_top_level_ready(self.launch_sync())
+
+        sibling = self.root / "sibling"
+        self.command("git", "-C", str(self.checkout), "worktree", "add", "-q", "-b", "wt", str(sibling))
+        for name in ("beetle", "lucent"):
+            checkout = sibling / "vendor" / name
+            self.command("git", "init", "-q", "--initial-branch=main", str(checkout))
+            (checkout / "README").write_text("unrelated history")
+            self.git(checkout, "add", "README")
+            self.git(checkout, "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                     "commit", "-qm", "unrelated")
+
+        git = Git()
+        root = Path(self.checkout).resolve()
+        inventory = enumerate_submodules(root, git)
+        for item in inventory.submodules:
+            served = local_sources(git, root, item)
+            self.assertEqual(served, [],
+                             "%s was served from %s despite not holding %s"
+                             % (item.path, served, item.recorded))
+        # And the CONTROL, because an empty list is also what "found nothing at all" returns. Asked
+        # from the SIBLING worktree -- the repository's own checkout is deliberately not a candidate
+        # for itself -- the recorded commit of the main checkout's submodule IS offered.
+        lucent = next(item for item in inventory.submodules if item.path == "vendor/lucent")
+        main_sources = local_sources(git, sibling.resolve(), lucent)
+        self.assertTrue(main_sources,
+                        "a commit the sibling worktree holds was not offered, so the filter above "
+                        "would pass on a scan that finds nothing whatsoever")
+        self.assertTrue(all(str(self.checkout) in str(source) for source, _why in main_sources),
+                        "the source offered was not the checkout that holds the commit: %s"
+                        % (main_sources,))
 
 
 if __name__ == "__main__":

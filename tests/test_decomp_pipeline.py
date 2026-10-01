@@ -53,8 +53,9 @@ TOOLS = HERE.parent / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-from decomp import headless, images, lock, pipeline, report as report_module  # noqa: E402
-from decomp import postscript, prescript, structure, verify_body  # noqa: E402
+from decomp import cache, headless, images, lock, pipeline, queries as queries_module  # noqa: E402
+from decomp import report as report_module  # noqa: E402
+from decomp import postscript, prescript, queryscript, structure, verify_body  # noqa: E402
 
 FAILURES: list[str] = []
 CHECKS = 0
@@ -634,7 +635,8 @@ def test_ghidra_boundary() -> None:
             import_path=Path("image.exe"), base_address=0x8000F800,
             text_first=0x80010000, text_last=0x800100FF, entry_address=0x80010000,
             output_dir=out,
-            postscript=Path("postscript.py"))
+            postscript=Path("postscript.py"),
+            prescript=Path("prescript.py"))
 
         runner = ScriptedRunner(writes_inventory=False)
         raised, message = raises(headless.GhidraRefusal, invocation.run, runner)
@@ -676,7 +678,8 @@ def test_ghidra_boundary() -> None:
             import_path=Path("relative-image.exe"), base_address=0x8000F800,
             text_first=0x80010000, text_last=0x800100FF, entry_address=0x80010040,
             output_dir=out,
-            postscript=Path("postscript.py"))
+            postscript=Path("postscript.py"),
+            prescript=Path("prescript.py"))
         check(invocation.project_dir.is_absolute(), "the project directory is resolved")
         check(invocation.output_dir.is_absolute(), "the output directory is resolved")
         check(invocation.import_path.is_absolute(), "the import path is resolved")
@@ -745,18 +748,20 @@ def test_lock() -> None:
 
 
 def test_output_dir_must_be_ignored() -> None:
-    case("decompiled C can only be written where git would ignore it")
+    case("derived guest data can only be written where git would ignore it")
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         # A REAL git repository: `git check-ignore` only answers inside one, so a bare .git
         # directory would make this case fail for a reason that has nothing to do with the check.
         subprocess.run(["git", "init", "-q", str(root)], capture_output=True, check=True)
         (root / "scratch").mkdir()
-        (root / ".gitignore").write_text("scratch/\n")
+        (root / ".gitignore").write_text("scratch/\nbuild/\n")
         kept = root / "scratch" / "decomp"
-        pipeline._assert_output_dir_is_ignored(kept, root)
+        cache.assert_ignored(kept, root)
         check(True, "scratch/ is accepted")
-        raised, message = raises(images.ImageRefusal, pipeline._assert_output_dir_is_ignored,
+        cache.assert_ignored(root / "build" / "ghidra" / "spyro1" / "ab" / "cd", root)
+        check(True, "build/ is accepted for the analyzed project")
+        raised, message = raises(cache.CacheRefusal, cache.assert_ignored,
                                  root / "game" / "decomp", root)
         check(raised, "a non-ignored output directory is REFUSED before anything is written", message)
         check("never be committed" in message, "the refusal says why", message)
@@ -993,6 +998,328 @@ def test_target_parsing_and_refusals() -> None:
         check(raised, "an ambiguous image name is refused rather than guessed", message)
 
 
+# ---------------------------------------------------------------------------------------------
+# The query path and the analyzed-project cache.
+# ---------------------------------------------------------------------------------------------
+
+GOOD_QUERIES = "callers 80010000\nrefs 0x80020000  # a global\nfunction-at 80010040\n"
+
+
+def test_query_parsing_and_refusals() -> None:
+    case("a query set is served in full, and every unreadable line is refused rather than dropped")
+    parsed = queries_module.parse_query_text(GOOD_QUERIES)
+    check([(q.kind, q.address) for q in parsed] == [
+        ("callers", 0x80010000), ("refs", 0x80020000), ("function_at", 0x80010040)],
+        "one question per line, comments stripped, both hex spellings accepted", str(parsed))
+
+    again = queries_module.parse_query_text(GOOD_QUERIES + "callers 80010000\n")
+    check(len(again) == 3, "a repeated question is asked once", str(again))
+
+    for text, why in (
+        ("", "an empty query set"),
+        ("# only a comment\n", "a file that is only comments"),
+        ("callers 80010000 80020000\n", "two addresses on one line"),
+        ("readers 80010000\n", "a question kind that does not exist"),
+        ("callers zzz\n", "an address that is not hex"),
+        ("callers 1000000000000\n", "an address wider than 32 bits"),
+    ):
+        raised, message = raises(queries_module.QueryRefusal, queries_module.parse_query_text, text)
+        check(raised, "%s is REFUSED, not answered as a smaller question" % why, message)
+
+
+def test_query_parser_mirrors_agree() -> None:
+    case("ONE parser owns the query file format; the Ghidra-side mirror is PINNED, not assumed")
+
+    def outcome(parser, text):
+        """``(raised, rows)`` -- agreement is about the ANSWER, not about the two classes' names.
+
+        The two refusals are deliberately different types in different modules, because the mirror
+        cannot import the owner's; comparing the type names would compare something that is
+        SUPPOSED to differ.
+        """
+        try:
+            rows = parser(text)
+        except Exception:  # noqa: BLE001 - a refusal is an outcome here, not a crash
+            return ("raised", None)
+        normalised = tuple((row.kind, row.address) if hasattr(row, "kind") else row for row in rows)
+        return ("ok", normalised)
+
+    corpus = [
+        GOOD_QUERIES,
+        "",
+        "# only a comment\n",
+        "callers 80010000 80020000\n",
+        "readers 80010000\n",
+        "callers zzz\n",
+        "CALLERS 80010000\n",
+        "  refs   80020000  \n\n\nfunction_at 0x80010040",
+        "callers 80010000\ncallers 80010000\n",
+        "function-at 80010040\n",
+        "callers -1\n",
+        "refs 80020000,80020004\n",
+    ]
+    for text in corpus:
+        mine = outcome(queries_module.parse_query_text, text)
+        theirs = outcome(queryscript.parse_query_text, text)
+        check(mine == theirs,
+              "the two parsers agree on %r" % (text[:36],),
+              "owner=%s mirror=%s" % (mine, theirs))
+
+    # The CONTROL, because "they agree" is also what two parsers that both always refuse would look
+    # like. On the corpus that is meant to parse, the mirror must actually accept and produce rows.
+    check(len(queryscript.parse_query_text(GOOD_QUERIES)) == 3,
+          "the mirror serves the good corpus rather than refusing everything")
+
+
+def query_document(**overrides) -> dict:
+    document = {
+        "program": "SCUS_944.25",
+        "image_name": "spyro2",
+        "image_kind": "resident",
+        "language": "MIPS:LE:32:default",
+        "memory_first": "0x8000F800",
+        "memory_last": "0x80066FFF",
+        "functions_scanned": 614,
+        "queries_requested": 1,
+        "queries": [{
+            "mode": "refs",
+            "address": "0x80020000",
+            "in_memory": True,
+            "references_found": 2,
+            "code_references": 1,
+            "data_references": 1,
+            "functions_touched": 2,
+            "unattributed_sites": 0,
+            "sites": [
+                {"from": "0x80030000", "type": "UNCONDITIONAL_CALL", "access": "control",
+                 "function": "8002FF00", "function_name": "FUN_8002ff00", "text": "jal 0x80010000"},
+                {"from": "0x80030100", "type": "DATA", "access": "write",
+                 "function": "80030080", "function_name": "FUN_80030080", "text": "sw a0,0(at)"},
+            ],
+        }],
+    }
+    document.update(overrides)
+    return document
+
+
+def test_query_document_is_checked_against_its_sites() -> None:
+    case("a query answer is checked against the sites it carries, not read at face value")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+
+        def load(document, asked=None):
+            path = root / "queries.json"
+            path.write_text(json.dumps(document))
+            return queries_module.load_query_report(path, asked=asked)
+
+        asked = [queries_module.Query("refs", 0x80020000)]
+        report = load(query_document(), asked)
+        check(queries_module.audit(report) == [],
+              "the audit is CLEAN on a complete answer, so red below is the seeded difference",
+              str(queries_module.audit(report)))
+        rendered = report.text()
+        check("2 reference(s) to it (1 code, 1 data) from 2 function(s)" in rendered,
+              "the count names what was scanned, what matched, and what the references are", rendered)
+        check("0x80030000" in rendered and "FUN_80030080" in rendered,
+              "each site carries its address and its enclosing function", rendered)
+
+        raised, message = raises(queries_module.QueryRefusal, load, query_document(
+            queries=[dict(query_document()["queries"][0], references_found=7,
+                          code_references=2, data_references=5)]))
+        check(raised, "a count that disagrees with the sites it counts is REFUSED", message)
+        check("the number a reader would quote" in message, "the refusal names the consequence",
+              message)
+
+        # The sum check is a DIFFERENT defence and is exercised separately: here the code+data split
+        # is the thing that disagrees, so the sites check cannot be what fired.
+        raised, _message = raises(queries_module.QueryRefusal, load, query_document(
+            queries=[dict(query_document()["queries"][0], references_found=7,
+                          code_references=2, data_references=1)]))
+        check(raised, "a code+data split that does not add up is REFUSED")
+
+        # A QUESTION THAT WAS ASKED AND NOT ANSWERED. The document is self-consistent -- one query,
+        # one answer -- so only comparing it against the FILE the post-script read can catch it.
+        report = load(query_document(), asked=[queries_module.Query("refs", 0x80020000),
+                                               queries_module.Query("callers", 0x80010000)])
+        problems = queries_module.audit(report)
+        check(any("callers 0x80010000 was asked and is absent" in p for p in problems),
+              "a query asked and not answered is REFUSED by name", str(problems))
+
+        empty = queries_module.audit(load(query_document(functions_scanned=0)))
+        check(any("0 of 0 functions" in p for p in empty),
+              "an answer drawn from a program with no functions is refused, not read as no refs",
+              str(empty))
+
+        out_of_memory = query_document(queries=[{
+            "mode": "refs", "address": "0x7FFFFFFF", "in_memory": False, "sites": [],
+            "references_found": 0, "code_references": 0, "data_references": 0,
+            "functions_touched": 0, "unattributed_sites": 0,
+            "note": "outside memory", "instruction_count": 0, "function_found": False,
+        }])
+        report = load(out_of_memory)
+        check("OUTSIDE the memory" in report.text(),
+              "an address outside the program is not answered as a bare zero", report.text())
+        check(queries_module.audit(report) == [],
+              "an address outside memory is a real answer, not an audit failure")
+
+        raised, message = raises(queries_module.QueryRefusal, load, {"program": "x"})
+        check(raised, "a document missing its denominators is REFUSED", message)
+
+        with tempfile.TemporaryDirectory() as empty_dir:
+            raised, message = raises(queries_module.QueryRefusal,
+                                     queries_module.load_query_report, Path(empty_dir) / "nope.json")
+            check(raised, "an ABSENT answer document is a refusal, not an empty answer set", message)
+
+
+def test_analyzed_project_cache() -> None:
+    case("the analyzed project is keyed by the image's SHA-256, and only a RECORDED analysis is reused")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        subprocess.run(["git", "init", "-q", str(root)], capture_output=True, check=True)
+        (root / ".gitignore").write_text("build/\nscratch/\n")
+        image = make_psx_exe(root / "image.exe")
+        spec = images.select(images.load_manifest(), "spyro1")
+        spec = images.ImageSpec(**{**spec.__dict__, "sha1": None})
+
+        first = cache.with_entry(cache.slot_for(spec, image, root), 0x8005B8E0)
+        check(str(first.sha256) == cache.image_sha256(image), "the slot is keyed by the image digest")
+        check(first.directory.parent.name == "spyro1" and len(first.directory.name) == 64,
+              "the slot lives at build/ghidra/<image>/<sha256>", str(first.directory))
+
+        # A DIFFERENT IMAGE MUST NOT SHARE THE SLOT. Keying by name would let a different region or
+        # revision answer as if it were the image every document names, invisibly.
+        other = make_psx_exe(root / "other.exe", load=0x80020000)
+        second = cache.with_entry(cache.slot_for(spec, other, root), 0x8005B8E0)
+        check(second.directory != first.directory,
+              "two different images do not share one analysis slot")
+
+        check(not cache.is_analyzed(first), "a project directory with no state file is NOT an analysis")
+        first.directory.mkdir(parents=True, exist_ok=True)
+        (first.directory / "spyro1.gpr").write_text("half-written")
+        check(not cache.is_analyzed(first),
+              "a run that died leaves a project that is still not an analysis")
+
+        cache.mark_analyzed(first, ghidra_version="12.0.4",
+                            preseed={"entry": "0x8005B8E0", "instructions_from_entry": 4753})
+        check(cache.is_analyzed(first), "a completed analysis is recorded and reused")
+        replayed = cache.recorded_preseed(first)
+        check(replayed and replayed["instructions_from_entry"] == 4753,
+              "the seed record is replayable so a warm run's audit can still ask about it",
+              str(replayed))
+        check("recorded_from" in replayed and replayed["recorded_sha256"] == first.sha256,
+              "the replayed record says which run made it and which bytes it was made from",
+              str(replayed))
+        check(cache.recorded_preseed(second) is None,
+              "an image with no analysis has no seed record to replay")
+
+        # A state file that disagrees with the slot is not evidence of this image's analysis.
+        first.state_path.write_text(json.dumps({"analyzed": True, "image_sha256": "0" * 64,
+                                                "image_name": "spyro1"}))
+        check(not cache.is_analyzed(first), "a state file naming another image's digest is not reused")
+
+        # DISCARD, and the guard on it. A computed path that stopped being what it was must raise
+        # rather than remove a tree.
+        unmanaged = cache.ProjectSlot(**{**cache.with_entry(
+            cache.slot_for(spec, image, root), 0x8005B8E0).__dict__,
+            "directory": root / "src", "managed": False})
+        raised, message = raises(cache.CacheRefusal, cache.discard, unmanaged)
+        check(raised, "a directory this tool did not create is never removed", message)
+        check("did not create" in message, "the refusal says why", message)
+
+        victim = root / "build" / "ghidra" / "spyro1" / ("f" * 64)
+        victim.mkdir(parents=True)
+        (victim / "keep").write_text("x")
+        named = cache.ProjectSlot(**{**unmanaged.__dict__, "directory": victim, "managed": True})
+        cache.discard(named)
+        check(not victim.exists(), "the tool's OWN cache slot is removed by --fresh")
+
+
+def test_warm_run_opens_the_project_without_reanalyzing() -> None:
+    case("a warm run asks -noanalysis and does NOT seed the program a second time")
+    with tempfile.TemporaryDirectory() as temporary:
+        out = Path(temporary)
+        common = dict(
+            interpreter=Path("/usr/bin/true"), ghidra_home=Path("/nowhere"),
+            project_dir=out / "build" / "ghidra" / "spyro1" / ("a" * 64), project_name="spyro1",
+            import_path=Path("image.exe"), base_address=0x8000F800,
+            text_first=0x80010000, text_last=0x80066FFF, entry_address=0x8005B8E0,
+            output_dir=out, postscript=Path("postscript.py"), prescript=Path("prescript.py"))
+
+        cold = headless.GhidraInvocation(**common).command()
+        check("-import" in cold, "a cold run imports the image")
+        check("-preScript" in cold, "a cold run seeds disassembly from the declared entry")
+        check("-deleteProject" not in cold,
+              "the project is never deleted, or every question would cost a full analysis")
+        check("-process" not in cold, "a cold run does not ask to process an existing program")
+
+        queries_file = out / "queries.txt"
+        queries_file.write_text("callers 80010000\n")
+        warm = headless.GhidraInvocation(
+            **common, reuse_project=True, decompile_targets=False,
+            queryscript=Path("queryscript.py"), queries_path=queries_file).command()
+        check("-process" in warm and "-noanalysis" in warm,
+              "a warm run opens the program with -noanalysis")
+        check("-import" not in warm, "a warm run does not import again")
+        check("-preScript" not in warm,
+              "a warm run does NOT seed again: on Spyro 2 the same entry reaches 4,753 instructions "
+              "before analysis and 11,674 after, and both would print as 'the pre-script seed'")
+        check("-deleteProject" not in warm, "a warm run keeps the project for the next question")
+        check(warm.count("-postScript") == 1, "a query-only run launches the query script only")
+
+        both = headless.GhidraInvocation(
+            **common, reuse_project=True, queryscript=Path("queryscript.py"),
+            queries_path=queries_file).command()
+        check(both.count("-postScript") == 2,
+              "one launch answers the queries AND decompiles the targets")
+        raised, message = raises(headless.GhidraRefusal, headless.GhidraInvocation,
+                                 **common, reuse_project=True, decompile_targets=False)
+        check(raised, "a warm run with nothing to ask is REFUSED, not launched to exit 0", message)
+        raised, message = raises(headless.GhidraRefusal, headless.GhidraInvocation,
+                                 **{**common, "prescript": None})
+        check(raised, "an import with no pre-script is REFUSED before it is launched", message)
+
+        # Every artefact the run promised must exist, checked per artefact rather than once: a
+        # decompile that landed while the query script never ran is a run that half-succeeded and
+        # looks complete.
+        class Produces(headless.Runner):
+            """A runner that writes only the artefacts named, and logs Ghidra's own success line."""
+
+            def __init__(self, basenames):
+                self.basenames = basenames
+
+            def run(self, command, cwd, timeout, environment):
+                if "import pyghidra" in command:
+                    return 0, ""
+                for index, word in enumerate(command):
+                    if word != "-postScript" or index + 2 >= len(command):
+                        continue
+                    target = Path(command[index + 2])
+                    if target.name in self.basenames:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text("{}")
+                return 0, "INFO  Post-analysis succeeded"
+
+        invocation = headless.GhidraInvocation(
+            **common, reuse_project=True, decompile_targets=False,
+            queryscript=Path("queryscript.py"), queries_path=queries_file)
+        raised, message = raises(headless.GhidraRefusal, invocation.run, Produces(set()))
+        check(raised, "an exit-0 run that wrote NO query answers is a REFUSAL", message)
+        check("query answers" in message,
+              "the refusal names the artefact that is missing, not just the run", message)
+        check("Post-analysis succeeded" in message,
+              "the refusal quotes Ghidra's own success line, which is the measured way this fails",
+              message)
+
+        both = headless.GhidraInvocation(
+            **common, reuse_project=True, queryscript=Path("queryscript.py"),
+            queries_path=queries_file)
+        raised, message = raises(headless.GhidraRefusal, both.run,
+                                 Produces({"queries.json"}))
+        check(raised, "a run that wrote only the QUERY answers is still a failure: the decompile "
+                      "it promised produced nothing", message)
+        check("inventory" in message, "that refusal names the missing artefact", message)
+
+
 def main() -> int:
     print("decomp pipeline selftest -- every case is a seeded difference that must be caught")
     for test in (
@@ -1017,6 +1344,11 @@ def main() -> int:
         test_structure_owner_has_no_drifted_copies,
         test_scripts_have_an_entry_point,
         test_target_parsing_and_refusals,
+        test_query_parsing_and_refusals,
+        test_query_parser_mirrors_agree,
+        test_query_document_is_checked_against_its_sites,
+        test_analyzed_project_cache,
+        test_warm_run_opens_the_project_without_reanalyzing,
     ):
         try:
             test()

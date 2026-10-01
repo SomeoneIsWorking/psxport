@@ -568,3 +568,37 @@ denominator and names nested gitlinks it saw but deliberately excluded:
 The focused test covers cold initialization, warm pin correction, missing declared paths, dirty and
 deliberately advanced checkouts, and both mapped and unmapped nested gitlinks. A clean verdict applies
 to the declared top-level set only.
+
+## Submodule sync: a new worktree clones from a LOCAL checkout, not the network
+
+A fresh agent worktree has three declared submodules and no checkouts, so the sync used to spend
+minutes fetching commits the machine already holds. It no longer does, and the reason is a
+**url override**, not a `--reference`:
+
+- a candidate is any repository at `<worktree>/<submodule path>` (from `git worktree list`, plus
+  `PSXPORT_SUBMODULE_SOURCES` if the operator names one) that **`cat-file -e` confirms contains the
+  recorded commit**. That test comes first: handing git a repository without the commit produces a
+  clone that fails at CHECKOUT, which reads as "the local clone is broken" rather than as "that
+  repository has different history";
+- the recorded URL is then pointed at that path, `protocol.file.allow=always` is passed (every git
+  since 2.38.1 refuses the `file` transport for submodules by default), and the clone runs;
+- the URL is **restored on the way out, including on failure**. It is repository-local config shared by
+  every worktree, and leaving it at a scratch path would make the next `git submodule sync` somewhere
+  else resolve to a directory that only exists while this worktree does.
+
+`--reference` is not used because it still FETCHES from the configured remote and only borrows what
+it cannot find locally — so it needs the network in exactly the case this fixes — and because the
+shared checkout this reads is often **shallow**, which is the case where there is no older history to
+borrow and the fetch is what fails.
+
+MEASURED behaviour of the verdict, per run rather than on failure only:
+
+    [submodules] cloning vendor/beetle-psx from a local checkout that already has 5791d27a41 (worktree <main checkout>, 0 more candidate(s))
+    [submodules] cloning vendor/lucent from a local checkout that already has 974412c26b (worktree <main checkout>, 0 more candidate(s))
+    [submodules] cloned 3 of 3 uninitialized submodule(s) from a local checkout, 0 from the network
+
+The regression (`tests/test_sync_submodules.py`) DELETES the original repositories before the second
+worktree syncs, so any run that reaches for the recorded URLs fails and the only way to pass is the
+local path; a second test drives `local_sources` directly to show that a sibling checkout which does
+**not** hold the commit is not offered, with a control that the same query **is** answered when it
+does.

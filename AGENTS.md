@@ -180,9 +180,10 @@ binary, an independent emulator/hardware trace, or a separately built test oracl
 
 **Decompiling guest code to readable C is a TOOL, not a per-title project.**
 `tools/decomp_pipeline.py`, reached from a title as `external/psxport/tools/decomp_pipeline.py`, takes
-an admitted PS-X EXE and a list of guest entry addresses and returns a function inventory plus
-decompiled C under a git-ignored `scratch/` path. `docs/workspace/GHIDRA.md` has the one command and
-the refusals. Three obligations belong to that tool and are not re-derived per title:
+an admitted PS-X EXE or overlay and a list of guest entry addresses (`--target`) or addresses to ask
+questions of (`--callers`, `--refs`, `--function-at`), and returns a function inventory, decompiled C
+and the answers under a git-ignored `scratch/` path. `docs/workspace/GHIDRA.md` has the one command
+and the refusals. Three obligations belong to that tool and are not re-derived per title:
 
 - **Its exit code is not the result.** Read `body present` on every target. A body that Ghidra
   produced can still be missing everything after a call, which reads as a finished function and is
@@ -195,6 +196,33 @@ the refusals. Three obligations belong to that tool and are not re-derived per t
 - **One Ghidra at a time.** The pipeline takes `coord/locks/ghidra` and bounds the heap, because a
   Ghidra analysis of a RAM dump costs 1-2 GB on a machine with ~2 GB free and several agents
   building, and an OOM-killed build is reported to its owner as a false red.
+
+**READ A GAME WITH IT INSTEAD OF ONE ADDRESS AT A TIME — three commands, from the title's root.**
+
+    T=external/psxport/tools/decomp_pipeline.py; I=scratch/assets/<title>/<image>
+    uv run --frozen python $T --image-name spyro2 --image $I \
+        --target 0x80044504 --callers 0x80044504 --refs 0x800A11E4 \
+        --function-at 0x80044AE0 --out scratch/decomp/spyro2
+
+Many addresses per run; one Ghidra launch. `--list-titles` prints the images the manifest knows
+(Spyro 1/2/3, Toy Story 2 and its `LEVEL*`/`MEMORY`/`FMV` overlays, Vagrant's `.PRG`s and the rest),
+so a title that is "not supported" is usually a manifest entry that does not exist yet — a data edit,
+not a code change.
+
+- **The first run for an image ANALYZES it (tens of seconds to minutes); later runs REUSE it**
+  (`-process -noanalysis`) and take seconds. The analyzed project is kept under the CONSUMING
+  repository's `build/ghidra/<image>/<sha256>/`, keyed by the image's SHA-256 so a different region
+  or revision can never answer as if it were this one. Every run prints its mode and its wall time;
+  `--fresh` discards and re-analyzes. Reading a title address by address with `tools/disasm.py` costs
+  what the first analysis costs, once per question.
+- **A reference count is ANALYZER SCOPE, not runtime execution.** `--callers` is the code references
+  the analyzer holds, `--refs` adds the data references with each site's access (read/write/control)
+  and its enclosing function. An address outside the program's memory is answered as *outside memory*
+  and never as a bare "0 references", and every count is printed with the range and the function
+  count it was drawn from.
+- **`--function-at` is how you find out an address is not a function.** A PC inside a body is
+  reported as a label inside its enclosing function rather than carved into a second, overlapping
+  function — the workspace's signature failure, which the tool refuses by name.
 
 Decompiled C is a reading and porting aid. What ships is a hand-written native override; nothing
 here may become a build input, an install-time translation, or a precompiled guest corpus.

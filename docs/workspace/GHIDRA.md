@@ -22,6 +22,56 @@ uv run --frozen python external/psxport/tools/decomp_pipeline.py \
 `--list-titles` prints every image with its kind, base, window and SHA-1. **Point the other agents
 at this.** Per-title geometry is a JSON edit in `tools/decomp/manifest.json`, not code.
 
+## Ask questions about the image, many per run, one Ghidra launch
+
+Reading a title one address at a time is what the analysis cache and the query flags exist to stop.
+
+```sh
+uv run --frozen python external/psxport/tools/decomp_pipeline.py \
+    --image-name spyro2 --image scratch/assets/spyro2/SCUS_944.25 \
+    --callers 0x80044504 \        # who CALLS it
+    --refs 0x800A11E4 \           # what READS or WRITES it, with the access and the function
+    --function-at 0x80044AE0 \    # which function contains this PC
+    --out scratch/decomp/spyro2
+```
+
+Each flag is repeatable, all of them are answered in the same launch as any `--target`, and each line
+of the answer states what was scanned:
+
+    [decomp] queries: 3 asked, 3 answered, against memory 0x8000F800..0x80066FFF of SCUS_944.25
+    (614 function(s) in the program). A count is references the ANALYZER holds: this is static
+    cross-reference scope, not runtime execution.
+      callers 0x80044504: 1 reference(s) to it (1 code, 0 data) from 1 function(s)
+        0x8004C564 UNCONDITIONAL_CALL control   8004C534 FUN_8004c534   jal 0x80044504
+      refs 0x800A11E4: 20 reference(s) to it (0 code, 20 data) from 8 function(s)
+        0x8003B350 WRITE other 8003B33C FUN_8003b33c  sh v0,0x11e4(at)
+      function_at 0x80044AE0: +1500 bytes inside FUN_80044504, 0x80044504, body 0x80044504..0x80046FD7
+
+Three things the answers will NOT do, because each would be a confident answer about the wrong thing:
+
+- an address **outside the program's memory** is answered as outside memory, never as a bare "0
+  references" — no reference to it could exist, and that is a different claim;
+- an answer whose **count disagrees with the sites it lists** is refused, not printed;
+- a question **asked and not answered** is refused by name, so a dropped question cannot read as a
+  question with no result.
+
+## The analysis is cached, and the run says which mode it was
+
+The Ghidra project for an image is kept under the **consuming repository's**
+`build/ghidra/<image>/<sha256>/` — keyed by the image's SHA-256, so a different region or revision
+cannot answer as if it were this one. The first run imports and analyses; later runs open it with
+`-process -noanalysis`:
+
+    [decomp] analyze run in 19.4 s; project <repo>/build/ghidra/spyro2/7b54002… (7b54002789ab379e), analyzed=True
+    [decomp] reuse   run in  3.8 s; project <repo>/build/ghidra/spyro2/7b54002… (7b54002789ab379e), analyzed=True
+
+A directory with **no recorded state** is a run that died, not an analysis: it is re-analyzed rather
+than opened. `--fresh` discards the slot and analyzes again, and it removes only a directory this tool
+created under `build/ghidra/`. A warm run passes **no pre-script** — re-seeding overwrites the analysis
+run's record with a different number (Spyro 2's entry reaches 4,753 instructions before analysis and
+11,674 after) and both print as "the pre-script seed"; the recorded seed is replayed instead, labelled
+as replayed.
+
 ## Overlays and modules — the titles that are actually blocked
 
 **For Vagrant Story, Crash Team Racing, both Tomba! titles and Mega Man X4, the code on the path of
@@ -238,6 +288,8 @@ failed".
 | the image | `no image at <path>` |
 | a title | `no manifest entry titled 'x'. Known titles: … (12 known)` |
 | `--target` | `no target addresses … A run with no targets decompiles nothing and is not a result.` |
+| anything to ask at all | `nothing was asked … A run with neither decompiles nothing, answers nothing, and is not a result.` |
+| an unreadable query line | refused with the LINE NUMBER and the token: a line that cannot be read is a question that would be dropped rather than answered. |
 | a correct base | the manifest's load address and text size are checked against **the image's own PS-X EXE header**; a disagreement is refused, naming both values. A wrong base does **not** fail on its own — Ghidra imports happily and every function lands at a plausible address that is not the one your documents name. |
 | PyGhidra | named, with the interpreter that would actually launch Ghidra |
 | the lock | the holder, read from the lock's own `holder.txt` |

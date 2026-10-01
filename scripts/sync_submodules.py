@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Synchronize declared top-level submodules without clobbering deliberate work."""
+"""Synchronize declared top-level submodules without clobbering deliberate work.
+
+A NEW WORKTREE DOES NOT CLONE FROM THE NETWORK WHEN A SIBLING CHECKOUT ALREADY HAS THE COMMIT. A fresh
+agent worktree of this repository has three declared submodules and no checkouts, so the sync used to
+spend minutes fetching the same commits this machine already holds -- and the shared checkout it would
+have fetched them from is frequently SHALLOW, which is exactly the case where a `--reference` clone
+cannot borrow what it needs. :func:`submodule_state.local_sources` finds a checkout that already has
+the recorded commit and :func:`submodule_state.initialize_from_local` clones from that path, then
+restores the recorded URL.
+"""
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -13,6 +23,8 @@ from submodule_state import (
     add_top_level_crosscheck,
     dirty_paths,
     enumerate_submodules,
+    initialize_from_local,
+    local_sources,
     protected_checkouts,
     update_declared,
 )
@@ -68,6 +80,36 @@ def main() -> int:
     git = Git()
     try:
         inventory = enumerate_submodules(root, git)
+        if inventory.uninitialized:
+            # The local-source decision is made BEFORE the update and per path, so one submodule
+            # served from a sibling checkout and one fetched from the network both work, and a
+            # fallback is not all-or-nothing.
+            overrides = os.environ.get("PSXPORT_SUBMODULE_SOURCES", "").split(os.pathsep)
+            served: list[str] = []
+            network: list[str] = []
+            for item in inventory.uninitialized:
+                sources = local_sources(git, root, item, overrides)
+                if not sources:
+                    network.append(item.path)
+                    continue
+                source, why = sources[0]
+                say("cloning %s from a local checkout that already has %s (%s, %d more candidate(s))"
+                    % (item.path, item.recorded[:10], why, len(sources) - 1))
+                result = initialize_from_local(root, git, item, source)
+                if result.returncode:
+                    warn("local clone of %s from %s failed: %s" % (item.path, source,
+                                                                  result.stderr.strip()))
+                    network.append(item.path)
+                    continue
+                served.append(item.path)
+            if not network:
+                inventory = enumerate_submodules(root, git)
+                add_top_level_crosscheck(root, git, inventory)
+                say("cloned %d of %d uninitialized submodule(s) from a local checkout, 0 from the "
+                    "network" % (len(served), len(served) + len(network)))
+            else:
+                say("fetching %d of %d submodule(s) from the recorded remote(s): %s"
+                    % (len(network), len(served) + len(network), ", ".join(sorted(network))))
         if inventory.uninitialized:
             say("initializing declared top-level submodules…")
             result = update_declared(root, git, (item.path for item in inventory.uninitialized), initialize=True)
