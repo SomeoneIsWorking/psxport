@@ -48,7 +48,7 @@ EXCLUDED_COMPONENTS = {"build", "external", "generated", "scratch", "vendor"}
 PSXPORT_CAPS = {
     "runtime/psx/game_iface.h": 37,
     "runtime/psx/gpu_native.cpp": 3592,
-    "runtime/psx/gpu_vk.cpp": 4202,
+    "runtime/psx/gpu_vk.cpp": 4196,
     "runtime/psx/gpu_vk_semi_selftest.cpp": 199,
     "runtime/psx/gpu_vk_semi_selftest.h": 12,
     "runtime/psx/gpu_vk_selftest_support.h": 15,

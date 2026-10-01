@@ -160,7 +160,6 @@ struct TexVtx {
 // so it can pull the right instance's batches at present time.
 // (raster/pipeline resources live on GpuDevice — see the shadow macros above)
 static void create_3d_pipelines(void);
-static void init_gpu(Game *game);
 static void poll_quit(Game *game);
 
 // ---- enable / windowed gates (mirror gpu_vk.cpp) ----------------------------------------------------
@@ -367,13 +366,6 @@ void gpu_vk_video_status(Core *c, int *native_w, int *ires, int *fbw, int *fbh, 
     *ires_cap = cap;
   }
 }
-// Unused stub (no call sites) — the ires-scaled 3D target that actually exists now (GpuVkState::
-// s_ires_color/ensure_ires_targets, render_geom below) is a per-present in/out blit around Pass A/B, not a
-// standing "frame renders via a scratch FB" mode this accessor implies. Left at 0; not wired to anything.
-int GpuVkState::frame_via_fb() {
-  return 0;
-}
-
 // ---- SDL_GPU helpers --------------------------------------------------------------------------------
 #define GPUCHK(p, what)                                                                                                \
   do {                                                                                                                 \
@@ -583,7 +575,7 @@ static bool gpu_submit_and_wait(SDL_GPUCommandBuffer *cmd, const char *where) {
 // the submit calls, per frame. `debug gpuwait`.
 // Submit, and latch on failure. EVERY submit in this file goes through here — a raw
 // SDL_SubmitGPUCommandBuffer is the defect this exists to remove, so do not add one back.
-static bool gpu_submit(SDL_GPUCommandBuffer *cmd, const char *where) {
+bool gpu_submit(SDL_GPUCommandBuffer *cmd, const char *where) {
   if (!cmd) {
     return false;
   }
@@ -1104,7 +1096,7 @@ static void create_3d_pipelines(void) {
       "3D raster up (RG8 color target + D32 depth, real HW-blend semi via float intermediate; per-Game targets)");
 }
 
-static void init_gpu(Game *game) {
+void init_gpu(Game *game) {
   s_inited = 1;
   // SDL_GPU requires the video subsystem even headless (the device is created against it; we just don't
   // open a window or claim a swapchain).
@@ -2444,40 +2436,6 @@ void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay)
   SDL_EndGPURenderPass(rp);
   gpu_submit(cmd, "show_present_image");
   poll_quit(game);
-}
-
-// ---- present_screen: a choice screen (title picker) as the whole picture ---------------------------------
-// The screen is recorded into s_present_img, the image every present shot reads, and the window blit that
-// follows must not draw an overlay pass over it (the screen is not an overlay; see RmlOverlay).
-void GpuVkState::present_screen() {
-  if (!gpu_vk_enabled()) {
-    return;
-  }
-  if (!s_inited) {
-    init_gpu(game);
-  }
-  overlay_glue_frame_begin(&game->core);
-  int w = 0, h = 0;
-  gpu_vk_present_sink_size(&w, &h);
-  ensure_present_img(w, h);
-  if (!s_present_img) {
-    return;
-  }
-  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
-  GPUCHK(cmd, "AcquireGPUCommandBuffer");
-  SDL_GPUColorTargetInfo cti = {};
-  cti.texture = s_present_img;
-  cti.clear_color = (SDL_FColor){0, 0, 0, 1};
-  cti.load_op = SDL_GPU_LOADOP_CLEAR;
-  cti.store_op = SDL_GPU_STOREOP_STORE;
-  SDL_GPURenderPass *rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
-  overlay_glue_record_screen(game, cmd, rp, s_present_img_w, s_present_img_h);
-  SDL_EndGPURenderPass(rp);
-  if (s_headless) {
-    gpu_submit(cmd, "present_screen");
-    return;
-  }
-  show_present_image(cmd, false); // consumes cmd
 }
 
 // ---- repaint: re-show the LAST BUILT frame, without building anything (kanban #20) -------------------
@@ -4205,14 +4163,6 @@ void gpu_vk_draw_semi(Core *core,
 }
 void gpu_vk_shot(Core *core, const char *path) {
   core->game->gpu_vk.shot(path);
-}
-void gpu_vk_ensure_device(Core *core) {
-  if (gpu_vk_enabled() && !s_inited) {
-    init_gpu(core->game);
-  }
-}
-void gpu_vk_present_screen(Core *core) {
-  core->game->gpu_vk.present_screen();
 }
 void gpu_vk_present_shot(Core *core, const char *path) {
   core->game->gpu_vk.present_shot(path);

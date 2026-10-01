@@ -20,7 +20,7 @@
 #include "vram_dirty.h"                  // class VramDirty — which parts of guest VRAM a present must re-upload
 #include <stdint.h>
 
-struct Game;   // back-pointer target (game.h); only frame_via_fb() uses it (to reach s_seen3d via Core)
+struct Game;   // back-pointer target (game.h)
 struct Panel;  // gpu_vk.cpp: a self-contained per-target render view (Vulkan-typed; pointer-only here)
 struct TexVtx; // gpu_vk.cpp: a textured vertex (defined there; pointer-only in the tex_emit signature)
 struct Core;   // CPU/RAM handle (core.h)
@@ -58,7 +58,7 @@ struct VkRect {
 
 // ---- GpuVkState — the VK backend's per-instance, per-frame render machine state + its methods --------
 struct GpuVkState {
-  Game *game = nullptr; // set by Game(); reached only by frame_via_fb() for s_seen3d (via game->core)
+  Game *game = nullptr; // set by Game()
 
   // ---- per-Game GPU render TARGETS (deglobalized off GpuDevice 2026-07-10) --------------------------
   // Each Game owns its own GPU-side guest VRAM image + everything a frame renders through: the texture/
@@ -392,7 +392,6 @@ struct GpuVkState {
   void panel_render(Panel *p);
   void ssao_pass();
   void shadow_pass(); // rasterize the captured world geometry from the light's view into the shadow map
-  int frame_via_fb();
   void tex_emit(TexVtx *t,
                 const int *xs,
                 const int *ys,
@@ -420,5 +419,11 @@ struct GpuVkState {
   void tri_render_and_readback(uint16_t *out);
   void tri_over_bg_readback(const uint16_t *bg, uint16_t *out);
 };
+
+// Shared with gpu_vk_screen.cpp (the choice-screen present), which cannot reach this file's statics: bring the
+// SDL_GPU device up for `game` (once per Game), and submit a command buffer through the GPU-fault latch.
+int gpu_vk_enabled(void); // is the VK backend the active renderer
+void init_gpu(Game *game);
+bool gpu_submit(SDL_GPUCommandBuffer *cmd, const char *where);
 
 #endif // GPU_GPU_INTERNAL_H

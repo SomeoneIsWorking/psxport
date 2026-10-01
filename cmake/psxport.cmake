@@ -136,7 +136,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/frame_pacer.cpp
   ${PSXPORT_ROOT}/runtime/psx/timing.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu_vk_device.cpp # SDL window/device/pipeline teardown for a Game that ends
+  ${PSXPORT_ROOT}/runtime/psx/gpu_vk_device.cpp
+  ${PSXPORT_ROOT}/runtime/psx/gpu_vk_screen.cpp # present a host screen (title selector) as the whole picture
   ${PSXPORT_ROOT}/runtime/psx/picture_announce.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_fadewatch.cpp
   ${PSXPORT_ROOT}/runtime/psx/native_composite_capture.cpp # renderer-private completed-composite retention
