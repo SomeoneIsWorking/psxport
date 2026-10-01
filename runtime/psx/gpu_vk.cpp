@@ -2396,7 +2396,7 @@ void GpuVkState::build_present_image(SDL_GPUCommandBuffer *cmd, const PresentPla
 // The one place in the renderer a leg difference is legitimate, and it does no picture work at all: the
 // letterbox, fade, source selection and 24bpp decode are already baked into s_present_img. It ACQUIRES
 // WITHOUT WAITING, because a window nobody is showing never becomes ready (gpu_present_sink.h).
-void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd) {
+void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay) {
   SDL_GPUTexture *swaptex = NULL;
   Uint32 sw = 0, sh = 0;
   swaptex = sink_acquire(s_sink, cmd, s_win, &sw, &sh);
@@ -2438,10 +2438,46 @@ void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd) {
   // RmlUi mod/debug overlay (ESC) composites ON TOP of the game frame, into the same present pass over
   // the FULL window. It is host UI, not the game's picture, which is why it belongs to the sink and not
   // to s_present_img — a present shot must show the frame, not the debug menu over it.
-  overlay_glue_record(game, cmd, rp, (int)sw, (int)sh);
+  if (withOverlay) {
+    overlay_glue_record(game, cmd, rp, (int)sw, (int)sh);
+  }
   SDL_EndGPURenderPass(rp);
   gpu_submit(cmd, "show_present_image");
   poll_quit(game);
+}
+
+// ---- present_screen: a choice screen (title picker) as the whole picture ---------------------------------
+// The screen is recorded into s_present_img, the image every present shot reads, and the window blit that
+// follows must not draw an overlay pass over it (the screen is not an overlay; see RmlOverlay).
+void GpuVkState::present_screen() {
+  if (!gpu_vk_enabled()) {
+    return;
+  }
+  if (!s_inited) {
+    init_gpu(game);
+  }
+  overlay_glue_frame_begin(&game->core);
+  int w = 0, h = 0;
+  gpu_vk_present_sink_size(&w, &h);
+  ensure_present_img(w, h);
+  if (!s_present_img) {
+    return;
+  }
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  GPUCHK(cmd, "AcquireGPUCommandBuffer");
+  SDL_GPUColorTargetInfo cti = {};
+  cti.texture = s_present_img;
+  cti.clear_color = (SDL_FColor){0, 0, 0, 1};
+  cti.load_op = SDL_GPU_LOADOP_CLEAR;
+  cti.store_op = SDL_GPU_STOREOP_STORE;
+  SDL_GPURenderPass *rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
+  overlay_glue_record_screen(game, cmd, rp, s_present_img_w, s_present_img_h);
+  SDL_EndGPURenderPass(rp);
+  if (s_headless) {
+    gpu_submit(cmd, "present_screen");
+    return;
+  }
+  show_present_image(cmd, false); // consumes cmd
 }
 
 // ---- repaint: re-show the LAST BUILT frame, without building anything (kanban #20) -------------------
@@ -4169,6 +4205,14 @@ void gpu_vk_draw_semi(Core *core,
 }
 void gpu_vk_shot(Core *core, const char *path) {
   core->game->gpu_vk.shot(path);
+}
+void gpu_vk_ensure_device(Core *core) {
+  if (gpu_vk_enabled() && !s_inited) {
+    init_gpu(core->game);
+  }
+}
+void gpu_vk_present_screen(Core *core) {
+  core->game->gpu_vk.present_screen();
 }
 void gpu_vk_present_shot(Core *core, const char *path) {
   core->game->gpu_vk.present_shot(path);

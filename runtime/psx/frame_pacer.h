@@ -23,5 +23,9 @@ void gpu_pace_subframe_fields(Core *core, int guestFields, int parts);
 // Presentation of fields already delivered by a title's scheduler: wait without advancing devices.
 void gpu_wait_presented_fields(Core *core, int guestFields, int parts);
 
+// Pace a host-only screen (a title picker: no guest, no display mode programmed) at one NTSC display field
+// per call, honouring PSXPORT_NOPACE exactly as guest-driven pacing does.
+void host_screen_pace(Core *core);
+
 // The display field rate decoded from the standard the guest programmed through GP1(0x08).
 unsigned gpu_field_rate_millihz(Core *core);

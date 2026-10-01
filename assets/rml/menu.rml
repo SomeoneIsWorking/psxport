@@ -29,7 +29,7 @@
 			     A row carries EXACTLY ONE of three attributes, and there is no fourth:
 			       toggle="<id>"  cycles a named state (Off/On, or Vanilla/16:9/21:9/Auto)
 			       adjust="<id>"  steps a number, and is the only kind Left/Right act on
-			       action="<id>"  is a one-shot button (quit / close / warp_go / music_*)
+			       action="<id>"  is a one-shot button (quit / close / return_to_selector / warp_go / music_*)
 			     (An earlier version of this note also listed `cycle="<id>"`. NOTHING has ever
 			     read that attribute — a row carrying it would be inert. `toggle` already
 			     handles multi-state rows. Do not reintroduce it.)
@@ -86,6 +86,7 @@
 			<pane>
 				<div class="section-heading">Game</div>
 				<select-button action="close"><key>Resume</key><value>&#8629;</value></select-button>
+				<select-button action="return_to_selector"><key>Return to Title Selection</key><value>&#8617;</value></select-button>
 				<select-button action="quit"><key>Quit Game</key><value>&#10005;</value></select-button>
 				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A select &#183; Esc close</p>
 			</pane>

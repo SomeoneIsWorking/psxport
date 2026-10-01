@@ -60,7 +60,9 @@ std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id);
 std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id);
 std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp);
 std::unique_ptr<RowBinding> make_render_path_binding(RenderPathControl *render_path);
-std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action);
+// `available` (optional) is asked when the row is built: false removes the row, as a declared capability
+// absence (a product with no title selector has no "return to selection" row).
+std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action, std::function<bool()> available = {});
 
 // ---- the row widget -------------------------------------------------------------------------------
 class MenuRow : public Component {

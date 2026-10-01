@@ -31,4 +31,8 @@ void overlay_glue_frame_begin(Core *core);
 // window, not the letterboxed game pane). No-op if hidden.
 void overlay_glue_record(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int win_w, int win_h);
 
+// Record the choice SCREEN (a title picker) into the present-image render pass `rp`. Unlike the menu this
+// is picture content, so it goes into the image a present shot reads. No-op when no screen is shown.
+void overlay_glue_record_screen(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h);
+
 #endif

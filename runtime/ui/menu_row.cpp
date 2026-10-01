@@ -99,7 +99,11 @@ private:
 
 class ActionBinding final : public RowBinding {
 public:
-  explicit ActionBinding(std::function<void()> action) : mAction(std::move(action)) {}
+  ActionBinding(std::function<void()> action, std::function<bool()> available)
+      : mAction(std::move(action)), mAvailable(std::move(available)) {}
+  bool available() const override {
+    return !mAvailable || mAvailable();
+  }
   void step(int) override {
     if (mAction) {
       mAction();
@@ -108,6 +112,7 @@ public:
 
 private:
   std::function<void()> mAction;
+  std::function<bool()> mAvailable;
 };
 
 } // namespace
@@ -124,8 +129,8 @@ std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp) {
 std::unique_ptr<RowBinding> make_render_path_binding(RenderPathControl *render_path) {
   return std::make_unique<RenderPathBinding>(render_path);
 }
-std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action) {
-  return std::make_unique<ActionBinding>(std::move(action));
+std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action, std::function<bool()> available) {
+  return std::make_unique<ActionBinding>(std::move(action), std::move(available));
 }
 
 MenuRow::MenuRow(Rml::Element *root, std::unique_ptr<RowBinding> binding, std::function<void(MenuRow &)> on_click)

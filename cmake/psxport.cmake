@@ -136,6 +136,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/frame_pacer.cpp
   ${PSXPORT_ROOT}/runtime/psx/timing.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk.cpp
+  ${PSXPORT_ROOT}/runtime/psx/gpu_vk_device.cpp # SDL window/device/pipeline teardown for a Game that ends
   ${PSXPORT_ROOT}/runtime/psx/picture_announce.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_fadewatch.cpp
   ${PSXPORT_ROOT}/runtime/psx/native_composite_capture.cpp # renderer-private completed-composite retention
@@ -181,6 +182,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/menu_pane.cpp          # one tab's page of rows
   ${PSXPORT_ROOT}/runtime/ui/menu_tab_bar.cpp       # the <tab> row and which one is selected
   ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video/world/music/warp status lines
+  ${PSXPORT_ROOT}/runtime/ui/choice_navigator.cpp   # the rules of a choose-one list (no RmlUi)
+  ${PSXPORT_ROOT}/runtime/ui/choice_screen.cpp      # the full-window choose-one screen over choice.rml
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
   ${PSXPORT_ROOT}/runtime/psx/game_hooks_opt.cpp
   ${PSXPORT_ROOT}/runtime/psx/overlay_glue.cpp

@@ -124,9 +124,13 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
   // also carries a `toggle`/`adjust` attribute.
   std::string id = row->GetAttribute<Rml::String>(kAttrAction, "");
   if (!id.empty()) {
-    return make_action_binding([this, id] {
-      run_action(id);
-    });
+    return make_action_binding(
+        [this, id] {
+          run_action(id);
+        },
+        [this, id] {
+          return id != "return_to_selector" || (mGame && mGame->session.returnAvailable());
+        });
   }
 
   id = row->GetAttribute<Rml::String>(kAttrToggle, "");
@@ -186,6 +190,13 @@ void MenuDocument::run_action(const std::string &id) {
   }
   if (id == "close") {
     hide();
+    return;
+  }
+  if (id == "return_to_selector") {
+    hide();
+    if (mGame) {
+      mGame->session.requestReturn();
+    }
     return;
   }
   if (id == "warp_go") {

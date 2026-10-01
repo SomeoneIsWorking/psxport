@@ -41,3 +41,9 @@ void overlay_glue_record(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPas
     game->rml_overlay.recordGpu(cmd, rp, win_w, win_h);
   }
 }
+
+void overlay_glue_record_screen(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h) {
+  if (game) {
+    game->rml_overlay.recordScreenGpu(cmd, rp, w, h);
+  }
+}

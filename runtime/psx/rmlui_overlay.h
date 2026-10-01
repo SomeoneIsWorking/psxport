@@ -27,7 +27,9 @@ class Game;
 
 namespace psx::ui {
 class MenuDocument;
-}
+class ChoiceScreen;
+struct ChoiceContent;
+} // namespace psx::ui
 
 class RmlOverlay {
 public:
@@ -61,6 +63,18 @@ public:
   void newFrame();
   // Record the menu geometry into the present render pass. No-op when menu is hidden / not inited.
   void recordGpu(SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int win_w, int win_h);
+
+  // ---- the full-window choice SCREEN (a title picker) ----------------------------------------------
+  // A screen is the picture of a product state in which no guest runs, not an overlay over one: it
+  // lives in its own RmlUi context and is recorded by `recordScreenGpu` into the PRESENT IMAGE, so a
+  // present shot sees it and the window blit carries it. The ESC menu stays a separate overlay drawn
+  // over the window; the two never draw each other's documents.
+  psx::ui::ChoiceScreen *showChoiceScreen(psx::ui::ChoiceContent content);
+  psx::ui::ChoiceScreen *choiceScreen() const {
+    return mChoice.get();
+  }
+  void hideChoiceScreen();
+  void recordScreenGpu(SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h);
 
   // `inited()` = RmlUi is up and owns resources. It is NOT "there is a menu": LoadDocument can fail
   // (typically a missing PSXPORT_ASSET_DIR) and leave a live context with no document. Ask
@@ -105,6 +119,9 @@ private:
 
   // The UI. Null when LoadDocument failed — which is exactly what hasMenu() reports.
   std::unique_ptr<psx::ui::MenuDocument> mMenu;
+
+  void *mScreenCtx = nullptr; // Rml::Context* of the choice screen; separate so each pass draws only its own
+  std::unique_ptr<psx::ui::ChoiceScreen> mChoice;
 };
 #endif // __cplusplus
 #endif

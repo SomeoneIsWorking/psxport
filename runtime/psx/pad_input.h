@@ -103,6 +103,14 @@ public:
     return mRecFc;
   }
 
+  // A host-only screen (a title picker) wants the live keyboard/controller and the control channel's
+  // presses, and nothing a run's recording owns: no default `scratch/bin/pad_session.pad` sink, which
+  // rotates the player's real capture, and no PSXPORT_PAD_REPLAY, which belongs to the title started
+  // after it. Call before the first serviceFrame().
+  void useLiveInputOnly() {
+    mRecInit = 1;
+  }
+
   // Slot-1 controller presence is game policy. The default remains absent so existing single-pad
   // ports retain their current guest-visible packet; a title whose guest reads both slots opts in.
   void setSlot1Connected(bool connected) {

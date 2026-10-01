@@ -1,0 +1,91 @@
+/* A full-window "choose one of N" screen (psx::ui::ChoiceScreen).
+
+   Sizes are in vh so the screen scales with the window height and stays legible from the 4:3
+   presentation to widescreen; the panel is centred and capped in width so wide windows add margins,
+   not stretched rows. Renderer constraints are the menu's: no opacity, box-shadow or filters. */
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	display: flex;
+	width: 100%;
+	height: 100%;
+	background-color: #0E0F0A;
+	font-family: "Fira Sans";
+	font-size: 3vh;
+	color: #E0DBC8;
+}
+
+panel {
+	display: block;
+	width: 100%;
+	max-width: 120vh;
+	margin: auto;
+	padding: 4vh;
+}
+
+#heading {
+	display: block;
+	margin-bottom: 5vh;
+	font-family: "Fira Sans Condensed";
+	font-weight: bold;
+	font-size: 6vh;
+	text-transform: uppercase;
+	text-align: center;
+	color: #C2A42D;
+}
+
+#list {
+	display: block;
+}
+
+entry {
+	display: block;
+	margin-bottom: 2.5vh;
+	padding: 2.2vh 4vh;
+	border: 0.4vh #4A4630;
+	border-radius: 1.5vh;
+	background-color: #1A1B13;
+}
+
+entry:selected {
+	border-color: #C2A42D;
+	background-color: #2B2813;
+}
+
+entry:disabled {
+	border-color: #2A2A22;
+	background-color: #14150F;
+	color: #6B6858;
+}
+
+name {
+	display: block;
+	font-weight: bold;
+	font-size: 4.6vh;
+}
+
+note {
+	display: block;
+	margin-top: 0.8vh;
+	font-size: 2.6vh;
+	color: #8F8A70;
+}
+
+entry:selected note {
+	color: #C9C29A;
+}
+
+entry:disabled note {
+	color: #A5694F;
+}
+
+#hint {
+	display: block;
+	margin-top: 5vh;
+	font-size: 2.6vh;
+	text-align: center;
+	color: #8F8A70;
+}

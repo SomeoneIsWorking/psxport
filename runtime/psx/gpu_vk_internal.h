@@ -307,7 +307,10 @@ struct GpuVkState {
   // build: VRAM/ires target -> s_present_img. Runs in BOTH legs; this is the picture.
   // show:  s_present_img -> the window swapchain (+ the RmlUi overlay). Windowed only; this is the SINK.
   void build_present_image(SDL_GPUCommandBuffer *cmd, const struct PresentPlan &plan);
-  void show_present_image(SDL_GPUCommandBuffer *cmd);
+  void show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay = true);
+  // Present the overlay's choice SCREEN as the whole picture: built into the present image (so a present
+  // shot reads it in either leg) and blitted to the window with no second overlay pass over it.
+  void present_screen();
   void present_shot(const char *path); // read back s_present_img — WHAT THE PLAYER SEES, either leg
   // differential test two-pane present is NOT a GpuVkState method: each core renders + reads its own frame back
   // to a CPU RGBA pane (gpu_vk_render_readback), and the free function gpu_vk_present_sbs2 composites the

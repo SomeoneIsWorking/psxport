@@ -1,0 +1,14 @@
+<rml>
+<head>
+	<title>Choice</title>
+	<link type="text/rcss" href="rml.rcss"/>
+	<link type="text/rcss" href="choice.rcss"/>
+</head>
+<body>
+	<panel>
+		<div id="heading"></div>
+		<div id="list"></div>
+		<div id="hint"></div>
+	</panel>
+</body>
+</rml>

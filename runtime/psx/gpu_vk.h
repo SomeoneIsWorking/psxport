@@ -198,6 +198,11 @@ void gpu_vk_shot(Core *core, const char *path);
 // sees it: letterboxed, faded, source-selected, 24bpp-decoded. Works in BOTH legs, and is the only
 // capture in this framework that samples the present stage. See PSXPORT_PRESENT_SHOT_AT.
 void gpu_vk_present_shot(Core *core, const char *path);
+// Bring the device (and, windowed, the window and the overlay) up now rather than on the first present, so
+// a host-only screen can create its UI before its first frame. Idempotent; no-op when the GPU is disabled.
+void gpu_vk_ensure_device(Core *core);
+// Present the overlay's choice screen as the whole picture (title picker); see GpuVkState::present_screen.
+void gpu_vk_present_screen(Core *core);
 void gpu_vk_stats(Core *core, int *tri, int *tex, int *semi);
 
 // (Engine-owned screen fade is now the PC-native subsystem class ScreenFade at

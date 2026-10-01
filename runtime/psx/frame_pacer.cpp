@@ -103,6 +103,20 @@ void gpu_wait_presented_fields(Core *core, int guestFields, int parts) {
   waitForPlan(plan, gpu_field_rate_millihz(core));
 }
 
+void host_screen_pace(Core *core) {
+  if (!core || !core->game) {
+    lucent::error("pacer", "host-screen pacing requires an owning Game instance");
+    std::abort();
+  }
+  PaceInputs inputs;
+  inputs.unpaced = psx::config::cv_nopace.get();
+  inputs.quota = 1;
+  inputs.parts = 1;
+  inputs.fieldRateMilliHz = field_rate_millihz(false);
+  inputs.nowMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  waitForPlan(core->game->framePacer.plan(inputs), inputs.fieldRateMilliHz);
+}
+
 void gpu_pace_subframe(Core *core, int parts) {
   gpu_pace_subframe_fields(core, 0, parts);
 }
