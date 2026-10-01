@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <memory>
 
+#include "guest_packet_pool_windows.h"
 #include "guest_pad_buffer_layout.h"
 #include "guest_program_image.h"
 #include "input_phase.h"
@@ -100,6 +101,17 @@ public:
   // guest's libcd ISR after the controller raises INT1. Adapter runtimes retain the legacy direct
   // GameConfig::cdReadyCbPtr behavior.
   virtual const GuestCdStreamCallbackLayout *guestCdStreamCallbackLayout() const {
+    return nullptr;
+  }
+
+  // The guest RAM the title's 2D packet pool occupies, for DIRECT runtimes (core.cfg == nullptr).
+  // `OtAttr` records packet-producer spans only inside this window, so a runtime that declares none
+  // has a `GuestPacketFilter` that can never match anything — which reads as "the guest submitted
+  // nothing here" rather than as "nobody said where the pool is". Adapter runtimes keep the legacy
+  // GameConfig::packetPool* fields, which are read where they always were and are not re-read here.
+  // The default declares no pool, which is the honest answer for a title whose pool is not located,
+  // for a bare product, and for a smoke/tool client that never submits packets.
+  virtual const GuestPacketPoolWindows *guestPacketPoolWindows() const {
     return nullptr;
   }
 

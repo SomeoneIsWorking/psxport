@@ -54,6 +54,7 @@
 #include <lucent/log.h> // lucent::Channel — the inline armed test below
 #include <stdint.h>
 class Core;
+struct GameConfig;
 
 // The `otattr` channel as an INTERNED HANDLE. This is the one place in the framework that has earned
 // one: the gate below runs on every guest store. A `lucent::Channel` is constant-initialised (no
@@ -367,9 +368,19 @@ private:
   // went 450 ms -> 485 ms over the same 1,100-frame scene (samples at 1 kHz), i.e. caching the value
   // cost MORE than recomputing it had. The arithmetic was never the expense; the call is.
   void poolRangeMiss(Core *c);
-  // Cache key: the GameConfig the window was derived from. Dynamic descriptor stores clear it so the
-  // next store re-reads the live bounds.
-  const void *mPoolCfg = nullptr;
+  // Cache key: the GameConfig the window was derived from, for a legacy game. Dynamic descriptor
+  // stores clear the cached bounds so the next store re-reads the live ones — through `mPoolDirty`,
+  // not by nulling the key, because a typed runtime's cfg is null and nulling it changed nothing.
+  const GameConfig *mPoolCfg = nullptr;
+  // The declaration the window was derived from, for a typed runtime. Informational: it is what the
+  // "structurally blind" report names, and the thing whose address `descriptor_overlap` re-checks.
+  const void *mPoolSource = nullptr;
+  // The four guest pointer globals the live window is derived from: {base,end} per parity. Cached at
+  // resolve time so the per-store overlap test is four integer compares.
+  uint32_t mPoolDescriptorAddr[4] = {};
+  // Has the window been derived at least once for this Core? A typed runtime declares nothing
+  // keyable, so this is what triggers the one resolve a null-cfg Core ever needs.
+  bool mPoolDirty = true;
   uint32_t mPoolLo[2] = {};
   uint32_t mPoolHi[2] = {};
   uint32_t mPoolCount = 0;

@@ -165,6 +165,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gte_vendor_hooks.cpp
   ${PSXPORT_ROOT}/runtime/psx/proj_params.cpp
   ${PSXPORT_ROOT}/runtime/psx/ot_attr.cpp
+  ${PSXPORT_ROOT}/runtime/psx/guest_packet_pool_windows.cpp
   ${PSXPORT_ROOT}/runtime/psx/hw_bind.cpp
   ${PSXPORT_ROOT}/runtime/psx/repl.cpp
   ${PSXPORT_ROOT}/runtime/psx/dbg_server.cpp
