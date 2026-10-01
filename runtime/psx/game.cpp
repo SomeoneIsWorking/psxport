@@ -2,6 +2,14 @@
 #include "config_vars.h" // cv_producers — PSXPORT_PRODUCERS, read once per Game below
 #include "ot_attr.h"     // g_producer_census_armed — armed by every Game's constructor, below
 
+HostIdentity Game::hostIdentity() const {
+  if (core.cfg) {
+    return {core.cfg->windowTitle, core.cfg->cardEnvVar, core.cfg->cardDefaultPath};
+  }
+  const HostIdentity *declared = runtime ? runtime->hostIdentity() : nullptr;
+  return declared ? *declared : HostIdentity{};
+}
+
 Game::Game() {
   // THE PRODUCER-CENSUS ARM, from PSXPORT_PRODUCERS. This used to be assigned only inside
   // native_boot_run, which direct-boot runtimes (Tekken 3's bootInit dispatch) never execute, so the

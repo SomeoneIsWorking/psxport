@@ -12,6 +12,7 @@
 struct Core;
 struct GameConfig;
 class Game;
+struct HostIdentity;
 
 struct McFd {
   int used;
@@ -34,6 +35,10 @@ public:
 
   // Physical-layer card I/O — host-file backed.
   void init();
+  // The backing file chosen by init(); empty before it.
+  const char *path() const {
+    return mPath;
+  }
   bool present() const {
     return mCard != nullptr;
   }
@@ -99,7 +104,7 @@ private:
   char mScanPat[64] = {0};     // firstfile/nextfile pattern, device prefix already stripped
   uint32_t mScanBlk = kBlocks; // next directory block to examine; kBlocks = scan exhausted/unarmed
 
-  static char *resolvePath(const struct GameConfig *cfg);
+  static char *resolvePath(const struct HostIdentity &identity);
   static void mkParents(const char *path);
 };
 

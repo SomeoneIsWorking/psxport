@@ -114,6 +114,10 @@ public:
   // Declared after the subsystem state so the products are destroyed first. A derived driver or
   // scheduler may retain references to the fully wired subsystem members it receives at creation.
   GameRuntime *runtime = nullptr;
+
+  // Window title and memory-card policy, from the legacy GameConfig or the direct runtime, whichever
+  // this Game was built with. Fields are null when the title declares none.
+  HostIdentity hostIdentity() const;
   std::unique_ptr<TemporalFramePresentation> temporalPresentation;
   std::unique_ptr<FrameDriver> frameDriver;
   std::unique_ptr<TaskScheduler> taskScheduler;

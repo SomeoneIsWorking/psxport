@@ -1116,10 +1116,10 @@ static void init_gpu(Game *game) {
     int fullscreen =
         cfg_on("PSXPORT_FULLSCREEN") || (cfg_str("PSXPORT_WINDOWED") && atoi(cfg_str("PSXPORT_WINDOWED")) == 0);
     SDL_WindowFlags flags = fullscreen ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE;
-    // GameConfig::windowTitle — never a game name in the framework. The fallback is deliberately
+    // HostIdentity::windowTitle — never a game name in the framework. The fallback is deliberately
     // self-evidently wrong: a port that forgets to set it must look untitled, not look like Tomba!2.
-    const char *title =
-        (game->core.cfg && game->core.cfg->windowTitle) ? game->core.cfg->windowTitle : "psxport (untitled game)";
+    const char *declaredTitle = game->hostIdentity().windowTitle;
+    const char *title = declaredTitle ? declaredTitle : "psxport (untitled game)";
     s_win = SDL_CreateWindow(title, PRESENT_WINDOW_W, PRESENT_WINDOW_H, flags);
     GPUCHK(s_win, "SDL_CreateWindow");
   }

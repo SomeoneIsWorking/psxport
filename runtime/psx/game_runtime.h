@@ -26,6 +26,17 @@ struct GameConfig;
 struct GameHooks;
 struct PlatformHlePlan;
 
+// The host-visible identity of a game: what its window is called and where its memory card lives.
+// A DIRECT runtime (core.cfg == nullptr) declares it through GameRuntime::hostIdentity(); the legacy
+// adapter's equivalent is GameConfig::windowTitle / cardEnvVar / cardDefaultPath, and Game::hostIdentity()
+// is the one place that chooses between them. The framework reads the card variable itself, through
+// its configuration owner (the environment, then ./.env), so a title names the key and never reads it.
+struct HostIdentity {
+  const char *windowTitle = nullptr;     // null shows the framework's deliberately untitled marker
+  const char *cardEnvVar = nullptr;      // checked before the generic PSXPORT_CARD
+  const char *cardDefaultPath = nullptr; // used when neither variable names a card
+};
+
 class FrameDriver {
 public:
   virtual ~FrameDriver() = default;
@@ -106,6 +117,12 @@ public:
   // Disc environment key for DIRECT runtimes (core.cfg == nullptr). The disc resolver checks this
   // variable in the environment and ./.env before falling back to generic PSXPORT_DISC.
   virtual const char *discEnvVar() const {
+    return nullptr;
+  }
+
+  // Window title and memory-card policy for DIRECT runtimes (core.cfg == nullptr). Null is honest for
+  // smoke/tool clients and yields an untitled window and the generic card path.
+  virtual const HostIdentity *hostIdentity() const {
     return nullptr;
   }
 
