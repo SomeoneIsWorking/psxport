@@ -155,6 +155,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/timing.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_device.cpp
+  ${PSXPORT_ROOT}/runtime/psx/gpu_vk_window.cpp # the ONE window + swapchain for the whole product run
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_screen.cpp # present a host screen (title selector) as the whole picture
   ${PSXPORT_ROOT}/runtime/psx/picture_announce.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu_vk_fadewatch.cpp

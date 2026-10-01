@@ -56,16 +56,12 @@ GpuDevice::~GpuDevice() {
     releaseHandle(s_img_xfer, s_dev, [](SDL_GPUDevice *d, SDL_GPUTransferBuffer *b) {
       SDL_ReleaseGPUTransferBuffer(d, b);
     });
-    if (s_win != nullptr) {
-      SDL_ReleaseWindowFromGPUDevice(s_dev, s_win);
-    }
+    // The window leaves the device before the device is destroyed; the window itself outlives it.
+    s_window.release_device(s_dev);
     SDL_DestroyGPUDevice(s_dev);
     s_dev = nullptr;
   }
-  if (s_win != nullptr) {
-    SDL_DestroyWindow(s_win);
-    s_win = nullptr;
-  }
+  s_window.destroy();
   SDL_QuitSubSystem(SDL_INIT_VIDEO);
   s_inited = 0;
   lucent::info("gpu_vk", "device and window released");

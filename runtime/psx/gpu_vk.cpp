@@ -4,6 +4,7 @@
 #include "game.h"                             // Game / GpuVkState (per-instance render state)
 #include "game_hooks_opt.h"                   // guarded optional fade-state reader
 #include "gpu_painter.h"                      // authored painter staging + focused GPU discriminator
+#include "gpu_vk_check.h"                     // GPUCHK — the one rule for a handle the run depends on
 #include "gpu_vk_fadewatch.h"                 // `debug fadewatch` transition taps (extracted out of present)
 #include "gpu_vk_modulation_selftest.h"       // PSX texture*color modulation truncation through shipping shaders
 #include "gpu_vk_present_mode.h"              // preferred_present_mode — the sink must not stall the guest thread
@@ -12,6 +13,7 @@
 #include "gpu_vk_texture_coverage_selftest.h" // PSX integer-pixel coverage through the shipping textured path
 #include "gpu_vk_texture_phase_selftest.h"    // integer-pixel UV phase through opaque + semi shipping paths
 #include "gpu_vk_untextured_selftest.h"       // untextured G3 interpolation through the shipping opaque path
+#include "gpu_vk_window.h"                    // GpuWindow — the ONE window + swapchain for the whole run
 #include "image_writer.h"                     // one checked RGB24 capture-file boundary
 #include "picture_announce.h"                 // per-Core `[wide] native picture:` line, reported on change
 #include "present_fade_state.h"               // the fade a present composites, resolved for this Core
@@ -72,9 +74,9 @@ static inline GpuDevice &gdev() {
 #define s_gpu_on (gdev().s_gpu_on)
 #define s_inited (gdev().s_inited)
 #define s_headless (gdev().s_headless)
-#define s_win (gdev().s_win)
+#define s_win (gdev().s_window.window())
 #define s_dev (gdev().s_dev)
-#define s_swap_fmt (gdev().s_swap_fmt)
+#define s_swap_fmt (gdev().s_window.swapchain_format())
 #define s_samp_nearest (gdev().s_samp_nearest)
 #define s_samp_linear (gdev().s_samp_linear)
 #define s_present_pipe (gdev().s_present_pipe)
@@ -183,41 +185,24 @@ extern "C" int gpu_windowed(void) {
   return gpu_vk_enabled() && !s_headless;
 }
 
-// Live window size in pixels (swapchain extent), used ONLY to answer "how big is the sink" in the
-// windowed leg — see gpu_vk_present_sink_size() below, which is what every consumer must ask.
+// The live window extent (swapchain) lives on GpuWindow (gpu_vk_window.h) and is read ONLY through
+// gpu_vk_present_sink_size() below, which is what every consumer must ask.
 //
-// DO NOT REACH FOR THESE TO SIZE ANYTHING. They fall back to 320x240 when no window exists, and that
-// fallback silently became the RESOLUTION INPUT for the AUTO internal-resolution scale and for
+// DO NOT REACH FOR THE WINDOW TO SIZE ANYTHING. It falls back to 320x240 when no window exists, and
+// that fallback silently became the RESOLUTION INPUT for the AUTO internal-resolution scale and for
 // ASPECT_AUTO's widened framebuffer: headless computed ires = round(240/240) = 1 where the same
 // build in its window computed round(720/240) = 3, so a headless capture was not the user's picture.
 // Both decisions now live in video_plan.h and take the SINK, which exists in both legs.
 // (`gpu_has_window()` is gone with the same defect: its only caller was the frame pacer's
 // `if (!gpu_has_window()) return`, which made headless unpaced. PSXPORT_NOPACE is the switch for
 // that, and it always was.)
-static int win_w(void) {
-  int w = 320, h = 240;
-  if (s_win) {
-    SDL_GetWindowSizeInPixels(s_win, &w, &h);
-  }
-  return w > 0 ? w : 320;
-}
-static int win_h(void) {
-  int w = 320, h = 240;
-  if (s_win) {
-    SDL_GetWindowSizeInPixels(s_win, &w, &h);
-  }
-  return h > 0 ? h : 240;
-}
 
 // The presented-picture target's format. RGBA8 rather than the swapchain's format so it exists
 // identically in both legs (headless has no swapchain and therefore no swapchain format) and so the
 // readback decode is one fixed rule.
 static const SDL_GPUTextureFormat PRESENT_IMG_FMT = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
-// The window's creation size, defined ONCE and used both at SDL_CreateWindow and as the headless
-// sink default, so the two cannot drift. (They were two hand-copied 960x720 literals; changing the
-// window would silently have desynchronised the headless sink from it.)
-enum { PRESENT_WINDOW_W = 960, PRESENT_WINDOW_H = 720 };
+// The window's creation size (PRESENT_WINDOW_W/H) is declared once by GpuWindow, gpu_vk_window.h.
 
 // ---- THE SINK SIZE — the only leg-dependent input to the presented picture, and deliberately so ------
 // Windowed it is the live drawable; headless there is no drawable, so it is a configured size
@@ -240,8 +225,8 @@ enum { PRESENT_WINDOW_W = 960, PRESENT_WINDOW_H = 720 };
 void gpu_vk_present_sink_size(int *w, int *h) {
   (void)gpu_vk_enabled(); // resolves the headless/windowed leg before a pre-first-present title latch
   if (!s_headless) {
-    *w = win_w();
-    *h = win_h();
+    *w = gdev().s_window.pixel_width();
+    *h = gdev().s_window.pixel_height();
     return;
   }
   static int cw = 0, ch = 0;
@@ -367,13 +352,7 @@ void gpu_vk_video_status(Core *c, int *native_w, int *ires, int *fbw, int *fbh, 
   }
 }
 // ---- SDL_GPU helpers --------------------------------------------------------------------------------
-#define GPUCHK(p, what)                                                                                                \
-  do {                                                                                                                 \
-    if (!(p)) {                                                                                                        \
-      lucent::error("gpu_vk", "{} failed: {}", what, SDL_GetError());                                                  \
-      exit(2);                                                                                                         \
-    }                                                                                                                  \
-  } while (0)
+// (GPUCHK — the checked-handle rule — lives in gpu_vk_check.h, shared with the window owner.)
 
 // ── GPU-FAULT LATCH — a failed submit ENDS this process's GPU work, permanently ────────────────────
 //
@@ -1135,21 +1114,18 @@ void init_gpu_device(Game *game) {
     lucent::error("gpu_vk", "SDL_Init(VIDEO) failed: {}", SDL_GetError());
     exit(2);
   }
-  if (!s_headless) {
-    int fullscreen =
-        cfg_on("PSXPORT_FULLSCREEN") || (cfg_str("PSXPORT_WINDOWED") && atoi(cfg_str("PSXPORT_WINDOWED")) == 0);
-    SDL_WindowFlags flags = fullscreen ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE;
-    // HostIdentity::windowTitle — never a game name in the framework. The fallback is deliberately
-    // self-evidently wrong: a port that forgets to set it must look untitled, not look like Tomba!2.
-    // A HOST that owns the window owns its name (psxport::HostPresentation::setWindowTitle): the
-    // window is created by whichever Game comes first, which in a selector-then-title product is the
-    // selector, and its identity would name the window for the whole run.
-    const char *hostTitle = gdev().s_window_title;
-    const char *declaredTitle = hostTitle != nullptr ? hostTitle : game->hostIdentity().windowTitle;
-    const char *title = declaredTitle ? declaredTitle : "psxport (untitled game)";
-    s_win = SDL_CreateWindow(title, PRESENT_WINDOW_W, PRESENT_WINDOW_H, flags);
-    GPUCHK(s_win, "SDL_CreateWindow");
-  }
+  // The ONE window for the whole run (GpuWindow, gpu_vk_window.h): created before the device, claimed
+  // after it, and released once — it outlives every Game that presents into it.
+  //
+  // HostIdentity::windowTitle — never a game name in the framework. The fallback is deliberately
+  // self-evidently wrong: a port that forgets to set it must look untitled, not look like Tomba!2.
+  // A HOST that owns the window owns its name (psxport::HostPresentation::setWindowTitle): the
+  // window is created by whichever Game comes first, which in a selector-then-title product is the
+  // selector, and its identity would name the window for the whole run.
+  const char *hostTitle = gdev().s_window_title;
+  const char *declaredTitle = hostTitle != nullptr ? hostTitle : game->hostIdentity().windowTitle;
+  const char *title = declaredTitle ? declaredTitle : "psxport (untitled game)";
+  gdev().s_window.create(s_headless != 0, title);
   // Create the GPU device (SPIR-V shaders; let SDL pick the optimal driver — Vulkan on Linux, Metal on Mac).
   // A recorded fault from a PREVIOUS process stops us before we ever touch the device.
   if (!gpu_fault_preflight()) {
@@ -1164,27 +1140,9 @@ void init_gpu_device(Game *game) {
     lucent::info("gpu_vk", "SDL_GPU device up (driver: {})", drv ? drv : "(null)");
   }
   if (!s_headless) {
-    GPUCHK(SDL_ClaimWindowForGPUDevice(s_dev, s_win), "SDL_ClaimWindowForGPUDevice");
-    // The swapchain must NOT stall the guest thread. A freshly claimed window keeps SDL's DEFAULT
-    // present mode, VSYNC, under which SDL_WaitAndAcquireGPUSwapchainTexture (show_present_image) sleeps
-    // until the next vblank — on the one thread that runs the guest, the CD pump, MDEC and the DMA
-    // completions. Ask for a non-blocking mode instead; see gpu_vk_present_mode.h for the measurement.
-    const SDL_GPUPresentMode want =
-        preferred_present_mode(SDL_WindowSupportsGPUPresentMode(s_dev, s_win, SDL_GPU_PRESENTMODE_MAILBOX),
-                               SDL_WindowSupportsGPUPresentMode(s_dev, s_win, SDL_GPU_PRESENTMODE_IMMEDIATE));
-    const bool set_ok = SDL_SetGPUSwapchainParameters(s_dev, s_win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, want);
-    if (!set_ok) {
-      lucent::warn("gpu_vk", "SDL_SetGPUSwapchainParameters({}) failed: {}", present_mode_name(want), SDL_GetError());
-    }
-    // The mode actually IN EFFECT, not the one asked for: on failure the swapchain keeps SDL's default,
-    // which is VSYNC. Unguarded info — a normal windowed run must state whether its sink blocks.
-    const SDL_GPUPresentMode got = set_ok ? want : SDL_GPU_PRESENTMODE_VSYNC;
-    lucent::info("gpu_vk",
-                 "swapchain present mode: {}{}",
-                 present_mode_name(got),
-                 present_mode_blocks_caller(got) ? " (BLOCKING — every present stalls the guest thread until vblank)"
-                                                 : "");
-    s_swap_fmt = SDL_GetGPUSwapchainTextureFormat(s_dev, s_win);
+    // Claim the window for the device and settle its swapchain: a present mode that does not stall
+    // the guest thread, and the swapchain's own texture format.
+    gdev().s_window.claim(s_dev);
   }
 
   // (the guest-VRAM image + its upload/download staging are PER-GAME now — GpuVkState::ensure_targets.

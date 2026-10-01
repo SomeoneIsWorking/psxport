@@ -10,6 +10,7 @@
 #pragma once
 #include "gpu_vk_internal.h" // GGS_NUM_BLEND_MODES
 #include "gpu_vk_present_policy.h"
+#include "gpu_vk_window.h" // GpuWindow — the ONE window + swapchain (its own lifetime, not a field here)
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include <stdint.h>
@@ -32,13 +33,15 @@ public:
   int s_headless = 0;
 
   // ---- window / device / swapchain ----
-  SDL_Window *s_win = nullptr;
+  // The window and its swapchain (format, present-mode claim, live drawable extent) are owned by
+  // GpuWindow: they are created before and destroyed after the SDL_GPU device, so their lifetime is not
+  // this object's. The device is all that remains here.
   SDL_GPUDevice *s_dev = nullptr;
   // The window's title, when a HOST that owns the window named it (psxport::HostPresentation). Null
   // means "name the window after the first Game that brings the device up", which is what every
-  // one-Game-per-process product gets.
+  // one-Game-per-process product gets. It is the window's DECLARED identity, an input to GpuWindow.
   const char *s_window_title = nullptr;
-  SDL_GPUTextureFormat s_swap_fmt = SDL_GPU_TEXTUREFORMAT_INVALID;
+  GpuWindow s_window;
 
   // (per-Game render TARGETS — the guest-VRAM image, snapshot, depth, color intermediate and vertex
   //  buffers — moved to GpuVkState 2026-07-10: two Games must not share mutable GPU surfaces.)
