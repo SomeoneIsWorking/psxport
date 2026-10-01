@@ -126,6 +126,7 @@ public:
   // covered range once afterwards (MDEC-out DMA). Every other store check still runs. The caller
   // owns the notification: skipping it leaves stale translated code.
   void mem_w32_unnotified(uint32_t a, uint32_t v);
+  void mem_w8_unnotified(uint32_t a, uint8_t v);
   // Copy a NUL-terminated guest string into `out` (at most cap-1 bytes, always NUL-terminated).
   // The one owner of this read; title code and runtime services call it instead of re-looping mem_r8.
   void readCString(uint32_t address, char *out, size_t cap);

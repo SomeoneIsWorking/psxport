@@ -370,8 +370,11 @@ static void cd_read(Core *c) {
       return;
     } // bool: 0 = failure
     for (uint32_t j = 0; j < 2048; j++) {
-      c->mem_w8(buf + i * 2048u + j, sec[j]);
+      c->mem_w8_unnotified(buf + i * 2048u + j, sec[j]);
     }
+    psx::cpu::notifyExecutableWrite(*c,
+                                    {(buf + i * 2048u) & 0x1fffffffu, ((buf + i * 2048u) & 0x1fffffffu) + 2048u},
+                                    psx::cpu::ExecutableWriteSource::ModuleLoad);
   }
   if (c->game->cd.verbose || lucent::channel_on("cd")) {
     lucent::info("cd", "read {} blk @ LBA {} -> 0x{:08X}", blocks, lba, buf);
@@ -447,8 +450,11 @@ void cd_getsector_stock(Core *c) {
     uint32_t avail = (uint32_t)(cd.sec_len - cd.sec_pos);
     uint32_t n = need - done < avail ? need - done : avail;
     for (uint32_t k = 0; k < n; k++) {
-      c->mem_w8(dest + done + k, cd.sec_raw[cd.sec_pos + k]);
+      c->mem_w8_unnotified(dest + done + k, cd.sec_raw[cd.sec_pos + k]);
     }
+    psx::cpu::notifyExecutableWrite(*c,
+                                    {(dest + done) & 0x1fffffffu, ((dest + done) & 0x1fffffffu) + n},
+                                    psx::cpu::ExecutableWriteSource::ModuleLoad);
     cd.sec_pos += (int)n;
     done += n;
   }
@@ -508,7 +514,7 @@ void cd_read_stock_sync(Core *c) {
       return;
     }
     for (uint32_t k = 0; k < bytes; k++) {
-      c->mem_w8(buf + i * bytes + k, raw[off + k]);
+      c->mem_w8_unnotified(buf + i * bytes + k, raw[off + k]);
     }
     // The write becomes visible HERE, so the range is reported HERE — per sector, so a failure part way
     // through still reports exactly the bytes that landed rather than the whole request.
@@ -621,7 +627,7 @@ static void cd_loadfile(Core *c) {
     }
     uint32_t n = size - done < 2048 ? size - done : 2048;
     for (uint32_t j = 0; j < n; j++) {
-      c->mem_w8(dest + done + j, sec[j]);
+      c->mem_w8_unnotified(dest + done + j, sec[j]);
     }
     done += n;
   }
@@ -678,7 +684,7 @@ void Cd::asyncRead() {
     }
     uint32_t n = bytes - done < 2048 ? bytes - done : 2048;
     for (uint32_t j = 0; j < n; j++) {
-      c->mem_w8(dest + done + j, sec[j]);
+      c->mem_w8_unnotified(dest + done + j, sec[j]);
     }
     done += n;
   }

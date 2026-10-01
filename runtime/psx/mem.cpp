@@ -902,8 +902,10 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
           const int take = count < remaining ? count : remaining;
           const int got = cdc_dma_read(&game->cdc, s_dma_buf + (n - remaining), take);
           for (int i = 0; i < take; i++) {
-            mem_w32(node + 4 + (unsigned)i * 4u, s_dma_buf[n - remaining + i]);
+            mem_w32_unnotified(node + 4 + (unsigned)i * 4u, s_dma_buf[n - remaining + i]);
           }
+          psx::cpu::notifyExecutableWrite(
+              *this, {node + 4, node + 4 + (unsigned)take * 4u}, psx::cpu::ExecutableWriteSource::Dma);
           lucent::debug("cdc",
                         "DMA3 chain node 0x{:08X}: {} words, FIFO {} + controller-zero {} (head LBA {})",
                         0x80000000u | node,
@@ -920,8 +922,9 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       } else {
         const int fifo_words = cdc_dma_read(&game->cdc, s_dma_buf, n);
         for (int i = 0; i < n; i++) {
-          mem_w32(da + (unsigned)i * 4u, s_dma_buf[i]);
+          mem_w32_unnotified(da + (unsigned)i * 4u, s_dma_buf[i]);
         }
+        psx::cpu::notifyExecutableWrite(*this, {da, da + (unsigned)n * 4u}, psx::cpu::ExecutableWriteSource::Dma);
         lucent::debug("cdc",
                       "DMA3 {} words -> 0x{:08X}: FIFO {} + controller-zero {} (head LBA {})",
                       n,
@@ -1002,8 +1005,9 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       } else { // SPU -> RAM
         int got = spu_dma_read(s_dma_buf, n);
         for (int i = 0; i < got; i++) {
-          mem_w32(da + i * 4, s_dma_buf[i]);
+          mem_w32_unnotified(da + i * 4, s_dma_buf[i]);
         }
+        psx::cpu::notifyExecutableWrite(*this, {da, da + (unsigned)got * 4u}, psx::cpu::ExecutableWriteSource::Dma);
       }
       s_dma4_chcr &= ~0x01000000u;
       if (dma_completed(4)) {
@@ -1170,8 +1174,9 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       for (uint32_t i = 0; i < n; i++) {
         uint32_t addr = madr - i * 4;
         uint32_t word = (i == n - 1) ? 0x00FFFFFFu : ((addr - 4) & 0x00FFFFFFu);
-        mem_w32(addr, word);
+        mem_w32_unnotified(addr, word);
       }
+      psx::cpu::notifyExecutableWrite(*this, {madr - (n - 1) * 4u, madr + 4u}, psx::cpu::ExecutableWriteSource::Dma);
       s_dma6_chcr &= ~0x01000000u; // clear busy -> ClearOTagR's busy-poll passes
       if (dma_completed(6)) {
         pending_work |= PW_IRQ;

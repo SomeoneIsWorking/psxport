@@ -15,6 +15,14 @@ enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 constexpr uint32_t kBuffer = 0x80110000u;
 constexpr uint32_t kResult = 0x80111000u;
 
+// A sector source that fills every byte of the sector with its LBA, so a copied sector is identifiable.
+int fakeSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+  for (uint32_t i = 0; i < count; ++i) {
+    out[i] = static_cast<uint8_t>(lba);
+  }
+  return 1;
+}
+
 } // namespace
 
 static void test_stock_read_refuses_without_a_position() {
@@ -176,6 +184,28 @@ static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_no
 
 // The refusal path must be just as quiet: with no Setloc the read never starts, so there is no write and
 // nothing to report. A refusal that still reported a range would invalidate on every unpositioned poll.
+// The positive feeder, through the controller's sector-source binding: each sector costs ONE
+// invalidation (its range, reported once), not one per byte copied.
+static void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte() {
+  auto game = std::make_unique<Game>();
+  game->cdc.disc_read_raw_fn = fakeSector;
+  game->cd.setloc_lba = 7;
+  game->core.r[A0] = 3; // sectors
+  game->core.r[A1] = kBuffer;
+  game->core.r[A2] = 0; // 2048-byte payloads
+  const auto before = game->core.lightrecExecutor().counters();
+
+  cd_read_stock_sync(&game->core);
+
+  const auto after = game->core.lightrecExecutor().counters();
+  CHECK_EQ(game->core.r[V0], 1u);
+  CHECK_EQ(game->core.mem_r8(kBuffer), 7u);
+  CHECK_EQ(game->core.mem_r8(kBuffer + 3u * 2048u - 1u), 9u);
+  CHECK_EQ(after.invalidations - before.invalidations, 3u);
+  const auto source = static_cast<std::size_t>(psx::cpu::ExecutableWriteSource::ModuleLoad);
+  CHECK_EQ(after.invalidationsBySource[source] - before.invalidationsBySource[source], 3u);
+}
+
 static void test_a_refused_read_reports_no_executable_write() {
   auto game = std::make_unique<Game>();
   psx::cpu::notifyExecutableWrite(game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
@@ -196,6 +226,7 @@ int main() {
   RUN(stock_readsync_reports_completed_and_zeros_result);
   RUN(stock_cdsync_reports_ready_and_zeros_result);
   RUN(the_invalidation_counter_is_live_and_a_zero_sector_read_does_not_move_it);
+  RUN(a_stock_read_reports_one_invalidation_per_sector_not_per_byte);
   RUN(a_refused_read_reports_no_executable_write);
   return pt_summary();
 }

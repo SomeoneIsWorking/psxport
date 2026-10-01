@@ -115,6 +115,9 @@ void Core::mem_w16(uint32_t a, uint16_t v) {
 void Core::mem_w32(uint32_t a, uint32_t v) {
   writeGuestMemory(a, v);
 }
+void Core::mem_w8_unnotified(uint32_t a, uint8_t v) {
+  writeGuestMemory<uint8_t, false>(a, v);
+}
 void Core::mem_w32_unnotified(uint32_t a, uint32_t v) {
   writeGuestMemory<uint32_t, false>(a, v);
 }
