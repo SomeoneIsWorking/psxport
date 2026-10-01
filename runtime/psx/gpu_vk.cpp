@@ -1096,7 +1096,38 @@ static void create_3d_pipelines(void) {
       "3D raster up (RG8 color target + D32 depth, real HW-blend semi via float intermediate; per-Game targets)");
 }
 
+// Bring the presentation device up, and bind THIS Game to it. Called from every path that needs the
+// device, and safe to call as often as they like: the two halves are separately idempotent.
+//
+//   DEVICE half (once per device) — SDL video, the window, the SDL_GPU device and swapchain, the
+//     samplers and the shared pipelines. Guarded by `s_inited`, which is why a host that keeps one
+//     device across sessions (psxport::HostPresentation) creates none of them a second time.
+//   GAME half (once per Game) — this Game's RmlUi overlay on its own RmlOverlay, at the SINK's size.
+//     Per-Game because `overlay_glue_init` binds a Game's overlay, and a host-lifetime device runs a
+//     NEW Game after every session: guarded per device, the second Game's overlay would never bind.
+//
+// Every caller used to guard `if (!s_inited) init_gpu(game)`. They now call init_gpu unconditionally,
+// because the Game half has to run for a Game that arrives after the device already exists.
 void init_gpu(Game *game) {
+  if (!s_inited) {
+    init_gpu_device(game);
+  }
+  // RmlUi mod/debug overlay. Brought up in BOTH legs: this used to be `if (!s_headless)`, which made
+  // the overlay's very EXISTENCE a property of the window — so every headless instrument was
+  // structurally blind to it, and a user-reported dead overlay could not be diagnosed at all without
+  // taking the user's screen (spyro issue #52). The window is an output sink, not a mode
+  // (docs/workspace/PROTOCOL.md), so the overlay takes the SINK's size and the format of the pass it will
+  // record into, and `s_win` (NULL headless) is passed only for input translation.
+  if (game == nullptr || game->gpu_vk.s_overlay_bound) {
+    return;
+  }
+  game->gpu_vk.s_overlay_bound = 1;
+  int ow = 0, oh = 0;
+  gpu_vk_present_sink_size(&ow, &oh);
+  overlay_glue_init(game, s_win, s_dev, s_headless ? PRESENT_IMG_FMT : s_swap_fmt, ow, oh);
+}
+
+void init_gpu_device(Game *game) {
   s_inited = 1;
   // SDL_GPU requires the video subsystem even headless (the device is created against it; we just don't
   // open a window or claim a swapchain).
@@ -1110,7 +1141,11 @@ void init_gpu(Game *game) {
     SDL_WindowFlags flags = fullscreen ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE;
     // HostIdentity::windowTitle — never a game name in the framework. The fallback is deliberately
     // self-evidently wrong: a port that forgets to set it must look untitled, not look like Tomba!2.
-    const char *declaredTitle = game->hostIdentity().windowTitle;
+    // A HOST that owns the window owns its name (psxport::HostPresentation::setWindowTitle): the
+    // window is created by whichever Game comes first, which in a selector-then-title product is the
+    // selector, and its identity would name the window for the whole run.
+    const char *hostTitle = gdev().s_window_title;
+    const char *declaredTitle = hostTitle != nullptr ? hostTitle : game->hostIdentity().windowTitle;
     const char *title = declaredTitle ? declaredTitle : "psxport (untitled game)";
     s_win = SDL_CreateWindow(title, PRESENT_WINDOW_W, PRESENT_WINDOW_H, flags);
     GPUCHK(s_win, "SDL_CreateWindow");
@@ -1181,15 +1216,6 @@ void init_gpu(Game *game) {
   create_3d_pipelines(); // the native 3D/textured raster pipelines — windowed AND headless
   lucent::info(
       "gpu_vk", "{} renderer up (VRAM {}x{} RG8 = PSX 1555)", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
-  // RmlUi mod/debug overlay. Brought up in BOTH legs: this used to be `if (!s_headless)`, which made
-  // the overlay's very EXISTENCE a property of the window — so every headless instrument was
-  // structurally blind to it, and a user-reported dead overlay could not be diagnosed at all without
-  // taking the user's screen (spyro issue #52). The window is an output sink, not a mode
-  // (docs/workspace/PROTOCOL.md), so the overlay takes the SINK's size and the format of the pass it will
-  // record into, and `s_win` (NULL headless) is passed only for input translation.
-  int ow = 0, oh = 0;
-  gpu_vk_present_sink_size(&ow, &oh);
-  overlay_glue_init(game, s_win, s_dev, s_headless ? PRESENT_IMG_FMT : s_swap_fmt, ow, oh);
 }
 
 static void poll_quit(Game *game) {
@@ -2120,9 +2146,7 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) {
     return;
   }
-  if (!s_inited) {
-    init_gpu(game);
-  }
+  init_gpu(game);
   // Present the framebuffer extent the renderer owns. Do not infer the screen type from this
   // field's primitive census: a persistent 3D composition may legitimately submit no world geometry
   // while it is paused or updating only VRAM, and its extent must not change underneath it.
@@ -2498,9 +2522,7 @@ void gpu_vk_present_image(Core *core, const uint8_t *rgba, int iw, int ih, float
   if (!gpu_vk_enabled() || iw <= 0 || ih <= 0) {
     return;
   }
-  if (!s_inited) {
-    init_gpu(game);
-  }
+  init_gpu(game);
   img_make_tex(iw, ih);
   if (fade < 0.0f) {
     fade = 0.0f;
@@ -3556,9 +3578,7 @@ void GpuVkState::tritest() {
     return;
   }
   s_headless = 1; // force offscreen — no window/swapchain
-  if (!s_inited) {
-    init_gpu(game);
-  }
+  init_gpu(game);
   const int TW = 320, TH = 240; // 4:3 offscreen target (so present's letterbox is full-viewport)
 
   // Offscreen RGBA8 color target + its present pipeline + a download buffer.

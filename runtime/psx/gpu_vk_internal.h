@@ -88,6 +88,11 @@ struct GpuVkState {
   SDL_GPUTransferBuffer *s_semi_xfer[GGS_NUM_BLEND_MODES] = {};
   int s_have_3d = 0;     // THIS Game's targets created
   void ensure_targets(); // lazy target creation (device must be inited)
+  // THIS Game's RmlUi overlay has been glued to the process presentation device. Per-GAME, not
+  // per-device: a host that keeps ONE window and ONE device across sessions (psxport::HostPresentation)
+  // runs a NEW Game after every session, and each one's overlay must bind itself to that same device.
+  // It is the per-Game half of init_gpu and the reason init_gpu is no longer "run once per process".
+  int s_overlay_bound = 0;
 
   // ---- THE PRESENTED PICTURE (sink-independent) -------------------------------------------------------
   // The composite that the PLAYER sees — letterboxed, faded, source-selected, 24bpp-decoded — rendered
@@ -424,6 +429,7 @@ struct GpuVkState {
 // SDL_GPU device up for `game` (once per Game), and submit a command buffer through the GPU-fault latch.
 int gpu_vk_enabled(void); // is the VK backend the active renderer
 void init_gpu(Game *game);
+void init_gpu_device(Game *game);
 bool gpu_submit(SDL_GPUCommandBuffer *cmd, const char *where);
 
 #endif // GPU_GPU_INTERNAL_H

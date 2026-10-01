@@ -14,7 +14,18 @@ HostIdentity Game::hostIdentity() const {
   return declared ? *declared : HostIdentity{};
 }
 
-Game::Game() {
+Game::Game() : ownedGpuDevice(std::make_unique<GpuDevice>()), gpu_dev(*ownedGpuDevice) {
+  wireRuntimeMembers();
+}
+
+// A Game that presents through a device the caller owns. Nothing here may create or release one: the
+// device outlives this Game by contract, and the process claim below points at it exactly as it would
+// for a self-owning Game.
+Game::Game(GpuDevice &presentation) : gpu_dev(presentation) {
+  wireRuntimeMembers();
+}
+
+void Game::wireRuntimeMembers() {
   // THE PRODUCER-CENSUS ARM, from PSXPORT_PRODUCERS. This used to be assigned only inside
   // native_boot_run, which direct-boot runtimes (Tekken 3's bootInit dispatch) never execute, so the
   // knob silently did nothing there. Game construction is on EVERY runtime's route — native_boot_run
@@ -100,7 +111,10 @@ Game::~Game() {
   // per-Game retained texture while its owning SDL device is still alive; GpuVkState's destructor then
   // only clears the already-empty policy state.
   gpu_vk.release_native_composite_capture();
-  if (GpuDevice::sInstance == &gpu_dev) {
+  // Only a Game that OWNS the device releases the process claim. A Game presenting through a
+  // host-owned device must leave it: the host outlives this Game and every later session's Game will
+  // claim the very same device.
+  if (ownedGpuDevice && GpuDevice::sInstance == &gpu_dev) {
     GpuDevice::sInstance = nullptr;
   }
 }

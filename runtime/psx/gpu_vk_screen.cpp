@@ -18,9 +18,7 @@ void GpuVkState::present_screen() {
     return;
   }
   GpuDevice &device = *GpuDevice::sInstance;
-  if (!device.s_inited) {
-    init_gpu(game);
-  }
+  init_gpu(game);
   overlay_glue_frame_begin(&game->core);
   int w = 0, h = 0;
   gpu_vk_present_sink_size(&w, &h);
@@ -48,9 +46,12 @@ void GpuVkState::present_screen() {
   show_present_image(cmd, false); // consumes cmd
 }
 
+// Bring the window/device (and the windowed overlay) up now rather than on the first present, so a
+// host-only screen can create its UI before its first frame. Idempotent per device AND per Game, so
+// every session in a host-lifetime-window product can call it; no-op when the GPU is disabled.
 void gpu_vk_ensure_device(Core *core) {
-  if (gpu_vk_enabled() && !GpuDevice::sInstance->s_inited) {
-    init_gpu(core->game);
+  if (gpu_vk_enabled()) {
+    init_gpu(core ? core->game : nullptr);
   }
 }
 

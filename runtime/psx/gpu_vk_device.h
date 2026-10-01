@@ -34,6 +34,10 @@ public:
   // ---- window / device / swapchain ----
   SDL_Window *s_win = nullptr;
   SDL_GPUDevice *s_dev = nullptr;
+  // The window's title, when a HOST that owns the window named it (psxport::HostPresentation). Null
+  // means "name the window after the first Game that brings the device up", which is what every
+  // one-Game-per-process product gets.
+  const char *s_window_title = nullptr;
   SDL_GPUTextureFormat s_swap_fmt = SDL_GPU_TEXTUREFORMAT_INVALID;
 
   // (per-Game render TARGETS — the guest-VRAM image, snapshot, depth, color intermediate and vertex

@@ -16,7 +16,7 @@
 #include "game_runtime.h"                // GameRuntime + per-Game polymorphic behavior products
 #include "gpu_native_internal.h"         // GpuState — the native GPU's per-instance render machine state
 #include "gpu_perf.h"                    // class GpuPerf — per-frame CPU phase profiler (`debug perf`)
-#include "gpu_vk_device.h"               // class GpuDevice — the SDL3 GPU host window/device (first Game claims it)
+#include "gpu_vk_device.h"               // class GpuDevice — the SDL3 GPU host window/device (this or the host's)
 #include "gpu_vk_internal.h"             // GpuVkState — the Vulkan present backend's per-instance render state
 #include "gte_state.h"                   // GteRegs — per-instance GTE (COP2) register file (Beetle gte.c)
 #include "guest_widescreen_projection.h" // title-owned guest projection + latched presentation extent
@@ -39,6 +39,7 @@
 #include "xa_state.h"                    // XaState  — per-instance native XA-ADPCM CD-audio streamer (xa_stream.c)
 
 class FrameLoopShell;
+#include <memory>
 #include <setjmp.h>
 #include <stdint.h>
 
@@ -66,13 +67,26 @@ public:
   Sio0 sio; // controller port (SIO0) hardware: the pad protocol and its transfer/ack deadlines
   DmaCallbackRegistry dmaCallbacks;
   Pad pad;
-  Repl repl;                   // interactive REPL driver + title-consumed requests (repl.cpp)
-  Fmv fmv;                     // native .STR movie player (native_fmv.cpp)
-  BootStub stub;               // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
-  PcScheduler pcSched;         // native cooperative task scheduler (game/core/pc_scheduler.cpp)
-  GpuState gpu;                // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
-  GpuVkState gpu_vk;           // Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
-  GpuDevice gpu_dev;           // SDL3 GPU host device/window/pipelines (ONE per process; first Game claims it)
+  Repl repl;           // interactive REPL driver + title-consumed requests (repl.cpp)
+  Fmv fmv;             // native .STR movie player (native_fmv.cpp)
+  BootStub stub;       // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
+  PcScheduler pcSched; // native cooperative task scheduler (game/core/pc_scheduler.cpp)
+  GpuState gpu;        // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
+  GpuVkState gpu_vk;   // Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
+
+  // The SDL3 GPU host window/device/pipelines: the ONE presentation device of the process. A Game
+  // presents through it; it does not have to OWN it. A host that runs several Games in one process — a
+  // title selector, then a title, then the selector again — passes the same device to every one of them
+  // (see psxport::HostPresentation), because a window destroyed and re-created between sessions is what
+  // made the selector look like a separate program. `Game()` keeps the old behaviour and owns a device
+  // of its own, and `Game(GpuDevice&)` presents through one the caller owns and outlives this Game.
+  //
+  // `ownedGpuDevice` is declared FIRST so it is constructed before the reference binds to it, and LAST
+  // so it is destroyed last: a self-owning Game's device outlives every per-Game GPU target rather than
+  // the other way round.
+  std::unique_ptr<GpuDevice> ownedGpuDevice;
+  GpuDevice &gpu_dev;
+
   RenderQueue rq;              // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
   FramePresenter presentation; // non-temporal current-frame fence, present and pacing owner
   // The screen fade of the present in flight. A fade is a present-time composite rather than a
@@ -130,11 +144,17 @@ public:
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_vk.game->core). Set once here so no file-scope global is needed.
   Game();
+  // Present through a presentation device the CALLER owns and outlives this Game. The device must
+  // already be the process device (or become it through the sInstance claim below); this Game never
+  // releases it, so every Game in a host-lifetime-window product shares one window and one device.
+  explicit Game(GpuDevice &presentation);
   ~Game();
   // Return every process-wide peripheral bind point to its default (see game.cpp).
   void releaseHardwareBindings();
 
 private:
+  // The body both constructors share: the wiring that does not depend on which device this Game uses.
+  void wireRuntimeMembers();
   friend class FrameLoopShell;
   bool productFrameLoopPrepared_ = false;
 };
