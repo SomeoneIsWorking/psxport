@@ -256,6 +256,42 @@ int cdc_post_data_ready(CdcState *s) {
   return 1;
 }
 
+int cdc_post_data_ready_after_read(CdcState *s, uint32_t first_lba, uint32_t sectors, uint8_t mode) {
+  if (sectors == 0 || s->read_completion_n >= 4) {
+    return 0;
+  }
+  if (!s->tick_now) {
+    return cdc_post_data_ready(s);
+  }
+  const uint64_t now_ticks = s->tick_now(s->tick_context);
+  const uint64_t start = s->read_completion_n ? s->read_completion_deadline_ticks[s->read_completion_n - 1] : now_ticks;
+  s->read_completion_deadline_ticks[s->read_completion_n++] =
+      (start > now_ticks ? start : now_ticks) + deterministic_seek_time(s, first_lba) +
+      uint64_t{sectors} * cd_drive_sector_period_cpu_ticks(mode);
+  s->loc_lba = first_lba + sectors;
+  s->stat |= kCdlStatStandby; // the spindle is up once a read has been served
+  return 1;
+}
+
+// Announce every owed read completion whose drive time has elapsed, oldest first. A full response queue
+// leaves the rest owed for the next service rather than dropping one.
+static int service_read_completions(CdcState *s) {
+  if (s->read_completion_n == 0 || !s->tick_now) {
+    return 0;
+  }
+  const uint64_t now_ticks = s->tick_now(s->tick_context);
+  int announced = 0;
+  while (s->read_completion_n > 0 && now_ticks >= s->read_completion_deadline_ticks[0] && cdc_post_data_ready(s)) {
+    lucent::debug("cdcpace", "announced owed read completion now={} queue_empty={}", now_ticks, q_empty(s));
+    s->read_completion_n--;
+    for (int i = 0; i < s->read_completion_n; i++) {
+      s->read_completion_deadline_ticks[i] = s->read_completion_deadline_ticks[i + 1];
+    }
+    announced = 1;
+  }
+  return announced;
+}
+
 static void cancel_drive_event(CdcState *s) {
   if (!s->drive_event_armed) {
     return;
@@ -595,14 +631,22 @@ static void complete_command(CdcState *s) {
 }
 
 int cdc_next_deadline_ticks(const CdcState *s, uint64_t *absoluteTicks) {
-  const bool drive = s->drive_event_armed != 0;
-  const bool command = s->command_event_armed != 0;
-  if (!drive && !command) {
+  // Every armed deadline, so a Lightrec segment ends at the earliest of them: the drive's next sector,
+  // the command phase, and the oldest paced read completion (the completion must be announced when the
+  // drive is done, not at the next unrelated service).
+  uint64_t earliest = 0;
+  bool armed = false;
+  const auto consider = [&](bool isArmed, uint64_t deadline) {
+    if (isArmed && (!armed || deadline < earliest)) {
+      earliest = deadline;
+      armed = true;
+    }
+  };
+  consider(s->drive_event_armed != 0, s->drive_deadline_ticks);
+  consider(s->command_event_armed != 0, s->command_deadline_ticks);
+  consider(s->read_completion_n != 0, s->read_completion_deadline_ticks[0]);
+  if (!armed) {
     return 0;
-  }
-  uint64_t earliest = drive ? s->drive_deadline_ticks : s->command_deadline_ticks;
-  if (drive && command) {
-    earliest = std::min(s->drive_deadline_ticks, s->command_deadline_ticks);
   }
   *absoluteTicks = earliest;
   return 1;
@@ -613,6 +657,7 @@ int cdc_drive_service(CdcState *s) {
   // update. Preserve that ordering so an exact tie makes INT1 current and queues command INT3.
   const uint64_t irq_sequence_before = s->irq_sequence;
   service_drive_event(s);
+  service_read_completions(s);
   const CdcCommandEvent event = cdc_command_service(s, q_empty(s));
   if (event == CdcCommandEvent::kExecute) {
     cdc_command_finish_execution(s, exec_command(s, s->pending_command));

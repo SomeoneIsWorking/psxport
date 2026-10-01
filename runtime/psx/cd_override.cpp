@@ -547,7 +547,8 @@ void cd_read_stock_sync(Core *c) {
                                      .bytes = sectors * bytes});
   // The read is finished and its data is in guest RAM; a guest that chains reads from its ready callback
   // is owed the completion its interrupt handler would have delivered (cd_stock_read_completion.h).
-  psx::cd::raiseStockReadCompletion(*c, sectors);
+  psx::cd::raiseStockReadCompletion(
+      *c, static_cast<uint32_t>(cd.setloc_lba) - sectors, sectors, static_cast<uint8_t>(mode));
   c->r[V0] = 1; // bool: success
 }
 

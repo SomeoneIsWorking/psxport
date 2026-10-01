@@ -287,9 +287,48 @@ void test_setmode_selects_single_and_double_speed_deadlines(void) {
   CHECK_EQ(twice.drive_deadline_ticks, 225'792u);
 }
 
+void test_paced_read_completion_is_owed_until_the_drive_time_elapses(void) {
+  DiscState disc{};
+  CdcTestClock clock{};
+  CdcState cdc{};
+  cdc_state_init(&cdc);
+  cdc.disc = &disc;
+  cdc_test_bind(&cdc, &clock);
+
+  const uint64_t period = cd_drive_sector_period_cpu_ticks(0x80);
+  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5000, 3, 0x80), 1);
+  CHECK_EQ(pending_irq_type(&cdc), 0); // owed, not announced: the guest still sees the read in flight
+  const uint64_t due = cdc.read_completion_deadline_ticks[0];
+  CHECK(due > 3 * period);      // the head's seek is part of the read, not just the sector time
+  CHECK_EQ(cdc.loc_lba, 5003u); // and the head ends after the last sector read
+
+  clock.ticks = due - 1;
+  CHECK_EQ(cdc_drive_service(&cdc), 0);
+  CHECK_EQ(pending_irq_type(&cdc), 0);
+
+  clock.ticks = due;
+  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(pending_irq_type(&cdc), 1);
+  CHECK_EQ(cdc.read_completion_n, 0);
+
+  // A near read costs less than the long seek did, and queues serially behind the one still owed.
+  acknowledge_irq(&cdc);
+  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5003, 1, 0x80), 1);
+  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5004, 1, 0x80), 1);
+  CHECK(cdc.read_completion_deadline_ticks[0] - clock.ticks < due);
+  CHECK(cdc.read_completion_deadline_ticks[1] >= cdc.read_completion_deadline_ticks[0] + period);
+
+  // Negatives: a zero-sector read owes nothing, and a fifth outstanding completion is refused.
+  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5005, 0, 0x80), 0);
+  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5005, 1, 0x80), 1);
+  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5006, 1, 0x80), 1);
+  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5007, 1, 0x80), 0);
+}
+
 } // namespace
 
 int main() {
+  RUN(paced_read_completion_is_owed_until_the_drive_time_elapses);
   RUN(first_sector_waits_one_drive_period);
   RUN(partial_fifo_does_not_block_following_sector_event);
   RUN(stopped_controller_does_not_announce_sector);

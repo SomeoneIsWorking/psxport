@@ -55,9 +55,11 @@ void announceStockReadLanding(Core &core, const StockReadLanding &landing);
 // Does this title owe its guest a completion for every successful stock CdRead?
 [[nodiscard]] bool stockReadOwesCompletion(const Core &core);
 
-// Post the completion for one successful stock read of `sectors` sectors. Returns true only when a
-// response was queued. A read that moved no sectors completed nothing and posts nothing.
-bool raiseStockReadCompletion(Core &core, std::uint32_t sectors);
+// Owe the completion for one successful stock read of `sectors` sectors from `firstLba` at CdRead mode `mode`.
+// The controller announces it once the drive would have spent the read's time (`cdc_post_data_ready_after_read`),
+// so the guest sees the read in flight until then. Returns true only when the completion is owed. A read that
+// moved no sectors completed nothing and owes nothing.
+bool raiseStockReadCompletion(Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode);
 
 // Set I_MASK bit 2 through the device, preserving every bit the guest already enabled, and ask for an
 // interrupt poll because unmasking can make a latched bit deliverable. Returns true when the bit changed.

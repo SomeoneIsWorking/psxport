@@ -10,6 +10,7 @@
 #include "game_runtime.h"
 #include "guest_call.h"
 #include "hle.h"
+#include "irq_edge.h"
 #include "platform_hle.h"
 
 #include <cstdlib>
@@ -318,7 +319,17 @@ void Hle::irqPoll(Core *c) {
   // the guest's own ready callback must be able to make BIOS calls and re-enter the CD owner without
   // the delivery re-entering itself. The callback's OWN re-entrant polls find `in_irq` set again
   // for its whole extent, which is what keeps a chain of sectors from delivering twice.
-  if (cd_delivery_path && !claimed) {
+  //
+  // A CLAIM IS NOT A CLAIM OF EVERY SOURCE. The walk above stops at the first element whose verifier
+  // accepts, but a verifier names ONE source: Spyro 3's element (verifier 0x8005FC90, handler
+  // 0x8005FCF8) tests the VBlank bit and writes I_STAT with 0x77F, which leaves bit 2 alone. On hardware
+  // the BIOS services each pending source separately, so a CD data-ready that arrived with that VBlank
+  // is still owed. Read "owed" from the same place hardware does: the I_STAT bit the claiming handler
+  // did not acknowledge. A handler that serviced CD acknowledged it (and consumed the controller
+  // response, which `deliverCdReadyCompletionOnInterrupt` independently requires), so nothing is
+  // delivered twice.
+  const bool cd_bit_unserviced = (c->irqStatLatch() & i_mask & (1u << IRQ_BIT_CD)) != 0u;
+  if (cd_delivery_path && (!claimed || cd_bit_unserviced)) {
     in_irq = 0; // the chain walk's handler has RETURNED; this is a separate handler
     const CdReadyDelivery delivered = deliverCdReadyCompletionOnInterrupt(*c);
     if (delivered == CdReadyDelivery::GuestExited) {

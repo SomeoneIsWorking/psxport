@@ -9,6 +9,7 @@
 // The control is the same guest loop with NO armed deadline: it must still run its whole budget (the
 // cap must not shorten a segment for a device that owes nothing), and the delivery must not happen.
 #include "cd_control.h"
+#include "cd_drive_timing.h"
 #include "cd_stock_read_completion.h"
 #include "cdc_state.h"
 #include "core.h"
@@ -157,7 +158,23 @@ static void test_the_device_event_horizon_is_absent_exact_and_zero_when_due() {
   CHECK_EQ(*fixture.game->timing.ticksUntilDeviceEvent(), 1u);
 }
 
+// A paced stock-read completion is a device deadline like any other: the executor must end its segment there
+// so the completion is announced when the drive is done. Without it the horizon would be absent while the
+// completion is owed, and a spin with no device access would run its whole budget past the due time.
+static void test_an_owed_read_completion_is_a_device_event() {
+  Fixture fixture;
+  CHECK(!fixture.game->timing.ticksUntilDeviceEvent().has_value());
+  CHECK_EQ(cdc_post_data_ready_after_read(&fixture.game->cdc, 500, 4, 0x80), 1);
+  const auto remaining = fixture.game->timing.ticksUntilDeviceEvent();
+  CHECK(remaining.has_value());
+  CHECK(*remaining > 4u * cd_drive_sector_period_cpu_ticks(0x80));
+  // With a drive deadline sooner than the completion, the sooner one wins.
+  cdc_begin_read(&fixture.game->cdc, 100);
+  CHECK(*fixture.game->timing.ticksUntilDeviceEvent() < *remaining);
+}
+
 int main() {
+  RUN(an_owed_read_completion_is_a_device_event);
   RUN(a_ram_spin_receives_the_interrupt_a_controller_deadline_raises);
   RUN(with_no_armed_deadline_the_spin_runs_its_whole_budget_and_delivers_nothing);
   RUN(the_device_event_horizon_is_absent_exact_and_zero_when_due);

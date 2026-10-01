@@ -28,25 +28,24 @@ void announceStockReadLanding(Core &core, const StockReadLanding &landing) {
   core.game->runtime->stockCdReadLanded(core, landing);
 }
 
-bool raiseStockReadCompletion(Core &core, std::uint32_t sectors) {
+bool raiseStockReadCompletion(Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode) {
   if (sectors == 0u || !stockReadOwesCompletion(core)) {
     return false;
   }
-  if (cdc_post_data_ready(&core.game->cdc) == 0) {
+  if (cdc_post_data_ready_after_read(&core.game->cdc, firstLba, sectors, mode) == 0) {
     lucent::error("cd",
                   "stock CdRead of {} sector(s) completed but its completion could NOT be queued: the controller "
                   "response queue is full, so the guest's ready callback will not run for this read",
                   sectors);
     return false;
   }
-  // The controller raised an edge; fold it into I_STAT now and ask for an interrupt poll, exactly as the
-  // delivery does after its own acknowledge, so the completion is visible at the next guest function entry
-  // instead of waiting for an unrelated I_STAT access.
-  core.irqStatLatch();
-  core.pending_work |= Core::PW_IRQ;
+  // The completion is owed to the controller's drive clock, not announced yet: `Timing` services it as
+  // guest time passes and latches the edge it raises. Announcing at once made the read finish before the
+  // guest could observe it in flight (see cd_stock_read_completion.h).
   const Hle &hle = core.game->hle;
   lucent::debug("cdirq",
-                "stock CdRead of {} sector(s) queued its data-ready completion (I_STAT=0x{:03X} I_MASK=0x{:03X} "
+                "stock CdRead of {} sector(s) owes its data-ready completion after the drive time (I_STAT=0x{:03X} "
+                "I_MASK=0x{:03X} "
                 "interrupts {}, slot holds 0x{:08X})",
                 sectors,
                 hle.i_stat,

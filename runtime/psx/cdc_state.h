@@ -48,6 +48,8 @@ typedef struct CdcState {
   uint8_t command_args[16];       // arguments consumed by the active command
   uint8_t command_arg_n;
   uint64_t command_deadline_ticks;
+  uint8_t read_completion_n;                  // owed read completions not yet announced (<= 4)
+  uint64_t read_completion_deadline_ticks[4]; // absolute announce time of each, oldest first
   void *tick_context;
   CdcTickNowFn tick_now;
   CdcIrqEnt q[8];                          // pending-interrupt queue                     (was s_q)
@@ -79,8 +81,8 @@ void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now);
 // Service due drive and command events on the guest thread. Returns 1 only when a response became
 // current and raised a new controller IRQ edge; an early wake leaves existing deadlines armed.
 int cdc_drive_service(CdcState *s);
-// Absolute guest-instruction timestamp of the earliest armed drive or command deadline. Returns 0,
-// writing nothing, when no deadline is armed. The deadline domain is the injected tick source's.
+// Absolute guest-instruction timestamp of the earliest armed drive, command or paced read-completion deadline. Returns
+// 0, writing nothing, when no deadline is armed. The deadline domain is the injected tick source's.
 int cdc_next_deadline_ticks(const CdcState *s, uint64_t *absoluteTicks);
 // Read the current controller response type without consuming its response FIFO. Zero means the
 // queue is empty. Stream callback owners use this to dispatch only for a real INT1 data-ready
@@ -91,6 +93,14 @@ uint8_t cdc_current_irq_type(const CdcState *s);
 // work it performed itself (a synchronous stock CdRead). Returns 0, queuing nothing, when the response
 // queue is full, so the caller can refuse to count a completion that does not exist.
 int cdc_post_data_ready(CdcState *s);
+// The same completion, but announced only after the drive would have finished reading `sectors` sectors from
+// `first_lba` at the speed `mode` selects (the CdRead mode byte): the head's seek from where the previous read
+// left it (spin-up included on a stopped motor), then one sector period per sector. Reads queue serially, and the
+// head ends at the sector after the read. Until the deadline the guest's own status words still say a read is in
+// flight, which is what a loader that polls "is the drive busy" depends on. Returns 0, owing nothing, when
+// `sectors` is 0 or four completions are already owed. With no tick source bound there is no drive clock to wait
+// on, so it falls back to cdc_post_data_ready.
+int cdc_post_data_ready_after_read(CdcState *s, uint32_t first_lba, uint32_t sectors, uint8_t mode);
 // MMIO 0x1F801800-3 register model — the instance is explicit (mem.cpp passes &game->cdc).
 uint32_t cdc_read(CdcState *s, uint32_t p);
 void cdc_write(CdcState *s, uint32_t p, uint8_t v);

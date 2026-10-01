@@ -14,6 +14,7 @@
 //   * a completion the arm cannot deliver is left OWED, because these completions chain and a
 //     consumed-but-undelivered one ends the chain — the defect the DMA arm's own comments record.
 #include "cd_control.h"
+#include "cd_drive_timing.h"
 #include "cd_ready_delivery.h"
 #include "cd_stock_read_completion.h"
 #include "cdc_state.h"
@@ -38,6 +39,7 @@ constexpr uint32_t kVerifier = 0x80012104u;
 constexpr uint32_t kInterruptHandler = 0x80012108u;
 constexpr uint32_t kBareInterruptHandler = 0x80012110u;
 constexpr uint32_t kChainCallback = 0x80012114u;
+constexpr uint32_t kAckingInterruptHandler = 0x80012118u;
 constexpr uint32_t kInterruptElement = 0x80012200u;
 constexpr uint32_t kIStat = 0x1F801070u;
 constexpr uint32_t kIMask = 0x1F801074u;
@@ -101,7 +103,24 @@ void bareInterruptHandler(Core *) {
   ++interruptHandlerCalls;
 }
 
+// A guest element that claims the interrupt and acknowledges the CD bit in I_STAT, but never reads or
+// acknowledges the controller: it serviced the source as far as the interrupt controller can tell.
+void ackingInterruptHandler(Core *core) {
+  ++interruptHandlerCalls;
+  core->mem_w32(kIStat, 0x7FBu);
+}
+
 constexpr uint32_t kReadBuffer = 0x80130000u;
+
+// Let the drive spend the time a read of `sectors` sectors takes at the read's mode (0x80, double speed), seek
+// included (half a second covers the longest seek), which is when a stock read's completion is owed to the guest. The
+// completion is paced by the drive clock, so a test that wants it current must advance that clock through the same
+// owner the guest's own execution advances.
+void elapseReadTime(Game &game, uint32_t sectors) {
+  game.timing.advanceGuestInstructionTicks(
+      static_cast<uint32_t>(kNominalPsxCpuHz / 2u + sectors * cd_drive_sector_period_cpu_ticks(0x80u)));
+}
+
 int chainRemaining = 0;
 
 // The guest's ready callback of a chained loader: on every completion it starts the NEXT read, until the
@@ -117,18 +136,21 @@ void chainingCallback(Core *core) {
     core->r[5] = kReadBuffer;
     core->r[6] = 0x80u;
     cd_read_stock_sync(core);
+    elapseReadTime(*core->game, 1);
   }
 }
 
 void installCallback(Game &game) {
   const auto image = game.core.imageCatalog().activate(
-      "test-main", {kCallback & 0x1FFFFFFFu, (kChainCallback & 0x1FFFFFFFu) + 4u}, 1u);
+      "test-main", {kCallback & 0x1FFFFFFFu, (kAckingInterruptHandler & 0x1FFFFFFFu) + 4u}, 1u);
   CHECK(game.core.nativeDispatcher().install({{image, kCallback}, "cd-ready-callback", callback}));
   CHECK(game.core.nativeDispatcher().install({{image, kVerifier}, "cd-interrupt-verifier", interruptVerifier}));
   CHECK(game.core.nativeDispatcher().install({{image, kInterruptHandler}, "cd-interrupt-handler", interruptHandler}));
   CHECK(
       game.core.nativeDispatcher().install({{image, kBareInterruptHandler}, "cd-bare-handler", bareInterruptHandler}));
   CHECK(game.core.nativeDispatcher().install({{image, kChainCallback}, "cd-chain-callback", chainingCallback}));
+  CHECK(game.core.nativeDispatcher().install(
+      {{image, kAckingInterruptHandler}, "cd-acking-handler", ackingInterruptHandler}));
 }
 
 class DirectRuntime final : public GameRuntime {
@@ -389,10 +411,12 @@ void test_guest_element_keeps_its_own_single_delivery() {
   delete game.release();
 }
 
-// THE ORDER GATE, on its own: the guest's element claimed the interrupt, so the framework's built-in
-// CD entry does not run -- even with the completion still sitting in the controller. Removing the
-// `!claimed` condition from `Hle::irqPoll` delivers a second time here, and the test says so.
-void test_a_claiming_guest_element_still_blocks_the_framework_arm() {
+// A CLAIM IS PER SOURCE. A guest element that claimed the interrupt and left the CD bit in I_STAT
+// unacknowledged did not service the CD-ROM, so the framework's built-in entry still delivers the
+// completion. This is Spyro 3's shape, measured: its only element (verifier 0x8005FC90, handler
+// 0x8005FCF8) is VBlank/pad and writes I_STAT with 0x77F, which leaves bit 2 alone; with the claim
+// blocking the built-in entry, every CD completion queued behind a VBlank was lost.
+void test_a_claiming_element_that_leaves_the_cd_bit_set_does_not_block_the_framework_arm() {
   auto game = freshDirectGame();
   game->core.mem_w32(kInterruptElement + 4u, kBareInterruptHandler);
   game->core.mem_w32(kInterruptElement + 8u, kVerifier);
@@ -405,9 +429,32 @@ void test_a_claiming_guest_element_still_blocks_the_framework_arm() {
 
   CHECK_EQ(verifierCalls, 1);
   CHECK_EQ(interruptHandlerCalls, 1);
+  CHECK_EQ(callbackCalls, 1);
+  CHECK_EQ(game->hle.cd_ready_delivered, 1u);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  delete game.release();
+}
+
+// THE ORDER GATE, on its own, and the negative of the test above: the guest's element claimed the
+// interrupt AND acknowledged the CD bit, so the source was serviced and the framework's built-in CD
+// entry does not run -- even with the response still sitting in the controller. Removing the
+// `cd_bit_unserviced` test from `Hle::irqPoll` (delivering after every claim) delivers a second time here.
+void test_a_claiming_guest_element_that_acknowledges_the_cd_bit_blocks_the_framework_arm() {
+  auto game = freshDirectGame();
+  game->core.mem_w32(kInterruptElement + 4u, kAckingInterruptHandler);
+  game->core.mem_w32(kInterruptElement + 8u, kVerifier);
+  game->hle.irqEnq(2u, kInterruptElement);
+  armCdLine(*game);
+  queueDataReady(*game, 1);
+  latchCdLine(*game);
+
+  game->hle.irqPoll(&game->core);
+
+  CHECK_EQ(verifierCalls, 1);
+  CHECK_EQ(interruptHandlerCalls, 1);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(game->hle.cd_ready_delivered, 0u);
-  CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u); // untouched, because the guest took the interrupt
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u); // untouched, because the guest serviced the source
   delete game.release();
 }
 
@@ -607,6 +654,7 @@ void stockRead(Game &game, uint32_t sectors) {
   game.core.r[6] = 0x80u;
   cd_read_stock_sync(&game.core);
   CHECK_EQ(game.core.r[2], 1u);
+  elapseReadTime(game, sectors);
 }
 
 std::unique_ptr<Game> freshStockReadGame(bool declareCompletion, uint8_t status) {
@@ -742,15 +790,28 @@ void test_a_failed_or_empty_read_owes_nothing() {
   delete game.release();
 }
 
-// A completion that cannot be queued is reported, not counted: nothing is posted and nothing is owed.
-void test_a_full_controller_queue_refuses_the_completion() {
+// Completions are OWED to the drive clock, and the owed set is bounded: a fifth outstanding completion is
+// refused and reported rather than counted.
+void test_the_owed_completion_ring_refuses_a_fifth() {
   auto game = freshStockReadGame(true, kCdlCompleteCode);
-  int posted = 0;
-  while (psx::cd::raiseStockReadCompletion(game->core, 1)) {
-    ++posted;
+  int owed = 0;
+  while (psx::cd::raiseStockReadCompletion(game->core, 100u, 1, 0x80u)) {
+    ++owed;
   }
-  CHECK_EQ(posted, 7); // the 8-entry ring holds 7
-  CHECK_EQ(psx::cd::raiseStockReadCompletion(game->core, 1), false);
+  CHECK_EQ(owed, 4);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u); // owed, not yet announced: the drive has not run
+  delete game.release();
+}
+
+// A full controller response queue at the announce deadline leaves the completion OWED, not dropped: it is
+// announced as soon as the guest drains the queue.
+void test_a_full_controller_queue_leaves_the_completion_owed() {
+  auto game = freshStockReadGame(true, kCdlCompleteCode);
+  while (cdc_post_data_ready(&game->cdc) != 0) {
+  }
+  CHECK(psx::cd::raiseStockReadCompletion(game->core, 100u, 1, 0x80u));
+  elapseReadTime(*game, 1);
+  CHECK_EQ(game->cdc.read_completion_n, 1);
   delete game.release();
 }
 
@@ -829,7 +890,8 @@ int main() {
   RUN(the_owner_declaration_is_the_gate);
   RUN(legacy_consumer_is_not_owned_by_the_interrupt);
   RUN(guest_element_keeps_its_own_single_delivery);
-  RUN(a_claiming_guest_element_still_blocks_the_framework_arm);
+  RUN(a_claiming_element_that_leaves_the_cd_bit_set_does_not_block_the_framework_arm);
+  RUN(a_claiming_guest_element_that_acknowledges_the_cd_bit_blocks_the_framework_arm);
   RUN(a_guest_element_runs_on_the_exception_stack);
   RUN(the_framework_cd_arm_runs_on_the_exception_stack);
   RUN(masked_cd_line_owes_the_completion);
@@ -845,7 +907,8 @@ int main() {
   RUN(host_pump_owner_gets_no_stock_read_completion);
   RUN(legacy_consumer_gets_no_stock_read_completion);
   RUN(a_failed_or_empty_read_owes_nothing);
-  RUN(a_full_controller_queue_refuses_the_completion);
+  RUN(the_owed_completion_ring_refuses_a_fifth);
+  RUN(a_full_controller_queue_leaves_the_completion_owed);
   RUN(a_chained_loader_completes_exactly_its_reads);
   RUN(a_whole_read_announces_its_landing_once_with_exact_bytes);
   RUN(a_failed_or_empty_read_announces_no_landing);
