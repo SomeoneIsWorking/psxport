@@ -67,7 +67,14 @@ extern "C" int test_fake_disc_read_sector(struct DiscState *, uint32_t, uint8_t 
   return 1;
 }
 
+// A one-track data disc: track 1 from LBA 0 for 45'000 sectors, so the lead-out is at 10:02.
+void install_one_track(DiscState *disc) {
+  disc->track_count = 1;
+  disc->tracks[0] = DiscTrackInfo{1, 0, 45'000, 150, 0, 0};
+}
+
 CdcState controller(DiscState *disc, CdcTestClock *clock) {
+  install_one_track(disc);
   CdcState cdc{};
   cdc.disc = disc;
   cdc_state_init(&cdc);
@@ -235,6 +242,123 @@ void test_command_queued_behind_current_irq_does_not_raise_an_early_edge(void) {
   CHECK_EQ(cdc.irq_edge, 1);
 }
 
+// A guest that masks the response types off (Spyro 3's disc check writes 0x18 to the interrupt-enable
+// register, issues GetTN and polls the flag register) must get its response WITHOUT a CPU interrupt
+// edge, or the title's libcd handler consumes the answer and records it against its own last command.
+void test_masked_response_is_polled_without_an_interrupt_edge(void) {
+  DiscState disc{};
+  CdcTestClock clock{};
+  CdcState cdc = controller(&disc, &clock);
+  select_bank(&cdc, 1);
+  cdc_write(&cdc, 0x1F801802u, 0x18u); // interrupt enable: response types 1-7 masked
+
+  issue_command(&cdc, 0x13);
+  service_at(&cdc, &clock, cdc_command_ack_delay_cpu_ticks(0));
+  CHECK_EQ(pending_irq_type(&cdc), 3); // the poll still sees the response
+  CHECK_EQ(cdc.irq_edge, 0);           // but the CPU line never rose
+  acknowledge_irq(&cdc);
+  CHECK_EQ(pending_irq_type(&cdc), 0);
+  CHECK_EQ(cdc.irq_edge, 0);
+
+  // Unmasking while a response is current asserts the line, which is a fresh edge.
+  issue_command(&cdc, 0x13);
+  service_at(&cdc, &clock, clock.ticks + cdc_command_ack_delay_cpu_ticks(0));
+  CHECK_EQ(cdc.irq_edge, 0);
+  select_bank(&cdc, 1);
+  cdc_write(&cdc, 0x1F801802u, 0x1Fu);
+  CHECK_EQ(cdc.irq_edge, 1);
+}
+
+void test_responses_interrupt_with_the_bios_enable_mask(void) {
+  DiscState disc{};
+  CdcTestClock clock{};
+  CdcState cdc = controller(&disc, &clock);
+  select_bank(&cdc, 1);
+  CHECK_EQ(cdc_read(&cdc, 0x1F801803u) & 0x1Fu, 0); // bank 1: flag register, nothing pending
+  select_bank(&cdc, 0);
+  CHECK_EQ(cdc_read(&cdc, 0x1F801803u) & 0x1Fu, 0x1Fu); // bank 0: enable register as the BIOS left it
+
+  issue_command(&cdc, 0x13);
+  service_at(&cdc, &clock, cdc_command_ack_delay_cpu_ticks(0));
+  CHECK_EQ(cdc.irq_edge, 1);
+}
+
+void execute(CdcState *cdc, CdcTestClock *clock, uint8_t command, int arguments) {
+  issue_command(cdc, command);
+  service_at(cdc, clock, clock->ticks + cdc_command_ack_delay_cpu_ticks(arguments));
+}
+
+// GetTN and GetTD answer from the disc's table of contents, not a fixed reply.
+void test_track_queries_answer_from_the_disc_toc(void) {
+  DiscState disc{};
+  CdcTestClock clock{};
+  CdcState cdc = controller(&disc, &clock);
+
+  execute(&cdc, &clock, 0x13, 0); // GetTN
+  CHECK_EQ(pending_irq_type(&cdc), 3);
+  CHECK_EQ(response_byte(&cdc), 0x02);
+  CHECK_EQ(response_byte(&cdc), 0x01);
+  CHECK_EQ(response_byte(&cdc), 0x01);
+  acknowledge_irq(&cdc);
+
+  push_parameter(&cdc, 0x00); // GetTD(0): the lead-out
+  execute(&cdc, &clock, 0x14, 1);
+  CHECK_EQ(pending_irq_type(&cdc), 3);
+  CHECK_EQ(response_byte(&cdc), 0x02);
+  CHECK_EQ(response_byte(&cdc), 0x10);
+  CHECK_EQ(response_byte(&cdc), 0x02);
+  acknowledge_irq(&cdc);
+
+  push_parameter(&cdc, 0x02); // GetTD(2): the disc has no track 2
+  execute(&cdc, &clock, 0x14, 1);
+  CHECK_EQ(pending_irq_type(&cdc), 5);
+  CHECK_EQ(response_byte(&cdc), 0x03);
+  CHECK_EQ(response_byte(&cdc), 0x10);
+}
+
+// Acknowledging clears the interrupt flag, not the results: a guest that acknowledges first and
+// reads the answer afterwards (Spyro 3's disc check) still reads it, until the next response
+// replaces it.
+void test_results_stay_readable_after_acknowledge(void) {
+  DiscState disc{};
+  CdcTestClock clock{};
+  CdcState cdc = controller(&disc, &clock);
+
+  execute(&cdc, &clock, 0x13, 0);
+  acknowledge_irq(&cdc);
+  CHECK_EQ(pending_irq_type(&cdc), 0);
+  CHECK((status(&cdc) & 0x20u) != 0); // RSLRRDY
+  CHECK_EQ(response_byte(&cdc), 0x02);
+  CHECK_EQ(response_byte(&cdc), 0x01);
+  CHECK_EQ(response_byte(&cdc), 0x01);
+  CHECK_EQ(status(&cdc) & 0x20u, 0);
+
+  execute(&cdc, &clock, 0x01, 0); // the next response replaces the results
+  acknowledge_irq(&cdc);
+  CHECK_EQ(response_byte(&cdc), 0x02);
+  CHECK_EQ(response_byte(&cdc), 0);
+}
+
+// Setloc 00:00:00 names LBA -150 in the lead-in; the seek is the short signed distance, not a
+// wrap-around across the whole 32-bit range.
+void test_seek_into_the_lead_in_is_a_short_signed_distance(void) {
+  DiscState disc{};
+  CdcTestClock clock{};
+  CdcState cdc = controller(&disc, &clock);
+  cdc.loc_lba = 0;
+  push_parameter(&cdc, 0x00);
+  push_parameter(&cdc, 0x00);
+  push_parameter(&cdc, 0x00);
+  execute(&cdc, &clock, 0x02, 3); // Setloc 00:00:00
+  acknowledge_irq(&cdc);
+
+  const uint64_t issued = clock.ticks;
+  execute(&cdc, &clock, 0x15, 0); // SeekL
+  CHECK_EQ(pending_irq_type(&cdc), 3);
+  acknowledge_irq(&cdc);
+  CHECK(cdc.command_deadline_ticks - issued < 33'868'800u); // well under one second
+}
+
 } // namespace
 
 int main() {
@@ -246,5 +370,10 @@ int main() {
   RUN(argument_count_is_checked_after_transfer);
   RUN(drive_event_wins_an_exact_command_deadline_tie);
   RUN(command_queued_behind_current_irq_does_not_raise_an_early_edge);
+  RUN(masked_response_is_polled_without_an_interrupt_edge);
+  RUN(track_queries_answer_from_the_disc_toc);
+  RUN(results_stay_readable_after_acknowledge);
+  RUN(seek_into_the_lead_in_is_a_short_signed_distance);
+  RUN(responses_interrupt_with_the_bios_enable_mask);
   return pt_summary();
 }

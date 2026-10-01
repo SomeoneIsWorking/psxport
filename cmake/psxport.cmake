@@ -144,6 +144,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cd_ready_delivery.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd_stock_read_completion.cpp
   ${PSXPORT_ROOT}/runtime/psx/stock_cd_work_area.cpp
+  ${PSXPORT_ROOT}/runtime/psx/disc_toc.cpp
   ${PSXPORT_ROOT}/runtime/psx/stock_cd_response.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd_drive_timing.cpp
   ${PSXPORT_ROOT}/runtime/psx/cdc_command_phase.cpp

@@ -37,7 +37,7 @@ typedef struct CdcState {
   int param_n;                    //                                            (was s_param_n)
   uint8_t data[2340];             // sector data FIFO                            (was s_data)
   int data_n, data_rd;            //                                            (was s_data_n/s_data_rd)
-  uint8_t irq_en;                 // interrupt enable register                   (was s_irq_en)
+  uint8_t irq_en;                 // interrupt enable register; gates irq_edge     (was s_irq_en)
   uint8_t stat;                   // drive status byte (bit1 = motor on)         (was s_stat, init 0x02)
   uint32_t loc_lba;               // current physical sector
   uint32_t command_lba;           // Setloc target, applied by ReadN/ReadS/Seek
@@ -62,7 +62,9 @@ typedef struct CdcState {
   void *tick_context;
   CdcTickNowFn tick_now;
   CdcIrqEnt q[8];                          // pending-interrupt queue                     (was s_q)
-  int q_head, q_tail, resp_rd;             //                                     (was s_q_head/s_q_tail/s_resp_rd)
+  int q_head, q_tail;                      //                                     (was s_q_head/s_q_tail)
+  int resp_rd;                             // results read position: in the current response, or after an
+                                           // acknowledge emptied the queue, in the one acknowledged last
   uint64_t irq_sequence;                   // increments whenever a response becomes current
   uint8_t irq_edge;                        // 1 = the controller just RAISED an interrupt and nothing has latched
                                            // it yet. The MMIO dispatcher (mem.cpp) consumes this and sets I_STAT
@@ -88,7 +90,8 @@ void cdc_state_init(CdcState *s);
 // counter and call cdc_drive_service through the same controller path.
 void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now);
 // Service due drive and command events on the guest thread. Returns 1 only when a response became
-// current and raised a new controller IRQ edge; an early wake leaves existing deadlines armed.
+// current; it raised a CPU interrupt edge (irq_edge) only if the interrupt-enable register admits its
+// type. An early wake leaves existing deadlines armed.
 int cdc_drive_service(CdcState *s);
 // Absolute guest-instruction timestamp of the earliest armed drive, command or paced read-completion deadline. Returns
 // 0, writing nothing, when no deadline is armed. The deadline domain is the injected tick source's.

@@ -20,6 +20,7 @@
 #include "cdc_command_phase.h"
 #include "cdc_state.h"
 #include "disc.h"
+#include "disc_toc.h"
 #include "r3000.h"
 #include "xa_state.h"
 #include <algorithm>
@@ -39,15 +40,46 @@ static void complete_command(CdcState *s);
 
 constexpr uint8_t kCdlStatStandby = 0x02;
 constexpr uint8_t kCdlStatRead = 0x20;
+// Interrupt-enable bits 0-4: the five response types (INT1..INT5 are encoded in bits 0-2).
+constexpr uint8_t kCdcIrqEnableAll = 0x1F;
+// INT5 error code for an argument the command cannot satisfy (GetTD of a track the disc lacks).
+constexpr uint8_t kCdcErrorBadArgument = 0x10;
 
 void cdc_state_init(CdcState *s) {
   struct DiscState *disc = s->disc; // preserve wiring across re-init
   memset(s, 0, sizeof *s);
   s->stat = kCdlStatStandby; // power-on defaults
+  // The interrupt-enable register as the BIOS leaves it: its CD initialisation enables all five
+  // response types before any game code runs, and the framework replaces that BIOS. A game that
+  // masks responses (to poll a command itself) writes its own value.
+  s->irq_en = kCdcIrqEnableAll;
   s->disc = disc;
   s->disc_read_raw_fn = disc_read_raw;
   s->disc_read_sector_fn = disc_read_sector;
   s->disc_get_subq_position_fn = disc_get_subq_position;
+}
+
+static int q_empty(const CdcState *s) {
+  return s->q_head == s->q_tail;
+}
+
+// The controller's interrupt LINE to the CPU: the current response's type ANDed with the
+// interrupt-enable register (bank 1 of 0x1F801802), as on hardware and in Beetle's RecalcIRQ. A
+// response whose type the guest masked off is still current and readable through the flag
+// register, but it raises no CPU interrupt, so the guest's interrupt handler does not consume it.
+// Spyro 3's disc check relies on exactly this: it masks responses with 0x18, issues GetTN directly,
+// and polls the flag register for the answer while libcd's handler stays out of the way.
+static bool irq_line(const CdcState *s) {
+  return !q_empty(s) && (s->q[s->q_head].type & s->irq_en & kCdcIrqEnableAll) != 0;
+}
+
+// A response just became current (queued into an empty queue, or uncovered by an acknowledge). The
+// sequence counts responses; the I_STAT edge follows the line, so a masked response raises none.
+static void response_became_current(CdcState *s) {
+  ++s->irq_sequence;
+  if (irq_line(s)) {
+    s->irq_edge = 1; // -> I_STAT bit 2, latched by the MMIO dispatcher
+  }
 }
 
 static void cdc_irq(CdcState *s, uint8_t type, const uint8_t *resp, int len) {
@@ -66,12 +98,17 @@ static void cdc_irq(CdcState *s, uint8_t type, const uint8_t *resp, int len) {
   }
   s->q_tail = n;
   if (becomes_current) {
-    ++s->irq_sequence;
-    s->irq_edge = 1; // -> I_STAT bit 2, latched by the MMIO dispatcher
+    response_became_current(s);
   }
 }
-static int q_empty(const CdcState *s) {
-  return s->q_head == s->q_tail;
+
+// The results buffer the response register (bank 0 of 0x1F801801) reads. Acknowledging clears the
+// interrupt flag only: the results stay readable until the next response becomes current and
+// replaces them (Beetle's BeginResults). So with the queue empty the buffer still belongs to the
+// response acknowledged last, which sits in the slot just behind the head, with its read position
+// kept. Spyro 3's disc check acknowledges GetTN/GetTD before it reads their answer.
+static const CdcIrqEnt *results_entry(const CdcState *s) {
+  return &s->q[q_empty(s) ? ((s->q_head - 1) & 7) : s->q_head];
 }
 
 uint8_t cdc_current_irq_type(const CdcState *s) {
@@ -91,8 +128,12 @@ static uint64_t deterministic_seek_time(const CdcState *s, uint32_t target_lba) 
   // Beetle's PS_CDC_CalcSeekTime with only its random 0..25000 component fixed at zero.
   const bool motor_on = (s->stat & kCdlStatStandby) != 0;
   const bool paused = motor_on && !s->reading;
-  const uint32_t initial_lba = motor_on ? s->loc_lba : 0;
-  const uint64_t difference = initial_lba > target_lba ? initial_lba - target_lba : target_lba - initial_lba;
+  // LBAs are signed: Setloc may name the 2-second lead-in before LBA 0 (00:00:00 is LBA -150), which
+  // the unsigned fields carry in two's complement. The seek distance is between the signed values.
+  const int64_t initial_lba = motor_on ? static_cast<int32_t>(s->loc_lba) : 0;
+  const int64_t signed_target_lba = static_cast<int32_t>(target_lba);
+  const uint64_t difference = static_cast<uint64_t>(initial_lba > signed_target_lba ? initial_lba - signed_target_lba
+                                                                                    : signed_target_lba - initial_lba);
   uint64_t ticks = motor_on ? 0u : 33'868'800u;
   const uint64_t seek_ticks = difference * 33'868'800u / (72u * 60u * 75u);
   ticks += seek_ticks < 20'000u ? 20'000u : seek_ticks;
@@ -665,16 +706,21 @@ static uint64_t exec_command(CdcState *s, uint8_t cmd) {
   case 0x12:
     cdc_irq(s, 3, r1, 1);
     return 33'868u;
-  case 0x13: {
-    uint8_t t[3] = {s->stat, 0x01, 0x01};
+  case 0x13:   // GetTN
+  case 0x14: { // GetTD
+    psx::disc_toc::BcdPair answer{};
+    const bool known =
+        s->disc != nullptr && (cmd == 0x13 ? psx::disc_toc::track_range(*s->disc, answer)
+                                           : psx::disc_toc::track_start(*s->disc, s->command_args[0], answer));
+    if (!known) {
+      const uint8_t error[2] = {static_cast<uint8_t>(s->stat | 0x01), kCdcErrorBadArgument};
+      cdc_irq(s, 5, error, 2);
+      return 0;
+    }
+    const uint8_t t[3] = {s->stat, answer.first, answer.second};
     cdc_irq(s, 3, t, 3);
     return 0;
-  } // GetTN
-  case 0x14: {
-    uint8_t t[3] = {s->stat, 0x00, 0x02};
-    cdc_irq(s, 3, t, 3);
-    return 0;
-  } // GetTD
+  }
   default:
     lucent::debug("cdc", "UNHANDLED cmd 0x{:02X} -> ack only", cmd);
     cdc_irq(s, 3, r1, 1);
@@ -798,7 +844,7 @@ uint32_t cdc_read(CdcState *s, uint32_t p) {
     if (s->param_n < 16) {
       st |= 0x10; // PRMWRDY (param FIFO not full)
     }
-    if (!q_empty(s) && s->resp_rd < s->q[s->q_head].len) {
+    if (s->resp_rd < results_entry(s)->len) {
       st |= 0x20; // RSLRRDY (response ready)
     }
     if (s->bfrd && s->data_rd < s->data_n) {
@@ -810,10 +856,7 @@ uint32_t cdc_read(CdcState *s, uint32_t p) {
     return st;
   }
   case 1: { // response FIFO
-    if (q_empty(s)) {
-      return 0;
-    }
-    CdcIrqEnt *f = &s->q[s->q_head];
+    const CdcIrqEnt *f = results_entry(s);
     return s->resp_rd < f->len ? f->resp[s->resp_rd++] : 0;
   }
   case 2: { // data FIFO — CPU pop path; must advance the head exactly as DMA3 does
@@ -852,7 +895,13 @@ void cdc_write(CdcState *s, uint32_t p, uint8_t v) {
       }
     } // param FIFO push
     else if (s->index == 1) {
-      s->irq_en = v; // interrupt enable
+      // Interrupt enable. Unmasking the type of a response that is already current asserts the line
+      // now, which is a fresh edge exactly as a newly queued response would be.
+      const bool line_was_asserted = irq_line(s);
+      s->irq_en = v;
+      if (!line_was_asserted && irq_line(s)) {
+        s->irq_edge = 1;
+      }
     }
     return;
   case 3:
@@ -860,14 +909,13 @@ void cdc_write(CdcState *s, uint32_t p, uint8_t v) {
       if (v & 0x07) {    // ack current IRQ -> advance the queue
         if (!q_empty(s)) {
           s->q_head = (s->q_head + 1) & 7;
-          s->resp_rd = 0;
           // A response that was QUEUED behind the one just acked becomes current now, and that is
           // a fresh interrupt on real hardware — not a continuation of the acked one. Without this
           // edge the second and later responses of a multi-INT command sequence would be visible
           // in the FIFO but never announced, which looks exactly like a dropped response.
           if (!q_empty(s)) {
-            ++s->irq_sequence;
-            s->irq_edge = 1;
+            s->resp_rd = 0; // its results replace the acknowledged ones
+            response_became_current(s);
           }
         }
       }
