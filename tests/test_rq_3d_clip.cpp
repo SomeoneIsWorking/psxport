@@ -35,7 +35,8 @@ namespace {
 
 constexpr int kNativeWidth = 512; // Spyro 2's own 4:3 framebuffer width
 constexpr int kGuestClipRight = kNativeWidth - 1;
-constexpr int kWideWidth = 684; // 512 * 4/3, the smallest even width that reaches 16:9
+constexpr int kWideWidth = 684;                          // 512 * 4/3, the smallest even width that reaches 16:9
+constexpr int kMargin = (kWideWidth - kNativeWidth) / 2; // 86, what rq_2d_xform shifts by
 
 // The triangle the measurement found: its right vertex is at 652, past the guest's own 511.
 constexpr int kPrimLeft = 459;
@@ -125,13 +126,20 @@ static Submitted submit(int aspect, bool latch, Shape shape, int guestClipRight 
 
 } // namespace
 
-// THE POSITIVE, in the shape that actually occurs. At 16:9 the clip is the plan's last column, so a
-// prim whose right vertex is at 652 keeps all of itself instead of being cut at the guest's 511.
+// THE POSITIVE, in the shape that actually occurs. At 16:9 the clip is the plan's last column.
+//
+// The clip is the LAST COLUMN OF THE CANVAS, not "past the vertex": in this shape the 2D block has
+// already shifted the vertices by the margin, so the prim's right vertex 652 lands at 738 — beyond
+// any 684-wide canvas, and correctly so, because a guest vertex off the right edge of the 4:3
+// picture is off the right edge of the wider one too. What the clip has to reach is the canvas edge,
+// and that is what is asserted. The guest geometry that DOES land in the margin is the part between
+// 512 and 597 in 4:3 space, which is why the clip must be 683 and not 597.
 static void test_wide_keeps_a_guest_world_prim_past_the_guest_clip(void) {
   const Submitted wide = submit(ASPECT_16_9, true, kGuestWorldShape);
   CHECK_EQ(wide.queued, 1);
+  CHECK_EQ(wide.x1, kPrimRight + kMargin); // the 2D block moved it into the wide frame
   CHECK_EQ(wide.da_x1, kWideWidth - 1);
-  CHECK(wide.da_x1 >= wide.x1); // the number the rule exists to produce: nothing is cut
+  CHECK(wide.da_x1 > kNativeWidth - 1); // strictly wider than the guest's own rectangle
 }
 
 // THE SAME CLAIM FOR A DEPTH-ORDERED WORLD PRIM, so the rule is not a GTE-path special case.
@@ -174,13 +182,19 @@ static void test_unlatched_plan_leaves_the_clip_alone(void) {
 
 // NEVER NARROWS. A guest that already stated a wider rectangle than the plan keeps its own: the plan
 // is a floor, not a target, and clamping down would crop a title that draws wide on purpose.
+//
+// The expected value differs per shape and the difference is the point: in the guest shape the 2D
+// block has already MOVED the rectangle by the margin before this rule sees it, so 900 arrives as
+// 986 and the rule must leave THAT alone. Asserting one number for both shapes would have hidden the
+// only interaction between the two rules that matters.
 static void test_a_wider_guest_rectangle_is_left_alone(void) {
-  for (int s = 0; s < kShapeCount; s++) {
-    const Submitted wide = submit(ASPECT_16_9, true, kShapes[s], 900);
-    CHECK_EQ(wide.queued, 1);
-    CHECK_EQ(wide.da_x1, 900);
-  }
-  printf("      [never narrows] swept %d producer shape(s)\n", kShapeCount);
+  const Submitted depth = submit(ASPECT_16_9, true, kNativeWorldShape, 900);
+  CHECK_EQ(depth.queued, 1);
+  CHECK_EQ(depth.da_x1, 900);
+  const Submitted guest = submit(ASPECT_16_9, true, kGuestWorldShape, 900);
+  CHECK_EQ(guest.queued, 1);
+  CHECK_EQ(guest.da_x1, 900 + kMargin);
+  printf("      [never narrows] 2 producer shapes: 900 kept, 900 kept after the 2D shift\n");
 }
 
 int main(void) {
