@@ -19,7 +19,7 @@
 // CONSUMER NOTE: every port whose runtime binds cd_control_sync / the CdControl override inherits
 // this. Tomba! 1's cd_native_startup.cpp does. It is libcd's own contract, so honouring it is the
 // faithful behaviour, but only Spyro 1 has been re-verified against it — re-check a consumer's CD
-// startup when its psxport.pin crosses 892e9550.
+// startup when it next moves onto a framework that includes this fix.
 namespace psx::cd {
 
 // The CD's first data sector is at 00:02:00, so an MSF carries a 150-sector lead-in offset.

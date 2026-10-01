@@ -160,27 +160,21 @@ inputs, use stable directories under `build/test-fixtures`, and preserve the loc
 symlink. Submodule-sync fixtures supply their own Git identity for every command. These repair the
 three fixture failures in hosted run `33893969146`; a subsequent hosted run must establish CI success.
 
-The framework/port link tooling is split so that the file a port SHIPS is the smallest one that has to
-exist before the framework is on disk: `tools/psxport_fetch.py` is installed into the ten ports and gated
-by bytes + `--help`; `tools/psxport_sync.py` (report, `--check`, `--bump`, `--link`) lives in the
-framework and is run as `external/psxport/tools/psxport_sync.py --repo <title>`.
+`external/psxport` is the LIVE framework: a relative symlink to the workspace's sibling `psxport`,
+established by `tools/psxport_fetch.py --auto` (the ONE file a port ships), or a shallow clone of psxport
+`main` with its vendor submodules on a machine that has no sibling checkout. There is NO per-port
+framework pin: no port records a framework commit, and a framework edit is visible in every game at once.
 
-**Both `external/psxport` and `shared/lightrec` resolve to the PINNED commit, not the moving shared
-checkout** — a detached worktree at `<checkout>/scratch/pins/<sha>/`, reused only while clean and exactly
-at the pin, and REFUSED — never repaired — when dirty, at another commit, or belonging to another
-repository. That is what makes a framework or Lightrec commit landing under a consumer unable to change
-what it builds, and it is why a landing could otherwise surface as a configure failure in a tree that was
-green a minute earlier. `psxport_fetch.py --lightrec` reads `PSXPORT_LIGHTREC_REVISION` out of
-`cmake/lightrec_dependency.cmake`, so the pin has one home, and `psxport_configure_lightrec_dependency()`
-probes that worktree before the plain checkout for every candidate.
+`shared/lightrec` is still PINNED, because that is a third-party fork revision and not a workspace layout
+choice: `psxport_fetch.py --lightrec` reads `PSXPORT_LIGHTREC_REVISION` out of
+`cmake/lightrec_dependency.cmake`, so the pin has one home, materialises that revision as a detached
+worktree, and `psxport_configure_lightrec_dependency()` probes that worktree before the plain checkout.
 
-Evidence: `tests/test_psxport_fetch.py` 17/17 and `tests/test_psxport_sync.py` 20/20, both against real git
-repositories; `tests/test_lightrec_pinned_worktree.py` 6/6 over three real CMake configures of a throwaway
-two-commit Lightrec repository and its own pin; and **7 of 12 properties measured failing against the
-pre-change code**, two of them the pin itself, where the old tool answered status 0, a symlink and the
-expected text while the build followed the moving checkout. Gap: no port has been
-migrated yet, so `check_port_pin_tools.py` reports them as NOT MIGRATED and their `--auto` call sites still
-name the retired tool.
+Evidence: `tests/test_psxport_fetch.py` over real git repositories and no network — the relative symlink, an
+existing equivalent link left alone, a link to a checkout discovery cannot name left alone, a real clone
+refused rather than destroyed, the clone path with the sibling checkout's working tree and `.git/modules`
+byte-unchanged; and `tests/test_lightrec_pinned_worktree.py` over three real CMake configures of a
+throwaway two-commit Lightrec repository and its own pin.
 
 ## Blocking dependency
 

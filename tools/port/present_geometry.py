@@ -9,7 +9,7 @@ every port runs this exact file through its own `external/psxport` checkout:
 It used to be copied into spyro/tools/, Tomba2Engine/tools/ and spider1/tools/. That is exactly the
 failure the copies were warned about: by 2026-09-19 all three hashes differed, and spider1's was the
 original, which prints a confident band-only aspect (STRETCHED 1.714x) on a frame this one resolves
-to 1.600x. The copies are gone; a fix here reaches every consumer at its own pin.
+to 1.600x. The copies are gone; a fix here reaches every consumer through the live framework.
 
 WHY THIS EXISTS. Issue 0008 (the picture presented 1.6x too wide for a whole session) was found by
 the USER asking "are these stretched wide?" — not by any check in this repo. It could not have been

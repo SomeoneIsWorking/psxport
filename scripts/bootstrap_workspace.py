@@ -49,8 +49,8 @@ def initialize_framework_vendors(framework: Path) -> None:
 def sync_game_framework(game: Path) -> None:
     """Make external/psxport exist, with the ONE tool a port ships.
 
-    It is psxport_fetch.py, not psxport_sync.py: the pin work lives in the fetched framework
-    (external/psxport/tools/psxport_sync.py --repo .), and this step has to work before there is one.
+    There is no pin: the tool points the game at the workspace's live psxport checkout, so a framework
+    edit is visible in every game at once.
     """
     fetcher = game / "tools/psxport_fetch.py"
     state = "psxport_fetch.py" if fetcher.is_file() else "no fetch tool yet"

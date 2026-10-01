@@ -36,13 +36,13 @@ Toy Story 2. Every title: widescreen and loading removal. Tekken 3, Tomba! 1 and
 60 fps, so no interpolation for them; the others get 60 fps interpolation. Vagrant Story's horizontal
 projection word is gameplay state (battle code branches on it), so widen its canvas, never `H`.
 
-## Framework pin
+## Framework
 
-Each game's `external/psxport` is a symlink to `psxport/scratch/pins/<sha>/`, the commit named in the game's
-`psxport.pin`; `tools/psxport_fetch.py --auto` (run by `run.sh`) creates it. To move a game to a new framework
-commit: set the pin, `tools/psxport_fetch.py --auto`, build, then
-`external/psxport/tools/psxport_sync.py --repo . --bump --build <build-dir>`. Lightrec is pinned the same way
-(`PSXPORT_LIGHTREC_REVISION` in `psxport/cmake/lightrec_dependency.cmake`, `psxport_fetch.py --lightrec`).
+There is no per-game framework pin. Each game's `external/psxport` is a plain relative symlink to the
+workspace's live `psxport` checkout, created by `tools/psxport_fetch.py --auto` (run by `run.sh`), so a
+framework edit is live in every game at once; with no sibling checkout (CI, a fresh clone) it shallow-clones
+psxport `main` instead. Lightrec stays pinned at `PSXPORT_LIGHTREC_REVISION`
+(`psxport/cmake/lightrec_dependency.cmake`, `psxport_fetch.py --lightrec`).
 
 ## Gates
 
