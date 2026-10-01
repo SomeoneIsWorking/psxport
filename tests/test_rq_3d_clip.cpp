@@ -1,22 +1,27 @@
-// test_rq_3d_clip.cpp — a 3D prim's draw-area clip on a GUEST-WIDENED picture.
+// test_rq_3d_clip.cpp — a guest-widened picture's draw-area clip.
 //
 // WHY THIS TEST EXISTS. Spyro 2 runs on the GTE path and its own title-owned `GuestProjectionPlan`
-// widens the guest's projection (CR24/OFX to the widened centre), so its primitives arrive at the
-// queue ALREADY in wide coordinates: 684 columns wide, while the guest still states its own drawing
-// rectangle through GP1 E3/E4 at `x1 = 511`. Measured on Spyro 2's Glimmer: 1970 prims per frame
-// spanning x -170..652, 82 of them past 511, and 0.0 % non-black across the columns 512..683.
+// widens the presentation, so its primitives arrive at the queue in WIDE coordinates: 684 columns
+// wide, while the guest still states its own drawing rectangle through GP1 E3/E4 at `x1 = 511`.
+// Measured on Spyro 2's Glimmer: 1970 prims per frame spanning x -170..652, 82 of them past 511, and
+// ink stopping at column 597 of a 684-column presentation.
 //
-// The 2D half of this problem is `test_rq_2d_clip.cpp` and it is solved at a DIFFERENT point: a 2D
-// prim authored in 4:3 space needs its vertices AND its clip MOVED together. A 3D prim needs
-// neither — its vertices came out of the widened projection — but it does need a clip rectangle wide
-// enough to contain them. `RenderQueue::emitOrQueue` now applies `GuestProjectionPlan::guestClipRight`
-// to `RQ_OM_DEPTH` items, and this test is that rule's evidence.
+// The 2D half of this problem is `test_rq_2d_clip.cpp`: a 2D prim authored in 4:3 space needs its
+// vertices AND its clip MOVED together. A prim on a guest-widened frame needs no vertex move — the
+// 2D block above already shifted it into the wide frame — but it DOES need a clip rectangle wide
+// enough to contain the result. `RenderQueue::emitOrQueue` now applies
+// `GuestProjectionPlan::guestClipRight`, and this test is that rule's evidence.
 //
-// The two directions are the test, because "a prim survives at 16:9" is only half a claim:
-//   * at 16:9 the clip is the plan's edge, so a triangle whose right vertex is at 652 keeps all of
-//     itself instead of being cut at 511;
-//   * at 4:3 nothing runs, so the very same triangle is cut at exactly the guest's 511 — which is
-//     what makes "wider" a change to the PICTURE and not a change to the rules.
+// WHY THE FIRST VERSION OF THE RULE WAS WRONG, which is why both producer shapes are here. It was
+// keyed on `order_mode == RQ_OM_DEPTH`. Instrumented on Spyro 2 with the 2D block logging its
+// inputs, 775,259 submissions per run arrive as `RQ_2D_AUTHORED_4_3` / `RQ_HUD` / `RQ_OM_2D_FG`,
+// because the pure GTE-path policy in `gpu_native.cpp` forces `is3d = 0` and `bg = 0` for every
+// guest prim — the picture is PSX painter order by construction, and `is3d`'s own writers have no
+// callers, so it reads 0 for every title on Lightrec. An order-mode key therefore excluded the very
+// primitives the rule exists for: the register was demonstrably widened and the margin stayed black.
+// The rule is keyed on `gpu_vk_wide_presentation`, which is the question actually being asked — "were
+// these coordinates produced by a projection the host has already widened" — and every shape here
+// answers it the same way.
 #include "game.h"
 #include "guest_widescreen_projection.h"
 #include "mods.h"
@@ -46,12 +51,21 @@ struct Submitted {
   int da_x1;
 };
 
-// One guest-widened GTE-path Core with a latched plan, or a 4:3 Core with the same guest clip.
-//
-// `aspect` is the USER's setting and `latch` says whether the title published a matching guest
-// projection. They are deliberately separate arguments: the third case below proves the branch is
-// gated on the TITLE having published, not merely on the user having asked for 16:9.
-Submitted submitTerrainTriangle(int aspect, bool latch) {
+// How a producer presents itself to the queue. Both shapes below are real; neither is hypothetical.
+struct Shape {
+  int order_mode;
+  int layer;
+  Rq2dSpace space;
+};
+
+// What a guest OT prim ACTUALLY is on the pure GTE path — 775,259 submissions per Spyro 2 run.
+static const Shape kGuestWorldShape{RQ_OM_2D_FG, RQ_HUD, RQ_2D_AUTHORED_4_3};
+// What a native-depth world prim is.
+static const Shape kNativeWorldShape{RQ_OM_DEPTH, RQ_WORLD, RQ_2D_AUTHORED_4_3};
+static const Shape kShapes[] = {kGuestWorldShape, kNativeWorldShape};
+static const int kShapeCount = static_cast<int>(sizeof kShapes / sizeof kShapes[0]);
+
+static Submitted submit(int aspect, bool latch, Shape shape, int guestClipRight = kGuestClipRight) {
   auto game = std::make_unique<Game>();
   game->gpu.s_disp_w = kNativeWidth;
   game->mods.aspect = aspect;
@@ -71,10 +85,11 @@ Submitted submitTerrainTriangle(int aspect, bool latch) {
   const int ys[4] = {kPrimTop, kPrimTop, kPrimBottom, kPrimBottom};
   const int uv[4] = {0, 0, 0, 0};
   const unsigned char rgb[4] = {0x80, 0x80, 0x80, 0x80};
+  const RenderQueue::Space2dScope declared(game->rq, shape.space);
   game->rq.emitOrQueue(&core,
                        1,
-                       RQ_WORLD,
-                       RQ_OM_DEPTH,
+                       shape.layer,
+                       shape.order_mode,
                        4,
                        0,
                        0,
@@ -101,7 +116,7 @@ Submitted submitTerrainTriangle(int aspect, bool latch) {
                        0,
                        0,
                        0,
-                       kGuestClipRight,
+                       guestClipRight,
                        227,
                        0);
   const RqItem &item = game->rq.items[0];
@@ -110,96 +125,66 @@ Submitted submitTerrainTriangle(int aspect, bool latch) {
 
 } // namespace
 
-// THE POSITIVE. At 16:9 with a published guest projection, a triangle whose right vertex is at 652
-// keeps the whole of itself: the clip is the plan's last column, not the guest's.
-static void test_wide_keeps_a_depth_prim_past_the_guest_clip(void) {
-  const Submitted wide = submitTerrainTriangle(ASPECT_16_9, true);
+// THE POSITIVE, in the shape that actually occurs. At 16:9 the clip is the plan's last column, so a
+// prim whose right vertex is at 652 keeps all of itself instead of being cut at the guest's 511.
+static void test_wide_keeps_a_guest_world_prim_past_the_guest_clip(void) {
+  const Submitted wide = submit(ASPECT_16_9, true, kGuestWorldShape);
   CHECK_EQ(wide.queued, 1);
-  // The VERTICES are untouched: they came out of the widened projection already. Moving them here
+  CHECK_EQ(wide.da_x1, kWideWidth - 1);
+  CHECK(wide.da_x1 >= wide.x1); // the number the rule exists to produce: nothing is cut
+}
+
+// THE SAME CLAIM FOR A DEPTH-ORDERED WORLD PRIM, so the rule is not a GTE-path special case.
+static void test_wide_keeps_a_depth_prim_past_the_guest_clip(void) {
+  const Submitted wide = submit(ASPECT_16_9, true, kNativeWorldShape);
+  CHECK_EQ(wide.queued, 1);
+  // The VERTICES are untouched: they came out of a widened projection already. Moving them here
   // would be the second margin this rule exists to avoid (the kanban #73 double shift, 2D side).
   CHECK_EQ(wide.x0, kPrimLeft);
   CHECK_EQ(wide.x1, kPrimRight);
-  // The left edge is left alone for the same reason the right one moves: only the RIGHT edge bounds
-  // the extra columns, and a title's own left edge is still inside the widened canvas.
   CHECK_EQ(wide.da_x0, 0);
   CHECK_EQ(wide.da_x1, kWideWidth - 1);
-  // The number the whole rule exists to produce: the prim is no longer cut before its own extent.
   CHECK(wide.da_x1 >= wide.x1);
 }
 
 // THE NEGATIVE, with its denominator. At 4:3 the branch does not execute: the identical submission
-// is clipped at exactly the guest's own 511, so a console-shaped picture is bit-for-bit the console's.
+// is clipped at exactly the guest's own 511, so a console-shaped picture is the console's.
 static void test_four_three_clips_at_the_guest_edge(void) {
-  const Submitted narrow = submitTerrainTriangle(ASPECT_4_3, true);
-  CHECK_EQ(narrow.queued, 1);
-  CHECK_EQ(narrow.x0, kPrimLeft);
-  CHECK_EQ(narrow.x1, kPrimRight);
-  CHECK_EQ(narrow.da_x0, 0);
-  CHECK_EQ(narrow.da_x1, kGuestClipRight);
-  CHECK(narrow.da_x1 < narrow.x1); // still cut — the 4:3 picture loses that vertex, as it must
+  for (int s = 0; s < kShapeCount; s++) {
+    const Submitted narrow = submit(ASPECT_4_3, true, kShapes[s]);
+    CHECK_EQ(narrow.queued, 1);
+    CHECK_EQ(narrow.x1, kPrimRight);
+    CHECK_EQ(narrow.da_x1, kGuestClipRight);
+    CHECK(narrow.da_x1 < narrow.x1); // still cut — the 4:3 picture loses that vertex, as it must
+  }
+  printf("      [4:3 identity] swept %d producer shape(s)\n", kShapeCount);
 }
 
 // THE GATE IS THE TITLE'S PUBLICATION, NOT THE USER'S SETTING. 16:9 requested with no latched guest
 // projection leaves the clip alone: the framework presents a wider canvas it must not invent geometry
 // for, and this rule does not run on an unlatched plan.
 static void test_unlatched_plan_leaves_the_clip_alone(void) {
-  const Submitted unlatched = submitTerrainTriangle(ASPECT_16_9, false);
-  CHECK_EQ(unlatched.queued, 1);
-  CHECK_EQ(unlatched.da_x1, kGuestClipRight);
+  for (int s = 0; s < kShapeCount; s++) {
+    const Submitted unlatched = submit(ASPECT_16_9, false, kShapes[s]);
+    CHECK_EQ(unlatched.queued, 1);
+    CHECK_EQ(unlatched.da_x1, kGuestClipRight);
+  }
+  printf("      [unlatched identity] swept %d producer shape(s)\n", kShapeCount);
 }
 
 // NEVER NARROWS. A guest that already stated a wider rectangle than the plan keeps its own: the plan
 // is a floor, not a target, and clamping down would crop a title that draws wide on purpose.
 static void test_a_wider_guest_rectangle_is_left_alone(void) {
-  auto game = std::make_unique<Game>();
-  game->core.rsub.mode.setPath(RenderPath::Gte);
-  game->guestDisplay.latch(guest_projection_plan(GuestProjectionInputs{
-      .path = RenderPath::Gte,
-      .requested = PresentationAspect::Standard4x3, // the plan is NOT a widening
-      .nativePresentation = {kNativeWidth, 240},
-      .nativeProjection = {{kNativeWidth, 240}, kNativeWidth},
-  }));
-  CHECK(!game->guestDisplay.plan().widescreen());
-  Core &core = game->core;
-  const int xs[4] = {0, 700, 0, 700};
-  const int ys[4] = {0, 0, 10, 10};
-  const int uv[4] = {0, 0, 0, 0};
-  const unsigned char rgb[4] = {0, 0, 0, 0};
-  game->rq.emitOrQueue(&core,
-                       1,
-                       RQ_WORLD,
-                       RQ_OM_DEPTH,
-                       4,
-                       0,
-                       0,
-                       xs,
-                       ys,
-                       nullptr,
-                       nullptr,
-                       uv,
-                       uv,
-                       rgb,
-                       rgb,
-                       rgb,
-                       nullptr,
-                       0,
-                       0,
-                       0,
-                       0,
-                       0,
-                       0,
-                       0,
-                       0,
-                       0,
-                       0,
-                       0,
-                       900,
-                       227,
-                       0);
-  CHECK_EQ(game->rq.items[0].da_x1, 900);
+  for (int s = 0; s < kShapeCount; s++) {
+    const Submitted wide = submit(ASPECT_16_9, true, kShapes[s], 900);
+    CHECK_EQ(wide.queued, 1);
+    CHECK_EQ(wide.da_x1, 900);
+  }
+  printf("      [never narrows] swept %d producer shape(s)\n", kShapeCount);
 }
 
 int main(void) {
+  RUN(wide_keeps_a_guest_world_prim_past_the_guest_clip);
   RUN(wide_keeps_a_depth_prim_past_the_guest_clip);
   RUN(four_three_clips_at_the_guest_edge);
   RUN(unlatched_plan_leaves_the_clip_alone);
