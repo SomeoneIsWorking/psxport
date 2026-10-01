@@ -55,6 +55,9 @@ bool isDeviceAddress(std::uint32_t address) {
   return address >= kHardwareBase && address < kHardwareBase + kHardwareSize;
 }
 
+// The one initialized Lightrec machine of this process; Lightrec supports exactly one.
+std::atomic<const void *> liveMachine{nullptr};
+
 std::uint64_t nextBoundaryOwnerId() {
   static std::atomic<std::uint64_t> next{1};
   return next.fetch_add(1, std::memory_order_relaxed);
@@ -74,6 +77,7 @@ struct LightrecExecutor::Impl {
         .block_boundary_data = this,
         .fallback_admission = fallbackAdmission,
         .fallback_admission_data = this,
+        .context = this,
     };
     initializeMaps();
   }
@@ -84,21 +88,18 @@ struct LightrecExecutor::Impl {
       return state != nullptr;
     }
     initializationAttempted = true;
-    {
-      std::scoped_lock lock(registryMutex());
-      if (!registry().empty()) {
-        lucent::error("executor", "Lightrec supports one initialized machine per process");
-        return false;
-      }
+    const void *expected = nullptr;
+    if (!liveMachine.compare_exchange_strong(expected, this)) {
+      lucent::error("executor", "Lightrec supports one initialized machine per process");
+      return false;
     }
     char programName[] = "psxport";
     state = lightrec_init(programName, maps.data(), maps.size(), &operations);
     if (!state) {
+      liveMachine.store(nullptr);
       lucent::error("executor", "Lightrec initialization failed");
       return false;
     }
-    std::scoped_lock lock(registryMutex());
-    registry().emplace(state, this);
     return true;
   }
 
@@ -107,21 +108,14 @@ struct LightrecExecutor::Impl {
       return;
     }
     std::scoped_lock lifecycleLock(lifecycleMutex());
-    {
-      std::scoped_lock lock(registryMutex());
-      registry().erase(state);
-    }
     lightrec_destroy(state);
+    liveMachine.store(nullptr);
   }
 
+  // The memory callbacks receive only the Lightrec state; the state carries this object as its context,
+  // so reaching the owner is one load rather than a locked lookup (188 million callbacks per route).
   static Impl &owner(lightrec_state *lightrec) {
-    std::scoped_lock lock(registryMutex());
-    const auto found = registry().find(lightrec);
-    if (found == registry().end()) {
-      lucent::error("executor", "Lightrec callback has no owning Core");
-      std::abort();
-    }
-    return *found->second;
+    return *static_cast<Impl *>(lightrec_get_context(lightrec));
   }
 
   static void storeByte(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
@@ -263,13 +257,31 @@ struct LightrecExecutor::Impl {
     return boundaries;
   }
 
+  // The context this thread last resolved, so the per-block callback does not hash the owner id into
+  // `threadBoundaries()` for every executed block. It names a node of that map, which is stable until
+  // BoundarySession erases it, and the erase clears the slot.
+  struct BoundarySlot {
+    std::uint64_t ownerId = 0;
+    BoundaryContext *context = nullptr;
+  };
+
+  static BoundarySlot &threadBoundarySlot() {
+    static thread_local BoundarySlot slot;
+    return slot;
+  }
+
   BoundaryContext &activeBoundary() {
+    BoundarySlot &slot = threadBoundarySlot();
+    if (slot.ownerId == boundaryOwnerId && slot.context != nullptr && slot.context->active) {
+      return *slot.context;
+    }
     auto &boundaries = threadBoundaries();
     const auto found = boundaries.find(boundaryOwnerId);
     if (found == boundaries.end() || !found->second.active) {
       lucent::error("executor", "Lightrec callback reached without a boundary on its host thread");
       std::abort();
     }
+    slot = {boundaryOwnerId, &found->second};
     return found->second;
   }
 
@@ -414,6 +426,7 @@ struct LightrecExecutor::Impl {
         boundary_ = previous_;
       } else {
         threadBoundaries().erase(impl_.boundaryOwnerId);
+        threadBoundarySlot() = {};
       }
     }
 
@@ -422,16 +435,6 @@ struct LightrecExecutor::Impl {
     BoundaryContext &boundary_;
     BoundaryContext previous_;
   };
-
-  static std::unordered_map<lightrec_state *, Impl *> &registry() {
-    static std::unordered_map<lightrec_state *, Impl *> instances;
-    return instances;
-  }
-
-  static std::mutex &registryMutex() {
-    static std::mutex mutex;
-    return mutex;
-  }
 
   static std::mutex &lifecycleMutex() {
     static std::mutex mutex;
