@@ -127,6 +127,10 @@ public:
   // tables, including the C(06h) ExceptionHandler entry address.
   void workAreaInit();
   bool dispatchPadBios(uint32_t function);
+  // Whether `guestAddress` is one of the two work-area entry points the pad service could ever answer
+  // for. Whether it DOES answer depends on live guest memory (see padWorkAreaAction), so this is the
+  // part of the question that never changes.
+  static bool isPadWorkAreaEntry(uint32_t guestAddress);
   std::optional<PadWorkAreaAction> padWorkAreaAction(uint32_t guestAddress) const;
   void applyPadWorkAreaAction(PadWorkAreaAction action);
   bool biosPadShouldService() const;

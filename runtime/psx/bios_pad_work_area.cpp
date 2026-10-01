@@ -7,6 +7,8 @@ namespace {
 
 constexpr uint32_t kPadEnableOffset = 0x884u;
 constexpr uint32_t kPadDisableOffset = 0x894u;
+constexpr uint32_t kPadEnableEntry = (Hle::kWorkBase + kPadEnableOffset) & 0x1FFFFFFFu;
+constexpr uint32_t kPadDisableEntry = (Hle::kWorkBase + kPadDisableOffset) & 0x1FFFFFFFu;
 constexpr uint32_t kB0WorkBaseSlot = Hle::kB0Table + 0x5Bu * sizeof(uint32_t);
 // SCPH-1001 v2.2 (SHA-1 10155d8d6e6e832d6ea66db9bc098321fb5e8ebf): ROM offsets 0x14754
 // and 0x14764 align with work-area +884/+894. Both store to kernel word 0x74B8 (1 then 0) and
@@ -36,21 +38,21 @@ bool Hle::dispatchPadBios(uint32_t function) {
   return true;
 }
 
+bool Hle::isPadWorkAreaEntry(uint32_t guestAddress) {
+  const uint32_t physical = guestAddress & 0x1FFFFFFFu;
+  return physical == kPadEnableEntry || physical == kPadDisableEntry;
+}
+
 std::optional<Hle::PadWorkAreaAction> Hle::padWorkAreaAction(uint32_t guestAddress) const {
+  if (!isPadWorkAreaEntry(guestAddress)) {
+    return std::nullopt;
+  }
   // The callback belongs to the HLE BIOS only after GetB0Table published the work area. A title
   // that changes the table's base must not silently dispatch the old synthetic service.
   if (!work_ok || game->core.mem_r32(kB0WorkBaseSlot) != kWorkBase) {
     return std::nullopt;
   }
-  const uint32_t physical = guestAddress & 0x1FFFFFFFu;
-  switch (physical) {
-  case (kWorkBase + kPadEnableOffset) & 0x1FFFFFFFu:
-    return PadWorkAreaAction::Enable;
-  case (kWorkBase + kPadDisableOffset) & 0x1FFFFFFFu:
-    return PadWorkAreaAction::Disable;
-  default:
-    return std::nullopt;
-  }
+  return (guestAddress & 0x1FFFFFFFu) == kPadEnableEntry ? PadWorkAreaAction::Enable : PadWorkAreaAction::Disable;
 }
 
 void Hle::applyPadWorkAreaAction(PadWorkAreaAction action) {

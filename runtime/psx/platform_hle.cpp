@@ -119,6 +119,7 @@ bool PlatformHle::register_(std::uint32_t address, OverrideFn function) {
         return false;
       }
       mFn[index] = function;
+      ++mRevision;
       return true;
     }
   }
@@ -131,6 +132,7 @@ bool PlatformHle::register_(std::uint32_t address, OverrideFn function) {
   ++mN;
   mLo = std::min(mLo, address);
   mHi = std::max(mHi, address);
+  ++mRevision;
   return true;
 }
 

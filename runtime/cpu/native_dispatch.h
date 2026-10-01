@@ -1,6 +1,8 @@
 #pragma once
 
 #include "execution_exit.h"
+#include "guest_host_dispatch_kind.h"
+#include "host_dispatch_cache.h"
 #include "image_identity.h"
 
 #include <memory>
@@ -41,6 +43,17 @@ public:
   // Owned for the dispatcher's lifetime; its destructor writes the final report.
   void attachDifferential(std::unique_ptr<OverrideDifferential> differential);
   OverrideDifferential *differential() const;
+  // What `guestAddress` is when execution reaches it. Answered from a cache that is discarded whenever
+  // an input of the answer changes (resident images, installed or suppressed overrides, registered
+  // platform services); an address whose answer also reads live guest memory is never cached.
+  GuestHostDispatchKind classify(std::uint32_t guestAddress);
+  const HostDispatchVerdictCache &verdicts() const {
+    return verdicts_;
+  }
+  // Advances on every install, removal, and change of the suppression stack.
+  std::uint64_t revision() const {
+    return revision_;
+  }
 
 private:
   struct NativeKeyHash {
@@ -59,13 +72,9 @@ private:
   Core &core_;
   std::unordered_map<NativeKey, Entry, NativeKeyHash> entries_;
   std::vector<NativeKey> suppressions_;
+  std::uint64_t revision_ = 0;
+  HostDispatchVerdictCache verdicts_;
   std::unique_ptr<OverrideDifferential> differential_;
-};
-
-enum class GuestHostDispatchKind : std::uint8_t {
-  ExecuteGuest,
-  HostService,
-  Fault,
 };
 
 GuestHostDispatchKind classifyGuestHostDispatch(Core &core, std::uint32_t guestAddress);

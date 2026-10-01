@@ -131,6 +131,12 @@ public:
   // Returns nullptr for a miss.
   OverrideFn lookup(uint32_t addr) const;
 
+  // Advances whenever a registration is added or replaced, so a cache of lookup answers can tell that
+  // it is stale without repeating the lookup.
+  [[nodiscard]] uint64_t revision() const {
+    return mRevision;
+  }
+
 private:
   // The accepted address windows are GAME data (GameConfig::hle.windowLo/windowHi), so the guard
   // takes the config rather than baking one game's memory map into the framework.
@@ -147,4 +153,5 @@ private:
   uint32_t mHi = 0;
   uint32_t mVSyncAddress = 0;
   uint32_t mVSyncQueryCounterAddress = 0;
+  uint64_t mRevision = 0;
 };

@@ -63,6 +63,7 @@ bool NativeDispatcher::install(NativeRegistration registration) {
                   entry->second.name);
     return false;
   }
+  ++revision_;
   core_.lightrecExecutor().invalidate(
       {registration.key.address & 0x1fffffffu, (registration.key.address & 0x1fffffffu) + 4u});
   return true;
@@ -72,6 +73,7 @@ bool NativeDispatcher::remove(NativeKey key) {
   if (!entries_.erase(key)) {
     return false;
   }
+  ++revision_;
   core_.lightrecExecutor().invalidate({key.address & 0x1fffffffu, (key.address & 0x1fffffffu) + 4u});
   return true;
 }
@@ -82,10 +84,12 @@ bool NativeDispatcher::suppressed(NativeKey key) const {
 
 void NativeDispatcher::pushSuppression(NativeKey key) {
   suppressions_.push_back(key);
+  ++revision_;
 }
 
 void NativeDispatcher::popSuppression() {
   suppressions_.pop_back();
+  ++revision_;
 }
 
 bool NativeDispatcher::isInstalled(NativeKey key) const {
@@ -270,8 +274,26 @@ invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction func
   return {ExecutionExitReason::GuestReturn, core.pc, 0, std::string(name)};
 }
 
+GuestHostDispatchKind NativeDispatcher::classify(std::uint32_t guestAddress) {
+  // The pad work-area service answers from live guest memory (the B0 table's published base), so its
+  // two entry addresses are resolved every time rather than remembered.
+  if (Hle::isPadWorkAreaEntry(guestAddress)) {
+    return resolveHostDispatch(core_, guestAddress).kind;
+  }
+  verdicts_.observe({.images = core_.imageCatalog().revision(),
+                     .overrides = revision_,
+                     .services = core_.game ? core_.game->platform_hle.revision() : 0u,
+                     .game = core_.game});
+  if (const auto cached = verdicts_.find(guestAddress)) {
+    return *cached;
+  }
+  const GuestHostDispatchKind kind = resolveHostDispatch(core_, guestAddress).kind;
+  verdicts_.store(guestAddress, kind);
+  return kind;
+}
+
 GuestHostDispatchKind classifyGuestHostDispatch(Core &core, std::uint32_t guestAddress) {
-  return resolveHostDispatch(core, guestAddress).kind;
+  return core.nativeDispatcher().classify(guestAddress);
 }
 
 ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress) {
