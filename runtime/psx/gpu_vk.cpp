@@ -1221,6 +1221,14 @@ void init_gpu_device(Game *game) {
 static void poll_quit(Game *game) {
   SDL_Event e;
   while (SDL_PollEvent(&e)) {
+    // This drain competes with Pad::drainHostKeyEvents for the same queue, and whichever runs first
+    // takes the event. A press delivered between two fields is drained here — a boot logo presents
+    // before the next field is serviced — so the pad has to learn about keys from HERE too, or a
+    // press that arrived while a guest draw was presenting is simply lost. SDL does not apply
+    // unfocused keys to its keyboard-state array either, so nothing downstream recovers it.
+    if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
+      game->pad.noteHostKey(static_cast<int>(e.key.scancode), e.type == SDL_EVENT_KEY_DOWN);
+    }
     overlay_glue_event(game, &e); // RmlUi overlay: ESC toggle + mouse/keyboard nav (no-op if not inited)
     if (e.type == SDL_EVENT_QUIT) {
       exit(0);

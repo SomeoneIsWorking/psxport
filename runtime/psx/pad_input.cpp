@@ -36,6 +36,7 @@
 #include "game.h" // class Pad lives on Game; reached via c->game->pad (see class docs)
 #include "game_runtime.h"
 #include "guest_pad_buffer_layout.h"
+#include "overlay_glue.h"
 #include <lucent/log.h>
 #include <stdint.h>
 
@@ -264,7 +265,7 @@ static void pad_apply_controller(SDL_Gamepad *gc, uint16_t *mask) {
 // frame (after SDL_PumpEvents elsewhere, or it pumps here). Builds an ACTIVE-LOW
 // mask: a bit is cleared when its control is pressed.
 void Pad::pollSdl() {
-  SDL_PumpEvents();
+  drainHostKeyEvents();
   uint16_t mask = PAD_NONE;
 
   // SDL3 leaves text input OFF by default (it is per-window and opt-in), and the RmlUi overlay is dropped
@@ -272,8 +273,8 @@ void Pad::pollSdl() {
   // SDL_StopTextInput dance is unnecessary). The keyboard read is gated only by rmlui_overlay_wants_keyboard
   // (stubbed to 0 in this build), so WASD always drives the game.
   const bool *ks = ((game && game->rml_overlay.wantsKeyboard()) ? nullptr : SDL_GetKeyboardState(NULL));
-  if (ks) {
-#define KEYDOWN(sc) (ks[(sc)] != 0)
+  if (mKeyDown[SDL_SCANCODE_RETURN] || (ks != nullptr && ks[SDL_SCANCODE_RETURN])) {
+#define KEYDOWN(sc) (mKeyDown[(sc)] || (ks != nullptr && ks[(sc)] != 0))
     if (KEYDOWN(SDL_SCANCODE_UP) || KEYDOWN(SDL_SCANCODE_W)) {
       mask &= ~0x0010u; // Up
     }
@@ -374,6 +375,46 @@ void Pad::pollSdl() {
   }
 
   buttons = mask;
+}
+
+// THIS IS THE HOST KEY STATE, AND IT IS OWNED HERE BECAUSE SDL_GetKeyboardState() IS NOT A
+// TRUSTWORTHY ANSWER TO "IS THE PLAYER HOLDING A KEY".
+//
+// SDL3 keeps that array per KEYBOARD-FOCUS window. When the product's window is not the focused
+// one, SDL still DELIVERS the key events — they are sitting in the queue and `poll_quit` drains
+// them — but it does not apply them to the state array, so every entry reads "up". Measured on
+// Spyro's shipping window (2026-10-01, SDL 3.0.4): with the window up and `wantsKeyboard` false and
+// `SDL_GetKeyboardState()` non-null, a real X11 KEY_DOWN for SDL_SCANCODE_RETURN arrived at
+// `SDL_PollEvent` and `ks[SDL_SCANCODE_RETURN]` was still 0 on the same frame, so the pad mask
+// never moved and Start/Cross did nothing. `SDL_GetKeyboardFocus()` was null, which is the gate.
+//
+// A player hits that gate whenever the window is not the focused one — after alt-tabbing back, a
+// fullscreen change, a notification, a window manager that leaves focus at the pointer root, or a
+// second window taking it. The symptom is uniform and unreadable: the game ignores every press
+// while the same key "works" under PSXPORT_FORCE_BUTTONS or a REPL tap, which is why every gate in
+// the project stayed green.
+//
+// So the pad owns the truth: one bit per scancode, set on KEY_DOWN and cleared on KEY_UP, fed by
+// the events themselves. The SDL state array is still OR-ed in, because it is correct whenever SDL
+// does have focus and costs nothing.
+void Pad::noteHostKey(int scancode, bool down) {
+  if (scancode > 0 && scancode < kHostKeyStates) {
+    mKeyDown[scancode] = down;
+  }
+}
+
+void Pad::drainHostKeyEvents() {
+  SDL_PumpEvents();
+  SDL_Event e;
+  while (SDL_PollEvent(&e)) {
+    if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
+      noteHostKey(static_cast<int>(e.key.scancode), e.type == SDL_EVENT_KEY_DOWN);
+    }
+    // Every event is forwarded, so the RmlUi overlay keeps exactly the input it had when the
+    // present-path drain was the only consumer. Two drains racing is safe for the same reason:
+    // whichever gets an event passes it on here, so the overlay sees each one exactly once.
+    overlay_glue_event(game, &e);
+  }
 }
 #endif // PSXPORT_SDL
 

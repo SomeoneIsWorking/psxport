@@ -20,10 +20,19 @@ public:
   int repl_tap_n = 0;          // REPL: tap countdown frames (was s_repl_tap_n)
   int repl_on = 0;             // REPL drive active (was s_repl_on)
 
-  void init();                            // was pad_init(Core*)
-  void setButtons(uint16_t mask);         // was pad_set_buttons(Core*, mask) — feed the active-low mask
-  void fillBuffer(uint8_t *buf);          // was pad_fill_buffer(Core*, buf) — per-VBlank guest read pad
-  void pollSdl();                         // was pad_poll_sdl(Core*) — host SDL controller poll
+  void init();                    // was pad_init(Core*)
+  void setButtons(uint16_t mask); // was pad_set_buttons(Core*, mask) — feed the active-low mask
+  void fillBuffer(uint8_t *buf);  // was pad_fill_buffer(Core*, buf) — per-VBlank guest read pad
+  void pollSdl();                 // was pad_poll_sdl(Core*) — host SDL controller poll
+
+  // Consume the host event queue: KEY_DOWN/KEY_UP update `mKeyDown` (the pad's OWN host key state),
+  // everything is forwarded to the RmlUi overlay. pollSdl calls it; see its definition for why the
+  // pad cannot read SDL_GetKeyboardState() as the answer.
+  void drainHostKeyEvents();
+  // Record one host key from a KEY_DOWN/KEY_UP the host delivered. Called from EVERY consumer of the
+  // host event queue, not just this pad's own drain: `poll_quit` drains the same queue on the
+  // present path and would otherwise swallow a press that arrived between two fields.
+  void noteHostKey(int scancode, bool down);
   void overridesInit();                   // was pad_overrides_init(Core*) — install per-VBlank pad-read override
   void driveHold(uint16_t activeLowMask); // was pad_repl_hold(c, mask) — REPL: hold down these bits
   void driveTap(uint16_t activeLowMask, int nframes); // was pad_repl_tap(c, mask, n) — press for n frames
@@ -116,6 +125,12 @@ public:
 
 private:
   ActiveLowEdges mButtonEdges;
+  // One flag per SDL scancode, fed from KEY_DOWN/KEY_UP events rather than from SDL's focus-gated
+  // keyboard-state array, so a delivered press is a press whether or not our window holds focus.
+  // 512 is SDL_NUM_SCANCODES; it is spelled as a number so this header stays free of SDL types
+  // (game.h includes it), and `drainHostKeyEvents` bounds-checks every scancode against it.
+  static constexpr int kHostKeyStates = 512;
+  bool mKeyDown[kHostKeyStates] = {};
   bool mSlot1Connected = false;
   // ---- SDL gamepad handles (hotswap-aware; SDL build only) ----
   static const int PAD_MAX_GC = 4;
