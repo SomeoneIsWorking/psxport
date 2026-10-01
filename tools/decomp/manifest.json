@@ -40,6 +40,14 @@
       "text_size": "0x65800",
       "note": "Insomniac. Its repo verified the file-offset formula against 62,183 of 62,183 recorded instructions."
     },
+    "c12": {
+      "kind": "resident",
+      "serial": "SCUS_946.66",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0xE0800",
+      "note": "C-12: Final Resistance (USA). Geometry read from the authenticated executable's own header (text 0x80010000, size 0xE0C00, entry 0x800A8454), which the pipeline cross-checks."
+    },
     "crash1": {
       "kind": "resident",
       "serial": "SCUS_949.00",
@@ -385,6 +393,16 @@
       "code_first": "0x0",
       "code_last": "0x2E800",
       "note": "BOOT.BIN, 189 sectors. The shell/menu overlay: it owns the root scene 0x80078C90 (enter 0x80092BDC, update 0x80092BA0, present 0x80092B7C), the scene-transition primitive 0x8001E588/0x8001E610, and the mode/attract scenes (0x8009F720: enter 0x80092CAC, update 0x80092EDC, present 0x80092E94) that dispatch DAT28136. Load base and extent are the crashbash repo's measured facts (titles/crashbash/boot_module.json)."
+    },
+    "crashbash_menu": {
+      "kind": "module",
+      "title": "crashbash",
+      "serial": "SCUS_945.70",
+      "sha1": "2ad6c8e943ffe966786fcc8ad88077e341fdd470",
+      "load_base": "0x800B32B4",
+      "code_first": "0x0",
+      "code_last": "0x7FFF",
+      "note": "MENU.BIN, 16 sectors. The shell menu overlay: SELECT GAME TYPE, SELECT NUMBER OF PLAYERS, CHOOSE LEVEL, the difficulty/cups pages, the memory-card browser strings ('CHECK MEMORY CARD / FOR SAVED GAME / THERE IS NO CRASH BASH DATA ON THIS MEMORY CARD / FOR UNLOCKED LEVELS') and the character-select grid. Load base and extent are the crashbash repo's measured facts (titles/crashbash/menu_module.json)."
     }
   }
 }
