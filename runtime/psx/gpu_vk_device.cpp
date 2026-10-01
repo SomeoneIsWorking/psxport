@@ -1,0 +1,72 @@
+// GpuDevice teardown: the SDL window, GPU device, samplers and pipelines a Game's first present created.
+//
+// Until 2026-10-01 nothing released any of it. A process only ever ran one Game, so process exit was
+// the owner. A product that runs one Game after another (a title picker, then a title, then the picker
+// again) would otherwise leave every earlier Game's window open and its device alive, and the next
+// Game's init would see `s_inited` of a fresh GpuDevice and create a second window beside the first.
+#include "gpu_vk_device.h"
+
+#include <lucent/log.h>
+
+namespace {
+template <typename T, typename Release> void releaseHandle(T *&handle, SDL_GPUDevice *device, Release release) {
+  if (handle != nullptr) {
+    release(device, handle);
+    handle = nullptr;
+  }
+}
+} // namespace
+
+GpuDevice::~GpuDevice() {
+  if (s_inited == 0) {
+    return;
+  }
+  if (s_dev != nullptr) {
+    SDL_WaitForGPUIdle(s_dev);
+    const auto pipeline = [](SDL_GPUDevice *d, SDL_GPUGraphicsPipeline *p) {
+      SDL_ReleaseGPUGraphicsPipeline(d, p);
+    };
+    releaseHandle(s_present_pipe, s_dev, pipeline);
+    releaseHandle(s_image_pipe, s_dev, pipeline);
+    releaseHandle(s_tri_pipe, s_dev, pipeline);
+    releaseHandle(s_line_pipe, s_dev, pipeline);
+    releaseHandle(s_tritex_pipe, s_dev, pipeline);
+    releaseHandle(s_decode_pipe, s_dev, pipeline);
+    releaseHandle(s_encode_pipe, s_dev, pipeline);
+    releaseHandle(s_ires_downsample_pipe, s_dev, pipeline);
+    releaseHandle(s_semi_cover_pipe, s_dev, pipeline);
+    releaseHandle(s_painter_tex_pipe, s_dev, pipeline);
+    releaseHandle(s_painter_tri_pipe, s_dev, pipeline);
+    releaseHandle(s_painter_composite_pipe, s_dev, pipeline);
+    for (SDL_GPUGraphicsPipeline *&semi : s_semi_pipe) {
+      releaseHandle(semi, s_dev, pipeline);
+    }
+    for (SDL_GPUGraphicsPipeline *&semi : s_painter_semi_pipe) {
+      releaseHandle(semi, s_dev, pipeline);
+    }
+    releaseHandle(s_samp_nearest, s_dev, [](SDL_GPUDevice *d, SDL_GPUSampler *s) {
+      SDL_ReleaseGPUSampler(d, s);
+    });
+    releaseHandle(s_samp_linear, s_dev, [](SDL_GPUDevice *d, SDL_GPUSampler *s) {
+      SDL_ReleaseGPUSampler(d, s);
+    });
+    releaseHandle(s_img_tex, s_dev, [](SDL_GPUDevice *d, SDL_GPUTexture *t) {
+      SDL_ReleaseGPUTexture(d, t);
+    });
+    releaseHandle(s_img_xfer, s_dev, [](SDL_GPUDevice *d, SDL_GPUTransferBuffer *b) {
+      SDL_ReleaseGPUTransferBuffer(d, b);
+    });
+    if (s_win != nullptr) {
+      SDL_ReleaseWindowFromGPUDevice(s_dev, s_win);
+    }
+    SDL_DestroyGPUDevice(s_dev);
+    s_dev = nullptr;
+  }
+  if (s_win != nullptr) {
+    SDL_DestroyWindow(s_win);
+    s_win = nullptr;
+  }
+  SDL_QuitSubSystem(SDL_INIT_VIDEO);
+  s_inited = 0;
+  lucent::info("gpu_vk", "device and window released");
+}

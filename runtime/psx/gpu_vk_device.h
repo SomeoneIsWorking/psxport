@@ -16,6 +16,13 @@
 
 class GpuDevice {
 public:
+  GpuDevice() = default;
+  GpuDevice(const GpuDevice &) = delete;
+  GpuDevice &operator=(const GpuDevice &) = delete;
+  // Releases the window, device, samplers and pipelines `init_gpu` created, when it ran. Per-Game
+  // targets on GpuVkState die with the device; Game orders the two so that is safe.
+  ~GpuDevice();
+
   // First Game to construct claims the process device slot (signal-free singleton claim; see above).
   static GpuDevice *sInstance;
 
