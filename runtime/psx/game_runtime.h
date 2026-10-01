@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 
 #include "guest_pad_buffer_layout.h"
@@ -156,6 +157,13 @@ public:
   // Title-specific developer commands. The framework REPL owns parsing for framework state only;
   // guest addresses, object layouts, and title subsystems stay behind this game-owned boundary.
   virtual bool replCommand(Core &, const char *, const char *) {
+    return false;
+  }
+
+  // Title-specific commands on the live control channel (the loopback debug endpoint). `out` is the
+  // reply stream. Return true when the command was this title's. Unlike replCommand, whose reply goes to
+  // the log, this answers the client that asked.
+  virtual bool controlCommand(Core &, const char *, const char *, FILE *) {
     return false;
   }
 

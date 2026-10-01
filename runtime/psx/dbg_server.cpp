@@ -119,38 +119,66 @@ public:
   static Core *&ctx() {
     return sInstance->mCtx;
   }
+  // The process-lifetime half. The server thread is detached and never ends, so everything it touches
+  // (the mutex it waits on, the request slot, the started flag) has to outlive every Game. These used to
+  // be members of the DbgServer of whichever Game claimed the endpoint, so the thread kept using the
+  // mutex of a Game that had been destroyed: harmless while a process ran one Game, undefined behaviour
+  // for a host that runs one Game after another.
+  struct Channel {
+    pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t done = PTHREAD_COND_INITIALIZER; // signalled by main when a result is ready
+    char cmd[512] = {};                             // command awaiting service (server -> main)
+    int reqPending = 0;                             // 1 while a command is queued for the main thread
+    int respReady = 0;                              // 1 once the main thread has produced a result
+    char *respBuf = nullptr;                        // malloc'd result (main -> server); server frees after sending
+    size_t respLen = 0;
+    // WHICH REQUEST a queued command and a produced result belong to; see dbg_submit for why.
+    uint64_t reqGen = 0;
+    uint64_t respGen = 0;
+    bool threadStarted = false;
+  };
+  static Channel sChannel;
   static bool &started() {
-    return sInstance->mStarted;
+    return sChannel.threadStarted;
   }
   static pthread_mutex_t &mtx() {
-    return sInstance->mMtx;
+    return sChannel.mtx;
   }
   static pthread_cond_t &done() {
-    return sInstance->mDone;
+    return sChannel.done;
   }
   static char (&cmd())[512] {
-    return sInstance->mCmd;
+    return sChannel.cmd;
   }
   static int &reqPending() {
-    return sInstance->mReqPending;
+    return sChannel.reqPending;
   }
   static int &respReady() {
-    return sInstance->mRespReady;
+    return sChannel.respReady;
   }
   static char *&respBuf() {
-    return sInstance->mRespBuf;
+    return sChannel.respBuf;
   }
   static size_t &respLen() {
-    return sInstance->mRespLen;
+    return sChannel.respLen;
   }
   static uint64_t &reqGen() {
-    return sInstance->mReqGen;
+    return sChannel.reqGen;
   }
   static uint64_t &respGen() {
-    return sInstance->mRespGen;
+    return sChannel.respGen;
   }
 };
 DbgServer *DbgServerInternals::sInstance = nullptr;
+DbgServerInternals::Channel DbgServerInternals::sChannel;
+
+DbgServer::~DbgServer() {
+  if (DbgServerInternals::sInstance == this) {
+    pthread_mutex_lock(&DbgServerInternals::sChannel.mtx);
+    DbgServerInternals::sInstance = nullptr;
+    pthread_mutex_unlock(&DbgServerInternals::sChannel.mtx);
+  }
+}
 
 // Impl-TU shorthand so the dispatcher below (a large switch) doesn't sprout accessor calls every
 // three lines. Not exported — this block is impl-private.
@@ -546,6 +574,14 @@ static void dbg_exec(FILE *out, const char *line) {
     sscanf(line, "%*s %255s", path);
     gpu_vk_shot(s_ctx, path);
     fprintf(out, "vkshot -> %s\n", path);
+  } else if (!strcmp(cmd, "pshot")) {
+    // What the PLAYER sees: the present image (letterboxed, faded, overlay-screen included), either leg.
+    // `shot` reads guest VRAM instead, which is blank for any frame the guest did not draw.
+    char path[256] = "scratch/screenshots/dbg_present.png";
+    sscanf(line, "%*s %255s", path);
+    void gpu_vk_present_shot(Core *, const char *);
+    gpu_vk_present_shot(s_ctx, path);
+    fprintf(out, "pshot -> %s\n", path);
   } else if (!strcmp(cmd, "vkstats")) {
     int tri = 0, tex = 0, semi = 0;
     gpu_vk_stats(s_ctx, &tri, &tex, &semi);
@@ -774,6 +810,17 @@ static void dbg_exec(FILE *out, const char *line) {
             s_paused,
             s_ctx->game->gpu.s_disp_x,
             s_ctx->game->gpu.s_disp_y);
+  } else if (!strcmp(cmd, "session")) {
+    // Host-level session control (session_control.h). `session return` ends this Game and shows the
+    // host's selector; it writes no guest state and refuses where the product has no selector.
+    if (sscanf(line, "%*s %31s", arg) == 1 && !strcmp(arg, "return")) {
+      const bool ok = s_ctx->game->session.requestReturn();
+      fprintf(out, ok ? "session return requested\n" : "session return REFUSED: this product has no title selector\n");
+    } else {
+      fprintf(out, "usage: session return\n");
+    }
+  } else if (s_ctx->runtime && s_ctx->runtime->controlCommand(*s_ctx, cmd, line, out)) {
+    // handled by the title's own control surface (GameRuntime::controlCommand)
   } else {
     fprintf(out, "? %s  (try 'help')\n", line);
   }
@@ -1023,7 +1070,10 @@ void DbgServer::start(Core *c) {
   // port — looked like a crash on entering the New-Game cutscene, but the process was merely SIGPIPE'd).
   // Ignore it process-wide so the server just sees write()<0 and drops that one connection.
   signal(SIGPIPE, SIG_IGN);
-  c->game->gpu.gpu_provat_enable(); // so `provat` works at any time (not gated on PSXPORT_PROVAT)
+  c->game->gpu.gpu_provat_enable();
+  if (s_started) {
+    return; // the process endpoint is already listening: this Game just re-claimed it (see ~DbgServer)
+  } // so `provat` works at any time (not gated on PSXPORT_PROVAT)
   pthread_t t;
   int *port_arg = new int(port); // ownership transfers to dbg_thread after pthread_create succeeds
   if (pthread_create(&t, NULL, dbg_thread, port_arg) != 0) {

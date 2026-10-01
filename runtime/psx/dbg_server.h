@@ -11,7 +11,6 @@
 #include "config_vars.h" // cv_debug_server — the endpoint's port
 #include <cstddef>
 #include <cstdint>
-#include <pthread.h>
 #include <string_view>
 class Core;
 class Game;
@@ -54,6 +53,13 @@ inline bool debug_server_live() {
 class DbgServer {
 public:
   Game *game = nullptr; // back-pointer wired by Game()
+
+  DbgServer() = default;
+  DbgServer(const DbgServer &) = delete;
+  DbgServer &operator=(const DbgServer &) = delete;
+  // Releases this Game's claim on the process endpoint so the next Game's start() re-claims it; the
+  // listening thread keeps running, and a command that arrives with no Game bound times out cleanly.
+  ~DbgServer();
 
   // Process entry — installed by boot when PSXPORT_DEBUG_SERVER names a port. NO-OP otherwise.
   void start(Core *c);
@@ -122,26 +128,10 @@ private:
   int mStep = 0;
   unsigned short mHeld = 0xFFFF; // active-low held mask (all released)
 
-  // Handoff between the TCP server thread and the MAIN thread. mMtx guards mReqPending/mRespReady/
-  // mCmd/mRespBuf/mRespLen/mReqGen/mRespGen. See dbg_server.cpp for the timed-wait dance in
-  // dbg_submit, and there for why the generation pair exists.
-  bool mStarted = false;
-  Core *mCtx = nullptr;
-  pthread_mutex_t mMtx = PTHREAD_MUTEX_INITIALIZER;
-  pthread_cond_t mDone = PTHREAD_COND_INITIALIZER; // signalled by main when a result is ready
-  char mCmd[512] = {};                             // command awaiting service (server -> main)
-  int mReqPending = 0;                             // 1 while a command is queued for the main thread
-  int mRespReady = 0;                              // 1 once the main thread has produced a result
-  char *mRespBuf = nullptr;                        // malloc'd result (main -> server); server frees after sending
-  size_t mRespLen = 0;
-  // WHICH REQUEST a queued command and a produced result belong to. Without this pair an ABANDONED
-  // request (dbg_submit's timeout) is unrecoverable: the main thread finishes servicing it later and
-  // sets mRespReady for nobody, and the next submitter's guard loop then spins to its own timeout
-  // forever. Measured on a stuck run: the endpoint served exactly ONE command for the rest of the
-  // process and every later read spun to timeout, so the surface reported a timeout where a reader
-  // expected a value. Bumping the generation abandons the request AND invalidates the answer the
-  // in-flight service is about to publish, so the slot is usable again on the next command.
-  uint64_t mReqGen = 0;
-  uint64_t mRespGen = 0;
+  Core *mCtx = nullptr; // set at the top of service(); the frame-loop Core while a command runs
+
+  // The server thread and its main<->server handoff are PROCESS-lifetime (see DbgServerInternals::Channel in
+  // dbg_server.cpp), not this object's: a Game that ends must not take the listening port, the thread, or
+  // the mutex the thread waits on with it. This object only holds what belongs to ONE Game's session.
   friend class DbgServerInternals; // dbg_server.cpp accessor helper (see impl file)
 };
