@@ -1274,6 +1274,9 @@ def test_warm_run_opens_the_project_without_reanalyzing() -> None:
         raised, message = raises(headless.GhidraRefusal, headless.GhidraInvocation,
                                  **common, reuse_project=True, decompile_targets=False)
         check(raised, "a warm run with nothing to ask is REFUSED, not launched to exit 0", message)
+        decompile_only = headless.GhidraInvocation(**common, reuse_project=True).command()
+        check(decompile_only.count("-postScript") == 1 and "-noanalysis" in decompile_only,
+              "a warm run with targets and no queries decompiles them")
         raised, message = raises(headless.GhidraRefusal, headless.GhidraInvocation,
                                  **{**common, "prescript": None})
         check(raised, "an import with no pre-script is REFUSED before it is launched", message)

@@ -134,11 +134,10 @@ class GhidraInvocation:
             self.queryscript = Path(self.queryscript).resolve()
         if self.queries_path is not None:
             self.queries_path = Path(self.queries_path).resolve()
-        if self.reuse_project and self.queryscript is None:
+        if self.reuse_project and self.queryscript is None and not self.decompile_targets:
             raise GhidraRefusal(
-                "reuse_project asks Ghidra to open an existing program with -noanalysis, but no query "
-                "script was given, so the run would open the project, do nothing and exit 0. A warm "
-                "run with nothing to ask is a run that establishes nothing."
+                "reuse_project asks Ghidra to open an existing program with -noanalysis, but neither a "
+                "query script nor decompile targets were given, so the run would do nothing."
             )
         if self.reuse_project and self.prescript is not None:
             # A warm run must NOT seed anything, and the reason is a measured difference rather than
