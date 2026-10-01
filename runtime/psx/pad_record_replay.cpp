@@ -33,6 +33,12 @@ void PadRecordReplay::configure(const PadSessionConfig &config) {
   configured_ = true;
   const CardIdentity card = config.cardIdentity ? config.cardIdentity() : CardIdentity{};
   recording_ = PadRecording(card);
+  if (config.liveInputOnly) {
+    // Named once, here, because the alternative is a picker that silently rotates the player's real
+    // capture or replays a pad file belonging to the title it is about to start.
+    lucent::info("padrec", "live input only: no recording sink, no replay, no resume (host-only screen)");
+    return;
+  }
   openSink(config, card);
   // PSXPORT_PAD_RESUME is the same replay plus fast-forward until the recording is spent, then the
   // player drives. Two knobs because the two intentions want opposite pacing: a gate replays at real

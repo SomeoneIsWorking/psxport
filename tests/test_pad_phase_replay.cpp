@@ -79,6 +79,11 @@ std::vector<std::uint8_t> readBytes(const std::string &path) {
   return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
+bool fileExists(const std::string &path) {
+  std::error_code ignored;
+  return std::filesystem::exists(path, ignored);
+}
+
 void removeFile(const std::string &path) {
   std::error_code ignored;
   std::filesystem::remove(path, ignored);
@@ -394,6 +399,38 @@ void test_the_record_sink_captures_what_a_replay_delivers_under_the_live_phases(
   removeFile(sink);
 }
 
+void test_a_live_input_only_session_neither_sinks_nor_replays() {
+  // A host-only screen (a title picker) runs before any game, so a default sink would rotate the
+  // player's real capture and a replay would drive the pad with a file belonging to the title that
+  // starts AFTER this screen. Both are refused here; the in-memory recording still runs, so the
+  // control channel's `padrec save` keeps answering.
+  const std::string sink = scratchFile("test_pad_phase_replay_live_only.pad");
+  const std::string source = scratchFile("test_pad_phase_replay_live_only_src.pad");
+  writeBytes(source, menuRoute().encode());
+  PadRecordReplay session;
+  session.configure(PadSessionConfig{
+      .recordPath = sink,
+      .replayPath = source,
+      .resumePath = "",
+      .windowed = true, // would open kDefaultSink if the session were not live-input-only
+      .liveInputOnly = true,
+      .cardIdentity =
+          [] {
+            return cardImage(0x11);
+          },
+  });
+  // The live mask passes through untouched: nothing here owns the pad.
+  for (const std::uint64_t phase : concat({repeat(kTitle, 3), repeat(kMenu, 2)})) {
+    CHECK_EQ(session.service(phase, kNeutralMask, kNeutralMask), kNeutralMask);
+  }
+  CHECK(!session.replayPending());
+  CHECK(!fileExists(sink));
+  CHECK(!fileExists(scratchFile("test_pad_phase_replay_live_only.pad.saved")));
+  // ...and the in-memory recording is still there, which is the half that must survive.
+  CHECK_EQ(session.recording().totalFrames(), 5u);
+  removeFile(source);
+}
+
 // ---- the Pad seam ----------------------------------------------------------------------------------
 
 constexpr std::uint32_t kPhaseWord = 0x1000u;
@@ -462,6 +499,7 @@ int main() {
   RUN(a_keyed_recording_is_refused_by_a_title_without_phases);
   RUN(a_raw_file_on_the_replay_knob_is_refused_not_replayed);
   RUN(the_record_sink_captures_what_a_replay_delivers_under_the_live_phases);
+  RUN(a_live_input_only_session_neither_sinks_nor_replays);
   RUN(pad_records_the_title_phase_of_every_frame);
   return pt_summary();
 }

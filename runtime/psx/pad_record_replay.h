@@ -34,6 +34,11 @@ struct PadSessionConfig {
   std::string replayPath;
   std::string resumePath;
   bool windowed = false;
+  // A host-only screen that runs before a game (a title picker) wants the live input sources and
+  // nothing a session owns: no sink at all, so the default one cannot rotate the player's real
+  // capture, and no replay or resume, which belong to the title started after it. The in-memory
+  // recording still runs, so the control channel's `padrec save` keeps answering.
+  bool liveInputOnly = false;
   std::function<CardIdentity()> cardIdentity;
 };
 

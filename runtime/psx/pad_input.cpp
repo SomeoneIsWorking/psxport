@@ -609,6 +609,7 @@ void Pad::serviceFrame() {
           .replayPath = psx::config::cv_pad_replay.get(),
           .resumePath = psx::config::cv_pad_resume.get(),
           .windowed = have_window != 0,
+          .liveInputOnly = mLiveInputOnly,
           .cardIdentity =
               [this] {
                 return game->memcard.identity();

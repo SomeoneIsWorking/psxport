@@ -99,8 +99,13 @@ public:
   // presses, and nothing a run's recording owns: no default `scratch/bin/pad_session.pad` sink, which
   // rotates the player's real capture, and no PSXPORT_PAD_REPLAY, which belongs to the title started
   // after it. Call before the first serviceFrame().
+  //
+  // Stated to the session owner rather than implemented here, because the sink and the replay are
+  // both resolved there and skipping them from the outside would leave the session believing it is
+  // configured and holding nothing. The in-memory recording keeps running, so the control channel's
+  // `padrec save` still answers for a screen that has a pad.
   void useLiveInputOnly() {
-    mRecInit = 1;
+    mLiveInputOnly = true;
   }
 
   // Slot-1 controller presence is game policy. The default remains absent so existing single-pad
@@ -133,6 +138,7 @@ private:
 
   // ---- input record / replay + schedules ----
   psx::input::PadRecordReplay mSession;
+  bool mLiveInputOnly = false;             // a host-only screen: no sink, no replay, live input only
   uint64_t currentPhase(Core &core) const; // the title's input phase this frame (GameRuntime::inputPhase)
   int mShotInit = 0, mShotN = 0;
   uint32_t mShotAt[64] = {};
