@@ -277,6 +277,17 @@ struct LightrecExecutor::Impl {
   fallbackAdmission(lightrec_state *, const lightrec_fallback_event *event, void *userData) {
     auto &impl = *static_cast<Impl *>(userData);
     auto &boundary = impl.activeBoundary();
+    // A cross-block load-delay hazard is architected R3000 behaviour, not a refused compilation:
+    // a taken branch whose delay slot loads $r, into a block whose FIRST instruction reads $r, must
+    // see $r's old value. Lightrec resolves it by interpreting exactly that instruction (plus a
+    // branch and its delay slot when the first instruction is itself a branch), so the interpreted
+    // work per event is at most three guest instructions regardless of the block. Hand-scheduled
+    // GTE clipping loops hit it once per vertex, so a per-call BLOCK limit cannot bound it and would
+    // fault correct guest code (Toy Story 2 at 0x800202F0). It is therefore exempt from the block
+    // limit and reported by its own counters (fallback_instructions against executed_instructions).
+    if (event->reason == LIGHTREC_FALLBACK_LOAD_DELAY_HAZARD) {
+      return LIGHTREC_FALLBACK_ALLOW;
+    }
     if (boundary.admittedFallbackBlocks < boundary.fallbackPolicy.maxBlocksPerExecution) {
       ++boundary.admittedFallbackBlocks;
       return LIGHTREC_FALLBACK_ALLOW;

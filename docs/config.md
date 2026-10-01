@@ -56,7 +56,14 @@ bounded executor call may admit. Its default is `1`, matching the verified diffi
 a second fallback block in the same call is a typed execution fault. `0` disables automatic
 fallback admission without creating a selectable interpreter mode. Negative values are invalid and
 fault before guest execution. Lightrec asks the executor before entering any fallback block, so a
-zero limit executes zero interpreter instructions. Lightrec shutdown and explicit turn-end reports
+zero limit executes zero interpreter instructions of a block fallback. The one exemption is the
+cross-block load-delay hazard (`load_delay_hazard` in the telemetry): a taken branch whose delay slot
+loads `$r` into a block whose first instruction reads `$r` must see the OLD `$r`, and Lightrec
+resolves that by interpreting at most three guest instructions (the first instruction, or a first
+branch with its delay slot). It is architected R3000 behaviour rather than a refused compilation,
+hand-scheduled loops hit it once per iteration (Toy Story 2's GTE clipper at `0x800202F0`), and a
+per-call block limit would fault correct guest code, so it is admitted without consuming the limit
+and reported by its own counters against `executed_instructions`. Lightrec shutdown and explicit turn-end reports
 name executor calls, executed blocks/instructions, admitted and refused fallback blocks, every
 admitted/refused reason count, and the policy applied to the most recent execution.
 
