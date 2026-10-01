@@ -122,6 +122,11 @@ static void on_interrupt(int sig) {
 
 // Enable with PSXPORT_WATCHDOG=<seconds> (0/unset disables). Call once at startup.
 void watchdog_init(void) {
+  // A host that runs one Game after another arms the watchdog once per Game. Everything but the SIGNAL
+  // DISPOSITIONS below is per-run state: `main_present_ready` left set by the previous Game's first
+  // present would hand the next Game's cold GPU initialisation the 3 s steady budget instead of the
+  // boot grace, and a watchdog_disable() left armed=0 would be re-decided by the config below.
+  s_wd = {};
   // A crash (SIGSEGV/SIGABRT) during boot should report WHERE (C backtrace names the guest_<addr>
   // guest call chain), not silently dump core — install the fault handler regardless of the setting.
   struct sigaction fa = {};

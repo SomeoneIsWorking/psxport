@@ -246,8 +246,6 @@ uint8_t *Core::host_ptr(uint32_t a, uint32_t bytes) {
   return 0;
 }
 
-static uint32_t s_dma3_madr, s_dma3_bcr, s_dma3_chcr; // DMA3: CDROM data FIFO -> RAM
-
 // DPCR (0x1F8010F0) and DICR (0x1F8010F4) — the DMA controller's channel-enable and interrupt
 // registers. Rules in dma_irq.h; state here, alongside the per-channel registers it governs.
 //
@@ -256,26 +254,23 @@ static uint32_t s_dma3_madr, s_dma3_bcr, s_dma3_chcr; // DMA3: CDROM data FIFO -
 // their untouched 0 as "every channel disabled" and stop every DMA in the port. Its power-on value
 // is published so a guest that read-modify-writes it (which is the only way it is ever used) sees
 // the other channels' bits rather than zeros.
-static uint32_t s_dpcr = DPCR_RESET;
-static uint32_t s_dicr = 0;
 
 // Channels that finished a transfer the guest armed and have not had their callback run yet.
 // Deferred to a guest FUNCTION-ENTRY boundary (Hle::irqPoll), never dispatched from inside the store
 // that finished the transfer: native runtime code is mid-mutation there, and re-entering guest code
 // from a store is how a controller gets re-entered halfway through a command.
-static DmaDone s_dma_done;
 
-void dma_irq_ack(int ch) {
-  s_dicr &= ~(1u << (24 + ch));
+void dma_irq_ack(Core &core, int ch) {
+  core.dma.dicr &= ~(1u << (24 + ch));
 }
-bool dma_done_owed(int ch) {
-  return s_dma_done.owed(ch);
+bool dma_done_owed(const Core &core, int ch) {
+  return core.dma.done.owed(ch);
 }
-void dma_done_taken(int ch) {
-  s_dma_done.taken(ch);
+void dma_done_taken(Core &core, int ch) {
+  core.dma.done.taken(ch);
 }
-bool dma_done_any() {
-  return s_dma_done.mask != 0;
+bool dma_done_any(const Core &core) {
+  return core.dma.done.mask != 0;
 }
 
 // One completion point per channel, all identical: the DICR gate decides, never the channel number.
@@ -283,9 +278,9 @@ bool dma_done_any() {
 // Returns true if the guest is now owed a callback, so the caller can raise its deferred-work bit
 // (the completion sites are all Core methods; this is deliberately not one, so it cannot touch
 // anything else on the Core by accident).
-static bool dma_completed(int ch) {
-  const bool owed = s_dma_done.complete(s_dicr, ch);
-  lucent::debug("dmairq", "DMA{} complete: armed={} (DICR {:08X})", ch, owed ? 1 : 0, dma_dicr_read(s_dicr));
+static bool dma_completed(DmaRegisters &dma, int ch) {
+  const bool owed = dma.done.complete(dma.dicr, ch);
+  lucent::debug("dmairq", "DMA{} complete: armed={} (DICR {:08X})", ch, owed ? 1 : 0, dma_dicr_read(dma.dicr));
   return owed;
 }
 
@@ -385,14 +380,14 @@ void Core::mdec_dma_pump() {
     if (s_mdec0_left == 0 && (s_dma0_chcr & 0x01000000u)) {
       s_dma0_chcr &= ~0x01000000u;
       lucent::debug("mdecdma", "DMA0(in)  complete");
-      if (dma_completed(0)) {
+      if (dma_completed(dma, 0)) {
         pending_work |= PW_IRQ;
       }
     }
     if (s_mdec1_left == 0 && (s_dma1_chcr & 0x01000000u)) {
       s_dma1_chcr &= ~0x01000000u;
       lucent::debug("mdecdma", "DMA1(out) complete");
-      if (dma_completed(1)) {
+      if (dma_completed(dma, 1)) {
         pending_work |= PW_IRQ;
       }
     }
@@ -721,13 +716,13 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     return spu_read(p); // SPU register file
   }
   if (p == 0x1F8010B0) {
-    return s_dma3_madr; // DMA3 CDROM->RAM
+    return dma.dma3Madr; // DMA3 CDROM->RAM
   }
   if (p == 0x1F8010B4) {
-    return s_dma3_bcr;
+    return dma.dma3Bcr;
   }
   if (p == 0x1F8010B8) {
-    return s_dma3_chcr; // busy bit already cleared by the write handler
+    return dma.dma3Chcr; // busy bit already cleared by the write handler
   }
   if (p == 0x1F8010C0) {
     return s_dma4_madr;
@@ -772,10 +767,10 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     return s_dma2_chcr; // DMA2 CHCR (busy bit already cleared)
   }
   if (p >= 0x1F8010F0 && p <= 0x1F8010F3) { // DPCR — plain storage, byte-addressable
-    return s_dpcr >> ((p & 3u) * 8u);
+    return dma.dpcr >> ((p & 3u) * 8u);
   }
   if (p >= 0x1F8010F4 && p <= 0x1F8010F7) { // DICR — bit 31 is computed, not stored
-    return dma_dicr_read(s_dicr) >> ((p & 3u) * 8u);
+    return dma_dicr_read(dma.dicr) >> ((p & 3u) * 8u);
   }
   if (p == 0x1F8010E0) {
     return s_dma6_madr; // DMA6 OTC MADR
@@ -860,31 +855,31 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   // this way (CD_getsector drives 0x1F8010B0/B4/B8 through its own pointer globals), so no
   // libcd-based game could read from disc at all.
   if (p == 0x1F8010B0) {
-    s_dma3_madr = v;
+    dma.dma3Madr = v;
     return;
   }
   if (p == 0x1F8010B4) {
-    s_dma3_bcr = v;
+    dma.dma3Bcr = v;
     return;
   }
   if (p == 0x1F8010B8) {
-    s_dma3_chcr = v;
+    dma.dma3Chcr = v;
     if (v & 0x01000000u) { // start/busy
       // Sync mode decides what MADR and BCR even MEAN, and mode 2 ignores BCR entirely. Reading a
       // chain as a block count transferred the wrong words and then announced completion, which is
       // worse than not transferring: the guest stops waiting for something that never ran.
-      const unsigned mode = psx::dma::syncMode(s_dma3_bcr);
-      uint32_t endMadr = s_dma3_madr & 0x1FFFFC;
+      const unsigned mode = psx::dma::syncMode(dma.dma3Bcr);
+      uint32_t endMadr = dma.dma3Madr & 0x1FFFFC;
       bool chainRefused = false;
-      int n = mode == psx::dma::kLinkedList ? psx::dma::chainWords(*this, s_dma3_madr, &endMadr, &chainRefused)
-                                            : dma_block_words(s_dma3_bcr);
+      int n = mode == psx::dma::kLinkedList ? psx::dma::chainWords(*this, dma.dma3Madr, &endMadr, &chainRefused)
+                                            : dma_block_words(dma.dma3Bcr);
       if (mode != psx::dma::kLinkedList) {
-        endMadr = (s_dma3_madr & 0x1FFFFC) + (unsigned)n * 4u;
+        endMadr = (dma.dma3Madr & 0x1FFFFC) + (unsigned)n * 4u;
       }
       if (n > 0x10000) {
         n = 0x10000;
       }
-      uint32_t da = s_dma3_madr & 0x1FFFFC;
+      uint32_t da = dma.dma3Madr & 0x1FFFFC;
       // CDC DMA returns zero after the FIFO empties (Beetle PS_CDC_DMARead) and still completes.
       // Keep both populations visible so a normal libstr tail flush cannot masquerade as disc data
       // and an unexpected depletion cannot disappear silently.
@@ -937,11 +932,11 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         // A guest that reads MADR back after a chain expects the end of the chain, which is what
         // hardware leaves there. Leaving the head behind made a resume-from-MADR guest restart the
         // whole chain, and a guest walking `next` itself never saw where the transfer stopped.
-        s_dma3_madr = endMadr;
+        dma.dma3Madr = endMadr;
         lucent::debug("cdc", "DMA3 chain {} words, MADR advanced to 0x{:08X}", n, 0x80000000u | endMadr);
       }
-      s_dma3_chcr &= ~0x01000000u; // clear busy: the completion poll must pass
-      irqStatLatch();              // draining a sector queues the next INT1
+      dma.dma3Chcr &= ~0x01000000u; // clear busy: the completion poll must pass
+      irqStatLatch();               // draining a sector queues the next INT1
       // Announce completion — but ONLY if the guest asked to hear about THIS transfer. DICR is where
       // it says so, per channel, and a guest may deliberately run most of its transfers silent:
       // Sony's libstr streams an STR frame as N sector DMAs on this channel and enables the
@@ -951,7 +946,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       //
       // Deferred to a function-entry boundary rather than dispatched here: we are inside a guest
       // store, with native code mid-mutation.
-      if (dma_completed(3)) {
+      if (dma_completed(dma, 3)) {
         pending_work |= PW_IRQ;
       }
     }
@@ -1010,7 +1005,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         psx::cpu::notifyExecutableWrite(*this, {da, da + (unsigned)got * 4u}, psx::cpu::ExecutableWriteSource::Dma);
       }
       s_dma4_chcr &= ~0x01000000u;
-      if (dma_completed(4)) {
+      if (dma_completed(dma, 4)) {
         pending_work |= PW_IRQ;
       }
       // SPU transfer complete. On hardware this raises IRQ9 and the BIOS turns it into
@@ -1126,7 +1121,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         gpu_dma2_block(this, s_dma2_madr, (int)(s_dma2_bcr & 0xFFFF), to_gpu); // immediate
       }
       s_dma2_chcr &= ~0x01000000u; // clear busy -> game's DMA-done poll passes
-      if (dma_completed(2)) {
+      if (dma_completed(dma, 2)) {
         pending_work |= PW_IRQ;
       }
     }
@@ -1134,14 +1129,14 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   }
   if (p >= 0x1F8010F0 && p <= 0x1F8010F3) { // DPCR
     const uint32_t lane = dma_lane_mask(p, bytes);
-    s_dpcr = (s_dpcr & ~lane) | (dma_lane_value(p, v, bytes) & lane);
+    dma.dpcr = (dma.dpcr & ~lane) | (dma_lane_value(p, v, bytes) & lane);
     return;
   }
   if (p >= 0x1F8010F4 && p <= 0x1F8010F7) { // DICR
-    s_dicr = dma_dicr_store(s_dicr, p, v, bytes);
+    dma.dicr = dma_dicr_store(dma.dicr, p, v, bytes);
     unsigned armed = 0;
     for (int ch = 0; ch < 7; ch++) {
-      if (dma_irq_armed(s_dicr, ch)) {
+      if (dma_irq_armed(dma.dicr, ch)) {
         armed |= 1u << ch;
       }
     }
@@ -1150,7 +1145,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
                   (p & 3u),
                   bytes,
                   v,
-                  dma_dicr_read(s_dicr),
+                  dma_dicr_read(dma.dicr),
                   armed,
                   r[31]);
     return;
@@ -1178,7 +1173,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       }
       psx::cpu::notifyExecutableWrite(*this, {madr - (n - 1) * 4u, madr + 4u}, psx::cpu::ExecutableWriteSource::Dma);
       s_dma6_chcr &= ~0x01000000u; // clear busy -> ClearOTagR's busy-poll passes
-      if (dma_completed(6)) {
+      if (dma_completed(dma, 6)) {
         pending_work |= PW_IRQ;
       }
     }

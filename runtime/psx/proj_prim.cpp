@@ -10,6 +10,12 @@ void ProjPrim::bind(Core * /*c*/) {
   sCurrent = this;
 }
 
+void ProjPrim::release() {
+  if (sCurrent == this) {
+    sCurrent = nullptr;
+  }
+}
+
 // `debug pzaddr` — print the first few addresses RECORDED and the first few that MISSED a lookup, in
 // the same frame. Native depth only works if those two sets are the same addresses, and when they are
 // not, no amount of extra recording coverage helps: the counters alone (records=N, hit=0, miss=M)

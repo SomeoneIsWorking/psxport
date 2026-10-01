@@ -111,7 +111,7 @@ void Hle::irqPoll(Core *c) {
   // callback that uploads each decoded strip to VRAM, and it was never called once in a run.
   const uint32_t table = guestDmaCallbackTable(*c);
   for (int ch = 0; ch < 7; ch++) {
-    if (!dma_done_owed(ch)) {
+    if (!dma_done_owed(*c, ch)) {
       continue;
     }
     const uint32_t slot = dma_callback_slot(table, ch);
@@ -133,8 +133,8 @@ void Hle::irqPoll(Core *c) {
     if (in_irq) {
       continue;
     }
-    dma_done_taken(ch);
-    dma_irq_ack(ch); // this dispatch stands in for the BIOS DMA handler, which acknowledges first
+    dma_done_taken(*c, ch);
+    dma_irq_ack(*c, ch); // this dispatch stands in for the BIOS DMA handler, which acknowledges first
     if (!cb) {
       continue; // nothing registered: the completion is consumed
     }
@@ -191,7 +191,7 @@ void Hle::irqPoll(Core *c) {
   // strips per movie decoded and then "no decode command in flight". So the gate survives while
   // anything is owed, and only the genuinely-idle case pays nothing.
   const bool has_delivery_path = irq_n != 0 || exception_exit_buf != 0 || cd_delivery_path;
-  if ((!pending || !has_delivery_path) && !dma_done_any()) {
+  if ((!pending || !has_delivery_path) && !dma_done_any(*c)) {
     c->pending_work &= ~Core::PW_IRQ;
     return;
   }
@@ -354,7 +354,7 @@ void Hle::irqPoll(Core *c) {
   in_irq = 0;
   const bool still_deliverable =
       (c->irqStatLatch() & i_mask) && (irq_n != 0 || exception_exit_buf != 0 || cd_delivery_path);
-  if (!dma_done_any() && !still_deliverable) { // an owed DMA callback or live IRQ keeps the gate armed
+  if (!dma_done_any(*c) && !still_deliverable) { // an owed DMA callback or live IRQ keeps the gate armed
     c->pending_work &= ~Core::PW_IRQ;
   }
 }

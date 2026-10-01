@@ -3,6 +3,7 @@
 // process-global active machine. Public R3000 inheritance exposes the canonical register state to the
 // dynarec state bridge and native service owners.
 #pragma once
+#include "dma_irq.h"
 #include "executable_write_source.h"
 #include "game_iface.h" // Legacy GameConfig/GameHooks compatibility views.
 #include "pc_observer.h"
@@ -54,6 +55,7 @@ public:
   PcObserver pcObserver;
   psx::cpu::GuestCallAttribution callAttribution;
 
+  DmaRegisters dma;               // DMA controller registers + owed completions — per-instance HW state (dma_irq.h)
   uint32_t io_gpustat_toggle = 0; // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 
   // A store landing in the diagnostic watch range fires this callback with address, value, and width.

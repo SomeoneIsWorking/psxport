@@ -35,6 +35,8 @@ public:
   // the title FrameDriver per core step and by boot setup. Compatibility hook for the
   // remaining call sites that lack a Core* in scope; new code should just reach the instance via
   // `c->rsub.projprim` directly.
+  // Drop the process-wide binding if it names THIS instance (its storage is about to be freed).
+  void release();
   void bind(Core *c);
   static ProjPrim *current() {
     return sCurrent;

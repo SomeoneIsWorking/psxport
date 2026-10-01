@@ -26,6 +26,8 @@
 #pragma once
 #include <cstdint>
 
+class Core;
+
 // DPCR's power-on value. The BIOS leaves it here and Sony's libraries read-modify-write it, so a
 // guest that ORs its channel's enable bit in must read back the other channels' bits, not zero.
 static constexpr uint32_t DPCR_RESET = 0x07654321u;
@@ -93,13 +95,13 @@ inline uint32_t dma_dicr_complete(uint32_t dicr, int ch) {
 // handler does, so the port does it at the same point. Without this the flag latches on the first
 // completion and DICR bit 31 reads asserted for the rest of the run, which is a lie about the
 // hardware to any guest that looks.
-void dma_irq_ack(int ch);
+void dma_irq_ack(Core &core, int ch);
 
-// The pending-completion set, owned by mem.cpp (which is where transfers finish) and drained by
-// Hle::irqPoll (which is where guest code may safely be re-entered).
-bool dma_done_owed(int ch);
-void dma_done_taken(int ch);
-bool dma_done_any(); // is ANY channel still owed? the deferred-work gate must not clear while so
+// The pending-completion set, owned per Core (Core::dma, filled by mem.cpp (which is where transfers finish) and
+// drained by Hle::irqPoll (which is where guest code may safely be re-entered).
+bool dma_done_owed(const Core &core, int ch);
+void dma_done_taken(Core &core, int ch);
+bool dma_done_any(const Core &core); // is ANY channel still owed? the deferred-work gate must not clear while so
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // WHO gets called when a transfer finishes, and on WHICH channels.
@@ -143,4 +145,17 @@ struct DmaDone {
   void taken(int ch) {
     mask &= ~(1u << ch);
   }
+};
+
+// Every DMA-controller register this runtime models, as one value owned by its Core. These were
+// file-scope statics in mem.cpp, so a second Core in the same process (a title started after another
+// ended, or the oracle's second core) inherited the first one's DICR flags, channel-3 registers and
+// owed completions instead of the power-on state.
+struct DmaRegisters {
+  uint32_t dma3Madr = 0; // DMA3: CDROM data FIFO -> RAM
+  uint32_t dma3Bcr = 0;
+  uint32_t dma3Chcr = 0;
+  uint32_t dpcr = DPCR_RESET;
+  uint32_t dicr = 0;
+  DmaDone done;
 };

@@ -25,6 +25,12 @@ void ProjParams::bind(Core * /*c*/) {
   sCurrent = this;
 }
 
+void ProjParams::release() {
+  if (sCurrent == this) {
+    sCurrent = nullptr;
+  }
+}
+
 // Depth-normalize (was file-scope proj_pz_to_ord in gte_beetle.cpp). Affine in 1/pz; nearer (smaller pz)
 // -> larger value, matching the renderer's GREATER_OR_EQUAL compare + 0.0 clear.
 // Every depth this port writes is normalised against the near plane below (H/2), so two producers

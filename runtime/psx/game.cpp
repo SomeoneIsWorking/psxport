@@ -1,6 +1,10 @@
 #include "game.h"
 #include "config_vars.h" // cv_producers — PSXPORT_PRODUCERS, read once per Game below
+#include "gte_state.h"   // GTE_BindState — released below
+#include "mdec_state.h"  // MDEC_BindState — released below
 #include "ot_attr.h"     // g_producer_census_armed — armed by every Game's constructor, below
+#include "spu_state.h"   // SPU_BindState, spu_bind_log, spu_bind_irq_core — released below
+#include "xa_state.h"    // xa_bind_state — released below
 
 HostIdentity Game::hostIdentity() const {
   if (core.cfg) {
@@ -66,7 +70,24 @@ Game::Game() {
   gpu_vk.tritest();
 }
 
+// The Beetle peripherals reach their per-instance state through process-wide bind points that the title's
+// frame step re-establishes from its explicit Core. A bind point that outlives the Game it names is a
+// dangling write for whatever runs next in this process (measured: a second Game's gte_init wrote through
+// the first Game's freed GTE registers). Every one is returned to its shared default here, while the
+// storage it names is still alive.
+void Game::releaseHardwareBindings() {
+  GTE_BindState(nullptr);
+  SPU_BindState(nullptr);
+  spu_bind_log(nullptr);
+  spu_bind_irq_core(nullptr);
+  MDEC_BindState(nullptr);
+  xa_bind_state(nullptr);
+  core.rsub.projParams.release();
+  core.rsub.projprim.release();
+}
+
 Game::~Game() {
+  releaseHardwareBindings();
   // Unconditional, because the interesting answer is often "nothing was ever read". A run that
   // stalled three seconds in one chd_read and a run that never touched the disc are different
   // facts, and only the denominators tell them apart (Spyro issue 0115).

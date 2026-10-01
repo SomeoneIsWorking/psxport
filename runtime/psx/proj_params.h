@@ -19,6 +19,8 @@ class Core;
 class ProjParams {
 public:
   void bind(Core *c); // set the currently-bound ProjParams to this
+  // Drop the process-wide binding if it names THIS instance (its storage is about to be freed).
+  void release();
   static ProjParams *current() {
     return sCurrent;
   }
