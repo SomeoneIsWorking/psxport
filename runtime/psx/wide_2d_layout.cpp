@@ -36,6 +36,12 @@ Wide2dExtent wide_2d_extent(int host_wide, bool host_engaged, int guest_wide, bo
   return Wide2dExtent{native, native};
 }
 
+int wide_2d_width(Core &core) {
+  const Mechanism host = host_mechanism(core);
+  const Mechanism guest = guest_mechanism(core);
+  return wide_2d_extent(host.wide, host.engaged, guest.wide, guest.engaged, gpu_vk_native_w(&core)).wide;
+}
+
 bool wide_2d_layout_active_for(int host_wide, bool host_engaged, int guest_wide, bool guest_engaged, int native) {
   const Wide2dExtent extent = wide_2d_extent(host_wide, host_engaged, guest_wide, guest_engaged, native);
   return extent.wide > extent.native;

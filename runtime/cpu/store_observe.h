@@ -35,6 +35,8 @@
 // so an ordinary run pays one string compare per configuration and nothing per instruction.
 #pragma once
 
+#include "lightrec_executor.h" // StoreObserverReport
+
 class Core;
 
 // Arm the store observer on this Core from configuration, and log what it sees. Idempotent, and safe
@@ -73,8 +75,10 @@ void store_observe_configure(Core &core);
 // carry the address that was written, so this per-target table is how several watched words are told
 // apart: it reports each one's store counts and the guest PC of its last one. Silent when the
 // observer was never armed — the arming line already said so, and an unarmed observer's silence is not
-// evidence of anything.
-void store_observe_report(Core &core);
+// evidence of anything. Takes the report rather than the Core: `~LightrecExecutor` emits it, and asking
+// the Core for its executor from inside that destructor returned a torn-down object (SIGSEGV in Spyro's
+// recipe tests, 2026-10-01).
+void store_observe_report(const psx::cpu::StoreObserverReport &report);
 
 // A title-owned spine calls THIS once instead of remembering the pair, because forgetting the report is
 // how a run ends with the observer armed and nothing said about what it saw — the same silence the

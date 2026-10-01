@@ -25,6 +25,7 @@
 #include "image_writer.h"   // one checked RGB24 capture-file boundary
 #include "ordering_table.h" // the guest DrawOTag chain: node header decoded by field name
 #include "r3000.h"
+#include "wide_2d_layout.h" // the presented width, whichever widening mechanism owns it
 #include <lucent/log.h>
 
 // The beetle-GPU oracle tee (gpu_beetle.cpp). Every guest command word goes to both implementations
@@ -1758,9 +1759,9 @@ void GpuState::gp0_exec(Core *core) {
       // display, which is what makes it a backdrop clear. Requiring the latch as well made the margin
       // fix unavailable to exactly the ports that need it — one whose pool is double buffered never
       // sets the latch on a prim-bearing frame at all.
-      if (full && gpu_vk_wide_engine(core)) {
-        int ww = gpu_vk_wide_engine_w(core);
-        if (ww > 320) {
+      if (full && wide_2d_layout_active(*core)) {
+        const int ww = wide_2d_width(*core);
+        if (ww > 0) {
           // TO DISPLAY-LOCAL FIRST. A FillRect's rect is VRAM-ABSOLUTE — it ignores clip and offset by
           // design, which is the whole reason this case needs handling separately — while the 2D queue
           // takes display-local coordinates and adds the display origin back on submit. Passing the

@@ -143,8 +143,7 @@ void store_observe_configure(Core &core) {
   }
 }
 
-void store_observe_report(Core &core) {
-  const StoreObserverReport report = core.lightrecExecutor().storeObserverReport();
+void store_observe_report(const psx::cpu::StoreObserverReport &report) {
   if (!report.armed && report.targetCount == 0) {
     return; // never armed: the arming line already said so, and silence here is not evidence
   }

@@ -643,7 +643,7 @@ LightrecExecutor::~LightrecExecutor() {
   // it was watching: the silence reads as "matched none of the stores" when the truth is "never
   // looked". So the report is emitted from the teardown that every exit path reaches, and the
   // one-call-site version is deleted rather than left to double-report on the paths that did take it.
-  store_observe_report(impl_->core);
+  store_observe_report(impl_->storeReport);
 }
 
 void LightrecExecutor::attachFunctionReach(std::unique_ptr<FunctionReach> reach) {

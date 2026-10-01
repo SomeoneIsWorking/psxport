@@ -55,6 +55,12 @@ struct Wide2dExtent {
 // is the seam the hermetic test drives; the Core-facing functions below only gather the facts.
 Wide2dExtent wide_2d_extent(int host_wide, bool host_engaged, int guest_wide, bool guest_engaged, int native);
 
+// The presented width for this Core's 2D layer, by the SAME decision `wide_2d_layout_active` makes —
+// either widening mechanism, never one of them. A site that needs "how wide is the picture I am
+// drawing into" must ask this and not `gpu_vk_wide_engine_w`, which answers only for the host
+// mechanism and reads 0 for a GTE-path title whose guest owns the projection.
+int wide_2d_width(Core &core);
+
 // Whether that extent is genuinely a widening. A plan that resolved narrow — ASPECT_AUTO against a 4:3
 // sink, say — is NOT one, and must not lay the 2D layer out for nothing.
 bool wide_2d_layout_active_for(int host_wide, bool host_engaged, int guest_wide, bool guest_engaged, int native);
