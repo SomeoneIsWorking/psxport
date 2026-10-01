@@ -129,7 +129,6 @@
       "text_size": "0x52000",
       "note": "Square. SHA-1 of this image MATCHES the CC0 rood-reverse decomp's declared target, so its symbol addresses are confirmed against real bytes -- a reading aid only, never copied into a shipping path. 933,925 B of its code lives in .PRG overlays; see the vagrant_* modules."
     },
-
     "vagrant_battle": {
       "kind": "module",
       "title": "vagrant",
@@ -159,8 +158,7 @@
       "code_first": "0x18",
       "code_last": "0x1317",
       "note": "INITBTL.PRG, 7,036 B (INITBTL.BIN). A DIFFERENT measured base from BATTLE/TITLE -- 0x800F9800 against 0x80068800 -- which is what makes it the control: the same reader, the same code path, a base 0x91000 away. Its decomp-declared code extent is 0x18..0x1318."
-    }
-,
+    },
     "spyro2": {
       "kind": "resident",
       "serial": "SCUS_944.25",
@@ -367,6 +365,26 @@
       "code_first": "0x4",
       "code_last": "0xA5B",
       "note": "LEVEL10__LEVEL1.BIN, 2652 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "crashbash_dat28136": {
+      "kind": "module",
+      "title": "crashbash",
+      "serial": "SCUS_945.70",
+      "sha1": "d0335ec27e8c5673bcc6969e54a4d4c21eedd1b2",
+      "load_base": "0x800B32B4",
+      "code_first": "0x0",
+      "code_last": "0x14FC0",
+      "note": "DAT28136.BIN, 86,016 B. The Adventure level/challenge module: it holds the level roster strings (Papu Papu, Bearminator, N. Oxide, Dragon Drop, Mallet Mash, Keg Kaboom, Dante's Dash, Splash Dash, Swamp Fox), the 'PRESS LEFT - RIGHT TO SELECT CHALLENGE' prompt, and 10 readers of the guest input-edge word 0x80051380 at 0x800B65D4..0x800B6BE4 and 0x800BAC64..0x800BAD70. Load base and size are the crashbash repo's measured facts (titles/crashbash/dat28136_module.json, published by the authenticated nested-module owner at guest 0x800B32B4)."
+    },
+    "crashbash_boot": {
+      "kind": "module",
+      "title": "crashbash",
+      "serial": "SCUS_945.70",
+      "sha1": "61c3eb749fdc194dad7c0181cc4cb5c9d3e447e4",
+      "load_base": "0x80078C90",
+      "code_first": "0x0",
+      "code_last": "0x2E800",
+      "note": "BOOT.BIN, 189 sectors. The shell/menu overlay: it owns the root scene 0x80078C90 (enter 0x80092BDC, update 0x80092BA0, present 0x80092B7C), the scene-transition primitive 0x8001E588/0x8001E610, and the mode/attract scenes (0x8009F720: enter 0x80092CAC, update 0x80092EDC, present 0x80092E94) that dispatch DAT28136. Load base and extent are the crashbash repo's measured facts (titles/crashbash/boot_module.json)."
     }
   }
 }
