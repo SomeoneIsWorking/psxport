@@ -18,9 +18,10 @@
 
 class Core;
 
-// How the title's pool is laid out. The two representations are the two the guest engines actually
-// use, and they are not interchangeable: collapsing two separately-allocated parity pools into one
-// range would classify the gap between them — unrelated RAM — as render output.
+// How the title's pool is laid out. The representations are the layouts guest engines actually use,
+// and they are not interchangeable: collapsing two separately-allocated parity pools into one range
+// would classify the gap between them — unrelated RAM — as render output, and inventing equal halves
+// for a pool that has none declares a window whose top is fiction.
 struct GuestPacketPoolWindows {
   enum class Representation : std::uint8_t {
     // One contiguous array of two parity pools: base, and a stride measured in BYTES, each half the
@@ -31,6 +32,14 @@ struct GuestPacketPoolWindows {
     // pool the guest reallocates mid-run is tracked without the framework being told.
     // This is `GameConfig::packetPoolBasePtrs` / `packetPoolEndPtrs`.
     LiveBaseEndPointers,
+    // ONE descending pool window that holds BOTH parity ordering tables at its top. Measured on
+    // C-12: a walk of each parity OT reaches the same lowest packet address, with the two OT heads
+    // 0x10000 apart inside the one window. That is neither an array of two equal halves nor two
+    // independently allocated pools: describing it as FixedBaseStride with a half-stride declares a
+    // top that is wrong by however much the two halves differ, and LiveBaseEndPointers needs guest
+    // globals that reallocate, which this guest does not have. So the pool's measured extent is
+    // declared, rather than reconstructed from a shape the guest does not have.
+    SingleWindow,
   };
 
   Representation representation = Representation::FixedBaseStride;
@@ -39,6 +48,10 @@ struct GuestPacketPoolWindows {
   // pool; the window is two strides wide, matching the legacy field pair exactly.
   std::uint32_t base = 0;
   std::uint32_t stride = 0;
+
+  // SingleWindow: `base` is the lowest guest address the pool ever occupies and `end` the exclusive
+  // top — the measured extent of the window, not a shape it was derived from.
+  std::uint32_t end = 0;
 
   // LiveBaseEndPointers, one pair per parity pool (0 and 1). A pair whose members are both 0 is
   // absent, not broken: a game with a single parity pool declares one pair. A pair with exactly one
@@ -51,6 +64,9 @@ struct GuestPacketPoolWindows {
   bool valid() const {
     if (representation == Representation::FixedBaseStride) {
       return base != 0 && stride != 0;
+    }
+    if (representation == Representation::SingleWindow) {
+      return base != 0 && end != 0 && base < end;
     }
     for (int i = 0; i < 2; ++i) {
       if (basePointer[i] || endPointer[i]) {

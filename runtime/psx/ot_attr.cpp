@@ -24,7 +24,9 @@
 //
 // Fixed-pool games declare base + stride. Heap-pool games instead declare the guest globals holding
 // each parity pool's live base/end; collapsing those allocations into one range would classify an
-// arbitrary gap between them as render output.
+// arbitrary gap between them as render output. A game whose packets descend from BOTH parity
+// ordering-table heads inside ONE window declares that window's measured extent (SingleWindow);
+// splitting it into equal halves would declare a top that guest memory never reaches.
 //
 // A GAME THAT HAS NOT RE'd ITS POOL LEAVES THE FIELDS 0 (spyro, spider1 — an honest zero with a TODO,
 // per their own rules). Then this feed CANNOT attribute anything, and it says so once instead of
@@ -49,11 +51,12 @@ uint32_t main_ram_address(uint32_t value) {
 // legacy GameConfig and a typed runtime declare the same two representations with the same meaning;
 // keeping them as two code paths is how they drift.
 struct PoolSource {
-  enum class Kind { None, FixedBaseStride, LiveBaseEndPointers };
+  enum class Kind { None, FixedBaseStride, LiveBaseEndPointers, SingleWindow };
 
   Kind kind = Kind::None;
   uint32_t base = 0;
   uint32_t stride = 0;
+  uint32_t end = 0;
   uint32_t basePointer[2] = {};
   uint32_t endPointer[2] = {};
   // The identity the derived window is cached against — the GameConfig, or the typed declaration.
@@ -93,6 +96,12 @@ PoolSource pool_source(Core *c) {
     source.kind = PoolSource::Kind::FixedBaseStride;
     source.base = windows->base;
     source.stride = windows->stride;
+    return source;
+  }
+  if (windows->representation == GuestPacketPoolWindows::Representation::SingleWindow) {
+    source.kind = PoolSource::Kind::SingleWindow;
+    source.base = windows->base;
+    source.end = windows->end;
     return source;
   }
   source.kind = PoolSource::Kind::LiveBaseEndPointers;
@@ -140,6 +149,19 @@ OtAttr::PoolWindows pool_range_uncached(Core *c, uint32_t descriptorAddr[4]) {
     // two pools and `stride` is the width of ONE of them.
     const uint32_t lo = main_ram_address(source.base);
     const uint32_t hi = lo + 2u * source.stride;
+    if (lo >= hi || hi > 0x80200000u) {
+      return result;
+    }
+    result.lo[0] = lo;
+    result.hi[0] = hi;
+    result.count = 1;
+    result.known = true;
+    return result;
+  }
+  if (source.kind == PoolSource::Kind::SingleWindow) {
+    // The measured extent, taken as measured: no parity split is invented for a pool that has none.
+    const uint32_t lo = main_ram_address(source.base);
+    const uint32_t hi = main_ram_address(source.end);
     if (lo >= hi || hi > 0x80200000u) {
       return result;
     }
