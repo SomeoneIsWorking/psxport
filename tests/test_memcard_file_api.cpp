@@ -385,6 +385,66 @@ static void test_firstfile_restores_the_patched_dcb_slot(void) {
   CHECK_EQ(c->mem_r32(dcb + Hle::DCB_OFF_FIRSTFILE), 0u);
 }
 
+// ---------------------------------------------------------------------------------------------
+// THE LOW-LEVEL FRAME PRIMITIVES. B0:0x4E is _card_write(chan, sector, src) and B0:0x4F is
+// _card_read(chan, sector, dst); they were swapped, so a guest READING frame 0 into a zeroed buffer
+// executed a WRITE of zeros over the card header (Spyro 3, SCUS_944.67 0x8007E954).
+static constexpr uint32_t kHeaderFrame = 0;
+
+static void put_frame(Game *g, uint32_t va, uint8_t fill) {
+  for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
+    g->core.mem_w8(va + i, fill);
+  }
+}
+
+static bool frame_holds(Game *g, uint32_t va, uint8_t fill) {
+  for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
+    if (g->core.mem_r8(va + i) != fill) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void test_frame_read_is_0x4f_and_never_writes_the_card(void) {
+  Game *g = gam();
+  uint8_t before[Memcard::kFrameSize];
+  CHECK(g->memcard.readFrame(kHeaderFrame, before));
+  CHECK(before[0] == 'M' && before[1] == 'C'); // the formatted header: the thing the swap erased
+
+  put_frame(g, kBuf + 0x200u, 0x00); // a zeroed guest buffer, exactly as Spyro 3's is
+  bios_b0(g, 0x4F, 0, kHeaderFrame, kBuf + 0x200u);
+
+  uint8_t after[Memcard::kFrameSize];
+  CHECK(g->memcard.readFrame(kHeaderFrame, after));
+  CHECK_EQ(memcmp(before, after, sizeof before), 0);     // the card is untouched
+  CHECK_EQ(g->core.mem_r8(kBuf + 0x200u), (uint8_t)'M'); // and the buffer now holds the header
+  CHECK_EQ(g->core.mem_r8(kBuf + 0x201u), (uint8_t)'C');
+}
+
+static void test_frame_write_is_0x4e_and_a_null_source_moves_nothing(void) {
+  Game *g = gam();
+  const uint32_t frame = 62; // a data frame of block 0 nothing else here touches
+  put_frame(g, kBuf + 0x300u, 0x5A);
+  bios_b0(g, 0x4E, 0, frame, kBuf + 0x300u);
+  uint8_t stored[Memcard::kFrameSize];
+  CHECK(g->memcard.readFrame(frame, stored));
+  CHECK_EQ(stored[0], 0x5Au);
+  CHECK_EQ(stored[Memcard::kFrameSize - 1], 0x5Au);
+
+  // The presence probe, _card_write(chan, 0x3F, 0): nothing to write, so nothing may change and
+  // nothing may be copied anywhere -- in particular not from or to guest address 0.
+  uint8_t probe_before[Memcard::kFrameSize];
+  CHECK(g->memcard.readFrame(0x3F, probe_before));
+  g->core.mem_w8(0x0, 0xC3);
+  bios_b0(g, 0x4E, 0, 0x3F, 0);
+  uint8_t probe_after[Memcard::kFrameSize];
+  CHECK(g->memcard.readFrame(0x3F, probe_after));
+  CHECK_EQ(memcmp(probe_before, probe_after, sizeof probe_before), 0);
+  CHECK_EQ(g->core.mem_r8(0x0), 0xC3u);
+  CHECK(!frame_holds(g, kBuf + 0x300u, 0x00)); // negative control: the helper can say "no"
+}
+
 int main(void) {
   RUN(device_table_is_published);
   RUN(firstfile_on_an_empty_card_finds_nothing);
@@ -396,5 +456,7 @@ int main(void) {
   RUN(success_delivers_io_end_and_not_error);
   RUN(unperformable_transfer_fails_visibly);
   RUN(invalid_fd_is_a_synchronous_error);
+  RUN(frame_read_is_0x4f_and_never_writes_the_card);
+  RUN(frame_write_is_0x4e_and_a_null_source_moves_nothing);
   return pt_summary();
 }

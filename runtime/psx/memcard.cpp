@@ -417,34 +417,46 @@ void Memcard::deliverError(Core *c) {
   c->game->hle.deliverEvent(0xF0000011u, 0x8000u); // HwCARD error
 }
 
-// B0:0x4E _card_read(chan, sector, buf).
+// B0:0x4F _card_read(chan, sector, dst): copy one 128-byte frame into guest memory.
+//
+// WHICH NUMBER IS WHICH was wrong here until Spyro 3: the two were swapped (0x4E read, 0x4F write).
+// SCUS_944.67's libcard wrapper at 0x8007E954 is `li $t2,0xB0 ; jr $t2 ; li $t1,0x4E`, and its caller
+// (0x8007DFC0..0x8007E00C) builds a directory frame in the buffer at 0x80081244, XORs the first 0x7E
+// bytes into byte 127, and only THEN calls it -- the shape of a write, not a read. With the numbers
+// swapped, the guest's four reads of frame 0 into that buffer were executed as writes of the (zeroed)
+// buffer over the card header, erasing its "MC" magic, and the title reported a corrupt card.
 static void card_read(Core *c) {
   Memcard &m = c->game->memcard;
   const uint32_t sector = c->r[A1], buf = c->r[A2];
   uint8_t f[Memcard::kFrameSize];
   const bool moved = m.readFrame(sector, f);
-  // A NULL destination is a presence PROBE, not a transfer. Spyro 1 asks _card_read(chan, 0x3F, 0)
-  // once per slot at boot purely to see whether a card answers, and this used to copy 128 bytes to
-  // guest address 0 for it -- over the exception-vector page, twice every boot, silently. Measured
-  // 2026-09-19 (issue 0123); the same probe runs 1,084 times on the unformatted-card path.
-  if (buf != 0) {
-    for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
-      c->mem_w8(buf + i, f[i]);
-    }
+  for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
+    c->mem_w8(buf + i, f[i]);
   }
   lucent::debug("card",
-                "read  frame {} -> {}{}",
+                "read  frame {} -> 0x{:08X}{}",
                 sector,
-                buf != 0 ? lucent::format("0x{:08X}", buf) : std::string("(probe, no destination)"),
+                buf,
                 moved ? "" : " — BACKEND DID NOT MOVE THE FRAME, yet this call reports success");
 
   c->r[V0] = 1;
 }
 
-// B0:0x4F _card_write(chan, sector, buf).
+// B0:0x4E _card_write(chan, sector, src): store one 128-byte frame from guest memory.
+//
+// A NULL source is a presence PROBE, not a transfer: libcard calls `_card_write(chan, 0x3F, 0)` once
+// per slot at boot to see whether a card answers (and to clear the card-changed flag). It used to be
+// executed as a read INTO guest address 0 -- over the exception-vector page, twice every boot
+// (Spyro issue 0123) -- and was then "fixed" by skipping the copy; the call is a write with nothing
+// to write, so it moves nothing in either direction.
 static void card_write(Core *c) {
   Memcard &m = c->game->memcard;
-  uint32_t sector = c->r[A1], buf = c->r[A2];
+  const uint32_t sector = c->r[A1], buf = c->r[A2];
+  if (buf == 0) {
+    lucent::debug("card", "write frame {} <- (probe, no source)", sector);
+    c->r[V0] = 1;
+    return;
+  }
   uint8_t f[Memcard::kFrameSize];
   for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
     f[i] = c->mem_r8(buf + i);
@@ -768,13 +780,13 @@ static int card_dispatch_b0(uint32_t fn, Core *c) {
     card_info(c);
     return 1; // _card_info(chan)
   case 0x4Eu:
-    card_read(c);
-    Memcard::deliverComplete(c);
-    return 1; // _card_read
-  case 0x4Fu:
     card_write(c);
     Memcard::deliverComplete(c);
     return 1; // _card_write
+  case 0x4Fu:
+    card_read(c);
+    Memcard::deliverComplete(c);
+    return 1; // _card_read
   case 0x50u:
     c->r[V0] = 0;
     return 1; // _card_chan() -> 0
