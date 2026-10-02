@@ -134,7 +134,12 @@ struct RqItem {
   // has_xyf is set the rasterizer uses these instead of the rounded xs/ys, so world geometry keeps its
   // sub-pixel position and stops snapping pixel-to-pixel (PS1 wobble) — vertex smoothing, issue #15.
   float xsf[4], ysf[4];
-  uint8_t has_xyf;        // 1 = xsf/ysf are valid sub-pixel positions (world prims via drawWorldQuad)
+  uint8_t has_xyf; // 1 = xsf/ysf are valid sub-pixel positions (world prims via drawWorldQuad)
+  // The guest packet's OWN vertex words, before the drawing offset or any host mapping — the values the
+  // guest stored from the GTE. They are what links a drawn vertex back to the projection that made it
+  // (projection_provenance.h); xs/ys are a host coordinate space and cannot.
+  uint8_t has_guest_xy;
+  int16_t guest_x[4], guest_y[4];
   uint8_t authored_depth; // 1 = depth[] already encodes OT order; suppress the generic later-draw bias
   int us[4], vs[4];       // texel coords
   uint8_t rs[4], gs[4], bs[4];
@@ -167,6 +172,12 @@ struct RqItem {
   // passes — build_lerp leaves these untouched), per the user's "shadows are not interpolated" design.
   uint8_t sh_cast;                    // 1 = opaque world prim that casts a shadow (push sh_v* as two tris at emit)
   float sh_vx[4], sh_vy[4], sh_vz[4]; // view-space verts (the shadow VBO input)
+};
+
+// A guest packet's vertex words as the guest stored them (see RqItem::guest_x).
+struct RqGuestXy {
+  int16_t x[4];
+  int16_t y[4];
 };
 
 struct RqPixelSample {
@@ -453,7 +464,8 @@ struct RenderQueue {
                    int dither = 0,
                    PainterReplayOrder painter_replay = {},
                    uint32_t guest_packet = 0,
-                   uint32_t guest_ot_order = 0);
+                   uint32_t guest_ot_order = 0,
+                   const RqGuestXy *guest_xy = nullptr);
 
   // drawWorldQuad: PC-native world-quad draw — a quad already projected to FLOAT screen coords + real
   // per-vertex depth, teed as two triangles to the VK rasterizer through the queue. No GP0 packet, no

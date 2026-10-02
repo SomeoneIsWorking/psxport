@@ -132,7 +132,8 @@ void RenderQueue::emitOrQueue(Core *core,
                               int dither,
                               PainterReplayOrder painter_replay,
                               uint32_t guest_packet,
-                              uint32_t guest_ot_order) {
+                              uint32_t guest_ot_order,
+                              const RqGuestXy *guest_xy) {
   if (observation == Observation::Live) {
     observeSubmission(core, layer);
   }
@@ -238,6 +239,13 @@ void RenderQueue::emitOrQueue(Core *core,
   it.painter_replay = painter_replay;
   it.guest_packet = guest_packet;
   it.guest_ot_order = guest_ot_order;
+  if (guest_xy) {
+    it.has_guest_xy = 1;
+    for (int k = 0; k < 4; ++k) {
+      it.guest_x[k] = guest_xy->x[k];
+      it.guest_y[k] = guest_xy->y[k];
+    }
+  }
   it.painter_flags = mPainterFlags;
   it.shade_gouraud = shade_gouraud ? 1 : 0;
   it.dither = (dither || (mPainterFlags & PAINTER_OBJECT_DITHER)) ? 1 : 0;

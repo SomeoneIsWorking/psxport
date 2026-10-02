@@ -7,7 +7,7 @@
 #include "game_hooks_opt.h" // game_render_fade_state — the title's current fade, the endpoint source
 #include "mods.h"           // Mods (game->mods.fps60)
 #include "proj_params.h"    // ProjParams — the camera's projection constants + Snapshot save/restore
-#include "render_mode.h"    // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
+#include "render_mode.h"    // RenderMode — enhancementsAllowed/path, DisplayPassGuard (framework)
 #include "render_queue.h"
 #include <lucent/log.h>
 #include <span>
@@ -52,7 +52,25 @@ void Fps60::fold(uint32_t v) {
 // rate detector so the tier knows the logic rate (Tomba2 = 30fps → one in-between per frame).
 // See the declaration in fps60.h: the user's toggle AND the render path must both allow it.
 bool Fps60::active() const {
-  return game && game->mods.fps60 && game->core.rsub.mode.enhancementsAllowed();
+  return game && game->mods.fps60 && interpolationPermitted(game->core);
+}
+
+// MAY THIS CORE PRESENT AN IN-BETWEEN AT ALL?
+//
+// Two answers, not one. `enhancementsAllowed()` is the user's broad "the guest render stays pure"
+// decision and it stays exactly as it was: Native only, and it still governs every host-side
+// enhancement. A source whose in-betweens are MADE OF THE GUEST'S OWN PRIMITIVES is a second, narrower
+// answer: its in-between field is the captured guest frame with provenance-paired vertices interpolated
+// toward the previous real frame, rasterized by the same renderer as the real frame. That is the guest's
+// picture at another instant rather than a PC rewrite of it, so it is permitted on Gte, the path that
+// already ships guest geometry. Psx is excluded: it is the untouched software reference and has no
+// second field to present into.
+bool Fps60::interpolationPermitted(const Core &core) const {
+  if (core.rsub.mode.enhancementsAllowed()) {
+    return true;
+  }
+  return core.rsub.mode.path() == RenderPath::Gte && sceneSource_ != nullptr &&
+         sceneSource_->interpolatesGuestGeometry();
 }
 
 void Fps60::rtp(uint32_t op) {
@@ -200,10 +218,24 @@ void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFr
   // rather than going through Fps60::frame_commit (measured: Tomba! 2 does, so a capture there
   // never ran at all and the endpoints stayed zero).
   c->game->presentFade.capture(game_render_fade_state(c, c->hooks));
+  if (sceneSource_) {
+    sceneSource_->beginPresentation(*c, frame, active());
+  }
 
   const int tforce = cfg_int("PSXPORT_FPS60_TFORCE", -1);
   const float tInterp = (tforce == 0) ? 0.0f : (tforce == 1) ? 1.0f : 0.5f;
   const bool extraFrame = active() && sceneSource_ && mHavePrev && sceneSource_->eligible(*c);
+
+  if (extraFrame && !c->rsub.mode.enhancementsAllowed() && !mAnnouncedGuestInbetween) {
+    // Announced ONCE, because it is the one frame this path behaves differently in a way no other
+    // line records: the guest's own primitives, their vertices interpolated between two real frames,
+    // presented through the same renderer as the real field.
+    mAnnouncedGuestInbetween = true;
+    lucent::info("fps60",
+                 "temporal in-betweens ON on the {} path — made of the GUEST'S OWN primitives, each vertex "
+                 "interpolated between two real frames by its projection provenance; real frames unchanged",
+                 render_path_name(c->rsub.mode.path()));
+  }
 
   if (extraFrame) {
     presentPass(c, tInterp, frame);
@@ -261,9 +293,17 @@ void Fps60::presentPass(Core *c, float t, CapturedFrameView frame) {
   c->game->presentFade.setFactor(t);
   mTier1PrimsThisFrame = 0;
   mBackdropPrimsThisFrame = 0;
-  const bool tier1 = sceneSource_ && c->rsub.mode.enhancementsAllowed() &&
-                     (active() || (t == 1.0f && sceneSource_->requiresEndpointReconstruction())) &&
-                     sceneSource_->eligible(*c);
+  // A source whose CAPTURED QUEUE already is its geometry presents that queue VERBATIM at the real
+  // frame: replacing the field the guest drew with a copy of itself could only change measured pixels.
+  // The in-between slot still reconstructs, so this is a per-SLOT decision keyed on `t`, not a property
+  // of the source. With fps60 off there is no in-between slot, and only a source that demands an
+  // endpoint reconstruction gets one at all.
+  bool reconstructThisPass = false;
+  if (sceneSource_) {
+    reconstructThisPass = active() ? (t != 1.0f || !sceneSource_->capturedQueueIsComplete())
+                                   : (t == 1.0f && sceneSource_->requiresEndpointReconstruction());
+  }
+  const bool tier1 = reconstructThisPass && interpolationPermitted(*c) && sceneSource_->eligible(*c);
   if (tier1) {
     tier1Render(c, t);
   }

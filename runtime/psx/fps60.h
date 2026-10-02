@@ -27,8 +27,11 @@ struct Fps60 final : TemporalFramePresentation {
   explicit Fps60(Game &owner, std::unique_ptr<TemporalSceneSource> source = {});
   ~Fps60();
 
-  // Interpolation is enabled only when requested on this Core's native presentation path.
+  // Interpolation is enabled only when requested AND permitted on this Core (interpolationPermitted).
   bool active() const;
+  // Whether this Core may present an in-between: broad PC enhancements, or a source whose in-betweens
+  // are made of the guest's own primitives on the Gte path. One answer for every gate.
+  bool interpolationPermitted(const Core &core) const;
   void present(FramePresentationBackend &backend, Core &core, CapturedFrameView frame, int guestFields) override;
   void frame_commit(Core *core, int guestFields = 0);
   void present_vk(FramePresentationBackend &backend, Core *core, CapturedFrameView frame);
@@ -46,6 +49,9 @@ struct Fps60 final : TemporalFramePresentation {
   long mTier1PrimsThisFrame = 0;
   long mBackdropPrimsThisFrame = 0;
   int mCommitGuestFields = 0;
+  // One-shot: announced the first time this Core presents an in-between on a path where PC
+  // enhancements are locked out, which is the configuration that has to be discoverable from the log.
+  bool mAnnouncedGuestInbetween = false;
 
   void fold(uint32_t value);
   void rtp(uint32_t op);

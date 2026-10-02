@@ -18,6 +18,7 @@
 #include "producer_scope.h"
 #include "proj_params.h"
 #include "proj_prim.h"
+#include "projection_provenance.h"
 #include "render_diag.h"
 #include "render_mode.h"
 #include "render_stats.h"
@@ -48,6 +49,9 @@ public:
   ProjPrim projprim;         // vertex-depth cache for native depth path (per-Core; SBS-safe)
   ProjParams projParams;     // camview + per-frame projection constants (per-Core)
   GtePreOpObserver gtePreOp; // explicitly armed pre-GTE diagnostic observer (per-Core)
+  // Which title-scoped guest projection produced each screen vertex this frame: the provenance a
+  // guest-geometry temporal source pairs two real frames' vertices by (projection_provenance.h).
+  psxport::temporal::ProjectionProvenance projectionProvenance;
   // The picture geometry last announced for this Core (the `[wide] native picture:` line;
   // picture_announce.h owns why it is per-Core and why it reports changes rather than once).
   psx::picture::Geometry announcedPicture;

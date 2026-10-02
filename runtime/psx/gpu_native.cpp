@@ -990,6 +990,13 @@ void GpuState::gp0_exec(Core *core) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
         int om = is3d ? RQ_OM_DEPTH : (bg ? RQ_OM_2D_BG : RQ_OM_2D_FG);
+        // The packet's own vertex words ride with the item: they link a drawn vertex back to the guest
+        // projection that produced it, which xs/ys (offset, possibly widened) cannot.
+        RqGuestXy guestXy{};
+        for (int i = 0; i < nv; i++) {
+          guestXy.x[i] = static_cast<int16_t>(v[i].x);
+          guestXy.y[i] = static_cast<int16_t>(v[i].y);
+        }
         core->game->activeRq().emitOrQueue(core,
                                            1,
                                            layer,
@@ -1028,7 +1035,8 @@ void GpuState::gp0_exec(Core *core) {
                                            0,
                                            {},
                                            s_cur_node,
-                                           ord_idx);
+                                           ord_idx,
+                                           &guestXy);
       } else {
         gpu_vk_set_order(core, ord_idx); // OT submission order -> depth (preserve opaque/semi order)
         if (!is3d) {                     // 2D band select
@@ -3277,6 +3285,8 @@ void GpuState::gpu_dma2_linked_list(Core *core, uint32_t madr) {
   }
   s_dma2++;
   s_ot_madr = madr & 0x1FFFFC;
+  // The projections behind this table's packets are complete: pair them with what it draws.
+  core->rsub.projectionProvenance.sealForDraw();
   using psx::gpu::OrderingTableCursor;
   // PSXPORT_DEBUG=ot (diagnostic only — the driver no longer reads the OT): on a chain that fails to
   // terminate within an OT's worth of nodes (cyclic = malformed), dump its first 40 nodes once for diagnosis.

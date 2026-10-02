@@ -55,6 +55,20 @@ struct RenderCapabilities {
     };
   }
 
+  // Widescreen-only geometry, PLUS a temporal product whose in-between fields are made of the GUEST'S
+  // OWN captured primitives, interpolated between two real frames by projection provenance (see
+  // TemporalSceneSource::interpolatesGuestGeometry). Gte remains the shipping path and the real frame is
+  // presented exactly as `widescreenOnly()` ships it. `interpolatedNative()` is the other shape — Native
+  // producers AND interpolation — and neither implies the other.
+  static constexpr RenderCapabilities guestInterpolated() {
+    return {
+        .defaultPath = RenderPath::Gte,
+        .nativeRenderPath = false,
+        .temporalInterpolation = true,
+        .defaultFaceOrder = FACE_ORDER_DEPTH,
+    };
+  }
+
   constexpr bool supports(RenderPath path) const {
     return path != RenderPath::Native || nativeRenderPath;
   }

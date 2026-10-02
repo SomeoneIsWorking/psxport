@@ -65,8 +65,25 @@ No source means ordinary single-frame replay, even when a temporal setting is en
 
 `rotate` runs once after the real presentation, including disabled or ineligible frames. The title owns
 clearing missing endpoints and refusing incompatible pairs; the presenter does not infer identity from
-adjacent geometry. Reconstruction runs only on the native path and, ordinarily, only while fps60 is
-active. A source whose guest-time walk deliberately captures inputs without emitting its geometry can
+adjacent geometry. Reconstruction runs only where `Fps60::interpolationPermitted` allows it and, ordinarily, only while
+fps60 is active. That predicate is one answer read by every gate (`active`, the per-pass tier-1 gate,
+and the announcement): the broad `RenderMode::enhancementsAllowed()` permission, which stays
+Native-only, OR the Gte path with a source that declares `interpolatesGuestGeometry()` — a source whose
+in-between field is the captured frame's OWN primitives with each vertex moved toward where the same
+vertex was a frame earlier (`GuestGeometrySceneSource`). The pairing comes from projection provenance,
+never from pixels: `ProjectionProvenance` records every scoped GTE RTPS/RTPT as (title scope, ordinal of
+the distinct transform, model-space vertex) → SXY, cut where the guest hands an ordering table to the GPU
+so the log belongs to the table actually drawn; `GuestGeometryInterpolation` resolves each packet's vertex
+words exactly against that log (the face's own instructions first, then its transform alone) and refuses
+a primitive whose readings moved differently. Nothing re-runs and nothing writes guest memory, so the
+display-pass guard stays armed. Every other host-side enhancement remains locked out on Gte. `Psx` is
+excluded from the narrow permission: it is the untouched software reference.
+
+A source that declares `capturedQueueIsComplete()` presents its captured queue VERBATIM at the real
+frame. Its captured items already are the geometry that pass draws, so replacing them with a second run
+of the same submission could only make the real frame worse; the reconstruction is for the in-between
+slot alone. The default is false, which is the answer for a source whose captured items are capture-only
+inputs and therefore need the reconstruction at `t=1` as well. A source whose guest-time walk deliberately captures inputs without emitting its geometry can
 explicitly request `requiresEndpointReconstruction()`: this preserves its current-endpoint draw at
 `t=1` while interpolation is disabled, without scheduling an intermediate callback. The GameHooks
 adapter uses that policy and retains its camera/object/backdrop captures and existing producer filter.
@@ -92,9 +109,12 @@ This is capability absence, not a disabled implementation and not a game-owned m
 
 ## Title-owned guest widescreen
 
-The broad `RenderMode::enhancementsAllowed()` gate remains Native-only. Guest widescreen does not
-relax it: GTE still receives no interpolation, internal-resolution scaling, native depth, or deferred
-native passes.
+The broad `RenderMode::enhancementsAllowed()` gate remains Native-only, and guest widescreen does not
+relax it. GTE still receives no internal-resolution scaling, native depth, or deferred native passes.
+The ONE thing GTE now accepts is a temporal in-between whose source declares
+`interpolatesGuestGeometry()` — the guest's own captured primitives, moved by provenance-proven vertex
+pairs, which is a different question from a PC enhancement of the guest picture and is gated by its own
+narrow predicate (`Fps60::interpolationPermitted`), not by this one.
 
 A direct runtime may separately return a `GuestWidescreenProjection`. The policy declares an aspect,
 but declaration alone cannot stretch or widen a frame. The title must call

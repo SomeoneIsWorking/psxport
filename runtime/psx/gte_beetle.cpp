@@ -476,6 +476,28 @@ int attach_enabled(void) {
 //   correct data — that is the content-interface CORRECTNESS gate, not GTE-hardware emulation, and it is
 //   fine. The fixed-point interface itself disappears once that content consumer is ported too.
 // Every gte_op caller ported this way removes work from GTE_Instruction; it vanishes when none remain.
+// The operands and results of the RTPS/RTPT that just ran, for projection provenance. RTPT reads V0..V2
+// (DR0..DR5) and pushes its three screen points to SXY0..SXY2 (DR12..DR14); RTPS reads V0 and pushes one
+// point, which lands in SXY2 (DR14). Neither modifies V, so reading it after the instruction is exact.
+static psxport::temporal::ProjectionSample sample_projection(unsigned op) {
+  psxport::temporal::ProjectionSample sample;
+  sample.count = op == 0x30 ? 3 : 1;
+  for (unsigned vertex = 0; vertex < sample.count; ++vertex) {
+    const uint32_t xy = gte_read_data(vertex * 2u);
+    sample.inputs[vertex * 3u] = static_cast<int16_t>(xy & 0xFFFFu);
+    sample.inputs[vertex * 3u + 1u] = static_cast<int16_t>(xy >> 16);
+    sample.inputs[vertex * 3u + 2u] = static_cast<int16_t>(gte_read_data(vertex * 2u + 1u) & 0xFFFFu);
+    sample.screen[vertex] = gte_read_data(op == 0x30 ? 12u + vertex : 14u);
+  }
+  for (unsigned reg = 0; reg < 8; ++reg) {
+    sample.transform[reg] = gte_read_ctrl(reg);
+  }
+  for (unsigned reg = 0; reg < 3; ++reg) {
+    sample.transform[8u + reg] = gte_read_ctrl(24u + reg);
+  }
+  return sample;
+}
+
 static void gte_op_impl(Core *c, uint32_t insn, uint32_t guest_pc) {
   c->rsub.gtePreOp.observeAround(c, guest_pc, insn, [insn] {
     GTE_Instruction(insn);
@@ -488,6 +510,9 @@ static void gte_op_impl(Core *c, uint32_t insn, uint32_t guest_pc) {
   }
   if (gd.gteprobe > 0) {
     gd.gte_hist[op]++;
+  }
+  if ((op == 0x01 || op == 0x30) && c->rsub.projectionProvenance.recording()) {
+    c->rsub.projectionProvenance.record(sample_projection(op));
   }
   if (op == 0x01 || op == 0x30) {
     // PROJECTION CONSTANTS, captured generically. pzToOrd needs the
