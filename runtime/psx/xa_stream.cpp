@@ -277,30 +277,42 @@ static int xa_decode_next_sector(XaState *xs) {
 // Push mode: the CDC drive model (cdc_native.cpp) has already read the sector from the disc and
 // decided it is XA-ADPCM audio under beetle's routing rule; decode it into the ring here. The disc
 // cursor belongs to the drive — this NEVER touches s_lba. `drive_lba` is diagnostic-only.
-// Returns frames decoded (>0), 0 when the sector is not decodable audio, or -1 when the ring is
-// full: NOTHING is decoded or dropped in that case (the XA history must stay coherent for the
-// retry), and the CALLER holds the sector — a real drive cannot deliver into a full buffer, so
-// backpressure, not loss, is the faithful behaviour. A held sector also makes a stopped SPU pull
-// visible as a stalled stream rather than silent corruption.
+// Returns frames decoded (>0) or 0 when the sector is not decodable audio.
+//
+// The ring overflows when audio is produced faster than the SPU drains it. On hardware the decoded
+// XA audio lands in the SPU's own CD buffer, and when THAT overflows the SPU drops/glitches samples
+// while the drive keeps spinning at its selected speed — so an overflow discards the OLDEST decoded
+// audio (the oldest is the least useful delay), takes the new sector, and never stops the disc. A
+// hold-for-retry would instead stall the sectors delivering the guest's VIDEO from the same stream.
+static int xa_decode_and_store_sector(XaState *xs, const uint8_t *raw, uint32_t drive_lba);
+
 int xa_push_audio_sector(XaState *xs, const uint8_t *raw, uint32_t drive_lba) {
   if (!xs->push_mode || raw[15] != 2 || !(raw[18] & 0x04)) {
     return 0;
   }
-  static uint32_t g_defer_streak = 0; // log-throttle only: consecutive full-ring deferrals
-  if ((uint32_t)(s_wr - (uint32_t)s_rd) >= XA_RING_FRAMES - 4096) {
-    g_defer_streak++;
-    if ((g_defer_streak & (g_defer_streak - 1)) == 0) { // report at 1,2,4,8... — every doubling
+  const uint32_t backlog = (uint32_t)(s_wr - (uint32_t)s_rd);
+  if (backlog >= XA_RING_FRAMES - 4096) {
+    const uint32_t dropped = backlog - (XA_RING_FRAMES - 4096);
+    s_rd = (double)((uint32_t)s_rd + dropped); // oldest audio first; the drive never stops
+    const uint32_t streak = ++xs->overflow_streak;
+    if ((streak & (streak - 1)) == 0) { // report at 1,2,4,8... — every doubling
       lucent::warn("xa",
-                   "ring FULL (wr={} rd={}) — holding audio sector LBA {} ({} consecutive); "
-                   "the SPU pull is not draining CD audio",
+                   "ring OVERFLOW (wr={} rd={}) — dropped {} oldest frames, took audio sector LBA {} "
+                   "anyway ({} consecutive); the SPU is not draining CD audio",
                    s_wr,
                    (uint32_t)s_rd,
+                   dropped,
                    drive_lba,
-                   g_defer_streak);
+                   streak);
     }
-    return -1;
+    return xa_decode_and_store_sector(xs, raw, drive_lba);
   }
-  g_defer_streak = 0;
+  return xa_decode_and_store_sector(xs, raw, drive_lba);
+}
+
+// Decode one already-read audio sector into the ring and account it. Shared by the normal push and
+// by the overflow path above, so both store, count, log and mark the stream live identically.
+static int xa_decode_and_store_sector(XaState *xs, const uint8_t *raw, uint32_t drive_lba) {
   int16_t pcm[4032 * 2]; // mono sectors yield up to 4032 frames (see xa_decode_sector)
   int freq = s_src_freq;
   int n = xa_decode_sector(raw, pcm, s_hist, &freq);

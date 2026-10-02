@@ -205,10 +205,10 @@ static bool sector_is_xa_audio(const CdcState *s, const uint8_t *raw) {
 
 // Hand one audio sector to the SPU ring. First routing also flips the ring into PUSH mode: from
 // then on the SPU pull never fetches sectors itself — the drive owns the cursor (a pull-side
-// self-fetch would read ahead of the physical head and desync A/V). Returns -1 when the ring is
-// FULL: the drive must HOLD the sector (hardware backpressure — a real CD buffer cannot accept
-// into a full FIFO) and retry the same sector after another period. >=0 means consumed (the
-// sector moved past the head even if zero frames decoded from it).
+// self-fetch would read ahead of the physical head and desync A/V). The sector is ALWAYS consumed:
+// on hardware the decoded audio lands in the SPU's own CD buffer, and an overflowing SPU buffer
+// drops samples while the drive keeps spinning, so there is no condition under which this drive
+// stops for audio. Returns the frames decoded (0 when the sector carried none).
 static int route_audio_to_spu(CdcState *s, const uint8_t *raw, uint32_t drive_lba) {
   s->xa->push_mode = 1;
   return xa_push_audio_sector(s->xa, raw, drive_lba);
@@ -219,25 +219,22 @@ static int route_audio_to_spu(CdcState *s, const uint8_t *raw, uint32_t drive_lb
 //                           the guest never sees audio sectors in its DMA stream, exactly like
 //                           hardware);
 //   anything else         -> fill the data FIFO via load_sector (the caller raises INT1).
-// Returns false only when the disc read itself failed. out_held=true marks the backpressure case:
-// the ring was full, NOTHING advanced, and the caller must retry this same sector next period.
-static bool drive_consume_sector(CdcState *s, uint32_t lba, bool *out_audio, bool *out_held) {
+// Returns false only when the disc read itself failed. Audio is always consumed and always lets the
+// head advance: an audio sector has no "retry" outcome, and the caller has no hold path to share
+// with the data side.
+static bool drive_consume_sector(CdcState *s, uint32_t lba, bool *out_audio) {
   *out_audio = false;
-  *out_held = false;
   if (!(s->mode & 0x40)) { // STRSND off: every sector is a data sector
     return load_sector(s, lba);
   }
   uint8_t raw[2352];
-  if (!s->disc_read_raw_fn(s->disc, lba, raw, sizeof raw)) {
+  if (!s->disc_read_raw_fn(s->disc, lba, raw, sizeof(raw))) {
     return false;
   }
   if (!sector_is_xa_audio(s, raw)) {
     return load_sector(s, lba);
   }
-  if (route_audio_to_spu(s, raw, lba) < 0) {
-    *out_held = true;
-    return true;
-  }
+  route_audio_to_spu(s, raw, lba);
   *out_audio = true;
   return true;
 }
@@ -403,20 +400,17 @@ static int service_drive_event(CdcState *s) {
 
   if (s->first_sector_pending) {
     s->first_sector_pending = 0;
-    bool audio = false, held = false;
-    if (!drive_consume_sector(s, s->loc_lba, &audio, &held)) {
+    bool audio = false;
+    if (!drive_consume_sector(s, s->loc_lba, &audio)) {
       stop_continuous_read(s);
       return 0;
     }
     s->stat |= kCdlStatRead; // INT1/Getstat must identify an active sector read
-    if (audio || held) {
-      // Decoded straight to the SPU (or the ring is full and the sector is held for retry): the
-      // guest sees no data-ready. The drive keeps reading — reschedule so the stream stays paced.
+    if (audio) {
+      // Decoded straight to the SPU: the guest sees no data-ready. The drive keeps reading —
+      // reschedule so the stream stays paced.
       schedule_sector_event(s);
-      if (held) {
-        s->first_sector_pending = 1; // retry THIS sector once the ring drains
-      }
-      lucent::debug("cdcpace", "first sector @ {} was XA audio -> SPU ring (held={})", s->loc_lba, held);
+      lucent::debug("cdcpace", "first sector @ {} was XA audio -> SPU ring", s->loc_lba);
       return 0;
     }
     queue_data_ready(s);
@@ -427,15 +421,13 @@ static int service_drive_event(CdcState *s) {
   // the later BFRD service request swaps this ready sector into the CPU/DMA-visible FIFO.
   // An XA-audio next sector never announces: the drive decodes it now and moves on, so a pure-
   // audio stretch produces no guest interrupts at all while the head still advances in real time.
-  // Ring full -> hold: retry the SAME sector next period (no head advance, no announce).
   {
     bool next_audio = false;
     uint8_t raw[2352];
     const uint32_t next_lba = s->loc_lba + 1;
     if (s->disc_read_raw_fn(s->disc, next_lba, raw, sizeof raw) && sector_is_xa_audio(s, raw)) {
-      if (route_audio_to_spu(s, raw, next_lba) >= 0) {
-        s->loc_lba++; // the head PASSED this sector; the next peek must see the one after it
-      }
+      route_audio_to_spu(s, raw, next_lba);
+      s->loc_lba++; // the head PASSED this sector; the next peek must see the one after it
       schedule_sector_event(s);
       return 0;
     }
@@ -526,9 +518,9 @@ static void retire_pending_command(CdcState *s) {
 }
 
 void cdc_begin_read(CdcState *s, uint32_t lba) {
-  // The read is the NEXT command after anything still pending, so the older one runs first. The
-  // timed contract is unchanged — the command was not executed inline at issue — but a command can
-  // no longer land after the read it was issued before.
+  // The read is the NEXT command after anything still pending, so the older one runs first and
+  // retires here: a timed command is never executed inline at issue, so it always lands before the
+  // read it was issued before.
   retire_pending_command(s);
   s->loc_lba = lba;
   s->command_lba = lba;

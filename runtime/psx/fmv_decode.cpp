@@ -436,18 +436,27 @@ static void mdec_upload_tables(void) {
 }
 
 // ====================================================================================
-// MDEC feed (16bpp) + RGB555 extraction
+// MDEC feed + macroblock drain (depth-parameterised) + RGB extraction
 // ====================================================================================
-int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int height, uint16_t *pixels) {
-  static uint32_t *inbuf = 0;                 // MDEC input words (was an Fmv member; lazily allocated)
-  static uint32_t *outbuf = 0;                // MDEC output words (was an Fmv member; lazily allocated)
+// MDEC decode-macroblock command depth bits ([28:27]): 2 = 24bpp, 3 = 16bpp (mdec.c cases 2 and 3).
+static const uint32_t kDepth24bpp = 2;
+static const uint32_t kDepth16bpp = 3;
+
+// Feed one frame's code stream through the MDEC at `depth` and drain its macroblocks linearly into
+// *out_buf (allocated on first use). Returns the number of 32-bit output words drained, or negative
+// on error. The block LAYOUT differs with depth and is the caller's business: 16bpp emits 128 words
+// per 16x16 macroblock, 24bpp emits 192 (mdec.c PixelBufferCount32 32 vs 48 per 8x8 block).
+static int
+mdec_decode_macroblocks(const uint16_t *codes, int ncodes, uint32_t depth, int width, int height, uint32_t **out_buf) {
+  static uint32_t *inbuf = 0;                 // MDEC input words (lazily allocated)
+  uint32_t *outbuf = *out_buf;                // MDEC output words (allocated on first use)
   mdec_write(MDEC1, 0x80000000);              // reset
   mdec_write(MDEC1, (1u << 30) | (1u << 29)); // enable DMA in + out
   mdec_upload_tables();                       // load quant + IDCT (else output is black)
 
   int nwords = (ncodes + 1) / 2;
-  // Decode-macroblock command: [31:29]=1, [28:27]=depth(16bpp=3), [15:0]=param word count.
-  uint32_t cmd = 0x30000000u | (0x3u << 27) | (uint32_t)(nwords & 0xFFFF);
+  // Decode-macroblock command: [31:29]=1, [28:27]=depth, [15:0]=param word count.
+  uint32_t cmd = 0x30000000u | (depth << 27) | (uint32_t)(nwords & 0xFFFF);
   mdec_write(MDEC0, cmd);
 
   if (!inbuf) {
@@ -463,13 +472,15 @@ int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int heig
   }
 
   // MDEC emits the frame as a sequence of 16x16 macroblocks in raster order (left->right,
-  // top->bottom). The mdec_dma_out voffs scatter makes each 128-word (16bpp) group a
-  // self-contained 16x16 RASTER block; it does NOT tile the blocks across the frame width
-  // (on real PSX the game DMAs each macroblock to its own computed address). So we drain
-  // the whole stream linearly, then TILE each 16x16 block into the width x height frame.
-  int total_words = (width * height) / 2; // 16bpp: 2 px/word
+  // top->bottom). The mdec_dma_out voffs scatter makes each output group a self-contained
+  // 16x16 RASTER block; it does NOT tile the blocks across the frame width (on real PSX the game
+  // DMAs each macroblock to its own computed address). So we drain the whole stream linearly, and
+  // the caller TILES each 16x16 block into the width x height frame.
+  // 16bpp: 2 px/word. 24bpp: 3 bytes/px = 1.5 words/px, so a word covers 4 px across two rows.
+  int total_words = (depth == kDepth24bpp) ? (width * height * 3) / 4 : (width * height) / 2;
   if (!outbuf) {
     outbuf = (uint32_t *)malloc(FMV_OUTBUF_WORDS * 4);
+    *out_buf = outbuf;
   }
   if (total_words > (int)FMV_OUTBUF_WORDS) {
     return -2;
@@ -483,6 +494,7 @@ int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int heig
   // going until all input is consumed AND no more output drains.
   int in_pos = 0, got = 0, stall = 0;
   for (;;) {
+    const int progress_before = in_pos + got;
     // Feed a burst when the InFIFO reports room. MDEC_DMACanWrite is true only when >=0x20
     // words are free, so a 0x10-word chunk is always safe (never dropped). Pump after each
     // chunk so the decoder drains the InFIFO before we top it up again.
@@ -499,9 +511,14 @@ int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int heig
     mdec_pump();
     int n = (got < total_words) ? mdec_dma_out(outbuf + got, total_words - got) : 0;
     got += n;
-    if (in_pos >= nwords && n == 0) {
+    // Termination is by LACK OF PROGRESS, not by exhausted input. The decoder can park while input
+    // is still outstanding — it refuses writes when its output side cannot drain — and a loop that
+    // only counts stalls once the input is gone spins forever in exactly that state. 24bpp reaches
+    // it readily (48 output words per 8x8 block instead of 32), and did: a frame that would not
+    // decode hung the player instead of returning the blocks it had.
+    if (in_pos + got == progress_before) {
       if (++stall >= 4) {
-        break; // input drained + several empty output pumps => done
+        break; // several iterations that fed nothing and drained nothing => the decoder is parked
       }
     } else {
       stall = 0;
@@ -523,14 +540,22 @@ int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int heig
   got += tail;
   lucent::debug(
       "fmv", "  drain: {} scattered + {} tail-scatter = {}/{} total", got_before_tail, tail, got, total_words);
+  return got;
+}
 
+int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int height, uint16_t *pixels) {
+  uint32_t *outbuf = 0;
+  int got = mdec_decode_macroblocks(codes, ncodes, kDepth16bpp, width, height, &outbuf);
+  if (got < 0) {
+    return got;
+  }
   // Tile 16x16 macroblocks (each 128 words = 256 px, raster within the block) into the frame.
   memset(pixels, 0, (size_t)width * height * 2);
   const uint16_t *mb = (const uint16_t *)outbuf; // 2 px per outbuf word
   int mbx = (width + 15) / 16;
   int mby = (height + 15) / 16;
   int produced = got; // words actually drained
-  lucent::debug("fmv", "  drained {}/{} words ({} macroblocks)", got, total_words, got / 128);
+  lucent::debug("fmv", "  drained {} words ({} macroblocks, 16bpp)", got, got / 128);
   int blocks_avail = produced / 128; // 128 (32-bit) words per 16x16 MB
   // Each 128-word (256 px) group is a 16x16 RASTER macroblock: mednafen emits four 8x8 Y
   // sub-blocks and mdec_dma_out's voffs scatter (RAMOffsetWWS=4) lays them out as a 16x16
@@ -568,6 +593,56 @@ int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int heig
     }
   }
   return width * height; // pixel count
+}
+
+// 24bpp: mdec.c case 2 writes 8 rows of 8 pixels as 3 bytes each (EncodeRow24: out[i*3+0..2],
+// pix_out += 24), so one 8x8 block is 192 bytes and a 16x16 macroblock is four of them: 768 bytes
+// = 192 words, 48 bytes per frame row of 16 pixels. This is the depth Toy Story 2's FMV overlay
+// selects (its player passes depth 3 in ITS convention, compared against the constant 3 at its
+// 24-bit upload), and the same byte layout its 16-pixel LoadImage strips assume.
+int mdec_decode_to_rgb888(const uint16_t *codes, int ncodes, int width, int height, uint8_t *pixels) {
+  uint32_t *outbuf = 0;
+  int got = mdec_decode_macroblocks(codes, ncodes, kDepth24bpp, width, height, &outbuf);
+  if (got < 0) {
+    return got;
+  }
+  memset(pixels, 0, (size_t)width * height * 3);
+  const uint8_t *mb = (const uint8_t *)outbuf; // 3 bytes per pixel
+  int mbx = (width + 15) / 16;
+  int mby = (height + 15) / 16;
+  const int kBlockWords = 192; // 16x16 px at 3 B/px
+  lucent::debug("fmv", "  drained {}/{} words ({} macroblocks, 24bpp)", got, got / kBlockWords, got / kBlockWords);
+  int blocks_avail = got / kBlockWords;
+  // Same COLUMN-MAJOR emit order as the 16bpp path above, for the same reason.
+  int rowmajor = cfg_on("PSXPORT_FMV_ROWMAJOR") ? 1 : 0;
+  for (int blk = 0; blk < blocks_avail; blk++) {
+    int bx, by;
+    if (rowmajor) {
+      by = blk / mbx;
+      bx = blk % mbx;
+    } else {
+      bx = blk / mby;
+      by = blk % mby;
+    }
+    if (bx >= mbx || by >= mby) {
+      continue;
+    }
+    const uint8_t *src = mb + (size_t)blk * kBlockWords * 4;
+    for (int yy = 0; yy < 16; yy++) {
+      int fy = by * 16 + yy;
+      if (fy >= height) {
+        break;
+      }
+      for (int xx = 0; xx < 16; xx++) {
+        int fx = bx * 16 + xx;
+        if (fx >= width) {
+          break;
+        }
+        memcpy(pixels + ((size_t)fy * width + fx) * 3, src + (yy * 16 + xx) * 3, 3);
+      }
+    }
+  }
+  return width * height;
 }
 
 // ====================================================================================

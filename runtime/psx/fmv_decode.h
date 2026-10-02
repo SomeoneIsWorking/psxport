@@ -24,6 +24,11 @@ int bs_decode_frame(
 // negative on error.
 int mdec_decode_to_rgb555(const uint16_t *codes, int ncodes, int width, int height, uint16_t *pixels);
 
+// Same at MDEC depth 2 (24bpp): `pixels` receives width*height RGB888 triples, three bytes per
+// pixel in R,G,B order — the layout mdec.c's EncodeRow24 writes and the layout the PSX 24-bit
+// display samples. Returns width*height, or negative on error.
+int mdec_decode_to_rgb888(const uint16_t *codes, int ncodes, int width, int height, uint8_t *pixels);
+
 // xa_decode_sector — decode one raw 2352B XA-ADPCM sector to interleaved S16 stereo.
 // DECLARED IN c_subsys.h, which this includes. The declaration used to be copied here as well, with
 // a comment saying so ("identical declaration") — a copy that is known about is still a copy, and

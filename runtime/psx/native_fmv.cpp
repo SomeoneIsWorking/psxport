@@ -79,30 +79,19 @@ int Fmv::bsDecodeFrame(
 }
 
 // ====================================================================================
-// MDEC feed (16bpp) + RGB555 extraction — in fmv_decode.cpp (mdec_decode_to_rgb555),
-// which uploads the quant/IDCT tables, feeds the MDEC in DMA0/DMA1 ping-pong, drains the
-// frame, and tiles the 16x16 macroblocks column-major. See above for the why.
+// MDEC feed + macroblock tiling — in fmv_decode.cpp (mdec_decode_to_rgb555 / _to_rgb888),
+// which upload the quant/IDCT tables, feed the MDEC in DMA0/DMA1 ping-pong, drain the
+// frame, and tile the 16x16 macroblocks column-major. See above for the why.
 // ====================================================================================
-int Fmv::mdecDecodeToRgb555(const uint16_t *codes, int ncodes, int width, int height, uint16_t *pixels) {
-  return mdec_decode_to_rgb555(codes, ncodes, width, height, pixels);
-}
-
 // Present the decoded movie frame as a NATIVE RGBA image, letterboxed 4:3 with black bars
 // (gpu_vk_present_image) — NOT a VRAM upload. The PC renderer composites only native submits over
 // black; a CPU->VRAM upload + gpu_present would be blacked out by that. Presenting the frame directly
 // is also the centering fix — it pillarboxes 4:3 on widescreen instead of left-aligning in the wide FB.
-static void present_rgb555(Core *core, const uint16_t *pixels, int width, int height) {
-  static std::vector<uint8_t> rgba;
-  const int npix = width * height;
-  rgba.resize((size_t)npix * 4);
-  for (int i = 0; i < npix; i++) {
-    const uint16_t p = pixels[i]; // PSX 555: bit0-4 R, 5-9 G, 10-14 B
-    const uint8_t r5 = p & 0x1f, g5 = (p >> 5) & 0x1f, b5 = (p >> 10) & 0x1f;
-    rgba[i * 4 + 0] = (uint8_t)((r5 << 3) | (r5 >> 2)); // 5 -> 8 bit expand
-    rgba[i * 4 + 1] = (uint8_t)((g5 << 3) | (g5 >> 2));
-    rgba[i * 4 + 2] = (uint8_t)((b5 << 3) | (b5 >> 2));
-    rgba[i * 4 + 3] = 255;
-  }
+//
+// The frame is 24bpp because that is what retail PSX movies were authored for: Toy Story 2's FMV
+// overlay asks its player for depth 3 in ITS convention (compared against the literal 3 before its
+// 24-bit upload path), and RGB555 would spend two bits per channel the movie actually encodes.
+static void submit_rgba(Core *core, const std::vector<uint8_t> &rgba, int width, int height) {
   gpu_vk_present_image(core, rgba.data(), width, height, 1.0f);
   // Native movie frames bypass GpuState::gpu_present_ex(), the main-presenter readiness path. They
   // are forward progress, but a startup movie does not prove the main VRAM targets are initialized.
@@ -110,6 +99,36 @@ static void present_rgb555(Core *core, const uint16_t *pixels, int width, int he
   watchdog_progress();
 }
 
+static void present_rgb888(Core *core, std::vector<uint8_t> &rgba, const uint8_t *pixels, int width, int height) {
+  const int npix = width * height;
+  rgba.resize((size_t)npix * 4);
+  for (int i = 0; i < npix; i++) {
+    rgba[i * 4 + 0] = pixels[i * 3 + 0]; // already full 8-bit R,G,B from the MDEC
+    rgba[i * 4 + 1] = pixels[i * 3 + 1];
+    rgba[i * 4 + 2] = pixels[i * 3 + 2];
+    rgba[i * 4 + 3] = 255;
+  }
+  submit_rgba(core, rgba, width, height);
+  // Native movie frames bypass GpuState::gpu_present_ex(), the main-presenter readiness path. They
+  // are forward progress, but a startup movie does not prove the main VRAM targets are initialized.
+  // After the main presenter is ready this heartbeat automatically uses the steady timeout.
+  watchdog_progress();
+}
+
+void Fmv::presentFrame(const uint8_t *pixels, int width, int height) {
+  present_rgb888(&game->core, rgba_scratch_, pixels, width, height);
+  last_frame_width_ = width;
+  last_frame_height_ = height;
+}
+
+void Fmv::replayLastFrame(Core &core) {
+  if (!active_ || last_frame_width_ == 0) {
+    return;
+  }
+  // rgba_scratch_ still holds the frame presented above: the decode buffers are separate, so nothing
+  // since then has overwritten it.
+  submit_rgba(&core, rgba_scratch_, last_frame_width_, last_frame_height_);
+}
 // CD-XA ADPCM audio decode lives in fmv_decode.cpp (xa_decode_sector) — the shared machinery
 // this TU and the offline tools both call. It is declared via c_subsys.h / fmv_decode.h.
 
@@ -164,32 +183,42 @@ void Fmv::audioClose() {
 // fixed-15fps guess was too slow). Polls input and returns 1 if Start was pressed (skip).
 // uncapped (PSXPORT_FMV_FPS=0) disables pacing for fast headless dumps.
 int Fmv::pace(long media_frames, int freq, uint32_t t0, int uncapped) {
-  game->pad.pollSdl();
-  game->pad.sampleButtonEdges();
-  int pressed = game->pad.pressedButton(PAD_START);
+  // Reads the pad OWNER'S serviced mask — nothing else. A movie host turn is a presented host frame,
+  // so the frame driver's per-frame service (Pad::serviceFrame) has already run this frame and
+  // resolved host, forced, replay and control-channel input into `buttons`. Polling here for input of
+  // its own would be a second copy of that resolution with different rules, and it would make a movie
+  // skip unreplayable: no pad frame is serviced while the mask is resolved by hand, so a recording
+  // could not contain one.
+  //
+  // A LEVEL, not an EDGE, is the skip condition: the frame's own pad service sampled this press and
+  // consumed its edge before the guest ran, so waiting for an edge here would never see it. What a
+  // player means by skipping a movie is Start held while it is up. The one exception is a Start
+  // already down when the movie opens, which `begin` records: that needs a release first, exactly the
+  // contract the original player had.
+  auto startIsHeld = [this] {
+    return (game->pad.buttons & PAD_START) == 0; // the pad mask is active-low
+  };
+  const auto skipping = [this, &startIsHeld] {
+    if (!startIsHeld()) {
+      start_held_at_begin_ = false; // a release re-arms the skip for this movie
+      return false;
+    }
+    return !start_held_at_begin_;
+  };
+  int pressed = skipping() ? 1 : 0;
   if (uncapped || freq <= 0) {
     return pressed;
   }
-  uint32_t target = (uint32_t)((long long)media_frames * 1000 / freq);
+  const uint32_t target = (uint32_t)((long long)media_frames * 1000 / freq);
   while ((int)(SDL_GetTicks() - t0) < (int)target) {
     SDL_Delay(2);
-    game->pad.pollSdl();
-    game->pad.sampleButtonEdges();
-    if (game->pad.pressedButton(PAD_START)) {
+    if (skipping()) {
       pressed = 1;
     }
   }
   return pressed;
 }
 #else
-void Fmv::audioOpen(int freq) {
-  (void)freq;
-}
-void Fmv::audioQueue(const int16_t *p, int n) {
-  (void)p;
-  (void)n;
-}
-void Fmv::audioClose() {}
 int Fmv::pace(long m, int f, uint32_t t, int u) {
   (void)m;
   (void)f;
@@ -202,49 +231,51 @@ int Fmv::pace(long m, int f, uint32_t t, int u) {
 Fmv::~Fmv() {
   free(payload_buf);
   free(codes_buf);
-  free(pixels_buf);
+  free(pixels24_buf);
   free(xa_pcm);
 }
 
 // ====================================================================================
-// STR demux + top-level play
+// STR demux + playback, stepped
 // ====================================================================================
-int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
-  Core *core = &game->core;
+void Fmv::ensureScratch() {
+  if (payload_buf) {
+    return;
+  }
+  payload_buf = (uint8_t *)malloc(FMV_PAYLOAD_BYTES);
+  codes_buf = (uint16_t *)malloc(FMV_CODES_MAX * 2);
+  pixels24_buf = (uint8_t *)malloc(1024 * 512 * 3);
+  xa_pcm = (int16_t *)malloc(4032 * 2 * 2); // mono sectors yield up to 4032 frames (see xa_decode_sector)
+}
+
+// ====================================================================================
+// STR demux + playback, stepped
+// ====================================================================================
+bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
   game->gpu.gpu_native_init();
   mdec_init();
+  ensureScratch();
 
-  uint32_t nsectors = (size_bytes + SECTOR_USER - 1) / SECTOR_USER;
-  if (!payload_buf) {
-    payload_buf = (uint8_t *)malloc(FMV_PAYLOAD_BYTES);
-    codes_buf = (uint16_t *)malloc(FMV_CODES_MAX * 2);
-    pixels_buf = (uint16_t *)malloc(1024 * 512 * 2);
-    xa_pcm = (int16_t *)malloc(4032 * 2 * 2); // mono sectors yield up to 4032 frames (see xa_decode_sector)
-  }
-  uint8_t *payload = payload_buf;
-  uint16_t *codes = codes_buf;
-  uint16_t *pixels = pixels_buf;
+  base_lba_ = lba;
+  sector_count_ = (size_bytes + SECTOR_USER - 1) / SECTOR_USER;
+  sector_ = 0;
+  frame_in_progress_ = -1;
+  payload_len_ = 0;
+  expected_chunks_ = 0;
+  got_chunks_ = 0;
+  frame_width_ = 320;
+  frame_height_ = 240;
+  media_frames_ = 0;
+  xa_freq_ = 37800;
+  xa_hist_[0][0] = xa_hist_[0][1] = xa_hist_[1][0] = xa_hist_[1][1] = 0;
+  frames_ = 0;
+  skipped_ = false;
+  finished_ = false;
+  active_ = true;
 
-  int frames = 0;
-  uint32_t sec = 0;
-  int cur_frame = -1;
-  uint32_t paylen = 0;
-  int fwidth = 320, fheight = 240;
-  int expected_chunks = 0, got_chunks = 0;
-
-  // Optional dev cap: PSXPORT_FMV_MAXFRAMES bounds how many frames to play (0/unset = all).
-  // Used by the standalone proof to decode just the first frame quickly; harmless in prod.
-  int max_frames = 0;
-  {
-    const char *mf = cfg_str("PSXPORT_FMV_MAXFRAMES");
-    if (mf && *mf) {
-      max_frames = atoi(mf);
-    }
-  }
-
-  // Audio: STR interleaves XA-ADPCM sectors with the video sectors. Decode them, play through
-  // a dedicated SDL device at the XA rate, and pace VIDEO to the audio/media clock (the real
-  // PSX rate). uncapped = PSXPORT_FMV_FPS=0 (headless dumps: no pacing, no audio device).
+  // Audio: STR interleaves XA-ADPCM sectors with the video sectors. Decode them, play through a
+  // dedicated SDL device at the XA rate, and pace VIDEO to the audio/media clock (the real PSX
+  // rate). uncapped = PSXPORT_FMV_FPS=0 (headless dumps: no pacing, no audio device).
   // FMV pacing is asked for explicitly, never inferred from the render sink.
   //
   // This used to auto-uncap on PSXPORT_VK_HEADLESS. USER RULE: "Headless and windowed should never
@@ -256,143 +287,204 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
   //
   // The wall-clock saving is real and is still available — ask for it: PSXPORT_FMV_FPS=0. A probe
   // that wants to fast-forward says so, and its log then records that it did.
-  int uncapped = 0;
+  uncapped_ = false;
   {
     const char *f = cfg_str("PSXPORT_FMV_FPS");
     if (f && *f) {
-      uncapped = (atoi(f) == 0);
+      uncapped_ = (atoi(f) == 0);
     }
   }
   // A RESUME run (PSXPORT_PAD_RESUME) is replaying its way back to where the player left off, and the
   // boot movies are ~77 s of that journey. This is not the inferred fast-forward the comment above
   // rejects: the user asked for it by name, it ends when the recording does, and the log line below
   // records that this run's movies were uncapped.
-  if (!uncapped && game->pad.fastForwarding()) {
-    uncapped = 1;
+  if (!uncapped_ && game->pad.fastForwarding()) {
+    uncapped_ = true;
     lucent::info("fmv", "uncapped: PSXPORT_PAD_RESUME is fast-forwarding to the end of the recording");
   }
-  int xa_freq = 37800;
-  int16_t xa_hist[2][2] = {{0, 0}, {0, 0}};
-  long media_frames = 0; // cumulative audio sample-pairs = media clock
-  // Suppress a Start already held as the movie begins. Pretending the prior sample was held exactly
-  // reproduces the original player's contract: release, then a fresh press, is required to skip.
-  game->pad.resetButtonEdges((uint16_t)(game->pad.buttons & (uint16_t)~PAD_START));
-  uint32_t t0 = 0;
+  // Optional dev cap: PSXPORT_FMV_MAXFRAMES bounds how many frames to play (0/unset = all).
+  // Used by the standalone proof to decode just the first frame quickly; harmless in prod.
+  max_frames_ = 0;
+  {
+    const char *mf = cfg_str("PSXPORT_FMV_MAXFRAMES");
+    if (mf && *mf) {
+      max_frames_ = atoi(mf);
+    }
+  }
+
+  // A Start already held as the movie begins must not skip it: the skip needs a fresh press, which
+  // is what the original player required. Recorded as a LEVEL (the pad mask is active-low), because
+  // the edge for a press that arrives later belongs to the frame whose pad service produced it — see
+  // pace(). The mask is this frame's serviced one: the frame driver services input before the guest
+  // runs, so this is the same mask every other consumer of the frame sees.
+  start_held_at_begin_ = (game->pad.buttons & PAD_START) == 0;
+  game->pad.resetButtonEdges(game->pad.buttons);
+  clock_origin_ms_ = 0;
 #ifdef PSXPORT_SDL
-  t0 = SDL_GetTicks();
+  clock_origin_ms_ = SDL_GetTicks();
 #endif
-  int skipped = 0;
+  lucent::info("fmv", "begin: LBA {}, {} bytes ({} sectors)", lba, size_bytes, sector_count_);
+  return true;
+}
+
+void Fmv::step() {
+  if (finished_) {
+    return;
+  }
   uint8_t raw[2352];
-  while (sec < nsectors) {
-    if (!disc_read_raw(&game->disc, lba + sec, raw, 2352)) {
+  while (sector_ < sector_count_) {
+    if (!disc_read_raw(&game->disc, base_lba_ + sector_, raw, 2352)) {
       break;
     }
-    sec++;
-    int submode = raw[18];
+    sector_++;
+    const int submode = raw[18];
 
     if (submode & 0x04) { // XA-ADPCM audio sector
-      int n = xa_decode_sector(raw, xa_pcm, xa_hist, &xa_freq);
-      if (sec == 1 || media_frames == 0) {
-        audioOpen(xa_freq);
+      const int n = xa_decode_sector(raw, xa_pcm, xa_hist_, &xa_freq_);
+      if (sector_ == 1 || media_frames_ == 0) {
+        audioOpen(xa_freq_);
       }
       audioQueue(xa_pcm, n);
-      media_frames += n;
-      if (pace(media_frames, xa_freq, t0, uncapped)) {
-        skipped = 1;
-        break;
+      media_frames_ += n;
+      if (pace(media_frames_, xa_freq_, clock_origin_ms_, uncapped_)) {
+        endWithSkip();
+        return;
       }
       continue;
     }
 
     const uint8_t *sbuf = raw + 24; // Form1 video user data
-    uint16_t magic = (uint16_t)(sbuf[0] | (sbuf[1] << 8));
+    const uint16_t magic = (uint16_t)(sbuf[0] | (sbuf[1] << 8));
     if (magic != 0x0160) {
       continue; // not a video data sector (padding)
     }
 
-    int chunk_idx = sbuf[4] | (sbuf[5] << 8);
-    int nchunks = sbuf[6] | (sbuf[7] << 8);
-    int framenum = sbuf[8] | (sbuf[9] << 8) | (sbuf[10] << 16) | (sbuf[11] << 24);
-    int w = sbuf[16] | (sbuf[17] << 8);
-    int h = sbuf[18] | (sbuf[19] << 8);
+    const int chunk_idx = sbuf[4] | (sbuf[5] << 8);
+    const int nchunks = sbuf[6] | (sbuf[7] << 8);
+    const int framenum = sbuf[8] | (sbuf[9] << 8) | (sbuf[10] << 16) | (sbuf[11] << 24);
+    const int w = sbuf[16] | (sbuf[17] << 8);
+    const int h = sbuf[18] | (sbuf[19] << 8);
 
     if (chunk_idx == 0) {
-      cur_frame = framenum;
-      paylen = 0;
-      expected_chunks = nchunks;
-      got_chunks = 0;
-      fwidth = w ? w : 320;
-      fheight = h ? h : 240;
+      frame_in_progress_ = framenum;
+      payload_len_ = 0;
+      expected_chunks_ = nchunks;
+      got_chunks_ = 0;
+      frame_width_ = w ? w : 320;
+      frame_height_ = h ? h : 240;
     }
-    if (cur_frame != framenum) {
+    if (frame_in_progress_ != framenum) {
       continue; // out of sync; wait for next chunk-0
     }
 
-    uint32_t plen = SECTOR_USER - SUBHDR_LEN;
-    if (paylen + plen <= FMV_PAYLOAD_BYTES) {
-      memcpy(payload + paylen, sbuf + SUBHDR_LEN, plen);
-      paylen += plen;
+    const uint32_t plen = SECTOR_USER - SUBHDR_LEN;
+    if (payload_len_ + plen <= FMV_PAYLOAD_BYTES) {
+      memcpy(payload_buf + payload_len_, sbuf + SUBHDR_LEN, plen);
+      payload_len_ += plen;
     }
-    got_chunks++;
+    got_chunks_++;
 
-    if (expected_chunks > 0 && got_chunks >= expected_chunks) {
-      int ncodes = bsDecodeFrame(payload, paylen, fwidth, fheight, codes, (int)FMV_CODES_MAX);
-      lucent::debug("fmv", "frame {}: {}x{}, {} payload bytes, {} codes", framenum, fwidth, fheight, paylen, ncodes);
-      if (ncodes > 0) {
-        int np = mdecDecodeToRgb555(codes, ncodes, fwidth, fheight, pixels);
-        if (np > 0) {
-          present_rgb555(core, pixels, fwidth, fheight);
-          frames++;
-          // Pace video to the audio/media clock (no audio sector here, so just gate on it).
-          if (pace(media_frames, xa_freq, t0, uncapped)) {
-            skipped = 1;
-            break;
-          }
+    if (expected_chunks_ > 0 && got_chunks_ >= expected_chunks_) {
+      const uint32_t frame_payload = payload_len_;
+      frame_in_progress_ = -1;
+      expected_chunks_ = 0;
+      got_chunks_ = 0;
+      payload_len_ = 0;
+      const int ncodes =
+          bsDecodeFrame(payload_buf, frame_payload, frame_width_, frame_height_, codes_buf, (int)FMV_CODES_MAX);
+      lucent::debug("fmv",
+                    "frame {}: {}x{}, {} payload bytes, {} codes",
+                    framenum,
+                    frame_width_,
+                    frame_height_,
+                    frame_payload,
+                    ncodes);
+      if (ncodes > 0 && mdec_decode_to_rgb888(codes_buf, ncodes, frame_width_, frame_height_, pixels24_buf) > 0) {
+        presentFrame(pixels24_buf, frame_width_, frame_height_);
+        frames_++;
+        // Pace video to the audio/media clock (no audio sector here, so just gate on it).
+        if (pace(media_frames_, xa_freq_, clock_origin_ms_, uncapped_)) {
+          endWithSkip();
+          return;
+        }
+        if (max_frames_ && frames_ >= max_frames_) {
+          endAtEndOfStream();
+          return;
         }
       }
-      cur_frame = -1;
-      expected_chunks = 0;
-      got_chunks = 0;
-      paylen = 0;
-      if (max_frames && frames >= max_frames) {
-        break;
-      }
+      // ONE frame presented (or attempted) per call: hand the turn back so the frame loop, the
+      // control channel and window events all get a slice between movie frames.
+      return;
     }
   }
-  if (skipped) {
-    lucent::info("fmv", "skipped by Start at frame {}", frames);
-    // CONSUME the skip press: the title front-end polls the pad the instant this returns, so if Start is
-    // still held it reads as a fresh menu press and auto-selects New Game. Wait for Start to be RELEASED
-    // (bounded, ~1s safety cap) before handing back — the game's own StrPlayer consumed it the same way.
-    for (int guard = 0; guard < 250 && (game->pad.buttons & PAD_START) == 0; guard++) {
-      game->pad.pollSdl();
-      game->pad.sampleButtonEdges();
-      SDL_Delay(4);
-    }
-  }
-  lucent::debug("fmv",
-                "done: {} video frames, {} audio sample-pairs ({:.2f}s @ {}Hz)",
-                frames,
-                media_frames,
-                media_frames / (double)(xa_freq ? xa_freq : 37800),
-                xa_freq);
-  audioClose();
-  // FMV teardown (issues #7/#11): EVERY exit (normal end AND Start-skip break) leaves the FMV's last
-  // (possibly partial) frame in the display FB. Black it + present once so no FMV residue is revealed
-  // under the front-end's still-loading 2D layer. Engine-owned deterministic hand-off, no sleep/retry.
-  void gpu_clear_display(Core *);
-  gpu_clear_display(core);
-  return frames;
+  endAtEndOfStream();
 }
 
-int Fmv::play(const char *path) {
+// Every exit from a movie — end of stream, the dev cap, and a Start skip — leaves the movie's last
+// (possibly partial) frame in the display FB. Black it + present once so no FMV residue is revealed
+// under a front end that is still loading its 2D layer. Deterministic hand-off, no sleep/retry.
+void Fmv::endAtEndOfStream() {
+  if (finished_) {
+    return;
+  }
+  finished_ = true;
+  active_ = false;
+  lucent::debug("fmv",
+                "done: {} video frames, {} audio sample-pairs ({:.2f}s @ {}Hz)",
+                frames_,
+                media_frames_,
+                media_frames_ / (double)(xa_freq_ ? xa_freq_ : 37800),
+                xa_freq_);
+  audioClose();
+  void gpu_clear_display(Core *);
+  gpu_clear_display(&game->core);
+}
+
+void Fmv::endWithSkip() {
+  if (finished_) {
+    return;
+  }
+  skipped_ = true;
+  endAtEndOfStream();
+  lucent::info("fmv", "skipped by Start at frame {}", frames_);
+  // No press-consumption wait is needed here, and adding one would be wrong: this movie ends INSIDE a
+  // pad frame, so no further frame is serviced until the guest resumes, and a wait loop would spin
+  // against a mask that cannot change. The original player waited because its own poll consumed the
+  // press; here the press belongs to the frame whose pad service produced it, and the guest was not
+  // running in that frame, so it cannot act on the edge. A Start still held afterwards yields no
+  // further edge, which is exactly the state the original player waited for.
+}
+
+int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
+  if (!begin(lba, size_bytes)) {
+    return -1;
+  }
+  while (!finished()) {
+    step();
+  }
+  return frames_;
+}
+
+bool Fmv::beginPath(const char *path) {
   uint32_t lba = 0, size = 0;
   if (!fmv_resolve_path(&game->disc, path, &lba, &size)) {
     lucent::info("fmv", "could not resolve {} on disc", path ? path : "(null)");
-    return -1;
+    finished_ = true;
+    active_ = false;
+    return false;
   }
   lucent::info("fmv", "{} -> LBA {}, {} bytes", path ? path : "(null)", lba, size);
-  return playLba(lba, size);
+  return begin(lba, size);
+}
+
+int Fmv::play(const char *path) {
+  if (!beginPath(path)) {
+    return -1;
+  }
+  while (!finished()) {
+    step();
+  }
+  return frames_;
 }
 
 // ---- ISO9660 path resolution (walks directories via disc_read_sector) ----------------
