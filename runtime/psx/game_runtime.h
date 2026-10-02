@@ -222,7 +222,10 @@ public:
   // A LOAD refuses rather than desyncs: a file whose title section does not match this port's name
   // and version is rejected by name, and so is a title that owns native state the file does not
   // carry. Neither direction is recoverable by trying harder later — the run is already wrong.
-  virtual psx::state::NativeStatePort *nativeState() const {
+  //
+  // The port is asked for with the Core whose state is being saved or loaded, because a title's
+  // native owners live in that Core's own context (`createContext`), not in this runtime object.
+  virtual psx::state::NativeStatePort *nativeState(Core &) const {
     return nullptr;
   }
 

@@ -107,7 +107,7 @@ std::optional<ImageDescription> ImageCatalog::describe(ImageIdentity identity) c
   if (entry == entries_.end()) {
     return std::nullopt;
   }
-  return ImageDescription{entry->name, entry->contentIdentity};
+  return ImageDescription{entry->name, entry->contentIdentity, entry->ranges};
 }
 
 std::uint64_t ImageCatalog::revision() const {

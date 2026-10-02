@@ -15,6 +15,8 @@
 //      state untouched — a half-restored interrupt controller is a machine that faults for reasons
 //      no diagnostic can name, and refusing before any mutation is the only version of this that is
 //      safe to retry.
+//   3. once every section is restored, the title's port is told (`NativeStatePort::restored`), so
+//      native state derived from guest RAM is adopted after the bytes it describes are visible.
 //
 // THE TITLE REFUSAL. A title with native owners says so by returning a NativeStatePort (below); a
 // title without them returns null and this owner writes no title section. Loading compares the
@@ -63,6 +65,12 @@ public:
   // title knows which of its fields are safe to have half-restored.
   virtual bool save(class BlobWriter &out, std::string &error) const = 0;
   virtual bool load(class BlobReader &in, std::string &error) = 0;
+  // Called once, after a load has restored EVERY section — guest RAM, the scratchpad and the CPU
+  // included — and can no longer refuse; never after a refusal. `load` runs before the RAM section,
+  // so a title whose native state must agree with the restored guest bytes (the image identities and
+  // native-override keys of the code now resident in RAM) validates and stages it in `load` and
+  // adopts it here. It cannot fail: everything that could refuse was checked in `load`.
+  virtual void restored(Core &) {}
 };
 
 // The version of the envelope the framework writes AROUND a title's own payload — the two fields
@@ -93,7 +101,7 @@ public:
   // section, a device that refuses its own bytes, or a title/native-state mismatch.
   std::optional<StateOutcome> restore(std::span<const std::uint8_t> image, std::string &error);
 
-  // The title's own port, or null when this title has no native owners.
+  // The title's own port for this machine's Core, or null when this title has no native owners.
   static NativeStatePort *titlePort(Game &game);
 
 private:

@@ -117,6 +117,15 @@ void test_subtraction_preserves_only_unwritten_fragments_of_one_generation() {
   CHECK(catalog.resolve(0x1600u) == boot);
   CHECK(catalog.resolve(GuestAddressRange{0x1000u, 0x1400u}) == boot);
   CHECK(!catalog.resolve(GuestAddressRange{0x13ffu, 0x1601u}));
+  // The description carries the surviving fragments, so a whole-machine state can record exactly the
+  // coverage this generation still claims and re-establish it after its RAM is restored.
+  const auto described = catalog.describe(boot);
+  CHECK(described.has_value());
+  CHECK(described->name == "boot");
+  CHECK_EQ(described->contentIdentity, 11u);
+  CHECK_EQ(described->ranges.size(), 2u);
+  CHECK(described->ranges[0].begin == 0x1000u && described->ranges[0].end == 0x1400u);
+  CHECK(described->ranges[1].begin == 0x1600u && described->ranges[1].end == 0x2000u);
 
   const auto menu = catalog.activate("menu", {0x1400u, 0x1600u}, 22u);
   CHECK_EQ(catalog.activeCount(), 2u);

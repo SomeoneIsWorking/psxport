@@ -313,8 +313,17 @@ public:
     loadedMarker = marker;
     return true;
   }
+  void restored(Core &core) override {
+    ++restoredCalls;
+    ramWordWhenRestored = core.mem_r32(kRestoredProbeAddress);
+  }
+  // A guest word the title would derive native state from: what it reads in `restored` must be the
+  // RESTORED value, which is what lets a title re-establish state that has to agree with guest RAM.
+  static constexpr std::uint32_t kRestoredProbeAddress = 0x80010000u;
   std::uint32_t savedMarker = 0x11111111u;
   std::uint32_t loadedMarker = 0u;
+  std::uint32_t restoredCalls = 0u;
+  std::uint32_t ramWordWhenRestored = 0u;
 };
 
 // Installs a title state port on the running game for the duration of a check, and puts the
@@ -338,7 +347,7 @@ private:
   // capability defaulted to something.
   class Runtime final : public GameRuntime {
   public:
-    psx::state::NativeStatePort *nativeState() const override {
+    psx::state::NativeStatePort *nativeState(Core &) const override {
       return port;
     }
     void *createContext(Core &) override {
@@ -424,6 +433,7 @@ void test_a_title_that_owns_native_state_refuses_a_file_without_one(void) {
   CHECK_MSG(!outcome.has_value(), "a title with native state loaded a file that carries none");
   CHECK_MSG(error.find("carries no title section") != std::string::npos, error.c_str());
   CHECK_MSG(port.loadedMarker == 0u, "the title port was written to despite the refusal");
+  CHECK_MSG(port.restoredCalls == 0u, "the title adopted restored state from a refused load");
 }
 
 // A title section carrying a VERSION this title does not implement. The title owns the meaning of
@@ -465,6 +475,31 @@ void test_a_title_section_from_a_newer_title_version_is_refused(void) {
   CHECK_MSG(!outcome.has_value(), "a title section of an unimplemented version loaded");
   CHECK_MSG(error.find("version") != std::string::npos, error.c_str());
   CHECK_MSG(port.loadedMarker == 0u, "the title port was written to despite the refusal");
+  CHECK_MSG(port.restoredCalls == 0u, "the title adopted restored state from a refused load");
+}
+
+// A title whose native state is DERIVED from guest RAM (the image identities of the code resident
+// there) cannot adopt it in `load`, which runs before the RAM section. It is told once the whole
+// machine is restored, and at that point it must see the restored bytes, not the ones they replaced.
+void test_a_title_port_adopts_its_state_after_guest_ram_is_restored(void) {
+  Game &game = *makeGame();
+  FixtureTitleState port;
+  ScopedTitlePort scoped(game, &port);
+  Core &core = game.core;
+
+  core.mem_w32(FixtureTitleState::kRestoredProbeAddress, 0xC0DE0001u);
+  psx::state::MachineState state(game);
+  std::string error;
+  const auto image = state.capture(error);
+  CHECK_MSG(image.has_value(), error.c_str());
+  CHECK_MSG(port.restoredCalls == 0u, "a capture told the title its state was restored");
+
+  core.mem_w32(FixtureTitleState::kRestoredProbeAddress, 0xDEAD0002u);
+  const auto outcome = state.restore(*image, error);
+  CHECK_MSG(outcome.has_value(), error.c_str());
+  CHECK_EQ(port.restoredCalls, 1u);
+  CHECK_EQ(port.ramWordWhenRestored, 0xC0DE0001u);
+  CHECK_EQ(port.loadedMarker, port.savedMarker);
 }
 
 } // namespace
@@ -476,5 +511,6 @@ int main(void) {
   RUN(a_file_missing_a_device_section_is_refused_with_the_section_named);
   RUN(a_title_that_owns_native_state_refuses_a_file_without_one);
   RUN(a_title_section_from_a_newer_title_version_is_refused);
+  RUN(a_title_port_adopts_its_state_after_guest_ram_is_restored);
   return pt_summary();
 }

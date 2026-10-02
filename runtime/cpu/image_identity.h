@@ -19,10 +19,12 @@ struct ImageIdentity {
   }
 };
 
-// What a residency is, independent of when it was loaded: its name and the identity of its bytes.
+// What a residency is, independent of when it was loaded: its name, the identity of its bytes, and
+// the physical ranges it still covers (an activation's range minus every subtraction since).
 struct ImageDescription {
   std::string name;
   std::uint64_t contentIdentity = 0;
+  std::vector<GuestAddressRange> ranges;
 };
 
 struct NativeKey {

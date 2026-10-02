@@ -38,7 +38,7 @@ NativeStatePort *MachineState::titlePort(Game &game) {
   if (game.runtime == nullptr) {
     return nullptr;
   }
-  return game.runtime->nativeState();
+  return game.runtime->nativeState(game.core);
 }
 
 std::optional<std::vector<std::uint8_t>> MachineState::capture(std::string &error) {
@@ -186,7 +186,7 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
   const auto titlePayload = file->titlePayload();
   if (port == nullptr && titlePayload.has_value()) {
     error = "this file carries a title state section and this title declares none "
-            "(GameRuntime::nativeState() returns null); loading it would resume a guest whose "
+            "(GameRuntime::nativeState(Core &) returns null); loading it would resume a guest whose "
             "native owners are at their power-on values";
     return std::nullopt;
   }
@@ -353,6 +353,10 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
     if (!readCpuSection(core, in, error)) {
       return std::nullopt;
     }
+  }
+  // Every section is in place and nothing below can refuse, so the title adopts what it staged.
+  if (port != nullptr) {
+    port->restored(core);
   }
   outcome.loaded = true;
   return outcome;
