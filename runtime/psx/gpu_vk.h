@@ -49,6 +49,19 @@ inline int gpu_vk_wide_left_margin(Core *core) {
 int gpu_vk_wide_presentation(Core *core);
 int gpu_vk_wide_presentation_w(Core *core);
 GuestProjectionPlan gpu_vk_latch_guest_projection(Core *core, GuestProjectionGeometry geometry);
+// THE INVERSE OF THE LATCH, and it belongs beside it because the two are one contract: a plan is not
+// a setting the host applies once, it is what the title is widening RIGHT NOW. A title whose guest
+// leaves the canvas it widened — this title's front end runs 320x240 and 256x240 screens while its
+// resident frame is 512x240 — must say so, or the host keeps sampling the widened columns of a frame
+// that only ever drew the console ones: the guest-authored picture is left at the origin, the columns
+// it never wrote show as whatever VRAM held, and the widened aspect turns that garbage into the
+// player's picture.
+//
+// This publishes the SAME plan the title's own 4:3 leg is, built by the SAME builder from the guest's
+// CURRENT display mode: presentation, projection and draw widths are the guest's own, both margins
+// are zero, and `widescreen()` is false — so the presenter samples the authored columns and the
+// letterbox centres them at their own aspect, which is what a non-widened frame wants.
+void gpu_vk_unlatch_guest_projection(Core &core);
 // Leg-independent sink extent used by the guest projection latch and renderer planning.
 void gpu_vk_present_sink_size(int *width, int *height);
 

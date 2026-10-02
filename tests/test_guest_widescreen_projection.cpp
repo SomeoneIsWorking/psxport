@@ -109,6 +109,38 @@ void test_latched_plan_is_stable_until_the_title_publishes_another_projection() 
   CHECK_EQ(state.plan().presentationExtent.width, 428);
 }
 
+// The plan a title publishes when it is NOT widening (psxport's `gpu_vk_unlatch_guest_projection`).
+// The guest has left the canvas the title widened — this title's front end runs 320x240 and 256x240
+// screens while its resident frame is 512x240 — so every width in the plan is the guest's OWN
+// display mode, both margins are zero, and `widescreen()` is false: the presenter samples the columns
+// the guest authored and the letterbox centres them at their own aspect.
+void test_retirement_plan_is_the_guests_own_display_mode() {
+  const auto retired = make_plan(RenderPath::Gte,
+                                 PresentationAspect::Standard4x3,
+                                 /*display*/ 320,
+                                 /*height*/ 240,
+                                 /*projection*/ 320,
+                                 240,
+                                 /*draw*/ 320);
+  CHECK_EQ(retired.presentationExtent.width, 320);
+  CHECK_EQ(retired.projectionExtent.width, 320);
+  CHECK_EQ(retired.guestDrawWidth, 320);
+  CHECK_EQ(retired.presentationHorizontalMargin, 0);
+  CHECK_EQ(retired.projectionHorizontalMargin, 0);
+  CHECK_EQ(retired.guestClipLeft, 0);
+  CHECK_EQ(retired.guestClipRight, 319);
+  CHECK(!retired.widescreen());
+
+  // And it replaces a latched wide plan: the state has no idea what "retired" means beyond being
+  // the next publication, which is the whole contract the title's retire path relies on.
+  GuestPresentationState state;
+  state.latch(make_plan(RenderPath::Gte, PresentationAspect::Wide16x9, 512, 240, 512, 240, 512));
+  CHECK(state.plan().widescreen());
+  state.latch(retired);
+  CHECK(!state.plan().widescreen());
+  CHECK_EQ(state.plan().presentationExtent.width, 320);
+}
+
 } // namespace
 
 int main() {
@@ -119,5 +151,6 @@ int main() {
   RUN(title_projection_extent_is_not_conflated_with_gp1_display_extent);
   RUN(four_three_preserves_distinct_display_projection_and_draw_extents);
   RUN(latched_plan_is_stable_until_the_title_publishes_another_projection);
+  RUN(retirement_plan_is_the_guests_own_display_mode);
   return pt_summary();
 }

@@ -57,3 +57,23 @@ GuestProjectionPlan gpu_vk_latch_guest_projection(Core *core, GuestProjectionGeo
   game->guestDisplay.latch(plan);
   return plan;
 }
+
+void gpu_vk_unlatch_guest_projection(Core &core) {
+  Game &game = *core.game;
+  // The guest's OWN display mode, read now rather than taken from the caller's geometry: the caller
+  // is publishing that it is not widening this frame, so the frame it is presenting is the one the
+  // guest just published, whatever width that is.
+  const int width = game.gpu.s_disp_w > 0 ? game.gpu.s_disp_w : WIDE_REFERENCE_NATIVE_W;
+  const int height = game.gpu.s_disp_h > 0 ? game.gpu.s_disp_h : PRESENT_NATIVE_LINES;
+  int sinkWidth = 0;
+  int sinkHeight = 0;
+  gpu_vk_present_sink_size(&sinkWidth, &sinkHeight);
+  game.guestDisplay.latch(guest_projection_plan({
+      .path = core.rsub.mode.path(),
+      .requested = PresentationAspect::Standard4x3,
+      .nativePresentation = {width, height},
+      .nativeProjection = {.extent = {width, height}, .drawWidth = width},
+      .sink = {sinkWidth, sinkHeight},
+      .vramWidth = VRAM_W,
+  }));
+}
