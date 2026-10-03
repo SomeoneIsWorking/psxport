@@ -138,9 +138,11 @@ public:
   }
 
 private:
-  // The accepted address windows are GAME data (GameConfig::hle.windowLo/windowHi), so the guard
-  // takes the config rather than baking one game's memory map into the framework.
-  static bool inBiosWindow(const struct GameConfig *cfg, uint32_t a);
+  // The accepted address windows are GAME data — GameConfig::hle.windowLo/windowHi for a legacy
+  // config, the direct runtime's own PlatformHlePlan otherwise — so the guard takes the GAME rather
+  // than baking one game's memory map into the framework, and reads the plan from THAT game's
+  // runtime (a process can run several, one after another or all at once).
+  static bool inBiosWindow(const Game *game, const struct GameConfig *cfg, uint32_t a);
   void bindVSyncBoundary(uint32_t addr, uint32_t queryCounterAddr);
   static void vsync(Core *core);
 

@@ -12,10 +12,18 @@ body {
 	display: flex;
 	width: 100%;
 	height: 100%;
-	background-color: #0E0F0A;
+	background-color: transparent;
 	font-family: "Fira Sans";
 	font-size: 3vh;
 	color: #E0DBC8;
+}
+
+/* A screen drawn OVER a picture the host composited (a selector whose entries are panels, each
+   showing its own title's attract demo) must not paint a backdrop: the picture behind it is the
+   content, and an opaque body would hide every panel. A screen that IS the whole picture keeps the
+   backdrop — that is what ChoiceScreen builds by default, and setBackdropOpaque drives this. */
+body:opaque {
+	background-color: #0E0F0A;
 }
 
 panel {
@@ -37,8 +45,34 @@ panel {
 	color: #C2A42D;
 }
 
+/* A CAPTION BAND: the host composites pictures behind this screen (a title picker whose panels are
+   live sessions), so the heading and the hint move into a band it names — usually the bottom of the
+   selected panel — instead of the middle of the picture. The type shrinks with it: this is a label
+   under a game, not a title over one. */
+#panel:banded {
+	max-width: none;
+	padding: 0;
+	margin: 0;
+}
+
+#panel:banded #heading {
+	font-size: 2.4vh;
+	margin-bottom: 0.6vh;
+}
+
+#panel:banded #hint {
+	font-size: 1.5vh;
+	margin-top: 0;
+}
+
 #list {
 	display: block;
+}
+
+/* The host draws its own entries as pictures; the text list is then a duplicate of them.
+   ChoiceScreen::setEntriesVisible drives this. */
+#list:hidden {
+	display: none;
 }
 
 entry {

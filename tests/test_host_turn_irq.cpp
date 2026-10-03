@@ -34,7 +34,7 @@ public:
   }
 
   ~HostTurnFixture() {
-    psx::cpu::shutdownHostTurn();
+    psx::cpu::shutdownHostTurn(game->core);
   }
 
   std::unique_ptr<Game> game = std::make_unique<Game>();

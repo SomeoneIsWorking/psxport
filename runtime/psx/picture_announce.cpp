@@ -81,8 +81,11 @@ void announceOnChange(Core &core, int presentedFramebufferWidth) {
   // The title's own answer is a PresentationAspect, and only its WIDE arms count as a request.
   // MatchSink is deliberately NOT one: it resolves to whatever the run's sink is, which is the same
   // trap ASPECT_AUTO has, and a headless run has no wide sink to resolve to.
+  // The runtime is THIS Core's own snapshot, never the process's last-installed one: a process that
+  // runs several sessions presents from all of them, and the global would answer with whichever
+  // session was installed last.
   int guestAspect = ASPECT_4_3;
-  if (const GameRuntime *runtime = psxport_game_runtime(); runtime != nullptr) {
+  if (const GameRuntime *runtime = core.runtime; runtime != nullptr) {
     if (const GuestWidescreenProjection *projection = runtime->guestWidescreenProjection()) {
       switch (projection->presentationAspect(core)) {
       case PresentationAspect::Wide16x9:

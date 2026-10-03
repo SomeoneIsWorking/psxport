@@ -181,6 +181,16 @@ DbgServer::~DbgServer() {
   }
 }
 
+bool DbgServer::claimEndpoint() {
+  // Same discipline as start(): the claim is compared and taken without the channel mutex, which
+  // serialises SOCKETS, not Games. Two hosts racing to claim would still both see the winner here.
+  if (DbgServerInternals::sInstance && DbgServerInternals::sInstance != this) {
+    return false;
+  }
+  DbgServerInternals::sInstance = this;
+  return true;
+}
+
 // Impl-TU shorthand so the dispatcher below (a large switch) doesn't sprout accessor calls every
 // three lines. Not exported — this block is impl-private.
 #define s_held (DbgServerInternals::held())

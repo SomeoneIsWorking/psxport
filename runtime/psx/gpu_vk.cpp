@@ -1165,12 +1165,20 @@ void init_gpu_device(Game *game) {
   // not running the present pass was the bug, not a premise.)
   s_present_pipe = make_fullscreen_pipeline(
       spv_g_present_vert, spv_g_present_vert_len, spv_g_present_frag, spv_g_present_frag_len, PRESENT_IMG_FMT);
-  // The IMAGE pipeline draws into the swapchain (the s_present_img blit, and gpu_vk_present_image), so it
-  // needs the swapchain format and is genuinely windowed-only.
-  if (!s_headless) {
-    s_image_pipe = make_fullscreen_pipeline(
-        spv_g_image_vert, spv_g_image_vert_len, spv_g_image_frag, spv_g_image_frag_len, s_swap_fmt);
-  }
+  // The IMAGE pipeline presents a plain RGBA image (gpu_vk_present_image): windowed it draws into the
+  // swapchain, headless it builds the same picture into s_present_img, which is what a present shot
+  // reads back. So it is created in BOTH legs, against the format of the target THAT leg draws into —
+  // two legs, two different surfaces, and only one of them is the swapchain.
+  //
+  // (It used to be windowed-only, on the reasoning recorded above this line: "the IMAGE pipeline draws
+  // into the swapchain ... so it needs the swapchain format and is genuinely windowed-only". Both halves
+  // were true of the swapchain blit and neither was a fact about the leg; the same premise made the MAIN
+  // present pass windowed-only, and that one is recorded in instruments.md INST-18 as a bug.)
+  s_image_pipe = make_fullscreen_pipeline(spv_g_image_vert,
+                                          spv_g_image_vert_len,
+                                          spv_g_image_frag,
+                                          spv_g_image_frag_len,
+                                          s_headless ? PRESENT_IMG_FMT : s_swap_fmt);
   create_3d_pipelines(); // the native 3D/textured raster pipelines — windowed AND headless
   lucent::info(
       "gpu_vk", "{} renderer up (VRAM {}x{} RG8 = PSX 1555)", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
@@ -2070,6 +2078,8 @@ void GpuVkState::ensure_present_img(int w, int h) {
   s_present_rb = SDL_CreateGPUTransferBuffer(s_dev, &dn);
   GPUCHK(s_present_rb, "present img readback xfer");
   s_present_img_w = w;
+  // A new image is a new picture: the measured content belonged to the old size.
+  s_present_content = PaneRect{0, 0, 0, 0};
   s_present_img_h = h;
   lucent::info("gpu_vk", "present image {}x{} ({} sink)", w, h, s_headless ? "headless" : "windowed");
 }
@@ -2100,6 +2110,14 @@ present_inputs(const GpuVkState &g, int sx, int sy, int disp_w, int h, int nativ
   in.fade_g = fade.g;
   in.fade_b = fade.b;
   in.disp_rgb24 = g.s_disp_rgb24;
+  // A session whose present is a PANE builds its image at the size its host asked for, not at the
+  // window's: a quarter-width panel does not need a full-window RGBA target per session. A SIZE is
+  // what the present plan already treats as a parameter (the sink's size is one leg-dependent input);
+  // nothing above this line decides what the picture looks like, and neither does this.
+  if (g.s_present_img_requested_w > 0 && g.s_present_img_requested_h > 0) {
+    in.sink_w = g.s_present_img_requested_w;
+    in.sink_h = g.s_present_img_requested_h;
+  }
   return in;
 }
 
@@ -2312,10 +2330,36 @@ void GpuVkState::present(const uint16_t *src, int sx, int sy, int w, int h) {
   // the composite is built in both legs, and the leg appears exactly once: whether it reaches a window.
   const PresentPlan plan =
       plan_present(present_inputs(*this, sx, sy, disp_w, h, /*native_w=*/w, fade), s_headless != 0);
+  // Where the picture SITS inside the image it was built into: everything outside this rectangle is
+  // letterbox bar, so it is what a host compositing this picture into a region of its own frame must
+  // sample (pane_composite.h). Recorded for that consumer, in both legs.
+  s_present_viewport = plan.viewport;
+  ++s_present_serial;
+  // WHAT THIS PRESENT IS ACTUALLY SAMPLING. The picture is chosen by four numbers and nothing else:
+  // whether the ires target is sampled instead of native VRAM, the 24bpp flag that says how those 16
+  // bits are packed, the source rectangle inside the target, and the letterbox rect inside the image.
+  // "The picture is wrong at this size" is always one of those four, and this line is which.
+  lucent::debug("present",
+                "sink {}x{} pane={} swapchain={} src_ires={} rgb24={} disp={},{},{},{} "
+                "viewport={},{},{},{}",
+                plan.sink_w,
+                plan.sink_h,
+                s_present_target == PresentTarget::Pane ? "yes" : "no",
+                plan.to_swapchain ? "yes" : "no",
+                plan.src_ires,
+                plan.fmt[0],
+                plan.disp[0],
+                plan.disp[1],
+                plan.disp[2],
+                plan.disp[3],
+                plan.viewport.x,
+                plan.viewport.y,
+                plan.viewport.w,
+                plan.viewport.h);
   if (plan.build) {
     build_present_image(cmd, plan);
   }
-  if (plan.to_swapchain) {
+  if (plan.to_swapchain && s_present_target == PresentTarget::Swapchain) {
     show_present_image(cmd);
     return;
   } // consumes cmd (submits + polls)
@@ -2488,6 +2532,44 @@ static void img_make_tex(int iw, int ih) {
   s_img_w = iw;
   s_img_h = ih;
 }
+// The IMAGE pipeline's half of the picture, for the leg that has no swapchain. Structurally the mirror
+// of the swapchain blit below — same pipeline, same source texture and sampler, same `letterbox(4, 3, …)`
+// viewport and full-image scissor, same fragment fade, same black clear painting the bars — with the
+// sink in place of the drawable. `gpu_vk_present_sink_size` is what names the sink in either leg, so the
+// geometry is the same expression in both rather than two numbers that agree today.
+//
+// It also publishes `s_present_viewport`, because that is where the picture is recorded as sitting inside
+// its image and `measurePresentedContent` measures its extent against it.
+void GpuVkState::build_image_present_image(SDL_GPUCommandBuffer *cmd, float fade) {
+  int w = 0, h = 0;
+  gpu_vk_present_sink_size(&w, &h);
+  ensure_present_img(w, h);
+  if (!s_present_img) {
+    return;
+  }
+  SDL_GPUColorTargetInfo cti = {};
+  cti.texture = s_present_img;
+  cti.clear_color = (SDL_FColor){0, 0, 0, 1};
+  cti.load_op = SDL_GPU_LOADOP_CLEAR;
+  cti.store_op = SDL_GPU_STOREOP_STORE; // CLEAR paints the letterbox bars
+  SDL_GPURenderPass *rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
+  float fpc[4] = {fade, 0, 0, 0};
+  SDL_PushGPUFragmentUniformData(cmd, 0, fpc, sizeof fpc);
+  SDL_GPUViewport vp = letterbox(4, 3, (int)s_present_img_w, (int)s_present_img_h);
+  SDL_Rect sc = {0, 0, (int)s_present_img_w, (int)s_present_img_h};
+  SDL_BindGPUGraphicsPipeline(rp, s_image_pipe);
+  SDL_SetGPUViewport(rp, &vp);
+  SDL_SetGPUScissor(rp, &sc);
+  SDL_GPUTextureSamplerBinding tsb = {s_img_tex, s_samp_linear};
+  SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
+  SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+  // No overlay pass here, for the same reason build_present_image() draws none: s_present_img is the
+  // PICTURE, and a present shot must show the frame rather than the debug menu drawn over it.
+  SDL_EndGPURenderPass(rp);
+  const PaneRect laid_out = pane_letterbox(4, 3, (int)s_present_img_w, (int)s_present_img_h);
+  s_present_viewport = laid_out;
+}
+
 void gpu_vk_present_image(Core *core, const uint8_t *rgba, int iw, int ih, float fade) {
   Game *game = core ? core->game : nullptr;
   if (!gpu_vk_enabled() || iw <= 0 || ih <= 0) {
@@ -2520,10 +2602,19 @@ void gpu_vk_present_image(Core *core, const uint8_t *rgba, int iw, int ih, float
   SDL_UploadToGPUTexture(cp, &srci, &dst, false);
   SDL_EndGPUCopyPass(cp);
 
+  // HEADLESS: the SAME picture, built into the presented image. This is not a second dump mechanism and
+  // not a window-only path: the windowed leg below draws this texture into the swapchain, and headless
+  // builds the identical picture — same shader, same texture, same 4:3 letterbox, same fade, same black
+  // clear — into s_present_img, which is exactly what present_shot reads back. Without it a native movie
+  // is invisible to every headless capture, because a movie never touches guest VRAM and the MAIN
+  // present path builds its picture from VRAM (issue 0040).
   if (s_headless) {
+    if (game) {
+      game->gpu_vk.build_image_present_image(cmd, fade);
+    }
     gpu_submit(cmd, "gpu_vk_present_image");
     return;
-  } // caller PPM-dumps its own rgba headless
+  }
 
   SDL_GPUTexture *swaptex = NULL;
   Uint32 sw = 0, sh = 0;
@@ -2603,6 +2694,261 @@ static const uint16_t *readback_vram(GpuVkState &g) {
   }
   return p;
 }
+// The download half of present_shot, shared with the presented-image probe so "is there anything
+// on screen" and "what is on screen" cannot disagree about which image they read.
+static const uint8_t *download_present_image(GpuVkState &g, bool *ok) {
+  *ok = false;
+  if (!gpu_vk_enabled() || !s_inited || !g.s_present_img) {
+    return nullptr;
+  }
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  GPUCHK(cmd, "present image download cmd");
+  SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
+  SDL_GPUTextureRegion srcr = {};
+  srcr.texture = g.s_present_img;
+  srcr.w = (Uint32)g.s_present_img_w;
+  srcr.h = (Uint32)g.s_present_img_h;
+  srcr.d = 1;
+  SDL_GPUTextureTransferInfo dsti = {};
+  dsti.transfer_buffer = g.s_present_rb;
+  dsti.pixels_per_row = (Uint32)g.s_present_img_w;
+  dsti.rows_per_layer = (Uint32)g.s_present_img_h;
+  SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
+  SDL_EndGPUCopyPass(cp);
+  if (!gpu_submit_and_wait(cmd, "present image download")) {
+    lucent::error("gpu_vk",
+                  "present image download failed; the GPU is latched off and the transfer buffer "
+                  "still holds an OLDER frame, so it must not be read as this one");
+    return nullptr;
+  }
+  *ok = true;
+  return static_cast<const uint8_t *>(SDL_MapGPUTransferBuffer(s_dev, g.s_present_rb, false));
+}
+
+// presentProbeResult — what one readback of the presented image says.
+struct PresentProbe {
+  bool filled = false;             // this frame carries a real, coherent picture
+  bool advertises = false;         // ...and it MOVED since the last probe: a demo, not a held card
+  const uint8_t *pixels = nullptr; // the readback, mapped; null when nothing could be read
+};
+
+// probePresentImage() — ONE readback that answers both questions the picker asks of a panel: is this
+// frame a picture, and where is the picture inside it. They were two downloads before, which doubled
+// the stall for one answer.
+static PresentProbe probePresentImage(GpuVkState &g) {
+  PresentProbe probe;
+  bool ok = false;
+  const uint8_t *rgba = download_present_image(g, &ok);
+  if (!ok || rgba == nullptr) {
+    return probe;
+  }
+  probe.pixels = rgba;
+
+  // A SAMPLE GRID, not every pixel: the question is "does this frame carry a picture", and a frame of
+  // solid colour answers the grid exactly as it answers the full scan. Sampling keeps the check's cost
+  // independent of the pane's pixel count.
+  //
+  // Two questions, one grid. Being non-black is not being a PICTURE: an uninitialised framebuffer is
+  // every colour at once — vividly lit, and not a game. A real picture is LOCALLY COHERENT, because
+  // neighbouring samples of a rendered frame are near each other whatever the scene is doing, while
+  // noise differs from its neighbour as often as not. So: a quarter of the samples must carry colour
+  // (which rejects a publisher's logo on black), and two thirds of the neighbouring pairs must be
+  // close (which rejects uninitialised memory).
+  const int w = g.s_present_img_w;
+  const int h = g.s_present_img_h;
+  const int kGrid = 16;
+  const int kSamples = kGrid * kGrid;
+  int lit = 0;
+  int coherent = 0;
+  int pairs = 0;
+  int grid[kGrid * kGrid];
+  for (int gy = 0; gy < kGrid; ++gy) {
+    const int y = (int)((long)gy * h / kGrid);
+    for (int gx = 0; gx < kGrid; ++gx) {
+      const int x = (int)((long)gx * w / kGrid);
+      const uint8_t *px = rgba + ((long)y * w + x) * 4;
+      const int lum = (px[0] * 77 + px[1] * 150 + px[2] * 29) >> 8;
+      grid[gy * kGrid + gx] = lum;
+      if (px[0] || px[1] || px[2]) {
+        ++lit;
+      }
+      if (gx > 0) {
+        const int delta = grid[gy * kGrid + gx - 1] - lum;
+        ++pairs;
+        coherent += (delta <= 24 && delta >= -24) ? 1 : 0;
+      }
+      if (gy > 0) {
+        const int delta = grid[(gy - 1) * kGrid + gx] - lum;
+        ++pairs;
+        coherent += (delta <= 24 && delta >= -24) ? 1 : 0;
+      }
+    }
+  }
+  probe.filled = lit >= kSamples / 4 && coherent >= (pairs * 2) / 3;
+  // WHAT "A PICTURE" MEANS HERE IS THE TITLE'S BUSINESS, NOT OURS. This probe only answers whether the
+  // presented image holds a real, coherent picture; whether that picture is the title's ADVERTISEMENT —
+  // its attract demo rather than its publisher card — is answered by the title's own driver, which knows
+  // when its boot prefix returned. Pixel heuristics for that were tried and are wrong twice over: a
+  // card's sphere spins for minutes (motion cannot tell), and a demo over a wide landscape leaves most
+  // of the frame unchanged (coverage cannot tell either).
+  if (probe.filled) {
+    // Only a frame that HAS a picture says anything about where the picture is: measuring a fade would
+    // measure the fade.
+    g.measurePresentedContent(rgba, w, h);
+  }
+  return probe;
+}
+
+// retainFilledPresentImage() — hold the newest presented frame that HAS a picture, and report whether
+// this session has one to show.
+//
+// The hold is filled by UPLOADING the readback this probe already made, not by a GPU-side copy. This
+// SDL has no COPY_DST texture usage flag, so a copy pass into a plain texture is dropped by the driver
+// and the texture stays whatever the allocator gave it — which is to say noise, drawn as if it were
+// the game. The transfer path (download for the probe, upload for the hold) is the one this codebase
+// and this SDL already use everywhere.
+bool GpuVkState::retainFilledPresentImage() {
+  // The probe is per NEW present, not per call: a caller that asks twice about one frame pays once.
+  if (s_present_serial == s_present_probed_serial) {
+    return s_present_filled != nullptr;
+  }
+  // A session that already holds a frame still gets that frame REPLACED, on a slow cadence. Holding
+  // forever is what it used to do, and it is wrong: a panel's demo plays on, so a panel frozen on the
+  // first picture it ever had is a slideshow of one stale frame — and for a title that spends a minute
+  // on its publisher card, that frame is the card, forever. Refreshing every frame would mean a
+  // GPU->CPU->GPU round trip per panel per field, which is the whole reason the hold exists; so the
+  // cadence is bounded instead: at most one refresh every kHoldRefreshPresents new presents, which is
+  // a quarter second of a panel's own time at 60 Hz. A hold is what this is for — it survives fades,
+  // loads and black frames — not a way to stop time.
+  constexpr std::uint64_t kHoldRefreshPresents = 15;
+  if (s_present_filled != nullptr && s_present_serial - s_present_probed_serial < kHoldRefreshPresents) {
+    return true;
+  }
+  s_present_probed_serial = s_present_serial;
+  if (!gpu_vk_enabled() || !s_inited || !s_present_img || !s_present_viewport.w || !s_present_viewport.h) {
+    return false;
+  }
+  const PresentProbe probe = probePresentImage(*this);
+  if (!probe.filled) {
+    if (probe.pixels != nullptr) {
+      SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
+    }
+    return false; // keep what is held: a fade or a load screen is not a reason to show nothing
+  }
+  if (s_present_filled == nullptr || s_present_filled_w != s_present_img_w || s_present_filled_h != s_present_img_h) {
+    if (s_present_filled != nullptr) {
+      SDL_ReleaseGPUTexture(s_dev, s_present_filled);
+    }
+    SDL_GPUTextureCreateInfo info = {};
+    info.type = SDL_GPU_TEXTURETYPE_2D;
+    info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    // This SDL has no COPY_DST usage flag: uploads go through a copy pass, which is why the hold is
+    // filled by uploading the probe's readback rather than by a texture-to-texture copy.
+    info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    info.width = (Uint32)s_present_img_w;
+    info.height = (Uint32)s_present_img_h;
+    info.layer_count_or_depth = 1;
+    info.num_levels = 1;
+    s_present_filled = SDL_CreateGPUTexture(s_dev, &info);
+    GPUCHK(s_present_filled, "CreateGPUTexture(present filled)");
+    s_present_filled_w = s_present_filled ? s_present_img_w : 0;
+    s_present_filled_h = s_present_filled ? s_present_img_h : 0;
+  }
+  if (s_present_filled == nullptr) {
+    SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
+    return false;
+  }
+  // The mapped readback is still the source: uploading it back is a copy the SDL actually performs.
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  GPUCHK(cmd, "present filled upload cmd");
+  SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
+  SDL_GPUTextureRegion dst = {};
+  dst.texture = s_present_filled;
+  dst.w = (Uint32)s_present_filled_w;
+  dst.h = (Uint32)s_present_filled_h;
+  dst.d = 1;
+  SDL_GPUTextureTransferInfo src = {};
+  src.transfer_buffer = s_present_rb;
+  src.pixels_per_row = (Uint32)s_present_img_w;
+  src.rows_per_layer = (Uint32)s_present_img_h;
+  SDL_UploadToGPUTexture(cp, &src, &dst, /*cycle=*/true);
+  SDL_EndGPUCopyPass(cp);
+  const bool submitted = gpu_submit_and_wait(cmd, "present filled upload");
+  SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
+  if (!submitted) {
+    return false; // the held frame stays as it was
+  }
+  s_present_filled_viewport = s_present_viewport;
+  return true;
+}
+
+void GpuVkState::releaseFilledPresentImage() {
+  if (s_present_filled != nullptr && s_dev != nullptr) {
+    SDL_ReleaseGPUTexture(s_dev, s_present_filled);
+  }
+  s_present_filled = nullptr;
+  s_present_filled_w = 0;
+  s_present_filled_h = 0;
+  s_present_filled_viewport = PaneRect{0, 0, 0, 0};
+}
+
+// measurePresentedContent() — the picture's own extent inside the presented image, on a coarse grid.
+// Titles frame their own image: Spyro 3 draws about fourteen black rows at the top and bottom of its
+// 240 lines, and a consumer that crops to the viewport alone carries those into the middle of its own
+// output as bars. This is where they are measured out.
+//
+// It only ever WIDENS what is known. A dark scene (a fade, a night interior) must not be able to
+// shrink the crop and zoom into the middle of the picture, so each measurement is a union with the
+// last: the rect converges on the picture's true extent and stays there.
+void GpuVkState::measurePresentedContent(const uint8_t *rgba, int w, int h) {
+  // The region of interest: the viewport (the picture inside the letterbox), not the whole image.
+  const PaneRect area = s_present_viewport;
+  if (area.w <= 0 || area.h <= 0) {
+    return;
+  }
+  const int kGrid = 24;
+  int top = -1;
+  int bottom = -1;
+  int left = -1;
+  int right = -1;
+  for (int gy = 0; gy < kGrid; ++gy) {
+    const int y = area.y + (int)((long)gy * area.h / kGrid);
+    if (y < 0 || y >= h) {
+      continue;
+    }
+    for (int gx = 0; gx < kGrid; ++gx) {
+      const int x = area.x + (int)((long)gx * area.w / kGrid);
+      if (x < 0 || x >= w) {
+        continue;
+      }
+      const uint8_t *px = rgba + ((long)y * w + x) * 4;
+      if (px[0] || px[1] || px[2]) {
+        if (top < 0) {
+          top = y;
+        }
+        bottom = y + 1;
+        if (left < 0) {
+          left = x;
+        }
+        right = x + 1;
+      }
+    }
+  }
+  if (top < 0 || bottom <= top || right <= left) {
+    return; // a grid with no lit sample in it: nothing to learn
+  }
+  if (s_present_content.w == 0 || s_present_content.h == 0) {
+    s_present_content = PaneRect{left, top, right - left, bottom - top};
+    return;
+  }
+  const int nx = s_present_content.x < left ? s_present_content.x : left;
+  const int ny = s_present_content.y < top ? s_present_content.y : top;
+  const int ex = s_present_content.x + s_present_content.w > right ? s_present_content.x + s_present_content.w : right;
+  const int ey =
+      s_present_content.y + s_present_content.h > bottom ? s_present_content.y + s_present_content.h : bottom;
+  s_present_content = PaneRect{nx, ny, ex - nx, ey - ny};
+}
+
 // ---- present_shot: THE INSTRUMENT THAT WAS MISSING — read back what the player sees ----------------
 //
 // Every other capture in this framework (shot / dump_to / gpu_vk_render_readback / PSXPORT_GPU_DUMP)
@@ -4155,8 +4501,45 @@ void gpu_vk_draw_semi(Core *core,
 void gpu_vk_shot(Core *core, const char *path) {
   core->game->gpu_vk.shot(path);
 }
+
+bool gpu_vk_read_vram_rect(Core *core, int x, int y, int w, int h, uint16_t *out) {
+  if (core == nullptr || out == nullptr || w <= 0 || h <= 0) {
+    return false;
+  }
+  GpuVkState &g = core->game->gpu_vk;
+  if (!gpu_vk_enabled() || !s_inited) {
+    lucent::error("gpu_vk", "read_vram_rect: the GPU is off — NOTHING read");
+    return false;
+  }
+  // A rectangle partly or wholly off VRAM is refused rather than clamped: a clamped read returns a
+  // picture that is mostly real pixels and silently not the artwork asked for, which is exactly the
+  // kind of plausible lie that gets drawn on a title screen as somebody's logo.
+  if (x < 0 || y < 0 || x + w > VRAM_W || y + h > VRAM_H) {
+    lucent::error(
+        "gpu_vk", "read_vram_rect: {}x{}+{}+{} is outside VRAM ({}x{}) — NOTHING read", w, h, x, y, VRAM_W, VRAM_H);
+    return false;
+  }
+  const uint16_t *vram = readback_vram(g);
+  if (vram == nullptr) {
+    return false; // readback_vram already said why, and said it in the log
+  }
+  for (int row = 0; row < h; ++row) {
+    const uint16_t *src = &vram[(y + row) * VRAM_W + x];
+    for (int col = 0; col < w; ++col) {
+      out[row * w + col] = src[col];
+    }
+  }
+  SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
+  return true;
+}
 void gpu_vk_present_shot(Core *core, const char *path) {
   core->game->gpu_vk.present_shot(path);
+}
+
+void gpu_vk_pump_host_events(Core *core) {
+  if (core != nullptr) {
+    poll_quit(core->game);
+  }
 }
 void gpu_vk_shot_b(Core *core, const char *path) {
   core->game->gpu_vk.shot_b(path);

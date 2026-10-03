@@ -117,6 +117,25 @@ public:
     mLiveInputOnly = true;
   }
 
+  // The HOST owns the player's input for now, and this session's guest must not see it.
+  //
+  // A process that runs several sessions at once — a title selector showing three attract demos —
+  // reads the pad itself to decide which panel is selected, and every session's Pad would otherwise
+  // deliver that same press to its own guest: one Left tap would move three demos, and the panel the
+  // player just selected would have been advanced by the press that selected it. This claims the
+  // input for the host: the pad keeps polling, keeps recording, and keeps learning host keys, but
+  // the mask handed to the guest — and to the recording and the replay, so all three still agree —
+  // is "nothing pressed". Releasing the claim restores live input on the next frame.
+  //
+  // Distinct from useLiveInputOnly, which is about the recording sink, and from the REPL drive, which
+  // is a debug channel with its own replay interactions.
+  void setPlayerInputSuppressed(bool suppressed) {
+    mPlayerInputSuppressed = suppressed;
+  }
+  bool playerInputSuppressed() const {
+    return mPlayerInputSuppressed;
+  }
+
   // Slot-1 controller presence is game policy. The default remains absent so existing single-pad
   // ports retain their current guest-visible packet; a title whose guest reads both slots opts in.
   void setSlot1Connected(bool connected) {
@@ -154,6 +173,7 @@ private:
   // ---- input record / replay + schedules ----
   psx::input::PadRecordReplay mSession;
   bool mLiveInputOnly = false;             // a host-only screen: no sink, no replay, live input only
+  bool mPlayerInputSuppressed = false;     // the host owns input; the guest's mask is nothing pressed
   uint64_t currentPhase(Core &core) const; // the title's input phase this frame (GameRuntime::inputPhase)
   int mShotInit = 0, mShotN = 0;
   uint32_t mShotAt[64] = {};

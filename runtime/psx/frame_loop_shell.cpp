@@ -1,5 +1,7 @@
 #include "frame_loop_shell.h"
 
+#include "hw_bind.h"
+
 #include "core.h"
 #include "game.h"
 #include "game_runtime.h"
@@ -42,6 +44,26 @@ void FrameLoopShell::step(Core &core, uint32_t frame) const {
     std::abort();
   }
   const uint64_t fenceBefore = game.presentation.fence();
+  // NAME THE SESSION THAT IS ABOUT TO RUN — but only when it CHANGED. The Beetle SPU and the XA
+  // streamer reach their state through a process-global binding (their vendored entry points cannot
+  // carry an instance), and that binding must name the Core that is RUNNING, not the one that booted
+  // last: a host that runs several sessions at once — a title picker whose panels are live sessions —
+  // otherwise delivers one guest's SPU interrupt line and CD-audio pull into another guest, and into
+  // freed memory once a session is destroyed. It was done on EVERY step, which is the same answer
+  // asked a thousand times a second: `bind` re-points global state a title's own per-frame GTE work
+  // reads (the terrain producer projects through it), and re-pointing it under a running frame cost
+  // Spyro 2's boot prefix two orders of magnitude in time. A single-session run binds once, at boot,
+  // exactly as it always did; a picker binds on the switch, which is the only moment the answer can
+  // differ.
+  static Core *bound = nullptr;
+  if (bound != &core) {
+    gte_bind(&core);
+    core.rsub.projprim.bind(&core);
+    spu_bind(&core);
+    mdec_bind(&core);
+    xa_bind(&core);
+    bound = &core;
+  }
   requireDriver(game).stepFrame(core, frame);
   const uint64_t fenceAfter = game.presentation.fence();
   if (fenceAfter != fenceBefore + 1u) {

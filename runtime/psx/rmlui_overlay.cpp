@@ -13,6 +13,7 @@
 #include "rmlui_overlay.h"
 #include "game.h" // Game — the overlay reaches game->core for the video status
 #include "rmlui_render_gpu.h"
+#include <cstdlib>
 
 #include "../ui/choice_screen.h"
 #include "../ui/menu_document.h"
@@ -41,11 +42,77 @@ static inline Rml::Context *ctx_(void *p) {
 }
 
 RmlOverlay::RmlOverlay() = default;
-// Rml::Shutdown is process-global and the render interface is released on the Game's device, so a Game
-// that ends must give both back or the next Game's init meets a half-alive library.
+// Each overlay releases its OWN resources here, and never the LIBRARY's globals. `Rml::Shutdown` is
+// process-global: it used to be called by whichever Game ended first, which in a process running
+// several sessions at once (a title selector whose panels are live sessions) shut RmlUi down under
+// the sessions still using it — the next one's `Rml::Initialise` refused, and a second `Rml::Shutdown`
+// on an already-dead library segfaulted. See the lifetime notes below for where it does run.
 RmlOverlay::~RmlOverlay() {
   shutdown();
 }
+
+namespace {
+// How many overlays in this process are OPEN. It is only a count of open screens: the library's
+// lifetime is the process's, so this reaching zero releases nothing (see below).
+int liveOverlays = 0;
+
+// The ONE renderer and ONE system interface this process's RmlUi uses, installed by the first overlay
+// and never replaced.
+//
+// They are process-global because RML'S are: `Rml::SetRenderInterface` and `Rml::SetSystemInterface`
+// publish ONE pointer for the whole library, and every context in every overlay draws through it. So
+// they cannot be per-overlay in any useful sense — and per-overlay ownership was a use-after-free: a
+// second overlay's document drew through the FIRST overlay's renderer, which that overlay's shutdown
+// had already shut down and deleted. The renderer is also process-lifetime in the only sense that
+// matters here: it is built over the presentation device, which belongs to the product and outlives
+// every session.
+RmlRenderInterfaceGpu *g_render = nullptr;
+SystemInterface_SDL *g_sys = nullptr;
+
+// Serial for the per-overlay context NAMES (see the CreateContext call in init). Monotonic within a
+// process; a name is never reused, so a context removed and recreated cannot collide with itself.
+unsigned long long nextContextSerial() {
+  static unsigned long long serial = 0;
+  return ++serial;
+}
+
+// Whether `Rml::Initialise` has already run in this process. NOT the same question as liveOverlays: a
+// count of zero means no overlay is open right now, which for a host that rebuilds its selector
+// between two titles is the normal state between two screens, and it must not read as "the library
+// is down". `Rml::Initialise` runs for the first overlay of the process and never again.
+bool rmlUiInitialised = false;
+
+// Rml::Shutdown runs once, when the process is leaving — never between two overlays. `Rml::Shutdown`
+// is process-global, and a product that rebuilds its UI (a title selector that returns from a game
+// and builds itself again) tears every overlay down and constructs new ones inside one process. A
+// refcount that shut the library down at zero made that path call `Rml::Shutdown` and then
+// `Rml::Initialise` again in the same process, which segfaulted in the second picker inside RmlUi:
+// the library's globals do not survive a shutdown/initialise cycle that has stack objects and a
+// plugin still registered against it. RmlUi is documented as one initialise and one shutdown per
+// process, so that is exactly what this does: the first overlay initialises, and the process's exit
+// shuts down once. An overlay that merely ends still gives back its own interfaces (below).
+void shutdownRmlUiAtExit() {
+  if (rmlUiInitialised) {
+    Rml::Shutdown();
+    rmlUiInitialised = false;
+  }
+  if (g_render) {
+    g_render->Shutdown();
+    delete g_render;
+    g_render = nullptr;
+  }
+  delete g_sys;
+  g_sys = nullptr;
+}
+
+bool rmlUiExitHookInstalled = false;
+} // namespace
+
+namespace psx::ui {
+void releaseDeviceResources() {
+  shutdownRmlUiAtExit();
+}
+} // namespace psx::ui
 
 // ---- init ---------------------------------------------------------------------------------------
 void RmlOverlay::init(SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h) {
@@ -54,23 +121,38 @@ void RmlOverlay::init(SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat 
   }
   mWin = win; // may be null — headless. See the header: the window is a sink, not a mode.
 
-  auto *render = new RmlRenderInterfaceGpu();
-  if (!render->Init(dev, target_fmt)) {
-    lucent::error("rmlui", "render interface init failed; overlay disabled");
-    delete render;
-    return;
+  if (!rmlUiInitialised) {
+    // The process-global renderer and system interface are built and installed ONCE, by the first
+    // overlay of the process. Every later overlay draws through THESE, because Rml has exactly one
+    // render interface pointer for the whole library; see g_render above for why per-overlay ones
+    // were a use-after-free.
+    auto *render = new RmlRenderInterfaceGpu();
+    if (!render->Init(dev, target_fmt)) {
+      lucent::error("rmlui", "render interface init failed; overlay disabled");
+      delete render;
+      return;
+    }
+    auto *sys = new SystemInterface_SDL();
+    sys->SetWindow(win);
+    Rml::SetSystemInterface(sys);
+    Rml::SetRenderInterface(render);
+    if (!Rml::Initialise()) {
+      lucent::error("rmlui", "Rml::Initialise failed; overlay disabled");
+      delete render;
+      delete sys;
+      return;
+    }
+    g_render = render;
+    g_sys = sys;
+    rmlUiInitialised = true;
+    if (!rmlUiExitHookInstalled) {
+      rmlUiExitHookInstalled = true;
+      std::atexit(shutdownRmlUiAtExit);
+    }
   }
-  mRender = render;
-
-  auto *sys = new SystemInterface_SDL();
-  sys->SetWindow(win);
-  mSys = sys;
-  Rml::SetSystemInterface(sys);
-  Rml::SetRenderInterface(render);
-  if (!Rml::Initialise()) {
-    lucent::error("rmlui", "Rml::Initialise failed; overlay disabled");
-    return;
-  }
+  mRender = g_render;
+  mSys = g_sys;
+  ++liveOverlays;
 
   // ---- assets, and a LOUD failure when they are not there ---------------------------------
   // spyro issue #52: with PSXPORT_ASSET_DIR unset every load failed and the code reported
@@ -110,9 +192,14 @@ void RmlOverlay::init(SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat 
     lucent::warn(
         "rmlui", "init got a degenerate sink {}x{}; the menu will be laid out for it as given", sink_w, sink_h);
   }
-  Rml::Context *c = Rml::CreateContext("psxport_menu", Rml::Vector2i(sink_w > 0 ? sink_w : 1, sink_h > 0 ? sink_h : 1));
+  // Context names are per OVERLAY, because the library outlives an overlay now (see
+  // shutdownRmlUiAtExit) and `Rml::CreateContext` refuses a name that is already registered. The
+  // fixed names this used to pass made every overlay after the first one in a process lose its
+  // context — which is every panel of a selector whose panels are their own sessions.
+  mMenuCtxName = "psxport_menu#" + std::to_string(nextContextSerial());
+  Rml::Context *c = Rml::CreateContext(mMenuCtxName, Rml::Vector2i(sink_w > 0 ? sink_w : 1, sink_h > 0 ? sink_h : 1));
   if (!c) {
-    lucent::error("rmlui", "CreateContext failed — menu unavailable");
+    lucent::error("rmlui", "CreateContext({}) failed — menu unavailable", mMenuCtxName);
     return;
   }
   mCtx = c;
@@ -164,18 +251,28 @@ void RmlOverlay::shutdown() {
   // down first.
   mChoice.reset();
   mMenu.reset();
-  Rml::Shutdown(); // destroys contexts/documents
+  // The overlay's own CONTEXTS go here, because the LIBRARY's are not released here (see
+  // shutdownRmlUiAtExit). Rml::Shutdown used to destroy every context as a side effect, which is the
+  // only reason the code below never had to: with the library outliving the overlay, an overlay that
+  // kept its contexts would leave `psxport_menu` registered, and the next overlay to ask for that
+  // name was refused ("context already exists") — a selector that rebuilds itself after a title
+  // returns could not build its screen. A context holds documents, listeners and elements, so it is
+  // unloaded first and removed second, exactly as a clean shutdown would.
+  if (Rml::Context *screen = ctx_(mScreenCtx)) {
+    screen->UnloadAllDocuments();
+    Rml::RemoveContext(screen->GetName());
+  }
+  if (Rml::Context *base = ctx_(mCtx)) {
+    base->UnloadAllDocuments();
+    Rml::RemoveContext(base->GetName());
+  }
+  --liveOverlays;
   mCtx = nullptr;
   mScreenCtx = nullptr;
-  if (mRender) {
-    ((RmlRenderInterfaceGpu *)mRender)->Shutdown();
-    delete (RmlRenderInterfaceGpu *)mRender;
-    mRender = nullptr;
-  }
-  if (mSys) {
-    delete (SystemInterface_SDL *)mSys;
-    mSys = nullptr;
-  }
+  // NOT deleted: the renderer and the system interface are the process's (g_render/g_sys) and are
+  // released once, when the process leaves.
+  mRender = nullptr;
+  mSys = nullptr;
   mInited = false;
 }
 
@@ -345,9 +442,9 @@ psx::ui::ChoiceView *RmlOverlay::showChoiceScreen(psx::ui::ChoiceContent content
   }
   Rml::Context *base = ctx_(mCtx);
   if (!mScreenCtx) {
-    mScreenCtx = Rml::CreateContext("psxport_screen", base->GetDimensions());
+    mScreenCtx = Rml::CreateContext(mMenuCtxName + "_screen", base->GetDimensions());
     if (!mScreenCtx) {
-      lucent::error("rmlui", "CreateContext(psxport_screen) failed — no choice screen");
+      lucent::error("rmlui", "CreateContext({}_screen) failed — no choice screen", mMenuCtxName);
       return nullptr;
     }
   }

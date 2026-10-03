@@ -64,6 +64,20 @@ public:
   // Process entry — installed by boot when PSXPORT_DEBUG_SERVER names a port. NO-OP otherwise.
   void start(Core *c);
 
+  // Take the process endpoint for THIS Game when another Game has released it.
+  //
+  // The endpoint is process-lifetime and a claim is per-Game: `~DbgServer` drops the claim so the
+  // next Game's `start()` re-claims it. That is enough for a host that runs one Game after another
+  // and not enough for a host that runs SEVERAL and destroys one of them — the picker Game owns the
+  // endpoint, the picker builds its panels, confirming hands the chosen session to the window and
+  // the picker Game dies — after which the endpoint belonged to nobody and every command timed out
+  // on a product that was running fine. A host that destroys the claiming Game points the channel
+  // at the session that is now the product with this.
+  //
+  // Refuses while another Game still holds the claim, exactly as a second `start()` does; reports
+  // whether this Game now holds it.
+  bool claimEndpoint();
+
   // Attach the live endpoint to a boot spine that is NOT the framework's own, and answer the frame cap
   // that spine should use. This is the one call a title-owned spine needs before its loop; `start`
   // alone leaves the cap question unanswered, and getting that wrong ends the process before a client

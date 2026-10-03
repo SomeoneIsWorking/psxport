@@ -38,6 +38,8 @@ SHADERS = (
     ("semi_cover.frag", "spv_g_semi_cover_frag"),
     ("ires_downsample.frag", "spv_g_ires_downsample_frag"),
     ("painter_composite.frag", "spv_g_painter_composite_frag"),
+    ("pane.vert", "spv_g_pane_vert"),
+    ("pane.frag", "spv_g_pane_frag"),
 )
 
 

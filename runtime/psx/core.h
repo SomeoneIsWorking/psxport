@@ -110,6 +110,26 @@ public:
   enum : int { PW_IRQ = 1, PW_HOST = 2 };
   int pending_work = 0;
 
+  // ---- HOST FIELD CLOCK (runtime/psx/host_turn.cpp) ------------------------------------------------
+  // Per-Core. The clock is the device's, but WHICH machine owns it is that machine's business: a
+  // process that runs several sessions at once (a title selector whose panels are live sessions)
+  // has a guest waiting for a display field in every one of them, and a single process-global
+  // registration could only pace the first. Two failures came out of that, both in a host that runs
+  // more than one Core: the second session's registration was refused, so its guest was never paced
+  // and outran its display field until a guest call crossed a frame boundary; and the first
+  // session's teardown cleared the clock out from under the sessions still running.
+  struct {
+    // The registered handler — guest code the clock runs at a boundary — and the period and deadline
+    // in EMULATED guest ticks. A deadline met starts a complete new period, so an update longer
+    // than several periods sees one field per period rather than a burst.
+    void (*fn)(Core *) = nullptr;
+    uint64_t periodTicks = 0;
+    uint64_t deadlineTicks = 0;
+    // Re-entrancy guard: the handler runs guest code that enters guest functions, each of which
+    // tests the gate, so without this a turn could nest inside itself without bound.
+    bool inTurn = false;
+  } hostTurn;
+
   // ---- SPIN DETECTOR state (runtime/psx/spin_detector.h; fatal path watchdog_spin_fault) ----
   SpinDetectorState spin;
 

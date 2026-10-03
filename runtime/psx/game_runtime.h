@@ -53,6 +53,18 @@ public:
   // and commits presentation exactly once (or supplies a measured unpresented fence). It must never
   // dispatch a guest-owned frame loop or call libetc VSync.
   virtual void stepFrame(Core &core, uint32_t frame) = 0;
+
+  // Whether this driver is PAST whatever boot prefix its title owns — the logos, the loading screens
+  // and the publisher cards that come before a title's own picture. A driver with no prefix is past
+  // it from its first frame.
+  //
+  // This exists for hosts that show a title's picture before handing the session to the player (the
+  // Spyro picker shows each title's attract demo in a panel). A pixel test cannot tell a publisher's
+  // logo from a title screen: both are filled, coherent and stable. The title's OWN phase can, and it
+  // is the same signal that decides which renderer owns the frame.
+  virtual bool pastBootPrefix() const {
+    return true;
+  }
 };
 
 class TaskScheduler {

@@ -35,6 +35,7 @@ public:
   }
 
   bool move(int direction) override;
+  bool select(int index) override;
   std::optional<int> activate() const override {
     return mNavigator.activate();
   }
@@ -48,11 +49,28 @@ public:
   // yields nothing.
   std::optional<int> takeClick() override;
 
+  // Re-word the screen's heading. A host whose screen shows what is currently SELECTED (a picker
+  // whose rows are pictures rather than a text list) needs the heading to follow the selection, and
+  // the heading is written once in the constructor.
+  void setHeading(const std::string &text) override;
+  // Show or hide the ENTRY LIST. A host whose entries are pictures — a selector that composites each
+  // title's own attract demo into a panel (psxport::PaneCompositor) — keeps the heading and the
+  // hint and drops the rows, which would otherwise repeat the panels as text over them.
+  void setEntriesVisible(bool visible) override;
+  // Whether the screen paints its own opaque backdrop. A screen drawn over a host-composited picture
+  // must not: the picture behind it IS the content, and an opaque body would hide every panel while
+  // still being the correct answer for a screen that is the whole picture on its own.
+  void setBackdropOpaque(bool opaque) override;
+  // Move the heading and the hint into a band of these surface pixels. See ChoiceView::setCaptionBand.
+  void setCaptionBand(int x, int y, int width, int height) override;
+
 private:
   void refreshSelection();
 
   Rml::Context *mCtx = nullptr;
   Rml::ElementDocument *mDoc = nullptr;
+  Rml::Element *mList = nullptr; // the #list, kept so its visibility is a host decision
+  Rml::Element *mBand = nullptr; // the #panel, repositioned into a caption band when the host asks
   ChoiceNavigator mNavigator;
   std::vector<Rml::Element *> mRows;
   std::optional<int> mClicked;

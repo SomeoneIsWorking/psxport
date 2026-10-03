@@ -52,6 +52,21 @@ public:
 
   ~SpuAudio();
   void init();
+  // Whether THIS session's sound reaches the host's speakers.
+  //
+  // The host audio device is a per-process resource and a process that runs several sessions at once
+  // must not have all of them talking over each other: only the one the player is looking at may be
+  // heard. Claiming output is separate from opening the device, because which session is the audible
+  // one changes while the sessions are already alive — a title selector that hands the chosen title
+  // the speakers. Before the claim, init() opens no device at all (an unclaimed session is silent
+  // rather than a second stream competing for the same output); claiming it later opens the device
+  // then, if the host has not given it to anyone else.
+  //
+  // The guest's own audio state keeps advancing either way: this gates OUTPUT, never the SPU.
+  void setOutputEnabled(bool enabled);
+  bool outputEnabled() const {
+    return mOutputEnabled;
+  }
   void frame();
   void frameLogic() {
     frameEx(false);
@@ -66,6 +81,7 @@ public:
   }
 
 private:
+  void openHostDevice();
   void frameEx(bool output);
   void wavOpen(const char *path);
   void wavClose();
@@ -87,12 +103,13 @@ private:
   SDL_AudioStream *mStream = nullptr; // NULL = not open / failed / disabled
   bool mStreamStarted = false;        // playback begins only after the bounded cushion is primed
 #endif
-  int mState = 0;          // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
-  FILE *mWav = nullptr;    // open WAV file, or NULL
-  uint32_t mWavBytes = 0;  // PCM bytes written so far
-  uint32_t mWavSynced = 0; // mWavBytes at the last header patch + flush (see frameEx):
-                           // the capture stays a valid WAV even if the process is
-                           // killed, which is how every headless run actually ends
+  int mState = 0;             // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
+  bool mOutputEnabled = true; // this session's sound reaches the host speakers (see setOutputEnabled)
+  FILE *mWav = nullptr;       // open WAV file, or NULL
+  uint32_t mWavBytes = 0;     // PCM bytes written so far
+  uint32_t mWavSynced = 0;    // mWavBytes at the last header patch + flush (see frameEx):
+                              // the capture stays a valid WAV even if the process is
+                              // killed, which is how every headless run actually ends
 
   SpuFieldCadence mCadence;
 

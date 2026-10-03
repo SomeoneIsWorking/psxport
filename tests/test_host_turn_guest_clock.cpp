@@ -52,7 +52,7 @@ public:
     psx::cpu::registerHostTurn(game->core, deliverTurn, FIELD_RATE_NTSC_MILLIHZ);
   }
   ~Fixture() {
-    psx::cpu::shutdownHostTurn();
+    psx::cpu::shutdownHostTurn(game->core);
   }
   bool hostOwed() const {
     return (game->core.pending_work & Core::PW_HOST) != 0;

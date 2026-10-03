@@ -112,3 +112,8 @@ render_path_next_supported(RenderPath current, const RenderCapabilities &capabil
 // The one live-selection validator. Player selection additionally excludes the diagnostic software
 // rasterizer.
 RenderPathSelectionResult render_path_apply(Game &game, RenderPath requested, RenderPathAudience audience);
+
+// Forgets a Core that a live `render path` switch was addressed to, so the remembered pointer cannot
+// outlive the machine it names. Called from ~Core: the switch is per-Core state held in a
+// process-global, and a dangling Core there would hand the next Core somebody else's path.
+void render_path_forget(const Core *core);

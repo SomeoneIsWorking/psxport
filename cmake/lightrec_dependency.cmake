@@ -12,7 +12,7 @@
 # checkout usable at all, and a pinned worktree that is dirty is refused by the same comparison.
 include_guard(GLOBAL)
 
-set(PSXPORT_LIGHTREC_REVISION "a197e64a475c2b2aaccbd05e5ea112a57809f5f7")
+set(PSXPORT_LIGHTREC_REVISION "3e6d9c6cc411587be96444528effaa6545f9943c")
 set(PSXPORT_LIGHTREC_PIN_ROOT "scratch/pins" CACHE STRING
     "Path, relative to a Lightrec checkout, holding one detached worktree per pinned revision")
 set(PSXPORT_LIGHTREC_DIR "" CACHE PATH "Path to the maintained shared/lightrec checkout")

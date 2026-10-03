@@ -637,6 +637,14 @@ void Pad::serviceFrame() {
   }
   mFc++;
 
+  // The HOST's claim on the player's input (see setPlayerInputSuppressed). Applied BEFORE the
+  // session's record/replay service, so the guest, the recording and a replay all see the same mask —
+  // a recording taken while the host held the claim records what the guest was actually given, not
+  // the press the host consumed.
+  if (mPlayerInputSuppressed) {
+    buttons = PAD_NONE;
+  }
+
   // ---- INPUT RECORD / REPLAY (deterministic pad capture) ---------------------------------------
   // The engine has no wall-clock/RNG, so the per-frame final pad mask fully determines a run from a
   // given card image. The session (pad_record_replay.h) records the finalized mask with the title's

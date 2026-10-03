@@ -17,6 +17,7 @@
 #include "gpu_vk_semi_order.h"           // world semi-transparent submission runs
 #include "guest_vram_composite_policy.h" // persistent-composite ownership transition latch
 #include "native_composite_capture.h"    // native pause/backdrop capture lifetime policy
+#include "viewport_layout.h"             // PaneRect — where the presented picture sits in its image
 #include "vram_dirty.h"                  // class VramDirty — which parts of guest VRAM a present must re-upload
 #include <stdint.h>
 
@@ -107,7 +108,91 @@ struct GpuVkState {
   SDL_GPUTransferBuffer *s_present_rb = nullptr; // s_present_img → host download (present shot)
   SinkIdleState s_sink;                          // idle/resume latch for an unavailable swapchain image
   int s_present_img_w = 0, s_present_img_h = 0;  // its current size; rebuilt when the sink resizes
-  void ensure_present_img(int w, int h);         // (re)create the composite target at this sink size
+  PaneRect s_present_viewport{0, 0, 0, 0};       // where the picture sits inside that image (the letterbox)
+  // The picture's own extent inside the viewport, measured from presented frames that had content.
+  // It only ever GROWS: a dark scene must not be able to shrink the crop and zoom into the middle of
+  // the picture, so every measurement widens what is known and none of them narrows it.
+  PaneRect s_present_content{0, 0, 0, 0};
+  void measurePresentedContent(const uint8_t *rgba, int w, int h);
+  void ensure_present_img(int w, int h); // (re)create the composite target at this sink size
+
+  // WHERE THIS GAME'S PRESENT GOES. Swapchain is every ordinary product: the picture IS the window.
+  // Pane keeps the picture in this Game's present image and does NOT show it, which is the only way
+  // several sessions can appear in ONE window: each session's present builds its own image, and the
+  // host (which owns the window) composites them — see psxport::PaneCompositor.
+  enum class PresentTarget : uint8_t { Swapchain, Pane };
+  PresentTarget s_present_target = PresentTarget::Swapchain;
+  void setPresentTarget(PresentTarget target) {
+    s_present_target = target;
+  }
+  PresentTarget presentTarget() const {
+    return s_present_target;
+  }
+
+  // The size this present image is built at when it is NOT the sink's size — a pane is a fraction of
+  // the window, and building a full-window image per session to show a quarter of it is memory nobody
+  // asked for. 0 (the default) follows the sink. This is a SIZE, which the present plan already treats
+  // as a legitimate parameter (it is the one leg-dependent input); what the picture LOOKS like is
+  // still decided by plan_present and never here.
+  int s_present_img_requested_w = 0, s_present_img_requested_h = 0;
+  void setPresentImageSize(int w, int h) {
+    s_present_img_requested_w = w;
+    s_present_img_requested_h = h;
+  }
+
+  // The presented picture this Game last BUILT, as a compositor consumes it: the image, its size, and
+  // the viewport inside it where the picture actually is (everything outside is letterbox bar). A
+  // session that has not presented yet has none, and a pane fed this draws nothing rather than an
+  // empty frame pretending to be one.
+  struct PresentedImage {
+    SDL_GPUTexture *texture = nullptr;
+    int width = 0, height = 0;
+    PaneRect viewport{0, 0, 0, 0}; // the present plan's own rect type: where the picture sits
+    // Where the PICTURE is inside the viewport: many titles frame their own image with black border
+    // rows (Spyro 3 draws about fourteen at the top and bottom of its 240 lines), and a consumer that
+    // cover-crops to the viewport shows those borders as bars in the middle of its own output. Empty
+    // until a probe has seen a filled frame, in which case a consumer uses the viewport unchanged.
+    PaneRect content{0, 0, 0, 0};
+    bool valid() const {
+      return texture != nullptr && width > 0 && height > 0 && viewport.w > 0 && viewport.h > 0;
+    }
+  };
+  PresentedImage lastPresented() const {
+    return PresentedImage{s_present_img, s_present_img_w, s_present_img_h, s_present_viewport, s_present_content};
+  }
+
+  // THE LAST PRESENTED FRAME THAT ACTUALLY HAD A PICTURE, held for a consumer that must never show a
+  // black one. A title fades out, blanks between scenes and shows load screens, so the newest frame is
+  // often the one least worth showing: a host that samples this once per panel keeps the last good
+  // picture on screen instead of blinking the panel to black between the guest's own scenes.
+  //
+  // A copy, not a flag. Flagging "this frame was fine" does not help the moment the next frame
+  // overwrites the image, which is exactly the moment the panel needs something to show.
+  SDL_GPUTexture *s_present_filled = nullptr;
+  int s_present_filled_w = 0, s_present_filled_h = 0;
+  // Bumped by every built present, so the probe can tell "a new frame to look at" from "the frame I
+  // already looked at" without reading it.
+  std::uint64_t s_present_serial = 0;
+  std::uint64_t s_present_probed_serial = 0;
+  PaneRect s_present_filled_viewport{0, 0, 0, 0};
+  // Fills the held picture from the current image IF it has content; otherwise keeps what is held.
+  //
+  // ITS COST, precisely: one GPU->CPU readback of the presented image, and only when there is a NEW
+  // present to look at (compared by serial) AND no held frame exists yet. Once a session has held a
+  // frame it is never probed again, so the shipping path costs nothing at all: the panel samples the
+  // hold, the probe is off. That matters because the readback is a full stall on the present queue.
+  // "Does this session have a picture to show?" — holding the newest one that qualifies.
+  //
+  // ITS COST, precisely: one GPU->CPU readback of the presented image, and only when there is a NEW
+  // present to look at (compared by serial) AND no frame is held yet. Once a session holds a frame it
+  // is never probed again, so the shipping path costs nothing: the panel samples the hold, the probe is
+  // off. That matters because the readback is a full stall on the present queue.
+  bool retainFilledPresentImage();
+  void releaseFilledPresentImage();
+  PresentedImage lastFilledPresented() const {
+    return PresentedImage{
+        s_present_filled, s_present_filled_w, s_present_filled_h, s_present_filled_viewport, s_present_content};
+  }
 
   // ---- 2D (non-world) GPU vertex buffers — bug #55 fix ------------------------------------------------
   // A SEPARATE vertex-buffer set per 2D band (GGS_2D_BG / GGS_2D_FG), so 2D content never shares the
@@ -303,6 +388,14 @@ struct GpuVkState {
   bool
   apply_native_composite_base(SDL_GPUCommandBuffer *cmd, bool ires, int scale, int sx, int sy, int width, int height);
   void release_native_composite_capture();
+  // Release every SDL device object this state created — VRAM/CLUT textures, the depth and
+  // semi-blend intermediates, the per-batch vertex buffers and the upload/download transfer
+  // buffers. MUST run while the SDL device is still alive: `Game` declares `gpu_dev` after
+  // `gpu_vk`, so member teardown destroys the device FIRST and these would outlive it (issue
+  // 0148's sibling: VUID-vkDestroyDevice-device-05137 at exit, one VkBuffer per run). `Game::~Game`
+  // calls it before the device dies; the destructor calls it again as a backstop. Every release is
+  // null-checked, so the second call is free.
+  void release_device_resources();
   ~GpuVkState();
   void present(const uint16_t *src, int sx, int sy, int w, int h);
   // Re-show the last BUILT frame (no VRAM upload, no geometry re-render, no batch reset) — the debug-server
@@ -313,10 +406,24 @@ struct GpuVkState {
   // show:  s_present_img -> the window swapchain (+ the RmlUi overlay). Windowed only; this is the SINK.
   void build_present_image(SDL_GPUCommandBuffer *cmd, const struct PresentPlan &plan);
   void show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay = true);
+  // The IMAGE pipeline's picture (gpu_vk_present_image: a decoded movie frame, the SCEA splash) built
+  // into s_present_img for the leg that has no swapchain. Same geometry as the swapchain blit in the
+  // other leg, so a present shot shows what the window shows. Runs in headless only; windowed draws
+  // into the swapchain directly.
+  void build_image_present_image(SDL_GPUCommandBuffer *cmd, float fade);
   // Present the overlay's choice SCREEN as the whole picture: built into the present image (so a present
   // shot reads it in either leg) and blitted to the window with no second overlay pass over it.
   void present_screen();
   void present_shot(const char *path); // read back s_present_img — WHAT THE PLAYER SEES, either leg
+  // Whether the last built picture contains anything visible: false while it is entirely black, which
+  // is what a session presents through the first frames of a cold boot. A host that composites
+  // several sessions into one window (a title picker whose panels are live sessions) must not call
+  // "it presented" the same as "there is something to see": a panel showing the black frame its guest
+  // presented first is indistinguishable from a title that failed to start.
+  //
+  // This reads the present image back, so it COSTS a download and a submit-and-wait. It is a question
+  // about the last frame, not a per-frame one: a caller asks it while a session is coming up, not
+  // every frame of a run.
   // differential test two-pane present is NOT a GpuVkState method: each core renders + reads its own frame back
   // to a CPU RGBA pane (gpu_vk_render_readback), and the free function gpu_vk_present_sbs2 composites the
   // two panes into one window frame. A method could not do it — the two panes come from two DIFFERENT

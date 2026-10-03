@@ -130,8 +130,101 @@ void GpuVkState::release_native_composite_capture() {
   s_native_composite_capture.resetResource();
 }
 
+namespace {
+SDL_GPUDevice *vkDevice() {
+  return GpuDevice::sInstance != nullptr ? GpuDevice::sInstance->s_dev : nullptr;
+}
+
+// Release one handle through SDL's owning release call and null it, so the backstop in
+// GpuVkState's destructor and the Game teardown call cannot free the same object twice.
+template <typename T, typename Release> void releaseGpuHandle(T *&handle, Release release) {
+  SDL_GPUDevice *dev = vkDevice();
+  if (handle != nullptr && dev != nullptr) {
+    release(dev, handle);
+  }
+  handle = nullptr;
+}
+} // namespace
+
 GpuVkState::~GpuVkState() {
+  // Only THIS Game's retained capture texture. The SDL objects behind release_device_resources() are
+  // the renderer's process-global pool, shared by every Core in the process, so they are NOT this
+  // destructor's to free: a process that runs several sessions tears down one Game at a time while
+  // the others keep drawing. The device owner releases that pool — Game::~Game when the Game owns the
+  // device, and the device shutdown otherwise — while the device is still alive.
   release_native_composite_capture();
+}
+
+void GpuVkState::release_device_resources() {
+  if (vkDevice() == nullptr) {
+    return;
+  }
+  // The held picture is a device object like every other one below, and this is the one place the
+  // pool is released while the device is alive.
+  releaseFilledPresentImage();
+  const auto tex = [](SDL_GPUDevice *d, SDL_GPUTexture *t) {
+    SDL_ReleaseGPUTexture(d, t);
+  };
+  const auto xfer = [](SDL_GPUDevice *d, SDL_GPUTransferBuffer *b) {
+    SDL_ReleaseGPUTransferBuffer(d, b);
+  };
+  const auto vbuf = [](SDL_GPUDevice *d, SDL_GPUBuffer *b) {
+    SDL_ReleaseGPUBuffer(d, b);
+  };
+  // Per-band and per-blend-mode arrays first: they are the bulk of what init creates.
+  for (SDL_GPUBuffer *&b : s_tri2d_vbuf) {
+    releaseGpuHandle(b, vbuf);
+  }
+  for (SDL_GPUBuffer *&b : s_tex2d_vbuf) {
+    releaseGpuHandle(b, vbuf);
+  }
+  for (auto &band : s_semi2d_vbuf) {
+    for (SDL_GPUBuffer *&b : band) {
+      releaseGpuHandle(b, vbuf);
+    }
+  }
+  for (SDL_GPUTransferBuffer *&b : s_tri2d_xfer) {
+    releaseGpuHandle(b, xfer);
+  }
+  for (SDL_GPUTransferBuffer *&b : s_tex2d_xfer) {
+    releaseGpuHandle(b, xfer);
+  }
+  for (auto &band : s_semi2d_xfer) {
+    for (SDL_GPUTransferBuffer *&b : band) {
+      releaseGpuHandle(b, xfer);
+    }
+  }
+  for (SDL_GPUBuffer *&b : s_semi_vbuf) {
+    releaseGpuHandle(b, vbuf);
+  }
+  for (SDL_GPUTransferBuffer *&b : s_semi_xfer) {
+    releaseGpuHandle(b, xfer);
+  }
+  releaseGpuHandle(s_tri_vbuf, vbuf);
+  releaseGpuHandle(s_line_vbuf, vbuf);
+  releaseGpuHandle(s_tex_vbuf, vbuf);
+  releaseGpuHandle(s_painter_tex_vbuf, vbuf);
+  releaseGpuHandle(s_painter_tri_vbuf, vbuf);
+  releaseGpuHandle(s_tri_xfer, xfer);
+  releaseGpuHandle(s_line_xfer, xfer);
+  releaseGpuHandle(s_tex_xfer, xfer);
+  releaseGpuHandle(s_painter_tex_xfer, xfer);
+  releaseGpuHandle(s_painter_tri_xfer, xfer);
+  releaseGpuHandle(s_vram_xfer, xfer);
+  releaseGpuHandle(s_rb_xfer, xfer);
+  releaseGpuHandle(s_snap_xfer, xfer);
+  releaseGpuHandle(s_present_rb, xfer);
+  releaseGpuHandle(s_vram_tex, tex);
+  releaseGpuHandle(s_vram_snap, tex);
+  releaseGpuHandle(s_depth, tex);
+  releaseGpuHandle(s_color_rgba, tex);
+  releaseGpuHandle(s_present_img, tex);
+  releaseGpuHandle(s_ires_color, tex);
+  releaseGpuHandle(s_ires_depth, tex);
+  releaseGpuHandle(s_ires_rgba, tex);
+  releaseGpuHandle(s_painter_color, tex);
+  releaseGpuHandle(s_painter_rgba, tex);
+  releaseGpuHandle(s_painter_depth, tex);
 }
 
 bool gpu_vk_request_native_composite_capture(Core *core) {

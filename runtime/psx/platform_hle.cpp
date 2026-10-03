@@ -83,9 +83,11 @@ void PlatformHle::vsync(Core *core) {
   psx::cpu::requestExecutionExit(*core, psx::cpu::ExecutionExitReason::FrameBoundary);
 }
 
-bool PlatformHle::inBiosWindow(const GameConfig *config, std::uint32_t address) {
+bool PlatformHle::inBiosWindow(const Game *game, const GameConfig *config, std::uint32_t address) {
   if (!config) {
-    const GameRuntime *runtime = psxport_game_runtime();
+    // THIS Game's runtime, not the process's last-installed one: a process that runs several
+    // sessions installs each one's runtime in turn, and this table is built while ONE of them boots.
+    const GameRuntime *runtime = game ? game->runtime : nullptr;
     const PlatformHlePlan *plan = runtime ? runtime->platformHlePlan() : nullptr;
     if (plan) {
       for (int index = 0; index < kPlatformHleWindowCapacity; ++index) {
@@ -109,7 +111,7 @@ bool PlatformHle::inBiosWindow(const GameConfig *config, std::uint32_t address) 
 }
 
 bool PlatformHle::register_(std::uint32_t address, OverrideFn function) {
-  if (!function || !game || !inBiosWindow(game->core.cfg, address)) {
+  if (!function || !game || !inBiosWindow(game, game->core.cfg, address)) {
     return false;
   }
   for (int index = 0; index < mN; ++index) {
@@ -191,7 +193,9 @@ void PlatformHle::initBuiltins() {
   };
 
   if (!game->core.cfg) {
-    const GameRuntime *runtime = psxport_game_runtime();
+    // THIS Game's runtime, not the process's last-installed one: a process that runs several
+    // sessions installs each one's runtime in turn, and this table is built while ONE of them boots.
+    const GameRuntime *runtime = game->runtime;
     const PlatformHlePlan *plan = runtime ? runtime->platformHlePlan() : nullptr;
     if (!plan) {
       lucent::error("plat-hle", "direct runtime declares no PlatformHlePlan");

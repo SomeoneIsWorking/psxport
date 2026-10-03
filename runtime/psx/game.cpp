@@ -111,10 +111,19 @@ Game::~Game() {
   // per-Game retained texture while its owning SDL device is still alive; GpuVkState's destructor then
   // only clears the already-empty policy state.
   gpu_vk.release_native_composite_capture();
-  // Only a Game that OWNS the device releases the process claim. A Game presenting through a
-  // host-owned device must leave it: the host outlives this Game and every later session's Game will
-  // claim the very same device.
+  // Every other SDL device object this Game created — VRAM/CLUT textures, the depth and semi-blend
+  // intermediates, the per-batch vertex buffers and their upload/download transfer buffers — dies
+  // with the device unless it is released HERE, while the device is alive. Left to member teardown
+  // they outlive it: the Vulkan validation layer reports VUID-vkDestroyDevice-device-05137 naming
+  // the live VkBuffer, and the process dies on the way out.
+  //
+  // Those handles are the RENDERER'S PROCESS-GLOBAL pool, shared by every Core in the process, so only
+  // the Game that owns the device may release them. A Game presenting through a host-owned device — a
+  // picker panel session, a session handed a title host — is torn down while that owner is still
+  // drawing with the pool; releasing it there takes the owner's renderer down with it. A process that
+  // runs one Game at a time is unaffected: it owns the device, so it releases as before.
   if (ownedGpuDevice && GpuDevice::sInstance == &gpu_dev) {
+    gpu_vk.release_device_resources();
     GpuDevice::sInstance = nullptr;
   }
 }

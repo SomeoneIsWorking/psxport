@@ -143,6 +143,9 @@ bool enh_named(const char *name);
 // Read it through render_path() below, never by parsing the text at a call site.
 extern TextVar cv_render_path;
 RenderPath render_path(RenderPath fallback = RenderPath::Native);
+// The same ladder WITHOUT the process-global Runtime layer, for a Core that a live switch was not
+// addressed to. See render_path.cpp: the Runtime slot mirrors one Core's live switch.
+RenderPath render_path_excluding_runtime(RenderPath fallback = RenderPath::Native);
 
 // ── the graphics-producer DB ────────────────────────────────────────────────────────────────────
 // PSXPORT_PRODUCERS_DIR — where the per-run producer-census JSONL and the accumulated claim set are

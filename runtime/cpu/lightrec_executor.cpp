@@ -55,8 +55,19 @@ bool isDeviceAddress(std::uint32_t address) {
   return address >= kHardwareBase && address < kHardwareBase + kHardwareSize;
 }
 
-// The one initialized Lightrec machine of this process; Lightrec supports exactly one.
-std::atomic<const void *> liveMachine{nullptr};
+// How many Lightrec machines this process has INITIALIZED and not destroyed.
+//
+// It was a one-per-process claim, on the stated belief that "Lightrec supports exactly one". The
+// library's own state is per-`lightrec_state` — the code cache, the block cache, the register cache and
+// the code buffer are all reached through it — so the belief is not a property of Lightrec, and it
+// refused the one shape a multi-session host cannot avoid: a title selector that keeps every title's
+// session ALIVE (three panels, three attract demos, one of them advancing). This is now a COUNT, so a
+// second machine initializes, and a machine's destruction is accounted exactly once.
+//
+// The ceiling stays, because "several" is a host's requirement and not a licence to leak machines: past
+// it the refusal is by name, which is what the old claim produced.
+constexpr int kMaxLiveMachines = 8;
+std::atomic<int> liveMachines{0};
 
 std::uint64_t nextBoundaryOwnerId() {
   static std::atomic<std::uint64_t> next{1};
@@ -88,15 +99,17 @@ struct LightrecExecutor::Impl {
       return state != nullptr;
     }
     initializationAttempted = true;
-    const void *expected = nullptr;
-    if (!liveMachine.compare_exchange_strong(expected, this)) {
-      lucent::error("executor", "Lightrec supports one initialized machine per process");
+    const int live = liveMachines.fetch_add(1);
+    if (live >= kMaxLiveMachines) {
+      liveMachines.fetch_sub(1);
+      lucent::error(
+          "executor", "refusing to initialize a {}. Lightrec machine in one process ({} already live)", live + 1, live);
       return false;
     }
     char programName[] = "psxport";
     state = lightrec_init(programName, maps.data(), maps.size(), &operations);
     if (!state) {
-      liveMachine.store(nullptr);
+      liveMachines.fetch_sub(1);
       lucent::error("executor", "Lightrec initialization failed");
       return false;
     }
@@ -109,7 +122,8 @@ struct LightrecExecutor::Impl {
     }
     std::scoped_lock lifecycleLock(lifecycleMutex());
     lightrec_destroy(state);
-    liveMachine.store(nullptr);
+    state = nullptr;
+    liveMachines.fetch_sub(1);
   }
 
   // The memory callbacks receive only the Lightrec state; the state carries this object as its context,

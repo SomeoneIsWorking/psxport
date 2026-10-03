@@ -125,7 +125,11 @@ inline PresentPlan plan_present(const PresentInputs &in, bool headless) {
   // source is therefore narrowed to the authored columns FROM THE ORIGIN (they are where the guest
   // drew) and presented at its own aspect, which the letterbox centres. `content_w == disp_w` (Spyro
   // 2, which authors all 684 columns through its widened projection) is a strict no-op.
-  const int content_w = (in.content_w > 0 && in.content_w < in.disp_w) ? in.content_w : in.disp_w;
+  // ...and it applies to the NATIVE VRAM read only, for the same reason 24bpp does below: the ires
+  // composite is rendered by our own raster, already at the DISPLAY's own width. Narrowing the source
+  // to the guest's authored columns while sampling it does not remove the unwritten columns — it
+  // samples the wrong 1536 of the 2046 the target actually holds, and a panel shows that as noise.
+  const int content_w = (p.src_ires > 1 || in.content_w <= 0 || in.content_w >= in.disp_w) ? in.disp_w : in.content_w;
   p.disp[0] = in.sx * scale;
   p.disp[1] = in.sy * scale;
   p.disp[2] = content_w * scale;

@@ -666,6 +666,32 @@ RenderPath render_path(RenderPath fallback) {
   return p;
 }
 
+// render_path_excluding_runtime() — the same ladder with ONE layer removed: Runtime. That layer is
+// process-global (it is where a live `render path` switch is mirrored) while the render path itself is
+// per-Core state. A Core created after a switch was applied to a different Core must resolve its own
+// request, so it reads Override > Value > the knob's own default and leaves the switch to the Core it
+// was addressed to. A layer whose text parses to nothing is a knob that did nothing, and says so
+// exactly as render_path() does — only here the message can also name the layer.
+RenderPath render_path_excluding_runtime(RenderPath fallback) {
+  for (Layer layer : {Layer::Override, Layer::Value}) {
+    const std::string text = cv_render_path.layer_text(layer);
+    if (text.empty()) {
+      continue;
+    }
+    RenderPath parsed = fallback;
+    if (render_path_parse(text.c_str(), &parsed)) {
+      return parsed;
+    }
+    lucent::warn("cfg",
+                 "PSXPORT_RENDER_PATH={} ('{}') matched NO render path — ignoring that {} layer. "
+                 "Valid: native | gte | psx.",
+                 layer == Layer::Override ? "(override)" : "(value)",
+                 text,
+                 layer_name(layer));
+  }
+  return fallback;
+}
+
 TextVar cv_debug_channels("PSXPORT_DEBUG",
                           "",
                           "enabled diagnostic channels — READ BY LUCENT, declared here for visibility",

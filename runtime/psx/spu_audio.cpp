@@ -151,6 +151,41 @@ void SpuAudio::init() {
     }
   }
 
+  // This session is not the audible one (a host that runs several sessions claims output for one of
+  // them). It is enabled, and it stays enabled: the guest's audio state advances normally and this
+  // session becomes audible the moment the host claims output for it. What it does NOT do is open a
+  // second stream on the process's one output device.
+  if (!mOutputEnabled) {
+    mState = 1;
+    return;
+  }
+  openHostDevice();
+}
+
+void SpuAudio::setOutputEnabled(bool enabled) {
+  if (mOutputEnabled == enabled) {
+    return;
+  }
+  mOutputEnabled = enabled;
+  if (!enabled) {
+    // The stream, if one is open, is left alone: this gates what is FED to it (frameEx), and a
+    // session that loses the claim must not tear down the device it is about to win back.
+    lucent::info("spu_audio", "host output released by the host (this session is silent)");
+    return;
+  }
+  if (mState == 0) {
+    return; // init() has not run; the claim takes effect when it does
+  }
+  if (mState != 1 || mStream != nullptr) {
+    return; // already open, or audio is off for this run for a reason of its own
+  }
+  lucent::info("spu_audio", "host output claimed by the host — opening the audio device");
+  openHostDevice();
+}
+
+// Open the SDL3 audio device (44.1 kHz, S16, stereo). Idempotent: subsequent calls are no-ops.
+// Honors PSXPORT_NOAUDIO (force-disable) and gracefully disables if SDL can't init/open a device.
+void SpuAudio::openHostDevice() {
   // Headless implies no audio — there's no point driving the sound device for an automated /
   // offscreen run. Audio opens ONLY for a real on-screen window.
   if (!audio_may_open(psx::config::cv_noaudio.get(), gpu_windowed() != 0)) {
@@ -226,7 +261,7 @@ void SpuAudio::frameEx(bool output) {
   // output == false (logic-only): SBS/dual-core diff path — two Games share the ONE output device
   // so neither may feed it. Still advance THIS core's XA stream so its game logic progresses.
 #ifdef PSXPORT_SDL
-  bool sdl_on = output && (mState == 1 && mStream != nullptr);
+  bool sdl_on = output && mOutputEnabled && (mState == 1 && mStream != nullptr);
 #else
   bool sdl_on = false;
 #endif

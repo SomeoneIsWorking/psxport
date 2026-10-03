@@ -26,6 +26,8 @@ std::uint64_t hostTurnTicksUntilDue(const Core &core);
 // titles advance display fields through it and never acknowledge fields themselves.
 void notifyDisplayField(Core &core);
 void serviceHostTurn(Core &core);
-void shutdownHostTurn();
+// Drop this Core's clock (see Core::hostTurn). It is per-Core, so one session's teardown cannot
+// unpace the sessions still running in the same process.
+void shutdownHostTurn(Core &core);
 
 } // namespace psx::cpu

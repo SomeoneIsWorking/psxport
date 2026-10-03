@@ -6,6 +6,7 @@
 // Game's init would see `s_inited` of a fresh GpuDevice and create a second window beside the first.
 #include "gpu_vk_device.h"
 
+#include "rmlui_overlay.h"
 #include <lucent/log.h>
 
 namespace {
@@ -57,6 +58,10 @@ GpuDevice::~GpuDevice() {
       SDL_ReleaseGPUTransferBuffer(d, b);
     });
     // The window leaves the device before the device is destroyed; the window itself outlives it.
+    // RmlUi's own teardown is an atexit hook, which runs after this: it would release onto a dead
+    // device and leave its texture, view, pipeline, sampler and shader modules alive at
+    // vkDestroyDevice. Give them back here, while s_dev is still up.
+    psx::ui::releaseDeviceResources();
     s_window.release_device(s_dev);
     SDL_DestroyGPUDevice(s_dev);
     s_dev = nullptr;

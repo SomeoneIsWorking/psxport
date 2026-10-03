@@ -64,6 +64,11 @@ GuestProjectionPlan gpu_vk_latch_guest_projection(Core *core, GuestProjectionGeo
 void gpu_vk_unlatch_guest_projection(Core &core);
 // Leg-independent sink extent used by the guest projection latch and renderer planning.
 void gpu_vk_present_sink_size(int *width, int *height);
+// Drain the host event queue (window close, ESC, and the key states a Pad must learn) on behalf of
+// whoever SHOWS the window. An ordinary session does it inside its present; a host that composes
+// several sessions into one window frame shows it itself, and a press that arrived between two
+// fields would otherwise be drained by nobody at all.
+void gpu_vk_pump_host_events(Core *core);
 
 // per-prim depth / OT-submission order (set by the gp0 tee before each VK draw)
 void gpu_vk_set_order(Core *core, unsigned idx);
@@ -207,6 +212,20 @@ bool gpu_vk_native_composite_capture_ready(Core *core);
 // capture is armed. Lets RenderQueue::emitItem key each [preseqobj] line to its present frame.
 int gpu_vk_preseq_present_index(Core *core);
 void gpu_vk_shot(Core *core, const char *path);
+// Read a RECTANGLE OF GUEST VRAM into host memory, as PSX 1555 halfwords, row by row.
+//
+// WHY A PORT NEEDS THIS. A title's own artwork — its logo sprite, its font page, a card image — is
+// already in VRAM, decoded by the game itself from the disc the player owns, and a host that wants
+// to show that artwork in its own chrome has to get it out somehow. This is that way: one GPU→host
+// download of VRAM, then a copy of the rectangle asked for. It is VRAM, not the presented frame:
+// the frame is what the game drew ON SCREEN (composited, faded, letterboxed), while VRAM is the
+// pixels the game uploaded, which is what "the title's own image" means and is why this can be
+// decoded with the CLUT and transfer mode the title actually used.
+//
+// `out` must hold `w * h` entries. Returns false — and writes nothing to `out` — when VRAM could not
+// be read (the GPU is latched off) or the rectangle is empty or off-VRAM, rather than filling the
+// caller's buffer with a stale or clamped image that would read as the title's own art.
+bool gpu_vk_read_vram_rect(Core *core, int x, int y, int w, int h, uint16_t *out);
 // Capture the PRESENTED PICTURE (s_present_img) rather than guest VRAM — the composite as the player
 // sees it: letterboxed, faded, source-selected, 24bpp-decoded. Works in BOTH legs, and is the only
 // capture in this framework that samples the present stage. See PSXPORT_PRESENT_SHOT_AT.
@@ -216,6 +235,12 @@ void gpu_vk_present_shot(Core *core, const char *path);
 void gpu_vk_ensure_device(Core *core);
 // Present the overlay's choice screen as the whole picture (title picker); see GpuVkState::present_screen.
 void gpu_vk_present_screen(Core *core);
+// Route this Game's present to a PANE instead of the window: the picture is built and kept in this
+// Game's own present image, at `image_width` x `image_height` (0 = the sink's size), for a host that
+// composites several sessions into one window — see psxport::PaneCompositor. The second restores the
+// ordinary product route.
+void gpu_vk_present_to_pane(Core *core, int image_width, int image_height);
+void gpu_vk_present_to_window(Core *core);
 void gpu_vk_stats(Core *core, int *tri, int *tex, int *semi);
 
 // (Engine-owned screen fade is now the PC-native subsystem class ScreenFade at

@@ -58,3 +58,26 @@ void gpu_vk_ensure_device(Core *core) {
 void gpu_vk_present_screen(Core *core) {
   core->game->gpu_vk.present_screen();
 }
+
+// Route this Game's present somewhere other than the window.
+//
+// The ordinary product never calls these: its present IS the window (see show_present_image). A host
+// running SEVERAL sessions at once calls the first, and every session's present then builds its
+// picture and keeps it in its own present image instead of blitting it over the others — which is the
+// only way several guests can share one window, because the window belongs to the host
+// (psxport::HostPresentation) and each session's composite is its own.
+//
+// `image_width`/`image_height` are the size that session should build its picture at, which is the
+// host's business: a panel is a fraction of the window, and a full-window image per session is memory
+// nobody asked for. Zero keeps the sink's size.
+void gpu_vk_present_to_pane(Core *core, int image_width, int image_height) {
+  GpuVkState &state = core->game->gpu_vk;
+  state.setPresentImageSize(image_width, image_height);
+  state.setPresentTarget(GpuVkState::PresentTarget::Pane);
+}
+
+void gpu_vk_present_to_window(Core *core) {
+  GpuVkState &state = core->game->gpu_vk;
+  state.setPresentImageSize(0, 0);
+  state.setPresentTarget(GpuVkState::PresentTarget::Swapchain);
+}

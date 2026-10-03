@@ -18,6 +18,7 @@
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
 #include "override_differential.h"
+#include "render_capabilities.h"
 #include <cstring>
 #include <lucent/log.h>
 #include <utility>
@@ -55,6 +56,9 @@ Core::Core() {
 }
 
 Core::~Core() {
+  // Any live `render path` switch was addressed to THIS Core; let go of it before the machine goes,
+  // so the process-global that remembers it cannot outlive the pointer it holds.
+  render_path_forget(this);
   if (runtime) {
     runtime->destroyContext(gameCtx);
   }

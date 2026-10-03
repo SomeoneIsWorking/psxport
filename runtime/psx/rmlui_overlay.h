@@ -30,6 +30,17 @@ class MenuDocument;
 class ChoiceScreen;
 class ChoiceView;
 struct ChoiceContent;
+
+// Release RmlUi's SDL_GPU objects (the render interface's white texture, its graphics pipeline
+// and sampler, and the library globals) WHILE THE DEVICE IS STILL ALIVE.
+//
+// The overlay's own teardown is an `std::atexit` hook, and atexit runs after every destructor:
+// by then `Game::~Game` has already called `SDL_DestroyGPUDevice`, so those releases go to a dead
+// device, nothing is freed, and `vkDestroyDevice` reports the still-live VkImage, VkImageView,
+// VkPipeline, VkSampler and VkShaderModules. `GpuDevice::~GpuDevice` calls this immediately before
+// destroying the device; the atexit hook then finds nothing left to do.
+void releaseDeviceResources();
+
 } // namespace psx::ui
 
 class RmlOverlay {
@@ -112,9 +123,10 @@ private:
   bool mOptionsMode = false; // stands in for the game's in-game Options menu
 
   SDL_Window *mWin = nullptr;
-  void *mCtx = nullptr;    // Rml::Context*        (void* to keep Rml headers out of ours)
-  void *mSys = nullptr;    // SystemInterface_SDL*
-  void *mRender = nullptr; // RmlRenderInterfaceGpu*
+  std::string mMenuCtxName; // this overlay's own RmlUi context names (the library outlives it)
+  void *mCtx = nullptr;     // Rml::Context*        (void* to keep Rml headers out of ours)
+  void *mSys = nullptr;     // SystemInterface_SDL*
+  void *mRender = nullptr;  // RmlRenderInterfaceGpu*
 
   // The UI. Null when LoadDocument failed — which is exactly what hasMenu() reports.
   std::unique_ptr<psx::ui::MenuDocument> mMenu;
