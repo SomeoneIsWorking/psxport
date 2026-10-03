@@ -49,7 +49,9 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/cpu/function_reach.cpp # PSXPORT_REACH_REPORT: guest entry pcs reached, by image
   ${PSXPORT_ROOT}/runtime/cpu/host_dispatch_cache.cpp # per-address host-dispatch verdicts, flushed with their inputs
   ${PSXPORT_ROOT}/runtime/cpu/image_identity.cpp
-  ${PSXPORT_ROOT}/runtime/cpu/guest_call.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/guest_call.cpp # dispatchGuest{0..4}, callGuestNow — the finite single-turn call
+  ${PSXPORT_ROOT}/runtime/cpu/guest_call_census.cpp # per-Core tally of calls that crossed a host turn
+  ${PSXPORT_ROOT}/runtime/cpu/resumable_guest_call.cpp # one guest call across display fields: latch, cap, classify
   ${PSXPORT_ROOT}/runtime/cpu/invalidation.cpp
   ${PSXPORT_ROOT}/runtime/cpu/lightrec_executor.cpp
   ${PSXPORT_ROOT}/runtime/cpu/machine_snapshot.cpp # CPU/GTE/RAM capture and invalidating restore

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <lucent/log.h>
+#include <optional>
 
 namespace psx::cpu {
 
@@ -637,6 +638,35 @@ void callOriginalToReturnResuming(Core &core,
                              return resumeGuestToReturnFrom(core, guestAddress, resumePc, returnPc, turn);
                            }),
                        owner);
+}
+
+std::optional<NativeKey>
+tryInstallNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function) {
+  if (function == nullptr) {
+    lucent::error(
+        "native-dispatch", "cannot install '{}' at 0x{:08X}: it has no native implementation", name, guestAddress);
+    return std::nullopt;
+  }
+  const std::optional<ImageIdentity> image = core.currentImageIdentity(guestAddress);
+  if (!image) {
+    lucent::error("native-dispatch",
+                  "cannot install '{}' at 0x{:08X}: no active image owns that address, so it cannot "
+                  "be attributed to whichever module happens to be resident",
+                  name,
+                  guestAddress);
+    return std::nullopt;
+  }
+  const NativeKey key{*image, guestAddress};
+  if (!core.nativeDispatcher().install(NativeRegistration{key, name, function})) {
+    return std::nullopt;
+  }
+  return key;
+}
+
+void installNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function) {
+  if (!tryInstallNativeOverride(core, guestAddress, name, function)) {
+    std::abort();
+  }
 }
 
 } // namespace psx::cpu

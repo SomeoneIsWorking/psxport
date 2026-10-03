@@ -18,6 +18,7 @@
 #include "cpu_divide.h"
 #include "frame_pacer.h"
 #include "guest_call_attribution.h"
+#include "guest_call_census.h"
 #include <memory>
 #include <optional>
 
@@ -76,6 +77,9 @@ public:
   // Optional exact-PC observer and nested-call attribution, both owned per Core.
   PcObserver pcObserver;
   psx::cpu::GuestCallAttribution callAttribution;
+  // The run's resumable-guest-call tally. Per-Core like every other counter here: a process that runs
+  // several machines must not fold their calls into one number.
+  psx::cpu::GuestCallCensus guestCallCensus_;
 
   DmaRegisters dma;               // DMA controller registers + owed completions — per-instance HW state (dma_irq.h)
   uint32_t io_gpustat_toggle = 0; // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
@@ -144,6 +148,12 @@ public:
   psx::cpu::ImageCatalog &imageCatalog();
   psx::cpu::LightrecExecutor &lightrecExecutor();
   psx::cpu::NativeDispatcher &nativeDispatcher();
+  psx::cpu::GuestCallCensus &guestCallCensus() {
+    return guestCallCensus_;
+  }
+  const psx::cpu::GuestCallCensus &guestCallCensus() const {
+    return guestCallCensus_;
+  }
   std::optional<psx::cpu::ImageIdentity> currentImageIdentity(uint32_t guestAddress) const;
   std::optional<psx::cpu::ImageIdentity> currentImageIdentity(GuestAddressRange physicalRange) const;
 

@@ -78,6 +78,17 @@ private:
 };
 
 GuestHostDispatchKind classifyGuestHostDispatch(Core &core, std::uint32_t guestAddress);
+// THE ONE WAY AN OVERRIDE IS REGISTERED. An override key is (active image identity, address), and an
+// address alone does not identify guest code because overlays reuse ranges, so the identity is
+// resolved here rather than by every caller. Refusals, each naming the address and the override:
+// a null handler, an address no active image owns, and a key that already has an owner. Returns the
+// installed key.
+std::optional<NativeKey>
+tryInstallNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function);
+// The same refusal, then a fatal abort: the shape a boot-time override catalog uses, because a title
+// that cannot continue without its override must not install half a catalog. Where the refusal is a
+// reportable outcome, use the returning form.
+void installNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function);
 ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress);
 ExecutionResult
 invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction function, std::string_view name);
