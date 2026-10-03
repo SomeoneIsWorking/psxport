@@ -3414,6 +3414,21 @@ void GpuState::gpu_dma2_linked_list(Core *core, uint32_t madr) {
   // flush -> emitQueue already returns immediately on an empty queue, so no guard is needed here.
   core->game->rq.flush(core);
 }
+
+// See gpu_replay_guest_packet. Identical to the OT walk's inner loop except that the words arrive in
+// host memory, so `s_gp0_src` is stamped with the guest-shaped address the word WOULD have had. That
+// is not a fiction the submit path can notice: it reads the stamp to attribute the packet, and the
+// address it is given is the one a guest packet of this stream really occupied.
+void GpuState::replayGuestPacket(Core *core, uint32_t nodeAddress, const uint32_t *words, unsigned count) {
+  s_cur_node = nodeAddress;
+  for (unsigned i = 0; i < count; i++) {
+    // Word 0 is the node's first GP0 word, and it sits one header word in — the same address the OT
+    // walk stamps, so a replayed word is attributed exactly where that word would have been.
+    s_gp0_src = nodeAddress + psx::gpu::kOtHeaderBytes + psx::gpu::kOtHeaderBytes * i;
+    gpu_gp0(core, words[i]);
+  }
+  s_gp0_src = 0;
+}
 // DMA channel 2 block mode: `count` words from `madr` (to/from GP0). to_gpu=1 -> GP0 writes.
 void GpuState::gpu_dma2_block(Core *core, uint32_t madr, int count, int to_gpu) {
   s_dma2++;
@@ -3478,9 +3493,30 @@ uint32_t GpuState::gpu_read_word() {
 void gpu_gp0(Core *core, uint32_t w) {
   core->game->gpu.gpu_gp0(core, w);
 }
+
+// Replay ONE guest packet the DrawOTag walk did not read out of guest RAM.
+//
+// A title's native world pass can rebuild a packet stream the guest never stored — this repository's
+// Spyro terrain in-between runs the guest's own draw routine again over HOST memory and gets its
+// packets back. Those packets are still guest packets: the same GP0 words, the same primitive kinds,
+// in the same order the guest's ordering table would have walked them. The only thing missing is the
+// place to read them from, and the only two things the submit path takes from that place are the
+// packet's guest-shaped address (recorded as the item's guest packet, and read by the
+// screen-coverage background classification) and each word's address (the FIFO's own source stamp).
+// So the caller supplies both, as guest-shaped addresses, and everything after that — the FIFO state
+// machine, texpage/CLUT/draw-area resolution, layer classification, the emit-or-queue funnel — runs
+// exactly where it has always run.
+//
+// alternative, decoding each packet into resolved quad data and calling RenderQueue::emitOrQueue
+// directly, is what this function exists to avoid: it would put a SECOND copy of texpage/CLUT/
+// draw-area/blend resolution in a title, and the two copies would drift.
+void gpu_replay_guest_packet(Core *core, uint32_t nodeAddress, const uint32_t *words, unsigned count) {
+  core->game->gpu.replayGuestPacket(core, nodeAddress, words, count);
+}
 void gpu_gp1(Core *core, uint32_t w) {
   core->game->gpu.gpu_gp1(w);
 }
+
 // PC-NATIVE single display: set the displayed VRAM origin directly (what GP1(0x05) would set), so the
 // present can scan a fixed page without going through the PSX disp-env / PutDispEnv struct dance. Used by
 // a title FrameDriver to display the single buffer its engine draws into. The display W/H are unchanged

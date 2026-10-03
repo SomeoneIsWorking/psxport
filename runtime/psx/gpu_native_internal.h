@@ -9,6 +9,7 @@
 // it. NOT a public API; internal to the GPU TUs.
 #ifndef GPU_NATIVE_INTERNAL_H
 #define GPU_NATIVE_INTERNAL_H
+#include "core.h" // gpu_replay_guest_packet
 #include "gpu_display_mode.h"
 #include "guest_draw_rows.h"
 #include <array>
@@ -392,6 +393,10 @@ struct GpuState {
   void set_clut(uint16_t cl);
   void gp0_exec(Core *core);
   void gpu_gp0(Core *core, uint32_t w);
+  // Feed `count` GP0 words as ONE packet identified by `nodeAddress`, both guest-shaped. See the free
+  // function gpu_replay_guest_packet's comment for why a caller that rebuilt a guest packet stream
+  // outside guest RAM comes through here rather than through emitOrQueue.
+  void replayGuestPacket(Core *core, uint32_t nodeAddress, const uint32_t *words, unsigned count);
   void gpu_gp1(uint32_t w);
   void gpu_dma2_linked_list(Core *core, uint32_t madr);
   void gpu_dma2_block(Core *core, uint32_t madr, int count, int to_gpu);

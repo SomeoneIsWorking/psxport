@@ -1,9 +1,9 @@
-// Per-instance temporal presentation. Titles own scene reconstruction through TemporalSceneSource.
+// Per-instance temporal presentation. Titles own scene reconstruction through InBetweenStrategy.
 #pragma once
 
 #include "frame_presenter.h"
+#include "in_between_strategy.h"
 #include "render_queue.h"
-#include "temporal_scene_source.h"
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -24,7 +24,7 @@ struct RateDet {
 };
 
 struct Fps60 final : TemporalFramePresentation {
-  explicit Fps60(Game &owner, std::unique_ptr<TemporalSceneSource> source = {});
+  explicit Fps60(Game &owner, std::unique_ptr<InBetweenStrategy> source = {});
   ~Fps60();
 
   // Interpolation is enabled only when requested AND permitted on this Core (interpolationPermitted).
@@ -110,5 +110,5 @@ struct Fps60 final : TemporalFramePresentation {
 
 private:
   void tier1Render(Core *core, float t);
-  std::unique_ptr<TemporalSceneSource> sceneSource_;
+  std::unique_ptr<InBetweenStrategy> sceneSource_;
 };

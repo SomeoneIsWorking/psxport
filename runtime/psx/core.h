@@ -346,6 +346,23 @@ void gpu_dma2_block(Core *c, uint32_t madr, int count, int to_gpu);
 // ---- Native renderer (gpu_native.cpp) — C++ linkage; take the Core for guest-RAM reads / DMA /
 // per-frame present bookkeeping (no global). gpu_gp1 is display control (no RAM) but kept here. ----
 void gpu_gp0(Core *core, uint32_t w);
+
+// Replay ONE guest packet the DrawOTag walk did not read out of guest RAM.
+//
+// A title's native world pass can rebuild a packet stream the guest never stored — this repository's
+// Spyro terrain in-between runs the guest's own draw routine again over HOST memory and gets its
+// packets back. Those packets are still guest packets: the same GP0 words, the same primitive kinds, in
+// the same order the guest's ordering table would have walked them. The only thing missing is the place
+// to read them from, and the only two things the submit path takes from that place are the packet's
+// guest-shaped address (recorded as the item's guest packet, and read by the screen-coverage background
+// classification) and each word's address (the FIFO's own source stamp). So the caller supplies both,
+// as guest-shaped addresses, and everything after that — the FIFO state machine, texpage/CLUT/draw-area
+// resolution, layer classification, the emit-or-queue funnel — runs exactly where it has always run.
+//
+// The alternative, decoding each packet into resolved quad data and calling RenderQueue::emitOrQueue
+// directly, is what this exists to avoid: it would put a SECOND copy of texpage/CLUT/draw-area/blend
+// resolution in a title, and the two copies would drift.
+void gpu_replay_guest_packet(Core *core, uint32_t nodeAddress, const uint32_t *words, unsigned count);
 void gpu_gp1(uint32_t w);
 void gpu_present(Core *core);
 void gpu_present_ex(Core *core, int do_blit);

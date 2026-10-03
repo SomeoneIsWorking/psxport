@@ -1,4 +1,4 @@
-#include "fps60_legacy_scene_source.h"
+#include "host_world_pass_strategy.h"
 #include "fps60.h"
 #include "fps60_game_hooks.h"
 #include "game.h"
@@ -68,9 +68,9 @@ void dumpProducerBounds(const RenderQueue &sink) {
   }
 }
 
-class LegacyTemporalSceneSource final : public TemporalSceneSource {
+class HostWorldPassStrategy final : public InBetweenStrategy {
 public:
-  explicit LegacyTemporalSceneSource(Game &game) : game_(game) {}
+  explicit HostWorldPassStrategy(Game &game) : game_(game) {}
 
   bool eligible(const Core &) const override {
     return fps60(game_).mTier1EligibleCur;
@@ -149,8 +149,8 @@ private:
 };
 } // namespace
 
-std::unique_ptr<TemporalSceneSource> makeLegacyTemporalSceneSource(Game &game) {
-  return std::make_unique<LegacyTemporalSceneSource>(game);
+std::unique_ptr<InBetweenStrategy> makeHostWorldPassStrategy(Game &game) {
+  return std::make_unique<HostWorldPassStrategy>(game);
 }
 
 void Fps60::sceneCam(Core *c, float R[3][3], float T[3], float &ofx, float &ofy, float &H) {

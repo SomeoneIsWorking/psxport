@@ -33,7 +33,7 @@ std::array<RqItem, 6> capturedItems() {
           item(RQ_HUD, 6, 0)};
 }
 
-class Source final : public TemporalSceneSource {
+class Source : public InBetweenStrategy {
 public:
   bool eligible(const Core &) const override {
     return ready;
@@ -69,6 +69,20 @@ public:
   int rotations = 0;
   Core *rotatedCore = nullptr;
   std::vector<float> parameters;
+};
+
+// A source that claims a named basis for presenting on a path that keeps the guest's renderer live,
+// and otherwise says nothing. Everything else about it is identical, so the claim is the only thing
+// the admission rule below can be reading.
+class ClaimingSource : public Source {
+public:
+  explicit ClaimingSource(InBetweenStrategy::GuestPathClaim claim) : claim_(claim) {}
+  InBetweenStrategy::GuestPathClaim guestPathClaim() const override {
+    return claim_;
+  }
+
+private:
+  InBetweenStrategy::GuestPathClaim claim_;
 };
 
 class Backend final : public FramePresentationBackend {
@@ -267,10 +281,77 @@ void test_legacy_factory_preserves_uncaptured_endpoint_geometry_and_rotation() {
   checkVerbatim(presentation, captured);
   CHECK_EQ(hookPresents, 1); // disabled interpolation never invokes an intermediate callback
 }
+// WHO MAY PRESENT AN IN-BETWEEN ON A PATH THAT KEEPS THE GUEST'S RENDERER LIVE.
+//
+// The claim replaced a narrower question — "are your in-betweens made of the guest's own primitives?"
+// — with a named basis, because a host rebuild of the guest's own picture out of a read-only reading
+// of its memory is admitted for the same reason and used to be refused. Three claims and the paths
+// they differ on, one case each.
+void test_guest_path_claim_is_what_admits_an_in_between_on_the_guest_path() {
+  using Claim = InBetweenStrategy::GuestPathClaim;
+
+  // Each pair is (path, permitted), so the claim is the only thing that differs between the two
+  // halves of a row and the path is the only thing that differs between the rows.
+  struct Case {
+    Claim claim;
+    RenderPath path;
+    bool permitted;
+    const char *what;
+  };
+  const Case cases[] = {
+      // Nothing claimed: the in-between needs the guest's renderer live, so it is Native-only, and
+      // the user's broad decision is what admits it there.
+      {Claim::None, RenderPath::Gte, false, "a source that claims nothing"},
+      // The guest's own captured primitives (Tomba! 2's GuestGeometrySceneSource): unchanged, still
+      // admitted on Gte.
+      {Claim::GuestPrimitives, RenderPath::Gte, true, "the guest's own primitives"},
+      // A host rebuild of the guest's own picture out of read-only guest memory: admitted on Gte for
+      // the same reason, and this is the case that used to be refused.
+      {Claim::HostRebuiltFromGuestMemory, RenderPath::Gte, true, "a host rebuild of guest memory"},
+      // Psx is the untouched software reference and has no second field to present into, so no claim
+      // reaches it.
+      {Claim::GuestPrimitives, RenderPath::Psx, false, "the guest's primitives on Psx"},
+      {Claim::HostRebuiltFromGuestMemory, RenderPath::Psx, false, "a host rebuild on Psx"},
+  };
+
+  for (const Case &one : cases) {
+    auto game = std::make_unique<Game>();
+    auto source = std::make_unique<ClaimingSource>(one.claim);
+    Fps60 presentation(*game, std::unique_ptr<InBetweenStrategy>(std::move(source)));
+    game->core.rsub.mode.setPath(one.path);
+    // `interpolationPermitted` is private to the shipping product, so it is reached the way the
+    // product reaches it: through `active()`, which is also the question a player is answered.
+    game->mods.fps60 = true;
+    CHECK_EQ(presentation.active(), one.permitted);
+    // OFF is off whatever is claimed: the claim is an admission, not a request.
+    game->mods.fps60 = false;
+    CHECK(!presentation.active());
+    (void)one.what;
+  }
+
+  // The default IS "nothing claimed": a strategy that says nothing is Native-only, which is the safe
+  // answer for a title that has not thought about it.
+  // Not a static_assert: a type with virtual functions is not a literal type, so the default is
+  // checked on an instance, which is where it is actually consulted.
+  struct Bare final : InBetweenStrategy {
+    bool eligible(const Core &) const override {
+      return true;
+    }
+    bool owns(const RqItem &) const override {
+      return false;
+    }
+    void reconstruct(Core &, float) override {}
+    void rotate(Core &) override {}
+  };
+  const Bare bare;
+  CHECK_EQ(static_cast<int>(bare.guestPathClaim()), static_cast<int>(Claim::None));
+}
+
 } // namespace
 
 int main() {
   RUN(mixed_producers_survive_every_reconstructed_slot);
+  RUN(guest_path_claim_is_what_admits_an_in_between_on_the_guest_path);
   RUN(disabled_ineligible_and_reference_frames_replay_capture);
   RUN(rotation_is_per_instance_and_once_per_real_fence_even_disabled);
   RUN(no_source_replays_without_synthesizing_a_second_present);

@@ -20,8 +20,7 @@ extern "C" {
 uint32_t GTE_ReadDR(unsigned);
 } // Beetle GTE (mednafen gte.c) — RTP result regs (rate tap)
 
-Fps60::Fps60(Game &owner, std::unique_ptr<TemporalSceneSource> source)
-    : game(&owner), sceneSource_(std::move(source)) {}
+Fps60::Fps60(Game &owner, std::unique_ptr<InBetweenStrategy> source) : game(&owner), sceneSource_(std::move(source)) {}
 
 Fps60::~Fps60() {
   delete mSink;
@@ -59,18 +58,24 @@ bool Fps60::active() const {
 //
 // Two answers, not one. `enhancementsAllowed()` is the user's broad "the guest render stays pure"
 // decision and it stays exactly as it was: Native only, and it still governs every host-side
-// enhancement. A source whose in-betweens are MADE OF THE GUEST'S OWN PRIMITIVES is a second, narrower
-// answer: its in-between field is the captured guest frame with provenance-paired vertices interpolated
-// toward the previous real frame, rasterized by the same renderer as the real frame. That is the guest's
-// picture at another instant rather than a PC rewrite of it, so it is permitted on Gte, the path that
-// already ships guest geometry. Psx is excluded: it is the untouched software reference and has no
-// second field to present into.
+// enhancement.
+//
+// The second answer is narrower and it is the STRATEGY's to make, because only the strategy knows what
+// its in-between is made of (InBetweenStrategy::guestPathClaim). A strategy that rebuilds the guest's
+// own picture on the host out of a read-only reading of the guest's memory, or that interpolates the
+// guest's own captured primitives, is presenting the guest's picture at another instant rather than a
+// PC rewrite of it — so it needs no host geometry of its own and is permitted on Gte, the path that
+// already ships guest geometry. A strategy that claims nothing needs the guest's renderer to be live
+// to have produced its in-between, and stays Native-only.
+//
+// The real field is untouched either way: it is presented exactly as captured, from the same queue,
+// on the same path, with the same renderer.
 bool Fps60::interpolationPermitted(const Core &core) const {
   if (core.rsub.mode.enhancementsAllowed()) {
     return true;
   }
   return core.rsub.mode.path() == RenderPath::Gte && sceneSource_ != nullptr &&
-         sceneSource_->interpolatesGuestGeometry();
+         sceneSource_->guestPathClaim() != InBetweenStrategy::GuestPathClaim::None;
 }
 
 void Fps60::rtp(uint32_t op) {
@@ -112,10 +117,7 @@ const lucent::Channel sequenceChannel{"fps60seq"};
 // were never drawn — on Tomba! 2's outdoor replay it named 132 items covering 39% of a picture that
 // was fully painted and visibly interpolating. `stream` is what emitItemStream hands the rasterizer,
 // so its runs are the only ones a reader can join to pixels.
-void dumpSequenceRuns(uint64_t fence,
-                      float t,
-                      std::span<const RqItem *const> stream,
-                      const TemporalSceneSource *source) {
+void dumpSequenceRuns(uint64_t fence, float t, std::span<const RqItem *const> stream, const InBetweenStrategy *source) {
   lucent::debug(sequenceChannel, "f{} t={:.3f} emitted n={}", fence, t, stream.size());
   // The painter object is part of the run key, so a verbatim run names the producer that emitted
   // it. Grouping by layer alone made "verbatim n=478" span every producer drawing into RQ_WORLD and

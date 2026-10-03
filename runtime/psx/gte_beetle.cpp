@@ -7,12 +7,14 @@
 #include "cfg.h"
 #include "core.h"
 #include "game.h"             // Core::game->gte (per-instance GTE register file) for gte_bind
+#include "gte_state.h"        // GteRegs / GTE_CurState — the per-instance register file
 #include "proj_params.h"      // class ProjParams — camview + per-frame projection constants
 #include "proj_vtx.h"         // ProjVtx — proj_native_vertex's POD out-struct (was reached via render.h)
 #include "render_substrate.h" // per-Core projection parameters and submission attribution
 #include <lucent/log.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 // Beetle GTE API (mednafen/psx/gte.h), declared locally to avoid pulling Beetle headers.
 extern "C" { // mednafen GTE (gte.c, compiled as C)
@@ -46,6 +48,29 @@ uint32_t gte_read_ctrl(uint32_t reg) {
 }
 void gte_write_ctrl(uint32_t reg, uint32_t v) {
   GTE_WriteCR(reg, v);
+}
+
+// The GTE's whole state, copied in and out (gte_state.h). Beetle's registers and flags ARE the
+// state — DR12..DR14 is the projection FIFO, CR24..CR29 are the screen offsets — so this is a
+// memcpy of the bound instance, deliberately NOT a sweep through GTE_ReadDR/GTE_ReadCR: reading a
+// flag register clears the flag it reports and reading DR12..DR14 pops the FIFO, so a restore built
+// from reads would hand the guest back a GTE that had already run.
+void GTE_SaveRawState(GteRawState *out) {
+  GteRegs *const state = GTE_CurState();
+  if (out == nullptr || state == nullptr) {
+    return;
+  }
+  memcpy(out->reg, state->REG, sizeof out->reg);
+  out->flags = state->FLAGS;
+}
+
+void GTE_RestoreRawState(const GteRawState *in) {
+  GteRegs *const state = GTE_CurState();
+  if (in == nullptr || state == nullptr) {
+    return;
+  }
+  memcpy(state->REG, in->reg, sizeof in->reg);
+  state->FLAGS = in->flags;
 }
 // --- Widescreen RE tool (journal later-55): histogram the projected screen-X the GTE produces, to
 // learn whether world geometry is projected beyond the 320 display window. Result: ~14% of verts

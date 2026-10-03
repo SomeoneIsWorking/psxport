@@ -38,6 +38,31 @@ extern "C" {
 #endif
 // Make `s` the active GTE instance for all subsequent GTE_* calls; lazily inits its CR/DR pointers.
 void GTE_BindState(GteRegs *s);
+
+// THE WHOLE GTE, PASSIVELY: the 64 registers and the overflow flags, and nothing else.
+//
+// Beetle keeps every part of a COP2's state in `GteRegs` — REG[0..31] are the data registers
+// (including the SX/SY/Z FIFO, which is DR12..DR14 itself) and REG[32..63] the control registers
+// (including the screen offsets OFX/OFY/H/ZSF3) — so a copy of REG plus FLAGS IS the state.
+//
+// This exists because reading the registers back through GTE_ReadDR/GTE_ReadCR is NOT a snapshot:
+// reading DR12..DR14 pops the projection FIFO, and reading a flag register clears the flag it
+// reports. Native code that must not disturb the guest's GTE (a host pass that runs the guest's own
+// maths over its own data and then hands the GTE back exactly as it found it) cannot restore state
+// it destroyed on the way in, and Beetle's own GTE_StateAction is a savestate encoder with
+// compatibility transforms in it, not a copy. So one raw snapshot in, one raw write-back out.
+typedef struct GteRawState {
+  uint32_t reg[64]; // DR = reg[0..31], CR = reg[32..63]
+  uint32_t flags;   // the accumulated overflow flags
+} GteRawState;
+
+// Copy the bound instance's registers and flags into `out`. A null `out`, or a null bound state,
+// is a no-op rather than a fault: the caller is restoring state it may not have.
+void GTE_SaveRawState(GteRawState *out);
+// Write `in` back into the bound instance. A null `in`, or a null bound state, is a no-op. This
+// touches REG and FLAGS only — it runs no instruction, so it advances no FIFO and clears no flag
+// beyond restoring the ones `in` carries.
+void GTE_RestoreRawState(const GteRawState *in);
 GteRegs *GTE_CurState(void);
 // TEST-ONLY. Execute one instruction against `s` through Beetle's authoritative GTE_Instruction path,
 // restoring the caller's binding before return; nested isolation depth is tracked so PGXP and the

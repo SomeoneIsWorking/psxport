@@ -2,7 +2,7 @@
 #include "game_iface.h"
 
 #include "fps60.h"
-#include "fps60_legacy_scene_source.h"
+#include "host_world_pass_strategy.h"
 
 #include <memory>
 
@@ -66,7 +66,7 @@ bool LegacyGameRuntimeAdapter::guestVramIsPicture(const Game &) const {
 }
 
 std::unique_ptr<TemporalFramePresentation> LegacyGameRuntimeAdapter::createTemporalFramePresentation(Game &game) {
-  return std::make_unique<Fps60>(game, makeLegacyTemporalSceneSource(game));
+  return std::make_unique<Fps60>(game, makeHostWorldPassStrategy(game));
 }
 
 bool LegacyGameRuntimeAdapter::replCommand(Core &core, const char *command, const char *line) {

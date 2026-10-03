@@ -1,4 +1,4 @@
-// guest_geometry_scene_source.h — a TemporalSceneSource whose in-between is the guest's own geometry.
+// guest_geometry_scene_source.h — a InBetweenStrategy whose in-between is the guest's own geometry.
 //
 // The framework half of a title's guest-geometry interpolation. The real frame is presented exactly as
 // captured; the in-between is the captured frame with each provenance-proven vertex interpolated toward
@@ -8,11 +8,11 @@
 #pragma once
 
 #include "guest_geometry_interpolation.h"
-#include "temporal_scene_source.h"
+#include "in_between_strategy.h"
 
 namespace psxport::temporal {
 
-class GuestGeometrySceneSource : public ::TemporalSceneSource {
+class GuestGeometrySceneSource : public ::InBetweenStrategy {
 public:
   void beginPresentation(Core &core, CapturedFrameView frame, bool interpolating) final;
   bool eligible(const Core &core) const final;
@@ -23,8 +23,10 @@ public:
   bool capturedQueueIsComplete() const final {
     return true;
   }
-  bool interpolatesGuestGeometry() const final {
-    return true;
+  // Its in-between is the guest's own captured primitives with provenance-proven vertices
+  // interpolated, so it claims exactly what it always had: the guest's picture at another instant.
+  GuestPathClaim guestPathClaim() const final {
+    return GuestPathClaim::GuestPrimitives;
   }
 
 protected:
