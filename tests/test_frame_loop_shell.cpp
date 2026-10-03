@@ -205,7 +205,11 @@ static void test_native_boot_has_no_title_frame_body_or_fallback() {
   CHECK(source.find("hooks->frameUpdate(") == std::string::npos);
   CHECK(source.find("hooks->drawOTag(") == std::string::npos);
   CHECK(source.find("timing.frameTick(") == std::string::npos);
-  CHECK(source.find("FrameLoopShell{}.prepareProduct(") != std::string::npos);
+  // The preflight reaches FrameLoopShell through its owner now: `psx::Machine::prepareProduct` IS the
+  // shell call, and this spine composes the same owner a title-owned spine does. What this test protects
+  // is the DELEGATION — native_boot must not grow a frame body or a fallback of its own — so the
+  // assertion follows the delegation to where it now lives rather than pinning one spelling of it.
+  CHECK(source.find("machine.prepareProduct()") != std::string::npos);
   const size_t step = source.find("FrameLoopShell{}.step(");
   const size_t prompt = source.find("repl.consumePromptRequest()");
   CHECK(step != std::string::npos);

@@ -1,4 +1,4 @@
-// machine.h — psx::Machine: the boot composition and the frame turn every product shares.
+// machine.h — psx::Machine: the boot composition and the field turn every product shares.
 //
 // WHAT THIS OWNS, and why it had to exist:
 //
@@ -12,7 +12,15 @@
 //
 // So the composition is here, and a title keeps only its FACTS: which runtime policy it installs,
 // where its executable is, what its field step does, and what its frame cap should be.
+//
+// ONE OWNER, NOT TWO SPINES. The framework's own `native_boot_run` composes through this class as
+// well, step for step, so "the product that boots natively" and "the product that owns its loop" are
+// the same sequence with the same obligations. Each step below is explicit and optional: a spine calls
+// the ones it needs, in the measured order, and the classes that own a step (`FrameLoopShell`,
+// `FieldTurn`, `crt0_setup`, `psx::state`) keep their own contracts.
 #pragma once
+
+#include "field_turn.h"
 
 #include <cstdint>
 #include <string>
@@ -38,15 +46,71 @@ public:
   // leaves them, before any guest code can run. Call it once, before `prepare`.
   void bindDevices();
 
+  // The same binders WITHOUT the device initialisers, for a spine that has already initialised them
+  // (`native_boot`'s game_main runs after the title's own init) or must not re-initialise them. The
+  // GTE/SPU/MDEC/XA binding is what this exists for: those four reached a PROCESS-GLOBAL through the
+  // vendored entry points, and the binding must name the Core that is running, not the one that booted
+  // last. `FrameLoopShell::step` re-checks it per field anyway; doing it before the first guest call is
+  // what keeps a title's own boot prologue off the wrong instance.
+  void bindSession();
+
+  // The one-time configuration audit — every active PSXPORT_* knob, once, before anything reads one.
+  void reportConfigurationOnce();
+
+  // The host's own measuring instruments: the caller-attributing host census, and the active-config
+  // dump. Armed here, before any frame runs, because an instrument that cannot produce evidence is
+  // worse than none — its existence answers "can we measure this?" with a yes.
+  void armHostDiagnostics();
+
+  // The render path (native | gte | psx) resolved from the configuration ladder, at the shared Core
+  // setup boundary. A harness may deliberately replace it after this call.
+  void installRenderPath();
+
+  // The boot movies the title declares (`GameConfig::bootFmv`), played before the guest's own crt0 —
+  // and ONLY those: an all-null list is a real answer ("this title plays no movie natively"), not a
+  // missing value. `PSXPORT_NO_FMV` is the diagnostic control; whether a movie PLAYS is game
+  // behaviour, and is never inferred from the render sink.
+  void playBootMovies();
+
+  // Black the display framebuffer before the title builds, so the title's first frames (drawn over
+  // several fields while its background/font/CLUT upload) never composite over a stale splash or an
+  // FMV last frame. Deterministic, no timer.
+  void clearDisplayForFrontEnd();
+
+  // The guest crt0: apply the derived boot group (bss, stack, heap, `gp`, `a0`/`a1`, libc init) with
+  // the completeness refusal and the shipped-constants cross-check. Refuses the whole boot rather than
+  // fabricating guest state; `crt0_setup` owns that decision and `crt0_boot.h` the derivation.
+  void setupGuestBoot();
+
+  // `PSXPORT_LOAD_STATE`: resume a whole-machine state BEFORE the first field, so a headless tool
+  // starts inside a level instead of replaying thousands of fields. Fatal on failure rather than a
+  // fall back to power-on: a run that silently rebooted after a broken path would spend its budget
+  // re-deriving the state it was asked to start from and produce a plausible-looking trace.
+  void applyConfiguredState();
+
+  // The same, reporting instead of terminating — the form a test or a tool with its own error policy
+  // calls. False carries the reason; the state was not applied.
+  bool tryApplyConfiguredState(std::string &error) const;
+
   Game &game() const {
     return game_;
   }
   Core &core() const;
 
+  // The title's own overrides: which guest leaves are native. Registered BEFORE the preflight, because
+  // the preflight reports a product with no finite frame owner and a title's own registration is
+  // allowed to be part of answering that.
+  void registerTitleOverrides();
+
+  // The frame-loop preflight: refuses a product with no finite frame owner before any guest code can
+  // dispatch. Separate from `registerTitleOverrides` because the framework's own spine does NOT
+  // register the title's overrides — a standalone game main installs its clusters before entering it.
+  void prepareProduct();
+
   // Everything between the binds and the first field, in the order a product must do it: the title's
-  // own overrides (which may already need the binds), then the frame-loop preflight that refuses a
-  // product with no finite frame owner. A title whose native leaves it registers itself instead calls
-  // the preflight on its own; the titles that used to spell both lines out have nothing left to spell.
+  // own overrides (which may already need the binds), then the frame-loop preflight. A title whose
+  // native leaves it registers itself calls the two halves itself; the titles that used to spell both
+  // lines out have nothing left to spell.
   void prepare();
 
   // The live control channel and the dynarec store observer, armed together and before the first
@@ -59,9 +123,10 @@ public:
   // bound while nothing read it.
   std::uint32_t attachControlChannel(std::uint32_t requestedFrameCap);
 
-  // One display field: honour a client pause, run the title's finite frame step, then service at most
-  // one queued command. The pause is honoured BEFORE the step and the command serviced AFTER it, so a
-  // read never observes a half-completed command.
+  // One display field: the shared per-field services (`FieldTurn`), then the title's finite frame step
+  // (`FrameLoopShell::step`, which takes the frame's capture and enforces the one-presentation-per-field
+  // contract). The pause is honoured BEFORE the body and the command serviced AFTER it, so a read never
+  // observes a half-completed command.
   void stepFrame(std::uint32_t frame);
 
   // The product loop, for a title with no loop of its own: `stepFrame` until the cap, a window close,
@@ -71,8 +136,15 @@ public:
   // hung guest loop never returns to this loop at all.
   void run(std::uint32_t frameCap = 0);
 
+  // The obligations a finished run owes WHATEVER ended it: the whole-run guest ledger, the guest-call
+  // census, and the after-loop RAM dump when the title asked for one. The dump is here rather than in a
+  // spine because it is a path some products never reach — it is the MID-RUN dump (`FieldTurn`) that
+  // answers a question about live guest state.
+  void reportRunEnd();
+
 private:
   Game &game_;
+  FieldTurn fieldTurn_;
 };
 
 } // namespace psx

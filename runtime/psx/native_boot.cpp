@@ -6,27 +6,21 @@
 // watchdog, and frame-budget scaffolding around that delegation.
 #include "c_subsys.h"
 #include "cfg.h"
-#include "config.h"      // psx::config::report_once — arms the exit audit at BOOT, for every port
 #include "config_vars.h" // psx::config::render_path() / cv_repl — knobs through the CVar ladder
 #include "core.h"
-#include "crt0_boot.h"        // crt0_plan/crt0_apply — THE crt0 derivation + the required/ABSENT decision
-#include "crt0_verify.h"      // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
-#include "dbg_server.h"       // debug_server_port — the one reading of PSXPORT_DEBUG_SERVER
-#include "execution_ledger.h" // logRunEndLedger — the whole-run guest ledger
+#include "dbg_server.h" // debug_server_port — the one reading of PSXPORT_DEBUG_SERVER
+#include "field_turn.h" // psx::FieldTurn — the per-field services this loop owes
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_iface.h"
 #include "gpu_vk.h" // gpu_vk_windowed — the windowed/headless discriminator
 #include "guest_call.h"
-#include "guest_call_census.h"
 #include "hw_bind.h" // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
-#include "memcensus.h"
+#include "machine.h" // psx::Machine — the one boot composition this spine and every title share
 #include "mods.h"
 #include "ot_attr.h" // OtAttr — the producer-census tables (armed by Game's ctor, game.cpp)
 #include "repl.h"
-#include "state/state_command.h" // PSXPORT_LOAD_STATE — resume a whole-machine state before field 1
-#include "store_observe.h"       // store_observe_configure — the one reading of PSXPORT_STORE_OBSERVE
-                                 // (the REPORT is emitted by ~LightrecExecutor, on every exit path)
+// (the REPORT is emitted by ~LightrecExecutor, on every exit path)
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,76 +31,8 @@ static void game_main(Core *c);
 
 // Native crt0 implementation of recovered FUN_800896E0 behavior: clear BSS, initialize the heap,
 // then call game_main. The libc/heap initialization at 0x80089860 remains a guest call.
-// crt0 register/heap setup only (no main call) — shared by native_crt0 and the dual-core harness.
-// THIS FUNCTION PERFORMS NO ARITHMETIC. Every value it applies comes from crt0_plan (crt0_boot.h),
-// which is the one place the derivation, the required/absent decision and the refusal live — so the
-// hermetic test (tests/test_crt0_boot_group.cpp) exercises the code that SHIPS rather than a helper
-// beside it. Keep it that way: a computation added here is a second copy by definition.
-static void crt0_setup(Core *c) {
-  const GuestProgramImage *image = c->guestProgramImage;
-  // The two words the guest crt0 loads. Read before the .bss clear, exactly as the guest does — and
-  // read through the plan's inputs rather than inside it, so the plan stays pure and testable.
-  const uint32_t stackTopWord = image ? c->mem_r32(image->stackTopWordAddress) : 0u;
-  const uint32_t reserveWord = image ? c->mem_r32(image->stackReserveWordAddress) : 0u;
-  const Crt0Plan p = crt0_plan(image, stackTopWord, reserveWord, "crt0_setup");
-  if (!p.ok) {
-    // crt0_plan has already named the missing fields and its denominator. Refuse before mutating any
-    // guest state.
-    lucent::error("crt0",
-                  "boot ABORTED: the game's crt0 boot group is incomplete (see above). No "
-                  "guest state has been modified.");
-    exit(1);
-  }
-  // CROSS-CHECK THE SHIPPED CONSTANTS AGAINST THE GUEST'S OWN crt0 BYTES, before applying any of them.
-  // This is the gate that was missing: every field above is a MEASURED value hand-copied into the game's
-  // derived runtime, and nothing compared the copy to the measurement. crt0_audit re-derives the group
-  // from the instruction stream at image->crt0Entry and refuses a CONFIRMED disagreement (crt0_verify.h).
-  if (!crt0_audit(
-          image,
-          p,
-          [c](uint32_t a) {
-            return c->mem_r32(a);
-          },
-          "crt0_setup")) {
-    lucent::error("crt0",
-                  "boot ABORTED: the shipped crt0 boot group DISAGREES with the guest's own "
-                  "crt0 (see above). No guest state has been modified.");
-    exit(1);
-  }
-  // a1 = heap size USED TO BE MISSING: libcInit is the BIOS A(39h) InitHeap(ptr, size) thunk in every
-  // consumer measured so far, and hle.cpp's `case 0x39` copies a1 straight into Hle::heap_size — the
-  // capacity every BIOS malloc is checked against. Log the incoming register value beside the
-  // measured capacity so the diagnostic exposes a caller that failed to initialize a1.
-  lucent::info("crt0",
-               "libcInit 0x{:08X}: a0=0x{:08X} a1=0x{:X} (a1 held 0x{:08X} = {} before crt0 set "
-               "it — that stale value is the heap capacity this port passed to InitHeap before "
-               "the r[5] fix; a difference here is the bug's blast radius)",
-               p.libcInit,
-               p.a0,
-               p.a1,
-               c->r[5],
-               c->r[5]);
-  // The write sequence itself comes from crt0_apply, NOT from lines here: the defect was in the
-  // application (an unconditional store through a zero pointer), so the sequence lives in the tested
-  // header and this is only the adapter that binds it to a Core.
-  struct CoreWriter {
-    Core *c;
-    void w32(uint32_t a, uint32_t v) {
-      c->mem_w32(a, v);
-    }
-    void reg(int i, uint32_t v) {
-      c->r[i] = v;
-    }
-    void call(uint32_t entry) {
-      psx::cpu::dispatchGuestToReturn0(
-          *c, entry, psx::cpu::ExecutionBudget::currentTurn(*c), "native crt0 libc initialization");
-    }
-  } w{c};
-  crt0_apply(p, w);
-}
-
 static void native_crt0(Core *c) {
-  crt0_setup(c);
+  psx::Machine{*c->game}.setupGuestBoot();
   game_main(c);
 }
 
@@ -132,21 +58,17 @@ static void game_init(Core *c) {
 // hardware-service tables are populated here. Render policy is likewise resolved at the shared Core
 // setup boundary; a harness may deliberately replace it after this call.
 void dc_boot_init(Core *c) {
-  psx::config::report_once();
-  void gte_bind(Core *);
-  gte_bind(c);
-  c->rsub.projprim.bind(c);
-  spu_bind(c);
-  mdec_bind(c);
-  xa_bind(c);
+  psx::Machine machine{*c->game};
+  machine.reportConfigurationOnce();
+  machine.bindSession();
   c->runtime->registerOverrides(*c->game);
   // Harnesses construct their own Game objects, so every per-Game hardware-service table must be
   // populated here as well as on the standalone main() path. Register the CD command/read seams
   // before the generic BIOS-library waits, matching the standalone boot order.
   c->game->cd.overridesInit();
-  FrameLoopShell{}.prepareProduct(*c->game);
-  render_path_install(c);
-  crt0_setup(c);
+  machine.prepareProduct();
+  machine.installRenderPath();
+  machine.setupGuestBoot();
   game_init(c);
 }
 void dc_step_frame(Core *c, uint32_t f) {
@@ -154,15 +76,15 @@ void dc_step_frame(Core *c, uint32_t f) {
 }
 
 static void game_main(Core *c) {
+  // The boot composition is `psx::Machine`'s, step for step, exactly as a title-owned spine calls it.
+  // This spine adds no step of its own: the ones it needs and the ones a title needs are the same ones,
+  // which is what makes "the product that boots natively" and "the product that owns its loop" the
+  // same sequence rather than two that agree today.
+  psx::Machine machine{*c->game};
   // Arm the config audit before title initialization. report_once() is idempotent; the complete dump
   // remains after the loop for bounded diagnostic runs.
-  psx::config::report_once();
-  void gte_bind(Core *);
-  gte_bind(c);              // bind this core's GTE before the init prefix / frame loop
-  c->rsub.projprim.bind(c); // and this core's native depth-cache (class ProjPrim on Render)
-  spu_bind(c);              // and this core's SPU
-  mdec_bind(c);             // and this core's MDEC
-  xa_bind(c);               // and this core's XA streamer
+  machine.reportConfigurationOnce();
+  machine.bindSession(); // this core's GTE / depth-cache / SPU / MDEC / XA, before the init prefix
   game_init(c);
   // PSXPORT_LOAD_STATE: resume a whole-machine state BEFORE the first field, so a headless tool
   // starts inside a level instead of replaying the thousands of fields between power-on and it.
@@ -172,13 +94,7 @@ static void game_main(Core *c) {
   // entire budget re-deriving the state it was asked to start from, produce a plausible-looking
   // trace, and be reported as a working run. The path is resolved through the configuration owner,
   // so nothing here reads the environment itself.
-  {
-    std::string stateError;
-    if (!psx::state::applyConfiguredState(*c, stateError)) {
-      lucent::error("native_boot", "{}", stateError);
-      std::exit(1);
-    }
-  }
+  machine.applyConfiguredState();
   // the measured input/audio/simulation/render/present order and any cooperative task service.
 
   // Frame budget: an explicit PSXPORT_NATIVE_FRAMES always wins (headless tests). Otherwise, when
@@ -228,15 +144,18 @@ static void game_main(Core *c) {
   if (!repl_mode && !gpu_vk_windowed() && debug_server_live()) {
     nframes = 0;
   }
+  // The live control channel, the store observer and the cap THIS run must use, armed together by the
+  // same owner a title-owned spine calls: a surface nobody opens is not a surface. `attach` answers 0
+  // (uncapped) when a client is going to drive, which is exactly the rule the block above applied by
+  // hand — the run must not end before the client that is meant to steer it connects.
+  const std::uint32_t clientCap = machine.attachControlChannel(nframes);
+  nframes = clientCap;
   lucent::info(
       "native_boot", "entering native frame loop ({})", nframes ? "capped" : "interactive (until window close)");
-  c->game->dbg_server.start(c); // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.cpp)
-  // PSXPORT_STORE_OBSERVE: arm the dynarec store observer for this Core. It is HERE, beside the live
-  // endpoint, because a surface nobody calls is not a surface: the first version of
-  // runtime/cpu/store_observe.cpp was compiled, documented, and reachable from nothing — the knob was
-  // linked and audited as known, and no run could ever arm it. Measured 2026-09-27 on Spyro 1, where
-  // `nm` on the product showed both symbols ABSENT because the linker never pulled the object in.
-  store_observe_configure(*c);
+  // The per-field services this loop owes, in the measured order, shared with `psx::Machine` and every
+  // title-owned loop. The REPL budget below and the prompt consume inside the loop stay here: they are
+  // this loop's own mode, not a field's obligation.
+  const psx::FieldTurn fieldTurn;
   long repl_budget = 0; // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
@@ -256,106 +175,40 @@ static void game_main(Core *c) {
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
-    // The policy lives in DbgServer::honourPause because a title's own frame driver owes the same
+    // The pause policy lives in DbgServer::honourPause because a title's own frame driver owes the same
     // behaviour, and two copies of "what a pause does" would be free to disagree.
-    c->game->dbg_server.honourPause(c);
-    watchdog_resume(); // re-arm after idle without falsely claiming this frame completed; the
-                       // completed present switches first-frame grace to the steady budget
+    fieldTurn.beginField(*c);
     FrameLoopShell{}.step(*c, f);
     if (c->game->repl.consumePromptRequest()) {
       repl_budget = 0;
     }
     // The title FrameDriver owns its measured present, pace, and audio order, so this shell loop
-    // performs none of those services around step().
-    // PSXPORT_RAMDUMP_FRAME=N — dump RAM mid-run at native frame N (overlay state during gameplay
-    // differs from end-of-run; needed to disasm the LIVE level/stage overlay at 0x8010/0x8011xxxx).
-    {
-      // The two knob values are held in const references, not `const char *` into a temporary:
-      // `TextVar::get()` returns by VALUE, so a `const char *` bound to `.c_str()` of the temporary
-      // would dangle before the first use. A const reference to a prvalue lifetime-EXTENDS the
-      // temporary, which is both the safe form and the copy-free one the style check requires.
-      const std::string &rdf = psx::config::cv_ramdump_frame.get();
-      if (!rdf.empty() && f == (uint32_t)strtoul(rdf.c_str(), nullptr, 0)) {
-        std::string rd = psx::config::cv_ramdump.get();
-        if (rd.empty()) {
-          rd = "scratch/bin/midrun_ram.bin";
-        }
-        FILE *mf = fopen(rd.c_str(), "wb");
-        if (mf) {
-          fwrite(c->ram, 1, 0x200000, mf);
-          fclose(mf);
-          lucent::info("native_boot", "mid-run RAM dump @frame {} -> {}", f, rd);
-        } else {
-          lucent::error("native_boot",
-                        "mid-run RAM dump @frame {} could not open {} — the path is "
-                        "relative to the working directory, which for an agent run is "
-                        "the repository root",
-                        f,
-                        rd);
-        }
-      }
-    }
-    c->game->dbg_server.service(c); // service one queued live-debug-server command (non-blocking)
+    // performs none of those services around step(). What it DOES owe each field — the pause, the
+    // watchdog re-arm, the mid-run RAM dump, one serviced command — is `psx::FieldTurn`'s, shared with
+    // `psx::Machine` and every title-owned loop, so a loop cannot silently omit one of them.
+    fieldTurn.endField(*c, f);
   }
-  // The GUEST leg's denominator, printed next to the census so "0 guest prims" can be told apart from
-  // "the span feed recorded nothing". Without it, an armed feed that silently did no work measures as
-  // free and reads as working.
-  lucent::info("producers",
-               "run-end: OtAttr spans recorded {} (overflow {}) — the guest leg's feed",
-               c->rsub.otAttr.spanCount(),
-               c->rsub.otAttr.spanOverflow());
-  // THE JOIN RATE, printed next to the census so a row list can never be read as a comparison it is not.
-  // Resolved = the guest prim landed in the row a native producer keys; unresolved = no frame in the
-  // searched window is claimed, i.e. THIS EFFECT HAS NO NATIVE PRODUCER (the DB's actual answer, not a
-  // failure); too-early = the claim set was still empty, so the prim could not be resolved either way and
-  // must not be counted as "no native producer".
-  // THE REPLAY'S OWN DENOMINATOR. "frame loop done" alone cannot distinguish a run that followed the
-  // whole recording from one the frame cap cut off, or one whose route departed from the recording
-  // and stalled — and those mean opposite things about every number the run produced.
-  c->game->pad.reportReplayRunEnd();
-  // THE WHOLE-RUN GUEST LEDGER. A title that never destroys its Game never reaches the executor's
-  // destructor telemetry, so this is the report every clean run gets: translated blocks and
-  // instructions, cache hits and misses, invalidations by source, fallback by every reason.
-  psx::cpu::logRunEndLedger(c->lightrecExecutor().counters());
-  // The guest-call census, with the same denominators and beside the ledger: a run that resumed no
-  // call has to SAY so, because silence and "nothing was ever long enough" look identical. It is
-  // reported from the Core that made the calls, so a process running several machines keeps their
-  // numbers apart.
-  c->guestCallCensus().log("frame loop done");
-  lucent::info("native_boot", "frame loop done");
-  // The store observer's report is NOT here any more: it now lives in ~LightrecExecutor, beside the
-  // fallback telemetry, because this function's return is not a path every product takes. Measured
-  // 2026-09-27 on Spyro 1 — an armed observer printed its watching lines and then no report at all,
-  // through two drivers and a clean exit, because this line was the report's only call site. Called
-  // from here as well it would have double-reported on the paths that DO return, which is how a
-  // denominator stops being one.
-  // NOTE: this is the END-OF-RUN dump, and it only happens on the paths that return from the frame
-  // loop — not every product does (measured 2026-09-27 on Spyro 1, which never prints
-  // `frame loop done`). A missing file from this knob is therefore NOT evidence that RAM dumping is
-  // broken; use PSXPORT_RAMDUMP_FRAME=N, or the live channel's `dumpram <path>`, which work mid-run.
-  const std::string &rd = psx::config::cv_ramdump.get();
-  if (!rd.empty()) {
-    FILE *f = fopen(rd.c_str(), "wb");
-    if (f) {
-      fwrite(c->ram, 1, 0x200000, f);
-      fclose(f);
-      lucent::info("native_boot", "dumped 2MB RAM -> {}", rd);
-    } else {
-      lucent::error("native_boot", "end-of-run RAM dump could not open {}", rd);
-    }
-  }
+  machine.reportRunEnd();
 }
 
 // Wired from the title bootstrap when native boot is selected. Enters framework crt0 and then the
 // host-owned product loop.
 void native_boot_run(Core *c) {
+  // The whole spine composes `psx::Machine`, the same owner a title-owned loop composes, so there is one
+  // boot sequence with one set of obligations rather than a framework spine and a title spine that
+  // agree today. Each step below is the same call, in the same order, as before this existed.
+  psx::Machine machine{*c->game};
   // Refuse before diagnostics, FMVs, or a title boot hook can dispatch a non-returning guest main.
   // Product execution has exactly one frame owner: the title's finite native FrameDriver.
-  FrameLoopShell{}.prepareProduct(*c->game);
+  // NOTE: the preflight only. Standalone game mains install their override clusters immediately before
+  // entering here, so this spine must NOT register them; `Machine::prepare` (both halves) is the
+  // composition for a product that has not installed them yet.
+  machine.prepareProduct();
 
   // Standalone game mains install their override clusters immediately before entering here. Developer
   // diagnostics must install last or a working game override can silently displace them. dc_boot_init
   // performs the same ordering for dual-core and selftest boot paths.
+  //
   // The HOST sampling profiler (PSXPORT_PROF). It was written, documented, given a companion report
   // tool, compiled into the library — and CALLED FROM NOWHERE, so `PSXPORT_PROF=1` came back from the
   // exit audit as "set for this whole run and NOTHING ever read it". An instrument that cannot produce
@@ -364,62 +217,11 @@ void native_boot_run(Core *c) {
   // WHICH CALL SITES MOVE THE BYTES (PSXPORT_MEMCENSUS). hostprof answers "the PC is inside memmove",
   // which has now produced two wrong conclusions on kanban #118 because it cannot name the CALLER.
   // Armed here, beside the profiler, for the same reason.
-  memcensus_init();
-  {
-    void cfg_dump(void);
-    cfg_dump();
-  } // log active PSXPORT_* config once (see docs/config.md)
-  render_path_install(c); // native | gte | psx, from the CVar ladder + aliases (render_path.cpp)
-  // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
-  // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
-  // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the
-  // movies are played here with our self-contained native FMV player (native_fmv.c).
-  // SPLIT OF OWNERSHIP: only LOGO.STR (the Whoopee logo, which plays BEFORE the front-end overlay is
-  // even loaded) is played at boot. OP.STR (the opening movie) is OWNED BY THE FRONT-END — the DEMO
-  // menu machine's states 4..7 ARE the OP.STR sequence (demo.cpp demo_menu_machine), which now
-  // plays it via fmv.play. Playing OP here too made it play TWICE (boot + front-end) — the
-  // "FMV repeats" bug. Boot plays LOGO; the front-end plays OP -> SCEA->LOGO->OP->title, no repeat.
-  // Skip the intro FMVs on PSXPORT_NO_FMV ONLY.
-  //
-  // This used to read `|| cfg_on("PSXPORT_VK_HEADLESS")`, and that one term cost a user-reported bug
-  // a whole day. USER RULE: "Headless and windowed should never be different code paths" — headless
-  // is the same pipeline with a different FINAL SINK (a readback instead of a swapchain present),
-  // and whether a movie PLAYS is game behaviour, not a sink concern.
-  //
-  // Concretely: the user reported "boots into black screen, missing splash or FMV". Every
-  // measurement taken to investigate it was headless, so every one of them SKIPPED THE INTRO MOVIES
-  // BY CONSTRUCTION. The instrument could not produce the failing answer, the numbers came back
-  // green, and the bug was reported fixed while the user still saw a black screen. A run that
-  // silently does less than the real program is not a fast probe, it is a lie with a good excuse.
-  //
-  // PSXPORT_NO_FMV is the explicit diagnostic control for a probe that does not need movies, and its log
-  // then says so. What is not acceptable is inferring the intent from the render sink.
-  int skip_fmv = cfg_on("PSXPORT_NO_FMV");
-  const char *nf_ov = cfg_str("PSXPORT_NO_FMV");
-  if (nf_ov && atoi(nf_ov) == 0 && *nf_ov) {
-    skip_fmv = 0; // explicit PSXPORT_NO_FMV=0 forces FMVs on
-  }
-  // The list comes from GameConfig::bootFmv — it used to be a hardcoded path, which is the first
-  // consumer's file and nothing a second port could ever open. An all-null list is a real answer
-  // ("this game's boot plays no movie natively"), not a missing value, so it is not a warning.
-  const char *const *boot_fmv = c->cfg ? c->cfg->bootFmv : nullptr;
-  const int n_boot_fmv = boot_fmv ? (int)(sizeof c->cfg->bootFmv / sizeof c->cfg->bootFmv[0]) : 0;
-  if (!skip_fmv && boot_fmv && boot_fmv[0]) {
-    for (int i = 0; i < n_boot_fmv && boot_fmv[i]; i++) {
-      lucent::info("native_boot", "playing boot FMV {}/{}: {}", i + 1, n_boot_fmv, boot_fmv[i]);
-      c->game->fmv.play(boot_fmv[i]);
-    }
-  } else if (!skip_fmv) {
-    lucent::info("native_boot", "no boot FMV configured (GameConfig::bootFmv is empty) — nothing to play");
-  } else {
-    lucent::warn("native_boot", "skipping intro FMVs (headless/NO_FMV)");
-  }
-  // Clean hand-off to the front-end (issues #7/#11): black the display FB before the title builds, so the
-  // title's first frames (drawn over several frames while its background/font/CLUT upload) never composite
-  // over the stale SCEA white-fill or an FMV last-frame. Covers the no-FMV-ran case too (the stub splash
-  // fill is still resident in s_vram even when both intros are skipped). Deterministic, no timer.
-  void gpu_clear_display(Core *);
-  gpu_clear_display(c);
+  // The host census that names the CALLER of a host PC, and the active-config dump (docs/config.md).
+  machine.armHostDiagnostics();
+  machine.installRenderPath(); // native | gte | psx, from the CVar ladder + aliases (render_path.cpp)
+  machine.playBootMovies();
+  machine.clearDisplayForFrontEnd();
   lucent::info("native_boot", "entering native crt0 (PC-driven)");
   native_crt0(c);
   lucent::info("native_boot", "returned from native crt0");

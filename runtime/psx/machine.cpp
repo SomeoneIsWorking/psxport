@@ -1,17 +1,26 @@
 #include "machine.h"
 
 #include "c_subsys.h" // mdec_init — the vendored MDEC device's own initializer
+#include "cfg.h"      // cfg_dump / cfg_on / cfg_str
+#include "config.h"   // psx::config::report_once — arms the exit audit at BOOT, for every port
 #include "core.h"
+#include "crt0_boot.h" // crt0_setup — the derived guest crt0 group's applier
 #include "dbg_server.h"
 #include "execution_ledger.h"
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "gpu_native_internal.h" // gpu_clear_display
 #include "guest_call_census.h"
 #include "host_input.h"
 #include "hw_bind.h"
+#include "memcensus.h"
 #include "render_mode.h"
+#include "state/state_command.h"
 #include "store_observe.h"
+
+#include <cstdio>
+#include <cstdlib>
 
 #include <lucent/log.h>
 
@@ -54,15 +63,97 @@ void Machine::bindDevices() {
   bindPerCoreDevices(game_);
 }
 
-void Machine::prepare() {
+void Machine::bindSession() {
+  Core &core = this->core();
+  gte_bind(&core);
+  core.rsub.projprim.bind(&core);
+  spu_bind(&core);
+  mdec_bind(&core);
+  xa_bind(&core);
+}
+
+void Machine::reportConfigurationOnce() {
+  psx::config::report_once();
+}
+
+void Machine::armHostDiagnostics() {
+  memcensus_init();
+  cfg_dump();
+}
+
+void Machine::installRenderPath() {
+  render_path_install(&core());
+}
+
+void Machine::playBootMovies() {
+  // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
+  // title/menu. The game's own STR streaming times out under this runtime (its CD-streamed FMV sectors
+  // never reach its StrPlayer), so the movies are played with the self-contained native FMV player.
+  //
+  // SPLIT OF OWNERSHIP: only LOGO.STR (which plays BEFORE the front-end overlay is even loaded) is
+  // played at boot. OP.STR is owned by the front-end, whose DEMO menu machine states 4..7 ARE the OP.STR
+  // sequence; playing OP here too made it play TWICE (boot + front-end) — the "FMV repeats" bug.
+  //
+  // PSXPORT_NO_FMV is the explicit diagnostic control, and `PSXPORT_NO_FMV=0` forces the movies back
+  // on. What is not acceptable is inferring the intent from the render sink: headless is the same
+  // pipeline with a different final sink, so a headless probe that silently skipped the movies could
+  // not reproduce the failing behaviour it was sent to investigate.
+  const bool skip = cfg_on("PSXPORT_NO_FMV");
+  const char *override = cfg_str("PSXPORT_NO_FMV");
+  const bool moviesPlay = (override != nullptr && *override != '\0' && atoi(override) == 0) ? true : !skip;
+  const char *const *bootFmv = core().cfg ? core().cfg->bootFmv : nullptr;
+  const int count = bootFmv ? static_cast<int>(sizeof core().cfg->bootFmv / sizeof core().cfg->bootFmv[0]) : 0;
+  if (!moviesPlay) {
+    lucent::warn("machine", "skipping intro FMVs (headless/NO_FMV)");
+    return;
+  }
+  if (bootFmv == nullptr || bootFmv[0] == nullptr) {
+    lucent::info("machine", "no boot FMV configured (GameConfig::bootFmv is empty) — nothing to play");
+    return;
+  }
+  for (int i = 0; i < count && bootFmv[i] != nullptr; ++i) {
+    lucent::info("machine", "playing boot FMV {}/{}: {}", i + 1, count, bootFmv[i]);
+    game_.fmv.play(bootFmv[i]);
+  }
+}
+
+void Machine::clearDisplayForFrontEnd() {
+  gpu_clear_display(&core());
+}
+
+void Machine::setupGuestBoot() {
+  crt0_setup(core());
+}
+
+bool Machine::tryApplyConfiguredState(std::string &error) const {
+  return psx::state::applyConfiguredState(core(), error);
+}
+
+void Machine::applyConfiguredState() {
+  std::string error;
+  if (!tryApplyConfiguredState(error)) {
+    lucent::error("machine", "{}", error);
+    std::exit(1);
+  }
+}
+
+void Machine::registerTitleOverrides() {
   if (!game_.runtime) {
     lucent::error("machine", "Game has no installed GameRuntime; refusing to compose a product boot");
     std::abort();
   }
+  game_.runtime->registerOverrides(game_);
+}
+
+void Machine::prepareProduct() {
+  FrameLoopShell{}.prepareProduct(game_);
+}
+
+void Machine::prepare() {
   // The title's overrides first: the preflight below reports a product with no finite frame owner, and
   // a title's own registration is allowed to be part of answering that.
-  game_.runtime->registerOverrides(game_);
-  FrameLoopShell{}.prepareProduct(game_);
+  registerTitleOverrides();
+  prepareProduct();
 }
 
 std::uint32_t Machine::attachControlChannel(std::uint32_t requestedFrameCap) {
@@ -77,9 +168,9 @@ std::uint32_t Machine::attachControlChannel(std::uint32_t requestedFrameCap) {
 }
 
 void Machine::stepFrame(std::uint32_t frame) {
-  game_.dbg_server.honourPause(&core());
+  fieldTurn_.beginField(core());
   FrameLoopShell{}.step(core(), frame);
-  game_.dbg_server.service(&core());
+  fieldTurn_.endField(core(), frame);
 }
 
 void Machine::run(std::uint32_t frameCap) {
@@ -96,10 +187,29 @@ void Machine::run(std::uint32_t frameCap) {
       break;
     }
   }
+  reportRunEnd();
+}
+
+void Machine::reportRunEnd() {
   // The whole-run guest ledger and the guest-call census, whatever ended the run: a product whose own
   // spine was abandoned, or whose loop returned, gets the same denominators as one that ended itself.
   psx::cpu::logRunEndLedger(core().lightrecExecutor().counters());
   core().guestCallCensus().log("product loop ended");
+  // PSXPORT_RAMDUMP: the AFTER-loop dump. This is not the diagnostic to reach for — a run that ends by
+  // exiting its process loop never returns here, and a missing file from this knob is therefore not
+  // evidence that RAM dumping is broken. PSXPORT_RAMDUMP_FRAME (FieldTurn, mid-run) is.
+  const std::string &path = psx::config::cv_ramdump.get();
+  if (path.empty()) {
+    return;
+  }
+  FILE *dump = fopen(path.c_str(), "wb");
+  if (dump == nullptr) {
+    lucent::error("machine", "end-of-run RAM dump could not open {}", path);
+    return;
+  }
+  fwrite(core().ram, 1, 0x200000, dump);
+  fclose(dump);
+  lucent::info("machine", "dumped 2MB RAM -> {}", path);
   lucent::info("machine", "product frame loop done");
 }
 

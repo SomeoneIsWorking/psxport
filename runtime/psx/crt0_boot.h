@@ -50,6 +50,9 @@
 // never given an address" are therefore different lines, which is the entire point.
 #pragma once
 #include "guest_program_image.h"
+
+class Core;
+
 #include <lucent/log.h>
 #include <stdint.h>
 #include <stdio.h> // snprintf
@@ -259,6 +262,12 @@ crt0_plan(const GuestProgramImage *image, uint32_t stackTopWord, uint32_t stackR
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
+// crt0_setup — APPLY the derived plan to a Core: the two guest crt0 words, the completeness refusal,
+// the shipped-constants cross-check against the guest's own crt0 bytes, and then crt0_apply's own
+// write sequence. Defined in crt0_boot.cpp; it performs no arithmetic, because every value it writes
+// comes from crt0_plan above.
+void crt0_setup(Core &core);
+
 // crt0_apply — APPLY a plan. Also here, and also templated, for ONE reason: the defect this file
 // exists to fix was not in the arithmetic, it was in the APPLICATION — an unconditional store
 // through the optional heap-size address when the address was absent. A test that only checked the plan would assert
