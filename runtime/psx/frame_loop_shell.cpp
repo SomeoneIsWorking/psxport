@@ -5,6 +5,7 @@
 #include "core.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "gpu_native_internal.h"
 
 #include <cstdlib>
 #include <lucent/log.h>
@@ -65,6 +66,13 @@ void FrameLoopShell::step(Core &core, uint32_t frame) const {
     bound = &core;
   }
   requireDriver(game).stepFrame(core, frame);
+  // THE FRAME'S CAPTURES, HERE, because this is where the frame's presentation ends. A frame can have
+  // more than one presenter — the main one, and gpu_vk_present_image when a native movie is playing —
+  // and in the movie case the second runs last and is what the window shows. Capturing at the tail of
+  // whichever presenter happened to be main therefore read the movie's frame as the empty guest-VRAM
+  // composite: black, on every frame of a movie (issue 0040). Both presenters now only present; the
+  // capture is taken once, here, and reads whatever the turn ended showing.
+  gpu_present_frame_capture(&core);
   const uint64_t fenceAfter = game.presentation.fence();
   if (fenceAfter != fenceBefore + 1u) {
     lucent::error("frame-loop",

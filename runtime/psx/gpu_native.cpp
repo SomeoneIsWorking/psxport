@@ -3001,19 +3001,29 @@ void GpuState::frame_finalize(Core *core) {
     void gp0raw_close_if_done(int);
     gp0raw_close_if_done(s_frame);
   } // PSXPORT_GP0RAW: flush + report counts
-  shot_triggers(core, s_frame); // PSXPORT_SHOT_AT / PSXPORT_PRESENT_SHOT_AT — every presenter reaches here
   gpu_beetle_frame_report(frame_just_ended, s_vram, VRAM_W, VRAM_H, prims_this_frame); // oracle diff + feed census
 }
-// ---- capture triggers, at the ONE point every present goes through ---------------------------------
-// These live here, called from the tail of gpu_present_ex, rather than in gpu_present — and that is a
-// correctness fix, not tidying. GpuState::gpu_present is NOT the only presenter: Fps60::present_vk
-// calls gpu_present_ex directly (fps60.cpp:380), and a port running fps60 never reaches gpu_present at
-// all (Tomba2Engine ships fps60=1). So both capture instruments were SILENTLY INERT on that port —
-// MEASURED 2026-08-05: PSXPORT_SHOT_AT over 2802 presents produced zero files and zero log lines,
-// while the same binary with fps60=0 captured normally. That is a diagnostic that can print nothing,
-// which this project treats as a lying instrument: "no capture" and "capture not wired here" are
-// indistinguishable on screen. gpu_present_ex is the chokepoint BOTH presenters share.
-// No behaviour change when the env vars are unset, which is every normal run.
+// ---- capture triggers: ONE point per FRAME, the end of the frame's presentation --------------------
+// These ran at the tail of gpu_present_ex, which was correct only while gpu_present_ex was the last
+// presenter of a frame. It is not: a native movie presents through gpu_vk_present_image, which runs
+// AFTER this tail, and during a movie the guest draws nothing, so a capture taken here read the empty
+// guest-VRAM composite — black, on every frame of a movie that was decoding and presenting the whole
+// time (issue 0040).
+//
+// So the trigger moved to the single point at which the frame's presentation is over:
+// FrameLoopShell::step, after stepFrame has returned and the presentation fence has been checked to
+// have advanced exactly once. Both presenters now only present, and the capture reads whatever the
+// turn ended showing, which is the same thing the window shows. gpu_present_frame_capture() below is
+// that entry point.
+//
+// gpu_present_ex is still the one place both PRESENTERS shared, and that remains true and useful: it
+// is what keeps the two instruments reaching fps60 and the native frame path alike. GpuState::gpu_present is NOT the
+// only presenter: Fps60::present_vk calls gpu_present_ex directly (fps60.cpp:380), and a port running fps60 never
+// reaches gpu_present at all (Tomba2Engine ships fps60=1). So both capture instruments were SILENTLY INERT on that port
+// — MEASURED 2026-08-05: PSXPORT_SHOT_AT over 2802 presents produced zero files and zero log lines, while the same
+// binary with fps60=0 captured normally. That is a diagnostic that can print nothing, which this project treats as a
+// lying instrument: "no capture" and "capture not wired here" are indistinguishable on screen. gpu_present_ex is the
+// chokepoint BOTH presenters share. No behaviour change when the env vars are unset, which is every normal run.
 static void shot_triggers(Core *core, uint32_t frame) {
   // PSXPORT_SHOT_AT=f0,f1,... — dump the presented frame to scratch/screenshots/shot_<f>.ppm at these
   // present indices. gpu_vk_shot already existed but was reachable ONLY from pad-replay
@@ -3076,6 +3086,14 @@ static void shot_triggers(Core *core, uint32_t frame) {
       gpu_vk_present_shot(core, pth); // logs its own path, size, leg and non-black coverage
     }
   }
+}
+
+// THE FRAME'S CAPTURES, once the frame's presentation is complete. Called from FrameLoopShell::step,
+// the one point every frame passes through after its presenters have run. The frame number it reports
+// is the same `s_frame` the old tail-of-present trigger used — that counter is advanced by
+// frame_finalize() inside gpu_present_ex, so it already names this frame by the time the step returns.
+void gpu_present_frame_capture(Core *core) {
+  shot_triggers(core, static_cast<uint32_t>(core->game->gpu.s_frame));
 }
 void GpuState::gpu_present(Core *core) {
   gpu_present_ex(core, 1, GpuPresentCompletion::MainFrame);

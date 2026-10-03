@@ -439,6 +439,11 @@ void gpu_dma2_block(Core *core, uint32_t madr, int count, int to_gpu);
 uint32_t gpu_read_word(Core *core); // GPUREAD (0x1F801810 read) — GP0(0xC0) VRAM->CPU pixel stream
 void gpu_present(Core *core);
 void gpu_present_ex(Core *core, int do_blit);
+// The frame's PSXPORT_SHOT_AT / PSXPORT_PRESENT_SHOT_AT captures, taken once the frame's presentation
+// is COMPLETE — FrameLoopShell::step calls this after stepFrame returns, because the main presenter and
+// the movie presenter are both inside a frame and the second overwrites the first in s_present_img.
+// See the comment above shot_triggers in gpu_native.cpp (issue 0040).
+void gpu_present_frame_capture(Core *core);
 void gpu_clear_display(Core *core); // FMV/splash teardown: black the display FB + present (no stale pixels)
 void gpu_native_load_image(Core *core, int x, int y, int w, int h, uint32_t src);
 int gpu_native_load_vram(Core *core, const char *path);
