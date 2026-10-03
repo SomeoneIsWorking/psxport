@@ -57,7 +57,9 @@ psxport `main` instead. Lightrec stays pinned at `PSXPORT_LIGHTREC_REVISION`
 
 - Never commit disc images, extracted executables, or `/home/<user>/…` paths.
 - Never write run artifacts to `/tmp`; use the repo's gitignored `scratch/`.
-- Some `scratch/` dirs are provisioned disc inputs — don't sweep them: `spyro/scratch/assets/<title>/`,
-  `Tomba2Engine/scratch/bin/`, `toystory2/scratch/{bin,flat,raw}`, `crashbash/scratch/bin/`.
+- Some `scratch/` dirs are provisioned disc inputs: `spyro/scratch/assets/`, `Tomba2Engine/scratch/bin/`,
+  `toystory2/scratch/{bin,flat,raw}`, `crashbash/scratch/bin/`. Each holds a `.scratch-keep` marker, which
+  `scratch_gc.py` honours for the whole subtree; a provisioner that creates such a dir writes the marker.
+  Sweep only your own `scratch/<activity>/`.
 - Disc images live under `/mnt/Boy/ROM/PSX CHD/`; each repo's `.env` points at its disc.
 - One game instance at a time unless isolated; kill by PID, never `pkill`.
