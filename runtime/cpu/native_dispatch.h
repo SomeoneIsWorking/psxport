@@ -89,6 +89,11 @@ tryInstallNativeOverride(Core &core, std::uint32_t guestAddress, std::string_vie
 // that cannot continue without its override must not install half a catalog. Where the refusal is a
 // reportable outcome, use the returning form.
 void installNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function);
+// The companion of `tryInstallNativeOverride`, and the same rule read backwards: resolve `guestAddress`
+// through the active image identity and refuse an address no image owns, rather than removing a key
+// built against an identity that is no longer resident — which would silently remove nothing, or the
+// wrong leaf. Also refuses an address that resolves but has no owner, naming it.
+bool removeNativeOverride(Core &core, std::uint32_t guestAddress);
 ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress);
 ExecutionResult
 invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction function, std::string_view name);

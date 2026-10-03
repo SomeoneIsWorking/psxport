@@ -20,6 +20,9 @@ library never depends on a test oracle.
 | Subsystem | Responsibility | Current location | New work belongs | Entry point / deep doc |
 | --- | --- | --- | --- | --- |
 | Product composition | Construct title-neutral runtime owners and run the host loop | `runtime/psx/native_boot.cpp` | Keep orchestration thin; CPU implementation moves to runtime/cpu/ | `runtime/psx/game_runtime.h` |
+| Shared boot composition and frame turn | The steps every product shares, one at a time: the per-Core device binds in the measured order and the `a0`/`a1` seed; the title's overrides and the frame-loop preflight; the live control channel, the store observer and the frame cap together; one field (honour pause -> the title's finite frame step -> service one command); and the loop with an end-of-run predicate and the run-end ledger | `runtime/psx/machine.{h,cpp}` (`psx::Machine`) | Each step is adopted SEPARATELY — a composition that arrives as a constructor side effect is one no caller can decline deliberately. A title keeps its facts: runtime policy, executable path, disc key, field body, frame cap, boot movies, refusal wording. A title whose loop is not a FrameDriver loop (spider1's `GuestExecution` turns) uses `attachControlChannel` and its own loop | `tests/test_machine_composition.cpp` |
+| Framework boot entry | The declared crt0, the boot movies, the guest boot prologue and the product frame loop | `runtime/psx/native_boot.{cpp,h}` (`native_boot_run`) | `native_boot.h` exists because four consumers hand-declared that prototype at their call sites; a product that needs its own composition uses `psx::Machine` instead | `runtime/psx/native_boot.h` |
+| Host window close | Whether closing the window ends the process or is a request the owning loop answers | `runtime/psx/host_input.{h,cpp}` (`HostInput::quitRequested`, `psx::input::QuitScope`) | While a `QuitScope` is alive the drain records the close; with none it exits the process, which is what every product did before the request existed. Ctrl+C stays the watchdog's force-exit | `tests/test_machine_composition.cpp` |
 | Canonical PSX state | Per-`Core` registers, RAM/scratchpad, devices, and game association | `runtime/psx/core.h`, `runtime/psx/core.cpp` | `Core` owns the composed CPU executor but not its implementation | `runtime/psx/r3000.h` |
 | Lightrec lifetime | One dynarec-default Lightrec state and callback context per `Core` | `runtime/cpu/lightrec_executor.*`, `runtime/cpu/fallback_policy.h` | Keep backend lifetime, fallback admission policy, and complete bounded-fallback telemetry per `Core`; maintained-fork work belongs in the pinned dependency | `docs/migration.md` |
 | Architectural-state bridge | Synchronize GPR, HI/LO, PC/delay state, CP0, GTE, interrupt, and cycle state at every host boundary | `runtime/cpu/lightrec_executor.*`, `runtime/psx/core.*` | The executor bridge, never title wrappers | `docs/migration.md` |
@@ -118,6 +121,17 @@ One chain per turn, hop by hop. A hop that is not in its owner's file is the def
 | A call that must finish now | `callGuestToReturnResuming` / `callOriginalResumingToReturn` | The same loop run to its return address, aborting on a refusal with the owner, entry, return address, turn and reason named. The `Original` form resolves the key and re-establishes the suppression scope on every resume, so guest code inside an original cannot re-enter its own override |
 | The run's measure of those calls | `GuestCallCensus::recordCompleted` -> `log` (`runtime/cpu/guest_call_census.cpp`) | Completed, resumed, deepest turns, cycles — recorded per `Core` by the call that made them, reported once at run end with its denominators |
 
+### Product boot -> the field turn
+
+| Hop | Owner | What it decides |
+| --- | --- | --- |
+| Per-Core devices | `psx::Machine::bindDevices` (`runtime/psx/machine.cpp`) | `init` then `bind` per device in the measured order (GTE first), then `r[4] = 1`, `r[5] = 0`. The title's `Game` and installed runtime already exist — a `Game` reads the installed runtime as it is constructed |
+| Title overrides, then preflight | `psx::Machine::prepare` -> `GameRuntime::registerOverrides` -> `FrameLoopShell::prepareProduct` | Which leaves are native, and refuses a product with no finite frame owner before any guest code can run |
+| Control channel and cap | `psx::Machine::attachControlChannel` -> `DbgServer::attach` + `store_observe_attach` | Whether a client is going to drive the run, and the frame cap this run must use — 0 when one is, because a cap exists to bound an unattended smoke run |
+| One field | `psx::Machine::stepFrame` -> `DbgServer::honourPause` -> `FrameLoopShell::step` (`FrameDriver::stepFrame`) -> `DbgServer::service` | Pause before the frame, command after it, so a read never sees a half-completed command. The frame BODY is the title's |
+| The loop | `psx::Machine::run` | Ends on the cap, a window close (`HostInput::quitRequested`) or a client `quit` (`DbgServer::quitRequested`), then prints the guest ledger and the guest-call census |
+| The framework spine | `native_boot_run` (`runtime/psx/native_boot.cpp`) | The whole spine — crt0, boot movies, boot prologue, loop — for a product with nothing of its own to add |
+
 ### Host input -> pad -> guest
 
 | Hop | Owner | What it decides |
@@ -146,6 +160,7 @@ Every pump site goes through `HostInput`, never through a second drain:
 - A new host-visible execution stop -> runtime/cpu/execution_exit.*
 - Resident/overlay identity or generation -> runtime/cpu/image_identity.*
 - Native override or original-call semantics -> runtime/cpu/native_dispatch.*
+- A boot step or a frame turn every product shares -> runtime/psx/machine.*; a step of the framework spine as a whole -> native_boot_run (declared in runtime/psx/native_boot.h)
 - A native-to-guest call that crosses display fields, its boundary latch, cap and refusals -> runtime/cpu/resumable_guest_call.*
 - The run's count of calls that needed a resume -> `Core::guestCallCensus()` (runtime/cpu/guest_call_census.*), reported once at run end
 - Proving a native override equals its original -> runtime/cpu/override_differential* (armed by PSXPORT_OVERRIDE_DIFF), gated by tools/port/override_differential_gate.py

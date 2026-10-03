@@ -8,6 +8,7 @@
 #include "testutil.h"
 
 #include "core.h"
+#include "execution_control.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "image_identity.h"
@@ -57,6 +58,20 @@ constexpr std::uint32_t addu(std::uint32_t rd, std::uint32_t rs, std::uint32_t r
 constexpr std::uint32_t nop() {
   return 0;
 }
+
+// A second synthetic image whose entry is intercepted by a native leaf that hands the turn BACK
+// instead of doing the guest's work: the shape a movie player, a title's own frame boundary or any
+// other native replacement uses.
+constexpr std::uint32_t kYieldEntry = 0x00050000u;
+constexpr std::uint32_t kYieldResume = kYieldEntry + 4u;
+// The entry word is never executed - the leaf intercepts it - and the resume address is the `jr $ra`
+// AFTER it, with its delay slot. Resuming at the delay slot would run off the end of the image.
+constexpr std::size_t kYieldWords = 3u;
+constexpr std::array<std::uint32_t, kYieldWords> kYieldProgram{
+    nop(),
+    jr(rRa),
+    nop(),
+};
 
 // word 0: save the caller's boundary, run the inner loop, put the boundary back, then return.
 // The inner loop counts 100 iterations in `$v0` and `$a0`, so a small first turn MUST suspend.
@@ -121,6 +136,10 @@ struct Fixture {
     core.imageCatalog().activate("resumable-call-test", {kEntry, kProgramEnd}, 0x52455331u);
     for (std::size_t i = 0; i < kProgram.size(); ++i) {
       core.mem_w32(kEntry + static_cast<std::uint32_t>(i) * 4u, kProgram[i]);
+    }
+    core.imageCatalog().activate("resumable-yield-test", {kYieldEntry, kYieldEntry + 12u}, 0x59454C44u);
+    for (std::size_t i = 0; i < kYieldProgram.size(); ++i) {
+      core.mem_w32(kYieldEntry + static_cast<std::uint32_t>(i) * 4u, kYieldProgram[i]);
     }
     core.imageCatalog().activate("resumable-spin-test", {kSpinEntry, kSpinEntry + 16u}, 0x53504E31u);
     for (std::size_t i = 0; i < kSpinProgram.size(); ++i) {
@@ -194,7 +213,68 @@ static void test_resuming_a_call_that_is_not_pending_is_refused(void) {
   CHECK(step.detail.find("not pending") != std::string::npos);
 }
 
-static void nativeOverride(Core *) {}
+// What the yielding leaf asks for, and where it says to resume. A test global because the leaf is a
+// plain function pointer: the alternative is a per-instance dispatch table for one fixture.
+psx::cpu::ExecutionExitReason g_yieldReason = psx::cpu::ExecutionExitReason::CooperativeYield;
+std::uint32_t g_yieldResumeAddress = kYieldResume;
+unsigned g_yieldLeafCalls = 0;
+
+void yieldingLeaf(Core *core) {
+  ++g_yieldLeafCalls;
+  psx::cpu::requestExecutionExit(*core, psx::cpu::ExecutionResult{g_yieldReason, g_yieldResumeAddress, 0, {}});
+}
+
+void nativeOverride(Core *) {}
+
+// A cooperative yield is a native replacement reporting work it did in HOST code: an FMV frame is
+// decoded, uploaded and drawn without the guest executing an instruction, so it arrives carrying ZERO
+// guest cycles. Refusing that as "no progress" would kill every movie, so the rule the framework
+// applies is per-reason, and this is the case that decides it.
+static void test_a_cooperative_yield_with_no_guest_cycles_suspends_and_the_call_still_finishes(void) {
+  Fixture fixture;
+  Core &core = fixture.game->core;
+  g_yieldReason = psx::cpu::ExecutionExitReason::CooperativeYield;
+  g_yieldResumeAddress = kYieldResume;
+  g_yieldLeafCalls = 0;
+  psx::cpu::installNativeOverride(core, kYieldEntry, "test::cooperativeYield", &yieldingLeaf);
+
+  psx::cpu::ResumableGuestCall call;
+  call.begin(core, "test cooperative yield", kYieldEntry, kOuterReturn, 8u);
+  const psx::cpu::CallStep suspended = call.advance();
+  CHECK(suspended.outcome == psx::cpu::CallOutcome::Suspended);
+  CHECK(suspended.reason == psx::cpu::ExecutionExitReason::CooperativeYield);
+  // It suspended on a turn that consumed no guest cycles at all, which is the whole point.
+  CHECK_EQ(suspended.cycles, 0u);
+
+  const psx::cpu::CallStep finished = call.advance();
+  CHECK(finished.outcome == psx::cpu::CallOutcome::Returned);
+  CHECK_EQ(g_yieldLeafCalls, 1u);
+  // The resume continued in the GUEST at the address the leaf stated, and reached the caller's
+  // boundary: the yield did not become a second dispatch from the top.
+  CHECK_EQ(core.r[31], kOuterReturn);
+  CHECK_EQ(core.pc, kOuterReturn);
+}
+
+// A frame boundary is the guest asking for a field. A call that is mid-body resumes after the field is
+// delivered, which is the same rule as a budget exhaustion and was the second reason a title could not
+// put into one owner.
+static void test_a_frame_boundary_suspends_the_call_and_names_the_reason(void) {
+  Fixture fixture;
+  Core &core = fixture.game->core;
+  g_yieldReason = psx::cpu::ExecutionExitReason::FrameBoundary;
+  g_yieldResumeAddress = kYieldResume;
+  g_yieldLeafCalls = 0;
+  psx::cpu::installNativeOverride(core, kYieldEntry, "test::frameBoundary", &yieldingLeaf);
+
+  psx::cpu::ResumableGuestCall call;
+  call.begin(core, "test frame boundary", kYieldEntry, kOuterReturn, 8u);
+  const psx::cpu::CallStep suspended = call.advance();
+  CHECK(suspended.outcome == psx::cpu::CallOutcome::Suspended);
+  CHECK(suspended.reason == psx::cpu::ExecutionExitReason::FrameBoundary);
+  const psx::cpu::CallStep finished = call.advance();
+  CHECK(finished.outcome == psx::cpu::CallOutcome::Returned);
+  CHECK_EQ(core.pc, kOuterReturn);
+}
 
 static void test_installing_an_override_resolves_the_image_and_refuses_a_foreign_address(void) {
   Fixture fixture;
@@ -209,6 +289,13 @@ static void test_installing_an_override_resolves_the_image_and_refuses_a_foreign
   CHECK(!psx::cpu::tryInstallNativeOverride(core, 0x00090000u, "test::foreign", &nativeOverride).has_value());
   // So is a registration with no native body.
   CHECK(!psx::cpu::tryInstallNativeOverride(core, kEntry + 4u, "test::empty", nullptr).has_value());
+
+  // Removal reads the same identity rule backwards, and refuses both ways it can be wrong: an
+  // address no image owns, and a resolved address with no owner there.
+  CHECK(!psx::cpu::removeNativeOverride(core, 0x00090000u));
+  CHECK(!psx::cpu::removeNativeOverride(core, kEntry + 4u));
+  CHECK(psx::cpu::removeNativeOverride(core, kEntry));
+  CHECK(!core.nativeDispatcher().isInstalled(*installed));
 }
 
 } // namespace
@@ -217,6 +304,8 @@ int main() {
   RUN(a_call_that_outlives_its_turn_is_resumed_to_the_callers_boundary);
   RUN(the_turn_cap_refuses_a_guest_that_never_returns);
   RUN(resuming_a_call_that_is_not_pending_is_refused);
+  RUN(a_cooperative_yield_with_no_guest_cycles_suspends_and_the_call_still_finishes);
+  RUN(a_frame_boundary_suspends_the_call_and_names_the_reason);
   RUN(installing_an_override_resolves_the_image_and_refuses_a_foreign_address);
   return pt_summary();
 }

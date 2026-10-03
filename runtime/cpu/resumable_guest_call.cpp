@@ -11,8 +11,21 @@
 namespace psx::cpu {
 namespace {
 
-CallStep refused(std::string detail, std::uint32_t guestPc, std::uint32_t turns, std::uint64_t cycles) {
-  return CallStep{CallOutcome::Refused, guestPc, turns, cycles, 0u, std::move(detail)};
+CallStep refused(std::string detail,
+                 std::uint32_t guestPc,
+                 std::uint32_t turns,
+                 std::uint64_t cycles,
+                 ExecutionExitReason reason = ExecutionExitReason::BudgetExhausted) {
+  return CallStep{CallOutcome::Refused, guestPc, turns, cycles, 0u, std::move(detail), reason};
+}
+
+// A turn can end for a reason that is not a fault and not an exhaustion: the guest reached its own
+// display-field barrier, or a native replacement finished a slice and handed the turn back. Both mean
+// the host owes its caller a field, so both are suspensions. Everything else still has to be a return
+// or a refusal.
+constexpr bool suspends(ExecutionExitReason reason) {
+  return reason == ExecutionExitReason::BudgetExhausted || reason == ExecutionExitReason::FrameBoundary ||
+         reason == ExecutionExitReason::CooperativeYield;
 }
 
 } // namespace
@@ -71,19 +84,34 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
   if (result.returned()) {
     pending_ = false;
     core.guestCallCensus().recordCompleted(entry_, returnPc_, turns_, cycles_);
-    return CallStep{CallOutcome::Returned, result.guestPc, turns_, cycles_, core.r[2], {}};
+    return CallStep{CallOutcome::Returned, result.guestPc, turns_, cycles_, core.r[2], {}, result.reason};
   }
-  if (result.reason != ExecutionExitReason::BudgetExhausted) {
+  if (!suspends(result.reason)) {
     requireGuestReturn(result, owner_);
-    return refused(
-        std::string{"the guest call exited as "} + executionExitName(result.reason), result.guestPc, turns_, cycles_);
+    return refused(std::string{"the guest call exited as "} + executionExitName(result.reason),
+                   result.guestPc,
+                   turns_,
+                   cycles_,
+                   result.reason);
   }
-  if (result.cycles == 0u || result.guestPc == 0u) {
-    return refused(
-        "the guest call exhausted a host turn having consumed no guest cycles", result.guestPc, turns_, cycles_);
+  // "No cycles" is only evidence of no progress for a turn that ran out of budget. A
+  // `CooperativeYield` is a native replacement reporting the work it just did in HOST code - an FMV
+  // frame is decoded, uploaded and drawn without the guest ever executing an instruction - so it
+  // arrives carrying zero guest cycles by construction, and refusing it would kill every movie. A
+  // `FrameBoundary` is the guest asking for a field, which is progress the host is about to deliver.
+  //
+  // Every suspending exit must state WHERE to resume, and that is already the framework's rule rather
+  // than this class's: a request with no address of its own is handed back with the standing
+  // architectural PC (lightrec_executor.cpp), so there is nothing to check here.
+  if (result.reason == ExecutionExitReason::BudgetExhausted && result.cycles == 0u) {
+    return refused("the guest call exhausted a host turn having consumed no guest cycles",
+                   result.guestPc,
+                   turns_,
+                   cycles_,
+                   result.reason);
   }
   resumePc_ = result.guestPc;
-  return CallStep{CallOutcome::Suspended, result.guestPc, turns_, cycles_, 0u, {}};
+  return CallStep{CallOutcome::Suspended, result.guestPc, turns_, cycles_, 0u, {}, result.reason};
 }
 
 std::uint32_t ResumableGuestCall::callToReturn(const std::optional<NativeKey> &original) {

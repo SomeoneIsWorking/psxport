@@ -9,6 +9,7 @@
 // `c->game->dbg_server.method()`. No legacy free-function shims — all callers use the class directly.
 #pragma once
 #include "config_vars.h" // cv_debug_server — the endpoint's port
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -99,6 +100,19 @@ public:
   // Core* is stashed for the `call` subcommand to run guest fns at this frame boundary.
   void service(Core *c);
 
+  // `quit` from a client: the connection is closed at once, and the run that owns its end-of-run asks
+  // this to stop. A run that never asks is unaffected, exactly as before — `quit` was always just a
+  // disconnect.
+  bool quitRequested() const {
+    return mQuitRequested.load();
+  }
+  bool takeQuitRequest() {
+    return mQuitRequested.exchange(false);
+  }
+  void requestQuit() {
+    mQuitRequested.store(true);
+  }
+
   // Pause / step gating polled by the frame loop.
   bool isPaused() const {
     return mPaused;
@@ -141,6 +155,10 @@ private:
   bool mPaused = false;
   int mStep = 0;
   unsigned short mHeld = 0xFFFF; // active-low held mask (all released)
+
+  // Set from the SERVER thread by `quit`, read by the product loop. Atomic because it is the one
+  // field here with two threads on it.
+  std::atomic<bool> mQuitRequested{false};
 
   Core *mCtx = nullptr; // set at the top of service(); the frame-loop Core while a command runs
 

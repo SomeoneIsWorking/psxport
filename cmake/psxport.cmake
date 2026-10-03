@@ -181,6 +181,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/platform_hle.cpp
   ${PSXPORT_ROOT}/runtime/psx/scheduler.cpp
   ${PSXPORT_ROOT}/runtime/psx/native_boot.cpp
+  ${PSXPORT_ROOT}/runtime/psx/machine.cpp # psx::Machine: the shared boot composition and the frame turn
   ${PSXPORT_ROOT}/runtime/psx/render_path.cpp   # render_path_install — the render-path tri-state, one parser for every boot spine
   ${PSXPORT_ROOT}/runtime/psx/proj_prim.cpp
   ${PSXPORT_ROOT}/runtime/psx/gte_vendor_hooks.cpp

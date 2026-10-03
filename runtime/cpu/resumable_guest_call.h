@@ -12,7 +12,9 @@
 //      progress and is REFUSED, never retried;
 //   5. the number of host turns a call may consume is a stated policy constant in display fields;
 //   6. a stop is classified as Returned / Suspended / Refused, so a caller never reads a fault or a
-//      yield as progress.
+//      yield as progress. A turn that ended BudgetExhausted, FrameBoundary or CooperativeYield is a
+//      SUSPENSION: the first ran out of cycles, the second reached the guest's own field barrier, and
+//      the third handed the turn back from a native replacement, and `CallStep::reason` says which.
 //
 // The ENTRY address, the RETURN address and the turn cap VALUE are the caller's facts. The loop,
 // the latch, the refusals and the classification are not.
@@ -50,6 +52,11 @@ struct CallStep {
   std::uint64_t cycles = 0;  // guest cycles over those turns
   std::uint32_t value = 0;   // r[2], once Returned
   std::string detail;        // the refusal, empty otherwise
+  // WHY the turn ended, so a caller that counts display fields can count the ones that are display
+  // fields. A title whose guest waits on VSync reaches FrameBoundary, and a title whose native
+  // replacement yields a slice reaches CooperativeYield; neither is a budget exhaustion, and both are
+  // a suspension rather than a fault.
+  ExecutionExitReason reason = ExecutionExitReason::GuestReturn;
 };
 
 class ResumableGuestCall {

@@ -669,4 +669,25 @@ void installNativeOverride(Core &core, std::uint32_t guestAddress, std::string_v
   }
 }
 
+bool removeNativeOverride(Core &core, std::uint32_t guestAddress) {
+  const std::optional<ImageIdentity> image = core.currentImageIdentity(guestAddress);
+  if (!image) {
+    lucent::error("native-dispatch",
+                  "cannot remove the override at 0x{:08X}: no active image owns that address, so there is "
+                  "no key to remove",
+                  guestAddress);
+    return false;
+  }
+  const NativeKey key{*image, guestAddress};
+  if (!core.nativeDispatcher().remove(key)) {
+    lucent::error("native-dispatch",
+                  "cannot remove the override at 0x{:08X}: image {}:{} has no native owner there",
+                  guestAddress,
+                  key.image.id,
+                  key.image.generation);
+    return false;
+  }
+  return true;
+}
+
 } // namespace psx::cpu

@@ -997,6 +997,12 @@ static void serve_conn(int fd) {
       line[ll - 1] = 0;
     }
     if (!strcmp(line, "quit") || !strcmp(line, "q") || !strcmp(line, "exit")) {
+      // The connection ends at once, and the run that OWNS its end-of-run is told to stop. The
+      // endpoint is process-lifetime and this thread has no Game, so the request goes to whichever
+      // DbgServer holds the claim.
+      if (DbgServerInternals::sInstance) {
+        DbgServerInternals::sInstance->requestQuit();
+      }
       close(fd);
       return;
     }

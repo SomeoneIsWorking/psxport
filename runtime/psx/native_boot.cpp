@@ -18,6 +18,7 @@
 #include "game_iface.h"
 #include "gpu_vk.h" // gpu_vk_windowed — the windowed/headless discriminator
 #include "guest_call.h"
+#include "guest_call_census.h"
 #include "hw_bind.h" // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "memcensus.h"
 #include "mods.h"
@@ -316,6 +317,11 @@ static void game_main(Core *c) {
   // destructor telemetry, so this is the report every clean run gets: translated blocks and
   // instructions, cache hits and misses, invalidations by source, fallback by every reason.
   psx::cpu::logRunEndLedger(c->lightrecExecutor().counters());
+  // The guest-call census, with the same denominators and beside the ledger: a run that resumed no
+  // call has to SAY so, because silence and "nothing was ever long enough" look identical. It is
+  // reported from the Core that made the calls, so a process running several machines keeps their
+  // numbers apart.
+  c->guestCallCensus().log("frame loop done");
   lucent::info("native_boot", "frame loop done");
   // The store observer's report is NOT here any more: it now lives in ~LightrecExecutor, beside the
   // fallback telemetry, because this function's return is not a path every product takes. Measured
