@@ -8,7 +8,7 @@ which is exactly how that file's own comment records it being found (mask 0xFEFF
 could not name).
 
 A frame's mask is one little-endian uint16, ACTIVE-LOW: a pressed button CLEARS its bit, so a neutral
-frame is 0xFFFF. The runtime writes them (`runtime/psx/pad_recording.cpp`) and only ever consumes a
+frame is 0xFFFF. The runtime writes them (`runtime/psx/input/pad_recording.cpp`) and only ever consumes a
 PREFIX from boot — `pad_recording.h`: "Only a PREFIX is ever offered: a recording's first phase is
 the one the game boots into, and a suffix would start elsewhere."
 
@@ -66,7 +66,7 @@ def buttons_of(mask: int) -> frozenset[str]:
 
 
 # ---- the v1 phase-keyed container ------------------------------------------------------------
-# Mirrors runtime/psx/pad_recording.h. Kept as named constants so a change on either side that
+# Mirrors runtime/psx/input/pad_recording.h. Kept as named constants so a change on either side that
 # forgets the other shows up as a refusal here rather than as a file that decodes to plausible junk.
 MAGIC = b"PSXPADPH"
 VERSION = 1

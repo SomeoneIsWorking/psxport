@@ -10,7 +10,7 @@
 // either direction is how RQ_MAX gets raised until the symptom disappears.
 //
 // Hermetic: the report reads a span of RqItem and nothing else. No Core, no Game, no GPU, no disc.
-#include "../runtime/psx/render_queue_attribution.h"
+#include "render_queue_attribution.h"
 #include "testutil.h"
 
 #include <vector>

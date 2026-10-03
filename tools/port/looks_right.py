@@ -421,7 +421,7 @@ def selftest():
     """Both answers, on constructed inputs, for every verdict this tool makes."""
     checks = []
 
-    # The shape the product actually emits (runtime/psx/fps60.cpp). It said "replay prev=Q[N-1]"
+    # The shape the product actually emits (runtime/psx/present/fps60.cpp). It said "replay prev=Q[N-1]"
     # until 2026-09-19, which was never true: both presents run over the current fence's queue.
     duplicate = "[fps60] TRUE per-object interpolated 60fps ON (source: env)\n" + "".join(
         f"[fps60] f{f} slotA: in-between over Q[N] n=3613 tier1=0 backdrop=0 t=0.500\n" for f in range(3)

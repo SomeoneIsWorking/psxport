@@ -1,4 +1,4 @@
-// runtime/psx/render_node.h — cur_render_node: the current per-instance render node (framework-side).
+// runtime/psx/gpu/render_node.h — cur_render_node: the current per-instance render node (framework-side).
 //
 // Extracted from game/render/render_internal.h so the framework (ot_attr.cpp) can read the render-walk's
 // current node without pulling in the whole game render-internals header (which drags in render.h, game.h,

@@ -37,7 +37,7 @@ An earlier product CPU implementation held 11 diagnostic-only address probes ins
 Those probes were removed with the obsolete product CPU implementation. Their lasting lesson is that
 title-address diagnostics belong in the title, not in a framework instruction loop.
 
-**`runtime/psx/pc_scheduler.cpp` — 8 addresses, and these are BEHAVIOUR**, not diagnostics:
+**`runtime/psx/frame/pc_scheduler.cpp` — 8 addresses, and these are BEHAVIOUR**, not diagnostics:
 
 ```
 entry_pc == 0x801062E4   // DEMO

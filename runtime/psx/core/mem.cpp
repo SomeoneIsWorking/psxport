@@ -47,7 +47,7 @@ static void dumpHostBacktrace(int depth) {
   psxport::host::emitBacktrace(frames, count);
 }
 
-// Core::Core / ~Core moved to runtime/psx/core.cpp (lifetime + subsystem wiring live there).
+// Core::Core / ~Core moved to runtime/psx/core/core.cpp (lifetime + subsystem wiring live there).
 
 // PSXPORT_CW="lo,hi" — host-backtrace watchpoint: when ANY store lands in physical byte range
 // [lo,hi), dump a C backtrace. Finds runtime code that clobbers a region the decompressor wrote.

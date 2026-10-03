@@ -29,7 +29,7 @@ compiler-dependent, and the project's own test was the instrument that said so. 
 explanation was checked and **refuted**: both objects were rebuilt, and the two `mods.cpp.o` files
 differ while compiling the identical path, which a stale tree cannot explain.
 
-## Defect one — `runtime/psx/mods.cpp`, the checkout guard returned a dangling pointer
+## Defect one — `runtime/psx/debug/mods.cpp`, the checkout guard returned a dangling pointer
 
 `insideCheckout` returned `const char *` pointing at its own local `char buffer[4096]`. The object
 dies at return, so the pointer is dangling — undefined behaviour, and GCC says so:
@@ -68,7 +68,7 @@ the null branch saved it; for every later test it was a pointer to an already-de
 Symptom: `test_segment_clock` **segfaulted under GCC and passed 15/15 under Clang.**
 
     Program received signal SIGSEGV
-    #0 Core::Core (this=0xbbd230) at runtime/psx/core.cpp:31
+    #0 Core::Core (this=0xbbd230) at runtime/psx/core/core.cpp:31
       guestProgramImage = runtime ? runtime->guestProgramImage() : nullptr;
     #2 std::make_unique<Game> ()
     #3 (anonymous namespace)::Fixture::Fixture ()

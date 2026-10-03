@@ -2,14 +2,14 @@
 // event to a guest that never opened one, and the number that looks like a fix is the one that
 // cannot work.
 //
-// WHAT THIS PINS, AND WHY IT IS NOT THE OBVIOUS TEST. `Hle::deliverEvent` (runtime/psx/hle.cpp)
+// WHAT THIS PINS, AND WHY IT IS NOT THE OBVIOUS TEST. `Hle::deliverEvent` (runtime/psx/hle/hle.cpp)
 // marks a slot only when `ev[i].open && ev[i].enabled && ev[i].ev_class == evClass` and
 // `(ev[i].spec & spec)`. A slot's `ev_class` is set in exactly one place — the B0:0x08 OpenEvent arm
 // of `Hle::dispatchBios` — so "can this class be delivered to" is decided entirely by what the guest
 // opened, and NOT by which spec a caller picks.
 //
 // The memory-card owner is the framework's own precedent for delivering a device completion as a
-// PAIR of BIOS hardware classes (runtime/psx/memcard.cpp:405-406):
+// PAIR of BIOS hardware classes (runtime/psx/platform/memcard.cpp:405-406):
 //
 //     c->game->hle.deliverEvent(0xF4000001u, 0x0004u); // SwCARD I/O end
 //     c->game->hle.deliverEvent(0xF0000011u, 0x0004u); // HwCARD BIOS-level completion
@@ -41,8 +41,8 @@
 // because the run measured them absent.
 //
 // HERMETIC: a Game is constructed in-process. No disc, no window, no GPU, no wall clock.
-#include "../runtime/psx/game.h"
-#include "../runtime/psx/hle.h"
+#include "game.h"
+#include "hle.h"
 #include "testutil.h"
 
 enum { R_A3 = 7 };

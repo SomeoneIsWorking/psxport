@@ -20,10 +20,10 @@
 // cfg_on / cfg_int / cfg_str used to be `lucent::config::flag/number/text` and nothing else: the
 // environment was the only layer, and precedence between the environment, psxport_settings.ini and
 // a REPL `debug` command was undocumented because there was nothing to document it against.
-// runtime/psx/config.h now owns that, with an explicit ladder (default < value < env < runtime).
+// runtime/psx/config/config.h now owns that, with an explicit ladder (default < value < env < runtime).
 //
 // TWO PATHS THROUGH HERE, and the split is the whole compatibility story:
-//   * the name IS a declared CVar (runtime/psx/config_vars.h) — resolve through the full ladder.
+//   * the name IS a declared CVar (runtime/psx/config/config_vars.h) — resolve through the full ladder.
 //     For a run that only sets the environment, that is the same answer as before, by construction:
 //     the CVar's Override layer is bound with the very expression this function used to return.
 //   * the name is NOT — fall through to lucent::config exactly as before, and RECORD the read, so

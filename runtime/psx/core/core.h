@@ -114,7 +114,7 @@ public:
   enum : int { PW_IRQ = 1, PW_HOST = 2 };
   int pending_work = 0;
 
-  // ---- HOST FIELD CLOCK (runtime/psx/host_turn.cpp) ------------------------------------------------
+  // ---- HOST FIELD CLOCK (runtime/psx/boot/host_turn.cpp) ------------------------------------------------
   // Per-Core. The clock is the device's, but WHICH machine owns it is that machine's business: a
   // process that runs several sessions at once (a title selector whose panels are live sessions)
   // has a guest waiting for a display field in every one of them, and a single process-global
@@ -134,7 +134,7 @@ public:
     bool inTurn = false;
   } hostTurn;
 
-  // ---- SPIN DETECTOR state (runtime/psx/spin_detector.h; fatal path watchdog_spin_fault) ----
+  // ---- SPIN DETECTOR state (runtime/psx/platform/spin_detector.h; fatal path watchdog_spin_fault) ----
   SpinDetectorState spin;
 
   // COP0 registers (12 = Status, 13 = Cause, 14 = EPC). Per-Core: exception state must never be

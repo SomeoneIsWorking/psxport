@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-21
 tags: cdc,cdrom,readn,dma
-depends: runtime/psx/cdc_native.cpp#cdc_drive_service, runtime/psx/timing.cpp#Timing::advanceGuestInstructionTicks, tests/test_cdc_continuous_read.cpp#test_first_sector_waits_one_drive_period
+depends: runtime/psx/cd/cdc_native.cpp#cdc_drive_service, runtime/psx/frame/timing.cpp#Timing::advanceGuestInstructionTicks, tests/test_cdc_continuous_read.cpp#test_first_sector_waits_one_drive_period
 reconfirmed: 2026-08-25
 verified_at: 2026-08-25 01:16:02
 ---

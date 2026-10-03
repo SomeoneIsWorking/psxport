@@ -17,8 +17,8 @@ overlap is brighter than the artist authored.
 
 ## What this framework does
 
-`Gp0Command::maskBits()` (`runtime/psx/gp0_command.h`) decodes both bits and both are stored. Neither
-is used as a pixel test. The rasterizer's `put_px_b` (`runtime/psx/gpu_native_raster.cpp`) writes every
+`Gp0Command::maskBits()` (`runtime/psx/gpu/gp0_command.h`) decodes both bits and both are stored. Neither
+is used as a pixel test. The rasterizer's `put_px_b` (`runtime/psx/gpu/gpu_native_raster.cpp`) writes every
 pixel unconditionally.
 
 The file has carried a `PSXPORT_DEBUG=maskbit` probe for this since before the decode was named, and
@@ -44,8 +44,8 @@ from the framework.
 
 ## Where
 
-- `runtime/psx/gp0_command.h` — `Gp0MaskBits`, `Gp0Command::maskBits()`: the decode, and the comment
+- `runtime/psx/gpu/gp0_command.h` — `Gp0MaskBits`, `Gp0Command::maskBits()`: the decode, and the comment
   recording why it exists.
-- `runtime/psx/gpu_native_raster.cpp` — `GpuState::put_px_b`: the write with no mask test.
-- `runtime/psx/gpu_native.cpp` — the `PSXPORT_DEBUG=maskbit` probe that measures whether any title
+- `runtime/psx/gpu/gpu_native_raster.cpp` — `GpuState::put_px_b`: the write with no mask test.
+- `runtime/psx/gpu/gpu_native.cpp` — the `PSXPORT_DEBUG=maskbit` probe that measures whether any title
   sets the bit.

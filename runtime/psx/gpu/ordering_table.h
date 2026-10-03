@@ -13,7 +13,7 @@
 
 #include <cstdint>
 
-class Core; // runtime/psx/core.h — the guest RAM handle the walk reads through
+class Core; // runtime/psx/core/core.h — the guest RAM handle the walk reads through
 
 namespace psx::gpu {
 

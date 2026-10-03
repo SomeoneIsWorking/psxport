@@ -1,5 +1,5 @@
 // PcScheduler — native cooperative-task handlers plus per-frame slot dispatch. Title-owned native
-// handlers run first; unowned tasks resume through the guest scheduler in runtime/psx/scheduler.cpp.
+// handlers run first; unowned tasks resume through the guest scheduler in runtime/psx/platform/scheduler.cpp.
 #include "pc_scheduler.h"
 #include "c_subsys.h" // xa_stream_owns_slot2/xa_stream_voice_busy/xa_stream_voice_release
 #include "core.h"

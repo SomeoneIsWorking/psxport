@@ -17,8 +17,8 @@
 // NEGATIVE-RESULT DISCIPLINE: every case asserts a specific value, and the end-of-chain set is asserted
 // as a table (including the values that must NOT end a chain) so a widened or narrowed sentinel cannot
 // pass by accident. The walk cases assert the node SEQUENCE, not merely that the walk terminated.
-#include "../runtime/psx/ordering_table.h"
 #include "core.h"
+#include "ordering_table.h"
 #include "testutil.h"
 
 #include <cstdint>

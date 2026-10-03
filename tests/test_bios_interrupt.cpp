@@ -7,9 +7,9 @@
 //
 // This hermetic test pins both answers: a complete saved context is restored exactly, while a missing
 // buffer or missing continuation is refused without changing the interrupted register file.
-#include "../runtime/psx/bios_interrupt.h"
-#include "../runtime/psx/game.h"
-#include "../runtime/psx/game_iface.h"
+#include "bios_interrupt.h"
+#include "game.h"
+#include "game_iface.h"
 #include "testutil.h"
 #include <memory>
 

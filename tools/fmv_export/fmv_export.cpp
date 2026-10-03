@@ -3,7 +3,7 @@
 // No game boot: opens the CHD directly (same by-LBA hunk read as runtime/psx/disc.c) and
 // decodes an .STR movie (MOVIE/LOGO.STR, MOVIE/OP.STR) to PNG frames + a CD-XA audio WAV + an
 // index manifest. The decode uses the SAME functions the runtime player runs — bs_decode_frame /
-// mdec_decode_to_rgb555 / xa_decode_sector from runtime/psx/fmv_decode.cpp — so a frame that
+// mdec_decode_to_rgb555 / xa_decode_sector from runtime/psx/movie/fmv_decode.cpp — so a frame that
 // dumps wrong here is a runtime frame that plays wrong, by construction. There is no forked copy.
 //
 // Output (all under <out-dir>):
@@ -38,7 +38,7 @@
 
 // Vestigial Beetle savestate hook the vendored mdec.c references (state_helpers.h expands
 // MDFNSS_StateAction into a real call inside MDEC_StateAction, which an offline decode never
-// enters). Same `return 1` stub the runtime keeps in runtime/psx/gte_vendor_hooks.cpp.
+// enters). Same `return 1` stub the runtime keeps in runtime/psx/cpu/gte_vendor_hooks.cpp.
 extern "C" int MDFNSS_StateAction(void *st, int load, int data_only, void *sf, const char *name) {
   (void)st;
   (void)load;
@@ -369,7 +369,7 @@ int main(int argc, char **argv) {
   fprintf(idx, "# fmv_export manifest: %s @ LBA %u, %u bytes\n", movie, lba, size);
   fprintf(idx, "# output_frame  str_frame  w  h  chunks  payload_bytes  codes  samples_played  time_ms\n");
 
-  // --- scratch (same caps as runtime/psx/native_fmv.cpp playLba) ---
+  // --- scratch (same caps as runtime/psx/movie/native_fmv.cpp playLba) ---
   uint8_t *payload = (uint8_t *)malloc(FMV_PAYLOAD_BYTES);
   uint16_t *codes = (uint16_t *)malloc(FMV_CODES_MAX * 2);
   uint16_t *pixels = (uint16_t *)malloc(FMV_MAX_PIXELS * 2);

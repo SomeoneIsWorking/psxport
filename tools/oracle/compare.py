@@ -132,7 +132,7 @@ def match_console_card(console: CoreSession, card: Optional[Path]) -> dict:
     """Start the reference from the memory-card image at `card`, or record that it kept its own.
 
     The two cores otherwise start from DIFFERENT cards, and that is not a detail: the product formats
-    the blank image it creates (runtime/psx/memcard.cpp) while the reference comes up with the
+    the blank image it creates (runtime/psx/platform/memcard.cpp) while the reference comes up with the
     unformatted card a real console has when a new card is inserted. A title branches on that --
     Spyro 1 draws its card-creation page on an unformatted card and its save picker on a formatted
     one -- so comparing a save menu across that difference measures the harness.
@@ -372,7 +372,7 @@ Segments = Sequence[tuple[frozenset[str], int]]
 def recorded_route(path: Path, start: int) -> Segments:
     """A recorded .pad replay, from frame `start`, as held-input segments.
 
-    WHY A SUFFIX IS SOUND HERE AND NOT IN THE RUNTIME. `runtime/psx/pad_input.h` says a replay is
+    WHY A SUFFIX IS SOUND HERE AND NOT IN THE RUNTIME. `runtime/psx/input/pad_input.h` says a replay is
     "only valid from boot", and that is about the runtime's own replay cursor: resuming it mid-file
     would feed the guest frames it never ran. This is a different use — the buttons are read out and
     delivered to BOTH cores through the same Playback that delivers a scripted route, from a state

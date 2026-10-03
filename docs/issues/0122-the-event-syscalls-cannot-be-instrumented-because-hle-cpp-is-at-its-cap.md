@@ -2,7 +2,7 @@
 id: 122
 title: The BIOS event syscalls cannot be instrumented because hle.cpp is at its line cap
 status: open
-symptom: adding one lucent::debug line to the TestEvent case takes runtime/psx/hle.cpp from 784 to 789 lines and fails cpp_style; the file's shrink-only legacy cap is correct and the event syscalls have never been extracted into an owner
+symptom: adding one lucent::debug line to the TestEvent case takes runtime/psx/hle/hle.cpp from 784 to 789 lines and fails cpp_style; the file's shrink-only legacy cap is correct and the event syscalls have never been extracted into an owner
 tags: architecture,hle,diagnostics,structure
 created: 2026-09-19
 ---

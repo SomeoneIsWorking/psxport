@@ -4,7 +4,7 @@
 // run flags, step-spread counters) and the per-frame dispatch over the 3 task
 // slots: PC-native stanzas (DEMO/SOP/GAME/task-1/STAGE-0) first, then the
 // substrate coro-fiber / generic-dispatch stanzas in
-// runtime/psx/scheduler.cpp for un-ported tasks. The yield/spawn primitives
+// runtime/psx/platform/scheduler.cpp for un-ported tasks. The yield/spawn primitives
 // (scheduler_yield, native_task_spawn) also live in scheduler.cpp and reach
 // this state via c->game->pcSched.
 //
@@ -21,7 +21,7 @@
 #include <stdint.h>
 
 class Game;
-class Coro; // runtime/psx/coro.h — thread-fiber for full-PSX mid-function
+class Coro; // runtime/psx/platform/coro.h — thread-fiber for full-PSX mid-function
             // resume (later-264)
 struct Core;
 

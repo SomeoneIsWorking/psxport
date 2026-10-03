@@ -17,7 +17,7 @@
 // missing words with zeros and never drop them silently. The data line's format is unchanged, so a
 // caller that parses one line still parses it.
 //
-// The cap is stated once, in `runtime/psx/control_surface_limits.h`, because two transports each
+// The cap is stated once, in `runtime/psx/frame/control_surface_limits.h`, because two transports each
 // carrying their own literal is two places for them to drift apart silently.
 //
 // NO GAME, NO WINDOW, NO PRODUCT: a bare Core, the REPL, and an in-process log sink.

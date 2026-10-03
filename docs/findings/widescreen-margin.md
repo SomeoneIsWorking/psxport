@@ -46,7 +46,7 @@ the picture matched a correct 24bpp read to a mean |diff| of 1.29.
 VRAM's 1024-halfword width (reached by this real case: 684 columns need halfword 1026). Seeding the
 old identity conversion back in fails 4 of the 7 tests in `tests/test_wide_margin_plan.cpp`, which is
 what makes them evidence rather than decoration. The drawing itself moved out of the
-4,253-line `gpu_vk.cpp` into `runtime/psx/gpu_vk_wide_margin.cpp`; the file's legacy cap ratcheted to
+4,253-line `gpu_vk.cpp` into `runtime/psx/gpu/gpu_vk_wide_margin.cpp`; the file's legacy cap ratcheted to
 4,238.
 
 ## The base belongs to whoever draws the displayed buffer (2026-10-02)

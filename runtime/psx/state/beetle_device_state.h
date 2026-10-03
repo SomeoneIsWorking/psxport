@@ -43,7 +43,7 @@ struct BeetleStateMem {
 };
 
 // Which devices of the vendored fork this bridge can reach. The independent GPU ORACLE
-// (runtime/psx/gpu_beetle.cpp) is deliberately absent: it is not the GPU the guest draws with and it
+// (runtime/psx/gpu/gpu_beetle.cpp) is deliberately absent: it is not the GPU the guest draws with and it
 // is inert unless a run enabled it, so there is nothing guest-visible here to carry.
 enum class BeetleDevice : unsigned { Spu = 0, Mdec = 1 };
 inline constexpr std::size_t kBeetleDeviceCount = 2;

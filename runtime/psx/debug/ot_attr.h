@@ -27,7 +27,7 @@
 //      this is what keeps the static cap (OT_ATTR_CAP) from blowing out on a normal frame.
 //
 //   2. GTE RTPS/RTPT per-(fn,node) call counts for the frame (not per-call — aggregated), fed from
-//      gte_op's existing RTPS/RTPT branch (runtime/psx/gte_beetle.cpp, alongside rtpcaller_record).
+//      gte_op's existing RTPS/RTPT branch (runtime/psx/cpu/gte_beetle.cpp, alongside rtpcaller_record).
 //
 // Reached as `core->rsub.otAttr`. The REPL `otattr` command (repl.cpp) re-walks the CURRENT OT
 // read-only (no gpu_gp0 side effects) and looks up each packet's pool address in table 1, printing the

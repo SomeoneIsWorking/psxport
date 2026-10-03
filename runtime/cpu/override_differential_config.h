@@ -1,5 +1,5 @@
 // The typed, immutable configuration of the per-function override differential. The configuration
-// owner (`runtime/psx/config.cpp`, `psx::config::override_differential_config`) reads the knobs once and
+// owner (`runtime/psx/config/config.cpp`, `psx::config::override_differential_config`) reads the knobs once and
 // converts them through `overrideDifferentialConfigFrom`; nothing else reads the environment.
 #pragma once
 

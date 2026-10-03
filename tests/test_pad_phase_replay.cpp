@@ -5,11 +5,11 @@
 // absolute input, passes over a recorded phase that held a press, or plays against a different card
 // is exactly how spyro issue 0116's route came to answer the wrong dialog while looking like a run.
 
-#include "../runtime/psx/game.h"
-#include "../runtime/psx/game_runtime.h"
-#include "../runtime/psx/pad_phase_replay.h"
-#include "../runtime/psx/pad_record_replay.h"
-#include "../runtime/psx/pad_recording.h"
+#include "game.h"
+#include "game_runtime.h"
+#include "pad_phase_replay.h"
+#include "pad_record_replay.h"
+#include "pad_recording.h"
 #include "testutil.h"
 
 #include <cstdint>

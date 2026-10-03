@@ -378,7 +378,7 @@ void RenderQueue::mark_consumed() {
 // SORT THE KEYS, PERMUTE ONCE — do not sort 284-byte payloads to order 8 bytes of key.
 //
 // MEASURED, and this was the largest single byte mover in the whole port. The --wrap=memcpy call-site
-// census (runtime/psx/memcensus.cpp) over the 1,100-frame field scene attributed 12.29 GB of
+// census (runtime/psx/debug/memcensus.cpp) over the 1,100-frame field scene attributed 12.29 GB of
 // copying, and 46% of it was THIS FUNCTION:
 //
 //     33.4%  4.11 GB   std::__move_merge<RqItem*, sortQueue()::lambda>

@@ -6,7 +6,7 @@
 // "what knobs exist".
 //
 // A knob that is NOT here still works: cfg_on / cfg_int / cfg_str fall through to the environment
-// exactly as they always did (runtime/psx/cfg.cpp), and the registry records the read so the
+// exactly as they always did (runtime/psx/config/cfg.cpp), and the registry records the read so the
 // environment audit can tell it apart from a typo. Migration order and the remaining list are in
 // docs/config.md.
 //
@@ -66,7 +66,7 @@ extern TextVar cv_load_state;
 
 // PSXPORT_PAD_RECORD / PSXPORT_PAD_REPLAY / PSXPORT_PAD_RESUME — the pad session's record sink, the
 // recording a gate replays at real speed, and the recording a player resumes from (fast-forwarded).
-// All three are phase-keyed .pad files (runtime/psx/pad_recording.h); PSXPORT_PAD_RECORD=0 disables
+// All three are phase-keyed .pad files (runtime/psx/input/pad_recording.h); PSXPORT_PAD_RECORD=0 disables
 // the windowed default sink. Resolved once by psx::input::PadRecordReplay on the first pad frame.
 extern TextVar cv_pad_record;
 extern TextVar cv_pad_replay;
@@ -97,7 +97,7 @@ extern TextVar cv_settings_path;
 // PSXPORT_FPS60 — the interpolated-60fps tier. Documented in docs/config.md since it was written and
 // READ BY NOTHING until this migration: a run with it set was indistinguishable from a run without.
 // It is the reason the environment audit exists. Its Value layer is the `fps60=` line in
-// psxport_settings.ini, written by the F1 overlay (runtime/psx/mods.cpp).
+// psxport_settings.ini, written by the F1 overlay (runtime/psx/debug/mods.cpp).
 extern BoolVar cv_fps60;
 
 // PSXPORT_ENH=<name,name|all> — the sanctioned pc_enh class: deliberate, MEANINGFUL guest-state

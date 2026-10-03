@@ -17,7 +17,7 @@
 //
 // NEGATIVE-RESULT DISCIPLINE: each family is asserted over a SET of inputs and against the reference,
 // not on one hand-picked word, so a decode that happens to be right for the common case cannot pass.
-#include "../runtime/psx/gp0_command.h"
+#include "gp0_command.h"
 #include "testutil.h"
 
 #include <cstdint>

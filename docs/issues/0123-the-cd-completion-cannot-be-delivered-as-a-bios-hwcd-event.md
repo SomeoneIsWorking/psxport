@@ -24,7 +24,7 @@ ev[i].open && ev[i].enabled && ev[i].ev_class == evClass && (ev[i].spec & spec)
 ```
 
 and a slot's `ev_class` is set in exactly one place — the `B0:0x08` OpenEvent arm of
-`Hle::dispatchBios` (`runtime/psx/hle.cpp:540-566`). So "can class C be delivered to" is decided
+`Hle::dispatchBios` (`runtime/psx/hle/hle.cpp:540-566`). So "can class C be delivered to" is decided
 entirely by what the guest opened, and **not at all** by which spec a caller picks. There is no spec
 that reaches an absent slot.
 
@@ -213,7 +213,7 @@ weaker instrument than a register read and is named as such.
 
 - `psxport`: **175/175 green** (was 174; +1 for the new test). `cpp_style` and `cpp_policy` pass;
   the new file was clang-formatted after the gate caught real violations.
-- `runtime/psx/hle.cpp` is **unchanged at 748 lines**, still at its shrink-only cap. Nothing was
+- `runtime/psx/hle/hle.cpp` is **unchanged at 748 lines**, still at its shrink-only cap. Nothing was
   added to it.
 - `spider1`: 28 tests, 26 pass, **2 fail — `psxport_pin` and `spider1_psxport_pin_live`, both
   pre-existing.** Verified pre-existing by parking the new file and re-running with the framework

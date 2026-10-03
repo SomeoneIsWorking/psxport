@@ -1,7 +1,7 @@
 // test_memcard_file_api.cpp — the BIOS memory-card FILE API is ASYNCHRONOUS, and its return value
 // says so.
 //
-// WHAT IS BROKEN. `runtime/psx/memcard.cpp` `file_read` / `file_write` (B0:0x34 / B0:0x35) do the
+// WHAT IS BROKEN. `runtime/psx/platform/memcard.cpp` `file_read` / `file_write` (B0:0x34 / B0:0x35) do the
 // host I/O synchronously and return the byte COUNT. Sony's stock libmcrd does not accept a byte count
 // there: its READ and WRITE op state machines retry the BIOS call until it returns ZERO, and only
 // then move to the state that waits for the card completion EVENT. Transcribed from Spyro's own
@@ -35,8 +35,8 @@
 // EvMdINTR callback Crash Bash waits on.
 #include "../runtime/cpu/image_identity.h"
 #include "../runtime/cpu/native_dispatch.h"
-#include "../runtime/psx/game.h"
-#include "../runtime/psx/memcard.h"
+#include "game.h"
+#include "memcard.h"
 #include "testutil.h"
 #include <stdio.h>
 #include <stdlib.h>

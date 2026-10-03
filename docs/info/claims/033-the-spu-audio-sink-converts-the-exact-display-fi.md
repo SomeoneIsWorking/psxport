@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-24
 tags: audio,timing,cadence
-depends: runtime/psx/field_rate.h#DISPLAY_FIELD_RATE_NTSC, runtime/psx/spu_field_cadence.h#SpuFieldCadence, runtime/psx/spu_audio.cpp#SpuAudio::frameEx, tests/test_spu_field_cadence.cpp
+depends: runtime/psx/frame/field_rate.h#DISPLAY_FIELD_RATE_NTSC, runtime/psx/audio/spu_field_cadence.h#SpuFieldCadence, runtime/psx/audio/spu_audio.cpp#SpuAudio::frameEx, tests/test_spu_field_cadence.cpp
 ---
 
 ## Claim

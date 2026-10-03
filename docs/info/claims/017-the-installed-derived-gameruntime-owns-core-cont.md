@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags: architecture,game-runtime
-depends: runtime/psx/game_iface.cpp#psxport_install_game, runtime/psx/core.cpp#Core, runtime/psx/game.h#Game, runtime/psx/game_runtime.h#GameRuntime
+depends: runtime/psx/game/game_iface.cpp#psxport_install_game, runtime/psx/core/core.cpp#Core, runtime/psx/game/game.h#Game, runtime/psx/game/game_runtime.h#GameRuntime
 reconfirmed: 2026-08-22
 verified_at: 2026-08-22 19:33:47
 ---

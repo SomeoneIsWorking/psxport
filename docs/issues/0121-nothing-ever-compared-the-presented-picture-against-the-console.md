@@ -65,7 +65,7 @@ state; the reference is asked for its own active area (`crop_overscan=smart`) an
 agreeing with the title's declared 224 independently. A fitted offset would have been the tool
 finding the answer that made its own number look best.
 
-The policy behind those two counts is now one pure function, `runtime/psx/display_scanout.h`, split
+The policy behind those two counts is now one pure function, `runtime/psx/present/display_scanout.h`, split
 out of `gpu_native.cpp` with its resolution in `gpu_native_scanout.cpp` rather than raising that
 file's line cap (ratcheted 4051 -> 4030). `tests/test_display_scanout.cpp` asserts the presented and
 scanned counts separately in every combination that produced a wrong answer once, 21 checks; it was

@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-22
 tags:
-depends: runtime/psx/gpu_vk.cpp#GpuVkState::present, runtime/psx/gpu_painter.cpp#GpuVkState::painter_command
+depends: runtime/psx/gpu/gpu_vk.cpp#GpuVkState::present, runtime/psx/gpu/gpu_painter.cpp#GpuVkState::painter_command
 reconfirmed: 2026-08-25
 verified_at: 2026-08-25 00:33:39
 ---

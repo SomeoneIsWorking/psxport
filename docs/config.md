@@ -1,8 +1,8 @@
 # Configuration and logging
 
-`runtime/psx/config.cpp` is the only owner of product configuration. Runtime code reads declared,
-typed variables through `runtime/psx/config_var.h`; C compatibility call sites use `cfg_on`,
-`cfg_int`, and `cfg_str` from `runtime/psx/cfg.h`. No CPU-engine selector is a product setting.
+`runtime/psx/config/config.cpp` is the only owner of product configuration. Runtime code reads declared,
+typed variables through `runtime/psx/config/config_var.h`; C compatibility call sites use `cfg_on`,
+`cfg_int`, and `cfg_str` from `runtime/psx/config/cfg.h`. No CPU-engine selector is a product setting.
 
 ## Precedence
 
@@ -26,7 +26,7 @@ sink. `PSXPORT_DEBUG` is the comma-separated diagnostic-channel set.
 `PSXPORT_DEBUG_SERVER` names a loopback TCP port for the live, non-blocking debug endpoint, where `1`
 asks for the default port 5959 and a number asks for that port; unset, empty, `0` and anything that is
 not a number in range leave it off. The text is interpreted once, by `debug_server_port()` in
-`runtime/psx/dbg_server.h`, and both of its readers use it: `DbgServer::start` binds the port, and
+`runtime/psx/debug/dbg_server.h`, and both of its readers use it: `DbgServer::start` binds the port, and
 `debug_server_live()` tells a boot spine that a client will drive the run, which is why such a run is
 not frame-capped.
 
@@ -75,14 +75,14 @@ be guarded with `cfg_dbg`, then emits each complete line through the configured 
 
 ## Player settings
 
-Player-facing settings are declared in `runtime/psx/config_vars.h` and exposed by the runtime UI.
+Player-facing settings are declared in `runtime/psx/config/config_vars.h` and exposed by the runtime UI.
 Persistent settings use the platform user-data location supplied by the consuming title. The
 checkout, current directory, and environment are not player-storage defaults.
 
 ## Verification
 
 A run that asked for a wide picture and did not get one is told so, by name and by reason, in the same
-`[wide]` announcement: `classifyWide()` in `runtime/psx/picture_announce.h` decides between "widened",
+`[wide]` announcement: `classifyWide()` in `runtime/psx/present/picture_announce.h` decides between "widened",
 "nobody asked", "this Core is PURE", "ASPECT_AUTO resolved to a sink that is not wide", and "a wide
 aspect was allowed and the width still did not grow", and a refused outcome is a warning rather than a
 number to be noticed later. The announced `render_width` is the width the presenter will actually

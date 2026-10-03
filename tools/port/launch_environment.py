@@ -19,7 +19,7 @@ AGENT_RUNTIME_KEYS = (
     "PSXPORT_NOPACE",
 )
 
-# The framework's memory-card path key (runtime/psx/memcard.cpp). Without it every run opens the same
+# The framework's memory-card path key (runtime/psx/platform/memcard.cpp). Without it every run opens the same
 # `scratch/saves/card.mcr` relative to its working directory, whichever title it is.
 CARD_ENV = "PSXPORT_CARD"
 

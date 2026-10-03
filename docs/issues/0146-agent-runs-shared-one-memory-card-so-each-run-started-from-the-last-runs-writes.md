@@ -10,7 +10,7 @@ updated: 2026-10-01
 
 ## Answer
 
-Not host time. `runtime/psx/memcard.cpp` opens `PSXPORT_CARD`, else the title's default, else
+Not host time. `runtime/psx/platform/memcard.cpp` opens `PSXPORT_CARD`, else the title's default, else
 `scratch/saves/card.mcr` relative to the working directory. Agent launches set none, so every run of every title
 read and then rewrote one shared file: the previous run's writes were the next run's boot state.
 

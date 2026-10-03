@@ -1,6 +1,6 @@
 // test_pace_plan.cpp — frame pacing must not depend on a window, and must run on the GAME's clock.
 //
-// WHAT THIS GATES. `runtime/psx/pace_plan.h` is the whole pacing decision. Two USER-flagged
+// WHAT THIS GATES. `runtime/psx/frame/pace_plan.h` is the whole pacing decision. Two USER-flagged
 // defects lived in the code it replaces (now `frame_pacer.cpp`), and this file pins
 // both of them shut:
 //

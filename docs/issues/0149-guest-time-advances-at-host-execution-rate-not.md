@@ -36,7 +36,7 @@ defect behind a plausible-looking picture.
 ## Why it is not fixed here
 
 Toy Story 2's issue 22 was fixed at the title's own owner (the guest's unadapted streaming player
-replaced by psxport's native movie owner, `runtime/psx/native_fmv.cpp`), which is the correct place
+replaced by psxport's native movie owner, `runtime/psx/movie/native_fmv.cpp`), which is the correct place
 for it: the guest loop is title code and instant CD is a standing product design. Clamping the
 emulated clock inside this change was tried and reverted, because it restored drive timing — the
 thing the product deliberately does not do.

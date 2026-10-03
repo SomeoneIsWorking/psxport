@@ -1,4 +1,4 @@
-// The sink's idle latch (runtime/psx/gpu_present_sink.h). An unavailable swapchain image is an idle
+// The sink's idle latch (runtime/psx/gpu/gpu_present_sink.h). An unavailable swapchain image is an idle
 // field, and only the TRANSITION is reported: this is what turns "a window the compositor is not
 // showing" from a hung guest thread (measured: SIGABRT "[watchdog] STUCK: no frame presented", parked in
 // the blocking acquire) into a skipped blit.

@@ -199,7 +199,7 @@ def product_boundary_bypasses(root: Path) -> list[str]:
         relative = path.relative_to(root).as_posix()
         if not relative.startswith(("runtime/cpu/", "runtime/psx/", "runtime/ui/")):
             continue
-        if relative == "runtime/psx/watchdog.cpp":
+        if relative == "runtime/psx/platform/watchdog.cpp":
             continue
         try:
             source = _code_without_comments(path.read_text(encoding="utf-8", errors="replace"))

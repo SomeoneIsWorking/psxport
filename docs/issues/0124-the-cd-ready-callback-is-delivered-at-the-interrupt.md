@@ -31,7 +31,7 @@ is the only consumer, and whatever the guest's stream callback needs in order to
 ## 1. What now delivers the callback, and where
 
 `runtime/psx/cd_ready_delivery.{h,cpp}` (new, 2 files), called from `Hle::irqPoll` in
-`runtime/psx/hle_interrupt.cpp`.
+`runtime/psx/hle/hle_interrupt.cpp`.
 
 `Hle::irqPoll` already services DMA completions lowest-channel-first as its first act. The CD arm is
 its sibling and follows the same two rules that arm's own comments state, because a CD chain breaks
@@ -187,7 +187,7 @@ does not serve.
 
 ## 5. A second framework defect, fixed here because it is what made the last two arms weak
 
-`runtime/psx/dbg_server.cpp` — the control surface served **one command per process** for the rest of
+`runtime/psx/debug/dbg_server.cpp` — the control surface served **one command per process** for the rest of
 a stuck run. `dbg_submit`'s abandonment path cleared `s_req_pending` and left `s_resp_ready` set; the
 main thread's `service()` then completed the abandoned slot and set `s_resp_ready` for nobody, and the
 next submitter's guard loop `while (s_req_pending || s_resp_ready)` spun to its own timeout forever.
@@ -263,13 +263,13 @@ The eight files this change touches are each format-clean under the repository's
 `clang-format --dry-run --Werror` and the repository's `.clang-format`, and `clang-tidy` with the
 tracked `.clang-tidy` over the real compile database exits 0 on all four touched translation units.
 `tools/check_cpp_style.py`'s cap table was edited by another arm in this window (`gpu_native.cpp`
-4030 -> 3592, `render_queue.cpp` 2178 -> 1819 — two shrink-only ratchets); `"runtime/psx/hle.cpp":
+4030 -> 3592, `render_queue.cpp` 2178 -> 1819 — two shrink-only ratchets); `"runtime/psx/hle/hle.cpp":
 748` is untouched and `hle.cpp` is still 748 lines.
-`runtime/psx/hle.cpp` is **unchanged at 748 lines**, still exactly at its shrink-only cap; the new
+`runtime/psx/hle/hle.cpp` is **unchanged at 748 lines**, still exactly at its shrink-only cap; the new
 responsibility went into its own module rather than into a capped file. One correction to the framing
-this work was given: `runtime/psx/hle_interrupt.cpp` is **not** under a shrink-only cap — it is not in
+this work was given: `runtime/psx/hle/hle_interrupt.cpp` is **not** under a shrink-only cap — it is not in
 `PSXPORT_CAPS` at all — so it went from 252 to 287 lines against the 1,200-line default, with no cap
-raised and no ratchet owed. `runtime/psx/dbg_server.cpp` went from 1,033 to 1,067, also under the
+raised and no ratchet owed. `runtime/psx/debug/dbg_server.cpp` went from 1,033 to 1,067, also under the
 default.
 
 `spider1` `ctest --test-dir build/agent-clang`: **26/28**, the two reds being `psxport_pin` and

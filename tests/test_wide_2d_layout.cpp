@@ -19,9 +19,9 @@
 // would report, at the geometries that were affected. The Core-facing overload only gathers those
 // facts, so the decision under test is the one the product makes.
 
-#include "../runtime/psx/render_queue.h"
-#include "../runtime/psx/wide_2d_layout.h"
+#include "render_queue.h"
 #include "testutil.h"
+#include "wide_2d_layout.h"
 
 namespace {
 

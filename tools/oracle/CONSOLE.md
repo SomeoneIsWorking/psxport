@@ -25,7 +25,7 @@ only the recorded Beetle gitlink, verifies required full-core inputs, and never 
 checkout. Hardware rendering and Lightrec are disabled at build time. This diagnostic build explicitly selects
 `PSX_PC_OBSERVER=1`; product and default upstream core builds omit the observer module and all
 CPU-loop references. The framework verifier separately enables its CPU-only diagnostic regression. The manifest records the observer ABI. Uncommitted fork edits are not build inputs. The fork's GTE state declaration
-is supplied from `runtime/psx/gte_state.h`; its digest is part of the build identity. Source exports,
+is supplied from `runtime/psx/cpu/gte_state.h`; its digest is part of the build identity. Source exports,
 objects, library and identity manifests live in `build/oracle-console`. Linux `.so` and macOS `.dylib`
 are recognized; other platforms refuse explicitly. Recognizing a platform is not runtime qualification.
 The activity lock prevents overlapping host builds/runs. The application launcher does not call this tool.

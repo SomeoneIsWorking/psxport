@@ -196,7 +196,7 @@ static void test_repl_prompt_request_is_one_shot() {
 
 static void test_native_boot_has_no_title_frame_body_or_fallback() {
   const auto root = std::filesystem::path(__FILE__).parent_path().parent_path();
-  const std::string source = read_source(root / "runtime/psx/native_boot.cpp");
+  const std::string source = read_source(root / "runtime/psx/boot/native_boot.cpp");
   CHECK(!source.empty());
 
   // These were the title-shaped body and its defining per-frame operations. Native boot may retain

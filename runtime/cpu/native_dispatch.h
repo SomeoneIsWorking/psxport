@@ -125,7 +125,7 @@ ExecutionResult resumeGuestToReturn(Core &core, std::uint32_t resumePc, std::uin
 // CALL, so it must be scoped on the call's entry — the address a fresh `dispatchGuest` would have used —
 // and `resumePc` is MID-FUNCTION, so it cannot stand in for it. Without this, primitives submitted during a
 // resumed turn are attributed to the enclosing frame instead of the call being resumed, which
-// `runtime/psx/ot_attr.cpp` reports (`callAttribution.top()`, `caller()`, `visibleDepth()`). The
+// `runtime/psx/debug/ot_attr.cpp` reports (`callAttribution.top()`, `caller()`, `visibleDepth()`). The
 // entry-less form still works and still resumes correctly; it just cannot attribute. `resumeOriginal` needs
 // no second form because its `NativeKey` already carries the entry.
 ExecutionResult resumeGuestToReturnFrom(

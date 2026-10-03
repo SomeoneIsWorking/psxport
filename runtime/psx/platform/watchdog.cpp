@@ -147,7 +147,7 @@ void watchdog_init(void) {
   // windowed `./run.sh` self-aborts with a backtrace instead of wedging forever. A frame must take
   // well under a second, so 3s is already far past any healthy frame; gameplay pets every present
   // and never trips it. Explicit PSXPORT_WATCHDOG=0 disables it; set higher only for slow debugging.
-  // MIGRATED to a CVar (runtime/psx/config_vars.h). One DELIBERATE behaviour change, called out
+  // MIGRATED to a CVar (runtime/psx/config/config_vars.h). One DELIBERATE behaviour change, called out
   // here because "nothing may silently change meaning": this used to be `atoi(cfg_str(...))`, and
   // atoi("abc") is 0, so a TYPO in PSXPORT_WATCHDOG silently DISABLED the watchdog. It now falls
   // back to the declared default and the CVar binding logs a warn naming the bad value. A hang that

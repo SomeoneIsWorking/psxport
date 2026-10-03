@@ -1,4 +1,4 @@
-// The display controller's VBlank interrupt — Timing::raiseVBlank (runtime/psx/timing.cpp).
+// The display controller's VBlank interrupt — Timing::raiseVBlank (runtime/psx/frame/timing.cpp).
 //
 // The port owns frame pacing natively and traps every guest VSync wait; that is unchanged. What is
 // asserted here is the separate thing a guest can own itself: the INTERRUPT EDGE. A driver hung off
@@ -6,8 +6,8 @@
 // runs when something raises an interrupt at all.
 #include "../runtime/cpu/image_identity.h"
 #include "../runtime/cpu/native_dispatch.h"
-#include "../runtime/psx/game.h"
-#include "../runtime/psx/game_iface.h"
+#include "game.h"
+#include "game_iface.h"
 #include "testutil.h"
 
 #include <memory>

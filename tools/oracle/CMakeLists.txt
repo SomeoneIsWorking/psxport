@@ -33,7 +33,7 @@ add_library(psxport_oracle STATIC
 # Keep the dependency warning policy scoped to dependency translation units.
 set_source_files_properties(${ORACLE_VENDOR_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
-# gte.c reaches for psxport's own runtime/psx/gte_state.h — which is why psxport builds it too, and why
+# gte.c reaches for psxport's own runtime/psx/cpu/gte_state.h — which is why psxport builds it too, and why
 # the oracle must have runtime/psx on its path. PGXP is RUNTIME-gated (`PGXP_GetModes()`), not
 # compile-time, so its objects must be present even though the oracle never enables it.
 target_include_directories(psxport_oracle PUBLIC
@@ -45,7 +45,22 @@ target_include_directories(psxport_oracle PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/libretro-common/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/deps/libchdr/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/pgxp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx # the flat root, kept for game/*.h comments
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/boot # boot
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/core # core
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/cpu # cpu
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/frame # frame
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/gpu # gpu
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/present # present
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/input # input
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/cd # cd
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/audio # audio
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/movie # movie
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/debug # debug
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/config # config
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/hle # hle
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/platform # platform
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/game)
 
 # -fno-strict-aliasing: Mednafen's memory paths type-pun through MultiAccessSizeMem, and the vendor build
 # uses it. Dropping it would let the optimiser reorder RAM accesses the reference must perform exactly.

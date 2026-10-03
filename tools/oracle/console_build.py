@@ -46,7 +46,7 @@ def source_identity() -> dict:
     if git("rev-parse", "HEAD", cwd=VENDOR) != revision:
         raise ValueError(f"vendor checkout differs from recorded Beetle revision {revision}")
     return {"schema": BUILD_SCHEMA, "vendor_revision": revision,
-            "gte_state_sha256": file_sha256(ROOT / "runtime/psx/gte_state.h"),
+            "gte_state_sha256": file_sha256(ROOT / "runtime/psx/cpu/gte_state.h"),
             "system": sys.platform, "machine": platform.machine(),
             "software_renderer": True, "mednafen_interpreter": True, "lightrec": False,
             "pc_observer_abi": 1}

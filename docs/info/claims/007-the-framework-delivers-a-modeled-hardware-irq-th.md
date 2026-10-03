@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-21
 tags: bios,irq,hookentryint
-depends: runtime/psx/bios_interrupt.cpp#bios_interrupt_dispatch_custom_exit, runtime/psx/hle.cpp#Hle::irqPoll, runtime/cpu/execution_control.cpp#requestExecutionExit
+depends: runtime/psx/hle/bios_interrupt.cpp#bios_interrupt_dispatch_custom_exit, runtime/psx/hle/hle.cpp#Hle::irqPoll, runtime/cpu/execution_control.cpp#requestExecutionExit
 reconfirmed: 2026-08-25
 verified_at: 2026-08-25 00:52:55
 ---

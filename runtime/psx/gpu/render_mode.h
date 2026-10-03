@@ -133,7 +133,7 @@ public:
   // reads guest RAM + engine state and draws to HOST memory only — it must NEVER write guest main
   // RAM or scratchpad. True only while the native picture-producing display pass (sceneNative() +
   // the native OT/queue draw it triggers, in game_tomba2.cpp's Engine::drawOTag) is executing on
-  // THIS core. Core::mem_w8/16/32 (runtime/psx/mem.cpp) check this and abort with a guest
+  // THIS core. Core::mem_w8/16/32 (runtime/psx/core/mem.cpp) check this and abort with a guest
   // backtrace on any guest-memory write while armed. Per-Core so differential test's two cores (and psx_render,
   // which never arms it) never cross-contaminate. Set/cleared ONLY via DisplayPassGuard (below) —
   // never toggled by hand — so an early return/exception can't leave it stuck on.

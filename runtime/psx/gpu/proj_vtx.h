@@ -1,4 +1,4 @@
-// runtime/psx/proj_vtx.h — ProjVtx: the projected-vertex POD (framework-side).
+// runtime/psx/gpu/proj_vtx.h — ProjVtx: the projected-vertex POD (framework-side).
 //
 // Extracted from game/render/projection.h so the framework (gte_beetle.cpp) can name the projection
 // output type without pulling in the game's per-object transform (EObjXform). Pure POD, no game types,

@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-25
 tags: syscall,cp0,oracle
-depends: runtime/psx/syscall_exception.cpp#enter, runtime/psx/hle.cpp#Hle::dispatchBios, tools/oracle/oracle_shim.c#oracle_resume_syscall_return, tools/oracle/test_oracle_trace.py#main
+depends: runtime/psx/hle/syscall_exception.cpp#enter, runtime/psx/hle/hle.cpp#Hle::dispatchBios, tools/oracle/oracle_shim.c#oracle_resume_syscall_return, tools/oracle/test_oracle_trace.py#main
 reconfirmed: 2026-08-26
 verified_at: 2026-08-26 23:30:36
 ---

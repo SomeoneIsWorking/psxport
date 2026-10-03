@@ -34,12 +34,12 @@ Two further facts, both measured on Spyro 2, were needed before the completion c
 
 | piece | where |
 |---|---|
-| two declared fields on `GuestCdStreamCallbackLayout`: `readyStatus` (default 1) and `stockReadRaisesCompletion` (default false) | `runtime/psx/guest_cd_stream_callback_layout.h` |
+| two declared fields on `GuestCdStreamCallbackLayout`: `readyStatus` (default 1) and `stockReadRaisesCompletion` (default false) | `runtime/psx/cd/guest_cd_stream_callback_layout.h` |
 | `psx::cd::raiseStockReadCompletion`, the one owner: after a successful stock read of >0 sectors, post one INT1 data-ready response, latch the edge, request an IRQ poll | `runtime/psx/cd_stock_read_completion.*`, called at the end of `cd_read_stock_sync` |
-| `cdc_post_data_ready`: queue ONE data-ready response without starting a drive read; refuses (returns 0) when the ring is full | `runtime/psx/cdc_native.cpp` |
-| the delivery arm passes the declared `readyStatus` instead of a constant | `runtime/psx/cd_ready_delivery.cpp` |
+| `cdc_post_data_ready`: queue ONE data-ready response without starting a drive read; refuses (returns 0) when the ring is full | `runtime/psx/cd/cdc_native.cpp` |
+| the delivery arm passes the declared `readyStatus` instead of a constant | `runtime/psx/cd/cd_ready_delivery.cpp` |
 | `psx::cd::armCdInterrupt`: the one implementation of "open I_MASK bit 2 through the device, keep the guest's other bits" | same module |
-| `cd_read_stock_sync` reads sectors through `cdc.disc_read_raw_fn` (defaults to `disc_read_raw`) so the shipping function is testable with fake sectors | `runtime/psx/cd_override.cpp` |
+| `cd_read_stock_sync` reads sectors through `cdc.disc_read_raw_fn` (defaults to `disc_read_raw`) so the shipping function is testable with fake sectors | `runtime/psx/cd/cd_override.cpp` |
 
 **Exactly once per read is enforced by the controller queue, not by a counter.** One successful read posts
 one response; the delivery consumes and acknowledges that response before dispatching; `in_irq` defers a

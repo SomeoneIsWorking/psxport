@@ -423,7 +423,7 @@ struct GpuState {
   // store-span table. Called at every prim-completion site. Both ways of failing to attribute are
   // COUNTED and DISTINGUISHED (no source address at all vs an address no span covers) because they have
   // different fixes: one is inherent to a packet the walk never stamped, the other means the span feed
-  // missed. See runtime/psx/producer_census.h.
+  // missed. See runtime/psx/debug/producer_census.h.
   void censusGuestPrim(Core *core);
 };
 

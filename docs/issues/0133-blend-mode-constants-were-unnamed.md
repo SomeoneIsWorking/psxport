@@ -4,7 +4,7 @@
 is not.
 
 Found 2026-09-28 while splitting the software rasterizer out of `gpu_native.cpp` into
-`runtime/psx/gpu_native_raster.cpp`.
+`runtime/psx/gpu/gpu_native_raster.cpp`.
 
 ## What was there
 
@@ -41,5 +41,5 @@ capture rather than reasoned about.
 
 ## Where
 
-- `runtime/psx/gpu_native_raster.cpp` — the blend constants, `sat5`, `blend555`.
-- `runtime/psx/gpu_native_internal.h` — `s_tp_blend`, the texpage field that selects the mode.
+- `runtime/psx/gpu/gpu_native_raster.cpp` — the blend constants, `sat5`, `blend555`.
+- `runtime/psx/gpu/gpu_native_internal.h` — `s_tp_blend`, the texpage field that selects the mode.

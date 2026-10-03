@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-30
 tags: input,sio,vblank,crashbash
-depends: runtime/psx/sio_pad.cpp#Sio0::dataWrite, runtime/psx/timing.cpp#Timing::advanceDisplayFields, runtime/psx/timing.cpp#Timing::rootCounter2, runtime/psx/io_peripherals.cpp#io_peripheral_read
+depends: runtime/psx/input/sio_pad.cpp#Sio0::dataWrite, runtime/psx/frame/timing.cpp#Timing::advanceDisplayFields, runtime/psx/frame/timing.cpp#Timing::rootCounter2, runtime/psx/platform/io_peripherals.cpp#io_peripheral_read
 ---
 
 ## Claim

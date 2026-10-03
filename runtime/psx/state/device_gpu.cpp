@@ -12,7 +12,7 @@
 // default or pure counters. It is listed here rather than left implicit because "the section is
 // smaller than the struct" is exactly the kind of omission that later reads as an oversight.
 //
-// The BEETLE GPU is not in this file. It is the independent ORACLE (runtime/psx/gpu_beetle.cpp),
+// The BEETLE GPU is not in this file. It is the independent ORACLE (runtime/psx/gpu/gpu_beetle.cpp),
 // inert unless a run enabled it, and it is not the GPU the guest draws with — see
 // beetle_device_state.h.
 #include "device_sections.h"

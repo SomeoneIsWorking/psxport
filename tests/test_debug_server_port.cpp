@@ -15,7 +15,7 @@
 // exits before a client can drive it. So both call `debug_server_port`, and these cases are its
 // contract: the sentinel, a real port, and every shape of text that must NOT bind a port.
 
-#include "../runtime/psx/dbg_server.h"
+#include "dbg_server.h"
 #include "testutil.h"
 
 #include <string>

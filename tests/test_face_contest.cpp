@@ -16,8 +16,8 @@
 // HERE, against the geometry directly.
 //
 // Hermetic: no queue, no Core, no GPU, no disc. Every case is two RqItems and a boolean.
-#include "../runtime/psx/face_contest.h"
-#include "../runtime/psx/render_queue.h"
+#include "face_contest.h"
+#include "render_queue.h"
 #include "testutil.h"
 
 #include <cmath>

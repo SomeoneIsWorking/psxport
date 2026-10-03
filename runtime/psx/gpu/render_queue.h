@@ -94,7 +94,7 @@ static constexpr uint32_t kSceneTableDbgNode = 0xFFFF0002u;
 // Reserved dbg_node sentinel for the NATIVE SCROLLING-BACKDROP prims: Render::backdropRender (the field's
 // sky/parallax tilemap, render_walk.cpp) scopes its own diag.beginObject/endObject around its push2dQuad
 // loop, the same way terrain/scene-table do. #54 (main-menu widescreen+fps60): RQ_BACKGROUND is NOT a
-// single-producer layer — the generic guest-OT walk (runtime/psx/gpu_native.cpp) ALSO classifies any
+// single-producer layer — the generic guest-OT walk (runtime/psx/gpu/gpu_native.cpp) ALSO classifies any
 // full-screen 2D poly/sprite/FillRect (menu backdrop art, hut-interior clear, SOP-narration fills, #52's
 // FillRect widen) as RQ_BACKGROUND by SCREEN COVERAGE, with no relation to backdropRender. Those OT-walk
 // items keep dbg_node==0 (no beginObject scope wraps the OT walk) — this sentinel is what lets

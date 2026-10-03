@@ -6,11 +6,11 @@ product does not carry a second windowing or graphics stack.
 
 ## Ownership
 
-- `runtime/psx/gpu_vk.cpp` owns the SDL GPU device, window claim, swapchain, VRAM textures, transfer
+- `runtime/psx/gpu/gpu_vk.cpp` owns the SDL GPU device, window claim, swapchain, VRAM textures, transfer
   buffers, pipelines, presentation, readback, and dirty-region synchronization.
 - `runtime/psx/shaders_gpu/` owns first-party GLSL sources. `tools/gen_gpu_shaders.py` compiles and
   embeds them in a consumer-owned build directory; no shader header is written to the source tree.
-- `runtime/psx/gpu_native.cpp` and the render-queue owners provide primitive and presentation work
+- `runtime/psx/gpu/gpu_native.cpp` and the render-queue owners provide primitive and presentation work
   through the renderer's narrow interfaces.
 - `runtime/psx/sbs_pane_layout.h` owns side-by-side pane geometry. Each Game renders independently;
   composition consumes the completed panes without sharing per-Core renderer state.

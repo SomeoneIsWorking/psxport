@@ -8,7 +8,7 @@
 // interrupt the moment the source deasserted.
 //
 // Transcribed from the semantics of vendor/beetle-psx/mednafen/psx/irq.c IRQ_Assert, which is the
-// reference this framework's SPU line goes through (spu.c calls IRQ_Assert; runtime/psx/hw_bind.cpp
+// reference this framework's SPU line goes through (spu.c calls IRQ_Assert; runtime/psx/boot/hw_bind.cpp
 // turns that into Game::hle.i_stat bit 9).
 #pragma once
 #include <cstdint>

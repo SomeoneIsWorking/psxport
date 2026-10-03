@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dbgclient.py — client for the port's live, non-blocking debug server (runtime/psx/dbg_server.cpp).
+# dbgclient.py — client for the port's live, non-blocking debug server (runtime/psx/debug/dbg_server.cpp).
 #
 # The port must be launched with PSXPORT_DEBUG_SERVER=1 (default port 5959) or =<port>. Unlike the
 # blocking PSXPORT_REPL FIFO, this does NOT pause the game — the game keeps presenting while a command

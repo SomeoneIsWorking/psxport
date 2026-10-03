@@ -1,6 +1,6 @@
 // test_present_plan.cpp — the presented picture must not depend on which leg built it.
 //
-// WHAT THIS GATES. `runtime/psx/present_plan.h` decides everything about a presented frame:
+// WHAT THIS GATES. `runtime/psx/present/present_plan.h` decides everything about a presented frame:
 // whether the composite runs, where it lands in the sink, which target it samples, the fade, and the
 // 24bpp flag. The rule is that ONLY `to_swapchain` may differ between headless and windowed. If any
 // other field can, then a headless measurement is a measurement of a different program — which is

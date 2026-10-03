@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-26
 tags:
-depends: runtime/psx/render_capabilities.h#RenderCapabilities, runtime/psx/render_path.cpp#render_path_apply, runtime/psx/mods.cpp#Mods::init, runtime/ui/menu_pane.cpp#MenuPane, runtime/ui/render_path_control.cpp#RenderPathControl::cycle
+depends: runtime/psx/gpu/render_capabilities.h#RenderCapabilities, runtime/psx/gpu/render_path.cpp#render_path_apply, runtime/psx/debug/mods.cpp#Mods::init, runtime/ui/menu_pane.cpp#MenuPane, runtime/ui/render_path_control.cpp#RenderPathControl::cycle
 ---
 
 ## Claim

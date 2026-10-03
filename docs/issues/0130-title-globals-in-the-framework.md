@@ -1,7 +1,7 @@
 # 0130 — three TITLE-SPECIFIC guest globals are read by bare address from framework code
 
 **State:** recorded, not fixed. Found 2026-09-28 while naming the guest operations in
-`runtime/psx/gpu_native.cpp`; the same work tried to fix it and was stopped by the gate that exists
+`runtime/psx/gpu/gpu_native.cpp`; the same work tried to fix it and was stopped by the gate that exists
 specifically to stop it (below).
 
 ## The addresses
@@ -28,7 +28,7 @@ the right NAME and the wrong PLACE, and the gate said so:
 
 ```
 NEW game address in framework code: runtime/psx/guest_scene_globals.h 0x800bf544 x1 (baseline 0)
-  -> move it into GameConfig (runtime/psx/game_iface.h) and read it from there;
+  -> move it into GameConfig (runtime/psx/game/game_iface.h) and read it from there;
 ```
 
 Naming a title address in a framework file does not make it title-neutral; it makes it a named title
@@ -43,7 +43,7 @@ nothing should see. That is a design decision, not a refactor.
 
 ## Where
 
-- `runtime/psx/gpu_native.cpp` — `0x801FE00C` (redpkt, `[stagetl]`), `0x800BF544` (pool channel).
-- `runtime/psx/mem.cpp` — `0x801FE00C` (wwatch, spudma).
-- `runtime/psx/dbg_server.cpp` — `0x801FE00C`, `0x801FE048`, `0x800BE258` (`debug stage`).
+- `runtime/psx/gpu/gpu_native.cpp` — `0x801FE00C` (redpkt, `[stagetl]`), `0x800BF544` (pool channel).
+- `runtime/psx/core/mem.cpp` — `0x801FE00C` (wwatch, spudma).
+- `runtime/psx/debug/dbg_server.cpp` — `0x801FE00C`, `0x801FE048`, `0x800BE258` (`debug stage`).
 - `tests/test_no_game_address_literals.cpp` — the baseline rows that keep these visible.

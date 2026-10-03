@@ -4,7 +4,7 @@
 // starting another title, or the oracle's second core) began with the first one's DICR flags and owed
 // completions instead of the power-on state. `DmaRegisters` is the per-Core home; this pins that a fresh
 // one is the power-on state and that two instances share nothing.
-#include "../runtime/psx/dma_irq.h"
+#include "dma_irq.h"
 #include "testutil.h"
 
 static void test_fresh_registers_are_power_on(void) {

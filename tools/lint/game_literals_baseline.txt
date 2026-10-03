@@ -10,94 +10,94 @@
 # DENOMINATOR at generation: 285 files scanned across roots runtime; 11986 hex literals in live code; 486 were 5-8 digit address candidates; 100 live flagged in 15 files; 161 more in comments/strings (NOT gated, listed at the bottom); 0 exempted by an inline `psx-console:` marker; 0 test files and 0 gitignored build artifacts excluded.
 #
 # Top holders by LIVE count (comment/string count in parentheses):
-#      33 (  16)  runtime/psx/pc_scheduler.cpp
-#      20 (  24)  runtime/psx/cd_override.cpp
-#      11 (   4)  runtime/psx/pad_input.cpp
-#       6 (   9)  runtime/psx/dbg_server.cpp
-#       5 (   1)  runtime/psx/gpu_vk.cpp
-#       4 (   8)  runtime/psx/gpu_native.cpp
-#       4 (   0)  runtime/psx/overlay_glue.cpp
-#       4 (  10)  runtime/psx/scheduler.cpp
-#       3 (   6)  runtime/psx/render_queue.cpp
+#      33 (  16)  runtime/psx/frame/pc_scheduler.cpp
+#      20 (  24)  runtime/psx/cd/cd_override.cpp
+#      11 (   4)  runtime/psx/input/pad_input.cpp
+#       6 (   9)  runtime/psx/debug/dbg_server.cpp
+#       5 (   1)  runtime/psx/gpu/gpu_vk.cpp
+#       4 (   8)  runtime/psx/gpu/gpu_native.cpp
+#       4 (   0)  runtime/psx/core/overlay_glue.cpp
+#       4 (  10)  runtime/psx/platform/scheduler.cpp
+#       3 (   6)  runtime/psx/gpu/render_queue.cpp
 #       3 (   0)  runtime/ui/menu_readouts.cpp
-#       2 (   3)  runtime/psx/mem.cpp
-#       2 (   0)  runtime/psx/scheduler.h
-#       1 (   0)  runtime/psx/boot.cpp
-#       1 (   1)  runtime/psx/render_node.h
-#       1 (   3)  runtime/psx/timing.cpp
+#       2 (   3)  runtime/psx/core/mem.cpp
+#       2 (   0)  runtime/psx/platform/scheduler.h
+#       1 (   0)  runtime/psx/boot/boot.cpp
+#       1 (   1)  runtime/psx/gpu/render_node.h
+#       1 (   3)  runtime/psx/frame/timing.cpp
 
-runtime/psx/boot.cpp:0x801FFFF0:1  # L45
-runtime/psx/cd_override.cpp:0x1F800137:1  # L728
-runtime/psx/cd_override.cpp:0x1F800138:1  # L331
-runtime/psx/cd_override.cpp:0x1F80019A:1  # L728
-runtime/psx/cd_override.cpp:0x1F8001F0:2  # L625,L668
-runtime/psx/cd_override.cpp:0x1F8001F4:3  # L626,L641,L669
-runtime/psx/cd_override.cpp:0x1F8001F8:3  # L627,L642,L667
-runtime/psx/cd_override.cpp:0x8001CF00:2  # L711,L801
-runtime/psx/cd_override.cpp:0x800BE220:1  # L727
-runtime/psx/cd_override.cpp:0x800BE222:1  # L727
-runtime/psx/cd_override.cpp:0x800BE224:1  # L727
-runtime/psx/cd_override.cpp:0x800BED80:1  # L729
-runtime/psx/cd_override.cpp:0x801FE0E0:3  # L731,L774,L787
-runtime/psx/dbg_server.cpp:0x800BE258:1  # L392
-runtime/psx/dbg_server.cpp:0x800ECF58:1  # L337
-runtime/psx/dbg_server.cpp:0x800F2624:1  # L365
-runtime/psx/dbg_server.cpp:0x800FB168:1  # L365
-runtime/psx/dbg_server.cpp:0x801FE00C:1  # L390
-runtime/psx/dbg_server.cpp:0x801FE048:1  # L391
-runtime/psx/gpu_native.cpp:0x80010000:1  # L3685
-runtime/psx/gpu_native.cpp:0x800BF544:1  # L3819
-runtime/psx/gpu_native.cpp:0x801FE00C:2  # L1712,L3195
-runtime/psx/gpu_vk.cpp:0x1F800138:1  # L4130
-runtime/psx/gpu_vk.cpp:0x80100400:4  # L4133,L4134,L4135,…
-runtime/psx/mem.cpp:0x801FE00C:2  # L148,L875
-runtime/psx/overlay_glue.cpp:0x1F8000D2:1  # L31
-runtime/psx/overlay_glue.cpp:0x1F8000D6:1  # L32
-runtime/psx/overlay_glue.cpp:0x1F8000DA:1  # L33
-runtime/psx/overlay_glue.cpp:0x801FE00C:1  # L34
-runtime/psx/pad_input.cpp:0x1F800138:1  # L843
-runtime/psx/pad_input.cpp:0x1F800236:1  # L850
-runtime/psx/pad_input.cpp:0x800BE258:1  # L854
-runtime/psx/pad_input.cpp:0x800BF809:1  # L856
-runtime/psx/pad_input.cpp:0x800BF80F:1  # L849
-runtime/psx/pad_input.cpp:0x800BF839:1  # L848
-runtime/psx/pad_input.cpp:0x800BF870:1  # L855
-runtime/psx/pad_input.cpp:0x800BF89C:1  # L857
-runtime/psx/pad_input.cpp:0x800E7E68:1  # L858
-runtime/psx/pad_input.cpp:0x800FE916:1  # L859
-runtime/psx/pad_input.cpp:0x800FE91E:1  # L860
-runtime/psx/pc_scheduler.cpp:0x1F800138:1  # L30
-runtime/psx/pc_scheduler.cpp:0x80051F40:1  # L68
-runtime/psx/pc_scheduler.cpp:0x80051F54:1  # L71
-runtime/psx/pc_scheduler.cpp:0x80051F68:1  # L78
-runtime/psx/pc_scheduler.cpp:0x80051F70:1  # L81
-runtime/psx/pc_scheduler.cpp:0x80051FA4:1  # L48
-runtime/psx/pc_scheduler.cpp:0x80051FDC:1  # L133
-runtime/psx/pc_scheduler.cpp:0x80051FF0:1  # L138
-runtime/psx/pc_scheduler.cpp:0x80051FF8:1  # L141
-runtime/psx/pc_scheduler.cpp:0x80052000:1  # L145
-runtime/psx/pc_scheduler.cpp:0x80052054:1  # L103
-runtime/psx/pc_scheduler.cpp:0x80052060:1  # L108
-runtime/psx/pc_scheduler.cpp:0x80052068:1  # L111
-runtime/psx/pc_scheduler.cpp:0x80080860:1  # L80
-runtime/psx/pc_scheduler.cpp:0x80080870:2  # L110,L140
-runtime/psx/pc_scheduler.cpp:0x80080890:3  # L74,L106,L136
-runtime/psx/pc_scheduler.cpp:0x800808A0:3  # L84,L113,L143
-runtime/psx/pc_scheduler.cpp:0x801062E4:4  # L231,L257,L451,…
-runtime/psx/pc_scheduler.cpp:0x8010637C:3  # L304,L337,L451
-runtime/psx/pc_scheduler.cpp:0x801063F4:1  # L346
-runtime/psx/pc_scheduler.cpp:0x8010649C:2  # L451,L469
-runtime/psx/pc_scheduler.cpp:0x80109164:1  # L273
-runtime/psx/render_node.h:0x1F80028C:1  # L13
-runtime/psx/render_queue.cpp:0x800F2624:1  # L248
-runtime/psx/render_queue.cpp:0x800F2738:1  # L248
-runtime/psx/render_queue.cpp:0x800FB168:1  # L248
-runtime/psx/scheduler.cpp:0x8010637C:1  # L249
-runtime/psx/scheduler.cpp:0x801063F4:2  # L254,L258
-runtime/psx/scheduler.cpp:0x801FE0E0:1  # L114
-runtime/psx/scheduler.h:0x1F800138:1  # L8
-runtime/psx/scheduler.h:0x801FE000:1  # L6
-runtime/psx/timing.cpp:0x800ABDE0:1  # L14
+runtime/psx/boot/boot.cpp:0x801FFFF0:1  # L45
+runtime/psx/cd/cd_override.cpp:0x1F800137:1  # L728
+runtime/psx/cd/cd_override.cpp:0x1F800138:1  # L331
+runtime/psx/cd/cd_override.cpp:0x1F80019A:1  # L728
+runtime/psx/cd/cd_override.cpp:0x1F8001F0:2  # L625,L668
+runtime/psx/cd/cd_override.cpp:0x1F8001F4:3  # L626,L641,L669
+runtime/psx/cd/cd_override.cpp:0x1F8001F8:3  # L627,L642,L667
+runtime/psx/cd/cd_override.cpp:0x8001CF00:2  # L711,L801
+runtime/psx/cd/cd_override.cpp:0x800BE220:1  # L727
+runtime/psx/cd/cd_override.cpp:0x800BE222:1  # L727
+runtime/psx/cd/cd_override.cpp:0x800BE224:1  # L727
+runtime/psx/cd/cd_override.cpp:0x800BED80:1  # L729
+runtime/psx/cd/cd_override.cpp:0x801FE0E0:3  # L731,L774,L787
+runtime/psx/debug/dbg_server.cpp:0x800BE258:1  # L392
+runtime/psx/debug/dbg_server.cpp:0x800ECF58:1  # L337
+runtime/psx/debug/dbg_server.cpp:0x800F2624:1  # L365
+runtime/psx/debug/dbg_server.cpp:0x800FB168:1  # L365
+runtime/psx/debug/dbg_server.cpp:0x801FE00C:1  # L390
+runtime/psx/debug/dbg_server.cpp:0x801FE048:1  # L391
+runtime/psx/gpu/gpu_native.cpp:0x80010000:1  # L3685
+runtime/psx/gpu/gpu_native.cpp:0x800BF544:1  # L3819
+runtime/psx/gpu/gpu_native.cpp:0x801FE00C:2  # L1712,L3195
+runtime/psx/gpu/gpu_vk.cpp:0x1F800138:1  # L4130
+runtime/psx/gpu/gpu_vk.cpp:0x80100400:4  # L4133,L4134,L4135,…
+runtime/psx/core/mem.cpp:0x801FE00C:2  # L148,L875
+runtime/psx/core/overlay_glue.cpp:0x1F8000D2:1  # L31
+runtime/psx/core/overlay_glue.cpp:0x1F8000D6:1  # L32
+runtime/psx/core/overlay_glue.cpp:0x1F8000DA:1  # L33
+runtime/psx/core/overlay_glue.cpp:0x801FE00C:1  # L34
+runtime/psx/input/pad_input.cpp:0x1F800138:1  # L843
+runtime/psx/input/pad_input.cpp:0x1F800236:1  # L850
+runtime/psx/input/pad_input.cpp:0x800BE258:1  # L854
+runtime/psx/input/pad_input.cpp:0x800BF809:1  # L856
+runtime/psx/input/pad_input.cpp:0x800BF80F:1  # L849
+runtime/psx/input/pad_input.cpp:0x800BF839:1  # L848
+runtime/psx/input/pad_input.cpp:0x800BF870:1  # L855
+runtime/psx/input/pad_input.cpp:0x800BF89C:1  # L857
+runtime/psx/input/pad_input.cpp:0x800E7E68:1  # L858
+runtime/psx/input/pad_input.cpp:0x800FE916:1  # L859
+runtime/psx/input/pad_input.cpp:0x800FE91E:1  # L860
+runtime/psx/frame/pc_scheduler.cpp:0x1F800138:1  # L30
+runtime/psx/frame/pc_scheduler.cpp:0x80051F40:1  # L68
+runtime/psx/frame/pc_scheduler.cpp:0x80051F54:1  # L71
+runtime/psx/frame/pc_scheduler.cpp:0x80051F68:1  # L78
+runtime/psx/frame/pc_scheduler.cpp:0x80051F70:1  # L81
+runtime/psx/frame/pc_scheduler.cpp:0x80051FA4:1  # L48
+runtime/psx/frame/pc_scheduler.cpp:0x80051FDC:1  # L133
+runtime/psx/frame/pc_scheduler.cpp:0x80051FF0:1  # L138
+runtime/psx/frame/pc_scheduler.cpp:0x80051FF8:1  # L141
+runtime/psx/frame/pc_scheduler.cpp:0x80052000:1  # L145
+runtime/psx/frame/pc_scheduler.cpp:0x80052054:1  # L103
+runtime/psx/frame/pc_scheduler.cpp:0x80052060:1  # L108
+runtime/psx/frame/pc_scheduler.cpp:0x80052068:1  # L111
+runtime/psx/frame/pc_scheduler.cpp:0x80080860:1  # L80
+runtime/psx/frame/pc_scheduler.cpp:0x80080870:2  # L110,L140
+runtime/psx/frame/pc_scheduler.cpp:0x80080890:3  # L74,L106,L136
+runtime/psx/frame/pc_scheduler.cpp:0x800808A0:3  # L84,L113,L143
+runtime/psx/frame/pc_scheduler.cpp:0x801062E4:4  # L231,L257,L451,…
+runtime/psx/frame/pc_scheduler.cpp:0x8010637C:3  # L304,L337,L451
+runtime/psx/frame/pc_scheduler.cpp:0x801063F4:1  # L346
+runtime/psx/frame/pc_scheduler.cpp:0x8010649C:2  # L451,L469
+runtime/psx/frame/pc_scheduler.cpp:0x80109164:1  # L273
+runtime/psx/gpu/render_node.h:0x1F80028C:1  # L13
+runtime/psx/gpu/render_queue.cpp:0x800F2624:1  # L248
+runtime/psx/gpu/render_queue.cpp:0x800F2738:1  # L248
+runtime/psx/gpu/render_queue.cpp:0x800FB168:1  # L248
+runtime/psx/platform/scheduler.cpp:0x8010637C:1  # L249
+runtime/psx/platform/scheduler.cpp:0x801063F4:2  # L254,L258
+runtime/psx/platform/scheduler.cpp:0x801FE0E0:1  # L114
+runtime/psx/platform/scheduler.h:0x1F800138:1  # L8
+runtime/psx/platform/scheduler.h:0x801FE000:1  # L6
+runtime/psx/frame/timing.cpp:0x800ABDE0:1  # L14
 runtime/ui/menu_readouts.cpp:0x801062E4:1  # L63
 runtime/ui/menu_readouts.cpp:0x8010637C:1  # L62
 runtime/ui/menu_readouts.cpp:0x8010649C:1  # L64
@@ -105,35 +105,35 @@ runtime/ui/menu_readouts.cpp:0x8010649C:1  # L64
 # ---------------------------------------------------------------------------------
 # NOT GATED — the same values in comments and string literals. Cleanup debt, recorded
 # here so nobody sizes the seam work off a grep count that mixes the two classes.
-#      24  runtime/psx/cd_override.cpp
-#      17  runtime/psx/crt0_verify.h
-#      16  runtime/psx/pc_scheduler.cpp
-#      13  runtime/psx/render_noise.h
-#      10  runtime/psx/scheduler.cpp
-#       9  runtime/psx/dbg_server.cpp
-#       8  runtime/psx/gpu_native.cpp
-#       6  runtime/psx/producer_census.h
-#       6  runtime/psx/render_queue.cpp
-#       5  runtime/psx/memcard.cpp
-#       4  runtime/psx/ot_attr.cpp
-#       4  runtime/psx/pad_input.cpp
-#       3  runtime/psx/cd.h
-#       3  runtime/psx/crt0_boot.h
-#       3  runtime/psx/mem.cpp
-#       3  runtime/psx/ot_attr.h
-#       3  runtime/psx/pc_scheduler.h
-#       3  runtime/psx/repl.cpp
-#       3  runtime/psx/sio_pad.cpp
-#       3  runtime/psx/timing.cpp
-#       2  runtime/psx/gpu_perf.cpp
-#       2  runtime/psx/legacy_game_config.h
-#       2  runtime/psx/producer_scope.h
-#       1  runtime/psx/cdc_native.cpp
-#       1  runtime/psx/core.h
-#       1  runtime/psx/fps60.h
-#       1  runtime/psx/gpu_vk.cpp
-#       1  runtime/psx/native_boot.cpp
-#       1  runtime/psx/proj_prim.cpp
-#       1  runtime/psx/render_node.h
-#       1  runtime/psx/task_slot_layout.h
-#       1  runtime/psx/timing.h
+#      24  runtime/psx/cd/cd_override.cpp
+#      17  runtime/psx/boot/crt0_verify.h
+#      16  runtime/psx/frame/pc_scheduler.cpp
+#      13  runtime/psx/gpu/render_noise.h
+#      10  runtime/psx/platform/scheduler.cpp
+#       9  runtime/psx/debug/dbg_server.cpp
+#       8  runtime/psx/gpu/gpu_native.cpp
+#       6  runtime/psx/debug/producer_census.h
+#       6  runtime/psx/gpu/render_queue.cpp
+#       5  runtime/psx/platform/memcard.cpp
+#       4  runtime/psx/debug/ot_attr.cpp
+#       4  runtime/psx/input/pad_input.cpp
+#       3  runtime/psx/cd/cd.h
+#       3  runtime/psx/boot/crt0_boot.h
+#       3  runtime/psx/core/mem.cpp
+#       3  runtime/psx/debug/ot_attr.h
+#       3  runtime/psx/frame/pc_scheduler.h
+#       3  runtime/psx/debug/repl.cpp
+#       3  runtime/psx/input/sio_pad.cpp
+#       3  runtime/psx/frame/timing.cpp
+#       2  runtime/psx/gpu/gpu_perf.cpp
+#       2  runtime/psx/config/legacy_game_config.h
+#       2  runtime/psx/debug/producer_scope.h
+#       1  runtime/psx/cd/cdc_native.cpp
+#       1  runtime/psx/core/core.h
+#       1  runtime/psx/present/fps60.h
+#       1  runtime/psx/gpu/gpu_vk.cpp
+#       1  runtime/psx/boot/native_boot.cpp
+#       1  runtime/psx/gpu/proj_prim.cpp
+#       1  runtime/psx/gpu/render_node.h
+#       1  runtime/psx/platform/task_slot_layout.h
+#       1  runtime/psx/frame/timing.h

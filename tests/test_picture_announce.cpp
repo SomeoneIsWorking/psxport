@@ -15,8 +15,8 @@
 // two repositories a body of evidence: AUTO that resolved narrow, and AUTO that resolved wide. Those
 // two must be told apart, or the warning becomes noise nobody reads.
 
-#include "../runtime/psx/mods.h"
-#include "../runtime/psx/picture_announce.h"
+#include "mods.h"
+#include "picture_announce.h"
 #include "testutil.h"
 
 #include <string>

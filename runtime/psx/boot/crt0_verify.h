@@ -450,7 +450,7 @@ static inline bool crt0_audit(const GuestProgramImage *image, const Crt0Plan &p,
                   "GuestProgramImage DISAGREE with the guest's own crt0 at 0x{:08X}: {}."
                   "\n  The guest bytes are the measurement; the runtime image is a hand copy of "
                   "it. Fix the derived runtime (or, if the scanner is wrong, say so with the disassembly — "
-                  "runtime/psx/crt0_verify.h documents the five crt0s it was measured on).",
+                  "runtime/psx/boot/crt0_verify.h documents the five crt0s it was measured on).",
                   who,
                   disagreed,
                   n,
