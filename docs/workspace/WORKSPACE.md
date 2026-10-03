@@ -63,3 +63,7 @@ psxport `main` instead. Lightrec stays pinned at `PSXPORT_LIGHTREC_REVISION`
   Sweep only your own `scratch/<activity>/`.
 - Disc images live under `/mnt/Boy/ROM/PSX CHD/`; each repo's `.env` points at its disc.
 - One game instance at a time unless isolated; kill by PID, never `pkill`.
+- To reach a screen, level or state for exploration, add a title-owned debug option modelled on Tomba 2's
+  `warp` (`Tomba2Engine/game/core/dev_warp.cpp`): a control-channel command arms a request and the frame
+  driver applies it at a frame boundary through the game's own transition/load owners. Player paths stay
+  untouched. Never steer gameplay to get there, and prefer this over timed front-end replays.
