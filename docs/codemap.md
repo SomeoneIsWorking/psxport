@@ -66,8 +66,9 @@ library never depends on a test oracle.
 | Fade-driver state tap | `debug fadewatch` dump of the two overlapping fade drivers on every fade/rect transition | `runtime/psx/gpu_vk_fadewatch.*` | Diagnostic only, out of the present path; the guest addresses are title config (`GameConfig::fadewatch*`), and an undeclared title is reported BLIND rather than read at address 0 | `runtime/psx/legacy_game_config.h` |
 | Audio output | SPU sample production, queue policy, and host playback | `runtime/psx/spu_audio.cpp`, `runtime/psx/audio_queue_policy.h` | Existing audio owner | `runtime/psx/spu_audio.h` |
 | Movie playback | .STR demux, BS VLC decode, MDEC output at 16- or 24-bit, presentation, the movie's own XA audio stream, media-clock pacing, and the Start skip | `runtime/psx/native_fmv.cpp` (`Fmv`), decode machinery in `runtime/psx/fmv_decode.cpp` | The ONE movie owner: a title replaces its guest's player with an override that supplies which movie and what the retail player returns, and never re-implements demux or decode. Frame decode terminates on LACK OF PROGRESS, not on exhausted input — a parked MDEC with input outstanding must not spin. Playback is STEPPED (`begin`/`step`/`finished`/`skipped`), at most one frame per host turn, so the frame loop, the control channel and window events keep running; the blocking `play`/`playLba` are built on it for callers with nothing to do until a movie ends. A movie host turn IS a served host frame, so the skip reads the pad owner's serviced mask and resolves no input of its own, and it is a LEVEL not an edge because that per-frame service consumes the edge first — which is also what makes a movie skip replayable | `runtime/psx/native_fmv.h`, `runtime/psx/fmv_decode.h` |
-| Input | Host events, controller mapping, and guest pad transport | `runtime/psx/pad_input.cpp`, `runtime/psx/sio_pad.cpp` | Existing input/device owner | `runtime/psx/pad_input.h` |
-| Pad record/replay | The `.pad` file's format and streaming sink, the phase-keyed matcher, and the per-`Pad` session that resolves the three knobs and records/replays | `runtime/psx/pad_recording.*`, `runtime/psx/pad_phase_replay.*`, `runtime/psx/pad_record_replay.*`, `runtime/psx/input_phase.h` | `PadRecordReplay` is the only caller of `PhaseReplay` and the only reader of `PSXPORT_PAD_RECORD`/`REPLAY`/`RESUME` (declared in `config_vars.h`); the phase VOCABULARY is the title's through `GameRuntime::inputPhase`, never the framework's. `Pad` keeps host events, mapping and transport only | `tests/test_pad_phase_replay.cpp`, `tools/psx_pad.py`, `tools/test_psx_pad.py` |
+| Host input | The ONE drain of the SDL event queue, the delivered key state, the open controllers and their contribution to the button mask, whether the game or the overlay owns the keyboard, and the latched P / '.' debug edges | `runtime/psx/host_input.cpp` (`psx::input::HostInput`), held by `Game` immediately before `Pad` | Never let a second owner drain that queue or map a key: a second drain is how an event is consumed by the wrong owner. Window availability is an explicit argument (`poll(bool)`), not a lookup from a renderer | `runtime/psx/host_input.h` |
+| Guest pad transport | The active-low mask the guest reads, the per-VBlank digital packet in every registered slot buffer, the BIOS pad work-area lifecycle, and the REPL drive | `runtime/psx/pad_input.cpp` (`Pad`), `runtime/psx/sio_pad.cpp` | `Pad` consumes `HostInput`'s mask and owns only what is guest-visible; a second key-to-bit mapping is a defect | `runtime/psx/pad_input.h` |
+| Pad record/replay | The `.pad` file's format and streaming sink, the phase-keyed matcher, and the per-`Pad` session that resolves the three knobs and records/replays | `runtime/psx/pad_recording.*`, `runtime/psx/pad_phase_replay.*`, `runtime/psx/pad_record_replay.*`, `runtime/psx/input_phase.h` | `PadRecordReplay` is the only caller of `PhaseReplay` and the only reader of `PSXPORT_PAD_RECORD`/`REPLAY`/`RESUME` (declared in `config_vars.h`); the phase VOCABULARY is the title's through `GameRuntime::inputPhase`, never the framework's. `Pad` owns the guest-visible mask, transport and test hooks; the host itself belongs to `HostInput` above | `tests/test_pad_phase_replay.cpp`, `tools/psx_pad.py`, `tools/test_psx_pad.py` |
 | Memory-card identity | What card image a run started from, and the one spelling of a blank formatted card | `runtime/psx/memcard.cpp` (`identity`, `formattedDirectory`) | Read by `PadRecordReplay` only to record and refuse; formatting stays one implementation shared with `init()`, and the path comes from `HostIdentity` | `runtime/psx/memcard.h` |
 | Player UI | RmlUi lifetime, event routing, and componentized player controls | `runtime/ui/`, `runtime/psx/rmlui_overlay.cpp` | One component per responsibility under `runtime/ui/`; overlay keeps lifetime only. The LIBRARY's lifetime is the process's (first overlay initialises and installs the one renderer and system interface; `Rml::Shutdown` runs once at process exit); an overlay owns its own contexts and must remove them, and its context names are per overlay | `docs/ui-architecture.md` |
 | Host automation channel | The loopback debug endpoint a headless run is driven over, across a host that creates and destroys Games | `runtime/psx/dbg_server.*` | The channel is process-lifetime, the CLAIM is not: a host that destroys the Game holding the claim (`DbgServer::claimEndpoint`) points it at the session that is now the product | `docs/issues/0169-*.md` in a consuming port |
@@ -100,6 +101,31 @@ library never depends on a test oracle.
 | External source checkout | Existing psycross checkout used by historical development flows | `external/psycross/` | No new framework ownership; replace any live dependency with an explicit pinned resolver or remove it when unused | `external/psycross/README.md` |
 | Workspace scripts | Python bootstrap, declared top-level submodule sync, and OpenBIOS helpers | `scripts/`; submodule inventory/update policy in `scripts/submodule_state.py` | Modular Python operations with thin command entry points; nested dependency gitlinks remain outside launcher sync | `docs/workspace/WORKSPACE.md` |
 | Stale build trees | Disposable generated compiler output from prior verification | ignored `build-*/`, `build_*/` | No new work; clean with an explicit repository-scoped build cleanup tool | `AGENTS.md` |
+
+## Who owns it
+
+One chain per turn, hop by hop. A hop that is not in its owner's file is the defect to look for first.
+
+### Host input -> pad -> guest
+
+| Hop | Owner | What it decides |
+| --- | --- | --- |
+| SDL event queue | `psx::input::HostInput::drainEvents` (`runtime/psx/host_input.cpp`) | The ONE drain. Records delivered key state, hands the event to the overlay, ends the process on a window close |
+| Key state, controllers, keyboard gate | `HostInput::poll(bool windowAvailable)` | The active-low PSX mask for this turn. `windowAvailable` is the caller's answer; with no window there is no host input, so it answers `kNoButtons` and drops a pending debug edge |
+| Debug edges | `HostInput::takePauseRequest` / `takeFrameStepRequest` -> `DbgServer::togglePause` / `addStep(1)` | The keys are detected here, the ACTION stays in the debug channel, so all six products that never call `honourPause` still pause |
+| Effective mask | `Pad::pollHostInput` (`runtime/psx/pad_input.cpp`) | The one pump: drains, then assigns the host mask ONLY when a window is up, so a forced, replayed, restored or host-driven mask survives a headless leg |
+| Pad frame | `Pad::serviceFrame` | force/hold -> REPL drive -> host suppression -> session record/replay, each able to win over the one before; edges are latched only after the final mask |
+| Guest | `Pad::fillBuffer` -> the registered slot buffers | The 4-byte digital packet per VBlank; slot 1 writes `0xFF` when that title declares no second controller |
+
+Every pump site goes through `HostInput`, never through a second drain:
+
+| Site | Calls | Why |
+| --- | --- | --- |
+| Frame service | `Pad::pollHostInput` | the ordinary per-frame pump |
+| Blocking movie (`Fmv::playToEnd`) | `Pad::pollHostInput` | a movie turn is a served host frame, so the skip reads the pad owner's serviced mask and is replayable |
+| Debug pause wait (`DbgServer::honourPause`) | `Pad::pollHostInput` | a paused run must still see the key that resumes it; it must not tick the pad-frame clock |
+| SCEA splash (`runtime/psx/native_stub.cpp`) | `Pad::pollHostInput` | Start during the splash is the same press as any other frame |
+| Present path (`gpu_vk.cpp`, 5 sites) | `HostInput::drainEvents` | records state and keeps the overlay fed without consuming the pad's edge; the next `poll` resolves it |
 
 ## Where does new work go?
 

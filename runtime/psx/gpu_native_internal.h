@@ -429,7 +429,10 @@ struct GpuState {
 
 // ---- Diagnostic dumps (gpu_debug.cpp) — read the per-instance state via Core* -----------------
 void gpu_scene_dump(Core *core, FILE *out, uint32_t madr); // classify an OT's display list (PSXPORT_SCENEDUMP)
+void gpu_scene_dump_now(Core *core, FILE *out);            // the CURRENT frame's display list, not a named OT
 void gpu_scene_log(Core *core, uint32_t madr);
+void gpu_disp_dump_now(Core *core, FILE *out);                     // the display rect + draw clip, in one place
+void gpu_otattr_dump_now(Core *core, FILE *out, uint32_t oneAddr); // who submitted this geometry
 
 // ---- Public GPU API (free functions; thin wrappers over GpuState methods, reached via Core*) ---
 void gpu_gp0(Core *core, uint32_t w);

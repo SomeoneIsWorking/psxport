@@ -9,7 +9,10 @@
 #include "c_subsys.h"
 #include "cfg.h"
 #include "core.h"
-#include "game.h" // class BootStub lives on Game (game->stub); this TU implements its run()
+#include "game.h"                // class BootStub lives on Game (game->stub); this TU implements its run()
+#include "gpu_native_internal.h" // gpu_scea_decode_rgba / gpu_clear_display
+#include "gpu_vk.h"              // gpu_vk_present_image
+#include "host_input.h"          // psx::input::kButtonStart
 #include "psx_exe_image.h"
 #include "scea_asset.h" // SCEA_DISP_W/H (the decoded RGBA splash dims)
 #include <lucent/log.h>
@@ -51,22 +54,15 @@ static void scea_dump_ppm(const uint8_t *rgba, float fade01, const char *path) {
 }
 
 static void native_scea_splash(Core *c) {
-  void gpu_scea_decode_rgba(uint8_t *);
-  void gpu_vk_present_image(Core *, const uint8_t *, int, int, float);
-  void gpu_clear_display(Core *);
   // Decode the baked SCEA asset into a PC-native RGBA8 screen image ONCE (no PSX VRAM / GP0 / CLUT path).
   uint8_t *scea_rgba = (uint8_t *)malloc((size_t)SCEA_DISP_W * SCEA_DISP_H * 4);
   gpu_scea_decode_rgba(scea_rgba);
   int dumped = 0;
   for (int f = 0; f < SCEA_FRAMES; f++) {
-#ifdef PSXPORT_SDL
-    {
-      if (gpu_windowed()) {
-        c->game->pad.pollSdl();
-      }
-    }
-#endif
-    if ((c->game->pad.buttons & 0x0008u) == 0) { // Start = skip the license screen
+    // The splash owns the whole turn before the first pad frame exists, so it pumps the host itself
+    // and reads the mask the pump resolved. A Start held here skips the license screen.
+    c->game->pad.pollHostInput();
+    if ((c->game->pad.buttons & psx::input::kButtonStart) == 0) {
       lucent::info("scea", "skipped (Start) at frame {}", f);
       break;
     }

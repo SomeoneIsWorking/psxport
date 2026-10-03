@@ -21,6 +21,7 @@
 #include "gte_state.h"                   // GteRegs — per-instance GTE (COP2) register file (Beetle gte.c)
 #include "guest_widescreen_projection.h" // title-owned guest projection + latched presentation extent
 #include "hle.h"                         // class Hle — BIOS HLE (events, heap, work area, A0/B0/C0 dispatch)
+#include "host_input.h"                  // psx::input::HostInput — the host keyboard/controllers/event drain
 #include "mdec_device.h"                 // class MdecDevice — per-instance MDEC state handle (Beetle mdec.c)
 #include "memcard.h"                     // class Memcard — host-backed 128 KB memory card device
 #include "mods.h"                        // class Mods — per-Game PC-native mod toggles (aspect/ires/ssao/light/fps60)
@@ -66,7 +67,12 @@ public:
   Hle hle;
   Sio0 sio; // controller port (SIO0) hardware: the pad protocol and its transfer/ack deadlines
   DmaCallbackRegistry dmaCallbacks;
-  Pad pad;
+  // The host input owner, constructed before the pad it feeds: the SDL event drain, the delivered
+  // key state, the gamepads and the active-low mask they add up to. Every pump site — the pad frame
+  // service, the SCEA splash, a blocking movie, the debug-server pause wait, and the present path's
+  // own window drain — reaches the host through this one object.
+  psx::input::HostInput hostInput;
+  Pad pad{hostInput};
   Repl repl;           // interactive REPL driver + title-consumed requests (repl.cpp)
   Fmv fmv;             // native .STR movie player (native_fmv.cpp)
   BootStub stub;       // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)

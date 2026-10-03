@@ -1,7 +1,8 @@
 #include "c_subsys.h"
 #include "core.h"
-#include "game.h"   // class Fmv lives on Game (game->fmv); this TU implements its methods
-#include "gpu_vk.h" // gpu_vk_present_image — present the decoded frame as a NATIVE RGBA image
+#include "game.h"       // class Fmv lives on Game (game->fmv); this TU implements its methods
+#include "gpu_vk.h"     // gpu_vk_present_image, gpu_vk_windowed — the windowed/headless discriminator
+#include "host_input.h" // psx::input::kButtonStart
 #include <vector>
 // Native FMV player for the Tomba!2 PC port.
 //
@@ -39,7 +40,6 @@
 //
 // The boot/front-end sequencers call game->fmv.play().
 #include "audio_policy.h" // audio_may_open — headless implies no audio device
-#include "c_subsys.h"     // gpu_windowed
 #include "cfg.h"
 #include "config_vars.h"
 #include "fmv_decode.h" // the pure decode machinery (shared with tools/fmv_export + fmv_compare)
@@ -53,8 +53,7 @@
 
 void gpu_gp1(Core *, uint32_t w);
 
-// pad access via c->game->pad — class Pad on Game (see game.h): pollSdl(), buttons field
-#define PAD_START 0x0008u // Start button bit (active-low)
+// pad access via c->game->pad — class Pad on Game (see game.h): pollHostInput(), buttons field
 
 static int fmv_resolve_path(DiscState *disc, const char *path, uint32_t *out_lba, uint32_t *out_size);
 
@@ -141,7 +140,7 @@ void Fmv::audioOpen(int freq) {
   // Headless implies NO AUDIO DEVICE — the same rule spu_audio.cpp applies, via the SAME predicate.
   // This line used to test only the knob, so a headless gate still played movie sound (USER,
   // 2026-08-06: "a tomba gate plays audible fmv"). See audio_policy.h for why it is shared.
-  if (!audio_may_open(psx::config::cv_noaudio.get(), gpu_windowed() != 0)) {
+  if (!audio_may_open(psx::config::cv_noaudio.get(), gpu_vk_windowed())) {
     return;
   }
   if (st && stream_freq == freq) {
@@ -196,7 +195,7 @@ int Fmv::pace(long media_frames, int freq, uint32_t t0, int uncapped) {
   // already down when the movie opens, which `begin` records: that needs a release first, exactly the
   // contract the original player had.
   auto startIsHeld = [this] {
-    return (game->pad.buttons & PAD_START) == 0; // the pad mask is active-low
+    return (game->pad.buttons & psx::input::kButtonStart) == 0; // the pad mask is active-low
   };
   const auto skipping = [this, &startIsHeld] {
     if (!startIsHeld()) {
@@ -317,7 +316,7 @@ bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
   // the edge for a press that arrives later belongs to the frame whose pad service produced it — see
   // pace(). The mask is this frame's serviced one: the frame driver services input before the guest
   // runs, so this is the same mask every other consumer of the frame sees.
-  start_held_at_begin_ = (game->pad.buttons & PAD_START) == 0;
+  start_held_at_begin_ = (game->pad.buttons & psx::input::kButtonStart) == 0;
   game->pad.resetButtonEdges(game->pad.buttons);
   clock_origin_ms_ = 0;
 #ifdef PSXPORT_SDL
@@ -467,7 +466,7 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
 // which is what lets the player's Start reach the skip check that step() reads from `pad.buttons`.
 int Fmv::playToEnd() {
   while (!finished()) {
-    game->pad.pumpHostInput();
+    game->pad.pollHostInput();
     step();
   }
   return frames_;

@@ -2,7 +2,7 @@
 //
 // THE BUG THIS PINS (USER, 2026-08-06: "a tomba gate plays audible fmv"). The rule "headless means no
 // window and no audio" was implemented twice and one copy dropped the headless half:
-//     spu_audio.cpp    if (cv_noaudio || !gpu_windowed())   correct
+//     spu_audio.cpp    if (cv_noaudio || !gpu_vk_windowed())  correct
 //     native_fmv.cpp   if (cv_noaudio)                      MISSING -> FMV sound on every gate run
 // A gate is headless by construction, so every automated run in this workspace was playing movie
 // audio out of the user's speakers.

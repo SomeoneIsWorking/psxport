@@ -20,10 +20,6 @@ void watchdog_spin_fault(unsigned anchor_pc,
                          unsigned last_pc,
                          unsigned long long instructions); // guest spin: report + abort (timing.cpp)
 
-// gpu_vk.cpp — is a live on-screen window up (the single windowed/headless discriminator; replaces
-// the old PSXPORT_GPU_WINDOW env gate). C-linkage so C and C++ subsystems share one source of truth.
-int gpu_windowed(void);
-
 // disc.c
 // disc_* (disc.c) now take the Game-owned DiscState* explicitly — see disc.h.
 

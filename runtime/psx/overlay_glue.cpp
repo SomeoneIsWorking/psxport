@@ -12,12 +12,6 @@ void overlay_glue_init(
   }
 }
 
-void overlay_glue_event(Game *game, const SDL_Event *e) {
-  if (game) {
-    game->rml_overlay.event(e);
-  }
-}
-
 void overlay_glue_frame_begin(Core *core) {
   // Live world-position HUD: camera/Tomba position (int16 world units in scratchpad) + the
   // current stage entry pointer. These guest addresses are the same ones the engine RE

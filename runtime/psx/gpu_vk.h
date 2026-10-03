@@ -64,6 +64,11 @@ GuestProjectionPlan gpu_vk_latch_guest_projection(Core *core, GuestProjectionGeo
 void gpu_vk_unlatch_guest_projection(Core &core);
 // Leg-independent sink extent used by the guest projection latch and renderer planning.
 void gpu_vk_present_sink_size(int *width, int *height);
+// Is a live on-screen window up? THE windowed/headless discriminator: it gates host input, the audio
+// device, and a title-owned headless frame cap, so it is answered in one place and every caller asks
+// here rather than reading the window or the env itself. Settling it also resolves the leg's env gate
+// on first ask, which is why it is safe to call before the present device exists.
+bool gpu_vk_windowed();
 // Drain the host event queue (window close, ESC, and the key states a Pad must learn) on behalf of
 // whoever SHOWS the window. An ordinary session does it inside its present; a host that composes
 // several sessions into one window frame shows it itself, and a press that arrived between two
@@ -242,6 +247,8 @@ void gpu_vk_present_screen(Core *core);
 void gpu_vk_present_to_pane(Core *core, int image_width, int image_height);
 void gpu_vk_present_to_window(Core *core);
 void gpu_vk_stats(Core *core, int *tri, int *tex, int *semi);
+// Read back a VRAM rectangle as an image file — the `vram` arm of the REPL and the debug channel.
+void gpu_vk_vram_region(Core *core, const char *path, int x, int y, int w, int h);
 
 // (Engine-owned screen fade is now the PC-native subsystem class ScreenFade at
 // game/render/screen_fade.h. The old gpu_set_fade / gpu_clear_fade / engine_fade_set entries

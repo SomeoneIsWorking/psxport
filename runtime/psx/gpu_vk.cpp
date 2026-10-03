@@ -162,7 +162,6 @@ struct TexVtx {
 // so it can pull the right instance's batches at present time.
 // (raster/pipeline resources live on GpuDevice — see the shadow macros above)
 static void create_3d_pipelines(void);
-static void poll_quit(Game *game);
 
 // ---- enable / windowed gates (mirror gpu_vk.cpp) ----------------------------------------------------
 int gpu_vk_enabled(void) {
@@ -181,7 +180,7 @@ int gpu_vk_enabled(void) {
   }
   return s_gpu_on;
 }
-extern "C" int gpu_windowed(void) {
+bool gpu_vk_windowed() {
   return gpu_vk_enabled() && !s_headless;
 }
 
@@ -1182,24 +1181,6 @@ void init_gpu_device(Game *game) {
   create_3d_pipelines(); // the native 3D/textured raster pipelines — windowed AND headless
   lucent::info(
       "gpu_vk", "{} renderer up (VRAM {}x{} RG8 = PSX 1555)", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
-}
-
-static void poll_quit(Game *game) {
-  SDL_Event e;
-  while (SDL_PollEvent(&e)) {
-    // This drain competes with Pad::drainHostKeyEvents for the same queue, and whichever runs first
-    // takes the event. A press delivered between two fields is drained here — a boot logo presents
-    // before the next field is serviced — so the pad has to learn about keys from HERE too, or a
-    // press that arrived while a guest draw was presenting is simply lost. SDL does not apply
-    // unfocused keys to its keyboard-state array either, so nothing downstream recovers it.
-    if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
-      game->pad.noteHostKey(static_cast<int>(e.key.scancode), e.type == SDL_EVENT_KEY_DOWN);
-    }
-    overlay_glue_event(game, &e); // RmlUi overlay: ESC toggle + mouse/keyboard nav (no-op if not inited)
-    if (e.type == SDL_EVENT_QUIT) {
-      exit(0);
-    }
-  }
 }
 
 // Copy CPU VRAM (src, 1024*512 uint16) into THIS Game's VRAM image — but only over `regions`.
@@ -2433,8 +2414,8 @@ void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay)
   swaptex = sink_acquire(s_sink, cmd, s_win, &sw, &sh);
   if (swaptex == NULL) {
     gpu_submit(cmd, "show_present_image");
-    poll_quit(game);
-    return; // occluded window / frames in flight: an idle sink, not a stuck guest
+    game->hostInput.drainEvents(); // window close, ESC, and the key state the pad learns from
+    return;                        // occluded window / frames in flight: an idle sink, not a stuck guest
   }
   SDL_GPUColorTargetInfo cti = {};
   cti.texture = swaptex;
@@ -2474,7 +2455,7 @@ void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay)
   }
   SDL_EndGPURenderPass(rp);
   gpu_submit(cmd, "show_present_image");
-  poll_quit(game);
+  game->hostInput.drainEvents(); // window close, ESC, and the key state the pad learns from
 }
 
 // ---- repaint: re-show the LAST BUILT frame, without building anything (kanban #20) -------------------
@@ -2620,7 +2601,7 @@ void gpu_vk_present_image(Core *core, const uint8_t *rgba, int iw, int ih, float
   Uint32 sw = 0, sh = 0;
   if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) {
     gpu_submit(cmd, "gpu_vk_present_image");
-    poll_quit(game);
+    game->hostInput.drainEvents(); // window close, ESC, and the key state the pad learns from
     return;
   }
   SDL_GPUColorTargetInfo cti = {};
@@ -2644,7 +2625,7 @@ void gpu_vk_present_image(Core *core, const uint8_t *rgba, int iw, int ih, float
   overlay_glue_record(game, cmd, rp, (int)sw, (int)sh);
   SDL_EndGPURenderPass(rp);
   gpu_submit(cmd, "gpu_vk_present_image");
-  poll_quit(game);
+  game->hostInput.drainEvents(); // window close, ESC, and the key state the pad learns from
 }
 
 // ---- readback (shot / vram dump): download THIS Game's VRAM image → host, decode 1555 → PPM ---------
@@ -4538,7 +4519,7 @@ void gpu_vk_present_shot(Core *core, const char *path) {
 
 void gpu_vk_pump_host_events(Core *core) {
   if (core != nullptr) {
-    poll_quit(core->game);
+    core->game->hostInput.drainEvents();
   }
 }
 void gpu_vk_shot_b(Core *core, const char *path) {

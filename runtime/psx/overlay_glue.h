@@ -1,12 +1,15 @@
 #ifndef PSXPORT_OVERLAY_GLUE_H
 #define PSXPORT_OVERLAY_GLUE_H
 // Thin integration layer between the SDL_GPU present path (gpu_vk.cpp) and the RmlUi mod/debug
-// overlay (rmlui_overlay.cpp). gpu_vk.cpp calls these four hooks and nothing more — all
+// overlay (rmlui_overlay.cpp). gpu_vk.cpp calls these three hooks and nothing more — all
 // overlay-specific logic (full-window record, the live world-position latch read from guest RAM,
 // the per-frame CPU update) lives HERE, not crammed into the renderer.
 //
 // Each hook takes the calling Game/Core so it can reach `game->rml_overlay` — one overlay per
 // Game (see rmlui_overlay.h). All hooks are no-ops until the overlay is initialised.
+//
+// EVENTS ARE NOT HERE: they arrive through the host input owner (psx::input::HostInput), which is
+// the one drain of the SDL event queue and already holds the overlay.
 #include <SDL3/SDL.h>
 
 class Core;
@@ -18,9 +21,6 @@ class Game;
 // records into. See rmlui_overlay.h for why none of this is re-derived from the window.
 void overlay_glue_init(
     Game *game, SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h);
-
-// Feed every SDL event (overlay mouse/keys; ESC toggles the menu). No-op if not inited.
-void overlay_glue_event(Game *game, const SDL_Event *e);
 
 // Per-frame CPU step: latch the live world readout from guest RAM (camera/Tomba pos + stage) for
 // the menu's HUD line, then run the overlay's CPU update. Called from present() before recording.

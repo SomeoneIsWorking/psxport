@@ -40,6 +40,7 @@ void Game::wireRuntimeMembers() {
   gpu.game = this;
   gpu_vk.game = this;
   timing.game = this;
+  hostInput.attachOverlay(&rml_overlay); // one drain feeds the pad's key state AND the overlay
   pad.game = this;
   hle.game = this;
   sio.game = this;

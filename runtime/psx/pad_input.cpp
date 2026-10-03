@@ -1,44 +1,29 @@
-// Native controller / PAD input for the Tomba!2 PC port.
-// -----------------------------------------------------------------------------
-// RE summary (see report / docs): Tomba!2 does NOT use the BIOS auto-pad
-// services (B0:0x12 InitPAD .. 0x16). MAIN.EXE includes Sony's libpad/_pad
-// SIO driver into its own low text (0x80003748..0x80004xxx) and bit-bangs the
-// controller port directly:
-//   * FUN_800040c4(buf1,len1,buf2,len2)  = InitPAD-equiv: stores the per-slot pad
-//     buffer pointers at the driver globals _DAT_0000aec8 (slot 0) and
-//     _DAT_0000aecc (slot 1) [base 0x0000aec8, stride 4 bytes per slot], zeroes them.
-//   * FUN_800041b8 / FUN_8000435c        = StartPAD-equiv: hook the VBlank/root-counter
-//     IRQ so that, each VBlank, the SIO read fills those buffers.
-//   * FUN_80003a4c(slot)                 = the per-VBlank read: bit-bangs SIO
-//     (0x1F801040 data / 0x1F801044 status / 0x1F80104A control), runs the
-//     0x01,0x42,... controller handshake, and writes the standard pad packet into
-//     the slot's buffer:
-//         buf[0] = status   (0x00 = pad present/ok; 0xFF = no pad / error)
-//         buf[1] = pad id    (0x41 = digital; high nibble = #halfwords of data,
-//                             low nibble counts; 0x41 => 1 halfword => 2 data bytes)
-//         buf[2] = button mask low  byte   (active-low: 0 = pressed)
-//         buf[3] = button mask high byte
-//         buf[4..] = analog (only for analog/2-halfword ids; unused for 0x41)
+// pad_input.cpp — the PSX controller the guest reads: the effective active-low mask, the per-VBlank
+// digital packet, the REPL drive, and the deterministic record/replay session.
 //
-// Because that SIO read depends on real hardware + the SIO IRQ (which the no-IRQ
-// HLE runtime never raises), its guest body would spin on the _DAT_1f801044
-// status poll and bail via its timeout (LAB_80003da4 -> mark "no pad"). The clean
-// PC-native fix (native-overrides pattern): override FUN_80003a4c to write our
-// native packet straight into the registered slot buffer instead of emulating SIO.
+// THE GUEST GETS A NATIVE PACKET, not its own SIO pad read. Titles that bit-bang the port (Tomba! 2's
+// libpad driver is the measured case) depend on the SIO IRQ, which this runtime never raises, so the
+// guest's own per-VBlank read spins on the status poll and reports no pad. This service does what that
+// read would have done: once per frame, before the guest reads input, write the standard digital packet
+// into every registered slot buffer.
 //
-// This module is self-contained (no guest/runtime headers required) so it can be
-// unit-tested standalone. The PM wires it into hle.c/mem.c (see report).
-
-#include "c_subsys.h" // gpu_windowed()
+// LIMITATION (measured 2026-06-14): that guest read lives at 0x80003A4C, BELOW Tomba! 2's MAIN.EXE text
+// range, in the boot-stub / resident low-text module. Until the image catalog identifies that resident
+// module no image-scoped override can own the address, so no address-only registration is attempted and
+// no missing registration is silently accepted — the native per-frame service supplies the buffers.
+#include "pad_input.h"
 #include "cfg.h"
 #include "config_vars.h"
 #include "core.h"
-#include "game.h" // class Pad lives on Game; reached via c->game->pad (see class docs)
-#include "game_runtime.h"
+#include "game.h"                // class Pad lives on Game (c->game->pad)
+#include "game_runtime.h"        // GameRuntime::inputPhase / guestPadBufferLayout
+#include "gpu_native_internal.h" // gpu_scene_dump_now / gpu_disp_dump_now / gpu_otattr_dump_now
+#include "gpu_vk.h"              // gpu_vk_shot, gpu_vk_windowed — the windowed/headless discriminator
 #include "guest_pad_buffer_layout.h"
-#include "overlay_glue.h"
 #include <lucent/log.h>
-#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 // The title's input phase for this pad frame. A title that declares none (the GameRuntime default,
 // and every legacy adapter) answers kUnkeyedPhase, and its recordings are absolute from boot.
@@ -46,21 +31,16 @@ uint64_t Pad::currentPhase(Core &core) const {
   return core.runtime ? core.runtime->inputPhase(core) : psx::input::kUnkeyedPhase;
 }
 
-// PSX digital button bits, active-low (0 = pressed). Default = nothing pressed.
-#define PAD_NONE 0xFFFFu
-
 void Pad::init() {
-  buttons = PAD_NONE;
+  buttons = psx::input::kNoButtons;
 }
 
-// Host/PM feeds button state in the PSX active-low layout (0 bit = pressed).
 void Pad::setButtons(uint16_t mask) {
   buttons = mask;
 }
 
-// Write the standard digital auto-pad packet into a buffer the game polls.
-// `buf` must have room for at least 4 bytes. Layout matches FUN_80003a4c's output
-// for a connected digital pad (id 0x41).
+// Write the standard digital auto-pad packet into a buffer the game polls: status, pad id, and the
+// button mask low/high, active-low. `buf` must have room for at least 4 bytes.
 void Pad::fillBuffer(uint8_t *buf) {
   if (!buf) {
     return;
@@ -71,408 +51,32 @@ void Pad::fillBuffer(uint8_t *buf) {
   buf[3] = (uint8_t)((buttons >> 8) & 0xFF); // button mask high (active-low)
 }
 
-namespace {
-
-GuestPadBufferLayout resolveGuestPadBufferLayout(const Core &core) {
-  if (core.cfg) {
-    return {
-        .slot0Buffer = core.cfg->padSlot0Buf,
-        .slot1Buffer = core.cfg->padSlot1Buf,
-        .slotPointerTable = core.cfg->padSlotPtrTable,
-        .slotPointerStride = core.cfg->padSlotPtrStride ? core.cfg->padSlotPtrStride : 4u,
-    };
-  }
-  if (core.runtime) {
-    if (const GuestPadBufferLayout *layout = core.runtime->guestPadBufferLayout()) {
-      GuestPadBufferLayout resolved = *layout;
-      if (!resolved.slotPointerStride) {
-        resolved.slotPointerStride = 4u;
-      }
-      return resolved;
-    }
-  }
-  return {};
-}
-
-} // namespace
-
-// --- Optional SDL host input ------------------------------------------------
-// DEFAULT (no host input) works headlessly: s_buttons stays 0xFFFF (no presses)
-// unless pad_set_buttons() / pad_poll_sdl() updates it. SDL is compiled in only
-// under PSXPORT_SDL, matching gpu_native.c's optional-SDL style.
-#ifdef PSXPORT_SDL
-#include <SDL3/SDL.h>
-#include <stdio.h>  // diagnostic fprintf in pad_poll_sdl (controller-driving-directions notice)
-#include <stdlib.h> // atoi (PSXPORT_PAD_NOPAD parse)
-
-// The overlay's `wantsKeyboard()` reports true ONLY while the user is actively typing into an RmlUi
-// text widget — not merely because the menu is open/focused. Suppress the game's keyboard read in
-// that narrow case so typed characters don't leak into gameplay. Reached through `game->rml_overlay`
-// (Pad::game is wired in Game()).
-
-// --- Game controller (gamepad) state ----------------------------------------
-// Up to PAD_MAX_GC simultaneously-open controllers (Pad members); hotswap-aware (DEVICEADDED/REMOVED
-// handled by a per-frame rescan in rescanControllers() so NO other file needs editing — see pollSdl).
-
-// Lazily ensure SDL's gamepad subsystem is up. SDL_Init(SDL_INIT_VIDEO) happens in gpu_vk.cpp
-// (not owned here); the gamepad subsystem is independent, so we add it on first use. Idempotent.
-void Pad::ensureGcSubsystem() {
-  if (mGcSubInit) {
+// The host mask, plus the P / '.' debug keys, whose ACTION belongs to the debug channel. Nothing
+// frame-indexed is touched here (no record/replay tick, no frame counter, no tap countdown), which is
+// what lets a paused or a movie-blocked turn keep reading the host without disturbing a recording.
+//
+// A leg with NO window has no host input, and this pump must not overwrite what the pad already
+// resolves: in such a leg a forced, replayed, restored or host-driven mask is the only input there is,
+// and clobbering it with "nothing pressed" would discard exactly what the leg depends on. The drain
+// still runs, because a window close has to end the run from any leg.
+void Pad::pollHostInput() {
+  const bool windowed = gpu_vk_windowed() != 0;
+  const uint16_t hostMask = mHost.poll(windowed);
+  if (!windowed) {
     return;
   }
-  if ((SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD) == 0) {
-    SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+  buttons = hostMask;
+  if (mHost.takePauseRequest()) {
+    game->dbg_server.togglePause();
   }
-  mGcSubInit = 1;
-}
-
-// HOTSWAP: open any newly-connected controllers and drop any that vanished. Self-contained per-frame
-// rescan so we don't depend on SDL_CONTROLLERDEVICEADDED/REMOVED events reaching us through an event
-// pump we don't own (the pump lives in gpu_vk.cpp). Cheap: SDL_NumJoysticks is a count, and we only
-// call SDL_GameControllerOpen for indices we haven't already opened.
-void Pad::rescanControllers() {
-  // ESCAPE HATCH (Linux WASD-dead): PSXPORT_PAD_NOPAD=1 ignores ALL game controllers and uses the
-  // keyboard only. Use this if a connected/phantom pad with a drifting analog stick ("analog mode")
-  // is injecting a phantom direction and you can't unplug it. Close anything already open, then bail.
-  if (mNoPad < 0) {
-    const char *v = cfg_str("PSXPORT_PAD_NOPAD");
-    mNoPad = (v && atoi(v) != 0) ? 1 : 0;
+  if (mHost.takeFrameStepRequest()) {
+    game->dbg_server.addStep(1);
   }
-  if (mNoPad) {
-    for (int s = 0; s < PAD_MAX_GC; s++) {
-      if (mGc[s]) {
-        SDL_CloseGamepad(mGc[s]);
-        mGc[s] = nullptr;
-        mGcInst[s] = -1;
-      }
-    }
-    return;
-  }
-  ensureGcSubsystem();
-  // 1) Drop slots whose controller was unplugged.
-  for (int s = 0; s < PAD_MAX_GC; s++) {
-    if (mGc[s] && !SDL_GamepadConnected(mGc[s])) {
-      SDL_CloseGamepad(mGc[s]);
-      mGc[s] = nullptr;
-      mGcInst[s] = -1;
-    }
-  }
-  // 2) Open any attached gamepad we don't already hold (dedup by instance id). SDL3 SDL_GetGamepads
-  //    returns instance IDs of devices with a real gamepad mapping (no accelerometers/phantom joysticks),
-  //    so we don't open garbage-axis devices that used to inject a permanent phantom direction.
-  int n = 0;
-  SDL_JoystickID *ids = SDL_GetGamepads(&n);
-  for (int i = 0; i < n; i++) {
-    SDL_JoystickID inst = ids[i];
-    int already = 0;
-    for (int s = 0; s < PAD_MAX_GC; s++) {
-      if (mGcInst[s] == (int)inst) {
-        already = 1;
-        break;
-      }
-    }
-    if (already) {
-      continue;
-    }
-    for (int s = 0; s < PAD_MAX_GC; s++) {
-      if (!mGc[s]) {
-        SDL_Gamepad *gc = SDL_OpenGamepad(inst);
-        if (gc) {
-          mGc[s] = gc;
-          mGcInst[s] = (int)SDL_GetGamepadID(gc);
-        }
-        break;
-      }
-    }
-  }
-  SDL_free(ids);
-}
-
-// OR one controller's buttons + analog sticks into the active-low PSX mask.
-// Button mapping (Sony layout — natural for a PSX title):
-//   A -> Cross, B -> Circle, X -> Square, Y -> Triangle (SDL A/B/X/Y are positional SNES-style;
-//   this gives the conventional Sony bottom=Cross, right=Circle, left=Square, top=Triangle).
-//   LeftShoulder/RightShoulder -> L1/R1; LeftTrigger/RightTrigger (analog, thresholded) -> L2/R2.
-//   Start -> Start, Back -> Select, LeftStick/RightStick click -> L3/R3.
-//   D-pad AND left analog stick -> directions (stick past ~50% deflection counts as a press).
-//
-// DEADZONE / DRIFT ROBUSTNESS (Linux fix, 2026-06-21): the directional STICK threshold must be a LARGE
-// fraction of full deflection, never a small "off-center" value. The previous code OR'd directions in
-// additively across EVERY connected controller every frame with a 50%-ish threshold and NO lower guard,
-// so on Linux a controller (or a phantom/virtual joystick SDL enumerates and the hotswap then opens)
-// whose left stick rests slightly off-center — or whose axes read stale/extreme before the first
-// joystick event is pumped — would HOLD a phantom direction continuously. A constantly-held analog
-// direction makes the game look "stuck"/unresponsive to WASD (it fights or saturates movement), which
-// is exactly the "WASD doesn't move the player / maybe analog mode" symptom on the Linux machine. Keep
-// the threshold high (~70%) so only a deliberate stick push registers and resting drift never does.
-static void pad_apply_controller(SDL_Gamepad *gc, uint16_t *mask) {
-#define BTN(b) SDL_GetGamepadButton(gc, (b))
-  const int STICK = 22000; // ~67% of 32767 deflection -> treat as a directional press (drift-proof)
-  Sint16 lx = SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFTX);
-  Sint16 ly = SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFTY);
-  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_UP) || ly < -STICK) {
-    *mask &= ~0x0010u; // Up
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || lx > STICK) {
-    *mask &= ~0x0020u; // Right
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || ly > STICK) {
-    *mask &= ~0x0040u; // Down
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || lx < -STICK) {
-    *mask &= ~0x0080u; // Left
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_START)) {
-    *mask &= ~0x0008u; // Start
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_BACK)) {
-    *mask &= ~0x0001u; // Select
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_SOUTH)) {
-    *mask &= ~0x4000u; // Cross  (SDL3 SOUTH = bottom)
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_EAST)) {
-    *mask &= ~0x2000u; // Circle (EAST = right)
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_WEST)) {
-    *mask &= ~0x8000u; // Square (WEST = left)
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_NORTH)) {
-    *mask &= ~0x1000u; // Triangle (NORTH = top)
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) {
-    *mask &= ~0x0400u; // L1
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) {
-    *mask &= ~0x0800u; // R1
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_LEFT_STICK)) {
-    *mask &= ~0x0002u; // L3
-  }
-  if (BTN(SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
-    *mask &= ~0x0004u; // R3
-  }
-  if (SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > STICK) {
-    *mask &= ~0x0100u; // L2
-  }
-  if (SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > STICK) {
-    *mask &= ~0x0200u; // R2
-  }
-#undef BTN
-}
-
-// Map keyboard + first connected gamepad to the PSX button mask. Call once per
-// frame (after SDL_PumpEvents elsewhere, or it pumps here). Builds an ACTIVE-LOW
-// mask: a bit is cleared when its control is pressed.
-void Pad::pollSdl() {
-  drainHostKeyEvents();
-  uint16_t mask = PAD_NONE;
-
-  // SDL3 leaves text input OFF by default (it is per-window and opt-in), and the RmlUi overlay is dropped
-  // from the SDL_GPU build, so there is no IME/compose widget to suppress here any more (the old GH#18
-  // SDL_StopTextInput dance is unnecessary). The keyboard read is gated only by rmlui_overlay_wants_keyboard
-  // (stubbed to 0 in this build), so WASD always drives the game.
-  const bool gameOwnsKeyboard = !(game && game->rml_overlay.wantsKeyboard());
-  const bool *ks = gameOwnsKeyboard ? SDL_GetKeyboardState(NULL) : nullptr;
-  if (gameOwnsKeyboard) {
-#define KEYDOWN(sc) (mKeyDown[(sc)] || (ks != nullptr && ks[(sc)] != 0))
-    if (KEYDOWN(SDL_SCANCODE_UP) || KEYDOWN(SDL_SCANCODE_W)) {
-      mask &= ~0x0010u; // Up
-    }
-    if (KEYDOWN(SDL_SCANCODE_RIGHT) || KEYDOWN(SDL_SCANCODE_D)) {
-      mask &= ~0x0020u; // Right
-    }
-    if (KEYDOWN(SDL_SCANCODE_DOWN) || KEYDOWN(SDL_SCANCODE_S)) {
-      mask &= ~0x0040u; // Down
-    }
-    if (KEYDOWN(SDL_SCANCODE_LEFT) || KEYDOWN(SDL_SCANCODE_A)) {
-      mask &= ~0x0080u; // Left
-    }
-    if (KEYDOWN(SDL_SCANCODE_RETURN)) {
-      mask &= ~0x0008u; // Start
-    }
-    if (KEYDOWN(SDL_SCANCODE_RSHIFT) || KEYDOWN(SDL_SCANCODE_TAB)) {
-      mask &= ~0x0001u; // Select
-    }
-    if (KEYDOWN(SDL_SCANCODE_K)) {
-      mask &= ~0x4000u; // Cross
-    }
-    if (KEYDOWN(SDL_SCANCODE_L)) {
-      mask &= ~0x2000u; // Circle
-    }
-    if (KEYDOWN(SDL_SCANCODE_I)) {
-      mask &= ~0x1000u; // Triangle
-    }
-    if (KEYDOWN(SDL_SCANCODE_J)) {
-      mask &= ~0x8000u; // Square
-    }
-    if (KEYDOWN(SDL_SCANCODE_Q)) {
-      mask &= ~0x0400u; // L1
-    }
-    if (KEYDOWN(SDL_SCANCODE_E)) {
-      mask &= ~0x0800u; // R1
-    }
-    if (KEYDOWN(SDL_SCANCODE_1)) {
-      mask &= ~0x0100u; // L2
-    }
-    if (KEYDOWN(SDL_SCANCODE_3)) {
-      mask &= ~0x0200u; // R2
-    }
-#undef KEYDOWN
-  }
-
-  // Debug pause / frame-step keys (edge-detected so one keypress = one action). P toggles pause/play;
-  // '.' (period) freezes and advances exactly one frame. Read SDL's keyboard snapshot directly (not the
-  // `ks` above) so these still work even when RmlUi suppressed gameplay keys. Handled here because
-  // pad_poll_sdl runs every frame in BOTH the running loop and the paused wait. (dbg_server.c)
-  if (game) {
-    const bool *dks = SDL_GetKeyboardState(NULL);
-    int p = dks && dks[SDL_SCANCODE_P] != 0;
-    int st = dks && dks[SDL_SCANCODE_PERIOD] != 0;
-    if (p && !mPrevP) {
-      game->dbg_server.togglePause();
-    }
-    if (st && !mPrevStep) {
-      game->dbg_server.addStep(1);
-    }
-    mPrevP = p;
-    mPrevStep = st;
-  }
-
-  // HOTSWAP-aware controllers: open/close as devices come and go, then OR every connected pad into the
-  // mask (additive with the keyboard, so both work simultaneously). Self-contained — no dependency on
-  // SDL_CONTROLLERDEVICE* events from the (unowned) event pump.
-  //
-  // SDL_GameControllerUpdate() FIRST: the joystick/controller event pump lives in another TU (gpu_vk's
-  // poll_quit) and our SDL_PumpEvents() above only refreshes controller state if the GC subsystem was
-  // already up at pump time. The subsystem is lazily initialized inside pad_rescan_controllers(), so on
-  // the frames right after a controller is opened the button/axis reads could be stale (Linux: stale
-  // axes read as a held direction). An explicit update guarantees fresh state before we read it.
-  rescanControllers();
-  SDL_UpdateGamepads();
-  uint16_t before_pads = mask;
-  for (int s = 0; s < PAD_MAX_GC; s++) {
-    if (mGc[s]) {
-      pad_apply_controller(mGc[s], &mask);
-    }
-  }
-
-  // DIAGNOSTIC (Linux WASD-dead hunt): if a controller is injecting directions while the keyboard
-  // pressed nothing, say so once — this tells the user a connected/phantom pad (e.g. a drifting analog
-  // stick "analog mode") is the input source, not their keyboard. Active-low: bits CLEARED == pressed.
-  // Only fires on a transition so it doesn't spam. Set PSXPORT_PAD_NOPAD=1 to ignore controllers
-  // entirely (keyboard only) if a phantom device is the culprit and you can't unplug it.
-  {
-    const uint16_t DIRS = 0x00F0u;                        // Up/Right/Down/Left
-    int pad_dirs = (before_pads & DIRS) != (mask & DIRS); // a pad changed a direction bit
-    int kbd_no_dir = (before_pads & DIRS) == DIRS;        // keyboard pressed no direction
-    if (pad_dirs && kbd_no_dir && !mPadDirsWarned) {
-      lucent::info("pad",
-                   "a game controller is driving DIRECTIONS (host pad mask=0x{:04x}). If WASD seems dead, an analog "
-                   "stick / phantom pad is the input. Set PSXPORT_PAD_NOPAD=1 to use the keyboard only.",
-                   (unsigned)mask);
-      mPadDirsWarned = 1;
-    }
-  }
-
-  buttons = mask;
-}
-
-// THIS IS THE HOST KEY STATE, AND IT IS OWNED HERE BECAUSE SDL_GetKeyboardState() IS NOT A
-// TRUSTWORTHY ANSWER TO "IS THE PLAYER HOLDING A KEY".
-//
-// SDL3 keeps that array per KEYBOARD-FOCUS window. When the product's window is not the focused
-// one, SDL still DELIVERS the key events — they are sitting in the queue and `poll_quit` drains
-// them — but it does not apply them to the state array, so every entry reads "up". Measured on
-// Spyro's shipping window (2026-10-01, SDL 3.0.4): with the window up and `wantsKeyboard` false and
-// `SDL_GetKeyboardState()` non-null, a real X11 KEY_DOWN for SDL_SCANCODE_RETURN arrived at
-// `SDL_PollEvent` and `ks[SDL_SCANCODE_RETURN]` was still 0 on the same frame, so the pad mask
-// never moved and Start/Cross did nothing. `SDL_GetKeyboardFocus()` was null, which is the gate.
-//
-// A player hits that gate whenever the window is not the focused one — after alt-tabbing back, a
-// fullscreen change, a notification, a window manager that leaves focus at the pointer root, or a
-// second window taking it. The symptom is uniform and unreadable: the game ignores every press
-// while the same key "works" under PSXPORT_FORCE_BUTTONS or a REPL tap, which is why every gate in
-// the project stayed green.
-//
-// So the pad owns the truth: one bit per scancode, set on KEY_DOWN and cleared on KEY_UP, fed by
-// the events themselves. The SDL state array is still OR-ed in, because it is correct whenever SDL
-// does have focus and costs nothing.
-void Pad::noteHostKey(int scancode, bool down) {
-  if (scancode > 0 && scancode < kHostKeyStates) {
-    mKeyDown[scancode] = down;
-  }
-}
-
-void Pad::drainHostKeyEvents() {
-  SDL_PumpEvents();
-  SDL_Event e;
-  while (SDL_PollEvent(&e)) {
-    if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
-      noteHostKey(static_cast<int>(e.key.scancode), e.type == SDL_EVENT_KEY_DOWN);
-    }
-    // Every event is forwarded, so the RmlUi overlay keeps exactly the input it had when the
-    // present-path drain was the only consumer. Two drains racing is safe for the same reason:
-    // whichever gets an event passes it on here, so the overlay sees each one exactly once.
-    overlay_glue_event(game, &e);
-  }
-}
-#endif // PSXPORT_SDL
-
-// --- Native pad-read override -----------------------------------------------
-// Wired into the guest core (kept out of the standalone unit test via
-// PSXPORT_PAD_NO_OVERRIDES, mirroring memcard.c). Replaces the per-VBlank SIO
-// pad read FUN_80003a4c(slot) so it writes our native packet straight into the
-// slot's registered buffer instead of bit-banging SIO (which would spin on the
-// _DAT_1f801044 status poll the no-IRQ runtime never satisfies).
-//
-// IMPORTANT LIMITATION (verified 2026-06-14): FUN_80003a4c lives at 0x80003A4C,
-// which is BELOW MAIN.EXE's text range [0x80010000,0x800BE800). MAIN.EXE (the
-// executor input) does NOT contain that SIO driver — it is part of the
-// boot-stub/resident low-text image loaded at runtime. The authenticated image catalog must identify
-// that resident module before an image-scoped override can own 0x80003A4C. Until then the native
-// per-frame pad service below supplies the registered buffers; no address-only registration is
-// attempted and no missing registration is silently accepted.
-#ifndef PSXPORT_PAD_NO_OVERRIDES
-#include <stdio.h>
-#include <stdlib.h>
-
-// Slot-buffer pointer table base in the SIO driver's low-RAM globals: the per-slot
-// pad buffer pointer for slot `slot` is at 0x0000AEC8 + slot*4 (FUN_800040c4 stores
-// them there; FUN_80003a4c reads them via &DAT_0000aec8 + slot*4).
-// FUN_80003a4c(slot): a0 = slot index.
-static void pad_read(Core *c) {
-  uint32_t b = c->mem_r32(c->cfg->padSlotPtrTable + c->r[4] * 4u); // registered slot buffer ptr
-  if (b) {
-    uint8_t pk[4];
-    c->game->pad.fillBuffer(pk);
-    for (int i = 0; i < 4; i++) {
-      c->mem_w8(b + i, pk[i]);
-    }
-  }
-  c->r[2] = 0; // v0 = 0 (read complete / pad serviced)
 }
 
 void Pad::overridesInit() {
   init();
 }
-
-// Per-frame native pad service. The real console fills the slot pad buffers from the per-VBlank
-// SIO read (FUN_80003A4C, hooked into the VBlank IRQ by StartPAD). Our no-IRQ runtime never fires
-// that, so FUN_80003A4C is dead and the buffers would stay at their init value (0xFF/no-pad),
-// making FUN_800524b4 read "no controller". The native frame loop (native_boot.c) calls this once
-// per frame, BEFORE the game reads input (FUN_800788ac -> FUN_800524b4), to do exactly what the
-// VBlank read would: poll host input, then write the standard digital packet into every registered
-// slot buffer. Slot buffer pointers live in the SIO driver's table at 0x0000AEC8 (+slot*4), set by
-// FUN_800040c4 (via FUN_80088b00, called from the pad init FUN_800520e0 in the boot prefix).
-//
-// NOTE on the buffer address: FUN_800040c4 is the SIO driver's InitPAD, which lives in low text
-// (0x80004xxx) BELOW MAIN.EXE and is never present/run in this port, so the runtime pointer table
-// at 0x0000AEC8 stays NULL (verified: aec8==0 at boot). But the game reads its slot-0 packet from a
-// FIXED, known address: FUN_800520e0 registers &DAT_800BF4F8 (slot0) / &DAT_800BF51A (slot1) via
-// FUN_80088b00, and FUN_800524b4 reads DAT_800BF4F8 directly. So we write the packet to those fixed
-// buffers (and, if the pointer table ever does get populated, to whatever it points at too).
-// PAD_SLOT0_BUF / PAD_SLOT1_BUF are now game config (c->cfg->padSlot0Buf / padSlot1Buf).
 
 // REPL pad control (native-port -repl): a held active-low mask + a tap countdown, applied by
 // serviceFrame() so the interactive driver can press/hold/tap buttons.
@@ -480,45 +84,29 @@ void Pad::driveHold(uint16_t activeLowMask) {
   repl_on = 1;
   repl_hold = activeLowMask;
 }
+
 void Pad::driveTap(uint16_t activeLowMask, int nframes) {
   repl_on = 1;
   repl_tap = activeLowMask;
   repl_tap_n = nframes;
 }
-// Fully relinquish REPL pad control (repl_on=0) so neither a held mask nor a stale PAD_NONE keeps
-// overriding host/FORCE input. Used by the state-gated auto-navigator to go hands-off in gameplay.
+
+// Relinquish REPL pad control entirely, so neither a held mask nor a stale no-buttons mask keeps
+// overriding host/FORCE input.
 void Pad::driveRelease() {
   repl_on = 0;
-  repl_hold = PAD_NONE;
-  repl_tap = PAD_NONE;
+  repl_hold = psx::input::kNoButtons;
+  repl_tap = psx::input::kNoButtons;
   repl_tap_n = 0;
 }
 
-// Host input only — no frame-indexed state touched (no record/replay tick, no mFc, no tap countdown,
-// no shot/dump schedules). pollSdl also carries the P / '.' debug keys, which is what lets a paused
-// session be un-paused from the keyboard.
-void Pad::pumpHostInput() {
-#ifdef PSXPORT_SDL
-  if (gpu_windowed()) {
-    pollSdl();
-  }
-#endif
-}
-
-// PSXPORT_GUEST_POKE=<addr>:<val>[:<width>],... — write these guest locations EVERY frame, on
-// whatever leg is running. Width is 1 (default), 2 or 4 bytes; addr and val are hex.
+// PSXPORT_GUEST_POKE=<addr>:<val>[:<width>],... — rewrite these guest locations EVERY frame, on
+// whatever leg is running. Width is 1 (default), 2 or 4 bytes; addr and val are hex. A malformed spec
+// refuses loudly rather than poking nothing.
 //
-// Why a per-frame write and not a one-shot: the state worth forcing is usually state the guest
-// REWRITES every frame (Tomba! 2's HUD ring gate at 0x800ED061 goes back to 0 on each pass, so a
-// single REPL `w8` is gone by the next render). A one-shot poke silently does nothing there.
-//
-// Why it lives at the platform frame tick rather than in a producer: a render-time force reaches only
-// the NATIVE picture, so the oracle leg — which draws from the guest OT — would show nothing and the
-// comparison would be native-vs-blank. Writing guest state makes BOTH legs draw the same thing, which
-// is the only way the oracle can answer what a forced-on layer should look like.
-//
-// It CHANGES CANON GUEST STATE, so it must be on in BOTH legs of a comparison or in NEITHER, and never
-// in an SBS byte-compare. A malformed spec REFUSES loudly instead of quietly poking nothing.
+// It writes GUEST state at the platform frame tick, not at a render point, so a comparison's oracle
+// leg (which draws from the guest OT) sees it too. That makes it canon-changing: on in BOTH legs of a
+// comparison or in NEITHER, and never in a byte-compare.
 void Pad::applyGuestPoke(Core *c) {
   if (!mPokeInit) {
     mPokeInit = 1;
@@ -569,20 +157,38 @@ void Pad::applyGuestPoke(Core *c) {
   }
 }
 
+namespace {
+
+// Where this title keeps the packet the guest polls. A title may expose fixed buffers, a driver-owned
+// pointer table, or both; a non-null driver pointer wins and the fixed address is the fallback.
+GuestPadBufferLayout resolveGuestPadBufferLayout(const Core &core) {
+  if (core.cfg) {
+    return {
+        .slot0Buffer = core.cfg->padSlot0Buf,
+        .slot1Buffer = core.cfg->padSlot1Buf,
+        .slotPointerTable = core.cfg->padSlotPtrTable,
+        .slotPointerStride = core.cfg->padSlotPtrStride ? core.cfg->padSlotPtrStride : 4u,
+    };
+  }
+  if (core.runtime) {
+    if (const GuestPadBufferLayout *layout = core.runtime->guestPadBufferLayout()) {
+      GuestPadBufferLayout resolved = *layout;
+      if (!resolved.slotPointerStride) {
+        resolved.slotPointerStride = 4u;
+      }
+      return resolved;
+    }
+  }
+  return {};
+}
+
+} // namespace
+
 void Pad::serviceFrame() {
   Core *c = &game->core;
-  int have_window = gpu_windowed(); // a live on-screen window is up (gpu_vk.cpp)
-#ifdef PSXPORT_SDL
-  // Under SBS, the harness polls SDL ONCE per frame and feeds the SAME mask into both cores'
-  // Pad::buttons via feedInput() (sbs.cpp). Skipping our own pollSdl here keeps the two cores'
-  // input byte-identical — otherwise A polls first, then B polls a moment later, and a keystroke
-  // mid-press (or a controller axis update in the tiny gap) gives them different masks → real
-  // divergence downstream (area-update slot table, packet pool, etc.). Standalone runs still poll
-  // as before (game->sbs is nullptr).
-  if (have_window) {
-    pollSdl(); // host keyboard/gamepad -> this->buttons
-  }
-#endif
+  const bool windowed = gpu_vk_windowed() != 0;
+  pollHostInput(); // host keyboard/controllers, plus the P / '.' debug keys
+
   if (!mForceInit) { // headless test hook: pulse an active-low mask
     const char *force = cfg_str("PSXPORT_FORCE_BUTTONS");
     if (force) {
@@ -601,32 +207,26 @@ void Pad::serviceFrame() {
     }
     mForceInit = 1;
   }
-  // Pulse the forced buttons (pressed 8 frames, released 24) so each press is a fresh EDGE the
-  // game's current&~prev input logic (FUN_800788ac) actually sees — a continuous hold would edge
-  // only once. Lets a headless run drive menus deterministically without a host controller. Once
-  // past FORCE_HOLD_AT, hold FORCE_HOLD continuously instead (movement input).
-  // PSXPORT_FORCE_STOP_AT=N: cease ALL forced input at frame N (release everything). Lets a run
-  // pulse Start to drive through attract/menu/intro to a target scene, then go fully hands-off so
-  // the scene's own BGM/state isn't disturbed by phantom presses (Start in gameplay = pause menu,
-  // which stops BGM — that artifact poisoned earlier BGM captures).
+  // Pulse the forced buttons (pressed 8 frames, released 24) so each press is a fresh EDGE the game's
+  // current&~prev input logic sees; a continuous hold would edge only once. Once past FORCE_HOLD_AT,
+  // hold FORCE_HOLD continuously instead (a held direction is what a game reads for movement).
+  // PSXPORT_FORCE_STOP_AT=N ceases ALL forced input at frame N, so a run can pulse Start through
+  // attract/menu/intro to a target scene and then go hands-off.
   if (mStopAt == -2) {
     const char *e = cfg_str("PSXPORT_FORCE_STOP_AT");
     mStopAt = e ? atol(e) : -1;
   }
   if (mForceOn && !(mStopAt >= 0 && (long)mFc >= mStopAt)) {
-    if (mHoldMask != PAD_NONE && mFc >= mHoldAt) {
+    if (mHoldMask != psx::input::kNoButtons && mFc >= mHoldAt) {
       setButtons(mHoldMask);
     } else {
-      setButtons((mFc % 32u) < 8u ? mForceMask : PAD_NONE);
+      setButtons((mFc % 32u) < 8u ? mForceMask : psx::input::kNoButtons);
     }
   }
-  // REPL pad control: a tap (countdown) overrides the held mask while active. The effective REPL
-  // mask is also kept aside so a replay in progress MERGES it (below) instead of swallowing it:
-  // an explicit press/tap issued at the REPL is user intent NOW, and silently dropping it while
-  // rep_buf still has frames left (a replay pads its full file length, mostly idle tail) misled
-  // two sessions into "the game doesn't react" conclusions. Determinism is unaffected when no
-  // REPL command is issued (mask stays PAD_NONE = no-op).
-  uint16_t repl_mask = PAD_NONE;
+  // REPL pad control: a tap (countdown) overrides the held mask while active. The effective REPL mask is
+  // kept aside so a replay in progress MERGES it (below) instead of swallowing it — an explicit press is
+  // user intent NOW. Determinism is unaffected when no REPL command is issued.
+  uint16_t repl_mask = psx::input::kNoButtons;
   if (repl_on) {
     if (repl_tap_n > 0) {
       repl_mask = repl_tap;
@@ -638,12 +238,11 @@ void Pad::serviceFrame() {
   }
   mFc++;
 
-  // The HOST's claim on the player's input (see setPlayerInputSuppressed). Applied BEFORE the
-  // session's record/replay service, so the guest, the recording and a replay all see the same mask —
-  // a recording taken while the host held the claim records what the guest was actually given, not
-  // the press the host consumed.
+  // The HOST's claim on the player's input, applied BEFORE the record/replay service so the guest, the
+  // recording and a replay all see the same mask: a recording taken under the claim records what the
+  // guest was actually given, not the press the host consumed.
   if (mPlayerInputSuppressed) {
-    buttons = PAD_NONE;
+    buttons = psx::input::kNoButtons;
   }
 
   // ---- INPUT RECORD / REPLAY (deterministic pad capture) ---------------------------------------
@@ -658,7 +257,7 @@ void Pad::serviceFrame() {
           .recordPath = psx::config::cv_pad_record.get(),
           .replayPath = psx::config::cv_pad_replay.get(),
           .resumePath = psx::config::cv_pad_resume.get(),
-          .windowed = have_window != 0,
+          .windowed = windowed,
           .liveInputOnly = mLiveInputOnly,
           .cardIdentity =
               [this] {
@@ -673,8 +272,9 @@ void Pad::serviceFrame() {
     const uint32_t rec_fc = mSession.frameIndex(); // the pad-frame axis the schedules below index
     // PSXPORT_PAD_SHOT_AT=f0,f1,... : during replay, screenshot at these EXACT replay (pad) frame
     // indices to scratch/screenshots/padshot_<frame>.ppm. The pad-frame axis (rec_fc) is the faithful
-    // one (gpu_frame_no drifts because boot/FMV presents extra frames), so this captures a deterministic
-    // visual timeline of a replayed session. Done here, after the mask is applied for THIS frame.
+    // one (gpu_frame_no drifts because boot/FMV presents extra frames), so this captures a
+    // deterministic visual timeline of a replayed session. Taken here, after the mask is applied for
+    // THIS frame.
     uint32_t *shot_at = mShotAt;
     int &shot_n = mShotN;
     if (!mShotInit) {
@@ -690,7 +290,6 @@ void Pad::serviceFrame() {
     }
     for (int i = 0; i < shot_n; i++) {
       if (shot_at[i] == rec_fc) {
-        void gpu_vk_shot(Core *, const char *);
         char p[96];
         snprintf(p, sizeof p, "scratch/screenshots/padshot_%u.ppm", rec_fc);
         gpu_vk_shot(c, p);
@@ -729,7 +328,6 @@ void Pad::serviceFrame() {
           fclose(spf);
         }
         // also dump the classified display list (which prims/passes drew this frame) — pins the culprit pass.
-        void gpu_scene_dump_now(Core *, FILE *);
         char sc[100];
         snprintf(sc, sizeof sc, "scratch/bin/padscene_%u.txt", rec_fc);
         FILE *scf = fopen(sc, "w");
@@ -740,9 +338,9 @@ void Pad::serviceFrame() {
         lucent::info("padrec", "dumpram+scene at replay-frame {} -> {}", rec_fc, p);
       }
     }
-    // PSXPORT_PAD_TRACE=lo-hi : log the transition/scene markers EVERY replay frame in [lo,hi] (pad-frame
-    // indexed — the faithful axis). Finds which field moves when the player walks into the hut (the
-    // seamless sub-scene transition). All fixed-address globals; sm = *0x1f800138.
+    // PSXPORT_PAD_TRACE=lo-hi : log the transition/scene markers EVERY replay frame in [lo,hi]
+    // (pad-frame indexed — the faithful axis). Finds which field moves when the player walks into the
+    // hut (the seamless sub-scene transition). All fixed-address globals; sm = *0x1f800138.
     uint32_t &trace_lo = mTraceLo;
     uint32_t &trace_hi = mTraceHi;
     if (!mTraceInit) {
@@ -783,9 +381,9 @@ void Pad::serviceFrame() {
 
   applyGuestPoke(c);
 
-  // A BIOS InitPAD2/StartPAD2 user receives packets only while its PadCardIrq handler is
-  // enqueued and the work-area pad-enable flag is set. Title-native SIO drivers never enter
-  // this BIOS lifecycle and retain their existing host packet path.
+  // A BIOS InitPAD2/StartPAD2 user receives packets only while its PadCardIrq handler is enqueued and
+  // the work-area pad-enable flag is set. Title-native SIO drivers never enter this BIOS lifecycle and
+  // retain their existing host packet path.
   if (!game->hle.biosPadShouldService()) {
     return;
   }
@@ -795,9 +393,9 @@ void Pad::serviceFrame() {
   const GuestPadBufferLayout layout = resolveGuestPadBufferLayout(*c);
   const uint32_t bufs[2] = {layout.slot0Buffer, layout.slot1Buffer};
   for (int slot = 0; slot < 2; slot++) {
-    // Only consult the driver's table when the port HAS one. Reading it unconditionally means a
-    // game with no known table reads guest address 0 (and 0+stride) and calls whatever garbage is
-    // there a buffer pointer — writing the pad packet into an arbitrary address.
+    // Only consult the driver's table when the port HAS one. Reading it unconditionally means a game
+    // with no known table reads guest address 0 (and 0+stride) and calls whatever garbage is there a
+    // buffer pointer — writing the pad packet into an arbitrary address.
     uint32_t b =
         layout.slotPointerTable ? c->mem_r32(layout.slotPointerTable + (uint32_t)slot * layout.slotPointerStride) : 0u;
     if (!b) {
@@ -815,5 +413,3 @@ void Pad::serviceFrame() {
     }
   }
 }
-
-#endif // PSXPORT_PAD_NO_OVERRIDES

@@ -1,51 +1,54 @@
-// pad_input.h — class Pad — native controller input subsystem, owned by Game (c->game->pad).
-// Carries the current host button state + REPL drive control + all the pad_* behavior (host poll,
-// per-VBlank fill buffer, REPL hold/tap/release), plus the SDL gamepad handles and the headless
-// test hooks (force/hold/record/replay/shot/dump/trace schedules). Implemented in pad_input.cpp.
+// pad_input.h — class Pad — the PSX controller as the guest sees it, owned by Game (c->game->pad).
+//
+// Pad owns everything about the BUTTONS once they are host buttons: the current active-low mask, the
+// per-VBlank guest packet fill, the REPL drive, the deterministic record/replay session, and the
+// headless test hooks. The host itself — the SDL event drain, the delivered key state, the gamepads and
+// the mask they add up to — belongs to psx::input::HostInput (host_input.h), which Pad consumes.
+//
+// Its constructor takes that owner: a pad with no host input source is not a pad that can be
+// configured later, it is a pad that silently ignores the player.
 #pragma once
 #include "active_low_edges.h"
+#include "host_input.h" // psx::input::HostInput — the host input owner this pad consumes
 #include "pad_record_replay.h"
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+
+class Core;
 class Game;
-typedef struct SDL_Gamepad SDL_Gamepad; // opaque; only held as pointers (SDL build only)
 
 class Pad {
 public:
+  explicit Pad(psx::input::HostInput &host) : mHost(host) {}
+
   Game *game = nullptr;
-  uint16_t buttons = 0xFFFF;   // current host button state, active-low (0 bit = pressed) (was s_buttons)
-  uint16_t repl_hold = 0xFFFF; // REPL: bits cleared = held down (was s_repl_hold)
-  uint16_t repl_tap = 0xFFFF;  // REPL: active-low mask pressed for repl_tap_n frames (was s_repl_tap)
-  int repl_tap_n = 0;          // REPL: tap countdown frames (was s_repl_tap_n)
-  int repl_on = 0;             // REPL drive active (was s_repl_on)
+  uint16_t buttons = psx::input::kNoButtons;   // current effective mask, active-low (0 bit = pressed)
+  uint16_t repl_hold = psx::input::kNoButtons; // REPL: bits cleared = held down
+  uint16_t repl_tap = psx::input::kNoButtons;  // REPL: active-low mask pressed for repl_tap_n frames
+  int repl_tap_n = 0;                          // REPL: tap countdown frames
+  int repl_on = 0;                             // REPL drive active
 
-  void init();                    // was pad_init(Core*)
-  void setButtons(uint16_t mask); // was pad_set_buttons(Core*, mask) — feed the active-low mask
-  void fillBuffer(uint8_t *buf);  // was pad_fill_buffer(Core*, buf) — per-VBlank guest read pad
-  void pollSdl();                 // was pad_poll_sdl(Core*) — host SDL controller poll
+  void init();                    // reset the mask to nothing pressed
+  void setButtons(uint16_t mask); // feed the effective active-low mask (a forced or replayed mask)
+  void fillBuffer(uint8_t *buf);  // per-VBlank guest read pad — write the standard digital packet
 
-  // Consume the host event queue: KEY_DOWN/KEY_UP update `mKeyDown` (the pad's OWN host key state),
-  // everything is forwarded to the RmlUi overlay. pollSdl calls it; see its definition for why the
-  // pad cannot read SDL_GetKeyboardState() as the answer.
-  void drainHostKeyEvents();
-  // Record one host key from a KEY_DOWN/KEY_UP the host delivered. Called from EVERY consumer of the
-  // host event queue, not just this pad's own drain: `poll_quit` drains the same queue on the
-  // present path and would otherwise swallow a press that arrived between two fields.
-  void noteHostKey(int scancode, bool down);
-  void overridesInit();                   // was pad_overrides_init(Core*) — install per-VBlank pad-read override
-  void driveHold(uint16_t activeLowMask); // was pad_repl_hold(c, mask) — REPL: hold down these bits
-  void driveTap(uint16_t activeLowMask, int nframes); // was pad_repl_tap(c, mask, n) — press for n frames
-  void driveRelease();                                // was pad_repl_release(c) — clear REPL drive
+  // THE ONE HOST-INPUT PUMP. Every site that must keep the host responsive goes through this: the
+  // per-frame service, the SCEA splash, a blocking movie, and the debug-server pause wait. It resolves
+  // the host mask, and applies the P / '.' debug keys to the debug channel's pause and step state.
+  void pollHostInput();
+
+  void overridesInit();                               // install the per-VBlank pad-read override
+  void driveHold(uint16_t activeLowMask);             // REPL: hold down these bits
+  void driveTap(uint16_t activeLowMask, int nframes); // REPL: press for n frames
+  void driveRelease();                                // REPL: clear the drive entirely
+
+  // The once-per-frame pad service: poll the host, resolve forced / REPL / replay input into `buttons`,
+  // record or replay the frame, apply the test hooks, and write the guest packet into the registered
+  // slot buffers. Advances the pad-frame clock, so it is NOT what a pump site that must not advance a
+  // frame calls.
   void serviceFrame();
-  void applyGuestPoke(Core *c); // was pad_service_frame(c) — per-frame native pad service
-
-  // Pump host input WITHOUT advancing a pad frame. For the debug-server pause loop, which must keep
-  // the window responsive (and the P / '.' keys alive) while the game is explicitly NOT advancing.
-  // serviceFrame() must never be used there: it ticks the record/replay frame index, so a capture
-  // taken across a pause records frames the game never ran, and replaying it consumes them while the
-  // game IS running — the whole session desyncs from that point on.
-  void pumpHostInput();
+  void applyGuestPoke(Core *c); // PSXPORT_GUEST_POKE: rewrite named guest locations every frame
 
   // Edge state for the FINAL effective active-low mask (host/forced/REPL/replay already resolved).
   // Consumers may inspect it, but only their own state machine decides whether an edge transitions a
@@ -53,7 +56,7 @@ public:
   void sampleButtonEdges() {
     mButtonEdges.sample(buttons);
   }
-  void resetButtonEdges(uint16_t current = 0xFFFFu) {
+  void resetButtonEdges(uint16_t current = psx::input::kNoButtons) {
     mButtonEdges.reset(current);
   }
   uint16_t pressedButtons() const {
@@ -82,11 +85,10 @@ public:
     return mSession.saveRecording(path, nframes);
   }
 
-  // TRUE while a RESUME replay (PSXPORT_PAD_RESUME) is still feeding the guest. The pacer does not
-  // sleep (frame_pacer.cpp), FMVs play uncapped (native_fmv.cpp) and rendered audio is dropped
-  // (spu_audio.cpp) while it holds. It goes FALSE the moment the replay stops driving the pad —
-  // complete or stalled — so speed, sound and control are handed back together. A plain
-  // PSXPORT_PAD_REPLAY is NOT fast-forwarded: the two are told apart by which knob was set.
+  // TRUE while a RESUME replay (PSXPORT_PAD_RESUME) is still feeding the guest: the pacer does not sleep,
+  // FMVs play uncapped and rendered audio is dropped while it holds, and all three come back together
+  // the moment the replay stops driving the pad. A plain PSXPORT_PAD_REPLAY is NOT fast-forwarded; the
+  // two are told apart by which knob was set.
   bool fastForwarding() const {
     return mSession.fastForwarding();
   }
@@ -105,30 +107,19 @@ public:
   }
 
   // A host-only screen (a title picker) wants the live keyboard/controller and the control channel's
-  // presses, and nothing a run's recording owns: no default `scratch/bin/pad_session.pad` sink, which
-  // rotates the player's real capture, and no PSXPORT_PAD_REPLAY, which belongs to the title started
-  // after it. Call before the first serviceFrame().
-  //
-  // Stated to the session owner rather than implemented here, because the sink and the replay are
-  // both resolved there and skipping them from the outside would leave the session believing it is
-  // configured and holding nothing. The in-memory recording keeps running, so the control channel's
-  // `padrec save` still answers for a screen that has a pad.
+  // presses, and none of a run's recording: no default `scratch/bin/pad_session.pad` sink and no
+  // PSXPORT_PAD_REPLAY, which belong to the title started after it. Call before the first
+  // serviceFrame(). The in-memory recording keeps running, so `padrec save` still answers.
   void useLiveInputOnly() {
     mLiveInputOnly = true;
   }
 
-  // The HOST owns the player's input for now, and this session's guest must not see it.
-  //
-  // A process that runs several sessions at once — a title selector showing three attract demos —
-  // reads the pad itself to decide which panel is selected, and every session's Pad would otherwise
-  // deliver that same press to its own guest: one Left tap would move three demos, and the panel the
-  // player just selected would have been advanced by the press that selected it. This claims the
-  // input for the host: the pad keeps polling, keeps recording, and keeps learning host keys, but
-  // the mask handed to the guest — and to the recording and the replay, so all three still agree —
-  // is "nothing pressed". Releasing the claim restores live input on the next frame.
-  //
-  // Distinct from useLiveInputOnly, which is about the recording sink, and from the REPL drive, which
-  // is a debug channel with its own replay interactions.
+  // The HOST owns the player's input for now, so this session's guest must not see it. A process
+  // running several sessions reads the pad itself to pick a panel; without this claim every session
+  // delivers the selecting press to its own guest. The pad keeps polling, recording and learning host
+  // keys, but the mask handed to the guest — and to the recording and the replay, so all three agree —
+  // is "nothing pressed". Distinct from useLiveInputOnly (the sink) and the REPL drive (a debug
+  // channel with its own replay interactions).
   void setPlayerInputSuppressed(bool suppressed) {
     mPlayerInputSuppressed = suppressed;
   }
@@ -143,32 +134,17 @@ public:
   }
 
 private:
+  psx::input::HostInput &mHost; // the host input owner (host_input.h)
   ActiveLowEdges mButtonEdges;
-  // One flag per SDL scancode, fed from KEY_DOWN/KEY_UP events rather than from SDL's focus-gated
-  // keyboard-state array, so a delivered press is a press whether or not our window holds focus.
-  // 512 is SDL_NUM_SCANCODES; it is spelled as a number so this header stays free of SDL types
-  // (game.h includes it), and `drainHostKeyEvents` bounds-checks every scancode against it.
-  static constexpr int kHostKeyStates = 512;
-  bool mKeyDown[kHostKeyStates] = {};
   bool mSlot1Connected = false;
-  // ---- SDL gamepad handles (hotswap-aware; SDL build only) ----
-  static const int PAD_MAX_GC = 4;
-  SDL_Gamepad *mGc[PAD_MAX_GC] = {};
-  int mGcInst[PAD_MAX_GC] = {-1, -1, -1, -1}; // SDL_JoystickID per slot (-1 = empty)
-  int mGcSubInit = 0;                         // lazily added the gamepad subsystem?
-  int mNoPad = -1;                            // PSXPORT_PAD_NOPAD cache (-1 = not read)
-  int mPrevP = 0, mPrevStep = 0;              // P / '.' debug-key edge detectors
-  int mPadDirsWarned = 0;                     // "controller is driving directions" once-notice
-  void ensureGcSubsystem();
-  void rescanControllers();
 
   // ---- serviceFrame test hooks / config caches ----
   int mForceInit = 0, mForceOn = 0;
-  uint16_t mForceMask = 0xFFFF;
-  uint32_t mFc = 0;            // internal frame counter for the pulse (== native frame index)
-  uint16_t mHoldMask = 0xFFFF; // headless test hook: a HELD (not pulsed) mask...
-  uint32_t mHoldAt = 0;        // ...applied from this native frame onward
-  long mStopAt = -2;           // PSXPORT_FORCE_STOP_AT (-2 = not read, -1 = off)
+  uint16_t mForceMask = psx::input::kNoButtons;
+  uint32_t mFc = 0;                            // internal frame counter for the pulse (== native frame index)
+  uint16_t mHoldMask = psx::input::kNoButtons; // headless test hook: a HELD (not pulsed) mask...
+  uint32_t mHoldAt = 0;                        // ...applied from this native frame onward
+  long mStopAt = -2;                           // PSXPORT_FORCE_STOP_AT (-2 = not read, -1 = off)
 
   // ---- input record / replay + schedules ----
   psx::input::PadRecordReplay mSession;

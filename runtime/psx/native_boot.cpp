@@ -16,6 +16,7 @@
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_iface.h"
+#include "gpu_vk.h" // gpu_vk_windowed — the windowed/headless discriminator
 #include "guest_call.h"
 #include "hw_bind.h" // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "memcensus.h"
@@ -190,7 +191,7 @@ static void game_main(Core *c) {
   if (repl_mode) {
     nframes = 0; // REPL drives frame count via `run N`
   } else {
-    if (!gpu_windowed()) {
+    if (!gpu_vk_windowed()) {
       nframes = 120;
     }
   } // headless smoke default
@@ -223,7 +224,7 @@ static void game_main(Core *c) {
   // When the debug server is up (headless, no REPL), the run is INTERACTIVELY DRIVEN over the socket
   // (rw/w16/press/shot/dumpram, step/play) — do NOT cap it, or it exits before we can drive. The
   // server's `quit` command (or SIGINT) ends it.
-  if (!repl_mode && !gpu_windowed() && debug_server_live()) {
+  if (!repl_mode && !gpu_vk_windowed() && debug_server_live()) {
     nframes = 0;
   }
   lucent::info(

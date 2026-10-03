@@ -410,7 +410,10 @@ void test_widescreen_only_runtime_refuses_native_through_shipping_validator() {
         RenderPathSelectionResult::Applied);
 }
 
-void test_startup_rewrites_unsupported_native_config_to_effective_gte_path() {
+// A title that cannot do the requested path gets its DECLARED path on its own Core, and the
+// process-global ladder keeps the request: rewriting the fallback there would hand the next Core
+// created in this process a path its title never asked for.
+void test_startup_refuses_unsupported_native_and_leaves_the_process_ladder_alone() {
   TestRuntime runtime;
   runtime.capabilities = RenderCapabilities::widescreenOnly();
   psxport_install_game(runtime);
@@ -420,7 +423,7 @@ void test_startup_rewrites_unsupported_native_config_to_effective_gte_path() {
   render_path_install(&game->core);
 
   CHECK(game->core.rsub.mode.path() == RenderPath::Gte);
-  CHECK_STREQ(psx::config::cv_render_path.get().c_str(), "gte");
+  CHECK_STREQ(psx::config::cv_render_path.get().c_str(), "native");
   CHECK(psx::config::cv_render_path.layer() == psx::config::Layer::Runtime);
 }
 
@@ -500,7 +503,7 @@ int main() {
   RUN(runtime_capabilities_are_explicit_and_preserve_legacy_temporal_titles);
   RUN(live_render_path_validator_separates_player_and_diagnostic_use);
   RUN(widescreen_only_runtime_refuses_native_through_shipping_validator);
-  RUN(startup_rewrites_unsupported_native_config_to_effective_gte_path);
+  RUN(startup_refuses_unsupported_native_and_leaves_the_process_ladder_alone);
   RUN(capability_absence_removes_player_bindings_while_capable_titles_retain_them);
   RUN(guest_vram_picture_policy_is_runtime_owned_and_dynamic);
   RUN(guest_vram_picture_policy_is_per_game);

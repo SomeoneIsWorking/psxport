@@ -10,6 +10,7 @@
 #include "cfg.h"
 #include "config_vars.h"
 #include "game.h"
+#include "gpu_vk.h" // gpu_vk_windowed — the windowed/headless discriminator
 #include "xa_state.h"
 #include <lucent/log.h>
 
@@ -57,7 +58,6 @@ int spu_render(int16_t *out, int max_frames);
 // advance for the wait to clear even headless.
 struct XaState;
 int xa_stream_is_active(struct XaState *xs);
-int gpu_windowed(void);
 }
 
 constexpr uint32_t kWavMaxBytes = 600u * SpuFieldCadence::kSampleRateHz * 2u * 2u;
@@ -188,7 +188,7 @@ void SpuAudio::setOutputEnabled(bool enabled) {
 void SpuAudio::openHostDevice() {
   // Headless implies no audio — there's no point driving the sound device for an automated /
   // offscreen run. Audio opens ONLY for a real on-screen window.
-  if (!audio_may_open(psx::config::cv_noaudio.get(), gpu_windowed() != 0)) {
+  if (!audio_may_open(psx::config::cv_noaudio.get(), gpu_vk_windowed())) {
     mState = -1;
     return;
   }

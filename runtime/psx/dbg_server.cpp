@@ -52,20 +52,13 @@
 #include "c_subsys.h" // watchdog_suspend / watchdog_resume — a debug pause is intentional idle
 #include "core.h"     // Core, mem_*, guest dispatch — for the RE commands (call/ents/node)
 #include "execution_control.h"
-#include "execution_ledger.h" // `guest`: the executor's own counters, asked live
-#include "game.h"             // Core::game->gpu (render state is per-instance now)
+#include "execution_ledger.h"    // `guest`: the executor's own counters, asked live
+#include "game.h"                // Core::game->gpu (render state is per-instance now)
+#include "gpu_native_internal.h" // the GPU diagnostic dumps + gpu_native_shot / gpu_frame_no
+#include "gpu_vk.h"              // gpu_vk_shot / gpu_vk_stats / gpu_vk_vram_region
+#include "gpu_vk_internal.h"     // gpu_vk_enabled — the active-renderer predicate
 #include "guest_call.h"
 #include "lightrec_executor.h"
-void gpu_scene_dump_now(Core *c, FILE *out);
-void gpu_disp_dump_now(Core *c, FILE *out);                     // `disp` — the display rect + draw clip, in one place
-void gpu_otattr_dump_now(Core *c, FILE *out, uint32_t oneAddr); // `otattr` — who submitted this geometry
-void gpu_provat_display(Core *core, FILE *out, int qx, int qy);
-void gpu_native_shot(Core *core, const char *path);
-int gpu_frame_no(Core *core);
-int gpu_vk_enabled(void);
-void gpu_vk_shot(Core *core, const char *path);
-void gpu_vk_stats(Core *core, int *tri, int *tex, int *semi);
-void gpu_vk_vram_region(Core *core, const char *path, int x, int y, int w, int h);
 // pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
 
 // PSX pad: name -> active-HIGH bit (mirrors the REPL mapping in native_boot.c).
@@ -1080,7 +1073,7 @@ void DbgServer::honourPause(Core *c) {
       consumeStep();
       break; // run exactly one frame
     }
-    c->game->pad.pumpHostInput(); // host input ONLY — must not tick the pad-frame clock here
+    c->game->pad.pollHostInput(); // host input ONLY — must not tick the pad-frame clock here
     c->game->gpu.gpu_repaint();
     service(c); // receive step/play/capture commands
     usleep(15000);

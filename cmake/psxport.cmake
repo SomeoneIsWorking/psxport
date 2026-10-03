@@ -99,6 +99,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/vram_xfer.cpp
   ${PSXPORT_ROOT}/runtime/psx/spu_audio.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio_field_report.cpp
+  ${PSXPORT_ROOT}/runtime/psx/host_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/pad_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/pad_recording.cpp
   ${PSXPORT_ROOT}/runtime/psx/pad_phase_replay.cpp
