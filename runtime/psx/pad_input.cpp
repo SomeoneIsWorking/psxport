@@ -272,8 +272,9 @@ void Pad::pollSdl() {
   // from the SDL_GPU build, so there is no IME/compose widget to suppress here any more (the old GH#18
   // SDL_StopTextInput dance is unnecessary). The keyboard read is gated only by rmlui_overlay_wants_keyboard
   // (stubbed to 0 in this build), so WASD always drives the game.
-  const bool *ks = ((game && game->rml_overlay.wantsKeyboard()) ? nullptr : SDL_GetKeyboardState(NULL));
-  if (mKeyDown[SDL_SCANCODE_RETURN] || (ks != nullptr && ks[SDL_SCANCODE_RETURN])) {
+  const bool gameOwnsKeyboard = !(game && game->rml_overlay.wantsKeyboard());
+  const bool *ks = gameOwnsKeyboard ? SDL_GetKeyboardState(NULL) : nullptr;
+  if (gameOwnsKeyboard) {
 #define KEYDOWN(sc) (mKeyDown[(sc)] || (ks != nullptr && ks[(sc)] != 0))
     if (KEYDOWN(SDL_SCANCODE_UP) || KEYDOWN(SDL_SCANCODE_W)) {
       mask &= ~0x0010u; // Up

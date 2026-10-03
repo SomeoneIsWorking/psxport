@@ -459,7 +459,15 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
   if (!begin(lba, size_bytes)) {
     return -1;
   }
+  return playToEnd();
+}
+
+// A blocking caller owns the whole turn until the movie ends, so no frame driver services the pad in
+// between: this loop pumps host input itself (host only — no pad-frame clock, replay or record tick),
+// which is what lets the player's Start reach the skip check that step() reads from `pad.buttons`.
+int Fmv::playToEnd() {
   while (!finished()) {
+    game->pad.pumpHostInput();
     step();
   }
   return frames_;
@@ -481,10 +489,7 @@ int Fmv::play(const char *path) {
   if (!beginPath(path)) {
     return -1;
   }
-  while (!finished()) {
-    step();
-  }
-  return frames_;
+  return playToEnd();
 }
 
 // ---- ISO9660 path resolution (walks directories via disc_read_sector) ----------------

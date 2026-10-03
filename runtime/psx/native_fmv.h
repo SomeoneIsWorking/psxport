@@ -68,7 +68,9 @@ private:
   void audioOpen(int freq);
   void audioQueue(const int16_t *pcm, int frames);
   void audioClose();
-  // Pace playback to the AUDIO/media clock; polls input, returns 1 if Start was pressed (skip).
+  // The blocking loop behind play()/playLba(): pumps host input and steps until the movie ends.
+  int playToEnd();
+  // Pace playback to the AUDIO/media clock; returns 1 if Start is held (skip).
   int pace(long media_frames, int freq, uint32_t t0, int uncapped);
   // Decode an entire BS frame into the MDEC run-level code stream (VLC decode).
   int bsDecodeFrame(
