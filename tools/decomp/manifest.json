@@ -125,8 +125,288 @@
       "serial": "SCUS_944.54",
       "text_load_address": "0x80010000",
       "text_file_offset": "0x800",
-      "text_size": "0x28800",
-      "note": "Whoopee Camp. The resident executable is ~15% of the title; most code is in .PRG overlays loaded at run time. Has overlays, not yet declared."
+      "text_size": "0xAE800",
+      "note": "Whoopee Camp (SCUS_944.54). The resident executable is ~15% of the title; most code is in .PRG overlays. text_size is 0xAE800 from MAIN.EXE's own PS-X EXE header (it was 0x28800, which contradicted the header and made the pipeline refuse the image). The 28 overlay images are declared below as modules."
+    },
+    "tomba2_a00": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "c34a290816d05433ca402fbaecde2bf424b4e664",
+      "load_base": "0x80100000",
+      "code_first": "0x13A0",
+      "code_last": "0x459A7",
+      "note": "A00.BIN, 285096 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x13A0 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x459A7), so the whole image is addressable."
+    },
+    "tomba2_a01": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "5bdd26f4e39009786d682221afb80f87e2bb1a47",
+      "load_base": "0x80100000",
+      "code_first": "0xFE0",
+      "code_last": "0x316DB",
+      "note": "A01.BIN, 202460 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0xFE0 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x316DB), so the whole image is addressable."
+    },
+    "tomba2_a02": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "c0232987d14263d5e61b763dd1322e27b87429cf",
+      "load_base": "0x80100000",
+      "code_first": "0x158C",
+      "code_last": "0x3112B",
+      "note": "A02.BIN, 201004 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x158C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x3112B), so the whole image is addressable."
+    },
+    "tomba2_a03": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "8bd4bcc23f1c41b778e1c5733269d9e45701c86a",
+      "load_base": "0x80100000",
+      "code_first": "0x88",
+      "code_last": "0x1326B",
+      "note": "A03.BIN, 78444 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x88 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1326B), so the whole image is addressable."
+    },
+    "tomba2_a04": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "7c940d9434cb724c363a098312c2c84ba83511e5",
+      "load_base": "0x80100000",
+      "code_first": "0x1578",
+      "code_last": "0x3D3A3",
+      "note": "A04.BIN, 250788 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1578 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x3D3A3), so the whole image is addressable."
+    },
+    "tomba2_a05": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "05ea0e4071a358cff97a5c146b46489e1d61c970",
+      "load_base": "0x80100000",
+      "code_first": "0x1398",
+      "code_last": "0x392B3",
+      "note": "A05.BIN, 234164 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1398 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x392B3), so the whole image is addressable."
+    },
+    "tomba2_a06": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "27332ed9f09df70cfcbed5bd3046b44035bb328b",
+      "load_base": "0x80100000",
+      "code_first": "0x157C",
+      "code_last": "0x456BB",
+      "note": "A06.BIN, 284348 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x157C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x456BB), so the whole image is addressable."
+    },
+    "tomba2_a07": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "4c5163c1a5c51955b6bf3e17fe9db7a468baa89d",
+      "load_base": "0x80100000",
+      "code_first": "0x16C4",
+      "code_last": "0x38157",
+      "note": "A07.BIN, 229720 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x16C4 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x38157), so the whole image is addressable."
+    },
+    "tomba2_a08": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "abddb36655ecc72406a2b497c212596c6db4d67c",
+      "load_base": "0x80100000",
+      "code_first": "0x1580",
+      "code_last": "0x40F8B",
+      "note": "A08.BIN, 266124 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1580 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x40F8B), so the whole image is addressable."
+    },
+    "tomba2_a09": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "1ba8966b0b36c38b386ad3050f3b672ba43408a7",
+      "load_base": "0x80100000",
+      "code_first": "0xDC",
+      "code_last": "0x566C",
+      "note": "A09.BIN, 22125 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0xDC is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x566C), so the whole image is addressable."
+    },
+    "tomba2_a0a": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "5a582ac84ecf40074c7e4d65061b8ba82cd0dc08",
+      "load_base": "0x80100000",
+      "code_first": "0x378",
+      "code_last": "0x1EE37",
+      "note": "A0A.BIN, 126520 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x378 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1EE37), so the whole image is addressable."
+    },
+    "tomba2_a0b": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "75269941dacd0b68102076181d0463f274e1ded6",
+      "load_base": "0x80100000",
+      "code_first": "0x320",
+      "code_last": "0x1C367",
+      "note": "A0B.BIN, 115560 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x320 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1C367), so the whole image is addressable."
+    },
+    "tomba2_a0c": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "c00f2b9fe2cf34a75086a65e1e29f7597900b0c6",
+      "load_base": "0x80100000",
+      "code_first": "0x338",
+      "code_last": "0x1E1BF",
+      "note": "A0C.BIN, 123328 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x338 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1E1BF), so the whole image is addressable."
+    },
+    "tomba2_a0d": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "305a5a4ed6587734767719e4ae4a1a27dc8156ac",
+      "load_base": "0x80100000",
+      "code_first": "0x368",
+      "code_last": "0x1D327",
+      "note": "A0D.BIN, 119592 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x368 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1D327), so the whole image is addressable."
+    },
+    "tomba2_a0e": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "9b9fa2b41c129826fbd9292a7965bdf47755d854",
+      "load_base": "0x80100000",
+      "code_first": "0x36C",
+      "code_last": "0x1E6EF",
+      "note": "A0E.BIN, 124656 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x36C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1E6EF), so the whole image is addressable."
+    },
+    "tomba2_a0f": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "959318a353097c3bf7da0c1c9f41cbc07218f60f",
+      "load_base": "0x80100000",
+      "code_first": "0x384",
+      "code_last": "0x2114B",
+      "note": "A0F.BIN, 135500 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x384 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x2114B), so the whole image is addressable."
+    },
+    "tomba2_a0g": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "d07947d2fe3969137f6171c94eb18bb80d57cde6",
+      "load_base": "0x80100000",
+      "code_first": "0x1E4",
+      "code_last": "0x463B",
+      "note": "A0G.BIN, 17980 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1E4 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x463B), so the whole image is addressable."
+    },
+    "tomba2_a0h": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "47c2c86518bee63d4668e0ce75c4446969f34919",
+      "load_base": "0x80100000",
+      "code_first": "0x140",
+      "code_last": "0x36BF",
+      "note": "A0H.BIN, 14016 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x140 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x36BF), so the whole image is addressable."
+    },
+    "tomba2_a0i": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "501db41b522102fbdb698161997a390a87d0a79d",
+      "load_base": "0x80100000",
+      "code_first": "0x154",
+      "code_last": "0x3B2F",
+      "note": "A0I.BIN, 15152 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x154 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x3B2F), so the whole image is addressable."
+    },
+    "tomba2_a0j": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "9a7152203c47f1120007784f9277f7bbad8a90e6",
+      "load_base": "0x80100000",
+      "code_first": "0x128",
+      "code_last": "0x4A7B",
+      "note": "A0J.BIN, 19068 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x128 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x4A7B), so the whole image is addressable."
+    },
+    "tomba2_a0k": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "9dfaa004c493bd474842379b8129a18baab1b702",
+      "load_base": "0x80100000",
+      "code_first": "0x62C",
+      "code_last": "0x16CC3",
+      "note": "A0K.BIN, 93380 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x62C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x16CC3), so the whole image is addressable."
+    },
+    "tomba2_a0l": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "b5f09d338c809957134cb1fe8cc9828503479931",
+      "load_base": "0x80100000",
+      "code_first": "0x26C",
+      "code_last": "0x1244F",
+      "note": "A0L.BIN, 74832 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x26C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1244F), so the whole image is addressable."
+    },
+    "tomba2_crd": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "1cfb06cdda46ea7d48fc81790dc437543e62b032",
+      "load_base": "0x80100000",
+      "code_first": "0x1E8",
+      "code_last": "0x61E3",
+      "note": "CRD.BIN, 25060 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1E8 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x61E3), so the whole image is addressable."
+    },
+    "tomba2_demo": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "e3988a70ed218b392a245301e4b20f34343cb7d1",
+      "load_base": "0x80100000",
+      "code_first": "0xBC",
+      "code_last": "0x14FB",
+      "note": "DEMO.BIN, 5372 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0xBC is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x14FB), so the whole image is addressable."
+    },
+    "tomba2_game": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "2e1181fe670f27581f95e7fe4d658361e87f2882",
+      "load_base": "0x80100000",
+      "code_first": "0x154",
+      "code_last": "0x2D73",
+      "note": "GAME.BIN, 11636 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x154 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x2D73), so the whole image is addressable."
+    },
+    "tomba2_opn": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "0462c26910a5285eb231cf0d95499f034ae136f4",
+      "load_base": "0x80100000",
+      "code_first": "0x300",
+      "code_last": "0x351B",
+      "note": "OPN.BIN, 13596 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x300 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x351B), so the whole image is addressable."
+    },
+    "tomba2_sop": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "31a0fbd54612836912ff7e991334f063fe0df7f2",
+      "load_base": "0x80100000",
+      "code_first": "0x1C8",
+      "code_last": "0x44FB",
+      "note": "SOP.BIN, 17660 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1C8 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x44FB), so the whole image is addressable."
+    },
+    "tomba2_start": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "5eb7efe5e5aff8a567c30367a7031a8243d26cca",
+      "load_base": "0x80100000",
+      "code_first": "0x274",
+      "code_last": "0x66F",
+      "note": "START.BIN, 1648 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x274 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x66F), so the whole image is addressable."
     },
     "vagrant": {
       "kind": "resident",
