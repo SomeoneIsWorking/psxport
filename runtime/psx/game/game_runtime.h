@@ -24,7 +24,9 @@ namespace psx::cd {
 struct StockReadLanding;
 }
 struct GuestCdStreamCallbackLayout;
+namespace psx::frame {
 class TemporalFramePresentation;
+} // namespace psx::frame
 struct GameConfig;
 struct GameHooks;
 struct PlatformHlePlan;
@@ -198,7 +200,7 @@ public:
   // Optional temporal decorator. Direct runtimes default to the neutral current-frame presenter and
   // therefore instantiate no interpolation history. Legacy consumers keep their existing behavior via
   // LegacyGameRuntimeAdapter until they declare the narrower contract directly.
-  virtual std::unique_ptr<TemporalFramePresentation> createTemporalFramePresentation(Game &game);
+  virtual std::unique_ptr<psx::frame::TemporalFramePresentation> createTemporalFramePresentation(Game &game);
 
   // The default presenter delivers simulated fields and waits for their host deadline. A title
   // whose field scheduler already advances devices overrides this with host waiting only.

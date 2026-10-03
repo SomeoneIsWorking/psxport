@@ -1,5 +1,5 @@
 #include "c_subsys.h"
-#include "census_frame.h" // census_frame — presents are NOT the tick a producer lifetime is measured in
+#include "census_frame.h" // censusFrame — presents are NOT the tick a producer lifetime is measured in
 #include "core.h"
 #include "game.h"
 #include "gpu_vk.h" // Core*-threaded VK present API (de-globalized R2)
@@ -2426,7 +2426,7 @@ void GpuState::gpu_gp1(uint32_t w) {
     // decoded NOWHERE, so the frame pacer had no field rate to pace against and used a literal
     // 60.000 Hz — while the port's vblank counter advanced at the real rate. Decoded here because
     // this write is the game telling the hardware which standard it runs in: the rate is now READ
-    // from the guest rather than assumed by the framework (see gpu_field_rate_millihz below).
+    // from the guest rather than assumed by the framework (see FramePacer::fieldRateMilliHz below).
     {
       const int pal = (w >> 3) & 1;
       if (!s_disp_std_seen || pal != s_disp_pal) {
@@ -2436,8 +2436,8 @@ void GpuState::gpu_gp1(uint32_t w) {
                      "display standard -> {} ({}.{:03} Hz fields — the frame pacer's clock, "
                      "GP1(08)={:08X})",
                      pal ? "PAL" : "NTSC",
-                     field_rate_millihz(pal) / 1000,
-                     field_rate_millihz(pal) % 1000,
+                     psx::frame::fieldRateMilliHz(pal) / 1000,
+                     psx::frame::fieldRateMilliHz(pal) % 1000,
                      w);
       }
     }
@@ -3011,7 +3011,7 @@ void GpuState::frame_finalize(Core *core) {
 // time (issue 0040).
 //
 // So the trigger moved to the single point at which the frame's presentation is over:
-// FrameLoopShell::step, after stepFrame has returned and the presentation fence has been checked to
+// psx::frame::FrameLoopShell::step, after stepFrame has returned and the presentation fence has been checked to
 // have advanced exactly once. Both presenters now only present, and the capture reads whatever the
 // turn ended showing, which is the same thing the window shows. gpu_present_frame_capture() below is
 // that entry point.
@@ -3088,7 +3088,7 @@ static void shot_triggers(Core *core, uint32_t frame) {
   }
 }
 
-// THE FRAME'S CAPTURES, once the frame's presentation is complete. Called from FrameLoopShell::step,
+// THE FRAME'S CAPTURES, once the frame's presentation is complete. Called from psx::frame::FrameLoopShell::step,
 // the one point every frame passes through after its presenters have run. The frame number it reports
 // is the same `s_frame` the old tail-of-present trigger used — that counter is advanced by
 // frame_finalize() inside gpu_present_ex, so it already names this frame by the time the step returns.
@@ -3248,7 +3248,7 @@ void GpuState::censusGuestPrim(Core *core) {
       core->rsub.census.noteSpanNoFnHadNode(1u);
       const uint32_t rfn = core->mem_r32((sp.node & 0x1FFFFFFFu) + 0x18u);
       if (rfn >= 0x80010000u && rfn < 0x80200000u) {
-        core->rsub.census.noteGuest(rfn, 1u, census_frame(core));
+        core->rsub.census.noteGuest(rfn, 1u, psx::frame::censusFrame(*core));
         core->rsub.census.noteGuestViaNode(1u);
         return;
       }
@@ -3277,7 +3277,7 @@ void GpuState::censusGuestPrim(Core *core) {
   // resolved outward to the handler/pass frame; when it is 0 no frame in the searched window is claimed,
   // which is the DB's real answer for that effect — IT HAS NO NATIVE PRODUCER — and it keeps the emitter
   // key so the row still identifies something a human can go and port.
-  core->rsub.census.noteGuest(sp.claimed ? sp.claimed : sp.fn, 1u, census_frame(core));
+  core->rsub.census.noteGuest(sp.claimed ? sp.claimed : sp.fn, 1u, psx::frame::censusFrame(*core));
 }
 
 int GpuState::gpu_frame_no() {

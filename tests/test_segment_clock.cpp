@@ -2,7 +2,7 @@
 // segment, and the commit that makes it observable must never run the clock backwards.
 //
 // THE DEFECT THIS GUARDS. `LightrecExecutor::executeWithBoundary` accounted a segment's guest
-// instructions once, after `lightrec_execute` returned, and `EmulatedTime` moves only there. A guest
+// instructions once, after `lightrec_execute` returned, and `psx::frame::EmulatedTime` moves only there. A guest
 // polling a hardware counter from inside one translated segment — the `latch RCnt2, spin until the
 // delta exceeds N` idiom, which is how a PSX pad driver talks to a controller — therefore read the
 // SAME value for the whole segment and could not leave its loop until the segment ended. Measured on
@@ -169,7 +169,7 @@ static void test_a_stationary_counter_charges_nothing_at_all(void) {
 // access of every segment, on every run, in every port.
 static void test_a_reset_counter_does_not_walk_the_clock_backwards(void) {
   psx::cpu::SegmentClockLedger ledger;
-  // `clock` is what `EmulatedTime` would hold: the sum of every count handed to
+  // `clock` is what `psx::frame::EmulatedTime` would hold: the sum of every count handed to
   // `advanceGuestInstructionTicks`. Tracking it here is what makes "the clock did not go backwards"
   // an executable statement about the ledger rather than an inference about the code.
   std::uint64_t clock = 0;
@@ -359,7 +359,7 @@ static void test_a_guest_polling_root_counter2_inside_one_segment_sees_it_move(v
   // The loop ran to completion: a2 reached the end pointer, so every sample was written.
   CHECK_EQ(fixture.game->core.r[6], kRecord + kSamples * 4u);
   // THE CONTROL. All 32 samples were fetched from one register; before the charge every one of them
-  // was the same value, because `EmulatedTime` could not move until the segment ended. `countDistinct
+  // was the same value, because `psx::frame::EmulatedTime` could not move until the segment ended. `countDistinct
   // == 1` is the defect, so this asserts the opposite AND names the number that would be the defect.
   const std::size_t distinct = countDistinct(run.samples);
   std::printf("  %zu distinct RCnt2 values across %u reads in one segment (%llu device commits)\n",
@@ -475,7 +475,7 @@ static void test_root_counter2_never_decreases_across_a_segment_boundary(void) {
 }
 
 // A STORE to a device register is the same contract violation as a load, and this framework has a
-// concrete reason it matters rather than a symmetrical one: `Timing::rootCounter2Write` records
+// concrete reason it matters rather than a symmetrical one: `psx::frame::Timing::rootCounter2Write` records
 // `rootCounter2OriginTicks = mEmulatedTime.nowTicks()` when the guest programs the counter, and
 // `rootCounter2()` then counts from that origin. A write observed with a stale clock anchors the
 // counter to a time that has already passed, so the first read after it reports a delta the guest
@@ -485,7 +485,7 @@ static void test_a_device_store_is_charged_as_well_as_a_device_read(void) {
   Fixture fixture;
   Core &core = fixture.game->core;
   // A WRITE to a device register is the same contract violation as a read, and this framework has a
-  // concrete reason it matters rather than a merely symmetrical one: `Timing::rootCounter2Write`
+  // concrete reason it matters rather than a merely symmetrical one: `psx::frame::Timing::rootCounter2Write`
   // records `rootCounter2OriginTicks = mEmulatedTime.nowTicks()` when the guest programs the counter,
   // and `rootCounter2()` counts from that origin. A write observed against a stale clock anchors the
   // counter to a moment that has already passed.

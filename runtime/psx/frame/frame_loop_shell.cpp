@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <lucent/log.h>
 
+namespace psx::frame {
+
 FrameDriver &FrameLoopShell::requireDriver(Game &game) const {
   if (!game.runtime) {
     lucent::error("frame-loop", "Game has no installed GameRuntime; refusing to infer a product frame loop");
@@ -83,3 +85,5 @@ void FrameLoopShell::step(Core &core, uint32_t frame) const {
     std::abort();
   }
 }
+
+} // namespace psx::frame

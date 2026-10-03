@@ -35,7 +35,7 @@ private:
   // Every frame's total, kept for the whole run. The rolling average below says what a typical
   // frame costs; only the distribution can say whether any frame missed its budget, which is the
   // question a 60fps product actually has to answer.
-  psxport::perf::FrameTimeHistogram mFrames;
+  psx::frame::FrameTimeHistogram mFrames;
 
   // Phase accumulators (ms), summed across the averaging window, reset every report. One field per
   // Phase, named identically, so the report label and the slot it prints cannot drift apart.

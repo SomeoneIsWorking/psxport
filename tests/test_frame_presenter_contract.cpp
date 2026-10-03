@@ -1,5 +1,5 @@
 // The ordinary frame fence is a presentation service, not an interpolation service. This test drives
-// the shipping FramePresenter state machine through its backend seam and poisons every temporal route
+// the shipping psx::frame::FramePresenter state machine through its backend seam and poisons every temporal route
 // by providing none: one captured frame must emit/present/pace/reconcile/reset exactly once.
 #include "frame_presenter.h"
 #include "testutil.h"
@@ -12,7 +12,7 @@
 
 namespace {
 
-class CountingBackend final : public FramePresentationBackend {
+class CountingBackend final : public psx::frame::FramePresentationBackend {
 public:
   void emit(std::span<const RqItem> items) override {
     calls.emplace_back("emit");
@@ -52,7 +52,7 @@ public:
 };
 
 void test_neutral_commit_owns_the_complete_non_temporal_fence() {
-  FramePresenter presenter;
+  psx::frame::FramePresenter presenter;
   RqItem first{};
   RqItem second{};
   first.seq = 0;
@@ -81,7 +81,7 @@ void test_neutral_commit_owns_the_complete_non_temporal_fence() {
 }
 
 void test_capture_accumulates_flushes_and_rebases_sequence_once() {
-  FramePresenter presenter;
+  psx::frame::FramePresenter presenter;
   RqItem a{};
   RqItem b{};
   RqItem c{};

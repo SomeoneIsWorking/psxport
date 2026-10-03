@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <lucent/log.h>
 
+using psx::frame::PcScheduler;
+
 namespace {
 
 constexpr int kPumpLimit = 4096;

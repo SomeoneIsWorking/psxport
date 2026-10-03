@@ -85,7 +85,7 @@ private:
   InBetweenStrategy::GuestPathClaim claim_;
 };
 
-class Backend final : public FramePresentationBackend {
+class Backend final : public psx::frame::FramePresentationBackend {
 public:
   void emit(std::span<const RqItem>) override {}
   void presentReal() override {

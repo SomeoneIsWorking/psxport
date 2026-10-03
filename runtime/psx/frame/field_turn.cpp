@@ -12,7 +12,7 @@
 
 #include <lucent/log.h>
 
-namespace psx {
+namespace psx::frame {
 namespace {
 
 // `PSXPORT_RAMDUMP_FRAME` asks for a RAM dump at native frame N. The two knob values are held in
@@ -69,4 +69,4 @@ void FieldTurn::dumpRamIfRequested(Core &core, std::uint32_t frame) const {
   lucent::info("field-turn", "mid-run RAM dump @frame {} -> {}", frame, path);
 }
 
-} // namespace psx
+} // namespace psx::frame

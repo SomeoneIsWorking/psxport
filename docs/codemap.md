@@ -243,7 +243,7 @@ directory with a global-namespace C API today keeps that API until its own batch
 | `boot/` | `psx::boot` | `psx::Machine`, `psx::FieldTurn` (shared with frame/), `crt0_setup`, `PsxExeImage`, `hw_bind` |
 | `core/` | `psx::core` | `Core`, `GuestCodeModule`, guest memory |
 | `cpu/` | `psx::cpu_state` | the r3000/COP0/GTE state owners, beside the executor in `runtime/cpu/` |
-| `frame/` | `psx::frame` | `psx::FieldTurn`, `FrameLoopShell`, `FramePresenter`, `FramePacer`, timing |
+| `frame/` | `psx::frame` | `FieldTurn`, `FrameLoopShell`, `FramePresenter`, `FramePacer`, timing |
 | `gpu/` | `psx::gpu` | `RenderQueue`, `OrderingTableCursor`, `PainterObjectLayer`, the raster and Vulkan backends |
 | `present/` | `psx::present` | the widescreen projection, `Fps60`, composite and pane policies |
 | `input/` | `psx::input` | `HostInput`, `PadInput`, the record/replay owners |

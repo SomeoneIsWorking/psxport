@@ -1,5 +1,7 @@
+
+namespace psx::frame {
 #pragma once
-// pace_plan — the FRAME-PACING DECISION, as a pure function of its inputs.
+// pacePlan — the FRAME-PACING DECISION, as a pure function of its inputs.
 //
 // WHY THIS IS A SEPARATE HEADER AND NOT JUST A BLOCK IN gpu_native.cpp. Two USER-flagged defects
 // lived in that block, and both of them were invisible because the decision was tangled with a
@@ -22,7 +24,7 @@
 //      at the game's REAL display field rate (NTSC is 60000/1001 = 59.940 Hz, not 60). Two clocks
 //      at different rates across one wait loop is a beat, and a beat in a wait loop is what reaches
 //      the screen. The rate is now an INPUT, taken from the standard the guest itself programmed
-//      into GP1(0x08) bit 3 (`frame_pacer.cpp::gpu_field_rate_millihz`) — not a second literal, which
+//      into GP1(0x08) bit 3 (`frame_pacer.cpp::gpu_fieldRateMilliHz`) — not a second literal, which
 //      would have been the same bug with a different number.
 //
 // UNITS. Everything in milliseconds except the field rate, which is in MILLI-HERTZ because that is
@@ -70,7 +72,7 @@ struct PacePlan {
   bool resync = false;     // the deadline was more than one interval in the past: drop the debt
 };
 
-inline PacePlan pace_plan(const PaceInputs &in) {
+inline PacePlan pacePlan(const PaceInputs &in) {
   PacePlan p;
   p.nextMs = in.nextMs; // untouched unless we actually pace
 
@@ -110,3 +112,4 @@ inline PacePlan pace_plan(const PaceInputs &in) {
   p.nextMs = next;
   return p;
 }
+} // namespace psx::frame

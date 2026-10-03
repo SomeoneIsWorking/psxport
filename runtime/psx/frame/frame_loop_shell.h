@@ -7,6 +7,8 @@ class Core;
 class FrameDriver;
 class Game;
 
+namespace psx::frame {
+
 // The framework owns iteration; the title owns one finite native frame step. A missing driver is a
 // product-contract violation, never permission to dispatch a non-returning guest frame loop.
 class FrameLoopShell {
@@ -17,3 +19,4 @@ public:
   FrameDriver &requireDriver(Game &game) const;
   void step(Core &core, uint32_t frame) const;
 };
+} // namespace psx::frame

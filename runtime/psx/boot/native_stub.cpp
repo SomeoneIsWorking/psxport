@@ -81,8 +81,8 @@ static void native_scea_splash(Core *c) {
       scea_dump_ppm(scea_rgba, fade / 128.0f, "scratch/screenshots/scea_native_check.ppm");
       dumped = 1;
     }
-    gpu_pace_frame(c); // paces at the game's field rate, headless or not
-                       // (PSXPORT_NOPACE=1 is the only "run flat out")
+    c->game->framePacer.paceFrame(*c); // paces at the game's field rate, headless or not
+                                       // (PSXPORT_NOPACE=1 is the only "run flat out")
     // This image path proves splash progress, not readiness of the main VRAM presenter: its per-Game
     // targets are first materialised by gpu_clear_display below and may still need the cold-init grace.
     watchdog_progress();

@@ -62,7 +62,7 @@ public:
 
 // A host backend that advances the presentation fence and touches no device, so the frame contract
 // can be exercised without a GPU: the same seam `test_frame_loop_shell` uses.
-class FenceBackend final : public FramePresentationBackend {
+class FenceBackend final : public psx::frame::FramePresentationBackend {
 public:
   void emit(std::span<const RqItem>) override {}
   void presentReal() override {}

@@ -191,7 +191,10 @@ void Fps60::frame_commit(Core *core, int guestFields) {
   game->presentation.commit(core, guestFields, this);
 }
 
-void Fps60::present(FramePresentationBackend &backend, Core &core, CapturedFrameView frame, int guestFields) {
+void Fps60::present(psx::frame::FramePresentationBackend &backend,
+                    Core &core,
+                    psx::frame::CapturedFrameView frame,
+                    int guestFields) {
   mCommitGuestFields = guestFields;
   if (active()) {
     uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
@@ -211,7 +214,7 @@ uint32_t fade_rgb(const FadeState &f) {
 } // namespace
 
 // Both slots use the source's same reconstruction and captured-queue merge; only t differs.
-void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFrameView frame) {
+void Fps60::present_vk(psx::frame::FramePresentationBackend &backend, Core *core, psx::frame::CapturedFrameView frame) {
   Core *c = core;
   RenderQueue &q = c->game->rq;
 
@@ -246,7 +249,7 @@ void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFr
     // Was an info line behind a latched `fps60` channel test — a per-present line that only ever appeared
     // when the channel was asked for, so it is debug audience, not info.
     // This used to say "replay prev=Q[N-1]", which is not what happens and sent an analysis the
-    // wrong way for a session. There is no previous queue here: FramePresenter::capturedFrame()
+    // wrong way for a session. There is no previous queue here: psx::frame::FramePresenter::capturedFrame()
     // returns THIS fence's items and both passes run over it, so an item no producer reconstructs
     // is drawn in the in-between present at the position the next real frame will show it. n is
     // that captured queue, tier1 is how much of it was replaced by reconstruction.
@@ -289,7 +292,7 @@ void Fps60::present_vk(FramePresentationBackend &backend, Core *core, CapturedFr
   presentRotate();
 }
 
-void Fps60::presentPass(Core *c, float t, CapturedFrameView frame) {
+void Fps60::presentPass(Core *c, float t, psx::frame::CapturedFrameView frame) {
   RenderQueue &q = c->game->rq;
   mT = t;
   c->game->presentFade.setFactor(t);

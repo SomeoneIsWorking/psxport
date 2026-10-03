@@ -15,7 +15,7 @@
 //     submit". That was true when the port ran the guest's own frame loop through a super-call at
 //     0x800788AC. It stopped being true when that address became natively owned (Tomba! 2's
 //     Engine::padEdgeFence, a per-frame INPUT-EDGE FENCE) and the per-frame game work moved to
-//     PcScheduler. The phase kept reporting ~0.00 ms under a name that claimed to cover the whole
+//     psx::frame::PcScheduler. The phase kept reporting ~0.00 ms under a name that claimed to cover the whole
 //     game, and 0.00 under that name reads as "the game is free" rather than "the work is not here
 //     any more". It misled a session on 2026-08-20 into reporting exactly that. The accumulator
 //     slots are now named for their phases so the label and the measurement cannot drift apart.

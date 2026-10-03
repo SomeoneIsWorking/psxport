@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace psxport::perf {
+namespace psx::frame {
 
 void FrameTimeHistogram::add(double milliseconds) {
   // A monotonic clock cannot run backwards, but a caller that measured across a reset could hand
@@ -40,4 +40,4 @@ double FrameTimeHistogram::percentileMs(double fraction) const {
   return worst_;
 }
 
-} // namespace psxport::perf
+} // namespace psx::frame

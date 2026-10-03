@@ -86,7 +86,7 @@ extern "C" {
 #endif
 // Initialize a fresh CdcState to power-on defaults (stat=0x02, everything else 0). Called by Game().
 void cdc_state_init(CdcState *s);
-// Inject the deterministic guest-instruction clock. Production binds Timing; hermetic tests bind a fake
+// Inject the deterministic guest-instruction clock. Production binds psx::frame::Timing; hermetic tests bind a fake
 // counter and call cdc_drive_service through the same controller path.
 void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now);
 // Service due drive and command events on the guest thread. Returns 1 only when a response became

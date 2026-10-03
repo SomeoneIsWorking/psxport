@@ -118,7 +118,7 @@ constexpr uint32_t kReadBuffer = 0x80130000u;
 // owner the guest's own execution advances.
 void elapseReadTime(Game &game, uint32_t sectors) {
   game.timing.advanceGuestInstructionTicks(
-      static_cast<uint32_t>(kNominalPsxCpuHz / 2u + sectors * cd_drive_sector_period_cpu_ticks(0x80u)));
+      static_cast<uint32_t>(psx::frame::kNominalPsxCpuHz / 2u + sectors * cd_drive_sector_period_cpu_ticks(0x80u)));
 }
 
 int chainRemaining = 0;

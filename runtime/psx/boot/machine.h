@@ -16,8 +16,8 @@
 // ONE OWNER, NOT TWO SPINES. The framework's own `native_boot_run` composes through this class as
 // well, step for step, so "the product that boots natively" and "the product that owns its loop" are
 // the same sequence with the same obligations. Each step below is explicit and optional: a spine calls
-// the ones it needs, in the measured order, and the classes that own a step (`FrameLoopShell`,
-// `FieldTurn`, `crt0_setup`, `psx::state`) keep their own contracts.
+// the ones it needs, in the measured order, and the classes that own a step (`psx::frame::FrameLoopShell`,
+// `psx::frame::FieldTurn`, `crt0_setup`, `psx::state`) keep their own contracts.
 #pragma once
 
 #include "field_turn.h"
@@ -50,7 +50,7 @@ public:
   // (`native_boot`'s game_main runs after the title's own init) or must not re-initialise them. The
   // GTE/SPU/MDEC/XA binding is what this exists for: those four reached a PROCESS-GLOBAL through the
   // vendored entry points, and the binding must name the Core that is running, not the one that booted
-  // last. `FrameLoopShell::step` re-checks it per field anyway; doing it before the first guest call is
+  // last. `psx::frame::FrameLoopShell::step` re-checks it per field anyway; doing it before the first guest call is
   // what keeps a title's own boot prologue off the wrong instance.
   void bindSession();
 
@@ -123,8 +123,8 @@ public:
   // bound while nothing read it.
   std::uint32_t attachControlChannel(std::uint32_t requestedFrameCap);
 
-  // One display field: the shared per-field services (`FieldTurn`), then the title's finite frame step
-  // (`FrameLoopShell::step`, which takes the frame's capture and enforces the one-presentation-per-field
+  // One display field: the shared per-field services (`psx::frame::FieldTurn`), then the title's finite frame step
+  // (`psx::frame::FrameLoopShell::step`, which takes the frame's capture and enforces the one-presentation-per-field
   // contract). The pause is honoured BEFORE the body and the command serviced AFTER it, so a read never
   // observes a half-completed command.
   void stepFrame(std::uint32_t frame);
@@ -138,13 +138,13 @@ public:
 
   // The obligations a finished run owes WHATEVER ended it: the whole-run guest ledger, the guest-call
   // census, and the after-loop RAM dump when the title asked for one. The dump is here rather than in a
-  // spine because it is a path some products never reach — it is the MID-RUN dump (`FieldTurn`) that
+  // spine because it is a path some products never reach — it is the MID-RUN dump (`psx::frame::FieldTurn`) that
   // answers a question about live guest state.
   void reportRunEnd();
 
 private:
   Game &game_;
-  FieldTurn fieldTurn_;
+  psx::frame::FieldTurn fieldTurn_;
 };
 
 } // namespace psx

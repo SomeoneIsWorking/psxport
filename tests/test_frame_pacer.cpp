@@ -13,7 +13,7 @@ constexpr uint32_t kIStat = 0x1F801070u;
 void test_host_deadlines_belong_to_each_instance() {
   auto first = std::make_unique<Game>();
   auto second = std::make_unique<Game>();
-  PaceInputs inputs{.quota = 1, .parts = 1, .fieldRateMilliHz = 50000, .nowMs = 1000};
+  psx::frame::PaceInputs inputs{.quota = 1, .parts = 1, .fieldRateMilliHz = 50000, .nowMs = 1000};
   const auto a = first->framePacer.plan(inputs);
   CHECK(a.paced);
   CHECK_EQ(a.nextMs, 1020.0);
@@ -24,8 +24,8 @@ void test_host_deadlines_belong_to_each_instance() {
 }
 
 void test_unpaced_calls_preserve_the_instance_deadline() {
-  FramePacer pacer;
-  PaceInputs inputs{.quota = 2, .parts = 2, .fieldRateMilliHz = 50000, .nowMs = 1000};
+  psx::frame::FramePacer pacer;
+  psx::frame::PaceInputs inputs{.quota = 2, .parts = 2, .fieldRateMilliHz = 50000, .nowMs = 1000};
   CHECK_EQ(pacer.plan(inputs).nextMs, 1020.0);
   inputs.unpaced = true;
   inputs.nowMs = 9000;
@@ -57,22 +57,22 @@ void test_default_runtime_still_delivers_display_time_and_irq() {
 void test_presented_field_wait_leaves_time_irq_and_fractional_phase_unchanged() {
   auto game = std::make_unique<Game>();
   const uint64_t before = game->timing.emulatedCpuTicks();
-  gpu_wait_presented_fields(&game->core, 1, 2);
+  game->framePacer.waitPresentedFields(game->core, 1, 2);
   CHECK_EQ(game->timing.emulatedCpuTicks(), before);
   CHECK_EQ(game->core.mem_r32(kIStat) & 1u, 0u);
   CHECK_EQ(game->core.pending_work & Core::PW_IRQ, 0u);
 
-  gpu_pace_subframe_fields(&game->core, 1, 2);
+  game->framePacer.paceSubframeFields(game->core, 1, 2);
   CHECK_EQ(game->core.mem_r32(kIStat) & 1u, 0u);
   const uint64_t partial = game->timing.emulatedCpuTicks();
-  gpu_wait_presented_fields(&game->core, 2, 2);
-  gpu_wait_presented_fields(&game->core, 2, 2);
+  game->framePacer.waitPresentedFields(game->core, 2, 2);
+  game->framePacer.waitPresentedFields(game->core, 2, 2);
   CHECK_EQ(game->timing.emulatedCpuTicks(), partial);
   CHECK_EQ(game->core.mem_r32(kIStat) & 1u, 0u);
-  gpu_pace_subframe_fields(&game->core, 1, 2);
+  game->framePacer.paceSubframeFields(game->core, 1, 2);
   CHECK_EQ(game->core.mem_r32(kIStat) & 1u, 1u);
   const uint64_t completed = game->timing.emulatedCpuTicks();
-  gpu_wait_presented_fields(&game->core, 1, 1);
+  game->framePacer.waitPresentedFields(game->core, 1, 1);
   CHECK_EQ(game->timing.emulatedCpuTicks(), completed);
   CHECK_EQ(game->core.mem_r32(kIStat) & 1u, 1u);
   CHECK_EQ(game->core.pending_work & Core::PW_IRQ, Core::PW_IRQ);

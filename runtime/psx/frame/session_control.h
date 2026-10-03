@@ -1,3 +1,5 @@
+
+namespace psx::frame {
 // SessionControl — how a running Game asks its host to end it and show the title selector again.
 //
 // A product that runs one Game after another (a picker, then a title, then the picker) owns the loop
@@ -35,3 +37,4 @@ private:
   bool mReturnAvailable = false;
   bool mReturnRequested = false;
 };
+} // namespace psx::frame

@@ -3,12 +3,14 @@
 
 #include <cstdint>
 
+namespace psx::frame {
+
 constexpr uint32_t kNominalPsxCpuHz = 33'868'800u;
 
 // Return the integral CPU ticks represented by a display-field interval. Invalid cadence inputs
 // return zero. EmulatedTime retains the fractional part internally; this helper is for evidence and
 // diagnostics, not a second clock implementation.
-uint64_t display_field_cpu_ticks(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz);
+uint64_t displayFieldCpuTicks(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz);
 
 class EmulatedTime {
 public:
@@ -39,3 +41,4 @@ private:
   unsigned __int128 mNowQ32 = 0;
   unsigned __int128 mDisplayBoundaryQ32 = 0;
 };
+} // namespace psx::frame

@@ -12,12 +12,12 @@ namespace {
 GameRuntime *installedRuntime;
 }
 
-std::unique_ptr<TemporalFramePresentation> GameRuntime::createTemporalFramePresentation(Game &) {
+std::unique_ptr<psx::frame::TemporalFramePresentation> GameRuntime::createTemporalFramePresentation(Game &) {
   return nullptr;
 }
 
 void GameRuntime::pacePresentation(Core &core, int guestFields, int parts) {
-  gpu_pace_subframe_fields(&core, guestFields, parts);
+  core.game->framePacer.paceSubframeFields(core, guestFields, parts);
 }
 
 std::unique_ptr<FrameDriver> GameRuntime::createFrameDriver(Game &game) {

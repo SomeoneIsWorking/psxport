@@ -1,6 +1,6 @@
 // A RenderQueue keeps its consumed payload until the next push so that starting a new queue is lazy.
 // That retained storage is not another submission: a later empty DrawOTag/flush must not capture it
-// again. This drives the shipping queue and FramePresenter together, without a GPU or game window.
+// again. This drives the shipping queue and psx::frame::FramePresenter together, without a GPU or game window.
 #include "game.h"
 #include "render_queue.h"
 #include "testutil.h"

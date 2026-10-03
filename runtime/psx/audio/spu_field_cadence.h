@@ -21,7 +21,7 @@ public:
   static constexpr uint32_t kSampleRateHz = 44100u;
   static constexpr uint32_t kMaximumStandardSamplesPerField = kSampleRateHz / 50u;
 
-  SpuFieldAdvance advance(DisplayFieldRate rate) {
+  SpuFieldAdvance advance(psx::frame::DisplayFieldRate rate) {
     if (rate != mRate) {
       // GP1(0x08) may change standards at runtime. Remainders have the old rate's denominator and
       // cannot be carried into the new rational domain, so the new standard starts a new phase.
@@ -36,14 +36,14 @@ public:
   }
 
 private:
-  static uint32_t divideStep(uint32_t unitsPerSecond, DisplayFieldRate rate, uint64_t &remainder) {
+  static uint32_t divideStep(uint32_t unitsPerSecond, psx::frame::DisplayFieldRate rate, uint64_t &remainder) {
     const uint64_t numerator = remainder + static_cast<uint64_t>(unitsPerSecond) * rate.frequencyDenominator;
     const uint32_t units = static_cast<uint32_t>(numerator / rate.frequencyNumerator);
     remainder = numerator % rate.frequencyNumerator;
     return units;
   }
 
-  DisplayFieldRate mRate{};
+  psx::frame::DisplayFieldRate mRate{};
   uint64_t mClockRemainder = 0;
   uint64_t mSampleRemainder = 0;
 };

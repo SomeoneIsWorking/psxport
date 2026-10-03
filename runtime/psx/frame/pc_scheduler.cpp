@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <stdlib.h> // abort — the fail-fast on a wait that can never complete
 
+namespace psx::frame {
+
 // Native scheduler primitives recovered from the original guest binary. Every frame descent, spill
 // offset, and task-slot write preserves the recovered guest ABI; spill values remain live guest
 // registers so nested callee spills land at their original locations.
@@ -548,3 +550,5 @@ void PcScheduler::tickSleepCountdown() {
     }
   }
 }
+
+} // namespace psx::frame

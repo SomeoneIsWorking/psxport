@@ -23,7 +23,7 @@ struct RateDet {
   long changes;
 };
 
-struct Fps60 final : TemporalFramePresentation {
+struct Fps60 final : psx::frame::TemporalFramePresentation {
   explicit Fps60(Game &owner, std::unique_ptr<InBetweenStrategy> source = {});
   ~Fps60();
 
@@ -32,13 +32,16 @@ struct Fps60 final : TemporalFramePresentation {
   // Whether this Core may present an in-between: broad PC enhancements, or a source whose in-betweens
   // are made of the guest's own primitives on the Gte path. One answer for every gate.
   bool interpolationPermitted(const Core &core) const;
-  void present(FramePresentationBackend &backend, Core &core, CapturedFrameView frame, int guestFields) override;
+  void present(psx::frame::FramePresentationBackend &backend,
+               Core &core,
+               psx::frame::CapturedFrameView frame,
+               int guestFields) override;
   void frame_commit(Core *core, int guestFields = 0);
-  void present_vk(FramePresentationBackend &backend, Core *core, CapturedFrameView frame);
+  void present_vk(psx::frame::FramePresentationBackend &backend, Core *core, psx::frame::CapturedFrameView frame);
 
   // Both slots use the same reconstruction/merge. t=1 is the real endpoint. Only primitives owned
   // by an eligible source are replaced; every other captured item is emitted verbatim.
-  void presentPass(Core *core, float t, CapturedFrameView frame);
+  void presentPass(Core *core, float t, psx::frame::CapturedFrameView frame);
   void presentRotate(); // source history advances after both slots, including disabled frames
 
   Game *game = nullptr;

@@ -22,7 +22,7 @@ public:
   const GuestProgramImage *guestProgramImage() const override;
   RenderCapabilities renderCapabilities() const override;
   bool guestVramIsPicture(const Game &game) const override;
-  std::unique_ptr<TemporalFramePresentation> createTemporalFramePresentation(Game &game) override;
+  std::unique_ptr<psx::frame::TemporalFramePresentation> createTemporalFramePresentation(Game &game) override;
   bool replCommand(Core &core, const char *command, const char *line) override;
 
 private:

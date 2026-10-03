@@ -6,8 +6,8 @@
 
 #include "platform_hle.h"
 
-// SchedBody — which game stage body the framework scheduler (PcScheduler, now framework) is asking the
-// game to run. PcScheduler owns the framework-side task/coro/yield machinery; the actual stage bodies are
+// SchedBody — which game stage body the framework scheduler (psx::frame::PcScheduler, now framework) is asking the
+// game to run. psx::frame::PcScheduler owns the framework-side task/coro/yield machinery; the actual stage bodies are
 // game code (Engine::*), reached through the single schedStageBody hook so the framework names no Engine
 // method. Values are the game's dispatch cases (see game/core/game_hooks.cpp tomba_schedStageBody).
 enum SchedBody {
@@ -235,7 +235,7 @@ struct GameConfig {
   // --- frame pacing (frame_pacer.cpp) -----------------------------------------------------------
   // The pacer sleeps a whole-frame interval per call so a live run plays at the game's intended
   // speed instead of spinning. `quota` is the number of DISPLAY FIELDS one pacing call represents,
-  // and the interval is that many fields at the game's real field rate (gpu_field_rate_millihz,
+  // and the interval is that many fields at the game's real field rate (FramePacer::fieldRateMilliHz,
   // decoded from GP1(0x08) bit 3) divided by `parts`.
   //
   // IT IS NOT "WINDOWED PACING". It used to be — the pacer early-returned when there was no window,
@@ -251,10 +251,10 @@ struct GameConfig {
   // quietly mistimed. A new game MUST set this field.
   //
   // Semantics of the value are by CALLING CADENCE, not the game's display rate: a native-loop port
-  // that calls gpu_pace_frame once per logic frame sets the game's fields-per-frame (2 => 30fps on a
+  // that calls FramePacer::paceFrame once per logic frame sets the game's fields-per-frame (2 => 30fps on a
   // 60-field display). A port that still runs the guest's own frame loop and paces once per field
   // sets 1. The LENGTH of a field is not this field's business — that comes from the game's video
-  // standard (gpu_field_rate_millihz). Appended at the end because GameConfig is initialised
+  // standard (FramePacer::fieldRateMilliHz). Appended at the end because GameConfig is initialised
   // positionally.
   uint32_t paceQuota;
 
@@ -295,7 +295,7 @@ struct GameConfig {
   } stackBias;
 
   // ── the scheduler's guest task ENTRY PCs, declared by the game ─────────────────────────────────
-  // P1.7c moved PcScheduler into the framework with the game supplying task BODIES through
+  // P1.7c moved psx::frame::PcScheduler into the framework with the game supplying task BODIES through
   // `hooks->schedStageBody(kind)`. The mapping from a guest task's entry PC to which body it is did NOT
   // move with it: `pc_scheduler.cpp` tested eight Tomba!2 literals directly
   // (`entry_pc == 0x801062E4` and friends). That made the framework schedule ONE game specially, left

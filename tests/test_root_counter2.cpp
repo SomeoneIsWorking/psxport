@@ -1,4 +1,4 @@
-// Root counter 2 (0x1F801120 value / 0x1F801124 mode / 0x1F801128 target) — Timing::rootCounter2*.
+// Root counter 2 (0x1F801120 value / 0x1F801124 mode / 0x1F801128 target) — psx::frame::Timing::rootCounter2*.
 //
 // Guest code uses this register as a stopwatch: latch the value, spin until the delta exceeds a
 // budget. While it was unmapped I/O reading 0, every such delta was 0, every budget was unreachable,

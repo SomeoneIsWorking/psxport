@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+namespace psx::frame {
+
 enum { V0 = 2 };
 
 uint64_t Timing::readEmulatedCpuTicks(void *context) {
@@ -168,7 +170,7 @@ void Timing::rootCounter2Write(uint32_t reg, uint32_t v) {
 
 uint16_t Timing::hSyncCounter() const {
   const bool pal = game && game->gpu.s_disp_pal != 0;
-  return static_cast<uint16_t>(mEmulatedTime.hSyncCount(field_rate_millihz(pal), display_lines_per_field(pal)));
+  return static_cast<uint16_t>(mEmulatedTime.hSyncCount(fieldRateMilliHz(pal), displayLinesPerField(pal)));
 }
 
 void Timing::serviceCdc() {
@@ -176,6 +178,24 @@ void Timing::serviceCdc() {
     game->core.irqStatLatch();
   }
 }
+
+// 0x80085BB0 FUN_80085bb0 VSyncCallback(func): no-op. The original routes the per-vblank
+// callback through the libapi interrupt vector we don't model; we don't deliver preemptive
+// VBlank IRQs at all — the game's vblank busy-waits are ported to PC behavior natively
+// (see games_tomba2.c), so registering the callback is unnecessary and its unmodeled-vector
+// deref is skipped. Was ov_vsync_callback (taxi-in via c->r[4]; the callback ptr arg is
+// unused here, so no arg on the method).
+void Timing::vsyncCallback() {
+  game->core.r[V0] = 0;
+}
+
+// Advance the host field count once per title-owned native frame. Guest memory layout is title
+// policy: a frame driver that needs a libetc compatibility mirror writes its measured address.
+void Timing::frameTick() {
+  vblank += 1u;
+}
+
+} // namespace psx::frame
 
 // ---- SPIN DETECTOR (see Core::spin_* and tests/test_spin_detector.cpp) -----------------------
 // One decision per `window_ticks` guest instructions. A decision counts toward a spin only when
@@ -185,6 +205,7 @@ void Timing::serviceCdc() {
 // `max_run` consecutive starved in-region decisions the process fail-fasts NAMING the region —
 // measured live as Vagrant's movie-wait spinning inside a single resident libcd poll body while
 // CD sectors flowed (issue #25; the concrete pc lives in that issue's record, not here).
+
 bool spin_detector_sample(
     SpinDetectorState &st, uint32_t pc, bool host_starved, uint32_t ticks, uint64_t window_ticks, int max_run) {
   if (window_ticks == 0 || max_run <= 0) {
@@ -215,20 +236,4 @@ bool spin_detector_sample(
   }
   st.run = std::min(st.run + 1, max_run + 1); // saturate; never overflow
   return st.run >= max_run;
-}
-
-// 0x80085BB0 FUN_80085bb0 VSyncCallback(func): no-op. The original routes the per-vblank
-// callback through the libapi interrupt vector we don't model; we don't deliver preemptive
-// VBlank IRQs at all — the game's vblank busy-waits are ported to PC behavior natively
-// (see games_tomba2.c), so registering the callback is unnecessary and its unmodeled-vector
-// deref is skipped. Was ov_vsync_callback (taxi-in via c->r[4]; the callback ptr arg is
-// unused here, so no arg on the method).
-void Timing::vsyncCallback() {
-  game->core.r[V0] = 0;
-}
-
-// Advance the host field count once per title-owned native frame. Guest memory layout is title
-// policy: a frame driver that needs a libetc compatibility mirror writes its measured address.
-void Timing::frameTick() {
-  vblank += 1u;
 }

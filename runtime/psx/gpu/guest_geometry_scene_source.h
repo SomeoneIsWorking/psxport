@@ -14,7 +14,7 @@ namespace psxport::temporal {
 
 class GuestGeometrySceneSource : public ::InBetweenStrategy {
 public:
-  void beginPresentation(Core &core, CapturedFrameView frame, bool interpolating) final;
+  void beginPresentation(Core &core, psx::frame::CapturedFrameView frame, bool interpolating) final;
   bool eligible(const Core &core) const final;
   bool owns(const RqItem &item) const final;
   void reconstruct(Core &core, float t) final;

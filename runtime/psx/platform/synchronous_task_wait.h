@@ -2,7 +2,9 @@
 
 #include <stdint.h>
 
+namespace psx::frame {
 class PcScheduler;
+} // namespace psx::frame
 
 struct SyncWaitCompletion {
   bool stamped = false;
@@ -16,9 +18,9 @@ struct SyncWaitCompletion {
 // spawned task before returning.
 class SynchronousTaskWait {
 public:
-  static SyncWaitCompletion finish(PcScheduler &scheduler, uint32_t taskBase, uint32_t flag);
-  static void run(PcScheduler &scheduler, uint32_t fn, uint32_t p2, uint32_t p3, uint32_t flag);
+  static SyncWaitCompletion finish(psx::frame::PcScheduler &scheduler, uint32_t taskBase, uint32_t flag);
+  static void run(psx::frame::PcScheduler &scheduler, uint32_t fn, uint32_t p2, uint32_t p3, uint32_t flag);
 
 private:
-  static void runSlot(PcScheduler &scheduler, int slot);
+  static void runSlot(psx::frame::PcScheduler &scheduler, int slot);
 };

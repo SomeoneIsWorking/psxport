@@ -25,6 +25,8 @@ class Coro; // runtime/psx/platform/coro.h — thread-fiber for full-PSX mid-fun
             // resume (later-264)
 struct Core;
 
+namespace psx::frame {
+
 class PcScheduler {
 public:
   Game *game = nullptr;
@@ -146,3 +148,5 @@ private:
   int warned_demo_yield = 0; // warn-once latches for the frontier diagnostics
   int warned_game_yield = 0;
 };
+
+} // namespace psx::frame

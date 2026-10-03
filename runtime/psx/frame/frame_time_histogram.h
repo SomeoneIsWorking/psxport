@@ -15,7 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace psxport::perf {
+namespace psx::frame {
 
 class FrameTimeHistogram {
 public:
@@ -54,4 +54,4 @@ private:
   double total_ = 0.0;
 };
 
-} // namespace psxport::perf
+} // namespace psx::frame

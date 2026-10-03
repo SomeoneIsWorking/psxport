@@ -280,7 +280,7 @@ void SpuAudio::frameEx(bool output) {
     return;
   }
 
-  const SpuFieldAdvance advance = mCadence.advance(display_field_rate(game->gpu.s_disp_pal != 0));
+  const SpuFieldAdvance advance = mCadence.advance(psx::frame::displayFieldRate(game->gpu.s_disp_pal != 0));
   const uint32_t xaWrBefore = game->xa.wr;
   const double xaRdBefore = game->xa.rd;
   const uint32_t xaPullsBefore = game->xa.pulls;

@@ -156,7 +156,7 @@ bool readCdcSection(Game &game, BlobReader &in, std::string &error) {
 }
 
 void writeTimingSection(Game &game, BlobWriter &out) {
-  const Timing &timing = game.timing;
+  const psx::frame::Timing &timing = game.timing;
   out.u8(kBusLayoutVersion);
   out.u32(timing.vblank);
   out.u32(timing.logicFrame);
@@ -165,7 +165,7 @@ void writeTimingSection(Game &game, BlobWriter &out) {
   out.u32(timing.rootCounter2Target);
   out.u16(timing.rootCounter2BaseValue);
   out.u64(timing.rootCounter2OriginTicks);
-  const Timing::ClockSnapshot clock = timing.clockSnapshot();
+  const psx::frame::Timing::ClockSnapshot clock = timing.clockSnapshot();
   out.u64(clock.nowQ32);
   out.u64(clock.displayBoundaryQ32);
   out.u64(clock.displayPhaseNumerator);
@@ -179,7 +179,7 @@ bool readTimingSection(Game &game, BlobReader &in, std::string &error) {
         "timing section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kBusLayoutVersion);
     return false;
   }
-  Timing &timing = game.timing;
+  psx::frame::Timing &timing = game.timing;
   const std::uint32_t vblank = in.u32();
   const std::uint32_t logicFrame = in.u32();
   const std::uint64_t ticks = in.u64();
@@ -187,7 +187,7 @@ bool readTimingSection(Game &game, BlobReader &in, std::string &error) {
   const std::uint32_t target = in.u32();
   const std::uint16_t base = in.u16();
   const std::uint64_t origin = in.u64();
-  Timing::ClockSnapshot clock{};
+  psx::frame::Timing::ClockSnapshot clock{};
   clock.nowQ32 = in.u64();
   clock.displayBoundaryQ32 = in.u64();
   clock.displayPhaseNumerator = in.u64();
@@ -593,17 +593,17 @@ bool readCdSection(Game &game, BlobReader &in, std::string &error) {
 
 } // namespace psx::state
 
-// Core/Timing member definitions live at global scope, next to nothing: they are ordinary members of
+// Core/psx::frame::Timing member definitions live at global scope, next to nothing: they are ordinary members of
 // their own classes, defined here because this is where the save-state owner reaches their private
 // state, and NOT because of any ownership they have over the machine.
-Timing::ClockSnapshot Timing::clockSnapshot() const {
+psx::frame::Timing::ClockSnapshot psx::frame::Timing::clockSnapshot() const {
   return ClockSnapshot{mEmulatedTime.nowQ32(),
                        mEmulatedTime.displayBoundaryQ32(),
                        static_cast<std::uint64_t>(mDisplayFieldPhaseNumerator),
                        static_cast<std::uint64_t>(mDisplayFieldPhaseDenominator)};
 }
 
-void Timing::restoreClockSnapshot(const ClockSnapshot &clock) {
+void psx::frame::Timing::restoreClockSnapshot(const ClockSnapshot &clock) {
   mEmulatedTime.restoreQ32(clock.nowQ32, clock.displayBoundaryQ32);
   mDisplayFieldPhaseNumerator = static_cast<unsigned __int128>(clock.displayPhaseNumerator);
   mDisplayFieldPhaseDenominator = static_cast<unsigned __int128>(clock.displayPhaseDenominator);

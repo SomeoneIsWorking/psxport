@@ -13,7 +13,7 @@ namespace psx::cpu {
 //
 // It is an APPROXIMATION of the hardware and deliberately not more than one. A real R3000A spends a
 // different number of cycles per instruction class (loads and branches differ from ALU ops, and
-// mul/div are tens of cycles), so neither this constant nor `EmulatedTime` is a cycle-accurate CPU
+// mul/div are tens of cycles), so neither this constant nor `psx::frame::EmulatedTime` is a cycle-accurate CPU
 // model — `runtime/psx/frame/timing.h` records that same gap and cites issue 0007. What this constant does
 // guarantee is INTERNAL CONSISTENCY: mid-segment commits and the segment's own instruction total are
 // two views of one measurement, so a commit never invents or loses guest time relative to the total
@@ -25,7 +25,7 @@ inline constexpr std::uint32_t kLightrecCyclesPerInstruction = 2;
 // The per-segment commitment ledger for the emulated guest clock.
 //
 // WHY IT EXISTS. The executor accounts a segment's guest instructions once, after `lightrec_execute`
-// returns (`LightrecExecutor::executeWithBoundary`). `EmulatedTime` moves only there, so a guest
+// returns (`LightrecExecutor::executeWithBoundary`). `psx::frame::EmulatedTime` moves only there, so a guest
 // polling a hardware counter from inside one translated segment — the `latch RCnt2, spin until the
 // delta exceeds N` idiom — read the SAME value for the whole segment and could not leave its loop
 // until the segment ended. Measured on Tekken 3 (SLUS_004.02) `FUN_80093478`: identical guest bytes

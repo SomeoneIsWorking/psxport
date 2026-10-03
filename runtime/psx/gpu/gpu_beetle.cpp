@@ -256,7 +256,7 @@ void gpu_beetle_gp0(uint32_t w, int is_xfer_data) {
   // that synchronous command seam complete without advancing Beetle's CPU/scanout clock at all.
   // The previous adapter called GPU_Update after every word merely to drain this FIFO; large native
   // texture uploads then advanced multiple video frames inside one guest frame and violated
-  // GPU.sl_zero_reached. Timing and scanout are outside this oracle's declared scope.
+  // GPU.sl_zero_reached. psx::frame::Timing and scanout are outside this oracle's declared scope.
   psxport_gpu_grant_drawtime();
   GPU_Write(0, 0x1F801810u, w); // A&4 == 0 selects GP0 ("Data")
 }

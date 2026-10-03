@@ -5,14 +5,14 @@
 #include "testutil.h"
 
 static void test_refused_without_a_selector(void) {
-  SessionControl session;
+  psx::frame::SessionControl session;
   CHECK(!session.returnAvailable());
   CHECK(!session.requestReturn());
   CHECK(!session.returnRequested());
 }
 
 static void test_recorded_with_a_selector(void) {
-  SessionControl session;
+  psx::frame::SessionControl session;
   session.setReturnAvailable(true);
   CHECK(!session.returnRequested());
   CHECK(session.requestReturn());

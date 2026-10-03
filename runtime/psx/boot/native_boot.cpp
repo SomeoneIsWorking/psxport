@@ -1,7 +1,7 @@
 // PC-PSX hybrid native boot and host-loop orchestration.
 //
 // Architecture: the host owns product iteration and delegates exactly one finite frame through
-// FrameLoopShell to the title-created FrameDriver. Title state-machine, input, audio, render, and
+// psx::frame::FrameLoopShell to the title-created FrameDriver. Title state-machine, input, audio, render, and
 // present ordering does not live here. This file retains generic crt0/boot, diagnostics, REPL pause,
 // watchdog, and frame-budget scaffolding around that delegation.
 #include "c_subsys.h"
@@ -9,7 +9,7 @@
 #include "config_vars.h" // psx::config::render_path() / cv_repl — knobs through the CVar ladder
 #include "core.h"
 #include "dbg_server.h" // debug_server_port — the one reading of PSXPORT_DEBUG_SERVER
-#include "field_turn.h" // psx::FieldTurn — the per-field services this loop owes
+#include "field_turn.h" // psx::frame::FieldTurn — the per-field services this loop owes
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_iface.h"
@@ -72,7 +72,7 @@ void dc_boot_init(Core *c) {
   game_init(c);
 }
 void dc_step_frame(Core *c, uint32_t f) {
-  FrameLoopShell{}.step(*c, f);
+  psx::frame::FrameLoopShell{}.step(*c, f);
 }
 
 static void game_main(Core *c) {
@@ -155,7 +155,7 @@ static void game_main(Core *c) {
   // The per-field services this loop owes, in the measured order, shared with `psx::Machine` and every
   // title-owned loop. The REPL budget below and the prompt consume inside the loop stay here: they are
   // this loop's own mode, not a field's obligation.
-  const psx::FieldTurn fieldTurn;
+  const psx::frame::FieldTurn fieldTurn;
   long repl_budget = 0; // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
@@ -178,13 +178,13 @@ static void game_main(Core *c) {
     // The pause policy lives in DbgServer::honourPause because a title's own frame driver owes the same
     // behaviour, and two copies of "what a pause does" would be free to disagree.
     fieldTurn.beginField(*c);
-    FrameLoopShell{}.step(*c, f);
+    psx::frame::FrameLoopShell{}.step(*c, f);
     if (c->game->repl.consumePromptRequest()) {
       repl_budget = 0;
     }
     // The title FrameDriver owns its measured present, pace, and audio order, so this shell loop
     // performs none of those services around step(). What it DOES owe each field — the pause, the
-    // watchdog re-arm, the mid-run RAM dump, one serviced command — is `psx::FieldTurn`'s, shared with
+    // watchdog re-arm, the mid-run RAM dump, one serviced command — is `psx::frame::FieldTurn`'s, shared with
     // `psx::Machine` and every title-owned loop, so a loop cannot silently omit one of them.
     fieldTurn.endField(*c, f);
   }

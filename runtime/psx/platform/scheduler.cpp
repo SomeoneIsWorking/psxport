@@ -1,12 +1,12 @@
 // scheduler.cpp — task-slot bookkeeping and cooperative guest/native task execution.
 // Coroutines retain suspended native call stacks across authored cooperative yields. The JIT can
 // resume any instruction boundary; budget exhaustion saves that exact guest context for the next
-// scheduler turn. PcScheduler owns the per-frame slot loop and title-declared native stanzas.
+// scheduler turn. psx::frame::PcScheduler owns the per-frame slot loop and title-declared native stanzas.
 #include "scheduler.h"
 #include "core.h"
 #include "coro.h" // thread-fiber for full-PSX mid-function resume (later-264)
 #include "execution_control.h"
-#include "game.h" // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
+#include "game.h" // psx::frame::PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "host_backtrace.h"
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
@@ -25,7 +25,7 @@
 // slot (the PSX stack lives in c->ram per-task at obj+8, untouched) and longjmps out of the
 // guest call chain; we resume by restoring that context and continuing at the captured
 // return address. This is the "later 29" design — a yield is a save/restore of a state struct,
-// no native stack. PcScheduler::step mirrors FUN_80051e60: one pass over the 3 slots,
+// no native stack. psx::frame::PcScheduler::step mirrors FUN_80051e60: one pass over the 3 slots,
 // running state==2 (runnable, resume) and state==3 (restart, fresh entry) tasks; the yield sets
 // state=1 and FUN_800506d0 (called later in the frame) re-arms 1->2. This makes the cooperative
 // handshakes work — e.g. task0's FUN_80044bd4 busy-waits (yielding) for DAT_1f80019b while the
@@ -33,11 +33,11 @@
 // (TASKBASE/TASKSTRIDE/CUR_TASK live in scheduler.h — shared with native_boot.cpp's REPL/debug probes.)
 
 // The cooperative-scheduler state (yield jmp_buf, per-task saved R3000 regs, run flags) is per-instance:
-// it lives on Game as class PcScheduler (game/core/pc_scheduler.h), reached via c->game->pcSched. A task
-// context is ONLY the CPU register file — guest RAM/scratchpad/DMA/peripherals are SHARED one memory
-// across all tasks (saving a whole Core would give each task its own RAM snapshot — the OOP regression
-// where the loader task read a pre-fill file-table snapshot and stalled boot; see oop-regression-hunt).
-// So task_ctx slices to the R3000 base on save/restore.
+// it lives on Game as class psx::frame::PcScheduler (runtime/psx/frame/pc_scheduler.h), reached via c->game->pcSched. A
+// task context is ONLY the CPU register file — guest RAM/scratchpad/DMA/peripherals are SHARED one memory across all
+// tasks (saving a whole Core would give each task its own RAM snapshot — the OOP regression where the loader task read
+// a pre-fill file-table snapshot and stalled boot; see oop-regression-hunt). So task_ctx slices to the R3000 base on
+// save/restore.
 
 // FUN_80080880 ChangeThread override = the universal task-switch primitive. Every cooperative
 // switch funnels through it: FUN_80051f80 (yield, state=1), FUN_80051fb4 (task end, state=0) and
@@ -254,7 +254,7 @@ int guest_run_coro_fiber_stanza(Core *c, int i, uint32_t base, uint32_t st, bool
 // with no live ctx); game_coop resume at 0x801063F4 (guest-loop re-entry with loop's callee-saved
 // regs pinned); state==2 resume from saved r31. Inside the setjmp block, fresh entries for the
 // two remaining native task entries (GAME stagePrologue and STAGE-0 startBinStage) fire before
-// rec_coro_run. DEMO/SOP/GAME-per-frame entries were consumed by the PcScheduler stanzas.
+// rec_coro_run. DEMO/SOP/GAME-per-frame entries were consumed by the psx::frame::PcScheduler stanzas.
 int guest_run_dispatch_stanza(Core *c, int i, uint32_t base, uint32_t st, bool preferNative, const R3000 &loop) {
   uint32_t resume_pc;
   int fresh = 0;

@@ -13,7 +13,7 @@
 // kind of in-between implements it here and nothing in the framework moves.
 #pragma once
 
-#include "frame_presenter.h" // CapturedFrameView
+#include "frame_presenter.h" // psx::frame::CapturedFrameView
 
 class Core;
 struct RqItem;
@@ -25,7 +25,7 @@ public:
   // Once per presented frame, before either present runs and before `eligible` is asked: the frame
   // the presenter is about to show, and whether an in-between will be requested for it at all. A
   // source that pairs captured frames resolves this one here; the default ignores it.
-  virtual void beginPresentation(Core &core, CapturedFrameView frame, bool interpolating) {
+  virtual void beginPresentation(Core &core, psx::frame::CapturedFrameView frame, bool interpolating) {
     (void)core;
     (void)frame;
     (void)interpolating;

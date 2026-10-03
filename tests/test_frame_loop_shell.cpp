@@ -24,7 +24,7 @@ namespace {
 constexpr uint32_t kVSyncAddress = 0x800859A8u;
 constexpr uint32_t kPlatformWindowEnd = 0x80085B20u;
 
-class FenceBackend final : public FramePresentationBackend {
+class FenceBackend final : public psx::frame::FramePresentationBackend {
 public:
   void emit(std::span<const RqItem>) override {}
   void presentReal() override {}
@@ -113,12 +113,12 @@ void expect_abort(void (*operation)(void *), void *context) {
 
 void require_driver(void *context) {
   auto *game = static_cast<Game *>(context);
-  FrameLoopShell{}.prepareProduct(*game);
+  psx::frame::FrameLoopShell{}.prepareProduct(*game);
 }
 
 void step_shell(void *context) {
   auto *game = static_cast<Game *>(context);
-  FrameLoopShell{}.step(game->core, 91u);
+  psx::frame::FrameLoopShell{}.step(game->core, 91u);
 }
 
 std::string read_source(const std::filesystem::path &path) {
@@ -136,7 +136,7 @@ static void test_shell_delegates_exactly_one_native_frame() {
   auto game = std::make_unique<Game>();
   CHECK(runtime.createdDriver != nullptr);
 
-  FrameLoopShell shell;
+  psx::frame::FrameLoopShell shell;
   shell.prepareProduct(*game);
   shell.step(game->core, 73);
 
@@ -169,7 +169,7 @@ static void test_driver_returning_without_a_fence_refuses() {
   DriverRuntime runtime(0);
   psxport_install_game(runtime);
   auto game = std::make_unique<Game>();
-  FrameLoopShell{}.prepareProduct(*game);
+  psx::frame::FrameLoopShell{}.prepareProduct(*game);
 
   expect_abort(step_shell, game.get());
   CHECK_EQ(game->presentation.fence(), 0u);
@@ -179,7 +179,7 @@ static void test_driver_committing_twice_refuses() {
   DriverRuntime runtime(2);
   psxport_install_game(runtime);
   auto game = std::make_unique<Game>();
-  FrameLoopShell{}.prepareProduct(*game);
+  psx::frame::FrameLoopShell{}.prepareProduct(*game);
 
   expect_abort(step_shell, game.get());
   CHECK_EQ(game->presentation.fence(), 0u);
@@ -200,17 +200,17 @@ static void test_native_boot_has_no_title_frame_body_or_fallback() {
   CHECK(!source.empty());
 
   // These were the title-shaped body and its defining per-frame operations. Native boot may retain
-  // host orchestration, but it must delegate through FrameLoopShell instead of growing a fallback.
+  // host orchestration, but it must delegate through psx::frame::FrameLoopShell instead of growing a fallback.
   CHECK(source.find("pcSched.step(") == std::string::npos);
   CHECK(source.find("hooks->frameUpdate(") == std::string::npos);
   CHECK(source.find("hooks->drawOTag(") == std::string::npos);
   CHECK(source.find("timing.frameTick(") == std::string::npos);
-  // The preflight reaches FrameLoopShell through its owner now: `psx::Machine::prepareProduct` IS the
+  // The preflight reaches psx::frame::FrameLoopShell through its owner now: `psx::Machine::prepareProduct` IS the
   // shell call, and this spine composes the same owner a title-owned spine does. What this test protects
   // is the DELEGATION — native_boot must not grow a frame body or a fallback of its own — so the
   // assertion follows the delegation to where it now lives rather than pinning one spelling of it.
   CHECK(source.find("machine.prepareProduct()") != std::string::npos);
-  const size_t step = source.find("FrameLoopShell{}.step(");
+  const size_t step = source.find("psx::frame::FrameLoopShell{}.step(");
   const size_t prompt = source.find("repl.consumePromptRequest()");
   CHECK(step != std::string::npos);
   CHECK(prompt != std::string::npos);

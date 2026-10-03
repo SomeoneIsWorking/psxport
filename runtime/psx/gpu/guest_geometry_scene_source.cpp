@@ -11,7 +11,7 @@ namespace {
 const lucent::Channel censusChannel{"fps60guest"};
 } // namespace
 
-void GuestGeometrySceneSource::beginPresentation(Core &core, CapturedFrameView frame, bool interpolating) {
+void GuestGeometrySceneSource::beginPresentation(Core &core, psx::frame::CapturedFrameView frame, bool interpolating) {
   ProjectionProvenance &provenance = core.rsub.projectionProvenance;
   // Recording costs a few registers per projection; it runs only while an in-between is wanted.
   provenance.setArmed(interpolating);

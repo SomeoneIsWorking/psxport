@@ -44,7 +44,7 @@ public:
   };
 
   // Resolve one captured frame against the projections that produced it. `items` must stay valid until
-  // rotate(); FramePresenter keeps it for the whole presentation of the frame.
+  // rotate(); psx::frame::FramePresenter keeps it for the whole presentation of the frame.
   void beginFrame(std::span<const RqItem> items, std::span<const ProjectedVertex> projections);
 
   bool owns(const RqItem &item) const;

@@ -19,7 +19,7 @@
 
 class Core;
 
-namespace psx {
+namespace psx::frame {
 
 // The services around one display field. Stateless by design: it owns an ORDER, not a session, so
 // every loop — the framework's, `psx::Machine`'s, or a title's — calls the same two halves and gets
@@ -41,4 +41,4 @@ private:
   void dumpRamIfRequested(Core &core, std::uint32_t frame) const;
 };
 
-} // namespace psx
+} // namespace psx::frame

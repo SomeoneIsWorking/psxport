@@ -39,7 +39,7 @@ void psx::cpu::registerHostTurn(Core &core, HostTurnFunction fn, unsigned fps_mi
     return;
   }
   core.hostTurn.fn = fn;
-  core.hostTurn.periodTicks = display_field_cpu_ticks(1, 1, fps_millihz);
+  core.hostTurn.periodTicks = psx::frame::displayFieldCpuTicks(1, 1, fps_millihz);
   core.hostTurn.deadlineTicks = guestNow(core) + core.hostTurn.periodTicks;
   lucent::info("hostturn",
                "host turn armed at {}.{:03} Hz: one field per {} guest ticks",

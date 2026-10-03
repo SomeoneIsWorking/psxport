@@ -8,7 +8,7 @@
 
 namespace {
 
-class CountingBackend final : public FramePresentationBackend {
+class CountingBackend final : public psx::frame::FramePresentationBackend {
 public:
   void emit(std::span<const RqItem> items) override {
     emitted += static_cast<int>(items.size());
@@ -46,7 +46,7 @@ RqItem item(unsigned sequence) {
 }
 
 void test_plain_commit_still_presents() {
-  FramePresenter presenter;
+  psx::frame::FramePresenter presenter;
   const RqItem batch[] = {item(0), item(1)};
   presenter.capture(batch, 2);
   CountingBackend backend;
@@ -59,7 +59,7 @@ void test_plain_commit_still_presents() {
 }
 
 void test_unpresented_field_rotates_bookkeeping_without_output() {
-  FramePresenter presenter;
+  psx::frame::FramePresenter presenter;
   const RqItem batch[] = {item(10), item(11), item(12)};
   presenter.capture(batch, 3);
   CountingBackend backend;
@@ -75,7 +75,7 @@ void test_unpresented_field_rotates_bookkeeping_without_output() {
 }
 
 void test_unpresented_window_does_not_leak_capture_into_next_present() {
-  FramePresenter presenter;
+  psx::frame::FramePresenter presenter;
   CountingBackend backend;
   for (unsigned field = 0; field < 8; ++field) {
     const RqItem hidden[] = {item(field * 16), item(field * 16 + 1)};

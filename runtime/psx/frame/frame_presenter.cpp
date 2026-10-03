@@ -17,6 +17,8 @@
 
 int gpu_vk_enabled();
 
+namespace psx::frame {
+
 namespace {
 
 constexpr int kDumpMax = 600;
@@ -29,7 +31,7 @@ void dump_present(Core *core, uint64_t fence, int &sequence, bool interpolated) 
     sequence = 0;
     return;
   }
-  if (!frame_dump_window_contains(fence, cfg_int("PSXPORT_FPS60_DUMP_FROM", 0))) {
+  if (!frameDumpWindowContains(fence, cfg_int("PSXPORT_FPS60_DUMP_FROM", 0))) {
     return;
   }
   if (sequence >= kDumpMax) {
@@ -86,7 +88,7 @@ public:
       core_.game->runtime->pacePresentation(core_, guestFields, parts);
     } else {
       // A neutral framework instance has no title scheduler and retains combined field pacing.
-      gpu_pace_subframe_fields(&core_, guestFields, parts);
+      core_.game->framePacer.paceSubframeFields(core_, guestFields, parts);
     }
   }
 
@@ -190,3 +192,5 @@ void FramePresenter::resetCapture() {
   sequenceBase_ = 0;
   flushOrdinal_ = 0;
 }
+
+} // namespace psx::frame

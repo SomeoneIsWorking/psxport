@@ -193,7 +193,7 @@ struct LightrecExecutor::Impl {
   // backwards; this is the call site that feeds it Lightrec's live cycle count.
   //
   // IT CANNOT RE-ENTER. Nothing reachable from here calls back into the Lightrec memory callbacks:
-  // `Timing::advanceGuestInstructionTicks` reaches the SIO service and `serviceCdc`, and
+  // `psx::frame::Timing::advanceGuestInstructionTicks` reaches the SIO service and `serviceCdc`, and
   // `cdc_drive_service` decodes a sector or executes a command entirely in host state. The memory
   // callbacks are invoked by generated code, not by `Core::mem_r*`/`mem_w*`, so host code calling
   // those cannot come back here. (Scanned 2026-09-28: every `dispatchGuest*`/`executeFunction` call

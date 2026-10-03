@@ -146,7 +146,7 @@ void Machine::registerTitleOverrides() {
 }
 
 void Machine::prepareProduct() {
-  FrameLoopShell{}.prepareProduct(game_);
+  psx::frame::FrameLoopShell{}.prepareProduct(game_);
 }
 
 void Machine::prepare() {
@@ -169,7 +169,7 @@ std::uint32_t Machine::attachControlChannel(std::uint32_t requestedFrameCap) {
 
 void Machine::stepFrame(std::uint32_t frame) {
   fieldTurn_.beginField(core());
-  FrameLoopShell{}.step(core(), frame);
+  psx::frame::FrameLoopShell{}.step(core(), frame);
   fieldTurn_.endField(core(), frame);
 }
 
@@ -197,7 +197,7 @@ void Machine::reportRunEnd() {
   core().guestCallCensus().log("product loop ended");
   // PSXPORT_RAMDUMP: the AFTER-loop dump. This is not the diagnostic to reach for — a run that ends by
   // exiting its process loop never returns here, and a missing file from this knob is therefore not
-  // evidence that RAM dumping is broken. PSXPORT_RAMDUMP_FRAME (FieldTurn, mid-run) is.
+  // evidence that RAM dumping is broken. PSXPORT_RAMDUMP_FRAME (psx::frame::FieldTurn, mid-run) is.
   const std::string &path = psx::config::cv_ramdump.get();
   if (path.empty()) {
     return;

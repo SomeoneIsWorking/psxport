@@ -1,5 +1,7 @@
 #include "emulated_time.h"
 
+namespace psx::frame {
+
 namespace {
 
 constexpr unsigned kFractionBits = 32;
@@ -19,7 +21,7 @@ unsigned __int128 display_field_duration_q32(uint32_t fields, uint32_t parts, ui
 
 } // namespace
 
-uint64_t display_field_cpu_ticks(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz) {
+uint64_t displayFieldCpuTicks(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz) {
   return static_cast<uint64_t>(display_field_duration_q32(fields, parts, fieldRateMilliHz) >> kFractionBits);
 }
 
@@ -56,3 +58,5 @@ uint64_t EmulatedTime::hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerFi
   const unsigned __int128 denominator = (static_cast<unsigned __int128>(kNominalPsxCpuHz) * 1000u) << kFractionBits;
   return static_cast<uint64_t>(scaled / denominator);
 }
+
+} // namespace psx::frame

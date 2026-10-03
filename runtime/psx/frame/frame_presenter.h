@@ -9,6 +9,8 @@
 
 class Core;
 
+namespace psx::frame {
+
 struct CapturedFrameView {
   std::span<const RqItem> items;
   uint64_t fence = 0;
@@ -82,3 +84,4 @@ private:
   uint64_t fence_ = 0;
   int dumpSequence_ = 0;
 };
+} // namespace psx::frame

@@ -75,7 +75,7 @@ void test_direct_runtime_cd_plan_remains_owned_by_platform_hle() {
   auto game = std::make_unique<Game>();
 
   // This is the shipping dc_boot_init order: the legacy CD registration seam runs first, then
-  // FrameLoopShell asks PlatformHle to install the direct runtime's typed plan.
+  // psx::frame::FrameLoopShell asks PlatformHle to install the direct runtime's typed plan.
   game->cd.overridesInit();
   game->platform_hle.initBuiltins();
 

@@ -5,5 +5,5 @@ int cd_drive_sectors_per_second(uint8_t mode) {
 }
 
 uint64_t cd_drive_sector_period_cpu_ticks(uint8_t mode) {
-  return kNominalPsxCpuHz / static_cast<uint64_t>(cd_drive_sectors_per_second(mode));
+  return psx::frame::kNominalPsxCpuHz / static_cast<uint64_t>(cd_drive_sectors_per_second(mode));
 }

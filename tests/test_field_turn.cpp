@@ -33,7 +33,7 @@ constexpr std::size_t kRamDumpBytes = 0x200000u;
 
 // A host backend that advances the presentation fence and touches no device: the same seam
 // `test_frame_loop_shell` and `test_machine_composition` use, so a field step can run without a GPU.
-class FenceBackend final : public FramePresentationBackend {
+class FenceBackend final : public psx::frame::FramePresentationBackend {
 public:
   void emit(std::span<const RqItem>) override {}
   void presentReal() override {}

@@ -28,7 +28,7 @@ public:
   void bootInit(Core &) override {}
 };
 
-class NeutralBackend final : public FramePresentationBackend {
+class NeutralBackend final : public psx::frame::FramePresentationBackend {
 public:
   void emit(std::span<const RqItem>) override {}
   void presentReal() override {

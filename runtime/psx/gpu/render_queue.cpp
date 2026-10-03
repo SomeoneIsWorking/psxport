@@ -1,7 +1,7 @@
 // Engine-owned render queue — see render_queue.h. Per-instance state lives on Game (game.h);
 // the free rq_* API forwards to core->game->rq.
 #include "render_queue.h"
-#include "census_frame.h" // census_frame — the ONE frame number a producer row is stamped with
+#include "census_frame.h" // censusFrame — the ONE frame number a producer row is stamped with
 #include "cfg.h"
 #include "face_contest.h" // the pair rule: can the depth buffer be trusted to order these two faces?
 #include "game.h"
@@ -539,7 +539,7 @@ void RenderQueue::emitItemStream(Core *core, std::span<const RqItem *const> stre
                     bad ? bad->painter_object : 0);
       abort();
     }
-    painterPlanReport(census_frame(core), run.front()->flush_ordinal, plan);
+    painterPlanReport(psx::frame::censusFrame(*core), run.front()->flush_ordinal, plan);
     // Regrouping changes physical pass order. Exact-real-depth painter/ordinary ties are preserved by
     // a dense rank of original sequence values inside THIS physical flush. Fps60 rebases RqItem::seq
     // across captured flushes, but that global offset carries no ordering information inside this run
@@ -910,7 +910,7 @@ void RenderQueue::flush(Core *core) {
   // empty, not that the instrument was silent.
   // Both whole-queue diagnostics live with the attribution owner (`rqflush` and `rqattr`), which is the
   // one case the project's logging rule allows a channel guard around a walk.
-  psxport::render::logFlushedRenderQueue(static_cast<int>(census_frame(core)), items, n, seq);
+  psxport::render::logFlushedRenderQueue(static_cast<int>(psx::frame::censusFrame(*core)), items, n, seq);
   // debug: label each object with its engine ID. Appended BEFORE finalize so the overlay's quads take
   // part in the same sort as everything else; resolveKeyOrder ignores them (HUD, no game sort key).
   if (n && objid_on(core)) {
@@ -922,12 +922,12 @@ void RenderQueue::flush(Core *core) {
   histogram();
   // zfightScan reads only the sorted item array (depth/xy/order_mode set at submission time) — it does not
   // depend on emitItem having run — so it belongs HERE, right after sortQueue, not inside emitQueue. This is
-  // the one placement that scans the exact same sorted, real-frame item set before FramePresenter captures
+  // the one placement that scans the exact same sorted, real-frame item set before psx::frame::FramePresenter captures
   // it. A temporal decorator may later re-render from captured inputs, but that synthesized picture does not
   // need (or want) its own real-queue scan. Previously this call lived at the tail of emitQueue(), which the
   // capture path skips entirely, so the instrument never ran on presented builds.
   zfightScan(core);
-  // ONE PATH. Every ordinary flush CAPTURES into the neutral FramePresenter; its frame fence decides
+  // ONE PATH. Every ordinary flush CAPTURES into the neutral psx::frame::FramePresenter; its frame fence decides
   // whether to emit the current picture directly or offer it to an optional temporal decorator. This
   // used to branch on fps60.active(), creating two renderers and a family of "only broken at 60" bugs.
   //

@@ -20,6 +20,8 @@
 // and that is exactly what it should say here rather than being quietly presented as verified.
 #include <cstdint>
 
+namespace psx::frame {
+
 struct DisplayFieldRate {
   uint32_t frequencyNumerator;
   uint32_t frequencyDenominator;
@@ -30,12 +32,12 @@ struct DisplayFieldRate {
 inline constexpr DisplayFieldRate DISPLAY_FIELD_RATE_NTSC{60000u, 1001u};
 inline constexpr DisplayFieldRate DISPLAY_FIELD_RATE_PAL{50u, 1u};
 
-constexpr unsigned field_rate_millihz(DisplayFieldRate rate) {
+constexpr unsigned fieldRateMilliHz(DisplayFieldRate rate) {
   return static_cast<unsigned>((static_cast<uint64_t>(rate.frequencyNumerator) * 1000u) / rate.frequencyDenominator);
 }
 
-inline constexpr unsigned FIELD_RATE_NTSC_MILLIHZ = field_rate_millihz(DISPLAY_FIELD_RATE_NTSC);
-inline constexpr unsigned FIELD_RATE_PAL_MILLIHZ = field_rate_millihz(DISPLAY_FIELD_RATE_PAL);
+inline constexpr unsigned FIELD_RATE_NTSC_MILLIHZ = fieldRateMilliHz(DISPLAY_FIELD_RATE_NTSC);
+inline constexpr unsigned FIELD_RATE_PAL_MILLIHZ = fieldRateMilliHz(DISPLAY_FIELD_RATE_PAL);
 
 // Nominal non-interlaced field geometry used by the PSX GPU and HBlank-clocked root counter 1.
 // Interlaced hardware alternates adjacent line counts; the deterministic framework clock does
@@ -43,14 +45,15 @@ inline constexpr unsigned FIELD_RATE_PAL_MILLIHZ = field_rate_millihz(DISPLAY_FI
 inline constexpr unsigned DISPLAY_LINES_NTSC = 263u;
 inline constexpr unsigned DISPLAY_LINES_PAL = 314u;
 
-inline constexpr DisplayFieldRate display_field_rate(bool pal) {
+inline constexpr DisplayFieldRate displayFieldRate(bool pal) {
   return pal ? DISPLAY_FIELD_RATE_PAL : DISPLAY_FIELD_RATE_NTSC;
 }
 
-inline unsigned field_rate_millihz(bool pal) {
-  return field_rate_millihz(display_field_rate(pal));
+inline unsigned fieldRateMilliHz(bool pal) {
+  return fieldRateMilliHz(displayFieldRate(pal));
 }
 
-inline unsigned display_lines_per_field(bool pal) {
+inline unsigned displayLinesPerField(bool pal) {
   return pal ? DISPLAY_LINES_PAL : DISPLAY_LINES_NTSC;
 }
+} // namespace psx::frame

@@ -39,7 +39,7 @@ bool raiseStockReadCompletion(Core &core, std::uint32_t firstLba, std::uint32_t 
                   sectors);
     return false;
   }
-  // The completion is owed to the controller's drive clock, not announced yet: `Timing` services it as
+  // The completion is owed to the controller's drive clock, not announced yet: `psx::frame::Timing` services it as
   // guest time passes and latches the edge it raises. Announcing at once made the read finish before the
   // guest could observe it in flight (see cd_stock_read_completion.h).
   const Hle &hle = core.game->hle;

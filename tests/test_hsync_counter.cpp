@@ -14,34 +14,34 @@ constexpr uint32_t kRootCounter1 = 0x1F801110u;
 void test_root_counter_one_advances_by_the_video_standard() {
   auto *ntsc = new Game();
   CHECK_EQ(ntsc->core.mem_r16(kRootCounter1), 0);
-  CHECK(ntsc->timing.advanceDisplayFields(1, 1, FIELD_RATE_NTSC_MILLIHZ));
-  CHECK_EQ(ntsc->core.mem_r16(kRootCounter1), DISPLAY_LINES_NTSC);
+  CHECK(ntsc->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK_EQ(ntsc->core.mem_r16(kRootCounter1), psx::frame::DISPLAY_LINES_NTSC);
 
   auto *pal = new Game();
-  CHECK(pal->timing.advanceDisplayFields(1, 1, FIELD_RATE_PAL_MILLIHZ));
+  CHECK(pal->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_PAL_MILLIHZ));
   pal->gpu.s_disp_pal = 1;
-  CHECK_EQ(pal->core.mem_r16(kRootCounter1), DISPLAY_LINES_PAL);
+  CHECK_EQ(pal->core.mem_r16(kRootCounter1), psx::frame::DISPLAY_LINES_PAL);
 }
 
 void test_root_counter_reports_intra_field_progress() {
   auto *game = new Game();
-  game->timing.advanceDisplayFields(1, 1, FIELD_RATE_NTSC_MILLIHZ);
-  CHECK_EQ(game->core.mem_r16(kRootCounter1), DISPLAY_LINES_NTSC);
+  game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
+  CHECK_EQ(game->core.mem_r16(kRootCounter1), psx::frame::DISPLAY_LINES_NTSC);
 
-  const uint64_t ticksPerField = display_field_cpu_ticks(1, 1, FIELD_RATE_NTSC_MILLIHZ);
-  const uint32_t ticksThroughLine248 =
-      static_cast<uint32_t>((ticksPerField + DISPLAY_LINES_NTSC - 1) / DISPLAY_LINES_NTSC * 248u);
+  const uint64_t ticksPerField = psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
+  const uint32_t ticksThroughLine248 = static_cast<uint32_t>((ticksPerField + psx::frame::DISPLAY_LINES_NTSC - 1) /
+                                                             psx::frame::DISPLAY_LINES_NTSC * 248u);
   game->timing.advanceGuestInstructionTicks(ticksThroughLine248);
   const uint16_t observed = game->core.mem_r16(kRootCounter1);
-  CHECK(observed >= DISPLAY_LINES_NTSC + 248u);
-  CHECK(observed < DISPLAY_LINES_NTSC * 2u);
+  CHECK(observed >= psx::frame::DISPLAY_LINES_NTSC + 248u);
+  CHECK(observed < psx::frame::DISPLAY_LINES_NTSC * 2u);
 }
 
 void test_invalid_hsync_cadence_does_not_invent_a_counter() {
-  EmulatedTime clock;
+  psx::frame::EmulatedTime clock;
   clock.advanceInstructions(1'000'000u);
-  CHECK_EQ(clock.hSyncCount(0, DISPLAY_LINES_NTSC), 0);
-  CHECK_EQ(clock.hSyncCount(FIELD_RATE_NTSC_MILLIHZ, 0), 0);
+  CHECK_EQ(clock.hSyncCount(0, psx::frame::DISPLAY_LINES_NTSC), 0);
+  CHECK_EQ(clock.hSyncCount(psx::frame::FIELD_RATE_NTSC_MILLIHZ, 0), 0);
 }
 
 } // namespace

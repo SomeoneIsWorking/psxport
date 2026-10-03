@@ -4,8 +4,11 @@
 
 #include <cstdint>
 #include <optional>
+
 class Game;
 struct CdcState;
+
+namespace psx::frame {
 
 class Timing {
 public:
@@ -85,3 +88,4 @@ private:
   void raiseVBlank(uint32_t fields);
   void serviceCdc();
 };
+} // namespace psx::frame

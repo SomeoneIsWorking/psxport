@@ -443,7 +443,7 @@ uint32_t gpu_read_word(Core *core); // GPUREAD (0x1F801810 read) — GP0(0xC0) V
 void gpu_present(Core *core);
 void gpu_present_ex(Core *core, int do_blit);
 // The frame's PSXPORT_SHOT_AT / PSXPORT_PRESENT_SHOT_AT captures, taken once the frame's presentation
-// is COMPLETE — FrameLoopShell::step calls this after stepFrame returns, because the main presenter and
+// is COMPLETE — psx::frame::FrameLoopShell::step calls this after stepFrame returns, because the main presenter and
 // the movie presenter are both inside a frame and the second overwrites the first in s_present_img.
 // See the comment above shot_triggers in gpu_native.cpp (issue 0040).
 void gpu_present_frame_capture(Core *core);

@@ -32,8 +32,11 @@ void observeSubmission(Core *core, int layer) {
   if (core->rsub.guestGp0Depth > 0) {
     core->rsub.census.noteGuestOriginPush(1u);
   } else {
-    core->rsub.census.noteNativeLayer(
-        core->rsub.producerScope.currentKey(), 1u, census_frame(core), layer, core->rsub.producerScope.currentName());
+    core->rsub.census.noteNativeLayer(core->rsub.producerScope.currentKey(),
+                                      1u,
+                                      psx::frame::censusFrame(*core),
+                                      layer,
+                                      core->rsub.producerScope.currentName());
   }
 
   // WHO draws the undeclared prims — `PSXPORT_DEBUG=unscoped`.

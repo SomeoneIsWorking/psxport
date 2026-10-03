@@ -1,6 +1,6 @@
 // test_host_turn_guest_clock.cpp — the host field clock owes fields by EMULATED guest time.
 //
-// One field period of Timing::emulatedCpuTicks since the last delivered field raises the pending
+// One field period of psx::frame::Timing::emulatedCpuTicks since the last delivered field raises the pending
 // host turn; a delivered field or a served turn starts the next complete period. No wall clock,
 // thread, or sleep takes part, so a slow host cannot change how many fields a guest update sees.
 #include "emulated_time.h"
@@ -49,7 +49,7 @@ public:
     deliveredTurns = 0;
     turnFlagAddress = 0;
     game->hle.irq_enabled = 1;
-    psx::cpu::registerHostTurn(game->core, deliverTurn, FIELD_RATE_NTSC_MILLIHZ);
+    psx::cpu::registerHostTurn(game->core, deliverTurn, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
   }
   ~Fixture() {
     psx::cpu::shutdownHostTurn(game->core);
@@ -60,7 +60,8 @@ public:
   std::unique_ptr<Game> game = std::make_unique<Game>();
 };
 
-const uint32_t kPeriod = static_cast<uint32_t>(display_field_cpu_ticks(1, 1, FIELD_RATE_NTSC_MILLIHZ));
+const uint32_t kPeriod =
+    static_cast<uint32_t>(psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
 
 } // namespace
 
@@ -96,7 +97,7 @@ static void test_delivered_field_cancels_and_restarts_the_period(void) {
   CHECK(fixture.hostOwed());
   // The native frame loop delivered the field itself: the latched turn is the same event, and
   // the timing owner re-anchors the clock as part of advancing display fields.
-  CHECK(fixture.game->timing.advanceDisplayFields(1, 1, FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(fixture.game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK(!fixture.hostOwed());
   psx::cpu::accountGuestInstructions(core, kPeriod - 1);
   CHECK(!fixture.hostOwed());
@@ -112,7 +113,7 @@ static void test_a_delivered_field_does_not_request_itself(void) {
   // not see a due clock: that request would be for the field already in flight, and serving it at
   // the next boundary chained one unrequested field after another.
   for (int field = 0; field < 8; ++field) {
-    CHECK(fixture.game->timing.advanceDisplayFields(1, 1, FIELD_RATE_NTSC_MILLIHZ));
+    CHECK(fixture.game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
     psx::cpu::accountGuestInstructions(core, 200);
     CHECK(!fixture.hostOwed());
   }
