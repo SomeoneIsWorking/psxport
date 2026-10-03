@@ -57,6 +57,43 @@ def parse_window(argv: list[str]) -> tuple[int, int, int]:
     return lo, hi, entry
 
 
+# End of main RAM in KSEG0. A PS-X EXE's file image ends where its .bss begins; everything above is
+# uninitialised guest RAM the program writes at runtime (heap, stack, module arenas).
+KSEG0_LAST = 0x80200000
+
+
+def map_bss_window(program, text_end: int) -> dict:
+    """Map the uninitialised RAM past the file image, so references INTO it are analysable.
+
+    Ghidra's Raw Binary loader maps exactly the file, so a resident image's mapped memory stops at
+    its own length and every guest address above that is "outside the memory of the analyzed
+    program" — which makes `refs` on a runtime word (a scene machine, a queue head, anything in
+    .bss) answer "outside the program" instead of the references that name its writer. That is a
+    statement about the LOADER, not about the binary, so it is fixed here for every resident image
+    rather than per title: the guest's .bss genuinely is part of its address space.
+
+    Disassembly is NOT seeded across this block: it is uninitialised, so anything decoded from it
+    would be invented. It is mapped so references resolve, nothing more.
+    """
+    memory = program.getMemory()  # noqa: F821
+    start = program.getAddressFactory().getAddress("%08x" % text_end)  # noqa: F821
+    if text_end >= KSEG0_LAST:
+        return {"mapped": False, "reason": "text already reaches the end of RAM"}
+    # Ghidra refuses to create a block that overlaps an existing one, and it reports the overlap as an
+    # exception. Rather than guess at a pre-check that can disagree with the real geometry, the create
+    # IS the test: its own failure is the authoritative "already mapped" answer.
+    try:
+        block = memory.createUninitializedBlock(".bss", start, KSEG0_LAST - text_end, False)  # noqa: F821
+    except Exception as error:  # noqa: BLE001 - Ghidra's own exception type is not on this classpath
+        return {"mapped": False, "reason": "create refused: %s" % (error,)}
+    block.setRead(True)
+    block.setWrite(True)
+    block.setExecute(False)
+    block.setVolatile(False)
+    block.setInitialized(False)
+    return {"mapped": True, "start": "0x%08X" % text_end, "end": "0x%08X" % KSEG0_LAST}
+
+
 def count_instructions(listing, first, last) -> int:
     """Instructions in the half-open ADDRESS window. Bounded, for the same reason the post-script
     bounds its per-function count: an unbounded walk attributes the next region's code to this one.
@@ -82,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
         argv = getScriptArgs()  # noqa: F821 - provided by GhidraScript
     lo, hi, entry = parse_window(list(argv))
 
+    bss = map_bss_window(currentProgram, hi + 1)  # noqa: F821  # `hi` is the last mapped byte
+
     factory = currentProgram.getAddressFactory()  # noqa: F821
     seeded_address = factory.getAddress("%08x" % entry)
     last_address = factory.getAddress("%08x" % hi)
@@ -95,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         "entry": "0x%08X" % entry,
         "disassemble_returned": bool(seeded),
         "instructions_from_entry": found,
+        "bss_window": bss,
     }
     # Written beside the inventory so the post-script can report it and the audit can REFUSE an
     # absent or empty one. A pre-script that raises is otherwise invisible: Ghidra carries on and
