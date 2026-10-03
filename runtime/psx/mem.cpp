@@ -673,7 +673,8 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     io_gpustat_toggle ^= 0x80000000u; // per-instance (Core member), not a shared static
     return 0x1C000000u | io_gpustat_toggle;
   }
-  if (p >= 0x1F801800 && p <= 0x1F801803) { // CD controller registers
+  if (p >= 0x1F801800 && p <= 0x1F80180F) { // CD controller registers; Beetle's window, which
+                                            // mirrors registers 0..3 above ..803 (cdc_read: p & 3)
     const uint32_t rv = cdc_read(&game->cdc, p);
     irqStatLatch(); // the controller may have raised during this access; I_STAT is set THEN, not
                     // when the CPU next looks — and latching here is also what makes the edge
@@ -798,7 +799,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (io_peripheral_write(*this, a, v)) { // SIO0 + root counter 2 (io_peripherals.h)
     return;
   }
-  if (p >= 0x1F801800 && p <= 0x1F801803) { // CD controller
+  if (p >= 0x1F801800 && p <= 0x1F80180F) { // CD controller (mirrored window, as io_read)
     // `PSXPORT_DEBUG=cdcw` — WHO wrote a CD register. The cdc channel (cdc_native.c) can say WHAT
     // command arrived but not where it came from: that file is plain C with no Core, so it has no
     // guest pc/ra. This is the same store one level up, where the caller context still exists, and
