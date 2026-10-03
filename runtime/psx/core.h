@@ -130,6 +130,11 @@ public:
   // Resolve a contiguous guest span to its physical main-RAM bytes using the same mapping as
   // mem_r*/mem_w*. Scratchpad, I/O, zero-length, and mirror-straddling spans have no such range.
   std::optional<GuestAddressRange> mappedMainRamRange(uint32_t address, uint32_t bytes);
+  // True when the whole span is guest storage (main RAM, its mirrors, or the scratchpad), so a read
+  // of it reaches no device register and cannot fault.
+  bool isGuestStorage(uint32_t address, uint32_t bytes) {
+    return host_ptr(address, bytes) != nullptr;
+  }
 
   // Memory access (delegates to host_ptr / the I/O map). PSX is little-endian == host.
   uint8_t mem_r8(uint32_t a);

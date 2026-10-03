@@ -199,11 +199,12 @@ namespace {
 // kills the very product it is diagnosing.
 //
 // Measured 2026-09-26: `ents` on Mega Man X4 dereferenced an unmapped node pointer and took the
-// product down mid-census, losing the run. These helpers check the span is main RAM first, so an
-// untrusted address yields a refusal the caller can report instead of a crash. `mappedMainRamRange` is
-// the framework's own mapper, so this agrees with what the CPU would actually execute from.
+// product down mid-census, losing the run. These helpers check the span is backed by guest memory (main
+// RAM, its mirrors, or the scratchpad) first, so an untrusted address yields a refusal the caller can
+// report instead of a crash. `Core::isGuestStorage` is the framework's own mapper, and a debug read never reaches a
+// device register, whose read has side effects.
 bool probeR32(Core &core, uint32_t address, uint32_t &out) {
-  if (!core.mappedMainRamRange(address, 4).has_value()) {
+  if (!core.isGuestStorage(address, 4)) {
     return false;
   }
   out = core.mem_r32(address);
@@ -211,7 +212,7 @@ bool probeR32(Core &core, uint32_t address, uint32_t &out) {
 }
 
 bool probeR8(Core &core, uint32_t address, uint8_t &out) {
-  if (!core.mappedMainRamRange(address, 1).has_value()) {
+  if (!core.isGuestStorage(address, 1)) {
     return false;
   }
   out = core.mem_r8(address);
@@ -219,7 +220,7 @@ bool probeR8(Core &core, uint32_t address, uint8_t &out) {
 }
 
 bool probeR16(Core &core, uint32_t address, uint16_t &out) {
-  if (!core.mappedMainRamRange(address, 2).has_value()) {
+  if (!core.isGuestStorage(address, 2)) {
     return false;
   }
   out = core.mem_r16(address);
@@ -346,11 +347,15 @@ static void dbg_exec(FILE *out, const char *line) {
     if (b > 256) {
       b = 256;
     }
-    fprintf(out, "%08X:", a);
-    for (unsigned i = 0; i < b; i++) {
-      fprintf(out, " %02X", s_ctx->mem_r8(a + i));
+    if (!s_ctx->isGuestStorage(a, b)) {
+      fprintf(out, "[r] refused: %08X+%u is not guest RAM or scratchpad\n", a, b);
+    } else {
+      fprintf(out, "%08X:", a);
+      for (unsigned i = 0; i < b; i++) {
+        fprintf(out, " %02X", s_ctx->mem_r8(a + i));
+      }
+      fprintf(out, "\n");
     }
-    fprintf(out, "\n");
   } else if (!strcmp(cmd, "rw") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
     if (!b) {
       b = 8;
@@ -360,11 +365,15 @@ static void dbg_exec(FILE *out, const char *line) {
     // parses it; the notice is a SEPARATE line, so it cannot be mistaken for a word.
     const unsigned asked = b;
     const unsigned served = b > psx::control::kMaxControlReadWords ? psx::control::kMaxControlReadWords : b;
-    fprintf(out, "%08X:", a);
-    for (unsigned i = 0; i < served; i++) {
-      fprintf(out, " %08X", s_ctx->mem_r32(a + i * 4));
+    if (!s_ctx->isGuestStorage(a, served * 4u)) {
+      fprintf(out, "[rw] refused: %08X+%u word(s) is not guest RAM or scratchpad\n", a, served);
+    } else {
+      fprintf(out, "%08X:", a);
+      for (unsigned i = 0; i < served; i++) {
+        fprintf(out, " %08X", s_ctx->mem_r32(a + i * 4));
+      }
+      fprintf(out, "\n");
     }
-    fprintf(out, "\n");
     if (served < asked) {
       fprintf(out,
               "[rw] SHORT ANSWER: served %u of %u word(s) requested; this surface returns at most %u "
