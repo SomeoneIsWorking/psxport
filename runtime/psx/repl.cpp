@@ -499,100 +499,11 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
       OtAttr &oa = c->rsub.otAttr;
       char sub[32] = {0};
       sscanf(line, "%*s %31s", sub);
-      // LAST-WRITER PROVENANCE sub-commands (ot_attr.h) — answer "who wrote this WORD", independent of
-      // call-flow, for the staging-buffer case where call-path attribution only names the batcher.
-      if (!strcmp(sub, "watch")) {
-        uint32_t addr = 0, len = 0;
-        if (sscanf(line, "%*s %*s %x %x", &addr, &len) != 2 || len == 0) {
-          lucent::info("otattr", "usage: otattr watch <addr-hex> <len-hex>");
-        } else {
-          int slot = oa.watchRegister(addr, len);
-          if (slot < 0) {
-            lucent::info("otattr",
-                         "watch REJECTED (slots={}/{} wordsUsed={}/{} overflow={}) — free a slot or shrink the region",
-                         oa.watchSlotCount(),
-                         (int)OtAttr::WATCH_SLOTS,
-                         oa.watchWordsUsed(),
-                         (int)OtAttr::WATCH_CAP_WORDS,
-                         oa.watchOverflow());
-          } else {
-            const OtAttr::WatchRegion *r = oa.watchAt(slot);
-            // Decorate as KSEG0 (0x800xxxxx) ONLY for main-RAM regions — scratchpad (0x1F800000-
-            // 0x1F8003FF) is NOT mirrored across segments the way RAM is, so blindly OR-ing 0x80000000
-            // onto it prints a bogus 0x9F8xxxxx address. Print scratchpad addresses as-is (their own
-            // canonical form).
-            uint32_t dlo = r->lo < 0x200000u ? (0x80000000u | r->lo) : r->lo;
-            uint32_t dhi = r->hi < 0x200000u ? (0x80000000u | r->hi) : r->hi;
-            lucent::info("otattr",
-                         "watch[{}] = [0x{:08X},0x{:08X}) ({} words) — slots {}/{}, {}/{} words used",
-                         slot,
-                         dlo,
-                         dhi,
-                         (r->hi - r->lo) / 4,
-                         oa.watchSlotCount(),
-                         (int)OtAttr::WATCH_SLOTS,
-                         oa.watchWordsUsed(),
-                         (int)OtAttr::WATCH_CAP_WORDS);
-          }
-        }
-        continue;
-      }
-      if (!strcmp(sub, "who")) {
-        uint32_t addr = 0, len = 4;
-        int got = sscanf(line, "%*s %*s %x %x", &addr, &len);
-        if (got < 1) {
-          lucent::info("otattr", "usage: otattr who <addr-hex> [len-hex]");
-          continue;
-        }
-        if (got == 1) {
-          len = 4;
-        }
-        lucent::info("otattr", "who 0x{:08X}..0x{:08X} (word-granular, coalesced runs):", addr, addr + len);
-        uint32_t w = addr & ~3u, end = addr + len;
-        bool any = false;
-        OtAttr::WordRec cur{};
-        uint32_t runLo = 0, runHi = 0;
-        bool haveRun = false;
-        auto flush_run = [&]() {
-          if (!haveRun) {
-            return;
-          }
-          if (cur.frame == 0xFFFFFFFFu) {
-            lucent::info("repl", "  [0x{:08X},0x{:08X}) NEVER WRITTEN since watch registered", runLo, runHi);
-          } else {
-            lucent::info("repl",
-                         "  [0x{:08X},0x{:08X}) fn=0x{:08X} caller=0x{:08X} frame={}",
-                         runLo,
-                         runHi,
-                         cur.fn,
-                         cur.caller,
-                         cur.frame);
-          }
-          any = true;
-          haveRun = false;
-        };
-        for (; w < end; w += 4) {
-          OtAttr::WordRec rec{};
-          uint32_t wa = 0;
-          if (!oa.watchLookup(w, &rec, &wa)) {
-            flush_run();
-            lucent::info("repl", "  [0x{:08X},0x{:08X}) NOT WATCHED — run `otattr watch` first", w, w + 4);
-            continue;
-          }
-          if (haveRun && rec.fn == cur.fn && rec.caller == cur.caller && rec.frame == cur.frame && wa == runHi) {
-            runHi = wa + 4;
-          } else {
-            flush_run();
-            cur = rec;
-            runLo = wa;
-            runHi = wa + 4;
-            haveRun = true;
-          }
-        }
-        flush_run();
-        if (!any) {
-          lucent::info("repl", "  (nothing in range)");
-        }
+      // The last-writer sub-commands live in the otattr owner (ot_attr.cpp) so every transport
+      // shares one implementation; see there.
+      if (oa.runLastWriterCommand(line, [](std::string_view m) {
+            lucent::info("otattr", "{}", m);
+          })) {
         continue;
       }
       if (!strcmp(sub, "trace")) {

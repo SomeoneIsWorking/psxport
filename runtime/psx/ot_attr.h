@@ -51,8 +51,10 @@
 //      `otattr trace <addr>` heuristic: a writer fn that touches many distinct pages in one frame LOOKS
 //      like a copy loop (batching many sources into one buffer), which is the census's actual scenario.
 #pragma once
+#include <functional>
 #include <lucent/log.h> // lucent::Channel — the inline armed test below
 #include <stdint.h>
+#include <string_view>
 class Core;
 struct GameConfig;
 
@@ -113,6 +115,10 @@ inline thread_local int g_guest_packet_owner_scope_depth = 0;
 
 class OtAttr {
 public:
+  // The `otattr watch` / `otattr who` last-writer sub-commands, one implementation for every control
+  // transport (the REPL and the debug server). `emit` is the transport's sink. Returns true when `line`
+  // named one of them and was consumed; false means the caller keeps its own `otattr` behaviour.
+  bool runLastWriterCommand(std::string_view line, const std::function<void(std::string_view)> &emit);
   // A single terrain-heavy field frame can produce well over 4096 attribution-distinct spans (terrain
   // tiles interleave E1/E2 texpage-state words between quads, which breaks the lo/hi coalescing even
   // when the fn/node attribution is identical) — sized generously since this is diagnostic-only memory,

@@ -24,6 +24,7 @@
 #include "config.h"      // `cvars` / `cvar` — the layered CVar registry + env audit
 #include "config_vars.h" // cv_debug_server
 #include "control_surface_limits.h" // kMaxControlReadWords — the one home for the cap — the endpoint's port, and cv_render_path's live switch
+#include "ot_attr.h"             // `otattr watch` / `otattr who` — the SAME last-writer implementation the REPL runs
 #include "render_mode.h"         // `renderpath` — RenderPath + render_path_parse/name/next
 #include "state/state_command.h" // `state save|load <path>` — the whole-machine state owner
 #include <arpa/inet.h>
@@ -543,9 +544,18 @@ static void dbg_exec(FILE *out, const char *line) {
   } else if (!strcmp(cmd, "scene")) {
     gpu_scene_dump_now(s_ctx, out);
   } else if (!strcmp(cmd, "otattr")) {
-    unsigned one = 0;
-    sscanf(line, "%*s %x", &one);
-    gpu_otattr_dump_now(s_ctx, out, one);
+    // The last-writer sub-commands (`watch`, `who`) are the SAME implementation the REPL runs
+    // (ot_attr.cpp), so `otattr watch`/`otattr who` mean one thing across every control transport
+    // and an agent can drive provenance over this channel exactly as over the REPL. Without a
+    // sub-command this stays the geometry dump this endpoint always was.
+    const bool consumed = s_ctx->rsub.otAttr.runLastWriterCommand(line, [out](std::string_view m) {
+      fprintf(out, "%.*s\n", static_cast<int>(m.size()), m.data());
+    });
+    if (!consumed) {
+      unsigned one = 0;
+      sscanf(line, "%*s %x", &one);
+      gpu_otattr_dump_now(s_ctx, out, one);
+    }
   } else if (!strcmp(cmd, "disp")) {
     gpu_disp_dump_now(s_ctx, out);
   } else if (!strcmp(cmd, "provat") && sscanf(line, "%*s %u %u", &a, &b) == 2) {
