@@ -1,0 +1,698 @@
+#include "cfg.h"
+#include "core.h"
+#include "gpu_vk.h"
+#include "ot_attr.h" // OtAttr::Span — `otattr` packet->submitter attribution
+// gpu_debug.cpp — read-only diagnostic views of the native GPU state: the render-queue pixel probe
+// and the classified scene display list of an ordering table. They never mutate VRAM.
+#include "game.h"
+#include "gpu_native_internal.h"
+#include "render_queue.h"
+#include <algorithm>
+#include <climits>
+#include <cmath>
+#include <cstdlib>
+#include <lucent/log.h>
+#include <math.h>
+#include <stdio.h>
+
+namespace {
+
+template <typename Producer> void logDiagnosticLines(std::string_view channel, Producer &&producer) {
+  char *buffer = nullptr;
+  size_t size = 0;
+  FILE *stream = open_memstream(&buffer, &size);
+  if (!stream) {
+    lucent::error("gpu-diag", "could not allocate the {} diagnostic stream", channel);
+    return;
+  }
+  producer(stream);
+  fclose(stream);
+
+  const std::string_view output(buffer ? buffer : "", size);
+  size_t begin = 0;
+  while (begin < output.size()) {
+    const size_t end = output.find('\n', begin);
+    const size_t count = end == std::string_view::npos ? output.size() - begin : end - begin;
+    lucent::log(lucent::Level::Info, channel, output.substr(begin, count));
+    if (end == std::string_view::npos) {
+      break;
+    }
+    begin = end + 1;
+  }
+  free(buffer);
+}
+
+float rqProbeX(const RqItem &item, int vertex) {
+  return item.has_xyf ? item.xsf[vertex] : (float)item.xs[vertex];
+}
+
+float rqProbeY(const RqItem &item, int vertex) {
+  return item.has_xyf ? item.ysf[vertex] : (float)item.ys[vertex];
+}
+
+bool rqProbeBarycentric(const RqItem &item, int triangle, float x, float y, float weights[3]) {
+  const int i0 = triangle, i1 = triangle + 1, i2 = triangle + 2;
+  const float x0 = rqProbeX(item, i0), y0 = rqProbeY(item, i0);
+  const float x1 = rqProbeX(item, i1), y1 = rqProbeY(item, i1);
+  const float x2 = rqProbeX(item, i2), y2 = rqProbeY(item, i2);
+  const float denominator = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+  if (denominator == 0.0f) {
+    return false;
+  }
+  weights[0] = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / denominator;
+  weights[1] = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / denominator;
+  weights[2] = 1.0f - weights[0] - weights[1];
+  return weights[0] >= 0.0f && weights[1] >= 0.0f && weights[2] >= 0.0f;
+}
+
+// The PSX modulation rule for a textured prim: texel channel (5-bit, expanded to 8) scaled by the
+// vertex colour about 0x80, saturating. `raw` prims skip modulation entirely.
+int rqProbeModulate(int texelChannel5, int vertexChannel, bool raw) {
+  const int expanded = (texelChannel5 << 3) | (texelChannel5 >> 2);
+  if (raw) {
+    return expanded;
+  }
+  const int scaled = expanded * vertexChannel / 128;
+  return scaled > 255 ? 255 : scaled;
+}
+
+float rqProbeInterpolate(const float weights[3], float v0, float v1, float v2) {
+  return weights[0] * v0 + weights[1] * v1 + weights[2] * v2;
+}
+
+int rqProbeUv(const RqItem &item, int triangle, const float weights[3], const int values[4]) {
+  const float interpolated =
+      rqProbeInterpolate(weights, (float)values[triangle], (float)values[triangle + 1], (float)values[triangle + 2]);
+  float lo = (float)values[triangle], hi = lo;
+  for (int i = 1; i < 3; ++i) {
+    const float value = (float)values[triangle + i];
+    lo = value < lo ? value : lo;
+    hi = value > hi ? value : hi;
+  }
+  const float snapped = floorf(interpolated * 4096.0f + 0.5f) / 4096.0f;
+  return (int)(snapped < lo ? lo : snapped > hi ? hi : snapped);
+}
+
+RqPixelProbeWinner rqProbeWinner(const RqItem &item, const RqPixelSample &sample, uint32_t finalOrder, float d32) {
+  RqPixelProbeWinner winner;
+  winner.valid = true;
+  winner.final_order = finalOrder;
+  winner.seq = item.seq;
+  winner.dbg_node = item.dbg_node;
+  winner.guest_packet = item.guest_packet;
+  winner.guest_ot_order = item.guest_ot_order;
+  winner.sort_key = item.sort_key;
+  winner.key_ord = item.key_ord;
+  winner.d32 = d32;
+  winner.sample = sample;
+  return winner;
+}
+
+void rqProbeLogFinal(const RqPixelProbeState &probe) {
+  const RqPixelProbeWinner &native = probe.shipping;
+  const RqPixelProbeWinner &source = probe.source_ot;
+  const RqPixelProbeWinner &guest = probe.guest_ot;
+  lucent::info("primat-rq",
+               "FINAL f{} @({},{}) display=({},{})+{}x{} compare={} semi_seen={} shipping(valid={} order={} seq={} "
+               "node={:08X} packet={:08X} ot_order={} key={} key_ord={:.9f} D32={:.9f} texel={:04X} writes={}) "
+               "source_OT(valid={} order={} seq={} node={:08X} key={} key_ord={:.9f} texel={:04X} writes={}) "
+               "guest_OT(valid={} order={} seq={} packet={:08X} ot_order={} key={} texel={:04X} writes={})",
+               probe.frame,
+               probe.x,
+               probe.y,
+               // THE COORDINATE FRAME THE TARGET WAS INTERPRETED IN. A probe answer is only as good as
+               // the mapping between the pixel a human picked off a captured image and the pixel this
+               // walk explained; getting that mapping wrong produces a confident report about a
+               // different prim, with nothing in the output to show it (Spyro issue 0120, 2026-09-19,
+               // where an 8-row disagreement about the display origin sent the probe into the hedge
+               // beside the artefact). Printing the display rect makes the mapping checkable.
+               probe.display_x,
+               probe.display_y,
+               probe.display_w,
+               probe.display_h,
+               gpu_vk_world_depth_compare_name(),
+               probe.semi_seen,
+               native.valid,
+               native.final_order,
+               native.seq,
+               native.dbg_node,
+               native.guest_packet,
+               native.guest_ot_order,
+               native.sort_key,
+               native.key_ord,
+               native.d32,
+               native.sample.texel,
+               native.sample.writes,
+               source.valid,
+               source.final_order,
+               source.seq,
+               source.dbg_node,
+               source.sort_key,
+               source.key_ord,
+               source.sample.texel,
+               source.sample.writes,
+               guest.valid,
+               guest.final_order,
+               guest.seq,
+               guest.guest_packet,
+               guest.guest_ot_order,
+               guest.sort_key,
+               guest.sample.texel,
+               guest.sample.writes);
+}
+
+} // namespace
+
+// The texture/CLUT sampler the pixel probe evaluates an RqItem's captured state with.
+GpuTextureSample GpuState::sample_tex_at(
+    int u, int v, int tp_x, int tp_y, int mode, int clut_x, int clut_y, int tw_mx, int tw_my, int tw_ox, int tw_oy) {
+  GpuTextureSample sample;
+  sample.u = (u & ~(tw_mx * 8)) | ((tw_ox & tw_mx) * 8);
+  sample.v = (v & ~(tw_my * 8)) | ((tw_oy & tw_my) * 8);
+  if (mode == 2) {
+    sample.source_word = *vram(tp_x + sample.u, tp_y + sample.v);
+    sample.texel = sample.source_word;
+    return sample;
+  }
+  if (mode == 1) {
+    sample.source_word = *vram(tp_x + (sample.u >> 1), tp_y + sample.v);
+    sample.palette_index = (sample.u & 1) ? (sample.source_word >> 8) : (sample.source_word & 0xFF);
+  } else {
+    sample.source_word = *vram(tp_x + (sample.u >> 2), tp_y + sample.v);
+    sample.palette_index = (sample.source_word >> ((sample.u & 3) * 4)) & 0xF;
+  }
+  sample.texel = *vram(clut_x + sample.palette_index, clut_y);
+  return sample;
+}
+
+bool GpuState::pixel_probe_target(int &absoluteX, int &absoluteY) {
+  if (!s_pixel_probe.configured) {
+    s_pixel_probe.configured = true;
+    const char *setting = cfg_str("PSXPORT_PRIMAT");
+    if (setting) {
+      sscanf(setting, "%d,%d,%d", &s_pixel_probe.x, &s_pixel_probe.y, &s_pixel_probe.from_frame);
+    }
+  }
+  if (s_pixel_probe.x < 0 || s_frame < s_pixel_probe.from_frame) {
+    return false;
+  }
+  absoluteX = s_disp_x + s_pixel_probe.x;
+  absoluteY = s_disp_y + s_pixel_probe.y;
+  return true;
+}
+
+// The prim's screen footprint, in the same coordinates the probe's target is given in. World prims
+// carry sub-pixel xsf/ysf and everything else carries the rounded xs/ys, so reading one of the two
+// unconditionally would report a plausible box for the other kind rather than refusing — the bounds
+// are taken from whichever pair the rasterizer itself uses.
+struct RqProbeBounds {
+  int min_x;
+  int min_y;
+  int max_x;
+  int max_y;
+};
+
+RqProbeBounds rq_probe_item_bounds(const RqItem &item) {
+  RqProbeBounds bounds{INT_MAX, INT_MAX, INT_MIN, INT_MIN};
+  for (int i = 0; i < (int)item.nv; ++i) {
+    const int x = item.has_xyf ? (int)std::lround(item.xsf[i]) : item.xs[i];
+    const int y = item.has_xyf ? (int)std::lround(item.ysf[i]) : item.ys[i];
+    bounds.min_x = std::min(bounds.min_x, x);
+    bounds.min_y = std::min(bounds.min_y, y);
+    bounds.max_x = std::max(bounds.max_x, x);
+    bounds.max_y = std::max(bounds.max_y, y);
+  }
+  return bounds;
+}
+
+RqPixelSample rq_probe_item_pixel(GpuState &gpu, const RqItem &item, int x, int y) {
+  RqPixelSample sample;
+  if (x < item.da_x0 || x > item.da_x1 || y < item.da_y0 || y > item.da_y1) {
+    return sample;
+  }
+  float centerWeights[3];
+  const int vertexCount = item.nv ? item.nv : 4;
+  int triangle = rqProbeBarycentric(item, 0, (float)x + 0.5f, (float)y + 0.5f, centerWeights) ? 0 : -1;
+  if (triangle < 0 && vertexCount == 4 &&
+      rqProbeBarycentric(item, 1, (float)x + 0.5f, (float)y + 0.5f, centerWeights)) {
+    triangle = 1;
+  }
+  if (triangle < 0) {
+    return sample;
+  }
+  sample.covered = true;
+  sample.triangle = triangle;
+  sample.interpolated_depth =
+      rqProbeInterpolate(centerWeights, item.depth[triangle], item.depth[triangle + 1], item.depth[triangle + 2]);
+  const auto shadeChannel = [&](const uint8_t channels[4]) {
+    return (int)lrintf(rqProbeInterpolate(
+        centerWeights, (float)channels[triangle], (float)channels[triangle + 1], (float)channels[triangle + 2]));
+  };
+  const int vertexR = shadeChannel(item.rs);
+  const int vertexG = shadeChannel(item.gs);
+  const int vertexB = shadeChannel(item.bs);
+  if (item.mode == 3) {
+    sample.writes = true;
+    sample.blends = item.semi != 0;
+    sample.shaded_r = vertexR;
+    sample.shaded_g = vertexG;
+    sample.shaded_b = vertexB;
+    return sample;
+  }
+
+  float integerWeights[3];
+  if (!rqProbeBarycentric(item, triangle, (float)x, (float)y, integerWeights)) {
+    integerWeights[0] = centerWeights[0];
+    integerWeights[1] = centerWeights[1];
+    integerWeights[2] = centerWeights[2];
+  }
+  const int u = rqProbeUv(item, triangle, integerWeights, item.us);
+  const int v = rqProbeUv(item, triangle, integerWeights, item.vs);
+  const GpuTextureSample texture = gpu.sample_tex_at(
+      u, v, item.tp_x, item.tp_y, item.mode, item.clut_x, item.clut_y, item.tw_mx, item.tw_my, item.tw_ox, item.tw_oy);
+  sample.u = texture.u;
+  sample.v = texture.v;
+  sample.source_word = texture.source_word;
+  sample.palette_index = texture.palette_index;
+  sample.texel = texture.texel;
+  sample.writes = texture.texel != 0;
+  sample.blends = sample.writes && item.semi && (texture.texel & 0x8000);
+  sample.shaded_r = rqProbeModulate(texture.texel & 0x1f, vertexR, item.raw != 0);
+  sample.shaded_g = rqProbeModulate((texture.texel >> 5) & 0x1f, vertexG, item.raw != 0);
+  sample.shaded_b = rqProbeModulate((texture.texel >> 10) & 0x1f, vertexB, item.raw != 0);
+  return sample;
+}
+
+bool rq_source_ot_candidate_wins(const RqItem &candidate, const RqPixelProbeWinner &current) {
+  return candidate.sort_key >= 0 && (!current.valid || candidate.key_ord > current.key_ord ||
+                                     (candidate.key_ord == current.key_ord && candidate.seq < current.seq));
+}
+
+void RenderQueue::observeEmittedPrim(Core *core, const RqItem &item, uint32_t finalOrder, uint32_t depthBiasOrder) {
+  GpuState &gpu = core->game->gpu;
+  int x = 0;
+  int y = 0;
+  if (!gpu.pixel_probe_target(x, y)) {
+    return;
+  }
+  if (pixelProbe.frame != gpu.s_frame) {
+    if (pixelProbe.frame >= 0) {
+      rqProbeLogFinal(pixelProbe);
+    }
+    pixelProbe.frame = gpu.s_frame;
+    pixelProbe.x = x - gpu.s_disp_x;
+    pixelProbe.y = y - gpu.s_disp_y;
+    pixelProbe.display_x = gpu.s_disp_x;
+    pixelProbe.display_y = gpu.s_disp_y;
+    pixelProbe.display_w = gpu.s_disp_w;
+    pixelProbe.display_h = gpu.s_disp_h;
+    pixelProbe.semi_seen = false;
+    pixelProbe.shipping = {};
+    pixelProbe.source_ot = {};
+    pixelProbe.guest_ot = {};
+  }
+  const RqProbeBounds bounds = rq_probe_item_bounds(item);
+  const RqPixelSample sample = rq_probe_item_pixel(gpu, item, x, y);
+  if (!sample.covered) {
+    return;
+  }
+  const float d32 =
+      item.order_mode == RQ_OM_DEPTH ? gpu_vk_map_ordered_3d_depth(sample.interpolated_depth, depthBiasOrder) : -1.0f;
+  lucent::info(
+      "primat-rq",
+      "f{} final_order={} depth_bias_order={} seq={} node={:08X} painter={:08X} packet={:08X} "
+      "ot_order={} layer={} om={} "
+      "semi={} tri={} "
+      "nv={} key={} key_ord={:.6f} authored_depth={} "
+      // The PRODUCER-AUTHORED replay position -- the guest OT bin the game's own submitter
+      // computed for this face. Distinct from authored_depth (which only says whether depth[]
+      // already encodes OT order) and from sort_key (the guest-derived key, -1 for most prims).
+      // Omitting it made "authored=0" read as "this face carries no authored order" when every
+      // actor producer passes scene_painter_order::...(otBin, ...) on every submit; the probe
+      // could not show the other answer, so it could only mislead. replay_domain=0 means the
+      // face genuinely has none.
+      "replay_domain={:08X} replay_ot={} replay_link={} replay_sub={} "
+      "compare={} interp={:.9f} D32={:.9f} "
+      "mode={} raw={} tp=({},{}) clut=({},{}) uv=({},{}) source={:04X} index={} texel={:04X} "
+      "transparent={} writes={} blends={} rgb0=({},{},{}) shaded=({},{},{}) bbox=({},{})-({},{}) viewZ_ord={:.6f}",
+      pixelProbe.frame,
+      finalOrder,
+      depthBiasOrder,
+      item.seq,
+      item.dbg_node,
+      // WHICH PRODUCER SUBMITTED IT. dbg_node is the guest object and is 0 for any prim not
+      // wrapped in a beginObject scope, which is most of them — so a probe line could name
+      // neither the object nor the code that emitted it, and "who drew this" stayed a guess
+      // (Spyro issue 0120, where an untextured quad beating terrain could not be attributed
+      // to a producer at all). painter_object is the producer key every native submitter
+      // already opens its PainterObjectScope with.
+      (uint32_t)item.painter_object,
+      item.guest_packet,
+      item.guest_ot_order,
+      item.layer,
+      item.order_mode,
+      item.semi,
+      sample.triangle,
+      item.nv,
+      item.sort_key,
+      (double)item.key_ord,
+      item.authored_depth,
+      item.painter_replay.domain,
+      item.painter_replay.key.ot_bin,
+      item.painter_replay.key.link_ordinal,
+      item.painter_replay.key.chain_suborder,
+      gpu_vk_world_depth_compare_name(),
+      sample.interpolated_depth,
+      d32,
+      item.mode,
+      item.raw,
+      item.tp_x,
+      item.tp_y,
+      item.clut_x,
+      item.clut_y,
+      sample.u,
+      sample.v,
+      sample.source_word,
+      sample.palette_index,
+      sample.texel,
+      sample.texel == 0 && item.mode != 3,
+      sample.writes,
+      sample.blends,
+      // WHAT IT ACTUALLY PAINTED, AND WHERE. For an untextured prim (mode 3) the probe's
+      // `texel` is 0000 by construction, which reads exactly like a black texel — so the one
+      // question a wrong-occlusion report asks ("is THIS the coloured blob I can see?")
+      // could not be answered from the line at all. The vertex colour answers it, and the
+      // screen bounding box separates "drawn in the wrong place" from "drawn at all",
+      // which is the fork Spyro issue 0120 is stuck on.
+      item.rs[0],
+      item.gs[0],
+      item.bs[0],
+      sample.shaded_r,
+      sample.shaded_g,
+      sample.shaded_b,
+      bounds.min_x,
+      bounds.min_y,
+      bounds.max_x,
+      bounds.max_y,
+      item.depth[0]);
+
+  if (sample.blends) {
+    pixelProbe.semi_seen = true;
+  }
+  if (sample.writes && !sample.blends && item.order_mode == RQ_OM_DEPTH &&
+      (!pixelProbe.shipping.valid || gpu_vk_world_depth_test_passes(d32, pixelProbe.shipping.d32))) {
+    pixelProbe.shipping = rqProbeWinner(item, sample, finalOrder, d32);
+  }
+  if (sample.writes && !sample.blends && rq_source_ot_candidate_wins(item, pixelProbe.source_ot)) {
+    pixelProbe.source_ot = rqProbeWinner(item, sample, finalOrder, d32);
+  }
+  if (item.guest_packet && sample.writes && !sample.blends) {
+    pixelProbe.guest_ot = rqProbeWinner(item, sample, finalOrder, d32);
+  }
+}
+
+// --- Native scene accounting (graphics OWNERSHIP) -----------------------------------------------
+// Read-only walk of the same OT DrawOTag DMAs, classifying every primitive into engine-meaningful
+// categories so the port can ACCOUNT for each draw (VRAM copies = reflection/fade buffers, fills,
+// large/semi overlays = fade tiles, env). PSXPORT_SCENEDUMP=N. (later-99)
+static int gp0_cmd_len(uint8_t op) {
+  if (op >= 0x20 && op <= 0x3F) {
+    int nv = (op & 0x08) ? 4 : 3, per = 1 + ((op & 0x04) ? 1 : 0) + ((op & 0x10) ? 1 : 0);
+    return 1 + nv * per - ((op & 0x10) ? 1 : 0);
+  }
+  if (op >= 0x40 && op <= 0x5F) {
+    return 0;
+  }
+  if (op >= 0x60 && op <= 0x7F) {
+    int t = (op & 0x04) ? 1 : 0, sz = (op >> 3) & 3;
+    return 1 + 1 + t + (sz == 0 ? 1 : 0);
+  }
+  if (op == 0x02) {
+    return 3;
+  }
+  if (op >= 0x80 && op <= 0x9F) {
+    return 4;
+  }
+  if (op >= 0xA0 && op <= 0xDF) {
+    return 3;
+  }
+  return 1;
+}
+void gpu_scene_dump(Core *core, FILE *out, uint32_t madr) {
+  const int s_frame = core->game->gpu.s_frame;
+  uint32_t addr = madr & 0x1FFFFC;
+  int npoly = 0, nrect = 0, nline = 0, nfill = 0, ncopy = 0, nup = 0, nenv = 0;
+  fprintf(out, "[scene] f%d OT@0x%08X — classified display list:\n", s_frame, 0x80000000u | addr);
+  for (int g = 0; g < 0x10000; g++) {
+    uint32_t hdr = core->mem_r32(addr);
+    int n = hdr >> 24, i = 0;
+    while (i < n) {
+      uint32_t c = core->mem_r32(addr + 4 + i * 4);
+      uint8_t op = c >> 24;
+      int len = gp0_cmd_len(op);
+      if (len <= 0) {
+        break;
+      }
+      uint32_t w1 = (i + 1 < n) ? core->mem_r32(addr + 4 + (i + 1) * 4) : 0;
+      uint32_t w2 = (i + 2 < n) ? core->mem_r32(addr + 4 + (i + 2) * 4) : 0;
+      if (op == 0x02) {
+        nfill++;
+        fprintf(out,
+                "  FILL rgb=(%d,%d,%d) at(%d,%d) %dx%d\n",
+                c & 0xFF,
+                (c >> 8) & 0xFF,
+                (c >> 16) & 0xFF,
+                w1 & 0x3FF,
+                (w1 >> 16) & 0x1FF,
+                w2 & 0x3FF,
+                (w2 >> 16) & 0x1FF);
+      } else if (op >= 0x80 && op <= 0x9F) {
+        ncopy++;
+        uint32_t w3 = (i + 3 < n) ? core->mem_r32(addr + 4 + (i + 3) * 4) : 0;
+        fprintf(out,
+                "  COPY src(%d,%d)->dst(%d,%d) %dx%d [reflection/fade]\n",
+                w1 & 0x3FF,
+                (w1 >> 16) & 0x1FF,
+                w2 & 0x3FF,
+                (w2 >> 16) & 0x1FF,
+                w3 & 0x3FF,
+                (w3 >> 16) & 0x1FF);
+      } else if (op >= 0xA0 && op <= 0xBF) {
+        nup++;
+      } else if (op >= 0xE1 && op <= 0xE6) {
+        nenv++;
+      } else if (op >= 0x20 && op <= 0x3F) {
+        npoly++;
+        if (((op >> 1) & 1) && !((op >> 2) & 1)) {
+          fprintf(
+              out, "  POLY semi flat rgb=(%d,%d,%d) [fade/overlay?]\n", c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF);
+        }
+      } else if (op >= 0x60 && op <= 0x7F) {
+        nrect++;
+      } else if (op >= 0x40 && op <= 0x5F) {
+        nline++;
+        break;
+      }
+      i += len;
+    }
+    uint32_t next = hdr & 0xFFFFFF;
+    if (next == 0xFFFFFF || next == 0) {
+      break;
+    }
+    addr = next & 0x1FFFFC;
+  }
+  fprintf(out,
+          "[scene] f%d totals: poly=%d rect=%d line=%d fill=%d vramcopy=%d upload=%d env=%d\n",
+          s_frame,
+          npoly,
+          nrect,
+          nline,
+          nfill,
+          ncopy,
+          nup,
+          nenv);
+}
+
+void gpu_scene_log(Core *core, uint32_t madr) {
+  logDiagnosticLines("scene", [=](FILE *output) {
+    gpu_scene_dump(core, output, madr);
+  });
+}
+// On-demand scene dump for the live debug server (dbg_server.c): classify the CURRENT frame's
+// last-submitted OT (Gpu::s_ot_madr, set by gpu_dma2_linked_list) into `out`.
+void gpu_scene_dump_now(Core *core, FILE *out) {
+  gpu_scene_dump(core, out, core->game->gpu.s_ot_madr);
+}
+
+// The DISPLAY DECISION, on demand (dbg_server `disp`). Everything that decides which VRAM rectangle
+// reaches the screen, plus the draw-side clip that decides what was allowed to be written into it —
+// in one place, because a picture that is right except for a band at one edge is always a
+// disagreement between those two rectangles, and reading them out of three different logs is how
+// that gets guessed at instead of measured.
+//
+// The point of the "NEVER PROGRAMMED" annotations: a default that reads back like an answer is the
+// worst kind of diagnostic. `disp_h = 240` means one thing if the game asked for 240 lines and the
+// opposite thing if nothing ever wrote GP1(07) — and the second case is exactly when a strip of
+// framebuffer the console would never scan out ends up on screen.
+void gpu_disp_dump_now(Core *core, FILE *out) {
+  const GpuState &g = core->game->gpu;
+  const int vr = g.s_disp_vy1 - g.s_disp_vy0;
+  fprintf(out,
+          "[disp] f%d display VRAM rect = (%d,%d) %dx%d%s\n",
+          g.s_frame,
+          g.s_disp_x,
+          g.s_disp_y,
+          g.s_disp_w,
+          g.s_disp_h,
+          g.s_disp_rgb24 ? "  24-BIT" : "");
+  fprintf(out, "  GP1(05) start   = (%d,%d)\n", g.s_disp_x, g.s_disp_y);
+  fprintf(out,
+          "  GP1(07) v-range = [%d,%d) = %d line%s%s\n",
+          g.s_disp_vy0,
+          g.s_disp_vy1,
+          vr,
+          vr == 1 ? "" : "s",
+          g.s_disp_vrange_seen ? ""
+                               : "   <-- NEVER PROGRAMMED: this is the framework default, not the "
+                                 "game's value. Rows beyond what the game really scans out may be "
+                                 "on screen here and on no console.");
+  fprintf(out,
+          "  GP1(08) width   = %d, %s, %s%s\n",
+          g.s_disp_w,
+          g.s_disp_480i ? "480i" : "non-interlaced",
+          g.s_disp_pal ? "PAL" : "NTSC",
+          g.s_disp_std_seen ? "" : "   <-- GP1(08) NEVER PROGRAMMED (default)");
+  fprintf(out,
+          "  GP0(E3/E4) draw clip = (%d,%d)..(%d,%d)   GP0(E5) offset = (%d,%d)\n",
+          g.s_da_x0,
+          g.s_da_y0,
+          g.s_da_x1,
+          g.s_da_y1,
+          g.s_off_x,
+          g.s_off_y);
+  // The one comparison worth making for the caller, stated rather than left as arithmetic: the draw
+  // clip lets the game write rows the display then shows. That is normal (the clip is usually the
+  // whole buffer); it is only interesting next to a picture with a band at the bottom.
+  const int shown_y1 = g.s_disp_y + g.s_disp_h - 1;
+  if (g.s_da_y1 >= shown_y1) {
+    fprintf(out,
+            "  note: the draw clip reaches row %d and the display shows through row %d — anything "
+            "the game rasterizes down there IS on screen unless it paints over it.\n",
+            g.s_da_y1,
+            shown_y1);
+  }
+}
+
+// WHO SUBMITTED THIS FRAME'S GEOMETRY — the packet->submitter question, on the debug server.
+//
+// The REPL has had `otattr` for a long time and it was UNREACHABLE where the question is usually asked:
+// the REPL blocks the frame loop, so it cannot attach to a live window or to a long resumed session,
+// which is exactly where "what draws that thing that is missing" comes up. Same gap `renderpath` had.
+//
+// Two forms, both read-only:
+//   otattr            aggregate the CURRENT ordering table by submitter fn
+//   otattr <addr>     attribute one packet address
+//
+// It reports its DENOMINATORS because the attribution is not total: spans are recorded as the guest
+// STORES packets, so a packet whose store the span table missed (or which was written before the table
+// was armed) is UNATTRIBUTED, and a table that overflowed says so. An aggregate with no denominator
+// would read as "these are all the submitters" when it means "these are the ones I could name".
+void gpu_otattr_dump_now(Core *core, FILE *out, uint32_t oneAddr) {
+  GpuState &g = core->game->gpu;
+  OtAttr &oa = core->rsub.otAttr;
+
+  if (oneAddr) {
+    OtAttr::Span sp{};
+    if (oa.lookupStore(oneAddr, &sp)) {
+      fprintf(out,
+              "[otattr] 0x%08X <- fn=0x%08X caller=0x%08X node=0x%08X claimed=0x%08X "
+              "(span [0x%08X,0x%08X))\n",
+              oneAddr | 0x80000000u,
+              sp.fn,
+              sp.caller,
+              sp.node,
+              sp.claimed,
+              sp.lo,
+              sp.hi);
+    } else {
+      fprintf(out,
+              "[otattr] 0x%08X — NO SPAN COVERS IT. That is 'not recorded', NOT 'nobody wrote it': "
+              "%d spans this frame%s.\n",
+              oneAddr | 0x80000000u,
+              oa.spanCount(),
+              oa.spanOverflow() ? " (TABLE OVERFLOWED — attribution is incomplete)" : "");
+    }
+    return;
+  }
+
+  // Aggregate the current OT. Same link walk gpu_scene_dump uses; read-only, no gpu_gp0 side effects.
+  struct Row {
+    uint32_t fn;
+    int packets;
+  };
+  Row rows[64];
+  int nrows = 0;
+  int nodes = 0, attributed = 0, unattributed = 0, rowsDropped = 0;
+  uint32_t addr = g.s_ot_madr & 0x1FFFFC;
+  for (int guard = 0; guard < 0x10000; guard++) {
+    const uint32_t hdr = core->mem_r32(addr);
+    const unsigned n = hdr >> 24;
+    if (n) {
+      nodes++;
+      OtAttr::Span sp{};
+      if (oa.lookupStore(addr + 4, &sp)) {
+        attributed++;
+        int i = 0;
+        for (; i < nrows; i++) {
+          if (rows[i].fn == sp.fn) {
+            rows[i].packets++;
+            break;
+          }
+        }
+        if (i == nrows) {
+          if (nrows < 64) {
+            rows[nrows++] = {sp.fn, 1};
+          } else {
+            rowsDropped++;
+          }
+        }
+      } else {
+        unattributed++;
+      }
+    }
+    const uint32_t next = hdr & 0xFFFFFF;
+    if (next == 0xFFFFFF || next == 0) {
+      break;
+    }
+    addr = next & 0x1FFFFC;
+  }
+  // Biggest first — the ranking is the point when the question is "what draws most of this scene".
+  for (int i = 0; i < nrows; i++) {
+    for (int j = i + 1; j < nrows; j++) {
+      if (rows[j].packets > rows[i].packets) {
+        Row t = rows[i];
+        rows[i] = rows[j];
+        rows[j] = t;
+      }
+    }
+  }
+  fprintf(out,
+          "[otattr] f%d OT@0x%08X: %d drawing nodes, %d attributed, %d UNATTRIBUTED"
+          " (%d spans%s)\n",
+          g.s_frame,
+          0x80000000u | g.s_ot_madr,
+          nodes,
+          attributed,
+          unattributed,
+          oa.spanCount(),
+          oa.spanOverflow() ? ", TABLE OVERFLOWED" : "");
+  for (int i = 0; i < nrows; i++) {
+    fprintf(out, "  fn=0x%08X  %d packet(s)\n", rows[i].fn, rows[i].packets);
+  }
+  if (rowsDropped) {
+    fprintf(out, "  (+%d distinct fn(s) past the 64-row cap — NOT listed)\n", rowsDropped);
+  }
+  if (!nodes) {
+    fprintf(out, "  the ordering table this frame has no drawing nodes at all.\n");
+  }
+}
