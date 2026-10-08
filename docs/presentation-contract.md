@@ -1,0 +1,228 @@
+# Frame and guest-widescreen presentation contracts
+
+`FramePresenter` is the ordinary frame-fence owner. It captures every queue flush in one guest
+frame, rebases ordering metadata across those flushes, emits one real picture, captures diagnostics,
+paces the measured display fields, reconciles the presentation ledger, and resets current-frame
+capture. None of those responsibilities is interpolation.
+
+`FrameLoopShell` is the product entry boundary above that fence. After the title has registered its
+native overrides, `prepareProduct(Game&)` validates the mandatory `Game::frameDriver`, installs the
+framework-owned fatal VSync trap as the final native binding at that address, and requires the
+measured VSync fact. It performs no implicit pad, audio, render, or present service; `step` delegates
+exactly one finite `stepFrame(Core&, frame)` and refuses if that preflight was skipped. The title driver owns the measured ordering of those services and
+must call `Game::presentation.commit(...)` exactly once, or implement a measured unpresented fence.
+The shell snapshots `FramePresenter::fence()` around the call and aborts unless it advances by exactly
+one, so both a missing fence and accidental double presentation are product-contract violations.
+This keeps harness stepping and standalone stepping on one host-owned route without inventing one
+console-engine frame recipe for every title.
+
+`GameRuntime::createTemporalFramePresentation(Game&)` is an optional decorator factory. Direct
+runtimes get `nullptr` by default; `LegacyGameRuntimeAdapter` explicitly installs its hook-based
+scene source into `Fps60` to preserve existing temporal consumers. An already-60fps title commits with:
+
+```cpp
+core->game->presentation.commit(core, guestFields);
+```
+
+A title whose measured logic cadence needs interpolation creates a temporal product and passes it to
+the same fence. `Fps60::frame_commit` remains a bounded compatibility entry, while temporal capture
+chokes use the checked `fps60(Game&)` accessor. A direct-runtime link falsifier proves that constructing
+and committing a neutral `Game` does not link `Fps60` symbols.
+
+The ownership follows from psxport's own state boundary: the game-clock/presentation fence is neutral,
+while interpolation is composed only on a path that owns previous/current temporal state. Neither the
+neutral path nor a non-temporal title depends on interpolation code.
+
+## Display time and host pacing
+
+`GameRuntime::pacePresentation` decides who advances simulated display time. Its default uses
+`FramePacer::paceSubframeFields`: the represented rational field count advances Timing, devices and the
+VBlank latch, then waits for the host deadline. Existing consumers and neutral framework instances
+retain that combined behavior.
+
+A title with an explicit field scheduler advances `Timing::advanceDisplayFields` (`psx::frame::Timing`) once for each
+field it delivers, including fields without a new picture. That runtime overrides presentation
+pacing with `FramePacer::waitPresentedFields`. This waits for the same cadence without creating another
+emulated field or interrupt. Temporal subdivisions distribute host waiting over the existing field
+quota; they do not deliver a second copy of the scheduler's fields. NOPACE suppresses host waiting
+only, whichever owner delivers simulated time.
+
+Each `Game` owns a `psx::frame::FramePacer` and its running host deadline. Both pacing entry points use the same
+pure `pace_plan` decision and steady-clock waiting; instances do not share deadline state. Timing
+retains ownership of rational field accumulation and hardware IRQ latching. Titles retain their
+callback, input, audio and interrupt-service order; the host pacer does not synthesize callbacks.
+
+## Temporal scene ownership
+
+A direct runtime opts into interpolation with `Fps60(game, std::make_unique<TitleSceneSource>(...))`.
+`TemporalSceneSource` owns the paired scene inputs, frame eligibility, reconstruction at `t`, and exact
+primitive producer membership. Its `reconstruct` method submits through `Game::rqRedirect`; Fps60
+supplies the isolated queue, read-only display guard, projection-state restoration, ordering resolution,
+and merge with the captured frame. Both slots use `presentPass`; only source-owned captured primitives
+are replaced. Unrelated native world, backgrounds, and overlays survive with their captured values.
+A false eligibility result preserves the complete queue and does not reuse an earlier reconstruction.
+No source means ordinary single-frame replay, even when a temporal setting is enabled.
+
+`rotate` runs once after the real presentation, including disabled or ineligible frames. The title owns
+clearing missing endpoints and refusing incompatible pairs; the presenter does not infer identity from
+adjacent geometry. Reconstruction runs only where `Fps60::interpolationPermitted` allows it and, ordinarily, only while
+fps60 is active. That predicate is one answer read by every gate (`active`, the per-pass tier-1 gate,
+and the announcement): the broad `RenderMode::enhancementsAllowed()` permission, which stays
+Native-only, OR the Gte path with a source that declares `interpolatesGuestGeometry()` — a source whose
+in-between field is the captured frame's OWN primitives with each vertex moved toward where the same
+vertex was a frame earlier (`GuestGeometrySceneSource`). The pairing comes from projection provenance,
+never from pixels: `ProjectionProvenance` records every scoped GTE RTPS/RTPT as (title scope, ordinal of
+the distinct transform, model-space vertex) → SXY, cut where the guest hands an ordering table to the GPU
+so the log belongs to the table actually drawn; `GuestGeometryInterpolation` resolves each packet's vertex
+words exactly against that log (the face's own instructions first, then its transform alone) and refuses
+a primitive whose readings moved differently. Nothing re-runs and nothing writes guest memory, so the
+display-pass guard stays armed. Every other host-side enhancement remains locked out on Gte. `Device` is
+excluded from the narrow permission: it shows the GPU device untouched.
+
+A source that declares `capturedQueueIsComplete()` presents its captured queue VERBATIM at the real
+frame. Its captured items already are the geometry that pass draws, so replacing them with a second run
+of the same submission could only make the real frame worse; the reconstruction is for the in-between
+slot alone. The default is false, which is the answer for a source whose captured items are capture-only
+inputs and therefore need the reconstruction at `t=1` as well. A source whose guest-time walk deliberately captures inputs without emitting its geometry can
+explicitly request `requiresEndpointReconstruction()`: this preserves its current-endpoint draw at
+`t=1` while interpolation is disabled, without scheduling an intermediate callback. The GameHooks
+adapter uses that policy and retains its camera/object/backdrop captures and existing producer filter.
+Direct scene sources do not depend on those hooks or the adapter's `mTier1EligibleCur` latch.
+
+## Title-declared presentation capabilities
+
+Every `GameRuntime` returns a `RenderCapabilities` profile. This is the single title-owned answer for
+whether Native producers exist, whether temporal interpolation exists, which render path ships by
+default, and which paths a player may select. Direct runtimes must answer explicitly; the legacy
+adapter explicitly preserves Native plus temporal interpolation while its consumers migrate.
+
+An already-60fps widescreen-only runtime returns `RenderCapabilities::widescreenOnly()`: GTE is the
+shipping/player path, PSX remains a diagnostic path, and Native plus temporal interpolation are
+unsupported. `render_path_install`, RmlUi, REPL, and the debug server all consult this same policy.
+An unsupported launch request resolves to the declared default and the live CVar reports that
+effective path rather than the rejected request.
+
+`Mods` consumes the temporal declaration before loading settings. Unsupported titles refuse an
+enabled saved/environment fps60 request, keep the live field off, omit `fps60=` on the next save, and
+publish no fps60 row binding. `MenuPane` removes unavailable bindings from both layout and navigation.
+This is capability absence, not a disabled implementation and not a game-owned menu fork.
+
+## Title-owned guest widescreen
+
+The broad `RenderMode::enhancementsAllowed()` gate remains Native-only, and guest widescreen does not
+relax it. GTE still receives no internal-resolution scaling, native depth, or deferred native passes.
+The ONE thing GTE now accepts is a temporal in-between whose source declares
+`interpolatesGuestGeometry()` — the guest's own captured primitives, moved by provenance-proven vertex
+pairs, which is a different question from a PC enhancement of the guest picture and is gated by its own
+narrow predicate (`Fps60::interpolationPermitted`), not by this one.
+
+A direct runtime may separately return a `GuestWidescreenProjection`. The policy declares an aspect,
+but declaration alone cannot stretch or widen a frame. The title must call
+`gpu_vk_latch_guest_projection` at its measured guest projection publication site and apply the
+returned plan to its own projection, draw clipping, culling, and layout. The framework then exposes
+the matching latched host presentation span on `RenderPath::Gte`. `RenderPath::Device`, oracle, and SBS
+remain 4:3 reference pictures.
+
+The latch accepts three deliberately distinct title facts:
+
+- GP1 display extent, decoded by the framework (including the dedicated 368-dot mode);
+- title-authored projection extent, whose center determines OFX;
+- title-authored guest draw/clip width.
+
+Those values are not interchangeable. For example, a title may publish a 384x480 projection around
+OFX 192 while displaying and clipping 368x448. The pure `GuestProjectionPlan` derives separate
+presentation, projection, and draw widths and margins from one aspect rule. Each extent is widened
+directly from its own 4:3 width to the smallest even width that does not undershoot the requested
+aspect; rounding from a 320-wide display is never compounded into a distinct projection width. It never owns title
+culling formulae, view matrices, H, OFY, primitive offsets, or executable addresses.
+
+The plan is frame-stable: host presentation reads only the stored latch. Changing a setting cannot
+widen an old guest projection; the title must publish the matching projection again. Invalid or zero
+title geometry refuses instead of inventing a plausible default.
+
+## What counts as a widening, and what actually breaks one
+
+Read this before diagnosing a title's widescreen, because the obvious diagnosis is the wrong one and
+it has been reached independently on more than one title.
+
+**On a PSX the horizontal field of view is the ratio `OFX / H`, not `H`.** `native_projection.cpp`
+computes `sx = ofx + ir[0] * (h / sz)`, so the visible horizontal half-extent at depth `pz` is
+`ofx * pz / h` and the half-angle is governed by `ofx/h`. Therefore:
+
+- **Moving OFX outward at unchanged H IS a widening.** It grows the frustum by exactly the canvas
+  ratio, leaves the centre pixel mapping to `x/z = 0`, and leaves central scale and vertical FOV
+  untouched. Mega Man X4 widens OFX 160 -> 214 at H = 512 (ratio 428/320), Tekken 3 widens 192 -> 256 at
+  a title-owned H = 500, Tomba! 1 widens 160 -> 214 at H = 544. All three are 4/3 widenings by this
+  rule, and all three keep `OFX = W/2` so the retail frustum is symmetric.
+- **Substituting a SMALLER H is a zoom, not a widening.** It changes central scale. The unique pair
+  that widens by 4/3 at unchanged central scale is `OFX = W/2, H` unchanged.
+- **No register combination is a bare translation while also centring the picture,** because centring
+  forces `OFX = W/2` and that *is* the FOV change. A picture that sits off-centre in a wider canvas is
+  the opposite defect, not this one.
+- `tools/port/widescreen_pair.py` already names the passing case and rules on it: "TRANSLATION — the
+  wide frame contains the 4:3 frame at its ORIGINAL SCALE, offset by `(wide_w - narrow_w)//2`, with
+  genuinely new content at the sides. This is a real horizontal FOV widening." Widening by moving OFX
+  and widening by reducing H produce byte-identical frames, so no pixel tool can and should separate
+  them.
+
+So when a title's wide picture is wrong, the projection registers are usually right. The two defect
+classes that actually produce a bad wide picture, both verified in this workspace:
+
+1. **A horizontal culling owner still comparing against a retail 4:3 literal.** The frustum widens,
+   the cull does not, and the new margins are empty. Measured, pending fix: Mega Man X4's
+   `is_on_screen` (`0x8002B288`) compares `-32`/`352` and `quad_is_on_screen` (`0x800D46F4`) compares
+   `w < 320` four times; Tekken 3's stage-tile selector `FUN_8006D95C` is fed authored 600/780
+   visibility-wedge angles from `FUN_8006D014` (`0x8006D1C4`, `0x8006D24C`) while the stage and effect
+   clippers have already been ported to `guestDrawWidth`. A widened picture is only as wide as the
+   narrowest culling owner still allows.
+2. **An authored 4:3 2D composition that never consumes the margin.** See `wide_2d_layout.h`: the
+   layout rule existed and was correct, but its one application site asked only the host wide engine
+   and so was false on every frame of a `RenderPath::Gte` title.
+
+Both are the same shape of mistake — a retail constant that widens nothing — and `widescreen_pair.py`
+has a distinct verdict for each: `WIDENED BUT OFF-CENTRE`, and `WIDENED BUT … MARGIN IS NOT COVERAGE`.
+Diagnose with those two verdicts in mind before touching a register.
+
+## Native projection precision
+
+`native_projection::project` preserves the exact PSX integer SXY, SZ, IR and FLAG results while
+its native floating screen/depth channels retain fractional transformed coordinates. Both those
+endpoint channels and title-owned intermediate samples call `project_view`: it clamps source X/Y
+to the signed IR bounds, clamps depth to H/2 without narrowing it to an integer register, and
+applies the screen bounds after projection. The nondefault sf/lm diagnostic adapter retains its
+previous IR-based float inputs.
+
+A title captures authored geometry and transforms, then derives any intermediate raw view
+coordinates from matching sources. `project_view` owns neither matching nor temporal history.
+Mixing integer-IR endpoint projection with fractional midpoint projection makes a stationary
+source move between presentation slots; narrowing midpoint depth additionally changes perspective
+at fractional or greater-than-32767 depths. The native projection test preserves hardware outputs
+while exercising fractional endpoints, clamps, and large floating depths. Spyro's actual Fps60
+presenter regression checks stationary fractional geometry at both ordinary and large depth.
+
+## Consumer migration
+
+An already-60fps direct runtime should:
+
+1. derive `GameRuntime`, not use the legacy compatibility bags;
+2. return `RenderCapabilities::widescreenOnly()` and leave
+   `createTemporalFramePresentation` at its null default;
+3. implement and return a title-owned `GuestWidescreenProjection` only after locating the real guest
+   projection/culling owners;
+4. latch positive projection and draw geometry at that publication boundary, then apply the returned
+   center/clip extents in title code;
+5. commit each measured frame through `Game::presentation` with its real guest-field count.
+
+Consumer verification must include 4:3 identity, the requested wide aspect, reference-path
+suppression, and a real-frame A/B proving the original central picture is not rescaled and that H,
+vertical center, UV, color, depth/order, and unrelated guest state remain unchanged.
+
+`transform` retains each signed 44-bit affine accumulator and its MAC overflow history;
+`project_transformed` owns the subsequent IR/SZ saturation, reciprocal division, screen/depth-cue
+classification and flags. Ordinary `project` composes those same owners. `sample_view` interpolates
+matching raw fixed inputs in double precision, floors interior values to 1/4096 view units and
+passes them through that projection owner. Exact endpoints retain the ordinary result. It refuses
+nonfinite/out-of-range fractions, malformed signed-44 values and either endpoint's affine overflow:
+a final wrapped accumulator cannot reveal a canceled intermediate overflow. Titles must retain
+source/resource identity, constant projection parameters and independently transformed inputs for
+authored precision/refinement streams; scaling a projected vertex does not meet this contract.
