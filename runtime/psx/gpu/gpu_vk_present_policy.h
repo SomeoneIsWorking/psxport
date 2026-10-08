@@ -1,0 +1,106 @@
+#pragma once
+#include <stdint.h>
+
+// ---- "Does this present have anything new to show?" ------------------------------------------------
+//
+// A present is paced by the display field clock, but a guest need not produce a new picture every
+// field. Hardware handles that by simply re-scanning the SAME framebuffer: a field in which the guest
+// did nothing shows the previous image again. The renderer reproduces that by re-showing the last
+// composite instead of rebuilding one (gpu: afca817d).
+//
+// The trap this header exists to close: "the guest did nothing" was read as "the geometry batch is
+// empty", and that is only true for a port whose NATIVE producer owns the whole picture. A port still
+// running the guest's own drawing has a SECOND way to produce a new picture — writing the framebuffer
+// directly, via a CPU->VRAM upload, a fill, or a VRAM->VRAM copy, submitting zero primitives. Those
+// screens (logo stills, loading screens, fades, pre-rendered art) are not "nothing new"; they are the
+// whole frame. Treating them as nothing new never builds a composite at all, so they show black.
+//
+// That is issue 0029 one level up. 0029 was the same assumption inside render_geom ("total == 0 means
+// clear to black"), fixed by the title runtime's guest-VRAM-picture policy. The empty-batch early-out then landed
+// ABOVE upload_vram, so the preserve control could not be reached and the screens went black again.
+//
+// So the predicate is deliberately about VISIBLE CHANGE, not activity: rebuild when either source
+// of a new picture fired. A texture/CLUT upload outside the displayed rectangle is real VRAM work,
+// but it cannot change scanout and must not replace the current composite. It remains pending until
+// the next real build. The decision carries the reason so diagnostics can name it.
+enum PresentRebuild {
+  // Neither the geometry batch nor guest VRAM changed since the composite was built. Re-show it.
+  PRESENT_REUSE_LAST = 0,
+  // The guest submitted primitives this frame.
+  PRESENT_REBUILD_GEOM,
+  // The guest wrote the framebuffer directly (GP0 0xA0 upload / fill / VRAM->VRAM copy / native
+  // load_image) since the composite was built, and submitted no primitives. THE UPLOAD-ONLY SCREEN.
+  PRESENT_REBUILD_VRAM,
+  // The title changed whether guest VRAM is picture content. The persistent composite was built
+  // under the opposite ownership rule and must be rebuilt even if no other producer changed.
+  PRESENT_REBUILD_OWNERSHIP,
+  PRESENT_REBUILD_COUNT,
+};
+
+// guestVramIsPicture: GameRuntime::guestVramIsPicture() — the port's current-frame statement about
+//   whether the guest's VRAM is part of the picture. It has to be consulted here, and it is NOT a convenience
+//   gate to shrink the blast radius; the arm below is only MEANINGFUL when it is set. If a port's
+//   native producer owns the frame, render_geom clears an empty batch to black, so "rebuild because
+//   the guest wrote VRAM" would composite black over a good frame — strictly worse than re-showing
+//   it. A guest VRAM write is new PICTURE content exactly when guest VRAM is the picture. This is the
+//   same switch render_geom consults for its clear, so the two decisions cannot drift apart.
+// vramWrites: a monotonically increasing count of guest CPU->VRAM write operations (the gpu_vk_dirty()
+//   chokepoint). vramWritesAtLastBuild: its value when the composite currently on screen was built.
+//   Compared with != rather than > so wraparound cannot wedge the decision into "never rebuild".
+// guestDisplayChanged: pending dirty rectangles intersect the displayed framebuffer. This is exact
+//   VRAM address ownership, not a classifier inferred from frame contents or primitive activity.
+// deviceIsPicture: RenderPath::Device — the presented buffer is the GPU device's VRAM, the whole picture
+//   at every present. The two inputs above are blind on that path (no VK primitive, no dirty mark), so
+//   it is checked first and does not consult guestVramIsPicture.
+// Does the VRAM backdrop hold real picture content, so that render_geom must NOT clear it away when
+// no native primitive was submitted this frame?
+//
+// On RenderPath::Device render_geom's batch is always empty, so `total == 0` says nothing about whether
+// there is a picture; the device's VRAM is the picture and must not be cleared.
+//
+// The two inputs are independent reasons for the same conclusion, so neither may veto the other.
+static inline bool vram_backdrop_is_picture(bool guestVramIsPicture, bool deviceIsPicture) {
+  return guestVramIsPicture || deviceIsPicture;
+}
+
+// Should render_geom LOAD the existing PC composite instead of clearing the whole 1024x512 target?
+//
+// `guestGeometryPath` is RenderPath::Gte: the guest still owns its ordinary PSX double-buffering, but
+// its GP0 primitives are rasterized into the PC composite rather than s_vram. That composite must be
+// persistent for the same reason hardware VRAM is persistent. While the guest draws page A, the display
+// scans the completed page B; clearing the whole target before drawing A erases B immediately before it
+// is scanned. This is independent of `guestVramIsPicture`: texture/CLUT uploads in s_vram are not
+// themselves the picture on Gte, while the already-rasterized PC framebuffer pages still persist.
+//
+// The first build under an ownership rule remains a clear. Otherwise a newly-created GPU texture would
+// be LOADed with undefined contents, and a transition away from a guest-VRAM backdrop could retain the
+// old owner's pixels. Once that initialization/re-ownership build has happened, Gte preserves both
+// pages and the guest's own fills/background primitives clear the page it is actually drawing.
+static inline bool preserve_composite_backdrop(bool guestVramIsPicture,
+                                               bool deviceIsPicture,
+                                               bool guestGeometryPath,
+                                               bool rebuildForOwnership) {
+  return vram_backdrop_is_picture(guestVramIsPicture, deviceIsPicture) || (guestGeometryPath && !rebuildForOwnership);
+}
+
+static inline PresentRebuild present_rebuild_decision(bool batchEmpty,
+                                                      bool guestVramIsPicture,
+                                                      uint32_t vramWrites,
+                                                      uint32_t vramWritesAtLastBuild,
+                                                      bool rebuildForOwnership = false,
+                                                      bool deviceIsPicture = false,
+                                                      bool guestDisplayChanged = true) {
+  if (deviceIsPicture) {
+    return PRESENT_REBUILD_VRAM;
+  }
+  if (!batchEmpty) {
+    return PRESENT_REBUILD_GEOM;
+  }
+  if (rebuildForOwnership) {
+    return PRESENT_REBUILD_OWNERSHIP;
+  }
+  if (guestVramIsPicture && guestDisplayChanged && vramWrites != vramWritesAtLastBuild) {
+    return PRESENT_REBUILD_VRAM;
+  }
+  return PRESENT_REUSE_LAST;
+}
