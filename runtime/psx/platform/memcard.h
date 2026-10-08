@@ -1,0 +1,145 @@
+// class Memcard — the host-backed MEMORY CARD device.
+//
+// One per Game (`c->game->memcard.method()`); 128 KB backing file. In SBS with two Games each has
+// its own memcard instance (only one actually opens the host file — the other is inert). See
+// memcard.cpp for the docstring on how Tomba!2 accesses the card via the BIOS libcard/libmcrd and
+// file APIs, and why every I/O completes synchronously against a real host file (no SIO IRQ = no
+// spin).
+#pragma once
+#include "card_syscall_log.h"
+#include "pad_recording.h"
+#include <cstdint>
+#include <cstdio>
+#include <vector>
+struct Core;
+struct GameConfig;
+struct HostIdentity;
+class Game;
+struct HostIdentity;
+
+struct McFd {
+  int used;
+  int block;
+  uint32_t pos;
+  uint32_t size;
+};
+
+class Memcard {
+public:
+  Game *game = nullptr; // back-pointer wired by Game()
+
+  static constexpr uint32_t kFrameSize = 128u;
+  static constexpr uint32_t kFrames = 1024u;              // 16 blocks × 64 frames
+  static constexpr uint32_t kSize = kFrameSize * kFrames; // 128 KB
+  static constexpr uint32_t kBlocks = 16u;
+  static constexpr uint32_t kBlockFrames = 64u;
+  static constexpr uint8_t kDirFree = 0xA0u;
+  static constexpr uint8_t kDirUsedFirst = 0x51u;
+
+  // Physical-layer card I/O — host-file backed.
+  void init();
+  // The backing file chosen by init(); empty before it.
+  const char *path() const {
+    return mPath;
+  }
+  bool present() const {
+    return mCard != nullptr;
+  }
+  // The card image as it stands now and its identity (a missing file reads as the blank formatted
+  // card init() would create, without creating it). A pad recording stores the identity so a replay
+  // can refuse a card that sends the title's front end down a different branch, and keeps the bytes
+  // so the card a recording started from can be handed to whoever replays it.
+  psx::input::CardSnapshot snapshot();
+  static std::vector<uint8_t> formattedDirectory(); // frames 0..15 of a blank formatted card
+  // Return TRUE only if the frame was actually moved. A card image that failed to open, or a frame
+  // index off the end of the card, used to be a silent no-op that returned zeros — so a transfer the
+  // backend could not perform was indistinguishable from one that worked, and the BIOS file API
+  // above it announced I/O-END for a save that never landed.
+  bool readFrame(uint32_t frame, uint8_t *out128);
+  bool writeFrame(uint32_t frame, const uint8_t *in128);
+
+  // PSX card-filesystem helpers (directory scan + free-block allocation).
+  int dirFind(const char *name);
+  int dirCreate(const char *name, uint32_t size);
+
+  // Directory ENUMERATION — the BIOS firstfile/nextfile pair (B0:0x42 / B0:0x43), which is how the
+  // save/load browser discovers what is on the card. `dirScanBegin` arms a scan for a shell pattern
+  // (the part after "bu00:", `*` and `?` supported); `dirScanNext` writes the next match into a
+  // guest DIRENTRY and returns false once the directory is exhausted. The cursor lives here, per
+  // card, because nextfile carries no state of its own beyond the DIRENTRY it is handed.
+  //
+  // DIRENTRY (Sony libapi, 40 bytes): +0x00 char name[20], +0x14 attr, +0x18 size, +0x1C next,
+  // +0x20 head, +0x24 char system[4].
+  static constexpr uint32_t kDirEntNameLen = 20u;
+  static constexpr uint32_t kDirEntAttr = 0x14u, kDirEntSize = 0x18u, kDirEntNext = 0x1Cu, kDirEntHead = 0x20u,
+                            kDirEntBytes = 0x28u;
+  void dirScanBegin(const char *pattern);
+  bool dirScanNext(Core *c, uint32_t direntVa);
+
+  // BIOS file-API descriptor table (native).
+  static constexpr int kFdBase = 3;
+  static constexpr int kFdMax = 11;
+  int fdAlloc(int block, uint32_t size);
+  bool fdValid(int fd) const {
+    return fd >= kFdBase && fd < kFdMax && mFd[fd].used;
+  }
+  McFd *fdAt(int fd) {
+    return fdValid(fd) ? &mFd[fd] : nullptr;
+  }
+  void fdFree(int fd) {
+    if (fd >= kFdBase && fd < kFdMax) {
+      mFd[fd].used = 0;
+    }
+  }
+
+  // ---- whole-machine state (runtime/psx/state/device_bus.cpp) ---------------------------------
+  // The descriptor table and the directory-enumeration cursor are private because only the card
+  // filesystem writes them. A save state still has to carry both — the guest holds descriptor NUMBERS
+  // across calls, and an enumeration caught mid-walk has a cursor the next BIOS call continues from —
+  // so they are read and written through this narrow pair rather than by widening the class's public
+  // surface to its whole private table.
+  const McFd *descriptorAt(int index) const {
+    return (index >= 0 && index < kFdMax) ? &mFd[index] : nullptr;
+  }
+  void restoreDescriptor(int index, const McFd &entry) {
+    if (index >= 0 && index < kFdMax) {
+      mFd[index] = entry;
+    }
+  }
+  void restoreScanCursor(const char *pattern, uint32_t block);
+  const char *scanPattern() const {
+    return mScanPat;
+  }
+  uint32_t scanBlock() const {
+    return mScanBlk;
+  }
+
+  // Diagnostics. The syscall log accounts for every dispatched BIOS card call, handled or not;
+  // see card_syscall_log.h for why an unhandled call must leave a record.
+  psxport::card::SyscallLog &syscallLog() {
+    return mSyscallLog;
+  }
+  // Deliver the libcard I/O-complete event (SwCARD/HwCARD EvSpIOE) so callers waiting on TestEvent
+  // fall through immediately. Static — routes to the Core's per-Game `class Hle`.
+  static void deliverComplete(Core *c);
+  // …and its opposite. An operation the backend could not perform completes with the ERROR spec
+  // instead, which is the ONLY channel a libmcrd consumer can see a card failure through: the BIOS
+  // call's return value is a "busy, retry" flag, so it cannot carry an error (see memcard.cpp).
+  static void deliverError(Core *c);
+
+private:
+  FILE *mCard = nullptr;
+  char mPath[1024] = {0};
+  psxport::card::SyscallLog mSyscallLog;
+  McFd mFd[kFdMax] = {};
+  char mScanPat[64] = {0};     // firstfile/nextfile pattern, device prefix already stripped
+  uint32_t mScanBlk = kBlocks; // next directory block to examine; kBlocks = scan exhausted/unarmed
+
+  static char *resolvePath(const struct HostIdentity &identity);
+  static void mkParents(const char *path);
+};
+
+// BIOS dispatch entry points (called from hle.cpp `class Hle`'s dispatchBios via C linkage).
+extern "C" int card_hle_a0(uint32_t fn, Core *c);
+extern "C" int card_hle_b0(uint32_t fn, Core *c);
+void card_overrides_init(Game *game);
