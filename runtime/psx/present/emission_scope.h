@@ -62,6 +62,8 @@ public:
   void bindPacket(std::uint32_t packetAddress);
   // The key of the packet whose header word is at `packetAddress`, with part 0.
   std::optional<RecordKey> keyFor(std::uint32_t packetAddress) const;
+  // keyFor without the scope serial, the key two scopes of one object share.
+  std::optional<RecordKey> identityFor(std::uint32_t packetAddress) const;
   // Main RAM was replaced wholesale (a savestate load): nothing is bound.
   void clear();
 

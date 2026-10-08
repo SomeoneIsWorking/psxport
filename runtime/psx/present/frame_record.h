@@ -20,6 +20,12 @@ struct RecordKey {
   std::uint32_t serial = 0; // the object scope that bound the packet; names the state it saved, not the object
 
   bool operator==(const RecordKey &) const = default;
+  // The key without the scope serial: the object a packet belongs to, equal across frames and respawns of the scope.
+  [[nodiscard]] RecordKey identity() const {
+    RecordKey key = *this;
+    key.serial = 0;
+    return key;
+  }
 };
 
 struct RecordKeyHash {

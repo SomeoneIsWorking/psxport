@@ -30,12 +30,6 @@ void blendPositions(DrawPrimitive &out, const DrawPrimitive &previous, float t) 
   }
 }
 
-// Pairing is by object and element across frames; the scope serial differs every call.
-RecordKey pairingKey(RecordKey key) {
-  key.serial = 0;
-  return key;
-}
-
 } // namespace
 
 FrameRecord keyedBlend(const FrameRecord &previous, const FrameRecord &current, float t) {
@@ -44,7 +38,7 @@ FrameRecord keyedBlend(const FrameRecord &previous, const FrameRecord &current, 
   for (const RecordEntry &entry : previous.entries()) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entry);
     if (primitive != nullptr && primitive->key) {
-      earlier[pairingKey(*primitive->key)].push_back(primitive);
+      earlier[primitive->key->identity()].push_back(primitive);
     }
   }
   if (earlier.empty()) {
@@ -54,7 +48,7 @@ FrameRecord keyedBlend(const FrameRecord &previous, const FrameRecord &current, 
   for (const RecordEntry &entry : out.entries()) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entry);
     if (primitive != nullptr && primitive->key) {
-      uses[pairingKey(*primitive->key)]++;
+      uses[primitive->key->identity()]++;
     }
   }
   for (RecordEntry &entry : out.entries()) {
@@ -63,7 +57,7 @@ FrameRecord keyedBlend(const FrameRecord &previous, const FrameRecord &current, 
       continue;
     }
     // A key used twice in either frame names no single primitive: drawn as N.
-    const RecordKey key = pairingKey(*primitive->key);
+    const RecordKey key = primitive->key->identity();
     const auto found = earlier.find(key);
     if (found == earlier.end() || found->second.size() != 1 || uses[key] != 1) {
       continue;

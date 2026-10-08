@@ -164,8 +164,25 @@ static void test_clear_unbinds_everything(void) {
   CHECK(!scope.keyFor(0x80100000u).has_value());
 }
 
+static void test_identity_ignores_the_scope_serial(void) {
+  EmissionScope scope;
+  {
+    EmissionScope::Guard first(scope, kProducer, 0xA0u, 2);
+    writePacket(scope, 0x80100000u);
+  }
+  {
+    EmissionScope::Guard second(scope, kProducer, 0xA0u, 2);
+    writePacket(scope, 0x80100100u);
+  }
+  CHECK(scope.keyFor(0x80100000u) != scope.keyFor(0x80100100u));
+  CHECK(scope.identityFor(0x80100000u) == scope.identityFor(0x80100100u));
+  CHECK(scope.identityFor(0x80100000u) == (RecordKey{kProducer, 0xA0u, 2u, 0u}));
+  CHECK(!scope.identityFor(0x80100200u).has_value());
+}
+
 int main(void) {
   RUN(stores_outside_a_scope_bind_nothing);
+  RUN(identity_ignores_the_scope_serial);
   RUN(a_packet_is_keyed_by_its_first_command_word);
   RUN(a_link_written_into_the_header_keeps_the_key);
   RUN(a_command_word_rewritten_outside_a_scope_is_unkeyed);

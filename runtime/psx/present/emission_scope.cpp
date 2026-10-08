@@ -101,6 +101,14 @@ std::optional<RecordKey> EmissionScope::keyFor(std::uint32_t packetAddress) cons
   return words_[*word];
 }
 
+std::optional<RecordKey> EmissionScope::identityFor(std::uint32_t packetAddress) const {
+  const std::optional<RecordKey> key = keyFor(packetAddress);
+  if (!key) {
+    return std::nullopt;
+  }
+  return key->identity();
+}
+
 void EmissionScope::clear() {
   std::fill(words_.begin(), words_.end(), RecordKey{});
 }
