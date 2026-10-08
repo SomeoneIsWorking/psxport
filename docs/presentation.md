@@ -144,6 +144,10 @@ so a picture is always drawn from the state its own packets came from. States ar
 `kRetainedFrames` logic frames. An object drawn from two scopes, or a scope that saved twice, is
 ambiguous and keeps its entries.
 
+The serial names a state, not an object, and differs on every scope: `RecordKey ==` compares it, so code that
+asks whether two packets belong to the same object compares `RecordKey::identity()` (or reads
+`EmissionScope::identityFor`), the key without the serial. Producer tests assert identity keys.
+
 ## Interpolation
 
 The composer builds the frame at `t` from S's record:
