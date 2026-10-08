@@ -1,0 +1,37 @@
+name: Asset-free native runtime contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64:
+    name: Linux x86-64 native/Lightrec contract
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - name: Check out psxport with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13.15"
+      - name: Select locked uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.10.12"
+          enable-cache: false
+      - name: Provision the shared Linux build inputs
+        uses: ./.github/actions/setup-linux
+      - name: Run the asset-free product and repository contracts
+        run: uv run --frozen python tools/verify.py
