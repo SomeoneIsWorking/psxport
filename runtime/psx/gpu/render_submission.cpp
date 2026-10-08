@@ -1,0 +1,276 @@
+// Resolved primitive construction is shared by live and isolated admission queues.
+#include "render_queue.h"
+
+#include "game.h"
+#include "gpu_vk.h" // gpu_vk_wide_presentation — is the GUEST's own projection the widened one?
+#include "host_backtrace.h"
+#include "wide_2d_layout.h" // the 2D layout transform for a Core, by EITHER widening mechanism
+
+#include <cstdlib>
+#include <lucent/log.h>
+
+namespace {
+void observeSubmission(Core *core, int layer) {
+  // WHO draws the undeclared prims — `PSXPORT_DEBUG=unscoped`.
+  //
+  // The census can say HOW MANY undeclared prims a layer holds; it cannot say WHICH C++ producer pushed
+  // them, and without that the only way to shrink the number is to guess a file, scope it, and re-measure.
+  // That guessing already cost a round: four producers were identified and scoped on solid evidence, and
+  // the undeclared totals did not move by a single prim, because none of the four runs in that replay.
+  // So capture the CALL SITE at the moment a prim arrives with no producer declared.
+  //
+  // Deduplicated by stack, and capped by NOVELTY rather than by count: every DISTINCT stack is printed
+  // once, so a producer pushing 300k prims and one pushing 12 are equally visible. A plain "first N"
+  // cap would have printed 8 lines of the same hot loop and hidden every other producer behind it.
+  if (!core->rsub.producerScope.active() && core->rsub.guestGp0Depth == 0 && lucent::channel_on("unscoped")) {
+    void *frames[24];
+    const int n = backtrace(frames, 24);
+    // Cheap order-sensitive hash of the return addresses — enough to tell distinct call sites apart.
+    uint64_t h = 1469598103934665603ull;
+    for (int i = 0; i < n; i++) {
+      h ^= (uint64_t)(uintptr_t)frames[i];
+      h *= 1099511628211ull;
+    }
+    static uint64_t seen[64];
+    static int seenN = 0;
+    bool fresh = true;
+    for (int i = 0; i < seenN; i++) {
+      if (seen[i] == h) {
+        fresh = false;
+        break;
+      }
+    }
+    if (fresh) {
+      if (seenN < (int)(sizeof seen / sizeof seen[0])) {
+        seen[seenN++] = h;
+      }
+      char **sym = backtrace_symbols(frames, n);
+      lucent::Line ln;
+      ln.add("UNDECLARED native prim #{} layer={} — no ProducerScope open. Call site:\n", seenN, (int)layer);
+      // Skip this function's own frame; print the producer chain above it.
+      for (int i = 1; i < n && i < 12; i++) {
+        ln.add("    {}\n", sym && sym[i] ? sym[i] : "?");
+      }
+      ln.flush(lucent::Level::Warn, "unscoped");
+      free(sym);
+    } else if (seenN >= (int)(sizeof seen / sizeof seen[0])) {
+      // The table is full: say so ONCE rather than silently deduplicating against a truncated set,
+      // which would read as "these are all the producers".
+      static bool warned = false;
+      if (!warned) {
+        warned = true;
+        lucent::warn("unscoped",
+                     "distinct-call-site table FULL at {} entries — further NEW sites are "
+                     "no longer reported. Scope what is listed and re-run.",
+                     seenN);
+      }
+    }
+  }
+}
+} // namespace
+
+void RenderQueue::emitOrQueue(Core *core,
+                              int capture,
+                              int layer,
+                              int order_mode,
+                              int nv,
+                              int semi,
+                              int raw,
+                              const int *xs,
+                              const int *ys,
+                              const float *xsf,
+                              const float *ysf,
+                              const int *us,
+                              const int *vs,
+                              const unsigned char *rs,
+                              const unsigned char *gs,
+                              const unsigned char *bs,
+                              const float *depth,
+                              int mode,
+                              int tp_x,
+                              int tp_y,
+                              int clut_x,
+                              int clut_y,
+                              int tw_mx,
+                              int tw_my,
+                              int tw_ox,
+                              int tw_oy,
+                              int da_x0,
+                              int da_y0,
+                              int da_x1,
+                              int da_y1,
+                              int tp_blend,
+                              const float (*sv)[3],
+                              int sort_key,
+                              float key_ord,
+                              int shade_gouraud,
+                              int dither,
+                              PainterReplayOrder painter_replay,
+                              uint32_t guest_packet,
+                              uint32_t guest_ot_order,
+                              const RqGuestXy *guest_xy) {
+  if (observation == Observation::Live) {
+    observeSubmission(core, layer);
+  }
+
+  // ---- WIDESCREEN 2D layout — the ONE layout authority for NATIVE screen-space producers (USER
+  // 2026-07-16: dialog/prompt panels sat left-anchored in wide). The wide FB spans [0,ww) with the
+  // world centred at ww/2, so a 4:3-authored x hugs the left edge until it is centred.
+  //
+  // WHICH SPACE the coordinates are in is DECLARED by the producer (RenderQueue::Space2dScope), not
+  // inferred here. It used to be inferred, and the inference was wrong for every producer whose x
+  // comes out of the widened projection rather than a 4:3 layout — see rq_2d_xform and kanban #73.
+  // The rule itself lives in rq_2d_xform (hermetically tested); this is only its application.
+  // 3D (RQ_OM_DEPTH) never enters. At 4:3 the transform is the identity.
+  int wxs[4];
+  float wxsf[4];
+  {
+    if (order_mode != RQ_OM_DEPTH && wide_2d_layout_active(*core)) {
+      // The material shape selects the background stretch: only a UNIFORM SOLID FILL (flat vertex
+      // colour AND untextured) may be spread across the wide FB.
+      const bool flat = rs && gs && bs && rs[0] == rs[1] && rs[1] == rs[2] && rs[2] == rs[3] && gs[0] == gs[1] &&
+                        gs[1] == gs[2] && gs[2] == gs[3] && bs[0] == bs[1] && bs[1] == bs[2] && bs[2] == bs[3];
+      const bool untextured = (!us || (us[0] == 0 && us[1] == 0 && us[2] == 0 && us[3] == 0)) &&
+                              (!vs || (vs[0] == 0 && vs[1] == 0 && vs[2] == 0 && vs[3] == 0));
+      // wide_2d_layout asks BOTH widening mechanisms whether this Core is wider than its own 4:3
+      // width. It used to ask only the host wide engine, which is `path == RenderPath::Native`, so on
+      // every GTE-path widescreen-only title the conjunction was false on every frame and this rule
+      // never ran: Mega Man X4's all-2D composition sat 164 px left of centre with 635/635 sprites 2D
+      // and 0/635 3D. See wide_2d_layout.h.
+      const Rq2dXform t = wide_2d_layout(*core, m2dSpace, layer, flat, untextured);
+      for (int i = 0; i < nv; i++) {
+        wxs[i] = t.apply(xs[i]);
+        if (xsf) {
+          wxsf[i] = t.applyf(xsf[i]);
+        }
+      }
+      xs = wxs;
+      if (xsf) {
+        xsf = wxsf;
+      }
+      // The draw-area clip is in the producer's space too, so it moves with the vertices it bounds.
+      da_x0 = t.apply(da_x0);
+      da_x1 = t.apply(da_x1);
+    }
+  }
+
+  // ---- WIDESCREEN clip for a GUEST-WIDENED picture — the rule the plan was published for.
+  //
+  // A primitive on a guest-widened frame needs no vertex transform — the 2D block above already
+  // moved it into the wide frame — but it DOES need a clip rectangle wide enough to contain the
+  // result. The guest states its rectangle through GP1 E3/E4 and it is snapshotted here, so on
+  // Spyro 2 it still says `x1 = 511` for a 684-column canvas: the extra geometry is queued,
+  // rasterises, and is discarded, and the margins present black. Measured on Spyro 2's Glimmer:
+  // 1970 prims per frame spanning x -170..652, 82 of them past 511, and ink stopping at column 597
+  // of a 684-column presentation.
+  //
+  // `GuestProjectionPlan::guestClipRight` was computed, published, documented and asserted by its own
+  // unit test for exactly this, and consumed by nothing. This is its consumer.
+  //
+  // INERT WHERE IT MUST BE, and both directions are load-bearing:
+  //   * 4:3 — `plan.widescreen()` is false, so the branch does not execute at all;
+  //   * a NATIVE-path title — `gpu_vk_wide_presentation` is false there (`guestWidescreenAllowed` is
+  //     a GTE-path permission), so its host-owned widening is untouched.
+  //   * NEVER NARROWS. A guest that already stated a wider rectangle than the plan keeps its own.
+  // IT IS NOT KEYED ON THE ORDER MODE, and the first version was, and that version could never fire.
+  // Measured on Spyro 2 with the 2D block instrumented: 775,259 submissions per run arrive as
+  // `space = RQ_2D_AUTHORED_4_3`, `layer = RQ_HUD`, `om = RQ_OM_2D_FG`, because the pure-GTE-path
+  // policy in `gpu_native.cpp` forces `is3d = 0` and `bg = 0` for every guest prim — the picture is
+  // PSX painter order by construction, and `is3d`'s own writers have no callers, so it reads 0 for
+  // every title on Lightrec. Keying on `RQ_OM_DEPTH` therefore excluded the very primitives this rule
+  // exists for: the register was demonstrably widened (`register now (683, 227)`, and 1,337
+  // submissions per run carrying `da 86..769`) while the right margin stayed black.
+  //
+  // What is actually being asked is "were these coordinates produced by a projection the host has
+  // already widened", and `gpu_vk_wide_presentation` is that question and the same one
+  // `wide_2d_layout` asks two lines above. Every producer shape answers it identically.
+  if (gpu_vk_wide_presentation(core)) {
+    const GuestProjectionPlan &plan = core->game->guestDisplay.plan();
+    if (plan.widescreen()) {
+      if (plan.guestClipRight > da_x1) {
+        da_x1 = plan.guestClipRight;
+      }
+      // THE LEFT END IS THE SAME RULE. The 2D block above moved the clip WITH the vertices, so a
+      // guest rectangle of 0..511 arrived here as 86..597 — its left edge now sits at the margin, and
+      // every primitive that straddles the guest's own left edge is cut at column 86 instead of at
+      // column 0. That is the mirror of the bug this rule was written for: widening only the right
+      // end produced a working right margin and a hard-edged left one, which reads as "the left side
+      // has no geometry" when in fact the geometry was queued and discarded. Spyro 2's Glimmer is the
+      // measured case: the same frame that inked 49.8 % of columns 598..683 inked nothing in 0..85.
+      if (plan.guestClipLeft < da_x0) {
+        da_x0 = plan.guestClipLeft;
+      }
+    }
+  }
+  // Zero-init: only the later key-order resolver may promote authored_depth from ordinary real depth.
+  RqItem it{};
+  it.flush_ordinal = 0;
+  it.layer = (uint8_t)layer;
+  it.semi = semi ? 1 : 0;
+  it.nv = (uint8_t)nv;
+  it.raw = raw ? 1 : 0;
+  it.order_mode = (uint8_t)order_mode;
+  it.painter_object = mPainterObject;
+  it.painter_replay = painter_replay;
+  it.guest_packet = guest_packet;
+  it.guest_ot_order = guest_ot_order;
+  if (guest_xy) {
+    it.has_guest_xy = 1;
+    for (int k = 0; k < 4; ++k) {
+      it.guest_x[k] = guest_xy->x[k];
+      it.guest_y[k] = guest_xy->y[k];
+    }
+  }
+  it.painter_flags = mPainterFlags;
+  it.shade_gouraud = shade_gouraud ? 1 : 0;
+  it.dither = (dither || (mPainterFlags & PAINTER_OBJECT_DITHER)) ? 1 : 0;
+  // objid overlay: stamp the entity node the native render walk is currently rendering (submit.cpp).
+  // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
+  // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.
+  // RQ_BACKGROUND also carries currentNode() (#54): Render::backdropRender scopes itself with
+  // kBackdropDbgNode (render_queue.h) the same way world producers do, so Fps60::isTier1Owned can key on
+  // ITS prims specifically. Any RQ_BACKGROUND item from OUTSIDE that scope (the generic guest-OT-walk bg
+  // classification in gpu_native.cpp — no beginObject wraps it) still gets dbg_node==0, unchanged.
+  it.dbg_node = (layer == RQ_WORLD || layer == RQ_BACKGROUND) ? core->rsub.diag.currentNode() : 0;
+  it.sort_key = sort_key;
+  it.key_ord = key_ord;              // game's own OT sort key (kanban #11) — -1 = none
+  it.has_xyf = (xsf && ysf) ? 1 : 0; // sub-pixel float XY (vertex smoothing) supplied by the world path
+  for (int i = 0; i < nv; i++) {
+    it.xs[i] = xs[i];
+    it.ys[i] = ys[i];
+    it.us[i] = us[i];
+    it.vs[i] = vs[i];
+    it.xsf[i] = it.has_xyf ? xsf[i] : (float)xs[i];
+    it.ysf[i] = it.has_xyf ? ysf[i] : (float)ys[i];
+    it.rs[i] = rs[i];
+    it.gs[i] = gs[i];
+    it.bs[i] = bs[i];
+    it.depth[i] = depth ? depth[i] : 0.0f;
+  }
+  it.mode = mode;
+  it.tp_x = tp_x;
+  it.tp_y = tp_y;
+  it.clut_x = clut_x;
+  it.clut_y = clut_y;
+  it.tw_mx = tw_mx;
+  it.tw_my = tw_my;
+  it.tw_ox = tw_ox;
+  it.tw_oy = tw_oy;
+  it.da_x0 = da_x0;
+  it.da_y0 = da_y0;
+  it.da_x1 = da_x1;
+  it.da_y1 = da_y1;
+  it.tp_blend = tp_blend;
+  if (capture) {
+    RqItem *slot = push();
+    if (slot) {
+      uint32_t sq = slot->seq;
+      uint32_t dsq = slot->draw_seq;
+      *slot = it;
+      slot->seq = sq;
+      slot->draw_seq = dsq;
+    }
+  } else {
+    emitItem(core, &it);
+  }
+}
