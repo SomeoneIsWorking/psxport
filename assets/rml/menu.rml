@@ -1,0 +1,99 @@
+<rml>
+<head>
+	<title>Tomba2Engine</title>
+	<link type="text/rcss" href="rml.rcss"/>
+	<link type="text/rcss" href="menu.rcss"/>
+</head>
+<body>
+	<window id="window">
+		<tab-bar id="tab-bar">
+			<tab>Display</tab>
+			<tab>Debug</tab>
+			<tab>Game</tab>
+			<tab>Sound</tab>
+			<tab>About</tab>
+		</tab-bar>
+		<content id="content">
+			<!-- NON-ASCII GLYPHS ARE NUMERIC CHARACTER REFERENCES: &#183; is "·", &#8212; is "—".
+			     Never write an HTML entity NAME here (middot, mdash, rarr, hellip, times, copy…).
+			     RML is XML-ish, not HTML: RmlUi decodes the four XML predefined names plus numeric
+			     references and NOTHING else, so an unknown name is passed straight through and
+			     RENDERS LITERALLY — that is exactly the bug the user reported in the readouts.
+			     tests/test_rml_text_encoding.cpp lints this whole file for it, comments included,
+			     which is why this note spells the names without their punctuation. -->
+			<!-- One <pane> per tab; psx::ui::MenuDocument pairs the Nth <tab> with the Nth
+			     <pane> and shows only the selected one (a count mismatch is now an error,
+			     not a silent std::min clamp). Each focusable row is a <select-button> with a <key>
+			     (label) + <value>. `tab-index: auto` (RCSS, in menu.rcss) drives Up/Down nav.
+			     A row carries EXACTLY ONE of three attributes, and there is no fourth:
+			       toggle="<id>"  cycles a named state (Off/On, or Vanilla/16:9/21:9/Auto)
+			       adjust="<id>"  steps a number, and is the only kind Left/Right act on
+			       action="<id>"  is a one-shot button (quit / close / return_to_selector / warp_go / music_*)
+			     (An earlier version of this note also listed `cycle="<id>"`. NOTHING has ever
+			     read that attribute — a row carrying it would be inert. `toggle` already
+			     handles multi-state rows. Do not reintroduce it.)
+			     An id psx::ui::ModRowModel does not know is now reported as an error at load
+			     instead of producing a dead row. The value text is refreshed from live state
+			     by psx::ui::MenuDocument every frame the menu is open. -->
+			<pane>
+				<div id="video_readout" class="readout">render -</div>
+				<div id="world_readout" class="readout"></div>
+
+				<div class="section-heading">Display</div>
+				<select-button toggle="render_path"><key>Renderer</key><value>Native / PC</value></select-button>
+				<select-button toggle="aspect"><key>Aspect Ratio</key><value>Vanilla</value></select-button>
+				<select-button toggle="ires"><key>Internal Resolution</key><value>Vanilla</value></select-button>
+				<select-button toggle="fps60"><key>60fps Interpolation</key><value>Off</value></select-button>
+				<select-button toggle="face_order"><key>Face Ordering</key><value>Depth (enhanced)</value></select-button>
+				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
+			</pane>
+
+			<pane>
+				<div class="section-heading">Debug</div>
+				<select-button toggle="debug_quads"><key>Highlight Quads (billboards)</key><value>Off</value></select-button>
+				<select-button toggle="debug_objects"><key>Highlight 3D Objects</key><value>Off</value></select-button>
+				<p class="hint">Boxes each game object at its world position + shows id and WORLD x,y,z. Quads (2D sprites at 3D positions) are yellow; 3D meshes are cyan.</p>
+
+				<div class="section-heading spaced">Area Warp</div>
+				<div id="warp_readout" class="readout"></div>
+				<select-button adjust="warp_area"><key>Destination</key><value>Area 0</value></select-button>
+				<select-button action="warp_go"><key>Warp There</key><value>&#8594;</value></select-button>
+				<p class="hint">Only from the field &#8212; the warp runs the game's own door transition (fade, teardown, reload), so it needs a running field. Unnamed areas show as "Area N"; names live in docs/areas.md.</p>
+				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
+			</pane>
+
+			<pane>
+				<div class="section-heading">Game</div>
+				<select-button action="close"><key>Resume</key><value>&#8629;</value></select-button>
+				<select-button action="return_to_selector"><key>Return to Title Selection</key><value>&#8617;</value></select-button>
+				<select-button action="quit"><key>Quit Game</key><value>&#10005;</value></select-button>
+				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A select &#183; Esc close</p>
+			</pane>
+
+			<pane>
+				<div class="section-heading">Sound Test</div>
+				<div id="music_readout" class="readout">stopped</div>
+				<select-button action="music_0"><key>Song 0 (jingle)</key><value>&#9654;</value></select-button>
+				<select-button action="music_1"><key>Song 1 (jingle)</key><value>&#9654;</value></select-button>
+				<select-button action="music_2"><key>Song 2 (jingle)</key><value>&#9654;</value></select-button>
+				<select-button action="music_3"><key>Song 3 (jingle)</key><value>&#9654;</value></select-button>
+				<select-button action="music_4"><key>Song 4 (cue)</key><value>&#9654;</value></select-button>
+				<select-button action="music_5"><key>Song 5 (cue)</key><value>&#9654;</value></select-button>
+				<select-button action="music_6"><key>Song 6 (cue)</key><value>&#9654;</value></select-button>
+				<select-button action="music_7"><key>Song 7 (field)</key><value>&#9654;</value></select-button>
+				<select-button action="music_8"><key>Song 8 (field)</key><value>&#9654;</value></select-button>
+				<select-button action="music_9"><key>Song 9 (field)</key><value>&#9654;</value></select-button>
+				<select-button action="music_stop"><key>Stop</key><value>&#9632;</value></select-button>
+				<p class="hint">Native PC audio engine (engine/audio/) &#183; replaces the libsnd music path.</p>
+				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A play &#183; Esc close</p>
+			</pane>
+
+			<pane>
+				<div class="section-heading">About</div>
+				<p>Tomba! 2 &#8212; PC-native engine port (Tomba2Engine).</p>
+				<p class="hint">RmlUi (HTML/CSS) menu over the Vulkan renderer.</p>
+			</pane>
+		</content>
+	</window>
+</body>
+</rml>
