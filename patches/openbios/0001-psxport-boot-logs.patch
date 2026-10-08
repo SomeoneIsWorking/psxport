@@ -1,0 +1,22 @@
+diff --git a/src/mips/openbios/main/main.c b/src/mips/openbios/main/main.c
+index c21bcaf..fece2e8 100644
+--- a/src/mips/openbios/main/main.c
++++ b/src/mips/openbios/main/main.c
+@@ -363,13 +363,17 @@ static void boot(char *systemCnfPath, char *binaryPath) {
+     // As a result, in the retail bios, the static value that's
+     // always passed down to the shell is 0x07, due to the POST
+     // set just above, and the way this is deterministic.
++    psxprintf("psxport: pre-startShell\n");
+     startShell(7);
++    psxprintf("psxport: post-startShell\n");
+ 
+ #ifndef OPENBIOS_BOOT_MODE_NO_CDROM
+     POST = 8;
+     IMASK = 0;
+     IREG = 0;
++    psxprintf("psxport: initCDRom...\n");
+     initCDRom();
++    psxprintf("psxport: initCDRom done\n");
+     SETJMPFATAL(0x399);
+     // See the note about hooks in main().
+     runExp1PostHook();
