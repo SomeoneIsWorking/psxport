@@ -1,0 +1,217 @@
+/* psxport RmlUi mod/debug menu.
+
+   Renderer constraints:
+   - No `box-shadow`, no `backdrop-filter: blur`, no `filter: opacity()`, no element `opacity`.
+     RmlUi renders those via its layer / render-to-texture / composite path, which the port's
+     minimal RmlUi Vulkan render interface does not implement (base no-op layer methods). Using
+     them draws a red error placeholder / corrupts the frame. Dimming is done with rgba colors,
+     which blend correctly. border-radius (plain geometry), gradients (decorators), font-effect
+     glow (baked into the font texture) and rectangular scissor clipping all work and are used.
+   - The bundled Fira family provides "Fira Sans" and "Fira Sans Condensed". Unicode
+     arrows/glyphs are used in the markup instead of a separate icon font.
+   - Lengths are dp, so the menu keeps its physical size on a scaled display. */
+
+/* Fonts are loaded via the C++ API (Rml::LoadFontFace in the RmlUi overlay setup), NOT via @font-face:
+   this RmlUi build's RCSS parser does not support the @font-face at-rule (it errored on the block and
+   skipped it). The faces used below ("Fira Sans" / "Fira Sans Condensed") are the ones loaded there. */
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	display: flex;
+	width: 100%;
+	height: 100%;
+	padding: 64dp;
+	/* Dim the whole window so the menu reads as a modal cover over the game. */
+	background-color: rgba(0, 0, 0, 82%);
+	font-family: "Fira Sans";
+	font-weight: normal;
+	font-style: normal;
+	font-size: 15dp;
+	color: #E0DBC8;
+}
+
+/* The window: centered, dark translucent, gold border, rounded. */
+window {
+	display: flex;
+	flex-flow: column;
+	position: relative;
+	height: 100%;
+	width: 100%;
+	max-width: 1088dp;
+	max-height: 768dp;
+	margin: auto;
+	border-radius: 14dp;
+	overflow: hidden;
+	border: 2dp #92875B;
+	background-color: rgba(21, 22, 16, 90%);
+}
+
+/* --- Tab bar ------------------------------------------------------------------------------ */
+tab-bar {
+	display: block;
+	flex: 0 0 64dp;
+	height: 64dp;
+	background-color: rgba(217, 217, 217, 10%);
+	border-bottom: 2dp #92875B;
+	font-family: "Fira Sans Condensed";
+	text-transform: uppercase;
+}
+
+tab {
+	display: inline-block;
+	height: 64dp;
+	padding: 0 24dp;
+	line-height: 64dp;
+	vertical-align: top;
+	font-weight: bold;
+	font-size: 18dp;
+	white-space: nowrap;
+	color: rgba(224, 219, 200, 25%);
+	cursor: pointer;
+}
+
+tab:hover,
+tab:focus {
+	color: #E0DBC8;
+	decorator: vertical-gradient(#c2a42d00 #c2a42d26);
+}
+
+/* Selection is runtime state, so it is a pseudo-class (psx::ui::Component::set_selected), not a
+   class: `class` is the document author's namespace and a runtime SetClass writes into it. */
+tab:selected {
+	color: #E0DBC8;
+	border-bottom: 4dp #C2A42D;
+	font-effect: glow(0dp 4dp 0dp 4dp black);
+}
+
+/* --- Content / panes --------------------------------------------------------------------- */
+content {
+	display: flex;
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: hidden;
+}
+
+/* One pane per tab; only the selected tab's pane is shown. The runtime sets the `:shown`
+   pseudo-class (psx::ui::MenuPane::set_shown). It is not called `:active`: `:active` is RmlUi's
+   built-in mouse-held pseudo-class, so a pane using it for visibility would flicker on a press. */
+pane {
+	display: none;
+	flex: 1 1 0;
+	min-height: 0;
+	padding: 24dp;
+	font-size: 20dp;
+	overflow-y: auto;
+}
+
+pane:shown {
+	display: block;
+}
+
+.section-heading {
+	display: block;
+	font-family: "Fira Sans Condensed";
+	font-weight: bold;
+	text-transform: uppercase;
+	font-size: 22dp;
+	color: rgba(224, 219, 200, 35%);
+	margin-bottom: 8dp;
+}
+
+.section-heading.spaced {
+	margin-top: 16dp;
+}
+
+/* A settings row: label on the left, value right-aligned. The whole row takes focus so a
+   controller/keyboard has a clear, readable highlight. */
+select-button {
+	display: block;
+	background-color: rgba(17, 16, 10, 20%);
+	padding: 8dp 16dp;
+	margin-bottom: 8dp;
+	border-radius: 14dp;
+	border: 1dp rgba(146, 135, 91, 25%);
+	cursor: pointer;
+	/* RmlUi keys focus navigation off the `tab-index` RCSS property (default `none`), NOT the HTML
+	   `tabindex` attribute, so this — not a markup attribute — is what makes Up/Down step rows. */
+	tab-index: auto;
+	focus: auto;
+}
+
+select-button:hover,
+select-button:focus {
+	background-color: rgba(204, 184, 119, 20%);
+	border: 1dp #C2A42D;
+}
+
+select-button key {
+	display: inline-block;
+	width: 70%;
+	font-family: "Fira Sans Condensed";
+	font-weight: bold;
+	font-size: 18dp;
+	text-transform: uppercase;
+	vertical-align: middle;
+}
+
+select-button value {
+	display: inline-block;
+	width: 28%;
+	text-align: right;
+	font-size: 20dp;
+	color: #E0DBC8;
+	vertical-align: middle;
+}
+
+select-button:hover value,
+select-button:focus value {
+	color: #C2A42D;
+}
+
+/* --- Scrollbar --------------------------------------------------------------------------- */
+scrollbarvertical {
+	width: 8dp;
+	margin: 4dp 4dp 4dp 0;
+}
+
+scrollbarvertical slidertrack {
+	background-color: rgba(255, 255, 255, 5%);
+	border-radius: 2dp;
+}
+
+scrollbarvertical sliderbar {
+	width: 8dp;
+	min-height: 24dp;
+	background-color: rgba(224, 219, 200, 45%);
+	border-radius: 2dp;
+}
+
+scrollbarvertical sliderbar:hover,
+scrollbarvertical sliderbar:active {
+	background-color: rgba(194, 164, 45, 80%);
+}
+
+scrollbarvertical sliderarrowdec,
+scrollbarvertical sliderarrowinc {
+	height: 0;
+}
+
+/* Footer hint line at the bottom of a pane. */
+.hint {
+	display: block;
+	margin-top: 12dp;
+	font-size: 15dp;
+	color: rgba(224, 219, 200, 45%);
+}
+
+/* Read-only status line (video/world readout). */
+.readout {
+	display: block;
+	font-family: "Fira Sans Condensed";
+	font-size: 15dp;
+	color: rgba(224, 219, 200, 60%);
+	margin-bottom: 8dp;
+}
