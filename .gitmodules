@@ -1,0 +1,15 @@
+[submodule "vendor/beetle-psx"]
+	path = vendor/beetle-psx
+	url = https://github.com/SomeoneIsWorking/beetle-psx-libretro.git
+[submodule "vendor/lucent"]
+	path = vendor/lucent
+	url = https://github.com/SomeoneIsWorking/lucent.git
+[submodule "external/psycross"]
+	path = external/psycross
+	url = https://github.com/OpenDriver2/PsyCross.git
+[submodule "vendor/rmlui"]
+	path = vendor/rmlui
+	url = https://github.com/mikke89/RmlUi.git
+[submodule "vendor/bug-report"]
+	path = vendor/bug-report
+	url = https://github.com/SomeoneIsWorking/bug-report.git
