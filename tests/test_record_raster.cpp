@@ -101,6 +101,7 @@ struct Outcome {
   bool replayed = false;
   long changed = 0; // pixels the stream changed on the device: the comparison's denominator
   std::size_t entries = 0;
+  std::size_t uploads = 0; // upload entries after the pattern: the tap's device-resolved primitives
 };
 
 // VRAM starts as a seeded pattern (applied by resync), then `stream` runs and is replayed.
@@ -141,6 +142,9 @@ Outcome replay(const Stream &stream, const std::vector<std::uint32_t> &gp1 = {})
   const std::span<const std::uint16_t> vram = device.vram();
   out.mismatched = 0;
   out.entries = record.entries().size();
+  for (const psx::present::RecordEntry &entry : record.entries()) {
+    out.uploads += std::holds_alternative<psx::present::VramUpload>(entry) ? 1 : 0;
+  }
   for (std::size_t i = 0; i < vram.size(); i++) {
     out.changed += vram[i] != pristine[i] ? 1 : 0;
     if (image[i] != vram[i] && out.mismatched++ == 0) {
@@ -818,6 +822,122 @@ static void test_textured_polygons(void) {
   }
 }
 
+// CTR's additive gouraud textured fade triangles: one vertex bright, two black, drawn under a row offset.
+static void test_steep_gouraud_textured_semi_triangles(void) {
+  Stream s = baseState();
+  const std::uint32_t texture = page(14, 0, 1, 0);
+  const std::uint32_t clut = clutAt(912, 254);
+  s.area(0, 296, 511, 511);
+  s.offset(0, 296);
+  s.add({drawMode(texture, true, false, false)});
+  s.add({rgb(0x36, 0, 0, 0),
+         xy(-20, 82),
+         uv(191, 48, clut),
+         rgb(0, 253, 255, 255),
+         xy(42, 90),
+         uv(191, 95, texture),
+         rgb(0, 0, 0, 0),
+         xy(9, 68),
+         uv(144, 48, 0)});
+  s.add({rgb(0x36, 0, 0, 0),
+         xy(2, 97),
+         uv(144, 48, clut),
+         rgb(0, 0, 0, 0),
+         xy(-20, 82),
+         uv(144, 95, texture),
+         rgb(0, 253, 255, 255),
+         xy(42, 90),
+         uv(191, 95, 0)});
+  CHECK_REPLAY(s);
+}
+
+// gpu.c fetches texels through a cache that only an upload, copy or read invalidates, and a draw reads the
+// pixels it wrote earlier; the rasterizer's snapshot read must still end on the device's picture.
+static void test_a_draw_that_samples_its_own_pixels(void) {
+  Stream s = baseState();
+  const std::uint32_t texture = page(0, 0, 0, 2);
+  s.add({drawMode(texture, false, false, false)});
+  s.add({rgb(0x25, 128, 128, 128), xy(4, 4), uv(12, 9, 0), xy(70, 6), uv(90, 7, texture), xy(30, 80), uv(30, 75, 0)});
+  s.add({rgb(0x2D, 128, 128, 128),
+         xy(10, 100),
+         uv(0, 98, 0),
+         xy(90, 100),
+         uv(80, 98, texture),
+         xy(10, 150),
+         uv(5, 120, 0),
+         xy(90, 150),
+         uv(85, 130, 0)});
+  CHECK_REPLAY(s);
+}
+
+static void test_a_draw_over_a_cached_texture_is_sampled_stale(void) {
+  Stream s = baseState();
+  const std::uint32_t texture = page(0, 0, 0, 2);
+  s.add({drawMode(texture, false, false, false)});
+  const auto sample = [&](int x, int y) {
+    s.add({rgb(0x25, 128, 128, 128),
+           xy(x, y),
+           uv(0, 0, 0),
+           xy(x + 60, y),
+           uv(60, 0, texture),
+           xy(x, y + 60),
+           uv(0, 60, 0)});
+  };
+  sample(300, 300);
+  s.add({rgb(0x20, 200, 30, 90), xy(0, 0), xy(120, 0), xy(0, 120)});
+  sample(300, 400);
+  CHECK_REPLAY(s);
+}
+
+// gpu.c SetTPage invalidates its texture cache when the page changes, from E1 or from a textured polygon's own
+// texpage word; a texture read after that sees current VRAM and needs no device-resolved pixels.
+static void test_a_texpage_change_invalidates_the_cache_through_e1(void) {
+  Stream s = baseState();
+  const std::uint32_t texture = page(0, 0, 0, 2);
+  const std::uint32_t other = page(2, 0, 0, 2);
+  s.add({drawMode(texture, false, false, false)});
+  s.add({rgb(0x20, 200, 30, 90), xy(0, 0), xy(120, 0), xy(0, 120)});
+  s.add({drawMode(other, false, false, false)});
+  s.add({drawMode(texture, false, false, false)});
+  s.add({rgb(0x25, 128, 128, 128),
+         xy(300, 300),
+         uv(0, 0, 0),
+         xy(360, 300),
+         uv(60, 0, texture),
+         xy(300, 360),
+         uv(0, 60, 0)});
+  const Outcome outcome = replay(s);
+  CHECK(outcome.replayed);
+  CHECK_EQ(outcome.mismatched, 0);
+  CHECK_EQ(outcome.uploads, 0u);
+}
+
+static void test_a_texpage_change_invalidates_the_cache_through_a_polygon(void) {
+  Stream s = baseState();
+  const std::uint32_t texture = page(0, 0, 0, 2);
+  const std::uint32_t other = page(2, 0, 0, 2);
+  s.add({drawMode(texture, false, false, false)});
+  s.add({rgb(0x20, 200, 30, 90), xy(0, 0), xy(120, 0), xy(0, 120)});
+  s.add({rgb(0x25, 128, 128, 128),
+         xy(300, 300),
+         uv(0, 0, 0),
+         xy(360, 300),
+         uv(60, 0, other),
+         xy(300, 360),
+         uv(0, 60, 0)});
+  s.add({rgb(0x25, 128, 128, 128),
+         xy(300, 400),
+         uv(0, 0, 0),
+         xy(360, 400),
+         uv(60, 0, texture),
+         xy(300, 460),
+         uv(0, 60, 0)});
+  const Outcome outcome = replay(s);
+  CHECK(outcome.replayed);
+  CHECK_EQ(outcome.mismatched, 0);
+  CHECK_EQ(outcome.uploads, 0u);
+}
+
 static void test_texture_window(void) {
   Stream s = baseState();
   const std::uint32_t texture = page(10, 0, 0, 1);
@@ -997,6 +1117,11 @@ int main(void) {
   RUN(the_first_record_follows_the_empty_one);
   RUN(flat_and_gouraud_polygons);
   RUN(textured_polygons);
+  RUN(steep_gouraud_textured_semi_triangles);
+  RUN(a_draw_that_samples_its_own_pixels);
+  RUN(a_draw_over_a_cached_texture_is_sampled_stale);
+  RUN(a_texpage_change_invalidates_the_cache_through_e1);
+  RUN(a_texpage_change_invalidates_the_cache_through_a_polygon);
   RUN(texture_window);
   RUN(sprites);
   RUN(lines);

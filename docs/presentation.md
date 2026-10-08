@@ -73,9 +73,16 @@ the device still executes every command and holds the guest-visible VRAM.
 - **Scale.** S is the internal-resolution setting (`setires`, `mods.ires`). Vertices and the draw
   area scale; texels, CLUTs and dither stay on the native grid; sprites, lines and fills cover
   S×S blocks; uploads replicate, copies run at full resolution. 24bpp display keeps the device picture.
-- **Known differences from `gpu.c`.** Its texture cache is invalidated only by copy, upload, read and
-  texpage change, so a draw into a texture page can be sampled stale there and fresh here. A draw
-  area below row 511 is clipped at 511 (the device wraps it). Texel rows are fetched `& 511`.
+- **Texture cache.** `gpu.c` fetches texels through a cache that GP0(01), copy, upload, read, soft reset and
+  `SetTPage` invalidate (SetTPage runs for E1 and for every textured polygon's own texpage word, and invalidates
+  when the page, 4bpp-or-not, or TexDisable changes), and a draw reads pixels it wrote earlier. A textured draw over
+  VRAM written since the last invalidation therefore depends on the device's fetch order, which a snapshot read
+  cannot reproduce. `TextureFeedback` (`gpu/texture_feedback.*`) follows those invalidation points and tracks the
+  64x32 tiles drawn or filled since; a textured primitive whose texture page overlaps one is recorded by the tap as
+  a `VramUpload` of the device's pixels over its draw bounds (not interpolated or widened, upload resolution at
+  S > 1). The tile is coarser than the cache, so some resolved primitives would have read fresh texels.
+- **Known differences from `gpu.c`.** A draw area below row 511 is clipped at 511 (the device wraps it). Texel
+  rows are fetched `& 511`.
 - **Capture.** `RecordRasterizer::presented()` is the picture the last present showed (the VRAM
   image's display rect, a canvas, or an in-between copy). `shot`, `preseq` and the fps60 dump all go
   through `record_shot`, which downloads it and applies the present fade; nothing else reads it.

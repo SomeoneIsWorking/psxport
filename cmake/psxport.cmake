@@ -126,6 +126,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/vendor/beetle-psx/rhi/rhi_intf.c
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_device.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu/gp0_record_tap.cpp # executed GP0 commands into the FrameRecord
+  ${PSXPORT_ROOT}/runtime/psx/gpu/texture_feedback.cpp # draws that sample VRAM gpu.c's texture cache may hold stale
   ${PSXPORT_ROOT}/runtime/psx/gpu/gp0_primitive_decode.cpp # a GP0 draw packet's words to a record primitive
   ${PSXPORT_ROOT}/runtime/psx/present/frame_record.cpp # one logic frame's GPU work in execution order
   ${PSXPORT_ROOT}/runtime/psx/present/emission_scope.cpp # producer scopes and the packet keys they bind

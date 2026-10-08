@@ -40,6 +40,7 @@ void Gp0RecordTap::resetFraming() {
 
 void Gp0RecordTap::desync() {
   record_.markIncomplete();
+  feedback_.invalidateAll();
   synced_ = false;
   resetFraming();
 }
@@ -104,6 +105,11 @@ void Gp0RecordTap::onDeviceStep(const DeviceProbe &probe) {
   verify(probe);
 }
 
+void Gp0RecordTap::onSoftReset(const DeviceProbe &probe) {
+  feedback_.invalidate();
+  feedback_.texturePage(probe.state, probe.texDisable);
+}
+
 void Gp0RecordTap::onCommandReset(const DeviceProbe &probe) {
   if (mode_ == Mode::Upload && !uploadPixels_.empty()) {
     // The device kept the pixels it already wrote; the record cannot say which.
@@ -118,6 +124,8 @@ void Gp0RecordTap::onCommandReset(const DeviceProbe &probe) {
 
 void Gp0RecordTap::onStateReplaced(const DeviceProbe &probe) {
   record_.markIncomplete();
+  feedback_.invalidateAll();
+  feedback_.texturePage(probe.state, probe.texDisable);
   resetFraming();
   clutTag_ = kInvalidClutTag;
   synced_ = false;
@@ -209,12 +217,15 @@ std::uint32_t Gp0RecordTap::captureClut(const DeviceProbe &probe) {
 void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
   const Gp0Command command(words_[0]);
   expectedDispatches_ = 1;
+  feedback_.texturePage(probe.state, probe.texDisable);
   if (command.isPolygon()) {
     recordPolygon(probe);
     if (command.polygonVertexCount() == 4) {
       quadOpcode_ = words_[0];
       mode_ = Mode::QuadTail;
       need_ = vertexWords(command);
+    } else {
+      settleLast(probe);
     }
     words_.clear();
     return;
@@ -257,6 +268,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     fill.value =
         static_cast<std::uint16_t>((colour.red >> 3) | ((colour.green >> 3) << 5) | ((colour.blue >> 3) << 10));
     fill.skipRowParity = probe.state.skipRowParity;
+    feedback_.written({fill.x, fill.y, fill.x + fill.width, fill.y + fill.height});
     record_.append(fill);
     words_.clear();
     return;
@@ -273,6 +285,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     copy.height = target.height;
     copy.maskSet = probe.state.maskSet;
     copy.maskCheck = probe.state.maskCheck;
+    feedback_.invalidate();
     record_.append(copy);
     words_.clear();
     return;
@@ -289,17 +302,20 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     upload_.sourceAddress = packetSource_;
     uploadRemaining_ = static_cast<std::uint32_t>(target.width) * static_cast<std::uint32_t>(target.height);
     uploadPixels_.clear();
+    feedback_.invalidate();
     mode_ = Mode::Upload;
     words_.clear();
     return;
   }
   if (command.isVramToCpuRead()) {
+    feedback_.invalidate();
     mode_ = probe.command == DeviceCommandState::Read ? Mode::Read : Mode::Command;
     words_.clear();
     return;
   }
   if (command.opcode() == Gp0Opcode::ClearCache) {
     clutTag_ = kInvalidClutTag;
+    feedback_.invalidate();
   }
   words_.clear();
 }
@@ -345,6 +361,7 @@ void Gp0RecordTap::finishQuad(const DeviceProbe &probe) {
     vertex.y += probe.state.offsetY;
     primitive->vertices[3] = vertex;
     primitive->vertexCount = 4;
+    settleLast(probe);
   }
   mode_ = Mode::Command;
   words_.clear();
@@ -367,6 +384,7 @@ void Gp0RecordTap::recordLineSegment(const present::RecordVertex &from,
   primitive.key = nextPrimitiveKey();
   primitive.slot = slot_;
   record_.append(primitive);
+  settleLast(probe);
 }
 
 void Gp0RecordTap::consumePolyLineWord(std::uint32_t word, const DeviceProbe &probe) {
@@ -413,6 +431,35 @@ void Gp0RecordTap::recordSprite(const DeviceProbe &probe) {
   primitive.key = nextPrimitiveKey();
   primitive.slot = slot_;
   record_.append(primitive);
+  settleLast(probe);
+}
+
+void Gp0RecordTap::settleLast(const DeviceProbe &probe) {
+  present::RecordEntry *last = record_.last();
+  const auto *primitive = last != nullptr ? std::get_if<present::DrawPrimitive>(last) : nullptr;
+  if (primitive == nullptr || !feedback_.drawn(*primitive)) {
+    return;
+  }
+  const RecordRect rect = drawBounds(*primitive);
+  if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) {
+    return;
+  }
+  present::VramUpload upload;
+  upload.x = rect.x0;
+  upload.y = rect.y0;
+  upload.width = rect.x1 - rect.x0;
+  upload.height = rect.y1 - rect.y0;
+  upload.sourceAddress = primitive->sourceAddress;
+  std::vector<std::uint16_t> pixels;
+  pixels.reserve(static_cast<std::size_t>(upload.width) * static_cast<std::size_t>(upload.height));
+  for (int y = rect.y0; y < rect.y1; y++) {
+    const auto row =
+        probe.vram.subspan(static_cast<std::size_t>(y) * kRecordVramWidth + static_cast<std::size_t>(rect.x0),
+                           static_cast<std::size_t>(upload.width));
+    pixels.insert(pixels.end(), row.begin(), row.end());
+  }
+  record_.dropLast();
+  record_.appendUpload(upload, pixels);
 }
 
 void Gp0RecordTap::consumeUploadWord(std::uint32_t word) {
