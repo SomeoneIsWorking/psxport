@@ -1,0 +1,19 @@
+#ifndef HW_BIND_H
+#define HW_BIND_H
+struct Core;
+// Bind THIS core's per-instance HW-peripheral state (so two cores — e.g. native vs guest dual-view —
+// keep SEPARATE peripheral state). Called per core frame-step + at boot, from the explicit Core.
+void gte_bind(Core *c); // gte_beetle.cpp — per-instance GTE register file
+// Initialize the division table and power the currently bound GTE at startup.
+void gte_init();
+// (native-depth cache bind moved to `class ProjPrim::bind` — call `c->rsub.projprim.bind(c)`)
+void spu_bind(Core *c); // Beetle spu.c — per-instance SPU state (lazy-powers on first bind)
+extern "C" {
+// Beetle spu.c — create and power the process SPU state that `spu_bind` binds a Core to. Declared here
+// beside the bind it precedes; two consuming repositories hand-declared it at their call site for the
+// same reason four hand-declared `native_boot_run`.
+void spu_init(void);
+}
+void mdec_bind(Core *c); // Beetle mdec.c — per-instance MDEC state (lazy-powers on first bind)
+void xa_bind(Core *c);   // xa_stream.c — per-instance XA-ADPCM streamer state
+#endif
