@@ -78,9 +78,9 @@ the device still executes every command and holds the guest-visible VRAM.
   when the page, 4bpp-or-not, or TexDisable changes), and a draw reads pixels it wrote earlier. A textured draw over
   VRAM written since the last invalidation therefore depends on the device's fetch order, which a snapshot read
   cannot reproduce. `TextureFeedback` (`gpu/texture_feedback.*`) follows those invalidation points and tracks the
-  64x32 tiles drawn or filled since; a textured primitive whose texture page overlaps one is recorded by the tap as
-  a `VramUpload` of the device's pixels over its draw bounds (not interpolated or widened, upload resolution at
-  S > 1). The tile is coarser than the cache, so some resolved primitives would have read fresh texels.
+  VRAM pixels drawn (draw bounds) or filled since; a textured primitive whose sampled texels (its UV box, or the
+  whole page axis through a texture window or an 8-bit wrap) overlap one is recorded by the tap as a `VramUpload`
+  of the device's pixels over its draw bounds (not interpolated or widened, upload resolution at S > 1).
 - **Known differences from `gpu.c`.** A draw area below row 511 is clipped at 511 (the device wraps it). Texel
   rows are fetched `& 511`.
 - **Capture.** `RecordRasterizer::presented()` is the picture the last present showed (the VRAM
