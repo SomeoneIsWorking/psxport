@@ -1,0 +1,376 @@
+#include "fps60.h"
+#include "cfg.h"
+#include "core.h"
+#include "fps60_sequence_runs.h"
+#include "game.h"           // Game-owned optional temporal product and RenderQueue
+#include "game_hooks_opt.h" // game_render_fade_state — the title's current fade, the endpoint source
+#include "in_between_present.h"
+#include "in_between_splice.h"
+#include "mods.h"        // Mods (game->mods.fps60)
+#include "proj_params.h" // ProjParams — the camera's projection constants + Snapshot save/restore
+#include "render_mode.h" // RenderMode — enhancementsAllowed/path, DisplayPassGuard (framework)
+#include "render_queue.h"
+#include <algorithm>
+#include <lucent/log.h>
+#include <span>
+#include <stdint.h>
+#include <stdlib.h>
+#include <utility>
+#include <vector>
+
+extern "C" {
+uint32_t GTE_ReadDR(unsigned);
+} // Beetle GTE (mednafen gte.c) — RTP result regs (rate tap)
+
+Fps60::Fps60(Game &owner, std::unique_ptr<InBetweenStrategy> source) : game(&owner), sceneSource_(std::move(source)) {}
+
+// Unconditional, because the interesting answer is often "nothing was ever dropped": a run whose
+// in-between splice placed every reconstructed primitive and one that dropped 19,405 of them are
+// different facts, and only the counts tell them apart. Same reason as the disc and memcard census
+// reports in `~Game`.
+Fps60::~Fps60() {
+  lucent::warn("fps60",
+               "in-between splice census [shutdown]: spliced presents={} surplus presents={} surplus "
+               "primitives={} worst single surplus={} declined captured primitives={}",
+               mSplice.splicedPresents,
+               mSplice.surplusPresents,
+               mSplice.surplusPrimitives,
+               mSplice.worstSurplus,
+               mSplice.declinedPrimitives);
+  delete mSink;
+}
+
+Fps60 &fps60(Game &game) {
+  auto *temporal = dynamic_cast<Fps60 *>(game.temporalPresentation.get());
+  if (!temporal) {
+    lucent::error("fps60", "temporal interpolation was requested from a Game that did not create it");
+    std::abort();
+  }
+  return *temporal;
+}
+
+// ---- logic-rate detector (validated lrate_proto) -----------------------------------------------------
+void Fps60::fold(uint32_t v) {
+  uint64_t h = mFrameHash;
+  for (int i = 0; i < 4; i++) {
+    h ^= (v & 0xFF);
+    h *= 1099511628211ull;
+    v >>= 8;
+  }
+  mFrameHash = h;
+  mFrameGeom++;
+}
+// gte RTP tap (fps60 gate): fold this vertex's projected SXY into the frame fingerprint. RTPS(0x01) writes
+// one SXY (DR14); RTPT(0x30) writes three (DR12/13/14). This is the ONLY remaining GTE tap — it feeds the
+// rate detector so the tier knows the logic rate (Tomba2 = 30fps → one in-between per frame).
+// See the declaration in fps60.h: the user's toggle AND the render path must both allow it.
+bool Fps60::active() const {
+  return game && game->mods.fps60 && interpolationPermitted(game->core);
+}
+
+// MAY THIS CORE PRESENT AN IN-BETWEEN AT ALL?
+//
+// Two answers, not one. `enhancementsAllowed()` is the user's broad "the guest render stays pure"
+// decision and it stays exactly as it was: Native only, and it still governs every host-side
+// enhancement.
+//
+// The second answer is narrower and it is the STRATEGY's to make, because only the strategy knows what
+// its in-between is made of (InBetweenStrategy::guestPathClaim). A strategy that rebuilds the guest's
+// own picture on the host out of a read-only reading of the guest's memory, or that interpolates the
+// guest's own captured primitives, is presenting the guest's picture at another instant rather than a
+// PC rewrite of it — so it needs no host geometry of its own and is permitted on Gte, the path that
+// already ships guest geometry. A strategy that claims nothing needs the guest's renderer to be live
+// to have produced its in-between, and stays Native-only.
+//
+// The real field is untouched either way: it is presented exactly as captured, from the same queue,
+// on the same path, with the same renderer.
+bool Fps60::interpolationPermitted(const Core &core) const {
+  if (core.rsub.mode.enhancementsAllowed()) {
+    return true;
+  }
+  return core.rsub.mode.path() == RenderPath::Gte && sceneSource_ != nullptr &&
+         sceneSource_->guestPathClaim() != InBetweenStrategy::GuestPathClaim::None;
+}
+
+void Fps60::rtp(uint32_t op) {
+  if (!active()) {
+    return;
+  }
+  unsigned lo = (op == 0x30) ? 12 : 14;
+  for (unsigned r = lo; r <= 14; r++) {
+    fold(GTE_ReadDR(r));
+  }
+}
+static void rate_tick(RateDet *d, uint64_t set_hash) {
+  if (set_hash == d->last_hash) {
+    d->held++;
+    return;
+  }
+  int p = d->held + 1;
+  if (p >= 1 && p <= 8) {
+    d->votes[p]++;
+  }
+  int best = 0, bp = 2;
+  for (int i = 1; i <= 8; i++) {
+    if (d->votes[i] > best) {
+      best = d->votes[i];
+      bp = i;
+    }
+  }
+  d->period = bp;
+  d->last_hash = set_hash;
+  d->held = 0;
+  d->changes++;
+}
+
+namespace {
+const lucent::Channel sequenceChannel{"fps60seq"};
+
+// The EMITTED stream, not the captured queue. presentPass replaces every item the scene source owns
+// with the reconstruction before anything is rasterised, so the captured queue describes prims that
+// were never drawn — on Tomba! 2's outdoor replay it named 132 items covering 39% of a picture that
+// was fully painted and visibly interpolating. `stream` is what emitItemStream hands the rasterizer,
+// so its runs are the only ones a reader can join to pixels.
+void dumpSequenceRuns(uint64_t fence, float t, std::span<const RqItem *const> stream, const InBetweenStrategy *source) {
+  lucent::debug(sequenceChannel, "f{} t={:.3f} emitted n={}", fence, t, stream.size());
+  // The painter object is part of the run key, so a verbatim run names the producer that emitted
+  // it. Grouping by layer alone made "verbatim n=478" span every producer drawing into RQ_WORLD and
+  // name none of them, which is the one thing a reader needs before choosing what to reconstruct
+  // next.
+  std::vector<psxport::fps60::SequenceRun> runs;
+  psxport::fps60::groupSequenceRuns(
+      stream,
+      [source](const RqItem &item) {
+        return source != nullptr && source->owns(item);
+      },
+      runs);
+  for (const auto &run : runs) {
+    lucent::debug(sequenceChannel,
+                  "  rqcur layer={} {:<9} n={} seq=[{}..{}] producer={:08X} node0={:08X} "
+                  "x=[{}..{}) y=[{}..{})",
+                  run.layer,
+                  run.owned ? "TIER1" : "verbatim",
+                  run.count(),
+                  stream[run.begin]->seq,
+                  stream[run.end - 1]->seq,
+                  (uint32_t)run.painterObject,
+                  run.dbgNode,
+                  run.extent.x0,
+                  run.extent.x1,
+                  run.extent.y0,
+                  run.extent.y1);
+  }
+}
+
+class ReconstructionScope {
+public:
+  ReconstructionScope(Core &core, RenderQueue &sink)
+      : core_(core), projection_(core.rsub.projParams.snapshot()),
+        redirect_(std::exchange(core.game->rqRedirect, &sink)), display_(core.rsub.mode) {}
+  ~ReconstructionScope() {
+    core_.game->rqRedirect = redirect_;
+    core_.rsub.projParams.restore(projection_);
+  }
+
+private:
+  Core &core_;
+  ProjParams::Snapshot projection_;
+  RenderQueue *redirect_;
+  DisplayPassGuard display_;
+};
+} // namespace
+
+void Fps60::tier1Render(Core *core, float t) {
+  if (!mSink) {
+    mSink = new RenderQueue();
+    mSink->game = game;
+  }
+  mSink->reset();
+  mObjLerp.reset();
+  {
+    ReconstructionScope scope(*core, *mSink);
+    sceneSource_->reconstruct(*core, t);
+  }
+  // Apply the same authored ordering resolution as the real queue before merging.
+  mSink->finalize(core, "fps60-tier1");
+  for (int i = 0; i < mSink->n; ++i) {
+    if (mSink->items[i].layer == RQ_BACKGROUND) {
+      ++mBackdropPrimsThisFrame;
+    }
+  }
+  mTier1PrimsThisFrame = mSink->n - mBackdropPrimsThisFrame;
+}
+
+void Fps60::frame_commit(Core *core, int guestFields) {
+  game->presentation.commit(core, guestFields, this);
+}
+
+void Fps60::present(psx::frame::FramePresentationBackend &backend,
+                    Core &core,
+                    psx::frame::CapturedFrameView frame,
+                    int guestFields) {
+  mCommitGuestFields = guestFields;
+  if (active()) {
+    uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
+    rate_tick(&mRd, set_hash);
+  }
+  present_vk(backend, &core, frame);
+  mFrameHash = 1469598103934665603ull;
+  mFrameGeom = 0;
+}
+
+namespace {
+// The three fade channels as one 0xRRGGBB word, so a per-present diagnostic line carries the whole
+// endpoint without six fields of noise. A previous mode of -1 in that line means "no prev yet".
+uint32_t fade_rgb(const FadeState &f) {
+  return (static_cast<uint32_t>(f.r) << 16) | (static_cast<uint32_t>(f.g) << 8) | static_cast<uint32_t>(f.b);
+}
+} // namespace
+
+// Both slots use the source's same reconstruction and captured-queue merge; only t differs.
+void Fps60::present_vk(psx::frame::FramePresentationBackend &backend, Core *core, psx::frame::CapturedFrameView frame) {
+  Core *c = core;
+  RenderQueue &q = c->game->rq;
+
+  // Once per LOGIC frame, before either present runs: roll the fade endpoints. This is the frame
+  // boundary for every consumer, including one whose frame driver calls presentation.commit itself
+  // rather than going through Fps60::frame_commit (measured: Tomba! 2 does, so a capture there
+  // never ran at all and the endpoints stayed zero).
+  c->game->presentFade.capture(game_render_fade_state(c, c->hooks));
+  if (sceneSource_) {
+    sceneSource_->beginPresentation(*c, frame, active());
+  }
+
+  const int tforce = cfg_int("PSXPORT_FPS60_TFORCE", -1);
+  const float tInterp = (tforce == 0) ? 0.0f : (tforce == 1) ? 1.0f : 0.5f;
+  const bool extraFrame = active() && sceneSource_ && mHavePrev && sceneSource_->eligible(*c);
+
+  if (extraFrame && !c->rsub.mode.enhancementsAllowed() && !mAnnouncedGuestInbetween) {
+    // Announced ONCE, because it is the one frame this path behaves differently in a way no other
+    // line records: the guest's own primitives, their vertices interpolated between two real frames,
+    // presented through the same renderer as the real field.
+    mAnnouncedGuestInbetween = true;
+    lucent::info("fps60",
+                 "temporal in-betweens ON on the {} path — made of the GUEST'S OWN primitives, each vertex "
+                 "interpolated between two real frames by its projection provenance; real frames unchanged",
+                 render_path_name(c->rsub.mode.path()));
+  }
+
+  if (extraFrame) {
+    presentPass(c, tInterp, frame);
+    gpu_present_in_between(c);
+    backend.captureDiagnostic(frame.fence, /*interpolated=*/true);
+    // Was an info line behind a latched `fps60` channel test — a per-present line that only ever appeared
+    // when the channel was asked for, so it is debug audience, not info.
+    // This used to say "replay prev=Q[N-1]", which is not what happens and sent an analysis the
+    // wrong way for a session. There is no previous queue here: psx::frame::FramePresenter::capturedFrame()
+    // returns THIS fence's items and both passes run over it, so an item no producer reconstructs
+    // is drawn in the in-between present at the position the next real frame will show it. n is
+    // that captured queue, tier1 is how much of it was replaced by reconstruction.
+    lucent::debug("fps60",
+                  "f{} slotA: in-between over Q[N] n={} tier1={} backdrop={} t={:.3f} "
+                  "objs={} lerped={} noprev={} uncaptured={} fade={}->{} 0x{:06X}->0x{:06X}",
+                  frame.fence,
+                  frame.items.size(),
+                  mTier1PrimsThisFrame,
+                  mBackdropPrimsThisFrame,
+                  mT,
+                  mObjLerp.total(),
+                  mObjLerp.lerped,
+                  mObjLerp.noPrev,
+                  mObjLerp.uncaptured,
+                  c->game->presentFade.havePrevious() ? c->game->presentFade.previous().mode : -1,
+                  c->game->presentFade.current().mode,
+                  fade_rgb(c->game->presentFade.previous()),
+                  fade_rgb(c->game->presentFade.current()));
+    backend.pace(mCommitGuestFields, 2);
+  }
+
+  // ---- PASS 2 (slot B): the real frame. SAME call, t=1 — every lerped input resolves to its current
+  // value, so this is the in-between at its near endpoint rather than a separate replay of the captured
+  // queue. That is what makes the symmetry structural instead of a property two code paths happen to
+  // share.
+  q.mLedger.inRealPresent = true; // only the real present counts as "reached the screen"
+  presentPass(c, 1.0f, frame);
+  q.mLedger.inRealPresent = false;
+  backend.presentReal();
+  backend.captureDiagnostic(frame.fence, /*interpolated=*/false);
+  // Pacing differs only BECAUSE the extra frame does: two half-frames when an in-between was inserted,
+  // one whole frame when it was not.
+  if (extraFrame) {
+    backend.pace(mCommitGuestFields, 2);
+  } else {
+    backend.pace(mCommitGuestFields, 1);
+  }
+
+  presentRotate();
+}
+
+void Fps60::presentPass(Core *c, float t, psx::frame::CapturedFrameView frame) {
+  RenderQueue &q = c->game->rq;
+  mT = t;
+  c->game->presentFade.setFactor(t);
+  mTier1PrimsThisFrame = 0;
+  mBackdropPrimsThisFrame = 0;
+  // A source whose CAPTURED QUEUE already is its geometry presents that queue VERBATIM at the real
+  // frame: replacing the field the guest drew with a copy of itself could only change measured pixels.
+  // The in-between slot still reconstructs, so this is a per-SLOT decision keyed on `t`, not a property
+  // of the source. With fps60 off there is no in-between slot, and only a source that demands an
+  // endpoint reconstruction gets one at all.
+  bool reconstructThisPass = false;
+  if (sceneSource_) {
+    reconstructThisPass = active() ? (t != 1.0f || !sceneSource_->capturedQueueIsComplete())
+                                   : (t == 1.0f && sceneSource_->requiresEndpointReconstruction());
+  }
+  const bool tier1 = reconstructThisPass && interpolationPermitted(*c) && sceneSource_->eligible(*c);
+  if (tier1) {
+    tier1Render(c, t);
+  }
+  // Only this source's producers are replaced; unrelated native world and backdrop items
+  // retain their exact captured values and position in the authored layer/sequence ordering.
+  //
+  // The substitution is `spliceInBetween`'s, and it is a SPLICE rather than a merge on (layer, seq):
+  // `seq` is stamped once at push() and never rewritten, so the reconstruction's own queue numbers
+  // its items from zero while the live frame's run to hundreds. Comparing the two numbering spaces
+  // ordered reconstructed items by an ordinal unrelated to where the guest drew them, which moved
+  // them across their un-owned neighbours. Measured on Spyro 1: the two presents of ONE logic frame
+  // carry byte-identical item lists and still differ on 11.7-27.7% of the pixels in the flame's own
+  // region, because a translucent item composited against a different background on the in-between
+  // pass than on the real one. Identical draw calls, different pixels.
+  // With no reconstruction this pass, no item is owned, and the captured queue is emitted verbatim.
+  const auto ownsItem = [this, tier1](const RqItem &item) {
+    return tier1 && sceneSource_->owns(item);
+  };
+  const psxport::fps60::SpliceCensus splice = psxport::fps60::spliceInBetween(
+      frame.items,
+      tier1 && mSink ? std::span<RqItem>(mSink->items, static_cast<std::size_t>(mSink->n)) : std::span<RqItem>(),
+      mPresentStream,
+      ownsItem);
+  // A source REBUILDS its geometry, so its item count is its own and it can outrun the slots its own
+  // producers held. Measured on Spyro 1's picker: the actor producers went 196 captured against 199
+  // reconstructed and the secondary 692 against 681. A surplus primitive has no captured slot of its
+  // own producer to take stream coordinates from, and appending it would land it in a run the painter
+  // planner refuses (measured: refused=12 DuplicateReplayKey, refused=8 UnsortedQueue). It is DROPPED,
+  // and it is COUNTED: `~Fps60` reports the run's totals, because this is the ordinary case and a
+  // per-present line would say the same thing 19,405 times.
+  if (splice.substituted > 0) {
+    ++mSplice.splicedPresents;
+  }
+  if (splice.surplus > 0) {
+    ++mSplice.surplusPresents;
+    mSplice.surplusPrimitives += (uint32_t)splice.surplus;
+    mSplice.worstSurplus = std::max(mSplice.worstSurplus, (uint32_t)splice.surplus);
+  }
+  mSplice.declinedPrimitives += (uint32_t)splice.declined;
+  if (sequenceChannel) { // guards the queue scan, not a logging call
+    dumpSequenceRuns(frame.fence, t, mPresentStream, tier1 ? sceneSource_.get() : nullptr);
+  }
+  q.emitItemStream(c, mPresentStream);
+}
+
+void Fps60::presentRotate() {
+  if (sceneSource_) {
+    sceneSource_->rotate(game->core);
+  }
+  mHavePrev = 1;
+}
