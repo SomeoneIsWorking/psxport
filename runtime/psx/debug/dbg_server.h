@@ -1,0 +1,174 @@
+// class DbgServer — the live, non-blocking TCP debug endpoint (127.0.0.1:<PSXPORT_DEBUG_SERVER>).
+//
+// One per Game (`c->game->dbg_server.method()`). The endpoint listens on a single host port and
+// dispatches queued commands to the MAIN thread once per frame via `service()`. All the socket/
+// thread machinery + pause/step state + held-input mask + main<->server handoff lives on the class.
+//
+// In SBS two Games each have their own DbgServer, but only one wins the host TCP port; the other's
+// listener bind fails and its `mStarted` stays false. Callers with `Core* c` reach the endpoint via
+// `c->game->dbg_server.method()`. No legacy free-function shims — all callers use the class directly.
+#pragma once
+#include "config_vars.h" // cv_debug_server — the endpoint's port
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+class Core;
+class Game;
+
+// The loopback port the live debug endpoint listens on, or 0 for "off".
+//
+// PSXPORT_DEBUG_SERVER carries a PORT, with 1 as the sentinel for the default, so it is read as text
+// and interpreted here — once, for both readers. `native_boot` asks whether the endpoint is on (to
+// lift the headless frame cap) and `DbgServer::start` asks which port to bind; when those two
+// answered the knob separately they could disagree about whether it was set at all, which is how a
+// capped run ended before a client could drive it.
+//
+// Unset, empty, "0" and anything that is not a number are OFF, because a knob that silently binds a
+// port nobody asked for is worse than one that does not start.
+inline int debug_server_port(std::string_view value) {
+  int port = 0;
+  for (const char c : value) {
+    if (c < '0' || c > '9') {
+      return 0; // a negative or non-numeric port is not a port; refuse rather than bind one
+    }
+    port = port * 10 + (c - '0');
+    if (port > 65535) {
+      return 0;
+    }
+  }
+  if (port == 0) {
+    return 0; // an empty value and an explicit "0" both land here, and both mean off
+  }
+  return port == 1 ? 5959 : port;
+}
+
+// Whether a client is going to drive this run over the live endpoint. Every boot spine asks this
+// before applying its own frame cap: the cap exists to bound an unattended smoke run, and a run that
+// is driven over the socket must not be capped, or the process exits before anyone can drive it.
+// The conditions a particular spine adds (no REPL, no window) are that spine's policy and stay there.
+inline bool debug_server_live() {
+  return debug_server_port(psx::config::cv_debug_server.get()) != 0;
+}
+
+class DbgServer {
+public:
+  Game *game = nullptr; // back-pointer wired by Game()
+
+  DbgServer() = default;
+  DbgServer(const DbgServer &) = delete;
+  DbgServer &operator=(const DbgServer &) = delete;
+  // Releases this Game's claim on the process endpoint so the next Game's start() re-claims it; the
+  // listening thread keeps running, and a command that arrives with no Game bound times out cleanly.
+  ~DbgServer();
+
+  // Process entry — installed by boot when PSXPORT_DEBUG_SERVER names a port. NO-OP otherwise.
+  void start(Core *c);
+
+  // Take the process endpoint for THIS Game when another Game has released it.
+  //
+  // The endpoint is process-lifetime and a claim is per-Game: `~DbgServer` drops the claim so the
+  // next Game's `start()` re-claims it. That is enough for a host that runs one Game after another
+  // and not enough for a host that runs SEVERAL and destroys one of them — the picker Game owns the
+  // endpoint, the picker builds its panels, confirming hands the chosen session to the window and
+  // the picker Game dies — after which the endpoint belonged to nobody and every command timed out
+  // on a product that was running fine. A host that destroys the claiming Game points the channel
+  // at the session that is now the product with this.
+  //
+  // Refuses while another Game still holds the claim, exactly as a second `start()` does; reports
+  // whether this Game now holds it.
+  bool claimEndpoint();
+
+  // Attach the live endpoint to a boot spine that is NOT the framework's own, and answer the frame cap
+  // that spine should use. This is the one call a title-owned spine needs before its loop; `start`
+  // alone leaves the cap question unanswered, and getting that wrong ends the process before a client
+  // can drive it.
+  //
+  // Returns 0 (uncapped) when PSXPORT_DEBUG_SERVER names a port, because the cap exists to bound an
+  // unattended smoke run and a client-driven one is neither; otherwise the requested cap unchanged.
+  int attach(Core *c, int requested_frame_cap);
+
+  // The once-per-frame half of a live session, called BEFORE the frame runs: while the client has
+  // frozen the game, do not advance it — pump host input, re-show the last presented frame, and keep
+  // servicing commands so `step` and `play` can arrive. One implementation for every boot spine,
+  // because the framework's own loop and a title's own frame driver both have to honour a pause, and
+  // two copies of "what a pause does" is how they come to disagree. The command itself is serviced
+  // by `service()` AFTER the frame, so a read never observes a half-completed one.
+  void honourPause(Core *c);
+
+  // One idle tick of a held field: pump host input (without ticking the pad-frame clock), re-show
+  // the last presented frame with the overlay over it, service one command, and sleep ~15 ms. The
+  // pause above and the in-app bug report both hold a field with exactly this.
+  void idleFrame(Core *c);
+
+  // Called once per frame from the native frame loop. Services at most one queued command; the
+  // Core* is stashed for the `call` subcommand to run guest fns at this frame boundary.
+  void service(Core *c);
+
+  // `quit` from a client: the connection is closed at once, and the run that owns its end-of-run asks
+  // this to stop. A run that never asks is unaffected, exactly as before — `quit` was always just a
+  // disconnect.
+  bool quitRequested() const {
+    return mQuitRequested.load();
+  }
+  bool takeQuitRequest() {
+    return mQuitRequested.exchange(false);
+  }
+  void requestQuit() {
+    mQuitRequested.store(true);
+  }
+
+  // Pause / step gating polled by the frame loop.
+  bool isPaused() const {
+    return mPaused;
+  }
+  bool stepPending() const {
+    return mStep > 0;
+  }
+  void consumeStep() {
+    if (mStep > 0) {
+      mStep--;
+    }
+  }
+  void setPaused(bool p) {
+    mPaused = p;
+    mStep = 0;
+  }
+  void togglePause() {
+    mPaused = !mPaused;
+    mStep = 0;
+  }
+  void addStep(int n) {
+    mPaused = true;
+    mStep += n;
+  }
+
+  // Held-input mask (set by press/release/hold subcommands, applied to c->game->pad.driveHold).
+  unsigned short heldMask() const {
+    return mHeld;
+  }
+  void setHeldMask(unsigned short m) {
+    mHeld = m;
+  }
+
+  // Command dispatcher's live Core pointer (set at the top of service()); nullptr outside a frame.
+  Core *ctx() const {
+    return mCtx;
+  }
+
+private:
+  bool mPaused = false;
+  int mStep = 0;
+  unsigned short mHeld = 0xFFFF; // active-low held mask (all released)
+
+  // Set from the SERVER thread by `quit`, read by the product loop. Atomic because it is the one
+  // field here with two threads on it.
+  std::atomic<bool> mQuitRequested{false};
+
+  Core *mCtx = nullptr; // set at the top of service(); the frame-loop Core while a command runs
+
+  // The server thread and its main<->server handoff are PROCESS-lifetime (see DbgServerInternals::Channel in
+  // dbg_server.cpp), not this object's: a Game that ends must not take the listening port, the thread, or
+  // the mutex the thread waits on with it. This object only holds what belongs to ONE Game's session.
+  friend class DbgServerInternals; // dbg_server.cpp accessor helper (see impl file)
+};
