@@ -1,0 +1,68 @@
+// xa_state.h — per-instance native XA-ADPCM CD-audio / voice-clip streamer state (xa_stream.c), so two
+// Cores keep SEPARATE streaming state (active stream, position, decode ring, clip bookkeeping). The
+// state lives in this struct, one per Game (game.h embeds it), and xa_stream.c is BOUND to one
+// instance at a time via xa_bind(Core*) — set from the explicit Core by its title FrameDriver before
+// that core runs, like gte_bind/spu_bind/mdec_bind. The decoded PCM still feeds the per-instance SPU
+// which mixes to the SHARED host audio sink (one physical speaker; a lockstep RAM/state diff is
+// unaffected by the host device, shared by design — same policy as the FMV audio sink and SPU output).
+//
+// Plain-C struct (no C++) so xa_stream.c stays C, exactly like gte_state.h's GteRegs.
+#pragma once
+#include <stdint.h>
+
+// 65536 frames ≈ 1.7 s of 37800 Hz source audio. The drive produces in sector bursts (one audio
+// sector every ~8th LBA) while the SPU pulls continuously; too small a ring turns normal burst
+// jitter into drops (measured on Vagrant Story's intro: 16384 frames filled and dropped within the
+// first second of playback even though consumption matched production overall).
+#define XA_RING_FRAMES 65536
+
+typedef struct XaState {
+  int active;                       // 1 while ReadS streaming with XA-ADPCM enabled  (was s_active)
+  int push_mode;                    // 1 = the CDC drive decodes INTO this ring (Vagrant-style native
+                                    //     controller model): pulls must NOT self-fetch sectors. 0 =
+                                    //     pull-driven cd_override model (Tomba!2), where the pull
+                                    //     advances s_lba itself.
+  uint32_t lba;                     // next CHD sector to read                        (was s_lba)
+  uint8_t mode;                     // last Setmode                                   (was s_mode)
+  int filter_set;                   // a Setfilter was issued                         (was s_filter_set)
+  uint8_t filter_file, filter_chan; //                                       (was s_filter_*)
+  int owns_slot2;                   // native owner of voice task slot 2              (was s_owns_slot2)
+  uint32_t end_lba;                 // clip end LBA (0 = open-ended)                  (was s_end_lba)
+  uint32_t clip_start;              // clip start LBA (idempotency + loop restart)    (was s_clip_start)
+  uint8_t clip_chan;                // clip channel (idempotency)                     (was s_clip_chan)
+  int loop;                         // loop the clip when the head passes the end     (was s_loop)
+  int16_t ring[XA_RING_FRAMES][2];  // decoded-sample ring (interleaved S16)  (was s_ring)
+  uint32_t wr;                      // total frames written (monotonic)               (was s_wr)
+  double rd;                        // total frames read (monotonic, fractional)      (was s_rd)
+  int16_t hist[2][2];               // XA IIR history, persists across sectors        (was s_hist)
+  int src_freq;                     //                                               (was s_src_freq, init 37800)
+  // Census for the stream currently active, reset at start/play and reported at stop. Decode is
+  // PULL-driven, so "no audio came out" has two very different causes that look identical from
+  // outside: the SPU never pulled a sample (pulls == 0 — the mixer is not running, or CD audio is
+  // gated off), or it pulled and the disc side produced nothing (pulls > 0, sectors == 0). These
+  // need opposite fixes, so the stop line names both counts instead of leaving silence unexplained.
+  uint32_t pulls;           // CDC_GetCDAudioSample calls while this stream was active
+  uint32_t sectors;         // audio sectors actually decoded into the ring
+  uint32_t overflow_streak; // consecutive sectors that arrived on a full ring; log throttle only
+  struct DiscState *disc;   // Game-owned disc backend (wired by Game())
+} XaState;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+// Initialize a fresh XaState to power-on defaults (src_freq=37800, everything else 0). Called by Game().
+void xa_state_init(XaState *s);
+// Bind `s` for the vendored Beetle spu.c sample pull ONLY: CDC_GetCDAudioSample(s32*) is a
+// context-free vendor callback, so it reads the bound instance (sanctioned vendor interop).
+// All xa_stream_* entry points take their XaState explicitly.
+void xa_bind_state(XaState *s);
+// Decode one ALREADY-READ raw 2352-byte Mode2 XA-ADPCM sector into the ring (push mode). The
+// caller owns the disc cursor: this never advances s_lba and never reads the disc. Returns the
+// frames decoded (0 when the sector is not decodable audio), and NEVER asks the caller to hold the
+// sector: a full ring drops its oldest frames and takes the sector anyway, because hardware's SPU CD
+// buffer overflows without stopping the drive. Beetle-parity routing lives in the caller
+// (cdc_native.cpp decides FIFO-vs-decoder from mode/subheader bytes).
+int xa_push_audio_sector(XaState *s, const uint8_t *raw, uint32_t drive_lba);
+#ifdef __cplusplus
+}
+#endif
