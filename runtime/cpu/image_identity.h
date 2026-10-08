@@ -1,0 +1,71 @@
+#pragma once
+
+#include "guest_program_image.h"
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace psx::cpu {
+
+struct ImageIdentity {
+  std::uint64_t id = 0;
+  std::uint64_t generation = 0;
+
+  friend constexpr bool operator==(ImageIdentity lhs, ImageIdentity rhs) {
+    return lhs.id == rhs.id && lhs.generation == rhs.generation;
+  }
+};
+
+// What a residency is, independent of when it was loaded: its name, the identity of its bytes, and
+// the physical ranges it still covers (an activation's range minus every subtraction since).
+struct ImageDescription {
+  std::string name;
+  std::uint64_t contentIdentity = 0;
+  std::vector<GuestAddressRange> ranges;
+};
+
+struct NativeKey {
+  ImageIdentity image;
+  std::uint32_t address = 0;
+
+  friend constexpr bool operator==(NativeKey lhs, NativeKey rhs) {
+    return lhs.image == rhs.image && lhs.address == rhs.address;
+  }
+};
+
+class ImageCatalog {
+public:
+  ImageIdentity activate(std::string_view name, GuestAddressRange range, std::uint64_t contentIdentity);
+  bool deactivate(ImageIdentity identity);
+  // Remove written physical bytes from one authenticated generation without changing the identity
+  // of its untouched fragments. Returns the count of surviving disjoint ranges.
+  std::size_t subtractRange(ImageIdentity identity, GuestAddressRange physicalRange);
+  std::optional<ImageIdentity> resolve(std::uint32_t guestAddress) const;
+  // Physical half-open ranges resolve only when one active residency owns every
+  // byte. Empty, invalid, and virtual-alias ranges do not resolve.
+  std::optional<ImageIdentity> resolve(GuestAddressRange physicalRange) const;
+  std::size_t activeCount() const;
+  std::optional<ImageDescription> describe(ImageIdentity identity) const;
+  // Advances on every activation, deactivation and subtraction, so a cache of address residency can
+  // tell that it is stale without re-resolving every address.
+  std::uint64_t revision() const;
+
+private:
+  struct Entry {
+    std::string name;
+    std::vector<GuestAddressRange> ranges;
+    std::uint64_t contentIdentity = 0;
+    ImageIdentity identity;
+    bool active = false;
+  };
+
+  std::vector<Entry> entries_;
+  std::uint64_t nextId_ = 1;
+  std::uint64_t nextGeneration_ = 1;
+  std::uint64_t revision_ = 0;
+};
+
+} // namespace psx::cpu
