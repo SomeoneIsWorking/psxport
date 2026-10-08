@@ -1,0 +1,448 @@
+// test_render_queue_keyorder — RenderQueue::resolveKeyOrder: what it DECIDES, and what it COSTS.
+//
+// WHY THIS TEST EXISTS (Tomba!2, 2026-08-04). The DEMO attract loop wedged the frame loop dead at
+// gpu frame 1822: the watchdog's backtrace landed inside resolveKeyOrder, and the run never
+// presented another frame. It was not an infinite loop — the function has no unbounded loop — it
+// was the pair contest doing 596,134,804 pair tests and 496,339,081 interior-grid samples for ONE
+// frame, because two guest object nodes each emitted tens of thousands of keyed faces that frame
+// (measured: maxgroup=31308 faces on node 800F06D8, vs 143 on a normal frame).
+//
+// WHAT THE FUNCTION ACTUALLY COMPUTES. Its output is one bit PER FACE — "snap this face's test
+// depth to its key's ord" — and that bit is a pure existence question:
+//
+//     snap[x]  ==  there EXISTS some other face y of the same object such that x and y are
+//                  "in contest": either they carry the SAME sort key and are exactly coincident
+//                  (the rotated-vertex decal case), or their keys differ and the farther-keyed one
+//                  interpolates NEARER somewhere both polygons cover (the depth-buffer-contradicts-
+//                  the-game case).
+//
+// An existence question needs ONE witness. The pre-fix implementation enumerated the complete
+// pairwise relation instead — every C(n,2) pair of every object group — so a face that had already
+// found its witness kept being tested against every remaining face in the group. On the wedge frame
+// 45,917 of 45,993 faces were snapped (99.83%), i.e. essentially every one of those half-billion
+// pair tests was re-deciding a face whose answer was already known.
+//
+// SO THIS FILE ASSERTS TWO THINGS, and they have to be asserted together:
+//   1. EQUIVALENCE — the snap set is exactly the brute-force existence set, on inputs that exercise
+//      both contest rules and the negative case. Without this, "fast" is meaningless.
+//   2. WORK — on a large single-object group the pair-test count is proportional to the group, not
+//      to its square. Without this, a re-introduced exhaustive scan is invisible until a game
+//      wedges again.
+//
+// Hermetic: no Core, no disc, no GPU. resolveKeyOrderFaces(frame, who, faceOrder) is the Core-free entry;
+// the RqItems are built directly.
+#include "testutil.h"
+
+#include "face_contest.h" // the rule itself: the pair test this test is an ORACLE for
+#include "render_queue.h"
+
+#include "game.h"
+#include "gpu_vk.h"
+#include "mods.h" // FACE_ORDER_DEPTH — the ordering mode the rule is driven with
+
+#include <math.h>
+#include <memory>
+#include <stdint.h>
+#include <string.h>
+#include <vector>
+
+namespace {
+
+// A queue is ~16 MB of RqItem storage, so it lives on the heap and is reused across cases.
+std::unique_ptr<RenderQueue> make_queue(void) {
+  std::unique_ptr<RenderQueue> q(new RenderQueue());
+  q->n = 0;
+  q->seq = 0;
+  return q;
+}
+
+// Append one keyed WORLD face. Every field resolveKeyOrder reads is set explicitly here: the layer/
+// order-mode/sort-key triple that makes it "keyed", the dbg_node that decides its OBJECT GROUP, the
+// float screen XY, and the per-vertex ord (larger = nearer, the renderer's convention).
+void push_face(RenderQueue &q,
+               uint32_t node,
+               int sort_key,
+               float x0,
+               float y0,
+               float x1,
+               float y1,
+               float ord_at_v0,
+               float ord_at_v2) {
+  RqItem &it = q.items[q.n];
+  memset(&it, 0, sizeof(it));
+  it.seq = q.seq++;
+  it.draw_seq = it.seq; // what push() does; these fixtures build items directly
+  it.layer = RQ_WORLD;
+  it.order_mode = RQ_OM_DEPTH;
+  it.nv = 4;
+  it.has_xyf = 1;
+  it.dbg_node = node;
+  it.sort_key = sort_key;
+  // One distinctive, strictly monotone ord per key, matching the shipping key_to_ord contract.
+  // Same-key faces MUST share it: the resolver's OT-LIFO rule is precisely about separating that tie.
+  it.key_ord = 2.0f - 0.0001f * (float)sort_key;
+  // Vertex winding 0=(x0,y0) 1=(x1,y0) 2=(x1,y1) 3=(x0,y1): an axis-aligned quad, split by the
+  // rasterizer into tris (0,1,2) and (1,2,3) — the same split rq_ord_at samples with.
+  const float vx[4] = {x0, x1, x1, x0};
+  const float vy[4] = {y0, y0, y1, y1};
+  for (int k = 0; k < 4; k++) {
+    it.xsf[k] = vx[k];
+    it.ysf[k] = vy[k];
+    it.xs[k] = (int)vx[k];
+    it.ys[k] = (int)vy[k];
+  }
+  // Ramp the ord across the quad so the two faces of a pair genuinely CROSS in depth rather than
+  // being uniformly in front of one another (a uniform pair is rejected by the cheap dmax/dmin test
+  // and would never reach the interior contest this function exists for).
+  it.depth[0] = ord_at_v0;
+  it.depth[1] = 0.5f * (ord_at_v0 + ord_at_v2);
+  it.depth[2] = ord_at_v2;
+  it.depth[3] = 0.5f * (ord_at_v0 + ord_at_v2);
+  q.n++;
+}
+
+// The specification, implemented independently of the unit: snap[x] iff SOME other face of the same
+// object is in contest with x. Deliberately the dumbest possible O(n^2) formulation — it is the
+// oracle, so it must be obviously right rather than fast.
+std::vector<uint8_t> brute_force_snap(const RenderQueue &q) {
+  std::vector<int> keyed;
+  for (int i = 0; i < q.n; i++) {
+    const RqItem &it = q.items[i];
+    if (it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) {
+      continue;
+    }
+    if (it.dbg_node < 0x80000000u || it.dbg_node >= 0x80200000u) {
+      continue;
+    }
+    keyed.push_back(i);
+  }
+  std::vector<uint8_t> snap(q.n, 0);
+  for (size_t a = 0; a < keyed.size(); a++) {
+    for (size_t b = 0; b < keyed.size(); b++) {
+      if (a == b) {
+        continue;
+      }
+      const RqItem &A = q.items[keyed[a]];
+      const RqItem &B = q.items[keyed[b]];
+      if (A.dbg_node != B.dbg_node) {
+        continue;
+      }
+      if (psx::gpu::facesInContest(A, B)) {
+        snap[keyed[a]] = 1;
+        snap[keyed[b]] = 1;
+      }
+    }
+  }
+  return snap;
+}
+
+// Compare the unit's decision against the oracle. Returns the number of faces that DISAGREE, and
+// reports the totals so a "0 disagreements" result carries its denominator — over how many faces,
+// and how many of them the oracle expected to be snapped. A run where the oracle snapped nothing
+// proves nothing about the snapping rules, so cases assert the expected snap count too.
+struct SnapCompare {
+  int faces;
+  int oracle_snapped;
+  int unit_snapped;
+  int disagreements;
+};
+
+SnapCompare run_and_compare(RenderQueue &q) {
+  // The oracle reads pre-resolve depths, so it must run BEFORE the unit overwrites them with key_ord.
+  std::vector<uint8_t> want = brute_force_snap(q);
+  std::vector<float> ord_before(q.n);
+  for (int i = 0; i < q.n; i++) {
+    ord_before[i] = q.items[i].key_ord;
+  }
+
+  q.resolveKeyOrderFaces(0, "test", FACE_ORDER_DEPTH);
+
+  SnapCompare r = {q.n, 0, 0, 0};
+  for (int i = 0; i < q.n; i++) {
+    // A snapped face has one constant ord in its key's band. The earliest submission in a same-key
+    // group is advanced by representable D32 steps toward the nearer band, so it can be > key_ord.
+    bool got = q.items[i].depth[0] >= ord_before[i] && q.items[i].depth[1] == q.items[i].depth[0] &&
+               q.items[i].depth[2] == q.items[i].depth[0] && q.items[i].depth[3] == q.items[i].depth[0];
+    if (want[i]) {
+      r.oracle_snapped++;
+    }
+    if (got) {
+      r.unit_snapped++;
+    }
+    if ((int)want[i] != (int)got) {
+      r.disagreements++;
+    }
+  }
+  return r;
+}
+
+} // namespace
+
+// Which of two same-layer items is VISIBLE where they overlap, per the shipped renderer: the world
+// depth test is GREATER_OR_EQUAL with depth write, and the queue draws in (layer, draw_seq) order.
+// So a strictly nearer depth wins outright, and at EQUAL depth the one drawn LATER overwrites and
+// wins. Tests assert this rather than a depth inequality, because an OT bucket's ties are resolved
+// by draw order now and by depth separation before — the mechanism is what changed, not the answer.
+static bool wins_over(const RqItem &a, const RqItem &b) {
+  if (a.depth[0] != b.depth[0]) {
+    return a.depth[0] > b.depth[0];
+  }
+  return a.draw_seq > b.draw_seq;
+}
+
+static void test_pixel_predicate_rejects_degenerate_faces(void) {
+  CHECK(rq_point_in_triangle(4, 4, 0, 0, 8, 0, 0, 8));
+  CHECK(rq_point_in_triangle(4, 4, 0, 8, 8, 0, 0, 0));
+  CHECK(!rq_point_in_triangle(9, 9, 0, 0, 8, 0, 0, 8));
+  CHECK(!rq_point_in_triangle(4, 4, 2, 2, 2, 2, 2, 2));
+  CHECK(!rq_point_in_triangle(4, 4, 0, 0, 4, 4, 8, 8));
+}
+
+static void test_shipping_capture_starts_with_real_depth_ownership(void) {
+  static Game game;
+  RenderQueue &q = game.rq;
+  q.reset();
+  const int xs[4] = {0, 8, 8, 0};
+  const int ys[4] = {0, 0, 8, 8};
+  const int uv[4] = {0, 0, 0, 0};
+  const unsigned char rgb[4] = {64, 64, 64, 64};
+  const float depth[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+  q.emitOrQueue(&game.core,
+                1,
+                RQ_WORLD,
+                RQ_OM_DEPTH,
+                4,
+                0,
+                0,
+                xs,
+                ys,
+                nullptr,
+                nullptr,
+                uv,
+                uv,
+                rgb,
+                rgb,
+                rgb,
+                depth,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                320,
+                240,
+                0);
+  CHECK_EQ(q.n, 1);
+  CHECK_EQ(q.items[0].authored_depth, 0);
+}
+
+// ---- 1. the contradiction rule: two faces of one object whose depth inverts the game's key order --
+static void test_contradicting_pair_snaps_both(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  // Same object, overlapping on screen. Face NEAR has the smaller sort key (the game files it in
+  // front) but ramps to a FARTHER ord across the overlap, so the depth buffer would hand those
+  // pixels to FAR — exactly the barrel-cap case the rule exists for.
+  push_face(*q, 0x800FD850u, 400, 0, 0, 40, 40, 0.90f, 0.10f);
+  push_face(*q, 0x800FD850u, 460, 0, 0, 40, 40, 0.20f, 0.80f);
+  SnapCompare r = run_and_compare(*q);
+  CHECK_EQ(r.faces, 2);
+  CHECK_EQ(r.oracle_snapped, 2); // the rule must actually FIRE here, else the case tests nothing
+  CHECK_EQ(r.disagreements, 0);
+}
+
+// ---- 2. the negative: an ordinary mesh must be left entirely alone ------------------------------
+static void test_disjoint_faces_never_snap(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  // Eight faces of one object, side by side and not overlapping, keys ascending with depth. No pair
+  // can contest, so NOTHING may be snapped — the property that makes this a discriminator rather
+  // than the reverted "re-order every face" ramp.
+  for (int i = 0; i < 8; i++) {
+    push_face(
+        *q, 0x800FD850u, 400 + i, (float)(i * 50), 0, (float)(i * 50 + 40), 40, 0.5f - 0.01f * i, 0.5f - 0.01f * i);
+  }
+  SnapCompare r = run_and_compare(*q);
+  CHECK_EQ(r.faces, 8);
+  CHECK_EQ(r.oracle_snapped, 0);
+  CHECK_EQ(r.unit_snapped, 0);
+  CHECK_EQ(r.disagreements, 0);
+}
+
+// ---- 3. object grouping: a contest ACROSS two objects is not a contest --------------------------
+static void test_contest_does_not_cross_objects(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  // Byte-for-byte the pair from case 1, except the two faces belong to DIFFERENT guest nodes. The
+  // game's sort key only orders faces within one object, so nothing may snap.
+  push_face(*q, 0x800FD850u, 400, 0, 0, 40, 40, 0.90f, 0.10f);
+  push_face(*q, 0x800FD860u, 460, 0, 0, 40, 40, 0.20f, 0.80f);
+  SnapCompare r = run_and_compare(*q);
+  CHECK_EQ(r.faces, 2);
+  CHECK_EQ(r.oracle_snapped, 0);
+  CHECK_EQ(r.unit_snapped, 0);
+  CHECK_EQ(r.disagreements, 0);
+}
+
+// ---- 4. the same-key rule: exactly coincident decal, rotated vertex order -----------------------
+static void test_coincident_same_key_pair_snaps(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  // Two faces with the SAME sort key and the same four projected corners at the same four depths.
+  // The key says nothing about which is in front, and the fixed quad triangulation splits a rotated
+  // listing on the opposite diagonal — so both snap and submission order decides.
+  push_face(*q, 0x800FD850u, 408, 10, 10, 50, 50, 0.40f, 0.40f);
+  RqItem &rot = q->items[q->n];
+  rot = q->items[0];
+  rot.seq = q->seq++;
+  rot.draw_seq = rot.seq;
+  // Rotate the vertex listing by one: same multiset of corners, different diagonal.
+  for (int k = 0; k < 4; k++) {
+    rot.xsf[k] = q->items[0].xsf[(k + 1) & 3];
+    rot.ysf[k] = q->items[0].ysf[(k + 1) & 3];
+    rot.depth[k] = q->items[0].depth[(k + 1) & 3];
+  }
+  q->n++;
+  SnapCompare r = run_and_compare(*q);
+  CHECK_EQ(r.faces, 2);
+  CHECK_EQ(r.oracle_snapped, 2);
+  CHECK_EQ(r.disagreements, 0);
+  // Native submits seq 0 then seq 1. The PSX bucket walk is seq 1 then seq 0 because AddPrim
+  // inserts each packet at the head, so seq 0 must WIN despite being submitted first.
+  CHECK(wins_over(q->items[0], q->items[1]));
+}
+
+// ---- 5. AddPrim head insertion: every same-bucket group reverses submission order ----------------
+static void test_authored_bucket_depths_match_addprim_lifo(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  constexpr int kFaces = 17;
+  for (int i = 0; i < kFaces; i++) {
+    push_face(*q, 0x800FD850u, 511, 0, 0, 40, 40, 0.25f + 0.01f * i, 0.25f + 0.01f * i);
+  }
+  q->resolveKeyOrderFaces(0, "test", FACE_ORDER_AUTHORED);
+
+  // The linked-list oracle after repeated head insertion is [16..0]. Native still submits [0..16],
+  // so every earlier submission must win over the next — which makes seq 0 the bucket's winner.
+  // One bucket costs ONE depth value: the whole group shares its band and draw order decides.
+  for (int seq = 0; seq + 1 < kFaces; seq++) {
+    CHECK(wins_over(q->items[seq], q->items[seq + 1]));
+    CHECK_EQ(q->items[seq].depth[0], q->items[seq + 1].depth[0]);
+    CHECK_EQ(q->items[seq].authored_depth, 1);
+  }
+  CHECK_EQ(q->items[kFaces - 1].depth[0], q->items[kFaces - 1].key_ord);
+  CHECK_EQ(q->items[kFaces - 1].authored_depth, 1);
+}
+
+// ---- 6. authored order is frame-wide: OT buckets and AddPrim LIFO cross object boundaries -------
+static void test_authored_order_crosses_objects(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  push_face(*q, 0x800FD850u, 500, 0, 0, 40, 40, 0.10f, 0.90f);
+  push_face(*q, 0x800FD860u, 540, 0, 0, 40, 40, 0.90f, 0.10f);
+  push_face(*q, 0x800FD870u, 500, 0, 0, 40, 40, 0.50f, 0.50f);
+  q->resolveKeyOrderFaces(0, "test", FACE_ORDER_AUTHORED);
+
+  // A PSX ordering table is frame-wide, not per object: the smaller bucket wins even when the
+  // competing packets came from different object submitters. Same-bucket AddPrim ties likewise
+  // reverse native submission order, so seq 0 wins over the later seq 2 packet.
+  CHECK_EQ(q->items[0].authored_depth, 1);
+  CHECK_EQ(q->items[1].authored_depth, 1);
+  CHECK_EQ(q->items[2].authored_depth, 1);
+  CHECK(wins_over(q->items[0], q->items[1]));
+  CHECK(wins_over(q->items[0], q->items[2]));
+  CHECK(wins_over(q->items[2], q->items[1]));
+  // items 0 and 2 are the same bucket (500), so they tie on depth and draw order separates them;
+  // item 1 is a farther bucket (540) and is separated by depth.
+  CHECK_EQ(q->items[0].depth[0], q->items[2].depth[0]);
+  CHECK(q->items[0].depth[0] > q->items[1].depth[0]);
+}
+
+// ---- 7. Crash Bash f300: the measured cross-object pair follows the retail OT -------------------
+static void test_authored_order_matches_crash_bash_frame_300_pair(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  constexpr uint32_t kDarkObject = 0x800A0C74u;
+  constexpr uint32_t kRedObject = 0x801E18B0u;
+  constexpr int kDarkOtBucket = 3312;
+  constexpr int kRedOtBucket = 3160;
+
+  // The native D32 witness selected the dark face from object 0x800A0C74, while the retail packet
+  // walk selected the red face from object 0x801E18B0. They are in different OT buckets, so the
+  // smaller red bucket is nearer regardless of object identity or same-bucket insertion order.
+  push_face(*q, kDarkObject, kDarkOtBucket, 0, 0, 80, 160, 0.028896261f, 0.028896261f);
+  push_face(*q, kRedObject, kRedOtBucket, 0, 0, 80, 160, 0.022926982f, 0.022926982f);
+  q->resolveKeyOrderFaces(300, "crashbash-f300", FACE_ORDER_AUTHORED);
+
+  CHECK_EQ(q->items[0].dbg_node, kDarkObject);
+  CHECK_EQ(q->items[1].dbg_node, kRedObject);
+  CHECK_EQ(q->items[0].authored_depth, 1);
+  CHECK_EQ(q->items[1].authored_depth, 1);
+  CHECK(q->items[1].depth[0] > q->items[0].depth[0]);
+  CHECK(gpu_vk_map_3d_depth(q->items[1].depth[0]) > gpu_vk_map_3d_depth(q->items[0].depth[0]));
+}
+
+// ---- 8. a mixed group: both rules and non-participants together ---------------------------------
+static void test_mixed_group_matches_oracle(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  // A contesting pair, a coincident same-key pair, and four faces that touch nothing — all in one
+  // object, so the unit has to get every face's bit right rather than a blanket answer.
+  push_face(*q, 0x800FD850u, 400, 0, 0, 40, 40, 0.90f, 0.10f);
+  push_face(*q, 0x800FD850u, 460, 0, 0, 40, 40, 0.20f, 0.80f);
+  push_face(*q, 0x800FD850u, 408, 200, 200, 240, 240, 0.40f, 0.40f);
+  push_face(*q, 0x800FD850u, 408, 200, 200, 240, 240, 0.40f, 0.40f);
+  for (int i = 0; i < 4; i++) {
+    push_face(*q, 0x800FD850u, 500 + i, (float)(600 + i * 60), 0, (float)(600 + i * 60 + 40), 40, 0.2f, 0.2f);
+  }
+  SnapCompare r = run_and_compare(*q);
+  CHECK_EQ(r.faces, 8);
+  CHECK_EQ(r.oracle_snapped, 4); // the two contest pairs, and only those
+  CHECK_EQ(r.disagreements, 0);
+}
+
+// ---- 9. THE WEDGE: cost must scale with the group, not with its square --------------------------
+static void test_large_group_work_is_not_quadratic(void) {
+  std::unique_ptr<RenderQueue> q = make_queue();
+  // The shape measured on the wedge frame: ONE object node, tens of thousands of keyed faces, all
+  // mutually overlapping on screen (the real ones spanned the whole -1024..1023 clamp range, so 89%
+  // of pairs passed the cheap bbox reject), and essentially every face in contest with something
+  // (99.83% snapped). Scaled down to 6000 faces so the PRE-FIX behaviour is merely slow rather than
+  // unrunnable — 6000 faces is still 17,997,000 pairs against ~6000 witnesses.
+  const int kFaces = 6000;
+  for (int i = 0; i < kFaces; i++) {
+    // Alternating ramp directions guarantee adjacent faces contest: even faces ramp near->far,
+    // odd faces far->near, and consecutive keys make the odd one the "farther-keyed" partner.
+    bool even = (i % 2) == 0;
+    push_face(*q, 0x800F06D8u, 1500 + i, 0, 0, 300, 200, even ? 0.90f : 0.20f, even ? 0.10f : 0.80f);
+  }
+  SnapCompare r = run_and_compare(*q);
+  CHECK_EQ(r.faces, kFaces);
+  CHECK_EQ(r.disagreements, 0);
+  // The negative would be meaningless if nothing snapped — this input must reproduce the wedge
+  // frame's regime, where nearly every face finds a witness.
+  CHECK(r.oracle_snapped > kFaces - 10);
+
+  // THE ACTUAL GATE. An existence question over n faces needs one witness per face, so the work is
+  // O(n) tests for the faces that find one plus O(n) per face that does not. Exhaustive pairwise
+  // enumeration is n*(n-1)/2 = 17,997,000 here. The bound is 64*n = 384,000: twenty times the
+  // witness-per-face ideal, and forty-six times BELOW the exhaustive count — no threshold tuning
+  // can slip between those.
+  CHECK(q->keyOrderPairTests <= (uint64_t)kFaces * 64u);
+  // ...and it must not be trivially small either: every face has to have been examined at least
+  // once, or the unit skipped work rather than avoiding it.
+  CHECK(q->keyOrderPairTests >= (uint64_t)kFaces / 2u);
+}
+
+int main(void) {
+  RUN(pixel_predicate_rejects_degenerate_faces);
+  RUN(shipping_capture_starts_with_real_depth_ownership);
+  RUN(contradicting_pair_snaps_both);
+  RUN(disjoint_faces_never_snap);
+  RUN(contest_does_not_cross_objects);
+  RUN(coincident_same_key_pair_snaps);
+  RUN(authored_bucket_depths_match_addprim_lifo);
+  RUN(authored_order_crosses_objects);
+  RUN(authored_order_matches_crash_bash_frame_300_pair);
+  RUN(mixed_group_matches_oracle);
+  RUN(large_group_work_is_not_quadratic);
+  return pt_summary();
+}
