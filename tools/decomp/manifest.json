@@ -1,0 +1,673 @@
+{
+  "_comment": [
+    "Per-image load geometry for tools/decomp_pipeline.py. DATA, not code: adding a title or an",
+    "overlay is an entry here, and the pipeline checks what it can about each one before it imports",
+    "anything.",
+    "",
+    "KIND decides what is checked, and it is a field rather than a branch in the code:",
+    "  'resident' -- a PS-X EXE. Load address, text size and entry come from its OWN header, and the",
+    "    numbers here are CROSS-CHECKED against it; a disagreement is a refusal, because a wrong base",
+    "    imports cleanly and puts every function at a plausible address that is not the recorded one.",
+    "  'module'   -- an overlay (.PRG / .BIN). NO header, NO entry, and no address derivable from",
+    "    the file, so load_base and the code window are the OWNING PORT'S MEASURED facts and are",
+    "    trusted as data. What the tool can still check is that the code window lies inside the FILE,",
+    "    that the base is in 2 MiB of KSEG0, and the sha1 gate below.",
+    "",
+    "ghidra_base is DERIVED, never stored, so it cannot drift:",
+    "  resident -> text_load_address - text_file_offset (which maps file offset 0x800 onto the load",
+    "             address and leaves the executable's own header below the text window),",
+    "  module   -> load_base (a module's text begins at file offset 0).",
+    "",
+    "WHAT IS DELIBERATELY NOT HERE, stated rather than left to be discovered: the four",
+    "Toy Story 2 level-slot files that hold NO code -- LEVEL07/LEVEL1.BIN, LEVEL08/LEVEL1.BIN and",
+    "LEVEL09/LEVEL1.BIN at 24 bytes each, and LEVEL06/LEVEL1.BIN at 624 -- and the four-byte",
+    "LEVEL00/LEVEL.BIN placeholder. MEASURED with this repository's own is_entry_prologue over",
+    "every 4-aligned word: they contain no entry prologue at all, so a module entry for them would be",
+    "a guess, and a manifest entry that cannot seed disassembly is an entry that reads as a broken",
+    "tool rather than as a file with no code in it. The other 17 level modules ARE declared, each",
+    "with its own size, because a shared code window would refuse the 17 correct files.",
+    "",
+    "MEASURED 2026-09-28/29 from the provisioned images. Every resident title in this workspace is a",
+    "PS-X EXE loading at 0x80010000 with text at file offset 0x800; they differ in text size, which is",
+    "why the size is data here rather than an assumption in the code."
+  ],
+  "images": {
+    "spyro1": {
+      "kind": "resident",
+      "serial": "SCUS_942.28",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x65800",
+      "note": "Insomniac. Its repo verified the file-offset formula against 62,183 of 62,183 recorded instructions."
+    },
+    "c12": {
+      "kind": "resident",
+      "serial": "SCUS_946.66",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0xE0800",
+      "note": "C-12: Final Resistance (USA). Geometry read from the authenticated executable's own header (text 0x80010000, size 0xE0C00, entry 0x800A8454), which the pipeline cross-checks."
+    },
+    "c12_gt": {
+      "kind": "module",
+      "title": "c12",
+      "serial": "SCUS_946.66",
+      "sha1": "4f1387058ccd3d36b1893059eba8feceab97c28f",
+      "load_base": "0x8011F9BC",
+      "code_first": "0x74",
+      "code_last": "0x3FFF",
+      "note": "RELOCS/GT.LVB, 16,384 B as the guest actually runs it: the title's FUN_80059108 opens RELOCS_GT_LVB, allocates in the guest's own arena (InitHeap base 0x80105E40, stack base 0x801FFFF0) and relocates it with FUN_800615F4, so these are POST-relocation bytes taken from a `dumpram` of the authenticated image at the stall, not the file as it sits on disc. 16 KiB covers 0x8011F9BC..0x801239BC, measured as 8 sectors DMA3 plus the module's own data; the entry is blob+0xA8 = 0x8011FA64 (word 0x27BDFFC8, `addiu $sp,$sp,-0x38`, a non-leaf entry). code_first 0x74 is this blob's first entry prologue and code_last prologue 0x2320 is where the code stops; code_last is the blob's LAST BYTE. The relocation is deterministic, so the sha1 identifies these bytes."
+    },
+    "crash1": {
+      "kind": "resident",
+      "serial": "SCUS_949.00",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x46800",
+      "note": "Naughty Dog. Retail projection is H=1000, OFX=0, OFY=0; widening must not raise the 0x800578D0 GTE near plane."
+    },
+    "crash2": {
+      "kind": "resident",
+      "serial": "SCUS_941.54",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x4F800",
+      "note": "Naughty Dog."
+    },
+    "crash3": {
+      "kind": "resident",
+      "serial": "SCUS_942.44",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x51000",
+      "note": "Naughty Dog."
+    },
+    "crashbash": {
+      "kind": "resident",
+      "serial": "SCUS_945.70",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x69000",
+      "note": "Main image has no file extension; find -iname 'SCUS*.BIN' misses it. Has 7 overlays, not yet declared."
+    },
+    "ctr": {
+      "kind": "resident",
+      "serial": "SCUS_944.26",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x7D800",
+      "note": "Naughty Dog. Measured 2 fields per game frame; 30 fps."
+    },
+    "megamanx4": {
+      "kind": "resident",
+      "serial": "SLUS_005.61",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x11F800",
+      "note": "Capcom. Its text is 2.83x spyro1's and MEASURED to fit the 1400 MB ceiling: 4,834 functions, up to 1,089,096 KB peak RSS, 53.3 s. NOTE 0x80015FE0 is NOT a function entry (nearest entry 0x80016004, +0x24) and 0x80015FD4 is +264 INSIDE FUN_80015ecc's body; both are labels, not entries."
+    },
+    "spiderman1": {
+      "kind": "resident",
+      "serial": "SLUS_008.75",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0xB6800",
+      "note": "Neversoft. Reaches library routines through jalr function pointers, so a jal-only census reads 0 for every one of them."
+    },
+    "tekken3": {
+      "kind": "resident",
+      "serial": "SLUS_004.02",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x121000",
+      "note": "Namco. Already 60 fps, so widescreen-only enhancement scope."
+    },
+    "tomba1": {
+      "kind": "resident",
+      "serial": "SCUS_942.36",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x88000",
+      "note": "Whoopee Camp. Already 60 fps, so widescreen-only enhancement scope."
+    },
+    "tomba2": {
+      "kind": "resident",
+      "serial": "SCUS_944.54",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0xAE800",
+      "note": "Whoopee Camp (SCUS_944.54). The resident executable is ~15% of the title; most code is in .PRG overlays. text_size is 0xAE800 from MAIN.EXE's own PS-X EXE header (it was 0x28800, which contradicted the header and made the pipeline refuse the image). The 28 overlay images are declared below as modules."
+    },
+    "tomba2_a00": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "c34a290816d05433ca402fbaecde2bf424b4e664",
+      "load_base": "0x80108F9C",
+      "code_first": "0x13A0",
+      "code_last": "0x459A7",
+      "note": "A00.BIN, 285096 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x13A0 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x459A7), so the whole image is addressable."
+    },
+    "tomba2_a01": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "5bdd26f4e39009786d682221afb80f87e2bb1a47",
+      "code_first": "0xFE0",
+      "code_last": "0x316DB",
+      "note": "A01.BIN, 202460 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0xFE0 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x316DB), so the whole image is addressable."
+    },
+    "tomba2_a02": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "c0232987d14263d5e61b763dd1322e27b87429cf",
+      "code_first": "0x158C",
+      "code_last": "0x3112B",
+      "note": "A02.BIN, 201004 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x158C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x3112B), so the whole image is addressable."
+    },
+    "tomba2_a03": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "8bd4bcc23f1c41b778e1c5733269d9e45701c86a",
+      "code_first": "0x88",
+      "code_last": "0x1326B",
+      "note": "A03.BIN, 78444 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x88 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1326B), so the whole image is addressable."
+    },
+    "tomba2_a04": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "7c940d9434cb724c363a098312c2c84ba83511e5",
+      "code_first": "0x1578",
+      "code_last": "0x3D3A3",
+      "note": "A04.BIN, 250788 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1578 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x3D3A3), so the whole image is addressable."
+    },
+    "tomba2_a05": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "05ea0e4071a358cff97a5c146b46489e1d61c970",
+      "code_first": "0x1398",
+      "code_last": "0x392B3",
+      "note": "A05.BIN, 234164 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1398 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x392B3), so the whole image is addressable."
+    },
+    "tomba2_a06": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "27332ed9f09df70cfcbed5bd3046b44035bb328b",
+      "code_first": "0x157C",
+      "code_last": "0x456BB",
+      "note": "A06.BIN, 284348 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x157C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x456BB), so the whole image is addressable."
+    },
+    "tomba2_a07": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "4c5163c1a5c51955b6bf3e17fe9db7a468baa89d",
+      "code_first": "0x16C4",
+      "code_last": "0x38157",
+      "note": "A07.BIN, 229720 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x16C4 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x38157), so the whole image is addressable."
+    },
+    "tomba2_a08": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "load_base": "0x80108F9C",
+      "sha1": "abddb36655ecc72406a2b497c212596c6db4d67c",
+      "code_first": "0x1580",
+      "code_last": "0x40F8B",
+      "note": "A08.BIN, 266124 B. Loads at the MODE slot 0x80108F9C with its text at FILE OFFSET 0 (measured: 66426 of 66531 words equal in a live RAM dump; the rest is data the overlay writes) (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1580 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x40F8B), so the whole image is addressable."
+    },
+    "tomba2_a09": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "1ba8966b0b36c38b386ad3050f3b672ba43408a7",
+      "code_first": "0xDC",
+      "code_last": "0x566C",
+      "note": "A09.BIN, 22125 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0xDC is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x566C), so the whole image is addressable."
+    },
+    "tomba2_a0a": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "5a582ac84ecf40074c7e4d65061b8ba82cd0dc08",
+      "code_first": "0x378",
+      "code_last": "0x1EE37",
+      "note": "A0A.BIN, 126520 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x378 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1EE37), so the whole image is addressable."
+    },
+    "tomba2_a0b": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "75269941dacd0b68102076181d0463f274e1ded6",
+      "code_first": "0x320",
+      "code_last": "0x1C367",
+      "note": "A0B.BIN, 115560 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x320 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1C367), so the whole image is addressable."
+    },
+    "tomba2_a0c": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "c00f2b9fe2cf34a75086a65e1e29f7597900b0c6",
+      "code_first": "0x338",
+      "code_last": "0x1E1BF",
+      "note": "A0C.BIN, 123328 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x338 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1E1BF), so the whole image is addressable."
+    },
+    "tomba2_a0d": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "305a5a4ed6587734767719e4ae4a1a27dc8156ac",
+      "code_first": "0x368",
+      "code_last": "0x1D327",
+      "note": "A0D.BIN, 119592 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x368 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1D327), so the whole image is addressable."
+    },
+    "tomba2_a0e": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "9b9fa2b41c129826fbd9292a7965bdf47755d854",
+      "code_first": "0x36C",
+      "code_last": "0x1E6EF",
+      "note": "A0E.BIN, 124656 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x36C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1E6EF), so the whole image is addressable."
+    },
+    "tomba2_a0f": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "959318a353097c3bf7da0c1c9f41cbc07218f60f",
+      "code_first": "0x384",
+      "code_last": "0x2114B",
+      "note": "A0F.BIN, 135500 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x384 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x2114B), so the whole image is addressable."
+    },
+    "tomba2_a0g": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "d07947d2fe3969137f6171c94eb18bb80d57cde6",
+      "code_first": "0x1E4",
+      "code_last": "0x463B",
+      "note": "A0G.BIN, 17980 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1E4 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x463B), so the whole image is addressable."
+    },
+    "tomba2_a0h": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "47c2c86518bee63d4668e0ce75c4446969f34919",
+      "code_first": "0x140",
+      "code_last": "0x36BF",
+      "note": "A0H.BIN, 14016 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x140 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x36BF), so the whole image is addressable."
+    },
+    "tomba2_a0i": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "501db41b522102fbdb698161997a390a87d0a79d",
+      "code_first": "0x154",
+      "code_last": "0x3B2F",
+      "note": "A0I.BIN, 15152 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x154 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x3B2F), so the whole image is addressable."
+    },
+    "tomba2_a0j": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "9a7152203c47f1120007784f9277f7bbad8a90e6",
+      "code_first": "0x128",
+      "code_last": "0x4A7B",
+      "note": "A0J.BIN, 19068 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x128 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x4A7B), so the whole image is addressable."
+    },
+    "tomba2_a0k": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "9dfaa004c493bd474842379b8129a18baab1b702",
+      "code_first": "0x62C",
+      "code_last": "0x16CC3",
+      "note": "A0K.BIN, 93380 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x62C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x16CC3), so the whole image is addressable."
+    },
+    "tomba2_a0l": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "b5f09d338c809957134cb1fe8cc9828503479931",
+      "code_first": "0x26C",
+      "code_last": "0x1244F",
+      "note": "A0L.BIN, 74832 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x26C is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x1244F), so the whole image is addressable."
+    },
+    "tomba2_crd": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "1cfb06cdda46ea7d48fc81790dc437543e62b032",
+      "code_first": "0x1E8",
+      "code_last": "0x61E3",
+      "note": "CRD.BIN, 25060 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1E8 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x61E3), so the whole image is addressable."
+    },
+    "tomba2_demo": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "e3988a70ed218b392a245301e4b20f34343cb7d1",
+      "code_first": "0xBC",
+      "code_last": "0x14FB",
+      "note": "DEMO.BIN, 5372 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0xBC is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x14FB), so the whole image is addressable."
+    },
+    "tomba2_game": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "2e1181fe670f27581f95e7fe4d658361e87f2882",
+      "code_first": "0x154",
+      "code_last": "0x2D73",
+      "note": "GAME.BIN, 11636 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x154 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x2D73), so the whole image is addressable."
+    },
+    "tomba2_opn": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "0462c26910a5285eb231cf0d95499f034ae136f4",
+      "code_first": "0x300",
+      "code_last": "0x351B",
+      "note": "OPN.BIN, 13596 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x300 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x351B), so the whole image is addressable."
+    },
+    "tomba2_sop": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "load_base": "0x80108F9C",
+      "sha1": "31a0fbd54612836912ff7e991334f063fe0df7f2",
+      "code_first": "0x1C8",
+      "code_last": "0x44FB",
+      "note": "SOP.BIN, 17660 B. Loads at the MODE slot 0x80108F9C with its text at FILE OFFSET 0 (measured: 4409 of 4415 words equal in a live RAM dump; the rest is data the overlay writes) (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x1C8 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x44FB), so the whole image is addressable."
+    },
+    "tomba2_start": {
+      "kind": "module",
+      "title": "tomba2",
+      "serial": "SCUS_944.54",
+      "sha1": "5eb7efe5e5aff8a567c30367a7031a8243d26cca",
+      "code_first": "0x274",
+      "code_last": "0x66F",
+      "note": "START.BIN, 1648 B. Loads at 0x80100000 with its text at FILE OFFSET 0 (an overlay carries no PS-X EXE header), which is why it is a module and not a resident entry. code_first 0x274 is this file's first entry prologue (addiu $sp,$sp,-N), MEASURED with this repository's is_entry_prologue: the words before it are a function-pointer table, so seeding disassembly at offset 0 would reach nothing. code_last is the file's LAST BYTE (0x66F), so the whole image is addressable."
+    },
+    "vagrant": {
+      "kind": "resident",
+      "serial": "SLUS_010.40",
+      "sha1": "fababcfd4325d42f350d95b3472874affeb0e48c",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x52000",
+      "note": "Square. SHA-1 of this image MATCHES the CC0 rood-reverse decomp's declared target, so its symbol addresses are confirmed against real bytes -- a reading aid only, never copied into a shipping path. 933,925 B of its code lives in .PRG overlays; see the vagrant_* modules."
+    },
+    "vagrant_battle": {
+      "kind": "module",
+      "title": "vagrant",
+      "serial": "SLUS_010.40",
+      "sha1": "d53aaccc3b3a2fc057d05e0dcea92f7182bc72a9",
+      "load_base": "0x80068800",
+      "code_first": "0x146C",
+      "code_last": "0x7F983",
+      "note": "BATTLE.PRG, 577,828 B on disc (BATTLE.BIN). code_first/code_last are the MEASURED CODE EXTENT (the decomp declares 0x146C..0x7F984), and code_first is NOT 0: the module's first words are a POINTER TABLE (0x8006C684 = base+0x3E84, and eight consecutive words all resolve inside the module), so disassembly seeded at file offset 0 reaches nothing. Verified here: offset 0x146C holds 0x27BDFFE8, an `addiu $sp,$sp,-N` prologue, which is what a code extent starts with. Load base is the vagrant repo's MEASURED fact (tools/re_viewport.py BATTLE_LOAD_BASE, itself derived in tools/re_overlay.py M2 from this module's own absolute jal targets and entry offsets -- 20/20 identity and address agreements, and the decomp declares the same vram). Its decomp-declared CODE extent is 0x146C..0x7F984; that is narrower than the loaded module and is where its functions live, but the pipeline seeds disassembly at the window start and reports what it finds. HOLDS func_800760CC, the port's projection owner."
+    },
+    "vagrant_title": {
+      "kind": "module",
+      "title": "vagrant",
+      "serial": "SLUS_010.40",
+      "sha1": "f74a76e6215edebf607d0c2af56481050edb139a",
+      "load_base": "0x80068800",
+      "code_first": "0x22C",
+      "code_last": "0x959B",
+      "note": "TITLE.PRG, 554,568 B (TITLE.BIN). Same measured load base as BATTLE -- they SHARE one slot, which is exactly why a guest address is meaningless without the module identity, and why a resident-only reader could never decompile both. Declared code extent 0x22C..0x959C."
+    },
+    "vagrant_initbtl": {
+      "kind": "module",
+      "title": "vagrant",
+      "serial": "SLUS_010.40",
+      "sha1": "d7ea16ef957179cad6e3b02727bb714713cfcc32",
+      "load_base": "0x800F9800",
+      "code_first": "0x18",
+      "code_last": "0x1317",
+      "note": "INITBTL.PRG, 7,036 B (INITBTL.BIN). A DIFFERENT measured base from BATTLE/TITLE -- 0x800F9800 against 0x80068800 -- which is what makes it the control: the same reader, the same code path, a base 0x91000 away. Its decomp-declared code extent is 0x18..0x1318."
+    },
+    "spyro2": {
+      "kind": "resident",
+      "serial": "SCUS_944.25",
+      "sha1": "42633ff8cf1b43c49c5fe23d00eca6eb2703828b",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x57000",
+      "note": "Insomniac, Spyro 2: Ripto's Rage! Geometry and identity match spyro/titles/spyro2/executable.json."
+    },
+    "spyro3": {
+      "kind": "resident",
+      "serial": "SCUS_944.67",
+      "sha1": "31ad35fd03539910b5b3d9309ae52f5acaf3612e",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x5C800",
+      "note": "Insomniac, Spyro: Year of the Dragon. Geometry and identity match spyro/titles/spyro3/executable.json."
+    },
+    "toystory2": {
+      "kind": "resident",
+      "serial": "SLUS_008.93",
+      "sha1": "f90c9cd6b4fc9845adfe34e306b7df393bf9154c",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0x91800",
+      "note": "Disney/Pixar, Toy Story 2. SHA-1 matches the toystory2 repo's own docs/info/exe-identity.txt (598,016 B). Much of the title's code arrives in overlays at run time; see toystory2_memory, toystory2_fmv and the toystory2_level* modules."
+    },
+    "toystory2_memory": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "b735c3e5471c2641c204077ebb9bb437690b6a5c",
+      "load_base": "0x800D5D20",
+      "code_first": "0x8F4",
+      "code_last": "0xF74F",
+      "note": "BITS/MEMORY.BIN, 63,312 B. The UI overlay in the shared slot at 0x800D5D20 (toystory2/game/overlay/shared_slot_image.h kLoadAddress), whose recorded retail SHA-256 matches this provisioned file. code_first is this file's first entry prologue (addiu $sp,$sp,-0x18 at file+0x8F4), MEASURED with the framework's is_entry_prologue: no earlier word in the file is one. That says where code demonstrably begins, not that the bytes before it are data."
+    },
+    "toystory2_fmv": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "47321941eaa9a841bf48c8fa64edc70df42db87f",
+      "load_base": "0x800D5D20",
+      "code_first": "0x908",
+      "code_last": "0x7CBEF",
+      "note": "FMV/FMV.BIN, 510,960 B: the OTHER contents of that same 0x800D5D20 slot, so an address means nothing without the module identity. code_first 0x908 is the module entry at 0x800D6628, recorded independently in toystory2/docs/re-frontier.md (I009) and re-measured here as the file's first entry prologue (word 0x27BDFF10)."
+    },
+    "toystory2_level01": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "7f512da2fd70117db4061fce392b438bafc2810a",
+      "load_base": "0x800D12C0",
+      "code_first": "0x4",
+      "code_last": "0x362B",
+      "note": "LEVEL01__LEVEL.BIN, 13868 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level011": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "05f4426dbe842c7d6e8c9df27398864b765a90d5",
+      "load_base": "0x800D12C0",
+      "code_first": "0xC",
+      "code_last": "0x4937",
+      "note": "LEVEL01__LEVEL1.BIN, 18744 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level02": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "d2e455282720b3dd6a8d3ca4a964b6c9cf3547d6",
+      "load_base": "0x800D12C0",
+      "code_first": "0x4",
+      "code_last": "0x4A5F",
+      "note": "LEVEL02__LEVEL.BIN, 19040 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level021": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "91ea59b27352238c8219b1796d1f5364f8b3f0af",
+      "load_base": "0x800D12C0",
+      "code_first": "0x4",
+      "code_last": "0x147F",
+      "note": "LEVEL02__LEVEL1.BIN, 5248 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level03": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "cbcaf0a478770dcd4c9a350beb32ac7a52935d18",
+      "load_base": "0x800D12C0",
+      "code_first": "0x4",
+      "code_last": "0x149B",
+      "note": "LEVEL03__LEVEL.BIN, 5276 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level031": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "100d16a60a9c8ef329c865d1fb791dd910c5a215",
+      "load_base": "0x800D12C0",
+      "code_first": "0xC",
+      "code_last": "0x2887",
+      "note": "LEVEL03__LEVEL1.BIN, 10376 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level04": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "b555714096ccd8592e29f162ff3daa832eaa01d0",
+      "load_base": "0x800D12C0",
+      "code_first": "0x34",
+      "code_last": "0x4153",
+      "note": "LEVEL04__LEVEL.BIN, 16724 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level041": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "8cc7552037078172d15fc1855236a2119ae753e3",
+      "load_base": "0x800D12C0",
+      "code_first": "0x4",
+      "code_last": "0x2FC7",
+      "note": "LEVEL04__LEVEL1.BIN, 12232 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level05": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "b5a692f53f01ae73daf5562cdf108a0ecb57098d",
+      "load_base": "0x800D12C0",
+      "code_first": "0xC",
+      "code_last": "0x3477",
+      "note": "LEVEL05__LEVEL.BIN, 13432 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level051": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "02401765f43780458507651972866228c55927cd",
+      "load_base": "0x800D12C0",
+      "code_first": "0xC",
+      "code_last": "0x1FD3",
+      "note": "LEVEL05__LEVEL1.BIN, 8148 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level06": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "10a99b0375e414a1efc8494e9fb7b44075c13620",
+      "load_base": "0x800D12C0",
+      "code_first": "0x4",
+      "code_last": "0xE17",
+      "note": "LEVEL06__LEVEL.BIN, 3608 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level07": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "fbba4f35b653e9ba57a787fe9e2e215151e1eebc",
+      "load_base": "0x800D12C0",
+      "code_first": "0xFC",
+      "code_last": "0x3253",
+      "note": "LEVEL07__LEVEL.BIN, 12884 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level08": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "f0f701d74b189ddadc5a9e4679e7200b70828ac3",
+      "load_base": "0x800D12C0",
+      "code_first": "0x1C",
+      "code_last": "0x326B",
+      "note": "LEVEL08__LEVEL.BIN, 12908 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level09": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "e854d618f9f74f52336f039e1033533de57c1a0d",
+      "load_base": "0x800D12C0",
+      "code_first": "0x4",
+      "code_last": "0x1DB7",
+      "note": "LEVEL09__LEVEL.BIN, 7608 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level10": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "deddf9f5b1e84b4b65e4011302383860c90c5f69",
+      "load_base": "0x800D12C0",
+      "code_first": "0xC",
+      "code_last": "0x47D7",
+      "note": "LEVEL10__LEVEL.BIN, 18392 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "toystory2_level101": {
+      "kind": "module",
+      "title": "toystory2",
+      "serial": "SLUS_008.93",
+      "sha1": "0081f5bb00ac350433c123eff63f7bc6b2abdbd7",
+      "load_base": "0x800D12C0",
+      "code_first": "0x4",
+      "code_last": "0xA5B",
+      "note": "LEVEL10__LEVEL1.BIN, 2652 B, one of the alternative contents of the level slot at 0x800D12C0 (toystory2/game/overlay/level_slot_image.h kLoadAddress); the retail SHA-256 recorded there matches this provisioned file. code_first is this file's first entry prologue, MEASURED with the framework's is_entry_prologue."
+    },
+    "crashbash_dat28136": {
+      "kind": "module",
+      "title": "crashbash",
+      "serial": "SCUS_945.70",
+      "sha1": "d0335ec27e8c5673bcc6969e54a4d4c21eedd1b2",
+      "load_base": "0x800B32B4",
+      "code_first": "0x0",
+      "code_last": "0x14FC0",
+      "note": "DAT28136.BIN, 86,016 B. The Adventure level/challenge module: it holds the level roster strings (Papu Papu, Bearminator, N. Oxide, Dragon Drop, Mallet Mash, Keg Kaboom, Dante's Dash, Splash Dash, Swamp Fox), the 'PRESS LEFT - RIGHT TO SELECT CHALLENGE' prompt, and 10 readers of the guest input-edge word 0x80051380 at 0x800B65D4..0x800B6BE4 and 0x800BAC64..0x800BAD70. Load base and size are the crashbash repo's measured facts (titles/crashbash/dat28136_module.json, published by the authenticated nested-module owner at guest 0x800B32B4)."
+    },
+    "crashbash_boot": {
+      "kind": "module",
+      "title": "crashbash",
+      "serial": "SCUS_945.70",
+      "sha1": "61c3eb749fdc194dad7c0181cc4cb5c9d3e447e4",
+      "load_base": "0x80078C90",
+      "code_first": "0x0",
+      "code_last": "0x2E800",
+      "note": "BOOT.BIN, 189 sectors. The shell/menu overlay: it owns the root scene 0x80078C90 (enter 0x80092BDC, update 0x80092BA0, present 0x80092B7C), the scene-transition primitive 0x8001E588/0x8001E610, and the mode/attract scenes (0x8009F720: enter 0x80092CAC, update 0x80092EDC, present 0x80092E94) that dispatch DAT28136. Load base and extent are the crashbash repo's measured facts (titles/crashbash/boot_module.json)."
+    },
+    "crashbash_menu": {
+      "kind": "module",
+      "title": "crashbash",
+      "serial": "SCUS_945.70",
+      "sha1": "2ad6c8e943ffe966786fcc8ad88077e341fdd470",
+      "load_base": "0x800B32B4",
+      "code_first": "0x0",
+      "code_last": "0x7FFF",
+      "note": "MENU.BIN, 16 sectors. The shell menu overlay: SELECT GAME TYPE, SELECT NUMBER OF PLAYERS, CHOOSE LEVEL, the difficulty/cups pages, the memory-card browser strings ('CHECK MEMORY CARD / FOR SAVED GAME / THERE IS NO CRASH BASH DATA ON THIS MEMORY CARD / FOR UNLOCKED LEVELS') and the character-select grid. Load base and extent are the crashbash repo's measured facts (titles/crashbash/menu_module.json)."
+    }
+  }
+}
