@@ -1,0 +1,768 @@
+// OtAttr implementation — see ot_attr.h for the design. Separated from the header so the header can
+// stay a forward-declared-Core, dependency-light include.
+#include "ot_attr.h"
+#include "core.h"
+#include "guest_packet_pool_windows.h"
+#include "render_node.h" // cur_render_node — same node fallback the native submit path itself uses
+// NO "game.h" HERE, DELIBERATELY, and it is a compile-enforced fence rather than a convention: with
+// `Game` left incomplete (core.h only forward-declares it) any future `c->game->…` in this TU fails to
+// build. That is what keeps the store path off the whole machine — see OtAttr::stampFrame for the crash
+// that reaching through `c->game` for a frame counter caused.
+#include "native_dispatch.h"
+#include "render_noise.h"
+#include <cstdio>
+#include <format>
+#include <lucent/log.h>
+#include <string_view>
+
+// THE PACKET POOL RANGE COMES FROM THE GAME, not from here. It used to be two file-scope constants
+// holding Tomba!2's addresses (0x800BFE68..0x800E7E68) inside game-agnostic framework code — so on any
+// other consumer this whole table silently matched nothing and reported no attributions, which is
+// indistinguishable from "the guest submitted no packets". A legacy GameConfig declares it in
+// `packetPoolBase/Stride` or `packetPoolBasePtrs/EndPtrs`; a DIRECT runtime declares it through
+// `GameRuntime::guestPacketPoolWindows()` (guest_packet_pool_windows.h), and this function reads
+// whichever the Core's game actually has. That is the whole point of the second path: without it
+// every typed runtime was BLIND here, and a blind filter returns "not owned" for every packet, which
+// is the most believable possible wrong answer.
+//
+// Fixed-pool games declare base + stride. Heap-pool games instead declare the guest globals holding
+// each parity pool's live base/end; collapsing those allocations into one range would classify an
+// arbitrary gap between them as render output. A game whose packets descend from BOTH parity
+// ordering-table heads inside ONE window declares that window's measured extent (SingleWindow);
+// splitting it into equal halves would declare a top that guest memory never reaches.
+//
+// A GAME THAT HAS NOT RE'd ITS POOL LEAVES THE FIELDS 0 (spyro, spider1 — an honest zero with a TODO,
+// per their own rules). Then this feed CANNOT attribute anything, and it says so once instead of
+// producing an empty table that reads like a measurement.
+//
+// The arithmetic moved to render_noise.h (2026-08-11) because dualcore.cpp and selftest.cpp each had
+// their OWN copy of it with Tomba!2's literals still in them — three copies meant fixing one left two
+// lying. This function is now just the pool window of that shared mask.
+namespace {
+// CACHED until the config changes or a live descriptor is rewritten, not derived once per store. This
+// is called from trackStoreSlow, i.e. on EVERY guest memory write, and it used to rebuild the whole
+// RenderNoiseMask each time — measured at 1.53% of a 3D field frame purely to recompute a constant.
+//
+// KEYED ON the cfg pointer and invalidated on dynamic-descriptor writes rather than cached in a bare
+// static. SBS runs two Cores, and a window inherited across games does not just drop ranges, it makes a
+// harness blind to real divergence.
+uint32_t main_ram_address(uint32_t value) {
+  return (value & 0x1FFFFFFFu) | 0x80000000u;
+}
+
+// THE TWO DECLARATIONS, flattened to ONE shape, so the window arithmetic below exists once. A
+// legacy GameConfig and a typed runtime declare the same two representations with the same meaning;
+// keeping them as two code paths is how they drift.
+struct PoolSource {
+  enum class Kind { None, FixedBaseStride, LiveBaseEndPointers, SingleWindow };
+
+  Kind kind = Kind::None;
+  uint32_t base = 0;
+  uint32_t stride = 0;
+  uint32_t end = 0;
+  uint32_t basePointer[2] = {};
+  uint32_t endPointer[2] = {};
+  // The identity the derived window is cached against — the GameConfig, or the typed declaration.
+  const void *identity = nullptr;
+};
+
+PoolSource pool_source(Core *c) {
+  PoolSource source;
+  if (c->cfg) {
+    // Legacy titles keep their existing owner and their existing precedence: a GameConfig game is
+    // never also consulted as a typed runtime, so nothing it relied on can change here.
+    for (uint32_t i = 0; i < 2; i++) {
+      if (c->cfg->packetPoolBasePtrs[i] || c->cfg->packetPoolEndPtrs[i]) {
+        source.kind = PoolSource::Kind::LiveBaseEndPointers;
+        for (uint32_t p = 0; p < 2; p++) {
+          source.basePointer[p] = c->cfg->packetPoolBasePtrs[p];
+          source.endPointer[p] = c->cfg->packetPoolEndPtrs[p];
+        }
+        source.identity = c->cfg;
+        return source;
+      }
+    }
+    if (c->cfg->packetPoolBase && c->cfg->packetPoolStride) {
+      source.kind = PoolSource::Kind::FixedBaseStride;
+      source.base = c->cfg->packetPoolBase;
+      source.stride = c->cfg->packetPoolStride;
+      source.identity = c->cfg;
+    }
+    return source;
+  }
+  const GuestPacketPoolWindows *windows = declaredGuestPacketPoolWindows(*c);
+  if (!windows) {
+    return source;
+  }
+  source.identity = windows;
+  if (windows->representation == GuestPacketPoolWindows::Representation::FixedBaseStride) {
+    source.kind = PoolSource::Kind::FixedBaseStride;
+    source.base = windows->base;
+    source.stride = windows->stride;
+    return source;
+  }
+  if (windows->representation == GuestPacketPoolWindows::Representation::SingleWindow) {
+    source.kind = PoolSource::Kind::SingleWindow;
+    source.base = windows->base;
+    source.end = windows->end;
+    return source;
+  }
+  source.kind = PoolSource::Kind::LiveBaseEndPointers;
+  for (uint32_t i = 0; i < 2; i++) {
+    source.basePointer[i] = windows->basePointer[i];
+    source.endPointer[i] = windows->endPointer[i];
+  }
+  return source;
+}
+
+// Does this store overwrite one of the pointer globals the live window is derived from? When it does
+// the cached bounds are stale by definition, so the caller must re-derive them before using them.
+// It works from the ADDRESSES cached at resolve time, not from the declaration: this runs on every
+// guest store of a dynamic-pool title, and re-reading a title's declaration per store would put a
+// virtual call on the hottest path in the substrate.
+bool descriptor_overlap(const uint32_t descriptorAddr[4], uint32_t addr, uint32_t bytes) {
+  const uint32_t physical = addr & 0x1FFFFFFFu;
+  if (physical >= 0x00200000u) {
+    return false;
+  }
+  const uint32_t lo = physical | 0x80000000u;
+  const uint32_t hi = lo + bytes;
+  for (uint32_t i = 0; i < 4; i += 2) {
+    if (!descriptorAddr[i] && !descriptorAddr[i + 1]) {
+      continue;
+    }
+    const uint32_t basePtr = main_ram_address(descriptorAddr[i]);
+    const uint32_t endPtr = main_ram_address(descriptorAddr[i + 1]);
+    if ((descriptorAddr[i] && lo < basePtr + 4u && basePtr < hi) ||
+        (descriptorAddr[i + 1] && lo < endPtr + 4u && endPtr < hi)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+OtAttr::PoolWindows pool_range_uncached(Core *c, uint32_t descriptorAddr[4]) {
+  OtAttr::PoolWindows result{};
+  const PoolSource source = pool_source(c);
+  for (uint32_t i = 0; i < 4; i++) {
+    descriptorAddr[i] = 0;
+  }
+  if (source.kind == PoolSource::Kind::FixedBaseStride) {
+    // ONE parity half of each stride, exactly as GameConfig's pair has always meant: the array holds
+    // two pools and `stride` is the width of ONE of them.
+    const uint32_t lo = main_ram_address(source.base);
+    const uint32_t hi = lo + 2u * source.stride;
+    if (lo >= hi || hi > 0x80200000u) {
+      return result;
+    }
+    result.lo[0] = lo;
+    result.hi[0] = hi;
+    result.count = 1;
+    result.known = true;
+    return result;
+  }
+  if (source.kind == PoolSource::Kind::SingleWindow) {
+    // The measured extent, taken as measured: no parity split is invented for a pool that has none.
+    const uint32_t lo = main_ram_address(source.base);
+    const uint32_t hi = main_ram_address(source.end);
+    if (lo >= hi || hi > 0x80200000u) {
+      return result;
+    }
+    result.lo[0] = lo;
+    result.hi[0] = hi;
+    result.count = 1;
+    result.known = true;
+    return result;
+  }
+  if (source.kind == PoolSource::Kind::LiveBaseEndPointers) {
+    for (uint32_t i = 0; i < 2; i++) {
+      descriptorAddr[2 * i] = source.basePointer[i];
+      descriptorAddr[2 * i + 1] = source.endPointer[i];
+    }
+    bool dynamicComplete = true;
+    bool completePair = false;
+    for (uint32_t i = 0; i < 2; i++) {
+      const uint32_t basePtr = source.basePointer[i];
+      const uint32_t endPtr = source.endPointer[i];
+      if (!basePtr || !endPtr) {
+        dynamicComplete &= !basePtr && !endPtr;
+        continue;
+      }
+      completePair = true;
+      const uint32_t rawLo = c->mem_r32(basePtr);
+      const uint32_t rawHi = c->mem_r32(endPtr);
+      if (!rawLo || !rawHi) {
+        continue; // a declared heap pool may legitimately not be allocated during boot
+      }
+      const uint32_t lo = main_ram_address(rawLo);
+      const uint32_t hi = main_ram_address(rawHi);
+      if (lo >= hi || hi > 0x80200000u) {
+        continue; // descriptor words are rewritten separately, so transient mixed bounds are normal
+      }
+      result.lo[result.count] = lo;
+      result.hi[result.count] = hi;
+      result.count++;
+    }
+    result.dynamic = true;
+    result.known = dynamicComplete && completePair;
+    if (!result.known) {
+      static bool warnedPartial = false;
+      if (!warnedPartial) {
+        warnedPartial = true;
+        lucent::warn("otattr",
+                     "the declared packet-pool pointer pairs are partial — each declared parity "
+                     "needs both pointer globals");
+      }
+    }
+    return result;
+  }
+
+  // A GAME THAT HAS NOT RE'd ITS POOL LEAVES NOTHING DECLARED, from either representation. Then this
+  // feed CANNOT attribute anything, and it says so once instead of producing an empty table that
+  // reads like a measurement. The warning names BOTH declarations because "you declared no pool" is
+  // a different sentence from "you declared one and I could not find it", and a title debugging a
+  // silent filter needs to be told which one it is.
+  const RenderNoiseMask m = RenderNoiseMask::from(c->cfg, "otattr");
+  if (!m.poolLo && !m.poolHi) {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      lucent::warn("otattr",
+                   "no packet pool is declared — GameConfig::packetPoolBase/Stride (a legacy game) "
+                   "and GameRuntime::guestPacketPoolWindows() (a typed runtime) are both absent — so "
+                   "packet-pool attribution is STRUCTURALLY BLIND here, an empty span table means "
+                   "'not measured', NOT 'the guest submitted nothing', and a GuestPacketFilter can "
+                   "never suppress a packet. RE the pool and declare it in the representation this "
+                   "guest actually uses.");
+    }
+    return result;
+  }
+  result.lo[0] = m.poolLo;
+  result.hi[0] = m.poolHi;
+  result.count = 1;
+  result.known = true;
+  return result;
+}
+
+} // namespace
+
+// ---- The `otattr` last-writer sub-commands, shared by EVERY control transport ------------------
+//
+// `otattr watch` / `otattr who` are one implementation here, not one per transport: the REPL
+// (repl.cpp) and the debug server (dbg_server.cpp) both call this, so the command means the same
+// thing and answers identically wherever it is typed, and the workspace rule that agents drive
+// everything through the control channel holds. `emit` is the transport's sink.
+
+bool OtAttr::runLastWriterCommand(std::string_view line, const std::function<void(std::string_view)> &emit) {
+  char sub[32] = {0};
+  std::sscanf(std::string(line).c_str(), "%*s %31s", sub);
+  // LAST-WRITER PROVENANCE sub-commands (ot_attr.h) — answer "who wrote this WORD", independent of
+  // call-flow, for the staging-buffer case where call-path attribution only names the batcher.
+  if (!strcmp(sub, "watch")) {
+    uint32_t addr = 0, len = 0;
+    if (std::sscanf(std::string(line).c_str(), "%*s %*s %x %x", &addr, &len) != 2 || len == 0) {
+      emit(std::format("usage: otattr watch <addr-hex> <len-hex>"));
+    } else {
+      int slot = watchRegister(addr, len);
+      if (slot < 0) {
+        emit(std::format("watch REJECTED (slots={}/{} wordsUsed={}/{} overflow={}) — free a slot or shrink the region",
+                         watchSlotCount(),
+                         (int)OtAttr::WATCH_SLOTS,
+                         watchWordsUsed(),
+                         (int)OtAttr::WATCH_CAP_WORDS,
+                         watchOverflow()));
+      } else {
+        const OtAttr::WatchRegion *r = watchAt(slot);
+        // Decorate as KSEG0 (0x800xxxxx) ONLY for main-RAM regions — scratchpad (0x1F800000-
+        // 0x1F8003FF) is NOT mirrored across segments the way RAM is, so blindly OR-ing 0x80000000
+        // onto it prints a bogus 0x9F8xxxxx address. Print scratchpad addresses as-is (their own
+        // canonical form).
+        uint32_t dlo = r->lo < 0x200000u ? (0x80000000u | r->lo) : r->lo;
+        uint32_t dhi = r->hi < 0x200000u ? (0x80000000u | r->hi) : r->hi;
+        emit(std::format("watch[{}] = [0x{:08X},0x{:08X}) ({} words) — slots {}/{}, {}/{} words used",
+                         slot,
+                         dlo,
+                         dhi,
+                         (r->hi - r->lo) / 4,
+                         watchSlotCount(),
+                         (int)OtAttr::WATCH_SLOTS,
+                         watchWordsUsed(),
+                         (int)OtAttr::WATCH_CAP_WORDS));
+      }
+    }
+    return true;
+  }
+  if (!strcmp(sub, "who")) {
+    uint32_t addr = 0, len = 4;
+    int got = std::sscanf(std::string(line).c_str(), "%*s %*s %x %x", &addr, &len);
+    if (got < 1) {
+      emit(std::format("usage: otattr who <addr-hex> [len-hex]"));
+      return true;
+    }
+    if (got == 1) {
+      len = 4;
+    }
+    emit(std::format("who 0x{:08X}..0x{:08X} (word-granular, coalesced runs):", addr, addr + len));
+    uint32_t w = addr & ~3u, end = addr + len;
+    bool any = false;
+    OtAttr::WordRec cur{};
+    uint32_t runLo = 0, runHi = 0;
+    bool haveRun = false;
+    auto flush_run = [&]() {
+      if (!haveRun) {
+        return;
+      }
+      if (cur.frame == 0xFFFFFFFFu) {
+        emit(std::format("  [0x{:08X},0x{:08X}) NEVER WRITTEN since watch registered", runLo, runHi));
+      } else {
+        emit(std::format(
+            "  [0x{:08X},0x{:08X}) fn=0x{:08X} caller=0x{:08X} frame={}", runLo, runHi, cur.fn, cur.caller, cur.frame));
+      }
+      any = true;
+      haveRun = false;
+    };
+    for (; w < end; w += 4) {
+      OtAttr::WordRec rec{};
+      uint32_t wa = 0;
+      if (!watchLookup(w, &rec, &wa)) {
+        flush_run();
+        emit(std::format("  [0x{:08X},0x{:08X}) NOT WATCHED — run `otattr watch` first", w, w + 4));
+        return true;
+      }
+      if (haveRun && rec.fn == cur.fn && rec.caller == cur.caller && rec.frame == cur.frame && wa == runHi) {
+        runHi = wa + 4;
+      } else {
+        flush_run();
+        cur = rec;
+        runLo = wa;
+        runHi = wa + 4;
+        haveRun = true;
+      }
+    }
+    flush_run();
+    if (!any) {
+      emit(std::format("  (nothing in range)"));
+    }
+    return true;
+  }
+  return false;
+}
+
+void OtAttr::poolRangeMiss(Core *c) {
+  const PoolWindows r = pool_range_uncached(c, mPoolDescriptorAddr);
+  // The cfg pointer stays the cache key for the LEGACY path, unchanged. A typed runtime's cfg is null
+  // and stays null, so it cannot key anything; its window is resolved once (below, via mPoolDirty)
+  // and then tracked by the descriptor invalidation exactly as a legacy dynamic pool is.
+  mPoolCfg = c->cfg;
+  mPoolSource = pool_source(c).identity;
+  for (uint32_t i = 0; i < 2; i++) {
+    mPoolLo[i] = r.lo[i];
+    mPoolHi[i] = r.hi[i];
+  }
+  mPoolCount = r.count;
+  mPoolKnown = r.known;
+  mPoolDynamic = r.dynamic;
+}
+
+// The frame stamp every table here shares — see ot_attr.h for the null-deref this replaced and for why
+// there is now exactly ONE clock instead of a logic clock for the spans and a present clock for the rest.
+uint32_t OtAttr::stampFrame() {
+  if (mFrame != NO_FRAME) {
+    return mFrame;
+  }
+  // Pre-loop boot stores are normal in a game run. Count them and use frame 0, but defer the verdict
+  // until run end: only then can we distinguish "the loop has not started YET" from "no loop ever
+  // declared a frame". The old immediate warning accused every healthy port during crt0.
+  mPreFrameStamps++;
+  return 0;
+}
+
+void OtAttr::reportFrameContract(const char *context) const {
+  const char *who = (context && *context) ? context : "run";
+  if (mFrame != NO_FRAME) {
+    lucent::info("otattr",
+                 "{}: frame-loop contract SATISFIED — beginLogicFrame reached frame {} "
+                 "after {} pre-frame stamp(s)",
+                 who,
+                 mFrame,
+                 mPreFrameStamps);
+    return;
+  }
+  if (mPreFrameStamps == 0) {
+    lucent::info("otattr",
+                 "{}: frame-loop contract NOT EXERCISED — 0 table stamps and 0 declared "
+                 "frames; there is no per-frame data to certify",
+                 who);
+    return;
+  }
+  lucent::warn("otattr",
+               "{}: frame-loop contract FAILED — {} table stamp(s) occurred but nothing "
+               "called OtAttr::beginLogicFrame. The span / watch / per-fn tables were "
+               "stamped frame 0 and never reset; their contents span the whole run, not "
+               "one frame.",
+               who,
+               mPreFrameStamps);
+}
+
+void OtAttr::resetIfNewFrame(uint32_t frame) {
+  if (frame == mFrame) {
+    return;
+  }
+  mFrame = frame;
+  mSpanCount = 0;
+  mSpanOverflow = 0;
+  mSpansSorted = true; // a fresh frame starts sorted by construction; trackStore un-sets it if not
+}
+
+void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
+  // Reached from Core::mem_w32 via pkt_track — on EVERY guest memory write, the hottest path in the
+  // substrate. Looking the channel up by NAME here is not a cheap flag test: it hashes the name under
+  // a mutex. MEASURED on the Spyro port with a 6-sample stack profile: 6/6 samples landed in
+  // lucent::detail::channel_enabled reached from exactly here.
+  //
+  // The gate is now the inline `if (!g_otattr_channel)` in ot_attr.h and there is nothing left to
+  // re-check here: a Channel re-resolves itself whenever the enabled set changes, so `debug otattr`
+  // at the REPL still takes effect on the next store. Anything reaching this function is armed.
+  // OtAttr's OWN clock, not `c->game->gpu.s_frame` (see stampFrame): reaching through `Core::game` here
+  // made a plain guest store null-deref on every Core that no `Game` owns, and mixed the present counter
+  // into a function whose span table is keyed on the logic frame.
+  const uint32_t frame = stampFrame();
+  const uint32_t fn = c->callAttribution.top();
+  const uint32_t caller = c->callAttribution.caller();
+  const uint32_t guestProducer = c->rsub.guestPacketFilter.currentOwner();
+  // Physical form: mask off the segment bits (KUSEG/KSEG0/KSEG1 mirror main RAM at 0x000xxxxx/0x800xxxxx/
+  // 0xA00xxxxx — masking with 0x1FFFFFFF collapses all three to the same physical offset) — this is the
+  // SAME normalization display_pass_write_guard (mem.cpp) uses, and unlike the pool-only `k = addr |
+  // 0x80000000u` below, it also gives scratchpad (0x1F800000-0x1F8003FF) its own correct, un-mangled
+  // address instead of folding it into a bogus main-RAM address. Needed here because watched regions
+  // (LAST-WRITER PROVENANCE, ot_attr.h) can cover scratchpad, not just the packet pool.
+  const uint32_t phys = addr & 0x1FFFFFFFu;
+
+  // GATED ON THE CHANNEL, and the gate is LOAD-BEARING — shipping the direct-call push without it costs
+  // +24% user CPU on pc_render and +87% on psx_render (1200-frame replay, PSXPORT_NOPACE=1, measured).
+  // recordFnStat LINEAR-SCANS up to FNSTAT_CAP entries keyed on `fn`, on EVERY guest store, before the
+  // pool-range early-out. That was O(1) BY ACCIDENT while otattrTop() was structurally 0: one row, always
+  // a first-iteration hit. Maintaining the stack on direct calls turns it into a real scan. It is read
+  // ONLY by `otattr trace`, whose REPL path already reports "no per-fn store stat recorded" when empty.
+  if (g_otattr_channel) {
+    recordFnStat(frame, fn, phys);
+  }
+  trackWatch(fn, caller, phys, bytes, frame);
+
+  const uint32_t k = phys | 0x80000000u;
+  // The cache CHECK is here, not behind a call: a bool test and a pointer compare, then three member
+  // loads. See poolRangeMiss in the header for the measurement that made this split necessary — a
+  // tidier compare-inside-a-member-function version was measurably SLOWER than no cache at all.
+  //
+  // The bool is the TYPED-RUNTIME half. A `GameRuntime` is owned by its `Game` for the process
+  // lifetime, so its declaration cannot change under a settled Core; `mPoolSettled` is what lets the
+  // one resolve happen without a virtual call on every store afterwards, and it is cleared only by the
+  // descriptor invalidation below — which must re-read the live bounds anyway.
+  if (mPoolDirty || c->cfg != mPoolCfg) {
+    mPoolDirty = false;
+    poolRangeMiss(c);
+  }
+  // Core calls this before committing the guest store. Invalidate now so the NEXT store resolves the
+  // just-written descriptors; attributing the descriptor write itself would be a category error.
+  if (mPoolDynamic && descriptor_overlap(mPoolDescriptorAddr, addr, bytes)) {
+    mPoolDirty = true;
+    return;
+  }
+  bool inPool = false;
+  for (uint32_t i = 0; i < mPoolCount; i++) {
+    inPool |= k >= mPoolLo[i] && k < mPoolHi[i];
+  }
+  if (!mPoolKnown || !inPool) {
+    return;
+  }
+
+  // NOT reset off `frame` (= gpu.s_frame) any more: that counts presents, so on a path where presents
+  // are rare it never fired and the table saturated with stale spans (see beginLogicFrame). The frame
+  // loop owns the reset now; this only stamps what it records.
+  // Same node fallback the native GT3/GT4 submit path itself uses (render_internal.h cur_render_node):
+  // the walk's beginObject() node when set, else the guest "current render object" scratchpad
+  // (0x1F80028C) — most native per-object quad submission (submit.cpp) never opens a diag walk scope,
+  // it relies on this scratchpad, so reading raw diag.currentNode() alone would show node=0 for the
+  // MAJORITY of world-object quads (the exact case bug #45 cares about).
+  const uint32_t node = cur_render_node(c);
+
+  // Coalesce a run of stores sharing the same attribution into one growing span — a quad's
+  // header/vertex/color words collapse to a single entry instead of one per store, which is what
+  // keeps SPAN_CAP from blowing out on a normal frame.
+  if (mSpanCount > 0) {
+    Span &last = mSpans[mSpanCount - 1];
+    if (last.fn == fn && last.caller == caller && last.node == node && last.guestProducer == guestProducer &&
+        k >= last.lo && k <= last.hi) {
+      if (k + bytes > last.hi) {
+        last.hi = k + bytes;
+      }
+      return;
+    }
+  }
+  // Resolved HERE and not at GP0-execution time, because the call chain only exists during the store —
+  // by the time the packet is executed the guest has long returned and there is nothing left to walk.
+  const uint32_t claimed = resolveClaimedFrame(c);
+  if (mSpanCount < SPAN_CAP) {
+    // Track whether the table stayed ADDRESS-SORTED. The pool pointer is monotonic within a frame (the
+    // reason the reverse linear scan below is safe), so in practice it is — and that is what lets
+    // lookupStore binary-search. Checked rather than assumed: the fallback pass looks a span up per OT
+    // node, so a linear scan there is O(nodes x spans) and measured at ~4x the frame cost.
+    if (mSpanCount && k < mSpans[mSpanCount - 1].lo) {
+      mSpansSorted = false;
+    }
+    mSpans[mSpanCount++] = Span{k, k + bytes, fn, caller, node, c->pc, claimed, guestProducer};
+  } else {
+    mSpanOverflow++;
+  }
+}
+
+uint32_t OtAttr::resolveClaimedFrame(Core *c) {
+  const psx::cpu::NativeDispatcher &dispatcher = c->nativeDispatcher();
+  if (!dispatcher.hasProducers()) {
+    return 0;
+  }
+  if (mResolveCacheRevision != dispatcher.producerRevision()) {
+    for (int i = 0; i < RCACHE_SLOTS; i++) {
+      mResolveCache[i].depth = -1;
+    }
+    mResolveCacheRevision = dispatcher.producerRevision();
+  }
+  const int visNow = c->callAttribution.visibleDepth();
+  const int limNow = visNow < CLAIM_SEARCH_DEPTH ? visNow : CLAIM_SEARCH_DEPTH;
+  uint32_t prefix[CLAIM_SEARCH_DEPTH] = {};
+  uint32_t h = 2166136261u; // FNV-1a over the prefix
+  for (int i = 0; i < limNow; i++) {
+    prefix[i] = c->callAttribution.frameFromTop(i);
+    h = (h ^ prefix[i]) * 16777619u;
+  }
+  ResolveEntry &slot = mResolveCache[(h ^ (uint32_t)limNow) & (RCACHE_SLOTS - 1)];
+  if (slot.depth == limNow) {
+    bool same = true;
+    for (int i = 0; i < limNow && same; i++) {
+      same = slot.prefix[i] == prefix[i];
+    }
+    if (same) {
+      return slot.result;
+    }
+  }
+  uint32_t found = 0;
+  for (int i = 0; i < limNow; i++) {
+    if (prefix[i] && dispatcher.isProducer(prefix[i])) {
+      found = prefix[i];
+      break;
+    }
+  }
+  slot.depth = limNow;
+  for (int i = 0; i < limNow; i++) {
+    slot.prefix[i] = prefix[i];
+  }
+  slot.result = found;
+  return found;
+}
+
+psx::debug::ProducerAttribution OtAttr::submitterOf(Core *c, uint32_t packetAddress) const {
+  if (packetAddress == 0) {
+    return {0, psx::debug::Unattributed::NoSource};
+  }
+  Span span{};
+  if (!lookupStore(packetAddress & 0x1FFFFCu, &span)) {
+    return {0, psx::debug::Unattributed::SpanMiss};
+  }
+  if (span.claimed) {
+    return {span.claimed, psx::debug::Unattributed::NoSource};
+  }
+  if (span.fn) {
+    return {span.fn, psx::debug::Unattributed::NoSource};
+  }
+  // With no indirect dispatch on the stack, the node's own render function (node+0x18) names the object.
+  if (span.node) {
+    const uint32_t render = c->mem_r32((span.node & 0x1FFFFFFFu) + 0x18u);
+    if (render >= 0x80010000u && render < 0x80200000u) {
+      return {render, psx::debug::Unattributed::NoSource};
+    }
+  }
+  return {0, psx::debug::Unattributed::SpanNoFn};
+}
+
+void OtAttr::trackGte(Core *c) {
+  if (!g_otattr_channel) {
+    return;
+  }
+  // Same one clock as the store path, and for the same reason: `gte_op` is a core primitive too, so
+  // reaching through `c->game` for a frame counter would crash a Core-alone embedder that executes GTE.
+  const uint32_t frame = stampFrame();
+  if (frame != mGteFrame) {
+    mGteFrame = frame;
+    mGteCount = 0;
+    mGteOverflow = 0;
+  }
+
+  const uint32_t fn = c->callAttribution.top();
+  const uint32_t node = cur_render_node(c);
+  for (int i = 0; i < mGteCount; i++) {
+    if (mGte[i].fn == fn && mGte[i].node == node) {
+      mGte[i].count++;
+      return;
+    }
+  }
+  if (mGteCount < GTE_CAP) {
+    mGte[mGteCount++] = GteBucket{fn, node, 1};
+  } else {
+    mGteOverflow++;
+  }
+}
+
+bool OtAttr::lookupStore(uint32_t addr, Span *out) const {
+  const uint32_t k = addr | 0x80000000u;
+  // BINARY SEARCH when the table is address-sorted, which it is whenever the pool pointer only moved
+  // forward this frame (trackStore checks, it does not assume). This is not a micro-optimisation: the
+  // unclaimed-geometry fallback asks once per OT node, so the reverse scan below made the pass
+  // O(nodes x spans) — measured at ~29 fps against ~110 without it.
+  if (mSpansSorted && mSpanCount > 8) {
+    int lo = 0, hi = mSpanCount - 1;
+    while (lo <= hi) {
+      const int mid = (lo + hi) / 2;
+      if (k < mSpans[mid].lo) {
+        hi = mid - 1;
+      } else if (k >= mSpans[mid].hi) {
+        lo = mid + 1;
+      } else {
+        if (out) {
+          *out = mSpans[mid];
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+  // Most-recent-first: within one frame the pool pointer is monotonic, so addresses aren't reused, but
+  // scanning backward costs nothing extra and is the more useful order if that ever changes.
+  for (int i = mSpanCount - 1; i >= 0; i--) {
+    if (k >= mSpans[i].lo && k < mSpans[i].hi) {
+      if (out) {
+        *out = mSpans[i];
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+// --- LAST-WRITER PROVENANCE (watched regions) ---
+
+int OtAttr::watchRegister(uint32_t addr, uint32_t len) {
+  if (mWatchCount >= WATCH_SLOTS) {
+    mWatchOverflow++;
+    return -1;
+  }
+  const uint32_t phys = addr & 0x1FFFFFFFu;
+  const uint32_t words = (len + 3) / 4;
+  if (mWatchWordsUsed + (int)words > WATCH_CAP_WORDS) {
+    mWatchOverflow++;
+    return -1;
+  }
+
+  WatchRegion &r = mWatch[mWatchCount];
+  r.lo = phys;
+  r.hi = phys + len;
+  r.wordBase = (uint32_t)mWatchWordsUsed;
+  r.active = true;
+  // Fresh region -> its slice of the pooled backing store starts as "never written" (default WordRec has
+  // frame=0xFFFFFFFF); no explicit clear needed since a slice is never reused across two live regions.
+  mWatchWordsUsed += (int)words;
+  return mWatchCount++;
+}
+
+void OtAttr::trackWatch(uint32_t fn, uint32_t caller, uint32_t phys, uint32_t bytes, uint32_t frame) {
+  if (mWatchCount == 0) {
+    return;
+  }
+  // A store can straddle a word boundary (unaligned byte/half store, or a >4-byte call site) — mark
+  // every word touched, not just the first.
+  const uint32_t first = phys & ~3u;
+  const uint32_t last = (phys + bytes - 1) & ~3u;
+  for (uint32_t w = first; w <= last; w += 4) {
+    for (int i = 0; i < mWatchCount; i++) {
+      const WatchRegion &r = mWatch[i];
+      if (!r.active || w < r.lo || w >= r.hi) {
+        continue;
+      }
+      const uint32_t idx = r.wordBase + (w - r.lo) / 4;
+      mWatchWords[idx] = WordRec{fn, caller, frame};
+      break; // regions don't overlap by construction (each registration carves a fresh slice)
+    }
+  }
+}
+
+bool OtAttr::watchLookup(uint32_t addr, WordRec *out, uint32_t *wordAddrOut) const {
+  const uint32_t phys = addr & 0x1FFFFFFFu;
+  const uint32_t w = phys & ~3u;
+  for (int i = 0; i < mWatchCount; i++) {
+    const WatchRegion &r = mWatch[i];
+    if (!r.active || w < r.lo || w >= r.hi) {
+      continue;
+    }
+    const uint32_t idx = r.wordBase + (w - r.lo) / 4;
+    if (out) {
+      *out = mWatchWords[idx];
+    }
+    if (wordAddrOut) {
+      *wordAddrOut = w;
+    }
+    return true;
+  }
+  return false;
+}
+
+// --- per-fn store-count stat (feeds `otattr trace`'s copy-loop heuristic) ---
+
+void OtAttr::recordFnStat(uint32_t frame, uint32_t fn, uint32_t phys) {
+  if (frame != mFnStatFrame) {
+    mFnStatFrame = frame;
+    mFnStatCount = 0;
+    mFnStatOverflow = 0;
+  }
+  const uint32_t page = phys & ~0xFFFu; // 4KB page granularity — coarse enough that a real copy loop
+                                        // (fans out across many small structs) blows past FNSTAT_PAGES
+                                        // fast, while one object's own quad submission stays within 1-2.
+  FnStoreStat *e = nullptr;
+  for (int i = 0; i < mFnStatCount; i++) {
+    if (mFnStat[i].fn == fn) {
+      e = &mFnStat[i];
+      break;
+    }
+  }
+  if (!e) {
+    if (mFnStatCount >= FNSTAT_CAP) {
+      mFnStatOverflow++;
+      return;
+    }
+    e = &mFnStat[mFnStatCount++];
+    *e = FnStoreStat{};
+    e->fn = fn;
+  }
+  e->count++;
+  bool haveIt = false;
+  for (int i = 0; i < e->pageCount; i++) {
+    if (e->pages[i] == page) {
+      haveIt = true;
+      break;
+    }
+  }
+  if (!haveIt) {
+    if (e->pageCount < FNSTAT_PAGES) {
+      e->pages[e->pageCount++] = page;
+    } else {
+      e->pageOverflow = true;
+    }
+  }
+}
+
+const OtAttr::FnStoreStat *OtAttr::fnStatFind(uint32_t fn) const {
+  for (int i = 0; i < mFnStatCount; i++) {
+    if (mFnStat[i].fn == fn) {
+      return &mFnStat[i];
+    }
+  }
+  return nullptr;
+}
