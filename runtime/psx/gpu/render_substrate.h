@@ -1,0 +1,77 @@
+// class RenderSubstrate — the game-agnostic, per-Core RENDER SUBSTRATE.
+//
+// These members are HOST-ONLY render-substrate state (compare-mode toggles, per-object walk-scope
+// diag tags, packet-pool span/attribution trackers, the dual-view snapshot buffers, per-frame render
+// counters, the native-depth cache, and the per-frame projection constants). None of
+// them hold guest memory, and none carry a ctor back-pointer to Core — they bind lazily (bind()/
+// sCurrent) or are pure value state. They used to live on the game-side `class Render` umbrella
+// (game/render/render.h), which forced the framework (runtime/psx/) to include that whole game
+// header just to reach a projection cache or a compare-mode toggle. Splitting them out onto a
+// framework-owned value member (`Core::rsub`) lets the substrate reach them without pulling in the
+// game render umbrella. Byte-neutral: SBS compares guest RAM / scratchpad / GTE, never C++ layout.
+#pragma once
+#include "gte_preop_observer.h"
+#include "guest_packet_filter.h"
+#include "ot_attr.h"
+#include "picture_announce.h"
+#include "producer_census.h"
+#include "producer_scope.h"
+#include "proj_params.h"
+#include "proj_prim.h"
+#include "projection_provenance.h"
+#include "render_diag.h"
+#include "render_mode.h"
+#include "render_stats.h"
+class Core;
+
+class RenderSubstrate {
+public:
+  RenderMode mode;
+  RenderDiag diag; // per-object walk-scope tags (currentNode, currentGeomblk)
+  OtAttr otAttr;   // OT/GTE submission attribution (`debug otattr`; ot_attr.h)
+  // Per-Core owner stack + filter for guest packets whose execution must survive a native producer
+  // replacement.  Stores no guest state and is consumed only by delayed GP0 presentation.
+  GuestPacketFilter guestPacketFilter;
+  // The per-run producer table (fed from each sealed frame record) and the native render path's
+  // current-producer stack.
+  psx::debug::ProducerCensus census;
+  ProducerScopeState producerScope;
+  // Are we INSIDE the guest's own GP0 execution right now? Set only by GuestGp0Scope (below), read only
+  // by the native render queue's chokepoint, so a push that came from the guest's linked-list walk is
+  // counted as GUEST-ORIGIN instead of as an undeclared native producer — a guest prim has no native
+  // producer to declare, and conflating the two made the DB's headline number unable to reach zero on any
+  // leg that walks the guest OT. Host-only, writes no guest memory.
+  int guestGp0Depth = 0;
+  RenderStats stats;         // per-frame render diag counters (ndepth / projprim)
+  ProjPrim projprim;         // vertex-depth cache for native depth path (per-Core; SBS-safe)
+  ProjParams projParams;     // camview + per-frame projection constants (per-Core)
+  GtePreOpObserver gtePreOp; // explicitly armed pre-GTE diagnostic observer (per-Core)
+  // Which title-scoped guest projection produced each screen vertex this frame: the provenance a
+  // guest-geometry temporal source pairs two real frames' vertices by (projection_provenance.h).
+  psxport::temporal::ProjectionProvenance projectionProvenance;
+  // The picture geometry last announced for this Core (the `[wide] native picture:` line;
+  // picture_announce.h owns why it is per-Core and why it reports changes rather than once).
+  psx::picture::Geometry announcedPicture;
+};
+
+// Marks the guest's own GP0 execution for the producer census. Nesting-safe by depth rather than a bool:
+// the guest's DMA walk can re-enter, and a bool would clear the mark on the first inner exit and silently
+// re-attribute the remainder of the outer walk to "undeclared native".
+class GuestGp0Scope {
+public:
+  explicit GuestGp0Scope(RenderSubstrate *rsub) : mRsub(rsub) {
+    if (mRsub) {
+      mRsub->guestGp0Depth++;
+    }
+  }
+  ~GuestGp0Scope() {
+    if (mRsub && mRsub->guestGp0Depth > 0) {
+      mRsub->guestGp0Depth--;
+    }
+  }
+  GuestGp0Scope(const GuestGp0Scope &) = delete;
+  GuestGp0Scope &operator=(const GuestGp0Scope &) = delete;
+
+private:
+  RenderSubstrate *mRsub;
+};
