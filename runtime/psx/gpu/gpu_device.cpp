@@ -249,10 +249,12 @@ DeviceProbe GpuDevice::probe(unsigned long dispatchedBefore, unsigned long dropp
   if ((GPU.DisplayMode & 0x24) == 0x24 && !GPU.dfe && !psx_gpu_rasterize_both_fields) {
     state.skipRowParity = static_cast<int>((GPU.DisplayFB_YStart + (GPU.field_ram_readout ? 1u : 0u)) & 1u);
   }
+  probe.texDisable = GPU.TexDisable;
   probe.spriteFlipX = (GPU.SpriteFlip & 0x1000) != 0;
   probe.spriteFlipY = (GPU.SpriteFlip & 0x2000) != 0;
   probe.clutTag = GPU.CLUT_Cache_VB;
   probe.clut = std::span<const uint16_t>(GPU.CLUT_Cache, 256);
+  probe.vram = std::span<const uint16_t>(GPU_get_vram(), static_cast<size_t>(kDeviceVramWidth) * kDeviceVramHeight);
   return probe;
 }
 
@@ -280,6 +282,9 @@ void GpuDevice::gp1(uint32_t word, uint64_t cpuTicks) {
   advanceTo(cpuTicks);
   GPU_Write(0, kGp1Port, word);
   const uint32_t command = word >> 24;
+  if (command == 0x00) {
+    mTap.onSoftReset(probe(dispatched, dropped));
+  }
   if (command == 0x00 || command == 0x01) {
     mTap.onCommandReset(probe(dispatched, dropped));
   } else {

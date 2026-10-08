@@ -2,6 +2,7 @@
 #pragma once
 
 #include "frame_record.h"
+#include "texture_feedback.h"
 
 #include <cstdint>
 #include <optional>
@@ -20,10 +21,12 @@ struct DeviceProbe {
   unsigned dispatched = 0;  // commands the device dispatched while consuming the word
   bool wordDropped = false; // the device discarded the word on a full FIFO
   present::RecordDrawState state;
+  bool texDisable = false; // gpu.c TexDisable
   bool spriteFlipX = false;
   bool spriteFlipY = false;
   std::uint32_t clutTag = 0;           // gpu.c CLUT_Cache_VB
   std::span<const std::uint16_t> clut; // gpu.c CLUT_Cache, 256 entries
+  std::span<const std::uint16_t> vram; // the device's VRAM, 1024x512
 };
 
 // Frames the GP0 word stream exactly as gpu.c's ProcessFIFO does, decodes each command with
@@ -45,6 +48,8 @@ public:
   void enterSlot(const std::optional<present::OtSlot> &slot, bool descending);
   // A device step that consumed no GP0 word: GP1, GPUREAD, GPUSTAT.
   void onDeviceStep(const DeviceProbe &probe);
+  // GP1(00): gpu.c GPU_SoftReset, which also invalidates the texture cache.
+  void onSoftReset(const DeviceProbe &probe);
   // GP1(00) or GP1(01): the device dropped its FIFO and any command in progress.
   void onCommandReset(const DeviceProbe &probe);
   // The device's whole state was replaced; nothing recorded so far describes it.
@@ -67,6 +72,9 @@ private:
                          bool semi,
                          const DeviceProbe &probe);
   void recordSprite(const DeviceProbe &probe);
+  // Settles the last primitive: tracks what it wrote and keeps the device's pixels when its texture reads
+  // depended on writes the rasterizer's snapshot cannot order.
+  void settleLast(const DeviceProbe &probe);
   void consumeUploadWord(std::uint32_t word);
   void consumePolyLineWord(std::uint32_t word, const DeviceProbe &probe);
   void resyncIfIdle(const DeviceProbe &probe);
@@ -101,6 +109,8 @@ private:
   present::VramUpload upload_{};
   std::uint32_t uploadRemaining_ = 0;
   std::vector<std::uint16_t> uploadPixels_;
+
+  TextureFeedback feedback_;
 
   std::uint32_t clutTag_ = 0xFFFFFFFFu;
   std::uint32_t clutOffset_ = present::kNoClut;

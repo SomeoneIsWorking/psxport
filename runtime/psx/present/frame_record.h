@@ -206,6 +206,7 @@ public:
   void append(const RecordEntry &entry);
   // The most recent entry, or null.
   RecordEntry *last();
+  void dropLast();
   // Returns the pool offset of `entries`, or kNoClut when the pool is full.
   std::uint32_t appendClut(std::span<const std::uint16_t> entries);
   // Appends an upload with its pixels; sets upload.pixelOffset.

@@ -59,6 +59,12 @@ RecordEntry *FrameRecord::last() {
   return entries_.empty() ? nullptr : &entries_.back();
 }
 
+void FrameRecord::dropLast() {
+  if (!entries_.empty()) {
+    entries_.pop_back();
+  }
+}
+
 std::uint32_t FrameRecord::appendClut(std::span<const std::uint16_t> entries) {
   if (!complete_) {
     return kNoClut;
