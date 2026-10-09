@@ -34,6 +34,10 @@ public:
   // Every guest handler the framework dispatches as an interrupt runs on this stack for the same
   // reason. It sits directly under the BIOS work area, in the kernel region no guest data occupies.
   static constexpr uint32_t kExceptionStackTop = kWorkBase;
+  // The return address an interrupt handler runs under: the dispatch stops at the first guest PC equal
+  // to it, so it must be an address no code executes (the interrupted context's own $ra is one a
+  // handler can reach by calling the same libcd routine).
+  static constexpr uint32_t kInterruptReturnSentinel = 0xDEAD0000u;
   enum class PadWorkAreaAction { Enable, Disable };
   Game *game = nullptr;
   HleEvCB ev[16] = {}; // was s_ev[EVCB_MAX]

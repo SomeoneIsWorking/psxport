@@ -19,7 +19,7 @@
 namespace {
 
 // MIPS o32 argument and result registers used by the BIOS interrupt-chain ABI.
-enum { A0 = 4, V0 = 2, SP = 29 };
+enum { A0 = 4, V0 = 2, SP = 29, RA = 31 };
 
 // The guest-owned DMA callback table base, from whichever seam the runtime declared it on; 0 when the
 // title keeps its callbacks in the native registry instead.
@@ -41,6 +41,7 @@ static void dispatchCustomExceptionExit(Core *core, uint32_t address) {
 
 void Hle::enterExceptionStack(Core &core) {
   core.r[SP] = kExceptionStackTop;
+  core.r[RA] = kInterruptReturnSentinel;
 }
 
 // ---- interrupt delivery -------------------------------------------------------------------------
@@ -341,6 +342,7 @@ void Hle::irqPoll(Core *c) {
   }
 
   if (exception_exit_buf) {
+    c->r[RA] = kInterruptReturnSentinel;
     custom_exit_active = 1;
     const BiosInterruptDispatchResult result =
         bios_interrupt_dispatch_custom_exit(c, exception_exit_buf, dispatchCustomExceptionExit);
