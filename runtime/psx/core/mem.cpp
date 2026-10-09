@@ -865,7 +865,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       // Sync mode decides what MADR and BCR even MEAN, and mode 2 ignores BCR entirely. Reading a
       // chain as a block count transferred the wrong words and then announced completion, which is
       // worse than not transferring: the guest stops waiting for something that never ran.
-      const unsigned mode = psx::dma::syncMode(dma.dma3Bcr);
+      const unsigned mode = psx::dma::syncMode(v);
       uint32_t endMadr = dma.dma3Madr & 0x1FFFFC;
       bool chainRefused = false;
       int n = mode == psx::dma::kLinkedList ? psx::dma::chainWords(*this, dma.dma3Madr, &endMadr, &chainRefused)
