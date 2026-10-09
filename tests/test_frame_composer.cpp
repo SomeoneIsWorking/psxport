@@ -5,6 +5,7 @@
 #include "marker_render.h"
 #include "testutil.h"
 
+#include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -215,6 +216,41 @@ static void test_an_object_drawn_from_two_scopes_is_ambiguous(void) {
   CHECK(!psx::present::composeFrame(shown, nullptr, to, 1.0f, renders).has_value());
 }
 
+// Two triangles of the object in one slot, the guest's draw mode changing between them.
+class PairRender final : public psx::present::StateProducer {
+public:
+  void render(std::span<const std::byte>,
+              std::span<const std::byte>,
+              float,
+              psx::present::PrimitiveSink &sink) const override {
+    for (const float x : {40.0f, 60.0f}) {
+      DrawPrimitive primitive;
+      primitive.vertexCount = 3;
+      psx::present::placeVertex(primitive.vertices[0], x, 0.0f, primitive.kind);
+      sink.emit(OtSlot{0, 1}, primitive);
+    }
+  }
+};
+
+static void test_the_nth_primitive_in_a_slot_takes_the_nth_entrys_environment(void) {
+  psx::present::StateProducers renders;
+  renders.install(kProducer, std::make_unique<PairRender>());
+  FrameRecord shown(2, true);
+  shown.beginSlot({0, 1}, true);
+  const RecordKey key{kProducer, kObject, 0, 0, 9};
+  shown.append(triangle(40, key, 1));
+  DrawPrimitive dithered = triangle(60, key, 1);
+  dithered.state.dither = true;
+  shown.append(dithered);
+  const FrameState to = stateFor(shown, 9, {0.0f, 1, 0});
+  const auto composed = psx::present::composeFrame(shown, nullptr, to, 1.0f, renders);
+  CHECK(composed.has_value());
+  CHECK(composed && composed->entries().size() == 2u);
+  CHECK(composed && !primitiveAt(*composed, 0).state.dither);
+  CHECK(composed && primitiveAt(*composed, 1).state.dither);
+  CHECK(composed && primitiveAt(*composed, 1).vertices[0].x == 60 + kOffsetX);
+}
+
 int main() {
   RUN(a_record_with_no_produced_object_is_the_frame);
   RUN(the_render_at_t_replaces_the_object_in_its_slot);
@@ -227,5 +263,6 @@ int main() {
   RUN(a_clut_resolves_to_one_the_record_sampled);
   RUN(states_follow_the_scope_that_wrote_the_packets);
   RUN(an_object_drawn_from_two_scopes_is_ambiguous);
+  RUN(the_nth_primitive_in_a_slot_takes_the_nth_entrys_environment);
   return pt_summary();
 }

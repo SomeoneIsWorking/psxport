@@ -169,8 +169,9 @@ The composer builds the frame at `t` from S's record:
   each packet its bucket instead (`OtTables::assign`), good for one walk. `render` emits each
   primitive with the slot the guest function would have inserted it into at that state, from the same
   depth-to-bucket rule the original uses. The record keeps where the walk passed each bucket head.
-  A producer's primitives go where its entries were in that slot in S, or, in a slot it did not use in
-  S, at the slot's head, where the last `AddPrim` into it lands; in a bucket S left empty, where the
+  A producer's primitives go where its entries were in that slot in S (the n-th at the object's n-th
+  entry there, so guest draw-mode changes between them stay where the guest put them), or, in a slot it
+  did not use in S, at the slot's head, where the last `AddPrim` into it lands; in a bucket S left empty, where the
   table's walk order puts it. A render naming a table S never walked, or a CLUT S never sampled, leaves
   that object as S drew it.
 - **Environment.** A render sets texture page, texture mode and blend mode; draw area, offset,
