@@ -155,6 +155,7 @@ struct VramUpload {
   bool maskCheck = false;
   std::uint32_t pixelOffset = 0;
   std::uint32_t sourceAddress = 0;
+  std::optional<RecordKey> key; // set when the pixels bake a keyed primitive (texture feedback)
 
   bool operator==(const VramUpload &) const = default;
 };

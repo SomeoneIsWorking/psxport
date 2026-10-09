@@ -449,6 +449,7 @@ void Gp0RecordTap::settleLast(const DeviceProbe &probe) {
   upload.width = rect.x1 - rect.x0;
   upload.height = rect.y1 - rect.y0;
   upload.sourceAddress = primitive->sourceAddress;
+  upload.key = primitive->key;
   std::vector<std::uint16_t> pixels;
   pixels.reserve(static_cast<std::size_t>(upload.width) * static_cast<std::size_t>(upload.height));
   for (int y = rect.y0; y < rect.y1; y++) {

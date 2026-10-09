@@ -12,6 +12,9 @@ namespace psx::gpu {
 // The VRAM rect a primitive can write: its vertices or sprite extent inside the draw area.
 RecordRect drawBounds(const present::DrawPrimitive &primitive);
 
+// Whether `entry` writes a VRAM pixel inside `rect`: a primitive's draw bounds, a fill, or a copy or upload target.
+bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect);
+
 // VRAM pixels drawn into since gpu.c last invalidated its texture cache (upload, copy, read). gpu.c fills a cache
 // line on a miss and serves it until then, and a draw reads its own earlier pixels, so a texture read from a
 // written pixel depends on the device's fetch order. The rasterizer samples a snapshot, which cannot say.

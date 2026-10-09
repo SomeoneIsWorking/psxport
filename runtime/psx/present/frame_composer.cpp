@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -138,6 +139,13 @@ std::optional<FrameRecord> composeFrame(
   std::vector<Covered> covered;
   std::unordered_map<std::uint64_t, std::size_t> coveredIndex;
   std::unordered_map<std::uint32_t, std::uint32_t> clutOffsets;
+  // Objects with a primitive baked into an upload: their pixels are in the record, so a render would draw them twice.
+  std::unordered_set<std::uint64_t> baked;
+  for (const RecordEntry &entry : entries) {
+    if (const auto *upload = std::get_if<VramUpload>(&entry); upload != nullptr && upload->key) {
+      baked.insert(objectKey({upload->key->producer, upload->key->object}));
+    }
+  }
   for (std::size_t i = 0; i < entries.size(); i++) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entries[i]);
     if (primitive == nullptr) {
@@ -150,6 +158,9 @@ std::optional<FrameRecord> composeFrame(
       continue;
     }
     const ObjectId id{primitive->key->producer, primitive->key->object};
+    if (baked.contains(objectKey(id))) {
+      continue;
+    }
     auto found = coveredIndex.find(objectKey(id));
     if (found == coveredIndex.end()) {
       const StateProducer *render = producers.find(id.producer);
