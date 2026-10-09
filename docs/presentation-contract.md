@@ -8,7 +8,8 @@ capture. None of those responsibilities is interpolation.
 `FrameLoopShell` is the product entry boundary above that fence. After the title has registered its
 native overrides, `prepareProduct(Game&)` validates the mandatory `Game::frameDriver`, installs the
 framework-owned fatal VSync trap as the final native binding at that address, and requires the
-measured VSync fact. It performs no implicit pad, audio, render, or present service; `step` delegates
+measured VSync fact. A nonnegative `VSync(n)` returns the HBlanks of one whole field (263 NTSC, 314 PAL) in `$v0`, so a guest
+polling `VSync(1)` for a late scanline leaves its loop at the field boundary. It performs no implicit pad, audio, render, or present service; `step` delegates
 exactly one finite `stepFrame(Core&, frame)` and refuses if that preflight was skipped. The title driver owns the measured ordering of those services and
 must call `Game::presentation.commit(...)` exactly once, or implement a measured unpresented fence.
 The shell snapshots `FramePresenter::fence()` around the call and aborts unless it advances by exactly

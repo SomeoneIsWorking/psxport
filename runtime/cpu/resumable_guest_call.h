@@ -1,6 +1,6 @@
 // resumable_guest_call — one guest call that may legitimately cross host turns.
 //
-// The contract, in six statements. Every one of them was previously re-derived by each title that
+// The contract, in seven statements. Every one of them was previously re-derived by each title that
 // owned a native function that calls guest code:
 //
 //   1. the return address is captured BEFORE the first dispatch and reused on every resume, so a
@@ -16,12 +16,17 @@
 //      SUSPENSION: the first ran out of cycles, the second reached the guest's own field barrier, and
 //      the third handed the turn back from a native replacement, and `CallStep::reason` says which.
 //
+//   7. the register file the call suspended with is kept and put back before the next segment, because
+//      the host work between two fields (input, audio, interrupt delivery, native guest calls)
+//      borrows the same registers and a call suspended mid-body needs every one of them.
+//
 // The ENTRY address, the RETURN address and the turn cap VALUE are the caller's facts. The loop,
 // the latch, the refusals and the classification are not.
 #pragma once
 
 #include "execution_exit.h"
 #include "image_identity.h"
+#include "r3000.h"
 
 #include <cstdint>
 #include <optional>
@@ -112,6 +117,7 @@ private:
   std::uint32_t turnCap_ = kDefaultCallTurns;
   std::uint32_t turns_ = 0;
   std::uint64_t cycles_ = 0;
+  R3000 suspended_{};
   bool pending_ = false;
 };
 

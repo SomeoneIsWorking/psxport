@@ -188,6 +188,32 @@ static void test_a_call_that_outlives_its_turn_is_resumed_to_the_callers_boundar
   CHECK(core.guestCallCensus().deepestTurns() > 1u);
 }
 
+// Between two fields the host runs its own services, and native guest calls among them borrow the register
+// file. A call suspended mid-body must still see every register it suspended with.
+static void test_host_work_between_segments_cannot_disturb_a_suspended_call(void) {
+  Fixture fixture;
+  Core &core = fixture.game->core;
+  psx::cpu::ResumableGuestCall call;
+  call.begin(core, "test disturbed call", kEntry, kOuterReturn, 64u);
+  const psx::cpu::ExecutionBudget segment = psx::cpu::ExecutionBudget::fromCycles(200);
+  psx::cpu::CallStep step = call.advance(std::nullopt, segment);
+  std::uint32_t resumes = 1u;
+  while (step.outcome == psx::cpu::CallOutcome::Suspended && resumes < 64u) {
+    for (std::uint32_t reg = 1; reg < 32; ++reg) {
+      core.r[reg] = 0xA5A50000u + reg;
+    }
+    core.hi = 0x1234u;
+    core.lo = 0x5678u;
+    core.pc = 0x0BAD0000u;
+    step = call.advance(std::nullopt, segment);
+    ++resumes;
+  }
+  CHECK(step.outcome == psx::cpu::CallOutcome::Returned);
+  CHECK(resumes > 1u);
+  CHECK_EQ(step.value, 107u);
+  CHECK_EQ(core.pc, kOuterReturn);
+}
+
 // The cap is a policy constant in display fields, and it REFUSES by answering rather than by
 // aborting, so a caller that owns the surrounding decision can report it.
 static void test_the_turn_cap_refuses_a_guest_that_never_returns(void) {
@@ -302,6 +328,7 @@ static void test_installing_an_override_resolves_the_image_and_refuses_a_foreign
 
 int main() {
   RUN(a_call_that_outlives_its_turn_is_resumed_to_the_callers_boundary);
+  RUN(host_work_between_segments_cannot_disturb_a_suspended_call);
   RUN(the_turn_cap_refuses_a_guest_that_never_returns);
   RUN(resuming_a_call_that_is_not_pending_is_refused);
   RUN(a_cooperative_yield_with_no_guest_cycles_suspends_and_the_call_still_finishes);

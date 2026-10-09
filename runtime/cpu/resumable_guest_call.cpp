@@ -74,6 +74,9 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
     return refused("the call reached its turn cap", resumePc_, turns_, cycles_);
   }
 
+  if (turns_ != 0u) {
+    *static_cast<R3000 *>(&core) = suspended_;
+  }
   ExecutionResult result =
       turns_ == 0u ? (original ? callOriginal(core, *original, budget) : dispatchGuest(core, entry_, budget, owner_))
                    : (original ? resumeOriginal(core, *original, resumePc_, returnPc_, budget)
@@ -111,6 +114,7 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
                    result.reason);
   }
   resumePc_ = result.guestPc;
+  suspended_ = *static_cast<const R3000 *>(&core);
   return CallStep{CallOutcome::Suspended, result.guestPc, turns_, cycles_, 0u, {}, result.reason};
 }
 

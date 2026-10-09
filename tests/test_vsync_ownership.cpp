@@ -48,7 +48,10 @@ void assert_wait_modes_request_frame_boundary(Game &game) {
   CHECK(handler != nullptr);
   for (const int32_t mode : {0, 1, 4}) {
     game.core.r[4] = static_cast<uint32_t>(mode);
+    game.core.r[2] = 0u;
     handler(&game.core);
+    // The elapsed HBlank count a polling `VSync(1)` loop compares against a late scanline.
+    CHECK_EQ(game.core.r[2], 263u);
     const auto result = game.core.executionControl().consume();
     CHECK(result.has_value());
     if (result) {
