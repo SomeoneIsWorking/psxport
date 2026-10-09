@@ -197,9 +197,9 @@ time and the OT walk stamps the key on its entries, so the composer knows what a
 - **Shown record.** A present shows the latest held drawing record with a primitive whose draw area is
   the displayed buffer (`drawAreaSpansBuffer`, the canvas rule): the newest drawing record on a
   single-buffered title, the one before it on a double-buffered one, however many empty records were
-  sealed between them. A later record that wrote the displayed buffer (a clear, a fill, an upload) makes that picture
-  stale: the present is then the device's (`FramePresenter::shownRecord`). The presenter remembers which record each
-  present showed.
+  sealed between them. A later record that wrote the displayed buffer (a clear, a fill, an upload, a copy
+  elsewhere; a copy onto its own source writes nothing) makes that picture stale: the present is then the
+  device's (`FramePresenter::shownRecord`). The presenter remembers which record each present showed.
 - **Cadence.** With the title's 60 fps on, each logic frame gets two presents, at `t = 0.5` and
   `t = 1`; with it off, one at `t = 1`. With no record drawing the displayed buffer, S' unknown, or a
   record after S' missing or incomplete, the present is `t = 1`.

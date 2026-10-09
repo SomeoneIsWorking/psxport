@@ -73,6 +73,10 @@ bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect) 
   } else if (const auto *fill = std::get_if<present::VramFill>(&entry)) {
     written = clampedVramRect(fill->x, fill->y, fill->width, fill->height);
   } else if (const auto *copy = std::get_if<present::VramCopy>(&entry)) {
+    // A copy onto its own source changes no pixel (the guest issues a 2x1 one as a fence).
+    if (copy->srcX == copy->dstX && copy->srcY == copy->dstY) {
+      return false;
+    }
     written = clampedVramRect(copy->dstX, copy->dstY, copy->width, copy->height);
   } else if (const auto *upload = std::get_if<present::VramUpload>(&entry)) {
     written = clampedVramRect(upload->x, upload->y, upload->width, upload->height);

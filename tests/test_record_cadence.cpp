@@ -290,6 +290,29 @@ static void test_a_later_record_over_the_displayed_buffer_is_not_composed_over(v
   CHECK(!backend.realComposed);
 }
 
+// A copy onto its own source (the guest's 2x1 fence) changes no pixel: the shown picture stays composed.
+static void test_a_copy_onto_itself_leaves_the_shown_picture_composed(void) {
+  psx::frame::FramePresenter presenter;
+  RecordBackend backend(presenter);
+  const psx::present::StateProducers renders = marker::renders(kKey.producer);
+  backend.producers = &renders;
+  const FrameRecord first = slottedRecordAt(0, 0, 1);
+  presenter.commit(backend, 2, first, savedAt(first, 1, 0.0f));
+  CHECK(backend.realComposed);
+
+  psx::present::VramCopy fence;
+  fence.srcX = 0;
+  fence.srcY = 0;
+  fence.dstX = 0;
+  fence.dstY = 0;
+  fence.width = 2;
+  fence.height = 1;
+  FrameRecord second(1, true);
+  second.append(fence);
+  presenter.commit(backend, 2, second, psx::present::FrameState());
+  CHECK(backend.realComposed);
+}
+
 int main(void) {
   RUN(consecutive_records_present_the_blend_then_n);
   RUN(a_cut_shows_n_as_its_in_between);
@@ -301,5 +324,6 @@ int main(void) {
   RUN(a_display_no_record_drew_has_no_in_between);
   RUN(every_present_draws_the_producers_render_at_its_t);
   RUN(a_later_record_over_the_displayed_buffer_is_not_composed_over);
+  RUN(a_copy_onto_itself_leaves_the_shown_picture_composed);
   return pt_summary();
 }
