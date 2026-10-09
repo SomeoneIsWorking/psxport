@@ -2,7 +2,9 @@
 
 #include "core.h"
 #include "game.h"
+#include "game_runtime.h"
 #include "gpu_vk.h"
+#include "guest_widescreen_projection.h"
 
 int gpu_vk_wide_presentation(Core *);
 int gpu_vk_wide_presentation_w(Core *);
@@ -25,7 +27,22 @@ Mechanism guest_mechanism(Core &core) {
   return Mechanism{engaged ? gpu_vk_wide_presentation_w(&core) : 0, engaged};
 }
 
+// A guest-widened title says per frame whether its coordinates already include the widening.
+Rq2dSpace guest_space(Core &core, const Mechanism &host, const Mechanism &guest, Rq2dSpace declared) {
+  const GuestWidescreenProjection *policy = core.runtime ? core.runtime->guestWidescreenProjection() : nullptr;
+  const bool widened = policy != nullptr && policy->guestCoordinatesWidened(core);
+  return wide_2d_guest_space(host.engaged, guest.engaged, widened, declared);
+}
+
 } // namespace
+
+Rq2dSpace
+wide_2d_guest_space(bool host_engaged, bool guest_engaged, bool guest_coordinates_widened, Rq2dSpace declared) {
+  if (host_engaged || !guest_engaged) {
+    return declared;
+  }
+  return guest_coordinates_widened ? RQ_2D_WIDE_FINAL : declared;
+}
 
 Wide2dExtent wide_2d_extent(int host_wide, bool host_engaged, int guest_wide, bool guest_engaged, int native) {
   if (host_engaged) {
@@ -62,5 +79,11 @@ Rq2dXform wide_2d_layout(Core &core, Rq2dSpace space, int layer, bool flat, bool
   if (extent.wide <= extent.native) {
     return {}; // 4:3, or nothing widened: the identity, which is what the rule returns anyway
   }
-  return rq_2d_xform(extent.wide, extent.native, space, layer, flat, untextured);
+  return rq_2d_xform(extent.wide, extent.native, guest_space(core, host, guest, space), layer, flat, untextured);
+}
+
+bool wide_2d_centres_guest_frame(Core &core) {
+  const Mechanism host = host_mechanism(core);
+  const Mechanism guest = guest_mechanism(core);
+  return wide_2d_layout_active(core) && guest_space(core, host, guest, RQ_2D_AUTHORED_4_3) == RQ_2D_AUTHORED_4_3;
 }

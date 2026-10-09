@@ -1,6 +1,7 @@
 #include "game.h"
 #include "gpu_vk.h"
 #include "gpu_vk_internal.h"
+#include "wide_2d_layout.h"
 #include "wide_margin_plan.h"
 
 // WIDESCREEN STORAGE IS NOT A FRAMEBUFFER. The guest owns only [sx,sx+native_w); the extra
@@ -15,12 +16,16 @@
 // keeps out of the rows it draws in the displayed buffer; see host_margin_bands.
 void GpuVkState::draw_wide_margin(
     int sx, int sy, int native_w, int disp_w, int h, bool rgb24, bool presentCarriesGeometry) {
-  const WideMarginPlan margin = plan_wide_margin(sx, sy, native_w, disp_w, h, rgb24);
   Core *core = &game->core;
-  const bool guestDrawsMargin = presentCarriesGeometry && gpu_vk_wide_presentation(core) && !gpu_vk_wide_engine(core);
+  const bool centredLayout = presentCarriesGeometry && wide_2d_centres_guest_frame(*core);
+  const WideMarginPlan margin = plan_wide_margin(sx, sy, native_w, disp_w, h, rgb24);
+  // A centred layout leaves both margins to the host; only a widened guest draws its own.
+  const bool guestDrawsMargin =
+      presentCarriesGeometry && !centredLayout && gpu_vk_wide_presentation(core) && !gpu_vk_wide_engine(core);
   const std::optional<psx::gpu::RowSpan> guestDrawnRows =
       guestDrawsMargin ? game->gpu.s_draw_rows.newestIntersecting({sy, sy + h}) : std::nullopt;
-  const WideMarginBands bands = host_margin_bands(margin, guestDrawnRows);
+  const WideMarginBands bands = centredLayout ? plan_centred_wide_margins(sx, sy, native_w, disp_w, h, rgb24)
+                                              : host_margin_bands(margin, guestDrawnRows);
   if (bands.count == 0) {
     return;
   }

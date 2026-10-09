@@ -23,6 +23,9 @@ public:
   virtual ~GuestWidescreenProjection() = default;
   // The player's aspect setting; a title overrides this only to hold 4:3 in some state.
   virtual PresentationAspect presentationAspect(const Core &core) const;
+  // True while the guest's screen coordinates already come out of the widened projection (a 3D
+  // frame), so the host must not centre them again. A title that cannot tell leaves it false.
+  virtual bool guestCoordinatesWidened(const Core &core) const;
 };
 
 struct GuestPresentationExtent {

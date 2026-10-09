@@ -119,7 +119,20 @@ static void test_the_mechanisms_are_alternatives_not_a_sum(void) {
            428);
 }
 
+// A 3D frame the guest projected wide is finished; the 4:3 layouts of the same title are centred.
+static void test_a_widened_guest_frame_is_not_centred_again(void) {
+  CHECK_EQ(wide_2d_guest_space(false, true, true, RQ_2D_AUTHORED_4_3), RQ_2D_WIDE_FINAL);
+  CHECK_EQ(wide_2d_guest_space(false, true, false, RQ_2D_AUTHORED_4_3), RQ_2D_AUTHORED_4_3);
+  // The host engine and a title with no guest widening ignore the title's answer.
+  CHECK_EQ(wide_2d_guest_space(true, true, true, RQ_2D_AUTHORED_4_3), RQ_2D_AUTHORED_4_3);
+  CHECK_EQ(wide_2d_guest_space(false, false, true, RQ_2D_AUTHORED_4_3), RQ_2D_AUTHORED_4_3);
+  // Finished coordinates move by nothing; authored ones by the margin.
+  CHECK_EQ(rq_2d_xform(684, 512, RQ_2D_WIDE_FINAL, RQ_HUD, false, false).shift, 0);
+  CHECK_EQ(rq_2d_xform(684, 512, RQ_2D_AUTHORED_4_3, RQ_HUD, false, false).shift, 86);
+}
+
 int main(void) {
+  RUN(a_widened_guest_frame_is_not_centred_again);
   RUN(a_guest_projection_widening_makes_the_rule_active);
   RUN(a_host_engine_widening_still_makes_the_rule_active);
   RUN(four_three_three_is_not_active);
