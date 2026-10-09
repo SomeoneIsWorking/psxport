@@ -600,6 +600,17 @@ static void test_a_display_draw_reaches_the_margins(void) {
   CHECK(differsFromVram(out.canvas, 416, 240, out.device, kBuffer.x0 - kMargin, kBuffer.y0) > 0);
 }
 
+// Mega Man X4 shows (0,0,320,240) and (0,240,320,479) alternately: neither canvas may retire the other.
+static void test_a_double_buffer_of_differing_heights_keeps_both_canvases(void) {
+  const psx::gpu::RecordCanvas top{{0, 0, 320, 240}, kMargin};
+  const psx::gpu::RecordCanvas bottom{{0, 240, 320, 479}, kMargin};
+  CHECK(psx::gpu::canvasSurvives(top, 320, kMargin));
+  CHECK(psx::gpu::canvasSurvives(bottom, 320, kMargin));
+  CHECK(!psx::gpu::canvasSurvives(top, 320, kMargin + 1));
+  CHECK(!psx::gpu::canvasSurvives(top, 256, kMargin));
+  CHECK(!psx::gpu::canvasSurvives(top, 320, 0));
+}
+
 // A draw area inset in rows (Tekken 3 draws rows 20..467 of 480) still reaches the margins.
 static void test_a_row_inset_display_draw_reaches_the_margins(void) {
   constexpr int kInset = 20;
@@ -1154,6 +1165,7 @@ int main(void) {
   RUN(four_three_presents_the_device_display);
   RUN(a_display_draw_reaches_the_margins);
   RUN(a_row_inset_display_draw_reaches_the_margins);
+  RUN(a_double_buffer_of_differing_heights_keeps_both_canvases);
   RUN(a_fill_of_the_display_clears_the_margins);
   RUN(an_offscreen_draw_leaves_the_canvas);
   RUN(a_double_buffer_in_between_sits_between_the_shown_pictures);

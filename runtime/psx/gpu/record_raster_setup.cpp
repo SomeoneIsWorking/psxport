@@ -895,6 +895,10 @@ bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect
          area.y0 < buffer.y1 && area.y1 >= buffer.y0;
 }
 
+bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int margin) {
+  return margin > 0 && canvas.margin == margin && canvas.buffer.x1 - canvas.buffer.x0 == displayWidth;
+}
+
 RecordRasterPlan planRecord(const FrameRecord &record, int scale, std::span<const RecordCanvas> canvases) {
   PlanBuilder builder(std::max(scale, 1), record.clutPool(), record.uploadPixels(), canvases);
   for (const present::RecordEntry &entry : record.entries()) {
