@@ -133,6 +133,9 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/keyed_blend.cpp # the in-between record from N-1 and N by key
   ${PSXPORT_ROOT}/runtime/psx/present/frame_state.cpp # producer states by scope serial, collected per record
   ${PSXPORT_ROOT}/runtime/psx/present/state_producer.cpp # the registry of producer renders
+  ${PSXPORT_ROOT}/runtime/psx/present/emit_memory.cpp # guest or host bytes a packet-emitting body runs over
+  ${PSXPORT_ROOT}/runtime/psx/present/gte_control.cpp # the GTE control registers a render runs under
+  ${PSXPORT_ROOT}/runtime/psx/present/host_ordering_table.cpp # packets a body linked into a host table, as primitives
   ${PSXPORT_ROOT}/runtime/psx/present/frame_composer.cpp # the frame at t from a record and producer renders
   ${PSXPORT_ROOT}/runtime/psx/gpu/native_projection.cpp
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
