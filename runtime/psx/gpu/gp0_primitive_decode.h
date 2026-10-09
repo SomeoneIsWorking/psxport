@@ -22,12 +22,16 @@ present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
                                     const Gp0PrimitiveFlags &flags,
                                     const present::RecordVertex &first,
                                     bool isFirst);
+// The two ends of a line packet (not a poly-line), position as written, before the draw offset; a flat line's
+// ends share the first colour.
+void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex &from, present::RecordVertex &to);
 // A textured polygon's texpage attribute into texture page, texture mode and blend mode.
 void applyTexPageAttribute(present::RecordDrawState &state, std::uint16_t attribute);
 
 // One polygon or sprite packet as written, before the draw offset: positions, colours, UVs, and for a
-// textured polygon its texpage and CLUT attributes. A sprite's texture page is the draw environment's.
-// Nullopt for any other command.
+// textured polygon its texpage and CLUT attributes. A sprite's or line's texture page and blend mode are the
+// draw environment's.
+// Nullopt for any other command, and for a poly-line.
 std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std::uint32_t> words);
 
 } // namespace psx::gpu

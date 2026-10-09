@@ -33,6 +33,18 @@ present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
   return vertex;
 }
 
+void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex &from, present::RecordVertex &to) {
+  const bool gouraud = Gp0Command(words[0]).flags().gouraud;
+  from = colourVertex(words[0]);
+  const Gp0VertexPos p0 = Gp0Command(words[1]).vertexPos();
+  from.x = p0.x;
+  from.y = p0.y;
+  to = gouraud ? colourVertex(words[2]) : from;
+  const Gp0VertexPos p1 = Gp0Command(words[gouraud ? 3 : 2]).vertexPos();
+  to.x = p1.x;
+  to.y = p1.y;
+}
+
 void applyTexPageAttribute(present::RecordDrawState &state, std::uint16_t attribute) {
   state.texPageX = (attribute & 0xF) * 64;
   state.texPageY = ((attribute >> 4) & 1) * 256;
@@ -66,6 +78,17 @@ std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std:
       primitive.clutWord = Gp0Command(words[uv0]).textureCoord().selector & 0x7FFFu;
       applyTexPageAttribute(primitive.state, Gp0Command(words[uv0 + stride]).textureCoord().selector);
     }
+    return primitive;
+  }
+  if (command.isLineOrPolyLine()) {
+    if (command.isPolyLine()) {
+      return std::nullopt;
+    }
+    primitive.kind = present::PrimitiveKind::Line;
+    primitive.vertexCount = 2;
+    primitive.textured = false;
+    primitive.modulate = false;
+    decodeLineEnds(words, primitive.vertices[0], primitive.vertices[1]);
     return primitive;
   }
   if (command.isRectangleOrSprite()) {
