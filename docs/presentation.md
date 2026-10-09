@@ -73,6 +73,8 @@ the device still executes every command and holds the guest-visible VRAM.
 - **Scale.** S is the internal-resolution setting (`setires`, `mods.ires`). Vertices and the draw
   area scale; texels, CLUTs and dither stay on the native grid; sprites, lines and fills cover
   S×S blocks; uploads replicate, copies run at full resolution. 24bpp display keeps the device picture.
+  `record.frag` finds a scaled pixel's native pixel by integer floor division; a float divide is inexact
+  at S = 3 and puts each block's first row and column in the block before.
 - **Texture cache.** `gpu.c` fetches texels through a cache that GP0(01), copy, upload, read, soft reset and
   `SetTPage` invalidate (SetTPage runs for E1 and for every textured polygon's own texpage word, and invalidates
   when the page, 4bpp-or-not, or TexDisable changes), and a draw reads pixels it wrote earlier. A textured draw over
@@ -89,8 +91,9 @@ the device still executes every command and holds the guest-visible VRAM.
   image's display rect, a canvas, or an in-between copy). `shot`, `preseq` and the fps60 dump all go
   through `record_shot`, which downloads it and applies the present fade; nothing else reads it.
 - **Test.** `tests/test_record_raster.cpp` replays synthetic GP0 streams through `GpuDevice` and the
-  rasterizer at 1x on a headless Vulkan device and requires all of VRAM to match, and checks the
-  display canvas against the device drawing the same stream with its draw area widened;
+  rasterizer at 1x on a headless Vulkan device and requires all of VRAM to match (at S = 3 and 5, an
+  upload and a sprite reading it must fill every pixel of each block with the device's pixel), and checks
+  the display canvas against the device drawing the same stream with its draw area widened;
   `tests/test_gp0_record_tap.cpp` covers decode and seal boundaries. `tests/test_record_raster.cpp` also drives
   `FramePresenter` and `RecordRasterizer::show` over a single- and a double-buffered stream with a
   keyed moving triangle and requires each in-between to differ from both reals and to equal the device
