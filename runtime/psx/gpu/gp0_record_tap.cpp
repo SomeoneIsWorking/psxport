@@ -232,14 +232,13 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
   }
   if (command.isLineOrPolyLine()) {
     const bool gouraud = command.flags().gouraud;
-    present::RecordVertex from = colourVertex(words_[0]);
-    const Gp0VertexPos p0 = Gp0Command(words_[1]).vertexPos();
-    from.x = p0.x + probe.state.offsetX;
-    from.y = p0.y + probe.state.offsetY;
-    present::RecordVertex to = gouraud ? colourVertex(words_[2]) : from;
-    const Gp0VertexPos p1 = Gp0Command(words_[gouraud ? 3 : 2]).vertexPos();
-    to.x = p1.x + probe.state.offsetX;
-    to.y = p1.y + probe.state.offsetY;
+    present::RecordVertex from;
+    present::RecordVertex to;
+    decodeLineEnds(words_, from, to);
+    from.x += probe.state.offsetX;
+    from.y += probe.state.offsetY;
+    to.x += probe.state.offsetX;
+    to.y += probe.state.offsetY;
     recordLineSegment(from, to, gouraud, command.flags().semiTransparent, probe);
     if (command.isPolyLine()) {
       mode_ = Mode::PolyLine;

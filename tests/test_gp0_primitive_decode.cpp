@@ -113,9 +113,18 @@ static void test_a_fixed_size_sprite(void) {
   checkMatches({0x78FFFFFFu, xy(-2, 100)});
 }
 
+static void test_a_gouraud_line(void) {
+  checkMatches({0x52FFFFFFu, xy(10, 20), 0x00808080u, xy(40, -6)});
+}
+
+static void test_a_flat_line(void) {
+  checkMatches({0x40204060u, xy(1, 2), xy(30, 40)});
+}
+
 static void test_other_commands_decode_to_nothing(void) {
   CHECK(!psx::gpu::decodePacketPrimitive(std::vector<std::uint32_t>{0x02000000u, xy(0, 0), xy(16, 16)}).has_value());
   CHECK(!psx::gpu::decodePacketPrimitive(std::vector<std::uint32_t>{0x20FFFFFFu, xy(0, 0)}).has_value());
+  CHECK(!psx::gpu::decodePacketPrimitive(std::vector<std::uint32_t>{0x48FFFFFFu, xy(0, 0), xy(8, 8)}).has_value());
 }
 
 int main() {
@@ -124,6 +133,8 @@ int main() {
   RUN(a_flat_untextured_quad);
   RUN(a_textured_sprite);
   RUN(a_fixed_size_sprite);
+  RUN(a_gouraud_line);
+  RUN(a_flat_line);
   RUN(other_commands_decode_to_nothing);
   return pt_summary();
 }
