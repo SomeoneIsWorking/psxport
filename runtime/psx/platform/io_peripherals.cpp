@@ -8,8 +8,8 @@
 
 namespace {
 
-// Root counter 1 is HBlank-clocked and derived, so it has a value but no writable state here; root
-// counter 2 is a full value/mode/target trio. Anything else in the timer block is unmapped.
+// Root counter 1 is HBlank-clocked and derived: its value is writable, its mode and target are not
+// modelled; root counter 2 is a full value/mode/target trio. Anything else in the timer block is unmapped.
 constexpr uint32_t kSio0Lo = 0x1F801040u, kSio0Hi = 0x1F80104Fu;
 constexpr uint32_t kCounter1Value = 0x1F801110u;
 constexpr uint32_t kCounter2Lo = 0x1F801120u, kCounter2Hi = 0x1F80112Bu;
@@ -130,8 +130,12 @@ bool io_peripheral_write(Core &core, uint32_t addr, uint32_t value) {
     game.timing.rootCounter2Write(p, value);
     return true;
   }
-  // Root counter 1 is derived from display time and has no writable state: a write is not this
-  // unit's, so it falls through to mem.cpp's unmapped-peripheral report rather than being swallowed.
+  if (p == kCounter1Value) {
+    game.timing.hSyncCounterWrite(static_cast<uint16_t>(value));
+    return true;
+  }
+  // Root counter 1's mode and target are not modelled: the write falls through to mem.cpp's
+  // unmapped-peripheral report rather than being swallowed.
   return false;
 }
 
