@@ -1,10 +1,6 @@
-// DMA sync mode decides what MADR and BCR MEAN, and reading BCR as if bits 0-1 were not there made a
-// mode-2 (linked-list) transfer run a block count taken from a word that is not a size.
-//
-// The measured consequence is a title that stops: Mega Man X4's post-movie task programs a chain, polls
-// a guest flag for completion, and with no chain walk the flag never arrives — so every post-movie frame
-// is one flat clear colour and the title has no picture at all. That is worse than a transfer that does
-// nothing, because the runtime cleared busy and announced completion regardless.
+// DMA sync mode (CHCR bits 9-10) decides what MADR and BCR MEAN. Reading it from BCR bits 0-1 made a
+// plain block transfer of a size ending in binary 10 a linked-list walk: Tekken 3's 98-word last CD
+// sector landed nowhere and the file's tail stayed zero.
 //
 // So these cases pin the DISPATCH (which shape each mode takes) and the three ways a guest's chain can be
 // wrong, each of which must be handled by a stated rule rather than by trusting guest RAM.
@@ -21,6 +17,8 @@ constexpr uint32_t kDma3Madr = 0x1F8010B0;
 constexpr uint32_t kDma3Bcr = 0x1F8010B4;
 constexpr uint32_t kDma3Chcr = 0x1F8010B8;
 constexpr uint32_t kStart = 0x01000100u; // bit 24 start, bit 0 RAM -> CDROM is what DMA3 wants
+constexpr uint32_t kRequestMode = 1u << 9;
+constexpr uint32_t kChainMode = 2u << 9;
 constexpr uint32_t kChainEnd = 0x00FFFFFFu;
 
 // A chain is `{count:24, next:24}` header words, and the payload FOLLOWS each header. Node A at
@@ -65,12 +63,10 @@ static void test_a_chained_transfer_walks_the_nodes() {
   auto *game = new Game();
   Core &core = game->core;
   build_two_node_chain(core);
-  // Sync mode 2 lives in BCR bits 0-1, and BCR's other fields are what a mode-1 transfer would read as a
-  // size. So this fixture gives mode 2 a DELIBERATELY block-shaped BCR: a handler that ignored the sync
-  // mode would move 0x0008 words from the head and never reach node B, which is the bug this file
-  // exists for. (Writing `0x0008` alone here would be mode 0 and would silently test the block path.)
-  program(core, kBaseA, 0x0008u | (1u << 16) | 2u);
-  core.mem_w32(kDma3Chcr, kStart);
+  // The fixture gives mode 2 a DELIBERATELY block-shaped BCR: a handler that ignored the sync mode would
+  // move 8 words from the head and never reach node B.
+  program(core, kBaseA, 0x0008u | (1u << 16));
+  core.mem_w32(kDma3Chcr, kStart | kChainMode);
   // The FIFO is empty in this fixture, so the sector stream reads as controller-zero. What is under
   // test is WHERE the words landed, not what they were.
   CHECK_EQ(core.mem_r32(kBaseA + 4), 0u); // node A payload was written
@@ -93,8 +89,8 @@ static void test_a_block_transfer_still_uses_the_block_count() {
   auto *game = new Game();
   Core &core = game->core;
   build_two_node_chain(core);
-  program(core, kBlockBase, 0x0004u | (2u << 16) | 1u); // mode 1, 4 words x 2 blocks = 8
-  core.mem_w32(kDma3Chcr, kStart);
+  program(core, kBlockBase, 0x0004u | (2u << 16)); // mode 1, 4 words x 2 blocks = 8
+  core.mem_w32(kDma3Chcr, kStart | kRequestMode);
   CHECK_EQ(core.mem_r32(kBlockBase), 0u);
   CHECK_EQ(core.mem_r32(kBlockBase + 28u), 0u);
   // A block transfer's MADR is the guest's own value: the hardware does not walk a list, so advancing
@@ -110,8 +106,8 @@ static void test_a_self_linked_chain_terminates_and_completes() {
   Core &core = game->core;
   build_two_node_chain(core);
   core.mem_w32(kBaseA + 0, 0x01000000u | kPhysA); // 1 word, next -> itself
-  program(core, kBaseA, 2u);
-  core.mem_w32(kDma3Chcr, kStart);
+  program(core, kBaseA, 0u);
+  core.mem_w32(kDma3Chcr, kStart | kChainMode);
   CHECK_EQ(core.mem_r32(kDma3Chcr) & 0x01000000u, 0u);
   CHECK_EQ(core.mem_r32(kBaseA + 4), 0u);
 }
@@ -135,8 +131,8 @@ static void test_an_oversized_count_stops_at_the_ceiling() {
     core.mem_w32(at, 0xFF000000u | nxt);
     core.mem_w32(at + 4, 0x5A5A5A5Au); // a marker the refusal must leave alone
   }
-  program(core, kLongBase, 2u);
-  core.mem_w32(kDma3Chcr, kStart);
+  program(core, kLongBase, 0u);
+  core.mem_w32(kDma3Chcr, kStart | kChainMode);
   // It terminates and clears busy rather than walking 76,500 words: the ceiling is a REFUSAL, and a
   // guest is never left polling a busy channel it cannot clear.
   CHECK_EQ(core.mem_r32(kDma3Chcr) & 0x01000000u, 0u);
@@ -152,14 +148,31 @@ static void test_an_empty_chain_completes() {
   Core &core = game->core;
   build_two_node_chain(core);
   core.mem_w32(kBaseA + 0, 0x00000000u | kChainEnd);
-  program(core, kBaseA, 2u);
-  core.mem_w32(kDma3Chcr, kStart);
+  program(core, kBaseA, 0u);
+  core.mem_w32(kDma3Chcr, kStart | kChainMode);
   CHECK_EQ(core.mem_r32(kDma3Chcr) & 0x01000000u, 0u);
+}
+
+// A BLOCK SIZE ENDING IN BINARY 10 IS STILL A BLOCK. The last sector of a Tekken 3 file reads 98 words
+// (BCR 0x00010062); BCR bits 0-1 are size bits, not a sync mode.
+static void test_a_block_size_ending_in_binary_10_is_not_a_chain() {
+  auto *game = new Game();
+  Core &core = game->core;
+  build_two_node_chain(core);
+  for (uint32_t i = 0; i < 98u; i++) {
+    core.mem_w32(kBlockBase + i * 4u, 0xCCCCCCCCu);
+  }
+  program(core, kBlockBase, 0x00010062u);
+  core.mem_w32(kDma3Chcr, kStart);
+  CHECK_EQ(core.mem_r32(kBlockBase), 0u); // the first and the 98th word were written by the block
+  CHECK_EQ(core.mem_r32(kBlockBase + 97u * 4u), 0u);
+  CHECK_EQ(core.mem_r32(kDma3Madr), kBlockBase); // a block leaves the guest's MADR alone
 }
 
 } // namespace
 
 int main() {
+  RUN(a_block_size_ending_in_binary_10_is_not_a_chain);
   RUN(a_chained_transfer_walks_the_nodes);
   RUN(a_block_transfer_still_uses_the_block_count);
   RUN(a_self_linked_chain_terminates_and_completes);

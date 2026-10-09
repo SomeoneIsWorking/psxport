@@ -6,8 +6,8 @@
 
 namespace psx::dma {
 
-unsigned syncMode(std::uint32_t bcr) {
-  return bcr & 3u;
+unsigned syncMode(std::uint32_t chcr) {
+  return (chcr >> 9) & 3u;
 }
 
 int chainWords(Core &core, std::uint32_t madr, std::uint32_t *endMadr, bool *refused) {
