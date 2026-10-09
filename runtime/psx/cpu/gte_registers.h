@@ -30,8 +30,20 @@ inline constexpr std::uint32_t kMac1 = 25;
 inline constexpr std::uint32_t kMac2 = 26;
 inline constexpr std::uint32_t kMac3 = 27;
 
-// Control registers: 0..4 the rotation matrix, 5..7 the translation.
+// Control registers: 0..4 the rotation matrix, 5..7 the translation, 8..12 the light matrix.
 inline constexpr std::uint32_t kRotation = 0;
+inline constexpr std::uint32_t kRotationWords = 5;
+inline constexpr std::uint32_t kTranslationX = 5;
+inline constexpr std::uint32_t kTranslationY = 6;
+inline constexpr std::uint32_t kTranslationZ = 7;
+inline constexpr std::uint32_t kLight0 = 8;
+inline constexpr std::uint32_t kLight1 = 9;
+inline constexpr std::uint32_t kLight2 = 10;
+inline constexpr std::uint32_t kLight3 = 11;
+inline constexpr std::uint32_t kLight4 = 12;
+inline constexpr std::uint32_t kFarRed = 21;
+inline constexpr std::uint32_t kFarGreen = 22;
+inline constexpr std::uint32_t kFarBlue = 23;
 inline constexpr std::uint32_t kOfx = 24; // 16.16 screen offset
 inline constexpr std::uint32_t kOfy = 25;
 inline constexpr std::uint32_t kH = 26; // projection plane distance
@@ -47,6 +59,11 @@ inline constexpr std::uint32_t kAvsz3 = 0x4B58002Du;
 inline constexpr std::uint32_t kAvsz4 = 0x4B68002Eu;
 inline constexpr std::uint32_t kDpcs = 0x4A780010u;
 inline constexpr std::uint32_t kDcpl = 0x4A680029u;
-inline constexpr std::uint32_t kCc = 0x4B38041Cu; // lm=1
+inline constexpr std::uint32_t kCc = 0x4B38041Cu;          // lm=1
+inline constexpr std::uint32_t kMvmvaRtIr = 0x4A49E012u;   // sf, RT * IR, no offset
+inline constexpr std::uint32_t kMvmvaRtV0 = 0x4A486012u;   // sf, RT * V0, no offset
+inline constexpr std::uint32_t kMvmvaRtIrTr = 0x4A498012u; // sf, RT * IR + TR
+inline constexpr std::uint32_t kGpf = 0x4B90003Du;         // sf, MAC = IR0 * IR
+inline constexpr std::uint32_t kIntpl = 0x4A980011u;       // IR toward FC by IR0
 
 } // namespace psx::gte
