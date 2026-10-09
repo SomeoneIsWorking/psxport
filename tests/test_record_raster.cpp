@@ -1,5 +1,5 @@
 // test_record_raster — GP0 streams executed by the GPU device, then replayed from its FrameRecord by
-// RecordRasterizer at 1x on a headless Vulkan device; all of VRAM must match pixel for pixel.
+// RecordRasterizer on a headless Vulkan device; all of VRAM must match pixel for pixel (at S > 1, block for pixel).
 //
 // Bounds the streams respect, each a gpu.c behaviour the rasterizer does not reproduce:
 //   - gpu.c's texture cache is invalidated only by copy, upload, read and texpage changes, so a draw
@@ -104,8 +104,9 @@ struct Outcome {
   std::size_t uploads = 0; // upload entries after the pattern: the tap's device-resolved primitives
 };
 
-// VRAM starts as a seeded pattern (applied by resync), then `stream` runs and is replayed.
-Outcome replay(const Stream &stream, const std::vector<std::uint32_t> &gp1 = {}) {
+// VRAM starts as a seeded pattern (applied by resync), then `stream` runs and is replayed at `scale`,
+// where every pixel of a block must be its native pixel, so only streams without polygons or lines.
+Outcome replay(const Stream &stream, const std::vector<std::uint32_t> &gp1 = {}, int scale = 1) {
   Outcome out;
   GpuDevice device;
   device.gp1(0x00000000u, 0);
@@ -120,7 +121,7 @@ Outcome replay(const Stream &stream, const std::vector<std::uint32_t> &gp1 = {})
   RecordRasterizer rasterizer(gDevice);
   const psx::present::FrameRecord before = device.sealRecord();
   SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(gDevice);
-  rasterizer.update(cmd, before, false, device.vram(), 1, {kWholeVram, 0});
+  rasterizer.update(cmd, before, false, device.vram(), scale, {kWholeVram, 0});
   if (!submitAndWait(cmd)) {
     return out;
   }
@@ -132,7 +133,7 @@ Outcome replay(const Stream &stream, const std::vector<std::uint32_t> &gp1 = {})
   }
   const psx::present::FrameRecord record = device.sealRecord();
   cmd = SDL_AcquireGPUCommandBuffer(gDevice);
-  rasterizer.update(cmd, record, false, device.vram(), 1, {kWholeVram, 0});
+  rasterizer.update(cmd, record, false, device.vram(), scale, {kWholeVram, 0});
   rasterizer.download(cmd, {rasterizer.image(), kWholeVram});
   if (!submitAndWait(cmd)) {
     return out;
@@ -147,11 +148,18 @@ Outcome replay(const Stream &stream, const std::vector<std::uint32_t> &gp1 = {})
   }
   for (std::size_t i = 0; i < vram.size(); i++) {
     out.changed += vram[i] != pristine[i] ? 1 : 0;
-    if (image[i] != vram[i] && out.mismatched++ == 0) {
-      out.firstX = static_cast<int>(i % psx::gpu::kRecordVramWidth);
-      out.firstY = static_cast<int>(i / psx::gpu::kRecordVramWidth);
+  }
+  const int width = psx::gpu::kRecordVramWidth * scale;
+  for (std::size_t i = 0; i < image.size(); i++) {
+    const int x = static_cast<int>(i % static_cast<std::size_t>(width));
+    const int y = static_cast<int>(i / static_cast<std::size_t>(width));
+    const std::uint16_t want =
+        vram[static_cast<std::size_t>(y / scale) * psx::gpu::kRecordVramWidth + static_cast<std::size_t>(x / scale)];
+    if (image[i] != want && out.mismatched++ == 0) {
+      out.firstX = x;
+      out.firstY = y;
       out.image = image[i];
-      out.device = vram[i];
+      out.device = want;
     }
   }
   fprintf(stderr, "    %zu entries, %ld pixels changed\n", out.entries, out.changed);
@@ -698,6 +706,20 @@ static void test_uploads(void) {
   CHECK_REPLAY(s);
 }
 
+// At a scale that is not a power of two, an upload and a sprite sampling it fill every pixel of each block.
+static void test_a_scaled_upload_and_a_read_of_it_fill_whole_blocks(void) {
+  Stream s = baseState();
+  s.upload(600, 300, 40, 24, 11);
+  s.add({drawMode(page(9, 1, 0, 2), false, false, false)});
+  s.add({rgb(0x65, 0, 0, 0), xy(10, 10), uv(24, 44, 0), xy(40, 24)});
+  s.upload(1010, 505, 30, 20, 2);
+  for (int scale : {3, 5}) {
+    const Outcome outcome = replay(s, {}, scale);
+    CHECK(outcome.replayed);
+    CHECK_EQ(outcome.mismatched, 0);
+  }
+}
+
 // A present before the first record shows the presenter's empty record; the device's first record still lands.
 static void test_the_first_record_follows_the_empty_one(void) {
   GpuDevice device;
@@ -1115,6 +1137,7 @@ int main(void) {
   RUN(copies);
   RUN(uploads);
   RUN(the_first_record_follows_the_empty_one);
+  RUN(a_scaled_upload_and_a_read_of_it_fill_whole_blocks);
   RUN(flat_and_gouraud_polygons);
   RUN(textured_polygons);
   RUN(steep_gouraud_textured_semi_triangles);

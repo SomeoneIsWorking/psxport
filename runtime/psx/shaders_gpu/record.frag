@@ -95,8 +95,8 @@ void main() {
     S = params.scaleOrigin.x;
     ivec2 target = ivec2(gl_FragCoord.xy);
     ivec2 p = target + params.scaleOrigin.yz * S;
-    // Floor division: a canvas reaches left of VRAM.
-    ivec2 n = ivec2(floor(vec2(p) / float(S)));
+    // Integer floor division (a float divide is inexact at S = 3); biased because a canvas reaches left of VRAM.
+    ivec2 n = (p + 1024 * S) / S - 1024;
     uint flags = word(0);
     uint kind = flags & 0xFFu;
     if ((flags & F_SKIP_ROWS) != 0u && uint(n.y & 1) == ((flags & F_SKIP_PARITY) != 0u ? 1u : 0u)) {
