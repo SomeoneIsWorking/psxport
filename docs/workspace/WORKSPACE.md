@@ -26,14 +26,15 @@ All public under `github.com/SomeoneIsWorking`, side by side, no superproject.
 | `vagrant/` | Vagrant Story (vendors the CC0 `rood-reverse` decomp) |
 | `megamanx4/` | Mega Man X4 (vendors the AGPL `mmx4` decomp — never lift it into psxport) |
 | `tekken3/` | Tekken 3 |
+| `c12/` | C-12: Final Resistance (`SCUS_946.66`) |
 
 Fresh machine: `git clone https://github.com/SomeoneIsWorking/psxport.git ~/repo/psx/psxport && cd ~/repo/psx/psxport && uv run --frozen python scripts/bootstrap_workspace.py`.
 
 ## Title scope
 
 Spyro 1/2/3, Crash 1/2/3, Crash Bash, CTR, Vagrant Story, Mega Man X4, Tomba! 1/2, Tekken 3, Spider-Man 1/2,
-Toy Story 2. Every title: widescreen and loading removal. Tekken 3, Tomba! 1 and Mega Man X4 are already
-60 fps, so no interpolation for them; the others get 60 fps interpolation. Vagrant Story's horizontal
+Toy Story 2, C-12: Final Resistance. Every title: widescreen and loading removal. Tekken 3, Tomba! 1 and
+Mega Man X4 are already 60 fps, so no interpolation for them; the others get 60 fps interpolation. Vagrant Story's horizontal
 projection word is gameplay state (battle code branches on it), so widen its canvas, never `H`.
 
 ## Framework
