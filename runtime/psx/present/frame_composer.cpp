@@ -1,6 +1,7 @@
 // frame_composer.cpp — replacing a produced object's entries with its render, by OT slot.
 #include "frame_composer.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <unordered_map>
 #include <utility>
@@ -31,7 +32,7 @@ struct Covered {
   const StateProducer *render = nullptr;
   std::span<const std::byte> to;
   std::vector<std::size_t> entries;
-  std::unordered_map<std::uint64_t, std::size_t> firstInSlot;
+  std::unordered_map<std::uint64_t, std::vector<std::size_t>> inSlot; // entry indices, by slot, in record order
 };
 
 class CollectingSink final : public PrimitiveSink {
@@ -162,7 +163,7 @@ std::optional<FrameRecord> composeFrame(
     Covered &object = covered[found->second];
     object.entries.push_back(i);
     if (primitive->slot) {
-      object.firstInSlot.try_emplace(slotKey(*primitive->slot), i);
+      object.inSlot[slotKey(*primitive->slot)].push_back(i);
     }
   }
   if (covered.empty()) {
@@ -180,11 +181,16 @@ std::optional<FrameRecord> composeFrame(
     object.render->render(earlier.value_or(object.to), object.to, earlier ? t : 1.0f, sink);
     std::vector<std::pair<std::size_t, DrawPrimitive>> placed;
     placed.reserve(sink.emitted.size());
+    std::unordered_map<std::uint64_t, std::size_t> emittedInSlot;
     bool drawable = true;
     for (auto &[slot, primitive] : sink.emitted) {
-      const auto own = object.firstInSlot.find(slotKey(slot));
+      // The n-th primitive in a slot lands where the object's n-th entry there was, so the draw state
+      // between them is the one the guest drew under; beyond its last entry, after it.
+      const auto own = object.inSlot.find(slotKey(slot));
+      const std::size_t nth = emittedInSlot[slotKey(slot)]++;
       const std::optional<std::size_t> position =
-          own != object.firstInSlot.end() ? std::optional<std::size_t>(own->second) : placement.position(slot);
+          own != object.inSlot.end() ? std::optional<std::size_t>(own->second[std::min(nth, own->second.size() - 1)])
+                                     : placement.position(slot);
       if (!position) {
         drawable = false;
         break;
