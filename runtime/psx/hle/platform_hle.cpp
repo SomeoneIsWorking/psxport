@@ -3,6 +3,7 @@
 #include "cd_control.h"
 #include "core.h"
 #include "execution_control.h"
+#include "field_rate.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "proj_params.h"
@@ -80,6 +81,9 @@ void PlatformHle::vsync(Core *core) {
     core->r[V0] = core->mem_r32(owner.mVSyncQueryCounterAddress);
     return;
   }
+  // libetc returns the HBlanks elapsed since the last VBlank; the boundary completes a whole field, so a guest
+  // polling `VSync(1)` for a late scanline sees it.
+  core->r[V0] = psx::frame::displayLinesPerField(core->game->gpu.s_disp_pal != 0);
   psx::cpu::requestExecutionExit(*core, psx::cpu::ExecutionExitReason::FrameBoundary);
 }
 

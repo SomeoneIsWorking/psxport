@@ -134,6 +134,12 @@ void Hle::irqPoll(Core *c) {
     if (in_irq) {
       continue;
     }
+    // A guest-owned callback table means the guest runs its own libapi, which masks I_MASK around its
+    // GPU queue loops; the BIOS DMA handler only runs while the DMA line is unmasked.
+    const bool guestOwnsTable = c->cfg || table;
+    if (guestOwnsTable && (i_mask & (1u << IRQ_BIT_DMA)) == 0u) {
+      continue;
+    }
     dma_done_taken(*c, ch);
     dma_irq_ack(*c, ch); // this dispatch stands in for the BIOS DMA handler, which acknowledges first
     if (!cb) {

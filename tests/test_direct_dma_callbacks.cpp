@@ -6,6 +6,7 @@
 #include "game_iface.h"
 #include "game_runtime.h"
 #include "image_identity.h"
+#include "irq_edge.h"
 #include "native_dispatch.h"
 #include "platform_hle.h"
 #include "testutil.h"
@@ -92,6 +93,7 @@ std::unique_ptr<Game> freshGuestTableGame() {
   callbackCalls = 0;
   auto game = std::make_unique<Game>();
   installCallback(*game);
+  game->hle.i_mask = 1u << IRQ_BIT_DMA;
   return game;
 }
 
@@ -108,6 +110,7 @@ std::unique_ptr<Game> freshLegacyGame() {
   callbackA1 = 0;
   auto game = std::make_unique<Game>();
   installCallback(*game);
+  game->hle.i_mask = 1u << IRQ_BIT_DMA;
   return game;
 }
 
@@ -215,6 +218,22 @@ void test_direct_runtime_with_a_declared_guest_table_and_an_empty_slot_delivers_
   CHECK((game->core.pending_work & Core::PW_IRQ) == 0);
 }
 
+// The guest's libapi zeroes I_MASK around its GPU queue loops; the callback that would re-enter the
+// loop stays owed until the DMA line is unmasked again.
+void test_guest_table_callback_waits_for_the_dma_line_to_be_unmasked() {
+  auto game = freshGuestTableGame();
+  game->core.mem_w32(kLegacyTable + 4u * static_cast<uint32_t>(DmaChannel::Cdrom), kCallback);
+  game->hle.i_mask = 0u;
+
+  completeDma3(*game);
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(callbackCalls, 0);
+
+  game->hle.i_mask = 1u << IRQ_BIT_DMA;
+  game->hle.irqPoll(&game->core);
+  CHECK_EQ(callbackCalls, 1);
+}
+
 } // namespace
 
 int main() {
@@ -225,5 +244,6 @@ int main() {
   RUN(legacy_runtime_keeps_its_guest_callback_table_authoritative);
   RUN(direct_runtime_with_a_declared_guest_table_dispatches_the_guest_word);
   RUN(direct_runtime_with_a_declared_guest_table_and_an_empty_slot_delivers_nothing);
+  RUN(guest_table_callback_waits_for_the_dma_line_to_be_unmasked);
   return pt_summary();
 }
