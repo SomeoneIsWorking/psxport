@@ -141,7 +141,7 @@ void registry_remove(CVarBase *v) {
 
 // ── CVarBase ────────────────────────────────────────────────────────────────────────────────────
 
-CVarBase::CVarBase(const char *name, Kind kind, const char *help, bool persistable, bool external)
+CVarBase::CVarBase(const char *name, Kind kind, const char *help, bool persistable, bool external) noexcept
     : mName(name), mHelp(help), mKind(kind), mPersistable(persistable), mExternal(external) {
   detail::registry_add(this);
 }
