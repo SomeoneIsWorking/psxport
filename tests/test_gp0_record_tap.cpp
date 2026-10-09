@@ -168,6 +168,35 @@ static void test_seal_between_quad_triangles(void) {
   CHECK(third.complete());
 }
 
+// A keyed textured draw that samples pixels the frame already wrote is recorded as an upload of its
+// result; the upload keeps the key so the composer knows the object is not only primitives.
+static void test_a_feedback_upload_keeps_the_primitives_key(void) {
+  GpuDevice device;
+  device.gp1(0x00000000u, 0);
+  drawEverywhere(device);
+  device.gp0(0xE1000100u);
+  device.sealRecord();
+  device.gp0(0x02FFFFFFu);
+  device.gp0(xy(0, 0));
+  device.gp0(xy(64, 64));
+  const psx::present::RecordKey key{0x80010000u, 0x80150000u, 5, 0};
+  device.beginPacket();
+  device.gp0(0x24808080u, 0x80100000u, key);
+  device.gp0(xy(100, 100), 0x80100004u, key);
+  device.gp0(0x00000000u, 0x80100008u, key);
+  device.gp0(xy(120, 100), 0x8010000Cu, key);
+  device.gp0(0x0100001Fu, 0x80100010u, key);
+  device.gp0(xy(100, 120), 0x80100014u, key);
+  device.gp0(0x00001F00u, 0x80100018u, key);
+  const FrameRecord record = device.sealRecord();
+  CHECK_EQ(record.entries().size(), 2u);
+  const auto *upload =
+      record.entries().size() > 1 ? std::get_if<psx::present::VramUpload>(&record.entries()[1]) : nullptr;
+  CHECK(upload != nullptr);
+  CHECK(upload != nullptr && upload->key.has_value());
+  CHECK(upload != nullptr && upload->key && upload->key->object == key.object);
+}
+
 int main(void) {
   RUN(polygon_is_decoded_after_offset);
   RUN(part_restarts_per_packet);
@@ -175,5 +204,6 @@ int main(void) {
   RUN(sequence_and_pending_work);
   RUN(seal_inside_an_upload);
   RUN(seal_between_quad_triangles);
+  RUN(a_feedback_upload_keeps_the_primitives_key);
   return pt_summary();
 }

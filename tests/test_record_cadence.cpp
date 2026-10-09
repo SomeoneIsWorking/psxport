@@ -30,6 +30,7 @@ public:
       real = *record;
       realAdvances = presenter_.composedAdvances();
     }
+    realComposed = presenter_.composedRecord() != nullptr;
   }
   void captureDiagnostic(uint64_t, bool) override {}
   void pace(int, int parts) override {
@@ -69,6 +70,7 @@ public:
   const psx::present::StateProducers *producers = nullptr;
   FrameRecord real;
   bool realAdvances = false;
+  bool realComposed = false;
 
 private:
   const psx::frame::FramePresenter &presenter_;
@@ -264,6 +266,30 @@ static void test_every_present_draws_the_producers_render_at_its_t(void) {
   CHECK(presenter.composedRecord() == nullptr);
 }
 
+// A record after the shown one that overwrites the displayed buffer (a clear under a whole-VRAM draw area) makes the
+// shown picture stale: the present is the device's, not the composed record.
+static void test_a_later_record_over_the_displayed_buffer_is_not_composed_over(void) {
+  psx::frame::FramePresenter presenter;
+  RecordBackend backend(presenter);
+  const psx::present::StateProducers renders = marker::renders(kKey.producer);
+  backend.producers = &renders;
+  const FrameRecord first = slottedRecordAt(0, 0, 1);
+  presenter.commit(backend, 2, first, savedAt(first, 1, 0.0f));
+  CHECK(backend.realComposed);
+
+  DrawPrimitive clear;
+  clear.kind = psx::present::PrimitiveKind::Sprite;
+  clear.vertexCount = 1;
+  clear.width = kBufferA.x1;
+  clear.height = kBufferA.y1;
+  clear.state.clipX1 = 1023;
+  clear.state.clipY1 = 511;
+  FrameRecord second(1, true);
+  second.append(clear);
+  presenter.commit(backend, 2, second, psx::present::FrameState());
+  CHECK(!backend.realComposed);
+}
+
 int main(void) {
   RUN(consecutive_records_present_the_blend_then_n);
   RUN(a_cut_shows_n_as_its_in_between);
@@ -274,5 +300,6 @@ int main(void) {
   RUN(an_incomplete_empty_record_breaks_the_pairing);
   RUN(a_display_no_record_drew_has_no_in_between);
   RUN(every_present_draws_the_producers_render_at_its_t);
+  RUN(a_later_record_over_the_displayed_buffer_is_not_composed_over);
   return pt_summary();
 }

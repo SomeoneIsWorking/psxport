@@ -2,6 +2,7 @@
 #include "texture_feedback.h"
 
 #include <algorithm>
+#include <variant>
 
 namespace psx::gpu {
 namespace {
@@ -63,6 +64,20 @@ RecordRect drawBounds(const present::DrawPrimitive &primitive) {
     return {};
   }
   return rect;
+}
+
+bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect) {
+  RecordRect written{};
+  if (const auto *primitive = std::get_if<present::DrawPrimitive>(&entry)) {
+    written = drawBounds(*primitive);
+  } else if (const auto *fill = std::get_if<present::VramFill>(&entry)) {
+    written = clampedVramRect(fill->x, fill->y, fill->width, fill->height);
+  } else if (const auto *copy = std::get_if<present::VramCopy>(&entry)) {
+    written = clampedVramRect(copy->dstX, copy->dstY, copy->width, copy->height);
+  } else if (const auto *upload = std::get_if<present::VramUpload>(&entry)) {
+    written = clampedVramRect(upload->x, upload->y, upload->width, upload->height);
+  }
+  return written.x0 < rect.x1 && rect.x0 < written.x1 && written.y0 < rect.y1 && rect.y0 < written.y1;
 }
 
 TextureFeedback::TextureFeedback()

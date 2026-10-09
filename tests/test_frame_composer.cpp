@@ -251,6 +251,20 @@ static void test_the_nth_primitive_in_a_slot_takes_the_nth_entrys_environment(vo
   CHECK(composed && primitiveAt(*composed, 1).vertices[0].x == 60 + kOffsetX);
 }
 
+// A face that drew over its own texture became an upload of its pixels; the object's render would draw
+// it again over them, so the object stays as the guest drew it.
+static void test_an_object_with_a_baked_upload_keeps_its_entries(void) {
+  const auto renders = producers();
+  FrameRecord shown = recordWithObject(2, 40, 9);
+  psx::present::VramUpload baked;
+  baked.width = 1;
+  baked.height = 1;
+  baked.key = RecordKey{kProducer, kObject, 1, 0, 9};
+  shown.appendUpload(baked, std::vector<std::uint16_t>{0x1234});
+  const FrameState to = stateFor(shown, 9, {60.0f, 3, 0});
+  CHECK(!psx::present::composeFrame(shown, nullptr, to, 1.0f, renders).has_value());
+}
+
 int main() {
   RUN(a_record_with_no_produced_object_is_the_frame);
   RUN(the_render_at_t_replaces_the_object_in_its_slot);
@@ -264,5 +278,6 @@ int main() {
   RUN(states_follow_the_scope_that_wrote_the_packets);
   RUN(an_object_drawn_from_two_scopes_is_ambiguous);
   RUN(the_nth_primitive_in_a_slot_takes_the_nth_entrys_environment);
+  RUN(an_object_with_a_baked_upload_keeps_its_entries);
   return pt_summary();
 }

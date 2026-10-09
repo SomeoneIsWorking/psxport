@@ -128,6 +128,9 @@ private:
 
   // The latest record that drew `buffer`, or null.
   const SealedRecord *latestDrawing(const gpu::RecordRect &buffer) const;
+  // The record a present shows for `buffer`: the latest drawing one, unless a later record wrote the buffer, in
+  // which case its picture is stale and the present is the device's.
+  const SealedRecord *shownRecord(const gpu::RecordRect &buffer) const;
   const SealedRecord *sealed(std::uint64_t sequence) const;
   // Every drawing record after `from` up to `to` is held, follows its predecessor and is no cut.
   bool continuesTo(std::uint64_t from, std::uint64_t to) const;

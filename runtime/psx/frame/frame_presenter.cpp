@@ -11,6 +11,7 @@
 #include "in_between_present.h"
 #include "keyed_blend.h"
 #include "producer_census.h"
+#include "texture_feedback.h"
 
 #include <lucent/log.h>
 
@@ -241,7 +242,7 @@ void FramePresenter::commit(FramePresentationBackend &backend,
     } else {
       const present::StateProducers *producers = backend.stateProducers();
       const bool composes = producers != nullptr && !producers->empty();
-      presentCurrent(backend, frame, guestFields, 1, composes ? latestDrawing(backend.displayedBuffer()) : nullptr);
+      presentCurrent(backend, frame, guestFields, 1, composes ? shownRecord(backend.displayedBuffer()) : nullptr);
     }
   }
   backend.reconcile(fence_);
@@ -262,6 +263,24 @@ const FramePresenter::SealedRecord *FramePresenter::latestDrawing(const gpu::Rec
     }
   }
   return nullptr;
+}
+
+const FramePresenter::SealedRecord *FramePresenter::shownRecord(const gpu::RecordRect &buffer) const {
+  const SealedRecord *latest = latestDrawing(buffer);
+  if (latest == nullptr) {
+    return nullptr;
+  }
+  const auto writesBuffer = [&buffer](const present::FrameRecord &record) {
+    return std::any_of(record.entries().begin(), record.entries().end(), [&buffer](const present::RecordEntry &entry) {
+      return gpu::entryWritesRect(entry, buffer);
+    });
+  };
+  for (const SealedRecord &entry : history_) {
+    if (entry.record && entry.record->sequence() > latest->record->sequence() && writesBuffer(*entry.record)) {
+      return nullptr;
+    }
+  }
+  return current_->sequence() > latest->record->sequence() && writesBuffer(*current_) ? nullptr : latest;
 }
 
 const FramePresenter::SealedRecord *FramePresenter::sealed(std::uint64_t sequence) const {
@@ -295,7 +314,7 @@ bool FramePresenter::cutBetween(std::uint64_t from, std::uint64_t to) const {
 }
 
 void FramePresenter::presentRecords(FramePresentationBackend &backend, CapturedFrameView frame, int guestFields) {
-  const SealedRecord *shown = latestDrawing(backend.displayedBuffer());
+  const SealedRecord *shown = shownRecord(backend.displayedBuffer());
   const SealedRecord *from = shownSequence_ ? sealed(*shownSequence_) : nullptr;
   shownSequence_.reset();
   if (shown != nullptr) {
