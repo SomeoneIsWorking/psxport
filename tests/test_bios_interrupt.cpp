@@ -143,6 +143,16 @@ static void test_custom_exit_reports_an_illegal_normal_return(void) {
   CHECK_EQ(dispatch_fell_through, 1);
 }
 
+// A nested ISR must not see the interrupted ra as its stop address: it can legitimately execute that pc.
+static void test_exception_stack_ra_is_a_sentinel_not_guest_code(void) {
+  const std::unique_ptr<Core> c = std::make_unique<Core>();
+  c->r[R_SP] = 0x80001234u;
+  c->r[31] = 0x80028CBCu;
+  Hle::enterExceptionStack(*c);
+  CHECK_EQ(c->r[R_SP], Hle::kExceptionStackTop);
+  CHECK_EQ(c->r[31], Hle::kInterruptReturnSentinel);
+}
+
 int main(void) {
   RUN(restores_the_measured_jmp_buf_layout);
   RUN(refuses_a_missing_buffer_without_clobbering);
@@ -150,5 +160,6 @@ int main(void) {
   RUN(bios_hook_reset_and_return_entry_points);
   RUN(return_from_exception_unwinds_instead_of_falling_through);
   RUN(custom_exit_reports_an_illegal_normal_return);
+  RUN(exception_stack_ra_is_a_sentinel_not_guest_code);
   return pt_summary();
 }
