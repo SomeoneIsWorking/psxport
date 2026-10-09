@@ -250,7 +250,7 @@ On the record path `gpu_vk_latch_record_display` turns the title's aspect into a
 for the displayed rect. A title's guest projection plan there keeps the retail centre and draw width
 (`projectionCenterX`, `guestDrawWidth`): the canvas, not a wider draw area, holds the margins, and the
 title widens only what it culls. `RecordRasterizer` keeps a canvas per displayed buffer (at most two, the
-least recently shown is dropped): the buffer plus M columns each side, at scale, seeded from the image
+least recently shown is dropped; a margin or width change retires both, a height difference between the two buffers does not): the buffer plus M columns each side, at scale, seeded from the image
 with black margins and reseeded after a resync. Each record entry is planned once per plane:
 
 - A primitive whose draw area spans the buffer's columns (x range equal, rows inside the buffer; a title may inset its rows) draws into the

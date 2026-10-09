@@ -164,11 +164,9 @@ RecordRasterizer::Plane &RecordRasterizer::plane(int index) {
 void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &view) {
   const int width = view.display.x1 - view.display.x0;
   const int height = view.display.y1 - view.display.y0;
-  // A margin or display size change makes every canvas another shape.
+  // A margin or display width change makes every canvas another shape.
   std::erase_if(canvases_, [&](Canvas &canvas) {
-    const RecordRect &buffer = canvas.shape.buffer;
-    const bool stale = view.margin <= 0 || canvas.shape.margin != view.margin || buffer.x1 - buffer.x0 != width ||
-                       buffer.y1 - buffer.y0 != height;
+    const bool stale = !canvasSurvives(canvas.shape, width, view.margin);
     if (stale) {
       releasePlane(canvas.plane);
     }

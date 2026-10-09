@@ -110,6 +110,10 @@ struct RecordCanvas {
   bool operator==(const RecordCanvas &) const = default;
 };
 
+// Whether a kept canvas still serves displays of this margin and width. The two buffers of a double-buffered
+// title may differ in height, so each keeps its own canvas and only a margin or width change retires one.
+bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int margin);
+
 // Plane 0 is the VRAM image; plane 1 + i is canvas i.
 inline constexpr int kRecordMaxCanvases = 2;
 inline constexpr int kRecordPlanes = 1 + kRecordMaxCanvases;
