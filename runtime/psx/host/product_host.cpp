@@ -58,8 +58,7 @@ int ProductHost::runSelector() {
     // Empty (the default) is every provisioned title.
     const std::vector<std::string> panelSlugs = splitSlugs(cfg_str("PSXPORT_PICKER_TITLES"));
     const PickerContent content(catalog_.productName(), titles, panelSlugs);
-    PickerSession picker(
-        pickerRuntime, catalog_, titles, content, cfg_int("PSXPORT_PICKER_FRAMES", 0), presentation_.device());
+    PickerSession picker(pickerRuntime, catalog_, content, cfg_int("PSXPORT_PICKER_FRAMES", 0), presentation_.device());
     const PickerSession::Result choice = picker.run();
     if (choice.outcome != PickerSession::Outcome::Chosen || choice.session == nullptr) {
       return 0;

@@ -37,11 +37,10 @@ public:
     std::unique_ptr<TitleSession> session; // the chosen title's LIVE session, set when Chosen
   };
 
-  // One panel per available entry in catalog order; both outlive this session. `frameCap` of 0 runs
+  // `content` names the panels (available entries in catalog order); both outlive this session. `frameCap` of 0 runs
   // until a title is chosen.
   PickerSession(PickerRuntime &runtime,
                 const TitleCatalog &catalog,
-                std::span<const TitleAvailability> titles,
                 const PickerContent &content,
                 int frameCap,
                 GpuDevice &presentation);
@@ -58,7 +57,6 @@ private:
 
   PickerRuntime &runtime_;
   const TitleCatalog &catalog_;
-  std::span<const TitleAvailability> titles_;
   const PickerContent &content_;
   int frameCap_;
   GpuDevice &presentation_;

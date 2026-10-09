@@ -43,12 +43,10 @@ constexpr int kBootStepBudget = 6;
 
 PickerSession::PickerSession(PickerRuntime &runtime,
                              const TitleCatalog &catalog,
-                             std::span<const TitleAvailability> titles,
                              const PickerContent &content,
                              int frameCap,
                              GpuDevice &presentation)
-    : runtime_(runtime), catalog_(catalog), titles_(titles), content_(content), frameCap_(frameCap),
-      presentation_(presentation),
+    : runtime_(runtime), catalog_(catalog), content_(content), frameCap_(frameCap), presentation_(presentation),
       layout_(content.panelCount(), kSelectedShare, kUnselectedShare, kSlantPerWidth, kWidthResponse) {
   if (content.panelCount() > PickerLayout::maxPanels()) {
     lucent::error("picker",
@@ -57,7 +55,7 @@ PickerSession::PickerSession(PickerRuntime &runtime,
                   PickerLayout::maxPanels());
     std::abort();
   }
-  panels_ = std::make_unique<PanelSessions>(catalog_, titles_, presentation_);
+  panels_ = std::make_unique<PanelSessions>(catalog_, content_, presentation_);
   runtime_.bind(&content_, nullptr);
 }
 

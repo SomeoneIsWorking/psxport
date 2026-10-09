@@ -2,6 +2,7 @@
 #pragma once
 
 #include "panel_logo.h"
+#include "picker_content.h"
 #include "title_availability.h"
 #include "title_catalog.h"
 
@@ -19,9 +20,9 @@ class TitleSession;
 
 class PanelSessions {
 public:
-  // One session per available title in catalog order. `titles` is the probed catalog and is not
-  // retained: the sessions reference its available entries, which outlive the picker.
-  PanelSessions(const TitleCatalog &catalog, std::span<const TitleAvailability> titles, GpuDevice &presentation);
+  // One session per panel of `content` (the available titles `PSXPORT_PICKER_TITLES` asks for), in
+  // panel order. The sessions reference the content's probed entries, which outlive the picker.
+  PanelSessions(const TitleCatalog &catalog, const PickerContent &content, GpuDevice &presentation);
   ~PanelSessions();
   PanelSessions(const PanelSessions &) = delete;
   PanelSessions &operator=(const PanelSessions &) = delete;

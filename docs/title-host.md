@@ -15,7 +15,7 @@ namespace `psx::host`.
 | `title_availability.{h,cpp}` | `TitleAvailabilityProbe`: which catalog titles are provisioned and authenticate at `<root>/<slug>/<serial>` right now |
 | `title_session.{h,cpp}` | `TitleSession`: one boot-to-exit run of one title as a steppable owner; destruction is the whole teardown |
 | `session_run.h` | `SessionRun`, held per `Game` as `Game::run`: the delivered-field cap and the end request |
-| `panel_sessions.{h,cpp}` | `PanelSessions`: one live session per available title and the rules about which of them runs |
+| `panel_sessions.{h,cpp}` | `PanelSessions`: one live session per panel (the available titles `PSXPORT_PICKER_TITLES` asks for) and the rules about which of them runs |
 | `picker_session.{h,cpp}` | `PickerSession`: the selector frame loop; one guest advances per frame |
 | `picker_runtime.{h,cpp}` | `PickerRuntime`: the selector's own `GameRuntime`; the control commands `picker`, `pick`, `select` |
 | `picker_content.{h,cpp}`, `picker_layout.{h,cpp}`, `picker_composite.{h,cpp}` | what the panels advertise, their geometry and cover crop, and the composited window frame |

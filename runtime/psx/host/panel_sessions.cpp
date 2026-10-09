@@ -25,14 +25,10 @@ constexpr int kPreRollSteps = 900;
 
 } // namespace
 
-PanelSessions::PanelSessions(const TitleCatalog &catalog,
-                             std::span<const TitleAvailability> titles,
-                             GpuDevice &presentation)
+PanelSessions::PanelSessions(const TitleCatalog &catalog, const PickerContent &content, GpuDevice &presentation)
     : catalog_(catalog), presentation_(presentation) {
-  for (const TitleAvailability &title : titles) {
-    if (title.available()) {
-      titles_.push_back(&title);
-    }
+  for (int panel = 0; panel < content.panelCount(); ++panel) {
+    titles_.push_back(&content.panelTitle(panel));
   }
   sessions_.reserve(titles_.size());
   booted_.assign(titles_.size(), false);
