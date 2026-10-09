@@ -384,10 +384,11 @@ static int stop_continuous_read(CdcState *s, CdcReadStop stop) {
   s->reading = 0;
   s->stat &= static_cast<uint8_t>(~kCdlStatRead); // clears when the drive leaves DS_READING
   s->first_sector_pending = 0;
-  s->following_sector_ready = 0;
   if (stop == CdcReadStop::kGuestCommand) {
+    // A sector already announced by INT1 stays in the drive buffer; the guest's BFRD still gets it.
     return 0;
   }
+  s->following_sector_ready = 0;
   if (cdc_post_data_ready(s) == 0) {
     lucent::error("cdc",
                   "the drive stopped at LBA {} with no room in the controller response queue for the "
@@ -866,7 +867,7 @@ static void write_request_register(CdcState *s, uint8_t value) {
   // write that only acted on a 0 -> 1 transition left every sector after the first unanswered.
   const bool fresh_request = s->bfrd == 0;
   s->bfrd = 1;
-  if (!s->reading) {
+  if (!s->reading && !s->following_sector_ready) {
     if (flushed) {
       s->data_rd = 0;
     }
