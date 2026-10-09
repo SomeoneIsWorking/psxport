@@ -105,7 +105,40 @@ static void test_fully_drawn_and_4_3_lay_no_base(void) {
   CHECK_EQ(host_margin_bands(plan_wide_margin(0, 0, 512, 512, 240, false), std::nullopt).count, 0);
 }
 
+// A centred 4:3 layout leaves the canvas columns on both sides of the picture to the host.
+static void test_centred_layout_covers_both_margins(void) {
+  const WideMarginBands b = plan_centred_wide_margins(0, 0, 512, 684, 240, /*rgb24=*/false);
+  CHECK_EQ(b.count, 2);
+  CHECK_EQ(b.band[0].x0, 0);
+  CHECK_EQ(b.band[0].x1, 86);
+  CHECK_EQ(b.band[1].x0, 598);
+  CHECK_EQ(b.band[1].x1, 684);
+  CHECK_EQ(b.band[0].y0, 0);
+  CHECK_EQ(b.band[0].y1, 240);
+  const WideMarginBands origin = plan_centred_wide_margins(32, 8, 320, 428, 224, /*rgb24=*/false);
+  CHECK_EQ(origin.count, 2);
+  CHECK_EQ(origin.band[0].x0, 32);
+  CHECK_EQ(origin.band[0].x1, 86);
+  CHECK_EQ(origin.band[1].x0, 32 + 374);
+  CHECK_EQ(origin.band[1].x1, 460);
+  // 4:3 and invalid extents lay nothing.
+  CHECK_EQ(plan_centred_wide_margins(0, 0, 512, 512, 240, /*rgb24=*/false).count, 0);
+  CHECK_EQ(plan_centred_wide_margins(0, 0, 0, 684, 240, /*rgb24=*/false).count, 0);
+}
+
+// At 24bpp the bands are in halfwords and the right one clamps at the end of VRAM.
+static void test_centred_layout_in_24bpp_halfwords(void) {
+  const WideMarginBands b = plan_centred_wide_margins(0, 0, 512, 684, 240, /*rgb24=*/true);
+  CHECK_EQ(b.count, 2);
+  CHECK_EQ(b.band[0].x0, 0);
+  CHECK_EQ(b.band[0].x1, 129); // 86 * 3/2
+  CHECK_EQ(b.band[1].x0, 897); // 598 * 3/2
+  CHECK_EQ(b.band[1].x1, 1024);
+}
+
 int main(void) {
+  RUN(centred_layout_covers_both_margins);
+  RUN(centred_layout_in_24bpp_halfwords);
   RUN(spyro_extension_only);
   RUN(origin_is_preserved);
   RUN(24bpp_margin_is_in_halfwords);

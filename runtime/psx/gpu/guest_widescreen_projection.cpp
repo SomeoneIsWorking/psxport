@@ -29,6 +29,10 @@ PresentationAspect GuestWidescreenProjection::presentationAspect(const Core &cor
   }
 }
 
+bool GuestWidescreenProjection::guestCoordinatesWidened(const Core &) const {
+  return false;
+}
+
 namespace {
 
 PresentationAspect requestedAspect(const Core &core) {

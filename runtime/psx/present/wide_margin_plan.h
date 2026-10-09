@@ -103,3 +103,27 @@ inline WideMarginBands host_margin_bands(const WideMarginPlan &margin,
   }
   return out;
 }
+
+// The margins of a frame whose 4:3 picture the host centres in the wide canvas: one band on each
+// side of the picture, in the same VRAM halfword space as plan_wide_margin. Nothing under the
+// picture is covered.
+inline WideMarginBands plan_centred_wide_margins(int sx, int sy, int native_w, int wide_w, int h, bool rgb24) {
+  WideMarginBands out;
+  if (native_w <= 0 || wide_w <= native_w || h <= 0) {
+    return out;
+  }
+  const int margin = (wide_w - native_w) / 2;
+  const int bounds[4] = {0, margin, margin + native_w, wide_w};
+  for (int i = 0; i < 4; i += 2) {
+    WideMarginPlan b{};
+    b.x0 = sx + wide_margin_display_x_to_words(bounds[i], rgb24);
+    b.x1 = std::min(sx + wide_margin_display_x_to_words(bounds[i + 1], rgb24), kVramWidthWords);
+    b.y0 = sy;
+    b.y1 = sy + h;
+    if (b.x1 > b.x0) {
+      b.draw = true;
+      out.band[out.count++] = b;
+    }
+  }
+  return out;
+}

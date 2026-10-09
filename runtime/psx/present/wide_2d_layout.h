@@ -55,6 +55,12 @@ struct Wide2dExtent {
 // is the seam the hermetic test drives; the Core-facing functions below only gather the facts.
 Wide2dExtent wide_2d_extent(int host_wide, bool host_engaged, int guest_wide, bool guest_engaged, int native);
 
+// The space a guest primitive's x is in: the producer's declaration, except that a guest-widened
+// title's frame whose coordinates already include the widening (`guest_coordinates_widened`) is
+// finished. The host engine's own widening never takes this path.
+Rq2dSpace
+wide_2d_guest_space(bool host_engaged, bool guest_engaged, bool guest_coordinates_widened, Rq2dSpace declared);
+
 // The presented width for this Core's 2D layer, by the SAME decision `wide_2d_layout_active` makes —
 // either widening mechanism, never one of them. A site that needs "how wide is the picture I am
 // drawing into" must ask this and not `gpu_vk_wide_engine_w`, which answers only for the host
@@ -72,3 +78,8 @@ Rq2dXform wide_2d_layout(Core &core, Rq2dSpace space, int layer, bool flat, bool
 
 // Whether this Core's picture is genuinely wider than the game's own 4:3 width, by either mechanism.
 bool wide_2d_layout_active(Core &core);
+
+// Whether this Core's guest frame is a 4:3-authored layout the host centres in the wider canvas, so
+// the canvas columns on both sides of it are the host's to cover. False on a native-render title and
+// on a frame whose guest coordinates already include the widening.
+bool wide_2d_centres_guest_frame(Core &core);

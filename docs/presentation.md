@@ -263,6 +263,12 @@ image itself. Known differences: a canvas reaching past column 1023 does not wra
 displayed buffer evicts one canvas, whose margins are black until redrawn. The record path does not
 use `wide_2d_layout`, `rq_2d_xform` or `ws_2d_local_x`.
 
+On the Gte path a title's widened frame is told apart from its 4:3 layouts by
+`GuestWidescreenProjection::guestCoordinatesWidened`: a frame it claims is finished
+(`wide_2d_guest_space` returns `RQ_2D_WIDE_FINAL`), any other guest frame is centred by the margin and
+its margins are covered by `plan_centred_wide_margins` (black, one band per side, never under the
+picture).
+
 ## Producer DB
 
 Each title tracks which guest functions draw and which of them have a producer. The row key is the
