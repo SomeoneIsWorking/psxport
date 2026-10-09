@@ -1,6 +1,6 @@
-// Root counter 1 is a read-only hardware observation of deterministic emulated time. It remains
-// available to guest code, but it neither delivers a field nor licenses libetc VSync: product VSync
-// calls are trapped by PlatformHle.
+// Root counter 1 is a hardware observation of deterministic emulated time whose value the guest may
+// reset (libapi ResetRCnt writes zero). It neither delivers a field nor licenses libetc VSync:
+// product VSync calls are trapped by PlatformHle.
 #include "testutil.h"
 
 #include "emulated_time.h"
@@ -37,6 +37,21 @@ void test_root_counter_reports_intra_field_progress() {
   CHECK(observed < psx::frame::DISPLAY_LINES_NTSC * 2u);
 }
 
+void test_root_counter_one_counts_from_a_guest_write() {
+  auto *game = new Game();
+  for (int field = 0; field < 3; ++field) {
+    game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
+  }
+  CHECK_EQ(game->core.mem_r16(kRootCounter1), 3 * psx::frame::DISPLAY_LINES_NTSC);
+  game->core.mem_w16(kRootCounter1, 0);
+  CHECK_EQ(game->core.mem_r16(kRootCounter1), 0);
+  game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
+  CHECK_EQ(game->core.mem_r16(kRootCounter1), psx::frame::DISPLAY_LINES_NTSC);
+  game->core.mem_w16(kRootCounter1, 0xFFF0);
+  game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
+  CHECK_EQ(game->core.mem_r16(kRootCounter1), static_cast<uint16_t>(0xFFF0u + psx::frame::DISPLAY_LINES_NTSC));
+}
+
 void test_invalid_hsync_cadence_does_not_invent_a_counter() {
   psx::frame::EmulatedTime clock;
   clock.advanceInstructions(1'000'000u);
@@ -49,6 +64,7 @@ void test_invalid_hsync_cadence_does_not_invent_a_counter() {
 int main() {
   RUN(root_counter_one_advances_by_the_video_standard);
   RUN(root_counter_reports_intra_field_progress);
+  RUN(root_counter_one_counts_from_a_guest_write);
   RUN(invalid_hsync_cadence_does_not_invent_a_counter);
   return pt_summary();
 }

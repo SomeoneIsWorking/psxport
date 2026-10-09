@@ -34,7 +34,7 @@
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kBusLayoutVersion = 1;
+constexpr std::uint8_t kBusLayoutVersion = 2;
 
 // CdcState's queue, verbatim. `CdcIrqEnt` is a plain-C struct so it is written field by field rather
 // than memcpy'd: a memcpy would put the struct's padding in the file, and padding is not a contract.
@@ -165,6 +165,7 @@ void writeTimingSection(Game &game, BlobWriter &out) {
   out.u32(timing.rootCounter2Target);
   out.u16(timing.rootCounter2BaseValue);
   out.u64(timing.rootCounter2OriginTicks);
+  out.u64(timing.rootCounter1Offset);
   const psx::frame::Timing::ClockSnapshot clock = timing.clockSnapshot();
   out.u64(clock.nowQ32);
   out.u64(clock.displayBoundaryQ32);
@@ -187,6 +188,7 @@ bool readTimingSection(Game &game, BlobReader &in, std::string &error) {
   const std::uint32_t target = in.u32();
   const std::uint16_t base = in.u16();
   const std::uint64_t origin = in.u64();
+  const std::uint64_t counter1Offset = in.u64();
   psx::frame::Timing::ClockSnapshot clock{};
   clock.nowQ32 = in.u64();
   clock.displayBoundaryQ32 = in.u64();
@@ -210,6 +212,7 @@ bool readTimingSection(Game &game, BlobReader &in, std::string &error) {
   timing.rootCounter2Target = target;
   timing.rootCounter2BaseValue = base;
   timing.rootCounter2OriginTicks = origin;
+  timing.rootCounter1Offset = counter1Offset;
   return true;
 }
 

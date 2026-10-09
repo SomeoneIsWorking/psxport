@@ -168,9 +168,17 @@ void Timing::rootCounter2Write(uint32_t reg, uint32_t v) {
   }
 }
 
-uint16_t Timing::hSyncCounter() const {
+uint64_t Timing::hSyncTotal() const {
   const bool pal = game && game->gpu.s_disp_pal != 0;
-  return static_cast<uint16_t>(mEmulatedTime.hSyncCount(fieldRateMilliHz(pal), displayLinesPerField(pal)));
+  return mEmulatedTime.hSyncCount(fieldRateMilliHz(pal), displayLinesPerField(pal));
+}
+
+uint16_t Timing::hSyncCounter() const {
+  return static_cast<uint16_t>(hSyncTotal() - rootCounter1Offset);
+}
+
+void Timing::hSyncCounterWrite(uint16_t value) {
+  rootCounter1Offset = hSyncTotal() - value;
 }
 
 void Timing::serviceCdc() {
