@@ -242,6 +242,36 @@ void test_stopped_controller_does_not_announce_sector(void) {
   CHECK_EQ(cdc.loc_lba, kFirstLba);
 }
 
+// An INT1 already announced when a Pause executes still owes the guest its sector: the Pause ACK
+// queues behind the INT1, and the data-ready handler's BFRD must find the announced sector.
+void test_pause_keeps_an_announced_sector_for_its_pending_data_ready(void) {
+  DiscState disc{};
+  CdcTestClock clock{};
+  CdcState cdc = begin_read(&disc, &clock);
+  uint32_t second_word = 0;
+
+  CHECK(acknowledge_current_sector(&cdc, &clock));
+  write_bfrd(&cdc, 0x00);
+  write_bfrd(&cdc, 0x80);
+  clock.ticks = cdc.drive_deadline_ticks;
+  CHECK_EQ(cdc_drive_service(&cdc), 1); // INT1 announces LBA 17
+  CHECK_EQ(pending_irq_type(&cdc), 1);
+  CHECK_EQ(cdc.following_sector_ready, 1);
+
+  cdc_issue_command(&cdc, 0x09);
+  clock.ticks += cdc_command_ack_delay_cpu_ticks(0);
+  cdc_drive_service(&cdc);
+  CHECK_EQ(cdc.reading, 0);
+  CHECK_EQ(pending_irq_type(&cdc), 1); // the INT1 is still first in line
+
+  acknowledge_irq(&cdc);
+  write_bfrd(&cdc, 0x00);
+  write_bfrd(&cdc, 0x80);
+  CHECK_EQ(cdc.loc_lba, kFirstLba + 1);
+  CHECK_EQ(cdc_dma_read(&cdc, &second_word, 1), 1);
+  CHECK_EQ(second_word, read_le32(kSecondSector.data() + 12));
+}
+
 void test_native_pause_command_stops_the_controller_and_tells_the_guest(void) {
   DiscState disc{};
   CdcTestClock clock{};
@@ -358,6 +388,7 @@ int main() {
   RUN(partial_fifo_does_not_block_following_sector_event);
   RUN(header_only_consumer_receives_the_next_sector_after_a_request_clear);
   RUN(stopped_controller_does_not_announce_sector);
+  RUN(pause_keeps_an_announced_sector_for_its_pending_data_ready);
   RUN(native_pause_command_stops_the_controller_and_tells_the_guest);
   RUN(full_drain_rearms_bfrd_for_announced_sector);
   RUN(setmode_selects_single_and_double_speed_deadlines);
