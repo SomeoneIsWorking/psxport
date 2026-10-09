@@ -104,7 +104,8 @@ public:
   virtual bool set_text(Layer l, std::string_view text) = 0;
 
 protected:
-  CVarBase(const char *name, Kind kind, const char *help, bool persistable, bool external);
+  // noexcept: CVars are file-scope objects, and a failure to register one ends the process anyway.
+  CVarBase(const char *name, Kind kind, const char *help, bool persistable, bool external) noexcept;
   CVarBase(const CVarBase &) = delete;
   CVarBase &operator=(const CVarBase &) = delete;
 
@@ -127,7 +128,7 @@ protected:
 
 template <class T> class CVar : public CVarBase {
 public:
-  CVar(const char *name, T dflt, const char *help, bool persistable = true, bool external = false)
+  CVar(const char *name, T dflt, const char *help, bool persistable = true, bool external = false) noexcept
       : CVarBase(name, kind_of(), help, persistable, external), mDefault(std::move(dflt)) {}
 
   // The effective value. Binds the environment on first use.
