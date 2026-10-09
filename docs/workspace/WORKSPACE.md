@@ -36,7 +36,8 @@ Spyro 1/2/3, Crash 1/2/3, Crash Bash, CTR, Vagrant Story, Mega Man X4, Tomba! 1/
 Toy Story 2, C-12: Final Resistance. Every title: widescreen and loading removal. Tekken 3, Tomba! 1 and
 Mega Man X4 are already 60 fps, so no interpolation for them; the others get 60 fps interpolation. Vagrant Story's horizontal
 projection word is gameplay state (battle code branches on it), so widen its canvas, never `H`.
-C-12 also gets increased draw distance. Mega Man X4 needs only widescreen and drop-in/drop-out co-op (no loading removal).
+C-12 also gets increased draw distance. Mega Man X4 also gets drop-in/drop-out co-op
+and skippable dialogue and sequences.
 
 ## Framework
 
