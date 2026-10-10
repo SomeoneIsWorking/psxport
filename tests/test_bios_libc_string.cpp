@@ -151,9 +151,30 @@ void test_wrong_table_and_neighbor_are_not_claimed() {
   delete game;
 }
 
+void check_atoi(Game &game, uint32_t fn, const char *text, int32_t expected) {
+  put_string(game.core, kSrc, text);
+  game.core.r[R_A0] = kSrc;
+  game.core.r[R_V0] = 0xDEADBEEFu;
+  CHECK(game.hle.dispatchBios('A', fn));
+  CHECK_EQ(static_cast<int32_t>(game.core.r[R_V0]), expected);
+}
+
+void test_atoi_and_atol_parse_signed_decimal() {
+  auto game = new Game();
+  for (const uint32_t fn : {0x10u, 0x11u}) {
+    check_atoi(*game, fn, "42", 42);
+    check_atoi(*game, fn, "  -17xyz", -17);
+    check_atoi(*game, fn, "+8", 8);
+    check_atoi(*game, fn, "x9", 0);
+    check_atoi(*game, fn, "", 0);
+  }
+  delete game;
+}
+
 } // namespace
 
 int main() {
+  RUN(atoi_and_atol_parse_signed_decimal);
   RUN(toupper_is_ascii_only_and_locale_independent);
   RUN(appends_terminator_returns_destination_and_preserves_guards);
   RUN(guest_mirror_source_and_empty_inputs);
