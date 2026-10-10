@@ -10,10 +10,13 @@
 namespace psx::ui {
 
 void set_text(Rml::Element *el, std::string_view text) {
+  set_markup(el, rml_text_markup(text));
+}
+
+void set_markup(Rml::Element *el, const std::string &markup) {
   if (!el) {
     return;
   }
-  const std::string markup = rml_text_markup(text);
   if (el->GetInnerRML() == markup) {
     return;
   }

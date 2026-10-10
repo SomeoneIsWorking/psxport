@@ -1,6 +1,9 @@
 #pragma once
 
 #include "render_capabilities.h"
+#include "title_settings.h"
+
+#include <span>
 // class Mods — live PC-native mod toggles + params, PER-GAME state (member `Game::mods`).
 // The single source of truth shared by the renderer (gpu_vk.cpp) and the RmlUi overlay
 // (rmlui_overlay.cpp): seeded by init() in the Game ctor (factory defaults, then the settings
@@ -42,6 +45,11 @@ public:
   int debug_quads = 0;   // DEBUG: box+label BILLBOARD objects (2D sprites at 3D positions). Not persisted.
   int debug_objects = 0; // DEBUG: box+label 3D-MESH objects. Not persisted.
 
+  // The title's own integer settings, persisted beside the fields above. Declared before init() so the
+  // settings-file load reads them.
+  void declareTitleSettings(std::span<const TitleIntSetting> settings) {
+    mTitleSettings = settings;
+  }
   void init(const RenderCapabilities &capabilities); // title capabilities + settings-file load (idempotent)
   void save() const;                                 // persist the live settings (called by the overlay on change)
   void load();                                       // load the settings file over the current values, if it exists
@@ -62,6 +70,8 @@ public:
   }
 
 private:
+  const TitleIntSetting *findTitleSetting(const char *key) const;
+  std::span<const TitleIntSetting> mTitleSettings;
   bool mInited = false;
   bool mTemporalInterpolationSupported = false;
 };

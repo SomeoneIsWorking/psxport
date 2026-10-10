@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <memory>
 #include <optional>
+#include <span>
 
 #include "guest_packet_pool_windows.h"
 #include "guest_pad_buffer_layout.h"
@@ -18,6 +19,7 @@
 #include "input_phase.h"
 #include "logo_image.h"
 #include "render_capabilities.h"
+#include "title_settings.h"
 
 class Core;
 class Game;
@@ -158,6 +160,12 @@ public:
   // must publish a matching guest projection plan before the host exposes a wider presentation span.
   virtual const GuestWidescreenProjection *guestWidescreenProjection() const {
     return nullptr;
+  }
+
+  // Integer settings the title offers in the settings menu, one stepped row each, persisted in the
+  // settings file. The returned span must outlive the runtime's Games; empty declares none.
+  virtual std::span<const TitleIntSetting> titleIntSettings() const {
+    return {};
   }
 
   // Disc environment key for DIRECT runtimes (core.cfg == nullptr). The disc resolver checks this

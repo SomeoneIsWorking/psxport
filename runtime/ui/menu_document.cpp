@@ -2,6 +2,8 @@
 
 #include "game.h"
 #include "game_hooks_opt.h" // OPTIONAL hooks are never called directly — see that header
+#include "rml_text.h"
+#include "ui_component.h"
 
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -11,6 +13,9 @@
 #include <SDL3/SDL.h>
 
 #include <cstdlib>
+#include <span>
+#include <string>
+#include <string_view>
 
 namespace psx::ui {
 namespace {
@@ -26,6 +31,11 @@ constexpr const char *kWarpAreaId = "warp_area";
 constexpr const char *kDevCommandIds[] = {"warp_entry", "flag_index", "flag_value"};
 constexpr const char *kRenderPathId = "render_path";
 
+// A title's declared settings are adjust rows whose id carries this prefix; they are added under
+// `#title_settings` when the document is built.
+constexpr std::string_view kTitleSettingPrefix = "title:";
+constexpr const char *kTitleSettingsHostId = "title_settings";
+
 } // namespace
 
 MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *game)
@@ -34,6 +44,8 @@ MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *g
   if (!mDoc) {
     return;
   }
+
+  add_title_setting_rows();
 
   // Readouts first: the initial tab selection at the bottom of this constructor refreshes the
   // whole tree, so the readouts must already exist by then.
@@ -83,6 +95,35 @@ MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *g
 }
 
 MenuDocument::~MenuDocument() = default;
+
+const TitleIntSetting *MenuDocument::find_title_setting(std::string_view id) const {
+  if (!mGame || !mGame->runtime) {
+    return nullptr;
+  }
+  for (const TitleIntSetting &setting : mGame->runtime->titleIntSettings()) {
+    if (id == setting.id) {
+      return &setting;
+    }
+  }
+  return nullptr;
+}
+
+void MenuDocument::add_title_setting_rows() {
+  Rml::Element *host = mDoc->GetElementById(kTitleSettingsHostId);
+  if (!host || !mGame || !mGame->runtime) {
+    return;
+  }
+  const std::span<const TitleIntSetting> settings = mGame->runtime->titleIntSettings();
+  if (settings.empty()) {
+    return;
+  }
+  std::string rml = "<div class=\"section-heading spaced\">Enhancements</div>";
+  for (const TitleIntSetting &setting : settings) {
+    rml += std::string("<select-button adjust=\"") + std::string(kTitleSettingPrefix) + setting.id + "\"><key>" +
+           rml_text_markup(setting.label) + "</key><value></value></select-button>";
+  }
+  set_markup(host, rml);
+}
 
 void MenuDocument::dump() const {
   // Counts FIRST, so the enumeration below always arrives with its denominator attached. A dump
@@ -160,6 +201,12 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
     for (const char *devId : kDevCommandIds) {
       if (id == devId) {
         return make_dev_command_binding(&mDevCommands, id);
+      }
+    }
+    if (id.rfind(kTitleSettingPrefix, 0) == 0) {
+      const TitleIntSetting *setting = find_title_setting(std::string_view(id).substr(kTitleSettingPrefix.size()));
+      if (setting) {
+        return make_title_setting_binding(setting, &mGame->mods);
       }
     }
     if (!ModRowModel::knows(RowKind::Adjust, id)) {

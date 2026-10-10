@@ -23,7 +23,7 @@ headless-operation, content-authoring, and testability requirements; the codemap
     runtime/ui/dev_command_control.{h,cpp} warp entry, grant-all-items and event-flag commands, sent over the control channel
     runtime/ui/render_path_control.{h,cpp} the Display tab's title-capability-filtered player paths;
                                            the PSX software path stays diagnostic-only
-    runtime/ui/menu_row.{h,cpp}            one <select-button> + its binding
+    runtime/ui/menu_row.{h,cpp}            one <select-button> + its binding (incl. a title's stepped integer setting)
     runtime/ui/menu_pane.{h,cpp}           one tab's page of rows
     runtime/ui/menu_tab_bar.{h,cpp}        the <tab> row and which one is selected
     runtime/ui/menu_readouts.{h,cpp}       the live video/world/music/warp status lines

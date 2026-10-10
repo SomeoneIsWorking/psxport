@@ -253,7 +253,7 @@ template <std::size_t N> void writeCode(Core &core, std::uint32_t at, const std:
 }
 
 std::string reportPath(const char *name) {
-  return std::string("override_differential_test/") + name + ".json";
+  return std::string("scratch/override_differential_test/") + name + ".json";
 }
 
 // VmHWM from /proc/self/status: the process's PEAK resident set, in kB, which is the quantity

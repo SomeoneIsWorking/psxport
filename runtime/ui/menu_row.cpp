@@ -3,6 +3,7 @@
 #include "dev_command_control.h"
 #include "mods.h"
 #include "render_path_control.h"
+#include "title_settings.h"
 #include "warp_control.h"
 
 #include <RmlUi/Core/StringUtilities.h>
@@ -50,6 +51,28 @@ public:
 private:
   Mods *mMods;
   std::string mId;
+};
+
+class TitleSettingBinding final : public RowBinding {
+public:
+  TitleSettingBinding(const TitleIntSetting *setting, Mods *mods) : mSetting(setting), mMods(mods) {}
+  bool text(std::string &out) const override {
+    out = std::to_string(mSetting->range.clamp(mSetting->var->get())) + mSetting->unit;
+    return true;
+  }
+  void step(int dir) override {
+    mSetting->var->set(psx::config::Layer::Value, mSetting->range.stepped(mSetting->var->get(), dir));
+    if (mMods) {
+      mMods->save();
+    }
+  }
+  bool steps_with_arrows() const override {
+    return true;
+  }
+
+private:
+  const TitleIntSetting *mSetting;
+  Mods *mMods;
 };
 
 class WarpAreaBinding final : public RowBinding {
@@ -161,6 +184,9 @@ std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id) 
 }
 std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id) {
   return std::make_unique<ModAdjustBinding>(mods, std::move(id));
+}
+std::unique_ptr<RowBinding> make_title_setting_binding(const TitleIntSetting *setting, Mods *mods) {
+  return std::make_unique<TitleSettingBinding>(setting, mods);
 }
 std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp) {
   return std::make_unique<WarpAreaBinding>(warp);

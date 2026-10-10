@@ -28,9 +28,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 class Game;
+struct TitleIntSetting;
 
 namespace Rml {
 class Context;
@@ -102,6 +104,8 @@ private:
   std::unique_ptr<RowBinding> bind_row(Rml::Element *row) override;
   void on_row_clicked(MenuRow &row) override;
 
+  void add_title_setting_rows(); // the title's declared settings, under #title_settings
+  const TitleIntSetting *find_title_setting(std::string_view id) const;
   void on_tab_selected(int index); // MenuTabBar's callback; call mTabBar->select() to change tab
   void focus_step(int dir);        // Down/Up, via RmlUi's own TAB navigation
   void activate_focused(int dir);

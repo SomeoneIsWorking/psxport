@@ -58,6 +58,9 @@ void Game::wireRuntimeMembers() {
   if (!GpuDevice::sInstance) {
     GpuDevice::sInstance = &gpu_dev;
   }
+  if (runtime) {
+    mods.declareTitleSettings(runtime->titleIntSettings());
+  }
   mods.init(runtime ? runtime->renderCapabilities() : RenderCapabilities::direct());
   // The declared render path is installed here so no title can run on a path it did not declare.
   if (runtime) {

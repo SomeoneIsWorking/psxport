@@ -597,6 +597,11 @@ bool enh(const CVar<bool> &v) {
   return enh_gate(v.name(), v.get());
 }
 
+long enh_int(const CVar<long> &v) {
+  const long value = v.get();
+  return enh_gate(v.name(), value != 0) ? value : 0;
+}
+
 bool enh_named(const char *name) {
   if (!name || !*name) {
     return enh_gate(name, false); // refused, and it says so — see enh_gate

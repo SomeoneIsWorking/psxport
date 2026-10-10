@@ -66,14 +66,19 @@ std::string outcomeDetail(const DifferentialOutcome &outcome) {
                           outcome.sideEffectsOriginal,
                           outcome.deadStackBytesIgnored);
   }
+  std::string further;
+  for (const DifferentialDifference &difference : outcome.further) {
+    further += lucent::format("; {}: original {} native {}", difference.what, difference.original, difference.native);
+  }
   return lucent::format("first difference {}: original {} native {} ({} register(s), {} memory range(s) / {} "
-                        "byte(s) differ)",
+                        "byte(s) differ){}",
                         outcome.difference->what,
                         outcome.difference->original,
                         outcome.difference->native,
                         outcome.registersDiffering,
                         outcome.memoryRangesDiffering,
-                        outcome.memoryBytesDiffering);
+                        outcome.memoryBytesDiffering,
+                        further);
 }
 
 } // namespace
