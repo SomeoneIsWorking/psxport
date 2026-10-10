@@ -3,8 +3,8 @@
 // The framework knows NOTHING about areas. How many there are, what they are called, and whether a
 // warp is legal right now all come from the game through GameHooks (`devAreaCount` / `devAreaName`
 // / `devWarpAllowed`); this class holds only the current selection, which is deliberately not
-// persisted. Arming reuses the SAME path the REPL `warp` command takes — `Repl::warpArmed` /
-// `warpDest` — so there is one warp mechanism, not a second one hiding behind a button.
+// persisted. Arming sends the same control-channel `warp <area> <entry>` line a client sends, through
+// DevCommandControl, so there is one warp mechanism, not a second one hiding behind a button.
 //
 // NAMING RULE (docs/areas.md): an area INDEX is a fact, an area NAME is a claim that needs a
 // source. An area the game has no name for is shown as "Area 12", never as a guess.
@@ -16,10 +16,14 @@
 class Game;
 
 namespace psx::ui {
+class DevCommandControl;
+}
+
+namespace psx::ui {
 
 class WarpControl {
 public:
-  explicit WarpControl(Game *game) : mGame(game) {}
+  WarpControl(Game *game, const DevCommandControl *commands) : mGame(game), mCommands(commands) {}
 
   int areaCount() const;
   std::string areaLabel(int area) const;
@@ -35,6 +39,7 @@ public:
 
 private:
   Game *mGame = nullptr;
+  const DevCommandControl *mCommands = nullptr;
   int mArea = 0;
 };
 

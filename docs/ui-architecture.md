@@ -20,6 +20,7 @@ headless-operation, content-authoring, and testability requirements; the codemap
     runtime/ui/ui_assets.{h,cpp}           asset resolution that refuses to report success
     runtime/ui/mod_row_model.{h,cpp}       what a row MEANS (the Mods toggle/adjust tables)
     runtime/ui/warp_control.{h,cpp}        the Debug tab's dev area warp
+    runtime/ui/dev_command_control.{h,cpp} warp entry, grant-all-items and event-flag commands, sent over the control channel
     runtime/ui/render_path_control.{h,cpp} the Display tab's title-capability-filtered player paths;
                                            the PSX software path stays diagnostic-only
     runtime/ui/menu_row.{h,cpp}            one <select-button> + its binding

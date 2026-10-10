@@ -1,8 +1,7 @@
 #include "warp_control.h"
 
+#include "dev_command_control.h"
 #include "game.h"
-
-#include <lucent/log.h>
 
 #include <cstdio>
 
@@ -49,11 +48,7 @@ std::string WarpControl::arm() {
   if (mGame->core.hooks->devWarpAllowed && !mGame->core.hooks->devWarpAllowed(&mGame->core)) {
     return "not in the field - reach gameplay first";
   }
-  mGame->repl.warpDest = (uint32_t)mArea;
-  mGame->repl.warpSub = 0;
-  mGame->repl.warpArmed = 1;
-  lucent::info("rmlui", "warp: armed area {} from the menu", mArea);
-  return "warping to " + areaLabel(mArea);
+  return mCommands->warp(mArea);
 }
 
 } // namespace psx::ui

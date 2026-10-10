@@ -36,7 +36,6 @@ struct GameHooks {
   void (*renderBbFrameReset)(Core *c);
 
   bool (*replCommand)(Core *c, const char *cmd, const char *line);
-  void (*devWarp)(Core *c, int area, int sub);
   int (*devAreaCount)(Core *c);
   const char *(*devAreaName)(Core *c, int area);
   bool (*devWarpAllowed)(Core *c);

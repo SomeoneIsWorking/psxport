@@ -25,6 +25,7 @@ class Mods;
 namespace psx::ui {
 
 class WarpControl;
+class DevCommandControl;
 class RenderPathControl;
 
 // ---- what a row is wired to -----------------------------------------------------------------------
@@ -59,6 +60,8 @@ public:
 std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id);
 std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id);
 std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp);
+// `warp_entry`, `flag_index` and `flag_value`: the numeric selections behind the developer commands.
+std::unique_ptr<RowBinding> make_dev_command_binding(DevCommandControl *commands, std::string id);
 std::unique_ptr<RowBinding> make_render_path_binding(RenderPathControl *render_path);
 // `available` (optional) is asked when the row is built: false removes the row, as a declared capability
 // absence (a product with no title selector has no "return to selection" row).

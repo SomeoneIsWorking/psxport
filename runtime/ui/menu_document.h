@@ -23,6 +23,7 @@
 #include "menu_tab_bar.h"
 #include "render_path_control.h"
 #include "ui_component.h"
+#include "dev_command_control.h"
 #include "warp_control.h"
 
 #include <cstdint>
@@ -111,6 +112,7 @@ private:
   Rml::ElementDocument *mDoc = nullptr;
   Game *mGame = nullptr;
 
+  DevCommandControl mDevCommands;
   WarpControl mWarp;
   RenderPathControl mRenderPath;
   MenuTabBar *mTabBar = nullptr;     // owned by Component::mChildren

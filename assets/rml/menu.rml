@@ -57,8 +57,17 @@
 				<div class="section-heading spaced">Area Warp</div>
 				<div id="warp_readout" class="readout"></div>
 				<select-button adjust="warp_area"><key>Destination</key><value>Area 0</value></select-button>
+				<select-button adjust="warp_entry"><key>Entry</key><value>0</value></select-button>
 				<select-button action="warp_go"><key>Warp There</key><value>&#8594;</value></select-button>
-				<p class="hint">Only from the field &#8212; the warp runs the game's own door transition (fade, teardown, reload), so it needs a running field. Unnamed areas show as "Area N"; names live in docs/areas.md.</p>
+				<p class="hint">Only from the field &#8212; the warp runs the game's own door transition (fade, teardown, reload), so it needs a running field. Unnamed areas show as "Area N"; names live in docs/areas.md. The entry picks the door or spawn point in the destination.</p>
+
+				<div class="section-heading spaced">Items and Event Flags</div>
+				<select-button action="items_all"><key>Grant All Items</key><value>&#8594;</value></select-button>
+				<select-button adjust="flag_index"><key>Flag</key><value>0</value></select-button>
+				<select-button adjust="flag_value"><key>Value</key><value>0</value></select-button>
+				<select-button action="flag_read"><key>Read Flag</key><value>&#8594;</value></select-button>
+				<select-button action="flag_write"><key>Write Flag</key><value>&#8594;</value></select-button>
+				<p class="hint">Sent to the game as control-channel commands and written at the next frame. A game without them answers "not supported". Results show in the line under Area Warp.</p>
 				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
 			</pane>
 
