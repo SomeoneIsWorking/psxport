@@ -420,11 +420,22 @@ void test_startup_refuses_unsupported_native_and_leaves_the_process_ladder_alone
   auto game = std::make_unique<Game>();
   psx::config::cv_render_path.set(psx::config::Layer::Runtime, "native");
 
-  render_path_install(&game->core);
+  game = std::make_unique<Game>();
 
   CHECK(game->core.rsub.mode.path() == RenderPath::Gte);
   CHECK_STREQ(psx::config::cv_render_path.get().c_str(), "native");
   CHECK(psx::config::cv_render_path.layer() == psx::config::Layer::Runtime);
+}
+
+// A Core composed through Game alone lands on its runtime's declared path; the title calls nothing.
+void test_game_construction_installs_the_declared_render_path() {
+  TestRuntime runtime;
+  runtime.capabilities = RenderCapabilities::widescreenOnly();
+  runtime.capabilities.defaultPath = RenderPath::Record;
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+
+  CHECK(game->core.rsub.mode.path() == RenderPath::Record);
 }
 
 void test_capability_absence_removes_player_bindings_while_capable_titles_retain_them() {
@@ -500,6 +511,7 @@ int main() {
   RUN(legacy_adapter_supports_incremental_inheritance);
   RUN(game_owns_runtime_products_and_context);
   RUN(only_legacy_adapter_installs_the_temporal_compatibility_decorator);
+  RUN(game_construction_installs_the_declared_render_path);
   RUN(runtime_capabilities_are_explicit_and_preserve_legacy_temporal_titles);
   RUN(live_render_path_validator_separates_player_and_diagnostic_use);
   RUN(widescreen_only_runtime_refuses_native_through_shipping_validator);

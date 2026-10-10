@@ -75,10 +75,8 @@ inline bool render_path_parse(const char *s, RenderPath *out) {
 }
 
 class Core;
-// render_path_install — resolve and install this Core's render path from configuration (the CVar
-// configuration ladder, and announce it. Called by every boot
-// spine: native_boot_run, and a port whose boot does not go through it (spyro). One parser, one
-// announce line. Definition in render_path.cpp.
+// render_path_install — resolve this Core's render path from the CVar ladder and the title's declared
+// capabilities, and announce it. Game's constructor is the only caller. Definition in render_path.cpp.
 void render_path_install(Core *c);
 
 class RenderMode {

@@ -67,7 +67,6 @@ void dc_boot_init(Core *c) {
   // before the generic BIOS-library waits, matching the standalone boot order.
   c->game->cd.overridesInit();
   machine.prepareProduct();
-  machine.installRenderPath();
   machine.setupGuestBoot();
   game_init(c);
 }
@@ -219,7 +218,6 @@ void native_boot_run(Core *c) {
   // Armed here, beside the profiler, for the same reason.
   // The host census that names the CALLER of a host PC, and the active-config dump (docs/config.md).
   machine.armHostDiagnostics();
-  machine.installRenderPath(); // native | gte | psx, from the CVar ladder + aliases (render_path.cpp)
   machine.playBootMovies();
   machine.clearDisplayForFrontEnd();
   lucent::info("native_boot", "entering native crt0 (PC-driven)");

@@ -15,7 +15,6 @@
 #include "host_input.h"
 #include "hw_bind.h"
 #include "memcensus.h"
-#include "render_mode.h"
 #include "state/state_command.h"
 #include "store_observe.h"
 
@@ -79,10 +78,6 @@ void Machine::reportConfigurationOnce() {
 void Machine::armHostDiagnostics() {
   memcensus_init();
   cfg_dump();
-}
-
-void Machine::installRenderPath() {
-  render_path_install(&core());
 }
 
 void Machine::playBootMovies() {

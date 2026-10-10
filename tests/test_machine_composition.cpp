@@ -177,7 +177,6 @@ static void test_the_boot_steps_are_individually_callable(void) {
   machine.reportConfigurationOnce();
   machine.bindSession();
   machine.armHostDiagnostics();
-  machine.installRenderPath();
   // No GameConfig::bootFmv in this fixture: "this title plays no movie natively" is a real answer,
   // and it must be answerable without an FMV decoder or a disc.
   machine.playBootMovies();

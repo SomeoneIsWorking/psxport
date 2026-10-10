@@ -103,6 +103,10 @@ unsupported. `render_path_install`, RmlUi, REPL, and the debug server all consul
 An unsupported launch request resolves to the declared default and the live CVar reports that
 effective path rather than the rejected request.
 
+`Game`'s constructor calls `render_path_install` for a Game that has a runtime, so a Core always starts on its
+runtime's declared path and logs the `render path =` line; titles and boot spines never install it. A harness may
+replace the path afterwards, and a live `render path` switch or a new picker session still resolves per Core.
+
 `Mods` consumes the temporal declaration before loading settings. Unsupported titles refuse an
 enabled saved/environment fps60 request, keep the live field off, omit `fps60=` on the next save, and
 publish no fps60 row binding. `MenuPane` removes unavailable bindings from both layout and navigation.
