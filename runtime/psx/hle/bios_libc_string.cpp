@@ -10,6 +10,10 @@ namespace {
 
 enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 
+bool isAsciiSpace(uint8_t c) {
+  return c == ' ' || (c >= '\t' && c <= '\r');
+}
+
 } // namespace
 
 bool bios_libc_string_dispatch(Core *core, uint32_t fn) {
@@ -167,6 +171,25 @@ bool bios_libc_string_dispatch(Core *core, uint32_t fn) {
       length++;
     }
     core->r[V0] = length;
+    return true;
+  }
+  case 0x10:   // atoi(s)
+  case 0x11: { // atol(s)
+    uint32_t i = 0;
+    while (isAsciiSpace(core->mem_r8(a0 + i))) {
+      i++;
+    }
+    bool negative = false;
+    const uint8_t sign = core->mem_r8(a0 + i);
+    if (sign == '-' || sign == '+') {
+      negative = sign == '-';
+      i++;
+    }
+    uint32_t value = 0;
+    for (uint8_t digit = core->mem_r8(a0 + i); digit >= '0' && digit <= '9'; digit = core->mem_r8(a0 + ++i)) {
+      value = value * 10u + static_cast<uint32_t>(digit - '0');
+    }
+    core->r[V0] = negative ? 0u - value : value;
     return true;
   }
   case 0x25: { // toupper(c) — Sony BIOS's locale-independent ASCII leaf
