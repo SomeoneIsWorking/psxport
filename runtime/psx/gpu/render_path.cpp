@@ -1,13 +1,5 @@
 // render_path.cpp — resolve THE RENDER PATH for one Core, from configuration, in ONE place.
-//
-// WHY THIS IS ITS OWN FILE. The path has to be installed by every boot spine, and there is more than
-// one: `native_boot_run` (native_boot.cpp) for the ports that boot through it, and the bootInit hook
-// for the ports that do not — spyro reaches `main()` -> `dc_boot_init` -> hook and never touches
-// native_boot_run (spyro C158). Before this existed, the flag was parsed inside native_boot_run, so
-// spyro's own render_frame.cpp had to re-parse it and said so in a comment: *"The duplication is a
-// framework wart: config parsing that belongs at Core setup lives inside one particular boot spine.
-// Worth fixing upstream"*. This is that fix. Two parsers for one knob is two places for the knob's
-// meaning to drift, and the ONLY reason the second one existed is that the first was in the wrong file.
+// Game's constructor installs it, so every boot spine and harness gets the title's declared path.
 //
 // Renderer ownership and path selection are documented in docs/codemap.md.
 #include "cfg.h"

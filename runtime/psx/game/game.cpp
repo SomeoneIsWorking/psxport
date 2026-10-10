@@ -59,6 +59,10 @@ void Game::wireRuntimeMembers() {
     GpuDevice::sInstance = &gpu_dev;
   }
   mods.init(runtime ? runtime->renderCapabilities() : RenderCapabilities::direct());
+  // The declared render path is installed here so no title can run on a path it did not declare.
+  if (runtime) {
+    render_path_install(&core);
+  }
   disc_state_init(&disc);
   cdc_state_init(&cdc);
   timing.bindCdcClock(&cdc);

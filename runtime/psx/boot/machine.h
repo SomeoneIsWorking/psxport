@@ -62,10 +62,6 @@ public:
   // worse than none — its existence answers "can we measure this?" with a yes.
   void armHostDiagnostics();
 
-  // The render path (native | gte | psx) resolved from the configuration ladder, at the shared Core
-  // setup boundary. A harness may deliberately replace it after this call.
-  void installRenderPath();
-
   // The boot movies the title declares (`GameConfig::bootFmv`), played before the guest's own crt0 —
   // and ONLY those: an all-null list is a real answer ("this title plays no movie natively"), not a
   // missing value. `PSXPORT_NO_FMV` is the diagnostic control; whether a movie PLAYS is game
