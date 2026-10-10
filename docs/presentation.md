@@ -87,6 +87,12 @@ the device still executes every command and holds the guest-visible VRAM.
   would draw the baked faces again over their own pixels.
 - **Known differences from `gpu.c`.** A draw area below row 511 is clipped at 511 (the device wraps it). Texel
   rows are fetched `& 511`.
+- **Interlace.** With 480-line interlace and E1 bit 10 clear the device rasterizes one field per frame: the rows of the
+  displayed field are skipped (`skipRowParity`), so the VRAM holds this frame's rows beside the previous frame's. A display
+  shows one field at a time, so `RecordRasterizer::selectField` presents the field the shown record drew
+  (`FrameRecord::undrawnRowParity`), each undrawn row repeating the drawn row of its pair. The weave stays in the VRAM
+  image and in `woven()`, which `recordcheck` compares against the device. A record that draws every row (E1 bit 10 set,
+  or no interlace) is presented as drawn. A static scene loses the second field's vertical detail.
 - **Capture.** `RecordRasterizer::presented()` is the picture the last present showed (the VRAM
   image's display rect, a canvas, or an in-between copy). `shot`, `preseq` and the fps60 dump all go
   through `record_shot`, which downloads it and applies the present fade; nothing else reads it.

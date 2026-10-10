@@ -55,6 +55,21 @@ void FrameRecord::append(const RecordEntry &entry) {
   entries_.push_back(entry);
 }
 
+std::optional<int> FrameRecord::undrawnRowParity() const {
+  for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry) {
+    int parity = -1;
+    if (const auto *primitive = std::get_if<DrawPrimitive>(&*entry)) {
+      parity = primitive->state.skipRowParity;
+    } else if (const auto *fill = std::get_if<VramFill>(&*entry)) {
+      parity = fill->skipRowParity;
+    } else {
+      continue;
+    }
+    return parity >= 0 ? std::optional<int>(parity) : std::nullopt;
+  }
+  return std::nullopt;
+}
+
 RecordEntry *FrameRecord::last() {
   return entries_.empty() ? nullptr : &entries_.back();
 }

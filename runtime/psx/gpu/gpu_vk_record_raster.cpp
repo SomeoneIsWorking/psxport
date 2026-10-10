@@ -126,6 +126,11 @@ void RecordRasterizer::releaseImage() {
   }
   canvases_.clear();
   presented_ = {};
+  woven_ = {};
+  if (field_ != nullptr) {
+    SDL_ReleaseGPUTexture(device_, field_);
+    field_ = nullptr;
+  }
 }
 
 void RecordRasterizer::ensureImage(int scale) {
@@ -210,9 +215,51 @@ void RecordRasterizer::present(const RecordView &view, bool inBetween) {
   if (Canvas *canvas = view.margin > 0 ? canvasFor(view) : nullptr) {
     presented_ = {inBetween ? canvas->plane.inBetween : canvas->plane.image,
                   {0, 0, canvas->plane.width, canvas->plane.height}};
+    wovenOriginY_ = canvas->plane.originY;
+  } else {
+    presented_ = {inBetween ? vram_.inBetween : vram_.image, view.display};
+    wovenOriginY_ = view.display.y0;
+  }
+  woven_ = presented_;
+}
+
+void RecordRasterizer::selectField(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record) {
+  const std::optional<int> undrawn = record.undrawnRowParity();
+  const RecordRect source = woven_.rect;
+  const int width = source.x1 - source.x0;
+  const int height = source.y1 - source.y0;
+  if (!undrawn || woven_.texture == nullptr || width <= 0 || height <= 0) {
     return;
   }
-  presented_ = {inBetween ? vram_.inBetween : vram_.image, view.display};
+  if (field_ == nullptr || fieldWidth_ != width || fieldHeight_ != height) {
+    if (field_ != nullptr) {
+      SDL_ReleaseGPUTexture(device_, field_);
+    }
+    field_ = makeTexture(device_, width * scale_, height * scale_, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    fieldWidth_ = width;
+    fieldHeight_ = height;
+  }
+  copyTexture(cmd, woven_.texture, source, field_, 0, 0);
+  // Each undrawn row repeats the drawn row of its pair, so the picture is one field and never two moments.
+  SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
+  for (int row = 0; row < height; row++) {
+    const int vramRow = wovenOriginY_ + row;
+    const int partner = row + ((vramRow & 1) == 0 ? 1 : -1);
+    if ((vramRow & 1) != *undrawn || partner < 0 || partner >= height) {
+      continue;
+    }
+    SDL_GPUTextureLocation from = {};
+    from.texture = woven_.texture;
+    from.x = static_cast<Uint32>(source.x0 * scale_);
+    from.y = static_cast<Uint32>((source.y0 + partner) * scale_);
+    SDL_GPUTextureLocation to = {};
+    to.texture = field_;
+    to.y = static_cast<Uint32>(row * scale_);
+    SDL_CopyGPUTextureToTexture(
+        copy, &from, &to, static_cast<Uint32>(width * scale_), static_cast<Uint32>(scale_), 1, false);
+  }
+  SDL_EndGPUCopyPass(copy);
+  presented_ = {field_, {0, 0, width, height}};
 }
 
 void RecordRasterizer::update(SDL_GPUCommandBuffer *cmd,
@@ -225,6 +272,7 @@ void RecordRasterizer::update(SDL_GPUCommandBuffer *cmd,
   showCanvas(cmd, view);
   present(view, false);
   advance(cmd, record, deviceAhead, vram);
+  selectField(cmd, record);
 }
 
 void RecordRasterizer::advance(SDL_GPUCommandBuffer *cmd,
@@ -286,6 +334,7 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
     copyTexture(cmd, target.image, {0, 0, target.width, target.height}, target.snapshot, 0, 0);
   }
   present(view, true);
+  selectField(cmd, record);
   return true;
 }
 

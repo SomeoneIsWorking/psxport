@@ -568,6 +568,64 @@ static void test_four_three_presents_the_device_display(void) {
   CHECK_EQ(differsFromVram(out.image, 1024, 512, out.device, 0, 0), 0);
 }
 
+// A device that rasterizes one field per frame (480-line interlace, E1 bit 10 clear) shows that field with each
+// row doubled over its pair; the other field's rows are the previous frame's and never reach the picture.
+static void test_an_interlaced_one_field_frame_presents_that_field(void) {
+  Stream s = baseState();
+  s.area(kBuffer.x0, kBuffer.y0, kBuffer.x1 - 1, kBuffer.y1 - 1);
+  s.add({0xE1000000u | page(8, 0, 0, 0)});
+  s.add({rgb(0x28, 200, 30, 30),
+         xy(kBuffer.x0, kBuffer.y0),
+         xy(kBuffer.x1, kBuffer.y0),
+         xy(kBuffer.x0, kBuffer.y1),
+         xy(kBuffer.x1, kBuffer.y1)});
+  GpuDevice device;
+  device.gp1(0x00000000u, 0);
+  device.gp1(0x08000000u | 0x24u | 0x01u, 0);
+  Stream pattern;
+  pattern.upload(0, 0, 1024, 512, 7);
+  for (std::uint32_t word : pattern.words) {
+    device.gp0(word);
+  }
+  RecordRasterizer rasterizer(gDevice);
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(gDevice);
+  rasterizer.update(cmd, device.sealRecord(), false, device.vram(), 1, {kBuffer, 0});
+  for (std::uint32_t word : s.words) {
+    device.gp0(word, 0x80100000u);
+  }
+  const psx::present::FrameRecord record = device.sealRecord();
+  rasterizer.update(cmd, record, false, device.vram(), 1, {kBuffer, 0});
+  const psx::gpu::RecordPicture picture = rasterizer.presented();
+  rasterizer.download(cmd, picture);
+  CHECK(submitAndWait(cmd));
+  const std::vector<std::uint16_t> shown = rasterizer.downloaded();
+  const std::optional<int> undrawn = record.undrawnRowParity();
+  CHECK(undrawn.has_value());
+  CHECK(picture.texture != rasterizer.image());
+  CHECK(rasterizer.woven().texture == rasterizer.image());
+  const std::span<const std::uint16_t> vram = device.vram();
+  const int width = kBuffer.x1 - kBuffer.x0;
+  long wrong = 0;
+  long stale = 0;
+  for (int row = 0; row < kBuffer.y1 - kBuffer.y0; row++) {
+    const int vramRow = kBuffer.y0 + row;
+    const int drawnRow = (vramRow & 1) == *undrawn ? vramRow ^ 1 : vramRow;
+    for (int column = 0; column < width; column++) {
+      const std::size_t at =
+          static_cast<std::size_t>(row) * static_cast<std::size_t>(width) + static_cast<std::size_t>(column);
+      const std::uint16_t want = vram[static_cast<std::size_t>(drawnRow) * psx::gpu::kRecordVramWidth +
+                                      static_cast<std::size_t>(kBuffer.x0 + column)];
+      wrong += shown[at] != want ? 1 : 0;
+      stale += vram[static_cast<std::size_t>(vramRow) * psx::gpu::kRecordVramWidth +
+                    static_cast<std::size_t>(kBuffer.x0 + column)] != want
+                   ? 1
+                   : 0;
+    }
+  }
+  CHECK_EQ(wrong, 0);
+  CHECK(stale > 0);
+}
+
 // The canvas equals the device drawing the same frame with its draw area widened by the margin.
 static void test_a_display_draw_reaches_the_margins(void) {
   Stream wide = baseState();
@@ -1161,6 +1219,7 @@ int main(void) {
   RUN(lines);
   RUN(clip_offset_and_mask);
   RUN(interlaced_row_skip);
+  RUN(an_interlaced_one_field_frame_presents_that_field);
   RUN(random_streams);
   RUN(four_three_presents_the_device_display);
   RUN(a_display_draw_reaches_the_margins);
