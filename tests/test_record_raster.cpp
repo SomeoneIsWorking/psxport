@@ -658,6 +658,25 @@ static void test_a_display_draw_reaches_the_margins(void) {
   CHECK(differsFromVram(out.canvas, 416, 240, out.device, kBuffer.x0 - kMargin, kBuffer.y0) > 0);
 }
 
+// A buffer at VRAM x = 0 puts its left margin left of VRAM; a flat quad drawn there lands in the canvas.
+static void test_a_draw_left_of_vram_reaches_the_left_margin(void) {
+  constexpr psx::gpu::RecordRect kFlush{0, 0, 320, 240};
+  Stream s = baseState();
+  s.area(kFlush.x0, kFlush.y0, kFlush.x1 - 1, kFlush.y1 - 1);
+  s.add({rgb(0x28, 0, 248, 0), xy(-40, 20), xy(-5, 20), xy(-40, 60), xy(-5, 60)});
+  const CanvasOutcome out = present({s}, {kFlush, kMargin});
+  CHECK(out.ran);
+  constexpr std::size_t width = 320 + 2 * kMargin;
+  const std::uint16_t green = static_cast<std::uint16_t>(31u << 5);
+  long drawn = 0;
+  for (int row = 20; row < 60; row++) {
+    for (int column = kMargin - 40; column < kMargin - 5; column++) {
+      drawn += out.canvas[static_cast<std::size_t>(row) * width + static_cast<std::size_t>(column)] == green ? 1 : 0;
+    }
+  }
+  CHECK_EQ(drawn, 35 * 40);
+}
+
 // Mega Man X4 shows (0,0,320,240) and (0,240,320,479) alternately: neither canvas may retire the other.
 static void test_a_double_buffer_of_differing_heights_keeps_both_canvases(void) {
   const psx::gpu::RecordCanvas top{{0, 0, 320, 240}, kMargin};
@@ -1223,6 +1242,7 @@ int main(void) {
   RUN(random_streams);
   RUN(four_three_presents_the_device_display);
   RUN(a_display_draw_reaches_the_margins);
+  RUN(a_draw_left_of_vram_reaches_the_left_margin);
   RUN(a_row_inset_display_draw_reaches_the_margins);
   RUN(a_double_buffer_of_differing_heights_keeps_both_canvases);
   RUN(a_fill_of_the_display_clears_the_margins);
