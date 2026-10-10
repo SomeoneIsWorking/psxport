@@ -17,13 +17,13 @@
 #ifndef PSXPORT_UI_MENU_DOCUMENT_H
 #define PSXPORT_UI_MENU_DOCUMENT_H
 
+#include "dev_command_control.h"
 #include "menu_pane.h"
 #include "menu_readouts.h"
 #include "menu_row.h"
 #include "menu_tab_bar.h"
 #include "render_path_control.h"
 #include "ui_component.h"
-#include "dev_command_control.h"
 #include "warp_control.h"
 
 #include <cstdint>
