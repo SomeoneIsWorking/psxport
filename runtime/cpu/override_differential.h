@@ -70,10 +70,14 @@ struct DifferentialDifference {
   std::string native;
 };
 
+inline constexpr std::size_t kListedFurtherDifferences = 8;
+
 struct DifferentialOutcome {
   DifferentialVerdict verdict = DifferentialVerdict::Match;
   // Mismatch: the first difference. Incomparable: `reason` names why, `difference` is empty.
   std::optional<DifferentialDifference> difference;
+  // The differences after the first, up to kListedFurtherDifferences.
+  std::vector<DifferentialDifference> further;
   std::string reason;
   std::uint32_t registersDiffering = 0;
   std::uint32_t memoryRangesDiffering = 0;

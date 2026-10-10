@@ -92,6 +92,8 @@ std::uint32_t architecturalGteWord(std::size_t index, std::uint32_t word) {
 void noteFirst(DifferentialOutcome &outcome, DifferentialDifference difference) {
   if (!outcome.difference) {
     outcome.difference = std::move(difference);
+  } else if (outcome.further.size() < kListedFurtherDifferences) {
+    outcome.further.push_back(std::move(difference));
   }
 }
 

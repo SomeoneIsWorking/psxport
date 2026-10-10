@@ -88,6 +88,15 @@ bool insideCheckout(const char *path) {
 
 } // namespace
 
+const TitleIntSetting *Mods::findTitleSetting(const char *key) const {
+  for (const TitleIntSetting &setting : mTitleSettings) {
+    if (strcmp(setting.var->name(), key) == 0) {
+      return &setting;
+    }
+  }
+  return nullptr;
+}
+
 void Mods::save() const {
   const char *path = mods_path();
   if (insideCheckout(path)) {
@@ -110,6 +119,9 @@ void Mods::save() const {
     psx::config::cv_fps60.set(psx::config::Layer::Value, fps60 != 0);
   }
   fprintf(f, "aspect=%d\nires=%d\nface_order=%d\n", aspect, ires, face_order);
+  for (const TitleIntSetting &setting : mTitleSettings) {
+    fprintf(f, "%s=%ld\n", setting.var->name(), setting.var->value_for_save());
+  }
   if (mTemporalInterpolationSupported) {
     fprintf(f, "fps60=%d\n", psx::config::cv_fps60.value_for_save() ? 1 : 0);
   }
@@ -153,6 +165,10 @@ void Mods::load() {
         lucent::warn(
             "mods", "{}: fps60=1 REFUSED — this title declares no temporal interpolation product", mods_path());
       }
+    }
+    // A title setting goes to its CVar's VALUE layer, like fps60: an environment Override still wins.
+    else if (const TitleIntSetting *setting = findTitleSetting(k)) {
+      setting->var->set(psx::config::Layer::Value, setting->range.clamp(atol(v)));
     }
     // A key this loader does not recognise used to fall off the end of the chain and vanish. That is
     // the settings-file half of exactly the same bug as PSXPORT_FPS60: a line the user (or a past

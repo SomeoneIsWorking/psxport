@@ -21,6 +21,7 @@
 #include <string>
 
 class Mods;
+struct TitleIntSetting;
 
 namespace psx::ui {
 
@@ -60,6 +61,8 @@ public:
 std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id);
 std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id);
 std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp);
+// A title's declared integer setting: shows the value and unit, steps within the declared range and persists.
+std::unique_ptr<RowBinding> make_title_setting_binding(const TitleIntSetting *setting, Mods *mods);
 // `warp_entry`, `flag_index` and `flag_value`: the numeric selections behind the developer commands.
 std::unique_ptr<RowBinding> make_dev_command_binding(DevCommandControl *commands, std::string id);
 std::unique_ptr<RowBinding> make_render_path_binding(RenderPathControl *render_path);

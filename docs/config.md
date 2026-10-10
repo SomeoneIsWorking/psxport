@@ -79,6 +79,12 @@ Player-facing settings are declared in `runtime/psx/config/config_vars.h` and ex
 Persistent settings use the platform user-data location supplied by the consuming title. The
 checkout, current directory, and environment are not player-storage defaults.
 
+A title adds its own stepped integer settings through `GameRuntime::titleIntSettings()`: a
+`TitleIntSetting` names an `IntVar`, a label, a unit and a `psx::config::SteppedRange` (min, max, step;
+`clamp` snaps to the nearest step, `stepped` moves one step and saturates). The settings file stores the
+value under the CVar's name, `Mods::load` clamps it onto the grid, and the menu shows one arrow-stepped row
+per setting under "Enhancements" in the Display pane. `enh_int(var)` reads it, and reads 0 in a comparison run.
+
 ## Verification
 
 A run that asked for a wide picture and did not get one is told so, by name and by reason, in the same
@@ -119,7 +125,7 @@ that (default 64; 0 = none): the original runs live, the native runs against the
 with the original's device traffic replayed to it, the two post-states are compared under the MIPS O32
 contract, and the run continues from the **original's** state. `PSXPORT_OVERRIDE_DIFF_DEAD_STACK`
 (default 8192) bounds the callee-frame window below the entry `sp` whose differences are counted but not
-judged. `PSXPORT_OVERRIDE_DIFF_REPORT` (default `scratch/override_differential.json`, cwd-relative) is the
+judged. The log line of a mismatch lists up to eight further differences after the first. `PSXPORT_OVERRIDE_DIFF_REPORT` (default `scratch/override_differential.json`, cwd-relative) is the
 JSON report; gate on it with
 
     uv run --frozen python tools/port/override_differential_gate.py scratch/override_differential.json --require <name>

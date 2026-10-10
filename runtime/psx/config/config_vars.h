@@ -141,6 +141,9 @@ bool enh_gate(const char *key, bool asked);
 // (the shape megamanx4 uses); `enh_named(name)` is for a name selected through PSXPORT_ENH, and is
 // what cfg_enh() forwards to.
 bool enh(const CVar<bool> &v);
+// The integer counterpart for a graded pc_enh (a percentage, a distance): the knob's value, or 0 in a
+// comparison run. The title declares 0 as its neutral value, which is what the faithful engine does.
+long enh_int(const CVar<long> &v);
 bool enh_named(const char *name);
 
 // PSXPORT_RENDER_PATH — the render path: native | gte | device | record.
