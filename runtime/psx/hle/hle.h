@@ -129,6 +129,9 @@ public:
   //   completion, and sound-DMA completion so guest waits (TestEvent/WaitEvent) advance.
   void deliverEvent(uint32_t evClass, uint32_t spec);
 
+  // unDeliverEvent(evClass, spec): B0:0x20, clear `fired` on the matching slots that have no handler.
+  void unDeliverEvent(uint32_t evClass, uint32_t spec);
+
   // ---- BIOS-side helpers -------------------------------------------------------
   // heap: A0:0x33-0x39 native first-fit arena (bookkeeping outside PSX RAM).
   void heapInit(uint32_t addr, uint32_t size);

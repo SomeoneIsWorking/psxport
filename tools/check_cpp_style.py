@@ -60,7 +60,7 @@ PSXPORT_CAPS = {
     "runtime/psx/gpu/gpu_vk_selftest_support.h": 15,
     "runtime/psx/gpu/gpu_vk_texture_phase_selftest.cpp": 180,
     "runtime/psx/gpu/gpu_vk_texture_phase_selftest.h": 10,
-    "runtime/psx/hle/hle.cpp": 744,
+    "runtime/psx/hle/hle.cpp": 667,
     "runtime/psx/gpu/render_queue.cpp": 1800,
     "runtime/ui/render_path_control.cpp": 54,
     "runtime/ui/render_path_control.h": 32,
