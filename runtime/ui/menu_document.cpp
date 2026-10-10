@@ -21,14 +21,16 @@ constexpr const char *kAttrAction = "action";
 constexpr const char *kAttrToggle = "toggle";
 constexpr const char *kAttrAdjust = "adjust";
 
-// The one adjust row whose model is not `Mods`.
+// The adjust rows whose model is not `Mods`.
 constexpr const char *kWarpAreaId = "warp_area";
+constexpr const char *kDevCommandIds[] = {"warp_entry", "flag_index", "flag_value"};
 constexpr const char *kRenderPathId = "render_path";
 
 } // namespace
 
 MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *game)
-    : Component(doc), mCtx(ctx), mDoc(doc), mGame(game), mWarp(game), mRenderPath(game) {
+    : Component(doc), mCtx(ctx), mDoc(doc), mGame(game), mDevCommands(game), mWarp(game, &mDevCommands),
+      mRenderPath(game) {
   if (!mDoc) {
     return;
   }
@@ -155,6 +157,11 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
     if (id == kWarpAreaId) {
       return make_warp_area_binding(&mWarp);
     }
+    for (const char *devId : kDevCommandIds) {
+      if (id == devId) {
+        return make_dev_command_binding(&mDevCommands, id);
+      }
+    }
     if (!ModRowModel::knows(RowKind::Adjust, id)) {
       mUnknownRows++;
       lucent::error("rmlui",
@@ -202,6 +209,14 @@ void MenuDocument::run_action(const std::string &id) {
   if (id == "warp_go") {
     if (mReadouts) {
       mReadouts->set_warp_status(mWarp.arm());
+    }
+    return;
+  }
+  if (id == "items_all" || id == "flag_read" || id == "flag_write") {
+    if (mReadouts) {
+      mReadouts->set_warp_status(id == "items_all"   ? mDevCommands.grantAllItems()
+                                 : id == "flag_read" ? mDevCommands.readFlag()
+                                                     : mDevCommands.writeFlag());
     }
     return;
   }

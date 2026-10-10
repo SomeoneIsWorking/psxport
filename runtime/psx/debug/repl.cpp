@@ -1,5 +1,5 @@
 // repl.cpp — interactive REPL driver (PSXPORT_REPL=1): read commands from stdin and drive the native
-// port (run/step, memory peek/poke, input, screenshots, RAM dumps, entity/scene inspection, area warp,
+// port (run/step, memory peek/poke, input, screenshots, RAM dumps, entity/scene inspection,
 // audio dumps). Extracted from native_boot.cpp (later-288) so the boot + scheduler file is not crammed
 // with the debug driver. The generic loop (native_boot.cpp) calls c->game->repl.read() between frames;
 // the title's FrameDriver consumes the class Repl's auto-drive requests and can ask the generic loop
@@ -138,10 +138,8 @@ static void repl_xadump(DiscState *disc, uint8_t chan, uint32_t start_lba, const
   free(out);
 }
 
-// REPL auto-drive state (navNewgame / skipFrames / warpArmed / warpDest) lives on class Repl (repl.h) —
+// REPL auto-drive state (navNewgame / skipFrames) lives on class Repl (repl.h) —
 // arm here on the appropriate command; the title's FrameDriver consumes it on subsequent frames.
-// `warp <id>` (dev/diagnostic) only records a requested destination. The title owns whether a warp is
-// currently legal, its area inventory, and the complete operation consumed by its frame driver.
 
 // Read+execute REPL commands until a `run N` (returns N), `quit`/EOF (returns -1) or `end`
 // (returns -2).
@@ -324,32 +322,6 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
       this->skipFrames = (long)a;
       lucent::info("repl", "skip {} frames", a);
       return (long)a;
-    } else if (!strcmp(cmd, "warp")) {
-      // The frame loop invokes the game's complete cold-warp operation. Area-machine layout and
-      // load/entry ordering are deliberately absent from this generic command parser.
-      unsigned sub = 0;
-      int nargs = sscanf(line, "%*s %u %u", &a, &sub);
-      if (nargs >= 1) {
-        if (!c->hooks || !c->hooks->devAreaCount || !c->hooks->devWarpAllowed) {
-          lucent::info("repl", "warp: unavailable for this game");
-        } else if (!c->hooks->devWarpAllowed(c)) {
-          lucent::info("repl", "warp: refused by the game in its current state");
-        } else {
-          const int count = c->hooks->devAreaCount(c);
-          if (count <= 0) {
-            lucent::info("repl", "warp: this game exposes no areas");
-          } else if ((int)a >= count) {
-            lucent::info("repl", "warp: area {} is out of range — this game has {} areas (0..{})", a, count, count - 1);
-          } else {
-            this->warpDest = a;
-            this->warpSub = (nargs == 2) ? sub : 0;
-            this->warpArmed = 1;
-            lucent::info("repl", "warp: armed cold destination area id={} sub={}", a, this->warpSub);
-          }
-        }
-      } else {
-        lucent::info("repl", "warp <area_id> [sub]");
-      }
     } else if (!strcmp(cmd, "preseq")) { // arm a PRESENT-sequence dump: next N presented frames (real + fps60 interp)
       unsigned n = 0;
       char dir[120] = "scratch/screenshots/preseq";

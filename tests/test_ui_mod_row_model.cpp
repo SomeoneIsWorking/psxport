@@ -55,6 +55,9 @@ static const char *const kNotToggles[] = {
     "ASPECT",
     "",
     "warp_area",
+    "warp_entry",
+    "flag_index",
+    "flag_value",
     "quit",
     "music_0",
 };
@@ -62,6 +65,9 @@ static const char *const kNotAdjusts[] = {
     "",
     "aspect",
     "warp_area",
+    "warp_entry",
+    "flag_index",
+    "flag_value",
     "close",
 };
 

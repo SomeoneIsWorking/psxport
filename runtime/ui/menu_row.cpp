@@ -1,5 +1,6 @@
 #include "menu_row.h"
 
+#include "dev_command_control.h"
 #include "mods.h"
 #include "render_path_control.h"
 #include "warp_control.h"
@@ -74,6 +75,44 @@ private:
   WarpControl *mWarp;
 };
 
+class DevCommandBinding final : public RowBinding {
+public:
+  DevCommandBinding(DevCommandControl *commands, std::string id) : mCommands(commands), mId(std::move(id)) {}
+  bool text(std::string &out) const override {
+    if (!mCommands) {
+      return false;
+    }
+    out = std::to_string(value());
+    return true;
+  }
+  void step(int dir) override {
+    if (!mCommands) {
+      return;
+    }
+    if (mId == "warp_entry") {
+      mCommands->adjustEntry(dir);
+    } else if (mId == "flag_index") {
+      mCommands->adjustFlagIndex(dir);
+    } else {
+      mCommands->adjustFlagValue(dir);
+    }
+  }
+  bool steps_with_arrows() const override {
+    return true;
+  }
+
+private:
+  int value() const {
+    if (mId == "warp_entry") {
+      return mCommands->entry();
+    }
+    return mId == "flag_index" ? mCommands->flagIndex() : mCommands->flagValue();
+  }
+
+  DevCommandControl *mCommands;
+  std::string mId;
+};
+
 class RenderPathBinding final : public RowBinding {
 public:
   explicit RenderPathBinding(RenderPathControl *render_path) : mRenderPath(render_path) {}
@@ -125,6 +164,9 @@ std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id) 
 }
 std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp) {
   return std::make_unique<WarpAreaBinding>(warp);
+}
+std::unique_ptr<RowBinding> make_dev_command_binding(DevCommandControl *commands, std::string id) {
+  return std::make_unique<DevCommandBinding>(commands, std::move(id));
 }
 std::unique_ptr<RowBinding> make_render_path_binding(RenderPathControl *render_path) {
   return std::make_unique<RenderPathBinding>(render_path);
