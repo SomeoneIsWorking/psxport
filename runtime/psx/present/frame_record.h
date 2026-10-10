@@ -210,6 +210,11 @@ public:
     return entries_.empty();
   }
 
+  // The row parity (of VRAM y) the record's last drawing entry leaves undrawn, set when the device
+  // rasterizes one field per frame (480-line interlace, E1 bit 10 clear); the other parity is the field
+  // just drawn. Empty when it draws every row or draws nothing.
+  std::optional<int> undrawnRowParity() const;
+
   void append(const RecordEntry &entry);
   // The most recent entry, or null.
   RecordEntry *last();

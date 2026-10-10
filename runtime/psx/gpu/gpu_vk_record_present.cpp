@@ -66,7 +66,7 @@ void GpuVkState::present_record(PresentInputs &inputs) {
     return;
   }
   const psx::gpu::RecordRect rect = psx::gpu::clampedVramRect(area.x, area.y, area.width, area.height);
-  s_record->download(cmd, {drewComposed ? s_record->presented().texture : s_record->image(), rect});
+  s_record->download(cmd, {drewComposed ? s_record->woven().texture : s_record->image(), rect});
   if (!gpu_submit_and_wait(cmd, "record check")) {
     return;
   }
@@ -93,7 +93,7 @@ void GpuVkState::present_record(PresentInputs &inputs) {
     }
   }
   lucent::debug("recordcheck",
-                "seq={} composed={} complete={} entries={} ahead={} replayed={} resynced={} scale={} "
+                "seq={} composed={} complete={} entries={} ahead={} replayed={} resynced={} scale={} undrawn={} "
                 "display {}x{}@{},{} mismatched={} first=({},{}) record={:#06x} device={:#06x}",
                 record.sequence(),
                 drewComposed ? 1 : 0,
@@ -103,6 +103,7 @@ void GpuVkState::present_record(PresentInputs &inputs) {
                 s_record->replayed(),
                 s_record->resynced(),
                 scale,
+                record.undrawnRowParity().value_or(-1),
                 width,
                 rect.y1 - rect.y0,
                 rect.x0,

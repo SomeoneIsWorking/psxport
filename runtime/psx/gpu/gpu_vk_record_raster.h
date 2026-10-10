@@ -69,9 +69,14 @@ public:
   SDL_GPUTexture *image() const {
     return vram_.image;
   }
-  // What the last update or drawInBetween put on screen.
+  // What the last update or drawInBetween put on screen. A record that draws one field per frame is
+  // shown as that field, each row doubled over its pair, as a display shows it.
   RecordPicture presented() const {
     return presented_;
+  }
+  // The same picture with both fields woven, as the device holds it.
+  RecordPicture woven() const {
+    return woven_;
   }
   int scale() const {
     return scale_;
@@ -121,6 +126,8 @@ private:
   std::vector<RecordCanvas> canvasShapes() const;
   Plane &plane(int index);
   void present(const RecordView &view, bool inBetween);
+  // Replaces the presented picture by the field `record` drew, when it draws one field per frame.
+  void selectField(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
   void execute(SDL_GPUCommandBuffer *cmd, const RecordRasterPlan &plan, bool inBetween);
   void copyTexture(
       SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *from, const RecordRect &source, SDL_GPUTexture *to, int toX, int toY);
@@ -135,6 +142,11 @@ private:
   std::vector<Canvas> canvases_;
   std::uint64_t shows_ = 0;
   RecordPicture presented_;
+  RecordPicture woven_;
+  int wovenOriginY_ = 0; // VRAM row of the woven picture's first row
+  SDL_GPUTexture *field_ = nullptr;
+  int fieldWidth_ = 0; // native pixels, at scale_
+  int fieldHeight_ = 0;
   int scale_ = 0;
 
   Buffer quads_;
