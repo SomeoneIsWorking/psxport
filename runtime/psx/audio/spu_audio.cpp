@@ -253,32 +253,17 @@ void SpuAudio::frame() {
 
 void SpuAudio::frameEx(bool output) {
   const uint64_t traceField = ++mTraceField;
-  // We advance + drain the SPU when SOMETHING consumes it: the SDL device (playback) OR a WAV
-  // capture (PSXPORT_WAV, works headless). We ALSO advance it (output discarded) when an XA clip
-  // is streaming, because game LOGIC blocks until the clip's read head passes its end LBA and that
-  // progress lives inside spu_update -> CDC_GetCDAudioSample.
+  // The SPU advances every field, consumed or not: guest logic waits on voice end and on the XA read head,
+  // and both live inside spu_update.
   //
-  // output == false (logic-only): SBS/dual-core diff path — two Games share the ONE output device
-  // so neither may feed it. Still advance THIS core's XA stream so its game logic progresses.
+  // output == false (logic-only): SBS/dual-core diff path, two Games share the ONE output device so
+  // neither may feed it.
 #ifdef PSXPORT_SDL
   bool sdl_on = output && mOutputEnabled && (mState == 1 && mStream != nullptr);
 #else
   bool sdl_on = false;
 #endif
   bool wav_on = output && mWav;
-  if (!sdl_on && !wav_on && !xa_stream_is_active(&game->xa) && output) {
-    lucent::debug("audiofield",
-                  "field={} advanced=0 output={} reason=no-consumer xa_active={} xa_wr={} "
-                  "xa_rd={:.3f} xa_pulls={} xa_sectors={}",
-                  traceField,
-                  output ? 1 : 0,
-                  game->xa.active,
-                  game->xa.wr,
-                  game->xa.rd,
-                  game->xa.pulls,
-                  game->xa.sectors);
-    return;
-  }
 
   const SpuFieldAdvance advance = mCadence.advance(psx::frame::displayFieldRate(game->gpu.s_disp_pal != 0));
   const uint32_t xaWrBefore = game->xa.wr;
