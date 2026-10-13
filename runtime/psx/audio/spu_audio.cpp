@@ -220,8 +220,14 @@ void SpuAudio::openHostDevice() {
     mState = -1;
     return;
   }
-  // Streams are paused at open. frameEx() primes a bounded cushion before starting playback; an
-  // empty start made render/load stalls audible and the old four-field cap then discarded tails.
+  {
+    SDL_AudioSpec device;
+    int deviceFrames = 0;
+    if (SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(mStream), &device, &deviceFrames)) {
+      lucent::info("spu_audio", "device {} Hz, {} frames per period", device.freq, deviceFrames);
+    }
+  }
+  // Streams are paused at open. frameEx() primes the target level before starting playback.
   mState = 1;
 #else
   mState = -1;
@@ -244,9 +250,8 @@ void spu_mix_game_audio(Core *c, const GameHooks *hooks, int16_t *buf, int frame
 
 // Called once per delivered display field: advance the SPU by that field's fractional share of its
 // clock and sample rates, drain the resulting frames, and queue them to the device. No-op when audio
-// is disabled/failed. Bounds the device queue: if the backlog exceeds kAudioQueueCapBytes we still
-// advance the SPU (so its mixer state stays correct) but drop rendered samples only after the
-// bounded catch-up reserve is full, letting the device drain without accumulating unlimited delay.
+// is disabled/failed. The device queue is steered toward AudioQueuePolicy's target level by trimming
+// the device's consumption rate; rendered samples are dropped only above the policy's hard limit.
 void SpuAudio::frame() {
   frameEx(true);
 }
@@ -418,13 +423,15 @@ void SpuAudio::frameEx(bool output) {
       double dt = now - mRateT0;
       if (dt >= 2.0) {
         lucent::info("audio_rate",
-                     "{:.0f} samples/s (want {}), {} calls/{:.1f}s, drops={}, backlog={}",
+                     "{:.0f} samples/s (want {}), {} calls/{:.1f}s, drops={}, backlog={}, level={:.0f}, ratio={:.5f}",
                      mRateSamp / dt,
                      SpuFieldCadence::kSampleRateHz,
                      mRateCalls,
                      dt,
                      mRateDrops,
-                     SDL_GetAudioStreamQueued(mStream));
+                     SDL_GetAudioStreamQueued(mStream),
+                     mSteer.level(),
+                     SDL_GetAudioStreamFrequencyRatio(mStream));
         mRateT0 = now;
         mRateSamp = 0;
         mRateCalls = 0;
@@ -436,9 +443,10 @@ void SpuAudio::frameEx(bool output) {
   if (AudioQueuePolicy::needsReprime(mStreamStarted, queuedBytes)) {
     SDL_PauseAudioStreamDevice(mStream);
     mStreamStarted = false;
+    lucent::debug("audio", "[spu_audio] queue ran empty: re-priming");
   }
 
-  // Drop (don't queue) only when the bounded catch-up reserve is already full.
+  // Drop (don't queue) only above the limit the steer keeps a steady producer under.
   if (AudioQueuePolicy::shouldDrop(queuedBytes)) {
     return;
   }
@@ -453,7 +461,11 @@ void SpuAudio::frameEx(bool output) {
   SDL_PutAudioStreamData(mStream, buf, (int)(frames * 2 * sizeof(int16_t)));
 
   queuedBytes = SDL_GetAudioStreamQueued(mStream);
-  if (!mStreamStarted && AudioQueuePolicy::readyToStart(queuedBytes)) {
+  if (mStreamStarted) {
+    SDL_SetAudioStreamFrequencyRatio(mStream, static_cast<float>(mSteer.observe(queuedBytes)));
+  } else if (AudioQueuePolicy::readyToStart(queuedBytes)) {
+    mSteer.reset(queuedBytes);
+    SDL_SetAudioStreamFrequencyRatio(mStream, 1.0f);
     SDL_ResumeAudioStreamDevice(mStream);
     mStreamStarted = true;
   }
