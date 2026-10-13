@@ -78,6 +78,21 @@ void test_presented_field_wait_leaves_time_irq_and_fractional_phase_unchanged() 
   CHECK_EQ(game->core.pending_work & Core::PW_IRQ, Core::PW_IRQ);
 }
 
+// A picker panel's pre-roll runs on the picker frame's clock, never its own pacer's.
+void test_pre_rolling_game_does_not_pace() {
+  psx::config::cv_nopace.set(psx::config::Layer::Runtime, false);
+  auto game = std::make_unique<Game>();
+  game->session.setPreRolling(true);
+  CHECK(game->fastForwarding());
+  game->framePacer.waitPresentedFields(game->core, 1, 1);
+  psx::frame::PaceInputs probe{.quota = 1, .parts = 1, .fieldRateMilliHz = 50000, .nowMs = 1000};
+  CHECK_EQ(game->framePacer.plan(probe).nextMs, 1020.0);
+
+  game->session.setPreRolling(false);
+  CHECK(!game->fastForwarding());
+  psx::config::cv_nopace.set(psx::config::Layer::Runtime, true);
+}
+
 } // namespace
 
 int main() {
@@ -86,5 +101,6 @@ int main() {
   RUN(unpaced_calls_preserve_the_instance_deadline);
   RUN(default_runtime_still_delivers_display_time_and_irq);
   RUN(presented_field_wait_leaves_time_irq_and_fractional_phase_unchanged);
+  RUN(pre_rolling_game_does_not_pace);
   return pt_summary();
 }

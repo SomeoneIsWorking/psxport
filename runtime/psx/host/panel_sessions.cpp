@@ -10,7 +10,6 @@
 
 #include <lucent/log.h>
 
-#include <algorithm>
 #include <cstdlib>
 #include <format>
 #include <optional>
@@ -43,8 +42,9 @@ PanelSessions::PanelSessions(const TitleCatalog &catalog, const PickerContent &c
     lucent::warn("picker", "no provisioned title: the selector has no panels");
     return;
   }
-  // The first panel is the one the player is on, and it is the one that boots first.
-  select(0);
+  // The first panel is the one the player is on: it boots first and is the one heard. select(0)
+  // would be a no-op, since panel 0 is already the selection.
+  sessions_.front()->setAudible(true);
   lucent::info("picker", "{} title panel(s) over the probed catalog", count());
 }
 
@@ -175,8 +175,10 @@ bool PanelSessions::panelSettled(int panel) const {
   return panel >= 0 && panel < count() && settled_[static_cast<std::size_t>(panel)];
 }
 
+// The pre-roll is a step count, not a picture: a panel that never draws one must still stop
+// taking the frames the selected panel runs in.
 bool PanelSessions::hasArrived(int panel) const {
-  if (!panelReady(panel)) {
+  if (panel < 0 || panel >= count() || !booted_[static_cast<std::size_t>(panel)]) {
     return false;
   }
   const TitleSession *session = this->session(panel);
@@ -219,7 +221,7 @@ int PanelSessions::nextPanelNeedingWork() {
   return selected_;
 }
 
-bool PanelSessions::advance(int bootStepBudget) {
+bool PanelSessions::advance(const PreRollBudget &preRoll) {
   const int panel = nextPanelNeedingWork();
   if (panel < 0 || count() == 0) {
     return false;
@@ -249,17 +251,18 @@ bool PanelSessions::advance(int bootStepBudget) {
   if (current->returnRequested()) {
     return false;
   }
-  // An arrived panel gets one step per picker frame: it is the product the player is watching, and
-  // the picker's cadence is one display field. A pre-rolling panel gets the whole budget, since
-  // it is booting rather than playing.
-  const bool preRolling = !panelSettled(panel);
-  const int budget = preRolling ? std::max(bootStepBudget, 1) : 1;
+  // An arrived panel gets one step per picker frame on its own pacer. A pre-rolling panel fills the
+  // rest of the picker's field unpaced, since the picker frame owns wall time while it boots.
+  current->setPreRolling(!panelSettled(panel));
   bool advanced = false;
-  for (int step = 0; step < budget; ++step) {
-    if (current->end() != TitleSession::End::Running) {
+  PreRollBudget::Clock::duration lastStep{};
+  for (int step = 0; current->end() == TitleSession::End::Running; ++step) {
+    if (step > 0 && (panelSettled(panel) || !preRoll.mayStep(step, PreRollBudget::Clock::now(), lastStep))) {
       break;
     }
+    const PreRollBudget::Clock::time_point stepStart = PreRollBudget::Clock::now();
     current->step();
+    lastStep = PreRollBudget::Clock::now() - stepStart;
     advanced = true;
     // The running panel is the only one whose picture can have changed, so it is the only one worth
     // reading back; its own slow cadence is what keeps a demo playing in the panel.

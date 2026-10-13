@@ -443,12 +443,10 @@ void SpuAudio::frameEx(bool output) {
     return;
   }
 
-  // Same drop, for the same reason, while a RESUME run fast-forwards (PSXPORT_PAD_RESUME): the guest
-  // is producing minutes of audio in seconds, so queueing it is either a shriek or an ever-growing
-  // backlog that then plays the past over the present once control is handed back. The SPU still ran
-  // and its mixer state is intact — this only decides what reaches the device, and it stops the
-  // instant the recording is spent, which is when the player starts listening.
-  if (game && game->pad.fastForwarding()) {
+  // Same drop while the Game fast-forwards (resume replay or host pre-roll): queueing seconds of audio
+  // produced in a moment is a shriek or a backlog. The SPU still ran; this only decides what reaches
+  // the device, and it stops when the fast-forward ends.
+  if (game && game->fastForwarding()) {
     return;
   }
 

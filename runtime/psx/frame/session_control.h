@@ -32,9 +32,17 @@ public:
   bool returnRequested() const {
     return mReturnRequested;
   }
+  // The host is bringing this Game up to its picture rather than showing it: run unpaced and unheard.
+  void setPreRolling(bool preRolling) {
+    mPreRolling = preRolling;
+  }
+  bool preRolling() const {
+    return mPreRolling;
+  }
 
 private:
   bool mReturnAvailable = false;
   bool mReturnRequested = false;
+  bool mPreRolling = false;
 };
 } // namespace psx::frame

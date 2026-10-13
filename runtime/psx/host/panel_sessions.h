@@ -3,6 +3,7 @@
 
 #include "panel_logo.h"
 #include "picker_content.h"
+#include "pre_roll_budget.h"
 #include "title_availability.h"
 #include "title_catalog.h"
 
@@ -47,7 +48,7 @@ public:
   // Whether the panel may be drawn: an unready panel is left empty, since an empty panel reads
   // as "not chosen" and a black one as "broken".
   bool panelReady(int panel) const;
-  // A picture past the boot prefix that has pre-rolled a fixed number of steps.
+  // A panel that has pre-rolled its fixed number of steps from power-on, picture or not.
   bool panelSettled(int panel) const;
   // The picture's own aspect, which decides how a panel is cover-cropped; 1:1 for an empty panel,
   // which the layout treats as the panel's own shape.
@@ -66,9 +67,9 @@ public:
     return selected_;
   }
 
-  // One picker frame. Runs the selected session's step, or spends `bootStepBudget` steps bringing
-  // the next panel that has no picture yet up to one. Returns true when a guest advanced.
-  bool advance(int bootStepBudget);
+  // One picker frame. Runs the selected session's step, or pre-rolls the next unsettled panel for as
+  // many steps as `preRoll` allows. Returns true when a guest advanced.
+  bool advance(const PreRollBudget &preRoll);
   // Ends every session and hands back a fresh unbooted session for the chosen title: the demo was
   // a preview, so choosing a game must start it at power-on rather than resume its preview.
   std::unique_ptr<TitleSession> confirm();

@@ -112,6 +112,10 @@ public:
   RenderQueue &activeRq() {
     return rqRedirect ? *rqRedirect : rq;
   }
+  // A resume replay or a host pre-roll: the pacer does not sleep, movies run uncapped, audio is dropped.
+  bool fastForwarding() const {
+    return pad.fastForwarding() || session.preRolling();
+  }
   SpuAudio spu_audio; // host audio output sink (SDL3 device + optional WAV capture)
   // The game's SEP/VAB in-game music player + Sound Test catalogue live game-side on TombaCtx now;
   // the framework SPU sink + mod-UI HUD reach them through the audioMixFrame / audioNowPlayingName /

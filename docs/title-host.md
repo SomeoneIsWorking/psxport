@@ -53,7 +53,12 @@ boots it, claims the debug endpoint, and steps it until `TitleSession::end()`; `
 the ESC row ends it as `ReturnedToSelector` and the selector is rebuilt from a fresh probe.
 `runExecutable` skips the selector and runs one serial-identified executable.
 Each panel pre-rolls 900 steps from power-on, past its publisher cards onto the title's own
-press-start page or opening movie; after that only the selected panel runs and the others hold.
+press-start page or opening movie, whether or not it has drawn a picture by then; after that only the
+selected panel runs and the others hold. A pre-roll is a fast-forward (`SessionControl::setPreRolling`,
+read through `Game::fastForwarding`): its steps do not sleep on the panel's pacer and its audio is
+dropped. Each picker frame pre-rolls one panel for as many steps as fit in one NTSC field
+(`PreRollBudget`), at least one. A settled panel steps once per picker frame on its own pacer, so the
+picker then runs at that title's step cadence. Panel 0 starts selected and audible.
 
 `TitleSession::boot` sets `Game::run = SessionRun(frameCap)`; `step` ends the run when
 `Game::run.shouldEnd()`. A title's frame drivers write `core.game->run` (`fieldDelivered`,
@@ -65,6 +70,7 @@ press-start page or opening movie; after that only the selected panel runs and t
 - A Core snapshots the installed `GameRuntime` when it is constructed, so `TitleSession::boot`
   installs `catalog.runtime(index)` immediately before building its `Game`.
 - Exactly one guest advances per picker frame.
+- The picker frame owns wall time while a panel pre-rolls: no pre-roll step sleeps.
 - Nothing under `runtime/psx/host/` names a title, a serial or a slug.
 
 ## Adopting it
@@ -80,6 +86,8 @@ press-start page or opening movie; after that only the selected panel runs and t
 
 `tests/test_title_selection.cpp`, `test_title_picker.cpp`, `test_picker_layout.cpp` and
 `test_session_run.cpp` cover selection, availability, the control commands, panel geometry and the
-run cap over a fake catalog, with no window. The headless walk (`picker`, `pick <slug>`,
+run cap over a fake catalog, with no window. `test_pre_roll_budget.cpp` covers the per-frame pre-roll
+budget and `test_frame_pacer.cpp` that a pre-rolling Game does not pace. Picker frame time is read
+from consecutive `[picker] panels:` lines of a paced run (`PSXPORT_DEBUG=picker,pacer`, no NOPACE). The headless walk (`picker`, `pick <slug>`,
 `session return`, `pick <slug>`) runs on a built port with `PSXPORT_DEBUG_SERVER` and
 `tools/dbgclient.py`; see the consuming port's docs for its route.
