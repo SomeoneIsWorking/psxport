@@ -98,6 +98,8 @@ int cdc_drive_service(CdcState *s);
 // Absolute guest-instruction timestamp of the earliest armed drive, command or paced read-completion deadline. Returns
 // 0, writing nothing, when no deadline is armed. The deadline domain is the injected tick source's.
 int cdc_next_deadline_ticks(const CdcState *s, uint64_t *absoluteTicks);
+// The eight GetlocP bytes for the head's current sector. Returns 0 when the disc layout is unavailable.
+int cdc_getloc_p(const CdcState *s, uint8_t out[8]);
 // Read the current controller response type without consuming its response FIFO. Zero means the
 // queue is empty. Stream callback owners use this to dispatch only for a real INT1 data-ready
 // response, never from a host-side pacing estimate alone.

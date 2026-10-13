@@ -19,6 +19,7 @@ constexpr uint32_t kParameterAddress = 0x80112000u;
 constexpr uint32_t kPositionAddress = 0x80113000u;
 constexpr uint32_t kModeAddress = 0x80114000u;
 constexpr uint32_t kLegacyWorkAreaAddress = 0x80115000u;
+constexpr uint32_t kLastCommandAddress = 0x80116000u;
 constexpr uint8_t kSentinel = 0xA5u;
 
 class DirectRuntime final : public GameRuntime {
@@ -156,11 +157,35 @@ void test_legacy_adapter_retains_contiguous_position_and_mode_layout() {
   CHECK_EQ(core.mem_r8(kLegacyWorkAreaAddress + 4u), 0xE0u);
 }
 
+// CdLastCom() reads the byte every command send writes, parameter or not.
+void test_every_command_publishes_the_last_command_byte() {
+  DirectRuntime runtime;
+  runtime.plan.cdCommandAddress = kCommandAddress;
+  runtime.plan.windowLo[0] = kCommandAddress;
+  runtime.plan.windowHi[0] = kCommandAddress + 4u;
+  runtime.plan.stockCdWorkArea = {kPositionAddress, kModeAddress, kLastCommandAddress};
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+  game->platform_hle.initBuiltins();
+  auto &core = game->core;
+  core.mem_w8(kLastCommandAddress, kSentinel);
+
+  command(core, cd_control_fire_sync, 0x11u, 0u);
+  CHECK_EQ(core.mem_r8(kLastCommandAddress), 0x11u);
+  core.mem_w8(kParameterAddress, 0xC8u);
+  command(core, cd_control_sync, 0x0Eu, kParameterAddress);
+  CHECK_EQ(core.mem_r8(kLastCommandAddress), 0x0Eu);
+  CHECK_EQ(core.mem_r8(kModeAddress), 0xC8u);
+  command(core, game->platform_hle.lookup(kCommandAddress), 0x09u, 0u);
+  CHECK_EQ(core.mem_r8(kLastCommandAddress), 0x09u);
+}
+
 } // namespace
 
 int main() {
   RUN(direct_runtime_publishes_setloc_and_setmode_through_stock_command);
   RUN(unconfigured_direct_work_area_and_absent_parameters_do_not_write);
   RUN(legacy_adapter_retains_contiguous_position_and_mode_layout);
+  RUN(every_command_publishes_the_last_command_byte);
   return pt_summary();
 }

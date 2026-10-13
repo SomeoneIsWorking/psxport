@@ -148,6 +148,17 @@ void test_control_and_fire_keep_their_result_contract() {
   check_bytes(core, Response{0x02, 0x01, 0x02});
 }
 
+// Spyro 1's music driver reads its track position from the GetlocP result's absolute MSF.
+void test_getlocp_reports_the_head_position_through_sync() {
+  auto game = std::make_unique<Game>();
+  install_two_tracks(*game);
+  auto &core = game->core;
+  game->cdc.loc_lba = 1000;
+  issue_and_sync(core, 0x11, 0, Response{0x01, 0x01, 0x00, 0x13, 0x25, 0x00, 0x15, 0x25});
+  game->cdc.loc_lba = 1001;
+  issue_and_sync(core, 0x11, 0, Response{0x01, 0x01, 0x00, 0x13, 0x26, 0x00, 0x15, 0x26});
+}
+
 void test_missing_disc_refuses_toc_command() {
   auto game = std::make_unique<Game>();
   game->disc.env_key = "PSXPORT_DISC";
@@ -167,6 +178,7 @@ int main() {
   RUN(gettn_gettd_and_leadout_survive_command_and_sync);
   RUN(invalid_track_and_disc_metadata_do_not_reuse_prior_result);
   RUN(control_and_fire_keep_their_result_contract);
+  RUN(getlocp_reports_the_head_position_through_sync);
   RUN(missing_disc_refuses_toc_command);
   return pt_summary();
 }

@@ -44,6 +44,8 @@ typedef struct XaState {
   uint32_t pulls;           // CDC_GetCDAudioSample calls while this stream was active
   uint32_t sectors;         // audio sectors actually decoded into the ring
   uint32_t overflow_streak; // consecutive sectors that arrived on a full ring; log throttle only
+  int primed;               // push mode: playback released since the stream (re)started
+  uint32_t held_pulls;      // push mode: pulls answered with silence while not primed
   struct DiscState *disc;   // Game-owned disc backend (wired by Game())
 } XaState;
 
@@ -63,6 +65,8 @@ void xa_bind_state(XaState *s);
 // buffer overflows without stopping the drive. Beetle-parity routing lives in the caller
 // (cdc_native.cpp decides FIFO-vs-decoder from mode/subheader bytes).
 int xa_push_audio_sector(XaState *s, const uint8_t *raw, uint32_t drive_lba);
+// Beetle spu.c's CD-audio source: one stereo pair per 44.1 kHz output sample from the bound instance.
+void CDC_GetCDAudioSample(int32_t *samples);
 #ifdef __cplusplus
 }
 #endif

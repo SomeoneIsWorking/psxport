@@ -1,5 +1,6 @@
 #include "stock_cd_response.h"
 
+#include "cdc_state.h"
 #include "core.h"
 #include "disc.h"
 #include "disc_toc.h"
@@ -61,6 +62,16 @@ bool stock_cd_begin_command(Core &core, uint8_t command, uint32_t parameter, uin
     if (!toc_response(core, command, parameter, response)) {
       stock_cd_zero_result(core, result);
       lucent::error("cd", "stock command 0x{:02X} refused: missing or invalid disc TOC/track", command);
+      return false;
+    }
+    core.game->cd.stock_command_response = response;
+    core.game->cd.stock_command_response_valid = true;
+  }
+  if (command == 0x11) {
+    Response response{};
+    if (!cdc_getloc_p(&core.game->cdc, response.data())) {
+      stock_cd_zero_result(core, result);
+      lucent::error("cd", "stock GetlocP refused: the disc layout is unavailable");
       return false;
     }
     core.game->cd.stock_command_response = response;
