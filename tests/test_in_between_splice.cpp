@@ -117,6 +117,7 @@ void test_reconstruction_is_paired_per_producer_not_per_stream_position() {
   CHECK_EQ(census.substituted, 5);
   CHECK_EQ(census.declined, 0);
   CHECK_EQ(census.surplus, 0);
+  CHECK_EQ(census.appended, 0);
   CHECK_EQ(stream.size(), captured.size());
   checkPlannerInvariants(stream);
   for (size_t i = 0; i < captured.size(); ++i) {
@@ -162,11 +163,11 @@ void test_a_substituted_primitive_adopts_all_three_coordinates_of_its_slot() {
 }
 
 // A source REBUILDS, so its item count is its own: it can outrun the slots its own producers held,
-// and a producer can fall short of them. The surplus is DROPPED and counted; the shortfall drops the
-// owned slots with nothing to put in them. Neither moves an un-owned captured item, and neither is
-// silent - `census` is the number the presenter reports.
-void test_per_producer_surplus_and_shortfall_are_counted_and_never_move_an_unowned_item() {
-  const std::array<RqItem, 7> captured = {
+// and a producer can fall short of them. A producer's extra primitives follow its last captured slot
+// and adopt that slot's coordinates; a shortfall drops the owned slots with nothing to put in them.
+// Neither moves an un-owned captured item.
+void test_a_producers_extra_primitives_follow_its_last_slot_and_a_shortfall_is_declined() {
+  const std::array<RqItem, 8> captured = {
       item(RQ_WORLD, 20, kActor),
       item(RQ_WORLD, 21, kUnowned),
       item(RQ_WORLD, 22, kSecondary),
@@ -174,32 +175,63 @@ void test_per_producer_surplus_and_shortfall_are_counted_and_never_move_an_unown
       item(RQ_WORLD, 24, kUnowned),
       item(RQ_WORLD, 25, kSecondary),
       item(RQ_WORLD, 26, kSecondary),
+      item(RQ_WORLD, 27, kUnowned),
   };
-  // The actor falls SHORT (one primitive against its two captured slots) and secondary runs one
+  // The actor falls SHORT (one primitive against its two captured slots) and secondary runs two
   // LONG against its three.
-  std::array<RqItem, 5> reconstruction = {
+  std::array<RqItem, 6> reconstruction = {
       item(RQ_WORLD, 0, kActor),
       item(RQ_WORLD, 1, kSecondary),
       item(RQ_WORLD, 2, kSecondary),
       item(RQ_WORLD, 3, kSecondary),
       item(RQ_WORLD, 4, kSecondary),
+      item(RQ_WORLD, 5, kSecondary),
   };
   std::vector<const RqItem *> stream;
   const auto census = psxport::fps60::spliceInBetween(captured, reconstruction, stream, claimTwoProducers());
   CHECK_EQ(census.ownedSlots, 5);
   CHECK_EQ(census.substituted, 4);
   CHECK_EQ(census.declined, 1);
-  CHECK_EQ(census.surplus, 1);
-  // The second actor slot is dropped and the surplus secondary primitive is dropped; the two
-  // un-owned items are still there, in their captured order, and the stream is still sortable.
-  CHECK_EQ(stream.size(), captured.size() - 1);
+  CHECK_EQ(census.appended, 2);
+  CHECK_EQ(census.surplus, 0);
+  CHECK_EQ(stream.size(), captured.size() - 1 + 2);
   CHECK(stream[0] == &reconstruction[0]);
   CHECK(stream[1] == &captured[1]);
   CHECK(stream[2] == &reconstruction[1]);
   CHECK(stream[3] == &captured[4]);
   CHECK(stream[4] == &reconstruction[2]);
   CHECK(stream[5] == &reconstruction[3]);
+  CHECK(stream[6] == &reconstruction[4]);
+  CHECK(stream[7] == &reconstruction[5]);
+  CHECK(stream[8] == &captured[7]);
+  for (size_t i = 6; i <= 7; ++i) {
+    CHECK_EQ(stream[i]->layer, captured[6].layer);
+    CHECK_EQ(stream[i]->draw_seq, captured[6].draw_seq);
+    CHECK_EQ(stream[i]->flush_ordinal, captured[6].flush_ordinal);
+  }
   checkPlannerInvariants(stream);
+}
+
+// A producer that held no captured slot has no run to follow, so its primitives are dropped and
+// counted while another producer's slots are substituted.
+void test_a_producer_without_a_captured_slot_is_counted_as_surplus() {
+  const std::array<RqItem, 2> captured = {
+      item(RQ_WORLD, 50, kActor),
+      item(RQ_WORLD, 51, kUnowned),
+  };
+  std::array<RqItem, 3> reconstruction = {
+      item(RQ_WORLD, 0, kSecondary),
+      item(RQ_WORLD, 1, kActor),
+      item(RQ_WORLD, 2, kSecondary),
+  };
+  std::vector<const RqItem *> stream;
+  const auto census = psxport::fps60::spliceInBetween(captured, reconstruction, stream, claimTwoProducers());
+  CHECK_EQ(census.substituted, 1);
+  CHECK_EQ(census.appended, 0);
+  CHECK_EQ(census.surplus, 2);
+  CHECK_EQ(stream.size(), 2u);
+  CHECK(stream[0] == &reconstruction[1]);
+  CHECK(stream[1] == &captured[1]);
 }
 
 // A source that owns NOTHING in the captured queue has no captured positions at all, so its whole
@@ -235,7 +267,8 @@ void test_a_source_that_owns_nothing_emits_its_whole_reconstruction() {
 int main() {
   RUN(reconstruction_is_paired_per_producer_not_per_stream_position);
   RUN(a_substituted_primitive_adopts_all_three_coordinates_of_its_slot);
-  RUN(per_producer_surplus_and_shortfall_are_counted_and_never_move_an_unowned_item);
+  RUN(a_producers_extra_primitives_follow_its_last_slot_and_a_shortfall_is_declined);
+  RUN(a_producer_without_a_captured_slot_is_counted_as_surplus);
   RUN(a_source_that_owns_nothing_emits_its_whole_reconstruction);
   return pt_summary();
 }

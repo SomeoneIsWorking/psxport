@@ -30,9 +30,10 @@ Fps60::Fps60(Game &owner, std::unique_ptr<InBetweenStrategy> source) : game(&own
 // reports in `~Game`.
 Fps60::~Fps60() {
   lucent::warn("fps60",
-               "in-between splice census [shutdown]: spliced presents={} surplus presents={} surplus "
-               "primitives={} worst single surplus={} declined captured primitives={}",
+               "in-between splice census [shutdown]: spliced presents={} appended primitives={} surplus "
+               "presents={} surplus primitives={} worst single surplus={} declined captured primitives={}",
                mSplice.splicedPresents,
+               mSplice.appendedPrimitives,
                mSplice.surplusPresents,
                mSplice.surplusPrimitives,
                mSplice.worstSurplus,
@@ -346,13 +347,8 @@ void Fps60::presentPass(Core *c, float t, psx::frame::CapturedFrameView frame) {
       tier1 && mSink ? std::span<RqItem>(mSink->items, static_cast<std::size_t>(mSink->n)) : std::span<RqItem>(),
       mPresentStream,
       ownsItem);
-  // A source REBUILDS its geometry, so its item count is its own and it can outrun the slots its own
-  // producers held. Measured on Spyro 1's picker: the actor producers went 196 captured against 199
-  // reconstructed and the secondary 692 against 681. A surplus primitive has no captured slot of its
-  // own producer to take stream coordinates from, and appending it would land it in a run the painter
-  // planner refuses (measured: refused=12 DuplicateReplayKey, refused=8 UnsortedQueue). It is DROPPED,
-  // and it is COUNTED: `~Fps60` reports the run's totals, because this is the ordinary case and a
-  // per-present line would say the same thing 19,405 times.
+  // A source REBUILDS its geometry, so its item count is its own: a producer's extra primitives
+  // follow its last captured slot, and only a producer with no captured slot loses its primitives.
   if (splice.substituted > 0) {
     ++mSplice.splicedPresents;
   }
@@ -362,6 +358,7 @@ void Fps60::presentPass(Core *c, float t, psx::frame::CapturedFrameView frame) {
     mSplice.worstSurplus = std::max(mSplice.worstSurplus, (uint32_t)splice.surplus);
   }
   mSplice.declinedPrimitives += (uint32_t)splice.declined;
+  mSplice.appendedPrimitives += (uint32_t)splice.appended;
   if (sequenceChannel) { // guards the queue scan, not a logging call
     dumpSequenceRuns(frame.fence, t, mPresentStream, tier1 ? sceneSource_.get() : nullptr);
   }
