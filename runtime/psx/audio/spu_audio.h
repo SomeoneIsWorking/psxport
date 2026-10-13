@@ -18,6 +18,7 @@
 //   - repl.cpp `wav <path>`       → spu_audio.wavReopen(path)      (mid-run WAV capture handoff)
 #pragma once
 #include "audio_field_report.h"
+#include "audio_queue_policy.h"
 #include "spu_field_cadence.h"
 
 #include <cstdint>
@@ -101,8 +102,9 @@ private:
 
 #ifdef PSXPORT_SDL
   SDL_AudioStream *mStream = nullptr; // NULL = not open / failed / disabled
-  bool mStreamStarted = false;        // playback begins only after the bounded cushion is primed
+  bool mStreamStarted = false;        // playback begins only after the target level is primed
 #endif
+  AudioQueueSteer mSteer;
   int mState = 0;             // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
   bool mOutputEnabled = true; // this session's sound reaches the host speakers (see setOutputEnabled)
   FILE *mWav = nullptr;       // open WAV file, or NULL
