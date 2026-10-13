@@ -3,9 +3,9 @@
 #include "panel_sessions.h"
 #include "title_session.h"
 
-#include "cfg.h"
 #include "core.h"
 #include "dbg_server.h"
+#include "field_rate.h"
 #include "field_turn.h"
 #include "frame_pacer.h"
 #include "game.h"
@@ -15,6 +15,7 @@
 
 #include <lucent/log.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -37,8 +38,6 @@ constexpr float kSlantPerWidth = 0.1f;
 // A quarter of what is left per frame: long enough to read as movement, short enough that the
 // panel is where the player left it before they can press again.
 constexpr float kWidthResponse = 0.25f;
-// Bounded, because an unbounded boot would freeze the screen on the panel the player is leaving.
-constexpr int kBootStepBudget = 6;
 } // namespace
 
 PickerSession::PickerSession(PickerRuntime &runtime,
@@ -121,7 +120,10 @@ PickerSession::Result PickerSession::run() {
   // composite presents.
   const psx::frame::FieldTurn fieldTurn;
   int frame = 0;
+  const auto fieldInterval = std::chrono::duration_cast<PreRollBudget::Clock::duration>(
+      std::chrono::duration<double, std::milli>(1000000.0 / psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   for (; frameCap == 0 || static_cast<std::uint32_t>(frame) < frameCap; ++frame) {
+    const PreRollBudget preRoll(PreRollBudget::Clock::now() + fieldInterval);
     fieldTurn.beginField(core);
     host->pad.serviceFrame();
 
@@ -155,7 +157,7 @@ PickerSession::Result PickerSession::run() {
 
     // The panel animation runs on the same frame, so the width change the player just
     // asked for is drawn from its first frame.
-    panels_->advance(cfg_int("PSXPORT_PICKER_BOOT_STEPS", kBootStepBudget));
+    panels_->advance(preRoll);
     layout_.advance();
     panels_->report();
 

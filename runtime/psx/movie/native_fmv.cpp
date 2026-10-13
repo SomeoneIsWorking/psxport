@@ -293,13 +293,10 @@ bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
       uncapped_ = (atoi(f) == 0);
     }
   }
-  // A RESUME run (PSXPORT_PAD_RESUME) is replaying its way back to where the player left off, and the
-  // boot movies are ~77 s of that journey. This is not the inferred fast-forward the comment above
-  // rejects: the user asked for it by name, it ends when the recording does, and the log line below
-  // records that this run's movies were uncapped.
-  if (!uncapped_ && game->pad.fastForwarding()) {
+  // A resume replay or a host pre-roll asked for the fast-forward by name; the log line records it.
+  if (!uncapped_ && game->fastForwarding()) {
     uncapped_ = true;
-    lucent::info("fmv", "uncapped: PSXPORT_PAD_RESUME is fast-forwarding to the end of the recording");
+    lucent::info("fmv", "uncapped: the run is fast-forwarding (resume replay or host pre-roll)");
   }
   // Optional dev cap: PSXPORT_FMV_MAXFRAMES bounds how many frames to play (0/unset = all).
   // Used by the standalone proof to decode just the first frame quickly; harmless in prod.

@@ -34,9 +34,9 @@ namespace {
 
 PacePlan preparePace(Core &core, int guestFields, int parts) {
   PaceInputs inputs;
-  // NOPACE and resume fast-forward suppress host sleeping only. Neither changes windowing, the
-  // guest display cadence, or the emulated time delivered below.
-  inputs.unpaced = psx::config::cv_nopace.get() || (core.game && core.game->pad.fastForwarding());
+  // NOPACE and a fast-forward (resume replay or host pre-roll) suppress host sleeping only. Neither changes windowing,
+  // the guest display cadence, or the emulated time delivered below.
+  inputs.unpaced = psx::config::cv_nopace.get() || (core.game && core.game->fastForwarding());
   inputs.quota =
       guestFields > 0 ? guestFields : (core.cfg && core.cfg->paceQuota ? static_cast<int>(core.cfg->paceQuota) : 0);
   inputs.parts = parts;

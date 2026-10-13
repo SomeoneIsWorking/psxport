@@ -113,6 +113,8 @@ public:
   }
   // This session alone may be heard. Exactly one session in a process holds it at a time.
   void setAudible(bool audible);
+  // Bringing the session up to its picture: its steps run unpaced and unheard (Game::fastForwarding).
+  void setPreRolling(bool preRolling);
   // A claim does not outlive a Game, and confirming destroys the picker Game, so the session that
   // becomes the product must claim it or later commands time out on a healthy run. See
   // psxport::DbgServer::claimEndpoint.
@@ -135,6 +137,7 @@ private:
   bool paused_ = false;
   bool playerInput_ = false;
   bool audible_ = false;
+  bool preRolling_ = false;
   bool paneDestination_ = false;
   int paneImageW_ = 0, paneImageH_ = 0;
   // The last content answer and the step it was taken at, because the answer only changes when the
