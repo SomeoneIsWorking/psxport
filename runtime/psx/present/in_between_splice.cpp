@@ -43,11 +43,25 @@ SpliceCensus spliceInBetween(std::span<const RqItem> captured,
     producer->items.push_back(&item);
   }
 
+  // Each producer's last owned captured slot: its extra primitives follow that slot.
+  std::vector<std::size_t> lastSlot(producers.size(), captured.size());
+  for (std::size_t i = 0; i < captured.size(); ++i) {
+    if (!owns(captured[i])) {
+      continue;
+    }
+    for (std::size_t p = 0; p < producers.size(); ++p) {
+      if (producers[p].id == captured[i].painter_object) {
+        lastSlot[p] = i;
+      }
+    }
+  }
+
   // One cursor per producer: each captured slot of producer P takes P's next reconstruction
   // primitive, so one producer's geometry can never land in another producer's run however the two
   // orders compare.
   std::vector<std::size_t> taken(producers.size(), 0);
-  for (const RqItem &item : captured) {
+  for (std::size_t i = 0; i < captured.size(); ++i) {
+    const RqItem &item = captured[i];
     if (!owns(item)) {
       out.push_back(&item);
       continue;
@@ -63,13 +77,20 @@ SpliceCensus spliceInBetween(std::span<const RqItem> captured,
       ++census.declined;
       continue;
     }
-    RqItem &replacement = *producers[which].items[taken[which]++];
     // THE RECONSTRUCTION REPLACES THE GEOMETRY, NOT THE POSITION IN THE STREAM.
-    replacement.layer = item.layer;
-    replacement.draw_seq = item.draw_seq;
-    replacement.flush_ordinal = item.flush_ordinal;
-    out.push_back(&replacement);
+    const auto place = [&](RqItem &replacement) {
+      replacement.layer = item.layer;
+      replacement.draw_seq = item.draw_seq;
+      replacement.flush_ordinal = item.flush_ordinal;
+      out.push_back(&replacement);
+    };
+    place(*producers[which].items[taken[which]++]);
     ++census.substituted;
+    // A sample can keep faces its captured endpoint culled; they follow the producer's last slot.
+    while (lastSlot[which] == i && taken[which] < producers[which].items.size()) {
+      place(*producers[which].items[taken[which]++]);
+      ++census.appended;
+    }
   }
 
   if (census.ownedSlots == 0) {
@@ -85,7 +106,7 @@ SpliceCensus spliceInBetween(std::span<const RqItem> captured,
     return census;
   }
 
-  census.surplus = static_cast<int>(reconstruction.size()) - census.substituted;
+  census.surplus = static_cast<int>(reconstruction.size()) - census.substituted - census.appended;
   return census;
 }
 

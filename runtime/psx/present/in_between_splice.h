@@ -52,8 +52,8 @@
 
 namespace psxport::fps60 {
 
-// WHAT ONE SPLICE DID. The presenter reports `surplus` and `declined`; both are numbers of
-// primitives a source produced or a captured primitive lost, so neither may be silent.
+// WHAT ONE SPLICE DID. The presenter reports `appended`, `surplus` and `declined`, so no placement
+// decision is silent.
 struct SpliceCensus {
   // Captured items the source claimed.
   int ownedSlots = 0;
@@ -62,13 +62,18 @@ struct SpliceCensus {
   // Owned slots with no reconstruction primitive left to place: the source declined to reproduce
   // that primitive this present, and presenting the captured copy would defeat the replacement.
   int declined = 0;
-  // Reconstructed primitives with no captured slot of their own producer to fill.
+  // Reconstructed primitives past their producer's captured slots, placed after its last slot.
+  int appended = 0;
+  // Reconstructed primitives whose producer held no captured slot; dropped.
   int surplus = 0;
 };
 
 // Replaces every captured item `owns` claims with the next reconstruction primitive of the SAME
 // producer, and appends `out` in the captured queue's order. Un-owned items are appended by pointer,
 // so every one of them keeps its own index.
+//
+// A producer whose sample emits more primitives than it held slots places the rest right after its
+// last slot, with that slot's coordinates: each sample culls on its own projection (issue 0152).
 //
 // `reconstruction` is mutable because a substituted primitive ADOPTS the three stream coordinates of
 // the slot it fills - `layer`, `draw_seq` and `flush_ordinal` - which is what puts the reconstruction
