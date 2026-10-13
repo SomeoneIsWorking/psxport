@@ -40,7 +40,8 @@ projection word is gameplay state (battle code branches on it), so widen its can
 C-12 also gets increased draw distance. Mega Man X4 also gets drop-in/drop-out co-op
 and skippable dialogue and sequences.
 
-Start skips what the player does not control (logos, movies, flybys, transition and load fades) in every title.
+Start skips what the player does not control (logos, movies, flybys, transition and load fades, in-game camera
+cutaways such as a door-opened shot) in every title.
 Each skip is title-owned, one screen at a time, taken through that screen's own guest terminal transition and
 tested; no framework-wide skip hook. A screen with no faithful terminal transition stays unskippable and is
 recorded as an issue.
