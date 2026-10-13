@@ -366,6 +366,10 @@ IntVar cv_watchdog_boot("PSXPORT_WATCHDOG_BOOT",
                         -1,
                         "main-presenter cold-init grace, seconds (-1 = derive: max(WATCHDOG, 45))",
                         /*persistable=*/false);
+IntVar cv_native_frames("PSXPORT_NATIVE_FRAMES",
+                        0,
+                        "run cap in presentation-fence steps (0 = the run budget's default)",
+                        /*persistable=*/false);
 
 TextVar cv_asset_dir("PSXPORT_ASSET_DIR",
                      "",
@@ -850,12 +854,6 @@ void report_exit_audit() {
   // that the renderer had failed to initialise, while the same log carried `[gpu_vk] headless renderer
   // up` and `present image 960x720 (headless sink)`. It had initialised. Before concluding from this
   // line that a subsystem is missing, grep the log for that subsystem's own startup line.
-  //
-  // The mirror-image trap is `PSXPORT_NATIVE_FRAMES`, which IS read but through the legacy `cfg_int`
-  // path rather than a declared CVar — so the BOOT audit calls it UNKNOWN (nothing has read it yet at
-  // boot) and this exit audit calls it `legacy (observed when read)`. Both are true. Reading only the
-  // boot line concludes a frame cap did nothing and a run was unbounded, when the guest may simply have
-  // finished first.
   const EnvAudit a = audit_environment();
   lucent::info("cfg",
                "env audit AT EXIT (everything that was going to be read has been): {} PSXPORT_* set "

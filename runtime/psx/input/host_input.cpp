@@ -25,11 +25,8 @@ void psx::input::HostInput::drainEvents() {
       mOverlay->event(&event);
     }
     if (event.type == SDL_EVENT_QUIT) {
-      // A close is a REQUEST. A product whose loop owns its end-of-run holds a `QuitScope` and asks
-      // `quitRequested()`; without one the process ends here, which is what every product did before
-      // the request existed.
-      if (mQuitOwners > 0) {
-        mQuitRequested = true;
+      if (mQuitScope != nullptr) {
+        mQuitScope->request();
       } else {
         exit(0);
       }

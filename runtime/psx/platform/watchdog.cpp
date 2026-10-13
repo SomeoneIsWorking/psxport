@@ -226,3 +226,7 @@ void watchdog_disable(void) {
   s_wd.armed = 0;
   alarm(0);
 }
+
+int watchdog_armed(void) {
+  return s_wd.armed ? 1 : 0;
+}

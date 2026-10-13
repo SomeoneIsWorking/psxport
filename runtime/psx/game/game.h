@@ -35,7 +35,7 @@
 #include "repl.h"                        // class Repl — REPL driver + title-owned request state
 #include "rmlui_overlay.h"               // class RmlOverlay — mod/debug HTML UI + world readout HUD
 #include "session_control.h"             // psx::frame::SessionControl — "return to the host's selector" request
-#include "session_run.h"                 // psx::host::SessionRun — field cap and end request for a hosted run
+#include "session_run.h"                 // psx::host::SessionRun — a title's request to end its run
 #include "sio_pad.h"                     // class Sio0 — the controller port and the device on it
 #include "spu_audio.h"                   // class SpuAudio — host audio output sink (SDL3 + WAV capture)
 #include "spu_device.h"                  // class SpuDevice — per-instance SPU state handle (Beetle spu.c)
@@ -124,7 +124,7 @@ public:
   PlatformHle platform_hle;           // HW-sync HLE dispatch table (VSync/CdSync/MDEC/ChangeThread)
   Memcard memcard;                    // host-backed 128 KB memory card device (BIOS libcard/libmcrd)
   Mods mods;                          // per-Game mod toggles + params (was the process-global g_mods, 2026-07-10)
-  psx::host::SessionRun run;          // how many fields were delivered and whether the run was asked to end
+  psx::host::SessionRun run;          // whether the title asked to end its run
   psx::frame::SessionControl session; // host-level request to end this Game and show the selector (session_control.h)
   DbgServer dbg_server;               // live TCP debug endpoint (PSXPORT_DEBUG_SERVER=<port>)
   psx::debug::BugReportSession bugReport; // B key: freeze, capture, write and save a bug report

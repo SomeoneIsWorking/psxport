@@ -60,7 +60,7 @@ class Core;
 // instruction out of the listing.
 //
 // *** WHO ARMS IT, AND WHY IT IS NOT OPTIONAL FOR A TITLE ***
-// `psx::Machine::attachControlChannel` (machine.cpp) calls this beside `DbgServer::attach`, and
+// `psx::Machine::attachControlChannel` (machine.cpp) calls this beside `DbgServer::start`, and
 // `native_boot_run` reaches it through the same spine, so a product is armed whichever composition it
 // boots with. It used to be reachable only through the framework's own boot line, so a title-owned
 // spine was silently unarmed while the boot audit printed `PSXPORT_STORE_OBSERVE = ... [env]` — an

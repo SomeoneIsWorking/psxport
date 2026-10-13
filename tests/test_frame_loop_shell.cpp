@@ -221,7 +221,7 @@ static void test_native_boot_has_no_title_frame_body_or_fallback() {
   // assertion follows the delegation to where it now lives rather than pinning one spelling of it.
   CHECK(source.find("machine.prepareProduct()") != std::string::npos);
   const size_t step = source.find("psx::frame::FrameLoopShell{}.step(");
-  const size_t prompt = source.find("repl.consumePromptRequest()");
+  const size_t prompt = source.find("repl.afterStep()");
   CHECK(step != std::string::npos);
   CHECK(prompt != std::string::npos);
   CHECK(prompt > step);

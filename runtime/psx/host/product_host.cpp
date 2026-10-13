@@ -1,9 +1,11 @@
 #include "product_host.h"
 
+#include "c_subsys.h"
 #include "cfg.h"
 #include "core.h"
 #include "dbg_server.h"
 #include "game.h"
+#include "machine.h"
 #include "picker_content.h"
 #include "picker_runtime.h"
 #include "picker_session.h"
@@ -43,10 +45,18 @@ std::vector<std::string> splitSlugs(const char *text) {
 } // namespace
 
 ProductHost::ProductHost(const TitleCatalog &catalog, std::filesystem::path provisioningRoot)
-    : catalog_(catalog), root_(std::move(provisioningRoot)) {
+    : catalog_(catalog), root_(std::move(provisioningRoot)), budget_(RunBudget::fromConfig()),
+      services_{presentation_.device(), quit_, budget_} {
   // The window belongs to the product, not to whichever Game brought the device up first.
   windowTitle_ = std::string(catalog_.productName());
   presentation_.setWindowTitle(windowTitle_.c_str());
+  // The watchdog is process-wide signal state: armed once here, never by a session.
+  watchdog_init();
+  psx::Machine::armHostDiagnostics();
+}
+
+ProductHost::~ProductHost() {
+  watchdog_disable();
 }
 
 int ProductHost::runSelector() {
@@ -58,7 +68,7 @@ int ProductHost::runSelector() {
     // Empty (the default) is every provisioned title.
     const std::vector<std::string> panelSlugs = splitSlugs(cfg_str("PSXPORT_PICKER_TITLES"));
     const PickerContent content(catalog_.productName(), titles, panelSlugs);
-    PickerSession picker(pickerRuntime, catalog_, content, cfg_int("PSXPORT_PICKER_FRAMES", 0), presentation_.device());
+    PickerSession picker(pickerRuntime, catalog_, content, services_);
     const PickerSession::Result choice = picker.run();
     if (choice.outcome != PickerSession::Outcome::Chosen || choice.session == nullptr) {
       return 0;
@@ -69,19 +79,21 @@ int ProductHost::runSelector() {
                  "starting {} ({})",
                  choice.session->title().identity->displayName,
                  choice.session->title().identity->serial);
-    const int status = runToEnd(*choice.session);
-    if (status != 0) {
-      return status; // a boot refusal is not something the selector can retry
+    const TitleSession::End end = runToEnd(*choice.session);
+    if (end == TitleSession::End::Refused) {
+      return 2; // a boot refusal is not something the selector can retry
     }
-    // Back to the top: the title finished or asked for the selector, and the selector is rebuilt —
-    // with a fresh probe, so a title provisioned in the meantime gets a panel this time.
+    if (end != TitleSession::End::ReturnedToSelector && end != TitleSession::End::TitleEnded) {
+      return 0; // a quit or the spent run budget ends the process
+    }
+    // Back to the top, with a fresh probe, so a title provisioned in the meantime gets a panel.
   }
 }
 
-int ProductHost::runToEnd(TitleSession &session) {
+TitleSession::End ProductHost::runToEnd(TitleSession &session) {
   if (!session.boot()) {
     lucent::error("boot", "{} could not be started", session.title().identity->displayName);
-    return 2;
+    return TitleSession::End::Refused;
   }
   // The selector's Game died with the PickerSession above, so the channel would answer
   // nobody for the rest of the run.
@@ -89,9 +101,8 @@ int ProductHost::runToEnd(TitleSession &session) {
   while (session.end() == TitleSession::End::Running) {
     session.step();
   }
-  // Destruction is the whole teardown; the window and its device survive into the next
-  // session. Whether the run finished or returned to the selector is the caller's question.
-  return 0;
+  // Destruction is the whole teardown; the window and its device survive into the next session.
+  return session.end();
 }
 
 int ProductHost::runExecutable(const std::filesystem::path &executable) {
@@ -105,9 +116,8 @@ int ProductHost::runExecutable(const std::filesystem::path &executable) {
   title.index = selection.index;
   title.executable = executable;
   title.status = AvailabilityStatus::Available;
-  TitleSession session(catalog_, title, false, presentation_.device());
-  runToEnd(session);
-  return 0;
+  TitleSession session(catalog_, title, TitleSession::Role::Product, false, services_);
+  return runToEnd(session) == TitleSession::End::Refused ? 2 : 0;
 }
 
 } // namespace psx::host

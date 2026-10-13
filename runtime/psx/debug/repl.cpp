@@ -174,6 +174,17 @@ bool Repl::readStdinLine(std::span<char> line) {
   return fgets(line.data(), static_cast<int>(line.size()), stdin) != nullptr;
 }
 
+bool Repl::beforeStep(Core *c, uint32_t step, LineReader readLine) {
+  while (budget_ <= 0) {
+    budget_ = read(c, step, readLine);
+    if (budget_ < 0) {
+      return false;
+    }
+  }
+  --budget_;
+  return true;
+}
+
 long Repl::read(Core *c, uint32_t f, LineReader readLine) {
   uint16_t &held = mHeldMask; // active-low held mask (persists across REPL entries)
   char line[256];

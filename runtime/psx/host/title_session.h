@@ -1,5 +1,6 @@
 #pragma once
 
+#include "run_budget.h"
 #include "title_availability.h"
 #include "title_catalog.h"
 
@@ -11,7 +12,21 @@
 class Core;
 class Game;
 
+namespace psx::input {
+class QuitScope;
+}
+
 namespace psx::host {
+
+// What every session of the process shares, owned by ProductHost.
+struct SessionServices {
+  GpuDevice &presentation;
+  psx::input::QuitScope &quit;
+  RunBudget &budget;
+  // PSXPORT_LOAD_STATE starts the process's first product session only; a title picked after a
+  // return boots from power-on.
+  bool configuredStatePending = true;
+};
 
 // One boot-to-exit run of one title as a steppable owner: boot() brings the Game and guest up,
 // step() advances one step, and destruction is the whole teardown. The window and presentation
@@ -22,20 +37,28 @@ namespace psx::host {
 // owns itself cannot be paused, and rebuilding a title to show its panel would restart it from
 // power-on every time the player moved the selection.
 //
-// `presentation` must outlive this session.
+// `services` must outlive this session.
 class TitleSession {
 public:
   enum class End : std::uint8_t {
     Running,            // still stepping: no end has been reached
     ReturnedToSelector, // the player (or `session return`) asked for the title selector
-    Finished,           // the frame cap was reached or the run ended itself
+    TitleEnded,         // the title ended its own run; back to the selector when there is one
+    BudgetSpent,        // the process's run budget ran out
+    Quit,               // a window close or a client `quit`
     Refused,            // the executable could not be loaded
   };
 
+  // A panel is a picker preview: it never counts against the run budget, takes no quit, pumps no
+  // REPL, loads no configured state and owes no run-end report. The product is the confirmed or
+  // directly started session, and does all of those.
+  enum class Role : std::uint8_t { Panel, Product };
+
   TitleSession(const TitleCatalog &catalog,
                const TitleAvailability &title,
+               Role role,
                bool selectorAvailable,
-               GpuDevice &presentation);
+               SessionServices &services);
   ~TitleSession();
   TitleSession(const TitleSession &) = delete;
   TitleSession &operator=(const TitleSession &) = delete;
@@ -46,7 +69,7 @@ public:
   // One product step. A no-op before boot(), and the caller's business to make at most one per
   // frame.
   void step();
-  // Why the session stopped. `Finished` until it is asked to return to the selector.
+  // Why the session stopped; `Running` until it has.
   End end() const {
     return end_;
   }
@@ -105,7 +128,7 @@ public:
   // confirm press REACHES the game it selected, as a real press rather than as a jump to a state.
   void pressOnce(std::uint16_t activeLowMask, int frames = 2);
   // Stop advancing / start advancing. A paused session keeps its picture and its guest state
-  // exactly where they were; it does not present, and it does not hold the frame watchdog armed.
+  // exactly where they were and does not present.
   void pause();
   void resume();
   bool paused() const {
@@ -125,13 +148,14 @@ private:
   // The route is held as state and applied at boot: a panel is routed before its session has
   // booted, because the host knows where every panel is long before that panel has a guest.
   void applyPresentRoute();
-  // The run-complete line and telemetry, then the title's own report.
-  void reportRun(Core &core) const;
+  // Ask the end owners once per step; true when the run ends here.
+  bool endRequested(Game &game);
 
   const TitleCatalog &catalog_;
   const TitleAvailability &title_;
+  Role role_;
   bool selectorAvailable_;
-  GpuDevice &presentation_;
+  SessionServices &services_;
   std::unique_ptr<Parts> parts_;
   End end_ = End::Running;
   bool paused_ = false;

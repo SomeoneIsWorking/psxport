@@ -106,8 +106,8 @@ public:
   // Hardware-sync primitives for DIRECT runtimes (core.cfg == nullptr): the measured SCEI library
   // leaves this binary links and the windows that admit them. A native-frame product declares its
   // libetc VSync address here. Adapter runtimes keep the equivalent GameConfig::hle fact slice.
-  // Null remains valid
-  // for generic bare products and non-product smoke/tool clients that never enter `dc_boot_init`.
+  // Null remains valid for generic bare products and non-product smoke/tool clients that never boot a
+  // product.
   virtual const PlatformHlePlan *platformHlePlan() const {
     return nullptr;
   }

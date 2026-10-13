@@ -25,6 +25,8 @@ namespace psx::input {
 inline constexpr std::uint16_t kNoButtons = 0xFFFFu;
 inline constexpr std::uint16_t kButtonStart = 0x0008u;
 
+class QuitScope;
+
 class HostInput {
 public:
   HostInput() = default;
@@ -39,7 +41,7 @@ public:
   }
 
   // Drain the host event queue: record every delivered key into the state below, hand every event to
-  // the overlay, and RECORD a window close for `quitRequested`.
+  // the overlay, and hand a window close to the attached QuitScope.
   //
   // EVERY site that pumps host input calls this, directly or through poll(). Two drains of one queue
   // is how an event gets consumed by the wrong owner — a press that arrived while a guest draw was
@@ -47,21 +49,13 @@ public:
   // close is ignored if the other drain swallowed it. One function, any number of call sites, each
   // event delivered exactly once to each consumer. Safe to call several times per frame.
   //
-  // A window close is a REQUEST, and ending the run from inside an event drain is how a product could
-  // not choose how it stopped. A caller that owns its run holds a `QuitScope` and asks
-  // `quitRequested()`; with no scope alive the drain ends the process, which is what every product
-  // did before the request existed.
+  // With no QuitScope attached a window close ends the process.
   void drainEvents();
 
-  // Whether the host window has been closed since this was last taken. Consumed by the product loop
-  // that owns the run.
-  bool quitRequested() const {
-    return mQuitRequested;
-  }
-  bool takeQuitRequest() {
-    const bool requested = mQuitRequested;
-    mQuitRequested = false;
-    return requested;
+  // The run that owns its end. The SDL queue is the process's, so every Game whose drain can see the
+  // close attaches the same scope; null detaches.
+  void attachQuitScope(QuitScope *scope) {
+    mQuitScope = scope;
   }
 
   // The active-low PSX button mask for this frame, from the host keyboard and every connected
@@ -128,32 +122,31 @@ private:
   bool mPauseRequested = false;
   bool mFrameStepRequested = false;
   bool mBugReportRequested = false;
-  bool mQuitRequested = false;
-  // How many `QuitScope`s are alive. While at least one is, a window close is recorded rather than
-  // ending the process — see drainEvents(). Private, with `QuitScope` the only way to count one: the
-  // count is a property of a composition, not a setting.
-  int mQuitOwners = 0;
-
-  friend class QuitScope;
+  QuitScope *mQuitScope = nullptr;
 };
 
-// While this is alive, a host window close is RECORDED instead of ending the process, so the loop
-// that owns the run decides what ending it means. The scope is what makes that a property of a
-// composition rather than a global switch: a product that has not adopted an owned end-of-run keeps
-// the process exit it always had, because no scope is alive to record instead.
+// A window close recorded for the loop that owns the run, which decides what ending it means.
 class QuitScope {
 public:
-  explicit QuitScope(HostInput &input) : input_(&input) {
-    ++input_->mQuitOwners;
-  }
-  ~QuitScope() {
-    --input_->mQuitOwners;
-  }
+  QuitScope() = default;
   QuitScope(const QuitScope &) = delete;
   QuitScope &operator=(const QuitScope &) = delete;
 
+  void request() {
+    requested_ = true;
+  }
+  bool requested() const {
+    return requested_;
+  }
+  // Taken, so a later run in this process does not end on its first field.
+  bool take() {
+    const bool requested = requested_;
+    requested_ = false;
+    return requested;
+  }
+
 private:
-  HostInput *input_;
+  bool requested_ = false;
 };
 
 } // namespace psx::input

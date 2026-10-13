@@ -20,6 +20,7 @@ namespace psx::host {
 
 class PanelSessions;
 class TitleSession;
+struct SessionServices;
 
 // The title selector: the product state in which several games are alive at once, each showing its
 // own picture in its own panel.
@@ -28,7 +29,7 @@ class TitleSession;
 // the player's pad, a panel with no picture draws nothing, and confirming destroys every panel
 // session and hands the caller a fresh unbooted one for the chosen title.
 //
-// `presentation` (the process's window and device) must outlive this session.
+// `services` (the process's window, device, quit and run budget) must outlive this session.
 class PickerSession {
 public:
   enum class Outcome : std::uint8_t { Chosen, Ended };
@@ -37,13 +38,13 @@ public:
     std::unique_ptr<TitleSession> session; // the chosen title's LIVE session, set when Chosen
   };
 
-  // `content` names the panels (available entries in catalog order); both outlive this session. `frameCap` of 0 runs
-  // until a title is chosen.
+  // `content` names the panels (available entries in catalog order); both outlive this session. Each
+  // selector frame is one step of the process's run budget; a window close or a client `quit` ends
+  // the selector.
   PickerSession(PickerRuntime &runtime,
                 const TitleCatalog &catalog,
                 const PickerContent &content,
-                int frameCap,
-                GpuDevice &presentation);
+                SessionServices &services);
   // Out of line because the result owns a session: a unique_ptr over a forward-declared type can
   // only be destroyed where that type is complete.
   ~PickerSession();
@@ -58,8 +59,7 @@ private:
   PickerRuntime &runtime_;
   const TitleCatalog &catalog_;
   const PickerContent &content_;
-  int frameCap_;
-  GpuDevice &presentation_;
+  SessionServices &services_;
   PickerLayout layout_;
   std::unique_ptr<PickerComposite> composite_;
   std::unique_ptr<PanelSessions> panels_;

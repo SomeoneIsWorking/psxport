@@ -1,30 +1,19 @@
 #pragma once
 
-#include <cstdint>
-
 namespace psx::host {
 
-// The observation cap counts delivered fields, but shutdown waits until the complete product
-// step has returned through the framework presentation-fence check. One per Game.
+// A title's request to end its run, held per Game as `Game::run`. The run's length is RunBudget's;
+// this is the title's own "done", read by TitleSession after the step that asked.
 class SessionRun {
 public:
-  explicit SessionRun(std::uint64_t fieldLimit = 0) : fieldLimit_(fieldLimit) {}
-  void fieldDelivered() {
-    ++fields_;
-  }
   void requestEnd() {
     endRequested_ = true;
   }
   bool shouldEnd() const {
-    return endRequested_ || (fieldLimit_ != 0 && fields_ >= fieldLimit_);
-  }
-  std::uint64_t fields() const {
-    return fields_;
+    return endRequested_;
   }
 
 private:
-  std::uint64_t fieldLimit_ = 0;
-  std::uint64_t fields_ = 0;
   bool endRequested_ = false;
 };
 

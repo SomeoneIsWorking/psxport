@@ -14,14 +14,15 @@ namespace `psx::host`.
 | `title_selection.{h,cpp}` | `selectExecutable`, `selectExecutableFile`: does these bytes match this catalog entry (size, PS-X EXE header words, SHA-256) |
 | `title_availability.{h,cpp}` | `TitleAvailabilityProbe`: which catalog titles are provisioned and authenticate at `<root>/<slug>/<serial>` right now |
 | `title_session.{h,cpp}` | `TitleSession`: one boot-to-exit run of one title as a steppable owner; destruction is the whole teardown |
-| `session_run.h` | `SessionRun`, held per `Game` as `Game::run`: the delivered-field cap and the end request |
+| `session_run.h` | `SessionRun`, held per `Game` as `Game::run`: a title's request to end its run |
+| `run_budget.{h,cpp}` | `RunBudget`: the process's run cap in presentation-fence steps, decided once from `PSXPORT_NATIVE_FRAMES` |
 | `panel_sessions.{h,cpp}` | `PanelSessions`: one live session per panel (the available titles `PSXPORT_PICKER_TITLES` asks for) and the rules about which of them runs |
 | `picker_session.{h,cpp}` | `PickerSession`: the selector frame loop; one guest advances per frame |
 | `picker_runtime.{h,cpp}` | `PickerRuntime`: the selector's own `GameRuntime`; the control commands `picker`, `pick`, `select` |
 | `picker_content.{h,cpp}`, `picker_layout.{h,cpp}`, `picker_composite.{h,cpp}` | what the panels advertise, their geometry and cover crop, and the composited window frame |
 | `panel_logo.{h,cpp}` | `PanelLogo`: a `LogoImage` plus its lazily uploaded texture and nearest magnification |
 | `logo_image.h` | `LogoImage`: straight-alpha RGBA8, included by `game_runtime.h` without SDL |
-| `product_host.{h,cpp}` | `ProductHost`: the process top level and the owner of the window and device |
+| `product_host.{h,cpp}` | `ProductHost`: the process top level; owns the window and device, the `QuitScope`, the `RunBudget` and the process watchdog |
 
 ## The catalog contract
 
@@ -60,9 +61,48 @@ dropped. Each picker frame pre-rolls one panel for as many steps as fit in one N
 (`PreRollBudget`), at least one. A settled panel steps once per picker frame on its own pacer, so the
 picker then runs at that title's step cadence. Panel 0 starts selected and audible.
 
-`TitleSession::boot` sets `Game::run = SessionRun(frameCap)`; `step` ends the run when
-`Game::run.shouldEnd()`. A title's frame drivers write `core.game->run` (`fieldDelivered`,
-`requestEnd`). The destructor logs the generic `run complete` line, then calls `reportRun`.
+`ProductHost` hands every session its `SessionServices`: the presentation device, the process
+`QuitScope`, the `RunBudget` and whether `PSXPORT_LOAD_STATE` is still owed (only the process's first
+product session loads it; a title picked after a return boots from power-on). A session is a `Role::Panel` (a picker panel) or a
+`Role::Product` (the confirmed title, or the executable `runExecutable` was given).
+
+`TitleSession::boot`, in order: install the title's runtime and build its `Game`; attach the
+`QuitScope` to its `HostInput`; panel defaults (pane route, suppressed pad, audibility, pre-roll);
+`load_exe`; `psx::Machine` `reportConfigurationOnce`, `bindDevices` (init then bind, honouring
+`Pad::overridesInit`), `prepare`, `attachControlChannel`; for a product only,
+`clearDisplayForFrontEnd`; `setupGuestBoot` (crt0) and `GameRuntime::bootInit`; for the first product
+session only, `applyConfiguredState`; then the present-to-present series restarts, so the boot's gap
+is not counted as a missed present.
+
+`TitleSession::step` ends the session before stepping on, in order: `session return`
+(`ReturnedToSelector`), `Game::run.requestEnd()` (`TitleEnded`), and for a product a window close or
+client `quit` (`Quit`) or an exhausted `RunBudget` (`BudgetSpent`). A product with `PSXPORT_REPL` then
+waits in `Repl::beforeStep` for a `run N` that covers the step (`quit`, `end` or EOF is `Quit`).
+The body is `FieldTurn::beginField`, `FrameLoopShell::step` (one presentation fence),
+`RunBudget::step` and `Repl::afterStep` for a product, `FieldTurn::endField`.
+A product session's destructor prints the one `RunEndReport` (`run complete`, fallback telemetry,
+ledger, guest-call census, present intervals, record stability, audio queue, `reportRun`). `Quit` and
+`BudgetSpent` end the process; `ReturnedToSelector` and `TitleEnded` rebuild the selector when the
+run came from it, and end the process under `runExecutable`.
+
+### RunBudget and PreRollBudget
+
+`RunBudget` bounds a whole run, counted in presentation-fence steps: one per product step and one per
+selector frame. An explicit `PSXPORT_NATIVE_FRAMES` wins; otherwise a pad replay or resume, the REPL or
+a live control client leaves it uncapped, a windowed run is uncapped and a headless one stops at 120.
+This is the only place the live-client rule lives: `Machine::attachControlChannel` and
+`DbgServer::start` open the channel and answer no cap, and every loop that is not yet a
+`TitleSession` (native_boot, Tekken 3, C-12, Tomba! 1) takes its cap from `RunBudget::fromConfig`.
+It never counts a panel's pre-roll steps, and panels never print a run-end report, apply configured
+state or pump the REPL. `PreRollBudget` stays the pre-roll owner: how many panel steps fit in one
+selector frame's wall time.
+
+### Process lifetime
+
+`ProductHost` arms the watchdog and the host diagnostics (`Machine::armHostDiagnostics`: the
+memory census and the active-config dump) when it is constructed, and disables the watchdog when it
+is destroyed; sessions never arm or disarm either. A window close is recorded on the `QuitScope` instead of exiting in
+the event drain, so it reaches the run-end report like a client `quit`.
 
 ## Invariants
 
@@ -80,13 +120,18 @@ picker then runs at that title's step cadence. Panel 0 starts selected and audib
 2. Override `panelLogo` where the title can say it.
 3. `main` constructs the catalog and `psx::host::ProductHost host(catalog, "scratch/assets");` then
    calls `runSelector()` or `runExecutable(path)`.
-4. Have the title's frame drivers call `core.game->run.fieldDelivered()` and `requestEnd()`.
+4. Have the title's frame drivers call `core.game->run.requestEnd()` when the title cannot go on; a
+   picked title then returns to the selector.
 
 ## Testing
 
-`tests/test_title_selection.cpp`, `test_title_picker.cpp`, `test_picker_layout.cpp` and
-`test_session_run.cpp` cover selection, availability, the control commands, panel geometry and the
-run cap over a fake catalog, with no window. `test_pre_roll_budget.cpp` covers the per-frame pre-roll
+`tests/test_title_selection.cpp`, `test_title_picker.cpp` and `test_picker_layout.cpp` cover
+selection, availability, the control commands and panel geometry over a fake catalog, with no window.
+`test_run_budget.cpp` covers the cap's precedence. `test_product_host_session.cpp` runs the shipping
+`ProductHost` over a stub catalog and frame driver on an offscreen device: the cap, a client quit and
+a window close each reach one run-end report; a capped selector boots its panels without one; a
+window close in the selector ends it without a report; and a picked title that ends its own run
+returns to the selector, where a second pick boots without reloading `PSXPORT_LOAD_STATE`. `test_pre_roll_budget.cpp` covers the per-frame pre-roll
 budget and `test_frame_pacer.cpp` that a pre-rolling Game does not pace. Picker frame time is read
 from consecutive `[picker] panels:` lines of a paced run (`PSXPORT_DEBUG=picker,pacer`, no NOPACE). The headless walk (`picker`, `pick <slug>`,
 `session return`, `pick <slug>`) runs on a built port with `PSXPORT_DEBUG_SERVER` and

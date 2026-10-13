@@ -34,9 +34,20 @@ public:
   // Read+execute commands until `run N` (returns N), quit/EOF (-1), or end (-2).
   long read(Core *c, uint32_t f, LineReader readLine = readStdinLine);
 
+  // The loop's side of PSXPORT_REPL: before each product step, block on commands until a `run N`
+  // budget covers it. False when `quit`, `end` or EOF ends the run.
+  bool beforeStep(Core *c, uint32_t step, LineReader readLine = readStdinLine);
+  // After the step: a title's prompt request returns the next step to the prompt.
+  void afterStep() {
+    if (consumePromptRequest()) {
+      budget_ = 0;
+    }
+  }
+
 private:
   static bool readStdinLine(std::span<char> line);
 
   bool promptRequested_ = false;
+  long budget_ = 0;            // steps left in the current `run N`
   uint16_t mHeldMask = 0xFFFF; // active-low held pad mask (all released); `press`/`release` edit it
 };

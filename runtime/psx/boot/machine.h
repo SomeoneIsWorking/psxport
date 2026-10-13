@@ -58,15 +58,8 @@ public:
   void reportConfigurationOnce();
 
   // The host's own measuring instruments: the caller-attributing host census, and the active-config
-  // dump. Armed here, before any frame runs, because an instrument that cannot produce evidence is
-  // worse than none — its existence answers "can we measure this?" with a yes.
-  void armHostDiagnostics();
-
-  // The boot movies the title declares (`GameConfig::bootFmv`), played before the guest's own crt0 —
-  // and ONLY those: an all-null list is a real answer ("this title plays no movie natively"), not a
-  // missing value. `PSXPORT_NO_FMV` is the diagnostic control; whether a movie PLAYS is game
-  // behaviour, and is never inferred from the render sink.
-  void playBootMovies();
+  // dump. Process-wide, armed once before any frame runs; needs no Game.
+  static void armHostDiagnostics();
 
   // Black the display framebuffer before the title builds, so the title's first frames (drawn over
   // several fields while its background/font/CLUT upload) never composite over a stale splash or an
@@ -110,14 +103,8 @@ public:
   void prepare();
 
   // The live control channel and the dynarec store observer, armed together and before the first
-  // field, and the frame cap THIS run must use: 0 means uncapped, which is what a client-driven run
-  // needs — a cap exists to bound an unattended smoke run, and one that ends the process before a
-  // client connects measures nothing. `requestedFrameCap` is the title's own bound (or 0).
-  //
-  // Both surfaces are here because a surface nobody opens is not a surface: each was reachable only
-  // through the framework's own spine, so a title-owned spine had an audit line saying the knob was
-  // bound while nothing read it.
-  std::uint32_t attachControlChannel(std::uint32_t requestedFrameCap);
+  // field. How long the run may go is `psx::host::RunBudget`'s, not the channel's.
+  void attachControlChannel();
 
   // One display field: the shared per-field services (`psx::frame::FieldTurn`), then the title's finite frame step
   // (`psx::frame::FrameLoopShell::step`, which takes the frame's capture and enforces the one-presentation-per-field
@@ -126,17 +113,11 @@ public:
   void stepFrame(std::uint32_t frame);
 
   // The product loop, for a title with no loop of its own: `stepFrame` until the cap, a window close,
-  // or a client `quit`; then the run-end ledger every run owes, whatever ended it.
+  // or a client `quit`; then the RunEndReport every run owes, whatever ended it.
   //
   // Ctrl+C is deliberately NOT here: the watchdog handler force-exits with the stuck PC, because a
   // hung guest loop never returns to this loop at all.
   void run(std::uint32_t frameCap = 0);
-
-  // The obligations a finished run owes WHATEVER ended it: the whole-run guest ledger, the guest-call
-  // census, and the after-loop RAM dump when the title asked for one. The dump is here rather than in a
-  // spine because it is a path some products never reach — it is the MID-RUN dump (`psx::frame::FieldTurn`) that
-  // answers a question about live guest state.
-  void reportRunEnd();
 
 private:
   Game &game_;
