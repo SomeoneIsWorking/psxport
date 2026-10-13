@@ -22,11 +22,13 @@ StockCommandWorkArea resolveWorkArea(const Core &core) {
 } // namespace
 
 void publishStockCommandWorkArea(Core &core, uint8_t command, uint32_t parameter) {
+  StockCommandWorkArea workArea = resolveWorkArea(core);
+  if (workArea.lastCommandAddress) {
+    core.mem_w8(workArea.lastCommandAddress, command);
+  }
   if (!parameter) {
     return;
   }
-
-  StockCommandWorkArea workArea = resolveWorkArea(core);
   if (command == 0x02u && workArea.lastPositionAddress) {
     for (uint32_t index = 0; index < 4u; ++index) {
       core.mem_w8(workArea.lastPositionAddress + index, core.mem_r8(parameter + index));

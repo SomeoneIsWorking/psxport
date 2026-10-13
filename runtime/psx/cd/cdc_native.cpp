@@ -360,19 +360,26 @@ static void cancel_drive_event(CdcState *s) {
   s->drive_deadline_ticks = 0;
 }
 
-static void schedule_sector_event(CdcState *s) {
+// The next sector is due one drive period after `origin`.
+static void schedule_sector_event_after(CdcState *s, uint64_t origin) {
   if (!s->reading || s->following_sector_ready || s->drive_event_armed || !s->tick_now) {
     return;
   }
-  const uint64_t now_ticks = s->tick_now(s->tick_context);
-  s->drive_deadline_ticks = now_ticks + cd_drive_sector_period_cpu_ticks(s->mode);
+  s->drive_deadline_ticks = origin + cd_drive_sector_period_cpu_ticks(s->mode);
   s->drive_event_armed = 1;
   lucent::debug("cdcpace",
-                "armed sector event now={} deadline={} mode=0x{:02X} first={}",
-                now_ticks,
+                "armed sector event origin={} deadline={} mode=0x{:02X} first={}",
+                origin,
                 s->drive_deadline_ticks,
                 s->mode,
                 s->first_sector_pending);
+}
+
+static void schedule_sector_event(CdcState *s) {
+  if (!s->tick_now) {
+    return;
+  }
+  schedule_sector_event_after(s, s->tick_now(s->tick_context));
 }
 
 // See `CdcReadStop` above for why the two callers are not the same event. The drive-stopped case
@@ -423,16 +430,10 @@ void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now) {
   s->tick_now = now;
 }
 
-static int service_drive_event(CdcState *s) {
-  if (!s->drive_event_armed || !s->tick_now) {
-    return 0;
-  }
-
-  const uint64_t now_ticks = s->tick_now(s->tick_context);
-  if (now_ticks < s->drive_deadline_ticks) {
-    return 0;
-  }
-
+// One sector whose deadline has passed. An audio sector re-arms from its own deadline, so a service
+// that arrives several periods late still passes every sector the head reached in that time.
+static int service_due_sector(CdcState *s, uint64_t now_ticks) {
+  const uint64_t due_ticks = s->drive_deadline_ticks;
   s->drive_event_armed = 0;
   s->drive_deadline_ticks = 0;
   lucent::debug(
@@ -453,9 +454,8 @@ static int service_drive_event(CdcState *s) {
     // first sector. `test_the_first_data_ready_of_a_live_read_carries_the_read_bit` pins it.
     s->stat |= kCdlStatRead; // INT1/Getstat must identify an active sector read
     if (audio) {
-      // Decoded straight to the SPU: the guest sees no data-ready. The drive keeps reading —
-      // reschedule so the stream stays paced.
-      schedule_sector_event(s);
+      // Decoded straight to the SPU: the guest sees no data-ready. The drive keeps reading.
+      schedule_sector_event_after(s, due_ticks);
       lucent::debug("cdcpace", "first sector @ {} was XA audio -> SPU ring", s->loc_lba);
       return 0;
     }
@@ -490,13 +490,26 @@ static int service_drive_event(CdcState *s) {
         route_audio_to_spu(s, raw, next_lba);
       }
       s->loc_lba++; // the head PASSED this sector; the next peek must see the one after it
-      schedule_sector_event(s);
+      schedule_sector_event_after(s, due_ticks);
       return 0;
     }
   }
   s->following_sector_ready = 1;
   queue_data_ready(s);
   return 1;
+}
+
+static int service_drive_event(CdcState *s) {
+  if (!s->drive_event_armed || !s->tick_now) {
+    return 0;
+  }
+  const uint64_t now_ticks = s->tick_now(s->tick_context);
+  while (s->drive_event_armed && now_ticks >= s->drive_deadline_ticks) {
+    if (service_due_sector(s, now_ticks) != 0) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 // Draining the data FIFO releases that buffer; it does not drive the disc head or produce an event.
@@ -679,7 +692,7 @@ static uint64_t exec_command(CdcState *s, uint8_t cmd) {
     return 0;  // Setfilter
   case 0x11: { // GetlocP: current Sub-Q track/index and relative/absolute position.
     uint8_t position[8] = {};
-    if (!s->disc_get_subq_position_fn || !s->disc_get_subq_position_fn(s->disc, s->loc_lba, position)) {
+    if (!cdc_getloc_p(s, position)) {
       const uint8_t error[2] = {static_cast<uint8_t>(s->stat | 0x01), 0x80};
       cdc_irq(s, 5, error, 2);
       return 0;
@@ -796,6 +809,10 @@ static void complete_command(CdcState *s) {
   }
   const uint8_t response[1] = {s->stat};
   cdc_irq(s, 2, response, 1);
+}
+
+int cdc_getloc_p(const CdcState *s, uint8_t out[8]) {
+  return s->disc_get_subq_position_fn != nullptr && s->disc_get_subq_position_fn(s->disc, s->loc_lba, out);
 }
 
 int cdc_next_deadline_ticks(const CdcState *s, uint64_t *absoluteTicks) {

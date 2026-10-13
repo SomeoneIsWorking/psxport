@@ -1,3 +1,4 @@
+#include "cd_drive_timing.h"
 #include "cdc_state.h"
 #include "cdc_test_clock.h"
 #include "xa_state.h"
@@ -87,12 +88,43 @@ void testRejectedXaSectorRaisesNoDataReady() {
   require(cdc_test_service_deadline(&cdc, &clock) == 1, "data sector after the XA run raised no INT1");
 }
 
+// Every sector is the selected XA stream.
+extern "C" int xaStreamDiscReadRaw(struct DiscState *, uint32_t, uint8_t *out, uint32_t count) {
+  const auto sector = xaSector(1u, 13u, kRtForm2Audio);
+  std::copy_n(sector.data(), count, out);
+  return 1;
+}
+
+// One NTSC field is 2.5 sector periods at double speed; a service that late owes every sector in it.
+void testLateServicePassesEveryElapsedAudioSector() {
+  auto xa = std::make_unique<XaState>();
+  xa_state_init(xa.get());
+  CdcState cdc{};
+  cdc_state_init(&cdc);
+  cdc.xa = xa.get();
+  cdc.disc_read_raw_fn = xaStreamDiscReadRaw;
+  cdc.disc_read_sector_fn = xaFilterDiscReadSector;
+  CdcTestClock clock;
+  cdc_test_bind(&cdc, &clock);
+  cdc_set_mode(&cdc, 0xc8u);
+  cdc_set_filter(&cdc, 1u, 13u);
+  cdc_begin_read(&cdc, 16u);
+
+  const uint64_t period = cd_drive_sector_period_cpu_ticks(0xc8u);
+  const uint64_t first = cdc.drive_deadline_ticks;
+  clock.ticks = first + (period * 5u) / 2u;
+  require(cdc_drive_service(&cdc) == 0, "an audio stream raised INT1");
+  require(xa->sectors == 3u, "a service 2.5 periods late did not pass the 3 sectors due by then");
+  require(cdc.drive_deadline_ticks == first + 3u * period, "the next sector was not due one period after the last");
+}
+
 } // namespace
 
 int main() {
   testFilterSelectsOnlyTheProgrammedStream();
   testFilterBitOffAcceptsAllXAStreams();
   testRejectedXaSectorRaisesNoDataReady();
+  testLateServicePassesEveryElapsedAudioSector();
   std::cout << "cdc_xa_filter: PASS (MODE_SF file/channel routing)\n";
   return 0;
 }

@@ -11,6 +11,7 @@ namespace psx::cd {
 struct StockCommandWorkArea {
   uint32_t lastPositionAddress = 0; // Four Setloc parameter bytes, including the trailing byte.
   uint32_t lastModeAddress = 0;     // One Setmode parameter byte.
+  uint32_t lastCommandAddress = 0;  // One byte, every command sent; CdLastCom() reads it.
 };
 
 // Preserve the replaced command routine's guest bookkeeping through the shared stock-CD path.

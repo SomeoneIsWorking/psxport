@@ -25,6 +25,7 @@
 // accumulator + linear interpolation.
 #include "c_subsys.h" // C linkage for every xa_stream_* entry point AND for xa_decode_sector
 #include "disc.h"
+#include "xa_push_pacing.h"
 #include "xa_state.h"
 #include <stdint.h>
 // (fmv_decode.cpp): the vendored Beetle spu.c, compiled as C, links against
@@ -75,6 +76,8 @@ static void xa_reset_buffers(XaState *xs) {
   s_rd = 0.0;
   s_pulls = 0;
   s_sectors = 0;
+  xs->primed = 0;
+  xs->held_pulls = 0;
   s_hist[0][0] = s_hist[0][1] = s_hist[1][0] = s_hist[1][1] = 0;
 }
 
@@ -357,19 +360,24 @@ extern "C" void CDC_GetCDAudioSample(int32_t *samples) { // called from the vend
   }
   uint32_t avail = s_wr - (uint32_t)s_rd;
   if (avail < 1) {
+    xs->primed = 0; // starved: a push stream rebuilds its backlog before playing again
+    xs->held_pulls = 0;
     samples[0] = samples[1] = 0;
     return;
   }
-  // Push-mode rate servo: the drive paces production off the guest-tick domain while pulls arrive
-  // per SPU field advance — two clocks whose relative drift (measured ~1.1% on this host) would
-  // otherwise walk the ring to full (holding the drive, stretching playback) or empty. Trim the
-  // consumption rate toward a half-ring backlog: up to ±3% pitch transiently, far below audibility,
-  // and it pins A/V sync by construction instead of by calibration. Pull mode keeps the exact fixed
-  // ratio (its cursor IS the drive cursor).
+  if (xs->push_mode && !xs->primed) {
+    if (!XaPushPacing::readyToPlay(avail, xs->held_pulls)) {
+      ++xs->held_pulls;
+      samples[0] = samples[1] = 0;
+      return;
+    }
+    xs->primed = 1;
+  }
+  // Push mode trims the rate toward XaPushPacing's backlog against drive/SPU clock drift; pull mode
+  // keeps the exact ratio because its cursor is the drive cursor.
   double ratio = (double)s_src_freq / 44100.0;
   if (xs->push_mode) {
-    const double err = ((double)(s_wr - (uint32_t)s_rd) - (double)XA_RING_FRAMES * 0.5) / (double)XA_RING_FRAMES;
-    ratio *= (1.0 + err * 0.06);
+    ratio *= XaPushPacing::rateScale(avail);
   }
 
   uint32_t i0 = (uint32_t)s_rd;
