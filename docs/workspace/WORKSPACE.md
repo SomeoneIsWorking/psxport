@@ -7,6 +7,7 @@ A map. The workspace directory is not a repo; `AGENTS.md`/`CLAUDE.md` here are s
 | `psxport/AGENTS.md` | how a game consumes the framework (Lightrec/native seam, overrides, invalidation) |
 | `psxport/docs/codemap.md` | where framework code lives |
 | `<game>/AGENTS.md`, `<game>/docs/codemap.md` | that game's specifics and layout |
+| `psxport/docs/workspace/RESTRUCTURE.md` | the ordered restructure: one product loop, one title interface, one renderer, classes over C APIs |
 | `psxport/docs/workspace/GHIDRA.md` | Ghidra queries: `external/psxport/tools/decomp_pipeline.py --image <exe> --target/--callers/--refs/--function-at 0xADDR` |
 
 ## Repos
