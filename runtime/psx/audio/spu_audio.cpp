@@ -423,7 +423,8 @@ void SpuAudio::frameEx(bool output) {
       double dt = now - mRateT0;
       if (dt >= 2.0) {
         lucent::info("audio_rate",
-                     "{:.0f} samples/s (want {}), {} calls/{:.1f}s, drops={}, backlog={}, level={:.0f}, ratio={:.5f}",
+                     "{:.0f} samples/s (want {}), {} calls/{:.1f}s, drops={}, backlog={}, level={:.0f}, ratio={:.5f}, "
+                     "run reprimes={} drops={}",
                      mRateSamp / dt,
                      SpuFieldCadence::kSampleRateHz,
                      mRateCalls,
@@ -431,7 +432,9 @@ void SpuAudio::frameEx(bool output) {
                      mRateDrops,
                      SDL_GetAudioStreamQueued(mStream),
                      mSteer.level(),
-                     SDL_GetAudioStreamFrequencyRatio(mStream));
+                     SDL_GetAudioStreamFrequencyRatio(mStream),
+                     mReprimes,
+                     mDrops);
         mRateT0 = now;
         mRateSamp = 0;
         mRateCalls = 0;
@@ -443,11 +446,13 @@ void SpuAudio::frameEx(bool output) {
   if (AudioQueuePolicy::needsReprime(mStreamStarted, queuedBytes)) {
     SDL_PauseAudioStreamDevice(mStream);
     mStreamStarted = false;
+    ++mReprimes;
     lucent::debug("audio", "[spu_audio] queue ran empty: re-priming");
   }
 
   // Drop (don't queue) only above the limit the steer keeps a steady producer under.
   if (AudioQueuePolicy::shouldDrop(queuedBytes)) {
+    ++mDrops;
     return;
   }
 
@@ -472,4 +477,8 @@ void SpuAudio::frameEx(bool output) {
 
   lucent::debug("audio", "[spu_audio] rendered {} frames, queued={} bytes", frames, queuedBytes);
 #endif
+}
+
+void SpuAudio::reportQueue() const {
+  lucent::info("playcheck", "audio: reprimes={} drops={}", mReprimes, mDrops);
 }

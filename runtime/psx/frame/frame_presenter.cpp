@@ -316,14 +316,32 @@ bool FramePresenter::cutBetween(std::uint64_t from, std::uint64_t to) const {
 void FramePresenter::presentRecords(FramePresentationBackend &backend, CapturedFrameView frame, int guestFields) {
   const SealedRecord *shown = shownRecord(backend.displayedBuffer());
   const SealedRecord *from = shownSequence_ ? sealed(*shownSequence_) : nullptr;
+  const std::optional<std::uint64_t> previous = shownSequence_;
   shownSequence_.reset();
+  ++stability_.recordPresents;
+  if (stability_.recordPresents % 600 == 0) {
+    lucent::debug("playcheck",
+                  "records so far: presents={} in_betweens={} without_in_between={} repeats={} backwards={}",
+                  stability_.recordPresents,
+                  stability_.inBetweens,
+                  stability_.withoutInBetween,
+                  stability_.repeats,
+                  stability_.backwards);
+  }
   if (shown != nullptr) {
     shownSequence_ = shown->record->sequence();
+    if (previous && *shownSequence_ == *previous) {
+      ++stability_.repeats;
+    } else if (previous && *shownSequence_ < *previous) {
+      ++stability_.backwards;
+    }
   }
   if (shown == nullptr || from == nullptr || !continuesTo(from->record->sequence(), shown->record->sequence())) {
+    ++stability_.withoutInBetween;
     presentCurrent(backend, frame, guestFields, 1, shown);
     return;
   }
+  ++stability_.inBetweens;
   const bool cut = cutBetween(from->record->sequence(), shown->record->sequence());
   present::FrameRecord blended =
       cut ? present::FrameRecord() : present::keyedBlend(*from->record, *shown->record, 0.5f);
@@ -356,6 +374,16 @@ void FramePresenter::presentCurrent(
   composedStore_.reset();
   backend.captureDiagnostic(fence_, false);
   backend.pace(guestFields, parts);
+}
+
+void FramePresenter::reportStability() const {
+  lucent::info("playcheck",
+               "records: presents={} in_betweens={} without_in_between={} repeats={} backwards={}",
+               stability_.recordPresents,
+               stability_.inBetweens,
+               stability_.withoutInBetween,
+               stability_.repeats,
+               stability_.backwards);
 }
 
 void FramePresenter::resetCapture() {

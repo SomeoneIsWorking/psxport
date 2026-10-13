@@ -74,3 +74,11 @@ int GpuWindow::pixel_height() const {
   }
   return h > 0 ? h : 240;
 }
+
+double GpuWindow::refresh_period_ms() const {
+  if (s_win == nullptr) {
+    return 0.0;
+  }
+  const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s_win));
+  return mode != nullptr && mode->refresh_rate > 0.0f ? 1000.0 / static_cast<double>(mode->refresh_rate) : 0.0;
+}

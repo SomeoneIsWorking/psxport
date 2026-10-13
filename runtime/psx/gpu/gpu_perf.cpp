@@ -36,7 +36,9 @@
 
 #include "gpu_perf.h"
 #include <cstdio>
+#include <format>
 #include <lucent/log.h>
+#include <string>
 
 static inline double ms_between(std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
   return std::chrono::duration<double, std::milli>(b - a).count();
@@ -117,7 +119,6 @@ void GpuPerf::frameEnd() {
   mAcc.post += ms_between(mTMark, n);
   const double thisFrame = ms_between(mTFrame, n);
   mAcc.frame += thisFrame;
-  mFrames.add(thisFrame);
   if (++mAcc.frames < 60) {
     return;
   }
@@ -143,18 +144,65 @@ void GpuPerf::frameEnd() {
                post,
                idle,
                cpu_sum);
-  // The average above cannot answer a budget: one frame in a thousand over its deadline is a
-  // visible stutter and does not move a mean. These are cumulative over the whole run, and
-  // `beyond` counts the frames slower than the distribution's range rather than folding them into
-  // its last bucket.
+  // The average above cannot answer a budget: one late present in a thousand is a visible stutter
+  // and does not move a mean. Cumulative over the whole run; `beyond-range` is not folded into the
+  // last bucket.
   lucent::info("perf",
-               "{}f distribution p50 {:.2f} p95 {:.2f} p99 {:.2f} worst {:.2f}ms beyond-range {}",
+               "{} present distribution p50 {:.2f} p95 {:.2f} p99 {:.2f} worst {:.2f}ms beyond-range {} "
+               "over-1.5-vsync {} longest-miss-run {}",
                mFrames.count(),
                mFrames.percentileMs(0.50),
                mFrames.percentileMs(0.95),
                mFrames.percentileMs(0.99),
                mFrames.worstMs(),
-               mFrames.beyondRange());
+               mFrames.beyondRange(),
+               mPresents.missed,
+               mPresents.longestMissRun);
 
   mAcc = Acc{};
+}
+
+void GpuPerf::presented(clk_time_point at, double vsyncPeriodMs) {
+  if (!mHavePresent) {
+    mHavePresent = true;
+    mLastPresent = at;
+    return;
+  }
+  const double interval = ms_between(mLastPresent, at);
+  mLastPresent = at;
+  mFrames.add(interval);
+  ++mPresents.intervals;
+  if (vsyncPeriodMs > 0.0) {
+    mPresents.vsyncPeriodMs = vsyncPeriodMs;
+  }
+  if (mPresents.vsyncPeriodMs > 0.0 && interval > 1.5 * mPresents.vsyncPeriodMs) {
+    ++mPresents.missed;
+    ++mMissRun;
+    mPresents.longestMissRun = mMissRun > mPresents.longestMissRun ? mMissRun : mPresents.longestMissRun;
+  } else {
+    mMissRun = 0;
+  }
+  if (mPresents.intervals % kPresentSummaryEvery == 0) {
+    lucent::debug("playcheck", "presents so far: {}", presentSummary());
+  }
+}
+
+void GpuPerf::reportPresents() const {
+  lucent::info("playcheck", "presents: {}", presentSummary());
+}
+
+std::string GpuPerf::presentSummary() const {
+  const double missedPct =
+      mPresents.intervals != 0 ? 100.0 * (double)mPresents.missed / (double)mPresents.intervals : 0.0;
+  return std::format("intervals={} p50={:.2f}ms p99={:.2f}ms worst={:.2f}ms vsync={:.2f}ms "
+                     "over_1.5_vsync={} ({:.2f}%) longest_miss_run={} beyond_range={}",
+                     mPresents.intervals,
+                     mFrames.percentileMs(0.50),
+                     mFrames.percentileMs(0.99),
+                     mFrames.worstMs(),
+                     mPresents.vsyncPeriodMs,
+                     mPresents.missed,
+                     missedPct,
+                     mPresents.longestMissRun,
+                     mFrames.beyondRange());
 }
