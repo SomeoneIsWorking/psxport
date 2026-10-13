@@ -98,6 +98,26 @@
       "text_size": "0x7D800",
       "note": "Naughty Dog. Measured 2 fields per game frame; 30 fps."
     },
+    "ctr_bf0226": {
+      "kind": "module",
+      "title": "ctr",
+      "serial": "SCUS_944.26",
+      "sha1": "ce2729438334fc794fe62bbc3e00fb462d69f4d5",
+      "load_base": "0x800A0CB8",
+      "code_first": "0x4",
+      "code_last": "0xACB7",
+      "note": "BIGFILE.BIG entry 226 as stored (44,216 B), the race module in slot 0x800A0CB8; the guest's own CdRead callback relocates it after load."
+    },
+    "ctr_bf0231": {
+      "kind": "module",
+      "title": "ctr",
+      "serial": "SCUS_944.26",
+      "sha1": "df367b8b00b30122af8916fa547e4f65ffc7f4bc",
+      "load_base": "0x800AB9F0",
+      "code_first": "0x1C4",
+      "code_last": "0xEB57",
+      "note": "BIGFILE.BIG entry 231 as stored (60,248 B), the race HUD/UI module in slot 0x800AB9F0; the guest's own CdRead callback relocates it after load."
+    },
     "megamanx4": {
       "kind": "resident",
       "serial": "SLUS_005.61",
