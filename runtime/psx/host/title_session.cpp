@@ -1,6 +1,6 @@
 #include "title_session.h"
 
-#include "cfg.h"
+#include "config_vars.h"
 #include "core.h"
 #include "dbg_server.h"
 #include "field_turn.h"
@@ -9,25 +9,15 @@
 #include "game_runtime.h"
 #include "gpu_vk.h"
 #include "gpu_vk_internal.h"
+#include "host_input.h"
 #include "host_turn.h"
-#include "hw_bind.h"
-#include "lightrec_executor.h"
 #include "machine.h"
 #include "psx_exe_image.h"
+#include "run_end_report.h"
 
 #include <lucent/log.h>
 
 #include <cstdlib>
-
-extern "C" {
-void watchdog_init(void);
-void watchdog_disable(void);
-void mdec_init(void);
-void spu_init(void);
-}
-
-void dc_boot_init(Core *c);
-void dc_step_frame(Core *c, uint32_t frame);
 
 namespace psx::host {
 
@@ -43,40 +33,21 @@ struct TitleSession::Parts {
 
 TitleSession::TitleSession(const TitleCatalog &catalog,
                            const TitleAvailability &title,
+                           Role role,
                            bool selectorAvailable,
-                           GpuDevice &presentation)
-    : catalog_(catalog), title_(title), selectorAvailable_(selectorAvailable), presentation_(presentation),
+                           SessionServices &services)
+    : catalog_(catalog), title_(title), role_(role), selectorAvailable_(selectorAvailable), services_(services),
       parts_(std::make_unique<Parts>()) {}
 
 TitleSession::~TitleSession() {
   if (!parts_->booted) {
     return;
   }
-  // The frame alarm must not outlive its title into the next session or the selector.
-  watchdog_disable();
-  psx::cpu::shutdownHostTurn(parts_->game->core);
-  reportRun(parts_->game->core);
-}
-
-void TitleSession::reportRun(Core &core) const {
-  const auto &counts = core.lightrecExecutor().counters();
-  lucent::info("runtime",
-               "run complete: fields={} product_steps={} presentation_fences={} "
-               "translated_blocks={} executed_blocks={} executed_instructions={} "
-               "cache_hits={} cache_misses={} host_dispatches={} invalidations={} faults={}",
-               parts_->game->run.fields(),
-               steps_,
-               core.game->presentation.fence(),
-               counts.translatedBlocks,
-               counts.executedBlocks,
-               counts.executedInstructions,
-               counts.cacheHits,
-               counts.cacheMisses,
-               counts.hostDispatches,
-               counts.invalidations,
-               counts.faults);
-  core.lightrecExecutor().reportFallbackTelemetry("run-complete");
-  core.runtime->reportRun(core);
+  Game &game = *parts_->game;
+  psx::cpu::shutdownHostTurn(game.core);
+  if (role_ == Role::Product) {
+    psx::RunEndReport{game}.emit(steps_);
+  }
 }
 
 bool TitleSession::boot() {
@@ -84,9 +55,10 @@ bool TitleSession::boot() {
     return true;
   }
   psxport_install_game(catalog_.runtime(title_.index));
-  parts_->game = std::make_unique<Game>(presentation_);
+  parts_->game = std::make_unique<Game>(services_.presentation);
   Game &game = *parts_->game;
   Core &core = game.core;
+  game.hostInput.attachQuitScope(&services_.quit);
   game.session.setReturnAvailable(selectorAvailable_);
   // Panel defaults are applied only to a selector session. A product session must stay windowed
   // with the player's pad live and its audio on: a title whose boot waits on its own audio device
@@ -100,26 +72,25 @@ bool TitleSession::boot() {
     game.session.setPreRolling(preRolling_);
   }
 
-  watchdog_init();
   load_exe(title_.executable.c_str(), &core);
-  // Power, done once. The per-frame-step rebind that names the session actually running is
-  // FrameLoopShell::step's own job.
-  gte_bind(&core);
-  spu_bind(&core);
-  mdec_bind(&core);
-  xa_bind(&core);
-  gte_init();
-  mdec_init();
-  spu_init();
-  game.spu_audio.init();
-  game.gpu.gpu_native_init();
-
-  // Several sessions each attach; only the first owns the host port, which is how the
-  // picker and a running title share one channel.
-  const std::uint32_t frameCap = psx::Machine{game}.attachControlChannel(cfg_int("PSXPORT_NATIVE_FRAMES", 0));
-  game.run = SessionRun(frameCap);
-
-  dc_boot_init(&core);
+  psx::Machine machine{game};
+  machine.reportConfigurationOnce();
+  machine.bindDevices();
+  machine.prepare();
+  // Several sessions each attach; only the first owns the host port, which is how the picker and a
+  // running title share one channel.
+  machine.attachControlChannel();
+  if (role_ == Role::Product) {
+    machine.clearDisplayForFrontEnd();
+  }
+  machine.setupGuestBoot();
+  core.runtime->bootInit(core);
+  if (role_ == Role::Product && services_.configuredStatePending) {
+    services_.configuredStatePending = false;
+    machine.applyConfiguredState();
+  }
+  // The play check measures the run, not the gap between the boot's clear and the first step.
+  game.perf.restartPresentSeries();
   parts_->booted = true;
   lucent::info("session",
                "{} ({}) booted{}",
@@ -129,26 +100,57 @@ bool TitleSession::boot() {
   return true;
 }
 
+bool TitleSession::endRequested(Game &game) {
+  if (game.session.returnRequested()) {
+    end_ = End::ReturnedToSelector;
+    return true;
+  }
+  if (game.run.shouldEnd()) {
+    lucent::info("session", "{} ended its run after {} step(s)", title_.identity->displayName, steps_);
+    end_ = End::TitleEnded;
+    return true;
+  }
+  if (role_ != Role::Product) {
+    return false;
+  }
+  if (services_.quit.take() || game.dbg_server.takeQuitRequest()) {
+    lucent::info("session", "{} was asked to quit after {} step(s)", title_.identity->displayName, steps_);
+    end_ = End::Quit;
+    return true;
+  }
+  if (services_.budget.exhausted()) {
+    lucent::info("session", "{} reached its run budget of {} step(s)", title_.identity->displayName, steps_);
+    end_ = End::BudgetSpent;
+    return true;
+  }
+  return false;
+}
+
 void TitleSession::step() {
-  if (!parts_->booted || paused_) {
+  if (!parts_->booted || paused_ || end_ != End::Running) {
     return;
   }
   Game &game = *parts_->game;
-  if (game.session.returnRequested()) {
-    end_ = End::ReturnedToSelector;
+  if (endRequested(game)) {
+    return;
+  }
+  const bool product = role_ == Role::Product;
+  if (product && psx::config::cv_repl.get() && !game.repl.beforeStep(&game.core, static_cast<std::uint32_t>(steps_))) {
+    end_ = End::Quit;
     return;
   }
   // `psx::frame::FieldTurn` is the framework's owner, so this loop cannot silently omit one of
   // the four services. What stays here is the body: this title's own finite frame step.
   const psx::frame::FieldTurn fieldTurn;
   fieldTurn.beginField(game.core);
-  if (game.run.shouldEnd()) {
-    fieldTurn.endField(game.core, static_cast<std::uint32_t>(steps_));
-    end_ = End::Finished;
-    return;
+  ++steps_;
+  psx::frame::FrameLoopShell{}.step(game.core, static_cast<std::uint32_t>(steps_));
+  if (product) {
+    services_.budget.step();
+    game.repl.afterStep();
   }
-  dc_step_frame(&game.core, static_cast<uint32_t>(++steps_));
   fieldTurn.endField(game.core, static_cast<std::uint32_t>(steps_));
+  endRequested(game);
 }
 
 bool TitleSession::returnRequested() const {
@@ -269,24 +271,11 @@ void TitleSession::pressOnce(std::uint16_t activeLowMask, int frames) {
 }
 
 void TitleSession::pause() {
-  if (paused_ || !parts_->booted) {
-    paused_ = true;
-    return;
-  }
   paused_ = true;
-  // A paused session presents nothing, so leaving its alarm armed would trip on a pause the
-  // player chose.
-  watchdog_disable();
 }
 
 void TitleSession::resume() {
-  if (!paused_) {
-    return;
-  }
   paused_ = false;
-  if (parts_->booted) {
-    watchdog_init();
-  }
 }
 
 void TitleSession::setAudible(bool audible) {

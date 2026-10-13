@@ -24,8 +24,8 @@ constexpr int kPreRollSteps = 900;
 
 } // namespace
 
-PanelSessions::PanelSessions(const TitleCatalog &catalog, const PickerContent &content, GpuDevice &presentation)
-    : catalog_(catalog), presentation_(presentation) {
+PanelSessions::PanelSessions(const TitleCatalog &catalog, const PickerContent &content, SessionServices &services)
+    : catalog_(catalog), services_(services) {
   for (int panel = 0; panel < content.panelCount(); ++panel) {
     titles_.push_back(&content.panelTitle(panel));
   }
@@ -36,7 +36,7 @@ PanelSessions::PanelSessions(const TitleCatalog &catalog, const PickerContent &c
   for (const TitleAvailability *title : titles_) {
     // Constructed, not booted: an unasked session costs only its handle, and boot() is the
     // expensive part.
-    sessions_.push_back(std::make_unique<TitleSession>(catalog_, *title, true, presentation));
+    sessions_.push_back(std::make_unique<TitleSession>(catalog_, *title, TitleSession::Role::Panel, true, services_));
   }
   if (sessions_.empty()) {
     lucent::warn("picker", "no provisioned title: the selector has no panels");
@@ -306,7 +306,7 @@ std::unique_ptr<TitleSession> PanelSessions::confirm() {
   // Panel defaults are undone before boot, and the player's pad must reach the guest: a panel
   // session starts with player input suppressed so the press that moved the selection does not
   // also press a button in three demos at once.
-  auto session = std::make_unique<TitleSession>(catalog_, picked, true, presentation_);
+  auto session = std::make_unique<TitleSession>(catalog_, picked, TitleSession::Role::Product, true, services_);
   session->presentToWindow();
   session->setPlayerInput(true);
   session->setAudible(true);

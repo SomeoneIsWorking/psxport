@@ -16,6 +16,7 @@ void watchdog_main_present_complete(void); // main presenter complete: leave boo
 void watchdog_resume(void);                // resume after intentional idle without claiming frame progress
 void watchdog_suspend(void);               // cancel the timeout during intentional idle (pause / REPL input wait)
 void watchdog_disable(void);               // permanently disable (SBS debugger pauses indefinitely on a divergence)
+int watchdog_armed(void);                  // nonzero while the frame-progress timeout is armed
 void watchdog_spin_fault(unsigned anchor_pc,
                          unsigned last_pc,
                          unsigned long long instructions); // guest spin: report + abort (timing.cpp)

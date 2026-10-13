@@ -111,13 +111,7 @@ def fps60_verdict(log_text):
 
 
 def presentation_fences(log_text):
-    """How many presentation fences the run actually produced, or None if it never said.
-
-    --frames bounds FIELDS; --shot-at names PRESENTATION FENCES, and a title that presents on some
-    fields and not others produces fewer fences than fields. Measured 2026-09-19 on Spyro: 1,300
-    fields produced 868 fences, so shots requested at 900/1100/1250 could not exist. Without this the
-    short-capture failure reads as a product fault and sends the next person hunting one.
-    """
+    """How many presentation fences the run actually produced, or None if it never said."""
     for line in reversed(log_text.splitlines()):
         for token in line.split():
             if token.startswith("presentation_fences="):
@@ -297,7 +291,7 @@ def main(argv=None):
     parser.add_argument("--binary", help="the already-built port executable (agents never run run.sh)")
     parser.add_argument("--repository", help="the port repository the run is rooted at (default: two "
                                              "directories above the binary's bin/, i.e. <repo>/build/bin)")
-    parser.add_argument("--frames", type=int, default=400, help="frames to present")
+    parser.add_argument("--frames", type=int, default=400, help="presentation-fence steps to run (PSXPORT_NATIVE_FRAMES)")
     parser.add_argument("--shot-at", default="", help="comma-separated frames to capture (default: the last frame)")
     parser.add_argument("--replay", help="pad replay that reaches gameplay; without one this only sees attract")
     parser.add_argument("--route", help="the title's own command for reaching the state worth judging, "
@@ -358,8 +352,7 @@ def main(argv=None):
         fences = presentation_fences(standard_log)
         detail += f" — never reached frame(s) {missing}"
         if fences is not None:
-            detail += (f"; the run produced {fences} presentation fence(s) from {args.frames} field(s), "
-                       f"and --shot-at counts FENCES — raise --frames")
+            detail += f"; the run ended after {fences} of {args.frames} presentation fence(s)"
     if crashed(standard_exit):
         detail += f" — but {crash_detail('4:3', standard_exit)}"
     ok &= report("reaches", not failures and not missing and not crashed(standard_exit), detail)
@@ -438,7 +431,7 @@ def selftest():
         ("fps60 refusal is not a pass", fps60_verdict("[fps60] interpolated 60fps REFUSED")[0] == "refused")
     )
     checks.append(("fps60 off is named, not assumed", fps60_verdict("quiet log")[0] == "not-enabled"))
-    fence_log = "[runtime] run complete: fields=1300 product_steps=868 presentation_fences=868 faults=0"
+    fence_log = "[runtime] run complete: product_steps=868 presentation_fences=868 faults=0"
     checks.append(("the fence count is read from the run", presentation_fences(fence_log) == 868))
     checks.append(("a log that never says is not guessed", presentation_fences("quiet log") is None))
     # The unjudged/failing split is a property of the run, not of the log, so it is checked here on

@@ -43,9 +43,8 @@ constexpr float kWidthResponse = 0.25f;
 PickerSession::PickerSession(PickerRuntime &runtime,
                              const TitleCatalog &catalog,
                              const PickerContent &content,
-                             int frameCap,
-                             GpuDevice &presentation)
-    : runtime_(runtime), catalog_(catalog), content_(content), frameCap_(frameCap), presentation_(presentation),
+                             SessionServices &services)
+    : runtime_(runtime), catalog_(catalog), content_(content), services_(services),
       layout_(content.panelCount(), kSelectedShare, kUnselectedShare, kSlantPerWidth, kWidthResponse) {
   if (content.panelCount() > PickerLayout::maxPanels()) {
     lucent::error("picker",
@@ -54,7 +53,7 @@ PickerSession::PickerSession(PickerRuntime &runtime,
                   PickerLayout::maxPanels());
     std::abort();
   }
-  panels_ = std::make_unique<PanelSessions>(catalog_, content_, presentation_);
+  panels_ = std::make_unique<PanelSessions>(catalog_, content_, services_);
   runtime_.bind(&content_, nullptr);
 }
 
@@ -102,15 +101,16 @@ PickerSession::Result PickerSession::run() {
   psxport_install_game(runtime_);
   // No guest runs here, but the control endpoint, the pad and the screen text all need an owner,
   // and no panel session may have them.
-  auto host = std::make_unique<Game>(presentation_);
+  auto host = std::make_unique<Game>(services_.presentation);
   Core &core = host->core;
   host->pad.useLiveInputOnly(); // a selector must not open or rotate the player's pad recording
+  host->hostInput.attachQuitScope(&services_.quit);
   // The same arming call the product spine makes in `TitleSession::boot`, so the selector's channel
   // is not reachable only through a hand-written attach of its own.
-  const std::uint32_t frameCap = psx::Machine{*host}.attachControlChannel(frameCap_);
+  psx::Machine{*host}.attachControlChannel();
   gpu_vk_ensure_device(&core);
 
-  composite_ = std::make_unique<PickerComposite>(presentation_, &core);
+  composite_ = std::make_unique<PickerComposite>(services_.presentation, &core);
   runtime_.bind(&content_, composite_.get());
 
   // Each panel is a live session's own presented frame plus that title's own logo read from its own
@@ -122,7 +122,11 @@ PickerSession::Result PickerSession::run() {
   int frame = 0;
   const auto fieldInterval = std::chrono::duration_cast<PreRollBudget::Clock::duration>(
       std::chrono::duration<double, std::milli>(1000000.0 / psx::frame::FIELD_RATE_NTSC_MILLIHZ));
-  for (; frameCap == 0 || static_cast<std::uint32_t>(frame) < frameCap; ++frame) {
+  for (; !services_.budget.exhausted(); ++frame) {
+    if (services_.quit.take() || host->dbg_server.takeQuitRequest()) {
+      lucent::info("picker", "selector asked to quit after {} frame(s)", frame);
+      return {};
+    }
     const PreRollBudget preRoll(PreRollBudget::Clock::now() + fieldInterval);
     fieldTurn.beginField(core);
     host->pad.serviceFrame();
@@ -174,6 +178,7 @@ PickerSession::Result PickerSession::run() {
     }
     composite_->present(layout_, sources_, panels_->selected());
     core.game->framePacer.hostScreenPace(core);
+    services_.budget.step();
     fieldTurn.endField(core, static_cast<std::uint32_t>(frame));
   }
   lucent::info("picker", "selector ended after {} frame(s) with no choice", frame);

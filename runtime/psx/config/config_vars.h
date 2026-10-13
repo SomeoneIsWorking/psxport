@@ -87,6 +87,11 @@ extern IntVar cv_spin_runs;  // consecutive starved in-region samples that decla
 // An explicit 0 still means 0, which is why the sentinel is -1 and not 0.
 extern IntVar cv_watchdog_boot;
 
+// ── run length ──────────────────────────────────────────────────────────────────────────────────
+// PSXPORT_NATIVE_FRAMES — the run's cap in presentation-fence steps; 0 leaves it to the run budget's
+// defaults (host/run_budget.h).
+extern IntVar cv_native_frames;
+
 // ── assets and settings ─────────────────────────────────────────────────────────────────────────
 // PSXPORT_ASSET_DIR — the directory CONTAINING `assets/`, for a consumer whose cwd is its own repo
 // root. Empty = cwd-relative `assets/rml/...`.

@@ -18,12 +18,13 @@ class GpuDevice;
 namespace psx::host {
 
 class TitleSession;
+struct SessionServices;
 
 class PanelSessions {
 public:
   // One session per panel of `content` (the available titles `PSXPORT_PICKER_TITLES` asks for), in
   // panel order. The sessions reference the content's probed entries, which outlive the picker.
-  PanelSessions(const TitleCatalog &catalog, const PickerContent &content, GpuDevice &presentation);
+  PanelSessions(const TitleCatalog &catalog, const PickerContent &content, SessionServices &services);
   ~PanelSessions();
   PanelSessions(const PanelSessions &) = delete;
   PanelSessions &operator=(const PanelSessions &) = delete;
@@ -90,8 +91,8 @@ private:
   const TitleCatalog &catalog_;
   std::vector<const TitleAvailability *> titles_;
   std::vector<std::unique_ptr<TitleSession>> sessions_;
-  // The window and its device, kept because confirm() builds the fresh session the player gets.
-  GpuDevice &presentation_;
+  // Kept because confirm() builds the fresh session the player gets.
+  SessionServices &services_;
   std::vector<bool> booted_;
   // Latches on arrival: readiness is a property of the panel having arrived once, not of what its
   // guest happens to be doing this instant.

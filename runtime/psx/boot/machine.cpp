@@ -1,24 +1,22 @@
 #include "machine.h"
 
 #include "c_subsys.h" // mdec_init — the vendored MDEC device's own initializer
-#include "cfg.h"      // cfg_dump / cfg_on / cfg_str
+#include "cfg.h"      // cfg_dump
 #include "config.h"   // psx::config::report_once — arms the exit audit at BOOT, for every port
 #include "core.h"
 #include "crt0_boot.h" // crt0_setup — the derived guest crt0 group's applier
 #include "dbg_server.h"
-#include "execution_ledger.h"
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "gpu_native_internal.h" // gpu_clear_display
-#include "guest_call_census.h"
 #include "host_input.h"
 #include "hw_bind.h"
 #include "memcensus.h"
+#include "run_end_report.h"
 #include "state/state_command.h"
 #include "store_observe.h"
 
-#include <cstdio>
 #include <cstdlib>
 
 #include <lucent/log.h>
@@ -80,38 +78,6 @@ void Machine::armHostDiagnostics() {
   cfg_dump();
 }
 
-void Machine::playBootMovies() {
-  // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
-  // title/menu. The game's own STR streaming times out under this runtime (its CD-streamed FMV sectors
-  // never reach its StrPlayer), so the movies are played with the self-contained native FMV player.
-  //
-  // SPLIT OF OWNERSHIP: only LOGO.STR (which plays BEFORE the front-end overlay is even loaded) is
-  // played at boot. OP.STR is owned by the front-end, whose DEMO menu machine states 4..7 ARE the OP.STR
-  // sequence; playing OP here too made it play TWICE (boot + front-end) — the "FMV repeats" bug.
-  //
-  // PSXPORT_NO_FMV is the explicit diagnostic control, and `PSXPORT_NO_FMV=0` forces the movies back
-  // on. What is not acceptable is inferring the intent from the render sink: headless is the same
-  // pipeline with a different final sink, so a headless probe that silently skipped the movies could
-  // not reproduce the failing behaviour it was sent to investigate.
-  const bool skip = cfg_on("PSXPORT_NO_FMV");
-  const char *override = cfg_str("PSXPORT_NO_FMV");
-  const bool moviesPlay = (override != nullptr && *override != '\0' && atoi(override) == 0) ? true : !skip;
-  const char *const *bootFmv = core().cfg ? core().cfg->bootFmv : nullptr;
-  const int count = bootFmv ? static_cast<int>(sizeof core().cfg->bootFmv / sizeof core().cfg->bootFmv[0]) : 0;
-  if (!moviesPlay) {
-    lucent::warn("machine", "skipping intro FMVs (headless/NO_FMV)");
-    return;
-  }
-  if (bootFmv == nullptr || bootFmv[0] == nullptr) {
-    lucent::info("machine", "no boot FMV configured (GameConfig::bootFmv is empty) — nothing to play");
-    return;
-  }
-  for (int i = 0; i < count && bootFmv[i] != nullptr; ++i) {
-    lucent::info("machine", "playing boot FMV {}/{}: {}", i + 1, count, bootFmv[i]);
-    game_.fmv.play(bootFmv[i]);
-  }
-}
-
 void Machine::clearDisplayForFrontEnd() {
   gpu_clear_display(&core());
 }
@@ -151,15 +117,11 @@ void Machine::prepare() {
   prepareProduct();
 }
 
-std::uint32_t Machine::attachControlChannel(std::uint32_t requestedFrameCap) {
-  const int clientCap = game_.dbg_server.attach(&core(), static_cast<int>(requestedFrameCap));
+void Machine::attachControlChannel() {
+  game_.dbg_server.start(&core());
   store_observe_attach(core());
-  const std::uint32_t cap = clientCap > 0 ? static_cast<std::uint32_t>(clientCap) : 0u;
-  lucent::info("machine",
-               "live control channel {} (frame cap {}), store observer armed",
-               debug_server_live() ? "attached" : "not requested",
-               cap);
-  return cap;
+  lucent::info(
+      "machine", "live control channel {}, store observer armed", debug_server_live() ? "attached" : "not requested");
 }
 
 void Machine::stepFrame(std::uint32_t frame) {
@@ -169,43 +131,22 @@ void Machine::stepFrame(std::uint32_t frame) {
 }
 
 void Machine::run(std::uint32_t frameCap) {
-  // While this is alive a window close is a request this loop answers; without it the event drain
-  // ends the process, which is what every product did before the request existed.
-  const psx::input::QuitScope ownedQuit{game_.hostInput};
+  // While attached a window close is a request this loop answers; without it the drain ends the
+  // process.
+  psx::input::QuitScope quit;
+  game_.hostInput.attachQuitScope(&quit);
   lucent::info("machine", "entering the product frame loop ({})", frameCap ? "capped" : "interactive");
-  for (std::uint32_t frame = 0; frameCap == 0u || frame < frameCap; ++frame) {
+  std::uint32_t frame = 0;
+  for (; frameCap == 0u || frame < frameCap; ++frame) {
     stepFrame(frame);
-    // TAKEN, not asked: this run ended because of that request, so leaving it set would end the next
-    // run in this process on the first field.
-    if (game_.hostInput.takeQuitRequest() || game_.dbg_server.takeQuitRequest()) {
+    if (quit.take() || game_.dbg_server.takeQuitRequest()) {
       lucent::info("machine", "the run was asked to stop after {} field(s)", frame + 1u);
+      ++frame;
       break;
     }
   }
-  reportRunEnd();
-}
-
-void Machine::reportRunEnd() {
-  // The whole-run guest ledger and the guest-call census, whatever ended the run: a product whose own
-  // spine was abandoned, or whose loop returned, gets the same denominators as one that ended itself.
-  psx::cpu::logRunEndLedger(core().lightrecExecutor().counters());
-  core().guestCallCensus().log("product loop ended");
-  // PSXPORT_RAMDUMP: the AFTER-loop dump. This is not the diagnostic to reach for — a run that ends by
-  // exiting its process loop never returns here, and a missing file from this knob is therefore not
-  // evidence that RAM dumping is broken. PSXPORT_RAMDUMP_FRAME (psx::frame::FieldTurn, mid-run) is.
-  const std::string &path = psx::config::cv_ramdump.get();
-  if (path.empty()) {
-    return;
-  }
-  FILE *dump = fopen(path.c_str(), "wb");
-  if (dump == nullptr) {
-    lucent::error("machine", "end-of-run RAM dump could not open {}", path);
-    return;
-  }
-  fwrite(core().ram, 1, 0x200000, dump);
-  fclose(dump);
-  lucent::info("machine", "dumped 2MB RAM -> {}", path);
-  lucent::info("machine", "product frame loop done");
+  game_.hostInput.attachQuitScope(nullptr);
+  RunEndReport{game_}.emit(frame);
 }
 
 } // namespace psx

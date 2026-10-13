@@ -6,8 +6,7 @@
 // published to its instance, and the failure looks like a title bug for weeks.
 //
 // The second is that a title cannot come up without a control channel: `attachControlChannel` is the
-// one call that opens the endpoint AND arms the store observer AND answers the frame cap, because
-// those three answers were previously three separate opportunities to omit one.
+// one call that opens the endpoint AND arms the store observer. The run's cap is RunBudget's.
 #include "testutil.h"
 
 #include "config_var.h"
@@ -138,19 +137,11 @@ static void test_prepare_registers_the_title_overrides_before_the_preflight(void
   CHECK(true);
 }
 
-static void test_attach_answers_the_cap_a_client_needs(void) {
-  Fixture fixture;
-  psx::Machine machine{*fixture.game};
-  // No PSXPORT_DEBUG_SERVER in this run, so the requested bound is the run's own and the endpoint is
-  // not requested: the answer is the request, not a silent zero that would run forever.
-  CHECK_EQ(machine.attachControlChannel(600u), 600u);
-}
-
 static void test_the_loop_ends_on_the_clients_quit_and_owes_a_ledger(void) {
   Fixture fixture;
   psx::Machine machine{*fixture.game};
   machine.prepare();
-  machine.attachControlChannel(0u);
+  machine.attachControlChannel();
   // A client that connects and says `quit` must end the run, not just disconnect.
   fixture.game->dbg_server.requestQuit();
   machine.run(0u);
@@ -177,9 +168,6 @@ static void test_the_boot_steps_are_individually_callable(void) {
   machine.reportConfigurationOnce();
   machine.bindSession();
   machine.armHostDiagnostics();
-  // No GameConfig::bootFmv in this fixture: "this title plays no movie natively" is a real answer,
-  // and it must be answerable without an FMV decoder or a disc.
-  machine.playBootMovies();
   // Both halves of `prepare`, in order: the title's overrides, then the preflight.
   machine.prepare();
   CHECK_EQ(g_registerOverridesCalls, 1u);
@@ -207,15 +195,6 @@ static void test_configured_state_reports_instead_of_silently_booting(void) {
   CHECK(!error.empty());
 }
 
-// The run-end obligations are one implementation whether the loop was `Machine::run`'s or a spine's.
-static void test_the_run_end_report_is_owed_by_both_routes(void) {
-  Fixture fixture;
-  psx::Machine machine{*fixture.game};
-  machine.prepare();
-  machine.reportRunEnd();
-  CHECK(true);
-}
-
 // The hand-written prototype four repositories carried at their call sites is now declared by the
 // framework. Its address is what the test can check without running a boot.
 static void test_native_boot_run_is_declared_by_the_framework(void) {
@@ -223,14 +202,12 @@ static void test_native_boot_run_is_declared_by_the_framework(void) {
   CHECK(declared != nullptr);
 }
 
-static void test_a_window_close_is_a_request_only_while_a_loop_owns_the_run(void) {
-  psx::input::HostInput input;
-  CHECK(!input.quitRequested());
-  {
-    const psx::input::QuitScope scope{input};
-    CHECK(!input.quitRequested());
-  }
-  CHECK(!input.quitRequested());
+static void test_a_window_close_is_recorded_on_the_attached_scope(void) {
+  psx::input::QuitScope quit;
+  CHECK(!quit.requested());
+  quit.request();
+  CHECK(quit.take());
+  CHECK(!quit.take());
 }
 
 } // namespace
@@ -238,14 +215,12 @@ static void test_a_window_close_is_a_request_only_while_a_loop_owns_the_run(void
 int main() {
   RUN(construction_binds_the_devices_and_seeds_the_entry_registers);
   RUN(prepare_registers_the_title_overrides_before_the_preflight);
-  RUN(attach_answers_the_cap_a_client_needs);
   RUN(the_boot_steps_are_individually_callable);
   RUN(the_display_clear_is_the_frame_owners_step);
   RUN(configured_state_reports_instead_of_silently_booting);
-  RUN(the_run_end_report_is_owed_by_both_routes);
   RUN(the_loop_ends_on_the_clients_quit_and_owes_a_ledger);
   RUN(a_capped_run_stops_at_its_cap);
   RUN(native_boot_run_is_declared_by_the_framework);
-  RUN(a_window_close_is_a_request_only_while_a_loop_owns_the_run);
+  RUN(a_window_close_is_recorded_on_the_attached_scope);
   return pt_summary();
 }

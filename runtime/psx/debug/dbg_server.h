@@ -19,10 +19,8 @@ class Game;
 // The loopback port the live debug endpoint listens on, or 0 for "off".
 //
 // PSXPORT_DEBUG_SERVER carries a PORT, with 1 as the sentinel for the default, so it is read as text
-// and interpreted here — once, for both readers. `native_boot` asks whether the endpoint is on (to
-// lift the headless frame cap) and `DbgServer::start` asks which port to bind; when those two
-// answered the knob separately they could disagree about whether it was set at all, which is how a
-// capped run ended before a client could drive it.
+// and interpreted here — once, for both readers: `psx::host::RunBudget` asks whether the endpoint is
+// on and `DbgServer::start` asks which port to bind.
 //
 // Unset, empty, "0" and anything that is not a number are OFF, because a knob that silently binds a
 // port nobody asked for is worse than one that does not start.
@@ -43,10 +41,7 @@ inline int debug_server_port(std::string_view value) {
   return port == 1 ? 5959 : port;
 }
 
-// Whether a client is going to drive this run over the live endpoint. Every boot spine asks this
-// before applying its own frame cap: the cap exists to bound an unattended smoke run, and a run that
-// is driven over the socket must not be capped, or the process exits before anyone can drive it.
-// The conditions a particular spine adds (no REPL, no window) are that spine's policy and stay there.
+// Whether a client is going to drive this run over the live endpoint. `psx::host::RunBudget` reads it.
 inline bool debug_server_live() {
   return debug_server_port(psx::config::cv_debug_server.get()) != 0;
 }
@@ -78,15 +73,6 @@ public:
   // Refuses while another Game still holds the claim, exactly as a second `start()` does; reports
   // whether this Game now holds it.
   bool claimEndpoint();
-
-  // Attach the live endpoint to a boot spine that is NOT the framework's own, and answer the frame cap
-  // that spine should use. This is the one call a title-owned spine needs before its loop; `start`
-  // alone leaves the cap question unanswered, and getting that wrong ends the process before a client
-  // can drive it.
-  //
-  // Returns 0 (uncapped) when PSXPORT_DEBUG_SERVER names a port, because the cap exists to bound an
-  // unattended smoke run and a client-driven one is neither; otherwise the requested cap unchanged.
-  int attach(Core *c, int requested_frame_cap);
 
   // The once-per-frame half of a live session, called BEFORE the frame runs: while the client has
   // frozen the game, do not advance it — pump host input, re-show the last presented frame, and keep
