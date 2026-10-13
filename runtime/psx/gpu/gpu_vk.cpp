@@ -161,9 +161,6 @@ bool gpu_vk_windowed() {
 // ASPECT_AUTO's widened framebuffer: headless computed ires = round(240/240) = 1 where the same
 // build in its window computed round(720/240) = 3, so a headless capture was not the user's picture.
 // Both decisions now live in video_plan.h and take the SINK, which exists in both legs.
-// (`gpu_has_window()` is gone with the same defect: its only caller was the frame pacer's
-// `if (!gpu_has_window()) return`, which made headless unpaced. PSXPORT_NOPACE is the switch for
-// that, and it always was.)
 
 // The presented-picture target's format. RGBA8 rather than the swapchain's format so it exists
 // identically in both legs (headless has no swapchain and therefore no swapchain format) and so the
@@ -2391,6 +2388,7 @@ void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay)
   }
   SDL_EndGPURenderPass(rp);
   gpu_submit(cmd, "show_present_image");
+  game->perf.presented(std::chrono::steady_clock::now(), gdev().s_window.refresh_period_ms());
   game->hostInput.drainEvents(); // window close, ESC, and the key state the pad learns from
 }
 
@@ -2561,6 +2559,7 @@ void gpu_vk_present_image(Core *core, const uint8_t *rgba, int iw, int ih, float
   overlay_glue_record(game, cmd, rp, (int)sw, (int)sh);
   SDL_EndGPURenderPass(rp);
   gpu_submit(cmd, "gpu_vk_present_image");
+  game->perf.presented(std::chrono::steady_clock::now(), gdev().s_window.refresh_period_ms());
   game->hostInput.drainEvents(); // window close, ESC, and the key state the pad learns from
 }
 

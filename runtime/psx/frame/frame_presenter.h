@@ -58,6 +58,16 @@ public:
   virtual void present(FramePresentationBackend &backend, Core &core, CapturedFrameView frame, int guestFields) = 0;
 };
 
+// What the record path showed, for the play check: the shown record never repeats or goes backwards,
+// and every record present at 60 fps brings its in-between.
+struct PresentStability {
+  std::uint64_t recordPresents = 0;
+  std::uint64_t inBetweens = 0;
+  std::uint64_t withoutInBetween = 0;
+  std::uint64_t repeats = 0;
+  std::uint64_t backwards = 0;
+};
+
 class FramePresenter {
 public:
   FramePresenter() = default;
@@ -108,6 +118,11 @@ public:
   uint64_t fence() const {
     return fence_;
   }
+  const PresentStability &stability() const {
+    return stability_;
+  }
+  // The stability counts, once, at run end.
+  void reportStability() const;
 
 private:
   void commit(FramePresentationBackend &backend,
@@ -161,5 +176,6 @@ private:
   std::optional<present::FrameRecord> composedStore_;
   const present::FrameRecord *composed_ = nullptr;
   bool composedAdvances_ = false;
+  PresentStability stability_;
 };
 } // namespace psx::frame

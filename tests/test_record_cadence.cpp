@@ -313,7 +313,25 @@ static void test_a_copy_onto_itself_leaves_the_shown_picture_composed(void) {
   CHECK(backend.realComposed);
 }
 
+// The play check reads these: every record present after the first brings its in-between, and a
+// record that drew nothing leaves the shown record where it was, which is a repeat.
+static void test_stability_counts_in_betweens_and_repeats(void) {
+  psx::frame::FramePresenter presenter;
+  RecordBackend backend(presenter);
+  presenter.commit(backend, 2, recordAt(0, 0));
+  presenter.commit(backend, 2, recordAt(1, 20));
+  presenter.commit(backend, 2, recordAt(2, 40));
+  CHECK_EQ(presenter.stability().recordPresents, 3u);
+  CHECK_EQ(presenter.stability().inBetweens, 2u);
+  CHECK_EQ(presenter.stability().withoutInBetween, 1u);
+  CHECK_EQ(presenter.stability().repeats, 0u);
+  presenter.commit(backend, 2, FrameRecord(3, true));
+  CHECK_EQ(presenter.stability().repeats, 1u);
+  CHECK_EQ(presenter.stability().backwards, 0u);
+}
+
 int main(void) {
+  RUN(stability_counts_in_betweens_and_repeats);
   RUN(consecutive_records_present_the_blend_then_n);
   RUN(a_cut_shows_n_as_its_in_between);
   RUN(a_record_that_does_not_follow_has_no_in_between);

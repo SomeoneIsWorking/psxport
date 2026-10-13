@@ -54,6 +54,8 @@ public:
   // "how big is the SINK" in the windowed leg ONLY (see gpu_vk_present_sink_size).
   int pixel_width() const;
   int pixel_height() const;
+  // The refresh period of the display the window is on, in ms; 0 headless or when unknown.
+  double refresh_period_ms() const;
 
 private:
   SDL_Window *s_win = nullptr;

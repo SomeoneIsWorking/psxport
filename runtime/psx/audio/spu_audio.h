@@ -74,6 +74,16 @@ public:
   } // SBS/dual-core: advance XA for game logic only, no output
   void wavReopen(const char *path); // REPL music-dump: finalize current WAV, start a fresh one
 
+  // Queue underruns after playback first started, and fields dropped above the queue limit.
+  [[nodiscard]] std::uint64_t reprimes() const {
+    return mReprimes;
+  }
+  [[nodiscard]] std::uint64_t drops() const {
+    return mDrops;
+  }
+  // The two counts, once, at run end.
+  void reportQueue() const;
+
   void clearFieldReports() {
     mFieldReports.clear();
   }
@@ -105,6 +115,8 @@ private:
   bool mStreamStarted = false;        // playback begins only after the target level is primed
 #endif
   AudioQueueSteer mSteer;
+  std::uint64_t mReprimes = 0;
+  std::uint64_t mDrops = 0;
   int mState = 0;             // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
   bool mOutputEnabled = true; // this session's sound reaches the host speakers (see setOutputEnabled)
   FILE *mWav = nullptr;       // open WAV file, or NULL

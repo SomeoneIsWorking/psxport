@@ -100,7 +100,44 @@ static void test_two_windows_report_twice(void) {
   CHECK_EQ(averages, 2);
 }
 
+// ── the present series is recorded with the channel off, and counts misses and their longest run ──
+static void test_presents_count_misses_and_the_longest_run(void) {
+  lucent::enable_channels("");
+  GpuPerf perf;
+  const double vsync = 1000.0 / 60.0;
+  const std::chrono::steady_clock::time_point start{};
+  double at = 0.0;
+  // 16.7, 40, 40, 16.7, 30 ms: three intervals over 1.5 vsync, two of them in a row.
+  for (double interval : {0.0, 16.7, 40.0, 40.0, 16.7, 30.0}) {
+    at += interval;
+    perf.presented(start + std::chrono::microseconds(static_cast<long>(at * 1000.0)), vsync);
+  }
+  const GpuPerf::PresentSeries series = perf.presentSeries();
+  CHECK_EQ(series.intervals, 5u);
+  CHECK_EQ(series.missed, 3u);
+  CHECK_EQ(series.longestMissRun, 2u);
+  CHECK(perf.presentIntervals().worstMs() >= 39.9);
+}
+
+// ── a restart drops the gap before it: boot is not a missed present ──
+static void test_a_restarted_series_opens_no_interval_across_the_gap(void) {
+  lucent::enable_channels("");
+  GpuPerf perf;
+  const double vsync = 1000.0 / 60.0;
+  const std::chrono::steady_clock::time_point start{};
+  perf.presented(start, vsync);
+  perf.restartPresentSeries();
+  perf.presented(start + std::chrono::milliseconds(7500), vsync);
+  perf.presented(start + std::chrono::microseconds(7516700), vsync);
+  const GpuPerf::PresentSeries series = perf.presentSeries();
+  CHECK_EQ(series.intervals, 1u);
+  CHECK_EQ(series.missed, 0u);
+  CHECK(perf.presentIntervals().worstMs() < 17.0);
+}
+
 int main(void) {
+  RUN(presents_count_misses_and_the_longest_run);
+  RUN(a_restarted_series_opens_no_interval_across_the_gap);
   RUN(a_closed_window_reports_its_average_and_its_distribution);
   RUN(the_average_line_names_every_phase);
   RUN(an_unfinished_window_reports_nothing);
