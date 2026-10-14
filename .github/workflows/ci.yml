@@ -33,5 +33,7 @@ jobs:
           enable-cache: false
       - name: Provision the shared Linux build inputs
         uses: ./.github/actions/setup-linux
+      - name: Fetch the shared policy tools
+        run: uv run --frozen python tools/policy/harness.py --fetch
       - name: Run the asset-free product and repository contracts
         run: uv run --frozen python tools/verify.py

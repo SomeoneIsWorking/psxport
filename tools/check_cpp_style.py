@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from policy import harness
 from repository_policy import (
     deleted_path_references,
     forbidden_architecture_references,
@@ -369,6 +370,56 @@ def check_tidy(root: Path, compile_commands: Path, sources: list[Path], touched_
     return 1 if result.returncode else 0
 
 
+ACCEPTED_SITES = Path("tools") / "policy" / "accepted.txt"
+ENTRY_DIRECTORIES = {"tests", "tools"}
+PRODUCT_MAIN = SCRIPT_ROOT / "runtime" / "psx" / "host" / "product_main.cpp"
+
+
+def excluded_directories(root: Path) -> list[Path]:
+    found: list[Path] = []
+    for base, directories, _ in os.walk(root):
+        for name in list(directories):
+            if name == ".git" or name in EXCLUDED_COMPONENTS:
+                if name != ".git":
+                    found.append(Path(base) / name)
+                directories.remove(name)
+    return found
+
+
+def ownership_command(root: Path, compile_commands: Path, sources: list[Path]) -> list[str]:
+    """The re-harness cpp_policy run for this repository, before its accepted sites are applied."""
+    policy = harness.tool("cpp_policy.py")
+    database_file = compile_commands / "compile_commands.json" if compile_commands.is_dir() else compile_commands
+    entry_roots = sorted(
+        {
+            root.joinpath(*path.relative_to(root).parts[: index + 1])
+            for path in sources
+            for index, part in enumerate(path.relative_to(root).parts[:-1])
+            if part in ENTRY_DIRECTORIES
+        }
+    )
+    command = [sys.executable, str(policy), "--compile-commands", str(database_file), "--root", str(root)]
+    for directory in excluded_directories(root):
+        command += ["--exclude", str(directory)]
+    for entry_root in [*entry_roots, PRODUCT_MAIN]:
+        command += ["--entry-root", str(entry_root)]
+    return command
+
+
+def check_ownership(root: Path, compile_commands: Path, sources: list[Path]) -> int:
+    """Ownership rules, plus `main` only in an entry root, against the repository's accepted sites."""
+    try:
+        command = ownership_command(root, compile_commands, sources)
+    except harness.HarnessMissing as error:
+        print(f"cpp-policy: REFUSED — {error}", file=sys.stderr)
+        return 2
+    accepted = root / ACCEPTED_SITES
+    if accepted.is_file():
+        command += ["--accept", str(accepted)]
+    result = subprocess.run(command, cwd=root, check=False)
+    return result.returncode
+
+
 def selftest_write_database(root: Path, compiler: str = "clang++", include_source: bool = True) -> None:
     build = root / "build"
     build.mkdir(exist_ok=True)
@@ -446,6 +497,10 @@ def selftest() -> int:
         source_text = "int main() {\n  return 0;\n}\n"
         (root / "a.cpp").write_text(source_text, encoding="utf-8")
         (root / "deleted.cpp").write_text(source_text, encoding="utf-8")
+        accepted = root / ACCEPTED_SITES
+        accepted.parent.mkdir(parents=True)
+        accepted_text = "# the fixture's hand-written main\na.cpp:entry point:main\n"
+        accepted.write_text(accepted_text, encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(root)], check=True)
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
         subprocess.run(
@@ -509,6 +564,13 @@ def selftest() -> int:
         print("cpp-policy selftest: PASS nested scratch excluded at any depth")
 
         expect("happy clean tree lints one TU", 0, "checked 1 of 1 first-party C++ TU")
+        expect("an accepted hand-written main passes the ownership scan", 0, "1 accepted sites")
+        expect("ownership-only runs the scan alone", 0, "1 accepted sites", "--ownership-only")
+        accepted.write_text("", encoding="utf-8")
+        expect("main outside an entry root fails", 1, "a.cpp:1: entry point: main")
+        accepted.write_text(accepted_text + "a.cpp:block-scope static:gone\n", encoding="utf-8")
+        expect("an accepted site that no longer occurs fails", 1, "no longer occurs: a.cpp:block-scope static:gone")
+        accepted.write_text(accepted_text, encoding="utf-8")
         expect("tracked deletion is excluded", 0, "1 worktree-deleted file(s)")
 
         docs = root / "docs"
@@ -686,6 +748,11 @@ def main() -> int:
         action="store_true",
         help="run the whole-tree first-party policy scan without format, size, or clang-tidy checks",
     )
+    parser.add_argument(
+        "--ownership-only",
+        action="store_true",
+        help="run only the re-harness ownership and entry-point scan, for a repo that gates format and tidy itself",
+    )
     args = parser.parse_args()
 
     if args.selftest:
@@ -711,6 +778,9 @@ def main() -> int:
         f"{len(generated)} generated file(s), and {len(deleted)} worktree-deleted file(s)"
     )
 
+    compile_commands = (args.compile_commands or (root / "build")).resolve()
+    if args.ownership_only:
+        return check_ownership(root, compile_commands, sources)
     result = check_repository_policy(root)
     if result:
         return result
@@ -719,7 +789,6 @@ def main() -> int:
 
     caps = dict(PSXPORT_CAPS) if root == SCRIPT_ROOT else {}
     caps.update(dict(args.cap))
-    compile_commands = (args.compile_commands or (root / "build")).resolve()
 
     result = check_format(root, sources)
     if result:
@@ -730,7 +799,7 @@ def main() -> int:
     result = check_tidy(root, compile_commands, sources, args.tidy_touched)
     if result:
         return result
-    return 0
+    return check_ownership(root, compile_commands, sources)
 
 
 if __name__ == "__main__":

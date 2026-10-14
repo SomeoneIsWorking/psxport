@@ -420,3 +420,21 @@ set_source_files_properties(
 set_source_files_properties(
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/state.c
   PROPERTIES COMPILE_DEFINITIONS "MEDNAFEN_VERSION_NUMERIC=0;HAVE_STRL;_DEFAULT_SOURCE")
+
+# ---- the product executable --------------------------------------------------------------------
+# psxport_add_product(<target> CATALOG <factory> HEADER <header> [SOURCES <file>...] [LIBRARIES <lib>...])
+# One executable whose main is runtime/psx/host/product_main.cpp. <factory> is the title's
+# `std::unique_ptr<psx::host::TitleCatalog>()` function, declared in <header>.
+function(psxport_add_product target)
+  cmake_parse_arguments(PARSE_ARGV 1 PRODUCT "" "CATALOG;HEADER" "SOURCES;LIBRARIES")
+  if(NOT PRODUCT_CATALOG OR NOT PRODUCT_HEADER OR PRODUCT_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR
+      "psxport_add_product(${target} CATALOG <factory> HEADER <header> [SOURCES ...] [LIBRARIES ...])")
+  endif()
+  add_executable(${target}
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../runtime/psx/host/product_main.cpp" ${PRODUCT_SOURCES})
+  target_compile_definitions(${target} PRIVATE
+    "PSXPORT_PRODUCT_CATALOG=${PRODUCT_CATALOG}"
+    "PSXPORT_PRODUCT_CATALOG_HEADER=\"${PRODUCT_HEADER}\"")
+  target_link_libraries(${target} PRIVATE psxport ${PRODUCT_LIBRARIES})
+endfunction()

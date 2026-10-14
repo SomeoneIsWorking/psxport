@@ -90,8 +90,7 @@ private:
   uint8_t *payload_buf = nullptr;  // concatenated BS payload (512 KB)
   uint16_t *codes_buf = nullptr;   // MDEC run-level code stream (512K codes)
   uint8_t *pixels24_buf = nullptr; // decoded RGB888 frame (1024x512 px, 3 bytes each)
-  // RGBA expansion scratch for presentation, owned here rather than as a function-local static
-  // (tools/cpp_policy.py).
+  // RGBA expansion scratch for presentation; re-harness cpp_policy forbids a function-local static.
   std::vector<uint8_t> rgba_scratch_;
   int last_frame_width_ = 0; // the frame replayLastFrame() re-presents; 0 until the first frame
   int last_frame_height_ = 0;

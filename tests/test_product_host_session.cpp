@@ -36,6 +36,7 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -210,18 +211,22 @@ private:
   GuestProgramImage image_{};
 };
 
-// Two titles over the same executable bytes, so a picker has two panels.
+// Two titles over the same executable bytes, so a picker has two panels; or only the first.
 class Catalog final : public psx::host::TitleCatalog {
 public:
-  Catalog(Script &script, const std::string &sha256) : sha256_(sha256), runtimes_{Runtime(script), Runtime(script)} {
+  Catalog(Script &script, const std::string &sha256, std::filesystem::path root, std::size_t count = 2)
+      : sha256_(sha256), root_(std::move(root)), count_(count), runtimes_{Runtime(script), Runtime(script)} {
     titles_[0] = identity("One", "SCUS_000.01", "alpha");
     titles_[1] = identity("Two", "SCUS_000.02", "beta");
   }
   std::string_view productName() const override {
     return "Product host test";
   }
+  std::filesystem::path provisioningRoot() const override {
+    return root_;
+  }
   std::span<const psx::host::TitleIdentity> titles() const override {
-    return titles_;
+    return std::span(titles_).first(count_);
   }
   GameRuntime &runtime(std::size_t index) const override {
     return runtimes_[index];
@@ -243,6 +248,8 @@ private:
   }
 
   std::string sha256_;
+  std::filesystem::path root_;
+  std::size_t count_;
   mutable std::array<Runtime, 2> runtimes_;
   std::array<psx::host::TitleIdentity, 2> titles_{};
 };
@@ -285,6 +292,17 @@ struct Fixture {
   }
 };
 
+// The host's command line: `run(host)` is the bare product, `run(host, {path})` an executable.
+int run(psx::host::ProductHost &host, std::vector<std::string> arguments = {}) {
+  arguments.insert(arguments.begin(), "product_host_test");
+  std::vector<char *> argv;
+  argv.reserve(arguments.size());
+  for (std::string &argument : arguments) {
+    argv.push_back(argument.data());
+  }
+  return host.run(static_cast<int>(argv.size()), argv.data());
+}
+
 bool g_finished = false;
 
 // A window close used to end the process with exit(0) from inside the event drain, which would end
@@ -301,11 +319,11 @@ void refuseEarlyExit() {
 static void test_a_session_ends_on_its_cap_counted_in_fence_steps(void) {
   Fixture fixture;
   Script script;
-  const Catalog catalog(script, fixture.sha256);
+  const Catalog catalog(script, fixture.sha256, fixture.root);
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 5);
   {
-    psx::host::ProductHost host(catalog, fixture.root);
-    CHECK_EQ(host.runExecutable(fixture.alpha), 0);
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
   }
   CHECK_EQ(script.steps, 5u);
   CHECK_EQ(fixture.count("run complete: product_steps=5 presentation_fences=5 "), 1);
@@ -316,11 +334,11 @@ static void test_a_client_quit_reaches_the_run_end_report(void) {
   Fixture fixture;
   Script script;
   script.quitAtStep = 3;
-  const Catalog catalog(script, fixture.sha256);
+  const Catalog catalog(script, fixture.sha256, fixture.root);
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 50);
   {
-    psx::host::ProductHost host(catalog, fixture.root);
-    CHECK_EQ(host.runExecutable(fixture.alpha), 0);
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
   }
   CHECK_EQ(script.steps, 3u);
   CHECK_EQ(fixture.count("was asked to quit after 3 step(s)"), 1);
@@ -332,11 +350,11 @@ static void test_a_window_close_reaches_the_run_end_report(void) {
   Fixture fixture;
   Script script;
   script.closeAtStep = 4;
-  const Catalog catalog(script, fixture.sha256);
+  const Catalog catalog(script, fixture.sha256, fixture.root);
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 50);
   {
-    psx::host::ProductHost host(catalog, fixture.root);
-    CHECK_EQ(host.runExecutable(fixture.alpha), 0);
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
   }
   CHECK_EQ(script.steps, 4u);
   CHECK_EQ(fixture.count("was asked to quit after 4 step(s)"), 1);
@@ -349,13 +367,13 @@ static void test_a_window_close_reaches_the_run_end_report(void) {
 static void test_panels_report_nothing_load_no_state_and_leave_the_watchdog_armed(void) {
   Fixture fixture;
   Script script;
-  const Catalog catalog(script, fixture.sha256);
+  const Catalog catalog(script, fixture.sha256, fixture.root);
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 8);
   psx::config::cv_load_state.set(psx::config::Layer::Runtime, "no/such/state.sav");
   {
-    psx::host::ProductHost host(catalog, fixture.root);
-    CHECK(watchdog_armed());
-    CHECK_EQ(host.runSelector(), 0);
+    psx::host::ProductHost host(catalog);
+    CHECK(!watchdog_armed());
+    CHECK_EQ(run(host), 0);
     CHECK(watchdog_armed());
   }
   CHECK(!watchdog_armed());
@@ -370,11 +388,11 @@ static void test_a_window_close_in_the_selector_ends_the_process_cleanly(void) {
   Fixture fixture;
   Script script;
   script.panelCloses = true;
-  const Catalog catalog(script, fixture.sha256);
+  const Catalog catalog(script, fixture.sha256, fixture.root);
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 200);
   {
-    psx::host::ProductHost host(catalog, fixture.root);
-    CHECK_EQ(host.runSelector(), 0);
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host), 0);
     CHECK(watchdog_armed());
   }
   CHECK(script.steps > 0u);
@@ -471,11 +489,11 @@ static void test_a_title_that_ends_its_run_returns_to_the_selector_and_loads_no_
   const std::filesystem::path state = fixture.root / "first.state";
   script.saveStateTo = state;
   script.card = (fixture.root / "card.mcr").string();
-  const Catalog catalog(script, fixture.sha256);
+  const Catalog catalog(script, fixture.sha256, fixture.root);
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 2);
   {
-    psx::host::ProductHost host(catalog, fixture.root);
-    CHECK_EQ(host.runExecutable(fixture.alpha), 0);
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
   }
   CHECK(std::filesystem::exists(state));
 
@@ -489,9 +507,9 @@ static void test_a_title_that_ends_its_run_returns_to_the_selector_and_loads_no_
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 3000);
   psx::config::cv_load_state.set(psx::config::Layer::Runtime, state.string());
   {
-    psx::host::ProductHost host(catalog, fixture.root);
+    psx::host::ProductHost host(catalog);
     PickClient client(port, 2);
-    CHECK_EQ(host.runSelector(), 0);
+    CHECK_EQ(run(host), 0);
   }
   CHECK_EQ(script.productSessions, 2u);
   CHECK(!std::filesystem::exists(state));
@@ -500,11 +518,59 @@ static void test_a_title_that_ends_its_run_returns_to_the_selector_and_loads_no_
   CHECK_EQ(fixture.count("run complete: product_steps=2 "), 3);
 }
 
+static void test_help_names_the_product_and_boots_nothing(void) {
+  Fixture fixture;
+  Script script;
+  const Catalog catalog(script, fixture.sha256, fixture.root);
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host, {"--help"}), 0);
+    CHECK_EQ(run(host, {"-h"}), 0);
+    CHECK(!watchdog_armed());
+  }
+  CHECK_EQ(script.steps, 0u);
+  CHECK_EQ(fixture.count("run budget:"), 0);
+  CHECK_EQ(fixture.count("Usage: product_host_test [executable]"), 2);
+  CHECK_EQ(fixture.count("the Product host test title selector over "), 2);
+  CHECK_EQ(fixture.count("  Two (SCUS_000.02)"), 2);
+}
+
+static void test_unexpected_arguments_are_refused(void) {
+  Fixture fixture;
+  Script script;
+  const Catalog catalog(script, fixture.sha256, fixture.root);
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host, {"--frames"}), 2);
+    CHECK_EQ(run(host, {fixture.alpha.string(), "extra"}), 2);
+  }
+  CHECK_EQ(script.steps, 0u);
+  CHECK_EQ(fixture.count("unexpected arguments"), 2);
+}
+
+// One title needs no selector: the bare product boots the provisioned executable directly.
+static void test_a_single_title_catalog_skips_the_selector(void) {
+  Fixture fixture;
+  Script script;
+  const Catalog catalog(script, fixture.sha256, fixture.root, 1);
+  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 3);
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host), 0);
+  }
+  CHECK_EQ(script.steps, 3u);
+  CHECK_EQ(fixture.count("booting panel"), 0);
+  CHECK_EQ(fixture.count("run complete: product_steps=3 "), 1);
+}
+
 int main(void) {
   std::atexit(refuseEarlyExit);
   // The product boot clears the display, which presents through a real (headless) GPU device.
   SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "offscreen", SDL_HINT_OVERRIDE);
   SDL_Init(SDL_INIT_EVENTS);
+  RUN(help_names_the_product_and_boots_nothing);
+  RUN(unexpected_arguments_are_refused);
+  RUN(a_single_title_catalog_skips_the_selector);
   RUN(a_session_ends_on_its_cap_counted_in_fence_steps);
   RUN(a_client_quit_reaches_the_run_end_report);
   RUN(a_window_close_reaches_the_run_end_report);

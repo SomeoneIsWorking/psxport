@@ -52,6 +52,21 @@ foreach(test_src IN LISTS PSXPORT_TEST_SRCS)
     TIMEOUT 60)
 endforeach()
 
+# The framework main over an empty catalog: psxport_add_product and product_main.cpp built and run here.
+psxport_add_product(psxport_product_fixture
+  CATALOG psx::host::fixture::createCatalog
+  HEADER product_fixture_catalog.h
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/product_fixture_catalog.cpp)
+target_include_directories(psxport_product_fixture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(psxport_product_fixture PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+foreach(option IN ITEMS -h --help)
+  add_test(NAME product_main_help${option} COMMAND psxport_product_fixture ${option})
+  set_tests_properties(product_main_help${option} PROPERTIES
+    PASS_REGULAR_EXPRESSION "Usage: psxport_product_fixture \\[executable\\].*Product fixture title selector")
+endforeach()
+add_test(NAME product_main_refuses_arguments COMMAND psxport_product_fixture --frames 9)
+set_tests_properties(product_main_refuses_arguments PROPERTIES WILL_FAIL TRUE)
+
 add_test(NAME test_sync_submodules
          COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sync_submodules.py")
 set_tests_properties(test_sync_submodules PROPERTIES TIMEOUT 60)
