@@ -17,7 +17,7 @@ class Core;
 namespace psx::frame {
 
 // The services around one display field. Stateless by design: it owns an ORDER, not a session, so
-// every loop — the framework's, `psx::Machine`'s, or a title's — calls the same two halves and gets
+// every loop — `TitleSession`'s or a title's own — calls the same two halves and gets
 // the same obligations fulfilled.
 class FieldTurn {
 public:

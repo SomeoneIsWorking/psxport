@@ -1,4 +1,4 @@
-// Cd::overridesInit is part of Machine::bindDevices' shipping path. Direct GameRuntime consumers have no
+// Cd::overridesInit is part of TitleSession::boot's device binds. Direct GameRuntime consumers have no
 // legacy GameConfig by contract, so that path must accept an empty title-CD group while leaving
 // typed PlatformHlePlan registration to PlatformHle::initBuiltins. Adapter consumers retain the
 // existing legacy CD address table.
@@ -74,7 +74,7 @@ void test_direct_runtime_cd_plan_remains_owned_by_platform_hle() {
   psxport_install_game(runtime);
   auto game = std::make_unique<Game>();
 
-  // This is the shipping Machine::bindDevices order: the legacy CD registration seam runs first, then
+  // This is the shipping TitleSession::boot bind order: the legacy CD registration seam runs first, then
   // psx::frame::FrameLoopShell asks PlatformHle to install the direct runtime's typed plan.
   game->cd.overridesInit();
   game->platform_hle.initBuiltins();

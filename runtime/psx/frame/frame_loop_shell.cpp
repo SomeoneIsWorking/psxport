@@ -34,6 +34,15 @@ FrameDriver &FrameLoopShell::prepareProduct(Game &game) const {
   return driver;
 }
 
+void FrameLoopShell::bindRunningCore(Core &core) {
+  gte_bind(&core);
+  core.rsub.projprim.bind(&core);
+  spu_bind(&core);
+  mdec_bind(&core);
+  xa_bind(&core);
+  bound_ = &core;
+}
+
 void FrameLoopShell::step(Core &core, uint32_t frame) const {
   if (!core.game) {
     lucent::error("frame-loop", "frame step has no bound Game");
@@ -58,14 +67,8 @@ void FrameLoopShell::step(Core &core, uint32_t frame) const {
   // Spyro 2's boot prefix two orders of magnitude in time. A single-session run binds once, at boot,
   // exactly as it always did; a picker binds on the switch, which is the only moment the answer can
   // differ.
-  static Core *bound = nullptr;
-  if (bound != &core) {
-    gte_bind(&core);
-    core.rsub.projprim.bind(&core);
-    spu_bind(&core);
-    mdec_bind(&core);
-    xa_bind(&core);
-    bound = &core;
+  if (bound_ != &core) {
+    bindRunningCore(core);
   }
   requireDriver(game).stepFrame(core, frame);
   // THE FRAME'S CAPTURES, HERE, because this is where the frame's presentation ends. A frame can have

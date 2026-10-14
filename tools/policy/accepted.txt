@@ -1752,7 +1752,6 @@ runtime/psx/core/mem.cpp:block-scope static:s_cw_max
 runtime/psx/core/snapshot.cpp:block-scope static:s
 runtime/psx/debug/ot_attr.cpp:block-scope static:warned
 runtime/psx/debug/ot_attr.cpp:block-scope static:warnedPartial
-runtime/psx/frame/frame_loop_shell.cpp:block-scope static:bound
 runtime/psx/frame/frame_pacer.cpp:block-scope static:warned
 runtime/psx/frame/frame_pacer.cpp:block-scope static:warnedRate
 runtime/psx/frame/frame_presenter.cpp:block-scope static:channel

@@ -6,6 +6,7 @@
 #include "game.h"
 #include "game_runtime.h"
 #include "platform_hle.h"
+#include "proj_prim.h"
 #include "testutil.h"
 
 #include <csignal>
@@ -47,6 +48,7 @@ public:
   void stepFrame(Core &core, uint32_t frame) override {
     seenCore = &core;
     seenFrame = frame;
+    stepsOnBoundCore += ProjPrim::current() == &core.rsub.projprim ? 1 : 0;
     ++calls;
     for (int fence = 0; fence < fences_; ++fence) {
       core.game->presentation.commitUnpresented(backend_);
@@ -56,6 +58,7 @@ public:
   Core *seenCore = nullptr;
   uint32_t seenFrame = 0;
   int calls = 0;
+  int stepsOnBoundCore = 0;
 
 private:
   int fences_;
@@ -146,6 +149,26 @@ static void test_shell_delegates_exactly_one_native_frame() {
   CHECK_EQ(game->presentation.fence(), 1u);
 }
 
+namespace {
+
+// Another session's boot binds the devices to its own Core; the next step of this one rebinds them.
+void test_a_step_rebinds_after_another_core_was_bound() {
+  DriverRuntime runtime(1);
+  psxport_install_game(runtime);
+  auto game = std::make_unique<Game>();
+  CountingDriver *driver = runtime.createdDriver;
+  auto other = std::make_unique<Game>();
+  psx::frame::FrameLoopShell shell;
+  shell.prepareProduct(*game);
+  shell.step(game->core, 1);
+  psx::frame::FrameLoopShell::bindRunningCore(other->core);
+  shell.step(game->core, 2);
+  CHECK_EQ(driver->calls, 2);
+  CHECK_EQ(driver->stepsOnBoundCore, 2);
+}
+
+} // namespace
+
 static void test_missing_driver_refuses_before_boot_can_run() {
   DriverRuntime runtime(-1);
   psxport_install_game(runtime);
@@ -195,6 +218,7 @@ static void test_repl_prompt_request_is_one_shot() {
 
 int main() {
   RUN(shell_delegates_exactly_one_native_frame);
+  RUN(a_step_rebinds_after_another_core_was_bound);
   RUN(missing_driver_refuses_before_boot_can_run);
   RUN(step_before_product_preflight_refuses);
   RUN(driver_returning_without_a_fence_refuses);

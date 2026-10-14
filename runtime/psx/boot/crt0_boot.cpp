@@ -1,7 +1,7 @@
 // crt0_boot.cpp — crt0_setup: the thin applier that binds the derived crt0 plan to a Core.
 //
 // It lives here, beside `crt0_boot.h`, because it is that header's shipping adapter rather than the
-// framework boot spine's: `psx::Machine::setupGuestBoot` and the dual-core harness both apply the plan,
+// framework boot spine's: `psx::host::TitleSession::boot` and the dual-core harness both apply the plan,
 // and a function that had to be reached through one of them could not be.
 #include "crt0_boot.h"
 
@@ -12,6 +12,26 @@
 #include <cstdlib>
 
 #include <lucent/log.h>
+
+namespace psx {
+
+std::string bootEntryRefusal(const GuestProgramImage *image) {
+  if (image == nullptr) {
+    return "the runtime declares no GuestProgramImage, so it has no bootEntry";
+  }
+  if (image->bootEntry == BootEntry::DriverOwned) {
+    return {};
+  }
+  const Crt0Completeness crt0 = crt0Completeness(*image);
+  if (crt0.unsetCount == 0) {
+    return {};
+  }
+  return "bootEntry=Crt0 but " + std::to_string(crt0.unsetCount) + " of " + std::to_string(crt0.required) +
+         " crt0 field(s) are unset (" + crt0.unset +
+         "); a title whose frame driver enters the guest declares bootEntry=DriverOwned";
+}
+
+} // namespace psx
 
 // crt0 register/heap setup only (no main call) — shared by native_crt0 and the dual-core harness.
 // THIS FUNCTION PERFORMS NO ARITHMETIC. Every value it applies comes from crt0_plan (crt0_boot.h),

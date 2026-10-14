@@ -204,7 +204,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/config/config.cpp   # layered CVar registry + the environment audit (docs/config.md)
   ${PSXPORT_ROOT}/runtime/psx/hle/platform_hle.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/scheduler.cpp
-  ${PSXPORT_ROOT}/runtime/psx/boot/machine.cpp # psx::Machine: the shared boot composition and the frame turn
   ${PSXPORT_ROOT}/runtime/psx/boot/run_end_report.cpp # the one report a finished run owes
   ${PSXPORT_ROOT}/runtime/psx/host/product_host.cpp # the multi-title product: picker, then the chosen title, then the picker
   ${PSXPORT_ROOT}/runtime/psx/host/title_session.cpp # one steppable boot-to-exit run of one catalog title

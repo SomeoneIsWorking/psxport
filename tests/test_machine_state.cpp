@@ -13,11 +13,14 @@
 // HERMETIC: one Game is constructed in-process and the memory card is a temp file in the CWD. No
 // disc, no window, no network.
 #include "beetle_device_state.h"
+#include "config_var.h"
+#include "config_vars.h"
 #include "device_sections.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "machine_state.h"
 #include "memcard.h"
+#include "state/state_command.h"
 #include "state_file.h"
 #include "testutil.h"
 
@@ -501,6 +504,18 @@ void test_a_title_port_adopts_its_state_after_guest_ram_is_restored(void) {
   CHECK_EQ(port.loadedMarker, port.savedMarker);
 }
 
+// Unset boots normally; a path that cannot be loaded is refused with its reason, not booted around.
+void test_a_configured_state_that_cannot_load_is_refused(void) {
+  Game &game = *makeGame();
+  std::string error;
+  CHECK(psx::state::applyConfiguredState(game.core, error));
+  psx::config::cv_load_state.set(psx::config::Layer::Runtime, "no/such/state.sav");
+  const bool applied = psx::state::applyConfiguredState(game.core, error);
+  psx::config::cv_load_state.clear(psx::config::Layer::Runtime);
+  CHECK(!applied);
+  CHECK(!error.empty());
+}
+
 } // namespace
 
 int main(void) {
@@ -511,5 +526,6 @@ int main(void) {
   RUN(a_title_that_owns_native_state_refuses_a_file_without_one);
   RUN(a_title_section_from_a_newer_title_version_is_refused);
   RUN(a_title_port_adopts_its_state_after_guest_ram_is_restored);
+  RUN(a_configured_state_that_cannot_load_is_refused);
   return pt_summary();
 }

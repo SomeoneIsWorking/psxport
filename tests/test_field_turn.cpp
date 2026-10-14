@@ -13,10 +13,10 @@
 #include "core.h"
 #include "dbg_server.h"
 #include "field_turn.h"
+#include "frame_loop_shell.h"
 #include "frame_presenter.h"
 #include "game.h"
 #include "game_runtime.h"
-#include "machine.h"
 #include "platform_hle.h"
 #include "render_queue.h"
 
@@ -32,7 +32,7 @@ constexpr std::uint32_t kVSyncAddress = 0x00014000u;
 constexpr std::size_t kRamDumpBytes = 0x200000u;
 
 // A host backend that advances the presentation fence and touches no device: the same seam
-// `test_frame_loop_shell` and `test_machine_composition` use, so a field step can run without a GPU.
+// `test_frame_loop_shell` uses, so a field step can run without a GPU.
 class FenceBackend final : public psx::frame::FramePresentationBackend {
 public:
   void emit(std::span<const RqItem>) override {}
@@ -110,6 +110,14 @@ struct Fixture {
   }
 };
 
+// One field the way a product loop runs it: the turn's halves around the title's frame step.
+void runField(Game &game, std::uint32_t frame) {
+  const psx::frame::FieldTurn turn;
+  turn.beginField(game.core);
+  psx::frame::FrameLoopShell{}.step(game.core, frame);
+  turn.endField(game.core, frame);
+}
+
 // The RAM-dump knobs are process-wide CVar state, so a test that writes them must put them back or it
 // decides the next test's behaviour.
 struct RamDumpKnobs {
@@ -137,17 +145,15 @@ std::size_t fileSize(const std::string &path) {
 // The dump is the turn's, at the frame the LOOP numbered — not at a counter the turn keeps itself.
 static void test_the_mid_run_ram_dump_happens_at_the_requested_frame(void) {
   Fixture fixture;
-  psx::Machine machine{*fixture.game};
-  machine.prepare();
+  psx::frame::FrameLoopShell{}.prepareProduct(*fixture.game);
   const std::string path = "test_field_turn_ram.bin";
   remove(path.c_str());
   {
-    // Fields are stepped directly rather than through `run`, because the run ALSO owes the AFTER-loop
-    // dump and that one would write this same path — the test is about the mid-run frame, so the run-end
-    // dump must not be able to produce what it asserts.
+    // No run-end report here: it owes the AFTER-loop dump to this same path, and the test is about the
+    // mid-run frame.
     const RamDumpKnobs knobs{path, "2"};
     for (std::uint32_t frame = 0; frame < 4u; ++frame) {
-      machine.stepFrame(frame);
+      runField(*fixture.game, frame);
     }
   }
   CHECK_EQ(fixture.driver->steps, 4u);
@@ -167,14 +173,13 @@ static void test_the_mid_run_ram_dump_happens_at_the_requested_frame(void) {
 
 static void test_no_requested_frame_writes_nothing(void) {
   Fixture fixture;
-  psx::Machine machine{*fixture.game};
-  machine.prepare();
+  psx::frame::FrameLoopShell{}.prepareProduct(*fixture.game);
   const std::string path = "test_field_turn_unset.bin";
   remove(path.c_str());
   {
     const RamDumpKnobs knobs{path, "7"};
     for (std::uint32_t frame = 0; frame < 3u; ++frame) {
-      machine.stepFrame(frame);
+      runField(*fixture.game, frame);
     }
   }
   CHECK_EQ(fixture.driver->steps, 3u);
@@ -187,15 +192,13 @@ static void test_no_requested_frame_writes_nothing(void) {
 // product must not have.
 static void test_the_client_step_is_consumed_by_the_turn(void) {
   Fixture fixture;
-  psx::Machine machine{*fixture.game};
-  machine.prepare();
+  psx::frame::FrameLoopShell{}.prepareProduct(*fixture.game);
   fixture.game->dbg_server.setPaused(true);
   fixture.game->dbg_server.addStep(1);
   CHECK(fixture.game->dbg_server.stepPending());
-  // `quit` is what lets this run end: with the pause still frozen and no step left, the second field
-  // would idle until a client arrived, and a test must never wait for one.
-  fixture.game->dbg_server.requestQuit();
-  machine.run(0u);
+  // One field only: with the pause still frozen and no step left, a second would idle until a client
+  // arrived.
+  runField(*fixture.game, 0u);
   CHECK_EQ(fixture.driver->steps, 1u);
   CHECK(!fixture.game->dbg_server.stepPending());
 }
