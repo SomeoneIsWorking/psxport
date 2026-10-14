@@ -6,8 +6,7 @@
 //
 // So the services around the frame BODY live here, once, in the order they were measured in. The body
 // itself stays the title's — `FrameLoopShell::step` calls the title's `FrameDriver::stepFrame`, takes
-// the capture and enforces the one-presentation-per-field contract, and a product's own loop is still
-// free to say what its field does.
+// the capture and enforces the one-presentation-per-field contract.
 #pragma once
 
 #include <cstdint>
@@ -17,8 +16,7 @@ class Core;
 namespace psx::frame {
 
 // The services around one display field. Stateless by design: it owns an ORDER, not a session, so
-// every loop — `TitleSession`'s or a title's own — calls the same two halves and gets
-// the same obligations fulfilled.
+// both loops — `TitleSession`'s and the picker's — call the same two halves.
 class FieldTurn {
 public:
   // Before the body. A client pause or single-step is answered first, because a paused field must not
