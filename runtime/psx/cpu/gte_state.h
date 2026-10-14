@@ -1,8 +1,8 @@
 // gte_state.h — per-instance GTE (COP2) register state, so two Cores run with SEPARATE GTE state
 // (user 2026-06-24: "make all states OOP and feed two cores separate states — we are in charge, not
 // Beetle"). The Beetle GTE math (mednafen/psx/gte.c) used a file-scope REG[64]+FLAGS; that mutable
-// state now lives in this struct, one per Game (game.h embeds it). gte.c is BOUND to one instance at a
-// time via GTE_BindState — set from the explicit Core before that core runs (gte_beetle.cpp gte_bind),
+// state now lives in this struct, one per Core (psx::cpu::Gte owns it). gte.c is BOUND to one instance at a
+// time via GTE_BindState — set from the explicit Core before that core runs (psx::cpu::Gte::bind),
 // so each core reads/writes only its own registers; nothing is shared (DivTable stays a const table).
 #pragma once
 #include <stdint.h>

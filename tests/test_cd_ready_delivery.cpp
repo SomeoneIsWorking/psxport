@@ -2,18 +2,16 @@
 //
 // WHAT IS ASSERTED, and why a test of only this path would prove nothing. The framework now stands
 // in for the BIOS's own CD-ROM interrupt handler, which is ROM code this port does not have, and
-// dispatches a title's registered stock-libcd ready callback when that title declares
-// `GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt`. Every one of those cases is the
-// NEGATIVE of a control:
+// dispatches a title's registered stock-libcd ready callback when that title binds a
+// `psx::cd::GuestInterruptLibcd`. Every one of those cases is the NEGATIVE of a control:
 //
-//   * the `HostPump` owner must still receive EXACTLY ONE callback per completion, and it must come
+//   * a host-pumped `StockLibcd` must still receive EXACTLY ONE callback per completion, and it must come
 //     from the host pump and not from the interrupt arm. A test that only exercised the new path
 //     would pass identically for a framework that delivered every completion twice;
 //   * a guest whose own registered interrupt element claims the CD bit keeps that one delivery, and
 //     the framework adds none;
 //   * a completion the arm cannot deliver is left OWED, because these completions chain and a
 //     consumed-but-undelivered one ends the chain — the defect the DMA arm's own comments record.
-#include "cd_control.h"
 #include "cd_drive_timing.h"
 #include "cd_ready_delivery.h"
 #include "cd_stock_read_completion.h"
@@ -23,15 +21,22 @@
 #include "game_iface.h"
 #include "game_runtime.h"
 #include "guest_call.h"
-#include "guest_cd_stream_callback_layout.h"
 #include "image_identity.h"
 #include "native_dispatch.h"
+#include "stock_libcd.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
+
+namespace {
+// Rebuilt by each legacy fixture; the Game from the previous fixture is gone by then.
+std::optional<LegacyGameRuntimeAdapter> legacyRuntime;
+} // namespace
 
 namespace {
 
@@ -137,7 +142,7 @@ void chainingCallback(Core *core) {
     core->r[4] = 1;
     core->r[5] = kReadBuffer;
     core->r[6] = 0x80u;
-    cd_read_stock_sync(core);
+    core->game->cd.stockLibrary()->read(*core);
     elapseReadTime(*core->game, 1);
   }
 }
@@ -155,37 +160,43 @@ void installCallback(Game &game) {
       {{image, kAckingInterruptHandler}, "cd-acking-handler", ackingInterruptHandler}));
 }
 
-class DirectRuntime final : public GameRuntime {
+// A host-pumped libcd that records each ready call it makes.
+class RecordingHostPump final : public psx::cd::StockLibcd {
 public:
-  void *createContext(Core &) override {
-    return nullptr;
+  RecordingHostPump(std::vector<uint32_t> &calls) : StockLibcd({}, {}, kCallbackSlot), calls_(calls) {}
+
+protected:
+  psx::cpu::ExecutionResult callReady(Core &core, uint32_t callback) const override {
+    calls_.push_back(callback);
+    return StockLibcd::callReady(core, callback);
   }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  const GuestCdStreamCallbackLayout *guestCdStreamCallbackLayout() const override {
-    return &callbacks;
+
+private:
+  std::vector<uint32_t> &calls_;
+};
+
+class DirectRuntime final : public psx::test::StubGameRuntime {
+public:
+  void registerOverrides(Game &game) override {
+    libcd->bind(game);
   }
 
   void stockCdReadLanded(Core &, const psx::cd::StockReadLanding &landing) override {
     landings.push_back(landing);
   }
 
-  void select(GuestCdStreamCallbackLayout::DeliveryOwner owner) {
-    callbacks.owner = owner;
+  // Takes effect at the next registerOverrides.
+  void useGuestInterrupt(psx::cd::GuestInterruptLibcd::Completion completion = {}) {
+    libcd = std::make_unique<psx::cd::GuestInterruptLibcd>(
+        psx::cd::StockLibcd::Entries{}, psx::cd::StockCommandWorkArea{}, kCallbackSlot, completion);
   }
-  void dropSlot() {
-    callbacks.readyCallbackPointer = 0;
+  void useHostPump() {
+    libcd = std::make_unique<RecordingHostPump>(cdReadyCallbacks);
   }
 
-  GuestCdStreamCallbackLayout callbacks{kCallbackSlot, GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt};
+  std::unique_ptr<psx::cd::StockLibcd> libcd;
   std::vector<psx::cd::StockReadLanding> landings;
+  std::vector<uint32_t> cdReadyCallbacks;
 };
 
 DirectRuntime &runtime() {
@@ -204,13 +215,9 @@ void resetCounters() {
 
 std::unique_ptr<Game> freshDirectGame() {
   runtime().landings.clear();
-  runtime().select(GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt);
-  runtime().dropSlot();
-  runtime().callbacks.readyCallbackPointer = kCallbackSlot;
-  runtime().callbacks.readyStatus = 1;
-  runtime().callbacks.stockReadRaisesCompletion = false;
-  psxport_install_game(runtime());
-  auto game = std::make_unique<Game>();
+  runtime().useGuestInterrupt();
+  auto game = std::make_unique<Game>(runtime());
+  runtime().registerOverrides(*game);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->cd.stream_active = 1;
@@ -228,13 +235,17 @@ std::unique_ptr<Game> freshLegacyGame() {
   config.recMainLo = kCallback & 0x1FFFFFFFu;
   config.recMainHi = (kCallback & 0x1FFFFFFFu) + 4u;
   config.cdReadyCbPtr = kCallbackSlot;
-  psxport_install_game(&config, &hooks);
-  auto game = std::make_unique<Game>();
+  legacyRuntime.emplace(config, hooks);
+  auto game = std::make_unique<Game>(*legacyRuntime);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->cd.stream_active = 1;
   resetCounters();
   return game;
+}
+
+CdReadyDelivery deliver(Game &game) {
+  return game.cd.stockLibrary()->deliverOnInterrupt(game.core);
 }
 
 // Queue `count` data-ready responses the way the controller does, the last of which becomes current.
@@ -283,7 +294,7 @@ void test_guest_interrupt_owner_receives_the_completion() {
   queueDataReady(*game, 1);
   latchCdLine(*game);
 
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::Delivered);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::Delivered);
   CHECK_EQ(callbackCalls, 1);
   CHECK_EQ(callbackA0, 1u);
   CHECK_EQ(callbackA1, 0u);
@@ -309,7 +320,7 @@ void test_delivery_empties_the_data_fifo_like_the_stock_handler() {
   game->cdc.data_rd = 12;
   game->cdc.bfrd = 1;
 
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::Delivered);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::Delivered);
   CHECK_EQ(game->cdc.bfrd, 0);
   CHECK_EQ(game->cdc.data_rd, game->cdc.data_n);
   delete game.release();
@@ -337,10 +348,9 @@ void test_one_completion_is_delivered_exactly_once() {
 // new path cannot see. The check order is the point: the arm's effect is measured as a CALLBACK
 // COUNT through the shipping poll, before the host pump ever runs.
 void test_host_pump_owner_gets_exactly_one_callback_from_the_pump() {
-  runtime().select(GuestCdStreamCallbackLayout::DeliveryOwner::HostPump);
-  runtime().callbacks.readyCallbackPointer = kCallbackSlot;
-  psxport_install_game(runtime());
-  auto game = std::make_unique<Game>();
+  runtime().useHostPump();
+  auto game = std::make_unique<Game>(runtime());
+  runtime().registerOverrides(*game);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->cd.stream_active = 1;
@@ -358,38 +368,46 @@ void test_host_pump_owner_gets_exactly_one_callback_from_the_pump() {
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u); // the completion is still owed
   CHECK_EQ(game->hle.cd_ready_delivered, 0u);     // ...and the arm never ran
 
-  // The host pump delivers it, and delivers it once.
-  game->cd.pumpStream(&game->core, 1);
+  // The host pump delivers it, once, through the libcd's ready call.
+  runtime().cdReadyCallbacks.clear();
+  game->cd.stockLibrary()->pumpStream(game->core, 1);
+  CHECK_EQ(runtime().cdReadyCallbacks.size(), 1u);
+  CHECK_EQ(runtime().cdReadyCallbacks.empty() ? 0u : runtime().cdReadyCallbacks[0], kCallback);
+  CHECK_EQ(callbackA0, 1u); // the default ready call hands libcd's data-ready code
   CHECK_EQ(callbackCalls, 1);
   CHECK_EQ(interruptHandlerCalls, 0);
   CHECK_EQ(game->cd.stream_delivered, 1u);
 
   // A further poll and a further pump add nothing: one completion, one callback.
-  game->cd.pumpStream(&game->core, 1);
+  game->cd.stockLibrary()->pumpStream(game->core, 1);
   game->hle.irqPoll(&game->core);
   CHECK_EQ(callbackCalls, 1);
   CHECK_EQ(game->hle.cd_ready_delivered, 0u); // the interrupt arm never ran at all
   delete game.release();
 }
 
-// The same control read through the typed entry points, so a reader can see the refusal is the
-// DECLARATION and not a side effect of the poll.
-void test_the_owner_declaration_is_the_gate() {
-  runtime().select(GuestCdStreamCallbackLayout::DeliveryOwner::HostPump);
-  runtime().callbacks.readyCallbackPointer = kCallbackSlot;
-  psxport_install_game(runtime());
-  auto hostPump = std::make_unique<Game>();
-  CHECK_EQ(cdReadyCallbackOwnedByGuestInterrupt(hostPump->core), false);
-  CHECK_EQ(cdReadyCompletionOwed(hostPump->core), false);
+// The same control read through the libcd itself: the refusal is the bound class, not a side effect
+// of the poll.
+void test_the_bound_libcd_is_the_gate() {
+  runtime().useHostPump();
+  auto hostPump = std::make_unique<Game>(runtime());
+  runtime().registerOverrides(*hostPump);
+  armCdLine(*hostPump);
+  queueDataReady(*hostPump, 1);
+  latchCdLine(*hostPump);
+  CHECK_EQ(hostPump->cd.stockLibrary()->deliversOnInterrupt(), false);
+  CHECK_EQ(deliver(*hostPump), CdReadyDelivery::NotOwned);
+  CHECK_EQ(cdc_current_irq_type(&hostPump->cdc), 1u);
+  delete hostPump.release();
 
-  runtime().select(GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt);
-  auto guestInterrupt = std::make_unique<Game>();
-  CHECK_EQ(cdReadyCallbackOwnedByGuestInterrupt(guestInterrupt->core), true);
+  runtime().useGuestInterrupt();
+  auto guestInterrupt = std::make_unique<Game>(runtime());
+  runtime().registerOverrides(*guestInterrupt);
+  CHECK_EQ(guestInterrupt->cd.stockLibrary()->deliversOnInterrupt(), true);
   armCdLine(*guestInterrupt);
   queueDataReady(*guestInterrupt, 1);
   latchCdLine(*guestInterrupt);
-  CHECK_EQ(cdReadyCompletionOwed(guestInterrupt->core), true);
-  delete hostPump.release();
+  CHECK_EQ(psx::cd::readyCompletionOwed(guestInterrupt->core), true);
   delete guestInterrupt.release();
 }
 
@@ -397,11 +415,11 @@ void test_the_owner_declaration_is_the_gate() {
 // though the same slot holds the same callback.
 void test_legacy_consumer_is_not_owned_by_the_interrupt() {
   auto game = freshLegacyGame();
-  CHECK_EQ(cdReadyCallbackOwnedByGuestInterrupt(game->core), false);
+  CHECK_EQ(game->cd.stockLibrary()->deliversOnInterrupt(), false);
   armCdLine(*game);
   queueDataReady(*game, 1);
   latchCdLine(*game);
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::NotOwned);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::NotOwned);
   game->hle.irqPoll(&game->core);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u);
@@ -533,14 +551,14 @@ void test_masked_cd_line_owes_the_completion() {
   queueDataReady(*game, 1);
   latchCdLine(*game);
 
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::NothingOwed);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::NothingOwed);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u);
   CHECK_EQ(game->hle.cd_ready_delivered, 0u);
   CHECK_EQ(game->hle.cd_ready_declined, 0u); // not owed is not a declined delivery
 
   game->core.mem_w32(kIMask, 1u << 2u);
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::Delivered);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::Delivered);
   CHECK_EQ(callbackCalls, 1);
   delete game.release();
 }
@@ -553,7 +571,7 @@ void test_a_non_data_ready_response_is_not_a_ready_completion() {
   queueResponse(*game, 3u);
   latchCdLine(*game);
 
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::NothingOwed);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::NothingOwed);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 3u);
   delete game.release();
@@ -596,13 +614,13 @@ void test_no_installed_callback_leaves_the_completion_owed() {
   latchCdLine(*game);
   game->core.mem_w32(kCallbackSlot, 0u);
 
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::NothingOwed);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::NothingOwed);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u);
   CHECK_EQ(game->hle.i_stat & (1u << 2u), 0x4u); // the line is still asserted; nobody serviced it
   CHECK_EQ(game->hle.cd_ready_declined, 1u);
 
   game->core.mem_w32(kCallbackSlot, kCallback);
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::Delivered);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::Delivered);
   CHECK_EQ(callbackCalls, 1);
   delete game.release();
 }
@@ -621,17 +639,17 @@ void test_reentrant_poll_defers_and_the_chain_continues() {
   // Stand in for a poll taken from inside the ready callback: `in_irq` is exactly what a guest
   // callback's own function-entry poll sees.
   game->hle.in_irq = 1;
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::NothingOwed);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::NothingOwed);
   game->hle.in_irq = 0;
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(game->hle.cd_ready_declined, 1u);
 
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::Delivered);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::Delivered);
   CHECK_EQ(callbackCalls, 1);
   CHECK_EQ(game->cdc.index, 0);
   // The second completion is STILL owed — the chain is intact, not truncated.
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u);
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::Delivered);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::Delivered);
   CHECK_EQ(callbackCalls, 2);
   CHECK_EQ(game->hle.cd_ready_delivered, 2u);
   CHECK_EQ(game->hle.cd_ready_declined, 1u);
@@ -665,19 +683,19 @@ void test_delivery_waits_for_a_call_coherent_boundary() {
   latchCdLine(*game);
   game->core.active_native_address = kCallback;
 
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::NothingOwed);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::NothingOwed);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u);
 
   game->core.active_native_address = 0u;
-  CHECK_EQ(deliverCdReadyCompletionOnInterrupt(game->core), CdReadyDelivery::Delivered);
+  CHECK_EQ(deliver(*game), CdReadyDelivery::Delivered);
   CHECK_EQ(callbackCalls, 1);
   delete game.release();
 }
 
 // ----------------------------------------------------------------------------
 // The completion a SYNCHRONOUS stock CdRead owes a guest that chains reads from its ready callback
-// (runtime/psx/cd_stock_read_completion.*). These drive the shipping `cd_read_stock_sync` with fake
+// (runtime/psx/cd/cd_stock_read_completion.*). These drive the bound `StockLibcd::read` with fake
 // sectors through the controller's sector-source binding, and read the answer as a CALLBACK COUNT through
 // the shipping poll. Every positive has a negative beside it, because a count of 0 is also what a
 // framework that never raised anything would print.
@@ -699,15 +717,15 @@ void stockRead(Game &game, uint32_t sectors) {
   game.core.r[4] = sectors;
   game.core.r[5] = kReadBuffer;
   game.core.r[6] = 0x80u;
-  cd_read_stock_sync(&game.core);
+  game.cd.stockLibrary()->read(game.core);
   CHECK_EQ(game.core.r[2], 1u);
   elapseReadTime(game, sectors);
 }
 
 std::unique_ptr<Game> freshStockReadGame(bool declareCompletion, uint8_t status) {
   auto game = freshDirectGame();
-  runtime().callbacks.readyStatus = status;
-  runtime().callbacks.stockReadRaisesCompletion = declareCompletion;
+  runtime().useGuestInterrupt({.status = status, .perStockRead = declareCompletion});
+  runtime().registerOverrides(*game);
   game->cdc.disc_read_raw_fn = fakeSector;
   sectorsServed = 0;
   armCdLine(*game);
@@ -768,7 +786,7 @@ void test_a_multi_sector_read_owes_one_completion() {
   delete game.release();
 }
 
-// NEGATIVE 1: a GuestInterrupt title that does not opt in (Spider-Man 1's shape) gets nothing, and its
+// NEGATIVE 1: a GuestInterruptLibcd that does not opt in (Spider-Man 1's shape) gets nothing, and its
 // controller is untouched.
 void test_guest_interrupt_without_the_declaration_gets_no_completion() {
   auto game = freshStockReadGame(false, 1);
@@ -778,17 +796,14 @@ void test_guest_interrupt_without_the_declaration_gets_no_completion() {
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
   CHECK_EQ(game->hle.cd_ready_delivered, 0u);
-  CHECK_EQ(psx::cd::stockReadOwesCompletion(game->core), false);
   delete game.release();
 }
 
-// NEGATIVE 2: the flag means nothing under the host-pump owner, which keeps its own single delivery.
+// NEGATIVE 2: a host-pumped libcd keeps its own single delivery and raises no completion.
 void test_host_pump_owner_gets_no_stock_read_completion() {
-  runtime().select(GuestCdStreamCallbackLayout::DeliveryOwner::HostPump);
-  runtime().callbacks.readyCallbackPointer = kCallbackSlot;
-  runtime().callbacks.stockReadRaisesCompletion = true;
-  psxport_install_game(runtime());
-  auto game = std::make_unique<Game>();
+  runtime().useHostPump();
+  auto game = std::make_unique<Game>(runtime());
+  runtime().registerOverrides(*game);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->cdc.disc_read_raw_fn = fakeSector;
@@ -799,7 +814,6 @@ void test_host_pump_owner_gets_no_stock_read_completion() {
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
   CHECK_EQ(game->hle.cd_ready_delivered, 0u);
-  runtime().callbacks.stockReadRaisesCompletion = false;
   delete game.release();
 }
 
@@ -822,14 +836,14 @@ void test_a_failed_or_empty_read_owes_nothing() {
   game->core.r[4] = 0;
   game->core.r[5] = kReadBuffer;
   game->core.r[6] = 0x80u;
-  cd_read_stock_sync(&game->core); // zero sectors
+  game->cd.stockLibrary()->read(game->core); // zero sectors
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
 
   game->cdc.disc_read_raw_fn = [](DiscState *, uint32_t, uint8_t *, uint32_t) -> int {
     return 0;
   };
   game->core.r[4] = 1;
-  cd_read_stock_sync(&game->core);
+  game->cd.stockLibrary()->read(game->core);
   CHECK_EQ(game->core.r[2], 0u);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
   game->hle.irqPoll(&game->core);
@@ -910,20 +924,20 @@ void test_a_failed_or_empty_read_announces_no_landing() {
   game->core.r[4] = 0;
   game->core.r[5] = kReadBuffer;
   game->core.r[6] = 0x80u;
-  cd_read_stock_sync(&game->core); // zero sectors
+  game->cd.stockLibrary()->read(game->core); // zero sectors
   CHECK_EQ(runtime().landings.size(), 0u);
 
   game->cdc.disc_read_raw_fn = [](DiscState *, uint32_t lba, uint8_t *out, uint32_t) -> int {
     return lba == 100u ? fakeSector(nullptr, lba, out, 0u) : 0; // the second sector is unreadable
   };
   game->core.r[4] = 2;
-  cd_read_stock_sync(&game->core);
+  game->cd.stockLibrary()->read(game->core);
   CHECK_EQ(game->core.r[2], 0u);
   CHECK_EQ(runtime().landings.size(), 0u);
 
   game->cd.setloc_lba = -1; // never positioned: refused before any byte is read
   game->core.r[4] = 1;
-  cd_read_stock_sync(&game->core);
+  game->cd.stockLibrary()->read(game->core);
   CHECK_EQ(runtime().landings.size(), 0u);
   delete game.release();
 }
@@ -935,7 +949,7 @@ int main() {
   RUN(delivery_empties_the_data_fifo_like_the_stock_handler);
   RUN(one_completion_is_delivered_exactly_once);
   RUN(host_pump_owner_gets_exactly_one_callback_from_the_pump);
-  RUN(the_owner_declaration_is_the_gate);
+  RUN(the_bound_libcd_is_the_gate);
   RUN(legacy_consumer_is_not_owned_by_the_interrupt);
   RUN(guest_element_keeps_its_own_single_delivery);
   RUN(a_claiming_element_that_leaves_the_cd_bit_set_does_not_block_the_framework_arm);

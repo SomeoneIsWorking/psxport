@@ -11,6 +11,7 @@
 #include "in_between_present.h"
 #include "keyed_blend.h"
 #include "producer_census.h"
+#include "render_mode.h"
 #include "texture_feedback.h"
 
 #include <lucent/log.h>
@@ -19,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -75,9 +77,11 @@ void dump_present(Core *core, uint64_t fence, int &sequence, bool interpolated) 
   ++sequence;
 }
 
+// The title's renders, asked through its runtime.
 class CoreFramePresentationBackend final : public FramePresentationBackend {
 public:
-  CoreFramePresentationBackend(Core &core, int &dumpSequence) : core_(core), dumpSequence_(dumpSequence) {}
+  CoreFramePresentationBackend(Core &core, int &dumpSequence)
+      : core_(core), dumpSequence_(dumpSequence), producers_(core) {}
 
   void emit(std::span<const RqItem> items) override {
     std::vector<const RqItem *> stream;
@@ -99,12 +103,7 @@ public:
   }
 
   void pace(int guestFields, int parts) override {
-    if (core_.game->runtime) {
-      core_.game->runtime->pacePresentation(core_, guestFields, parts);
-    } else {
-      // A neutral framework instance has no title scheduler and retains combined field pacing.
-      core_.game->framePacer.paceSubframeFields(core_, guestFields, parts);
-    }
+    core_.runtime.pacePresentation(core_, guestFields, parts);
   }
 
   void reconcile(uint64_t fence) override {
@@ -120,7 +119,7 @@ public:
   }
 
   bool sealedFrameIsCut() override {
-    return core_.game->runtime != nullptr && core_.game->runtime->sealedFrameIsCut(core_);
+    return core_.runtime.sealedFrameIsCut(core_);
   }
 
   gpu::RecordRect displayedBuffer() override {
@@ -133,15 +132,38 @@ public:
   }
 
   const present::StateProducers *stateProducers() override {
-    return core_.rsub.mode.path() == RenderPath::Record ? &core_.stateProducers : nullptr;
+    return core_.rsub.mode.path() == RenderPath::Record ? &producers_ : nullptr;
+  }
+
+  RenderMode *displayPassMode() override {
+    return &core_.rsub.mode;
   }
 
 private:
   Core &core_;
   int &dumpSequence_;
+  RuntimeStateProducers producers_;
 };
 
+// A producer render reads saved state only; the armed display pass aborts any guest store it makes.
+std::optional<present::FrameRecord> composeGuarded(FramePresentationBackend &backend,
+                                                   const present::FrameRecord &shown,
+                                                   const present::FrameState *from,
+                                                   const present::FrameState &to,
+                                                   float t,
+                                                   const present::StateProducers &producers) {
+  std::optional<DisplayPassGuard> guard;
+  if (RenderMode *mode = backend.displayPassMode()) {
+    guard.emplace(*mode);
+  }
+  return present::composeFrame(shown, from, to, t, producers);
+}
+
 } // namespace
+
+const present::StateProducer *RuntimeStateProducers::find(std::uint32_t producer) const {
+  return core_.runtime.stateProducer(core_, producer);
+}
 
 void FramePresenter::capture(const RqItem *items, int count) {
   if (count <= 0) {
@@ -219,6 +241,8 @@ void FramePresenter::commit(FramePresentationBackend &backend,
                             TemporalFramePresentation *temporal) {
   const bool interpolates = backend.interpolatesRecords();
   const bool cut = interpolates && backend.sealedFrameIsCut();
+  // Only a title with state producers saves state, so an empty state has nothing to compose.
+  const bool savedState = !state.empty();
   const bool gap = !lastSequence_ || sealed.sequence() != *lastSequence_ + 1u;
   lastSequence_ = sealed.sequence();
   current_ = std::make_shared<const present::FrameRecord>(std::move(sealed));
@@ -240,8 +264,7 @@ void FramePresenter::commit(FramePresentationBackend &backend,
     if (temporal) {
       temporal->present(backend, *core, frame, guestFields);
     } else {
-      const present::StateProducers *producers = backend.stateProducers();
-      const bool composes = producers != nullptr && !producers->empty();
+      const bool composes = savedState && backend.stateProducers() != nullptr;
       presentCurrent(backend, frame, guestFields, 1, composes ? shownRecord(backend.displayedBuffer()) : nullptr);
     }
   }
@@ -347,7 +370,7 @@ void FramePresenter::presentRecords(FramePresentationBackend &backend, CapturedF
       cut ? present::FrameRecord() : present::keyedBlend(*from->record, *shown->record, 0.5f);
   const present::FrameRecord &base = cut ? *shown->record : blended;
   if (const present::StateProducers *producers = backend.stateProducers()) {
-    composedStore_ = present::composeFrame(base, cut ? nullptr : from->state.get(), *shown->state, 0.5f, *producers);
+    composedStore_ = composeGuarded(backend, base, cut ? nullptr : from->state.get(), *shown->state, 0.5f, *producers);
   }
   composed_ = composedStore_ ? &*composedStore_ : &base;
   composedAdvances_ = false;
@@ -363,7 +386,7 @@ void FramePresenter::presentCurrent(
     FramePresentationBackend &backend, CapturedFrameView frame, int guestFields, int parts, const SealedRecord *shown) {
   const present::StateProducers *producers = backend.stateProducers();
   if (shown != nullptr && producers != nullptr) {
-    composedStore_ = present::composeFrame(*shown->record, nullptr, *shown->state, 1.0f, *producers);
+    composedStore_ = composeGuarded(backend, *shown->record, nullptr, *shown->state, 1.0f, *producers);
   }
   composed_ = composedStore_ ? &*composedStore_ : nullptr;
   composedAdvances_ = composed_ != nullptr;

@@ -1,146 +1,55 @@
-// test_platform_hle_direct_runtime.cpp — direct runtimes (core.cfg == nullptr) must be able to
-// declare their own hardware-sync primitives without instantiating the legacy GameConfig bag.
-//
-// The seam under test is GameRuntime::platformHlePlan(), a consumer-owned fact slice per
-// The platform-library entry table consumed by initBuiltins()
-// when core.cfg is null.
+// The stock library classes bind their located entries into the Game's PlatformHle; zero entries stay
+// guest code, and the legacy GameConfig group keeps its window guard.
 
-#include "cd_control.h"
 #include "game.h"
-#include "game_runtime.h"
-#include "hw_bind.h"
+#include "game_iface.h"
 #include "platform_hle.h"
+#include "stock_libcd.h"
+#include "stock_libgpu.h"
+#include "stock_libgte.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <array>
 #include <memory>
-#include <type_traits>
 
 namespace {
 
-constexpr uint32_t kCustomBindingAddr = 0x800859A8u;
-constexpr uint32_t kCustomBindingEnd = 0x80085B20u;
-
-// Measured CTR (SCUS_944.26) libgte projection leaves. They share one verified SCEI-library
-// window: SetGeomScreen [0x8007781C,0x8007782C), SetGeomOffset [0x8007782C,0x80077844).
+// Measured CTR (SCUS_944.26) libgte projection leaves.
 constexpr uint32_t kSetGeomScreenAddr = 0x8007781Cu;
 constexpr uint32_t kSetGeomOffsetAddr = 0x8007782Cu;
 constexpr uint32_t kSetGeomLeavesEnd = 0x80077844u;
 constexpr uint32_t kCdReadAddr = 0x80066A50u;
 constexpr uint32_t kCdReadSyncAddr = 0x80066B30u;
-constexpr uint32_t kCdReadLeavesEnd = 0x80066C20u;
 // Toy Story 2 (SLUS_008.93): libcd CdGetSector, and libgpu's timeout pair with the two guest words
-// the arm publishes. They are test data here; the title declares the measured values.
+// the arm publishes.
 constexpr uint32_t kCdGetSectorAddr = 0x80091108u;
 constexpr uint32_t kGpuTimeoutArmAddr = 0x80088380u;
 constexpr uint32_t kGpuTimeoutCheckAddr = 0x800883B4u;
 constexpr uint32_t kGpuTimeoutDeadlineWord = 0x8009EC20u;
 constexpr uint32_t kGpuTimeoutFlagWord = 0x8009EC24u;
 
-static_assert(std::extent_v<decltype(PlatformHlePlan::windowLo)> == kPlatformHleWindowCapacity);
-static_assert(std::extent_v<decltype(GameConfig::PlatformHleCfg::windowLo)> == kPlatformHleWindowCapacity);
-
 int g_handlerCalls = 0;
 void recorded_handler(Core *) {
   ++g_handlerCalls;
 }
 
-class SilentRuntime : public GameRuntime {
-public:
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-
-  const GuestProgramImage *guestProgramImage() const override {
-    return &image_;
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  void *createContext(Core &) override {
-    return &ctx_;
-  }
-  void destroyContext(void *c) override {
-    CHECK_EQ(c, &ctx_);
-  }
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-
-  GuestProgramImage image_{};
-  int ctx_ = 0;
-};
-
-class PlannedRuntime final : public SilentRuntime {
-public:
-  const PlatformHlePlan *platformHlePlan() const override {
-    return &plan_;
-  }
-
-  PlatformHlePlan plan_{};
-};
-
-GuestProgramImage makeImage() {
-  GuestProgramImage image{};
-  image.residentText = {0x00010000u, 0x00120000u};
-  image.backtraceText = {0x00010000u, 0x00130000u};
-  return image;
-}
-
-} // namespace
-
-static void test_direct_runtime_without_plan_installs_nothing_and_says_so() {
-  SilentRuntime runtime;
-  runtime.image_ = makeImage();
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-
-  // The honest default: a direct runtime that declares no sync primitives installs none. Any
-  // address then misses — including the one that would have been bound — and initBuiltins()
-  // must not dereference the absent legacy config to get there.
-  game->platform_hle.initBuiltins();
-  CHECK_EQ(g_handlerCalls, 0);
-  CHECK(game->platform_hle.lookup(kCustomBindingAddr) == nullptr);
-  CHECK(game->platform_hle.lookup(kCustomBindingAddr + 0x100) == nullptr);
-}
-
-static void test_direct_runtime_plan_binds_entries_inside_the_declared_window() {
-  PlannedRuntime runtime;
-  runtime.image_ = makeImage();
-  runtime.plan_.bindingCount = 1;
-  runtime.plan_.bindings[0] = {kCustomBindingAddr, recorded_handler};
-  runtime.plan_.windowLo[0] = kCustomBindingAddr;
-  runtime.plan_.windowHi[0] = kCustomBindingEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+void test_a_title_that_binds_nothing_installs_nothing() {
+  psx::test::StubGameRuntime runtime;
+  auto game = std::make_unique<Game>(runtime);
 
   game->platform_hle.initBuiltins();
-
-  // Inside the declared window AND exactly at the bound address: the handler resolves and runs.
-  g_handlerCalls = 0;
-  OverrideFn fn = game->platform_hle.lookup(kCustomBindingAddr);
-  CHECK(fn != nullptr);
-  if (fn) {
-    fn(&game->core);
-  }
-  CHECK_EQ(g_handlerCalls, 1);
-
-  // The window guard still protects the table: the byte past the measured body end is refused,
-  // and so is engine text far below the library window.
-  CHECK(game->platform_hle.lookup(kCustomBindingEnd) == nullptr);
-  CHECK(game->platform_hle.lookup(0x80050000u | 0x80000000u) == nullptr);
+  runtime.registerOverrides(*game);
+  CHECK(game->platform_hle.lookup(kSetGeomScreenAddr) == nullptr);
+  CHECK(game->platform_hle.lookup(kCdReadAddr) == nullptr);
+  CHECK(game->cd.stockLibrary() == nullptr);
 }
 
-static void test_direct_runtime_plan_binds_standard_libgte_projection_leaves() {
-  PlannedRuntime runtime;
-  runtime.image_ = makeImage();
-  runtime.plan_.setGeomOffset = kSetGeomOffsetAddr;
-  runtime.plan_.setGeomScreen = kSetGeomScreenAddr;
-  runtime.plan_.windowLo[0] = kSetGeomScreenAddr;
-  runtime.plan_.windowHi[0] = kSetGeomLeavesEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+void test_stock_libgte_binds_the_projection_leaves() {
+  psx::test::StubGameRuntime runtime;
+  auto game = std::make_unique<Game>(runtime);
 
-  game->platform_hle.initBuiltins();
+  psx::hle::StockLibgte({.setGeomOffset = kSetGeomOffsetAddr, .setGeomScreen = kSetGeomScreenAddr}).bind(*game);
 
   OverrideFn setScreen = game->platform_hle.lookup(kSetGeomScreenAddr);
   OverrideFn setOffset = game->platform_hle.lookup(kSetGeomOffsetAddr);
@@ -148,7 +57,7 @@ static void test_direct_runtime_plan_binds_standard_libgte_projection_leaves() {
   CHECK(setOffset != nullptr);
 
   Core &core = game->core;
-  gte_bind(&core);
+  core.gte().bind();
   core.r[4] = 401u;
   if (setScreen) {
     setScreen(&core);
@@ -169,86 +78,37 @@ static void test_direct_runtime_plan_binds_standard_libgte_projection_leaves() {
   CHECK(core.rsub.projParams.geomValid());
 }
 
-static void test_direct_runtime_standard_libgte_leaves_still_require_the_declared_window() {
-  PlannedRuntime runtime;
-  runtime.image_ = makeImage();
-  // Admit only SetGeomOffset. A standard address remains subject to the same registration guard.
-  runtime.plan_.windowLo[0] = kSetGeomOffsetAddr;
-  runtime.plan_.windowHi[0] = kSetGeomLeavesEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+void test_stock_libcd_binds_its_located_entries_and_becomes_the_games_libcd() {
+  psx::test::StubGameRuntime runtime;
+  const psx::cd::StockLibcd libcd(
+      {.read = kCdReadAddr, .readSync = kCdReadSyncAddr, .getSector = kCdGetSectorAddr}, {}, 0);
+  auto game = std::make_unique<Game>(runtime);
 
-  CHECK(game->platform_hle.register_(kSetGeomOffsetAddr, recorded_handler));
-  CHECK(!game->platform_hle.register_(kSetGeomScreenAddr, recorded_handler));
-  CHECK(game->platform_hle.lookup(kSetGeomOffsetAddr) == recorded_handler);
-  CHECK(game->platform_hle.lookup(kSetGeomScreenAddr) == nullptr);
+  libcd.bind(*game);
+
+  CHECK(game->platform_hle.lookup(kCdReadAddr) != nullptr);
+  CHECK(game->platform_hle.lookup(kCdReadSyncAddr) != nullptr);
+  CHECK(game->platform_hle.lookup(kCdGetSectorAddr) != nullptr);
+  CHECK(game->platform_hle.lookup(kCdReadAddr + 4u) == nullptr);
+  CHECK(game->cd.stockLibrary() == &libcd);
 }
 
-static void test_direct_runtime_plan_binds_standard_stock_cd_read_leaves() {
-  PlannedRuntime runtime;
-  runtime.image_ = makeImage();
-  runtime.plan_.cdReadAddress = kCdReadAddr;
-  runtime.plan_.cdReadSyncAddress = kCdReadSyncAddr;
-  runtime.plan_.windowLo[0] = kCdReadAddr;
-  runtime.plan_.windowHi[0] = kCdReadLeavesEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+void test_stock_libgpu_binds_the_timeout_pair() {
+  psx::test::StubGameRuntime runtime;
+  const psx::hle::StockLibgpu libgpu({.timeoutArm = kGpuTimeoutArmAddr,
+                                      .timeoutCheck = kGpuTimeoutCheckAddr,
+                                      .timeoutDeadlineWord = kGpuTimeoutDeadlineWord,
+                                      .timeoutFlagWord = kGpuTimeoutFlagWord});
+  auto game = std::make_unique<Game>(runtime);
+  libgpu.bind(*game);
 
-  game->platform_hle.initBuiltins();
-
-  CHECK(game->platform_hle.lookup(kCdReadAddr) == cd_read_stock_sync);
-  CHECK(game->platform_hle.lookup(kCdReadSyncAddr) == cd_readsync_stock_sync);
-  CHECK(cd_native_stock_read_owned(game->core));
-}
-
-static void test_every_exact_window_slot_is_consumed_without_admitting_overflow() {
-  PlannedRuntime runtime;
-  runtime.image_ = makeImage();
-  constexpr std::array<uint32_t, kPlatformHleWindowCapacity> addresses = {
-      0x80084010u, 0x80085020u, 0x80086030u, 0x80087040u};
-  for (int i = 0; i < kPlatformHleWindowCapacity; i++) {
-    runtime.plan_.windowLo[i] = addresses[i];
-    runtime.plan_.windowHi[i] = addresses[i] + 4u;
-    runtime.plan_.bindings[i] = {addresses[i], recorded_handler};
-  }
-  constexpr uint32_t kOverflowAddress = 0x80088050u;
-  runtime.plan_.bindingCount = kPlatformHleWindowCapacity;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-
-  game->platform_hle.initBuiltins();
-
-  for (const uint32_t address : addresses) {
-    CHECK(game->platform_hle.lookup(address) == recorded_handler);
-    CHECK(game->platform_hle.lookup(address + 4u) == nullptr);
-  }
-  // A fifth binding cannot overflow the declared window set into an implicit broad acceptance.
-  CHECK(!game->platform_hle.register_(kOverflowAddress, recorded_handler));
-  CHECK(game->platform_hle.lookup(kOverflowAddress) == nullptr);
-}
-
-static void test_direct_runtime_plan_binds_get_sector_and_the_gpu_timeout_pair() {
-  PlannedRuntime runtime;
-  runtime.image_ = makeImage();
-  runtime.plan_.cdGetSectorAddress = kCdGetSectorAddr;
-  runtime.plan_.gpuTimeoutArmAddress = kGpuTimeoutArmAddr;
-  runtime.plan_.gpuTimeoutCheckAddress = kGpuTimeoutCheckAddr;
-  runtime.plan_.gpuTimeoutDeadlineVar = kGpuTimeoutDeadlineWord;
-  runtime.plan_.gpuTimeoutFlagVar = kGpuTimeoutFlagWord;
-  runtime.plan_.windowLo[0] = kCdGetSectorAddr;
-  runtime.plan_.windowHi[0] = kCdGetSectorAddr + 4u;
-  runtime.plan_.windowLo[1] = kGpuTimeoutArmAddr;
-  runtime.plan_.windowHi[1] = kGpuTimeoutCheckAddr + 4u;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-
-  game->platform_hle.initBuiltins();
-
-  CHECK(game->platform_hle.lookup(kCdGetSectorAddr) == cd_getsector_stock);
   OverrideFn arm = game->platform_hle.lookup(kGpuTimeoutArmAddr);
   OverrideFn check = game->platform_hle.lookup(kGpuTimeoutCheckAddr);
   CHECK(arm != nullptr);
   CHECK(check != nullptr);
+  if (!arm || !check) {
+    return;
+  }
 
   Core &core = game->core;
   core.mem_w32(kGpuTimeoutDeadlineWord, 0u);
@@ -261,41 +121,73 @@ static void test_direct_runtime_plan_binds_get_sector_and_the_gpu_timeout_pair()
   CHECK_EQ(core.r[2], 0u);
 }
 
-// The negative half: an undeclared word is left alone, and a plan that declares neither address
-// binds neither handler. A handler that wrote through an unset (zero) var would scribble on guest
-// address 0 and still look like it worked.
-static void test_gpu_timeout_arm_leaves_an_undeclared_word_untouched_and_unbound_when_absent() {
-  PlannedRuntime runtime;
-  runtime.image_ = makeImage();
-  runtime.plan_.gpuTimeoutArmAddress = kGpuTimeoutArmAddr;
-  runtime.plan_.gpuTimeoutDeadlineVar = kGpuTimeoutDeadlineWord; // flag word deliberately undeclared
-  runtime.plan_.windowLo[0] = kGpuTimeoutArmAddr;
-  runtime.plan_.windowHi[0] = kGpuTimeoutArmAddr + 4u;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+// An arm that wrote through an unset word would scribble on guest address 0 and still look like it worked.
+void test_gpu_timeout_arm_leaves_an_undeclared_word_untouched_and_unbound_when_absent() {
+  psx::test::StubGameRuntime runtime;
+  const psx::hle::StockLibgpu libgpu(
+      {.timeoutArm = kGpuTimeoutArmAddr, .timeoutDeadlineWord = kGpuTimeoutDeadlineWord});
+  auto game = std::make_unique<Game>(runtime);
+  libgpu.bind(*game);
 
   Core &core = game->core;
   core.mem_w32(kGpuTimeoutFlagWord, 7u);
   core.mem_w32(0x80000000u, 0x5A5A5A5Au);
   OverrideFn arm = game->platform_hle.lookup(kGpuTimeoutArmAddr);
   CHECK(arm != nullptr);
-  arm(&core);
+  if (arm) {
+    arm(&core);
+  }
   CHECK_EQ(core.mem_r32(kGpuTimeoutDeadlineWord), 0x7FFFFFFFu);
   CHECK_EQ(core.mem_r32(kGpuTimeoutFlagWord), 7u);
   CHECK_EQ(core.mem_r32(0x80000000u), 0x5A5A5A5Au);
   CHECK(game->platform_hle.lookup(kGpuTimeoutCheckAddr) == nullptr);
-  CHECK(game->platform_hle.lookup(kCdGetSectorAddr) == nullptr);
 }
 
+void test_legacy_entries_still_require_the_declared_window() {
+  GameConfig config{};
+  const GameHooks hooks{};
+  config.hle.windowLo[0] = kSetGeomOffsetAddr;
+  config.hle.windowHi[0] = kSetGeomLeavesEnd;
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto game = std::make_unique<Game>(runtime);
+
+  CHECK(game->platform_hle.register_(kSetGeomOffsetAddr, recorded_handler));
+  CHECK(!game->platform_hle.register_(kSetGeomScreenAddr, recorded_handler));
+  CHECK(game->platform_hle.lookup(kSetGeomOffsetAddr) == recorded_handler);
+  CHECK(game->platform_hle.lookup(kSetGeomScreenAddr) == nullptr);
+}
+
+void test_every_legacy_window_slot_is_consumed_without_admitting_overflow() {
+  GameConfig config{};
+  const GameHooks hooks{};
+  constexpr std::array<uint32_t, kPlatformHleWindowCapacity> addresses = {
+      0x80084010u, 0x80085020u, 0x80086030u, 0x80087040u};
+  for (int i = 0; i < kPlatformHleWindowCapacity; i++) {
+    config.hle.windowLo[i] = addresses[i];
+    config.hle.windowHi[i] = addresses[i] + 4u;
+  }
+  constexpr uint32_t kOverflowAddress = 0x80088050u;
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto game = std::make_unique<Game>(runtime);
+
+  for (const uint32_t address : addresses) {
+    CHECK(game->platform_hle.register_(address, recorded_handler));
+    CHECK(game->platform_hle.lookup(address) == recorded_handler);
+    CHECK(game->platform_hle.lookup(address + 4u) == nullptr);
+  }
+  CHECK(!game->platform_hle.register_(kOverflowAddress, recorded_handler));
+  CHECK(game->platform_hle.lookup(kOverflowAddress) == nullptr);
+}
+
+} // namespace
+
 int main(void) {
-  RUN(direct_runtime_without_plan_installs_nothing_and_says_so);
-  RUN(direct_runtime_plan_binds_entries_inside_the_declared_window);
-  RUN(direct_runtime_plan_binds_standard_libgte_projection_leaves);
-  RUN(direct_runtime_standard_libgte_leaves_still_require_the_declared_window);
-  RUN(direct_runtime_plan_binds_standard_stock_cd_read_leaves);
-  RUN(every_exact_window_slot_is_consumed_without_admitting_overflow);
-  RUN(direct_runtime_plan_binds_get_sector_and_the_gpu_timeout_pair);
+  RUN(a_title_that_binds_nothing_installs_nothing);
+  RUN(stock_libgte_binds_the_projection_leaves);
+  RUN(stock_libcd_binds_its_located_entries_and_becomes_the_games_libcd);
+  RUN(stock_libgpu_binds_the_timeout_pair);
   RUN(gpu_timeout_arm_leaves_an_undeclared_word_untouched_and_unbound_when_absent);
+  RUN(legacy_entries_still_require_the_declared_window);
+  RUN(every_legacy_window_slot_is_consumed_without_admitting_overflow);
   return pt_summary();
 }

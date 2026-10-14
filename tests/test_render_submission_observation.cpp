@@ -2,12 +2,15 @@
 #include "render_queue.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 class DiagnosticCapture {
 public:
   DiagnosticCapture() {
@@ -117,7 +120,7 @@ void test_admission_preserves_observations_and_items() {
     auto ordinary = std::make_unique<RenderQueue>();
     CHECK_EQ(ordinary->items[5].dbg_node, 0u);
   }
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   auto admission = std::make_unique<RenderQueue>(RenderQueue::Observation::Admission);
   auto &core = game->core;
   CHECK_EQ(admission->items[5].dbg_node, 0u);

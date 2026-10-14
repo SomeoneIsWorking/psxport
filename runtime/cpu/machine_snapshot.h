@@ -11,7 +11,7 @@
 // `Savestate`) after the bytes are visible.
 #pragma once
 
-#include "guest_program_image.h"
+#include "guest_address_range.h"
 
 #include <array>
 #include <cstddef>

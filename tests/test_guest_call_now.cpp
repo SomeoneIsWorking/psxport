@@ -6,27 +6,13 @@
 #include "game_runtime.h"
 #include "guest_call.h"
 #include "native_dispatch.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <cstdint>
 #include <memory>
 
 namespace {
-class Runtime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-};
 
 constexpr std::uint32_t kLeaf = 0x00010100u;
 constexpr std::uint32_t kUntouched = 0x5a5a5a5au;
@@ -41,9 +27,8 @@ void nativeLeaf(Core *core) {
   }
 }
 
-std::unique_ptr<Game> makeGame(Runtime &runtime) {
-  psxport_install_game(runtime);
-  return std::make_unique<Game>();
+std::unique_ptr<Game> makeGame(psx::test::StubGameRuntime &runtime) {
+  return std::make_unique<Game>(runtime);
 }
 
 void primeArgumentRegisters(Core &core) {
@@ -55,7 +40,7 @@ void primeArgumentRegisters(Core &core) {
 } // namespace
 
 static void test_arguments_reach_r4_to_r7_in_order() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = core.imageCatalog().activate("guest-call-now", {kLeaf, kLeaf + 16u}, 0x43414c4c4e4f57ull);
@@ -71,7 +56,7 @@ static void test_arguments_reach_r4_to_r7_in_order() {
 }
 
 static void test_unpassed_argument_registers_are_left_alone() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = core.imageCatalog().activate("guest-call-now", {kLeaf, kLeaf + 16u}, 0x43414c4c4e4f57ull);

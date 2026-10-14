@@ -86,10 +86,10 @@ static void test_a_degenerate_range_holds_its_minimum() {
 static void test_the_row_shows_value_and_unit_and_steps_within_the_range() {
   SettingsDir dir("row");
   psx::config::IntVar var("PSXPORT_TEST_ROW_SETTING", 100, "test-only setting");
-  const TitleIntSetting setting{"test_row", "Test", "%", &var, kRange};
+  const psx::game::TitleIntSetting setting{"test_row", "Test", "%", &var, kRange};
   Mods mods;
-  mods.declareTitleSettings(std::span<const TitleIntSetting>(&setting, 1));
-  mods.init(RenderCapabilities::direct());
+  mods.declareTitleSettings(std::span<const psx::game::TitleIntSetting>(&setting, 1));
+  mods.init(false, FACE_ORDER_DEPTH);
   auto binding = psx::ui::make_title_setting_binding(&setting, &mods);
 
   std::string text;
@@ -118,10 +118,10 @@ static void test_the_chosen_value_is_persisted_and_reloaded_onto_the_grid() {
   SettingsDir dir("persist");
   {
     psx::config::IntVar var("PSXPORT_TEST_PERSISTED", 100, "test-only setting");
-    const TitleIntSetting setting{"persisted", "Persisted", "%", &var, kRange};
+    const psx::game::TitleIntSetting setting{"persisted", "Persisted", "%", &var, kRange};
     Mods mods;
-    mods.declareTitleSettings(std::span<const TitleIntSetting>(&setting, 1));
-    mods.init(RenderCapabilities::direct());
+    mods.declareTitleSettings(std::span<const psx::game::TitleIntSetting>(&setting, 1));
+    mods.init(false, FACE_ORDER_DEPTH);
     var.set(psx::config::Layer::Value, 300);
     mods.save();
     CHECK(dir.body().find("PSXPORT_TEST_PERSISTED=300") != std::string::npos);
@@ -131,10 +131,10 @@ static void test_the_chosen_value_is_persisted_and_reloaded_onto_the_grid() {
     out << "PSXPORT_TEST_PERSISTED=333\n";
   }
   psx::config::IntVar reloaded("PSXPORT_TEST_PERSISTED", 100, "test-only setting");
-  const TitleIntSetting setting{"persisted", "Persisted", "%", &reloaded, kRange};
+  const psx::game::TitleIntSetting setting{"persisted", "Persisted", "%", &reloaded, kRange};
   Mods mods;
-  mods.declareTitleSettings(std::span<const TitleIntSetting>(&setting, 1));
-  mods.init(RenderCapabilities::direct());
+  mods.declareTitleSettings(std::span<const psx::game::TitleIntSetting>(&setting, 1));
+  mods.init(false, FACE_ORDER_DEPTH);
   CHECK_EQ(reloaded.get(), 325L);
 }
 

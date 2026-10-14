@@ -3,9 +3,12 @@
 #include "hle.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 constexpr uint32_t kClass = 0xF0000009u;
 constexpr uint32_t kSpec = 0x0020u;
@@ -31,7 +34,7 @@ bool testEvent(Game &g, uint32_t handle) {
 }
 
 void test_undeliver_clears_a_delivered_nointr_event() {
-  auto g = std::make_unique<Game>();
+  auto g = std::make_unique<Game>(stubRuntime);
   const uint32_t handle = openEnabled(*g, EV_MD_NOINTR);
   g->hle.deliverEvent(kClass, kSpec);
   CHECK_EQ(biosB0(*g, 0x20, kClass, kSpec, 0), 0u);
@@ -39,7 +42,7 @@ void test_undeliver_clears_a_delivered_nointr_event() {
 }
 
 void test_undeliver_leaves_another_class_fired() {
-  auto g = std::make_unique<Game>();
+  auto g = std::make_unique<Game>(stubRuntime);
   const uint32_t handle = openEnabled(*g, EV_MD_NOINTR);
   g->hle.deliverEvent(kClass, kSpec);
   biosB0(*g, 0x20, kClass + 1u, kSpec, 0);

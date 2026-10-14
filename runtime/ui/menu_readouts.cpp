@@ -1,9 +1,8 @@
 #include "menu_readouts.h"
 
 #include "game.h"
-#include "game_hooks_opt.h" // OPTIONAL hooks are never called directly — see that header
-#include "gpu_vk.h"         // gpu_vk_video_status
-#include "rml_text.h"       // RML_TEXT_SEP — a real U+00B7 in the DATA, never an entity
+#include "gpu_vk.h"   // gpu_vk_video_status
+#include "rml_text.h" // RML_TEXT_SEP — a real U+00B7 in the DATA, never an entity
 
 #include <lucent/log.h>
 
@@ -47,10 +46,9 @@ void MenuReadouts::update() {
   set_text(mVideo, buf);
 
   std::string music = "stopped";
-  if (mGame) {
-    const char *nm = game_audio_now_playing_name(&mGame->core, mGame->core.hooks);
-    if (nm) {
-      music = std::string("playing: ") + nm;
+  if (const psx::game::TitleAudio *audio = mGame ? mGame->runtime.audio(mGame->core) : nullptr) {
+    if (const char *name = audio->nowPlayingName()) {
+      music = std::string("playing: ") + name;
     }
   }
   set_text(mMusic, music);

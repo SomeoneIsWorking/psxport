@@ -9,7 +9,7 @@ add_executable(crt0_extract crt0_extract.cpp)
 # boot/ and core/ directories by basename, and a tool that spells a header's DIRECTORY can never see a
 # header that moves. Linking the static library exports the whole subsystem include path and pulls in no
 # code the extractor does not call.
-target_link_libraries(crt0_extract PRIVATE psxport lucent::lucent)
+target_link_libraries(crt0_extract PRIVATE psxport psxport_internal lucent::lucent)
 
 add_executable(discdump discdump.cpp)
 target_link_libraries(discdump PRIVATE psxport_common chdr-static)

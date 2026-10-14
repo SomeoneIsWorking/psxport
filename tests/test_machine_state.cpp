@@ -22,6 +22,7 @@
 #include "memcard.h"
 #include "state/state_command.h"
 #include "state_file.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <cstdio>
@@ -33,7 +34,21 @@ namespace {
 
 const char *kCardPath = "test_machine_state.mcr";
 
-GameConfig g_cfg{};
+// The minimum concrete GameRuntime. Its only product is `nativeState`, set by ScopedTitlePort; the
+// frame/step/yield capabilities a real title implements are irrelevant to a save-state check.
+class MachineRuntime final : public psx::test::StubGameRuntime {
+public:
+  psx::state::NativeStatePort *nativeState(Core &) const override {
+    return port;
+  }
+  const psx::game::HostIdentity *hostIdentity() const override {
+    return &identity;
+  }
+  psx::state::NativeStatePort *port = nullptr;
+  psx::game::HostIdentity identity{.cardDefaultPath = kCardPath};
+};
+
+MachineRuntime machineRuntime;
 
 Game *makeGame() {
   static Game *game = nullptr;
@@ -41,9 +56,7 @@ Game *makeGame() {
     return game;
   }
   std::remove(kCardPath);
-  game = new Game();
-  g_cfg.cardDefaultPath = kCardPath;
-  game->core.cfg = &g_cfg;
+  game = new Game(machineRuntime);
   card_overrides_init(game);
   return game;
 }
@@ -93,9 +106,9 @@ void perturb(Game &game) {
   }
   core.ram[0x1FFFFu] = 0x5Au;
   core.scratch[7] = 0xC3u;
-  game.gte.REG[5] = 0x00010001u;
-  game.gte.REG[26] = 256u; // H — the projection distance
-  game.gte.FLAGS = 0x00000042u;
+  game.core.gte().registers().REG[5] = 0x00010001u;
+  game.core.gte().registers().REG[26] = 256u; // H — the projection distance
+  game.core.gte().registers().FLAGS = 0x00000042u;
 
   game.gpu.s_vram[0] = 0x1234u;
   game.gpu.s_vram[VRAM_W * 240 + 320] = 0xBEEFu;
@@ -233,7 +246,7 @@ void test_every_section_round_trips_through_the_file(void) {
   CHECK_STREQ(fingerprint(wiped).c_str(), before.c_str());
   // Spot checks that name the FIELDS, so a failure says which device diverged.
   CHECK_EQ(wiped.core.pc, 0x80004000u);
-  CHECK_EQ(static_cast<int>(wiped.gte.REG[26]), 256);
+  CHECK_EQ(static_cast<int>(wiped.core.gte().registers().REG[26]), 256);
   CHECK_EQ(static_cast<int>(wiped.cdc.loc_lba), 0x1234);
   CHECK_EQ(static_cast<int>(wiped.timing.vblank), 4242);
   CHECK_EQ(static_cast<int>(wiped.hle.rand_state), 0x12345678);
@@ -328,48 +341,19 @@ public:
   std::uint32_t ramWordWhenRestored = 0u;
 };
 
-// Installs a title state port on the running game for the duration of a check, and puts the
-// runtime that was there back afterwards. Swapping rather than building a second Game is deliberate:
-// Lightrec supports one initialized machine per process, and `MachineState::restore` reports
-// invalidation through the running executor.
+// Hands the running game's runtime a title state port for the duration of a check. One Game for the
+// whole file: Lightrec supports one initialized machine per process, and `MachineState::restore`
+// reports invalidation through the running executor.
 class ScopedTitlePort {
 public:
-  explicit ScopedTitlePort(Game &game, psx::state::NativeStatePort *port) : game_(game), saved_(game.runtime) {
-    game.runtime = &runtime_;
-    runtime_.port = port;
+  explicit ScopedTitlePort(psx::state::NativeStatePort *port) {
+    machineRuntime.port = port;
   }
   ~ScopedTitlePort() {
-    game_.runtime = saved_;
+    machineRuntime.port = nullptr;
   }
-
-private:
-  // The minimum concrete GameRuntime. Its only product is `nativeState`; the frame/step/yield and
-  // render capabilities a real title implements are irrelevant to a save-state check and are
-  // stubbed rather than left undefined, so the fixture cannot accidentally pass because a
-  // capability defaulted to something.
-  class Runtime final : public GameRuntime {
-  public:
-    psx::state::NativeStatePort *nativeState(Core &) const override {
-      return port;
-    }
-    void *createContext(Core &) override {
-      return nullptr;
-    }
-    void destroyContext(void *) override {}
-    void registerOverrides(Game &) override {}
-    void bootInit(Core &) override {}
-    RenderCapabilities renderCapabilities() const override {
-      return {};
-    }
-    bool guestVramIsPicture(const Game &) const override {
-      return false;
-    }
-    psx::state::NativeStatePort *port = nullptr;
-  };
-
-  Game &game_;
-  GameRuntime *saved_;
-  Runtime runtime_;
+  ScopedTitlePort(const ScopedTitlePort &) = delete;
+  ScopedTitlePort &operator=(const ScopedTitlePort &) = delete;
 };
 
 void test_a_file_missing_a_device_section_is_refused_with_the_section_named(void) {
@@ -408,7 +392,7 @@ void test_a_file_missing_a_device_section_is_refused_with_the_section_named(void
 void test_a_title_that_owns_native_state_refuses_a_file_without_one(void) {
   Game &game = *makeGame();
   FixtureTitleState port;
-  ScopedTitlePort scoped(game, &port);
+  ScopedTitlePort scoped(&port);
 
   psx::state::StateImage image;
   for (const std::string_view name : {psx::state::section::kCpu,
@@ -444,7 +428,7 @@ void test_a_title_that_owns_native_state_refuses_a_file_without_one(void) {
 void test_a_title_section_from_a_newer_title_version_is_refused(void) {
   Game &game = *makeGame();
   FixtureTitleState port; // implements version 4
-  ScopedTitlePort scoped(game, &port);
+  ScopedTitlePort scoped(&port);
 
   psx::state::StateImage image;
   for (const std::string_view name : {psx::state::section::kCpu,
@@ -486,7 +470,7 @@ void test_a_title_section_from_a_newer_title_version_is_refused(void) {
 void test_a_title_port_adopts_its_state_after_guest_ram_is_restored(void) {
   Game &game = *makeGame();
   FixtureTitleState port;
-  ScopedTitlePort scoped(game, &port);
+  ScopedTitlePort scoped(&port);
   Core &core = game.core;
 
   core.mem_w32(FixtureTitleState::kRestoredProbeAddress, 0xC0DE0001u);

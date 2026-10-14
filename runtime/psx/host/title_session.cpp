@@ -4,7 +4,6 @@
 #include "config.h"
 #include "config_vars.h"
 #include "core.h"
-#include "crt0_boot.h"
 #include "dbg_server.h"
 #include "field_turn.h"
 #include "frame_loop_shell.h"
@@ -31,12 +30,12 @@ namespace {
 
 // The process devices initialised, then bound to this Core through the shell, so its next step
 // knows what is bound; then `a0`/`a1` as the BIOS leaves them.
-void bindPerCoreDevices(Game &game) {
+void bindPerCoreDevices(Game &game, psx::frame::FrameLoopShell &shell) {
   Core &core = game.core;
   gte_init();
   mdec_init();
   spu_init();
-  psx::frame::FrameLoopShell::bindRunningCore(core);
+  shell.bindRunningCore(core);
   game.spu_audio.init();
   game.gpu.gpu_native_init();
   game.cd.overridesInit();
@@ -51,9 +50,7 @@ void bindPerCoreDevices(Game &game) {
 // The session's state that needs the framework's headers, hidden so this header stays the
 // session's contract.
 struct TitleSession::Parts {
-  // The Game is built in boot(), not here: a Core snapshots the process's installed GameRuntime
-  // when it is constructed, so the title's runtime is installed immediately before its own Game
-  // exists.
+  // Built in boot(), after the boot entry and the executable are accepted.
   std::unique_ptr<Game> game;
   bool booted = false;
 };
@@ -75,23 +72,19 @@ TitleSession::~TitleSession() {
   if (role_ == Role::Product) {
     psx::RunEndReport{game}.emit(steps_);
   }
+  services_.frameLoop.forgetCore(game.core);
 }
 
 bool TitleSession::boot() {
   if (parts_->booted) {
     return true;
   }
-  GameRuntime &runtime = catalog_.runtime(title_.index);
-  if (const std::string refusal = psx::bootEntryRefusal(runtime.guestProgramImage()); !refusal.empty()) {
-    lucent::error("boot", "{} ({}) refused: {}", title_.identity->displayName, title_.identity->serial, refusal);
-    return false;
-  }
+  psx::game::GameRuntime &runtime = catalog_.runtime(title_.index);
   if (!title_.available()) {
     lucent::error("boot", "{} has no authenticated executable", title_.identity->displayName);
     return false;
   }
-  psxport_install_game(runtime);
-  parts_->game = std::make_unique<Game>(services_.presentation);
+  parts_->game = std::make_unique<Game>(runtime, services_.presentation);
   Game &game = *parts_->game;
   Core &core = game.core;
   game.hostInput.attachQuitScope(&services_.quit);
@@ -127,11 +120,11 @@ bool TitleSession::boot() {
                admitted.image.textBytes,
                core.r[29]);
   psx::config::report_once();
-  bindPerCoreDevices(game);
+  bindPerCoreDevices(game, services_.frameLoop);
   // The overrides before the preflight: a title's own registration may be what gives it a finite
   // frame owner.
   runtime.registerOverrides(game);
-  psx::frame::FrameLoopShell{}.prepareProduct(game);
+  services_.frameLoop.prepareProduct(game);
   // Several sessions each start the channel; only the first owns the host port, which is how the
   // picker and a running title share one.
   game.dbg_server.start(&core);
@@ -142,10 +135,7 @@ bool TitleSession::boot() {
     // Black before the title builds, so its first frames never composite over a stale splash.
     gpu_clear_display(&core);
   }
-  if (core.guestProgramImage == nullptr || core.guestProgramImage->bootEntry == BootEntry::Crt0) {
-    crt0_setup(core);
-  }
-  core.runtime->bootInit(core);
+  runtime.startProgram(core);
   if (role_ == Role::Product && services_.configuredStatePending) {
     services_.configuredStatePending = false;
     if (std::string error; !psx::state::applyConfiguredState(core, error)) {
@@ -208,7 +198,7 @@ void TitleSession::step() {
   const psx::frame::FieldTurn fieldTurn;
   fieldTurn.beginField(game.core);
   ++steps_;
-  psx::frame::FrameLoopShell{}.step(game.core, static_cast<std::uint32_t>(steps_));
+  services_.frameLoop.step(game.core, static_cast<std::uint32_t>(steps_));
   if (product) {
     services_.budget.step();
     game.repl.afterStep();
@@ -237,7 +227,7 @@ bool TitleSession::showsTitlePicture() const {
   }
   // The driver knows when the retail boot prefix has returned; a pixel test cannot tell an
   // animated publisher logo from an attract demo.
-  const FrameDriver &driver = psx::frame::FrameLoopShell{}.requireDriver(*parts_->game);
+  const psx::game::FrameDriver &driver = services_.frameLoop.requireDriver(*parts_->game);
   if (!driver.pastBootPrefix()) {
     return false;
   }

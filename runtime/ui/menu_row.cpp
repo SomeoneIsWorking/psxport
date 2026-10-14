@@ -55,7 +55,7 @@ private:
 
 class TitleSettingBinding final : public RowBinding {
 public:
-  TitleSettingBinding(const TitleIntSetting *setting, Mods *mods) : mSetting(setting), mMods(mods) {}
+  TitleSettingBinding(const psx::game::TitleIntSetting *setting, Mods *mods) : mSetting(setting), mMods(mods) {}
   bool text(std::string &out) const override {
     out = std::to_string(mSetting->range.clamp(mSetting->var->get())) + mSetting->unit;
     return true;
@@ -71,7 +71,7 @@ public:
   }
 
 private:
-  const TitleIntSetting *mSetting;
+  const psx::game::TitleIntSetting *mSetting;
   Mods *mMods;
 };
 
@@ -185,7 +185,7 @@ std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id) 
 std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id) {
   return std::make_unique<ModAdjustBinding>(mods, std::move(id));
 }
-std::unique_ptr<RowBinding> make_title_setting_binding(const TitleIntSetting *setting, Mods *mods) {
+std::unique_ptr<RowBinding> make_title_setting_binding(const psx::game::TitleIntSetting *setting, Mods *mods) {
   return std::make_unique<TitleSettingBinding>(setting, mods);
 }
 std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp) {

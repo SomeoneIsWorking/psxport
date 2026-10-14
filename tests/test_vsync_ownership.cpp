@@ -6,11 +6,14 @@
 #include "game_runtime.h"
 #include "native_dispatch.h"
 #include "platform_hle.h"
+#include "stock_vsync.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <csignal>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -20,25 +23,18 @@ constexpr uint32_t kVSyncAddress = 0x800859A8u;
 constexpr uint32_t kWindowEnd = 0x80085B20u;
 constexpr uint32_t kSyntheticVBlankCounter = 0x80018000u;
 
-class DirectRuntime final : public GameRuntime {
+class DirectRuntime final : public psx::test::StubGameRuntime {
 public:
-  const PlatformHlePlan *platformHlePlan() const override {
-    return &plan;
-  }
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
+  void registerOverrides(Game &game) override {
+    vsync_.emplace(vsyncAddress, queryCounter);
+    vsync_->bind(game);
   }
 
-  PlatformHlePlan plan{};
+  std::uint32_t vsyncAddress = 0;
+  std::uint32_t queryCounter = 0;
+
+private:
+  std::optional<psx::hle::StockVSync> vsync_;
 };
 
 void harmless_handler(Core *) {}
@@ -60,12 +56,11 @@ void assert_wait_modes_request_frame_boundary(Game &game) {
   }
 }
 
-void assert_missing_counter_aborts(Game &game) {
+template <class Body> void assert_aborts(Body body) {
   const pid_t child = fork();
   CHECK(child >= 0);
   if (child == 0) {
-    game.core.r[4] = static_cast<uint32_t>(-1);
-    game.platform_hle.lookup(kVSyncAddress)(&game.core);
+    body();
     _exit(0);
   }
   int status = 0;
@@ -74,19 +69,23 @@ void assert_missing_counter_aborts(Game &game) {
   CHECK_EQ(WTERMSIG(status), SIGABRT);
 }
 
+void assert_missing_counter_aborts(Game &game) {
+  assert_aborts([&game] {
+    game.core.r[4] = static_cast<uint32_t>(-1);
+    game.platform_hle.lookup(kVSyncAddress)(&game.core);
+  });
+}
+
 } // namespace
 
 static void test_direct_runtime_installs_one_wait_boundary_and_measured_query() {
   DirectRuntime runtime;
-  runtime.plan.vsyncAddress = kVSyncAddress;
-  runtime.plan.vsyncQueryCounterAddress = kSyntheticVBlankCounter;
-  runtime.plan.windowLo[0] = kVSyncAddress;
-  runtime.plan.windowHi[0] = kWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  runtime.vsyncAddress = kVSyncAddress;
+  runtime.queryCounter = kSyntheticVBlankCounter;
+  auto game = std::make_unique<Game>(runtime);
 
-  game->platform_hle.initBuiltins();
-  game->platform_hle.initBuiltins(); // repeatable even when no title override is installed
+  runtime.registerOverrides(*game);
+  runtime.registerOverrides(*game); // binding the same entry again is idempotent
   CHECK(game->platform_hle.hasNativeFrameLoopContract());
   game->platform_hle.requireNativeFrameLoopContract();
   game->core.mem_w32(kSyntheticVBlankCounter, 73u);
@@ -112,8 +111,8 @@ static void test_legacy_adapter_installs_the_same_wait_boundary() {
   config.hle.windowLo[0] = kVSyncAddress;
   config.hle.windowHi[0] = kWindowEnd;
   config.hle.vsyncTrap = kVSyncAddress;
-  psxport_install_game(&config, &hooks);
-  auto game = std::make_unique<Game>();
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto game = std::make_unique<Game>(runtime);
 
   game->platform_hle.initBuiltins();
   CHECK(game->platform_hle.hasNativeFrameLoopContract());
@@ -123,25 +122,39 @@ static void test_legacy_adapter_installs_the_same_wait_boundary() {
 
 static void test_vsync_boundary_cannot_be_replaced() {
   DirectRuntime runtime;
-  runtime.plan.vsyncAddress = kVSyncAddress;
-  runtime.plan.windowLo[0] = kVSyncAddress;
-  runtime.plan.windowHi[0] = kWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  runtime.vsyncAddress = kVSyncAddress;
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
+
+  assert_aborts([&game] {
+    game->platform_hle.bindStock(kVSyncAddress, harmless_handler);
+  });
+  assert_wait_modes_request_frame_boundary(*game);
+}
+
+namespace {
+
+void test_legacy_vsync_boundary_cannot_be_replaced() {
+  GameConfig config{};
+  const GameHooks hooks{};
+  config.hle.windowLo[0] = kVSyncAddress;
+  config.hle.windowHi[0] = kWindowEnd;
+  config.hle.vsyncTrap = kVSyncAddress;
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto game = std::make_unique<Game>(runtime);
   game->platform_hle.initBuiltins();
 
   CHECK(!game->platform_hle.register_(kVSyncAddress, harmless_handler));
   assert_wait_modes_request_frame_boundary(*game);
 }
 
+} // namespace
+
 static void test_negative_query_without_measured_counter_refuses() {
   DirectRuntime runtime;
-  runtime.plan.vsyncAddress = kVSyncAddress;
-  runtime.plan.windowLo[0] = kVSyncAddress;
-  runtime.plan.windowHi[0] = kWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+  runtime.vsyncAddress = kVSyncAddress;
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
 
   assert_missing_counter_aborts(*game);
   CHECK(!game->core.executionControl().pending());
@@ -149,25 +162,27 @@ static void test_negative_query_without_measured_counter_refuses() {
 
 static void test_missing_direct_vsync_address_has_no_product_contract() {
   DirectRuntime runtime;
-  runtime.plan.windowLo[0] = kVSyncAddress;
-  runtime.plan.windowHi[0] = kWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
 
   CHECK(!game->platform_hle.hasNativeFrameLoopContract());
 }
 
-static void test_vsync_address_outside_the_declared_window_is_refused() {
-  DirectRuntime runtime;
-  runtime.plan.windowLo[0] = kVSyncAddress + 4u;
-  runtime.plan.windowHi[0] = kWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+namespace {
+
+void test_legacy_address_outside_the_declared_window_is_refused() {
+  GameConfig config{};
+  const GameHooks hooks{};
+  config.hle.windowLo[0] = kVSyncAddress + 4u;
+  config.hle.windowHi[0] = kWindowEnd;
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto game = std::make_unique<Game>(runtime);
 
   CHECK(!game->platform_hle.register_(kVSyncAddress, harmless_handler));
   CHECK(game->platform_hle.lookup(kVSyncAddress) == nullptr);
 }
+
+} // namespace
 
 // A TITLE'S OWN OVERRIDE WINS OVER THE HOST-SERVICE TABLE. This is the case that was silently
 // impossible before, and it is the whole reason `resolveHostDispatch` consults the image-scoped native
@@ -198,14 +213,11 @@ void titleOwnedBoundary(Core *) {
 
 static void test_a_title_override_is_dispatched_before_a_host_service_leaf(void) {
   DirectRuntime runtime;
-  runtime.plan.vsyncAddress = kVSyncAddress;
-  runtime.plan.windowLo[0] = kVSyncAddress;
-  runtime.plan.windowHi[0] = kWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+  runtime.vsyncAddress = kVSyncAddress;
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
 
-  // Both tables now claim this address: the framework's VSync builtin through the HLE plan, and the
+  // Both tables now claim this address: the framework's VSync builtin through StockVSync, and the
   // title's own boundary through the image-scoped seam.
   const OverrideFn builtin = game->platform_hle.lookup(kVSyncAddress);
   CHECK(builtin != nullptr);
@@ -241,12 +253,9 @@ static void test_a_title_override_is_dispatched_before_a_host_service_leaf(void)
 // FOR. Without this the ordering change would look like it had simply disabled the builtins.
 static void test_a_host_service_leaf_still_answers_an_unclaimed_address(void) {
   DirectRuntime runtime;
-  runtime.plan.vsyncAddress = kVSyncAddress;
-  runtime.plan.windowLo[0] = kVSyncAddress;
-  runtime.plan.windowHi[0] = kWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+  runtime.vsyncAddress = kVSyncAddress;
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
   // An image is active but NO override is installed for this address.
   (void)game->core.imageCatalog().activate(
       "vsync-ownership", {kVSyncAddress & 0x1fffffffu, kWindowEnd & 0x1fffffffu}, 0x564f574eull);
@@ -274,12 +283,9 @@ static void test_a_host_service_leaf_still_answers_an_unclaimed_address(void) {
 // resumed at the wrong address", which is the same stall with a better story. This pins the address.
 static void test_a_frame_boundary_leaf_resumes_after_its_call_not_at_its_entry() {
   DirectRuntime runtime;
-  runtime.plan.vsyncAddress = kVSyncAddress;
-  runtime.plan.windowLo[0] = kVSyncAddress;
-  runtime.plan.windowHi[0] = kWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+  runtime.vsyncAddress = kVSyncAddress;
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
   // An image is active but no title claims this address, so the framework's own leaf is reached —
   // the situation the previous test deliberately does NOT create.
   (void)game->core.imageCatalog().activate(
@@ -314,12 +320,9 @@ void boundaryStatingItsOwnResume(Core *core) {
 
 static void test_a_leaf_that_states_its_own_resume_address_keeps_it() {
   DirectRuntime runtime;
-  runtime.plan.vsyncAddress = kVSyncAddress;
-  runtime.plan.windowLo[0] = kVSyncAddress;
-  runtime.plan.windowHi[0] = kWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+  runtime.vsyncAddress = kVSyncAddress;
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
 
   constexpr uint32_t kStated = 0x80012345u;
   constexpr uint32_t kReturn = 0x8007A934u;
@@ -340,9 +343,10 @@ int main() {
   RUN(direct_runtime_installs_one_wait_boundary_and_measured_query);
   RUN(legacy_adapter_installs_the_same_wait_boundary);
   RUN(vsync_boundary_cannot_be_replaced);
+  RUN(legacy_vsync_boundary_cannot_be_replaced);
   RUN(negative_query_without_measured_counter_refuses);
   RUN(missing_direct_vsync_address_has_no_product_contract);
-  RUN(vsync_address_outside_the_declared_window_is_refused);
+  RUN(legacy_address_outside_the_declared_window_is_refused);
   RUN(a_title_override_is_dispatched_before_a_host_service_leaf);
   RUN(a_host_service_leaf_still_answers_an_unclaimed_address);
   RUN(a_frame_boundary_leaf_resumes_after_its_call_not_at_its_entry);

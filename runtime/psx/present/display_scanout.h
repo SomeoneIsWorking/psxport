@@ -6,8 +6,8 @@ namespace psxport::display {
 // and conflating them has cost a retracted defect report.
 //
 // A port that HLEs the guest's display setup never writes GP1(07), so the decoded display height
-// keeps the framework's default while the game really scans fewer lines. `GameConfig::
-// guestDisplayHeight` is the port stating the real count.
+// keeps the framework's default while the game really scans fewer lines. `GameRuntime::displayHeight()`
+// is the port stating the real count.
 //
 // A GUEST-SOURCED render path claims to show what the console showed, so it presents the declared
 // count. A NATIVE render path owns its own frame and deliberately presents more (USER 2026-08-19:
@@ -25,7 +25,7 @@ struct Scanout {
 };
 
 // `displayHeight` is the decoded GP1(07) height (or the framework default when it was never
-// written); `declaredGuestHeight` is GameConfig::guestDisplayHeight, or 0 when the port declares
+// written); `declaredGuestHeight` is GameRuntime::displayHeight, or 0 when the port declares
 // none; `nativePath` is whether a native renderer owns this frame.
 constexpr Scanout scanout(int displayHeight, int declaredGuestHeight, bool nativePath) {
   if (declaredGuestHeight <= 0) {

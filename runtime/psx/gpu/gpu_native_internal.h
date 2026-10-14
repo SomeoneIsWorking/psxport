@@ -139,7 +139,7 @@ struct GpuState {
   // How many of the presented rows a console would scan out, starting at the top. A picture
   // comparison against a console compares these rows; the native path may present more.
   int guestScanHeight(Core *core) const;
-  static int declaredGuestHeight(Core *core); // GameConfig::guestDisplayHeight, or 0
+  static int declaredGuestHeight(Core *core); // GameRuntime::displayHeight, or 0
   int s_disp_vy0 = 0, s_disp_vy1 = 240;       // GP1(0x07) vertical display range
   // Has GP1(0x07) been written AT ALL? Without this, `s_disp_h == 240` is unreadable: it is either the
   // height the game asked for or the height nobody asked for, and those are opposite answers when the

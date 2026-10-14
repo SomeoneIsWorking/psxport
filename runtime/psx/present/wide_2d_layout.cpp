@@ -29,7 +29,7 @@ Mechanism guest_mechanism(Core &core) {
 
 // A guest-widened title says per frame whether its coordinates already include the widening.
 Rq2dSpace guest_space(Core &core, const Mechanism &host, const Mechanism &guest, Rq2dSpace declared) {
-  const GuestWidescreenProjection *policy = core.runtime ? core.runtime->guestWidescreenProjection() : nullptr;
+  const GuestWidescreenProjection *policy = core.runtime.guestWidescreenProjection();
   const bool widened = policy != nullptr && policy->guestCoordinatesWidened(core);
   return wide_2d_guest_space(host.engaged, guest.engaged, widened, declared);
 }

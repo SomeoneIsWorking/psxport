@@ -6,7 +6,7 @@
 #include "irq_edge.h"   // irq_latch_edge / IRQ_BIT_SPU — how a source's line becomes an I_STAT bit
 #include <lucent/log.h> // diagnostics: lucent::debug (channel-gated internally — never guard it)
 
-// Bind THIS core's per-instance SPU state (Beetle spu.c), lazily powering it on first use. Like gte_bind,
+// Bind THIS core's per-instance SPU state (Beetle spu.c), lazily powering it on first use. Like Gte::bind,
 // called per core frame-step + at boot, from the explicit Core — two cores keep SEPARATE SPU state.
 // Also binds this core's SPU write log so spu_write appends to A's or B's per-Core log during SBS, and
 // this core as the target of the SPU's interrupt line (spu_irq_raise below).

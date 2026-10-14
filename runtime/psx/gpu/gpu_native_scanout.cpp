@@ -11,12 +11,11 @@
 
 #include "display_scanout.h"
 #include "gpu_native_internal.h"
-#include "legacy_game_config.h"
 
 #include <lucent/log.h>
 
 int GpuState::declaredGuestHeight(Core *core) {
-  return (core->cfg && core->cfg->guestDisplayHeight) ? core->cfg->guestDisplayHeight : 0;
+  return core->runtime.displayHeight();
 }
 
 int GpuState::guestScanHeight(Core *core) const {
@@ -32,7 +31,7 @@ int GpuState::presentedHeight(Core *core, int displayHeight) {
     if (!said) {
       said = true;
       lucent::info("gpu",
-                   "guest render path presents {} lines, not {} — GameConfig::guestDisplayHeight. "
+                   "guest render path presents {} lines, not {} — GameRuntime::displayHeight. "
                    "The extra rows are framebuffer this game never scans out.",
                    declared,
                    displayHeight);

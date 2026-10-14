@@ -4,12 +4,15 @@
 #include "game_iface.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <array>
 #include <memory>
 #include <stdexcept>
 #include <vector>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 constexpr uint32_t sourceTag = 0x1234;
 
 RqItem item(int layer, uint32_t sequence, uint32_t producer, bool projected = false) {
@@ -143,7 +146,7 @@ void checkVerbatim(const Fps60 &presentation, std::span<const RqItem> captured) 
 // neighbour it is composited against. Measured on Spyro 1 as identical draw calls producing
 // different pixels in the effect's own region.
 void test_unowned_items_keep_their_captured_position_between_reconstructed_ones() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->mods.fps60 = true;
   auto ownedSource = std::make_unique<Source>();
   Source &source = *ownedSource;
@@ -215,7 +218,7 @@ public:
 };
 
 void test_reconstruction_is_paired_per_producer_not_per_stream_position() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->mods.fps60 = true;
   auto ownedSource = std::make_unique<ReorderedSource>();
   Fps60 presentation(*game, std::move(ownedSource));
@@ -276,7 +279,7 @@ void test_reconstruction_is_paired_per_producer_not_per_stream_position() {
 }
 
 void test_mixed_producers_survive_every_reconstructed_slot() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->mods.fps60 = true;
   auto ownedSource = std::make_unique<Source>();
   Source &source = *ownedSource;
@@ -309,7 +312,7 @@ void test_mixed_producers_survive_every_reconstructed_slot() {
 }
 
 void test_disabled_ineligible_and_reference_frames_replay_capture() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   auto ownedSource = std::make_unique<Source>();
   Source &source = *ownedSource;
   Fps60 presentation(*game, std::move(ownedSource));
@@ -340,11 +343,11 @@ void test_disabled_ineligible_and_reference_frames_replay_capture() {
 }
 
 void test_rotation_is_per_instance_and_once_per_real_fence_even_disabled() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   auto ownedSource = std::make_unique<Source>();
   Source &source = *ownedSource;
   Fps60 presentation(*game, std::move(ownedSource));
-  auto otherGame = std::make_unique<Game>();
+  auto otherGame = std::make_unique<Game>(stubRuntime);
   auto otherSource = std::make_unique<Source>();
   Source &other = *otherSource;
   Fps60 otherPresentation(*otherGame, std::move(otherSource));
@@ -367,7 +370,7 @@ void test_rotation_is_per_instance_and_once_per_real_fence_even_disabled() {
 }
 
 void test_no_source_replays_without_synthesizing_a_second_present() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->mods.fps60 = true;
   Fps60 presentation(*game);
   presentation.mHavePrev = 1;
@@ -380,7 +383,7 @@ void test_no_source_replays_without_synthesizing_a_second_present() {
 }
 
 void test_failed_reconstruction_restores_display_state() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->mods.fps60 = true;
   auto source = std::make_unique<Source>();
   source->throwOnReconstruct = true;
@@ -417,7 +420,7 @@ void test_legacy_factory_preserves_uncaptured_endpoint_geometry_and_rotation() {
   hooks.fps60WorldPass = legacyWorld;
   hooks.fps60TemporalRotate = legacyRotate;
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->core.hooks = &hooks;
   game->temporalPresentation = runtime.createTemporalFramePresentation(*game);
   Fps60 &presentation = fps60(*game);
@@ -476,7 +479,7 @@ void test_guest_path_claim_is_what_admits_an_in_between_on_the_guest_path() {
   };
 
   for (const Case &one : cases) {
-    auto game = std::make_unique<Game>();
+    auto game = std::make_unique<Game>(stubRuntime);
     auto source = std::make_unique<ClaimingSource>(one.claim);
     Fps60 presentation(*game, std::unique_ptr<InBetweenStrategy>(std::move(source)));
     game->core.rsub.mode.setPath(one.path);

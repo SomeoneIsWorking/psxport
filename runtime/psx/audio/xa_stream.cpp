@@ -52,6 +52,14 @@ void xa_bind_state(XaState *s) {
   s_bound = s;
 }
 
+namespace psx::audio {
+void releaseXaState(const XaState &state) {
+  if (s_bound == &state) {
+    s_bound = nullptr;
+  }
+}
+} // namespace psx::audio
+
 #define s_active (xs->active)
 #define s_lba (xs->lba)
 #define s_mode (xs->mode)

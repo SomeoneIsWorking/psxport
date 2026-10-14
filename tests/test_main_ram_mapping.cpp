@@ -2,15 +2,15 @@
 #include "game_iface.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
 
+psx::test::StubGameRuntime stubRuntime;
+
 std::unique_ptr<Core> bareCore() {
-  static const GameConfig config{};
-  static const GameHooks hooks{};
-  psxport_install_game(&config, &hooks);
-  return std::make_unique<Core>();
+  return std::make_unique<Core>(stubRuntime);
 }
 
 void test_main_ram_aliases_share_the_store_mapping() {

@@ -29,9 +29,12 @@
 #include "render_queue.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 constexpr int kNativeWidth = 512; // Spyro 2's own 4:3 framebuffer width
 constexpr int kGuestClipRight = kNativeWidth - 1;
@@ -67,7 +70,7 @@ static const Shape kShapes[] = {kGuestWorldShape, kNativeWorldShape};
 static const int kShapeCount = static_cast<int>(sizeof kShapes / sizeof kShapes[0]);
 
 static Submitted submit(int aspect, bool latch, Shape shape, int guestClipRight = kGuestClipRight, int guestLeft = 0) {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->gpu.s_disp_w = kNativeWidth;
   game->mods.aspect = aspect;
   // The GTE path is what `guestWidescreenAllowed()` answers for, and it is the only path on which a

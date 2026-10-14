@@ -16,10 +16,9 @@
 #include "config_vars.h"
 #include "core.h"
 #include "game.h"                // class Pad lives on Game (c->game->pad)
-#include "game_runtime.h"        // GameRuntime::inputPhase / guestPadBufferLayout
+#include "game_runtime.h"        // GameRuntime::inputPhase / deliverPad
 #include "gpu_native_internal.h" // gpu_scene_dump_now / gpu_disp_dump_now / gpu_otattr_dump_now
 #include "gpu_vk.h"              // gpu_vk_shot, gpu_vk_windowed — the windowed/headless discriminator
-#include "guest_pad_buffer_layout.h"
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,7 +27,7 @@
 // The title's input phase for this pad frame. A title that declares none (the GameRuntime default,
 // and every legacy adapter) answers kUnkeyedPhase, and its recordings are absolute from boot.
 uint64_t Pad::currentPhase(Core &core) const {
-  return core.runtime ? core.runtime->inputPhase(core) : psx::input::kUnkeyedPhase;
+  return core.runtime.inputPhase(core);
 }
 
 void Pad::init() {
@@ -159,33 +158,6 @@ void Pad::applyGuestPoke(Core *c) {
     }
   }
 }
-
-namespace {
-
-// Where this title keeps the packet the guest polls. A title may expose fixed buffers, a driver-owned
-// pointer table, or both; a non-null driver pointer wins and the fixed address is the fallback.
-GuestPadBufferLayout resolveGuestPadBufferLayout(const Core &core) {
-  if (core.cfg) {
-    return {
-        .slot0Buffer = core.cfg->padSlot0Buf,
-        .slot1Buffer = core.cfg->padSlot1Buf,
-        .slotPointerTable = core.cfg->padSlotPtrTable,
-        .slotPointerStride = core.cfg->padSlotPtrStride ? core.cfg->padSlotPtrStride : 4u,
-    };
-  }
-  if (core.runtime) {
-    if (const GuestPadBufferLayout *layout = core.runtime->guestPadBufferLayout()) {
-      GuestPadBufferLayout resolved = *layout;
-      if (!resolved.slotPointerStride) {
-        resolved.slotPointerStride = 4u;
-      }
-      return resolved;
-    }
-  }
-  return {};
-}
-
-} // namespace
 
 void Pad::serviceFrame() {
   Core *c = &game->core;
@@ -391,28 +363,8 @@ void Pad::serviceFrame() {
     return;
   }
 
-  uint8_t pk[4];
-  fillBuffer(pk);
-  const GuestPadBufferLayout layout = resolveGuestPadBufferLayout(*c);
-  const uint32_t bufs[2] = {layout.slot0Buffer, layout.slot1Buffer};
-  for (int slot = 0; slot < 2; slot++) {
-    // Only consult the driver's table when the port HAS one. Reading it unconditionally means a game
-    // with no known table reads guest address 0 (and 0+stride) and calls whatever garbage is there a
-    // buffer pointer — writing the pad packet into an arbitrary address.
-    uint32_t b =
-        layout.slotPointerTable ? c->mem_r32(layout.slotPointerTable + (uint32_t)slot * layout.slotPointerStride) : 0u;
-    if (!b) {
-      b = bufs[slot]; // fall back to the fixed buffer
-    }
-    if (!b) {
-      continue; // neither known: nothing to fill
-    }
-    if (slot == 1 && !mSlot1Connected) {
-      c->mem_w8(b, 0xFF);
-    } else {
-      for (int i = 0; i < 4; i++) {
-        c->mem_w8(b + i, pk[i]);
-      }
-    }
-  }
+  psx::input::PadDelivery delivery;
+  fillBuffer(delivery.packet.data());
+  delivery.slot1Connected = mSlot1Connected;
+  c->runtime.deliverPad(*c, delivery);
 }

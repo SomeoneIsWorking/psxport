@@ -1,17 +1,20 @@
 // The direct-runtime stock-libcd binding targets are the shipping synchronous read owners, not
 // title-local copies. Exercise their guest ABI and state transitions without requiring a disc image.
-#include "cd_control.h"
 #include "dynarec_test_fixture.h"
 #include "game.h"
 #include "guest_call.h"
 #include "invalidation.h"
 #include "lightrec_executor.h"
+#include "stock_libcd.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <array>
 #include <memory>
 
 namespace {
+psx::test::StubGameRuntime stubRuntime;
+const psx::cd::StockLibcd kLibcd({}, {}, 0);
 
 enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 
@@ -47,14 +50,14 @@ int codeInSecondSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) 
 } // namespace
 
 static void test_stock_read_refuses_without_a_position() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->core.r[A0] = 1;
   game->core.r[A1] = kBuffer;
   game->core.r[A2] = 0;
   game->core.r[V0] = 0xDEADBEEFu;
   game->core.mem_w8(kBuffer, 0xA5u);
 
-  cd_read_stock_sync(&game->core);
+  kLibcd.read(game->core);
 
   CHECK_EQ(game->core.r[V0], 0u);
   CHECK_EQ(game->core.mem_r8(kBuffer), 0xA5u);
@@ -62,7 +65,7 @@ static void test_stock_read_refuses_without_a_position() {
 }
 
 static void test_zero_sector_stock_read_completes_without_inventing_drive_work() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->cd.setloc_lba = 321;
   game->cd.sec_pos = 40;
   game->cd.sec_len = 2352;
@@ -72,7 +75,7 @@ static void test_zero_sector_stock_read_completes_without_inventing_drive_work()
   game->core.r[A1] = kBuffer;
   game->core.r[A2] = 0;
 
-  cd_read_stock_sync(&game->core);
+  kLibcd.read(game->core);
 
   CHECK_EQ(game->core.r[V0], 1u);
   CHECK_EQ(game->cd.setloc_lba, 321);
@@ -83,7 +86,7 @@ static void test_zero_sector_stock_read_completes_without_inventing_drive_work()
 }
 
 static void test_stock_readsync_reports_completed_and_zeros_result() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   for (uint32_t i = 0; i < 8; i++) {
     game->core.mem_w8(kResult + i, static_cast<uint8_t>(0x80u + i));
   }
@@ -91,7 +94,7 @@ static void test_stock_readsync_reports_completed_and_zeros_result() {
   game->core.r[A1] = kResult;
   game->core.r[V0] = 0xDEADBEEFu;
 
-  cd_readsync_stock_sync(&game->core);
+  kLibcd.readSync(game->core);
 
   CHECK_EQ(game->core.r[V0], 0u);
   for (uint32_t i = 0; i < 8; i++) {
@@ -100,7 +103,7 @@ static void test_stock_readsync_reports_completed_and_zeros_result() {
 }
 
 static void test_stock_cdsync_reports_ready_and_zeros_result() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   for (uint32_t i = 0; i < 8; i++) {
     game->core.mem_w8(kResult + i, static_cast<uint8_t>(0x90u + i));
   }
@@ -108,7 +111,7 @@ static void test_stock_cdsync_reports_ready_and_zeros_result() {
   game->core.r[A1] = kResult;
   game->core.r[V0] = 0xDEADBEEFu;
 
-  cd_sync_stock_sync(&game->core);
+  kLibcd.sync(game->core);
 
   CHECK_EQ(game->core.r[V0], 2u);
   for (uint32_t i = 0; i < 8; i++) {
@@ -117,7 +120,7 @@ static void test_stock_cdsync_reports_ready_and_zeros_result() {
 }
 
 static void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   auto &core = game->core;
   core.mem_w8(kBuffer, 0x00u);
   core.mem_w8(kBuffer + 1, 0x03u);
@@ -134,7 +137,7 @@ static void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
   core.r[A2] = kResult;
   core.r[V0] = 0xDEADBEEFu;
 
-  cd_command_stock_sync(&core);
+  kLibcd.command(core);
 
   CHECK_EQ(core.r[V0], 0u);
   CHECK_EQ(game->cd.setloc_lba, 95);
@@ -147,13 +150,13 @@ static void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
 
   // CdControl is a distinct public ABI over the same command effects: its success result is 1.
   core.r[V0] = 0xDEADBEEFu;
-  cd_control_sync(&core);
+  kLibcd.control(core);
   CHECK_EQ(core.r[V0], 1u);
   CHECK_EQ(game->cd.setloc_lba, 95);
 }
 
 static void test_stock_pause_stops_stream_and_accepts_null_output() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->cd.stock_reading = 1;
   game->cd.stream_active = 1;
   game->core.r[A0] = 0x09u;
@@ -161,7 +164,7 @@ static void test_stock_pause_stops_stream_and_accepts_null_output() {
   game->core.r[A2] = 0;
   game->core.r[V0] = 0xDEADBEEFu;
 
-  cd_command_stock_sync(&game->core);
+  kLibcd.command(game->core);
 
   CHECK_EQ(game->core.r[V0], 0u);
   CHECK_EQ(game->cd.stock_reading, 0);
@@ -171,7 +174,7 @@ static void test_stock_pause_stops_stream_and_accepts_null_output() {
 // ----------------------------------------------------------------------------
 // The executable-write report on the CdRead route, and what it is worth without a disc.
 //
-// `cd_read_stock_sync` writes `sectors * bytes` from a guest-chosen `buf`, and the guest is free to aim
+// `StockLibcd::read` writes `sectors * bytes` from a guest-chosen `buf`, and the guest is free to aim
 // that at CODE. Tomba! 1 does: `CdRead 7x2048 from LBA 103311 -> 0x800E7388`, after which the port's
 // dispatch answered "claimed by none" for the callee — a module arriving on a route that never told the
 // invalidation owner, so Lightrec could keep serving translated blocks for bytes that had just changed.
@@ -183,7 +186,7 @@ static void test_stock_pause_stops_stream_and_accepts_null_output() {
 // unless the feeder is shown running first. That is the whole lesson of the nine dead taps in this
 // workspace, so it is asserted rather than assumed.
 static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_not_move_it() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   const uint64_t atRest = game->core.lightrecExecutor().counters().invalidations;
 
   // POSITIVE: the owner is fed on purpose, and the counter moves. Without this line the zero below is
@@ -198,7 +201,7 @@ static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_no
   game->core.r[A0] = 0;
   game->core.r[A1] = kBuffer;
   game->core.r[A2] = 0;
-  cd_read_stock_sync(&game->core);
+  kLibcd.read(game->core);
   CHECK_EQ(game->core.r[V0], 1u);
   CHECK_EQ(game->core.lightrecExecutor().counters().invalidations, afterDeliberate);
 }
@@ -206,7 +209,7 @@ static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_no
 // The positive feeder, through the controller's sector-source binding: each sector costs ONE
 // invalidation (its range, reported once), not one per byte copied.
 static void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->cdc.disc_read_raw_fn = fakeSector;
   game->cd.setloc_lba = 7;
   game->core.r[A0] = 3; // sectors
@@ -214,7 +217,7 @@ static void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte()
   game->core.r[A2] = 0; // 2048-byte payloads
   const auto before = game->core.lightrecExecutor().counters();
 
-  cd_read_stock_sync(&game->core);
+  kLibcd.read(game->core);
 
   const auto after = game->core.lightrecExecutor().counters();
   CHECK_EQ(game->core.r[V0], 1u);
@@ -230,7 +233,7 @@ static void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte()
 // executed it after a module load and faulted at PC 0x10000000). The guest code below is translated
 // in the second sector, then the read replaces it: the next call must run the new program.
 static void test_a_multi_sector_read_invalidates_translated_code_in_a_later_sector() {
-  dynarec_test::Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = dynarec_test::makeGame(runtime);
   Core &core = game->core;
   dynarec_test::installTestImage(core);
@@ -248,7 +251,7 @@ static void test_a_multi_sector_read_invalidates_translated_code_in_a_later_sect
   core.r[A0] = 2;                                   // sectors: LBA 7 then LBA 8
   core.r[A1] = 0x80000000u | dynarec_test::kCaller; // buffer
   core.r[A2] = 0;                                   // 2048-byte payloads
-  cd_read_stock_sync(&core);
+  kLibcd.read(core);
   CHECK_EQ(core.r[V0], 1u);
   CHECK_EQ(core.mem_r32(second), 0x24020002u);
 
@@ -261,13 +264,13 @@ static void test_a_multi_sector_read_invalidates_translated_code_in_a_later_sect
 // The refusal path must be just as quiet: with no Setloc the read never starts, so there is no write and
 // nothing to report. A refusal that still reported a range would invalidate on every unpositioned poll.
 static void test_a_refused_read_reports_no_executable_write() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   psx::cpu::notifyExecutableWrite(game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
   const uint64_t before = game->core.lightrecExecutor().counters().invalidations;
   game->core.r[A0] = 4;
   game->core.r[A1] = kBuffer;
   game->core.r[A2] = 0;
-  cd_read_stock_sync(&game->core);
+  kLibcd.read(game->core);
   CHECK_EQ(game->core.r[V0], 0u);
   CHECK_EQ(game->core.lightrecExecutor().counters().invalidations, before);
 }

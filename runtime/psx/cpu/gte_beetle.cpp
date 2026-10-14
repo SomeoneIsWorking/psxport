@@ -6,7 +6,7 @@
 // matches the oracle exactly. The widescreen GTE-scale hack stays OFF here (fps60 tier later).
 #include "cfg.h"
 #include "core.h"
-#include "game.h"             // Core::game->gte (per-instance GTE register file) for gte_bind
+#include "gte.h"
 #include "gte_state.h"        // GteRegs / GTE_CurState — the per-instance register file
 #include "proj_params.h"      // class ProjParams — camview + per-frame projection constants
 #include "proj_vtx.h"         // ProjVtx — proj_native_vertex's POD out-struct (was reached via render.h)
@@ -247,7 +247,7 @@ void gte_probe_dump(const char *tag) {
 
 // proj_pz_to_ord + the camview + projection-plane accessors moved to game/render/proj_params.cpp — see
 // the free-function bridges at the bottom of that file. They forward to ProjParams::current() (bound
-// per-frame by gte_bind), so callers with no Core* in scope keep working.
+// per-frame by Gte::bind), so callers with no Core* in scope keep working.
 // Project an EXPLICIT model vertex V (int16 x/y/z) through the GTE's composed camera×object transform
 // (rotation CR0-4 + translation CR5-7 + screen offset/H CR24-26) to float screen coords + view-Z, with
 // NO gte_op — the full RTPT math in C. `insn` carries the sf/lm flags an RTPT would use (RTPT = 0x280030,
@@ -448,7 +448,7 @@ static void rtpcaller_record(uint32_t ra) {
   }
 }
 void rtpcaller_dump(Core *c, const char *tag) {
-  GteDebug &d = c->game->gte.dbg;
+  GteDebug &d = c->gte().registers().dbg;
   if (d.rtpcaller_on != 1) {
     return;
   }
@@ -528,7 +528,7 @@ static void gte_op_impl(Core *c, uint32_t insn, uint32_t guest_pc) {
     GTE_Instruction(insn);
   });
   unsigned op = insn & 0x3F;
-  GteDebug &gd = c->game->gte.dbg;
+  GteDebug &gd = c->gte().registers().dbg;
   if (gd.gteprobe < 0) {
     const char *e = cfg_str("PSXPORT_GTEPROBE");
     gd.gteprobe = e ? atoi(e) : 0;
@@ -751,13 +751,6 @@ void gte_record_pz(Core *c, uint32_t addr, int gpr) {
   c->rsub.projprim.setPz(c, addr, s_held_pz[gpr & 31]);
 }
 
-// Bind the GTE math to THIS core's register file (game.h GteRegs) so two cores keep separate GTE state.
-// Called by the title FrameDriver for each core step and by boot setup, from the explicit Core — no shared regs.
-void gte_bind(Core *c) {
-  GTE_BindState(&c->game->gte);
-  // Binding selects the per-Core projection owner; its lifetime follows frame presentation.
-  c->rsub.projParams.bind(c);
-}
 void gte_init(void) {
   GTE_Init();
   GTE_Power();
@@ -767,3 +760,49 @@ void gte_init(void) {
   // it loses horizontal resolution and stretches the 2D HUD (user rejected it). Keep the hack OFF. }
   widescreen_hack = 0;
 }
+
+namespace psx::cpu {
+
+Gte::Gte(Core &core) : core_(core) {
+  // -1: the probe's environment switch has not been read yet.
+  regs_.dbg.sxhist_on = regs_.dbg.gteprobe = regs_.dbg.projprobe = regs_.dbg.rtpcaller_on = -1;
+}
+
+void Gte::bind() {
+  GTE_BindState(&regs_);
+  core_.rsub.projParams.bind(&core_);
+}
+
+void Gte::release() {
+  if (GTE_CurState() == &regs_) {
+    GTE_BindState(nullptr);
+  }
+  core_.rsub.projParams.release();
+}
+
+std::uint32_t Gte::readData(std::uint32_t reg) {
+  bind();
+  return GTE_ReadDR(reg);
+}
+
+void Gte::writeData(std::uint32_t reg, std::uint32_t value) {
+  bind();
+  GTE_WriteDR(reg, value);
+}
+
+std::uint32_t Gte::readControl(std::uint32_t reg) {
+  bind();
+  return GTE_ReadCR(reg);
+}
+
+void Gte::writeControl(std::uint32_t reg, std::uint32_t value) {
+  bind();
+  GTE_WriteCR(reg, value);
+}
+
+void Gte::execute(std::uint32_t instruction) {
+  bind();
+  gte_op_impl(&core_, instruction, core_.pc);
+}
+
+} // namespace psx::cpu

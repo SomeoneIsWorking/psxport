@@ -3,9 +3,12 @@
 #include "host_turn.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 int deliveredTurns;
 bool requestNestedTurn;
@@ -37,11 +40,11 @@ public:
     psx::cpu::shutdownHostTurn(game->core);
   }
 
-  std::unique_ptr<Game> game = std::make_unique<Game>();
+  std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
 };
 
 void test_unregistered_request_retires_after_critical_section() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->core.pending_work = Core::PW_HOST | Core::PW_IRQ;
   game->hle.irq_enabled = 0;
   psx::cpu::serviceHostTurn(game->core);
@@ -54,7 +57,7 @@ void test_unregistered_request_retires_after_critical_section() {
 
 void test_foreign_core_request_does_not_dispatch_registered_handler() {
   HostTurnFixture fixture;
-  auto foreignGame = std::make_unique<Game>();
+  auto foreignGame = std::make_unique<Game>(stubRuntime);
   foreignGame->hle.irq_enabled = 1;
   foreignGame->core.pending_work = Core::PW_HOST | Core::PW_IRQ;
 

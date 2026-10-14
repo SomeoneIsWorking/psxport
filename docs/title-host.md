@@ -60,14 +60,13 @@ first probe). It opens the title's disc on its own `DiscState` keyed by `discEnv
 `discExecutablePath`, authenticates the bytes with `selectExecutable` against that title alone, and
 writes them only on a match. A present file is never read or rewritten. Only `ProductHost` calls it.
 
-`GuestProgramImage::bootEntry` says who enters the guest. `Crt0` (the default): the framework applies the
-image's crt0 group (`crt0_setup`, from `TitleSession::boot`) and then `GameRuntime::bootInit`.
-`DriverOwned`: the framework applies no crt0; the title's frame driver enters the guest from the
-executable's entry. `TitleSession::boot` asks `psx::bootEntryRefusal` (`crt0_boot.h`) before it builds the
-`Game`: a `Crt0` image whose crt0 group is incomplete, or a runtime with no image, is refused by name
-(`bootEntry=Crt0 but 1 of 8 crt0 field(s) are unset (libcInitEntry)`) and the process exits 2.
-Tomba 2 is `Crt0`; its MAIN.EXE handoff stays in its `bootInit`. CTR, Tekken 3, Vagrant Story,
-Spider-Man 2 and C-12 are `DriverOwned`.
+`GameRuntime::startProgram` enters the guest, called by `TitleSession::boot` after the overrides,
+the control channel and the display clear. Its default does nothing: the title's frame driver enters
+at the executable's entry. A crt0 title runs `psx::game::Crt0Boot` (`runtime/psx/game/crt0_boot.h`)
+with its measured `Crt0Image`; an incomplete group is refused by name
+(`1 of 8 crt0 field(s) are unset (libcInitEntry)`) and the process exits 1 before any guest write.
+Tomba 2 replays crt0; its MAIN.EXE handoff follows in its `startProgram`. CTR, Tekken 3, Vagrant
+Story, Spider-Man 2 and C-12 keep the default.
 
 `GameRuntime::admitExecutable(core, bytes)` maps the executable and sets the entry registers. Its default is `loadPsxExeImage` plus `applyPsxExeTopLevelRegisters`; a title that publishes
 its own image identity overrides it (Crash Bash, which publishes its resident code range and sets no
@@ -123,8 +122,8 @@ install the title's runtime and build its `Game`; attach the
 the disc key from the title's `TitleIdentity`; `GameRuntime::admitExecutable`; the configuration audit
 (`psx::config::report_once`); the per-Core device binds (init then bind, then `Pad::overridesInit`, then
 the `a0`/`a1` seed); `GameRuntime::registerOverrides` then `FrameLoopShell::prepareProduct`;
-`DbgServer::start` and `store_observe_attach`; for a product only, `gpu_clear_display`; `crt0_setup` for
-a `Crt0` image, then `GameRuntime::bootInit`; for the first product session only,
+`DbgServer::start` and `store_observe_attach`; for a product only, `gpu_clear_display`;
+`GameRuntime::startProgram`; for the first product session only,
 `psx::state::applyConfiguredState` (fatal on failure); then the present-to-present series restarts, so the boot's gap
 is not counted as a missed present.
 

@@ -25,7 +25,7 @@ constexpr int kOffsetX = 16;
 
 using marker::Marker;
 
-psx::present::StateProducers producers() {
+psx::present::StateProducerTable producers() {
   return marker::renders(kProducer);
 }
 
@@ -233,7 +233,7 @@ public:
 };
 
 static void test_the_nth_primitive_in_a_slot_takes_the_nth_entrys_environment(void) {
-  psx::present::StateProducers renders;
+  psx::present::StateProducerTable renders;
   renders.install(kProducer, std::make_unique<PairRender>());
   FrameRecord shown(2, true);
   shown.beginSlot({0, 1}, true);

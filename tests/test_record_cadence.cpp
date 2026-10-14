@@ -2,6 +2,7 @@
 // pictures, or the shown record on its cut, then N.
 #include "frame_presenter.h"
 #include "marker_render.h"
+#include "render_mode.h"
 #include "testutil.h"
 
 #include <string>
@@ -39,12 +40,13 @@ public:
   void reconcile(uint64_t) override {}
   void beginLedgerFrame() override {}
   bool interpolatesRecords() const override {
-    return true;
+    return interpolates;
   }
   bool sealedFrameIsCut() override {
     return cut;
   }
   psx::gpu::RecordRect displayedBuffer() override {
+    ++displayQueries;
     return display;
   }
   void presentInBetween() override {
@@ -60,7 +62,13 @@ public:
   const psx::present::StateProducers *stateProducers() override {
     return producers;
   }
+  RenderMode *displayPassMode() override {
+    return &mode;
+  }
 
+  RenderMode mode;
+  bool interpolates = true;
+  int displayQueries = 0;
   bool cut = false;
   psx::gpu::RecordRect display = kBufferA;
   std::vector<std::string> calls;
@@ -107,11 +115,9 @@ FrameRecord slottedRecordAt(std::uint64_t sequence, int x, std::uint32_t serial)
 }
 
 psx::present::FrameState savedAt(const FrameRecord &record, std::uint32_t serial, float x) {
-  psx::present::FrameStates states;
   RecordKey owner = kKey;
   owner.serial = serial;
-  states.save(owner, marker::Marker{x, 1, 0});
-  return states.collect(record);
+  return marker::savedState(record, owner, x);
 }
 
 int shownX(const FrameRecord &record) {
@@ -248,7 +254,7 @@ static void test_a_display_no_record_drew_has_no_in_between(void) {
 static void test_every_present_draws_the_producers_render_at_its_t(void) {
   psx::frame::FramePresenter presenter;
   RecordBackend backend(presenter);
-  const psx::present::StateProducers renders = marker::renders(kKey.producer);
+  const psx::present::StateProducerTable renders = marker::renders(kKey.producer);
   backend.producers = &renders;
   const FrameRecord first = slottedRecordAt(0, 0, 1);
   presenter.commit(backend, 2, first, savedAt(first, 1, 0.0f));
@@ -271,7 +277,7 @@ static void test_every_present_draws_the_producers_render_at_its_t(void) {
 static void test_a_later_record_over_the_displayed_buffer_is_not_composed_over(void) {
   psx::frame::FramePresenter presenter;
   RecordBackend backend(presenter);
-  const psx::present::StateProducers renders = marker::renders(kKey.producer);
+  const psx::present::StateProducerTable renders = marker::renders(kKey.producer);
   backend.producers = &renders;
   const FrameRecord first = slottedRecordAt(0, 0, 1);
   presenter.commit(backend, 2, first, savedAt(first, 1, 0.0f));
@@ -294,7 +300,7 @@ static void test_a_later_record_over_the_displayed_buffer_is_not_composed_over(v
 static void test_a_copy_onto_itself_leaves_the_shown_picture_composed(void) {
   psx::frame::FramePresenter presenter;
   RecordBackend backend(presenter);
-  const psx::present::StateProducers renders = marker::renders(kKey.producer);
+  const psx::present::StateProducerTable renders = marker::renders(kKey.producer);
   backend.producers = &renders;
   const FrameRecord first = slottedRecordAt(0, 0, 1);
   presenter.commit(backend, 2, first, savedAt(first, 1, 0.0f));
@@ -330,7 +336,60 @@ static void test_stability_counts_in_betweens_and_repeats(void) {
   CHECK_EQ(presenter.stability().backwards, 0u);
 }
 
+namespace {
+
+class ArmedProbe final : public psx::present::StateProducer {
+public:
+  explicit ArmedProbe(const RenderMode &mode) : mode_(mode) {}
+  void
+  render(std::span<const std::byte>, std::span<const std::byte>, float, psx::present::PrimitiveSink &) const override {
+    ++renders;
+    armedEvery = armedEvery && mode_.displayPassArmed();
+  }
+
+  mutable int renders = 0;
+  mutable bool armedEvery = true;
+
+private:
+  const RenderMode &mode_;
+};
+
+// Producer renders run inside the display pass, so a render that stores to guest memory aborts.
+// A 30 fps Record present with nothing saved does not look for a picture to compose over.
+void test_a_frame_without_saved_state_is_not_composed() {
+  psx::frame::FramePresenter presenter;
+  RecordBackend backend(presenter);
+  const psx::present::StateProducerTable renders = marker::renders(kKey.producer);
+  backend.producers = &renders;
+  backend.interpolates = false;
+  presenter.commit(backend, 1, recordAt(1, 10));
+  CHECK_EQ(backend.displayQueries, 0);
+  CHECK(!backend.realComposed);
+}
+
+void test_producer_renders_run_inside_the_display_pass() {
+  psx::frame::FramePresenter presenter;
+  RecordBackend backend(presenter);
+  psx::present::StateProducerTable renders;
+  auto probe = std::make_unique<ArmedProbe>(backend.mode);
+  const ArmedProbe &seen = *probe;
+  renders.install(kKey.producer, std::move(probe));
+  backend.producers = &renders;
+  const FrameRecord first = slottedRecordAt(0, 0, 1);
+  presenter.commit(backend, 2, first, savedAt(first, 1, 0.0f));
+  const FrameRecord second = slottedRecordAt(1, 20, 2);
+  presenter.commit(backend, 2, second, savedAt(second, 2, 20.0f));
+
+  CHECK(seen.renders >= 3);
+  CHECK(seen.armedEvery);
+  CHECK(!backend.mode.displayPassArmed());
+}
+
+} // namespace
+
 int main(void) {
+  RUN(producer_renders_run_inside_the_display_pass);
+  RUN(a_frame_without_saved_state_is_not_composed);
   RUN(stability_counts_in_betweens_and_repeats);
   RUN(consecutive_records_present_the_blend_then_n);
   RUN(a_cut_shows_n_as_its_in_between);

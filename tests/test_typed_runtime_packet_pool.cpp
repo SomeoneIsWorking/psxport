@@ -1,4 +1,4 @@
-// A typed GameRuntime declares its own packet-pool windows, so its GuestPacketFilter is not blind.
+// A typed GameRuntime reports its packet pool, so its GuestPacketFilter is not blind.
 //
 // The bug this pins is the shape this project keeps finding: a title that HAS reverse-engineered its
 // packet pool still had nowhere to say so, because the window came only from a legacy GameConfig.
@@ -9,6 +9,7 @@
 // collapsing them into a single code path is how they drift. The negative is covered too, and it is the
 // half that matters: a runtime that declares nothing must answer "not owned", NOT accidentally match
 // a leftover span from another Core.
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include "core.h"
@@ -20,6 +21,7 @@
 #include "ot_attr.h"
 
 #include <memory>
+#include <optional>
 
 namespace {
 
@@ -31,30 +33,14 @@ constexpr uint32_t kEndPtr0 = 0x80001004u;
 constexpr uint32_t kBasePtr1 = 0x80001008u;
 constexpr uint32_t kEndPtr1 = 0x8000100Cu;
 
-class TypedRuntime : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-};
-
 // The fixed-array representation: one contiguous pair of parity pools.
-class FixedPoolRuntime final : public TypedRuntime {
+class FixedPoolRuntime final : public psx::test::StubGameRuntime {
 public:
-  const GuestPacketPoolWindows *guestPacketPoolWindows() const override {
-    return &windows;
+  std::optional<psx::gpu::PacketPoolExtent> packetPool(Core &core) const override {
+    return windows.extent(core);
   }
-  GuestPacketPoolWindows windows{
-      .representation = GuestPacketPoolWindows::Representation::FixedBaseStride,
+  psx::gpu::GuestPacketPoolWindows windows{
+      .representation = psx::gpu::GuestPacketPoolWindows::Representation::FixedBaseStride,
       .base = 0x80020000u,
       .stride = 0x1000u,
   };
@@ -62,21 +48,36 @@ public:
 
 // The heap representation: two independently allocated pools named by guest globals. Crash Bash's
 // real declaration, and the one whose bounds move when the guest reallocates.
-class DynamicPoolRuntime final : public TypedRuntime {
+class DynamicPoolRuntime final : public psx::test::StubGameRuntime {
 public:
-  const GuestPacketPoolWindows *guestPacketPoolWindows() const override {
-    return &windows;
+  std::optional<psx::gpu::PacketPoolExtent> packetPool(Core &core) const override {
+    return windows.extent(core);
   }
-  GuestPacketPoolWindows windows{
-      .representation = GuestPacketPoolWindows::Representation::LiveBaseEndPointers,
+  psx::gpu::GuestPacketPoolWindows windows{
+      .representation = psx::gpu::GuestPacketPoolWindows::Representation::LiveBaseEndPointers,
       .basePointer = {kBasePtr0, kBasePtr1},
       .endPointer = {kEndPtr0, kEndPtr1},
   };
 };
 
+// Counts how often the census asks for the pool.
+class CountingPoolRuntime final : public psx::test::StubGameRuntime {
+public:
+  std::optional<psx::gpu::PacketPoolExtent> packetPool(Core &core) const override {
+    ++queries;
+    return windows.extent(core);
+  }
+  psx::gpu::GuestPacketPoolWindows windows{
+      .representation = psx::gpu::GuestPacketPoolWindows::Representation::FixedBaseStride,
+      .base = 0x80020000u,
+      .stride = 0x1000u,
+  };
+  mutable int queries = 0;
+};
+
 // Declares no pool at all. This is the DEFAULT every runtime inherits, and the case that must answer
 // "not owned" rather than match whatever the last Core left behind.
-class NoPoolRuntime final : public TypedRuntime {};
+class NoPoolRuntime final : public psx::test::StubGameRuntime {};
 
 void write_owned_packet(Core &core, GuestPacketFilter &filter, uint32_t addr, uint32_t producer) {
   filter.setSuppressed(producer, true);
@@ -93,11 +94,10 @@ void write_owned_packet(Core &core, GuestPacketFilter &filter, uint32_t addr, ui
 // filter suppresses it — the exact pair of answers that were impossible before.
 static void test_typed_runtime_fixed_pool_is_attributable_and_suppressible() {
   static FixedPoolRuntime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
 
   CHECK(game->core.cfg == nullptr);
-  CHECK(declaredGuestPacketPoolWindows(game->core) == &runtime.windows);
+  CHECK(runtime.packetPool(game->core)->contains(0x80020020u));
 
   OtAttr &attr = game->core.rsub.otAttr;
   GuestPacketFilter &filter = game->core.rsub.guestPacketFilter;
@@ -118,10 +118,9 @@ static void test_typed_runtime_fixed_pool_is_attributable_and_suppressible() {
 // THE POSITIVE, heap form: both parity pools are tracked and the gap between them is NOT.
 static void test_typed_runtime_dynamic_pool_tracks_both_parities_without_the_gap() {
   static DynamicPoolRuntime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
 
-  CHECK(declaredGuestPacketPoolWindows(game->core) == &runtime.windows);
+  CHECK(!runtime.packetPool(game->core)->contains(0x80020020u)); // no pool allocated yet
   game->core.mem_w32(kBasePtr0, 0x80020000u);
   game->core.mem_w32(kEndPtr0, 0x80021000u);
   game->core.mem_w32(kBasePtr1, 0x80100000u);
@@ -145,8 +144,7 @@ static void test_typed_runtime_dynamic_pool_tracks_both_parities_without_the_gap
 // so this case had nothing to re-read.
 static void test_typed_runtime_dynamic_pool_follows_a_reallocation() {
   static DynamicPoolRuntime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
 
   game->core.mem_w32(kBasePtr0, 0x80020000u);
   game->core.mem_w32(kEndPtr0, 0x80021000u);
@@ -171,11 +169,10 @@ static void test_typed_runtime_dynamic_pool_follows_a_reallocation() {
 // claiming the guest submitted nothing.
 static void test_runtime_declaring_no_pool_answers_not_owned() {
   static NoPoolRuntime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
 
   CHECK(game->core.cfg == nullptr);
-  CHECK(declaredGuestPacketPoolWindows(game->core) == nullptr);
+  CHECK(!runtime.packetPool(game->core));
 
   OtAttr &attr = game->core.rsub.otAttr;
   GuestPacketFilter &filter = game->core.rsub.guestPacketFilter;
@@ -185,19 +182,36 @@ static void test_runtime_declaring_no_pool_answers_not_owned() {
   CHECK(!filter.suppressesPacket(attr, 0x80020020u));
 }
 
-// A LEGACY GameConfig keeps its own owner: the typed accessor refuses it, so the config's window is
-// still read where it always was and cannot be displaced by a declaration.
-static void test_legacy_config_is_never_consulted_as_a_typed_declaration() {
+namespace {
+
+// The census reads the pool once per logic frame, not once per guest store.
+void test_the_pool_is_read_once_per_logic_frame() {
+  static CountingPoolRuntime runtime;
+  auto game = std::make_unique<Game>(runtime);
+  const int before = runtime.queries;
+  for (uint32_t word = 0; word < 8; ++word) {
+    game->core.mem_w32(0x80020020u + (4u * word), word);
+  }
+  CHECK_EQ(runtime.queries, before + 1);
+  game->core.rsub.otAttr.beginLogicFrame(1);
+  game->core.mem_w32(0x80020020u, 0u);
+  game->core.mem_w32(0x80020024u, 0u);
+  CHECK_EQ(runtime.queries, before + 2);
+}
+
+// The legacy adapter answers from its GameConfig window.
+void test_legacy_config_answers_from_its_window() {
   static const GameConfig cfg = {
       .packetPoolBase = 0x80020000u,
       .packetPoolStride = 0x1000u,
   };
   static const GameHooks hooks{};
-  psxport_install_game(&cfg, &hooks);
-  auto game = std::make_unique<Game>();
+  LegacyGameRuntimeAdapter runtime(cfg, hooks);
+  auto game = std::make_unique<Game>(runtime);
 
   CHECK_EQ(game->core.cfg, &cfg);
-  CHECK(declaredGuestPacketPoolWindows(game->core) == nullptr);
+  CHECK(runtime.packetPool(game->core)->contains(0x80020020u));
+  CHECK(!runtime.packetPool(game->core)->contains(0x80022000u));
 
   OtAttr &attr = game->core.rsub.otAttr;
   GuestPacketFilter &filter = game->core.rsub.guestPacketFilter;
@@ -209,11 +223,14 @@ static void test_legacy_config_is_never_consulted_as_a_typed_declaration() {
   CHECK(filter.suppressesPacket(attr, 0x80020020u));
 }
 
+} // namespace
+
 int main() {
   RUN(typed_runtime_fixed_pool_is_attributable_and_suppressible);
   RUN(typed_runtime_dynamic_pool_tracks_both_parities_without_the_gap);
   RUN(typed_runtime_dynamic_pool_follows_a_reallocation);
   RUN(runtime_declaring_no_pool_answers_not_owned);
-  RUN(legacy_config_is_never_consulted_as_a_typed_declaration);
+  RUN(the_pool_is_read_once_per_logic_frame);
+  RUN(legacy_config_answers_from_its_window);
   return pt_summary();
 }

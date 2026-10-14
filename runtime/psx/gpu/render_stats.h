@@ -55,7 +55,7 @@ public:
   long long nd2dTotal = 0;
 
   // (ProjPrim / depth-cache diag now lives on `class ProjPrim` (game/render/proj_prim.h), embedded on
-  // Render as `c->rsub.projprim` — bound via `ProjPrim::bind(c)` alongside gte_bind. Two SBS cores
+  // Render as `c->rsub.projprim` — bound via `ProjPrim::bind(c)` alongside Gte::bind. Two SBS cores
   // keep separate caches + counters. Read via `.stats()` / `.statsReset()`.)
 
   // Scene-native walk counters (game/render/render_walk.cpp).

@@ -7,6 +7,7 @@
 #include "game.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <errno.h>
 #include <signal.h>
 #include <string>
@@ -15,6 +16,8 @@
 #include <unistd.h>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 struct ChildResult {
   int status;
@@ -40,7 +43,7 @@ ChildResult runClearDisplayChild() {
     setenv("PSXPORT_WATCHDOG", "1", 1);
     setenv("PSXPORT_WATCHDOG_BOOT", "3", 1);
 
-    static Game game;
+    static Game game{stubRuntime};
     game.core.rsub.mode.setPath(RenderPath::Device);
     watchdog_init();
     game.gpu.gpu_clear_display(&game.core, /*do_blit=*/0);

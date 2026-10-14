@@ -2,249 +2,17 @@
 // stay a forward-declared-Core, dependency-light include.
 #include "ot_attr.h"
 #include "core.h"
-#include "guest_packet_pool_windows.h"
 #include "render_node.h" // cur_render_node — same node fallback the native submit path itself uses
 // NO "game.h" HERE, DELIBERATELY, and it is a compile-enforced fence rather than a convention: with
 // `Game` left incomplete (core.h only forward-declares it) any future `c->game->…` in this TU fails to
 // build. That is what keeps the store path off the whole machine — see OtAttr::stampFrame for the crash
 // that reaching through `c->game` for a frame counter caused.
 #include "native_dispatch.h"
-#include "render_noise.h"
 #include <cstdio>
 #include <format>
 #include <lucent/log.h>
+#include <optional>
 #include <string_view>
-
-// THE PACKET POOL RANGE COMES FROM THE GAME, not from here. It used to be two file-scope constants
-// holding Tomba!2's addresses (0x800BFE68..0x800E7E68) inside game-agnostic framework code — so on any
-// other consumer this whole table silently matched nothing and reported no attributions, which is
-// indistinguishable from "the guest submitted no packets". A legacy GameConfig declares it in
-// `packetPoolBase/Stride` or `packetPoolBasePtrs/EndPtrs`; a DIRECT runtime declares it through
-// `GameRuntime::guestPacketPoolWindows()` (guest_packet_pool_windows.h), and this function reads
-// whichever the Core's game actually has. That is the whole point of the second path: without it
-// every typed runtime was BLIND here, and a blind filter returns "not owned" for every packet, which
-// is the most believable possible wrong answer.
-//
-// Fixed-pool games declare base + stride. Heap-pool games instead declare the guest globals holding
-// each parity pool's live base/end; collapsing those allocations into one range would classify an
-// arbitrary gap between them as render output. A game whose packets descend from BOTH parity
-// ordering-table heads inside ONE window declares that window's measured extent (SingleWindow);
-// splitting it into equal halves would declare a top that guest memory never reaches.
-//
-// A GAME THAT HAS NOT RE'd ITS POOL LEAVES THE FIELDS 0 (spyro, spider1 — an honest zero with a TODO,
-// per their own rules). Then this feed CANNOT attribute anything, and it says so once instead of
-// producing an empty table that reads like a measurement.
-//
-// The arithmetic moved to render_noise.h (2026-08-11) because dualcore.cpp and selftest.cpp each had
-// their OWN copy of it with Tomba!2's literals still in them — three copies meant fixing one left two
-// lying. This function is now just the pool window of that shared mask.
-namespace {
-// CACHED until the config changes or a live descriptor is rewritten, not derived once per store. This
-// is called from trackStoreSlow, i.e. on EVERY guest memory write, and it used to rebuild the whole
-// RenderNoiseMask each time — measured at 1.53% of a 3D field frame purely to recompute a constant.
-//
-// KEYED ON the cfg pointer and invalidated on dynamic-descriptor writes rather than cached in a bare
-// static. SBS runs two Cores, and a window inherited across games does not just drop ranges, it makes a
-// harness blind to real divergence.
-uint32_t main_ram_address(uint32_t value) {
-  return (value & 0x1FFFFFFFu) | 0x80000000u;
-}
-
-// THE TWO DECLARATIONS, flattened to ONE shape, so the window arithmetic below exists once. A
-// legacy GameConfig and a typed runtime declare the same two representations with the same meaning;
-// keeping them as two code paths is how they drift.
-struct PoolSource {
-  enum class Kind { None, FixedBaseStride, LiveBaseEndPointers, SingleWindow };
-
-  Kind kind = Kind::None;
-  uint32_t base = 0;
-  uint32_t stride = 0;
-  uint32_t end = 0;
-  uint32_t basePointer[2] = {};
-  uint32_t endPointer[2] = {};
-  // The identity the derived window is cached against — the GameConfig, or the typed declaration.
-  const void *identity = nullptr;
-};
-
-PoolSource pool_source(Core *c) {
-  PoolSource source;
-  if (c->cfg) {
-    // Legacy titles keep their existing owner and their existing precedence: a GameConfig game is
-    // never also consulted as a typed runtime, so nothing it relied on can change here.
-    for (uint32_t i = 0; i < 2; i++) {
-      if (c->cfg->packetPoolBasePtrs[i] || c->cfg->packetPoolEndPtrs[i]) {
-        source.kind = PoolSource::Kind::LiveBaseEndPointers;
-        for (uint32_t p = 0; p < 2; p++) {
-          source.basePointer[p] = c->cfg->packetPoolBasePtrs[p];
-          source.endPointer[p] = c->cfg->packetPoolEndPtrs[p];
-        }
-        source.identity = c->cfg;
-        return source;
-      }
-    }
-    if (c->cfg->packetPoolBase && c->cfg->packetPoolStride) {
-      source.kind = PoolSource::Kind::FixedBaseStride;
-      source.base = c->cfg->packetPoolBase;
-      source.stride = c->cfg->packetPoolStride;
-      source.identity = c->cfg;
-    }
-    return source;
-  }
-  const GuestPacketPoolWindows *windows = declaredGuestPacketPoolWindows(*c);
-  if (!windows) {
-    return source;
-  }
-  source.identity = windows;
-  if (windows->representation == GuestPacketPoolWindows::Representation::FixedBaseStride) {
-    source.kind = PoolSource::Kind::FixedBaseStride;
-    source.base = windows->base;
-    source.stride = windows->stride;
-    return source;
-  }
-  if (windows->representation == GuestPacketPoolWindows::Representation::SingleWindow) {
-    source.kind = PoolSource::Kind::SingleWindow;
-    source.base = windows->base;
-    source.end = windows->end;
-    return source;
-  }
-  source.kind = PoolSource::Kind::LiveBaseEndPointers;
-  for (uint32_t i = 0; i < 2; i++) {
-    source.basePointer[i] = windows->basePointer[i];
-    source.endPointer[i] = windows->endPointer[i];
-  }
-  return source;
-}
-
-// Does this store overwrite one of the pointer globals the live window is derived from? When it does
-// the cached bounds are stale by definition, so the caller must re-derive them before using them.
-// It works from the ADDRESSES cached at resolve time, not from the declaration: this runs on every
-// guest store of a dynamic-pool title, and re-reading a title's declaration per store would put a
-// virtual call on the hottest path in the substrate.
-bool descriptor_overlap(const uint32_t descriptorAddr[4], uint32_t addr, uint32_t bytes) {
-  const uint32_t physical = addr & 0x1FFFFFFFu;
-  if (physical >= 0x00200000u) {
-    return false;
-  }
-  const uint32_t lo = physical | 0x80000000u;
-  const uint32_t hi = lo + bytes;
-  for (uint32_t i = 0; i < 4; i += 2) {
-    if (!descriptorAddr[i] && !descriptorAddr[i + 1]) {
-      continue;
-    }
-    const uint32_t basePtr = main_ram_address(descriptorAddr[i]);
-    const uint32_t endPtr = main_ram_address(descriptorAddr[i + 1]);
-    if ((descriptorAddr[i] && lo < basePtr + 4u && basePtr < hi) ||
-        (descriptorAddr[i + 1] && lo < endPtr + 4u && endPtr < hi)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-OtAttr::PoolWindows pool_range_uncached(Core *c, uint32_t descriptorAddr[4]) {
-  OtAttr::PoolWindows result{};
-  const PoolSource source = pool_source(c);
-  for (uint32_t i = 0; i < 4; i++) {
-    descriptorAddr[i] = 0;
-  }
-  if (source.kind == PoolSource::Kind::FixedBaseStride) {
-    // ONE parity half of each stride, exactly as GameConfig's pair has always meant: the array holds
-    // two pools and `stride` is the width of ONE of them.
-    const uint32_t lo = main_ram_address(source.base);
-    const uint32_t hi = lo + 2u * source.stride;
-    if (lo >= hi || hi > 0x80200000u) {
-      return result;
-    }
-    result.lo[0] = lo;
-    result.hi[0] = hi;
-    result.count = 1;
-    result.known = true;
-    return result;
-  }
-  if (source.kind == PoolSource::Kind::SingleWindow) {
-    // The measured extent, taken as measured: no parity split is invented for a pool that has none.
-    const uint32_t lo = main_ram_address(source.base);
-    const uint32_t hi = main_ram_address(source.end);
-    if (lo >= hi || hi > 0x80200000u) {
-      return result;
-    }
-    result.lo[0] = lo;
-    result.hi[0] = hi;
-    result.count = 1;
-    result.known = true;
-    return result;
-  }
-  if (source.kind == PoolSource::Kind::LiveBaseEndPointers) {
-    for (uint32_t i = 0; i < 2; i++) {
-      descriptorAddr[2 * i] = source.basePointer[i];
-      descriptorAddr[2 * i + 1] = source.endPointer[i];
-    }
-    bool dynamicComplete = true;
-    bool completePair = false;
-    for (uint32_t i = 0; i < 2; i++) {
-      const uint32_t basePtr = source.basePointer[i];
-      const uint32_t endPtr = source.endPointer[i];
-      if (!basePtr || !endPtr) {
-        dynamicComplete &= !basePtr && !endPtr;
-        continue;
-      }
-      completePair = true;
-      const uint32_t rawLo = c->mem_r32(basePtr);
-      const uint32_t rawHi = c->mem_r32(endPtr);
-      if (!rawLo || !rawHi) {
-        continue; // a declared heap pool may legitimately not be allocated during boot
-      }
-      const uint32_t lo = main_ram_address(rawLo);
-      const uint32_t hi = main_ram_address(rawHi);
-      if (lo >= hi || hi > 0x80200000u) {
-        continue; // descriptor words are rewritten separately, so transient mixed bounds are normal
-      }
-      result.lo[result.count] = lo;
-      result.hi[result.count] = hi;
-      result.count++;
-    }
-    result.dynamic = true;
-    result.known = dynamicComplete && completePair;
-    if (!result.known) {
-      static bool warnedPartial = false;
-      if (!warnedPartial) {
-        warnedPartial = true;
-        lucent::warn("otattr",
-                     "the declared packet-pool pointer pairs are partial — each declared parity "
-                     "needs both pointer globals");
-      }
-    }
-    return result;
-  }
-
-  // A GAME THAT HAS NOT RE'd ITS POOL LEAVES NOTHING DECLARED, from either representation. Then this
-  // feed CANNOT attribute anything, and it says so once instead of producing an empty table that
-  // reads like a measurement. The warning names BOTH declarations because "you declared no pool" is
-  // a different sentence from "you declared one and I could not find it", and a title debugging a
-  // silent filter needs to be told which one it is.
-  const RenderNoiseMask m = RenderNoiseMask::from(c->cfg, "otattr");
-  if (!m.poolLo && !m.poolHi) {
-    static bool warned = false;
-    if (!warned) {
-      warned = true;
-      lucent::warn("otattr",
-                   "no packet pool is declared — GameConfig::packetPoolBase/Stride (a legacy game) "
-                   "and GameRuntime::guestPacketPoolWindows() (a typed runtime) are both absent — so "
-                   "packet-pool attribution is STRUCTURALLY BLIND here, an empty span table means "
-                   "'not measured', NOT 'the guest submitted nothing', and a GuestPacketFilter can "
-                   "never suppress a packet. RE the pool and declare it in the representation this "
-                   "guest actually uses.");
-    }
-    return result;
-  }
-  result.lo[0] = m.poolLo;
-  result.hi[0] = m.poolHi;
-  result.count = 1;
-  result.known = true;
-  return result;
-}
-
-} // namespace
 
 // ---- The `otattr` last-writer sub-commands, shared by EVERY control transport ------------------
 //
@@ -348,20 +116,19 @@ bool OtAttr::runLastWriterCommand(std::string_view line, const std::function<voi
   return false;
 }
 
-void OtAttr::poolRangeMiss(Core *c) {
-  const PoolWindows r = pool_range_uncached(c, mPoolDescriptorAddr);
-  // The cfg pointer stays the cache key for the LEGACY path, unchanged. A typed runtime's cfg is null
-  // and stays null, so it cannot key anything; its window is resolved once (below, via mPoolDirty)
-  // and then tracked by the descriptor invalidation exactly as a legacy dynamic pool is.
-  mPoolCfg = c->cfg;
-  mPoolSource = pool_source(c).identity;
-  for (uint32_t i = 0; i < 2; i++) {
-    mPoolLo[i] = r.lo[i];
-    mPoolHi[i] = r.hi[i];
+void OtAttr::refreshPool(Core *c) {
+  mPoolStale = false;
+  const std::optional<psx::gpu::PacketPoolExtent> pool = c->runtime.packetPool(*c);
+  if (pool) {
+    mPool = *pool;
+    return;
   }
-  mPoolCount = r.count;
-  mPoolKnown = r.known;
-  mPoolDynamic = r.dynamic;
+  mPool = {};
+  if (mWarnedNoPool) {
+    return;
+  }
+  mWarnedNoPool = true;
+  lucent::warn("otattr", "the title declares no packet pool, so packet attribution and GuestPacketFilter see nothing");
 }
 
 // The frame stamp every table here shares — see ot_attr.h for the null-deref this replaced and for why
@@ -450,29 +217,15 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
   trackWatch(fn, caller, phys, bytes, frame);
 
   const uint32_t k = phys | 0x80000000u;
-  // The cache CHECK is here, not behind a call: a bool test and a pointer compare, then three member
-  // loads. See poolRangeMiss in the header for the measurement that made this split necessary — a
-  // tidier compare-inside-a-member-function version was measurably SLOWER than no cache at all.
-  //
-  // The bool is the TYPED-RUNTIME half. A `GameRuntime` is owned by its `Game` for the process
-  // lifetime, so its declaration cannot change under a settled Core; `mPoolSettled` is what lets the
-  // one resolve happen without a virtual call on every store afterwards, and it is cleared only by the
-  // descriptor invalidation below — which must re-read the live bounds anyway.
-  if (mPoolDirty || c->cfg != mPoolCfg) {
-    mPoolDirty = false;
-    poolRangeMiss(c);
+  if (mPoolStale) {
+    refreshPool(c);
   }
-  // Core calls this before committing the guest store. Invalidate now so the NEXT store resolves the
-  // just-written descriptors; attributing the descriptor write itself would be a category error.
-  if (mPoolDynamic && descriptor_overlap(mPoolDescriptorAddr, addr, bytes)) {
-    mPoolDirty = true;
+  // Core calls this before committing the store, so the next store re-reads the rewritten bound.
+  if (mPool.readFrom(k, bytes)) {
+    mPoolStale = true;
     return;
   }
-  bool inPool = false;
-  for (uint32_t i = 0; i < mPoolCount; i++) {
-    inPool |= k >= mPoolLo[i] && k < mPoolHi[i];
-  }
-  if (!mPoolKnown || !inPool) {
+  if (!mPool.contains(k)) {
     return;
   }
 

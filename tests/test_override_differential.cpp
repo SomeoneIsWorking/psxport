@@ -12,6 +12,7 @@
 // host-dispatch boundary resolves the installed override, and `NativeDispatcher::invoke` hands the call
 // to the differential. Nothing here calls the differential's internals directly.
 #include "mips_asm.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include "core.h"
@@ -161,22 +162,6 @@ constexpr std::array<std::uint32_t, 7> kPatchingCode = {
     nop(),
 };
 
-class Runtime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-};
-
 int g_nativeCalls = 0;
 
 void correctSum(Core *core) {
@@ -282,7 +267,7 @@ std::optional<long long> peakResidentKb() {
 }
 
 struct Fixture {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   std::unique_ptr<Game> game;
   psx::cpu::NativeKey key{};
 
@@ -293,8 +278,7 @@ struct Fixture {
           std::string_view selectors = "under-test",
           std::int64_t first = 16,
           std::int64_t every = 64) {
-    psxport_install_game(runtime);
-    game = std::make_unique<Game>();
+    game = std::make_unique<Game>(runtime);
     Core &core = game->core;
     const psx::cpu::ImageIdentity image =
         core.imageCatalog().activate("override-diff", {kCaller, kImageEnd}, 0x4F444946u);

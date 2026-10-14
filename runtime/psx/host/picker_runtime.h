@@ -13,7 +13,7 @@ class PickerComposite;
 // The host's own session, in which no guest runs: the control channel is its job, which is the
 // headless route to every decision the pad makes in the window. It also owns the screen's Game,
 // the one that holds the control endpoint, reads the pad and records the screen text.
-class PickerRuntime final : public GameRuntime {
+class PickerRuntime final : public psx::game::GameRuntime {
 public:
   PickerRuntime() = default;
 
@@ -37,12 +37,7 @@ public:
     return selection;
   }
 
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
   void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
   RenderCapabilities renderCapabilities() const override {
     return RenderCapabilities::direct();
   }
@@ -50,7 +45,7 @@ public:
     return false;
   }
   // `line` is the whole command line, as the framework passes it.
-  bool controlCommand(Core &core, const char *cmd, const char *line, FILE *out) override;
+  bool titleCommand(Core &core, const char *cmd, const char *line, FILE *out) override;
 
   // The command logic itself, which needs no Core: a hermetic test drives it directly.
   bool handle(const char *cmd, const char *line, FILE *out);

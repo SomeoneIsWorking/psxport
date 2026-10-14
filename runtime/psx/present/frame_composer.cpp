@@ -132,7 +132,7 @@ std::vector<const RecordDrawState *> environmentsAt(std::span<const RecordEntry>
 
 std::optional<FrameRecord> composeFrame(
     const FrameRecord &shown, const FrameState *from, const FrameState &to, float t, const StateProducers &producers) {
-  if (producers.empty() || to.empty()) {
+  if (to.empty()) {
     return std::nullopt;
   }
   const std::span<const RecordEntry> entries = shown.entries();

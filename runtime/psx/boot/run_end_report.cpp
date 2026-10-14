@@ -38,9 +38,7 @@ void RunEndReport::emit(std::uint64_t productSteps) const {
   game_.presentation.reportStability();
   game_.spu_audio.reportQueue();
   dumpRamIfRequested();
-  if (core.runtime != nullptr) {
-    core.runtime->reportRun(core);
-  }
+  core.runtime.reportRun(core);
 }
 
 // PSXPORT_RAMDUMP: the after-loop dump. A run that ends by exiting its process never gets here;

@@ -47,12 +47,13 @@ public:
 
   // The title's own integer settings, persisted beside the fields above. Declared before init() so the
   // settings-file load reads them.
-  void declareTitleSettings(std::span<const TitleIntSetting> settings) {
+  void declareTitleSettings(std::span<const psx::game::TitleIntSetting> settings) {
     mTitleSettings = settings;
   }
-  void init(const RenderCapabilities &capabilities); // title capabilities + settings-file load (idempotent)
-  void save() const;                                 // persist the live settings (called by the overlay on change)
-  void load();                                       // load the settings file over the current values, if it exists
+  // The title's interpolation and face-order answers, then the settings file (idempotent).
+  void init(bool interpolates, FaceOrder defaultFaceOrder);
+  void save() const; // persist the live settings (called by the overlay on change)
+  void load();       // load the settings file over the current values, if it exists
   bool temporalInterpolationSupported() const {
     return mTemporalInterpolationSupported;
   }
@@ -70,8 +71,8 @@ public:
   }
 
 private:
-  const TitleIntSetting *findTitleSetting(const char *key) const;
-  std::span<const TitleIntSetting> mTitleSettings;
+  const psx::game::TitleIntSetting *findTitleSetting(const char *key) const;
+  std::span<const psx::game::TitleIntSetting> mTitleSettings;
   bool mInited = false;
   bool mTemporalInterpolationSupported = false;
 };

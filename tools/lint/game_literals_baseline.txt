@@ -118,7 +118,7 @@ runtime/ui/menu_readouts.cpp:0x8010649C:1  # L62
 #       4  runtime/psx/hle/bios_libc_string.cpp
 #       4  runtime/psx/hle/bios_load_exec.h
 #       4  runtime/psx/hle/hle_interrupt.cpp
-#       3  runtime/psx/boot/crt0_boot.h
+#       3  runtime/psx/game/crt0_boot.h
 #       3  runtime/psx/cd/cd.h
 #       3  runtime/psx/core/guest_memory.cpp
 #       3  runtime/psx/debug/ot_attr.h

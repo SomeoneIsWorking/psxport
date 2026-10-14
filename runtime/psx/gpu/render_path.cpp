@@ -32,11 +32,7 @@ LiveSwitch g_live_switch;
 } // namespace
 
 RenderPathSelectionResult render_path_apply(Game &game, RenderPath requested, RenderPathAudience audience) {
-  if (!game.runtime) {
-    return RenderPathSelectionResult::Unsupported;
-  }
-
-  const RenderCapabilities capabilities = game.runtime->renderCapabilities();
+  const RenderCapabilities capabilities = game.runtime.renderCapabilities();
   const bool supported = audience == RenderPathAudience::Player ? capabilities.playerSelectable(requested)
                                                                 : capabilities.supports(requested);
   if (!supported) {
@@ -57,7 +53,7 @@ void render_path_forget(const Core *core) {
 }
 
 void render_path_install(Core *c) {
-  const RenderCapabilities capabilities = c->runtime->renderCapabilities();
+  const RenderCapabilities capabilities = c->runtime.renderCapabilities();
   // 1. The CVar: Default < Value (settings file) < Override (PSXPORT_RENDER_PATH) < Runtime (REPL) —
   // but only where the Runtime layer belongs to THIS Core. A live switch is addressed to one Core, so
   // for any other Core the ladder is read without it; otherwise the next session booted in this

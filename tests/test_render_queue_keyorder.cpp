@@ -40,6 +40,7 @@
 #include "gpu_vk.h"
 #include "mods.h" // FACE_ORDER_DEPTH — the ordering mode the rule is driven with
 
+#include "stub_game_runtime.h"
 #include <math.h>
 #include <memory>
 #include <stdint.h>
@@ -47,6 +48,8 @@
 #include <vector>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 // A queue is ~16 MB of RqItem storage, so it lives on the heap and is reused across cases.
 std::unique_ptr<RenderQueue> make_queue(void) {
@@ -199,7 +202,7 @@ static void test_pixel_predicate_rejects_degenerate_faces(void) {
 }
 
 static void test_shipping_capture_starts_with_real_depth_ownership(void) {
-  static Game game;
+  static Game game{stubRuntime};
   RenderQueue &q = game.rq;
   q.reset();
   const int xs[4] = {0, 8, 8, 0};

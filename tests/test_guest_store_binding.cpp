@@ -18,7 +18,7 @@ constexpr std::uint32_t kRegisterTarget = 0x80080200u;
 } // namespace
 
 static void test_known_and_register_addressed_guest_stores_bind(void) {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   installTestImage(core);

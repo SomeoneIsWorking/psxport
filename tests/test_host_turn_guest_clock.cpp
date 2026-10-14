@@ -12,26 +12,13 @@
 #include "host_turn.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <cstdio>
 #include <memory>
 
 namespace {
 
-class Runtime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-};
+psx::test::StubGameRuntime stubRuntime;
 
 int deliveredTurns;
 uint32_t turnFlagAddress;
@@ -57,7 +44,7 @@ public:
   bool hostOwed() const {
     return (game->core.pending_work & Core::PW_HOST) != 0;
   }
-  std::unique_ptr<Game> game = std::make_unique<Game>();
+  std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
 };
 
 const uint32_t kPeriod =
@@ -138,7 +125,7 @@ static void test_long_update_owes_one_field_per_period(void) {
 
 static void test_unregistered_core_is_never_owed_a_field(void) {
   Fixture fixture;
-  auto foreign = std::make_unique<Game>();
+  auto foreign = std::make_unique<Game>(stubRuntime);
   psx::cpu::accountGuestInstructions(foreign->core, 3u * kPeriod);
   CHECK_EQ(foreign->core.pending_work & Core::PW_HOST, 0);
   psx::cpu::notifyDisplayField(foreign->core);
@@ -161,8 +148,7 @@ static void test_guest_wait_on_field_work_returns_after_one_period(void) {
   constexpr uint32_t kWait = 0x00010000u;
   constexpr uint32_t kFlag = 0x00010100u;
   const uint64_t kBudget = 200ull * kPeriod;
-  static Runtime runtime;
-  psxport_install_game(runtime);
+  static psx::test::StubGameRuntime runtime;
   Fixture fixture;
   Core &core = fixture.game->core;
   core.imageCatalog().activate("host-turn-guest-clock", {kWait, kFlag + 4u}, 0x484f5354ull);

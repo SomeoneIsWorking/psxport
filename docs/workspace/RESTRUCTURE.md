@@ -46,16 +46,16 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 | `FrameDriver` | Required. `stepFrame` is one guest turn plus exactly one `presentation.commit`. |
 | `TaskScheduler` | Returned by `createTaskScheduler`. Only Tomba 2 implements one, in its own repo. |
 | `TitleAudio`, `TitleDevWarp` | Optional capabilities returned by `audio(Core&)` and `devWarp(Core&)`. The null check lives only in the consumer (`SpuAudio`, the menus, `warp_control`). |
-| `TitleIdentity`, `HostIdentity`, `TitleIntSetting` | Plain data: disc serial, size, sha256, EXE header, disc env key and path; card and user-data names; menu rows. |
+| `HostIdentity`, `TitleIntSetting`; `psx::host::TitleIdentity` (`host/title_catalog.h`) | Plain data: disc serial, size, sha256, EXE header, disc env key and path; card and user-data names; menu rows. |
 
 `GameRuntime` virtuals, final list:
 
 - **Boot.**
   - `admitExecutable`.
-  - `startProgram(Core&)`. Its default enters the EXE header entry. A title that needs crt0 replay calls `psx::boot::Crt0Boot` with its own addresses.
+  - `startProgram(Core&)`. Its default does nothing, so the frame driver enters at the EXE header entry `admitExecutable` set. A title that needs crt0 replay calls `psx::game::Crt0Boot` (`game/crt0_boot.h`) with its own `Crt0Image`.
   - `registerOverrides(Game&)`.
   - `createSession`, `createFrameDriver`, `createTaskScheduler`.
-- **Hardware services the title owns.** `deliverPad`, `cdReady`, `stockCdReadLanded`, `guestCodeModuleWindow`, `isPacketPoolWord`, `residentText`.
+- **Hardware services the title owns.** `deliverPad`, `stockCdReadLanded`, `guestCodeModuleWindow`, `packetPool(Core&)` (the pool's current extent; the census re-reads it once per logic frame and after a store to one of its bounds). The host-pump per-sector ready call is `StockLibcd::callReady`, a virtual on the title's libcd; a title whose guest INT1 service delivers it binds `GuestInterruptLibcd`.
 - **Presentation.**
   - `interpolates()`.
   - `stateProducer(Core&, uint32_t producer)`.
@@ -67,11 +67,11 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 | today | read by (psxport) | end state |
 |---|---|---|
 | `GameConfig` (about 70 fields) + `GameHooks` (25 fn pointers), bound by `LegacyGameRuntimeAdapter` (Tomba 2) and `bindLegacyInterface` (X4) | 25 files, every `if (core.cfg)` | Deleted. Each field goes to a row below or into title code. |
-| `GuestProgramImage`: bss, stack, heap, gp, libcInit, gameMain, crt0Entry, residentText, backtraceText, stackBias, `BootEntry` | core, crt0_boot, title_session | `startProgram` virtual. The crt0 addresses become arguments the title passes to `Crt0Boot`. `residentText()` is a virtual for backtraces. |
-| `PlatformHlePlan`: 16 bindings, the libgte/libcd/libgpu/VSync/GPU-timeout addresses, `dmaCallbackTable`, `stockCdWorkArea`, HLE windows | platform_hle, hle_interrupt, cd_override, stock_cd_work_area | Deleted. psxport exports the stock-library implementations as classes (`psx::hle::StockLibcd`, `StockLibgpu`, `StockLibgte`, `StockVSync`, `StockDmaCallbacks`). The title constructs and binds them at its own addresses in `registerOverrides`. |
+| `GuestProgramImage`: bss, stack, heap, gp, libcInit, gameMain, crt0Entry, residentText, backtraceText, stackBias, `BootEntry` | core, crt0_boot, title_session | `startProgram` virtual. The crt0 addresses become the `Crt0Image` the title passes to `Crt0Boot`. No `residentText()`: no framework code reads `residentText`/`backtraceText`. |
+| `PlatformHlePlan`: 16 bindings, the libgte/libcd/libgpu/VSync/GPU-timeout addresses, `dmaCallbackTable`, `stockCdWorkArea`, HLE windows | platform_hle, hle_interrupt, cd_override, stock_cd_work_area | Deleted. psxport exports the stock-library implementations as classes holding their bodies (`psx::cd::StockLibcd`/`GuestInterruptLibcd` in `cd/`, `StockLibgpu`, `StockLibgte`, `StockVSync`, `StockDmaCallbacks` in `hle/`). The title owns the objects, keeps them alive while its Game runs, and binds them at its own addresses in `registerOverrides`. |
 | `GuestPadBufferLayout` (slot buffers, pointer table, stride) | pad_input | `deliverPad` virtual. The default is the BIOS pad path. A buffer-writing title calls `psx::input::StockPadBuffers`. |
-| `GuestCdStreamCallbackLayout` (ready callback pointer, delivery owner, status) | cd_ready_delivery, cd_override, cd_stock_read_completion | `cdReady` virtual. The default is the host pump. |
-| `GuestPacketPoolWindows` (three representations) | ot_attr, guest_packet_pool_windows | `isPacketPoolWord(const Core&, uint32_t)` virtual. |
+| `GuestCdStreamCallbackLayout` (ready callback pointer, delivery owner, status) | cd_ready_delivery, cd_override, cd_stock_read_completion | The ready slot is a `StockLibcd` constructor argument; the host pump is the base class (`callReady` virtual), the guest-INT1 owner the `GuestInterruptLibcd` subclass with its `Completion`. |
+| `GuestPacketPoolWindows` (three representations) | ot_attr, guest_packet_pool_windows | `packetPool(Core&)` virtual returning a `PacketPoolExtent`; the layouts move to `game/guest_packet_pool_windows.h` for a title to answer with. |
 | `RenderCapabilities` {defaultPath, nativeRenderPath, temporalInterpolation, defaultFaceOrder} + `render_path_install` | game.cpp, render_path | `interpolates()` virtual. The path is always Record. Both the struct and the install are deleted. |
 | `guestVramIsPicture`, `guestPictureIsNativeWidth`, `createTemporalFramePresentation` | renderer | Deleted with Native. Keep `guestPictureIsNativeWidth` only if Spyro 1's boot logos on Record need it. |
 | `core.stateProducers.install(addr, …)` registry | frame_composer | `stateProducer(Core&, addr)` virtual, answered from the title's session state. |
@@ -122,7 +122,8 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 
 ### 3.5 Include split
 
-- Titles see only the title API: `game/`, `host/title_catalog.h`, `frame/frame_driver`, `present/state_producer.h`, `present/frame_composer.h` (`PrimitiveSink`), `core.h` guest memory and `Gte`, and the stock HLE/input/cd classes of section 3.2.
+- Titles see only the title API: `game/` (`game_runtime.h` with `FrameDriver`, `crt0_boot.h`, `psx_exe_image.h`), `host/title_catalog.h`, `present/state_producer.h`, `present/frame_composer.h` (`PrimitiveSink`), `core.h` guest memory, `cpu/gte.h`, `input/pad_delivery.h`, `input/input_phase.h`, `host/logo_image.h`, `core/guest_address_range.h`, `runtime/cpu/execution_exit.h`, and the stock classes (`cd/stock_libcd.h`, `hle/stock_*.h`, `input/stock_pad_buffers.h`).
+- Leaks to close before `gpu/` and `cpu/` go private: `core.h` includes `gpu/gpu_device.h`; `game_runtime.h` includes `gpu/render_capabilities.h` (gone with `RenderCapabilities` in (c)); `game/psx_exe_image.h` includes `runtime/cpu/image_identity.h`; the packet-pool layouts live in `gpu/guest_packet_pool_windows.h` (moved to `game/` in (a)). Core also holds `GpuDevice`, `OtTables` and `RenderSubstrate` (gpu/, debug/) by value, so `gpu/` cannot go private until (c) shrinks RenderSubstrate or Core holds them behind a pointer.
 - `boot/`, the `host/` internals, `gpu/` and the `cpu/` internals are PRIVATE in `psxport.cmake`.
 - Title includes today: core 15-375 per repo, gpu up to 124 (Spyro), present up to 33 (Crash Bash), config up to 97 (Tomba). Each title's pass removes its own.
 
@@ -265,19 +266,13 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 Continue from the uncommitted M8a tree; do not restart it.
 
 1. Finish M8a. `FrameLoopShell::bound_` becomes a member of the shell's owner, still rebinding only when the running Core changes. Delete the neutral-runtime branches in FramePresenter and the pacer.
-2. Add the section 3.1 interface in `psx::game`: `TitleSessionState`, `titleCommand`, `TitleAudio`, `TitleDevWarp`, `startProgram` + `Crt0Boot`, `deliverPad`, `cdReady`, `isPacketPoolWord`, `residentText`, `displayHeight`, `interpolates`, `stateProducer`. Each needs a unit test through the stub runtime.
+2. Add the section 3.1 interface in `psx::game`: `TitleSessionState`, `titleCommand`, `TitleAudio`, `TitleDevWarp`, `startProgram` + `Crt0Boot`, `deliverPad`, `packetPool`, `residentText`, `displayHeight`, `interpolates`, `stateProducer`. Each needs a unit test through the stub runtime.
 3. Add the stock-library classes (`StockLibcd`, `StockLibgpu`, `StockLibgte`, `StockVSync`, `StockDmaCallbacks`, `StockPadBuffers`), built from the code that today reads `PlatformHlePlan` and the layouts.
-4. Make the Record present stand alone:
-   - `PresentLedger` moves to the presenter.
-   - `PresentInputs` come from the device display area and `displayHeight()`.
-   - Record and Device pictures feed `build_present_image` with no `upload_vram`/`render_geom`.
-   - Drop `rq.flush` and RqItem capture for Record cores.
-   - Keep 24bpp/FMV and `present_fade_rgb`.
-   - Add `DisplayPassGuard`.
-5. Add `psx::cpu::Gte` with `core.gte()`, an explicit `GpuDevice&` reach, the typed `psx::config` fields titles read, and the Lucent call shape titles use.
-6. Fix the public header set of section 3.5.
+4. Typed config, done at the start of the c12 brief: one immutable `psx::config` object built by the config owner from the environment and reached through `Game`. A setting the player changes at runtime (`fps60` from the mods UI) is not config: it is a member of its owner, reached through `Game`. Titles read only these two.
+5. `psx::cpu::Gte` with `core.gte()` as the one bind rule; `GpuDevice&` reached through `Game`/`Core`; Lucent `info`/`warn`/`error`/`debug`.
+6. The public header set of section 3.5 is fixed now; from its pass on, a title includes only that set (each title review checks it). CMake enforces it in (c), after `Core` stops holding `gpu/` and `cpu/` internals by value.
 
-The old surfaces stay untouched until (c). (a) is pushed together with c12's pass.
+The old surfaces stay until (c), except the `GameRuntime` virtuals a new one replaces (`createContext`/`destroyContext`, `bootInit`, `guestProgramImage`, `platformHlePlan`, `guestPadBufferLayout`, `guestCdStreamCallbackLayout`, `guestPacketPoolWindows`, `replCommand`, `controlCommand`): (a) deletes them, since keeping both is a second path. `LegacyGameRuntimeAdapter` answers the new virtuals for `GameConfig` titles. (a) is pushed together with c12's pass.
 
 ### (b) titles, one brief per repo
 
@@ -300,9 +295,13 @@ Code that moves from psxport into a title (the Tomba scheduler and CD) is cut fr
 ### (c) psxport deletes what no title uses (one brief)
 
 - **Interface.** The legacy layer (`game_iface.*`, `legacy_game_hooks.h`, `legacy_game_config.h`, `game_hooks_opt.*`, `Core::cfg`/`hooks`/`gameCtx`, every `if (core.cfg)`); the section 3.2 bags; the old `GameRuntime` members; the old free functions (`gte_*`, `GTE_*`, `cfg_log*`, `cfg_on/int/str/dbg`, CVar externs).
-- **Renderer.** Everything in section 3.3's delete list; `RenderPath` becomes `{Record, Device}`; split `gpu_vk.cpp`.
+- **Record present stands alone** (first, checked with recordcheck t=1 on the migrated Record titles):
+  - `PresentLedger` moves to the presenter; `PresentInputs` come from the device display area and `displayHeight()`.
+  - Record and Device pictures feed `build_present_image` with no `upload_vram`/`render_geom`; drop `rq.flush` and RqItem capture for Record cores.
+  - Keep 24bpp/FMV and `present_fade_rgb`. `DisplayPassGuard` already exists.
+- **Renderer.** Everything in section 3.3's delete list; `RenderPath` becomes `{Record, Device}`; delete `GpuDevice::sInstance` and the `s_*` macros; then split `gpu_vk.cpp` (it fits two files only after the Native code is gone).
 - **Internal-only conversions.** These touch no title: device classes, debug singletons, dead functions, block-scope externs, and non-Beetle `extern "C"`. psxport's own GTE, config and logging callers move as well.
-- **Enforcement.** Apply the PRIVATE split; empty psxport's `accepted.txt` (1,905 lines); trim `PSXPORT_CAPS`; align `.clang-tidy`.
+- **Enforcement.** `Core` holds `gpu/`/`cpu/` internals behind its own owners so `core.h` stops exposing them; apply the PRIVATE split; empty psxport's `accepted.txt` (1,905 lines); trim `PSXPORT_CAPS`; align `.clang-tidy`.
 - **Docs.** psxport `features.md`, the slim codemap, `presentation.md`; delete `one-renderer.md` and `presentation-contract.md`.
 
 ### (d) push as each pass lands

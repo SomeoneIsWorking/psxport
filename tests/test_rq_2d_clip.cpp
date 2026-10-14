@@ -7,9 +7,12 @@
 #include "render_queue.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 constexpr int kNativeWidth = 512; // Spyro's own 4:3 framebuffer width
 constexpr int kPanelLeft = 140;
@@ -24,7 +27,7 @@ struct Submitted {
 };
 
 Submitted submitPanel(int aspect) {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->gpu.s_disp_w = kNativeWidth;
   game->mods.aspect = aspect;
   Core &core = game->core;

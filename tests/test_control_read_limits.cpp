@@ -127,8 +127,8 @@ void dump(const char *what, const std::vector<std::string> &lines) {
 std::vector<std::string> run_repl(const std::string &command) {
   static const GameConfig config{};
   static const GameHooks hooks{};
-  psxport_install_game(&config, &hooks);
-  auto core = std::make_unique<Core>();
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto core = std::make_unique<Core>(runtime);
   g_command = command;
   capture_start();
   Repl repl;

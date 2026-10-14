@@ -35,8 +35,8 @@ static void test_speed_from_mode_is_the_hardware_rate(void) {
 // At t=0 nothing has elapsed, so nothing is owed — but the FIRST sector must not be blocked, or the
 // stream can never start. Budget is computed from elapsed time; the caller seeds delivery at start.
 static void test_nothing_is_due_before_any_time_has_passed(void) {
-  CHECK_EQ(cd_stream_sectors_due(0, 150, 0), 0);
-  CHECK_EQ(cd_stream_sectors_due(0, 150, 10), 0);
+  CHECK_EQ(psx::cd::streamSectorsDue(0, 150, 0), 0);
+  CHECK_EQ(psx::cd::streamSectorsDue(0, 150, 10), 0);
 }
 
 // Behind the budget: deliver the shortfall, up to the per-call bound.
@@ -47,32 +47,32 @@ static void test_nothing_is_due_before_any_time_has_passed(void) {
 // so the unclamped branch is the one real playback lives in.
 static void test_behind_budget_delivers_the_shortfall(void) {
   // One second at double speed owes 150 in total; with 149 delivered exactly 1 is still due.
-  CHECK_EQ(cd_stream_sectors_due(1000000000ull, 150, 149), 1);
-  CHECK_EQ(cd_stream_sectors_due(1000000000ull, 150, 148), 2);
+  CHECK_EQ(psx::cd::streamSectorsDue(1000000000ull, 150, 149), 1);
+  CHECK_EQ(psx::cd::streamSectorsDue(1000000000ull, 150, 148), 2);
   // Single speed over the same second owes half as many, so 74 delivered leaves exactly 1.
-  CHECK_EQ(cd_stream_sectors_due(1000000000ull, 75, 74), 1);
+  CHECK_EQ(psx::cd::streamSectorsDue(1000000000ull, 75, 74), 1);
   // The rate really is proportional to elapsed time: a third of a second at double speed owes 49
   // (integer division), so 48 delivered leaves 1 and 47 leaves 2.
-  CHECK_EQ(cd_stream_sectors_due(333333333ull, 150, 48), 1);
-  CHECK_EQ(cd_stream_sectors_due(333333333ull, 150, 47), 2);
+  CHECK_EQ(psx::cd::streamSectorsDue(333333333ull, 150, 48), 1);
+  CHECK_EQ(psx::cd::streamSectorsDue(333333333ull, 150, 47), 2);
   // A shortfall larger than the bound is clamped, not delivered whole.
-  CHECK_EQ(cd_stream_sectors_due(1000000000ull, 150, 0), CD_STREAM_MAX_BURST);
-  CHECK_EQ(cd_stream_sectors_due(1000000000ull, 150, 100), CD_STREAM_MAX_BURST);
+  CHECK_EQ(psx::cd::streamSectorsDue(1000000000ull, 150, 0), CD_STREAM_MAX_BURST);
+  CHECK_EQ(psx::cd::streamSectorsDue(1000000000ull, 150, 100), CD_STREAM_MAX_BURST);
 }
 
 // Caught up or AHEAD: nothing is due. This is the case the shipped code never had — it is what stops
 // the movie racing. Never negative, so a caller can use the value as a loop count directly.
 static void test_caught_up_or_ahead_is_zero_never_negative(void) {
-  CHECK_EQ(cd_stream_sectors_due(1000000000ull, 150, 150), 0);
-  CHECK_EQ(cd_stream_sectors_due(1000000000ull, 150, 400), 0); // ahead: still 0, not -250
-  CHECK_EQ(cd_stream_sectors_due(0, 150, 999999), 0);
+  CHECK_EQ(psx::cd::streamSectorsDue(1000000000ull, 150, 150), 0);
+  CHECK_EQ(psx::cd::streamSectorsDue(1000000000ull, 150, 400), 0); // ahead: still 0, not -250
+  CHECK_EQ(psx::cd::streamSectorsDue(0, 150, 999999), 0);
 }
 
 // A stalled process (descheduled, a long native load) can leave a huge elapsed gap. Delivering the
 // whole backlog at once would burst thousands of sectors and be exactly the unpaced behaviour this
 // exists to stop, so the per-call answer is bounded — and the bound is stated, not silent.
 static void test_a_long_gap_is_bounded_per_call(void) {
-  const int due = cd_stream_sectors_due(60ull * 1000000000ull, 150, 0); // a whole minute owed
+  const int due = psx::cd::streamSectorsDue(60ull * 1000000000ull, 150, 0); // a whole minute owed
   CHECK(due > 0);
   CHECK(due <= CD_STREAM_MAX_BURST);
 }

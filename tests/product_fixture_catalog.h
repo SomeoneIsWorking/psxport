@@ -15,7 +15,7 @@ public:
   std::string_view productName() const override;
   std::filesystem::path provisioningRoot() const override;
   std::span<const TitleIdentity> titles() const override;
-  GameRuntime &runtime(std::size_t index) const override;
+  psx::game::GameRuntime &runtime(std::size_t index) const override;
 };
 
 std::unique_ptr<TitleCatalog> createCatalog();

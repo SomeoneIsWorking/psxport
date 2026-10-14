@@ -650,17 +650,6 @@ static void dbg_exec(FILE *out, const char *line) {
     } else {
       fprintf(out, "preseq <N> [dir] — dump the next N PRESENTED frames (incl. fps60 interp)\n");
     }
-  } else if (!strcmp(cmd, "tp")) {
-    // Camera teleport override / release. Was REPL-only, for the same reason as `preseq`. `tp` with
-    // three coords pins the camera; `tp` alone hands it back to the game's follow logic.
-    int x = 0, y = 0, z = 0;
-    if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) {
-      s_ctx->hooks->replCamTeleport(s_ctx, x, y, z);
-      fprintf(out, "tp camera -> (%d,%d,%d)\n", x, y, z);
-    } else {
-      s_ctx->hooks->replCamTeleportOff(s_ctx);
-      fprintf(out, "tp off (camera follows player)\n");
-    }
   } else if (!strcmp(cmd, "debug")) {
     char ch[200] = {0};
     sscanf(line, "%*s %199[^\n]", ch);
@@ -744,7 +733,7 @@ static void dbg_exec(FILE *out, const char *line) {
                 render_path_name(s_ctx->rsub.mode.path()));
       } else {
         if (!named) {
-          p = render_path_next_supported(p, g->runtime->renderCapabilities(), RenderPathAudience::Diagnostic);
+          p = render_path_next_supported(p, g->runtime.renderCapabilities(), RenderPathAudience::Diagnostic);
         }
         const RenderPathSelectionResult selection = render_path_apply(*g, p, RenderPathAudience::Diagnostic);
         if (selection == RenderPathSelectionResult::Unsupported) {
@@ -845,8 +834,7 @@ static void dbg_exec(FILE *out, const char *line) {
     // the only point at which no native override is active and every device is in a state a later run
     // can resume from. Answers on the SAME channel, including a refusal and its reason.
     psx::state::handleControlCommand(*s_ctx, line, out);
-  } else if (s_ctx->runtime && s_ctx->runtime->controlCommand(*s_ctx, cmd, line, out)) {
-    // handled by the title's own control surface (GameRuntime::controlCommand)
+  } else if (s_ctx->runtime.titleCommand(*s_ctx, cmd, line, out)) {
   } else {
     fprintf(out, "? %s  (try 'help')\n", line);
   }

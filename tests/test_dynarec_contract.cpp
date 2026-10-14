@@ -257,7 +257,7 @@ std::uint32_t resumeParkedTask(Core &core) {
 } // namespace
 
 static void test_supported_syscall_resumes_function_and_retains_checkpoint_exit() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   installTestImage(core);
@@ -287,7 +287,7 @@ static void test_supported_syscall_resumes_function_and_retains_checkpoint_exit(
 }
 
 static void test_unsupported_syscall_preserves_state_and_refuses_continuation() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   installTestImage(core);
@@ -308,7 +308,7 @@ static void test_unsupported_syscall_preserves_state_and_refuses_continuation() 
 }
 
 static void test_until_exit_routes_native_entry_syscall_pending_work_and_frame_exit() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -336,7 +336,7 @@ static void test_until_exit_routes_native_entry_syscall_pending_work_and_frame_e
 }
 
 static void test_delay_slot_syscall_is_refused_without_sequential_resume() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   installTestImage(core);
@@ -357,7 +357,7 @@ static void test_delay_slot_syscall_is_refused_without_sequential_resume() {
 }
 
 static void test_syscall_continuation_remains_bounded() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   installTestImage(core);
@@ -384,7 +384,7 @@ static void test_syscall_continuation_remains_bounded() {
 // happens, and a bad pc is actually classified as bad. A test that only checks the "outside" counter
 // is zero would pass on a census that never ran.
 static void test_budget_exit_pc_is_classified_with_its_denominator() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -413,7 +413,7 @@ static void test_budget_exit_pc_is_classified_with_its_denominator() {
 }
 
 static void test_native_only_self_loop_exhausts_dispatch_budget_without_fabricated_cycles() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -437,7 +437,7 @@ static void test_native_only_self_loop_exhausts_dispatch_budget_without_fabricat
 }
 
 static void test_explicit_function_continuation_is_independent_of_incoming_ra() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   installTestImage(core);
@@ -452,7 +452,7 @@ static void test_explicit_function_continuation_is_independent_of_incoming_ra() 
 }
 
 static void test_original_until_exit_suppresses_only_its_entry_and_restores_on_frame_exit() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -474,7 +474,7 @@ static void test_original_until_exit_suppresses_only_its_entry_and_restores_on_f
 }
 
 static void test_native_store_widths_and_ram_aliases_invalidate_translated_code() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   installTestImage(core);
@@ -514,7 +514,7 @@ static void test_native_store_widths_and_ram_aliases_invalidate_translated_code(
 }
 
 static void test_nested_original_resumes_native_return_result_not_scoped_caller_pc() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -578,7 +578,7 @@ static void test_backend_reports_verified_host_properties() {
 }
 
 static void test_real_executor_translates_and_runs_guest_instructions() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   constexpr std::uint32_t entry = 0x00010000u;
@@ -614,7 +614,7 @@ static void test_real_executor_translates_and_runs_guest_instructions() {
 }
 
 static void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupported_target() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   auto &executor = core.lightrecExecutor();
@@ -755,7 +755,7 @@ static void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupp
 }
 
 static void test_translated_call_dispatches_image_scoped_native_and_resumes_caller() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -783,7 +783,7 @@ static void test_translated_call_dispatches_image_scoped_native_and_resumes_call
 }
 
 static void test_call_original_runs_guest_body_to_exact_caller_continuation() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -821,7 +821,7 @@ static void test_call_original_runs_guest_body_to_exact_caller_continuation() {
 }
 
 static void test_nested_native_dispatch_restores_outer_context_and_continuations() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -858,7 +858,7 @@ static void test_nested_native_dispatch_restores_outer_context_and_continuations
 }
 
 static void test_parked_native_task_keeps_main_and_task_return_boundaries() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -907,7 +907,7 @@ static void test_parked_native_task_keeps_main_and_task_return_boundaries() {
 }
 
 static void test_parked_task_fallback_allowance_excludes_main_thread_fallback() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = installTestImage(core);
@@ -932,7 +932,7 @@ static void test_parked_task_fallback_allowance_excludes_main_thread_fallback() 
 }
 
 static void test_guest_self_modifying_store_invalidates_and_retranslates() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   installTestImage(core);
@@ -981,7 +981,7 @@ static void test_guest_self_modifying_store_invalidates_and_retranslates() {
 }
 
 static void test_pending_host_work_is_serviced_at_a_bounded_execution_exit() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   constexpr std::uint32_t entry = 0x00010000u;
@@ -997,7 +997,7 @@ static void test_pending_host_work_is_serviced_at_a_bounded_execution_exit() {
 }
 
 static void test_deferred_pending_work_does_not_prevent_guest_progress() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   installTestImage(core);
@@ -1018,7 +1018,7 @@ static void test_deferred_pending_work_does_not_prevent_guest_progress() {
 }
 
 static void test_invalid_fetch_is_a_typed_hard_fault() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   auto &executor = game->core.lightrecExecutor();
 
@@ -1031,7 +1031,7 @@ static void test_invalid_fetch_is_a_typed_hard_fault() {
 }
 
 static void test_backend_fallback_is_classified_and_counted() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   constexpr std::uint32_t entry = 0x00010000u;
@@ -1069,7 +1069,7 @@ static void test_backend_fallback_is_classified_and_counted() {
 }
 
 static void test_fallback_threshold_refusal_prevents_interpreter_execution() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   constexpr std::uint32_t entry = 0x00010000u;
@@ -1099,7 +1099,7 @@ static void test_fallback_threshold_refusal_prevents_interpreter_execution() {
 }
 
 static void test_invalid_fallback_limit_faults_before_guest_execution() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   constexpr std::uint32_t entry = 0x00010000u;

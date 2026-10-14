@@ -1,20 +1,21 @@
 // ProductHost and TitleSession end to end over a stub catalog and FrameDriver: how a run ends, what
 // it counts, and what a picker panel is not allowed to do.
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include "c_subsys.h"
 #include "config_vars.h"
 #include "core.h"
+#include "crt0_boot.h"
 #include "dbg_server.h"
 #include "frame_presenter.h"
 #include "fs_util.h"
 #include "game.h"
 #include "game_runtime.h"
-#include "guest_program_image.h"
 #include "host_input.h"
-#include "platform_hle.h"
 #include "product_host.h"
 #include "state/state_command.h"
+#include "stock_vsync.h"
 #include "title_catalog.h"
 
 #include <SDL3/SDL.h>
@@ -85,9 +86,8 @@ struct Script {
   std::filesystem::path consumeState; // the first product deletes this file at its first step
   std::string card;                   // the memory card every session opens, so a state can carry it
   std::string discKey;                // the disc key the product's Game resolves its image through
-  BootEntry bootEntry = BootEntry::Crt0;
-  bool crt0Incomplete = false; // the image leaves libcInitEntry unset
-  // Overwritten with zeros when the session first asks for the image, after the host selected it.
+  bool runsCrt0 = true;               // the title starts its program through Crt0Boot
+  // Overwritten with zeros when the title starts its program, after the host selected it.
   std::filesystem::path rewriteAtBoot;
   bool fileBugReport = false; // the product files a scripted bug report at its first step
   unsigned overridesRegistered = 0;
@@ -120,7 +120,7 @@ public:
   }
 };
 
-class Driver final : public FrameDriver {
+class Driver final : public psx::game::FrameDriver {
 public:
   Driver(Game &game, Script &script) : game_(game), script_(script) {}
 
@@ -171,66 +171,50 @@ private:
   unsigned steps_ = 0;
 };
 
-class Runtime final : public GameRuntime {
+class Runtime final : public psx::test::StubGameRuntime {
 public:
   explicit Runtime(Script &script) : script_(script) {
-    plan_.vsyncAddress = kVSyncAddress;
-    plan_.windowLo[0] = kVSyncAddress;
-    plan_.windowHi[0] = kVSyncAddress + 4u;
-    image_.bss = {0x80011000u, 0x80011100u};
-    image_.stackTopWordAddress = kStackTopWord;
-    image_.stackReserveWordAddress = kStackReserveWord;
-    image_.heapBase = 0x80020000u;
-    image_.globalPointer = 0x80018000u;
-    image_.bootEntry = script.bootEntry;
-    image_.libcInitEntry = script.crt0Incomplete ? 0u : kTextAddress;
-    image_.stackBias.declared = true;
-    image_.stackBias.bytes = -8;
-    image_.residentText = {kTextAddress & 0x1FFFFFFFu, (kTextAddress + kTextSize) & 0x1FFFFFFFu};
+    crt0_.bss = {0x80011000u, 0x80011100u};
+    crt0_.stackTopWordAddress = kStackTopWord;
+    crt0_.stackReserveWordAddress = kStackReserveWord;
+    crt0_.heapBase = 0x80020000u;
+    crt0_.globalPointer = 0x80018000u;
+    crt0_.libcInitEntry = kTextAddress;
+    crt0_.stackBias.declared = true;
+    crt0_.stackBias.bytes = -8;
   }
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
   void registerOverrides(Game &game) override {
+    vsync_.bind(game);
     ++script_.overridesRegistered;
     script_.devicesBoundBeforeOverrides = game.core.r[4] == 1u && game.core.r[5] == 0u;
     if (!script_.card.empty()) {
       game.memcard.init();
     }
   }
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  const HostIdentity *hostIdentity() const override {
+  const psx::game::HostIdentity *hostIdentity() const override {
     identity_.cardDefaultPath = script_.card.c_str();
     return &identity_;
   }
-  const PlatformHlePlan *platformHlePlan() const override {
-    return &plan_;
-  }
-  const GuestProgramImage *guestProgramImage() const override {
+  void startProgram(Core &core) override {
     if (!script_.rewriteAtBoot.empty()) {
       const std::vector<char> zeros(0x800u + kTextSize, 0);
       std::ofstream(script_.rewriteAtBoot, std::ios::binary)
           .write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
       script_.rewriteAtBoot.clear();
     }
-    return &image_;
+    if (script_.runsCrt0) {
+      psx::game::Crt0Boot(crt0_).run(core);
+    }
   }
-  std::unique_ptr<FrameDriver> createFrameDriver(Game &game) override {
+  std::unique_ptr<psx::game::FrameDriver> createFrameDriver(Game &game) override {
     return std::make_unique<Driver>(game, script_);
   }
 
 private:
   Script &script_;
-  mutable HostIdentity identity_{};
-  PlatformHlePlan plan_{};
-  GuestProgramImage image_{};
+  mutable psx::game::HostIdentity identity_{};
+  psx::game::Crt0Image crt0_{};
+  const psx::hle::StockVSync vsync_{kVSyncAddress, 0u};
 };
 
 // Two titles over the same executable bytes, so a picker has two panels; or only the first.
@@ -250,7 +234,7 @@ public:
   std::span<const psx::host::TitleIdentity> titles() const override {
     return std::span(titles_).first(count_);
   }
-  GameRuntime &runtime(std::size_t index) const override {
+  psx::game::GameRuntime &runtime(std::size_t index) const override {
     return runtimes_[index];
   }
   void replaceFirst(const psx::host::TitleIdentity &title) {
@@ -649,29 +633,11 @@ static void test_a_single_title_catalog_skips_the_selector(void) {
 
 namespace {
 
-// A Crt0 title whose image leaves its crt0 group incomplete is refused by name before its Game exists.
-void test_a_crt0_title_with_an_incomplete_group_is_refused_by_name() {
-  Fixture fixture;
-  Script script;
-  script.crt0Incomplete = true;
-  const Catalog catalog(script, fixture.sha256, fixture.root, 1);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 3);
-  {
-    psx::host::ProductHost host(catalog);
-    CHECK_EQ(run(host), 2);
-  }
-  CHECK_EQ(script.steps, 0u);
-  CHECK_EQ(
-      fixture.count("One (SCUS_000.01) refused: bootEntry=Crt0 but 1 of 8 crt0 field(s) are unset (libcInitEntry)"), 1);
-  CHECK_EQ(fixture.count("run complete"), 0);
-}
-
-// The same image declared DriverOwned boots: the framework applies no crt0 and leaves the entry to the driver.
+// A title that does not start through Crt0Boot gets no crt0: the entry is the driver's.
 void test_a_driver_owned_title_boots_without_the_framework_crt0() {
   Fixture fixture;
   Script script;
-  script.crt0Incomplete = true;
-  script.bootEntry = BootEntry::DriverOwned;
+  script.runsCrt0 = false;
   const Catalog catalog(script, fixture.sha256, fixture.root, 1);
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 2);
   {
@@ -679,7 +645,7 @@ void test_a_driver_owned_title_boots_without_the_framework_crt0() {
     CHECK_EQ(run(host), 0);
   }
   CHECK_EQ(script.steps, 2u);
-  CHECK_EQ(fixture.count("crt0_setup:"), 0);
+  CHECK_EQ(fixture.count("Crt0Boot:"), 0);
   CHECK_EQ(fixture.count("run complete: product_steps=2 "), 1);
 }
 
@@ -687,7 +653,7 @@ void test_a_driver_owned_title_boots_without_the_framework_crt0() {
 void test_a_session_binds_the_devices_before_the_title_overrides() {
   Fixture fixture;
   Script script;
-  script.bootEntry = BootEntry::DriverOwned;
+  script.runsCrt0 = false;
   const Catalog catalog(script, fixture.sha256, fixture.root, 1);
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 1);
   {
@@ -706,7 +672,7 @@ void test_a_missing_executable_is_provisioned_from_the_title_disc() {
   const std::string sha256 = lucent::content::sha256_hex(lucent::content::sha256(std::as_bytes(std::span(bytes))));
   CHECK_EQ(setenv("PSXPORT_TEST_PROVISION_DISC", (fixtures / "provision.chd").c_str(), 1), 0);
   Script script;
-  script.bootEntry = BootEntry::DriverOwned;
+  script.runsCrt0 = false;
   Catalog catalog(script, fixture.sha256, fixture.root, 1);
   catalog.replaceFirst(psx::host::TitleIdentity{.displayName = "Disc",
                                                 .serial = "SLUS_000.01",
@@ -741,7 +707,6 @@ int main(void) {
   RUN(help_names_the_product_and_boots_nothing);
   RUN(unexpected_arguments_are_refused);
   RUN(a_single_title_catalog_skips_the_selector);
-  RUN(a_crt0_title_with_an_incomplete_group_is_refused_by_name);
   RUN(a_driver_owned_title_boots_without_the_framework_crt0);
   RUN(a_session_binds_the_devices_before_the_title_overrides);
   RUN(a_missing_executable_is_provisioned_from_the_title_disc);

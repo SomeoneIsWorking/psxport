@@ -17,7 +17,7 @@ std::span<const TitleIdentity> EmptyCatalog::titles() const {
   return {};
 }
 
-GameRuntime &EmptyCatalog::runtime(std::size_t index) const {
+psx::game::GameRuntime &EmptyCatalog::runtime(std::size_t index) const {
   lucent::error("fixture", "the empty catalog has no runtime {}", index);
   std::abort();
 }

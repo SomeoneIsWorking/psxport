@@ -35,10 +35,7 @@ struct SectionWriter {
 } // namespace
 
 NativeStatePort *MachineState::titlePort(Game &game) {
-  if (game.runtime == nullptr) {
-    return nullptr;
-  }
-  return game.runtime->nativeState(game.core);
+  return game.runtime.nativeState(game.core);
 }
 
 std::optional<std::vector<std::uint8_t>> MachineState::capture(std::string &error) {

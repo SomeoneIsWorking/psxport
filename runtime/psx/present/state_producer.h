@@ -1,4 +1,4 @@
-// state_producer.h — a producer's native render from saved state, and the registry of them.
+// state_producer.h — a producer's native render from saved state, and the lookup of them.
 #pragma once
 
 #include "frame_record.h"
@@ -33,12 +33,16 @@ public:
 // The renders by producer guest address. A producer without one keeps its entries as recorded.
 class StateProducers {
 public:
+  virtual ~StateProducers() = default;
+  virtual const StateProducer *find(std::uint32_t producer) const = 0;
+};
+
+// A title's renders, held in its session state and answered from GameRuntime::stateProducer.
+class StateProducerTable final : public StateProducers {
+public:
+  // Aborts on a second render for one producer.
   void install(std::uint32_t producer, std::unique_ptr<const StateProducer> render);
-  void clear();
-  const StateProducer *find(std::uint32_t producer) const;
-  bool empty() const {
-    return renders_.empty();
-  }
+  const StateProducer *find(std::uint32_t producer) const override;
 
 private:
   std::unordered_map<std::uint32_t, std::unique_ptr<const StateProducer>> renders_;

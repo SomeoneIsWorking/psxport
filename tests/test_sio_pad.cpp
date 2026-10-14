@@ -7,9 +7,12 @@
 // that the /ACK is a DEADLINE, late enough that a driver which clears I_STAT bit 7 after sending a
 // byte still sees that byte's ack afterwards.
 #include "game.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 // The two register-level facts every case needs: a selected port with the /ACK interrupt enabled,
 // and the baud/mode the measured driver programs (reload 0x88, MUL1 → 8 * 0x88 = 1088 ticks/byte).
@@ -27,7 +30,7 @@ constexpr uint32_t kIMask = 0x1F801074u;
 
 // A port needs a Game only because the /ACK raises I_STAT, which the interrupt controller owns.
 struct Port {
-  Game *owner = new Game();
+  Game *owner = new Game(stubRuntime);
   Hle &hle = owner->hle;
 
   Port() {

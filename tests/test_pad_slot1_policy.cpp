@@ -1,8 +1,9 @@
 // Slot-1 controller presence is per-game policy rather than a hardcoded "always absent" packet.
 
 #include "game.h"
-#include "legacy_game_config.h"
 #include "pad_input.h"
+#include "stock_pad_buffers.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <memory>
@@ -12,16 +13,19 @@ namespace {
 constexpr uint32_t kSlot0 = 0x10000u;
 constexpr uint32_t kSlot1 = 0x20000u;
 
-struct Fixture {
-  std::unique_ptr<Game> game = std::make_unique<Game>();
-  GameConfig config{};
-
-  Fixture() {
-    config.padSlot0Buf = kSlot0;
-    config.padSlot1Buf = kSlot1;
-    game->core.cfg = &config;
-    game->pad.game = game.get();
+class PadRuntime final : public psx::test::StubGameRuntime {
+public:
+  void deliverPad(Core &core, const psx::input::PadDelivery &delivery) override {
+    buffers_.deliver(core, delivery);
   }
+
+private:
+  psx::input::StockPadBuffers buffers_{{.slot0Buffer = kSlot0, .slot1Buffer = kSlot1}};
+};
+
+struct Fixture {
+  PadRuntime runtime;
+  std::unique_ptr<Game> game = std::make_unique<Game>(runtime);
 };
 
 void test_slot1_is_absent_by_default() {

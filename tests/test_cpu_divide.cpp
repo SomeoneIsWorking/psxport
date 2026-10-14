@@ -3,12 +3,15 @@
 #include "cpu_divide.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
 
+psx::test::StubGameRuntime stubRuntime;
+
 void checkSigned(uint32_t numerator, uint32_t denominator, uint32_t quotient, uint32_t remainder) {
-  auto core = std::make_unique<Core>();
+  auto core = std::make_unique<Core>(stubRuntime);
   core->lo = 0xA5A5A5A5u;
   core->hi = 0x5A5A5A5Au;
   cpu_div(core.get(), numerator, denominator);
@@ -17,7 +20,7 @@ void checkSigned(uint32_t numerator, uint32_t denominator, uint32_t quotient, ui
 }
 
 void checkUnsigned(uint32_t numerator, uint32_t denominator, uint32_t quotient, uint32_t remainder) {
-  auto core = std::make_unique<Core>();
+  auto core = std::make_unique<Core>(stubRuntime);
   core->lo = 0xA5A5A5A5u;
   core->hi = 0x5A5A5A5Au;
   cpu_divu(core.get(), numerator, denominator);

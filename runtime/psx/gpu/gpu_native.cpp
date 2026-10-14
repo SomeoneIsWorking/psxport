@@ -2212,7 +2212,7 @@ bool GpuState::deviceScanout() const {
 // SDL_Texture code that SDL3 doesn't carry verbatim.
 int gpu_vk_enabled(void); // gpu_vk.cpp — SDL_GPU present backend
 void GpuState::ensure_window() {}
-// The presented height is the decoded display height, or GameConfig::guestDisplayHeight on guest paths
+// The presented height is the decoded display height, or GameRuntime::displayHeight on guest paths
 // (display_scanout.h).
 void GpuState::present_window() {
   Core *core = &game->core;

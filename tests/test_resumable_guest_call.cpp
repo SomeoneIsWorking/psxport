@@ -5,6 +5,7 @@
 // nested `$ra` the guest body left behind, the call would end at the wrong place and the run would
 // continue; if the turn cap were missing, a guest that never returns would hang the product. Both are
 // asserted here against a real dynarec execution of a synthetic guest image.
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include "core.h"
@@ -109,29 +110,12 @@ constexpr std::array<std::uint32_t, kSpinWords> kSpinProgram{
     nop(),
 };
 
-class Runtime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  void registerOverrides(Game &) override {}
-};
-
 struct Fixture {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   std::unique_ptr<Game> game;
 
   Fixture() {
-    psxport_install_game(runtime);
-    game = std::make_unique<Game>();
+    game = std::make_unique<Game>(runtime);
     Core &core = game->core;
     core.imageCatalog().activate("resumable-call-test", {kEntry, kProgramEnd}, 0x52455331u);
     for (std::size_t i = 0; i < kProgram.size(); ++i) {

@@ -10,7 +10,7 @@
 // WHAT A NEGATIVE PRINTS. Never "(nothing found)". A refusal names what it could not do and exits
 // non-zero; a partial scan prints its DENOMINATOR (instructions decoded, why it stopped, how many words
 // in the window were zero) next to every field it did and did not resolve. A field this tool cannot see
-// must reach `GuestProgramImage` as 0 with a TODO, never as a guess — zero is honest, and `crt0_plan`
+// must reach `Crt0Image` as 0 with a TODO, never as a guess — zero is honest, and `crt0_plan`
 // distinguishes ABSENT (a measured "this crt0 has no such global") from UNSET (nobody has RE'd it) by
 // the explicit `declared` flag, not by the value.
 //
@@ -73,7 +73,7 @@ struct Crt0xOutcome {
   int resolved = 0, total = 0;
   Crt0Observed o;
 
-  // What the SHIPPING arithmetic makes of the scan: `crt0_plan` from runtime/psx/boot/crt0_boot.h, run on
+  // What the SHIPPING arithmetic makes of the scan: `crt0_plan` from runtime/psx/game/crt0_boot.h, run on
   // this image's own words. Carried out of `extract_from_image` so `--selftest` asserts on the same values
   // the human report prints, and so `tools/oracle/crossvalidate_crt0.py` can diff a1 (the heap SIZE)
   // against what the oracle MEASURED at the InitHeap call. Before this existed, a1 was the one field the
@@ -219,7 +219,7 @@ extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t en
   // about the InitHeap arguments, for the same reason they already share `crt0_scan`. It is pure — the two
   // words the guest crt0 loads are passed in — so it can run here against the image's own bytes.
   if (r.resolved == r.total && o.scanComplete) {
-    GuestProgramImage image{};
+    psx::game::Crt0Image image{};
     image.bss.begin = o.bssLo;
     image.bss.end = o.bssHi;
     image.stackTopWordAddress = o.stackTopBase;
@@ -297,7 +297,7 @@ extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t en
 
     // The paste-ready declaration. Emitted only for what was RESOLVED; an unresolved field is emitted as
     // a TODO rather than a zero that would read as a measurement.
-    fputs("  --- for the derived runtime's GuestProgramImage ---\n", report);
+    fputs("  --- for the derived runtime's Crt0Image ---\n", report);
     if (o.haveBias) {
       fprintf(report,
               "    image.stackBias = {true, %d};   // measured by tools/crt0_extract from %s\n",
@@ -511,7 +511,7 @@ static int selftest(void) {
         "  header-declares-more-text-than-present NOTE are exercised only by a real run), the images are\n"
         "  assembled from tests/crt0_fixture.h rather than read out of a commercial executable, so a real\n"
         "  crt0 shape outside the five measured ones is invisible to it, and it says nothing about\n"
-        "  whether any game's GuestProgramImage actually carries the values this tool printed — that is\n"
+        "  whether any game's Crt0Image actually carries the values this tool printed — that is\n"
         "  crt0_audit's job, at every boot.\n",
         stderr);
   return g_failed ? 1 : 0;

@@ -4,6 +4,7 @@
 #include "game.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -11,6 +12,8 @@
 #include <string>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 std::filesystem::path capturePath(const char *name) {
   return std::filesystem::current_path() / name;
@@ -33,7 +36,7 @@ void test_active_wav_is_finalized_before_spu_owner_teardown() {
 
   CHECK_EQ(setenv("PSXPORT_WAV", initial.c_str(), 1), 0);
   {
-    auto game = std::make_unique<Game>();
+    auto game = std::make_unique<Game>(stubRuntime);
     game->spu_audio.init();
     game->spu_audio.wavReopen(active.c_str());
   }

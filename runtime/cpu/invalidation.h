@@ -1,7 +1,7 @@
 #pragma once
 
 #include "executable_write_source.h"
-#include "guest_program_image.h"
+#include "guest_address_range.h"
 
 #include <cstddef>
 #include <cstdint>

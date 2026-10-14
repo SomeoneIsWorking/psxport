@@ -72,8 +72,7 @@ void publishStockReadLanding(Core &core, const psx::cd::StockReadLanding &landin
 } // namespace psx::code_module
 
 GuestAddressRange guestCodeModuleWindow(const Core &core) {
-  const GameRuntime *runtime = core.game ? core.game->runtime : nullptr;
-  return runtime ? runtime->guestCodeModuleWindow() : GuestAddressRange{};
+  return core.runtime.guestCodeModuleWindow();
 }
 
 void publishGuestCodeModuleLanding(Core &core, GuestAddressRange landed) {

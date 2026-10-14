@@ -2,10 +2,13 @@
 #include "image_identity.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 #include <stdexcept>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 void test_address_aliases_and_unload_reveal_are_preserved() {
   psx::cpu::ImageCatalog catalog;
@@ -94,7 +97,7 @@ void test_gaps_empty_invalid_and_nonphysical_ranges_refuse() {
 }
 
 void test_core_forwards_range_resolution_to_its_own_catalog() {
-  auto core = std::make_unique<Core>();
+  auto core = std::make_unique<Core>(stubRuntime);
   const GuestAddressRange whole{0x1000u, 0x2000u};
   const auto base = core->imageCatalog().activate("world", whole, 11u);
   CHECK(core->currentImageIdentity(whole) == base);

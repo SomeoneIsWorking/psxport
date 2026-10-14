@@ -15,7 +15,7 @@
 using namespace dynarec_test;
 
 static void test_cross_block_load_delay_hazards_are_not_limited_by_the_fallback_block_budget() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   constexpr std::uint32_t entry = 0x00010000u;
@@ -52,7 +52,7 @@ static void test_cross_block_load_delay_hazards_are_not_limited_by_the_fallback_
 }
 
 static void test_non_hazard_fallbacks_stay_bounded_when_hazards_are_exempt() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   constexpr std::uint32_t entry = 0x00010000u;

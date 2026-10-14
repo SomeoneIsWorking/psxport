@@ -36,11 +36,28 @@
 #include "state_file.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <cstdio>
 #include <cstring>
 #include <span>
 #include <string>
 #include <vector>
+
+namespace {
+constexpr const char *kCardPath = "test_state_determinism.mcr";
+
+class CardRuntime final : public psx::test::StubGameRuntime {
+public:
+  const psx::game::HostIdentity *hostIdentity() const override {
+    return &identity_;
+  }
+
+private:
+  psx::game::HostIdentity identity_{.cardDefaultPath = kCardPath};
+};
+
+CardRuntime cardRuntime;
+} // namespace
 
 namespace {
 
@@ -113,12 +130,9 @@ struct Machine {
 
 Machine makeMachine() {
   Machine machine;
-  machine.cardPath = "test_state_determinism.mcr";
-  machine.game = std::make_unique<Game>();
+  machine.cardPath = kCardPath;
+  machine.game = std::make_unique<Game>(cardRuntime);
   Core &core = machine.game->core;
-  static GameConfig config{};
-  config.cardDefaultPath = machine.cardPath.c_str();
-  core.cfg = &config;
   std::remove(machine.cardPath.c_str());
   card_overrides_init(machine.game.get());
   core.imageCatalog().activate("state-determinism", {kImageBase, kImageEnd}, 0x53544154u);

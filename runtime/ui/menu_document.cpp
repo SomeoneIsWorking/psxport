@@ -1,7 +1,6 @@
 #include "menu_document.h"
 
 #include "game.h"
-#include "game_hooks_opt.h" // OPTIONAL hooks are never called directly — see that header
 #include "rml_text.h"
 #include "ui_component.h"
 
@@ -96,11 +95,11 @@ MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *g
 
 MenuDocument::~MenuDocument() = default;
 
-const TitleIntSetting *MenuDocument::find_title_setting(std::string_view id) const {
-  if (!mGame || !mGame->runtime) {
+const psx::game::TitleIntSetting *MenuDocument::find_title_setting(std::string_view id) const {
+  if (!mGame) {
     return nullptr;
   }
-  for (const TitleIntSetting &setting : mGame->runtime->titleIntSettings()) {
+  for (const psx::game::TitleIntSetting &setting : mGame->runtime.titleIntSettings()) {
     if (id == setting.id) {
       return &setting;
     }
@@ -110,15 +109,15 @@ const TitleIntSetting *MenuDocument::find_title_setting(std::string_view id) con
 
 void MenuDocument::add_title_setting_rows() {
   Rml::Element *host = mDoc->GetElementById(kTitleSettingsHostId);
-  if (!host || !mGame || !mGame->runtime) {
+  if (!host || !mGame) {
     return;
   }
-  const std::span<const TitleIntSetting> settings = mGame->runtime->titleIntSettings();
+  const std::span<const psx::game::TitleIntSetting> settings = mGame->runtime.titleIntSettings();
   if (settings.empty()) {
     return;
   }
   std::string rml = "<div class=\"section-heading spaced\">Enhancements</div>";
-  for (const TitleIntSetting &setting : settings) {
+  for (const psx::game::TitleIntSetting &setting : settings) {
     rml += std::string("<select-button adjust=\"") + std::string(kTitleSettingPrefix) + setting.id + "\"><key>" +
            rml_text_markup(setting.label) + "</key><value></value></select-button>";
   }
@@ -204,7 +203,8 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
       }
     }
     if (id.rfind(kTitleSettingPrefix, 0) == 0) {
-      const TitleIntSetting *setting = find_title_setting(std::string_view(id).substr(kTitleSettingPrefix.size()));
+      const psx::game::TitleIntSetting *setting =
+          find_title_setting(std::string_view(id).substr(kTitleSettingPrefix.size()));
       if (setting) {
         return make_title_setting_binding(setting, &mGame->mods);
       }
@@ -269,14 +269,11 @@ void MenuDocument::run_action(const std::string &id) {
   }
   // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
   if (id.rfind("music_", 0) == 0) {
-    if (!mGame) {
+    psx::game::TitleAudio *audio = mGame ? mGame->runtime.audio(mGame->core) : nullptr;
+    if (!audio) {
       return;
     }
-    if (id == "music_stop") {
-      game_audio_sound_test_play(&mGame->core, mGame->core.hooks, -1);
-    } else {
-      game_audio_sound_test_play(&mGame->core, mGame->core.hooks, atoi(id.c_str() + 6));
-    }
+    audio->soundTestPlay(id == "music_stop" ? -1 : atoi(id.c_str() + 6));
     if (mReadouts) {
       mReadouts->update();
     }

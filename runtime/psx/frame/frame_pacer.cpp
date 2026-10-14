@@ -16,7 +16,7 @@
 namespace psx::frame {
 
 unsigned FramePacer::fieldRateMilliHz(Core &core) const {
-  return psx::frame::fieldRateMilliHz(core.game ? core.game->gpu.s_disp_pal != 0 : false);
+  return psx::frame::fieldRateMilliHz(core.game->gpu.s_disp_pal != 0);
 }
 
 PacePlan FramePacer::plan(PaceInputs inputs) {
@@ -36,7 +36,7 @@ PacePlan preparePace(Core &core, int guestFields, int parts) {
   PaceInputs inputs;
   // NOPACE and a fast-forward (resume replay or host pre-roll) suppress host sleeping only. Neither changes windowing,
   // the guest display cadence, or the emulated time delivered below.
-  inputs.unpaced = psx::config::cv_nopace.get() || (core.game && core.game->fastForwarding());
+  inputs.unpaced = psx::config::cv_nopace.get() || core.game->fastForwarding();
   inputs.quota =
       guestFields > 0 ? guestFields : (core.cfg && core.cfg->paceQuota ? static_cast<int>(core.cfg->paceQuota) : 0);
   inputs.parts = parts;

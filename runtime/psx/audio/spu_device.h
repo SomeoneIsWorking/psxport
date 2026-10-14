@@ -45,5 +45,25 @@ public:
     SPU_BindState(state);
     spu_bind_log(writeLog); // NULL when SBS off — spu_write's null-check makes it a no-op
     spu_bind_irq_core(c);   // the SPU IRQ raises on THIS core's I_STAT
+    bound_ = this;
   }
+
+  bool isBound() const {
+    return bound_ == this;
+  }
+
+  // Returns the SPU bind points to their defaults if this instance holds them.
+  void release() {
+    if (bound_ != this) {
+      return;
+    }
+    SPU_BindState(nullptr);
+    spu_bind_log(nullptr);
+    spu_bind_irq_core(nullptr);
+    bound_ = nullptr;
+  }
+
+private:
+  // Beetle's bind point is process-global; this records which instance it names.
+  inline static const SpuDevice *bound_ = nullptr;
 };

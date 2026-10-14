@@ -14,6 +14,7 @@
 // is the one that matters: a bound that is never reached is a hang wearing the costume of a fix. So
 // the never-returning guest is a SEPARATE CTest mode, because in-process it would take the whole
 // suite down with it, and because `abort()` is not catchable.
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include "core.h"
@@ -203,24 +204,12 @@ psx::cpu::NativeKey keyFor(Core &core) {
   return psx::cpu::NativeKey{*identity, kEntry};
 }
 
-class Runtime final : public GameRuntime {
+class Runtime final : public psx::test::StubGameRuntime {
 public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
   // Pure virtual, so it is overridden — and deliberately EMPTY. This hook runs during `Game`
   // construction, before the fixture activates the image, so a key built here would name a different
   // identity than `keyFor` resolves afterwards and the override would silently never fire. The install
   // is done in the fixture instead, where the ordering is visible.
-  void registerOverrides(Game &) override {}
 };
 
 void overrideCallingOriginal(Core *core) {
@@ -237,8 +226,7 @@ struct Fixture {
   std::unique_ptr<Game> game;
 
   Fixture() {
-    psxport_install_game(runtime);
-    game = std::make_unique<Game>();
+    game = std::make_unique<Game>(runtime);
     Core &core = game->core;
     core.imageCatalog().activate("resume-test", {kEntry, kImageEnd}, 0x52455355u);
     for (std::size_t i = 0; i < kProgram.size(); ++i) {
@@ -306,8 +294,7 @@ static void test_the_return_address_is_the_callers_and_not_whatever_the_guest_le
 // ran by accident, and the case that made a working framework look broken.
 static void test_a_guest_store_into_its_own_code_reaches_ram(void) {
   Runtime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
   Core &core = game->core;
   core.imageCatalog().activate("smc-test", {kEntry, kSmcImageEnd}, 0x534D4355u);
   for (std::size_t i = 0; i < kSmcProgram.size(); ++i) {
@@ -342,8 +329,7 @@ extern "C" void onAbortFromTheNeverReturningGuest(int) {
 
 int runTheNeverReturningGuest() {
   Runtime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
   Core &core = game->core;
   core.imageCatalog().activate(
       "resume-spin", {kEntry, kEntry + 4u * static_cast<std::uint32_t>(kSpinWords)}, 0x5350494Eu);

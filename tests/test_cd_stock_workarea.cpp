@@ -1,11 +1,12 @@
 // Stock libcd's native command service must publish the guest work area that its real command-send
 // routine updated. Exercise the shipping HLE registration and command entry points in both runtime
 // shapes, including commands that must leave that area untouched.
-#include "cd_control.h"
 #include "game.h"
 #include "game_iface.h"
 #include "game_runtime.h"
 #include "platform_hle.h"
+#include "stock_libcd.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <array>
@@ -22,26 +23,9 @@ constexpr uint32_t kLegacyWorkAreaAddress = 0x80115000u;
 constexpr uint32_t kLastCommandAddress = 0x80116000u;
 constexpr uint8_t kSentinel = 0xA5u;
 
-class DirectRuntime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  const PlatformHlePlan *platformHlePlan() const override {
-    return &plan;
-  }
-
-  PlatformHlePlan plan{};
-};
+psx::cd::StockLibcd commandLibcd(const psx::cd::StockCommandWorkArea &workArea) {
+  return {{.command = kCommandAddress}, workArea, 0};
+}
 
 void set_parameter(Core &core, const std::array<uint8_t, 4> &bytes) {
   for (uint32_t index = 0; index < bytes.size(); ++index) {
@@ -49,27 +33,27 @@ void set_parameter(Core &core, const std::array<uint8_t, 4> &bytes) {
   }
 }
 
-void command(Core &core, OverrideFn entry, uint8_t code, uint32_t parameter) {
+void setCommand(Core &core, uint8_t code, uint32_t parameter) {
   core.r[A0] = code;
   core.r[A1] = parameter;
   core.r[A2] = 0;
   core.r[V0] = 0xDEADBEEFu;
+}
+
+void command(Core &core, OverrideFn entry, uint8_t code, uint32_t parameter) {
+  setCommand(core, code, parameter);
   entry(&core);
 }
 
 void test_direct_runtime_publishes_setloc_and_setmode_through_stock_command() {
-  DirectRuntime runtime;
-  runtime.plan.cdCommandAddress = kCommandAddress;
-  runtime.plan.windowLo[0] = kCommandAddress;
-  runtime.plan.windowHi[0] = kCommandAddress + 4u;
-  runtime.plan.stockCdWorkArea = {kPositionAddress, kModeAddress};
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+  psx::test::StubGameRuntime runtime;
+  const psx::cd::StockLibcd libcd = commandLibcd({kPositionAddress, kModeAddress});
+  auto game = std::make_unique<Game>(runtime);
+  libcd.bind(*game);
   auto &core = game->core;
   CHECK(core.cfg == nullptr);
   OverrideFn entry = game->platform_hle.lookup(kCommandAddress);
-  CHECK(entry == cd_command_stock_sync);
+  CHECK(entry != nullptr);
 
   std::array<uint8_t, 4> position{0x00u, 0x02u, 0x16u, 0x01u};
   set_parameter(core, position);
@@ -99,16 +83,14 @@ void test_direct_runtime_publishes_setloc_and_setmode_through_stock_command() {
 }
 
 void test_unconfigured_direct_work_area_and_absent_parameters_do_not_write() {
-  DirectRuntime runtime;
-  runtime.plan.cdCommandAddress = kCommandAddress;
-  runtime.plan.windowLo[0] = kCommandAddress;
-  runtime.plan.windowHi[0] = kCommandAddress + 4u;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+  psx::test::StubGameRuntime runtime;
+  const psx::cd::StockLibcd unconfigured = commandLibcd({});
+  const psx::cd::StockLibcd configured = commandLibcd({kPositionAddress, kModeAddress});
+  auto game = std::make_unique<Game>(runtime);
+  unconfigured.bind(*game);
   auto &core = game->core;
   OverrideFn entry = game->platform_hle.lookup(kCommandAddress);
-  CHECK(entry == cd_command_stock_sync);
+  CHECK(entry != nullptr);
 
   set_parameter(core, {0x00u, 0x02u, 0x16u, 0x01u});
   for (uint32_t index = 0; index < 4u; ++index) {
@@ -122,7 +104,7 @@ void test_unconfigured_direct_work_area_and_absent_parameters_do_not_write() {
   }
   CHECK_EQ(core.mem_r8(kModeAddress), kSentinel);
 
-  runtime.plan.stockCdWorkArea = {kPositionAddress, kModeAddress};
+  configured.bind(*game);
   command(core, entry, 0x02u, 0u);
   command(core, entry, 0x0Eu, 0u);
   for (uint32_t index = 0; index < 4u; ++index) {
@@ -138,13 +120,12 @@ void test_legacy_adapter_retains_contiguous_position_and_mode_layout() {
   config.cdLastPosBuf = kLegacyWorkAreaAddress;
   config.hle.windowLo[0] = kCommandAddress;
   config.hle.windowHi[0] = kCommandAddress + 4u;
-  psxport_install_game(&config, &hooks);
-  auto game = std::make_unique<Game>();
-  game->cd.overridesInit();
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto game = std::make_unique<Game>(runtime);
   auto &core = game->core;
   CHECK(core.cfg == &config);
   OverrideFn entry = game->platform_hle.lookup(kCommandAddress);
-  CHECK(entry == cd_command_stock_sync);
+  CHECK(entry != nullptr);
 
   std::array<uint8_t, 4> position{0x00u, 0x02u, 0x16u, 0x01u};
   set_parameter(core, position);
@@ -159,21 +140,19 @@ void test_legacy_adapter_retains_contiguous_position_and_mode_layout() {
 
 // CdLastCom() reads the byte every command send writes, parameter or not.
 void test_every_command_publishes_the_last_command_byte() {
-  DirectRuntime runtime;
-  runtime.plan.cdCommandAddress = kCommandAddress;
-  runtime.plan.windowLo[0] = kCommandAddress;
-  runtime.plan.windowHi[0] = kCommandAddress + 4u;
-  runtime.plan.stockCdWorkArea = {kPositionAddress, kModeAddress, kLastCommandAddress};
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
-  game->platform_hle.initBuiltins();
+  psx::test::StubGameRuntime runtime;
+  const psx::cd::StockLibcd libcd = commandLibcd({kPositionAddress, kModeAddress, kLastCommandAddress});
+  auto game = std::make_unique<Game>(runtime);
+  libcd.bind(*game);
   auto &core = game->core;
   core.mem_w8(kLastCommandAddress, kSentinel);
 
-  command(core, cd_control_fire_sync, 0x11u, 0u);
+  setCommand(core, 0x11u, 0u);
+  libcd.controlFire(core);
   CHECK_EQ(core.mem_r8(kLastCommandAddress), 0x11u);
   core.mem_w8(kParameterAddress, 0xC8u);
-  command(core, cd_control_sync, 0x0Eu, kParameterAddress);
+  setCommand(core, 0x0Eu, kParameterAddress);
+  libcd.control(core);
   CHECK_EQ(core.mem_r8(kLastCommandAddress), 0x0Eu);
   CHECK_EQ(core.mem_r8(kModeAddress), 0xC8u);
   command(core, game->platform_hle.lookup(kCommandAddress), 0x09u, 0u);

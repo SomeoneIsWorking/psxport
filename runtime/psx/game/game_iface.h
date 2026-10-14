@@ -1,37 +1,32 @@
-// game_iface.h — installation boundary for consumers migrating to GameRuntime inheritance.
+// game_iface.h — the legacy GameConfig/GameHooks adapter; deleted once no title derives it, add nothing.
 #pragma once
 
-#ifdef __cplusplus
-
 #include "game_runtime.h"
+#include "guest_packet_pool_windows.h"
 #include "legacy_game_config.h"
 #include "legacy_game_hooks.h"
 
-// Temporary inheritance bridge for incremental consumer migration. A game may derive its runtime
-// from this class, override cohesive behavior directly, and leave unmoved behavior/config facts on
-// the legacy pair. Do not add members here: its death condition is every consumer deriving
-// GameRuntime directly after narrow immutable fact groups replace the remaining GameConfig reads.
-class LegacyGameRuntimeAdapter : public GameRuntime {
+class LegacyGameRuntimeAdapter : public psx::game::GameRuntime {
 public:
   LegacyGameRuntimeAdapter(const GameConfig &config, const GameHooks &hooks);
 
-  void *createContext(Core &core) override;
-  void destroyContext(void *context) override;
+  std::unique_ptr<psx::game::TitleSessionState> createSession(Game &game) override;
   void registerOverrides(Game &game) override;
-  void bootInit(Core &core) override;
-  const GuestProgramImage *guestProgramImage() const override;
+  void startProgram(Core &core) override;
+  void deliverPad(Core &core, const psx::input::PadDelivery &delivery) override;
+  std::optional<psx::gpu::PacketPoolExtent> packetPool(Core &core) const override;
+  bool interpolates() const override;
+  int displayHeight() const override;
   RenderCapabilities renderCapabilities() const override;
   bool guestVramIsPicture(const Game &game) const override;
   std::unique_ptr<psx::frame::TemporalFramePresentation> createTemporalFramePresentation(Game &game) override;
-  bool replCommand(Core &core, const char *command, const char *line) override;
+  bool titleCommand(Core &core, const char *command, const char *line, std::FILE *reply) override;
+  psx::game::TitleAudio *audio(Core &core) const override;
+  psx::game::TitleDevWarp *devWarp(Core &core) const override;
+  const psx::game::HostIdentity *hostIdentity() const override;
 
 private:
-  GuestProgramImage guestProgramImage_;
+  const GameConfig &config_;
+  psx::game::HostIdentity hostIdentity_;
+  std::optional<psx::gpu::GuestPacketPoolWindows> packetPool_;
 };
-
-// Legacy adapter install. New code calls psxport_install_game(GameRuntime&) from game_runtime.h.
-void psxport_install_game(const GameConfig *cfg, const GameHooks *hooks);
-const GameConfig *psxport_game_config();
-const GameHooks *psxport_game_hooks();
-
-#endif // __cplusplus

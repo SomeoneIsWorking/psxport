@@ -1,6 +1,6 @@
 #pragma once
 
-#include "guest_program_image.h"
+#include "guest_address_range.h"
 
 #include <cstdint>
 #include <optional>

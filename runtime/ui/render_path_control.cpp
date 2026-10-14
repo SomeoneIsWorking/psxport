@@ -12,7 +12,7 @@ RenderPath player_render_path_next(RenderPath current, const RenderCapabilities 
 }
 
 bool RenderPathControl::available() const {
-  return mGame && mGame->runtime && mGame->runtime->renderCapabilities().playerPathCount() > 1;
+  return mGame && mGame->runtime.renderCapabilities().playerPathCount() > 1;
 }
 
 std::string RenderPathControl::currentLabel() const {
@@ -32,11 +32,11 @@ std::string RenderPathControl::currentLabel() const {
 }
 
 void RenderPathControl::cycle() {
-  if (!mGame || !mGame->runtime) {
+  if (!mGame) {
     return;
   }
   Core &core = mGame->core;
-  const RenderCapabilities capabilities = mGame->runtime->renderCapabilities();
+  const RenderCapabilities capabilities = mGame->runtime.renderCapabilities();
   const RenderPath next = player_render_path_next(core.rsub.mode.path(), capabilities);
   const RenderPathSelectionResult result = render_path_apply(*mGame, next, RenderPathAudience::Player);
   if (result == RenderPathSelectionResult::Unsupported) {

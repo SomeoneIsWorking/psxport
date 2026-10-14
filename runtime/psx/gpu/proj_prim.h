@@ -31,7 +31,7 @@ public:
   // the cost is entries kept, never a wrong depth.
   static constexpr int kGens = 8;
 
-  // bind: mark this instance as the currently-bound cache. Parallels gte_bind/spu_bind — called by
+  // bind: mark this instance as the currently-bound cache. Parallels Gte::bind/spu_bind — called by
   // the title FrameDriver per core step and by boot setup. Compatibility hook for the
   // remaining call sites that lack a Core* in scope; new code should just reach the instance via
   // `c->rsub.projprim` directly.

@@ -91,7 +91,6 @@ static void test_widescreen_only_profile_has_no_native_or_temporal_choice(void) 
   CHECK(!capabilities.supports(RenderPath::Native));
   CHECK(capabilities.supports(RenderPath::Gte));
   CHECK(capabilities.supports(RenderPath::Device));
-  CHECK(!capabilities.temporalInterpolation);
   CHECK_EQ(capabilities.playerPathCount(), 1);
   CHECK(psx::ui::player_render_path_next(RenderPath::Gte, capabilities) == RenderPath::Gte);
   CHECK(render_path_next_supported(RenderPath::Gte, capabilities, RenderPathAudience::Diagnostic) ==
@@ -107,7 +106,6 @@ static void test_interpolated_native_profile_retains_both_player_choices(void) {
   const RenderCapabilities capabilities = RenderCapabilities::interpolatedNative();
   CHECK(capabilities.defaultPath == RenderPath::Native);
   CHECK(capabilities.supports(RenderPath::Native));
-  CHECK(capabilities.temporalInterpolation);
   CHECK_EQ(capabilities.playerPathCount(), 2);
   CHECK(render_path_resolve(RenderPath::Native, capabilities) == RenderPath::Native);
 }

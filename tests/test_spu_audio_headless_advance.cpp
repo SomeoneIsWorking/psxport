@@ -3,12 +3,15 @@
 #include "game.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
 
+psx::test::StubGameRuntime stubRuntime;
+
 void test_field_advances_spu_without_a_consumer() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->spu_audio.init();
   game->spu_audio.frame();
   CHECK_EQ(game->spu_audio.fieldReports().size(), 1u);

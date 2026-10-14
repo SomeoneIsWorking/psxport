@@ -10,8 +10,13 @@
 #include "bios_interrupt.h"
 #include "game.h"
 #include "game_iface.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 #include <memory>
+
+namespace {
+psx::test::StubGameRuntime stubRuntime;
+}
 
 enum { R_V0 = 2, R_S0 = 16, R_GP = 28, R_SP = 29, R_FP = 30 };
 
@@ -42,7 +47,7 @@ static void poison_context_registers(Core *c) {
 }
 
 static void test_restores_the_measured_jmp_buf_layout(void) {
-  const std::unique_ptr<Core> c = std::make_unique<Core>();
+  const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
   write_context(c.get(), kResume);
   poison_context_registers(c.get());
 
@@ -57,7 +62,7 @@ static void test_restores_the_measured_jmp_buf_layout(void) {
 }
 
 static void test_refuses_a_missing_buffer_without_clobbering(void) {
-  const std::unique_ptr<Core> c = std::make_unique<Core>();
+  const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
   poison_context_registers(c.get());
 
   CHECK_EQ(bios_interrupt_enter_custom_exit(c.get(), 0), 0u);
@@ -71,7 +76,7 @@ static void test_refuses_a_missing_buffer_without_clobbering(void) {
 }
 
 static void test_refuses_a_buffer_without_a_continuation(void) {
-  const std::unique_ptr<Core> c = std::make_unique<Core>();
+  const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
   write_context(c.get(), 0);
   poison_context_registers(c.get());
 
@@ -86,7 +91,7 @@ static void test_refuses_a_buffer_without_a_continuation(void) {
 }
 
 static void test_bios_hook_reset_and_return_entry_points(void) {
-  const std::unique_ptr<Game> game = std::make_unique<Game>();
+  const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
   Core *c = &game->core;
   write_context(c, kResume);
 
@@ -116,7 +121,7 @@ static void ordinary_return_dispatch(Core *, uint32_t resume) {
 }
 
 static void test_return_from_exception_unwinds_instead_of_falling_through(void) {
-  const std::unique_ptr<Game> game = std::make_unique<Game>();
+  const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
   write_context(&game->core, kResume);
   dispatch_entered = 0;
   dispatch_fell_through = 0;
@@ -132,7 +137,7 @@ static void test_return_from_exception_unwinds_instead_of_falling_through(void) 
 }
 
 static void test_custom_exit_reports_an_illegal_normal_return(void) {
-  const std::unique_ptr<Core> c = std::make_unique<Core>();
+  const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
   write_context(c.get(), kResume);
   dispatch_entered = 0;
   dispatch_fell_through = 0;
@@ -145,7 +150,7 @@ static void test_custom_exit_reports_an_illegal_normal_return(void) {
 
 // A nested ISR must not see the interrupted ra as its stop address: it can legitimately execute that pc.
 static void test_exception_stack_ra_is_a_sentinel_not_guest_code(void) {
-  const std::unique_ptr<Core> c = std::make_unique<Core>();
+  const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
   c->r[R_SP] = 0x80001234u;
   c->r[31] = 0x80028CBCu;
   Hle::enterExceptionStack(*c);

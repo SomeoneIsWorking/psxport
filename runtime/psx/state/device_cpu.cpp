@@ -130,8 +130,9 @@ bool readScratchpadSection(Core &core, BlobReader &in, std::string &error) {
 }
 
 void writeGteSection(Game &game, BlobWriter &out) {
-  out.array(game.gte.REG, std::size(game.gte.REG));
-  out.u32(game.gte.FLAGS);
+  const GteRegs &gte = game.core.gte().registers();
+  out.array(gte.REG, std::size(gte.REG));
+  out.u32(gte.FLAGS);
 }
 
 bool readGteSection(Game &game, BlobReader &in, std::string &error) {
@@ -143,12 +144,13 @@ bool readGteSection(Game &game, BlobReader &in, std::string &error) {
             std::to_string(in.offset()) + " consumed)";
     return false;
   }
-  std::copy(regs.begin(), regs.end(), game.gte.REG);
-  game.gte.FLAGS = flags;
+  GteRegs &gte = game.core.gte().registers();
+  std::copy(regs.begin(), regs.end(), gte.REG);
+  gte.FLAGS = flags;
   // CR/DR alias REG+32/REG and are re-derived from the copy just made, so a state that renamed them
   // cannot leave the GTE reading through a stale pointer.
-  game.gte.DR = game.gte.REG;
-  game.gte.CR = game.gte.REG + 32;
+  gte.DR = gte.REG;
+  gte.CR = gte.REG + 32;
   return true;
 }
 

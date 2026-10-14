@@ -41,7 +41,7 @@ static void test_an_empty_record_after_the_shown_one_keeps_its_in_between(void) 
 
 // Every present is the render at its t: at t = 1 exactly the device's buffer.
 static void test_a_rendered_object_draws_every_present_from_its_state(void) {
-  psx::present::StateProducers renders;
+  psx::present::StateProducerTable renders;
   renders.install(kTriangleProducer, std::make_unique<TriangleRender>());
   const std::vector<Present> doubled = presentFrames(6, alternating, previousAlternating, false, &renders);
   CHECK_EQ(doubled.size(), 2u + 2u * 4u);

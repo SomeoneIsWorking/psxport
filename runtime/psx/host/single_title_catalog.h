@@ -15,18 +15,18 @@ public:
   // `identity` must outlive the catalog; the product name is its display name.
   SingleTitleCatalog(const TitleIdentity &identity,
                      std::filesystem::path provisioningRoot,
-                     std::unique_ptr<GameRuntime> runtime);
+                     std::unique_ptr<psx::game::GameRuntime> runtime);
   ~SingleTitleCatalog() override;
 
   std::string_view productName() const override;
   std::filesystem::path provisioningRoot() const override;
   std::span<const TitleIdentity> titles() const override;
-  GameRuntime &runtime(std::size_t index) const override;
+  psx::game::GameRuntime &runtime(std::size_t index) const override;
 
 private:
   std::span<const TitleIdentity, 1> titles_;
   std::filesystem::path provisioningRoot_;
-  std::unique_ptr<GameRuntime> runtime_;
+  std::unique_ptr<psx::game::GameRuntime> runtime_;
 };
 
 } // namespace psx::host

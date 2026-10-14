@@ -3,9 +3,12 @@
 // sequence is Sony's libc LCG: state = state * 0x41C64E6D + 0x3039; return
 // (state >> 16) & 0x7FFF.
 #include "game.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 enum { R_V0 = 2, R_A0 = 4 };
 
@@ -25,7 +28,7 @@ uint32_t next(Game &game) {
 }
 
 void test_seed_one_exact_sequence_and_restart() {
-  Game *game = new Game();
+  Game *game = new Game(stubRuntime);
   seed(*game, 1);
   static constexpr uint32_t expected[] = {16838u, 5758u, 10113u, 17515u, 31051u};
   for (uint32_t value : expected) {
@@ -38,8 +41,8 @@ void test_seed_one_exact_sequence_and_restart() {
 }
 
 void test_state_is_per_game() {
-  Game *a = new Game();
-  Game *b = new Game();
+  Game *a = new Game(stubRuntime);
+  Game *b = new Game(stubRuntime);
   seed(*a, 1);
   seed(*b, 7);
   CHECK_EQ(next(*a), 16838u);
@@ -50,7 +53,7 @@ void test_state_is_per_game() {
 }
 
 void test_wrong_table_and_neighbor_are_not_claimed() {
-  Game *game = new Game();
+  Game *game = new Game(stubRuntime);
   game->core.r[R_V0] = 0xDEADBEEFu;
   CHECK(!game->hle.dispatchBios('Z', 0x2F));
   CHECK_EQ(game->core.r[R_V0], 0xDEADBEEFu);

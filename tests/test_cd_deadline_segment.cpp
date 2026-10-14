@@ -8,7 +8,6 @@
 //
 // The control is the same guest loop with NO armed deadline: it must still run its whole budget (the
 // cap must not shorten a segment for a device that owes nothing), and the delivery must not happen.
-#include "cd_control.h"
 #include "cd_drive_timing.h"
 #include "cd_stock_read_completion.h"
 #include "cdc_state.h"
@@ -16,9 +15,10 @@
 #include "game.h"
 #include "game_runtime.h"
 #include "guest_call.h"
-#include "guest_cd_stream_callback_layout.h"
 #include "image_identity.h"
 #include "native_dispatch.h"
+#include "stock_libcd.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <memory>
@@ -52,24 +52,12 @@ int fakeSector2048(DiscState *, uint32_t lba, uint8_t *out) {
   return 1;
 }
 
-class StreamRuntime final : public GameRuntime {
+class StreamRuntime final : public psx::test::StubGameRuntime {
 public:
-  void *createContext(Core &) override {
-    return nullptr;
+  void registerOverrides(Game &game) override {
+    libcd.bind(game);
   }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  const GuestCdStreamCallbackLayout *guestCdStreamCallbackLayout() const override {
-    return &layout;
-  }
-  GuestCdStreamCallbackLayout layout{kSlot, GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt};
+  const psx::cd::GuestInterruptLibcd libcd{{}, {}, kSlot, {}};
 };
 
 // lui t1,0x8001 ; loop: lw t0,0x800(t1) ; beq t0,zero,loop ; nop ; jr ra ; nop
@@ -86,8 +74,8 @@ void writeSpinOnRamFlag(Core &core) {
 struct Fixture {
   Fixture() {
     callbackCalls = 0;
-    psxport_install_game(runtime);
-    game = std::make_unique<Game>();
+    game = std::make_unique<Game>(runtime);
+    runtime.registerOverrides(*game);
     Core &core = game->core;
     const auto image = core.imageCatalog().activate("deadline-segment", {kSpin & 0x1FFFFFFFu, 0x00011000u}, 7u);
     CHECK(core.nativeDispatcher().install({{image, kCallback}, "ready-callback", readyCallback}));

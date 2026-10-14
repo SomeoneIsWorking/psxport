@@ -37,13 +37,3 @@ struct GameHooks;
 // that table, is exactly the default zero/no-fade state. Keeping both cases here prevents renderer
 // call sites from dereferencing the compatibility table directly.
 FadeState game_render_fade_state(Core *c, const GameHooks *hooks);
-
-// Currently-playing Sound-Test track name, or nullptr when nothing is playing OR the game has no
-// Sound Test at all. The overlay renders both as "stopped", which is exactly right: a game without a
-// sound-test catalogue genuinely has nothing playing.
-const char *game_audio_now_playing_name(Core *c, const GameHooks *hooks);
-
-// Sound-Test action: play catalogued track (>= 0) or stop (< 0). Silently does nothing when the game
-// has no Sound Test — the menu row is inert rather than fatal. `track` reaches the game unchanged;
-// the negative "stop" value is meaningful and must not be clamped.
-void game_audio_sound_test_play(Core *c, const GameHooks *hooks, int track);

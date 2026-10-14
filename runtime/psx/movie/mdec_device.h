@@ -32,5 +32,23 @@ public:
   // fabricating the state it is about to capture.
   void bindExisting() {
     MDEC_BindState(state);
+    bound_ = this;
   }
+
+  bool isBound() const {
+    return bound_ == this;
+  }
+
+  // Returns the MDEC bind point to the shared default if this instance holds it.
+  void release() {
+    if (bound_ != this) {
+      return;
+    }
+    MDEC_BindState(nullptr);
+    bound_ = nullptr;
+  }
+
+private:
+  // Beetle's bind point is process-global; this records which instance it names.
+  inline static const MdecDevice *bound_ = nullptr;
 };

@@ -36,8 +36,7 @@ bool GuestWidescreenProjection::guestCoordinatesWidened(const Core &) const {
 namespace {
 
 PresentationAspect requestedAspect(const Core &core) {
-  const GameRuntime *runtime = core.game->runtime;
-  const GuestWidescreenProjection *projection = runtime ? runtime->guestWidescreenProjection() : nullptr;
+  const GuestWidescreenProjection *projection = core.runtime.guestWidescreenProjection();
   if (projection == nullptr || !core.rsub.mode.guestWidescreenAllowed()) {
     return PresentationAspect::Standard4x3;
   }

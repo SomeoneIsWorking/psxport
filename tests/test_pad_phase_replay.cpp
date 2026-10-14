@@ -10,6 +10,7 @@
 #include "pad_phase_replay.h"
 #include "pad_record_replay.h"
 #include "pad_recording.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <cstdint>
@@ -448,20 +449,8 @@ void test_a_live_input_only_session_neither_sinks_nor_replays() {
 
 constexpr std::uint32_t kPhaseWord = 0x1000u;
 
-class PhaseRuntime final : public GameRuntime {
+class PhaseRuntime final : public psx::test::StubGameRuntime {
 public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
   std::uint64_t inputPhase(Core &core) const override {
     return core.mem_r32(kPhaseWord);
   }
@@ -469,8 +458,7 @@ public:
 
 void test_pad_records_the_title_phase_of_every_frame() {
   PhaseRuntime runtime;
-  psxport_install_game(runtime);
-  std::unique_ptr<Game> game = std::make_unique<Game>();
+  std::unique_ptr<Game> game = std::make_unique<Game>(runtime);
   game->core.mem_w32(kPhaseWord, 7u);
   game->pad.serviceFrame();
   game->pad.serviceFrame();

@@ -37,15 +37,16 @@
 #include "ot_attr.h"
 #include "render_substrate.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
-// A Core alone, exactly as an embedder gets one: the seam installed with a stub config/hooks (Core's
-// ctor reads psxport_game_config()), no Game anywhere.
+namespace {
+psx::test::StubGameRuntime stubRuntime;
+}
+
+// A Core alone, exactly as an embedder gets one: the stub runtime, no Game anywhere.
 static std::unique_ptr<Core> bare_core(void) {
-  static const GameConfig cfg{};
-  static const GameHooks hooks{};
-  psxport_install_game(&cfg, &hooks);
-  return std::make_unique<Core>();
+  return std::make_unique<Core>(stubRuntime);
 }
 
 // (1) main RAM round-trips at all three widths, through the KSEG0 mirror guest execution uses.
