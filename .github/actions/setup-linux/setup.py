@@ -16,7 +16,6 @@ PACKAGES = (
     "libfreetype-dev", "libtool", "make", "libsdl3-dev", "libsdl3-image-dev",
     "libvulkan1", "mesa-vulkan-drivers", "ninja-build", "pkg-config", "zlib1g-dev",
 )
-FRAMEWORK_SUBMODULES = ("external/psycross", "vendor/beetle-psx", "vendor/lucent")
 LIGHTREC_REVISION_DECLARATION = re.compile(r'set\(PSXPORT_LIGHTREC_REVISION "([0-9a-f]{40})"\)')
 Runner = Callable[[Sequence[str], Path], None]
 
@@ -71,7 +70,8 @@ def provision(paths: SetupPaths, runner: Runner = run) -> dict[str, str]:
     ):
         if not required.is_file():
             raise RuntimeError(f"required pinned checkout input is missing: {required}")
-    runner(["git", "submodule", "update", "--init", *FRAMEWORK_SUBMODULES], paths.framework)
+    # .gitmodules is the one list; non-recursive because beetle carries a URL-less nested gitlink.
+    runner(["git", "submodule", "update", "--init"], paths.framework)
     runner(["sudo", "apt-get", "update"], paths.workspace)
     runner(["sudo", "apt-get", "install", "--yes", *PACKAGES], paths.workspace)
     runner(
