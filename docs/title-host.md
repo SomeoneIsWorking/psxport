@@ -45,8 +45,7 @@ the presentation before the first present, and no `Game` names the window.
 `TitleIdentity` also carries the title's disc facts: `discEnvVar` (the environment/`.env` key read
 before `PSXPORT_DISC`), `discExecutablePath` (the boot executable's ISO9660 path, `/`-separated) and
 `defaultExecutable(root)` (`<root>/<slug>/<serial>`, the one spelling of where a provisioned executable
-lives, used by the probe, the size-1 catalog and the help text). A title still on its own loop declares
-a `TitleIdentity` for the same facts and sets its `Game`'s `disc.env_key` from it.
+lives, used by the probe, the size-1 catalog and the help text).
 
 A selection means serial plus file identity, never the label. `TitleIdentity::slug` is the directory
 under `provisioningRoot()` (relative to the working directory: `scratch/assets` or `scratch/bin`), and `pick <slug>` on the control channel resolves against it. The
@@ -67,8 +66,8 @@ image's crt0 group (`crt0_setup`, from `TitleSession::boot`) and then `GameRunti
 executable's entry. `TitleSession::boot` asks `psx::bootEntryRefusal` (`crt0_boot.h`) before it builds the
 `Game`: a `Crt0` image whose crt0 group is incomplete, or a runtime with no image, is refused by name
 (`bootEntry=Crt0 but 1 of 8 crt0 field(s) are unset (libcInitEntry)`) and the process exits 2.
-Tomba 2 is `Crt0`; its MAIN.EXE handoff stays in its `bootInit`. CTR, Tekken 3, Vagrant Story and
-Spider-Man 2 are `DriverOwned`.
+Tomba 2 is `Crt0`; its MAIN.EXE handoff stays in its `bootInit`. CTR, Tekken 3, Vagrant Story,
+Spider-Man 2 and C-12 are `DriverOwned`.
 
 `GameRuntime::admitExecutable(core, bytes)` maps the executable and sets the entry registers. Its default is `loadPsxExeImage` plus `applyPsxExeTopLevelRegisters`; a title that publishes
 its own image identity overrides it (Crash Bash, which publishes its resident code range and sets no
@@ -79,7 +78,7 @@ probe (the selector) returns them, `TitleAvailability::bytes` carries them into 
 file is read once. No title authenticates them again.
 
 Every boot goes through `TitleSession::boot`; the framework has no other boot spine. Crash Bash, Toy
-Story 2, Mega Man X4, CTR, Tekken 3 and Vagrant Story are one-title catalogs (`SingleTitleCatalog`): no argument provisions and boots their one executable,
+Story 2, Mega Man X4, CTR, Tekken 3, Vagrant Story and C-12 are one-title catalogs (`SingleTitleCatalog`): no argument provisions and boots their one executable,
 and a title's own run-end lines come from `reportRun`.
 
 `GameRuntime` carries two optional virtuals the host asks, each with a neutral default:
@@ -147,8 +146,7 @@ run came from it, and end the process under `runExecutable`.
 selector frame. An explicit `PSXPORT_NATIVE_FRAMES` wins; otherwise a pad replay or resume, the REPL or
 a live control client leaves it uncapped, a windowed run is uncapped and a headless one stops at 120.
 This is the only place the live-client rule lives: `DbgServer::start` opens the channel and answers
-no cap, and a loop that is not yet a `TitleSession` (C-12's own loop) takes its cap from
-`RunBudget::fromConfig`.
+no cap, and `ProductHost` takes the process's cap from `RunBudget::fromConfig`.
 It never counts a panel's pre-roll steps, and panels never print a run-end report, apply configured
 state or pump the REPL. `PreRollBudget` stays the pre-roll owner: how many panel steps fit in one
 selector frame's wall time.
