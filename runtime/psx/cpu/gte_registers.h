@@ -23,12 +23,14 @@ inline constexpr std::uint32_t kSxy1 = 13;
 inline constexpr std::uint32_t kSxy2 = 14;
 inline constexpr std::uint32_t kSz0 = 16;
 inline constexpr std::uint32_t kSz1 = 17;
+inline constexpr std::uint32_t kSz2 = 18;
 inline constexpr std::uint32_t kSz3 = 19;
 inline constexpr std::uint32_t kRgb2 = 22;
 inline constexpr std::uint32_t kMac0 = 24;
 inline constexpr std::uint32_t kMac1 = 25;
 inline constexpr std::uint32_t kMac2 = 26;
 inline constexpr std::uint32_t kMac3 = 27;
+inline constexpr std::uint32_t kIrgb = 28;
 
 // Control registers: 0..4 the rotation matrix, 5..7 the translation, 8..12 the light matrix.
 inline constexpr std::uint32_t kRotation = 0;

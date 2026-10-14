@@ -55,7 +55,7 @@ Game *interruptGame() {
   legacyRuntime.emplace(config, hooks);
   verifierCalls = 0;
   handlerCalls = 0;
-  Game *game = new Game(*legacyRuntime);
+  Game *game = new Game(*legacyRuntime, {});
   installInterruptCallbacks(*game);
   game->core.mem_w32(kElement + 4u, kHandler);
   game->core.mem_w32(kElement + 8u, kVerifier);
@@ -64,7 +64,7 @@ Game *interruptGame() {
 }
 
 void test_a_field_advance_latches_i_stat_bit0() {
-  Game *game = new Game(stubRuntime);
+  Game *game = new Game(stubRuntime, {});
   game->hle.i_stat = 0;
   CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 1u);
@@ -74,7 +74,7 @@ void test_a_field_advance_latches_i_stat_bit0() {
 // It is a LATCH, not a counter: a guest that has not acknowledged sees one pending VBlank, exactly
 // like the hardware bit. Two fields with no ack in between are still one set bit.
 void test_the_bit_latches_and_survives_until_acknowledged() {
-  Game *game = new Game(stubRuntime);
+  Game *game = new Game(stubRuntime, {});
   game->hle.i_stat = 0;
   CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
   CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
@@ -88,7 +88,7 @@ void test_the_bit_latches_and_survives_until_acknowledged() {
 
 // Delivery is armed, because a latched bit nobody looks at is the same as no bit at all.
 void test_the_delivery_gate_is_armed() {
-  Game *game = new Game(stubRuntime);
+  Game *game = new Game(stubRuntime, {});
   game->core.pending_work = 0;
   CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
   CHECK_EQ(game->core.pending_work & Core::PW_IRQ, (uint32_t)Core::PW_IRQ);
@@ -98,7 +98,7 @@ void test_the_delivery_gate_is_armed() {
 // fps60 presents twice per guest field and paces each presentation by one half. The first
 // presentation is not a physical VBlank; the second completes the field and raises exactly one.
 void test_two_half_field_paces_raise_one_vblank() {
-  Game *game = new Game(stubRuntime);
+  Game *game = new Game(stubRuntime, {});
   game->hle.i_stat = 0;
   CHECK(game->timing.advanceDisplayFields(1, 2, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 0u);
@@ -109,7 +109,7 @@ void test_two_half_field_paces_raise_one_vblank() {
 
 // A two-field title split into two presentations still completes one physical field per call.
 void test_two_field_quota_split_in_half_raises_each_call() {
-  Game *game = new Game(stubRuntime);
+  Game *game = new Game(stubRuntime, {});
   game->hle.i_stat = 0;
   CHECK(game->timing.advanceDisplayFields(2, 2, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 1u);
@@ -122,7 +122,7 @@ void test_two_field_quota_split_in_half_raises_each_call() {
 // The negative: an advance that does NOT happen raises nothing. Both refusal shapes are covered so
 // a "no VBlank" result cannot come from the method silently doing nothing at all.
 void test_a_refused_advance_raises_nothing() {
-  Game *game = new Game(stubRuntime);
+  Game *game = new Game(stubRuntime, {});
   game->hle.i_stat = 0;
   CHECK(!game->timing.advanceDisplayFields(0, 1, kNtscFieldMilliHz));
   CHECK(!game->timing.advanceDisplayFields(1, 1, 0));

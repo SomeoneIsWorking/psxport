@@ -34,7 +34,7 @@ void test_absent_mix_hook_leaves_the_spu_output_alone() {
   GameHooks hooks{};
   hooks.audioNowPlayingName = stub_name;
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   psx::game::TitleAudio *audio = runtime.audio(game->core);
   CHECK(audio != nullptr);
   if (!audio) {
@@ -55,7 +55,7 @@ void test_present_mix_hook_is_called_once() {
   GameHooks hooks{};
   hooks.audioMixFrame = stub_mix;
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   psx::game::TitleAudio *audio = runtime.audio(game->core);
   CHECK(audio != nullptr);
   if (!audio) {

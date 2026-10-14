@@ -17,6 +17,24 @@ Environment values are read only by the configuration owner and are never persis
 overrides last for the process lifetime only. Invalid values and unknown names fail or are reported
 at the configuration boundary; callers do not add local `getenv()` fallbacks.
 
+## Typed launch config
+
+`psx::config::Config` (`runtime/psx/config/typed_config.h`) is the immutable launch configuration.
+`ProductHost` builds it once with `Config::fromEnvironment()`, which reads the process environment
+through the CVar registry's `detail::env_*` surface, and every `Game` holds a copy as `game.config`. Titles and the
+framework read these launch switches only there; they are not CVars and the runtime command cannot change them.
+
+| field | variable | meaning |
+|---|---|---|
+| `unpaced` | `PSXPORT_NOPACE` | never sleep to hold the present rate |
+| `repl` | `PSXPORT_REPL` | the stdin REPL drives the product loop, uncapped |
+| `fps60` | `PSXPORT_FPS60` | this run's 60 fps choice; unset leaves the saved setting |
+
+A set variable resolves exactly as a `BoolVar`'s environment layer does (`lucent::config::flag`). A setting the player changes
+at runtime is not config: 60 fps lives in `Mods::fps60` (`game.mods`), seeded from the settings file's
+`fps60=` line and overridden for the run by `Config::fps60`, which is never saved. The environment audit
+counts `Config::environmentNames()` as declared. Unit test: `tests/test_typed_config.cpp`.
+
 The resolved value, source layer, and complete `PSXPORT_*` environment denominator are available
 through `psx::config::report()` and the `cvars` runtime command. `PSXPORT_LOG_FILE` selects the log
 sink. `PSXPORT_DEBUG` is the comma-separated diagnostic-channel set.

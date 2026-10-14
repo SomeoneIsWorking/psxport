@@ -3,6 +3,10 @@
 
 #include <cstdint>
 
+namespace psx::config {
+class Config;
+}
+
 namespace psx::host {
 
 // What decides a run's cap, read once when the run starts.
@@ -26,7 +30,7 @@ public:
   // uncapped; then headless means kHeadlessDefaultSteps and windowed means uncapped.
   static RunBudget decide(const RunBudgetInputs &inputs);
   // The same decision from this process's configuration.
-  static RunBudget fromConfig();
+  static RunBudget fromConfig(const psx::config::Config &config);
 
   explicit RunBudget(std::uint64_t cap = 0) : cap_(cap) {}
 

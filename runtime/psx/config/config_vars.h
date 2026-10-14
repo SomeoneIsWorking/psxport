@@ -26,13 +26,7 @@ namespace psx::config {
 // is the consuming game's own launch decision).
 extern BoolVar cv_noaudio;
 
-// PSXPORT_NOPACE — do not sleep to hold the present rate. An agent's headless progress run wants
-// frames as fast as they come; a normal run wants 60 Hz.
-extern BoolVar cv_nopace;
 extern BoolVar cv_producers; // arm the producer census (ot_attr.h) — see config.cpp for the cost
-
-// PSXPORT_REPL — the interactive REPL on stdin, serviced by the product frame loop.
-extern BoolVar cv_repl;
 
 // PSXPORT_DEBUG_SERVER — the live, non-blocking TCP debug endpoint on 127.0.0.1, which is how a game
 // is driven and inspected WHILE it runs. The value is a port, and 1 means the default port, so the
@@ -103,16 +97,10 @@ extern TextVar cv_asset_dir;
 extern TextVar cv_settings_path;
 
 // ── enhancements ────────────────────────────────────────────────────────────────────────────────
-// PSXPORT_FPS60 — the interpolated-60fps tier. Documented in docs/config.md since it was written and
-// READ BY NOTHING until this migration: a run with it set was indistinguishable from a run without.
-// It is the reason the environment audit exists. Its Value layer is the `fps60=` line in
-// psxport_settings.ini, written by the F1 overlay (runtime/psx/debug/mods.cpp).
-extern BoolVar cv_fps60;
-
 // PSXPORT_ENH=<name,name|all> — the sanctioned pc_enh class: deliberate, MEANINGFUL guest-state
 // changes on top of the faithful engine. Read it through enh_named() / enh(), never by parsing the
 // text at a call site. Persistable: an enhancement selection is a user preference, the class the
-// Value layer exists for (cf. cv_fps60).
+// Value layer exists for.
 //
 // MIGRATED 2026-08-12 (Tomba2Engine kanban #92). It used to be read by cfg_enh() straight out of
 // lucent::config into a function-local SEEDED STATIC, which cost three things: no Value layer (the
@@ -139,17 +127,6 @@ psx::cpu::OverrideDifferentialConfig override_differential_config();
 
 // PSXPORT_REACH_REPORT — where the function-reach recorder writes its JSON report; empty disarms it.
 std::string function_reach_report_path();
-
-// Resolve one enhancement and announce an active selection once per key.
-bool enh_gate(const char *key, bool asked);
-// The two ways to reach it. `enh(v)` is for a game that declares its enhancements as its OWN CVars
-// (the shape megamanx4 uses); `enh_named(name)` is for a name selected through PSXPORT_ENH, and is
-// what cfg_enh() forwards to.
-bool enh(const CVar<bool> &v);
-// The integer counterpart for a graded pc_enh (a percentage, a distance): the knob's value, or 0 in a
-// comparison run. The title declares 0 as its neutral value, which is what the faithful engine does.
-long enh_int(const CVar<long> &v);
-bool enh_named(const char *name);
 
 // PSXPORT_RENDER_PATH — the render path: native | gte | device | record.
 // Read it through render_path() below, never by parsing the text at a call site.

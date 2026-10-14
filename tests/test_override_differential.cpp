@@ -278,7 +278,7 @@ struct Fixture {
           std::string_view selectors = "under-test",
           std::int64_t first = 16,
           std::int64_t every = 64) {
-    game = std::make_unique<Game>(runtime);
+    game = std::make_unique<Game>(runtime, psx::config::Config{});
     Core &core = game->core;
     const psx::cpu::ImageIdentity image =
         core.imageCatalog().activate("override-diff", {kCaller, kImageEnd}, 0x4F444946u);

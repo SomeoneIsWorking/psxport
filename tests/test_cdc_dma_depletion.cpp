@@ -60,7 +60,7 @@ void test_controller_read_overwrites_stale_output_with_zeros(void) {
 }
 
 void test_dma3_shipping_path_commits_the_full_programmed_transfer(void) {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   seed_tail(&game->cdc);
   for (int index = 0; index < kRequestedWords; ++index) {
     game->core.mem_w32(kDestination + static_cast<uint32_t>(index * 4), kStale);
@@ -81,7 +81,7 @@ void test_dma3_shipping_path_commits_the_full_programmed_transfer(void) {
 }
 
 void test_deasserted_bfrd_dma_commits_only_controller_zeros(void) {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   seed_tail(&game->cdc);
   game->cdc.bfrd = 0; // FIFO bytes exist internally but are not exposed to CPU/DMA reads.
   for (int index = 0; index < kRequestedWords; ++index) {

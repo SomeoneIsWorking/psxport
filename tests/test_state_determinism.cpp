@@ -131,7 +131,7 @@ struct Machine {
 Machine makeMachine() {
   Machine machine;
   machine.cardPath = kCardPath;
-  machine.game = std::make_unique<Game>(cardRuntime);
+  machine.game = std::make_unique<Game>(cardRuntime, psx::config::Config{});
   Core &core = machine.game->core;
   std::remove(machine.cardPath.c_str());
   card_overrides_init(machine.game.get());

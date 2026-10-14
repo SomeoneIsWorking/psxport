@@ -91,7 +91,7 @@ void test_a_save_into_a_checkout_writes_nothing() {
   Fixture fixture("refuse");
   setPath(fixture.checkout_file);
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH);
+  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
   mods.save();
   std::error_code ignored;
   CHECK(!fs::exists(fixture.checkout_file, ignored));
@@ -101,7 +101,7 @@ void test_a_save_outside_a_checkout_still_writes() {
   Fixture fixture("allow");
   setPath(fixture.plain_file);
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH);
+  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
   mods.save();
   CHECK(existsNonEmpty(fixture.plain_file));
 }
@@ -110,7 +110,7 @@ void test_the_written_file_carries_the_knobs() {
   Fixture fixture("content");
   setPath(fixture.plain_file);
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH);
+  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
   mods.aspect = 1;
   mods.save();
   std::ifstream in(fixture.plain_file);
@@ -125,10 +125,46 @@ void test_a_deeper_path_inside_a_checkout_is_still_refused() {
   Fixture fixture("deep");
   setPath(fixture.checkout_file);
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH);
+  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
   mods.save();
   std::error_code ignored;
   CHECK(!fs::exists(fixture.checkout_file, ignored));
+}
+
+std::string readAll(const fs::path &path) {
+  std::ifstream in(path);
+  return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+// PSXPORT_FPS60 sets this run's 60 fps; the save keeps the player's own choice.
+void test_a_launch_fps60_is_live_but_never_saved() {
+  Fixture fixture("launch");
+  setPath(fixture.plain_file);
+  {
+    std::ofstream out(fixture.plain_file);
+    out << "fps60=0\n";
+  }
+  Mods mods;
+  mods.init(true, FACE_ORDER_DEPTH, true);
+  CHECK_EQ(mods.fps60, 1);
+  mods.save();
+  CHECK(readAll(fixture.plain_file).find("fps60=0") != std::string::npos);
+}
+
+// With no launch choice the saved setting is live, and an overlay change is what gets saved.
+void test_the_saved_fps60_is_live_and_an_overlay_change_saves() {
+  Fixture fixture("saved");
+  setPath(fixture.plain_file);
+  {
+    std::ofstream out(fixture.plain_file);
+    out << "fps60=1\n";
+  }
+  Mods mods;
+  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
+  CHECK_EQ(mods.fps60, 1);
+  mods.fps60 = 0;
+  mods.save();
+  CHECK(readAll(fixture.plain_file).find("fps60=0") != std::string::npos);
 }
 
 } // namespace
@@ -138,5 +174,7 @@ int main() {
   RUN(a_save_outside_a_checkout_still_writes);
   RUN(the_written_file_carries_the_knobs);
   RUN(a_deeper_path_inside_a_checkout_is_still_refused);
+  RUN(a_launch_fps60_is_live_but_never_saved);
+  RUN(the_saved_fps60_is_live_and_an_overlay_change_saves);
   return pt_summary();
 }

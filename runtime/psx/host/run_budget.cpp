@@ -3,6 +3,7 @@
 #include "config_vars.h"
 #include "dbg_server.h"
 #include "gpu_vk.h"
+#include "typed_config.h"
 
 #include <lucent/log.h>
 
@@ -18,11 +19,11 @@ RunBudget RunBudget::decide(const RunBudgetInputs &inputs) {
   return RunBudget(kHeadlessDefaultSteps);
 }
 
-RunBudget RunBudget::fromConfig() {
+RunBudget RunBudget::fromConfig(const psx::config::Config &config) {
   RunBudgetInputs inputs;
   inputs.explicitCap = psx::config::cv_native_frames.get();
   inputs.padRecording = !psx::config::cv_pad_replay.get().empty() || !psx::config::cv_pad_resume.get().empty();
-  inputs.repl = psx::config::cv_repl.get();
+  inputs.repl = config.repl;
   inputs.clientLive = debug_server_live();
   inputs.windowed = gpu_vk_windowed();
   const RunBudget budget = decide(inputs);

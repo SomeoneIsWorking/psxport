@@ -74,7 +74,7 @@ void writeSpinOnRamFlag(Core &core) {
 struct Fixture {
   Fixture() {
     callbackCalls = 0;
-    game = std::make_unique<Game>(runtime);
+    game = std::make_unique<Game>(runtime, psx::config::Config{});
     runtime.registerOverrides(*game);
     Core &core = game->core;
     const auto image = core.imageCatalog().activate("deadline-segment", {kSpin & 0x1FFFFFFFu, 0x00011000u}, 7u);

@@ -30,7 +30,7 @@ constexpr uint32_t kIMask = 0x1F801074u;
 
 // A port needs a Game only because the /ACK raises I_STAT, which the interrupt controller owns.
 struct Port {
-  Game *owner = new Game(stubRuntime);
+  Game *owner = new Game(stubRuntime, {});
   Hle &hle = owner->hle;
 
   Port() {

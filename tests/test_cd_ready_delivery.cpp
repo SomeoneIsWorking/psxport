@@ -216,7 +216,7 @@ void resetCounters() {
 std::unique_ptr<Game> freshDirectGame() {
   runtime().landings.clear();
   runtime().useGuestInterrupt();
-  auto game = std::make_unique<Game>(runtime());
+  auto game = std::make_unique<Game>(runtime(), psx::config::Config{});
   runtime().registerOverrides(*game);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
@@ -236,7 +236,7 @@ std::unique_ptr<Game> freshLegacyGame() {
   config.recMainHi = (kCallback & 0x1FFFFFFFu) + 4u;
   config.cdReadyCbPtr = kCallbackSlot;
   legacyRuntime.emplace(config, hooks);
-  auto game = std::make_unique<Game>(*legacyRuntime);
+  auto game = std::make_unique<Game>(*legacyRuntime, psx::config::Config{});
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->cd.stream_active = 1;
@@ -349,7 +349,7 @@ void test_one_completion_is_delivered_exactly_once() {
 // COUNT through the shipping poll, before the host pump ever runs.
 void test_host_pump_owner_gets_exactly_one_callback_from_the_pump() {
   runtime().useHostPump();
-  auto game = std::make_unique<Game>(runtime());
+  auto game = std::make_unique<Game>(runtime(), psx::config::Config{});
   runtime().registerOverrides(*game);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
@@ -390,7 +390,7 @@ void test_host_pump_owner_gets_exactly_one_callback_from_the_pump() {
 // of the poll.
 void test_the_bound_libcd_is_the_gate() {
   runtime().useHostPump();
-  auto hostPump = std::make_unique<Game>(runtime());
+  auto hostPump = std::make_unique<Game>(runtime(), psx::config::Config{});
   runtime().registerOverrides(*hostPump);
   armCdLine(*hostPump);
   queueDataReady(*hostPump, 1);
@@ -401,7 +401,7 @@ void test_the_bound_libcd_is_the_gate() {
   delete hostPump.release();
 
   runtime().useGuestInterrupt();
-  auto guestInterrupt = std::make_unique<Game>(runtime());
+  auto guestInterrupt = std::make_unique<Game>(runtime(), psx::config::Config{});
   runtime().registerOverrides(*guestInterrupt);
   CHECK_EQ(guestInterrupt->cd.stockLibrary()->deliversOnInterrupt(), true);
   armCdLine(*guestInterrupt);
@@ -802,7 +802,7 @@ void test_guest_interrupt_without_the_declaration_gets_no_completion() {
 // NEGATIVE 2: a host-pumped libcd keeps its own single delivery and raises no completion.
 void test_host_pump_owner_gets_no_stock_read_completion() {
   runtime().useHostPump();
-  auto game = std::make_unique<Game>(runtime());
+  auto game = std::make_unique<Game>(runtime(), psx::config::Config{});
   runtime().registerOverrides(*game);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);

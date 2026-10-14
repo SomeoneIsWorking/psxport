@@ -6,6 +6,7 @@
 #include "config.h"
 #include "config_vars.h"
 #include "diagnostic_run.h"
+#include "enhancement_gate.h"
 #include "menu_row.h"
 #include "mods.h"
 #include "render_capabilities.h"
@@ -89,7 +90,7 @@ static void test_the_row_shows_value_and_unit_and_steps_within_the_range() {
   const psx::game::TitleIntSetting setting{"test_row", "Test", "%", &var, kRange};
   Mods mods;
   mods.declareTitleSettings(std::span<const psx::game::TitleIntSetting>(&setting, 1));
-  mods.init(false, FACE_ORDER_DEPTH);
+  mods.init(false, FACE_ORDER_DEPTH, std::nullopt);
   auto binding = psx::ui::make_title_setting_binding(&setting, &mods);
 
   std::string text;
@@ -121,7 +122,7 @@ static void test_the_chosen_value_is_persisted_and_reloaded_onto_the_grid() {
     const psx::game::TitleIntSetting setting{"persisted", "Persisted", "%", &var, kRange};
     Mods mods;
     mods.declareTitleSettings(std::span<const psx::game::TitleIntSetting>(&setting, 1));
-    mods.init(false, FACE_ORDER_DEPTH);
+    mods.init(false, FACE_ORDER_DEPTH, std::nullopt);
     var.set(psx::config::Layer::Value, 300);
     mods.save();
     CHECK(dir.body().find("PSXPORT_TEST_PERSISTED=300") != std::string::npos);
@@ -134,7 +135,7 @@ static void test_the_chosen_value_is_persisted_and_reloaded_onto_the_grid() {
   const psx::game::TitleIntSetting setting{"persisted", "Persisted", "%", &reloaded, kRange};
   Mods mods;
   mods.declareTitleSettings(std::span<const psx::game::TitleIntSetting>(&setting, 1));
-  mods.init(false, FACE_ORDER_DEPTH);
+  mods.init(false, FACE_ORDER_DEPTH, std::nullopt);
   CHECK_EQ(reloaded.get(), 325L);
 }
 

@@ -39,6 +39,7 @@
 #include "spu_audio.h"                   // class SpuAudio — host audio output sink (SDL3 + WAV capture)
 #include "spu_device.h"                  // class SpuDevice — per-instance SPU state handle (Beetle spu.c)
 #include "timing.h"                      // class psx::frame::Timing — native VBlank/VSync frame clock
+#include "typed_config.h"                // psx::config::Config — the immutable launch configuration
 #include "xa_state.h"                    // XaState  — per-instance native XA-ADPCM CD-audio streamer (xa_stream.c)
 
 // CdcState / XaState — native CD-controller register model + XA-ADPCM streamer, PER-INSTANCE so two
@@ -51,7 +52,8 @@
 
 class Game {
 public:
-  Core core; // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
+  const psx::config::Config config; // the launch configuration, fixed for this Game's life
+  Core core;                        // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
 
   // ---- migrated subsystem state (one member per migrated subsystem) ----
   psx::frame::Timing timing;
@@ -147,11 +149,11 @@ public:
   // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_vk.game->core). Set once here so no file-scope global is needed.
-  explicit Game(psx::game::GameRuntime &runtime);
+  Game(psx::game::GameRuntime &runtime, const psx::config::Config &config);
   // Present through a presentation device the CALLER owns and outlives this Game. The device must
   // already be the process device (or become it through the sInstance claim below); this Game never
   // releases it, so every Game in a host-lifetime-window product shares one window and one device.
-  Game(psx::game::GameRuntime &runtime, GpuDevice &presentation);
+  Game(psx::game::GameRuntime &runtime, GpuDevice &presentation, const psx::config::Config &config);
   ~Game();
   // Return every process-wide peripheral bind point that still names this Game to its default.
   void releaseHardwareBindings();

@@ -33,7 +33,7 @@ void arm_sector_deadline(Game *game) {
 }
 
 void test_instruction_work_reaches_the_sector_deadline() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   arm_sector_deadline(game);
   const uint64_t deadline = game->cdc.drive_deadline_ticks;
 
@@ -47,7 +47,7 @@ void test_instruction_work_reaches_the_sector_deadline() {
 }
 
 void test_delivered_fields_reach_the_sector_deadline() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   arm_sector_deadline(game);
   // One single-speed sector period is ~13.3 ms, under one NTSC field: the field boundary alone
   // crosses it, which is what lets a display-waiting title receive sectors without spinning.
@@ -57,7 +57,7 @@ void test_delivered_fields_reach_the_sector_deadline() {
 }
 
 void test_host_time_alone_never_fires_a_deadline() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   arm_sector_deadline(game);
   // Negative arm: two sector periods of real time with no guest progress. The old wall-locked
   // clock fired here; the emulated clock must not, or a fast host would starve a slow guest.
@@ -68,7 +68,7 @@ void test_host_time_alone_never_fires_a_deadline() {
 }
 
 void test_instruction_work_is_not_added_on_top_of_the_field_boundary() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   const uint64_t field_ticks = psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
 
   game->timing.advanceGuestInstructionTicks(static_cast<uint32_t>(field_ticks / 2));
@@ -77,7 +77,7 @@ void test_instruction_work_is_not_added_on_top_of_the_field_boundary() {
 }
 
 void test_two_half_field_deliveries_equal_one_full_field() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   const uint64_t field_ticks = psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
 
   CHECK(game->timing.advanceDisplayFields(1, 2, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
@@ -86,7 +86,7 @@ void test_two_half_field_deliveries_equal_one_full_field() {
 }
 
 void test_a_late_cpu_resynchronizes_the_next_field_boundary() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   const uint64_t field_ticks = psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
 
   game->timing.advanceGuestInstructionTicks(static_cast<uint32_t>(field_ticks + 10));
@@ -97,7 +97,7 @@ void test_a_late_cpu_resynchronizes_the_next_field_boundary() {
 }
 
 void test_zero_or_fractionally_invalid_field_input_is_refused() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   CHECK(!game->timing.advanceDisplayFields(1, 1, 0));
   CHECK(!game->timing.advanceDisplayFields(1, 0, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK_EQ(game->timing.emulatedCpuTicks(), 0);

@@ -59,7 +59,7 @@ private:
 };
 
 struct Machine {
-  explicit Machine(psx::game::GameRuntime &runtime) : game(std::make_unique<Game>(runtime)) {
+  explicit Machine(psx::game::GameRuntime &runtime) : game(std::make_unique<Game>(runtime, psx::config::Config{})) {
     game->gpu_dev.s_gpu_on = 0;
     game->core.r[29] = 0x801FFF00u;
     game->core.r[30] = 0x801FFF00u;

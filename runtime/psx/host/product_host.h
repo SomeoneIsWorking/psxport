@@ -41,6 +41,7 @@ private:
     Process(const Process &) = delete;
     Process &operator=(const Process &) = delete;
 
+    const psx::config::Config config;
     psxport::HostPresentation presentation;
     // The presentation keeps the title pointer, so the text lives as long as the process state.
     std::string windowTitle;

@@ -39,7 +39,7 @@ std::vector<uint8_t> executable(uint32_t value = 7) {
 
 void test_load_and_aliases() {
   for (uint32_t segment : {0u, 0x80000000u, 0xa0000000u}) {
-    auto game = std::make_unique<Game>(stubRuntime);
+    auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
     auto &core = game->core;
     auto bytes = executable();
     word(bytes, 0x10, segment + 0x10000);
@@ -60,7 +60,7 @@ void test_load_and_aliases() {
 }
 
 void test_absent_stack_preserves_caller() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto bytes = executable();
   word(bytes, 0x14, 0);
   word(bytes, 0x30, 0);
@@ -75,7 +75,7 @@ void test_absent_stack_preserves_caller() {
 
 void test_top_level_registers_after_mapping() {
   for (uint32_t stack : {0u, 0x801ff000u}) {
-    auto game = std::make_unique<Game>(stubRuntime);
+    auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
     auto bytes = executable();
     word(bytes, 0x30, stack);
     word(bytes, 0x34, stack ? 0xff0u : 0u);
@@ -95,7 +95,7 @@ void test_top_level_registers_after_mapping() {
 }
 
 void test_refusals_preserve_core() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   std::fill_n(core.ram, sizeof(core.ram), 0x5a);
   for (unsigned index = 0; index < 32; ++index) {
@@ -146,7 +146,7 @@ void test_refusals_preserve_core() {
 }
 
 void test_reload_invalidates_executed_code() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   auto bytes = executable();
   const auto first = loadPsxExeImage(core, bytes, "same-name");
@@ -179,7 +179,7 @@ void test_file_startup_register_contract() {
       file.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
       CHECK(file.good());
     }
-    auto game = std::make_unique<Game>(stubRuntime);
+    auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
     game->core.r[29] = 0x801fa000;
     load_exe(path.string().c_str(), &game->core);
     CHECK_EQ(game->core.r[28], 0x80018000u);
@@ -194,7 +194,7 @@ void test_file_startup_register_contract() {
 }
 
 void test_input_alias_is_refused_before_copy() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto bytes = executable();
   std::copy(bytes.begin(), bytes.end(), game->core.ram);
   const auto result = loadPsxExeImage(game->core, {game->core.ram, bytes.size()}, "aliased");

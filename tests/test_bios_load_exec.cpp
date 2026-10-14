@@ -128,7 +128,7 @@ void writeFilename(Core &core, const char *text) {
 // leaf uses replaced by `disc` exactly as `Game::wireRuntimeMembers` binds the real one — the seam
 // is the shipping one, not a second dispatch path.
 std::unique_ptr<Game> armedGuest(FakeDisc &disc, const char *filename, uint32_t stackBase, uint32_t stackOffset) {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   Core &core = game->core;
   game->hle.loadExecReader = disc.reader();
   writeFilename(core, filename);

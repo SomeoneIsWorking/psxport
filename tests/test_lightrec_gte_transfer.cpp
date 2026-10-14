@@ -29,7 +29,7 @@ void seedFifos(GteRegs &state) {
 }
 
 void test_guest_gpf_sqr_preserves_ir_inputs_against_isolated_gte() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   core.imageCatalog().activate("gte-transfer-fixture", {kEntry, kReturn + 4u}, 1u);
   seedFifos(game->core.gte().registers());
@@ -80,7 +80,7 @@ void test_guest_gpf_sqr_preserves_ir_inputs_against_isolated_gte() {
 }
 
 void test_non_gte_guest_exit_preserves_raw_state_without_fifo_or_irgb_side_effects() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   core.imageCatalog().activate("gte-transfer-fixture", {kEntry, kReturn + 4u}, 1u);
   seedFifos(game->core.gte().registers());
@@ -113,7 +113,7 @@ void test_non_gte_guest_exit_preserves_raw_state_without_fifo_or_irgb_side_effec
 }
 
 void test_guest_sxyp_write_advances_fifo_once_and_reads_alias() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   core.imageCatalog().activate("gte-transfer-fixture", {kEntry, kReturn + 4u}, 1u);
   seedFifos(game->core.gte().registers());

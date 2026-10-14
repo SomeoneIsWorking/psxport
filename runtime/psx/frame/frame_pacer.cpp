@@ -1,7 +1,5 @@
 #include "frame_pacer.h"
 
-#include "config.h"
-#include "config_vars.h"
 #include "core.h"
 #include "field_rate.h"
 #include "game.h"
@@ -36,7 +34,7 @@ PacePlan preparePace(Core &core, int guestFields, int parts) {
   PaceInputs inputs;
   // NOPACE and a fast-forward (resume replay or host pre-roll) suppress host sleeping only. Neither changes windowing,
   // the guest display cadence, or the emulated time delivered below.
-  inputs.unpaced = psx::config::cv_nopace.get() || core.game->fastForwarding();
+  inputs.unpaced = core.game->config.unpaced || core.game->fastForwarding();
   inputs.quota =
       guestFields > 0 ? guestFields : (core.cfg && core.cfg->paceQuota ? static_cast<int>(core.cfg->paceQuota) : 0);
   inputs.parts = parts;
@@ -102,7 +100,7 @@ void FramePacer::waitPresentedFields(Core &core, int guestFields, int parts) {
 
 void FramePacer::hostScreenPace(Core &core) {
   PaceInputs inputs;
-  inputs.unpaced = psx::config::cv_nopace.get();
+  inputs.unpaced = core.game->config.unpaced;
   inputs.quota = 1;
   inputs.parts = 1;
   inputs.fieldRateMilliHz = psx::frame::fieldRateMilliHz(false);

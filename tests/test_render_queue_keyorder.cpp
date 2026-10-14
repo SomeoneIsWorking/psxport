@@ -202,7 +202,7 @@ static void test_pixel_predicate_rejects_degenerate_faces(void) {
 }
 
 static void test_shipping_capture_starts_with_real_depth_ownership(void) {
-  static Game game{stubRuntime};
+  static Game game{stubRuntime, {}};
   RenderQueue &q = game.rq;
   q.reset();
   const int xs[4] = {0, 8, 8, 0};

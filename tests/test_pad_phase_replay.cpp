@@ -458,7 +458,7 @@ public:
 
 void test_pad_records_the_title_phase_of_every_frame() {
   PhaseRuntime runtime;
-  std::unique_ptr<Game> game = std::make_unique<Game>(runtime);
+  std::unique_ptr<Game> game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->core.mem_w32(kPhaseWord, 7u);
   game->pad.serviceFrame();
   game->pad.serviceFrame();

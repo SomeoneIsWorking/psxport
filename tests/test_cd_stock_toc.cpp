@@ -84,7 +84,7 @@ void refuse_and_sync(Core &core, uint8_t command, uint32_t parameter) {
 }
 
 void test_gettn_gettd_and_leadout_survive_command_and_sync() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   install_two_tracks(*game);
   auto &core = game->core;
   issue_and_sync(core, 0x13, 0, Response{0x02, 0x01, 0x02});
@@ -101,7 +101,7 @@ void test_gettn_gettd_and_leadout_survive_command_and_sync() {
 }
 
 void test_invalid_track_and_disc_metadata_do_not_reuse_prior_result() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   install_two_tracks(*game);
   auto &core = game->core;
   issue_and_sync(core, 0x13, 0, Response{0x02, 0x01, 0x02});
@@ -117,7 +117,7 @@ void test_invalid_track_and_disc_metadata_do_not_reuse_prior_result() {
 }
 
 void test_control_and_fire_keep_their_result_contract() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   install_two_tracks(*game);
   auto &core = game->core;
   core.r[A0] = 0x13;
@@ -153,7 +153,7 @@ void test_control_and_fire_keep_their_result_contract() {
 
 // Spyro 1's music driver reads its track position from the GetlocP result's absolute MSF.
 void test_getlocp_reports_the_head_position_through_sync() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   install_two_tracks(*game);
   auto &core = game->core;
   game->cdc.loc_lba = 1000;
@@ -163,7 +163,7 @@ void test_getlocp_reports_the_head_position_through_sync() {
 }
 
 void test_missing_disc_refuses_toc_command() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->disc.env_key = "PSXPORT_DISC";
   const char *previous = std::getenv("PSXPORT_DISC");
   const bool had_previous = previous != nullptr;

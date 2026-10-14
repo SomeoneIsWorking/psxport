@@ -37,7 +37,7 @@ psx::cpu::ExecutionResult callPadCallback(Game &game, uint32_t address) {
 }
 
 void test_published_pad_callbacks_return_through_shipping_dispatch() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   CHECK(game->hle.dispatchBios('B', 0x57u));
   CHECK_EQ(game->core.r[2], kB0Table);
   const uint32_t workBase = game->core.mem_r32(kWorkBaseSlot);
@@ -57,7 +57,7 @@ void test_published_pad_callbacks_return_through_shipping_dispatch() {
 }
 
 void test_unpublished_and_invalid_work_area_are_not_services() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   constexpr uint32_t kExpectedWorkBase = 0x8000E000u;
   CHECK_EQ(psx::cpu::classifyGuestHostDispatch(game->core, kExpectedWorkBase + kPadEnableOffset),
            psx::cpu::GuestHostDispatchKind::Fault);
@@ -70,7 +70,7 @@ void test_unpublished_and_invalid_work_area_are_not_services() {
 
 void test_bios_pad_lifecycle_gates_guest_packets_without_changing_native_only_input() {
   PadRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->pad.setButtons(0xFFF7u);
 
   // Existing title-native packet users have no BIOS pad lifecycle to gate them.

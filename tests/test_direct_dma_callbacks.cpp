@@ -78,7 +78,7 @@ std::unique_ptr<Game> freshGame() {
   callbackCalls = 0;
   callbackA0 = 0;
   callbackA1 = 0;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   installCallback(*game);
   return game;
 }
@@ -86,7 +86,7 @@ std::unique_ptr<Game> freshGame() {
 std::unique_ptr<Game> freshGuestTableGame() {
   static DirectRuntime runtime(kLegacyTable);
   callbackCalls = 0;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   installCallback(*game);
   game->hle.i_mask = 1u << IRQ_BIT_DMA;
@@ -102,7 +102,7 @@ std::unique_ptr<Game> freshLegacyGame() {
   callbackCalls = 0;
   callbackA0 = 0;
   callbackA1 = 0;
-  auto game = std::make_unique<Game>(*legacyRuntime);
+  auto game = std::make_unique<Game>(*legacyRuntime, psx::config::Config{});
   installCallback(*game);
   game->hle.i_mask = 1u << IRQ_BIT_DMA;
   return game;

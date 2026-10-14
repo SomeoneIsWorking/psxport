@@ -122,7 +122,7 @@ void step_shell(void *context) {
 
 static void test_shell_delegates_exactly_one_native_frame() {
   DriverRuntime runtime(1);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   CHECK(runtime.createdDriver != nullptr);
 
@@ -142,10 +142,10 @@ namespace {
 // Another session's boot binds the devices to its own Core; the next step of this one rebinds them.
 void test_a_step_rebinds_after_another_core_was_bound() {
   DriverRuntime runtime(1);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   CountingDriver *driver = runtime.createdDriver;
-  auto other = std::make_unique<Game>(runtime);
+  auto other = std::make_unique<Game>(runtime, psx::config::Config{});
   psx::frame::FrameLoopShell shell;
   shell.prepareProduct(*game);
   shell.step(game->core, 1);
@@ -158,10 +158,10 @@ void test_a_step_rebinds_after_another_core_was_bound() {
 // Steps of the Core the shell bound last leave the bindings alone.
 void test_a_step_of_the_bound_core_does_not_rebind() {
   DriverRuntime runtime(1);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   CountingDriver *driver = runtime.createdDriver;
-  auto other = std::make_unique<Game>(runtime);
+  auto other = std::make_unique<Game>(runtime, psx::config::Config{});
   psx::frame::FrameLoopShell shell;
   shell.prepareProduct(*game);
   shell.step(game->core, 1);
@@ -174,10 +174,10 @@ void test_a_step_of_the_bound_core_does_not_rebind() {
 // A forgotten Core is rebound on its next step, even when it is the one bound last.
 void test_a_forgotten_core_is_rebound() {
   DriverRuntime runtime(1);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   CountingDriver *driver = runtime.createdDriver;
-  auto other = std::make_unique<Game>(runtime);
+  auto other = std::make_unique<Game>(runtime, psx::config::Config{});
   psx::frame::FrameLoopShell shell;
   shell.prepareProduct(*game);
   shell.step(game->core, 1);
@@ -190,8 +190,8 @@ void test_a_forgotten_core_is_rebound() {
 // Destroying a Game that is not bound leaves the bound Game's peripherals in place.
 void test_destroying_an_unbound_game_keeps_the_bound_one() {
   DriverRuntime runtime(1);
-  auto game = std::make_unique<Game>(runtime);
-  auto other = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
+  auto other = std::make_unique<Game>(runtime, psx::config::Config{});
   psx::frame::FrameLoopShell shell;
   shell.bindRunningCore(game->core);
   other.reset();
@@ -211,7 +211,7 @@ void test_destroying_an_unbound_game_keeps_the_bound_one() {
 
 static void test_missing_driver_refuses_before_boot_can_run() {
   DriverRuntime runtime(-1);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
 
   expect_abort(require_driver, game.get());
@@ -220,7 +220,7 @@ static void test_missing_driver_refuses_before_boot_can_run() {
 
 static void test_step_before_product_preflight_refuses() {
   DriverRuntime runtime(1);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
 
   expect_abort(step_shell, game.get());
@@ -229,7 +229,7 @@ static void test_step_before_product_preflight_refuses() {
 
 static void test_driver_returning_without_a_fence_refuses() {
   DriverRuntime runtime(0);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   psx::frame::FrameLoopShell{}.prepareProduct(*game);
 
@@ -239,7 +239,7 @@ static void test_driver_returning_without_a_fence_refuses() {
 
 static void test_driver_committing_twice_refuses() {
   DriverRuntime runtime(2);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   psx::frame::FrameLoopShell{}.prepareProduct(*game);
 

@@ -31,7 +31,7 @@ std::unique_ptr<Core> filter_core() {
 }
 
 Game &filter_game() {
-  static Game game{poolRuntime};
+  static Game game{poolRuntime, {}};
   return game;
 }
 

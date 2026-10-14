@@ -3,6 +3,7 @@
 #include "render_capabilities.h"
 #include "title_settings.h"
 
+#include <optional>
 #include <span>
 // class Mods — live PC-native mod toggles + params, PER-GAME state (member `Game::mods`).
 // The single source of truth shared by the renderer (gpu_vk.cpp) and the RmlUi overlay
@@ -50,8 +51,9 @@ public:
   void declareTitleSettings(std::span<const psx::game::TitleIntSetting> settings) {
     mTitleSettings = settings;
   }
-  // The title's interpolation and face-order answers, then the settings file (idempotent).
-  void init(bool interpolates, FaceOrder defaultFaceOrder);
+  // The title's interpolation and face-order answers, then the settings file, then this run's launch
+  // choice of 60 fps, which is never saved (idempotent).
+  void init(bool interpolates, FaceOrder defaultFaceOrder, std::optional<bool> launchFps60);
   void save() const; // persist the live settings (called by the overlay on change)
   void load();       // load the settings file over the current values, if it exists
   bool temporalInterpolationSupported() const {
@@ -74,5 +76,7 @@ private:
   const psx::game::TitleIntSetting *findTitleSetting(const char *key) const;
   std::span<const psx::game::TitleIntSetting> mTitleSettings;
   bool mInited = false;
+  bool mLaunchFps60 = false; // fps60 came from the launch config, so save keeps mSavedFps60
+  int mSavedFps60 = 0;
   bool mTemporalInterpolationSupported = false;
 };

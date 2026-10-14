@@ -25,7 +25,7 @@ private:
 
 struct Fixture {
   PadRuntime runtime;
-  std::unique_ptr<Game> game = std::make_unique<Game>(runtime);
+  std::unique_ptr<Game> game = std::make_unique<Game>(runtime, psx::config::Config{});
 };
 
 void test_slot1_is_absent_by_default() {

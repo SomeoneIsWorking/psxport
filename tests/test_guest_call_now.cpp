@@ -28,7 +28,7 @@ void nativeLeaf(Core *core) {
 }
 
 std::unique_ptr<Game> makeGame(psx::test::StubGameRuntime &runtime) {
-  return std::make_unique<Game>(runtime);
+  return std::make_unique<Game>(runtime, psx::config::Config{});
 }
 
 void primeArgumentRegisters(Core &core) {

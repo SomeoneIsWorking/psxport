@@ -120,7 +120,7 @@ void test_absent_audio_hooks_offer_no_title_audio() {
   const GameConfig config{};
   const GameHooks hooks{};
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   reset_spies();
 
   CHECK(runtime.audio(game->core) == nullptr);
@@ -135,7 +135,7 @@ void test_present_audio_hooks_are_reached_through_title_audio() {
   hooks.audioNowPlayingName = spy_now_playing;
   hooks.audioSoundTestPlay = spy_sound_test;
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   reset_spies();
 
   psx::game::TitleAudio *audio = runtime.audio(game->core);
@@ -234,7 +234,7 @@ static void test_billboard_rotate_is_optional_but_present_hook_runs(void) {
 
 static void test_world_rerun_is_not_eligible_until_a_game_claims_it(void) {
   psx::test::StubGameRuntime runtime;
-  const auto game = std::make_unique<Game>(runtime);
+  const auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   Fps60 fps60(*game);
   CHECK(!fps60.mTier1EligibleCur);
 }

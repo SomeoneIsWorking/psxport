@@ -32,6 +32,7 @@
 #include "cfg.h"
 #include "config.h"
 #include "config_vars.h"
+#include "enhancement_gate.h"
 
 #include <lucent/config.h>
 #include <lucent/log.h>

@@ -44,7 +44,7 @@ public:
   bool hostOwed() const {
     return (game->core.pending_work & Core::PW_HOST) != 0;
   }
-  std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
+  std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
 };
 
 const uint32_t kPeriod =
@@ -125,7 +125,7 @@ static void test_long_update_owes_one_field_per_period(void) {
 
 static void test_unregistered_core_is_never_owed_a_field(void) {
   Fixture fixture;
-  auto foreign = std::make_unique<Game>(stubRuntime);
+  auto foreign = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   psx::cpu::accountGuestInstructions(foreign->core, 3u * kPeriod);
   CHECK_EQ(foreign->core.pending_work & Core::PW_HOST, 0);
   psx::cpu::notifyDisplayField(foreign->core);

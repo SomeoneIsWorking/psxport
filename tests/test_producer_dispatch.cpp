@@ -56,7 +56,7 @@ struct Fixture {
   bool invoked = false;
 
   Fixture() {
-    game = std::make_unique<Game>(runtime);
+    game = std::make_unique<Game>(runtime, psx::config::Config{});
     Core &core = game->core;
     core.imageCatalog().activate("producer-test", {kEntry, kEntry + 8u}, 0x50524F44u);
     core.mem_w32(kEntry, 0x03E00008u); // jr $ra

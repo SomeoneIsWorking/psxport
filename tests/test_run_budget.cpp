@@ -3,6 +3,7 @@
 #include "run_budget.h"
 #include "session_run.h"
 #include "testutil.h"
+#include "typed_config.h"
 
 using psx::host::RunBudget;
 using psx::host::RunBudgetInputs;
@@ -43,14 +44,21 @@ static void test_the_budget_runs_out_on_its_last_step(void) {
 
 // The live-client rule is read from configuration here and nowhere else; the channel only opens.
 static void test_a_configured_client_lifts_the_cap_unless_one_is_asked_for(void) {
+  const psx::config::Config config{};
   psx::config::cv_debug_server.set(psx::config::Layer::Runtime, "1");
-  CHECK_EQ(RunBudget::fromConfig().cap(), 0u);
+  CHECK_EQ(RunBudget::fromConfig(config).cap(), 0u);
   psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 9);
-  CHECK_EQ(RunBudget::fromConfig().cap(), 9u);
+  CHECK_EQ(RunBudget::fromConfig(config).cap(), 9u);
   psx::config::cv_native_frames.clear(psx::config::Layer::Runtime);
   psx::config::cv_debug_server.clear(psx::config::Layer::Runtime);
-  CHECK_EQ(RunBudget::fromConfig().cap(), RunBudget::kHeadlessDefaultSteps);
+  CHECK_EQ(RunBudget::fromConfig(config).cap(), RunBudget::kHeadlessDefaultSteps);
 }
+
+namespace {
+void test_the_launch_repl_runs_uncapped() {
+  CHECK_EQ(RunBudget::fromConfig(psx::config::Config{.repl = true}).cap(), 0u);
+}
+} // namespace
 
 static void test_a_title_ends_its_own_run(void) {
   psx::host::SessionRun run;
@@ -66,6 +74,7 @@ int main(void) {
   RUN(headless_is_bounded_and_windowed_is_not);
   RUN(the_budget_runs_out_on_its_last_step);
   RUN(a_configured_client_lifts_the_cap_unless_one_is_asked_for);
+  RUN(the_launch_repl_runs_uncapped);
   RUN(a_title_ends_its_own_run);
   return pt_summary();
 }

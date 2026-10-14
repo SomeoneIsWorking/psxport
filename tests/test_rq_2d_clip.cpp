@@ -27,7 +27,7 @@ struct Submitted {
 };
 
 Submitted submitPanel(int aspect) {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->gpu.s_disp_w = kNativeWidth;
   game->mods.aspect = aspect;
   Core &core = game->core;

@@ -143,7 +143,7 @@ public:
 
 void test_game_and_core_hold_the_runtime_they_are_given() {
   TestRuntime runtime;
-  const auto game = std::make_unique<Game>(runtime);
+  const auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(&game->runtime == &runtime);
   CHECK(&game->core.runtime == &runtime);
@@ -152,7 +152,7 @@ void test_game_and_core_hold_the_runtime_they_are_given() {
 void test_bound_stock_libcd_becomes_the_games_libcd() {
   TestRuntime runtime;
   const psx::cd::StockLibcd libcd({}, {}, 0x80123450u);
-  const auto game = std::make_unique<Game>(runtime);
+  const auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK_EQ(game->core.cfg, nullptr);
   CHECK(game->cd.stockLibrary() == nullptr);
@@ -164,7 +164,7 @@ void test_bound_stock_libcd_becomes_the_games_libcd() {
 
 void test_default_admission_maps_the_executable_and_sets_top_level_registers() {
   TestRuntime runtime;
-  const auto game = std::make_unique<Game>(runtime);
+  const auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   std::vector<std::uint8_t> bytes(0x1000u);
   std::memcpy(bytes.data(), "PS-X EXE", 8);
   const auto put = [&bytes](std::size_t offset, std::uint32_t value) {
@@ -191,7 +191,7 @@ void test_default_admission_maps_the_executable_and_sets_top_level_registers() {
 
 void test_title_commands_are_game_owned_and_legacy_forwarding_is_optional() {
   TestRuntime direct;
-  auto directGame = std::make_unique<Game>(direct);
+  auto directGame = std::make_unique<Game>(direct, psx::config::Config{});
   const psx::game::TitleCommandReply unhandled = psx::game::runTitleCommand(directGame->core, "ents");
   CHECK(!unhandled.handled);
   CHECK(unhandled.text.empty());
@@ -199,7 +199,7 @@ void test_title_commands_are_game_owned_and_legacy_forwarding_is_optional() {
   static const GameConfig config{};
   GameHooks emptyHooks{};
   LegacyGameRuntimeAdapter emptyLegacy(config, emptyHooks);
-  auto emptyGame = std::make_unique<Game>(emptyLegacy);
+  auto emptyGame = std::make_unique<Game>(emptyLegacy, psx::config::Config{});
   CHECK(!psx::game::runTitleCommand(emptyGame->core, "tp 1 2 3").handled);
 
   GameHooks forwardingHooks{};
@@ -207,7 +207,7 @@ void test_title_commands_are_game_owned_and_legacy_forwarding_is_optional() {
   forwardingHooks.replCamTeleport = legacy_cam_teleport;
   forwardingHooks.replCamTeleportOff = legacy_cam_teleport_off;
   LegacyGameRuntimeAdapter forwardingLegacy(config, forwardingHooks);
-  auto forwardingGame = std::make_unique<Game>(forwardingLegacy);
+  auto forwardingGame = std::make_unique<Game>(forwardingLegacy, psx::config::Config{});
   legacyReplCommands = 0;
   const psx::game::TitleCommandReply forwarded =
       psx::game::runTitleCommand(forwardingGame->core, "title-command argument\n");
@@ -255,7 +255,7 @@ void test_legacy_pair_is_bounded_by_runtime_adapter() {
   LegacyGameRuntimeAdapter runtime(config, hooks);
 
   {
-    auto game = std::make_unique<Game>(runtime);
+    auto game = std::make_unique<Game>(runtime, psx::config::Config{});
     CHECK_EQ(game->core.cfg, &config);
     CHECK_EQ(game->core.hooks, &hooks);
     CHECK_EQ(game->core.gameCtx, &legacyContextToken);
@@ -273,7 +273,7 @@ void test_legacy_adapter_supports_incremental_inheritance() {
   hooks.bootInit = legacy_boot_init;
   MigratingRuntime runtime(config, hooks);
 
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   CHECK(&game->core.runtime == &runtime);
   game->runtime.startProgram(game->core);
   CHECK_EQ(runtime.programStarts, 1);
@@ -284,7 +284,7 @@ void test_game_owns_runtime_products_and_session() {
   TestRuntime runtime;
 
   {
-    auto game = std::make_unique<Game>(runtime);
+    auto game = std::make_unique<Game>(runtime, psx::config::Config{});
     CHECK(&game->core.runtime == &runtime);
     CHECK(game->sessionState != nullptr);
     CHECK(game->temporalPresentation == nullptr);
@@ -311,7 +311,7 @@ void test_only_legacy_adapter_installs_the_temporal_compatibility_decorator() {
   hooks.ctxDestroy = legacy_destroy_context;
   LegacyGameRuntimeAdapter runtime(config, hooks);
 
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   CHECK(game->temporalPresentation != nullptr);
 }
 
@@ -334,7 +334,7 @@ void test_runtime_capabilities_are_explicit_and_preserve_legacy_temporal_titles(
 
 void test_live_render_path_validator_separates_player_and_diagnostic_use() {
   TestRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(render_path_apply(*game, RenderPath::Gte, RenderPathAudience::Player) == RenderPathSelectionResult::Applied);
   CHECK(game->core.rsub.mode.path() == RenderPath::Gte);
@@ -353,7 +353,7 @@ void test_live_render_path_validator_separates_player_and_diagnostic_use() {
 void test_widescreen_only_runtime_refuses_native_through_shipping_validator() {
   TestRuntime runtime;
   runtime.capabilities = RenderCapabilities::widescreenOnly();
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->core.rsub.mode.setPath(RenderPath::Gte);
 
   CHECK(render_path_apply(*game, RenderPath::Native, RenderPathAudience::Diagnostic) ==
@@ -369,10 +369,10 @@ void test_widescreen_only_runtime_refuses_native_through_shipping_validator() {
 void test_startup_refuses_unsupported_native_and_leaves_the_process_ladder_alone() {
   TestRuntime runtime;
   runtime.capabilities = RenderCapabilities::widescreenOnly();
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   psx::config::cv_render_path.set(psx::config::Layer::Runtime, "native");
 
-  game = std::make_unique<Game>(runtime);
+  game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(game->core.rsub.mode.path() == RenderPath::Gte);
   CHECK_STREQ(psx::config::cv_render_path.get().c_str(), "native");
@@ -384,7 +384,7 @@ void test_game_construction_installs_the_declared_render_path() {
   TestRuntime runtime;
   runtime.capabilities = RenderCapabilities::widescreenOnly();
   runtime.capabilities.defaultPath = RenderPath::Record;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(game->core.rsub.mode.path() == RenderPath::Record);
 }
@@ -392,7 +392,7 @@ void test_game_construction_installs_the_declared_render_path() {
 void test_capability_absence_removes_player_bindings_while_capable_titles_retain_them() {
   TestRuntime unsupportedRuntime;
   unsupportedRuntime.capabilities = RenderCapabilities::widescreenOnly();
-  auto unsupportedGame = std::make_unique<Game>(unsupportedRuntime);
+  auto unsupportedGame = std::make_unique<Game>(unsupportedRuntime, psx::config::Config{});
   psx::ui::RenderPathControl unsupportedControl(unsupportedGame.get());
   CHECK(!psx::ui::make_render_path_binding(&unsupportedControl)->available());
   CHECK(!psx::ui::make_mod_toggle_binding(&unsupportedGame->mods, "fps60")->available());
@@ -400,7 +400,7 @@ void test_capability_absence_removes_player_bindings_while_capable_titles_retain
   static const GameConfig config{};
   static GameHooks hooks{};
   LegacyGameRuntimeAdapter capableRuntime(config, hooks);
-  auto capableGame = std::make_unique<Game>(capableRuntime);
+  auto capableGame = std::make_unique<Game>(capableRuntime, psx::config::Config{});
   psx::ui::RenderPathControl capableControl(capableGame.get());
   CHECK(psx::ui::make_render_path_binding(&capableControl)->available());
   CHECK(psx::ui::make_mod_toggle_binding(&capableGame->mods, "fps60")->available());
@@ -408,7 +408,7 @@ void test_capability_absence_removes_player_bindings_while_capable_titles_retain
 
 void test_guest_vram_picture_policy_is_runtime_owned_and_dynamic() {
   TestRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(!game_guest_vram_is_picture(*game));
   runtime.guestVramPicture = true;
@@ -417,8 +417,8 @@ void test_guest_vram_picture_policy_is_runtime_owned_and_dynamic() {
 
 void test_guest_vram_picture_policy_is_per_game() {
   TestRuntime runtime;
-  auto pictureGame = std::make_unique<Game>(runtime);
-  auto nativeGame = std::make_unique<Game>(runtime);
+  auto pictureGame = std::make_unique<Game>(runtime, psx::config::Config{});
+  auto nativeGame = std::make_unique<Game>(runtime, psx::config::Config{});
 
   runtime.pictureGame = pictureGame.get();
   CHECK(game_guest_vram_is_picture(*pictureGame));
@@ -432,13 +432,13 @@ void test_legacy_adapter_projects_static_backdrop_policy_only_for_migration() {
 
   GameConfig hiddenConfig{};
   LegacyGameRuntimeAdapter hidden(hiddenConfig, hooks);
-  auto hiddenGame = std::make_unique<Game>(hidden);
+  auto hiddenGame = std::make_unique<Game>(hidden, psx::config::Config{});
   CHECK(!game_guest_vram_is_picture(*hiddenGame));
 
   GameConfig visibleConfig{};
   visibleConfig.preserveVramBackdrop = 1;
   LegacyGameRuntimeAdapter visible(visibleConfig, hooks);
-  auto visibleGame = std::make_unique<Game>(visible);
+  auto visibleGame = std::make_unique<Game>(visible, psx::config::Config{});
   CHECK(game_guest_vram_is_picture(*visibleGame));
 }
 

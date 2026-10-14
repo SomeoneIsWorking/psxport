@@ -282,7 +282,7 @@ void checkGuestAuthoredTaskState(Game &game, Checks &checks) {
 
 int main(int argc, char **argv) {
   Runtime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   Core &core = game->core;
   if (argc == 2 && std::string_view(argv[1]) == "--terminal-fault") {
     constexpr std::uint32_t unmappedEntry = 0x80018000u;

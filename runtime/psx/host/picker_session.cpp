@@ -99,7 +99,7 @@ int PickerSession::serviceInput(Game &host) {
 PickerSession::Result PickerSession::run() {
   // No guest runs here, but the control endpoint, the pad and the screen text all need an owner,
   // and no panel session may have them.
-  auto host = std::make_unique<Game>(runtime_, services_.presentation);
+  auto host = std::make_unique<Game>(runtime_, services_.presentation, services_.config);
   Core &core = host->core;
   host->pad.useLiveInputOnly(); // a selector must not open or rotate the player's pad recording
   host->hostInput.attachQuitScope(&services_.quit);

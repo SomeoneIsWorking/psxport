@@ -22,7 +22,7 @@
 namespace dynarec_test {
 
 std::unique_ptr<Game> makeGame(psx::test::StubGameRuntime &runtime) {
-  return std::make_unique<Game>(runtime);
+  return std::make_unique<Game>(runtime, psx::config::Config{});
 }
 
 constexpr std::uint32_t encodeJal(std::uint32_t target) {

@@ -6,11 +6,9 @@
 // surface, and it is deliberately small so that "what can change a knob" stays answerable.
 // THE PART THAT MATTERS MOST: audit_environment() / report().
 //
-// PSXPORT_FPS60 is documented in docs/config.md and is read by NOTHING. It has been set on real
-// runs, including on both legs of an A/B, and the result looked plausible. Nothing in the port said
-// a word. Every knob in this system can therefore be asked three questions — does it exist, what is
-// it resolving to, and which layer did that come from — and every PSXPORT_* variable found in the
-// environment is classified into one of exactly three buckets, one of which is "this did nothing".
+// Every knob can be asked whether it exists, what it resolves to and which layer that came from, and
+// every PSXPORT_* variable found in the environment is classified into one of exactly three buckets,
+// one of which is "this did nothing".
 //
 // The audit reports its DENOMINATOR and its BLIND SPOT even when it finds nothing, because "0
 // unknown" and "the audit never ran" must not print the same way.

@@ -48,7 +48,7 @@ static void test_rotation_halves_and_translation_move_and_the_rest_is_the_later_
 }
 
 static void test_written_control_reads_back_and_the_guard_restores_the_gte(void) {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->core.gte().bind();
   const GteControl before = sample(7, 9, 11u);
   psx::present::writeGteControl(before);
@@ -83,8 +83,8 @@ namespace {
 
 // Any GTE access re-points both the register file and the projection at its own Core.
 void test_a_gte_access_binds_its_cores_projection() {
-  auto first = std::make_unique<Game>(stubRuntime);
-  auto second = std::make_unique<Game>(stubRuntime);
+  auto first = std::make_unique<Game>(stubRuntime, psx::config::Config{});
+  auto second = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   first->core.gte().bind();
   (void)second->core.gte().readData(0);
   CHECK(GTE_CurState() == &second->core.gte().registers());

@@ -56,7 +56,7 @@ void checkSyncBody(Core &core, OverrideFn entry) {
 
 void test_empty_direct_runtime_cd_registration_is_valid() {
   psx::test::StubGameRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(game->core.cfg == nullptr);
   game->cd.overridesInit();
@@ -65,7 +65,7 @@ void test_empty_direct_runtime_cd_registration_is_valid() {
 
 void test_direct_runtime_stock_libcd_binds_after_the_device_binds() {
   StockDirectRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   // The shipping TitleSession::boot order: device binds, then the title's registerOverrides.
   game->cd.overridesInit();
@@ -92,7 +92,7 @@ void test_legacy_runtime_keeps_existing_cd_registration() {
   config.hle.windowLo[0] = kLegacyCdSync;
   config.hle.windowHi[0] = kLegacyCdWindowEnd;
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK_EQ(game->core.cfg, &config);
   game->cd.overridesInit();

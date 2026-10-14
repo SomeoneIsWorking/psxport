@@ -8,6 +8,8 @@
 // requirements is the cheapest way not to repeat it.
 #include "config.h"
 #include "config_vars.h"
+#include "enhancement_gate.h"
+#include "typed_config.h"
 
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -17,6 +19,7 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <span>
 
 namespace psx::config {
 
@@ -270,14 +273,6 @@ template class CVar<std::string>;
 // Declared in config_vars.h, which carries the per-knob documentation. Keep the two in the same
 // order.
 BoolVar cv_noaudio("PSXPORT_NOAUDIO", false, "open no audio device", /*persistable=*/false);
-BoolVar cv_nopace("PSXPORT_NOPACE",
-                  false,
-                  "do not sleep to hold the present rate",
-                  /*persistable=*/false);
-BoolVar cv_repl("PSXPORT_REPL",
-                false,
-                "interactive REPL on stdin, serviced by the product frame loop",
-                /*persistable=*/false);
 // PSXPORT_DEBUG_SERVER — the live, non-blocking TCP debug endpoint. Its VALUE is a port, with 1
 // meaning the default: "1" asks for the default port and a number asks for that port, so it is a
 // TextVar rather than a BoolVar, and the meaning of "1" belongs to dbg_server.h's
@@ -391,8 +386,6 @@ BoolVar cv_producers("PSXPORT_PRODUCERS",
                      "arm the producer census (per-store + per-prim attribution). Off makes the "
                      "producer DB stop recording; use it to price the census, not to fix a bug",
                      /*persistable=*/false);
-
-BoolVar cv_fps60("PSXPORT_FPS60", false, "interpolated-60fps tier (Value layer = fps60= in the settings file)");
 
 TextVar cv_enh("PSXPORT_ENH",
                "",
@@ -645,7 +638,7 @@ bool enh_named(const char *name) {
 // PSXPORT_RENDER_PATH — the render path: native | gte | device | record
 // A TextVar rather than an int so the settings file and the REPL
 // both read as the thing they select, and so a typo is REJECTED by render_path_parse instead of
-// resolving to a plausible number. Persistable: the F1 overlay writes the Value layer, like fps60.
+// resolving to a plausible number. Persistable: the F1 overlay writes the Value layer.
 TextVar cv_render_path("PSXPORT_RENDER_PATH",
                        "native",
                        "render path: native (PC producers) | gte (guest GTE+OT on the PC rasterizer) | "
@@ -777,7 +770,8 @@ EnvAudit audit_environment() {
     }
     a.set_in_env.push_back(entry);
     const std::string name = name_of_entry(entry);
-    if (vars.count(name)) {
+    const std::span<const std::string_view> typed = Config::environmentNames();
+    if (vars.count(name) || std::find(typed.begin(), typed.end(), name) != typed.end()) {
       a.declared.push_back(name);
     } else if (legacy.count(name)) {
       a.legacy.push_back(name);

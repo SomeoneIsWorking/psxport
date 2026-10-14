@@ -1619,12 +1619,10 @@ runtime/psx/config/config_vars.h:extern declaration:cv_bug_report_dir
 runtime/psx/config/config_vars.h:extern declaration:cv_debug_channels
 runtime/psx/config/config_vars.h:extern declaration:cv_debug_server
 runtime/psx/config/config_vars.h:extern declaration:cv_enh
-runtime/psx/config/config_vars.h:extern declaration:cv_fps60
 runtime/psx/config/config_vars.h:extern declaration:cv_load_state
 runtime/psx/config/config_vars.h:extern declaration:cv_log_file
 runtime/psx/config/config_vars.h:extern declaration:cv_native_frames
 runtime/psx/config/config_vars.h:extern declaration:cv_noaudio
-runtime/psx/config/config_vars.h:extern declaration:cv_nopace
 runtime/psx/config/config_vars.h:extern declaration:cv_pad_record
 runtime/psx/config/config_vars.h:extern declaration:cv_pad_replay
 runtime/psx/config/config_vars.h:extern declaration:cv_pad_resume
@@ -1632,7 +1630,6 @@ runtime/psx/config/config_vars.h:extern declaration:cv_producers
 runtime/psx/config/config_vars.h:extern declaration:cv_ramdump
 runtime/psx/config/config_vars.h:extern declaration:cv_ramdump_frame
 runtime/psx/config/config_vars.h:extern declaration:cv_render_path
-runtime/psx/config/config_vars.h:extern declaration:cv_repl
 runtime/psx/config/config_vars.h:extern declaration:cv_selftest_declared
 runtime/psx/config/config_vars.h:extern declaration:cv_settings_path
 runtime/psx/config/config_vars.h:extern declaration:cv_spin_runs

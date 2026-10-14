@@ -86,7 +86,7 @@ static Game *gam() {
     return g;
   }
   remove(kCardPath); // a fresh, unformatted image every run: init() formats it
-  g = new Game(cardRuntime);
+  g = new Game(cardRuntime, {});
   // card_overrides_init, not memcard.init(): the card is a BIOS DEVICE as well as a backing file,
   // and publishing it in the kernel device table is part of bringing it up. Calling init() alone
   // tests a card the running game never has.

@@ -21,7 +21,7 @@ constexpr std::size_t kV0 = 2;
 constexpr std::size_t kA0 = 4;
 
 Game &testGame() {
-  static Game game{stubRuntime};
+  static Game game{stubRuntime, {}};
   return game;
 }
 
