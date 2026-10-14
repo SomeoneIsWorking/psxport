@@ -438,3 +438,30 @@ function(psxport_add_product target)
     "PSXPORT_PRODUCT_CATALOG_HEADER=\"${PRODUCT_HEADER}\"")
   target_link_libraries(${target} PRIVATE psxport ${PRODUCT_LIBRARIES})
 endfunction()
+
+# ---- title link isolation ----------------------------------------------------------------------
+# psxport_add_title_link_isolation_test(<test> FIRST <target> FIRST_ROOT <dir> SECOND <target> SECOND_ROOT <dir>)
+# A test that refuses an external name both targets' objects define from sources under their roots
+# (tools/port/title_link_isolation.py). The targets are built with -g: definition locations come from
+# line information.
+function(psxport_add_title_link_isolation_test test)
+  cmake_parse_arguments(PARSE_ARGV 1 ISOLATION "" "FIRST;FIRST_ROOT;SECOND;SECOND_ROOT" "")
+  if(NOT ISOLATION_FIRST OR NOT ISOLATION_FIRST_ROOT OR NOT ISOLATION_SECOND OR NOT ISOLATION_SECOND_ROOT
+     OR ISOLATION_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "psxport_add_title_link_isolation_test(${test} FIRST <target> FIRST_ROOT <dir> "
+                        "SECOND <target> SECOND_ROOT <dir>)")
+  endif()
+  find_program(PSXPORT_GNU_NM NAMES nm gnm)
+  foreach(side IN ITEMS FIRST SECOND)
+    target_compile_options(${ISOLATION_${side}} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-g>)
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/link_isolation/${test}.${side}.objects"
+         CONTENT "$<JOIN:$<TARGET_OBJECTS:${ISOLATION_${side}}>,\n>\n")
+  endforeach()
+  add_test(NAME ${test}
+           COMMAND "${Python3_EXECUTABLE}" "${PSXPORT_ROOT}/tools/port/title_link_isolation.py"
+                   --nm "${PSXPORT_GNU_NM}"
+                   --first "${CMAKE_BINARY_DIR}/link_isolation/${test}.FIRST.objects"
+                   --first-root "${ISOLATION_FIRST_ROOT}"
+                   --second "${CMAKE_BINARY_DIR}/link_isolation/${test}.SECOND.objects"
+                   --second-root "${ISOLATION_SECOND_ROOT}")
+endfunction()

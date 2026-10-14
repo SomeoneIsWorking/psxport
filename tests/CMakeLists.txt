@@ -121,6 +121,24 @@ set_tests_properties(test_call_original_resuming_bound PROPERTIES
   TIMEOUT 60
   PASS_REGULAR_EXPRESSION "consumed 64 host turn\\(s\\).*without returning")
 
+# The title link-isolation check must report a collision it has to see, and refuse objects it cannot
+# place.
+add_library(link_isolation_first OBJECT fixtures/link_isolation/first/shared_name.cpp)
+add_library(link_isolation_second OBJECT fixtures/link_isolation/second/shared_name.cpp)
+psxport_add_title_link_isolation_test(title_link_isolation_detects_collision
+  FIRST link_isolation_first FIRST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/first
+  SECOND link_isolation_second SECOND_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/second)
+set_tests_properties(title_link_isolation_detects_collision PROPERTIES
+  PASS_REGULAR_EXPRESSION "collision: link_fixture::sharedName\\(\\)")
+add_library(link_isolation_no_lines OBJECT fixtures/link_isolation/first/shared_name.cpp)
+psxport_add_title_link_isolation_test(title_link_isolation_refuses_objects_without_lines
+  FIRST link_isolation_no_lines FIRST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/first
+  SECOND link_isolation_second SECOND_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/second)
+# After the helper's -g, so the last flag wins.
+target_compile_options(link_isolation_no_lines PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-g0>)
+set_tests_properties(title_link_isolation_refuses_objects_without_lines PROPERTIES
+  PASS_REGULAR_EXPRESSION "carries no line information")
+
 list(LENGTH PSXPORT_TEST_SRCS _n_tests)
 message(STATUS "psxport tests: ${_n_tests} discovered in ${CMAKE_CURRENT_SOURCE_DIR}")
 
