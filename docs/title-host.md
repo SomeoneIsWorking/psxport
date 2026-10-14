@@ -46,7 +46,7 @@ the presentation before the first present, and no `Game` names the window.
 before `PSXPORT_DISC`), `discExecutablePath` (the boot executable's ISO9660 path, `/`-separated) and
 `defaultExecutable(root)` (`<root>/<slug>/<serial>`, the one spelling of where a provisioned executable
 lives, used by the probe, the size-1 catalog and the help text). A title still on its own loop declares
-a `TitleIdentity` for the same facts and hands it to `psx::Machine::insertDisc`.
+a `TitleIdentity` for the same facts and sets its `Game`'s `disc.env_key` from it.
 
 A selection means serial plus file identity, never the label. `TitleIdentity::slug` is the directory
 under `provisioningRoot()` (relative to the working directory: `scratch/assets` or `scratch/bin`), and `pick <slug>` on the control channel resolves against it. The
@@ -62,22 +62,24 @@ first probe). It opens the title's disc on its own `DiscState` keyed by `discEnv
 writes them only on a match. A present file is never read or rewritten. Only `ProductHost` calls it.
 
 `GuestProgramImage::bootEntry` says who enters the guest. `Crt0` (the default): the framework applies the
-image's crt0 group (`psx::Machine::setupGuestBoot` -> `crt0_setup`) and then `GameRuntime::bootInit`.
+image's crt0 group (`crt0_setup`, from `TitleSession::boot`) and then `GameRuntime::bootInit`.
 `DriverOwned`: the framework applies no crt0; the title's frame driver enters the guest from the
-executable's entry. `TitleSession::boot` asks `psx::Machine::bootEntryRefusal` before it builds the
+executable's entry. `TitleSession::boot` asks `psx::bootEntryRefusal` (`crt0_boot.h`) before it builds the
 `Game`: a `Crt0` image whose crt0 group is incomplete, or a runtime with no image, is refused by name
 (`bootEntry=Crt0 but 1 of 8 crt0 field(s) are unset (libcInitEntry)`) and the process exits 2.
-Tomba 2 is `Crt0`; its MAIN.EXE handoff stays in its `bootInit`.
+Tomba 2 is `Crt0`; its MAIN.EXE handoff stays in its `bootInit`. CTR, Tekken 3 and Vagrant Story are
+`DriverOwned`.
 
 `GameRuntime::admitExecutable(core, bytes)` maps the executable and sets the entry registers. Its default is `loadPsxExeImage` plus `applyPsxExeTopLevelRegisters`; a title that publishes
 its own image identity overrides it (Crash Bash, which publishes its resident code range and sets no
-top-level registers). A refusal leaves Core unchanged and refuses the boot. The bytes reaching it are
+top-level registers; Vagrant Story, which checks its header and registers its native leaves against the
+published resident generation). A refusal leaves Core unchanged and refuses the boot. The bytes reaching it are
 the ones the host authenticated against the catalog: `selectExecutableFile` (`runExecutable`) or the
 probe (the selector) returns them, `TitleAvailability::bytes` carries them into the session, and the
 file is read once. No title authenticates them again.
 
 Every boot goes through `TitleSession::boot`; the framework has no other boot spine. Crash Bash, Toy
-Story 2, Mega Man X4 and Spider-Man 1 are one-title catalogs (`SingleTitleCatalog`): no argument provisions and boots their one executable,
+Story 2, Mega Man X4, Spider-Man 1, CTR, Tekken 3 and Vagrant Story are one-title catalogs (`SingleTitleCatalog`): no argument provisions and boots their one executable,
 and a title's own run-end lines come from `reportRun`.
 
 `GameRuntime` carries two optional virtuals the host asks, each with a neutral default:
@@ -116,17 +118,20 @@ product session loads it; a title picked after a return boots from power-on). A 
 `TitleSession::boot`, in order: refuse a boot entry the image cannot honour; read the executable;
 install the title's runtime and build its `Game`; attach the
 `QuitScope` to its `HostInput`; panel defaults (pane route, suppressed pad, audibility, pre-roll);
-`psx::Machine::insertDisc` with the title's `TitleIdentity`; `GameRuntime::admitExecutable`; `psx::Machine` `reportConfigurationOnce`, `bindDevices` (init then bind, honouring
-`Pad::overridesInit`), `prepare`, `attachControlChannel`; for a product only,
-`clearDisplayForFrontEnd`; `setupGuestBoot` (the declared boot entry) and `GameRuntime::bootInit`; for the first product
-session only, `applyConfiguredState`; then the present-to-present series restarts, so the boot's gap
+the disc key from the title's `TitleIdentity`; `GameRuntime::admitExecutable`; the configuration audit
+(`psx::config::report_once`); the per-Core device binds (init then bind, then `Pad::overridesInit`, then
+the `a0`/`a1` seed); `GameRuntime::registerOverrides` then `FrameLoopShell::prepareProduct`;
+`DbgServer::start` and `store_observe_attach`; for a product only, `gpu_clear_display`; `crt0_setup` for
+a `Crt0` image, then `GameRuntime::bootInit`; for the first product session only,
+`psx::state::applyConfiguredState` (fatal on failure); then the present-to-present series restarts, so the boot's gap
 is not counted as a missed present.
 
 `TitleSession::step` ends the session before stepping on, in order: `session return`
 (`ReturnedToSelector`), `Game::run.requestEnd()` (`TitleEnded`), and for a product a window close or
 client `quit` (`Quit`) or an exhausted `RunBudget` (`BudgetSpent`). A product with `PSXPORT_REPL` then
 waits in `Repl::beforeStep` for a `run N` that covers the step (`quit`, `end` or EOF is `Quit`).
-The body is `FieldTurn::beginField`, `FrameLoopShell::step` (one presentation fence),
+The body is `FieldTurn::beginField`, `FrameLoopShell::step` (one presentation fence; the field number a
+`FrameDriver` receives counts from 1 and goes up by one per step),
 `RunBudget::step` and `Repl::afterStep` for a product, `FieldTurn::endField`.
 A product session's destructor prints the one `RunEndReport` (`run complete`, fallback telemetry,
 ledger, guest-call census, present intervals, record stability, audio queue, `reportRun`). `Quit` and
@@ -138,10 +143,10 @@ run came from it, and end the process under `runExecutable`.
 `RunBudget` bounds a whole run, counted in presentation-fence steps: one per product step and one per
 selector frame. An explicit `PSXPORT_NATIVE_FRAMES` wins; otherwise a pad replay or resume, the REPL or
 a live control client leaves it uncapped, a windowed run is uncapped and a headless one stops at 120.
-This is the only place the live-client rule lives: `Machine::attachControlChannel` and
-`DbgServer::start` open the channel and answer no cap, and every loop that is not yet a
-`TitleSession` (`psx::Machine::run` in CTR, Tekken 3 and Vagrant Story; the own loops of C-12,
-Tomba! 1 and Spider-Man 2) takes its cap from `RunBudget::fromConfig`.
+This is the only place the live-client rule lives: `DbgServer::start` opens the channel and answers
+no cap, and every loop that is not yet a
+`TitleSession` (the own loops of C-12, Tomba! 1 and Spider-Man 2) takes its cap from
+`RunBudget::fromConfig`.
 It never counts a panel's pre-roll steps, and panels never print a run-end report, apply configured
 state or pump the REPL. `PreRollBudget` stays the pre-roll owner: how many panel steps fit in one
 selector frame's wall time.
@@ -150,7 +155,7 @@ selector frame's wall time.
 
 Once `run` has a selector or a title to start, `ProductHost` builds its process state: the window
 and device, the `QuitScope`, the `RunBudget`, the watchdog and the host diagnostics
-(`Machine::armHostDiagnostics`: the memory census and the active-config dump). Help and refused
+(`memcensus_init` and `cfg_dump`: the memory census and the active-config dump). Help and refused
 arguments build none of it. The watchdog is disabled when the host is destroyed; sessions never arm
 or disarm either. A window close is recorded on the `QuitScope` instead of exiting in
 the event drain, so it reaches the run-end report like a client `quit`.

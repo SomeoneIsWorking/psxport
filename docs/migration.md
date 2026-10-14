@@ -103,8 +103,8 @@ qualification. Complete executable-writer coverage and fallback threshold enforc
 ## Direct-runtime service contracts
 
 A title's disc environment key is a disc fact in its `psx::host::TitleIdentity::discEnvVar`;
-`psx::Machine::insertDisc` hands it to the shared disc resolver before anything reads the disc
-(`TitleSession::boot` does so for a catalog title). An absent key retains generic disc resolution. A
+`TitleSession::boot` hands it to the shared disc resolver (`DiscState::env_key`) before anything reads
+the disc. An absent key retains generic disc resolution. A
 missing boot executable is extracted through the same resolver by `psx::host::provisionExecutable`. Title
 code must not introduce another disc-open, extraction or environment-parsing path.
 

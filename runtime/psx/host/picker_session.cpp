@@ -11,7 +11,6 @@
 #include "game.h"
 #include "gpu_vk.h"
 #include "gpu_vk_device.h"
-#include "machine.h"
 
 #include <lucent/log.h>
 
@@ -105,9 +104,8 @@ PickerSession::Result PickerSession::run() {
   Core &core = host->core;
   host->pad.useLiveInputOnly(); // a selector must not open or rotate the player's pad recording
   host->hostInput.attachQuitScope(&services_.quit);
-  // The same arming call the product spine makes in `TitleSession::boot`, so the selector's channel
-  // is not reachable only through a hand-written attach of its own.
-  psx::Machine{*host}.attachControlChannel();
+  // No guest runs here, so the channel needs no store observer.
+  host->dbg_server.start(&core);
   gpu_vk_ensure_device(&core);
 
   composite_ = std::make_unique<PickerComposite>(services_.presentation, &core);

@@ -59,7 +59,8 @@ public:
 
   // One finite native frame. The title owns its measured input/audio/simulation/render/present order
   // and commits presentation exactly once (or supplies a measured unpresented fence). It must never
-  // dispatch a guest-owned frame loop or call libetc VSync.
+  // dispatch a guest-owned frame loop or call libetc VSync. `frame` is the host loop's field number:
+  // consecutive, starting at 1 under TitleSession.
   virtual void stepFrame(Core &core, uint32_t frame) = 0;
 
   // Whether this driver is PAST whatever boot prefix its title owns — the logos, the loading screens

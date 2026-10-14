@@ -131,6 +131,10 @@ inline Crt0Completeness crt0Completeness(const GuestProgramImage &image) {
   return result;
 }
 
+// Why the image's declared `bootEntry` cannot boot it, or empty when it can. `Crt0` needs the complete
+// crt0 group; `DriverOwned` needs nothing here. No image declares no entry.
+std::string bootEntryRefusal(const GuestProgramImage *image);
+
 } // namespace psx
 
 // crt0_plan — derive the plan, or refuse.

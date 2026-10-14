@@ -33,7 +33,7 @@ typedef struct DiscState {
   uint64_t fills;
   uint64_t fill_ns;
   uint64_t worst_fill_ns;
-  const char *env_key;                   // TitleIdentity::discEnvVar: psx::Machine::insertDisc for a Game's disc,
+  const char *env_key;                   // TitleIdentity::discEnvVar: TitleSession::boot for a Game's disc,
                                          // provisionExecutable for its own; NULL leaves the generic keys only.
   DiscTrackInfo tracks[DISC_MAX_TRACKS]; // CHD TOC, indexed densely in metadata order
   uint8_t track_count;

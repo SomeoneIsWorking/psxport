@@ -18,5 +18,11 @@ public:
   FrameDriver &prepareProduct(Game &game) const;
   FrameDriver &requireDriver(Game &game) const;
   void step(Core &core, uint32_t frame) const;
+  // Point the process-global device bindings (GTE, projection, SPU, MDEC, XA) at `core`. `step` calls
+  // it when the stepped Core changes; a session boot calls it so the next step knows what is bound.
+  static void bindRunningCore(Core &core);
+
+private:
+  inline static Core *bound_ = nullptr;
 };
 } // namespace psx::frame

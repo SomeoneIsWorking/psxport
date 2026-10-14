@@ -6,7 +6,7 @@
 #include "dbg_server.h"
 #include "executable_provisioner.h"
 #include "game.h"
-#include "machine.h"
+#include "memcensus.h"
 #include "picker_content.h"
 #include "picker_runtime.h"
 #include "picker_session.h"
@@ -57,7 +57,8 @@ ProductHost::Process::Process(const TitleCatalog &catalog)
   presentation.setWindowTitle(windowTitle.c_str());
   // The watchdog is process-wide signal state: armed once here, never by a session.
   watchdog_init();
-  psx::Machine::armHostDiagnostics();
+  memcensus_init();
+  cfg_dump();
 }
 
 ProductHost::Process::~Process() {

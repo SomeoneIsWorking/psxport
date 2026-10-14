@@ -1,19 +1,25 @@
 #include "title_session.h"
 
+#include "c_subsys.h" // mdec_init
+#include "config.h"
 #include "config_vars.h"
 #include "core.h"
+#include "crt0_boot.h"
 #include "dbg_server.h"
 #include "field_turn.h"
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "gpu_native_internal.h" // gpu_clear_display
 #include "gpu_vk.h"
 #include "gpu_vk_internal.h"
 #include "host_input.h"
 #include "host_turn.h"
-#include "machine.h"
+#include "hw_bind.h"
 #include "psx_exe_image.h"
 #include "run_end_report.h"
+#include "state/state_command.h"
+#include "store_observe.h"
 
 #include <lucent/log.h>
 
@@ -21,6 +27,26 @@
 #include <string>
 
 namespace psx::host {
+namespace {
+
+// The process devices initialised, then bound to this Core through the shell, so its next step
+// knows what is bound; then `a0`/`a1` as the BIOS leaves them.
+void bindPerCoreDevices(Game &game) {
+  Core &core = game.core;
+  gte_init();
+  mdec_init();
+  spu_init();
+  psx::frame::FrameLoopShell::bindRunningCore(core);
+  game.spu_audio.init();
+  game.gpu.gpu_native_init();
+  game.cd.overridesInit();
+  game.platform_hle.initBuiltins();
+  game.pad.overridesInit();
+  core.r[4] = 1;
+  core.r[5] = 0;
+}
+
+} // namespace
 
 // The session's state that needs the framework's headers, hidden so this header stays the
 // session's contract.
@@ -56,7 +82,7 @@ bool TitleSession::boot() {
     return true;
   }
   GameRuntime &runtime = catalog_.runtime(title_.index);
-  if (const std::string refusal = psx::Machine::bootEntryRefusal(runtime.guestProgramImage()); !refusal.empty()) {
+  if (const std::string refusal = psx::bootEntryRefusal(runtime.guestProgramImage()); !refusal.empty()) {
     lucent::error("boot", "{} ({}) refused: {}", title_.identity->displayName, title_.identity->serial, refusal);
     return false;
   }
@@ -83,8 +109,7 @@ bool TitleSession::boot() {
     game.session.setPreRolling(preRolling_);
   }
 
-  psx::Machine machine{game};
-  machine.insertDisc(*title_.identity);
+  game.disc.env_key = title_.identity->discEnvVar;
   const psx::cpu::PsxExeLoadResult admitted = runtime.admitExecutable(core, title_.bytes);
   if (!admitted) {
     lucent::error("boot",
@@ -101,20 +126,32 @@ bool TitleSession::boot() {
                admitted.image.textAddress,
                admitted.image.textBytes,
                core.r[29]);
-  machine.reportConfigurationOnce();
-  machine.bindDevices();
-  machine.prepare();
-  // Several sessions each attach; only the first owns the host port, which is how the picker and a
-  // running title share one channel.
-  machine.attachControlChannel();
+  psx::config::report_once();
+  bindPerCoreDevices(game);
+  // The overrides before the preflight: a title's own registration may be what gives it a finite
+  // frame owner.
+  runtime.registerOverrides(game);
+  psx::frame::FrameLoopShell{}.prepareProduct(game);
+  // Several sessions each start the channel; only the first owns the host port, which is how the
+  // picker and a running title share one.
+  game.dbg_server.start(&core);
+  store_observe_attach(core);
+  lucent::info(
+      "boot", "live control channel {}, store observer armed", debug_server_live() ? "attached" : "not requested");
   if (role_ == Role::Product) {
-    machine.clearDisplayForFrontEnd();
+    // Black before the title builds, so its first frames never composite over a stale splash.
+    gpu_clear_display(&core);
   }
-  machine.setupGuestBoot();
+  if (core.guestProgramImage == nullptr || core.guestProgramImage->bootEntry == BootEntry::Crt0) {
+    crt0_setup(core);
+  }
   core.runtime->bootInit(core);
   if (role_ == Role::Product && services_.configuredStatePending) {
     services_.configuredStatePending = false;
-    machine.applyConfiguredState();
+    if (std::string error; !psx::state::applyConfiguredState(core, error)) {
+      lucent::error("boot", "{}", error);
+      std::exit(1);
+    }
   }
   // The play check measures the run, not the gap between the boot's clear and the first step.
   game.perf.restartPresentSeries();

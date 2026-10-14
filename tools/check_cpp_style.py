@@ -373,6 +373,8 @@ def check_tidy(root: Path, compile_commands: Path, sources: list[Path], touched_
 ACCEPTED_SITES = Path("tools") / "policy" / "accepted.txt"
 ENTRY_DIRECTORIES = {"tests", "tools"}
 PRODUCT_MAIN = SCRIPT_ROOT / "runtime" / "psx" / "host" / "product_main.cpp"
+# Framework steps a title once spelled out itself; TitleSession and ProductHost compose them now.
+RETIRED_NAMES = ("watchdog_init", "gte_bind", "spu_bind", "mdec_bind", "load_exe", "store_observe_attach")
 
 
 def excluded_directories(root: Path) -> list[Path]:
@@ -403,11 +405,15 @@ def ownership_command(root: Path, compile_commands: Path, sources: list[Path]) -
         command += ["--exclude", str(directory)]
     for entry_root in [*entry_roots, PRODUCT_MAIN]:
         command += ["--entry-root", str(entry_root)]
+    if root.resolve() != SCRIPT_ROOT:
+        for name in RETIRED_NAMES:
+            command += ["--retired-name", name]
     return command
 
 
 def check_ownership(root: Path, compile_commands: Path, sources: list[Path]) -> int:
-    """Ownership rules, plus `main` only in an entry root, against the repository's accepted sites."""
+    """Ownership rules, `main` only in an entry root and no retired framework step in a title, against the
+    repository's accepted sites."""
     try:
         command = ownership_command(root, compile_commands, sources)
     except harness.HarnessMissing as error:
@@ -571,6 +577,13 @@ def selftest() -> int:
         accepted.write_text(accepted_text + "a.cpp:block-scope static:gone\n", encoding="utf-8")
         expect("an accepted site that no longer occurs fails", 1, "no longer occurs: a.cpp:block-scope static:gone")
         accepted.write_text(accepted_text, encoding="utf-8")
+        retired_text = (
+            'extern "C" void load_exe(const char *path, void *core);\n\n'
+            "namespace fixture {\nvoid boot() {\n  load_exe(nullptr, nullptr);\n}\n} // namespace fixture\n\n"
+        )
+        (root / "a.cpp").write_text(retired_text + source_text, encoding="utf-8")
+        expect("a title calling a retired framework step fails", 1, "a.cpp:5: retired name: load_exe", "--ownership-only")
+        (root / "a.cpp").write_text(source_text, encoding="utf-8")
         expect("tracked deletion is excluded", 0, "1 worktree-deleted file(s)")
 
         docs = root / "docs"

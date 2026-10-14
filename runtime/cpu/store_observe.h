@@ -59,8 +59,7 @@ class Core;
 // you must already know the instruction** — use `PSXPORT_CW` for host-reaching stores, or read the store
 // instruction out of the listing.
 //
-// Armed by `psx::Machine::attachControlChannel` (machine.cpp) beside `DbgServer::start`, on every
-// product's boot.
+// Armed by `psx::host::TitleSession::boot` beside `DbgServer::start`, on every product's boot.
 void store_observe_configure(Core &core);
 
 // Log what the observer saw, with the executor's own counters beside it. `StoreObservation` does not

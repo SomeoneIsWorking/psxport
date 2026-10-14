@@ -90,6 +90,8 @@ struct Script {
   // Overwritten with zeros when the session first asks for the image, after the host selected it.
   std::filesystem::path rewriteAtBoot;
   bool fileBugReport = false; // the product files a scripted bug report at its first step
+  unsigned overridesRegistered = 0;
+  bool devicesBoundBeforeOverrides = false; // a0/a1 already seeded when the title registered
 };
 
 void closeWindow() {
@@ -191,6 +193,8 @@ public:
   }
   void destroyContext(void *) override {}
   void registerOverrides(Game &game) override {
+    ++script_.overridesRegistered;
+    script_.devicesBoundBeforeOverrides = game.core.r[4] == 1u && game.core.r[5] == 0u;
     if (!script_.card.empty()) {
       game.memcard.init();
     }
@@ -679,6 +683,21 @@ void test_a_driver_owned_title_boots_without_the_framework_crt0() {
   CHECK_EQ(fixture.count("run complete: product_steps=2 "), 1);
 }
 
+// The devices are bound, and a0/a1 seeded, before the title registers its overrides, once.
+void test_a_session_binds_the_devices_before_the_title_overrides() {
+  Fixture fixture;
+  Script script;
+  script.bootEntry = BootEntry::DriverOwned;
+  const Catalog catalog(script, fixture.sha256, fixture.root, 1);
+  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 1);
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host), 0);
+  }
+  CHECK_EQ(script.overridesRegistered, 1u);
+  CHECK(script.devicesBoundBeforeOverrides);
+}
+
 // A one-title product whose executable is missing extracts it from the title's own disc, then boots it.
 void test_a_missing_executable_is_provisioned_from_the_title_disc() {
   Fixture fixture;
@@ -724,6 +743,7 @@ int main(void) {
   RUN(a_single_title_catalog_skips_the_selector);
   RUN(a_crt0_title_with_an_incomplete_group_is_refused_by_name);
   RUN(a_driver_owned_title_boots_without_the_framework_crt0);
+  RUN(a_session_binds_the_devices_before_the_title_overrides);
   RUN(a_missing_executable_is_provisioned_from_the_title_disc);
   RUN(a_session_ends_on_its_cap_counted_in_fence_steps);
   RUN(a_product_reads_its_titles_own_disc_key);

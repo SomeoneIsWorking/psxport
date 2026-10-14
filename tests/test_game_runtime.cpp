@@ -1,14 +1,13 @@
 #include "cd_control.h"
 #include "config_vars.h"
+#include "crt0_boot.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "guest_cd_stream_callback_layout.h"
 #include "guest_program_image.h"
-#include "machine.h"
 #include "menu_row.h"
 #include "render_path_control.h"
 #include "testutil.h"
-#include "title_catalog.h"
 
 #include <cstdint>
 #include <cstring>
@@ -163,29 +162,6 @@ void test_direct_runtime_publishes_cd_ready_callback_slot() {
   CHECK_EQ(cd_ready_callback_pointer(game->core), 0u);
 }
 
-void test_title_disc_key_reaches_the_shared_disc_owner() {
-  TestRuntime runtime;
-  psxport_install_game(runtime);
-  const auto game = std::make_unique<Game>();
-  CHECK_EQ(game->disc.env_key, nullptr);
-
-  constexpr psx::host::TitleIdentity kTitle{.serial = "TEST_000.00", .discEnvVar = "TEST_TITLE_DISC"};
-  psx::Machine{*game}.insertDisc(kTitle);
-
-  CHECK_STREQ(game->disc.env_key, "TEST_TITLE_DISC");
-  CHECK_EQ(game->cdc.disc, &game->disc);
-  CHECK_EQ(game->xa.disc, &game->disc);
-}
-
-void test_title_without_disc_key_retains_generic_resolution() {
-  TestRuntime runtime;
-  psxport_install_game(runtime);
-  const auto game = std::make_unique<Game>();
-  psx::Machine{*game}.insertDisc(psx::host::TitleIdentity{.serial = "TEST_000.00"});
-
-  CHECK_EQ(game->disc.env_key, nullptr);
-}
-
 void test_default_admission_maps_the_executable_and_sets_top_level_registers() {
   TestRuntime runtime;
   psxport_install_game(runtime);
@@ -215,12 +191,11 @@ void test_default_admission_maps_the_executable_and_sets_top_level_registers() {
 }
 
 void test_an_image_with_no_program_image_declares_no_boot_entry() {
-  CHECK(psx::Machine::bootEntryRefusal(nullptr) == "the runtime declares no GuestProgramImage, so it has no bootEntry");
+  CHECK(psx::bootEntryRefusal(nullptr) == "the runtime declares no GuestProgramImage, so it has no bootEntry");
   const GuestProgramImage driverOwned{.bootEntry = BootEntry::DriverOwned};
-  CHECK(psx::Machine::bootEntryRefusal(&driverOwned).empty());
+  CHECK(psx::bootEntryRefusal(&driverOwned).empty());
   const GuestProgramImage crt0{};
-  CHECK(psx::Machine::bootEntryRefusal(&crt0).starts_with(
-      "bootEntry=Crt0 but 8 of 8 crt0 field(s) are unset (bss.begin, "));
+  CHECK(psx::bootEntryRefusal(&crt0).starts_with("bootEntry=Crt0 but 8 of 8 crt0 field(s) are unset (bss.begin, "));
 }
 
 void test_repl_commands_are_game_owned_and_legacy_forwarding_is_optional() {
@@ -529,8 +504,6 @@ void test_legacy_adapter_projects_static_backdrop_policy_only_for_migration() {
 int main() {
   RUN(installation_reaches_derived_runtime);
   RUN(direct_runtime_publishes_cd_ready_callback_slot);
-  RUN(title_disc_key_reaches_the_shared_disc_owner);
-  RUN(title_without_disc_key_retains_generic_resolution);
   RUN(default_admission_maps_the_executable_and_sets_top_level_registers);
   RUN(an_image_with_no_program_image_declares_no_boot_entry);
   RUN(repl_commands_are_game_owned_and_legacy_forwarding_is_optional);
