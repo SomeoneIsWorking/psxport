@@ -33,12 +33,12 @@ public:
 
 void test_display_height_bounds_the_presented_guest_lines() {
   DisplayHeightRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->core.rsub.mode.setPath(RenderPath::Gte);
   CHECK_EQ(GpuState::presentedHeight(&game->core, 240), 224);
 
   psx::test::StubGameRuntime decoded;
-  auto decodedGame = std::make_unique<Game>(decoded);
+  auto decodedGame = std::make_unique<Game>(decoded, psx::config::Config{});
   decodedGame->core.rsub.mode.setPath(RenderPath::Gte);
   CHECK_EQ(GpuState::presentedHeight(&decodedGame->core, 240), 240);
 }
@@ -52,11 +52,11 @@ public:
 
 void test_interpolates_decides_whether_the_fps60_mod_exists() {
   InterpolatingRuntime interpolating;
-  auto game = std::make_unique<Game>(interpolating);
+  auto game = std::make_unique<Game>(interpolating, psx::config::Config{});
   CHECK(game->mods.temporalInterpolationSupported());
 
   psx::test::StubGameRuntime still;
-  auto stillGame = std::make_unique<Game>(still);
+  auto stillGame = std::make_unique<Game>(still, psx::config::Config{});
   CHECK(!stillGame->mods.temporalInterpolationSupported());
 }
 
@@ -76,7 +76,7 @@ public:
 
 void test_title_command_answers_the_dev_command_control() {
   CommandRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   const psx::ui::DevCommandControl control(game.get());
 
   CHECK(control.send("warp 3 2") == "armed warp 3 2");
@@ -84,7 +84,7 @@ void test_title_command_answers_the_dev_command_control() {
   CHECK(control.send("items") == "not supported by this game");
 
   psx::test::StubGameRuntime silent;
-  auto silentGame = std::make_unique<Game>(silent);
+  auto silentGame = std::make_unique<Game>(silent, psx::config::Config{});
   CHECK(psx::ui::DevCommandControl(silentGame.get()).send("warp 1 0") == "not supported by this game");
 }
 
@@ -114,7 +114,7 @@ public:
 
 void test_dev_warp_feeds_the_debug_tab_warp() {
   WarpRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   const psx::ui::DevCommandControl commands(game.get());
   psx::ui::WarpControl warp(game.get(), &commands);
 
@@ -124,7 +124,7 @@ void test_dev_warp_feeds_the_debug_tab_warp() {
   CHECK(warp.arm() == "not in the field - reach gameplay first");
 
   psx::test::StubGameRuntime none;
-  auto noneGame = std::make_unique<Game>(none);
+  auto noneGame = std::make_unique<Game>(none, psx::config::Config{});
   psx::ui::WarpControl absent(noneGame.get(), &commands);
   CHECK_EQ(absent.areaCount(), 0);
   CHECK(absent.arm() == "warp unavailable");
@@ -153,7 +153,7 @@ void test_state_producers_compose_the_record_present() {
   const psx::present::FrameState state = marker::savedState(shown, kKey, 20.0f);
 
   ProducerRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   const std::optional<psx::present::FrameRecord> composed =
       psx::present::composeFrame(shown, nullptr, state, 1.0f, psx::frame::RuntimeStateProducers(game->core));
   CHECK(composed.has_value());
@@ -162,7 +162,7 @@ void test_state_producers_compose_the_record_present() {
   }
 
   psx::test::StubGameRuntime none;
-  auto noneGame = std::make_unique<Game>(none);
+  auto noneGame = std::make_unique<Game>(none, psx::config::Config{});
   CHECK(!psx::present::composeFrame(shown, nullptr, state, 1.0f, psx::frame::RuntimeStateProducers(noneGame->core)));
 }
 
@@ -189,7 +189,7 @@ public:
 // The title's music mixes into each output field the SPU rendered, and never into a logic-only field.
 void test_title_audio_mixes_each_output_field() {
   MusicRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->spu_audio.init();
   game->spu_audio.frameLogic();
   CHECK_EQ(runtime.music.calls, 0);
@@ -218,7 +218,7 @@ public:
 
 void test_start_program_runs_the_titles_crt0() {
   Crt0Runtime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   Core &core = game->core;
   core.mem_w32(0x80010000u, 0x03E00008u); // libcInit: jr ra
   core.mem_w32(0x80010004u, 0u);
@@ -239,8 +239,8 @@ void test_start_program_runs_the_titles_crt0() {
 void test_each_core_reads_and_runs_its_own_gte() {
   gte_init();
   psx::test::StubGameRuntime runtime;
-  auto first = std::make_unique<Game>(runtime);
-  auto second = std::make_unique<Game>(runtime);
+  auto first = std::make_unique<Game>(runtime, psx::config::Config{});
+  auto second = std::make_unique<Game>(runtime, psx::config::Config{});
   psx::cpu::Gte &a = first->core.gte();
   psx::cpu::Gte &b = second->core.gte();
 

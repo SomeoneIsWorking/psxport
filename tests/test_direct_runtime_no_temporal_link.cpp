@@ -38,7 +38,7 @@ public:
 
 void test_direct_runtime_constructs_without_a_temporal_product() {
   psx::test::StubGameRuntime runtime;
-  const auto game = std::make_unique<Game>(runtime);
+  const auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   CHECK(game->temporalPresentation == nullptr);
   NeutralBackend backend;
   game->presentation.commit(backend, 1);

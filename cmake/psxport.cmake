@@ -205,6 +205,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_time_histogram.cpp  # the frame-time distribution gpu_perf reports percentiles from
   ${PSXPORT_ROOT}/runtime/psx/debug/mods.cpp
   ${PSXPORT_ROOT}/runtime/psx/config/config.cpp   # layered CVar registry + the environment audit (docs/config.md)
+  ${PSXPORT_ROOT}/runtime/psx/config/typed_config.cpp # the immutable launch config reached through Game
   ${PSXPORT_ROOT}/runtime/psx/hle/platform_hle.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/stock_dma_callbacks.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/stock_libgpu.cpp

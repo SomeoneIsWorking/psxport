@@ -55,7 +55,7 @@ constexpr uint16_t kStartHeld = static_cast<uint16_t>(0xFFFFu & ~0x0008u);
 
 void test_each_serviced_frame_delivers_one_packet_to_the_title() {
   RecordingRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->pad.setButtons(kStartHeld);
 
   game->pad.serviceFrame();
@@ -69,7 +69,7 @@ void test_each_serviced_frame_delivers_one_packet_to_the_title() {
 
 void test_stock_pad_buffers_write_the_fixed_buffers() {
   PadRuntime runtime({.slot0Buffer = kRuntimeSlot0, .slot1Buffer = kRuntimeSlot1});
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   CHECK_EQ(game->core.cfg, nullptr);
   game->pad.setButtons(kStartHeld);
 
@@ -82,7 +82,7 @@ void test_stock_pad_buffers_write_the_fixed_buffers() {
 
 void test_a_slot_pointer_wins_over_the_fixed_buffer() {
   PadRuntime runtime({.slot0Buffer = kRuntimeSlot0, .slotPointerTable = kSlotPointerTable});
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->core.mem_w32(kSlotPointerTable, kTableSlot0);
   game->core.mem_w8(kRuntimeSlot0, 0xA5u);
   game->pad.setButtons(kStartHeld);
@@ -99,7 +99,7 @@ void test_the_legacy_adapter_delivers_to_its_config_buffers() {
   config.padSlot0Buf = kLegacySlot0;
   config.padSlot1Buf = kLegacySlot1;
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->pad.setButtons(kStartHeld);
 
   game->pad.serviceFrame();
@@ -110,7 +110,7 @@ void test_the_legacy_adapter_delivers_to_its_config_buffers() {
 
 void test_a_title_that_delivers_nothing_writes_no_guest_address() {
   psx::test::StubGameRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->core.mem_w8(kRuntimeSlot0, 0xA5u);
   game->core.mem_w8(kRuntimeSlot1, 0x5Au);
 

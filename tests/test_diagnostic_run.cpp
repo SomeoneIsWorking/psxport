@@ -1,6 +1,7 @@
 #include "config.h"
 #include "config_vars.h"
 #include "diagnostic_run.h"
+#include "enhancement_gate.h"
 
 #include "testutil.h"
 

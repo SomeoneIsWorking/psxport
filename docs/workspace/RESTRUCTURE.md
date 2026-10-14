@@ -116,13 +116,14 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 - **Config.**
   - One immutable typed `psx::config` object, built by the config owner and reached through `Game`.
   - `cfg_on`/`cfg_int`/`cfg_str`/`cfg_dbg` (100 sites in psxport, 39 in Tomba, 5 in Spyro) and the 29 CVar externs become its fields.
-  - `common/env.cpp` is the only `getenv`.
+  - `common/env.cpp` is the only `getenv`. Not yet: `psx::config::Config`, the CVar registry and lucent read the process environment through `lucent::config` (lucent's own `getenv`), `common/env.cpp` serves the disc path, and `cd/disc.cpp` and `platform/memcard.cpp` each parse `./.env` again. (c) folds those into the config owner.
+  - Done in (a): `psx::config::Config` (`config/typed_config.h`) with `unpaced` (`PSXPORT_NOPACE`), `repl` (`PSXPORT_REPL`) and `fps60` (`PSXPORT_FPS60`, a launch choice over the saved setting), built once by `ProductHost` and held as `game.config`. The live 60 fps setting is `Mods::fps60`. Title-declared `pc_enh` CVars (C-12, X4) stay CVars until a title-settings owner replaces them: `TitleIntSetting`, which stays data, binds an `IntVar`.
   - `OtAttr::trackStore` reads its field as a plain member load.
 - **C linkage.** `extern "C"` remains only on functions Beetle's C calls back.
 
 ### 3.5 Include split
 
-- Titles see only the title API: `game/` (`game_runtime.h` with `FrameDriver`, `crt0_boot.h`, `psx_exe_image.h`), `host/title_catalog.h`, `present/state_producer.h`, `present/frame_composer.h` (`PrimitiveSink`), `core.h` guest memory, `cpu/gte.h`, `input/pad_delivery.h`, `input/input_phase.h`, `host/logo_image.h`, `core/guest_address_range.h`, `runtime/cpu/execution_exit.h`, and the stock classes (`cd/stock_libcd.h`, `hle/stock_*.h`, `input/stock_pad_buffers.h`).
+- Titles see only the title API: `game/` (`game.h`, `game_runtime.h` with `FrameDriver`, `crt0_boot.h`, `psx_exe_image.h`, `title_settings.h`, `guest_packet_pool_windows.h`), `host/title_catalog.h`, `host/single_title_catalog.h`, `present/state_producer.h`, `present/frame_composer.h` (`PrimitiveSink`), `present/guest_widescreen_projection.h`, `present/gte_control.h` (`GteGuard`), `core.h` guest memory, `cpu/gte.h`, `cpu/gte_registers.h`, `frame/logic_frame.h`, `input/pad_delivery.h`, `input/input_phase.h`, `host/logo_image.h`, `core/guest_address_range.h`, `core/guest_code_module.h`, the guest-call seam in `runtime/cpu/` (`execution_exit.h`, `execution_control.h`, `guest_call.h`, `native_dispatch.h`, `image_identity.h`, `lightrec_executor.h` for the frame driver's turn), `config/config_var.h`, `config/enhancement_gate.h` and `config/stepped_range.h` (title `pc_enh` knobs), and the stock classes (`cd/stock_libcd.h`, `hle/stock_*.h`, `input/stock_pad_buffers.h`). C-12's pass needed every header added here; tests may also include `hle/platform_hle.h` to observe a stock binding and `frame/frame_loop_shell.h` to step a `FrameDriver` through the product loop.
 - Leaks to close before `gpu/` and `cpu/` go private: `core.h` includes `gpu/gpu_device.h`; `game_runtime.h` includes `gpu/render_capabilities.h` (gone with `RenderCapabilities` in (c)); `game/psx_exe_image.h` includes `runtime/cpu/image_identity.h`; the packet-pool layouts live in `gpu/guest_packet_pool_windows.h` (moved to `game/` in (a)). Core also holds `GpuDevice`, `OtTables` and `RenderSubstrate` (gpu/, debug/) by value, so `gpu/` cannot go private until (c) shrinks RenderSubstrate or Core holds them behind a pointer.
 - `boot/`, the `host/` internals, `gpu/` and the `cpu/` internals are PRIVATE in `psxport.cmake`.
 - Title includes today: core 15-375 per repo, gpu up to 124 (Spyro), present up to 33 (Crash Bash), config up to 97 (Tomba). Each title's pass removes its own.
@@ -130,7 +131,7 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 ### 3.6 Docs and policy
 
 - **psxport `docs/features.md`.** Sections F-BOOT, F-TURN, F-INPUT, F-PICK, F-RENDER, F-WIDE, F-FPS60, F-FMV, F-CD, F-AUDIO, F-LOAD, F-SAVE and F-DEBUG, each at most 40 lines. Hop rows are written as `` `path:Symbol` ``.
-- **Every title's `docs/features.md`.** Title hops only, joined as `psxport F-X.n`.
+- **Every title's `docs/features.md`.** Title hops only, joined as `psxport F-X.n`. C-12 (the template) joins F-BOOT.1 (catalog and disc), F-BOOT.6 (`registerOverrides`, `createSession`), F-TURN.2 (`FrameDriver::stepFrame`), F-TURN.4 (run-end report), F-CD.1 (stock libcd binding), F-CD.3 (module landing), F-RENDER.1 (render path), F-RENDER.2 (`packetPool`), F-WIDE.1 (projection policy) and F-WIDE.2 (widened culls); psxport's `features.md` keeps those hop numbers.
 - **Codemap.** At most 150 lines in Owners-table shape, with no source-tree dump and no "Who owns it" chains.
 - **Renderer doc.** `presentation.md` is the one renderer doc. Delete `one-renderer.md` and `presentation-contract.md`.
 - **cpp_policy** (re-harness `cpp_policy.py`, called by psxport `check_cpp_style.py`):

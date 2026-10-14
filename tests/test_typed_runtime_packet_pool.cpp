@@ -94,7 +94,7 @@ void write_owned_packet(Core &core, GuestPacketFilter &filter, uint32_t addr, ui
 // filter suppresses it — the exact pair of answers that were impossible before.
 static void test_typed_runtime_fixed_pool_is_attributable_and_suppressible() {
   static FixedPoolRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(game->core.cfg == nullptr);
   CHECK(runtime.packetPool(game->core)->contains(0x80020020u));
@@ -118,7 +118,7 @@ static void test_typed_runtime_fixed_pool_is_attributable_and_suppressible() {
 // THE POSITIVE, heap form: both parity pools are tracked and the gap between them is NOT.
 static void test_typed_runtime_dynamic_pool_tracks_both_parities_without_the_gap() {
   static DynamicPoolRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(!runtime.packetPool(game->core)->contains(0x80020020u)); // no pool allocated yet
   game->core.mem_w32(kBasePtr0, 0x80020000u);
@@ -144,7 +144,7 @@ static void test_typed_runtime_dynamic_pool_tracks_both_parities_without_the_gap
 // so this case had nothing to re-read.
 static void test_typed_runtime_dynamic_pool_follows_a_reallocation() {
   static DynamicPoolRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   game->core.mem_w32(kBasePtr0, 0x80020000u);
   game->core.mem_w32(kEndPtr0, 0x80021000u);
@@ -169,7 +169,7 @@ static void test_typed_runtime_dynamic_pool_follows_a_reallocation() {
 // claiming the guest submitted nothing.
 static void test_runtime_declaring_no_pool_answers_not_owned() {
   static NoPoolRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(game->core.cfg == nullptr);
   CHECK(!runtime.packetPool(game->core));
@@ -187,7 +187,7 @@ namespace {
 // The census reads the pool once per logic frame, not once per guest store.
 void test_the_pool_is_read_once_per_logic_frame() {
   static CountingPoolRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   const int before = runtime.queries;
   for (uint32_t word = 0; word < 8; ++word) {
     game->core.mem_w32(0x80020020u + (4u * word), word);
@@ -207,7 +207,7 @@ void test_legacy_config_answers_from_its_window() {
   };
   static const GameHooks hooks{};
   LegacyGameRuntimeAdapter runtime(cfg, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK_EQ(game->core.cfg, &cfg);
   CHECK(runtime.packetPool(game->core)->contains(0x80020020u));

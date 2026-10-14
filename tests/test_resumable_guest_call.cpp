@@ -115,7 +115,7 @@ struct Fixture {
   std::unique_ptr<Game> game;
 
   Fixture() {
-    game = std::make_unique<Game>(runtime);
+    game = std::make_unique<Game>(runtime, psx::config::Config{});
     Core &core = game->core;
     core.imageCatalog().activate("resumable-call-test", {kEntry, kProgramEnd}, 0x52455331u);
     for (std::size_t i = 0; i < kProgram.size(); ++i) {

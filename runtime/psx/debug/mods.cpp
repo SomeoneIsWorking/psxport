@@ -3,8 +3,6 @@
 // restored next launch. Path: PSXPORT_SETTINGS or ./psxport_settings.ini (gitignored). Saved on every
 // overlay change; loaded by init().
 #include "mods.h"
-#include "cfg.h"
-#include "config.h"
 #include "config_vars.h"
 #include "render_capabilities.h"
 #include <lucent/log.h>
@@ -111,19 +109,14 @@ void Mods::save() const {
   if (!f) {
     return;
   }
-  // fps60 is on the CVar ladder. The overlay writes the plain member, so fold it back into the VALUE
-  // layer here — but only when nothing above Value is in force. A PSXPORT_FPS60 in the environment
-  // is a launch argument: persisting it would turn one run's flag into the player's saved setting,
-  // and they would never find out where it came from.
-  if (mTemporalInterpolationSupported && psx::config::cv_fps60.layer() < psx::config::Layer::Override) {
-    psx::config::cv_fps60.set(psx::config::Layer::Value, fps60 != 0);
-  }
+  // A launch PSXPORT_FPS60 is one run's choice; the player's saved one stays in the file.
+  const int savedFps60 = mLaunchFps60 ? mSavedFps60 : fps60;
   fprintf(f, "aspect=%d\nires=%d\nface_order=%d\n", aspect, ires, face_order);
   for (const psx::game::TitleIntSetting &setting : mTitleSettings) {
     fprintf(f, "%s=%ld\n", setting.var->name(), setting.var->value_for_save());
   }
   if (mTemporalInterpolationSupported) {
-    fprintf(f, "fps60=%d\n", psx::config::cv_fps60.value_for_save() ? 1 : 0);
+    fprintf(f, "fps60=%d\n", savedFps60 != 0 ? 1 : 0);
   }
   fclose(f);
 }
@@ -155,26 +148,19 @@ void Mods::load() {
       }
     } else if (!strcmp(k, "face_order")) {
       face_order = atoi(v);
-    }
-    // fps60 goes to the CVar's VALUE layer, not straight to the member: an env Override must beat
-    // the settings file, and that decision belongs to the ladder rather than to load order here.
-    else if (!strcmp(k, "fps60")) {
+    } else if (!strcmp(k, "fps60")) {
       if (mTemporalInterpolationSupported) {
-        psx::config::cv_fps60.set(psx::config::Layer::Value, atoi(v) != 0);
+        mSavedFps60 = atoi(v) != 0 ? 1 : 0;
       } else if (atoi(v) != 0) {
         lucent::warn(
             "mods", "{}: fps60=1 REFUSED — this title declares no temporal interpolation product", mods_path());
       }
     }
-    // A title setting goes to its CVar's VALUE layer, like fps60: an environment Override still wins.
+    // A title setting goes to its CVar's VALUE layer: an environment Override still wins.
     else if (const psx::game::TitleIntSetting *setting = findTitleSetting(k)) {
       setting->var->set(psx::config::Layer::Value, setting->range.clamp(atol(v)));
     }
-    // A key this loader does not recognise used to fall off the end of the chain and vanish. That is
-    // the settings-file half of exactly the same bug as PSXPORT_FPS60: a line the user (or a past
-    // version) wrote, silently doing nothing, with the file still looking like it configured
-    // something. Say it, and name the file — this is also the first thing you see if `save()` has
-    // ever written a key `load()` cannot read back.
+    // A line that configures nothing is reported, never dropped silently.
     else {
       lucent::warn("mods", "{}: unknown key \"{}\" ignored — it configures nothing", mods_path(), k);
     }
@@ -191,7 +177,7 @@ void Mods::load() {
   }
 }
 
-void Mods::init(bool interpolates, FaceOrder defaultFaceOrder) {
+void Mods::init(bool interpolates, FaceOrder defaultFaceOrder, std::optional<bool> launchFps60) {
   if (mInited) {
     return;
   }
@@ -205,22 +191,17 @@ void Mods::init(bool interpolates, FaceOrder defaultFaceOrder) {
   // file, restored next launch.
   ui = 1; // overlay always available
   load(); // the player's persisted choices win over the factory defaults
-  // ...and PSXPORT_FPS60 wins over those. THIS LINE IS THE WHOLE POINT OF THE CVar WORK: the
-  // variable has been in docs/config.md since it was written, has been set on real runs, and until
-  // now was read by NOTHING — a run configured with it was byte-identical to a run without it, with
-  // no message either way. It resolves through the ladder now, and cfg_dump()'s report says which
-  // layer the answer came from.
-  const bool requestedFps60 = psx::config::cv_fps60.get();
+  mLaunchFps60 = launchFps60.has_value();
+  const bool requestedFps60 = mLaunchFps60 ? *launchFps60 : mSavedFps60 != 0;
+  const char *source = mLaunchFps60 ? "PSXPORT_FPS60" : "settings";
   fps60 = mTemporalInterpolationSupported && requestedFps60 ? 1 : 0;
   if (!mTemporalInterpolationSupported && requestedFps60) {
     lucent::warn("fps60",
                  "interpolated 60fps REFUSED — this title declares no temporal interpolation product "
                  "(request source: {})",
-                 psx::config::layer_name(psx::config::cv_fps60.layer()));
+                 source);
   }
   if (fps60) {
-    lucent::info("fps60",
-                 "TRUE per-object interpolated 60fps ON (source: {})",
-                 psx::config::layer_name(psx::config::cv_fps60.layer()));
+    lucent::info("fps60", "TRUE per-object interpolated 60fps ON (source: {})", source);
   }
 }

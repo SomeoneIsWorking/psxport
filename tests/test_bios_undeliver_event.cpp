@@ -34,7 +34,7 @@ bool testEvent(Game &g, uint32_t handle) {
 }
 
 void test_undeliver_clears_a_delivered_nointr_event() {
-  auto g = std::make_unique<Game>(stubRuntime);
+  auto g = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   const uint32_t handle = openEnabled(*g, EV_MD_NOINTR);
   g->hle.deliverEvent(kClass, kSpec);
   CHECK_EQ(biosB0(*g, 0x20, kClass, kSpec, 0), 0u);
@@ -42,7 +42,7 @@ void test_undeliver_clears_a_delivered_nointr_event() {
 }
 
 void test_undeliver_leaves_another_class_fired() {
-  auto g = std::make_unique<Game>(stubRuntime);
+  auto g = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   const uint32_t handle = openEnabled(*g, EV_MD_NOINTR);
   g->hle.deliverEvent(kClass, kSpec);
   biosB0(*g, 0x20, kClass + 1u, kSpec, 0);

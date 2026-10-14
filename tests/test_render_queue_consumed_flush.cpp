@@ -21,7 +21,7 @@ void push_hud_item(RenderQueue &queue) {
 }
 
 void test_consumed_flush_is_empty_until_another_push() {
-  const auto game = std::make_unique<Game>(stubRuntime);
+  const auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   RenderQueue &queue = game->rq;
 
   push_hud_item(queue);

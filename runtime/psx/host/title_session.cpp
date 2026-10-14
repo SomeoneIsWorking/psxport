@@ -2,7 +2,6 @@
 
 #include "c_subsys.h" // mdec_init
 #include "config.h"
-#include "config_vars.h"
 #include "core.h"
 #include "dbg_server.h"
 #include "field_turn.h"
@@ -84,7 +83,7 @@ bool TitleSession::boot() {
     lucent::error("boot", "{} has no authenticated executable", title_.identity->displayName);
     return false;
   }
-  parts_->game = std::make_unique<Game>(runtime, services_.presentation);
+  parts_->game = std::make_unique<Game>(runtime, services_.presentation, services_.config);
   Game &game = *parts_->game;
   Core &core = game.core;
   game.hostInput.attachQuitScope(&services_.quit);
@@ -189,7 +188,7 @@ void TitleSession::step() {
     return;
   }
   const bool product = role_ == Role::Product;
-  if (product && psx::config::cv_repl.get() && !game.repl.beforeStep(&game.core, static_cast<std::uint32_t>(steps_))) {
+  if (product && game.config.repl && !game.repl.beforeStep(&game.core, static_cast<std::uint32_t>(steps_))) {
     end_ = End::Quit;
     return;
   }

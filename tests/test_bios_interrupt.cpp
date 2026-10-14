@@ -91,7 +91,7 @@ static void test_refuses_a_buffer_without_a_continuation(void) {
 }
 
 static void test_bios_hook_reset_and_return_entry_points(void) {
-  const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
+  const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   Core *c = &game->core;
   write_context(c, kResume);
 
@@ -121,7 +121,7 @@ static void ordinary_return_dispatch(Core *, uint32_t resume) {
 }
 
 static void test_return_from_exception_unwinds_instead_of_falling_through(void) {
-  const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
+  const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   write_context(&game->core, kResume);
   dispatch_entered = 0;
   dispatch_fell_through = 0;

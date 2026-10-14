@@ -85,7 +85,7 @@ constexpr std::uint32_t kPollProgram[] = {
 
 struct Fixture {
   psx::test::StubGameRuntime runtime;
-  std::unique_ptr<Game> game = std::make_unique<Game>(runtime);
+  std::unique_ptr<Game> game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   Fixture() {
     game->hle.irq_enabled = 1;
@@ -590,7 +590,7 @@ static void test_the_charge_granularity_is_one_block_not_one_instruction(void) {
 // traffic this is where it would show — a device-clock commit count far above the device reads.
 static void test_a_run_with_no_device_access_makes_no_device_commit(void) {
   psx::test::StubGameRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->hle.irq_enabled = 1;
   Core &core = game->core;
   // Pure main-RAM traffic through the OUT-OF-LINE memory callbacks, and no hardware register.

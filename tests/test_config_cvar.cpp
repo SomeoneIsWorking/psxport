@@ -5,10 +5,6 @@
 // (mods.cpp), and REPL/debug-server `debug ...` commands. "The REPL still overrides the environment
 // for the rest of the run" was the only precedence sentence anywhere in the repo.
 //
-// And one knob, PSXPORT_FPS60, is documented in docs/config.md and read by NOTHING. It has been set
-// on real runs. Nothing said so. A run measured with a flag that never applied is a measurement of
-// the wrong thing that looks exactly like a measurement of the right thing.
-//
 // So the three cases below, in order of how much they matter:
 //
 //   1. COMPATIBILITY (the important one). A knob that has been migrated onto a CVar must resolve
@@ -264,7 +260,6 @@ static void test_the_declared_inventory_is_not_empty(void) {
   fprintf(stderr, "  %d CVar(s) registered\n", n);
   CHECK(n >= 7);
   CHECK(psx::config::find("PSXPORT_NOAUDIO") != nullptr);
-  CHECK(psx::config::find("PSXPORT_FPS60") != nullptr); // documented since forever, read by NOTHING
   CHECK(psx::config::find("PSXPORT_DIAGNOSTIC_RUN") != nullptr);
   CHECK(psx::config::find("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT") != nullptr);
 }

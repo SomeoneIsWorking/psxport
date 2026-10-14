@@ -36,7 +36,7 @@ void recorded_handler(Core *) {
 
 void test_a_title_that_binds_nothing_installs_nothing() {
   psx::test::StubGameRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   game->platform_hle.initBuiltins();
   runtime.registerOverrides(*game);
@@ -47,7 +47,7 @@ void test_a_title_that_binds_nothing_installs_nothing() {
 
 void test_stock_libgte_binds_the_projection_leaves() {
   psx::test::StubGameRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   psx::hle::StockLibgte({.setGeomOffset = kSetGeomOffsetAddr, .setGeomScreen = kSetGeomScreenAddr}).bind(*game);
 
@@ -82,7 +82,7 @@ void test_stock_libcd_binds_its_located_entries_and_becomes_the_games_libcd() {
   psx::test::StubGameRuntime runtime;
   const psx::cd::StockLibcd libcd(
       {.read = kCdReadAddr, .readSync = kCdReadSyncAddr, .getSector = kCdGetSectorAddr}, {}, 0);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   libcd.bind(*game);
 
@@ -99,7 +99,7 @@ void test_stock_libgpu_binds_the_timeout_pair() {
                                       .timeoutCheck = kGpuTimeoutCheckAddr,
                                       .timeoutDeadlineWord = kGpuTimeoutDeadlineWord,
                                       .timeoutFlagWord = kGpuTimeoutFlagWord});
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   libgpu.bind(*game);
 
   OverrideFn arm = game->platform_hle.lookup(kGpuTimeoutArmAddr);
@@ -126,7 +126,7 @@ void test_gpu_timeout_arm_leaves_an_undeclared_word_untouched_and_unbound_when_a
   psx::test::StubGameRuntime runtime;
   const psx::hle::StockLibgpu libgpu(
       {.timeoutArm = kGpuTimeoutArmAddr, .timeoutDeadlineWord = kGpuTimeoutDeadlineWord});
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   libgpu.bind(*game);
 
   Core &core = game->core;
@@ -149,7 +149,7 @@ void test_legacy_entries_still_require_the_declared_window() {
   config.hle.windowLo[0] = kSetGeomOffsetAddr;
   config.hle.windowHi[0] = kSetGeomLeavesEnd;
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK(game->platform_hle.register_(kSetGeomOffsetAddr, recorded_handler));
   CHECK(!game->platform_hle.register_(kSetGeomScreenAddr, recorded_handler));
@@ -168,7 +168,7 @@ void test_every_legacy_window_slot_is_consumed_without_admitting_overflow() {
   }
   constexpr uint32_t kOverflowAddress = 0x80088050u;
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   for (const uint32_t address : addresses) {
     CHECK(game->platform_hle.register_(address, recorded_handler));

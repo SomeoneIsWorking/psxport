@@ -1,8 +1,8 @@
-#include "config_vars.h"
 #include "frame_pacer.h"
 #include "game.h"
 #include "game_iface.h"
 #include "testutil.h"
+#include "typed_config.h"
 
 #include "stub_game_runtime.h"
 #include <memory>
@@ -10,12 +10,13 @@
 namespace {
 
 psx::test::StubGameRuntime stubRuntime;
+const psx::config::Config unpaced{.unpaced = true};
 
 constexpr uint32_t kIStat = 0x1F801070u;
 
 void test_host_deadlines_belong_to_each_instance() {
-  auto first = std::make_unique<Game>(stubRuntime);
-  auto second = std::make_unique<Game>(stubRuntime);
+  auto first = std::make_unique<Game>(stubRuntime, unpaced);
+  auto second = std::make_unique<Game>(stubRuntime, unpaced);
   psx::frame::PaceInputs inputs{.quota = 1, .parts = 1, .fieldRateMilliHz = 50000, .nowMs = 1000};
   const auto a = first->framePacer.plan(inputs);
   CHECK(a.paced);
@@ -44,7 +45,7 @@ void test_default_runtime_still_delivers_display_time_and_irq() {
   const GameConfig config{};
   const GameHooks hooks{};
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, unpaced);
   const uint64_t before = game->timing.emulatedCpuTicks();
   runtime.pacePresentation(game->core, 1, 1);
   CHECK(game->timing.emulatedCpuTicks() > before);
@@ -58,7 +59,7 @@ void test_default_runtime_still_delivers_display_time_and_irq() {
 }
 
 void test_presented_field_wait_leaves_time_irq_and_fractional_phase_unchanged() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, unpaced);
   const uint64_t before = game->timing.emulatedCpuTicks();
   game->framePacer.waitPresentedFields(game->core, 1, 2);
   CHECK_EQ(game->timing.emulatedCpuTicks(), before);
@@ -83,8 +84,7 @@ void test_presented_field_wait_leaves_time_irq_and_fractional_phase_unchanged() 
 
 // A picker panel's pre-roll runs on the picker frame's clock, never its own pacer's.
 void test_pre_rolling_game_does_not_pace() {
-  psx::config::cv_nopace.set(psx::config::Layer::Runtime, false);
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->session.setPreRolling(true);
   CHECK(game->fastForwarding());
   game->framePacer.waitPresentedFields(game->core, 1, 1);
@@ -93,17 +93,24 @@ void test_pre_rolling_game_does_not_pace() {
 
   game->session.setPreRolling(false);
   CHECK(!game->fastForwarding());
-  psx::config::cv_nopace.set(psx::config::Layer::Runtime, true);
+}
+
+// PSXPORT_NOPACE reaches the pacer through the Game's launch config.
+void test_an_unpaced_game_never_plans_a_sleep() {
+  auto game = std::make_unique<Game>(stubRuntime, unpaced);
+  game->framePacer.waitPresentedFields(game->core, 1, 1);
+  psx::frame::PaceInputs probe{.quota = 1, .parts = 1, .fieldRateMilliHz = 50000, .nowMs = 1000};
+  CHECK_EQ(game->framePacer.plan(probe).nextMs, 1020.0);
 }
 
 } // namespace
 
 int main() {
-  psx::config::cv_nopace.set(psx::config::Layer::Runtime, true);
   RUN(host_deadlines_belong_to_each_instance);
   RUN(unpaced_calls_preserve_the_instance_deadline);
   RUN(default_runtime_still_delivers_display_time_and_irq);
   RUN(presented_field_wait_leaves_time_irq_and_fractional_phase_unchanged);
   RUN(pre_rolling_game_does_not_pace);
+  RUN(an_unpaced_game_never_plans_a_sleep);
   return pt_summary();
 }

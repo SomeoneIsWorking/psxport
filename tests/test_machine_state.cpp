@@ -56,7 +56,7 @@ Game *makeGame() {
     return game;
   }
   std::remove(kCardPath);
-  game = new Game(machineRuntime);
+  game = new Game(machineRuntime, {});
   card_overrides_init(game);
   return game;
 }

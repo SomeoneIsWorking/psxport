@@ -63,7 +63,7 @@ void program(Core &core, uint32_t madr, uint32_t bcr) {
 // handler read the BCR as a block count it would move that many words to the HEAD address and leave the
 // chain nodes untouched, which is exactly the bug.
 static void test_a_chained_transfer_walks_the_nodes() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
   // The fixture gives mode 2 a DELIBERATELY block-shaped BCR: a handler that ignored the sync mode would
@@ -89,7 +89,7 @@ static void test_a_chained_transfer_walks_the_nodes() {
 // MODE 1 IS UNCHANGED. A regression here would break every libcd title, because Sony's libcd fetches
 // every sector with a block-mode DMA3 and MMX4's working STR playback is exactly that.
 static void test_a_block_transfer_still_uses_the_block_count() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
   program(core, kBlockBase, 0x0004u | (2u << 16)); // mode 1, 4 words x 2 blocks = 8
@@ -105,7 +105,7 @@ static void test_a_block_transfer_still_uses_the_block_count() {
 // A SELF-LINK is the cheapest cycle a guest can write into its own RAM. It must not hang the host, and
 // the words already counted must still complete so the guest is not left polling a busy channel forever.
 static void test_a_self_linked_chain_terminates_and_completes() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
   core.mem_w32(kBaseA + 0, 0x01000000u | kPhysA); // 1 word, next -> itself
@@ -118,7 +118,7 @@ static void test_a_self_linked_chain_terminates_and_completes() {
 // A COUNT over the ceiling is refused with a stated bound rather than trusted, because the chain is guest
 // RAM and `count` is 24 bits of whatever the guest had there.
 static void test_an_oversized_count_stops_at_the_ceiling() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
   // THE COUNT FIELD IS 8 BITS. A linked-list header is `{count:8, next:24}`, so ONE node can declare at
@@ -147,7 +147,7 @@ static void test_an_oversized_count_stops_at_the_ceiling() {
 // A CHAIN ENDED BY DESIGN transfers nothing and still completes, so a guest that arms an empty chain
 // does not wedge.
 static void test_an_empty_chain_completes() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
   core.mem_w32(kBaseA + 0, 0x00000000u | kChainEnd);
@@ -159,7 +159,7 @@ static void test_an_empty_chain_completes() {
 // A BLOCK SIZE ENDING IN BINARY 10 IS STILL A BLOCK. The last sector of a Tekken 3 file reads 98 words
 // (BCR 0x00010062); BCR bits 0-1 are size bits, not a sync mode.
 static void test_a_block_size_ending_in_binary_10_is_not_a_chain() {
-  auto *game = new Game(stubRuntime);
+  auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
   for (uint32_t i = 0; i < 98u; i++) {

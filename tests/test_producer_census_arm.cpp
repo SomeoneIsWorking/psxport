@@ -33,7 +33,7 @@
 namespace {
 
 std::unique_ptr<Game> make_game(psx::test::StubGameRuntime &runtime) {
-  return std::make_unique<Game>(runtime);
+  return std::make_unique<Game>(runtime, psx::config::Config{});
 }
 
 void clear_override(void) {

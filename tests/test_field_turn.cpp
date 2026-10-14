@@ -90,7 +90,7 @@ struct Fixture {
   Driver *driver = nullptr;
 
   Fixture() {
-    game = std::make_unique<Game>(runtime);
+    game = std::make_unique<Game>(runtime, psx::config::Config{});
     runtime.registerOverrides(*game);
     auto owned = std::make_unique<Driver>();
     owned->game = game.get();

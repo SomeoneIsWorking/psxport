@@ -24,7 +24,7 @@ private:
 
 void test_begin_publishes_the_frame_and_services_the_pad() {
   PadRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->pad.setButtons(static_cast<uint16_t>(0xFFFFu & ~0x0008u));
   game->core.mem_w8(kSlot0 + 1, 0x00u);
 

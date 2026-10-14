@@ -43,7 +43,7 @@ ChildResult runClearDisplayChild() {
     setenv("PSXPORT_WATCHDOG", "1", 1);
     setenv("PSXPORT_WATCHDOG_BOOT", "3", 1);
 
-    static Game game{stubRuntime};
+    static Game game{stubRuntime, {}};
     game.core.rsub.mode.setPath(RenderPath::Device);
     watchdog_init();
     game.gpu.gpu_clear_display(&game.core, /*do_blit=*/0);

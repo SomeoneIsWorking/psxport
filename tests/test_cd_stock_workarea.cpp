@@ -48,7 +48,7 @@ void command(Core &core, OverrideFn entry, uint8_t code, uint32_t parameter) {
 void test_direct_runtime_publishes_setloc_and_setmode_through_stock_command() {
   psx::test::StubGameRuntime runtime;
   const psx::cd::StockLibcd libcd = commandLibcd({kPositionAddress, kModeAddress});
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   libcd.bind(*game);
   auto &core = game->core;
   CHECK(core.cfg == nullptr);
@@ -86,7 +86,7 @@ void test_unconfigured_direct_work_area_and_absent_parameters_do_not_write() {
   psx::test::StubGameRuntime runtime;
   const psx::cd::StockLibcd unconfigured = commandLibcd({});
   const psx::cd::StockLibcd configured = commandLibcd({kPositionAddress, kModeAddress});
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   unconfigured.bind(*game);
   auto &core = game->core;
   OverrideFn entry = game->platform_hle.lookup(kCommandAddress);
@@ -121,7 +121,7 @@ void test_legacy_adapter_retains_contiguous_position_and_mode_layout() {
   config.hle.windowLo[0] = kCommandAddress;
   config.hle.windowHi[0] = kCommandAddress + 4u;
   LegacyGameRuntimeAdapter runtime(config, hooks);
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   auto &core = game->core;
   CHECK(core.cfg == &config);
   OverrideFn entry = game->platform_hle.lookup(kCommandAddress);
@@ -142,7 +142,7 @@ void test_legacy_adapter_retains_contiguous_position_and_mode_layout() {
 void test_every_command_publishes_the_last_command_byte() {
   psx::test::StubGameRuntime runtime;
   const psx::cd::StockLibcd libcd = commandLibcd({kPositionAddress, kModeAddress, kLastCommandAddress});
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   libcd.bind(*game);
   auto &core = game->core;
   core.mem_w8(kLastCommandAddress, kSentinel);

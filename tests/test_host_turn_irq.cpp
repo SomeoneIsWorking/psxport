@@ -40,11 +40,11 @@ public:
     psx::cpu::shutdownHostTurn(game->core);
   }
 
-  std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
+  std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
 };
 
 void test_unregistered_request_retires_after_critical_section() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->core.pending_work = Core::PW_HOST | Core::PW_IRQ;
   game->hle.irq_enabled = 0;
   psx::cpu::serviceHostTurn(game->core);
@@ -57,7 +57,7 @@ void test_unregistered_request_retires_after_critical_section() {
 
 void test_foreign_core_request_does_not_dispatch_registered_handler() {
   HostTurnFixture fixture;
-  auto foreignGame = std::make_unique<Game>(stubRuntime);
+  auto foreignGame = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   foreignGame->hle.irq_enabled = 1;
   foreignGame->core.pending_work = Core::PW_HOST | Core::PW_IRQ;
 

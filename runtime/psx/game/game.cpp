@@ -9,16 +9,17 @@ psx::game::HostIdentity Game::hostIdentity() const {
   return declared ? *declared : psx::game::HostIdentity{};
 }
 
-Game::Game(psx::game::GameRuntime &runtime)
-    : core(runtime), ownedGpuDevice(std::make_unique<GpuDevice>()), gpu_dev(*ownedGpuDevice), runtime(runtime) {
+Game::Game(psx::game::GameRuntime &runtime, const psx::config::Config &config)
+    : config(config), core(runtime), ownedGpuDevice(std::make_unique<GpuDevice>()), gpu_dev(*ownedGpuDevice),
+      runtime(runtime) {
   wireRuntimeMembers();
 }
 
 // A Game that presents through a device the caller owns. Nothing here may create or release one: the
 // device outlives this Game by contract, and the process claim below points at it exactly as it would
 // for a self-owning Game.
-Game::Game(psx::game::GameRuntime &runtime, GpuDevice &presentation)
-    : core(runtime), gpu_dev(presentation), runtime(runtime) {
+Game::Game(psx::game::GameRuntime &runtime, GpuDevice &presentation, const psx::config::Config &config)
+    : config(config), core(runtime), gpu_dev(presentation), runtime(runtime) {
   wireRuntimeMembers();
 }
 
@@ -46,7 +47,7 @@ void Game::wireRuntimeMembers() {
     GpuDevice::sInstance = &gpu_dev;
   }
   mods.declareTitleSettings(runtime.titleIntSettings());
-  mods.init(runtime.interpolates(), runtime.renderCapabilities().defaultFaceOrder);
+  mods.init(runtime.interpolates(), runtime.renderCapabilities().defaultFaceOrder, config.fps60);
   // The declared render path is installed here so no title can run on a path it did not declare.
   render_path_install(&core);
   disc_state_init(&disc);

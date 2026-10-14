@@ -226,7 +226,7 @@ struct Fixture {
   std::unique_ptr<Game> game;
 
   Fixture() {
-    game = std::make_unique<Game>(runtime);
+    game = std::make_unique<Game>(runtime, psx::config::Config{});
     Core &core = game->core;
     core.imageCatalog().activate("resume-test", {kEntry, kImageEnd}, 0x52455355u);
     for (std::size_t i = 0; i < kProgram.size(); ++i) {
@@ -294,7 +294,7 @@ static void test_the_return_address_is_the_callers_and_not_whatever_the_guest_le
 // ran by accident, and the case that made a working framework look broken.
 static void test_a_guest_store_into_its_own_code_reaches_ram(void) {
   Runtime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   Core &core = game->core;
   core.imageCatalog().activate("smc-test", {kEntry, kSmcImageEnd}, 0x534D4355u);
   for (std::size_t i = 0; i < kSmcProgram.size(); ++i) {
@@ -329,7 +329,7 @@ extern "C" void onAbortFromTheNeverReturningGuest(int) {
 
 int runTheNeverReturningGuest() {
   Runtime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   Core &core = game->core;
   core.imageCatalog().activate(
       "resume-spin", {kEntry, kEntry + 4u * static_cast<std::uint32_t>(kSpinWords)}, 0x5350494Eu);

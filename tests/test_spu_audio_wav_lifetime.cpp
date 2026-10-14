@@ -36,7 +36,7 @@ void test_active_wav_is_finalized_before_spu_owner_teardown() {
 
   CHECK_EQ(setenv("PSXPORT_WAV", initial.c_str(), 1), 0);
   {
-    auto game = std::make_unique<Game>(stubRuntime);
+    auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
     game->spu_audio.init();
     game->spu_audio.wavReopen(active.c_str());
   }

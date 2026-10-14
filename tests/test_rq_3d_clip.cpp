@@ -70,7 +70,7 @@ static const Shape kShapes[] = {kGuestWorldShape, kNativeWorldShape};
 static const int kShapeCount = static_cast<int>(sizeof kShapes / sizeof kShapes[0]);
 
 static Submitted submit(int aspect, bool latch, Shape shape, int guestClipRight = kGuestClipRight, int guestLeft = 0) {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->gpu.s_disp_w = kNativeWidth;
   game->mods.aspect = aspect;
   // The GTE path is what `guestWidescreenAllowed()` answers for, and it is the only path on which a

@@ -20,7 +20,7 @@ psx::test::StubGameRuntime stubRuntime;
 
 // One Game per test process (2 MB RAM + 1 MB VRAM as members — keep it off the stack).
 static Game *gam() {
-  static const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
+  static const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   return game.get();
 }
 

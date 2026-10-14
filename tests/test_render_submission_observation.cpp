@@ -120,7 +120,7 @@ void test_admission_preserves_observations_and_items() {
     auto ordinary = std::make_unique<RenderQueue>();
     CHECK_EQ(ordinary->items[5].dbg_node, 0u);
   }
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto admission = std::make_unique<RenderQueue>(RenderQueue::Observation::Admission);
   auto &core = game->core;
   CHECK_EQ(admission->items[5].dbg_node, 0u);

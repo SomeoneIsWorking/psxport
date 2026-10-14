@@ -16,7 +16,7 @@ uint32_t fixed_rng(Core *) {
 
 const GameHooks hooks{.schedRng = fixed_rng};
 Game *make_game() {
-  Game *game = new Game(stubRuntime);
+  Game *game = new Game(stubRuntime, {});
   game->core.hooks = &hooks;
   game->core.mem_w16(kWaitCounter, 0x4567u);
   game->core.mem_w16(kTask + 0x56u, 0xBEEFu);

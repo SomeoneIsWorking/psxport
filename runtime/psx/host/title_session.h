@@ -6,6 +6,7 @@
 
 #include "frame_loop_shell.h"
 #include "gpu_vk_device.h"
+#include "typed_config.h"
 
 #include <cstdint>
 #include <memory>
@@ -21,6 +22,7 @@ namespace psx::host {
 
 // What every session of the process shares, owned by ProductHost.
 struct SessionServices {
+  const psx::config::Config &config;
   GpuDevice &presentation;
   psx::input::QuitScope &quit;
   RunBudget &budget;

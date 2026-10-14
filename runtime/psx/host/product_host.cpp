@@ -51,14 +51,15 @@ std::vector<std::string> splitSlugs(const char *text) {
 } // namespace
 
 ProductHost::Process::Process(const TitleCatalog &catalog)
-    : windowTitle(catalog.productName()), budget(RunBudget::fromConfig()),
-      services{presentation.device(), quit, budget} {
+    : config(psx::config::Config::fromEnvironment()), windowTitle(catalog.productName()),
+      budget(RunBudget::fromConfig(config)), services{config, presentation.device(), quit, budget} {
   // The window belongs to the product, not to whichever Game brought the device up first.
   presentation.setWindowTitle(windowTitle.c_str());
   // The watchdog is process-wide signal state: armed once here, never by a session.
   watchdog_init();
   memcensus_init();
   cfg_dump();
+  lucent::info("cfg", "launch config: {}", config.describe());
 }
 
 ProductHost::Process::~Process() {

@@ -49,7 +49,7 @@ std::string scratchPath(const char *name) {
 
 // Constructs a Game for `runtime`, initialises its card, and returns the file it chose.
 std::string cardChosenBy(IdentifiedRuntime &runtime) {
-  const auto game = std::make_unique<Game>(runtime);
+  const auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   game->memcard.init();
   return game->memcard.path();
 }
@@ -57,7 +57,7 @@ std::string cardChosenBy(IdentifiedRuntime &runtime) {
 void test_a_declared_identity_reaches_the_game() {
   const psx::game::HostIdentity declared{.cardEnvVar = kCardVar, .cardDefaultPath = "ignored-default.mcr"};
   IdentifiedRuntime runtime(&declared);
-  const auto game = std::make_unique<Game>(runtime);
+  const auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   const psx::game::HostIdentity seen = game->hostIdentity();
   CHECK(std::string(seen.cardEnvVar) == std::string(kCardVar));
   CHECK(std::string(seen.cardDefaultPath) == std::string("ignored-default.mcr"));
@@ -65,7 +65,7 @@ void test_a_declared_identity_reaches_the_game() {
 
 void test_no_declaration_is_an_honest_null_identity() {
   IdentifiedRuntime runtime(nullptr);
-  const auto game = std::make_unique<Game>(runtime);
+  const auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   const psx::game::HostIdentity seen = game->hostIdentity();
   CHECK(seen.cardEnvVar == nullptr);
   CHECK(seen.cardDefaultPath == nullptr);

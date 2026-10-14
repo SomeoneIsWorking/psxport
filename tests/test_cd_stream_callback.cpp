@@ -89,7 +89,7 @@ std::unique_ptr<Game> freshGame() {
   config.recMainHi = (kCallback & 0x1FFFFFFFu) + 4u;
   config.cdReadyCbPtr = kCallbackSlot;
   legacyRuntime.emplace(config, hooks);
-  auto game = std::make_unique<Game>(*legacyRuntime);
+  auto game = std::make_unique<Game>(*legacyRuntime, psx::config::Config{});
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->cd.stream_active = 1;
@@ -103,7 +103,7 @@ std::unique_ptr<Game> freshGame() {
 
 std::unique_ptr<Game> freshInterruptOwnedGame() {
   static DirectRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);

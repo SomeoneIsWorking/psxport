@@ -331,7 +331,7 @@ void configureStream(Game &game) {
 
 std::unique_ptr<Game> startStream() {
   static StreamRuntime runtime;
-  auto game = std::make_unique<Game>(runtime);
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   configureStream(*game);
   return game;

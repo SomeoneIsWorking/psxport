@@ -50,7 +50,7 @@ int codeInSecondSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) 
 } // namespace
 
 static void test_stock_read_refuses_without_a_position() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->core.r[A0] = 1;
   game->core.r[A1] = kBuffer;
   game->core.r[A2] = 0;
@@ -65,7 +65,7 @@ static void test_stock_read_refuses_without_a_position() {
 }
 
 static void test_zero_sector_stock_read_completes_without_inventing_drive_work() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->cd.setloc_lba = 321;
   game->cd.sec_pos = 40;
   game->cd.sec_len = 2352;
@@ -86,7 +86,7 @@ static void test_zero_sector_stock_read_completes_without_inventing_drive_work()
 }
 
 static void test_stock_readsync_reports_completed_and_zeros_result() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   for (uint32_t i = 0; i < 8; i++) {
     game->core.mem_w8(kResult + i, static_cast<uint8_t>(0x80u + i));
   }
@@ -103,7 +103,7 @@ static void test_stock_readsync_reports_completed_and_zeros_result() {
 }
 
 static void test_stock_cdsync_reports_ready_and_zeros_result() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   for (uint32_t i = 0; i < 8; i++) {
     game->core.mem_w8(kResult + i, static_cast<uint8_t>(0x90u + i));
   }
@@ -120,7 +120,7 @@ static void test_stock_cdsync_reports_ready_and_zeros_result() {
 }
 
 static void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   core.mem_w8(kBuffer, 0x00u);
   core.mem_w8(kBuffer + 1, 0x03u);
@@ -156,7 +156,7 @@ static void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
 }
 
 static void test_stock_pause_stops_stream_and_accepts_null_output() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->cd.stock_reading = 1;
   game->cd.stream_active = 1;
   game->core.r[A0] = 0x09u;
@@ -186,7 +186,7 @@ static void test_stock_pause_stops_stream_and_accepts_null_output() {
 // unless the feeder is shown running first. That is the whole lesson of the nine dead taps in this
 // workspace, so it is asserted rather than assumed.
 static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_not_move_it() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   const uint64_t atRest = game->core.lightrecExecutor().counters().invalidations;
 
   // POSITIVE: the owner is fed on purpose, and the counter moves. Without this line the zero below is
@@ -209,7 +209,7 @@ static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_no
 // The positive feeder, through the controller's sector-source binding: each sector costs ONE
 // invalidation (its range, reported once), not one per byte copied.
 static void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->cdc.disc_read_raw_fn = fakeSector;
   game->cd.setloc_lba = 7;
   game->core.r[A0] = 3; // sectors
@@ -264,7 +264,7 @@ static void test_a_multi_sector_read_invalidates_translated_code_in_a_later_sect
 // The refusal path must be just as quiet: with no Setloc the read never starts, so there is no write and
 // nothing to report. A refusal that still reported a range would invalidate on every unpositioned poll.
 static void test_a_refused_read_reports_no_executable_write() {
-  auto game = std::make_unique<Game>(stubRuntime);
+  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   psx::cpu::notifyExecutableWrite(game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
   const uint64_t before = game->core.lightrecExecutor().counters().invalidations;
   game->core.r[A0] = 4;
