@@ -13,19 +13,7 @@ void overlay_glue_init(
 }
 
 void overlay_glue_frame_begin(Core *core) {
-  // Live world-position HUD: camera/Tomba position (int16 world units in scratchpad) + the
-  // current stage entry pointer. These guest addresses are the same ones the engine RE
-  // established for the coordinate readout; reading them here keeps gpu_vk.cpp free of overlay
-  // concerns.
-  //
-  // In SBS mode both cores hit this per frame; the overlay is one host UI, so we push the world
-  // coords from ONE core — the `sbs show`-selected one — rather than let A and B overwrite each
-  // other's readout each frame. Standalone: core is the sole core, push unconditionally.
   if (core && core->game) {
-    core->game->rml_overlay.setWorld((int16_t)core->mem_r16(0x1F8000D2u),
-                                     (int16_t)core->mem_r16(0x1F8000D6u),
-                                     (int16_t)core->mem_r16(0x1F8000DAu),
-                                     core->mem_r32(0x801FE00Cu));
     core->game->rml_overlay.newFrame();
   }
 }

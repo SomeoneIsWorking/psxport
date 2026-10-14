@@ -123,6 +123,12 @@ void Core::mem_w8_unnotified(uint32_t a, uint8_t v) {
 void Core::mem_w32_unnotified(uint32_t a, uint32_t v) {
   writeGuestMemory<uint32_t, false>(a, v, psx::cpu::ExecutableWriteSource::MappedStore);
 }
+void Core::mem_write(uint32_t a, std::span<const uint8_t> bytes, psx::cpu::ExecutableWriteSource source) {
+  for (std::size_t i = 0; i < bytes.size(); i++) {
+    mem_w8_unnotified(a + static_cast<uint32_t>(i), bytes[i]);
+  }
+  psx::cpu::notifyExecutableWrite(*this, {a, a + static_cast<uint32_t>(bytes.size())}, source);
+}
 
 // lwl/lwr/swl/swr: little-endian unaligned word merge.
 uint32_t Core::mem_lwl(uint32_t cur, uint32_t a) {

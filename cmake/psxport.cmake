@@ -130,7 +130,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_device.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu/gp0_record_tap.cpp # executed GP0 commands into the FrameRecord
   ${PSXPORT_ROOT}/runtime/psx/gpu/texture_feedback.cpp # draws that sample VRAM gpu.c's texture cache may hold stale
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gp0_primitive_decode.cpp # a GP0 draw packet's words to a record primitive
+  ${PSXPORT_ROOT}/runtime/psx/present/gp0_primitive_decode.cpp # a GP0 draw packet's words to a record primitive
   ${PSXPORT_ROOT}/runtime/psx/present/frame_record.cpp # one logic frame's GPU work in execution order
   ${PSXPORT_ROOT}/runtime/psx/present/emission_scope.cpp # producer scopes and the packet keys they bind
   ${PSXPORT_ROOT}/runtime/psx/present/keyed_blend.cpp # the in-between record from N-1 and N by key
@@ -163,7 +163,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cd/disc.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/disc_provision.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cd_position.cpp
-  ${PSXPORT_ROOT}/runtime/psx/cd/cd_override.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cd_ready_delivery.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cd_stock_read_completion.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/stock_cd_work_area.cpp
@@ -211,7 +210,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/hle/stock_libgpu.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/stock_libgte.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/stock_vsync.cpp
-  ${PSXPORT_ROOT}/runtime/psx/platform/scheduler.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot/run_end_report.cpp # the one report a finished run owes
   ${PSXPORT_ROOT}/runtime/psx/host/product_host.cpp # the multi-title product: picker, then the chosen title, then the picker
   ${PSXPORT_ROOT}/runtime/psx/host/title_session.cpp # one steppable boot-to-exit run of one catalog title
@@ -245,6 +243,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/platform/watchdog.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot/boot.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/psx_exe_image.cpp
+  ${PSXPORT_ROOT}/runtime/psx/game/disc_executable.cpp # a boot stub's hand-off to an executable on its disc
   ${PSXPORT_ROOT}/runtime/ui/rmlui_overlay.cpp  # RmlUi LIFETIME only — the UI itself is runtime/ui/
   ${PSXPORT_ROOT}/runtime/ui/rmlui_render_gpu.cpp
   ${PSXPORT_ROOT}/runtime/ui/rml_text.cpp       # DATA -> RML markup boundary (see rml_text.h)
@@ -282,8 +281,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu/render_submission.cpp
   ${PSXPORT_ROOT}/runtime/psx/present/wide_2d_layout.cpp # the 2D layout transform for a Core, by either widening mechanism
   ${PSXPORT_ROOT}/runtime/psx/gpu/painter_object_layer.cpp # atomic painter admission + authored command plan
-  ${PSXPORT_ROOT}/runtime/psx/frame/pc_scheduler.cpp     # PC-native cooperative task scheduler; stage bodies via hooks (P1.7c)
-  ${PSXPORT_ROOT}/runtime/psx/platform/synchronous_task_wait.cpp # one native synchronous FUN_80044BD4 owner
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
 add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC})
@@ -342,9 +339,7 @@ target_include_directories(psxport PUBLIC
   ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr/include
   ${PSXPORT_ROOT}/vendor/rmlui/Include ${PSXPORT_ROOT}/vendor/rmlui/Backends)
-# NO game include dirs: as of P1.7c the framework owns Fps60/RenderQueue/PcScheduler/VerifyHarness/FfSpan
-# (their headers moved to runtime/psx/; the game reaches into them only through the GameHooks seam). The
-# framework #includes no game/ header — the psxport_smoke link proves it (no game/** symbol resolves).
+# NO game include dirs: the framework #includes no game/ header — the psxport_smoke link proves it.
 
 # Framework internals no title includes; framework tests and tools link psxport_internal for them.
 add_library(psxport_internal INTERFACE)

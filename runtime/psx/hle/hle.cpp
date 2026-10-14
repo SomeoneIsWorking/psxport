@@ -466,9 +466,8 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
           s_ev[i].spec = a1;
           s_ev[i].mode = a2;
           s_ev[i].func = c->r[A3];
-          // `PSXPORT_DEBUG=ev` — which events a game opens, and the handle each got. A port must
-          // put those CLASSES into GameConfig::irqEventClasses or the per-frame delivery has
-          // nothing to deliver and every TestEvent wait spins forever. There was no way to
+          // `PSXPORT_DEBUG=ev` — which events a game opens, and the handle each got. A title's frame
+          // driver must deliver those CLASSES or every TestEvent wait spins forever. There was no way to
           // discover a game's classes short of reading its OpenEvent call sites by hand; this
           // prints them from the run. Handle is what TestEvent/WaitEvent are later called with,
           // so it also links a spinning poll back to the event it is waiting on.

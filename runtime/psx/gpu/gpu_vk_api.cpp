@@ -13,7 +13,6 @@
 #include "game.h"
 #include "gpu_vk.h"
 #include "gpu_vk_device_handles.h" // s_dev / s_inited, spelled once for every renderer TU
-#include "gpu_vk_fadewatch.h"
 #include "gpu_vk_internal.h"
 #include "image_writer.h"
 #include "overlay_glue.h"
@@ -84,7 +83,6 @@ void gpu_vk_present(Core *core, const uint16_t *src, int sx, int sy, int w, int 
   overlay_glue_frame_begin(core);
   psx::picture::announceOnChange(*core, w); // `w` is why: see picture_announce.h
   core->game->gpu_vk.present(src, sx, sy, w, h);
-  gpu_vk_fadewatch_tap(core, sx, sy, w, h);
 }
 void gpu_vk_repaint(Core *core) {
   overlay_glue_frame_begin(core); // the RmlUi overlay stays interactive while the game is frozen

@@ -23,7 +23,7 @@ TitleCommandReply runTitleCommand(Core &core, const std::string &line) {
     return {};
   }
   TitleCommandReply result;
-  result.handled = core.runtime.titleCommand(core, command.c_str(), trimmed.c_str(), reply);
+  result.handled = core.runtime.titleCommand(core, {.command = command.c_str(), .line = trimmed.c_str()}, reply);
   std::fclose(reply);
   result.text.assign(buffer != nullptr ? buffer : "", length);
   std::free(buffer);

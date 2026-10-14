@@ -1,14 +1,12 @@
 #include "executable_provisioner.h"
 
 #include "disc.h"
-#include "disc_file.h"
 #include "fs_util.h"
 #include "title_catalog.h"
 #include "title_selection.h"
 
 #include <lucent/log.h>
 
-#include <span>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -49,24 +47,20 @@ Provisioning provisionExecutable(const TitleIdentity &title, const std::filesyst
         "provision", "{} is missing and {} names no executable on its disc", target.string(), title.displayName);
     return Provisioning::Unavailable;
   }
-  const std::string discPath(title.discExecutablePath);
-  std::vector<std::uint8_t> bytes;
-  {
+  const SelectionResult selection = [&title] {
     TitleDisc disc(title);
-    if (!psx::cd::readDiscFile(disc.state(), discPath.c_str(), bytes)) {
-      lucent::warn("provision",
-                   "{} is missing and {} could not be read from {}'s disc",
-                   target.string(),
-                   discPath,
-                   title.displayName);
-      return Provisioning::Unavailable;
-    }
-  }
-  const SelectionResult selection = selectExecutable(title.serial, bytes, std::span(&title, 1));
+    return selectDiscExecutable(disc.state(), title);
+  }();
   if (!selection) {
-    lucent::warn("provision", "the disc's {} is not {}: {}", discPath, title.displayName, selection.detail);
+    lucent::warn("provision",
+                 "{} is missing and {}'s disc did not supply it: {}",
+                 target.string(),
+                 title.displayName,
+                 selection.detail);
     return Provisioning::Unavailable;
   }
+  const std::string discPath(title.discExecutablePath);
+  const std::vector<std::uint8_t> &bytes = selection.bytes;
   if (!Fs::writeFile(target.string(), bytes.data(), bytes.size())) {
     lucent::error("provision", "cannot write {}", target.string());
     return Provisioning::Unavailable;

@@ -319,7 +319,6 @@ struct GpuState {
   void gpu_gp1(uint32_t w);
   void gpu_dma2_linked_list(Core *core, uint32_t madr);
   void gpu_dma2_block(Core *core, uint32_t madr, int count); // RAM -> GPU only
-  void gpu_native_load_image(Core *core, int x, int y, int w, int h, uint32_t src, std::span<const uint16_t> pixels);
   int gpu_native_load_vram(const char *path);
   void ensure_window();
   void blit_src(const uint16_t *src, int sx, int sy);
@@ -359,7 +358,6 @@ void gpu_present_ex(Core *core, int do_blit);
 // See the comment above shot_triggers in gpu_native.cpp (issue 0040).
 void gpu_present_frame_capture(Core *core);
 void gpu_clear_display(Core *core); // FMV/splash teardown: black the display FB + present (no stale pixels)
-void gpu_native_load_image(Core *core, int x, int y, int w, int h, uint32_t src);
 int gpu_native_load_vram(Core *core, const char *path);
 void gpu_native_shot(Core *core, const char *path);
 int gpu_frame_no(Core *core);

@@ -37,7 +37,6 @@ void bindPerCoreDevices(Game &game, psx::frame::FrameLoopShell &shell) {
   shell.bindRunningCore(core);
   game.spu_audio.init();
   game.gpu.gpu_native_init();
-  game.cd.overridesInit();
   game.platform_hle.initBuiltins();
   game.pad.overridesInit();
   core.r[4] = 1;

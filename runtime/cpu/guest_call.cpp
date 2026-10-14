@@ -21,6 +21,10 @@ ExecutionResult dispatchGuestWithArguments(Core &core,
   return dispatchGuest(core, address, budget, "guest_call.cpp: callGuest");
 }
 
+std::uint32_t guestReturnValue(const Core &core) {
+  return core.r[2];
+}
+
 void dispatchGuestWithArgumentsToReturn(Core &core,
                                         std::uint32_t address,
                                         std::span<const std::uint32_t> arguments,

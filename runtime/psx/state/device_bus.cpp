@@ -34,7 +34,7 @@
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kBusLayoutVersion = 2;
+constexpr std::uint8_t kBusLayoutVersion = 3;
 
 // CdcState's queue, verbatim. `CdcIrqEnt` is a plain-C struct so it is written field by field rather
 // than memcpy'd: a memcpy would put the struct's padding in the file, and padding is not a contract.
@@ -554,10 +554,6 @@ bool readCardSection(Game &game, BlobReader &in, std::string &error) {
 void writeCdSection(Game &game, BlobWriter &out) {
   const Cd &cd = game.cd;
   out.u8(kBusLayoutVersion);
-  out.i32(cd.pending_music);
-  out.u8(cd.pm_chan);
-  out.u32(cd.pm_start);
-  out.u32(cd.pm_end);
   out.array(cd.stock_command_response.data(), cd.stock_command_response.size());
   out.boolean(cd.stock_command_response_valid);
   out.i32(cd.setloc_lba);
@@ -572,10 +568,6 @@ bool readCdSection(Game &game, BlobReader &in, std::string &error) {
     return false;
   }
   Cd &cd = game.cd;
-  cd.pending_music = in.i32();
-  cd.pm_chan = in.u8();
-  cd.pm_start = in.u32();
-  cd.pm_end = in.u32();
   in.array(cd.stock_command_response.data(), cd.stock_command_response.size());
   cd.stock_command_response_valid = in.boolean();
   cd.setloc_lba = in.i32();

@@ -98,14 +98,6 @@ void gpu_disp_region(Core *core, int *sx, int *sy, int *w, int *h) {
 void gpu_clear_display(Core *core) {
   core->game->gpu.gpu_clear_display(core);
 }
-void gpu_native_load_image(Core *core, int x, int y, int w, int h, uint32_t src) {
-  std::vector<uint16_t> pixels(static_cast<size_t>(std::max(w, 0)) * static_cast<size_t>(std::max(h, 0)));
-  for (size_t i = 0; i < pixels.size(); i++) {
-    pixels[i] = core->mem_r16(src + static_cast<uint32_t>(i * 2));
-  }
-  core->gpuDevice.loadImage(x, y, w, h, pixels);
-  core->game->gpu.gpu_native_load_image(core, x, y, w, h, src, pixels);
-}
 int gpu_native_load_vram(Core *core, const char *path) {
   return core->game->gpu.gpu_native_load_vram(path);
 }

@@ -230,21 +230,9 @@ LegacyGameRuntimeAdapter::createTemporalFramePresentation(Game &game) {
   return std::make_unique<Fps60>(game, makeHostWorldPassStrategy(game));
 }
 
-bool LegacyGameRuntimeAdapter::titleCommand(Core &core, const char *command, const char *line, std::FILE *reply) {
+bool LegacyGameRuntimeAdapter::titleCommand(Core &core, const psx::game::TitleCommandLine &input, std::FILE *reply) {
+  const auto [command, line] = input;
   const GameHooks &hooks = *legacyHooks();
-  if (std::strcmp(command, "tp") == 0 && hooks.replCamTeleport && hooks.replCamTeleportOff) {
-    int x = 0;
-    int y = 0;
-    int z = 0;
-    if (std::sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) {
-      hooks.replCamTeleport(&core, x, y, z);
-      std::fprintf(reply, "tp camera -> (%d,%d,%d)\n", x, y, z);
-    } else {
-      hooks.replCamTeleportOff(&core);
-      std::fprintf(reply, "tp off (camera follows player)\n");
-    }
-    return true;
-  }
   if (!hooks.replCommand || !hooks.replCommand(&core, command, line)) {
     return false;
   }

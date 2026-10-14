@@ -834,7 +834,7 @@ static void dbg_exec(FILE *out, const char *line) {
     // the only point at which no native override is active and every device is in a state a later run
     // can resume from. Answers on the SAME channel, including a refusal and its reason.
     psx::state::handleControlCommand(*s_ctx, line, out);
-  } else if (s_ctx->runtime.titleCommand(*s_ctx, cmd, line, out)) {
+  } else if (s_ctx->runtime.titleCommand(*s_ctx, {.command = cmd, .line = line}, out)) {
   } else {
     fprintf(out, "? %s  (try 'help')\n", line);
   }

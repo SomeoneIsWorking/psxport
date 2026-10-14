@@ -42,14 +42,6 @@ void legacy_boot_init(Core *) {
   ++legacyBootInitializations;
 }
 
-int legacyTeleports;
-
-void legacy_cam_teleport(Core *, int, int, int) {
-  ++legacyTeleports;
-}
-
-void legacy_cam_teleport_off(Core *) {}
-
 bool legacy_repl_command(Core *, const char *command, const char *line) {
   legacyReplCommandName = command;
   legacyReplCommandLine = line;
@@ -60,12 +52,6 @@ bool legacy_repl_command(Core *, const char *command, const char *line) {
 class TestFrameDriver final : public psx::game::FrameDriver {
 public:
   void stepFrame(Core &, uint32_t) override {}
-};
-
-class TestTaskScheduler final : public psx::game::TaskScheduler {
-public:
-  void step() override {}
-  void yield(Core &) override {}
 };
 
 class TestSession final : public psx::game::TitleSessionState {
@@ -112,18 +98,11 @@ public:
     return std::make_unique<TestFrameDriver>();
   }
 
-  std::unique_ptr<psx::game::TaskScheduler> createTaskScheduler(Game &game) override {
-    factoriesSawWiredGame = factoriesSawWiredGame && game.core.game == &game;
-    ++taskSchedulersCreated;
-    return std::make_unique<TestTaskScheduler>();
-  }
-
   int sessionsCreated = 0;
   int sessionsDestroyed = 0;
   int overrideRegistrations = 0;
   int programStarts = 0;
   int frameDriversCreated = 0;
-  int taskSchedulersCreated = 0;
   bool factoriesSawWiredGame = true;
   bool guestVramPicture = false;
   const Game *pictureGame = nullptr;
@@ -204,8 +183,6 @@ void test_title_commands_are_game_owned_and_legacy_forwarding_is_optional() {
 
   GameHooks forwardingHooks{};
   forwardingHooks.replCommand = legacy_repl_command;
-  forwardingHooks.replCamTeleport = legacy_cam_teleport;
-  forwardingHooks.replCamTeleportOff = legacy_cam_teleport_off;
   LegacyGameRuntimeAdapter forwardingLegacy(config, forwardingHooks);
   auto forwardingGame = std::make_unique<Game>(forwardingLegacy, psx::config::Config{});
   legacyReplCommands = 0;
@@ -217,13 +194,27 @@ void test_title_commands_are_game_owned_and_legacy_forwarding_is_optional() {
   CHECK_EQ(legacyReplCommands, 1);
   CHECK(legacyReplCommandName == "title-command");
   CHECK(legacyReplCommandLine == "title-command argument");
+}
 
-  legacyTeleports = 0;
-  const psx::game::TitleCommandReply teleport = psx::game::runTitleCommand(forwardingGame->core, "tp 1 2 3");
-  CHECK(teleport.handled);
-  CHECK(teleport.text == "tp camera -> (1,2,3)");
-  CHECK_EQ(legacyTeleports, 1);
-  CHECK_EQ(legacyReplCommands, 1);
+// The world line is the title's text read from its own Core; the framework adds nothing.
+class WorldLineRuntime final : public psx::test::StubGameRuntime {
+public:
+  std::string worldReadout(Core &core) const override {
+    return "stage 0x" + std::to_string(core.mem_r32(kStageWord));
+  }
+
+  static constexpr std::uint32_t kStageWord = 0x80010000u;
+};
+
+void test_world_readout_is_the_titles_line_for_its_core() {
+  psx::test::StubGameRuntime silent;
+  const auto silentGame = std::make_unique<Game>(silent, psx::config::Config{});
+  CHECK(silent.worldReadout(silentGame->core).empty());
+
+  WorldLineRuntime runtime;
+  const auto game = std::make_unique<Game>(runtime, psx::config::Config{});
+  game->core.mem_w32(WorldLineRuntime::kStageWord, 7u);
+  CHECK(game->runtime.worldReadout(game->core) == "stage 0x7");
 }
 
 void test_guest_address_ranges_are_validated_and_physically_normalized() {
@@ -289,10 +280,8 @@ void test_game_owns_runtime_products_and_session() {
     CHECK(game->sessionState != nullptr);
     CHECK(game->temporalPresentation == nullptr);
     CHECK(game->frameDriver != nullptr);
-    CHECK(game->taskScheduler != nullptr);
     CHECK_EQ(runtime.sessionsCreated, 1);
     CHECK_EQ(runtime.frameDriversCreated, 1);
-    CHECK_EQ(runtime.taskSchedulersCreated, 1);
     CHECK(runtime.factoriesSawWiredGame);
     game->runtime.registerOverrides(*game);
     game->runtime.startProgram(game->core);
@@ -449,6 +438,7 @@ int main() {
   RUN(bound_stock_libcd_becomes_the_games_libcd);
   RUN(default_admission_maps_the_executable_and_sets_top_level_registers);
   RUN(title_commands_are_game_owned_and_legacy_forwarding_is_optional);
+  RUN(world_readout_is_the_titles_line_for_its_core);
   RUN(guest_address_ranges_are_validated_and_physically_normalized);
   RUN(legacy_pair_is_bounded_by_runtime_adapter);
   RUN(legacy_adapter_supports_incremental_inheritance);

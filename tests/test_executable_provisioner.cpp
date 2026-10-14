@@ -2,8 +2,11 @@
 // one-track CHD holding BOOT/SLUS_000.01, the same bytes as tests/fixtures/provision_disc/SLUS_000.01.
 #include "testutil.h"
 
+#include "disc_executable.h"
 #include "executable_provisioner.h"
 #include "fs_util.h"
+#include "game.h"
+#include "stub_game_runtime.h"
 #include "title_catalog.h"
 
 #include <lucent/content.h>
@@ -11,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <string>
 #include <unistd.h>
@@ -88,6 +92,37 @@ void test_a_path_the_disc_does_not_hold_provisions_nothing() {
   CHECK(!std::filesystem::exists(fixture.target));
 }
 
+// A boot stub's hand-off: the same authenticated bytes, loaded as the running program.
+void test_a_disc_executable_loads_as_the_running_program() {
+  const Fixture fixture;
+  psx::test::StubGameRuntime runtime;
+  const auto owned = std::make_unique<Game>(runtime, psx::config::Config{});
+  Game &game = *owned;
+  game.disc.env_key = kDiscKey;
+  const psx::cpu::PsxExeLoadResult loaded = psx::game::loadDiscExecutable(game, fixture.title("BOOT/SLUS_000.01"));
+  CHECK(static_cast<bool>(loaded));
+  CHECK_EQ(game.core.pc, 0x80010000u);
+  CHECK_EQ(game.core.mem_r32(0x80010000u),
+           fixture.executable[0x800] | (fixture.executable[0x801] << 8u) | (fixture.executable[0x802] << 16u) |
+               (static_cast<std::uint32_t>(fixture.executable[0x803]) << 24u));
+}
+
+void test_a_disc_executable_that_is_not_the_title_is_refused_unloaded() {
+  const Fixture fixture;
+  psx::test::StubGameRuntime runtime;
+  const auto owned = std::make_unique<Game>(runtime, psx::config::Config{});
+  Game &game = *owned;
+  game.disc.env_key = kDiscKey;
+  psx::host::TitleIdentity other = fixture.title("BOOT/SLUS_000.01");
+  const std::string wrong(64, '0');
+  other.sha256 = wrong;
+  game.core.pc = 0xBFC00000u;
+  const psx::cpu::PsxExeLoadResult loaded = psx::game::loadDiscExecutable(game, other);
+  CHECK(!loaded);
+  CHECK(!loaded.detail.empty());
+  CHECK_EQ(game.core.pc, 0xBFC00000u);
+}
+
 } // namespace
 
 int main() {
@@ -95,5 +130,7 @@ int main() {
   RUN(a_present_executable_is_left_alone);
   RUN(bytes_that_are_not_the_title_are_never_written);
   RUN(a_path_the_disc_does_not_hold_provisions_nothing);
+  RUN(a_disc_executable_loads_as_the_running_program);
+  RUN(a_disc_executable_that_is_not_the_title_is_refused_unloaded);
   return pt_summary();
 }

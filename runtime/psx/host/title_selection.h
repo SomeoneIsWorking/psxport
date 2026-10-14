@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+struct DiscState;
+
 namespace psx::host {
 
 enum class SelectionStatus : std::uint8_t {
@@ -34,5 +36,7 @@ struct SelectionResult {
 SelectionResult
 selectExecutable(std::string_view serial, std::span<const std::uint8_t> bytes, std::span<const TitleIdentity> catalog);
 SelectionResult selectExecutableFile(const std::filesystem::path &path, std::span<const TitleIdentity> catalog);
+// `title`'s `discExecutablePath` read from `disc` and authenticated; `bytes` holds it when Selected.
+SelectionResult selectDiscExecutable(DiscState &disc, const TitleIdentity &title);
 
 } // namespace psx::host

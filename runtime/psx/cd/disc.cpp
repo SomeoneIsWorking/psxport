@@ -1,10 +1,5 @@
-// Native by-LBA disc backend for the guest core (S3).
-// Reads 2048-byte user data per sector directly from the Tomba!2 CHD via libchdr —
-// the same extraction tools/discdump.cpp does, so the bytes match the oracle disc.
-// This is the data source the CD overrides (cd_override.c) read from; "no emulation"
-// means no CD controller / IRQ handshake — the game's read functions are replaced by
-// direct native reads of this image. Pure data path: form/mode-2 audio/video framing
-// (XA/STR) is a later front-end concern; data files are mode2/form1 with 2048 user bytes.
+// disc.cpp — the title's CHD read by LBA through libchdr: 2048-byte user data and raw sectors for the
+// CD controller, the stock libcd reads and a title's own CD overrides.
 #include "disc.h"
 #include "cfg.h" // cfg_str — the CONFIG half of cfg.h; the logging half is retired
 #include "r3000.h"

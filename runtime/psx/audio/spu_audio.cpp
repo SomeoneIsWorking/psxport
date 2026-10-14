@@ -53,11 +53,6 @@ extern "C" {
 // SPU lift interface (spu_beetle.c).
 int32_t spu_update(int32_t clocks);
 int spu_render(int16_t *out, int max_frames);
-// XA/CD streamer (xa_stream.c). When a clip is streaming, GAME LOGIC may BLOCK waiting for it to
-// finish; that progress only happens inside spu_update -> CDC_GetCDAudioSample, so the SPU must
-// advance for the wait to clear even headless.
-struct XaState;
-int xa_stream_is_active(struct XaState *xs);
 }
 
 constexpr uint32_t kWavMaxBytes = 600u * SpuFieldCadence::kSampleRateHz * 2u * 2u;

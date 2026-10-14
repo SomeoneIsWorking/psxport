@@ -13,7 +13,6 @@
 
 #include "ui_component.h"
 
-#include <cstdint>
 #include <string>
 
 class Game;
@@ -27,9 +26,6 @@ public:
 
   // Refresh video / world / music from live state. Called by the base's per-frame walk.
   void update() override;
-
-  // The live world latch, pushed each frame by overlay_glue from the shown core.
-  void set_world(int x, int y, int z, uint32_t stage);
 
   // The Area Warp status line, written when a warp is armed (or refused).
   void set_warp_status(const std::string &text);
@@ -46,9 +42,6 @@ private:
   Rml::Element *mMusic = nullptr;
   Rml::Element *mWarp = nullptr;
 
-  int mWorldPos[3] = {0, 0, 0};
-  uint32_t mWorldStage = 0;
-  bool mWorldValid = false;
   int mFound = 0;
 };
 

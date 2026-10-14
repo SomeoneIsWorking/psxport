@@ -45,7 +45,7 @@ public:
     return false;
   }
   // `line` is the whole command line, as the framework passes it.
-  bool titleCommand(Core &core, const char *cmd, const char *line, FILE *out) override;
+  bool titleCommand(Core &core, const psx::game::TitleCommandLine &input, FILE *out) override;
 
   // The command logic itself, which needs no Core: a hermetic test drives it directly.
   bool handle(const char *cmd, const char *line, FILE *out);

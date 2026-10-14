@@ -63,10 +63,6 @@ public:
   // to RmlUi's SDL input translation (hover, text, wheel).
   bool handle_key(int sdl_keycode);
 
-  void set_world(int x, int y, int z, uint32_t stage) {
-    mReadouts->set_world(x, y, z, stage);
-  }
-
   // ---- headless driving surface ---------------------------------------------------------------
   // AGENTS MAY NOT RUN WINDOWED (docs/workspace/PROTOCOL.md), and the menu is driven by SDL keyboard events
   // that do not exist without a window. Without these the entire UI is unreachable by every

@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 
 #include "execution_exit.h"
 #include "guest_address_range.h"
@@ -37,6 +38,12 @@ class NativeStatePort;
 
 namespace psx::game {
 
+// One control-channel line: its first word and the whole trimmed line.
+struct TitleCommandLine {
+  const char *command;
+  const char *line;
+};
+
 // Where a title's memory card and user data live. The framework reads the card variable through its
 // configuration owner; the title only names the key.
 struct HostIdentity {
@@ -58,15 +65,6 @@ public:
   virtual bool pastBootPrefix() const {
     return true;
   }
-};
-
-class TaskScheduler {
-public:
-  virtual ~TaskScheduler() = default;
-
-  virtual void step() = 0;
-  virtual void yield(Core &core) = 0;
-  virtual void tickSleepCountdown() {}
 };
 
 // A title's per-Core state, created with each Game and destroyed with it.
@@ -135,7 +133,6 @@ public:
   virtual void registerOverrides(Game &game) = 0;
   virtual std::unique_ptr<TitleSessionState> createSession(Game &game);
   virtual std::unique_ptr<FrameDriver> createFrameDriver(Game &game);
-  virtual std::unique_ptr<TaskScheduler> createTaskScheduler(Game &game);
 
   // ---- Hardware services the title owns
 
@@ -209,10 +206,9 @@ public:
 
   // A control-channel or REPL command the framework did not recognise. Replies go to `reply`; true
   // when the command was the title's.
-  virtual bool titleCommand(Core &core, const char *command, const char *line, std::FILE *reply) {
+  virtual bool titleCommand(Core &core, const TitleCommandLine &input, std::FILE *reply) {
     (void)core;
-    (void)command;
-    (void)line;
+    (void)input;
     (void)reply;
     return false;
   }
@@ -237,6 +233,11 @@ public:
   // Title lines after the framework's run-complete report.
   virtual void reportRun(Core &core) const {
     (void)core;
+  }
+  // The Debug tab's world line (position, stage); empty when the title has none.
+  virtual std::string worldReadout(Core &core) const {
+    (void)core;
+    return {};
   }
 
   // ---- Identity data

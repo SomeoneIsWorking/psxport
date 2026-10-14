@@ -162,9 +162,6 @@ void perturb(Game &game) {
   game.pad.buttons = 0xFF7Fu;
 
   game.cd.setloc_lba = 0x2222;
-  game.cd.pending_music = 3;
-  game.cd.pm_start = 0x1000u;
-  game.cd.pm_end = 0x2000u;
 
   // And the memory card, which is a HOST FILE the run owns: without a frame written here the card
   // section is byte-identical at both ends of the test and proves nothing.

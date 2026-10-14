@@ -18,15 +18,13 @@
 
 typedef struct XaState {
   int active;                       // 1 while ReadS streaming with XA-ADPCM enabled  (was s_active)
-  int push_mode;                    // 1 = the CDC drive decodes INTO this ring (Vagrant-style native
-                                    //     controller model): pulls must NOT self-fetch sectors. 0 =
-                                    //     pull-driven cd_override model (Tomba!2), where the pull
+  int push_mode;                    // 1 = the CDC drive decodes INTO this ring: pulls must NOT
+                                    //     self-fetch sectors. 0 = pull-driven, where the pull
                                     //     advances s_lba itself.
   uint32_t lba;                     // next CHD sector to read                        (was s_lba)
   uint8_t mode;                     // last Setmode                                   (was s_mode)
   int filter_set;                   // a Setfilter was issued                         (was s_filter_set)
   uint8_t filter_file, filter_chan; //                                       (was s_filter_*)
-  int owns_slot2;                   // native owner of voice task slot 2              (was s_owns_slot2)
   uint32_t end_lba;                 // clip end LBA (0 = open-ended)                  (was s_end_lba)
   uint32_t clip_start;              // clip start LBA (idempotency + loop restart)    (was s_clip_start)
   uint8_t clip_chan;                // clip channel (idempotency)                     (was s_clip_chan)
@@ -65,6 +63,18 @@ void xa_bind_state(XaState *s);
 // buffer overflows without stopping the drive. Beetle-parity routing lives in the caller
 // (cdc_native.cpp decides FIFO-vs-decoder from mode/subheader bytes).
 int xa_push_audio_sector(XaState *s, const uint8_t *raw, uint32_t drive_lba);
+// The pull-mode streamer the CD command layer drives (stock libcd, or a title's own CdControl).
+void xa_stream_setmode(XaState *xs, uint8_t mode);
+void xa_stream_setfilter(XaState *xs, uint8_t file, uint8_t chan);
+void xa_stream_setloc(XaState *xs, uint8_t amm, uint8_t ass, uint8_t asect);
+void xa_stream_start(XaState *xs);
+void xa_stream_stop(XaState *xs);
+// The read head while streaming: 1 with *lba set, 0 when idle.
+int xa_stream_play_lba(XaState *xs, uint32_t *lba);
+// Streams channel `chan` over [start, end] (CHD LBAs), restarting at `start` past the end when `loop`.
+void xa_stream_play(XaState *xs, uint8_t chan, uint32_t start, uint32_t end, int loop);
+int xa_stream_is_looping(XaState *xs);
+int xa_stream_is_active(XaState *xs);
 // Beetle spu.c's CD-audio source: one stereo pair per 44.1 kHz output sample from the bound instance.
 void CDC_GetCDAudioSample(int32_t *samples);
 #ifdef __cplusplus

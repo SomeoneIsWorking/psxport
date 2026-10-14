@@ -358,12 +358,6 @@ void RmlOverlay::dumpMenu() const {
   }
 }
 
-void RmlOverlay::setWorld(int x, int y, int z, unsigned stage) {
-  if (mMenu) {
-    mMenu->set_world(x, y, z, stage);
-  }
-}
-
 // pad_input.cpp suppresses gameplay keyboard input while this returns true. The menu uses arrow/Enter
 // nav (not typing), so we suppress whenever the menu is OPEN — otherwise arrow keys would also drive
 // the game. (No text fields exist in this menu; the input/textarea checks are kept for completeness.)

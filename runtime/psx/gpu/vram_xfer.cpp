@@ -2,10 +2,8 @@
 //
 // WHY THIS EXISTS
 // ---------------
-// The port already owns the CPU->VRAM upload library (engine/asset.cpp ov_upload_image == FUN_80081218):
-// EVERY texture-group atlas page, font page, and per-frame CLUT funnels through gpu_native_load_image. The
-// render path's VRAM->VRAM copy (GP0 0x80) and the (now rarely used) DMA CPU->VRAM stream (GP0 0xA0) are
-// the OTHER two VRAM writers, in gpu_native.cpp. All three address VRAM through `vram(x,y)`, which masks
+// The render path's VRAM->VRAM copy (GP0 0x80) and the DMA CPU->VRAM stream (GP0 0xA0) are the VRAM
+// writers in gpu_native.cpp. Both address VRAM through `vram(x,y)`, which masks
 // x & 1023, y & 511. That masking is CORRECT PSX behavior for an in-bounds transfer (PSX VRAM wraps), but
 // it is ALSO the amplifier for the non-deterministic "stripe corruption" bug: a transfer fed a GARBAGE
 // base/size (a stray render-OT 0x80 copy from a parse desync — the later-72 family — or a bad upload
@@ -16,11 +14,11 @@
 // it cannot be caught by a static A/B diff — it must be caught the moment it fires on the running game.
 //
 // WHAT THIS DOES (one guarded chokepoint for VRAM placement bookkeeping)
-//   * vram_register_atlas(x,y,w,h,tag): the native upload registers each big texture-group page it lands as
-//     a PROTECTED, populated region. These are exactly the atlas/font/CLUT rectangles the characters and UI
+//   * vram_register_atlas(x,y,w,h,tag): registers each sampled texture page as a PROTECTED, populated region. These are
+//   exactly the atlas/font/CLUT rectangles the characters and UI
 //     sample from. Re-uploads to the same rect refresh in place (the region is re-confirmed live, not stale).
-//   * vram_guard_check(path,x,y,w,h,src): every VRAM-writing transfer calls this — the native upload,
-//     the GP0(0xA0) CPU->VRAM load, the GP0(0x80) VRAM->VRAM copy, the GP0(0x02) FILL, and the
+//   * vram_guard_check(path,x,y,w,h,src): every VRAM-writing transfer calls this — the GP0(0xA0) CPU->VRAM load, the
+//   GP0(0x80) VRAM->VRAM copy, the GP0(0x02) FILL, and the
 //     display blank. That list is the guard's COVERAGE, and it is load-bearing: fill and blank were
 //     absent until 2026-08-05, so a clobber arriving through either produced no line at all and the
 //     guard read as "no clobber found" when it had simply not been looking. If a new VRAM writer is

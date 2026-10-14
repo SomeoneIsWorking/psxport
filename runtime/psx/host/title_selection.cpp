@@ -1,5 +1,7 @@
 #include "title_selection.h"
 
+#include "disc_file.h"
+
 #include <lucent/content.h>
 
 #include <algorithm>
@@ -114,6 +116,19 @@ SelectionResult selectExecutableFile(const std::filesystem::path &path, std::spa
     return {SelectionStatus::MissingExecutable, &*found, "cannot read " + path.string(), index};
   }
   SelectionResult selection = selectExecutable(serial, bytes, catalog);
+  if (selection) {
+    selection.bytes = std::move(bytes);
+  }
+  return selection;
+}
+
+SelectionResult selectDiscExecutable(DiscState &disc, const TitleIdentity &title) {
+  const std::string discPath(title.discExecutablePath);
+  std::vector<std::uint8_t> bytes;
+  if (discPath.empty() || !psx::cd::readDiscFile(disc, discPath.c_str(), bytes)) {
+    return {SelectionStatus::MissingExecutable, &title, "cannot read '" + discPath + "' from the disc"};
+  }
+  SelectionResult selection = selectExecutable(title.serial, bytes, std::span(&title, 1));
   if (selection) {
     selection.bytes = std::move(bytes);
   }

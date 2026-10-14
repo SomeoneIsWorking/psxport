@@ -47,9 +47,6 @@
 // gte_state.h's GteRegs) so cdc_native.c / xa_stream.c stay C. cdc_read/cdc_write take &game->cdc
 // explicitly; the XA streamer is bound per frame-step via xa_bind (vendor SPU pull — see xa_state.h).
 
-#include "pc_scheduler.h" // class psx::frame::PcScheduler — the PC-native cooperative task scheduler
-                          // (per-task contexts, run flags, step-spread counters, stanza dispatch)
-
 class Game {
 public:
   const psx::config::Config config; // the launch configuration, fixed for this Game's life
@@ -59,10 +56,10 @@ public:
   psx::frame::Timing timing;
   psx::frame::FramePacer framePacer;
   psx::diag::FieldDigest fieldDigest; // per-field determinism trace (`PSXPORT_DEBUG=fielddigest`)
-  Cd cd;          // native CD subsystem: sync reads + libcd HLE + deferred-music state (cd_override.cpp)
-  DiscState disc; // native CHD disc backend: handle + hunk cache (per-instance; disc.c)
-  CdcState cdc;   // native CD-controller register model (per-instance; cdc_native.c, explicit param)
-  XaState xa;     // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
+  Cd cd;                              // native CD subsystem: the stock libcd state (stock_libcd.cpp)
+  DiscState disc;                     // native CHD disc backend: handle + hunk cache (per-instance; disc.c)
+  CdcState cdc; // native CD-controller register model (per-instance; cdc_native.c, explicit param)
+  XaState xa;   // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
   Hle hle;
   Sio0 sio; // controller port (SIO0) hardware: the pad protocol and its transfer/ack deadlines
   DmaCallbackRegistry dmaCallbacks;
@@ -72,11 +69,10 @@ public:
   // own window drain — reaches the host through this one object.
   psx::input::HostInput hostInput;
   Pad pad{hostInput};
-  Repl repl;                       // interactive REPL driver + title-consumed requests (repl.cpp)
-  Fmv fmv;                         // native .STR movie player (native_fmv.cpp)
-  psx::frame::PcScheduler pcSched; // native cooperative task scheduler (game/core/pc_scheduler.cpp)
-  GpuState gpu;                    // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
-  GpuVkState gpu_vk;               // Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
+  Repl repl;         // interactive REPL driver + title-consumed requests (repl.cpp)
+  Fmv fmv;           // native .STR movie player (native_fmv.cpp)
+  GpuState gpu;      // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
+  GpuVkState gpu_vk; // Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
 
   // The SDL3 GPU host window/device/pipelines: the ONE presentation device of the process. A Game
   // presents through it; it does not have to OWN it. A host that runs several Games in one process — a
@@ -118,7 +114,7 @@ public:
   }
   SpuAudio spu_audio;                 // host audio output sink (SDL3 device + optional WAV capture)
   RmlOverlay rml_overlay;             // in-app mod/debug HTML UI + live world-position HUD
-  PlatformHle platform_hle;           // HW-sync HLE dispatch table (VSync/CdSync/MDEC/ChangeThread)
+  PlatformHle platform_hle;           // HW-sync HLE dispatch table (VSync/CdSync/MDEC)
   Memcard memcard;                    // host-backed 128 KB memory card device (BIOS libcard/libmcrd)
   Mods mods;                          // per-Game mod toggles + params (was the process-global g_mods, 2026-07-10)
   psx::host::SessionRun run;          // whether the title asked to end its run
@@ -130,21 +126,16 @@ public:
   SpuDevice spu;   // per-instance SPU device (Beetle spu.c handle + SBS write log); bound via spu.bind()
   MdecDevice mdec; // per-instance MDEC device (Beetle mdec.c handle); bound via mdec.bind()
 
-  // Field BGM director latch (MusicCoord::fieldBgmDirector): a MusicList field song was
-  // started and is still considered live (was a function-local static — wrong under two Games).
-  int field_bgm_started = 0;
-
   // The title's runtime, shared with core.runtime; the caller owns it and it outlives this Game.
   psx::game::GameRuntime &runtime;
 
   // The title's card and user-data names; fields are null when the title declares none.
   psx::game::HostIdentity hostIdentity() const;
-  // Declared after the subsystem state so the products are destroyed first. A derived driver or
-  // scheduler may retain references to the fully wired subsystem members it receives at creation.
+  // Declared after the subsystem state so the products are destroyed first. A derived driver may
+  // retain references to the fully wired subsystem members it receives at creation.
   std::unique_ptr<psx::game::TitleSessionState> sessionState;
   std::unique_ptr<psx::frame::TemporalFramePresentation> temporalPresentation;
   std::unique_ptr<psx::game::FrameDriver> frameDriver;
-  std::unique_ptr<psx::game::TaskScheduler> taskScheduler;
 
   // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
