@@ -351,7 +351,7 @@ std::unique_ptr<Game> startStream() {
 
 // The status byte the controller put on the wire is asserted at the REGISTER seam, by
 // `response_byte`, in the drive-stopped cases above — never from inside the guest callback. The
-// delivery drops the current response (`consumeCurrentResponse` calls `cdc_take_current_response`,
+// delivery drops the current response (`psx::cd::acknowledgeCurrentCdResponse` calls `cdc_take_current_response`,
 // which advances `q_head`) BEFORE it notifies the callback, so a callback indexing `q[q_head]` read
 // the NEXT, not-yet-written entry. That is a test reading the wrong thing and asserting the wrong
 // answer; the wire the guest actually reads is the register.

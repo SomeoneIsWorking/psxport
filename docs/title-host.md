@@ -109,6 +109,9 @@ read through `Game::fastForwarding`): its steps do not sleep on the panel's pace
 dropped. Each picker frame pre-rolls one panel for as many steps as fit in one NTSC field
 (`PreRollBudget`), at least one. A settled panel steps once per picker frame on its own pacer, so the
 picker then runs at that title's step cadence. Panel 0 starts selected and audible.
+A panel shows the newest presented frame that held a picture (`GpuVkState::retainFilledPresentImage`);
+a black or faded present keeps the held frame shown. The selector logs its end state with the panel
+summary (`selector ended ... ; panels: [0]*slug demo ...`).
 
 `ProductHost` hands every session its `SessionServices`: the presentation device, the process
 `QuitScope`, the `RunBudget` and whether `PSXPORT_LOAD_STATE` is still owed (only the process's first
@@ -145,7 +148,7 @@ selector frame. An explicit `PSXPORT_NATIVE_FRAMES` wins; otherwise a pad replay
 a live control client leaves it uncapped, a windowed run is uncapped and a headless one stops at 120.
 This is the only place the live-client rule lives: `DbgServer::start` opens the channel and answers
 no cap, and every loop that is not yet a
-`TitleSession` (the own loops of C-12, Tomba! 1 and Spider-Man 2) takes its cap from
+`TitleSession` (the own loops of C-12 and Spider-Man 2) takes its cap from
 `RunBudget::fromConfig`.
 It never counts a panel's pre-roll steps, and panels never print a run-end report, apply configured
 state or pump the REPL. `PreRollBudget` stays the pre-roll owner: how many panel steps fit in one

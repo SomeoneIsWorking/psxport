@@ -179,7 +179,7 @@ PickerSession::Result PickerSession::run() {
     services_.budget.step();
     fieldTurn.endField(core, static_cast<std::uint32_t>(frame));
   }
-  lucent::info("picker", "selector ended after {} frame(s) with no choice", frame);
+  lucent::info("picker", "selector ended after {} frame(s) with no choice; {}", frame, panels_->summary());
   return {};
 }
 

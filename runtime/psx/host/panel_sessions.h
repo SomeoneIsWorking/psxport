@@ -74,7 +74,9 @@ public:
   // Ends every session and hands back a fresh unbooted session for the chosen title: the demo was
   // a preview, so choosing a game must start it at power-on rather than resume its preview.
   std::unique_ptr<TitleSession> confirm();
-  // Report what the sessions are doing, once per picker frame, at `lucent::debug`.
+  // What the sessions are doing, one word per panel: `panels: [0]*slug demo [1] slug booting`.
+  std::string summary() const;
+  // Log the summary, once per picker frame, at `lucent::debug`.
   void report() const;
 
 private:
