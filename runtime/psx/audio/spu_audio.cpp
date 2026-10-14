@@ -234,20 +234,6 @@ void SpuAudio::openHostDevice() {
 #endif
 }
 
-// See spu_audio.h for why this is a free function rather than part of frameEx.
-//
-// `audioMixFrame` is an OPTIONAL hook. A port with no native music engine of its own never binds it,
-// and psxport's convention (bind by name, unlisted fields value-initialise to null) makes that the
-// normal state rather than an error — so there is nothing to report here: no game music is not a
-// fault, it is a port that has none. Gated by tests/test_spu_mix_optional_hook.cpp, which also
-// asserts the hook IS called when a port does supply one.
-void spu_mix_game_audio(Core *c, const GameHooks *hooks, int16_t *buf, int frames) {
-  if (!hooks || !hooks->audioMixFrame) {
-    return;
-  }
-  hooks->audioMixFrame(c, buf, frames);
-}
-
 // Called once per delivered display field: advance the SPU by that field's fractional share of its
 // clock and sample rates, drain the resulting frames, and queue them to the device. No-op when audio
 // is disabled/failed. The device queue is steered toward AudioQueuePolicy's target level by trimming
@@ -365,11 +351,8 @@ void SpuAudio::frameEx(bool output) {
   // A zero-frame SPU result is represented by the expected-duration silent buffer above so native
   // music and the host sink still receive one complete field.
 
-  // Mix the game's native music engine on top of the SPU's output (game-owned; the framework names
-  // no game audio type). The hook renders the game's NativeMusic into its own scratch and saturating-
-  // adds it into `buf`; it's a no-op when nothing is playing. Silent when no game is bound.
-  if (game) {
-    spu_mix_game_audio(&game->core, game->core.hooks, buf, frames);
+  if (psx::game::TitleAudio *titleAudio = game->runtime.audio(game->core)) {
+    titleAudio->mixFrame(buf, frames);
   }
 
   // WAV capture: append the drained PCM. Capped.

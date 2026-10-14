@@ -27,7 +27,7 @@
 #pragma once
 
 #include "cd_stock_read_completion.h"
-#include "guest_program_image.h"
+#include "guest_address_range.h"
 #include "image_identity.h"
 
 #include <cstdint>
@@ -37,7 +37,9 @@
 
 class Core;
 
+namespace psx::game {
 class GameRuntime;
+}
 
 namespace psx::code_module {
 

@@ -4,10 +4,13 @@
 #include "game.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <array>
 #include <cstdint>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 enum { R_V0 = 2, R_A0 = 4, R_A1 = 5, R_A2 = 6 };
 
@@ -57,7 +60,7 @@ void check_toupper(Game &game, uint32_t character, uint32_t expected) {
 }
 
 void test_toupper_is_ascii_only_and_locale_independent() {
-  auto game = new Game();
+  auto game = new Game(stubRuntime);
   check_toupper(*game, static_cast<uint32_t>('t'), static_cast<uint32_t>('T'));
   check_toupper(*game, static_cast<uint32_t>('T'), static_cast<uint32_t>('T'));
   check_toupper(*game, static_cast<uint32_t>('7'), static_cast<uint32_t>('7'));
@@ -66,7 +69,7 @@ void test_toupper_is_ascii_only_and_locale_independent() {
 }
 
 void test_appends_terminator_returns_destination_and_preserves_guards() {
-  auto game = new Game();
+  auto game = new Game(stubRuntime);
   put_string(game->core, kDst, "LEVEL01\\SFX");
   put_string(game->core, kSrc, ".vh");
   game->core.mem_w8(kDst - 1, 0xA5);
@@ -81,7 +84,7 @@ void test_appends_terminator_returns_destination_and_preserves_guards() {
 }
 
 void test_guest_mirror_source_and_empty_inputs() {
-  auto game = new Game();
+  auto game = new Game(stubRuntime);
   put_string(game->core, kDst, "");
   put_string(game->core, kSrc, ".vb");
 
@@ -97,7 +100,7 @@ void test_guest_mirror_source_and_empty_inputs() {
 }
 
 void test_forward_guest_alias_uses_bytewise_psx_copy_order() {
-  auto game = new Game();
+  auto game = new Game(stubRuntime);
   constexpr std::array<uint8_t, 6> bytes = {'a', 'b', 0, 'c', 'd', 0};
   for (uint32_t i = 0; i < bytes.size(); i++) {
     game->core.mem_w8(kDst + i, bytes[i]);
@@ -111,7 +114,7 @@ void test_forward_guest_alias_uses_bytewise_psx_copy_order() {
 }
 
 void test_memcmp_returns_first_unsigned_byte_difference() {
-  auto game = new Game();
+  auto game = new Game(stubRuntime);
   constexpr uint32_t kLhs = 0x80100200u;
   constexpr uint32_t kRhs = 0x80100300u;
   constexpr std::array<uint8_t, 4> lhs = {0x44, 0xF0, 0x00, 0x10};
@@ -136,7 +139,7 @@ void test_memcmp_returns_first_unsigned_byte_difference() {
 }
 
 void test_wrong_table_and_neighbor_are_not_claimed() {
-  auto game = new Game();
+  auto game = new Game(stubRuntime);
   put_string(game->core, kDst, "base");
   put_string(game->core, kSrc, "tail");
   game->core.r[R_V0] = 0xDEADBEEFu;
@@ -160,7 +163,7 @@ void check_atoi(Game &game, uint32_t fn, const char *text, int32_t expected) {
 }
 
 void test_atoi_and_atol_parse_signed_decimal() {
-  auto game = new Game();
+  auto game = new Game(stubRuntime);
   for (const uint32_t fn : {0x10u, 0x11u}) {
     check_atoi(*game, fn, "42", 42);
     check_atoi(*game, fn, "  -17xyz", -17);

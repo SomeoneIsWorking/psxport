@@ -3,12 +3,12 @@
 // THIS TARGET PROVES TWO DIFFERENT THINGS, and conflating them is how it went unnoticed for so long
 // that it segfaulted with zero output:
 //
-//   1. AT LINK TIME — link-level game-agnosticism. This TU links against ONLY libpsxport.a (+ the
+//   1. AT LINK TIME — link-level game-agnosticism. This TU links against ONLY libpsxport.a and its test stub (+ the
 //      framework's inherited system deps): no game/*, no generated/* object. Any undefined
 //      game/generated symbol reachable from a Core-only client therefore fails THIS link. That proof
 //      is complete before main() ever runs, and it is the reason the target exists
 //      (cmake/psxport.cmake registers it as a plain add_executable linking `psxport`).
-//   2. AT RUN TIME — the CORE-ALONE STORE/LOAD CONTRACT: a default-constructed `Core` with
+//   2. AT RUN TIME — the CORE-ALONE STORE/LOAD CONTRACT: a `Core` over the stub runtime with
 //      `game == nullptr` is a complete guest-memory device, and the framework's own store-side
 //      instrumentation runs on it rather than crashing or silently switching itself off.
 //
@@ -37,11 +37,10 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "core.h"             // Core, mem_w32/mem_r32 — framework header (no game.h in its chain)
-#include "game_iface.h"       // Legacy-view absence asserted below
-#include "game_runtime.h"     // GameRuntime — the second-generation game ownership seam
-#include "ot_attr.h"          // OtAttr — the store-attribution instrument checked by check 8
-#include "render_substrate.h" // Core::rsub, which owns the OtAttr
+#include "core.h"              // Core, mem_w32/mem_r32 — framework header (no game.h in its chain)
+#include "ot_attr.h"           // OtAttr — the store-attribution instrument checked by check 8
+#include "render_substrate.h"  // Core::rsub, which owns the OtAttr
+#include "stub_game_runtime.h" // psx::test::StubGameRuntime — a runtime with no title
 
 // ---- the counted harness ----------------------------------------------------------------------
 // PLAN is the DENOMINATOR of this program's result. It is asserted against, not decorative: the
@@ -50,23 +49,6 @@
 static const int PLAN = 8;
 static int g_run = 0;
 static int g_failed = 0;
-
-class SmokeRuntime final : public GameRuntime {
-public:
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-};
 
 // Printed BEFORE the check body executes, so the last line of a crashed run names the crash site.
 static void begin(const char *name) {
@@ -117,14 +99,12 @@ int main() {
 
   // The stub derives the real seam. It deliberately supplies no legacy config/hooks pair: a new game
   // must not inherit the old public bags merely to satisfy the game-agnostic framework link.
-  static SmokeRuntime stub_runtime;
-  psxport_install_game(stub_runtime);
+  static psx::test::StubGameRuntime stub_runtime;
+  Core *c = new Core(stub_runtime);
 
-  SMOKE_TRUE("derived-runtime-readback", psxport_game_runtime() == &stub_runtime);
-  SMOKE_TRUE("no-legacy-config-or-hooks", psxport_game_config() == nullptr && psxport_game_hooks() == nullptr);
-
-  Core *c = new Core();
-  SMOKE_TRUE("null-ctxCreate-leaves-null-ctx", c->gameCtx == nullptr);
+  SMOKE_TRUE("derived-runtime-readback", &c->runtime == &stub_runtime);
+  SMOKE_TRUE("no-legacy-config-or-hooks", c->cfg == nullptr && c->hooks == nullptr);
+  SMOKE_TRUE("no-session-leaves-null-ctx", c->gameCtx == nullptr);
   // The PRECONDITION every remaining check is about, asserted rather than assumed: this really is a
   // Core with no Game. If a future Core ctor started binding one, the checks below would still pass
   // while no longer testing the Core-alone path at all — so the precondition is part of the plan.

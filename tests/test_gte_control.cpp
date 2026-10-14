@@ -1,13 +1,17 @@
 // test_gte_control.cpp — the control registers a render runs under: read, blended, written and handed back.
 #include "game.h"
 #include "gte_control.h"
-#include "hw_bind.h"
+#include "gte_state.h"
+#include "proj_params.h"
 #include "state_bytes.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 using psx::present::GteControl;
 
@@ -44,8 +48,8 @@ static void test_rotation_halves_and_translation_move_and_the_rest_is_the_later_
 }
 
 static void test_written_control_reads_back_and_the_guard_restores_the_gte(void) {
-  auto game = std::make_unique<Game>();
-  gte_bind(&game->core);
+  auto game = std::make_unique<Game>(stubRuntime);
+  game->core.gte().bind();
   const GteControl before = sample(7, 9, 11u);
   psx::present::writeGteControl(before);
   CHECK(psx::present::readGteControl() == before);
@@ -75,9 +79,24 @@ static void test_state_bytes_read_back_what_was_written(void) {
   CHECK_EQ(back[2], 3u);
 }
 
+namespace {
+
+// Any GTE access re-points both the register file and the projection at its own Core.
+void test_a_gte_access_binds_its_cores_projection() {
+  auto first = std::make_unique<Game>(stubRuntime);
+  auto second = std::make_unique<Game>(stubRuntime);
+  first->core.gte().bind();
+  (void)second->core.gte().readData(0);
+  CHECK(GTE_CurState() == &second->core.gte().registers());
+  CHECK(ProjParams::current() == &second->core.rsub.projParams);
+}
+
+} // namespace
+
 int main(void) {
   RUN(rotation_halves_and_translation_move_and_the_rest_is_the_later_state);
   RUN(written_control_reads_back_and_the_guard_restores_the_gte);
+  RUN(a_gte_access_binds_its_cores_projection);
   RUN(state_bytes_read_back_what_was_written);
   return pt_summary();
 }

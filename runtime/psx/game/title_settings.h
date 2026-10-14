@@ -7,6 +7,8 @@
 #include "config_var.h"
 #include "stepped_range.h"
 
+namespace psx::game {
+
 struct TitleIntSetting {
   const char *id;    // menu row id, unique within the title
   const char *label; // row text
@@ -14,3 +16,5 @@ struct TitleIntSetting {
   psx::config::IntVar *var;
   psx::config::SteppedRange range;
 };
+
+} // namespace psx::game

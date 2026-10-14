@@ -27,7 +27,7 @@ constexpr const char *kPickerShotCommand = "picker shot";
 
 } // namespace
 
-bool PickerRuntime::controlCommand(Core &, const char *cmd, const char *line, FILE *out) {
+bool PickerRuntime::titleCommand(Core &, const char *cmd, const char *line, FILE *out) {
   return handle(cmd, line, out);
 }
 

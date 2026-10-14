@@ -12,6 +12,8 @@
 #include "hle.h"
 #include "irq_edge.h"
 #include "platform_hle.h"
+#include "stock_dma_callbacks.h"
+#include "stock_libcd.h"
 
 #include <cstdlib>
 #include <lucent/log.h>
@@ -20,17 +22,6 @@ namespace {
 
 // MIPS o32 argument and result registers used by the BIOS interrupt-chain ABI.
 enum { A0 = 4, V0 = 2, SP = 29, RA = 31 };
-
-// The guest-owned DMA callback table base, from whichever seam the runtime declared it on; 0 when the
-// title keeps its callbacks in the native registry instead.
-uint32_t guestDmaCallbackTable(const Core &core) {
-  if (core.cfg) {
-    return core.cfg->dmaCallbackTable;
-  }
-  const GameRuntime *runtime = core.game ? core.game->runtime : nullptr;
-  const PlatformHlePlan *plan = runtime ? runtime->platformHlePlan() : nullptr;
-  return plan ? plan->dmaCallbackTable : 0;
-}
 
 static void dispatchCustomExceptionExit(Core *core, uint32_t address) {
   psx::cpu::dispatchGuestToReturn0(
@@ -110,34 +101,25 @@ void Hle::irqPoll(Core *c) {
   // EVERY channel, lowest first, exactly as the BIOS handler scans them. It used to be channel 3
   // alone, and that hid a whole subsystem: Spider-Man's FMV player registers an MDEC-out (channel 1)
   // callback that uploads each decoded strip to VRAM, and it was never called once in a run.
-  const uint32_t table = guestDmaCallbackTable(*c);
+  const psx::hle::StockDmaCallbacks *guestTable = c->game->dmaCallbacks.guestTable();
   for (int ch = 0; ch < 7; ch++) {
     if (!dma_done_owed(*c, ch)) {
       continue;
     }
-    const uint32_t slot = dma_callback_slot(table, ch);
     const uint32_t cb =
-        (c->cfg || table) ? (slot ? c->mem_r32(slot) : 0) : c->game->dmaCallbacks.current(static_cast<DmaChannel>(ch));
+        guestTable ? guestTable->callback(*c, ch) : c->game->dmaCallbacks.current(static_cast<DmaChannel>(ch));
     lucent::debug("dmairq",
-                  "owed ch{} -> callback {:08X} ({} {:08X}){}",
+                  "owed ch{} -> callback {:08X} ({}){}",
                   ch,
                   cb,
-                  (c->cfg || table) ? "guest slot" : "direct registry",
-                  slot,
+                  guestTable ? "guest table" : "direct registry",
                   in_irq ? "  DEFERRED: a guest callback is running" : "");
-    // A COMPLETION IS ONLY CONSUMED WHEN IT IS DELIVERED. Taking it first and then declining the
-    // dispatch silently DROPS the callback, and that is not a corner case: these callbacks CHAIN.
-    // The FMV player's MDEC-out handler starts the next strip's transfer, which finishes while the
-    // handler is still running — so the second completion always lands with `in_irq` set. Consuming
-    // it there ended the chain after two strips per movie, with the decoder left holding 1640
-    // abandoned input words. Left owed, the next poll delivers it and the chain runs to the end.
+    // A completion is consumed only when it is delivered: these callbacks chain (the FMV player's
+    // MDEC-out handler starts the next strip, whose completion lands while it runs).
     if (in_irq) {
       continue;
     }
-    // A guest-owned callback table means the guest runs its own libapi, which masks I_MASK around its
-    // GPU queue loops; the BIOS DMA handler only runs while the DMA line is unmasked.
-    const bool guestOwnsTable = c->cfg || table;
-    if (guestOwnsTable && (i_mask & (1u << IRQ_BIT_DMA)) == 0u) {
+    if (guestTable && !psx::hle::StockDmaCallbacks::handlerRuns(*c)) {
       continue;
     }
     dma_done_taken(*c, ch);
@@ -188,7 +170,8 @@ void Hle::irqPoll(Core *c) {
   // that registers NO SysEnq element and installs NO custom exception exit still reaches it. It
   // decides for itself whether a completion is owed, and it only runs after the chain below has
   // declined the interrupt — so counting it here cannot deliver anything twice.
-  const bool cd_delivery_path = cdReadyCallbackOwnedByGuestInterrupt(*c);
+  const psx::cd::StockLibcd *libcd = c->game->cd.stockLibrary();
+  const bool cd_delivery_path = libcd != nullptr && libcd->deliversOnInterrupt();
   const uint32_t pending = c->irqStatLatch() & i_mask;
   // Clear the gate whenever there is nothing to deliver, so the common case costs one load-and-test
   // per function entry and nothing more. Re-armed by whoever raises next.
@@ -333,12 +316,12 @@ void Hle::irqPoll(Core *c) {
   // the BIOS services each pending source separately, so a CD data-ready that arrived with that VBlank
   // is still owed. Read "owed" from the same place hardware does: the I_STAT bit the claiming handler
   // did not acknowledge. A handler that serviced CD acknowledged it (and consumed the controller
-  // response, which `deliverCdReadyCompletionOnInterrupt` independently requires), so nothing is
+  // response, which `deliverReadyCompletion` independently requires), so nothing is
   // delivered twice.
   const bool cd_bit_unserviced = (c->irqStatLatch() & i_mask & (1u << IRQ_BIT_CD)) != 0u;
   if (cd_delivery_path && (!claimed || cd_bit_unserviced)) {
     in_irq = 0; // the chain walk's handler has RETURNED; this is a separate handler
-    const CdReadyDelivery delivered = deliverCdReadyCompletionOnInterrupt(*c);
+    const CdReadyDelivery delivered = libcd->deliverOnInterrupt(*c);
     if (delivered == CdReadyDelivery::GuestExited) {
       in_irq = 0;
       return; // the guest took a typed exit out of its ready callback; stop the whole poll

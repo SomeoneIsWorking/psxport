@@ -125,7 +125,7 @@ void BugReportSession::report(Core &core) {
     lucent::error("bugreport", "no user-data directory on this host; set PSXPORT_BUG_REPORT_DIR");
     return;
   }
-  const HostIdentity identity = game.hostIdentity();
+  const psx::game::HostIdentity identity = game.hostIdentity();
   const char *application = !mProductName.empty()              ? mProductName.c_str()
                             : identity.userDataName != nullptr ? identity.userDataName
                                                                : kFallbackUserDataName;
@@ -188,7 +188,7 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
   draft.addFact("build", PSXPORT_BUILD_ID_COMPOSITE);
 
   if (recorded) {
-    const HostIdentity identity = game.hostIdentity();
+    const psx::game::HostIdentity identity = game.hostIdentity();
     const std::string cardVar = identity.cardEnvVar != nullptr ? identity.cardEnvVar : "PSXPORT_CARD";
     draft.setReproduction(bug_report::Reproduction{
         .summary = "Replay the pad recording from boot on the memory card it started from; pad frame " +

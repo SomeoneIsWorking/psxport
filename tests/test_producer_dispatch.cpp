@@ -1,4 +1,5 @@
 // test_producer_dispatch.cpp — a producer override's packets carry (P, obj, k) into the frame record.
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include "core.h"
@@ -22,22 +23,6 @@ constexpr std::uint32_t kKeyedOne = 0x80100000u;
 constexpr std::uint32_t kKeyedTwo = 0x80100020u;
 constexpr std::uint32_t kGuestPacket = 0x80100060u;
 constexpr std::uint32_t kChainEnd = 0x00FFFFFFu;
-
-class Runtime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  void registerOverrides(Game &) override {}
-};
 
 std::uint32_t link(std::uint32_t words, std::uint32_t next) {
   return (words << 24) | (next & 0x00FFFFFFu);
@@ -66,13 +51,12 @@ void drawObject(Core *core) {
 }
 
 struct Fixture {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   std::unique_ptr<Game> game;
   bool invoked = false;
 
   Fixture() {
-    psxport_install_game(runtime);
-    game = std::make_unique<Game>();
+    game = std::make_unique<Game>(runtime);
     Core &core = game->core;
     core.imageCatalog().activate("producer-test", {kEntry, kEntry + 8u}, 0x50524F44u);
     core.mem_w32(kEntry, 0x03E00008u); // jr $ra

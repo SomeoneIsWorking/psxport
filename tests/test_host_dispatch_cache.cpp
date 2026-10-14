@@ -85,7 +85,7 @@ void test_a_colliding_address_replaces_rather_than_answers_for_the_other() {
 }
 
 void test_classification_is_remembered_and_follows_an_override_install_and_removal() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = core.imageCatalog().activate("cache-test", {0x00010000u, 0x00020000u}, 1u);
@@ -105,7 +105,7 @@ void test_classification_is_remembered_and_follows_an_override_install_and_remov
 }
 
 void test_classification_follows_the_image_that_owns_the_address() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = core.imageCatalog().activate("cache-test", {0x00010000u, 0x00020000u}, 1u);
@@ -142,7 +142,7 @@ void nativeCallsItsOriginal(Core *core) {
 }
 
 void test_a_suppressed_override_is_classified_as_guest_code_for_exactly_the_suppression() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   const auto image = core.imageCatalog().activate("cache-test", {0x00010000u, 0x00020000u}, 1u);
@@ -169,7 +169,7 @@ void test_a_suppressed_override_is_classified_as_guest_code_for_exactly_the_supp
 }
 
 void test_a_platform_service_registration_changes_the_answer() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   GameConfig config{};
@@ -189,7 +189,7 @@ void test_a_platform_service_registration_changes_the_answer() {
 void test_the_pad_work_area_entries_are_never_remembered() {
   // Their answer reads live guest memory (the B0 table's published base), which no revision counter
   // watches, so a remembered verdict could outlive the memory it was read from.
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   CHECK(Hle::isPadWorkAreaEntry(kPadEnableEntry));

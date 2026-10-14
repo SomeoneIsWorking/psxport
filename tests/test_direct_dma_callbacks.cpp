@@ -9,9 +9,17 @@
 #include "irq_edge.h"
 #include "native_dispatch.h"
 #include "platform_hle.h"
+#include "stock_dma_callbacks.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <memory>
+#include <optional>
+
+namespace {
+// Rebuilt by each legacy fixture; the Game from the previous fixture is gone by then.
+std::optional<LegacyGameRuntimeAdapter> legacyRuntime;
+} // namespace
 
 namespace {
 
@@ -44,22 +52,14 @@ void installCallback(Game &game) {
   CHECK(game.core.nativeDispatcher().install({{image, kCallback}, "dma-callback", callback}));
 }
 
-class DirectRuntime final : public GameRuntime {
+class DirectRuntime final : public psx::test::StubGameRuntime {
 public:
-  explicit DirectRuntime(uint32_t guestDmaTable = 0) {
-    plan_.dmaCallbackTable = guestDmaTable;
-    image_.residentText = {kCallback & 0x1FFFFFFFu, (kCallback & 0x1FFFFFFFu) + 4u};
-    image_.backtraceText = image_.residentText;
-  }
+  explicit DirectRuntime(uint32_t guestDmaTable = 0) : guestDmaTable_(guestDmaTable) {}
 
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  const GuestProgramImage *guestProgramImage() const override {
-    return &image_;
+  void registerOverrides(Game &game) override {
+    if (guestDmaTable_ != 0) {
+      guestTable_.bind(game);
+    }
   }
   RenderCapabilities renderCapabilities() const override {
     return RenderCapabilities::widescreenOnly();
@@ -67,31 +67,27 @@ public:
   bool guestVramIsPicture(const Game &) const override {
     return true;
   }
-  const PlatformHlePlan *platformHlePlan() const override {
-    return &plan_;
-  }
 
 private:
-  GuestProgramImage image_{};
-  PlatformHlePlan plan_{};
+  uint32_t guestDmaTable_;
+  const psx::hle::StockDmaCallbacks guestTable_{guestDmaTable_};
 };
 
 std::unique_ptr<Game> freshGame() {
   static DirectRuntime runtime;
-  psxport_install_game(runtime);
   callbackCalls = 0;
   callbackA0 = 0;
   callbackA1 = 0;
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
   installCallback(*game);
   return game;
 }
 
 std::unique_ptr<Game> freshGuestTableGame() {
   static DirectRuntime runtime(kLegacyTable);
-  psxport_install_game(runtime);
   callbackCalls = 0;
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
   installCallback(*game);
   game->hle.i_mask = 1u << IRQ_BIT_DMA;
   return game;
@@ -101,14 +97,12 @@ std::unique_ptr<Game> freshLegacyGame() {
   static GameConfig config{};
   static const GameHooks hooks{};
   config = {};
-  config.recMainLo = kCallback & 0x1FFFFFFFu;
-  config.recMainHi = (kCallback & 0x1FFFFFFFu) + 4u;
   config.dmaCallbackTable = kLegacyTable;
-  psxport_install_game(&config, &hooks);
+  legacyRuntime.emplace(config, hooks);
   callbackCalls = 0;
   callbackA0 = 0;
   callbackA1 = 0;
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(*legacyRuntime);
   installCallback(*game);
   game->hle.i_mask = 1u << IRQ_BIT_DMA;
   return game;
@@ -194,8 +188,8 @@ void test_legacy_runtime_keeps_its_guest_callback_table_authoritative() {
   CHECK_EQ(callbackCalls, 1);
 }
 
-// A direct runtime whose own libapi keeps the table in guest RAM declares its base on the platform
-// plan; the framework then calls the CURRENT guest word and never consults the native registry.
+// A direct runtime whose own libapi keeps the table in guest RAM binds StockDmaCallbacks; the framework then calls the
+// CURRENT guest word and never consults the native registry.
 void test_direct_runtime_with_a_declared_guest_table_dispatches_the_guest_word() {
   auto game = freshGuestTableGame();
   game->core.mem_w32(kLegacyTable + 4u * static_cast<uint32_t>(DmaChannel::Cdrom), kCallback);

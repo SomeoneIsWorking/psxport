@@ -6,6 +6,7 @@
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
 #include "scheduler.h"
+#include "stub_game_runtime.h"
 
 #include <lucent/log.h>
 #include <memory>
@@ -28,29 +29,17 @@ struct CooperativeObservation {
   bool cooperativeContextPreserved = false;
 };
 
-class Runtime final : public GameRuntime {
+class Runtime final : public psx::test::StubGameRuntime {
 public:
   Runtime() {
     bindLegacyInterface(&kSyntheticConfig, nullptr);
-  }
-  void *createContext(Core &) override {
-    return &nested;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
   }
 
   CooperativeObservation nested;
 };
 
 void cooperativeNativeOwner(Core *core) {
-  auto &observed = *static_cast<CooperativeObservation *>(core->gameCtx);
+  auto &observed = static_cast<Runtime &>(core->runtime).nested;
   ++observed.cooperativeCalls;
   const std::uint32_t stack = core->r[29];
   const std::uint32_t activeAddress = core->active_native_address;
@@ -293,8 +282,7 @@ void checkGuestAuthoredTaskState(Game &game, Checks &checks) {
 
 int main(int argc, char **argv) {
   Runtime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
   Core &core = game->core;
   if (argc == 2 && std::string_view(argv[1]) == "--terminal-fault") {
     constexpr std::uint32_t unmappedEntry = 0x80018000u;

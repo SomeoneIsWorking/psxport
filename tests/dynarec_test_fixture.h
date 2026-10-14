@@ -14,31 +14,15 @@
 #include "game_runtime.h"
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
+#include "stub_game_runtime.h"
 
 #include <cstdint>
 #include <memory>
 
 namespace dynarec_test {
 
-class Runtime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-};
-
-std::unique_ptr<Game> makeGame(Runtime &runtime) {
-  psxport_install_game(runtime);
-  return std::make_unique<Game>();
+std::unique_ptr<Game> makeGame(psx::test::StubGameRuntime &runtime) {
+  return std::make_unique<Game>(runtime);
 }
 
 constexpr std::uint32_t encodeJal(std::uint32_t target) {

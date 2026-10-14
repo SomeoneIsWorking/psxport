@@ -1,37 +1,30 @@
 #include "game.h"
 #include "bios_load_exec.h" // the disc reader A0:0x51 LoadAndExecute is bound with, below
 #include "config_vars.h"    // cv_producers — PSXPORT_PRODUCERS, read once per Game below
-#include "gte_state.h"      // GTE_BindState — released below
-#include "mdec_state.h"     // MDEC_BindState — released below
 #include "ot_attr.h"        // g_producer_census_armed — armed by every Game's constructor, below
-#include "spu_state.h"      // SPU_BindState, spu_bind_log, spu_bind_irq_core — released below
-#include "xa_state.h"       // xa_bind_state — released below
+#include "xa_state.h"       // xa_state_init, psx::audio::releaseXaState
 
-HostIdentity Game::hostIdentity() const {
-  if (core.cfg) {
-    return {.cardEnvVar = core.cfg->cardEnvVar,
-            .cardDefaultPath = core.cfg->cardDefaultPath,
-            .userDataName = core.cfg->userDataName};
-  }
-  const HostIdentity *declared = runtime ? runtime->hostIdentity() : nullptr;
-  return declared ? *declared : HostIdentity{};
+psx::game::HostIdentity Game::hostIdentity() const {
+  const psx::game::HostIdentity *declared = runtime.hostIdentity();
+  return declared ? *declared : psx::game::HostIdentity{};
 }
 
-Game::Game() : ownedGpuDevice(std::make_unique<GpuDevice>()), gpu_dev(*ownedGpuDevice) {
+Game::Game(psx::game::GameRuntime &runtime)
+    : core(runtime), ownedGpuDevice(std::make_unique<GpuDevice>()), gpu_dev(*ownedGpuDevice), runtime(runtime) {
   wireRuntimeMembers();
 }
 
 // A Game that presents through a device the caller owns. Nothing here may create or release one: the
 // device outlives this Game by contract, and the process claim below points at it exactly as it would
 // for a self-owning Game.
-Game::Game(GpuDevice &presentation) : gpu_dev(presentation) {
+Game::Game(psx::game::GameRuntime &runtime, GpuDevice &presentation)
+    : core(runtime), gpu_dev(presentation), runtime(runtime) {
   wireRuntimeMembers();
 }
 
 void Game::wireRuntimeMembers() {
   // PSXPORT_PRODUCERS is armed per Game, before any guest store.
   g_producer_census_armed = psx::config::cv_producers.get();
-  runtime = core.runtime;
   core.game = this;
   gpu.game = this;
   gpu_vk.game = this;
@@ -52,19 +45,14 @@ void Game::wireRuntimeMembers() {
   if (!GpuDevice::sInstance) {
     GpuDevice::sInstance = &gpu_dev;
   }
-  if (runtime) {
-    mods.declareTitleSettings(runtime->titleIntSettings());
-  }
-  mods.init(runtime ? runtime->renderCapabilities() : RenderCapabilities::direct());
+  mods.declareTitleSettings(runtime.titleIntSettings());
+  mods.init(runtime.interpolates(), runtime.renderCapabilities().defaultFaceOrder);
   // The declared render path is installed here so no title can run on a path it did not declare.
-  if (runtime) {
-    render_path_install(&core);
-  }
+  render_path_install(&core);
   disc_state_init(&disc);
   cdc_state_init(&cdc);
   timing.bindCdcClock(&cdc);
   xa_state_init(&xa);
-  gte.dbg.sxhist_on = gte.dbg.gteprobe = gte.dbg.projprobe = gte.dbg.rtpcaller_on = -1;
   // BIOS A0:0x51 LoadAndExecute reads the executable the guest named through this run's disc, bound
   // here with every other per-Core owner rather than at the dispatch site.
   hle.loadExecReader = psx::hle::discFileReader(disc);
@@ -72,31 +60,23 @@ void Game::wireRuntimeMembers() {
   cdc.xa = &xa;
   xa.disc = &disc;
 
-  // Factories receive a fully wired Game. Direct runtimes create no temporal decorator by default;
-  // compatibility runtimes opt in explicitly through their factory override.
-  if (runtime) {
-    temporalPresentation = runtime->createTemporalFramePresentation(*this);
-    frameDriver = runtime->createFrameDriver(*this);
-    taskScheduler = runtime->createTaskScheduler(*this);
-  }
+  // Factories receive a fully wired Game; the session first, so the products can reach it.
+  sessionState = runtime.createSession(*this);
+  temporalPresentation = runtime.createTemporalFramePresentation(*this);
+  frameDriver = runtime.createFrameDriver(*this);
+  taskScheduler = runtime.createTaskScheduler(*this);
 
   // Every product constructs a Game, so PSXPORT_GPU_SELFTEST runs here.
   gpu_vk.tritest();
 }
 
-// The Beetle peripherals reach their per-instance state through process-wide bind points that the title's
-// frame step re-establishes from its explicit Core. A bind point that outlives the Game it names is a
-// dangling write for whatever runs next in this process (measured: a second Game's gte_init wrote through
-// the first Game's freed GTE registers). Every one is returned to its shared default here, while the
-// storage it names is still alive.
+// A process-wide bind point that still names this Game would dangle once it is freed; one that names
+// another live Game is left alone.
 void Game::releaseHardwareBindings() {
-  GTE_BindState(nullptr);
-  SPU_BindState(nullptr);
-  spu_bind_log(nullptr);
-  spu_bind_irq_core(nullptr);
-  MDEC_BindState(nullptr);
-  xa_bind_state(nullptr);
-  core.rsub.projParams.release();
+  core.gte().release();
+  spu.release();
+  mdec.release();
+  psx::audio::releaseXaState(xa);
   core.rsub.projprim.release();
 }
 

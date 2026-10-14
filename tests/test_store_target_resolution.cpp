@@ -32,6 +32,7 @@
 #include "game_runtime.h"
 #include "lightrec_executor.h"
 #include "render_capabilities.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <array>
@@ -40,28 +41,8 @@
 
 namespace {
 
-// A minimal GameRuntime, because `Runtime`/`makeGame` are local to test_dynarec_contract.cpp and this
-// test is deliberately standalone: the point of the file is ONE question, and copying the harness keeps
-// the two tests from sharing a fixture whose changes would move both answers at once.
-class Runtime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-};
-
-std::unique_ptr<Game> makeGame(Runtime &runtime) {
-  psxport_install_game(runtime);
-  return std::make_unique<Game>();
+std::unique_ptr<Game> makeGame(psx::test::StubGameRuntime &runtime) {
+  return std::make_unique<Game>(runtime);
 }
 
 constexpr std::uint32_t kEntry = 0x00011000u;
@@ -99,7 +80,7 @@ void capture(const psx::cpu::StoreObservation &observation, void *data) noexcept
 // `$t2` is zero, so `bltz` is not taken and the delay slot has still executed: `$t0` is 0x64 by the time
 // control leaves the block, and the store must have written 0x60.
 static void test_store_in_a_delay_slot_bumped_base() {
-  Runtime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
   core.mem_w32(kEntry + 0u, 0x24080060u);  // addiu t0, zero, 0x60

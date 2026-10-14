@@ -31,21 +31,6 @@
 
 class Game;
 class Core;
-struct GameHooks;
-
-// Mix the GAME's own music engine on top of the SPU's rendered PCM.
-//
-// A free function, not a private method, because `audioMixFrame` is an OPTIONAL hook: a port with no
-// native music engine of its own leaves it null (spider1 binds its hooks by name, so every field it
-// has not stood up is value-initialised to nullptr). The framework's idiom for an optional hook is to
-// test the pointer before calling it (warp_control.cpp does this for devWarpAllowed) — this used to
-// be an unguarded call inside frameEx that checked only `game`, so the FIRST consumer without a music
-// engine segfaulted the moment anything drove the mixer.
-//
-// Split out here so that contract is reachable by a hermetic test: no SPU, no device, no Game.
-// Null `hooks` or null `hooks->audioMixFrame` is the normal case for such a port and must be a
-// silent no-op that leaves `buf` exactly as the SPU rendered it.
-void spu_mix_game_audio(Core *c, const GameHooks *hooks, int16_t *buf, int frames);
 
 class SpuAudio {
 public:

@@ -80,8 +80,8 @@ public:
   // presents through it; it does not have to OWN it. A host that runs several Games in one process — a
   // title selector, then a title, then the selector again — passes the same device to every one of them
   // (see psxport::HostPresentation), because a window destroyed and re-created between sessions is what
-  // made the selector look like a separate program. `Game()` keeps the old behaviour and owns a device
-  // of its own, and `Game(GpuDevice&)` presents through one the caller owns and outlives this Game.
+  // made the selector look like a separate program. `Game(GameRuntime&)` owns a device
+  // of its own, and `Game(GameRuntime&, GpuDevice&)` presents through one the caller owns and outlives this Game.
   //
   // `ownedGpuDevice` is declared FIRST so it is constructed before the reference binds to it, and LAST
   // so it is destroyed last: a self-owning Game's device outlives every per-Game GPU target rather than
@@ -114,10 +114,7 @@ public:
   bool fastForwarding() const {
     return pad.fastForwarding() || session.preRolling();
   }
-  SpuAudio spu_audio; // host audio output sink (SDL3 device + optional WAV capture)
-  // The game's SEP/VAB in-game music player + Sound Test catalogue live game-side on TombaCtx now;
-  // the framework SPU sink + mod-UI HUD reach them through the audioMixFrame / audioNowPlayingName /
-  // audioSoundTestPlay GameHooks (game_iface.h), so no framework member names a game audio type.
+  SpuAudio spu_audio;                 // host audio output sink (SDL3 device + optional WAV capture)
   RmlOverlay rml_overlay;             // in-app mod/debug HTML UI + live world-position HUD
   PlatformHle platform_hle;           // HW-sync HLE dispatch table (VSync/CdSync/MDEC/ChangeThread)
   Memcard memcard;                    // host-backed 128 KB memory card device (BIOS libcard/libmcrd)
@@ -127,8 +124,6 @@ public:
   DbgServer dbg_server;               // live TCP debug endpoint (PSXPORT_DEBUG_SERVER=<port>)
   psx::debug::BugReportSession bugReport; // B key: freeze, capture, write and save a bug report
   GpuPerf perf;                           // per-frame CPU phase / frame-time profiler (REPL `debug perf`)
-  GteRegs gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
-                 // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
   // (native-depth cache moved to `class ProjPrim` on Render — reach as `c->rsub.projprim`, 2026-07-03)
   SpuDevice spu;   // per-instance SPU device (Beetle spu.c handle + SBS write log); bound via spu.bind()
   MdecDevice mdec; // per-instance MDEC device (Beetle mdec.c handle); bound via mdec.bind()
@@ -137,27 +132,28 @@ public:
   // started and is still considered live (was a function-local static — wrong under two Games).
   int field_bgm_started = 0;
 
+  // The title's runtime, shared with core.runtime; the caller owns it and it outlives this Game.
+  psx::game::GameRuntime &runtime;
+
+  // The title's card and user-data names; fields are null when the title declares none.
+  psx::game::HostIdentity hostIdentity() const;
   // Declared after the subsystem state so the products are destroyed first. A derived driver or
   // scheduler may retain references to the fully wired subsystem members it receives at creation.
-  GameRuntime *runtime = nullptr;
-
-  // Window title and memory-card policy, from the legacy GameConfig or the direct runtime, whichever
-  // this Game was built with. Fields are null when the title declares none.
-  HostIdentity hostIdentity() const;
+  std::unique_ptr<psx::game::TitleSessionState> sessionState;
   std::unique_ptr<psx::frame::TemporalFramePresentation> temporalPresentation;
-  std::unique_ptr<FrameDriver> frameDriver;
-  std::unique_ptr<TaskScheduler> taskScheduler;
+  std::unique_ptr<psx::game::FrameDriver> frameDriver;
+  std::unique_ptr<psx::game::TaskScheduler> taskScheduler;
 
   // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_vk.game->core). Set once here so no file-scope global is needed.
-  Game();
+  explicit Game(psx::game::GameRuntime &runtime);
   // Present through a presentation device the CALLER owns and outlives this Game. The device must
   // already be the process device (or become it through the sInstance claim below); this Game never
   // releases it, so every Game in a host-lifetime-window product shares one window and one device.
-  explicit Game(GpuDevice &presentation);
+  Game(psx::game::GameRuntime &runtime, GpuDevice &presentation);
   ~Game();
-  // Return every process-wide peripheral bind point to its default (see game.cpp).
+  // Return every process-wide peripheral bind point that still names this Game to its default.
   void releaseHardwareBindings();
 
 private:

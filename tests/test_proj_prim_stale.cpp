@@ -25,13 +25,15 @@
 #include "proj_prim.h"
 #include "render_substrate.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
+namespace {
+psx::test::StubGameRuntime stubRuntime;
+}
+
 static std::unique_ptr<Core> bare_core(void) {
-  static const GameConfig cfg{};
-  static const GameHooks hooks{};
-  psxport_install_game(&cfg, &hooks);
-  return std::make_unique<Core>();
+  return std::make_unique<Core>(stubRuntime);
 }
 
 static const uint32_t kAddr = 0x80100000u;

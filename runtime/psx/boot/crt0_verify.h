@@ -1,8 +1,8 @@
 // crt0_verify.h — RE-DERIVE the crt0 boot group FROM THE GUEST'S OWN INSTRUCTIONS and diff it against
-// the constants the game shipped in its `GuestProgramImage`.
+// the constants the game shipped in its `psx::game::Crt0Image`.
 //
 // ═══ WHY THIS EXISTS: THE GATE RULE ═════════════════════════════════════════════════════════════════
-// Every crt0 field in GuestProgramImage is a value somebody MEASURED out of the executable and then
+// Every crt0 field in psx::game::Crt0Image is a value somebody MEASURED out of the executable and then
 // TYPED into the game's derived runtime. Before this file, nothing compared the typed copy to the
 // measurement — the shape of defect found independently in four of five ports in this workspace: a
 // per-repo tool holds its own copy of the answer and asserts the binary matches THAT, while the port
@@ -42,7 +42,6 @@
 // loaded yet) says exactly that, with its denominator, instead of silently reporting "0 disagreements".
 #pragma once
 #include "crt0_boot.h"
-#include "game_iface.h"
 #include <lucent/log.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -85,7 +84,7 @@ struct Crt0Observed {
   bool haveReserve = false;
   uint32_t stackTopBase2 = 0;
   bool haveHeapBase = false;
-  uint32_t heapBase = 0; // UNMASKED, as GuestProgramImage states it
+  uint32_t heapBase = 0; // UNMASKED, as psx::game::Crt0Image states it
   bool haveGp = false;
   uint32_t gp = 0;
   bool haveLibcInit = false;
@@ -248,7 +247,7 @@ template <class Reader> static inline Crt0Observed crt0_scan(uint32_t entry, Rea
       case 0x00: // sll — the `& 0x1FFFFFFF` mask, first half
         if (r[rt].tag == CT_CONST && sa == 3) {
           o.haveHeapBase = true;
-          o.heapBase = r[rt].val; // UNMASKED, which is what GuestProgramImage holds
+          o.heapBase = r[rt].val; // UNMASKED, which is what psx::game::Crt0Image holds
           r[rd].tag = CT_HEAPBASE;
           r[rd].val = r[rt].val << 3;
         } else {
@@ -297,13 +296,13 @@ struct Crt0AuditRow {
   bool agree;
 };
 
-// crt0_audit — scan the guest crt0 and diff it against the shipped GuestProgramImage + derived plan.
+// crt0_audit — scan the guest crt0 and diff it against the shipped psx::game::Crt0Image + derived plan.
 // Returns FALSE only on a CONFIRMED disagreement (the caller must then refuse to boot).
 template <class Reader>
-static inline bool crt0_audit(const GuestProgramImage *image, const Crt0Plan &p, Reader rd32, const char *who) {
+static inline bool crt0_audit(const psx::game::Crt0Image *image, const Crt0Plan &p, Reader rd32, const char *who) {
   if (!image || !image->crt0Entry) {
     lucent::warn("crt0",
-                 "{}: NOT AUDITED — GuestProgramImage::crt0Entry is 0, so there is no guest crt0 to compare "
+                 "{}: NOT AUDITED — psx::game::Crt0Image::crt0Entry is 0, so there is no guest crt0 to compare "
                  "the shipped boot group against. 0 of 10 fields were checked; every constant "
                  "below is an UNVERIFIED hand copy. Fill in `crt0Entry` (the PS-EXE entry pc) to turn "
                  "this audit on.",
@@ -447,7 +446,7 @@ static inline bool crt0_audit(const GuestProgramImage *image, const Crt0Plan &p,
   if (disagreed) {
     lucent::error("crt0",
                   "{}: REFUSING TO BOOT — {} of {} crt0 constant(s) shipped in the game's "
-                  "GuestProgramImage DISAGREE with the guest's own crt0 at 0x{:08X}: {}."
+                  "psx::game::Crt0Image DISAGREE with the guest's own crt0 at 0x{:08X}: {}."
                   "\n  The guest bytes are the measurement; the runtime image is a hand copy of "
                   "it. Fix the derived runtime (or, if the scanner is wrong, say so with the disassembly — "
                   "runtime/psx/boot/crt0_verify.h documents the five crt0s it was measured on).",

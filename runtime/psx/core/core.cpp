@@ -23,7 +23,7 @@
 #include <lucent/log.h>
 #include <utility>
 
-Core::Core() {
+Core::Core(psx::game::GameRuntime &runtime) : runtime(runtime) {
   memset((R3000 *)this, 0, sizeof(R3000));
   memset(ram, 0, sizeof(ram));
   memset(scratch, 0, sizeof(scratch));
@@ -44,25 +44,15 @@ Core::Core() {
     lightrecExecutor_->attachFunctionReach(
         std::make_unique<psx::cpu::FunctionReach>(*imageCatalog_, std::move(reachReport)));
   }
-  // Snapshot the game-owned polymorphic runtime. The two legacy views are non-null only when the
-  // bounded adapter was installed by a consumer that has not migrated this seam yet.
-  runtime = psxport_game_runtime();
-  guestProgramImage = runtime ? runtime->guestProgramImage() : nullptr;
-  cfg = psxport_game_config();
-  hooks = psxport_game_hooks();
-  if (runtime) {
-    gameCtx = runtime->createContext(*this);
-  }
+  // The two legacy views are non-null only for a runtime derived from the bounded adapter.
+  cfg = runtime.legacyConfigForMigration();
+  hooks = runtime.legacyHooksForMigration();
 }
 
 Core::~Core() {
   // Any live `render path` switch was addressed to THIS Core; let go of it before the machine goes,
   // so the process-global that remembers it cannot outlive the pointer it holds.
   render_path_forget(this);
-  if (runtime) {
-    runtime->destroyContext(gameCtx);
-  }
-  gameCtx = nullptr;
 }
 
 psx::cpu::ExecutionControl &Core::executionControl() {

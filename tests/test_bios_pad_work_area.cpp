@@ -1,13 +1,16 @@
 // B0[5B] is a guest-visible BIOS work area. Linked libpad calls its pad-enable
 // and pad-disable functions directly, so both must cross the shipping dispatcher.
 #include "game.h"
-#include "legacy_game_config.h"
 #include "native_dispatch.h"
+#include "stock_pad_buffers.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 constexpr uint32_t kB0Table = 0x8000F000u;
 constexpr uint32_t kWorkBaseSlot = kB0Table + 0x5Bu * sizeof(uint32_t);
@@ -17,6 +20,16 @@ constexpr uint32_t kReturnAddress = 0x80012340u;
 constexpr uint32_t kPadBuffer = 0x80020000u;
 constexpr uint32_t kPadEnableFlag = 0x000074B8u;
 
+class PadRuntime final : public psx::test::StubGameRuntime {
+public:
+  void deliverPad(Core &core, const psx::input::PadDelivery &delivery) override {
+    buffers_.deliver(core, delivery);
+  }
+
+private:
+  psx::input::StockPadBuffers buffers_{{.slot0Buffer = kPadBuffer}};
+};
+
 psx::cpu::ExecutionResult callPadCallback(Game &game, uint32_t address) {
   game.core.r[2] = 0xBACCu;
   game.core.r[31] = kReturnAddress;
@@ -24,7 +37,7 @@ psx::cpu::ExecutionResult callPadCallback(Game &game, uint32_t address) {
 }
 
 void test_published_pad_callbacks_return_through_shipping_dispatch() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   CHECK(game->hle.dispatchBios('B', 0x57u));
   CHECK_EQ(game->core.r[2], kB0Table);
   const uint32_t workBase = game->core.mem_r32(kWorkBaseSlot);
@@ -44,7 +57,7 @@ void test_published_pad_callbacks_return_through_shipping_dispatch() {
 }
 
 void test_unpublished_and_invalid_work_area_are_not_services() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   constexpr uint32_t kExpectedWorkBase = 0x8000E000u;
   CHECK_EQ(psx::cpu::classifyGuestHostDispatch(game->core, kExpectedWorkBase + kPadEnableOffset),
            psx::cpu::GuestHostDispatchKind::Fault);
@@ -56,10 +69,8 @@ void test_unpublished_and_invalid_work_area_are_not_services() {
 }
 
 void test_bios_pad_lifecycle_gates_guest_packets_without_changing_native_only_input() {
-  auto game = std::make_unique<Game>();
-  GameConfig config{};
-  config.padSlot0Buf = kPadBuffer;
-  game->core.cfg = &config;
+  PadRuntime runtime;
+  auto game = std::make_unique<Game>(runtime);
   game->pad.setButtons(0xFFF7u);
 
   // Existing title-native packet users have no BIOS pad lifecycle to gate them.

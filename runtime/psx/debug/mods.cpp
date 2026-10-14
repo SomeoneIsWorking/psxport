@@ -88,8 +88,8 @@ bool insideCheckout(const char *path) {
 
 } // namespace
 
-const TitleIntSetting *Mods::findTitleSetting(const char *key) const {
-  for (const TitleIntSetting &setting : mTitleSettings) {
+const psx::game::TitleIntSetting *Mods::findTitleSetting(const char *key) const {
+  for (const psx::game::TitleIntSetting &setting : mTitleSettings) {
     if (strcmp(setting.var->name(), key) == 0) {
       return &setting;
     }
@@ -119,7 +119,7 @@ void Mods::save() const {
     psx::config::cv_fps60.set(psx::config::Layer::Value, fps60 != 0);
   }
   fprintf(f, "aspect=%d\nires=%d\nface_order=%d\n", aspect, ires, face_order);
-  for (const TitleIntSetting &setting : mTitleSettings) {
+  for (const psx::game::TitleIntSetting &setting : mTitleSettings) {
     fprintf(f, "%s=%ld\n", setting.var->name(), setting.var->value_for_save());
   }
   if (mTemporalInterpolationSupported) {
@@ -167,7 +167,7 @@ void Mods::load() {
       }
     }
     // A title setting goes to its CVar's VALUE layer, like fps60: an environment Override still wins.
-    else if (const TitleIntSetting *setting = findTitleSetting(k)) {
+    else if (const psx::game::TitleIntSetting *setting = findTitleSetting(k)) {
       setting->var->set(psx::config::Layer::Value, setting->range.clamp(atol(v)));
     }
     // A key this loader does not recognise used to fall off the end of the chain and vanish. That is
@@ -191,15 +191,15 @@ void Mods::load() {
   }
 }
 
-void Mods::init(const RenderCapabilities &capabilities) {
+void Mods::init(bool interpolates, FaceOrder defaultFaceOrder) {
   if (mInited) {
     return;
   }
   mInited = true;
-  mTemporalInterpolationSupported = capabilities.temporalInterpolation;
+  mTemporalInterpolationSupported = interpolates;
   // The title owns the factory answer for OT-authored versus native per-pixel depth. Seed it before
   // load so an explicit persisted player choice remains the higher-precedence answer.
-  face_order = capabilities.defaultFaceOrder;
+  face_order = defaultFaceOrder;
   // One PC-native build: every other visual enhancement starts OFF (the in-class initializers are
   // the factory state). The F1 overlay toggles them LIVE and persists the choice to the settings
   // file, restored next launch.

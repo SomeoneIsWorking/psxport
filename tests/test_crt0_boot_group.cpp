@@ -1,15 +1,15 @@
 // test_crt0_boot_group.cpp — the crt0 boot group's BOTH directions: does an incomplete group REFUSE
 // and say what is missing, and does a complete one produce exactly the guest's own values?
 //
-// WHAT THIS GATES, and why the old code could not be gated at all. `crt0_setup` used to compute the
+// WHAT THIS GATES, and why the old code could not be gated at all. `Crt0Boot::run` used to compute the
 // whole crt0 inline in the boot spine — a file that cannot be linked into a hermetic test (it reaches
 // runtime guest execution). So the arithmetic that decides sp, gp and the InitHeap
 // capacity for every port had NO test, and its two silent failure modes shipped:
 //   * a hardcoded `- 8` stack-top bias, right for four of five executables in this workspace;
 //   * `mem_w32(cfg->heapSizePtr, …)` with heapSizePtr == 0, i.e. a write to GUEST ADDRESS 0.
-// The derivation now lives in crt0_boot.h as a pure function over (GuestProgramImage, the two words the guest
-// crt0 loads), and `crt0_setup` is a thin applier with NO arithmetic of its own — so what is asserted
-// below IS the shipping path, not a copy of it. If someone re-adds a computation to crt0_setup, that
+// The derivation now lives in crt0_boot.h as a pure function over (Crt0Image, the two words the guest
+// crt0 loads), and `Crt0Boot::run` is a thin applier with NO arithmetic of its own — so what is asserted
+// below IS the shipping path, not a copy of it. If someone re-adds a computation to Crt0Boot::run, that
 // computation is by definition a second copy and this file stops covering it.
 //
 // THE NEGATIVE IS ASSERTED, NOT ASSUMED. Every refusal case checks the emitted LINE COUNT and that the
@@ -70,8 +70,8 @@ static bool any_line_has(const char *needle) {
 
 // ── the two real boot groups ────────────────────────────────────────────────────────────────────
 // Tomba!2 MAIN.EXE, crt0 FUN_800896E0 — Tomba2Engine/game/core/game_config.cpp.
-static GuestProgramImage tomba2_cfg(void) {
-  GuestProgramImage c{};
+static psx::game::Crt0Image tomba2_cfg(void) {
+  psx::game::Crt0Image c{};
   c.bss.begin = 0x800BE0D8u;
   c.bss.end = 0x80106228u;
   c.stackTopWordAddress = 0x800A3F88u;
@@ -86,8 +86,8 @@ static GuestProgramImage tomba2_cfg(void) {
 }
 // Mega Man X4 SLUS_005.61, crt0 0x800DAE8C — megamanx4/game/core/game_config.cpp kCrt0* constants.
 // heapSizePtr/heapBasePtr are ABSENT: the function's ONLY absolute store is `sw ra`.
-static GuestProgramImage x4_cfg(void) {
-  GuestProgramImage c{};
+static psx::game::Crt0Image x4_cfg(void) {
+  psx::game::Crt0Image c{};
   c.bss.begin = 0x8012F418u;
   c.bss.end = 0x80175F38u;
   c.stackTopWordAddress = 0x800DAF3Cu;
@@ -113,7 +113,7 @@ static const uint32_t T2_RESERVE_WORD = 0x00008000u;
 // today, INCLUDING the -8 bias, and must perform BOTH absolute stores.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_tomba2_group_is_reproduced_exactly(void) {
-  const GuestProgramImage cfg = tomba2_cfg();
+  const psx::game::Crt0Image cfg = tomba2_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, T2_STACK_WORD, T2_RESERVE_WORD, "test-tomba2");
   capture_stop();
@@ -146,7 +146,7 @@ static void test_tomba2_group_is_reproduced_exactly(void) {
 // sp must be 0x80200000 (not 0x801FFFF8), and both stores must be declined WITHOUT a guest-0 write.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_x4_group_has_no_bias_and_no_stores(void) {
-  const GuestProgramImage cfg = x4_cfg();
+  const psx::game::Crt0Image cfg = x4_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "test-x4");
   capture_stop();
@@ -177,7 +177,7 @@ static void test_x4_group_has_no_bias_and_no_stores(void) {
 // the wrong field (or ignored it) would still satisfy one of the two cases above on its own.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_the_two_shapes_differ_on_the_same_stack_word(void) {
-  const GuestProgramImage t2 = tomba2_cfg(), x4 = x4_cfg();
+  const psx::game::Crt0Image t2 = tomba2_cfg(), x4 = x4_cfg();
   capture_start();
   const Crt0Plan a = crt0_plan(&t2, T2_STACK_WORD, T2_RESERVE_WORD, "diff-t2");
   const Crt0Plan b = crt0_plan(&x4, X4_STACK_WORD, X4_RESERVE_WORD, "diff-x4");
@@ -197,7 +197,7 @@ static void test_the_two_shapes_differ_on_the_same_stack_word(void) {
 // one field alone.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_undeclared_bias_refuses_and_names_itself(void) {
-  GuestProgramImage cfg = x4_cfg();
+  psx::game::Crt0Image cfg = x4_cfg();
   cfg.stackBias = {false, 0}; // the state a consumer that has not stated it is in
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "test-nobias");
@@ -223,7 +223,7 @@ static void test_undeclared_bias_refuses_and_names_itself(void) {
 // its crt0 is RE'd. It must refuse, name every one of the 7 unset fields, and count them.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_zero_config_refuses_with_every_field_named(void) {
-  const GuestProgramImage cfg{};
+  const psx::game::Crt0Image cfg{};
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, 0u, 0u, "test-zero");
   capture_stop();
@@ -246,7 +246,7 @@ static void test_zero_config_refuses_with_every_field_named(void) {
   CHECK_EQ(p.sp, 0u);
 }
 
-// A null GuestProgramImage is the same class of state and must refuse rather than dereference.
+// A null Crt0Image is the same class of state and must refuse rather than dereference.
 static void test_null_config_refuses(void) {
   capture_start();
   const Crt0Plan p = crt0_plan(nullptr, 0u, 0u, "test-null");
@@ -254,7 +254,7 @@ static void test_null_config_refuses(void) {
   dump_capture("null");
   CHECK(!p.ok);
   CHECK_EQ(g_errors, 1);
-  CHECK(any_line_has("NO GuestProgramImage"));
+  CHECK(any_line_has("NO crt0 image"));
   CHECK(any_line_has("0 of 8")); // the denominator of a refusal that checked nothing
 }
 
@@ -264,7 +264,7 @@ static void test_null_config_refuses(void) {
 // one state that looks like progress.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_partial_group_names_only_the_missing(void) {
-  GuestProgramImage cfg = tomba2_cfg();
+  psx::game::Crt0Image cfg = tomba2_cfg();
   cfg.globalPointer = 0;
   cfg.libcInitEntry = 0; // two fields not yet located
   capture_start();
@@ -287,7 +287,7 @@ static void test_partial_group_names_only_the_missing(void) {
 // EVERY request out of an arena that does not exist. Refusing is the only safe answer.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_underflowing_heap_size_refuses(void) {
-  const GuestProgramImage cfg = x4_cfg();
+  const psx::game::Crt0Image cfg = x4_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, 0u, X4_RESERVE_WORD, "test-underflow"); // stack-top word reads 0
   capture_stop();
@@ -308,7 +308,7 @@ static void test_underflowing_heap_size_refuses(void) {
 
 // A non-empty, mis-aligned or inverted .bss span is likewise a wrong value with everything set.
 static void test_bad_bss_span_refuses(void) {
-  GuestProgramImage cfg = x4_cfg();
+  psx::game::Crt0Image cfg = x4_cfg();
   cfg.bss.end = cfg.bss.begin - 4u; // inverted
   capture_start();
   const Crt0Plan a = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "test-bss-inverted");
@@ -318,7 +318,7 @@ static void test_bad_bss_span_refuses(void) {
   CHECK_EQ(g_errors, 1);
   CHECK(any_line_has("word-aligned non-empty"));
 
-  GuestProgramImage mis = x4_cfg();
+  psx::game::Crt0Image mis = x4_cfg();
   mis.bss.begin |= 2u; // unaligned
   capture_start();
   const Crt0Plan b = crt0_plan(&mis, X4_STACK_WORD, X4_RESERVE_WORD, "test-bss-unaligned");
@@ -331,7 +331,7 @@ static void test_bad_bss_span_refuses(void) {
 // CASE 8: THE APPLIER, not the plan. The original defect was not in the arithmetic — it was
 // `mem_w32(cfg->heapSizePtr, heapsz)` running with `heapSizePtr == 0`. Asserting `storeHeapSize ==
 // false` on the plan does NOT prove the caller honoured it, so the write sequence is generated by
-// crt0_apply (crt0_boot.h) over an abstract writer and recorded here. `crt0_setup` binds the same
+// crt0_apply (crt0_boot.h) over an abstract writer and recorded here. `Crt0Boot::run` binds the same
 // function to a Core, so this is the shipping sequence, not a paraphrase of it.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 struct RecWriter {
@@ -381,7 +381,7 @@ static void dump_writer(const char *what, const RecWriter &w) {
 }
 
 static void test_absent_heap_globals_write_nothing_at_all(void) {
-  const GuestProgramImage cfg = x4_cfg();
+  const psx::game::Crt0Image cfg = x4_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, X4_STACK_WORD, X4_RESERVE_WORD, "apply-x4");
   capture_stop();
@@ -410,7 +410,7 @@ static void test_absent_heap_globals_write_nothing_at_all(void) {
 // The consumer that DOES have both globals must still get both writes, at the measured addresses and
 // nowhere else — so the fix cannot be "stop storing" for everyone.
 static void test_present_heap_globals_write_exactly_two_words(void) {
-  const GuestProgramImage cfg = tomba2_cfg();
+  const psx::game::Crt0Image cfg = tomba2_cfg();
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, T2_STACK_WORD, T2_RESERVE_WORD, "apply-t2");
   capture_stop();
@@ -440,7 +440,7 @@ static void test_present_heap_globals_write_exactly_two_words(void) {
 // A refused plan must write NOTHING, even through a caller that ignored `ok`. Belt and braces, because
 // the failure mode of this whole area is guest state fabricated from unset fields.
 static void test_refused_plan_applies_nothing(void) {
-  const GuestProgramImage cfg{};
+  const psx::game::Crt0Image cfg{};
   capture_start();
   const Crt0Plan p = crt0_plan(&cfg, 0u, 0u, "apply-zero");
   capture_stop();

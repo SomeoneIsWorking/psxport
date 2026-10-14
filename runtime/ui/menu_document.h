@@ -32,7 +32,9 @@
 #include <vector>
 
 class Game;
+namespace psx::game {
 struct TitleIntSetting;
+}
 
 namespace Rml {
 class Context;
@@ -105,7 +107,7 @@ private:
   void on_row_clicked(MenuRow &row) override;
 
   void add_title_setting_rows(); // the title's declared settings, under #title_settings
-  const TitleIntSetting *find_title_setting(std::string_view id) const;
+  const psx::game::TitleIntSetting *find_title_setting(std::string_view id) const;
   void on_tab_selected(int index); // MenuTabBar's callback; call mTabBar->select() to change tab
   void focus_step(int dir);        // Down/Up, via RmlUi's own TAB navigation
   void activate_focused(int dir);

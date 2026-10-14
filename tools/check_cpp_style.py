@@ -53,7 +53,7 @@ EXCLUDED_COMPONENTS = {"build", "external", "generated", "scratch", "vendor"}
 # distribution and costs readability, so entries under DEFAULT_CAP are not carried here. Every file
 # listed below is over the default cap and still owes an extraction; each cap only moves down.
 PSXPORT_CAPS = {
-    "runtime/psx/game/game_iface.h": 37,
+    "runtime/psx/game/game_iface.h": 32,
     "runtime/psx/gpu/gpu_native.cpp": 2894,
     "runtime/psx/gpu/gpu_vk.cpp": 3592,
     "runtime/psx/gpu/gpu_vk_semi_selftest.cpp": 199,

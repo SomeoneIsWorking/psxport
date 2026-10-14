@@ -1,16 +1,23 @@
-// Gate continuous-read callback ownership through the shipping Cd::pumpStream path. Host pacing
+// Gate continuous-read callback ownership through the bound StockLibcd's stream pump. Host pacing
 // may cap delivery, but it must never invent the controller's INT1 data-ready response.
 #include "cdc_state.h"
 #include "game.h"
 #include "game_iface.h"
 #include "game_runtime.h"
 #include "guest_call.h"
-#include "guest_cd_stream_callback_layout.h"
 #include "image_identity.h"
 #include "native_dispatch.h"
+#include "stock_libcd.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <memory>
+#include <optional>
+
+namespace {
+// Rebuilt by each legacy fixture; the Game from the previous fixture is gone by then.
+std::optional<LegacyGameRuntimeAdapter> legacyRuntime;
+} // namespace
 
 namespace {
 
@@ -65,25 +72,13 @@ void installCallback(Game &game) {
   CHECK(game.core.nativeDispatcher().install({{image, kInterruptHandler}, "cd-interrupt-handler", interruptHandler}));
 }
 
-class DirectRuntime final : public GameRuntime {
+class DirectRuntime final : public psx::test::StubGameRuntime {
 public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  const GuestCdStreamCallbackLayout *guestCdStreamCallbackLayout() const override {
-    return &callbacks;
+  void registerOverrides(Game &game) override {
+    libcd.bind(game);
   }
 
-  GuestCdStreamCallbackLayout callbacks{kCallbackSlot, GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt};
+  const psx::cd::GuestInterruptLibcd libcd{{}, {}, kCallbackSlot, {}};
 };
 
 std::unique_ptr<Game> freshGame() {
@@ -93,8 +88,8 @@ std::unique_ptr<Game> freshGame() {
   config.recMainLo = kCallback & 0x1FFFFFFFu;
   config.recMainHi = (kCallback & 0x1FFFFFFFu) + 4u;
   config.cdReadyCbPtr = kCallbackSlot;
-  psxport_install_game(&config, &hooks);
-  auto game = std::make_unique<Game>();
+  legacyRuntime.emplace(config, hooks);
+  auto game = std::make_unique<Game>(*legacyRuntime);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->cd.stream_active = 1;
@@ -108,8 +103,8 @@ std::unique_ptr<Game> freshGame() {
 
 std::unique_ptr<Game> freshInterruptOwnedGame() {
   static DirectRuntime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->core.mem_w32(kInterruptElement + 4u, kInterruptHandler);
@@ -124,6 +119,10 @@ std::unique_ptr<Game> freshInterruptOwnedGame() {
   return game;
 }
 
+void pump(Game &game) {
+  game.cd.stockLibrary()->pumpStream(game.core, 1);
+}
+
 void publishCurrentResponse(Game &game, uint8_t type) {
   game.cdc.q_head = 0;
   game.cdc.q_tail = 1;
@@ -135,7 +134,7 @@ void publishCurrentResponse(Game &game, uint8_t type) {
 void test_empty_controller_queue_does_not_invent_first_callback() {
   auto game = freshGame();
 
-  game->cd.pumpStream(&game->core, 1);
+  pump(*game);
 
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
   CHECK_EQ(callbackCalls, 0);
@@ -146,7 +145,7 @@ void test_non_data_controller_response_is_not_dispatched_as_stream_data() {
   auto game = freshGame();
   publishCurrentResponse(*game, 2u);
 
-  game->cd.pumpStream(&game->core, 1);
+  pump(*game);
 
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 2u);
   CHECK_EQ(callbackCalls, 0);
@@ -159,7 +158,7 @@ void test_current_data_ready_response_dispatches_exactly_one_callback() {
   game->core.r[4] = 0xAAAAAAAAu;
   game->core.r[5] = 0xBBBBBBBBu;
 
-  game->cd.pumpStream(&game->core, 1);
+  pump(*game);
 
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u);
   CHECK_EQ(callbackCalls, 1);
@@ -181,7 +180,7 @@ void test_interrupt_owned_stream_waits_for_guest_isr_to_consume_int1() {
   game->core.r[5] = 0xBBBBBBBBu;
   game->core.active_native_address = kInterruptHandler;
 
-  game->cd.pumpStream(&game->core, 1);
+  pump(*game);
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(interruptHandlerCalls, 0);
@@ -208,7 +207,7 @@ void test_interrupt_owned_stream_does_not_dispatch_without_int1() {
   auto game = freshInterruptOwnedGame();
   game->core.mem_w32(kIMask, 1u << 2u);
 
-  game->cd.pumpStream(&game->core, 1);
+  pump(*game);
   game->hle.irqPoll(&game->core);
 
   CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);

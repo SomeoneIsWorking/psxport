@@ -1,7 +1,8 @@
 // psx::frame::LogicFrame::begin: the logic-frame clock, the producer-census frame and the pad service, in one call.
 #include "game.h"
-#include "game_runtime.h"
 #include "logic_frame.h"
+#include "stock_pad_buffers.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <memory>
@@ -11,32 +12,19 @@ namespace {
 constexpr uint32_t kSlot0 = 0x20000u;
 constexpr uint32_t kSlot1 = 0x20100u;
 
-class PadRuntime final : public GameRuntime {
+class PadRuntime final : public psx::test::StubGameRuntime {
 public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  const GuestPadBufferLayout *guestPadBufferLayout() const override {
-    return &layout_;
-  }
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
+  void deliverPad(Core &core, const psx::input::PadDelivery &delivery) override {
+    buffers_.deliver(core, delivery);
   }
 
 private:
-  GuestPadBufferLayout layout_{.slot0Buffer = kSlot0, .slot1Buffer = kSlot1};
+  psx::input::StockPadBuffers buffers_{{.slot0Buffer = kSlot0, .slot1Buffer = kSlot1}};
 };
 
 void test_begin_publishes_the_frame_and_services_the_pad() {
   PadRuntime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
   game->pad.setButtons(static_cast<uint16_t>(0xFFFFu & ~0x0008u));
   game->core.mem_w8(kSlot0 + 1, 0x00u);
 

@@ -3,10 +3,13 @@
 #include "game.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <array>
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 using psx::present::EmitMemory;
 using psx::present::HostMemory;
@@ -21,7 +24,7 @@ std::span<const std::byte> bytesOf(const std::array<std::uint8_t, 4> &words) {
 } // namespace
 
 static void test_a_guest_memory_reads_and_writes_the_core(void) {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   const EmitMemory memory(game->core);
   CHECK(!memory.hosted());
   memory.mem_w32(kGuest, 0x11223344u);
@@ -34,7 +37,7 @@ static void test_a_guest_memory_reads_and_writes_the_core(void) {
 }
 
 static void test_a_hosted_body_writes_host_bytes_and_leaves_the_guest_alone(void) {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   Core &core = game->core;
   core.mem_w32(kHost, 0xAAAAAAAAu);
   HostMemory host;
@@ -49,7 +52,7 @@ static void test_a_hosted_body_writes_host_bytes_and_leaves_the_guest_alone(void
 
 // A read outside every host range is level data and comes from the guest.
 static void test_a_read_outside_the_host_ranges_falls_through_to_the_guest(void) {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   Core &core = game->core;
   core.mem_w32(kGuest, 0x5566u);
   HostMemory host;
@@ -87,9 +90,9 @@ static void test_ranges_in_any_order_are_each_found(void) {
 }
 
 static void test_a_hosted_gte_point_store_writes_host_bytes_only(void) {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   Core &core = game->core;
-  gte_write_data(14, 0x00340012u);
+  core.gte().writeData(14, 0x00340012u);
   HostMemory host;
   host.zero(kHost, 16u);
   const EmitMemory memory(core, host);

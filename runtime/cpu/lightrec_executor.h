@@ -4,7 +4,7 @@
 #include "execution_exit.h"
 #include "fallback_policy.h"
 #include "function_reach.h"
-#include "guest_program_image.h"
+#include "guest_address_range.h"
 #include "invalidation.h"
 
 #include <array>

@@ -19,27 +19,19 @@ constexpr uint32_t kPoolStride = 0x1000u;
 constexpr uint32_t kProducerA = 0x80012340u;
 constexpr uint32_t kProducerB = 0x80056780u;
 
+const GameConfig poolConfig = {
+    .packetPoolBase = kPoolBase,
+    .packetPoolStride = kPoolStride,
+};
+const GameHooks noHooks{};
+LegacyGameRuntimeAdapter poolRuntime(poolConfig, noHooks);
+
 std::unique_ptr<Core> filter_core() {
-  static const GameConfig cfg = {
-      .packetPoolBase = kPoolBase,
-      .packetPoolStride = kPoolStride,
-  };
-  static const GameHooks hooks{};
-  psxport_install_game(&cfg, &hooks);
-  return std::make_unique<Core>();
+  return std::make_unique<Core>(poolRuntime);
 }
 
 Game &filter_game() {
-  static const GameConfig cfg = {
-      .packetPoolBase = kPoolBase,
-      .packetPoolStride = kPoolStride,
-  };
-  static const GameHooks hooks{};
-  // The legacy runtime is process-global. Construct this fixture once, after installing its
-  // runtime, so a later test setup cannot invalidate Core::runtime while this Game is alive.
-  static const bool installed = (psxport_install_game(&cfg, &hooks), true);
-  (void)installed;
-  static Game game;
+  static Game game{poolRuntime};
   return game;
 }
 

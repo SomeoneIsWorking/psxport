@@ -10,14 +10,15 @@
 #include "control_surface_limits.h" // kMaxControlReadWords — the one home for the cap both surfaces obey
 #include "core.h"
 #include "game.h"
-#include "game_iface.h"       // GameHooks — game-side command dispatch (replCommand) + REPL diag hooks
 #include "ot_attr.h"          // OtAttr — `otattr` command (OT/GTE submission attribution)
 #include "render_substrate.h" // Render::psxRender / setPsxRender (per-Core render-path switch)
+#include "title_command.h"
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <string_view>
 #include <unistd.h>
 #include <utility>
 
@@ -167,6 +168,18 @@ public:
   WatchdogInputWait &operator=(const WatchdogInputWait &) = delete;
 };
 
+// The REPL answers only through Lucent, one line per reply line.
+bool runTitleCommand(Core &core, const char *line) {
+  const psx::game::TitleCommandReply reply = psx::game::runTitleCommand(core, line);
+  std::string_view rest(reply.text);
+  while (!rest.empty()) {
+    const size_t end = rest.find('\n');
+    lucent::info("repl", "{}", rest.substr(0, end));
+    rest = end == std::string_view::npos ? std::string_view{} : rest.substr(end + 1);
+  }
+  return reply.handled;
+}
+
 } // namespace
 
 bool Repl::readStdinLine(std::span<char> line) {
@@ -308,17 +321,6 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
             "repl",
             "cvar <PSXPORT_NAME> <value> — set for this run only; `cvar <name>` clears it; `cvars` lists everything");
       }
-    } else if (!strcmp(cmd, "tp")) {
-      int x = 0, y = 0, z = 0;
-      if (!c->hooks || !c->hooks->replCamTeleport || !c->hooks->replCamTeleportOff) {
-        lucent::info("repl", "tp: unavailable for this game");
-      } else if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) {
-        c->hooks->replCamTeleport(c, x, y, z);
-        lucent::info("repl", "tp camera -> ({},{},{})", x, y, z);
-      } else {
-        c->hooks->replCamTeleportOff(c);
-        lucent::info("repl", "tp off (camera follows player)");
-      }
     } else if (!strcmp(cmd, "newgame")) {
       this->navNewgame = 1;
       lucent::info("repl", "newgame: pulsing to GAME prologue");
@@ -445,7 +447,7 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
           continue;
         }
       } else {
-        p = render_path_next_supported(p, c->runtime->renderCapabilities(), RenderPathAudience::Diagnostic);
+        p = render_path_next_supported(p, c->runtime.renderCapabilities(), RenderPathAudience::Diagnostic);
       }
       const RenderPathSelectionResult selection = render_path_apply(*c->game, p, RenderPathAudience::Diagnostic);
       if (selection == RenderPathSelectionResult::Unsupported) {
@@ -735,10 +737,7 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
         }
       }
       lucent::info("repl", " hi={:08X} lo={:08X}", c->hi, c->lo);
-    }
-    // Title-side commands cross the runtime boundary so this parser never names a game's guest
-    // addresses or object layout. Legacy consumers are forwarded to GameHooks by their adapter.
-    else if (c->runtime && c->runtime->replCommand(*c, cmd, line)) { /* handled game-side */
+    } else if (runTitleCommand(*c, line)) {
     } else {
       lucent::info("repl", "? {}", cmd);
     }

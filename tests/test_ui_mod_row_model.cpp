@@ -196,7 +196,7 @@ static void test_unknown_id_reports_rather_than_pretending(void) {
 
 static void test_temporal_capability_controls_row_mutation_and_persistence(void) {
   Mods unsupported;
-  unsupported.init(RenderCapabilities::widescreenOnly());
+  unsupported.init(false, FACE_ORDER_DEPTH);
   CHECK(!unsupported.temporalInterpolationSupported());
   CHECK(!ModRowModel::available(unsupported, RowKind::Toggle, "fps60"));
   CHECK(ModRowModel::available(unsupported, RowKind::Toggle, "aspect"));
@@ -211,7 +211,7 @@ static void test_temporal_capability_controls_row_mutation_and_persistence(void)
   CHECK(text.find("fps60=") == std::string::npos);
 
   Mods capable;
-  capable.init(RenderCapabilities::interpolatedNative());
+  capable.init(true, FACE_ORDER_DEPTH);
   CHECK(capable.temporalInterpolationSupported());
   CHECK(ModRowModel::available(capable, RowKind::Toggle, "fps60"));
   ModRowModel::toggle(capable, "fps60");

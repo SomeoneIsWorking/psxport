@@ -23,12 +23,15 @@
 #include "native_dispatch.h"
 #include "psx_exe_image.h"
 
+#include "stub_game_runtime.h"
 #include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 constexpr uint32_t kBiosTableA = 0x000000a0u;
 constexpr uint32_t kLoadExec = 0x51u;
@@ -125,7 +128,7 @@ void writeFilename(Core &core, const char *text) {
 // leaf uses replaced by `disc` exactly as `Game::wireRuntimeMembers` binds the real one — the seam
 // is the shipping one, not a second dispatch path.
 std::unique_ptr<Game> armedGuest(FakeDisc &disc, const char *filename, uint32_t stackBase, uint32_t stackOffset) {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   Core &core = game->core;
   game->hle.loadExecReader = disc.reader();
   writeFilename(core, filename);

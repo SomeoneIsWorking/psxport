@@ -27,10 +27,10 @@ enum SchedBody {
 
 // GameConfig — deprecated compatibility storage for game-specific guest facts not yet migrated to
 // typed runtime owners. A game fills one static instance; living legacy consumers read `c->cfg`.
-// The first group below is adapter input only and must disappear after every consumer supplies its
-// own GuestProgramImage. Do not add fields here.
+// The first group below is adapter input only and must disappear after every consumer passes its own
+// psx::game::Crt0Image. Do not add fields here.
 struct GameConfig {
-  // --- adapter-only GuestProgramImage projection; generic crt0/routing code no longer reads these ---
+  // --- adapter-only Crt0Image projection; generic crt0 code no longer reads these ---
   uint32_t bssZeroLo, bssZeroHi;        // .bss clear range
   uint32_t stackTopBase, stackTopBase2; // guest stack top globals
   uint32_t heapBase;                    // heap start
@@ -39,8 +39,7 @@ struct GameConfig {
   uint32_t libcInit;                    // libc init entry
   uint32_t gameMain, crt0;              // game-main / crt0 entries
 
-  // Guest MAIN .text range, masked to physical addresses. Adapter input only: the live overlay
-  // router consumes GuestProgramImage::residentText.
+  // Guest MAIN .text range, masked to physical addresses. Read by nothing; titles still set it.
   uint32_t recMainLo, recMainHi;
 
   // --- measured per-frame OT / packet-pool facts consumed by an adapter title's FrameDriver ---
@@ -152,8 +151,7 @@ struct GameConfig {
     // memory map. Direct and adapter storage share the one framework capacity constant.
     uint32_t windowLo[kPlatformHleWindowCapacity], windowHi[kPlatformHleWindowCapacity];
 
-    // Adapter input only for GuestProgramImage::backtraceText. Physical range; zero means the typed
-    // image falls back to residentText.
+    // Read by nothing; titles still set it.
     uint32_t codeScanLo, codeScanHi;
 
     uint32_t decDctInSync, decDctOutSync;    // libmdec DecDCTinSync / DecDCToutSync
@@ -175,10 +173,7 @@ struct GameConfig {
     // for an un-RE'd port, not a gap to paper over.
     uint32_t setGeomOffset, setGeomScreen;
 
-    // Measured libetc VSync entry. Product boot requires this address and binds it to the framework's
-    // all-mode fatal trap: every port's frame loop is native-owned, so neither guest waits nor guest
-    // queries are valid shipping paths. The legacy field name is retained only to preserve aggregate
-    // layout while adapter consumers migrate to PlatformHlePlan::vsyncAddress.
+    // Measured libetc VSync entry; the legacy session binds it as its StockVSync (a fatal trap).
     uint32_t vsyncTrap;
 
     // Measured libgpu DrawSync entry. The host GPU consumes GP0/DMA work synchronously, so the

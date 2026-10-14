@@ -9,13 +9,18 @@
 #include "gpu_device.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
+
+namespace {
+psx::test::StubGameRuntime stubRuntime;
+}
 
 // ---- helpers ----------------------------------------------------------------------------------
 
 // One Game per test process (2 MB RAM + 1 MB VRAM as members — keep it off the stack).
 static Game *gam() {
-  static const std::unique_ptr<Game> game = std::make_unique<Game>();
+  static const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime);
   return game.get();
 }
 

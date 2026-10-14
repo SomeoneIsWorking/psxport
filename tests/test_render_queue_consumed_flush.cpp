@@ -5,9 +5,12 @@
 #include "render_queue.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 void push_hud_item(RenderQueue &queue) {
   RqItem *item = queue.push();
@@ -18,7 +21,7 @@ void push_hud_item(RenderQueue &queue) {
 }
 
 void test_consumed_flush_is_empty_until_another_push() {
-  const auto game = std::make_unique<Game>();
+  const auto game = std::make_unique<Game>(stubRuntime);
   RenderQueue &queue = game->rq;
 
   push_hud_item(queue);

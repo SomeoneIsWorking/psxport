@@ -7,7 +7,9 @@
 #include <string>
 #include <string_view>
 
+namespace psx::game {
 class GameRuntime;
+}
 
 namespace psx::host {
 
@@ -45,7 +47,7 @@ public:
   virtual std::filesystem::path provisioningRoot() const = 0;
   virtual std::span<const TitleIdentity> titles() const = 0;
   // Installed before that title's Game exists.
-  virtual GameRuntime &runtime(std::size_t index) const = 0;
+  virtual psx::game::GameRuntime &runtime(std::size_t index) const = 0;
 };
 
 } // namespace psx::host

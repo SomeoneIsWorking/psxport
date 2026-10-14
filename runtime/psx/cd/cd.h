@@ -1,17 +1,20 @@
 // cd.h — class Cd — the native CD subsystem, owned by Game (`c->game->cd`, back-pointer wired in
 // Game()). Implemented in cd_override.cpp: the synchronous native read primitives the PC-native
-// loaders call directly, the CD-subsystem PlatformHle registrations (libcd command/sync/read
-// leaves), and the deferred ingame-music state (a looping clip suppressed during a dialog is
-// remembered here and resumed by MusicCoord::tick).
+// loaders call directly and the deferred ingame-music state (a looping clip suppressed during a dialog
+// is remembered here and resumed by MusicCoord::tick). The libcd entries are psx::cd::StockLibcd.
 #pragma once
+
 #include <array>
 #include <cstdint>
 class Game;
 class Core;
+namespace psx::cd {
+class StockLibcd;
+}
 
 // ---- streamed-read DRIVE PACING ----------------------------------------------------------------
 // A continuous read (XA / STR) is paced by the DRIVE, not by how fast the guest asks for sectors.
-// Cd::pumpStream used to deliver one every time the guest's StGetNext found none ready, with no rate
+// The stream pump used to deliver one every time the guest's StGetNext found none ready, with no rate
 // limit at all, so a movie ran as fast as the host could walk the file: measured on spider1, the
 // guest's data head covered 2040 sectors of CINEMAS/ATVILOGO.STR while the real-time-paced XA audio
 // head covered 512 — video 3.98x too fast, reproduced at 3.97x on LOGO.STR. Audio can never sync to
@@ -24,7 +27,9 @@ class Core;
 // for this stream. Never negative (a caller uses it directly as a loop count) and bounded per call,
 // so a long stall cannot be repaid as one unpaced burst — which would be the very behaviour this
 // exists to stop.
-int cd_stream_sectors_due(uint64_t elapsed_ns, int sectors_per_sec, uint32_t already_delivered);
+namespace psx::cd {
+int streamSectorsDue(uint64_t elapsedNs, int sectorsPerSecond, uint32_t alreadyDelivered);
+} // namespace psx::cd
 
 // Per-call bound on the catch-up above. One video field of double-speed delivery (150/60 = 2.5,
 // rounded up): enough that a stream pumped once per field keeps up exactly, and small enough that a
@@ -61,7 +66,7 @@ public:
   // resolve a target sector.
   int32_t setloc_lba = -1;
 
-  // Stock-libcd read driving (cd_override.cpp cd_drive_stock_read). `stock_reading` is cleared by the
+  // Stock-libcd read driving (StockLibcd::driveFiniteRead). `stock_reading` is cleared by the
   // guest's own Pause/Stop, which is what terminates the per-sector callback loop; `in_stock_read`
   // stops a callback that re-issues ReadN from starting a nested loop.
   int stock_reading = 0;
@@ -73,7 +78,7 @@ public:
   // rather than the burst a file read gets. Set on ReadN/ReadS, cleared by the guest's own Pause/Stop.
   int stream_active = 0;
 
-  // Drive-rate pacing for that stream (see cd_stream_sectors_due above). `stream_t0_ns` is the
+  // Drive-rate pacing for that stream (see psx::cd::streamSectorsDue above). `stream_t0_ns` is the
   // steady-clock reading when the stream started and `stream_delivered` counts host-dispatched ready
   // callback attempts since then; together they cap the direct-callback path's host rate. Guest
   // interrupt delivery uses the controller's own deadline and does not increment this count.
@@ -116,9 +121,14 @@ public:
   void hleInit();
   // overridesInit(): register every CD-subsystem PlatformHle handler with this Game's table.
   void overridesInit();
-  // pumpStream(c, sectors): service an active continuous read. A host-owned path invokes the guest's
-  //   registered ready callback at the drive's rate; a guest-interrupt-owned path only advances the
-  //   controller, leaving INT1 consumption and callback delivery to the guest ISR. File reads are
-  //   finite and must not be pumped this way.
-  void pumpStream(Core *c, int sectors);
+  // The title's stock libcd (psx::cd::StockLibcd::bind); null when it bound none.
+  void bindStockLibrary(const psx::cd::StockLibcd &library) {
+    stockLibrary_ = &library;
+  }
+  const psx::cd::StockLibcd *stockLibrary() const {
+    return stockLibrary_;
+  }
+
+private:
+  const psx::cd::StockLibcd *stockLibrary_ = nullptr;
 };

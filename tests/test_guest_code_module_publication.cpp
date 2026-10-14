@@ -2,7 +2,6 @@
 // (`psx::code_module::publishStockReadLanding`). Every case drives the shipping path: the stock
 // read, the framework's landing announcement, the runtime hook, the image catalog and Lightrec
 // dispatch into the loaded bytes. Fake sectors stand in only for the disc.
-#include "cd_control.h"
 #include "cdc_state.h"
 #include "core.h"
 #include "execution_control.h"
@@ -13,6 +12,8 @@
 #include "image_identity.h"
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
+#include "stock_libcd.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <array>
@@ -46,21 +47,9 @@ int fakeSector(DiscState *, std::uint32_t lba, std::uint8_t *out, std::uint32_t)
   return 1;
 }
 
-class LoaderRuntime final : public GameRuntime {
+class LoaderRuntime final : public psx::test::StubGameRuntime {
 public:
   explicit LoaderRuntime(GuestAddressRange arena) : arena_(arena) {}
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
   void stockCdReadLanded(Core &core, const psx::cd::StockReadLanding &landing) override {
     psx::code_module::publishStockReadLanding(core, landing, arena_);
   }
@@ -70,8 +59,7 @@ private:
 };
 
 struct Machine {
-  explicit Machine(GameRuntime &runtime) : game(std::make_unique<Game>()) {
-    game->runtime = &runtime;
+  explicit Machine(psx::game::GameRuntime &runtime) : game(std::make_unique<Game>(runtime)) {
     game->gpu_dev.s_gpu_on = 0;
     game->core.r[29] = 0x801FFF00u;
     game->core.r[30] = 0x801FFF00u;
@@ -83,7 +71,7 @@ struct Machine {
     game->core.r[4] = sectors;
     game->core.r[5] = destination;
     game->core.r[6] = 0x80u;
-    cd_read_stock_sync(&game->core);
+    libcd.read(game->core);
     return game->core.r[2] == 1u;
   }
 
@@ -95,6 +83,7 @@ struct Machine {
     return result.returned() ? core.r[2] : 0xFFFFFFFFu;
   }
 
+  const psx::cd::StockLibcd libcd{{}, {}, 0};
   std::unique_ptr<Game> game;
 };
 

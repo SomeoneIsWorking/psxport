@@ -1,11 +1,9 @@
 #include "dev_command_control.h"
 
 #include "game.h"
+#include "title_command.h"
 
 #include <lucent/log.h>
-
-#include <cstdio>
-#include <cstdlib>
 
 namespace psx::ui {
 namespace {
@@ -18,25 +16,12 @@ int wrap(int value, int dir, int max) {
 } // namespace
 
 std::string DevCommandControl::send(const std::string &line) const {
-  if (!mGame || !mGame->runtime) {
+  if (!mGame) {
     return "not available";
   }
-  const std::string verb = line.substr(0, line.find(' '));
-  char *buffer = nullptr;
-  size_t length = 0;
-  FILE *out = open_memstream(&buffer, &length);
-  if (!out) {
-    return "not available";
-  }
-  const bool handled = mGame->runtime->controlCommand(mGame->core, verb.c_str(), line.c_str(), out);
-  fclose(out);
-  std::string reply(buffer ? buffer : "", length);
-  free(buffer);
-  while (!reply.empty() && (reply.back() == '\n' || reply.back() == '\r')) {
-    reply.pop_back();
-  }
-  lucent::info("rmlui", "dev command '{}': {}", line, handled ? reply : "not handled by this game");
-  return handled ? reply : "not supported by this game";
+  const psx::game::TitleCommandReply reply = psx::game::runTitleCommand(mGame->core, line);
+  lucent::info("rmlui", "dev command '{}': {}", line, reply.handled ? reply.text : "not handled by this game");
+  return reply.handled ? reply.text : "not supported by this game";
 }
 
 std::string DevCommandControl::warp(int area) const {

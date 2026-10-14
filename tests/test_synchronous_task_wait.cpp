@@ -1,22 +1,22 @@
 #include "game.h"
+#include "stub_game_runtime.h"
 #include "synchronous_task_wait.h"
 #include "testutil.h"
 
 namespace {
-
 constexpr uint32_t kTask = 0x801FE000u;
 constexpr uint32_t kWaitCounter = 0x1F800198u;
 int rngCalls = 0;
+psx::test::StubGameRuntime stubRuntime;
 
 uint32_t fixed_rng(Core *) {
   ++rngCalls;
   return 0x1234ABCDu;
 }
 
+const GameHooks hooks{.schedRng = fixed_rng};
 Game *make_game() {
-  static GameHooks hooks{};
-  hooks.schedRng = fixed_rng;
-  Game *game = new Game();
+  Game *game = new Game(stubRuntime);
   game->core.hooks = &hooks;
   game->core.mem_w16(kWaitCounter, 0x4567u);
   game->core.mem_w16(kTask + 0x56u, 0xBEEFu);

@@ -30,7 +30,6 @@ enum FaceOrder {
 struct RenderCapabilities {
   RenderPath defaultPath = RenderPath::Native;
   bool nativeRenderPath = true;
-  bool temporalInterpolation = false;
   FaceOrder defaultFaceOrder = FACE_ORDER_DEPTH;
 
   static constexpr RenderCapabilities direct() {
@@ -41,7 +40,6 @@ struct RenderCapabilities {
     return {
         .defaultPath = RenderPath::Native,
         .nativeRenderPath = true,
-        .temporalInterpolation = true,
         .defaultFaceOrder = defaultFaceOrder,
     };
   }
@@ -50,21 +48,6 @@ struct RenderCapabilities {
     return {
         .defaultPath = RenderPath::Gte,
         .nativeRenderPath = false,
-        .temporalInterpolation = false,
-        .defaultFaceOrder = FACE_ORDER_DEPTH,
-    };
-  }
-
-  // Widescreen-only geometry, PLUS a temporal product whose in-between fields are made of the GUEST'S
-  // OWN captured primitives, interpolated between two real frames by projection provenance (see
-  // InBetweenStrategy::interpolatesGuestGeometry). Gte remains the shipping path and the real frame is
-  // presented exactly as `widescreenOnly()` ships it. `interpolatedNative()` is the other shape — Native
-  // producers AND interpolation — and neither implies the other.
-  static constexpr RenderCapabilities guestInterpolated() {
-    return {
-        .defaultPath = RenderPath::Gte,
-        .nativeRenderPath = false,
-        .temporalInterpolation = true,
         .defaultFaceOrder = FACE_ORDER_DEPTH,
     };
   }

@@ -13,14 +13,15 @@ constexpr uint32_t kEndPtr0 = 0x80001004u;
 constexpr uint32_t kBasePtr1 = 0x80001008u;
 constexpr uint32_t kEndPtr1 = 0x8000100Cu;
 
+const GameConfig dynamicPoolConfig = {
+    .packetPoolBasePtrs = {kBasePtr0, kBasePtr1},
+    .packetPoolEndPtrs = {kEndPtr0, kEndPtr1},
+};
+const GameHooks noHooks{};
+LegacyGameRuntimeAdapter dynamicPoolRuntime(dynamicPoolConfig, noHooks);
+
 std::unique_ptr<Core> dynamic_pool_core() {
-  static const GameConfig cfg = {
-      .packetPoolBasePtrs = {kBasePtr0, kBasePtr1},
-      .packetPoolEndPtrs = {kEndPtr0, kEndPtr1},
-  };
-  static const GameHooks hooks{};
-  psxport_install_game(&cfg, &hooks);
-  return std::make_unique<Core>();
+  return std::make_unique<Core>(dynamicPoolRuntime);
 }
 
 void set_bounds(Core &core, uint32_t lo0, uint32_t hi0, uint32_t lo1, uint32_t hi1) {

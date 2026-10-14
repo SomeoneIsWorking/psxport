@@ -1,7 +1,7 @@
 // psx::ui::DevCommandControl — the Debug tab's developer commands: warp entry, grant all items, event flags.
 //
 // The framework knows nothing about any title's warp, items or flags. Each command is a line on the title's
-// control channel (GameRuntime::controlCommand, the same surface a client sends `warp 3 2` to); the title
+// control channel (GameRuntime::titleCommand, the same surface a client sends `warp 3 2` to); the title
 // parses it, arms it, and writes it at its next frame boundary. This class holds only the current selection,
 // which is deliberately not persisted, and returns the title's reply for the readout.
 #ifndef PSXPORT_UI_DEV_COMMAND_CONTROL_H

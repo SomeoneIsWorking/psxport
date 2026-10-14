@@ -134,7 +134,7 @@ void libgte_set_geom_screen(Core *c, int32_t h) {
 
 // ---- Free-function bridges (declared in proj_params.h) ---------------------------------------------
 // Thin forwards to `ProjParams::current()` for callers with no `Core*` in scope. When the harness has
-// bound this core (gte_bind), sCurrent points to `c->rsub.projParams` and every call reaches
+// bound this core (Gte::bind), sCurrent points to `c->rsub.projParams` and every call reaches
 // this-core state; before the first bind these are safe null-checks.
 
 float proj_pz_to_ord(float pz) {

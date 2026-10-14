@@ -4,6 +4,7 @@
 #include "title_availability.h"
 #include "title_catalog.h"
 
+#include "frame_loop_shell.h"
 #include "gpu_vk_device.h"
 
 #include <cstdint>
@@ -23,6 +24,8 @@ struct SessionServices {
   GpuDevice &presentation;
   psx::input::QuitScope &quit;
   RunBudget &budget;
+  // Tracks which Core the process-global devices are bound to across every session.
+  psx::frame::FrameLoopShell frameLoop{};
   // PSXPORT_LOAD_STATE starts the process's first product session only; a title picked after a
   // return boots from power-on.
   bool configuredStatePending = true;

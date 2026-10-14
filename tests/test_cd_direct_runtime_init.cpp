@@ -1,12 +1,13 @@
-// Cd::overridesInit is part of TitleSession::boot's device binds. Direct GameRuntime consumers have no
-// legacy GameConfig by contract, so that path must accept an empty title-CD group while leaving
-// typed PlatformHlePlan registration to PlatformHle::initBuiltins. Adapter consumers retain the
-// existing legacy CD address table.
-#include "cd_control.h"
+// Cd::overridesInit is part of TitleSession::boot's device binds. A direct GameRuntime has no legacy
+// GameConfig, so that path accepts an empty title-CD group and leaves libcd to the title's StockLibcd.
+// The legacy adapter's session binds a StockLibcd from its GameConfig.
 #include "game.h"
 #include "game_iface.h"
 #include "game_runtime.h"
 #include "platform_hle.h"
+#include "stock_libcd.h"
+#include "stock_libgpu.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <memory>
@@ -17,73 +18,66 @@ constexpr uint32_t kDirectCdRead = 0x80066A50u;
 constexpr uint32_t kDirectCdCommand = 0x80066A60u;
 constexpr uint32_t kDirectCdSync = 0x80066A70u;
 constexpr uint32_t kDirectCdSearchFile = 0x80066A80u;
-constexpr uint32_t kDirectCdWindowEnd = 0x80066B30u;
 constexpr uint32_t kDirectDrawSync = 0x80066C00u;
-constexpr uint32_t kDirectDrawSyncWindowEnd = 0x80066C10u;
 constexpr uint32_t kLegacyCdSync = 0x800647A0u;
 constexpr uint32_t kLegacyCdCommand = 0x800647B0u;
 constexpr uint32_t kLegacyCdSearchFile = 0x800647C0u;
 constexpr uint32_t kLegacyCdWindowEnd = 0x80064810u;
 
-class DirectRuntime : public GameRuntime {
+class StockDirectRuntime final : public psx::test::StubGameRuntime {
 public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-};
-
-class PlannedDirectRuntime final : public DirectRuntime {
-public:
-  const PlatformHlePlan *platformHlePlan() const override {
-    return &plan;
+  void registerOverrides(Game &game) override {
+    libcd.bind(game);
+    libgpu.bind(game);
   }
 
-  PlatformHlePlan plan{};
+  const psx::cd::StockLibcd libcd{
+      {.read = kDirectCdRead, .command = kDirectCdCommand, .sync = kDirectCdSync, .searchFile = kDirectCdSearchFile},
+      {},
+      0};
+  const psx::hle::StockLibgpu libgpu{{.drawSync = kDirectDrawSync}};
 };
+
+enum { V0 = 2, A0 = 4, A1 = 5 };
+constexpr uint32_t kResult = 0x80110000u;
+
+// CdSync's body reports a completed drive (v0 = 2) whoever reaches it.
+void checkSyncBody(Core &core, OverrideFn entry) {
+  CHECK(entry != nullptr);
+  if (!entry) {
+    return;
+  }
+  core.r[A0] = 0;
+  core.r[A1] = kResult;
+  core.r[V0] = 0xDEADBEEFu;
+  entry(&core);
+  CHECK_EQ(core.r[V0], 2u);
+}
 
 void test_empty_direct_runtime_cd_registration_is_valid() {
-  DirectRuntime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  psx::test::StubGameRuntime runtime;
+  auto game = std::make_unique<Game>(runtime);
 
   CHECK(game->core.cfg == nullptr);
   game->cd.overridesInit();
   CHECK(game->platform_hle.lookup(kDirectCdRead) == nullptr);
 }
 
-void test_direct_runtime_cd_plan_remains_owned_by_platform_hle() {
-  PlannedDirectRuntime runtime;
-  runtime.plan.cdReadAddress = kDirectCdRead;
-  runtime.plan.cdCommandAddress = kDirectCdCommand;
-  runtime.plan.cdSyncAddress = kDirectCdSync;
-  runtime.plan.cdSearchFileAddress = kDirectCdSearchFile;
-  runtime.plan.windowLo[0] = kDirectCdRead;
-  runtime.plan.windowHi[0] = kDirectCdWindowEnd;
-  runtime.plan.drawSyncAddress = kDirectDrawSync;
-  runtime.plan.windowLo[1] = kDirectDrawSync;
-  runtime.plan.windowHi[1] = kDirectDrawSyncWindowEnd;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+void test_direct_runtime_stock_libcd_binds_after_the_device_binds() {
+  StockDirectRuntime runtime;
+  auto game = std::make_unique<Game>(runtime);
 
-  // This is the shipping TitleSession::boot bind order: the legacy CD registration seam runs first, then
-  // psx::frame::FrameLoopShell asks PlatformHle to install the direct runtime's typed plan.
+  // The shipping TitleSession::boot order: device binds, then the title's registerOverrides.
   game->cd.overridesInit();
   game->platform_hle.initBuiltins();
+  runtime.registerOverrides(*game);
 
   CHECK(game->core.cfg == nullptr);
-  CHECK(game->platform_hle.lookup(kDirectCdRead) == cd_read_stock_sync);
-  CHECK(game->platform_hle.lookup(kDirectCdCommand) == cd_command_stock_sync);
-  CHECK(game->platform_hle.lookup(kDirectCdSync) == cd_sync_stock_sync);
-  CHECK(game->platform_hle.lookup(kDirectCdSearchFile) == cd_searchfile_stock_sync);
+  CHECK(game->cd.stockLibrary() == &runtime.libcd);
+  CHECK(game->platform_hle.lookup(kDirectCdRead) != nullptr);
+  CHECK(game->platform_hle.lookup(kDirectCdCommand) != nullptr);
+  CHECK(game->platform_hle.lookup(kDirectCdSearchFile) != nullptr);
+  checkSyncBody(game->core, game->platform_hle.lookup(kDirectCdSync));
   CHECK(game->platform_hle.lookup(kDirectCdSearchFile + 4u) == nullptr);
   CHECK(game->platform_hle.lookup(kDirectDrawSync) != nullptr);
 }
@@ -97,21 +91,22 @@ void test_legacy_runtime_keeps_existing_cd_registration() {
   config.cdSearchFile = kLegacyCdSearchFile;
   config.hle.windowLo[0] = kLegacyCdSync;
   config.hle.windowHi[0] = kLegacyCdWindowEnd;
-  psxport_install_game(&config, &hooks);
-  auto game = std::make_unique<Game>();
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto game = std::make_unique<Game>(runtime);
 
   CHECK_EQ(game->core.cfg, &config);
   game->cd.overridesInit();
-  CHECK(game->platform_hle.lookup(kLegacyCdSync) == cd_sync_stock_sync);
-  CHECK(game->platform_hle.lookup(kLegacyCdCommand) == cd_command_stock_sync);
-  CHECK(game->platform_hle.lookup(kLegacyCdSearchFile) == cd_searchfile_stock_sync);
+  CHECK(game->cd.stockLibrary() != nullptr);
+  CHECK(game->platform_hle.lookup(kLegacyCdCommand) != nullptr);
+  CHECK(game->platform_hle.lookup(kLegacyCdSearchFile) != nullptr);
+  checkSyncBody(game->core, game->platform_hle.lookup(kLegacyCdSync));
 }
 
 } // namespace
 
 int main() {
   RUN(empty_direct_runtime_cd_registration_is_valid);
-  RUN(direct_runtime_cd_plan_remains_owned_by_platform_hle);
+  RUN(direct_runtime_stock_libcd_binds_after_the_device_binds);
   RUN(legacy_runtime_keeps_existing_cd_registration);
   return pt_summary();
 }

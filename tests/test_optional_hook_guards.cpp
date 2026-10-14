@@ -5,12 +5,12 @@
 // value-initialised to nullptr — and spyro spells two of them out as `nullptr` explicitly. The
 // framework then called them without checking, jumping to address 0:
 //
-//   1. audioMixFrame    — segfaulted spyro on its first audio frame (fixed: spu_mix_game_audio).
+//   1. audioMixFrame    — segfaulted spyro on its first audio frame (guarded in the legacy TitleAudio).
 //   2. renderFadeState  — segfaulted spyro on its first present (the guard lives in GpuVkState::present).
-//   3. audioNowPlayingName / audioSoundTestPlay — THIS ONE. rmlui_overlay's refreshReadouts() guards
-//      on `game` but not on the hook, so pressing ESC to open the debug menu in spider1 or spyro
-//      called through a null pointer and the process died. To the user that reads as "ESC closes the
-//      game", and as "the RmlUi overlay only works in Tomba!2" — one defect, two symptoms.
+//   3. audioNowPlayingName / audioSoundTestPlay, now behind GameRuntime::audio. rmlui_overlay's
+//      refreshReadouts() guarded on `game` but not on the hook, so pressing ESC to open the debug menu
+//      in spider1 or spyro called through a null pointer and the process died. To the user that reads as "ESC closes
+//      the game", and as "the RmlUi overlay only works in Tomba!2" — one defect, two symptoms.
 //
 // Each was found by a crash rather than by a test, and each was invisible in the reference consumer
 // because Tomba!2 supplies every hook. So the guard lives in ONE place now (game_hooks_opt.h) and this
@@ -20,6 +20,7 @@
 // the PRESENT case must actually reach the game. A guard that never calls through would pass a
 // null-only test while silently disabling the feature — that is why the present-hook cases assert the
 // call count and the arguments, not merely that nothing crashed.
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <stdint.h>
@@ -112,52 +113,51 @@ static void reset_spies(void) {
   s_fade_core = nullptr;
 }
 
-// A null hooks TABLE is a different failure from a null hook IN the table — a port that never installs
-// hooks at all reaches the same call sites, so both are asserted separately.
-static void test_absent_hook_is_a_safe_answer_not_a_jump_to_zero(void) {
-  GameHooks hooks{}; // every entry value-initialised to nullptr — the spider1/spyro shape
-  CHECK(hooks.audioNowPlayingName == nullptr);
-  CHECK(hooks.audioSoundTestPlay == nullptr);
+namespace {
+
+// The legacy adapter offers no TitleAudio when the title supplied no audio hook.
+void test_absent_audio_hooks_offer_no_title_audio() {
+  const GameConfig config{};
+  const GameHooks hooks{};
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto game = std::make_unique<Game>(runtime);
   reset_spies();
 
-  CHECK(game_audio_now_playing_name(nullptr, &hooks) == nullptr); // "nothing playing", not a crash
-  game_audio_sound_test_play(nullptr, &hooks, 3);                 // silent no-op
+  CHECK(runtime.audio(game->core) == nullptr);
   CHECK_EQ(s_play_calls, 0);
 }
 
-static void test_a_null_hooks_table_is_also_safe(void) {
-  reset_spies();
-  CHECK(game_audio_now_playing_name(nullptr, nullptr) == nullptr);
-  game_audio_sound_test_play(nullptr, nullptr, 0);
-  CHECK_EQ(s_play_calls, 0);
-}
-
-// THE OTHER CLASS. A guard that swallowed every call would pass the tests above while quietly
-// disabling the Sound Test in the one game that has it, so assert the hook is reached, exactly once,
-// with the arguments the caller passed.
-static void test_a_present_hook_is_actually_called(void) {
+// A guard that swallowed every call would disable the Sound Test, so the hook must be reached exactly
+// once with the caller's arguments, including the negative stop track.
+void test_present_audio_hooks_are_reached_through_title_audio() {
+  const GameConfig config{};
   GameHooks hooks{};
   hooks.audioNowPlayingName = spy_now_playing;
   hooks.audioSoundTestPlay = spy_sound_test;
+  LegacyGameRuntimeAdapter runtime(config, hooks);
+  auto game = std::make_unique<Game>(runtime);
   reset_spies();
 
-  const char *nm = game_audio_now_playing_name(kFakeCore, &hooks);
-  CHECK(nm != nullptr);
-  CHECK(strcmp(nm, "Track 07") == 0);
+  psx::game::TitleAudio *audio = runtime.audio(game->core);
+  CHECK(audio != nullptr);
+  if (!audio) {
+    return;
+  }
+  const char *name = audio->nowPlayingName();
+  CHECK(name != nullptr && strcmp(name, "Track 07") == 0);
   CHECK_EQ(s_name_calls, 1);
-  CHECK(s_name_core == kFakeCore); // the Core is forwarded, not dropped or rewritten
+  CHECK(s_name_core == &game->core);
 
-  game_audio_sound_test_play(kFakeCore, &hooks, 7);
+  audio->soundTestPlay(7);
   CHECK_EQ(s_play_calls, 1);
   CHECK_EQ(s_play_track, 7);
-  CHECK(s_play_core == kFakeCore);
-
-  // The stop action is track < 0 and must reach the game unchanged — a guard that clamped or dropped
-  // it would make "stop" silently do nothing.
-  game_audio_sound_test_play(kFakeCore, &hooks, -1);
+  CHECK(s_play_core == &game->core);
+  audio->soundTestPlay(-1);
   CHECK_EQ(s_play_calls, 2);
   CHECK_EQ(s_play_track, -1);
 }
+
+} // namespace
 
 static void test_fade_reader_handles_absent_table_and_calls_present_hook(void) {
   reset_spies();
@@ -233,24 +233,8 @@ static void test_billboard_rotate_is_optional_but_present_hook_runs(void) {
 }
 
 static void test_world_rerun_is_not_eligible_until_a_game_claims_it(void) {
-  class Runtime final : public GameRuntime {
-  public:
-    RenderCapabilities renderCapabilities() const override {
-      return RenderCapabilities::direct();
-    }
-
-    bool guestVramIsPicture(const Game &) const override {
-      return false;
-    }
-    void *createContext(Core &) override {
-      return nullptr;
-    }
-    void destroyContext(void *) override {}
-    void registerOverrides(Game &) override {}
-    void bootInit(Core &) override {}
-  } runtime;
-  psxport_install_game(runtime);
-  const auto game = std::make_unique<Game>();
+  psx::test::StubGameRuntime runtime;
+  const auto game = std::make_unique<Game>(runtime);
   Fps60 fps60(*game);
   CHECK(!fps60.mTier1EligibleCur);
 }
@@ -269,9 +253,8 @@ static void test_temporal_rotate_is_optional_and_exact(void) {
 }
 
 int main(void) {
-  RUN(absent_hook_is_a_safe_answer_not_a_jump_to_zero);
-  RUN(a_null_hooks_table_is_also_safe);
-  RUN(a_present_hook_is_actually_called);
+  RUN(absent_audio_hooks_offer_no_title_audio);
+  RUN(present_audio_hooks_are_reached_through_title_audio);
   RUN(fade_reader_handles_absent_table_and_calls_present_hook);
   RUN(scene_camera_reader_has_no_silent_fallback);
   RUN(world_pass_absence_refuses_instead_of_claiming_an_empty_world);

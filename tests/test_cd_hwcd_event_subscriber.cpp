@@ -43,7 +43,12 @@
 // HERMETIC: a Game is constructed in-process. No disc, no window, no GPU, no wall clock.
 #include "game.h"
 #include "hle.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
+
+namespace {
+psx::test::StubGameRuntime stubRuntime;
+}
 
 enum { R_A3 = 7 };
 
@@ -86,7 +91,7 @@ static constexpr GuestEventOpen kGuestEventTable[] = {
 // cannot open this class" for a reason that has nothing to do with the class. That is exactly the
 // capacity artifact the third case exists to rule out, so the fixture must not manufacture it.
 static Game *gam() {
-  return new Game();
+  return new Game(stubRuntime);
 }
 
 static uint32_t bios_b0(Game *g, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {

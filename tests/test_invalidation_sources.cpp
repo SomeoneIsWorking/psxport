@@ -5,9 +5,12 @@
 #include "lightrec_executor.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 constexpr uint32_t kRam = 0x80110000u;
 constexpr std::size_t kMapped = static_cast<std::size_t>(psx::cpu::ExecutableWriteSource::MappedStore);
@@ -16,7 +19,7 @@ constexpr std::size_t kDma = static_cast<std::size_t>(psx::cpu::ExecutableWriteS
 } // namespace
 
 static void test_a_guest_store_is_counted_against_mapped_store() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   const auto before = game->core.lightrecExecutor().counters();
   game->core.mem_w32(kRam, 1u);
   const auto after = game->core.lightrecExecutor().counters();
@@ -26,7 +29,7 @@ static void test_a_guest_store_is_counted_against_mapped_store() {
 }
 
 static void test_a_labelled_store_is_counted_against_its_source() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   const auto before = game->core.lightrecExecutor().counters();
   game->core.mem_w32(kRam, 1u, psx::cpu::ExecutableWriteSource::Cpu);
   const auto after = game->core.lightrecExecutor().counters();
@@ -36,7 +39,7 @@ static void test_a_labelled_store_is_counted_against_its_source() {
 }
 
 static void test_an_unnotified_burst_costs_one_dma_invalidation() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   const auto before = game->core.lightrecExecutor().counters();
   for (uint32_t i = 0; i < 64; i++) {
     game->core.mem_w32_unnotified(kRam + i * 4u, 0xA5A50000u + i);

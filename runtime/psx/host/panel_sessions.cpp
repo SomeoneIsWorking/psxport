@@ -151,7 +151,7 @@ void PanelSessions::takeLogo(int panel, TitleSession &session) {
   }
   Core &core = session.core();
   // The first successful decode is the logo and is kept for the life of the panel.
-  if (std::optional<LogoImage> image = core.runtime->panelLogo(core)) {
+  if (std::optional<LogoImage> image = core.runtime.panelLogo(core)) {
     logos_[index] = std::make_unique<PanelLogo>(image->width, image->height, std::move(image->rgba));
   }
 }

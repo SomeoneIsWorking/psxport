@@ -3,6 +3,7 @@
 // pointer is insufficient if the legacy adapter's vtable still drags Fps60 into the link.
 #include "game.h"
 #include "game_runtime.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <cstdio>
@@ -10,23 +11,6 @@
 #include <string>
 
 namespace {
-
-class DirectRuntime final : public GameRuntime {
-public:
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-};
 
 class NeutralBackend final : public psx::frame::FramePresentationBackend {
 public:
@@ -53,9 +37,8 @@ public:
 };
 
 void test_direct_runtime_constructs_without_a_temporal_product() {
-  DirectRuntime runtime;
-  psxport_install_game(runtime);
-  const auto game = std::make_unique<Game>();
+  psx::test::StubGameRuntime runtime;
+  const auto game = std::make_unique<Game>(runtime);
   CHECK(game->temporalPresentation == nullptr);
   NeutralBackend backend;
   game->presentation.commit(backend, 1);

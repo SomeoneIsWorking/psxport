@@ -1,8 +1,4 @@
-// crt0_boot.cpp — crt0_setup: the thin applier that binds the derived crt0 plan to a Core.
-//
-// It lives here, beside `crt0_boot.h`, because it is that header's shipping adapter rather than the
-// framework boot spine's: `psx::host::TitleSession::boot` and the dual-core harness both apply the plan,
-// and a function that had to be reached through one of them could not be.
+// crt0_boot.cpp — Crt0Boot: the thin applier that binds the derived crt0 plan to a Core.
 #include "crt0_boot.h"
 
 #include "core.h"
@@ -13,38 +9,15 @@
 
 #include <lucent/log.h>
 
-namespace psx {
+namespace psx::game {
 
-std::string bootEntryRefusal(const GuestProgramImage *image) {
-  if (image == nullptr) {
-    return "the runtime declares no GuestProgramImage, so it has no bootEntry";
-  }
-  if (image->bootEntry == BootEntry::DriverOwned) {
-    return {};
-  }
-  const Crt0Completeness crt0 = crt0Completeness(*image);
-  if (crt0.unsetCount == 0) {
-    return {};
-  }
-  return "bootEntry=Crt0 but " + std::to_string(crt0.unsetCount) + " of " + std::to_string(crt0.required) +
-         " crt0 field(s) are unset (" + crt0.unset +
-         "); a title whose frame driver enters the guest declares bootEntry=DriverOwned";
-}
-
-} // namespace psx
-
-// crt0 register/heap setup only (no main call) — shared by native_crt0 and the dual-core harness.
-// THIS FUNCTION PERFORMS NO ARITHMETIC. Every value it applies comes from crt0_plan (crt0_boot.h),
-// which is the one place the derivation, the required/absent decision and the refusal live — so the
-// hermetic test (tests/test_crt0_boot_group.cpp) exercises the code that SHIPS rather than a helper
-// beside it. Keep it that way: a computation added here is a second copy by definition.
-void crt0_setup(Core &core) {
-  const GuestProgramImage *image = core.guestProgramImage;
+void Crt0Boot::run(Core &core) const {
+  const Crt0Image *image = &image_;
   // The two words the guest crt0 loads. Read before the .bss clear, exactly as the guest does — and
   // read through the plan's inputs rather than inside it, so the plan stays pure and testable.
-  const uint32_t stackTopWord = image ? core.mem_r32(image->stackTopWordAddress) : 0u;
-  const uint32_t reserveWord = image ? core.mem_r32(image->stackReserveWordAddress) : 0u;
-  const Crt0Plan p = crt0_plan(image, stackTopWord, reserveWord, "crt0_setup");
+  const uint32_t stackTopWord = core.mem_r32(image->stackTopWordAddress);
+  const uint32_t reserveWord = core.mem_r32(image->stackReserveWordAddress);
+  const Crt0Plan p = crt0_plan(image, stackTopWord, reserveWord, "Crt0Boot");
   if (!p.ok) {
     // crt0_plan has already named the missing fields and its denominator. Refuse before mutating any
     // guest state.
@@ -63,7 +36,7 @@ void crt0_setup(Core &core) {
           [&core](uint32_t a) {
             return core.mem_r32(a);
           },
-          "crt0_setup")) {
+          "Crt0Boot")) {
     lucent::error("crt0",
                   "boot ABORTED: the shipped crt0 boot group DISAGREES with the guest's own "
                   "crt0 (see above). No guest state has been modified.");
@@ -100,3 +73,5 @@ void crt0_setup(Core &core) {
   } w{core};
   crt0_apply(p, w);
 }
+
+} // namespace psx::game

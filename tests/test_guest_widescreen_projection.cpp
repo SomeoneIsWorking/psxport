@@ -7,9 +7,12 @@
 #include "render_mode.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 GuestProjectionPlan make_plan(RenderPath path,
                               PresentationAspect aspect,
@@ -162,7 +165,7 @@ void test_retirement_plan_is_the_guests_own_display_mode() {
 }
 
 void test_the_base_policy_maps_the_aspect_setting() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   const GuestWidescreenProjection policy;
   game->mods.aspect = ASPECT_4_3;
   CHECK(policy.presentationAspect(game->core) == PresentationAspect::Standard4x3);

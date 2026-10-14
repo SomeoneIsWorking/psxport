@@ -7,17 +7,18 @@
 
 namespace psx::ui {
 
+psx::game::TitleDevWarp *WarpControl::titleWarp() const {
+  return mGame ? mGame->runtime.devWarp(mGame->core) : nullptr;
+}
+
 int WarpControl::areaCount() const {
-  if (!mGame || !mGame->core.hooks || !mGame->core.hooks->devAreaCount) {
-    return 0;
-  }
-  return mGame->core.hooks->devAreaCount(&mGame->core);
+  const psx::game::TitleDevWarp *warp = titleWarp();
+  return warp ? warp->areaCount() : 0;
 }
 
 std::string WarpControl::areaLabel(int area) const {
-  const char *nm = (mGame && mGame->core.hooks && mGame->core.hooks->devAreaName)
-                       ? mGame->core.hooks->devAreaName(&mGame->core, area)
-                       : "";
+  const psx::game::TitleDevWarp *warp = titleWarp();
+  const char *nm = warp ? warp->areaName(area) : nullptr;
   char b[96];
   if (nm && *nm) {
     snprintf(b, sizeof b, "%d - %s", area, nm);
@@ -39,13 +40,11 @@ void WarpControl::adjust(int dir) {
 }
 
 std::string WarpControl::arm() {
-  if (!mGame || !mGame->core.hooks) {
+  const psx::game::TitleDevWarp *warp = titleWarp();
+  if (!warp || warp->areaCount() <= 0) {
     return "warp unavailable";
   }
-  if (areaCount() <= 0) {
-    return "warp unavailable";
-  }
-  if (mGame->core.hooks->devWarpAllowed && !mGame->core.hooks->devWarpAllowed(&mGame->core)) {
+  if (!warp->warpAllowed()) {
     return "not in the field - reach gameplay first";
   }
   return mCommands->warp(mArea);

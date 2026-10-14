@@ -48,6 +48,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/core/core.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/game.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/game_runtime.cpp
+  ${PSXPORT_ROOT}/runtime/psx/game/title_command.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_exit.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_ledger.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_control.cpp
@@ -110,6 +111,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/audio/audio_field_report.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/host_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_input.cpp
+  ${PSXPORT_ROOT}/runtime/psx/input/stock_pad_buffers.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_recording.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_phase_replay.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_record_replay.cpp
@@ -165,6 +167,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cd/cd_ready_delivery.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cd_stock_read_completion.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/stock_cd_work_area.cpp
+  ${PSXPORT_ROOT}/runtime/psx/cd/stock_libcd.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/disc_toc.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/stock_cd_response.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cd_drive_timing.cpp
@@ -203,6 +206,10 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/debug/mods.cpp
   ${PSXPORT_ROOT}/runtime/psx/config/config.cpp   # layered CVar registry + the environment audit (docs/config.md)
   ${PSXPORT_ROOT}/runtime/psx/hle/platform_hle.cpp
+  ${PSXPORT_ROOT}/runtime/psx/hle/stock_dma_callbacks.cpp
+  ${PSXPORT_ROOT}/runtime/psx/hle/stock_libgpu.cpp
+  ${PSXPORT_ROOT}/runtime/psx/hle/stock_libgte.cpp
+  ${PSXPORT_ROOT}/runtime/psx/hle/stock_vsync.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/scheduler.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot/run_end_report.cpp # the one report a finished run owes
   ${PSXPORT_ROOT}/runtime/psx/host/product_host.cpp # the multi-title product: picker, then the chosen title, then the picker
@@ -221,14 +228,14 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host/title_selection.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/field_turn.cpp # psx::FieldTurn: the per-field services a loop owes
   ${PSXPORT_ROOT}/runtime/psx/frame/logic_frame.cpp # psx::frame::LogicFrame: the host side of a title logic frame
-  ${PSXPORT_ROOT}/runtime/psx/boot/crt0_boot.cpp # crt0_setup — the derived crt0 plan's shipping applier
+  ${PSXPORT_ROOT}/runtime/psx/game/crt0_boot.cpp # Crt0Boot — the derived crt0 plan's shipping applier
   ${PSXPORT_ROOT}/runtime/psx/gpu/render_path.cpp   # render_path_install — the render-path tri-state, one parser for every boot spine
   ${PSXPORT_ROOT}/runtime/psx/gpu/proj_prim.cpp
   ${PSXPORT_ROOT}/runtime/psx/cpu/gte_vendor_hooks.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu/proj_params.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/ot_attr.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/producer_census.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/guest_packet_pool_windows.cpp
+  ${PSXPORT_ROOT}/runtime/psx/game/guest_packet_pool_windows.cpp
   ${PSXPORT_ROOT}/runtime/psx/core/guest_code_module.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot/hw_bind.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/repl.cpp
@@ -236,7 +243,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/debug/bug_report_session.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/watchdog.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot/boot.cpp
-  ${PSXPORT_ROOT}/runtime/psx/boot/psx_exe_image.cpp
+  ${PSXPORT_ROOT}/runtime/psx/game/psx_exe_image.cpp
   ${PSXPORT_ROOT}/runtime/ui/rmlui_overlay.cpp  # RmlUi LIFETIME only — the UI itself is runtime/ui/
   ${PSXPORT_ROOT}/runtime/ui/rmlui_render_gpu.cpp
   ${PSXPORT_ROOT}/runtime/ui/rml_text.cpp       # DATA -> RML markup boundary (see rml_text.h)
@@ -312,7 +319,6 @@ target_include_directories(psxport PUBLIC
   # every consumer's `#include "x.h"` resolves by basename after the step-2 split. One flat
   # directory with 320 files hid the boundaries; these lines make the boundaries the include path's
   # own statement of them.
-  ${PSXPORT_ROOT}/${RT}/boot
   ${PSXPORT_ROOT}/${RT}/core
   ${PSXPORT_ROOT}/${RT}/cpu
   ${PSXPORT_ROOT}/${RT}/frame
@@ -338,6 +344,11 @@ target_include_directories(psxport PUBLIC
 # NO game include dirs: as of P1.7c the framework owns Fps60/RenderQueue/PcScheduler/VerifyHarness/FfSpan
 # (their headers moved to runtime/psx/; the game reaches into them only through the GameHooks seam). The
 # framework #includes no game/ header — the psxport_smoke link proves it (no game/** symbol resolves).
+
+# Framework internals no title includes; framework tests and tools link psxport_internal for them.
+add_library(psxport_internal INTERFACE)
+target_include_directories(psxport_internal INTERFACE ${PSXPORT_ROOT}/${RT}/boot)
+target_include_directories(psxport PRIVATE ${PSXPORT_ROOT}/${RT}/boot)
 
 target_compile_definitions(psxport PUBLIC
   PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)
@@ -388,6 +399,12 @@ target_link_libraries(psxport PUBLIC
   psxport_presentation_dependencies
   Threads::Threads m)
 
+# ---- test support: the stub GameRuntime for framework and title tests with no title runtime ----
+add_library(psxport_test_support STATIC EXCLUDE_FROM_ALL ${PSXPORT_ROOT}/tests/support/stub_game_runtime.cpp)
+set_target_properties(psxport_test_support PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_include_directories(psxport_test_support PUBLIC ${PSXPORT_ROOT}/tests/support)
+target_link_libraries(psxport_test_support PUBLIC psxport)
+
 # ---- headless game-agnostic smoke (PSXPORT_BUILD_SMOKE=ON) ------------------------------------
 # Links only psxport and inherited system dependencies. Any consumer-title symbol pulled into the
 # Core-only client fails this link. See tools/smoke/psxport_smoke.cpp.
@@ -397,7 +414,7 @@ if(PSXPORT_BUILD_SMOKE)
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/scratch/bin)
   # The smoke includes the public framework headers and inherits their build-owned include paths.
-  target_link_libraries(psxport_smoke PRIVATE psxport)
+  target_link_libraries(psxport_smoke PRIVATE psxport psxport_test_support)
 endif()
 
 # The vendored GPU sources use sscanf/fprintf/stderr without including <stdio.h>. Supply it on the

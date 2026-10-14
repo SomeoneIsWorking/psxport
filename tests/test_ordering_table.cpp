@@ -21,10 +21,13 @@
 #include "ordering_table.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <cstdint>
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 // The arithmetic this owner replaced, kept here as the ORACLE. If the named accessors ever disagree with
 // it, the disagreement is the bug — never the other way round.
@@ -144,7 +147,7 @@ static void test_guest_address_round_trips_through_the_offset(void) {
 namespace {
 
 std::unique_ptr<Core> walk_core() {
-  return std::make_unique<Core>();
+  return std::make_unique<Core>(stubRuntime);
 }
 
 // Place a node whose header is `header` and which holds `wordCount` GP0 words.

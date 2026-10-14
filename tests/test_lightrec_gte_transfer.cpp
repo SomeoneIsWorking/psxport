@@ -1,15 +1,17 @@
 // Executor state transfer must not replay side-effectful MTC2/CTC2 register-port writes.
 #include "game.h"
 #include "gte_state.h"
-#include "hw_bind.h"
 #include "image_identity.h"
 #include "lightrec_executor.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <algorithm>
 #include <memory>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 constexpr uint32_t kEntry = 0x00010000u;
 constexpr uint32_t kReturn = 0x00010100u;
@@ -27,12 +29,12 @@ void seedFifos(GteRegs &state) {
 }
 
 void test_guest_gpf_sqr_preserves_ir_inputs_against_isolated_gte() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   auto &core = game->core;
   core.imageCatalog().activate("gte-transfer-fixture", {kEntry, kReturn + 4u}, 1u);
-  seedFifos(game->gte);
+  seedFifos(game->core.gte().registers());
   GteRegs expected{};
-  std::copy_n(game->gte.REG, 64, expected.REG);
+  std::copy_n(game->core.gte().registers().REG, 64, expected.REG);
   // IRGB storage remains zero while MTC2 independently updates the IR inputs.
   expected.REG[15] = expected.REG[14]; // Architectural SXYP is an alias of SXY2.
   expected.REG[8] = 4096u;
@@ -69,30 +71,30 @@ void test_guest_gpf_sqr_preserves_ir_inputs_against_isolated_gte() {
   CHECK(core.lightrecExecutor().counters().executedBlocks > 0);
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
   for (uint32_t index : {8u, 9u, 10u, 11u, 25u, 26u, 27u, 63u}) {
-    CHECK_EQ(game->gte.REG[index], expected.REG[index]);
+    CHECK_EQ(game->core.gte().registers().REG[index], expected.REG[index]);
   }
   for (uint32_t index = 12; index <= 22; ++index) {
-    CHECK_EQ(game->gte.REG[index], expected.REG[index]);
+    CHECK_EQ(game->core.gte().registers().REG[index], expected.REG[index]);
   }
-  CHECK_EQ(game->gte.FLAGS, expected.FLAGS);
+  CHECK_EQ(game->core.gte().registers().FLAGS, expected.FLAGS);
 }
 
 void test_non_gte_guest_exit_preserves_raw_state_without_fifo_or_irgb_side_effects() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   auto &core = game->core;
   core.imageCatalog().activate("gte-transfer-fixture", {kEntry, kReturn + 4u}, 1u);
-  seedFifos(game->gte);
-  game->gte.REG[9] = 33u;
-  game->gte.REG[10] = static_cast<uint32_t>(-65);
-  game->gte.REG[11] = 127u;
-  game->gte.REG[28] = 0;
-  game->gte.REG[29] = 0x12345678u;
-  game->gte.REG[30] = 0x00ffffffu;
-  game->gte.REG[31] = 8u;
-  game->gte.REG[63] = 0x80001234u; // Bulk transfer preserves raw FLAG, unlike CTC2's write mask.
-  game->gte.FLAGS = game->gte.REG[63];
+  seedFifos(game->core.gte().registers());
+  game->core.gte().registers().REG[9] = 33u;
+  game->core.gte().registers().REG[10] = static_cast<uint32_t>(-65);
+  game->core.gte().registers().REG[11] = 127u;
+  game->core.gte().registers().REG[28] = 0;
+  game->core.gte().registers().REG[29] = 0x12345678u;
+  game->core.gte().registers().REG[30] = 0x00ffffffu;
+  game->core.gte().registers().REG[31] = 8u;
+  game->core.gte().registers().REG[63] = 0x80001234u; // Bulk transfer preserves raw FLAG, unlike CTC2's write mask.
+  game->core.gte().registers().FLAGS = game->core.gte().registers().REG[63];
   uint32_t expected[64];
-  std::copy_n(game->gte.REG, 64, expected);
+  std::copy_n(game->core.gte().registers().REG, 64, expected);
   expected[15] = expected[14]; // Ignore unused backend slot15; the native alias must remain coherent.
   core.mem_w32(kEntry, 0x03e00008u);
   core.mem_w32(kEntry + 4, 0u);
@@ -105,18 +107,18 @@ void test_non_gte_guest_exit_preserves_raw_state_without_fifo_or_irgb_side_effec
   CHECK(core.lightrecExecutor().counters().executedBlocks > 0);
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
   for (uint32_t index = 0; index < 64; ++index) {
-    CHECK_EQ(game->gte.REG[index], expected[index]);
+    CHECK_EQ(game->core.gte().registers().REG[index], expected[index]);
   }
-  CHECK_EQ(game->gte.FLAGS, expected[63]);
+  CHECK_EQ(game->core.gte().registers().FLAGS, expected[63]);
 }
 
 void test_guest_sxyp_write_advances_fifo_once_and_reads_alias() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   auto &core = game->core;
   core.imageCatalog().activate("gte-transfer-fixture", {kEntry, kReturn + 4u}, 1u);
-  seedFifos(game->gte);
+  seedFifos(game->core.gte().registers());
   GteRegs expected{};
-  std::copy_n(game->gte.REG, 64, expected.REG);
+  std::copy_n(game->core.gte().registers().REG, 64, expected.REG);
   const uint32_t pushed = 0x11223344u;
   GTE_BindState(&expected);
   gte_write_data(15, pushed); // Independent production register-port reference.
@@ -124,7 +126,7 @@ void test_guest_sxyp_write_advances_fifo_once_and_reads_alias() {
   for (uint32_t index = 0; index < 4; ++index) {
     expectedReads[index] = gte_read_data(12 + index);
   }
-  gte_bind(&core);
+  core.gte().bind();
   core.r[4] = pushed;
   const uint32_t instructions[] = {
       0x48847800u, // mtc2 a0, SXYP
@@ -152,7 +154,7 @@ void test_guest_sxyp_write_advances_fifo_once_and_reads_alias() {
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
   for (uint32_t index = 0; index < 4; ++index) {
     CHECK_EQ(core.r[5 + index], expectedReads[index]);
-    CHECK_EQ(game->gte.REG[12 + index], expected.REG[12 + index]);
+    CHECK_EQ(game->core.gte().registers().REG[12 + index], expected.REG[12 + index]);
     CHECK_EQ(gte_read_data(12 + index), expectedReads[index]);
   }
 }

@@ -1,8 +1,8 @@
 // crt0_boot.h — THE ONE derivation of a PSY-Q crt0's register/memory writes from
-// GuestProgramImage, and the ONE place that decides whether a game's boot group is complete enough
+// psx::game::Crt0Image, and the ONE place that decides whether a game's boot group is complete enough
 // to run.
 //
-// WHY THIS FILE EXISTS (megamanx4 docs/issues/0005). The first `crt0_setup` was a faithful
+// WHY THIS FILE EXISTS (megamanx4 docs/issues/0005). The first `Crt0Boot::run` was a faithful
 // transcription of the FIRST consumer's crt0 (Tomba!2, FUN_800896E0) wearing generic clothes. That was
 // established by MEASUREMENT, not by reading the C. The extractor is `tools/crt0_extract` (it shares
 // `crt0_scan` with the boot-time audit, so the two cannot drift); run over Tomba!2's MAIN.EXE it
@@ -31,7 +31,7 @@
 //      which is the arena capacity every BIOS malloc is measured against.
 //
 // THE SHAPE OF THE FIX. The arithmetic and every completeness decision live HERE, in a pure function
-// over (GuestProgramImage, the two guest words it reads). `crt0_setup` became a thin applier that
+// over (psx::game::Crt0Image, the two guest words it reads). `Crt0Boot::run` became a thin applier that
 // performs no arithmetic of its own, so the code the tests exercise IS the code that ships — there
 // is no helper beside the shipping path to drift from it.
 //
@@ -49,13 +49,36 @@
 // optional stores it performed out of how many the game declares). "No store performed" and "I was
 // never given an address" are therefore different lines, which is the entire point.
 #pragma once
-#include "guest_program_image.h"
+#include "guest_address_range.h"
 
 class Core;
 
 #include <lucent/log.h>
 #include <stdint.h>
 #include <string>
+
+namespace psx::game {
+
+// A PSY-Q crt0's boot group, measured out of the title's executable. Zero is "not measured" for every
+// address; the stack bias is declared explicitly because 0 is a real measured value.
+struct Crt0Image {
+  GuestAddressRange bss;
+  uint32_t stackTopWordAddress = 0;
+  uint32_t stackReserveWordAddress = 0;
+  uint32_t heapBase = 0;
+  uint32_t heapSizeStoreAddress = 0;
+  uint32_t heapBaseStoreAddress = 0;
+  uint32_t globalPointer = 0;
+  uint32_t libcInitEntry = 0;
+  uint32_t crt0Entry = 0;
+
+  struct StackBias {
+    bool declared = false;
+    int32_t bytes = 0;
+  } stackBias;
+};
+
+} // namespace psx::game
 
 // The largest heap a PSX crt0 can be computing. Main RAM is 2 MiB on retail and 8 MiB on a dev unit,
 // so a "heap size" at or above 8 MiB is not a heap size — it is the subtraction underflowing because
@@ -90,15 +113,14 @@ struct Crt0Plan {
 
 namespace psx {
 
-// The required crt0 fields an image leaves unset. One list, walked by `crt0_plan` and by the boot-entry
-// check, so a field can never be required-but-unnamed or named-but-checked-in-one-place-only.
+// The required crt0 fields an image leaves unset; `crt0_plan` refuses on any of them.
 struct Crt0Completeness {
   std::string unset; // the unset field names, comma-separated; empty when the group is complete
   int unsetCount = 0;
   int required = 0;
 };
 
-inline Crt0Completeness crt0Completeness(const GuestProgramImage &image) {
+inline Crt0Completeness crt0Completeness(const psx::game::Crt0Image &image) {
   struct Required {
     const char *name;
     uint32_t value;
@@ -131,10 +153,6 @@ inline Crt0Completeness crt0Completeness(const GuestProgramImage &image) {
   return result;
 }
 
-// Why the image's declared `bootEntry` cannot boot it, or empty when it can. `Crt0` needs the complete
-// crt0 group; `DriverOwned` needs nothing here. No image declares no entry.
-std::string bootEntryRefusal(const GuestProgramImage *image);
-
 } // namespace psx
 
 // crt0_plan — derive the plan, or refuse.
@@ -145,11 +163,11 @@ std::string bootEntryRefusal(const GuestProgramImage *image);
 //
 // `who` names the caller in every emitted line (a boot has more than one Core: SBS boots two).
 static inline Crt0Plan
-crt0_plan(const GuestProgramImage *image, uint32_t stackTopWord, uint32_t stackReserveWord, const char *who) {
+crt0_plan(const psx::game::Crt0Image *image, uint32_t stackTopWord, uint32_t stackReserveWord, const char *who) {
   Crt0Plan p;
   if (!image) {
     lucent::error("crt0",
-                  "{}: NO GuestProgramImage installed — the boot group could not be read at all, so "
+                  "{}: NO crt0 image — the boot group could not be read at all, so "
                   "0 of 8 required fields were checked. Refusing to run a crt0 (the previous "
                   "behaviour was to clear a zero-length .bss and write the heap base to guest "
                   "0x00000000).",
@@ -167,7 +185,7 @@ crt0_plan(const GuestProgramImage *image, uint32_t stackTopWord, uint32_t stackR
                   "\n  This is an un-reverse-engineered crt0, not a framework failure. The "
                   "group is consumed AS A GROUP: running it half-filled clears a wrong .bss "
                   "span, builds sp from mem[0], and hands InitHeap a garbage size."
-                  "\n  Fill them in the game's GuestProgramImage (owned by its derived runtime) with a "
+                  "\n  Fill them in the Crt0Image the title passes to Crt0Boot, with a "
                   "citation per field. `stackBias` must be stated explicitly even when the "
                   "measured bias is 0 — see crt0_boot.h.",
                   who,
@@ -264,7 +282,7 @@ crt0_plan(const GuestProgramImage *image, uint32_t stackTopWord, uint32_t stackR
     lucent::info("crt0",
                  "{}: heap-size global {} / heap-base global {} — this crt0 keeps {} in "
                  "REGISTERS ONLY, so no store is performed. That is a MEASURED absence "
-                 "(GuestProgramImage leaves the pointer 0), not a missing address: the framework used "
+                 "(Crt0Image leaves the pointer 0), not a missing address: the framework used "
                  "to write these to guest 0x00000000.",
                  who,
                  p.storeHeapSize ? "present" : "ABSENT",
@@ -275,11 +293,21 @@ crt0_plan(const GuestProgramImage *image, uint32_t stackTopWord, uint32_t stackR
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// crt0_setup — APPLY the derived plan to a Core: the two guest crt0 words, the completeness refusal,
-// the shipped-constants cross-check against the guest's own crt0 bytes, and then crt0_apply's own
-// write sequence. Defined in crt0_boot.cpp; it performs no arithmetic, because every value it writes
-// comes from crt0_plan above.
-void crt0_setup(Core &core);
+namespace psx::game {
+
+// Replays a title's crt0 on a Core: reads the two guest crt0 words, refuses an incomplete or
+// disagreeing group, then applies crt0_apply's write sequence and calls libcInit. No arithmetic of its
+// own; every value comes from crt0_plan.
+class Crt0Boot {
+public:
+  explicit Crt0Boot(const Crt0Image &image) : image_(image) {}
+  void run(Core &core) const;
+
+private:
+  Crt0Image image_;
+};
+
+} // namespace psx::game
 
 // crt0_apply — APPLY a plan. Also here, and also templated, for ONE reason: the defect this file
 // exists to fix was not in the arithmetic, it was in the APPLICATION — an unconditional store

@@ -5,10 +5,13 @@
 #include "game.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <cstddef>
 #include <cstring>
 
 namespace {
+
+psx::test::StubGameRuntime stubRuntime;
 
 constexpr uint32_t kSyscallPc = 0x8003E1FCu;
 constexpr uint32_t kStatusUpper = 0x00600000u;
@@ -18,7 +21,7 @@ constexpr std::size_t kV0 = 2;
 constexpr std::size_t kA0 = 4;
 
 Game &testGame() {
-  static Game game;
+  static Game game{stubRuntime};
   return game;
 }
 

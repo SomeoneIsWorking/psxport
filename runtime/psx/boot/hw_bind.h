@@ -3,7 +3,6 @@
 struct Core;
 // Bind THIS core's per-instance HW-peripheral state (so two cores — e.g. native vs guest dual-view —
 // keep SEPARATE peripheral state). Called per core frame-step + at boot, from the explicit Core.
-void gte_bind(Core *c); // gte_beetle.cpp — per-instance GTE register file
 // Initialize the division table and power the currently bound GTE at startup.
 void gte_init();
 // (native-depth cache bind moved to `class ProjPrim::bind` — call `c->rsub.projprim.bind(c)`)

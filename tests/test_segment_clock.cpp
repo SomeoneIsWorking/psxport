@@ -32,6 +32,7 @@
 #include "guest_call.h"
 #include "lightrec_executor.h"
 #include "segment_clock.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <algorithm>
@@ -45,22 +46,6 @@ namespace {
 constexpr std::uint32_t kRootCounter2Value = 0x1F801120u;
 
 constexpr std::uint32_t kV0 = 2u;
-
-class Runtime final : public GameRuntime {
-public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-};
 
 constexpr std::uint32_t kProgram = 0x00010000u;
 constexpr std::uint32_t kTrampoline = 0x00010200u;
@@ -99,25 +84,10 @@ constexpr std::uint32_t kPollProgram[] = {
 };
 
 struct Fixture {
-  Runtime runtime;
-  // NOT a member initialiser, and that is the whole point of this declaration.
-  //
-  // `std::make_unique<Game>()` as a NSDMI runs BEFORE the constructor body, so it ran before
-  // `psxport_install_game(runtime)` below — and `Core::Core` reads the installed runtime
-  // (`core.cpp:31`) while the Game is being constructed. The fixture therefore handed `Core` whatever
-  // pointer the PREVIOUS test had installed: for the first test in the file that was null and the
-  // null branch saved it, and for every later test it was a pointer to an already-destroyed `Runtime`.
-  //
-  // Clang tolerated the freed stack memory and this suite passed 15/15; GCC 16.2.1 at -O2 reused the
-  // frame and `Core::Core` segfaulted on `runtime->guestProgramImage()`. Same defect class as the
-  // `insideCheckout` dangling return in `mods.cpp` — **undefined behaviour that the agents' own
-  // toolchain hides** — and the fix in both places is the lifetime, not the symptom.
-  std::unique_ptr<Game> game;
+  psx::test::StubGameRuntime runtime;
+  std::unique_ptr<Game> game = std::make_unique<Game>(runtime);
 
   Fixture() {
-    psxport_install_game(runtime);
-    // Constructed HERE, after the install, because constructing a Game is what reads the runtime.
-    game = std::make_unique<Game>();
     game->hle.irq_enabled = 1;
     Core &core = game->core;
     core.imageCatalog().activate("rcnt2-poll", {kProgram, kProgram + sizeof(kPollProgram)}, 0x52434e54ull);
@@ -619,9 +589,8 @@ static void test_the_charge_granularity_is_one_block_not_one_instruction(void) {
 // accounting puts it, and must record zero device commits. If the charge fired on ordinary RAM
 // traffic this is where it would show — a device-clock commit count far above the device reads.
 static void test_a_run_with_no_device_access_makes_no_device_commit(void) {
-  Runtime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  psx::test::StubGameRuntime runtime;
+  auto game = std::make_unique<Game>(runtime);
   game->hle.irq_enabled = 1;
   Core &core = game->core;
   // Pure main-RAM traffic through the OUT-OF-LINE memory callbacks, and no hardware register.

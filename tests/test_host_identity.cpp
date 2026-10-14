@@ -5,6 +5,7 @@
 #include "game.h"
 #include "game_runtime.h"
 #include "memcard.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <cstdio>
@@ -20,27 +21,15 @@ namespace {
 constexpr const char *kCardVar = "PSXPORT_TEST_HOST_IDENTITY_CARD";
 constexpr const char *kUnsetCardVar = "PSXPORT_TEST_HOST_IDENTITY_UNSET_CARD";
 
-class IdentifiedRuntime final : public GameRuntime {
+class IdentifiedRuntime final : public psx::test::StubGameRuntime {
 public:
-  explicit IdentifiedRuntime(const HostIdentity *declared) : declared_(declared) {}
-  const HostIdentity *hostIdentity() const override {
+  explicit IdentifiedRuntime(const psx::game::HostIdentity *declared) : declared_(declared) {}
+  const psx::game::HostIdentity *hostIdentity() const override {
     return declared_;
   }
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
 
 private:
-  const HostIdentity *declared_;
+  const psx::game::HostIdentity *declared_;
 };
 
 // The card variable is an undeclared knob, so it comes from the real environment, as in a player's shell.
@@ -60,27 +49,24 @@ std::string scratchPath(const char *name) {
 
 // Constructs a Game for `runtime`, initialises its card, and returns the file it chose.
 std::string cardChosenBy(IdentifiedRuntime &runtime) {
-  psxport_install_game(runtime);
-  const auto game = std::make_unique<Game>();
+  const auto game = std::make_unique<Game>(runtime);
   game->memcard.init();
   return game->memcard.path();
 }
 
 void test_a_declared_identity_reaches_the_game() {
-  const HostIdentity declared{.cardEnvVar = kCardVar, .cardDefaultPath = "ignored-default.mcr"};
+  const psx::game::HostIdentity declared{.cardEnvVar = kCardVar, .cardDefaultPath = "ignored-default.mcr"};
   IdentifiedRuntime runtime(&declared);
-  psxport_install_game(runtime);
-  const auto game = std::make_unique<Game>();
-  const HostIdentity seen = game->hostIdentity();
+  const auto game = std::make_unique<Game>(runtime);
+  const psx::game::HostIdentity seen = game->hostIdentity();
   CHECK(std::string(seen.cardEnvVar) == std::string(kCardVar));
   CHECK(std::string(seen.cardDefaultPath) == std::string("ignored-default.mcr"));
 }
 
 void test_no_declaration_is_an_honest_null_identity() {
   IdentifiedRuntime runtime(nullptr);
-  psxport_install_game(runtime);
-  const auto game = std::make_unique<Game>();
-  const HostIdentity seen = game->hostIdentity();
+  const auto game = std::make_unique<Game>(runtime);
+  const psx::game::HostIdentity seen = game->hostIdentity();
   CHECK(seen.cardEnvVar == nullptr);
   CHECK(seen.cardDefaultPath == nullptr);
 }
@@ -88,7 +74,7 @@ void test_no_declaration_is_an_honest_null_identity() {
 void test_the_title_card_variable_outranks_the_default_path() {
   const std::string fromVariable = scratchPath("variable.mcr");
   const std::string fromDefault = scratchPath("default.mcr");
-  const HostIdentity declared{.cardEnvVar = kCardVar, .cardDefaultPath = fromDefault.c_str()};
+  const psx::game::HostIdentity declared{.cardEnvVar = kCardVar, .cardDefaultPath = fromDefault.c_str()};
   IdentifiedRuntime runtime(&declared);
   setEnvironment(kCardVar, fromVariable.c_str());
   CHECK(cardChosenBy(runtime) == fromVariable);
@@ -97,7 +83,7 @@ void test_the_title_card_variable_outranks_the_default_path() {
 
 void test_the_default_path_applies_when_the_variable_is_unset() {
   const std::string fromDefault = scratchPath("default.mcr");
-  const HostIdentity declared{.cardEnvVar = kUnsetCardVar, .cardDefaultPath = fromDefault.c_str()};
+  const psx::game::HostIdentity declared{.cardEnvVar = kUnsetCardVar, .cardDefaultPath = fromDefault.c_str()};
   IdentifiedRuntime runtime(&declared);
   CHECK(cardChosenBy(runtime) == fromDefault);
   std::remove(fromDefault.c_str());

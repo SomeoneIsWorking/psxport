@@ -7,6 +7,7 @@
 //    at exactly the requested frame number, and at no other.
 // 2. The client pause. `beginField` is where a pending `step` is consumed, so a turn that forgot the
 //    pause would leave a client's single-step request sitting unconsumed while fields kept running.
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include "config_var.h"
@@ -19,6 +20,7 @@
 #include "game_runtime.h"
 #include "platform_hle.h"
 #include "render_queue.h"
+#include "stock_vsync.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -53,7 +55,7 @@ public:
   }
 };
 
-class Driver final : public FrameDriver {
+class Driver final : public psx::game::FrameDriver {
 public:
   void stepFrame(Core &core, std::uint32_t frame) override {
     ++steps;
@@ -72,24 +74,14 @@ private:
   FenceBackend backend_;
 };
 
-class Runtime final : public GameRuntime {
+class Runtime final : public psx::test::StubGameRuntime {
 public:
-  void *createContext(Core &) override {
-    return nullptr;
+  void registerOverrides(Game &game) override {
+    vsync_.bind(game);
   }
-  void destroyContext(void *) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  void registerOverrides(Game &) override {}
-  const PlatformHlePlan *platformHlePlan() const override {
-    return &plan;
-  }
-  PlatformHlePlan plan{};
+
+private:
+  const psx::hle::StockVSync vsync_{kVSyncAddress, 0u};
 };
 
 struct Fixture {
@@ -98,11 +90,8 @@ struct Fixture {
   Driver *driver = nullptr;
 
   Fixture() {
-    runtime.plan.vsyncAddress = kVSyncAddress;
-    runtime.plan.windowLo[0] = kVSyncAddress;
-    runtime.plan.windowHi[0] = kVSyncAddress + 4u;
-    psxport_install_game(runtime);
-    game = std::make_unique<Game>();
+    game = std::make_unique<Game>(runtime);
+    runtime.registerOverrides(*game);
     auto owned = std::make_unique<Driver>();
     owned->game = game.get();
     driver = owned.get();

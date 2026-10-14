@@ -13,9 +13,10 @@
 #include <vector>
 struct Core;
 struct GameConfig;
-struct HostIdentity;
 class Game;
+namespace psx::game {
 struct HostIdentity;
+}
 
 struct McFd {
   int used;
@@ -135,7 +136,7 @@ private:
   char mScanPat[64] = {0};     // firstfile/nextfile pattern, device prefix already stripped
   uint32_t mScanBlk = kBlocks; // next directory block to examine; kBlocks = scan exhausted/unarmed
 
-  static char *resolvePath(const struct HostIdentity &identity);
+  static char *resolvePath(const psx::game::HostIdentity &identity);
   static void mkParents(const char *path);
 };
 

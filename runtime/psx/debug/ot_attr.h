@@ -16,9 +16,8 @@
 // op, which is exactly when a REPL command run between `run N` steps executes. Sized statically;
 // overflow is COUNTED and reported rather than growing unbounded or silently dropping.
 //
-//   1. Packet-pool store spans — every guest store landing in the shared packet pool (the
-//      GameConfig-derived window, render_noise.h; Tomba!2's is [0x800BFE68, 0x800E7E68), and a game
-//      that has not RE'd its pool gets NO window and is told so) is attributed to {emitter fn = the
+//   1. Packet-pool store spans — every guest store landing in the title's packet pool
+//      (GameRuntime::packetPool) is attributed to {emitter fn = the
 //      OTATTR SHADOW STACK top (InterpDiag::otattrTop(), the innermost guest fn reached via an
 //      INDIRECT/jalr guest dispatch — see interp_diag.h), caller fn = one frame below that, node =
 //      Render::diag.currentNode()}. Consecutive stores with the SAME (fn, node) attribution are
@@ -51,13 +50,14 @@
 //      `otattr trace <addr>` heuristic: a writer fn that touches many distinct pages in one frame LOOKS
 //      like a copy loop (batching many sources into one buffer), which is the census's actual scenario.
 #pragma once
+#include "guest_packet_pool_windows.h"
 #include "producer_census.h"
 #include <functional>
 #include <lucent/log.h> // lucent::Channel — the inline armed test below
+
 #include <stdint.h>
 #include <string_view>
 class Core;
-struct GameConfig;
 
 // The `otattr` channel as an INTERNED HANDLE. This is the one place in the framework that has earned
 // one: the gate below runs on every guest store. A `lucent::Channel` is constant-initialised (no
@@ -258,6 +258,7 @@ public:
   // says when a frame begins and this is the one clock that matters.
   void beginLogicFrame(uint32_t frame) {
     resetIfNewFrame(frame);
+    mPoolStale = true;
   }
 
   // Run-end verdict for the frame-loop contract. Stores before a game's loop starts are legitimate
@@ -301,45 +302,13 @@ public:
   // The first frame of the store's call chain that a registered producer owns, or 0.
   uint32_t resolveClaimedFrame(Core *c);
 
-  // Packet-pool windows, derived from either GameConfig's fixed base/stride or its two live guest
-  // base/end globals. Two separate windows matter: heap allocations need not be adjacent, and treating
-  // the gap as packet memory would attribute unrelated gameplay stores as render output.
-  struct PoolWindows {
-    uint32_t lo[2], hi[2];
-    uint32_t count;
-    bool known;
-    bool dynamic;
-  };
-
 private:
-  // The COLD half of the pool-window cache: derive the window for a cfg not seen before and store it.
-  // Deliberately out of line and never called on the steady-state path — trackStoreSlow inlines the
-  // pointer compare itself and only calls this on a miss.
-  //
-  // MEASURED, and this split is the whole point. The first version of this cache was one ordinary
-  // member function doing compare-then-return. That turned a same-TU free function the compiler had
-  // been INLINING into a real call on every guest store, and the profile said so: the OtAttr cluster
-  // went 450 ms -> 485 ms over the same 1,100-frame scene (samples at 1 kHz), i.e. caching the value
-  // cost MORE than recomputing it had. The arithmetic was never the expense; the call is.
-  void poolRangeMiss(Core *c);
-  // Cache key: the GameConfig the window was derived from, for a legacy game. Dynamic descriptor
-  // stores clear the cached bounds so the next store re-reads the live ones — through `mPoolDirty`,
-  // not by nulling the key, because a typed runtime's cfg is null and nulling it changed nothing.
-  const GameConfig *mPoolCfg = nullptr;
-  // The declaration the window was derived from, for a typed runtime. Informational: it is what the
-  // "structurally blind" report names, and the thing whose address `descriptor_overlap` re-checks.
-  const void *mPoolSource = nullptr;
-  // The four guest pointer globals the live window is derived from: {base,end} per parity. Cached at
-  // resolve time so the per-store overlap test is four integer compares.
-  uint32_t mPoolDescriptorAddr[4] = {};
-  // Has the window been derived at least once for this Core? A typed runtime declares nothing
-  // keyable, so this is what triggers the one resolve a null-cfg Core ever needs.
-  bool mPoolDirty = true;
-  uint32_t mPoolLo[2] = {};
-  uint32_t mPoolHi[2] = {};
-  uint32_t mPoolCount = 0;
-  bool mPoolKnown = false;
-  bool mPoolDynamic = false;
+  // Out of line: the per-store path only tests mPoolStale.
+  void refreshPool(Core *c);
+
+  psx::gpu::PacketPoolExtent mPool;
+  bool mPoolStale = true;
+  bool mWarnedNoPool = false;
 
   void resetIfNewFrame(uint32_t frame);
   void trackWatch(uint32_t fn, uint32_t caller, uint32_t phys, uint32_t bytes, uint32_t frame);

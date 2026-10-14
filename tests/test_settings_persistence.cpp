@@ -91,7 +91,7 @@ void test_a_save_into_a_checkout_writes_nothing() {
   Fixture fixture("refuse");
   setPath(fixture.checkout_file);
   Mods mods;
-  mods.init(RenderCapabilities::interpolatedNative());
+  mods.init(true, FACE_ORDER_DEPTH);
   mods.save();
   std::error_code ignored;
   CHECK(!fs::exists(fixture.checkout_file, ignored));
@@ -101,7 +101,7 @@ void test_a_save_outside_a_checkout_still_writes() {
   Fixture fixture("allow");
   setPath(fixture.plain_file);
   Mods mods;
-  mods.init(RenderCapabilities::interpolatedNative());
+  mods.init(true, FACE_ORDER_DEPTH);
   mods.save();
   CHECK(existsNonEmpty(fixture.plain_file));
 }
@@ -110,7 +110,7 @@ void test_the_written_file_carries_the_knobs() {
   Fixture fixture("content");
   setPath(fixture.plain_file);
   Mods mods;
-  mods.init(RenderCapabilities::interpolatedNative());
+  mods.init(true, FACE_ORDER_DEPTH);
   mods.aspect = 1;
   mods.save();
   std::ifstream in(fixture.plain_file);
@@ -125,7 +125,7 @@ void test_a_deeper_path_inside_a_checkout_is_still_refused() {
   Fixture fixture("deep");
   setPath(fixture.checkout_file);
   Mods mods;
-  mods.init(RenderCapabilities::interpolatedNative());
+  mods.init(true, FACE_ORDER_DEPTH);
   mods.save();
   std::error_code ignored;
   CHECK(!fs::exists(fixture.checkout_file, ignored));

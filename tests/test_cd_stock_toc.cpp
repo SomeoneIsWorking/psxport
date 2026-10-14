@@ -1,14 +1,17 @@
 // Exercise the stock libcd command/completion service with parsed-disc track metadata.
-#include "cd_control.h"
 #include "game.h"
+#include "stock_libcd.h"
 #include "testutil.h"
 
+#include "stub_game_runtime.h"
 #include <array>
 #include <cstdlib>
 #include <memory>
 #include <string>
 
 namespace {
+psx::test::StubGameRuntime stubRuntime;
+const psx::cd::StockLibcd kLibcd({}, {}, 0);
 
 enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 constexpr uint32_t kParameter = 0x80112000u;
@@ -44,7 +47,7 @@ void issue_and_sync(Core &core, uint8_t command, uint32_t parameter, const Respo
   core.r[A1] = parameter;
   core.r[A2] = kResult;
   core.r[V0] = 0xDEADBEEFu;
-  cd_command_stock_sync(&core);
+  kLibcd.command(core);
   CHECK_EQ(core.r[V0], 0u);
   check_bytes(core, expected);
 
@@ -56,7 +59,7 @@ void issue_and_sync(Core &core, uint8_t command, uint32_t parameter, const Respo
   core.r[A0] = 0;
   core.r[A1] = kResult;
   core.r[V0] = 0xDEADBEEFu;
-  cd_sync_stock_sync(&core);
+  kLibcd.sync(core);
   CHECK_EQ(core.r[V0], 2u);
   check_bytes(core, expected);
 }
@@ -68,7 +71,7 @@ void refuse_and_sync(Core &core, uint8_t command, uint32_t parameter) {
   core.r[A0] = command;
   core.r[A1] = parameter;
   core.r[A2] = kResult;
-  cd_command_stock_sync(&core);
+  kLibcd.command(core);
   CHECK(core.r[V0] != 0u);
   check_bytes(core, Response{});
 
@@ -76,12 +79,12 @@ void refuse_and_sync(Core &core, uint8_t command, uint32_t parameter) {
     core.mem_w8(kResult + index, 0x5Au);
   }
   core.r[A1] = kResult;
-  cd_sync_stock_sync(&core);
+  kLibcd.sync(core);
   check_bytes(core, Response{});
 }
 
 void test_gettn_gettd_and_leadout_survive_command_and_sync() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   install_two_tracks(*game);
   auto &core = game->core;
   issue_and_sync(core, 0x13, 0, Response{0x02, 0x01, 0x02});
@@ -98,7 +101,7 @@ void test_gettn_gettd_and_leadout_survive_command_and_sync() {
 }
 
 void test_invalid_track_and_disc_metadata_do_not_reuse_prior_result() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   install_two_tracks(*game);
   auto &core = game->core;
   issue_and_sync(core, 0x13, 0, Response{0x02, 0x01, 0x02});
@@ -114,13 +117,13 @@ void test_invalid_track_and_disc_metadata_do_not_reuse_prior_result() {
 }
 
 void test_control_and_fire_keep_their_result_contract() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   install_two_tracks(*game);
   auto &core = game->core;
   core.r[A0] = 0x13;
   core.r[A1] = 0;
   core.r[A2] = kResult;
-  cd_control_sync(&core);
+  kLibcd.control(core);
   CHECK_EQ(core.r[V0], 1u);
   check_bytes(core, Response{0x02, 0x01, 0x02});
 
@@ -128,11 +131,11 @@ void test_control_and_fire_keep_their_result_contract() {
   core.r[A0] = 0x09;
   core.r[A1] = 0;
   core.r[A2] = kResult; // stale a2 is not an output argument of CdControlF.
-  cd_control_fire_sync(&core);
+  kLibcd.controlFire(core);
   CHECK_EQ(core.r[V0], 1u);
   CHECK_EQ(core.mem_r8(kResult), 0xA5u);
   core.r[A1] = kResult;
-  cd_sync_stock_sync(&core);
+  kLibcd.sync(core);
   check_bytes(core, Response{});
 
   // CdControlF has no result buffer, but its later CdSync still publishes the TOC.
@@ -140,17 +143,17 @@ void test_control_and_fire_keep_their_result_contract() {
   core.r[A0] = 0x13;
   core.r[A1] = 0;
   core.r[A2] = kResult;
-  cd_control_fire_sync(&core);
+  kLibcd.controlFire(core);
   CHECK_EQ(core.r[V0], 1u);
   CHECK_EQ(core.mem_r8(kResult), 0xA5u);
   core.r[A1] = kResult;
-  cd_sync_stock_sync(&core);
+  kLibcd.sync(core);
   check_bytes(core, Response{0x02, 0x01, 0x02});
 }
 
 // Spyro 1's music driver reads its track position from the GetlocP result's absolute MSF.
 void test_getlocp_reports_the_head_position_through_sync() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   install_two_tracks(*game);
   auto &core = game->core;
   game->cdc.loc_lba = 1000;
@@ -160,7 +163,7 @@ void test_getlocp_reports_the_head_position_through_sync() {
 }
 
 void test_missing_disc_refuses_toc_command() {
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(stubRuntime);
   game->disc.env_key = "PSXPORT_DISC";
   const char *previous = std::getenv("PSXPORT_DISC");
   const bool had_previous = previous != nullptr;

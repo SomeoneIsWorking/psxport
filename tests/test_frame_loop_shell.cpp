@@ -1,12 +1,16 @@
 // A product frame is advanced only through the framework shell and the title-owned native driver.
-// Guest boot code is not an alternative loop owner: a missing driver must refuse before bootInit can
+// Guest boot code is not an alternative loop owner: a missing driver must refuse before startProgram can
 // dispatch a non-returning retail main.
 #include "frame_loop_shell.h"
 #include "frame_presenter.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "gte_state.h"
 #include "platform_hle.h"
+#include "proj_params.h"
 #include "proj_prim.h"
+#include "stock_vsync.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <csignal>
@@ -19,7 +23,6 @@
 namespace {
 
 constexpr uint32_t kVSyncAddress = 0x800859A8u;
-constexpr uint32_t kPlatformWindowEnd = 0x80085B20u;
 
 class FenceBackend final : public psx::frame::FramePresentationBackend {
 public:
@@ -41,7 +44,7 @@ public:
   }
 };
 
-class CountingDriver final : public FrameDriver {
+class CountingDriver final : public psx::game::FrameDriver {
 public:
   explicit CountingDriver(int fences) : fences_(fences) {}
 
@@ -65,32 +68,17 @@ private:
   FenceBackend backend_;
 };
 
-class DriverRuntime final : public GameRuntime {
+class DriverRuntime final : public psx::test::StubGameRuntime {
 public:
-  explicit DriverRuntime(int fences) : fences_(fences) {
-    platformPlan_.vsyncAddress = kVSyncAddress;
-    platformPlan_.windowLo[0] = kVSyncAddress;
-    platformPlan_.windowHi[0] = kPlatformWindowEnd;
-  }
+  explicit DriverRuntime(int fences) : fences_(fences) {}
 
-  void *createContext(Core &) override {
-    return nullptr;
+  void registerOverrides(Game &game) override {
+    vsync_.bind(game);
   }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {
+  void startProgram(Core &) override {
     ++bootCalls;
   }
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  const PlatformHlePlan *platformHlePlan() const override {
-    return &platformPlan_;
-  }
-  std::unique_ptr<FrameDriver> createFrameDriver(Game &) override {
+  std::unique_ptr<psx::game::FrameDriver> createFrameDriver(Game &) override {
     if (fences_ < 0) {
       return nullptr;
     }
@@ -103,8 +91,8 @@ public:
   int bootCalls = 0;
 
 private:
+  const psx::hle::StockVSync vsync_{kVSyncAddress, 0u};
   int fences_;
-  PlatformHlePlan platformPlan_{};
 };
 
 void expect_abort(void (*operation)(void *), void *context) {
@@ -134,8 +122,8 @@ void step_shell(void *context) {
 
 static void test_shell_delegates_exactly_one_native_frame() {
   DriverRuntime runtime(1);
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
   CHECK(runtime.createdDriver != nullptr);
 
   psx::frame::FrameLoopShell shell;
@@ -154,25 +142,77 @@ namespace {
 // Another session's boot binds the devices to its own Core; the next step of this one rebinds them.
 void test_a_step_rebinds_after_another_core_was_bound() {
   DriverRuntime runtime(1);
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
   CountingDriver *driver = runtime.createdDriver;
-  auto other = std::make_unique<Game>();
+  auto other = std::make_unique<Game>(runtime);
   psx::frame::FrameLoopShell shell;
   shell.prepareProduct(*game);
   shell.step(game->core, 1);
-  psx::frame::FrameLoopShell::bindRunningCore(other->core);
+  shell.bindRunningCore(other->core);
   shell.step(game->core, 2);
   CHECK_EQ(driver->calls, 2);
   CHECK_EQ(driver->stepsOnBoundCore, 2);
+}
+
+// Steps of the Core the shell bound last leave the bindings alone.
+void test_a_step_of_the_bound_core_does_not_rebind() {
+  DriverRuntime runtime(1);
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
+  CountingDriver *driver = runtime.createdDriver;
+  auto other = std::make_unique<Game>(runtime);
+  psx::frame::FrameLoopShell shell;
+  shell.prepareProduct(*game);
+  shell.step(game->core, 1);
+  other->core.rsub.projprim.bind(&other->core);
+  shell.step(game->core, 2);
+  CHECK_EQ(driver->calls, 2);
+  CHECK_EQ(driver->stepsOnBoundCore, 1);
+}
+
+// A forgotten Core is rebound on its next step, even when it is the one bound last.
+void test_a_forgotten_core_is_rebound() {
+  DriverRuntime runtime(1);
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
+  CountingDriver *driver = runtime.createdDriver;
+  auto other = std::make_unique<Game>(runtime);
+  psx::frame::FrameLoopShell shell;
+  shell.prepareProduct(*game);
+  shell.step(game->core, 1);
+  other->core.rsub.projprim.bind(&other->core);
+  shell.forgetCore(game->core);
+  shell.step(game->core, 2);
+  CHECK_EQ(driver->stepsOnBoundCore, 2);
+}
+
+// Destroying a Game that is not bound leaves the bound Game's peripherals in place.
+void test_destroying_an_unbound_game_keeps_the_bound_one() {
+  DriverRuntime runtime(1);
+  auto game = std::make_unique<Game>(runtime);
+  auto other = std::make_unique<Game>(runtime);
+  psx::frame::FrameLoopShell shell;
+  shell.bindRunningCore(game->core);
+  other.reset();
+  CHECK(GTE_CurState() == &game->core.gte().registers());
+  CHECK(ProjParams::current() == &game->core.rsub.projParams);
+  CHECK(ProjPrim::current() == &game->core.rsub.projprim);
+  CHECK(game->spu.isBound());
+  CHECK(game->mdec.isBound());
+  const GteRegs *registers = &game->core.gte().registers();
+  game.reset();
+  CHECK(GTE_CurState() != registers);
+  CHECK(ProjParams::current() == nullptr);
+  CHECK(ProjPrim::current() == nullptr);
 }
 
 } // namespace
 
 static void test_missing_driver_refuses_before_boot_can_run() {
   DriverRuntime runtime(-1);
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
 
   expect_abort(require_driver, game.get());
   CHECK_EQ(runtime.bootCalls, 0);
@@ -180,8 +220,8 @@ static void test_missing_driver_refuses_before_boot_can_run() {
 
 static void test_step_before_product_preflight_refuses() {
   DriverRuntime runtime(1);
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
 
   expect_abort(step_shell, game.get());
   CHECK_EQ(runtime.createdDriver->calls, 0);
@@ -189,8 +229,8 @@ static void test_step_before_product_preflight_refuses() {
 
 static void test_driver_returning_without_a_fence_refuses() {
   DriverRuntime runtime(0);
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
   psx::frame::FrameLoopShell{}.prepareProduct(*game);
 
   expect_abort(step_shell, game.get());
@@ -199,8 +239,8 @@ static void test_driver_returning_without_a_fence_refuses() {
 
 static void test_driver_committing_twice_refuses() {
   DriverRuntime runtime(2);
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
   psx::frame::FrameLoopShell{}.prepareProduct(*game);
 
   expect_abort(step_shell, game.get());
@@ -219,6 +259,9 @@ static void test_repl_prompt_request_is_one_shot() {
 int main() {
   RUN(shell_delegates_exactly_one_native_frame);
   RUN(a_step_rebinds_after_another_core_was_bound);
+  RUN(a_step_of_the_bound_core_does_not_rebind);
+  RUN(a_forgotten_core_is_rebound);
+  RUN(destroying_an_unbound_game_keeps_the_bound_one);
   RUN(missing_driver_refuses_before_boot_can_run);
   RUN(step_before_product_preflight_refuses);
   RUN(driver_returning_without_a_fence_refuses);

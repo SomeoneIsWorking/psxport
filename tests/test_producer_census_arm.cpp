@@ -2,7 +2,7 @@
 //
 // WHAT THIS GATES (the defect it was written RED against, 2026-08-25): the producer-census arm
 // `g_producer_census_armed` (ot_attr.h, default true) was assigned ONLY inside the framework's
-// own boot spine, a path that ports booting through GameRuntime::bootInit — Tekken 3 is the
+// own boot spine, a path that ports booting through GameRuntime::startProgram — Tekken 3 is the
 // measured case — NEVER execute. There, PSXPORT_PRODUCERS=0 silently changed nothing: the knob's own
 // help text says it exists "to price the census", so an A/B that cannot reach the arm prices nothing.
 //
@@ -21,9 +21,8 @@
 // Override once").
 #include "config.h"
 #include "game.h"
-#include "game_runtime.h"
-#include "guest_program_image.h"
 #include "ot_attr.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <lucent/config.h>
@@ -33,48 +32,8 @@
 
 namespace {
 
-class ArmRuntime final : public GameRuntime {
-public:
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-
-  const GuestProgramImage *guestProgramImage() const override {
-    return &programImage;
-  }
-  void *createContext(Core &) override {
-    return &contextToken;
-  }
-  void destroyContext(void *context) override {
-    CHECK_EQ(context, &contextToken);
-  }
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-
-  GuestProgramImage programImage{
-      .bss = {0x800BE0D8u, 0x80106228u},
-      .stackTopWordAddress = 0x800A3F88u,
-      .stackReserveWordAddress = 0x800A3F8Cu,
-      .heapBase = 0x80106228u,
-      .heapSizeStoreAddress = 0x800ABEF8u,
-      .heapBaseStoreAddress = 0x800ABEF4u,
-      .globalPointer = 0x800BE0D4u,
-      .libcInitEntry = 0x80089860u,
-      .gameMainEntry = 0x80050B08u,
-      .crt0Entry = 0x800896E0u,
-      .residentText = {0x00010000u, 0x00100000u},
-      .backtraceText = {0x00010000u, 0x00120000u},
-      .stackBias = {true, -8},
-  };
-  int contextToken = 0;
-};
-
-std::unique_ptr<Game> make_game(ArmRuntime &runtime) {
-  psxport_install_game(runtime);
-  return std::make_unique<Game>();
+std::unique_ptr<Game> make_game(psx::test::StubGameRuntime &runtime) {
+  return std::make_unique<Game>(runtime);
 }
 
 void clear_override(void) {
@@ -89,7 +48,7 @@ void clear_override(void) {
 // census ARMED (default true, behaviour unchanged).
 void test_default_state_arms_census_without_env_override(void) {
   clear_override();
-  ArmRuntime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = make_game(runtime);
   CHECK_EQ(g_producer_census_armed, true);
 }
@@ -103,7 +62,7 @@ void test_producers_zero_disarms_at_construction(void) {
   // case measures case 1's already-bound answer.
   lucent::config::reset_cache();
   psx::config::reset_for_test();
-  ArmRuntime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = make_game(runtime);
   CHECK_EQ(g_producer_census_armed, false);
 }
@@ -112,7 +71,7 @@ void test_producers_zero_disarms_at_construction(void) {
 // Game arms again. This is what makes SBS's two Games safe — each construction re-reads the knob.
 void test_removing_override_rearms_next_construction(void) {
   clear_override();
-  ArmRuntime runtime;
+  psx::test::StubGameRuntime runtime;
   auto game = make_game(runtime);
   CHECK_EQ(g_producer_census_armed, true);
 }

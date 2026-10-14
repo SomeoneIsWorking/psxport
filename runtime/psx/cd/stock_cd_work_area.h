@@ -1,21 +1,20 @@
+// stock_cd_work_area.h — the guest bookkeeping stock libcd's command-send routine keeps.
 #pragma once
 
 #include <cstdint>
 
-struct Core;
+class Core;
 
 namespace psx::cd {
 
-// Guest state written by stock Sony libcd's command-send routine. A zero address leaves that
-// particular state guest-owned; direct titles provide the measured addresses in PlatformHlePlan.
+// Where libcd keeps it; a zero address leaves that state guest-owned.
 struct StockCommandWorkArea {
-  uint32_t lastPositionAddress = 0; // Four Setloc parameter bytes, including the trailing byte.
-  uint32_t lastModeAddress = 0;     // One Setmode parameter byte.
-  uint32_t lastCommandAddress = 0;  // One byte, every command sent; CdLastCom() reads it.
+  uint32_t lastPositionAddress = 0; // four Setloc parameter bytes, including the trailing byte
+  uint32_t lastModeAddress = 0;     // one Setmode parameter byte
+  uint32_t lastCommandAddress = 0;  // one byte, every command sent; CdLastCom() reads it
 };
 
-// Preserve the replaced command routine's guest bookkeeping through the shared stock-CD path.
-// The legacy adapter's contiguous base and direct runtimes' explicit addresses use one policy.
-void publishStockCommandWorkArea(Core &core, uint8_t command, uint32_t parameter);
+// Writes what the replaced command-send would have recorded for `command` with `parameter`.
+void publishStockCommandWorkArea(Core &core, const StockCommandWorkArea &workArea, uint8_t command, uint32_t parameter);
 
 } // namespace psx::cd

@@ -37,6 +37,7 @@
 #include "../runtime/cpu/native_dispatch.h"
 #include "game.h"
 #include "memcard.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,11 +53,27 @@ static constexpr uint32_t kSpecError = 0x8000u; // EvSpERROR — the transfer fa
 
 static const char *kCardPath = "test_memcard_file_api.mcr";
 
+namespace {
+
+// No env, no .env: the card path is the title's declared default.
+class CardRuntime final : public psx::test::StubGameRuntime {
+public:
+  const psx::game::HostIdentity *hostIdentity() const override {
+    return &identity_;
+  }
+
+private:
+  psx::game::HostIdentity identity_{.cardDefaultPath = kCardPath};
+};
+
+CardRuntime cardRuntime;
+
+} // namespace
+
 // A guest RAM window well clear of anything the framework touches, used as the transfer buffer.
 static constexpr uint32_t kBuf = 0x80100000u;
 static constexpr uint32_t kDirectoryCallback = 0x80001000u;
 
-static GameConfig g_cfg{};
 static uint32_t g_directory_callbacks = 0;
 
 static void directory_callback(Core *) {
@@ -69,9 +86,7 @@ static Game *gam() {
     return g;
   }
   remove(kCardPath); // a fresh, unformatted image every run: init() formats it
-  g = new Game();
-  g_cfg.cardDefaultPath = kCardPath; // no env, no .env — the card path is stated here
-  g->core.cfg = &g_cfg;
+  g = new Game(cardRuntime);
   // card_overrides_init, not memcard.init(): the card is a BIOS DEVICE as well as a backing file,
   // and publishing it in the kernel device table is part of bringing it up. Calling init() alone
   // tests a card the running game never has.

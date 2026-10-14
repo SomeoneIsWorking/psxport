@@ -15,9 +15,10 @@
 // (`0x8001C7A4`) never ran, so the boot loop kept polling a completion that had never been posted.
 //
 // The guest-visible half drives the shipping `Timing` clock, the shipping controller and the
-// shipping `Hle::irqPoll` through a title that declared `DeliveryOwner::GuestInterrupt`, and reads
+// shipping `Hle::irqPoll` through a title that binds a `GuestInterruptLibcd`, and reads
 // the answer as a CALLBACK COUNT. Every positive has a negative beside it, because a framework that
 // raised nothing at all would also print a small count.
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <array>
@@ -25,7 +26,6 @@
 #include <cstdint>
 #include <memory>
 
-#include "cd_control.h"
 #include "cd_drive_timing.h"
 #include "cd_ready_delivery.h"
 #include "cdc_command_phase.h"
@@ -37,9 +37,9 @@
 #include "game_iface.h"
 #include "game_runtime.h"
 #include "guest_call.h"
-#include "guest_cd_stream_callback_layout.h"
 #include "image_identity.h"
 #include "native_dispatch.h"
+#include "stock_libcd.h"
 
 namespace {
 
@@ -306,25 +306,13 @@ void readyCallback(Core *core) {
   cdc_write(&controller, 0u, static_cast<uint8_t>(savedBank));
 }
 
-class StreamRuntime final : public GameRuntime {
+class StreamRuntime final : public psx::test::StubGameRuntime {
 public:
-  void *createContext(Core &) override {
-    return nullptr;
-  }
-  void destroyContext(void *) override {}
-  void registerOverrides(Game &) override {}
-  void bootInit(Core &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
-  const GuestCdStreamCallbackLayout *guestCdStreamCallbackLayout() const override {
-    return &layout;
+  void registerOverrides(Game &game) override {
+    libcd.bind(game);
   }
 
-  GuestCdStreamCallbackLayout layout{kCallbackSlot, GuestCdStreamCallbackLayout::DeliveryOwner::GuestInterrupt};
+  const psx::cd::GuestInterruptLibcd libcd{{}, {}, kCallbackSlot, {}};
 };
 
 void configureStream(Game &game) {
@@ -343,8 +331,8 @@ void configureStream(Game &game) {
 
 std::unique_ptr<Game> startStream() {
   static StreamRuntime runtime;
-  psxport_install_game(runtime);
-  auto game = std::make_unique<Game>();
+  auto game = std::make_unique<Game>(runtime);
+  runtime.registerOverrides(*game);
   configureStream(*game);
   return game;
 }

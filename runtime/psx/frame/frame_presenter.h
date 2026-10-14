@@ -15,6 +15,7 @@
 #include <span>
 
 class Core;
+class RenderMode;
 
 namespace psx::frame {
 
@@ -25,6 +26,16 @@ struct CapturedFrameView {
 
 // The host operations behind one frame fence. The production backend targets one Core; the narrow
 // interface also lets the complete shipping state machine be falsified without a GPU or a disc.
+// The renders a Core's title answers from GameRuntime::stateProducer.
+class RuntimeStateProducers final : public present::StateProducers {
+public:
+  explicit RuntimeStateProducers(Core &core) : core_(core) {}
+  const present::StateProducer *find(std::uint32_t producer) const override;
+
+private:
+  Core &core_;
+};
+
 class FramePresentationBackend {
 public:
   virtual ~FramePresentationBackend() = default;
@@ -45,6 +56,10 @@ public:
   virtual void presentInBetween() = 0;
   // The renders of the title's state producers on the record path; null draws every record as sealed.
   virtual const present::StateProducers *stateProducers() {
+    return nullptr;
+  }
+  // The mode whose display pass is armed while state producers render; a guest store then aborts.
+  virtual RenderMode *displayPassMode() {
     return nullptr;
   }
 };

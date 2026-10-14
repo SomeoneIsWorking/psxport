@@ -5,7 +5,7 @@
 #pragma once
 #include "dma_irq.h"
 #include "executable_write_source.h"
-#include "game_iface.h" // Legacy GameConfig/GameHooks compatibility views.
+#include "game_runtime.h"
 #include "pc_observer.h"
 #include "r3000.h"
 #include "render_substrate.h" // Core owns a RenderSubstrate (host-only per-Core render substrate)
@@ -21,6 +21,7 @@
 #include "frame_pacer.h"
 #include "frame_state.h"
 #include "gpu_device.h"
+#include "gte.h"
 #include "guest_call_attribution.h"
 #include "guest_call_census.h"
 #include "ordering_table.h"
@@ -68,16 +69,13 @@ public:
 
   Game *game = nullptr; // back-pointer to the owning Game (set by Game's constructor)
 
-  // ---- Framework↔game seam. GameRuntime is the owning polymorphic interface. cfg/hooks are
-  // compatibility views populated only by the bounded legacy adapter; migrate their consumers into
-  // GameRuntime behavior or narrow immutable fact groups rather than extending either bag. ----
-  GameRuntime *runtime = nullptr;
-  const GuestProgramImage *guestProgramImage = nullptr;
+  // The title interface. cfg/hooks/gameCtx are the legacy adapter's views, null for every other runtime.
+  psx::game::GameRuntime &runtime;
   const GameConfig *cfg = nullptr;
   const GameHooks *hooks = nullptr;
   void *gameCtx = nullptr;
 
-  // ---- Per-Core host-only rendering state. Title subsystems remain behind gameCtx. ----
+  // ---- Per-Core host-only rendering state. ----
   RenderSubstrate rsub;
   // Optional exact-PC observer and nested-call attribution, both owned per Core.
   PcObserver pcObserver;
@@ -86,15 +84,21 @@ public:
   // several machines must not fold their calls into one number.
   psx::cpu::GuestCallCensus guestCallCensus_;
 
+  psx::cpu::Gte &gte() {
+    return gte_;
+  }
+  const psx::cpu::Gte &gte() const {
+    return gte_;
+  }
+
   DmaRegisters dma;              // DMA controller registers + owed completions — per-instance HW state (dma_irq.h)
   psx::gpu::GpuDevice gpuDevice; // the GPU the guest reads and writes: VRAM, GPUSTAT, GPUREAD, display
   // The open producer scopes and the keys their stored packets carry into the frame record.
   psx::present::EmissionScope emission;
   // The ordering tables the title named; the walk tags each recorded primitive with its bucket.
   psx::gpu::OtTables otTables;
-  // Producer object states saved this logic frame, and the renders that draw them at t.
+  // Producer object states saved this logic frame.
   psx::present::FrameStates frameStates;
-  psx::present::StateProducers stateProducers;
 
   // A store landing in the diagnostic watch range fires this callback with address, value, and width.
   void (*storeWatchCb)(Core *, uint32_t, uint32_t, uint32_t) = nullptr; // (core, kaddr, val, width)
@@ -153,7 +157,7 @@ public:
   // shared between two Cores. Status bit 0 is the master interrupt enable — see stubs.cpp.
   uint32_t cop0[16] = {};
 
-  Core();
+  explicit Core(psx::game::GameRuntime &runtime);
   ~Core();
 
   psx::cpu::ExecutionControl &executionControl();
@@ -238,6 +242,7 @@ public:
   void dumpStringishRegs();
 
 private:
+  psx::cpu::Gte gte_{*this};
   std::unique_ptr<psx::cpu::ExecutionControl> executionControl_;
   std::unique_ptr<psx::cpu::ImageCatalog> imageCatalog_;
   std::unique_ptr<psx::cpu::LightrecExecutor> lightrecExecutor_;

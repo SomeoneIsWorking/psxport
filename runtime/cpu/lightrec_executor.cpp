@@ -7,7 +7,6 @@
 #include "game.h"
 #include "gte_register_transfer.h"
 #include "host_turn.h"
-#include "hw_bind.h"
 #include "native_dispatch.h"
 #include "segment_clock.h"
 #include "side_effect_journal.h"
@@ -178,10 +177,10 @@ struct LightrecExecutor::Impl {
   static void cop2Operation(lightrec_state *lightrec, std::uint32_t opcode) {
     Impl &impl = owner(lightrec);
     lightrec_registers *registers = lightrec_get_registers(lightrec);
-    gte_bind(&impl.core);
-    gte_import_registers(impl.core.game->gte, registers->cp2d, registers->cp2c);
+    impl.core.gte().bind();
+    gte_import_registers(impl.core.gte().registers(), registers->cp2d, registers->cp2c);
     gte_op_at(&impl.core, opcode, impl.core.pc);
-    gte_export_registers(impl.core.game->gte, registers->cp2d, registers->cp2c);
+    gte_export_registers(impl.core.gte().registers(), registers->cp2d, registers->cp2c);
   }
 
   static void enableRam(lightrec_state *, bool) {
@@ -503,8 +502,8 @@ struct LightrecExecutor::Impl {
     registers->gpr[32] = core.lo;
     registers->gpr[33] = core.hi;
     std::copy_n(core.cop0, 16, registers->cp0);
-    gte_bind(&core);
-    gte_export_registers(core.game->gte, registers->cp2d, registers->cp2c);
+    core.gte().bind();
+    gte_export_registers(core.gte().registers(), registers->cp2d, registers->cp2c);
   }
 
   void copyLightrecToCore(std::uint32_t nextPc) {
@@ -515,8 +514,8 @@ struct LightrecExecutor::Impl {
     core.hi = registers->gpr[33];
     core.pc = nextPc;
     std::copy_n(registers->cp0, 16, core.cop0);
-    gte_bind(&core);
-    gte_import_registers(core.game->gte, registers->cp2d, registers->cp2c);
+    core.gte().bind();
+    gte_import_registers(core.gte().registers(), registers->cp2d, registers->cp2c);
   }
 
   // CLASSIFY THE PC A BUDGET EXIT REPORTS, because that pc is where guest execution resumes and

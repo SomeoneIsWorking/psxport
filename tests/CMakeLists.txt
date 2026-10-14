@@ -38,7 +38,7 @@ foreach(test_src IN LISTS PSXPORT_TEST_SRCS)
   # not drag in the renderer. A test that reaches a unit which calls into the game substrate will
   # fail to LINK on title-owned symbols; that is the framework/game seam telling you the unit is not
   # framework-testable in isolation, not a bug in the harness.
-  target_link_libraries(${test_name} PRIVATE psxport)
+  target_link_libraries(${test_name} PRIVATE psxport psxport_internal psxport_test_support)
 
   add_test(NAME ${test_name} COMMAND ${test_name})
   set_tests_properties(${test_name} PROPERTIES
