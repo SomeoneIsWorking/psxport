@@ -11,7 +11,7 @@ specifically to stop it (below).
 | `0x801FE00C` | `gpu_native.cpp` (`redpkt`, `[stagetl]`), `mem.cpp` (2 sites), `dbg_server.cpp` | the entry address of guest task 0. No framework consumer interprets it; every one only tests it for non-zero. The STRUCT, the FIELD, and what a zero means are all unattributed. |
 | `0x801FE048` | `dbg_server.cpp` (`debug stage`) | nothing at all. It is printed as `sm48` and never read as a condition. |
 | `0x800BE258` | `dbg_server.cpp` (`debug stage`) | a non-zero value means a scene is loaded. Width unknown: read as a 32-bit word and only tested for non-zero, so a one-bit flag and a counter are indistinguishable. |
-| `0x800BF544` | `gpu_native.cpp` (`pool` channel) | the field overlay's packet-pool write cursor. **Its units are disputed:** the two tests that seed it (`test_zero_config_is_loud`, `test_render_noise_mask`) set it to the pool BASE, which is a byte offset, so it cannot be read as "how many packets were allocated". |
+| `0x800BF544` | `gpu_native.cpp` (`pool` channel) | the field overlay's packet-pool write cursor. It is a byte address, not a packet count. |
 
 ## Why it is a defect
 

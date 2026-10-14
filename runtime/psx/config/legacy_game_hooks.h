@@ -18,30 +18,20 @@ struct GameHooks {
 
   void (*frameUpdate)(Core *c);
   void (*drawOTag)(Core *c, uint32_t otHead);
-  void (*musicCoordTick)(Core *c);
-  bool (*cdDialogToneActive)(Core *c);
-  void (*cdMusicFadeIn)(Core *c);
 
   void (*audioMixFrame)(Core *c, int16_t *buf, int frames);
   const char *(*audioNowPlayingName)(Core *c);
   void (*audioSoundTestPlay)(Core *c, int track);
   void (*bootInit)(Core *c);
-  bool (*schedFreshEntry)(Core *c, int slot, uint32_t base, uint32_t entryPc);
-  bool (*hasNativeHandlerForEntry)(Core *c, uint32_t entryPc);
   void (*registerOverrides)(Game *g);
 
   void (*renderFadeState)(Core *c, FadeState *out);
-  void (*replCamTeleport)(Core *c, int x, int y, int z);
-  void (*replCamTeleportOff)(Core *c);
   void (*renderBbFrameReset)(Core *c);
 
   bool (*replCommand)(Core *c, const char *cmd, const char *line);
   int (*devAreaCount)(Core *c);
   const char *(*devAreaName)(Core *c, int area);
   bool (*devWarpAllowed)(Core *c);
-
-  int (*schedStageBody)(Core *c, int which, void *arg);
-  uint32_t (*schedRng)(Core *c);
 
   // Transitional until games submit immutable recipes that the framework interpolates directly.
   void (*fps60WorldPass)(Core *c, float t);

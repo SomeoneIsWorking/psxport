@@ -62,7 +62,8 @@ void test_interpolates_decides_whether_the_fps60_mod_exists() {
 
 class CommandRuntime final : public psx::test::StubGameRuntime {
 public:
-  bool titleCommand(Core &core, const char *command, const char *line, std::FILE *reply) override {
+  bool titleCommand(Core &core, const psx::game::TitleCommandLine &input, std::FILE *reply) override {
+    const auto [command, line] = input;
     seenCore = &core;
     if (std::strcmp(command, "warp") != 0) {
       return false;

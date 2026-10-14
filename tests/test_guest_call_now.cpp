@@ -78,8 +78,26 @@ static void test_unpassed_argument_registers_are_left_alone() {
   CHECK_EQ(seenArguments[3], kUntouched);
 }
 
+namespace {
+
+void test_result_is_v0() {
+  psx::test::StubGameRuntime runtime;
+  auto game = makeGame(runtime);
+  Core &core = game->core;
+  const auto image = core.imageCatalog().activate("guest-call-now", {kLeaf, kLeaf + 16u}, 0x43414c4c4e4f57ull);
+  CHECK(core.nativeDispatcher().install({{image, kLeaf}, "native-leaf", [](Core *c) {
+                                           c->r[2] = c->r[4] + 1u;
+                                         }}));
+
+  primeArgumentRegisters(core);
+  CHECK_EQ(psx::cpu::callGuestNowResult(core, "test", kLeaf, 41u), 42u);
+}
+
+} // namespace
+
 int main() {
   RUN(arguments_reach_r4_to_r7_in_order);
   RUN(unpassed_argument_registers_are_left_alone);
+  RUN(result_is_v0);
   return pt_summary();
 }

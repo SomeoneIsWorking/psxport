@@ -35,7 +35,6 @@ void Game::wireRuntimeMembers() {
   hle.game = this;
   sio.game = this;
   rq.game = this;
-  pcSched.game = this;
   cd.game = this;
   fmv.game = this;
   spu_audio.game = this;
@@ -65,7 +64,6 @@ void Game::wireRuntimeMembers() {
   sessionState = runtime.createSession(*this);
   temporalPresentation = runtime.createTemporalFramePresentation(*this);
   frameDriver = runtime.createFrameDriver(*this);
-  taskScheduler = runtime.createTaskScheduler(*this);
 
   // Every product constructs a Game, so PSXPORT_GPU_SELFTEST runs here.
   gpu_vk.tritest();

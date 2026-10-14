@@ -1,36 +1,12 @@
-// Native in-game XA-ADPCM CD-audio streaming for the Tomba!2 PC port.
-//
-// WHY: the game streams CD-XA audio (opening-cutscene BGM + dialog voice acting) by
-// commanding the CD controller — Setmode with the XA-ADPCM bit, Setloc, ReadS — and the
-// real hardware decodes those Mode2/Form2 sectors and mixes them straight into the SPU's
-// CD-audio input (no copy into main RAM). The port's CD layer (cd_override.c) replaces the
-// libcd read path with synchronous data reads and ACKs every controller command, so this
-// audio path was entirely missing: the prologue narration and all in-game voice were silent
-// while the oracle (Beetle, full CD emulation) plays them. Sequenced (libsnd) BGM is a
-// SEPARATE, working path — see docs/journal.md later-75/77.
-//
-// HOW: cd_override.c's CdControl wrapper (FUN_8008AC34) feeds us the controller commands:
-//   Setmode (0x0E)  -> xa_stream_setmode(): track the XA-ADPCM enable (0x40) + SF filter (0x08)
-//   Setfilter(0x0D) -> xa_stream_setfilter(file, channel)
-//   Setloc (0x02)   -> xa_stream_setloc(): MSF (BCD) -> CHD LBA (= msf_frames - 150)
-//   ReadS  (0x1B) / ReadN (0x06) -> xa_stream_start(): begin streaming from the set LBA
-//   Pause  (0x09) / Stop (0x08)  -> xa_stream_stop()
-// Decoding is PULL-driven: Beetle's spu.c calls CDC_GetCDAudioSample() once per 44.1kHz
-// output sample (scaled by the game's CD input volume CDVol and gated on SPUControl bit0 —
-// both set by the game). We drain a small decoded-XA ring; when it runs low we decode the
-// next CD sector (advancing the LBA) with xa_decode_sector() [native_fmv.c, mednafen-parity].
-// Pull-driven decode self-paces to realtime: we read exactly as many sectors as the SPU
-// consumes, so the LBA advances at the real playback rate with no separate timer/tick.
-// XA runs at 37800 (or 18900) Hz; we resample to the SPU's 44100 Hz with a fractional phase
-// accumulator + linear interpolation.
-#include "c_subsys.h" // C linkage for every xa_stream_* entry point AND for xa_decode_sector
+// xa_stream.cpp — native XA-ADPCM CD audio: the streamer the CD command layer drives (Setmode, Setfilter,
+// Setloc, ReadS/ReadN, Stop/Pause) and the clip player, decoded on demand as Beetle's spu.c pulls
+// CDC_GetCDAudioSample and resampled from 37800/18900 Hz to 44100 Hz.
+#include "c_subsys.h" // xa_decode_sector
 #include "disc.h"
 #include "xa_push_pacing.h"
 #include "xa_state.h"
-#include <stdint.h>
-// (fmv_decode.cpp): the vendored Beetle spu.c, compiled as C, links against
-// these, so this file being C++ must not mangle them.
 #include <lucent/log.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,7 +42,6 @@ void releaseXaState(const XaState &state) {
 #define s_filter_set (xs->filter_set)
 #define s_filter_file (xs->filter_file)
 #define s_filter_chan (xs->filter_chan)
-#define s_owns_slot2 (xs->owns_slot2)
 #define s_end_lba (xs->end_lba)
 #define s_clip_start (xs->clip_start)
 #define s_clip_chan (xs->clip_chan)
@@ -135,21 +110,10 @@ void xa_stream_stop(XaState *xs) {
         "xa", "STOP @ LBA {} — {} pull(s) from the SPU, {} audio sector(s) decoded", s_lba, s_pulls, s_sectors);
   }
   s_active = 0;
-  s_owns_slot2 = 0;
 }
 
-// ---- native voice/BGM clip player (engine port of the FUN_8001cfc8 task) ----------------
-// Play the XA clip on `chan` spanning [start..end] (CHD LBAs), looping if `loop`. Called by
-// the FUN_8001d2a8 override (which all the by-index voice APIs funnel through). Idempotent: a
-// repeat call for the clip already playing is a no-op, so the dialog re-issuing "play line N"
-// every frame can NOT reset the ring (that was the "first note repeats" bug). Marks us the
-// owner of task slot 2 so the native scheduler skips the (now unused) guest coroutine and the
-// cutscene's `while (DAT_801fe0e0 != 0)` wait is driven by clip completion below.
+// ---- clip player: one channel over [start..end], looping back to start when asked ----
 void xa_stream_play(XaState *xs, uint8_t chan, uint32_t start, uint32_t end, int loop) {
-  if (s_active && s_owns_slot2 && chan == s_clip_chan && start == s_clip_start) {
-    s_owns_slot2 = 1; // same clip already playing: idempotent
-    return;
-  }
   s_filter_set = 1;
   s_filter_file = 1;
   s_filter_chan = chan; // game always uses file 1
@@ -161,31 +125,16 @@ void xa_stream_play(XaState *xs, uint8_t chan, uint32_t start, uint32_t end, int
   s_loop = loop;
   xa_reset_buffers(xs);
   s_active = 1;
-  s_owns_slot2 = 1;
   lucent::debug("xa", "PLAY clip chan={} [{}..{}] loop={}", chan, start, end, loop);
 }
 
-int xa_stream_owns_slot2(XaState *xs) {
-  return s_owns_slot2;
-}
-int xa_stream_voice_busy(XaState *xs) {
-  return s_owns_slot2 && s_active;
-}
-// For the dialog-vs-ingame-music coordination in cd_override.cpp: distinguish a LOOPING clip
-// (ingame/background music) from a one-shot (voice/narration), and whether anything streams.
 int xa_stream_is_looping(XaState *xs) {
   return s_active && s_loop;
 }
 int xa_stream_is_active(XaState *xs) {
   return s_active;
 }
-void xa_stream_voice_release(XaState *xs) {
-  s_owns_slot2 = 0;
-}
 
-// Current drive-head LBA while streaming, for the engine's GetlocL position poll
-// (FUN_8001cfc8 waits for the head to pass the clip's end LBA to know the voice/BGM clip
-// finished and advance the cutscene). Returns 1 + *lba when streaming, 0 when idle.
 int xa_stream_play_lba(XaState *xs, uint32_t *lba) {
   if (!s_active) {
     return 0;
@@ -200,8 +149,7 @@ int xa_stream_play_lba(XaState *xs, uint32_t *lba) {
 // the LBA); stops the stream at end-of-file / non-Mode2 / read failure. Returns frames added.
 static int xa_decode_next_sector(XaState *xs) {
   uint8_t raw[2352];
-  // Clip end: when the read head passes the clip's end LBA, the clip is done. Loop clips
-  // restart at the start; one-shot clips stop (which clears busy -> cutscene advances).
+  // Past the clip's end LBA a looping clip restarts and a one-shot one stops.
   if (s_end_lba && s_lba > s_end_lba) {
     if (s_loop) {
       lucent::debug("xa",

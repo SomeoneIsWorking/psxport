@@ -27,8 +27,8 @@ constexpr const char *kPickerShotCommand = "picker shot";
 
 } // namespace
 
-bool PickerRuntime::titleCommand(Core &, const char *cmd, const char *line, FILE *out) {
-  return handle(cmd, line, out);
+bool PickerRuntime::titleCommand(Core &, const psx::game::TitleCommandLine &input, FILE *out) {
+  return handle(input.command, input.line, out);
 }
 
 void PickerRuntime::setSelection(int selected) {

@@ -285,40 +285,6 @@ int GpuState::gpu_native_load_vram(const char *path) {
   lucent::info("transplant", "loaded VRAM {} px from {}", n, path ? path : "(null)");
   return n == (size_t)VRAM_W * VRAM_H;
 }
-void GpuState::gpu_native_load_image(
-    Core *core, int x, int y, int w, int h, uint32_t src, std::span<const uint16_t> pixels) {
-  // VRAM-transfer guard: bounds-report + atlas-clobber catch (vram_xfer.cpp, `debug vramguard`). This is
-  // the single CPU->VRAM upload chokepoint for every texture-group page, font page, and CLUT, so it is
-  // both the place to REGISTER the protected atlas regions and a transfer to validate. Diagnostic only.
-  vram_guard_check("native", x, y, w, h, src);
-  // Register texture-region uploads (anything right of the two 320-wide framebuffers) as a protected,
-  // resident page: these are exactly the atlas/font/CLUT rects a later draw samples; a non-upload write
-  // landing on one is the stripe-corruption clobber. Framebuffer uploads (x<320) are NOT atlas data.
-  if (x >= 320) {
-    vram_register_atlas(x, y, w, h, (w <= 16) ? "clut" : "atlas");
-  }
-  for (int v = 0; v < h; v++) {
-    for (int u = 0; u < w; u++) {
-      *vram(x + u, y + v) = pixels[(size_t)v * w + u];
-    }
-  }
-  // Mirror the upload into the VK VRAM image, exactly like the GP0 0xA0 / VRAM-copy / fill paths.
-  // This native upload is a VRAM-writing path too; without the mirror its textures land only in the
-  // SW s_vram. The VK opaque pass samples a full s_vram snapshot so it still saw them, but the VK
-  // SEMI pass samples the post-opaque s_tex (dirty regions only) — so a SEMI-transparent textured
-  // prim whose texture arrived here read zeros and discarded (the invisible in-game puddle water).
-  if (gpu_vk_enabled()) {
-    gpu_vk_dirty(core, x, y, w, h);
-  }
-  // TEXWATCH coverage: this is the third VRAM writer and the watch did not see it either (see the
-  // FILL path). Completing the set is what makes a texwatch NEGATIVE mean "nothing wrote here".
-  if (texwatch_overlap(x, y, w, h)) {
-    lucent::info(
-        "texwatch", "f{} NATIVE dest=({},{}) {}x{} src=0x{:08X} first={:04X}", s_frame, x, y, w, h, src, pixels[0]);
-  }
-  lucent::debug("upload", "f{} NATIVE dest=({},{}) {}x{} src=0x{:08X}", s_frame, x, y, w, h, src);
-}
-
 void GpuState::set_texpage(uint16_t tp, TexPageFrom from) {
   s_tp_x = (tp & 0xF) * 64;
   s_tp_y = ((tp >> 4) & 1) * 256;

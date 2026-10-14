@@ -459,8 +459,7 @@ static void test_refused_plan_applies_nothing(void) {
 }
 
 int main(void) {
-  // No once-per-process suppression anywhere in crt0_boot.h — a refusal must fire on EVERY boot, and
-  // SBS boots two Cores — so unlike test_zero_config_is_loud.cpp this file's order is not load-bearing.
+  // crt0_boot.h refuses on every boot (no once-per-process suppression), so test order is not load-bearing.
   RUN(tomba2_group_is_reproduced_exactly);
   RUN(x4_group_has_no_bias_and_no_stores);
   RUN(the_two_shapes_differ_on_the_same_stack_word);

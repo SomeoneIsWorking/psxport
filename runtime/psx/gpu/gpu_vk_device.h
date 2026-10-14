@@ -80,8 +80,5 @@ public:
   int s_fw_lastmode = -999;                // `debug fadewatch` change detector (present)
   uint8_t s_fw_lr = 0, s_fw_lg = 0, s_fw_lb = 0;
   int s_fw_lsx = -999, s_fw_lsy = -999, s_fw_lw = -999, s_fw_lh = -999;
-  int s_fws_lastmode = -999; // fadewatch-state tap (wrapper) change detector
-  uint8_t s_fws_lr = 0, s_fws_lg = 0, s_fws_lb = 0;
-  int s_fws_lsx = -999, s_fws_lsy = -999, s_fws_lw = -999, s_fws_lh = -999;
   uint16_t s_selftest_pat[1024 * 512] = {}; // gpu_vk_selftest VRAM test pattern scratch
 };

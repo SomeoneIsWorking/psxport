@@ -1,6 +1,5 @@
-// Cd::overridesInit is part of TitleSession::boot's device binds. A direct GameRuntime has no legacy
-// GameConfig, so that path accepts an empty title-CD group and leaves libcd to the title's StockLibcd.
-// The legacy adapter's session binds a StockLibcd from its GameConfig.
+// A direct GameRuntime binds its StockLibcd from registerOverrides; the legacy adapter's session binds
+// one from its GameConfig.
 #include "game.h"
 #include "game_iface.h"
 #include "game_runtime.h"
@@ -54,21 +53,11 @@ void checkSyncBody(Core &core, OverrideFn entry) {
   CHECK_EQ(core.r[V0], 2u);
 }
 
-void test_empty_direct_runtime_cd_registration_is_valid() {
-  psx::test::StubGameRuntime runtime;
-  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
-
-  CHECK(game->core.cfg == nullptr);
-  game->cd.overridesInit();
-  CHECK(game->platform_hle.lookup(kDirectCdRead) == nullptr);
-}
-
 void test_direct_runtime_stock_libcd_binds_after_the_device_binds() {
   StockDirectRuntime runtime;
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   // The shipping TitleSession::boot order: device binds, then the title's registerOverrides.
-  game->cd.overridesInit();
   game->platform_hle.initBuiltins();
   runtime.registerOverrides(*game);
 
@@ -95,7 +84,6 @@ void test_legacy_runtime_keeps_existing_cd_registration() {
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
 
   CHECK_EQ(game->core.cfg, &config);
-  game->cd.overridesInit();
   CHECK(game->cd.stockLibrary() != nullptr);
   CHECK(game->platform_hle.lookup(kLegacyCdCommand) != nullptr);
   CHECK(game->platform_hle.lookup(kLegacyCdSearchFile) != nullptr);
@@ -105,7 +93,6 @@ void test_legacy_runtime_keeps_existing_cd_registration() {
 } // namespace
 
 int main() {
-  RUN(empty_direct_runtime_cd_registration_is_valid);
   RUN(direct_runtime_stock_libcd_binds_after_the_device_binds);
   RUN(legacy_runtime_keeps_existing_cd_registration);
   return pt_summary();

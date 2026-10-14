@@ -333,28 +333,20 @@ static Scan scan_framework(void) {
  *   sbs.cpp (126)          the side-by-side differential harness: Tomba's OT/packet-pool/task-table/
  *                          scratchpad layout, hardwired region names and watch addresses. Biggest
  *                          single block; needs a GameConfig-driven region table.
- *   pc_scheduler.cpp (62)  Tomba's task/scheduler guest FUNCTION addresses and task-state fields.
  *   selftest.cpp (38)      built-in selftest asserts written against Tomba's RAM map.
  *   retired CPU hooks      trace/watch hooks pinned to Tomba functions.
- *   cd_override.cpp (20)   CD override state pinned to Tomba's CD globals + scratchpad fields.
  *   repl.cpp (16)          debug REPL default watch/inspect targets.
  *   pad_input.cpp (11)     Tomba's pad-state globals.
  *   hle.cpp (8)            HLE entry points identified by Tomba guest address.
  *   dbg_server.cpp (6)     debug-server default watch set.
- *   overlay_glue.cpp (4)   overlay bookkeeping at Tomba scratchpad fields.
- *   scheduler.cpp (4)      framework scheduler reading Tomba task state.
  *   dualcore.cpp (3)       dual-core compare window (the packet-pool range literal).
  *   gpu_native.cpp (3)     native GPU path reading Tomba globals.
  *   mem.cpp (3)            memory-map special cases for Tomba addresses.
  *   render_queue.cpp (3)   render queue keyed on Tomba globals.
- *   menu_readouts.cpp (3)  UI readouts of Tomba game state.
- *   scheduler.h (2)        inline accessors of Tomba task state.
  *   overlay_router.cpp (1) one Tomba scratchpad field.
  *   render_node.h (1)      one Tomba scratchpad field.
  *
- * Fields to prefer when fixing: GameConfig already has otRegionBase/otRegionStride, packetPoolBase/
- * packetPoolStride, otBasePtr, poolPtrCur/poolPtrLast, taskTableBase/taskSlotStride/taskCount,
- * curTaskPtr and more. Reuse before inventing. */
+ * When fixing: the address belongs in the title, reached through a GameRuntime virtual. */
 struct BaselineRow {
   const char *file;
   uint32_t value;
@@ -362,18 +354,6 @@ struct BaselineRow {
 };
 
 static const BaselineRow kBaseline[] = {
-    {"runtime/psx/cd/cd_override.cpp", 0x1f800137u, 1},
-    {"runtime/psx/cd/cd_override.cpp", 0x1f800138u, 1},
-    {"runtime/psx/cd/cd_override.cpp", 0x1f80019au, 1},
-    {"runtime/psx/cd/cd_override.cpp", 0x1f8001f0u, 2},
-    {"runtime/psx/cd/cd_override.cpp", 0x1f8001f4u, 3},
-    {"runtime/psx/cd/cd_override.cpp", 0x1f8001f8u, 3},
-    {"runtime/psx/cd/cd_override.cpp", 0x8001cf00u, 2},
-    {"runtime/psx/cd/cd_override.cpp", 0x800be220u, 1},
-    {"runtime/psx/cd/cd_override.cpp", 0x800be222u, 1},
-    {"runtime/psx/cd/cd_override.cpp", 0x800be224u, 1},
-    {"runtime/psx/cd/cd_override.cpp", 0x800bed80u, 1},
-    {"runtime/psx/cd/cd_override.cpp", 0x801fe0e0u, 3},
     {"runtime/psx/debug/dbg_server.cpp", 0x800be258u, 1},
     {"runtime/psx/debug/dbg_server.cpp", 0x800ecf58u, 1},
     {"runtime/psx/debug/dbg_server.cpp", 0x800f2624u, 1},
@@ -385,10 +365,6 @@ static const BaselineRow kBaseline[] = {
     {"runtime/psx/gpu/gpu_native_dma.cpp", 0x800bf544u, 1},
     {"runtime/psx/gpu/gpu_native.cpp", 0x801fe00cu, 2},
     {"runtime/psx/core/mem.cpp", 0x801fe00cu, 2},
-    {"runtime/psx/core/overlay_glue.cpp", 0x1f8000d2u, 1},
-    {"runtime/psx/core/overlay_glue.cpp", 0x1f8000d6u, 1},
-    {"runtime/psx/core/overlay_glue.cpp", 0x1f8000dau, 1},
-    {"runtime/psx/core/overlay_glue.cpp", 0x801fe00cu, 1},
     {"runtime/psx/input/pad_input.cpp", 0x1f800138u, 1},
     {"runtime/psx/input/pad_input.cpp", 0x1f800236u, 1},
     {"runtime/psx/input/pad_input.cpp", 0x800be258u, 1},
@@ -400,40 +376,10 @@ static const BaselineRow kBaseline[] = {
     {"runtime/psx/input/pad_input.cpp", 0x800e7e68u, 1},
     {"runtime/psx/input/pad_input.cpp", 0x800fe916u, 1},
     {"runtime/psx/input/pad_input.cpp", 0x800fe91eu, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x1f800138u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80051f40u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80051f54u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80051f68u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80051f70u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80051fa4u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80051fdcu, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80051ff0u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80051ff8u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80052000u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80052054u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80052060u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80052068u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80080860u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80080870u, 2},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80080890u, 3},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x800808a0u, 3},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x801062e4u, 4},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x8010637cu, 3},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x801063f4u, 1},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x8010649cu, 2},
-    {"runtime/psx/frame/pc_scheduler.cpp", 0x80109164u, 1},
     {"runtime/psx/gpu/render_node.h", 0x1f80028cu, 1},
     {"runtime/psx/gpu/render_queue.cpp", 0x800f2624u, 1},
     {"runtime/psx/gpu/render_queue.cpp", 0x800f2738u, 1},
     {"runtime/psx/gpu/render_queue.cpp", 0x800fb168u, 1},
-    {"runtime/psx/platform/scheduler.cpp", 0x8010637cu, 1},
-    {"runtime/psx/platform/scheduler.cpp", 0x801063f4u, 2},
-    {"runtime/psx/platform/scheduler.cpp", 0x801fe0e0u, 1},
-    {"runtime/psx/platform/scheduler.h", 0x1f800138u, 1},
-    {"runtime/psx/platform/scheduler.h", 0x801fe000u, 1},
-    {"runtime/ui/menu_readouts.cpp", 0x801062e4u, 1},
-    {"runtime/ui/menu_readouts.cpp", 0x8010637cu, 1},
-    {"runtime/ui/menu_readouts.cpp", 0x8010649cu, 1},
 };
 
 /* ---- checks ---------------------------------------------------------------------------------- */

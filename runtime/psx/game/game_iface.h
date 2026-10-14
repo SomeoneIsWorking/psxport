@@ -20,7 +20,7 @@ public:
   RenderCapabilities renderCapabilities() const override;
   bool guestVramIsPicture(const Game &game) const override;
   std::unique_ptr<psx::frame::TemporalFramePresentation> createTemporalFramePresentation(Game &game) override;
-  bool titleCommand(Core &core, const char *command, const char *line, std::FILE *reply) override;
+  bool titleCommand(Core &core, const psx::game::TitleCommandLine &input, std::FILE *reply) override;
   psx::game::TitleAudio *audio(Core &core) const override;
   psx::game::TitleDevWarp *devWarp(Core &core) const override;
   const psx::game::HostIdentity *hostIdentity() const override;

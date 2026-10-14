@@ -25,6 +25,8 @@ inline constexpr std::uint32_t kSz0 = 16;
 inline constexpr std::uint32_t kSz1 = 17;
 inline constexpr std::uint32_t kSz2 = 18;
 inline constexpr std::uint32_t kSz3 = 19;
+inline constexpr std::uint32_t kRgb0 = 20;
+inline constexpr std::uint32_t kRgb1 = 21;
 inline constexpr std::uint32_t kRgb2 = 22;
 inline constexpr std::uint32_t kMac0 = 24;
 inline constexpr std::uint32_t kMac1 = 25;
@@ -60,6 +62,7 @@ inline constexpr std::uint32_t kNclip = 0x4B400006u;
 inline constexpr std::uint32_t kAvsz3 = 0x4B58002Du;
 inline constexpr std::uint32_t kAvsz4 = 0x4B68002Eu;
 inline constexpr std::uint32_t kDpcs = 0x4A780010u;
+inline constexpr std::uint32_t kDpct = 0x4AF8002Au;
 inline constexpr std::uint32_t kDcpl = 0x4A680029u;
 inline constexpr std::uint32_t kCc = 0x4B38041Cu;          // lm=1
 inline constexpr std::uint32_t kMvmvaRtIr = 0x4A49E012u;   // sf, RT * IR, no offset

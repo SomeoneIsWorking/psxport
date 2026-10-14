@@ -1,6 +1,5 @@
 #include "stock_libcd.h"
 
-#include "c_subsys.h"
 #include "cd_drive_timing.h"
 #include "cd_position.h"
 #include "cd_stock_read_completion.h"
@@ -8,9 +7,9 @@
 #include "execution_control.h"
 #include "game.h"
 #include "guest_call.h"
-#include "invalidation.h"
 #include "platform_hle.h"
 #include "stock_cd_response.h"
+#include "xa_state.h"
 
 #include <algorithm>
 #include <chrono>
@@ -69,9 +68,7 @@ void positionFromParam(Core &core, std::uint32_t param, const char *why) {
   cd.sec_len = 0;
   cd.sec_lba = -1;
   cd.setloc_lba = msfToLba(mm, ss, ff);
-  if (cd.verbose) {
-    lucent::info("cd", "{} {:02X}:{:02X}:{:02X} -> LBA {}", why, mm, ss, ff, cd.setloc_lba);
-  }
+  lucent::debug("cd", "{} {:02X}:{:02X}:{:02X} -> LBA {}", why, mm, ss, ff, cd.setloc_lba);
 }
 
 std::uint64_t steadyNowNs() {
@@ -273,24 +270,19 @@ void StockLibcd::getSector(Core &core) const {
     }
     const auto avail = static_cast<std::uint32_t>(cd.sec_len - cd.sec_pos);
     const std::uint32_t n = need - done < avail ? need - done : avail;
-    for (std::uint32_t k = 0; k < n; k++) {
-      core.mem_w8_unnotified(dest + done + k, cd.sec_raw[cd.sec_pos + static_cast<int>(k)]);
-    }
-    psx::cpu::notifyExecutableWrite(core,
-                                    {(dest + done) & 0x1fffffffu, ((dest + done) & 0x1fffffffu) + n},
-                                    psx::cpu::ExecutableWriteSource::ModuleLoad);
+    core.mem_write(dest + done,
+                   std::span<const std::uint8_t>(cd.sec_raw + cd.sec_pos, n),
+                   psx::cpu::ExecutableWriteSource::ModuleLoad);
     cd.sec_pos += static_cast<int>(n);
     done += n;
   }
-  if (cd.verbose || lucent::channel_on("cd")) {
-    lucent::info("cd",
-                 "CdGetSector {} words -> 0x{:08X} (sector LBA {}, cursor {}/{})",
-                 words,
-                 dest,
-                 cd.sec_lba,
-                 cd.sec_pos,
-                 cd.sec_len);
-  }
+  lucent::debug("cd",
+                "CdGetSector {} words -> 0x{:08X} (sector LBA {}, cursor {}/{})",
+                words,
+                dest,
+                cd.sec_lba,
+                cd.sec_pos,
+                cd.sec_len);
   core.r[V0] = 0;
 }
 
@@ -324,13 +316,9 @@ void StockLibcd::read(Core &core) const {
       core.r[V0] = 0;
       return;
     }
-    for (std::uint32_t k = 0; k < bytes; k++) {
-      core.mem_w8_unnotified(buf + i * bytes + k, raw[off + k]);
-    }
     // A guest may stream a code module through CdRead (Tomba! 1 does), so each sector is reported.
-    const std::uint32_t sectorBegin = (buf + i * bytes) & 0x1fffffffu;
-    psx::cpu::notifyExecutableWrite(
-        core, {sectorBegin, sectorBegin + bytes}, psx::cpu::ExecutableWriteSource::ModuleLoad);
+    core.mem_write(
+        buf + i * bytes, std::span<const std::uint8_t>(raw + off, bytes), psx::cpu::ExecutableWriteSource::ModuleLoad);
   }
   cd.setloc_lba += static_cast<std::int32_t>(sectors);
   cd.sec_pos = 0;
@@ -338,15 +326,13 @@ void StockLibcd::read(Core &core) const {
   cd.sec_lba = -1;
   cd.stock_reading = 0;
   const std::uint32_t firstLba = static_cast<std::uint32_t>(cd.setloc_lba) - sectors;
-  if (cd.verbose || lucent::channel_on("cd")) {
-    lucent::info("cd",
-                 "CdRead {} sector(s) x {} bytes from LBA {} -> 0x{:08X} (mode 0x{:02X})",
-                 sectors,
-                 bytes,
-                 firstLba,
-                 buf,
-                 mode);
-  }
+  lucent::debug("cd",
+                "CdRead {} sector(s) x {} bytes from LBA {} -> 0x{:08X} (mode 0x{:02X})",
+                sectors,
+                bytes,
+                firstLba,
+                buf,
+                mode);
   announceStockReadLanding(core,
                            {.firstLba = firstLba, .sectors = sectors, .destination = buf, .bytes = sectors * bytes});
   readLanded(core, firstLba, sectors, static_cast<std::uint8_t>(mode));
@@ -395,9 +381,7 @@ void StockLibcd::searchFile(Core &core) const {
     core.mem_w8(loc + 8 + i, i < n ? static_cast<std::uint8_t>(name[i]) : 0);
   }
   core.game->cd.setloc_lba = static_cast<std::int32_t>(lba);
-  if (core.game->cd.verbose || lucent::channel_on("cd")) {
-    lucent::info("cd", "CdSearchFile '{}' -> LBA {}, {} bytes", name, lba, size);
-  }
+  lucent::debug("cd", "CdSearchFile '{}' -> LBA {}, {} bytes", name, lba, size);
   core.r[V0] = loc;
 }
 

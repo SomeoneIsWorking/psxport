@@ -6,25 +6,6 @@
 
 #include "platform_hle.h"
 
-// SchedBody — which game stage body the framework scheduler (psx::frame::PcScheduler, now framework) is asking the
-// game to run. psx::frame::PcScheduler owns the framework-side task/coro/yield machinery; the actual stage bodies are
-// game code (Engine::*), reached through the single schedStageBody hook so the framework names no Engine
-// method. Values are the game's dispatch cases (see game/core/game_hooks.cpp tomba_schedStageBody).
-enum SchedBody {
-  SCHED_DEMO_STAGEMAIN = 0,     // eng(c).demo.stageMain()          (fresh DEMO prologue)
-  SCHED_DEMO_FRAME,             // eng(c).demo.frame()
-  SCHED_GAME_PROLOGUE,          // eng(c).stagePrologue()           (fresh GAME prologue)
-  SCHED_GAME_FRAME,             // eng(c).frame()                   → returns handled (0/1)
-  SCHED_SOP_AREALOAD,           // eng(c).sop.areaLoad()
-  SCHED_CORO_TEXGROUP,          // eng(c).asset.loadTexgroup()
-  SCHED_CORO_PRELOAD1,          // eng(c).asset.preloadStage1AsTask()
-  SCHED_CORO_AREADATA,          // eng(c).asset.areaDataLoadAsTask()
-  SCHED_CORO_AREALOAD_FAITHFUL, // eng(c).sop.areaLoadFaithful()
-  SCHED_FIBER_STARTBIN,         // eng(c).startBinStageFaithful()
-  SCHED_FIBER_DEMO_BODY,        // eng(c).demo.stageBodyFaithful()
-  SCHED_FIBER_STAGE_BODY,       // eng(c).stageBodyFaithful()
-};
-
 // GameConfig — deprecated compatibility storage for game-specific guest facts not yet migrated to
 // typed runtime owners. A game fills one static instance; living legacy consumers read `c->cfg`.
 // The first group below is adapter input only and must disappear after every consumer passes its own
@@ -42,47 +23,24 @@ struct GameConfig {
   // Guest MAIN .text range, masked to physical addresses. Read by nothing; titles still set it.
   uint32_t recMainLo, recMainHi;
 
-  // --- measured per-frame OT / packet-pool facts consumed by an adapter title's FrameDriver ---
-  uint32_t otRegionBase, otRegionStride;     // per-parity OT region
-  uint32_t packetPoolBase, packetPoolStride; // per-parity packet pool
-  uint32_t otBasePtr;                        // OT-base pointer global
-  uint32_t dwellCounter;
-  uint32_t poolPtrCur, poolPtrLast;
-  uint32_t clearOtagR, putDrawEnv, drawSync;
-  uint32_t irqEventClasses[3];
+  // --- per-parity packet pool ---
+  uint32_t packetPoolBase, packetPoolStride;
 
-  // --- scheduler task layout (scheduler.cpp, debug probes) ---
-  uint32_t taskTableBase, taskSlotStride, taskCount;
-  uint32_t curTaskPtr;
-  uint32_t stageStart, stageDemo, stageGame; // fresh-entry stage PCs
-
-  // --- overlay router slots (overlay_router.cpp slot_index) ---
-  struct OverlaySlot {
-    uint32_t base;
-    const char *name;
-  };
-  OverlaySlot overlaySlots[3];
-
-  // --- CD chokepoints (cd_override.cpp) ---
-  uint32_t cdInit, cdCommand, cdSync, cdReadPrim, cdFileLoad, cdAsyncRead, voicePlay, voiceStop, lastSectorTracker;
-  uint32_t cdInlineLoad;       // (added P1.x) FUN_8001DC40 inline (non-spawning) sync loader
-  uint32_t cdCmdStream;        // (added P1.x) FUN_8001CE90 streaming CD-cmd wrapper (GetlocL)
-  uint32_t cdCallbackTable[4]; // the 4 guest-RAM slots hleInit writes the CD-event callbacks into
-  uint32_t cdCallbackFn[4];    // (added P1.x) the 4 callback fn-ptr VALUES written into those slots
+  // --- stock libcd entries (StockLibcd) ---
+  uint32_t cdCommand, cdSync;
 
   // STOCK Sony libcd CdGetSector(dest, words) — the sector-transfer routine. Appended at the END of
   // this group on purpose: GameConfig is initialised POSITIONALLY by every consumer, so inserting a
   // field mid-struct silently shifts every value after it.
   //
-  // Distinct from cdReadPrim because the CONTRACT differs: this one carries no LBA. Stock libcd
-  // positions the head with CdlSetloc and reads from wherever it was left, so the handler consumes
-  // Cd::setloc_lba rather than an argument. Zero for a game that uses an engine loader instead.
+  // It carries no LBA: stock libcd positions the head with CdlSetloc and reads from wherever it was
+  // left, so the handler consumes Cd::setloc_lba. Zero for a game that uses an engine loader instead.
   uint32_t cdGetSector;
 
   // Guest global holding stock libcd's READY callback pointer (what CdReadyCallback() writes). The
   // PC drives the read through it: a stock-libcd read is a per-sector callback loop, so invoking
   // this once per sector completes the transfer with no interrupt in the picture at all. Zero for a
-  // game that does not use stock libcd. See cd_override.cpp cd_command's ReadN case.
+  // game that does not use stock libcd.
   uint32_t cdReadyCbPtr;
 
   // Guest buffer holding stock libcd's LAST REQUESTED POSITION (what CdLastPos() returns), and the
@@ -160,7 +118,6 @@ struct GameConfig {
     uint32_t gpuTimeoutArm, gpuTimeoutCheck; // libgpu GPU-DMA-completion timeout (arm / check)
     uint32_t gpuTimeoutDeadlineVar;          // guest global the arm writes its far-future deadline to
     uint32_t gpuTimeoutFlagVar;              // guest global the arm clears
-    uint32_t changeThread;                   // kernel cooperative task-switch / yield funnel
 
     // libgte SetGeomOffset / SetGeomScreen — the two leaves through which the game STATES its camera
     // projection (screen centre OFX/OFY, projection-plane distance H). Owned natively so the port
@@ -261,35 +218,6 @@ struct GameConfig {
     int32_t value;     // the measured adjustment, e.g. -8 for the stock PSY-Q crt0, 0 for X4.
   } stackBias;
 
-  // ── the scheduler's guest task ENTRY PCs, declared by the game ─────────────────────────────────
-  // P1.7c moved psx::frame::PcScheduler into the framework with the game supplying task BODIES through
-  // `hooks->schedStageBody(kind)`. The mapping from a guest task's entry PC to which body it is did NOT
-  // move with it: `pc_scheduler.cpp` tested eight Tomba!2 literals directly
-  // (`entry_pc == 0x801062E4` and friends). That made the framework schedule ONE game specially, left
-  // those branches dead for the other five ports, and gave a new port no way to say "this entry is my
-  // area-load callback". This table is the missing half of that seam — the noun to go with the verb.
-  //
-  // A game that declares nothing gets `schedEntryCount == 0`, which is exactly what the other five
-  // ports experience today (the literals never matched), so adding this changes no port's behaviour.
-  //
-  // `nativeHandler` and `fiberBody` are separate because the two call sites ask different questions:
-  // `hasNativeHandlerForEntry` asks "do the native per-frame stanzas own this entry at all", while the
-  // fresh-fiber stanza asks "which coro body do I start for it". An entry can answer yes to the first
-  // and have no fiber body (the DEMO/GAME dispatchers), or the reverse (the preload bodies), so one
-  // flag could not express both without a sentinel that reads as a real value.
-  struct SchedEntry {
-    uint32_t pc;            // the guest task entry PC, from `mem_r32(taskbase + 0xc)`
-    uint32_t nativeHandler; // 1 = the native per-frame stanzas handle this entry
-    uint32_t hasFiberBody;  // 1 = a fresh task at this entry starts a coro body
-    SchedBody fiberBody;    // which body — meaningful ONLY when hasFiberBody is 1
-  };
-  const SchedEntry *schedEntries; // may be null when the count is 0
-  uint32_t schedEntryCount;
-
-  // Appended for positional consumers. Zero means SynchronousTaskWait is unmeasured and refuses.
-  uint32_t syncWaitDoneFlag, syncWaitParam2, syncWaitParam3;
-  uint32_t syncWaitTaskGp, syncWaitForceCloseRa, syncWaitSpawnRa, syncWaitFinishRa;
-
   // --- THE GUEST'S OWN DISPLAY HEIGHT, in scanlines (0 = not declared) --------------------------
   // How many lines the game really scans out. Normally the GPU knows: GP1(0x07) programs the vertical
   // display range and gpu_gp1 decodes it. But a port that HLEs libgpu's display setup may leave that
@@ -320,40 +248,10 @@ struct GameConfig {
   uint32_t packetPoolBasePtrs[2];
   uint32_t packetPoolEndPtrs[2];
 
-  // --- `debug fadewatch` guest-state tap (gpu_vk_fadewatch.cpp) --------------------------------
-  // The two overlapping fade drivers whose state the tap dumps on every fade transition. These were
-  // Tomba! 2 literals sitting in gpu_vk_present until 2026-09-19, so the framework read one title's
-  // addresses on every game that turned the channel on. Leave both zero and the tap says it is BLIND
-  // rather than reading address 0 and printing plausible nonsense.
-  //
-  // `fadewatchDriverStruct` is the scene-transition driver's struct base (+3 dir, +4 state, +8 and
-  // +0xA ramp counters). `fadewatchFieldModeSmPtr` is the guest address of a word holding the outer
-  // field-mode state machine, whose +0x50 and +0x6C the tap reads.
-  //
-  // Appended because positional GameConfig consumers must retain their existing field mapping.
-  uint32_t fadewatchDriverStruct;
-  uint32_t fadewatchFieldModeSmPtr;
-
   // The game's directory name under the OS user-data root (HostIdentity::userDataName): where its
   // B-key bug reports are saved. One path component; null saves under the framework's own name.
   // Appended because positional GameConfig consumers must retain their existing field mapping.
   const char *userDataName;
 };
-
-// Look up a task entry PC in the game's declared table. Returns null when the game declared none or the
-// PC is not one of them — the caller must treat null as "not mine", which is the same fall-through the
-// hardcoded comparisons produced. Kept inline in the seam header so both the framework and the game read
-// one definition of what a declared entry means.
-static inline const GameConfig::SchedEntry *sched_entry_for(const GameConfig *cfg, uint32_t entry_pc) {
-  if (!cfg || !cfg->schedEntries) {
-    return nullptr;
-  }
-  for (uint32_t i = 0; i < cfg->schedEntryCount; i++) {
-    if (cfg->schedEntries[i].pc == entry_pc) {
-      return &cfg->schedEntries[i];
-    }
-  }
-  return nullptr;
-}
 
 #endif // __cplusplus

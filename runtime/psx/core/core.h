@@ -27,6 +27,7 @@
 #include "ordering_table.h"
 #include <memory>
 #include <optional>
+#include <span>
 
 class Game; // whole-machine owner; Core::game provides explicit access to its device owners
 
@@ -210,6 +211,8 @@ public:
   // owns the notification: skipping it leaves stale translated code.
   void mem_w32_unnotified(uint32_t a, uint32_t v);
   void mem_w8_unnotified(uint32_t a, uint8_t v);
+  // A burst of bytes at `a` (a CD or module load), with one executable-write notification over it.
+  void mem_write(uint32_t a, std::span<const uint8_t> bytes, psx::cpu::ExecutableWriteSource source);
   // Copy a NUL-terminated guest string into `out` (at most cap-1 bytes, always NUL-terminated).
   // The one owner of this read; title code and runtime services call it instead of re-looping mem_r8.
   void readCString(uint32_t address, char *out, size_t cap);
@@ -396,6 +399,5 @@ void gpu_present_ex(Core *core, int do_blit);
 // M3 provenance: an owned background drawer's override records the KSEG0 packet-pool span [lo,hi) it
 // produced this frame, so the OT walk classifies those prims as RQ_BACKGROUND (submit.cpp).
 void gpu_bg_range_add(Core *core, uint32_t lo, uint32_t hi);
-void gpu_native_load_image(Core *core, int x, int y, int w, int h, uint32_t src);
 
 #endif // __cplusplus

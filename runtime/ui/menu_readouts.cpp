@@ -53,33 +53,9 @@ void MenuReadouts::update() {
   }
   set_text(mMusic, music);
 
-  std::string world;
-  if (mWorldValid) {
-    const char *sname = mWorldStage == 0x8010637Cu   ? "GAME"
-                        : mWorldStage == 0x801062E4u ? "DEMO"
-                        : mWorldStage == 0x8010649Cu ? "START"
-                                                     : "?";
-    snprintf(buf,
-             sizeof buf,
-             "pos X %d Y %d Z %d" RML_TEXT_SEP "stage %s (0x%08X)",
-             mWorldPos[0],
-             mWorldPos[1],
-             mWorldPos[2],
-             sname,
-             mWorldStage);
-    world = buf;
-  }
-  set_text(mWorld, world);
+  set_text(mWorld, mGame ? mGame->runtime.worldReadout(mGame->core) : std::string());
 
   Component::update();
-}
-
-void MenuReadouts::set_world(int x, int y, int z, uint32_t stage) {
-  mWorldPos[0] = x;
-  mWorldPos[1] = y;
-  mWorldPos[2] = z;
-  mWorldStage = stage;
-  mWorldValid = true;
 }
 
 void MenuReadouts::set_warp_status(const std::string &text) {

@@ -2,7 +2,6 @@
 
 #include "core.h"
 #include "game.h"
-#include "scheduler.h"
 #include "stock_vsync.h"
 
 #include <algorithm>
@@ -147,6 +146,5 @@ void PlatformHle::initBuiltins() {
   install(config.cdReadSync, legacyCdReadSync);
   install(config.cdDataSync, completeImmediately);
   install(config.cdInitHandshake, completeImmediately);
-  install(config.changeThread, scheduler_yield);
   lucent::info("plat-hle", "{} legacy-adapter hardware services installed", mN);
 }

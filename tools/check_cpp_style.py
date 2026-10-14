@@ -54,18 +54,17 @@ EXCLUDED_COMPONENTS = {"build", "external", "generated", "scratch", "vendor"}
 # listed below is over the default cap and still owes an extraction; each cap only moves down.
 PSXPORT_CAPS = {
     "runtime/psx/game/game_iface.h": 32,
-    "runtime/psx/gpu/gpu_native.cpp": 2894,
+    "runtime/psx/gpu/gpu_native.cpp": 2860,
     "runtime/psx/gpu/gpu_vk.cpp": 3592,
     "runtime/psx/gpu/gpu_vk_semi_selftest.cpp": 199,
     "runtime/psx/gpu/gpu_vk_semi_selftest.h": 12,
     "runtime/psx/gpu/gpu_vk_selftest_support.h": 15,
     "runtime/psx/gpu/gpu_vk_texture_phase_selftest.cpp": 180,
     "runtime/psx/gpu/gpu_vk_texture_phase_selftest.h": 10,
-    "runtime/psx/hle/hle.cpp": 667,
+    "runtime/psx/hle/hle.cpp": 666,
     "runtime/psx/gpu/render_queue.cpp": 1800,
     "runtime/ui/render_path_control.cpp": 54,
     "runtime/ui/render_path_control.h": 32,
-    "tests/test_synchronous_task_wait.cpp": 71,
 }
 
 

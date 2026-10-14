@@ -17,6 +17,9 @@ ExecutionResult dispatchGuestWithArguments(Core &core,
                                            std::span<const std::uint32_t> arguments,
                                            ExecutionBudget budget);
 
+// v0 after a guest call returned.
+std::uint32_t guestReturnValue(const Core &core);
+
 void dispatchGuestWithArgumentsToReturn(Core &core,
                                         std::uint32_t address,
                                         std::span<const std::uint32_t> arguments,
@@ -107,6 +110,14 @@ template <typename... Args>
 void callGuestNow(Core &core, std::string_view owner, std::uint32_t address, Args... args) {
   const std::array<std::uint32_t, sizeof...(Args)> arguments{static_cast<std::uint32_t>(args)...};
   dispatchGuestWithArgumentsToReturn(core, address, arguments, ExecutionBudget::currentTurn(core), owner);
+}
+
+// callGuestNow for a leaf whose v0 the caller reads.
+template <typename... Args>
+  requires(sizeof...(Args) <= 4 && (std::convertible_to<Args, std::uint32_t> && ...))
+std::uint32_t callGuestNowResult(Core &core, std::string_view owner, std::uint32_t address, Args... args) {
+  callGuestNow(core, owner, address, args...);
+  return guestReturnValue(core);
 }
 
 } // namespace psx::cpu

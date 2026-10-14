@@ -1,8 +1,8 @@
 // test_gte_cross_thread — the GTE binding must follow the GUEST, not the host thread.
 //
-// Guest code migrates across host threads by design: the scheduler gives each PSX task a Coro and
-// Coro::start spawns a real std::thread (scheduler.cpp / pc_scheduler.cpp). So a guest GTE access can
-// legitimately arrive on a thread that never called GTE_BindState itself.
+// Guest code migrates across host threads by design: a title scheduler runs each PSX task on a Coro, and
+// Coro::start spawns a real std::thread. So a guest GTE access can legitimately arrive on a thread that
+// never called GTE_BindState itself.
 //
 // This is the gate for a measured incident. beetle-psx 190021cc made gte_cur/gte_default_regs
 // _Thread_local; a task fiber then saw gte_cur == NULL, fell back to its own zeroed gte_default_regs

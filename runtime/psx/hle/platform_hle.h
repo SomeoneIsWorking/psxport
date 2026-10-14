@@ -15,7 +15,7 @@ class StockLibgpu;
 class StockVSync;
 } // namespace psx::hle
 
-// OverrideFn is defined in scheduler.h — the (Core*)->void signature every HLE handler obeys.
+// The (Core*)->void signature every HLE handler obeys.
 typedef void (*OverrideFn)(Core *c);
 
 // The legacy GameConfig::hle window count.

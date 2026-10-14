@@ -22,10 +22,6 @@ std::unique_ptr<FrameDriver> GameRuntime::createFrameDriver(Game &) {
   return nullptr;
 }
 
-std::unique_ptr<TaskScheduler> GameRuntime::createTaskScheduler(Game &) {
-  return nullptr;
-}
-
 std::unique_ptr<psx::frame::TemporalFramePresentation> GameRuntime::createTemporalFramePresentation(Game &) {
   return nullptr;
 }

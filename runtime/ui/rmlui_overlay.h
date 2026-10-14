@@ -107,10 +107,6 @@ public:
     mOptionsMode = v;
   }
 
-  // Live world readout (camera/Tomba position + current stage). Pushed each frame from
-  // overlay_glue (which gates the push on Sbs::shownCore()).
-  void setWorld(int x, int y, int z, unsigned stage);
-
   // pad_input suppresses gameplay keyboard input while this returns true.
   bool wantsKeyboard() const;
   // A text field has the keyboard (the bug report form, or a focused input): HostInput then treats
