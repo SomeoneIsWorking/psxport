@@ -308,7 +308,7 @@ Code that moves from psxport into a title (the Tomba scheduler and CD) is cut fr
 ### (d) push as each pass lands
 
 - **psxport (a) with c12.** Title CI shallow-clones psxport `main`, so psxport (a) goes first, then c12 in the same session.
-- **Each title after its pass.** The repo is pushed once its section 6 checks are green. Its CI must go green against psxport `main`.
+- **Each title after its pass.** The repo is pushed once its section 6 checks are green. Its CI must go green against psxport `main`. CI was red in 11 of 12 repos on 2026-10-14 for causes unrelated to this pass (psxport: undeclared submodules, fixed in 336cbe60; c12: `c12_frame_driver` needs a video device on the runner, `c12_cpp_style`; vagrant: launcher tests need provisioned inputs; Tomba: `cpp_policy` at 510 s and link isolation; toystory2, spider1, megamanx4: configure; tekken3: bootstrap). Each title's pass reads its own CI log and fixes the cause at its owner; the pass is not done until that CI run is green.
 - **Unmigrated titles.** From (a) until its own pass lands, an unmigrated title cannot build from source, locally or in CI; its CI stays red in that window and nobody rebuilds its `build/`. This is the cost of no compatibility layer, and it shrinks one repo per brief.
 - **psxport (c)** is pushed after the last title, with a rebuild of all 12 repos against it.
 
