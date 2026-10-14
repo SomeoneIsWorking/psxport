@@ -16,6 +16,8 @@ memory/
 
 # ROM / disc drop-ins (never commit copyrighted assets)
 *.chd
+# synthetic provisioner fixture (tests/fixtures/make_provision_disc.py)
+!tests/fixtures/provision_disc/provision.chd
 *.bin
 # the psxport fastboot OpenBIOS build is MIT and committed deliberately
 !bios/openbios-fast.bin

@@ -146,9 +146,7 @@ void GpuState::gpu_dma2_linked_list(Core *core, uint32_t madr) {
   // This was missing for the GUEST-DRIVEN path only. rq_flush lived solely in Engine::drawOTag, which
   // the title FrameDriver calls — so a port whose native frame owner drained the
   // queue every frame, while a port still running the game's OWN main() on the substrate (Phase 0,
-  // where DrawOTag reaches the GPU through DMA2 rather than through the hook) never did. The same
-  // omission is already described in native_boot.cpp's drawOTag comment as a past bug that rendered
-  // the whole front-end black; this is that bug's other half, on the path that has no native hook.
+  // where DrawOTag reaches the GPU through DMA2 rather than through the hook) never did.
   //
   // A walk over an EMPTY ordering table (the link-only chain ClearOTagR produces) queues nothing, and
   // flush -> emitQueue already returns immediately on an empty queue, so no guard is needed here.

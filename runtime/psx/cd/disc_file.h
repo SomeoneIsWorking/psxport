@@ -2,8 +2,8 @@
 //
 // `disc_find_file` answers WHERE a file is and `disc_read_sector` answers what a sector holds; the
 // walk that turns those two into a file's bytes belongs to one place, and both of its callers live
-// here — the CD extract a launcher provisions an executable with (`disc_extract_file`) and the BIOS
-// LoadExec service (bios_load_exec.h), which loads the executable a guest named.
+// here — the host's executable provisioner (`psx::host::provisionExecutable`) and the BIOS LoadExec
+// service (bios_load_exec.h), which loads the executable a guest named.
 #pragma once
 
 #include "disc.h"
@@ -14,7 +14,7 @@
 namespace psx::cd {
 
 // The largest file this reader will pull into memory: a PS-X EXE is at most its own 0x800-byte
-// header plus main RAM, and this is also what a launcher's provisioning extract asks for. A
+// header plus main RAM, and this is also what the executable provisioner asks for. A
 // directory record claiming more is refused rather than turned into a multi-gigabyte allocation.
 inline constexpr std::uint32_t kDiscFileMaxBytes = 0x200000u;
 

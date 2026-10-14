@@ -37,20 +37,7 @@ static void test_native_fmv_present_reports_progress(void) {
   CHECK(pet - present < 500);
 }
 
-static void test_scea_present_reports_progress_without_readiness(void) {
-  const std::string source = read_runtime_source("boot/native_stub.cpp");
-  CHECK(!source.empty());
-  const size_t present = source.find("gpu_vk_present_image(c, scea_rgba, SCEA_DISP_W, SCEA_DISP_H");
-  CHECK(present != std::string::npos);
-  const size_t progress = source.find("watchdog_progress();", present);
-  const size_t ready = source.find("watchdog_main_present_complete();", present);
-  CHECK(progress != std::string::npos);
-  CHECK(progress - present < 1000);
-  CHECK(ready == std::string::npos);
-}
-
 int main(void) {
   RUN(native_fmv_present_reports_progress);
-  RUN(scea_present_reports_progress_without_readiness);
   return pt_summary();
 }

@@ -6,6 +6,7 @@
 #include <array>
 #include <fstream>
 #include <sstream>
+#include <utility>
 
 namespace psx::host {
 namespace {
@@ -112,7 +113,11 @@ SelectionResult selectExecutableFile(const std::filesystem::path &path, std::spa
   if (!input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
     return {SelectionStatus::MissingExecutable, &*found, "cannot read " + path.string(), index};
   }
-  return selectExecutable(serial, bytes, catalog);
+  SelectionResult selection = selectExecutable(serial, bytes, catalog);
+  if (selection) {
+    selection.bytes = std::move(bytes);
+  }
+  return selection;
 }
 
 } // namespace psx::host

@@ -23,7 +23,6 @@ void test_program_image_consumers_do_not_read_legacy_bag() {
   const char *consumers[] = {
       "runtime/psx/boot/crt0_boot.h",
       "runtime/psx/boot/crt0_verify.h",
-      "runtime/psx/boot/native_boot.cpp",
       "runtime/cpu/image_identity.cpp",
       "runtime/cpu/native_dispatch.cpp",
   };

@@ -149,7 +149,7 @@ Five briefs, each landable alone because `native_boot_run` lives until its last 
 
 ### M6. Spider-Man 2 gets a FrameDriver (spider1)
 
-- **Create.** `EnterElectroFrameDriver`. One `stepFrame` is one budgeted execute/resume turn plus exactly one `presentation.commit`. Spider-Man 2 joins `Spider1Catalog`, with `bootEntry=DriverOwned`.
+- **Create.** `EnterElectroFrameDriver`. One `stepFrame` is one budgeted execute/resume turn plus exactly one `presentation.commit`. Spider-Man 2 joins the Spider-Man catalog (a two-title catalog in place of today's `SingleTitleCatalog`), with `bootEntry=DriverOwned`.
 - **Delete.** `game/core/spider_port.cpp:runPort` (with its unused cap, swapped log arguments and frame-0 FieldTurn), `titles/spiderman2/main.cpp` and the `enter_electro_port` target.
 - **Real RE work.** The commit point needs a measured guest present point, found in Ghidra. Gate it on SM2's own boot milestone.
 - **Proof.** Boot smoke, plus a FrameDriver unit test: one fence per step. The same link-collision check and two-panel picker test as M5.

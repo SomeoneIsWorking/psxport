@@ -10,7 +10,7 @@
 // through one function.
 //
 // The second thing this pins is that ONE function owns the meaning. `DbgServer::start` and
-// `native_boot`'s frame-cap lift both ask "is the endpoint on, and on which port", and when two
+// `RunBudget`'s frame-cap lift both ask "is the endpoint on, and on which port", and when two
 // readers answer that separately they can disagree — a run capped by one and unbound by the other
 // exits before a client can drive it. So both call `debug_server_port`, and these cases are its
 // contract: the sentinel, a real port, and every shape of text that must NOT bind a port.

@@ -1,4 +1,4 @@
-// A DIRECT runtime (no GameConfig) names its window and its memory card through
+// A DIRECT runtime (no GameConfig) names its memory card through
 // GameRuntime::hostIdentity(). Game::hostIdentity() is the one place that chooses between the legacy
 // GameConfig fields and that declaration, and Memcard::init() resolves the backing file from it:
 // the title's own variable first, then the generic PSXPORT_CARD, then the title's default path.
@@ -67,12 +67,11 @@ std::string cardChosenBy(IdentifiedRuntime &runtime) {
 }
 
 void test_a_declared_identity_reaches_the_game() {
-  const HostIdentity declared{"Declared Title", kCardVar, "ignored-default.mcr"};
+  const HostIdentity declared{.cardEnvVar = kCardVar, .cardDefaultPath = "ignored-default.mcr"};
   IdentifiedRuntime runtime(&declared);
   psxport_install_game(runtime);
   const auto game = std::make_unique<Game>();
   const HostIdentity seen = game->hostIdentity();
-  CHECK(std::string(seen.windowTitle) == std::string("Declared Title"));
   CHECK(std::string(seen.cardEnvVar) == std::string(kCardVar));
   CHECK(std::string(seen.cardDefaultPath) == std::string("ignored-default.mcr"));
 }
@@ -82,7 +81,6 @@ void test_no_declaration_is_an_honest_null_identity() {
   psxport_install_game(runtime);
   const auto game = std::make_unique<Game>();
   const HostIdentity seen = game->hostIdentity();
-  CHECK(seen.windowTitle == nullptr);
   CHECK(seen.cardEnvVar == nullptr);
   CHECK(seen.cardDefaultPath == nullptr);
 }
@@ -90,7 +88,7 @@ void test_no_declaration_is_an_honest_null_identity() {
 void test_the_title_card_variable_outranks_the_default_path() {
   const std::string fromVariable = scratchPath("variable.mcr");
   const std::string fromDefault = scratchPath("default.mcr");
-  const HostIdentity declared{"T", kCardVar, fromDefault.c_str()};
+  const HostIdentity declared{.cardEnvVar = kCardVar, .cardDefaultPath = fromDefault.c_str()};
   IdentifiedRuntime runtime(&declared);
   setEnvironment(kCardVar, fromVariable.c_str());
   CHECK(cardChosenBy(runtime) == fromVariable);
@@ -99,7 +97,7 @@ void test_the_title_card_variable_outranks_the_default_path() {
 
 void test_the_default_path_applies_when_the_variable_is_unset() {
   const std::string fromDefault = scratchPath("default.mcr");
-  const HostIdentity declared{"T", kUnsetCardVar, fromDefault.c_str()};
+  const HostIdentity declared{.cardEnvVar = kUnsetCardVar, .cardDefaultPath = fromDefault.c_str()};
   IdentifiedRuntime runtime(&declared);
   CHECK(cardChosenBy(runtime) == fromDefault);
   std::remove(fromDefault.c_str());

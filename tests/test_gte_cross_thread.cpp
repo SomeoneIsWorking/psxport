@@ -56,7 +56,7 @@ void writeFromAnotherThread(WorkerResult *out) {
 void test_a_write_from_an_unbound_thread_lands_in_the_bound_state(void) {
   GteRegs bound;
   std::memset(&bound, 0, sizeof(bound));
-  GTE_BindState(&bound); // the main/scheduler thread binds, as native_boot.cpp does
+  GTE_BindState(&bound); // the main/scheduler thread binds, as the boot binds do
 
   WorkerResult got;
   writeFromAnotherThread(&got);

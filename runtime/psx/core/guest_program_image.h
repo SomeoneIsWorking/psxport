@@ -21,10 +21,18 @@ struct GuestAddressRange {
   }
 };
 
+// Who enters the guest at boot. Crt0: the framework applies the image's crt0 group (psx::Machine::setupGuestBoot)
+// before GameRuntime::bootInit. DriverOwned: the title's FrameDriver enters the guest from the executable's entry.
+enum class BootEntry : std::uint8_t {
+  Crt0,
+  DriverOwned,
+};
+
 // One game-owned value describes the resident executable image. Framework algorithms consume this
 // type directly instead of reaching through the deprecated GameConfig bag. Addresses remain zero
 // when not reverse-engineered; each consumer owns its honest refusal or explicit absence semantics.
 struct GuestProgramImage {
+  BootEntry bootEntry = BootEntry::Crt0;
   GuestAddressRange bss;
   uint32_t stackTopWordAddress = 0;
   uint32_t stackReserveWordAddress = 0;

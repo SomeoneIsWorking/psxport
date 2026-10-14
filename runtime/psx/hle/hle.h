@@ -1,7 +1,7 @@
 // hle.h — class Hle — BIOS HLE subsystem (event control blocks, native first-fit heap, IRQ /
 // work-area flags), owned by Game (`c->game->hle`, back-pointer wired in Game()). Implemented in
 // hle.cpp and hle_interrupt.cpp. The deliverEvent method promotes the former free function hle_deliver_event (called by
-// timing/native_boot/memcard/asset for VBlank + memcard + sound-DMA event delivery) so callers do
+// timing/memcard/asset for VBlank + memcard + sound-DMA event delivery) so callers do
 // c->game->hle.deliverEvent(class, spec) — no Core* arg on the surface.
 #pragma once
 #include "bios_load_exec.h"

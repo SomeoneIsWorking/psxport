@@ -1,4 +1,4 @@
-// The run's cap: native_boot's precedence rule, now RunBudget's, and the title's own end request.
+// The run's cap: RunBudget's precedence rule, and the title's own end request.
 #include "config_vars.h"
 #include "run_budget.h"
 #include "session_run.h"

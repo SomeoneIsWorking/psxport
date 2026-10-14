@@ -40,7 +40,7 @@ enum Rq2dSpace {
   // Widescreen CENTRES it in the wide frame (or, for a uniform background fill, stretches it).
   RQ_2D_AUTHORED_4_3 = 0,
   // x already came out of a projection the framework itself WIDENED — the guest GTE with CR24 = OFX
-  // = nw/2 (native_boot.cpp), or the native camera — so it is in [0, ww) and ALREADY lines up with
+  // = nw/2 (the widescreen projection), or the native camera — so it is in [0, ww) and ALREADY lines up with
   // the world. Centring it again moves it off whatever it is anchored to by exactly one margin.
   // That was Tomba2 kanban #73: the score popup sat 54 px right of the character at 16:9.
   RQ_2D_WIDE_FINAL = 1,

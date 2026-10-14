@@ -1,7 +1,7 @@
 // test_field_turn.cpp — psx::FieldTurn: the per-field services a loop owes, and the two ways a loop
 // silently failed to owe them.
 //
-// 1. The mid-run RAM dump (`PSXPORT_RAMDUMP_FRAME`). It used to live inside `native_boot.cpp`'s loop, so
+// 1. The mid-run RAM dump (`PSXPORT_RAMDUMP_FRAME`). It used to live inside one framework loop, so
 //    every title-owned loop had a bound, audited, unread knob: the audit line said the surface existed
 //    and nothing ever called it. Now the turn owns it, and the observable is the file itself — written
 //    at exactly the requested frame number, and at no other.

@@ -102,10 +102,11 @@ qualification. Complete executable-writer coverage and fallback threshold enforc
 
 ## Direct-runtime service contracts
 
-Direct titles publish their disc environment key through `GameRuntime::discEnvVar()`; `Game` passes
-it to the shared disc resolver during construction. The legacy adapter continues to use
-`GameConfig::discEnvVar`, and an absent key retains generic disc resolution. Title code must not
-introduce another disc-open or environment-parsing path.
+A title's disc environment key is a disc fact in its `psx::host::TitleIdentity::discEnvVar`;
+`psx::Machine::insertDisc` hands it to the shared disc resolver before anything reads the disc
+(`TitleSession::boot` does so for a catalog title). An absent key retains generic disc resolution. A
+missing boot executable is extracted through the same resolver by `psx::host::provisionExecutable`. Title
+code must not introduce another disc-open, extraction or environment-parsing path.
 
 Measured stock CD bindings use the shared command body `cd_command_stock_sync` for the low-level
 zero-on-success ABI and `cd_control_sync` for the public one-on-success ABI. Both apply the same

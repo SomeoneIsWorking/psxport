@@ -33,8 +33,8 @@ typedef struct DiscState {
   uint64_t fills;
   uint64_t fill_ns;
   uint64_t worst_fill_ns;
-  const char *env_key;                   // GameConfig::discEnvVar — the consuming game's disc env/.env key.
-                                         // Wired by Game(); NULL falls back to the generic keys only.
+  const char *env_key;                   // TitleIdentity::discEnvVar: psx::Machine::insertDisc for a Game's disc,
+                                         // provisionExecutable for its own; NULL leaves the generic keys only.
   DiscTrackInfo tracks[DISC_MAX_TRACKS]; // CHD TOC, indexed densely in metadata order
   uint8_t track_count;
 } DiscState;
@@ -54,11 +54,15 @@ int disc_get_subq_position(DiscState *d, uint32_t lba, uint8_t out[8]);
 // Print the hunk-cache denominators, whatever they are. `when` labels the moment.
 void disc_read_report(DiscState *d, const char *when);
 int disc_find_file(DiscState *d, const char *path, uint32_t *out_lba, uint32_t *out_size);
-int disc_extract_file(DiscState *d,
-                      const char *iso_path,
-                      const char *out_path);       // self-provisioning: ISO9660 file -> host file (disc_provision.cpp)
 int disc_dropin_scan(char *out, unsigned out_cap); // first *.chd in cwd, NUL-terminated into out (disc_provision.cpp)
 
 #ifdef __cplusplus
 }
+#endif
+
+#ifdef __cplusplus
+namespace psx::cd {
+// Closes the image and drops the cache and TOC; the next read opens it again.
+void closeDisc(DiscState &disc);
+} // namespace psx::cd
 #endif

@@ -101,7 +101,7 @@ tests are required; a diagnostic that only prints on invalidation is not evidenc
 ## Structure is part of correctness
 
 Use `docs/codemap.md` as the placement authority. The target CPU integration is split by ownership,
-not accumulated in `Core`, `native_boot.cpp`, `dispatch.cpp`, or a replacement god class:
+not accumulated in `Core`, the boot composition, `dispatch.cpp`, or a replacement god class:
 
 - `runtime/cpu/lightrec_executor.*`: Lightrec lifetime, bounded execution, and architectural-state
   transfer;

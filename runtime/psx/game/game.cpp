@@ -9,7 +9,9 @@
 
 HostIdentity Game::hostIdentity() const {
   if (core.cfg) {
-    return {core.cfg->windowTitle, core.cfg->cardEnvVar, core.cfg->cardDefaultPath, core.cfg->userDataName};
+    return {.cardEnvVar = core.cfg->cardEnvVar,
+            .cardDefaultPath = core.cfg->cardDefaultPath,
+            .userDataName = core.cfg->userDataName};
   }
   const HostIdentity *declared = runtime ? runtime->hostIdentity() : nullptr;
   return declared ? *declared : HostIdentity{};
@@ -27,14 +29,7 @@ Game::Game(GpuDevice &presentation) : gpu_dev(presentation) {
 }
 
 void Game::wireRuntimeMembers() {
-  // THE PRODUCER-CENSUS ARM, from PSXPORT_PRODUCERS. This used to be assigned only inside
-  // native_boot_run, which direct-boot runtimes (Tekken 3's bootInit dispatch) never execute, so the
-  // knob silently did nothing there. Game construction is on EVERY runtime's route — native_boot_run
-  // itself dereferences c->game, which only this constructor sets — so arming here covers them all
-  // and runs BEFORE any guest store, preserving the old site's before-guest-execution guarantee
-  // (it is in fact strictly earlier). Idempotent: SBS constructs two Games and each re-arms
-  // identically. Read via .get(), whose lazy env binding needs no init call (config_var.h); the cost
-  // of the gate this arms is measured in ot_attr.h.
+  // PSXPORT_PRODUCERS is armed per Game, before any guest store.
   g_producer_census_armed = psx::config::cv_producers.get();
   runtime = core.runtime;
   core.game = this;
@@ -49,7 +44,6 @@ void Game::wireRuntimeMembers() {
   pcSched.game = this;
   cd.game = this;
   fmv.game = this;
-  stub.game = this;
   spu_audio.game = this;
   rml_overlay.game = this;
   platform_hle.game = this;
@@ -71,7 +65,6 @@ void Game::wireRuntimeMembers() {
   timing.bindCdcClock(&cdc);
   xa_state_init(&xa);
   gte.dbg.sxhist_on = gte.dbg.gteprobe = gte.dbg.projprobe = gte.dbg.rtpcaller_on = -1;
-  disc.env_key = core.cfg ? core.cfg->discEnvVar : (runtime ? runtime->discEnvVar() : nullptr);
   // BIOS A0:0x51 LoadAndExecute reads the executable the guest named through this run's disc, bound
   // here with every other per-Core owner rather than at the dispatch site.
   hle.loadExecReader = psx::hle::discFileReader(disc);
@@ -87,9 +80,7 @@ void Game::wireRuntimeMembers() {
     taskScheduler = runtime->createTaskScheduler(*this);
   }
 
-  // Every port constructs a Game, including ports that bypass native_boot_run. Keep the shipping GPU
-  // self-test reachable from that common boundary; leaving tritest compiled but uncalled made
-  // PSXPORT_GPU_SELFTEST audit as an unknown no-op and falsely implied its shader checks were running.
+  // Every product constructs a Game, so PSXPORT_GPU_SELFTEST runs here.
   gpu_vk.tritest();
 }
 

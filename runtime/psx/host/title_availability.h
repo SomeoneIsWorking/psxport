@@ -2,6 +2,7 @@
 
 #include "title_catalog.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -21,6 +22,7 @@ struct TitleAvailability {
   const TitleIdentity *identity = nullptr;
   std::size_t index = 0; // catalog position, which is also the TitleCatalog::runtime index
   std::filesystem::path executable;
+  std::vector<std::uint8_t> bytes; // the authenticated executable when Available; what the session admits
   AvailabilityStatus status = AvailabilityStatus::NotProvisioned;
   std::string reason; // empty when Available
 

@@ -18,6 +18,7 @@
 #include <lucent/log.h>
 
 #include <cstdlib>
+#include <string>
 
 namespace psx::host {
 
@@ -54,12 +55,22 @@ bool TitleSession::boot() {
   if (parts_->booted) {
     return true;
   }
-  psxport_install_game(catalog_.runtime(title_.index));
+  GameRuntime &runtime = catalog_.runtime(title_.index);
+  if (const std::string refusal = psx::Machine::bootEntryRefusal(runtime.guestProgramImage()); !refusal.empty()) {
+    lucent::error("boot", "{} ({}) refused: {}", title_.identity->displayName, title_.identity->serial, refusal);
+    return false;
+  }
+  if (!title_.available()) {
+    lucent::error("boot", "{} has no authenticated executable", title_.identity->displayName);
+    return false;
+  }
+  psxport_install_game(runtime);
   parts_->game = std::make_unique<Game>(services_.presentation);
   Game &game = *parts_->game;
   Core &core = game.core;
   game.hostInput.attachQuitScope(&services_.quit);
   game.session.setReturnAvailable(selectorAvailable_);
+  game.bugReport.setProductName(catalog_.productName());
   // Panel defaults are applied only to a selector session. A product session must stay windowed
   // with the player's pad live and its audio on: a title whose boot waits on its own audio device
   // never gets there, and the run stalls in the first guest step with no frame ever presented.
@@ -72,8 +83,24 @@ bool TitleSession::boot() {
     game.session.setPreRolling(preRolling_);
   }
 
-  load_exe(title_.executable.c_str(), &core);
   psx::Machine machine{game};
+  machine.insertDisc(*title_.identity);
+  const psx::cpu::PsxExeLoadResult admitted = runtime.admitExecutable(core, title_.bytes);
+  if (!admitted) {
+    lucent::error("boot",
+                  "{} refused its executable {}: {}",
+                  title_.identity->displayName,
+                  title_.executable.string(),
+                  admitted.detail);
+    return false;
+  }
+  lucent::info("boot",
+               "admitted {}: entry 0x{:08X} load 0x{:08X} text 0x{:X} sp 0x{:08X}",
+               title_.executable.string(),
+               admitted.image.entry,
+               admitted.image.textAddress,
+               admitted.image.textBytes,
+               core.r[29]);
   machine.reportConfigurationOnce();
   machine.bindDevices();
   machine.prepare();

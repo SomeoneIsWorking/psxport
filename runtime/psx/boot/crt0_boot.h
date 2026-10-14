@@ -2,7 +2,7 @@
 // GuestProgramImage, and the ONE place that decides whether a game's boot group is complete enough
 // to run.
 //
-// WHY THIS FILE EXISTS (megamanx4 docs/issues/0005). `native_boot.cpp::crt0_setup` was a faithful
+// WHY THIS FILE EXISTS (megamanx4 docs/issues/0005). The first `crt0_setup` was a faithful
 // transcription of the FIRST consumer's crt0 (Tomba!2, FUN_800896E0) wearing generic clothes. That was
 // established by MEASUREMENT, not by reading the C. The extractor is `tools/crt0_extract` (it shares
 // `crt0_scan` with the boot-time audit, so the two cannot drift); run over Tomba!2's MAIN.EXE it
@@ -55,7 +55,7 @@ class Core;
 
 #include <lucent/log.h>
 #include <stdint.h>
-#include <stdio.h> // snprintf
+#include <string>
 
 // The largest heap a PSX crt0 can be computing. Main RAM is 2 MiB on retail and 8 MiB on a dev unit,
 // so a "heap size" at or above 8 MiB is not a heap size — it is the subtraction underflowing because
@@ -88,12 +88,50 @@ struct Crt0Plan {
   int32_t stackTopBias = 0;    // the guest crt0's own adjustment of that word
 };
 
-// The required fields, as (name, value) pairs. One list, walked by the checker AND printed in the
-// refusal, so a field can never be required-but-unnamed or named-but-unchecked.
-struct Crt0Required {
-  const char *name;
-  uint32_t value;
+namespace psx {
+
+// The required crt0 fields an image leaves unset. One list, walked by `crt0_plan` and by the boot-entry
+// check, so a field can never be required-but-unnamed or named-but-checked-in-one-place-only.
+struct Crt0Completeness {
+  std::string unset; // the unset field names, comma-separated; empty when the group is complete
+  int unsetCount = 0;
+  int required = 0;
 };
+
+inline Crt0Completeness crt0Completeness(const GuestProgramImage &image) {
+  struct Required {
+    const char *name;
+    uint32_t value;
+  };
+  // Every one of these is an address in guest RAM (0x8xxxxxxx) or, for the bias declaration, an
+  // explicit flag, so ZERO is unambiguously "not reverse-engineered yet" and never a real value.
+  const Required required[] = {
+      {"bss.begin", image.bss.begin},
+      {"bss.end", image.bss.end},
+      {"stackTopWordAddress", image.stackTopWordAddress},
+      {"stackReserveWordAddress", image.stackReserveWordAddress},
+      {"heapBase", image.heapBase},
+      {"globalPointer", image.globalPointer},
+      {"libcInitEntry", image.libcInitEntry},
+      // The stack-top bias CANNOT use zero-means-absent: 0 is X4's real, measured value. So the
+      // declaration is explicit and separate from the value, and an undeclared bias refuses rather than
+      // inheriting the stock PSY-Q -8.
+      {"stackBias.declared", image.stackBias.declared},
+  };
+  Crt0Completeness result;
+  for (const Required &field : required) {
+    ++result.required;
+    if (field.value != 0u) {
+      continue;
+    }
+    result.unset += result.unset.empty() ? "" : ", ";
+    result.unset += field.name;
+    ++result.unsetCount;
+  }
+  return result;
+}
+
+} // namespace psx
 
 // crt0_plan — derive the plan, or refuse.
 //
@@ -116,38 +154,9 @@ crt0_plan(const GuestProgramImage *image, uint32_t stackTopWord, uint32_t stackR
   }
 
   // ── the REQUIRED group ──────────────────────────────────────────────────────────────────────────
-  // Every one of these is an address in guest RAM (0x8xxxxxxx) or, for the bias declaration, an
-  // explicit flag, so ZERO is unambiguously "not reverse-engineered yet" and never a real value.
-  const Crt0Required req[] = {
-      {"bss.begin", image->bss.begin},
-      {"bss.end", image->bss.end},
-      {"stackTopWordAddress", image->stackTopWordAddress},
-      {"stackReserveWordAddress", image->stackReserveWordAddress},
-      {"heapBase", image->heapBase},
-      {"globalPointer", image->globalPointer},
-      {"libcInitEntry", image->libcInitEntry},
-      // The stack-top bias CANNOT use zero-means-absent: 0 is X4's real, measured value. So the
-      // declaration is explicit and separate from the value, and an undeclared bias refuses rather than
-      // inheriting the stock PSY-Q -8. Defaulting to -8 would be right for four of the five ports in
-      // this workspace and silently 8 bytes wrong for the fifth — which is precisely the class of bug
-      // this file exists to end.
-      {"stackBias.declared", image->stackBias.declared},
-  };
-  const int n_req = (int)(sizeof req / sizeof req[0]);
-  char missing[256];
-  missing[0] = 0;
-  int n_missing = 0;
-  for (int i = 0; i < n_req; i++) {
-    if (req[i].value) {
-      continue;
-    }
-    n_missing++;
-    size_t at = 0;
-    while (at < sizeof missing && missing[at]) {
-      at++;
-    }
-    snprintf(missing + at, sizeof missing - at, "%s%s", at ? ", " : "", req[i].name);
-  }
+  const psx::Crt0Completeness completeness = psx::crt0Completeness(*image);
+  const int n_req = completeness.required;
+  const int n_missing = completeness.unsetCount;
   if (n_missing) {
     lucent::error("crt0",
                   "{}: REFUSING TO BOOT — {} of {} required boot-group field(s) are UNSET: {}."
@@ -160,7 +169,7 @@ crt0_plan(const GuestProgramImage *image, uint32_t stackTopWord, uint32_t stackR
                   who,
                   n_missing,
                   n_req,
-                  missing);
+                  completeness.unset);
     return p;
   }
 
@@ -274,7 +283,7 @@ void crt0_setup(Core &core);
 // `storeHeapSize == false` and still not know whether the caller honoured it. So the write SEQUENCE is
 // generated here, over an abstract writer, and the hermetic test drives it with a RECORDING writer that
 // asserts the set of addresses written — i.e. "no write to guest 0" is a checked postcondition of the
-// shipping code path rather than a property a human read off `native_boot.cpp`.
+// shipping code path rather than a property a human read off the applier.
 //
 // `Writer` must provide:
 //   void w32(uint32_t addr, uint32_t val);   // a guest word store

@@ -43,13 +43,6 @@ struct GameConfig {
   // router consumes GuestProgramImage::residentText.
   uint32_t recMainLo, recMainHi;
 
-  // Per-game name of the environment variable / .env key that points at this game's disc image
-  // (e.g. "PSXPORT_TOMBA2_DISC", "PSXPORT_SPIDERMAN_DISC"). The resolver in disc.c used to hardcode
-  // the FIRST consumer's key, so a second port set its own variable, the framework never read it,
-  // and the CD model ran with NO DISC MOUNTED while every log line still looked ordinary. Leave it
-  // null to rely on the generic PSXPORT_DISC / drop-in *.chd paths, which are always tried too.
-  const char *discEnvVar;
-
   // --- measured per-frame OT / packet-pool facts consumed by an adapter title's FrameDriver ---
   uint32_t otRegionBase, otRegionStride;     // per-parity OT region
   uint32_t packetPoolBase, packetPoolStride; // per-parity packet pool
@@ -59,7 +52,7 @@ struct GameConfig {
   uint32_t clearOtagR, putDrawEnv, drawSync;
   uint32_t irqEventClasses[3];
 
-  // --- scheduler task layout (scheduler.cpp, native_boot probes) ---
+  // --- scheduler task layout (scheduler.cpp, debug probes) ---
   uint32_t taskTableBase, taskSlotStride, taskCount;
   uint32_t curTaskPtr;
   uint32_t stageStart, stageDemo, stageGame; // fresh-entry stage PCs
@@ -213,11 +206,10 @@ struct GameConfig {
   uint32_t preserveVramBackdrop;
 
   // --- memory card (memcard.cpp) ----------------------------------------------------------------
-  // The consuming game's memory-card env key and default backing-file path. Same lesson as
-  // discEnvVar: the resolver used to hardcode the FIRST consumer's key (PSXPORT_TOMBA2_CARD) and
-  // filename (scratch/saves/tomba2.mcr), so a second consumer's card silently landed in the
-  // reference game's file, or nowhere. NULL keeps the old behaviour for a consumer that has not set
-  // them. Appended at the end because GameConfig is initialised positionally.
+  // The consuming game's memory-card env key and default backing-file path. The resolver used to
+  // hardcode the FIRST consumer's key (PSXPORT_TOMBA2_CARD) and filename (scratch/saves/tomba2.mcr), so a second
+  // consumer's card silently landed in the reference game's file, or nowhere. NULL keeps the old behaviour for a
+  // consumer that has not set them. Appended at the end because GameConfig is initialised positionally.
   const char *cardEnvVar;
   const char *cardDefaultPath;
 
@@ -247,15 +239,6 @@ struct GameConfig {
   // positionally.
   uint32_t paceQuota;
 
-  // Window title. The framework is game-agnostic and must not name a game, but gpu_vk.cpp hardcoded
-  // "Tomba! 2 (SDL_GPU)" — the FIRST consumer's — so every port added since presented itself as
-  // Tomba!2 in the title bar and the taskbar, on all three games at once. Left null, the window is
-  // titled "psxport (untitled game)": OBVIOUSLY wrong rather than plausibly wrong, because a title
-  // naming some OTHER game reads as correct and therefore never gets reported.
-  // Also appended at the end — spider1 initialises GameConfig POSITIONALLY, so inserting a field
-  // mid-struct silently shifts every field after it there.
-  const char *windowTitle;
-
   // --- crt0 stack-top bias (crt0_boot.h) --------------------------------------------------------
   // The guest crt0's OWN adjustment of the stack-top word before it becomes sp:
   //
@@ -275,7 +258,7 @@ struct GameConfig {
   // silent. Hence: `declared` must be set to 1 by the consumer, and `crt0_plan` REFUSES a boot where
   // it is 0, naming the field. Loud is recoverable; either default is not.
   //
-  // Appended at the END of the struct, like paceQuota/windowTitle above, because GameConfig is
+  // Appended at the END of the struct, like paceQuota above, because GameConfig is
   // initialised POSITIONALLY by some consumers (spider1) — a field inserted into the crt0 group at
   // the top would shift every value after it there, silently.
   struct Crt0StackBias {

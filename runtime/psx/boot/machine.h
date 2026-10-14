@@ -1,23 +1,6 @@
-// machine.h — psx::Machine: the boot composition and the field turn every product shares.
-//
-// WHAT THIS OWNS, and why it had to exist:
-//
-// Nine consuming repositories each wrote the same spine: bind the per-Core devices in the measured
-// order, seed `a0`/`a1` as the BIOS leaves them, register the title's overrides, run the frame-loop
-// preflight, attach the live control channel, arm the store observer, and then loop over a finite
-// title-owned frame step. Four of them carried a long comment explaining that they had to, because the
-// framework's own spine (`native_boot_run`) could not host a field step they own. Every one of those
-// spines is a chance to omit a step: a title with no live endpoint cannot be driven or observed, and
-// a title with no per-field `honourPause`/`service` pair cannot be paused.
-//
-// So the composition is here, and a title keeps only its FACTS: which runtime policy it installs,
-// where its executable is, what its field step does, and what its frame cap should be.
-//
-// ONE OWNER, NOT TWO SPINES. The framework's own `native_boot_run` composes through this class as
-// well, step for step, so "the product that boots natively" and "the product that owns its loop" are
-// the same sequence with the same obligations. Each step below is explicit and optional: a spine calls
-// the ones it needs, in the measured order, and the classes that own a step (`psx::frame::FrameLoopShell`,
-// `psx::frame::FieldTurn`, `crt0_setup`, `psx::state`) keep their own contracts.
+// machine.h — psx::Machine: the boot steps every product composes, in the measured order.
+// `psx::host::TitleSession` composes them for a catalog product; a title with its own loop calls the
+// same steps and `run`.
 #pragma once
 
 #include "field_turn.h"
@@ -27,6 +10,11 @@
 
 class Core;
 class Game;
+struct GuestProgramImage;
+
+namespace psx::host {
+struct TitleIdentity;
+} // namespace psx::host
 
 namespace psx {
 
@@ -42,17 +30,13 @@ public:
   Machine(const Machine &) = delete;
   Machine &operator=(const Machine &) = delete;
 
+  // Points the CD model at the title's own disc key. The image opens on the first read, so this
+  // precedes any disc access: an executable extracted from the disc, the title's boot, the first field.
+  void insertDisc(const psx::host::TitleIdentity &title);
+
   // Binds the per-Core devices in the framework's measured order and seeds `a0`/`a1` the way the BIOS
   // leaves them, before any guest code can run. Call it once, before `prepare`.
   void bindDevices();
-
-  // The same binders WITHOUT the device initialisers, for a spine that has already initialised them
-  // (`native_boot`'s game_main runs after the title's own init) or must not re-initialise them. The
-  // GTE/SPU/MDEC/XA binding is what this exists for: those four reached a PROCESS-GLOBAL through the
-  // vendored entry points, and the binding must name the Core that is running, not the one that booted
-  // last. `psx::frame::FrameLoopShell::step` re-checks it per field anyway; doing it before the first guest call is
-  // what keeps a title's own boot prologue off the wrong instance.
-  void bindSession();
 
   // The one-time configuration audit — every active PSXPORT_* knob, once, before anything reads one.
   void reportConfigurationOnce();
@@ -66,9 +50,13 @@ public:
   // FMV last frame. Deterministic, no timer.
   void clearDisplayForFrontEnd();
 
-  // The guest crt0: apply the derived boot group (bss, stack, heap, `gp`, `a0`/`a1`, libc init) with
-  // the completeness refusal and the shipped-constants cross-check. Refuses the whole boot rather than
-  // fabricating guest state; `crt0_setup` owns that decision and `crt0_boot.h` the derivation.
+  // Why the image's declared `bootEntry` cannot boot it, or empty when it can. `Crt0` needs the complete
+  // crt0 group (`psx::crt0Completeness`); `DriverOwned` needs nothing here. No image declares no entry.
+  static std::string bootEntryRefusal(const GuestProgramImage *image);
+
+  // The guest's boot entry. `Crt0`: apply the derived boot group (bss, stack, heap, `gp`, `a0`/`a1`, libc
+  // init) with the completeness refusal and the shipped-constants cross-check, through `crt0_setup`.
+  // `DriverOwned`: nothing; the title's frame driver enters the guest from the executable's entry.
   void setupGuestBoot();
 
   // `PSXPORT_LOAD_STATE`: resume a whole-machine state BEFORE the first field, so a headless tool
@@ -92,8 +80,7 @@ public:
   void registerTitleOverrides();
 
   // The frame-loop preflight: refuses a product with no finite frame owner before any guest code can
-  // dispatch. Separate from `registerTitleOverrides` because the framework's own spine does NOT
-  // register the title's overrides — a standalone game main installs its clusters before entering it.
+  // dispatch.
   void prepareProduct();
 
   // Everything between the binds and the first field, in the order a product must do it: the title's

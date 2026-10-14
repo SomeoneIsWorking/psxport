@@ -17,11 +17,12 @@ std::vector<TitleAvailability> TitleAvailabilityProbe::probe() const {
     TitleAvailability entry;
     entry.identity = &identity;
     entry.index = titles.size();
-    entry.executable = root_ / std::string(identity.slug) / std::string(identity.serial);
-    const SelectionResult selection = selectExecutableFile(entry.executable, catalog_);
+    entry.executable = identity.defaultExecutable(root_);
+    SelectionResult selection = selectExecutableFile(entry.executable, catalog_);
     switch (selection.status) {
     case SelectionStatus::Selected:
       entry.status = AvailabilityStatus::Available;
+      entry.bytes = std::move(selection.bytes);
       break;
     case SelectionStatus::MissingExecutable:
       entry.status = AvailabilityStatus::NotProvisioned;

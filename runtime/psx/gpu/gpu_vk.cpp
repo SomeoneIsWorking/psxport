@@ -1043,7 +1043,7 @@ static void create_3d_pipelines(void) {
 // because the Game half has to run for a Game that arrives after the device already exists.
 void init_gpu(Game *game) {
   if (!s_inited) {
-    init_gpu_device(game);
+    init_gpu_device();
   }
   // RmlUi mod/debug overlay. Brought up in BOTH legs: this used to be `if (!s_headless)`, which made
   // the overlay's very EXISTENCE a property of the window — so every headless instrument was
@@ -1060,7 +1060,7 @@ void init_gpu(Game *game) {
   overlay_glue_init(game, s_win, s_dev, s_headless ? PRESENT_IMG_FMT : s_swap_fmt, ow, oh);
 }
 
-void init_gpu_device(Game *game) {
+void init_gpu_device() {
   s_inited = 1;
   // SDL_GPU requires the video subsystem even headless (the device is created against it; we just don't
   // open a window or claim a swapchain).
@@ -1070,15 +1070,10 @@ void init_gpu_device(Game *game) {
   }
   // The ONE window for the whole run (GpuWindow, gpu_vk_window.h): created before the device, claimed
   // after it, and released once — it outlives every Game that presents into it.
-  //
-  // HostIdentity::windowTitle — never a game name in the framework. The fallback is deliberately
-  // self-evidently wrong: a port that forgets to set it must look untitled, not look like Tomba!2.
-  // A HOST that owns the window owns its name (psxport::HostPresentation::setWindowTitle): the
-  // window is created by whichever Game comes first, which in a selector-then-title product is the
-  // selector, and its identity would name the window for the whole run.
+  // The host that owns the window names it (psxport::HostPresentation::setWindowTitle, from
+  // TitleCatalog::productName). Never a game name in the framework: an unnamed window looks untitled.
   const char *hostTitle = gdev().s_window_title;
-  const char *declaredTitle = hostTitle != nullptr ? hostTitle : game->hostIdentity().windowTitle;
-  const char *title = declaredTitle ? declaredTitle : "psxport (untitled game)";
+  const char *title = hostTitle != nullptr ? hostTitle : "psxport (untitled game)";
   gdev().s_window.create(s_headless != 0, title);
   // Create the GPU device (SPIR-V shaders; let SDL pick the optimal driver — Vulkan on Linux, Metal on Mac).
   // A recorded fault from a PREVIOUS process stops us before we ever touch the device.
@@ -2366,7 +2361,7 @@ void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay)
     // this is the identity and the blit is the 1:1 copy it claims to be. But the two CAN disagree, and
     // when they do a full-window viewport silently distorts the picture:
     //   * the window is resized between the size this image was built for and this acquire;
-    //   * repaint() — the debug-server pause loop, ~66 Hz from native_boot.cpp — re-blits the LAST
+    //   * repaint() — the debug-server pause loop, ~66 Hz — re-blits the LAST
     //     BUILT image, which is sized to whatever the window was when the pause began. Resize while
     //     paused and nothing rebuilds it, because repaint deliberately builds nothing.
     // Fitting by aspect degrades to bars, which is the honest answer for "re-show the last built

@@ -1,8 +1,7 @@
 // repl.cpp — interactive REPL driver (PSXPORT_REPL=1): read commands from stdin and drive the native
 // port (run/step, memory peek/poke, input, screenshots, RAM dumps, entity/scene inspection,
-// audio dumps). Extracted from native_boot.cpp (later-288) so the boot + scheduler file is not crammed
-// with the debug driver. The generic loop (native_boot.cpp) calls c->game->repl.read() between frames;
-// the title's FrameDriver consumes the class Repl's auto-drive requests and can ask the generic loop
+// audio dumps). The product loop (`TitleSession::step`) calls `beforeStep`/`afterStep` around each
+// frame; the title's FrameDriver consumes the class Repl's auto-drive requests and can ask the loop
 // to return to the prompt after the current frame.
 #include "repl.h"
 #include "c_subsys.h"

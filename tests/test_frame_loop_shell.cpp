@@ -10,12 +10,8 @@
 
 #include <csignal>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <memory>
 #include <span>
-#include <sstream>
-#include <string>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -131,13 +127,6 @@ void step_shell(void *context) {
   psx::frame::FrameLoopShell{}.step(game->core, 91u);
 }
 
-std::string read_source(const std::filesystem::path &path) {
-  std::ifstream input(path);
-  std::ostringstream contents;
-  contents << input.rdbuf();
-  return contents.str();
-}
-
 } // namespace
 
 static void test_shell_delegates_exactly_one_native_frame() {
@@ -204,29 +193,6 @@ static void test_repl_prompt_request_is_one_shot() {
   CHECK(!repl.consumePromptRequest());
 }
 
-static void test_native_boot_has_no_title_frame_body_or_fallback() {
-  const auto root = std::filesystem::path(__FILE__).parent_path().parent_path();
-  const std::string source = read_source(root / "runtime/psx/boot/native_boot.cpp");
-  CHECK(!source.empty());
-
-  // These were the title-shaped body and its defining per-frame operations. Native boot may retain
-  // host orchestration, but it must delegate through psx::frame::FrameLoopShell instead of growing a fallback.
-  CHECK(source.find("pcSched.step(") == std::string::npos);
-  CHECK(source.find("hooks->frameUpdate(") == std::string::npos);
-  CHECK(source.find("hooks->drawOTag(") == std::string::npos);
-  CHECK(source.find("timing.frameTick(") == std::string::npos);
-  // The preflight reaches psx::frame::FrameLoopShell through its owner now: `psx::Machine::prepareProduct` IS the
-  // shell call, and this spine composes the same owner a title-owned spine does. What this test protects
-  // is the DELEGATION — native_boot must not grow a frame body or a fallback of its own — so the
-  // assertion follows the delegation to where it now lives rather than pinning one spelling of it.
-  CHECK(source.find("machine.prepareProduct()") != std::string::npos);
-  const size_t step = source.find("psx::frame::FrameLoopShell{}.step(");
-  const size_t prompt = source.find("repl.afterStep()");
-  CHECK(step != std::string::npos);
-  CHECK(prompt != std::string::npos);
-  CHECK(prompt > step);
-}
-
 int main() {
   RUN(shell_delegates_exactly_one_native_frame);
   RUN(missing_driver_refuses_before_boot_can_run);
@@ -234,6 +200,5 @@ int main() {
   RUN(driver_returning_without_a_fence_refuses);
   RUN(driver_committing_twice_refuses);
   RUN(repl_prompt_request_is_one_shot);
-  RUN(native_boot_has_no_title_frame_body_or_fallback);
   return pt_summary();
 }

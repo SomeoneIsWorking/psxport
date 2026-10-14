@@ -12,6 +12,14 @@ namespace {
 GameRuntime *installedRuntime;
 }
 
+psx::cpu::PsxExeLoadResult GameRuntime::admitExecutable(Core &core, std::span<const std::uint8_t> bytes) {
+  psx::cpu::PsxExeLoadResult loaded = psx::cpu::loadPsxExeImage(core, bytes, "boot executable");
+  if (loaded) {
+    psx::cpu::applyPsxExeTopLevelRegisters(core, loaded.image);
+  }
+  return loaded;
+}
+
 std::unique_ptr<psx::frame::TemporalFramePresentation> GameRuntime::createTemporalFramePresentation(Game &) {
   return nullptr;
 }

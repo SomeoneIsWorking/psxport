@@ -18,6 +18,7 @@
 #include "guest_program_image.h"
 #include "input_phase.h"
 #include "logo_image.h"
+#include "psx_exe_image.h"
 #include "render_capabilities.h"
 #include "title_settings.h"
 
@@ -40,13 +41,13 @@ class BlobWriter;
 class NativeStatePort;
 } // namespace psx::state
 
-// The host-visible identity of a game: what its window is called and where its memory card lives.
-// A DIRECT runtime (core.cfg == nullptr) declares it through GameRuntime::hostIdentity(); the legacy
-// adapter's equivalent is GameConfig::windowTitle / cardEnvVar / cardDefaultPath, and Game::hostIdentity()
-// is the one place that chooses between them. The framework reads the card variable itself, through
-// its configuration owner (the environment, then ./.env), so a title names the key and never reads it.
+// Where a game's memory card and user data live. A DIRECT runtime (core.cfg == nullptr) declares it
+// through GameRuntime::hostIdentity(); the legacy adapter's equivalent is GameConfig::cardEnvVar /
+// cardDefaultPath, and Game::hostIdentity() is the one place that chooses between them. The framework
+// reads the card variable itself, through its configuration owner (the environment, then ./.env), so a
+// title names the key and never reads it. The window title is the product's (TitleCatalog::productName)
+// and the disc key the title's (psx::host::TitleIdentity).
 struct HostIdentity {
-  const char *windowTitle = nullptr;     // null shows the framework's deliberately untitled marker
   const char *cardEnvVar = nullptr;      // checked before the generic PSXPORT_CARD
   const char *cardDefaultPath = nullptr; // used when neither variable names a card
   const char *userDataName = nullptr;    // one path component under the OS user-data root (bug reports)
@@ -95,6 +96,11 @@ public:
   virtual void destroyContext(void *context) = 0;
   virtual void registerOverrides(Game &game) = 0;
   virtual void bootInit(Core &core) = 0;
+
+  // Map the authenticated boot executable into guest RAM and set its entry registers; the bytes are the
+  // ones the host authenticated. The default is `loadPsxExeImage` plus `applyPsxExeTopLevelRegisters`. A
+  // title that publishes its own image identity overrides it; a refusal leaves Core unchanged.
+  virtual psx::cpu::PsxExeLoadResult admitExecutable(Core &core, std::span<const std::uint8_t> bytes);
 
   // Immutable facts about the guest executable image. A direct runtime owns the returned value for
   // at least the lifetime of every Core. Null is an honest answer for tools/smoke clients that never
@@ -166,12 +172,6 @@ public:
   // settings file. The returned span must outlive the runtime's Games; empty declares none.
   virtual std::span<const TitleIntSetting> titleIntSettings() const {
     return {};
-  }
-
-  // Disc environment key for DIRECT runtimes (core.cfg == nullptr). The disc resolver checks this
-  // variable in the environment and ./.env before falling back to generic PSXPORT_DISC.
-  virtual const char *discEnvVar() const {
-    return nullptr;
   }
 
   // The title's INPUT PHASE for pad record/replay (input_phase.h): which screen or game state is

@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 class Core;
 
@@ -52,6 +53,11 @@ public:
   // The frame-boundary half, called at the start of every field (FieldTurn::beginField).
   void atFieldBoundary(Core &core);
 
+  // The application a report is filed under (TitleCatalog::productName); unset, the title's userDataName.
+  void setProductName(std::string_view name) {
+    mProductName = name;
+  }
+
 private:
   enum class State : std::uint8_t { Idle, Requested, Capturing };
 
@@ -62,6 +68,7 @@ private:
 
   State mState = State::Idle;
   bool mPruned = false;
+  std::string mProductName;
   std::optional<std::string> mScriptedSummary;
   std::optional<psx::gpu::Rgb24Picture> mReference;
 };

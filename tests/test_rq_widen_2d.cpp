@@ -5,7 +5,7 @@
 // on two headless instances with byte-identical world state:
 //
 //   * the popup's anchor is a guest GTE projection at 0x8003F7A0 (RTPS, store SXY2), and
-//     native_boot.cpp writes GTE CR24 = OFX = nw/2 under widescreen — so the guest's own screen x is
+//     the widescreen projection writes GTE CR24 = OFX = nw/2 under widescreen — so the guest's own screen x is
 //     ALREADY wide-final. Measured (scorepopup channel, pre-widen): 4:3 = 125/117/109,
 //     16:9 = 179/171/163. Delta +54 = exactly margin, i.e. the projection is already widened.
 //   * RenderQueue::emitOrQueue then added margin a SECOND time, because it GUESSED that every 2D

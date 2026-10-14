@@ -107,7 +107,7 @@ public:
 
   // tickSleepCountdown(): FUN_800506D0 — VERIFIED + WIRED (frontier tier,
   // 2026-07-10). The "sleep countdown / re-arm" sweep called once per frame
-  // from native_boot.cpp's guest-call site. Binary analysis identifies 0x800506D0 as a leaf with no stack
+  // from the title's frame driver. Binary analysis identifies 0x800506D0 as a leaf with no stack
   // frame (no sp descent, no ra use). Walks task slots 0..2 (TASKBASE +
   // i*TASKSTRIDE, matches "Tomba2 runs up to 3 cooperative tasks" in
   // scheduler.cpp): for each slot whose state (base+0x00, u16) == 1 (YIELDED,

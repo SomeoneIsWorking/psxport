@@ -100,9 +100,8 @@ inline const lucent::Channel g_otattr_channel{"otattr"};
 // work is real, not optimised away: the same run records 10,188 spans with 0 overflow, which is printed
 // at run end precisely so "no cost" can never be mistaken for "no work happened".
 // Set once per Game construction from PSXPORT_PRODUCERS (game.cpp), which defaults TRUE so behaviour
-// is unchanged; Game's constructor is on every runtime's boot route, including direct-boot ones that
-// never reach native_boot_run. It stays a plain global rather than a CVar read because trackStore's
-// inline gate is on the path of EVERY guest store — the whole point of that gate is that it is two
+// is unchanged; Game's constructor is on every runtime's boot route. It stays a plain global rather than a CVar read
+// because trackStore's inline gate is on the path of EVERY guest store — the whole point of that gate is that it is two
 // relaxed loads.
 inline bool g_producer_census_armed = true;
 

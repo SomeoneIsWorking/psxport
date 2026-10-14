@@ -9,7 +9,7 @@
 // span and returned "not owned", which reads exactly like a guest that submitted nothing there.
 //
 // This is the same seam the direct-runtime facts above it use (`guestCdStreamCallbackLayout`,
-// `discEnvVar`, `hostIdentity`): the runtime declares immutable guest-RAM facts, the framework reads
+// `hostIdentity`): the runtime declares immutable guest-RAM facts, the framework reads
 // them, and the legacy `GameConfig` path is untouched for titles still on the adapter. A runtime
 // that declares none keeps today's behaviour and today's warning.
 #pragma once

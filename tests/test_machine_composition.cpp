@@ -17,7 +17,6 @@
 #include "game_runtime.h"
 #include "host_input.h"
 #include "machine.h"
-#include "native_boot.h"
 #include "platform_hle.h"
 #include "render_queue.h"
 
@@ -158,15 +157,12 @@ static void test_a_capped_run_stops_at_its_cap(void) {
   CHECK_EQ(fixture.driver->lastFrame, 2u);
 }
 
-// The steps the framework's own spine used to own privately. Each is a call a product can make without
-// adopting the whole composition — which is what lets `native_boot_run` and a title-owned loop be the
-// same sequence rather than two that agree today.
+// Each step is a call a product can make without adopting the whole composition.
 static void test_the_boot_steps_are_individually_callable(void) {
   Fixture fixture;
   g_registerOverridesCalls = 0;
   psx::Machine machine{*fixture.game};
   machine.reportConfigurationOnce();
-  machine.bindSession();
   machine.armHostDiagnostics();
   // Both halves of `prepare`, in order: the title's overrides, then the preflight.
   machine.prepare();
@@ -195,13 +191,6 @@ static void test_configured_state_reports_instead_of_silently_booting(void) {
   CHECK(!error.empty());
 }
 
-// The hand-written prototype four repositories carried at their call sites is now declared by the
-// framework. Its address is what the test can check without running a boot.
-static void test_native_boot_run_is_declared_by_the_framework(void) {
-  void (*const declared)(Core *) = &native_boot_run;
-  CHECK(declared != nullptr);
-}
-
 static void test_a_window_close_is_recorded_on_the_attached_scope(void) {
   psx::input::QuitScope quit;
   CHECK(!quit.requested());
@@ -220,7 +209,6 @@ int main() {
   RUN(configured_state_reports_instead_of_silently_booting);
   RUN(the_loop_ends_on_the_clients_quit_and_owes_a_ledger);
   RUN(a_capped_run_stops_at_its_cap);
-  RUN(native_boot_run_is_declared_by_the_framework);
   RUN(a_window_close_is_recorded_on_the_attached_scope);
   return pt_summary();
 }
