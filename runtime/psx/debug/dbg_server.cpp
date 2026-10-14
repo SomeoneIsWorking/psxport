@@ -60,7 +60,7 @@
 #include "lightrec_executor.h"
 // pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
 
-// PSX pad: name -> active-HIGH bit (mirrors the REPL mapping in native_boot.c).
+// PSX pad: name -> active-HIGH bit (mirrors the REPL mapping in repl.cpp).
 static unsigned dbg_btn(const char *n) {
   if (!strcmp(n, "start")) {
     return 0x0008;

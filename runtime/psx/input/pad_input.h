@@ -96,8 +96,8 @@ public:
   bool fastForwarding() const {
     return mSession.fastForwarding();
   }
-  // True while a replay still drives the pad. The frame loop is uncapped for a replay run
-  // (native_boot.cpp), and the run-end line below reports how far the replay got.
+  // True while a replay still drives the pad. The run is uncapped for a replay
+  // (`psx::host::RunBudget`), and the run-end line below reports how far the replay got.
   bool replayPending() const {
     return mSession.replayPending();
   }

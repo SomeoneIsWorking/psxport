@@ -204,11 +204,11 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/config/config.cpp   # layered CVar registry + the environment audit (docs/config.md)
   ${PSXPORT_ROOT}/runtime/psx/hle/platform_hle.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/scheduler.cpp
-  ${PSXPORT_ROOT}/runtime/psx/boot/native_boot.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot/machine.cpp # psx::Machine: the shared boot composition and the frame turn
   ${PSXPORT_ROOT}/runtime/psx/boot/run_end_report.cpp # the one report a finished run owes
   ${PSXPORT_ROOT}/runtime/psx/host/product_host.cpp # the multi-title product: picker, then the chosen title, then the picker
   ${PSXPORT_ROOT}/runtime/psx/host/title_session.cpp # one steppable boot-to-exit run of one catalog title
+  ${PSXPORT_ROOT}/runtime/psx/host/single_title_catalog.cpp # the catalog of a one-title product
   ${PSXPORT_ROOT}/runtime/psx/host/run_budget.cpp # the run's cap in presentation-fence steps
   ${PSXPORT_ROOT}/runtime/psx/host/panel_sessions.cpp # one live session per available title and which of them runs
   ${PSXPORT_ROOT}/runtime/psx/host/panel_logo.cpp # a title's logo image and its lazy GPU texture
@@ -217,9 +217,11 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host/picker_composite.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_layout.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_content.cpp
+  ${PSXPORT_ROOT}/runtime/psx/host/executable_provisioner.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/title_availability.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/title_selection.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/field_turn.cpp # psx::FieldTurn: the per-field services a loop owes
+  ${PSXPORT_ROOT}/runtime/psx/frame/logic_frame.cpp # psx::frame::LogicFrame: the host side of a title logic frame
   ${PSXPORT_ROOT}/runtime/psx/boot/crt0_boot.cpp # crt0_setup — the derived crt0 plan's shipping applier
   ${PSXPORT_ROOT}/runtime/psx/gpu/render_path.cpp   # render_path_install — the render-path tri-state, one parser for every boot spine
   ${PSXPORT_ROOT}/runtime/psx/gpu/proj_prim.cpp
@@ -233,7 +235,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/debug/repl.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/dbg_server.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/bug_report_session.cpp
-  ${PSXPORT_ROOT}/runtime/psx/boot/native_stub.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/watchdog.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot/boot.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot/psx_exe_image.cpp

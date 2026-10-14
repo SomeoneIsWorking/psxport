@@ -1,6 +1,5 @@
-// hw_bind.cpp — per-instance HW-peripheral state binders (SPU/MDEC/CD-controller/XA). Split out of
-// native_boot.cpp (2026-07 restructure): grouped here so a reader can find every per-core HW bind in one
-// place instead of buried mid-file in the boot driver.
+// hw_bind.cpp — per-instance HW-peripheral state binders (SPU/MDEC/CD-controller/XA), every per-core
+// HW bind in one place.
 #include "hw_bind.h"
 #include "core.h"
 #include "game.h"

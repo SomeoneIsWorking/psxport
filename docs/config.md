@@ -158,8 +158,8 @@ that wrote this word", and that claim was wrong in the way that matters — it i
 address and reading the silence as a result.
 
 `PSXPORT_CW` sees every store to RAM or the scratchpad, native or guest: Lightrec routes each guest
-store through `Core::writeGuestMemory`, including stores to a constant address. `PSXPORT_STORE_OBSERVE` is armed from `native_boot.cpp`
-beside the live endpoint.
+store through `Core::writeGuestMemory`, including stores to a constant address. `PSXPORT_STORE_OBSERVE` is armed by
+`psx::Machine::attachControlChannel` beside the live endpoint.
 
 Two honest limits, both stated in `runtime/cpu/store_observe.cpp` rather than papered over:
 

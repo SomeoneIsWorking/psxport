@@ -16,6 +16,7 @@
 #include "run_end_report.h"
 #include "state/state_command.h"
 #include "store_observe.h"
+#include "title_catalog.h"
 
 #include <cstdlib>
 
@@ -52,21 +53,16 @@ void bindPerCoreDevices(Game &game) {
 
 Machine::Machine(Game &game) : game_(game) {}
 
+void Machine::insertDisc(const psx::host::TitleIdentity &title) {
+  game_.disc.env_key = title.discEnvVar;
+}
+
 Core &Machine::core() const {
   return game_.core;
 }
 
 void Machine::bindDevices() {
   bindPerCoreDevices(game_);
-}
-
-void Machine::bindSession() {
-  Core &core = this->core();
-  gte_bind(&core);
-  core.rsub.projprim.bind(&core);
-  spu_bind(&core);
-  mdec_bind(&core);
-  xa_bind(&core);
 }
 
 void Machine::reportConfigurationOnce() {
@@ -82,7 +78,27 @@ void Machine::clearDisplayForFrontEnd() {
   gpu_clear_display(&core());
 }
 
+std::string Machine::bootEntryRefusal(const GuestProgramImage *image) {
+  if (image == nullptr) {
+    return "the runtime declares no GuestProgramImage, so it has no bootEntry";
+  }
+  if (image->bootEntry == BootEntry::DriverOwned) {
+    return {};
+  }
+  const Crt0Completeness crt0 = crt0Completeness(*image);
+  if (crt0.unsetCount == 0) {
+    return {};
+  }
+  return "bootEntry=Crt0 but " + std::to_string(crt0.unsetCount) + " of " + std::to_string(crt0.required) +
+         " crt0 field(s) are unset (" + crt0.unset +
+         "); a title whose frame driver enters the guest declares bootEntry=DriverOwned";
+}
+
 void Machine::setupGuestBoot() {
+  const GuestProgramImage *image = core().guestProgramImage;
+  if (image != nullptr && image->bootEntry == BootEntry::DriverOwned) {
+    return;
+  }
   crt0_setup(core());
 }
 

@@ -2479,7 +2479,7 @@ void GpuState::gpu_present_ex(Core *core, int do_blit, GpuPresentCompletion comp
   // PSXPORT_GRAMDUMP="frame:path" — dump the full 2 MB of guest RAM at `frame`.
   //
   // WHY IT LIVES HERE, next to VRAMDUMP, and not with PSXPORT_RAMDUMP_FRAME: that knob fires from the
-  // NATIVE frame loop (native_boot.cpp), which a port running the guest's own main() on the substrate
+  // native field turn (`psx::FieldTurn`), which a port running the guest's own main() on the substrate
   // never executes — it produces no file AND no message, so "no dump" and "this knob is inert here" are
   // indistinguishable (instruments.md INST-22). gpu_present_ex runs on BOTH paths, which is exactly why
   // VRAMDUMP works where RAMDUMP_FRAME does not. It also logs unconditionally on the target frame,

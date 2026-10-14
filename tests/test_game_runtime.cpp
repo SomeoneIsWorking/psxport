@@ -4,12 +4,16 @@
 #include "game_runtime.h"
 #include "guest_cd_stream_callback_layout.h"
 #include "guest_program_image.h"
+#include "machine.h"
 #include "menu_row.h"
 #include "render_path_control.h"
 #include "testutil.h"
+#include "title_catalog.h"
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
+#include <vector>
 
 namespace {
 
@@ -55,10 +59,6 @@ public:
 
 class TestRuntime final : public GameRuntime {
 public:
-  const char *discEnvVar() const override {
-    return discEnvironmentKey;
-  }
-
   RenderCapabilities renderCapabilities() const override {
     return capabilities;
   }
@@ -104,7 +104,6 @@ public:
     return std::make_unique<TestTaskScheduler>();
   }
 
-  const char *discEnvironmentKey = nullptr;
   int contextToken = 0;
   GuestProgramImage programImage{
       .bss = {0x800BE0D8u, 0x80106228u},
@@ -164,36 +163,64 @@ void test_direct_runtime_publishes_cd_ready_callback_slot() {
   CHECK_EQ(cd_ready_callback_pointer(game->core), 0u);
 }
 
-void test_direct_runtime_publishes_disc_key_to_shared_disc_owner() {
+void test_title_disc_key_reaches_the_shared_disc_owner() {
   TestRuntime runtime;
-  runtime.discEnvironmentKey = "TEST_TITLE_DISC";
   psxport_install_game(runtime);
   const auto game = std::make_unique<Game>();
+  CHECK_EQ(game->disc.env_key, nullptr);
 
-  CHECK_EQ(game->core.cfg, nullptr);
+  constexpr psx::host::TitleIdentity kTitle{.serial = "TEST_000.00", .discEnvVar = "TEST_TITLE_DISC"};
+  psx::Machine{*game}.insertDisc(kTitle);
+
   CHECK_STREQ(game->disc.env_key, "TEST_TITLE_DISC");
   CHECK_EQ(game->cdc.disc, &game->disc);
   CHECK_EQ(game->xa.disc, &game->disc);
 }
 
-void test_absent_runtime_disc_key_retains_generic_resolution() {
+void test_title_without_disc_key_retains_generic_resolution() {
   TestRuntime runtime;
   psxport_install_game(runtime);
   const auto game = std::make_unique<Game>();
+  psx::Machine{*game}.insertDisc(psx::host::TitleIdentity{.serial = "TEST_000.00"});
 
   CHECK_EQ(game->disc.env_key, nullptr);
 }
 
-void test_legacy_disc_key_survives_runtime_migration() {
-  GameConfig config{};
-  config.discEnvVar = "TEST_LEGACY_DISC";
-  const GameHooks hooks{};
-  LegacyGameRuntimeAdapter runtime(config, hooks);
+void test_default_admission_maps_the_executable_and_sets_top_level_registers() {
+  TestRuntime runtime;
   psxport_install_game(runtime);
   const auto game = std::make_unique<Game>();
+  std::vector<std::uint8_t> bytes(0x1000u);
+  std::memcpy(bytes.data(), "PS-X EXE", 8);
+  const auto put = [&bytes](std::size_t offset, std::uint32_t value) {
+    std::memcpy(bytes.data() + offset, &value, sizeof value);
+  };
+  put(0x10u, 0x80010010u);
+  put(0x18u, 0x80010000u);
+  put(0x1Cu, 0x800u);
+  put(0x800u, 0x03E00008u);
 
-  CHECK_EQ(game->core.cfg, &config);
-  CHECK_STREQ(game->disc.env_key, "TEST_LEGACY_DISC");
+  const psx::cpu::PsxExeLoadResult admitted = runtime.admitExecutable(game->core, bytes);
+
+  CHECK(static_cast<bool>(admitted));
+  CHECK_EQ(game->core.pc, 0x80010010u);
+  CHECK_EQ(game->core.mem_r32(0x80010000u), 0x03E00008u);
+  CHECK_EQ(game->core.r[29], 0x801FFFF0u);
+  CHECK_EQ(game->core.r[31], 0xDEAD0000u);
+
+  bytes[0] = 'X';
+  game->core.r[31] = 0u;
+  CHECK(!runtime.admitExecutable(game->core, bytes));
+  CHECK_EQ(game->core.r[31], 0u);
+}
+
+void test_an_image_with_no_program_image_declares_no_boot_entry() {
+  CHECK(psx::Machine::bootEntryRefusal(nullptr) == "the runtime declares no GuestProgramImage, so it has no bootEntry");
+  const GuestProgramImage driverOwned{.bootEntry = BootEntry::DriverOwned};
+  CHECK(psx::Machine::bootEntryRefusal(&driverOwned).empty());
+  const GuestProgramImage crt0{};
+  CHECK(psx::Machine::bootEntryRefusal(&crt0).starts_with(
+      "bootEntry=Crt0 but 8 of 8 crt0 field(s) are unset (bss.begin, "));
 }
 
 void test_repl_commands_are_game_owned_and_legacy_forwarding_is_optional() {
@@ -502,9 +529,10 @@ void test_legacy_adapter_projects_static_backdrop_policy_only_for_migration() {
 int main() {
   RUN(installation_reaches_derived_runtime);
   RUN(direct_runtime_publishes_cd_ready_callback_slot);
-  RUN(direct_runtime_publishes_disc_key_to_shared_disc_owner);
-  RUN(absent_runtime_disc_key_retains_generic_resolution);
-  RUN(legacy_disc_key_survives_runtime_migration);
+  RUN(title_disc_key_reaches_the_shared_disc_owner);
+  RUN(title_without_disc_key_retains_generic_resolution);
+  RUN(default_admission_maps_the_executable_and_sets_top_level_registers);
+  RUN(an_image_with_no_program_image_declares_no_boot_entry);
   RUN(repl_commands_are_game_owned_and_legacy_forwarding_is_optional);
   RUN(guest_address_ranges_are_validated_and_physically_normalized);
   RUN(legacy_pair_is_bounded_by_runtime_adapter);

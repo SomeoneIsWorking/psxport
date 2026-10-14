@@ -11,9 +11,11 @@ namespace `psx::host`.
 
 | File | Owner |
 | --- | --- |
-| `title_catalog.h` | `TitleIdentity` (one catalog title: serial plus file identity) and `TitleCatalog` (what a product supplies, including its provisioning root) |
-| `title_selection.{h,cpp}` | `selectExecutable`, `selectExecutableFile`: does these bytes match this catalog entry (size, PS-X EXE header words, SHA-256) |
+| `title_catalog.h` | `TitleIdentity` (one title: serial plus file identity, and its disc facts) and `TitleCatalog` (what a product supplies, including its provisioning root) |
+| `single_title_catalog.{h,cpp}` | `SingleTitleCatalog`: the catalog of a one-title product, built from the title's identity, its provisioning root and its runtime |
+| `title_selection.{h,cpp}` | `selectExecutable`, `selectExecutableFile`: does these bytes match this catalog entry (size, PS-X EXE header words, SHA-256); the file variant returns the bytes it authenticated |
 | `title_availability.{h,cpp}` | `TitleAvailabilityProbe`: which catalog titles are provisioned and authenticate at `<root>/<slug>/<serial>` right now |
+| `executable_provisioner.{h,cpp}` | `provisionExecutable`: a missing `<root>/<slug>/<serial>` extracted from the title's own disc, authenticated before it is written |
 | `title_session.{h,cpp}` | `TitleSession`: one boot-to-exit run of one title as a steppable owner; destruction is the whole teardown |
 | `session_run.h` | `SessionRun`, held per `Game` as `Game::run`: a title's request to end its run |
 | `run_budget.{h,cpp}` | `RunBudget`: the process's run cap in presentation-fence steps, decided once from `PSXPORT_NATIVE_FRAMES` |
@@ -37,10 +39,46 @@ class TitleCatalog {
 };
 ```
 
+`productName()` is the window title for every catalog, one title or several; `ProductHost` sets it on
+the presentation before the first present, and no `Game` names the window.
+
+`TitleIdentity` also carries the title's disc facts: `discEnvVar` (the environment/`.env` key read
+before `PSXPORT_DISC`), `discExecutablePath` (the boot executable's ISO9660 path, `/`-separated) and
+`defaultExecutable(root)` (`<root>/<slug>/<serial>`, the one spelling of where a provisioned executable
+lives, used by the probe, the size-1 catalog and the help text). A title still on its own loop declares
+a `TitleIdentity` for the same facts and hands it to `psx::Machine::insertDisc`.
+
 A selection means serial plus file identity, never the label. `TitleIdentity::slug` is the directory
 under `provisioningRoot()` (relative to the working directory: `scratch/assets` or `scratch/bin`), and `pick <slug>` on the control channel resolves against it. The
 catalog and the `TitleIdentity` storage must outlive the host; `TitleAvailability::index` is the
 catalog position handed back to `runtime(index)`.
+
+## Provisioning, boot entry and admission
+
+Before `ProductHost` selects anything it calls `provisionExecutable` for each catalog title whose
+`defaultExecutable` is missing (the one title of a size-1 catalog, every title before the selector's
+first probe). It opens the title's disc on its own `DiscState` keyed by `discEnvVar`, reads
+`discExecutablePath`, authenticates the bytes with `selectExecutable` against that title alone, and
+writes them only on a match. A present file is never read or rewritten. Only `ProductHost` calls it.
+
+`GuestProgramImage::bootEntry` says who enters the guest. `Crt0` (the default): the framework applies the
+image's crt0 group (`psx::Machine::setupGuestBoot` -> `crt0_setup`) and then `GameRuntime::bootInit`.
+`DriverOwned`: the framework applies no crt0; the title's frame driver enters the guest from the
+executable's entry. `TitleSession::boot` asks `psx::Machine::bootEntryRefusal` before it builds the
+`Game`: a `Crt0` image whose crt0 group is incomplete, or a runtime with no image, is refused by name
+(`bootEntry=Crt0 but 1 of 8 crt0 field(s) are unset (libcInitEntry)`) and the process exits 2.
+Tomba 2 is `Crt0`; its MAIN.EXE handoff stays in its `bootInit`.
+
+`GameRuntime::admitExecutable(core, bytes)` maps the executable and sets the entry registers. Its default is `loadPsxExeImage` plus `applyPsxExeTopLevelRegisters`; a title that publishes
+its own image identity overrides it (Crash Bash, which publishes its resident code range and sets no
+top-level registers). A refusal leaves Core unchanged and refuses the boot. The bytes reaching it are
+the ones the host authenticated against the catalog: `selectExecutableFile` (`runExecutable`) or the
+probe (the selector) returns them, `TitleAvailability::bytes` carries them into the session, and the
+file is read once. No title authenticates them again.
+
+Every boot goes through `TitleSession::boot`; the framework has no other boot spine. Crash Bash, Toy
+Story 2, Mega Man X4 and Spider-Man 1 are one-title catalogs (`SingleTitleCatalog`): no argument provisions and boots their one executable,
+and a title's own run-end lines come from `reportRun`.
 
 `GameRuntime` carries two optional virtuals the host asks, each with a neutral default:
 
@@ -75,11 +113,12 @@ picker then runs at that title's step cadence. Panel 0 starts selected and audib
 product session loads it; a title picked after a return boots from power-on). A session is a `Role::Panel` (a picker panel) or a
 `Role::Product` (the confirmed title, or the executable `runExecutable` was given).
 
-`TitleSession::boot`, in order: install the title's runtime and build its `Game`; attach the
+`TitleSession::boot`, in order: refuse a boot entry the image cannot honour; read the executable;
+install the title's runtime and build its `Game`; attach the
 `QuitScope` to its `HostInput`; panel defaults (pane route, suppressed pad, audibility, pre-roll);
-`load_exe`; `psx::Machine` `reportConfigurationOnce`, `bindDevices` (init then bind, honouring
+`psx::Machine::insertDisc` with the title's `TitleIdentity`; `GameRuntime::admitExecutable`; `psx::Machine` `reportConfigurationOnce`, `bindDevices` (init then bind, honouring
 `Pad::overridesInit`), `prepare`, `attachControlChannel`; for a product only,
-`clearDisplayForFrontEnd`; `setupGuestBoot` (crt0) and `GameRuntime::bootInit`; for the first product
+`clearDisplayForFrontEnd`; `setupGuestBoot` (the declared boot entry) and `GameRuntime::bootInit`; for the first product
 session only, `applyConfiguredState`; then the present-to-present series restarts, so the boot's gap
 is not counted as a missed present.
 
@@ -101,7 +140,8 @@ selector frame. An explicit `PSXPORT_NATIVE_FRAMES` wins; otherwise a pad replay
 a live control client leaves it uncapped, a windowed run is uncapped and a headless one stops at 120.
 This is the only place the live-client rule lives: `Machine::attachControlChannel` and
 `DbgServer::start` open the channel and answer no cap, and every loop that is not yet a
-`TitleSession` (native_boot, Tekken 3, C-12, Tomba! 1) takes its cap from `RunBudget::fromConfig`.
+`TitleSession` (`psx::Machine::run` in CTR, Tekken 3 and Vagrant Story; the own loops of C-12,
+Tomba! 1 and Spider-Man 2) takes its cap from `RunBudget::fromConfig`.
 It never counts a panel's pre-roll steps, and panels never print a run-end report, apply configured
 state or pump the REPL. `PreRollBudget` stays the pre-roll owner: how many panel steps fit in one
 selector frame's wall time.
@@ -139,12 +179,16 @@ the event drain, so it reaches the run-end report like a client `quit`.
 
 `tests/test_title_selection.cpp`, `test_title_picker.cpp` and `test_picker_layout.cpp` cover
 selection, availability, the control commands and panel geometry over a fake catalog, with no window.
-`test_run_budget.cpp` covers the cap's precedence. `psxport_product_fixture` (`tests/product_fixture_catalog.*`) is a product built by `psxport_add_product` over an empty catalog; CTest runs its `-h`/`--help` and a refused argument through `product_main.cpp`. `test_product_host_session.cpp` runs the shipping
+`test_run_budget.cpp` covers the cap's precedence. `test_executable_provisioner.cpp` extracts from the
+fixture disc `tests/fixtures/provision_disc/provision.chd` (regenerate with
+`tests/fixtures/make_provision_disc.py`) and refuses bytes that are not the title. `psxport_product_fixture` (`tests/product_fixture_catalog.*`) is a product built by `psxport_add_product` over an empty catalog; CTest runs its `-h`/`--help` and a refused argument through `product_main.cpp`. `test_product_host_session.cpp` runs the shipping
 `ProductHost` through `run(argc, argv)` over a stub catalog and frame driver on an offscreen device: help
 and refused arguments boot nothing; a one-title catalog boots without a selector; the cap, a client quit and
 a window close each reach one run-end report; a capped selector boots its panels without one; a
 window close in the selector ends it without a report; and a picked title that ends its own run
-returns to the selector, where a second pick boots without reloading `PSXPORT_LOAD_STATE`. `test_pre_roll_budget.cpp` covers the per-frame pre-roll
+returns to the selector, where a second pick boots without reloading `PSXPORT_LOAD_STATE`; a `Crt0` image
+with an incomplete crt0 group is refused by name, the same image declared `DriverOwned` boots with no
+crt0, and a missing executable is provisioned from the fixture disc and booted. `test_pre_roll_budget.cpp` covers the per-frame pre-roll
 budget and `test_frame_pacer.cpp` that a pre-rolling Game does not pace. Picker frame time is read
 from consecutive `[picker] panels:` lines of a paced run (`PSXPORT_DEBUG=picker,pacer`, no NOPACE). The headless walk (`picker`, `pick <slug>`,
 `session return`, `pick <slug>`) runs on a built port with `PSXPORT_DEBUG_SERVER` and

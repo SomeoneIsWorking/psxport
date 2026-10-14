@@ -9,9 +9,7 @@ void gte_init();
 // (native-depth cache bind moved to `class ProjPrim::bind` — call `c->rsub.projprim.bind(c)`)
 void spu_bind(Core *c); // Beetle spu.c — per-instance SPU state (lazy-powers on first bind)
 extern "C" {
-// Beetle spu.c — create and power the process SPU state that `spu_bind` binds a Core to. Declared here
-// beside the bind it precedes; two consuming repositories hand-declared it at their call site for the
-// same reason four hand-declared `native_boot_run`.
+// Beetle spu.c — create and power the process SPU state that `spu_bind` binds a Core to.
 void spu_init(void);
 }
 void mdec_bind(Core *c); // Beetle mdec.c — per-instance MDEC state (lazy-powers on first bind)

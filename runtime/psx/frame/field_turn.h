@@ -1,13 +1,8 @@
 // field_turn.h — psx::FieldTurn: the per-field services a display field owes, in one measured order.
 //
-// WHY THIS IS AN OWNER AND NOT A COMMENT. The framework's own loop in `native_boot.cpp` did six
-// things per field: answer a client pause/step, re-arm the frame watchdog, run the title's finite
-// frame step, take the frame's capture and check the presentation contract, honour
-// `PSXPORT_RAMDUMP_FRAME`, and service one queued live-channel command. `psx::Machine::stepFrame`
-// (1b) did three of them. Spider-Man 1's title-owned loop did three others. Three copies, three
-// answers, and the missing steps are silent by construction: a loop that omits the watchdog re-arm
-// cannot pause without its frame timeout armed; a loop that omits the RAM-dump frame has a knob
-// bound, audited, and read by nothing.
+// Per field: answer a client pause/step, re-arm the frame watchdog, run the title's frame step, take
+// the capture and check the presentation contract, honour `PSXPORT_RAMDUMP_FRAME`, and service one
+// queued live-channel command. A loop that skips one skips it silently.
 //
 // So the services around the frame BODY live here, once, in the order they were measured in. The body
 // itself stays the title's — `FrameLoopShell::step` calls the title's `FrameDriver::stepFrame`, takes

@@ -36,12 +36,8 @@ public:
     return device_;
   }
 
-  // The title bar's text. The window is created by the FIRST Game that brings the device up, and it
-  // used to take that Game's `HostIdentity` — which, in a selector-then-title product, is the
-  // selector's and names the window for the rest of the run. A host that owns the window owns its
-  // name: set this before the first present and it wins. Null (the default) keeps the historical
-  // behaviour of naming the window after the first Game that presents. The string must outlive this
-  // object; a `static constexpr` literal is the intended argument.
+  // The title bar's text, the product's name (TitleCatalog::productName). Set it before the first
+  // present; left null, the window is visibly untitled. The string must outlive this object.
   void setWindowTitle(const char *title) {
     device_.s_window_title = title;
   }

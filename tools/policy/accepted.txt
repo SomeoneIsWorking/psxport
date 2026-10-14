@@ -46,14 +46,6 @@ runtime/psx/boot/hw_bind.h:global-namespace function:gte_init
 runtime/psx/boot/hw_bind.h:global-namespace function:mdec_bind
 runtime/psx/boot/hw_bind.h:global-namespace function:spu_bind
 runtime/psx/boot/hw_bind.h:global-namespace function:xa_bind
-runtime/psx/boot/native_boot.cpp:global-namespace function:game_init
-runtime/psx/boot/native_boot.cpp:global-namespace function:game_main
-runtime/psx/boot/native_boot.cpp:global-namespace function:native_boot_run
-runtime/psx/boot/native_boot.cpp:global-namespace function:native_crt0
-runtime/psx/boot/native_boot.h:global-namespace function:native_boot_run
-runtime/psx/boot/native_stub.cpp:global-namespace function:native_boot_run
-runtime/psx/boot/native_stub.cpp:global-namespace function:native_scea_splash
-runtime/psx/boot/native_stub.cpp:global-namespace function:scea_dump_ppm
 runtime/psx/boot/psx_exe_image.h:global-namespace function:load_exe
 runtime/psx/cd/cd.h:global-namespace function:cd_stream_sectors_due
 runtime/psx/cd/cd_control.h:global-namespace function:cd_command_stock_sync
@@ -158,7 +150,6 @@ runtime/psx/cd/disc.cpp:global-namespace function:disc_read_raw
 runtime/psx/cd/disc.cpp:global-namespace function:disc_read_report
 runtime/psx/cd/disc.cpp:global-namespace function:disc_read_sector
 runtime/psx/cd/disc.cpp:global-namespace function:disc_state_init
-runtime/psx/cd/disc.cpp:global-namespace function:discard_media
 runtime/psx/cd/disc.cpp:global-namespace function:dup_trim
 runtime/psx/cd/disc.cpp:global-namespace function:env_from_dotenv
 runtime/psx/cd/disc.cpp:global-namespace function:iso_name_eq
@@ -1076,7 +1067,6 @@ tests/test_fallback_hazard_budget.cpp:global-namespace function:test_cross_block
 tests/test_fallback_hazard_budget.cpp:global-namespace function:test_non_hazard_fallbacks_stay_bounded_when_hazards_are_exempt
 tests/test_fmv_watchdog.cpp:global-namespace function:read_runtime_source
 tests/test_fmv_watchdog.cpp:global-namespace function:test_native_fmv_present_reports_progress
-tests/test_fmv_watchdog.cpp:global-namespace function:test_scea_present_reports_progress_without_readiness
 tests/test_frame_composer.cpp:global-namespace function:test_a_clut_resolves_to_one_the_record_sampled
 tests/test_frame_composer.cpp:global-namespace function:test_a_cut_or_a_birth_renders_the_shown_state
 tests/test_frame_composer.cpp:global-namespace function:test_a_placed_primitive_takes_the_environment_where_it_lands
@@ -1093,7 +1083,6 @@ tests/test_frame_composer.cpp:global-namespace function:test_the_render_at_t_rep
 tests/test_frame_loop_shell.cpp:global-namespace function:test_driver_committing_twice_refuses
 tests/test_frame_loop_shell.cpp:global-namespace function:test_driver_returning_without_a_fence_refuses
 tests/test_frame_loop_shell.cpp:global-namespace function:test_missing_driver_refuses_before_boot_can_run
-tests/test_frame_loop_shell.cpp:global-namespace function:test_native_boot_has_no_title_frame_body_or_fallback
 tests/test_frame_loop_shell.cpp:global-namespace function:test_repl_prompt_request_is_one_shot
 tests/test_frame_loop_shell.cpp:global-namespace function:test_shell_delegates_exactly_one_native_frame
 tests/test_frame_loop_shell.cpp:global-namespace function:test_step_before_product_preflight_refuses

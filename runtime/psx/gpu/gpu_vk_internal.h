@@ -545,7 +545,7 @@ struct GpuVkState {
 // SDL_GPU device up for `game` (once per Game), and submit a command buffer through the GPU-fault latch.
 int gpu_vk_enabled(void); // is the VK backend the active renderer
 void init_gpu(Game *game);
-void init_gpu_device(Game *game);
+void init_gpu_device();
 bool gpu_submit(SDL_GPUCommandBuffer *cmd, const char *where);
 
 // The GPU→host readback seam, shared with the readback owner (gpu_vk_readback.cpp) and with the one

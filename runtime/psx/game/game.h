@@ -28,7 +28,6 @@
 #include "memcard.h"                     // class Memcard — host-backed 128 KB memory card device
 #include "mods.h"                        // class Mods — per-Game PC-native mod toggles
 #include "native_fmv.h"                  // class Fmv — native .STR movie player
-#include "native_stub.h"                 // class BootStub — SCEA splash + MAIN.EXE LoadExec hand-off
 #include "pad_input.h"                   // class Pad — native controller input + REPL drive
 #include "platform_hle.h"                // class PlatformHle — HW-sync HLE table (VSync/CdSync/…)
 #include "render_queue.h"                // RenderQueue — the engine-owned draw-order authority
@@ -73,7 +72,6 @@ public:
   Pad pad{hostInput};
   Repl repl;                       // interactive REPL driver + title-consumed requests (repl.cpp)
   Fmv fmv;                         // native .STR movie player (native_fmv.cpp)
-  BootStub stub;                   // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
   psx::frame::PcScheduler pcSched; // native cooperative task scheduler (game/core/pc_scheduler.cpp)
   GpuState gpu;                    // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
   GpuVkState gpu_vk;               // Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)

@@ -88,6 +88,8 @@ int main() {
   const std::vector<psx::host::TitleAvailability> titles = probe.probe();
   expect(titles.size() == 3, "one entry per catalog title");
   expect(titles[0].available() && titles[0].reason.empty(), "authentic provisioned title is available");
+  expect(titles[0].bytes == good, "an available title carries the bytes it was authenticated by");
+  expect(titles[1].bytes.empty() && titles[2].bytes.empty(), "a title that is not available carries no bytes");
   expect(titles[1].status == psx::host::AvailabilityStatus::NotProvisioned && !titles[1].reason.empty(),
          "absent executable is disabled with a reason");
   expect(titles[2].status == psx::host::AvailabilityStatus::IdentityMismatch &&

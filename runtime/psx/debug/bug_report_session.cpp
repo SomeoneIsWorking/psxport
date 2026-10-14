@@ -126,7 +126,7 @@ void BugReportSession::report(Core &core) {
     return;
   }
   const HostIdentity identity = game.hostIdentity();
-  const char *application = identity.windowTitle != nullptr    ? identity.windowTitle
+  const char *application = !mProductName.empty()              ? mProductName.c_str()
                             : identity.userDataName != nullptr ? identity.userDataName
                                                                : kFallbackUserDataName;
   std::string error;

@@ -214,7 +214,7 @@ static void test_agreeing_x4_shape_passes(void) {
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
 // CASE 2: THE PRE-FIX FRAMEWORK'S OWN BUG. The guest has no bias instruction; the config claims -8 (what
-// native_boot.cpp hardcoded for every consumer). The audit must REFUSE and name `stackBias`.
+// the first crt0 applier hardcoded for every consumer). The audit must REFUSE and name `stackBias`.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
 static void test_wrong_bias_is_refused_and_named(void) {
   FakeRam ram;

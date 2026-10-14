@@ -1,17 +1,16 @@
 // test_producer_census_arm.cpp — THE PSXPORT_PRODUCERS KNOB MUST ARM ON EVERY RUNTIME'S ROUTE.
 //
 // WHAT THIS GATES (the defect it was written RED against, 2026-08-25): the producer-census arm
-// `g_producer_census_armed` (ot_attr.h, default true) was assigned ONLY inside native_boot_run
-// (native_boot.cpp), a path that ports booting through GameRuntime::bootInit — Tekken 3 is the
+// `g_producer_census_armed` (ot_attr.h, default true) was assigned ONLY inside the framework's
+// own boot spine, a path that ports booting through GameRuntime::bootInit — Tekken 3 is the
 // measured case — NEVER execute. There, PSXPORT_PRODUCERS=0 silently changed nothing: the knob's own
 // help text says it exists "to price the census", so an A/B that cannot reach the arm prices nothing.
 //
 // THE FIX UNDER TEST: the arm moves into `Game`'s constructor (game.cpp) — a path EVERY runtime
-// executes exactly once per Game. native_boot_run itself dereferences c->game, so no runtime can
-// reach guest execution before constructing a Game; arming there preserves the old site's
-// before-guest-execution guarantee (and is strictly earlier). The assignment is idempotent, so SBS's
-// two Games each re-arm identically, and case 3 proves the value REFRESHES per construction rather
-// than being a one-shot at process start.
+// executes exactly once per Game. No runtime can reach guest execution before constructing a Game; arming there
+// preserves the old site's before-guest-execution guarantee (and is strictly earlier). The assignment is idempotent, so
+// SBS's two Games each re-arm identically, and case 3 proves the value REFRESHES per construction rather than being a
+// one-shot at process start.
 //
 // ENV RESOLUTION (verified in config_var.h/config.cpp): CVars self-register in their constructor and
 // bind their Override layer LAZILY on first get() — ensure_env_bound has "no init call to forget"

@@ -23,6 +23,8 @@ struct SelectionResult {
   const TitleIdentity *identity;
   std::string detail;
   std::size_t index = 0; // catalog position of `identity`; meaningful when identity is set
+  // selectExecutableFile only: the bytes it authenticated, when Selected; what the session admits.
+  std::vector<std::uint8_t> bytes;
 
   explicit operator bool() const {
     return status == SelectionStatus::Selected;

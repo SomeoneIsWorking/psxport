@@ -30,7 +30,7 @@
 // state=1 and FUN_800506d0 (called later in the frame) re-arms 1->2. This makes the cooperative
 // handshakes work — e.g. task0's FUN_80044bd4 busy-waits (yielding) for DAT_1f80019b while the
 // loader it spawned (task1) runs to completion across frames and sets the flag.
-// (TASKBASE/TASKSTRIDE/CUR_TASK live in scheduler.h — shared with native_boot.cpp's REPL/debug probes.)
+// (TASKBASE/TASKSTRIDE/CUR_TASK live in scheduler.h — shared with the REPL/debug probes.)
 
 // The cooperative-scheduler state (yield jmp_buf, per-task saved R3000 regs, run flags) is per-instance:
 // it lives on Game as class psx::frame::PcScheduler (runtime/psx/frame/pc_scheduler.h), reached via c->game->pcSched. A

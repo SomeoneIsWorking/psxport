@@ -7,6 +7,7 @@
 #include "core.h"
 #include "dbg_server.h"
 #include "frame_presenter.h"
+#include "fs_util.h"
 #include "game.h"
 #include "game_runtime.h"
 #include "guest_program_image.h"
@@ -83,6 +84,12 @@ struct Script {
   std::filesystem::path saveStateTo;  // a product saves its machine here after its first step
   std::filesystem::path consumeState; // the first product deletes this file at its first step
   std::string card;                   // the memory card every session opens, so a state can carry it
+  std::string discKey;                // the disc key the product's Game resolves its image through
+  BootEntry bootEntry = BootEntry::Crt0;
+  bool crt0Incomplete = false; // the image leaves libcInitEntry unset
+  // Overwritten with zeros when the session first asks for the image, after the host selected it.
+  std::filesystem::path rewriteAtBoot;
+  bool fileBugReport = false; // the product files a scripted bug report at its first step
 };
 
 void closeWindow() {
@@ -128,6 +135,7 @@ public:
     }
     if (session_ == 0) {
       session_ = ++script_.productSessions;
+      script_.discKey = game_.disc.env_key != nullptr ? game_.disc.env_key : "";
     }
     ++steps_;
     if (script_.steps == script_.quitAtStep) {
@@ -140,6 +148,9 @@ public:
     if (steps_ == 1 && !script_.saveStateTo.empty()) {
       std::string error;
       CHECK(psx::state::save(core, script_.saveStateTo.string(), error));
+    }
+    if (steps_ == 1 && script_.fileBugReport) {
+      game_.bugReport.requestScripted("fixture report");
     }
     if (session_ == 1 && steps_ == 1 && !script_.consumeState.empty()) {
       std::filesystem::remove(script_.consumeState);
@@ -169,7 +180,8 @@ public:
     image_.stackReserveWordAddress = kStackReserveWord;
     image_.heapBase = 0x80020000u;
     image_.globalPointer = 0x80018000u;
-    image_.libcInitEntry = kTextAddress;
+    image_.bootEntry = script.bootEntry;
+    image_.libcInitEntry = script.crt0Incomplete ? 0u : kTextAddress;
     image_.stackBias.declared = true;
     image_.stackBias.bytes = -8;
     image_.residentText = {kTextAddress & 0x1FFFFFFFu, (kTextAddress + kTextSize) & 0x1FFFFFFFu};
@@ -198,6 +210,12 @@ public:
     return &plan_;
   }
   const GuestProgramImage *guestProgramImage() const override {
+    if (!script_.rewriteAtBoot.empty()) {
+      const std::vector<char> zeros(0x800u + kTextSize, 0);
+      std::ofstream(script_.rewriteAtBoot, std::ios::binary)
+          .write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
+      script_.rewriteAtBoot.clear();
+    }
     return &image_;
   }
   std::unique_ptr<FrameDriver> createFrameDriver(Game &game) override {
@@ -216,8 +234,8 @@ class Catalog final : public psx::host::TitleCatalog {
 public:
   Catalog(Script &script, const std::string &sha256, std::filesystem::path root, std::size_t count = 2)
       : sha256_(sha256), root_(std::move(root)), count_(count), runtimes_{Runtime(script), Runtime(script)} {
-    titles_[0] = identity("One", "SCUS_000.01", "alpha");
-    titles_[1] = identity("Two", "SCUS_000.02", "beta");
+    titles_[0] = identity("One", "SCUS_000.01", "alpha", "PSXPORT_TEST_ALPHA_DISC");
+    titles_[1] = identity("Two", "SCUS_000.02", "beta", "PSXPORT_TEST_BETA_DISC");
   }
   std::string_view productName() const override {
     return "Product host test";
@@ -231,9 +249,12 @@ public:
   GameRuntime &runtime(std::size_t index) const override {
     return runtimes_[index];
   }
+  void replaceFirst(const psx::host::TitleIdentity &title) {
+    titles_[0] = title;
+  }
 
 private:
-  psx::host::TitleIdentity identity(const char *name, const char *serial, const char *slug) const {
+  psx::host::TitleIdentity identity(const char *name, const char *serial, const char *slug, const char *discKey) const {
     return psx::host::TitleIdentity{.displayName = name,
                                     .serial = serial,
                                     .slug = slug,
@@ -244,7 +265,8 @@ private:
                                     .textAddress = kTextAddress,
                                     .textSize = kTextSize,
                                     .stackAddress = kStackAddress,
-                                    .stackOffset = 0u};
+                                    .stackOffset = 0u,
+                                    .discEnvVar = discKey};
   }
 
   std::string sha256_;
@@ -329,6 +351,64 @@ static void test_a_session_ends_on_its_cap_counted_in_fence_steps(void) {
   CHECK_EQ(fixture.count("run complete: product_steps=5 presentation_fences=5 "), 1);
   CHECK_EQ(fixture.count("reached its run budget of 5 step(s)"), 1);
 }
+
+namespace {
+
+// The Game reads its disc through the chosen title's own key, not one the runtime declares.
+void test_a_product_reads_its_titles_own_disc_key() {
+  Fixture fixture;
+  Script script;
+  const Catalog catalog(script, fixture.sha256, fixture.root);
+  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 1);
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host, {(fixture.root / "beta/SCUS_000.02").string()}), 0);
+  }
+  CHECK_EQ(script.productSessions, 1u);
+  CHECK(script.discKey == "PSXPORT_TEST_BETA_DISC");
+}
+
+// The session admits the bytes the host authenticated; the file is not read a second time.
+void test_the_session_admits_the_bytes_the_host_authenticated() {
+  Fixture fixture;
+  Script script;
+  script.rewriteAtBoot = fixture.alpha;
+  const Catalog catalog(script, fixture.sha256, fixture.root);
+  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 1);
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
+  }
+  CHECK(script.rewriteAtBoot.empty());
+  CHECK_EQ(script.productSessions, 1u);
+  CHECK_EQ(fixture.count("run complete: product_steps=1 "), 1);
+}
+
+// A bug report is filed under the product's name, the one the window shows.
+void test_a_bug_report_is_filed_under_the_product_name() {
+  Fixture fixture;
+  Script script;
+  script.fileBugReport = true;
+  const Catalog catalog(script, fixture.sha256, fixture.root);
+  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 4);
+  psx::config::cv_bug_report_dir.set(psx::config::Layer::Runtime, (fixture.root / "reports").string());
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
+  }
+  psx::config::cv_bug_report_dir.clear(psx::config::Layer::Runtime);
+  int reports = 0;
+  for (const auto &entry : std::filesystem::recursive_directory_iterator(fixture.root / "reports")) {
+    if (entry.path().filename() == "report.json") {
+      ++reports;
+      const std::vector<std::uint8_t> json = Fs::readFile(entry.path().string());
+      CHECK(std::string(json.begin(), json.end()).find("\"application\": \"Product host test\"") != std::string::npos);
+    }
+  }
+  CHECK_EQ(reports, 1);
+}
+
+} // namespace
 
 static void test_a_client_quit_reaches_the_run_end_report(void) {
   Fixture fixture;
@@ -563,6 +643,77 @@ static void test_a_single_title_catalog_skips_the_selector(void) {
   CHECK_EQ(fixture.count("run complete: product_steps=3 "), 1);
 }
 
+namespace {
+
+// A Crt0 title whose image leaves its crt0 group incomplete is refused by name before its Game exists.
+void test_a_crt0_title_with_an_incomplete_group_is_refused_by_name() {
+  Fixture fixture;
+  Script script;
+  script.crt0Incomplete = true;
+  const Catalog catalog(script, fixture.sha256, fixture.root, 1);
+  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 3);
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host), 2);
+  }
+  CHECK_EQ(script.steps, 0u);
+  CHECK_EQ(
+      fixture.count("One (SCUS_000.01) refused: bootEntry=Crt0 but 1 of 8 crt0 field(s) are unset (libcInitEntry)"), 1);
+  CHECK_EQ(fixture.count("run complete"), 0);
+}
+
+// The same image declared DriverOwned boots: the framework applies no crt0 and leaves the entry to the driver.
+void test_a_driver_owned_title_boots_without_the_framework_crt0() {
+  Fixture fixture;
+  Script script;
+  script.crt0Incomplete = true;
+  script.bootEntry = BootEntry::DriverOwned;
+  const Catalog catalog(script, fixture.sha256, fixture.root, 1);
+  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 2);
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host), 0);
+  }
+  CHECK_EQ(script.steps, 2u);
+  CHECK_EQ(fixture.count("crt0_setup:"), 0);
+  CHECK_EQ(fixture.count("run complete: product_steps=2 "), 1);
+}
+
+// A one-title product whose executable is missing extracts it from the title's own disc, then boots it.
+void test_a_missing_executable_is_provisioned_from_the_title_disc() {
+  Fixture fixture;
+  const std::filesystem::path fixtures = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "provision_disc";
+  const std::vector<std::uint8_t> bytes = Fs::readFile((fixtures / "SLUS_000.01").string());
+  const std::string sha256 = lucent::content::sha256_hex(lucent::content::sha256(std::as_bytes(std::span(bytes))));
+  CHECK_EQ(setenv("PSXPORT_TEST_PROVISION_DISC", (fixtures / "provision.chd").c_str(), 1), 0);
+  Script script;
+  script.bootEntry = BootEntry::DriverOwned;
+  Catalog catalog(script, fixture.sha256, fixture.root, 1);
+  catalog.replaceFirst(psx::host::TitleIdentity{.displayName = "Disc",
+                                                .serial = "SLUS_000.01",
+                                                .slug = "gamma",
+                                                .fileSize = bytes.size(),
+                                                .sha256 = sha256,
+                                                .entry = kTextAddress,
+                                                .globalPointer = 0u,
+                                                .textAddress = kTextAddress,
+                                                .textSize = kTextSize,
+                                                .stackAddress = kStackAddress,
+                                                .stackOffset = 0u,
+                                                .discEnvVar = "PSXPORT_TEST_PROVISION_DISC",
+                                                .discExecutablePath = "BOOT/SLUS_000.01"});
+  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 2);
+  {
+    psx::host::ProductHost host(catalog);
+    CHECK_EQ(run(host), 0);
+  }
+  CHECK(Fs::readFile((fixture.root / "gamma/SLUS_000.01").string()) == bytes);
+  CHECK_EQ(fixture.count("extracted BOOT/SLUS_000.01 from Disc's disc"), 1);
+  CHECK_EQ(fixture.count("run complete: product_steps=2 "), 1);
+}
+
+} // namespace
+
 int main(void) {
   std::atexit(refuseEarlyExit);
   // The product boot clears the display, which presents through a real (headless) GPU device.
@@ -571,7 +722,13 @@ int main(void) {
   RUN(help_names_the_product_and_boots_nothing);
   RUN(unexpected_arguments_are_refused);
   RUN(a_single_title_catalog_skips_the_selector);
+  RUN(a_crt0_title_with_an_incomplete_group_is_refused_by_name);
+  RUN(a_driver_owned_title_boots_without_the_framework_crt0);
+  RUN(a_missing_executable_is_provisioned_from_the_title_disc);
   RUN(a_session_ends_on_its_cap_counted_in_fence_steps);
+  RUN(a_product_reads_its_titles_own_disc_key);
+  RUN(the_session_admits_the_bytes_the_host_authenticated);
+  RUN(a_bug_report_is_filed_under_the_product_name);
   RUN(a_client_quit_reaches_the_run_end_report);
   RUN(a_window_close_reaches_the_run_end_report);
   RUN(panels_report_nothing_load_no_state_and_leave_the_watchdog_armed);
