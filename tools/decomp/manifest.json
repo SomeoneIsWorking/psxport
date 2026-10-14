@@ -134,6 +134,13 @@
       "text_size": "0xB6800",
       "note": "Neversoft. Reaches library routines through jalr function pointers, so a jal-only census reads 0 for every one of them."
     },
+    "spiderman2": {
+      "kind": "resident",
+      "serial": "SLUS_013.78",
+      "text_load_address": "0x80010000",
+      "text_file_offset": "0x800",
+      "text_size": "0xBF800"
+    },
     "tekken3": {
       "kind": "resident",
       "serial": "SLUS_004.02",
