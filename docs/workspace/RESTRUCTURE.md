@@ -87,13 +87,13 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 ### 3.3 Renderer
 
 - Beetle `gpu.c` is the only VRAM and the only GP0 executor.
-- `RenderPath = {Record, Device}`. Device is the oracle and diagnostic view.
+- `RenderPath = {Record, Gte, Device}`. Gte serves Tomba 1 only; Device is the oracle and diagnostic view.
 - `FrameComposer` builds every in-between from `StateProducer` renders of saved state, with the shown record as the base. No packet lerp and no keyed blend. `DisplayPassGuard` aborts a guest-memory write inside `StateProducer::render`.
 - recordcheck covers t=1 only. In-betweens are covered by per-producer unit tests through `composeFrame`.
 - SDL3 GPU stays. `gpu_vk.cpp` (3,592 lines) splits into `gpu_vk_present.cpp` and `gpu_vk_submit.cpp`, each under 1,200 lines.
 - **Deleted.**
   - Native: `gpu_native*` (the second VRAM), `render_queue*`, `gpu_painter`, `painter_object_layer`, `face_contest`, `proj_prim`, `ot_lifo_depth`, `guest_packet_filter`, `render_noise`, `native_composite_capture`, `fade_interpolation`, `fps60*`, `host_world_pass_strategy`, `game_hooks_opt`, `gpu_vk_depth`, `gpu_vk_semi_order`, the PC-rasterizer selftests.
-  - Gte: `guest_geometry_interpolation`, `guest_geometry_scene_source`, `projection_provenance`, `in_between_splice`, `in_between_strategy.h`, `wide_2d_layout`, the render_path_control player cycle.
+  - Gte guest-geometry interpolation (Tomba 1 stays on Gte for widescreen; (c) keeps only the Gte pieces it uses): `guest_geometry_interpolation`, `guest_geometry_scene_source`, `projection_provenance`, `in_between_splice`, `in_between_strategy.h`, `wide_2d_layout`, the render_path_control player cycle.
   - `keyed_blend.*`.
   - Mods `face_order` and `debug_*`.
   - Env knobs RQ, ZFIGHT, ZBIAS, PAINTER, PAINTFG, PRIMDUMP, POLYDUMP, TEXWATCH, CLUTWATCH, GP0RAW, FADEDBG, VRAMDUMP, CLOBBERDUMP.
@@ -123,7 +123,7 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 
 ### 3.5 Include split
 
-- Titles see only the title API: `game/` (`game.h`, `game_runtime.h` with `FrameDriver`, `crt0_boot.h`, `psx_exe_image.h`, `title_settings.h`, `guest_packet_pool_windows.h`), `host/title_catalog.h`, `host/single_title_catalog.h`, `present/state_producer.h`, `present/frame_composer.h` (`PrimitiveSink`), `present/guest_widescreen_projection.h`, `present/gte_control.h` (`GteGuard`), `core.h` guest memory, `cpu/gte.h`, `cpu/gte_registers.h`, `frame/logic_frame.h`, `input/pad_delivery.h`, `input/input_phase.h`, `host/logo_image.h`, `core/guest_address_range.h`, `core/guest_code_module.h`, the guest-call seam in `runtime/cpu/` (`execution_exit.h`, `execution_control.h`, `guest_call.h`, `native_dispatch.h`, `image_identity.h`, `lightrec_executor.h` for the frame driver's turn), `config/config_var.h`, `config/enhancement_gate.h` and `config/stepped_range.h` (title `pc_enh` knobs), and the stock classes (`cd/stock_libcd.h`, `hle/stock_*.h`, `input/stock_pad_buffers.h`). C-12's pass needed every header added here; tests may also include `hle/platform_hle.h` to observe a stock binding and `frame/frame_loop_shell.h` to step a `FrameDriver` through the product loop.
+- Titles see only the title API: `game/` (`game.h`, `game_runtime.h` with `FrameDriver`, `crt0_boot.h`, `psx_exe_image.h`, `title_settings.h`, `guest_packet_pool_windows.h`), `host/title_catalog.h`, `host/single_title_catalog.h`, `present/state_producer.h`, `present/frame_composer.h` (`PrimitiveSink`), `present/guest_widescreen_projection.h`, `present/gte_control.h` (`GteGuard`), `core.h` guest memory, `cpu/gte.h`, `cpu/gte_registers.h`, `frame/logic_frame.h`, `input/pad_delivery.h`, `input/input_phase.h`, `host/logo_image.h`, `core/guest_address_range.h`, `core/guest_code_module.h`, the guest-call seam in `runtime/cpu/` (`execution_exit.h`, `execution_control.h`, `guest_call.h`, `native_dispatch.h`, `image_identity.h`, `lightrec_executor.h` for the frame driver's turn), `config/config_var.h`, `config/enhancement_gate.h` and `config/stepped_range.h` (title `pc_enh` knobs), and the stock classes (`cd/stock_libcd.h`, `hle/stock_*.h`, `input/stock_pad_buffers.h`). C-12's pass needed every header added here; Tomba's added `platform/coro.h` (the continuation a title `TaskScheduler` runs its tasks on), `core/guest_abi.h` (the guest stack frame a native body mirrors), `present/emit_memory.h` and `present/blend.h` (a producer's guest memory and its blends), and `cpu/resumable_guest_call.h`. Tests may also include `hle/platform_hle.h` to observe a stock binding, `frame/frame_loop_shell.h` to step a `FrameDriver` through the product loop, `stub_game_runtime.h` (`psxport_test_support`) for a Game with no title, and `boot/hw_bind.h` (`psxport_internal`) for `gte_init` in a GTE-driven test.
 - Leaks to close before `gpu/` and `cpu/` go private: `core.h` includes `gpu/gpu_device.h`; `game_runtime.h` includes `gpu/render_capabilities.h` (gone with `RenderCapabilities` in (c)); `game/psx_exe_image.h` includes `runtime/cpu/image_identity.h`; the packet-pool layouts live in `gpu/guest_packet_pool_windows.h` (moved to `game/` in (a)). Core also holds `GpuDevice`, `OtTables` and `RenderSubstrate` (gpu/, debug/) by value, so `gpu/` cannot go private until (c) shrinks RenderSubstrate or Core holds them behind a pointer.
 - `boot/`, the `host/` internals, `gpu/` and the `cpu/` internals are PRIVATE in `psxport.cmake`.
 - Title includes today: core 15-375 per repo, gpu up to 124 (Spyro), present up to 33 (Crash Bash), config up to 97 (Tomba). Each title's pass removes its own.
@@ -205,7 +205,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | product: scheduler | Moves into `game/core/sched/`, and the code is cut from psxport in this brief. The 12 hook sites become direct `Engine` calls. `test_synchronous_task_wait` and `test_task_slot_layout` move here. Read Tomba 1's `GuestTaskBudget` first, so no second scheduler is made. |
 | product: CD | The chokepoints become Tomba overrides, cut from psxport in this brief. cdCommand/cdSync/cdReadPrim/cdInit use the stock classes only where Ghidra shows a stock body. |
 | product: keys | Issue 0033: resolve the ambiguous writers `0x8007E6DC`, `0x8003C2D4`, `0x8002AB5C`, `0x80106824`, `0x8007E1B8` and `0x8007E9C8` into producers. |
-| product: Tomba 1 | Moves from Gte to Record. |
+| product: Tomba 1 | Stays on Gte: it is native 60 fps and never interpolates. The pass records which Gte pieces it uses. |
 | product: other | `tp` becomes a Tomba command; delete `extern tomba_repl_command`; `asset.cpp:316 gpu_native_load_image` becomes a device upload; `render_noise.h` and `gpu_vk_fadewatch.cpp` lose their Tomba addresses |
 | deletes | `game/core/entry/{game_hooks.cpp, game_config.cpp, title_facts.h}`, the `getenv` in `graphics_bind.cpp` and two `ai/beh_*` files, the 61 function-local and 7 mutable file-scope statics |
 | docs | The codemap's Guest address index moves to `docs/guest-addresses.md`. `titles/tomba1`'s per-directory READMEs become codemap rows. Codemap 1,263 lines to 150 or fewer. |
@@ -300,7 +300,7 @@ Code that moves from psxport into a title (the Tomba scheduler and CD) is cut fr
   - `PresentLedger` moves to the presenter; `PresentInputs` come from the device display area and `displayHeight()`.
   - Record and Device pictures feed `build_present_image` with no `upload_vram`/`render_geom`; drop `rq.flush` and RqItem capture for Record cores.
   - Keep 24bpp/FMV and `present_fade_rgb`. `DisplayPassGuard` already exists.
-- **Renderer.** Everything in section 3.3's delete list; `RenderPath` becomes `{Record, Device}`; delete `GpuDevice::sInstance` and the `s_*` macros; then split `gpu_vk.cpp` (it fits two files only after the Native code is gone).
+- **Renderer.** Everything in section 3.3's delete list; `RenderPath` becomes `{Record, Gte, Device}`; delete `GpuDevice::sInstance` and the `s_*` macros; then split `gpu_vk.cpp` (it fits two files only after the Native code is gone).
 - **Internal-only conversions.** These touch no title: device classes, debug singletons, dead functions, block-scope externs, and non-Beetle `extern "C"`. psxport's own GTE, config and logging callers move as well.
 - **Enforcement.** `Core` holds `gpu/`/`cpu/` internals behind its own owners so `core.h` stops exposing them; apply the PRIVATE split; empty psxport's `accepted.txt` (1,905 lines); trim `PSXPORT_CAPS`; align `.clang-tidy`.
 - **Docs.** psxport `features.md`, the slim codemap, `presentation.md`; delete `one-renderer.md` and `presentation-contract.md`.
@@ -337,7 +337,7 @@ Code that moves from psxport into a title (the Tomba scheduler and CD) is cut fr
 | item | why it is not mechanical | risk |
 |---|---|---|
 | Spyro 1 to Record | It needs RE of the `0x8001ED5C` tail, culls and HUD anchors, and five producer families moved out of about 40k lines of native render | It is the long pole; the titles after it wait unbuildable while it runs. Draw order becomes retail OT order, so pops the depth order hid (issue 0120) come back. That is the intended oracle-exact result. |
-| Gte to Record (S3, T1, SM1, SM2, C3) | The culling was widened for the Gte centre | Margin pop-in at 16:9. Spyro 3 loses 60 fps unless its terrain producer lands in the same brief. |
+| Gte to Record (S3, SM1, SM2, C3) | The culling was widened for the Gte centre | Margin pop-in at 16:9. Spyro 3 loses 60 fps unless its terrain producer lands in the same brief. |
 | keyed-blend removal | TS2 0040/0041 and Tomba 0033 need RE to become producers | Any object left keyed-only shows its shown-record position in the in-between, which is visible judder. |
 | stock HLE classes replace `PlatformHlePlan` | Same functions at the same addresses, but now bound by the title | A missed binding changes CD, VSync or DMA timing. X4's DMA-3 STR path changes branch. |
 | Tomba scheduler and CD out of psxport | stock versus non-stock libcd is decided per function in Ghidra | The DMA callback comes from the native registry instead of the guest slot. |
