@@ -8,7 +8,7 @@ Measured on the tree as of 2026-10-13, then corrected by an adversarial review o
 - **Lands whole.** `external/psxport` is a live symlink, so a psxport signature change breaks every caller at once. The psxport change and every title edit it forces land in the same push window. No old function is kept for compatibility.
 - **Gate.** Each touched repo runs the gate from `~/repo/psx/CLAUDE.md` on its touched targets only; untouched titles only have to build. Then every title the milestone reaches is boot-smoked: built binary, hidden window, `PSXPORT_NATIVE_FRAMES` (the run's frame cap) set, and it must reach that title's documented boot milestone. Agents never run `run.sh`.
 - **Structural rules, few and permanent.** Rules extend the existing re-harness `tools/cpp_policy.py` and `tools/codemap.py`, called once from psxport `tools/check_cpp_style.py`. Only three kinds: the `entry point` rule, the existing global-function/extern/block-static rules with per-repo `accepted.txt` lists that only shrink, and retired names a title could plausibly re-add (`watchdog_init`, `gte_bind`, `spu_bind`, `mdec_bind`, `load_exe`, `store_observe_attach` outside psxport). No temporary count ratchets, no listing files; a deleted symbol already fails to compile.
-- **Play check (PC).** Runs once at the end of each phase (after M8, M15, M26, M35), not per milestone. A milestone's "Play check" line names the titles the next phase-end check must cover. A failure the previous phase-end check already showed is a known defect with an issue file; it is fixed in its own brief, not re-measured.
+- **Play check (PC).** Runs once at the end of each phase (after M8, M15, M26, M35), not per milestone. A milestone's "Play check" line names the titles the next phase-end check must cover. No run of the current port is a reference: the criteria below are absolute, and "an earlier run showed it too" never passes a failure. Each failure gets one issue file and is fixed in its own brief, not re-measured.
   - **Setup.** Launch the built binary directly, in a visible vsynced window on the user's session. Do not use the hidden mode, because it disables vsync.
   - **Getting there.** Reach the content through the title's existing pad replay or debug warp, never by steering. Run at least 60 s of gameplay per title.
   - **Numbers.** They come from the run-end report added in M1:
@@ -18,7 +18,6 @@ Measured on the tree as of 2026-10-13, then corrected by an adversarial review o
   - **Pass.**
     - 0 underruns and 0 drops after boot.
     - Missed-vsync intervals at most 0.5%, and never 2 in a row.
-    - p99 within +10% of the previous phase-end check on the same machine.
     - The stability invariant holds.
   - **Order.** Spyro titles always run first, then the others in the order listed.
   - **Routes.** Crash Bash, Mega Man X4 and Tekken 3 have neither a warp nor a replay; Spyro, CTR, Vagrant, C-12, Spider-Man and TS2 have no warp. M0 adds the missing route before that title's first play check.
