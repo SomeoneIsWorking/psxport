@@ -35,6 +35,9 @@
 // returns, and the delivery must find it owed rather than already taken.
 #pragma once
 
+#include <cstdint>
+#include <span>
+
 class Core;
 
 // What one call to the handler did with the completion it found, or refused to find.
@@ -58,3 +61,11 @@ enum class CdReadyDelivery {
 // Deliver at most ONE owed data-ready completion to the guest's registered ready callback. Every
 // `NothingOwed` leaves the completion owed, and the register context is restored on every path.
 [[nodiscard]] CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core);
+
+// The handler's service of the CURRENT controller response, whatever its type: drain its bytes into
+// `response` (the rest zeroed), retire the CD line, acknowledge the controller and fold the edge that
+// acknowledge raises for a response queued behind it. Returns the response type, 0 when none is
+// current. The one owner of that sequence; a title that serves libcd's CdReady natively calls it too.
+namespace psx::cd {
+std::uint8_t acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> response);
+} // namespace psx::cd

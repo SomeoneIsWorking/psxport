@@ -217,7 +217,7 @@ bool GpuVkState::retainFilledPresentImage() {
     if (probe.pixels != nullptr) {
       SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
     }
-    return false; // keep what is held: a fade or a load screen is not a reason to show nothing
+    return s_present_filled != nullptr; // keep what is held: a fade or a load screen is not a reason to show nothing
   }
   if (s_present_filled == nullptr || s_present_filled_w != s_present_img_w || s_present_filled_h != s_present_img_h) {
     if (s_present_filled != nullptr) {
@@ -260,7 +260,7 @@ bool GpuVkState::retainFilledPresentImage() {
   const bool submitted = gpu_submit_and_wait(cmd, "present filled upload");
   SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
   if (!submitted) {
-    return false; // the held frame stays as it was
+    return s_present_filled != nullptr; // the held frame stays as it was
   }
   s_present_filled_viewport = s_present_viewport;
   return true;

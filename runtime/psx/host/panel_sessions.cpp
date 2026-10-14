@@ -317,7 +317,7 @@ std::unique_ptr<TitleSession> PanelSessions::confirm() {
   return session;
 }
 
-void PanelSessions::report() const {
+std::string PanelSessions::summary() const {
   std::string line = "panels:";
   for (int panel = 0; panel < count(); ++panel) {
     const bool isSelected = panel == selected_;
@@ -328,7 +328,11 @@ void PanelSessions::report() const {
                         panelReady(panel) ? (panelSettled(panel) ? "demo" : "picture")
                                           : (booted_[static_cast<std::size_t>(panel)] ? "booting" : "cold"));
   }
-  lucent::debug("picker", "{}", line);
+  return line;
+}
+
+void PanelSessions::report() const {
+  lucent::debug("picker", "{}", summary());
 }
 
 } // namespace psx::host

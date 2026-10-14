@@ -134,7 +134,9 @@ void cdc_begin_read(CdcState *s, uint32_t lba);
 // controller's reading state or tells the guest's interrupt handler, so a guest that reads its libcd
 // status word after a Pause (Spyro 2's XA state machine) would otherwise see "reading" forever.
 void cdc_issue_command(CdcState *s, uint8_t command);
-int cdc_take_current_response(CdcState *s, uint8_t *first_byte);
+// Drain the current response's bytes, keeping the first `capacity` in `bytes` (null keeps none). Returns
+// how many the response held; 0 means no response bytes were readable.
+int cdc_take_current_response(CdcState *s, uint8_t *bytes, int capacity);
 // Mirror a Setmode the native CD layer intercepted into the controller model. Bit 0x20 decides
 // whether the data FIFO presents whole sectors (header + subheader + data) or user data only, and a
 // streaming reader depends on that framing to identify sector types.

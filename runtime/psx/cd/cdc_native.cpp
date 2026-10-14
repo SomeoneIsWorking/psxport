@@ -619,24 +619,17 @@ void cdc_issue_command(CdcState *s, uint8_t command) {
   // function's.
 }
 
-int cdc_take_current_response(CdcState *s, uint8_t *first_byte) {
+int cdc_take_current_response(CdcState *s, uint8_t *bytes, int capacity) {
   const int savedBank = s->index;
-  uint8_t first = 0;
   int taken = 0;
-  for (int i = 0;; i++) {
-    if ((cdc_read(s, CDC_REG_INDEX) & CDC_STAT_RESPONSE_READY) == 0u) {
-      break;
-    }
+  while ((cdc_read(s, CDC_REG_INDEX) & CDC_STAT_RESPONSE_READY) != 0u) {
     const uint8_t value = (uint8_t)cdc_read(s, CDC_REG_RESPONSE);
-    if (i == 0) {
-      first = value;
+    if (bytes && taken < capacity) {
+      bytes[taken] = value;
     }
-    taken = 1;
+    taken++;
   }
   cdc_write(s, CDC_REG_INDEX, (uint8_t)savedBank);
-  if (taken && first_byte) {
-    *first_byte = first;
-  }
   return taken;
 }
 

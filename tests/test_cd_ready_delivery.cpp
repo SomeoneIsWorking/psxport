@@ -28,7 +28,9 @@
 #include "native_dispatch.h"
 #include "testutil.h"
 
+#include <array>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace {
@@ -557,6 +559,34 @@ void test_a_non_data_ready_response_is_not_a_ready_completion() {
   delete game.release();
 }
 
+// The acknowledge a title's native CdReady shares with this handler serves any response type: the
+// bytes come back, the line is retired, and the response queued behind it becomes current and latched.
+void test_acknowledge_serves_the_current_response_and_exposes_the_next() {
+  auto game = freshDirectGame();
+  armCdLine(*game);
+  queueResponse(*game, 3u);
+  queueResponse(*game, 2u);
+  latchCdLine(*game);
+  game->cdc.index = 2;
+
+  std::array<uint8_t, 8> response{};
+  response.fill(0xEEu);
+  CHECK_EQ(psx::cd::acknowledgeCurrentCdResponse(game->core, response), 3u);
+  CHECK_EQ(response[0], 0x22u);
+  CHECK_EQ(response[1], 0u);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 2u);
+  CHECK((game->hle.i_stat & (1u << 2u)) != 0u);
+  CHECK_EQ(game->cdc.index, 2);
+  CHECK_EQ(callbackCalls, 0);
+
+  CHECK_EQ(psx::cd::acknowledgeCurrentCdResponse(game->core, std::span<uint8_t>{}), 2u);
+  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  CHECK_EQ(game->hle.i_stat & (1u << 2u), 0u);
+  CHECK_EQ(psx::cd::acknowledgeCurrentCdResponse(game->core, response), 0u);
+  CHECK_EQ(response[0], 0u);
+  delete game.release();
+}
+
 // A completion with nothing installed to receive it is left owed, not consumed: the guest installs
 // its callback during CdInit and the first INT1 can arrive on the boundary.
 void test_no_installed_callback_leaves_the_completion_owed() {
@@ -914,6 +944,7 @@ int main() {
   RUN(the_framework_cd_arm_runs_on_the_exception_stack);
   RUN(masked_cd_line_owes_the_completion);
   RUN(a_non_data_ready_response_is_not_a_ready_completion);
+  RUN(acknowledge_serves_the_current_response_and_exposes_the_next);
   RUN(no_installed_callback_leaves_the_completion_owed);
   RUN(reentrant_poll_defers_and_the_chain_continues);
   RUN(two_queued_completions_deliver_two_callbacks_across_polls);

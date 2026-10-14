@@ -13,6 +13,8 @@
 #include "irq_edge.h"
 #include "r3000.h"
 
+#include <algorithm>
+#include <array>
 #include <lucent/log.h>
 
 namespace {
@@ -40,15 +42,6 @@ constexpr uint32_t kNoFirstWord = 0u;
 const GuestCdStreamCallbackLayout *declaredLayout(const Core &core) {
   const GameRuntime *runtime = core.game ? core.game->runtime : nullptr;
   return runtime ? runtime->guestCdStreamCallbackLayout() : nullptr;
-}
-
-// Read and drop the current response the way the handler that owns this interrupt does before it
-// notifies anybody. Returns the response's first byte (its status). Acknowledging is a SEPARATE
-// step, in the caller, so a caller that cannot deliver leaves the response in place.
-uint8_t consumeCurrentResponse(CdcState &controller) {
-  uint8_t first = 0;
-  cdc_take_current_response(&controller, &first);
-  return first;
 }
 
 } // namespace
@@ -133,23 +126,14 @@ CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core) {
 
   // Declared by the title (`readyStatus`, default 1); read from its callback's own bytes, never guessed here.
   const uint32_t status = declaredLayout(core)->readyStatus;
-  const int savedBank = controller.index;
-  const uint8_t responseStatus = consumeCurrentResponse(controller);
-  // This handler has now serviced the CD interrupt, so its line is acknowledged. Done BEFORE the
-  // controller acknowledge, because that acknowledge is what can raise a fresh edge for a response
-  // already queued behind this one.
-  hle.i_stat &= ~(1u << IRQ_BIT_CD);
-  cdc_write(&controller, CDC_REG_INDEX, CDC_BANK_IRQ);
-  cdc_write(&controller, CDC_REG_IRQ_FLAG, 1u);
+  std::array<uint8_t, 1> response{};
+  psx::cd::acknowledgeCurrentCdResponse(core, response);
+  const uint8_t responseStatus = response[0];
   // Stock libcd's INT1 handler clears the request register before the callback, which empties the data FIFO.
+  const int savedBank = controller.index;
   cdc_write(&controller, CDC_REG_INDEX, CDC_BANK_DATA);
   cdc_write(&controller, CDC_REG_REQUEST, 0u);
   cdc_write(&controller, CDC_REG_INDEX, static_cast<uint8_t>(savedBank));
-  // Fold an edge that acknowledge just raised, so a response queued behind this one is visible to
-  // the next poll instead of waiting for an unrelated I_STAT access. This is the same
-  // `irqStatLatch()` the MMIO dispatcher performs after a guest controller write.
-  core.irqStatLatch();
-  core.pending_work |= Core::PW_IRQ;
   hle.cd_ready_delivered++;
 
   lucent::debug("cdirq",
@@ -182,3 +166,30 @@ CdReadyDelivery deliverCdReadyCompletionOnInterrupt(Core &core) {
   // but the caller must stop, exactly as the DMA arm stops on the same event.
   return psx::cpu::completeOrPropagate(core, result) ? CdReadyDelivery::Delivered : CdReadyDelivery::GuestExited;
 }
+
+namespace psx::cd {
+
+std::uint8_t acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> response) {
+  CdcState &controller = core.game->cdc;
+  std::ranges::fill(response, std::uint8_t{0});
+  const std::uint8_t type = cdc_current_irq_type(&controller);
+  if (type == 0u) {
+    return 0u;
+  }
+  const int savedBank = controller.index;
+  cdc_take_current_response(&controller, response.data(), static_cast<int>(response.size()));
+  // The line is retired BEFORE the controller acknowledge, because that acknowledge is what raises a
+  // fresh edge for a response already queued behind this one.
+  controller.irq_edge = 0;
+  core.game->hle.i_stat &= ~(1u << IRQ_BIT_CD);
+  cdc_write(&controller, CDC_REG_INDEX, CDC_BANK_IRQ);
+  cdc_write(&controller, CDC_REG_IRQ_FLAG, type);
+  cdc_write(&controller, CDC_REG_INDEX, static_cast<std::uint8_t>(savedBank));
+  // The same `irqStatLatch()` the MMIO dispatcher performs after a guest controller write, so the
+  // next response is visible to the next poll.
+  core.irqStatLatch();
+  core.pending_work |= Core::PW_IRQ;
+  return type;
+}
+
+} // namespace psx::cd
