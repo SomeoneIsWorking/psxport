@@ -25,6 +25,10 @@ template <typename T, typename Release> void releaseHandle(T *&handle, SDL_GPUDe
 GpuDevice *GpuDevice::sInstance = nullptr;
 
 GpuDevice::~GpuDevice() {
+  // A host-owned device outlives the Games that claimed it; nothing may reach it once it is gone.
+  if (sInstance == this) {
+    sInstance = nullptr;
+  }
   if (s_inited == 0) {
     return;
   }

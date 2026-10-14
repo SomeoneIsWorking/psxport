@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string_view>
 
@@ -29,7 +30,9 @@ struct TitleIdentity {
 class TitleCatalog {
 public:
   virtual ~TitleCatalog() = default;
-  virtual std::string_view productName() const = 0; // the window title
+  virtual std::string_view productName() const = 0; // the window title, picker heading and help name
+  // Where `<slug>/<serial>` is provisioned; relative paths are from the working directory.
+  virtual std::filesystem::path provisioningRoot() const = 0;
   virtual std::span<const TitleIdentity> titles() const = 0;
   // Installed before that title's Game exists.
   virtual GameRuntime &runtime(std::size_t index) const = 0;

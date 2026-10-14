@@ -9,6 +9,7 @@ working tree and `.git/modules` stay byte-unchanged, because a git cwd that reso
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -25,12 +26,23 @@ def git(args, cwd):
     return done.stdout.strip()
 
 
-def seed_framework(path):
-    """A directory that is a psxport checkout by the same two-file test the tool uses."""
+def seed_framework(path, locator=True):
+    """A psxport checkout by the tool's two-file test, carrying the real re-harness locator."""
     os.makedirs(os.path.join(path, "cmake"), exist_ok=True)
     for name in ("cmake/psxport.cmake", "CMakeLists.txt"):
         with open(os.path.join(path, name), "w", encoding="utf-8") as handle:
             handle.write("# fixture\n")
+    if locator:
+        os.makedirs(os.path.join(path, "tools", "policy"), exist_ok=True)
+        shutil.copy(os.path.join(ROOT, "tools", "policy", "harness.py"), os.path.join(path, "tools", "policy"))
+
+
+def commit_all(tree, message):
+    git(["init", "--initial-branch", "main"], tree)
+    git(["config", "user.email", "fixture@example.invalid"], tree)
+    git(["config", "user.name", "fixture"], tree)
+    git(["add", "-A"], tree)
+    git(["commit", "-m", message], tree)
 
 
 class FetchContract(unittest.TestCase):
@@ -40,10 +52,27 @@ class FetchContract(unittest.TestCase):
         self.framework = os.path.join(self.workspace, "psxport")
         os.makedirs(self.repo)
         seed_framework(self.framework)
+        harness_work = os.path.join(self.workspace, "harness-work")
+        os.makedirs(os.path.join(harness_work, "tools"))
+        with open(os.path.join(harness_work, "tools", "cpp_policy.py"), "w", encoding="utf-8") as handle:
+            handle.write("# fixture\n")
+        commit_all(harness_work, "harness fixture")
+        self.harness_origin = os.path.join(self.workspace, "harness.git")
+        git(["clone", "--bare", harness_work, self.harness_origin], self.workspace)
+
+    def framework_origin(self, locator=True):
+        work = os.path.join(self.workspace, "origin-work")
+        seed_framework(work, locator)
+        commit_all(work, "framework fixture")
+        origin = os.path.join(self.workspace, "origin.git")
+        git(["clone", "--bare", work, origin], self.workspace)
+        return origin
 
     def run_tool(self, repo=None, env=None):
         environment = dict(os.environ)
         environment.pop("PSX", None)
+        environment.pop("RE_HARNESS_DIR", None)
+        environment["RE_HARNESS_URL"] = self.harness_origin
         environment.update(env or {})
         done = subprocess.run([sys.executable, TOOL, "--auto", "--repo", repo or self.repo],
                               capture_output=True, text=True, env=environment)
@@ -90,17 +119,8 @@ class FetchContract(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.link(), "keep.txt")))
 
     def test_no_sibling_checkout_clones_a_framework_in_place(self):
-        origin = os.path.join(self.workspace, "origin.git")
-        work = os.path.join(self.workspace, "origin-work")
-        seed_framework(work)
-        git(["init", "--initial-branch", "main"], work)
-        git(["config", "user.email", "fixture@example.invalid"], work)
-        git(["config", "user.name", "fixture"], work)
-        git(["add", "-A"], work)
-        git(["commit", "-m", "framework fixture"], work)
-        git(["clone", "--bare", work, origin], self.workspace)
-        moved = tempfile.mkdtemp(prefix="fetch-lonely-")
-        repo = os.path.join(moved, "tomba")
+        origin = self.framework_origin()
+        repo = os.path.join(tempfile.mkdtemp(prefix="fetch-lonely-"), "tomba")
         os.makedirs(repo)
         code, out = self.run_tool(repo=repo, env={"PSXPORT_FRAMEWORK_URL": origin})
         self.assertEqual(code, 0, out)
@@ -109,16 +129,26 @@ class FetchContract(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(link, "cmake", "psxport.cmake")))
         self.assertEqual(git(["rev-parse", "HEAD"], link), git(["rev-parse", "HEAD"], origin))
 
+    def test_a_framework_clone_also_fetches_re_harness_through_its_locator(self):
+        repo = os.path.join(tempfile.mkdtemp(prefix="fetch-lonely-"), "crash")
+        os.makedirs(repo)
+        code, out = self.run_tool(repo=repo, env={"PSXPORT_FRAMEWORK_URL": self.framework_origin()})
+        self.assertEqual(code, 0, out)
+        fetched = os.path.join(repo, "external", "shared", "re-harness", "tools", "cpp_policy.py")
+        self.assertTrue(os.path.isfile(fetched), out)
+
+    def test_a_framework_clone_without_the_locator_is_refused(self):
+        repo = os.path.join(tempfile.mkdtemp(prefix="fetch-lonely-"), "ctr")
+        os.makedirs(repo)
+        code, out = self.run_tool(repo=repo, env={"PSXPORT_FRAMEWORK_URL": self.framework_origin(locator=False)})
+        self.assertEqual(code, 2, out)
+        self.assertIn("REFUSED", out)
+
     def test_the_sibling_checkout_survives_the_clone_path_unchanged(self):
         # Issue 0142: the destruction came from a git cwd resolving THROUGH the symlink into the shared
         # checkout. Force that path — no sibling is discoverable, so the tool clones — and prove the
         # shared checkout's working tree and .git/modules are byte-identical afterwards.
-        git(["init", "--initial-branch", "main"], self.framework)
-        git(["config", "user.email", "fixture@example.invalid"], self.framework)
-        git(["config", "user.name", "fixture"], self.framework)
-        seed_framework(self.framework)
-        git(["add", "-A"], self.framework)
-        git(["commit", "-m", "shared checkout"], self.framework)
+        commit_all(self.framework, "shared checkout")
         vendor = os.path.join(self.framework, "vendor", "beetle-psx")
         os.makedirs(os.path.join(vendor, "deps"))
         seed_framework(vendor)
