@@ -34,7 +34,8 @@ inline constexpr std::uint32_t kMac2 = 26;
 inline constexpr std::uint32_t kMac3 = 27;
 inline constexpr std::uint32_t kIrgb = 28;
 
-// Control registers: 0..4 the rotation matrix, 5..7 the translation, 8..12 the light matrix.
+// Control registers: 0..4 the rotation matrix, 5..7 the translation, 8..12 the light matrix,
+// 13..15 the background colour.
 inline constexpr std::uint32_t kRotation = 0;
 inline constexpr std::uint32_t kRotationWords = 5;
 inline constexpr std::uint32_t kTranslationX = 5;
@@ -45,6 +46,9 @@ inline constexpr std::uint32_t kLight1 = 9;
 inline constexpr std::uint32_t kLight2 = 10;
 inline constexpr std::uint32_t kLight3 = 11;
 inline constexpr std::uint32_t kLight4 = 12;
+inline constexpr std::uint32_t kBackRed = 13;
+inline constexpr std::uint32_t kBackGreen = 14;
+inline constexpr std::uint32_t kBackBlue = 15;
 inline constexpr std::uint32_t kFarRed = 21;
 inline constexpr std::uint32_t kFarGreen = 22;
 inline constexpr std::uint32_t kFarBlue = 23;
@@ -53,6 +57,8 @@ inline constexpr std::uint32_t kOfy = 25;
 inline constexpr std::uint32_t kH = 26; // projection plane distance
 inline constexpr std::uint32_t kDqa = 27;
 inline constexpr std::uint32_t kDqb = 28;
+inline constexpr std::uint32_t kZsf3 = 29;
+inline constexpr std::uint32_t kZsf4 = 30;
 inline constexpr std::uint32_t kFlag = 31; // bit 31 is the error summary
 
 // Commands as the guests encode them.
@@ -68,7 +74,9 @@ inline constexpr std::uint32_t kCc = 0x4B38041Cu;          // lm=1
 inline constexpr std::uint32_t kMvmvaRtIr = 0x4A49E012u;   // sf, RT * IR, no offset
 inline constexpr std::uint32_t kMvmvaRtV0 = 0x4A486012u;   // sf, RT * V0, no offset
 inline constexpr std::uint32_t kMvmvaRtIrTr = 0x4A498012u; // sf, RT * IR + TR
-inline constexpr std::uint32_t kGpf = 0x4B90003Du;         // sf, MAC = IR0 * IR
+inline constexpr std::uint32_t kGpf = 0x4B90003Du;         // MAC = IR0 * IR
+inline constexpr std::uint32_t kGpl = 0x4BA0003Eu;         // MAC += IR0 * IR
+inline constexpr std::uint32_t kGpfSf = 0x4B98003Du;       // sf, MAC = IR0 * IR >> 12
 inline constexpr std::uint32_t kIntpl = 0x4A980011u;       // IR toward FC by IR0
 
 } // namespace psx::gte
