@@ -136,13 +136,12 @@ void drawActor(Core *core) {   // the logic frame: writes the guest's packets, t
 }
 class ActorRender final : public psx::present::StateProducer {
   // At present time, from host memory only: the object at t, into its OT slots.
-  void render(std::span<const std::byte> from, std::span<const std::byte> to, float t,
-              PrimitiveSink &) const override;
+  void render(const StateInterval &states, PrimitiveSink &) const override;
 };
 ```
 
 The override still writes the guest packets the original writes, so guest-visible memory, the device
-and its VRAM are Beetle's. `render` never writes guest memory. It reads two saved states
+and its VRAM are Beetle's. `render` never writes guest memory. It reads the interval's two saved states
 (`stateAs<T>`), and guest memory only for data the guest does not change while the object lives (level
 geometry); anything that changes per frame is in the state. It owns its own interpolation rules (angle
 wrap, which fields step rather than lerp).

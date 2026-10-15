@@ -385,13 +385,10 @@ inline int triangleX(int frame) {
 // bufferFrame's moving triangle drawn from its saved x.
 class TriangleRender final : public psx::present::StateProducer {
 public:
-  void render(std::span<const std::byte> from,
-              std::span<const std::byte> to,
-              float t,
-              psx::present::PrimitiveSink &sink) const override {
-    const auto a = psx::present::stateAs<float>(from);
-    const auto b = psx::present::stateAs<float>(to);
-    const float x = a + (b - a) * t;
+  void render(const psx::present::StateInterval &states, psx::present::PrimitiveSink &sink) const override {
+    const auto a = psx::present::stateAs<float>(states.from);
+    const auto b = psx::present::stateAs<float>(states.to);
+    const float x = a + (b - a) * states.t;
     psx::present::DrawPrimitive primitive;
     primitive.vertexCount = 3;
     const float corners[3][2] = {{x, 40.0f}, {x + 60.0f, 60.0f}, {x + 10.0f, 180.0f}};

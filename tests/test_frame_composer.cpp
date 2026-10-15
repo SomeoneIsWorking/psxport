@@ -219,10 +219,7 @@ static void test_an_object_drawn_from_two_scopes_is_ambiguous(void) {
 // Two triangles of the object in one slot, the guest's draw mode changing between them.
 class PairRender final : public psx::present::StateProducer {
 public:
-  void render(std::span<const std::byte>,
-              std::span<const std::byte>,
-              float,
-              psx::present::PrimitiveSink &sink) const override {
+  void render(const psx::present::StateInterval &, psx::present::PrimitiveSink &sink) const override {
     for (const float x : {40.0f, 60.0f}) {
       DrawPrimitive primitive;
       primitive.vertexCount = 3;

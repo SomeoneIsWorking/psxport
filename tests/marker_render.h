@@ -17,12 +17,10 @@ struct Marker {
 
 class MarkerRender final : public psx::present::StateProducer {
 public:
-  void render(std::span<const std::byte> from,
-              std::span<const std::byte> to,
-              float t,
-              psx::present::PrimitiveSink &sink) const override {
-    const auto a = psx::present::stateAs<Marker>(from);
-    const auto b = psx::present::stateAs<Marker>(to);
+  void render(const psx::present::StateInterval &states, psx::present::PrimitiveSink &sink) const override {
+    const auto a = psx::present::stateAs<Marker>(states.from);
+    const auto b = psx::present::stateAs<Marker>(states.to);
+    const float t = states.t;
     psx::present::DrawPrimitive primitive;
     primitive.vertexCount = 3;
     primitive.textured = b.clutWord != 0;
