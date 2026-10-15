@@ -294,6 +294,26 @@ The old surfaces stay until (c), except the `GameRuntime` virtuals a new one rep
 
 Code that moves from psxport into a title (the Tomba scheduler and CD) is cut from psxport in that title's brief. It never exists twice.
 
+### (b2) repo names (after the rename sweep, before (c))
+
+Title repos are named `psx-<game>`. The framework keeps `psxport`; every `external/psxport` link stays valid.
+
+| now | renamed |
+|---|---|
+| spyro | psx-spyro |
+| crash | psx-crash |
+| crashbash | psx-crash-bash |
+| ctr | psx-crash-team-racing |
+| Tomba2Engine | psx-tomba |
+| spider1 | psx-spider-man |
+| vagrant | psx-vagrant-story |
+| megamanx4 | psx-mega-man-x4 |
+| toystory2 | psx-toy-story-2 |
+| tekken3 | psx-tekken-3 |
+| c12 | psx-c12 |
+
+One step, with no agent working in any repo: `gh repo rename` on GitHub (old URLs redirect), move the local checkout to `~/repo/psx/<new>`, set each `origin`, then update every reference by name: `scripts/bootstrap_workspace.py`, the workspace `CLAUDE.md`, the re-harness skills and agent memory, CI workflow files and docs. Player-facing ids keep their old names (user-data folders, card files, desktop/AppStream ids, decomp manifest keys), so saves and installs carry over. Each build directory is reconfigured once after the move.
+
 ### (c) psxport deletes what no title uses (one brief)
 
 - **Interface.** The legacy layer (`game_iface.*`, `legacy_game_hooks.h`, `legacy_game_config.h`, `game_hooks_opt.*`, `Core::cfg`/`hooks`/`gameCtx`, every `if (core.cfg)`); the section 3.2 bags; the old `GameRuntime` members; the old free functions (`gte_*`, `GTE_*`, `cfg_log*`, `cfg_on/int/str/dbg`, CVar externs).
