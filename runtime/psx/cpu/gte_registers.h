@@ -35,7 +35,7 @@ inline constexpr std::uint32_t kMac3 = 27;
 inline constexpr std::uint32_t kIrgb = 28;
 
 // Control registers: 0..4 the rotation matrix, 5..7 the translation, 8..12 the light matrix,
-// 13..15 the background colour.
+// 13..15 the background colour, 16..20 the light colour matrix.
 inline constexpr std::uint32_t kRotation = 0;
 inline constexpr std::uint32_t kRotationWords = 5;
 inline constexpr std::uint32_t kTranslationX = 5;
@@ -49,6 +49,8 @@ inline constexpr std::uint32_t kLight4 = 12;
 inline constexpr std::uint32_t kBackRed = 13;
 inline constexpr std::uint32_t kBackGreen = 14;
 inline constexpr std::uint32_t kBackBlue = 15;
+inline constexpr std::uint32_t kLightColour = 16;
+inline constexpr std::uint32_t kLightColourWords = 5;
 inline constexpr std::uint32_t kFarRed = 21;
 inline constexpr std::uint32_t kFarGreen = 22;
 inline constexpr std::uint32_t kFarBlue = 23;

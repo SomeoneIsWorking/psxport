@@ -2,6 +2,7 @@
 #include "producer_census.h"
 
 #include "core.h"
+#include "game_runtime.h"
 #include "native_dispatch.h"
 #include "ot_attr.h"
 
@@ -15,7 +16,8 @@ namespace psx::debug {
 
 void ProducerCensus::noteRecord(const present::FrameRecord &record,
                                 const Resolve &resolve,
-                                const HasProducer &hasProducer) {
+                                const HasProducer &hasProducer,
+                                const HasRender &hasRender) {
   fed_ = true;
   uses_.clear();
   for (const present::RecordEntry &entry : record.entries()) {
@@ -33,6 +35,10 @@ void ProducerCensus::noteRecord(const present::FrameRecord &record,
     if (primitive->key) {
       keyed_++;
       Row &row = note(primitive->key->producer, true, hasProducer(primitive->key->producer));
+      if (!hasRender(*primitive->key)) {
+        withoutRender_++;
+        row.withoutRender++;
+      }
       if (uses_[*primitive->key] > 1u) {
         duplicated_++;
         if (row.duplicated == 0u) {
@@ -75,7 +81,7 @@ void ProducerCensus::summary(const char *who) const {
   }
   lucent::info("producers",
                "{}: {} row(s); primitives {} = keyed {} + unkeyed attributed {} + no-source {} + span-miss {} + "
-               "span-no-fn {}; duplicated keys {}",
+               "span-no-fn {}; keyed without render {}; duplicated keys {}",
                who,
                rows_.size(),
                primitives_,
@@ -84,6 +90,7 @@ void ProducerCensus::summary(const char *who) const {
                unattributed_[0],
                unattributed_[1],
                unattributed_[2],
+               withoutRender_,
                duplicated_);
 }
 
@@ -114,6 +121,12 @@ void ProducerCensus::report(const char *who) const {
   if (ranked.size() > shown) {
     lucent::info("producers", "  {} more row(s) not shown", ranked.size() - shown);
   }
+  for (const Row *row : ranked) {
+    if (row->withoutRender != 0u) {
+      lucent::info(
+          "producers", "  0x{:08X} keyed {} without render {}", row->submitter, row->keyed, row->withoutRender);
+    }
+  }
   std::vector<const Row *> duplicated;
   std::copy_if(ranked.begin(), ranked.end(), std::back_inserter(duplicated), [](const Row *row) {
     return row->duplicated != 0u;
@@ -133,7 +146,7 @@ void ProducerCensus::report(const char *who) const {
   }
 }
 
-void censusRecord(Core &core, const present::FrameRecord &record) {
+void censusRecord(Core &core, const present::FrameRecord &record, const present::FrameState &states) {
   if (!g_producer_census_armed) {
     return;
   }
@@ -145,6 +158,10 @@ void censusRecord(Core &core, const present::FrameRecord &record) {
       },
       [&dispatcher](std::uint32_t submitter) {
         return dispatcher.isProducer(submitter);
+      },
+      [&core, &states](const present::RecordKey &key) {
+        return core.runtime.stateProducer(core, key.producer) != nullptr &&
+               states.find({key.producer, key.object}).has_value();
       });
 }
 

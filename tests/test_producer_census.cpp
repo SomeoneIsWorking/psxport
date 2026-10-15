@@ -38,12 +38,17 @@ bool registered(std::uint32_t submitter) {
   return submitter == kProducer;
 }
 
+// Objects at 0x80150000 have a state render; any other object of the producer was drawn as recorded.
+bool rendered(const RecordKey &key) {
+  return key.producer == kProducer && key.object == 0x80150000u;
+}
+
 } // namespace
 
 static void test_unfed_is_distinguishable_from_empty(void) {
   ProducerCensus census;
   CHECK(!census.wasFed());
-  census.noteRecord(FrameRecord(0, true), resolve, registered);
+  census.noteRecord(FrameRecord(0, true), resolve, registered, rendered);
   CHECK(census.wasFed());
   CHECK_EQ(census.primsSeen(), 0u);
   CHECK(census.rows().empty());
@@ -59,8 +64,8 @@ static void test_keyed_and_unkeyed_primitives_are_counted_per_submitter(void) {
   record.append(primitiveFrom(0x80200004u, std::nullopt));
   record.append(primitiveFrom(0, std::nullopt));
   record.append(VramFill{});
-  census.noteRecord(record, resolve, registered);
-  census.noteRecord(record, resolve, registered);
+  census.noteRecord(record, resolve, registered, rendered);
+  census.noteRecord(record, resolve, registered, rendered);
 
   CHECK_EQ(census.primsSeen(), 12u);
   CHECK_EQ(census.primsKeyed(), 4u);
@@ -70,6 +75,8 @@ static void test_keyed_and_unkeyed_primitives_are_counted_per_submitter(void) {
   const ProducerCensus::Row *producer = census.find(kProducer);
   CHECK(producer != nullptr && producer->hasProducer);
   CHECK(producer != nullptr && producer->primitives == 4u && producer->keyed == 4u);
+  CHECK(producer != nullptr && producer->withoutRender == 2u);
+  CHECK_EQ(census.primsWithoutRender(), 2u);
   const ProducerCensus::Row *guest = census.find(kGuestSubmitter);
   CHECK(guest != nullptr && !guest->hasProducer);
   CHECK(guest != nullptr && guest->primitives == 4u && guest->keyed == 0u);
@@ -79,11 +86,15 @@ static void test_has_producer_follows_the_registrations(void) {
   ProducerCensus census;
   FrameRecord record(0, true);
   record.append(primitiveFrom(0x80100004u, std::nullopt));
-  census.noteRecord(record, resolve, registered);
+  census.noteRecord(record, resolve, registered, rendered);
   CHECK(!census.find(kGuestSubmitter)->hasProducer);
-  census.noteRecord(record, resolve, [](std::uint32_t submitter) {
-    return submitter == kGuestSubmitter;
-  });
+  census.noteRecord(
+      record,
+      resolve,
+      [](std::uint32_t submitter) {
+        return submitter == kGuestSubmitter;
+      },
+      rendered);
   CHECK(census.find(kGuestSubmitter)->hasProducer);
   CHECK_EQ(census.find(kGuestSubmitter)->keyed, 0u);
 }
@@ -96,12 +107,12 @@ static void test_a_key_shared_within_a_record_is_counted_as_duplicated(void) {
   record.append(primitiveFrom(0x80180034u, shared));
   record.append(primitiveFrom(0x80180064u, RecordKey{kProducer, 0x80150000u, 0x20003u, 0}));
   record.append(primitiveFrom(0x80100004u, std::nullopt));
-  census.noteRecord(record, resolve, registered);
+  census.noteRecord(record, resolve, registered, rendered);
 
   // The same key in the next record is a pairing, not a duplicate.
   FrameRecord next(1, true);
   next.append(primitiveFrom(0x80180004u, shared));
-  census.noteRecord(next, resolve, registered);
+  census.noteRecord(next, resolve, registered, rendered);
 
   CHECK_EQ(census.primsKeyed(), 4u);
   CHECK_EQ(census.primsDuplicated(), 2u);
@@ -112,10 +123,24 @@ static void test_a_key_shared_within_a_record_is_counted_as_duplicated(void) {
   CHECK_EQ(census.find(kGuestSubmitter)->duplicated, 0u);
 }
 
+static void test_a_keyed_primitive_without_a_state_render_is_counted(void) {
+  ProducerCensus census;
+  FrameRecord record(0, true);
+  record.append(primitiveFrom(0x80180004u, RecordKey{kProducer, 0x80150000u, 0, 0}));
+  record.append(primitiveFrom(0x80180014u, RecordKey{kProducer, 0x80150040u, 0, 0}));
+  record.append(primitiveFrom(0x80180024u, RecordKey{kProducer, 0x80150040u, 1, 0}));
+  census.noteRecord(record, resolve, registered, rendered);
+
+  CHECK_EQ(census.primsKeyed(), 3u);
+  CHECK_EQ(census.primsWithoutRender(), 2u);
+  CHECK_EQ(census.find(kProducer)->withoutRender, 2u);
+}
+
 int main(void) {
   RUN(unfed_is_distinguishable_from_empty);
   RUN(a_key_shared_within_a_record_is_counted_as_duplicated);
   RUN(keyed_and_unkeyed_primitives_are_counted_per_submitter);
   RUN(has_producer_follows_the_registrations);
+  RUN(a_keyed_primitive_without_a_state_render_is_counted);
   return pt_summary();
 }

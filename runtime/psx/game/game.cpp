@@ -80,7 +80,7 @@ void Game::releaseHardwareBindings() {
 }
 
 Game::~Game() {
-  core.rsub.census.summary("producer census at shutdown");
+  core.rsub.census.report("producer census at shutdown");
   releaseHardwareBindings();
   // Unconditional, because the interesting answer is often "nothing was ever read". A run that
   // stalled three seconds in one chd_read and a run that never touched the disc are different

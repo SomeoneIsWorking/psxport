@@ -1,9 +1,11 @@
 // producer_census.h — the per-run producer table: primitives drawn per guest submitter, how many of
-// them carried a producer key, and how many shared their key with another primitive of the same record
-// (ambiguous, so never interpolated). Unkeyed rows ranked by primitive count are the producer work queue.
+// them carried a producer key, how many of those had no state render (drawn as recorded), and how many
+// shared their key with another primitive of the same record (ambiguous, so never interpolated). Unkeyed
+// rows ranked by primitive count are the producer work queue.
 #pragma once
 
 #include "frame_record.h"
+#include "frame_state.h"
 
 #include <cstdint>
 #include <functional>
@@ -36,16 +38,22 @@ public:
     bool hasProducer = false;    // a producer override is registered at `submitter`
     std::uint64_t primitives = 0;
     std::uint64_t keyed = 0;
-    std::uint64_t duplicated = 0; // keyed primitives whose key another primitive of its record also carries
+    std::uint64_t withoutRender = 0; // keyed primitives whose object has no state render this record
+    std::uint64_t duplicated = 0;    // keyed primitives whose key another primitive of its record also carries
     present::RecordKey firstDuplicate{};
     std::uint32_t firstDuplicateWriter = 0; // the guest function that stored that packet, 0 if unknown
   };
   using Resolve = std::function<ProducerAttribution(std::uint32_t packetAddress)>;
   using HasProducer = std::function<bool(std::uint32_t submitter)>;
+  // Whether the key's object has a state and its producer a render for it.
+  using HasRender = std::function<bool(const present::RecordKey &key)>;
 
   // Every primitive of a sealed record: a keyed one under its key's producer, an unkeyed one under
   // `resolve(sourceAddress)`.
-  void noteRecord(const present::FrameRecord &record, const Resolve &resolve, const HasProducer &hasProducer);
+  void noteRecord(const present::FrameRecord &record,
+                  const Resolve &resolve,
+                  const HasProducer &hasProducer,
+                  const HasRender &hasRender);
 
   bool wasFed() const {
     return fed_;
@@ -55,6 +63,9 @@ public:
   }
   std::uint64_t primsKeyed() const {
     return keyed_;
+  }
+  std::uint64_t primsWithoutRender() const {
+    return withoutRender_;
   }
   std::uint64_t primsDuplicated() const {
     return duplicated_;
@@ -69,7 +80,8 @@ public:
 
   // The one summary line; nothing when the census was never fed.
   void summary(const char *who) const;
-  // The summary, the rows ranked by unkeyed primitives, then every row with duplicated keys.
+  // The summary, the rows ranked by unkeyed primitives, every row with keyed primitives drawn without a
+  // render, then every row with duplicated keys.
   void report(const char *who) const;
 
 private:
@@ -80,12 +92,14 @@ private:
   std::unordered_map<present::RecordKey, std::uint32_t, present::RecordKeyHash> uses_; // one record's key counts
   std::uint64_t primitives_ = 0;
   std::uint64_t keyed_ = 0;
+  std::uint64_t withoutRender_ = 0;
   std::uint64_t duplicated_ = 0;
   std::uint64_t unattributed_[kUnattributedReasons] = {};
   bool fed_ = false;
 };
 
-// Feeds `core`'s census from `record` when the census is armed (PSXPORT_PRODUCERS).
-void censusRecord(Core &core, const present::FrameRecord &record);
+// Feeds `core`'s census from `record` and the states it collected when the census is armed
+// (PSXPORT_PRODUCERS).
+void censusRecord(Core &core, const present::FrameRecord &record, const present::FrameState &states);
 
 } // namespace psx::debug
