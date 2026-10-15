@@ -341,8 +341,7 @@ namespace {
 class ArmedProbe final : public psx::present::StateProducer {
 public:
   explicit ArmedProbe(const RenderMode &mode) : mode_(mode) {}
-  void
-  render(std::span<const std::byte>, std::span<const std::byte>, float, psx::present::PrimitiveSink &) const override {
+  void render(const psx::present::StateInterval &, psx::present::PrimitiveSink &) const override {
     ++renders;
     armedEvery = armedEvery && mode_.displayPassArmed();
   }

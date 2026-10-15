@@ -20,14 +20,21 @@ public:
   virtual void emit(OtSlot slot, const DrawPrimitive &primitive) = 0;
 };
 
+// An object's two saved states and the point `t` between them. With no earlier state (birth, cut),
+// `from` is `to`.
+struct StateInterval {
+  std::span<const std::byte> from;
+  std::span<const std::byte> to;
+  float t = 1.0f;
+};
+
 // The object at `t` between two of its saved states. Never writes guest memory, and reads it only for
-// data that does not change while the object lives (level geometry). With no earlier state
-// (birth, cut), `from` is `to`. At `t = 1` it emits exactly the primitives its guest packets drew.
+// data that does not change while the object lives (level geometry). At `t = 1` it emits exactly the
+// primitives its guest packets drew.
 class StateProducer {
 public:
   virtual ~StateProducer() = default;
-  virtual void
-  render(std::span<const std::byte> from, std::span<const std::byte> to, float t, PrimitiveSink &sink) const = 0;
+  virtual void render(const StateInterval &states, PrimitiveSink &sink) const = 0;
 };
 
 // The renders by producer guest address. A producer without one keeps its entries as recorded.

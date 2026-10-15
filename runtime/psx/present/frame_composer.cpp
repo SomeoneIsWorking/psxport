@@ -189,7 +189,7 @@ std::optional<FrameRecord> composeFrame(
   for (const Covered &object : covered) {
     const std::optional<std::span<const std::byte>> earlier = from ? from->find(object.id) : std::nullopt;
     CollectingSink sink;
-    object.render->render(earlier.value_or(object.to), object.to, earlier ? t : 1.0f, sink);
+    object.render->render({.from = earlier.value_or(object.to), .to = object.to, .t = earlier ? t : 1.0f}, sink);
     std::vector<std::pair<std::size_t, DrawPrimitive>> placed;
     placed.reserve(sink.emitted.size());
     std::unordered_map<std::uint64_t, std::size_t> emittedInSlot;
