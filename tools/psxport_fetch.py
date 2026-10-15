@@ -184,6 +184,10 @@ def do_ensure(repo, link):
         # is left alone rather than replaced by a clone.
         print(f"[psxport] external/psxport is a symlink to {os.path.realpath(link)}; left alone.")
         return 0
+    if describe_link(link) == "clone" and is_framework(link):
+        # An earlier run's clone (CI resolves the framework, then the verifier asks again).
+        print("[psxport] external/psxport is a clone; left alone.")
+        return 0
     return do_clone(link)
 
 

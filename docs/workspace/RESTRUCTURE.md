@@ -245,7 +245,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 
 | | |
 |---|---|
-| owners | `tekken3::TitleRuntime` (Record, native 60) |
+| owners | `tekken3::Runtime` (Record, native 60) |
 | converts | programImage, HLE plan, pad |
 | product | Add a gameplay route. |
 | size | GTE 0; accepted 0 |

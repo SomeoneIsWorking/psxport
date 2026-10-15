@@ -129,6 +129,17 @@ class FetchContract(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(link, "cmake", "psxport.cmake")))
         self.assertEqual(git(["rev-parse", "HEAD"], link), git(["rev-parse", "HEAD"], origin))
 
+    def test_a_second_run_leaves_its_own_clone_alone(self):
+        # CI resolves the framework, then the verifier runs the tool again.
+        origin = self.framework_origin()
+        repo = os.path.join(tempfile.mkdtemp(prefix="fetch-lonely-"), "tekken3")
+        os.makedirs(repo)
+        env = {"PSXPORT_FRAMEWORK_URL": origin}
+        self.assertEqual(self.run_tool(repo=repo, env=env)[0], 0)
+        code, out = self.run_tool(repo=repo, env=env)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(os.path.isfile(os.path.join(self.link(repo), "cmake", "psxport.cmake")))
+
     def test_a_framework_clone_also_fetches_re_harness_through_its_locator(self):
         repo = os.path.join(tempfile.mkdtemp(prefix="fetch-lonely-"), "crash")
         os.makedirs(repo)
