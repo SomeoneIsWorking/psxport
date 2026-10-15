@@ -8,6 +8,7 @@ Measured on 2026-10-14: psxport `93e0f1ab` with an uncommitted M8a tree, and eve
 - **Each piece of code is touched once.** psxport gains its final title interface, then every title moves to it, then psxport deletes the old surface. The old surface lives only until (c); no title uses it after its own pass.
 - **One agent at a time.** Each repo gets one brief. A repo is committed and pushed as soon as its brief lands (section 5 (d)).
 - **No baselines.** No run of the current port is a reference. Checks are absolute (section 6).
+- **Paths name the concept, never the title.** The repo, or `titles/<t>/` in a multi-title repo, already names the game. `crashbash/game/runtime/runtime.cpp`, not `crashbash_runtime.cpp`; `spyro/titles/spyro1/render/sky.cpp`, not `spyro1_sky.cpp`. The namespace carries the title (`crashbash::Runtime`, `spyro1::render::Sky`). A file is included through its directory (`"render/sky.h"`). Renames go through `git mv` in the repo's pass; repos already passed get one rename sweep before (c).
 
 ## 2. Where the tree is
 
