@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 GITHUB_ROOT = "https://github.com/SomeoneIsWorking"
-REMOTE_BACKED = ("spyro", "spider1", "Tomba2Engine", "vagrant", "megamanx4", "crash", "ctr", "crashbash", "tekken3", "toystory2", "c12")
+REMOTE_BACKED = ("psx-spyro", "psx-spider-man", "psx-tomba", "psx-vagrant-story", "psx-mega-man-x4", "psx-crash", "psx-crash-team-racing", "psx-crash-bash", "psx-tekken-3", "psx-toy-story-2", "psx-c12")
 LOCAL_ONLY: tuple[str, ...] = ()
 
 

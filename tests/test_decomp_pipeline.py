@@ -945,7 +945,7 @@ def test_structure_owner_has_no_drifted_copies() -> None:
     # not over a handful of hand-picked encodings that could agree while both are wrong. The fallback
     # corpus is the synthetic one, so the pin still runs on a machine with no provisioned image.
     image = pathlib.Path(os.environ.get("PSXPORT_SPYRO_IMAGE",
-                                        "~/repo/psx/spyro/scratch/assets/spyro1/SCUS_942.28"
+                                        "~/repo/psx/psx-spyro/scratch/assets/spyro1/SCUS_942.28"
                                         )).expanduser()
     words = []
     if image.is_file():

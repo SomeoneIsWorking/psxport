@@ -22,17 +22,17 @@ Measured on 2026-10-14: psxport `93e0f1ab` with an uncommitted M8a tree, and eve
 | repo | render path today | interp | GTE call sites | accepted.txt (global fn / block static / extern) | codemap lines |
 |---|---|---|---|---|---|
 | psxport | - | - | 260 | 1669 / 203 / 33 | 270 |
-| spyro | S1 Native, S2 Record, S3 Gte | S1, S2, S3 | 579 | 45 / 12 / 0 | 414 |
-| toystory2 | Record | yes | 40 | 36 / 9 / 0 | 189 |
-| crashbash | Record | yes | 21 | 0 / 2 / 0 (+1 entry point) | 262 |
-| crash | C1/C2 Record, C3 Gte | C1/C2 (no producers) | 49 | 6 / 2 / 0 | 166 |
-| ctr | Record | no | 3 | 0 | 153 |
-| Tomba2Engine | T2 Record, T1 Gte | T2 | 413 | 374 / 65 / 3 | 1263 |
-| spider1 | SM1, SM2 Gte | no | 0 | 8 / 0 / 0 | 223 |
-| vagrant | Record | no | 6 | 1 / 1 / 0 | 327 |
-| megamanx4 | Record | no (native 60) | 4 | 1 / 0 / 0 | 270 |
-| tekken3 | Record | no (native 60) | 0 | 0 | 239 |
-| c12 | Record | no | 86 | 0 | 95 |
+| psx-spyro | S1 Native, S2 Record, S3 Gte | S1, S2, S3 | 579 | 45 / 12 / 0 | 414 |
+| psx-toy-story-2 | Record | yes | 40 | 36 / 9 / 0 | 189 |
+| psx-crash-bash | Record | yes | 21 | 0 / 2 / 0 (+1 entry point) | 262 |
+| psx-crash | C1/C2 Record, C3 Gte | C1/C2 (no producers) | 49 | 6 / 2 / 0 | 166 |
+| psx-crash-team-racing | Record | no | 3 | 0 | 153 |
+| psx-tomba | T2 Record, T1 Gte | T2 | 413 | 374 / 65 / 3 | 1263 |
+| psx-spider-man | SM1, SM2 Gte | no | 0 | 8 / 0 / 0 | 223 |
+| psx-vagrant-story | Record | no | 6 | 1 / 1 / 0 | 327 |
+| psx-mega-man-x4 | Record | no (native 60) | 4 | 1 / 0 / 0 | 270 |
+| psx-tekken-3 | Record | no (native 60) | 0 | 0 | 239 |
+| psx-c12 | Record | no | 86 | 0 | 95 |
 
 No repo has a `docs/features.md`. psxport and nine title repos use the narrowed `.clang-tidy` (an explicit list under `-*`). vagrant and c12 already enable `clang-analyzer-*`, `bugprone-*` and `performance-*`.
 
@@ -149,7 +149,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 
 **Size key:** S is a mechanical migration of 1-2 sessions; M adds title-owned seams; L adds RE or product render work; XL is L across several titles.
 
-### spyro (XL)
+### psx-spyro (XL)
 
 | | |
 |---|---|
@@ -160,7 +160,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | deletes | `game/render/temporal/` (2,529 lines), `TerrainWorldPass`, `terrain_packet_sink`, both `createTemporalFramePresentation` overrides, every RenderQueue use (about 78 files under `game/render`), FrameRenderer's native/reference split, `painter_submission_preflight`, `scene_painter_order`, `SpyroRuntime`'s `widescreenOnly` default, `tools/re_frontier.py`, `tools/source_policy.py` |
 | size | GTE 579 sites; accepted 45 + 12; codemap 414 to 150 or fewer; the 20 docs that restate the 60 fps mechanism link to F-FPS60 |
 
-### toystory2 (L)
+### psx-toy-story-2 (L)
 
 | | |
 |---|---|
@@ -170,7 +170,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | deletes | `tools/re_frontier.py` |
 | size | GTE 40; accepted 36 + 9; install-call references 10 in 5 files |
 
-### crashbash (S)
+### psx-crash-bash (S)
 
 | | |
 |---|---|
@@ -180,7 +180,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | deletes | the launcher `main`, `tools/source_policy.py` |
 | size | GTE 21; accepted 2 static + 1 entry point; install references 11 in 10 files |
 
-### crash (M)
+### psx-crash (M)
 
 | | |
 |---|---|
@@ -189,7 +189,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | product | Crash 3 moves from Gte to Record, with a 16:9 canvas showing the margins. Crash 1/2 interpolation is unchanged: there are no producers, so S007 stays missing (feature work, outside this pass). |
 | size | GTE 49; accepted 6 + 2; install references 17 in 10 files; warp exists |
 
-### ctr (S)
+### psx-crash-team-racing (S)
 
 | | |
 |---|---|
@@ -197,7 +197,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | converts | programImage, HLE plan, cd stream, `sealedFrameIsCut` |
 | size | GTE 3; accepted 0; install references 20 in 11 files; replay `arcade-crash-cove-drive.pad` |
 
-### Tomba2Engine (XL)
+### psx-tomba (XL)
 
 | | |
 |---|---|
@@ -212,7 +212,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | docs | The codemap's Guest address index moves to `docs/guest-addresses.md`. `titles/tomba1`'s per-directory READMEs become codemap rows. Codemap 1,263 lines to 150 or fewer. |
 | size | GTE 413; logging 123; config 39; accepted 374 + 65 + 3 |
 
-### spider1 (M)
+### psx-spider-man (M)
 
 | | |
 |---|---|
@@ -222,7 +222,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | deletes | `tools/re_frontier.py`, `tools/source_policy.py` |
 | size | GTE 0; accepted 8 (test functions); install references 16 in 3 files |
 
-### vagrant (S)
+### psx-vagrant-story (S)
 
 | | |
 |---|---|
@@ -231,7 +231,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | product | The 4 `activeRq()` sites (`game/render/{title_startup,title_movie,battle_frame,title_menu}.cpp`) become `presentation.commit`. Widen the canvas, never the horizontal projection word. Add a gameplay route. |
 | size | GTE 6; accepted 1 + 1 |
 
-### megamanx4 (M)
+### psx-mega-man-x4 (M)
 
 | | |
 |---|---|
@@ -241,7 +241,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | deletes | `tools/re_frontier.py` |
 | size | logging 14; GTE 4; accepted 1 |
 
-### tekken3 (S)
+### psx-tekken-3 (S)
 
 | | |
 |---|---|
@@ -250,7 +250,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 | product | Add a gameplay route. |
 | size | GTE 0; accepted 0 |
 
-### c12 (S)
+### psx-c12 (S)
 
 | | |
 |---|---|
@@ -294,11 +294,11 @@ The old surfaces stay until (c), except the `GameRuntime` virtuals a new one rep
 
 Code that moves from psxport into a title (the Tomba scheduler and CD) is cut from psxport in that title's brief. It never exists twice.
 
-### (b2) repo names (after the rename sweep, before (c))
+### (b2) repo names (done 2026-10-15)
 
 Title repos are named `psx-<game>`. The framework keeps `psxport`; every `external/psxport` link stays valid.
 
-| now | renamed |
+| was | now |
 |---|---|
 | spyro | psx-spyro |
 | crash | psx-crash |

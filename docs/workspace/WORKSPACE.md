@@ -17,17 +17,17 @@ All public under `github.com/SomeoneIsWorking`, side by side, no superproject.
 | path | what |
 |---|---|
 | `psxport/` | the framework — the one writable framework checkout |
-| `spyro/` | Spyro 1/2/3 (`titles/<t>/` over a shared `game/`), one process with an in-window picker |
-| `toystory2/` | Toy Story 2 (`SLUS_008.93`) |
-| `crashbash/` | Crash Bash |
-| `crash/` | Crash 1/2/3 (one architecture) |
-| `ctr/` | Crash Team Racing |
-| `Tomba2Engine/` | Tomba! 2 (`SCUS_944.54` → `MAIN.EXE`) and Tomba! 1 |
-| `spider1/` | Spider-Man 1/2 |
-| `vagrant/` | Vagrant Story (vendors the CC0 `rood-reverse` decomp) |
-| `megamanx4/` | Mega Man X4 (vendors the AGPL `mmx4` decomp — never lift it into psxport) |
-| `tekken3/` | Tekken 3 |
-| `c12/` | C-12: Final Resistance (`SCUS_946.66`) |
+| `psx-spyro/` | Spyro 1/2/3 (`titles/<t>/` over a shared `game/`), one process with an in-window picker |
+| `psx-toy-story-2/` | Toy Story 2 (`SLUS_008.93`) |
+| `psx-crash-bash/` | Crash Bash |
+| `psx-crash/` | Crash 1/2/3 (one architecture) |
+| `psx-crash-team-racing/` | Crash Team Racing |
+| `psx-tomba/` | Tomba! 2 (`SCUS_944.54` → `MAIN.EXE`) and Tomba! 1 |
+| `psx-spider-man/` | Spider-Man 1/2 |
+| `psx-vagrant-story/` | Vagrant Story (vendors the CC0 `rood-reverse` decomp) |
+| `psx-mega-man-x4/` | Mega Man X4 (vendors the AGPL `mmx4` decomp — never lift it into psxport) |
+| `psx-tekken-3/` | Tekken 3 |
+| `psx-c12/` | C-12: Final Resistance (`SCUS_946.66`) |
 
 Fresh machine: `git clone https://github.com/SomeoneIsWorking/psxport.git ~/repo/psx/psxport && cd ~/repo/psx/psxport && uv run --frozen python scripts/bootstrap_workspace.py`.
 
@@ -58,21 +58,21 @@ psxport `main` instead. Lightrec stays pinned at `PSXPORT_LIGHTREC_REVISION`
 | repo | command |
 |---|---|
 | psxport | `uv run --frozen python tools/verify.py --build build` |
-| spyro | `uv run --frozen python tools/verify.py --jobs 6` |
-| toystory2 | `CXX=clang++ CC=clang CMAKE_BUILD_PARALLEL_LEVEL=6 uv run --frozen python tools/verify.py` |
-| crashbash | `uv run --frozen python tools/verify.py` |
+| psx-spyro | `uv run --frozen python tools/verify.py --jobs 6` |
+| psx-toy-story-2 | `CXX=clang++ CC=clang CMAKE_BUILD_PARALLEL_LEVEL=6 uv run --frozen python tools/verify.py` |
+| psx-crash-bash | `uv run --frozen python tools/verify.py` |
 
 ## Rules
 
 - Never commit disc images, extracted executables, or `/home/<user>/…` paths.
 - Never write run artifacts to `/tmp`; use the repo's gitignored `scratch/`.
-- Some `scratch/` dirs are provisioned disc inputs: `spyro/scratch/assets/`, `Tomba2Engine/scratch/bin/`,
-  `toystory2/scratch/{bin,flat,raw}`, `crashbash/scratch/bin/`. Each holds a `.scratch-keep` marker, which
+- Some `scratch/` dirs are provisioned disc inputs: `psx-spyro/scratch/assets/`, `psx-tomba/scratch/bin/`,
+  `psx-toy-story-2/scratch/{bin,flat,raw}`, `psx-crash-bash/scratch/bin/`. Each holds a `.scratch-keep` marker, which
   `scratch_gc.py` honours for the whole subtree; a provisioner that creates such a dir writes the marker.
   Sweep only your own `scratch/<activity>/`.
 - Disc images live under `/mnt/Boy/ROM/PSX CHD/`; each repo's `.env` points at its disc.
 - One game instance at a time unless isolated; kill by PID, never `pkill`.
 - To reach a screen, level or state for exploration, add a title-owned debug option modelled on Tomba 2's
-  `warp` (`Tomba2Engine/game/core/debug/dev_warp.cpp`): a control-channel command arms a request and the frame
+  `warp` (`psx-tomba/game/core/debug/dev_warp.cpp`): a control-channel command arms a request and the frame
   driver applies it at a frame boundary through the game's own transition/load owners. Player paths stay
   untouched. Never steer gameplay to get there, and prefer this over timed front-end replays.
