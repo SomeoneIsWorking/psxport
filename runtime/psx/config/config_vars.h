@@ -20,6 +20,8 @@
 #include "override_differential_config.h"
 #include "render_mode.h" // RenderPath — the type cv_render_path resolves to
 
+#include <filesystem>
+
 namespace psx::config {
 
 // PSXPORT_NOAUDIO — open no audio device. Half of what "headless" means (the other half, no window,
@@ -90,6 +92,14 @@ extern IntVar cv_native_frames;
 // PSXPORT_ASSET_DIR — the directory CONTAINING `assets/`, for a consumer whose cwd is its own repo
 // root. Empty = cwd-relative `assets/rml/...`.
 extern TextVar cv_asset_dir;
+
+// PSXPORT_VK_WINDOW / PSXPORT_VK_HEADLESS — a run is headless unless a window is asked for, and
+// HEADLESS wins. Read through windowRequested(); the backing vars are private.
+bool windowRequested();
+
+// What a packaged product (an AppImage, `packageRoot`) runs with when nothing overrides it: a
+// window, and the assets shipped under `<packageRoot>/usr/share/psxport`. Default layer only.
+void applyPackagedDefaults(const std::filesystem::path &packageRoot);
 
 // PSXPORT_SETTINGS — path to the settings file. NOT persistable, and that is not a detail: this knob
 // SELECTS the file the Value layer is read from and written to, so a Value-layer copy of it inside

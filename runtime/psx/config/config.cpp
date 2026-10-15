@@ -370,6 +370,23 @@ TextVar cv_asset_dir("PSXPORT_ASSET_DIR",
                      "",
                      "directory containing assets/ (empty = cwd-relative)",
                      /*persistable=*/false);
+namespace {
+BoolVar cv_vk_window("PSXPORT_VK_WINDOW", false, "open the product window", /*persistable=*/false);
+BoolVar cv_vk_headless("PSXPORT_VK_HEADLESS",
+                       false,
+                       "never open a window; wins over PSXPORT_VK_WINDOW",
+                       /*persistable=*/false);
+} // namespace
+
+bool windowRequested() {
+  return cv_vk_window.get() && !cv_vk_headless.get();
+}
+
+void applyPackagedDefaults(const std::filesystem::path &packageRoot) {
+  cv_vk_window.set(Layer::Default, true);
+  cv_asset_dir.set(Layer::Default, (packageRoot / "usr" / "share" / "psxport").string());
+}
+
 TextVar cv_settings_path("PSXPORT_SETTINGS",
                          "psxport_settings.ini",
                          "path to the settings file — selects the Value layer, so never persisted",
@@ -825,29 +842,8 @@ void report() {
 }
 
 void report_exit_audit() {
-  // The boot-time audit's blind spot is real and was measured on the first run that used it:
-  // PSXPORT_VK_HEADLESS came back UNKNOWN because gpu_vk does not initialise until after the boot
-  // report, and PSXPORT_NOWINDOW came back UNKNOWN because it is genuinely read by nothing in the
-  // binary (only by run.sh, which translates it). Only one of those two is a real finding, and at
-  // exit the difference is decided rather than caveated: everything that was going to be read has
-  // been.
-  //
-  // LIMITATION, stated because a diagnostic that can print nothing is lying: this runs from
-  // std::atexit, so it does NOT fire when the process is killed — and an agent's `timeout`-bounded
-  // headless run ends in SIGTERM, which watchdog.cpp's handler answers with _exit(130). For those
-  // runs the boot audit plus its blind-spot line is all you get; ask the live process instead, with
-  // `cvars` over the debug server.
-  //
-  // *** HOW TO READ `UNKNOWN PSXPORT_VK_HEADLESS`, because it is routinely misread. *** It is a TRUE
-  // report of a knob whose value did nothing, and that is correct rather than a gap. gpu_vk.cpp:178 is
-  // `s_headless = (cfg_on("PSXPORT_VK_WINDOW") && !cfg_on("PSXPORT_VK_HEADLESS")) ? 0 : 1;` — the
-  // WINDOW is the switch and this is its override, so with no window requested the `&&` short-circuits
-  // and the override is never consulted. An agent run is therefore headless without setting it, which
-  // is the documented "a forgotten flag fails SAFE, not intrusive" design. Measured 2026-09-27 on
-  // Crash Bash: the exit audit's `UNKNOWN ... NOTHING ever read it` was read for a moment as evidence
-  // that the renderer had failed to initialise, while the same log carried `[gpu_vk] headless renderer
-  // up` and `present image 960x720 (headless sink)`. It had initialised. Before concluding from this
-  // line that a subsystem is missing, grep the log for that subsystem's own startup line.
+  // Runs from std::atexit, so a killed run (SIGTERM -> _exit(130)) never reaches it; ask the live
+  // process with `cvars` instead.
   const EnvAudit a = audit_environment();
   lucent::info("cfg",
                "env audit AT EXIT (everything that was going to be read has been): {} PSXPORT_* set "

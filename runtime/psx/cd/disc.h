@@ -33,8 +33,8 @@ typedef struct DiscState {
   uint64_t fills;
   uint64_t fill_ns;
   uint64_t worst_fill_ns;
-  const char *env_key;                   // TitleIdentity::discEnvVar: TitleSession::boot for a Game's disc,
-                                         // provisionExecutable for its own; NULL leaves the generic keys only.
+  const char *env_key;   // TitleIdentity::discEnvVar, set by psx::host::SavedDisc::bind; NULL leaves the generic keys
+  char saved_path[1024]; // the player's first-run choice (SavedDisc), read after the keys
   DiscTrackInfo tracks[DISC_MAX_TRACKS]; // CHD TOC, indexed densely in metadata order
   uint8_t track_count;
 } DiscState;
@@ -64,5 +64,7 @@ int disc_dropin_scan(char *out, unsigned out_cap); // first *.chd in cwd, NUL-te
 namespace psx::cd {
 // Closes the image and drops the cache and TOC; the next read opens it again.
 void closeDisc(DiscState &disc);
+// Opens exactly `path`, consulting no key; the first-run screen judges a chosen image with it.
+bool openDiscImage(DiscState &disc, const char *path);
 } // namespace psx::cd
 #endif

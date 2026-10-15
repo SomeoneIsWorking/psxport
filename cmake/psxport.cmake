@@ -31,9 +31,10 @@ set(RMLUI_LOTTIE_PLUGIN  OFF CACHE BOOL   "" FORCE)
 set(RMLUI_FONT_ENGINE    freetype CACHE STRING "" FORCE)
 add_subdirectory(${PSXPORT_ROOT}/vendor/rmlui ${CMAKE_BINARY_DIR}/rmlui_build EXCLUDE_FROM_ALL)
 
-# ---- bug-report (the in-app bug report form and report folder), over the RmlUi above ----------
-include("${PSXPORT_ROOT}/cmake/bug_report_dependency.cmake")
-psxport_configure_bug_report_dependency()
+# ---- bug-report (the in-app bug report form) and setup-ui (the first-run screen), over that RmlUi --
+include("${PSXPORT_ROOT}/cmake/shared_dependency.cmake")
+psxport_add_shared_dependency(bug-report include/bug_report/draft.h)
+psxport_add_shared_dependency(setup-ui include/setup_ui/setup_ui.h)
 
 # ---- generated SDL_GPU SPIR-V header ----------------------------------------------------------
 # tools/gen_gpu_shaders.py compiles shaders_gpu/*.{vert,frag} (incl. the RmlUi overlay shaders) and
@@ -223,6 +224,9 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host/picker_layout.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_content.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/executable_provisioner.cpp
+  ${PSXPORT_ROOT}/runtime/psx/host/title_disc.cpp # a title's disc, keyed or one exact image
+  ${PSXPORT_ROOT}/runtime/psx/host/saved_disc.cpp # the first-run disc choice in user data
+  ${PSXPORT_ROOT}/runtime/psx/host/first_run_setup.cpp # the setup-ui screen that asks for the disc
   ${PSXPORT_ROOT}/runtime/psx/host/title_availability.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/title_selection.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/field_turn.cpp # psx::FieldTurn: the per-field services a loop owes
@@ -394,6 +398,8 @@ target_link_libraries(psxport PUBLIC
   lightrec rmlui_debugger rmlui_core bug_report::bug_report chdr-static
   psxport_presentation_dependencies
   Threads::Threads m)
+# The first-run screen is the host's own; titles never include it.
+target_link_libraries(psxport PRIVATE setup_ui::setup_ui)
 
 # ---- test support: the stub GameRuntime for framework and title tests with no title runtime ----
 add_library(psxport_test_support STATIC EXCLUDE_FROM_ALL ${PSXPORT_ROOT}/tests/support/stub_game_runtime.cpp)

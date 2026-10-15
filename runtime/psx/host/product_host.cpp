@@ -2,9 +2,11 @@
 
 #include "c_subsys.h"
 #include "cfg.h"
+#include "config_vars.h"
 #include "core.h"
 #include "dbg_server.h"
 #include "executable_provisioner.h"
+#include "first_run_setup.h"
 #include "game.h"
 #include "memcensus.h"
 #include "picker_content.h"
@@ -15,10 +17,13 @@
 #include "title_session.h"
 
 #include <lucent/log.h>
+#include <lucent/platform.h>
 
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace psx::host {
@@ -50,9 +55,9 @@ std::vector<std::string> splitSlugs(const char *text) {
 }
 } // namespace
 
-ProductHost::Process::Process(const TitleCatalog &catalog)
-    : config(psx::config::Config::fromEnvironment()), windowTitle(catalog.productName()),
-      budget(RunBudget::fromConfig(config)), services{config, presentation.device(), quit, budget} {
+ProductHost::Process::Process(const TitleCatalog &catalog, const psx::config::Config &launch)
+    : config(launch), windowTitle(catalog.productName()), budget(RunBudget::fromConfig(config)),
+      services{config, presentation.device(), quit, budget} {
   // The window belongs to the product, not to whichever Game brought the device up first.
   presentation.setWindowTitle(windowTitle.c_str());
   // The watchdog is process-wide signal state: armed once here, never by a session.
@@ -66,27 +71,25 @@ ProductHost::Process::~Process() {
   watchdog_disable();
 }
 
-ProductHost::ProductHost(const TitleCatalog &catalog) : catalog_(catalog) {}
+ProductHost::ProductHost(const TitleCatalog &catalog)
+    : catalog_(catalog), config_(psx::config::Config::fromEnvironment()) {}
 
 ProductHost::~ProductHost() = default;
 
 ProductHost::Process &ProductHost::process() {
   if (process_ == nullptr) {
-    process_ = std::make_unique<Process>(catalog_);
+    process_ = std::make_unique<Process>(catalog_, config_);
   }
   return *process_;
 }
 
 int ProductHost::run(int argc, char **argv) {
   const char *program = argc > 0 ? argv[0] : "product";
+  if (config_.packageRoot) {
+    psx::config::applyPackagedDefaults(*config_.packageRoot);
+  }
   if (argc <= 1) {
-    if (catalog_.titles().size() != 1) {
-      return runSelector();
-    }
-    const TitleIdentity &only = catalog_.titles().front();
-    const std::filesystem::path executable = only.defaultExecutable(catalog_.provisioningRoot());
-    provisionExecutable(only, executable);
-    return runExecutable(executable);
+    return catalog_.titles().size() == 1 ? runOnlyTitle() : runSelector();
   }
   const std::string_view argument = argc == 2 ? argv[1] : "";
   if (argument == "-h" || argument == "--help") {
@@ -155,6 +158,43 @@ int ProductHost::runSelector() {
     }
     // Back to the top, with a fresh probe, so a title provisioned in the meantime gets a panel.
   }
+}
+
+int ProductHost::runOnlyTitle() {
+  const TitleIdentity &only = catalog_.titles().front();
+  if (config_.packageRoot && !enterUserData(only)) {
+    return 2;
+  }
+  const std::filesystem::path executable = only.defaultExecutable(catalog_.provisioningRoot());
+  if (provisionExecutable(only, executable) == Provisioning::Unavailable) {
+    switch (FirstRunSetup(only).run(psx::config::windowRequested())) {
+    case FirstRunSetup::Outcome::Accepted:
+      break;
+    case FirstRunSetup::Outcome::Declined:
+      return 0;
+    case FirstRunSetup::Outcome::Unavailable:
+      return 2;
+    }
+    provisionExecutable(only, executable);
+  }
+  return runExecutable(executable);
+}
+
+bool ProductHost::enterUserData(const TitleIdentity &title) const {
+  const std::optional<std::filesystem::path> directory = lucent::platform::user_data_directory(title.slug);
+  std::string error = "no user-data directory";
+  if (!directory || !lucent::platform::ensure_user_data_directory(*directory, error)) {
+    lucent::error("host", "{} cannot keep its data: {}", title.displayName, error);
+    return false;
+  }
+  std::error_code entered;
+  std::filesystem::current_path(*directory, entered);
+  if (entered) {
+    lucent::error("host", "cannot enter {}: {}", directory->string(), entered.message());
+    return false;
+  }
+  lucent::info("host", "packaged run from {}; data in {}", config_.packageRoot->string(), directory->string());
+  return true;
 }
 
 TitleSession::End ProductHost::runToEnd(TitleSession &session) {

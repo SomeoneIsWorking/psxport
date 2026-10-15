@@ -41,7 +41,7 @@ DEFAULT_BRANCH = "main"
 # psxport's own vendor submodules, init'd non-recursively (beetle has a URL-less nested gitlink that
 # makes `--recursive` fail outright), then that nested gitlink, as (parent, child) pairs.
 SUBMODULES = ((".", "vendor/beetle-psx"), (".", "vendor/lucent"), (".", "vendor/rmlui"),
-              (".", "vendor/bug-report"), ("vendor/beetle-psx", "deps/libchdr"))
+              (".", "vendor/bug-report"), (".", "vendor/setup-ui"), ("vendor/beetle-psx", "deps/libchdr"))
 LIGHTREC_REVISION = re.compile(r'set\s*\(\s*PSXPORT_LIGHTREC_REVISION\s+"([0-9a-f]{40})"')
 
 
