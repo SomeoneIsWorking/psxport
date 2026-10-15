@@ -13,3 +13,6 @@
 [submodule "vendor/bug-report"]
 	path = vendor/bug-report
 	url = https://github.com/SomeoneIsWorking/bug-report.git
+[submodule "vendor/setup-ui"]
+	path = vendor/setup-ui
+	url = https://github.com/SomeoneIsWorking/setup-ui.git

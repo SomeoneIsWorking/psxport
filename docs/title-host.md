@@ -16,6 +16,9 @@ namespace `psx::host`.
 | `title_selection.{h,cpp}` | `selectExecutable`, `selectExecutableFile`: does these bytes match this catalog entry (size, PS-X EXE header words, SHA-256); the file variant returns the bytes it authenticated |
 | `title_availability.{h,cpp}` | `TitleAvailabilityProbe`: which catalog titles are provisioned and authenticate at `<root>/<slug>/<serial>` right now |
 | `executable_provisioner.{h,cpp}` | `provisionExecutable`: a missing `<root>/<slug>/<serial>` extracted from the title's own disc, authenticated before it is written |
+| `title_disc.{h,cpp}` | `TitleDisc`: a title's disc for one read, keyed (`discEnvVar`, `PSXPORT_DISC`, the saved choice) or one exact image |
+| `saved_disc.{h,cpp}` | `SavedDisc`: the disc image the player chose at first run, `<user data>/<slug>/disc-path`, and `bind` that points a `DiscState` at the title's key and then at it |
+| `first_run_setup.{h,cpp}` | `FirstRunSetup`: the shared setup-ui screen that asks for the disc (`judge` is its validator), saved through `SavedDisc` |
 | `title_session.{h,cpp}` | `TitleSession`: one boot-to-exit run of one title as a steppable owner; destruction is the whole teardown |
 | `session_run.h` | `SessionRun`, held per `Game` as `Game::run`: a title's request to end its run |
 | `run_budget.{h,cpp}` | `RunBudget`: the process's run cap in presentation-fence steps, decided once from `PSXPORT_NATIVE_FRAMES` |
@@ -59,6 +62,21 @@ Before `ProductHost` selects anything it calls `provisionExecutable` for each ca
 first probe). It opens the title's disc on its own `DiscState` keyed by `discEnvVar`, reads
 `discExecutablePath`, authenticates the bytes with `selectExecutable` against that title alone, and
 writes them only on a match. A present file is never read or rewritten. Only `ProductHost` calls it.
+
+The disc is resolved in one order everywhere (`runtime/psx/cd/disc.cpp`): the title's key, `PSXPORT_DISC`
+(environment, then `./.env`), the player's saved first-run choice, a `*.chd` drop-in. `SavedDisc::bind`
+sets the first and third on a `DiscState`; `TitleSession::boot` and `TitleDisc` both use it.
+
+With no argument a one-title product provisions its executable. If it is neither there nor extractable, `FirstRunSetup` shows the shared setup-ui screen (one judged image, adopted, not
+copied): the chosen image must open as a CHD and its `discExecutablePath` must authenticate as the
+title; an accepted path is saved and provisioning runs again. Closing the screen exits 0. Without a
+window (`psx::config::windowRequested()` false) it renders one offscreen frame, logs the key to set and
+exits 2, so a test run never waits on a player. The selector has no first-run screen yet.
+
+A packaged run (`Config::packageRoot`, the AppImage's absolute `APPDIR`) applies
+`psx::config::applyPackagedDefaults` (a window, assets under `<APPDIR>/usr/share/psxport`) and, for a
+one-title product, enters `<user data>/<slug>` so the provisioning root, settings and memory card are
+user data. A packaged multi-title product keeps the working directory it was started in.
 
 `GameRuntime::startProgram` enters the guest, called by `TitleSession::boot` after the overrides,
 the control channel and the display clear. Its default does nothing: the title's frame driver enters
@@ -189,7 +207,9 @@ the event drain, so it reaches the run-end report like a client `quit`.
 
 `tests/test_title_selection.cpp`, `test_title_picker.cpp` and `test_picker_layout.cpp` cover
 selection, availability, the control commands and panel geometry over a fake catalog, with no window.
-`test_run_budget.cpp` covers the cap's precedence. `test_executable_provisioner.cpp` extracts from the
+`test_run_budget.cpp` covers the cap's precedence. `test_first_run_setup.cpp` drives the screen's validator
+(the fixture disc accepted, another title's bytes and a non-image refused by reason), the saved choice
+as the disc a title opens and provisions from, the title key winning over it, and the hidden-run refusal. `test_executable_provisioner.cpp` extracts from the
 fixture disc `tests/fixtures/provision_disc/provision.chd` (regenerate with
 `tests/fixtures/make_provision_disc.py`) and refuses bytes that are not the title. `psxport_product_fixture` (`tests/product_fixture_catalog.*`) is a product built by `psxport_add_product` over an empty catalog; CTest runs its `-h`/`--help` and a refused argument through `product_main.cpp`. `test_product_host_session.cpp` runs the shipping
 `ProductHost` through `run(argc, argv)` over a stub catalog and frame driver on an offscreen device: help

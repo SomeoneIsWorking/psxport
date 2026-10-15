@@ -16,6 +16,7 @@
 #include "hw_bind.h"
 #include "psx_exe_image.h"
 #include "run_end_report.h"
+#include "saved_disc.h"
 #include "state/state_command.h"
 #include "store_observe.h"
 
@@ -100,7 +101,7 @@ bool TitleSession::boot() {
     game.session.setPreRolling(preRolling_);
   }
 
-  game.disc.env_key = title_.identity->discEnvVar;
+  SavedDisc(*title_.identity).bind(game.disc);
   const psx::cpu::PsxExeLoadResult admitted = runtime.admitExecutable(core, title_.bytes);
   if (!admitted) {
     lucent::error("boot",

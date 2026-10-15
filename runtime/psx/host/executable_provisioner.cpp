@@ -1,8 +1,8 @@
 #include "executable_provisioner.h"
 
-#include "disc.h"
 #include "fs_util.h"
 #include "title_catalog.h"
+#include "title_disc.h"
 #include "title_selection.h"
 
 #include <lucent/log.h>
@@ -12,30 +12,6 @@
 #include <vector>
 
 namespace psx::host {
-namespace {
-
-// The title's disc, opened for one extraction and closed with it.
-class TitleDisc {
-public:
-  explicit TitleDisc(const TitleIdentity &title) {
-    disc_state_init(&disc_);
-    disc_.env_key = title.discEnvVar;
-  }
-  ~TitleDisc() {
-    psx::cd::closeDisc(disc_);
-  }
-  TitleDisc(const TitleDisc &) = delete;
-  TitleDisc &operator=(const TitleDisc &) = delete;
-
-  DiscState &state() {
-    return disc_;
-  }
-
-private:
-  DiscState disc_{};
-};
-
-} // namespace
 
 Provisioning provisionExecutable(const TitleIdentity &title, const std::filesystem::path &target) {
   std::error_code error;

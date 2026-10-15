@@ -148,6 +148,14 @@ Missing capability: no gameplay-ready backend, Windows host contract, macOS arm6
 `arm64-v8a` evidence, or release package exists. Hosted CI therefore runs only the proven Linux
 x86-64 synthetic runtime; unsupported hosts have no green placeholder jobs.
 
+Partial, in the product host: a one-title product with no usable disc shows the shared setup-ui
+first-run screen and remembers the accepted image; a packaged (AppImage `APPDIR`) run defaults to a
+window and its shipped assets and keeps its data in user data (`docs/title-host.md`). Evidence:
+`tests/test_first_run_setup.cpp`; a Crash Bash zero-argument packaged run refused with no disc
+(hidden) and, from a saved choice, extracted its executable and booted. Gaps: the windowed screen has
+not been driven by a player click, it has no handset-size capture, and the selector has no first-run
+screen.
+
 ### S022 — Mechanical structure/config/logging/tooling policy
 
 Canonical Python build/verification tooling runs through the checked-in `pyproject.toml`/`uv.lock`;

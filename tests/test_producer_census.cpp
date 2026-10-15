@@ -123,7 +123,8 @@ static void test_a_key_shared_within_a_record_is_counted_as_duplicated(void) {
   CHECK_EQ(census.find(kGuestSubmitter)->duplicated, 0u);
 }
 
-static void test_a_keyed_primitive_without_a_state_render_is_counted(void) {
+namespace {
+void test_a_keyed_primitive_without_a_state_render_is_counted() {
   ProducerCensus census;
   FrameRecord record(0, true);
   record.append(primitiveFrom(0x80180004u, RecordKey{kProducer, 0x80150000u, 0, 0}));
@@ -135,6 +136,7 @@ static void test_a_keyed_primitive_without_a_state_render_is_counted(void) {
   CHECK_EQ(census.primsWithoutRender(), 2u);
   CHECK_EQ(census.find(kProducer)->withoutRender, 2u);
 }
+} // namespace
 
 int main(void) {
   RUN(unfed_is_distinguishable_from_empty);

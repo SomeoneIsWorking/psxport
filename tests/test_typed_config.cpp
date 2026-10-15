@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "config_var.h"
+#include "config_vars.h"
 #include "typed_config.h"
 
 #include <lucent/config.h>
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <string>
 
 namespace {
@@ -28,6 +30,7 @@ void setEnv(const std::string &name, const char *value) {
 }
 
 void clearAll() {
+  setEnv("APPDIR", nullptr);
   for (const std::string_view name : Config::environmentNames()) {
     setEnv(std::string(name), nullptr);
   }
@@ -39,6 +42,7 @@ void test_nothing_set_is_the_neutral_config() {
   CHECK(!config.unpaced);
   CHECK(!config.repl);
   CHECK(!config.fps60.has_value());
+  CHECK(!config.packageRoot.has_value());
 }
 
 // Every field resolves a value exactly as a BoolVar's environment layer resolves the same text.
@@ -72,7 +76,31 @@ void test_fps60_keeps_unset_apart_from_off() {
 
 void test_describe_names_every_field() {
   const std::string text = Config{.unpaced = true, .repl = false, .fps60 = std::nullopt}.describe();
-  CHECK_STREQ(text.c_str(), "nopace=on repl=off fps60=saved");
+  CHECK_STREQ(text.c_str(), "nopace=on repl=off fps60=saved package=none");
+}
+
+// Only an absolute APPDIR is a package root.
+void test_package_root_is_an_absolute_appdir() {
+  setEnv("APPDIR", "/mnt/app");
+  CHECK(Config::fromEnvironment().packageRoot == std::filesystem::path("/mnt/app"));
+  setEnv("APPDIR", "relative/app");
+  CHECK(!Config::fromEnvironment().packageRoot.has_value());
+  setEnv("APPDIR", nullptr);
+  CHECK(!Config::fromEnvironment().packageRoot.has_value());
+}
+
+// A packaged run opens a window and reads its shipped assets unless the environment says otherwise.
+void test_packaged_defaults_ask_for_a_window_and_the_shipped_assets() {
+  setEnv("PSXPORT_VK_WINDOW", nullptr);
+  setEnv("PSXPORT_VK_HEADLESS", nullptr);
+  setEnv("PSXPORT_ASSET_DIR", nullptr);
+  CHECK(!psx::config::windowRequested());
+  psx::config::applyPackagedDefaults("/mnt/app");
+  CHECK(psx::config::windowRequested());
+  CHECK(psx::config::cv_asset_dir.get() == "/mnt/app/usr/share/psxport");
+  setEnv("PSXPORT_VK_HEADLESS", "1");
+  CHECK(!psx::config::windowRequested());
+  setEnv("PSXPORT_VK_HEADLESS", nullptr);
 }
 
 // A variable the typed config reads is declared, not an unknown that did nothing.
@@ -95,6 +123,8 @@ int main() {
   RUN(a_field_reads_a_value_as_a_boolvar_does);
   RUN(fps60_keeps_unset_apart_from_off);
   RUN(describe_names_every_field);
+  RUN(package_root_is_an_absolute_appdir);
+  RUN(packaged_defaults_ask_for_a_window_and_the_shipped_assets);
   RUN(the_audit_counts_typed_names_as_declared);
   return pt_summary();
 }

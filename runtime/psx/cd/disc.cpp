@@ -130,7 +130,8 @@ static char *env_from_dotenv(const char *key) {
   return found;
 }
 // Last-resort resolution order: CLI arg (run.sh) > the game's own key > PSXPORT_DISC, each from the
-// environment then from .env > a *.chd dropped into the working directory (repo root). The drop-in
+// environment then from .env > the disc the player chose at first run > a *.chd dropped into the
+// working directory (repo root). The drop-in
 // scan itself is in disc_provision.cpp (Fs::findFirstWithExtension, std::filesystem).
 static char *resolve_disc_path(DiscState *d0) {
   const char *key = d0->env_key;
@@ -152,6 +153,9 @@ static char *resolve_disc_path(DiscState *d0) {
   if (d) {
     return d;
   }
+  if (d0->saved_path[0] != '\0') {
+    return dup_trim(d0->saved_path);
+  }
   char buf[512];
   if (disc_dropin_scan(buf, sizeof buf)) {
     return dup_trim(buf);
@@ -166,15 +170,23 @@ int disc_open(DiscState *d) {
   char *path = resolve_disc_path(d);
   if (!path) {
     lucent::warn("disc",
-                 "no disc image: tried {}, PSXPORT_DISC (env and ./.env), and a *.chd drop-in "
-                 "in the working directory. The CD model will run with NO MEDIA.",
+                 "no disc image: tried {}, PSXPORT_DISC (env and ./.env), the first-run choice and a "
+                 "*.chd drop-in in the working directory. The CD model will run with NO MEDIA.",
                  d->env_key ? d->env_key : "<no TitleIdentity::discEnvVar>");
     return 0;
   }
+  const bool opened = psx::cd::openDiscImage(*d, path);
+  free(path);
+  return opened ? 1 : 0;
+}
+
+namespace psx::cd {
+
+bool openDiscImage(DiscState &disc, const char *path) {
+  DiscState *d = &disc;
   if (chd_open(path, CHD_OPEN_READ, 0, &d->chd) != CHDERR_NONE) {
     lucent::error("disc", "failed to open CHD: {}", path);
-    free(path);
-    return 0;
+    return false;
   }
   const chd_header *h = chd_get_header(d->chd);
   d->hunk_bytes = h->hunkbytes;
@@ -184,8 +196,7 @@ int disc_open(DiscState *d) {
   if (!d->hunk_buf || d->frames_per_hunk == 0) {
     lucent::error("disc", "invalid CHD hunk geometry or allocation failure: {}", path);
     psx::cd::closeDisc(*d);
-    free(path);
-    return 0;
+    return false;
   }
   memset(d->tracks, 0, sizeof d->tracks);
   d->track_count = 0;
@@ -220,8 +231,7 @@ int disc_open(DiscState *d) {
     if (!disc_parse_track_metadata(metadata, metadata2, &physical_lba, &track)) {
       lucent::error("disc", "invalid or unsupported CHD track metadata {}: {}", metadata_index, metadata);
       psx::cd::closeDisc(*d);
-      free(path);
-      return 0;
+      return false;
     }
     d->tracks[d->track_count] = track;
     ++d->track_count;
@@ -230,13 +240,13 @@ int disc_open(DiscState *d) {
   if (d->track_count == 0) {
     lucent::error("disc", "CHD contains no CD track metadata");
     psx::cd::closeDisc(*d);
-    free(path);
-    return 0;
+    return false;
   }
   lucent::info("disc", "opened {} ({} hunks, {} frames/hunk)", path, d->hunk_count, d->frames_per_hunk);
-  free(path);
-  return 1;
+  return true;
 }
+
+} // namespace psx::cd
 
 static uint8_t to_bcd(uint32_t value) {
   return static_cast<uint8_t>(((value / 10u) << 4u) | (value % 10u));

@@ -40,7 +40,7 @@ def submodule_paths(repo: Path) -> list[str]:
 
 
 def initialize_framework_vendors(framework: Path) -> None:
-    for relative in ("vendor/beetle-psx", "vendor/lucent", "vendor/rmlui", "vendor/bug-report"):
+    for relative in ("vendor/beetle-psx", "vendor/lucent", "vendor/rmlui", "vendor/bug-report", "vendor/setup-ui"):
         run(["git", "submodule", "update", "--init", relative], cwd=framework)
         run(["git", "reset", "--hard", "-q", "HEAD"], cwd=framework / relative)
     run(["git", "submodule", "update", "--init", "deps/libchdr"], cwd=framework / "vendor/beetle-psx")

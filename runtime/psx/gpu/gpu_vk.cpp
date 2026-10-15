@@ -44,6 +44,7 @@
 // ignore Core* exactly as before. The per-frame batch state lives on GpuVkState (game.h), and every
 // unit here reaches the device through the handle macros in gpu_vk_device_handles.h.
 #include "cfg.h"
+#include "config_vars.h"           // windowRequested — the window decision
 #include "gpu_vk_device_handles.h" // s_dev / s_inited / ... — the device handles, declared ONCE for every renderer TU
 #include "mods.h"                  // Mods: per-Game mod toggles (wide/ires) — reached via game->mods
 #include "overlay_glue.h"          // RmlUi mod/debug overlay hooks (init / event / per-frame / record)
@@ -138,13 +139,8 @@ int gpu_vk_enabled(void) {
     return 0;
   }
   if (s_gpu_on < 0) {
-    // HEADLESS BY DEFAULT (2026-07-15): a window opens ONLY on an explicit PSXPORT_VK_WINDOW=1 (set by
-    // run.sh, the user's interactive entry point). Every other invocation — agent gates, SBS smoke, probes,
-    // CI — is headless without needing to remember PSXPORT_VK_HEADLESS. Rationale: agents kept forgetting the
-    // flag and popping an intrusive window on the user's screen (and a windowed run auto-records over the
-    // user's pad_session.pad). A forgotten flag now fails SAFE (headless), not intrusive. PSXPORT_VK_HEADLESS
-    // still forces headless (back-compat) and wins over PSXPORT_VK_WINDOW.
-    s_headless = (cfg_on("PSXPORT_VK_WINDOW") && !cfg_on("PSXPORT_VK_HEADLESS")) ? 0 : 1;
+    // Headless unless a window is asked for, so a forgotten flag never pops a window.
+    s_headless = psx::config::windowRequested() ? 0 : 1;
     s_gpu_on = 1;
   }
   return s_gpu_on;
