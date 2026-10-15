@@ -22,9 +22,10 @@
 #include "menu_readouts.h"
 #include "menu_row.h"
 #include "menu_tab_bar.h"
-#include "render_path_control.h"
 #include "ui_component.h"
 #include "warp_control.h"
+
+#include <SDL3/SDL_keycode.h>
 
 #include <cstdint>
 #include <memory>
@@ -61,7 +62,7 @@ public:
 
   // Handle one menu key. Returns false when the key is not ours, so the caller can fall through
   // to RmlUi's SDL input translation (hover, text, wheel).
-  bool handle_key(int sdl_keycode);
+  bool handle_key(SDL_Keycode key);
 
   // ---- headless driving surface ---------------------------------------------------------------
   // AGENTS MAY NOT RUN WINDOWED (docs/workspace/PROTOCOL.md), and the menu is driven by SDL keyboard events
@@ -73,9 +74,6 @@ public:
     if (mTabBar) {
       mTabBar->select(index);
     }
-  }
-  bool send_key(int sdl_keycode) {
-    return handle_key(sdl_keycode);
   }
   // Enumerate the whole menu as it currently stands: every tab, every pane, every row with its
   // kind, id, label and the text actually in the DOM. This is the instrument that answers "did
@@ -116,7 +114,6 @@ private:
 
   DevCommandControl mDevCommands;
   WarpControl mWarp;
-  RenderPathControl mRenderPath;
   MenuTabBar *mTabBar = nullptr;     // owned by Component::mChildren
   MenuReadouts *mReadouts = nullptr; // owned by Component::mChildren
   std::vector<MenuPane *> mPanes;    // owned by Component::mChildren

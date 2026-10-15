@@ -30,6 +30,7 @@ using psx::input::CardSnapshot;
 using psx::input::DecodedPadRecording;
 using psx::input::kNeutralMask;
 using psx::input::kUnkeyedPhase;
+using psx::input::PadFrame;
 using psx::input::PadRecording;
 using psx::input::PadRecordingWriter;
 using psx::input::PadRecordReplay;
@@ -50,20 +51,20 @@ CardIdentity cardImage(std::uint8_t fill) {
   return card;
 }
 
-void appendFrames(PadRecording &recording, std::uint64_t phase, std::uint16_t mask, int frames) {
-  for (int i = 0; i < frames; i++) {
-    recording.append(phase, mask);
+void appendFrames(PadRecording &recording, PadFrame frame, int count) {
+  for (int i = 0; i < count; i++) {
+    recording.append(frame);
   }
 }
 
 // Title (8 neutral, Start at offset 8..9), menu (3 neutral, Cross at 3..4), then play (4 neutral).
 PadRecording menuRoute() {
   PadRecording recording(cardImage(0x11));
-  appendFrames(recording, kTitle, kNeutralMask, 8);
-  appendFrames(recording, kTitle, kStart, 2);
-  appendFrames(recording, kMenu, kNeutralMask, 3);
-  appendFrames(recording, kMenu, kCross, 2);
-  appendFrames(recording, kPlay, kNeutralMask, 4);
+  appendFrames(recording, {kTitle, kNeutralMask}, 8);
+  appendFrames(recording, {kTitle, kStart}, 2);
+  appendFrames(recording, {kMenu, kNeutralMask}, 3);
+  appendFrames(recording, {kMenu, kCross}, 2);
+  appendFrames(recording, {kPlay, kNeutralMask}, 4);
   return recording;
 }
 
@@ -178,18 +179,18 @@ void test_malformed_bodies_are_refused_not_truncated() {
   CHECK(PadRecording::decode(headerOnly).error.find("holds no frames") != std::string::npos);
 
   std::vector<std::uint8_t> orphanRun = headerOnly;
-  PadRecording::putRun(orphanRun, kNeutralMask, 1);
+  PadRecording::putRun(orphanRun, {.mask = kNeutralMask, .frames = 1});
   CHECK(PadRecording::decode(orphanRun).error.find("precedes any phase") != std::string::npos);
 
   std::vector<std::uint8_t> zeroRun = headerOnly;
   PadRecording::putPhase(zeroRun, kTitle);
-  PadRecording::putRun(zeroRun, kNeutralMask, 0);
+  PadRecording::putRun(zeroRun, {.mask = kNeutralMask, .frames = 0});
   CHECK(PadRecording::decode(zeroRun).error.find("zero-length") != std::string::npos);
 
   std::vector<std::uint8_t> emptyPhase = headerOnly;
   PadRecording::putPhase(emptyPhase, kTitle);
   PadRecording::putPhase(emptyPhase, kMenu);
-  PadRecording::putRun(emptyPhase, kNeutralMask, 1);
+  PadRecording::putRun(emptyPhase, {.mask = kNeutralMask, .frames = 1});
   CHECK(PadRecording::decode(emptyPhase).error.find("holds no frames") != std::string::npos);
 
   std::vector<std::uint8_t> badTag = headerOnly;
@@ -207,7 +208,7 @@ void test_the_streaming_writer_matches_the_in_memory_encoding_byte_for_byte() {
     for (const psx::input::PadSegment &segment : expected.segments()) {
       for (const psx::input::PadRun &run : segment.runs) {
         for (std::uint32_t i = 0; i < run.frames; i++) {
-          CHECK(writer->append(segment.phase, run.mask));
+          CHECK(writer->append({.phase = segment.phase, .mask = run.mask}));
         }
       }
     }
@@ -223,10 +224,10 @@ void test_a_longer_boot_moves_the_press_with_its_phase() {
   // The title phase now lasts 25 frames instead of 10, and the game is still there when the recorded
   // frames run out: the replay holds neutral for the overrun, then the menu press lands at offset 3.
   const auto masks = drive(replay, concat({repeat(kTitle, 25), repeat(kMenu, 6), repeat(kPlay, 4)}));
-  CHECK_EQ(*masks[8], kStart);
-  CHECK_EQ(*masks[10], kNeutralMask);
-  CHECK_EQ(*masks[25 + 3], kCross);
-  CHECK_EQ(*masks[25 + 4], kCross);
+  CHECK_EQ(psx::test::require(masks[8]), kStart);
+  CHECK_EQ(psx::test::require(masks[10]), kNeutralMask);
+  CHECK_EQ(psx::test::require(masks[25 + 3]), kCross);
+  CHECK_EQ(psx::test::require(masks[25 + 4]), kCross);
   CHECK_EQ(replay.progress().framesWaited, 15u + 1u);
   CHECK_EQ(replay.progress().phasesWaitedFor, 2u);
   CHECK(replay.progress().status == ReplayStatus::Complete);
@@ -239,8 +240,8 @@ void test_a_shorter_phase_drops_only_neutral_frames_and_counts_it() {
   // The menu is left 5 frames in, as recorded. The play phase ends after 2 of its 4 neutral frames:
   // nothing held a button, so nothing is reported dropped, and the recording is complete.
   const auto masks = drive(replay, concat({repeat(kTitle, 10), repeat(kMenu, 5), repeat(kPlay, 2), repeat(kLoad, 1)}));
-  CHECK_EQ(*masks[13], kCross);
-  CHECK_EQ(*masks[16], kNeutralMask);
+  CHECK_EQ(psx::test::require(masks[13]), kCross);
+  CHECK_EQ(psx::test::require(masks[16]), kNeutralMask);
   CHECK(!masks[17].has_value());
   CHECK(replay.progress().status == ReplayStatus::Complete);
   CHECK_EQ(replay.progress().framesEmitted, 17u);
@@ -252,8 +253,8 @@ void test_leaving_a_phase_before_its_press_is_counted_as_dropped_input() {
   // The game leaves the title after 9 frames: one of the two recorded Start frames was never
   // delivered. The replay carries on into the menu phase and reports the loss.
   const auto masks = drive(replay, concat({repeat(kTitle, 9), repeat(kMenu, 5), repeat(kPlay, 4)}));
-  CHECK_EQ(*masks[8], kStart);
-  CHECK_EQ(*masks[9 + 3], kCross);
+  CHECK_EQ(psx::test::require(masks[8]), kStart);
+  CHECK_EQ(psx::test::require(masks[9 + 3]), kCross);
   CHECK_EQ(replay.progress().inputFramesDropped, 1u);
   CHECK_EQ(replay.progress().segmentsWithDroppedInput, 1u);
   CHECK(replay.progress().status == ReplayStatus::Complete);
@@ -264,8 +265,8 @@ void test_a_phase_that_never_arrives_is_reported_not_skipped() {
   // The card sends the title somewhere the recording never went (kLoad). The menu segment holds a
   // press, so it can never be passed over: the replay waits, then stops as STALLED and says so.
   const auto masks = drive(replay, concat({repeat(kTitle, 10), repeat(kLoad, 30)}));
-  CHECK_EQ(*masks[10], kNeutralMask);
-  CHECK_EQ(*masks[29], kNeutralMask);
+  CHECK_EQ(psx::test::require(masks[10]), kNeutralMask);
+  CHECK_EQ(psx::test::require(masks[29]), kNeutralMask);
   CHECK(!masks[30].has_value());
   CHECK(!masks[39].has_value());
   CHECK(replay.progress().status == ReplayStatus::Stalled);
@@ -278,9 +279,9 @@ void test_a_phase_that_never_arrives_is_reported_not_skipped() {
 
 void test_a_skipped_phase_holding_input_is_never_passed_over() {
   PadRecording recording;
-  appendFrames(recording, kTitle, kNeutralMask, 2);
-  appendFrames(recording, kMenu, kCross, 1); // a one-frame phase with a press
-  appendFrames(recording, kPlay, kNeutralMask, 2);
+  appendFrames(recording, {kTitle, kNeutralMask}, 2);
+  appendFrames(recording, {kMenu, kCross}, 1); // a one-frame phase with a press
+  appendFrames(recording, {kPlay, kNeutralMask}, 2);
   PhaseReplay replay(std::move(recording), /*phaseWaitLimit=*/5);
   drive(replay, concat({repeat(kTitle, 2), repeat(kPlay, 10)}));
   CHECK(replay.progress().status == ReplayStatus::Stalled);
@@ -290,13 +291,13 @@ void test_a_skipped_phase_holding_input_is_never_passed_over() {
 
 void test_an_unobserved_neutral_phase_is_passed_and_counted() {
   PadRecording recording;
-  appendFrames(recording, kTitle, kNeutralMask, 2);
-  appendFrames(recording, kLoad, kNeutralMask, 1); // transient, no input
-  appendFrames(recording, kMenu, kCross, 2);
+  appendFrames(recording, {kTitle, kNeutralMask}, 2);
+  appendFrames(recording, {kLoad, kNeutralMask}, 1); // transient, no input
+  appendFrames(recording, {kMenu, kCross}, 2);
   PhaseReplay replay(std::move(recording));
   const auto masks = drive(replay, concat({repeat(kTitle, 2), repeat(kMenu, 2)}));
-  CHECK_EQ(*masks[2], kCross);
-  CHECK_EQ(*masks[3], kCross);
+  CHECK_EQ(psx::test::require(masks[2]), kCross);
+  CHECK_EQ(psx::test::require(masks[3]), kCross);
   CHECK_EQ(replay.progress().segmentsPassed, 1u);
   CHECK_EQ(replay.progress().segmentsEntered, 2u);
   CHECK(replay.progress().status == ReplayStatus::Complete);
@@ -304,12 +305,12 @@ void test_an_unobserved_neutral_phase_is_passed_and_counted() {
 
 void test_an_unkeyed_recording_replays_absolutely_from_boot() {
   PadRecording recording;
-  appendFrames(recording, kUnkeyedPhase, kNeutralMask, 3);
-  appendFrames(recording, kUnkeyedPhase, kStart, 1);
+  appendFrames(recording, {kUnkeyedPhase, kNeutralMask}, 3);
+  appendFrames(recording, {kUnkeyedPhase, kStart}, 1);
   CHECK(!recording.keyed());
   PhaseReplay replay(std::move(recording));
   const auto masks = drive(replay, {kTitle, kMenu, kLoad, kPlay, kPlay});
-  CHECK_EQ(*masks[3], kStart);
+  CHECK_EQ(psx::test::require(masks[3]), kStart);
   CHECK(!masks[4].has_value());
   CHECK_EQ(replay.progress().framesWaited, 0u);
   CHECK(replay.progress().status == ReplayStatus::Complete);
@@ -338,7 +339,7 @@ void test_a_replay_against_a_different_card_is_refused() {
                          return CardSnapshot{cardImage(0x22), {}};
                        }});
   CHECK(!session.replayPending());
-  CHECK_EQ(session.service(kTitle, 0x1234u, kNeutralMask), 0x1234u);
+  CHECK_EQ(session.service(kTitle, {.live = 0x1234u, .repl = kNeutralMask}), 0x1234u);
 
   PadRecordReplay same;
   same.configure(
@@ -346,7 +347,7 @@ void test_a_replay_against_a_different_card_is_refused() {
                          return CardSnapshot{cardImage(0x11), {}};
                        }});
   CHECK(same.replayPending());
-  CHECK_EQ(same.service(kTitle, 0x1234u, kNeutralMask), kNeutralMask);
+  CHECK_EQ(same.service(kTitle, {.live = 0x1234u, .repl = kNeutralMask}), kNeutralMask);
   removeFile(path);
 }
 
@@ -372,7 +373,7 @@ void test_a_keyed_recording_is_refused_by_a_title_without_phases() {
                          return CardSnapshot{cardImage(0x11), {}};
                        }});
   CHECK(session.replayPending());
-  CHECK_EQ(session.service(kUnkeyedPhase, 0x1234u, kNeutralMask), 0x1234u);
+  CHECK_EQ(session.service(kUnkeyedPhase, {.live = 0x1234u, .repl = kNeutralMask}), 0x1234u);
   CHECK(!session.replayPending());
   removeFile(path);
 }
@@ -386,7 +387,7 @@ void test_a_raw_file_on_the_replay_knob_is_refused_not_replayed() {
                          return CardSnapshot{};
                        }});
   CHECK(!session.replayPending());
-  CHECK_EQ(session.service(kTitle, 0x1234u, kNeutralMask), 0x1234u);
+  CHECK_EQ(session.service(kTitle, {.live = 0x1234u, .repl = kNeutralMask}), 0x1234u);
   removeFile(path);
 }
 
@@ -401,7 +402,7 @@ void test_the_record_sink_captures_what_a_replay_delivers_under_the_live_phases(
                            return CardSnapshot{cardImage(0x11), {}};
                          }});
     for (const std::uint64_t phase : concat({repeat(kTitle, 10), repeat(kMenu, 5), repeat(kPlay, 4)})) {
-      session.service(phase, kNeutralMask, kNeutralMask);
+      session.service(phase, {.live = kNeutralMask, .repl = kNeutralMask});
     }
     CHECK(!session.replayPending());
     CHECK_EQ(session.recording().totalFrames(), 19u);
@@ -435,7 +436,7 @@ void test_a_live_input_only_session_neither_sinks_nor_replays() {
   });
   // The live mask passes through untouched: nothing here owns the pad.
   for (const std::uint64_t phase : concat({repeat(kTitle, 3), repeat(kMenu, 2)})) {
-    CHECK_EQ(session.service(phase, kNeutralMask, kNeutralMask), kNeutralMask);
+    CHECK_EQ(session.service(phase, {.live = kNeutralMask, .repl = kNeutralMask}), kNeutralMask);
   }
   CHECK(!session.replayPending());
   CHECK(!fileExists(sink));
@@ -503,5 +504,5 @@ int main() {
   RUN(the_record_sink_captures_what_a_replay_delivers_under_the_live_phases);
   RUN(a_live_input_only_session_neither_sinks_nor_replays);
   RUN(pad_records_the_title_phase_of_every_frame);
-  return pt_summary();
+  return psx::test::summary();
 }

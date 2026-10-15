@@ -21,16 +21,16 @@ bool in(uint32_t p, uint32_t lo, uint32_t hi) {
 
 } // namespace
 
-bool io_peripheral_read(Core &core, uint32_t addr, uint32_t &out) {
+bool psx::platform::readIoPeripheral(Core &core, uint32_t addr, uint32_t &out) {
   Game &game = *core.game;
   const uint32_t p = addr & 0x1FFFFFFFu;
   if (in(p, kSio0Lo, kSio0Hi)) {
     switch (p & 0xEu) {
     case 0x0:
-      out = game.sio.dataRead(game.timing.emulatedCpuTicks());
+      out = game.sio.dataRead();
       return true; // JOY_RX_DATA
     case 0x4:
-      out = game.sio.status(game.timing.emulatedCpuTicks());
+      out = game.sio.status();
       return true; // JOY_STAT
     case 0x8:
       out = game.sio.mode;
@@ -86,13 +86,14 @@ bool io_peripheral_read(Core &core, uint32_t addr, uint32_t &out) {
   return false;
 }
 
-bool io_peripheral_write(Core &core, uint32_t addr, uint32_t value) {
+bool psx::platform::writeIoPeripheral(Core &core, GuestStore store) {
   Game &game = *core.game;
-  const uint32_t p = addr & 0x1FFFFFFFu;
+  const uint32_t value = store.value;
+  const uint32_t p = store.address & 0x1FFFFFFFu;
   if (in(p, kSio0Lo, kSio0Hi)) {
     switch (p & 0xEu) {
     case 0x0: // JOY_TX_DATA: the guest clocked a command byte out to the controller
-      game.sio.dataWrite(value, game.pad.buttons, game.timing.emulatedCpuTicks());
+      game.sio.dataWrite(value);
       return true;
     case 0x8:
       game.sio.mode = static_cast<uint16_t>(value & 0x013Fu);
@@ -127,8 +128,19 @@ bool io_peripheral_write(Core &core, uint32_t addr, uint32_t value) {
     return true;
   }
   if (in(p, kCounter2Lo, kCounter2Hi)) {
-    game.timing.rootCounter2Write(p, value);
-    return true;
+    switch (p & 0xCu) {
+    case 0x0:
+      game.timing.rootCounter2WriteValue(static_cast<uint16_t>(value));
+      return true;
+    case 0x4:
+      game.timing.rootCounter2WriteMode(value);
+      return true;
+    case 0x8:
+      game.timing.rootCounter2WriteTarget(value);
+      return true;
+    default:
+      return true;
+    }
   }
   if (p == kCounter1Value) {
     game.timing.hSyncCounterWrite(static_cast<uint16_t>(value));
@@ -148,7 +160,7 @@ bool io_peripheral_write(Core &core, uint32_t addr, uint32_t value) {
 uint32_t Core::irqStatLatch() {
   // The controller port's /ACK is a deadline, not an instant edge (sio_pad.cpp): fold it in here so a
   // driver polling I_STAT sees it at the same place the CD edge appears.
-  game->sio.service(game->timing.emulatedCpuTicks());
+  game->sio.service();
   if (game->cdc.irq_edge) {
     game->cdc.irq_edge = 0;
     game->hle.i_stat |= 1u << 2;

@@ -6,7 +6,7 @@
 #include "dma_irq.h"
 #include "executable_write_source.h"
 #include "game_runtime.h"
-#include "pc_observer.h"
+#include "guest_address_range.h"
 #include "r3000.h"
 #include "render_substrate.h" // Core owns a RenderSubstrate (host-only per-Core render substrate)
 #include "spin_detector.h"
@@ -20,7 +20,6 @@
 #include "emission_scope.h"
 #include "frame_pacer.h"
 #include "frame_state.h"
-#include "gpu_device.h"
 #include "gte.h"
 #include "guest_call_attribution.h"
 #include "guest_call_census.h"
@@ -30,6 +29,10 @@
 #include <span>
 
 class Game; // whole-machine owner; Core::game provides explicit access to its device owners
+
+namespace psx::gpu {
+class GpuDevice;
+}
 
 namespace psx::cpu {
 class ExecutionControl;
@@ -70,16 +73,11 @@ public:
 
   Game *game = nullptr; // back-pointer to the owning Game (set by Game's constructor)
 
-  // The title interface. cfg/hooks/gameCtx are the legacy adapter's views, null for every other runtime.
-  psx::game::GameRuntime &runtime;
-  const GameConfig *cfg = nullptr;
-  const GameHooks *hooks = nullptr;
-  void *gameCtx = nullptr;
+  psx::game::GameRuntime &runtime; // the title interface
 
   // ---- Per-Core host-only rendering state. ----
   RenderSubstrate rsub;
-  // Optional exact-PC observer and nested-call attribution, both owned per Core.
-  PcObserver pcObserver;
+  // Nested-call attribution, owned per Core.
   psx::cpu::GuestCallAttribution callAttribution;
   // The run's resumable-guest-call tally. Per-Core like every other counter here: a process that runs
   // several machines must not fold their calls into one number.
@@ -92,17 +90,17 @@ public:
     return gte_;
   }
 
-  DmaRegisters dma;              // DMA controller registers + owed completions — per-instance HW state (dma_irq.h)
-  psx::gpu::GpuDevice gpuDevice; // the GPU the guest reads and writes: VRAM, GPUSTAT, GPUREAD, display
+  DmaRegisters dma; // DMA controller registers + owed completions — per-instance HW state (dma_irq.h)
+  // The GPU the guest reads and writes: VRAM, GPUSTAT, GPUREAD, display.
+  psx::gpu::GpuDevice &gpuDevice() {
+    return *gpuDevice_;
+  }
   // The open producer scopes and the keys their stored packets carry into the frame record.
   psx::present::EmissionScope emission;
   // The ordering tables the title named; the walk tags each recorded primitive with its bucket.
   psx::gpu::OtTables otTables;
   // Producer object states saved this logic frame.
   psx::present::FrameStates frameStates;
-
-  // A store landing in the diagnostic watch range fires this callback with address, value, and width.
-  void (*storeWatchCb)(Core *, uint32_t, uint32_t, uint32_t) = nullptr; // (core, kaddr, val, width)
 
   // Transient continuation used by the cooperative task owner at an executor boundary.
   uint32_t pending_guest_redirect = 0;
@@ -128,7 +126,7 @@ public:
   //           Without it, a guest busy-wait paced by a per-vblank callback can never terminate,
   //           because nothing advances time between two guest instructions. Spider-Man's boot does
   //           exactly that (see spider1 docs/re-frontier.md RE-05).
-  enum : int { PW_IRQ = 1, PW_HOST = 2 };
+  enum : std::uint8_t { PW_IRQ = 1, PW_HOST = 2 };
   int pending_work = 0;
 
   // ---- HOST FIELD CLOCK (runtime/psx/boot/host_turn.cpp) ------------------------------------------------
@@ -180,7 +178,7 @@ public:
   // True when the whole span is guest storage (main RAM, its mirrors, or the scratchpad), so a read
   // of it reaches no device register and cannot fault.
   bool isGuestStorage(uint32_t address, uint32_t bytes) {
-    return host_ptr(address, bytes) != nullptr;
+    return host_ptr({address, bytes}) != nullptr;
   }
 
   // Memory access (delegates to host_ptr / the I/O map). PSX is little-endian == host.
@@ -216,24 +214,9 @@ public:
   // Copy a NUL-terminated guest string into `out` (at most cap-1 bytes, always NUL-terminated).
   // The one owner of this read; title code and runtime services call it instead of re-looping mem_r8.
   void readCString(uint32_t address, char *out, size_t cap);
-  uint32_t mem_lwl(uint32_t cur, uint32_t a);
-  uint32_t mem_lwr(uint32_t cur, uint32_t a);
-  void mem_swl(uint32_t a, uint32_t v);
-  void mem_swr(uint32_t a, uint32_t v);
-
-  // guestMemset(dst, val, n): 0x8009A420 FUN_8009A420 — the psyq libc `memset` linked into
-  //   MAIN.EXE (byte-loop over guest RAM; NOT a host memcpy since dst/n address guest space).
-  //   WIDE-RE DRAFT, UNWIRED — see mem.cpp for the RE note. Recovered guest contract:
-  //   dst==0 -> return 0; n<=0 -> return dst unmodified; else byte-fill and return the ORIGINAL
-  //   dst (the loop's local cursor advances a copy, never the returned value).
-  uint32_t guestMemset(uint32_t dst, uint8_t val, int32_t n);
-
   // Store watchpoints (REPL `watch` / PSXPORT_CW / PSXPORT_WWATCH).
-  void mem_set_watch(uint32_t lo, uint32_t hi);
+  void mem_set_watch(GuestAddressRange range);
   int mem_watch_hits();
-  // Programmatic write-watchpoint (SBS divergence debugger): stores landing in [lo,hi) fire this
-  // Core's storeWatchCb (installed by sbs.cpp) with (this, addr, value) —
-  void wwatch_arm(uint32_t lo, uint32_t hi);
 
   // Service pending peripheral interrupt deadlines/edges into I_STAT, then read it. PUBLIC because
   // interrupt delivery (Hle::irqPoll) has to test the same latch the guest would see.
@@ -246,11 +229,12 @@ public:
 
 private:
   psx::cpu::Gte gte_{*this};
+  std::unique_ptr<psx::gpu::GpuDevice> gpuDevice_;
   std::unique_ptr<psx::cpu::ExecutionControl> executionControl_;
   std::unique_ptr<psx::cpu::ImageCatalog> imageCatalog_;
   std::unique_ptr<psx::cpu::LightrecExecutor> lightrecExecutor_;
   std::unique_ptr<psx::cpu::NativeDispatcher> nativeDispatcher_;
-  uint8_t *host_ptr(uint32_t a, uint32_t bytes);
+  uint8_t *host_ptr(GuestSpan span);
   uint32_t io_read(uint32_t a, uint32_t bytes);
   void io_write(uint32_t a, uint32_t v, uint32_t bytes);
   // THE DEVICE FUNNEL: every guest-memory access with no RAM mapping, from native code and from
@@ -269,19 +253,19 @@ private:
   // So the "is anything armed" test lives HERE, inline, and only the armed case takes a call. Before
   // the first store the armed flag is unknown, so the slow path runs once to read the environment and
   // set it — which is why the test is `initialised && !armed` rather than just `!armed`.
-  void cw_check_slow(uint32_t a, uint32_t v, int width);
-  void wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w);
-  inline void cw_check(uint32_t a, uint32_t v, int width) {
+  void cw_check_slow(GuestStore store);
+  void wwatch_check_slow(GuestStore store);
+  inline void cw_check(GuestStore store) {
     if (s_cw_init && !s_cw_hi) {
       return;
     }
-    cw_check_slow(a, v, width);
+    cw_check_slow(store);
   }
-  inline void wwatch_check(uint32_t a, uint32_t v, uint32_t w) {
+  inline void wwatch_check(GuestStore store) {
     if (s_ww_init && !s_ww_hi) {
       return;
     }
-    wwatch_check_slow(a, v, w);
+    wwatch_check_slow(store);
   }
 
   // DMA channel state (per-instance) — DMA0 MDEC-in, 1 MDEC-out, 2 GPU, 4 SPU, 6 OTC.
@@ -320,84 +304,5 @@ private:
 // Native services receive their Core explicitly and operate on that instance's register and memory
 // state.
 typedef void (*OverrideFn)(Core *);
-
-extern "C" {
-
-// ---- Guest services and traps ----
-
-// ---- COP0 (minimal) ----
-uint32_t cop0_mfc(Core *c, uint32_t reg);
-void cop0_mtc(Core *c, uint32_t reg, uint32_t v);
-
-// ---- COP2 / GTE ----
-uint32_t gte_read_data(uint32_t reg);
-void gte_write_data(uint32_t reg, uint32_t v);
-uint32_t gte_read_ctrl(uint32_t reg);
-void gte_write_ctrl(uint32_t reg, uint32_t v);
-void gte_op(Core *c, uint32_t insn);
-// Diagnostic exact-PC variant. Both entry points run the same GTE instruction; `_at` additionally
-// supplies the instruction address to an explicitly armed per-Core pre-op observer. The guest
-// executor ordinarily uses Core::pc.
-void gte_op_at(Core *c, uint32_t insn, uint32_t guest_pc);
-inline void pc_observer_at(Core *c, uint32_t guest_pc) {
-  if (c && c->pcObserver.armed()) {
-    c->pcObserver.observe(c, guest_pc);
-  }
-}
-void gte_preop_observer_arm(Core *c, GtePreOpFn fn, void *user);
-void gte_op_observer_arm(Core *c, GtePreOpFn preFn, GtePostOpFn postFn, void *user);
-uint64_t gte_preop_observer_disarm(Core *c); // returns armed-op denominator
-uint64_t gte_preop_observer_seen(const Core *c);
-// swc2 of a projected screen-XY register (DR12/13/14/15): stores to memory AND records that vertex's
-// view-space Z against the written address, which is what gives the renderer native per-vertex depth.
-// The executor routes only those registers here; see gte_beetle.cpp for why the pairing is exact.
-void gte_store_xy(Core *c, uint32_t addr, int rt);
-// Native depth, mfc2 form. gte_hold_pz snapshots the vertex's view-space Z at the `mfc2` (the last
-// moment it is still that vertex's — submit loops are software pipelined); gte_record_pz consumes it
-// when the GPR is stored into the packet, keyed by the address written.
-void gte_hold_pz(Core *c, int gpr, int zreg);
-void gte_record_pz(Core *c, uint32_t addr, int gpr);
-// A word copied between buffers. gte_hold_src records where it was loaded from (captured AT the load,
-// because a load may clobber its own base register); gte_copy_pz carries any recorded vertex depth
-// from there to `dst`. Does nothing if the source has none — never fabricates depth. See
-// gte_beetle.cpp for why both properties matter.
-void gte_hold_src(Core *c, int gpr, uint32_t src);
-void gte_copy_pz(Core *c, int gpr, uint32_t dst);
-// Move a hold between GPRs when the guest DERIVES a value (shift/mask/add) rather than copying it —
-// the packing these renderers do between projecting a vertex and writing it into a packet.
-void gte_hold_move(int dst, int src);
-
-// ---- Subsystem entry points that read/write this instance's RAM (need the Core) ----
-void gpu_dma2_linked_list(Core *c, uint32_t madr);
-void gpu_dma2_block(Core *c, uint32_t madr, int count, int to_gpu);
-
-} // extern "C"
-
-// ---- Native renderer (gpu_native.cpp) — C++ linkage; take the Core for guest-RAM reads / DMA /
-// per-frame present bookkeeping (no global). gpu_gp1 is display control (no RAM) but kept here. ----
-void gpu_gp0(Core *core, uint32_t w);
-
-// Replay ONE guest packet the DrawOTag walk did not read out of guest RAM.
-//
-// A title's native world pass can rebuild a packet stream the guest never stored — this repository's
-// Spyro terrain in-between runs the guest's own draw routine again over HOST memory and gets its
-// packets back. Those packets are still guest packets: the same GP0 words, the same primitive kinds, in
-// the same order the guest's ordering table would have walked them. The only thing missing is the place
-// to read them from, and the only two things the submit path takes from that place are the packet's
-// guest-shaped address (recorded as the item's guest packet, and read by the screen-coverage background
-// classification) and each word's address (the FIFO's own source stamp). So the caller supplies both,
-// as guest-shaped addresses, and everything after that — the FIFO state machine, texpage/CLUT/draw-area
-// resolution, layer classification, the emit-or-queue funnel — runs exactly where it has always run.
-//
-// The alternative, decoding each packet into resolved quad data and calling RenderQueue::emitOrQueue
-// directly, is what this exists to avoid: it would put a SECOND copy of texpage/CLUT/draw-area/blend
-// resolution in a title, and the two copies would drift.
-void gpu_replay_guest_packet(Core *core, uint32_t nodeAddress, const uint32_t *words, unsigned count);
-void gpu_gp1(uint32_t w);
-void gpu_present(Core *core);
-void gpu_present_ex(Core *core, int do_blit);
-// M3 provenance: an owned background drawer's override records the KSEG0 packet-pool span [lo,hi) it
-// produced this frame, so the OT walk classifies those prims as RQ_BACKGROUND (submit.cpp).
-void gpu_bg_range_add(Core *core, uint32_t lo, uint32_t hi);
 
 #endif // __cplusplus

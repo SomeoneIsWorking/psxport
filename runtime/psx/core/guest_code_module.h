@@ -63,15 +63,9 @@ psx::cpu::ImageIdentity activate(Core &core, std::string_view kind, GuestAddress
 // fault rather than leaving guest code to run under no identity.
 void publishStockReadLanding(Core &core, const psx::cd::StockReadLanding &landing, GuestAddressRange arena = {});
 
+// A CD sector transfer landed `landed` bytes of guest RAM. If that range is inside the runtime's declared module
+// window and the window has no active residency, the window becomes one, so the title's own module entry is
+// dispatchable. Idempotent: repeated sectors of the same load activate once.
+void publishLanding(Core &core, GuestAddressRange landed);
+
 } // namespace psx::code_module
-
-// The physical window this title loads runtime code modules into, or an empty range when it has
-// none. One window, because one measured arena is what a title has measured; a runtime that needs
-// several disjoint arenas grows this into a list rather than approximating one with a span that
-// covers unrelated RAM.
-[[nodiscard]] GuestAddressRange guestCodeModuleWindow(const Core &core);
-
-// A CD sector transfer landed `landed` bytes of guest RAM. If that range is inside the declared
-// window and the window has no active residency, the window becomes one, so the title's own
-// module entry is dispatchable. Idempotent: repeated sectors of the same load activate once.
-void publishGuestCodeModuleLanding(Core &core, GuestAddressRange landed);

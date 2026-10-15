@@ -2,35 +2,28 @@
 // through the same Hle::dispatchBios seam as the guest's tail-jump stubs. The
 // sequence is Sony's libc LCG: state = state * 0x41C64E6D + 0x3039; return
 // (state >> 16) & 0x7FFF.
+#include "bios_call.h"
 #include "game.h"
+#include "r3000.h"
 #include "stub_game_runtime.h"
 #include "testutil.h"
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
-enum { R_V0 = 2, R_A0 = 4 };
-
-bool bios_a0(Game &game, uint32_t fn, uint32_t arg, uint32_t sentinel = 0xDEADBEEFu) {
-  game.core.r[R_A0] = arg;
-  game.core.r[R_V0] = sentinel;
-  return game.hle.dispatchBios('A', fn);
-}
-
 void seed(Game &game, uint32_t value) {
-  CHECK(bios_a0(game, 0x30, value));
-  CHECK_EQ(game.core.r[R_V0], 0u);
+  CHECK(psx::test::dispatchBios(game, {'A', 0x30, {value}}));
+  CHECK_EQ(game.core.r[psx::cpu::kV0], 0u);
 }
 
 uint32_t next(Game &game) {
-  return bios_a0(game, 0x2F, 0) ? game.core.r[R_V0] : 0xDEADBEEFu;
+  return psx::test::biosResult(game, {'A', 0x2F});
 }
 
 void test_seed_one_exact_sequence_and_restart() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *game = new Game(stubRuntime, {});
   seed(*game, 1);
-  static constexpr uint32_t expected[] = {16838u, 5758u, 10113u, 17515u, 31051u};
+  constexpr uint32_t expected[] = {16838u, 5758u, 10113u, 17515u, 31051u};
   for (uint32_t value : expected) {
     CHECK_EQ(next(*game), value);
   }
@@ -41,6 +34,7 @@ void test_seed_one_exact_sequence_and_restart() {
 }
 
 void test_state_is_per_game() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *a = new Game(stubRuntime, {});
   Game *b = new Game(stubRuntime, {});
   seed(*a, 1);
@@ -53,12 +47,13 @@ void test_state_is_per_game() {
 }
 
 void test_wrong_table_and_neighbor_are_not_claimed() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *game = new Game(stubRuntime, {});
-  game->core.r[R_V0] = 0xDEADBEEFu;
+  game->core.r[psx::cpu::kV0] = 0xDEADBEEFu;
   CHECK(!game->hle.dispatchBios('Z', 0x2F));
-  CHECK_EQ(game->core.r[R_V0], 0xDEADBEEFu);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 0xDEADBEEFu);
   CHECK(!game->hle.dispatchBios('A', 0x31));
-  CHECK_EQ(game->core.r[R_V0], 0xDEADBEEFu);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 0xDEADBEEFu);
   delete game;
 }
 
@@ -68,5 +63,5 @@ int main() {
   RUN(seed_one_exact_sequence_and_restart);
   RUN(state_is_per_game);
   RUN(wrong_table_and_neighbor_are_not_claimed);
-  return pt_summary();
+  return psx::test::summary();
 }

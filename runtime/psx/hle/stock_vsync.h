@@ -12,7 +12,12 @@ namespace psx::hle {
 // field counter at `queryCounter`; a title without one refuses the query by name.
 class StockVSync {
 public:
-  StockVSync(std::uint32_t entry, std::uint32_t queryCounter) : entry_(entry), queryCounter_(queryCounter) {}
+  // `entry` is VSync's guest address; `queryCounter` the libetc field counter, 0 when the title has none.
+  struct Addresses {
+    std::uint32_t entry = 0;
+    std::uint32_t queryCounter = 0;
+  };
+  explicit StockVSync(Addresses addresses) : entry_(addresses.entry), queryCounter_(addresses.queryCounter) {}
 
   void bind(Game &game) const &;
   // The Game keeps a pointer to it, so a temporary cannot bind.

@@ -19,8 +19,6 @@ public:
   StubGameRuntime &operator=(StubGameRuntime &&) = delete;
 
   void registerOverrides(Game &game) override;
-  RenderCapabilities renderCapabilities() const override;
-  bool guestVramIsPicture(const Game &game) const override;
   const psx::game::HostIdentity *hostIdentity() const override;
 
 private:

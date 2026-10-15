@@ -7,45 +7,33 @@
 # THE GATE: a count may only go DOWN, and going down requires regenerating this file
 # (`--write-baseline`) in the same reviewed change. Growth is impossible without an edit here.
 #
-# DENOMINATOR at generation: 517 files scanned across roots runtime; 12008 hex literals in live code; 471 were 5-8 digit address candidates; 28 live flagged in 9 files; 120 more in comments/strings (NOT gated, listed at the bottom); 0 exempted by an inline `psx-console:` marker; 0 test files and 0 gitignored build artifacts excluded.
+# DENOMINATOR at generation: 431 files scanned across roots runtime; 11683 hex literals in live code; 429 were 5-8 digit address candidates; 20 live flagged in 4 files; 107 more in comments/strings (NOT gated, listed at the bottom); 0 exempted by an inline `psx-console:` marker; 0 test files and 0 gitignored build artifacts excluded.
 #
 # Top holders by LIVE count (comment/string count in parentheses):
 #      11 (   1)  runtime/psx/input/pad_input.cpp
 #       6 (   9)  runtime/psx/debug/dbg_server.cpp
-#       3 (   6)  runtime/psx/gpu/render_queue.cpp
 #       2 (   2)  runtime/psx/core/mem.cpp
-#       2 (   1)  runtime/psx/gpu/gpu_native.cpp
 #       1 (   0)  runtime/psx/boot/boot.cpp
-#       1 (   3)  runtime/psx/debug/ot_attr.cpp
-#       1 (   1)  runtime/psx/gpu/gpu_native_dma.cpp
-#       1 (   1)  runtime/psx/gpu/render_node.h
 
 runtime/psx/boot/boot.cpp:0x801FFFF0:1  # L17
-runtime/psx/core/mem.cpp:0x801FE00C:2  # L152,L982
-runtime/psx/debug/dbg_server.cpp:0x800BE258:1  # L534
-runtime/psx/debug/dbg_server.cpp:0x800ECF58:1  # L441
-runtime/psx/debug/dbg_server.cpp:0x800F2624:1  # L473
-runtime/psx/debug/dbg_server.cpp:0x800FB168:1  # L473
-runtime/psx/debug/dbg_server.cpp:0x801FE00C:1  # L532
-runtime/psx/debug/dbg_server.cpp:0x801FE048:1  # L533
-runtime/psx/debug/ot_attr.cpp:0x80010000:1  # L333
-runtime/psx/gpu/gpu_native.cpp:0x801FE00C:2  # L1112,L2433
-runtime/psx/gpu/gpu_native_dma.cpp:0x800BF544:1  # L120
-runtime/psx/gpu/render_node.h:0x1F80028C:1  # L13
-runtime/psx/gpu/render_queue.cpp:0x800F2624:1  # L249
-runtime/psx/gpu/render_queue.cpp:0x800F2738:1  # L249
-runtime/psx/gpu/render_queue.cpp:0x800FB168:1  # L249
-runtime/psx/input/pad_input.cpp:0x1F800138:1  # L336
-runtime/psx/input/pad_input.cpp:0x1F800236:1  # L343
-runtime/psx/input/pad_input.cpp:0x800BE258:1  # L347
-runtime/psx/input/pad_input.cpp:0x800BF809:1  # L349
-runtime/psx/input/pad_input.cpp:0x800BF80F:1  # L342
-runtime/psx/input/pad_input.cpp:0x800BF839:1  # L341
-runtime/psx/input/pad_input.cpp:0x800BF870:1  # L348
-runtime/psx/input/pad_input.cpp:0x800BF89C:1  # L350
-runtime/psx/input/pad_input.cpp:0x800E7E68:1  # L351
-runtime/psx/input/pad_input.cpp:0x800FE916:1  # L352
-runtime/psx/input/pad_input.cpp:0x800FE91E:1  # L353
+runtime/psx/core/mem.cpp:0x801FE00C:2  # L148,L978
+runtime/psx/debug/dbg_server.cpp:0x800BE258:1  # L526
+runtime/psx/debug/dbg_server.cpp:0x800ECF58:1  # L433
+runtime/psx/debug/dbg_server.cpp:0x800F2624:1  # L465
+runtime/psx/debug/dbg_server.cpp:0x800FB168:1  # L465
+runtime/psx/debug/dbg_server.cpp:0x801FE00C:1  # L524
+runtime/psx/debug/dbg_server.cpp:0x801FE048:1  # L525
+runtime/psx/input/pad_input.cpp:0x1F800138:1  # L335
+runtime/psx/input/pad_input.cpp:0x1F800236:1  # L342
+runtime/psx/input/pad_input.cpp:0x800BE258:1  # L346
+runtime/psx/input/pad_input.cpp:0x800BF809:1  # L348
+runtime/psx/input/pad_input.cpp:0x800BF80F:1  # L341
+runtime/psx/input/pad_input.cpp:0x800BF839:1  # L340
+runtime/psx/input/pad_input.cpp:0x800BF870:1  # L347
+runtime/psx/input/pad_input.cpp:0x800BF89C:1  # L349
+runtime/psx/input/pad_input.cpp:0x800E7E68:1  # L350
+runtime/psx/input/pad_input.cpp:0x800FE916:1  # L351
+runtime/psx/input/pad_input.cpp:0x800FE91E:1  # L352
 
 # ---------------------------------------------------------------------------------
 # NOT GATED — the same values in comments and string literals. Cleanup debt, recorded
@@ -55,14 +43,12 @@ runtime/psx/input/pad_input.cpp:0x800FE91E:1  # L353
 #       9  runtime/cpu/native_dispatch.cpp
 #       9  runtime/psx/debug/dbg_server.cpp
 #       7  runtime/cpu/store_observe.h
-#       6  runtime/psx/gpu/render_queue.cpp
 #       5  runtime/psx/cd/cd_position.h
 #       4  runtime/cpu/lightrec_executor.cpp
 #       4  runtime/psx/hle/bios_libc_string.cpp
 #       4  runtime/psx/hle/bios_load_exec.h
 #       4  runtime/psx/hle/hle_interrupt.cpp
 #       3  runtime/psx/core/guest_memory.cpp
-#       3  runtime/psx/debug/ot_attr.cpp
 #       3  runtime/psx/frame/timing.cpp
 #       3  runtime/psx/game/crt0_boot.h
 #       3  runtime/psx/input/sio_pad.cpp
@@ -72,16 +58,11 @@ runtime/psx/input/pad_input.cpp:0x800FE91E:1  # L353
 #       2  runtime/psx/cd/cd_ready_delivery.cpp
 #       2  runtime/psx/config/config.cpp
 #       2  runtime/psx/core/mem.cpp
+#       2  runtime/psx/debug/ot_attr.cpp
 #       2  runtime/psx/debug/repl.cpp
 #       1  runtime/psx/cd/cdc_native.cpp
-#       1  runtime/psx/config/legacy_game_config.h
 #       1  runtime/psx/core/core.h
 #       1  runtime/psx/debug/ot_attr.h
 #       1  runtime/psx/frame/timing.h
-#       1  runtime/psx/gpu/gpu_native.cpp
-#       1  runtime/psx/gpu/gpu_native_dma.cpp
-#       1  runtime/psx/gpu/gpu_perf.cpp
-#       1  runtime/psx/gpu/proj_prim.cpp
-#       1  runtime/psx/gpu/render_node.h
 #       1  runtime/psx/hle/hle.h
 #       1  runtime/psx/input/pad_input.cpp

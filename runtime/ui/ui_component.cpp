@@ -10,7 +10,7 @@
 namespace psx::ui {
 
 void set_text(Rml::Element *el, std::string_view text) {
-  set_markup(el, rml_text_markup(text));
+  set_markup(el, psx::ui::rmlTextMarkup(text));
 }
 
 void set_markup(Rml::Element *el, const std::string &markup) {

@@ -5,7 +5,9 @@
 
 #include <cstdint>
 
-struct DiscState;
+namespace psx::cd {
+class Disc;
+}
 
 namespace psx::disc_toc {
 
@@ -17,10 +19,10 @@ struct BcdPair {
 
 // GetTN: the first and last track numbers. Opens the disc if its TOC is not loaded yet; false when
 // it cannot be opened or the TOC is malformed.
-bool track_range(DiscState &disc, BcdPair &out);
+bool track_range(cd::Disc &disc, BcdPair &out);
 
 // GetTD: the absolute minute and second where the BCD-numbered track starts; track 0 names the
 // lead-out. False for an unreadable or malformed TOC, a non-BCD number, or a track the disc lacks.
-bool track_start(DiscState &disc, uint8_t track_bcd, BcdPair &out);
+bool track_start(cd::Disc &disc, uint8_t track_bcd, BcdPair &out);
 
 } // namespace psx::disc_toc

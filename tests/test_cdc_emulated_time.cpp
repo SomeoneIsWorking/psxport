@@ -21,18 +21,17 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 void arm_sector_deadline(Game *game) {
   game->cdc.reading = 1;
   // Exercise a following-sector event so this clock test does not require media. Initial-sector
   // loading and framing are independently covered by test_cdc_continuous_read.
   game->cdc.first_sector_pending = 0;
   game->cdc.drive_event_armed = 1;
-  game->cdc.drive_deadline_ticks = cd_drive_sector_period_cpu_ticks(0xA0);
+  game->cdc.drive_deadline_ticks = psx::cd::driveSectorPeriodCpuTicks(0xA0);
 }
 
 void test_instruction_work_reaches_the_sector_deadline() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   arm_sector_deadline(game);
   const uint64_t deadline = game->cdc.drive_deadline_ticks;
@@ -47,16 +46,18 @@ void test_instruction_work_reaches_the_sector_deadline() {
 }
 
 void test_delivered_fields_reach_the_sector_deadline() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   arm_sector_deadline(game);
   // One single-speed sector period is ~13.3 ms, under one NTSC field: the field boundary alone
   // crosses it, which is what lets a display-waiting title receive sectors without spinning.
-  CHECK(game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK_EQ(game->cdc.drive_event_armed, 0);
   CHECK_EQ(game->cdc.following_sector_ready, 1);
 }
 
 void test_host_time_alone_never_fires_a_deadline() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   arm_sector_deadline(game);
   // Negative arm: two sector periods of real time with no guest progress. The old wall-locked
@@ -68,38 +69,42 @@ void test_host_time_alone_never_fires_a_deadline() {
 }
 
 void test_instruction_work_is_not_added_on_top_of_the_field_boundary() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   const uint64_t field_ticks = psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
 
   game->timing.advanceGuestInstructionTicks(static_cast<uint32_t>(field_ticks / 2));
-  CHECK(game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK_EQ(game->timing.emulatedCpuTicks(), field_ticks);
 }
 
 void test_two_half_field_deliveries_equal_one_full_field() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   const uint64_t field_ticks = psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
 
-  CHECK(game->timing.advanceDisplayFields(1, 2, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
-  CHECK(game->timing.advanceDisplayFields(1, 2, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(game->timing.advanceDisplayFields({1, 2}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(game->timing.advanceDisplayFields({1, 2}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK_EQ(game->timing.emulatedCpuTicks(), field_ticks);
 }
 
 void test_a_late_cpu_resynchronizes_the_next_field_boundary() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   const uint64_t field_ticks = psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
 
   game->timing.advanceGuestInstructionTicks(static_cast<uint32_t>(field_ticks + 10));
-  CHECK(game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK_EQ(game->timing.emulatedCpuTicks(), field_ticks + 10);
-  CHECK(game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK_EQ(game->timing.emulatedCpuTicks(), field_ticks * 2 + 10);
 }
 
 void test_zero_or_fractionally_invalid_field_input_is_refused() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
-  CHECK(!game->timing.advanceDisplayFields(1, 1, 0));
-  CHECK(!game->timing.advanceDisplayFields(1, 0, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(!game->timing.advanceDisplayFields({1, 1}, 0));
+  CHECK(!game->timing.advanceDisplayFields({1, 0}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK_EQ(game->timing.emulatedCpuTicks(), 0);
 }
 
@@ -113,5 +118,5 @@ int main() {
   RUN(two_half_field_deliveries_equal_one_full_field);
   RUN(a_late_cpu_resynchronizes_the_next_field_boundary);
   RUN(zero_or_fractionally_invalid_field_input_is_refused);
-  return pt_summary();
+  return psx::test::summary();
 }

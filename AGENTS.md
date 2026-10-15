@@ -6,7 +6,7 @@ never edit it separately. The portfolio-wide native/dynarec methodology lives in
 atomic work live in `docs/migration.md`, `docs/project-goals.md`, `docs/project-state.md`,
 `docs/codemap.md`, and `docs/issues/` respectively.
 
-Before framework work, read `docs/workspace/PROTOCOL.md` (short) and `docs/codemap.md`.
+Before framework work, read `docs/workspace/PROTOCOL.md` (short), `docs/codemap.md` and `docs/features.md`.
 
 ## Product architecture is settled
 
@@ -137,8 +137,8 @@ different test target, not by a gameplay CVar or menu choice.
 
 All product logging goes through Lucent. Use `lucent::info`/`warn`/`error` for normal-run messages and
 `lucent::debug(channel, ...)` for opt-in diagnostics. Never wrap a log call in an `if`; the logger owns
-channel filtering. Never call `printf`, `fprintf`, `std::cerr`, platform debug-print APIs, or the
-retired `cfg_log*` shim from product code. Build expensive non-logging diagnostic data only behind an
+channel filtering. Never call `printf`, `fprintf`, `std::cerr` or platform debug-print APIs from
+product code. Build expensive non-logging diagnostic data only behind an
 interned Lucent channel check, and emit one line per call site.
 
 The runtime logs its work at run end (blocks translated/executed, fallbacks by reason).

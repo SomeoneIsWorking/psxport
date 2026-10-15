@@ -2,6 +2,7 @@
 #pragma once
 
 #include "cd_ready_delivery.h"
+#include "cd_stock_read_completion.h"
 #include "execution_exit.h"
 #include "stock_cd_work_area.h"
 
@@ -30,7 +31,7 @@ public:
   };
 
   // `readySlot` is libcd's CdReadyCallback pointer; zero means the title has none.
-  StockLibcd(const Entries &entries, const StockCommandWorkArea &workArea, std::uint32_t readySlot)
+  StockLibcd(const Entries &entries, const StockCommandWorkArea &workArea, std::uint32_t readySlot) noexcept
       : entries_(entries), workArea_(workArea), readySlot_(readySlot) {}
   virtual ~StockLibcd() = default;
   StockLibcd(const StockLibcd &) = delete;
@@ -75,10 +76,9 @@ protected:
   // A ReadN/ReadS began. Unless CdRead is native, a finite read runs its ready callback to the guest's Pause.
   virtual void readStarted(Core &core) const;
   // A whole CdRead of `sectors` from `firstLba` landed in guest RAM.
-  virtual void readLanded(Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode) const {
+  virtual void readLanded(Core &core, const StockReadLanding &landing, std::uint8_t mode) const {
     (void)core;
-    (void)firstLba;
-    (void)sectors;
+    (void)landing;
     (void)mode;
   }
 
@@ -116,7 +116,7 @@ public:
 
 protected:
   void readStarted(Core &core) const override;
-  void readLanded(Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode) const override;
+  void readLanded(Core &core, const StockReadLanding &landing, std::uint8_t mode) const override;
 
 private:
   Completion completion_;

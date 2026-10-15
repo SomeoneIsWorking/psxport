@@ -4,14 +4,14 @@
 //
 // WHAT IS NOT HERE, named so it cannot be mistaken for an oversight:
 //
-//   * CdcState's function pointers, tick context, disc and XA back-pointers. Those are OWNERSHIP
+//   * psx::cd::CdController's function pointers, tick context, disc and XA back-pointers. Those are OWNERSHIP
 //     (which Game's disc backend this controller reads from), restored by Game's own construction,
 //     not machine state; serializing a pointer would write an address into a file.
 //   * Memcard's host FILE* and path. Also ownership. Its CONTENTS are captured — see writeCardSection
 //     — because the card is an input the guest reads and a file the run writes, so a run restored
 //     against a different card is a different machine.
 //   * The Pad's SDL handles and its recording/replay session index. Host-side input plumbing.
-//   * Cd's pending native read cursors beyond the position/setloc state, which live in CdcState.
+//   * Cd's pending native read cursors beyond the position/setloc state, which live in psx::cd::CdController.
 #include "device_sections.h"
 
 #include "cd.h"
@@ -36,28 +36,28 @@ namespace {
 
 constexpr std::uint8_t kBusLayoutVersion = 3;
 
-// CdcState's queue, verbatim. `CdcIrqEnt` is a plain-C struct so it is written field by field rather
-// than memcpy'd: a memcpy would put the struct's padding in the file, and padding is not a contract.
-void writeIrqQueue(const CdcState &cdc, BlobWriter &out) {
+// psx::cd::CdController's queue, verbatim. `psx::cd::CdcIrqEnt` is a plain-C struct so it is written field by field
+// rather than memcpy'd: a memcpy would put the struct's padding in the file, and padding is not a contract.
+void writeIrqQueue(const psx::cd::CdController &cdc, BlobWriter &out) {
   out.i32(cdc.q_head);
   out.i32(cdc.q_tail);
   out.i32(cdc.resp_rd);
   out.u64(cdc.irq_sequence);
   out.u8(cdc.irq_edge);
-  for (const CdcIrqEnt &entry : cdc.q) {
+  for (const psx::cd::CdcIrqEnt &entry : cdc.q) {
     out.u8(entry.type);
     out.array(entry.resp, std::size(entry.resp));
     out.i32(entry.len);
   }
 }
 
-void readIrqQueue(CdcState &cdc, BlobReader &in) {
+void readIrqQueue(psx::cd::CdController &cdc, BlobReader &in) {
   cdc.q_head = in.i32();
   cdc.q_tail = in.i32();
   cdc.resp_rd = in.i32();
   cdc.irq_sequence = in.u64();
   cdc.irq_edge = in.u8();
-  for (CdcIrqEnt &entry : cdc.q) {
+  for (psx::cd::CdcIrqEnt &entry : cdc.q) {
     entry.type = in.u8();
     in.array(entry.resp, std::size(entry.resp));
     entry.len = in.i32();
@@ -67,7 +67,7 @@ void readIrqQueue(CdcState &cdc, BlobReader &in) {
 } // namespace
 
 void writeCdcSection(Game &game, BlobWriter &out) {
-  const CdcState &cdc = game.cdc;
+  const psx::cd::CdController &cdc = game.cdc;
   out.u8(kBusLayoutVersion);
   out.i32(cdc.index);
   out.array(cdc.param, std::size(cdc.param));
@@ -106,7 +106,7 @@ bool readCdcSection(Game &game, BlobReader &in, std::string &error) {
     error = "cdc section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kBusLayoutVersion);
     return false;
   }
-  CdcState &cdc = game.cdc;
+  psx::cd::CdController &cdc = game.cdc;
   cdc.index = in.i32();
   in.array(cdc.param, std::size(cdc.param));
   cdc.param_n = in.i32();
@@ -454,7 +454,7 @@ void writeCardSection(Game &game, BlobWriter &out, std::string &error) {
   }
   std::vector<std::uint8_t> card(Memcard::kSize, 0);
   for (std::uint32_t frame = 0; frame < Memcard::kFrames; ++frame) {
-    if (!game.memcard.readFrame(frame, card.data() + frame * Memcard::kFrameSize)) {
+    if (!game.memcard.readFrame(frame, card.data() + static_cast<std::size_t>(frame) * Memcard::kFrameSize)) {
       error = "memory card frame " + std::to_string(frame) + " of " + std::to_string(Memcard::kFrames) +
               " could not be read from " + game.memcard.path();
       return;
@@ -509,7 +509,7 @@ bool readCardSection(Game &game, BlobReader &in, std::string &error) {
   // a host file the run OWNS, so this is the one place a load writes outside the state file itself.
   std::uint32_t written = 0;
   for (; written < Memcard::kFrames; ++written) {
-    if (!game.memcard.writeFrame(written, card.data() + written * Memcard::kFrameSize)) {
+    if (!game.memcard.writeFrame(written, card.data() + static_cast<std::size_t>(written) * Memcard::kFrameSize)) {
       error = "memory card frame " + std::to_string(written) + " of " + std::to_string(Memcard::kFrames) +
               " could not be written to " + game.memcard.path();
       return false;
@@ -592,14 +592,15 @@ bool readCdSection(Game &game, BlobReader &in, std::string &error) {
 // their own classes, defined here because this is where the save-state owner reaches their private
 // state, and NOT because of any ownership they have over the machine.
 psx::frame::Timing::ClockSnapshot psx::frame::Timing::clockSnapshot() const {
-  return ClockSnapshot{mEmulatedTime.nowQ32(),
-                       mEmulatedTime.displayBoundaryQ32(),
+  const EmulatedTimeQ32 time = mEmulatedTime.q32();
+  return ClockSnapshot{time.now,
+                       time.displayBoundary,
                        static_cast<std::uint64_t>(mDisplayFieldPhaseNumerator),
                        static_cast<std::uint64_t>(mDisplayFieldPhaseDenominator)};
 }
 
 void psx::frame::Timing::restoreClockSnapshot(const ClockSnapshot &clock) {
-  mEmulatedTime.restoreQ32(clock.nowQ32, clock.displayBoundaryQ32);
+  mEmulatedTime.restore({.now = clock.nowQ32, .displayBoundary = clock.displayBoundaryQ32});
   mDisplayFieldPhaseNumerator = static_cast<unsigned __int128>(clock.displayPhaseNumerator);
   mDisplayFieldPhaseDenominator = static_cast<unsigned __int128>(clock.displayPhaseDenominator);
 }

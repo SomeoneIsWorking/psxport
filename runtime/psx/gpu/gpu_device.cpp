@@ -21,7 +21,6 @@
 // gpu.c's link-time knobs and machine hooks. gMode, widescreen_hack and its aspect setting are owned
 // by gte_beetle.cpp, EventCycles by mdec_beetle.c, IRQ_Assert by spu_beetle.cpp.
 extern "C" {
-extern PS_GPU GPU;
 
 uint8_t psx_gpu_upscale_shift = 0;
 uint8_t psx_gpu_upscale_shift_hw = 0;
@@ -185,8 +184,13 @@ void GpuDevice::bind() {
   sBound = this;
 }
 
-void GpuDevice::advanceTo(uint64_t cpuTicks) {
+GpuDevice::CensusMark GpuDevice::censusMark() {
+  return {psxport_gpu_census[PGC_CMDS_DISPATCHED], psxport_gpu_census[PGC_WORDS_DROPPED]};
+}
+
+void GpuDevice::advanceTo(frame::CpuTicks now) {
   bind();
+  const auto cpuTicks = static_cast<uint64_t>(now);
   if (!mClockStarted || cpuTicks < mClockTicks) {
     mClockStarted = true;
     mClockTicks = cpuTicks;
@@ -205,7 +209,7 @@ void GpuDevice::advanceTo(uint64_t cpuTicks) {
   psxport_gpu_grant_drawtime();
 }
 
-DeviceProbe GpuDevice::probe(unsigned long dispatchedBefore, unsigned long droppedBefore) const {
+DeviceProbe GpuDevice::probe(CensusMark before) const {
   DeviceProbe probe;
   switch (GPU.InCmd) {
   case INCMD_PLINE:
@@ -225,8 +229,8 @@ DeviceProbe GpuDevice::probe(unsigned long dispatchedBefore, unsigned long dropp
     break;
   }
   probe.fifoDepth = static_cast<unsigned>(psxport_gpu_fifo_depth());
-  probe.dispatched = static_cast<unsigned>(psxport_gpu_census[PGC_CMDS_DISPATCHED] - dispatchedBefore);
-  probe.wordDropped = psxport_gpu_census[PGC_WORDS_DROPPED] != droppedBefore;
+  probe.dispatched = static_cast<unsigned>(psxport_gpu_census[PGC_CMDS_DISPATCHED] - before.dispatched);
+  probe.wordDropped = psxport_gpu_census[PGC_WORDS_DROPPED] != before.dropped;
   present::RecordDrawState &state = probe.state;
   state.clipX0 = GPU.ClipX0;
   state.clipY0 = GPU.ClipY0;
@@ -266,48 +270,44 @@ void GpuDevice::enterSlot(const std::optional<present::OtSlot> &slot, bool desce
   mTap.enterSlot(slot, descending);
 }
 
-void GpuDevice::gp0(uint32_t word, uint32_t sourceAddress, const std::optional<present::RecordKey> &packetKey) {
+void GpuDevice::gp0(uint32_t word, const Gp0Origin &origin) {
   bind();
   psxport_gpu_grant_drawtime();
-  const unsigned long dispatched = psxport_gpu_census[PGC_CMDS_DISPATCHED];
-  const unsigned long dropped = psxport_gpu_census[PGC_WORDS_DROPPED];
+  const CensusMark before = censusMark();
   GPU_Write(0, kGp0Port, word);
-  mTap.onGp0(word, sourceAddress, packetKey, probe(dispatched, dropped));
+  mTap.onGp0(word, origin, probe(before));
 }
 
-void GpuDevice::gp1(uint32_t word, uint64_t cpuTicks) {
+void GpuDevice::gp1(uint32_t word, frame::CpuTicks now) {
   bind();
-  const unsigned long dispatched = psxport_gpu_census[PGC_CMDS_DISPATCHED];
-  const unsigned long dropped = psxport_gpu_census[PGC_WORDS_DROPPED];
-  advanceTo(cpuTicks);
+  const CensusMark before = censusMark();
+  advanceTo(now);
   GPU_Write(0, kGp1Port, word);
   const uint32_t command = word >> 24;
   if (command == 0x00) {
-    mTap.onSoftReset(probe(dispatched, dropped));
+    mTap.onSoftReset(probe(before));
   }
   if (command == 0x00 || command == 0x01) {
-    mTap.onCommandReset(probe(dispatched, dropped));
+    mTap.onCommandReset(probe(before));
   } else {
-    mTap.onDeviceStep(probe(dispatched, dropped));
+    mTap.onDeviceStep(probe(before));
   }
 }
 
 uint32_t GpuDevice::read() {
   bind();
-  const unsigned long dispatched = psxport_gpu_census[PGC_CMDS_DISPATCHED];
-  const unsigned long dropped = psxport_gpu_census[PGC_WORDS_DROPPED];
+  const CensusMark before = censusMark();
   const uint32_t value = GPU_Read(0, kGp0Port);
-  mTap.onDeviceStep(probe(dispatched, dropped));
+  mTap.onDeviceStep(probe(before));
   return value;
 }
 
-uint32_t GpuDevice::status(uint64_t cpuTicks) {
+uint32_t GpuDevice::status(frame::CpuTicks now) {
   bind();
-  const unsigned long dispatched = psxport_gpu_census[PGC_CMDS_DISPATCHED];
-  const unsigned long dropped = psxport_gpu_census[PGC_WORDS_DROPPED];
-  advanceTo(cpuTicks);
+  const CensusMark before = censusMark();
+  advanceTo(now);
   const uint32_t value = GPU_Read(0, kGp1Port);
-  mTap.onDeviceStep(probe(dispatched, dropped));
+  mTap.onDeviceStep(probe(before));
   return value;
 }
 
@@ -319,7 +319,11 @@ bool GpuDevice::hasUnsealedWork() const {
   return mTap.hasPendingWork();
 }
 
-void GpuDevice::loadImage(int x, int y, int width, int height, std::span<const uint16_t> pixels) {
+void GpuDevice::loadImage(VramRect rect, std::span<const uint16_t> pixels) {
+  const int x = rect.x;
+  const int y = rect.y;
+  const int width = rect.width;
+  const int height = rect.height;
   if (width <= 0 || height <= 0) {
     return;
   }
@@ -348,11 +352,12 @@ DisplayArea GpuDevice::displayArea() {
   DisplayArea area;
   area.x = static_cast<int>(GPU.DisplayFB_XStart);
   area.y = static_cast<int>(GPU.DisplayFB_YStart);
-  area.width = gp1_display_width(GPU.DisplayMode);
+  area.width = psx::gpu::displayWidthFromMode(GPU.DisplayMode);
   const int lines = static_cast<int>(GPU.VertEnd) - static_cast<int>(GPU.VertStart);
   const bool interlaced480 = (GPU.DisplayMode & (DISP_INTERLACED | DISP_VERT480)) == (DISP_INTERLACED | DISP_VERT480);
   area.height = std::max(lines, 0) * (interlaced480 ? 2 : 1);
   area.depth24 = (GPU.DisplayMode & DISP_RGB24) != 0;
+  area.pal = (GPU.DisplayMode & DISP_PAL) != 0;
   return area;
 }
 
@@ -361,7 +366,11 @@ VramPoint GpuDevice::drawAreaOrigin() {
   return {GPU.ClipX0, GPU.ClipY0};
 }
 
-Rgb24Picture GpuDevice::picture(int x, int y, int width, int height, bool depth24) {
+Rgb24Picture GpuDevice::picture(VramRect rect, bool depth24) {
+  const int x = rect.x;
+  const int y = rect.y;
+  const int width = rect.width;
+  const int height = rect.height;
   bind();
   const uint16_t *vram = GPU_get_vram();
   const auto at = [vram](int column, int row) {
@@ -406,7 +415,7 @@ bool GpuDevice::loadState(std::span<const uint8_t> bytes) {
   GPU_StartFrame(&mScanout->spec);
   mFieldEnded = false;
   mClockStarted = false; // the restored machine's clock anchors at its next access
-  mTap.onStateReplaced(probe(psxport_gpu_census[PGC_CMDS_DISPATCHED], psxport_gpu_census[PGC_WORDS_DROPPED]));
+  mTap.onStateReplaced(probe(censusMark()));
   return true;
 }
 

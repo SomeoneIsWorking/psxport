@@ -21,7 +21,6 @@ namespace {
 constexpr uint8_t kCdcIrqDataReady = 1;
 
 // MIPS o32 argument registers for the ready-callback ABI.
-enum : int { A0 = 4, A1 = 5 };
 
 // The callback's second argument: no sector pointer, the callback reads the sector through the drive
 // (SLUS_008.75's callbacks read neither argument).
@@ -36,12 +35,12 @@ bool readyCompletionOwed(const Core &core) {
   if ((core.game->hle.i_stat & core.game->hle.i_mask & (1u << IRQ_BIT_CD)) == 0u) {
     return false;
   }
-  return cdc_current_irq_type(&core.game->cdc) == kCdcIrqDataReady;
+  return core.game->cdc.currentIrqType() == kCdcIrqDataReady;
 }
 
 CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint32_t status) {
   Hle &hle = core.game->hle;
-  CdcState &controller = core.game->cdc;
+  psx::cd::CdController &controller = core.game->cdc;
   // Command responses ahead of the data-ready belong to the guest's own status polls; none is retired here.
   if (!readyCompletionOwed(core)) {
     return CdReadyDelivery::NothingOwed;
@@ -71,9 +70,9 @@ CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint
   acknowledgeCurrentCdResponse(core, response);
   // Stock libcd's INT1 handler clears the request register before the callback, emptying the data FIFO.
   const int savedBank = controller.index;
-  cdc_write(&controller, CDC_REG_INDEX, CDC_BANK_DATA);
-  cdc_write(&controller, CDC_REG_REQUEST, 0u);
-  cdc_write(&controller, CDC_REG_INDEX, static_cast<uint8_t>(savedBank));
+  controller.write(psx::cd::CdcRegister::Index, psx::cd::kCdcBankData);
+  controller.write(psx::cd::CdcRegister::Request, 0u);
+  controller.write(psx::cd::CdcRegister::Index, static_cast<uint8_t>(savedBank));
   hle.cd_ready_delivered++;
   lucent::debug("cdirq",
                 "CD data-ready -> callback 0x{:08X} (slot 0x{:08X}, controller status 0x{:02X}, a0={} a1={}); {} of "
@@ -88,11 +87,11 @@ CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint
   // An interrupt handler's context: the whole register file restored, and in_irq held for the callback.
   hle.in_irq = 1;
   const R3000 saved = *static_cast<R3000 *>(&core);
-  if (!bios_interrupt_enter_handler_context(&core, hle.exception_exit_buf)) {
+  if (!psx::hle::enterInterruptHandlerContext(&core, hle.exception_exit_buf)) {
     Hle::enterExceptionStack(core);
   }
-  core.r[A0] = status;
-  core.r[A1] = kNoFirstWord;
+  core.r[psx::cpu::kA0] = status;
+  core.r[psx::cpu::kA1] = kNoFirstWord;
   const auto result = psx::cpu::dispatchGuest0(core, callback, psx::cpu::ExecutionBudget::currentTurn(core));
   *static_cast<R3000 *>(&core) = saved;
   hle.in_irq = 0;
@@ -100,21 +99,21 @@ CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint
 }
 
 std::uint8_t acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> response) {
-  CdcState &controller = core.game->cdc;
+  psx::cd::CdController &controller = core.game->cdc;
   std::ranges::fill(response, std::uint8_t{0});
-  const std::uint8_t type = cdc_current_irq_type(&controller);
+  const std::uint8_t type = controller.currentIrqType();
   if (type == 0u) {
     return 0u;
   }
   const int savedBank = controller.index;
-  cdc_take_current_response(&controller, response.data(), static_cast<int>(response.size()));
+  controller.takeCurrentResponse(response.data(), static_cast<int>(response.size()));
   // The line is retired BEFORE the controller acknowledge, because that acknowledge is what raises a
   // fresh edge for a response already queued behind this one.
   controller.irq_edge = 0;
   core.game->hle.i_stat &= ~(1u << IRQ_BIT_CD);
-  cdc_write(&controller, CDC_REG_INDEX, CDC_BANK_IRQ);
-  cdc_write(&controller, CDC_REG_IRQ_FLAG, type);
-  cdc_write(&controller, CDC_REG_INDEX, static_cast<std::uint8_t>(savedBank));
+  controller.write(psx::cd::CdcRegister::Index, psx::cd::kCdcBankIrq);
+  controller.write(psx::cd::CdcRegister::IrqFlag, type);
+  controller.write(psx::cd::CdcRegister::Index, static_cast<std::uint8_t>(savedBank));
   // The same `irqStatLatch()` the MMIO dispatcher performs after a guest controller write, so the
   // next response is visible to the next poll.
   core.irqStatLatch();

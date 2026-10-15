@@ -5,6 +5,7 @@
 #include "core.h"
 #include "field_rate.h"
 #include "game.h"
+#include "gpu_device.h"
 #include "host_turn.h"
 #include <algorithm> // std::min
 #include <lucent/log.h>
@@ -13,29 +14,27 @@
 
 namespace psx::frame {
 
-enum { V0 = 2 };
-
 uint64_t Timing::readEmulatedCpuTicks(void *context) {
   return static_cast<Timing *>(context)->mEmulatedTime.nowTicks();
 }
 
-void Timing::bindCdcClock(CdcState *cdc) {
-  cdc_bind_tick_source(cdc, this, readEmulatedCpuTicks);
+void Timing::bindCdcClock(psx::cd::CdController *cdc) {
+  cdc->bindTickSource(this, readEmulatedCpuTicks);
 }
 
 void Timing::advanceGuestInstructionTicks(uint32_t ticks) {
   guestInstructionTicks += ticks;
   mEmulatedTime.advanceInstructions(ticks);
-  game->sio.service(mEmulatedTime.nowTicks());
+  game->sio.service();
   serviceCdc();
 }
 
-bool Timing::advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilliHz) {
-  if (fields <= 0 || parts <= 0 || fieldRateMilliHz == 0) {
+bool Timing::advanceDisplayFields(FieldCadence cadence, uint32_t fieldRateMilliHz) {
+  if (cadence.fields <= 0 || cadence.parts <= 0 || fieldRateMilliHz == 0) {
     return false;
   }
   if (!mEmulatedTime.advanceDisplayFields(
-          static_cast<uint32_t>(fields), static_cast<uint32_t>(parts), fieldRateMilliHz)) {
+          static_cast<uint32_t>(cadence.fields), static_cast<uint32_t>(cadence.parts), fieldRateMilliHz)) {
     return false;
   }
   // A delivered display field is the host field clock's boundary. Re-anchor it here, before the
@@ -43,8 +42,8 @@ bool Timing::advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilli
   // owed at, and a callback that accounted guest time against the stale deadline would request
   // the very field it is inside.
   psx::cpu::notifyDisplayField(game->core);
-  game->sio.service(mEmulatedTime.nowTicks());
-  raiseVBlank(consumeCompletedDisplayFields(static_cast<uint32_t>(fields), static_cast<uint32_t>(parts)));
+  game->sio.service();
+  raiseVBlank(consumeCompletedDisplayFields(cadence));
   serviceCdc();
   game->fieldDigest.recordField(*game);
   return true;
@@ -63,7 +62,9 @@ unsigned __int128 gcd128(unsigned __int128 a, unsigned __int128 b) {
 
 } // namespace
 
-uint32_t Timing::consumeCompletedDisplayFields(uint32_t fields, uint32_t parts) {
+uint32_t Timing::consumeCompletedDisplayFields(FieldCadence cadence) {
+  const auto fields = static_cast<uint32_t>(cadence.fields);
+  const auto parts = static_cast<uint32_t>(cadence.parts);
   const unsigned __int128 common = gcd128(mDisplayFieldPhaseDenominator, parts);
   const unsigned __int128 leftScale = parts / common;
   const unsigned __int128 rightScale = mDisplayFieldPhaseDenominator / common;
@@ -106,7 +107,7 @@ void Timing::raiseVBlank(uint32_t fields) {
 
 std::optional<uint64_t> Timing::ticksUntilDeviceEvent() const {
   uint64_t deadline = 0;
-  if (!cdc_next_deadline_ticks(&game->cdc, &deadline)) {
+  if (!game->cdc.nextDeadlineTicks(&deadline)) {
     return std::nullopt;
   }
   const uint64_t now = mEmulatedTime.nowTicks();
@@ -147,29 +148,25 @@ uint16_t Timing::rootCounter2() const {
   return static_cast<uint16_t>(count);
 }
 
-void Timing::rootCounter2Write(uint32_t reg, uint32_t v) {
-  const uint64_t now = mEmulatedTime.nowTicks();
-  switch (reg & 0xCu) {
-  case 0x0: { // counter value: writing it restarts counting from that value
-    rootCounter2BaseValue = static_cast<uint16_t>(v);
-    rootCounter2OriginTicks = now;
-    return;
-  }
-  case 0x4: // mode: a write resets the counter to zero, as on hardware
-    rootCounter2Mode = v & 0x3FFu;
-    rootCounter2BaseValue = 0;
-    rootCounter2OriginTicks = now;
-    return;
-  case 0x8:
-    rootCounter2Target = v & 0xFFFFu;
-    return;
-  default:
-    return;
-  }
+// Writing the value restarts counting from it.
+void Timing::rootCounter2WriteValue(uint16_t value) {
+  rootCounter2BaseValue = value;
+  rootCounter2OriginTicks = mEmulatedTime.nowTicks();
+}
+
+// A mode write resets the counter to zero, as on hardware.
+void Timing::rootCounter2WriteMode(uint32_t mode) {
+  rootCounter2Mode = mode & 0x3FFu;
+  rootCounter2BaseValue = 0;
+  rootCounter2OriginTicks = mEmulatedTime.nowTicks();
+}
+
+void Timing::rootCounter2WriteTarget(uint32_t target) {
+  rootCounter2Target = target & 0xFFFFu;
 }
 
 uint64_t Timing::hSyncTotal() const {
-  const bool pal = game && game->gpu.s_disp_pal != 0;
+  const bool pal = game && game->core.gpuDevice().displayArea().pal;
   return mEmulatedTime.hSyncCount(fieldRateMilliHz(pal), displayLinesPerField(pal));
 }
 
@@ -182,7 +179,7 @@ void Timing::hSyncCounterWrite(uint16_t value) {
 }
 
 void Timing::serviceCdc() {
-  if (cdc_drive_service(&game->cdc)) {
+  if (game->cdc.service()) {
     game->core.irqStatLatch();
   }
 }
@@ -194,7 +191,7 @@ void Timing::serviceCdc() {
 // deref is skipped. Was ov_vsync_callback (taxi-in via c->r[4]; the callback ptr arg is
 // unused here, so no arg on the method).
 void Timing::vsyncCallback() {
-  game->core.r[V0] = 0;
+  game->core.r[psx::cpu::kV0] = 0;
 }
 
 // Advance the host field count once per title-owned native frame. Guest memory layout is title
@@ -214,8 +211,12 @@ void Timing::frameTick() {
 // measured live as Vagrant's movie-wait spinning inside a single resident libcd poll body while
 // CD sectors flowed (issue #25; the concrete pc lives in that issue's record, not here).
 
-bool spin_detector_sample(
-    SpinDetectorState &st, uint32_t pc, bool host_starved, uint32_t ticks, uint64_t window_ticks, int max_run) {
+bool psx::platform::sampleSpinDetector(SpinDetectorState &st, SpinSample sample, SpinLimits limits) {
+  const uint32_t pc = sample.pc;
+  const bool host_starved = sample.hostStarved;
+  const uint64_t window_ticks = limits.windowTicks;
+  const int max_run = limits.maxRun;
+  const uint32_t ticks = sample.ticks;
   if (window_ticks == 0 || max_run <= 0) {
     return false; // detection disabled by configuration
   }

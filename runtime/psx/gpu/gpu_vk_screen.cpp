@@ -14,19 +14,17 @@
 #include <cstdlib>
 
 void GpuVkState::present_screen() {
-  if (!gpu_vk_enabled()) {
+  if (!device->enabled()) {
     return;
   }
-  GpuDevice &device = *GpuDevice::sInstance;
-  init_gpu(game);
-  overlay_glue_frame_begin(&game->core);
-  int w = 0, h = 0;
-  gpu_vk_present_sink_size(&w, &h);
-  ensure_present_img(w, h);
+  bring_up();
+  psx::ui::beginOverlayFrame(&game->core);
+  const psx::present::PixelSize sink = device->sinkSize();
+  ensure_present_img(sink.width, sink.height);
   if (!s_present_img) {
     return;
   }
-  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device.s_dev);
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device->s_dev);
   if (!cmd) {
     lucent::error("gpu_vk", "AcquireGPUCommandBuffer failed: {}", SDL_GetError());
     std::exit(2);
@@ -37,10 +35,10 @@ void GpuVkState::present_screen() {
   cti.load_op = SDL_GPU_LOADOP_CLEAR;
   cti.store_op = SDL_GPU_STOREOP_STORE;
   SDL_GPURenderPass *rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
-  overlay_glue_record_screen(game, cmd, rp, s_present_img_w, s_present_img_h);
+  psx::ui::recordOverlayScreen(game, cmd, rp, s_present_img_w, s_present_img_h);
   SDL_EndGPURenderPass(rp);
-  if (device.s_headless) {
-    gpu_submit(cmd, "present_screen");
+  if (device->s_headless != 0) {
+    device->submit(cmd, "present_screen");
     return;
   }
   show_present_image(cmd, false); // consumes cmd
@@ -49,15 +47,15 @@ void GpuVkState::present_screen() {
 // Bring the window/device (and the windowed overlay) up now rather than on the first present, so a
 // host-only screen can create its UI before its first frame. Idempotent per device AND per Game, so
 // every session in a host-lifetime-window product can call it; no-op when the GPU is disabled.
-void gpu_vk_ensure_device(Core *core) {
-  if (gpu_vk_enabled()) {
-    init_gpu(core ? core->game : nullptr);
+namespace psx::gpu {
+
+void ensureDevice(Core &core) {
+  if (core.game->gpu_dev.enabled()) {
+    core.game->gpuVk().bring_up();
   }
 }
 
-void gpu_vk_present_screen(Core *core) {
-  core->game->gpu_vk.present_screen();
-}
+} // namespace psx::gpu
 
 // Route this Game's present somewhere other than the window.
 //
@@ -67,17 +65,15 @@ void gpu_vk_present_screen(Core *core) {
 // only way several guests can share one window, because the window belongs to the host
 // (psxport::HostPresentation) and each session's composite is its own.
 //
-// `image_width`/`image_height` are the size that session should build its picture at, which is the
+// `image` is the size that session should build its picture at, which is the
 // host's business: a panel is a fraction of the window, and a full-window image per session is memory
 // nobody asked for. Zero keeps the sink's size.
-void gpu_vk_present_to_pane(Core *core, int image_width, int image_height) {
-  GpuVkState &state = core->game->gpu_vk;
-  state.setPresentImageSize(image_width, image_height);
-  state.setPresentTarget(GpuVkState::PresentTarget::Pane);
+void GpuVkState::presentToPane(psx::present::PixelSize image) {
+  s_present_img_requested = image;
+  setPresentTarget(PresentTarget::Pane);
 }
 
-void gpu_vk_present_to_window(Core *core) {
-  GpuVkState &state = core->game->gpu_vk;
-  state.setPresentImageSize(0, 0);
-  state.setPresentTarget(GpuVkState::PresentTarget::Swapchain);
+void GpuVkState::presentToWindow() {
+  s_present_img_requested = {};
+  setPresentTarget(PresentTarget::Swapchain);
 }

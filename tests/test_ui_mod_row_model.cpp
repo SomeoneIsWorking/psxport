@@ -20,11 +20,11 @@
 
 #include "testutil.h"
 
+#include "config.h"
 #include "config_var.h"
 #include "config_vars.h"
 #include "mod_row_model.h"
 #include "mods.h"
-#include "render_capabilities.h"
 
 #include <filesystem>
 #include <fstream>
@@ -32,25 +32,22 @@
 #include <system_error>
 #include <vector>
 
+namespace {
+
 using psx::ui::ModRowModel;
 using psx::ui::RowKind;
 
-// Every id the shipped assets/rml/menu.rml actually authors, plus debug_ids, which the model knows
-// and the shipped document does NOT use (it is reachable by a game shipping its own menu.rml).
-static const char *const kRealToggles[] = {
+// Every toggle id the model owns.
+const char *const kRealToggles[] = {
     "aspect",
     "ires",
-    "face_order",
     "fps60",
-    "debug_ids",
-    "debug_quads",
-    "debug_objects",
 };
-static const char *const kRealAdjusts[] = {};
+const char *const kRealAdjusts[] = {};
 // Near-misses: plausible typos, wrong-kind lookups, and an id from the OTHER table. Each one must
 // come back false, and `warp_area` is in here on purpose — it is an adjust row whose model is
 // WarpControl, not Mods, so ModRowModel must NOT claim it.
-static const char *const kNotToggles[] = {
+const char *const kNotToggles[] = {
     "aspect_ratio",
     "ASPECT",
     "",
@@ -61,7 +58,7 @@ static const char *const kNotToggles[] = {
     "quit",
     "music_0",
 };
-static const char *const kNotAdjusts[] = {
+const char *const kNotAdjusts[] = {
     "",
     "aspect",
     "warp_area",
@@ -71,14 +68,14 @@ static const char *const kNotAdjusts[] = {
     "close",
 };
 
-static std::string text_of(const Mods &m, RowKind k, const char *id) {
+std::string text_of(const Mods &m, RowKind k, const char *id) {
   std::string out = "<not-set>";
   ModRowModel::value_text(m, k, id, out);
   return out;
 }
 
 // ---- 1. the discriminator, run against BOTH classes -----------------------------------------------
-static void test_knows_answers_both_ways(void) {
+void test_knows_answers_both_ways(void) {
   int yes = 0, no = 0;
   for (const char *id : kRealToggles) {
     CHECK(ModRowModel::knows(RowKind::Toggle, id));
@@ -107,24 +104,23 @@ static void test_knows_answers_both_ways(void) {
 }
 
 // ---- 2. every label of every multi-state row --------------------------------------------------------
-static void test_toggle_labels_cover_every_state(void) {
+void test_toggle_labels_cover_every_state(void) {
   Mods m;
-  static const char *const kAspect[] = {"Vanilla", "16:9", "21:9", "Auto"};
+  constexpr const char *const kAspect[] = {"Vanilla", "16:9", "21:9", "Auto"};
   for (int i = 0; i < 4; i++) {
     m.aspect = i;
     CHECK_STREQ(text_of(m, RowKind::Toggle, "aspect").c_str(), kAspect[i]);
   }
   // 0 is Auto for this row and 1 is Vanilla — the two rows' index conventions genuinely differ.
-  static const char *const kIres[] = {"Auto", "Vanilla", "X2", "X3", "X4"};
+  constexpr const char *const kIres[] = {"Auto", "Vanilla", "X2", "X3", "X4"};
   for (int i = 0; i < 5; i++) {
     m.ires = i;
     CHECK_STREQ(text_of(m, RowKind::Toggle, "ires").c_str(), kIres[i]);
   }
-  // Debug toggles are simple on/off
-  m.debug_quads = 0;
-  CHECK_STREQ(text_of(m, RowKind::Toggle, "debug_quads").c_str(), "Off");
-  m.debug_quads = 1;
-  CHECK_STREQ(text_of(m, RowKind::Toggle, "debug_quads").c_str(), "On");
+  m.fps60 = 0;
+  CHECK_STREQ(text_of(m, RowKind::Toggle, "fps60").c_str(), "Off");
+  m.fps60 = 1;
+  CHECK_STREQ(text_of(m, RowKind::Toggle, "fps60").c_str(), "On");
 }
 
 // ---- 3. THE COLLAPSE THAT WOULD HAVE BEEN SILENT ------------------------------------------------------
@@ -133,7 +129,7 @@ static void test_toggle_labels_cover_every_state(void) {
 // not: index 0 of the ires row is "Auto". A settings file carrying a bad value would silently start
 // showing (and, on the next activation, cycling from) the wrong state. This is the negative control
 // for the table rewrite: it is the case a naive generic clamp fails.
-static void test_out_of_range_falls_back_per_row(void) {
+void test_out_of_range_falls_back_per_row(void) {
   Mods m;
   for (int bad : {-1, 4, 99, 1 << 20}) {
     m.aspect = bad;
@@ -147,16 +143,8 @@ static void test_out_of_range_falls_back_per_row(void) {
 }
 
 // ---- 4. the cycles ------------------------------------------------------------------------------------
-static void test_toggle_cycles_and_wraps(void) {
+void test_toggle_cycles_and_wraps(void) {
   Mods m;
-  // A bool row: 0 <-> 1. debug_quads is deliberately chosen because it does NOT persist, so this
-  // case touches no file at all.
-  m.debug_quads = 0;
-  ModRowModel::toggle(m, "debug_quads");
-  CHECK_EQ(m.debug_quads, 1);
-  ModRowModel::toggle(m, "debug_quads");
-  CHECK_EQ(m.debug_quads, 0);
-
   m.aspect = 0;
   for (int expect : {1, 2, 3, 0, 1}) {
     ModRowModel::toggle(m, "aspect");
@@ -172,12 +160,12 @@ static void test_toggle_cycles_and_wraps(void) {
 
 // ---- 5. adjust: step, clamp, precision -----------------------------------------------------------------
 // No adjust rows remain; the test is kept as a compile-time guard that the empty table works.
-static void test_no_adjust_rows_remain(void) {
+void test_no_adjust_rows_remain(void) {
   CHECK(!ModRowModel::knows(RowKind::Adjust, "anything"));
 }
 
 // ---- 6. an unknown id must not be a silent no-op ---------------------------------------------------------
-static void test_unknown_id_reports_rather_than_pretending(void) {
+void test_unknown_id_reports_rather_than_pretending(void) {
   Mods m;
   m.aspect = 2;
 
@@ -194,9 +182,9 @@ static void test_unknown_id_reports_rather_than_pretending(void) {
   CHECK_EQ(m.aspect, 2);
 }
 
-static void test_temporal_capability_controls_row_mutation_and_persistence(void) {
+void test_temporal_capability_controls_row_mutation_and_persistence(void) {
   Mods unsupported;
-  unsupported.init(false, FACE_ORDER_DEPTH, std::nullopt);
+  unsupported.init(false, std::nullopt);
   CHECK(!unsupported.temporalInterpolationSupported());
   CHECK(!ModRowModel::available(unsupported, RowKind::Toggle, "fps60"));
   CHECK(ModRowModel::available(unsupported, RowKind::Toggle, "aspect"));
@@ -206,17 +194,19 @@ static void test_temporal_capability_controls_row_mutation_and_persistence(void)
   // Saving another setting rewrites the file without an unsupported fps60 key. A stale preference
   // therefore cannot look like an option this title still owns.
   ModRowModel::toggle(unsupported, "aspect");
-  std::ifstream saved(psx::config::cv_settings_path.get());
+  std::ifstream saved(psx::config::settings_path());
   const std::string text((std::istreambuf_iterator<char>(saved)), std::istreambuf_iterator<char>());
   CHECK(text.find("fps60=") == std::string::npos);
 
   Mods capable;
-  capable.init(true, FACE_ORDER_DEPTH, std::nullopt);
+  capable.init(true, std::nullopt);
   CHECK(capable.temporalInterpolationSupported());
   CHECK(ModRowModel::available(capable, RowKind::Toggle, "fps60"));
   ModRowModel::toggle(capable, "fps60");
   CHECK_EQ(capable.fps60, 1);
 }
+
+} // namespace
 
 int main(void) {
   // Redirect the settings file the persisting rows write, so this test cannot clobber a real one.
@@ -224,7 +214,7 @@ int main(void) {
   // It is REMOVED at the end: a hermetic test that leaves a file behind in whatever directory it
   // happened to be run from is not hermetic, it just fails somewhere else later.
   const char *kSettings = "scratch_test_ui_mod_row_model_settings.ini";
-  psx::config::cv_settings_path.set_text(psx::config::Layer::Override, kSettings);
+  psx::config::find("PSXPORT_SETTINGS")->set_text(psx::config::Layer::Override, kSettings);
 
   RUN(knows_answers_both_ways);
   RUN(toggle_labels_cover_every_state);
@@ -236,5 +226,5 @@ int main(void) {
 
   std::error_code ec;
   std::filesystem::remove(kSettings, ec); // best-effort; the rows above may never have saved
-  return pt_summary();
+  return psx::test::summary();
 }

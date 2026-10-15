@@ -2,6 +2,8 @@
 // One title's own logo as the picker draws it: an RGBA image and its lazily uploaded texture.
 #pragma once
 
+#include "logo_image.h"
+
 #include <SDL3/SDL_gpu.h>
 
 #include <cstdint>
@@ -15,8 +17,8 @@ namespace psx::host {
 // An RGBA8 image in memory plus the GPU texture the picker draws it from.
 class PanelLogo {
 public:
-  // `rgba` is `width * height * 4` bytes of straight alpha in the host's usual order.
-  PanelLogo(int width, int height, std::vector<std::uint8_t> rgba);
+  // `image.rgba` is `width * height * 4` bytes of straight alpha in the host's usual order.
+  explicit PanelLogo(LogoImage image);
   ~PanelLogo();
   PanelLogo(const PanelLogo &) = delete;
   PanelLogo &operator=(const PanelLogo &) = delete;

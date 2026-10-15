@@ -1,7 +1,9 @@
 // Sony BIOS libc leaves must operate on guest addresses through Core's memory map and preserve each
 // function's exact return contract. A0:0x15 strcat is used by Toy Story 2 asset-path composition;
 // A0:0x1A memcmp is used by CTR startup and returns the signed difference of the first unequal bytes.
+#include "bios_call.h"
 #include "game.h"
+#include "r3000.h"
 #include "testutil.h"
 
 #include "stub_game_runtime.h"
@@ -9,10 +11,6 @@
 #include <cstdint>
 
 namespace {
-
-psx::test::StubGameRuntime stubRuntime;
-
-enum { R_V0 = 2, R_A0 = 4, R_A1 = 5, R_A2 = 6 };
 
 constexpr uint32_t kDst = 0x80100000u;
 constexpr uint32_t kSrc = 0x80100100u;
@@ -36,47 +34,46 @@ void check_string(Core &core, uint32_t address, const char *expected) {
   }
 }
 
-bool strcat_call(Game &game, uint32_t destination, uint32_t source) {
-  game.core.r[R_A0] = destination;
-  game.core.r[R_A1] = source;
-  game.core.r[R_V0] = 0xDEADBEEFu;
-  return game.hle.dispatchBios('A', 0x15);
+bool strcat_call(Game &game, const std::array<uint32_t, 3> &args) {
+  return psx::test::dispatchBios(game, {'A', 0x15, args});
 }
 
-void check_memcmp(Game &game, uint32_t lhs, uint32_t rhs, uint32_t size, int32_t expected) {
-  game.core.r[R_A0] = lhs;
-  game.core.r[R_A1] = rhs;
-  game.core.r[R_A2] = size;
-  game.core.r[R_V0] = 0xDEADBEEFu;
-  CHECK(game.hle.dispatchBios('A', 0x1A));
-  CHECK_EQ(static_cast<int32_t>(game.core.r[R_V0]), expected);
+// memcmp(a0, a1, a2) answers `expected`.
+void check_memcmp(Game &game, const std::array<uint32_t, 3> &args, int32_t expected) {
+  CHECK(psx::test::dispatchBios(game, {'A', 0x1A, args}));
+  CHECK_EQ(static_cast<int32_t>(game.core.r[psx::cpu::kV0]), expected);
 }
 
-void check_toupper(Game &game, uint32_t character, uint32_t expected) {
-  game.core.r[R_A0] = character;
-  game.core.r[R_V0] = 0xDEADBEEFu;
-  CHECK(game.hle.dispatchBios('A', 0x25));
-  CHECK_EQ(game.core.r[R_V0], expected);
+struct CaseMapping {
+  uint32_t from = 0;
+  uint32_t to = 0;
+};
+
+void check_toupper(Game &game, CaseMapping mapping) {
+  CHECK(psx::test::dispatchBios(game, {'A', 0x25, {mapping.from}}));
+  CHECK_EQ(game.core.r[psx::cpu::kV0], mapping.to);
 }
 
 void test_toupper_is_ascii_only_and_locale_independent() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = new Game(stubRuntime, {});
-  check_toupper(*game, static_cast<uint32_t>('t'), static_cast<uint32_t>('T'));
-  check_toupper(*game, static_cast<uint32_t>('T'), static_cast<uint32_t>('T'));
-  check_toupper(*game, static_cast<uint32_t>('7'), static_cast<uint32_t>('7'));
-  check_toupper(*game, 0xE0u, 0xE0u);
+  check_toupper(*game, {static_cast<uint32_t>('t'), static_cast<uint32_t>('T')});
+  check_toupper(*game, {static_cast<uint32_t>('T'), static_cast<uint32_t>('T')});
+  check_toupper(*game, {static_cast<uint32_t>('7'), static_cast<uint32_t>('7')});
+  check_toupper(*game, {0xE0u, 0xE0u});
   delete game;
 }
 
 void test_appends_terminator_returns_destination_and_preserves_guards() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = new Game(stubRuntime, {});
   put_string(game->core, kDst, "LEVEL01\\SFX");
   put_string(game->core, kSrc, ".vh");
   game->core.mem_w8(kDst - 1, 0xA5);
   game->core.mem_w8(kDst + 15, 0x5A);
 
-  CHECK(strcat_call(*game, kDst, kSrc));
-  CHECK_EQ(game->core.r[R_V0], kDst);
+  CHECK(strcat_call(*game, {kDst, kSrc}));
+  CHECK_EQ(game->core.r[psx::cpu::kV0], kDst);
   check_string(game->core, kDst, "LEVEL01\\SFX.vh");
   CHECK_EQ(game->core.mem_r8(kDst - 1), 0xA5u);
   CHECK_EQ(game->core.mem_r8(kDst + 15), 0x5Au);
@@ -84,22 +81,24 @@ void test_appends_terminator_returns_destination_and_preserves_guards() {
 }
 
 void test_guest_mirror_source_and_empty_inputs() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = new Game(stubRuntime, {});
   put_string(game->core, kDst, "");
   put_string(game->core, kSrc, ".vb");
 
   // KSEG1 0xA0100100 aliases the KSEG0 source above. Reading through Core, rather than handing host
   // pointers to libc, is part of the shipping contract.
-  CHECK(strcat_call(*game, kDst, 0xA0100100u));
+  CHECK(strcat_call(*game, {kDst, 0xA0100100u}));
   check_string(game->core, kDst, ".vb");
 
   put_string(game->core, kSrc, "");
-  CHECK(strcat_call(*game, kDst, kSrc));
+  CHECK(strcat_call(*game, {kDst, kSrc}));
   check_string(game->core, kDst, ".vb");
   delete game;
 }
 
 void test_forward_guest_alias_uses_bytewise_psx_copy_order() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = new Game(stubRuntime, {});
   constexpr std::array<uint8_t, 6> bytes = {'a', 'b', 0, 'c', 'd', 0};
   for (uint32_t i = 0; i < bytes.size(); i++) {
@@ -108,12 +107,13 @@ void test_forward_guest_alias_uses_bytewise_psx_copy_order() {
 
   // The BIOS leaf is a guest-byte loop. This alias shape terminates and distinguishes that loop from
   // calling host strcat on an unmapped guest pointer or bulk-copying a precomputed source span.
-  CHECK(strcat_call(*game, kDst, kDst + 3));
+  CHECK(strcat_call(*game, {kDst, kDst + 3}));
   check_string(game->core, kDst, "abcd");
   delete game;
 }
 
 void test_memcmp_returns_first_unsigned_byte_difference() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = new Game(stubRuntime, {});
   constexpr uint32_t kLhs = 0x80100200u;
   constexpr uint32_t kRhs = 0x80100300u;
@@ -124,12 +124,12 @@ void test_memcmp_returns_first_unsigned_byte_difference() {
     game->core.mem_w8(kRhs + i, rhs[i]);
   }
 
-  check_memcmp(*game, kLhs, kRhs, 1, 0);
-  check_memcmp(*game, kLhs, kRhs, lhs.size(), 0xE0);
-  check_memcmp(*game, kRhs, kLhs, lhs.size(), -0xE0);
+  check_memcmp(*game, {kLhs, kRhs, 1}, 0);
+  check_memcmp(*game, {kLhs, kRhs, static_cast<uint32_t>(lhs.size())}, 0xE0);
+  check_memcmp(*game, {kRhs, kLhs, static_cast<uint32_t>(lhs.size())}, -0xE0);
   // The KSEG1 mirror must use the same guest-memory path; a zero length must touch neither pointer.
-  check_memcmp(*game, 0xA0100200u, kLhs, lhs.size(), 0);
-  check_memcmp(*game, 0xFFFFFFFFu, 0xFFFFFFFFu, 0, 0);
+  check_memcmp(*game, {0xA0100200u, kLhs, static_cast<uint32_t>(lhs.size())}, 0);
+  check_memcmp(*game, {0xFFFFFFFFu, 0xFFFFFFFFu, 0}, 0);
 
   for (uint32_t i = 0; i < lhs.size(); i++) {
     CHECK_EQ(game->core.mem_r8(kLhs + i), lhs[i]);
@@ -139,30 +139,30 @@ void test_memcmp_returns_first_unsigned_byte_difference() {
 }
 
 void test_wrong_table_and_neighbor_are_not_claimed() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = new Game(stubRuntime, {});
   put_string(game->core, kDst, "base");
   put_string(game->core, kSrc, "tail");
-  game->core.r[R_V0] = 0xDEADBEEFu;
+  game->core.r[psx::cpu::kV0] = 0xDEADBEEFu;
 
   CHECK(!game->hle.dispatchBios('Z', 0x15));
-  CHECK_EQ(game->core.r[R_V0], 0xDEADBEEFu);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 0xDEADBEEFu);
   CHECK(!game->hle.dispatchBios('A', 0x16));
-  CHECK_EQ(game->core.r[R_V0], 0xDEADBEEFu);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 0xDEADBEEFu);
   CHECK(!game->hle.dispatchBios('Z', 0x25));
-  CHECK_EQ(game->core.r[R_V0], 0xDEADBEEFu);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 0xDEADBEEFu);
   check_string(game->core, kDst, "base");
   delete game;
 }
 
 void check_atoi(Game &game, uint32_t fn, const char *text, int32_t expected) {
   put_string(game.core, kSrc, text);
-  game.core.r[R_A0] = kSrc;
-  game.core.r[R_V0] = 0xDEADBEEFu;
-  CHECK(game.hle.dispatchBios('A', fn));
-  CHECK_EQ(static_cast<int32_t>(game.core.r[R_V0]), expected);
+  CHECK(psx::test::dispatchBios(game, {'A', fn, {kSrc}}));
+  CHECK_EQ(static_cast<int32_t>(game.core.r[psx::cpu::kV0]), expected);
 }
 
 void test_atoi_and_atol_parse_signed_decimal() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = new Game(stubRuntime, {});
   for (const uint32_t fn : {0x10u, 0x11u}) {
     check_atoi(*game, fn, "42", 42);
@@ -184,5 +184,5 @@ int main() {
   RUN(forward_guest_alias_uses_bytewise_psx_copy_order);
   RUN(memcmp_returns_first_unsigned_byte_difference);
   RUN(wrong_table_and_neighbor_are_not_claimed);
-  return pt_summary();
+  return psx::test::summary();
 }

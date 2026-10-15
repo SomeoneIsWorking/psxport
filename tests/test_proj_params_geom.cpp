@@ -20,9 +20,11 @@
 
 #include "proj_params.h"
 
+namespace {
+
 // Fresh state: invalid, and NOT silently pre-loaded with the stock projection. This is the negative
 // the whole design rests on — if it can't be told apart from a real set, the flag buys nothing.
-static void test_a_fresh_instance_is_invalid_and_not_the_stock_values(void) {
+void test_a_fresh_instance_is_invalid_and_not_the_stock_values(void) {
   ProjParams pp;
   CHECK(!pp.geomValid());
   // The stock Tomba!2 projection is exactly 160/120/350. None of those may appear by default, or
@@ -34,7 +36,7 @@ static void test_a_fresh_instance_is_invalid_and_not_the_stock_values(void) {
 
 // Validity needs BOTH setters. The offset and the screen distance are separate libgte calls at
 // separate guest addresses, and a camera built from one of them is a camera with a made-up half.
-static void test_validity_requires_both_setters(void) {
+void test_validity_requires_both_setters(void) {
   ProjParams offset_only;
   offset_only.setGeomOffset(160.0f, 120.0f);
   CHECK(!offset_only.geomValid());
@@ -51,7 +53,7 @@ static void test_validity_requires_both_setters(void) {
 
 // The stock projection round-trips exactly. These are the audited 0-diff values (engine-ownership
 // audit rows 40-41), so a correct capture reproduces the current image bit-for-bit.
-static void test_the_stock_projection_round_trips(void) {
+void test_the_stock_projection_round_trips(void) {
   ProjParams pp;
   pp.setGeomOffset(160.0f, 120.0f);
   pp.setGeomScreen(350.0f);
@@ -65,7 +67,7 @@ static void test_the_stock_projection_round_trips(void) {
 // re-projection agree on ONE center. If this channel re-derived or "corrected" the center, the 3D
 // would reproject against a different center than the guest packets and double-image by ~54px
 // (journal 5900/5926). So the widened value must arrive here verbatim.
-static void test_a_widened_center_is_stored_verbatim(void) {
+void test_a_widened_center_is_stored_verbatim(void) {
   ProjParams wide;
   wide.setGeomOffset(214.0f, 120.0f); // 16:9
   wide.setGeomScreen(350.0f);
@@ -83,7 +85,7 @@ static void test_a_widened_center_is_stored_verbatim(void) {
 // range — 233 in one area, 350 elsewhere — long after the offset was set at display init. If the
 // second call reset or invalidated the offset, every area that narrows its draw range would lose its
 // projection center.
-static void test_a_second_screen_call_replaces_only_H(void) {
+void test_a_second_screen_call_replaces_only_H(void) {
   ProjParams pp;
   pp.setGeomOffset(160.0f, 120.0f);
   pp.setGeomScreen(350.0f);
@@ -94,11 +96,13 @@ static void test_a_second_screen_call_replaces_only_H(void) {
   CHECK(pp.geomValid());
 }
 
+} // namespace
+
 int main(void) {
   RUN(a_fresh_instance_is_invalid_and_not_the_stock_values);
   RUN(validity_requires_both_setters);
   RUN(the_stock_projection_round_trips);
   RUN(a_widened_center_is_stored_verbatim);
   RUN(a_second_screen_call_replaces_only_H);
-  return pt_summary();
+  return psx::test::summary();
 }

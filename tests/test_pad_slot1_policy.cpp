@@ -64,5 +64,5 @@ int main() {
   RUN(slot1_is_absent_by_default);
   RUN(connected_slot1_carries_the_guest_packet);
   RUN(connected_idle_slot1_is_present);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -1,7 +1,8 @@
 // disc.cpp — the title's CHD read by LBA through libchdr: 2048-byte user data and raw sectors for the
 // CD controller, the stock libcd reads and a title's own CD overrides.
 #include "disc.h"
-#include "cfg.h" // cfg_str — the CONFIG half of cfg.h; the logging half is retired
+#include "config.h" // launch_setting — the title disc key, then PSXPORT_DISC
+#include "number_text.h"
 #include "r3000.h"
 #include <libchdr/chd.h>
 #include <lucent/log.h>
@@ -10,67 +11,72 @@
 #include <string.h>
 #include <time.h>
 
-#define RAW_FRAME 2448u // 2352 raw + 96 subcode, CHD CD unit
-#define USER_DATA 2048u
-
-void disc_state_init(DiscState *d) {
-  memset(d, 0, sizeof *d);
-  d->cached_hunk = 0xFFFFFFFFu;
-}
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace psx::cd {
 
-void closeDisc(DiscState &disc) {
-  if (disc.chd) {
-    chd_close(disc.chd);
-    disc.chd = nullptr;
-  }
-  free(disc.hunk_buf);
-  disc.hunk_buf = nullptr;
-  disc.frames_per_hunk = 0;
-  disc.hunk_count = 0;
-  disc.hunk_bytes = 0;
-  disc.cached_hunk = 0xFFFFFFFFu;
-  memset(disc.tracks, 0, sizeof disc.tracks);
-  disc.track_count = 0;
+Disc::~Disc() {
+  close();
 }
 
-} // namespace psx::cd
+void Disc::close() {
+  if (chd) {
+    chd_close(chd);
+    chd = nullptr;
+  }
+  free(hunk_buf);
+  hunk_buf = nullptr;
+  frames_per_hunk = 0;
+  hunk_count = 0;
+  hunk_bytes = 0;
+  cached_hunk = 0xFFFFFFFFu;
+  memset(tracks, 0, sizeof tracks);
+  track_count = 0;
+}
 
-int disc_parse_track_metadata(const char *metadata, int metadata2, int32_t *physical_lba, DiscTrackInfo *out_track) {
+bool parseTrackMetadata(const char *metadata, bool metadata2, int32_t *physical_lba, DiscTrackInfo *out_track) {
   if (!metadata || !physical_lba || !out_track) {
-    return 0;
+    return false;
   }
 
-  int track_number = 0;
-  int frames = 0;
-  int pregap = 0;
-  int postgap = 0;
-  char type[64] = {};
-  char subtype[32] = {};
-  char pregap_type[32] = {};
-  char pregap_subtype[32] = {};
-  const int fields =
-      metadata2 ? sscanf(metadata,
-                         "TRACK:%d TYPE:%63s SUBTYPE:%31s FRAMES:%d PREGAP:%d PGTYPE:%31s "
-                         "PGSUB:%31s POSTGAP:%d",
-                         &track_number,
-                         type,
-                         subtype,
-                         &frames,
-                         &pregap,
-                         pregap_type,
-                         pregap_subtype,
-                         &postgap)
-                : sscanf(metadata, "TRACK:%d TYPE:%63s SUBTYPE:%31s FRAMES:%d", &track_number, type, subtype, &frames);
-  if (fields != (metadata2 ? 8 : 4) || track_number <= 0 || track_number > 99 || frames <= 0 || pregap < 0 ||
-      postgap < 0 || (strcmp(type, "MODE2_RAW") != 0 && strcmp(type, "AUDIO") != 0) || strcmp(subtype, "NONE") != 0) {
-    return 0;
+  // CHT2 adds PREGAP PGTYPE PGSUB POSTGAP after the CHTR fields.
+  constexpr std::array<std::string_view, 8> kKeys{
+      "TRACK:", "TYPE:", "SUBTYPE:", "FRAMES:", "PREGAP:", "PGTYPE:", "PGSUB:", "POSTGAP:"};
+  const std::size_t keyCount = metadata2 ? 8 : 4;
+  std::array<std::string_view, 8> values{};
+  std::string_view rest(metadata);
+  for (std::size_t i = 0; i < keyCount; i++) {
+    rest.remove_prefix(std::min(rest.find_first_not_of(" \t\r\n"), rest.size()));
+    const std::size_t end = std::min(rest.find_first_of(" \t\r\n"), rest.size());
+    const std::string_view field = rest.substr(0, end);
+    rest.remove_prefix(end);
+    if (!field.starts_with(kKeys[i]) || field.size() == kKeys[i].size()) {
+      return false;
+    }
+    values[i] = field.substr(kKeys[i].size());
+  }
+  const std::optional<int> parsed_track_number = psx::config::parseInt(values[0]);
+  const std::optional<int> parsed_frames = psx::config::parseInt(values[3]);
+  const std::optional<int> parsed_pregap = metadata2 ? psx::config::parseInt(values[4]) : std::optional<int>(0);
+  const std::optional<int> parsed_postgap = metadata2 ? psx::config::parseInt(values[7]) : std::optional<int>(0);
+  if (!parsed_track_number.has_value() || !parsed_frames.has_value() || !parsed_pregap.has_value() ||
+      !parsed_postgap.has_value() || *parsed_track_number <= 0 || *parsed_track_number > 99 || *parsed_frames <= 0 ||
+      *parsed_pregap < 0 || *parsed_postgap < 0 || (values[1] != "MODE2_RAW" && values[1] != "AUDIO") ||
+      values[2] != "NONE") {
+    return false;
   }
 
-  const int pregap_in_file = metadata2 && pregap_type[0] == 'V' ? pregap : 0;
+  const int track_number = *parsed_track_number;
+  const int frames = *parsed_frames;
+  const int pregap = *parsed_pregap;
+  const int postgap = *parsed_postgap;
+  const int pregap_in_file = metadata2 && values[5].starts_with('V') ? pregap : 0;
   if (frames < pregap_in_file) {
-    return 0;
+    return false;
   }
   DiscTrackInfo track{};
   track.number = static_cast<uint8_t>(track_number);
@@ -81,18 +87,20 @@ int disc_parse_track_metadata(const char *metadata, int metadata2, int32_t *phys
   track.postgap = postgap;
   const int64_t next = start + track.sectors + track.postgap;
   if (start < INT32_MIN || start > INT32_MAX || next < INT32_MIN || next > INT32_MAX) {
-    return 0;
+    return false;
   }
   track.lba = static_cast<int32_t>(start);
   *physical_lba = static_cast<int32_t>(next);
   *out_track = track;
-  return 1;
+  return true;
 }
 
-// Resolve the disc path: the CONSUMING GAME's own key (DiscState::env_key, from
-// psx::host::TitleIdentity::discEnvVar), then the generic PSXPORT_DISC, each as an environment
-// variable and then as a KEY=VALUE line in ./.env. Kept minimal (no parent-walk) since boot runs from the repo root.
-static char *dup_trim(const char *s) {
+namespace {
+
+constexpr uint32_t kRawFrame = 2448u; // 2352 raw + 96 subcode, CHD CD unit
+constexpr uint32_t kUserData = 2048u;
+
+std::string trimmed(const char *s) {
   while (*s == ' ' || *s == '\t') {
     s++;
   }
@@ -100,350 +108,255 @@ static char *dup_trim(const char *s) {
   while (n && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' || s[n - 1] == '\t')) {
     n--;
   }
-  char *o = (char *)malloc(n + 1);
-  memcpy(o, s, n);
-  o[n] = 0;
-  return o;
-}
-static char *env_from_dotenv(const char *key) {
-  FILE *f = fopen(".env", "rb");
-  if (!f) {
-    return 0;
-  }
-  char line[1024];
-  char *found = 0;
-  size_t klen = strlen(key);
-  while (fgets(line, sizeof line, f)) {
-    char *p = line;
-    while (*p == ' ' || *p == '\t') {
-      p++;
-    }
-    if (strncmp(p, key, klen) == 0) {
-      char *eq = strchr(p, '=');
-      if (eq && (size_t)(eq - p) == klen) {
-        found = dup_trim(eq + 1);
-        break;
-      }
-    }
-  }
-  fclose(f);
-  return found;
-}
-// Last-resort resolution order: CLI arg (run.sh) > the game's own key > PSXPORT_DISC, each from the
-// environment then from .env > the disc the player chose at first run > a *.chd dropped into the
-// working directory (repo root). The drop-in
-// scan itself is in disc_provision.cpp (Fs::findFirstWithExtension, std::filesystem).
-static char *resolve_disc_path(DiscState *d0) {
-  const char *key = d0->env_key;
-  if (key && *key) {
-    const char *e = cfg_str(key);
-    if (e && *e) {
-      return dup_trim(e);
-    }
-  }
-  const char *e = cfg_str("PSXPORT_DISC");
-  if (e && *e) {
-    return dup_trim(e);
-  }
-  char *d = (key && *key) ? env_from_dotenv(key) : 0;
-  if (d) {
-    return d;
-  }
-  d = env_from_dotenv("PSXPORT_DISC");
-  if (d) {
-    return d;
-  }
-  if (d0->saved_path[0] != '\0') {
-    return dup_trim(d0->saved_path);
-  }
-  char buf[512];
-  if (disc_dropin_scan(buf, sizeof buf)) {
-    return dup_trim(buf);
-  }
-  return 0;
+  return std::string(s, n);
 }
 
-int disc_open(DiscState *d) {
-  if (d->chd) {
-    return 1;
-  }
-  char *path = resolve_disc_path(d);
-  if (!path) {
-    lucent::warn("disc",
-                 "no disc image: tried {}, PSXPORT_DISC (env and ./.env), the first-run choice and a "
-                 "*.chd drop-in in the working directory. The CD model will run with NO MEDIA.",
-                 d->env_key ? d->env_key : "<no TitleIdentity::discEnvVar>");
-    return 0;
-  }
-  const bool opened = psx::cd::openDiscImage(*d, path);
-  free(path);
-  return opened ? 1 : 0;
-}
-
-namespace psx::cd {
-
-bool openDiscImage(DiscState &disc, const char *path) {
-  DiscState *d = &disc;
-  if (chd_open(path, CHD_OPEN_READ, 0, &d->chd) != CHDERR_NONE) {
-    lucent::error("disc", "failed to open CHD: {}", path);
-    return false;
-  }
-  const chd_header *h = chd_get_header(d->chd);
-  d->hunk_bytes = h->hunkbytes;
-  d->frames_per_hunk = h->hunkbytes / RAW_FRAME;
-  d->hunk_count = h->totalhunks;
-  d->hunk_buf = (uint8_t *)malloc(d->hunk_bytes);
-  if (!d->hunk_buf || d->frames_per_hunk == 0) {
-    lucent::error("disc", "invalid CHD hunk geometry or allocation failure: {}", path);
-    psx::cd::closeDisc(*d);
-    return false;
-  }
-  memset(d->tracks, 0, sizeof d->tracks);
-  d->track_count = 0;
-  int32_t physical_lba = -150;
-  uint32_t metadata_index = 0;
-  while (metadata_index < DISC_MAX_TRACKS) {
-    char metadata[256] = {};
-    uint32_t metadata_length = 0;
-    chd_error error = chd_get_metadata(d->chd,
-                                       CDROM_TRACK_METADATA2_TAG,
-                                       metadata_index,
-                                       metadata,
-                                       sizeof metadata,
-                                       &metadata_length,
-                                       nullptr,
-                                       nullptr);
-    bool metadata2 = error == CHDERR_NONE;
-    if (!metadata2) {
-      error = chd_get_metadata(d->chd,
-                               CDROM_TRACK_METADATA_TAG,
-                               metadata_index,
-                               metadata,
-                               sizeof metadata,
-                               &metadata_length,
-                               nullptr,
-                               nullptr);
-      if (error != CHDERR_NONE) {
-        break;
-      }
-    }
-    DiscTrackInfo track{};
-    if (!disc_parse_track_metadata(metadata, metadata2, &physical_lba, &track)) {
-      lucent::error("disc", "invalid or unsupported CHD track metadata {}: {}", metadata_index, metadata);
-      psx::cd::closeDisc(*d);
-      return false;
-    }
-    d->tracks[d->track_count] = track;
-    ++d->track_count;
-    ++metadata_index;
-  }
-  if (d->track_count == 0) {
-    lucent::error("disc", "CHD contains no CD track metadata");
-    psx::cd::closeDisc(*d);
-    return false;
-  }
-  lucent::info("disc", "opened {} ({} hunks, {} frames/hunk)", path, d->hunk_count, d->frames_per_hunk);
-  return true;
-}
-
-} // namespace psx::cd
-
-static uint8_t to_bcd(uint32_t value) {
-  return static_cast<uint8_t>(((value / 10u) << 4u) | (value % 10u));
-}
-
-int disc_get_subq_position(DiscState *d, uint32_t lba, uint8_t out[8]) {
-  if (!d || !out || (d->track_count == 0 && !disc_open(d))) {
-    return 0;
-  }
-
-  const int64_t position = lba;
-  const DiscTrackInfo *track = &d->tracks[0];
-  bool found = false;
-  for (uint8_t index = 0; index < d->track_count; ++index) {
-    const DiscTrackInfo &candidate = d->tracks[index];
-    const int64_t begin = static_cast<int64_t>(candidate.lba) - candidate.pregap_dv - candidate.pregap;
-    const int64_t end = static_cast<int64_t>(candidate.lba) + candidate.sectors + candidate.postgap;
-    if (position >= begin && position < end) {
-      track = &candidate;
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
-    track = &d->tracks[0];
-  }
-
-  const uint32_t relative =
-      static_cast<uint32_t>(position >= track->lba ? position - track->lba : track->lba - position);
-  const uint32_t absolute = lba + 150u;
-  out[0] = to_bcd(track->number);
-  out[1] = to_bcd(position < track->lba ? 0u : 1u);
-  out[2] = to_bcd(relative / (60u * 75u));
-  out[3] = to_bcd((relative / 75u) % 60u);
-  out[4] = to_bcd(relative % 75u);
-  out[5] = to_bcd(absolute / (60u * 75u));
-  out[6] = to_bcd((absolute / 75u) % 60u);
-  out[7] = to_bcd(absolute % 75u);
-  return 1;
-}
-
-// ---- THE ONE PLACE A HUNK BECOMES RESIDENT ---------------------------------------------------
-// Both readers used to carry their own copy of "is this the cached hunk? if not, chd_read into the
-// single buffer", which is the same policy written twice and the reason the cache could not be
-// changed in one place.
-//
-// It reports DENOMINATORS, because a cache that only says "hit" cannot be told from one that is
-// never asked. `disc_read_report` prints lookups, hits, fills and the time spent inside chd_read
-// whether or not anything missed.
-static uint64_t disc_now_ns() {
+uint64_t monotonicNs() {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-static const uint8_t *disc_hunk_resident(DiscState *d, uint32_t hunk, uint32_t lba, const char *reader) {
-  d->lookups++;
-  if (hunk == d->cached_hunk) {
-    d->hits++;
-    return d->hunk_buf;
+uint32_t readLe32(const uint8_t *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+// An ISO9660 record name (length `nlen`, no NUL) against path component `want`; case and ";version" ignored.
+bool isoNameEquals(const uint8_t *name, int nlen, const char *want) {
+  int i = 0;
+  for (; i < nlen; i++) {
+    char nc = (char)name[i];
+    char wc = want[i];
+    if (nc == ';') {
+      break;
+    }
+    if (wc == ';' || wc == 0) {
+      return false;
+    }
+    char a = (nc >= 'a' && nc <= 'z') ? (char)(nc - 32) : nc;
+    char b = (wc >= 'a' && wc <= 'z') ? (char)(wc - 32) : wc;
+    if (a != b) {
+      return false;
+    }
   }
-  const uint64_t started = disc_now_ns();
-  if (chd_read(d->chd, hunk, d->hunk_buf) != CHDERR_NONE) {
+  return want[i] == 0 || want[i] == ';';
+}
+
+} // namespace
+
+// The game's key then PSXPORT_DISC, from the environment then ./.env; then the first-run choice; then a drop-in.
+bool Disc::open() {
+  if (chd) {
+    return true;
+  }
+  std::string path = trimmed(psx::config::launch_setting({env_key, "PSXPORT_DISC"}).c_str());
+  if (path.empty() && saved_path[0] != '\0') {
+    path = trimmed(saved_path);
+  }
+  if (path.empty()) {
+    char buf[512];
+    if (findDropinImage(buf, sizeof buf)) {
+      path = trimmed(buf);
+    }
+  }
+  if (path.empty()) {
+    lucent::warn("disc",
+                 "no disc image: tried {}, PSXPORT_DISC (env and ./.env), the first-run choice and a "
+                 "*.chd drop-in in the working directory. The CD model will run with NO MEDIA.",
+                 env_key ? env_key : "<no TitleIdentity::discEnvVar>");
+    return false;
+  }
+  return openImage(path.c_str());
+}
+
+bool Disc::openImage(const char *path) {
+  if (chd_open(path, CHD_OPEN_READ, 0, &chd) != CHDERR_NONE) {
+    lucent::error("disc", "failed to open CHD: {}", path);
+    return false;
+  }
+  const chd_header *h = chd_get_header(chd);
+  hunk_bytes = h->hunkbytes;
+  frames_per_hunk = h->hunkbytes / kRawFrame;
+  hunk_count = h->totalhunks;
+  hunk_buf = (uint8_t *)malloc(hunk_bytes);
+  if (!hunk_buf || frames_per_hunk == 0) {
+    lucent::error("disc", "invalid CHD hunk geometry or allocation failure: {}", path);
+    close();
+    return false;
+  }
+  memset(tracks, 0, sizeof tracks);
+  track_count = 0;
+  int32_t physical_lba = -150;
+  uint32_t metadata_index = 0;
+  while (metadata_index < kDiscMaxTracks) {
+    char metadata[256] = {};
+    uint32_t metadata_length = 0;
+    chd_error error = chd_get_metadata(
+        chd, CDROM_TRACK_METADATA2_TAG, metadata_index, metadata, sizeof metadata, &metadata_length, nullptr, nullptr);
+    bool metadata2 = error == CHDERR_NONE;
+    if (!metadata2) {
+      error = chd_get_metadata(
+          chd, CDROM_TRACK_METADATA_TAG, metadata_index, metadata, sizeof metadata, &metadata_length, nullptr, nullptr);
+      if (error != CHDERR_NONE) {
+        break;
+      }
+    }
+    DiscTrackInfo track{};
+    if (!parseTrackMetadata(metadata, metadata2, &physical_lba, &track)) {
+      lucent::error("disc", "invalid or unsupported CHD track metadata {}: {}", metadata_index, metadata);
+      close();
+      return false;
+    }
+    tracks[track_count] = track;
+    ++track_count;
+    ++metadata_index;
+  }
+  if (track_count == 0) {
+    lucent::error("disc", "CHD contains no CD track metadata");
+    close();
+    return false;
+  }
+  lucent::info("disc", "opened {} ({} hunks, {} frames/hunk)", path, hunk_count, frames_per_hunk);
+  return true;
+}
+
+bool Disc::subqPosition(uint32_t lba, uint8_t out[8]) {
+  if (!out || (track_count == 0 && !open())) {
+    return false;
+  }
+
+  const int64_t position = lba;
+  const DiscTrackInfo *track = &tracks[0];
+  for (uint8_t index = 0; index < track_count; ++index) {
+    const DiscTrackInfo &candidate = tracks[index];
+    const int64_t begin = static_cast<int64_t>(candidate.lba) - candidate.pregap_dv - candidate.pregap;
+    const int64_t end = static_cast<int64_t>(candidate.lba) + candidate.sectors + candidate.postgap;
+    if (position >= begin && position < end) {
+      track = &candidate;
+      break;
+    }
+  }
+
+  const uint32_t relative =
+      static_cast<uint32_t>(position >= track->lba ? position - track->lba : track->lba - position);
+  const uint32_t absolute = lba + 150u;
+  out[0] = toBcd(track->number);
+  out[1] = toBcd(position < track->lba ? 0u : 1u);
+  out[2] = toBcd(relative / (60u * 75u));
+  out[3] = toBcd((relative / 75u) % 60u);
+  out[4] = toBcd(relative % 75u);
+  out[5] = toBcd(absolute / (60u * 75u));
+  out[6] = toBcd((absolute / 75u) % 60u);
+  out[7] = toBcd(absolute % 75u);
+  return true;
+}
+
+// The one place a hunk becomes resident; it counts lookups, hits, fills and time in chd_read.
+const uint8_t *Disc::residentHunk(uint32_t hunk, uint32_t lba, const char *reader) {
+  lookups++;
+  if (hunk == cached_hunk) {
+    hits++;
+    return hunk_buf;
+  }
+  const uint64_t started = monotonicNs();
+  if (chd_read(chd, hunk, hunk_buf) != CHDERR_NONE) {
     return nullptr;
   }
-  const uint64_t elapsed = disc_now_ns() - started;
-  d->fills++;
-  d->fill_ns += elapsed;
-  if (elapsed > d->worst_fill_ns) {
-    d->worst_fill_ns = elapsed;
+  const uint64_t elapsed = monotonicNs() - started;
+  fills++;
+  fill_ns += elapsed;
+  if (elapsed > worst_fill_ns) {
+    worst_fill_ns = elapsed;
   }
-  d->cached_hunk = hunk;
-  // The ACCESS TRACE, one line per fill. Sizing the cache is a question about the working set, and
-  // the working set is not something to guess at: with the channel on, the hunk sequence is the
-  // measurement that answers how many ways are needed.
+  cached_hunk = hunk;
+  // The hunk sequence is the working set a cache size is chosen from.
   lucent::debug("dischunk",
                 "fill hunk={} lba={} by={} us={} lookups={} fills={}",
                 hunk,
                 lba,
                 reader,
                 elapsed / 1000,
-                d->lookups,
-                d->fills);
-  return d->hunk_buf;
+                lookups,
+                fills);
+  return hunk_buf;
 }
 
-void disc_read_report(DiscState *d, const char *when) {
+void Disc::readReport(const char *when) const {
   lucent::info("disc",
                "{}: {} hunk lookup(s), {} hit(s), {} fill(s) ({:.1f}% miss), {:.1f} ms in chd_read, "
                "worst fill {:.1f} ms",
                when,
-               d->lookups,
-               d->hits,
-               d->fills,
-               d->lookups ? 100.0 * (double)d->fills / (double)d->lookups : 0.0,
-               (double)d->fill_ns / 1e6,
-               (double)d->worst_fill_ns / 1e6);
+               lookups,
+               hits,
+               fills,
+               lookups ? 100.0 * (double)fills / (double)lookups : 0.0,
+               (double)fill_ns / 1e6,
+               (double)worst_fill_ns / 1e6);
 }
 
-// Read one sector's 2048-byte user data. Returns 1 on success.
-int disc_read_sector(DiscState *d, uint32_t lba, uint8_t *out) {
-  if (!d->chd && !disc_open(d)) {
-    return 0;
+bool Disc::readSector(uint32_t lba, uint8_t *out) {
+  if (!chd && !open()) {
+    return false;
   }
-  uint32_t hunk = lba / d->frames_per_hunk;
-  uint32_t off = (lba % d->frames_per_hunk) * RAW_FRAME;
-  if (hunk >= d->hunk_count) {
+  uint32_t hunk = lba / frames_per_hunk;
+  uint32_t off = (lba % frames_per_hunk) * kRawFrame;
+  if (hunk >= hunk_count) {
     lucent::info("disc", "LBA {} out of range", lba);
-    return 0;
+    return false;
   }
-  const uint8_t *hunk_base = disc_hunk_resident(d, hunk, lba, "sector");
+  const uint8_t *hunk_base = residentHunk(hunk, lba, "sector");
   if (!hunk_base) {
-    return 0;
+    return false;
   }
   const uint8_t *raw = hunk_base + off;
   // Mode byte at raw[15]; mode-2 sectors carry an 8-byte subheader before user data.
   uint32_t data_off = (raw[15] == 2) ? 24 : 16;
-  memcpy(out, raw + data_off, USER_DATA);
-  return 1;
+  memcpy(out, raw + data_off, kUserData);
+  return true;
 }
 
-// Copy the first `n` bytes of the raw 2352-byte CD sector (sync+header+subheader+data).
-// Needed for CD-XA framing: the Mode2 subheader at raw[16..23] (submode raw[18], coding
-// raw[19]) distinguishes XA-ADPCM audio (Form2, 2324B) from MDEC video (Form1, 2048B)
-// sectors, which disc_read_sector() hides. Returns 1 on success. n is clamped to 2352.
-int disc_read_raw(DiscState *d, uint32_t lba, uint8_t *out, uint32_t n) {
-  if (!d->chd && !disc_open(d)) {
-    return 0;
+// The raw sector keeps the Mode2 subheader (raw[16..23]) that tells XA audio from MDEC video.
+bool Disc::readRaw(uint32_t lba, uint8_t *out, uint32_t n) {
+  if (!chd && !open()) {
+    return false;
   }
   if (n > 2352u) {
     n = 2352u;
   }
-  uint32_t hunk = lba / d->frames_per_hunk;
-  uint32_t off = (lba % d->frames_per_hunk) * RAW_FRAME;
-  if (hunk >= d->hunk_count) {
-    return 0;
+  uint32_t hunk = lba / frames_per_hunk;
+  uint32_t off = (lba % frames_per_hunk) * kRawFrame;
+  if (hunk >= hunk_count) {
+    return false;
   }
-  const uint8_t *hunk_base = disc_hunk_resident(d, hunk, lba, "raw");
+  const uint8_t *hunk_base = residentHunk(hunk, lba, "raw");
   if (!hunk_base) {
-    return 0;
+    return false;
   }
   memcpy(out, hunk_base + off, n);
-  return 1;
+  return true;
 }
 
-static uint32_t rd_le32(const uint8_t *p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-// Case-insensitive compare of an ISO9660 directory record name (length `nlen`, no NUL) against a
-// path component `want`. The on-disc file name carries a ";version" suffix (e.g. "START.BIN;1");
-// directory names do not. Matches `want` against the name with any ";.." suffix stripped.
-static int iso_name_eq(const uint8_t *name, int nlen, const char *want) {
-  int i = 0;
-  for (; i < nlen; i++) {
-    char nc = (char)name[i];
-    char wc = want[i];
-    if (nc == ';') {
-      break; // on-disc name reached its version suffix
-    }
-    if (wc == ';' || wc == 0) {
-      return 0; // want ended/versioned before the name did → no match
-    }
-    char a = (nc >= 'a' && nc <= 'z') ? (char)(nc - 32) : nc;
-    char b = (wc >= 'a' && wc <= 'z') ? (char)(wc - 32) : wc;
-    if (a != b) {
-      return 0;
-    }
-  }
-  return want[i] == 0 || want[i] == ';'; // both ended (want may carry its own ";version")
-}
-
-// Resolve an absolute ISO9660 path (PSX backslash style, e.g. "\\BIN\\START.BIN"; '/' also accepted;
-// ";version" and case are ignored) to its data LBA and byte size by walking the directory tree from
-// the Primary Volume Descriptor. This is the native CdSearchFile replacement for the game's
-// FUN_8008b8f0, which did the same ISO directory walk via busy-wait CD reads. Returns 1 on success.
-int disc_find_file(DiscState *d, const char *path, uint32_t *out_lba, uint32_t *out_size) {
-  if (!d->chd && !disc_open(d)) {
-    return 0;
+// Walks the directory tree from the Primary Volume Descriptor; the native CdSearchFile.
+std::optional<DiscFile> Disc::findFile(const char *path) {
+  if (!chd && !open()) {
+    return std::nullopt;
   }
   uint8_t sec[2048];
   // Primary Volume Descriptor at sector 16; its root directory record sits at offset 156 (34 bytes).
-  if (!disc_read_sector(d, 16, sec)) {
-    return 0;
+  if (!readSector(16, sec)) {
+    return std::nullopt;
   }
   if (sec[0] != 1) {
-    return 0; // PVD type byte
+    return std::nullopt;
   }
-  uint32_t dir_lba = rd_le32(sec + 156 + 2);   // root extent LBA  (LE form of the 8-byte field)
-  uint32_t dir_size = rd_le32(sec + 156 + 10); // root data length (LE form)
+  uint32_t dir_lba = readLe32(sec + 156 + 2);
+  uint32_t dir_size = readLe32(sec + 156 + 10);
 
   const char *p = path;
   while (*p == '\\' || *p == '/') {
-    p++; // skip leading separator(s)
+    p++;
   }
   while (*p) {
-    // isolate this path component into comp[]
     char comp[64];
     int cn = 0;
     while (*p && *p != '\\' && *p != '/' && cn < (int)sizeof(comp) - 1) {
@@ -453,43 +366,41 @@ int disc_find_file(DiscState *d, const char *path, uint32_t *out_lba, uint32_t *
     while (*p == '\\' || *p == '/') {
       p++;
     }
-    int is_last = (*p == 0);
+    const bool is_last = (*p == 0);
 
-    // scan the directory's records (records never cross a 2048-byte sector boundary)
-    uint32_t nsec = (dir_size + 2047u) / 2048u, found = 0;
+    // Records never cross a 2048-byte sector boundary.
+    uint32_t nsec = (dir_size + 2047u) / 2048u;
+    bool found = false;
     for (uint32_t s = 0; s < nsec && !found; s++) {
-      if (!disc_read_sector(d, dir_lba + s, sec)) {
-        return 0;
+      if (!readSector(dir_lba + s, sec)) {
+        return std::nullopt;
       }
       uint32_t o = 0;
       while (o < 2048u) {
         uint32_t rlen = sec[o];
-        if (rlen == 0) {
-          break; // zero pad → rest of sector is empty
-        }
-        if (o + rlen > 2048u) {
+        if (rlen == 0 || o + rlen > 2048u) {
           break;
         }
         int nlen = sec[o + 32];
-        if (iso_name_eq(sec + o + 33, nlen, comp)) {
-          uint32_t e_lba = rd_le32(sec + o + 2);
-          uint32_t e_size = rd_le32(sec + o + 10);
+        if (isoNameEquals(sec + o + 33, nlen, comp)) {
+          uint32_t e_lba = readLe32(sec + o + 2);
+          uint32_t e_size = readLe32(sec + o + 10);
           if (is_last) {
-            *out_lba = e_lba;
-            *out_size = e_size;
-            return 1;
+            return DiscFile{e_lba, e_size};
           }
           dir_lba = e_lba;
           dir_size = e_size;
-          found = 1;
+          found = true;
           break;
         }
         o += rlen;
       }
     }
     if (!found) {
-      return 0; // component not present
+      return std::nullopt;
     }
   }
-  return 0; // path ended on a directory, not a file
+  return std::nullopt; // path ended on a directory, not a file
 }
+
+} // namespace psx::cd

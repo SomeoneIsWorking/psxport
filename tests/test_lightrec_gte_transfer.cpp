@@ -1,6 +1,6 @@
 // Executor state transfer must not replay side-effectful MTC2/CTC2 register-port writes.
+#include "beetle_gte.h"
 #include "game.h"
-#include "gte_state.h"
 #include "image_identity.h"
 #include "lightrec_executor.h"
 #include "testutil.h"
@@ -10,8 +10,6 @@
 #include <memory>
 
 namespace {
-
-psx::test::StubGameRuntime stubRuntime;
 
 constexpr uint32_t kEntry = 0x00010000u;
 constexpr uint32_t kReturn = 0x00010100u;
@@ -29,6 +27,7 @@ void seedFifos(GteRegs &state) {
 }
 
 void test_guest_gpf_sqr_preserves_ir_inputs_against_isolated_gte() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   core.imageCatalog().activate("gte-transfer-fixture", {kEntry, kReturn + 4u}, 1u);
@@ -80,6 +79,7 @@ void test_guest_gpf_sqr_preserves_ir_inputs_against_isolated_gte() {
 }
 
 void test_non_gte_guest_exit_preserves_raw_state_without_fifo_or_irgb_side_effects() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   core.imageCatalog().activate("gte-transfer-fixture", {kEntry, kReturn + 4u}, 1u);
@@ -113,6 +113,7 @@ void test_non_gte_guest_exit_preserves_raw_state_without_fifo_or_irgb_side_effec
 }
 
 void test_guest_sxyp_write_advances_fifo_once_and_reads_alias() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   core.imageCatalog().activate("gte-transfer-fixture", {kEntry, kReturn + 4u}, 1u);
@@ -121,10 +122,10 @@ void test_guest_sxyp_write_advances_fifo_once_and_reads_alias() {
   std::copy_n(game->core.gte().registers().REG, 64, expected.REG);
   const uint32_t pushed = 0x11223344u;
   GTE_BindState(&expected);
-  gte_write_data(15, pushed); // Independent production register-port reference.
+  GTE_WriteDR(15, pushed); // Independent Beetle register-port reference.
   uint32_t expectedReads[4];
   for (uint32_t index = 0; index < 4; ++index) {
-    expectedReads[index] = gte_read_data(12 + index);
+    expectedReads[index] = GTE_ReadDR(12 + index);
   }
   core.gte().bind();
   core.r[4] = pushed;
@@ -155,7 +156,7 @@ void test_guest_sxyp_write_advances_fifo_once_and_reads_alias() {
   for (uint32_t index = 0; index < 4; ++index) {
     CHECK_EQ(core.r[5 + index], expectedReads[index]);
     CHECK_EQ(game->core.gte().registers().REG[12 + index], expected.REG[12 + index]);
-    CHECK_EQ(gte_read_data(12 + index), expectedReads[index]);
+    CHECK_EQ(core.gte().readData(12 + index), expectedReads[index]);
   }
 }
 
@@ -165,5 +166,5 @@ int main() {
   RUN(guest_gpf_sqr_preserves_ir_inputs_against_isolated_gte);
   RUN(guest_sxyp_write_advances_fifo_once_and_reads_alias);
   RUN(non_gte_guest_exit_preserves_raw_state_without_fifo_or_irgb_side_effects);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -30,8 +30,8 @@ constexpr bool suspends(ExecutionExitReason reason) {
 
 } // namespace
 
-void ResumableGuestCall::begin(
-    Core &core, std::string_view owner, std::uint32_t entry, std::uint32_t returnPc, std::uint32_t turnCap) {
+void ResumableGuestCall::begin(Core &core, std::string_view owner, GuestCallSite call, std::uint32_t turnCap) {
+  const std::uint32_t entry = call.entry;
   if (pending_) {
     lucent::error("guest-call",
                   "{} began a second call at 0x{:08X} while 0x{:08X} is still suspended at 0x{:08X}",
@@ -53,7 +53,7 @@ void ResumableGuestCall::begin(
   }
   owner_ = std::string{owner};
   entry_ = entry;
-  returnPc_ = returnPc;
+  returnPc_ = call.returnPc;
   resumePc_ = entry;
   turnCap_ = turnCap;
   turns_ = 0;
@@ -61,7 +61,7 @@ void ResumableGuestCall::begin(
   pending_ = true;
   // The boundary is the guest entry's `jr $ra`, so it is latched here rather than left to whatever
   // the guest last stored.
-  core.r[31] = returnPc;
+  core.r[31] = call.returnPc;
 }
 
 CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, std::optional<ExecutionBudget> turn) {
@@ -80,7 +80,7 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
   ExecutionResult result =
       turns_ == 0u ? (original ? callOriginal(core, *original, budget) : dispatchGuest(core, entry_, budget, owner_))
                    : (original ? resumeOriginal(core, *original, resumePc_, returnPc_, budget)
-                               : resumeGuestToReturn(core, resumePc_, returnPc_, budget));
+                               : resumeGuestToReturn(core, GuestCallSite{entry_, returnPc_}, resumePc_, budget));
   cycles_ += result.cycles;
   ++turns_;
 
@@ -149,7 +149,7 @@ std::uint32_t callGuestToReturnResuming(Core &core,
                                         const std::optional<NativeKey> &original,
                                         std::uint32_t turnCap) {
   ResumableGuestCall call;
-  call.begin(core, owner, entry, returnPc, turnCap);
+  call.begin(core, owner, GuestCallSite{entry, returnPc}, turnCap);
   return call.callToReturn(original);
 }
 

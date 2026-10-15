@@ -3,7 +3,7 @@
 // contracts while routing storage through that owner.
 
 #include "memcard.h"
-#include "cfg.h"
+#include "config.h" // launch_setting — the title card key, then PSXPORT_CARD
 #include "core.h"
 #include "game.h" // c->game->hle.deliverEvent — Hle subsystem lives on Game
 #include "game_runtime.h"
@@ -27,8 +27,9 @@
 
 // class Memcard is a Game member (see memcard.h). All BIOS handlers below reach it via `c->game->memcard`.
 
-// path resolution: env override > .env > default (scratch/saves/tomba2.mcr).
-static char *mc_dup_trim(const char *s) {
+namespace {
+
+char *mc_dup_trim(const char *s) {
   while (*s == ' ' || *s == '\t') {
     s++;
   }
@@ -41,49 +42,14 @@ static char *mc_dup_trim(const char *s) {
   o[n] = 0;
   return o;
 }
-static char *mc_env_from_dotenv(const char *key) {
-  FILE *f = fopen(".env", "rb");
-  if (!f) {
-    return 0;
-  }
-  char line[1024];
-  char *found = 0;
-  size_t klen = strlen(key);
-  while (fgets(line, sizeof line, f)) {
-    char *p = line;
-    while (*p == ' ' || *p == '\t') {
-      p++;
-    }
-    if (strncmp(p, key, klen) == 0) {
-      char *eq = strchr(p, '=');
-      if (eq && (size_t)(eq - p) == klen) {
-        found = mc_dup_trim(eq + 1);
-        break;
-      }
-    }
-  }
-  fclose(f);
-  return found;
-}
-// The consuming game supplies its own env key and default path (HostIdentity::cardEnvVar /
-// cardDefaultPath). This used to hardcode the FIRST consumer's key and filename, which meant a
-// second consumer's saves silently went to the reference game's card file — the same defect the disc
-// resolver had (WART-06 in the Spider-Man port). Order: the game's key, then the generic
-// PSXPORT_CARD, each from the environment then .env, then the game's default path.
+
+} // namespace
+// The game's card key then PSXPORT_CARD, from the environment then ./.env (launch_setting); then the
+// game's default path (HostIdentity::cardEnvVar / cardDefaultPath).
 char *Memcard::resolvePath(const psx::game::HostIdentity &identity) {
-  const char *keys[2] = {identity.cardEnvVar, "PSXPORT_CARD"};
-  for (int i = 0; i < 2; i++) {
-    if (!keys[i] || !*keys[i]) {
-      continue;
-    }
-    const char *e = cfg_str(keys[i]);
-    if (e && *e) {
-      return mc_dup_trim(e);
-    }
-    char *d = mc_env_from_dotenv(keys[i]);
-    if (d) {
-      return d;
-    }
+  const std::string configured = psx::config::launch_setting({identity.cardEnvVar, "PSXPORT_CARD"});
+  if (!configured.empty()) {
+    return mc_dup_trim(configured.c_str());
   }
   if (identity.cardDefaultPath && *identity.cardDefaultPath) {
     return mc_dup_trim(identity.cardDefaultPath);
@@ -125,7 +91,7 @@ void Memcard::init() {
   if (!mCard) {
     mCard = fopen(mPath, "w+b");
     if (mCard) {
-      static const uint8_t zero[kFrameSize] = {0};
+      constexpr uint8_t zero[kFrameSize] = {};
       for (uint32_t i = 0; i < kFrames; i++) {
         fwrite(zero, 1, kFrameSize, mCard);
       }
@@ -140,7 +106,7 @@ void Memcard::init() {
   fseek(mCard, 0, SEEK_END);
   long sz = ftell(mCard);
   if (sz < (long)kSize) {
-    static const uint8_t zero[kFrameSize] = {0};
+    constexpr uint8_t zero[kFrameSize] = {};
     fseek(mCard, sz, SEEK_SET);
     for (long i = sz; i < (long)kSize; i += kFrameSize) {
       fwrite(zero, 1, kFrameSize, mCard);
@@ -267,10 +233,14 @@ bool Memcard::writeFrame(uint32_t frame, const uint8_t *in128) {
 
 // ---- PSX card-filesystem: directory helpers ------------------------------------------------------
 
-static const char *mc_strip_dev(const char *name) {
+namespace {
+
+const char *mc_strip_dev(const char *name) {
   const char *colon = strchr(name, ':');
   return colon ? colon + 1 : name;
 }
+
+} // namespace
 
 int Memcard::dirFind(const char *name) {
   const char *want = mc_strip_dev(name);
@@ -324,10 +294,12 @@ int Memcard::dirCreate(const char *name, uint32_t size) {
   return -1;
 }
 
+namespace {
+
 // Shell-glob match for a card filename: `*` any run, `?` any one character. Sony's BIOS matches the
 // same two, and the browser only ever asks for "*" — but a pattern the matcher silently ignored
 // would enumerate the whole card and look exactly like a correct answer, so it is implemented.
-static bool mc_glob(const char *pat, const char *s) {
+bool mc_glob(const char *pat, const char *s) {
   const char *star = nullptr, *sAtStar = nullptr;
   while (*s) {
     if (*pat == '?' || *pat == *s) {
@@ -351,6 +323,8 @@ static bool mc_glob(const char *pat, const char *s) {
   }
   return *pat == 0;
 }
+
+} // namespace
 
 void Memcard::dirScanBegin(const char *pattern) {
   snprintf(mScanPat, sizeof mScanPat, "%s", pattern);
@@ -397,7 +371,12 @@ bool Memcard::dirScanNext(Core *c, uint32_t direntVa) {
   return false;
 }
 
-int Memcard::fdAlloc(int block, uint32_t size) {
+// The file's size is the one its directory frame records.
+int Memcard::fdAlloc(int block) {
+  uint8_t entry[kFrameSize];
+  readFrame(static_cast<uint32_t>(block), entry);
+  const uint32_t size = static_cast<uint32_t>(entry[4]) | (static_cast<uint32_t>(entry[5]) << 8) |
+                        (static_cast<uint32_t>(entry[6]) << 16) | (static_cast<uint32_t>(entry[7]) << 24);
   for (int i = kFdBase; i < kFdMax; i++) {
     if (!mFd[i].used) {
       mFd[i].used = 1;
@@ -410,15 +389,16 @@ int Memcard::fdAlloc(int block, uint32_t size) {
   return -1;
 }
 
-// ---- BIOS dispatch handlers (call into Memcard::instance) ----------------------------------------
-#ifndef PSXPORT_CARD_NO_OVERRIDES
+// ---- BIOS dispatch handlers ----------------------------------------------------------------------
 
-enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
+namespace {
 
 // Frame 0 of each block is reserved by convention; data starts at frame 1 of the block.
-static inline uint32_t mc_data_frame(int block, uint32_t off) {
+inline uint32_t mc_data_frame(int block, uint32_t off) {
   return (uint32_t)block * Memcard::kBlockFrames + 1u + (off / Memcard::kFrameSize);
 }
+
+} // namespace
 
 // Deliver the libcard I/O-complete event so callers waiting on TestEvent (SwCARD-0x8000 SUCCESS +
 // EvSpIOE for save/load and card-detect flows) fall through immediately.
@@ -456,6 +436,8 @@ void Memcard::deliverError(Core *c) {
   c->game->hle.deliverEvent(0xF0000011u, 0x8000u); // HwCARD error
 }
 
+namespace {
+
 // B0:0x4F _card_read(chan, sector, dst): copy one 128-byte frame into guest memory.
 //
 // WHICH NUMBER IS WHICH was wrong here until Spyro 3: the two were swapped (0x4E read, 0x4F write).
@@ -464,9 +446,9 @@ void Memcard::deliverError(Core *c) {
 // bytes into byte 127, and only THEN calls it -- the shape of a write, not a read. With the numbers
 // swapped, the guest's four reads of frame 0 into that buffer were executed as writes of the (zeroed)
 // buffer over the card header, erasing its "MC" magic, and the title reported a corrupt card.
-static void card_read(Core *c) {
+void card_read(Core *c) {
   Memcard &m = c->game->memcard;
-  const uint32_t sector = c->r[A1], buf = c->r[A2];
+  const uint32_t sector = c->r[psx::cpu::kA1], buf = c->r[psx::cpu::kA2];
   uint8_t f[Memcard::kFrameSize];
   const bool moved = m.readFrame(sector, f);
   for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
@@ -478,7 +460,7 @@ static void card_read(Core *c) {
                 buf,
                 moved ? "" : " — BACKEND DID NOT MOVE THE FRAME, yet this call reports success");
 
-  c->r[V0] = 1;
+  c->r[psx::cpu::kV0] = 1;
 }
 
 // B0:0x4E _card_write(chan, sector, src): store one 128-byte frame from guest memory.
@@ -488,12 +470,12 @@ static void card_read(Core *c) {
 // executed as a read INTO guest address 0 -- over the exception-vector page, twice every boot
 // (Spyro issue 0123) -- and was then "fixed" by skipping the copy; the call is a write with nothing
 // to write, so it moves nothing in either direction.
-static void card_write(Core *c) {
+void card_write(Core *c) {
   Memcard &m = c->game->memcard;
-  const uint32_t sector = c->r[A1], buf = c->r[A2];
+  const uint32_t sector = c->r[psx::cpu::kA1], buf = c->r[psx::cpu::kA2];
   if (buf == 0) {
     lucent::debug("card", "write frame {} <- (probe, no source)", sector);
-    c->r[V0] = 1;
+    c->r[psx::cpu::kV0] = 1;
     return;
   }
   uint8_t f[Memcard::kFrameSize];
@@ -503,20 +485,20 @@ static void card_write(Core *c) {
   m.writeFrame(sector, f);
   lucent::debug("card", "write frame {} <- 0x{:08X}", sector, buf);
 
-  c->r[V0] = 1;
+  c->r[psx::cpu::kV0] = 1;
 }
 
 // B0:0x5C _card_status(chan): always transfer-complete (our I/O is synchronous).
-static void card_status(Core *c) {
-  c->r[V0] = 1;
+void card_status(Core *c) {
+  c->r[psx::cpu::kV0] = 1;
 }
 
 // B0:0x32 open(name, mode). mode bit 0x0200 = create; block count = (mode >> 16) (Tomba uses 1).
-static void file_open(Core *c) {
+void file_open(Core *c) {
   Memcard &m = c->game->memcard;
   char name[0x100];
-  c->readCString(c->r[A0], name, sizeof name);
-  uint32_t mode = c->r[A1];
+  c->readCString(c->r[psx::cpu::kA0], name, sizeof name);
+  uint32_t mode = c->r[psx::cpu::kA1];
   int blk = m.dirFind(name);
   if (blk < 0 && (mode & 0x0200u)) {
     uint32_t nblocks = (mode >> 16) & 0xFFFFu;
@@ -526,37 +508,34 @@ static void file_open(Core *c) {
     blk = m.dirCreate(name, nblocks * (Memcard::kBlockFrames - 1) * Memcard::kFrameSize);
   }
   if (blk < 0) {
-    c->r[V0] = 0xFFFFFFFFu;
+    c->r[psx::cpu::kV0] = 0xFFFFFFFFu;
     lucent::debug("card", "open '{}' mode={:X} -> FAIL", name, mode);
 
     return;
   }
-  uint8_t e[Memcard::kFrameSize];
-  m.readFrame((uint32_t)blk, e);
-  uint32_t sz = (uint32_t)e[4] | ((uint32_t)e[5] << 8) | ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24);
-  int fd = m.fdAlloc(blk, sz);
-  c->r[V0] = (fd < 0) ? 0xFFFFFFFFu : (uint32_t)fd;
-  lucent::debug("card", "open '{}' mode={:X} -> fd={} block={} size={}", name, mode, fd, blk, sz);
+  int fd = m.fdAlloc(blk);
+  c->r[psx::cpu::kV0] = (fd < 0) ? 0xFFFFFFFFu : (uint32_t)fd;
+  lucent::debug("card", "open '{}' mode={:X} -> fd={} block={}", name, mode, fd, blk);
 }
 
 // B0:0x33 lseek(fd, off, whence).
-static void file_lseek(Core *c) {
+void file_lseek(Core *c) {
   Memcard &m = c->game->memcard;
-  int fd = (int)c->r[A0];
-  int32_t off = (int32_t)c->r[A1];
-  uint32_t whence = c->r[A2];
+  int fd = (int)c->r[psx::cpu::kA0];
+  int32_t off = (int32_t)c->r[psx::cpu::kA1];
+  uint32_t whence = c->r[psx::cpu::kA2];
   if (fd >= 0 && fd <= 2) {
-    c->r[V0] = 0;
+    c->r[psx::cpu::kV0] = 0;
     return;
   } // console device fds: no-op
   auto *f = m.fdAt(fd);
   if (!f) {
-    c->r[V0] = 0xFFFFFFFFu;
+    c->r[psx::cpu::kV0] = 0xFFFFFFFFu;
     return;
   }
   uint32_t base = (whence == 1) ? f->pos : (whence == 2) ? f->size : 0u;
   f->pos = base + (uint32_t)off;
-  c->r[V0] = f->pos;
+  c->r[psx::cpu::kV0] = f->pos;
   lucent::debug("card", "lseek fd={} off={} whence={} -> pos={}", fd, off, whence, f->pos);
 }
 
@@ -581,12 +560,12 @@ static void file_lseek(Core *c) {
 //
 // fd 0..2 are the console devices, not the card: they keep the ordinary synchronous file semantics
 // and announce nothing.
-static void file_read(Core *c) {
+void file_read(Core *c) {
   Memcard &m = c->game->memcard;
-  int fd = (int)c->r[A0];
-  uint32_t buf = c->r[A1], len = c->r[A2];
+  int fd = (int)c->r[psx::cpu::kA0];
+  uint32_t buf = c->r[psx::cpu::kA1], len = c->r[psx::cpu::kA2];
   if (fd >= 0 && fd <= 2) {
-    c->r[V0] = 0;
+    c->r[psx::cpu::kV0] = 0;
     return;
   }
   auto *f = m.fdAt(fd);
@@ -594,7 +573,7 @@ static void file_read(Core *c) {
   // operation was ever started. libmcrd cannot reach here (it abandons the op when open fails).
   if (!f) {
     lucent::error("card", "read on fd {} which is not an open card file — returning -1", fd);
-    c->r[V0] = 0xFFFFFFFFu;
+    c->r[psx::cpu::kV0] = 0xFFFFFFFFu;
     return;
   }
   uint8_t fr[Memcard::kFrameSize];
@@ -610,7 +589,7 @@ static void file_read(Core *c) {
     c->mem_w8(buf + i, fr[boff]);
   }
   f->pos += len;
-  c->r[V0] = 0; // accepted; the result is the event below
+  c->r[psx::cpu::kV0] = 0; // accepted; the result is the event below
   lucent::debug(
       "card", "read  fd={} -> 0x{:08X} len={} (pos now {}) {}", fd, buf, len, f->pos, ok ? "-> IOEND" : "-> ERROR");
 
@@ -622,28 +601,28 @@ static void file_read(Core *c) {
 }
 
 // B0:0x35 write(fd, buf, len).
-static void log_guest_file_output(Core &core, int fd, uint32_t guestBuffer, uint32_t length) {
+void log_guest_file_output(Core &core, int fd, GuestSpan output) {
   std::string text;
-  text.reserve(length);
-  for (uint32_t index = 0; index < length; ++index) {
-    text.push_back(static_cast<char>(core.mem_r8(guestBuffer + index)));
+  text.reserve(output.bytes);
+  for (uint32_t index = 0; index < output.bytes; ++index) {
+    text.push_back(static_cast<char>(core.mem_r8(output.address + index)));
   }
   lucent::log(fd == 2 ? lucent::Level::Error : lucent::Level::Info, fd == 2 ? "guest-stderr" : "guest-stdout", text);
 }
 
-static void file_write(Core *c) {
+void file_write(Core *c) {
   Memcard &m = c->game->memcard;
-  int fd = (int)c->r[A0];
-  uint32_t buf = c->r[A1], len = c->r[A2];
+  int fd = (int)c->r[psx::cpu::kA0];
+  uint32_t buf = c->r[psx::cpu::kA1], len = c->r[psx::cpu::kA2];
   if (fd == 1 || fd == 2) { // stdout/stderr
-    log_guest_file_output(*c, fd, buf, len);
-    c->r[V0] = len;
+    log_guest_file_output(*c, fd, {buf, len});
+    c->r[psx::cpu::kV0] = len;
     return;
   }
   auto *f = m.fdAt(fd);
   if (!f) { // see file_read: argument error
     lucent::error("card", "write on fd {} which is not an open card file — returning -1", fd);
-    c->r[V0] = 0xFFFFFFFFu;
+    c->r[psx::cpu::kV0] = 0xFFFFFFFFu;
     return;
   }
   uint8_t fr[Memcard::kFrameSize];
@@ -665,7 +644,7 @@ static void file_write(Core *c) {
     ok = m.writeFrame(cur_frame, fr) && ok; // flush the last partial frame
   }
   f->pos += len;
-  c->r[V0] = 0; // accepted; see file_read for why this is not `len`
+  c->r[psx::cpu::kV0] = 0; // accepted; see file_read for why this is not `len`
   lucent::debug(
       "card", "write fd={} <- 0x{:08X} len={} (pos now {}) {}", fd, buf, len, f->pos, ok ? "-> IOEND" : "-> ERROR");
 
@@ -677,29 +656,29 @@ static void file_write(Core *c) {
 }
 
 // B0:0x36 close(fd).
-static void file_close(Core *c) {
+void file_close(Core *c) {
   Memcard &m = c->game->memcard;
-  int fd = (int)c->r[A0];
+  int fd = (int)c->r[psx::cpu::kA0];
   if (fd >= 0 && fd <= 2) {
-    c->r[V0] = (uint32_t)fd;
+    c->r[psx::cpu::kV0] = (uint32_t)fd;
     return;
   }
   bool ok = m.fdValid(fd);
   if (ok) {
     m.fdFree(fd);
   }
-  c->r[V0] = ok ? (uint32_t)fd : 0xFFFFFFFFu;
+  c->r[psx::cpu::kV0] = ok ? (uint32_t)fd : 0xFFFFFFFFu;
   lucent::debug("card", "close fd={}", fd);
 }
 
 // B0:0x45 erase(name).
-static void file_erase(Core *c) {
+void file_erase(Core *c) {
   Memcard &m = c->game->memcard;
   char name[0x100];
-  c->readCString(c->r[A0], name, sizeof name);
+  c->readCString(c->r[psx::cpu::kA0], name, sizeof name);
   int blk = m.dirFind(name);
   if (blk < 0) {
-    c->r[V0] = 0;
+    c->r[psx::cpu::kV0] = 0;
     lucent::debug("card", "erase '{}' -> not found", name);
 
     return;
@@ -715,7 +694,7 @@ static void file_erase(Core *c) {
   }
   e[0x7F] = x;
   m.writeFrame((uint32_t)blk, e);
-  c->r[V0] = 1;
+  c->r[psx::cpu::kV0] = 1;
   lucent::debug("card", "erase '{}' (block {}) -> ok", name, blk);
 }
 
@@ -732,52 +711,59 @@ static void file_erase(Core *c) {
 // resolve every port to it, so enumerating per port would report files on a card that open() would
 // then read through the other port's name. One card, consistently, until the backend grows a second
 // image; that is a backend limitation, not a per-call decision.
-static void file_firstfile(Core *c) {
+void file_firstfile(Core *c) {
   Memcard &m = c->game->memcard;
   char name[0x100];
-  c->readCString(c->r[A0], name, sizeof name);
-  const uint32_t dirent = c->r[A1];
+  c->readCString(c->r[psx::cpu::kA0], name, sizeof name);
+  const uint32_t dirent = c->r[psx::cpu::kA1];
   m.dirScanBegin(mc_strip_dev(name));
   // Guest code patches the DCB's firstfile slot with its own restore-trampoline before calling here
   // and expects the BIOS to run it; this HLE *is* the device's firstfile, so put the slot back
   // rather than dispatching a pointer with no code behind it. See the DCB note in hle.cpp.
   c->game->hle.deviceUnhook(c->game->hle.deviceFind("bu"));
-  c->r[V0] = m.dirScanNext(c, dirent) ? dirent : 0;
+  c->r[psx::cpu::kV0] = m.dirScanNext(c, dirent) ? dirent : 0;
   // Directory enumeration is a completed card operation even when the card contains no matching
   // entry. Stock libmcrd observes BOTH results: V0 carries DIRENTRY-or-zero, then its zero-result
   // path waits for the HwCARD completion callback before deciding that the directory is empty.
   // Omitting this event leaves that callback flag at zero and turns a valid empty scan into an
   // unbounded guest wait (Crash Bash FUN_8003A554 -> FUN_800476EC).
   Memcard::deliverComplete(c);
-  lucent::debug("card", "firstfile '{}' dirent=0x{:08X} -> 0x{:08X}", name, dirent, c->r[V0]);
+  lucent::debug("card", "firstfile '{}' dirent=0x{:08X} -> 0x{:08X}", name, dirent, c->r[psx::cpu::kV0]);
 }
 
-static void file_nextfile(Core *c) {
+void file_nextfile(Core *c) {
   Memcard &m = c->game->memcard;
-  const uint32_t dirent = c->r[A0];
-  c->r[V0] = m.dirScanNext(c, dirent) ? dirent : 0;
+  const uint32_t dirent = c->r[psx::cpu::kA0];
+  c->r[psx::cpu::kV0] = m.dirScanNext(c, dirent) ? dirent : 0;
   Memcard::deliverComplete(c);
-  lucent::debug("card", "nextfile dirent=0x{:08X} -> 0x{:08X}", dirent, c->r[V0]);
+  lucent::debug("card", "nextfile dirent=0x{:08X} -> 0x{:08X}", dirent, c->r[psx::cpu::kV0]);
 }
 
 // B0:0x4C _card_info(chan): host-backed card is always healthy/present.
-static void card_info(Core *c) {
+void card_info(Core *c) {
   Memcard::deliverComplete(c);
-  c->r[V0] = 1;
+  c->r[psx::cpu::kV0] = 1;
 }
+
+} // namespace
 
 // ---- Public BIOS dispatch entries (called from `class Hle::dispatchBios`) -----------------------
 
 // A0 libcard: _card_info / _card_load. Tomba2's "Checking MEMORY CARD" uses A0:0xAB.
-extern "C" int card_hle_a0(uint32_t fn, Core *c) {
+int Memcard::dispatchBiosA0(uint32_t fn, Core *c) {
   Memcard &m = c->game->memcard;
   switch (fn) {
   case 0xABu: // _card_info(port)
   case 0xACu: // _card_load(slot)
-    lucent::debug("card", "A0:0x{:02X}(a0={:X} a1={:X} a2={:X})", fn, c->r[A0], c->r[A1], c->r[A2]);
+    lucent::debug("card",
+                  "A0:0x{:02X}(a0={:X} a1={:X} a2={:X})",
+                  fn,
+                  c->r[psx::cpu::kA0],
+                  c->r[psx::cpu::kA1],
+                  c->r[psx::cpu::kA2]);
     m.syscallLog().record(psxport::card::Vector::A0, fn, true);
     Memcard::deliverComplete(c);
-    c->r[V0] = 1;
+    c->r[psx::cpu::kV0] = 1;
     return 1;
   default:
     m.syscallLog().record(psxport::card::Vector::A0, fn, false);
@@ -785,11 +771,13 @@ extern "C" int card_hle_a0(uint32_t fn, Core *c) {
   }
 }
 
+namespace {
+
 // B0 libcard: _card_info/_card_read/_card_write/_card_chan/_card_status + the file API used by the
 // save/load menu (open/lseek/read/write/close/erase/firstfile).
 // The dispatch itself, separated from the accounting so every outcome -- including the
 // `default` that tells the guest the call was NOT taken -- is recorded at exactly one site.
-static int card_dispatch_b0(uint32_t fn, Core *c) {
+int card_dispatch_b0(uint32_t fn, Core *c) {
   switch (fn) {
   case 0x32u:
     file_open(c);
@@ -827,7 +815,7 @@ static int card_dispatch_b0(uint32_t fn, Core *c) {
     Memcard::deliverComplete(c);
     return 1; // _card_read
   case 0x50u:
-    c->r[V0] = 0;
+    c->r[psx::cpu::kV0] = 0;
     return 1; // _card_chan() -> 0
   case 0x5Cu:
     card_status(c);
@@ -837,14 +825,21 @@ static int card_dispatch_b0(uint32_t fn, Core *c) {
   }
 }
 
-extern "C" int card_hle_b0(uint32_t fn, Core *c) {
+} // namespace
+
+int Memcard::dispatchBiosB0(uint32_t fn, Core *c) {
   switch (fn) {
   case 0x4Cu:
   case 0x4Eu:
   case 0x4Fu:
   case 0x50u:
   case 0x5Cu:
-    lucent::debug("card", "B0:0x{:02X}(a0={:X} a1={:X} a2={:X})", fn, c->r[A0], c->r[A1], c->r[A2]);
+    lucent::debug("card",
+                  "B0:0x{:02X}(a0={:X} a1={:X} a2={:X})",
+                  fn,
+                  c->r[psx::cpu::kA0],
+                  c->r[psx::cpu::kA1],
+                  c->r[psx::cpu::kA2]);
     break;
   default:
     break;
@@ -854,19 +849,16 @@ extern "C" int card_hle_b0(uint32_t fn, Core *c) {
   return handled;
 }
 
-void card_overrides_init(Game *game) {
-  Memcard &m = game->memcard;
-  m.init();
+void Memcard::install() {
+  init();
   // Publish the card as an installed BIOS device. Guest code that resolves a path prefix walks the
   // kernel device table itself instead of calling a BIOS vector (Tomba!2's card browser does, in
   // FUN_80080940), and an unpublished table is not "no devices" — it is a garbage base and length
   // that the walk dereferences. See the DCB note in hle.cpp.
   game->hle.deviceAdd("bu");
-  // Low-level libcard B0 frame primitives + BIOS file API dispatch through card_hle_b0 above;
+  // Low-level libcard B0 frame primitives + BIOS file API dispatch through dispatchBiosB0 above;
   // no address overrides needed.
 }
-
-#endif // PSXPORT_CARD_NO_OVERRIDES
 
 // The directory-enumeration cursor, for the save-state owner (device_bus.cpp). Defined here rather
 // than inline because mScanPat/mScanBlk are private to this class's home file — the same reason the

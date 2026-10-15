@@ -32,7 +32,7 @@ constexpr std::uint32_t kModuleLba = 8696u;
 // executed result and their SHA-256.
 std::uint32_t gValue = 7u;
 
-int fakeSector(DiscState *, std::uint32_t lba, std::uint8_t *out, std::uint32_t) {
+bool fakeSector(psx::cd::Disc *, std::uint32_t lba, std::uint8_t *out, std::uint32_t) {
   for (std::uint32_t i = 0; i < 2352u; ++i) {
     out[i] = static_cast<std::uint8_t>(lba + i);
   }
@@ -44,7 +44,7 @@ int fakeSector(DiscState *, std::uint32_t lba, std::uint8_t *out, std::uint32_t)
       }
     }
   }
-  return 1;
+  return true;
 }
 
 class LoaderRuntime final : public psx::test::StubGameRuntime {
@@ -58,18 +58,25 @@ private:
   GuestAddressRange arena_;
 };
 
+// One CdRead: `sectors` from `lba` into `destination`.
+struct CdRead {
+  std::uint32_t sectors = 0;
+  std::uint32_t destination = 0;
+  std::int32_t lba = static_cast<std::int32_t>(kModuleLba);
+};
+
 struct Machine {
   explicit Machine(psx::game::GameRuntime &runtime) : game(std::make_unique<Game>(runtime, psx::config::Config{})) {
-    game->gpu_dev.s_gpu_on = 0;
+    game->disablePresentation();
     game->core.r[29] = 0x801FFF00u;
     game->core.r[30] = 0x801FFF00u;
     game->cdc.disc_read_raw_fn = fakeSector;
   }
 
-  bool read(std::uint32_t sectors, std::uint32_t destination, std::int32_t lba) {
-    game->cd.setloc_lba = lba;
-    game->core.r[4] = sectors;
-    game->core.r[5] = destination;
+  bool read(const CdRead &request) {
+    game->cd.setloc_lba = request.lba;
+    game->core.r[4] = request.sectors;
+    game->core.r[5] = request.destination;
     game->core.r[6] = 0x80u;
     libcd.read(game->core);
     return game->core.r[2] == 1u;
@@ -91,84 +98,82 @@ GuestAddressRange arena() {
   return {kArena & 0x1fffffffu, kArenaEnd & 0x1fffffffu};
 }
 
-} // namespace
-
-static void test_a_read_inside_the_arena_is_published_and_executes() {
+void test_a_read_inside_the_arena_is_published_and_executes() {
   LoaderRuntime runtime(arena());
   Machine machine(runtime);
   Core &core = machine.game->core;
   CHECK(!core.currentImageIdentity(kModule).has_value());
 
   gValue = 7u;
-  CHECK(machine.read(2u, kModule, static_cast<std::int32_t>(kModuleLba)));
+  CHECK(machine.read({2u, kModule}));
   const auto identity = core.currentImageIdentity(kModule);
   CHECK(identity.has_value());
   CHECK(core.currentImageIdentity(kModule + 2u * 2048u - 1u) == identity);
   CHECK(!core.currentImageIdentity(kModule + 2u * 2048u).has_value()); // exactly the landed bytes
-  CHECK(core.imageCatalog().describe(*identity)->name.starts_with("CD read SHA-256 "));
+  CHECK(psx::test::require(core.imageCatalog().describe(*identity)).name.starts_with("CD read SHA-256 "));
   CHECK_EQ(machine.run(kModule), 7u);
   CHECK(core.lightrecExecutor().counters().executedBlocks != 0u);
 }
 
-static void test_a_read_outside_or_straddling_the_arena_publishes_nothing() {
+void test_a_read_outside_or_straddling_the_arena_publishes_nothing() {
   LoaderRuntime runtime(arena());
   Machine machine(runtime);
   Core &core = machine.game->core;
   const auto baseline = core.imageCatalog().activeCount();
 
-  CHECK(machine.read(1u, 0x80110000u, static_cast<std::int32_t>(kModuleLba)));       // below
-  CHECK(machine.read(1u, kArenaEnd, static_cast<std::int32_t>(kModuleLba)));         // above
-  CHECK(machine.read(2u, kArenaEnd - 2048u, static_cast<std::int32_t>(kModuleLba))); // crosses the end
-  CHECK(machine.read(2u, kArena - 2048u, static_cast<std::int32_t>(kModuleLba)));    // crosses the start
+  CHECK(machine.read({1u, 0x80110000u}));       // below
+  CHECK(machine.read({1u, kArenaEnd}));         // above
+  CHECK(machine.read({2u, kArenaEnd - 2048u})); // crosses the end
+  CHECK(machine.read({2u, kArena - 2048u}));    // crosses the start
   CHECK(!core.currentImageIdentity(0x80110000u).has_value());
   CHECK(!core.currentImageIdentity(kArenaEnd - 2048u).has_value());
   CHECK_EQ(core.imageCatalog().activeCount(), baseline);
   CHECK(!core.executionControl().consume().has_value()); // not a fault, just not code
 
-  CHECK(machine.read(1u, kArena, static_cast<std::int32_t>(kModuleLba))); // exactly at the start
+  CHECK(machine.read({1u, kArena})); // exactly at the start
   CHECK(core.currentImageIdentity(kArena).has_value());
 }
 
-static void test_repeated_and_different_loads_are_new_generations() {
+void test_repeated_and_different_loads_are_new_generations() {
   LoaderRuntime runtime(arena());
   Machine machine(runtime);
   Core &core = machine.game->core;
   auto &catalog = core.imageCatalog();
 
   gValue = 7u;
-  CHECK(machine.read(2u, kModule, static_cast<std::int32_t>(kModuleLba)));
+  CHECK(machine.read({2u, kModule}));
   const auto first = core.currentImageIdentity(kModule);
   CHECK(first.has_value());
-  const auto firstContent = catalog.describe(*first)->contentIdentity;
+  const auto firstContent = psx::test::require(catalog.describe(*first)).contentIdentity;
 
   // The same bytes again: same content identity, new generation.
-  CHECK(machine.read(2u, kModule, static_cast<std::int32_t>(kModuleLba)));
+  CHECK(machine.read({2u, kModule}));
   const auto second = core.currentImageIdentity(kModule);
   CHECK(second.has_value() && *second != *first);
-  CHECK(catalog.describe(*second)->contentIdentity == firstContent);
+  CHECK(psx::test::require(catalog.describe(*second)).contentIdentity == firstContent);
 
   // A second overlay with different bytes in the same arena replaces the first and runs.
   gValue = 11u;
-  CHECK(machine.read(2u, kModule, static_cast<std::int32_t>(kModuleLba)));
+  CHECK(machine.read({2u, kModule}));
   const auto third = core.currentImageIdentity(kModule);
   CHECK(third.has_value() && *third != *second);
-  CHECK(catalog.describe(*third)->contentIdentity != firstContent);
+  CHECK(psx::test::require(catalog.describe(*third)).contentIdentity != firstContent);
   CHECK_EQ(machine.run(kModule), 11u);
 
   // Two reads of one load, back to back, stay separate images and both resolve.
-  CHECK(machine.read(1u, kModule + 0x1000u, static_cast<std::int32_t>(kModuleLba) + 1));
+  CHECK(machine.read({1u, kModule + 0x1000u, static_cast<std::int32_t>(kModuleLba) + 1}));
   CHECK(core.currentImageIdentity(kModule + 0x1000u).has_value());
   CHECK(core.currentImageIdentity(kModule) == third);
 }
 
-static void test_an_empty_arena_admits_all_of_main_ram() {
+void test_an_empty_arena_admits_all_of_main_ram() {
   LoaderRuntime runtime(GuestAddressRange{});
   Machine machine(runtime);
-  CHECK(machine.read(1u, 0x80110000u, static_cast<std::int32_t>(kModuleLba)));
+  CHECK(machine.read({1u, 0x80110000u}));
   CHECK(machine.game->core.currentImageIdentity(0x80110000u).has_value());
 }
 
-static void test_an_unpublishable_landing_is_a_runtime_fault() {
+void test_an_unpublishable_landing_is_a_runtime_fault() {
   LoaderRuntime runtime(GuestAddressRange{});
   Machine machine(runtime);
   Core &core = machine.game->core;
@@ -181,19 +186,21 @@ static void test_an_unpublishable_landing_is_a_runtime_fault() {
   CHECK_EQ(core.imageCatalog().activeCount(), baseline);
 }
 
-static void test_a_read_that_moved_nothing_publishes_nothing() {
+void test_a_read_that_moved_nothing_publishes_nothing() {
   LoaderRuntime runtime(arena());
   Machine machine(runtime);
   Core &core = machine.game->core;
-  CHECK(machine.read(0u, kModule, static_cast<std::int32_t>(kModuleLba)));
-  CHECK(!machine.read(1u, kModule, -1));
-  machine.game->cdc.disc_read_raw_fn = [](DiscState *, std::uint32_t, std::uint8_t *, std::uint32_t) -> int {
-    return 0;
+  CHECK(machine.read({0u, kModule}));
+  CHECK(!machine.read({1u, kModule, -1}));
+  machine.game->cdc.disc_read_raw_fn = [](psx::cd::Disc *, std::uint32_t, std::uint8_t *, std::uint32_t) -> bool {
+    return false;
   };
-  CHECK(!machine.read(1u, kModule, static_cast<std::int32_t>(kModuleLba)));
+  CHECK(!machine.read({1u, kModule}));
   CHECK(!core.currentImageIdentity(kModule).has_value());
   CHECK(!core.executionControl().consume().has_value());
 }
+
+} // namespace
 
 int main() {
   RUN(a_read_inside_the_arena_is_published_and_executes);
@@ -202,5 +209,5 @@ int main() {
   RUN(an_empty_arena_admits_all_of_main_ram);
   RUN(an_unpublishable_landing_is_a_runtime_fault);
   RUN(a_read_that_moved_nothing_publishes_nothing);
-  return pt_summary();
+  return psx::test::summary();
 }

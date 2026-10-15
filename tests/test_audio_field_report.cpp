@@ -30,7 +30,7 @@ AudioFieldReport report(uint64_t ordinal) {
 }
 
 void test_empty_trace_is_not_a_pass() {
-  const AudioFieldCompareResult result = compareAudioFieldReports(nullptr, 0, nullptr, 0);
+  const AudioFieldCompareResult result = psx::audio::compareAudioFieldReports(nullptr, 0, nullptr, 0);
   CHECK(!result.equal);
   CHECK(result.reason.find("no audio field reports") != std::string::npos);
 }
@@ -38,7 +38,7 @@ void test_empty_trace_is_not_a_pass() {
 void test_identical_trace_passes() {
   const std::vector<AudioFieldReport> a = {report(1), report(2)};
   const std::vector<AudioFieldReport> b = {report(1), report(2)};
-  const AudioFieldCompareResult result = compareAudioFieldReports(a.data(), a.size(), b.data(), b.size());
+  const AudioFieldCompareResult result = psx::audio::compareAudioFieldReports(a.data(), a.size(), b.data(), b.size());
   CHECK(result.equal);
   CHECK_EQ(result.index, a.size());
 }
@@ -47,7 +47,7 @@ void test_pcm_mismatch_is_named() {
   const std::vector<AudioFieldReport> a = {report(1)};
   std::vector<AudioFieldReport> b = a;
   b[0].pcmSamples[2] = 18;
-  const AudioFieldCompareResult result = compareAudioFieldReports(a.data(), a.size(), b.data(), b.size());
+  const AudioFieldCompareResult result = psx::audio::compareAudioFieldReports(a.data(), a.size(), b.data(), b.size());
   CHECK(!result.equal);
   CHECK_EQ(result.index, 0);
   CHECK(result.reason.find("PCM sample 2") != std::string::npos);
@@ -56,7 +56,7 @@ void test_pcm_mismatch_is_named() {
 void test_count_mismatch_is_named() {
   const std::vector<AudioFieldReport> a = {report(1), report(2)};
   const std::vector<AudioFieldReport> b = {report(1)};
-  const AudioFieldCompareResult result = compareAudioFieldReports(a.data(), a.size(), b.data(), b.size());
+  const AudioFieldCompareResult result = psx::audio::compareAudioFieldReports(a.data(), a.size(), b.data(), b.size());
   CHECK(!result.equal);
   CHECK_EQ(result.index, 1);
   CHECK(result.reason.find("report count") != std::string::npos);
@@ -69,5 +69,5 @@ int main() {
   RUN(identical_trace_passes);
   RUN(pcm_mismatch_is_named);
   RUN(count_mismatch_is_named);
-  return pt_summary();
+  return psx::test::summary();
 }

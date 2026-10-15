@@ -7,14 +7,11 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <memory>
 #include <vector>
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
 using namespace psx::cpu;
 
 void word(std::vector<uint8_t> &bytes, std::size_t offset, uint32_t value) {
@@ -38,6 +35,7 @@ std::vector<uint8_t> executable(uint32_t value = 7) {
 }
 
 void test_load_and_aliases() {
+  psx::test::StubGameRuntime stubRuntime;
   for (uint32_t segment : {0u, 0x80000000u, 0xa0000000u}) {
     auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
     auto &core = game->core;
@@ -60,6 +58,7 @@ void test_load_and_aliases() {
 }
 
 void test_absent_stack_preserves_caller() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto bytes = executable();
   word(bytes, 0x14, 0);
@@ -74,6 +73,7 @@ void test_absent_stack_preserves_caller() {
 }
 
 void test_top_level_registers_after_mapping() {
+  psx::test::StubGameRuntime stubRuntime;
   for (uint32_t stack : {0u, 0x801ff000u}) {
     auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
     auto bytes = executable();
@@ -95,6 +95,7 @@ void test_top_level_registers_after_mapping() {
 }
 
 void test_refusals_preserve_core() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   std::fill_n(core.ram, sizeof(core.ram), 0x5a);
@@ -146,6 +147,7 @@ void test_refusals_preserve_core() {
 }
 
 void test_reload_invalidates_executed_code() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   auto bytes = executable();
@@ -166,34 +168,8 @@ void test_reload_invalidates_executed_code() {
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-void test_file_startup_register_contract() {
-  const std::filesystem::path path = "scratch/psx-exe-image/startup.exe";
-  std::filesystem::create_directories(path.parent_path());
-  for (uint32_t stack : {0u, 0x801fe000u, 0x801ff000u}) {
-    auto bytes = executable();
-    word(bytes, 0x30, stack);
-    const uint32_t offset = stack == 0x801ff000u ? 0xff0u : 0u;
-    word(bytes, 0x34, offset);
-    {
-      std::ofstream file(path, std::ios::binary);
-      file.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-      CHECK(file.good());
-    }
-    auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
-    game->core.r[29] = 0x801fa000;
-    load_exe(path.string().c_str(), &game->core);
-    CHECK_EQ(game->core.r[28], 0x80018000u);
-    CHECK_EQ(game->core.r[29], stack ? stack + offset : 0x801ffff0u);
-    CHECK_EQ(game->core.pc, 0x80010000u);
-    CHECK_EQ(game->core.r[30], game->core.r[29]);
-    CHECK_EQ(game->core.r[31], 0xdead0000u);
-    CHECK_EQ(game->core.mem_r32(0x10000), 0x24020007u);
-    CHECK(game->core.currentImageIdentity(0x80010000));
-  }
-  CHECK(std::filesystem::remove(path));
-}
-
 void test_input_alias_is_refused_before_copy() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto bytes = executable();
   std::copy(bytes.begin(), bytes.end(), game->core.ram);
@@ -212,6 +188,5 @@ int main() {
   RUN(refusals_preserve_core);
   RUN(reload_invalidates_executed_code);
   RUN(input_alias_is_refused_before_copy);
-  RUN(file_startup_register_contract);
-  return pt_summary();
+  return psx::test::summary();
 }

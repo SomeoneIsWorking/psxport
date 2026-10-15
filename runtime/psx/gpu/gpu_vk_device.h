@@ -1,84 +1,72 @@
-// gpu_vk_device.h — class GpuDevice: the SDL3 GPU present backend's HOST-DEVICE state
-// (window, GPU device, pipelines, textures, transfer buffers) that used to be ~25 file-scope
-// statics in gpu_vk.cpp. Owned by Game (`game->gpu_dev`).
-//
-// ONE window/device per process: the FIRST Game constructed claims the process device via
-// `sInstance` (same first-wins pattern as DbgServer) — in SBS both cores render through it by
-// design (the harness composes both panes into the one window). Per-frame BATCH state is separate
-// and per-Core (GpuVkState, gpu_vk_internal.h). Field names keep their historical `s_` spelling
-// so the gpu_vk.cpp bodies are unchanged by the move (accessed via shadow macros there).
+// gpu_vk_device.h — class GpuDevice: the SDL3 GPU device, its window, and the samplers and present
+// pipelines every Game presenting through it shares. A Game owns one or presents through a host's
+// (`Game::gpu_dev`); per-Game targets live on GpuVkState (gpu_vk_internal.h).
 #pragma once
-#include "gpu_vk_internal.h" // GGS_NUM_BLEND_MODES
-#include "gpu_vk_present_policy.h"
-#include "gpu_vk_window.h" // GpuWindow — the ONE window + swapchain (its own lifetime, not a field here)
+#include "gpu_vk_window.h" // GpuWindow — the window + swapchain (its own lifetime, not a field here)
+#include "pixel_size.h"
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
-#include <stdint.h>
+
+// The presented-picture format: fixed so it exists identically windowed and headless.
+inline constexpr SDL_GPUTextureFormat kPresentImageFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
 class GpuDevice {
 public:
   GpuDevice() = default;
   GpuDevice(const GpuDevice &) = delete;
   GpuDevice &operator=(const GpuDevice &) = delete;
-  // Releases the window, device, samplers and pipelines `init_gpu` created, when it ran. Per-Game
-  // targets on GpuVkState die with the device; Game orders the two so that is safe.
+  // Releases the window, device, samplers and pipelines bringUp() created, when it ran.
   ~GpuDevice();
 
-  // First Game to construct claims the process device slot (signal-free singleton claim; see above).
-  static GpuDevice *sInstance;
+  // A disabled device presents nothing; a test disables it before the first present.
+  bool enabled() const {
+    return enabled_;
+  }
+  void disable() {
+    enabled_ = false;
+  }
+  // Is a live on-screen window up (or about to be)? Resolves the leg from config on the first ask.
+  bool windowed();
+  // Window, device, samplers and present pipelines. Idempotent; exits when no device can be created.
+  void bringUp();
+  // The present sink: the live drawable windowed, PSXPORT_PRESENT_SINK (default the window size) headless.
+  psx::present::PixelSize sinkSize();
 
-  // ---- enable / init gates ----
-  int s_gpu_on = -1; // -1 = env not read yet
+  // Submit, latching the device off for the rest of the process on the first failure.
+  bool submit(SDL_GPUCommandBuffer *cmd, const char *where);
+  // Submit and wait with a wall-clock bound; false (and latched) on failure or timeout.
+  bool submitAndWait(SDL_GPUCommandBuffer *cmd, const char *where);
+  bool faulted() const {
+    return faulted_;
+  }
+
   int s_inited = 0;
   int s_headless = 0;
-
-  // ---- window / device / swapchain ----
-  // The window and its swapchain (format, present-mode claim, live drawable extent) are owned by
-  // GpuWindow: they are created before and destroyed after the SDL_GPU device, so their lifetime is not
-  // this object's. The device is all that remains here.
   SDL_GPUDevice *s_dev = nullptr;
-  // The window's title, when a HOST that owns the window named it (psxport::HostPresentation). Null
-  // means "name the window after the first Game that brings the device up", which is what every
-  // one-Game-per-process product gets. It is the window's DECLARED identity, an input to GpuWindow.
+  // The window's title when the host that owns the window named it; null names it generically.
   const char *s_window_title = nullptr;
   GpuWindow s_window;
 
-  // (per-Game render TARGETS — the guest-VRAM image, snapshot, depth, color intermediate and vertex
-  //  buffers — moved to GpuVkState 2026-07-10: two Games must not share mutable GPU surfaces.)
   SDL_GPUSampler *s_samp_nearest = nullptr; // integer VRAM sampler (nearest)
   SDL_GPUSampler *s_samp_linear = nullptr;  // RGBA image sampler (linear)
   SDL_GPUGraphicsPipeline *s_present_pipe = nullptr;
   SDL_GPUGraphicsPipeline *s_image_pipe = nullptr;
 
-  // ---- fullscreen IMAGE present (RGBA8, recreated on size change) ----
+  // The fullscreen image present's source (RGBA8, recreated on size change).
   SDL_GPUTexture *s_img_tex = nullptr;
   SDL_GPUTransferBuffer *s_img_xfer = nullptr;
   int s_img_w = 0, s_img_h = 0;
+  void ensureImageTexture(int width, int height);
 
-  // ---- Pass 2: native 3D / textured raster PIPELINES (shared; per-Game targets on GpuVkState) ----
-  SDL_GPUGraphicsPipeline *s_tri_pipe = nullptr;                  // flat opaque (depth test + write)
-  SDL_GPUGraphicsPipeline *s_line_pipe = nullptr;                 // flat opaque line (depth test + write)
-  SDL_GPUGraphicsPipeline *s_tritex_pipe = nullptr;               // textured opaque (depth test + write)
-  SDL_GPUGraphicsPipeline *s_semi_pipe[GGS_NUM_BLEND_MODES] = {}; // textured semi, real HW blend
-  SDL_GPUGraphicsPipeline *s_decode_pipe = nullptr;               // fullscreen: packed 1555 -> float RGBA
-  SDL_GPUGraphicsPipeline *s_encode_pipe = nullptr;               // fullscreen: float RGBA -> packed 1555
-  SDL_GPUGraphicsPipeline *s_ires_downsample_pipe = nullptr;      // ires composite: box-filter downsample
-  // bug #55 (part 3): depth-only re-rasterization of the semi buckets so translucent-only 3D coverage
-  // (no opaque backing) still marks the depth buffer the composite-back's coverage gate reads. One
-  // pipeline shared across all 4 blend-mode buckets (semi_cover.frag ignores blend mode — depth marking
-  // only). See render_geom's 3D band, right after Pass B.
-  SDL_GPUGraphicsPipeline *s_semi_cover_pipe = nullptr;
-  SDL_GPUGraphicsPipeline *s_painter_tex_pipe = nullptr;                  // ALWAYS/write: authored local overwrite
-  SDL_GPUGraphicsPipeline *s_painter_tri_pipe = nullptr;                  // ALWAYS/write: untextured authored overwrite
-  SDL_GPUGraphicsPipeline *s_painter_semi_pipe[GGS_NUM_BLEND_MODES] = {}; // ALWAYS/write, authored HW blend
-  SDL_GPUGraphicsPipeline *s_painter_composite_pipe = nullptr;            // sampled RG8+D32 -> world GE/write
-  int s_pipes_3d = 0;                                                     // 3D pipelines created (once per process)
+private:
+  // Record the fault for the next process; refuse to start while one stands.
+  void persistFault(const char *where, const char *detail);
+  bool faultPreflight();
+  void latchFault(const char *where, const char *detail);
 
-  // ---- diagnostics dedupe / scratch ----
-  int s_trace_n = 0;                       // PSXPORT_GPU_TRACE print counter
-  long s_ps_n[PRESENT_REBUILD_COUNT] = {}; // `debug presentskip`: PresentRebuild decision tally
-  int s_fw_lastmode = -999;                // `debug fadewatch` change detector (present)
-  uint8_t s_fw_lr = 0, s_fw_lg = 0, s_fw_lb = 0;
-  int s_fw_lsx = -999, s_fw_lsy = -999, s_fw_lw = -999, s_fw_lh = -999;
-  uint16_t s_selftest_pat[1024 * 512] = {}; // gpu_vk_selftest VRAM test pattern scratch
+  bool enabled_ = true;
+  int legResolved_ = 0;
+  bool faulted_ = false;
+  int sinkW_ = 0, sinkH_ = 0; // headless sink, resolved once
 };

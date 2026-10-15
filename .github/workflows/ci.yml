@@ -35,5 +35,9 @@ jobs:
         uses: ./.github/actions/setup-linux
       - name: Fetch the shared policy tools
         run: uv run --frozen python tools/policy/harness.py --fetch
+      - name: Provision Ghidra for the decompiler fixture
+        run: |
+          sudo apt-get install --yes default-jdk-headless
+          uv run --frozen python tools/decomp/install.py
       - name: Run the asset-free product and repository contracts
         run: uv run --frozen python tools/verify.py

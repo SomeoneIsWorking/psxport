@@ -1,6 +1,7 @@
 // gte.h — one Core's GTE (COP2): its register file and the Beetle GTE run against it.
 #pragma once
 
+#include "gte_preop_observer.h"
 #include "gte_state.h"
 
 #include <cstdint>
@@ -24,8 +25,12 @@ public:
   void writeData(std::uint32_t reg, std::uint32_t value);
   std::uint32_t readControl(std::uint32_t reg);
   void writeControl(std::uint32_t reg, std::uint32_t value);
-  // One COP2 command at the Core's current PC, with the Core's GTE observers.
+  // One COP2 command at the Core's current PC, with the Core's GTE observer.
   void execute(std::uint32_t instruction);
+
+  // The whole register file and flags, copied without running a read port.
+  GteRawState saveRaw() const;
+  void restoreRaw(const GteRawState &state);
 
   // Makes this the Beetle GTE instance and its Core's projection the current one.
   void bind();
@@ -37,10 +42,15 @@ public:
   const GteRegs &registers() const {
     return regs_;
   }
+  // The explicitly armed observer around each guest GTE command.
+  GtePreOpObserver &observer() {
+    return observer_;
+  }
 
 private:
   Core &core_;
   GteRegs regs_{};
+  GtePreOpObserver observer_;
 };
 
 } // namespace psx::cpu

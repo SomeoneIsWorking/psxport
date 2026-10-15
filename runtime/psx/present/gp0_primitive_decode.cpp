@@ -106,7 +106,7 @@ std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std:
       primitive.clutWord = coord.selector & 0x7FFFu;
     }
     const int fixedSize = command.rectangleFixedSize();
-    const Gp0VramRect region = Gp0Command::spriteRegion(words[1], fixedSize == 0 ? words[index] : 0u, fixedSize);
+    const Gp0VramRect region = Gp0Command::spriteRegion({words[1], fixedSize == 0 ? words[index] : 0u}, fixedSize);
     primitive.width = region.width;
     primitive.height = region.height;
     primitive.vertices[0] = vertex;

@@ -14,7 +14,7 @@
 #include <cstdint>
 
 // Bit positions in I_STAT / I_MASK (0x1F801070 / 0x1F801074). Same numbering as beetle-psx irq.h.
-enum : int {
+enum : std::uint8_t {
   IRQ_BIT_VBLANK = 0,
   IRQ_BIT_GPU = 1,
   IRQ_BIT_CD = 2,
@@ -31,12 +31,16 @@ enum : int {
 inline constexpr uint32_t kIrqStatRegister = 0x1F801070u;
 inline constexpr uint32_t kIrqMaskRegister = 0x1F801074u;
 
+namespace psx::platform {
+
 // Drive source `bit`'s line to `asserted`, updating the caller's LEVEL word in place, and return the
-// new I_STAT. Only a low->high transition of that source adds its bit; nothing here ever CLEARS an
-// I_STAT bit, because only the guest's ack does that.
-inline uint32_t irq_latch_edge(uint32_t &level, uint32_t i_stat, int bit, bool asserted) {
+// I_STAT bit to latch: set only on that source's low->high transition. The caller ORs it in; only
+// the guest's ack ever clears an I_STAT bit.
+inline uint32_t latchIrqEdge(uint32_t &level, int bit, bool asserted) {
   const uint32_t was = level;
   const uint32_t mask = 1u << bit;
   level = asserted ? (level | mask) : (level & ~mask);
-  return i_stat | ((was ^ level) & level);
+  return (was ^ level) & level;
 }
+
+} // namespace psx::platform

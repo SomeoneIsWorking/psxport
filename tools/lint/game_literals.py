@@ -670,8 +670,8 @@ def main(argv: list[str]) -> int:
     for (p, v), cnt, b in shrunk:
         print(f"  {p}: 0x{v:08X} count SHRANK {b} -> {cnt} — good, but the baseline must record it.")
     print("\n  Two legal remedies, and only two:")
-    print("   1. Move the fact to where it belongs: a GameConfig scalar the framework reads via")
-    print("      `cfg->`, game code behind an abstract class, or a diagnostic ROW the game registers")
+    print("   1. Move the fact to where it belongs: a GameRuntime virtual the title answers,")
+    print("      game code behind an abstract class, or a diagnostic ROW the game registers")
     print("      at init; docs/codemap.md defines the framework/title ownership boundary.")
     print("   2. If it is genuinely a CONSOLE constant this classifier cannot know, annotate the line")
     print("      `// psx-console: <the console fact>` — the reason must state the fact, not that you")

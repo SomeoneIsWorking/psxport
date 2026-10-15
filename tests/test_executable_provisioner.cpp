@@ -1,5 +1,6 @@
 // psx::host::provisionExecutable against the fixture disc (tests/fixtures/make_provision_disc.py): a
 // one-track CHD holding BOOT/SLUS_000.01, the same bytes as tests/fixtures/provision_disc/SLUS_000.01.
+#include "source_tree.h"
 #include "testutil.h"
 
 #include "disc_executable.h"
@@ -22,18 +23,20 @@
 
 namespace {
 
-const std::filesystem::path kFixtures = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "provision_disc";
+std::filesystem::path fixtures() {
+  return psx::test::sourcePath("tests/fixtures/provision_disc");
+}
 constexpr const char *kDiscKey = "PSXPORT_TEST_PROVISION_DISC";
 
 struct Fixture {
-  std::vector<std::uint8_t> executable = Fs::readFile((kFixtures / "SLUS_000.01").string());
+  std::vector<std::uint8_t> executable = Fs::readFile((fixtures() / "SLUS_000.01").string());
   std::string sha256 = lucent::content::sha256_hex(lucent::content::sha256(std::as_bytes(std::span(executable))));
   std::filesystem::path root =
       std::filesystem::current_path() / ("executable_provisioner_" + std::to_string(::getpid()));
   std::filesystem::path target = root / "fixture" / "SLUS_000.01";
 
   Fixture() {
-    setenv(kDiscKey, (kFixtures / "provision.chd").c_str(), 1);
+    setenv(kDiscKey, (fixtures() / "provision.chd").c_str(), 1);
     unsetenv("PSXPORT_DISC");
   }
   ~Fixture() {
@@ -132,5 +135,5 @@ int main() {
   RUN(a_path_the_disc_does_not_hold_provisions_nothing);
   RUN(a_disc_executable_loads_as_the_running_program);
   RUN(a_disc_executable_that_is_not_the_title_is_refused_unloaded);
-  return pt_summary();
+  return psx::test::summary();
 }

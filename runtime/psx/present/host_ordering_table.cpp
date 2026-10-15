@@ -25,7 +25,7 @@ void emitHostOrderingTable(const HostMemory &host, const HostOrderingTable &tabl
   std::uint16_t drawMode = 0;
   for (std::uint32_t bucket = table.buckets; bucket-- > 0;) {
     std::uint32_t head = 0;
-    std::memcpy(&head, heads.data() + bucket * 4u, sizeof(head));
+    std::memcpy(&head, heads.data() + static_cast<std::size_t>(bucket) * 4u, sizeof(head));
     std::uint32_t packet = head & kTagNextMask;
     for (std::uint32_t linked = 0; packet != 0; ++linked) {
       std::uint32_t tag = 0;

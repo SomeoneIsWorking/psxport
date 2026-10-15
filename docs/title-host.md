@@ -4,8 +4,9 @@ The framework's multi-title product host: one process, one window and one presen
 in-window title selector, the chosen title, and back to the selector. A port with several titles
 (Spyro 1/2/3, Crash 1/2/3, Spider-Man 1/2, Tomba 1/2) supplies a catalog and a factory for it; the
 framework's one `main` runs it through `psx::host::ProductHost`. A title writes no `main`, command line or
-selector code of its own. Code lives in `runtime/psx/host/`,
-namespace `psx::host`.
+selector code of its own. Code lives in `runtime/psx/host/` (private to the framework) and, for the
+catalog contract a title implements (`title_catalog.h`, `single_title_catalog`, `title_selection`,
+`title_availability`, `logo_image.h`), in the public `runtime/psx/catalog/`; namespace `psx::host`.
 
 ## What it owns
 
@@ -20,7 +21,7 @@ namespace `psx::host`.
 | `saved_disc.{h,cpp}` | `SavedDisc`: the disc image the player chose at first run, `<user data>/<slug>/disc-path`, and `bind` that points a `DiscState` at the title's key and then at it |
 | `first_run_setup.{h,cpp}` | `FirstRunSetup`: the shared setup-ui screen that asks for the disc (`judge` is its validator), saved through `SavedDisc` |
 | `title_session.{h,cpp}` | `TitleSession`: one boot-to-exit run of one title as a steppable owner; destruction is the whole teardown |
-| `session_run.h` | `SessionRun`, held per `Game` as `Game::run`: a title's request to end its run |
+| `session_run.h` (`runtime/psx/game/`) | `SessionRun`, held per `Game` as `Game::run`: a title's request to end its run |
 | `run_budget.{h,cpp}` | `RunBudget`: the process's run cap in presentation-fence steps, decided once from `PSXPORT_NATIVE_FRAMES` |
 | `panel_sessions.{h,cpp}` | `PanelSessions`: one live session per panel (the available titles `PSXPORT_PICKER_TITLES` asks for) and the rules about which of them runs |
 | `picker_session.{h,cpp}` | `PickerSession`: the selector frame loop; one guest advances per frame |
@@ -140,7 +141,7 @@ install the title's runtime and build its `Game`; attach the
 the disc key from the title's `TitleIdentity`; `GameRuntime::admitExecutable`; the configuration audit
 (`psx::config::report_once`); the per-Core device binds (init then bind, then `Pad::overridesInit`, then
 the `a0`/`a1` seed); `GameRuntime::registerOverrides` then `FrameLoopShell::prepareProduct`;
-`DbgServer::start` and `store_observe_attach`; for a product only, `gpu_clear_display`;
+`DbgServer::start` and `store_observe_attach`; for a product only, a `DisplayPresenter` transition present;
 `GameRuntime::startProgram`; for the first product session only,
 `psx::state::applyConfiguredState` (fatal on failure); then the present-to-present series restarts, so the boot's gap
 is not counted as a missed present.
@@ -172,7 +173,7 @@ selector frame's wall time.
 
 Once `run` has a selector or a title to start, `ProductHost` builds its process state: the window
 and device, the `QuitScope`, the `RunBudget`, the watchdog and the host diagnostics
-(`memcensus_init` and `cfg_dump`: the memory census and the active-config dump). Help and refused
+(`memcensus_init` and `psx::config::report_once`: the memory census and the active-config report). Help and refused
 arguments build none of it. The watchdog is disabled when the host is destroyed; sessions never arm
 or disarm either. A window close is recorded on the `QuitScope` instead of exiting in
 the event drain, so it reaches the run-end report like a client `quit`.

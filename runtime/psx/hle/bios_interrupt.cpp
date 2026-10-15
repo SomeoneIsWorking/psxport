@@ -5,7 +5,6 @@
 #include <lucent/log.h>
 
 namespace {
-enum { V0 = 2, S0 = 16, GP = 28, SP = 29, FP = 30 };
 
 constexpr uint32_t kResumeOffset = 0x00u;
 constexpr uint32_t kSpOffset = 0x04u;
@@ -16,7 +15,7 @@ constexpr uint32_t kGpOffset = 0x2Cu;
 struct ReturnFromException {};
 } // namespace
 
-void bios_interrupt_trace_custom_exit(Core *c, uint32_t buffer) {
+void psx::hle::traceInterruptCustomExit(Core *c, uint32_t buffer) {
   if (!buffer || !lucent::channel_on("bios")) {
     return;
   }
@@ -32,20 +31,20 @@ void bios_interrupt_trace_custom_exit(Core *c, uint32_t buffer) {
   }
 }
 
-bool bios_interrupt_enter_handler_context(Core *c, uint32_t buffer) {
+bool psx::hle::enterInterruptHandlerContext(Core *c, uint32_t buffer) {
   if (!buffer) {
     return false;
   }
-  c->r[SP] = c->mem_r32(buffer + kSpOffset);
-  c->r[FP] = c->mem_r32(buffer + kFpOffset);
+  c->r[psx::cpu::kSp] = c->mem_r32(buffer + kSpOffset);
+  c->r[psx::cpu::kFp] = c->mem_r32(buffer + kFpOffset);
   for (uint32_t i = 0; i < 8; i++) {
-    c->r[S0 + i] = c->mem_r32(buffer + kS0Offset + 4u * i);
+    c->r[psx::cpu::kS0 + i] = c->mem_r32(buffer + kS0Offset + 4u * i);
   }
-  c->r[GP] = c->mem_r32(buffer + kGpOffset);
+  c->r[psx::cpu::kGp] = c->mem_r32(buffer + kGpOffset);
   return true;
 }
 
-uint32_t bios_interrupt_enter_custom_exit(Core *c, uint32_t buffer) {
+uint32_t psx::hle::enterInterruptCustomExit(Core *c, uint32_t buffer) {
   if (!buffer) {
     return 0;
   }
@@ -54,14 +53,14 @@ uint32_t bios_interrupt_enter_custom_exit(Core *c, uint32_t buffer) {
     return 0;
   }
 
-  bios_interrupt_enter_handler_context(c, buffer);
-  c->r[V0] = 1;
+  psx::hle::enterInterruptHandlerContext(c, buffer);
+  c->r[psx::cpu::kV0] = 1;
   return resume;
 }
 
 BiosInterruptDispatchResult
-bios_interrupt_dispatch_custom_exit(Core *c, uint32_t buffer, BiosInterruptGuestDispatch dispatch) {
-  const uint32_t resume = bios_interrupt_enter_custom_exit(c, buffer);
+psx::hle::dispatchInterruptCustomExit(Core *c, uint32_t buffer, BiosInterruptGuestDispatch dispatch) {
+  const uint32_t resume = psx::hle::enterInterruptCustomExit(c, buffer);
   if (!resume || !dispatch) {
     return BiosInterruptDispatchResult::Refused;
   }
@@ -73,7 +72,7 @@ bios_interrupt_dispatch_custom_exit(Core *c, uint32_t buffer, BiosInterruptGuest
   return BiosInterruptDispatchResult::FellThrough;
 }
 
-void bios_interrupt_return_from_exception(bool custom_exit_active) {
+void psx::hle::returnFromException(bool custom_exit_active) {
   if (!custom_exit_active) {
     lucent::error("irq", "B0:0x17 ReturnFromException called without an active custom exit");
     abort();

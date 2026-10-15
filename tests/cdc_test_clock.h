@@ -8,15 +8,19 @@ struct CdcTestClock {
   uint64_t ticks = 0;
 };
 
-inline uint64_t cdc_test_now(void *context) {
+namespace psx::test {
+
+inline uint64_t cdcClockNow(void *context) {
   return static_cast<CdcTestClock *>(context)->ticks;
 }
 
-inline void cdc_test_bind(CdcState *cdc, CdcTestClock *clock) {
-  cdc_bind_tick_source(cdc, clock, cdc_test_now);
+inline void bindCdcClock(psx::cd::CdController *cdc, CdcTestClock *clock) {
+  cdc->bindTickSource(clock, cdcClockNow);
 }
 
-inline int cdc_test_service_deadline(CdcState *cdc, CdcTestClock *clock) {
+inline int serviceCdcDeadline(psx::cd::CdController *cdc, CdcTestClock *clock) {
   clock->ticks = cdc->drive_deadline_ticks;
-  return cdc_drive_service(cdc);
+  return cdc->service();
 }
+
+} // namespace psx::test

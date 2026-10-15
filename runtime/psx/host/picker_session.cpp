@@ -44,7 +44,11 @@ PickerSession::PickerSession(PickerRuntime &runtime,
                              const PickerContent &content,
                              SessionServices &services)
     : runtime_(runtime), catalog_(catalog), content_(content), services_(services),
-      layout_(content.panelCount(), kSelectedShare, kUnselectedShare, kSlantPerWidth, kWidthResponse) {
+      layout_(content.panelCount(),
+              {.selectedShare = kSelectedShare,
+               .unselectedShare = kUnselectedShare,
+               .slantPerWidth = kSlantPerWidth,
+               .responsePerFrame = kWidthResponse}) {
   if (content.panelCount() > PickerLayout::maxPanels()) {
     lucent::error("picker",
                   "{} titles are available and the picker lays out at most {} panels",
@@ -105,7 +109,7 @@ PickerSession::Result PickerSession::run() {
   host->hostInput.attachQuitScope(&services_.quit);
   // No guest runs here, so the channel needs no store observer.
   host->dbg_server.start(&core);
-  gpu_vk_ensure_device(&core);
+  psx::gpu::ensureDevice(core);
 
   composite_ = std::make_unique<PickerComposite>(services_.presentation, &core);
   runtime_.bind(&content_, composite_.get());
@@ -128,16 +132,15 @@ PickerSession::Result PickerSession::run() {
     fieldTurn.beginField(core);
     host->pad.serviceFrame();
 
-    int sinkWidth = 0, sinkHeight = 0;
-    gpu_vk_present_sink_size(&sinkWidth, &sinkHeight);
-    layout_.setSurface(sinkWidth, sinkHeight);
+    const psx::present::PixelSize sink = services_.presentation.sinkSize();
+    layout_.setSurface(sink.width, sink.height);
     layout_.setSelection(panels_->selected());
-    composite_->setSurface(layout_, sinkWidth, sinkHeight);
+    composite_->setSurface(layout_, sink.width, sink.height);
     // Every panel session presents into the composite, never into the window: the window belongs to
     // this host, and each session's picture is a fraction of it.
     for (int panel = 0; panel < panels_->count(); ++panel) {
       if (TitleSession *session = panels_->session(panel)) {
-        session->presentToPane(composite_->paneImageWidth(), composite_->paneImageHeight());
+        session->presentToPane(composite_->paneImage());
       }
     }
 

@@ -32,5 +32,5 @@ void test_the_catalog_is_its_one_title() {
 
 int main() {
   RUN(the_catalog_is_its_one_title);
-  return pt_summary();
+  return psx::test::summary();
 }

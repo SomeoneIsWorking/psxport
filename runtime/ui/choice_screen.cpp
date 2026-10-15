@@ -40,7 +40,7 @@ ChoiceScreen::ChoiceScreen(Rml::Context *ctx, Rml::ElementDocument *doc, ChoiceC
   mList = list;
   mBand = doc->GetElementById("panel");
   // A screen is the WHOLE picture unless its host says otherwise: opaque backdrop, list shown.
-  setBackdropOpaque(true);
+  ChoiceScreen::setBackdropOpaque(true);
   const std::vector<ChoiceEntry> &entries = mNavigator.entries();
   for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
     Rml::Element *row = appendChild(list, "entry");

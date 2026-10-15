@@ -25,6 +25,7 @@
 #pragma once
 
 #include "execution_exit.h"
+#include "guest_call_site.h"
 #include "image_identity.h"
 #include "r3000.h"
 
@@ -71,11 +72,7 @@ public:
   // Captures the boundary and latches it into `r[31]`. `owner` names the native caller in every
   // report; `turnCap` is in display fields, and `kUnboundedCallTurns` says the caller bounds the
   // call itself. Refuses a second `begin` while a call is still pending.
-  void begin(Core &core,
-             std::string_view owner,
-             std::uint32_t entry,
-             std::uint32_t returnPc,
-             std::uint32_t turnCap = kDefaultCallTurns);
+  void begin(Core &core, std::string_view owner, GuestCallSite call, std::uint32_t turnCap = kDefaultCallTurns);
 
   // Runs exactly one host turn and classifies how it stopped. `turn` defaults to one display field.
   // `original` names a native key whose override is suppressed for the whole call: the first segment

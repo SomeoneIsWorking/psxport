@@ -33,10 +33,10 @@ void putU64(std::vector<std::uint8_t> &out, std::uint64_t value) {
 
 // Little-endian reads over a bounds-checked cursor. Every read is preceded by a length check in the
 // decoder, so these never run past the span.
-std::uint64_t getLe(std::span<const std::uint8_t> bytes, std::size_t at, std::size_t width) {
+std::uint64_t getLe(std::span<const std::uint8_t> field) {
   std::uint64_t value = 0;
-  for (std::size_t i = 0; i < width; i++) {
-    value |= static_cast<std::uint64_t>(bytes[at + i]) << (8 * i);
+  for (std::size_t i = 0; i < field.size(); i++) {
+    value |= static_cast<std::uint64_t>(field[i]) << (8 * i);
   }
   return value;
 }
@@ -92,7 +92,9 @@ std::uint32_t PadSegment::inputFramesFrom(std::uint32_t offset) const {
 
 PadRecording::PadRecording(CardIdentity card) : card_(card) {}
 
-void PadRecording::append(std::uint64_t phase, std::uint16_t mask) {
+void PadRecording::append(PadFrame frame) {
+  const std::uint64_t phase = frame.phase;
+  const std::uint16_t mask = frame.mask;
   if (segments_.empty() || segments_.back().phase != phase) {
     segments_.push_back(PadSegment{.phase = phase, .runs = {}});
   }
@@ -125,10 +127,10 @@ void PadRecording::putPhase(std::vector<std::uint8_t> &out, std::uint64_t phase)
   putU64(out, phase);
 }
 
-void PadRecording::putRun(std::vector<std::uint8_t> &out, std::uint16_t mask, std::uint32_t frames) {
+void PadRecording::putRun(std::vector<std::uint8_t> &out, PadRun run) {
   out.push_back(kRunTag);
-  putU16(out, mask);
-  putU32(out, frames);
+  putU16(out, run.mask);
+  putU32(out, run.frames);
 }
 
 std::vector<std::uint8_t> PadRecording::encode(std::size_t frameLimit) const {
@@ -145,7 +147,7 @@ std::vector<std::uint8_t> PadRecording::encode(std::size_t frameLimit) const {
         break;
       }
       const auto frames = static_cast<std::uint32_t>(std::min<std::size_t>(run.frames, remaining));
-      putRun(out, run.mask, frames);
+      putRun(out, PadRun{.mask = run.mask, .frames = frames});
       remaining -= frames;
     }
   }
@@ -166,12 +168,12 @@ DecodedPadRecording PadRecording::decode(std::span<const std::uint8_t> bytes) {
   if (bytes.size() < kHeaderBytes) {
     return refuse(lucent::format("truncated header: {} of {} bytes", bytes.size(), kHeaderBytes));
   }
-  const auto version = static_cast<std::uint32_t>(getLe(bytes, 8, 4));
+  const auto version = static_cast<std::uint32_t>(getLe(bytes.subspan(8, 4)));
   if (version != kVersion) {
     return refuse(lucent::format(
         "pad recording format version {} is not supported; this build reads version {}", version, kVersion));
   }
-  const auto cardKind = static_cast<std::uint32_t>(getLe(bytes, 12, 4));
+  const auto cardKind = static_cast<std::uint32_t>(getLe(bytes.subspan(12, 4)));
   if (cardKind > static_cast<std::uint32_t>(CardIdentity::Kind::Image)) {
     return refuse(lucent::format("unknown card identity kind {} in the header", cardKind));
   }
@@ -189,7 +191,7 @@ DecodedPadRecording PadRecording::decode(std::span<const std::uint8_t> bytes) {
       if (!recording.segments_.empty() && recording.segments_.back().runs.empty()) {
         return refuse(lucent::format("phase record at byte {} follows a phase that holds no frames", at));
       }
-      recording.segments_.push_back(PadSegment{.phase = getLe(bytes, at + 1, 8), .runs = {}});
+      recording.segments_.push_back(PadSegment{.phase = getLe(bytes.subspan(at + 1, 8)), .runs = {}});
       at += kPhaseRecordBytes;
     } else if (tag == kRunTag) {
       if (bytes.size() - at < kRunRecordBytes) {
@@ -198,8 +200,8 @@ DecodedPadRecording PadRecording::decode(std::span<const std::uint8_t> bytes) {
       if (recording.segments_.empty()) {
         return refuse(lucent::format("run record at byte {} precedes any phase record", at));
       }
-      const auto mask = static_cast<std::uint16_t>(getLe(bytes, at + 1, 2));
-      const auto frames = static_cast<std::uint32_t>(getLe(bytes, at + kRunFramesOffset, 4));
+      const auto mask = static_cast<std::uint16_t>(getLe(bytes.subspan(at + 1, 2)));
+      const auto frames = static_cast<std::uint32_t>(getLe(bytes.subspan(at + kRunFramesOffset, 4)));
       if (!frames) {
         return refuse(lucent::format("zero-length run record at byte {}", at));
       }
@@ -252,7 +254,9 @@ bool PadRecordingWriter::write(const std::vector<std::uint8_t> &bytes) {
   return file_ ? true : fail("write");
 }
 
-bool PadRecordingWriter::append(std::uint64_t phase, std::uint16_t mask) {
+bool PadRecordingWriter::append(PadFrame frame) {
+  const std::uint64_t phase = frame.phase;
+  const std::uint16_t mask = frame.mask;
   if (failed_) {
     return false;
   }
@@ -284,7 +288,7 @@ bool PadRecordingWriter::append(std::uint64_t phase, std::uint16_t mask) {
     return fail("position query");
   }
   runFramesPos_ = end + static_cast<std::streamoff>(bytes.size() + PadRecording::kRunFramesOffset);
-  PadRecording::putRun(bytes, mask, 1);
+  PadRecording::putRun(bytes, PadRun{.mask = mask, .frames = 1});
   haveRun_ = true;
   runMask_ = mask;
   runFrames_ = 1;

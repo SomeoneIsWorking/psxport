@@ -33,5 +33,9 @@ struct AudioFieldCompareResult {
   std::string reason;
 };
 
+namespace psx::audio {
+
 AudioFieldCompareResult
 compareAudioFieldReports(const AudioFieldReport *a, size_t aCount, const AudioFieldReport *b, size_t bCount);
+
+} // namespace psx::audio

@@ -82,5 +82,5 @@ int main() {
   RUN(default_state_arms_census_without_env_override);
   RUN(producers_zero_disarms_at_construction);
   RUN(removing_override_rearms_next_construction);
-  return pt_summary();
+  return psx::test::summary();
 }

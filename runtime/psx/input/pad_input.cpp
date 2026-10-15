@@ -12,17 +12,22 @@
 // module no image-scoped override can own the address, so no address-only registration is attempted and
 // no missing registration is silently accepted — the native per-frame service supplies the buffers.
 #include "pad_input.h"
-#include "cfg.h"
 #include "config_vars.h"
 #include "core.h"
-#include "game.h"                // class Pad lives on Game (c->game->pad)
-#include "game_runtime.h"        // GameRuntime::inputPhase / deliverPad
-#include "gpu_native_internal.h" // gpu_scene_dump_now / gpu_disp_dump_now / gpu_otattr_dump_now
-#include "gpu_vk.h"              // gpu_vk_shot, gpu_vk_windowed — the windowed/headless discriminator
+#include "diagnostic_config.h"
+#include "game.h" // class Pad lives on Game (c->game->pad)
+#include "game_runtime.h"
+#include "gpu_debug.h"
+#include "gpu_vk.h"
+#include "gpu_vk_device.h"
+#include "gpu_vk_internal.h"
+#include "number_text.h" // GameRuntime::inputPhase / deliverPad
 #include <lucent/log.h>
+#include <optional>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string_view>
 
 // The title's input phase for this pad frame. A title that declares none (the GameRuntime default,
 // and every legacy adapter) answers kUnkeyedPhase, and its recordings are absolute from boot.
@@ -59,7 +64,7 @@ void Pad::fillBuffer(uint8_t *buf) {
 // and clobbering it with "nothing pressed" would discard exactly what the leg depends on. The drain
 // still runs, because a window close has to end the run from any leg.
 void Pad::pollHostInput() {
-  const bool windowed = gpu_vk_windowed() != 0;
+  const bool windowed = game->gpu_dev.windowed();
   const uint16_t hostMask = mHost.poll(windowed);
   if (!windowed) {
     return;
@@ -87,10 +92,10 @@ void Pad::driveHold(uint16_t activeLowMask) {
   repl_hold = activeLowMask;
 }
 
-void Pad::driveTap(uint16_t activeLowMask, int nframes) {
+void Pad::driveTap(Tap tap) {
   repl_on = 1;
-  repl_tap = activeLowMask;
-  repl_tap_n = nframes;
+  repl_tap = tap.activeLowMask;
+  repl_tap_n = tap.frames;
 }
 
 // Relinquish REPL pad control entirely, so neither a held mask nor a stale no-buttons mask keeps
@@ -112,15 +117,28 @@ void Pad::driveRelease() {
 void Pad::applyGuestPoke(Core *c) {
   if (!mPokeInit) {
     mPokeInit = 1;
-    const char *spec = cfg_str("PSXPORT_GUEST_POKE");
-    if (spec) {
+    const std::string spec = psx::config::guest_poke();
+    if (!spec.empty()) {
       char buf[512];
-      snprintf(buf, sizeof buf, "%s", spec);
+      snprintf(buf, sizeof buf, "%s", spec.c_str());
       int bad = 0;
       for (char *t = strtok(buf, ","); t; t = strtok(nullptr, ",")) {
-        unsigned addr = 0, val = 0, width = 1;
-        const int got = sscanf(t, "%x:%x:%u", &addr, &val, &width);
-        if (got < 2 || (width != 1 && width != 2 && width != 4) || mPokeN >= kPokeMax) {
+        const std::string_view entry(t);
+        const std::size_t firstColon = entry.find(':');
+        const std::size_t secondColon = entry.find(':', firstColon == std::string_view::npos ? 0 : firstColon + 1);
+        const std::optional<std::uint32_t> parsedAddr = psx::config::parseUnsigned(entry.substr(0, firstColon), 16);
+        const std::optional<std::uint32_t> parsedVal =
+            firstColon == std::string_view::npos
+                ? std::nullopt
+                : psx::config::parseUnsigned(entry.substr(firstColon + 1, secondColon - firstColon - 1), 16);
+        const std::optional<std::uint32_t> parsedWidth =
+            secondColon == std::string_view::npos ? std::optional<std::uint32_t>(1)
+                                                  : psx::config::parseUnsigned(entry.substr(secondColon + 1), 10);
+        const unsigned addr = parsedAddr.value_or(0);
+        const unsigned val = parsedVal.value_or(0);
+        const unsigned width = parsedWidth.value_or(0);
+        if (!parsedAddr.has_value() || !parsedVal.has_value() || (width != 1 && width != 2 && width != 4) ||
+            mPokeN >= kPokeMax) {
           bad++;
           continue;
         }
@@ -161,24 +179,24 @@ void Pad::applyGuestPoke(Core *c) {
 
 void Pad::serviceFrame() {
   Core *c = &game->core;
-  const bool windowed = gpu_vk_windowed() != 0;
+  const bool windowed = game->gpu_dev.windowed();
   pollHostInput(); // host keyboard/controllers, plus the P / '.' debug keys
 
   if (!mForceInit) { // headless test hook: pulse an active-low mask
-    const char *force = cfg_str("PSXPORT_FORCE_BUTTONS");
-    if (force) {
+    const std::string force = psx::config::forced_buttons();
+    if (!force.empty()) {
       mForceOn = 1;
-      mForceMask = (uint16_t)strtoul(force, 0, 16);
+      mForceMask = (uint16_t)strtoul(force.c_str(), 0, 16);
     }
     // Second phase: HOLD a mask continuously from PSXPORT_FORCE_HOLD_AT onward (overrides the
     // pulse). Lets a headless run reach a state via pulsed Start, then hold a direction in-level
     // (a held direction is what the game reads for movement) — for interactivity testing.
-    const char *hold = cfg_str("PSXPORT_FORCE_HOLD");
-    if (hold) {
+    const std::string hold = psx::config::forced_hold();
+    if (!hold.empty()) {
       mForceOn = 1;
-      mHoldMask = (uint16_t)strtoul(hold, 0, 16);
-      const char *at = cfg_str("PSXPORT_FORCE_HOLD_AT");
-      mHoldAt = at ? strtoul(at, 0, 0) : 0;
+      mHoldMask = (uint16_t)strtoul(hold.c_str(), 0, 16);
+      const std::string at = psx::config::forced_hold_at();
+      mHoldAt = at.empty() ? 0 : strtoul(at.c_str(), 0, 0);
     }
     mForceInit = 1;
   }
@@ -188,8 +206,7 @@ void Pad::serviceFrame() {
   // PSXPORT_FORCE_STOP_AT=N ceases ALL forced input at frame N, so a run can pulse Start through
   // attract/menu/intro to a target scene and then go hands-off.
   if (mStopAt == -2) {
-    const char *e = cfg_str("PSXPORT_FORCE_STOP_AT");
-    mStopAt = e ? atol(e) : -1;
+    mStopAt = psx::config::forced_stop_at();
   }
   if (mForceOn && !(mStopAt >= 0 && (long)mFc >= mStopAt)) {
     if (mHoldMask != psx::input::kNoButtons && mFc >= mHoldAt) {
@@ -229,9 +246,9 @@ void Pad::serviceFrame() {
   {
     if (!mSession.configured()) {
       mSession.configure(psx::input::PadSessionConfig{
-          .recordPath = psx::config::cv_pad_record.get(),
-          .replayPath = psx::config::cv_pad_replay.get(),
-          .resumePath = psx::config::cv_pad_resume.get(),
+          .recordPath = psx::config::pad_record_path(),
+          .replayPath = psx::config::pad_replay_path(),
+          .resumePath = psx::config::pad_resume_path(),
           .windowed = windowed,
           .liveInputOnly = mLiveInputOnly,
           .card =
@@ -240,24 +257,24 @@ void Pad::serviceFrame() {
               },
       });
     }
-    buttons = mSession.service(currentPhase(*c), buttons, repl_mask);
+    buttons = mSession.service(currentPhase(*c), {.live = buttons, .repl = repl_mask});
     // Latch edges only after every input source has resolved to the mask the guest receives. Sampling
     // host input earlier would miss replay/REPL presses or expose an edge for a mask later replaced.
     sampleButtonEdges();
     const uint32_t rec_fc = mSession.frameIndex(); // the pad-frame axis the schedules below index
     // PSXPORT_PAD_SHOT_AT=f0,f1,... : during replay, screenshot at these EXACT replay (pad) frame
     // indices to scratch/screenshots/padshot_<frame>.ppm. The pad-frame axis (rec_fc) is the faithful
-    // one (gpu_frame_no drifts because boot/FMV presents extra frames), so this captures a
+    // one (the present count drifts because boot/FMV presents extra frames), so this captures a
     // deterministic visual timeline of a replayed session. Taken here, after the mask is applied for
     // THIS frame.
     uint32_t *shot_at = mShotAt;
     int &shot_n = mShotN;
     if (!mShotInit) {
       mShotInit = 1;
-      const char *s = cfg_str("PSXPORT_PAD_SHOT_AT");
-      if (s) {
+      const std::string s = psx::config::pad_shot_frames();
+      if (!s.empty()) {
         char buf[512];
-        snprintf(buf, sizeof buf, "%s", s);
+        snprintf(buf, sizeof buf, "%s", s.c_str());
         for (char *t = strtok(buf, ","); t && shot_n < 64; t = strtok(nullptr, ",")) {
           shot_at[shot_n++] = (uint32_t)strtoul(t, 0, 0);
         }
@@ -267,7 +284,7 @@ void Pad::serviceFrame() {
       if (shot_at[i] == rec_fc) {
         char p[96];
         snprintf(p, sizeof p, "scratch/screenshots/padshot_%u.ppm", rec_fc);
-        gpu_vk_shot(c, p);
+        c->game->gpuVk().shot(p);
         lucent::info("padrec", "shot at replay-frame {} -> {}", rec_fc, p);
       }
     }
@@ -277,10 +294,10 @@ void Pad::serviceFrame() {
     int &dump_n = mDumpN;
     if (!mDumpInit) {
       mDumpInit = 1;
-      const char *s = cfg_str("PSXPORT_PAD_DUMP_AT");
-      if (s) {
+      const std::string s = psx::config::pad_dump_frames();
+      if (!s.empty()) {
         char buf[256];
-        snprintf(buf, sizeof buf, "%s", s);
+        snprintf(buf, sizeof buf, "%s", s.c_str());
         for (char *t = strtok(buf, ","); t && dump_n < 32; t = strtok(nullptr, ",")) {
           dump_at[dump_n++] = (uint32_t)strtoul(t, 0, 0);
         }
@@ -307,7 +324,7 @@ void Pad::serviceFrame() {
         snprintf(sc, sizeof sc, "scratch/bin/padscene_%u.txt", rec_fc);
         FILE *scf = fopen(sc, "w");
         if (scf) {
-          gpu_scene_dump_now(c, scf);
+          psx::debug::dumpScene(*c, scf);
           fclose(scf);
         }
         lucent::info("padrec", "dumpram+scene at replay-frame {} -> {}", rec_fc, p);
@@ -320,15 +337,15 @@ void Pad::serviceFrame() {
     uint32_t &trace_hi = mTraceHi;
     if (!mTraceInit) {
       mTraceInit = 1;
-      const char *s = cfg_str("PSXPORT_PAD_TRACE");
-      if (s) {
-        unsigned a = 0, b = 0;
-        if (sscanf(s, "%u-%u", &a, &b) == 2) {
-          trace_lo = a;
-          trace_hi = b;
-        } else if (sscanf(s, "%u", &a) == 1) {
+      const std::string s = psx::config::pad_trace();
+      if (!s.empty()) {
+        if (const std::optional<psx::config::NumberPair> range =
+                psx::config::parsePair(s, psx::config::kDecimalRange)) {
+          trace_lo = range->first;
+          trace_hi = range->second;
+        } else if (const std::optional<std::uint32_t> last = psx::config::parseUnsigned(s, 10)) {
           trace_lo = 0;
-          trace_hi = a;
+          trace_hi = *last;
         }
       }
     }

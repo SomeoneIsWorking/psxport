@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_psxport_fetch.py — the file a port SHIPS, against real git repositories and no network.
+"""test_psxport_fetch.py: the title fetch, against real git repositories and no network.
 
 There is no pin any more: the contract is (1) a sibling framework checkout becomes a relative symlink
 that every port follows live, (2) a machine with no sibling checkout still gets a usable framework by
@@ -88,6 +88,17 @@ class FetchContract(unittest.TestCase):
         self.assertTrue(os.path.islink(link))
         self.assertEqual(os.readlink(link), os.path.join("..", "..", "psxport"))
         self.assertEqual(os.path.realpath(link), os.path.realpath(self.framework))
+
+    def test_a_downloaded_copy_resolves_the_title_it_runs_in(self):
+        # Titles run the tool from a temporary download, so the title is the working directory.
+        download = os.path.join(tempfile.mkdtemp(prefix="fetch-download-"), "psxport_fetch.py")
+        shutil.copy(TOOL, download)
+        environment = dict(os.environ)
+        environment.pop("PSX", None)
+        done = subprocess.run([sys.executable, download, "--auto"], cwd=self.repo,
+                              capture_output=True, text=True, env=environment)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(os.path.realpath(self.link()), os.path.realpath(self.framework))
 
     def test_an_existing_link_to_the_same_checkout_is_left_alone(self):
         os.makedirs(os.path.dirname(self.link()))

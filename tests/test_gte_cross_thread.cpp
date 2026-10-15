@@ -17,17 +17,12 @@
 // against a private file while the Core's real GTE state sat on another thread, and Coro allocates a
 // fresh thread per task start, so that private file would be re-zeroed on every restart. A test that
 // only checked for a crash would pass on that quieter, worse bug.
-#include "gte_state.h"
+#include "beetle_gte.h"
 #include "testutil.h"
 
 #include <cstdint>
 #include <cstring>
 #include <thread>
-
-extern "C" {
-void GTE_WriteCR(unsigned int which, uint32_t value);
-uint32_t GTE_ReadCR(unsigned int which);
-}
 
 namespace {
 
@@ -93,5 +88,5 @@ void test_the_unbound_fallback_is_never_half_initialised(void) {
 int main(void) {
   RUN(a_write_from_an_unbound_thread_lands_in_the_bound_state);
   RUN(the_unbound_fallback_is_never_half_initialised);
-  return pt_summary();
+  return psx::test::summary();
 }

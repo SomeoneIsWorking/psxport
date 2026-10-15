@@ -1,7 +1,9 @@
-# Presentation: match Beetle, then add producers
+# Presentation: the one renderer
 
-The target design for every title. `one-renderer.md` and `presentation-contract.md` describe the
-mechanisms this replaces; they are deleted once the last title has migrated.
+Every title presents through one renderer: the GPU device executes the guest's GP0 stream, each logic
+frame's executed work is a `FrameRecord`, and the record rasterizer draws it on SDL3 GPU. There is no
+second draw path. This doc owns what the renderer is, its frame fence and pacing, interpolation,
+widescreen and how each part is tested.
 
 ## Order of work
 
@@ -17,7 +19,7 @@ mechanisms this replaces; they are deleted once the last title has migrated.
 ## Structure
 
 ```
-guest CPU ─ GP0/GP1, DMA2/OT walk            gpu_native_dma, ordering_table, gp0_command
+guest CPU ─ GP0/GP1, GPUREAD, DMA2/OT walk  gpu_ports, ordering_table, gp0_command
    │
 GpuDevice (Beetle gpu.c)                      the only VRAM, GPUSTAT/GPUREAD, display mode
    │  each executed command is appended, in execution order, to
@@ -27,12 +29,16 @@ FramePresenter                                seals N, keeps the last 3 drawing 
    │  every present: FrameComposer(S, producer states S' and S, t)
 RecordRasterizer (VK)                         replays N into the VRAM image; draws the composed frame
    │
+DisplayPresenter → gpu_vk present             one present per frame or in-between; captures, counters
+   │
 present plan / sink                           viewport, letterbox, window
 ```
 
 | module | owns |
 |---|---|
-| `gpu/gpu_device.*` | Beetle `gpu.c` per `Core`: VRAM, GP0/GP1, GPUSTAT, GPUREAD, display area |
+| `gpu/gpu_device.*` | Beetle `gpu.c` per `Core`: VRAM, GP0/GP1, GPUSTAT, GPUREAD, display area (incl. PAL) |
+| `present/gpu_ports.*` | the guest-visible ports and the title-facing GPU API: GP0/GP1 writes, GPUREAD, DMA2 block and linked-list modes, `loadImage`, `vram`, `sealRecord` |
+| `present/render_mode.h` | the Core's `RenderPath` (`record` or `device`) and its parse |
 | `present/frame_record.*` | ordered primitives and VRAM ops of one logic frame |
 | `gpu/gp0_record_tap.*` | executed GP0 command to `FrameRecord` entry, with its key |
 | `present/emission_scope.*` | the `(P, obj, k)` scope stack and packet-address to key map |
@@ -40,22 +46,34 @@ present plan / sink                           viewport, letterbox, window
 | `present/frame_state.*` | producer states by the scope serial that saved them; per record, the states its packets came from |
 | `present/state_producer.*` | `StateProducer` (render at `t`), `PrimitiveSink`, the `StateProducers` registry on `Core` |
 | `present/frame_composer.*` | the frame at `t`: S's unproduced entries plus each producer's render, by OT slot |
-| `gpu/ordering_table.*` | the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
-| `present/keyed_blend.*` | the output blend the composer replaces; deleted at migration step 5 |
+| `present/ordering_table.*` | the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
 | `frame/frame_presenter.*` | N and the last three records that drew, which record each present shows, cadence, both presents through the backend |
-| `present/in_between_present.*` | the renderer call that shows an in-between without advancing the frame |
+| `present/display_presenter.*` | `DisplayPresenter` on `Game`: each present and in-between through `gpu_vk_present`, the present counters, `PSXPORT_SHOT_AT`/`PRESENT_SHOT_AT`/`GPU_DUMP`/`GRAMDUMP` captures |
 | `gpu/record_raster_setup.*` | a record's coverage and interpolants by `gpu.c`'s rules, at scale, per plane, in read-safe batches |
 | `gpu/record_raster_regions.h` | written-pixel map and VRAM-wrapped rects the batch split reads |
 | `gpu/gpu_vk_record_raster.*` | rasterizes a record in order into the VRAM image and display canvases; `presented()` |
 | `gpu/gpu_vk_record_present.cpp` | `RenderPath::Record`: current record to the present source, `shot`, `recordcheck` |
-| `gpu/guest_widescreen_projection.*` | the one widescreen API: title aspect and guest projection widening |
+| `gpu/gpu_vk_present.cpp` | one Game's present: the display picture (record image or device VRAM) through the present plan to the sink |
+| `gpu/gpu_vk_readback.cpp` | what was presented, read back: `shot`, present shot, VRAM regions |
+| `gpu/gpu_vk_device.*`, `gpu_vk_submit.cpp`, `gpu_vk_window.*` | the SDL3 GPU device, its submits and fault latch, the one window and swapchain |
+| `present/guest_widescreen_projection.*` | the one widescreen API: title aspect and guest projection widening |
 
 Draw order is OT slot order (below). There are no bands, layers or painter ranges.
 
-## Record path
+## Render paths
 
-`PSXPORT_RENDER_PATH=record` presents `FramePresenter::currentRecord()` through `RecordRasterizer`;
-the device still executes every command and holds the guest-visible VRAM.
+`PSXPORT_RENDER_PATH` (`config.md`) picks one of two per Core; `Game`'s constructor installs it and logs
+`render path: <name>`. The REPL and debug server `renderpath` command switch it live.
+
+- **`record`** (default): presents `FramePresenter::currentRecord()` through `RecordRasterizer`. Every
+  title ships on it; widescreen and interpolation exist only here.
+- **`device`**: presents the device's own VRAM display rect, 4:3, with no in-betweens. It is the reference
+  picture for comparing a record present against.
+
+The device executes every command on both paths and holds the only guest-visible VRAM. Any other
+name is refused with a warning and the Core stays on `record`.
+
+## Record path
 
 - **Tap.** `GpuDevice::gp0` reports each consumed word to `Gp0RecordTap`, which frames packets as
   `gpu.c` ProcessFIFO does and checks after every word that the device agrees (dispatch count, FIFO
@@ -102,8 +120,9 @@ the device still executes every command and holds the guest-visible VRAM.
   the display canvas against the device drawing the same stream with its draw area widened;
   `tests/test_gp0_record_tap.cpp` covers decode and seal boundaries. `tests/test_record_raster.cpp` also drives
   `FramePresenter` and `RecordRasterizer::show` over a single- and a double-buffered stream with a
-  keyed moving triangle and requires each in-between to differ from both reals and to equal the device
-  drawing the t = 0.5 triangle; `tests/test_record_cadence.cpp` covers shown-record selection. On a title,
+  moving triangle: with a producer render each in-between differs from both reals and equals the device
+  drawing the t = 0.5 triangle; without one it is the shown record. `tests/test_record_cadence.cpp`
+  covers shown-record selection. On a title,
   `PSXPORT_DEBUG=recordcheck` logs per present the display-area pixels that differ from the device
   (at S > 1, each block's top-left pixel), and the replay/resync counts; a composed `t = 1` present at
   4:3 is checked as drawn (`composed=1`), which is a title producer's proof on real frames.
@@ -125,11 +144,12 @@ present at t
 ```
 
 A producer is registered like any override, with the argument register that names its object, and
-has two halves: the override saves what its render needs, and the render draws from it.
+has two halves: the override saves what its render needs, and the render draws from it. The title's
+session holds its renders in a `StateProducerTable`, and `GameRuntime::stateProducer` answers from it.
 
 ```cpp
 dispatcher.install({key(0x8001F798), "drawActor", &drawActor, Producer{Arg::A0}});
-core.stateProducers.install(0x8001F798, std::make_unique<ActorRender>());
+session.renders.install(0x8001F798, std::make_unique<ActorRender>());
 
 void drawActor(Core *core) {   // the logic frame: writes the guest's packets, then
   core->frameStates.save(core->emission.current(), ActorState{...});
@@ -191,9 +211,9 @@ The composer builds the frame at `t` from S's record:
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
   each producer has a unit test on that, and the title's oracle compare covers the frame.
 
-What carries over from the keyed design: `EmissionScope` binds each packet to `(P, obj)` at store
-time and the OT walk stamps the key on its entries, so the composer knows what a producer replaces.
-`element` and `part` stop being pairing keys; there are no per-vertex keys.
+`EmissionScope` binds each packet to `(P, obj)` at store time and the OT walk stamps the key on its
+entries, so the composer knows what a producer replaces. `element` and `part` are not pairing keys;
+there are no per-vertex keys. An in-between with nothing produced is the shown record as drawn.
 
 - **Binding.** `RecordKey` is `(P, obj, element, part)`. The dispatcher opens `(P, object register, 0)`;
   `instance(object)` opens another object under the same producer. Every store through `Core::mem_w*` to
@@ -251,7 +271,7 @@ canvas, never `H`). Guest 2D is presented as-is, centred; a HUD element moves on
 producer anchors it. The margins show whatever the widened projection draws there. 4:3 stays
 oracle-exact: every widening is gated on the configured aspect.
 
-On the record path `gpu_vk_latch_record_display` turns the title's aspect into a margin M per side
+On the record path `psx::present::latchRecordDisplay` turns the title's aspect into a margin M per side
 for the displayed rect. A title's guest projection plan there keeps the retail centre and draw width
 (`projectionCenterX`, `guestDrawWidth`): the canvas, not a wider draw area, holds the margins, and the
 title widens only what it culls. `RecordRasterizer` keeps a canvas per displayed buffer (at most two, the
@@ -268,14 +288,59 @@ with black margins and reseeded after a resync. Each record entry is planned onc
 
 The present shows the canvas at the display's per-column aspect, so 4:3 (M = 0) presents the VRAM
 image itself. Known differences: a canvas reaching past column 1023 does not wrap, and a third
-displayed buffer evicts one canvas, whose margins are black until redrawn. The record path does not
-use `wide_2d_layout`, `rq_2d_xform` or `ws_2d_local_x`.
+displayed buffer evicts one canvas, whose margins are black until redrawn.
 
-On the Gte path a title's widened frame is told apart from its 4:3 layouts by
-`GuestWidescreenProjection::guestCoordinatesWidened`: a frame it claims is finished
-(`wide_2d_guest_space` returns `RQ_2D_WIDE_FINAL`), any other guest frame is centred by the margin and
-its margins are covered by `plan_centred_wide_margins` (black, one band per side, never under the
-picture).
+### The guest projection latch
+
+A runtime may return a `GuestWidescreenProjection`. Declaring an aspect widens nothing: the title calls
+`gpu_vk_latch_guest_projection` at its measured guest projection publication site and applies the
+returned plan to its own projection, culling and clipping. The latch takes three distinct title facts:
+the GP1 display extent (decoded by the framework, including the 368-dot mode), the title-authored
+projection extent, and the title-authored draw/clip width. `guest_projection_plan` widens each extent
+from its own 4:3 width to the smallest even width that does not undershoot the aspect; on `record` the
+guest keeps its retail centre and draw width and the canvas holds the margins. The plan is
+frame-stable: presentation reads only the stored latch, and invalid or zero title geometry is refused.
+`device` is always 4:3.
+
+### What breaks a widening
+
+The horizontal field of view is `OFX / H`, not `H`. Moving OFX outward at unchanged H is a widening;
+a smaller H is a zoom. When a wide picture is wrong the projection registers are usually right and one
+of these is not:
+
+1. **A horizontal culling owner still comparing against a retail 4:3 literal.** The frustum widens,
+   the cull does not, and the margins are empty (Mega Man X4 `is_on_screen` `0x8002B288`, Tekken 3's
+   stage-tile wedge `FUN_8006D95C`).
+2. **An authored 4:3 2D layout that never uses the margin.** A HUD moves only when a title producer
+   anchors it.
+
+`tools/port/widescreen_pair.py` names both verdicts: `WIDENED BUT OFF-CENTRE` and
+`WIDENED BUT … MARGIN IS NOT COVERAGE`.
+
+## Frame fence and pacing
+
+`FrameLoopShell::prepareProduct(Game&)` validates the title's `Game::frameDriver`, installs the fatal
+VSync trap as the last native binding at that address and requires the measured VSync fact. A
+nonnegative `VSync(n)` returns one field's HBlanks (263 NTSC, 314 PAL) in `$v0`. `step` runs one
+`stepFrame(Core&, frame)`; the driver calls `Game::presentation.commit(core, guestFields)` exactly once
+per frame, `guestFields` being the measured guest display fields it covered (no default). The shell
+aborts unless `FramePresenter::fence()` advanced by exactly one.
+
+`GameRuntime::pacePresentation` decides who advances simulated display time. The default,
+`FramePacer::paceSubframeFields`, advances Timing, devices and the VBlank latch by the represented field
+count, then waits for the host deadline. A title with its own field scheduler advances
+`Timing::advanceDisplayFields` per delivered field and paces with `FramePacer::waitPresentedFields`,
+which waits without creating a field. In-betweens split the host wait of the same fields. NOPACE
+suppresses host waiting only. Each `Game` owns its `FramePacer` and deadline.
+
+`DisplayPresenter::present` ends each frame: the present, its dumps, then the watchdog's main-present
+completion. A `Transition` present (a movie end, a boot card) reports watchdog progress only.
+
+## Interpolation availability
+
+`GameRuntime::interpolates()` is the title's answer to whether it ships 60 fps interpolation. `Mods`
+reads it before loading settings: a title that does not interpolate refuses a saved or environment
+`fps60`, omits `fps60=` on save and has no fps60 row.
 
 ## Producer DB
 
@@ -283,28 +348,18 @@ Each title tracks which guest functions draw and which of them have a producer. 
 guest submitter address, the same key the override table uses, so "has a producer" is derived from
 the registrations. A run records per row the primitives drawn, how many were keyed, and how many
 carried a key another primitive of the same record also carried (ambiguous, so drawn unblended), with
-the first such key, and how many keyed primitives had no render (no `StateProducer` at the key's producer, or no state saved for its object, so they blend by key only); the unkeyed rows ranked by primitive count are the producer work queue. Owners: `debug/producer_census.*` (the
+the first such key, and how many keyed primitives had no render (no `StateProducer` at the key's producer, or no state saved for its object, so they show as drawn); the unkeyed rows ranked by primitive count are the producer work queue. Owners: `debug/producer_census.*` (the
 per-run table, fed from each sealed record) and `debug/ot_attr.*` (guest packet to submitter). The
 REPL `census` command prints the table so far, and every run logs its report (the keyed, unkeyed,
 without-render and duplicated totals, then the ranked rows) at shutdown.
 
 A keyed primitive counts under its key's producer. An unkeyed one counts under the first frame of the
-storing call chain that is a registered producer, else the span's emitter, else the render function
-of the span's node; with none it is counted as no-source, span-miss or span-no-fn.
+storing call chain that is a registered producer, else the span's emitter; with none it is counted as
+no-source, span-miss or span-no-fn.
 
-## Migration
+## Status
 
-0. Delete dead code; pictures unchanged.
-1. Beetle `gpu.c` becomes `GpuDevice`, per `Core`, the only VRAM. Add `FrameRecord`, the record tap
-   and the record rasterizer; replaying a record at 1x 4:3 equals the device's display area. Every
-   guest-projection title moves to it; guest packet classification, bands and 2D re-layout go.
-2. Producer registration, emission scope, declared cuts (done, with keyed blend as the first composer).
-3. Tomba! 2: the record path at 4:3 by oracle compare, its display-time renderer deleted, then its
-   producers by census rank, then widescreen margins; `EffectLerp` deleted.
-4. The other titles, one at a time.
-5. `StateProducer`, `FrameState`, OT slots on record entries and `FrameComposer`, with unit tests on
-   synthetic records (identity, birth, death, cut, unproduced hold, slot placement, `t = 1` equals S).
-   Spyro 2 terrain first; then each keyed producer gains `save`/`render`, and keyed blend is deleted
-   once none is left. Depth attribute and target, then opt-in depth test.
-6. Delete the replaced mechanisms: `Fps60` and its strategies, splice, projection provenance, painter
-   and depth bands, the fade composite, spyro's `temporal/`.
+The native and GTE draw paths, the render queue, painter, keyed blend and every title's
+`RenderCapabilities` are deleted; `record` and `device` are the only paths. Remaining work:
+`StateProducer` renders for each title's keyed producers by census rank, the depth attribute and
+target, then the opt-in depth test.

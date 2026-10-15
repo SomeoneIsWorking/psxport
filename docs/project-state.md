@@ -27,7 +27,7 @@ translated control flow without restoring an offline dispatch substrate.
 | S017 | Reusable native PSX platform services | partial | — | G002 |
 | S018 | Independent test oracle | partial | S013 | G003 |
 | S019 | Narrow multi-title framework seam | partial | S012, S017 | G002 |
-| S020 | Native rendering and title-owned enhancements | partial | S017 | G003 |
+| S020 | Record rendering and title-owned enhancements | partial | S017 | G003 |
 | S021 | Portable desktop and Android delivery | missing | S012, S019, S020 | G003, G004 |
 | S022 | Mechanical structure/config/logging/tooling policy | partial | — | G002, G004 |
 | S023 | Whole-machine save states (title-neutral; a title adds native state via `GameRuntime::nativeState(Core &)`, and adopts RAM-derived state in `NativeStatePort::restored` after every section is restored) | verified | S012, S017 | G003 |
@@ -137,10 +137,12 @@ comparison-run enhancement suppression without title-local environment parsing. 
 still require coordinated pins and representative gameplay requalification without copied
 framework code.
 
-### S020 — Native rendering and title-owned enhancements
+### S020 — Record rendering and title-owned enhancements
 
-The framework rendering and presentation owners remain. Gap: native rendering and each enhancement
-must be requalified with the dynarec product path.
+One renderer: the device executes the guest stream and the record rasterizer draws it
+(`docs/presentation.md`); the native and GTE paths are deleted. Evidence: recordcheck t=1
+`mismatched=0` on C-12, Spyro 1/2 and Tomba! 2. Gap: each title's widescreen and interpolation must be
+requalified in the real-window play check.
 
 ### S021 — Portable desktop and Android delivery
 
@@ -169,10 +171,11 @@ inputs, use stable directories under `build/test-fixtures`, and preserve the loc
 symlink. Submodule-sync fixtures supply their own Git identity for every command. These repair the
 three fixture failures in hosted run `33893969146`; a subsequent hosted run must establish CI success.
 
-`external/psxport` is the LIVE framework: a relative symlink to the workspace's sibling `psxport`,
-established by `tools/psxport_fetch.py --auto` (the ONE file a port ships), or a shallow clone of psxport
-`main` with its vendor submodules on a machine that has no sibling checkout. There is NO per-port
-framework pin: no port records a framework commit, and a framework edit is visible in every game at once.
+`external/psxport` is the live framework: a relative symlink to the workspace's sibling `psxport`, or a
+shallow clone of psxport `main` with its vendor submodules on a machine that has no sibling checkout.
+`tools/psxport_fetch.py` makes it and has no copy in any title: a title's launcher and CI run it from
+psxport `main` (`uv run --no-project <raw URL> --auto`) only while `external/psxport` is missing, and
+`scripts/bootstrap_workspace.py` runs it for every title. No port records a framework commit.
 
 `shared/lightrec` is still PINNED, because that is a third-party fork revision and not a workspace layout
 choice: `psxport_fetch.py --lightrec` reads `PSXPORT_LIGHTREC_REVISION` out of
@@ -181,7 +184,8 @@ worktree, and `psxport_configure_lightrec_dependency()` probes that worktree bef
 
 Evidence: `tests/test_psxport_fetch.py` over real git repositories and no network — the relative symlink, an
 existing equivalent link left alone, a link to a checkout discovery cannot name left alone, a real clone
-refused rather than destroyed, the clone path with the sibling checkout's working tree and `.git/modules`
+refused rather than destroyed, a second run leaving its own clone alone, a downloaded copy resolving
+the title it runs in, the clone path with the sibling checkout's working tree and `.git/modules`
 byte-unchanged; and `tests/test_lightrec_pinned_worktree.py` over three real CMake configures of a
 throwaway two-commit Lightrec repository and its own pin.
 

@@ -117,7 +117,7 @@ private:
                const present::FrameRecord &record,
                bool deviceAhead,
                std::span<const std::uint16_t> vram);
-  Plane makePlane(int width, int height, int originX, int originY);
+  Plane makePlane(const RecordCanvas &shape);
   void releasePlane(Plane &plane);
   // Keeps a canvas for `view`'s display, created from the image with empty margins.
   void showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &view);
@@ -131,7 +131,7 @@ private:
   void execute(SDL_GPUCommandBuffer *cmd, const RecordRasterPlan &plan, bool inBetween);
   void copyTexture(
       SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *from, const RecordRect &source, SDL_GPUTexture *to, int toX, int toY);
-  void ensureBuffer(Buffer &buffer, std::uint32_t bytes, SDL_GPUBufferUsageFlags usage);
+  void ensureBuffer(Buffer &buffer, std::uint32_t bytes);
   void ensureUpload(std::uint32_t bytes);
   void releaseImage();
 

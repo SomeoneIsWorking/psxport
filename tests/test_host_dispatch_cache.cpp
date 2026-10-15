@@ -9,7 +9,6 @@
 #include "dynarec_test_fixture.h"
 #include "hle.h"
 #include "host_dispatch_cache.h"
-#include "legacy_game_config.h"
 #include "native_dispatch.h"
 #include "testutil.h"
 
@@ -45,7 +44,7 @@ void test_a_stored_verdict_is_found_and_an_unseen_address_is_not() {
   CHECK(!cache.find(kEntry).has_value());
   cache.store(kEntry, GuestHostDispatchKind::HostService);
   CHECK(cache.find(kEntry).has_value());
-  CHECK(*cache.find(kEntry) == GuestHostDispatchKind::HostService);
+  CHECK(psx::test::require(cache.find(kEntry)) == GuestHostDispatchKind::HostService);
   CHECK(!cache.find(kEntry + 4u).has_value());
   CHECK_EQ(cache.stats().hits, 2u);
   CHECK_EQ(cache.stats().misses, 2u);
@@ -81,7 +80,7 @@ void test_a_colliding_address_replaces_rather_than_answers_for_the_other() {
   cache.store(kEntry, GuestHostDispatchKind::HostService);
   cache.store(kOther, GuestHostDispatchKind::Fault);
   CHECK(!cache.find(kEntry).has_value());
-  CHECK(*cache.find(kOther) == GuestHostDispatchKind::Fault);
+  CHECK(psx::test::require(cache.find(kOther)) == GuestHostDispatchKind::Fault);
 }
 
 void test_classification_is_remembered_and_follows_an_override_install_and_removal() {
@@ -172,18 +171,13 @@ void test_a_platform_service_registration_changes_the_answer() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
-  GameConfig config{};
-  config.hle.windowLo[0] = kEntry;
-  config.hle.windowHi[0] = kEntry + 0x100u;
-  core.cfg = &config;
   core.imageCatalog().activate("cache-test", {0x00010000u, 0x00020000u}, 1u);
 
   CHECK(psx::cpu::classifyGuestHostDispatch(core, kEntry) == GuestHostDispatchKind::ExecuteGuest);
   const std::uint64_t flushesBefore = cacheFlushes(core);
-  CHECK(game->platform_hle.register_(kEntry, nativeNoop));
+  game->platform_hle.bindStock(kEntry, nativeNoop);
   CHECK(psx::cpu::classifyGuestHostDispatch(core, kEntry) == GuestHostDispatchKind::HostService);
   CHECK(cacheFlushes(core) > flushesBefore);
-  core.cfg = nullptr;
 }
 
 void test_the_pad_work_area_entries_are_never_remembered() {
@@ -213,5 +207,5 @@ int main() {
   RUN(a_suppressed_override_is_classified_as_guest_code_for_exactly_the_suppression);
   RUN(a_platform_service_registration_changes_the_answer);
   RUN(the_pad_work_area_entries_are_never_remembered);
-  return pt_summary();
+  return psx::test::summary();
 }

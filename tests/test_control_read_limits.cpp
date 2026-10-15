@@ -23,8 +23,8 @@
 // NO GAME, NO WINDOW, NO PRODUCT: a bare Core, the REPL, and an in-process log sink.
 #include "control_surface_limits.h"
 #include "core.h"
-#include "game_iface.h"
 #include "repl.h"
+#include "stub_game_runtime.h"
 #include "testutil.h"
 
 #include <lucent/log.h>
@@ -125,9 +125,7 @@ void dump(const char *what, const std::vector<std::string> &lines) {
 }
 
 std::vector<std::string> run_repl(const std::string &command) {
-  static const GameConfig config{};
-  static const GameHooks hooks{};
-  LegacyGameRuntimeAdapter runtime(config, hooks);
+  psx::test::StubGameRuntime runtime;
   auto core = std::make_unique<Core>(runtime);
   g_command = command;
   capture_start();
@@ -226,5 +224,5 @@ int main() {
   RUN(request_over_the_cap_announces_the_short_answer);
   RUN(request_within_the_cap_is_complete_and_silent);
   RUN(the_cap_has_one_home);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -18,7 +18,7 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 int deliveredTurns;
 uint32_t turnFlagAddress;
@@ -44,55 +44,54 @@ public:
   bool hostOwed() const {
     return (game->core.pending_work & Core::PW_HOST) != 0;
   }
-  std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
+  std::unique_ptr<Game> game = std::make_unique<Game>(*stubRuntime, psx::config::Config{});
 };
 
-const uint32_t kPeriod =
-    static_cast<uint32_t>(psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+uint32_t fieldPeriod() {
+  return static_cast<uint32_t>(psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+}
 
-} // namespace
-
-static void test_field_is_owed_after_one_period_of_guest_time(void) {
+void test_field_is_owed_after_one_period_of_guest_time(void) {
   Fixture fixture;
   Core &core = fixture.game->core;
-  psx::cpu::accountGuestInstructions(core, kPeriod - 1);
+  psx::cpu::accountGuestInstructions(core, fieldPeriod() - 1);
   CHECK(!fixture.hostOwed());
   psx::cpu::accountGuestInstructions(core, 1);
   CHECK(fixture.hostOwed());
 }
 
-static void test_served_turn_starts_the_next_complete_period(void) {
+void test_served_turn_starts_the_next_complete_period(void) {
   Fixture fixture;
   Core &core = fixture.game->core;
-  psx::cpu::accountGuestInstructions(core, kPeriod + 10);
+  psx::cpu::accountGuestInstructions(core, fieldPeriod() + 10);
   CHECK(fixture.hostOwed());
   psx::cpu::serviceHostTurn(core);
   CHECK_EQ(deliveredTurns, 1);
   CHECK(!fixture.hostOwed());
   // The period restarts at the served turn, not at the stale deadline: 10 ticks of overrun do not
   // bring the next field closer.
-  psx::cpu::accountGuestInstructions(core, kPeriod - 1);
+  psx::cpu::accountGuestInstructions(core, fieldPeriod() - 1);
   CHECK(!fixture.hostOwed());
   psx::cpu::accountGuestInstructions(core, 1);
   CHECK(fixture.hostOwed());
 }
 
-static void test_delivered_field_cancels_and_restarts_the_period(void) {
+void test_delivered_field_cancels_and_restarts_the_period(void) {
   Fixture fixture;
   Core &core = fixture.game->core;
-  psx::cpu::accountGuestInstructions(core, kPeriod);
+  psx::cpu::accountGuestInstructions(core, fieldPeriod());
   CHECK(fixture.hostOwed());
   // The native frame loop delivered the field itself: the latched turn is the same event, and
   // the timing owner re-anchors the clock as part of advancing display fields.
-  CHECK(fixture.game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(fixture.game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK(!fixture.hostOwed());
-  psx::cpu::accountGuestInstructions(core, kPeriod - 1);
+  psx::cpu::accountGuestInstructions(core, fieldPeriod() - 1);
   CHECK(!fixture.hostOwed());
   psx::cpu::accountGuestInstructions(core, 1);
   CHECK(fixture.hostOwed());
 }
 
-static void test_a_delivered_field_does_not_request_itself(void) {
+void test_a_delivered_field_does_not_request_itself(void) {
   Fixture fixture;
   Core &core = fixture.game->core;
   // Delivered fields advance the clock to exactly one period past the previous boundary, i.e. onto
@@ -100,19 +99,19 @@ static void test_a_delivered_field_does_not_request_itself(void) {
   // not see a due clock: that request would be for the field already in flight, and serving it at
   // the next boundary chained one unrequested field after another.
   for (int field = 0; field < 8; ++field) {
-    CHECK(fixture.game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+    CHECK(fixture.game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
     psx::cpu::accountGuestInstructions(core, 200);
     CHECK(!fixture.hostOwed());
   }
 }
 
-static void test_long_update_owes_one_field_per_period(void) {
+void test_long_update_owes_one_field_per_period(void) {
   Fixture fixture;
   Core &core = fixture.game->core;
   int owedTurns = 0;
   // Four periods of guest work with a boundary check after every chunk: exactly four fields, none
   // early, none doubled.
-  for (uint32_t tick = 0; tick < 4u * kPeriod; tick += 64) {
+  for (uint32_t tick = 0; tick < 4u * fieldPeriod(); tick += 64) {
     psx::cpu::accountGuestInstructions(core, 64);
     if (fixture.hostOwed()) {
       psx::cpu::serviceHostTurn(core);
@@ -123,16 +122,16 @@ static void test_long_update_owes_one_field_per_period(void) {
   CHECK_EQ(deliveredTurns, 4);
 }
 
-static void test_unregistered_core_is_never_owed_a_field(void) {
+void test_unregistered_core_is_never_owed_a_field(void) {
   Fixture fixture;
-  auto foreign = std::make_unique<Game>(stubRuntime, psx::config::Config{});
-  psx::cpu::accountGuestInstructions(foreign->core, 3u * kPeriod);
+  auto foreign = std::make_unique<Game>(*stubRuntime, psx::config::Config{});
+  psx::cpu::accountGuestInstructions(foreign->core, 3u * fieldPeriod());
   CHECK_EQ(foreign->core.pending_work & Core::PW_HOST, 0);
   psx::cpu::notifyDisplayField(foreign->core);
   CHECK(!fixture.hostOwed());
 }
 
-static void test_host_time_does_not_owe_a_field(void) {
+void test_host_time_does_not_owe_a_field(void) {
   Fixture fixture;
   // Negative arm: without guest time nothing is owed however the host clock advances. The old
   // wall-clock timer would have raised the request here after one 16.7 ms period.
@@ -144,11 +143,10 @@ static void test_host_time_does_not_owe_a_field(void) {
 // The guest loop the hand-off crash reproduced: a libetc-style `lw; beqz` wait on a word that only
 // the field's work sets. The executor must end its translated segment at the clock's deadline so
 // the turn is taken after one field period; the whole budget is the failure the crash reported.
-static void test_guest_wait_on_field_work_returns_after_one_period(void) {
+void test_guest_wait_on_field_work_returns_after_one_period(void) {
   constexpr uint32_t kWait = 0x00010000u;
   constexpr uint32_t kFlag = 0x00010100u;
-  const uint64_t kBudget = 200ull * kPeriod;
-  static psx::test::StubGameRuntime runtime;
+  const uint64_t kBudget = 200ull * fieldPeriod();
   Fixture fixture;
   Core &core = fixture.game->core;
   core.imageCatalog().activate("host-turn-guest-clock", {kWait, kFlag + 4u}, 0x484f5354ull);
@@ -178,12 +176,15 @@ static void test_guest_wait_on_field_work_returns_after_one_period(void) {
   // One period of GUEST time plus at most the loop iteration that observes the flag; never the
   // budget. Lightrec's cycle count is a different unit (it charges more than one cycle per
   // instruction), so the bound is checked on the emulated clock that owes the field.
-  CHECK(ticksElapsed >= kPeriod);
-  CHECK(ticksElapsed < kPeriod + 64u);
+  CHECK(ticksElapsed >= fieldPeriod());
+  CHECK(ticksElapsed < fieldPeriod() + 64u);
   CHECK(result.cycles < kBudget);
 }
 
+} // namespace
+
 int main() {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(guest_wait_on_field_work_returns_after_one_period);
   RUN(field_is_owed_after_one_period_of_guest_time);
   RUN(served_turn_starts_the_next_complete_period);
@@ -192,5 +193,5 @@ int main() {
   RUN(long_update_owes_one_field_per_period);
   RUN(unregistered_core_is_never_owed_a_field);
   RUN(host_time_does_not_owe_a_field);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -254,9 +254,7 @@ std::uint32_t resumeParkedTask(Core &core) {
   return taskNativeAddress;
 }
 
-} // namespace
-
-static void test_supported_syscall_resumes_function_and_retains_checkpoint_exit() {
+void test_supported_syscall_resumes_function_and_retains_checkpoint_exit() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -286,7 +284,7 @@ static void test_supported_syscall_resumes_function_and_retains_checkpoint_exit(
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_unsupported_syscall_preserves_state_and_refuses_continuation() {
+void test_unsupported_syscall_preserves_state_and_refuses_continuation() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -307,7 +305,7 @@ static void test_unsupported_syscall_preserves_state_and_refuses_continuation() 
   CHECK_EQ(core.cop0[14], 0x100u);
 }
 
-static void test_until_exit_routes_native_entry_syscall_pending_work_and_frame_exit() {
+void test_until_exit_routes_native_entry_syscall_pending_work_and_frame_exit() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -335,7 +333,7 @@ static void test_until_exit_routes_native_entry_syscall_pending_work_and_frame_e
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_delay_slot_syscall_is_refused_without_sequential_resume() {
+void test_delay_slot_syscall_is_refused_without_sequential_resume() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -356,7 +354,7 @@ static void test_delay_slot_syscall_is_refused_without_sequential_resume() {
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_syscall_continuation_remains_bounded() {
+void test_syscall_continuation_remains_bounded() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -383,7 +381,7 @@ static void test_syscall_continuation_remains_bounded() {
 // The two properties that matter, both directions: the denominator really moves when an exit really
 // happens, and a bad pc is actually classified as bad. A test that only checks the "outside" counter
 // is zero would pass on a census that never ran.
-static void test_budget_exit_pc_is_classified_with_its_denominator() {
+void test_budget_exit_pc_is_classified_with_its_denominator() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -412,7 +410,7 @@ static void test_budget_exit_pc_is_classified_with_its_denominator() {
   CHECK_EQ(counters.budgetExitPcInCodeImage + counters.budgetExitPcOutsideCodeImage, counters.budgetExits);
 }
 
-static void test_native_only_self_loop_exhausts_dispatch_budget_without_fabricated_cycles() {
+void test_native_only_self_loop_exhausts_dispatch_budget_without_fabricated_cycles() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -436,7 +434,7 @@ static void test_native_only_self_loop_exhausts_dispatch_budget_without_fabricat
   CHECK_EQ(refused.cycles, 0u);
 }
 
-static void test_explicit_function_continuation_is_independent_of_incoming_ra() {
+void test_explicit_function_continuation_is_independent_of_incoming_ra() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -451,7 +449,7 @@ static void test_explicit_function_continuation_is_independent_of_incoming_ra() 
   CHECK_EQ(result.guestPc, kOuterReturn);
 }
 
-static void test_original_until_exit_suppresses_only_its_entry_and_restores_on_frame_exit() {
+void test_original_until_exit_suppresses_only_its_entry_and_restores_on_frame_exit() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -473,7 +471,7 @@ static void test_original_until_exit_suppresses_only_its_entry_and_restores_on_f
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_native_store_widths_and_ram_aliases_invalidate_translated_code() {
+void test_native_store_widths_and_ram_aliases_invalidate_translated_code() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -513,7 +511,7 @@ static void test_native_store_widths_and_ram_aliases_invalidate_translated_code(
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_nested_original_resumes_native_return_result_not_scoped_caller_pc() {
+void test_nested_original_resumes_native_return_result_not_scoped_caller_pc() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -560,7 +558,7 @@ static void test_nested_original_resumes_native_return_result_not_scoped_caller_
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_backend_reports_verified_host_properties() {
+void test_backend_reports_verified_host_properties() {
   constexpr auto capabilities = psx::cpu::kLightrecBackendCapabilities;
   CHECK(capabilities.available);
   CHECK(capabilities.dynarecDefault);
@@ -577,7 +575,7 @@ static void test_backend_reports_verified_host_properties() {
   CHECK_EQ(PSXPORT_HAS_LIGHTREC_AARCH64, 0);
 }
 
-static void test_real_executor_translates_and_runs_guest_instructions() {
+void test_real_executor_translates_and_runs_guest_instructions() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -613,7 +611,7 @@ static void test_real_executor_translates_and_runs_guest_instructions() {
   CHECK(telemetryContains(lucent::Level::Info, "refused_fallback_blocks=0"));
 }
 
-static void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupported_target() {
+void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupported_target() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -754,7 +752,7 @@ static void test_selected_store_observer_bridges_exact_jit_pc_and_rejects_unsupp
   CHECK_EQ(rejectedReport.fallbackInstructions, 0u);
 }
 
-static void test_translated_call_dispatches_image_scoped_native_and_resumes_caller() {
+void test_translated_call_dispatches_image_scoped_native_and_resumes_caller() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -782,7 +780,7 @@ static void test_translated_call_dispatches_image_scoped_native_and_resumes_call
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_call_original_runs_guest_body_to_exact_caller_continuation() {
+void test_call_original_runs_guest_body_to_exact_caller_continuation() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -820,7 +818,7 @@ static void test_call_original_runs_guest_body_to_exact_caller_continuation() {
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_nested_native_dispatch_restores_outer_context_and_continuations() {
+void test_nested_native_dispatch_restores_outer_context_and_continuations() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -857,7 +855,7 @@ static void test_nested_native_dispatch_restores_outer_context_and_continuations
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_parked_native_task_keeps_main_and_task_return_boundaries() {
+void test_parked_native_task_keeps_main_and_task_return_boundaries() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -906,7 +904,7 @@ static void test_parked_native_task_keeps_main_and_task_return_boundaries() {
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, 0u);
 }
 
-static void test_parked_task_fallback_allowance_excludes_main_thread_fallback() {
+void test_parked_task_fallback_allowance_excludes_main_thread_fallback() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -931,7 +929,7 @@ static void test_parked_task_fallback_allowance_excludes_main_thread_fallback() 
   CHECK(taskIntact);
 }
 
-static void test_guest_self_modifying_store_invalidates_and_retranslates() {
+void test_guest_self_modifying_store_invalidates_and_retranslates() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -980,7 +978,7 @@ static void test_guest_self_modifying_store_invalidates_and_retranslates() {
   CHECK_EQ(core.lightrecExecutor().counters().fallback.calls, fallbackCallsBeforeWrite);
 }
 
-static void test_pending_host_work_is_serviced_at_a_bounded_execution_exit() {
+void test_pending_host_work_is_serviced_at_a_bounded_execution_exit() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -996,7 +994,7 @@ static void test_pending_host_work_is_serviced_at_a_bounded_execution_exit() {
   CHECK_EQ(game->timing.guestInstructionTicks, 0u);
 }
 
-static void test_deferred_pending_work_does_not_prevent_guest_progress() {
+void test_deferred_pending_work_does_not_prevent_guest_progress() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -1017,7 +1015,7 @@ static void test_deferred_pending_work_does_not_prevent_guest_progress() {
   CHECK(game->timing.guestInstructionTicks > 0u);
 }
 
-static void test_invalid_fetch_is_a_typed_hard_fault() {
+void test_invalid_fetch_is_a_typed_hard_fault() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   auto &executor = game->core.lightrecExecutor();
@@ -1030,7 +1028,7 @@ static void test_invalid_fetch_is_a_typed_hard_fault() {
   CHECK_EQ(executor.counters().fallback.unsafeInstructionFetch, 1u);
 }
 
-static void test_backend_fallback_is_classified_and_counted() {
+void test_backend_fallback_is_classified_and_counted() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -1068,7 +1066,7 @@ static void test_backend_fallback_is_classified_and_counted() {
   CHECK(telemetryContains(lucent::Level::Warn, "max_fallback_blocks_per_execution=1"));
 }
 
-static void test_fallback_threshold_refusal_prevents_interpreter_execution() {
+void test_fallback_threshold_refusal_prevents_interpreter_execution() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -1098,7 +1096,7 @@ static void test_fallback_threshold_refusal_prevents_interpreter_execution() {
   CHECK(result.detail.find("admitted_blocks=0, limit=0") != std::string::npos);
 }
 
-static void test_invalid_fallback_limit_faults_before_guest_execution() {
+void test_invalid_fallback_limit_faults_before_guest_execution() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -1117,6 +1115,8 @@ static void test_invalid_fallback_limit_faults_before_guest_execution() {
   CHECK_EQ(executor.counters().fallback.refusedCalls, 0u);
   CHECK(result.detail.find("expected a non-negative integer") != std::string::npos);
 }
+
+} // namespace
 
 int main() {
   RUN(supported_syscall_resumes_function_and_retains_checkpoint_exit);
@@ -1145,5 +1145,5 @@ int main() {
   RUN(fallback_threshold_refusal_prevents_interpreter_execution);
   RUN(invalid_fallback_limit_faults_before_guest_execution);
   RUN(budget_exit_pc_is_classified_with_its_denominator);
-  return pt_summary();
+  return psx::test::summary();
 }

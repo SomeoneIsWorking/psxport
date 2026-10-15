@@ -140,7 +140,7 @@ static void test_a_call_that_outlives_its_turn_is_resumed_to_the_callers_boundar
   Fixture fixture;
   Core &core = fixture.game->core;
   psx::cpu::ResumableGuestCall call;
-  call.begin(core, "test resumable call", kEntry, kOuterReturn, 64u);
+  call.begin(core, "test resumable call", psx::cpu::GuestCallSite{kEntry, kOuterReturn}, 64u);
   // The boundary is latched into the link register before the first dispatch.
   CHECK_EQ(core.r[31], kOuterReturn);
 
@@ -178,7 +178,7 @@ static void test_host_work_between_segments_cannot_disturb_a_suspended_call(void
   Fixture fixture;
   Core &core = fixture.game->core;
   psx::cpu::ResumableGuestCall call;
-  call.begin(core, "test disturbed call", kEntry, kOuterReturn, 64u);
+  call.begin(core, "test disturbed call", psx::cpu::GuestCallSite{kEntry, kOuterReturn}, 64u);
   const psx::cpu::ExecutionBudget segment = psx::cpu::ExecutionBudget::fromCycles(200);
   psx::cpu::CallStep step = call.advance(std::nullopt, segment);
   std::uint32_t resumes = 1u;
@@ -204,7 +204,7 @@ static void test_the_turn_cap_refuses_a_guest_that_never_returns(void) {
   Fixture fixture;
   Core &core = fixture.game->core;
   psx::cpu::ResumableGuestCall call;
-  call.begin(core, "test capped call", kSpinEntry, kOuterReturn, 2u);
+  call.begin(core, "test capped call", psx::cpu::GuestCallSite{kSpinEntry, kOuterReturn}, 2u);
   const psx::cpu::CallStep first = call.advance(std::nullopt, psx::cpu::ExecutionBudget::fromCycles(64));
   CHECK(first.outcome == psx::cpu::CallOutcome::Suspended);
   const psx::cpu::CallStep second = call.advance(std::nullopt, psx::cpu::ExecutionBudget::fromCycles(64));
@@ -249,7 +249,7 @@ static void test_a_cooperative_yield_with_no_guest_cycles_suspends_and_the_call_
   psx::cpu::installNativeOverride(core, kYieldEntry, "test::cooperativeYield", &yieldingLeaf);
 
   psx::cpu::ResumableGuestCall call;
-  call.begin(core, "test cooperative yield", kYieldEntry, kOuterReturn, 8u);
+  call.begin(core, "test cooperative yield", psx::cpu::GuestCallSite{kYieldEntry, kOuterReturn}, 8u);
   const psx::cpu::CallStep suspended = call.advance();
   CHECK(suspended.outcome == psx::cpu::CallOutcome::Suspended);
   CHECK(suspended.reason == psx::cpu::ExecutionExitReason::CooperativeYield);
@@ -277,7 +277,7 @@ static void test_a_frame_boundary_suspends_the_call_and_names_the_reason(void) {
   psx::cpu::installNativeOverride(core, kYieldEntry, "test::frameBoundary", &yieldingLeaf);
 
   psx::cpu::ResumableGuestCall call;
-  call.begin(core, "test frame boundary", kYieldEntry, kOuterReturn, 8u);
+  call.begin(core, "test frame boundary", psx::cpu::GuestCallSite{kYieldEntry, kOuterReturn}, 8u);
   const psx::cpu::CallStep suspended = call.advance();
   CHECK(suspended.outcome == psx::cpu::CallOutcome::Suspended);
   CHECK(suspended.reason == psx::cpu::ExecutionExitReason::FrameBoundary);
@@ -318,5 +318,5 @@ int main() {
   RUN(a_cooperative_yield_with_no_guest_cycles_suspends_and_the_call_still_finishes);
   RUN(a_frame_boundary_suspends_the_call_and_names_the_reason);
   RUN(installing_an_override_resolves_the_image_and_refuses_a_foreign_address);
-  return pt_summary();
+  return psx::test::summary();
 }

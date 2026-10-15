@@ -3,7 +3,9 @@
 #include <filesystem>
 #include <optional>
 
-struct DiscState;
+namespace psx::cd {
+class Disc;
+}
 
 namespace psx::host {
 
@@ -18,7 +20,7 @@ public:
   // Replaces the saved choice atomically; false when it cannot be written.
   bool save(const std::filesystem::path &image) const;
   // Points `disc` at the title's own key and then at the saved choice (disc.h resolution order).
-  void bind(DiscState &disc) const;
+  void bind(psx::cd::Disc &disc) const;
 
 private:
   const TitleIdentity &title_;

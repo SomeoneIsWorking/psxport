@@ -21,11 +21,28 @@
 // to reason about.
 #pragma once
 #include <cstdint>
-struct Core;
+#include <vector>
+class Core;
 
-// Call once per completed frame. Cheap when nothing is scheduled: one counter increment and two
-// compares. Writes at most PSXPORT_SNAP_MAX images per run so a stray SNAP_EVERY cannot fill the disk.
-void snapshot_tick(Core *c);
+namespace psx::debug {
 
-// Force a capture now, tagged with a reason that lands in the sidecar. Returns true if written.
-bool snapshot_now(Core *c, const char *why);
+// One per Game: the scheduled and SIGUSR1-requested guest RAM captures.
+class Snapshotter {
+public:
+  // Call once per completed frame. Cheap when nothing is scheduled; writes at most PSXPORT_SNAP_MAX images per run.
+  void tick(Core &core);
+  // Capture now, tagged with a reason that lands in the sidecar. True if written.
+  bool captureNow(Core &core, const char *why);
+
+private:
+  void configure();
+
+  bool configured_ = false;
+  std::vector<uint64_t> at_; // explicit frame numbers
+  uint64_t every_ = 0;       // periodic interval, 0 = off
+  int max_ = 8;              // hard cap on images per run
+  int written_ = 0;
+  uint64_t frame_ = 0;
+};
+
+} // namespace psx::debug

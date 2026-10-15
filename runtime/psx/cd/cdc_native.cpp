@@ -25,6 +25,7 @@
 #include "xa_state.h"
 #include <algorithm>
 #include <lucent/log.h>
+#include <optional>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,16 +50,8 @@
 //                   no way to return — measured on CTR, where the XA stream ran to its end
 //                   (EOF @ LBA 140038, 941 sectors) and the guest's `CdReadyCallback` never fired
 //                   once, leaving its boot loop polling a completion that had never been posted.
-enum class CdcReadStop { kGuestCommand, kDriveStopped };
-
-// Forward decls (definitions below): the FIFO fill used by drive_consume_sector, and the
-// beetle-parity routing wrapper that decides decoder-vs-FIFO per sector.
-static bool load_sector(CdcState *s, uint32_t lba);
-static uint64_t exec_command(CdcState *s, uint8_t cmd);
-static void complete_command(CdcState *s);
-
-// PER-INSTANCE CD-controller state: the register/FIFO/IRQ-queue model lives on a CdcState (one per
-// Game, game.h) passed EXPLICITLY to every entry point — no bound "current" pointer.
+namespace psx::cd {
+namespace {
 
 constexpr uint8_t kCdlStatStandby = 0x02;
 constexpr uint8_t kCdlStatRead = 0x20;
@@ -67,22 +60,32 @@ constexpr uint8_t kCdcIrqEnableAll = 0x1F;
 // INT5 error code for an argument the command cannot satisfy (GetTD of a track the disc lacks).
 constexpr uint8_t kCdcErrorBadArgument = 0x10;
 
-void cdc_state_init(CdcState *s) {
-  struct DiscState *disc = s->disc; // preserve wiring across re-init
-  memset(s, 0, sizeof *s);
-  s->stat = kCdlStatStandby; // power-on defaults
+} // namespace
+
+void CdController::reset() {
+  Disc *const wiredDisc = disc;
+  psx::audio::XaStream *const wiredXa = xa;
+  *this = CdController{};
+  stat = kCdlStatStandby; // power-on defaults
   // The interrupt-enable register as the BIOS leaves it: its CD initialisation enables all five
   // response types before any game code runs, and the framework replaces that BIOS. A game that
   // masks responses (to poll a command itself) writes its own value.
-  s->irq_en = kCdcIrqEnableAll;
-  s->disc = disc;
-  s->disc_read_raw_fn = disc_read_raw;
-  s->disc_read_sector_fn = disc_read_sector;
-  s->disc_get_subq_position_fn = disc_get_subq_position;
+  irq_en = kCdcIrqEnableAll;
+  disc = wiredDisc;
+  xa = wiredXa;
+  disc_read_raw_fn = [](Disc *d, uint32_t lba, uint8_t *out, uint32_t n) {
+    return d->readRaw(lba, out, n);
+  };
+  disc_read_sector_fn = [](Disc *d, uint32_t lba, uint8_t *out) {
+    return d->readSector(lba, out);
+  };
+  disc_get_subq_position_fn = [](Disc *d, uint32_t lba, uint8_t *out) {
+    return d->subqPosition(lba, out);
+  };
 }
 
-static int q_empty(const CdcState *s) {
-  return s->q_head == s->q_tail;
+bool CdController::queueEmpty() const {
+  return q_head == q_tail;
 }
 
 // The controller's interrupt LINE to the CPU: the current response's type ANDed with the
@@ -91,36 +94,36 @@ static int q_empty(const CdcState *s) {
 // register, but it raises no CPU interrupt, so the guest's interrupt handler does not consume it.
 // Spyro 3's disc check relies on exactly this: it masks responses with 0x18, issues GetTN directly,
 // and polls the flag register for the answer while libcd's handler stays out of the way.
-static bool irq_line(const CdcState *s) {
-  return !q_empty(s) && (s->q[s->q_head].type & s->irq_en & kCdcIrqEnableAll) != 0;
+bool CdController::irqLine() const {
+  return !queueEmpty() && (q[q_head].type & irq_en & kCdcIrqEnableAll) != 0;
 }
 
 // A response just became current (queued into an empty queue, or uncovered by an acknowledge). The
 // sequence counts responses; the I_STAT edge follows the line, so a masked response raises none.
-static void response_became_current(CdcState *s) {
-  ++s->irq_sequence;
-  if (irq_line(s)) {
-    s->irq_edge = 1; // -> I_STAT bit 2, latched by the MMIO dispatcher
+void CdController::responseBecameCurrent() {
+  ++irq_sequence;
+  if (irqLine()) {
+    irq_edge = 1; // -> I_STAT bit 2, latched by the MMIO dispatcher
   }
 }
 
-static void cdc_irq(CdcState *s, uint8_t type, const uint8_t *resp, int len) {
-  const bool becomes_current = s->q_tail == s->q_head;
-  int n = (s->q_tail + 1) & 7;
-  if (n == s->q_head) {
+void CdController::raise(uint8_t type, const uint8_t *resp, int len) {
+  const bool becomes_current = q_tail == q_head;
+  int n = (q_tail + 1) & 7;
+  if (n == q_head) {
     return; // queue full (shouldn't happen)
   }
-  s->q[s->q_tail].type = type;
-  s->q[s->q_tail].len = len;
+  q[q_tail].type = type;
+  q[q_tail].len = len;
   if (len) {
-    memcpy(s->q[s->q_tail].resp, resp, (size_t)len);
+    memcpy(q[q_tail].resp, resp, (size_t)len);
   }
   if (becomes_current) {
-    s->resp_rd = 0; // first entry becomes active
+    resp_rd = 0; // first entry becomes active
   }
-  s->q_tail = n;
+  q_tail = n;
   if (becomes_current) {
-    response_became_current(s);
+    responseBecameCurrent();
   }
 }
 
@@ -129,60 +132,68 @@ static void cdc_irq(CdcState *s, uint8_t type, const uint8_t *resp, int len) {
 // replaces them (Beetle's BeginResults). So with the queue empty the buffer still belongs to the
 // response acknowledged last, which sits in the slot just behind the head, with its read position
 // kept. Spyro 3's disc check acknowledges GetTN/GetTD before it reads their answer.
-static const CdcIrqEnt *results_entry(const CdcState *s) {
-  return &s->q[q_empty(s) ? ((s->q_head - 1) & 7) : s->q_head];
+const CdcIrqEnt *CdController::resultsEntry() const {
+  return &q[queueEmpty() ? ((q_head - 1) & 7) : q_head];
 }
 
-uint8_t cdc_current_irq_type(const CdcState *s) {
-  return !s || q_empty(s) ? 0u : s->q[s->q_head].type;
+uint8_t CdController::currentIrqType() const {
+  return queueEmpty() ? 0u : q[q_head].type;
 }
 
-static uint32_t lba_from_command_args(const CdcState *s) {
+uint32_t CdController::commandArgsLba() const {
   // Setloc params: amm,ass,asect (BCD), minus the 2s lead-in.
-  const uint8_t *p = s->command_args;
+  const uint8_t *p = command_args;
   int mm = (p[0] >> 4) * 10 + (p[0] & 0xF);
   int ss = (p[1] >> 4) * 10 + (p[1] & 0xF);
   int ff = (p[2] >> 4) * 10 + (p[2] & 0xF);
   return (uint32_t)((mm * 60 + ss) * 75 + ff - 150);
 }
 
-static uint64_t deterministic_seek_time(const CdcState *s, uint32_t target_lba) {
+uint64_t CdController::seekTime(uint32_t target_lba) const {
   // Beetle's PS_CDC_CalcSeekTime with only its random 0..25000 component fixed at zero.
-  const bool motor_on = (s->stat & kCdlStatStandby) != 0;
-  const bool paused = motor_on && !s->reading;
+  const bool motor_on = (stat & kCdlStatStandby) != 0;
+  const bool paused = motor_on && !reading;
   // LBAs are signed: Setloc may name the 2-second lead-in before LBA 0 (00:00:00 is LBA -150), which
   // the unsigned fields carry in two's complement. The seek distance is between the signed values.
-  const int64_t initial_lba = motor_on ? static_cast<int32_t>(s->loc_lba) : 0;
+  const int64_t initial_lba = motor_on ? static_cast<int32_t>(loc_lba) : 0;
   const int64_t signed_target_lba = static_cast<int32_t>(target_lba);
   const uint64_t difference = static_cast<uint64_t>(initial_lba > signed_target_lba ? initial_lba - signed_target_lba
                                                                                     : signed_target_lba - initial_lba);
   uint64_t ticks = motor_on ? 0u : 33'868'800u;
-  const uint64_t seek_ticks = difference * 33'868'800u / (72u * 60u * 75u);
+  const uint64_t seek_ticks = difference * 33'868'800u / (uint64_t{72} * 60u * 75u);
   ticks += seek_ticks < 20'000u ? 20'000u : seek_ticks;
   if (difference >= 2'250u) {
     ticks += 33'868'800u * 300u / 1'000u;
   } else if (paused) {
-    ticks += (s->mode & 0x80) != 0 ? 1'237'952u : 1'237'952u * 2u;
+    ticks += (mode & 0x80) != 0 ? 1'237'952u : 1'237'952u * 2u;
   } else if (difference >= 3u && difference < 12u) {
-    ticks += cd_drive_sector_period_cpu_ticks(s->mode) * 4u;
+    ticks += driveSectorPeriodCpuTicks(mode) * 4u;
   }
   return ticks;
 }
 
-static bool command_accepts_argument_count(uint8_t command, uint8_t count) {
+namespace {
+
+struct ArgumentCounts {
+  uint8_t min = 0;
+  uint8_t max = 0;
+};
+
+// The parameter counts a command accepts; none for an unknown command.
+std::optional<ArgumentCounts> commandArgumentCounts(uint8_t command) {
   switch (command) {
   case 0x02:
-    return count == 3;
+    return ArgumentCounts{3, 3};
   case 0x03:
-    return count <= 1;
+    return ArgumentCounts{0, 1};
   case 0x0D:
   case 0x1D:
-    return count == 2;
+    return ArgumentCounts{2, 2};
   case 0x0E:
   case 0x12:
   case 0x14:
   case 0x19:
-    return count == 1;
+    return ArgumentCounts{1, 1};
   case 0x01:
   case 0x04:
   case 0x05:
@@ -203,21 +214,23 @@ static bool command_accepts_argument_count(uint8_t command, uint8_t count) {
   case 0x1B:
   case 0x1C:
   case 0x1E:
-    return count == 0;
+    return ArgumentCounts{0, 0};
   default:
-    return false;
+    return std::nullopt;
   }
 }
+
+} // namespace
 
 // Beetle-parity XA routing (vendor cdc.c DS_READING arm): with Setmode's STRSND bit (0x40) set, a
 // Mode2 sector whose submode has ALL of RT|form2|audio (0x64) is XA. MODE_SF (0x08) selects exactly
 // one file/channel for the SPU; an XA sector the filter rejects is dropped, never offered as data.
-int cdc_sector_route(const CdcState *s, const uint8_t *raw) {
-  if ((s->mode & 0x40) == 0 || raw[15] != 2 || (raw[18] & 0x64) != 0x64) {
-    return kCdcRouteData;
+CdcSectorRoute CdController::sectorRoute(const uint8_t *raw) const {
+  if ((mode & 0x40) == 0 || raw[15] != 2 || (raw[18] & 0x64) != 0x64) {
+    return CdcSectorRoute::Data;
   }
-  const bool selected = (s->mode & 0x08) == 0 || (raw[16] == s->filter_file && raw[17] == s->filter_chan);
-  return selected ? kCdcRouteXaAudio : kCdcRouteXaDropped;
+  const bool selected = (mode & 0x08) == 0 || (raw[16] == filter_file && raw[17] == filter_chan);
+  return selected ? CdcSectorRoute::XaAudio : CdcSectorRoute::XaDropped;
 }
 
 // Hand one audio sector to the SPU ring. First routing also flips the ring into PUSH mode: from
@@ -226,9 +239,9 @@ int cdc_sector_route(const CdcState *s, const uint8_t *raw) {
 // on hardware the decoded audio lands in the SPU's own CD buffer, and an overflowing SPU buffer
 // drops samples while the drive keeps spinning, so there is no condition under which this drive
 // stops for audio. Returns the frames decoded (0 when the sector carried none).
-static int route_audio_to_spu(CdcState *s, const uint8_t *raw, uint32_t drive_lba) {
-  s->xa->push_mode = 1;
-  return xa_push_audio_sector(s->xa, raw, drive_lba);
+int CdController::routeAudioToSpu(const uint8_t *raw, uint32_t drive_lba) {
+  xa->push_mode = 1;
+  return xa->pushAudioSector(raw, drive_lba);
 }
 
 // One drive-paced sector consumption during a continuous read, at `lba`:
@@ -239,27 +252,27 @@ static int route_audio_to_spu(CdcState *s, const uint8_t *raw, uint32_t drive_lb
 // Returns false only when the disc read itself failed. Audio is always consumed and always lets the
 // head advance: an audio sector has no "retry" outcome, and the caller has no hold path to share
 // with the data side.
-static bool drive_consume_sector(CdcState *s, uint32_t lba, bool *out_audio) {
+bool CdController::consumeSector(uint32_t lba, bool *out_audio) {
   *out_audio = false;
-  if (!(s->mode & 0x40)) { // STRSND off: every sector is a data sector
-    return load_sector(s, lba);
+  if (!(mode & 0x40)) { // STRSND off: every sector is a data sector
+    return loadSector(lba);
   }
   uint8_t raw[2352];
-  if (!s->disc_read_raw_fn(s->disc, lba, raw, sizeof(raw))) {
+  if (!disc_read_raw_fn(disc, lba, raw, sizeof(raw))) {
     return false;
   }
-  const int route = cdc_sector_route(s, raw);
-  if (route == kCdcRouteData) {
-    return load_sector(s, lba);
+  const CdcSectorRoute route = sectorRoute(raw);
+  if (route == CdcSectorRoute::Data) {
+    return loadSector(lba);
   }
-  if (route == kCdcRouteXaAudio) {
-    route_audio_to_spu(s, raw, lba);
+  if (route == CdcSectorRoute::XaAudio) {
+    routeAudioToSpu(raw, lba);
   }
   *out_audio = true;
   return true;
 }
 
-static bool load_sector(CdcState *s, uint32_t lba) { // fill the data FIFO with the sector at lba
+bool CdController::loadSector(uint32_t lba) { // fill the data FIFO with the sector at lba
   // WHAT THE FIFO CONTAINS DEPENDS ON Setmode's bit 0x20 ("whole sector"), and getting this wrong is
   // invisible until much later. Streaming code reads the first 8 words of each sector expecting the
   // 4-byte header plus 8-byte subheader — that is how it tells a video sector from an audio one.
@@ -267,12 +280,12 @@ static bool load_sector(CdcState *s, uint32_t lba) { // fill the data FIFO with 
   // and it re-requests the same sector forever.
   //   bit 0x20 set  -> raw sector from offset 12 (past sync): header, subheader, then data
   //   bit 0x20 clear-> 2048 bytes of user data only
-  if (s->mode & 0x20) {
+  if (mode & 0x20) {
     uint8_t raw[2352];
-    if (!s->disc_read_raw_fn(s->disc, lba, raw, sizeof raw)) {
+    if (!disc_read_raw_fn(disc, lba, raw, sizeof raw)) {
       lucent::error("cdc", "ReadN: no data for LBA {} — data FIFO left EMPTY", lba);
-      s->data_n = 0;
-      s->data_rd = 0;
+      data_n = 0;
+      data_rd = 0;
       return false;
     }
     // The subheader is at raw[16..23]: file, channel, submode, coding. Submode bit 0x04 marks an
@@ -285,122 +298,121 @@ static bool load_sector(CdcState *s, uint32_t lba) { // fill the data FIFO with 
                   raw[17],
                   raw[18],
                   (raw[18] & 0x04) ? 1 : 0);
-    memcpy(s->data, raw + 12, 2340);
-    s->data_n = 2340;
-    s->data_rd = 0;
+    memcpy(data, raw + 12, 2340);
+    data_n = 2340;
+    data_rd = 0;
     return true;
   }
   uint8_t sec[2048];
-  if (!s->disc_read_sector_fn(s->disc, lba, sec)) {
+  if (!disc_read_sector_fn(disc, lba, sec)) {
     lucent::error("cdc", "ReadN: no data for LBA {} (no disc, or out of range) — data FIFO left EMPTY", lba);
-    s->data_n = 0;
-    s->data_rd = 0;
+    data_n = 0;
+    data_rd = 0;
     return false;
   }
-  memcpy(s->data, sec, 2048);
-  s->data_n = 2048;
-  s->data_rd = 0;
+  memcpy(data, sec, 2048);
+  data_n = 2048;
+  data_rd = 0;
   return true;
 }
 
-static void queue_data_ready(CdcState *s) {
-  const uint8_t response[1] = {s->stat};
-  cdc_irq(s, 1, response, 1);
+void CdController::queueDataReady() {
+  const uint8_t response[1] = {stat};
+  raise(1, response, 1);
 }
 
-int cdc_post_data_ready(CdcState *s) {
-  if (((s->q_tail + 1) & 7) == s->q_head) {
-    return 0; // cdc_irq would drop it; say so instead of reporting a completion that was never queued
+bool CdController::postDataReady() {
+  if (((q_tail + 1) & 7) == q_head) {
+    return 0; // raise() would drop it; say so instead of reporting a completion that was never queued
   }
-  queue_data_ready(s);
+  queueDataReady();
   return 1;
 }
 
-int cdc_post_data_ready_after_read(CdcState *s, uint32_t first_lba, uint32_t sectors, uint8_t mode) {
-  if (sectors == 0 || s->read_completion_n >= 4) {
+bool CdController::postDataReadyAfterRead(uint32_t first_lba, uint32_t sectors, uint8_t mode) {
+  if (sectors == 0 || read_completion_n >= 4) {
     return 0;
   }
-  if (!s->tick_now) {
-    return cdc_post_data_ready(s);
+  if (!tick_now) {
+    return postDataReady();
   }
-  const uint64_t now_ticks = s->tick_now(s->tick_context);
-  const uint64_t start = s->read_completion_n ? s->read_completion_deadline_ticks[s->read_completion_n - 1] : now_ticks;
-  s->read_completion_deadline_ticks[s->read_completion_n++] =
-      (start > now_ticks ? start : now_ticks) + deterministic_seek_time(s, first_lba) +
-      uint64_t{sectors} * cd_drive_sector_period_cpu_ticks(mode);
-  s->loc_lba = first_lba + sectors;
-  s->stat |= kCdlStatStandby; // the spindle is up once a read has been served
+  const uint64_t now_ticks = tick_now(tick_context);
+  const uint64_t start = read_completion_n ? read_completion_deadline_ticks[read_completion_n - 1] : now_ticks;
+  read_completion_deadline_ticks[read_completion_n++] = (start > now_ticks ? start : now_ticks) + seekTime(first_lba) +
+                                                        uint64_t{sectors} * driveSectorPeriodCpuTicks(mode);
+  loc_lba = first_lba + sectors;
+  stat |= kCdlStatStandby; // the spindle is up once a read has been served
   return 1;
 }
 
 // Announce every owed read completion whose drive time has elapsed, oldest first. A full response queue
 // leaves the rest owed for the next service rather than dropping one.
-static int service_read_completions(CdcState *s) {
-  if (s->read_completion_n == 0 || !s->tick_now) {
+bool CdController::serviceReadCompletions() {
+  if (read_completion_n == 0 || !tick_now) {
     return 0;
   }
-  const uint64_t now_ticks = s->tick_now(s->tick_context);
+  const uint64_t now_ticks = tick_now(tick_context);
   int announced = 0;
-  while (s->read_completion_n > 0 && now_ticks >= s->read_completion_deadline_ticks[0] && cdc_post_data_ready(s)) {
-    lucent::debug("cdcpace", "announced owed read completion now={} queue_empty={}", now_ticks, q_empty(s));
-    s->read_completion_n--;
-    for (int i = 0; i < s->read_completion_n; i++) {
-      s->read_completion_deadline_ticks[i] = s->read_completion_deadline_ticks[i + 1];
+  while (read_completion_n > 0 && now_ticks >= read_completion_deadline_ticks[0] && postDataReady()) {
+    lucent::debug("cdcpace", "announced owed read completion now={} queue_empty={}", now_ticks, queueEmpty());
+    read_completion_n--;
+    for (int i = 0; i < read_completion_n; i++) {
+      read_completion_deadline_ticks[i] = read_completion_deadline_ticks[i + 1];
     }
     announced = 1;
   }
   return announced;
 }
 
-static void cancel_drive_event(CdcState *s) {
-  if (!s->drive_event_armed) {
+void CdController::cancelDriveEvent() {
+  if (!drive_event_armed) {
     return;
   }
-  s->drive_event_armed = 0;
-  s->drive_deadline_ticks = 0;
+  drive_event_armed = 0;
+  drive_deadline_ticks = 0;
 }
 
 // The next sector is due one drive period after `origin`.
-static void schedule_sector_event_after(CdcState *s, uint64_t origin) {
-  if (!s->reading || s->following_sector_ready || s->drive_event_armed || !s->tick_now) {
+void CdController::scheduleSectorEventAfter(uint64_t origin) {
+  if (!reading || following_sector_ready || drive_event_armed || !tick_now) {
     return;
   }
-  s->drive_deadline_ticks = origin + cd_drive_sector_period_cpu_ticks(s->mode);
-  s->drive_event_armed = 1;
+  drive_deadline_ticks = origin + driveSectorPeriodCpuTicks(mode);
+  drive_event_armed = 1;
   lucent::debug("cdcpace",
                 "armed sector event origin={} deadline={} mode=0x{:02X} first={}",
                 origin,
-                s->drive_deadline_ticks,
-                s->mode,
-                s->first_sector_pending);
+                drive_deadline_ticks,
+                mode,
+                first_sector_pending);
 }
 
-static void schedule_sector_event(CdcState *s) {
-  if (!s->tick_now) {
+void CdController::scheduleSectorEvent() {
+  if (!tick_now) {
     return;
   }
-  schedule_sector_event_after(s, s->tick_now(s->tick_context));
+  scheduleSectorEventAfter(tick_now(tick_context));
 }
 
 // See `CdcReadStop` above for why the two callers are not the same event. The drive-stopped case
 // raises its end-of-read completion through `queue_data_ready` — the ONE response path a data
 // sector uses — so the guest's interrupt handler sees the ordinary data-ready shape with the status
 // byte it needs, carrying a cleared CdlStatRead because the drive has left its reading state.
-static int stop_continuous_read(CdcState *s, CdcReadStop stop) {
-  cancel_drive_event(s);
-  s->reading = 0;
-  s->stat &= static_cast<uint8_t>(~kCdlStatRead); // clears when the drive leaves DS_READING
-  s->first_sector_pending = 0;
-  if (stop == CdcReadStop::kGuestCommand) {
+bool CdController::stopContinuousRead(ReadStop stop) {
+  cancelDriveEvent();
+  reading = 0;
+  stat &= static_cast<uint8_t>(~kCdlStatRead); // clears when the drive leaves DS_READING
+  first_sector_pending = 0;
+  if (stop == ReadStop::GuestCommand) {
     // A sector already announced by INT1 stays in the drive buffer; the guest's BFRD still gets it.
     return 0;
   }
-  s->following_sector_ready = 0;
-  if (cdc_post_data_ready(s) == 0) {
+  following_sector_ready = 0;
+  if (postDataReady() == 0) {
     lucent::error("cdc",
                   "the drive stopped at LBA {} with no room in the controller response queue for the "
                   "end-of-read completion — the guest will not learn that this read ended",
-                  s->loc_lba);
+                  loc_lba);
     return 0;
   }
   // POSTING A COMPLETION AND RAISING THE INTERRUPT ARE ONE EVENT, so this returns 1 and the drive
@@ -413,53 +425,52 @@ static int stop_continuous_read(CdcState *s, CdcReadStop stop) {
   return 1;
 }
 
-static void start_continuous_read(CdcState *s) {
-  cancel_drive_event(s);
-  s->reading = 1;
-  s->stat |= kCdlStatRead;
-  s->first_sector_pending = 1;
-  s->bfrd = 0;
-  s->following_sector_ready = 0;
-  s->data_n = 0;
-  s->data_rd = 0;
-  schedule_sector_event(s);
+void CdController::startContinuousRead() {
+  cancelDriveEvent();
+  reading = 1;
+  stat |= kCdlStatRead;
+  first_sector_pending = 1;
+  bfrd = 0;
+  following_sector_ready = 0;
+  data_n = 0;
+  data_rd = 0;
+  scheduleSectorEvent();
 }
 
-void cdc_bind_tick_source(CdcState *s, void *context, CdcTickNowFn now) {
-  s->tick_context = context;
-  s->tick_now = now;
+void CdController::bindTickSource(void *context, CdcTickNowFn now) {
+  tick_context = context;
+  tick_now = now;
 }
 
 // One sector whose deadline has passed. An audio sector re-arms from its own deadline, so a service
 // that arrives several periods late still passes every sector the head reached in that time.
-static int service_due_sector(CdcState *s, uint64_t now_ticks) {
-  const uint64_t due_ticks = s->drive_deadline_ticks;
-  s->drive_event_armed = 0;
-  s->drive_deadline_ticks = 0;
-  lucent::debug(
-      "cdcpace", "servicing sector event now={} first={} lba={}", now_ticks, s->first_sector_pending, s->loc_lba);
-  if (!s->reading || s->following_sector_ready) {
+bool CdController::serviceDueSector(uint64_t now_ticks) {
+  const uint64_t due_ticks = drive_deadline_ticks;
+  drive_event_armed = 0;
+  drive_deadline_ticks = 0;
+  lucent::debug("cdcpace", "servicing sector event now={} first={} lba={}", now_ticks, first_sector_pending, loc_lba);
+  if (!reading || following_sector_ready) {
     return 0;
   }
 
-  if (s->first_sector_pending) {
-    s->first_sector_pending = 0;
+  if (first_sector_pending) {
+    first_sector_pending = 0;
     bool audio = false;
-    if (!drive_consume_sector(s, s->loc_lba, &audio)) {
-      return stop_continuous_read(s, CdcReadStop::kDriveStopped);
+    if (!consumeSector(loc_lba, &audio)) {
+      return stopContinuousRead(ReadStop::DriveStopped);
     }
     // Set BEFORE `queue_data_ready` below, and that ordering is load-bearing rather than incidental:
-    // `queue_data_ready` publishes `s->stat` as the status byte the guest reads, so setting the bit
+    // `queue_data_ready` publishes `stat` as the status byte the guest reads, so setting the bit
     // after the announcement would tell a guest the read had stopped at the moment it was handed its
     // first sector. `test_the_first_data_ready_of_a_live_read_carries_the_read_bit` pins it.
-    s->stat |= kCdlStatRead; // INT1/Getstat must identify an active sector read
+    stat |= kCdlStatRead; // INT1/Getstat must identify an active sector read
     if (audio) {
       // Decoded straight to the SPU: the guest sees no data-ready. The drive keeps reading.
-      schedule_sector_event_after(s, due_ticks);
-      lucent::debug("cdcpace", "first sector @ {} was XA audio -> SPU ring", s->loc_lba);
+      scheduleSectorEventAfter(due_ticks);
+      lucent::debug("cdcpace", "first sector @ {} was XA audio -> SPU ring", loc_lba);
       return 0;
     }
-    queue_data_ready(s);
+    queueDataReady();
     return 1;
   }
 
@@ -469,7 +480,7 @@ static int service_due_sector(CdcState *s, uint64_t now_ticks) {
   // audio stretch produces no guest interrupts at all while the head still advances in real time.
   //
   // The peek exists only to decide audio-vs-data, so it is read at all only when Setmode's STRSND
-  // bit could select audio: `cdc_sector_route` answers "data" for every sector without
+  // bit could select audio: `sectorRoute` answers "data" for every sector without
   // it, and reading 2352 bytes per sector to learn that is pure cost on every non-XA stream.
   //
   // A peek that FAILS is the third place the drive can stop, and it is the same event as the two
@@ -478,34 +489,34 @@ static int service_due_sector(CdcState *s, uint64_t now_ticks) {
   // one answer that is always wrong — the data FIFO would be empty for it, so DRQSTS would stay
   // clear while the interrupt claims a sector — and it cost the guest an extra interrupt before
   // the end-of-read completion it actually needed. So the read ends here, with that completion.
-  if (s->mode & 0x40) {
+  if (mode & 0x40) {
     uint8_t raw[2352];
-    const uint32_t next_lba = s->loc_lba + 1;
-    if (!s->disc_read_raw_fn(s->disc, next_lba, raw, sizeof raw)) {
-      return stop_continuous_read(s, CdcReadStop::kDriveStopped);
+    const uint32_t next_lba = loc_lba + 1;
+    if (!disc_read_raw_fn(disc, next_lba, raw, sizeof raw)) {
+      return stopContinuousRead(ReadStop::DriveStopped);
     }
-    const int route = cdc_sector_route(s, raw);
-    if (route != kCdcRouteData) {
-      if (route == kCdcRouteXaAudio) {
-        route_audio_to_spu(s, raw, next_lba);
+    const CdcSectorRoute route = sectorRoute(raw);
+    if (route != CdcSectorRoute::Data) {
+      if (route == CdcSectorRoute::XaAudio) {
+        routeAudioToSpu(raw, next_lba);
       }
-      s->loc_lba++; // the head PASSED this sector; the next peek must see the one after it
-      schedule_sector_event_after(s, due_ticks);
+      loc_lba++; // the head PASSED this sector; the next peek must see the one after it
+      scheduleSectorEventAfter(due_ticks);
       return 0;
     }
   }
-  s->following_sector_ready = 1;
-  queue_data_ready(s);
+  following_sector_ready = 1;
+  queueDataReady();
   return 1;
 }
 
-static int service_drive_event(CdcState *s) {
-  if (!s->drive_event_armed || !s->tick_now) {
+bool CdController::serviceDriveEvent() {
+  if (!drive_event_armed || !tick_now) {
     return 0;
   }
-  const uint64_t now_ticks = s->tick_now(s->tick_context);
-  while (s->drive_event_armed && now_ticks >= s->drive_deadline_ticks) {
-    if (service_due_sector(s, now_ticks) != 0) {
+  const uint64_t now_ticks = tick_now(tick_context);
+  while (drive_event_armed && now_ticks >= drive_deadline_ticks) {
+    if (serviceDueSector(now_ticks) != 0) {
       return 1;
     }
   }
@@ -516,10 +527,10 @@ static int service_drive_event(CdcState *s) {
 // If a following sector was announced, the next BFRD service request installs it. Clearing BFRD
 // here models the hardware FIFO becoming serviceable again even when software leaves the request
 // bit high.
-static void sector_consumed(CdcState *s) {
-  s->data_n = 0;
-  s->data_rd = 0;
-  s->bfrd = 0;
+void CdController::sectorConsumed() {
+  data_n = 0;
+  data_rd = 0;
+  bfrd = 0;
 }
 
 // DMA3 (CDROM -> RAM): produce exactly `words` controller-read words. Bytes available in the data
@@ -538,28 +549,28 @@ static void sector_consumed(CdcState *s) {
 //
 // So the two layers must share one source of truth: when the native CD layer accepts a read, the
 // controller model is positioned and loaded from the same disc image. Neither layer invents data.
-void cdc_set_mode(CdcState *s, uint8_t mode) {
+void CdController::setMode(uint8_t value) {
   // Print the WHOLE byte, not just the bits this model currently acts on. Bit 0x40 (XA-ADPCM
   // enable) and bit 0x08 (XA filter) decide whether the drive is supposed to swallow audio
   // sectors into the ADPCM decoder instead of presenting them as data; a mode log that showed
   // only 0x20 would make an unimplemented audio path look like a mode the game never asked for.
   lucent::debug("cdc",
                 "setmode 0x{:02X} (speed={} xa-adpcm={} filter={} whole-sector={})",
-                mode,
-                (mode & 0x80) ? 2 : 1,
-                (mode & 0x40) ? 1 : 0,
-                (mode & 0x08) ? 1 : 0,
-                (mode & 0x20) ? 1 : 0);
-  s->mode = mode;
-  if (s->drive_event_armed) {
-    cancel_drive_event(s);
-    schedule_sector_event(s);
+                value,
+                (value & 0x80) ? 2 : 1,
+                (value & 0x40) ? 1 : 0,
+                (value & 0x08) ? 1 : 0,
+                (value & 0x20) ? 1 : 0);
+  mode = value;
+  if (drive_event_armed) {
+    cancelDriveEvent();
+    scheduleSectorEvent();
   }
 }
 
-void cdc_set_filter(CdcState *s, uint8_t file, uint8_t channel) {
-  s->filter_file = file;
-  s->filter_chan = channel;
+void CdController::setFilter(uint8_t file, uint8_t channel) {
+  filter_file = file;
+  filter_chan = channel;
   lucent::debug("cdc", "setfilter file={} chan={}", file, channel);
 }
 
@@ -571,39 +582,39 @@ void cdc_set_filter(CdcState *s, uint8_t file, uint8_t channel) {
 // The controller executes the commands it accepted in the order it accepted them. The native CD
 // path breaks that order when it accepts a read's effect synchronously: a framework-issued Pause
 // (CdControl(Pause), answered to the guest synchronously by the CD command owner) is still pending
-// on the guest clock, and the very next CdControl(ReadN) applies `cdc_begin_read` right away — so a
+// on the guest clock, and the very next CdControl(ReadN) applies `beginRead` right away — so a
 // Pause issued BEFORE the read executed AFTER the read had begun and cancelled that read's own
 // sector event. Measured on C-12: no completion ever arrived and the title retried one sector every
 // 60 fields.
-static void retire_pending_command(CdcState *s) {
-  if (!s->command_event_armed || !s->tick_now) {
+void CdController::retirePendingCommand() {
+  if (!command_event_armed || !tick_now) {
     return;
   }
-  for (int guard = 0; guard < 64 && s->command_event_armed; ++guard) {
-    s->command_deadline_ticks = s->tick_now(s->tick_context);
-    const CdcCommandEvent event = cdc_command_service(s, 1);
-    if (event == CdcCommandEvent::kExecute) {
-      cdc_command_finish_execution(s, exec_command(s, s->pending_command));
-    } else if (event == CdcCommandEvent::kComplete) {
-      complete_command(s);
+  for (int guard = 0; guard < 64 && command_event_armed; ++guard) {
+    command_deadline_ticks = tick_now(tick_context);
+    const CdcCommandEvent event = serviceCommand(1);
+    if (event == CdcCommandEvent::Execute) {
+      finishCommandExecution(execCommand(pending_command));
+    } else if (event == CdcCommandEvent::Complete) {
+      completeCommand();
     }
     // `kNone` only means this phase was not the last one; the loop keeps pulling the deadline to
     // now until the command has executed (and its completion disarms it).
   }
 }
 
-void cdc_begin_read(CdcState *s, uint32_t lba) {
+void CdController::beginRead(uint32_t lba) {
   // The read is the NEXT command after anything still pending, so the older one runs first and
   // retires here: a timed command is never executed inline at issue, so it always lands before the
   // read it was issued before.
-  retire_pending_command(s);
-  s->loc_lba = lba;
-  s->command_lba = lba;
-  start_continuous_read(s);
+  retirePendingCommand();
+  loc_lba = lba;
+  command_lba = lba;
+  startContinuousRead();
 }
 
-void cdc_issue_command(CdcState *s, uint8_t command) {
-  s->index = 0;
+void CdController::issueCommand(uint8_t command) {
+  index = 0;
   // The responses this command produces belong to the GUEST that issued it: stock libcd polls
   // its own status and consumes them after every command (measured on C-12: Setloc -> Setmode ->
   // ReadN -> Pause, each followed by a GetStat poll), so the INT3 from execution and the INT2 from
@@ -611,7 +622,7 @@ void cdc_issue_command(CdcState *s, uint8_t command) {
   // a framework-issued command has "no guest consumer", which is false for every command that
   // reaches this function: the guest issued it through its own CdControl. Deleting them left the
   // guest's post-Pause poll waiting for a completion that had already been thrown away.
-  cdc_command_schedule(s, command);
+  scheduleCommand(command);
   // TIMED, not inline. A controller takes its own time to accept a command and reports it in two
   // phases; `test_cdc_continuous_read` pins that a native-issued Pause observes the still-reading
   // status at execution and the paused status at completion. Ordering a framework-issued command
@@ -619,196 +630,196 @@ void cdc_issue_command(CdcState *s, uint8_t command) {
   // function's.
 }
 
-int cdc_take_current_response(CdcState *s, uint8_t *bytes, int capacity) {
-  const int savedBank = s->index;
+int CdController::takeCurrentResponse(uint8_t *bytes, int capacity) {
+  const int savedBank = index;
   int taken = 0;
-  while ((cdc_read(s, CDC_REG_INDEX) & CDC_STAT_RESPONSE_READY) != 0u) {
-    const uint8_t value = (uint8_t)cdc_read(s, CDC_REG_RESPONSE);
+  while ((read(CdcRegister::Index) & kCdcStatResponseReady) != 0u) {
+    const uint8_t value = (uint8_t)read(CdcRegister::Response);
     if (bytes && taken < capacity) {
       bytes[taken] = value;
     }
     taken++;
   }
-  cdc_write(s, CDC_REG_INDEX, (uint8_t)savedBank);
+  write(CdcRegister::Index, (uint8_t)savedBank);
   return taken;
 }
 
-int cdc_dma_read(CdcState *s, uint32_t *out, int words) {
+int CdController::dmaRead(uint32_t *out, int words) {
   if (words <= 0) {
     return 0;
   }
   memset(out, 0, (size_t)words * sizeof *out);
-  if (!s->bfrd) {
+  if (!bfrd) {
     return 0;
   }
   int got = 0;
-  while (got < words && s->data_rd + 4 <= s->data_n) {
-    const uint8_t *p = s->data + s->data_rd;
+  while (got < words && data_rd + 4 <= data_n) {
+    const uint8_t *p = data + data_rd;
     out[got++] = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-    s->data_rd += 4;
+    data_rd += 4;
   }
-  if (got && s->data_rd >= s->data_n) {
-    sector_consumed(s);
+  if (got && data_rd >= data_n) {
+    sectorConsumed();
   }
   return got;
 }
 
-static uint64_t exec_command(CdcState *s, uint8_t cmd) {
+uint64_t CdController::execCommand(uint8_t cmd) {
   lucent::debug("cdc",
                 "cmd 0x{:02X} args={} [{:02X} {:02X} {:02X}]",
                 cmd,
-                s->command_arg_n,
-                s->command_args[0],
-                s->command_args[1],
-                s->command_args[2]);
-  if (!command_accepts_argument_count(cmd, s->command_arg_n)) {
-    const uint8_t error[2] = {static_cast<uint8_t>(s->stat | 0x01), 0x20};
-    cdc_irq(s, 5, error, 2);
+                command_arg_n,
+                command_args[0],
+                command_args[1],
+                command_args[2]);
+  const std::optional<ArgumentCounts> counts = commandArgumentCounts(cmd);
+  if (!counts || command_arg_n < counts->min || command_arg_n > counts->max) {
+    const uint8_t error[2] = {static_cast<uint8_t>(stat | 0x01), 0x20};
+    raise(5, error, 2);
     return 0;
   }
-  uint8_t r1[1] = {s->stat};
+  uint8_t r1[1] = {stat};
   switch (cmd) {
   case 0x01:
-    cdc_irq(s, 3, r1, 1);
+    raise(3, r1, 1);
     return 0; // Getstat
   case 0x02:
-    s->command_lba = lba_from_command_args(s);
-    cdc_irq(s, 3, r1, 1);
+    command_lba = commandArgsLba();
+    raise(3, r1, 1);
     return 0; // Setloc
   case 0x0E:
-    cdc_set_mode(s, s->command_args[0]);
-    cdc_irq(s, 3, r1, 1);
+    setMode(command_args[0]);
+    raise(3, r1, 1);
     return 0; // Setmode
   case 0x0D:
-    cdc_set_filter(s, s->command_args[0], s->command_args[1]);
-    cdc_irq(s, 3, r1, 1);
+    setFilter(command_args[0], command_args[1]);
+    raise(3, r1, 1);
     return 0;  // Setfilter
   case 0x11: { // GetlocP: current Sub-Q track/index and relative/absolute position.
     uint8_t position[8] = {};
-    if (!cdc_getloc_p(s, position)) {
-      const uint8_t error[2] = {static_cast<uint8_t>(s->stat | 0x01), 0x80};
-      cdc_irq(s, 5, error, 2);
+    if (!getlocP(position)) {
+      const uint8_t error[2] = {static_cast<uint8_t>(stat | 0x01), 0x80};
+      raise(5, error, 2);
       return 0;
     }
-    cdc_irq(s, 3, position, 8);
+    raise(3, position, 8);
     return 0;
   }
   case 0x06:
   case 0x1B: // ReadN / ReadS
-    cdc_irq(s, 3, r1, 1);
-    s->loc_lba = s->command_lba;
-    start_continuous_read(s);
+    raise(3, r1, 1);
+    loc_lba = command_lba;
+    startContinuousRead();
     return 0;
   case 0x09: {
-    const uint8_t reading_status[1] = {s->stat};
-    const bool was_reading = s->reading != 0;
-    stop_continuous_read(s, CdcReadStop::kGuestCommand);
-    cdc_irq(s, 3, reading_status, 1);
+    const uint8_t reading_status[1] = {stat};
+    const bool was_reading = reading != 0;
+    stopContinuousRead(ReadStop::GuestCommand);
+    raise(3, reading_status, 1);
     if (!was_reading) {
       return 5'000;
     }
-    const uint64_t speed_scale = (s->mode & 0x80) != 0 ? 1u : 2u;
-    return (1'124'584u + static_cast<uint64_t>(s->loc_lba) * 42'596u / (75u * 60u)) * speed_scale;
+    const uint64_t speed_scale = (mode & 0x80) != 0 ? 1u : 2u;
+    return (1'124'584u + static_cast<uint64_t>(loc_lba) * 42'596u / (uint64_t{75} * 60u)) * speed_scale;
   }
   case 0x08: {
-    const uint8_t reading_status[1] = {s->stat};
-    const bool was_stopped = !s->reading && (s->stat & kCdlStatStandby) == 0;
-    stop_continuous_read(s, CdcReadStop::kGuestCommand);
-    s->stat = 0;
-    cdc_irq(s, 3, reading_status, 1);
+    const uint8_t reading_status[1] = {stat};
+    const bool was_stopped = !reading && (stat & kCdlStatStandby) == 0;
+    stopContinuousRead(ReadStop::GuestCommand);
+    stat = 0;
+    raise(3, reading_status, 1);
     return was_stopped ? 5'000u : 33'868u;
   }
   case 0x0A:
-    stop_continuous_read(s, CdcReadStop::kGuestCommand);
-    s->stat = kCdlStatStandby;
-    s->mode = 0;
-    s->command_lba = 0;
-    cdc_irq(s, 3, r1, 1);
+    stopContinuousRead(ReadStop::GuestCommand);
+    stat = kCdlStatStandby;
+    mode = 0;
+    command_lba = 0;
+    raise(3, r1, 1);
     return 4'100'000u; // Reset's deterministic seek-to-sector-zero completion.
   case 0x0B:
   case 0x0C:
-    cdc_irq(s, 3, r1, 1);
+    raise(3, r1, 1);
     return 0; // Mute / Demute
   case 0x15:
   case 0x16: // SeekL / SeekP
-    cdc_irq(s, 3, r1, 1);
-    return deterministic_seek_time(s, s->command_lba);
+    raise(3, r1, 1);
+    return seekTime(command_lba);
   case 0x1E: // ReadTOC
-    cdc_irq(s, 3, r1, 1);
-    return 30'000'000u + deterministic_seek_time(s, 0);
+    raise(3, r1, 1);
+    return 30'000'000u + seekTime(0);
   case 0x07:
-    if (s->stat != 0) {
-      const uint8_t error[2] = {static_cast<uint8_t>(s->stat | 0x01), 0x20};
-      cdc_irq(s, 5, error, 2);
+    if (stat != 0) {
+      const uint8_t error[2] = {static_cast<uint8_t>(stat | 0x01), 0x20};
+      raise(5, error, 2);
       return 0;
     }
-    s->stat = kCdlStatStandby;
-    cdc_irq(s, 3, r1, 1);
+    stat = kCdlStatStandby;
+    raise(3, r1, 1);
     return 3'386'880u;
   case 0x03:
   case 0x17:
   case 0x18: // MotorOn/SetFilter/Play/SetSession
-    cdc_irq(s, 3, r1, 1);
+    raise(3, r1, 1);
     return 0;
   case 0x19: { // Test (sub-function in param[0])
-    if (s->command_args[0] == 0x20) {
+    if (command_args[0] == 0x20) {
       uint8_t v[4] = {0x94, 0x09, 0x19, 0xC0}; // BIOS date/version
-      cdc_irq(s, 3, v, 4);
+      raise(3, v, 4);
     } else {
-      cdc_irq(s, 3, r1, 1);
+      raise(3, r1, 1);
     }
     return 0;
   }
   case 0x1A: { // GetID -> region/license
-    cdc_irq(s, 3, r1, 1);
+    raise(3, r1, 1);
     return 33'868u;
   }
   case 0x12:
-    cdc_irq(s, 3, r1, 1);
+    raise(3, r1, 1);
     return 33'868u;
   case 0x13:   // GetTN
   case 0x14: { // GetTD
     psx::disc_toc::BcdPair answer{};
-    const bool known =
-        s->disc != nullptr && (cmd == 0x13 ? psx::disc_toc::track_range(*s->disc, answer)
-                                           : psx::disc_toc::track_start(*s->disc, s->command_args[0], answer));
+    const bool known = disc != nullptr && (cmd == 0x13 ? psx::disc_toc::track_range(*disc, answer)
+                                                       : psx::disc_toc::track_start(*disc, command_args[0], answer));
     if (!known) {
-      const uint8_t error[2] = {static_cast<uint8_t>(s->stat | 0x01), kCdcErrorBadArgument};
-      cdc_irq(s, 5, error, 2);
+      const uint8_t error[2] = {static_cast<uint8_t>(stat | 0x01), kCdcErrorBadArgument};
+      raise(5, error, 2);
       return 0;
     }
-    const uint8_t t[3] = {s->stat, answer.first, answer.second};
-    cdc_irq(s, 3, t, 3);
+    const uint8_t t[3] = {stat, answer.first, answer.second};
+    raise(3, t, 3);
     return 0;
   }
   default:
     lucent::debug("cdc", "UNHANDLED cmd 0x{:02X} -> ack only", cmd);
-    cdc_irq(s, 3, r1, 1);
+    raise(3, r1, 1);
     return 0;
   }
 }
 
-static void complete_command(CdcState *s) {
-  if (s->pending_command == 0x1A) {
+void CdController::completeCommand() {
+  if (pending_command == 0x1A) {
     const uint8_t id[8] = {0x02, 0x00, 0x20, 0x00, 'S', 'C', 'E', 'A'};
-    cdc_irq(s, 2, id, 8);
+    raise(2, id, 8);
     return;
   }
-  if (s->pending_command == 0x0A) {
-    s->loc_lba = 0;
-  } else if (s->pending_command == 0x15 || s->pending_command == 0x16) {
-    s->loc_lba = s->command_lba;
-    s->stat = kCdlStatStandby;
+  if (pending_command == 0x0A) {
+    loc_lba = 0;
+  } else if (pending_command == 0x15 || pending_command == 0x16) {
+    loc_lba = command_lba;
+    stat = kCdlStatStandby;
   }
-  const uint8_t response[1] = {s->stat};
-  cdc_irq(s, 2, response, 1);
+  const uint8_t response[1] = {stat};
+  raise(2, response, 1);
 }
 
-int cdc_getloc_p(const CdcState *s, uint8_t out[8]) {
-  return s->disc_get_subq_position_fn != nullptr && s->disc_get_subq_position_fn(s->disc, s->loc_lba, out);
+bool CdController::getlocP(uint8_t out[8]) const {
+  return disc_get_subq_position_fn != nullptr && disc_get_subq_position_fn(disc, loc_lba, out);
 }
 
-int cdc_next_deadline_ticks(const CdcState *s, uint64_t *absoluteTicks) {
+bool CdController::nextDeadlineTicks(uint64_t *absoluteTicks) const {
   // Every armed deadline, so a Lightrec segment ends at the earliest of them: the drive's next sector,
   // the command phase, and the oldest paced read completion (the completion must be announced when the
   // drive is done, not at the next unrelated service).
@@ -820,9 +831,9 @@ int cdc_next_deadline_ticks(const CdcState *s, uint64_t *absoluteTicks) {
       armed = true;
     }
   };
-  consider(s->drive_event_armed != 0, s->drive_deadline_ticks);
-  consider(s->command_event_armed != 0, s->command_deadline_ticks);
-  consider(s->read_completion_n != 0, s->read_completion_deadline_ticks[0]);
+  consider(drive_event_armed != 0, drive_deadline_ticks);
+  consider(command_event_armed != 0, command_deadline_ticks);
+  consider(read_completion_n != 0, read_completion_deadline_ticks[0]);
   if (!armed) {
     return 0;
   }
@@ -830,19 +841,19 @@ int cdc_next_deadline_ticks(const CdcState *s, uint64_t *absoluteTicks) {
   return 1;
 }
 
-int cdc_drive_service(CdcState *s) {
+bool CdController::service() {
   // The oracle services its drive counter before its command counter when both expire in the same
   // update. Preserve that ordering so an exact tie makes INT1 current and queues command INT3.
-  const uint64_t irq_sequence_before = s->irq_sequence;
-  service_drive_event(s);
-  service_read_completions(s);
-  const CdcCommandEvent event = cdc_command_service(s, q_empty(s));
-  if (event == CdcCommandEvent::kExecute) {
-    cdc_command_finish_execution(s, exec_command(s, s->pending_command));
-  } else if (event == CdcCommandEvent::kComplete) {
-    complete_command(s);
+  const uint64_t irq_sequence_before = irq_sequence;
+  serviceDriveEvent();
+  serviceReadCompletions();
+  const CdcCommandEvent event = serviceCommand(queueEmpty());
+  if (event == CdcCommandEvent::Execute) {
+    finishCommandExecution(execCommand(pending_command));
+  } else if (event == CdcCommandEvent::Complete) {
+    completeCommand();
   }
-  return s->irq_sequence != irq_sequence_before;
+  return irq_sequence != irq_sequence_before;
 }
 
 // Apply the bank-0 request register's BFRD latch. BFRD is a level, not a command: writing 0x80
@@ -854,32 +865,32 @@ int cdc_drive_service(CdcState *s) {
 // framing adds, then the 2048 data bytes. The EDC/ECC tail a 2352-byte raw sector carries after
 // that is not data any consumer reads, so a request that has passed this point has the sector and
 // is asking for the next one.
-static std::uint32_t sector_payload_bytes(const CdcState *s) {
-  return (s->mode & 0x20u) != 0 ? 12u + 2048u : 2048u;
+std::uint32_t CdController::sectorPayloadBytes() const {
+  return (mode & 0x20u) != 0 ? 12u + 2048u : 2048u;
 }
 
-static void write_request_register(CdcState *s, uint8_t value) {
+void CdController::writeRequestRegister(uint8_t value) {
   const uint8_t asserted = value & 0x80;
   if (!asserted) {
-    s->bfrd = 0;
+    bfrd = 0;
     // As Beetle: a clear without bit 6 empties the data FIFO but keeps the sector buffer for a re-request.
     if ((value & 0x40) == 0) {
-      s->data_rd = s->data_n;
+      data_rd = data_n;
     }
     return;
   }
-  const bool flushed = s->data_n > 0 && s->data_rd >= s->data_n;
+  const bool flushed = data_n > 0 && data_rd >= data_n;
 
   // An asserted-to-asserted write leaves the active FIFO and its cursor alone: a consumer that
   // splits one sector transfer around such a write is still reading THAT sector (psxport issue
   // 0002). What a repeated write does carry is the request for the sector the drive has since
   // ANNOUNCED — stock libcd writes the bit once per sector and never clears it in between, so a
   // write that only acted on a 0 -> 1 transition left every sector after the first unanswered.
-  const bool fresh_request = s->bfrd == 0;
-  s->bfrd = 1;
-  if (!s->reading && !s->following_sector_ready) {
+  const bool fresh_request = bfrd == 0;
+  bfrd = 1;
+  if (!reading && !following_sector_ready) {
     if (flushed) {
-      s->data_rd = 0;
+      data_rd = 0;
     }
     return;
   }
@@ -888,11 +899,11 @@ static void write_request_register(CdcState *s, uint8_t value) {
   // previous sector's payload. Measured on C-12: its read pump asked for sector N+1 while the FIFO
   // still held N's EDC/ECC tail, read those bytes back, and its own sector-locator check reported
   // `CdRead: sector error` once per 60 fields.
-  if (s->following_sector_ready && (s->data_n == 0 || s->data_rd >= sector_payload_bytes(s))) {
-    s->loc_lba++;
-    s->following_sector_ready = 0;
-    if (!load_sector(s, s->loc_lba)) {
-      stop_continuous_read(s, CdcReadStop::kDriveStopped);
+  if (following_sector_ready && (data_n == 0 || data_rd >= sectorPayloadBytes())) {
+    loc_lba++;
+    following_sector_ready = 0;
+    if (!loadSector(loc_lba)) {
+      stopContinuousRead(ReadStop::DriveStopped);
       return;
     }
     // THE HANDOFF IS THE DRIVE'S CLOCK, not the request bit's. One buffered sector means the drive
@@ -900,108 +911,109 @@ static void write_request_register(CdcState *s, uint8_t value) {
     // even when the request bit was already latched. Leaving the next sector unannounced until a
     // 0 -> 1 transition that stock libcd never performs stalls a long read after the first sector
     // it hands over on a repeated write (measured on C-12: a 121-sector read stopped at three).
-    schedule_sector_event(s);
+    scheduleSectorEvent();
   } else {
     if (flushed) {
-      s->data_rd = 0;
+      data_rd = 0;
     }
-    if (fresh_request && s->data_n > 0 && !s->following_sector_ready) {
-      schedule_sector_event(s);
+    if (fresh_request && data_n > 0 && !following_sector_ready) {
+      scheduleSectorEvent();
     }
   }
 }
 
-uint32_t cdc_read(CdcState *s, uint32_t p) {
-  switch (p & 3) {
-  case 0: { // status register
-    uint8_t st = (uint8_t)s->index;
-    if (s->param_n == 0) {
+uint32_t CdController::read(CdcRegister reg) {
+  switch (reg) {
+  case CdcRegister::Index: { // status register
+    uint8_t st = (uint8_t)index;
+    if (param_n == 0) {
       st |= 0x08; // PRMEMPT (param FIFO empty)
     }
-    if (s->param_n < 16) {
+    if (param_n < 16) {
       st |= 0x10; // PRMWRDY (param FIFO not full)
     }
-    if (s->resp_rd < results_entry(s)->len) {
+    if (resp_rd < resultsEntry()->len) {
       st |= 0x20; // RSLRRDY (response ready)
     }
-    if (s->bfrd && s->data_rd < s->data_n) {
+    if (bfrd && data_rd < data_n) {
       st |= 0x40; // DRQSTS (data FIFO not empty)
     }
-    if (s->command_event_armed && s->command_phase <= 1) {
+    if (command_event_armed && command_phase <= 1) {
       st |= 0x80; // BUSYSTS while command receive/argument/execution is pending
     }
     return st;
   }
-  case 1: { // response FIFO
-    const CdcIrqEnt *f = results_entry(s);
-    return s->resp_rd < f->len ? f->resp[s->resp_rd++] : 0;
+  case CdcRegister::Response: { // response FIFO
+    const CdcIrqEnt *f = resultsEntry();
+    return resp_rd < f->len ? f->resp[resp_rd++] : 0;
   }
-  case 2: { // data FIFO — CPU pop path; must advance the head exactly as DMA3 does
-    if (!s->bfrd || s->data_rd >= s->data_n) {
+  case CdcRegister::Parameter: { // data FIFO — CPU pop path; must advance the head exactly as DMA3 does
+    if (!bfrd || data_rd >= data_n) {
       return 0;
     }
-    const uint8_t b = s->data[s->data_rd++];
-    if (s->data_rd >= s->data_n) {
-      sector_consumed(s);
+    const uint8_t b = data[data_rd++];
+    if (data_rd >= data_n) {
+      sectorConsumed();
     }
     return b;
   }
-  case 3: // bank0/2: interrupt enable; bank1/3: interrupt flag (low 3 bits = pending type)
-    if (s->index & 1) {
-      return q_empty(s) ? 0xE0 : (uint8_t)(0xE0 | s->q[s->q_head].type);
+  default: // 3: bank0/2 interrupt enable; bank1/3 interrupt flag (low 3 bits = pending type)
+    if (index & 1) {
+      return queueEmpty() ? 0xE0 : (uint8_t)(0xE0 | q[q_head].type);
     }
-    return s->irq_en | 0xE0;
+    return irq_en | 0xE0;
   }
-  return 0;
 }
 
-void cdc_write(CdcState *s, uint32_t p, uint8_t v) {
-  switch (p & 3) {
-  case 0:
-    s->index = v & 3;
+void CdController::write(CdcRegister reg, uint8_t v) {
+  switch (reg) {
+  case CdcRegister::Index:
+    index = v & 3;
     return; // index/bank select
-  case 1:
-    if (s->index == 0) {
-      cdc_command_schedule(s, v); // command register
+  case CdcRegister::Response:
+    if (index == 0) {
+      scheduleCommand(v); // command register
     }
     return;
-  case 2:
-    if (s->index == 0) {
-      if (s->param_n < 16) {
-        s->param[s->param_n++] = v;
+  case CdcRegister::Parameter:
+    if (index == 0) {
+      if (param_n < 16) {
+        param[param_n++] = v;
       }
     } // param FIFO push
-    else if (s->index == 1) {
+    else if (index == 1) {
       // Interrupt enable. Unmasking the type of a response that is already current asserts the line
       // now, which is a fresh edge exactly as a newly queued response would be.
-      const bool line_was_asserted = irq_line(s);
-      s->irq_en = v;
-      if (!line_was_asserted && irq_line(s)) {
-        s->irq_edge = 1;
+      const bool line_was_asserted = irqLine();
+      irq_en = v;
+      if (!line_was_asserted && irqLine()) {
+        irq_edge = 1;
       }
     }
     return;
-  case 3:
-    if (s->index == 1) { // interrupt flag: write 1s to ack/clear
-      if (v & 0x07) {    // ack current IRQ -> advance the queue
-        if (!q_empty(s)) {
-          s->q_head = (s->q_head + 1) & 7;
+  default:            // 3
+    if (index == 1) { // interrupt flag: write 1s to ack/clear
+      if (v & 0x07) { // ack current IRQ -> advance the queue
+        if (!queueEmpty()) {
+          q_head = (q_head + 1) & 7;
           // A response that was QUEUED behind the one just acked becomes current now, and that is
           // a fresh interrupt on real hardware — not a continuation of the acked one. Without this
           // edge the second and later responses of a multi-INT command sequence would be visible
           // in the FIFO but never announced, which looks exactly like a dropped response.
-          if (!q_empty(s)) {
-            s->resp_rd = 0; // its results replace the acknowledged ones
-            response_became_current(s);
+          if (!queueEmpty()) {
+            resp_rd = 0; // its results replace the acknowledged ones
+            responseBecameCurrent();
           }
         }
       }
       if (v & 0x40) {
-        s->param_n = 0; // reset param FIFO
+        param_n = 0; // reset param FIFO
       }
-    } else if (s->index == 0) { // request register
-      write_request_register(s, v);
+    } else if (index == 0) { // request register
+      writeRequestRegister(v);
     }
     return;
   }
 }
+
+} // namespace psx::cd

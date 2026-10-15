@@ -38,12 +38,6 @@ public:
   }
 
   void registerOverrides(Game &) override {}
-  RenderCapabilities renderCapabilities() const override {
-    return RenderCapabilities::direct();
-  }
-  bool guestVramIsPicture(const Game &) const override {
-    return false;
-  }
   // `line` is the whole command line, as the framework passes it.
   bool titleCommand(Core &core, const psx::game::TitleCommandLine &input, FILE *out) override;
 

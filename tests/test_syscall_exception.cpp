@@ -3,26 +3,30 @@
 // the public runtime ABI so this test cannot pass against a test-only copy of the transition.
 #include "execution_services.h"
 #include "game.h"
+#include "r3000.h"
 #include "testutil.h"
 
 #include "stub_game_runtime.h"
 #include <cstddef>
 #include <cstring>
+#include <memory>
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 constexpr uint32_t kSyscallPc = 0x8003E1FCu;
 constexpr uint32_t kStatusUpper = 0x00600000u;
 constexpr uint32_t kPendingInterruptCause = 0x00001200u;
 constexpr uint32_t kSyscallCause = kPendingInterruptCause | 0x20u;
-constexpr std::size_t kV0 = 2;
-constexpr std::size_t kA0 = 4;
+
+std::unique_ptr<Game> sharedGame;
 
 Game &testGame() {
-  static Game game{stubRuntime, {}};
-  return game;
+  if (sharedGame == nullptr) {
+    sharedGame = std::make_unique<Game>(*stubRuntime, psx::config::Config{});
+  }
+  return *sharedGame;
 }
 
 Core &resetCore() {
@@ -36,13 +40,13 @@ Core &resetCore() {
 
 void test_enter_critical_retains_syscall_exception_and_disables_interrupts() {
   Core &core = resetCore();
-  core.r[kA0] = 1;
+  core.r[psx::cpu::kA0] = 1;
   core.cop0[12] = kStatusUpper | 0x3Fu;
   core.cop0[13] = 0xABCD1234u;
 
-  psx::cpu::handleSyscall(core, 0, kSyscallPc);
+  psx::cpu::handleSyscall(core, kSyscallPc);
 
-  CHECK_EQ(core.r[kV0], 1u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 1u);
   CHECK_EQ(core.game->hle.irq_enabled, 0);
   CHECK_EQ(core.cop0[12], kStatusUpper | 0x3Eu);
   CHECK_EQ(core.cop0[13], kSyscallCause);
@@ -52,13 +56,13 @@ void test_enter_critical_retains_syscall_exception_and_disables_interrupts() {
 void test_exit_critical_returns_with_current_interrupt_enable_set() {
   Core &core = resetCore();
   core.game->hle.irq_enabled = 0;
-  core.r[kA0] = 2;
+  core.r[psx::cpu::kA0] = 2;
   core.cop0[12] = kStatusUpper | 0x3Eu;
   core.cop0[13] = kPendingInterruptCause;
 
-  psx::cpu::handleSyscall(core, 0, kSyscallPc + 0x10u);
+  psx::cpu::handleSyscall(core, kSyscallPc + 0x10u);
 
-  CHECK_EQ(core.r[kV0], 0u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 0u);
   CHECK_EQ(core.game->hle.irq_enabled, 1);
   CHECK_EQ(core.cop0[12], kStatusUpper | 0x3Fu);
   CHECK_EQ(core.cop0[13], kSyscallCause);
@@ -67,12 +71,12 @@ void test_exit_critical_returns_with_current_interrupt_enable_set() {
 
 void test_non_interrupt_kernel_op_returns_from_exactly_one_exception_level() {
   Core &core = resetCore();
-  core.r[kA0] = 0;
+  core.r[psx::cpu::kA0] = 0;
   core.cop0[12] = kStatusUpper | 0x15u;
 
-  psx::cpu::handleSyscall(core, 0x54321u, kSyscallPc + 0x20u);
+  psx::cpu::handleSyscall(core, kSyscallPc + 0x20u);
 
-  CHECK_EQ(core.r[kV0], 0u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 0u);
   CHECK_EQ(core.cop0[12], kStatusUpper | 0x15u);
   CHECK_EQ(core.cop0[13], 0x20u);
   CHECK_EQ(core.cop0[14], kSyscallPc + 0x20u);
@@ -81,8 +85,9 @@ void test_non_interrupt_kernel_op_returns_from_exactly_one_exception_level() {
 } // namespace
 
 int main() {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(enter_critical_retains_syscall_exception_and_disables_interrupts);
   RUN(exit_critical_returns_with_current_interrupt_enable_set);
   RUN(non_interrupt_kernel_op_returns_from_exactly_one_exception_level);
-  return pt_summary();
+  return psx::test::summary();
 }

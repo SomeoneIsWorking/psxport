@@ -204,5 +204,5 @@ int main() {
   RUN(unreachable_overflow_and_invalid_configuration_are_explicit);
   retro_psx_observer_disable();
   oracle_teardown();
-  return pt_summary();
+  return psx::test::summary();
 }

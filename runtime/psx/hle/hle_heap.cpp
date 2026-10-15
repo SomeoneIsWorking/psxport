@@ -1,17 +1,18 @@
 // hle_heap.cpp - BIOS A0:0x33-0x39 malloc family: a native first-fit arena over guest RAM.
 #include "game.h"
 #include "hle.h"
+#include <cstdint>
 
 #include <lucent/log.h>
 
-enum { HEAP_MAX_BLOCKS = 4096 };
+enum : std::uint16_t { HEAP_MAX_BLOCKS = 4096 };
 
-void Hle::heapInit(uint32_t addr, uint32_t size) {
-  heap_base = addr;
-  heap_size = size;
+void Hle::heapInit(GuestSpan heap) {
+  heap_base = heap.address;
+  heap_size = heap.bytes;
   nblk = 1;
-  blk[0].addr = addr;
-  blk[0].size = size;
+  blk[0].addr = heap.address;
+  blk[0].size = heap.bytes;
   blk[0].used = 0;
   heap_ok = 1;
 }

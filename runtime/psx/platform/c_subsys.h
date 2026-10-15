@@ -1,28 +1,13 @@
-// C-linkage declarations for the leaf subsystems still compiled as C (disc, mdec/spu Beetle
-// adapters, spu_audio, watchdog, xa_stream) plus the vendored Beetle MDEC clock pump. The OOP
-// refactor made most of the runtime C++; these few stay C, so the C++ callers must see their
+// C-linkage declarations for the leaf subsystems still compiled as C (the mdec Beetle adapter) plus the vendored Beetle
+// MDEC clock pump. The OOP refactor made most of the runtime C++; these few stay C, so the C++ callers must see their
 // symbols with C linkage. Include this instead of scattering local (C++-mangled) forward decls.
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// watchdog.cpp
-void watchdog_init(void);
-void watchdog_progress(void);              // forward progress; retain the current boot/steady timeout phase
-void watchdog_main_present_complete(void); // main presenter complete: leave boot grace and start steady timing
-void watchdog_resume(void);                // resume after intentional idle without claiming frame progress
-void watchdog_suspend(void);               // cancel the timeout during intentional idle (pause / REPL input wait)
-void watchdog_disable(void);               // permanently disable (SBS debugger pauses indefinitely on a divergence)
-int watchdog_armed(void);                  // nonzero while the frame-progress timeout is armed
-void watchdog_spin_fault(unsigned anchor_pc,
-                         unsigned last_pc,
-                         unsigned long long instructions); // guest spin: report + abort (timing.cpp)
-
-// disc.c
-// disc_* (disc.c) now take the Game-owned DiscState* explicitly — see disc.h.
 
 // mdec_beetle.c + vendored mednafen mdec.c
 void mdec_init(void);
@@ -33,15 +18,9 @@ int mdec_dma_out(uint32_t *buf, int count);
 int mdec_dma_out_rest(uint32_t *buf, int count);
 uint32_t mdec_dma_read_word(uint32_t *offs); // pop one OutFIFO word + its scatter displacement
 void mdec_step(void);                        // run the decoder until it parks at a FIFO gate
-int mdec_dma_can_write(void);
-int mdec_dma_can_read(void);
+bool mdec_dma_can_write(void);
+bool mdec_dma_can_read(void);
 void MDEC_Run(int32_t clocks);
-
-// (spu_audio has moved to `class SpuAudio` owned by Game — `c->game->spu_audio.method()`.
-//  No C shims; callers use the class directly via spu_audio.h.)
-
-// native_fmv.cpp — one raw XA-ADPCM sector to PCM.
-int xa_decode_sector(const uint8_t *raw, int16_t *out, int16_t hist[2][2], int *freq);
 
 #ifdef __cplusplus
 }

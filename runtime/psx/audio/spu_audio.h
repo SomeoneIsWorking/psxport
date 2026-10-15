@@ -91,7 +91,7 @@ private:
   }
   static void wavLe32(FILE *f, uint32_t v) {
     for (int i = 0; i < 4; i++) {
-      fputc((v >> (8 * i)) & 0xFF, f);
+      fputc(static_cast<int>((v >> (8 * i)) & 0xFF), f);
     }
   }
 
@@ -113,8 +113,7 @@ private:
   SpuFieldCadence mCadence;
 
   // Per-field mix buffer (up to one PAL field + slack). Per-instance so two SBS Games never mix
-  // through the same scratch. The native-music render scratch moved game-side into the audioMixFrame
-  // GameHooks impl (game_hooks.cpp), which owns its own per-call buffer.
+  // through the same scratch. A title's music mixes into it through TitleAudio::mixFrame.
   static constexpr uint32_t kRenderSlack = 64;
   int16_t mMixBuf[2 * (SpuFieldCadence::kMaximumStandardSamplesPerField + kRenderSlack)] = {};
 

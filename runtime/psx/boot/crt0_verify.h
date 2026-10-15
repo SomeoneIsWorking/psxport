@@ -53,7 +53,7 @@ static const int CRT0_SCAN_LIMIT = 96;
 // ── the symbolic register file ──────────────────────────────────────────────────────────────────────
 // Straight-line only: the .bss loop's back-edge is deliberately NOT followed, because every value being
 // extracted is established before or after the loop, never by iterating it.
-enum Crt0Tag {
+enum Crt0Tag : std::uint8_t {
   CT_UNKNOWN = 0, // nothing is known about this register
   CT_CONST,       // a resolved constant (lui/addiu/ori/addu chains)
   CT_LOADED,      // the result of `lw` from a resolved address: src = that address, bias = later addi
@@ -69,42 +69,44 @@ struct Crt0SReg {
 
 // ── what the scan managed to observe ────────────────────────────────────────────────────────────────
 struct Crt0Observed {
-  int decoded = 0;                    // DENOMINATOR: instructions decoded before stopping
   const char *stopped = "scan limit"; // why it stopped
+  int decoded = 0;                    // DENOMINATOR: instructions decoded before stopping
   int allZero = 0;                    // words in the window that were 0x00000000 (image not loaded?)
 
-  bool haveBssLo = false;
   uint32_t bssLo = 0;
-  bool haveBssHi = false;
   uint32_t bssHi = 0;
-  bool haveStackTop = false;
   uint32_t stackTopBase = 0;
-  bool haveBias = false;
   int32_t bias = 0; // resolved WITH the stack-top; 0 = no `addi`
-  bool haveReserve = false;
   uint32_t stackTopBase2 = 0;
-  bool haveHeapBase = false;
   uint32_t heapBase = 0; // UNMASKED, as psx::game::Crt0Image states it
-  bool haveGp = false;
   uint32_t gp = 0;
-  bool haveLibcInit = false;
   uint32_t libcInit = 0;
+  uint32_t heapSizePtr = 0;
+  uint32_t heapBasePtr = 0;
+
+  bool haveBssLo = false;
+  bool haveBssHi = false;
+  bool haveStackTop = false;
+  bool haveBias = false;
+  bool haveReserve = false;
+  bool haveHeapBase = false;
+  bool haveGp = false;
+  bool haveLibcInit = false;
 
   // The two optional absolute stores. `scanComplete` is what makes "no store" a CONCLUSION rather than
   // "I stopped early": it is true only when the scan reached the `jal`, i.e. saw the whole prologue.
   bool scanComplete = false;
   bool sawHeapSizeStore = false;
-  uint32_t heapSizePtr = 0;
   bool sawHeapBaseStore = false;
-  uint32_t heapBasePtr = 0;
-
   bool a1LiveAtCall = false;       // r[5] still holds the heap size when the guest reaches its `jal`
-  bool a0PlusFour = false;         // the `jal` delay slot is `addi a0,a0,4` (the +4 crt0_plan applies)
+  bool a0PlusFour = false;         // the `jal` delay slot is `addi a0,a0,4` (the +4 psx::game::planCrt0 applies)
   bool libcInitIsInitHeap = false; // libcInit's first 3 words are the A(39h) BIOS thunk
 };
 
-// crt0_scan — decode the guest crt0 at `entry`, reading guest words through `rd32(addr)`.
-template <class Reader> static inline Crt0Observed crt0_scan(uint32_t entry, Reader rd32) {
+namespace psx::game {
+
+// scanCrt0 — decode the guest crt0 at `entry`, reading guest words through `rd32(addr)`.
+template <class Reader> inline Crt0Observed scanCrt0(uint32_t entry, Reader rd32) {
   Crt0Observed o;
   Crt0SReg r[32];
   r[0].tag = CT_CONST;
@@ -286,6 +288,8 @@ template <class Reader> static inline Crt0Observed crt0_scan(uint32_t entry, Rea
   return o;
 }
 
+} // namespace psx::game
+
 // ── the diff ────────────────────────────────────────────────────────────────────────────────────────
 // One row per field. `resolved` false means the scan could not decide — counted and named, never
 // silently treated as agreement.
@@ -296,10 +300,12 @@ struct Crt0AuditRow {
   bool agree;
 };
 
-// crt0_audit — scan the guest crt0 and diff it against the shipped psx::game::Crt0Image + derived plan.
+namespace psx::game {
+
+// auditCrt0 — scan the guest crt0 and diff it against the shipped psx::game::Crt0Image + derived plan.
 // Returns FALSE only on a CONFIRMED disagreement (the caller must then refuse to boot).
 template <class Reader>
-static inline bool crt0_audit(const psx::game::Crt0Image *image, const Crt0Plan &p, Reader rd32, const char *who) {
+inline bool auditCrt0(const psx::game::Crt0Image *image, const Crt0Plan &p, Reader rd32, const char *who) {
   if (!image || !image->crt0Entry) {
     lucent::warn("crt0",
                  "{}: NOT AUDITED — psx::game::Crt0Image::crt0Entry is 0, so there is no guest crt0 to compare "
@@ -309,7 +315,7 @@ static inline bool crt0_audit(const psx::game::Crt0Image *image, const Crt0Plan 
                  who);
     return true;
   }
-  const Crt0Observed o = crt0_scan(image->crt0Entry, rd32);
+  const Crt0Observed o = scanCrt0(image->crt0Entry, rd32);
 
   // WHICH SIDE EACH ROW COMPARES AGAINST, and why it matters. Where the plan CARRIES the value it is
   // about to apply (bssLo/bssHi/gp/libcInit/the bias), the row is diffed against THE PLAN — so the audit
@@ -317,7 +323,7 @@ static inline bool crt0_audit(const psx::game::Crt0Image *image, const Crt0Plan 
   // distinction is not academic: the pre-fix framework read `cfg->stackBias` nowhere and hardcoded -8, a
   // fault that an image-only audit would have declared clean. The three addresses the plan only reads
   // THROUGH (stackTopWordAddress/stackReserveWordAddress/heapBase) are compared against the image,
-  // because a wrong one there shows up as a wrong loaded word, which crt0_plan's own plausibility
+  // because a wrong one there shows up as a wrong loaded word, which psx::game::planCrt0's own plausibility
   // check catches.
   Crt0AuditRow rows[] = {
       {"bssZeroLo", o.haveBssLo, o.bssLo, p.bssLo, o.bssLo == p.bssLo},
@@ -468,3 +474,5 @@ static inline bool crt0_audit(const psx::game::Crt0Image *image, const Crt0Plan 
   }
   return true;
 }
+
+} // namespace psx::game

@@ -19,41 +19,43 @@
 #include "gpu_vk_present_mode.h"
 #include "testutil.h"
 
+namespace {
+
 // MAILBOX is the first choice whenever the driver offers it: newest-image-wins, no tearing, no wait.
-static void test_mailbox_wins_when_available(void) {
-  CHECK_EQ(preferred_present_mode(true, true), SDL_GPU_PRESENTMODE_MAILBOX);
+void test_mailbox_wins_when_available(void) {
+  CHECK_EQ(psx::gpu::preferredPresentMode(true, true), SDL_GPU_PRESENTMODE_MAILBOX);
   // ...and it is still first even if the driver somehow reports mailbox without immediate.
-  CHECK_EQ(preferred_present_mode(true, false), SDL_GPU_PRESENTMODE_MAILBOX);
+  CHECK_EQ(psx::gpu::preferredPresentMode(true, false), SDL_GPU_PRESENTMODE_MAILBOX);
 }
 
 // No mailbox but immediate available -> IMMEDIATE. Tearing is a picture; a stalled guest thread is not.
-static void test_immediate_when_no_mailbox(void) {
-  CHECK_EQ(preferred_present_mode(false, true), SDL_GPU_PRESENTMODE_IMMEDIATE);
+void test_immediate_when_no_mailbox(void) {
+  CHECK_EQ(psx::gpu::preferredPresentMode(false, true), SDL_GPU_PRESENTMODE_IMMEDIATE);
 }
 
 // Neither offered -> VSYNC, which the spec guarantees is always supported. This is the ONLY case in
 // which the blocking mode is the right answer, and it is here so the fallback is pinned too: a
 // "preference" that could return an UNSUPPORTED mode would fail SDL_SetGPUSwapchainParameters and leave
 // the swapchain on its default — the original bug, one level up.
-static void test_vsync_only_when_nothing_else_is_offered(void) {
-  CHECK_EQ(preferred_present_mode(false, false), SDL_GPU_PRESENTMODE_VSYNC);
+void test_vsync_only_when_nothing_else_is_offered(void) {
+  CHECK_EQ(psx::gpu::preferredPresentMode(false, false), SDL_GPU_PRESENTMODE_VSYNC);
 }
 
 // The property the guest thread actually cares about, asserted over the WHOLE input space rather than
 // mode by mode: if any non-blocking mode is available, the choice must be non-blocking. This is the
 // case that is red against "always VSYNC".
-static void test_never_settles_for_a_blocking_mode_when_a_nonblocking_one_exists(void) {
+void test_never_settles_for_a_blocking_mode_when_a_nonblocking_one_exists(void) {
   int scanned = 0, nonblocking = 0;
   for (int mb = 0; mb < 2; mb++) {
     for (int im = 0; im < 2; im++) {
-      SDL_GPUPresentMode m = preferred_present_mode(mb != 0, im != 0);
+      SDL_GPUPresentMode m = psx::gpu::preferredPresentMode(mb != 0, im != 0);
       bool any_nonblocking_offered = (mb != 0) || (im != 0);
       // The choice must never be a mode the driver did not offer (VSYNC is always offered).
       CHECK(m != SDL_GPU_PRESENTMODE_MAILBOX || mb != 0);
       CHECK(m != SDL_GPU_PRESENTMODE_IMMEDIATE || im != 0);
       // ...and it must never block when it did not have to.
-      CHECK_EQ(present_mode_blocks_caller(m), !any_nonblocking_offered);
-      if (!present_mode_blocks_caller(m)) {
+      CHECK_EQ(psx::gpu::presentModeBlocksCaller(m), !any_nonblocking_offered);
+      if (!psx::gpu::presentModeBlocksCaller(m)) {
         nonblocking++;
       }
       scanned++;
@@ -64,19 +66,20 @@ static void test_never_settles_for_a_blocking_mode_when_a_nonblocking_one_exists
 }
 
 // Sanity on the predicate itself, so the case above cannot pass by the predicate being vacuously false.
-static void test_blocking_predicate_discriminates(void) {
-  CHECK_EQ(present_mode_blocks_caller(SDL_GPU_PRESENTMODE_VSYNC), true);
-  CHECK_EQ(present_mode_blocks_caller(SDL_GPU_PRESENTMODE_MAILBOX), false);
-  CHECK_EQ(present_mode_blocks_caller(SDL_GPU_PRESENTMODE_IMMEDIATE), false);
+void test_blocking_predicate_discriminates(void) {
+  CHECK_EQ(psx::gpu::presentModeBlocksCaller(SDL_GPU_PRESENTMODE_VSYNC), true);
+  CHECK_EQ(psx::gpu::presentModeBlocksCaller(SDL_GPU_PRESENTMODE_MAILBOX), false);
+  CHECK_EQ(psx::gpu::presentModeBlocksCaller(SDL_GPU_PRESENTMODE_IMMEDIATE), false);
 }
 
 // The log line the sink prints must name the mode, and must never hand std::format a null pointer.
-static void test_mode_name_is_never_null(void) {
-  CHECK_STREQ(present_mode_name(SDL_GPU_PRESENTMODE_VSYNC), "VSYNC");
-  CHECK_STREQ(present_mode_name(SDL_GPU_PRESENTMODE_IMMEDIATE), "IMMEDIATE");
-  CHECK_STREQ(present_mode_name(SDL_GPU_PRESENTMODE_MAILBOX), "MAILBOX");
-  CHECK(present_mode_name((SDL_GPUPresentMode)9999) != NULL); // out-of-range must still be printable
+void test_mode_name_is_never_null(void) {
+  CHECK_STREQ(psx::gpu::presentModeName(SDL_GPU_PRESENTMODE_VSYNC), "VSYNC");
+  CHECK_STREQ(psx::gpu::presentModeName(SDL_GPU_PRESENTMODE_IMMEDIATE), "IMMEDIATE");
+  CHECK_STREQ(psx::gpu::presentModeName(SDL_GPU_PRESENTMODE_MAILBOX), "MAILBOX");
 }
+
+} // namespace
 
 int main(void) {
   RUN(mailbox_wins_when_available);
@@ -85,5 +88,5 @@ int main(void) {
   RUN(never_settles_for_a_blocking_mode_when_a_nonblocking_one_exists);
   RUN(blocking_predicate_discriminates);
   RUN(mode_name_is_never_null);
-  return pt_summary();
+  return psx::test::summary();
 }

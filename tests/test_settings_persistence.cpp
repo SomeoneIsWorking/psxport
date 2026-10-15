@@ -33,7 +33,6 @@
 #include "config.h"
 #include "config_vars.h"
 #include "mods.h"
-#include "render_capabilities.h"
 #include "testutil.h"
 
 #include <filesystem>
@@ -74,7 +73,7 @@ struct Fixture {
 };
 
 void setPath(const fs::path &path) {
-  psx::config::cv_settings_path.set_text(psx::config::Layer::Override, path.string());
+  psx::config::find("PSXPORT_SETTINGS")->set_text(psx::config::Layer::Override, path.string());
 }
 
 bool existsNonEmpty(const fs::path &path) {
@@ -91,7 +90,7 @@ void test_a_save_into_a_checkout_writes_nothing() {
   Fixture fixture("refuse");
   setPath(fixture.checkout_file);
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
+  mods.init(true, std::nullopt);
   mods.save();
   std::error_code ignored;
   CHECK(!fs::exists(fixture.checkout_file, ignored));
@@ -101,7 +100,7 @@ void test_a_save_outside_a_checkout_still_writes() {
   Fixture fixture("allow");
   setPath(fixture.plain_file);
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
+  mods.init(true, std::nullopt);
   mods.save();
   CHECK(existsNonEmpty(fixture.plain_file));
 }
@@ -110,7 +109,7 @@ void test_the_written_file_carries_the_knobs() {
   Fixture fixture("content");
   setPath(fixture.plain_file);
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
+  mods.init(true, std::nullopt);
   mods.aspect = 1;
   mods.save();
   std::ifstream in(fixture.plain_file);
@@ -125,7 +124,7 @@ void test_a_deeper_path_inside_a_checkout_is_still_refused() {
   Fixture fixture("deep");
   setPath(fixture.checkout_file);
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
+  mods.init(true, std::nullopt);
   mods.save();
   std::error_code ignored;
   CHECK(!fs::exists(fixture.checkout_file, ignored));
@@ -145,7 +144,7 @@ void test_a_launch_fps60_is_live_but_never_saved() {
     out << "fps60=0\n";
   }
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH, true);
+  mods.init(true, true);
   CHECK_EQ(mods.fps60, 1);
   mods.save();
   CHECK(readAll(fixture.plain_file).find("fps60=0") != std::string::npos);
@@ -160,7 +159,7 @@ void test_the_saved_fps60_is_live_and_an_overlay_change_saves() {
     out << "fps60=1\n";
   }
   Mods mods;
-  mods.init(true, FACE_ORDER_DEPTH, std::nullopt);
+  mods.init(true, std::nullopt);
   CHECK_EQ(mods.fps60, 1);
   mods.fps60 = 0;
   mods.save();
@@ -176,5 +175,5 @@ int main() {
   RUN(a_deeper_path_inside_a_checkout_is_still_refused);
   RUN(a_launch_fps60_is_live_but_never_saved);
   RUN(the_saved_fps60_is_live_and_an_overlay_change_saves);
-  return pt_summary();
+  return psx::test::summary();
 }

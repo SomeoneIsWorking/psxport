@@ -46,12 +46,17 @@ DrawPrimitive triangle(int x, std::optional<RecordKey> key, std::uint32_t bucket
 }
 
 // Buckets 2, 1, 0 in walk order (a reverse-cleared table): A in 2, the object in 1, B in 0.
-FrameRecord recordWithObject(std::uint64_t sequence, int objectX, std::uint32_t serial) {
+struct Object {
+  int x = 0;
+  std::uint32_t serial = 0;
+};
+
+FrameRecord recordWithObject(std::uint64_t sequence, Object object) {
   FrameRecord record(sequence, true);
   record.beginSlot({0, 2}, true);
   record.append(triangle(100, std::nullopt, 2));
   record.beginSlot({0, 1}, true);
-  record.append(triangle(objectX, RecordKey{kProducer, kObject, 0, 0, serial}, 1));
+  record.append(triangle(object.x, RecordKey{kProducer, kObject, 0, 0, object.serial}, 1));
   record.beginSlot({0, 0}, true);
   record.append(triangle(200, std::nullopt, 0));
   return record;
@@ -67,19 +72,17 @@ const DrawPrimitive &primitiveAt(const FrameRecord &record, std::size_t index) {
   return std::get<DrawPrimitive>(record.entries()[index]);
 }
 
-} // namespace
-
-static void test_a_record_with_no_produced_object_is_the_frame(void) {
+void test_a_record_with_no_produced_object_is_the_frame(void) {
   const auto renders = producers();
   FrameRecord record(1, true);
   record.append(triangle(10, std::nullopt, 0));
   CHECK(!psx::present::composeFrame(record, nullptr, FrameState(), 0.5f, renders).has_value());
 }
 
-static void test_the_render_at_t_replaces_the_object_in_its_slot(void) {
+void test_the_render_at_t_replaces_the_object_in_its_slot(void) {
   const auto renders = producers();
-  const FrameRecord before = recordWithObject(1, 20, 7);
-  const FrameRecord shown = recordWithObject(2, 40, 9);
+  const FrameRecord before = recordWithObject(1, {20, 7});
+  const FrameRecord shown = recordWithObject(2, {40, 9});
   const FrameState from = stateFor(before, 7, {20.0f, 1, 0});
   const FrameState to = stateFor(shown, 9, {40.0f, 1, 0});
   const auto composed = psx::present::composeFrame(shown, &from, to, 0.5f, renders);
@@ -91,9 +94,9 @@ static void test_the_render_at_t_replaces_the_object_in_its_slot(void) {
   CHECK_EQ(primitiveAt(*composed, 2).vertices[0].x, 200 + kOffsetX);
 }
 
-static void test_at_t_one_the_render_draws_the_recorded_frame(void) {
+void test_at_t_one_the_render_draws_the_recorded_frame(void) {
   const auto renders = producers();
-  const FrameRecord shown = recordWithObject(2, 40, 9);
+  const FrameRecord shown = recordWithObject(2, {40, 9});
   const FrameState to = stateFor(shown, 9, {40.0f, 1, 0});
   const auto composed = psx::present::composeFrame(shown, nullptr, to, 1.0f, renders);
   CHECK(composed.has_value());
@@ -107,9 +110,9 @@ static void test_at_t_one_the_render_draws_the_recorded_frame(void) {
   }
 }
 
-static void test_a_cut_or_a_birth_renders_the_shown_state(void) {
+void test_a_cut_or_a_birth_renders_the_shown_state(void) {
   const auto renders = producers();
-  const FrameRecord shown = recordWithObject(2, 40, 9);
+  const FrameRecord shown = recordWithObject(2, {40, 9});
   const FrameState to = stateFor(shown, 9, {40.0f, 1, 0});
   const auto cut = psx::present::composeFrame(shown, nullptr, to, 0.5f, renders);
   CHECK(cut && primitiveAt(*cut, 1).vertices[0].x == 40 + kOffsetX);
@@ -119,9 +122,9 @@ static void test_a_cut_or_a_birth_renders_the_shown_state(void) {
   CHECK(born && primitiveAt(*born, 1).vertices[0].x == 40 + kOffsetX);
 }
 
-static void test_a_render_into_another_slot_goes_to_that_slots_head(void) {
+void test_a_render_into_another_slot_goes_to_that_slots_head(void) {
   const auto renders = producers();
-  const FrameRecord shown = recordWithObject(2, 40, 9);
+  const FrameRecord shown = recordWithObject(2, {40, 9});
   const FrameState to = stateFor(shown, 9, {40.0f, 0, 0});
   const auto composed = psx::present::composeFrame(shown, nullptr, to, 1.0f, renders);
   CHECK(composed.has_value());
@@ -133,9 +136,9 @@ static void test_a_render_into_another_slot_goes_to_that_slots_head(void) {
 }
 
 // The guest changed draw mode before bucket 0, so a primitive placed there draws under that mode.
-static void test_a_placed_primitive_takes_the_environment_where_it_lands(void) {
+void test_a_placed_primitive_takes_the_environment_where_it_lands(void) {
   const auto renders = producers();
-  FrameRecord shown = recordWithObject(2, 40, 9);
+  FrameRecord shown = recordWithObject(2, {40, 9});
   auto &after = std::get<DrawPrimitive>(shown.entries()[2]);
   after.state.dither = true;
   after.state.clipX1 = 255;
@@ -148,16 +151,16 @@ static void test_a_placed_primitive_takes_the_environment_where_it_lands(void) {
 
 // Walked high to low: bucket 5 comes before bucket 2, and an empty bucket between 1 and 0 does not exist,
 // so one past the last walked bucket goes after the table's last entry.
-static void test_an_empty_slot_goes_where_the_walk_order_puts_it(void) {
+void test_an_empty_slot_goes_where_the_walk_order_puts_it(void) {
   const auto renders = producers();
-  const FrameRecord shown = recordWithObject(2, 40, 9);
+  const FrameRecord shown = recordWithObject(2, {40, 9});
   const auto first = psx::present::composeFrame(shown, nullptr, stateFor(shown, 9, {60.0f, 5, 0}), 1.0f, renders);
   CHECK(first.has_value());
   CHECK(first && primitiveAt(*first, 0).slot == (OtSlot{0, 5}));
   CHECK(first && primitiveAt(*first, 1).vertices[0].x == 100 + kOffsetX);
 }
 
-static void test_a_table_the_record_never_walked_keeps_the_objects_entries(void) {
+void test_a_table_the_record_never_walked_keeps_the_objects_entries(void) {
   const auto renders = producers();
   FrameRecord shown(2, true);
   shown.append(triangle(40, RecordKey{kProducer, kObject, 0, 0, 9}, 1));
@@ -165,9 +168,9 @@ static void test_a_table_the_record_never_walked_keeps_the_objects_entries(void)
   CHECK(!psx::present::composeFrame(shown, nullptr, to, 1.0f, renders).has_value());
 }
 
-static void test_a_clut_resolves_to_one_the_record_sampled(void) {
+void test_a_clut_resolves_to_one_the_record_sampled(void) {
   const auto renders = producers();
-  FrameRecord shown = recordWithObject(2, 40, 9);
+  FrameRecord shown = recordWithObject(2, {40, 9});
   DrawPrimitive textured = triangle(150, std::nullopt, 0);
   textured.textured = true;
   textured.clutWord = 0x1234;
@@ -181,7 +184,7 @@ static void test_a_clut_resolves_to_one_the_record_sampled(void) {
   CHECK(!psx::present::composeFrame(shown, nullptr, unsampled, 1.0f, renders).has_value());
 }
 
-static void test_states_follow_the_scope_that_wrote_the_packets(void) {
+void test_states_follow_the_scope_that_wrote_the_packets(void) {
   psx::present::EmissionScope scope;
   FrameStates states;
   RecordKey owner;
@@ -196,7 +199,7 @@ static void test_states_follow_the_scope_that_wrote_the_packets(void) {
   }
   // Built in one logic frame, walked in the next.
   states.endFrame();
-  const FrameRecord walked = recordWithObject(2, 40, owner.serial);
+  const FrameRecord walked = recordWithObject(2, {40, owner.serial});
   CHECK(states.collect(walked).find({kProducer, kObject}).has_value());
   for (std::uint32_t i = 0; i < FrameStates::kRetainedFrames; i++) {
     states.endFrame();
@@ -204,9 +207,9 @@ static void test_states_follow_the_scope_that_wrote_the_packets(void) {
   CHECK(!states.collect(walked).find({kProducer, kObject}).has_value());
 }
 
-static void test_an_object_drawn_from_two_scopes_is_ambiguous(void) {
+void test_an_object_drawn_from_two_scopes_is_ambiguous(void) {
   const auto renders = producers();
-  FrameRecord shown = recordWithObject(2, 40, 9);
+  FrameRecord shown = recordWithObject(2, {40, 9});
   shown.append(triangle(60, RecordKey{kProducer, kObject, 0, 0, 10}, 0));
   FrameStates states;
   states.save(RecordKey{kProducer, kObject, 0, 0, 9}, Marker{40.0f, 1, 0});
@@ -229,7 +232,7 @@ public:
   }
 };
 
-static void test_the_nth_primitive_in_a_slot_takes_the_nth_entrys_environment(void) {
+void test_the_nth_primitive_in_a_slot_takes_the_nth_entrys_environment(void) {
   psx::present::StateProducerTable renders;
   renders.install(kProducer, std::make_unique<PairRender>());
   FrameRecord shown(2, true);
@@ -250,9 +253,9 @@ static void test_the_nth_primitive_in_a_slot_takes_the_nth_entrys_environment(vo
 
 // A face that drew over its own texture became an upload of its pixels; the object's render would draw
 // it again over them, so the object stays as the guest drew it.
-static void test_an_object_with_a_baked_upload_keeps_its_entries(void) {
+void test_an_object_with_a_baked_upload_keeps_its_entries(void) {
   const auto renders = producers();
-  FrameRecord shown = recordWithObject(2, 40, 9);
+  FrameRecord shown = recordWithObject(2, {40, 9});
   psx::present::VramUpload baked;
   baked.width = 1;
   baked.height = 1;
@@ -261,6 +264,8 @@ static void test_an_object_with_a_baked_upload_keeps_its_entries(void) {
   const FrameState to = stateFor(shown, 9, {60.0f, 3, 0});
   CHECK(!psx::present::composeFrame(shown, nullptr, to, 1.0f, renders).has_value());
 }
+
+} // namespace
 
 int main() {
   RUN(a_record_with_no_produced_object_is_the_frame);
@@ -276,5 +281,5 @@ int main() {
   RUN(an_object_drawn_from_two_scopes_is_ambiguous);
   RUN(the_nth_primitive_in_a_slot_takes_the_nth_entrys_environment);
   RUN(an_object_with_a_baked_upload_keeps_its_entries);
-  return pt_summary();
+  return psx::test::summary();
 }

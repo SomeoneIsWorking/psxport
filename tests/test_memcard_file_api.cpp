@@ -35,25 +35,26 @@
 // EvMdINTR callback Crash Bash waits on.
 #include "../runtime/cpu/image_identity.h"
 #include "../runtime/cpu/native_dispatch.h"
+#include "bios_call.h"
 #include "game.h"
 #include "memcard.h"
+#include "r3000.h"
 #include "stub_game_runtime.h"
 #include "testutil.h"
+#include <memory>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { R_V0 = 2, R_A0 = 4, R_A1 = 5, R_A2 = 6, R_A3 = 7 };
+namespace {
 
 // libmcrd's two event classes and the four specs the guest opens on each (Spyro 0x80067EA0).
-static constexpr uint32_t kSwCard = 0xF4000001u;
-static constexpr uint32_t kHwCard = 0xF0000011u;
-static constexpr uint32_t kSpecIoEnd = 0x0004u; // EvSpIOE   — the transfer finished
-static constexpr uint32_t kSpecError = 0x8000u; // EvSpERROR — the transfer failed
+constexpr uint32_t kSwCard = 0xF4000001u;
+constexpr uint32_t kHwCard = 0xF0000011u;
+constexpr uint32_t kSpecIoEnd = 0x0004u; // EvSpIOE   — the transfer finished
+constexpr uint32_t kSpecError = 0x8000u; // EvSpERROR — the transfer failed
 
-static const char *kCardPath = "test_memcard_file_api.mcr";
-
-namespace {
+const char *kCardPath = "test_memcard_file_api.mcr";
 
 // No env, no .env: the card path is the title's declared default.
 class CardRuntime final : public psx::test::StubGameRuntime {
@@ -66,61 +67,51 @@ private:
   psx::game::HostIdentity identity_{.cardDefaultPath = kCardPath};
 };
 
-CardRuntime cardRuntime;
-
-} // namespace
+std::unique_ptr<CardRuntime> cardRuntime;
 
 // A guest RAM window well clear of anything the framework touches, used as the transfer buffer.
-static constexpr uint32_t kBuf = 0x80100000u;
-static constexpr uint32_t kDirectoryCallback = 0x80001000u;
+constexpr uint32_t kBuf = 0x80100000u;
+constexpr uint32_t kDirectoryCallback = 0x80001000u;
 
-static uint32_t g_directory_callbacks = 0;
+uint32_t g_directory_callbacks = 0;
 
-static void directory_callback(Core *) {
+void directory_callback(Core *) {
   g_directory_callbacks++;
 }
 
-static Game *gam() {
-  static Game *g = nullptr;
+Game *cardGame = nullptr;
+
+Game *gam() {
+  Game *&g = cardGame;
   if (g) {
     return g;
   }
   remove(kCardPath); // a fresh, unformatted image every run: init() formats it
-  g = new Game(cardRuntime, {});
-  // card_overrides_init, not memcard.init(): the card is a BIOS DEVICE as well as a backing file,
+  g = new Game(*cardRuntime, {});
+  // memcard.install(), not memcard.init(): the card is a BIOS DEVICE as well as a backing file,
   // and publishing it in the kernel device table is part of bringing it up. Calling init() alone
   // tests a card the running game never has.
-  card_overrides_init(g);
+  g->memcard.install();
   return g;
 }
 
 // EVERY call below goes through `Hle::dispatchBios`, the SAME entry the guest's B0 stub reaches —
-// never `card_hle_b0` directly. That is not a stylistic choice: dispatchBios has its own switch that
+// never `Memcard::dispatchBiosB0` directly. That is not a stylistic choice: dispatchBios has its own switch that
 // claims some B0 numbers before the card module ever sees them, and calling the card module directly
 // tests a function the running game does not reach. This test was written the wrong way round first
 // and was GREEN against a build in which every card WRITE was silently discarded by an earlier
 // `case 0x35` in that switch — the bug it exists to catch.
-static uint32_t bios_b0(Game *g, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
-  Core *c = &g->core;
-  c->r[R_A0] = a0;
-  c->r[R_A1] = a1;
-  c->r[R_A2] = a2;
-  c->r[R_V0] = 0xDEADBEEFu; // so "the handler never wrote v0" cannot read as a plausible answer
-  const bool handled = g->hle.dispatchBios('B', fn);
-  return handled ? c->r[R_V0] : 0xDEADBEEFu;
-}
-
 // Open + enable one BIOS event through the ordinary BIOS entry points, exactly as the guest does.
 // EvMdNOINTR (0x2000): the slot is MARKED on delivery and no handler runs, so a test needs no guest
 // code. Returns the handle.
-static uint32_t open_event(Game *g, uint32_t cls, uint32_t spec) {
-  g->core.r[R_A3] = 0; // no handler: EvMdNOINTR marks the slot and runs nothing
-  const uint32_t h = bios_b0(g, 0x08, cls, spec, 0x2000u);
-  bios_b0(g, 0x0C, h, 0, 0); // EnableEvent — deliverEvent ignores a disabled slot
+uint32_t open_event(Game *g, uint32_t cls, uint32_t spec) {
+  g->core.r[psx::cpu::kA3] = 0; // no handler: EvMdNOINTR marks the slot and runs nothing
+  const uint32_t h = psx::test::biosResult(*g, {'B', 0x08, {cls, spec, 0x2000u}});
+  psx::test::biosResult(*g, {'B', 0x0C, {h, 0, 0}}); // EnableEvent — deliverEvent ignores a disabled slot
   return h;
 }
 
-static void install_directory_callback(Game *g) {
+void install_directory_callback(Game *g) {
   const auto image = g->core.imageCatalog().activate(
       "test-main", {kDirectoryCallback & 0x1FFFFFFFu, (kDirectoryCallback & 0x1FFFFFFFu) + 4u}, 1u);
   CHECK(g->core.nativeDispatcher().install(
@@ -130,24 +121,25 @@ static void install_directory_callback(Game *g) {
 // EvMdINTR (0x1000): delivery dispatches the registered guest handler immediately. The synthetic
 // address is installed through the same override interception point used by a real port, so this
 // exercises Hle::deliverEvent's shipping callback path without linking a title runtime.
-static uint32_t open_callback_event(Game *g, uint32_t cls, uint32_t spec) {
-  static bool installed = false;
-  if (!installed) {
+bool directoryCallbackInstalled = false;
+
+uint32_t open_callback_event(Game *g, uint32_t cls, uint32_t spec) {
+  if (!directoryCallbackInstalled) {
     install_directory_callback(g);
-    installed = true;
+    directoryCallbackInstalled = true;
   }
-  g->core.r[R_A3] = kDirectoryCallback;
-  const uint32_t h = bios_b0(g, 0x08, cls, spec, 0x1000u);
-  bios_b0(g, 0x0C, h, 0, 0);
+  g->core.r[psx::cpu::kA3] = kDirectoryCallback;
+  const uint32_t h = psx::test::biosResult(*g, {'B', 0x08, {cls, spec, 0x1000u}});
+  psx::test::biosResult(*g, {'B', 0x0C, {h, 0, 0}});
   return h;
 }
 
 // TestEvent: 1 if the event has fired since it was last tested, and CLEARS it (BIOS semantics).
-static bool test_event(Game *g, uint32_t handle) {
-  return bios_b0(g, 0x0B, handle, 0, 0) != 0;
+bool test_event(Game *g, uint32_t handle) {
+  return psx::test::biosResult(*g, {'B', 0x0B, {handle, 0, 0}}) != 0;
 }
 
-static uint32_t card_open_create(Game *g, const char *name, uint32_t blocks) {
+uint32_t card_open_create(Game *g, const char *name, uint32_t blocks) {
   Core *c = &g->core;
   uint32_t va = kBuf + 0x800u; // scratch for the name string
   for (uint32_t i = 0;; i++) {
@@ -156,25 +148,25 @@ static uint32_t card_open_create(Game *g, const char *name, uint32_t blocks) {
       break;
     }
   }
-  return bios_b0(g, 0x32, va, (blocks << 16) | 0x0200u, 0); // 0x0200 = create
+  return psx::test::biosResult(*g, {'B', 0x32, {va, (blocks << 16) | 0x0200u, 0}}); // 0x0200 = create
 }
 
-static uint32_t card_lseek(Game *g, uint32_t fd, uint32_t off) {
-  return bios_b0(g, 0x33, fd, off, 0); // whence 0 = SEEK_SET
+uint32_t card_lseek(Game *g, uint32_t fd, uint32_t off) {
+  return psx::test::biosResult(*g, {'B', 0x33, {fd, off, 0}}); // whence 0 = SEEK_SET
 }
 
-static uint32_t card_write(Game *g, uint32_t fd, uint32_t buf, uint32_t len) {
-  return bios_b0(g, 0x35, fd, buf, len);
+uint32_t card_write(Game *g, uint32_t fd, uint32_t buf, uint32_t len) {
+  return psx::test::biosResult(*g, {'B', 0x35, {fd, buf, len}});
 }
 
-static uint32_t card_read(Game *g, uint32_t fd, uint32_t buf, uint32_t len) {
-  return bios_b0(g, 0x34, fd, buf, len);
+uint32_t card_read(Game *g, uint32_t fd, uint32_t buf, uint32_t len) {
+  return psx::test::biosResult(*g, {'B', 0x34, {fd, buf, len}});
 }
 
 // ---------------------------------------------------------------------------------------------
 // THE HEADLINE CASE. libmcrd loops `while (v0 != 0)`, so anything but 0 is an infinite loop in the
 // guest. Both directions, because both state machines carry the same loop.
-static void test_transfer_start_returns_zero(void) {
+void test_transfer_start_returns_zero(void) {
   Game *g = gam();
   const uint32_t fd = card_open_create(g, "bu00:PSXPORT-TEST", 1);
   CHECK(fd != 0xFFFFFFFFu);
@@ -189,7 +181,7 @@ static void test_transfer_start_returns_zero(void) {
 }
 
 // …and 0 must not be reachable by doing nothing. The bytes have to be there.
-static void test_transfer_actually_moves_the_bytes(void) {
+void test_transfer_actually_moves_the_bytes(void) {
   Game *g = gam();
   const uint32_t fd = card_open_create(g, "bu00:PSXPORT-TEST", 1);
   CHECK(fd != 0xFFFFFFFFu);
@@ -217,7 +209,7 @@ static void test_transfer_actually_moves_the_bytes(void) {
 
 // The completion the guest's NEXT state waits on. Delivering the wrong spec here is not a cosmetic
 // difference: 0x0004 means "done", 0x8000 means "failed, retry" — the guest branches on which.
-static void test_success_delivers_io_end_and_not_error(void) {
+void test_success_delivers_io_end_and_not_error(void) {
   Game *g = gam();
   const uint32_t sw_io = open_event(g, kSwCard, kSpecIoEnd);
   const uint32_t sw_err = open_event(g, kSwCard, kSpecError);
@@ -240,7 +232,7 @@ static void test_success_delivers_io_end_and_not_error(void) {
 // reads it — the ERROR spec instead of I/O-end. Induced by seeking past the end of the card, so
 // every frame index the transfer computes is out of range; today those frames are silently skipped
 // and the call announces I/O-END anyway, which is a save the game believes succeeded.
-static void test_unperformable_transfer_fails_visibly(void) {
+void test_unperformable_transfer_fails_visibly(void) {
   Game *g = gam();
   const uint32_t sw_io = open_event(g, kSwCard, kSpecIoEnd);
   const uint32_t sw_err = open_event(g, kSwCard, kSpecError);
@@ -258,7 +250,7 @@ static void test_unperformable_transfer_fails_visibly(void) {
 // The boundary that must NOT move: a bad file descriptor is a BIOS ARGUMENT error, synchronous and
 // -1, and it announces nothing. libmcrd never reaches read() with one (it aborts the op when open
 // fails), so this is the case where the async contract does not apply.
-static void test_invalid_fd_is_a_synchronous_error(void) {
+void test_invalid_fd_is_a_synchronous_error(void) {
   Game *g = gam();
   const uint32_t sw_io = open_event(g, kSwCard, kSpecIoEnd);
   const uint32_t sw_err = open_event(g, kSwCard, kSpecError);
@@ -275,7 +267,7 @@ static void test_invalid_fd_is_a_synchronous_error(void) {
 // byte count, and no card event. This is the half of B0:0x35 that dispatchBios is right to own, and
 // it is here so that "delegate card fds to the card" cannot be implemented by deleting the console
 // path.
-static void test_console_fds_keep_the_byte_count(void) {
+void test_console_fds_keep_the_byte_count(void) {
   Game *g = gam();
   const uint32_t sw_io = open_event(g, kSwCard, kSpecIoEnd);
   test_event(g, sw_io);
@@ -292,7 +284,7 @@ static void test_console_fds_keep_the_byte_count(void) {
 // published those words, so the walk read a garbage base and a 1 GB length and dereferenced the
 // first non-zero word it found as a `char*` — the memory model refused the read and the port
 // aborted. That is the whole of the "saving crashes the game" report.
-static void test_device_table_is_published(void) {
+void test_device_table_is_published(void) {
   Game *g = gam();
   Core *c = &g->core;
   const uint32_t base = c->mem_r32(Hle::KERNEL_DCB_ADDR);
@@ -304,9 +296,9 @@ static void test_device_table_is_published(void) {
   // …and the entry it points at really is the card, read the way the guest reads it.
   const uint32_t np = c->mem_r32(base + Hle::DCB_OFF_NAME);
   CHECK(np != 0);
-  CHECK_EQ((char)c->mem_r8(np + 0), 'b');
-  CHECK_EQ((char)c->mem_r8(np + 1), 'u');
-  CHECK_EQ((char)c->mem_r8(np + 2), '\0');
+  CHECK_EQ(c->mem_r8(np + 0), static_cast<uint8_t>('b'));
+  CHECK_EQ(c->mem_r8(np + 1), static_cast<uint8_t>('u'));
+  CHECK_EQ(c->mem_r8(np + 2), static_cast<uint8_t>('\0'));
 
   // The lookup must be able to say NO. A finder that matches everything would "find" the card for
   // any prefix and route a cdrom path into the card file.
@@ -318,7 +310,7 @@ static void test_device_table_is_published(void) {
 
 // firstfile on a card with nothing on it. Runs FIRST, before any test creates a file, so the "0"
 // below is a measured empty directory rather than an unarmed scan.
-static void test_firstfile_on_an_empty_card_finds_nothing(void) {
+void test_firstfile_on_an_empty_card_finds_nothing(void) {
   Game *g = gam();
   const uint32_t hw_io = open_callback_event(g, kHwCard, kSpecIoEnd);
   CHECK(hw_io != 0xFFFFFFFFu);
@@ -328,19 +320,19 @@ static void test_firstfile_on_an_empty_card_finds_nothing(void) {
   }
   g->core.mem_w8(va + 6, 0);
   g_directory_callbacks = 0;
-  CHECK_EQ(bios_b0(g, 0x42, va, kBuf + 0xB00u, 0), 0u);
+  CHECK_EQ(psx::test::biosResult(*g, {'B', 0x42, {va, kBuf + 0xB00u, 0}}), 0u);
   CHECK_EQ(g_directory_callbacks, 1u); // completed empty scan, exactly once
 
   g_directory_callbacks = 0;
-  CHECK_EQ(bios_b0(g, 0x43, kBuf + 0xB00u, 0, 0), 0u); // nextfile agrees
-  CHECK_EQ(g_directory_callbacks, 1u);                 // completed end-of-scan, exactly once
+  CHECK_EQ(psx::test::biosResult(*g, {'B', 0x43, {kBuf + 0xB00u, 0, 0}}), 0u); // nextfile agrees
+  CHECK_EQ(g_directory_callbacks, 1u);                                         // completed end-of-scan, exactly once
 }
 
 // …and the same call on a card that HAS files returns them, in the DIRENTRY layout the guest reads
 // (name at +0). Without this, the empty-card case above proves nothing: a firstfile hard-wired to 0
 // passes it. 0x42 is firstfile and 0x43 is nextfile — they were wired the other way round, so
 // firstfile was not handled at all and the BIOS-miss path left the guest a stale $v0.
-static void test_firstfile_enumerates_the_directory(void) {
+void test_firstfile_enumerates_the_directory(void) {
   Game *g = gam();
   CHECK(card_open_create(g, "bu00:PSXPORT-ONE", 1) != 0xFFFFFFFFu);
   CHECK(card_open_create(g, "bu00:PSXPORT-TWO", 1) != 0xFFFFFFFFu);
@@ -353,14 +345,14 @@ static void test_firstfile_enumerates_the_directory(void) {
 
   char seen[4][24] = {{0}};
   int n = 0;
-  uint32_t v0 = bios_b0(g, 0x42, path, dirent, 0);
+  uint32_t v0 = psx::test::biosResult(*g, {'B', 0x42, {path, dirent, 0}});
   while (v0 && n < 4) {
     CHECK_EQ(v0, dirent); // firstfile/nextfile return the DIRENTRY
     for (uint32_t i = 0; i < 20; i++) {
       seen[n][i] = (char)g->core.mem_r8(dirent + i);
     }
     n++;
-    v0 = bios_b0(g, 0x43, dirent, 0, 0);
+    v0 = psx::test::biosResult(*g, {'B', 0x43, {dirent, 0, 0}});
   }
   CHECK_EQ(n, 2); // both files, and the walk terminated
   const bool one = !strcmp(seen[0], "PSXPORT-ONE") || !strcmp(seen[1], "PSXPORT-ONE");
@@ -376,14 +368,14 @@ static void test_firstfile_enumerates_the_directory(void) {
     g->core.mem_w8(path + i, (uint8_t)"bu00:NOSUCH-*"[i]);
   }
   g->core.mem_w8(path + 13, 0);
-  CHECK_EQ(bios_b0(g, 0x42, path, dirent, 0), 0u);
+  CHECK_EQ(psx::test::biosResult(*g, {'B', 0x42, {path, dirent, 0}}), 0u);
 }
 
 // Guest code installs a restore-trampoline in the DCB's firstfile slot before calling B0:0x42 and
 // expects the BIOS to run it. This port services B0:0x42 itself, so the slot has to come back
 // unhooked — otherwise it keeps a guest address the HLE will never dispatch, and the next call
 // saves THAT aside as the "original".
-static void test_firstfile_restores_the_patched_dcb_slot(void) {
+void test_firstfile_restores_the_patched_dcb_slot(void) {
   Game *g = gam();
   Core *c = &g->core;
   const uint32_t dcb = g->hle.deviceFind("bu");
@@ -396,7 +388,7 @@ static void test_firstfile_restores_the_patched_dcb_slot(void) {
     c->mem_w8(path + i, (uint8_t)"bu00:*"[i]);
   }
   c->mem_w8(path + 6, 0);
-  bios_b0(g, 0x42, path, kBuf + 0xB00u, 0);
+  psx::test::biosResult(*g, {'B', 0x42, {path, kBuf + 0xB00u, 0}});
   CHECK_EQ(c->mem_r32(dcb + Hle::DCB_OFF_FIRSTFILE), 0u);
 }
 
@@ -404,15 +396,15 @@ static void test_firstfile_restores_the_patched_dcb_slot(void) {
 // THE LOW-LEVEL FRAME PRIMITIVES. B0:0x4E is _card_write(chan, sector, src) and B0:0x4F is
 // _card_read(chan, sector, dst); they were swapped, so a guest READING frame 0 into a zeroed buffer
 // executed a WRITE of zeros over the card header (Spyro 3, SCUS_944.67 0x8007E954).
-static constexpr uint32_t kHeaderFrame = 0;
+constexpr uint32_t kHeaderFrame = 0;
 
-static void put_frame(Game *g, uint32_t va, uint8_t fill) {
+void put_frame(Game *g, uint32_t va, uint8_t fill) {
   for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
     g->core.mem_w8(va + i, fill);
   }
 }
 
-static bool frame_holds(Game *g, uint32_t va, uint8_t fill) {
+bool frame_holds(Game *g, uint32_t va, uint8_t fill) {
   for (uint32_t i = 0; i < Memcard::kFrameSize; i++) {
     if (g->core.mem_r8(va + i) != fill) {
       return false;
@@ -421,14 +413,14 @@ static bool frame_holds(Game *g, uint32_t va, uint8_t fill) {
   return true;
 }
 
-static void test_frame_read_is_0x4f_and_never_writes_the_card(void) {
+void test_frame_read_is_0x4f_and_never_writes_the_card(void) {
   Game *g = gam();
   uint8_t before[Memcard::kFrameSize];
   CHECK(g->memcard.readFrame(kHeaderFrame, before));
   CHECK(before[0] == 'M' && before[1] == 'C'); // the formatted header: the thing the swap erased
 
   put_frame(g, kBuf + 0x200u, 0x00); // a zeroed guest buffer, exactly as Spyro 3's is
-  bios_b0(g, 0x4F, 0, kHeaderFrame, kBuf + 0x200u);
+  psx::test::biosResult(*g, {'B', 0x4F, {0, kHeaderFrame, kBuf + 0x200u}});
 
   uint8_t after[Memcard::kFrameSize];
   CHECK(g->memcard.readFrame(kHeaderFrame, after));
@@ -437,11 +429,11 @@ static void test_frame_read_is_0x4f_and_never_writes_the_card(void) {
   CHECK_EQ(g->core.mem_r8(kBuf + 0x201u), (uint8_t)'C');
 }
 
-static void test_frame_write_is_0x4e_and_a_null_source_moves_nothing(void) {
+void test_frame_write_is_0x4e_and_a_null_source_moves_nothing(void) {
   Game *g = gam();
   const uint32_t frame = 62; // a data frame of block 0 nothing else here touches
   put_frame(g, kBuf + 0x300u, 0x5A);
-  bios_b0(g, 0x4E, 0, frame, kBuf + 0x300u);
+  psx::test::biosResult(*g, {'B', 0x4E, {0, frame, kBuf + 0x300u}});
   uint8_t stored[Memcard::kFrameSize];
   CHECK(g->memcard.readFrame(frame, stored));
   CHECK_EQ(stored[0], 0x5Au);
@@ -452,7 +444,7 @@ static void test_frame_write_is_0x4e_and_a_null_source_moves_nothing(void) {
   uint8_t probe_before[Memcard::kFrameSize];
   CHECK(g->memcard.readFrame(0x3F, probe_before));
   g->core.mem_w8(0x0, 0xC3);
-  bios_b0(g, 0x4E, 0, 0x3F, 0);
+  psx::test::biosResult(*g, {'B', 0x4E, {0, 0x3F, 0}});
   uint8_t probe_after[Memcard::kFrameSize];
   CHECK(g->memcard.readFrame(0x3F, probe_after));
   CHECK_EQ(memcmp(probe_before, probe_after, sizeof probe_before), 0);
@@ -460,7 +452,10 @@ static void test_frame_write_is_0x4e_and_a_null_source_moves_nothing(void) {
   CHECK(!frame_holds(g, kBuf + 0x300u, 0x00)); // negative control: the helper can say "no"
 }
 
+} // namespace
+
 int main(void) {
+  cardRuntime = std::make_unique<CardRuntime>();
   RUN(device_table_is_published);
   RUN(firstfile_on_an_empty_card_finds_nothing);
   RUN(firstfile_enumerates_the_directory);
@@ -473,5 +468,5 @@ int main(void) {
   RUN(invalid_fd_is_a_synchronous_error);
   RUN(frame_read_is_0x4f_and_never_writes_the_card);
   RUN(frame_write_is_0x4e_and_a_null_source_moves_nothing);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -1,14 +1,14 @@
 // test_no_game_address_literals.cpp — THE GATE that keeps psxport game-agnostic.
 //
-// WHY THIS EXISTS. psxport is supposed to carry no game code: a game supplies GameConfig +
-// GameHooks (runtime/psx/game/game_iface.h) plus runtime guest execution, and the framework reads the
-// game's layout out of GameConfig. That rule was decaying silently. runtime/psx/debug/ot_attr.cpp held
+// WHY THIS EXISTS. psxport is supposed to carry no game code: a title subclasses GameRuntime
+// (runtime/psx/game/game_runtime.h) and answers the framework through its virtuals. That rule was decaying
+// silently. runtime/psx/debug/ot_attr.cpp held
 // Tomba!2's packet-pool range as two file-scope constants (0x800BFE68/0x800E7E68), so on spyro and
 // spider1 the entire OT attribution table matched nothing and reported no spans — which is
 // indistinguishable from "the guest submitted no packets". Nothing failed; nobody could have known.
 // A rule nobody can check is a rule that decays, so this is a test rather than a paragraph in a doc.
 //
-// WHAT IT DOES. It scans the framework's OWN sources (runtime/, common/) for hex literals in LIVE
+// WHAT IT DOES. It scans the framework's OWN sources (runtime/) for hex literals in LIVE
 // CODE that name a particular game's guest memory, compares the hit set against a recorded BASELINE
 // of today's debt, and fails on anything NEW. The baseline is SHRINK-ONLY (see "THE RATCHET").
 //
@@ -66,31 +66,36 @@
 // reviewer, next to the rule it is breaking, with no way to be mistaken for incidental churn.
 // The total is printed on every run so "going down" is legible progress.
 //
-// FIXING one means: add (or reuse!) a GameConfig field in runtime/psx/game/game_iface.h, have each
-// game fill it in game/core/game_config.cpp (spyro/spider1 leave un-RE'd fields 0 WITH a TODO), and
-// obey the honest-zero rule — a consumer reading 0 must fail fast or announce its blindness once,
-// loudly, naming what it cannot see. runtime/psx/debug/ot_attr.cpp's pool_range() is the worked example.
+// FIXING one means: move the address into the title and have the framework ask through a GameRuntime
+// virtual (runtime/psx/game/game_runtime.h), obeying the honest-zero rule — a title that has not
+// located it answers empty, and the consumer announces its blindness once. GameRuntime::packetPool is
+// the worked example.
 
+#include "source_tree.h"
 #include "testutil.h"
 
-#include <dirent.h>
 #include <sys/stat.h>
 
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
+
+namespace {
 
 /* ---- the classifier -------------------------------------------------------------------------- */
 
 /* Values inside the game window that are PS-EXE conventions rather than one game's data. */
-static const uint32_t kConsoleExceptions[] = {
+const uint32_t kConsoleExceptions[] = {
     0x80010000u, /* standard PS-EXE load base                */
     0x801ffff0u, /* conventional initial stack pointer        */
 };
 
-static bool is_console_exception(uint32_t v) {
+bool is_console_exception(uint32_t v) {
   for (uint32_t e : kConsoleExceptions) {
     if (v == e) {
       return true;
@@ -99,7 +104,7 @@ static bool is_console_exception(uint32_t v) {
   return false;
 }
 
-static bool is_game_addr(uint32_t v) {
+bool is_game_addr(uint32_t v) {
   if (is_console_exception(v)) {
     return false;
   }
@@ -119,7 +124,7 @@ static bool is_game_addr(uint32_t v) {
 
 /* Comments and string/char literals are documentation, not behaviour (see the header comment), so
  * they are blanked out before the number scan. Newlines are preserved so line numbers stay true. */
-static std::string strip_comments_and_strings(const std::string &s) {
+std::string strip_comments_and_strings(const std::string &s) {
   std::string out;
   out.reserve(s.size());
   const size_t n = s.size();
@@ -174,7 +179,7 @@ struct Scan {
   bool corpus_ok = false;
 };
 
-static bool is_source(const std::string &f) {
+bool is_source(const std::string &f) {
   const char *ext[] = {".c", ".cpp", ".h", ".hpp"};
   for (const char *e : ext) {
     const size_t k = strlen(e);
@@ -185,7 +190,7 @@ static bool is_source(const std::string &f) {
   return false;
 }
 
-static void scan_text(const std::string &rel, const std::string &text, Scan &sc) {
+void scan_text(const std::filesystem::path &rel, const std::string &text, Scan &sc) {
   const std::string code = strip_comments_and_strings(text);
   int line = 1;
   for (size_t i = 0; i < code.size(); ++i) {
@@ -214,100 +219,52 @@ static void scan_text(const std::string &rel, const std::string &text, Scan &sc)
     }
     ++sc.numbers;
     if (is_game_addr((uint32_t)v)) {
-      sc.hits.push_back(Hit{rel, line, (uint32_t)v});
+      sc.hits.push_back(Hit{rel.generic_string(), line, (uint32_t)v});
     }
   }
 }
 
-static std::string read_file(const std::string &path, bool *ok) {
-  FILE *f = fopen(path.c_str(), "rb");
-  *ok = false;
-  if (!f) {
-    return "";
-  }
-  std::string s;
-  char buf[65536];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0) {
-    s.append(buf, n);
-  }
-  fclose(f);
-  *ok = true;
-  return s;
+std::string read_file(const std::string &path, bool *ok) {
+  std::ifstream in(path, std::ios::binary);
+  *ok = in.is_open();
+  std::ostringstream text;
+  text << in.rdbuf();
+  return text.str();
 }
 
-static std::string path_join(const std::string &base, const std::string &name) {
-  std::string result = base;
-  result += '/';
-  result += name;
-  return result;
-}
-
-static void walk(const std::string &abs, const std::string &rel, Scan &sc) {
-  DIR *d = opendir(abs.c_str());
-  if (!d) {
-    return;
-  }
-  std::vector<std::string> subdirs;
-  struct dirent *e;
-  while ((e = readdir(d)) != nullptr) {
-    const std::string name = e->d_name;
-    if (name == "." || name == ".." || name == "vendor" || name == "__pycache__") {
+// Every source file under root/dir, skipping vendored and cache trees.
+void walk(const std::filesystem::path &root, const std::filesystem::path &dir, Scan &sc) {
+  namespace fs = std::filesystem;
+  for (auto it = fs::recursive_directory_iterator(root / dir); it != fs::recursive_directory_iterator(); ++it) {
+    const std::string name = it->path().filename().string();
+    if (it->is_directory()) {
+      if (name == "vendor" || name == "__pycache__") {
+        it.disable_recursion_pending();
+      }
       continue;
     }
-    const std::string a = path_join(abs, name), r = rel.empty() ? name : path_join(rel, name);
-    struct stat st;
-    if (stat(a.c_str(), &st) != 0) {
+    if (!it->is_regular_file() || !is_source(name)) {
       continue;
     }
-    if (S_ISDIR(st.st_mode)) {
-      subdirs.push_back(name);
-      continue;
-    }
-    if (!S_ISREG(st.st_mode) || !is_source(name)) {
-      continue;
-    }
+    const fs::path rel = fs::relative(it->path(), root);
     bool ok = false;
-    const std::string text = read_file(a, &ok);
+    const std::string text = read_file(it->path().string(), &ok);
     if (!ok) {
       /* A file we cannot read is a hole in the scan, not a clean result. */
-      fprintf(stderr, "    SCAN ERROR: cannot read %s\n", r.c_str());
+      fprintf(stderr, "    SCAN ERROR: cannot read %s\n", rel.generic_string().c_str());
       continue;
     }
     ++sc.files;
-    scan_text(r, text, sc);
+    scan_text(rel, text, sc);
   }
-  closedir(d);
-  for (const std::string &s : subdirs) {
-    walk(path_join(abs, s), rel.empty() ? s : path_join(rel, s), sc);
-  }
-}
-
-/* <this file>/../.. — the psxport checkout under test, not some other copy. tests/CMakeLists.txt
- * globs absolute paths, so __FILE__ is absolute. */
-static std::string repo_root(void) {
-  std::string f = __FILE__;
-  const size_t a = f.rfind('/');
-  if (a == std::string::npos) {
-    return "";
-  }
-  const size_t b = f.rfind('/', a - 1);
-  if (b == std::string::npos) {
-    return "";
-  }
-  return f.substr(0, b);
 }
 
 /* The scanned corpus. Anything the framework static library compiles lives under these. */
-static const char *kScanDirs[] = {"runtime", "common"};
+const char *kScanDirs[] = {"runtime"};
 
-static Scan scan_framework(void) {
+Scan scan_framework(void) {
   Scan sc;
-  const std::string root = repo_root();
-  if (root.empty()) {
-    fprintf(stderr, "    REFUSING: cannot derive repo root from __FILE__=%s\n", __FILE__);
-    return sc;
-  }
+  const std::string root = psx::test::sourceRoot().string();
   int dirs_found = 0;
   for (const char *d : kScanDirs) {
     struct stat st;
@@ -319,7 +276,7 @@ static Scan scan_framework(void) {
       continue;
     }
     ++dirs_found;
-    walk(a, d, sc);
+    walk(root, d, sc);
   }
   sc.corpus_ok = (dirs_found == (int)(sizeof kScanDirs / sizeof kScanDirs[0])) && sc.files > 0;
   return sc;
@@ -332,7 +289,7 @@ static Scan scan_framework(void) {
  *
  *   sbs.cpp (126)          the side-by-side differential harness: Tomba's OT/packet-pool/task-table/
  *                          scratchpad layout, hardwired region names and watch addresses. Biggest
- *                          single block; needs a GameConfig-driven region table.
+ *                          single block; needs a title-answered region table.
  *   selftest.cpp (38)      built-in selftest asserts written against Tomba's RAM map.
  *   retired CPU hooks      trace/watch hooks pinned to Tomba functions.
  *   repl.cpp (16)          debug REPL default watch/inspect targets.
@@ -340,11 +297,8 @@ static Scan scan_framework(void) {
  *   hle.cpp (8)            HLE entry points identified by Tomba guest address.
  *   dbg_server.cpp (6)     debug-server default watch set.
  *   dualcore.cpp (3)       dual-core compare window (the packet-pool range literal).
- *   gpu_native.cpp (3)     native GPU path reading Tomba globals.
  *   mem.cpp (3)            memory-map special cases for Tomba addresses.
- *   render_queue.cpp (3)   render queue keyed on Tomba globals.
  *   overlay_router.cpp (1) one Tomba scratchpad field.
- *   render_node.h (1)      one Tomba scratchpad field.
  *
  * When fixing: the address belongs in the title, reached through a GameRuntime virtual. */
 struct BaselineRow {
@@ -353,17 +307,13 @@ struct BaselineRow {
   int count;
 };
 
-static const BaselineRow kBaseline[] = {
+const BaselineRow kBaseline[] = {
     {"runtime/psx/debug/dbg_server.cpp", 0x800be258u, 1},
     {"runtime/psx/debug/dbg_server.cpp", 0x800ecf58u, 1},
     {"runtime/psx/debug/dbg_server.cpp", 0x800f2624u, 1},
     {"runtime/psx/debug/dbg_server.cpp", 0x800fb168u, 1},
     {"runtime/psx/debug/dbg_server.cpp", 0x801fe00cu, 1},
     {"runtime/psx/debug/dbg_server.cpp", 0x801fe048u, 1},
-    // The pool high-water literal moved with the OT walk it belongs to (gpu_native_dma.cpp), so the
-    // row moved with it: this baseline tracks (FILE, value), not a repository-wide allowance.
-    {"runtime/psx/gpu/gpu_native_dma.cpp", 0x800bf544u, 1},
-    {"runtime/psx/gpu/gpu_native.cpp", 0x801fe00cu, 2},
     {"runtime/psx/core/mem.cpp", 0x801fe00cu, 2},
     {"runtime/psx/input/pad_input.cpp", 0x1f800138u, 1},
     {"runtime/psx/input/pad_input.cpp", 0x1f800236u, 1},
@@ -376,17 +326,13 @@ static const BaselineRow kBaseline[] = {
     {"runtime/psx/input/pad_input.cpp", 0x800e7e68u, 1},
     {"runtime/psx/input/pad_input.cpp", 0x800fe916u, 1},
     {"runtime/psx/input/pad_input.cpp", 0x800fe91eu, 1},
-    {"runtime/psx/gpu/render_node.h", 0x1f80028cu, 1},
-    {"runtime/psx/gpu/render_queue.cpp", 0x800f2624u, 1},
-    {"runtime/psx/gpu/render_queue.cpp", 0x800f2738u, 1},
-    {"runtime/psx/gpu/render_queue.cpp", 0x800fb168u, 1},
 };
 
 /* ---- checks ---------------------------------------------------------------------------------- */
 
 /* The classifier, asserted in BOTH directions. The negative half is the point: a gate that trips on
  * console constants would be reverted within a week, so every family listed at the top is here. */
-static void test_classifier(void) {
+void test_classifier(void) {
   /* POSITIVE — real game addresses this gate exists to catch. */
   CHECK(is_game_addr(0x800bfe68u)); /* Tomba packet-pool base (the ot_attr.cpp bug)      */
   CHECK(is_game_addr(0x800e7e68u)); /* Tomba packet-pool end                             */
@@ -422,7 +368,7 @@ static void test_classifier(void) {
 
 /* Proof that the SCANNER fires, in the shipping artifact, independent of any manual injection: a
  * synthetic source file whose every case is known. If this ever passes trivially the gate is dead. */
-static void test_scanner_selftest(void) {
+void test_scanner_selftest(void) {
   const std::string src = "// a comment naming 0x800BFE68 is RE documentation, not a violation\n"
                           "/* nor is 0x801FE00C in a block comment */\n"
                           "static const char* name = \"packet pool at 0x800E7E68\";\n"
@@ -453,19 +399,16 @@ static void test_scanner_selftest(void) {
 }
 
 /* The corpus must exist and be non-trivial. Without this, a broken path would report a clean repo. */
-static void test_corpus_present(void) {
+void test_corpus_present(void) {
   const Scan sc = scan_framework();
-  fprintf(stderr,
-          "    scanned %d framework source files under runtime/ + common/, %ld hex literals\n",
-          sc.files,
-          sc.numbers);
+  fprintf(stderr, "    scanned %d framework source files under runtime/, %ld hex literals\n", sc.files, sc.numbers);
   CHECK(sc.corpus_ok);
   CHECK(sc.files > 100);   /* the framework is ~200 files; a handful means the walk broke */
   CHECK(sc.numbers > 500); /* and it really did look at numbers                          */
 }
 
 /* THE GATE. */
-static void test_no_new_game_address_literals(void) {
+void test_no_new_game_address_literals(void) {
   const Scan sc = scan_framework();
   CHECK(sc.corpus_ok); /* never certify a clean tree off a failed scan */
 
@@ -506,8 +449,8 @@ static void test_no_new_game_address_literals(void) {
       ++nnew;
       fprintf(stderr,
               "    NEW game address in framework code: %s 0x%08x x%d (baseline %d) at %s\n"
-              "      -> move it into GameConfig (runtime/psx/game/game_iface.h) and read it from"
-              " there; see ot_attr.cpp pool_range() for the honest-zero shape.\n",
+              "      -> move it into the title and ask through a GameRuntime virtual"
+              " (runtime/psx/game/game_runtime.h); see GameRuntime::packetPool for the honest-zero shape.\n",
               kv.first.first.c_str(),
               kv.first.second,
               kv.second,
@@ -544,10 +487,12 @@ static void test_no_new_game_address_literals(void) {
   CHECK_EQ(found_total, base_total);
 }
 
+} // namespace
+
 int main(void) {
   RUN(classifier);
   RUN(scanner_selftest);
   RUN(corpus_present);
   RUN(no_new_game_address_literals);
-  return pt_summary();
+  return psx::test::summary();
 }

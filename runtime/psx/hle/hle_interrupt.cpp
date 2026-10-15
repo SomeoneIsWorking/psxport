@@ -21,7 +21,6 @@
 namespace {
 
 // MIPS o32 argument and result registers used by the BIOS interrupt-chain ABI.
-enum { A0 = 4, V0 = 2, SP = 29, RA = 31 };
 
 static void dispatchCustomExceptionExit(Core *core, uint32_t address) {
   psx::cpu::dispatchGuestToReturn0(
@@ -31,8 +30,8 @@ static void dispatchCustomExceptionExit(Core *core, uint32_t address) {
 } // namespace
 
 void Hle::enterExceptionStack(Core &core) {
-  core.r[SP] = kExceptionStackTop;
-  core.r[RA] = kInterruptReturnSentinel;
+  core.r[psx::cpu::kSp] = kExceptionStackTop;
+  core.r[psx::cpu::kRa] = kInterruptReturnSentinel;
 }
 
 // ---- interrupt delivery -------------------------------------------------------------------------
@@ -103,7 +102,7 @@ void Hle::irqPoll(Core *c) {
   // callback that uploads each decoded strip to VRAM, and it was never called once in a run.
   const psx::hle::StockDmaCallbacks *guestTable = c->game->dmaCallbacks.guestTable();
   for (int ch = 0; ch < 7; ch++) {
-    if (!dma_done_owed(*c, ch)) {
+    if (!psx::dma::doneOwed(*c, ch)) {
       continue;
     }
     const uint32_t cb =
@@ -122,8 +121,8 @@ void Hle::irqPoll(Core *c) {
     if (guestTable && !psx::hle::StockDmaCallbacks::handlerRuns(*c)) {
       continue;
     }
-    dma_done_taken(*c, ch);
-    dma_irq_ack(*c, ch); // this dispatch stands in for the BIOS DMA handler, which acknowledges first
+    psx::dma::doneTaken(*c, ch);
+    psx::dma::ackIrq(*c, ch); // this dispatch stands in for the BIOS DMA handler, which acknowledges first
     if (!cb) {
       continue; // nothing registered: the completion is consumed
     }
@@ -142,7 +141,10 @@ void Hle::irqPoll(Core *c) {
   // "declined for the entire run", which are completely different diagnoses — so count each reason
   // and report periodically. Cheap: only runs when the channel is on.
   if (lucent::channel_on("irq")) {
-    static unsigned n_crit = 0, n_nest = 0, n_transient = 0, n_report = 0;
+    unsigned &n_crit = irqDeclines_.critical;
+    unsigned &n_nest = irqDeclines_.nested;
+    unsigned &n_transient = irqDeclines_.transient;
+    unsigned &n_report = irqDeclines_.reports;
     if (!irq_enabled) {
       n_crit++;
     } else if (in_irq) {
@@ -181,7 +183,7 @@ void Hle::irqPoll(Core *c) {
   // strips per movie decoded and then "no decode command in flight". So the gate survives while
   // anything is owed, and only the genuinely-idle case pays nothing.
   const bool has_delivery_path = irq_n != 0 || exception_exit_buf != 0 || cd_delivery_path;
-  if ((!pending || !has_delivery_path) && !dma_done_any(*c)) {
+  if ((!pending || !has_delivery_path) && !psx::dma::doneAny(*c)) {
     c->pending_work &= ~Core::PW_IRQ;
     return;
   }
@@ -228,7 +230,7 @@ void Hle::irqPoll(Core *c) {
         psx::cpu::completeOrPropagate(*c, result);
         return;
       }
-      if (c->r[V0] == 0) {
+      if (c->r[psx::cpu::kV0] == 0) {
         continue; // not this element's interrupt
       }
     }
@@ -236,7 +238,7 @@ void Hle::irqPoll(Core *c) {
       continue;
     }
     // The BIOS passes the verifier's return to the handler; a handler that reads $a0 expects it.
-    c->r[A0] = c->r[V0];
+    c->r[psx::cpu::kA0] = c->r[psx::cpu::kV0];
     // A HANDLER THAT IS NOT EXECUTABLE IS REPORTED HERE, WITH THE ELEMENT IT CAME FROM.
     //
     // This is the delivery site the caller-naming diagnostic pointed at on Mega Man X4: the port
@@ -276,9 +278,8 @@ void Hle::irqPoll(Core *c) {
   // it is the thing that serves a declined CD bit there. Read this line as "no REGISTERED ELEMENT
   // claimed it", which is what was measured, and not as "the source is unowned".
   if (!claimed) {
-    static uint32_t last_unclaimed = 0xFFFFFFFFu;
-    if (pending != last_unclaimed) {
-      last_unclaimed = pending;
+    if (pending != lastUnclaimedIrq_) {
+      lastUnclaimedIrq_ = pending;
       lucent::info("irq",
                    "pending I_STAT&I_MASK=0x{:03X}; no SysEnq element claimed it "
                    "({} in chain), custom exception exit {}",
@@ -331,10 +332,10 @@ void Hle::irqPoll(Core *c) {
   }
 
   if (exception_exit_buf) {
-    c->r[RA] = kInterruptReturnSentinel;
+    c->r[psx::cpu::kRa] = kInterruptReturnSentinel;
     custom_exit_active = 1;
     const BiosInterruptDispatchResult result =
-        bios_interrupt_dispatch_custom_exit(c, exception_exit_buf, dispatchCustomExceptionExit);
+        psx::hle::dispatchInterruptCustomExit(c, exception_exit_buf, dispatchCustomExceptionExit);
     custom_exit_active = 0;
     if (result != BiosInterruptDispatchResult::ReturnedFromException) {
       lucent::error("irq", "custom exception exit violated B0:0x17 contract (result={})", (int)result);
@@ -345,7 +346,7 @@ void Hle::irqPoll(Core *c) {
   in_irq = 0;
   const bool still_deliverable =
       (c->irqStatLatch() & i_mask) && (irq_n != 0 || exception_exit_buf != 0 || cd_delivery_path);
-  if (!dma_done_any(*c) && !still_deliverable) { // an owed DMA callback or live IRQ keeps the gate armed
+  if (!psx::dma::doneAny(*c) && !still_deliverable) { // an owed DMA callback or live IRQ keeps the gate armed
     c->pending_work &= ~Core::PW_IRQ;
   }
 }

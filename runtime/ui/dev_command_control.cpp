@@ -8,8 +8,8 @@
 namespace psx::ui {
 namespace {
 
-int wrap(int value, int dir, int max) {
-  const int span = max + 1;
+template <int Max> int wrap(int value, int dir) {
+  constexpr int span = Max + 1;
   return ((value + dir) % span + span) % span;
 }
 
@@ -41,15 +41,15 @@ std::string DevCommandControl::writeFlag() const {
 }
 
 void DevCommandControl::adjustEntry(int dir) {
-  mEntry = wrap(mEntry, dir, kMaxEntry);
+  mEntry = wrap<kMaxEntry>(mEntry, dir);
 }
 
 void DevCommandControl::adjustFlagIndex(int dir) {
-  mFlagIndex = wrap(mFlagIndex, dir, kMaxByte);
+  mFlagIndex = wrap<kMaxByte>(mFlagIndex, dir);
 }
 
 void DevCommandControl::adjustFlagValue(int dir) {
-  mFlagValue = wrap(mFlagValue, dir, kMaxByte);
+  mFlagValue = wrap<kMaxByte>(mFlagValue, dir);
 }
 
 } // namespace psx::ui

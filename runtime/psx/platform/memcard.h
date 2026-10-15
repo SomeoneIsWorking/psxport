@@ -12,7 +12,6 @@
 #include <cstdio>
 #include <vector>
 struct Core;
-struct GameConfig;
 class Game;
 namespace psx::game {
 struct HostIdentity;
@@ -39,6 +38,11 @@ public:
 
   // Physical-layer card I/O — host-file backed.
   void init();
+  // Open the card and publish it as the BIOS "bu" device.
+  void install();
+  // The card's BIOS A0/B0 file and frame calls; nonzero when `fn` was the card's.
+  int dispatchBiosA0(uint32_t fn, Core *c);
+  int dispatchBiosB0(uint32_t fn, Core *c);
   // The backing file chosen by init(); empty before it.
   const char *path() const {
     return mPath;
@@ -80,7 +84,7 @@ public:
   // BIOS file-API descriptor table (native).
   static constexpr int kFdBase = 3;
   static constexpr int kFdMax = 11;
-  int fdAlloc(int block, uint32_t size);
+  int fdAlloc(int block);
   bool fdValid(int fd) const {
     return fd >= kFdBase && fd < kFdMax && mFd[fd].used;
   }
@@ -139,8 +143,3 @@ private:
   static char *resolvePath(const psx::game::HostIdentity &identity);
   static void mkParents(const char *path);
 };
-
-// BIOS dispatch entry points (called from hle.cpp `class Hle`'s dispatchBios via C linkage).
-extern "C" int card_hle_a0(uint32_t fn, Core *c);
-extern "C" int card_hle_b0(uint32_t fn, Core *c);
-void card_overrides_init(Game *game);

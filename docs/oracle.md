@@ -60,8 +60,8 @@ The driver delivers the same pad to the same game frame's input read on both cor
 console's arrival pad, and treats the title's pad words as decisive so a delivery difference fails
 before anything downstream. `test_compare.py` proves both answers over fake cores: the matching
 lookahead matches every checkpoint, a wrong lookahead is reported as a `pad` divergence, and the
-seeded selftest is detected. Tomba! 2 (`Tomba2Engine/tools/oracle_tomba2.py`) and Spyro 1
-(`spyro/tools/oracle_spyro1.py`) are the consumers.
+seeded selftest is detected. Tomba! 2 (`psx-tomba/tools/oracle_title.py`) and Spyro 1
+(`psx-spyro/tools/oracle_spyro1.py`) are the consumers.
 
 ## Evidence rules
 
@@ -79,9 +79,9 @@ seeded selftest is detected. Tomba! 2 (`Tomba2Engine/tools/oracle_tomba2.py`) an
 | --- | --- | --- |
 | Independent Beetle/Mednafen CPU trace tools under `tools/oracle/` | Instruction/call boundaries and selected CPU/device state against an independent implementation | Not automatically aligned to a native title checkpoint; scope must be declared |
 | Test-only flat MIPS interpreter | Guest CPU/RAM behavior on reached paths using psxport state/memory seams | Shares psxport platform models and is not an independent device oracle |
-| `RenderPath::Device` picture | The guest's own GP0 stream as drawn by the GPU device | Does not prove native scene construction or host renderer correctness; shows only what the guest programmed (a title that bypasses PutDispEnv leaves the device's display mode at reset) |
+| `RenderPath::Device` picture | The guest's own GP0 stream as drawn by the GPU device | Does not prove producer renders or record rasterizer correctness; shows only what the guest programmed (a title that bypasses PutDispEnv leaves the device's display mode at reset) |
 | Guest dispatch tables and no-op arms | Whether original title data selects/submits a behavior or draw | Says nothing about final appearance |
-| Native renderer readback | What the current host renderer produced | Cannot establish what original hardware should produce by itself |
+| Record renderer readback | What the record rasterizer presented | Cannot establish what original hardware should produce by itself |
 
 ## Retained observations
 

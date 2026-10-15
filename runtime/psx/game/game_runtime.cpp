@@ -1,7 +1,6 @@
 #include "game_runtime.h"
 
 #include "frame_pacer.h"
-#include "frame_presenter.h"
 #include "game.h"
 
 namespace psx::game {
@@ -22,20 +21,8 @@ std::unique_ptr<FrameDriver> GameRuntime::createFrameDriver(Game &) {
   return nullptr;
 }
 
-std::unique_ptr<psx::frame::TemporalFramePresentation> GameRuntime::createTemporalFramePresentation(Game &) {
-  return nullptr;
-}
-
-void GameRuntime::pacePresentation(Core &core, int guestFields, int parts) {
-  core.game->framePacer.paceSubframeFields(core, guestFields, parts);
+void GameRuntime::pacePresentation(Core &core, frame::FieldCadence cadence) {
+  core.game->framePacer.paceSubframeFields(core, cadence);
 }
 
 } // namespace psx::game
-
-bool game_guest_vram_is_picture(const Game &game) {
-  return game.runtime.guestVramIsPicture(game);
-}
-
-bool game_guest_picture_is_native_width(const Game &game) {
-  return game.runtime.guestPictureIsNativeWidth(game);
-}

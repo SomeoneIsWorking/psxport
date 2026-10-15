@@ -50,11 +50,12 @@ struct SinkIdleState {
   }
 };
 
+namespace psx::gpu {
+
 // Acquire the swapchain image WITHOUT waiting for the window, accounting an idle field. Returns NULL when
 // no image is ready, and the caller skips the sink for this field. `w`/`h` are SDL's own answer and are
 // left untouched on failure.
-inline SDL_GPUTexture *
-sink_acquire(SinkIdleState &s, SDL_GPUCommandBuffer *cmd, SDL_Window *win, Uint32 *w, Uint32 *h) {
+inline SDL_GPUTexture *acquireSink(SinkIdleState &s, SDL_GPUCommandBuffer *cmd, SDL_Window *win, Uint32 *w, Uint32 *h) {
   SDL_GPUTexture *tex = nullptr;
   const bool available = SDL_AcquireGPUSwapchainTexture(cmd, win, &tex, w, h) && tex != nullptr;
   if (s.observe(available)) {
@@ -72,3 +73,5 @@ sink_acquire(SinkIdleState &s, SDL_GPUCommandBuffer *cmd, SDL_Window *win, Uint3
   }
   return available ? tex : nullptr;
 }
+
+} // namespace psx::gpu

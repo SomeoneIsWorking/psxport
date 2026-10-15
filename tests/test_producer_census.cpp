@@ -43,9 +43,7 @@ bool rendered(const RecordKey &key) {
   return key.producer == kProducer && key.object == 0x80150000u;
 }
 
-} // namespace
-
-static void test_unfed_is_distinguishable_from_empty(void) {
+void test_unfed_is_distinguishable_from_empty(void) {
   ProducerCensus census;
   CHECK(!census.wasFed());
   census.noteRecord(FrameRecord(0, true), resolve, registered, rendered);
@@ -54,7 +52,7 @@ static void test_unfed_is_distinguishable_from_empty(void) {
   CHECK(census.rows().empty());
 }
 
-static void test_keyed_and_unkeyed_primitives_are_counted_per_submitter(void) {
+void test_keyed_and_unkeyed_primitives_are_counted_per_submitter(void) {
   ProducerCensus census;
   FrameRecord record(0, true);
   record.append(primitiveFrom(0x80180004u, RecordKey{kProducer, 0x80150000u, 0, 0}));
@@ -82,7 +80,7 @@ static void test_keyed_and_unkeyed_primitives_are_counted_per_submitter(void) {
   CHECK(guest != nullptr && guest->primitives == 4u && guest->keyed == 0u);
 }
 
-static void test_has_producer_follows_the_registrations(void) {
+void test_has_producer_follows_the_registrations(void) {
   ProducerCensus census;
   FrameRecord record(0, true);
   record.append(primitiveFrom(0x80100004u, std::nullopt));
@@ -99,7 +97,7 @@ static void test_has_producer_follows_the_registrations(void) {
   CHECK_EQ(census.find(kGuestSubmitter)->keyed, 0u);
 }
 
-static void test_a_key_shared_within_a_record_is_counted_as_duplicated(void) {
+void test_a_key_shared_within_a_record_is_counted_as_duplicated(void) {
   ProducerCensus census;
   const RecordKey shared{kProducer, 0x80150000u, 0x10003u, 0};
   FrameRecord record(0, true);
@@ -123,7 +121,6 @@ static void test_a_key_shared_within_a_record_is_counted_as_duplicated(void) {
   CHECK_EQ(census.find(kGuestSubmitter)->duplicated, 0u);
 }
 
-namespace {
 void test_a_keyed_primitive_without_a_state_render_is_counted() {
   ProducerCensus census;
   FrameRecord record(0, true);
@@ -136,6 +133,7 @@ void test_a_keyed_primitive_without_a_state_render_is_counted() {
   CHECK_EQ(census.primsWithoutRender(), 2u);
   CHECK_EQ(census.find(kProducer)->withoutRender, 2u);
 }
+
 } // namespace
 
 int main(void) {
@@ -144,5 +142,5 @@ int main(void) {
   RUN(keyed_and_unkeyed_primitives_are_counted_per_submitter);
   RUN(has_producer_follows_the_registrations);
   RUN(a_keyed_primitive_without_a_state_render_is_counted);
-  return pt_summary();
+  return psx::test::summary();
 }

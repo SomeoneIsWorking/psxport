@@ -3,6 +3,7 @@
 
 #include "frame_record.h"
 #include "record_raster_setup.h"
+#include "vram_bitmap.h"
 
 #include <cstdint>
 #include <vector>
@@ -37,14 +38,10 @@ private:
   // Whether the VRAM the primitive's texture coordinates reach overlaps a written pixel.
   bool overlapsSampled(const present::DrawPrimitive &primitive) const;
 
-  // Columns [x0, x1) of one row, 0 <= x0 < x1 <= kRecordVramWidth.
-  void markSpan(int row, int x0, int x1);
-  bool testSpan(int row, int x0, int x1) const;
   // A column range may run past the right edge, where VRAM addressing wraps to column 0.
-  bool testWrapped(int row, int x0, int x1) const;
+  bool testWrapped(int row, ColumnRun run) const;
 
-  // One bit per VRAM pixel, row-major, 64 columns per word.
-  std::vector<std::uint64_t> written_;
+  VramBitmap written_;
   int pageX_ = 0;
   int pageY_ = 0;
   bool nonFourBit_ = false; // texture mode is not 4bpp

@@ -18,7 +18,9 @@
 #include <vector>
 
 class Core;
-struct DiscState;
+namespace psx::cd {
+class Disc;
+}
 
 namespace psx::hle {
 
@@ -29,7 +31,7 @@ namespace psx::hle {
 using DiscFileReader = std::function<bool(const char *isoPath, std::vector<std::uint8_t> &out)>;
 
 // The reader over one run's disc. The only binding of `DiscFileReader` the product makes.
-DiscFileReader discFileReader(DiscState &disc);
+DiscFileReader discFileReader(psx::cd::Disc &disc);
 
 // A0:0x51, from `core`'s own register file: a0 = filename, a1 = stack base, a2 = stack offset.
 //

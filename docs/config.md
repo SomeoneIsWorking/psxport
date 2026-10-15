@@ -1,8 +1,18 @@
 # Configuration and logging
 
-`runtime/psx/config/config.cpp` is the only owner of product configuration. Runtime code reads declared,
-typed variables through `runtime/psx/config/config_var.h`; C compatibility call sites use `cfg_on`,
-`cfg_int`, and `cfg_str` from `runtime/psx/config/cfg.h`. No CPU-engine selector is a product setting.
+`runtime/psx/config/config.cpp` is the only owner of product configuration. Every knob is a CVar
+private to its declaring file and read through a typed accessor: product and player settings in
+`config_vars.h`, opt-in probes, dumps, watches and forced input in `diagnostic_config.h`. Code outside
+`runtime/psx/config/` never names a CVar object and never reads the environment. A test or the runtime
+command changes a knob by name with `set_runtime`/`clear_runtime`. No CPU-engine selector is a product
+setting.
+
+## Title launch settings
+
+`launch_setting({keys...})` answers the disc and memory-card paths a title identity names: the first
+key set in the environment, otherwise the first key set in `./.env` (`KEY=value`, trimmed), otherwise
+empty. Disc and card owners pass the title key before the shared `PSXPORT_DISC`/`PSXPORT_CARD`. The
+keys a title asked for are reported as `identity` by the environment audit, not as unknown.
 
 ## Precedence
 
@@ -87,9 +97,10 @@ admitted/refused reason count, and the policy applied to the most recent executi
 
 ## Logging
 
-Runtime code logs through `cfg_logi`, `cfg_logw`, `cfg_loge`, or channel-gated `cfg_logf`. A call
-site does not wrap a logger invocation in its own debug conditional. Expensive diagnostic work may
-be guarded with `cfg_dbg`, then emits each complete line through the configured logger.
+Runtime code logs through Lucent: `lucent::info`/`warn`/`error`, or `lucent::debug(channel, ...)` for a
+diagnostic channel named in `PSXPORT_DEBUG`. A call site does not wrap a log call in its own
+conditional. Expensive diagnostic work may be guarded by an interned `lucent::Channel` check, then
+emits each complete line through the logger.
 
 ## Player settings
 
@@ -103,35 +114,26 @@ A title adds its own stepped integer settings through `GameRuntime::titleIntSett
 value under the CVar's name, `Mods::load` clamps it onto the grid, and the menu shows one arrow-stepped row
 per setting under "Enhancements" in the Display pane. `enh_int(var)` reads it, and reads 0 in a comparison run.
 
+## Render path
+
+`PSXPORT_RENDER_PATH` is `record` (default) or `device` (`render_path()` in `config_vars.h`). `Game`'s
+constructor installs it on its Core; any other value warns and stays on `record`. `docs/presentation.md`
+says what each path presents.
+
 ## Verification
 
-A run that asked for a wide picture and did not get one is told so, by name and by reason, in the same
-`[wide]` announcement: `classifyWide()` in `runtime/psx/present/picture_announce.h` decides between "widened",
-"nobody asked", "this Core is PURE", "ASPECT_AUTO resolved to a sink that is not wide", and "a wide
-aspect was allowed and the width still did not grow", and a refused outcome is a warning rather than a
-number to be noticed later. The announced `render_width` is the width the presenter will actually
-draw, derived with the presenter's own `present_display_width` from the framebuffer being handed
-over — because there are TWO widening mechanisms and only one of them is visible from the host wide
-engine. The host PC enhancement widens a native-render title; the title-owned
-`GuestWidescreenProjection` widens a GTE-path title, which is every widescreen-only title, since those
-declare `RenderCapabilities::widescreenOnly()`. Reading only the first is how two titles measured a
-false negative, and how the warning above then declared a correct run's claim void.
-
-`runtime/psx/wide_2d_layout.{h,cpp}` owns the matching 2D question. The layout rule itself is
-`rq_2d_xform` (centring authored-4:3 coordinates by (ww − native_w)/2, with a uniform untextured fill
-stretching instead) and it is correct; what was wrong is the question its application site asked, which
-was answered from the host wide engine alone and so was false on every frame of a Gte-path title. The
-owner asks about both mechanisms in the order the presenter prefers, treats them as alternatives rather
-than a sum, and exposes the decision as a pure function so it can be asked without a product.
+A run that asked for a wide picture and did not get one is told so, by name and by reason, in the
+`[wide]` announcement: `classifyWide()` in `runtime/psx/present/picture_announce.h` decides between
+widened, not requested, no title projection, the `device` path, `ASPECT_AUTO` on a sink that is not
+wide, and a request that was possible and still did not grow the width. A refused outcome is a
+warning. The announced `render_width` is derived with the presenter's own `present_display_width`.
 
 `tests/test_config_cvar.cpp` exercises precedence, invalid input, environment auditing, and runtime
 mutation through the production registry. `tests/test_debug_server_port.cpp` pins the endpoint's port
 contract, including the `1` sentinel and every shape of text that must not bind a port.
 `tests/test_picture_announce.cpp` drives the shipping `classifyWide` over the exact geometries two
 repositories recorded, and the mutation that silences the AUTO verdict fails it.
-`tests/test_wide_2d_layout.cpp` drives the shipping 2D-layout decision over both mechanisms at the
-geometries that were affected, and the mutation that restores the pre-fix host-engine-only question
-fails it.
+`tests/test_render_path.cpp` pins the render path names and parse.
 
 ## PSXPORT_OVERRIDE_DIFF — does this native override equal its original?
 

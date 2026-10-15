@@ -39,6 +39,7 @@
 #include "stub_game_runtime.h"
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -56,7 +57,7 @@ private:
   psx::game::HostIdentity identity_{.cardDefaultPath = kCardPath};
 };
 
-CardRuntime cardRuntime;
+std::unique_ptr<CardRuntime> cardRuntime;
 } // namespace
 
 namespace {
@@ -74,11 +75,8 @@ constexpr std::uint32_t kWorkBase = 0x80100000u; // the RAM window the loop walk
 constexpr std::uint32_t kWorkLimit = 0x8000u;    // in words
 constexpr int kIterations = 400;
 
-// The ONE guest body both phases run. `base` is the address the body is assembled at, because the loop
-// back-edge is a PC-RELATIVE branch: its displacement is measured from the instruction AFTER the
-// branch, and assembling it without knowing where the branch itself landed produces a displacement
-// that is perfectly well formed and points into the middle of the other phase.
-std::vector<std::uint32_t> phaseBody(std::uint32_t base, std::uint32_t firstWord) {
+// The ONE guest body both phases run; the back-edge is PC-relative, so the body runs wherever it is written.
+std::vector<std::uint32_t> phaseBody(std::uint32_t firstWord) {
   constexpr std::uint32_t kLoopIndex = 4; // the `lw` — where the back-edge goes
   std::vector<std::uint32_t> words = {
       lui(kS0, 0x8010),
@@ -110,7 +108,8 @@ std::vector<std::uint32_t> phaseBody(std::uint32_t base, std::uint32_t firstWord
   // was perfectly well formed and looped back to the counter's INITIALISATION, so the guest ran the
   // loop forever and the budget expired with the counter reading its start value every pass.
   const auto branchIndex = words.size() - 4;
-  words[branchIndex] = bne(kS1, kZero, base + static_cast<std::uint32_t>(branchIndex) * 4u, base + kLoopIndex * 4u);
+  words[branchIndex] =
+      bne(kS1, kZero, static_cast<std::int32_t>(kLoopIndex) - static_cast<std::int32_t>(branchIndex) - 1);
   return words;
 }
 
@@ -131,16 +130,16 @@ struct Machine {
 Machine makeMachine() {
   Machine machine;
   machine.cardPath = kCardPath;
-  machine.game = std::make_unique<Game>(cardRuntime, psx::config::Config{});
+  machine.game = std::make_unique<Game>(*cardRuntime, psx::config::Config{});
   Core &core = machine.game->core;
   std::remove(machine.cardPath.c_str());
-  card_overrides_init(machine.game.get());
+  machine.game->memcard.install();
   core.imageCatalog().activate("state-determinism", {kImageBase, kImageEnd}, 0x53544154u);
 
   core.mem_w32(kOuterReturn, jrRa());
   core.mem_w32(kOuterReturn + 4u, nop());
-  writeCode(core, kPhaseA, phaseBody(kPhaseA, 0));
-  writeCode(core, kPhaseB, phaseBody(kPhaseB, kIterations));
+  writeCode(core, kPhaseA, phaseBody(0));
+  writeCode(core, kPhaseB, phaseBody(kIterations));
   for (std::uint32_t i = 0; i < kWorkLimit; ++i) {
     core.mem_w32(kWorkBase + i * 4u, 0);
   }
@@ -178,11 +177,12 @@ void test_the_guest_program_actually_moves_ram(void) {
 } // namespace
 
 int main(int argc, char **argv) {
+  cardRuntime = std::make_unique<CardRuntime>();
   const bool asPhase = argc >= 2 && std::strcmp(argv[1], "--phase") == 0;
   if (!asPhase) {
     RUN(the_guest_program_actually_moves_ram);
     std::remove("test_state_determinism.mcr");
-    return pt_summary();
+    return psx::test::summary();
   }
 
   const std::string phase = argc >= 3 ? argv[2] : "";

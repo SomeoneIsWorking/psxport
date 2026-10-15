@@ -14,16 +14,16 @@
 #include "execution_control.h"
 #include "function_reach.h"
 #include "game_runtime.h"
+#include "gpu_device.h"
 #include "image_identity.h"
 #include "lightrec_executor.h"
 #include "native_dispatch.h"
 #include "override_differential.h"
-#include "render_capabilities.h"
 #include <cstring>
 #include <lucent/log.h>
 #include <utility>
 
-Core::Core(psx::game::GameRuntime &runtime) : runtime(runtime) {
+Core::Core(psx::game::GameRuntime &runtime) : runtime(runtime), gpuDevice_(std::make_unique<psx::gpu::GpuDevice>()) {
   memset((R3000 *)this, 0, sizeof(R3000));
   memset(ram, 0, sizeof(ram));
   memset(scratch, 0, sizeof(scratch));
@@ -44,16 +44,9 @@ Core::Core(psx::game::GameRuntime &runtime) : runtime(runtime) {
     lightrecExecutor_->attachFunctionReach(
         std::make_unique<psx::cpu::FunctionReach>(*imageCatalog_, std::move(reachReport)));
   }
-  // The two legacy views are non-null only for a runtime derived from the bounded adapter.
-  cfg = runtime.legacyConfigForMigration();
-  hooks = runtime.legacyHooksForMigration();
 }
 
-Core::~Core() {
-  // Any live `render path` switch was addressed to THIS Core; let go of it before the machine goes,
-  // so the process-global that remembers it cannot outlive the pointer it holds.
-  render_path_forget(this);
-}
+Core::~Core() = default;
 
 psx::cpu::ExecutionControl &Core::executionControl() {
   return *executionControl_;

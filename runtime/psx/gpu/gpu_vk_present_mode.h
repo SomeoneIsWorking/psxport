@@ -1,6 +1,8 @@
 #pragma once
 #include <SDL3/SDL_gpu.h>
 
+namespace psx::gpu {
+
 // ---- "Which swapchain present mode may the SINK use?" -----------------------------------------------
 //
 // The sink is the ONE place a windowed run and a headless run are allowed to differ (headless reads the
@@ -9,7 +11,7 @@
 //
 // psxport never called SDL_SetGPUSwapchainParameters, so a claimed window kept SDL's DEFAULT present
 // mode, VSYNC. Under VSYNC, SDL_WaitAndAcquireGPUSwapchainTexture blocks the CALLING thread until the
-// next vblank — and the caller is GpuVkState::show_present_image, reached from vblank_advance -> gpu_present
+// next vblank — and the caller is GpuVkState::show_present_image, reached from DisplayPresenter::present
 // on the GUEST thread. There is no I/O thread: the CD pump, MDEC, DMA completion and the guest itself
 // all run there. So the sink was spending ~16.7 ms of every guest field asleep inside an ioctl, and the
 // guest got almost no CPU. Headless never blocked (null window, acquire fails instantly), which is why
@@ -31,7 +33,7 @@
 // it SDL_WindowSupportsGPUPresentMode's answers. It deliberately does NOT take the window or the device:
 // the POLICY is what is worth pinning down, and a policy that needs a live swapchain to check is a
 // policy nobody checks.
-static inline SDL_GPUPresentMode preferred_present_mode(bool mailbox_ok, bool immediate_ok) {
+inline SDL_GPUPresentMode preferredPresentMode(bool mailbox_ok, bool immediate_ok) {
   if (mailbox_ok) {
     return SDL_GPU_PRESENTMODE_MAILBOX;
   }
@@ -43,13 +45,13 @@ static inline SDL_GPUPresentMode preferred_present_mode(bool mailbox_ok, bool im
 
 // Does this mode stall the caller until a vblank? The one property the guest thread cares about, named
 // so a log line (and the test) can talk about it without re-deriving the enum's semantics.
-static inline bool present_mode_blocks_caller(SDL_GPUPresentMode m) {
+inline bool presentModeBlocksCaller(SDL_GPUPresentMode m) {
   return m == SDL_GPU_PRESENTMODE_VSYNC;
 }
 
 // Name for the log. Never returns null — a null const char* is undefined behaviour for std::format,
 // and this feeds a lucent::info on the boot path.
-static inline const char *present_mode_name(SDL_GPUPresentMode m) {
+inline const char *presentModeName(SDL_GPUPresentMode m) {
   switch (m) {
   case SDL_GPU_PRESENTMODE_VSYNC:
     return "VSYNC";
@@ -60,3 +62,5 @@ static inline const char *present_mode_name(SDL_GPUPresentMode m) {
   }
   return "(unknown)";
 }
+
+} // namespace psx::gpu

@@ -14,7 +14,7 @@ enum class SyscallResult : std::uint8_t {
   MissingContext,
 };
 
-SyscallResult handleSyscall(Core &core, std::uint32_t code, std::uint32_t instructionPc);
+SyscallResult handleSyscall(Core &core, std::uint32_t instructionPc);
 void handleBreak(Core &core, std::uint32_t code);
 
 } // namespace psx::cpu

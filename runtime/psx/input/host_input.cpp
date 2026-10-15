@@ -1,7 +1,7 @@
 // host_input.cpp — psx::input::HostInput: the SDL event drain, the delivered host key state, the
 // gamepads, and the PSX active-low button mask they add up to.
 #include "host_input.h"
-#include "cfg.h" // cfg_str — PSXPORT_PAD_NOPAD
+#include "diagnostic_config.h" // PSXPORT_PAD_NOPAD
 #include "rmlui_overlay.h"
 #include <lucent/log.h>
 
@@ -141,8 +141,7 @@ void psx::input::HostInput::ensureGamepadSubsystem() {
 
 bool psx::input::HostInput::noPadRequested() {
   if (mNoPad < 0) {
-    const char *value = cfg_str("PSXPORT_PAD_NOPAD");
-    mNoPad = (value && atoi(value) != 0) ? 1 : 0;
+    mNoPad = psx::config::no_host_pads() ? 1 : 0;
   }
   return mNoPad != 0;
 }

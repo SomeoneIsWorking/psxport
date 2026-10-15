@@ -15,18 +15,17 @@ public:
   explicit TitleDisc(const TitleIdentity &title);
   // Exactly `image`, opened now; opened() says whether it is a readable disc image.
   explicit TitleDisc(const std::filesystem::path &image);
-  ~TitleDisc();
   TitleDisc(const TitleDisc &) = delete;
   TitleDisc &operator=(const TitleDisc &) = delete;
 
   // Opens a keyed disc if it is not open yet.
   bool opened();
-  DiscState &state() {
+  psx::cd::Disc &state() {
     return disc_;
   }
 
 private:
-  DiscState disc_{};
+  psx::cd::Disc disc_{};
 };
 
 } // namespace psx::host

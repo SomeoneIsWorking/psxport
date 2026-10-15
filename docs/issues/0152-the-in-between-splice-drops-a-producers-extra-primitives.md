@@ -26,3 +26,5 @@ at all is dropped (`surplus`). The census reports `appended` separately. Test:
 Same measurement after: 0 of 100 in-between presents over 1% black, worst 0.08%; three-present A-B-A
 pixel flicker mean 1.94% -> 0.35%, worst 35.5% -> 3.0% (the remainder is fast motion). Picker preview
 census: 3513 dropped surplus primitives -> 3440 appended, 0 surplus.
+
+The splice and its test were deleted in (c) stage 2; in-betweens are `composeFrame` renders on the shown record (`docs/presentation.md`).

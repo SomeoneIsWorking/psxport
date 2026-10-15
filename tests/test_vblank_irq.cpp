@@ -7,17 +7,14 @@
 #include "../runtime/cpu/image_identity.h"
 #include "../runtime/cpu/native_dispatch.h"
 #include "game.h"
-#include "game_iface.h"
 #include "testutil.h"
+#include <cstdint>
 
 #include "stub_game_runtime.h"
 #include <memory>
-#include <optional>
 
 namespace {
-psx::test::StubGameRuntime stubRuntime;
-// Rebuilt by each interrupt fixture; earlier fixtures' Games are no longer used by then.
-std::optional<LegacyGameRuntimeAdapter> legacyRuntime;
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 constexpr uint32_t kNtscFieldMilliHz = 59940u;
 constexpr uint32_t kIStat = 0x1F801070u;
@@ -47,15 +44,9 @@ void installInterruptCallbacks(Game &game) {
 }
 
 Game *interruptGame() {
-  static GameConfig config{};
-  static const GameHooks hooks{};
-  config = {};
-  config.recMainLo = kHandler & 0x1FFFFFFFu;
-  config.recMainHi = (kVerifier & 0x1FFFFFFFu) + 4u;
-  legacyRuntime.emplace(config, hooks);
   verifierCalls = 0;
   handlerCalls = 0;
-  Game *game = new Game(*legacyRuntime, {});
+  Game *game = new Game(*stubRuntime, {});
   installInterruptCallbacks(*game);
   game->core.mem_w32(kElement + 4u, kHandler);
   game->core.mem_w32(kElement + 8u, kVerifier);
@@ -64,9 +55,9 @@ Game *interruptGame() {
 }
 
 void test_a_field_advance_latches_i_stat_bit0() {
-  Game *game = new Game(stubRuntime, {});
+  Game *game = new Game(*stubRuntime, {});
   game->hle.i_stat = 0;
-  CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 1u);
   delete game;
 }
@@ -74,23 +65,23 @@ void test_a_field_advance_latches_i_stat_bit0() {
 // It is a LATCH, not a counter: a guest that has not acknowledged sees one pending VBlank, exactly
 // like the hardware bit. Two fields with no ack in between are still one set bit.
 void test_the_bit_latches_and_survives_until_acknowledged() {
-  Game *game = new Game(stubRuntime, {});
+  Game *game = new Game(*stubRuntime, {});
   game->hle.i_stat = 0;
-  CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
-  CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat, 1u);
   game->hle.i_stat &= ~1u; // the guest's own I_STAT write-0 acknowledge
   CHECK_EQ(game->hle.i_stat & 1u, 0u);
-  CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 1u);
   delete game;
 }
 
 // Delivery is armed, because a latched bit nobody looks at is the same as no bit at all.
 void test_the_delivery_gate_is_armed() {
-  Game *game = new Game(stubRuntime, {});
+  Game *game = new Game(*stubRuntime, {});
   game->core.pending_work = 0;
-  CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, kNtscFieldMilliHz));
   CHECK_EQ(game->core.pending_work & Core::PW_IRQ, (uint32_t)Core::PW_IRQ);
   delete game;
 }
@@ -98,23 +89,23 @@ void test_the_delivery_gate_is_armed() {
 // fps60 presents twice per guest field and paces each presentation by one half. The first
 // presentation is not a physical VBlank; the second completes the field and raises exactly one.
 void test_two_half_field_paces_raise_one_vblank() {
-  Game *game = new Game(stubRuntime, {});
+  Game *game = new Game(*stubRuntime, {});
   game->hle.i_stat = 0;
-  CHECK(game->timing.advanceDisplayFields(1, 2, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({1, 2}, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 0u);
-  CHECK(game->timing.advanceDisplayFields(1, 2, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({1, 2}, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 1u);
   delete game;
 }
 
 // A two-field title split into two presentations still completes one physical field per call.
 void test_two_field_quota_split_in_half_raises_each_call() {
-  Game *game = new Game(stubRuntime, {});
+  Game *game = new Game(*stubRuntime, {});
   game->hle.i_stat = 0;
-  CHECK(game->timing.advanceDisplayFields(2, 2, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({2, 2}, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 1u);
   game->hle.i_stat &= ~1u;
-  CHECK(game->timing.advanceDisplayFields(2, 2, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({2, 2}, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 1u);
   delete game;
 }
@@ -122,11 +113,11 @@ void test_two_field_quota_split_in_half_raises_each_call() {
 // The negative: an advance that does NOT happen raises nothing. Both refusal shapes are covered so
 // a "no VBlank" result cannot come from the method silently doing nothing at all.
 void test_a_refused_advance_raises_nothing() {
-  Game *game = new Game(stubRuntime, {});
+  Game *game = new Game(*stubRuntime, {});
   game->hle.i_stat = 0;
-  CHECK(!game->timing.advanceDisplayFields(0, 1, kNtscFieldMilliHz));
-  CHECK(!game->timing.advanceDisplayFields(1, 1, 0));
-  CHECK(!game->timing.advanceDisplayFields(1, 0, kNtscFieldMilliHz));
+  CHECK(!game->timing.advanceDisplayFields({0, 1}, kNtscFieldMilliHz));
+  CHECK(!game->timing.advanceDisplayFields({1, 1}, 0));
+  CHECK(!game->timing.advanceDisplayFields({1, 0}, kNtscFieldMilliHz));
   CHECK_EQ(game->hle.i_stat & 1u, 0u);
   delete game;
 }
@@ -136,7 +127,7 @@ void test_a_refused_advance_raises_nothing() {
 void test_masked_edge_dispatches_once_after_guest_unmasks_it() {
   Game *game = interruptGame();
   game->core.mem_w32(kIMask, 0);
-  CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
+  CHECK(game->timing.advanceDisplayFields({1, 1}, kNtscFieldMilliHz));
   game->hle.irqPoll(&game->core);
   CHECK_EQ(verifierCalls, 0);
   CHECK_EQ(handlerCalls, 0);
@@ -154,7 +145,7 @@ void test_masked_edge_dispatches_once_after_guest_unmasks_it() {
   delete game;
 }
 
-enum class DispatchGuard { Disabled, Nested, NativeCall, Redirect };
+enum class DispatchGuard : std::uint8_t { Disabled, Nested, NativeCall, Redirect };
 
 void setGuard(Game &game, DispatchGuard guard, bool blocked) {
   switch (guard) {
@@ -178,7 +169,7 @@ void test_each_cpu_context_guard_defers_the_shipping_irq_dispatch() {
        {DispatchGuard::Disabled, DispatchGuard::Nested, DispatchGuard::NativeCall, DispatchGuard::Redirect}) {
     const std::unique_ptr<Game> game(interruptGame());
     game->core.mem_w32(kIMask, 1u);
-    CHECK(game->timing.advanceDisplayFields(1, 1, kNtscFieldMilliHz));
+    CHECK(game->timing.advanceDisplayFields({1, 1}, kNtscFieldMilliHz));
     setGuard(*game, guard, true);
     CHECK(!game->hle.canDispatchInterrupt(game->core));
     game->hle.irqPoll(&game->core);
@@ -210,6 +201,7 @@ void test_idle_gate_retirement_precedes_transient_native_context_guard() {
 } // namespace
 
 int main() {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(a_field_advance_latches_i_stat_bit0);
   RUN(the_bit_latches_and_survives_until_acknowledged);
   RUN(the_delivery_gate_is_armed);
@@ -219,5 +211,5 @@ int main() {
   RUN(masked_edge_dispatches_once_after_guest_unmasks_it);
   RUN(each_cpu_context_guard_defers_the_shipping_irq_dispatch);
   RUN(idle_gate_retirement_precedes_transient_native_context_guard);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -8,7 +8,9 @@
 // before the present pass samples them. No depth, premultiplied-alpha blend, dynamic viewport/scissor.
 #include <RmlUi/Core/RenderInterface.h>
 #include <SDL3/SDL.h>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 
 class RmlRenderInterfaceGpu final : public Rml::RenderInterface {
@@ -55,7 +57,7 @@ private:
     SDL_GPUTexture *tex = nullptr;
   };
 
-  SDL_GPUBuffer *UploadBuffer(const void *data, uint32_t size, SDL_GPUBufferUsageFlags usage);
+  SDL_GPUBuffer *UploadBuffer(std::span<const std::byte> bytes, SDL_GPUBufferUsageFlags usage);
   SDL_GPUTexture *UploadTexture(const void *rgba, int w, int h);
 
   SDL_GPUDevice *mDev = nullptr;

@@ -1,6 +1,5 @@
-// A DIRECT runtime (no GameConfig) names its memory card through
-// GameRuntime::hostIdentity(). Game::hostIdentity() is the one place that chooses between the legacy
-// GameConfig fields and that declaration, and Memcard::init() resolves the backing file from it:
+// A runtime names its memory card through GameRuntime::hostIdentity(), and Memcard::init() resolves the
+// backing file from it:
 // the title's own variable first, then the generic PSXPORT_CARD, then the title's default path.
 #include "game.h"
 #include "game_runtime.h"
@@ -97,5 +96,5 @@ int main() {
   RUN(the_default_path_applies_when_the_variable_is_unset);
   RUN(the_title_card_variable_outranks_the_default_path);
   std::filesystem::remove_all(std::filesystem::current_path() / "host_identity_test");
-  return pt_summary();
+  return psx::test::summary();
 }

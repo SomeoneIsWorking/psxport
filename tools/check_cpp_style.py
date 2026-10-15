@@ -43,30 +43,6 @@ SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp")
 # failing for a reason unrelated to the change under test is noise.
 EXCLUDED_COMPONENTS = {"build", "external", "generated", "scratch", "vendor"}
 
-# psxport's pre-policy legacy files are frozen at their measured adoption sizes. A cap only moves
-# down after an extraction; it never moves up to accommodate growth. Consumer repos use the same
-# implementation through --root and declare their own legacy exceptions with --cap.
-#
-# The default cap is 1,200 lines per file, which exists to enforce code distribution rather than to
-# pin a file's exact length. A per-file entry BELOW that default froze a size the default already
-# subsumes: keeping a properly distributed 150-line header under a 148-line number buys no
-# distribution and costs readability, so entries under DEFAULT_CAP are not carried here. Every file
-# listed below is over the default cap and still owes an extraction; each cap only moves down.
-PSXPORT_CAPS = {
-    "runtime/psx/game/game_iface.h": 32,
-    "runtime/psx/gpu/gpu_native.cpp": 2860,
-    "runtime/psx/gpu/gpu_vk.cpp": 3588,
-    "runtime/psx/gpu/gpu_vk_semi_selftest.cpp": 199,
-    "runtime/psx/gpu/gpu_vk_semi_selftest.h": 12,
-    "runtime/psx/gpu/gpu_vk_selftest_support.h": 15,
-    "runtime/psx/gpu/gpu_vk_texture_phase_selftest.cpp": 180,
-    "runtime/psx/gpu/gpu_vk_texture_phase_selftest.h": 10,
-    "runtime/psx/hle/hle.cpp": 666,
-    "runtime/psx/gpu/render_queue.cpp": 1800,
-    "runtime/ui/render_path_control.cpp": 54,
-    "runtime/ui/render_path_control.h": 32,
-}
-
 
 def run_git(root: Path, *args: str) -> list[str]:
     result = subprocess.run(
@@ -373,7 +349,18 @@ ACCEPTED_SITES = Path("tools") / "policy" / "accepted.txt"
 ENTRY_DIRECTORIES = {"tests", "tools"}
 PRODUCT_MAIN = SCRIPT_ROOT / "runtime" / "psx" / "host" / "product_main.cpp"
 # Framework steps a title once spelled out itself; TitleSession and ProductHost compose them now.
-RETIRED_NAMES = ("watchdog_init", "gte_bind", "spu_bind", "mdec_bind", "load_exe", "store_observe_attach")
+RETIRED_NAMES = (
+    "watchdog_init",
+    "gte_bind",
+    "spu_bind",
+    "mdec_bind",
+    "load_exe",
+    "store_observe_attach",
+    "psxport_install_game",
+    "bindLegacyInterface",
+    "cfg_logf",
+    "gte_write_data",
+)
 
 
 def excluded_directories(root: Path) -> list[Path]:
@@ -799,8 +786,7 @@ def main() -> int:
     if args.repository_only:
         return 0
 
-    caps = dict(PSXPORT_CAPS) if root == SCRIPT_ROOT else {}
-    caps.update(dict(args.cap))
+    caps = dict(args.cap)
 
     result = check_format(root, sources)
     if result:

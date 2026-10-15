@@ -22,6 +22,7 @@
 // rest would produce a machine that never existed.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -54,11 +55,14 @@ inline constexpr std::string_view kSio = "sio";
 inline constexpr std::string_view kCard = "card";
 inline constexpr std::string_view kCd = "cd";
 inline constexpr std::string_view kTitle = "title";
+// Every device section a machine image must carry; the title section is the one optional name.
+inline constexpr std::array<std::string_view, 14> kRequired{
+    kCpu, kRam, kScratchpad, kGte, kGpu, kBeetleSpu, kBeetleMdec, kCdc, kTiming, kDma, kHle, kSio, kCard, kCd};
 } // namespace section
 
 // Every framework section name, in one vector. Built once, so the answer cannot drift between the
 // writer and the reader.
-const std::vector<std::string> &frameworkSectionNames();
+std::vector<std::string> frameworkSectionNames();
 bool isFrameworkSectionName(std::string_view name);
 
 // A written image: the bytes plus the section directory read back out of them.

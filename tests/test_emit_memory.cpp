@@ -9,8 +9,6 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 using psx::present::EmitMemory;
 using psx::present::HostMemory;
 
@@ -21,9 +19,8 @@ std::span<const std::byte> bytesOf(const std::array<std::uint8_t, 4> &words) {
   return std::as_bytes(std::span(words));
 }
 
-} // namespace
-
-static void test_a_guest_memory_reads_and_writes_the_core(void) {
+void test_a_guest_memory_reads_and_writes_the_core(void) {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   const EmitMemory memory(game->core);
   CHECK(!memory.hosted());
@@ -36,7 +33,8 @@ static void test_a_guest_memory_reads_and_writes_the_core(void) {
   CHECK_EQ(memory.mem_r8s(kGuest + 6u), -128);
 }
 
-static void test_a_hosted_body_writes_host_bytes_and_leaves_the_guest_alone(void) {
+void test_a_hosted_body_writes_host_bytes_and_leaves_the_guest_alone(void) {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   Core &core = game->core;
   core.mem_w32(kHost, 0xAAAAAAAAu);
@@ -51,7 +49,8 @@ static void test_a_hosted_body_writes_host_bytes_and_leaves_the_guest_alone(void
 }
 
 // A read outside every host range is level data and comes from the guest.
-static void test_a_read_outside_the_host_ranges_falls_through_to_the_guest(void) {
+void test_a_read_outside_the_host_ranges_falls_through_to_the_guest(void) {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   Core &core = game->core;
   core.mem_w32(kGuest, 0x5566u);
@@ -61,7 +60,7 @@ static void test_a_read_outside_the_host_ranges_falls_through_to_the_guest(void)
   CHECK_EQ(memory.mem_r32(kGuest), 0x5566u);
 }
 
-static void test_a_range_provided_from_bytes_is_found_through_every_segment(void) {
+void test_a_range_provided_from_bytes_is_found_through_every_segment(void) {
   HostMemory host;
   const std::array<std::uint8_t, 4> data{1, 2, 3, 4};
   host.provide(kHost, bytesOf(data));
@@ -75,7 +74,7 @@ static void test_a_range_provided_from_bytes_is_found_through_every_segment(void
   CHECK_EQ(host.view(kHost + 1u, 2u).size(), 2u);
 }
 
-static void test_ranges_in_any_order_are_each_found(void) {
+void test_ranges_in_any_order_are_each_found(void) {
   HostMemory host;
   host.zero(kHost + 0x100u, 16u);
   host.zero(kHost, 16u);
@@ -89,7 +88,8 @@ static void test_ranges_in_any_order_are_each_found(void) {
   CHECK_EQ(back, 0u);
 }
 
-static void test_a_hosted_gte_point_store_writes_host_bytes_only(void) {
+void test_a_hosted_gte_point_store_writes_host_bytes_only(void) {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   Core &core = game->core;
   core.gte().writeData(14, 0x00340012u);
@@ -101,6 +101,8 @@ static void test_a_hosted_gte_point_store_writes_host_bytes_only(void) {
   CHECK_EQ(core.mem_r32(kHost + 8u), 0u);
 }
 
+} // namespace
+
 int main(void) {
   RUN(a_guest_memory_reads_and_writes_the_core);
   RUN(a_hosted_body_writes_host_bytes_and_leaves_the_guest_alone);
@@ -108,5 +110,5 @@ int main(void) {
   RUN(a_range_provided_from_bytes_is_found_through_every_segment);
   RUN(ranges_in_any_order_are_each_found);
   RUN(a_hosted_gte_point_store_writes_host_bytes_only);
-  return pt_summary();
+  return psx::test::summary();
 }

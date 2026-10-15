@@ -13,8 +13,10 @@
 // single copy) is never touched by two parties at once — the scheduler save/restores it around the
 // handoff exactly as the old longjmp scheduler did.
 #pragma once
+
 #include <condition_variable>
 #include <csetjmp>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -56,7 +58,7 @@ public:
   }
 
 private:
-  enum class Turn { Scheduler, Fiber };
+  enum class Turn : std::uint8_t { Scheduler, Fiber };
   std::thread th_;
   std::mutex m_;
   std::condition_variable cv_;

@@ -15,24 +15,28 @@
 class Core;
 class Game;
 
+namespace psx::ui {
+
 // Bring the overlay up on the port's SDL_GPU device (call once per Game after the device exists).
 // `win` may be NULL — the overlay EXISTS in both legs; the window is a sink, not a mode. `sink_w`/
 // `sink_h` is the sink's measured size and `target_fmt` the colour format of the pass the overlay
 // records into. See rmlui_overlay.h for why none of this is re-derived from the window.
-void overlay_glue_init(
+void initOverlay(
     Game *game, SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h);
 
 // Per-frame CPU step: latch the live world readout from guest RAM (camera/Tomba pos + stage) for
 // the menu's HUD line, then run the overlay's CPU update. Called from present() before recording.
-void overlay_glue_frame_begin(Core *core);
+void beginOverlayFrame(Core *core);
 
 // Record the menu geometry into the present render pass `rp` (its command buffer `cmd`). `win_w`/
 // `win_h` = the FULL window pixel size (glue passes them through so the menu covers the whole
 // window, not the letterboxed game pane). No-op if hidden.
-void overlay_glue_record(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int win_w, int win_h);
+void recordOverlay(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int win_w, int win_h);
 
 // Record the choice SCREEN (a title picker) into the present-image render pass `rp`. Unlike the menu this
 // is picture content, so it goes into the image a present shot reads. No-op when no screen is shown.
-void overlay_glue_record_screen(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h);
+void recordOverlayScreen(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h);
+
+} // namespace psx::ui
 
 #endif

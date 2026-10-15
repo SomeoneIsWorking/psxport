@@ -1,9 +1,10 @@
 // gpu_vk_record_present.cpp — RenderPath::Record's picture: the current frame record through RecordRasterizer.
 #include "core.h"
 #include "game.h"
+#include "gpu_device.h"
 #include "gpu_vk.h"
 #include "gpu_vk_check.h"
-#include "gpu_vk_device_handles.h"
+#include "gpu_vk_device.h"
 #include "gpu_vk_internal.h"
 #include "image_writer.h"
 #include "present_plan.h"
@@ -15,26 +16,27 @@
 
 void GpuVkState::present_record(PresentInputs &inputs) {
   s_present_record = false;
+  s_present_ires = 0;
   Core &core = game->core;
-  const psx::gpu::DisplayArea area = core.gpuDevice.displayArea();
+  const psx::gpu::DisplayArea area = core.gpuDevice().displayArea();
   // 24bpp scanout reads VRAM bytes, which the scaled image does not hold; the device picture stands.
   if (core.rsub.mode.path() != RenderPath::Record || area.depth24) {
     return;
   }
-  int scale = 1;
-  gpu_vk_video_status(&core, nullptr, &scale, nullptr, nullptr, nullptr, nullptr, nullptr);
+  const int scale = psx::gpu::videoStatus(core).ires;
   if (!s_record) {
-    s_record = std::make_unique<psx::gpu::RecordRasterizer>(s_dev);
+    s_record = std::make_unique<psx::gpu::RecordRasterizer>(device->s_dev);
   }
-  const psx::gpu::RecordRect display = psx::gpu::clampedVramRect(inputs.sx, inputs.sy, inputs.native_w, inputs.disp_h);
+  const psx::gpu::RecordRect display =
+      psx::gpu::clampedVramRect({inputs.sx, inputs.sy, inputs.native_w, inputs.disp_h});
   const GuestProjectionPlan plan =
-      gpu_vk_latch_record_display(core, {display.x1 - display.x0, display.y1 - display.y0});
+      psx::present::latchRecordDisplay(core, {display.x1 - display.x0, display.y1 - display.y0});
   const psx::gpu::RecordView view{display, plan.presentationHorizontalMargin};
   const psx::present::FrameRecord &record = game->presentation.currentRecord();
   const psx::present::FrameRecord *composed = game->presentation.composedRecord();
   const bool advances = game->presentation.composedAdvances();
-  const bool deviceAhead = core.gpuDevice.hasUnsealedWork();
-  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  const bool deviceAhead = core.gpuDevice().hasUnsealedWork();
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device->s_dev);
   GPUCHK(cmd, "record command buffer");
   s_present_record = true;
   s_present_ires = scale > 1 ? scale : 0;
@@ -43,7 +45,7 @@ void GpuVkState::present_record(PresentInputs &inputs) {
   s_present_fade[2] = inputs.fade_g;
   s_present_fade[3] = inputs.fade_b;
   const bool drewComposed =
-      s_record->show(cmd, record, composed, advances, deviceAhead, core.gpuDevice.vram(), scale, view);
+      s_record->show(cmd, record, composed, advances, deviceAhead, core.gpuDevice().vram(), scale, view);
   // The display, or its wide canvas, at the 4:3 display's aspect per column.
   const psx::gpu::RecordRect shown = s_record->presented().rect;
   inputs.sx = shown.x0;
@@ -62,16 +64,16 @@ void GpuVkState::present_record(PresentInputs &inputs) {
   }
   // An in-between has no device picture to match; the t = 1 composed frame at 4:3 must match it.
   if ((drewComposed && (!advances || view.margin > 0)) || !lucent::channel_on("recordcheck")) {
-    gpu_submit(cmd, drewComposed ? "record composed" : "record");
+    device->submit(cmd, drewComposed ? "record composed" : "record");
     return;
   }
-  const psx::gpu::RecordRect rect = psx::gpu::clampedVramRect(area.x, area.y, area.width, area.height);
+  const psx::gpu::RecordRect rect = psx::gpu::clampedVramRect({area.x, area.y, area.width, area.height});
   s_record->download(cmd, {drewComposed ? s_record->woven().texture : s_record->image(), rect});
-  if (!gpu_submit_and_wait(cmd, "record check")) {
+  if (!device->submitAndWait(cmd, "record check")) {
     return;
   }
   const std::vector<std::uint16_t> image = s_record->downloaded();
-  const std::span<const std::uint16_t> vram = core.gpuDevice.vram();
+  const std::span<const std::uint16_t> vram = core.gpuDevice().vram();
   const int width = rect.x1 - rect.x0;
   long mismatched = 0;
   int firstX = -1;
@@ -121,10 +123,10 @@ bool GpuVkState::record_shot(const char *path) {
     lucent::error("shot", "no record picture has been presented, nothing written to {}", path ? path : "(null)");
     return false;
   }
-  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device->s_dev);
   GPUCHK(cmd, "record shot command buffer");
   s_record->download(cmd, picture);
-  if (!gpu_submit_and_wait(cmd, "record shot")) {
+  if (!device->submitAndWait(cmd, "record shot")) {
     return false;
   }
   const std::vector<std::uint16_t> image = s_record->downloaded();
@@ -134,15 +136,14 @@ bool GpuVkState::record_shot(const char *path) {
   std::vector<std::uint8_t> rgb(image.size() * 3);
   for (std::size_t i = 0; i < image.size(); i++) {
     const psx::gpu::VramPixel pixel = psx::gpu::decodeVramPixel(image[i]);
-    int r = psx::gpu::scale5to8(pixel.red);
-    int g = psx::gpu::scale5to8(pixel.green);
-    int b = psx::gpu::scale5to8(pixel.blue);
-    present_fade_rgb(s_present_fade, r, g, b);
-    rgb[i * 3] = static_cast<std::uint8_t>(r);
-    rgb[i * 3 + 1] = static_cast<std::uint8_t>(g);
-    rgb[i * 3 + 2] = static_cast<std::uint8_t>(b);
+    const psx::present::Rgb8 colour = psx::present::fadeRgb(
+        s_present_fade,
+        {psx::gpu::scale5to8(pixel.red), psx::gpu::scale5to8(pixel.green), psx::gpu::scale5to8(pixel.blue)});
+    rgb[i * 3] = static_cast<std::uint8_t>(colour.red);
+    rgb[i * 3 + 1] = static_cast<std::uint8_t>(colour.green);
+    rgb[i * 3 + 2] = static_cast<std::uint8_t>(colour.blue);
   }
-  if (!image_write_rgb24(path, rgb.data(), width, height)) {
+  if (!psx::debug::writeImageRgb24(path, rgb.data(), width, height)) {
     lucent::error("shot", "record picture not written to {}", path ? path : "(null)");
     return false;
   }

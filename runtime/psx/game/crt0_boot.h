@@ -5,7 +5,7 @@
 // WHY THIS FILE EXISTS (megamanx4 docs/issues/0005). The first `Crt0Boot::run` was a faithful
 // transcription of the FIRST consumer's crt0 (Tomba!2, FUN_800896E0) wearing generic clothes. That was
 // established by MEASUREMENT, not by reading the C. The extractor is `tools/crt0_extract` (it shares
-// `crt0_scan` with the boot-time audit, so the two cannot drift); run over Tomba!2's MAIN.EXE it
+// `psx::game::scanCrt0` with the boot-time audit, so the two cannot drift); run over Tomba!2's MAIN.EXE it
 // re-derives all NINE values Tomba2Engine's game_config.cpp had recorded independently by hand —
 // bssZeroLo/Hi, stackTopBase/2, heapBase, heapSizePtr, heapBasePtr, gp, libcInit — with zero
 // disagreements, which is what licenses trusting it on the five executables nobody had hand-RE'd.
@@ -44,7 +44,7 @@
 //                checked), and the caller must not boot. Refusing is the only honest answer, because
 //                every remaining alternative fabricates guest state.
 //
-// WHAT A NEGATIVE PRINTS. `crt0_plan` never returns quietly. A refusal names the fields and the count
+// WHAT A NEGATIVE PRINTS. `planCrt0` never returns quietly. A refusal names the fields and the count
 // checked; a success prints the whole applied group (sp/gp/a0/a1, the bss span, and which of the two
 // optional stores it performed out of how many the game declares). "No store performed" and "I was
 // never given an address" are therefore different lines, which is the entire point.
@@ -113,7 +113,7 @@ struct Crt0Plan {
 
 namespace psx {
 
-// The required crt0 fields an image leaves unset; `crt0_plan` refuses on any of them.
+// The required crt0 fields an image leaves unset; `planCrt0` refuses on any of them.
 struct Crt0Completeness {
   std::string unset; // the unset field names, comma-separated; empty when the group is complete
   int unsetCount = 0;
@@ -155,15 +155,17 @@ inline Crt0Completeness crt0Completeness(const psx::game::Crt0Image &image) {
 
 } // namespace psx
 
-// crt0_plan — derive the plan, or refuse.
+namespace psx::game {
+
+// planCrt0 — derive the plan, or refuse.
 //
 // `stackTopWord` / `stackReserveWord` are the two words the guest crt0 LOADS (mem[stackTopBase] and
 // mem[stackTopBase2]); they are passed in rather than read here so this function is pure and can be
 // exercised hermetically against the exact words a real boot saw.
 //
 // `who` names the caller in every emitted line (a boot has more than one Core: SBS boots two).
-static inline Crt0Plan
-crt0_plan(const psx::game::Crt0Image *image, uint32_t stackTopWord, uint32_t stackReserveWord, const char *who) {
+inline Crt0Plan
+planCrt0(const psx::game::Crt0Image *image, uint32_t stackTopWord, uint32_t stackReserveWord, const char *who) {
   Crt0Plan p;
   if (!image) {
     lucent::error("crt0",
@@ -292,12 +294,9 @@ crt0_plan(const psx::game::Crt0Image *image, uint32_t stackTopWord, uint32_t sta
   return p;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
-namespace psx::game {
-
 // Replays a title's crt0 on a Core: reads the two guest crt0 words, refuses an incomplete or
-// disagreeing group, then applies crt0_apply's write sequence and calls libcInit. No arithmetic of its
-// own; every value comes from crt0_plan.
+// disagreeing group, then applies applyCrt0's write sequence and calls libcInit. No arithmetic of its
+// own; every value comes from planCrt0.
 class Crt0Boot {
 public:
   explicit Crt0Boot(const Crt0Image &image) : image_(image) {}
@@ -307,9 +306,7 @@ private:
   Crt0Image image_;
 };
 
-} // namespace psx::game
-
-// crt0_apply — APPLY a plan. Also here, and also templated, for ONE reason: the defect this file
+// applyCrt0 — APPLY a plan. Also here, and also templated, for ONE reason: the defect this file
 // exists to fix was not in the arithmetic, it was in the APPLICATION — an unconditional store
 // through the optional heap-size address when the address was absent. A test that only checked the plan would assert
 // `storeHeapSize == false` and still not know whether the caller honoured it. So the write SEQUENCE is
@@ -324,7 +321,7 @@ private:
 //
 // Returns false (writing NOTHING) when the plan was refused, so a caller that forgot to check `ok`
 // still cannot fabricate guest state.
-template <class Writer> static inline bool crt0_apply(const Crt0Plan &p, Writer &w) {
+template <class Writer> inline bool applyCrt0(const Crt0Plan &p, Writer &w) {
   if (!p.ok) {
     return false;
   }
@@ -345,3 +342,5 @@ template <class Writer> static inline bool crt0_apply(const Crt0Plan &p, Writer 
   w.call(p.libcInit);
   return true;
 }
+
+} // namespace psx::game

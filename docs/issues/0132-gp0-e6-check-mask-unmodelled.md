@@ -1,6 +1,6 @@
 # 0130 — GP0(0xE6) check-mask is decoded and never honoured, so overlapping prims composite twice
 
-**State:** recorded, not fixed. Found 2026-09-28 while making the GP0 command word readable; a
+**State:** resolved 2026-10-15: the native rasterizer is deleted; Beetle's `gpu.c` and the record rasteriser (`record_raster_setup.cpp`, `kOpMaskCheck`) both honour check-mask. Recorded Found 2026-09-28 while making the GP0 command word readable; a
 readability refactor must not change what the code does, so the gap is left exactly as it was.
 
 ## What the guest asks for
@@ -17,7 +17,7 @@ overlap is brighter than the artist authored.
 
 ## What this framework does
 
-`Gp0Command::maskBits()` (`runtime/psx/gpu/gp0_command.h`) decodes both bits and both are stored. Neither
+`Gp0Command::maskBits()` (`runtime/psx/present/gp0_command.h`) decodes both bits and both are stored. Neither
 is used as a pixel test. The rasterizer's `put_px_b` (`runtime/psx/gpu/gpu_native_raster.cpp`) writes every
 pixel unconditionally.
 
@@ -44,7 +44,7 @@ from the framework.
 
 ## Where
 
-- `runtime/psx/gpu/gp0_command.h` — `Gp0MaskBits`, `Gp0Command::maskBits()`: the decode, and the comment
+- `runtime/psx/present/gp0_command.h` — `Gp0MaskBits`, `Gp0Command::maskBits()`: the decode, and the comment
   recording why it exists.
 - `runtime/psx/gpu/gpu_native_raster.cpp` — `GpuState::put_px_b`: the write with no mask test.
 - `runtime/psx/gpu/gpu_native.cpp` — the `PSXPORT_DEBUG=maskbit` probe that measures whether any title

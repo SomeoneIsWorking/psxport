@@ -1,56 +1,41 @@
 #ifndef PSXPORT_CONFIG_VARS_H
 #define PSXPORT_CONFIG_VARS_H
-// config_vars.h — THE INVENTORY. Every migrated knob is listed here and defined in config.cpp.
-// Ordinary values expose a CVar; policy values expose only their typed API so consumers cannot
-// duplicate parsing or couple themselves to the backing storage. This is the file you grep to answer
-// "what knobs exist".
-//
-// A knob that is NOT here still works: cfg_on / cfg_int / cfg_str fall through to the environment
-// exactly as they always did (runtime/psx/config/cfg.cpp), and the registry records the read so the
-// environment audit can tell it apart from a typo. Migration order and the remaining list are in
-// docs/config.md.
-//
-// TO MIGRATE A KNOB: declare it here, define it in config.cpp next to its neighbours, and change the
-// call site from cfg_*("PSXPORT_X") to cv_x.get(). Then check the migrated value against the
-// pre-migration one in tests/test_config_cvar.cpp — the compatibility gate is the point of the
-// exercise, not a formality.
-#include "config_var.h"
+// config_vars.h — the product and run knobs, each a private CVar in config.cpp read through the typed
+// accessor here. Diagnostic knobs are in diagnostic_config.h. A test sets one by name through
+// set_runtime()/clear_runtime() (config.h).
 #include "diagnostic_run.h"
 #include "fallback_policy.h"
 #include "override_differential_config.h"
-#include "render_mode.h" // RenderPath — the type cv_render_path resolves to
+#include "render_mode.h" // RenderPath
 
 #include <filesystem>
+#include <string>
 
 namespace psx::config {
 
 // PSXPORT_NOAUDIO — open no audio device. Half of what "headless" means (the other half, no window,
 // is the consuming game's own launch decision).
-extern BoolVar cv_noaudio;
+bool no_audio();
 
-extern BoolVar cv_producers; // arm the producer census (ot_attr.h) — see config.cpp for the cost
+bool producer_census(); // PSXPORT_PRODUCERS: arm the producer census (ot_attr.h)
 
 // PSXPORT_DEBUG_SERVER — the live, non-blocking TCP debug endpoint on 127.0.0.1, which is how a game
 // is driven and inspected WHILE it runs. The value is a port, and 1 means the default port, so the
-// text is interpreted once, in dbg_server.h's `debug_server_port`. Declared here because a knob the
-// audit cannot see is a knob that does nothing: this one was read through cfg_str() and matched
-// nothing, which the boot audit reported as UNKNOWN while the server never started.
-extern TextVar cv_debug_server;
+// text is interpreted once, in dbg_server.h's `psx::debug::debugServerPort`.
+std::string debug_server();
 // PSXPORT_STORE_OBSERVE — hex guest STORE-INSTRUCTION PCs the dynarec store observer watches. The list
 // is matched against the PC OF each executed translated store (`target.guestPc != guestPc` in
 // LightrecExecutor::Impl::observeStore), so it is NOT a list of guest data addresses; arming a data
 // address produces a guaranteed MATCHED NONE. Interpreted once by runtime/cpu/store_observe.cpp; see the
 // declaration in config.cpp for what it is for and what it cannot answer.
-extern TextVar cv_store_observe;
-// PSXPORT_RAMDUMP — write main RAM to this path AFTER the frame loop returns. It is here because it
-// was read with `cfg_str` and declared nowhere, so it had no help text and the env audit could not
-// describe it; and it is separated from the frame knob because the two are different tools.
+std::string store_observe();
+// PSXPORT_RAMDUMP — write main RAM to this path AFTER the frame loop returns.
 // PSXPORT_RAMDUMP_FRAME=N writes from INSIDE the loop at native frame N, which is the one that works
 // while a title is playing: overlay state during gameplay is not end-of-run state, and not every
 // product returns from the frame loop at all (measured 2026-09-27 on Spyro 1, where the end-of-run
 // dump silently did nothing). See the declarations in config.cpp.
-extern TextVar cv_ramdump;
-extern TextVar cv_ramdump_frame;
+std::string ramdump_path();
+std::string ramdump_frame();
 
 // PSXPORT_LOAD_STATE — a whole-machine state file to resume from BEFORE the first field, read once
 // at boot through this configuration owner (environment, then ./.env). This is how a headless tool
@@ -58,40 +43,40 @@ extern TextVar cv_ramdump_frame;
 // that cannot be loaded is a REFUSAL, not a silent fall back to power-on — a run that quietly
 // booted from scratch after a broken state path would spend the whole budget re-deriving the state
 // it was asked to start from.
-extern TextVar cv_load_state;
+std::string load_state_path();
 
 // PSXPORT_BUG_REPORT_DIR — where B-key bug reports are saved. Unset saves under the title's user-data
 // directory (HostIdentity::userDataName) in `bug-reports/`; see runtime/psx/debug/bug_report_session.h.
-extern TextVar cv_bug_report_dir;
+std::string bug_report_dir();
 
 // PSXPORT_PAD_RECORD / PSXPORT_PAD_REPLAY / PSXPORT_PAD_RESUME — the pad session's record sink, the
 // recording a gate replays at real speed, and the recording a player resumes from (fast-forwarded).
 // All three are phase-keyed .pad files (runtime/psx/input/pad_recording.h); PSXPORT_PAD_RECORD=0 disables
 // the windowed default sink. Resolved once by psx::input::PadRecordReplay on the first pad frame.
-extern TextVar cv_pad_record;
-extern TextVar cv_pad_replay;
-extern TextVar cv_pad_resume;
+std::string pad_record_path();
+std::string pad_replay_path();
+std::string pad_resume_path();
 
 // ── watchdog ────────────────────────────────────────────────────────────────────────────────────
 // PSXPORT_WATCHDOG — frame-progress timeout in seconds. Default 3, ON even when unset, so a hang
 // self-aborts with a backtrace instead of wedging. 0 disables it.
-extern IntVar cv_watchdog;
-extern IntVar cv_spin_ticks; // guest instructions per spin-detector sample (0 = off)
-extern IntVar cv_spin_runs;  // consecutive starved in-region samples that declare a spin
+long watchdog_seconds();
+long spin_ticks(); // PSXPORT_SPIN_TICKS: guest instructions per spin-detector sample (0 = off)
+long spin_runs();  // PSXPORT_SPIN_RUNS: consecutive starved in-region samples that declare a spin
 // PSXPORT_WATCHDOG_BOOT — the larger grace for the FIRST present, which legitimately blocks while
 // the driver compiles every pipeline. -1 (the default) means "derive": max(PSXPORT_WATCHDOG, 45).
 // An explicit 0 still means 0, which is why the sentinel is -1 and not 0.
-extern IntVar cv_watchdog_boot;
+long watchdog_boot_seconds();
 
 // ── run length ──────────────────────────────────────────────────────────────────────────────────
 // PSXPORT_NATIVE_FRAMES — the run's cap in presentation-fence steps; 0 leaves it to the run budget's
 // defaults (host/run_budget.h).
-extern IntVar cv_native_frames;
+long native_frames();
 
 // ── assets and settings ─────────────────────────────────────────────────────────────────────────
 // PSXPORT_ASSET_DIR — the directory CONTAINING `assets/`, for a consumer whose cwd is its own repo
 // root. Empty = cwd-relative `assets/rml/...`.
-extern TextVar cv_asset_dir;
+std::string asset_dir();
 
 // PSXPORT_VK_WINDOW / PSXPORT_VK_HEADLESS — a run is headless unless a window is asked for, and
 // HEADLESS wins. Read through windowRequested(); the backing vars are private.
@@ -104,20 +89,9 @@ void applyPackagedDefaults(const std::filesystem::path &packageRoot);
 // PSXPORT_SETTINGS — path to the settings file. NOT persistable, and that is not a detail: this knob
 // SELECTS the file the Value layer is read from and written to, so a Value-layer copy of it inside
 // that file could disagree with the file it is in.
-extern TextVar cv_settings_path;
+std::string settings_path();
 
-// ── enhancements ────────────────────────────────────────────────────────────────────────────────
-// PSXPORT_ENH=<name,name|all> — the sanctioned pc_enh class: deliberate, MEANINGFUL guest-state
-// changes on top of the faithful engine. Read it through enh_named() / enh(), never by parsing the
-// text at a call site. Persistable: an enhancement selection is a user preference, the class the
-// Value layer exists for.
-//
-// MIGRATED 2026-08-12 (Tomba2Engine kanban #92). It used to be read by cfg_enh() straight out of
-// lucent::config into a function-local SEEDED STATIC, which cost three things: no Value layer (the
-// settings file could not select an enhancement), no Runtime layer (nor could the REPL), and — because
-// the static was seeded on the first call and never re-read — no way for anything to change the answer
-// later in the process, including the suppression below. Gate: tests/test_config_enh.cpp.
-extern TextVar cv_enh;
+// PSXPORT_ENH=<name,name|all> — the pc_enh selection, read through enh_named()/enh() (enhancement_gate.h).
 
 // PSXPORT_DIAGNOSTIC_RUN — product | compare-candidate | compare-reference. This is a diagnostic
 // role for the same shipping dynarec/native runtime, never an interpreter/backend selector. The
@@ -138,31 +112,15 @@ psx::cpu::OverrideDifferentialConfig override_differential_config();
 // PSXPORT_REACH_REPORT — where the function-reach recorder writes its JSON report; empty disarms it.
 std::string function_reach_report_path();
 
-// PSXPORT_RENDER_PATH — the render path: native | gte | device | record.
-// Read it through render_path() below, never by parsing the text at a call site.
-extern TextVar cv_render_path;
-RenderPath render_path(RenderPath fallback = RenderPath::Native);
-// The same ladder WITHOUT the process-global Runtime layer, for a Core that a live switch was not
-// addressed to. See render_path.cpp: the Runtime slot mirrors one Core's live switch.
-RenderPath render_path_excluding_runtime(RenderPath fallback = RenderPath::Native);
+// PSXPORT_RENDER_PATH — the render path: record | device. An unknown value warns and gives `fallback`.
+RenderPath render_path(RenderPath fallback = RenderPath::Record);
 
-// ── declared for introspection only; resolved elsewhere ─────────────────────────────────────────
-// lucent reads these two for itself — it is BUILT with LUCENT_CHANNEL_ENV="PSXPORT_DEBUG" and
-// LUCENT_LOG_FILE_ENV="PSXPORT_LOG_FILE" (cmake/psxport.cmake), resolving both lazily on its first
-// log call so there is no initialisation that can fail to run. They are declared here, marked
-// `external`, purely so the environment audit does not report the two most-used knobs in the port as
-// unknown, and so `report()` can show what the run was configured with. NOTHING reads their value
-// from the registry and nothing may start: PSXPORT_DEBUG has 44 call sites across four repos and is
-// wired through CMake into lucent. tests/test_lucent_channel_env.cpp is the gate on that.
-extern TextVar cv_debug_channels;
-extern TextVar cv_log_file;
-
-// ── the audit's own calibration target ──────────────────────────────────────────────────────────
-// PSXPORT_CFG_SELFTEST_DECLARED — reserved. It configures nothing and never will. It exists so
-// selftest() can run the environment audit against a DECLARED name as well as an undeclared one: a
-// classifier only ever exercised on one of its two classes has not been tested, it has been
-// admired. Not documented as a knob in docs/config.md, because it is not one.
-extern BoolVar cv_selftest_declared;
+// PSXPORT_FULLSCREEN, or PSXPORT_WINDOWED=0 — the window opens fullscreen.
+bool fullscreen_requested();
+// PSXPORT_PICKER_TITLES — the picker's panel slugs, comma-separated; empty is every provisioned title.
+std::string picker_titles();
+// $XDG_STATE_HOME/psxport, else $HOME/.local/state/psxport; empty when neither is set.
+std::string user_state_dir();
 
 } // namespace psx::config
 

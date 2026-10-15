@@ -40,5 +40,5 @@ void test_begin_publishes_the_frame_and_services_the_pad() {
 
 int main() {
   RUN(begin_publishes_the_frame_and_services_the_pad);
-  return pt_summary();
+  return psx::test::summary();
 }

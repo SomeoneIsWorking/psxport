@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include <string>
 
 namespace psx::config {
@@ -7,7 +9,7 @@ namespace psx::config {
 // A comparison run is a diagnostic role, not a CPU-engine selection. Both roles execute the
 // product's dynarec/native path; the role only keeps deliberate enhancements out of fidelity
 // evidence and identifies which side of a comparison produced the result.
-enum class DiagnosticRunMode {
+enum class DiagnosticRunMode : std::uint8_t {
   Product,
   CompareCandidate,
   CompareReference,

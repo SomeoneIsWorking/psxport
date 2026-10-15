@@ -16,7 +16,6 @@
 using psx::state::BeetleStateMem;
 
 // Guest-facing device register writes (mem.cpp / spu_beetle.cpp), C linkage.
-extern "C" void spu_write(uint32_t addr, uint32_t val);
 extern "C" void mdec_write(uint32_t addr, uint32_t val);
 
 extern "C" {
@@ -37,15 +36,13 @@ int MDEC_StateAction(BeetleStateMem *sm, int load, int data_only);
 // The GTE is deliberately absent: psxport's GTE state is `GteRegs` (the 64 register words and
 // FLAGS), which the whole-machine owner writes directly, and Beetle's GTE_StateAction adds
 // Matrices/CRVectors duplicates kept only for compatibility with savestates this port does not read.
-int StateAction(BeetleStateMem *sm, int load, int data_only);
-} // extern "C"
-
 int StateAction(BeetleStateMem *sm, int load, int data_only) {
   int ret = 1;
   ret &= SPU_StateAction(sm, load, data_only);
   ret &= MDEC_StateAction(sm, load, data_only);
   return ret;
 }
+} // extern "C"
 
 namespace psx::state {
 namespace {
@@ -93,14 +90,14 @@ void bindDevice(Core &core, BeetleDevice device, bool powerIfNeeded) {
 void perturbDevice(Core &core, BeetleDevice device, std::uint32_t seed) {
   bindDevice(core, device, true);
   if (device == BeetleDevice::Spu) {
-    spu_write(0x1F801DA6u, seed & 0xFFFFu);        // transfer address
-    spu_write(0x1F801DAAu, 0x1234u ^ seed);        // IRQ address
-    spu_write(0x1F801DA8u, 0x0020u | (seed & 1u)); // control: SPU IRQ enable
-    spu_write(0x1F801D80u, 0x7F7Fu ^ seed);        // main volume L/R
-    spu_write(0x1F801DB0u, 0x0F0Fu ^ seed);        // CD volume L/R
-    spu_write(0x1F801D00u, seed & 0x7FFFu);        // voice 0 left volume
-    spu_write(0x1F801D02u, (seed >> 4) & 0x7FFFu); // voice 0 right volume
-    spu_write(0x1F801D08u, 0x0001u);               // voice 0 key on
+    psx::audio::spu::write(0x1F801DA6u, seed & 0xFFFFu);        // transfer address
+    psx::audio::spu::write(0x1F801DAAu, 0x1234u ^ seed);        // IRQ address
+    psx::audio::spu::write(0x1F801DA8u, 0x0020u | (seed & 1u)); // control: SPU IRQ enable
+    psx::audio::spu::write(0x1F801D80u, 0x7F7Fu ^ seed);        // main volume L/R
+    psx::audio::spu::write(0x1F801DB0u, 0x0F0Fu ^ seed);        // CD volume L/R
+    psx::audio::spu::write(0x1F801D00u, seed & 0x7FFFu);        // voice 0 left volume
+    psx::audio::spu::write(0x1F801D02u, (seed >> 4) & 0x7FFFu); // voice 0 right volume
+    psx::audio::spu::write(0x1F801D08u, 0x0001u);               // voice 0 key on
     return;
   }
   mdec_write(0x1F801E10u, 0x00040004u | (seed & 0xFFu)); // command 0x1 + a parameter word

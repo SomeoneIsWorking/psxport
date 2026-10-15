@@ -1,93 +1,49 @@
-// test_render_path.cpp — the RENDER PATH (RenderMode::path()).
-//
-// Who produces the geometry and whether PC enhancements may touch it are DERIVED from one enum, so
-// an impossible pair (the device picture over native producers) cannot be spelled. Both guest paths
-// are pure: enhancementsAllowed() is false for Gte and Device. The path is per-Core state.
+// test_render_path.cpp — the render path (RenderMode::path()): its names, its default and its parse.
 #include "render_mode.h"
 #include "testutil.h"
 
-// Every path maps to exactly one (geometry source, enhancements) pair.
-static void test_path_derives_its_answers(void) {
-  struct Row {
-    RenderPath path;
-    bool psxRender;
-    bool enh;
-    const char *name;
-  };
-  static const Row rows[] = {
-      // path                geometry from guest?  PC enhancements?
-      {RenderPath::Native, false, true, "native"},
-      {RenderPath::Gte, true, false, "gte"},
-      {RenderPath::Device, true, false, "device"},
-      {RenderPath::Record, true, false, "record"},
-  };
-  int n = 0;
-  for (const Row &r : rows) {
-    RenderMode m;
-    m.setPath(r.path);
-    CHECK_EQ((int)m.path(), (int)r.path);
-    CHECK_EQ(m.psxRender(), r.psxRender);
-    CHECK_EQ(m.enhancementsAllowed(), r.enh);
-    CHECK(strcmp(render_path_name(r.path), r.name) == 0);
-    n++;
-  }
-  CHECK_EQ(n, 4);
+#include <cstring>
+
+namespace {
+
+void test_paths_have_names(void) {
+  CHECK(strcmp(psx::gpu::renderPathName(RenderPath::Record), "record") == 0);
+  CHECK(strcmp(psx::gpu::renderPathName(RenderPath::Device), "device") == 0);
 }
 
-// The default must be the shipping configuration.
-static void test_default_is_native(void) {
+void test_default_is_record(void) {
   RenderMode m;
-  CHECK_EQ((int)m.path(), (int)RenderPath::Native);
-  CHECK(m.enhancementsAllowed());
-  CHECK(!m.psxRender());
+  CHECK_EQ((int)m.path(), (int)RenderPath::Record);
 }
 
-// The device picture shows what the guest drew, so the device path takes guest geometry.
-static void test_device_picture_implies_guest_geometry(void) {
-  int seen = 0, illegal = 0;
-  for (int i = 0; i <= (int)RenderPath::Record; i++) {
-    RenderMode m;
-    m.setPath((RenderPath)i);
-    if ((m.path() == RenderPath::Device || m.path() == RenderPath::Record) && !m.psxRender()) {
-      illegal++;
-    }
-    seen++;
-  }
-  CHECK_EQ(seen, 4);
-  CHECK_EQ(illegal, 0);
+// A retired or misspelt name is rejected rather than silently meaning something.
+void test_parse_names_and_reject_garbage(void) {
+  RenderPath p = RenderPath::Record;
+  CHECK(psx::gpu::parseRenderPath("device", &p) && p == RenderPath::Device);
+  CHECK(psx::gpu::parseRenderPath("DEVICE", &p) && p == RenderPath::Device); // case-insensitive
+  CHECK(psx::gpu::parseRenderPath("record", &p) && p == RenderPath::Record);
+  p = RenderPath::Device;
+  CHECK(!psx::gpu::parseRenderPath("native", &p));
+  CHECK(!psx::gpu::parseRenderPath("gte", &p));
+  CHECK(!psx::gpu::parseRenderPath("", &p));
+  CHECK(!psx::gpu::parseRenderPath("recor", &p)); // no prefix matching
+  CHECK_EQ((int)p, (int)RenderPath::Device);      // a rejected parse leaves the target untouched
 }
 
-// A typo is rejected rather than silently meaning `native`.
-static void test_parse_names_and_reject_garbage(void) {
-  RenderPath p = RenderPath::Native;
-  CHECK(render_path_parse("native", &p) && p == RenderPath::Native);
-  CHECK(render_path_parse("gte", &p) && p == RenderPath::Gte);
-  CHECK(render_path_parse("device", &p) && p == RenderPath::Device);
-  CHECK(render_path_parse("DEVICE", &p) && p == RenderPath::Device); // case-insensitive
-  CHECK(render_path_parse("record", &p) && p == RenderPath::Record);
-  p = RenderPath::Gte;
-  CHECK(!render_path_parse("psx", &p)); // the retired software-rasterizer path
-  CHECK(!render_path_parse("", &p));
-  CHECK(!render_path_parse("nativ", &p)); // no prefix matching: a truncation is a typo
-  CHECK_EQ((int)p, (int)RenderPath::Gte); // a rejected parse leaves the target UNTOUCHED
-}
-
-// Per-Core independence: two RenderModes never share state.
-static void test_two_cores_are_independent(void) {
+void test_two_cores_are_independent(void) {
   RenderMode a, b;
-  a.setPath(RenderPath::Native);
+  a.setPath(RenderPath::Record);
   b.setPath(RenderPath::Device);
-  CHECK(a.enhancementsAllowed());
-  CHECK(!b.enhancementsAllowed());
-  CHECK(!a.psxRender());
-  CHECK(b.psxRender());
+  CHECK_EQ((int)a.path(), (int)RenderPath::Record);
+  CHECK_EQ((int)b.path(), (int)RenderPath::Device);
 }
+
+} // namespace
 
 int main(void) {
-  RUN(path_derives_its_answers);
-  RUN(default_is_native);
-  RUN(device_picture_implies_guest_geometry);
+  RUN(paths_have_names);
+  RUN(default_is_record);
   RUN(parse_names_and_reject_garbage);
   RUN(two_cores_are_independent);
-  return pt_summary();
+  return psx::test::summary();
 }

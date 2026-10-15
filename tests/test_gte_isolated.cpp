@@ -1,14 +1,9 @@
-#include "gte_state.h"
+#include "beetle_gte.h"
 #include "testutil.h"
 
 #include <array>
 #include <cstdint>
 #include <cstring>
-
-extern "C" {
-void GTE_Init(void);
-int32_t GTE_Instruction(uint32_t instruction);
-}
 
 namespace {
 
@@ -55,10 +50,12 @@ static GteRegs make_state(uint32_t seed) {
   return state;
 }
 
-static void run_differential(uint32_t instruction, uint32_t seed) {
-  GteRegs expected = make_state(seed);
+enum class StateSeed : uint32_t {};
+
+static void run_differential(uint32_t instruction, StateSeed seed) {
+  GteRegs expected = make_state(static_cast<uint32_t>(seed));
   GteRegs actual = expected;
-  GteRegs caller = make_state(seed ^ 0xa5a55a5au);
+  GteRegs caller = make_state(static_cast<uint32_t>(seed) ^ 0xa5a55a5au);
   const GteRegs caller_before = caller;
 
   GTE_BindState(&expected);
@@ -85,7 +82,7 @@ static void test_randomized_differential(void) {
   uint32_t cases = 0;
   for (const uint32_t instruction : instructions) {
     for (uint32_t i = 0; i < 128; ++i) {
-      run_differential(instruction, 0x91e10da5u ^ instruction ^ (i * 0x9e3779b9u));
+      run_differential(instruction, StateSeed{0x91e10da5u ^ instruction ^ (i * 0x9e3779b9u)});
       ++cases;
     }
   }
@@ -184,5 +181,5 @@ int main(void) {
   RUN(saturation_and_other_answer);
   RUN(sequential_interleaving);
   RUN(isolation_restores_the_binding_across_a_run);
-  return pt_summary();
+  return psx::test::summary();
 }

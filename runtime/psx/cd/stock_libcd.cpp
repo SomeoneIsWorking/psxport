@@ -18,8 +18,6 @@
 namespace psx::cd {
 namespace {
 
-enum Register : int { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
-
 // Upper bound on one finite read's ready-callback burst: larger than any single PSX read.
 constexpr unsigned kMaxBurstSectors = 65536;
 
@@ -62,7 +60,7 @@ void positionFromParam(Core &core, std::uint32_t param, const char *why) {
   const auto ss = static_cast<std::uint8_t>(core.mem_r8(param + 1));
   const auto ff = static_cast<std::uint8_t>(core.mem_r8(param + 2));
   Cd &cd = core.game->cd;
-  xa_stream_setloc(&core.game->xa, mm, ss, ff);
+  core.game->xa.setLoc(mm, ss, ff);
   // Repositioning invalidates the buffered sector.
   cd.sec_pos = 0;
   cd.sec_len = 0;
@@ -75,6 +73,11 @@ std::uint64_t steadyNowNs() {
   return static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
           .count());
+}
+
+// The command libcd passed in a0/a1, answered into `result`.
+StockCdCommand sentCommand(const Core &core, std::uint32_t result) {
+  return {static_cast<std::uint8_t>(core.r[psx::cpu::kA0]), core.r[psx::cpu::kA1], result};
 }
 
 } // namespace
@@ -95,7 +98,8 @@ void StockLibcd::bind(Game &game) const & {
 
 psx::cpu::ExecutionResult StockLibcd::callReady(Core &core, std::uint32_t callback) const {
   constexpr std::uint32_t kDataReady = 1u;
-  return psx::cpu::dispatchGuest2(core, callback, kDataReady, 0u, psx::cpu::ExecutionBudget::currentTurn(core));
+  return psx::cpu::dispatchGuestWithArguments(
+      core, callback, std::array<std::uint32_t, 2>{kDataReady, 0u}, psx::cpu::ExecutionBudget::currentTurn(core));
 }
 
 void StockLibcd::readStarted(Core &core) const {
@@ -145,8 +149,8 @@ void StockLibcd::driveFiniteRead(Core &core) const {
 
 // Everything a controller command does to native state, shared by the entries with and without a result.
 void StockLibcd::applyCommand(Core &core) const {
-  const std::uint32_t cmd = core.r[A0] & 0xFF;
-  const std::uint32_t param = core.r[A1];
+  const std::uint32_t cmd = core.r[psx::cpu::kA0] & 0xFF;
+  const std::uint32_t param = core.r[psx::cpu::kA1];
   if (lucent::channel_on("cdcmd")) {
     std::uint8_t p[4] = {0, 0, 0, 0};
     if (param) {
@@ -168,15 +172,15 @@ void StockLibcd::applyCommand(Core &core) const {
   Cd &cd = game.cd;
   const std::uint8_t p0 = param ? static_cast<std::uint8_t>(core.mem_r8(param)) : 0;
   // The replaced command-send recorded Setloc/Setmode in guest RAM; libcd reads them back later.
-  publishStockCommandWorkArea(core, workArea_, static_cast<std::uint8_t>(cmd), param);
+  publishStockCommandWorkArea(core, workArea_, {static_cast<std::uint8_t>(cmd), param, 0u});
   switch (cmd) {
   case 0x0E: // Setmode, to the XA streamer and the controller (0x20 selects whole-sector framing)
-    xa_stream_setmode(&game.xa, p0);
-    cdc_set_mode(&game.cdc, p0);
+    game.xa.setMode(p0);
+    game.cdc.setMode(p0);
     break;
   case 0x0D: // Setfilter
-    xa_stream_setfilter(&game.xa, p0, param ? static_cast<std::uint8_t>(core.mem_r8(param + 1)) : 0);
-    cdc_set_filter(&game.cdc, p0, param ? static_cast<std::uint8_t>(core.mem_r8(param + 1)) : 0);
+    game.xa.setFilter(p0, param ? static_cast<std::uint8_t>(core.mem_r8(param + 1)) : 0);
+    game.cdc.setFilter(p0, param ? static_cast<std::uint8_t>(core.mem_r8(param + 1)) : 0);
     break;
   case 0x02:
     positionFromParam(core, param, "setloc");
@@ -189,10 +193,10 @@ void StockLibcd::applyCommand(Core &core) const {
   case 0x06:
   case 0x1B: // ReadN / ReadS: libcd's CdControl sends the implicit Setloc first (issue 0115)
     positionFromParam(core, param, "implicit setloc");
-    xa_stream_start(&game.xa);
+    game.xa.start();
     // The controller reads too: streaming code waits on its DRQSTS bit before kicking DMA3.
     if (cd.setloc_lba >= 0) {
-      cdc_begin_read(&game.cdc, static_cast<std::uint32_t>(cd.setloc_lba));
+      game.cdc.beginRead(static_cast<std::uint32_t>(cd.setloc_lba));
     }
     cd.stream_active = 1;
     // A new stream starts with a fresh pacing budget.
@@ -202,10 +206,10 @@ void StockLibcd::applyCommand(Core &core) const {
     break;
   case 0x08:
   case 0x09: // Stop / Pause: the guest's end of a read and of a stream
-    xa_stream_stop(&game.xa);
+    game.xa.stop();
     cd.stock_reading = 0;
     cd.stream_active = 0;
-    cdc_issue_command(&game.cdc, static_cast<std::uint8_t>(cmd));
+    game.cdc.issueCommand(static_cast<std::uint8_t>(cmd));
     break;
   default:
     break;
@@ -214,34 +218,34 @@ void StockLibcd::applyCommand(Core &core) const {
 
 void StockLibcd::command(Core &core) const {
   applyCommand(core);
-  core.r[V0] = stock_cd_begin_command(core, static_cast<std::uint8_t>(core.r[A0]), core.r[A1], core.r[A2]) ? 0u : 1u;
+  core.r[psx::cpu::kV0] = beginStockCommand(core, sentCommand(core, core.r[psx::cpu::kA2])) ? 0u : 1u;
 }
 
 void StockLibcd::control(Core &core) const {
   applyCommand(core);
-  core.r[V0] = stock_cd_begin_command(core, static_cast<std::uint8_t>(core.r[A0]), core.r[A1], core.r[A2]) ? 1u : 0u;
+  core.r[psx::cpu::kV0] = beginStockCommand(core, sentCommand(core, core.r[psx::cpu::kA2])) ? 1u : 0u;
 }
 
 // CdControlF(com, param) has no result: a2 is whatever the caller left there.
 void StockLibcd::controlFire(Core &core) const {
   applyCommand(core);
-  core.r[V0] = stock_cd_begin_command(core, static_cast<std::uint8_t>(core.r[A0]), core.r[A1], 0u) ? 1u : 0u;
+  core.r[psx::cpu::kV0] = beginStockCommand(core, sentCommand(core, 0u)) ? 1u : 0u;
 }
 
 void StockLibcd::sync(Core &core) const {
-  stock_cd_publish_sync(core, core.r[A1]);
-  core.r[V0] = 2;
+  publishStockSync(core, core.r[psx::cpu::kA1]);
+  core.r[psx::cpu::kV0] = 2;
 }
 
 // CdGetSector(dest, words): pops the sector at the Setloc position as the data FIFO presents it, the
 // header and subheader first (past the 12-byte sync), advancing the head per whole sector.
 void StockLibcd::getSector(Core &core) const {
-  const std::uint32_t dest = core.r[A0];
-  const std::uint32_t words = core.r[A1];
+  const std::uint32_t dest = core.r[psx::cpu::kA0];
+  const std::uint32_t words = core.r[psx::cpu::kA1];
   Cd &cd = core.game->cd;
   if (cd.setloc_lba < 0) {
     lucent::error("cd", "CdGetSector(dest=0x{:08X}, {} words) with no Setloc; no sector to serve", dest, words);
-    core.r[V0] = 1;
+    core.r[psx::cpu::kV0] = 1;
     return;
   }
   const std::uint32_t need = words * 4u;
@@ -250,10 +254,10 @@ void StockLibcd::getSector(Core &core) const {
     constexpr int kSyncSkip = 12;
     if (cd.sec_pos >= cd.sec_len) {
       const auto lba = static_cast<std::uint32_t>(cd.setloc_lba);
-      if (!disc_read_raw(&core.game->disc, lba, cd.sec_raw, sizeof cd.sec_raw)) {
+      if (!core.game->disc.readRaw(lba, cd.sec_raw, sizeof cd.sec_raw)) {
         lucent::error(
             "cd", "CdGetSector: LBA {} unreadable; {} of {} bytes delivered, rest not written", lba, done, need);
-        core.r[V0] = 1;
+        core.r[psx::cpu::kV0] = 1;
         return;
       }
       cd.sec_lba = static_cast<std::int32_t>(lba);
@@ -283,19 +287,19 @@ void StockLibcd::getSector(Core &core) const {
                 cd.sec_lba,
                 cd.sec_pos,
                 cd.sec_len);
-  core.r[V0] = 0;
+  core.r[psx::cpu::kV0] = 0;
 }
 
 // CdRead(sectors, buf, mode): the whole read, synchronously, from the Setloc position. Bytes per sector
 // follow the guest's own mode selection: 2048 from offset 24, 2340 from 12 (whole sector), else 2328.
 void StockLibcd::read(Core &core) const {
-  const std::uint32_t sectors = core.r[A0];
-  const std::uint32_t buf = core.r[A1];
-  const std::uint32_t mode = core.r[A2];
+  const std::uint32_t sectors = core.r[psx::cpu::kA0];
+  const std::uint32_t buf = core.r[psx::cpu::kA1];
+  const std::uint32_t mode = core.r[psx::cpu::kA2];
   Cd &cd = core.game->cd;
   if (cd.setloc_lba < 0) {
     lucent::error("cd", "CdRead({} sectors) with no Setloc; the drive was never positioned", sectors);
-    core.r[V0] = 0;
+    core.r[psx::cpu::kV0] = 0;
     return;
   }
   const std::uint32_t m = mode & 0x30u;
@@ -313,7 +317,7 @@ void StockLibcd::read(Core &core) const {
                     i,
                     sectors,
                     i);
-      core.r[V0] = 0;
+      core.r[psx::cpu::kV0] = 0;
       return;
     }
     // A guest may stream a code module through CdRead (Tomba! 1 does), so each sector is reported.
@@ -335,21 +339,23 @@ void StockLibcd::read(Core &core) const {
                 mode);
   announceStockReadLanding(core,
                            {.firstLba = firstLba, .sectors = sectors, .destination = buf, .bytes = sectors * bytes});
-  readLanded(core, firstLba, sectors, static_cast<std::uint8_t>(mode));
-  core.r[V0] = 1;
+  readLanded(core,
+             {.firstLba = firstLba, .sectors = sectors, .destination = buf, .bytes = sectors * bytes},
+             static_cast<std::uint8_t>(mode));
+  core.r[psx::cpu::kV0] = 1;
 }
 
 // CdReadSync(mode, result): CdRead already transferred everything, so nothing remains.
 void StockLibcd::readSync(Core &core) const {
-  stock_cd_zero_result(core, core.r[A1]);
-  core.r[V0] = 0;
+  zeroStockResult(core, core.r[psx::cpu::kA1]);
+  core.r[psx::cpu::kV0] = 0;
 }
 
 // CdSearchFile(CdlFILE *loc, name) from the disc's ISO9660 index: fills {CdlLOC pos; size; name[16]},
 // leaves the head at the file and returns `loc`, or 0 when the file is absent.
 void StockLibcd::searchFile(Core &core) const {
-  const std::uint32_t loc = core.r[A0];
-  const std::uint32_t namep = core.r[A1];
+  const std::uint32_t loc = core.r[psx::cpu::kA0];
+  const std::uint32_t namep = core.r[psx::cpu::kA1];
   char name[80];
   unsigned n = 0;
   while (n + 1 < sizeof name) {
@@ -361,13 +367,14 @@ void StockLibcd::searchFile(Core &core) const {
   }
   name[n] = 0;
 
-  std::uint32_t lba = 0;
-  std::uint32_t size = 0;
-  if (!disc_find_file(&core.game->disc, name, &lba, &size)) {
+  const std::optional<psx::cd::DiscFile> file = core.game->disc.findFile(name);
+  if (!file) {
     lucent::error("cd", "CdSearchFile: '{}' not found on the disc image", name);
-    core.r[V0] = 0;
+    core.r[psx::cpu::kV0] = 0;
     return;
   }
+  const std::uint32_t lba = file->lba;
+  const std::uint32_t size = file->size;
   const std::uint32_t total = lba + 150u; // sector 0 is 00:02:00
   auto bcd = [](std::uint32_t v) {
     return static_cast<std::uint8_t>(((v / 10) << 4) | (v % 10));
@@ -382,7 +389,7 @@ void StockLibcd::searchFile(Core &core) const {
   }
   core.game->cd.setloc_lba = static_cast<std::int32_t>(lba);
   lucent::debug("cd", "CdSearchFile '{}' -> LBA {}, {} bytes", name, lba, size);
-  core.r[V0] = loc;
+  core.r[psx::cpu::kV0] = loc;
 }
 
 // A continuous read (XA/STR) runs until the guest's Pause/Stop and is paced by the drive: at most the
@@ -401,8 +408,8 @@ void StockLibcd::pumpStream(Core &core, int sectors) const {
     cd.stream_t0_ns = nowNs;
   }
   Game &game = *core.game;
-  const int rate = cd_drive_sectors_per_second(game.cdc.mode);
-  int due = streamSectorsDue(nowNs - cd.stream_t0_ns, rate, cd.stream_delivered);
+  const int rate = psx::cd::driveSectorsPerSecond(game.cdc.mode);
+  int due = streamSectorsDue({nowNs - cd.stream_t0_ns, cd.stream_delivered}, rate);
   // At t = 0 nothing is owed yet, and a stream that cannot deliver its first sector never starts.
   if (cd.stream_delivered == 0 && due == 0) {
     due = 1;
@@ -419,7 +426,7 @@ void StockLibcd::pumpStream(Core &core, int sectors) const {
   const R3000 saved = *static_cast<R3000 *>(&core);
   for (int i = 0; i < sectors && cd.stream_active; i++) {
     game.timing.serviceCdcTickSource();
-    if (cdc_current_irq_type(&game.cdc) != 1u) {
+    if (game.cdc.currentIrqType() != 1u) {
       break;
     }
     cd.stream_delivered++;
@@ -446,12 +453,9 @@ void GuestInterruptLibcd::readStarted(Core &core) const {
   (void)core;
 }
 
-void GuestInterruptLibcd::readLanded(Core &core,
-                                     std::uint32_t firstLba,
-                                     std::uint32_t sectors,
-                                     std::uint8_t mode) const {
+void GuestInterruptLibcd::readLanded(Core &core, const StockReadLanding &landing, std::uint8_t mode) const {
   if (completion_.perStockRead && deliversOnInterrupt()) {
-    raiseStockReadCompletion(core, firstLba, sectors, mode);
+    raiseStockReadCompletion(core, landing.firstLba, landing.sectors, mode);
   }
 }
 
@@ -462,15 +466,15 @@ CdReadyDelivery GuestInterruptLibcd::deliverOnInterrupt(Core &core) const {
   return deliverReadyCompletion(core, readySlot(), completion_.status);
 }
 
-int streamSectorsDue(uint64_t elapsedNs, int sectorsPerSecond, uint32_t alreadyDelivered) {
+int streamSectorsDue(StreamProgress progress, int sectorsPerSecond) {
   if (sectorsPerSecond <= 0) {
     return 0;
   }
-  const uint64_t owed = elapsedNs * static_cast<uint64_t>(sectorsPerSecond) / 1000000000ull;
-  if (owed <= static_cast<uint64_t>(alreadyDelivered)) {
+  const uint64_t owed = progress.elapsedNs * static_cast<uint64_t>(sectorsPerSecond) / 1000000000ull;
+  if (owed <= static_cast<uint64_t>(progress.delivered)) {
     return 0;
   }
-  const uint64_t due = owed - static_cast<uint64_t>(alreadyDelivered);
+  const uint64_t due = owed - static_cast<uint64_t>(progress.delivered);
   return static_cast<int>(due > static_cast<uint64_t>(CD_STREAM_MAX_BURST) ? CD_STREAM_MAX_BURST : due);
 }
 

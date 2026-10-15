@@ -28,14 +28,6 @@ int texelShift(int texMode) {
   return 2 - std::clamp(texMode, 0, 2);
 }
 
-constexpr int kWordsPerRow = kRecordVramWidth / 64;
-
-// Bits [bit, bit + count) of one word.
-std::uint64_t spanMask(int bit, int count) {
-  const std::uint64_t ones = count == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << count) - 1u;
-  return ones << bit;
-}
-
 } // namespace
 
 RecordRect drawBounds(const present::DrawPrimitive &primitive) {
@@ -71,24 +63,23 @@ bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect) 
   if (const auto *primitive = std::get_if<present::DrawPrimitive>(&entry)) {
     written = drawBounds(*primitive);
   } else if (const auto *fill = std::get_if<present::VramFill>(&entry)) {
-    written = clampedVramRect(fill->x, fill->y, fill->width, fill->height);
+    written = clampedVramRect({fill->x, fill->y, fill->width, fill->height});
   } else if (const auto *copy = std::get_if<present::VramCopy>(&entry)) {
     // A copy onto its own source changes no pixel (the guest issues a 2x1 one as a fence).
     if (copy->srcX == copy->dstX && copy->srcY == copy->dstY) {
       return false;
     }
-    written = clampedVramRect(copy->dstX, copy->dstY, copy->width, copy->height);
+    written = clampedVramRect({copy->dstX, copy->dstY, copy->width, copy->height});
   } else if (const auto *upload = std::get_if<present::VramUpload>(&entry)) {
-    written = clampedVramRect(upload->x, upload->y, upload->width, upload->height);
+    written = clampedVramRect({upload->x, upload->y, upload->width, upload->height});
   }
   return written.x0 < rect.x1 && rect.x0 < written.x1 && written.y0 < rect.y1 && rect.y0 < written.y1;
 }
 
-TextureFeedback::TextureFeedback()
-    : written_(static_cast<std::size_t>(kWordsPerRow) * static_cast<std::size_t>(kRecordVramHeight)) {}
+TextureFeedback::TextureFeedback() = default;
 
 void TextureFeedback::invalidate() {
-  std::fill(written_.begin(), written_.end(), std::uint64_t{0});
+  written_.fill(false);
 }
 
 void TextureFeedback::texturePage(const present::RecordDrawState &state, bool texDisable) {
@@ -103,37 +94,15 @@ void TextureFeedback::texturePage(const present::RecordDrawState &state, bool te
 }
 
 void TextureFeedback::invalidateAll() {
-  std::fill(written_.begin(), written_.end(), ~std::uint64_t{0});
+  written_.fill(true);
 }
 
-void TextureFeedback::markSpan(int row, int x0, int x1) {
-  const std::size_t base = static_cast<std::size_t>(row) * kWordsPerRow;
-  for (int x = x0; x < x1;) {
-    const int bit = x % 64;
-    const int count = std::min(64 - bit, x1 - x);
-    written_[base + static_cast<std::size_t>(x / 64)] |= spanMask(bit, count);
-    x += count;
+bool TextureFeedback::testWrapped(int row, ColumnRun run) const {
+  if (run.x1 <= kRecordVramWidth) {
+    return written_.any(row, run);
   }
-}
-
-bool TextureFeedback::testSpan(int row, int x0, int x1) const {
-  const std::size_t base = static_cast<std::size_t>(row) * kWordsPerRow;
-  for (int x = x0; x < x1;) {
-    const int bit = x % 64;
-    const int count = std::min(64 - bit, x1 - x);
-    if ((written_[base + static_cast<std::size_t>(x / 64)] & spanMask(bit, count)) != 0u) {
-      return true;
-    }
-    x += count;
-  }
-  return false;
-}
-
-bool TextureFeedback::testWrapped(int row, int x0, int x1) const {
-  if (x1 <= kRecordVramWidth) {
-    return testSpan(row, x0, x1);
-  }
-  return testSpan(row, x0, kRecordVramWidth) || testSpan(row, 0, std::min(x1 - kRecordVramWidth, kRecordVramWidth));
+  return written_.any(row, {run.x0, kRecordVramWidth}) ||
+         written_.any(row, {0, std::min(run.x1 - kRecordVramWidth, kRecordVramWidth)});
 }
 
 void TextureFeedback::written(RecordRect rect) {
@@ -145,7 +114,7 @@ void TextureFeedback::written(RecordRect rect) {
     return;
   }
   for (int row = rect.y0; row < rect.y1; row++) {
-    markSpan(row, rect.x0, rect.x1);
+    written_.mark(row, {rect.x0, rect.x1});
   }
 }
 
@@ -184,7 +153,7 @@ bool TextureFeedback::overlapsSampled(const present::DrawPrimitive &primitive) c
   const int x0 = state.texPageX + (u.first >> shift);
   const int x1 = state.texPageX + (u.last >> shift) + 1;
   for (int texel = v.first; texel <= v.last; texel++) {
-    if (testWrapped((state.texPageY + texel) % kRecordVramHeight, x0, x1)) {
+    if (testWrapped((state.texPageY + texel) % kRecordVramHeight, {x0, x1})) {
       return true;
     }
   }

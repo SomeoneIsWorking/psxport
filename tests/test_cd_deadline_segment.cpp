@@ -38,18 +38,18 @@ void readyCallback(Core *core) {
   core->mem_w32(kFlag, 1u);
 }
 
-int fakeSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t) {
+bool fakeSector(psx::cd::Disc *, uint32_t lba, uint8_t *out, uint32_t) {
   for (uint32_t i = 0; i < 2352u; i++) {
     out[i] = static_cast<uint8_t>(lba + i);
   }
-  return 1;
+  return true;
 }
 
-int fakeSector2048(DiscState *, uint32_t lba, uint8_t *out) {
+bool fakeSector2048(psx::cd::Disc *, uint32_t lba, uint8_t *out) {
   for (uint32_t i = 0; i < 2048u; i++) {
     out[i] = static_cast<uint8_t>(lba + i);
   }
-  return 1;
+  return true;
 }
 
 class StreamRuntime final : public psx::test::StubGameRuntime {
@@ -96,14 +96,12 @@ struct Fixture {
   std::unique_ptr<Game> game;
 };
 
-} // namespace
-
 // THE POSITIVE: a ReadN arms the drive's first-sector deadline; the spin that touches no device
 // register receives the data-ready callback mid-call, returns, and spends far less than its budget.
-static void test_a_ram_spin_receives_the_interrupt_a_controller_deadline_raises() {
+void test_a_ram_spin_receives_the_interrupt_a_controller_deadline_raises() {
   Fixture fixture;
   Core &core = fixture.game->core;
-  cdc_begin_read(&fixture.game->cdc, 100);
+  fixture.game->cdc.beginRead(100);
   CHECK(fixture.game->cdc.drive_event_armed != 0);
 
   const auto result = fixture.spin();
@@ -118,7 +116,7 @@ static void test_a_ram_spin_receives_the_interrupt_a_controller_deadline_raises(
 // THE CONTROL: nothing is armed, so nothing is delivered and the loop runs its whole budget. A cap
 // that fired for an idle controller would shorten every guest call; a delivery without a deadline
 // would be invented.
-static void test_with_no_armed_deadline_the_spin_runs_its_whole_budget_and_delivers_nothing() {
+void test_with_no_armed_deadline_the_spin_runs_its_whole_budget_and_delivers_nothing() {
   Fixture fixture;
   Core &core = fixture.game->core;
   CHECK(!fixture.game->cdc.drive_event_armed);
@@ -135,10 +133,10 @@ static void test_with_no_armed_deadline_the_spin_runs_its_whole_budget_and_deliv
 
 // The accessor itself: absent when nothing is armed (the executor must not cap), the exact remaining
 // ticks when armed, zero once due.
-static void test_the_device_event_horizon_is_absent_exact_and_zero_when_due() {
+void test_the_device_event_horizon_is_absent_exact_and_zero_when_due() {
   Fixture fixture;
   CHECK(!fixture.game->timing.ticksUntilDeviceEvent().has_value());
-  cdc_begin_read(&fixture.game->cdc, 100);
+  fixture.game->cdc.beginRead(100);
   const auto remaining = fixture.game->timing.ticksUntilDeviceEvent();
   CHECK(remaining.has_value());
   CHECK(*remaining > 0u);
@@ -149,22 +147,24 @@ static void test_the_device_event_horizon_is_absent_exact_and_zero_when_due() {
 // A paced stock-read completion is a device deadline like any other: the executor must end its segment there
 // so the completion is announced when the drive is done. Without it the horizon would be absent while the
 // completion is owed, and a spin with no device access would run its whole budget past the due time.
-static void test_an_owed_read_completion_is_a_device_event() {
+void test_an_owed_read_completion_is_a_device_event() {
   Fixture fixture;
   CHECK(!fixture.game->timing.ticksUntilDeviceEvent().has_value());
-  CHECK_EQ(cdc_post_data_ready_after_read(&fixture.game->cdc, 500, 4, 0x80), 1);
+  CHECK_EQ(fixture.game->cdc.postDataReadyAfterRead(500, 4, 0x80), 1);
   const auto remaining = fixture.game->timing.ticksUntilDeviceEvent();
   CHECK(remaining.has_value());
-  CHECK(*remaining > 4u * cd_drive_sector_period_cpu_ticks(0x80));
+  CHECK(*remaining > 4u * psx::cd::driveSectorPeriodCpuTicks(0x80));
   // With a drive deadline sooner than the completion, the sooner one wins.
-  cdc_begin_read(&fixture.game->cdc, 100);
+  fixture.game->cdc.beginRead(100);
   CHECK(*fixture.game->timing.ticksUntilDeviceEvent() < *remaining);
 }
+
+} // namespace
 
 int main() {
   RUN(an_owed_read_completion_is_a_device_event);
   RUN(a_ram_spin_receives_the_interrupt_a_controller_deadline_raises);
   RUN(with_no_armed_deadline_the_spin_runs_its_whole_budget_and_delivers_nothing);
   RUN(the_device_event_horizon_is_absent_exact_and_zero_when_due);
-  return pt_summary();
+  return psx::test::summary();
 }

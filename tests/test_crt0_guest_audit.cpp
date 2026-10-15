@@ -2,7 +2,7 @@
 //
 // WHAT IT GATES. Every constant in a game's `psx::game::Crt0Image` crt0 group is a value somebody measured out of
 // the executable and typed into `game/core/game_config.cpp`. Nothing compared the typed copy to the
-// measurement, which is the defect shape found independently in four of five ports here. `crt0_audit`
+// measurement, which is the defect shape found independently in four of five ports here. `psx::game::auditCrt0`
 // (runtime/psx/boot/crt0_verify.h) closes it by re-deriving the group from the guest's OWN instruction
 // stream at boot and refusing a confirmed disagreement. This file gates the auditor in BOTH directions:
 // an agreeing config must pass and say how many fields it checked, and a disagreeing one must REFUSE and
@@ -15,7 +15,7 @@
 // `tools/crt0_extract --selftest` on purpose — two hand-written assemblers would drift, and the drift
 // would show up as one of the two gates passing against a stream the other does not recognise.
 //
-// THE ASSEMBLER IS NOT ASSUMED CORRECT — IT IS PINNED TO MEASURED BYTES. `crt0_fixture_pins()` carries
+// THE ASSEMBLER IS NOT ASSUMED CORRECT — IT IS PINNED TO MEASURED BYTES. `psx::test::crt0::pins()` carries
 // one row per instruction disassembled out of a real crt0 on 2026-08-12 (scratch/crt0_dump.py over
 // Tomba!2 MAIN.EXE / SLUS_005.61), and `test_assembler_matches_measured_bytes` asserts every row BEFORE
 // any audit case runs. If the encoder drifts, that test fails first and the audit cases below cannot pass
@@ -33,10 +33,12 @@
 #include <string>
 #include <vector>
 
+namespace {
+
 // ── the capture sink ────────────────────────────────────────────────────────────────────────────────
-static std::vector<std::string> g_lines;
-static int g_errors = 0, g_warns = 0;
-static void capture_start(void) {
+std::vector<std::string> g_lines;
+int g_errors = 0, g_warns = 0;
+void capture_start(void) {
   g_lines.clear();
   g_errors = g_warns = 0;
   lucent::set_sink([](lucent::Level lv, std::string_view line) {
@@ -49,16 +51,16 @@ static void capture_start(void) {
     }
   });
 }
-static void capture_stop(void) {
+void capture_stop(void) {
   lucent::set_sink(nullptr);
 }
-static void dump_capture(const char *what) {
+void dump_capture(const char *what) {
   fprintf(stderr, "  [%s] captured %zu line(s), %d error / %d warn\n", what, g_lines.size(), g_errors, g_warns);
   for (const std::string &l : g_lines) {
     fprintf(stderr, "  [%s] | %s\n", what, l.c_str());
   }
 }
-static bool any_line_has(const char *needle) {
+bool any_line_has(const char *needle) {
   for (const std::string &l : g_lines) {
     if (l.find(needle) != std::string::npos) {
       return true;
@@ -78,8 +80,8 @@ struct FakeRam {
 
 // The prologue comes from the shared fixture (tests/crt0_fixture.h): `Crt0Template`, the emitter, and the two
 // measured shapes all live there so this test and `crt0_extract --selftest` assemble the SAME bytes.
-static void emit_crt0(FakeRam &ram, const Crt0Template &t) {
-  crt0_fixture_emit(t, [&ram](uint32_t a, uint32_t w) {
+void emit_crt0(FakeRam &ram, const Crt0Template &t) {
+  psx::test::crt0::emit(t, [&ram](uint32_t a, uint32_t w) {
     ram.w[a] = w;
   });
 }
@@ -90,10 +92,10 @@ static void emit_crt0(FakeRam &ram, const Crt0Template &t) {
 // The `psx::game::Crt0Image` under audit is DERIVED from the same template rather than hand-typed a second time.
 // That is deliberate: a second hand copy of eleven addresses is exactly the defect class this file
 // gates, and a typo in it would surface as a spurious refusal that looks like a framework bug. It costs
-// the test nothing, because what the audit actually compares is the config against what `crt0_scan`
+// the test nothing, because what the audit actually compares is the config against what `psx::game::scanCrt0`
 // DECODES from the emitted bytes — deriving the config does not short-circuit the encoder→decoder round
 // trip, and every refusal case below perturbs the config away from the template on purpose.
-static psx::game::Crt0Image cfg_from(const Crt0Template &t) {
+psx::game::Crt0Image cfg_from(const Crt0Template &t) {
   psx::game::Crt0Image c{};
   c.bss.begin = t.bssLo;
   c.bss.end = t.bssHi;
@@ -108,24 +110,24 @@ static psx::game::Crt0Image cfg_from(const Crt0Template &t) {
   c.stackBias = {true, t.bias};
   return c;
 }
-static const uint32_t T2_CRT0 = CRT0_FIXTURE_TOMBA2_ENTRY;
-static Crt0Template t2_guest(void) {
-  return crt0_fixture_psyq_tomba2();
+const uint32_t T2_CRT0 = CRT0_FIXTURE_TOMBA2_ENTRY;
+Crt0Template t2_guest(void) {
+  return psx::test::crt0::psyqTomba2();
 }
-static psx::game::Crt0Image t2_cfg(void) {
+psx::game::Crt0Image t2_cfg(void) {
   return cfg_from(t2_guest());
 }
-static Crt0Template x4_guest(void) {
-  return crt0_fixture_psyq_mmx4();
+Crt0Template x4_guest(void) {
+  return psx::test::crt0::psyqMmx4();
 }
-static psx::game::Crt0Image x4_cfg(void) {
+psx::game::Crt0Image x4_cfg(void) {
   return cfg_from(x4_guest());
 }
 
 // A plan is needed only so the audit can print the applied values next to the verified ones.
-static Crt0Plan plan_for(const psx::game::Crt0Image &cfg, uint32_t stackWord, uint32_t reserveWord) {
+Crt0Plan plan_for(const psx::game::Crt0Image &cfg, uint32_t stackWord, uint32_t reserveWord) {
   lucent::set_sink([](lucent::Level, std::string_view) {}); // the plan's own log is not under test
-  Crt0Plan p = crt0_plan(&cfg, stackWord, reserveWord, "fixture");
+  Crt0Plan p = psx::game::planCrt0(&cfg, stackWord, reserveWord, "fixture");
   lucent::set_sink(nullptr);
   return p;
 }
@@ -140,8 +142,8 @@ static Crt0Plan plan_for(const psx::game::Crt0Image &cfg, uint32_t stackWord, ui
 // asserted before the loop runs. That floor is what makes "0 mismatches" meaningful rather than a report
 // of never having looked. It is shared with `crt0_extract --selftest` rather than re-typed: the floor is
 // a fact about the row list, and two copies is one to forget when a row is added.
-static void test_assembler_matches_measured_bytes(void) {
-  const std::vector<Crt0PinRow> pins = crt0_fixture_pins();
+void test_assembler_matches_measured_bytes(void) {
+  const std::vector<Crt0PinRow> pins = psx::test::crt0::pins();
   fprintf(stderr, "  [pins] checking %zu encoder row(s) against bytes measured out of real crt0s\n", pins.size());
   CHECK(pins.size() >= (size_t)CRT0_FIXTURE_PIN_FLOOR);
   int bad = 0;
@@ -163,13 +165,13 @@ static void test_assembler_matches_measured_bytes(void) {
 // CASE 1: an AGREEING config passes, and says how many fields it checked. The count is asserted because
 // "0 DISAGREE" over 0 fields checked is the exact false pass this whole file exists to prevent.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
-static void test_agreeing_config_passes_with_a_denominator(void) {
+void test_agreeing_config_passes_with_a_denominator(void) {
   FakeRam ram;
   emit_crt0(ram, t2_guest());
   const psx::game::Crt0Image cfg = t2_cfg();
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
-  const bool ok = crt0_audit(
+  const bool ok = psx::game::auditCrt0(
       &cfg,
       p,
       [&ram](uint32_t a) {
@@ -189,13 +191,13 @@ static void test_agreeing_config_passes_with_a_denominator(void) {
 }
 
 // The other shape: no bias instruction, X4's indirect stack-top load, and NEITHER heap global.
-static void test_agreeing_x4_shape_passes(void) {
+void test_agreeing_x4_shape_passes(void) {
   FakeRam ram;
   emit_crt0(ram, x4_guest());
   const psx::game::Crt0Image cfg = x4_cfg();
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
-  const bool ok = crt0_audit(
+  const bool ok = psx::game::auditCrt0(
       &cfg,
       p,
       [&ram](uint32_t a) {
@@ -216,14 +218,14 @@ static void test_agreeing_x4_shape_passes(void) {
 // CASE 2: THE PRE-FIX FRAMEWORK'S OWN BUG. The guest has no bias instruction; the config claims -8 (what
 // the first crt0 applier hardcoded for every consumer). The audit must REFUSE and name `stackBias`.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
-static void test_wrong_bias_is_refused_and_named(void) {
+void test_wrong_bias_is_refused_and_named(void) {
   FakeRam ram;
   emit_crt0(ram, x4_guest());
   psx::game::Crt0Image cfg = x4_cfg();
   cfg.stackBias = {true, -8}; // the value the old framework applied to all
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
-  const bool ok = crt0_audit(
+  const bool ok = psx::game::auditCrt0(
       &cfg,
       p,
       [&ram](uint32_t a) {
@@ -241,7 +243,7 @@ static void test_wrong_bias_is_refused_and_named(void) {
 
 // The mirror: a config that claims heap globals the guest does not store. That is the OTHER direction of
 // the ABSENT question, and getting it wrong injects writes the real game never makes.
-static void test_claimed_but_absent_heap_globals_are_refused(void) {
+void test_claimed_but_absent_heap_globals_are_refused(void) {
   FakeRam ram;
   emit_crt0(ram, x4_guest());
   psx::game::Crt0Image cfg = x4_cfg();
@@ -249,7 +251,7 @@ static void test_claimed_but_absent_heap_globals_are_refused(void) {
   cfg.heapBaseStoreAddress = 0x8012345Au; // invented, to keep the framework quiet
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
-  const bool ok = crt0_audit(
+  const bool ok = psx::game::auditCrt0(
       &cfg,
       p,
       [&ram](uint32_t a) {
@@ -267,7 +269,7 @@ static void test_claimed_but_absent_heap_globals_are_refused(void) {
 
 // …and the reverse omission: the guest DOES store them, the config says 0. Left unfixed this is a port
 // silently skipping two writes the real game makes.
-static void test_omitted_but_present_heap_globals_are_refused(void) {
+void test_omitted_but_present_heap_globals_are_refused(void) {
   FakeRam ram;
   emit_crt0(ram, t2_guest());
   psx::game::Crt0Image cfg = t2_cfg();
@@ -275,7 +277,7 @@ static void test_omitted_but_present_heap_globals_are_refused(void) {
   cfg.heapBaseStoreAddress = 0;
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
-  const bool ok = crt0_audit(
+  const bool ok = psx::game::auditCrt0(
       &cfg,
       p,
       [&ram](uint32_t a) {
@@ -290,7 +292,7 @@ static void test_omitted_but_present_heap_globals_are_refused(void) {
 
 // Every other field, one at a time — so the audit is proved to actually COMPARE each row rather than
 // only the two the fix touched.
-static void test_every_field_is_actually_compared(void) {
+void test_every_field_is_actually_compared(void) {
   struct Case {
     const char *name;
     uint32_t *(*field)(psx::game::Crt0Image &);
@@ -332,7 +334,7 @@ static void test_every_field_is_actually_compared(void) {
     *k.field(cfg) += 4u; // a 4-byte lie: the smallest one that is still a lie
     const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
     capture_start();
-    const bool ok = crt0_audit(
+    const bool ok = psx::game::auditCrt0(
         &cfg,
         p,
         [&ram](uint32_t a) {
@@ -353,12 +355,12 @@ static void test_every_field_is_actually_compared(void) {
 // CASE 3: THE HONEST NEGATIVE. Unloaded guest memory reads as zero words. The audit must say it examined
 // NOTHING — and must NOT refuse, because "I could not look" is not evidence of a fault.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
-static void test_unloaded_guest_memory_reports_nothing_examined(void) {
+void test_unloaded_guest_memory_reports_nothing_examined(void) {
   FakeRam ram; // deliberately empty
   const psx::game::Crt0Image cfg = t2_cfg();
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
-  const bool ok = crt0_audit(
+  const bool ok = psx::game::auditCrt0(
       &cfg,
       p,
       [&ram](uint32_t a) {
@@ -378,14 +380,14 @@ static void test_unloaded_guest_memory_reports_nothing_examined(void) {
 
 // A game that has not filled in `crt0` cannot be audited at all — and must be told so, with the
 // denominator, rather than quietly getting a clean bill of health.
-static void test_missing_crt0_entry_says_it_verified_nothing(void) {
+void test_missing_crt0_entry_says_it_verified_nothing(void) {
   psx::game::Crt0Image cfg = t2_cfg();
   cfg.crt0Entry = 0;
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   FakeRam ram;
   emit_crt0(ram, t2_guest());
   capture_start();
-  const bool ok = crt0_audit(
+  const bool ok = psx::game::auditCrt0(
       &cfg,
       p,
       [&ram](uint32_t a) {
@@ -402,7 +404,7 @@ static void test_missing_crt0_entry_says_it_verified_nothing(void) {
 
 // A crt0 whose prologue is truncated must report the fields as UNRESOLVED — not as agreeing, and not as
 // disagreeing. This is the case where a silent tool would be most convincing and most wrong.
-static void test_truncated_prologue_reports_unresolved_not_agreement(void) {
+void test_truncated_prologue_reports_unresolved_not_agreement(void) {
   FakeRam ram;
   emit_crt0(ram, t2_guest());
   for (uint32_t a = T2_CRT0 + 40u; a < T2_CRT0 + 200u; a += 4u) {
@@ -411,7 +413,7 @@ static void test_truncated_prologue_reports_unresolved_not_agreement(void) {
   const psx::game::Crt0Image cfg = t2_cfg();
   const Crt0Plan p = plan_for(cfg, 0x00200000u, 0x00008000u);
   capture_start();
-  const bool ok = crt0_audit(
+  const bool ok = psx::game::auditCrt0(
       &cfg,
       p,
       [&ram](uint32_t a) {
@@ -427,6 +429,8 @@ static void test_truncated_prologue_reports_unresolved_not_agreement(void) {
   CHECK(any_line_has("must not be read as"));
 }
 
+} // namespace
+
 int main(void) {
   RUN(assembler_matches_measured_bytes); // first: the fixtures must be real instructions
   RUN(agreeing_config_passes_with_a_denominator);
@@ -438,5 +442,5 @@ int main(void) {
   RUN(unloaded_guest_memory_reports_nothing_examined);
   RUN(missing_crt0_entry_says_it_verified_nothing);
   RUN(truncated_prologue_reports_unresolved_not_agreement);
-  return pt_summary();
+  return psx::test::summary();
 }

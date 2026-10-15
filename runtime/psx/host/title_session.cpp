@@ -8,15 +8,14 @@
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_runtime.h"
-#include "gpu_native_internal.h" // gpu_clear_display
 #include "gpu_vk.h"
 #include "gpu_vk_internal.h"
 #include "host_input.h"
 #include "host_turn.h"
-#include "hw_bind.h"
 #include "psx_exe_image.h"
 #include "run_end_report.h"
 #include "saved_disc.h"
+#include "spu_beetle.h"
 #include "state/state_command.h"
 #include "store_observe.h"
 
@@ -32,13 +31,10 @@ namespace {
 // knows what is bound; then `a0`/`a1` as the BIOS leaves them.
 void bindPerCoreDevices(Game &game, psx::frame::FrameLoopShell &shell) {
   Core &core = game.core;
-  gte_init();
   mdec_init();
-  spu_init();
+  psx::audio::spu::init();
   shell.bindRunningCore(core);
   game.spu_audio.init();
-  game.gpu.gpu_native_init();
-  game.platform_hle.initBuiltins();
   game.pad.overridesInit();
   core.r[4] = 1;
   core.r[5] = 0;
@@ -127,12 +123,13 @@ bool TitleSession::boot() {
   // Several sessions each start the channel; only the first owns the host port, which is how the
   // picker and a running title share one.
   game.dbg_server.start(&core);
-  store_observe_attach(core);
-  lucent::info(
-      "boot", "live control channel {}, store observer armed", debug_server_live() ? "attached" : "not requested");
+  psx::cpu::attachStoreObserver(core);
+  lucent::info("boot",
+               "live control channel {}, store observer armed",
+               psx::debug::debugServerLive() ? "attached" : "not requested");
   if (role_ == Role::Product) {
     // Black before the title builds, so its first frames never composite over a stale splash.
-    gpu_clear_display(&core);
+    game.display.present(psx::present::PresentCompletion::Transition);
   }
   runtime.startProgram(core);
   if (role_ == Role::Product && services_.configuredStatePending) {
@@ -234,7 +231,7 @@ bool TitleSession::showsTitlePicture() const {
 }
 
 bool TitleSession::hasPicture() const {
-  return parts_->booted && parts_->game->gpu_vk.lastPresented().valid();
+  return parts_->booted && parts_->game->gpuVk().lastPresented().valid();
 }
 
 void TitleSession::refreshPicture() const {
@@ -250,7 +247,7 @@ void TitleSession::refreshPicture() const {
   contentCheckedAtStep_ = steps_;
   // The probe holds the frame it read: asked again while the session runs, never once it is
   // paused, since a frozen panel's picture cannot change.
-  contentSeen_ = parts_->game->gpu_vk.retainFilledPresentImage();
+  contentSeen_ = parts_->game->gpuVk().retainFilledPresentImage();
 }
 
 int TitleSession::pictureWidth() const {
@@ -277,9 +274,9 @@ GpuVkState::PresentedImage TitleSession::presentedPicture() const {
   if (!parts_->booted) {
     return {};
   }
-  GpuVkState::PresentedImage image = parts_->game->gpu_vk.lastFilledPresented();
+  GpuVkState::PresentedImage image = parts_->game->gpuVk().lastFilledPresented();
   if (!image.valid()) {
-    image = parts_->game->gpu_vk.lastPresented();
+    image = parts_->game->gpuVk().lastPresented();
   }
   return image;
 }
@@ -289,23 +286,21 @@ void TitleSession::applyPresentRoute() {
     return; // no machine yet; boot() applies it
   }
   if (paneDestination_) {
-    gpu_vk_present_to_pane(&parts_->game->core, paneImageW_, paneImageH_);
+    parts_->game->core.game->gpuVk().presentToPane(paneImage_);
   } else {
-    gpu_vk_present_to_window(&parts_->game->core);
+    parts_->game->core.game->gpuVk().presentToWindow();
   }
 }
 
-void TitleSession::presentToPane(int imageWidth, int imageHeight) {
+void TitleSession::presentToPane(psx::present::PixelSize image) {
   paneDestination_ = true;
-  paneImageW_ = imageWidth;
-  paneImageH_ = imageHeight;
+  paneImage_ = image;
   applyPresentRoute();
 }
 
 void TitleSession::presentToWindow() {
   paneDestination_ = false;
-  paneImageW_ = 0;
-  paneImageH_ = 0;
+  paneImage_ = {};
   applyPresentRoute();
 }
 
@@ -314,13 +309,6 @@ void TitleSession::setPlayerInput(bool live) {
   if (parts_->booted) {
     parts_->game->pad.setPlayerInputSuppressed(!live);
   }
-}
-
-void TitleSession::pressOnce(std::uint16_t activeLowMask, int frames) {
-  if (!parts_->booted || activeLowMask == 0xFFFFu) {
-    return;
-  }
-  parts_->game->pad.driveTap(activeLowMask, frames);
 }
 
 void TitleSession::pause() {

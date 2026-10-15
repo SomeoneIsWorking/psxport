@@ -21,8 +21,12 @@
 static constexpr uint64_t kAckDelayTicks = 64;
 static constexpr uint64_t kAckPulseTicks = 32;
 
-// Bit period in CPU ticks: JOY_BAUD reload scaled by the JOY_MODE baud-rate factor (bits 0-1).
-static uint64_t transfer_ticks(uint16_t mode, uint16_t baud) {
+uint64_t Sio0::now() const {
+  return game->timing.emulatedCpuTicks();
+}
+
+// Bit period: JOY_BAUD reload scaled by the JOY_MODE baud-rate factor (bits 0-1).
+uint64_t Sio0::byteTicks() const {
   const uint64_t reload = baud ? baud : 1u;
   uint64_t factor = 1;
   switch (mode & 0x3u) {
@@ -43,7 +47,9 @@ static uint64_t transfer_ticks(uint16_t mode, uint16_t baud) {
 // One DATA write clocks one byte both ways. The sequence of RESPONSES is the standard digital-pad
 // one; what a driver really keys on is which bytes are ACKNOWLEDGED, which is every byte of the
 // response except its last.
-void Sio0::dataWrite(uint32_t byte, uint16_t buttons, uint64_t now) {
+void Sio0::dataWrite(uint32_t byte) {
+  const uint16_t buttons = game->pad.buttons;
+  const uint64_t now = this->now();
   const uint32_t tx = byte & 0xFFu;
   int resp = 0xFF; // an unaddressed / absent device leaves the bus floating high
   bool ack = false;
@@ -73,11 +79,11 @@ void Sio0::dataWrite(uint32_t byte, uint16_t buttons, uint64_t now) {
         ack = true;
         break;
       case 2:
-        resp = buttons & 0xFFu;
+        resp = static_cast<int>(buttons & 0xFFu);
         ack = true;
         break;
       case 3:
-        resp = (buttons >> 8) & 0xFFu;
+        resp = static_cast<int>((buttons >> 8) & 0xFFu);
         pos = -1; // last byte of the response: deliberately NOT acknowledged
         break;
       default:
@@ -87,7 +93,7 @@ void Sio0::dataWrite(uint32_t byte, uint16_t buttons, uint64_t now) {
     }
   }
   rx = resp;
-  rxReadyTicks = now + transfer_ticks(mode, baud);
+  rxReadyTicks = now + byteTicks();
   ackTicks = ack ? rxReadyTicks + kAckDelayTicks : 0;
   lucent::debug("sio",
                 "tx {:02X} -> rx {:02X} {} (pos {}, ctrl {:04X}, +{} ticks)",
@@ -99,7 +105,8 @@ void Sio0::dataWrite(uint32_t byte, uint16_t buttons, uint64_t now) {
                 rxReadyTicks - now);
 }
 
-void Sio0::service(uint64_t now) {
+void Sio0::service() {
+  const uint64_t now = this->now();
   if (ackTicks == 0 || now < ackTicks) {
     return;
   }
@@ -114,8 +121,9 @@ void Sio0::service(uint64_t now) {
   lucent::debug("sio", "/ACK{}", (ctrl & 0x1000u) ? " -> JOY_STAT#9 + I_STAT#7" : " (interrupt disabled)");
 }
 
-uint32_t Sio0::dataRead(uint64_t now) {
-  service(now);
+uint32_t Sio0::dataRead() {
+  const uint64_t now = this->now();
+  service();
   if (rx < 0 || now < rxReadyTicks) {
     return 0xFFu; // the RX FIFO is empty: the bus reads as floating
   }
@@ -155,8 +163,9 @@ void Sio0::ctrlWrite(uint16_t v) {
   }
 }
 
-uint32_t Sio0::status(uint64_t now) {
-  service(now);
+uint32_t Sio0::status() {
+  const uint64_t now = this->now();
+  service();
   // bit 0 TX ready: no pending/in-progress byte. bit 1 RX FIFO not empty. bit 7 is the active /ACK
   // input pulse; Crash Bash waits for it to return low before acknowledging bit 9 through CTRL bit 4.
   const bool rx_ready = rx >= 0 && now >= rxReadyTicks;

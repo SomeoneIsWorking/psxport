@@ -4,16 +4,22 @@
 // frame; the title's FrameDriver consumes the class Repl's auto-drive requests and can ask the loop
 // to return to the prompt after the current frame.
 #include "repl.h"
-#include "c_subsys.h"
+#include "command_args.h"
 #include "config.h"                 // `cvars` / `cvar` — the layered CVar registry + env audit
-#include "config_vars.h"            // psx::config::cv_render_path — mirror a live switch into the Runtime layer
 #include "control_surface_limits.h" // kMaxControlReadWords — the one home for the cap both surfaces obey
 #include "core.h"
+#include "display_presenter.h"
+#include "fmv_decode.h"
 #include "game.h"
+#include "gpu_device.h"
+#include "gpu_vk.h"
+#include "gpu_vk_internal.h"
 #include "ot_attr.h"          // OtAttr — `otattr` command (OT/GTE submission attribution)
-#include "render_substrate.h" // Render::psxRender / setPsxRender (per-Core render-path switch)
+#include "render_substrate.h" // RenderMode — the per-Core render path
 #include "title_command.h"
+#include "watchdog.h"
 #include <lucent/log.h>
+#include <optional>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,50 +28,19 @@
 #include <unistd.h>
 #include <utility>
 
+namespace {
+
 // ---- Interactive REPL (PSXPORT_REPL=1) — drive the native port from stdin --------------------
 // Mirrors the oracle's (wide60rt -repl) command set so one driver can step BOTH cores and diff.
 // Commands: run N | r addr [len] | rw addr [words] | w addr val | w8 addr val | watch lo hi |
 //   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit | end. Memory is the
 //   game's address space (mem_r*/mem_w*); watchpoints via mem_set_watch (reported during `run`).
-static uint16_t repl_btn(const char *n) { // name -> active-HIGH PSX pad bit
-  if (!strcmp(n, "start")) {
-    return 0x0008;
-  }
-  if (!strcmp(n, "select")) {
-    return 0x0001;
-  }
-  if (!strcmp(n, "x") || !strcmp(n, "cross")) {
-    return 0x4000;
-  }
-  if (!strcmp(n, "o") || !strcmp(n, "circle")) {
-    return 0x2000;
-  }
-  if (!strcmp(n, "triangle") || !strcmp(n, "t")) {
-    return 0x1000;
-  }
-  if (!strcmp(n, "square") || !strcmp(n, "sq")) {
-    return 0x8000;
-  }
-  if (!strcmp(n, "up")) {
-    return 0x0010;
-  }
-  if (!strcmp(n, "down")) {
-    return 0x0040;
-  }
-  if (!strcmp(n, "left")) {
-    return 0x0080;
-  }
-  if (!strcmp(n, "right")) {
-    return 0x0020;
-  }
-  return (uint16_t)strtoul(n, 0, 16);
-}
 // ---- REPL music-dump helpers (build a labeled track library to identify each tune) -------
 // Sequenced BGM is rendered through the live SPU (use `wav PATH` then `bgm N` then `run`);
 // XA tracks (CD-streamed music/voice) are decoded straight off the disc here, since they
 // never touch the sequencer. Both write standard 44100/native-rate stereo S16 WAVs.
 
-static void repl_wav_write(const char *path, const int16_t *pcm, uint32_t frames, int rate) {
+void repl_wav_write(const char *path, const int16_t *pcm, uint32_t frames, int rate) {
   FILE *fp = fopen(path, "wb");
   if (!fp) {
     lucent::error("repl", "wav write: cannot open {}", path);
@@ -92,9 +67,18 @@ static void repl_wav_write(const char *path, const int16_t *pcm, uint32_t frames
   lucent::info("repl", "xadump -> {} ({} frames @ {} Hz, {:.2f}s)", path, frames, rate, frames / (double)rate);
 }
 
-// Decode ~`secs` of the XA stream on subheader channel `chan` starting at CHD `start_lba`,
-// write a WAV at the stream's native rate. Skips interleaved non-matching/non-audio sectors.
-static void repl_xadump(DiscState *disc, uint8_t chan, uint32_t start_lba, const char *path, int secs) {
+// An XA stream to dump: its subheader channel, first CHD sector and how many seconds to decode.
+struct XaDumpRequest {
+  uint8_t chan;
+  uint32_t start_lba;
+  int secs;
+};
+
+// Write a WAV of the request at the stream's native rate. Skips interleaved non-matching/non-audio sectors.
+void repl_xadump(psx::cd::Disc *disc, XaDumpRequest request, const char *path) {
+  const uint8_t chan = request.chan;
+  const uint32_t start_lba = request.start_lba;
+  const int secs = request.secs;
   int16_t *out = (int16_t *)calloc(400000, sizeof(int16_t)); // ~4.5s of 44100 stereo; XA max 37800*secs
   if (!out) {
     return;
@@ -104,7 +88,7 @@ static void repl_xadump(DiscState *disc, uint8_t chan, uint32_t start_lba, const
   int freq = 37800;
   uint32_t frames = 0, lba = start_lba, cap = 0;
   for (int guard = 0; guard < 20000; guard++) {
-    if (!disc_read_raw(disc, lba, raw, 2352)) {
+    if (!disc->readRaw(lba, raw, 2352)) {
       break;
     }
     if (raw[15] != 2) {
@@ -120,14 +104,14 @@ static void repl_xadump(DiscState *disc, uint8_t chan, uint32_t start_lba, const
     } // not our audio
     int16_t pcm[4032 * 2];
     int f2 = freq;
-    int n = xa_decode_sector(raw, pcm, hist, &f2);
+    int n = psx::movie::decodeXaSector(raw, pcm, hist, &f2);
     freq = f2;
     if (!cap) {
       cap = (uint32_t)freq * (uint32_t)secs;
     }
     for (int i = 0; i < n && frames < cap && frames < 200000; i++) {
-      out[2 * frames] = pcm[2 * i];
-      out[2 * frames + 1] = pcm[2 * i + 1];
+      out[std::size_t{2} * frames] = pcm[std::size_t{2} * i];
+      out[std::size_t{2} * frames + 1] = pcm[std::size_t{2} * i + 1];
       frames++;
     }
     if (frames >= cap || (submode & 0x80)) {
@@ -137,6 +121,8 @@ static void repl_xadump(DiscState *disc, uint8_t chan, uint32_t start_lba, const
   repl_wav_write(path, out, frames, freq);
   free(out);
 }
+
+} // namespace
 
 // REPL auto-drive state (navNewgame / skipFrames) lives on class Repl (repl.h) —
 // arm here on the appropriate command; the title's FrameDriver consumes it on subsequent frames.
@@ -159,10 +145,10 @@ namespace {
 class WatchdogInputWait {
 public:
   WatchdogInputWait() {
-    watchdog_suspend();
+    psx::platform::Watchdog::suspend();
   }
   ~WatchdogInputWait() {
-    watchdog_resume();
+    psx::platform::Watchdog::resume();
   }
   WatchdogInputWait(const WatchdogInputWait &) = delete;
   WatchdogInputWait &operator=(const WatchdogInputWait &) = delete;
@@ -212,28 +198,32 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
     if (!receivedLine) {
       break;
     }
-    char cmd[24] = {0}, arg[32] = {0};
-    unsigned a = 0, b = 0;
-    if (sscanf(line, "%23s", cmd) != 1) {
+    const psx::debug::CommandArgs args(line);
+    const std::string cmd = args.text(0);
+    const std::optional<uint32_t> hex1 = args.hex(1);
+    const std::optional<uint32_t> hex2 = args.hex(2);
+    const std::optional<uint32_t> number1 = args.number(1);
+    const std::optional<uint32_t> number2 = args.number(2);
+    if (cmd.empty()) {
       continue;
     }
-    if (!strcmp(cmd, "quit") || !strcmp(cmd, "q")) {
+    if (cmd == "quit" || cmd == "q") {
       return -1;
-    } else if (!strcmp(cmd, "end")) {
+    } else if (cmd == "end") {
       return -2; // END the run cleanly; see the note above
-    } else if (!strcmp(cmd, "run") && sscanf(line, "%*s %u", &a) == 1) {
-      return (long)a;
+    } else if (cmd == "run" && number1.has_value()) {
+      return static_cast<long>(*number1);
     }
     // `step [n]` — advance n frames (default 1) and return to the prompt. Same mechanism as `run n`
     // (the REPL only resumes the frame loop by returning a frame count); provided because `step` is the
     // command everyone reaches for when single-stepping, and its ABSENCE previously read as "the game is
     // frozen" (the unknown command just reprinted the prompt, advancing nothing).
-    else if (!strcmp(cmd, "step")) {
-      if (sscanf(line, "%*s %u", &a) != 1 || !a) {
-        a = 1;
-      }
-      return (long)a;
-    } else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
+    else if (cmd == "step") {
+      const unsigned frames = number1.value_or(0);
+      return frames != 0 ? static_cast<long>(frames) : 1;
+    } else if (cmd == "r" && hex1.has_value()) {
+      const unsigned a = *hex1;
+      unsigned b = number2.value_or(0);
       if (!b) {
         b = 16;
       }
@@ -243,7 +233,9 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
         ln.add(" {:02X}", c->mem_r8(a + i));
       }
       ln.flush(lucent::Level::Info, "repl");
-    } else if (!strcmp(cmd, "rw") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
+    } else if (cmd == "rw" && hex1.has_value()) {
+      const unsigned a = *hex1;
+      unsigned b = number2.value_or(0);
       if (!b) {
         b = 8;
       }
@@ -269,36 +261,37 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
                      a + asked * 4u - 4u,
                      (asked - served + psx::control::kMaxControlReadWords - 1u) / psx::control::kMaxControlReadWords);
       }
-    } else if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
-      c->mem_w32(a, b);
+    } else if (cmd == "w" && hex1.has_value() && hex2.has_value()) {
+      c->mem_w32(*hex1, *hex2);
       lucent::info("repl", "ok");
-    } else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
-      c->mem_w8(a, (uint8_t)b);
+    } else if (cmd == "w8" && hex1.has_value() && hex2.has_value()) {
+      c->mem_w8(*hex1, static_cast<uint8_t>(*hex2));
       lucent::info("repl", "ok");
-    } else if (!strcmp(cmd, "watch") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
-      c->mem_set_watch(a, b);
-    } else if (!strcmp(cmd, "unwatch")) {
-      c->mem_set_watch(0, 0);
+    } else if (cmd == "watch" && hex1.has_value() && hex2.has_value()) {
+      c->mem_set_watch({*hex1, *hex2});
+    } else if (cmd == "unwatch") {
+      c->mem_set_watch({});
       lucent::info("repl", "unwatch");
-    } else if (!strcmp(cmd, "hits")) {
+    } else if (cmd == "hits") {
       lucent::info("repl", "watch hits={}", c->mem_watch_hits());
-    } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
-      held &= ~repl_btn(arg);
+    } else if (cmd == "press" && args.size() > 1) {
+      held &= ~psx::debug::padButtonBit(args.word(1));
       c->game->pad.driveHold(held);
       lucent::info("repl", "held={:04X}", held);
-    } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {
-      held |= repl_btn(arg);
+    } else if (cmd == "release" && args.size() > 1) {
+      held |= psx::debug::padButtonBit(args.word(1));
       c->game->pad.driveHold(held);
       lucent::info("repl", "held={:04X}", held);
-    } else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) {
+    } else if (cmd == "tap" && args.size() > 1) {
+      unsigned a = number2.value_or(0);
       if (!a) {
         a = 4;
       }
-      c->game->pad.driveTap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a);
-      lucent::info("repl", "tap {} {}", arg, a);
-    } else if (!strcmp(cmd, "debug")) {
-      char ch[200] = {0};
-      sscanf(line, "%*s %199[^\n]", ch);
+      c->game->pad.driveTap({.activeLowMask = static_cast<uint16_t>(0xFFFF & ~psx::debug::padButtonBit(args.word(1))),
+                             .frames = static_cast<int>(a)});
+      lucent::info("repl", "tap {} {}", args.word(1), a);
+    } else if (cmd == "debug") {
+      const std::string ch(args.rest(1));
       lucent::enable_channels(ch);
       // ...and record it on PSXPORT_DEBUG's CVar at the RUNTIME layer. That layer exists precisely
       // to give this a name: docs/config.md has always said a REPL `debug` "still overrides the
@@ -306,105 +299,96 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
       // anywhere in the repo. It is a layer now, and `cvars` will show it. The VALUE is still
       // resolved by lucent (the CVar is marked external) — nothing about who reads PSXPORT_DEBUG
       // changes here; see cmake/psxport.cmake and tests/test_lucent_channel_env.cpp.
-      psx::config::note_runtime_external("PSXPORT_DEBUG", ch);
-      lucent::info("repl", "debug channels = {}", ch[0] ? ch : "(none)");
-    } else if (!strcmp(cmd, "cvars")) {
+      psx::config::note_runtime_debug_channels(ch);
+      lucent::info("repl", "debug channels = {}", ch.empty() ? "(none)" : ch);
+    } else if (cmd == "cvars") {
       psx::config::report();
-    } else if (!strcmp(cmd, "cvar")) {
-      char nm[128] = {0}, val[192] = {0};
-      if (sscanf(line, "%*s %127s %191[^\n]", nm, val) == 2) {
-        psx::config::set_runtime(nm, val);
-      } else if (nm[0]) {
-        psx::config::clear_runtime(nm);
+    } else if (cmd == "cvar") {
+      const std::string nm = args.text(1);
+      const std::string val(args.rest(2));
+      if (!val.empty()) {
+        psx::config::set_runtime(nm.c_str(), val.c_str());
+      } else if (!nm.empty()) {
+        psx::config::clear_runtime(nm.c_str());
       } else {
         lucent::info(
             "repl",
             "cvar <PSXPORT_NAME> <value> — set for this run only; `cvar <name>` clears it; `cvars` lists everything");
       }
-    } else if (!strcmp(cmd, "newgame")) {
+    } else if (cmd == "newgame") {
       this->navNewgame = 1;
       lucent::info("repl", "newgame: pulsing to GAME prologue");
       return 100000;
-    } else if (!strcmp(cmd, "skip")) {
-      a = 0;
-      sscanf(line, "%*s %u", &a);
+    } else if (cmd == "skip") {
+      unsigned a = number1.value_or(0);
       if (!a) {
         a = 500;
       }
       this->skipFrames = (long)a;
       lucent::info("repl", "skip {} frames", a);
       return (long)a;
-    } else if (!strcmp(cmd, "preseq")) { // arm a PRESENT-sequence dump: next N presented frames (real + fps60 interp)
-      unsigned n = 0;
-      char dir[120] = "scratch/screenshots/preseq";
-      if (sscanf(line, "%*s %u %119s", &n, dir) >= 1 && n > 0) {
-        extern void gpu_vk_preseq_arm(Core *, int, const char *);
-        gpu_vk_preseq_arm(c, (int)n, dir);
+    } else if (cmd == "preseq") { // arm a PRESENT-sequence dump: next N presented frames (real + fps60 interp)
+      const unsigned n = number1.value_or(0);
+      const std::string dir = args.size() > 2 ? args.text(2) : std::string("scratch/screenshots/preseq");
+      if (n > 0) {
+        c->game->gpuVk().preseq_arm(static_cast<int>(n), dir.c_str());
         lucent::info("repl", "preseq armed: next {} presents -> {}/p%04d.ppm", n, dir);
       } else {
         lucent::info("repl", "preseq <N> [dir] — dump the next N PRESENTED frames (incl. fps60 interp)");
       }
-    } else if (!strcmp(cmd, "shot")) { // VK-aware, same pick as dbg_server's `shot`: capture what is PRESENTED
-      char path[200] = {0};
-      if (sscanf(line, "%*s %199s", path) == 1) {
-        // Pick by which rasterizer drew the frame, not by whether the VK backend is up:
-        // GpuState::gpu_native_shot routes on the render path.
-        void gpu_native_shot(Core *, const char *);
-        gpu_native_shot(c, path);
-        // Report the scanned-row count with the shot. A picture oracle needs to know which rows of
-        // this capture a console would have shown, and the GPU state is the only thing that knows;
-        // a tool that fitted the offset from the pixels would be measuring the answer it wanted.
+    } else if (cmd == "shot") { // VK-aware, same pick as dbg_server's `shot`: capture what is PRESENTED
+      const std::string path = args.text(1);
+      if (!path.empty()) {
+        c->game->display.shot(path.c_str());
+        // The scanned-row count: which rows of this capture a console would have shown.
         lucent::info("repl",
-                     "shot ({}) -> {}   [render path = {}] guest_scan={}",
-                     c->rsub.mode.path() == RenderPath::Record ? "record image"
-                     : c->game->gpu.deviceScanout()            ? "GPU device"
-                                                               : "VK readback",
+                     "shot -> {}   [render path = {}] guest_scan={}",
                      path,
-                     render_path_name(c->rsub.mode.path()),
-                     c->game->gpu.guestScanHeight(c));
+                     psx::gpu::renderPathName(c->rsub.mode.path()),
+                     psx::present::DisplayPresenter::presentedHeight(*c, c->gpuDevice().displayArea().height));
       }
-    } else if (!strcmp(cmd, "census")) { // the producer census so far, rows ranked by unkeyed primitives
+    } else if (cmd == "census") { // the producer census so far, rows ranked by unkeyed primitives
       c->rsub.census.report("census");
-    } else if (!strcmp(cmd, "shotregion")) { // dump an ARBITRARY VRAM region, not just what is presented
-      // `shot` captures the PRESENT window, which is the right default and useless for the question
-      // "where in VRAM is the content?". gpu_vk_shot_region already existed and was reachable from
-      // nothing — exposing it costs four lines and answers that directly: `shotregion v.ppm 0 0 1024
-      // 512` dumps the whole of VRAM, so a black present window can be told apart from a black VRAM.
-      char path[200] = {0};
-      int x = 0, y = 0, w = 0, h = 0;
-      if (sscanf(line, "%*s %199s %d %d %d %d", path, &x, &y, &w, &h) == 5) {
-        void gpu_vk_shot_region(Core *, const char *, int, int, int, int);
-        gpu_vk_shot_region(c, path, x, y, w, h);
+    } else if (cmd == "shotregion") { // dump an ARBITRARY VRAM region, not just what is presented
+      // `shotregion v.ppm 0 0 1024 512` dumps the whole of VRAM, so a black present can be told apart from a black
+      // VRAM.
+      const std::optional<int> x = args.integer(2);
+      const std::optional<int> y = args.integer(3);
+      const std::optional<int> w = args.integer(4);
+      const std::optional<int> h = args.integer(5);
+      if (x.has_value() && y.has_value() && w.has_value() && h.has_value()) {
+        psx::gpu::vramRegion(*c, args.text(1).c_str(), {*x, *y, *w, *h});
       } else {
         lucent::info("repl", "shotregion <path> <x> <y> <w> <h> — raw VRAM region (VRAM is 1024x512)");
       }
-    } else if (!strcmp(cmd, "setires")) { // live ires toggle (same mods.ires mutation the RmlUi overlay's
+    } else if (cmd == "setires") { // live ires toggle (same mods.ires mutation the RmlUi overlay's
       // "ires" row does — 0=Auto, 1..cap=fixed). Exercises GpuVkState::ensure_ires_targets' teardown+
       // rebuild path headless, without needing a windowed run to reach the overlay.
-      unsigned n = 0;
-      if (sscanf(line, "%*s %u", &n) == 1) {
-        c->game->mods.ires = (int)n;
+      if (const std::optional<unsigned> n = args.number(1)) {
+        c->game->mods.ires = static_cast<int>(*n);
         lucent::info("repl", "mods.ires = {}", c->game->mods.ires);
       } else {
         lucent::info("repl", "setires <0..4> — live ires toggle (0=Auto)");
       }
-    } else if (!strcmp(cmd, "vram")) {
-      char path[200] = {0};
-      unsigned x = 0, y = 0, w = 1024, h = 512;
-      if (sscanf(line, "%*s %199s %u %u %u %u", path, &x, &y, &w, &h) >= 1) {
-        void gpu_vk_vram_region(Core *, const char *, int, int, int, int);
-        gpu_vk_vram_region(c, path, (int)x, (int)y, (int)w, (int)h);
+    } else if (cmd == "vram") {
+      const std::string path = args.text(1);
+      if (!path.empty()) {
+        psx::gpu::vramRegion(*c,
+                             path.c_str(),
+                             {static_cast<int>(number2.value_or(0)),
+                              static_cast<int>(args.number(3).value_or(0)),
+                              static_cast<int>(args.number(4).value_or(1024)),
+                              static_cast<int>(args.number(5).value_or(512))});
       }
-    } else if (!strcmp(cmd, "vramraw")) {
-      char path[200] = {0};
-      if (sscanf(line, "%*s %199s", path) == 1) {
-        void gpu_vk_vram_raw(Core *, const char *);
-        gpu_vk_vram_raw(c, path);
+    } else if (cmd == "vramraw") {
+      const std::string path = args.text(1);
+      if (!path.empty()) {
+        psx::gpu::vramRaw(*c, path.c_str());
       }
-    } else if (!strcmp(cmd, "dumpram")) {
-      char path[200] = {0};
-      if (sscanf(line, "%*s %199s", path) == 1) {
-        FILE *fp = fopen(path, "wb");
+    } else if (cmd == "dumpram") {
+      const std::string path = args.text(1);
+      if (!path.empty()) {
+        FILE *fp = fopen(path.c_str(), "wb");
         if (fp) {
           fwrite(c->ram, 1, 0x200000, fp);
           fclose(fp);
@@ -414,72 +398,56 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
         }
         // Also dump the 1 KB scratchpad (0x1F800000) to a sidecar .spad — the main-RAM A/B diff is
         // BLIND to scratchpad, where several engine flags live (DEMO: 0x1f80019a/19d/134/198 etc.).
-        char spath[208];
-        snprintf(spath, sizeof spath, "%s.spad", path);
-        FILE *sp = fopen(spath, "wb");
+        const std::string spath = path + ".spad";
+        FILE *sp = fopen(spath.c_str(), "wb");
         if (sp) {
           fwrite(c->scratch, 1, sizeof c->scratch, sp);
           fclose(sp);
           lucent::info("repl", "dumpram scratchpad -> {}", spath);
         }
       }
-    } else if (!strcmp(cmd, "wav")) {
-      char path[200] = {0};
-      if (sscanf(line, "%*s %199s", path) == 1) {
-        c->game->spu_audio.wavReopen(path);
+    } else if (cmd == "wav") {
+      const std::string path = args.text(1);
+      if (!path.empty()) {
+        c->game->spu_audio.wavReopen(path.c_str());
       }
     }
-    // renderpath [native|gte|psx] — the render-path switch.
-    // native = PC producers + PC rasterizer + PC enhancements; gte = the guest's own GTE+OT on the PC
-    // rasterizer; psx = the guest's own GTE+OT on the PSX software rasterizer. Both guest paths are PURE
-    // (no fps60 / wide / ires / deferred). A BARE `renderpath` CYCLES native -> gte -> psx -> native; it
-    // does not merely print, because a bare form that only printed is what turned A/B scripts into
-    // pc-vs-pc compares before (kanban #26).
-    else if (!strcmp(cmd, "renderpath")) {
-      char st[16] = {0};
-      RenderPath p = c->rsub.mode.path();
-      if (sscanf(line, "%*s %15s", st) == 1) {
-        if (!render_path_parse(st, &p)) {
+    // renderpath [record|device] — switch the render path live; bare prints it.
+    else if (cmd == "renderpath") {
+      const std::string st = args.text(1);
+      if (!st.empty()) {
+        RenderPath p = c->rsub.mode.path();
+        if (!psx::gpu::parseRenderPath(st.c_str(), &p)) {
           lucent::warn("repl",
-                       "renderpath: '{}' is not a path — valid: native | gte | psx (unchanged: {})",
+                       "renderpath: '{}' is not a path — valid: record | device (unchanged: {})",
                        st,
-                       render_path_name(c->rsub.mode.path()));
+                       psx::gpu::renderPathName(c->rsub.mode.path()));
           continue;
         }
-      } else {
-        p = render_path_next_supported(p, c->runtime.renderCapabilities(), RenderPathAudience::Diagnostic);
+        c->rsub.mode.setPath(p);
       }
-      const RenderPathSelectionResult selection = render_path_apply(*c->game, p, RenderPathAudience::Diagnostic);
-      if (selection == RenderPathSelectionResult::Unsupported) {
-        lucent::warn("repl",
-                     "renderpath '{}' REFUSED: this title does not support it (unchanged: {})",
-                     render_path_name(p),
-                     render_path_name(c->rsub.mode.path()));
-        continue;
-      }
-      lucent::info("repl",
-                   "render path = {} (enhancements {})",
-                   render_path_name(c->rsub.mode.path()),
-                   c->rsub.mode.enhancementsAllowed() ? "ALLOWED" : "locked out — guest render stays pure");
-    } else if (!strcmp(cmd, "xadump")) {
-      unsigned ch = 0, lba = 0, secs = 3;
-      char path[200] = {0};
-      if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) {
-        repl_xadump(&c->game->disc, (uint8_t)ch, lba, path, secs ? (int)secs : 3);
+      lucent::info("repl", "render path = {}", psx::gpu::renderPathName(c->rsub.mode.path()));
+    } else if (cmd == "xadump") {
+      const std::optional<unsigned> ch = args.number(1);
+      const std::optional<unsigned> lba = args.number(2);
+      const unsigned secs = args.number(4).value_or(3);
+      if (ch.has_value() && lba.has_value() && args.size() > 3) {
+        repl_xadump(
+            &c->game->disc,
+            {.chan = static_cast<uint8_t>(*ch), .start_lba = *lba, .secs = secs != 0 ? static_cast<int>(secs) : 3},
+            args.text(3).c_str());
       }
     }
     // otattr — dump the OT/GTE submission-attribution tables (game/render/ot_attr.h, `debug otattr`).
-    // Re-walks the LAST OT this Core drew (GpuState::s_ot_madr) READ-ONLY (header/first-word peeks
+    // Re-walks the LAST OT this Core drew (RenderSubstrate::lastOrderingTable) READ-ONLY (header/first-word peeks
     // only — no gpu_gp0() call, so no draw/state side effects), and for each non-empty node looks up
     // the packet-pool store span attribution recorded during that frame's submission: {emitter fn = the
-    // otattr shadow-stack top, caller fn = one frame below it, node = the render-walk object scope open
-    // at store time}. Only produces attribution if `debug otattr` was ALREADY ON while the frame that
-    // built this OT ran — turn the channel on BEFORE the frame you want to inspect, then run this after.
-    // The report includes raw guest addresses; resolve them through the active title's symbol index.
-    else if (!strcmp(cmd, "otattr")) {
+    // otattr shadow-stack top, caller fn = one frame below it}. Only produces attribution if `debug otattr` was ALREADY
+    // ON while the frame that built this OT ran — turn the channel on BEFORE the frame you want to inspect, then run
+    // this after. The report includes raw guest addresses; resolve them through the active title's symbol index.
+    else if (cmd == "otattr") {
       OtAttr &oa = c->rsub.otAttr;
-      char sub[32] = {0};
-      sscanf(line, "%*s %31s", sub);
+      const std::string_view sub = args.word(1);
       // The last-writer sub-commands live in the otattr owner (ot_attr.cpp) so every transport
       // shares one implementation; see there.
       if (oa.runLastWriterCommand(line, [](std::string_view m) {
@@ -487,12 +455,13 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
           })) {
         continue;
       }
-      if (!strcmp(sub, "trace")) {
-        uint32_t addr = 0;
-        if (sscanf(line, "%*s %*s %x", &addr) != 1) {
+      if (sub == "trace") {
+        const std::optional<uint32_t> traced = args.hex(2);
+        if (!traced.has_value()) {
           lucent::info("otattr", "usage: otattr trace <addr-hex>");
           continue;
         }
+        const uint32_t addr = *traced;
         OtAttr::WordRec rec{};
         uint32_t wa = 0;
         if (!oa.watchLookup(addr, &rec, &wa)) {
@@ -552,9 +521,9 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
           oa.watchWordsUsed(),
           (int)OtAttr::WATCH_CAP_WORDS,
           oa.watchOverflow());
-      uint32_t madr = c->game->gpu.s_ot_madr;
+      uint32_t madr = c->rsub.lastOrderingTable;
       if (!madr) {
-        lucent::info("otattr", "GpuState::s_ot_madr == 0 — no OT walked yet this run");
+        lucent::info("otattr", "no OT walked yet this run");
       } else {
         uint32_t a = madr & 0x1FFFFC;
         for (int idx = 0; idx < 0x10000; idx++) {
@@ -571,11 +540,8 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
             }
             OtAttr::Span sp{};
             bool found = oa.lookupStore(a, &sp);
-            uint32_t node = found ? sp.node : 0;
-            uint32_t beh = node ? c->mem_r32((node & 0x1FFFFFFF) + 0x1C) : 0;
             lucent::info("repl",
-                         "  [{:4}] pool=0x{:08X} op=0x{:02X} n={} v0=({},{})  fn=0x{:08X} caller=0x{:08X} "
-                         "node=0x{:08X} beh@node+1C=0x{:08X}",
+                         "  [{:4}] pool=0x{:08X} op=0x{:02X} n={} v0=({},{})  fn=0x{:08X} caller=0x{:08X}",
                          idx,
                          0x80000000u | a,
                          op,
@@ -583,9 +549,7 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
                          vx,
                          vy,
                          found ? sp.fn : 0,
-                         found ? sp.caller : 0,
-                         node,
-                         beh);
+                         found ? sp.caller : 0);
           }
           uint32_t next = hdr & 0xFFFFFF;
           if (next == 0xFFFFFF || next == 0) {
@@ -594,14 +558,14 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
           a = next & 0x1FFFFC;
         }
       }
-      lucent::info("otattr", "GTE RTPS/RTPT per-(fn,node) call counts this frame:");
+      lucent::info("otattr", "GTE RTPS/RTPT per-fn call counts this frame:");
       for (int i = 0; i < oa.gteCount(); i++) {
         const OtAttr::GteBucket *g = oa.gteAt(i);
-        lucent::info("repl", "  fn=0x{:08X} node=0x{:08X} count={}", g->fn, g->node, g->count);
+        lucent::info("repl", "  fn=0x{:08X} count={}", g->fn, g->count);
       }
     }
     // otwhere <pkt-hex> <ot-base-hex> [entries] — locate a packet's OT BUCKET in the LAST-walked OT
-    // (read-only chain walk from GpuState::s_ot_madr, the same enumeration DrawOTag used; no draw/state
+    // (read-only chain walk from RenderSubstrate::lastOrderingTable, the same enumeration DrawOTag used; no draw/state
     // side effects). Reports {bucket index, position within the bucket, global chain position}. The OT
     // ARRAY base/entry-count are game data the framework does not know, so the caller supplies them
     // (Tomba2: base = *0x800ED8C8 via `r 800ED8C8`, entries = 2048 — the guest submitter's own range
@@ -609,15 +573,16 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
     // passed; packets hang off their bucket's head word, so every node between sentinel k and the next
     // sentinel belongs to bucket k. Diagnostic for the kanban #11 class (which game sort key did the
     // emitter give a prim); shipping-path OT reads remain banned — this is REPL-only.
-    else if (!strcmp(cmd, "otwhere")) {
-      uint32_t pkt = 0, base = 0;
-      int entries = 2048;
-      if (sscanf(line, "%*s %x %x %d", &pkt, &base, &entries) < 2) {
+    else if (cmd == "otwhere") {
+      const uint32_t pkt = hex1.value_or(0);
+      const uint32_t base = hex2.value_or(0);
+      const int entries = args.integer(3).value_or(2048);
+      if (!hex1.has_value() || !hex2.has_value()) {
         lucent::info("repl", "usage: otwhere <pkt-hex> <ot-base-hex> [entries=2048]");
       } else {
-        uint32_t madr = c->game->gpu.s_ot_madr;
+        uint32_t madr = c->rsub.lastOrderingTable;
         if (!madr) {
-          lucent::info("repl", "otwhere: s_ot_madr == 0 — no OT walked yet");
+          lucent::info("repl", "otwhere: no OT walked yet");
           continue;
         }
         uint32_t a = madr & 0x1FFFFC, want = pkt & 0x1FFFFC;
@@ -656,11 +621,8 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
     }
     // `bugreport <summary>` — the B key without a keyboard: the report is taken at the next frame
     // boundaries exactly as a keypress takes it, and its form is filled with <summary> and saved.
-    else if (!strcmp(cmd, "bugreport")) {
-      std::string summary(strstr(line, cmd) + strlen(cmd));
-      const std::size_t first = summary.find_first_not_of(" \t");
-      const std::size_t last = summary.find_last_not_of(" \t\r\n");
-      summary = first == std::string::npos ? std::string() : summary.substr(first, last - first + 1);
+    else if (cmd == "bugreport") {
+      std::string summary(args.rest(1));
       if (summary.empty()) {
         lucent::info("repl", "bugreport <summary>");
       } else {
@@ -677,9 +639,8 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
     // at all. Visibility is host UI state, not guest state, so this is a driving surface like
     // `press`/`tap`, not a behaviour switch. Reports what it DID, including the refusal cases, so
     // a run that changed nothing cannot read like a run that worked.
-    else if (!strcmp(cmd, "menu")) {
-      char which[16] = {0};
-      sscanf(line, "%*s %15s", which);
+    else if (cmd == "menu") {
+      const std::string_view which = args.word(1);
       RmlOverlay &ov = c->game->rml_overlay;
       if (!ov.inited()) {
         lucent::info("repl", "menu: overlay NOT initialised — nothing to show");
@@ -692,29 +653,27 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
       // thing an agent could change, and "does the Graphics tab still have its 13 rows?" had no
       // answer short of a windowed run. They are a DRIVING surface (like press/tap): host UI state
       // only, no guest state, no behaviour switch.
-      else if (!strcmp(which, "dump")) {
+      else if (which == "dump") {
         ov.dumpMenu();
-      } else if (!strcmp(which, "tab")) {
-        int n = -1;
-        if (sscanf(line, "%*s %*s %d", &n) == 1) {
-          ov.selectTab(n);
-          lucent::info("repl", "menu: tab {}", n);
+      } else if (which == "tab") {
+        if (const std::optional<int> n = args.integer(2)) {
+          ov.selectTab(*n);
+          lucent::info("repl", "menu: tab {}", *n);
         } else {
           lucent::info("repl", "menu tab <index>");
         }
-      } else if (!strcmp(which, "nav")) {
-        char key[16] = {0};
-        sscanf(line, "%*s %*s %15s", key);
-        const int code = !strcmp(key, "up")      ? SDLK_UP
-                         : !strcmp(key, "down")  ? SDLK_DOWN
-                         : !strcmp(key, "left")  ? SDLK_LEFT
-                         : !strcmp(key, "right") ? SDLK_RIGHT
-                         : !strcmp(key, "enter") ? SDLK_RETURN
-                                                 : 0;
+      } else if (which == "nav") {
+        const std::string_view key = args.word(2);
+        const SDL_Keycode code = key == "up"      ? SDLK_UP
+                                 : key == "down"  ? SDLK_DOWN
+                                 : key == "left"  ? SDLK_LEFT
+                                 : key == "right" ? SDLK_RIGHT
+                                 : key == "enter" ? SDLK_RETURN
+                                                  : SDLK_UNKNOWN;
         // A key name nobody recognises must SAY so. A no-op that logged nothing would look
         // identical to a nav that ran and changed nothing — the difference matters when the whole
         // point of the command is to tell those two apart.
-        if (!code) {
+        if (code == SDLK_UNKNOWN) {
           lucent::info("repl", "menu nav <up|down|left|right|enter> — \"{}\" is not one of them", key);
         } else if (!ov.visible()) {
           lucent::info("repl", "menu nav {}: IGNORED, the menu is hidden (`menu on` first)", key);
@@ -722,13 +681,11 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
           lucent::info("repl", "menu nav {}: {}", key, ov.sendKey(code) ? "handled" : "NOT handled by the menu");
         }
       } else {
-        const bool on = !strcmp(which, "off")  ? false
-                        : !strcmp(which, "on") ? true
-                                               : !ov.visible(); // bare `menu` / `menu toggle`
+        const bool on = which == "off" ? false : which == "on" ? true : !ov.visible(); // bare `menu` / `menu toggle`
         ov.setVisible(on);
         lucent::info("repl", "menu: {}", on ? "shown" : "hidden");
       }
-    } else if (!strcmp(cmd, "regs")) {
+    } else if (cmd == "regs") {
       lucent::Line ln; // 4 registers per row
       for (int i = 0; i < 32; i++) {
         ln.add(" r{:<2}={:08X}", i, c->r[i]);

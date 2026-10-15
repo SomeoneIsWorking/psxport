@@ -138,10 +138,8 @@ constexpr std::uint32_t kLineCommands[] = {
     0x58000000u | kRed,
 };
 
-} // namespace
-
 // ---- colour: the guest packs 0x00BBGGRR, so RED IS THE LOW BYTE ---------------------------------
-static void test_colour_byte_order_matches_the_original_shift(void) {
+void test_colour_byte_order_matches_the_original_shift(void) {
   constexpr std::uint32_t words[] = {
       0x00000000u, 0x00'00'00'FFu, 0x00'00'FF'00u, 0x00'FF'00'00u, 0x00'FF'FF'FFu, 0x00'12'34'56u, 0x20'AB'CD'EFu};
   for (std::uint32_t w : words) {
@@ -159,7 +157,7 @@ static void test_colour_byte_order_matches_the_original_shift(void) {
 }
 
 // ---- vertex position: 11-bit SIGNED axes, one per halfword ---------------------------------------
-static void test_vertex_axes_are_eleven_bit_signed(void) {
+void test_vertex_axes_are_eleven_bit_signed(void) {
   constexpr std::uint32_t words[] = {0x00000000u,
                                      0x00000001u,
                                      0x000003FFu,
@@ -188,7 +186,7 @@ static void test_vertex_axes_are_eleven_bit_signed(void) {
 }
 
 // ---- opcode ranges and flags ---------------------------------------------------------------------
-static void test_opcode_ranges_match_the_original_comparisons(void) {
+void test_opcode_ranges_match_the_original_comparisons(void) {
   for (std::uint32_t w : kPolygonCommands) {
     CHECK(Gp0Command(w).isPolygon());
     CHECK_EQ(Gp0Command(w).isPolygon(), referenceIsPolygon(w));
@@ -220,7 +218,7 @@ static void test_opcode_ranges_match_the_original_comparisons(void) {
   CHECK(!Gp0Command(0xE1'00'00'00u).isDrawable());
 }
 
-static void test_polygon_flags_sit_at_the_original_bit_positions(void) {
+void test_polygon_flags_sit_at_the_original_bit_positions(void) {
   const auto plain = Gp0Command(0x20000000u).flags();
   CHECK(!plain.gouraud);
   CHECK(!plain.quadOrPolyLine);
@@ -244,7 +242,7 @@ static void test_polygon_flags_sit_at_the_original_bit_positions(void) {
   CHECK(Gp0Command(0x21000000u).flags().rawTexel);
 }
 
-static void test_polygon_vertex_count_follows_the_quad_bit(void) {
+void test_polygon_vertex_count_follows_the_quad_bit(void) {
   for (std::uint32_t w : kPolygonCommands) {
     const std::uint8_t op = static_cast<std::uint8_t>(w >> 24);
     CHECK_EQ(Gp0Command(w).polygonVertexCount(), (op & 8) ? 4 : 3);
@@ -253,7 +251,7 @@ static void test_polygon_vertex_count_follows_the_quad_bit(void) {
   CHECK_EQ(Gp0Command(0x28000000u).polygonVertexCount(), 4);
 }
 
-static void test_rectangle_size_codes_and_their_fixed_sizes(void) {
+void test_rectangle_size_codes_and_their_fixed_sizes(void) {
   // A size code is bits 3-4, and code 0 means "a size word follows" while 1/2/3 are 1x1, 8x8 and 16x16.
   CHECK_EQ(Gp0Command(0x60000000u).rectangleSizeCode(), 0);
   CHECK_EQ(Gp0Command(0x60000000u).rectangleFixedSize(), 0);
@@ -265,7 +263,7 @@ static void test_rectangle_size_codes_and_their_fixed_sizes(void) {
   CHECK_EQ(Gp0Command(0x78000000u).rectangleFixedSize(), 16);
 }
 
-static void test_poly_line_is_a_line_with_the_quad_bit_set(void) {
+void test_poly_line_is_a_line_with_the_quad_bit_set(void) {
   for (std::uint32_t w : kLineCommands) {
     CHECK_EQ(Gp0Command(w).isPolyLine(), referenceIsPolyLine(w));
   }
@@ -287,7 +285,7 @@ static void test_poly_line_is_a_line_with_the_quad_bit_set(void) {
 // THE DECISION. A length that is one word short desynchronises the whole GP0 parse from that point on,
 // and the visible symptom is a later DATA word decoded as a VRAM copy — atlas corruption, not a
 // rendering artefact. The old gp0_len() is the oracle for every case.
-static void test_packet_word_count_matches_the_original_table(void) {
+void test_packet_word_count_matches_the_original_table(void) {
   constexpr std::uint32_t every[] = {
       0x00000000u, 0x01000000u, 0x02000000u, 0x10000000u, 0x20000000u, 0x21000000u, 0x22000000u, 0x24000000u,
       0x28000000u, 0x2C000000u, 0x30000000u, 0x34000000u, 0x38000000u, 0x3C000000u, 0x40000000u, 0x42000000u,
@@ -332,7 +330,7 @@ static void test_packet_word_count_matches_the_original_table(void) {
 // its length; the count returned is the fixed-LINE length and the compositor reframes the packet on the
 // terminator instead. A change that "fixed" this by inventing a count would desynchronise every poly-line
 // the guest draws, so the limitation is pinned rather than removed.
-static void test_poly_line_reports_the_fixed_line_length(void) {
+void test_poly_line_reports_the_fixed_line_length(void) {
   // A poly-line is 0x40-0x5F with bit 3, and its count is the line's — 3 flat, 4 gouraud.
   CHECK_EQ(Gp0Command::packetWordCount(0x48000000u), 3u);
   CHECK_EQ(Gp0Command::packetWordCount(0x58000000u), 4u);
@@ -340,7 +338,7 @@ static void test_poly_line_reports_the_fixed_line_length(void) {
   CHECK_EQ(Gp0Command::packetWordCount(0x58000000u), Gp0Command::packetWordCount(0x50000000u));
 }
 
-static void test_poly_line_terminator_is_the_sentinel_word(void) {
+void test_poly_line_terminator_is_the_sentinel_word(void) {
   // A guest ends a poly-line with 0x55555555: both halfwords 0x5000, tested against the 0xF000F000
   // mask. Asserting the real value matters, because the mask is loose — a word that is merely SIMILAR
   // must not terminate the line, or a real vertex is silently dropped.
@@ -354,7 +352,7 @@ static void test_poly_line_terminator_is_the_sentinel_word(void) {
   CHECK(!Gp0Command::isPolyLineTerminator(0x30005000u)); // and 3, not 5
 }
 
-static void test_poly_line_terminator_may_only_appear_at_a_vertex_start(void) {
+void test_poly_line_terminator_may_only_appear_at_a_vertex_start(void) {
   // A terminator accepted at ANY index truncates a real vertex. The two layouts sit vertex starts at
   // different indices because a gouraud poly-line interleaves a colour word per vertex.
   //
@@ -377,45 +375,45 @@ static void test_poly_line_terminator_may_only_appear_at_a_vertex_start(void) {
 // ---- the three VRAM region decodes, which deliberately DISAGREE ------------------------------------
 // A sprite, a fill and a transfer all name a rectangle, and they do not pack or interpret it the same
 // way. Two of the differences are silent misdraws; that is why each has its own named decode.
-static void test_fill_rect_is_sixteen_pixel_aligned_and_rounds_up(void) {
+void test_fill_rect_is_sixteen_pixel_aligned_and_rounds_up(void) {
   // x keeps only bits 4-9, so a fill can never start on an odd column, and the width rounds UP to a
   // multiple of 16. A 300-wide fill therefore covers 304 columns — which is the hardware's behaviour and
   // not a rounding mistake to "fix" here.
-  const auto atOrigin = Gp0Command::fillRectRegion(0x00000000u, (240u << 16) | 320u);
+  const auto atOrigin = Gp0Command::fillRectRegion({0x00000000u, (240u << 16) | 320u});
   CHECK_EQ(atOrigin.x, 0);
   CHECK_EQ(atOrigin.y, 0);
   CHECK_EQ(atOrigin.width, 320);
   CHECK_EQ(atOrigin.height, 240);
-  const auto odd = Gp0Command::fillRectRegion(0x00000000u, (240u << 16) | 300u);
+  const auto odd = Gp0Command::fillRectRegion({0x00000000u, (240u << 16) | 300u});
   CHECK_EQ(odd.width, 304);
-  const auto shifted = Gp0Command::fillRectRegion(0x0000'0017u, (10u << 16) | 5u);
+  const auto shifted = Gp0Command::fillRectRegion({0x0000'0017u, (10u << 16) | 5u});
   CHECK_EQ(shifted.x, 0x10);   // 0x17 & 0x3F0
   CHECK_EQ(shifted.width, 16); // 5 rounds up to one 16-pixel block
   // A ZERO width is "fill nothing" here — NOT the "whole axis" convention a transfer uses. Reading it
   // with the transfer's rule would turn a zero-width fill into a full-VRAM one.
-  CHECK_EQ(Gp0Command::fillRectRegion(0u, 0u).width, 0);
-  CHECK_EQ(Gp0Command::fillRectRegion(0u, 0u).height, 0);
+  CHECK_EQ(Gp0Command::fillRectRegion({0u, 0u}).width, 0);
+  CHECK_EQ(Gp0Command::fillRectRegion({0u, 0u}).height, 0);
 }
 
-static void test_transfer_zero_size_means_the_whole_axis(void) {
+void test_transfer_zero_size_means_the_whole_axis(void) {
   // The guest's own loader declares a full-page upload as size 0, and BOTH directions must agree, or a
   // readback would cover a different rectangle than the upload wrote and corrupt the save/restore round
   // trip it exists to serve.
-  const auto whole = Gp0Command::transferRegion(0u, 0u);
+  const auto whole = Gp0Command::transferRegion({0u, 0u});
   CHECK_EQ(whole.width, 1024);
   CHECK_EQ(whole.height, 512);
-  const auto page = Gp0Command::transferRegion(0x0080'0080u, (256u << 16) | 256u);
+  const auto page = Gp0Command::transferRegion({0x0080'0080u, (256u << 16) | 256u});
   CHECK_EQ(page.x, 0x80);
   CHECK_EQ(page.y, 0x80);
   CHECK_EQ(page.width, 256);
   CHECK_EQ(page.height, 256);
   // Only ONE axis being zero substitutes; the other keeps its value.
-  const auto wideOnly = Gp0Command::transferRegion(0u, 240u << 16);
+  const auto wideOnly = Gp0Command::transferRegion({0u, 240u << 16});
   CHECK_EQ(wideOnly.width, 1024);
   CHECK_EQ(wideOnly.height, 240);
 }
 
-static void test_rect_corner_and_draw_area_corner_use_different_shifts(void) {
+void test_rect_corner_and_draw_area_corner_use_different_shifts(void) {
   // THE ONE THAT BITES. A rect corner's Y starts at bit 16; a draw-area corner's Y starts at bit 10.
   // Reading one with the other's shift moves every rect by a factor of 64 in Y, which for a texture
   // upload is a wrong PAGE rather than a wrong pixel.
@@ -434,12 +432,12 @@ static void test_rect_corner_and_draw_area_corner_use_different_shifts(void) {
   CHECK(anyDisagree); // the two decodes genuinely disagree, which is the whole point
 }
 
-static void test_sprite_region_uses_a_signed_vertex_position_for_its_origin(void) {
+void test_sprite_region_uses_a_signed_vertex_position_for_its_origin(void) {
   // A sprite may hang off the left or top edge, so its origin is a SIGNED 11-bit vertex position — not
   // the unsigned rect corner a transfer uses.
-  const auto offLeft = Gp0Command::spriteRegion(0x0000'0400u, 0u, 0);
+  const auto offLeft = Gp0Command::spriteRegion({0x0000'0400u, 0u}, 0);
   CHECK_EQ(offLeft.x, -1024);
-  const auto fixed = Gp0Command::spriteRegion(0x0001'0000u, 0xDEADBEEFu, 8);
+  const auto fixed = Gp0Command::spriteRegion({0x0001'0000u, 0xDEADBEEFu}, 8);
   CHECK_EQ(fixed.x, 0);
   CHECK_EQ(fixed.y, 1);
   CHECK_EQ(fixed.width, 8); // the size word is IGNORED for a fixed size
@@ -447,7 +445,7 @@ static void test_sprite_region_uses_a_signed_vertex_position_for_its_origin(void
 }
 
 // ---- the draw-environment commands -----------------------------------------------------------------
-static void test_draw_environment_commands_are_one_word_each(void) {
+void test_draw_environment_commands_are_one_word_each(void) {
   // E1..E6 carry their parameters in the low halfword and never a payload, so the compositor routes on
   // membership BEFORE it can dispatch on a value.
   CHECK(Gp0Command(0xE1000000u).isDrawEnvironmentCommand());
@@ -460,7 +458,7 @@ static void test_draw_environment_commands_are_one_word_each(void) {
   CHECK_EQ(Gp0Command(0xE312'3456u).lowHalfWord(), 0x3456u);
 }
 
-static void test_draw_area_corner_is_ten_and_nine_bits_unsigned(void) {
+void test_draw_area_corner_is_ten_and_nine_bits_unsigned(void) {
   // Not a vertex position: a clip corner below zero is not expressible, and clamping one at decode time
   // would silently MOVE the clip instead of refusing it.
   // Y occupies bits 10-18, so 384 is written as 384 << 10.
@@ -472,7 +470,7 @@ static void test_draw_area_corner_is_ten_and_nine_bits_unsigned(void) {
   CHECK_EQ(Gp0Command(0xE3FF'FFFFu).drawAreaCorner().y, 511);
 }
 
-static void test_draw_offset_is_two_adjacent_signed_eleven_bit_axes(void) {
+void test_draw_offset_is_two_adjacent_signed_eleven_bit_axes(void) {
   // NOT one axis per halfword: the two are adjacent 11-bit fields. A negative offset is legitimate —
   // it moves the whole scene left/up — so the sign is part of the decode, not clamped away.
   const auto zero = Gp0Command(0xE5000000u).drawOffset();
@@ -491,7 +489,7 @@ static void test_draw_offset_is_two_adjacent_signed_eleven_bit_axes(void) {
   CHECK_EQ(farLeft.x, referenceX);
 }
 
-static void test_texture_window_is_four_five_bit_fields(void) {
+void test_texture_window_is_four_five_bit_fields(void) {
   // Four adjacent 5-bit fields, asserted against the reference shifts over a set of payloads so a decode
   // that reads the wrong field order cannot pass on one value.
   constexpr std::uint32_t payloads[] = {0x0000u, 0xFFFFu, 0x8421u, 0x1234u, 0xABCDu, 0x8000u};
@@ -513,7 +511,7 @@ static void test_texture_window_is_four_five_bit_fields(void) {
   CHECK_EQ(open.offsetX, 0);
 }
 
-static void test_mask_bits_are_the_two_named_hardware_bits(void) {
+void test_mask_bits_are_the_two_named_hardware_bits(void) {
   // NEITHER is honoured as a pixel test. Bit 1 is a real correctness gap rather than a missing
   // feature: with check-mask on, hardware SKIPS a write where the destination is already masked, so
   // deliberately overlapping primitives composite ONCE. See docs/issues/0132-gp0-e6-check-mask-unmodelled.md.
@@ -531,7 +529,7 @@ static void test_mask_bits_are_the_two_named_hardware_bits(void) {
   CHECK(both.checkMask);
 }
 
-static void test_nop_and_clear_cache_are_accepted_not_unimplemented(void) {
+void test_nop_and_clear_cache_are_accepted_not_unimplemented(void) {
   // A discarded command is not the same as an unrecognised one: the first is honoured by doing nothing,
   // the second is a command this port does not implement. They are named apart for that reason.
   CHECK(Gp0Command(0x00000000u).isDiscardedNoOp());
@@ -545,7 +543,7 @@ static void test_nop_and_clear_cache_are_accepted_not_unimplemented(void) {
   CHECK(Gp0Command(0xC0000000u).opcode() == psx::gpu::Gp0Opcode::VramToCpuRead);
 }
 
-static void test_vram_transfer_classification(void) {
+void test_vram_transfer_classification(void) {
   CHECK(Gp0Command(0x80000000u).isVramTransfer());
   CHECK(Gp0Command(0xA0000000u).isVramTransfer());
   CHECK(Gp0Command(0xC0000000u).isVramTransfer());
@@ -553,7 +551,7 @@ static void test_vram_transfer_classification(void) {
   CHECK(!Gp0Command(0xE1000000u).isVramTransfer());
 }
 
-static void test_texture_coordinate_word_leaves_the_selector_uninterpreted(void) {
+void test_texture_coordinate_word_leaves_the_selector_uninterpreted(void) {
   // The high halfword is a CLUT at vertex 0 and a texpage at vertex 1, so the WORD cannot name it. A
   // decode that called it one or the other would be right for half the vertices and wrong for the rest.
   const auto tex = Gp0Command(0x00AB'07C5u).textureCoord();
@@ -561,6 +559,8 @@ static void test_texture_coordinate_word_leaves_the_selector_uninterpreted(void)
   CHECK_EQ(tex.v, 0x07);
   CHECK_EQ(tex.selector, 0x00AB);
 }
+
+} // namespace
 
 int main(void) {
   RUN(colour_byte_order_matches_the_original_shift);
@@ -586,5 +586,5 @@ int main(void) {
   RUN(nop_and_clear_cache_are_accepted_not_unimplemented);
   RUN(vram_transfer_classification);
   RUN(texture_coordinate_word_leaves_the_selector_uninterpreted);
-  return pt_summary();
+  return psx::test::summary();
 }

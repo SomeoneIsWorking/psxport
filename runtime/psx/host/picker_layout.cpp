@@ -12,11 +12,10 @@ constexpr float kSettled = 0.0005f;
 
 } // namespace
 
-PickerLayout::PickerLayout(
-    int panelCount, float selectedShare, float unselectedShare, float slantPerWidth, float responsePerFrame)
-    : mPanelCount(std::clamp(panelCount, 0, kMaxPickerPanels)), mSelectedShare(selectedShare),
-      mUnselectedShare(unselectedShare), mSlantPerWidth(slantPerWidth),
-      mResponse(std::clamp(responsePerFrame, 0.01f, 1.0f)) {
+PickerLayout::PickerLayout(int panelCount, Motion motion)
+    : mPanelCount(std::clamp(panelCount, 0, kMaxPickerPanels)), mSelectedShare(motion.selectedShare),
+      mUnselectedShare(motion.unselectedShare), mSlantPerWidth(motion.slantPerWidth),
+      mResponse(std::clamp(motion.responsePerFrame, 0.01f, 1.0f)) {
   retarget();
   mShare = mTargetShare; // a layout starts settled; the first advance() has nothing to animate
 }
@@ -81,11 +80,12 @@ int PickerLayout::maxPanelWidth(int surfaceWidth) const {
   if (total <= 0.0f) {
     return 0;
   }
-  return std::max(
-      1, static_cast<int>(std::lround(surfaceWidth * mTargetShare[static_cast<std::size_t>(mSelected)] / total)));
+  return std::max(1,
+                  static_cast<int>(std::lround(static_cast<float>(surfaceWidth) *
+                                               mTargetShare[static_cast<std::size_t>(mSelected)] / total)));
 }
 
-PanelLayout PickerLayout::panel(int index, int pictureWidth, int pictureHeight) const {
+PanelLayout PickerLayout::panel(int index) const {
   PanelLayout out;
   if (mPanelCount <= 0 || index < 0 || index >= mPanelCount || mSurfaceW <= 0 || mSurfaceH <= 0) {
     return out;
@@ -105,12 +105,12 @@ PanelLayout PickerLayout::panel(int index, int pictureWidth, int pictureHeight) 
   }
   const float start = edge;
   const float width = mShare[static_cast<std::size_t>(index)] / total;
-  const int x = static_cast<int>(std::lround(start * mSurfaceW));
-  const int right = static_cast<int>(std::lround((start + width) * mSurfaceW));
+  const int x = static_cast<int>(std::lround(start * static_cast<float>(mSurfaceW)));
+  const int right = static_cast<int>(std::lround((start + width) * static_cast<float>(mSurfaceW)));
   out.bounds = PanelRect{x, 0, std::max(right - x, 0), mSurfaceH};
   // A fraction of the width, not the height: the slant is a horizontal displacement, and a
   // fraction of the height makes it invisible on a wide window.
-  out.slantX = static_cast<int>(std::lround(mSlantPerWidth * mSurfaceW));
+  out.slantX = static_cast<int>(std::lround(mSlantPerWidth * static_cast<float>(mSurfaceW)));
   // At the tiling edge the seam is half a slant left at the top and half a slant right at the
   // bottom. The row's two outer edges are the window's own and stand vertical, or each panel's
   // corner falls outside the surface it is meant to fill.

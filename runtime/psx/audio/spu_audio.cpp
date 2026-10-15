@@ -1,16 +1,18 @@
 // Native audio OUTPUT sink — plays the SPU's mixed samples through SDL3. See spu_audio.h.
 //
-// The SPU lift (spu_beetle.c) mixes 44.1 kHz stereo int16 into an internal buffer; spu_update()
-// advances that mixer and spu_render() drains the finished frames. This file is the speaker end.
+// The SPU lift (spu_beetle.cpp) mixes 44.1 kHz stereo int16 into an internal buffer; spu::update()
+// advances that mixer and spu::render() drains the finished frames. This file is the speaker end.
 // One `SpuAudio` per Game (embedded on Game as `spu_audio`); the SBS harness ensures only one
 // Game's SpuAudio actually drives the host device.
 #include "spu_audio.h"
 #include "audio_policy.h" // audio_may_open — ONE definition, shared with native_fmv.cpp
 #include "audio_queue_policy.h"
-#include "cfg.h"
 #include "config_vars.h"
+#include "diagnostic_config.h"
 #include "game.h"
-#include "gpu_vk.h" // gpu_vk_windowed — the windowed/headless discriminator
+#include "gpu_device.h"
+#include "gpu_vk_device.h"
+#include "spu_beetle.h"
 #include "xa_state.h"
 #include <lucent/log.h>
 
@@ -48,12 +50,6 @@ PcmSummary summarizePcm(const int16_t *samples, int frames) {
 }
 
 } // namespace
-
-extern "C" {
-// SPU lift interface (spu_beetle.c).
-int32_t spu_update(int32_t clocks);
-int spu_render(int16_t *out, int max_frames);
-}
 
 constexpr uint32_t kWavMaxBytes = 600u * SpuFieldCadence::kSampleRateHz * 2u * 2u;
 
@@ -140,9 +136,9 @@ void SpuAudio::init() {
 
   // WAV capture is independent of the SDL device: it works even headless / under NOAUDIO.
   {
-    const char *wp = cfg_str("PSXPORT_WAV");
-    if (wp && !mWav) {
-      wavOpen(wp);
+    const std::string wavPath = psx::config::wav_capture_path();
+    if (!wavPath.empty() && !mWav) {
+      wavOpen(wavPath.c_str());
     }
   }
 
@@ -183,7 +179,7 @@ void SpuAudio::setOutputEnabled(bool enabled) {
 void SpuAudio::openHostDevice() {
   // Headless implies no audio — there's no point driving the sound device for an automated /
   // offscreen run. Audio opens ONLY for a real on-screen window.
-  if (!audio_may_open(psx::config::cv_noaudio.get(), gpu_vk_windowed())) {
+  if (!psx::audio::mayOpenOutput(psx::config::no_audio(), game->gpu_dev.windowed())) {
     mState = -1;
     return;
   }
@@ -240,7 +236,7 @@ void SpuAudio::frame() {
 void SpuAudio::frameEx(bool output) {
   const uint64_t traceField = ++mTraceField;
   // The SPU advances every field, consumed or not: guest logic waits on voice end and on the XA read head,
-  // and both live inside spu_update.
+  // and both live inside spu::update.
   //
   // output == false (logic-only): SBS/dual-core diff path, two Games share the ONE output device so
   // neither may feed it.
@@ -251,7 +247,8 @@ void SpuAudio::frameEx(bool output) {
 #endif
   bool wav_on = output && mWav;
 
-  const SpuFieldAdvance advance = mCadence.advance(psx::frame::displayFieldRate(game->gpu.s_disp_pal != 0));
+  const SpuFieldAdvance advance =
+      mCadence.advance(psx::frame::displayFieldRate(game->core.gpuDevice().displayArea().pal));
   const uint32_t xaWrBefore = game->xa.wr;
   const double xaRdBefore = game->xa.rd;
   const uint32_t xaPullsBefore = game->xa.pulls;
@@ -260,7 +257,7 @@ void SpuAudio::frameEx(bool output) {
   // Advance the mixer by exactly one display field's share of system clocks.
   int16_t *buf = mMixBuf;
 
-  // Diagnostics: `debug spuprof` prints the average spu_update() wall time every 60 frames.
+  // Diagnostics: `debug spuprof` prints the average spu::update() wall time every 60 frames.
   if (mProfOn < 0) {
     mProfOn = lucent::channel_on("spuprof") ? 1 : 0;
   }
@@ -268,16 +265,17 @@ void SpuAudio::frameEx(bool output) {
     struct timespec a, b;
     clock_gettime(CLOCK_MONOTONIC, &a);
     if (mProfHavePrev) {
-      mProfLoopMs += (a.tv_sec - mProfPrev.tv_sec) * 1e3 + (a.tv_nsec - mProfPrev.tv_nsec) / 1e6;
+      mProfLoopMs += static_cast<double>(a.tv_sec - mProfPrev.tv_sec) * 1e3 +
+                     static_cast<double>(a.tv_nsec - mProfPrev.tv_nsec) / 1e6;
     }
-    spu_update(static_cast<int32_t>(advance.clocks));
+    psx::audio::spu::update(static_cast<int32_t>(advance.clocks));
     clock_gettime(CLOCK_MONOTONIC, &b);
-    mProfAccumMs += (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6;
+    mProfAccumMs += static_cast<double>(b.tv_sec - a.tv_sec) * 1e3 + static_cast<double>(b.tv_nsec - a.tv_nsec) / 1e6;
     mProfPrev = a;
     mProfHavePrev = 1;
     if (++mProfN >= 60) {
       lucent::info("spu_prof",
-                   "spu_update {:.4f} ms | full frame iter {:.4f} ms | spu share {:.1f}%",
+                   "spu::update {:.4f} ms | full frame iter {:.4f} ms | spu share {:.1f}%",
                    mProfAccumMs / mProfN,
                    mProfLoopMs / mProfN,
                    mProfLoopMs > 0 ? 100.0 * mProfAccumMs / mProfLoopMs : 0.0);
@@ -286,10 +284,10 @@ void SpuAudio::frameEx(bool output) {
       mProfN = 0;
     }
   } else {
-    spu_update(static_cast<int32_t>(advance.clocks));
+    psx::audio::spu::update(static_cast<int32_t>(advance.clocks));
   }
 
-  const int renderedFrames = spu_render(buf, static_cast<int>(advance.samples + kRenderSlack));
+  const int renderedFrames = psx::audio::spu::render(buf, static_cast<int>(advance.samples + kRenderSlack));
   int frames = renderedFrames;
   if (frames <= 0) {
     frames = static_cast<int>(advance.samples);
@@ -313,7 +311,7 @@ void SpuAudio::frameEx(bool output) {
       game->xa.rd - xaRdBefore,
       game->xa.pulls - xaPullsBefore,
       game->xa.sectors - xaSectorsBefore,
-      game->gpu.s_disp_pal != 0,
+      game->core.gpuDevice().displayArea().pal,
       std::vector<int16_t>(buf, buf + static_cast<size_t>(frames) * 2u),
   });
   lucent::debug("audiofield",
@@ -323,7 +321,7 @@ void SpuAudio::frameEx(bool output) {
                 "delta_wr={} delta_rd={:.3f} delta_pulls={} delta_sectors={}",
                 traceField,
                 output ? 1 : 0,
-                game->gpu.s_disp_pal ? 1 : 0,
+                game->core.gpuDevice().displayArea().pal ? 1 : 0,
                 advance.samples,
                 advance.clocks,
                 renderedFrames,
@@ -364,7 +362,7 @@ void SpuAudio::frameEx(bool output) {
     //
     // So flush and patch the sizes about once a second. Cost is one fflush + two seeks per ~172
     // frames; the capture is then at most ~1 s short if the process is killed, instead of empty.
-    if (mWavBytes - mWavSynced >= SpuFieldCadence::kSampleRateHz * 2u * sizeof(int16_t)) {
+    if (mWavBytes - mWavSynced >= sizeof(int16_t) * 2u * SpuFieldCadence::kSampleRateHz) {
       mWavSynced = mWavBytes;
       const long end = ftell(mWav);
       fseek(mWav, 4, SEEK_SET);
@@ -388,7 +386,7 @@ void SpuAudio::frameEx(bool output) {
     if (mRateOn) {
       struct timespec ts;
       clock_gettime(CLOCK_MONOTONIC, &ts);
-      double now = ts.tv_sec + ts.tv_nsec / 1e9;
+      double now = static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
       if (!mRateHave) {
         mRateT0 = now;
         mRateHave = 1;
@@ -403,7 +401,7 @@ void SpuAudio::frameEx(bool output) {
         lucent::info("audio_rate",
                      "{:.0f} samples/s (want {}), {} calls/{:.1f}s, drops={}, backlog={}, level={:.0f}, ratio={:.5f}, "
                      "run reprimes={} drops={}",
-                     mRateSamp / dt,
+                     static_cast<double>(mRateSamp) / dt,
                      SpuFieldCadence::kSampleRateHz,
                      mRateCalls,
                      dt,
@@ -441,7 +439,7 @@ void SpuAudio::frameEx(bool output) {
     return;
   }
 
-  SDL_PutAudioStreamData(mStream, buf, (int)(frames * 2 * sizeof(int16_t)));
+  SDL_PutAudioStreamData(mStream, buf, (int)(sizeof(int16_t) * 2 * frames));
 
   queuedBytes = SDL_GetAudioStreamQueued(mStream);
   if (mStreamStarted) {

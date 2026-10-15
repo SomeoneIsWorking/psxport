@@ -8,40 +8,8 @@
 #include <cstdlib>
 #include <lucent/log.h>
 
-namespace {
-enum Register : int { V0 = 2, A0 = 4, A1 = 5 };
-
-// The legacy group's CdReadSync: zeroes the 8-byte result and reports completion.
-void legacyCdReadSync(Core *core) {
-  const std::uint32_t result = core->r[A1];
-  for (std::uint32_t index = 0; result != 0 && index < 8; ++index) {
-    core->mem_w8(result + index, 0);
-  }
-  core->r[V0] = 0;
-}
-
-} // namespace
-
 void PlatformHle::completeImmediately(Core *core) {
-  core->r[V0] = 0;
-}
-
-bool PlatformHle::inBiosWindow(const GameConfig &config, std::uint32_t address) {
-  for (int index = 0; index < kPlatformHleWindowCapacity; ++index) {
-    if (config.hle.windowHi[index] != 0 && address >= config.hle.windowLo[index] &&
-        address < config.hle.windowHi[index]) {
-      return true;
-    }
-  }
-  lucent::error("plat-hle", "no configured hardware-service window admits 0x{:08X}", address);
-  return false;
-}
-
-bool PlatformHle::register_(std::uint32_t address, OverrideFn function) {
-  if (!function || !game || !game->core.cfg || !inBiosWindow(*game->core.cfg, address)) {
-    return false;
-  }
-  return insert(address, function);
+  core->r[psx::cpu::kV0] = 0;
 }
 
 void PlatformHle::bindStock(std::uint32_t address, OverrideFn function) {
@@ -128,23 +96,4 @@ OverrideFn PlatformHle::lookup(std::uint32_t address) const {
     }
   }
   return nullptr;
-}
-
-void PlatformHle::initBuiltins() {
-  const GameConfig *legacy = game->core.cfg;
-  if (!legacy) {
-    return;
-  }
-  const GameConfig::PlatformHleCfg &config = legacy->hle;
-  auto install = [this](std::uint32_t address, OverrideFn function) {
-    if (address && !register_(address, function)) {
-      std::abort();
-    }
-  };
-  install(config.decDctInSync, completeImmediately);
-  install(config.decDctOutSync, completeImmediately);
-  install(config.cdReadSync, legacyCdReadSync);
-  install(config.cdDataSync, completeImmediately);
-  install(config.cdInitHandshake, completeImmediately);
-  lucent::info("plat-hle", "{} legacy-adapter hardware services installed", mN);
 }

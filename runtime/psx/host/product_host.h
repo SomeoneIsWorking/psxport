@@ -1,5 +1,7 @@
 #pragma once
 
+#include "watchdog.h"
+
 #include "run_budget.h"
 #include "title_availability.h"
 #include "title_catalog.h"
@@ -38,7 +40,6 @@ private:
   // The process-wide state a run needs; the watchdog is armed for exactly its lifetime.
   struct Process {
     Process(const TitleCatalog &catalog, const psx::config::Config &launch);
-    ~Process();
     Process(const Process &) = delete;
     Process &operator=(const Process &) = delete;
 
@@ -49,6 +50,7 @@ private:
     psx::input::QuitScope quit;
     RunBudget budget;
     SessionServices services;
+    psx::platform::Watchdog watchdog;
   };
 
   void printUsage(const char *program) const;
@@ -57,7 +59,7 @@ private:
   // The zero-argument run of a one-title product: its executable (from a disc asked for at first run), then the title.
   int runOnlyTitle();
   // A packaged run keeps every relative path (executable, settings, card) in the title's user data.
-  bool enterUserData(const TitleIdentity &title) const;
+  bool enterUserData(const TitleIdentity &title, const std::filesystem::path &packageRoot) const;
   int runExecutable(const std::filesystem::path &executable);
 
   // The one loop every entered title runs in, whether it came from the picker or from an

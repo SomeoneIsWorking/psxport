@@ -8,6 +8,7 @@
 #pragma once
 
 #include "frame_record.h"
+#include "vram_rect.h"
 
 #include <array>
 #include <cstdint>
@@ -23,10 +24,10 @@ inline constexpr int kRecordVramHeight = 512;
 inline constexpr int kRecordOpWords = 32;
 using RecordOp = std::array<std::uint32_t, kRecordOpWords>;
 
-enum class RecordOpKind : std::uint32_t { Triangle = 0, Sprite = 1, LinePixel = 2, Fill = 3, Copy = 4, Upload = 5 };
+enum class RecordOpKind : std::uint8_t { Triangle = 0, Sprite = 1, LinePixel = 2, Fill = 3, Copy = 4, Upload = 5 };
 
 // RecordOp word indices.
-enum RecordOpField : int {
+enum RecordOpField : std::uint8_t {
   kOpFlags = 0,      // kind | RecordOpFlag bits
   kOpColour = 1,     // flat colour r | g << 8 | b << 16, or a fill value
   kOpWindowXAnd = 2, // gpu.c SUCV.TWX_AND
@@ -83,8 +84,8 @@ struct RecordRect {
   bool operator==(const RecordRect &) const = default;
 };
 
-// The VRAM rect (x, y, width, height) clipped to VRAM; how a display area becomes a buffer rect.
-RecordRect clampedVramRect(int x, int y, int width, int height);
+// `rect` clipped to VRAM; how a display area becomes a buffer rect.
+RecordRect clampedVramRect(VramRect rect);
 
 // The draw area is the buffer: its columns exactly, its rows covered.
 bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect &buffer);

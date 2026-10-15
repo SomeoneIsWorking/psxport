@@ -28,7 +28,8 @@ void OneShotWait(SDL_GPUDevice *dev, SDL_GPUCommandBuffer *cmd) {
 }
 } // namespace
 
-SDL_GPUBuffer *RmlRenderInterfaceGpu::UploadBuffer(const void *data, uint32_t size, SDL_GPUBufferUsageFlags usage) {
+SDL_GPUBuffer *RmlRenderInterfaceGpu::UploadBuffer(std::span<const std::byte> bytes, SDL_GPUBufferUsageFlags usage) {
+  const auto size = static_cast<uint32_t>(bytes.size());
   if (!size) {
     return nullptr;
   }
@@ -44,7 +45,7 @@ SDL_GPUBuffer *RmlRenderInterfaceGpu::UploadBuffer(const void *data, uint32_t si
   ti.size = size;
   SDL_GPUTransferBuffer *xfer = SDL_CreateGPUTransferBuffer(mDev, &ti);
   void *p = SDL_MapGPUTransferBuffer(mDev, xfer, false);
-  memcpy(p, data, size);
+  memcpy(p, bytes.data(), size);
   SDL_UnmapGPUTransferBuffer(mDev, xfer);
   SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(mDev);
   SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
@@ -219,8 +220,8 @@ Rml::CompiledGeometryHandle RmlRenderInterfaceGpu::CompileGeometry(Rml::Span<con
     return 0;
   }
   Geometry g;
-  g.vbo = UploadBuffer(vertices.data(), (uint32_t)(vertices.size() * sizeof(Rml::Vertex)), SDL_GPU_BUFFERUSAGE_VERTEX);
-  g.ibo = UploadBuffer(indices.data(), (uint32_t)(indices.size() * sizeof(int)), SDL_GPU_BUFFERUSAGE_INDEX);
+  g.vbo = UploadBuffer(std::as_bytes(std::span(vertices.data(), vertices.size())), SDL_GPU_BUFFERUSAGE_VERTEX);
+  g.ibo = UploadBuffer(std::as_bytes(std::span(indices.data(), indices.size())), SDL_GPU_BUFFERUSAGE_INDEX);
   g.indexCount = (uint32_t)indices.size();
   if (!g.vbo || !g.ibo) {
     if (g.vbo) {

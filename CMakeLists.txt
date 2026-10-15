@@ -11,10 +11,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(Threads REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-# libchdr (CHD access for tools/discdump) — from the Beetle PSX submodule (bundles its own lzma).
+# libchdr (CHD access for psx::cd::Disc) — from the Beetle PSX submodule (bundles its own lzma).
 add_subdirectory(vendor/beetle-psx/deps/libchdr EXCLUDE_FROM_ALL)
-
-add_subdirectory(common)
 
 # A standalone psxport configure owns and runs the framework suite. An embedded consumer owns its own
 # CTest surface: registering psxport tests there advertises executables that a consumer target did not

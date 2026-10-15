@@ -1,14 +1,15 @@
 // A transition-to-black present is visible progress, but it is not proof that the main gameplay
-// presenter is ready. Exercise the shipping GpuState::gpu_clear_display path in a child process so
-// the deliberate watchdog timeout cannot terminate the test runner. The no-blit form preserves all
-// clear/present/finalize/watchdog bookkeeping while keeping this test hermetic: no SDL device,
-// window, disc, or game assets are initialized.
+// presenter is ready. Exercise the shipping DisplayPresenter transition present in a child process so
+// the deliberate watchdog timeout cannot terminate the test runner. The SDL device is disabled, so
+// no window, disc or game assets are initialized.
 #include "c_subsys.h"
 #include "game.h"
 #include "testutil.h"
+#include "watchdog.h"
 
 #include "stub_game_runtime.h"
 #include <errno.h>
+#include <memory>
 #include <signal.h>
 #include <string>
 #include <sys/wait.h>
@@ -17,7 +18,7 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 struct ChildResult {
   int status;
@@ -43,10 +44,11 @@ ChildResult runClearDisplayChild() {
     setenv("PSXPORT_WATCHDOG", "1", 1);
     setenv("PSXPORT_WATCHDOG_BOOT", "3", 1);
 
-    static Game game{stubRuntime, {}};
+    Game game{*stubRuntime, {}};
     game.core.rsub.mode.setPath(RenderPath::Device);
-    watchdog_init();
-    game.gpu.gpu_clear_display(&game.core, /*do_blit=*/0);
+    game.disablePresentation();
+    const psx::platform::Watchdog watchdog;
+    game.display.present(psx::present::PresentCompletion::Transition);
 
     // Longer than the steady budget but shorter than the cold-init grace. If the black transition
     // falsely reports main-present completion, the child exits 134 before reaching _exit(0).
@@ -69,16 +71,17 @@ ChildResult runClearDisplayChild() {
   return {status, text};
 }
 
-} // namespace
-
-static void test_clear_display_retains_boot_grace(void) {
+void test_clear_display_retains_boot_grace(void) {
   const ChildResult result = runClearDisplayChild();
   CHECK(WIFEXITED(result.status));
   CHECK_EQ(WEXITSTATUS(result.status), 0);
   CHECK(result.stderrText.find("[watchdog] STUCK") == std::string::npos);
 }
 
+} // namespace
+
 int main() {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(clear_display_retains_boot_grace);
-  return pt_summary();
+  return psx::test::summary();
 }

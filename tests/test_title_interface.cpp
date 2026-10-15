@@ -2,12 +2,11 @@
 // GameRuntime virtual on the stub runtime and reads it back through the shipping owner.
 #include "crt0_boot.h"
 #include "dev_command_control.h"
+#include "display_presenter.h"
 #include "frame_composer.h"
 #include "frame_presenter.h"
 #include "game.h"
-#include "gpu_native_internal.h"
 #include "gte.h"
-#include "hw_bind.h"
 #include "image_identity.h"
 #include "marker_render.h"
 #include "state_producer.h"
@@ -34,13 +33,11 @@ public:
 void test_display_height_bounds_the_presented_guest_lines() {
   DisplayHeightRuntime runtime;
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
-  game->core.rsub.mode.setPath(RenderPath::Gte);
-  CHECK_EQ(GpuState::presentedHeight(&game->core, 240), 224);
+  CHECK_EQ(psx::present::DisplayPresenter::presentedHeight(game->core, 240), 224);
 
   psx::test::StubGameRuntime decoded;
   auto decodedGame = std::make_unique<Game>(decoded, psx::config::Config{});
-  decodedGame->core.rsub.mode.setPath(RenderPath::Gte);
-  CHECK_EQ(GpuState::presentedHeight(&decodedGame->core, 240), 240);
+  CHECK_EQ(psx::present::DisplayPresenter::presentedHeight(decodedGame->core, 240), 240);
 }
 
 class InterpolatingRuntime final : public psx::test::StubGameRuntime {
@@ -199,6 +196,15 @@ void test_title_audio_mixes_each_output_field() {
   CHECK(runtime.music.heard == game->spu_audio.fieldReports().back().pcmSamples);
 }
 
+// A title with no music engine still gets its SPU output field.
+void test_no_title_audio_still_renders_the_field() {
+  psx::test::StubGameRuntime runtime;
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
+  game->spu_audio.init();
+  game->spu_audio.frame();
+  CHECK(!game->spu_audio.fieldReports().empty());
+}
+
 // A crt0 title starts through Crt0Boot: the plan's registers land on the Core and libcInit is called.
 class Crt0Runtime final : public psx::test::StubGameRuntime {
 public:
@@ -238,7 +244,6 @@ void test_start_program_runs_the_titles_crt0() {
 
 // Each Core's GTE is its own: a write to one never shows on the other, whichever was bound last.
 void test_each_core_reads_and_runs_its_own_gte() {
-  gte_init();
   psx::test::StubGameRuntime runtime;
   auto first = std::make_unique<Game>(runtime, psx::config::Config{});
   auto second = std::make_unique<Game>(runtime, psx::config::Config{});
@@ -269,7 +274,8 @@ int main() {
   RUN(dev_warp_feeds_the_debug_tab_warp);
   RUN(state_producers_compose_the_record_present);
   RUN(title_audio_mixes_each_output_field);
+  RUN(no_title_audio_still_renders_the_field);
   RUN(start_program_runs_the_titles_crt0);
   RUN(each_core_reads_and_runs_its_own_gte);
-  return pt_summary();
+  return psx::test::summary();
 }

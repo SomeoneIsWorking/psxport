@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PACKAGES = (
-    "autoconf", "automake", "clang", "clang-format", "clang-tidy", "cmake", "glslc",
+    "autoconf", "automake", "clang", "clang-format", "clang-tidy", "cmake", "glslc", "libclang-dev",
     "libfreetype-dev", "libtool", "make", "libsdl3-dev", "libsdl3-image-dev",
     "libvulkan1", "mesa-vulkan-drivers", "ninja-build", "pkg-config", "zlib1g-dev",
 )

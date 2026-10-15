@@ -6,18 +6,16 @@
 
 #include "testutil.h"
 
-using namespace dynarec_test;
-
 namespace {
+
+using namespace dynarec_test;
 
 constexpr std::uint32_t kProducer = 0x8001F798u;
 constexpr std::uint32_t kObject = 0x80150000u;
 constexpr std::uint32_t kKnownTarget = 0x80080100u;
 constexpr std::uint32_t kRegisterTarget = 0x80080200u;
 
-} // namespace
-
-static void test_known_and_register_addressed_guest_stores_bind(void) {
+void test_known_and_register_addressed_guest_stores_bind(void) {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -46,7 +44,9 @@ static void test_known_and_register_addressed_guest_stores_bind(void) {
   CHECK(addressed && addressed->producer == kProducer && addressed->object == kObject);
 }
 
+} // namespace
+
 int main() {
   RUN(known_and_register_addressed_guest_stores_bind);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -26,7 +26,12 @@ class StockLibcd;
 // so a long stall cannot be repaid as one unpaced burst — which would be the very behaviour this
 // exists to stop.
 namespace psx::cd {
-int streamSectorsDue(uint64_t elapsedNs, int sectorsPerSecond, uint32_t alreadyDelivered);
+// Elapsed time since the stream started and the sectors already delivered for it.
+struct StreamProgress {
+  uint64_t elapsedNs = 0;
+  uint32_t delivered = 0;
+};
+int streamSectorsDue(StreamProgress progress, int sectorsPerSecond);
 } // namespace psx::cd
 
 // Per-call bound on the catch-up above. One video field of double-speed delivery (150/60 = 2.5,

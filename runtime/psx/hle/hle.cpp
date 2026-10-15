@@ -10,14 +10,13 @@
 #include "bios_interrupt.h"
 #include "bios_libc_string.h"
 #include "bios_load_exec.h"
-#include "cfg.h"
 #include "core.h"
 #include "execution_control.h"
 #include "execution_services.h"
 #include "fs_util.h" // Fs::writeFile — the miss RAM dump below
 #include "game.h"
 #include "guest_call.h"   // rc0 — invoke an EvMdINTR handler
-#include "memcard.h"      // card_hle_a0 / card_hle_b0 — libcard BIOS dispatch (class Memcard)
+#include "memcard.h"      // Memcard::dispatchBiosA0/B0 — libcard BIOS dispatch
 #include "platform_hle.h" // class PlatformHle — sync-primitive HLE consulted on a RAM-code miss
 #include <cstdio>
 #include <cstdlib>
@@ -25,10 +24,9 @@
 #include <lucent/log.h>
 
 // MIPS o32 register indices (== c->r[]).
-enum { A0 = 4, A1 = 5, A2 = 6, A3 = 7, T1 = 9, V0 = 2 };
 
 // ---- Event control blocks (B0:0x07-0x0D) --------------------------------------------
-enum { EVCB_MAX = 16 };
+constexpr int EVCB_MAX = 16;
 static const uint32_t EV_ID_BASE = 0xF1000000u;
 
 int Hle::eventIndex(uint32_t id) const {
@@ -219,15 +217,16 @@ void Hle::deviceUnhook(uint32_t dcb) {
   c->mem_w32(dcb + DCB_OFF_NEXTFILE, 0);
 }
 
-// BIOS threads are implemented natively (per-thread ucontext stacks) in threads.c.
-uint32_t thread_open(Core *c);
-uint32_t thread_close(Core *c);
-void thread_change(Core *c, uint32_t handle);
+namespace {
+
+constexpr uint32_t kBiosThreadHandle = 0xFF000000u;
+
+} // namespace
 
 // Dispatch one A0/B0/C0 BIOS call. Returns true if handled (c->r[V0] set), false otherwise.
 bool Hle::dispatchBios(char table, uint32_t fn) {
   Core *c = &game->core;
-  uint32_t a0 = c->r[A0], a1 = c->r[A1], a2 = c->r[A2];
+  uint32_t a0 = c->r[psx::cpu::kA0], a1 = c->r[psx::cpu::kA1], a2 = c->r[psx::cpu::kA2];
   // `PSXPORT_DEBUG=bios` — EVERY BIOS call the guest makes, handled or not. The existing UNIMPL log
   // only fires for calls that fall through, which answers "what is missing" but not "what does this
   // game actually use" — and that second question is what a port needs when deciding which BIOS
@@ -240,11 +239,11 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                 a0,
                 a1,
                 a2,
-                c->r[A3],
+                c->r[psx::cpu::kA3],
                 c->r[31]);
   HleEvCB *s_ev = ev; // alias so the switch bodies below read tersely
   if (table == 'A') {
-    if (bios_libc_string_dispatch(c, fn)) {
+    if (psx::hle::dispatchLibcString(c, fn)) {
       return true;
     }
     switch (fn) {
@@ -253,18 +252,18 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     // host rand(), whose sequence and process-global coupling are both wrong for dual-core runs.
     case 0x2F:
       rand_state = rand_state * 0x41C64E6Du + 0x3039u;
-      c->r[V0] = (rand_state >> 16) & 0x7FFFu;
+      c->r[psx::cpu::kV0] = (rand_state >> 16) & 0x7FFFu;
       return true;
     case 0x30:
       rand_state = a0;
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true;
     case 0x33:
-      c->r[V0] = heapAlloc(a0);
+      c->r[psx::cpu::kV0] = heapAlloc(a0);
       return true; // malloc
     case 0x34:
       heapFree(a0);
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true; // free
     case 0x37: {
       uint32_t n = a0 * a1, p = heapAlloc(n); // calloc
@@ -273,18 +272,18 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
           c->mem_w8(p + i, 0);
         }
       }
-      c->r[V0] = p;
+      c->r[psx::cpu::kV0] = p;
       return true;
     }
     case 0x38: {
       uint32_t old = a0, ns = a1; // realloc
       if (!old) {
-        c->r[V0] = heapAlloc(ns);
+        c->r[psx::cpu::kV0] = heapAlloc(ns);
         return true;
       }
       if (!ns) {
         heapFree(old);
-        c->r[V0] = 0;
+        c->r[psx::cpu::kV0] = 0;
         return true;
       }
       uint32_t np = heapAlloc(ns), os = heapBlockSize(old);
@@ -295,7 +294,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
         }
         heapFree(old);
       }
-      c->r[V0] = np;
+      c->r[psx::cpu::kV0] = np;
       return true;
     }
     // InitHeap(base, size). LOGGED AT INFO, not debug-gated, and it prints on EVERY boot because
@@ -306,19 +305,19 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     // measured pair is stated once per boot rather than being knowable only under a debug channel.
     case 0x39:
       lucent::info("hle", "InitHeap(base=0x{:08X}, size=0x{:X} = {} bytes) from guest a0/a1", a0, a1, a1);
-      heapInit(a0, a1);
-      c->r[V0] = 0;
+      heapInit({a0, a1});
+      c->r[psx::cpu::kV0] = 0;
       return true; // InitHeap
     // setjmp: fill the guest's jmp_buf with the real callee-saved set and return 0 (the
     // direct-call result). The layout is the BIOS's: ra, sp, fp, s0..s7, gp. Writing it truthfully
     // matters even though longjmp is unsupported below — a guest that INSPECTS the buffer, or
     // that longjmps and is therefore about to abort, should see the state that actually existed.
     case 0x13: { // setjmp(buf)
-      static const int kSave[12] = {31, 29, 30, 16, 17, 18, 19, 20, 21, 22, 23, 28};
+      constexpr int kSave[12] = {31, 29, 30, 16, 17, 18, 19, 20, 21, 22, 23, 28};
       for (int i = 0; i < 12; i++) {
         c->mem_w32(a0 + 4u * (uint32_t)i, c->r[kSave[i]]);
       }
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true;
     }
     // longjmp CANNOT be honoured here and must not be faked. Restoring the guest's $sp/$ra does
@@ -344,7 +343,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       char out[1024];
       unsigned o = 0;
       uint32_t fmt = a0, argi = 0;
-      const uint32_t argreg[3] = {a1, a2, c->r[A3]};
+      const uint32_t argreg[3] = {a1, a2, c->r[psx::cpu::kA3]};
       // Varargs past the fourth land on the guest stack, at sp+16 in the o32 layout.
       auto nextarg = [&]() -> uint32_t {
         if (argi < 3) {
@@ -413,30 +412,24 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
         out[o - 1] = 0;
       }
       lucent::debug("guest", "{}", out);
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true;
     }
-    case 0x44:
-      c->r[V0] = 0;
-      return true; // FlushCache (no-op)
-    case 0x49:
-      c->r[V0] = 0;
-      return true; // GPU_cw (GP0 word — harmless)
+    case 0x44: // FlushCache (no-op)
+    case 0x49: // GPU_cw (GP0 word — harmless)
+      c->r[psx::cpu::kV0] = 0;
+      return true;
     // LoadAndExecute: load the CD executable this guest named and START it — the BIOS never returns
     // to its caller on success, so the loaded program's entry is the guest's continuation.
     case 0x51:
       return psx::hle::dispatchLoadExec(*c, loadExecReader);
-    case 0x70:
-      c->r[V0] = 0;
-      return true; // _bu_init no-op
-    case 0x71:
-      c->r[V0] = 0;
-      return true; // _96_init no-op
-    case 0x72:
-      c->r[V0] = 0;
-      return true; // _96_remove no-op
+    case 0x70: // _bu_init no-op
+    case 0x71: // _96_init no-op
+    case 0x72: // _96_remove no-op
+      c->r[psx::cpu::kV0] = 0;
+      return true;
     default: {
-      if (card_hle_a0(fn, c)) {
+      if (c->game->memcard.dispatchBiosA0(fn, c)) {
         return true;
       }
       return false;
@@ -450,11 +443,11 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     switch (fn) {
     case 0x07:
       deliverEvent(a0, a1);
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true; // DeliverEvent
     case 0x20:
       unDeliverEvent(a0, a1);
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true; // UnDeliverEvent
     case 0x08: {   // OpenEvent
       for (int i = 0; i < EVCB_MAX; i++) {
@@ -465,7 +458,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
           s_ev[i].ev_class = a0;
           s_ev[i].spec = a1;
           s_ev[i].mode = a2;
-          s_ev[i].func = c->r[A3];
+          s_ev[i].func = c->r[psx::cpu::kA3];
           // `PSXPORT_DEBUG=ev` — which events a game opens, and the handle each got. A title's frame
           // driver must deliver those CLASSES or every TestEvent wait spins forever. There was no way to
           // discover a game's classes short of reading its OpenEvent call sites by hand; this
@@ -476,22 +469,22 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                         a0,
                         a1,
                         a2,
-                        c->r[A3],
+                        c->r[psx::cpu::kA3],
                         EV_ID_BASE + (uint32_t)i);
-          c->r[V0] = EV_ID_BASE + (uint32_t)i;
+          c->r[psx::cpu::kV0] = EV_ID_BASE + (uint32_t)i;
           return true;
         }
       }
-      c->r[V0] = 0xFFFFFFFFu;
+      c->r[psx::cpu::kV0] = 0xFFFFFFFFu;
       return true; // table full
     }
     case 0x09: {
       int i = eventIndex(a0); // CloseEvent
       if (i >= 0) {
         s_ev[i].open = 0;
-        c->r[V0] = 1;
+        c->r[psx::cpu::kV0] = 1;
       } else {
-        c->r[V0] = 0;
+        c->r[psx::cpu::kV0] = 0;
       }
       return true;
     }
@@ -499,9 +492,9 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       int i = eventIndex(a0); // WaitEvent (can't block)
       if (i >= 0) {
         s_ev[i].fired = 0;
-        c->r[V0] = 1;
+        c->r[psx::cpu::kV0] = 1;
       } else {
-        c->r[V0] = 0;
+        c->r[psx::cpu::kV0] = 0;
       }
       return true;
     }
@@ -509,9 +502,9 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       int i = eventIndex(a0); // TestEvent (read+clear)
       if (i >= 0 && s_ev[i].fired) {
         s_ev[i].fired = 0;
-        c->r[V0] = 1;
+        c->r[psx::cpu::kV0] = 1;
       } else {
-        c->r[V0] = 0;
+        c->r[psx::cpu::kV0] = 0;
       }
       return true;
     }
@@ -519,9 +512,9 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       int i = eventIndex(a0); // EnableEvent
       if (i >= 0) {
         s_ev[i].enabled = 1;
-        c->r[V0] = 1;
+        c->r[psx::cpu::kV0] = 1;
       } else {
-        c->r[V0] = 0;
+        c->r[psx::cpu::kV0] = 0;
       }
       return true;
     }
@@ -529,9 +522,9 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       int i = eventIndex(a0); // DisableEvent
       if (i >= 0) {
         s_ev[i].enabled = 0;
-        c->r[V0] = 1;
+        c->r[psx::cpu::kV0] = 1;
       } else {
-        c->r[V0] = 0;
+        c->r[psx::cpu::kV0] = 0;
       }
       return true;
     }
@@ -550,23 +543,23 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
         out[n - 1] = 0;
       }
       lucent::debug("guest", "{}", out);
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true;
     }
     case 0x15:
     case 0x16: // Legacy PAD_init2/PAD_dr remain outside this callback contract.
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true;
     case 0x17: // ReturnFromException — non-returning unwind to irqPoll's saved R3000 context
-      bios_interrupt_return_from_exception(custom_exit_active != 0);
+      psx::hle::returnFromException(custom_exit_active != 0);
     case 0x18: // ResetEntryInt — remove the custom exception-exit context
       exception_exit_buf = 0;
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true;
     case 0x19: // HookEntryInt — install the guest jmp_buf restored after the BIOS chain walk
       exception_exit_buf = a0;
-      bios_interrupt_trace_custom_exit(c, a0);
-      c->r[V0] = 0;
+      psx::hle::traceInterruptCustomExit(c, a0);
+      c->r[psx::cpu::kV0] = 0;
       return true;
     // B0:0x35 FileWrite is NOT handled here. It used to be, unconditionally: this switch wrote fd
     // 1/2 to stderr and then returned `len` FOR EVERY fd — so a write to a memory-card file never
@@ -574,40 +567,40 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     // line: the save was silently discarded, and `len` is the wrong return for a card fd (see
     // memcard.cpp file_read for the libmcrd retry loop that spins on a non-zero return; that spin
     // is the user-reported SELECT MEMORY CARD softlock). memcard.cpp's `file_write` already
-    // implements the console-device arm identically, so the whole call now goes to card_hle_b0
+    // implements the console-device arm identically, so the whole call now goes to Memcard::dispatchBiosB0
     // through the default arm below and the console path has ONE definition.
     // Pinned by tests/test_memcard_file_api.cpp, which drives THIS function rather than the card
     // module directly — precisely because an earlier case here can claim a number before the card
     // module sees it.
+    // BIOS threads: no context switch; a title that runs guest threads binds its own.
     case 0x0E:
-      c->r[V0] = thread_open(c);
+      c->r[psx::cpu::kV0] = kBiosThreadHandle;
       return true; // OpenThread
     case 0x0F:
-      c->r[V0] = thread_close(c);
+      c->r[psx::cpu::kV0] = 1;
       return true; // CloseThread
     case 0x10:
-      thread_change(c, a0);
-      c->r[V0] = a0;
+      c->r[psx::cpu::kV0] = a0;
       return true; // ChangeThread
     case 0x4A:
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true; // stopCard / card no-op
     case 0x4B:
-      c->r[V0] = 1;
+      c->r[psx::cpu::kV0] = 1;
       return true; // cardInfo -> present
     case 0x56:
       workAreaInit();
-      c->r[V0] = HLE_C0TABLE;
+      c->r[psx::cpu::kV0] = HLE_C0TABLE;
       return true; // GetC0Table
     case 0x57:
       workAreaInit();
-      c->r[V0] = kB0Table;
+      c->r[psx::cpu::kV0] = kB0Table;
       return true; // GetB0Table
     case 0x5B:
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true; // ChangeClearPAD (no-op)
     default: {
-      if (card_hle_b0(fn, c)) {
+      if (c->game->memcard.dispatchBiosB0(fn, c)) {
         return true;
       }
       return false;
@@ -641,7 +634,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       } else {
         irqDeq(a1);
       }
-      c->r[V0] = a1;
+      c->r[psx::cpu::kV0] = a1;
       return true;
     case 0x00:
     case 0x01:
@@ -651,7 +644,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     case 0x0C:
     case 0x12:
     case 0x1C: // installers + RCnt
-      c->r[V0] = 0;
+      c->r[psx::cpu::kV0] = 0;
       return true;
     default:
       return false;

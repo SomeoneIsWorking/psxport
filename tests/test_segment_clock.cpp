@@ -428,7 +428,9 @@ static void test_root_counter2_never_decreases_across_a_segment_boundary(void) {
     // A budget small enough that the poll program cannot finish in one segment, so `executeWithBoundary`
     // runs its `while` loop and re-enters `lightrec_reset_cycle_count` between iterations.
     const auto result = psx::cpu::dispatchGuest0(
-        core, kProgram, psx::cpu::ExecutionBudget::fromCycles(200 * psx::cpu::kLightrecCyclesPerInstruction));
+        core,
+        kProgram,
+        psx::cpu::ExecutionBudget::fromCycles(std::uint64_t{200} * psx::cpu::kLightrecCyclesPerInstruction));
     reads_taken.push_back(fixture.game->timing.rootCounter2());
     if (result.guestPc == 0) {
       break;
@@ -445,7 +447,7 @@ static void test_root_counter2_never_decreases_across_a_segment_boundary(void) {
 }
 
 // A STORE to a device register is the same contract violation as a load, and this framework has a
-// concrete reason it matters rather than a symmetrical one: `psx::frame::Timing::rootCounter2Write` records
+// concrete reason it matters rather than a symmetrical one: `psx::frame::Timing::rootCounter2WriteMode` records
 // `rootCounter2OriginTicks = mEmulatedTime.nowTicks()` when the guest programs the counter, and
 // `rootCounter2()` then counts from that origin. A write observed with a stale clock anchors the
 // counter to a time that has already passed, so the first read after it reports a delta the guest
@@ -455,7 +457,7 @@ static void test_a_device_store_is_charged_as_well_as_a_device_read(void) {
   Fixture fixture;
   Core &core = fixture.game->core;
   // A WRITE to a device register is the same contract violation as a read, and this framework has a
-  // concrete reason it matters rather than a merely symmetrical one: `psx::frame::Timing::rootCounter2Write`
+  // concrete reason it matters rather than a merely symmetrical one: `psx::frame::Timing::rootCounter2WriteMode`
   // records `rootCounter2OriginTicks = mEmulatedTime.nowTicks()` when the guest programs the counter,
   // and `rootCounter2()` counts from that origin. A write observed against a stale clock anchors the
   // counter to a moment that has already passed.
@@ -531,7 +533,7 @@ static void test_a_device_store_is_charged_as_well_as_a_device_read(void) {
   // issue 0007's cycle-accurate model. What must NOT happen is a commit per access, which would
   // double-count the block's cycles — and the count being 31 rather than ~63 is what rules that out.
   CHECK(newCommits > 0u);
-  CHECK(newCommits < 2u * kSamples);
+  CHECK(newCommits < std::uint64_t{2} * kSamples);
   // Every sample is still distinct, so the store did not cost the loop its visibility.
   int distinct = 0;
   for (std::uint32_t i = 1; i < kSamples; ++i) {
@@ -649,7 +651,7 @@ static void test_a_run_with_no_device_access_makes_no_device_commit(void) {
   CHECK(counters.memoryCallbacks >= kIterations);
   // The guest really read the RAM word, so the load was not elided.
   CHECK_EQ(core.r[kV0], 0xdeadbeefu);
-  CHECK(counters.executedInstructions >= 4u * kIterations);
+  CHECK(counters.executedInstructions >= std::uint64_t{4} * kIterations);
   // THE GATE. The ADDRESS decides, not the callback: none of these callbacks named a device address.
   CHECK_EQ(counters.deviceClockCommits, 0u);
   // THE GATE. The address decides, not the callback: none of these callbacks named a device address.
@@ -676,5 +678,5 @@ int main() {
   RUN(a_device_store_is_charged_as_well_as_a_device_read);
   RUN(the_charge_granularity_is_one_block_not_one_instruction);
   RUN(a_run_with_no_device_access_makes_no_device_commit);
-  return pt_summary();
+  return psx::test::summary();
 }

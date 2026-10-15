@@ -8,7 +8,7 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 int deliveredTurns;
 bool requestNestedTurn;
@@ -40,11 +40,11 @@ public:
     psx::cpu::shutdownHostTurn(game->core);
   }
 
-  std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
+  std::unique_ptr<Game> game = std::make_unique<Game>(*stubRuntime, psx::config::Config{});
 };
 
 void test_unregistered_request_retires_after_critical_section() {
-  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
+  auto game = std::make_unique<Game>(*stubRuntime, psx::config::Config{});
   game->core.pending_work = Core::PW_HOST | Core::PW_IRQ;
   game->hle.irq_enabled = 0;
   psx::cpu::serviceHostTurn(game->core);
@@ -57,7 +57,7 @@ void test_unregistered_request_retires_after_critical_section() {
 
 void test_foreign_core_request_does_not_dispatch_registered_handler() {
   HostTurnFixture fixture;
-  auto foreignGame = std::make_unique<Game>(stubRuntime, psx::config::Config{});
+  auto foreignGame = std::make_unique<Game>(*stubRuntime, psx::config::Config{});
   foreignGame->hle.irq_enabled = 1;
   foreignGame->core.pending_work = Core::PW_HOST | Core::PW_IRQ;
 
@@ -147,6 +147,7 @@ void test_reentrant_delivery_preserves_new_request() {
 } // namespace
 
 int main() {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(unregistered_request_retires_after_critical_section);
   RUN(foreign_core_request_does_not_dispatch_registered_handler);
   RUN(irq_handler_defers_until_return_and_preserves_registers);
@@ -154,5 +155,5 @@ int main() {
   RUN(native_dispatch_preserves_pending_request);
   RUN(pending_redirect_preserves_pending_request);
   RUN(reentrant_delivery_preserves_new_request);
-  return pt_summary();
+  return psx::test::summary();
 }

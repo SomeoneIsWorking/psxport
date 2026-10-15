@@ -1,7 +1,10 @@
 // gpu_device.h — the PSX GPU device: Beetle's gpu.c, the only VRAM and register file the guest sees.
 #pragma once
 
+#include "emulated_time.h"
 #include "gp0_record_tap.h"
+#include "rgb24_picture.h"
+#include "vram_rect.h"
 
 #include <cstdint>
 #include <memory>
@@ -21,17 +24,7 @@ struct DisplayArea {
   int width = 0;
   int height = 0;
   bool depth24 = false;
-};
-
-struct VramPoint {
-  int x = 0;
-  int y = 0;
-};
-
-struct Rgb24Picture {
-  int width = 0;
-  int height = 0;
-  std::vector<std::uint8_t> pixels; // row-major RGB
+  bool pal = false; // GP1(08) video mode: 50 Hz fields
 };
 
 // One machine's GPU. gpu.c keeps its state in globals, so one device is bound to them at a time:
@@ -43,20 +36,18 @@ public:
   GpuDevice(const GpuDevice &) = delete;
   GpuDevice &operator=(const GpuDevice &) = delete;
 
-  // `sourceAddress` is the guest address the word was read from, 0 when it came from no packet;
-  // `packetKey` the emission key of the OT node it belongs to.
-  void gp0(uint32_t word, uint32_t sourceAddress = 0, const std::optional<present::RecordKey> &packetKey = {});
+  void gp0(uint32_t word, const Gp0Origin &origin = {});
   // The next GP0 words come from a new OT node.
   void beginPacket();
   // The OT walk reached a named bucket, or left the named tables (nullopt).
   void enterSlot(const std::optional<present::OtSlot> &slot, bool descending);
-  // `cpuTicks` is the machine's emulated CPU clock; the device's scanline clock runs from it.
-  void gp1(uint32_t word, uint64_t cpuTicks);
+  // The device's scanline clock runs from `now`.
+  void gp1(uint32_t word, frame::CpuTicks now);
   uint32_t read();
-  uint32_t status(uint64_t cpuTicks);
+  uint32_t status(frame::CpuTicks now);
 
   // A CPU->VRAM upload the guest's libgpu would have sent as GP0(A0) (an HLE'd LoadImage).
-  void loadImage(int x, int y, int width, int height, std::span<const uint16_t> pixels);
+  void loadImage(VramRect rect, std::span<const uint16_t> pixels);
 
   // 1024x512 1555 halfwords, row-major.
   std::span<const uint16_t> vram();
@@ -64,7 +55,7 @@ public:
   // Top-left of the GP0(E3) drawing area: where the frame being drawn lands.
   VramPoint drawAreaOrigin();
   // A VRAM rectangle as 8-bit RGB, read as 15-bit pixels or as 24-bit display data.
-  Rgb24Picture picture(int x, int y, int width, int height, bool depth24);
+  Rgb24Picture picture(VramRect rect, bool depth24);
 
   // Beetle's own state stream for this device.
   std::vector<uint8_t> saveState();
@@ -82,8 +73,14 @@ private:
   struct Scanout;
 
   void bind();
-  void advanceTo(uint64_t cpuTicks);
-  DeviceProbe probe(unsigned long dispatchedBefore, unsigned long droppedBefore) const;
+  // gpu.c's census counters before a step; probe() reports the step's delta from them.
+  struct CensusMark {
+    unsigned long dispatched = 0;
+    unsigned long dropped = 0;
+  };
+  static CensusMark censusMark();
+  void advanceTo(frame::CpuTicks now);
+  DeviceProbe probe(CensusMark before) const;
 
   std::unique_ptr<Scanout> mScanout;
   std::vector<uint8_t> mParked; // this device's state while another device is bound

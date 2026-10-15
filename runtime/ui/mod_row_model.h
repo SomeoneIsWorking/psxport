@@ -15,6 +15,8 @@
 #ifndef PSXPORT_UI_MOD_ROW_MODEL_H
 #define PSXPORT_UI_MOD_ROW_MODEL_H
 
+#include <cstdint>
+
 #include <string>
 #include <string_view>
 
@@ -22,7 +24,7 @@ class Mods;
 
 namespace psx::ui {
 
-enum class RowKind { None, Toggle, Adjust, Action };
+enum class RowKind : std::uint8_t { None, Toggle, Adjust, Action };
 
 class ModRowModel {
 public:

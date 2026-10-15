@@ -75,13 +75,9 @@ public:
     write(address, value);
   }
 
-  // The GTE screen point `reg` into the packet word at `address`; a render leaves the guest's provenance alone.
+  // The GTE screen point `reg` into the packet word at `address`.
   void storeGteXy(std::uint32_t address, int reg) const {
-    if (host_ != nullptr) {
-      mem_w32(address, gte_read_data(static_cast<std::uint32_t>(reg)));
-    } else {
-      gte_store_xy(core_, address, reg);
-    }
+    mem_w32(address, core_->gte().readData(static_cast<std::uint32_t>(reg)));
   }
 
 private:

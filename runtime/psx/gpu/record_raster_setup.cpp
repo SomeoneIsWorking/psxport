@@ -64,9 +64,9 @@ bool skipsRow(const RecordDrawState &state, int nativeY) {
 struct TexelRange {
   int low = 256;
   int high = -1;
-  void add(int lowValue, int highValue) {
-    low = std::min(low, lowValue);
-    high = std::max(high, highValue);
+  void cover(int texel) {
+    low = std::min(low, texel);
+    high = std::max(high, texel);
   }
   void all() {
     low = 0;
@@ -127,12 +127,7 @@ private:
   void textureReads(const RecordDrawState &state, const TexelRange &u, const TexelRange &v);
   RecordRect nativeOf(const RecordQuad &quad) const;
   // A quad in VRAM-space scaled pixels, placed on the current target plane.
-  void emit(std::int32_t x0,
-            std::int32_t y0,
-            std::int32_t x1,
-            std::int32_t y1,
-            std::uint32_t param,
-            std::uint32_t rowOffset = 0);
+  void emit(RecordQuad quad);
   // VRAM rects written by a transfer, into VRAM and where they land in each canvas buffer.
   void emitTransferRects(const std::vector<RecordRect> &rects);
   void emitNativeRect(const RecordRect &rect);
@@ -228,7 +223,7 @@ void PlanBuilder::textureReads(const RecordDrawState &state, const TexelRange &u
   const int vAdd = ((state.windowOffsetY & state.windowMaskY) << 3) + state.texPageY;
   const int columnLow = (uLow + uAdd) >> shift;
   const int columnHigh = (uHigh + uAdd) >> shift;
-  for (const RecordRect &rect : wrappedRects(columnLow, vLow + vAdd, columnHigh - columnLow + 1, vHigh - vLow + 1)) {
+  for (const RecordRect &rect : wrappedRects({columnLow, vLow + vAdd, columnHigh - columnLow + 1, vHigh - vLow + 1})) {
     opReads_.push_back(rect);
   }
 }
@@ -238,22 +233,18 @@ RecordRect PlanBuilder::nativeOf(const RecordQuad &quad) const {
   return RecordRect{quad.x0 / s, quad.y0 / s, (quad.x1 + s - 1) / s, (quad.y1 + s - 1) / s};
 }
 
-void PlanBuilder::emit(
-    std::int32_t x0, std::int32_t y0, std::int32_t x1, std::int32_t y1, std::uint32_t param, std::uint32_t rowOffset) {
+void PlanBuilder::emit(RecordQuad quad) {
   const int s = plan_.scale;
-  RecordQuad quad;
-  quad.x0 = x0 - originX_ * s;
-  quad.y0 = y0 - originY_ * s;
-  quad.x1 = x1 - originX_ * s;
-  quad.y1 = y1 - originY_ * s;
-  quad.param = param;
-  quad.rowOffset = rowOffset;
+  quad.x0 -= originX_ * s;
+  quad.y0 -= originY_ * s;
+  quad.x1 -= originX_ * s;
+  quad.y1 -= originY_ * s;
   opQuads_.push_back(PlaneQuad{plane_, quad});
 }
 
 void PlanBuilder::emitNativeRect(const RecordRect &rect) {
   const int s = plan_.scale;
-  emit(rect.x0 * s, rect.y0 * s, rect.x1 * s, rect.y1 * s, 0);
+  emit({.x0 = rect.x0 * s, .y0 = rect.y0 * s, .x1 = rect.x1 * s, .y1 = rect.y1 * s});
 }
 
 void PlanBuilder::emitTransferRects(const std::vector<RecordRect> &rects) {
@@ -576,7 +567,16 @@ void PlanBuilder::addTriangle(TriVertex vertices[3], const DrawPrimitive &primit
   int clipY0 = 0;
   int clipY1 = 0;
   // gpu.c plots at the 11-bit row and interpolates with the unwrapped one.
-  const auto span = [&](std::int32_t yi, std::int32_t y, std::int32_t xStart, std::int32_t xBound) {
+  // `yi` is the unwrapped row the interpolants use, `y` the 11-bit row plotted.
+  struct ScanRow {
+    std::int32_t yi = 0;
+    std::int32_t y = 0;
+  };
+  const auto span = [&](ScanRow row, ColumnRun columns) {
+    const std::int32_t yi = row.yi;
+    const std::int32_t y = row.y;
+    const std::int32_t xStart = columns.x0;
+    const std::int32_t xBound = columns.x1;
     if (skipsRow(primitive.state, y / s)) {
       return;
     }
@@ -594,7 +594,12 @@ void PlanBuilder::addTriangle(TriVertex vertices[3], const DrawPrimitive &primit
     if (w <= 0) {
       return;
     }
-    emit(x, y, x + w, y + 1, static_cast<std::uint32_t>(interpolantOffset), static_cast<std::uint32_t>(yi - y));
+    emit({.x0 = x,
+          .y0 = y,
+          .x1 = x + w,
+          .y1 = y + 1,
+          .param = static_cast<std::uint32_t>(interpolantOffset),
+          .rowOffset = static_cast<std::uint32_t>(yi - y)});
     if (primitive.textured) {
       for (int c = 3; c < 5; c++) {
         const auto at = [&](std::int32_t px) {
@@ -611,7 +616,8 @@ void PlanBuilder::addTriangle(TriVertex vertices[3], const DrawPrimitive &primit
         } else {
           const int a = static_cast<int>((static_cast<std::uint64_t>(first) & 0xFFFFFFFFull) >> 24);
           const int b = static_cast<int>((static_cast<std::uint64_t>(last) & 0xFFFFFFFFull) >> 24);
-          range.add(std::min(a, b), std::max(a, b));
+          range.cover(a);
+          range.cover(b);
         }
       }
     }
@@ -636,7 +642,7 @@ void PlanBuilder::addTriangle(TriVertex vertices[3], const DrawPrimitive &primit
           if (y > clipY1) {
             continue;
           }
-          span(yi, y, polyXInt(rowAt(yi, 0)), polyXInt(rowAt(yi, 1)));
+          span({yi, y}, {polyXInt(rowAt(yi, 0)), polyXInt(rowAt(yi, 1))});
         }
       } else {
         for (std::int32_t yi = part.yCoord; yi < part.yBound; yi++) {
@@ -647,7 +653,7 @@ void PlanBuilder::addTriangle(TriVertex vertices[3], const DrawPrimitive &primit
           if (y < clipY0) {
             continue;
           }
-          span(yi, y, polyXInt(rowAt(yi, 0)), polyXInt(rowAt(yi, 1)));
+          span({yi, y}, {polyXInt(rowAt(yi, 0)), polyXInt(rowAt(yi, 1))});
         }
       }
     }
@@ -691,7 +697,8 @@ void PlanBuilder::addSprite(const DrawPrimitive &primitive) {
     if (last < 0 || last > 255) {
       range.all();
     } else {
-      range.add(std::min(first, last), std::max(first, last));
+      range.cover(first);
+      range.cover(last);
     }
   };
   for (const PlaneClip &planeClip : planeClips(primitive.state)) {
@@ -704,7 +711,7 @@ void PlanBuilder::addSprite(const DrawPrimitive &primitive) {
       continue;
     }
     target(planeClip.plane);
-    emit(xStart * s, yStart * s, xBound * s, yBound * s, 0);
+    emit({.x0 = xStart * s, .y0 = yStart * s, .x1 = xBound * s, .y1 = yBound * s});
     if (primitive.textured) {
       const auto u0 = static_cast<std::uint8_t>(u + (xStart - vertex.x) * uIncrement);
       const auto v0 = static_cast<std::uint8_t>(v + (yStart - vertex.y) * vIncrement);
@@ -797,7 +804,7 @@ void PlanBuilder::addLine(const DrawPrimitive &primitive) {
         const Clip &clip = planeClip.clip;
         if (x >= clip.x0 && x <= clip.x1 && y >= clip.y0 && y <= clip.y1) {
           target(planeClip.plane);
-          emit(x * s, y * s, (x + 1) * s, (y + 1) * s, pixel);
+          emit({.x0 = x * s, .y0 = y * s, .x1 = (x + 1) * s, .y1 = (y + 1) * s, .param = pixel});
         }
       }
     }
@@ -812,7 +819,7 @@ void PlanBuilder::addLine(const DrawPrimitive &primitive) {
 }
 
 void PlanBuilder::addFill(const present::VramFill &fill) {
-  const std::vector<RecordRect> rects = wrappedRects(fill.x, fill.y, fill.width, fill.height);
+  const std::vector<RecordRect> rects = wrappedRects({fill.x, fill.y, fill.width, fill.height});
   emitTransferRects(rects);
   // A fill across the buffer's columns clears the canvas's whole width on those rows.
   for (std::size_t i = 0; i < canvases_.size(); i++) {
@@ -841,21 +848,22 @@ void PlanBuilder::addCopy(const present::VramCopy &copy) {
   RecordOp op{};
   op[kOpFlags] = static_cast<std::uint32_t>(RecordOpKind::Copy) | (copy.maskCheck ? kOpMaskCheck : 0u) |
                  (copy.maskSet ? kOpMaskSet : 0u);
-  const bool overlapping = ringsOverlap(copy.srcX, copy.width, copy.dstX, copy.width, kRecordVramWidth) &&
-                           ringsOverlap(copy.srcY, copy.height, copy.dstY, copy.height, kRecordVramHeight);
-  const auto copyPart = [&](int srcX, int srcY, int dstX, int dstY, int width, int height) {
-    emitTransferRects(wrappedRects(dstX, dstY, width, height));
-    for (const RecordRect &rect : wrappedRects(srcX, srcY, width, height)) {
+  const bool overlapping = RingRun{copy.srcX, copy.width}.overlaps({copy.dstX, copy.width}, kRecordVramWidth) &&
+                           RingRun{copy.srcY, copy.height}.overlaps({copy.dstY, copy.height}, kRecordVramHeight);
+  // `dst` is the written rect; `src` the origin it reads from.
+  const auto copyPart = [&](VramPoint src, VramRect dst) {
+    emitTransferRects(wrappedRects(dst));
+    for (const RecordRect &rect : wrappedRects({src.x, src.y, dst.width, dst.height})) {
       opReads_.push_back(rect);
     }
-    op[kOpOriginX] = static_cast<std::uint32_t>(positiveMod(dstX, kRecordVramWidth));
-    op[kOpOriginY] = static_cast<std::uint32_t>(positiveMod(dstY, kRecordVramHeight));
-    op[kOpSourceX] = static_cast<std::uint32_t>(positiveMod(srcX, kRecordVramWidth));
-    op[kOpSourceY] = static_cast<std::uint32_t>(positiveMod(srcY, kRecordVramHeight));
+    op[kOpOriginX] = static_cast<std::uint32_t>(positiveMod(dst.x, kRecordVramWidth));
+    op[kOpOriginY] = static_cast<std::uint32_t>(positiveMod(dst.y, kRecordVramHeight));
+    op[kOpSourceX] = static_cast<std::uint32_t>(positiveMod(src.x, kRecordVramWidth));
+    op[kOpSourceY] = static_cast<std::uint32_t>(positiveMod(src.y, kRecordVramHeight));
     commit(op, copy.maskCheck);
   };
   if (!overlapping) {
-    copyPart(copy.srcX, copy.srcY, copy.dstX, copy.dstY, copy.width, copy.height);
+    copyPart({copy.srcX, copy.srcY}, {copy.dstX, copy.dstY, copy.width, copy.height});
     return;
   }
   // gpu.c copies row by row through a 128-pixel buffer; an overlapping copy sees its own writes.
@@ -863,13 +871,13 @@ void PlanBuilder::addCopy(const present::VramCopy &copy) {
   for (int row = 0; row < copy.height; row++) {
     for (int column = 0; column < copy.width; column += kChunk) {
       const int width = std::min(kChunk, copy.width - column);
-      copyPart(copy.srcX + column, copy.srcY + row, copy.dstX + column, copy.dstY + row, width, 1);
+      copyPart({copy.srcX + column, copy.srcY + row}, {copy.dstX + column, copy.dstY + row, width, 1});
     }
   }
 }
 
 void PlanBuilder::addUpload(const present::VramUpload &upload) {
-  emitTransferRects(wrappedRects(upload.x, upload.y, upload.width, upload.height));
+  emitTransferRects(wrappedRects({upload.x, upload.y, upload.width, upload.height}));
   RecordOp op{};
   op[kOpFlags] = static_cast<std::uint32_t>(RecordOpKind::Upload) | (upload.maskCheck ? kOpMaskCheck : 0u) |
                  (upload.maskSet ? kOpMaskSet : 0u);
@@ -883,10 +891,13 @@ void PlanBuilder::addUpload(const present::VramUpload &upload) {
 
 } // namespace
 
-RecordRect clampedVramRect(int x, int y, int width, int height) {
-  const int x0 = std::clamp(x, 0, kRecordVramWidth);
-  const int y0 = std::clamp(y, 0, kRecordVramHeight);
-  return {x0, y0, std::clamp(x + width, x0, kRecordVramWidth), std::clamp(y + height, y0, kRecordVramHeight)};
+RecordRect clampedVramRect(VramRect rect) {
+  const int x0 = std::clamp(rect.x, 0, kRecordVramWidth);
+  const int y0 = std::clamp(rect.y, 0, kRecordVramHeight);
+  return {x0,
+          y0,
+          std::clamp(rect.x + rect.width, x0, kRecordVramWidth),
+          std::clamp(rect.y + rect.height, y0, kRecordVramHeight)};
 }
 
 bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect &buffer) {

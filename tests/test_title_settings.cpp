@@ -9,7 +9,6 @@
 #include "enhancement_gate.h"
 #include "menu_row.h"
 #include "mods.h"
-#include "render_capabilities.h"
 #include "testutil.h"
 #include "title_settings.h"
 
@@ -34,7 +33,7 @@ struct SettingsDir {
     fs::remove_all(root, ignored);
     fs::create_directories(root);
     file = root / "psxport_settings.ini";
-    psx::config::cv_settings_path.set_text(psx::config::Layer::Override, file.string());
+    psx::config::find("PSXPORT_SETTINGS")->set_text(psx::config::Layer::Override, file.string());
   }
 
   ~SettingsDir() {
@@ -48,9 +47,7 @@ struct SettingsDir {
   }
 };
 
-} // namespace
-
-static void test_range_snaps_to_the_step_grid_and_holds_the_ends() {
+void test_range_snaps_to_the_step_grid_and_holds_the_ends() {
   CHECK_EQ(kRange.clamp(0), 0L);
   CHECK_EQ(kRange.clamp(1000), 1000L);
   CHECK_EQ(kRange.clamp(-50), 0L);
@@ -61,14 +58,14 @@ static void test_range_snaps_to_the_step_grid_and_holds_the_ends() {
   CHECK_EQ(kRange.clamp(990), 1000L);
 }
 
-static void test_range_with_a_ragged_top_never_exceeds_max() {
+void test_range_with_a_ragged_top_never_exceeds_max() {
   constexpr psx::config::SteppedRange ragged{0, 100, 30};
   CHECK_EQ(ragged.clamp(100), 90L);
   CHECK_EQ(ragged.clamp(95), 90L);
   CHECK_EQ(ragged.stepped(90, 1), 90L);
 }
 
-static void test_stepping_moves_one_step_and_saturates() {
+void test_stepping_moves_one_step_and_saturates() {
   CHECK_EQ(kRange.stepped(0, 1), 25L);
   CHECK_EQ(kRange.stepped(25, -1), 0L);
   CHECK_EQ(kRange.stepped(0, -1), 0L);
@@ -77,20 +74,20 @@ static void test_stepping_moves_one_step_and_saturates() {
   CHECK_EQ(kRange.stepped(13, 1), 50L);
 }
 
-static void test_a_degenerate_range_holds_its_minimum() {
+void test_a_degenerate_range_holds_its_minimum() {
   constexpr psx::config::SteppedRange noStep{5, 50, 0};
   constexpr psx::config::SteppedRange empty{5, 5, 1};
   CHECK_EQ(noStep.clamp(30), 5L);
   CHECK_EQ(empty.stepped(5, 1), 5L);
 }
 
-static void test_the_row_shows_value_and_unit_and_steps_within_the_range() {
+void test_the_row_shows_value_and_unit_and_steps_within_the_range() {
   SettingsDir dir("row");
   psx::config::IntVar var("PSXPORT_TEST_ROW_SETTING", 100, "test-only setting");
   const psx::game::TitleIntSetting setting{"test_row", "Test", "%", &var, kRange};
   Mods mods;
   mods.declareTitleSettings(std::span<const psx::game::TitleIntSetting>(&setting, 1));
-  mods.init(false, FACE_ORDER_DEPTH, std::nullopt);
+  mods.init(false, std::nullopt);
   auto binding = psx::ui::make_title_setting_binding(&setting, &mods);
 
   std::string text;
@@ -115,14 +112,14 @@ static void test_the_row_shows_value_and_unit_and_steps_within_the_range() {
   CHECK(dir.body().find("PSXPORT_TEST_ROW_SETTING=1000") != std::string::npos);
 }
 
-static void test_the_chosen_value_is_persisted_and_reloaded_onto_the_grid() {
+void test_the_chosen_value_is_persisted_and_reloaded_onto_the_grid() {
   SettingsDir dir("persist");
   {
     psx::config::IntVar var("PSXPORT_TEST_PERSISTED", 100, "test-only setting");
     const psx::game::TitleIntSetting setting{"persisted", "Persisted", "%", &var, kRange};
     Mods mods;
     mods.declareTitleSettings(std::span<const psx::game::TitleIntSetting>(&setting, 1));
-    mods.init(false, FACE_ORDER_DEPTH, std::nullopt);
+    mods.init(false, std::nullopt);
     var.set(psx::config::Layer::Value, 300);
     mods.save();
     CHECK(dir.body().find("PSXPORT_TEST_PERSISTED=300") != std::string::npos);
@@ -135,11 +132,11 @@ static void test_the_chosen_value_is_persisted_and_reloaded_onto_the_grid() {
   const psx::game::TitleIntSetting setting{"persisted", "Persisted", "%", &reloaded, kRange};
   Mods mods;
   mods.declareTitleSettings(std::span<const psx::game::TitleIntSetting>(&setting, 1));
-  mods.init(false, FACE_ORDER_DEPTH, std::nullopt);
+  mods.init(false, std::nullopt);
   CHECK_EQ(reloaded.get(), 325L);
 }
 
-static void test_a_comparison_run_reads_the_neutral_value() {
+void test_a_comparison_run_reads_the_neutral_value() {
   psx::config::IntVar var("PSXPORT_TEST_GATED", 300, "test-only setting");
   {
     psx::config::ScopedDiagnosticRun run(psx::config::DiagnosticRunMode::Product);
@@ -159,6 +156,8 @@ static void test_a_comparison_run_reads_the_neutral_value() {
   CHECK_EQ(psx::config::enh_int(off), 0L);
 }
 
+} // namespace
+
 int main() {
   RUN(range_snaps_to_the_step_grid_and_holds_the_ends);
   RUN(range_with_a_ragged_top_never_exceeds_max);
@@ -167,5 +166,5 @@ int main() {
   RUN(the_row_shows_value_and_unit_and_steps_within_the_range);
   RUN(the_chosen_value_is_persisted_and_reloaded_onto_the_grid);
   RUN(a_comparison_run_reads_the_neutral_value);
-  return pt_summary();
+  return psx::test::summary();
 }

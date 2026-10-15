@@ -84,7 +84,7 @@ That leaves two causes worth separating, both of which are cheap to tell apart:
 
 1. **The run never reached the report.** `RuntimeRun::shouldEnd()` (`game/core/runtime_run.h:20`) ends
    a run cleanly on `endRequested_ || fields_ >= fieldLimit_`, and `fieldLimit_` comes from
-   `cfg_int("PSXPORT_NATIVE_FRAMES", 0)`. So **a capped run exits the loop and does report**, while a
+   `psx::config::native_frames()` (`PSXPORT_NATIVE_FRAMES`). So **a capped run exits the loop and does report**, while a
    run ended by a **signal** — harness timeout, or a `kill` by the driving tool — never reaches
    `main.cpp:101` at all.
 2. **The binary predates the call site**, which prints nothing identically.

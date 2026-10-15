@@ -17,9 +17,9 @@ void Crt0Boot::run(Core &core) const {
   // read through the plan's inputs rather than inside it, so the plan stays pure and testable.
   const uint32_t stackTopWord = core.mem_r32(image->stackTopWordAddress);
   const uint32_t reserveWord = core.mem_r32(image->stackReserveWordAddress);
-  const Crt0Plan p = crt0_plan(image, stackTopWord, reserveWord, "Crt0Boot");
+  const Crt0Plan p = psx::game::planCrt0(image, stackTopWord, reserveWord, "Crt0Boot");
   if (!p.ok) {
-    // crt0_plan has already named the missing fields and its denominator. Refuse before mutating any
+    // psx::game::planCrt0 has already named the missing fields and its denominator. Refuse before mutating any
     // guest state.
     lucent::error("crt0",
                   "boot ABORTED: the game's crt0 boot group is incomplete (see above). No "
@@ -28,9 +28,9 @@ void Crt0Boot::run(Core &core) const {
   }
   // CROSS-CHECK THE SHIPPED CONSTANTS AGAINST THE GUEST'S OWN crt0 BYTES, before applying any of them.
   // This is the gate that was missing: every field above is a MEASURED value hand-copied into the game's
-  // derived runtime, and nothing compared the copy to the measurement. crt0_audit re-derives the group
+  // derived runtime, and nothing compared the copy to the measurement. psx::game::auditCrt0 re-derives the group
   // from the instruction stream at image->crt0Entry and refuses a CONFIRMED disagreement (crt0_verify.h).
-  if (!crt0_audit(
+  if (!psx::game::auditCrt0(
           image,
           p,
           [&core](uint32_t a) {
@@ -55,7 +55,7 @@ void Crt0Boot::run(Core &core) const {
                p.a1,
                core.r[5],
                core.r[5]);
-  // The write sequence itself comes from crt0_apply, NOT from lines here: the defect was in the
+  // The write sequence itself comes from psx::game::applyCrt0, NOT from lines here: the defect was in the
   // application (an unconditional store through a zero pointer), so the sequence lives in the tested
   // header and this is only the adapter that binds it to a Core.
   struct CoreWriter {
@@ -71,7 +71,7 @@ void Crt0Boot::run(Core &core) const {
           c, entry, psx::cpu::ExecutionBudget::currentTurn(c), "native crt0 libc initialization");
     }
   } w{core};
-  crt0_apply(p, w);
+  psx::game::applyCrt0(p, w);
 }
 
 } // namespace psx::game

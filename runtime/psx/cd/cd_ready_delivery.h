@@ -14,7 +14,7 @@
 class Core;
 
 // What one call to the handler did with the completion it found, or refused to find.
-enum class CdReadyDelivery {
+enum class CdReadyDelivery : std::uint8_t {
   NotOwned,    // this title keeps host dispatch: the arm is not part of its contract at all
   NothingOwed, // owned, but no data-ready completion is deliverable right now
   Delivered,   // one completion was consumed and its callback ran to return

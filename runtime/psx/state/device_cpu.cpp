@@ -19,18 +19,12 @@
 namespace psx::state {
 namespace {
 
-// A guard the whole state refuses to load across. The exact-PC observer counts instructions at guest
-// addresses; a state loaded underneath a live observer would have that observer's counters jump
-// across an unrelated run, and every divergence report built on it would be nonsense. Recorded as a
-// field rather than tested at save time only, so BOTH directions are caught: saving under an armed
-// observer would also write counters that mean nothing on the other side.
-constexpr std::uint8_t kCpuLayoutVersion = 2;
+constexpr std::uint8_t kCpuLayoutVersion = 3;
 
 } // namespace
 
 void writeCpuSection(Core &core, BlobWriter &out) {
   out.u8(kCpuLayoutVersion);
-  out.boolean(core.pcObserver.armed());
   out.array(core.r, std::size(core.r));
   out.u32(core.hi);
   out.u32(core.lo);
@@ -53,7 +47,6 @@ void writeCpuSection(Core &core, BlobWriter &out) {
 
 bool readCpuSection(Core &core, BlobReader &in, std::string &error) {
   const std::uint8_t layout = in.u8();
-  const bool observerArmed = in.boolean();
   std::array<std::uint32_t, 32> gpr{};
   in.array(gpr.data(), gpr.size());
   const std::uint32_t hi = in.u32();
@@ -80,11 +73,6 @@ bool readCpuSection(Core &core, BlobReader &in, std::string &error) {
   }
   if (layout != kCpuLayoutVersion) {
     error = "cpu section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kCpuLayoutVersion);
-    return false;
-  }
-  if (observerArmed || core.pcObserver.armed()) {
-    error = "the exact-PC observer is armed on one side of this state; its per-address counters would "
-            "be meaningless across the load";
     return false;
   }
 

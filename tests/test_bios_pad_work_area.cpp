@@ -10,8 +10,6 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 constexpr uint32_t kB0Table = 0x8000F000u;
 constexpr uint32_t kWorkBaseSlot = kB0Table + 0x5Bu * sizeof(uint32_t);
 constexpr uint32_t kPadEnableOffset = 0x884u;
@@ -37,6 +35,7 @@ psx::cpu::ExecutionResult callPadCallback(Game &game, uint32_t address) {
 }
 
 void test_published_pad_callbacks_return_through_shipping_dispatch() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   CHECK(game->hle.dispatchBios('B', 0x57u));
   CHECK_EQ(game->core.r[2], kB0Table);
@@ -57,6 +56,7 @@ void test_published_pad_callbacks_return_through_shipping_dispatch() {
 }
 
 void test_unpublished_and_invalid_work_area_are_not_services() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   constexpr uint32_t kExpectedWorkBase = 0x8000E000u;
   CHECK_EQ(psx::cpu::classifyGuestHostDispatch(game->core, kExpectedWorkBase + kPadEnableOffset),
@@ -119,5 +119,5 @@ int main() {
   RUN(published_pad_callbacks_return_through_shipping_dispatch);
   RUN(unpublished_and_invalid_work_area_are_not_services);
   RUN(bios_pad_lifecycle_gates_guest_packets_without_changing_native_only_input);
-  return pt_summary();
+  return psx::test::summary();
 }

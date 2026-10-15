@@ -1,5 +1,6 @@
 // Exercise the stock libcd command/completion service with parsed-disc track metadata.
 #include "game.h"
+#include "r3000.h"
 #include "stock_libcd.h"
 #include "testutil.h"
 
@@ -10,10 +11,8 @@
 #include <string>
 
 namespace {
-psx::test::StubGameRuntime stubRuntime;
 const psx::cd::StockLibcd kLibcd({}, {}, 0);
 
-enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 constexpr uint32_t kParameter = 0x80112000u;
 constexpr uint32_t kResult = 0x80113000u;
 constexpr uint32_t kResponseBytes = 8;
@@ -29,8 +28,8 @@ int set_disc_env(const char *value) {
 
 void install_two_tracks(Game &game) {
   game.disc.track_count = 2;
-  game.disc.tracks[0] = DiscTrackInfo{1, 0, 45'000, 150, 0, 0};
-  game.disc.tracks[1] = DiscTrackInfo{2, 45'000, 9'000, 0, 0, 0};
+  game.disc.tracks[0] = psx::cd::DiscTrackInfo{1, 0, 45'000, 150, 0, 0};
+  game.disc.tracks[1] = psx::cd::DiscTrackInfo{2, 45'000, 9'000, 0, 0, 0};
 }
 
 void check_bytes(Core &core, const Response &expected) {
@@ -39,16 +38,16 @@ void check_bytes(Core &core, const Response &expected) {
   }
 }
 
-void issue_and_sync(Core &core, uint8_t command, uint32_t parameter, const Response &expected) {
+template <uint8_t Command> void issue_and_sync(Core &core, uint32_t parameter, const Response &expected) {
   for (uint32_t index = 0; index < expected.size(); ++index) {
     core.mem_w8(kResult + index, 0xA5u);
   }
-  core.r[A0] = command;
-  core.r[A1] = parameter;
-  core.r[A2] = kResult;
-  core.r[V0] = 0xDEADBEEFu;
+  core.r[psx::cpu::kA0] = Command;
+  core.r[psx::cpu::kA1] = parameter;
+  core.r[psx::cpu::kA2] = kResult;
+  core.r[psx::cpu::kV0] = 0xDEADBEEFu;
   kLibcd.command(core);
-  CHECK_EQ(core.r[V0], 0u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 0u);
   check_bytes(core, expected);
 
   // The real wrapper calls CdSync with the same result buffer. Erase the first publication
@@ -56,113 +55,118 @@ void issue_and_sync(Core &core, uint8_t command, uint32_t parameter, const Respo
   for (uint32_t index = 0; index < expected.size(); ++index) {
     core.mem_w8(kResult + index, 0x5Au);
   }
-  core.r[A0] = 0;
-  core.r[A1] = kResult;
-  core.r[V0] = 0xDEADBEEFu;
+  core.r[psx::cpu::kA0] = 0;
+  core.r[psx::cpu::kA1] = kResult;
+  core.r[psx::cpu::kV0] = 0xDEADBEEFu;
   kLibcd.sync(core);
-  CHECK_EQ(core.r[V0], 2u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 2u);
   check_bytes(core, expected);
 }
 
-void refuse_and_sync(Core &core, uint8_t command, uint32_t parameter) {
+template <uint8_t Command> void refuse_and_sync(Core &core, uint32_t parameter) {
   for (uint32_t index = 0; index < kResponseBytes; ++index) {
     core.mem_w8(kResult + index, 0xA5u);
   }
-  core.r[A0] = command;
-  core.r[A1] = parameter;
-  core.r[A2] = kResult;
+  core.r[psx::cpu::kA0] = Command;
+  core.r[psx::cpu::kA1] = parameter;
+  core.r[psx::cpu::kA2] = kResult;
   kLibcd.command(core);
-  CHECK(core.r[V0] != 0u);
+  CHECK(core.r[psx::cpu::kV0] != 0u);
   check_bytes(core, Response{});
 
   for (uint32_t index = 0; index < kResponseBytes; ++index) {
     core.mem_w8(kResult + index, 0x5Au);
   }
-  core.r[A1] = kResult;
+  core.r[psx::cpu::kA1] = kResult;
   kLibcd.sync(core);
   check_bytes(core, Response{});
 }
 
 void test_gettn_gettd_and_leadout_survive_command_and_sync() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   install_two_tracks(*game);
   auto &core = game->core;
-  issue_and_sync(core, 0x13, 0, Response{0x02, 0x01, 0x02});
+  issue_and_sync<0x13>(core, 0, Response{0x02, 0x01, 0x02});
 
   core.mem_w8(kParameter, 0x01);
-  issue_and_sync(core, 0x14, kParameter, Response{0x02, 0x00, 0x02});
+  issue_and_sync<0x14>(core, kParameter, Response{0x02, 0x00, 0x02});
   core.mem_w8(kParameter, 0x02);
-  issue_and_sync(core, 0x14, kParameter, Response{0x02, 0x10, 0x02});
+  issue_and_sync<0x14>(core, kParameter, Response{0x02, 0x10, 0x02});
   core.mem_w8(kParameter, 0x00); // GetTD(0) is lead-out, not track zero.
-  issue_and_sync(core, 0x14, kParameter, Response{0x02, 0x12, 0x02});
+  issue_and_sync<0x14>(core, kParameter, Response{0x02, 0x12, 0x02});
 
   // An ordinary command replaces the pending TOC result; its command and sync buffers stay zero.
-  issue_and_sync(core, 0x09, 0, Response{});
+  issue_and_sync<0x09>(core, 0, Response{});
 }
 
 void test_invalid_track_and_disc_metadata_do_not_reuse_prior_result() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   install_two_tracks(*game);
   auto &core = game->core;
-  issue_and_sync(core, 0x13, 0, Response{0x02, 0x01, 0x02});
+  issue_and_sync<0x13>(core, 0, Response{0x02, 0x01, 0x02});
 
   core.mem_w8(kParameter, 0x03); // absent track
-  refuse_and_sync(core, 0x14, kParameter);
+  refuse_and_sync<0x14>(core, kParameter);
 
   core.mem_w8(kParameter, 0x1A); // malformed BCD is not a track number
-  refuse_and_sync(core, 0x14, kParameter);
+  refuse_and_sync<0x14>(core, kParameter);
 
   game->disc.tracks[1].number = 1; // duplicate metadata must not advertise a valid TOC
-  refuse_and_sync(core, 0x13, 0);
+  refuse_and_sync<0x13>(core, 0);
 }
 
 void test_control_and_fire_keep_their_result_contract() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   install_two_tracks(*game);
   auto &core = game->core;
-  core.r[A0] = 0x13;
-  core.r[A1] = 0;
-  core.r[A2] = kResult;
+  core.r[psx::cpu::kA0] = 0x13;
+  core.r[psx::cpu::kA1] = 0;
+  core.r[psx::cpu::kA2] = kResult;
   kLibcd.control(core);
-  CHECK_EQ(core.r[V0], 1u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 1u);
   check_bytes(core, Response{0x02, 0x01, 0x02});
 
   core.mem_w8(kResult, 0xA5u);
-  core.r[A0] = 0x09;
-  core.r[A1] = 0;
-  core.r[A2] = kResult; // stale a2 is not an output argument of CdControlF.
+  core.r[psx::cpu::kA0] = 0x09;
+  core.r[psx::cpu::kA1] = 0;
+  core.r[psx::cpu::kA2] = kResult; // stale a2 is not an output argument of CdControlF.
   kLibcd.controlFire(core);
-  CHECK_EQ(core.r[V0], 1u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 1u);
   CHECK_EQ(core.mem_r8(kResult), 0xA5u);
-  core.r[A1] = kResult;
+  core.r[psx::cpu::kA1] = kResult;
   kLibcd.sync(core);
   check_bytes(core, Response{});
 
   // CdControlF has no result buffer, but its later CdSync still publishes the TOC.
   core.mem_w8(kResult, 0xA5u);
-  core.r[A0] = 0x13;
-  core.r[A1] = 0;
-  core.r[A2] = kResult;
+  core.r[psx::cpu::kA0] = 0x13;
+  core.r[psx::cpu::kA1] = 0;
+  core.r[psx::cpu::kA2] = kResult;
   kLibcd.controlFire(core);
-  CHECK_EQ(core.r[V0], 1u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 1u);
   CHECK_EQ(core.mem_r8(kResult), 0xA5u);
-  core.r[A1] = kResult;
+  core.r[psx::cpu::kA1] = kResult;
   kLibcd.sync(core);
   check_bytes(core, Response{0x02, 0x01, 0x02});
 }
 
 // Spyro 1's music driver reads its track position from the GetlocP result's absolute MSF.
 void test_getlocp_reports_the_head_position_through_sync() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   install_two_tracks(*game);
   auto &core = game->core;
   game->cdc.loc_lba = 1000;
-  issue_and_sync(core, 0x11, 0, Response{0x01, 0x01, 0x00, 0x13, 0x25, 0x00, 0x15, 0x25});
+  issue_and_sync<0x11>(core, 0, Response{0x01, 0x01, 0x00, 0x13, 0x25, 0x00, 0x15, 0x25});
   game->cdc.loc_lba = 1001;
-  issue_and_sync(core, 0x11, 0, Response{0x01, 0x01, 0x00, 0x13, 0x26, 0x00, 0x15, 0x26});
+  issue_and_sync<0x11>(core, 0, Response{0x01, 0x01, 0x00, 0x13, 0x26, 0x00, 0x15, 0x26});
 }
 
 void test_missing_disc_refuses_toc_command() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->disc.env_key = "PSXPORT_DISC";
   const char *previous = std::getenv("PSXPORT_DISC");
@@ -170,7 +174,7 @@ void test_missing_disc_refuses_toc_command() {
   const std::string previous_value = previous ? previous : "";
   CHECK_EQ(set_disc_env("/nonexistent/psxport-cd-stock-toc.chd"), 0);
   auto &core = game->core;
-  refuse_and_sync(core, 0x13, 0);
+  refuse_and_sync<0x13>(core, 0);
   CHECK_EQ(game->disc.track_count, 0u);
   CHECK_EQ(set_disc_env(had_previous ? previous_value.c_str() : nullptr), 0);
 }
@@ -183,5 +187,5 @@ int main() {
   RUN(control_and_fire_keep_their_result_contract);
   RUN(getlocp_reports_the_head_position_through_sync);
   RUN(missing_disc_refuses_toc_command);
-  return pt_summary();
+  return psx::test::summary();
 }

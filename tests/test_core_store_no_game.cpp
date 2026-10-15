@@ -33,7 +33,6 @@
 #include "testutil.h"
 
 #include "core.h"
-#include "game_iface.h"
 #include "ot_attr.h"
 #include "render_substrate.h"
 
@@ -41,16 +40,16 @@
 #include <memory>
 
 namespace {
-psx::test::StubGameRuntime stubRuntime;
-}
+
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 // A Core alone, exactly as an embedder gets one: the stub runtime, no Game anywhere.
-static std::unique_ptr<Core> bare_core(void) {
-  return std::make_unique<Core>(stubRuntime);
+std::unique_ptr<Core> bare_core(void) {
+  return std::make_unique<Core>(*stubRuntime);
 }
 
 // (1) main RAM round-trips at all three widths, through the KSEG0 mirror guest execution uses.
-static void test_main_ram_roundtrip_without_game(void) {
+void test_main_ram_roundtrip_without_game(void) {
   auto c = bare_core();
   CHECK(c->game == nullptr); // the precondition under test — not an incidental detail
 
@@ -69,7 +68,7 @@ static void test_main_ram_roundtrip_without_game(void) {
 
 // (2) scratchpad round-trips too — it is a different host buffer AND a different address form in
 // trackStoreSlow's `phys` normalization, so it exercises a distinct path from main RAM.
-static void test_scratchpad_roundtrip_without_game(void) {
+void test_scratchpad_roundtrip_without_game(void) {
   auto c = bare_core();
   CHECK(c->game == nullptr);
   c->mem_w32(0x1F800100u, 0xC0FFEE01u);
@@ -80,13 +79,13 @@ static void test_scratchpad_roundtrip_without_game(void) {
 
 // (3) THE POSITIVE CONTROL. The store must still be ATTRIBUTED with no Game — i.e. trackStoreSlow
 // executed rather than bailing out. Fails on the `if (!c->game) return;` bandaid.
-static void test_store_is_still_attributed(void) {
+void test_store_is_still_attributed(void) {
   auto c = bare_core();
   CHECK(c->game == nullptr);
   OtAttr &oa = c->rsub.otAttr;
 
   const uint32_t base = 0x80020000u;
-  CHECK_EQ(oa.watchRegister(base, 16), 0); // slot 0 of WATCH_SLOTS
+  CHECK_EQ(oa.watchRegister({base, 16}), 0); // slot 0 of WATCH_SLOTS
   CHECK_EQ(oa.watchSlotCount(), 1);
 
   // Nothing has been written yet: the pooled record for a fresh region reads as "never written"
@@ -122,9 +121,12 @@ static void test_store_is_still_attributed(void) {
   CHECK(oa.frameContractSatisfied());
 }
 
+} // namespace
+
 int main(void) {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(main_ram_roundtrip_without_game);
   RUN(scratchpad_roundtrip_without_game);
   RUN(store_is_still_attributed);
-  return pt_summary();
+  return psx::test::summary();
 }

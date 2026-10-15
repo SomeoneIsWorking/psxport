@@ -7,7 +7,7 @@ extern "C" {
 #include "oracle_shim.h"
 #include "psx.h"
 }
-#include "gte_state.h"
+#include "beetle_gte.h"
 
 #include <algorithm>
 #include <array>

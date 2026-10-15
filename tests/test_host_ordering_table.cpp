@@ -26,8 +26,17 @@ public:
   std::vector<std::pair<OtSlot, DrawPrimitive>> emitted;
 };
 
-// A flat triangle whose first vertex is at x, linked ahead of what the bucket held.
-void link(HostMemory &host, std::uint32_t packet, std::uint32_t bucket, int x) {
+// A flat triangle at `address` whose first vertex is at x, linked ahead of what `bucket` held.
+struct Triangle {
+  std::uint32_t address = 0;
+  std::uint32_t bucket = 0;
+  int x = 0;
+};
+
+void link(HostMemory &host, const Triangle &triangle) {
+  const std::uint32_t packet = triangle.address;
+  const std::uint32_t bucket = triangle.bucket;
+  const int x = triangle.x;
   std::uint32_t head = 0;
   host.read(kHeads + bucket * 4u, &head, sizeof(head));
   const std::uint32_t tag = (kF3Words << 24) | (head & 0xFFFFFFu);
@@ -41,15 +50,13 @@ HostOrderingTable table() {
   return HostOrderingTable{kHeads, kBuckets, OtSlot{3, 10}, 16u};
 }
 
-} // namespace
-
-static void test_buckets_walk_from_the_last_and_a_bucket_from_its_newest_packet(void) {
+void test_buckets_walk_from_the_last_and_a_bucket_from_its_newest_packet(void) {
   HostMemory host;
   host.zero(kHeads, kBuckets * 4u);
   host.zero(kPackets, 0x100u);
-  link(host, kPackets, 1u, 5);
-  link(host, kPackets + 0x20u, 3u, 7);
-  link(host, kPackets + 0x40u, 1u, 9);
+  link(host, {kPackets, 1u, 5});
+  link(host, {kPackets + 0x20u, 3u, 7});
+  link(host, {kPackets + 0x40u, 1u, 9});
 
   Collect sink;
   psx::present::emitHostOrderingTable(host, table(), sink);
@@ -62,7 +69,7 @@ static void test_buckets_walk_from_the_last_and_a_bucket_from_its_newest_packet(
   CHECK_EQ(sink.emitted[2].second.vertexCount, 3);
 }
 
-static void test_an_empty_table_emits_nothing(void) {
+void test_an_empty_table_emits_nothing(void) {
   HostMemory host;
   host.zero(kHeads, kBuckets * 4u);
   Collect sink;
@@ -70,8 +77,10 @@ static void test_an_empty_table_emits_nothing(void) {
   CHECK_EQ(sink.emitted.size(), 0u);
 }
 
+} // namespace
+
 int main(void) {
   RUN(buckets_walk_from_the_last_and_a_bucket_from_its_newest_packet);
   RUN(an_empty_table_emits_nothing);
-  return pt_summary();
+  return psx::test::summary();
 }

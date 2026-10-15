@@ -8,7 +8,7 @@ headless-operation, content-authoring, and testability requirements; the codemap
     runtime/psx/rmlui_overlay.{h,cpp}   RmlUi LIFETIME ONLY — render interface, SDL system
                                            interface, fonts, context, LoadDocument, SDL event
                                            routing, the GPU record call. Knows no elements.
-    runtime/psx/overlay_glue.{h,cpp}    the four hooks gpu_vk.cpp calls
+    runtime/psx/core/overlay_glue.{h,cpp} the hooks the present backend calls
     runtime/psx/rml_text.{h,cpp}        the DATA -> RML markup encoder
     shared/bug-report (bug_report::Form) the B-key bug report form: a modal document the overlay
                                            hosts in the menu context (showBugReport/closeBugReport);
@@ -21,8 +21,6 @@ headless-operation, content-authoring, and testability requirements; the codemap
     runtime/ui/mod_row_model.{h,cpp}       what a row MEANS (the Mods toggle/adjust tables)
     runtime/ui/warp_control.{h,cpp}        the Debug tab's dev area warp
     runtime/ui/dev_command_control.{h,cpp} warp entry, grant-all-items and event-flag commands, sent over the control channel
-    runtime/ui/render_path_control.{h,cpp} the Display tab's title-capability-filtered player paths;
-                                           the PSX software path stays diagnostic-only
     runtime/ui/menu_row.{h,cpp}            one <select-button> + its binding (incl. a title's stepped integer setting)
     runtime/ui/menu_pane.{h,cpp}           one tab's page of rows
     runtime/ui/menu_tab_bar.{h,cpp}        the <tab> row and which one is selected
@@ -79,10 +77,9 @@ was sent to fix, and adopting a second stack now would double the amount of host
 instrument can capture.
 
 **So: NOT YET. What it is waiting on, concretely — the SINK PASS must exist in both legs.**
-`GpuVkState::show_present_image()` (gpu_vk.cpp) is the sink pass, and it runs only when
-`plan.to_swapchain`, i.e. windowed. Every `overlay_glue_record()` call site lives in a windowed-only
-path (gpu_vk.cpp:1246 inside `show_present_image`; gpu_vk.cpp:1330 after
-`gpu_vk_present_image`'s `if (s_headless) return`). MEASURED 2026-08-06: two headless
+The present backend's sink pass (`gpu_vk_present.cpp`) runs only when `plan.to_swapchain`, i.e.
+windowed. Every `overlay_glue_record()` call site lives in a windowed-only path (the sink pass, and
+after `gpu_vk_present_image`'s `if (s_headless) return`). MEASURED 2026-08-06: two headless
 `PSXPORT_PRESENT_SHOT_AT=70` captures, one with the menu SHOWN and one HIDDEN, are **byte-identical**
 (md5 `f68b47bc971bed9bbfa4b27c19e7ee1c`) — even though the menu's own stylesheet paints an
 `rgba(0,0,0,82%)` scrim over the whole screen. Negative control for that instrument: frames 100/300
@@ -115,7 +112,7 @@ counting two files by hand. It prints its counts first, so the enumeration alway
 denominator.
 
 An authored row is content, but it is not proof that a title implements the feature. Bindings ask
-the title's `RenderCapabilities`/`Mods` policy whether they are available. `MenuPane` removes an
+the title's `Mods` policy (`GameRuntime::interpolates()` for fps60) whether they are available. `MenuPane` removes an
 unavailable binding from layout and navigation; it does not leave a disabled or inert row. Unknown
 authored ids remain visible and loudly inert because those are document defects, not capability
 absences.
@@ -124,7 +121,7 @@ absences.
 
 B (or REPL `bugreport <summary>`, which fills and saves the form without a keyboard) opens the
 shared `bug_report::Form` over the held frame; `psx::debug::BugReportSession` owns when and what
-(see `docs/codemap.md`, "In-app bug report"). The form is a modal document in the menu context and is
+(see `docs/codemap.md`, "Bug report"). The form is a modal document in the menu context and is
 recorded in the overlay's window pass, never into the present image, so the report's own screenshot
 is the game's picture. Its pictures load through `RmlRenderInterfaceGpu::LoadTexture` (SDL_image,
 premultiplied), which is why that method decodes files rather than refusing them.
@@ -139,7 +136,7 @@ RmlUi is the upstream 6.3 release as the `vendor/rmlui` submodule.
   file.
 - **A new row kind is a new `RowBinding`**, not a branch in `MenuDocument`.
 - **A new Mods-backed `toggle=`/`adjust=` id is a row in `mod_row_model.cpp`'s table.** Feature-owned
-  state gets a cohesive control plus `RowBinding`, as `warp_control` and `render_path_control` do;
+  state gets a cohesive control plus `RowBinding`, as `warp_control` does;
   `MenuDocument` only maps the authored id to that binding. An unresolved id is an ERROR at load.
 - **Non-ASCII glyphs in `.rml` are numeric character references** (`&#183;`), never HTML entity
   names: RML is XML-ish, and an unknown name renders literally. The test lints the shipped assets.

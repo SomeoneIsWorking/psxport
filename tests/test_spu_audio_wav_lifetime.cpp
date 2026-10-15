@@ -13,8 +13,6 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 std::filesystem::path capturePath(const char *name) {
   return std::filesystem::current_path() / name;
 }
@@ -29,6 +27,7 @@ uint32_t readLe32(const std::filesystem::path &path, std::streamoff offset) {
 }
 
 void test_active_wav_is_finalized_before_spu_owner_teardown() {
+  psx::test::StubGameRuntime stubRuntime;
   const auto initial = capturePath("spu-audio-wav-initial.wav");
   const auto active = capturePath("spu-audio-wav-active.wav");
   std::filesystem::remove(initial);
@@ -59,5 +58,5 @@ void test_active_wav_is_finalized_before_spu_owner_teardown() {
 
 int main() {
   RUN(active_wav_is_finalized_before_spu_owner_teardown);
-  return pt_summary();
+  return psx::test::summary();
 }

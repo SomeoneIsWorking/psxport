@@ -1,8 +1,9 @@
 #include "c_subsys.h"
 #include "core.h"
-#include "game.h"       // class Fmv lives on Game (game->fmv); this TU implements its methods
-#include "gpu_vk.h"     // gpu_vk_present_image, gpu_vk_windowed — the windowed/headless discriminator
+#include "game.h" // class Fmv lives on Game (game->fmv); this TU implements its methods
+#include "gpu_vk.h"
 #include "host_input.h" // psx::input::kButtonStart
+#include "watchdog.h"
 #include <vector>
 // Native FMV player for the Tomba!2 PC port.
 //
@@ -12,9 +13,9 @@
 //   disc (libchdr, disc.c)  ->  STR demux (this file)
 //     ->  BS (MDEC bitstream) VLC decode (fmv_decode.cpp)
 //       ->  MDEC IDCT/YCbCr (Beetle mdec.c via mdec_beetle.c, driven by fmv_decode.cpp)
-//         ->  present (gpu_vk_present_image)
+//         ->  present (DisplayPresenter::presentHostPicture)
 //
-// THE DECODE IS SHARED: bs_decode_frame / mdec_decode_to_rgb555 / xa_decode_sector live in
+// THE DECODE IS SHARED: psx::movie::decodeBsFrame / psx::movie::decodeMdecToRgb555 / psx::movie::decodeXaSector live in
 // fmv_decode.cpp and are the SAME functions the offline exporters (tools/fmv_export,
 // tools/fmv_compare) link — a bug found in a tool dump is a bug in the runtime by
 // construction, and the STR/BS/MDEC pipeline walkthrough lives there.
@@ -40,65 +41,46 @@
 //
 // The boot/front-end sequencers call game->fmv.play().
 #include "audio_policy.h" // audio_may_open — headless implies no audio device
-#include "cfg.h"
 #include "config_vars.h"
-#include "fmv_decode.h" // the pure decode machinery (shared with tools/fmv_export + fmv_compare)
+#include "diagnostic_config.h"
+#include "fmv_decode.h"
+#include "gpu_vk_device.h"
+#include "number_text.h" // the pure decode machinery (shared with tools/fmv_export + fmv_compare)
 #include <lucent/log.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// ---- runtime pieces we call (declared here to avoid header churn; do NOT modify them) ----
-
-void gpu_gp1(Core *, uint32_t w);
-
 // pad access via c->game->pad — class Pad on Game (see game.h): pollHostInput(), buttons field
-
-static int fmv_resolve_path(DiscState *disc, const char *path, uint32_t *out_lba, uint32_t *out_size);
 
 #define SECTOR_USER 2048u
 #define SUBHDR_LEN 32u
 
 // decode-scratch sizes (heap members on Fmv, allocated on first play)
-#define FMV_PAYLOAD_BYTES (512u * 1024u) // concatenated BS payload
-#define FMV_CODES_MAX (512u * 1024u)     // MDEC run-level codes
+
+namespace {
 
 // ====================================================================================
-// BS (bitstream) VLC decode -> MDEC code stream, and MDEC IDCT/YCbCr -> RGB555.
-// THE DECODE IS THE SHARED PURE MACHINERY IN fmv_decode.cpp — the same functions the
-// offline exporters (tools/fmv_export, tools/fmv_compare) link. These methods are thin
-// pass-throughs so a bug found in a tool dump is a bug in the runtime by construction.
-// The machinery (VLC table, bit reader, quant/IDCT upload, XA-ADPCM, MDEC feed/tile) lives
-// there and only there; see fmv_decode.cpp for the STR/BS/MDEC pipeline walkthrough.
-// ====================================================================================
-int Fmv::bsDecodeFrame(
-    const uint8_t *payload, uint32_t payload_size, int width, int height, uint16_t *codes, int max_codes) {
-  return bs_decode_frame(payload, payload_size, width, height, codes, max_codes);
-}
-
-// ====================================================================================
-// MDEC feed + macroblock tiling — in fmv_decode.cpp (mdec_decode_to_rgb555 / _to_rgb888),
+// MDEC feed + macroblock tiling — in fmv_decode.cpp (psx::movie::decodeMdecToRgb555 / _to_rgb888),
 // which upload the quant/IDCT tables, feed the MDEC in DMA0/DMA1 ping-pong, drain the
 // frame, and tile the 16x16 macroblocks column-major. See above for the why.
 // ====================================================================================
 // Present the decoded movie frame as a NATIVE RGBA image, letterboxed 4:3 with black bars
-// (gpu_vk_present_image) — NOT a VRAM upload. The PC renderer composites only native submits over
+// (DisplayPresenter::presentHostPicture) — NOT a VRAM upload. The PC renderer composites only native submits over
 // black; a CPU->VRAM upload + gpu_present would be blacked out by that. Presenting the frame directly
 // is also the centering fix — it pillarboxes 4:3 on widescreen instead of left-aligning in the wide FB.
 //
 // The frame is 24bpp because that is what retail PSX movies were authored for: Toy Story 2's FMV
 // overlay asks its player for depth 3 in ITS convention (compared against the literal 3 before its
 // 24-bit upload path), and RGB555 would spend two bits per channel the movie actually encodes.
-static void submit_rgba(Core *core, const std::vector<uint8_t> &rgba, int width, int height) {
-  gpu_vk_present_image(core, rgba.data(), width, height, 1.0f);
-  // Native movie frames bypass GpuState::gpu_present_ex(), the main-presenter readiness path. They
-  // are forward progress, but a startup movie does not prove the main VRAM targets are initialized.
-  // After the main presenter is ready this heartbeat automatically uses the steady timeout.
-  watchdog_progress();
+void submit_rgba(Core *core, const std::vector<uint8_t> &rgba, int width, int height) {
+  core->game->display.presentHostPicture(rgba.data(), {width, height}, 1.0f);
+  // Movie frames are progress, not main-present readiness.
+  psx::platform::Watchdog::progress();
 }
 
-static void present_rgb888(Core *core, std::vector<uint8_t> &rgba, const uint8_t *pixels, int width, int height) {
+void present_rgb888(Core *core, std::vector<uint8_t> &rgba, const uint8_t *pixels, int width, int height) {
   const int npix = width * height;
   rgba.resize((size_t)npix * 4);
   for (int i = 0; i < npix; i++) {
@@ -108,11 +90,9 @@ static void present_rgb888(Core *core, std::vector<uint8_t> &rgba, const uint8_t
     rgba[i * 4 + 3] = 255;
   }
   submit_rgba(core, rgba, width, height);
-  // Native movie frames bypass GpuState::gpu_present_ex(), the main-presenter readiness path. They
-  // are forward progress, but a startup movie does not prove the main VRAM targets are initialized.
-  // After the main presenter is ready this heartbeat automatically uses the steady timeout.
-  watchdog_progress();
 }
+
+} // namespace
 
 void Fmv::presentFrame(const uint8_t *pixels, int width, int height) {
   present_rgb888(&game->core, rgba_scratch_, pixels, width, height);
@@ -128,7 +108,7 @@ void Fmv::replayLastFrame(Core &core) {
   // since then has overwritten it.
   submit_rgba(&core, rgba_scratch_, last_frame_width_, last_frame_height_);
 }
-// CD-XA ADPCM audio decode lives in fmv_decode.cpp (xa_decode_sector) — the shared machinery
+// CD-XA ADPCM audio decode lives in fmv_decode.cpp (psx::movie::decodeXaSector) — the shared machinery
 // this TU and the offline tools both call. It is declared via c_subsys.h / fmv_decode.h.
 
 // ---- FMV audio output (dedicated SDL device at the XA rate) + audio-master pacing --------
@@ -140,7 +120,7 @@ void Fmv::audioOpen(int freq) {
   // Headless implies NO AUDIO DEVICE — the same rule spu_audio.cpp applies, via the SAME predicate.
   // This line used to test only the knob, so a headless gate still played movie sound (USER,
   // 2026-08-06: "a tomba gate plays audible fmv"). See audio_policy.h for why it is shared.
-  if (!audio_may_open(psx::config::cv_noaudio.get(), gpu_vk_windowed())) {
+  if (!psx::audio::mayOpenOutput(psx::config::no_audio(), game->gpu_dev.windowed())) {
     return;
   }
   if (st && stream_freq == freq) {
@@ -181,7 +161,11 @@ void Fmv::audioClose() {
 // the elapsed media time; sleep until wall-clock catches up. This is the real PSX rate (the
 // fixed-15fps guess was too slow). Polls input and returns 1 if Start was pressed (skip).
 // uncapped (PSXPORT_FMV_FPS=0) disables pacing for fast headless dumps.
-int Fmv::pace(long media_frames, int freq, uint32_t t0, int uncapped) {
+int Fmv::pace() {
+  const long media_frames = media_frames_;
+  const int freq = xa_freq_;
+  const uint32_t t0 = clock_origin_ms_;
+  const bool uncapped = uncapped_;
   // Reads the pad OWNER'S serviced mask — nothing else. A movie host turn is a presented host frame,
   // so the frame driver's per-frame service (Pad::serviceFrame) has already run this frame and
   // resolved host, forced, replay and control-channel input into `buttons`. Polling here for input of
@@ -218,11 +202,7 @@ int Fmv::pace(long media_frames, int freq, uint32_t t0, int uncapped) {
   return pressed;
 }
 #else
-int Fmv::pace(long m, int f, uint32_t t, int u) {
-  (void)m;
-  (void)f;
-  (void)t;
-  (void)u;
+int Fmv::pace() {
   return 0;
 }
 #endif
@@ -241,17 +221,17 @@ void Fmv::ensureScratch() {
   if (payload_buf) {
     return;
   }
-  payload_buf = (uint8_t *)malloc(FMV_PAYLOAD_BYTES);
-  codes_buf = (uint16_t *)malloc(FMV_CODES_MAX * 2);
-  pixels24_buf = (uint8_t *)malloc(1024 * 512 * 3);
-  xa_pcm = (int16_t *)malloc(4032 * 2 * 2); // mono sectors yield up to 4032 frames (see xa_decode_sector)
+  payload_buf = (uint8_t *)malloc(psx::movie::kPayloadBytes);
+  codes_buf = (uint16_t *)malloc(psx::movie::kMaxCodes * sizeof(uint16_t));
+  pixels24_buf = (uint8_t *)malloc(std::size_t{1024} * 512 * 3);
+  xa_pcm = (int16_t *)malloc(std::size_t{4032} * 2 *
+                             sizeof(int16_t)); // mono sectors yield up to 4032 frames (see psx::movie::decodeXaSector)
 }
 
 // ====================================================================================
 // STR demux + playback, stepped
 // ====================================================================================
 bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
-  game->gpu.gpu_native_init();
   mdec_init();
   ensureScratch();
 
@@ -288,9 +268,9 @@ bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
   // that wants to fast-forward says so, and its log then records that it did.
   uncapped_ = false;
   {
-    const char *f = cfg_str("PSXPORT_FMV_FPS");
-    if (f && *f) {
-      uncapped_ = (atoi(f) == 0);
+    const std::string fps = psx::config::movie_fps();
+    if (!fps.empty()) {
+      uncapped_ = psx::config::parseInt(fps).value_or(0) == 0;
     }
   }
   // A resume replay or a host pre-roll asked for the fast-forward by name; the log line records it.
@@ -302,10 +282,7 @@ bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
   // Used by the standalone proof to decode just the first frame quickly; harmless in prod.
   max_frames_ = 0;
   {
-    const char *mf = cfg_str("PSXPORT_FMV_MAXFRAMES");
-    if (mf && *mf) {
-      max_frames_ = atoi(mf);
-    }
+    max_frames_ = static_cast<int>(psx::config::movie_max_frames());
   }
 
   // A Start already held as the movie begins must not skip it: the skip needs a fresh press, which
@@ -329,20 +306,20 @@ void Fmv::step() {
   }
   uint8_t raw[2352];
   while (sector_ < sector_count_) {
-    if (!disc_read_raw(&game->disc, base_lba_ + sector_, raw, 2352)) {
+    if (!game->disc.readRaw(base_lba_ + sector_, raw, 2352)) {
       break;
     }
     sector_++;
     const int submode = raw[18];
 
     if (submode & 0x04) { // XA-ADPCM audio sector
-      const int n = xa_decode_sector(raw, xa_pcm, xa_hist_, &xa_freq_);
+      const int n = psx::movie::decodeXaSector(raw, xa_pcm, xa_hist_, &xa_freq_);
       if (sector_ == 1 || media_frames_ == 0) {
         audioOpen(xa_freq_);
       }
       audioQueue(xa_pcm, n);
       media_frames_ += n;
-      if (pace(media_frames_, xa_freq_, clock_origin_ms_, uncapped_)) {
+      if (pace()) {
         endWithSkip();
         return;
       }
@@ -374,7 +351,7 @@ void Fmv::step() {
     }
 
     const uint32_t plen = SECTOR_USER - SUBHDR_LEN;
-    if (payload_len_ + plen <= FMV_PAYLOAD_BYTES) {
+    if (payload_len_ + plen <= psx::movie::kPayloadBytes) {
       memcpy(payload_buf + payload_len_, sbuf + SUBHDR_LEN, plen);
       payload_len_ += plen;
     }
@@ -386,8 +363,8 @@ void Fmv::step() {
       expected_chunks_ = 0;
       got_chunks_ = 0;
       payload_len_ = 0;
-      const int ncodes =
-          bsDecodeFrame(payload_buf, frame_payload, frame_width_, frame_height_, codes_buf, (int)FMV_CODES_MAX);
+      const int ncodes = psx::movie::decodeBsFrame(
+          {payload_buf, frame_payload}, {frame_width_, frame_height_}, {codes_buf, psx::movie::kMaxCodes});
       lucent::debug("fmv",
                     "frame {}: {}x{}, {} payload bytes, {} codes",
                     framenum,
@@ -395,11 +372,13 @@ void Fmv::step() {
                     frame_height_,
                     frame_payload,
                     ncodes);
-      if (ncodes > 0 && mdec_decode_to_rgb888(codes_buf, ncodes, frame_width_, frame_height_, pixels24_buf) > 0) {
+      if (ncodes > 0 && psx::movie::decodeMdecToRgb888({codes_buf, static_cast<std::size_t>(ncodes)},
+                                                       {frame_width_, frame_height_},
+                                                       pixels24_buf) > 0) {
         presentFrame(pixels24_buf, frame_width_, frame_height_);
         frames_++;
         // Pace video to the audio/media clock (no audio sector here, so just gate on it).
-        if (pace(media_frames_, xa_freq_, clock_origin_ms_, uncapped_)) {
+        if (pace()) {
           endWithSkip();
           return;
         }
@@ -429,11 +408,10 @@ void Fmv::endAtEndOfStream() {
                 "done: {} video frames, {} audio sample-pairs ({:.2f}s @ {}Hz)",
                 frames_,
                 media_frames_,
-                media_frames_ / (double)(xa_freq_ ? xa_freq_ : 37800),
+                static_cast<double>(media_frames_) / (double)(xa_freq_ ? xa_freq_ : 37800),
                 xa_freq_);
   audioClose();
-  void gpu_clear_display(Core *);
-  gpu_clear_display(&game->core);
+  game->display.present(psx::present::PresentCompletion::Transition);
 }
 
 void Fmv::endWithSkip() {
@@ -470,15 +448,15 @@ int Fmv::playToEnd() {
 }
 
 bool Fmv::beginPath(const char *path) {
-  uint32_t lba = 0, size = 0;
-  if (!fmv_resolve_path(&game->disc, path, &lba, &size)) {
+  const std::optional<psx::cd::DiscFile> file = path ? game->disc.findFile(path) : std::nullopt;
+  if (!file) {
     lucent::info("fmv", "could not resolve {} on disc", path ? path : "(null)");
     finished_ = true;
     active_ = false;
     return false;
   }
-  lucent::info("fmv", "{} -> LBA {}, {} bytes", path ? path : "(null)", lba, size);
-  return begin(lba, size);
+  lucent::info("fmv", "{} -> LBA {}, {} bytes", path, file->lba, file->size);
+  return begin(file->lba, file->size);
 }
 
 int Fmv::play(const char *path) {
@@ -486,112 +464,4 @@ int Fmv::play(const char *path) {
     return -1;
   }
   return playToEnd();
-}
-
-// ---- ISO9660 path resolution (walks directories via disc_read_sector) ----------------
-static uint32_t le32(const uint8_t *p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-static void iso_name(const uint8_t *rec, int nlen, char *out, int outsz) {
-  int j = 0;
-  for (int i = 0; i < nlen && j < outsz - 1; i++) {
-    char c = (char)rec[i];
-    if (c == ';') {
-      break;
-    }
-    if (c >= 'a' && c <= 'z') {
-      c = c - 'a' + 'A';
-    }
-    out[j++] = c;
-  }
-  out[j] = 0;
-}
-static int iso_find_child(DiscState *disc,
-                          uint32_t dir_lba,
-                          uint32_t dir_size,
-                          const char *name,
-                          int want_dir,
-                          uint32_t *clba,
-                          uint32_t *csize) {
-  char upper[256];
-  int n = 0;
-  for (const char *p = name; *p && n < 255; p++) {
-    char c = *p;
-    if (c >= 'a' && c <= 'z') {
-      c = c - 'a' + 'A';
-    }
-    upper[n++] = c;
-  }
-  upper[n] = 0;
-
-  uint32_t nsec = (dir_size + SECTOR_USER - 1) / SECTOR_USER;
-  uint8_t sbuf[SECTOR_USER];
-  for (uint32_t s = 0; s < nsec; s++) {
-    if (!disc_read_sector(disc, dir_lba + s, sbuf)) {
-      return 0;
-    }
-    uint32_t pos = 0;
-    while (pos < SECTOR_USER) {
-      uint8_t len = sbuf[pos];
-      if (len == 0) {
-        break;
-      }
-      if (pos + len > SECTOR_USER) {
-        break;
-      }
-      uint8_t flags = sbuf[pos + 25];
-      uint8_t nlen = sbuf[pos + 32];
-      uint32_t e_lba = le32(&sbuf[pos + 2]);
-      uint32_t e_size = le32(&sbuf[pos + 10]);
-      if (!(nlen == 1 && (sbuf[pos + 33] == 0 || sbuf[pos + 33] == 1))) {
-        char nm[256];
-        iso_name(&sbuf[pos + 33], nlen, nm, sizeof nm);
-        int is_dir = (flags & 0x02) ? 1 : 0;
-        if (is_dir == want_dir && strcmp(nm, upper) == 0) {
-          *clba = e_lba;
-          *csize = e_size;
-          return 1;
-        }
-      }
-      pos += len;
-    }
-  }
-  return 0;
-}
-static int fmv_resolve_path(DiscState *disc, const char *path, uint32_t *out_lba, uint32_t *out_size) {
-  uint8_t pvd[SECTOR_USER];
-  if (!disc_read_sector(disc, 16, pvd)) {
-    return 0;
-  }
-  if (memcmp(pvd + 1, "CD001", 5) != 0) {
-    return 0;
-  }
-  uint32_t dir_lba = le32(pvd + 156 + 2);
-  uint32_t dir_size = le32(pvd + 156 + 10);
-
-  char comp[256];
-  const char *p = path;
-  while (*p) {
-    int n = 0;
-    while (*p && *p != '/' && *p != '\\' && n < 255) {
-      comp[n++] = *p++;
-    }
-    comp[n] = 0;
-    while (*p == '/' || *p == '\\') {
-      p++;
-    }
-    int last = (*p == 0);
-    uint32_t clba = 0, csize = 0;
-    if (!iso_find_child(disc, dir_lba, dir_size, comp, last ? 0 : 1, &clba, &csize)) {
-      return 0;
-    }
-    if (last) {
-      *out_lba = clba;
-      *out_size = csize;
-      return 1;
-    }
-    dir_lba = clba;
-    dir_size = csize;
-  }
-  return 0;
 }

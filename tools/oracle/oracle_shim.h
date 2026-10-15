@@ -20,7 +20,7 @@ extern "C" {
 // Why the window ended. Every reason is REPORTED, never silently absorbed: "the window ran to the end
 // of its cycle budget" and "the window hit hardware at instruction 3" must never look the same to a
 // caller, or a comparison over 0 useful instructions reads as a comparison that agreed.
-typedef enum OracleStop {
+typedef enum OracleStop : uint8_t {
   ORACLE_STOP_NONE = 0, // not run yet
   ORACLE_STOP_BUDGET,   // clean: the requested cycle budget was consumed, no event, no fault
   ORACLE_STOP_HARDWARE, // the code touched an unsupported device register — the window is over
@@ -40,7 +40,7 @@ typedef struct OracleState {
   uint32_t cp0_epc;
 } OracleState;
 
-enum {
+enum : uint8_t {
   ORACLE_DEVICE_I_STAT = 1u << 0,
   ORACLE_DEVICE_I_MASK = 1u << 1,
   ORACLE_DEVICE_DPCR = 1u << 2,
@@ -62,7 +62,7 @@ void oracle_teardown(void);
 
 // Inject a PS-X EXE image: copy `len` bytes to guest `t_addr`, then set pc/gp/sp/fp. This is the plan's
 // option 1 — neither side executes a BIOS boot, so our HLE'd BIOS and Beetle's real one never have to
-// agree about kernel memory. Callers pass exactly what `crt0_plan` computed, so the two sides start from
+// agree about kernel memory. Callers pass exactly what `psx::game::planCrt0` computed, so the two sides start from
 // one derivation rather than two. Returns 0 (naming why) if the image would not fit in main RAM.
 int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr, uint32_t pc, uint32_t gp, uint32_t sp);
 

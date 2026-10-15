@@ -1,6 +1,7 @@
 #include "frame_time_histogram.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace psx::frame {
 
@@ -29,7 +30,7 @@ double FrameTimeHistogram::percentileMs(double fraction) const {
   }
   const double clamped = std::clamp(fraction, 0.0, 1.0);
   // The smallest sample position whose cumulative share reaches the fraction.
-  const auto wanted = (std::uint64_t)((double)count_ * clamped + 0.5);
+  const auto wanted = static_cast<std::uint64_t>(std::llround(static_cast<double>(count_) * clamped));
   std::uint64_t seen = 0;
   for (std::size_t bucket = 0; bucket < kBuckets; ++bucket) {
     seen += buckets_[bucket];

@@ -5,26 +5,26 @@
 #include "game.h"
 #include "rmlui_overlay.h"
 
-void overlay_glue_init(
+void psx::ui::initOverlay(
     Game *game, SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h) {
   if (game) {
     game->rml_overlay.init(win, dev, target_fmt, sink_w, sink_h);
   }
 }
 
-void overlay_glue_frame_begin(Core *core) {
+void psx::ui::beginOverlayFrame(Core *core) {
   if (core && core->game) {
     core->game->rml_overlay.newFrame();
   }
 }
 
-void overlay_glue_record(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int win_w, int win_h) {
+void psx::ui::recordOverlay(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int win_w, int win_h) {
   if (game) {
     game->rml_overlay.recordGpu(cmd, rp, win_w, win_h);
   }
 }
 
-void overlay_glue_record_screen(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h) {
+void psx::ui::recordOverlayScreen(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h) {
   if (game) {
     game->rml_overlay.recordScreenGpu(cmd, rp, w, h);
   }

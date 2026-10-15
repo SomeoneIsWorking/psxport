@@ -155,7 +155,7 @@ void test_every_framework_section_name_is_listed_once(void) {
   // The loader tells a framework section from a title section by consulting this list. A name added
   // to the writer but not to the list would make every file carrying it unloadable, and a name in the
   // list that nothing writes would let a file pass that omits a device.
-  const auto &names = psx::state::frameworkSectionNames();
+  const std::vector<std::string> names = psx::state::frameworkSectionNames();
   CHECK_EQ(static_cast<int>(names.size()), 15);
   for (const std::string &name : names) {
     int occurrences = 0;
@@ -180,5 +180,5 @@ int main(void) {
   RUN(image_refuses_a_duplicate_section_name);
   RUN(open_refuses_malformed_images_by_name);
   RUN(every_framework_section_name_is_listed_once);
-  return pt_summary();
+  return psx::test::summary();
 }

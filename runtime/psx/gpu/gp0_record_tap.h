@@ -29,6 +29,13 @@ struct DeviceProbe {
   std::span<const std::uint16_t> vram; // the device's VRAM, 1024x512
 };
 
+// Where a GP0 word came from: its guest address (0 when it came from no packet) and the emission
+// key of the OT node it belongs to.
+struct Gp0Origin {
+  std::uint32_t sourceAddress = 0;
+  std::optional<present::RecordKey> packetKey;
+};
+
 // Frames the GP0 word stream exactly as gpu.c's ProcessFIFO does, decodes each command with
 // Gp0Command, and checks after every word that the device agrees. Any disagreement marks the
 // record incomplete until the device and the tap are both idle again.
@@ -36,11 +43,7 @@ class Gp0RecordTap {
 public:
   Gp0RecordTap();
 
-  // `packetKey` is the emission key of the OT node the word belongs to, if any.
-  void onGp0(std::uint32_t word,
-             std::uint32_t sourceAddress,
-             const std::optional<present::RecordKey> &packetKey,
-             const DeviceProbe &probe);
+  void onGp0(std::uint32_t word, const Gp0Origin &origin, const DeviceProbe &probe);
   // The next words belong to a new OT node; `part` numbering restarts.
   void beginPacket();
   // The walk reached `slot` of a table walked high to low when `descending`, or left every named

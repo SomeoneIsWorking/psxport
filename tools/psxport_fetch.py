@@ -1,30 +1,17 @@
 #!/usr/bin/env python3
-"""psxport_fetch.py — the ONE file a port ships: make `external/psxport` exist. CANONICAL.
+"""psxport_fetch.py: make a title repo's `external/psxport` the live framework.
 
-A port must build from a bare clone of itself, so it cannot reach into the framework before it has the
-framework. This is that bootstrap step and nothing else: stdlib only, no import of any other framework
-module, because it has to work before the framework exists on disk.
+A title runs this from psxport `main` before it has a framework (`uv run --no-project <raw URL> --auto`
+in the title root), so it is stdlib only and imports nothing else from psxport. With a sibling `psxport`
+checkout it publishes a relative symlink; with none it shallow-clones psxport `main` and its vendor
+submodules, then fetches re-harness through the clone's `tools/policy/harness.py --fetch`.
+`PSXPORT_FRAMEWORK_URL` names a fork or mirror for that clone.
 
-THERE IS NO PER-PORT FRAMEWORK PIN. Every port builds against the LIVE framework checkout: this tool
-points `external/psxport` at the workspace's sibling `psxport`, so a framework edit is visible in every
-game at once and no title can be silently building an old framework it was never verified against. With
-no sibling checkout — a fresh machine, CI, a stranger's clone — it clones psxport `main` shallow into
-`external/psxport` and initialises the vendor submodules.
+No git command runs with its cwd at `external/psxport` or through a link this tool did not create
+(issue 0142); a staged tree or link is published by one atomic rename.
 
-MEASURED 2026-09-30 16:34 (issue 0142 carries the bytes): a `git submodule update` whose cwd resolved
-through the `external/psxport` symlink into the SHARED checkout deleted that checkout's
-`vendor/beetle-psx` working tree and its `.git/modules/vendor/beetle-psx`. So the rule below is
-absolute and structural, not a convention: **no git command runs with its cwd at `external/psxport`, or
-through any symlink this tool did not create.** Git runs only in a staging directory that this tool owns,
-or with `git -C` naming a real checkout directory, and a published tree is moved into place by one
-atomic rename rather than being written in place.
-
-`PSXPORT_FRAMEWORK_URL` names a fork or mirror for the no-sibling clone. The same clone also fetches
-re-harness through the framework's own locator (`tools/policy/harness.py --fetch`, `RE_HARNESS_URL`).
-
-Lightrec is still PINNED (`PSXPORT_LIGHTREC_REVISION` in `cmake/lightrec_dependency.cmake`) — that is a
-third-party fork pin, not a workspace layout choice. `--lightrec` materialises that revision as a
-detached worktree and prints its path.
+`--lightrec` materialises the Lightrec revision pinned in this checkout's
+`cmake/lightrec_dependency.cmake` as a detached worktree.
 """
 
 import argparse
@@ -46,20 +33,19 @@ LIGHTREC_REVISION = re.compile(r'set\s*\(\s*PSXPORT_LIGHTREC_REVISION\s+"([0-9a-
 
 
 def git(args, cwd):
-    """Run git in `cwd`, which is ALWAYS a real directory this tool owns or a real checkout — never the
-    `external/psxport` symlink (issue 0142). Returns (stdout, returncode)."""
+    """Run git in a real directory, never through `external/psxport` (issue 0142)."""
     done = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True)
     return done.stdout.strip(), done.returncode
 
 
 def is_framework(path):
-    """A psxport checkout, decided by the two files a build actually needs from it."""
+    """A psxport checkout, judged by the two files a build needs."""
     return (os.path.isfile(os.path.join(path, "cmake", "psxport.cmake"))
             and os.path.isfile(os.path.join(path, "CMakeLists.txt")))
 
 
 def describe_link(link):
-    """symlink | clone | dir | missing — what the path IS; never guessed, 'missing' is a real answer."""
+    """symlink | clone | dir | missing."""
     if os.path.islink(link):
         return "symlink"
     if os.path.isdir(link):
@@ -238,17 +224,17 @@ def do_lightrec(repo):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--repo", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    help="port repository whose external/psxport must exist (default: this file's repo)")
+    ap.add_argument("--repo", default=os.getcwd(),
+                    help="title repository whose external/psxport must exist (default: the current directory)")
     ap.add_argument("--auto", action="store_true",
                     help="the default and only action: point external/psxport at the live framework, "
                          "cloning psxport main when this machine has no sibling checkout")
     ap.add_argument("--lightrec", action="store_true",
                     help="instead, ensure the pinned Lightrec worktree and print its path")
     args = ap.parse_args(argv)
-    repo = os.path.abspath(args.repo)
     if args.lightrec:
-        return do_lightrec(repo)
+        return do_lightrec(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    repo = os.path.abspath(args.repo)
     return do_ensure(repo, os.path.join(repo, LINK_REL))
 
 

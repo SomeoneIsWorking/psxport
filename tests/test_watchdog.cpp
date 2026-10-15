@@ -4,7 +4,10 @@
 // suite's no-wall-clock rule: the production unit under test is alarm(2), both waits are bounded, and the negative case
 // must observe the real signal-handler exit rather than a duplicate timer model.
 #include "c_subsys.h"
+#include "source_tree.h"
 #include "testutil.h"
+#include "watchdog.h"
+#include <cstdint>
 
 #include <errno.h>
 #include <signal.h>
@@ -28,25 +31,7 @@ void sleepMilliseconds(long milliseconds) {
   }
 }
 
-std::string readGpuNative() {
-  std::string self = __FILE__;
-  const size_t slash = self.find_last_of('/');
-  const std::string tests = slash == std::string::npos ? "." : self.substr(0, slash);
-  FILE *file = fopen((tests + "/../runtime/psx/gpu/gpu_native.cpp").c_str(), "rb");
-  if (!file) {
-    return {};
-  }
-  std::string text;
-  char buffer[8192];
-  size_t count;
-  while ((count = fread(buffer, 1, sizeof buffer, file)) != 0) {
-    text.append(buffer, count);
-  }
-  fclose(file);
-  return text;
-}
-
-enum class ChildAction {
+enum class ChildAction : std::uint8_t {
   BootstrapProgressThenComplete,
   CompleteThenStall,
   CompleteProgressThenStall,
@@ -64,20 +49,20 @@ ChildResult runChild(ChildAction action) {
     close(diagnostic[1]);
     setenv("PSXPORT_WATCHDOG", "1", 1);
     setenv("PSXPORT_WATCHDOG_BOOT", "3", 1);
-    watchdog_init();
+    const psx::platform::Watchdog watchdog;
     if (action == ChildAction::CompleteThenStall) {
-      watchdog_main_present_complete();
+      psx::platform::Watchdog::mainPresentComplete();
       pause();
     } else if (action == ChildAction::BootstrapProgressThenComplete) {
       // Longer than the 1s steady budget but shorter than the 3s cold-init grace.
       sleepMilliseconds(1300);
-      watchdog_progress();
+      psx::platform::Watchdog::progress();
       sleepMilliseconds(1300);
-      watchdog_main_present_complete();
+      psx::platform::Watchdog::mainPresentComplete();
     } else {
-      watchdog_main_present_complete();
+      psx::platform::Watchdog::mainPresentComplete();
       sleepMilliseconds(500);
-      watchdog_progress();
+      psx::platform::Watchdog::progress();
       pause();
     }
     _exit(0);
@@ -97,16 +82,14 @@ ChildResult runChild(ChildAction action) {
   return {status, text};
 }
 
-} // namespace
-
-static void test_bootstrap_progress_retains_grace_until_main_present(void) {
+void test_bootstrap_progress_retains_grace_until_main_present(void) {
   const ChildResult result = runChild(ChildAction::BootstrapProgressThenComplete);
   CHECK(WIFEXITED(result.status));
   CHECK_EQ(WEXITSTATUS(result.status), 0);
   CHECK(result.stderrText.find("[watchdog] STUCK") == std::string::npos);
 }
 
-static void test_completed_present_arms_steady_timeout(void) {
+void test_completed_present_arms_steady_timeout(void) {
   const ChildResult result = runChild(ChildAction::CompleteThenStall);
   CHECK(WIFEXITED(result.status));
   CHECK_EQ(WEXITSTATUS(result.status), 134);
@@ -114,7 +97,7 @@ static void test_completed_present_arms_steady_timeout(void) {
   CHECK(result.stderrText.find("before the main presenter became ready") == std::string::npos);
 }
 
-static void test_progress_after_completion_retains_steady_timeout(void) {
+void test_progress_after_completion_retains_steady_timeout(void) {
   const ChildResult result = runChild(ChildAction::CompleteProgressThenStall);
   CHECK(WIFEXITED(result.status));
   CHECK_EQ(WEXITSTATUS(result.status), 134);
@@ -122,23 +105,25 @@ static void test_progress_after_completion_retains_steady_timeout(void) {
   CHECK(result.stderrText.find("before the main presenter became ready") == std::string::npos);
 }
 
-static void test_shipping_present_reports_only_after_finalize(void) {
-  const std::string source = readGpuNative();
+void test_shipping_present_reports_only_after_the_display_is_shown(void) {
+  const std::string source = psx::test::readRepoFile("runtime/psx/present/display_presenter.cpp");
   CHECK(!source.empty());
-  const size_t present = source.find("void GpuState::gpu_present_ex(");
+  const size_t present = source.find("void DisplayPresenter::present(");
   CHECK(present != std::string::npos);
-  const size_t finalize = source.find("frame_finalize(core);", present);
-  const size_t complete = source.find("watchdog_main_present_complete();", present);
+  const size_t finalize = source.find("presentDisplay();", present);
+  const size_t complete = source.find("psx::platform::Watchdog::mainPresentComplete();", present);
   CHECK(finalize != std::string::npos);
   CHECK(complete != std::string::npos);
   CHECK(complete > finalize);
   CHECK(complete - finalize < 800);
 }
 
+} // namespace
+
 int main(void) {
   RUN(bootstrap_progress_retains_grace_until_main_present);
   RUN(completed_present_arms_steady_timeout);
   RUN(progress_after_completion_retains_steady_timeout);
-  RUN(shipping_present_reports_only_after_finalize);
-  return pt_summary();
+  RUN(shipping_present_reports_only_after_the_display_is_shown);
+  return psx::test::summary();
 }
