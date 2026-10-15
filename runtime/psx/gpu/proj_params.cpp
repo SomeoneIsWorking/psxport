@@ -122,13 +122,13 @@ bool ProjParams::camWorldScreen(float wx, float wy, float wz, float *sx, float *
 // The GTE control-register write and the port's record of the projection, in ONE place so they cannot
 // drift. See the header for why this is framework code with a per-game address.
 void libgte_set_geom_offset(Core *c, int32_t ofx, int32_t ofy) {
-  gte_write_ctrl(kGteCrOfx, (uint32_t)ofx << 16); // OFX/OFY are 16.16 fixed point
-  gte_write_ctrl(kGteCrOfy, (uint32_t)ofy << 16);
+  c->gte().writeControl(kGteCrOfx, (uint32_t)ofx << 16); // OFX/OFY are 16.16 fixed point
+  c->gte().writeControl(kGteCrOfy, (uint32_t)ofy << 16);
   c->rsub.projParams.setGeomOffset((float)ofx, (float)ofy);
 }
 
 void libgte_set_geom_screen(Core *c, int32_t h) {
-  gte_write_ctrl(kGteCrH, (uint32_t)h); // H is a plain integer
+  c->gte().writeControl(kGteCrH, (uint32_t)h); // H is a plain integer
   c->rsub.projParams.setGeomScreen((float)h);
 }
 

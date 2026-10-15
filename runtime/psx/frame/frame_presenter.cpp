@@ -203,8 +203,8 @@ void FramePresenter::commit(Core *core, int guestFields, TemporalFramePresentati
     std::abort();
   }
   present::FrameRecord sealed = core->gpuDevice.sealRecord();
-  psx::debug::censusRecord(*core, sealed);
   present::FrameState state = core->frameStates.collect(sealed);
+  psx::debug::censusRecord(*core, sealed, state);
   core->frameStates.endFrame();
   CoreFramePresentationBackend backend(*core, dumpSequence_);
   commit(backend, core, std::move(sealed), std::move(state), guestFields, temporal);

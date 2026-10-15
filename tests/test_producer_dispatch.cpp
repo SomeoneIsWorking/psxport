@@ -198,9 +198,12 @@ static void test_assigned_buckets_tag_a_flattened_chain_for_one_walk(void) {
 static void test_the_census_counts_keyed_primitives_under_the_producer(void) {
   Fixture fixture;
   Core &core = fixture.game->core;
-  psx::debug::censusRecord(core, fixture.frame());
+  const psx::present::FrameRecord record = fixture.frame();
+  psx::debug::censusRecord(core, record, core.frameStates.collect(record));
   const psx::debug::ProducerCensus::Row *row = core.rsub.census.find(kEntry);
   CHECK(row != nullptr && row->hasProducer && row->keyed == 3u && row->primitives == 3u);
+  // The fixture's producer installs no state render, so every keyed primitive is drawn as recorded.
+  CHECK(row != nullptr && row->withoutRender == 3u);
   CHECK_EQ(core.rsub.census.primsSeen(), 4u);
 }
 
