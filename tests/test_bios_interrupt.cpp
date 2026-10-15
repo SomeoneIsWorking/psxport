@@ -9,24 +9,20 @@
 // buffer or missing continuation is refused without changing the interrupted register file.
 #include "bios_interrupt.h"
 #include "game.h"
-#include "game_iface.h"
+#include "r3000.h"
 #include "stub_game_runtime.h"
 #include "testutil.h"
 #include <memory>
 
 namespace {
-psx::test::StubGameRuntime stubRuntime;
-}
 
-enum { R_V0 = 2, R_S0 = 16, R_GP = 28, R_SP = 29, R_FP = 30 };
+constexpr uint32_t kBuffer = 0x80010000u;
+constexpr uint32_t kResume = 0x80031AE8u;
+int dispatch_entered = 0;
+int dispatch_fell_through = 0;
+Game *dispatch_game = nullptr;
 
-static constexpr uint32_t kBuffer = 0x80010000u;
-static constexpr uint32_t kResume = 0x80031AE8u;
-static int dispatch_entered = 0;
-static int dispatch_fell_through = 0;
-static Game *dispatch_game = nullptr;
-
-static void write_context(Core *c, uint32_t resume) {
+void write_context(Core *c, uint32_t resume) {
   c->mem_w32(kBuffer + 0x00u, resume);
   c->mem_w32(kBuffer + 0x04u, 0x80111110u); // sp
   c->mem_w32(kBuffer + 0x08u, 0x80222220u); // fp
@@ -36,91 +32,96 @@ static void write_context(Core *c, uint32_t resume) {
   c->mem_w32(kBuffer + 0x2Cu, 0x80333330u); // gp
 }
 
-static void poison_context_registers(Core *c) {
-  c->r[R_V0] = 0xDEADBEEFu;
-  c->r[R_SP] = 0xDEAD0001u;
-  c->r[R_FP] = 0xDEAD0002u;
-  c->r[R_GP] = 0xDEAD0003u;
+void poison_context_registers(Core *c) {
+  c->r[psx::cpu::kV0] = 0xDEADBEEFu;
+  c->r[psx::cpu::kSp] = 0xDEAD0001u;
+  c->r[psx::cpu::kFp] = 0xDEAD0002u;
+  c->r[psx::cpu::kGp] = 0xDEAD0003u;
   for (uint32_t i = 0; i < 8; i++) {
-    c->r[R_S0 + i] = 0xDEAD1000u + i;
+    c->r[psx::cpu::kS0 + i] = 0xDEAD1000u + i;
   }
 }
 
-static void test_restores_the_measured_jmp_buf_layout(void) {
+void test_restores_the_measured_jmp_buf_layout(void) {
+  psx::test::StubGameRuntime stubRuntime;
   const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
   write_context(c.get(), kResume);
   poison_context_registers(c.get());
 
-  CHECK_EQ(bios_interrupt_enter_custom_exit(c.get(), kBuffer), kResume);
-  CHECK_EQ(c->r[R_V0], 1u); // setjmp's second return is non-zero
-  CHECK_EQ(c->r[R_SP], 0x80111110u);
-  CHECK_EQ(c->r[R_FP], 0x80222220u);
-  CHECK_EQ(c->r[R_GP], 0x80333330u);
+  CHECK_EQ(psx::hle::enterInterruptCustomExit(c.get(), kBuffer), kResume);
+  CHECK_EQ(c->r[psx::cpu::kV0], 1u); // setjmp's second return is non-zero
+  CHECK_EQ(c->r[psx::cpu::kSp], 0x80111110u);
+  CHECK_EQ(c->r[psx::cpu::kFp], 0x80222220u);
+  CHECK_EQ(c->r[psx::cpu::kGp], 0x80333330u);
   for (uint32_t i = 0; i < 8; i++) {
-    CHECK_EQ(c->r[R_S0 + i], 0xA0000000u + i);
+    CHECK_EQ(c->r[psx::cpu::kS0 + i], 0xA0000000u + i);
   }
 }
 
-static void test_refuses_a_missing_buffer_without_clobbering(void) {
+void test_refuses_a_missing_buffer_without_clobbering(void) {
+  psx::test::StubGameRuntime stubRuntime;
   const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
   poison_context_registers(c.get());
 
-  CHECK_EQ(bios_interrupt_enter_custom_exit(c.get(), 0), 0u);
-  CHECK_EQ(c->r[R_V0], 0xDEADBEEFu);
-  CHECK_EQ(c->r[R_SP], 0xDEAD0001u);
-  CHECK_EQ(c->r[R_FP], 0xDEAD0002u);
-  CHECK_EQ(c->r[R_GP], 0xDEAD0003u);
+  CHECK_EQ(psx::hle::enterInterruptCustomExit(c.get(), 0), 0u);
+  CHECK_EQ(c->r[psx::cpu::kV0], 0xDEADBEEFu);
+  CHECK_EQ(c->r[psx::cpu::kSp], 0xDEAD0001u);
+  CHECK_EQ(c->r[psx::cpu::kFp], 0xDEAD0002u);
+  CHECK_EQ(c->r[psx::cpu::kGp], 0xDEAD0003u);
   for (uint32_t i = 0; i < 8; i++) {
-    CHECK_EQ(c->r[R_S0 + i], 0xDEAD1000u + i);
+    CHECK_EQ(c->r[psx::cpu::kS0 + i], 0xDEAD1000u + i);
   }
 }
 
-static void test_refuses_a_buffer_without_a_continuation(void) {
+void test_refuses_a_buffer_without_a_continuation(void) {
+  psx::test::StubGameRuntime stubRuntime;
   const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
   write_context(c.get(), 0);
   poison_context_registers(c.get());
 
-  CHECK_EQ(bios_interrupt_enter_custom_exit(c.get(), kBuffer), 0u);
-  CHECK_EQ(c->r[R_V0], 0xDEADBEEFu);
-  CHECK_EQ(c->r[R_SP], 0xDEAD0001u);
-  CHECK_EQ(c->r[R_FP], 0xDEAD0002u);
-  CHECK_EQ(c->r[R_GP], 0xDEAD0003u);
+  CHECK_EQ(psx::hle::enterInterruptCustomExit(c.get(), kBuffer), 0u);
+  CHECK_EQ(c->r[psx::cpu::kV0], 0xDEADBEEFu);
+  CHECK_EQ(c->r[psx::cpu::kSp], 0xDEAD0001u);
+  CHECK_EQ(c->r[psx::cpu::kFp], 0xDEAD0002u);
+  CHECK_EQ(c->r[psx::cpu::kGp], 0xDEAD0003u);
   for (uint32_t i = 0; i < 8; i++) {
-    CHECK_EQ(c->r[R_S0 + i], 0xDEAD1000u + i);
+    CHECK_EQ(c->r[psx::cpu::kS0 + i], 0xDEAD1000u + i);
   }
 }
 
-static void test_bios_hook_reset_and_return_entry_points(void) {
+void test_bios_hook_reset_and_return_entry_points(void) {
+  psx::test::StubGameRuntime stubRuntime;
   const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   Core *c = &game->core;
   write_context(c, kResume);
 
   c->r[4] = kBuffer;
-  c->r[R_V0] = 0xDEADBEEFu;
+  c->r[psx::cpu::kV0] = 0xDEADBEEFu;
   CHECK(game->hle.dispatchBios('B', 0x19));
   CHECK_EQ(game->hle.exception_exit_buf, kBuffer);
-  CHECK_EQ(c->r[R_V0], 0u);
+  CHECK_EQ(c->r[psx::cpu::kV0], 0u);
 
-  c->r[R_V0] = 0xDEADBEEFu;
+  c->r[psx::cpu::kV0] = 0xDEADBEEFu;
   CHECK(game->hle.dispatchBios('B', 0x18));
-  CHECK_EQ(c->r[R_V0], 0u);
+  CHECK_EQ(c->r[psx::cpu::kV0], 0u);
   CHECK_EQ(game->hle.exception_exit_buf, 0u);
 }
 
-static void return_from_exception_dispatch(Core *, uint32_t resume) {
+void return_from_exception_dispatch(Core *, uint32_t resume) {
   CHECK_EQ(resume, kResume);
   dispatch_entered++;
   dispatch_game->hle.dispatchBios('B', 0x17);
   dispatch_fell_through++; // unreachable: B0:0x17 is a non-returning exception return
 }
 
-static void ordinary_return_dispatch(Core *, uint32_t resume) {
+void ordinary_return_dispatch(Core *, uint32_t resume) {
   CHECK_EQ(resume, kResume);
   dispatch_entered++;
   dispatch_fell_through++;
 }
 
-static void test_return_from_exception_unwinds_instead_of_falling_through(void) {
+void test_return_from_exception_unwinds_instead_of_falling_through(void) {
+  psx::test::StubGameRuntime stubRuntime;
   const std::unique_ptr<Game> game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   write_context(&game->core, kResume);
   dispatch_entered = 0;
@@ -128,7 +129,7 @@ static void test_return_from_exception_unwinds_instead_of_falling_through(void) 
   dispatch_game = game.get();
   game->hle.custom_exit_active = 1;
 
-  CHECK_EQ(bios_interrupt_dispatch_custom_exit(&game->core, kBuffer, return_from_exception_dispatch),
+  CHECK_EQ(psx::hle::dispatchInterruptCustomExit(&game->core, kBuffer, return_from_exception_dispatch),
            BiosInterruptDispatchResult::ReturnedFromException);
   game->hle.custom_exit_active = 0;
   dispatch_game = nullptr;
@@ -136,27 +137,31 @@ static void test_return_from_exception_unwinds_instead_of_falling_through(void) 
   CHECK_EQ(dispatch_fell_through, 0);
 }
 
-static void test_custom_exit_reports_an_illegal_normal_return(void) {
+void test_custom_exit_reports_an_illegal_normal_return(void) {
+  psx::test::StubGameRuntime stubRuntime;
   const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
   write_context(c.get(), kResume);
   dispatch_entered = 0;
   dispatch_fell_through = 0;
 
-  CHECK_EQ(bios_interrupt_dispatch_custom_exit(c.get(), kBuffer, ordinary_return_dispatch),
+  CHECK_EQ(psx::hle::dispatchInterruptCustomExit(c.get(), kBuffer, ordinary_return_dispatch),
            BiosInterruptDispatchResult::FellThrough);
   CHECK_EQ(dispatch_entered, 1);
   CHECK_EQ(dispatch_fell_through, 1);
 }
 
 // A nested ISR must not see the interrupted ra as its stop address: it can legitimately execute that pc.
-static void test_exception_stack_ra_is_a_sentinel_not_guest_code(void) {
+void test_exception_stack_ra_is_a_sentinel_not_guest_code(void) {
+  psx::test::StubGameRuntime stubRuntime;
   const std::unique_ptr<Core> c = std::make_unique<Core>(stubRuntime);
-  c->r[R_SP] = 0x80001234u;
+  c->r[psx::cpu::kSp] = 0x80001234u;
   c->r[31] = 0x80028CBCu;
   Hle::enterExceptionStack(*c);
-  CHECK_EQ(c->r[R_SP], Hle::kExceptionStackTop);
+  CHECK_EQ(c->r[psx::cpu::kSp], Hle::kExceptionStackTop);
   CHECK_EQ(c->r[31], Hle::kInterruptReturnSentinel);
 }
+
+} // namespace
 
 int main(void) {
   RUN(restores_the_measured_jmp_buf_layout);
@@ -166,5 +171,5 @@ int main(void) {
   RUN(return_from_exception_unwinds_instead_of_falling_through);
   RUN(custom_exit_reports_an_illegal_normal_return);
   RUN(exception_stack_ra_is_a_sentinel_not_guest_code);
-  return pt_summary();
+  return psx::test::summary();
 }

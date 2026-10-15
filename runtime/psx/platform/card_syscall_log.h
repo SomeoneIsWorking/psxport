@@ -1,6 +1,6 @@
 // Accounting for the BIOS card syscalls a title actually makes.
 //
-// WHY THIS EXISTS. `card_hle_b0`/`card_hle_a0` dispatch by function number and end in
+// WHY THIS EXISTS. `Memcard::dispatchBiosB0`/`dispatchBiosA0` dispatch by function number and end in
 // `default: return 0` -- "not handled", silently, leaving no record that the call happened. A title
 // that stalls waiting on a card function this runtime does not implement therefore produces no
 // evidence at all: the card channel prints the image it opened and nothing else, and an

@@ -1,8 +1,6 @@
 // gte_control.cpp — see gte_control.h.
 #include "gte_control.h"
 
-#include "core.h"
-
 #include <cstring>
 
 namespace psx::present {
@@ -12,26 +10,23 @@ constexpr std::uint32_t kControlBase = 32u;
 
 } // namespace
 
-GteGuard::GteGuard() {
-  GTE_SaveRawState(&saved_);
-}
+GteGuard::GteGuard(psx::cpu::Gte &gte) : gte_(gte), saved_(gte.saveRaw()) {}
 
 GteGuard::~GteGuard() {
-  GTE_RestoreRawState(&saved_);
+  gte_.restoreRaw(saved_);
 }
 
-GteControl readGteControl() {
-  GteRawState raw;
-  GTE_SaveRawState(&raw);
+GteControl readGteControl(const psx::cpu::Gte &gte) {
+  const GteRawState raw = gte.saveRaw();
   GteControl control;
   std::memcpy(control.data(), raw.reg + kControlBase, sizeof(control));
   return control;
 }
 
-void writeGteControl(const GteControl &control) {
+void writeGteControl(psx::cpu::Gte &gte, const GteControl &control) {
   for (std::uint32_t reg = 0; reg < kGteControlRegisters; ++reg) {
     if (reg != gte::kFlag) {
-      gte_write_ctrl(reg, control[reg]);
+      gte.writeControl(reg, control[reg]);
     }
   }
 }

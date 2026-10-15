@@ -6,9 +6,9 @@
 // BFRD bit again, then DMA-reads the 2048-byte PVD payload. Treating the second 0x80 write as a new
 // request advances to LBA 17 and puts that sector's header where the PVD type and "CD001" must be.
 //
-// This is the shipping CDC path with a hermetic disc backend: cdc_begin_read() loads a synthetic raw
-// sector through disc_read_raw(), cdc_write() receives the exact request-register sequence, and
-// cdc_dma_read() performs both DMA legs. BFRD changes only FIFO access; the separate continuous-read
+// This is the shipping CDC path with a hermetic disc backend: ()->beginRead() loads a synthetic raw
+// sector through ()->readRaw(), ()->write() receives the exact request-register sequence, and
+// ()->dmaRead() performs both DMA legs. BFRD changes only FIFO access; the separate continuous-read
 // test owns drive-time sector arrival.
 #include "testutil.h"
 
@@ -28,65 +28,65 @@ constexpr size_t kRawSectorBytes = 2352;
 constexpr size_t kHeaderWords = 3;
 constexpr size_t kPayloadWords = 512;
 
-std::array<uint8_t, kRawSectorBytes> make_sector(uint32_t lba) {
+constexpr std::array<uint8_t, kRawSectorBytes> make_sector(uint32_t lba) {
   std::array<uint8_t, kRawSectorBytes> raw{};
   for (size_t offset = 0; offset < raw.size(); ++offset) {
-    raw[offset] = static_cast<uint8_t>((lba * 29u + offset * 7u) & 0xFFu);
+    raw[offset] = static_cast<uint8_t>((std::size_t{29} * lba + offset * 7u) & 0xFFu);
   }
   return raw;
 }
 
-const std::array<uint8_t, kRawSectorBytes> kPvdSector = make_sector(kPvdLba);
-const std::array<uint8_t, kRawSectorBytes> kNextSector = make_sector(kPvdLba + 1);
+constexpr std::array<uint8_t, kRawSectorBytes> kPvdSector = make_sector(kPvdLba);
+constexpr std::array<uint8_t, kRawSectorBytes> kNextSector = make_sector(kPvdLba + 1);
 
 uint32_t read_le32(const uint8_t *bytes) {
   return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8u) |
          (static_cast<uint32_t>(bytes[2]) << 16u) | (static_cast<uint32_t>(bytes[3]) << 24u);
 }
 
-void write_bfrd(CdcState *cdc, uint8_t value) {
-  cdc_write(cdc, 0x1F801800u, 0); // bank 0
-  cdc_write(cdc, 0x1F801803u, value);
+void write_bfrd(psx::cd::CdController *cdc, uint8_t value) {
+  cdc->write(psx::cd::cdcRegister(0x1F801800u), 0); // bank 0
+  cdc->write(psx::cd::cdcRegister(0x1F801803u), value);
 }
 
-// Fakes injected through CdcState's function pointers (the test links all of libpsxport; defining
+// Fakes injected through psx::cd::CdController's function pointers (the test links all of libpsxport; defining
 // the real symbol names would collide with libpsxport's disc.cpp).
-extern "C" int test_fake_disc_read_raw(struct DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+bool test_fake_disc_read_raw(psx::cd::Disc *, uint32_t lba, uint8_t *out, uint32_t count) {
   const auto *sector = lba == kPvdLba ? &kPvdSector : lba == kPvdLba + 1 ? &kNextSector : nullptr;
   if (sector == nullptr || count > sector->size()) {
-    return 0;
+    return false;
   }
   std::copy_n(sector->data(), count, out);
-  return 1;
+  return true;
 }
 
-extern "C" int test_fake_disc_read_sector(struct DiscState *, uint32_t, uint8_t *) {
-  return 0;
+bool test_fake_disc_read_sector(psx::cd::Disc *, uint32_t, uint8_t *) {
+  return false;
 }
 
-CdcState begin_whole_sector_read(DiscState *disc, CdcTestClock *clock) {
-  CdcState cdc{};
+psx::cd::CdController begin_whole_sector_read(psx::cd::Disc *disc, CdcTestClock *clock) {
+  psx::cd::CdController cdc{};
   cdc.disc = disc;
-  cdc_state_init(&cdc);
+  cdc.reset();
   cdc.disc_read_raw_fn = test_fake_disc_read_raw;
   cdc.disc_read_sector_fn = test_fake_disc_read_sector;
-  cdc_test_bind(&cdc, clock);
-  cdc_set_mode(&cdc, 0xA0); // double-speed, whole-sector FIFO
-  cdc_begin_read(&cdc, kPvdLba);
-  cdc_test_service_deadline(&cdc, clock);
+  psx::test::bindCdcClock(&cdc, clock);
+  cdc.setMode(0xA0); // double-speed, whole-sector FIFO
+  cdc.beginRead(kPvdLba);
+  psx::test::serviceCdcDeadline(&cdc, clock);
   write_bfrd(&cdc, 0x00);
   write_bfrd(&cdc, 0x80);
   return cdc;
 }
 
 void test_repeated_assertion_preserves_split_dma_cursor(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_whole_sector_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_whole_sector_read(&disc, &clock);
   std::array<uint32_t, kHeaderWords> header{};
   std::array<uint32_t, kPayloadWords> payload{};
 
-  CHECK_EQ(cdc_dma_read(&cdc, header.data(), static_cast<int>(header.size())), header.size());
+  CHECK_EQ(cdc.dmaRead(header.data(), static_cast<int>(header.size())), header.size());
   CHECK_EQ(cdc.loc_lba, kPvdLba);
   CHECK_EQ(cdc.data_rd, kHeaderWords * sizeof(uint32_t));
 
@@ -94,7 +94,7 @@ void test_repeated_assertion_preserves_split_dma_cursor(void) {
 
   CHECK_EQ(cdc.loc_lba, kPvdLba);
   CHECK_EQ(cdc.data_rd, kHeaderWords * sizeof(uint32_t));
-  CHECK_EQ(cdc_dma_read(&cdc, payload.data(), static_cast<int>(payload.size())), payload.size());
+  CHECK_EQ(cdc.dmaRead(payload.data(), static_cast<int>(payload.size())), payload.size());
   CHECK_EQ(cdc.loc_lba, kPvdLba);
   CHECK_EQ(cdc.data_rd, (kHeaderWords + kPayloadWords) * sizeof(uint32_t));
 
@@ -107,37 +107,37 @@ void test_repeated_assertion_preserves_split_dma_cursor(void) {
 }
 
 void test_deassert_then_assert_re_presents_the_sector_from_its_start(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_whole_sector_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_whole_sector_read(&disc, &clock);
   std::array<uint32_t, kHeaderWords> header{};
   uint32_t first_word = 0;
 
-  CHECK_EQ(cdc_dma_read(&cdc, header.data(), static_cast<int>(header.size())), header.size());
+  CHECK_EQ(cdc.dmaRead(header.data(), static_cast<int>(header.size())), header.size());
   write_bfrd(&cdc, 0x00); // Beetle flushes the data FIFO; the sector buffer survives for a re-request
   write_bfrd(&cdc, 0x80);
 
   CHECK_EQ(cdc.loc_lba, kPvdLba);
   CHECK_EQ(cdc.data_rd, 0);
-  CHECK_EQ(cdc_dma_read(&cdc, &first_word, 1), 1);
+  CHECK_EQ(cdc.dmaRead(&first_word, 1), 1);
   CHECK_EQ(first_word, read_le32(kPvdSector.data() + 12));
 }
 
 void test_deasserted_latch_blocks_fifo_access(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_whole_sector_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_whole_sector_read(&disc, &clock);
   uint32_t word = 0;
 
-  CHECK((cdc_read(&cdc, 0x1F801800u) & 0x40u) != 0); // DRQSTS while BFRD is asserted
+  CHECK((cdc.read(psx::cd::cdcRegister(0x1F801800u)) & 0x40u) != 0); // DRQSTS while BFRD is asserted
   write_bfrd(&cdc, 0x00);
-  CHECK_EQ(cdc_read(&cdc, 0x1F801800u) & 0x40u, 0);
-  CHECK_EQ(cdc_dma_read(&cdc, &word, 1), 0);
+  CHECK_EQ(cdc.read(psx::cd::cdcRegister(0x1F801800u)) & 0x40u, 0);
+  CHECK_EQ(cdc.dmaRead(&word, 1), 0);
   CHECK_EQ(cdc.data_rd, cdc.data_n);
 
   write_bfrd(&cdc, 0x80);
-  CHECK((cdc_read(&cdc, 0x1F801800u) & 0x40u) != 0);
-  CHECK_EQ(cdc_dma_read(&cdc, &word, 1), 1);
+  CHECK((cdc.read(psx::cd::cdcRegister(0x1F801800u)) & 0x40u) != 0);
+  CHECK_EQ(cdc.dmaRead(&word, 1), 1);
   CHECK_EQ(word, read_le32(kPvdSector.data() + 12));
 }
 
@@ -147,5 +147,5 @@ int main() {
   RUN(repeated_assertion_preserves_split_dma_cursor);
   RUN(deassert_then_assert_re_presents_the_sector_from_its_start);
   RUN(deasserted_latch_blocks_fifo_access);
-  return pt_summary();
+  return psx::test::summary();
 }

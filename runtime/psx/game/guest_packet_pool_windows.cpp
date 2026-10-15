@@ -30,9 +30,9 @@ bool PacketPoolExtent::contains(std::uint32_t address) const {
   return false;
 }
 
-bool PacketPoolExtent::readFrom(std::uint32_t address, std::uint32_t bytes) const {
-  const std::uint32_t storeLow = mainRamAddress(address);
-  const std::uint32_t storeHigh = storeLow + bytes;
+bool PacketPoolExtent::readFrom(GuestSpan store) const {
+  const std::uint32_t storeLow = mainRamAddress(store.address);
+  const std::uint32_t storeHigh = storeLow + store.bytes;
   for (const std::uint32_t source : sources) {
     if (source && storeLow < mainRamAddress(source) + 4u && mainRamAddress(source) < storeHigh) {
       return true;

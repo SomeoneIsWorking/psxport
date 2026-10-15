@@ -5,7 +5,9 @@
 #include "frame_state.h"
 #include "gpu_device.h"
 #include "gpu_vk_record_raster.h"
+#include "record_raster_setup.h"
 #include "testutil.h"
+#include "vram_rect.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
@@ -47,8 +49,8 @@ constexpr std::uint32_t drawMode(std::uint32_t pageBits, bool dither, bool flipX
   return 0xE1000000u | pageBits | (dither ? 1u << 9 : 0u) | (1u << 10) | (flipX ? 1u << 12 : 0u) |
          (flipY ? 1u << 13 : 0u);
 }
-constexpr std::uint32_t drawArea(int x0, int y0, int x1, int y1, std::uint32_t command) {
-  return (command << 24) | static_cast<std::uint32_t>(x0) | (static_cast<std::uint32_t>(y0) << 10);
+constexpr std::uint32_t drawArea(std::uint32_t command, psx::gpu::VramPoint corner) {
+  return (command << 24) | static_cast<std::uint32_t>(corner.x) | (static_cast<std::uint32_t>(corner.y) << 10);
 }
 
 struct Stream {
@@ -57,7 +59,7 @@ struct Stream {
     words.insert(words.end(), list);
   }
   void area(int x0, int y0, int x1, int y1) {
-    add({drawArea(x0, y0, 0, 0, 0xE3), drawArea(x1, y1, 0, 0, 0xE4)});
+    add({drawArea(0xE3, {x0, y0}), drawArea(0xE4, {x1, y1})});
   }
   void offset(int x, int y) {
     add({0xE5000000u | (static_cast<std::uint32_t>(x) & 0x7FFu) | ((static_cast<std::uint32_t>(y) & 0x7FFu) << 11)});
@@ -65,10 +67,12 @@ struct Stream {
   void mask(bool set, bool check) {
     add({0xE6000000u | (set ? 1u : 0u) | (check ? 2u : 0u)});
   }
-  void upload(int x, int y, int w, int h, std::uint32_t seed) {
-    add({0xA0000000u, xy(x, y), static_cast<std::uint32_t>(w) | (static_cast<std::uint32_t>(h) << 16)});
+  void upload(psx::gpu::VramRect rect, std::uint32_t seed) {
+    add({0xA0000000u,
+         xy(rect.x, rect.y),
+         static_cast<std::uint32_t>(rect.width) | (static_cast<std::uint32_t>(rect.height) << 16)});
     std::mt19937 random(seed);
-    const int count = w * h;
+    const int count = rect.width * rect.height;
     for (int i = 0; i < count; i += 2) {
       words.push_back(random());
     }
@@ -102,12 +106,12 @@ struct Outcome {
 inline Outcome replay(const Stream &stream, const std::vector<std::uint32_t> &gp1 = {}, int scale = 1) {
   Outcome out;
   GpuDevice device;
-  device.gp1(0x00000000u, 0);
+  device.gp1(0x00000000u, {});
   for (std::uint32_t word : gp1) {
-    device.gp1(word, 0);
+    device.gp1(word, {});
   }
   Stream pattern;
-  pattern.upload(0, 0, 1024, 512, 7);
+  pattern.upload({0, 0, 1024, 512}, 7);
   for (std::uint32_t word : pattern.words) {
     device.gp0(word);
   }
@@ -121,7 +125,7 @@ inline Outcome replay(const Stream &stream, const std::vector<std::uint32_t> &gp
   const std::vector<std::uint16_t> pristine(device.vram().begin(), device.vram().end());
   std::uint32_t address = 0x80100000u;
   for (std::uint32_t word : stream.words) {
-    device.gp0(word, address);
+    device.gp0(word, {.sourceAddress = address});
     address += 4;
   }
   const psx::present::FrameRecord record = device.sealRecord();
@@ -205,9 +209,9 @@ struct CanvasOutcome {
 inline CanvasOutcome present(const std::vector<Stream> &records, const psx::gpu::RecordView &view) {
   CanvasOutcome out;
   GpuDevice device;
-  device.gp1(0x00000000u, 0);
+  device.gp1(0x00000000u, {});
   Stream pattern;
-  pattern.upload(0, 0, 1024, 512, 7);
+  pattern.upload({0, 0, 1024, 512}, 7);
   for (std::uint32_t word : pattern.words) {
     device.gp0(word);
   }
@@ -216,7 +220,7 @@ inline CanvasOutcome present(const std::vector<Stream> &records, const psx::gpu:
   rasterizer.update(cmd, device.sealRecord(), false, device.vram(), 1, view);
   for (const Stream &stream : records) {
     for (std::uint32_t word : stream.words) {
-      device.gp0(word, 0x80100000u);
+      device.gp0(word, {.sourceAddress = 0x80100000u});
     }
     rasterizer.update(cmd, device.sealRecord(), false, device.vram(), 1, view);
   }
@@ -238,19 +242,16 @@ inline CanvasOutcome present(const std::vector<Stream> &records, const psx::gpu:
   return out;
 }
 
-// Pixels of `picture` (width x height) that differ from VRAM rect at (x, y).
+// Pixels of `picture` (rect's size) that differ from VRAM `rect`.
 long differsFromVram(const std::vector<std::uint16_t> &picture,
-                     int width,
-                     int height,
-                     const std::vector<std::uint16_t> &vram,
-                     int x,
-                     int y) {
+                     psx::gpu::VramRect rect,
+                     const std::vector<std::uint16_t> &vram) {
   long differing = 0;
-  for (int row = 0; row < height; row++) {
-    for (int column = 0; column < width; column++) {
-      const std::uint16_t want =
-          vram[static_cast<std::size_t>(y + row) * psx::gpu::kRecordVramWidth + static_cast<std::size_t>(x + column)];
-      differing += picture[(static_cast<std::size_t>(row) * static_cast<std::size_t>(width)) +
+  for (int row = 0; row < rect.height; row++) {
+    for (int column = 0; column < rect.width; column++) {
+      const std::uint16_t want = vram[static_cast<std::size_t>(rect.y + row) * psx::gpu::kRecordVramWidth +
+                                      static_cast<std::size_t>(rect.x + column)];
+      differing += picture[(static_cast<std::size_t>(row) * static_cast<std::size_t>(rect.width)) +
                            static_cast<std::size_t>(column)] != want
                        ? 1
                        : 0;
@@ -296,7 +297,7 @@ inline Stream bufferFrame(const psx::gpu::RecordRect &buffer, int x) {
 // The device's VRAM after only `stream`.
 inline std::vector<std::uint16_t> deviceDrawing(const Stream &stream) {
   GpuDevice device;
-  device.gp1(0x00000000u, 0);
+  device.gp1(0x00000000u, {});
   for (std::uint32_t word : stream.words) {
     device.gp0(word);
   }
@@ -317,14 +318,11 @@ public:
   RasterBackend(const psx::frame::FramePresenter &presenter, RecordRasterizer &rasterizer, GpuDevice &device)
       : presenter_(presenter), rasterizer_(rasterizer), device_(device) {}
 
-  void emit(std::span<const RqItem>) override {}
   void presentReal() override {
     show();
   }
   void captureDiagnostic(uint64_t, bool) override {}
-  void pace(int, int) override {}
-  void reconcile(uint64_t) override {}
-  void beginLedgerFrame() override {}
+  void pace(psx::frame::FieldCadence) override {}
   bool interpolatesRecords() const override {
     return true;
   }
@@ -402,16 +400,21 @@ public:
   }
 };
 
-// Frames 0..count-1, frame k drawn into draw(k) while display(k) is scanned out at its present.
+// The buffer frame k draws into and the one scanned out at its present.
+struct FrameBuffers {
+  psx::gpu::RecordRect (*draw)(int);
+  psx::gpu::RecordRect (*display)(int);
+};
+
+// Frames 0..count-1, frame k drawn into buffers.draw(k) while buffers.display(k) is scanned out at its present.
 std::vector<Present> presentFrames(int count,
-                                   psx::gpu::RecordRect (*draw)(int),
-                                   psx::gpu::RecordRect (*display)(int),
+                                   FrameBuffers buffers,
                                    bool emptyAfterEach = false,
                                    const psx::present::StateProducers *renders = nullptr) {
   GpuDevice device;
-  device.gp1(0x00000000u, 0);
+  device.gp1(0x00000000u, {});
   Stream pattern;
-  pattern.upload(0, 0, 1024, 512, 7);
+  pattern.upload({0, 0, 1024, 512}, 7);
   for (std::uint32_t word : pattern.words) {
     device.gp0(word);
   }
@@ -419,12 +422,12 @@ std::vector<Present> presentFrames(int count,
   psx::frame::FramePresenter presenter;
   RasterBackend backend(presenter, rasterizer, device);
   backend.producers = renders;
-  backend.display = display(0);
+  backend.display = buffers.display(0);
   presenter.commit(backend, 2, device.sealRecord());
   backend.presents.clear();
   for (int frame = 0; frame < count; frame++) {
-    for (std::uint32_t word : bufferFrame(draw(frame), triangleX(frame)).words) {
-      device.gp0(word, 0x80100000u);
+    for (std::uint32_t word : bufferFrame(buffers.draw(frame), triangleX(frame)).words) {
+      device.gp0(word, {.sourceAddress = 0x80100000u});
     }
     psx::present::FrameRecord record = device.sealRecord();
     const auto serial = static_cast<std::uint32_t>(frame + 1);
@@ -440,7 +443,7 @@ std::vector<Present> presentFrames(int count,
     psx::present::FrameStates states;
     states.save(key, static_cast<float>(triangleX(frame)));
     psx::present::FrameState state = states.collect(record);
-    backend.display = display(frame);
+    backend.display = buffers.display(frame);
     backend.frame = frame;
     presenter.commit(backend, 2, std::move(record), std::move(state));
     if (emptyAfterEach) {
@@ -463,7 +466,7 @@ inline psx::gpu::RecordRect single(int) {
 long differsFromBuffer(const std::vector<std::uint16_t> &picture,
                        const std::vector<std::uint16_t> &vram,
                        const psx::gpu::RecordRect &buffer) {
-  return differsFromVram(picture, buffer.x1 - buffer.x0, buffer.y1 - buffer.y0, vram, buffer.x0, buffer.y0);
+  return differsFromVram(picture, {buffer.x0, buffer.y0, buffer.x1 - buffer.x0, buffer.y1 - buffer.y0}, vram);
 }
 
 inline long differing(const std::vector<std::uint16_t> &a, const std::vector<std::uint16_t> &b) {
@@ -474,16 +477,13 @@ inline long differing(const std::vector<std::uint16_t> &a, const std::vector<std
   return count;
 }
 
-// Every in-between differs from the reals either side, and is exactly the device drawing the shown
-// record with the triangle halfway from the record shown before it; every real is the device's buffer.
-void checkPresents(const std::vector<Present> &presents,
-                   int shownLag,
-                   psx::gpu::RecordRect (*draw)(int),
-                   psx::gpu::RecordRect (*display)(int)) {
+// Every real is the device's buffer. With a render the in-between differs from the reals either side
+// and draws the triangle halfway from the record shown before it; without one it is the shown record.
+void checkPresents(const std::vector<Present> &presents, int shownLag, FrameBuffers buffers, bool rendered) {
   int inBetweens = 0;
   for (std::size_t i = 0; i < presents.size(); i++) {
     const Present &present = presents[i];
-    const psx::gpu::RecordRect shown = display(present.frame);
+    const psx::gpu::RecordRect shown = buffers.display(present.frame);
     if (!present.inBetween) {
       CHECK_EQ(differsFromBuffer(present.picture, present.device, shown), 0);
       continue;
@@ -500,9 +500,15 @@ void checkPresents(const std::vector<Present> &presents,
             fromBefore,
             fromAfter);
     CHECK(fromBefore > 0);
-    CHECK(fromAfter > 0);
     const int frame = present.frame - shownLag;
-    CHECK(draw(frame) == shown);
+    CHECK(buffers.draw(frame) == shown);
+    if (!rendered) {
+      CHECK_EQ(fromAfter, 0);
+      CHECK_EQ(differsFromBuffer(present.picture, deviceDrawing(bufferFrame(shown, triangleX(frame))), shown), 0);
+      inBetweens++;
+      continue;
+    }
+    CHECK(fromAfter > 0);
     const int halfway = (triangleX(frame - 1) + triangleX(frame)) / 2;
     CHECK_EQ(differsFromBuffer(present.picture, deviceDrawing(bufferFrame(shown, halfway)), shown), 0);
     inBetweens++;

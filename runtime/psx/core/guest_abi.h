@@ -90,22 +90,15 @@ template <int FrameSize, int NumSpills> struct GuestFrame {
 };
 
 // ---------------------------------------------------------------------------------------------
-// 3. guest_mult / guest_div — MIPS mult/div with the hi/lo side-effect. hi/lo are GUEST-VISIBLE
-//    state (SBS compares them transitively through later spills); a faithful body that multiplies
-//    where gen emits `mult` MUST go through these, never a bare C `*` (the gpuLoadImageStream
-//    lesson). Returns the full product so call sites read like arithmetic:
-//        vol = (int32_t)(guest_mult(c, base, cur) >> 15);
-inline int64_t guest_mult(Core *c, int32_t a, int32_t b) {
+// 3. multiply — MIPS mult with its hi/lo side effect, which is guest-visible state; a body that ports a guest
+//    `mult` goes through it. Division is psx::cpu::divide (cpu_divide.h).
+namespace psx::cpu {
+
+inline int64_t multiply(Core *c, int32_t a, int32_t b) {
   int64_t p = (int64_t)a * (int64_t)b;
   c->lo = (uint32_t)p;
   c->hi = (uint32_t)((uint64_t)p >> 32);
   return p;
 }
 
-inline void guest_div(Core *c, int32_t num, int32_t den) {
-  if (den == 0) {
-    return; // the translated instruction owner routes divide-by-zero through the typed fault path
-  }
-  c->lo = (uint32_t)(num / den);
-  c->hi = (uint32_t)(num % den);
-}
+} // namespace psx::cpu

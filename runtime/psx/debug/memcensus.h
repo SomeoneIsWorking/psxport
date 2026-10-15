@@ -24,15 +24,16 @@
 //   * copies the COMPILER INLINED (a fixed-size struct assignment becomes movs, never a call);
 //   * copies made inside a shared object (libc, the Vulkan driver, SDL) — --wrap only rewrites
 //     references from objects in THIS link;
-//   * anything before memcensus_init() or after the dump. The armed window is reported.
+//   * anything before psx::debug::armMemoryCensus() or after the dump. The armed window is reported.
 // Those are real blind spots, so the report names them rather than implying a closed accounting.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
 
-// Arm the census and record the frame it was armed at. No-op unless PSXPORT_MEMCENSUS=1, so an
-// ordinary run pays one relaxed load and a not-taken branch per copy.
-void memcensus_init(void);
+namespace psx::debug {
 
-// Write the table to PSXPORT_MEMCENSUS_OUT (default scratch/raw/memcensus.txt). Safe to call twice.
-void memcensus_dump(void);
+// Arm the census; it writes PSXPORT_MEMCENSUS_OUT (default scratch/raw/memcensus.txt) at exit. No-op unless
+// PSXPORT_MEMCENSUS=1, so an ordinary run pays one relaxed load and a not-taken branch per copy.
+void armMemoryCensus();
+
+} // namespace psx::debug

@@ -12,9 +12,11 @@
 
 #include "testutil.h"
 
+namespace {
+
 using namespace dynarec_test;
 
-static void test_cross_block_load_delay_hazards_are_not_limited_by_the_fallback_block_budget() {
+void test_cross_block_load_delay_hazards_are_not_limited_by_the_fallback_block_budget() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -47,11 +49,11 @@ static void test_cross_block_load_delay_hazards_are_not_limited_by_the_fallback_
   CHECK_EQ(executor.counters().fallback.loadDelayHazard, static_cast<std::uint64_t>(iterations));
   CHECK_EQ(executor.counters().fallback.refusedCalls, 0u);
   CHECK(executor.counters().fallback.instructions >= iterations);
-  CHECK(executor.counters().fallback.instructions <= 3u * iterations);
+  CHECK(executor.counters().fallback.instructions <= std::uint64_t{3} * iterations);
   CHECK(executor.counters().executedInstructions > executor.counters().fallback.instructions);
 }
 
-static void test_non_hazard_fallbacks_stay_bounded_when_hazards_are_exempt() {
+void test_non_hazard_fallbacks_stay_bounded_when_hazards_are_exempt() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -72,8 +74,10 @@ static void test_non_hazard_fallbacks_stay_bounded_when_hazards_are_exempt() {
   CHECK_EQ(executor.counters().fallback.loadDelayHazard, 0u);
 }
 
+} // namespace
+
 int main() {
   RUN(cross_block_load_delay_hazards_are_not_limited_by_the_fallback_block_budget);
   RUN(non_hazard_fallbacks_stay_bounded_when_hazards_are_exempt);
-  return pt_summary();
+  return psx::test::summary();
 }

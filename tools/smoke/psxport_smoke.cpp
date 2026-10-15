@@ -42,22 +42,24 @@
 #include "render_substrate.h"  // Core::rsub, which owns the OtAttr
 #include "stub_game_runtime.h" // psx::test::StubGameRuntime — a runtime with no title
 
+namespace {
+
 // ---- the counted harness ----------------------------------------------------------------------
 // PLAN is the DENOMINATOR of this program's result. It is asserted against, not decorative: the
 // verdict fails if fewer checks ran than the plan says exist, which is what makes an early crash or a
 // deleted call a FAILURE rather than a shorter green run.
-static const int PLAN = 8;
-static int g_run = 0;
-static int g_failed = 0;
+const int PLAN = 6;
+int g_run = 0;
+int g_failed = 0;
 
 // Printed BEFORE the check body executes, so the last line of a crashed run names the crash site.
-static void begin(const char *name) {
+void begin(const char *name) {
   printf("  [%d/%d] %-34s ... ", ++g_run, PLAN, name);
 }
-static void pass(void) {
+void pass(void) {
   printf("PASS\n");
 }
-static void fail(const char *fmt, ...) {
+void fail(const char *fmt, ...) {
   ++g_failed;
   va_list ap;
   va_start(ap, fmt);
@@ -86,6 +88,8 @@ static void fail(const char *fmt, ...) {
       fail("%s: got 0x%08X want 0x%08X", #got, g_, w_);                                                                \
   } while (0)
 
+} // namespace
+
 int main() {
   // Unbuffered, not line-buffered: a segfault mid-check must still have emitted the announcement of
   // the check it died in, even when stdout is a pipe (where the default is block buffering — the
@@ -97,14 +101,10 @@ int main() {
          "  link, not this run). Now checking the CORE-ALONE runtime contract: %d checks planned.\n",
          PLAN);
 
-  // The stub derives the real seam. It deliberately supplies no legacy config/hooks pair: a new game
-  // must not inherit the old public bags merely to satisfy the game-agnostic framework link.
-  static psx::test::StubGameRuntime stub_runtime;
+  psx::test::StubGameRuntime stub_runtime;
   Core *c = new Core(stub_runtime);
 
   SMOKE_TRUE("derived-runtime-readback", &c->runtime == &stub_runtime);
-  SMOKE_TRUE("no-legacy-config-or-hooks", c->cfg == nullptr && c->hooks == nullptr);
-  SMOKE_TRUE("no-session-leaves-null-ctx", c->gameCtx == nullptr);
   // The PRECONDITION every remaining check is about, asserted rather than assumed: this really is a
   // Core with no Game. If a future Core ctor started binding one, the checks below would still pass
   // while no longer testing the Core-alone path at all — so the precondition is part of the plan.
@@ -128,7 +128,7 @@ int main() {
     begin("store-attribution-ran-no-game");
     OtAttr &oa = c->rsub.otAttr;
     const uint32_t wbase = 0x80020000u;
-    const int slot = oa.watchRegister(wbase, 16);
+    const int slot = oa.watchRegister({wbase, 16});
     OtAttr::WordRec before{}, after{};
     const bool had_before = oa.watchLookup(wbase, &before);
     c->mem_w32(wbase, 0x12345678u);

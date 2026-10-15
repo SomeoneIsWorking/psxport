@@ -686,11 +686,11 @@ int oracle_snapshot_visit_shim(OracleSnapshotFieldVisitor visitor, void *context
     fprintf(stderr, "oracle snapshot: shim is not initialized or visitor is missing\n");
     return 0;
   }
-  _Static_assert(sizeof(s_stop) == sizeof(uint32_t), "snapshot stop enum must be 32-bit");
+  _Static_assert(sizeof(s_stop) == sizeof(uint8_t), "snapshot stop enum is one byte");
   visitor(context, "shim/timestamp", &s_ts, sizeof(s_ts), 4);
-  visitor(context, "shim/stop", &s_stop, sizeof(s_stop), 4);
+  visitor(context, "shim/stop", &s_stop, sizeof(s_stop), 1);
   visitor(context, "shim/stop_address", &s_stop_addr, sizeof(s_stop_addr), 4);
-  visitor(context, "shim/taint", &s_taint, sizeof(s_taint), 4);
+  visitor(context, "shim/taint", &s_taint, sizeof(s_taint), 1);
   visitor(context, "shim/taint_address", &s_taint_addr, sizeof(s_taint_addr), 4);
   visitor(context, "shim/device_writes", &s_device_writes, sizeof(s_device_writes), 4);
   return 1;

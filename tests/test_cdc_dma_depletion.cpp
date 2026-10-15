@@ -15,8 +15,6 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 constexpr int kRequestedWords = 504;
 constexpr int kTailWords = 70;
 constexpr uint32_t kDestination = 0x80020000u;
@@ -26,7 +24,7 @@ uint32_t tail_word(int index) {
   return 0xA1000000u | static_cast<uint32_t>(index);
 }
 
-void seed_tail(CdcState *cdc) {
+void seed_tail(psx::cd::CdController *cdc) {
   cdc->bfrd = 1;
   cdc->data_n = kTailWords * static_cast<int>(sizeof(uint32_t));
   cdc->data_rd = 0;
@@ -42,14 +40,14 @@ void seed_tail(CdcState *cdc) {
 }
 
 void test_controller_read_overwrites_stale_output_with_zeros(void) {
-  CdcState cdc{};
+  psx::cd::CdController cdc{};
   seed_tail(&cdc);
   uint32_t output[kRequestedWords];
   for (uint32_t &word : output) {
     word = kStale;
   }
 
-  CHECK_EQ(cdc_dma_read(&cdc, output, kRequestedWords), kTailWords);
+  CHECK_EQ(cdc.dmaRead(output, kRequestedWords), kTailWords);
   for (int index = 0; index < kTailWords; ++index) {
     CHECK_EQ(output[index], tail_word(index));
   }
@@ -60,6 +58,7 @@ void test_controller_read_overwrites_stale_output_with_zeros(void) {
 }
 
 void test_dma3_shipping_path_commits_the_full_programmed_transfer(void) {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   seed_tail(&game->cdc);
   for (int index = 0; index < kRequestedWords; ++index) {
@@ -81,6 +80,7 @@ void test_dma3_shipping_path_commits_the_full_programmed_transfer(void) {
 }
 
 void test_deasserted_bfrd_dma_commits_only_controller_zeros(void) {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   seed_tail(&game->cdc);
   game->cdc.bfrd = 0; // FIFO bytes exist internally but are not exposed to CPU/DMA reads.
@@ -105,5 +105,5 @@ int main() {
   RUN(controller_read_overwrites_stale_output_with_zeros);
   RUN(dma3_shipping_path_commits_the_full_programmed_transfer);
   RUN(deasserted_bfrd_dma_commits_only_controller_zeros);
-  return pt_summary();
+  return psx::test::summary();
 }

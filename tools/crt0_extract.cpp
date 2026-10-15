@@ -1,16 +1,16 @@
 // crt0_extract — report a PSX executable's crt0 boot group, using THE SHIPPING DECODER.
 //
 // WHY THIS IS A C++ TOOL AND NOT A PYTHON SCRIPT. Every value it prints becomes a constant in some
-// game's derived runtime, and `crt0_audit` (runtime/psx/boot/crt0_verify.h) re-derives those same
+// game's derived runtime, and `psx::game::auditCrt0` (runtime/psx/boot/crt0_verify.h) re-derives those same
 // values from the guest's own instruction stream at boot and REFUSES a disagreement. If this tool had
 // its own MIPS decoder, the two would drift, and the drift would present as the audit refusing a boot
 // over a constant this tool had just "measured" — the gate blaming the game for the tool's bug. So it
-// calls `crt0_scan` directly: one decoder, shared between the extractor and the gate that checks it.
+// calls `psx::game::scanCrt0` directly: one decoder, shared between the extractor and the gate that checks it.
 //
 // WHAT A NEGATIVE PRINTS. Never "(nothing found)". A refusal names what it could not do and exits
 // non-zero; a partial scan prints its DENOMINATOR (instructions decoded, why it stopped, how many words
 // in the window were zero) next to every field it did and did not resolve. A field this tool cannot see
-// must reach `Crt0Image` as 0 with a TODO, never as a guess — zero is honest, and `crt0_plan`
+// must reach `Crt0Image` as 0 with a TODO, never as a guess — zero is honest, and `psx::game::planCrt0`
 // distinguishes ABSENT (a measured "this crt0 has no such global") from UNSET (nobody has RE'd it) by
 // the explicit `declared` flag, not by the value.
 //
@@ -43,6 +43,8 @@
 #include <string.h>
 #include <vector>
 
+namespace {
+
 // A PS-X EXE is a 0x800-byte header followed by the text image, loaded at t_addr.
 struct PsxExe {
   uint32_t pc0 = 0, gp0 = 0, tAddr = 0, tSize = 0, spAddr = 0;
@@ -56,14 +58,14 @@ struct PsxExe {
   }
 };
 
-static uint32_t rd32le(const uint8_t *p) {
+uint32_t rd32le(const uint8_t *p) {
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 // WHICH refusal fired, so `--selftest` can assert the tool refused for the RIGHT reason. Asserting only
 // "exit was nonzero" would let any refusal stand in for any other — including a short-file check that
 // happened to catch a bad-magic image and left the magic check dead.
-enum Crt0xRefusal { XR_NONE = 0, XR_SHORT_FILE, XR_BAD_MAGIC, XR_ENTRY_OUTSIDE };
+enum Crt0xRefusal : std::uint8_t { XR_NONE = 0, XR_SHORT_FILE, XR_BAD_MAGIC, XR_ENTRY_OUTSIDE };
 
 struct Crt0xOutcome {
   int exitCode = 0;
@@ -73,7 +75,7 @@ struct Crt0xOutcome {
   int resolved = 0, total = 0;
   Crt0Observed o;
 
-  // What the SHIPPING arithmetic makes of the scan: `crt0_plan` from runtime/psx/game/crt0_boot.h, run on
+  // What the SHIPPING arithmetic makes of the scan: `psx::game::planCrt0` from runtime/psx/game/crt0_boot.h, run on
   // this image's own words. Carried out of `extract_from_image` so `--selftest` asserts on the same values
   // the human report prints, and so `tools/oracle/crossvalidate_crt0.py` can diff a1 (the heap SIZE)
   // against what the oracle MEASURED at the InitHeap call. Before this existed, a1 was the one field the
@@ -86,7 +88,7 @@ struct Crt0xOutcome {
 // the selftest cannot pass against a private copy of the logic. `report` may be null to suppress the
 // human report; REFUSALS always print to stderr regardless, because a silent refusal is the failure
 // mode this whole tool exists to avoid.
-static Crt0xOutcome
+Crt0xOutcome
 extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t entryOverride, FILE *report) {
   Crt0xOutcome r;
   if (n < 0x800) {
@@ -157,7 +159,7 @@ extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t en
     return r;
   }
 
-  r.o = crt0_scan(entry, [&exe](uint32_t a) {
+  r.o = psx::game::scanCrt0(entry, [&exe](uint32_t a) {
     return exe.r32(a);
   });
   r.scanned = true;
@@ -177,19 +179,19 @@ extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t en
 
   struct Row {
     const char *name;
-    bool have;
     uint32_t val;
+    bool have;
     bool isSigned;
   };
   const Row rows[] = {
-      {"bssZeroLo", o.haveBssLo, o.bssLo, false},
-      {"bssZeroHi", o.haveBssHi, o.bssHi, false},
-      {"stackTopBase", o.haveStackTop, o.stackTopBase, false},
-      {"stackBias", o.haveBias, (uint32_t)o.bias, true},
-      {"stackTopBase2", o.haveReserve, o.stackTopBase2, false},
-      {"heapBase", o.haveHeapBase, o.heapBase, false},
-      {"gp", o.haveGp, o.gp, false},
-      {"libcInit", o.haveLibcInit, o.libcInit, false},
+      {"bssZeroLo", o.bssLo, o.haveBssLo, false},
+      {"bssZeroHi", o.bssHi, o.haveBssHi, false},
+      {"stackTopBase", o.stackTopBase, o.haveStackTop, false},
+      {"stackBias", (uint32_t)o.bias, o.haveBias, true},
+      {"stackTopBase2", o.stackTopBase2, o.haveReserve, false},
+      {"heapBase", o.heapBase, o.haveHeapBase, false},
+      {"gp", o.gp, o.haveGp, false},
+      {"libcInit", o.libcInit, o.haveLibcInit, false},
   };
   r.total = (int)(sizeof(rows) / sizeof(rows[0]));
   if (report) {
@@ -215,8 +217,8 @@ extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t en
   }
 
   // ── what the SHIPPING arithmetic computes from this scan ────────────────────────────────────────
-  // `crt0_plan` is called, not reimplemented: the extractor and the boot path must not be able to disagree
-  // about the InitHeap arguments, for the same reason they already share `crt0_scan`. It is pure — the two
+  // `psx::game::planCrt0` is called, not reimplemented: the extractor and the boot path must not be able to disagree
+  // about the InitHeap arguments, for the same reason they already share `psx::game::scanCrt0`. It is pure — the two
   // words the guest crt0 loads are passed in — so it can run here against the image's own bytes.
   if (r.resolved == r.total && o.scanComplete) {
     psx::game::Crt0Image image{};
@@ -232,7 +234,7 @@ extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t en
     image.stackBias = {true, o.bias};
     const uint32_t stackTopWord = exe.r32(o.stackTopBase);
     const uint32_t stackReserveWord = exe.r32(o.stackTopBase2);
-    r.plan = crt0_plan(&image, stackTopWord, stackReserveWord, "crt0_extract");
+    r.plan = psx::game::planCrt0(&image, stackTopWord, stackReserveWord, "crt0_extract");
     r.planOk = r.plan.ok;
     if (report) {
       if (r.planOk) {
@@ -326,15 +328,15 @@ extract_from_image(const uint8_t *data, size_t n, const char *label, uint32_t en
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 // --selftest
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
-static int g_ran = 0, g_failed = 0;
-static void sx(bool ok, const char *what) {
+int g_ran = 0, g_failed = 0;
+void sx(bool ok, const char *what) {
   g_ran++;
   if (!ok) {
     g_failed++;
   }
   fprintf(stderr, "  [%d] %-58s ... %s\n", g_ran, what, ok ? "PASS" : "FAIL");
 }
-static void sx_eq32(uint32_t got, uint32_t want, const char *what) {
+void sx_eq32(uint32_t got, uint32_t want, const char *what) {
   const bool ok = got == want;
   g_ran++;
   if (!ok) {
@@ -350,9 +352,9 @@ static void sx_eq32(uint32_t got, uint32_t want, const char *what) {
 // A PS-X EXE image whose text is exactly the fixture's assembled prologue plus the InitHeap thunk it
 // calls. Built from the SAME emitter the audit test uses, so neither gate can pass against bytes the
 // other would not recognise.
-static std::vector<uint8_t> image_from_template(const Crt0Template &t) {
+std::vector<uint8_t> image_from_template(const Crt0Template &t) {
   std::map<uint32_t, uint32_t> words;
-  crt0_fixture_emit(t, [&words](uint32_t a, uint32_t w) {
+  psx::test::crt0::emit(t, [&words](uint32_t a, uint32_t w) {
     words[a] = w;
   });
   const uint32_t lo = words.begin()->first;
@@ -378,11 +380,11 @@ static std::vector<uint8_t> image_from_template(const Crt0Template &t) {
   return img;
 }
 
-// crt0_plan on a FIXTURE image must REFUSE, and that is asserted rather than left silent.
+// psx::game::planCrt0 on a FIXTURE image must REFUSE, and that is asserted rather than left silent.
 //
-// `crt0_fixture_emit` writes the prologue and the InitHeap thunk — code only, no DATA. So the words at
+// `psx::test::crt0::emit` writes the prologue and the InitHeap thunk — code only, no DATA. So the words at
 // `stackTopBase` / `stackTopBase2` read as 0 in a fixture image, the heap-size subtraction underflows, and
-// `crt0_plan` correctly refuses (`hsz >= CRT0_MAX_PLAUSIBLE_HEAP`). Asserting that refusal is what stops
+// `psx::game::planCrt0` correctly refuses (`hsz >= CRT0_MAX_PLAUSIBLE_HEAP`). Asserting that refusal is what stops
 // the plan block from being a code path nothing ever checks: if it started silently succeeding on zeroed
 // words, it would be printing an InitHeap capacity derived from nothing and this would catch it.
 //
@@ -390,14 +392,14 @@ static std::vector<uint8_t> image_from_template(const Crt0Template &t) {
 // by `tools/oracle/crossvalidate_crt0.py`, which diffs its `sp`/`a0`/`a1` against what the reference
 // emulator MEASURED at the InitHeap call across 7 images. That is stronger evidence than a fixture could
 // give, because a fixture's expected value would be computed by this same arithmetic.
-static void selftest_plan_refuses_on_fixture(const Crt0xOutcome &r) {
+void selftest_plan_refuses_on_fixture(const Crt0xOutcome &r) {
   sx(!r.planOk, "crt0_plan REFUSED on a fixture image (its stack-top words are 0: code only, no data)");
 }
 
 // One known-good shape: every field the tool REPORTS is compared against the spec that assembled the
 // bytes. This is the check that makes the tool's output trustworthy as a source of shipped constants —
 // "it exited 0" would not.
-static void selftest_shape(const char *name, const Crt0Template &t, bool expectHeapGlobals) {
+void selftest_shape(const char *name, const Crt0Template &t, bool expectHeapGlobals) {
   fprintf(stderr,
           "\n-- shape %s (bias %d, heap globals %s, %s stack-top load) --\n",
           name,
@@ -437,8 +439,7 @@ static void selftest_shape(const char *name, const Crt0Template &t, bool expectH
   }
 }
 
-static void
-selftest_refusal(const char *what, const std::vector<uint8_t> &img, uint32_t entryOverride, Crt0xRefusal expect) {
+void selftest_refusal(const char *what, const std::vector<uint8_t> &img, uint32_t entryOverride, Crt0xRefusal expect) {
   fprintf(stderr, "\n-- refusal: %s (the refusal text below is the EXPECTED output) --\n", what);
   const Crt0xOutcome r = extract_from_image(img.data(), img.size(), what, entryOverride, nullptr);
   sx(r.exitCode == 2, "exit 2 (REFUSED)");
@@ -447,7 +448,7 @@ selftest_refusal(const char *what, const std::vector<uint8_t> &img, uint32_t ent
   sx(r.resolved == 0, "no field was reported");
 }
 
-static int selftest(void) {
+int selftest(void) {
   fputs("crt0_extract --selftest: driving extract_from_image (THE path `main` calls) over synthesised\n"
         "  images. PLAN: 1 encoder-pin sweep · 2 known-good crt0 shapes, every reported field compared to\n"
         "  the spec that assembled the bytes · 3 refusals, each asserted to fire for its OWN reason ·\n"
@@ -456,7 +457,7 @@ static int selftest(void) {
 
   // FIRST: the encoder. If it drifts, every image below is an instruction stream no PSX would execute and
   // the shape checks would be comparing a decoder against nothing.
-  const std::vector<Crt0PinRow> pins = crt0_fixture_pins();
+  const std::vector<Crt0PinRow> pins = psx::test::crt0::pins();
   fprintf(stderr,
           "\n-- encoder pins: %zu row(s) vs bytes disassembled from real crt0s (floor %d) --\n",
           pins.size(),
@@ -477,15 +478,15 @@ static int selftest(void) {
   fprintf(stderr, "  [pins] %zu row(s) checked, %d mismatch(es)\n", pins.size(), badPins);
   sx(badPins == 0, "every pinned instruction encodes to the measured word");
 
-  selftest_shape("fixture:psyq-tomba2", crt0_fixture_psyq_tomba2(), true);
-  selftest_shape("fixture:psyq-mmx4", crt0_fixture_psyq_mmx4(), false);
+  selftest_shape("fixture:psyq-tomba2", psx::test::crt0::psyqTomba2(), true);
+  selftest_shape("fixture:psyq-mmx4", psx::test::crt0::psyqMmx4(), false);
 
   // The three refusals, each from an image that trips ONLY it.
   selftest_refusal("a 4-byte file", std::vector<uint8_t>(4, 0), 0, XR_SHORT_FILE);
   std::vector<uint8_t> notAnExe(0x900, 0u);
   memcpy(notAnExe.data(), "NOT-AN-E", 8);
   selftest_refusal("0x900 bytes with the wrong magic", notAnExe, 0, XR_BAD_MAGIC);
-  const std::vector<uint8_t> good = image_from_template(crt0_fixture_psyq_tomba2());
+  const std::vector<uint8_t> good = image_from_template(psx::test::crt0::psyqTomba2());
   selftest_refusal("--entry outside the mapped image", good, 0x1000u, XR_ENTRY_OUTSIDE);
 
   // THE NEGATIVE THAT MUST NOT LOOK LIKE A MEASUREMENT: a valid image whose prologue is all zeroes. The
@@ -516,6 +517,8 @@ static int selftest(void) {
         stderr);
   return g_failed ? 1 : 0;
 }
+
+} // namespace
 
 int main(int argc, char **argv) {
   const char *path = nullptr;

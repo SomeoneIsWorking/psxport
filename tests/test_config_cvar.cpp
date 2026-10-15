@@ -1,39 +1,19 @@
-// The layered CVar configuration system: precedence, compatibility, and the env audit.
-//
-// WHY THIS EXISTS. psxport has 201 distinct PSXPORT_* knobs read through three mechanisms that had
-// NO documented precedence between them: env vars (cfg_on/cfg_int/cfg_str), psxport_settings.ini
-// (mods.cpp), and REPL/debug-server `debug ...` commands. "The REPL still overrides the environment
-// for the rest of the run" was the only precedence sentence anywhere in the repo.
-//
-// So the three cases below, in order of how much they matter:
-//
-//   1. COMPATIBILITY (the important one). A knob that has been migrated onto a CVar must resolve
-//      IDENTICALLY to what the pre-migration code returned. The oracle is not a remembered constant
-//      — it is the pre-migration implementation itself, `lucent::config::flag/number/text`, called
-//      side by side with cfg_*. Same input, same environment, same answer, or red.
-//   2. PRECEDENCE. Default < Value < Override < Runtime, resolving and UN-resolving in that order,
-//      and an Override never contaminating what gets persisted.
-//   3. THE AUDIT. A knob set in the environment that resolves to nothing must be REPORTED. Run
-//      against BOTH classes: a bogus name must land in `unknown`, and a real registered knob must
-//      NOT. A discriminator only checked on one class is not a discriminator.
-//
-// WHAT A NEGATIVE PRINTS: every audit assertion first prints the full denominator — how many
-// PSXPORT_* variables were seen in the environment and how they were classified — so "0 unknown"
-// can never be confused with "the audit never looked". An audit that scanned nothing is a failure,
-// not a pass.
+// The layered CVar configuration: typed accessors over the environment, layer precedence, title
+// launch settings and the environment audit. Every audit check prints its denominator first, so an
+// audit that scanned nothing cannot pass.
 #include "testutil.h"
 
 #include "config.h"
 #include "config_var.h"
 #include "config_vars.h"
 
-#include "cfg.h"
-
 #include <lucent/config.h>
 
 #include <stdlib.h>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -41,11 +21,13 @@ using psx::config::CVarBase;
 using psx::config::Kind;
 using psx::config::Layer;
 
+namespace {
+
 // Every test knob name lives under this prefix so it is impossible to collide with a real knob, and
 // so the audit's "unknown" class has something deterministic to find.
-static const char *kBogus = "PSXPORT_TEST_NOT_A_KNOB_AT_ALL";
+const char *kBogus = "PSXPORT_TEST_NOT_A_KNOB_AT_ALL";
 
-static void set_env(const char *name, const char *value) {
+void set_env(const char *name, const char *value) {
   if (value) {
     setenv(name, value, 1);
   } else {
@@ -57,90 +39,71 @@ static void set_env(const char *name, const char *value) {
   psx::config::reset_for_test();
 }
 
-static bool contains(const std::vector<std::string> &v, const std::string &s) {
+bool contains(const std::vector<std::string> &v, const std::string &s) {
   return std::find(v.begin(), v.end(), s) != v.end();
 }
 
-static void print_audit(const psx::config::EnvAudit &a) {
+void print_audit(const psx::config::EnvAudit &a) {
   fprintf(stderr,
-          "  audit: %zu PSXPORT_* var(s) in the environment -> %zu declared, %zu legacy, %zu UNKNOWN\n",
+          "  audit: %zu PSXPORT_* var(s) in the environment -> %zu declared, %zu identity, %zu UNKNOWN\n",
           a.set_in_env.size(),
           a.declared.size(),
-          a.legacy.size(),
+          a.identity.size(),
           a.unknown.size());
   for (const std::string &s : a.unknown) {
     fprintf(stderr, "  audit:   UNKNOWN %s\n", s.c_str());
   }
 }
 
-// ── 1. COMPATIBILITY: a migrated knob resolves exactly as it did before migration ───────────────
-// The oracle is the old implementation, run side by side. cfg_on() used to BE
-// `lucent::config::flag(name) ? 1 : 0`; if routing it through a CVar changes any answer for any
-// input, that is a knob whose meaning silently moved.
-static void test_migrated_bool_knob_matches_pre_migration_env_behaviour(void) {
+// ── 1. TYPED ACCESSORS parse the environment exactly as lucent::config does ─────────────────────
+void test_bool_knob_parses_like_lucent_flag(void) {
   const char *const values[] = {nullptr, "1", "0", "yes", "off", "", "banana"};
   int compared = 0;
   for (const char *v : values) {
     set_env("PSXPORT_NOAUDIO", v);
-    const int want = lucent::config::flag("PSXPORT_NOAUDIO") ? 1 : 0; // the pre-migration body
-    const int got = cfg_on("PSXPORT_NOAUDIO");
-    fprintf(
-        stderr, "  PSXPORT_NOAUDIO=%-8s cfg_on=%d  pre-migration=%d\n", v ? (*v ? v : "\"\"") : "<unset>", got, want);
+    const bool want = lucent::config::flag("PSXPORT_NOAUDIO");
+    const bool got = psx::config::no_audio();
+    fprintf(stderr, "  PSXPORT_NOAUDIO=%-8s no_audio=%d  lucent=%d\n", v ? (*v ? v : "\"\"") : "<unset>", got, want);
     CHECK_EQ(got, want);
     ++compared;
   }
-  fprintf(stderr, "  compared %d value(s) against the pre-migration implementation\n", compared);
   CHECK_EQ(compared, 7);
   set_env("PSXPORT_NOAUDIO", nullptr);
 }
 
-static void test_migrated_int_and_text_knobs_match_pre_migration_env_behaviour(void) {
+void test_int_and_text_knobs_parse_like_lucent(void) {
+  set_env("PSXPORT_WATCHDOG", nullptr);
+  const long fallback = psx::config::watchdog_seconds();
   const char *const ints[] = {nullptr, "0", "3", "45", "notanumber"};
   int compared = 0;
   for (const char *v : ints) {
     set_env("PSXPORT_WATCHDOG", v);
-    const int want = (int)lucent::config::number("PSXPORT_WATCHDOG", 3);
-    const int got = cfg_int("PSXPORT_WATCHDOG", 3);
-    fprintf(stderr, "  PSXPORT_WATCHDOG=%-11s cfg_int=%d  pre-migration=%d\n", v ? v : "<unset>", got, want);
+    const long want = lucent::config::number("PSXPORT_WATCHDOG", fallback);
+    const long got = psx::config::watchdog_seconds();
+    fprintf(stderr, "  PSXPORT_WATCHDOG=%-11s watchdog_seconds=%ld  lucent=%ld\n", v ? v : "<unset>", got, want);
     CHECK_EQ(got, want);
     ++compared;
   }
   const char *const texts[] = {nullptr, "", "external/psxport", "/some/where"};
   for (const char *v : texts) {
     set_env("PSXPORT_ASSET_DIR", v);
-    const std::string &ref = lucent::config::text("PSXPORT_ASSET_DIR");
-    const char *want = ref.empty() ? nullptr : ref.c_str(); // the pre-migration body, verbatim
-    const char *got = cfg_str("PSXPORT_ASSET_DIR");
+    const std::string want = lucent::config::text("PSXPORT_ASSET_DIR");
+    const std::string got = psx::config::asset_dir();
     fprintf(stderr,
-            "  PSXPORT_ASSET_DIR=%-18s cfg_str=%s  pre-migration=%s\n",
+            "  PSXPORT_ASSET_DIR=%-18s asset_dir=%s  lucent=%s\n",
             v ? (*v ? v : "\"\"") : "<unset>",
-            got ? got : "(null)",
-            want ? want : "(null)");
-    CHECK_EQ(got == nullptr, want == nullptr);
-    if (got && want) {
-      CHECK_STREQ(got, want);
-    }
+            got.c_str(),
+            want.c_str());
+    CHECK_STREQ(got.c_str(), want.c_str());
     ++compared;
   }
-  fprintf(stderr, "  compared %d value(s) against the pre-migration implementation\n", compared);
   CHECK_EQ(compared, 9);
   set_env("PSXPORT_WATCHDOG", nullptr);
   set_env("PSXPORT_ASSET_DIR", nullptr);
 }
 
-// An UNMIGRATED knob — the compatibility path that carries the other ~190 — must be untouched too.
-static void test_unmigrated_knob_still_resolves_through_the_env(void) {
-  set_env("PSXPORT_TEST_UNMIGRATED", "1");
-  CHECK_EQ(cfg_on("PSXPORT_TEST_UNMIGRATED"), 1);
-  CHECK(psx::config::find("PSXPORT_TEST_UNMIGRATED") == nullptr);
-  set_env("PSXPORT_TEST_UNMIGRATED", "0");
-  CHECK_EQ(cfg_on("PSXPORT_TEST_UNMIGRATED"), 0);
-  set_env("PSXPORT_TEST_UNMIGRATED", nullptr);
-  CHECK_EQ(cfg_on("PSXPORT_TEST_UNMIGRATED"), 0);
-}
-
 // ── 2. PRECEDENCE: Default < Value < Override < Runtime ─────────────────────────────────────────
-static void test_layer_ladder_resolves_and_unresolves_in_the_documented_order(void) {
+void test_layer_ladder_resolves_and_unresolves_in_the_documented_order(void) {
   psx::config::BoolVar v("PSXPORT_TEST_LADDER", false, "hermetic test knob");
   CHECK_EQ((int)v.layer(), (int)Layer::Default);
   CHECK_EQ(v.get(), false);
@@ -175,7 +138,7 @@ static void test_layer_ladder_resolves_and_unresolves_in_the_documented_order(vo
 // docs/config.md has always said a REPL `debug ...` "still overrides the environment for the rest of
 // the run" and that behaviour must not change. A human typing at a live console is later and more
 // specific than the environment the process was launched with.
-static void test_runtime_layer_outranks_the_environment_override(void) {
+void test_runtime_layer_outranks_the_environment_override(void) {
   psx::config::TextVar v("PSXPORT_TEST_RUNTIME_WINS", "", "hermetic test knob");
   v.set(Layer::Override, "from-env");
   CHECK_STREQ(v.get().c_str(), "from-env");
@@ -186,7 +149,7 @@ static void test_runtime_layer_outranks_the_environment_override(void) {
 
 // An Override is a launch argument: it must never be written back to the settings file. This is the
 // bug the ladder prevents by construction — today mods.cpp saves whatever the field currently holds.
-static void test_override_and_runtime_layers_are_never_persisted(void) {
+void test_override_and_runtime_layers_are_never_persisted(void) {
   psx::config::BoolVar v("PSXPORT_TEST_NOPERSIST", false, "hermetic test knob");
   v.set(Layer::Value, true);
   v.set(Layer::Override, false);
@@ -196,7 +159,7 @@ static void test_override_and_runtime_layers_are_never_persisted(void) {
 }
 
 // ── 3. THE AUDIT, run against BOTH classes ──────────────────────────────────────────────────────
-static void test_a_knob_set_in_the_environment_that_nothing_reads_is_reported(void) {
+void test_a_knob_set_in_the_environment_that_nothing_reads_is_reported(void) {
   set_env(kBogus, "1");
   const psx::config::EnvAudit a = psx::config::audit_environment();
   print_audit(a);
@@ -210,7 +173,7 @@ static void test_a_knob_set_in_the_environment_that_nothing_reads_is_reported(vo
 // The negative half of the same discriminator: a knob that IS registered, set in the environment,
 // must be classified `declared` and must NOT appear as unknown. Without this case the audit could
 // pass case 1 by simply calling everything unknown.
-static void test_a_registered_knob_set_in_the_environment_is_not_reported_as_unknown(void) {
+void test_a_registered_knob_set_in_the_environment_is_not_reported_as_unknown(void) {
   set_env("PSXPORT_NOAUDIO", "1");
   const psx::config::EnvAudit a = psx::config::audit_environment();
   print_audit(a);
@@ -219,26 +182,50 @@ static void test_a_registered_knob_set_in_the_environment_is_not_reported_as_unk
   set_env("PSXPORT_NOAUDIO", nullptr);
 }
 
-// ...and the third class: an UNMIGRATED knob is only observable once something reads it. Before the
-// read it is indistinguishable from a typo — which is honest, and is exactly why the audit reports
-// the legacy count separately instead of folding it into `declared`.
-static void test_an_unmigrated_knob_is_classified_legacy_once_it_has_been_read(void) {
-  set_env("PSXPORT_TEST_LEGACY", "1");
+// A title's launch key is unknown until the title asks for it, then classified identity.
+void test_a_launch_setting_key_is_classified_identity_once_read(void) {
+  set_env("PSXPORT_TEST_IDENTITY_DISC", "disc.chd");
   const psx::config::EnvAudit before = psx::config::audit_environment();
   print_audit(before);
-  CHECK(contains(before.unknown, "PSXPORT_TEST_LEGACY"));
-  (void)cfg_on("PSXPORT_TEST_LEGACY");
+  CHECK(contains(before.unknown, "PSXPORT_TEST_IDENTITY_DISC"));
+  CHECK_STREQ(psx::config::launch_setting({"PSXPORT_TEST_IDENTITY_DISC"}).c_str(), "disc.chd");
   const psx::config::EnvAudit after = psx::config::audit_environment();
   print_audit(after);
-  CHECK(contains(after.legacy, "PSXPORT_TEST_LEGACY"));
-  CHECK(!contains(after.unknown, "PSXPORT_TEST_LEGACY"));
-  set_env("PSXPORT_TEST_LEGACY", nullptr);
+  CHECK(contains(after.identity, "PSXPORT_TEST_IDENTITY_DISC"));
+  CHECK(!contains(after.unknown, "PSXPORT_TEST_IDENTITY_DISC"));
+  set_env("PSXPORT_TEST_IDENTITY_DISC", nullptr);
+}
+
+// Every key in the environment outranks every key in ./.env; within a source the first key wins.
+void test_launch_setting_prefers_environment_then_dotenv_in_key_order(void) {
+  const std::filesystem::path home = std::filesystem::current_path();
+  const std::filesystem::path dir = home / "test_config_cvar_dotenv";
+  std::filesystem::create_directories(dir);
+  std::filesystem::current_path(dir);
+  {
+    std::ofstream env(".env");
+    env << "# comment\n  PSXPORT_TEST_LS_TITLE= title.chd \nPSXPORT_TEST_LS_SHARED=shared.chd\n";
+  }
+  const auto both = [] {
+    return psx::config::launch_setting({"PSXPORT_TEST_LS_TITLE", "PSXPORT_TEST_LS_SHARED"});
+  };
+  CHECK_STREQ(both().c_str(), "title.chd");
+  CHECK_STREQ(psx::config::launch_setting({"PSXPORT_TEST_LS_SHARED", "PSXPORT_TEST_LS_TITLE"}).c_str(), "shared.chd");
+  set_env("PSXPORT_TEST_LS_SHARED", "env-shared.chd");
+  CHECK_STREQ(both().c_str(), "env-shared.chd");
+  set_env("PSXPORT_TEST_LS_TITLE", "env-title.chd");
+  CHECK_STREQ(both().c_str(), "env-title.chd");
+  set_env("PSXPORT_TEST_LS_TITLE", nullptr);
+  set_env("PSXPORT_TEST_LS_SHARED", nullptr);
+  CHECK_STREQ(psx::config::launch_setting({"PSXPORT_TEST_LS_ABSENT"}).c_str(), "");
+  std::filesystem::current_path(home);
+  std::filesystem::remove_all(dir);
 }
 
 // The audit ships with its own proof that it can produce a positive. A `selftest()` that lives in
 // the library (not only here) is what stops the audit from quietly degrading into a function that
 // returns an empty list forever.
-static void test_the_audit_selftest_fires_in_the_shipping_library(void) {
+void test_the_audit_selftest_fires_in_the_shipping_library(void) {
   const bool ok = psx::config::selftest();
   fprintf(stderr, "  psx::config::selftest() -> %s\n", ok ? "true (audit produced its positive)" : "FALSE");
   CHECK(ok);
@@ -246,7 +233,7 @@ static void test_the_audit_selftest_fires_in_the_shipping_library(void) {
 
 // The inventory must actually contain the knobs claimed as migrated. A registry that registered
 // nothing would pass every other case in this file.
-static void test_the_declared_inventory_is_not_empty(void) {
+void test_the_declared_inventory_is_not_empty(void) {
   int n = 0;
   psx::config::enumerate([&n](CVarBase &v) {
     fprintf(stderr,
@@ -264,17 +251,19 @@ static void test_the_declared_inventory_is_not_empty(void) {
   CHECK(psx::config::find("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT") != nullptr);
 }
 
+} // namespace
+
 int main(void) {
-  RUN(migrated_bool_knob_matches_pre_migration_env_behaviour);
-  RUN(migrated_int_and_text_knobs_match_pre_migration_env_behaviour);
-  RUN(unmigrated_knob_still_resolves_through_the_env);
+  RUN(bool_knob_parses_like_lucent_flag);
+  RUN(int_and_text_knobs_parse_like_lucent);
   RUN(layer_ladder_resolves_and_unresolves_in_the_documented_order);
   RUN(runtime_layer_outranks_the_environment_override);
   RUN(override_and_runtime_layers_are_never_persisted);
   RUN(a_knob_set_in_the_environment_that_nothing_reads_is_reported);
   RUN(a_registered_knob_set_in_the_environment_is_not_reported_as_unknown);
-  RUN(an_unmigrated_knob_is_classified_legacy_once_it_has_been_read);
+  RUN(a_launch_setting_key_is_classified_identity_once_read);
+  RUN(launch_setting_prefers_environment_then_dotenv_in_key_order);
   RUN(the_audit_selftest_fires_in_the_shipping_library);
   RUN(the_declared_inventory_is_not_empty);
-  return pt_summary();
+  return psx::test::summary();
 }

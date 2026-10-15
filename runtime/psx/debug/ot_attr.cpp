@@ -2,11 +2,11 @@
 // stay a forward-declared-Core, dependency-light include.
 #include "ot_attr.h"
 #include "core.h"
-#include "render_node.h" // cur_render_node — same node fallback the native submit path itself uses
 // NO "game.h" HERE, DELIBERATELY, and it is a compile-enforced fence rather than a convention: with
 // `Game` left incomplete (core.h only forward-declares it) any future `c->game->…` in this TU fails to
 // build. That is what keeps the store path off the whole machine — see OtAttr::stampFrame for the crash
 // that reaching through `c->game` for a frame counter caused.
+#include "command_args.h"
 #include "native_dispatch.h"
 #include <cstdio>
 #include <format>
@@ -22,16 +22,17 @@
 // everything through the control channel holds. `emit` is the transport's sink.
 
 bool OtAttr::runLastWriterCommand(std::string_view line, const std::function<void(std::string_view)> &emit) {
-  char sub[32] = {0};
-  std::sscanf(std::string(line).c_str(), "%*s %31s", sub);
+  const psx::debug::CommandArgs args(line);
+  const std::string_view sub = args.word(1);
   // LAST-WRITER PROVENANCE sub-commands (ot_attr.h) — answer "who wrote this WORD", independent of
   // call-flow, for the staging-buffer case where call-path attribution only names the batcher.
-  if (!strcmp(sub, "watch")) {
-    uint32_t addr = 0, len = 0;
-    if (std::sscanf(std::string(line).c_str(), "%*s %*s %x %x", &addr, &len) != 2 || len == 0) {
+  if (sub == "watch") {
+    const uint32_t addr = args.hex(2).value_or(0);
+    const uint32_t len = args.hex(3).value_or(0);
+    if (!args.hex(2).has_value() || len == 0) {
       emit(std::format("usage: otattr watch <addr-hex> <len-hex>"));
     } else {
-      int slot = watchRegister(addr, len);
+      int slot = watchRegister({addr, len});
       if (slot < 0) {
         emit(std::format("watch REJECTED (slots={}/{} wordsUsed={}/{} overflow={}) — free a slot or shrink the region",
                          watchSlotCount(),
@@ -60,16 +61,14 @@ bool OtAttr::runLastWriterCommand(std::string_view line, const std::function<voi
     }
     return true;
   }
-  if (!strcmp(sub, "who")) {
-    uint32_t addr = 0, len = 4;
-    int got = std::sscanf(std::string(line).c_str(), "%*s %*s %x %x", &addr, &len);
-    if (got < 1) {
+  if (sub == "who") {
+    const std::optional<uint32_t> addrArg = args.hex(2);
+    if (!addrArg.has_value()) {
       emit(std::format("usage: otattr who <addr-hex> [len-hex]"));
       return true;
     }
-    if (got == 1) {
-      len = 4;
-    }
+    const uint32_t addr = *addrArg;
+    const uint32_t len = args.hex(3).value_or(4);
     emit(std::format("who 0x{:08X}..0x{:08X} (word-granular, coalesced runs):", addr, addr + len));
     uint32_t w = addr & ~3u, end = addr + len;
     bool any = false;
@@ -181,7 +180,9 @@ void OtAttr::resetIfNewFrame(uint32_t frame) {
   mSpansSorted = true; // a fresh frame starts sorted by construction; trackStore un-sets it if not
 }
 
-void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
+void OtAttr::trackStoreSlow(Core *c, GuestSpan store) {
+  const uint32_t addr = store.address;
+  const uint32_t bytes = store.bytes;
   // Reached from Core::mem_w32 via pkt_track — on EVERY guest memory write, the hottest path in the
   // substrate. Looking the channel up by NAME here is not a cheap flag test: it hashes the name under
   // a mutex. MEASURED on the Spyro port with a 6-sample stack profile: 6/6 samples landed in
@@ -190,13 +191,9 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
   // The gate is now the inline `if (!g_otattr_channel)` in ot_attr.h and there is nothing left to
   // re-check here: a Channel re-resolves itself whenever the enabled set changes, so `debug otattr`
   // at the REPL still takes effect on the next store. Anything reaching this function is armed.
-  // OtAttr's OWN clock, not `c->game->gpu.s_frame` (see stampFrame): reaching through `Core::game` here
-  // made a plain guest store null-deref on every Core that no `Game` owns, and mixed the present counter
-  // into a function whose span table is keyed on the logic frame.
   const uint32_t frame = stampFrame();
   const uint32_t fn = c->callAttribution.top();
   const uint32_t caller = c->callAttribution.caller();
-  const uint32_t guestProducer = c->rsub.guestPacketFilter.currentOwner();
   // Physical form: mask off the segment bits (KUSEG/KSEG0/KSEG1 mirror main RAM at 0x000xxxxx/0x800xxxxx/
   // 0xA00xxxxx — masking with 0x1FFFFFFF collapses all three to the same physical offset) — this is the
   // SAME normalization display_pass_write_guard (mem.cpp) uses, and unlike the pool-only `k = addr |
@@ -212,16 +209,16 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
   // a first-iteration hit. Maintaining the stack on direct calls turns it into a real scan. It is read
   // ONLY by `otattr trace`, whose REPL path already reports "no per-fn store stat recorded" when empty.
   if (g_otattr_channel) {
-    recordFnStat(frame, fn, phys);
+    recordFnStat({fn, caller, frame}, phys);
   }
-  trackWatch(fn, caller, phys, bytes, frame);
+  trackWatch({fn, caller, frame}, {phys, bytes});
 
   const uint32_t k = phys | 0x80000000u;
   if (mPoolStale) {
     refreshPool(c);
   }
   // Core calls this before committing the store, so the next store re-reads the rewritten bound.
-  if (mPool.readFrom(k, bytes)) {
+  if (mPool.readFrom({k, bytes})) {
     mPoolStale = true;
     return;
   }
@@ -229,23 +226,12 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
     return;
   }
 
-  // NOT reset off `frame` (= gpu.s_frame) any more: that counts presents, so on a path where presents
-  // are rare it never fired and the table saturated with stale spans (see beginLogicFrame). The frame
-  // loop owns the reset now; this only stamps what it records.
-  // Same node fallback the native GT3/GT4 submit path itself uses (render_internal.h cur_render_node):
-  // the walk's beginObject() node when set, else the guest "current render object" scratchpad
-  // (0x1F80028C) — most native per-object quad submission (submit.cpp) never opens a diag walk scope,
-  // it relies on this scratchpad, so reading raw diag.currentNode() alone would show node=0 for the
-  // MAJORITY of world-object quads (the exact case bug #45 cares about).
-  const uint32_t node = cur_render_node(c);
-
   // Coalesce a run of stores sharing the same attribution into one growing span — a quad's
   // header/vertex/color words collapse to a single entry instead of one per store, which is what
   // keeps SPAN_CAP from blowing out on a normal frame.
   if (mSpanCount > 0) {
     Span &last = mSpans[mSpanCount - 1];
-    if (last.fn == fn && last.caller == caller && last.node == node && last.guestProducer == guestProducer &&
-        k >= last.lo && k <= last.hi) {
+    if (last.fn == fn && last.caller == caller && k >= last.lo && k <= last.hi) {
       if (k + bytes > last.hi) {
         last.hi = k + bytes;
       }
@@ -260,10 +246,10 @@ void OtAttr::trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes) {
     // reason the reverse linear scan below is safe), so in practice it is — and that is what lets
     // lookupStore binary-search. Checked rather than assumed: the fallback pass looks a span up per OT
     // node, so a linear scan there is O(nodes x spans) and measured at ~4x the frame cost.
-    if (mSpanCount && k < mSpans[mSpanCount - 1].lo) {
+    if (mSpanCount > 0 && k < mSpans[mSpanCount - 1].lo) {
       mSpansSorted = false;
     }
-    mSpans[mSpanCount++] = Span{k, k + bytes, fn, caller, node, c->pc, claimed, guestProducer};
+    mSpans[mSpanCount++] = Span{k, k + bytes, fn, caller, c->pc, claimed};
   } else {
     mSpanOverflow++;
   }
@@ -327,13 +313,6 @@ psx::debug::ProducerAttribution OtAttr::submitterOf(Core *c, uint32_t packetAddr
   if (span.fn) {
     return {span.fn, psx::debug::Unattributed::NoSource};
   }
-  // With no indirect dispatch on the stack, the node's own render function (node+0x18) names the object.
-  if (span.node) {
-    const uint32_t render = c->mem_r32((span.node & 0x1FFFFFFFu) + 0x18u);
-    if (render >= 0x80010000u && render < 0x80200000u) {
-      return {render, psx::debug::Unattributed::NoSource};
-    }
-  }
   return {0, psx::debug::Unattributed::SpanNoFn};
 }
 
@@ -341,7 +320,7 @@ void OtAttr::trackGte(Core *c) {
   if (!g_otattr_channel) {
     return;
   }
-  // Same one clock as the store path, and for the same reason: `gte_op` is a core primitive too, so
+  // Same one clock as the store path, and for the same reason: Gte::execute is a core primitive too, so
   // reaching through `c->game` for a frame counter would crash a Core-alone embedder that executes GTE.
   const uint32_t frame = stampFrame();
   if (frame != mGteFrame) {
@@ -351,15 +330,14 @@ void OtAttr::trackGte(Core *c) {
   }
 
   const uint32_t fn = c->callAttribution.top();
-  const uint32_t node = cur_render_node(c);
   for (int i = 0; i < mGteCount; i++) {
-    if (mGte[i].fn == fn && mGte[i].node == node) {
+    if (mGte[i].fn == fn) {
       mGte[i].count++;
       return;
     }
   }
   if (mGteCount < GTE_CAP) {
-    mGte[mGteCount++] = GteBucket{fn, node, 1};
+    mGte[mGteCount++] = GteBucket{fn, 1};
   } else {
     mGteOverflow++;
   }
@@ -403,7 +381,9 @@ bool OtAttr::lookupStore(uint32_t addr, Span *out) const {
 
 // --- LAST-WRITER PROVENANCE (watched regions) ---
 
-int OtAttr::watchRegister(uint32_t addr, uint32_t len) {
+int OtAttr::watchRegister(GuestSpan region) {
+  const uint32_t addr = region.address;
+  const uint32_t len = region.bytes;
   if (mWatchCount >= WATCH_SLOTS) {
     mWatchOverflow++;
     return -1;
@@ -426,7 +406,9 @@ int OtAttr::watchRegister(uint32_t addr, uint32_t len) {
   return mWatchCount++;
 }
 
-void OtAttr::trackWatch(uint32_t fn, uint32_t caller, uint32_t phys, uint32_t bytes, uint32_t frame) {
+void OtAttr::trackWatch(StoreOrigin origin, GuestSpan physical) {
+  const uint32_t phys = physical.address;
+  const uint32_t bytes = physical.bytes;
   if (mWatchCount == 0) {
     return;
   }
@@ -441,7 +423,7 @@ void OtAttr::trackWatch(uint32_t fn, uint32_t caller, uint32_t phys, uint32_t by
         continue;
       }
       const uint32_t idx = r.wordBase + (w - r.lo) / 4;
-      mWatchWords[idx] = WordRec{fn, caller, frame};
+      mWatchWords[idx] = WordRec{origin.fn, origin.caller, origin.frame};
       break; // regions don't overlap by construction (each registration carves a fresh slice)
     }
   }
@@ -469,7 +451,9 @@ bool OtAttr::watchLookup(uint32_t addr, WordRec *out, uint32_t *wordAddrOut) con
 
 // --- per-fn store-count stat (feeds `otattr trace`'s copy-loop heuristic) ---
 
-void OtAttr::recordFnStat(uint32_t frame, uint32_t fn, uint32_t phys) {
+void OtAttr::recordFnStat(StoreOrigin origin, uint32_t phys) {
+  const uint32_t frame = origin.frame;
+  const uint32_t fn = origin.fn;
   if (frame != mFnStatFrame) {
     mFnStatFrame = frame;
     mFnStatCount = 0;

@@ -96,9 +96,7 @@ bool handleControlCommand(Core &core, const char *line, void *out) {
 
 bool applyConfiguredState(Core &core, std::string &error) {
   error.clear();
-  // `TextVar::get()` returns BY VALUE, so the reference lifetime-extends the temporary; a
-  // `const char *` bound to `.c_str()` of it would dangle before the first use.
-  const std::string &path = psx::config::cv_load_state.get();
+  const std::string path = psx::config::load_state_path();
   if (path.empty()) {
     return true;
   }

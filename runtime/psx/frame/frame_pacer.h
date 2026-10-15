@@ -9,6 +9,7 @@
 // here, taking `Core &`, because the cadence is a property of the session being paced.
 #pragma once
 
+#include "field_cadence.h"
 #include "pace_plan.h"
 
 class Core;
@@ -21,14 +22,12 @@ public:
   PacePlan plan(PaceInputs inputs);
 
   // The combined path for runtimes whose presentation owns simulated display-field advancement: pace
-  // one guest field (or `parts` of one) and advance the emulated display-field clock with it.
-  void paceFrame(Core &core);
-  void paceSubframe(Core &core, int parts);
-  void paceSubframeFields(Core &core, int guestFields, int parts);
+  // `cadence.fields` display fields (in `cadence.parts` steps) and advance the emulated display-field clock with them.
+  void paceSubframeFields(Core &core, FieldCadence cadence);
 
   // Presentation of fields already delivered by a title's scheduler: wait WITHOUT advancing devices,
   // because the guest has already produced them.
-  void waitPresentedFields(Core &core, int guestFields, int parts);
+  void waitPresentedFields(Core &core, FieldCadence cadence);
 
   // Pace a host-only screen (a title picker: no guest, no display mode programmed) at one NTSC display
   // field per call, honouring PSXPORT_NOPACE exactly as guest-driven pacing does.
@@ -41,6 +40,8 @@ public:
 private:
   double nextMs_ = 0.0;
   bool seeded_ = false;
+  bool warnedQuotaUnset_ = false;
+  bool warnedRateUnset_ = false;
 };
 
 } // namespace psx::frame

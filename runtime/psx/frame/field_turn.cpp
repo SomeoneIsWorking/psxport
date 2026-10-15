@@ -1,10 +1,10 @@
 #include "field_turn.h"
 
-#include "c_subsys.h" // watchdog_resume
 #include "config_var.h"
 #include "core.h"
 #include "dbg_server.h"
 #include "game.h"
+#include "watchdog.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -15,18 +15,10 @@
 namespace psx::frame {
 namespace {
 
-// `PSXPORT_RAMDUMP_FRAME` asks for a RAM dump at native frame N. The two knob values are held in
-// const references, not `const char *` into a temporary: `TextVar::get()` returns by VALUE, so a
-// `const char *` bound to `.c_str()` of the temporary would dangle before the first use. A const
-// reference to a prvalue lifetime-EXTENDS the temporary, which is both the safe form and the copy-free
-// one the style check requires.
-const std::string &ramDumpPathFor(std::string &fallback) {
-  const std::string &requested = psx::config::cv_ramdump.get();
-  if (requested.empty()) {
-    fallback = "scratch/bin/midrun_ram.bin";
-    return fallback;
-  }
-  return requested;
+// PSXPORT_RAMDUMP, or the mid-run default path.
+std::string ramDumpPath() {
+  std::string requested = psx::config::ramdump_path();
+  return requested.empty() ? std::string("scratch/bin/midrun_ram.bin") : requested;
 }
 
 } // namespace
@@ -41,7 +33,7 @@ void FieldTurn::beginField(Core &core) const {
   // suspends the watchdog itself across that idle, so this call is the re-arm the frame owes.
   core.game->dbg_server.honourPause(&core);
   core.game->bugReport.atFieldBoundary(core);
-  watchdog_resume();
+  psx::platform::Watchdog::resume();
 }
 
 void FieldTurn::endField(Core &core, std::uint32_t frame) const {
@@ -50,12 +42,11 @@ void FieldTurn::endField(Core &core, std::uint32_t frame) const {
 }
 
 void FieldTurn::dumpRamIfRequested(Core &core, std::uint32_t frame) const {
-  const std::string &requestedFrame = psx::config::cv_ramdump_frame.get();
+  const std::string requestedFrame = psx::config::ramdump_frame();
   if (requestedFrame.empty() || frame != static_cast<std::uint32_t>(strtoul(requestedFrame.c_str(), nullptr, 0))) {
     return;
   }
-  std::string fallback;
-  const std::string &path = ramDumpPathFor(fallback);
+  const std::string path = ramDumpPath();
   FILE *dump = fopen(path.c_str(), "wb");
   if (dump == nullptr) {
     lucent::error("field-turn",

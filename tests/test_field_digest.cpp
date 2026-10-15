@@ -51,5 +51,5 @@ int main() {
   RUN(equal_images_hash_equal);
   RUN(a_single_byte_anywhere_changes_the_hash);
   RUN(word_order_matters);
-  return pt_summary();
+  return psx::test::summary();
 }

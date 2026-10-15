@@ -49,9 +49,9 @@ constexpr std::uint32_t jr(std::uint32_t rs) {
 constexpr std::uint32_t jrRa() {
   return jr(kRa);
 }
-constexpr std::uint32_t bne(std::uint32_t rs, std::uint32_t rt, std::uint32_t atBranch, std::uint32_t target) {
-  const std::uint32_t displacement = (target - (atBranch + 4u)) >> 2u;
-  return (0x05u << 26) | (rs << 21) | (rt << 16) | (displacement & 0xFFFFu);
+// `wordOffset` counts instructions from the delay slot.
+constexpr std::uint32_t bne(std::uint32_t rs, std::uint32_t rt, std::int32_t wordOffset) {
+  return (0x05u << 26) | (rs << 21) | (rt << 16) | (static_cast<std::uint32_t>(wordOffset) & 0xFFFFu);
 }
 constexpr std::uint32_t nop() {
   return 0;

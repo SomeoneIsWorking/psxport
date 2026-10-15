@@ -8,43 +8,15 @@
 #include <cstring>
 
 namespace psx::state {
-namespace {
 
-const char *const kFrameworkSectionNames[] = {
-    section::kCpu.data(),
-    section::kRam.data(),
-    section::kScratchpad.data(),
-    section::kGte.data(),
-    section::kGpu.data(),
-    section::kBeetleSpu.data(),
-    section::kBeetleMdec.data(),
-    section::kCdc.data(),
-    section::kTiming.data(),
-    section::kDma.data(),
-    section::kHle.data(),
-    section::kSio.data(),
-    section::kCard.data(),
-    section::kCd.data(),
-    section::kTitle.data(),
-};
-static_assert(std::size(kFrameworkSectionNames) == 15, "every namespace section must be listed once");
-
-} // namespace
-
-const std::vector<std::string> &frameworkSectionNames() {
-  static const std::vector<std::string> names = [] {
-    std::vector<std::string> out;
-    out.reserve(std::size(kFrameworkSectionNames));
-    for (const char *name : kFrameworkSectionNames) {
-      out.emplace_back(name);
-    }
-    return out;
-  }();
+std::vector<std::string> frameworkSectionNames() {
+  std::vector<std::string> names(section::kRequired.begin(), section::kRequired.end());
+  names.emplace_back(section::kTitle);
   return names;
 }
 
 bool isFrameworkSectionName(std::string_view name) {
-  const auto &names = frameworkSectionNames();
+  const std::vector<std::string> names = frameworkSectionNames();
   return std::find(names.begin(), names.end(), name) != names.end();
 }
 

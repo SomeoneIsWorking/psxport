@@ -5,13 +5,14 @@
 // c->game->hle.deliverEvent(class, spec) — no Core* arg on the surface.
 #pragma once
 #include "bios_load_exec.h"
+#include "guest_address_range.h"
 #include <cstdint>
 #include <optional>
 class Core;
 class Game;
 
 // OpenEvent modes: EvMdINTR means 'call the handler', EvMdNOINTR means 'mark it and let TestEvent poll'.
-enum { EV_MD_INTR = 0x1000, EV_MD_NOINTR = 0x2000 };
+enum : std::uint16_t { EV_MD_INTR = 0x1000, EV_MD_NOINTR = 0x2000 };
 
 struct HleEvCB {
   int open, enabled, fired;
@@ -38,7 +39,7 @@ public:
   // to it, so it must be an address no code executes (the interrupted context's own $ra is one a
   // handler can reach by calling the same libcd routine).
   static constexpr uint32_t kInterruptReturnSentinel = 0xDEAD0000u;
-  enum class PadWorkAreaAction { Enable, Disable };
+  enum class PadWorkAreaAction : std::uint8_t { Enable, Disable };
   Game *game = nullptr;
   HleEvCB ev[16] = {}; // was s_ev[EVCB_MAX]
   // EvMdINTR events are delivered by CALLING their handler; this guards against a handler
@@ -69,7 +70,7 @@ public:
 
   // Where A0:0x51 LoadAndExecute gets the executable the guest named: the run's own disc, bound by
   // `Game::wireRuntimeMembers`. An explicit member rather than a call to the disc at the dispatch
-  // site for the same reason `CdcState::disc_read_sector_fn` is a member (cdc_state.h): it is the
+  // site for the same reason `psx::cd::CdController::disc_read_sector_fn` is a member (cdc_state.h): it is the
   // CD device's answer, injectable so a hermetic test drives the SHIPPING service without a disc
   // image. Empty is a refusal, not a fallback — a product that never bound it cannot load.
   psx::hle::DiscFileReader loadExecReader;
@@ -80,7 +81,7 @@ public:
   // the hardware state, so two Cores never share an interrupt controller.
   //
   // Only sources the framework ACTUALLY models may set a bit here: display-field completion raises
-  // bit 0 (VBlank), Sio0's enabled controller /ACK request raises bit 7, CdcState::irq_edge raises bit
+  // bit 0 (VBlank), Sio0's enabled controller /ACK request raises bit 7, psx::cd::CdController::irq_edge raises bit
   // 2 (CDROM), and the vendored Beetle SPU's address-match logic raises bit 9 through spu_irq_raise
   // (hw_bind.cpp). The rest stay 0 — and 0 means "this framework has no source for that interrupt",
   // NOT "the hardware did not raise it". In particular, root-counter IRQ/status semantics remain
@@ -96,7 +97,7 @@ public:
   //
   // Before this existed the framework accepted every registration and discarded it, so any guest
   // waiting on an interrupt-delivered completion waited until its own timeout, forever.
-  enum { IRQ_CHAIN_MAX = 8 };
+  enum : std::uint8_t { IRQ_CHAIN_MAX = 8 };
   uint32_t irq_elem[IRQ_CHAIN_MAX] = {};
   uint32_t irq_prio[IRQ_CHAIN_MAX] = {};
   int irq_n = 0;
@@ -134,7 +135,7 @@ public:
 
   // ---- BIOS-side helpers -------------------------------------------------------
   // heap: A0:0x33-0x39 native first-fit arena (bookkeeping outside PSX RAM).
-  void heapInit(uint32_t addr, uint32_t size);
+  void heapInit(GuestSpan heap);
   uint32_t heapAlloc(uint32_t size);
   void heapFree(uint32_t addr);
   uint32_t heapBlockSize(uint32_t addr) const;
@@ -157,9 +158,9 @@ public:
   //
   // deviceAdd(name) appends one DeviceControlBlock and republishes 0x150/0x154; it is the port's
   // equivalent of the BIOS AddDrv (B0:0x47) and is called by the subsystem that services the
-  // device (the card registers "bu" from card_overrides_init). Idempotent per name.
+  // device (the card registers "bu" from Memcard::install). Idempotent per name.
   // deviceFind(name) returns that DCB's guest address, or 0 when no device matches.
-  enum {
+  enum : std::uint16_t {
     DCB_STRIDE = 0x50u,
     DCB_MAX = 4,
     DCB_OFF_NAME = 0x00u,
@@ -181,4 +182,14 @@ public:
 
 private:
   void heapCoalesce(); // internal free-side merge pass; only touches this instance's blk[]
+
+  // `irq` channel accounting of declined deliveries, and the last pending set no element claimed.
+  struct IrqDeclines {
+    unsigned critical = 0;
+    unsigned nested = 0;
+    unsigned transient = 0;
+    unsigned reports = 0;
+  };
+  IrqDeclines irqDeclines_;
+  uint32_t lastUnclaimedIrq_ = 0xFFFFFFFFu;
 };

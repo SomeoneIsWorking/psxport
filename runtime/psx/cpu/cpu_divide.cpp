@@ -4,7 +4,11 @@
 
 #include <cstdint>
 
-void cpu_div(Core *core, uint32_t numerator, uint32_t denominator) {
+namespace psx::cpu {
+
+void divide(Core *core, Division operands) {
+  const uint32_t numerator = operands.numerator;
+  const uint32_t denominator = operands.denominator;
   const int32_t signedNumerator = static_cast<int32_t>(numerator);
   const int32_t signedDenominator = static_cast<int32_t>(denominator);
   if (signedDenominator == 0) {
@@ -19,7 +23,9 @@ void cpu_div(Core *core, uint32_t numerator, uint32_t denominator) {
   }
 }
 
-void cpu_divu(Core *core, uint32_t numerator, uint32_t denominator) {
+void divideUnsigned(Core *core, Division operands) {
+  const uint32_t numerator = operands.numerator;
+  const uint32_t denominator = operands.denominator;
   if (denominator == 0) {
     core->lo = 0xFFFFFFFFu;
     core->hi = numerator;
@@ -28,3 +34,5 @@ void cpu_divu(Core *core, uint32_t numerator, uint32_t denominator) {
     core->hi = numerator % denominator;
   }
 }
+
+} // namespace psx::cpu

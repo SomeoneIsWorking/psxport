@@ -49,6 +49,7 @@ target_include_directories(psxport_oracle PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/boot # boot
   ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/core # core
   ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/cpu # cpu
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/cpu/beetle # the Beetle GTE seam
   ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/frame # frame
   ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/gpu # gpu
   ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/psx/present # present
@@ -86,6 +87,8 @@ endif()
 # keeps the reference in its own process (so it shares no state with the port), needs no IPC protocol, and
 # is reproducible and human-readable, so "did the oracle change or did we?" stays answerable.
 add_executable(oracle_trace oracle_trace.c)
+# oracle_shim.h fixes its enums' base type, a C23 feature, for the C and C++ units that share its structs.
+set_target_properties(psxport_oracle oracle_spike oracle_trace PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
 target_link_libraries(oracle_trace PRIVATE psxport_oracle)
 target_compile_options(oracle_trace PRIVATE -O2 -g)
 if(PSXPORT_BUILD_TESTS)

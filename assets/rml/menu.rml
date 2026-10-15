@@ -40,22 +40,15 @@
 				<div id="world_readout" class="readout"></div>
 
 				<div class="section-heading">Display</div>
-				<select-button toggle="render_path"><key>Renderer</key><value>Native / PC</value></select-button>
 				<select-button toggle="aspect"><key>Aspect Ratio</key><value>Vanilla</value></select-button>
 				<select-button toggle="ires"><key>Internal Resolution</key><value>Vanilla</value></select-button>
 				<select-button toggle="fps60"><key>60fps Interpolation</key><value>Off</value></select-button>
-				<select-button toggle="face_order"><key>Face Ordering</key><value>Depth (enhanced)</value></select-button>
 				<div id="title_settings"></div>
 				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
 			</pane>
 
 			<pane>
-				<div class="section-heading">Debug</div>
-				<select-button toggle="debug_quads"><key>Highlight Quads (billboards)</key><value>Off</value></select-button>
-				<select-button toggle="debug_objects"><key>Highlight 3D Objects</key><value>Off</value></select-button>
-				<p class="hint">Boxes each game object at its world position + shows id and WORLD x,y,z. Quads (2D sprites at 3D positions) are yellow; 3D meshes are cyan.</p>
-
-				<div class="section-heading spaced">Area Warp</div>
+				<div class="section-heading">Area Warp</div>
 				<div id="warp_readout" class="readout"></div>
 				<select-button adjust="warp_area"><key>Destination</key><value>Area 0</value></select-button>
 				<select-button adjust="warp_entry"><key>Entry</key><value>0</value></select-button>

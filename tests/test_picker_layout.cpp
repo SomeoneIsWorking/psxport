@@ -1,6 +1,7 @@
 // The title picker's panel geometry, with no GPU, no session and no window: the rules a screenshot
 // cannot explain. Three panels and one panel are the same code here, so both are exercised.
 #include "picker_layout.h"
+#include "pixel_size.h"
 
 #include <cmath>
 #include <cstdio>
@@ -22,15 +23,15 @@ bool near(float a, float b, float tolerance = 0.002f) {
 
 // The panels tile the surface: no gap, no overlap, first one at the left edge, last one ending at
 // the right edge. Every other property is measured against this, so it is the first thing checked.
-void expectTiles(const psx::host::PickerLayout &layout, int width, int height) {
+void expectTiles(const psx::host::PickerLayout &layout, psx::present::PixelSize surface) {
   int edge = 0;
   for (int index = 0; index < layout.panelCount(); ++index) {
-    const psx::host::PanelLayout panel = layout.panel(index, 4, 3);
+    const psx::host::PanelLayout panel = layout.panel(index);
     expect(panel.bounds.x == edge, "each panel starts where the previous one ended");
-    expect(panel.bounds.y == 0 && panel.bounds.h == height, "a panel is full height");
+    expect(panel.bounds.y == 0 && panel.bounds.h == surface.height, "a panel is full height");
     edge = panel.bounds.x + panel.bounds.w;
   }
-  expect(edge == width, "the panels end at the surface's right edge");
+  expect(edge == surface.width, "the panels end at the surface's right edge");
 }
 
 // Advance until the layout says the animation is over, and report how many frames that took.
@@ -42,16 +43,16 @@ int settle(psx::host::PickerLayout &layout, int limit = 500) {
 }
 
 void threePanelsSettleWithTheSelectedWidest() {
-  psx::host::PickerLayout layout(3, 0.5f, 0.25f, 0.05f, 0.25f);
+  psx::host::PickerLayout layout(3, {0.5f, 0.25f, 0.05f, 0.25f});
   layout.setSurface(1280, 720);
   layout.setSelection(1);
-  expectTiles(layout, 1280, 720);
+  expectTiles(layout, {1280, 720});
   const int frames = settle(layout);
   expect(frames > 1, "moving the selection animates rather than snapping");
   expect(frames < 60, "and settles in a readable number of frames");
-  expectTiles(layout, 1280, 720);
-  const psx::host::PanelLayout selected = layout.panel(1, 4, 3);
-  const psx::host::PanelLayout other = layout.panel(0, 4, 3);
+  expectTiles(layout, {1280, 720});
+  const psx::host::PanelLayout selected = layout.panel(1);
+  const psx::host::PanelLayout other = layout.panel(0);
   expect(selected.bounds.w == 640, "the selected panel takes half of 1280");
   expect(other.bounds.w == 320, "each other panel takes a quarter");
   expect(selected.bounds.w > other.bounds.w, "the selected panel is the widest");
@@ -59,21 +60,21 @@ void threePanelsSettleWithTheSelectedWidest() {
 }
 
 void theAnimationNeverOvershoots() {
-  psx::host::PickerLayout layout(3, 0.5f, 0.25f, 0.05f, 0.25f);
+  psx::host::PickerLayout layout(3, {0.5f, 0.25f, 0.05f, 0.25f});
   layout.setSurface(1280, 720);
   layout.setSelection(0);
   settle(layout);
-  const psx::host::PanelLayout before = layout.panel(0, 4, 3);
+  const psx::host::PanelLayout before = layout.panel(0);
   layout.setSelection(2);
   // Every intermediate frame: the middle panel must never be narrower than its own final width (an
   // overshoot), and the width must never jump past where it is going.
   for (int frame = 0; frame < 40; ++frame) {
-    const psx::host::PanelLayout middle = layout.panel(1, 4, 3);
+    const psx::host::PanelLayout middle = layout.panel(1);
     expect(middle.bounds.w <= before.bounds.w / 2, "a narrowing panel never passes its target width");
     layout.advance();
   }
-  expect(layout.panel(1, 4, 3).bounds.w == 320, "the panel that lost the selection ends at a quarter");
-  expect(layout.panel(2, 4, 3).bounds.w == 640, "the panel that gained it ends at a half");
+  expect(layout.panel(1).bounds.w == 320, "the panel that lost the selection ends at a quarter");
+  expect(layout.panel(2).bounds.w == 640, "the panel that gained it ends at a half");
 }
 
 // A panel is FILLED. The pane IS the panel's own shape — the seams lean and the surface's own edges
@@ -82,9 +83,9 @@ void theAnimationNeverOvershoots() {
 // a neighbour begins. Letterboxing is what put black bands above and below every panel and made
 // three games read as three small pictures in a black frame.
 void aPictureCoversItsPanelAndKeepsItsAspect() {
-  psx::host::PickerLayout layout(3, 0.5f, 0.25f, 0.05f, 0.05f);
+  psx::host::PickerLayout layout(3, {0.5f, 0.25f, 0.05f, 0.05f});
   layout.setSurface(1280, 720);
-  const psx::host::PanelLayout panel = layout.panel(0, 4, 3);
+  const psx::host::PanelLayout panel = layout.panel(0);
   const psx::host::PanelRect bounds = panel.bounds;
   const psx::host::PanelRect box = panel.cover;
   // The drawn rectangle is the shape's own extent. This panel is the LEFTMOST one, so its left edge
@@ -106,12 +107,12 @@ void aPictureCoversItsPanelAndKeepsItsAspect() {
   const psx::host::SourceCrop wide = panel.sourceCrop(4, 3);
   // The crop's aspect is the panel's AVERAGE width by its height: a leaning panel has two widths
   // and the crop wants one number for both of them.
-  const double paneAspect = static_cast<double>(panel.averageWidth()) / static_cast<double>(bounds.h);
+  const float paneAspect = static_cast<float>(panel.averageWidth()) / static_cast<float>(bounds.h);
   expect(wide.h == 1.0f && wide.v == 0.0f, "a wide picture keeps its full height");
   expect(wide.w < 1.0f, "and drops some of its width");
   // The kept slice's aspect is the crop fraction times the PICTURE's aspect and it must come out as
   // the pane's, which is the whole definition of cover-cropping rather than squeezing.
-  expect(near(static_cast<double>(wide.w) * (4.0 / 3.0), paneAspect, 0.001),
+  expect(near(wide.w * (4.0f / 3.0f), paneAspect, 0.001f),
          "the kept slice has the PANE's aspect, so the picture is cropped and never squeezed");
   expect(near(wide.u, (1.0f - wide.w) * 0.5f, 1e-6f), "and the crop is centred, so the panel is symmetric");
 
@@ -119,8 +120,7 @@ void aPictureCoversItsPanelAndKeepsItsAspect() {
   const psx::host::SourceCrop tall = panel.sourceCrop(3, 4);
   expect(tall.w == 1.0f && tall.u == 0.0f, "a tall picture keeps its full width");
   expect(tall.h < 1.0f, "and drops some of its height");
-  expect(near((3.0 / 4.0) / static_cast<double>(tall.h), paneAspect, 0.001),
-         "and the kept slice still has the panel's aspect");
+  expect(near((3.0f / 4.0f) / tall.h, paneAspect, 0.001f), "and the kept slice still has the panel's aspect");
 
   // A picture of the panel's own shape is not cropped at all.
   const psx::host::SourceCrop exact = panel.sourceCrop(panel.averageWidth(), bounds.h);
@@ -135,12 +135,12 @@ void aPictureCoversItsPanelAndKeepsItsAspect() {
 // inside the panel so a wide wordmark on a narrow one is clipped by the seams rather than over its
 // neighbour.
 void theLogoSitsCentredAndOnOneLine() {
-  psx::host::PickerLayout layout(3, 0.5f, 0.25f, 0.05f, 0.25f);
+  psx::host::PickerLayout layout(3, {0.5f, 0.25f, 0.05f, 0.25f});
   layout.setSurface(1280, 720);
   settle(layout);
   int centres = 0;
   for (int panel = 0; panel < 3; ++panel) {
-    const psx::host::PanelLayout p = layout.panel(panel, 4, 3);
+    const psx::host::PanelLayout p = layout.panel(panel);
     const psx::host::PanelRect logo = p.logoRect(200, 50);
     expect(logo.w == 200 && logo.h == 50, "the logo is drawn at its own size, unscaled away");
     expect(logo.y + logo.h / 2 == static_cast<int>(std::lround(720.0 * 0.2)),
@@ -153,16 +153,16 @@ void theLogoSitsCentredAndOnOneLine() {
   expect(centres / 3 == centres / 3, "every panel's logo is on the same line");
   // A panel with no logo draws nothing at all: there is no placeholder rectangle standing in for a
   // wordmark the disc has not given us yet.
-  const psx::host::PanelLayout p = layout.panel(0, 4, 3);
+  const psx::host::PanelLayout p = layout.panel(0);
   expect(p.logoRect(0, 0).w == 0, "a panel whose logo has not decoded draws nothing");
 }
 
 void theSeamsLeanAndTheWindowsOwnEdgesDoNot() {
-  psx::host::PickerLayout layout(3, 0.5f, 0.25f, 0.06f, 0.25f);
+  psx::host::PickerLayout layout(3, {0.5f, 0.25f, 0.06f, 0.25f});
   layout.setSurface(1280, 720);
   settle(layout);
-  const psx::host::PanelLayout left = layout.panel(0, 4, 3);
-  const psx::host::PanelLayout right = layout.panel(1, 4, 3);
+  const psx::host::PanelLayout left = layout.panel(0);
+  const psx::host::PanelLayout right = layout.panel(1);
   expect(left.slantX == right.slantX && left.slantX > 0, "both neighbours are slanted the same way");
   // The slant is the authored fraction of the surface's WIDTH: it is a horizontal displacement, and
   // only a fraction of the width is the same size of lean on a wide window and a square one.
@@ -185,8 +185,8 @@ void theSeamsLeanAndTheWindowsOwnEdgesDoNot() {
   expect(left.seams.leftTopX == 0 && left.seams.leftBottomX == 0, "the first panel's left edge is the window edge");
   // The last panel's RIGHT edge is the window's too. With three panels the middle one is the only
   // parallelogram left, and it leans on both sides by the same slant.
-  const psx::host::PanelLayout middle = layout.panel(1, 4, 3);
-  const psx::host::PanelLayout last = layout.panel(2, 4, 3);
+  const psx::host::PanelLayout middle = layout.panel(1);
+  const psx::host::PanelLayout last = layout.panel(2);
   expect(last.seams.rightTopX == 1280 && last.seams.rightBottomX == 1280,
          "and the last panel's right edge is the window edge");
   expect(middle.seams.leftBottomX - middle.seams.leftTopX == middle.slantX &&
@@ -195,39 +195,39 @@ void theSeamsLeanAndTheWindowsOwnEdgesDoNot() {
   // Every panel's top edge and bottom edge cover the surface between them, so the row tiles with no
   // gap and no overlap at either height.
   for (int i = 0; i < 3; ++i) {
-    const psx::host::PanelLayout p = layout.panel(i, 4, 3);
-    const int leftAtTop = i == 0 ? 0 : layout.panel(i - 1, 4, 3).seams.rightTopX;
-    const int leftAtBottom = i == 0 ? 0 : layout.panel(i - 1, 4, 3).seams.rightBottomX;
+    const psx::host::PanelLayout p = layout.panel(i);
+    const int leftAtTop = i == 0 ? 0 : layout.panel(i - 1).seams.rightTopX;
+    const int leftAtBottom = i == 0 ? 0 : layout.panel(i - 1).seams.rightBottomX;
     expect(p.seams.leftTopX == leftAtTop && p.seams.leftBottomX == leftAtBottom,
            "panel N starts exactly where panel N-1 ends, at both heights");
   }
-  expect(layout.panel(2, 4, 3).seams.rightTopX == 1280, "and the row ends at the surface edge");
+  expect(layout.panel(2).seams.rightTopX == 1280, "and the row ends at the surface edge");
 }
 
 void oneAndTwoPanelsUseTheSameRule() {
-  psx::host::PickerLayout one(1, 0.5f, 0.25f, 0.05f, 0.25f);
+  psx::host::PickerLayout one(1, {0.5f, 0.25f, 0.05f, 0.25f});
   one.setSurface(1280, 720);
   settle(one);
-  expectTiles(one, 1280, 720);
-  expect(one.panel(0, 4, 3).bounds.w == 1280, "the only panel takes the whole surface");
+  expectTiles(one, {1280, 720});
+  expect(one.panel(0).bounds.w == 1280, "the only panel takes the whole surface");
 
-  psx::host::PickerLayout two(2, 0.5f, 0.25f, 0.05f, 0.25f);
+  psx::host::PickerLayout two(2, {0.5f, 0.25f, 0.05f, 0.25f});
   two.setSurface(1280, 720);
   settle(two);
-  expectTiles(two, 1280, 720);
-  expect(two.panel(0, 4, 3).bounds.w == 853, "with two panels the selected one takes 2/3, not a half");
-  expect(two.panel(1, 4, 3).bounds.w == 427, "and the other takes the third");
-  expect(two.panel(0, 4, 3).bounds.w > two.panel(1, 4, 3).bounds.w, "the selected panel is still widest");
+  expectTiles(two, {1280, 720});
+  expect(two.panel(0).bounds.w == 853, "with two panels the selected one takes 2/3, not a half");
+  expect(two.panel(1).bounds.w == 427, "and the other takes the third");
+  expect(two.panel(0).bounds.w > two.panel(1).bounds.w, "the selected panel is still widest");
 
-  psx::host::PickerLayout none(0, 0.5f, 0.25f, 0.05f, 0.25f);
+  psx::host::PickerLayout none(0, {0.5f, 0.25f, 0.05f, 0.25f});
   none.setSurface(1280, 720);
   expect(!none.advance(), "a picker with no panels is not animating");
-  expect(none.panel(0, 4, 3).bounds.w == 0, "and has no geometry to draw");
+  expect(none.panel(0).bounds.w == 0, "and has no geometry to draw");
   expect(none.maxPanelWidth(1280) == 0, "and asks for no pane image");
 }
 
 void aResizeKeepsTheAnimationWhereItWas() {
-  psx::host::PickerLayout layout(3, 0.5f, 0.25f, 0.05f, 0.25f);
+  psx::host::PickerLayout layout(3, {0.5f, 0.25f, 0.05f, 0.25f});
   layout.setSurface(1280, 720);
   settle(layout);
   layout.setSelection(2);
@@ -236,23 +236,23 @@ void aResizeKeepsTheAnimationWhereItWas() {
   const float middle = layout.share(1);
   layout.setSurface(1920, 1080);
   expect(near(layout.share(1), middle), "a resize does not restart or complete the animation");
-  expectTiles(layout, 1920, 1080);
+  expectTiles(layout, {1920, 1080});
   // Mid-animation, the shares are between where they were and where they are going, so what a
   // resize must preserve is the tiling and the ordering — not a width, which is still travelling.
-  expect(layout.panel(0, 4, 3).bounds.w > layout.panel(1, 4, 3).bounds.w,
+  expect(layout.panel(0).bounds.w > layout.panel(1).bounds.w,
          "the selected panel is still the widest while the animation runs");
-  expect(layout.panel(0, 4, 3).bounds.w > 320 && layout.panel(0, 4, 3).bounds.w <= 960,
+  expect(layout.panel(0).bounds.w > 320 && layout.panel(0).bounds.w <= 960,
          "and its width is between the old surface's and the new one's");
 }
 
 void degenerateSurfacesAreRefusedNotGuessed() {
-  psx::host::PickerLayout layout(3, 0.5f, 0.25f, 0.05f, 0.25f);
+  psx::host::PickerLayout layout(3, {0.5f, 0.25f, 0.05f, 0.25f});
   layout.setSurface(0, 0);
-  const psx::host::PanelLayout none = layout.panel(0, 4, 3);
+  const psx::host::PanelLayout none = layout.panel(0);
   expect(none.bounds.w == 0 && none.cover.w == 0, "no surface means no panels to draw");
   layout.setSurface(1280, 720);
-  expect(layout.panel(-1, 4, 3).bounds.w == 0, "a panel outside the picker is refused, not clamped");
-  expect(layout.panel(3, 4, 3).bounds.w == 0, "including the index just past the last panel");
+  expect(layout.panel(-1).bounds.w == 0, "a panel outside the picker is refused, not clamped");
+  expect(layout.panel(3).bounds.w == 0, "including the index just past the last panel");
   expect(layout.share(7) == 0.0f, "and it has no share of the width");
 }
 

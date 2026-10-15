@@ -34,8 +34,8 @@ std::optional<std::uint16_t> PhaseReplay::next(std::uint64_t observedPhase) {
       return std::nullopt;
     }
   }
-  if (const std::optional<std::size_t> target = findNeutralPath(segment_, observedPhase)) {
-    enter(*target, *target - segment_);
+  if (const std::optional<std::size_t> target = findNeutralPath(observedPhase)) {
+    enter(*target);
     return emit();
   }
   return wait(observedPhase);
@@ -86,7 +86,9 @@ std::optional<std::uint16_t> PhaseReplay::wait(std::uint64_t observedPhase) {
   return kNeutralMask;
 }
 
-void PhaseReplay::enter(std::size_t segment, std::size_t passed) {
+// Segments between the current one and `segment` were passed over unobserved.
+void PhaseReplay::enter(std::size_t segment) {
+  const std::size_t passed = segment - segment_;
   segment_ = segment;
   offset_ = 0;
   entered_ = true;
@@ -151,11 +153,11 @@ void PhaseReplay::closeCurrent() {
   entered_ = false;
 }
 
-// The segment to enter for `phase`, starting the search at `from` (not yet entered). Only segments
+// The segment to enter for `phase`, searching from the current one (not yet entered). Only segments
 // that hold no input may be passed over to reach it.
-std::optional<std::size_t> PhaseReplay::findNeutralPath(std::size_t from, std::uint64_t phase) const {
+std::optional<std::size_t> PhaseReplay::findNeutralPath(std::uint64_t phase) const {
   const std::vector<PadSegment> &segments = recording_.segments();
-  for (std::size_t index = from; index < segments.size(); index++) {
+  for (std::size_t index = segment_; index < segments.size(); index++) {
     if (segments[index].phase == kUnkeyedPhase || segments[index].phase == phase) {
       return index;
     }

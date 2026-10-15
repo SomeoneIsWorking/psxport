@@ -1,8 +1,9 @@
 // snapshot.cpp — on-demand guest RAM capture. See snapshot.h for the why.
 #include "snapshot.h"
-#include "cfg.h"
 #include "core.h"
+#include "diagnostic_config.h"
 #include "fs_util.h"
+#include "number_text.h"
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -21,21 +22,7 @@ void on_usr1(int) {
   g_sig_requested = 1;
 }
 
-struct Sched {
-  bool init = false;
-  std::vector<uint64_t> at; // explicit frame numbers
-  uint64_t every = 0;       // periodic interval, 0 = off
-  int max = 8;              // hard cap on images per run
-  int written = 0;
-  uint64_t frame = 0;
-};
-
-Sched &sched() {
-  static Sched s;
-  return s;
-}
-
-void parse_list(const char *s, std::vector<uint64_t> &out) {
+void parseList(const char *s, std::vector<uint64_t> &out) {
   if (!s) {
     return;
   }
@@ -46,57 +33,58 @@ void parse_list(const char *s, std::vector<uint64_t> &out) {
   }
 }
 
-void init_once() {
-  Sched &s = sched();
-  if (s.init) {
+} // namespace
+
+namespace psx::debug {
+
+void Snapshotter::configure() {
+  if (configured_) {
     return;
   }
-  s.init = true;
-  parse_list(cfg_str("PSXPORT_SNAP_AT"), s.at);
-  if (const char *e = cfg_str("PSXPORT_SNAP_EVERY")) {
-    s.every = strtoull(e, nullptr, 0);
+  configured_ = true;
+  const std::string frames = psx::config::snapshot_frames();
+  parseList(frames.empty() ? nullptr : frames.c_str(), at_);
+  if (const std::string every = psx::config::snapshot_every(); !every.empty()) {
+    every_ = strtoull(every.c_str(), nullptr, 0);
   }
-  if (const char *m = cfg_str("PSXPORT_SNAP_MAX")) {
-    s.max = atoi(m);
+  if (const std::string max = psx::config::snapshot_max(); !max.empty()) {
+    max_ = psx::config::parseInt(max).value_or(0);
   }
   // SIGUSR1 is installed unconditionally: it costs nothing, and the whole point is to be able to
   // snapshot a run that was NOT started with any snapshot flag set — which is every interesting run,
   // because you rarely know in advance that a state is worth capturing.
   signal(SIGUSR1, on_usr1);
-  if (!s.at.empty() || s.every) {
+  if (!at_.empty() || every_) {
     lucent::info("snap",
                  "scheduled: {} explicit frame(s), every={}, max={} "
                  "(also: kill -USR1 {})",
-                 s.at.size(),
-                 (unsigned long long)s.every,
-                 s.max,
+                 at_.size(),
+                 (unsigned long long)every_,
+                 max_,
                  (int)getpid());
   }
 }
 
-} // namespace
-
-bool snapshot_now(Core *c, const char *why) {
-  Sched &s = sched();
-  if (s.written >= s.max) {
+bool Snapshotter::captureNow(Core &core, const char *why) {
+  if (written_ >= max_) {
     lucent::warn("snap",
                  "cap reached ({}) — NOT writing '{}'. Raise PSXPORT_SNAP_MAX if you meant it; "
                  "silently skipping would leave you waiting for a file that never arrives.",
-                 s.max,
+                 max_,
                  why ? why : "?");
     return false;
   }
   char path[160], side[192];
-  snprintf(path, sizeof path, "scratch/raw/snap_%llu.bin", (unsigned long long)s.frame);
+  snprintf(path, sizeof path, "scratch/raw/snap_%llu.bin", (unsigned long long)frame_);
   snprintf(side, sizeof side, "%s.txt", path);
-  if (!Fs::writeFile(path, c->ram, 0x200000)) {
+  if (!Fs::writeFile(path, core.ram, 0x200000)) {
     lucent::error("snap", "FAILED to write {} — the capture you asked for does not exist", path);
     return false;
   }
   // A directory of anonymous 2 MB dumps is unusable a day later. Say what this one is.
   std::string meta;
   char line[256];
-  snprintf(line, sizeof line, "frame=%llu\nreason=%s\n", (unsigned long long)s.frame, why ? why : "?");
+  snprintf(line, sizeof line, "frame=%llu\nreason=%s\n", (unsigned long long)frame_, why ? why : "?");
   meta += line;
   snprintf(line,
            sizeof line,
@@ -107,28 +95,29 @@ bool snapshot_now(Core *c, const char *why) {
            path);
   meta += line;
   Fs::writeFile(side, meta.data(), meta.size());
-  s.written++;
-  lucent::info("snap", "frame {} -> {} ({})", (unsigned long long)s.frame, path, why ? why : "?");
+  written_++;
+  lucent::info("snap", "frame {} -> {} ({})", (unsigned long long)frame_, path, why ? why : "?");
   return true;
 }
 
-void snapshot_tick(Core *c) {
-  init_once();
-  Sched &s = sched();
-  s.frame++;
+void Snapshotter::tick(Core &core) {
+  configure();
+  frame_++;
   if (g_sig_requested) {
     g_sig_requested = 0;
-    snapshot_now(c, "SIGUSR1");
+    captureNow(core, "SIGUSR1");
     return;
   }
-  if (s.every && (s.frame % s.every) == 0) {
-    snapshot_now(c, "PSXPORT_SNAP_EVERY");
+  if (every_ && (frame_ % every_) == 0) {
+    captureNow(core, "PSXPORT_SNAP_EVERY");
     return;
   }
-  for (uint64_t f : s.at) {
-    if (f == s.frame) {
-      snapshot_now(c, "PSXPORT_SNAP_AT");
+  for (uint64_t f : at_) {
+    if (f == frame_) {
+      captureNow(core, "PSXPORT_SNAP_AT");
       return;
     }
   }
 }
+
+} // namespace psx::debug

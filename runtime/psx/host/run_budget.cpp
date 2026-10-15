@@ -2,7 +2,6 @@
 
 #include "config_vars.h"
 #include "dbg_server.h"
-#include "gpu_vk.h"
 #include "typed_config.h"
 
 #include <lucent/log.h>
@@ -21,11 +20,11 @@ RunBudget RunBudget::decide(const RunBudgetInputs &inputs) {
 
 RunBudget RunBudget::fromConfig(const psx::config::Config &config) {
   RunBudgetInputs inputs;
-  inputs.explicitCap = psx::config::cv_native_frames.get();
-  inputs.padRecording = !psx::config::cv_pad_replay.get().empty() || !psx::config::cv_pad_resume.get().empty();
+  inputs.explicitCap = psx::config::native_frames();
+  inputs.padRecording = !psx::config::pad_replay_path().empty() || !psx::config::pad_resume_path().empty();
   inputs.repl = config.repl;
-  inputs.clientLive = debug_server_live();
-  inputs.windowed = gpu_vk_windowed();
+  inputs.clientLive = psx::debug::debugServerLive();
+  inputs.windowed = psx::config::windowRequested();
   const RunBudget budget = decide(inputs);
   lucent::info("run", "run budget: {} fence step(s)", budget.cap() != 0 ? std::to_string(budget.cap()) : "uncapped");
   return budget;

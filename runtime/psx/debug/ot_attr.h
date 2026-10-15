@@ -1,17 +1,15 @@
 // class OtAttr — OT/GTE SUBMISSION ATTRIBUTION tool (`debug otattr`).
 //
 // MOTIVATION (USER 2026-07-14, serves bug #45 + general render investigations): trace every guest-
-// submitted primitive (packet-pool store) and every GTE RTPS/RTPT execution back to (a) the guest
-// FUNCTION that submitted it and (b) the world-object NODE whose render-walk scope was open at the
-// time. "Which fn+node drew this dialog-panel packet / this gem quad" without hand-walking backwards
-// through addresses.
+// submitted primitive (packet-pool store) and every GTE RTPS/RTPT execution back to the guest
+// FUNCTION that submitted it.
 //
 // DIAGNOSTIC ONLY. Zero behavior change when the `otattr` debug channel is off (one interned
 // lucent::Channel test gates every method). Never writes guest memory;
-// only reads Core::mem_r* / Render::diag / InterpDiag's otattr shadow stack.
+// only reads Core::mem_r* and the call-attribution stack.
 //
 // Two independent tables, both per-Core (SBS runs two: no cross-contamination) and both keyed to the
-// CURRENT render frame (GpuState::s_frame) with a LAZY reset on first touch of a new frame — so the
+// CURRENT logic frame with a LAZY reset on first touch of a new frame — so the
 // data for the just-finished frame is still readable any time before the NEXT frame's first store/GTE
 // op, which is exactly when a REPL command run between `run N` steps executes. Sized statically;
 // overflow is COUNTED and reported rather than growing unbounded or silently dropping.
@@ -19,14 +17,14 @@
 //   1. Packet-pool store spans — every guest store landing in the title's packet pool
 //      (GameRuntime::packetPool) is attributed to {emitter fn = the
 //      OTATTR SHADOW STACK top (InterpDiag::otattrTop(), the innermost guest fn reached via an
-//      INDIRECT/jalr guest dispatch — see interp_diag.h), caller fn = one frame below that, node =
-//      Render::diag.currentNode()}. Consecutive stores with the SAME (fn, node) attribution are
+//      INDIRECT/jalr guest dispatch — see interp_diag.h), caller fn = one frame below that}.
+//      Consecutive stores with the SAME attribution are
 //      COALESCED into one growing [lo,hi) span so one quad's
 //      handful of header/vertex/color words collapse to a single entry instead of one-per-word —
 //      this is what keeps the static cap (OT_ATTR_CAP) from blowing out on a normal frame.
 //
-//   2. GTE RTPS/RTPT per-(fn,node) call counts for the frame (not per-call — aggregated), fed from
-//      gte_op's existing RTPS/RTPT branch (runtime/psx/cpu/gte_beetle.cpp, alongside rtpcaller_record).
+//   2. GTE RTPS/RTPT per-fn call counts for the frame (not per-call — aggregated), fed from
+//      Gte::execute after each RTPS/RTPT (runtime/psx/cpu/gte_beetle.cpp).
 //
 // Reached as `core->rsub.otAttr`. The REPL `otattr` command (repl.cpp) re-walks the CURRENT OT
 // read-only (no gpu_gp0 side effects) and looks up each packet's pool address in table 1, printing the
@@ -50,6 +48,7 @@
 //      `otattr trace <addr>` heuristic: a writer fn that touches many distinct pages in one frame LOOKS
 //      like a copy loop (batching many sources into one buffer), which is the census's actual scenario.
 #pragma once
+#include "guest_address_range.h"
 #include "guest_packet_pool_windows.h"
 #include "producer_census.h"
 #include <functional>
@@ -66,7 +65,7 @@ class Core;
 // takes effect on the very next store, which is the property the hand-rolled generation counter this
 // replaces existed to provide. Measured in lucent: 0.66 ns/gate against 19.4 ns for the
 // channel-name-lookup form.
-inline const lucent::Channel g_otattr_channel{"otattr"};
+inline constexpr lucent::Channel g_otattr_channel{"otattr"};
 
 // THE SECOND REASON TO TRACK SPANS: the graphics-producer DB's GUEST leg needs the same attribution the
 // `otattr` channel produces, but during ORDINARY PLAY with no debug channel on — the DB's whole premise
@@ -105,11 +104,6 @@ inline const lucent::Channel g_otattr_channel{"otattr"};
 // relaxed loads.
 inline bool g_producer_census_armed = true;
 
-// A GuestPacketOwnerScope is active only while a title intentionally super-calls a guest producer
-// whose delayed OT packets may later be replaced by native output.  This retains packet-pool spans
-// even when the diagnostic census is disabled; the per-Core owner itself lives in GuestPacketFilter.
-inline thread_local int g_guest_packet_owner_scope_depth = 0;
-
 class OtAttr {
 public:
   // The `otattr watch` / `otattr who` last-writer sub-commands, one implementation for every control
@@ -118,7 +112,7 @@ public:
   bool runLastWriterCommand(std::string_view line, const std::function<void(std::string_view)> &emit);
   // A single terrain-heavy field frame can produce well over 4096 attribution-distinct spans (terrain
   // tiles interleave E1/E2 texpage-state words between quads, which breaks the lo/hi coalescing even
-  // when the fn/node attribution is identical) — sized generously since this is diagnostic-only memory,
+  // when the fn attribution is identical) — sized generously since this is diagnostic-only memory,
   // live only while the `otattr` channel is enabled.
   static constexpr int SPAN_CAP = 65536;
   static constexpr int GTE_CAP = 512;
@@ -133,33 +127,27 @@ public:
   // census row a store belongs to when its emitter `fn` is a helper the producer calls.
   struct Span {
     uint32_t lo, hi;
-    uint32_t fn, caller, node, pc, claimed, guestProducer;
+    uint32_t fn, caller, pc, claimed;
   };
 
   // Call-chain frames searched for a producer, innermost first.
   static constexpr int CLAIM_SEARCH_DEPTH = 8;
   struct GteBucket {
-    uint32_t fn, node, count;
+    uint32_t fn, count;
   };
 
-  // Called from Core::mem_w8/16/32 (mem.cpp) for EVERY guest store — no-op unless the `otattr` channel
-  // is enabled (checked internally — a hot-path early-out) and the address falls in
-  // the packet-pool range.
-  // Called on EVERY guest store (Core::mem_w* -> pkt_track). The armed test is inline so the common
-  // case is a load and a compare with no call at all — it was three nested out-of-line calls
-  // (trackStore -> cfg_dbg_generation -> bootstrap_once) to conclude it had nothing to do, measuring
-  // 2.54% of total CPU on its own. lucent::Channel is that same generation-stamped cache, done once
-  // in the logging library instead of hand-rolled here against a counter cfg.cpp had to export.
-  void trackStoreSlow(Core *c, uint32_t addr, uint32_t bytes);
-  inline void trackStore(Core *c, uint32_t addr, uint32_t bytes) {
+  // Called from Core::mem_w8/16/32 (mem.cpp) for EVERY guest store; the armed test is inline so the
+  // common case is a load and a compare with no call.
+  void trackStoreSlow(Core *c, GuestSpan store);
+  inline void trackStore(Core *c, GuestSpan store) {
     // Steady state with both off: two relaxed loads and two compares, still no call.
-    if (!g_otattr_channel && !g_producer_census_armed && !g_guest_packet_owner_scope_depth) {
+    if (!g_otattr_channel && !g_producer_census_armed) {
       return;
     }
-    trackStoreSlow(c, addr, bytes);
+    trackStoreSlow(c, store);
   }
 
-  // Called from gte_op's RTPS/RTPT branch (gte_beetle.cpp) — aggregates a call count per (fn, node).
+  // Called from Gte::execute after RTPS/RTPT — aggregates a call count per fn.
   void trackGte(Core *c);
 
   // REPL/diagnostic readback — NOT hot path, may scan linearly.
@@ -219,9 +207,9 @@ public:
     bool pageOverflow = false;
   };
 
-  // Register a watched region [addr, addr+len). Returns the slot index, or -1 if all WATCH_SLOTS are
-  // used or the WATCH_CAP_WORDS word budget is exhausted (both counted so `otattr watch` can report why).
-  int watchRegister(uint32_t addr, uint32_t len);
+  // Register a watched region. Returns the slot index, or -1 if all WATCH_SLOTS are used or the
+  // WATCH_CAP_WORDS word budget is exhausted (both counted so `otattr watch` can report why).
+  int watchRegister(GuestSpan region);
   int watchSlotCount() const {
     return mWatchCount;
   }
@@ -247,15 +235,7 @@ public:
     return &mFnStat[i];
   }
 
-  // Bound the span table's lifetime to ONE LOGIC FRAME, driven by the frame loop.
-  //
-  // WHY THIS IS PUBLIC AND CALLED FROM OUTSIDE. The table used to be reset off `gpu.s_frame`, which
-  // counts PRESENTS, not logic frames. Measured on the gte render path: 60 logic frames advanced
-  // s_frame to 3, so the reset almost never fired, the table saturated at SPAN_CAP and then reported
-  // 140,153 overflows — and worse, every lookup after that matched a STALE early-boot span whose
-  // emitter fn was 0, which is why the guest leg reported 16,384 prims as span-no-fn and attributed
-  // NONE. A span table is only meaningful for the frame whose packets it describes, so the frame loop
-  // says when a frame begins and this is the one clock that matters.
+  // The frame loop declares each logic frame; spans only describe the frame whose packets they hold.
   void beginLogicFrame(uint32_t frame) {
     resetIfNewFrame(frame);
     mPoolStale = true;
@@ -278,25 +258,7 @@ public:
   // happened" or "the clock was never set".
   static constexpr uint32_t NO_FRAME = 0xFFFFFFFFu;
 
-  // THE ONE CLOCK EVERYTHING HERE STAMPS WITH — and the reason this class no longer touches `Game`.
-  //
-  // ROOT CAUSE IT REPLACES (fixed 2026-08-12): trackStoreSlow and trackGte read `c->game->gpu.s_frame`.
-  // That was wrong twice over. (1) It made a CORE PRIMITIVE hard-require the whole machine: `Core::game`
-  // is nullptr until `Game`'s constructor sets it, `g_producer_census_armed` is default TRUE, so
-  // `Core::mem_w32` on a Core-alone embedder reached this path and null-dereferenced — a plain guest
-  // store crashing with no game bound. Measured victim: `psxport_smoke` (rc=139, zero output).
-  // `tests/test_overlay_reloc.cpp` is a bare-Core embedder too but writes no memory at all, so it was
-  // latently exposed rather than actually broken. (2) `gpu.s_frame`
-  // counts PRESENTS while `mFrame` (driven by beginLogicFrame) counts LOGIC FRAMES, so ONE function
-  // stamped its span table off one clock and its watch + per-fn tables off another. The measured
-  // saturation that made beginLogicFrame exist in the first place (60 logic frames advanced s_frame to
-  // 3, so the reset almost never fired) applied verbatim to those other two tables.
-  //
-  // A Core that no frame loop drives has a genuinely undefined frame, and that case is WARNED AT
-  // RUN END rather than quietly stamped. Warning here would falsely accuse normal boot stores before
-  // a healthy game loop has had a chance to start. An unstamped table must not be mistakable for a stamped one. It
-  // returns 0 (not NO_FRAME) because NO_FRAME is also WordRec's "never written" — stamping a real write with it would
-  // make a recorded store indistinguishable from an untouched word.
+  // The logic frame every table stamps with, or 0 before the frame loop declared one (warned at run end).
   uint32_t stampFrame();
 
   // The first frame of the store's call chain that a registered producer owns, or 0.
@@ -311,8 +273,14 @@ private:
   bool mWarnedNoPool = false;
 
   void resetIfNewFrame(uint32_t frame);
-  void trackWatch(uint32_t fn, uint32_t caller, uint32_t phys, uint32_t bytes, uint32_t frame);
-  void recordFnStat(uint32_t frame, uint32_t fn, uint32_t phys);
+  // Who made a store: the attributed function, its caller and the frame stamp.
+  struct StoreOrigin {
+    uint32_t fn;
+    uint32_t caller;
+    uint32_t frame;
+  };
+  void trackWatch(StoreOrigin origin, GuestSpan physical);
+  void recordFnStat(StoreOrigin origin, uint32_t phys);
 
   uint32_t mFrame = NO_FRAME;
   uint64_t mPreFrameStamps = 0;

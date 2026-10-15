@@ -1,11 +1,11 @@
 ---
 id: 22
 title: Static VRAM-backdrop policy leaks texture rows beneath native frames
-status: investigating
+status: resolved
 symptom: Spyro 1 widescreen title frame shows multicolour corrupt bands above and below otherwise correct native geometry
 tags: runtime,renderer,gameconfig,inheritance,spyro,vram,widescreen
 created: 2026-08-22
-updated: 2026-08-24
+updated: 2026-10-15
 ---
 
 ## Root cause
@@ -21,3 +21,7 @@ The persistent host composite also owns a per-`Game` latch recording the policy 
 ## Verification
 
 Framework unit coverage must prove per-`Game` answers, both composite-ownership transitions, instance isolation, legacy projection, and the absence of renderer reads of `preserveVramBackdrop`. The issue remains open until Spyro supplies fresh same-build guest-logo and native-widescreen captures and they are visually inspected.
+
+## Resolution
+
+Gone with the native renderer in (c) stage 2: there is no VRAM backdrop, `GameConfig` or `guestVramIsPicture`; Spyro 1 presents the device record.

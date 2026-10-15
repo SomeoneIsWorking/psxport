@@ -3,11 +3,11 @@ namespace psx::frame {
 #pragma once
 // pacePlan — the FRAME-PACING DECISION, as a pure function of its inputs.
 //
-// WHY THIS IS A SEPARATE HEADER AND NOT JUST A BLOCK IN gpu_native.cpp. Two USER-flagged defects
+// WHY THIS IS A SEPARATE HEADER AND NOT JUST A BLOCK IN THE PRESENTER. Two USER-flagged defects
 // lived in that block, and both of them were invisible because the decision was tangled with a
 // clock, a sleep and a window query:
 //
-//   1. `if (!gpu_has_window() || cfg_on("PSXPORT_NOPACE")) return;`
+//   1. `if (!gpu_has_window() || PSXPORT_NOPACE) return;`
 //      Headless was NEVER paced. Every headless timing number therefore described a program the
 //      user never runs — and headless is where essentially every measurement in this project is
 //      taken. `PSXPORT_NOPACE` was ALREADY the independent switch for "run unpaced", so the
@@ -38,9 +38,8 @@ struct PaceInputs {
   // PSXPORT_NOPACE — the ONE switch that means "run as fast as the host can". It is the only thing
   // that may suppress pacing, in either leg.
   bool unpaced = false;
-  // GameConfig::paceQuota — how many DISPLAY FIELDS one pacing call represents. < 1 means the port
-  // has not declared its cadence; that is a configuration defect, reported via quotaUnset rather
-  // than guessed at silently.
+  // How many DISPLAY FIELDS one pacing call represents, from the title's frame driver. < 1 means the
+  // driver passed no cadence; that is a defect, reported via quotaUnset rather than guessed at.
   int quota = 0;
   // Sub-frames per pacing call: 1 = pace a whole logic frame, 2 = half (fps60 presents twice per
   // logic frame). < 1 is clamped to 1.

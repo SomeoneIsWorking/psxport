@@ -43,7 +43,7 @@ struct BeetleStateMem {
 
 // Which devices of the vendored fork this bridge can reach. The GPU is absent: GpuDevice owns its own
 // state stream, written by the GPU section (device_gpu.cpp).
-enum class BeetleDevice : unsigned { Spu = 0, Mdec = 1 };
+enum class BeetleDevice : std::uint8_t { Spu = 0, Mdec = 1 };
 inline constexpr std::size_t kBeetleDeviceCount = 2;
 
 // Run Beetle's save then its load for one device, and report whether the state survived. This is the

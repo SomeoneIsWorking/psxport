@@ -10,15 +10,12 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 constexpr uint32_t kRam = 0x80110000u;
 constexpr std::size_t kMapped = static_cast<std::size_t>(psx::cpu::ExecutableWriteSource::MappedStore);
 constexpr std::size_t kDma = static_cast<std::size_t>(psx::cpu::ExecutableWriteSource::Dma);
 
-} // namespace
-
-static void test_a_guest_store_is_counted_against_mapped_store() {
+void test_a_guest_store_is_counted_against_mapped_store() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   const auto before = game->core.lightrecExecutor().counters();
   game->core.mem_w32(kRam, 1u);
@@ -28,7 +25,8 @@ static void test_a_guest_store_is_counted_against_mapped_store() {
   CHECK_EQ(after.invalidationsBySource[kDma], before.invalidationsBySource[kDma]);
 }
 
-static void test_a_labelled_store_is_counted_against_its_source() {
+void test_a_labelled_store_is_counted_against_its_source() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   const auto before = game->core.lightrecExecutor().counters();
   game->core.mem_w32(kRam, 1u, psx::cpu::ExecutableWriteSource::Cpu);
@@ -38,7 +36,8 @@ static void test_a_labelled_store_is_counted_against_its_source() {
   CHECK_EQ(after.invalidationsBySource[kMapped], before.invalidationsBySource[kMapped]);
 }
 
-static void test_an_unnotified_burst_costs_one_dma_invalidation() {
+void test_an_unnotified_burst_costs_one_dma_invalidation() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   const auto before = game->core.lightrecExecutor().counters();
   for (uint32_t i = 0; i < 64; i++) {
@@ -52,9 +51,11 @@ static void test_an_unnotified_burst_costs_one_dma_invalidation() {
   CHECK_EQ(game->core.mem_r32(kRam + 63u * 4u), 0xA5A50000u + 63u);
 }
 
+} // namespace
+
 int main() {
   RUN(a_guest_store_is_counted_against_mapped_store);
   RUN(a_labelled_store_is_counted_against_its_source);
   RUN(an_unnotified_burst_costs_one_dma_invalidation);
-  return pt_summary();
+  return psx::test::summary();
 }

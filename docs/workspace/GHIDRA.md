@@ -19,6 +19,9 @@ uv run --frozen python external/psxport/tools/decomp_pipeline.py \
     --out scratch/decomp/spyro1
 ```
 
+Ghidra and its PyGhidra environment come from `uv run --frozen python tools/decomp/install.py`
+(official release, SHA-256 checked; needs a JDK 21+ on PATH). CI runs the same command.
+
 `--list-titles` prints every image with its kind, base, window and SHA-1. **Point the other agents
 at this.** Per-title geometry is a JSON edit in `tools/decomp/manifest.json`, not code.
 

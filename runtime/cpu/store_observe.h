@@ -39,6 +39,8 @@
 
 class Core;
 
+namespace psx::cpu {
+
 // Arm the store observer on this Core from configuration, and log what it sees. Idempotent, and safe
 // to call from a product's setup: it is the whole product surface.
 //
@@ -60,7 +62,7 @@ class Core;
 // instruction out of the listing.
 //
 // Armed by `psx::host::TitleSession::boot` beside `DbgServer::start`, on every product's boot.
-void store_observe_configure(Core &core);
+void configureStoreObserver(Core &core);
 
 // Log what the observer saw, with the executor's own counters beside it. `StoreObservation` does not
 // carry the address that was written, so this per-target table is how several watched words are told
@@ -69,9 +71,11 @@ void store_observe_configure(Core &core);
 // evidence of anything. Takes the report rather than the Core: `~LightrecExecutor` emits it, and asking
 // the Core for its executor from inside that destructor returned a torn-down object (SIGSEGV in Spyro's
 // recipe tests, 2026-10-01).
-void store_observe_report(const psx::cpu::StoreObserverReport &report);
+void reportStoreObserver(const psx::cpu::StoreObserverReport &report);
 
 // A title-owned spine calls THIS once instead of remembering the pair, because forgetting the report is
 // how a run ends with the observer armed and nothing said about what it saw — the same silence the
 // configuration path is trusted not to have.
-void store_observe_attach(Core &core);
+void attachStoreObserver(Core &core);
+
+} // namespace psx::cpu

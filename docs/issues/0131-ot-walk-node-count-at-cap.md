@@ -1,7 +1,7 @@
 # 0131 — the pool diagnostic's OT node count is one MORE than the walk read, when the walk was cut short
 
-**State:** recorded, deliberately NOT fixed. The readability refactor that named the walk
-(`runtime/psx/gpu/ordering_table.cpp`, 2026-09-28) reproduced the arithmetic rather than correcting it,
+**State:** resolved 2026-10-15: the `pool` channel that printed this count was deleted with `gpu_native.cpp` in (c) stage 2. Recorded, deliberately not fixed at the time. The readability refactor that named the walk
+(`runtime/psx/present/ordering_table.cpp`, 2026-09-28) reproduced the arithmetic rather than correcting it,
 because a diagnostic that changes its own numbers during a refactor has an unreadable history.
 
 ## What it says
@@ -49,7 +49,7 @@ It is left in place because:
 
 - `runtime/psx/gpu/gpu_native.cpp` — the `pool` channel block in `GpuState::gpu_dma2_linked_list`, whose
   comment names this issue.
-- `runtime/psx/gpu/ordering_table.h` — `nodesEntered()`.
+- `runtime/psx/present/ordering_table.h` — `nodesEntered()`.
 - `tests/test_ordering_table.cpp` — `node_count_is_the_number_entered`, which asserts the CURSOR's count
   is the number entered. It does not assert the pool line's figure, because the pool line's figure is
   the thing under question.

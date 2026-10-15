@@ -166,8 +166,8 @@ class NativeReplSession:
         self._expect("[repl] ok")
 
     def capture(self, destination: Path) -> None:
-        """The REPL's `shot`, which routes through gpu_native_shot and so follows whichever render
-        path is active and the wide presentation region when widescreen is on. A shot the product
+        """The REPL's `shot`: the presented picture, including the wide presentation region when
+        widescreen is on. A shot the product
         reported but did not write is refused here rather than compared as an old file.
 
         The reply carries `guest_scan=<rows>`: how many of the captured rows a console would scan

@@ -50,7 +50,7 @@ std::string describePhase(std::uint64_t phase);
 // what the card holds (Spyro asks to create a save file only when it finds none), so a replay against
 // a different card is a replay of a different route even when every frame lands where it did.
 struct CardIdentity {
-  enum class Kind : std::uint32_t { Unknown = 0, Absent = 1, Image = 2 };
+  enum class Kind : std::uint8_t { Unknown = 0, Absent = 1, Image = 2 };
   Kind kind = Kind::Unknown;
   std::array<std::uint8_t, 32> sha256{};
 
@@ -67,6 +67,12 @@ struct CardSnapshot {
 struct PadRun {
   std::uint16_t mask = kNeutralMask;
   std::uint32_t frames = 0;
+};
+
+// One serviced pad frame: the phase the game was in and the active-low mask it received.
+struct PadFrame {
+  std::uint64_t phase = kUnkeyedPhase;
+  std::uint16_t mask = kNeutralMask;
 };
 
 // Every frame recorded while the game stayed in one phase, as run-length masks from phase entry.
@@ -96,8 +102,8 @@ public:
 
   explicit PadRecording(CardIdentity card = {});
 
-  // One pad frame. A phase different from the previous frame's opens a new segment.
-  void append(std::uint64_t phase, std::uint16_t mask);
+  // A phase different from the previous frame's opens a new segment.
+  void append(PadFrame frame);
 
   const CardIdentity &card() const {
     return card_;
@@ -120,7 +126,7 @@ public:
   // Record encoders, shared with the streaming writer so there is one spelling of each record.
   static void putHeader(std::vector<std::uint8_t> &out, const CardIdentity &card);
   static void putPhase(std::vector<std::uint8_t> &out, std::uint64_t phase);
-  static void putRun(std::vector<std::uint8_t> &out, std::uint16_t mask, std::uint32_t frames);
+  static void putRun(std::vector<std::uint8_t> &out, PadRun run);
 
 private:
   CardIdentity card_;
@@ -149,7 +155,7 @@ public:
   PadRecordingWriter &operator=(PadRecordingWriter &&) = delete;
 
   // False once a write has failed; the failure is logged once and later frames are not written.
-  bool append(std::uint64_t phase, std::uint16_t mask);
+  bool append(PadFrame frame);
 
 private:
   PadRecordingWriter() = default;

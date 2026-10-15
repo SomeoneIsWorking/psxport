@@ -11,9 +11,11 @@
 #include <string>
 #include <vector>
 
+namespace {
+
 using psx::cpu::ExecutorCounters;
 
-static ExecutorCounters distinctCounters() {
+ExecutorCounters distinctCounters() {
   ExecutorCounters k;
   k.calls = 101;
   k.translatedBlocks = 103;
@@ -52,7 +54,7 @@ static ExecutorCounters distinctCounters() {
   return k;
 }
 
-static std::string joined(const ExecutorCounters &k) {
+std::string joined(const ExecutorCounters &k) {
   std::string text;
   for (const std::string &line : psx::cpu::ledgerLines(k)) {
     text += line + "\n";
@@ -61,8 +63,13 @@ static std::string joined(const ExecutorCounters &k) {
 }
 
 // "key=value" followed by a space or end of line, so `calls=1` cannot match inside `refused_calls=1`.
-static bool has(const std::string &text, const std::string &key, unsigned long long value) {
-  const std::string needle = " " + key + "=" + std::to_string(value);
+struct Field {
+  std::string key;
+  unsigned long long value = 0;
+};
+
+bool has(const std::string &text, const Field &field) {
+  const std::string needle = " " + field.key + "=" + std::to_string(field.value);
   for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1)) {
     const size_t end = at + needle.size();
     if (end == text.size() || text[end] == ' ' || text[end] == '\n') {
@@ -72,7 +79,7 @@ static bool has(const std::string &text, const std::string &key, unsigned long l
   return false;
 }
 
-static void test_every_counter_is_named_with_its_own_value(void) {
+void test_every_counter_is_named_with_its_own_value(void) {
   const std::string text = joined(distinctCounters());
   const std::vector<std::pair<std::string, unsigned long long>> expected{
       {"calls", 101},
@@ -115,31 +122,31 @@ static void test_every_counter_is_named_with_its_own_value(void) {
       {"refused_unsafe_instruction_fetch", 277},
   };
   for (const auto &[key, value] : expected) {
-    if (!has(text, key, value)) {
+    if (!has(text, {key, value})) {
       PT_FAILED("ledger does not report %s=%llu:\n%s", key.c_str(), value, text.c_str());
     }
   }
-  CHECK(has(text, "calls", 101));
-  CHECK(has(text, "calls", 211)); // the fallback line's own `calls`, distinct from the executor's
+  CHECK(has(text, {"calls", 101}));
+  CHECK(has(text, {"calls", 211})); // the fallback line's own `calls`, distinct from the executor's
 }
 
-static void test_a_zero_counter_is_printed_not_omitted(void) {
+void test_a_zero_counter_is_printed_not_omitted(void) {
   const std::string text = joined(ExecutorCounters{});
-  CHECK(has(text, "load_delay_hazard", 0));
-  CHECK(has(text, "refused_load_delay_hazard", 0));
-  CHECK(has(text, "translated_blocks", 0));
-  CHECK(has(text, "native", 0));
+  CHECK(has(text, {"load_delay_hazard", 0}));
+  CHECK(has(text, {"refused_load_delay_hazard", 0}));
+  CHECK(has(text, {"translated_blocks", 0}));
+  CHECK(has(text, {"native", 0}));
 }
 
-static void test_the_checker_itself_rejects_a_transposed_value(void) {
+void test_the_checker_itself_rejects_a_transposed_value(void) {
   // Prove `has` can say no: a value under the wrong name must not match.
   const std::string text = joined(distinctCounters());
-  CHECK(!has(text, "load_delay_hazard", 271)); // that is refused_load_delay_hazard's value
-  CHECK(!has(text, "refused_load_delay_hazard", 241));
-  CHECK(!has(text, "calls", 227)); // `refused_calls` must not satisfy `calls`
+  CHECK(!has(text, {"load_delay_hazard", 271})); // that is refused_load_delay_hazard's value
+  CHECK(!has(text, {"refused_load_delay_hazard", 241}));
+  CHECK(!has(text, {"calls", 227})); // `refused_calls` must not satisfy `calls`
 }
 
-static void test_lines_are_five_named_groups(void) {
+void test_lines_are_five_named_groups(void) {
   const std::vector<std::string> lines = psx::cpu::ledgerLines(distinctCounters());
   CHECK_EQ(lines.size(), (size_t)5);
   CHECK(lines[0].rfind("guest:", 0) == 0);
@@ -149,10 +156,12 @@ static void test_lines_are_five_named_groups(void) {
   CHECK(lines[4].rfind("fallback:", 0) == 0);
 }
 
+} // namespace
+
 int main(void) {
   RUN(every_counter_is_named_with_its_own_value);
   RUN(a_zero_counter_is_printed_not_omitted);
   RUN(the_checker_itself_rejects_a_transposed_value);
   RUN(lines_are_five_named_groups);
-  return pt_summary();
+  return psx::test::summary();
 }

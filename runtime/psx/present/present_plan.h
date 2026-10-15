@@ -16,7 +16,7 @@
 //
 // THE INVARIANT THIS HEADER EXISTS TO PIN, asserted in tests/test_present_plan.cpp:
 //
-//     For identical inputs, plan_present(in, headless) and plan_present(in, windowed) differ in
+//     For identical inputs, planPresent(in, headless) and planPresent(in, windowed) differ in
 //     EXACTLY ONE field: `to_swapchain`.
 //
 // `to_swapchain` is the final sink and the only place a leg difference is legitimate. Everything that
@@ -26,13 +26,15 @@
 // Pure: no SDL, no GPU, no Game, no globals. The renderer consumes the plan; it does not re-decide.
 #pragma once
 
+#include <cstdint>
+
 #include "viewport_layout.h"
 #include <algorithm>
 
 // The PSX display height the present aspect is measured against. It is a constant of the DISPLAY,
 // not of the framebuffer: `disp_w` widens with widescreen while this does not, which is exactly what
 // makes a wide frame present as 512:240 instead of a squeezed 4:3.
-enum { PRESENT_DISPLAY_ASPECT_H = 240 };
+enum : std::uint8_t { PRESENT_DISPLAY_ASPECT_H = 240 };
 
 // Everything outside the renderer's own state that the presented picture depends on. All of it is
 // leg-independent by construction: there is no `headless` field here, because none of these values
@@ -50,7 +52,7 @@ struct PresentInputs {
   // APPENDED, NOT INSERTED: this struct is positionally aggregate-initialised by its callers and
   // tests, so a field added anywhere but the end silently shifts every later one. Width of
   // GUEST-AUTHORED content inside `disp_w`; 0 = the renderer filled `disp_w` and there is nothing
-  // narrower to honour. See plan_present.
+  // narrower to honour. See planPresent.
   int content_w = 0;
 };
 
@@ -72,19 +74,21 @@ struct PresentPlan {
   int src_ires;       // 0 = sample the native target, >1 = sample the ires target
 };
 
+namespace psx::present {
+
 // Presentation extent is a property of the configured framebuffer, not of whichever primitives
 // happened to be submitted during one field. Sampling a per-frame 3D census makes a persistent 3D
 // composition jump to 4:3 whenever it pauses or only updates VRAM. Native RGBA images such as the
 // license screen and FMVs use their explicit 4:3 image presenter; title-authored 4:3 compositions
 // centre and clip their content inside this wider canvas.
-inline int present_display_width(bool widePresentation, int wideWidth, int nativeWidth) {
+inline int presentDisplayWidth(bool widePresentation, int wideWidth, int nativeWidth) {
   if (!widePresentation || wideWidth <= nativeWidth) {
     return nativeWidth;
   }
   return wideWidth;
 }
 
-inline bool present_plan_same_picture(const PresentPlan &a, const PresentPlan &b) {
+inline bool samePicture(const PresentPlan &a, const PresentPlan &b) {
   if (a.build != b.build || a.src_ires != b.src_ires) {
     return false;
   }
@@ -103,20 +107,26 @@ inline bool present_plan_same_picture(const PresentPlan &a, const PresentPlan &b
   return true;
 }
 
+struct Rgb8 {
+  int red = 0;
+  int green = 0;
+  int blue = 0;
+};
+
 // PresentPlan::fade on one 8-bit colour, as present.frag applies it.
-inline void present_fade_rgb(const int fade[4], int &r, int &g, int &b) {
+inline Rgb8 fadeRgb(const int fade[4], Rgb8 colour) {
   if (fade[0] == 1) {
-    r = std::min(r + fade[1], 255);
-    g = std::min(g + fade[2], 255);
-    b = std::min(b + fade[3], 255);
-  } else if (fade[0] == 2) {
-    r = std::max(r - fade[1], 0);
-    g = std::max(g - fade[2], 0);
-    b = std::max(b - fade[3], 0);
+    return {std::min(colour.red + fade[1], 255),
+            std::min(colour.green + fade[2], 255),
+            std::min(colour.blue + fade[3], 255)};
   }
+  if (fade[0] == 2) {
+    return {std::max(colour.red - fade[1], 0), std::max(colour.green - fade[2], 0), std::max(colour.blue - fade[3], 0)};
+  }
+  return colour;
 }
 
-inline PresentPlan plan_present(const PresentInputs &in, bool headless) {
+inline PresentPlan planPresent(const PresentInputs &in, bool headless) {
   PresentPlan p{};
   // No sink means nothing to compose INTO — a minimised window, or a headless sink configured to
   // zero. This is the one case that builds nothing, and it is leg-independent: it is a statement
@@ -163,9 +173,9 @@ inline PresentPlan plan_present(const PresentInputs &in, bool headless) {
   // widened the frame for the widescreen mod.
   //
   // So the aspect is 4:3 scaled by how much wider than ITS OWN NATIVE WIDTH the framebuffer is:
-  //     aspect = (4 / 3) * (disp_w / native_w)   ->   pane_letterbox(4*disp_w, 3*native_w, ...)
+  //     aspect = (4 / 3) * (disp_w / native_w)   ->   psx::present::letterbox(4*disp_w, 3*native_w, ...)
   //
-  // The previous rule was pane_letterbox(disp_w, 240, ...), and disp_w/240 == (4/3)*(disp_w/320) —
+  // The previous rule was psx::present::letterbox(disp_w, 240, ...), and disp_w/240 == (4/3)*(disp_w/320) —
   // i.e. it HARDCODED 320 as every game's native 4:3 width. For a 320-wide game that constant IS
   // the native width, so Tomba2 was correct in both its modes (320:240 = 4:3, 428:240 = 16:9) and
   // the bug was invisible on the reference consumer. A 512-wide game (spider1, spyro) had its
@@ -179,6 +189,8 @@ inline PresentPlan plan_present(const PresentInputs &in, bool headless) {
   // native_w <= 0 means "the game has not told us its native width". Degrade to 4:3 — every PSX
   // display mode is 4:3, so that is the only safe assumption, and it can never divide by zero.
   const int aspect_h = in.native_w > 0 ? in.native_w : aspect_w;
-  p.viewport = pane_letterbox(4 * aspect_w, 3 * aspect_h, in.sink_w, in.sink_h);
+  p.viewport = psx::present::letterbox(4 * aspect_w, 3 * aspect_h, in.sink_w, in.sink_h);
   return p;
 }
+
+} // namespace psx::present

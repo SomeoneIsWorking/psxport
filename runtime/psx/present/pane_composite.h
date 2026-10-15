@@ -85,7 +85,7 @@ using PaneOverlayPass = std::function<void(SDL_GPUCommandBuffer *cmd, SDL_GPURen
 class PaneCompositor {
 public:
   // The device is the process's (psxport::HostPresentation); it must already be brought up
-  // (`gpu_vk_ensure_device`) before the first composite, and it outlives this object. `hostCore` is
+  // (`psx::gpu::ensureDevice`) before the first composite, and it outlives this object. `hostCore` is
   // the host's OWN session — the one whose pad and overlay the window's events feed, and the only
   // Game in the process that is not a pane. Null when the host has no session of its own, which
   // leaves the event pump to the sessions.

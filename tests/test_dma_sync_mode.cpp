@@ -14,8 +14,6 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 constexpr uint32_t kDma3Madr = 0x1F8010B0;
 constexpr uint32_t kDma3Bcr = 0x1F8010B4;
 constexpr uint32_t kDma3Chcr = 0x1F8010B8;
@@ -63,6 +61,7 @@ void program(Core &core, uint32_t madr, uint32_t bcr) {
 // handler read the BCR as a block count it would move that many words to the HEAD address and leave the
 // chain nodes untouched, which is exactly the bug.
 static void test_a_chained_transfer_walks_the_nodes() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
@@ -89,6 +88,7 @@ static void test_a_chained_transfer_walks_the_nodes() {
 // MODE 1 IS UNCHANGED. A regression here would break every libcd title, because Sony's libcd fetches
 // every sector with a block-mode DMA3 and MMX4's working STR playback is exactly that.
 static void test_a_block_transfer_still_uses_the_block_count() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
@@ -105,6 +105,7 @@ static void test_a_block_transfer_still_uses_the_block_count() {
 // A SELF-LINK is the cheapest cycle a guest can write into its own RAM. It must not hang the host, and
 // the words already counted must still complete so the guest is not left polling a busy channel forever.
 static void test_a_self_linked_chain_terminates_and_completes() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
@@ -118,6 +119,7 @@ static void test_a_self_linked_chain_terminates_and_completes() {
 // A COUNT over the ceiling is refused with a stated bound rather than trusted, because the chain is guest
 // RAM and `count` is 24 bits of whatever the guest had there.
 static void test_an_oversized_count_stops_at_the_ceiling() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
@@ -147,6 +149,7 @@ static void test_an_oversized_count_stops_at_the_ceiling() {
 // A CHAIN ENDED BY DESIGN transfers nothing and still completes, so a guest that arms an empty chain
 // does not wedge.
 static void test_an_empty_chain_completes() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
@@ -159,6 +162,7 @@ static void test_an_empty_chain_completes() {
 // A BLOCK SIZE ENDING IN BINARY 10 IS STILL A BLOCK. The last sector of a Tekken 3 file reads 98 words
 // (BCR 0x00010062); BCR bits 0-1 are size bits, not a sync mode.
 static void test_a_block_size_ending_in_binary_10_is_not_a_chain() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   Core &core = game->core;
   build_two_node_chain(core);
@@ -181,5 +185,5 @@ int main() {
   RUN(a_self_linked_chain_terminates_and_completes);
   RUN(an_oversized_count_stops_at_the_ceiling);
   RUN(an_empty_chain_completes);
-  return pt_summary();
+  return psx::test::summary();
 }

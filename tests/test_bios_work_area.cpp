@@ -14,8 +14,6 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 constexpr uint32_t kGetC0Table = 0x56u;
 constexpr uint32_t kC0Table = 0x8000F800u;
 constexpr uint32_t kExceptionHandlerSlot = 6u;
@@ -27,6 +25,7 @@ uint32_t slot_address(uint32_t slot) {
 }
 
 void test_get_c0_table_publishes_exception_handler_entry_only() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
 
   CHECK(game->hle.dispatchBios('B', kGetC0Table));
@@ -39,6 +38,7 @@ void test_get_c0_table_publishes_exception_handler_entry_only() {
 }
 
 void test_c0_table_and_exception_target_remain_guest_writable() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   constexpr uint32_t kGuestTableReplacement = 0x80123450u;
   constexpr uint32_t kGuestHandlerWord = 0x241A0100u;
@@ -60,5 +60,5 @@ void test_c0_table_and_exception_target_remain_guest_writable() {
 int main() {
   RUN(get_c0_table_publishes_exception_handler_entry_only);
   RUN(c0_table_and_exception_target_remain_guest_writable);
-  return pt_summary();
+  return psx::test::summary();
 }

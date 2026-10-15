@@ -176,7 +176,7 @@ class FrameRecord {
 public:
   // Records beyond these are dropped and the record is marked incomplete.
   static constexpr std::size_t kMaxEntries = 262144;
-  static constexpr std::size_t kMaxPoolHalfwords = 8u * 1024u * 1024u;
+  static constexpr std::size_t kMaxPoolHalfwords = std::size_t{8} * 1024u * 1024u;
 
   FrameRecord() = default;
   explicit FrameRecord(std::uint64_t sequence, bool complete) : sequence_(sequence), complete_(complete) {}

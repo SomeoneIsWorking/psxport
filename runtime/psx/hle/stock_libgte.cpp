@@ -8,8 +8,6 @@
 namespace psx::hle {
 namespace {
 
-enum Register : int { A0 = 4, A1 = 5 };
-
 void setGeomOffsetEntry(Core *core) {
   StockLibgte::setGeomOffset(*core);
 }
@@ -26,15 +24,15 @@ void StockLibgte::bind(Game &game) const {
 }
 
 void StockLibgte::setGeomOffset(Core &core) {
-  const auto x = static_cast<std::int32_t>(core.r[A0]);
-  const auto y = static_cast<std::int32_t>(core.r[A1]);
-  core.r[A0] = static_cast<std::uint32_t>(x) << 16;
-  core.r[A1] = static_cast<std::uint32_t>(y) << 16;
-  libgte_set_geom_offset(&core, x, y);
+  const auto x = static_cast<std::int32_t>(core.r[psx::cpu::kA0]);
+  const auto y = static_cast<std::int32_t>(core.r[psx::cpu::kA1]);
+  core.r[psx::cpu::kA0] = static_cast<std::uint32_t>(x) << 16;
+  core.r[psx::cpu::kA1] = static_cast<std::uint32_t>(y) << 16;
+  psx::gte::setGeomOffset(core, x, y);
 }
 
 void StockLibgte::setGeomScreen(Core &core) {
-  libgte_set_geom_screen(&core, static_cast<std::int32_t>(core.r[A0]));
+  psx::gte::setGeomScreen(core, static_cast<std::int32_t>(core.r[psx::cpu::kA0]));
 }
 
 } // namespace psx::hle

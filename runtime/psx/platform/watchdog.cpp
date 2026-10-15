@@ -8,9 +8,8 @@
 //
 // Build note: backtrace symbol names need -rdynamic at link time (run.sh adds it). Without it
 // you still get addresses — resolve with `addr2line -e scratch/bin/tomba2_port <addr>`.
-#include "c_subsys.h"    // C linkage for watchdog_init/pet/suspend/disable (callers are C++ and vendored C)
-#include "cfg.h"         // cfg_str — the CONFIG half of cfg.h; the logging half is retired
-#include "config_vars.h" // cv_watchdog / cv_watchdog_boot — migrated onto the layered CVar system
+#include "watchdog.h"
+#include "config_vars.h" // watchdog_seconds / watchdog_boot_seconds
 #include "host_backtrace.h"
 #include <lucent/log.h>
 #include <signal.h>
@@ -26,7 +25,9 @@
 // SANCTIONED SIGNAL-HANDLER EXCEPTION: signal handlers receive no context, so the watchdog's
 // state must be reachable from file scope. All of it lives in this ONE static struct; the
 // sig_atomic_t fields are the only ones a handler reads.
-static struct {
+namespace {
+
+struct {
   int secs;      // 0 => disabled
   int boot_secs; // generous grace until the main presenter completes cold initialization
   volatile sig_atomic_t armed;
@@ -39,17 +40,17 @@ static struct {
 // report. (Core::pc holds the per-core guest fn, but a signal handler has no Core handle and the
 // backtrace supersedes it.)
 
-static void on_alarm(int sig) {
+void onAlarm(int sig) {
   (void)sig;
   // SANCTIONED SIGNAL-HANDLER OUTPUT: Lucent, formatting, allocation, and stdio are not
   // async-signal-safe. Keep this emergency report restricted to fixed buffers, raw fd 2 writes,
   // the allocation-free fd backtrace formatter, and _exit.
-  static const char msg[] = "\n[watchdog] STUCK: no frame presented within the timeout — backtrace:\n";
+  constexpr char msg[] = "\n[watchdog] STUCK: no frame presented within the timeout — backtrace:\n";
   write(2, msg, sizeof(msg) - 1);
   if (!s_wd.main_present_ready) {
-    static const char hint[] = "[watchdog] (tripped before the main presenter became ready — likely "
-                               "cold GPU initialization, not a hang; re-run, or raise "
-                               "PSXPORT_WATCHDOG_BOOT)\n";
+    constexpr char hint[] = "[watchdog] (tripped before the main presenter became ready — likely "
+                            "cold GPU initialization, not a hang; re-run, or raise "
+                            "PSXPORT_WATCHDOG_BOOT)\n";
     write(2, hint, sizeof(hint) - 1);
   }
 #ifdef HAVE_BACKTRACE
@@ -60,14 +61,14 @@ static void on_alarm(int sig) {
   _exit(134);
 }
 
-static void on_fault(int sig) {
+void onFault(int sig) {
   // See on_alarm: this handler can use only the emergency async-signal-safe fd 2 path.
-  static const char msg[] = "\n[watchdog] FAULT (signal): backtrace:\n";
+  constexpr char msg[] = "\n[watchdog] FAULT (signal): backtrace:\n";
   write(2, msg, sizeof(msg) - 1);
   {
     char b[] = "[watchdog] signal = 00\n";
-    b[20] = '0' + (sig / 10) % 10;
-    b[21] = '0' + sig % 10;
+    b[20] = static_cast<char>('0' + (sig / 10) % 10);
+    b[21] = static_cast<char>('0' + sig % 10);
     write(2, b, sizeof(b) - 1);
   }
 #ifdef HAVE_BACKTRACE
@@ -78,12 +79,16 @@ static void on_fault(int sig) {
   _exit(139);
 }
 
-// SPIN DETECTOR fatal path (called from timing.cpp spin_detector_sample). The guest burned a huge
+} // namespace
+
+namespace psx::platform {
+
+// SPIN DETECTOR fatal path (called from timing.cpp psx::platform::sampleSpinDetector). The guest burned a huge
 // instruction budget without ever yielding to the host and without leaving one code region — the
 // definition of a hang that would otherwise freeze the window with a dead close button. Report
 // the region so the poll is findable, then abort. Exit code 137 distinguishes it from the
 // frame-watchdog's 134 and faults' 139.
-void watchdog_spin_fault(unsigned anchor_pc, unsigned last_pc, unsigned long long instructions) {
+void spinFault(unsigned anchor_pc, unsigned last_pc, unsigned long long instructions) {
   lucent::error("spin",
                 "FATAL: guest burned instruction time without yielding to the host — likely polling an "
                 "unmodeled device/status; anchor pc=0x{:08X}, last pc=0x{:08X}, ~{} instructions",
@@ -93,24 +98,29 @@ void watchdog_spin_fault(unsigned anchor_pc, unsigned last_pc, unsigned long lon
 #ifdef HAVE_BACKTRACE
   void *bt2[64];
   int nbt = backtrace(bt2, 64);
-  psxport::host::emitBacktrace(lucent::Level::Error, "spin", bt2, nbt, 1);
+  psxport::host::emitBacktrace(
+      lucent::Level::Error, "spin", std::span<void *const>(bt2, static_cast<std::size_t>(nbt)).subspan(1));
 #endif
   _exit(137);
 }
+
+} // namespace psx::platform
+
+namespace {
 
 // SIGINT/SIGTERM (Ctrl+C / kill): a hung guest loop never returns to the windowing event
 // pump, so the window's own close/Ctrl+C handling is dead and the process is unkillable from the
 // UI. Install our OWN handler so Ctrl+C always force-exits IMMEDIATELY — and report where it was
 // stuck (interp PC + C backtrace) on the way out, so a hang is diagnosable, not just killable.
 // A second signal hard-kills in case anything in the handler wedges.
-static void on_interrupt(int sig) {
+void onInterrupt(int sig) {
   (void)sig;
   if (s_wd.int_seen) {
     _exit(130); // second Ctrl+C: bail without touching anything
   }
   s_wd.int_seen = 1;
   // See on_alarm: this handler can use only the emergency async-signal-safe fd 2 path.
-  static const char msg[] = "\n[watchdog] INTERRUPT (SIGINT/SIGTERM) — where it was stuck:\n";
+  constexpr char msg[] = "\n[watchdog] INTERRUPT (SIGINT/SIGTERM) — where it was stuck:\n";
   write(2, msg, sizeof(msg) - 1);
 #ifdef HAVE_BACKTRACE
   void *bt[64];
@@ -120,17 +130,21 @@ static void on_interrupt(int sig) {
   _exit(130);
 }
 
-// Enable with PSXPORT_WATCHDOG=<seconds> (0/unset disables). Call once at startup.
-void watchdog_init(void) {
+} // namespace
+
+namespace psx::platform {
+
+// PSXPORT_WATCHDOG=<seconds> (0 disables).
+Watchdog::Watchdog() {
   // A host that runs one Game after another arms the watchdog once per Game. Everything but the SIGNAL
   // DISPOSITIONS below is per-run state: `main_present_ready` left set by the previous Game's first
   // present would hand the next Game's cold GPU initialisation the 3 s steady budget instead of the
-  // boot grace, and a watchdog_disable() left armed=0 would be re-decided by the config below.
+  // boot grace, and a disable() left armed=0 would be re-decided by the config below.
   s_wd = {};
   // A crash (SIGSEGV/SIGABRT) during boot should report WHERE (C backtrace names the guest_<addr>
   // guest call chain), not silently dump core — install the fault handler regardless of the setting.
   struct sigaction fa = {};
-  fa.sa_handler = on_fault;
+  fa.sa_handler = onFault;
   sigaction(SIGSEGV, &fa, 0);
   sigaction(SIGABRT, &fa, 0);
   sigaction(SIGBUS, &fa, 0);
@@ -139,7 +153,7 @@ void watchdog_init(void) {
   // guest loop otherwise leaves the window unclosable and SIGINT swallowed (the event pump
   // never runs). Our handler force-exits with the stuck PC.
   struct sigaction ia = {};
-  ia.sa_handler = on_interrupt;
+  ia.sa_handler = onInterrupt;
   sigaction(SIGINT, &ia, 0);
   sigaction(SIGTERM, &ia, 0);
 
@@ -147,12 +161,8 @@ void watchdog_init(void) {
   // windowed `./run.sh` self-aborts with a backtrace instead of wedging forever. A frame must take
   // well under a second, so 3s is already far past any healthy frame; gameplay pets every present
   // and never trips it. Explicit PSXPORT_WATCHDOG=0 disables it; set higher only for slow debugging.
-  // MIGRATED to a CVar (runtime/psx/config/config_vars.h). One DELIBERATE behaviour change, called out
-  // here because "nothing may silently change meaning": this used to be `atoi(cfg_str(...))`, and
-  // atoi("abc") is 0, so a TYPO in PSXPORT_WATCHDOG silently DISABLED the watchdog. It now falls
-  // back to the declared default and the CVar binding logs a warn naming the bad value. A hang that
-  // wedges forever because someone mistyped the timeout is not a behaviour worth preserving.
-  s_wd.secs = (int)psx::config::cv_watchdog.get();
+  // A malformed PSXPORT_WATCHDOG falls back to the default rather than disabling the watchdog.
+  s_wd.secs = (int)psx::config::watchdog_seconds();
   if (s_wd.secs <= 0) {
     return;
   }
@@ -161,14 +171,12 @@ void watchdog_init(void) {
   // wait for several seconds on a cold shader cache (e.g. right after a full ./run.sh rebuild). That
   // is NOT a hang, so the 3s steady-state budget must not apply to it. Give cold initialization a much
   // larger grace (still finite, so a real first-frame GPU hang is still caught + a Ctrl+C works).
-  // PSXPORT_WATCHDOG_BOOT overrides; default = max(s_secs, 45). The CVar's default is -1, NOT 0,
-  // precisely so that an explicit PSXPORT_WATCHDOG_BOOT=0 still means zero rather than being
-  // swallowed by the "derive it" sentinel — that is the one way this migration could have changed
-  // an existing run's behaviour, so the sentinel is out of the value's range.
-  const long boot = psx::config::cv_watchdog_boot.get();
+  // PSXPORT_WATCHDOG_BOOT overrides; default = max(s_secs, 45). Its unset sentinel is -1 so an
+  // explicit 0 still means zero.
+  const long boot = psx::config::watchdog_boot_seconds();
   s_wd.boot_secs = boot >= 0 ? (int)boot : (s_wd.secs > 45 ? s_wd.secs : 45);
   struct sigaction sa = {};
-  sa.sa_handler = on_alarm;
+  sa.sa_handler = onAlarm;
   sigaction(SIGALRM, &sa, 0);
   s_wd.armed = 1;
   alarm((unsigned)s_wd.boot_secs);
@@ -182,7 +190,7 @@ void watchdog_init(void) {
 // this because they can submit images before the main VRAM presenter has allocated its targets. Once
 // that presenter is ready, the same call naturally uses the steady timeout, so later movies do not
 // regain boot grace.
-void watchdog_progress(void) {
+void Watchdog::progress() {
   if (s_wd.armed) {
     alarm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
   }
@@ -192,7 +200,7 @@ void watchdog_progress(void) {
 // cold-init -> steady transition. Calling this at entry is wrong: SDL/GPU initialization and the
 // first full target allocation are part of this present and own boot_secs. Calling it for a simpler
 // bootstrap image is equally wrong because that path does not materialise those targets.
-void watchdog_main_present_complete(void) {
+void Watchdog::mainPresentComplete() {
   if (!s_wd.armed) {
     return;
   }
@@ -200,10 +208,10 @@ void watchdog_main_present_complete(void) {
   alarm((unsigned)s_wd.secs);
 }
 
-// Resume after watchdog_suspend without claiming that a frame completed. Before the first completed
+// Resume after suspend without claiming that a frame completed. Before the first completed
 // present this retains boot_secs; afterwards it re-arms the steady-state budget. The native frame loop
 // calls this before work so a resumed step can still be diagnosed if it hangs.
-void watchdog_resume(void) {
+void Watchdog::resume() {
   if (s_wd.armed) {
     alarm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
   }
@@ -211,9 +219,9 @@ void watchdog_resume(void) {
 
 // Suspend the frame-progress timeout during an INTENTIONAL idle where no frame is presented and that
 // is NOT a hang: a debug-server PAUSE/step-wait, or blocking on REPL stdin for the next command. The
-// watchdog_resume re-arms it before work resumes, and the next completed present resets it. Without
+// resume re-arms it before work resumes, and the next completed present resets it. Without
 // this the 3s timeout fires on a deliberately paused/idle process. Keep s_armed so resume can re-arm.
-void watchdog_suspend(void) {
+void Watchdog::suspend() {
   if (s_wd.armed) {
     alarm(0);
   }
@@ -221,12 +229,18 @@ void watchdog_suspend(void) {
 
 // Permanently disable the frame-progress watchdog. For the SBS divergence debugger, which PAUSES the
 // process indefinitely on a divergence for live inspection — "no frame presented" is the intended state
-// there, not a hang, and watchdog_suspend (a one-shot alarm cancel) can't keep up with an open pause.
-void watchdog_disable(void) {
+// there, not a hang, and suspend (a one-shot alarm cancel) can't keep up with an open pause.
+void Watchdog::disable() {
   s_wd.armed = 0;
   alarm(0);
 }
 
-int watchdog_armed(void) {
-  return s_wd.armed ? 1 : 0;
+bool Watchdog::armed() {
+  return s_wd.armed != 0;
 }
+
+Watchdog::~Watchdog() {
+  disable();
+}
+
+} // namespace psx::platform

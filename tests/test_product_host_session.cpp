@@ -1,7 +1,10 @@
 // ProductHost and TitleSession end to end over a stub catalog and FrameDriver: how a run ends, what
 // it counts, and what a picker panel is not allowed to do.
+#include "config.h"
+#include "source_tree.h"
 #include "stub_game_runtime.h"
 #include "testutil.h"
+#include "watchdog.h"
 
 #include "c_subsys.h"
 #include "config_vars.h"
@@ -14,6 +17,7 @@
 #include "game_runtime.h"
 #include "host_input.h"
 #include "product_host.h"
+#include "record_raster_setup.h"
 #include "state/state_command.h"
 #include "stock_vsync.h"
 #include "title_catalog.h"
@@ -102,12 +106,9 @@ void closeWindow() {
 
 class FenceBackend final : public psx::frame::FramePresentationBackend {
 public:
-  void emit(std::span<const RqItem>) override {}
   void presentReal() override {}
   void captureDiagnostic(std::uint64_t, bool) override {}
-  void pace(int, int) override {}
-  void reconcile(std::uint64_t) override {}
-  void beginLedgerFrame() override {}
+  void pace(psx::frame::FieldCadence) override {}
   bool interpolatesRecords() const override {
     return false;
   }
@@ -132,7 +133,7 @@ public:
         script_.panelCloses = false;
         closeWindow();
       }
-      game_.presentation.commitUnpresented(backend_);
+      game_.presentation.commitUnpresented();
       return;
     }
     if (session_ == 0) {
@@ -160,7 +161,7 @@ public:
     if (session_ == 1 && steps_ == script_.firstProductEndsAt) {
       game_.run.requestEnd();
     }
-    game_.presentation.commitUnpresented(backend_);
+    game_.presentation.commitUnpresented();
   }
 
 private:
@@ -214,7 +215,7 @@ private:
   Script &script_;
   mutable psx::game::HostIdentity identity_{};
   psx::game::Crt0Image crt0_{};
-  const psx::hle::StockVSync vsync_{kVSyncAddress, 0u};
+  const psx::hle::StockVSync vsync_{{.entry = kVSyncAddress}};
 };
 
 // Two titles over the same executable bytes, so a picker has two panels; or only the first.
@@ -287,9 +288,9 @@ struct Fixture {
   }
   ~Fixture() {
     lucent::set_sink(nullptr);
-    psx::config::cv_native_frames.clear(psx::config::Layer::Runtime);
-    psx::config::cv_load_state.clear(psx::config::Layer::Runtime);
-    psx::config::cv_debug_server.clear(psx::config::Layer::Runtime);
+    psx::config::clear_runtime("PSXPORT_NATIVE_FRAMES");
+    psx::config::clear_runtime("PSXPORT_LOAD_STATE");
+    psx::config::clear_runtime("PSXPORT_DEBUG_SERVER");
     std::filesystem::remove_all(root);
   }
 
@@ -324,13 +325,11 @@ void refuseEarlyExit() {
   }
 }
 
-} // namespace
-
-static void test_a_session_ends_on_its_cap_counted_in_fence_steps(void) {
+void test_a_session_ends_on_its_cap_counted_in_fence_steps(void) {
   Fixture fixture;
   Script script;
   const Catalog catalog(script, fixture.sha256, fixture.root);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 5);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(5));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
@@ -340,14 +339,12 @@ static void test_a_session_ends_on_its_cap_counted_in_fence_steps(void) {
   CHECK_EQ(fixture.count("reached its run budget of 5 step(s)"), 1);
 }
 
-namespace {
-
 // The Game reads its disc through the chosen title's own key, not one the runtime declares.
 void test_a_product_reads_its_titles_own_disc_key() {
   Fixture fixture;
   Script script;
   const Catalog catalog(script, fixture.sha256, fixture.root);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 1);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(1));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host, {(fixture.root / "beta/SCUS_000.02").string()}), 0);
@@ -362,7 +359,7 @@ void test_the_session_admits_the_bytes_the_host_authenticated() {
   Script script;
   script.rewriteAtBoot = fixture.alpha;
   const Catalog catalog(script, fixture.sha256, fixture.root);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 1);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(1));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
@@ -378,13 +375,13 @@ void test_a_bug_report_is_filed_under_the_product_name() {
   Script script;
   script.fileBugReport = true;
   const Catalog catalog(script, fixture.sha256, fixture.root);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 4);
-  psx::config::cv_bug_report_dir.set(psx::config::Layer::Runtime, (fixture.root / "reports").string());
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(4));
+  psx::config::set_runtime("PSXPORT_BUG_REPORT_DIR", (fixture.root / "reports").string());
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
   }
-  psx::config::cv_bug_report_dir.clear(psx::config::Layer::Runtime);
+  psx::config::clear_runtime("PSXPORT_BUG_REPORT_DIR");
   int reports = 0;
   for (const auto &entry : std::filesystem::recursive_directory_iterator(fixture.root / "reports")) {
     if (entry.path().filename() == "report.json") {
@@ -396,14 +393,12 @@ void test_a_bug_report_is_filed_under_the_product_name() {
   CHECK_EQ(reports, 1);
 }
 
-} // namespace
-
-static void test_a_client_quit_reaches_the_run_end_report(void) {
+void test_a_client_quit_reaches_the_run_end_report(void) {
   Fixture fixture;
   Script script;
   script.quitAtStep = 3;
   const Catalog catalog(script, fixture.sha256, fixture.root);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 50);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(50));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
@@ -414,12 +409,12 @@ static void test_a_client_quit_reaches_the_run_end_report(void) {
   CHECK_EQ(fixture.count("[playcheck] presents:"), 1);
 }
 
-static void test_a_window_close_reaches_the_run_end_report(void) {
+void test_a_window_close_reaches_the_run_end_report(void) {
   Fixture fixture;
   Script script;
   script.closeAtStep = 4;
   const Catalog catalog(script, fixture.sha256, fixture.root);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 50);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(50));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
@@ -432,19 +427,19 @@ static void test_a_window_close_reaches_the_run_end_report(void) {
 // The selector boots both panels and runs until the budget ends it. A panel that loaded the
 // configured state would end the process on the bad path, and one that reported would print a run
 // line; the watchdog the host armed is still armed when the panels are gone.
-static void test_panels_report_nothing_load_no_state_and_leave_the_watchdog_armed(void) {
+void test_panels_report_nothing_load_no_state_and_leave_the_watchdog_armed(void) {
   Fixture fixture;
   Script script;
   const Catalog catalog(script, fixture.sha256, fixture.root);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 8);
-  psx::config::cv_load_state.set(psx::config::Layer::Runtime, "no/such/state.sav");
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(8));
+  psx::config::set_runtime("PSXPORT_LOAD_STATE", "no/such/state.sav");
   {
     psx::host::ProductHost host(catalog);
-    CHECK(!watchdog_armed());
+    CHECK(!psx::platform::Watchdog::armed());
     CHECK_EQ(run(host), 0);
-    CHECK(watchdog_armed());
+    CHECK(psx::platform::Watchdog::armed());
   }
-  CHECK(!watchdog_armed());
+  CHECK(!psx::platform::Watchdog::armed());
   CHECK(script.steps > 0u);
   CHECK_EQ(fixture.count("booting panel 0"), 1);
   CHECK_EQ(fixture.count("booting panel 1"), 1);
@@ -452,16 +447,16 @@ static void test_panels_report_nothing_load_no_state_and_leave_the_watchdog_arme
   CHECK_EQ(fixture.count("run complete"), 0);
 }
 
-static void test_a_window_close_in_the_selector_ends_the_process_cleanly(void) {
+void test_a_window_close_in_the_selector_ends_the_process_cleanly(void) {
   Fixture fixture;
   Script script;
   script.panelCloses = true;
   const Catalog catalog(script, fixture.sha256, fixture.root);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 200);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(200));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host), 0);
-    CHECK(watchdog_armed());
+    CHECK(psx::platform::Watchdog::armed());
   }
   CHECK(script.steps > 0u);
   CHECK_EQ(fixture.count("selector asked to quit after"), 1);
@@ -469,13 +464,13 @@ static void test_a_window_close_in_the_selector_ends_the_process_cleanly(void) {
   CHECK_EQ(fixture.count("run complete"), 0);
 }
 
-// The control channel's `pick`, sent until the selector has started `count` titles. A product answers
+// The control channel's `pick`, sent until the selector has started `Count` titles. A product answers
 // it as an unknown command, so a send that reaches the running title is simply repeated.
-class PickClient {
+template <int Count> class PickClient {
 public:
-  PickClient(int port, int count)
-      : thread_([this, port, count] {
-          run(port, count);
+  explicit PickClient(int port)
+      : port_(port), thread_([this] {
+          run();
         }) {}
   ~PickClient() {
     done_ = true;
@@ -486,12 +481,12 @@ public:
   }
 
 private:
-  void run(int port, int count) {
+  void run() {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     int fd = -1;
-    while (!done_ && started_ < count && std::chrono::steady_clock::now() < deadline) {
+    while (!done_ && started_ < Count && std::chrono::steady_clock::now() < deadline) {
       if (fd < 0) {
-        fd = connectTo(port);
+        fd = connectTo(port_);
         if (fd < 0) {
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
           continue;
@@ -515,6 +510,9 @@ private:
 
   static int connectTo(int port) {
     const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+      return -1;
+    }
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_port = htons(static_cast<std::uint16_t>(port));
@@ -543,6 +541,7 @@ private:
     return reply;
   }
 
+  const int port_;
   std::atomic<bool> done_{false};
   std::atomic<int> started_{0};
   std::thread thread_;
@@ -551,14 +550,14 @@ private:
 // Ending its own run sends the title back to the selector, and only the process's first product
 // session loads PSXPORT_LOAD_STATE: the first deletes the state file, so a second load would fail
 // and end the process.
-static void test_a_title_that_ends_its_run_returns_to_the_selector_and_loads_no_state_again(void) {
+void test_a_title_that_ends_its_run_returns_to_the_selector_and_loads_no_state_again(void) {
   Fixture fixture;
   Script script;
   const std::filesystem::path state = fixture.root / "first.state";
   script.saveStateTo = state;
   script.card = (fixture.root / "card.mcr").string();
   const Catalog catalog(script, fixture.sha256, fixture.root);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 2);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(2));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host, {fixture.alpha.string()}), 0);
@@ -571,12 +570,12 @@ static void test_a_title_that_ends_its_run_returns_to_the_selector_and_loads_no_
   script.secondProductClosesAt = 2;
   script.productSessions = 0;
   const int port = 20000 + static_cast<int>(::getpid() % 20000);
-  psx::config::cv_debug_server.set(psx::config::Layer::Runtime, std::to_string(port));
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 3000);
-  psx::config::cv_load_state.set(psx::config::Layer::Runtime, state.string());
+  psx::config::set_runtime("PSXPORT_DEBUG_SERVER", std::to_string(port));
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(3000));
+  psx::config::set_runtime("PSXPORT_LOAD_STATE", state.string());
   {
     psx::host::ProductHost host(catalog);
-    PickClient client(port, 2);
+    PickClient<2> client(port);
     CHECK_EQ(run(host), 0);
   }
   CHECK_EQ(script.productSessions, 2u);
@@ -586,7 +585,7 @@ static void test_a_title_that_ends_its_run_returns_to_the_selector_and_loads_no_
   CHECK_EQ(fixture.count("run complete: product_steps=2 "), 3);
 }
 
-static void test_help_names_the_product_and_boots_nothing(void) {
+void test_help_names_the_product_and_boots_nothing(void) {
   Fixture fixture;
   Script script;
   const Catalog catalog(script, fixture.sha256, fixture.root);
@@ -594,7 +593,7 @@ static void test_help_names_the_product_and_boots_nothing(void) {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host, {"--help"}), 0);
     CHECK_EQ(run(host, {"-h"}), 0);
-    CHECK(!watchdog_armed());
+    CHECK(!psx::platform::Watchdog::armed());
   }
   CHECK_EQ(script.steps, 0u);
   CHECK_EQ(fixture.count("run budget:"), 0);
@@ -603,7 +602,7 @@ static void test_help_names_the_product_and_boots_nothing(void) {
   CHECK_EQ(fixture.count("  Two (SCUS_000.02)"), 2);
 }
 
-static void test_unexpected_arguments_are_refused(void) {
+void test_unexpected_arguments_are_refused(void) {
   Fixture fixture;
   Script script;
   const Catalog catalog(script, fixture.sha256, fixture.root);
@@ -617,11 +616,11 @@ static void test_unexpected_arguments_are_refused(void) {
 }
 
 // One title needs no selector: the bare product boots the provisioned executable directly.
-static void test_a_single_title_catalog_skips_the_selector(void) {
+void test_a_single_title_catalog_skips_the_selector(void) {
   Fixture fixture;
   Script script;
   const Catalog catalog(script, fixture.sha256, fixture.root, 1);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 3);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(3));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host), 0);
@@ -631,15 +630,13 @@ static void test_a_single_title_catalog_skips_the_selector(void) {
   CHECK_EQ(fixture.count("run complete: product_steps=3 "), 1);
 }
 
-namespace {
-
 // A title that does not start through Crt0Boot gets no crt0: the entry is the driver's.
 void test_a_driver_owned_title_boots_without_the_framework_crt0() {
   Fixture fixture;
   Script script;
   script.runsCrt0 = false;
   const Catalog catalog(script, fixture.sha256, fixture.root, 1);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 2);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(2));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host), 0);
@@ -655,7 +652,7 @@ void test_a_session_binds_the_devices_before_the_title_overrides() {
   Script script;
   script.runsCrt0 = false;
   const Catalog catalog(script, fixture.sha256, fixture.root, 1);
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 1);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(1));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host), 0);
@@ -667,7 +664,7 @@ void test_a_session_binds_the_devices_before_the_title_overrides() {
 // A one-title product whose executable is missing extracts it from the title's own disc, then boots it.
 void test_a_missing_executable_is_provisioned_from_the_title_disc() {
   Fixture fixture;
-  const std::filesystem::path fixtures = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "provision_disc";
+  const std::filesystem::path fixtures = psx::test::sourcePath("tests/fixtures/provision_disc");
   const std::vector<std::uint8_t> bytes = Fs::readFile((fixtures / "SLUS_000.01").string());
   const std::string sha256 = lucent::content::sha256_hex(lucent::content::sha256(std::as_bytes(std::span(bytes))));
   CHECK_EQ(setenv("PSXPORT_TEST_PROVISION_DISC", (fixtures / "provision.chd").c_str(), 1), 0);
@@ -687,7 +684,7 @@ void test_a_missing_executable_is_provisioned_from_the_title_disc() {
                                                 .stackOffset = 0u,
                                                 .discEnvVar = "PSXPORT_TEST_PROVISION_DISC",
                                                 .discExecutablePath = "BOOT/SLUS_000.01"});
-  psx::config::cv_native_frames.set(psx::config::Layer::Runtime, 2);
+  psx::config::set_runtime("PSXPORT_NATIVE_FRAMES", std::to_string(2));
   {
     psx::host::ProductHost host(catalog);
     CHECK_EQ(run(host), 0);
@@ -721,5 +718,5 @@ int main(void) {
   // Last: the control channel it opens listens for the rest of the process.
   RUN(a_title_that_ends_its_run_returns_to_the_selector_and_loads_no_state_again);
   g_finished = true;
-  return pt_summary();
+  return psx::test::summary();
 }

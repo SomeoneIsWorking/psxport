@@ -1,6 +1,6 @@
 #include "ui_assets.h"
 
-#include "config_vars.h" // cv_asset_dir — PSXPORT_ASSET_DIR
+#include "config_vars.h" // asset_dir
 #include "fs_util.h"     // Fs::exists — the framework's one host-filesystem wrapper
 
 #include <lucent/log.h>
@@ -31,7 +31,7 @@ std::string absolutize(const std::string &p) {
 } // namespace
 
 bool AssetSet::open() {
-  const std::string &base = psx::config::cv_asset_dir.get();
+  const std::string base = psx::config::asset_dir();
   mDir = absolutize(base.empty() ? std::string(kAssetSubdir) : base + "/" + kAssetSubdir);
   mOpened = true;
   mBaseOk = Fs::exists(mDir);
@@ -54,7 +54,7 @@ std::string AssetSet::resolve(const char *rel) const {
   // mDir is set by open(); if the caller skipped open() this still produces a usable path rather
   // than an empty string, so an error message can never be about "".
   if (!mOpened) {
-    const std::string &base = psx::config::cv_asset_dir.get();
+    const std::string base = psx::config::asset_dir();
     return absolutize((base.empty() ? std::string(kAssetSubdir) : base + "/" + kAssetSubdir) + "/" + rel);
   }
   return mDir + "/" + rel;

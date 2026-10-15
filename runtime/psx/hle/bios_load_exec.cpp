@@ -15,7 +15,6 @@ namespace psx::hle {
 namespace {
 
 // MIPS o32 argument registers (== core.r[]).
-enum { R_A0 = 4, R_A1 = 5, R_A2 = 6, R_V0 = 2 };
 
 // The BIOS's own failure answer for a load it could not perform.
 constexpr std::uint32_t kLoadFailed = 0xffffffffu;
@@ -41,13 +40,13 @@ std::string isoPathFromBiosPath(const char *biosPath) {
 // its own `r[31]`: this is the branch the BIOS returns from.
 bool refuseLoad(Core &core, const std::string &reason) {
   lucent::error("hle", "LoadExec refused: {}", reason);
-  core.r[R_V0] = kLoadFailed;
+  core.r[psx::cpu::kV0] = kLoadFailed;
   return true;
 }
 
 } // namespace
 
-DiscFileReader discFileReader(DiscState &disc) {
+DiscFileReader discFileReader(psx::cd::Disc &disc) {
   return [&disc](const char *isoPath, std::vector<std::uint8_t> &out) {
     return psx::cd::readDiscFile(disc, isoPath, out);
   };
@@ -55,16 +54,17 @@ DiscFileReader discFileReader(DiscState &disc) {
 
 bool dispatchLoadExec(Core &core, const DiscFileReader &readFile) {
   char filename[kFilenameBytes];
-  core.readCString(core.r[R_A0], filename, sizeof filename);
+  core.readCString(core.r[psx::cpu::kA0], filename, sizeof filename);
   const std::size_t length = std::strlen(filename);
   if (length == 0u) {
-    return refuseLoad(core, lucent::format("the filename pointer 0x{:08X} is empty or unreadable", core.r[R_A0]));
+    return refuseLoad(core,
+                      lucent::format("the filename pointer 0x{:08X} is empty or unreadable", core.r[psx::cpu::kA0]));
   }
   // A filename that filled the buffer was CUT, and admitting the truncated name would load a
   // different file than the guest asked for. Refused rather than guessed at.
-  if (core.mem_r8(core.r[R_A0] + static_cast<std::uint32_t>(length)) != 0u) {
-    return refuseLoad(core,
-                      lucent::format("the filename at 0x{:08X} exceeds {} bytes", core.r[R_A0], kFilenameBytes - 1u));
+  if (core.mem_r8(core.r[psx::cpu::kA0] + static_cast<std::uint32_t>(length)) != 0u) {
+    return refuseLoad(
+        core, lucent::format("the filename at 0x{:08X} exceeds {} bytes", core.r[psx::cpu::kA0], kFilenameBytes - 1u));
   }
 
   // THE CALLER OWNS THE STACK. That is what a1/a2 are for: a stated (stackbase, stackoffset) replaces
@@ -76,14 +76,15 @@ bool dispatchLoadExec(Core &core, const DiscFileReader &readFile) {
   // would answer -1 with half a program in RAM and a new image identity resident over it: a state the
   // guest cannot make sense of and can only escape by the run ending. Refusing first leaves the
   // machine exactly as the caller found it.
-  const std::uint32_t statedStackBase = core.r[R_A1];
+  const std::uint32_t statedStackBase = core.r[psx::cpu::kA1];
   const std::uint64_t statedStack =
-      static_cast<std::uint64_t>(statedStackBase) + static_cast<std::uint64_t>(core.r[R_A2]);
+      static_cast<std::uint64_t>(statedStackBase) + static_cast<std::uint64_t>(core.r[psx::cpu::kA2]);
   if (statedStackBase != 0u && (statedStack > std::numeric_limits<std::uint32_t>::max() ||
                                 !core.isGuestStorage(static_cast<std::uint32_t>(statedStack), sizeof(std::uint32_t)))) {
-    return refuseLoad(
-        core,
-        lucent::format("its stack (base 0x{:08X}, offset 0x{:X}) is not guest memory", statedStackBase, core.r[R_A2]));
+    return refuseLoad(core,
+                      lucent::format("its stack (base 0x{:08X}, offset 0x{:X}) is not guest memory",
+                                     statedStackBase,
+                                     core.r[psx::cpu::kA2]));
   }
 
   std::vector<std::uint8_t> bytes;
@@ -107,7 +108,7 @@ bool dispatchLoadExec(Core &core, const DiscFileReader &readFile) {
     core.r[29] = core.r[30] = static_cast<std::uint32_t>(statedStack);
   }
 
-  core.r[R_V0] = 0;
+  core.r[psx::cpu::kV0] = 0;
   lucent::info("hle",
                "LoadExec '{}': loaded at 0x{:08X}, entry 0x{:08X}, gp 0x{:08X}, sp 0x{:08X}",
                filename,

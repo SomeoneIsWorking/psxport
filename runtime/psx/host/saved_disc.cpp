@@ -63,7 +63,7 @@ bool SavedDisc::save(const std::filesystem::path &image) const {
   return true;
 }
 
-void SavedDisc::bind(DiscState &disc) const {
+void SavedDisc::bind(psx::cd::Disc &disc) const {
   disc.env_key = title_.discEnvVar;
   disc.saved_path[0] = '\0';
   const std::optional<std::filesystem::path> image = load();

@@ -12,6 +12,9 @@ GITHUB_ROOT = "https://github.com/SomeoneIsWorking"
 REMOTE_BACKED = ("psx-spyro", "psx-spider-man", "psx-tomba", "psx-vagrant-story", "psx-mega-man-x4", "psx-crash", "psx-crash-team-racing", "psx-crash-bash", "psx-tekken-3", "psx-toy-story-2", "psx-c12")
 LOCAL_ONLY: tuple[str, ...] = ()
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+from psxport_fetch import SUBMODULES  # noqa: E402
+
 
 def say(message: str) -> None:
     print(f"[bootstrap] {message}")
@@ -40,24 +43,15 @@ def submodule_paths(repo: Path) -> list[str]:
 
 
 def initialize_framework_vendors(framework: Path) -> None:
-    for relative in ("vendor/beetle-psx", "vendor/lucent", "vendor/rmlui", "vendor/bug-report", "vendor/setup-ui"):
-        run(["git", "submodule", "update", "--init", relative], cwd=framework)
-        run(["git", "reset", "--hard", "-q", "HEAD"], cwd=framework / relative)
-    run(["git", "submodule", "update", "--init", "deps/libchdr"], cwd=framework / "vendor/beetle-psx")
+    for parent, relative in SUBMODULES:
+        run(["git", "submodule", "update", "--init", relative], cwd=framework / parent)
+        if parent == ".":
+            run(["git", "reset", "--hard", "-q", "HEAD"], cwd=framework / relative)
 
 
-def sync_game_framework(game: Path) -> None:
-    """Make external/psxport exist, with the ONE tool a port ships.
-
-    There is no pin: the tool points the game at the workspace's live psxport checkout, so a framework
-    edit is visible in every game at once.
-    """
-    fetcher = game / "tools/psxport_fetch.py"
-    state = "psxport_fetch.py" if fetcher.is_file() else "no fetch tool yet"
-    say(f"{game.name}: establish external/psxport ({state})")
-    if not fetcher.is_file():
-        return
-    result = run([sys.executable, fetcher], cwd=game, required=False)
+def sync_game_framework(framework: Path, game: Path) -> None:
+    say(f"{game.name}: establish external/psxport")
+    result = run([sys.executable, framework / "tools/psxport_fetch.py", "--auto", "--repo", game], cwd=game, required=False)
     if result.returncode:
         say(f"{game.name}: psxport_fetch.py did not resolve external/psxport")
 
@@ -88,7 +82,7 @@ def main() -> int:
                 result = run(["git", "submodule", "update", "--init", relative], cwd=game, required=False)
                 if result.returncode:
                     say(f"{name}: submodule {relative} not initialised")
-            sync_game_framework(game)
+            sync_game_framework(framework, game)
 
         missing: list[str] = []
         for name in LOCAL_ONLY:
@@ -96,7 +90,7 @@ def main() -> int:
             if (game / ".git").exists():
                 head = run(["git", "rev-parse", "--short", "HEAD"], cwd=game).stdout.strip()
                 say(f"{name}: present ({head}) — LOCAL ONLY, has no remote")
-                sync_game_framework(game)
+                sync_game_framework(framework, game)
             else:
                 missing.append(name)
 

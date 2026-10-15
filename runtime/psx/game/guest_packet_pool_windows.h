@@ -1,6 +1,8 @@
 // guest_packet_pool_windows.h — a title's packet pool, as GameRuntime::packetPool reports it.
 #pragma once
 
+#include "guest_address_range.h"
+
 #include <array>
 #include <cstdint>
 
@@ -16,8 +18,8 @@ struct PacketPoolExtent {
   std::array<std::uint32_t, 4> sources{};
 
   bool contains(std::uint32_t address) const;
-  // Whether a store of `bytes` at `address` rewrites a bound this extent was read from.
-  bool readFrom(std::uint32_t address, std::uint32_t bytes) const;
+  // Whether `store` rewrites a bound this extent was read from.
+  bool readFrom(GuestSpan store) const;
 };
 
 // A title answers packetPool with the layout its engine uses. The layouts are not

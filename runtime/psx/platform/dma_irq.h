@@ -24,6 +24,8 @@
 //   24-30  IRQ flag for DMA0..DMA6 — set by hardware on completion, write 1 to acknowledge
 //   31     IRQ master flag — READ ONLY, computed: force || (master_en && (enable & flag))
 #pragma once
+#include "guest_address_range.h"
+
 #include <cstdint>
 
 class Core;
@@ -41,37 +43,39 @@ static constexpr uint32_t DICR_MASTER_FLAG = 0x80000000u; // bit 31, read-only
 // ACKNOWLEDGES rather than sets, and bit 31 because it is read-only.
 static constexpr uint32_t DICR_RW_MASK = 0x00FF803Fu;
 
-// The byte lanes a `bytes`-wide access at `addr` covers, as a mask over the 32-bit register.
+namespace psx::dma {
+
+// The byte lanes `store` covers, as a mask over the 32-bit register.
 // Sub-word access is not a corner case here: libstr's DMA starter read-modify-writes the BYTE at
 // DICR+2 (the enable bits plus the master-enable bit) on every single transfer.
-inline uint32_t dma_lane_mask(uint32_t addr, uint32_t bytes) {
-  if (bytes >= 4) {
+inline uint32_t laneMask(GuestStore store) {
+  if (store.width >= 4) {
     return 0xFFFFFFFFu;
   }
-  const uint32_t shift = (addr & 3u) * 8u;
-  const uint32_t width = bytes * 8u;
+  const uint32_t shift = (store.address & 3u) * 8u;
+  const uint32_t width = store.width * 8u;
   return ((width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u)) << shift;
 }
 
 // A stored value positioned into the lanes it is written through.
-inline uint32_t dma_lane_value(uint32_t addr, uint32_t v, uint32_t bytes) {
-  return (bytes >= 4) ? v : (v << ((addr & 3u) * 8u));
+inline uint32_t laneValue(GuestStore store) {
+  return (store.width >= 4) ? store.value : (store.value << ((store.address & 3u) * 8u));
 }
 
 // What a read of DICR returns: the stored word plus the computed master flag.
-inline uint32_t dma_dicr_read(uint32_t dicr) {
+inline uint32_t readDicr(uint32_t dicr) {
   const bool armed_and_flagged = (dicr & DICR_MASTER_EN) != 0 && (dicr & ((dicr & DICR_ENABLE_MASK) << 8)) != 0;
   const uint32_t out = dicr & ~DICR_MASTER_FLAG;
   return ((dicr & DICR_FORCE) || armed_and_flagged) ? (out | DICR_MASTER_FLAG) : out;
 }
 
-// Apply a store of `bytes` at `addr` to the stored DICR word. Plain R/W bits take the written value;
+// Apply `store` to the stored DICR word. Plain R/W bits take the written value;
 // a flag bit written as 1 is acknowledged (cleared); bit 31 is never stored. Both effects are
 // restricted to the lanes actually written, which is why the ack cannot be expressed as a whole-word
 // rule: a byte write to the enable lane must leave the flags in the top lane alone.
-inline uint32_t dma_dicr_store(uint32_t cur, uint32_t addr, uint32_t v, uint32_t bytes) {
-  const uint32_t lane = dma_lane_mask(addr, bytes);
-  const uint32_t val = dma_lane_value(addr, v, bytes) & lane;
+inline uint32_t storeDicr(uint32_t cur, GuestStore store) {
+  const uint32_t lane = laneMask(store);
+  const uint32_t val = laneValue(store) & lane;
   const uint32_t rw = DICR_RW_MASK & lane;
   const uint32_t ack = DICR_FLAG_MASK & lane & val;
   return ((cur & ~rw) | (val & rw)) & ~ack;
@@ -79,13 +83,13 @@ inline uint32_t dma_dicr_store(uint32_t cur, uint32_t addr, uint32_t v, uint32_t
 
 // Would a completion on `ch` raise the DMA interrupt? This is the gate a completion signal must pass:
 // the guest's per-channel enable AND the master enable, exactly as hardware ANDs them.
-inline bool dma_irq_armed(uint32_t dicr, int ch) {
+inline bool irqArmed(uint32_t dicr, int ch) {
   return (dicr & DICR_MASTER_EN) != 0 && (dicr & (1u << (16 + ch))) != 0;
 }
 
 // Hardware's action when a transfer on `ch` finishes: set that channel's flag, but only if armed.
-inline uint32_t dma_dicr_complete(uint32_t dicr, int ch) {
-  return dma_irq_armed(dicr, ch) ? (dicr | (1u << (24 + ch))) : dicr;
+inline uint32_t completeDicr(uint32_t dicr, int ch) {
+  return irqArmed(dicr, ch) ? (dicr | (1u << (24 + ch))) : dicr;
 }
 
 // Acknowledge channel `ch`'s DICR flag (mem.cpp owns the register state).
@@ -95,25 +99,29 @@ inline uint32_t dma_dicr_complete(uint32_t dicr, int ch) {
 // handler does, so the port does it at the same point. Without this the flag latches on the first
 // completion and DICR bit 31 reads asserted for the rest of the run, which is a lie about the
 // hardware to any guest that looks.
-void dma_irq_ack(Core &core, int ch);
+void ackIrq(Core &core, int ch);
 
 // The pending-completion set, owned per Core (Core::dma, filled by mem.cpp (which is where transfers finish) and
 // drained by Hle::irqPoll (which is where guest code may safely be re-entered).
-bool dma_done_owed(const Core &core, int ch);
-void dma_done_taken(Core &core, int ch);
-bool dma_done_any(const Core &core); // is ANY channel still owed? the deferred-work gate must not clear while so
+bool doneOwed(const Core &core, int ch);
+
+void doneTaken(Core &core, int ch);
+
+bool doneAny(const Core &core); // is ANY channel still owed? the deferred-work gate must not clear while so
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // WHO gets called when a transfer finishes, and on WHICH channels.
 //
 // The port dispatches the guest's own DMA-completion callback in place of the BIOS DMA handler that
 // would run on hardware. The BIOS keeps ONE CALLBACK PER CHANNEL, in a table the guest's
-// `DMACallback(ch, fn)` writes; `GameConfig::dmaCallbackTable` is that table's base, so channel
+// `DMACallback(ch, fn)` writes; a title's StockDmaCallbacks names that table's base, so channel
 // `ch`'s entry is `base + 4*ch`. A game that has not RE'd its table leaves the base 0 and gets no
 // dispatch at all — the same behaviour as a game that registered no callback, never a wrong one.
-inline uint32_t dma_callback_slot(uint32_t table, int ch) {
+inline uint32_t callbackSlot(uint32_t table, int ch) {
   return table ? table + 4u * (uint32_t)ch : 0u;
 }
+
+} // namespace psx::dma
 
 // The set of channels that have completed a transfer whose interrupt the guest ARMED, and therefore
 // owe it the callback it registered.
@@ -132,10 +140,10 @@ struct DmaDone {
   uint32_t mask = 0;
   // Record a completion on `ch`, applying the hardware gate. True if the guest is now owed a call.
   bool complete(uint32_t &dicr, int ch) {
-    if (!dma_irq_armed(dicr, ch)) {
+    if (!psx::dma::irqArmed(dicr, ch)) {
       return false;
     }
-    dicr = dma_dicr_complete(dicr, ch); // hardware sets the channel's flag
+    dicr = psx::dma::completeDicr(dicr, ch); // hardware sets the channel's flag
     mask |= 1u << ch;
     return true;
   }

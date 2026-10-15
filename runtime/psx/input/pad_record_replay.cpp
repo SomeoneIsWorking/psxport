@@ -157,7 +157,7 @@ void PadRecordReplay::loadReplay(const std::string &path, const CardIdentity &ca
                        : "");
 }
 
-std::uint16_t PadRecordReplay::service(std::uint64_t phase, std::uint16_t live, std::uint16_t replMask) {
+std::uint16_t PadRecordReplay::service(std::uint64_t phase, Inputs inputs) {
   frames_++;
   if (replay_ && !phaseSourceChecked_) {
     phaseSourceChecked_ = true;
@@ -169,12 +169,12 @@ std::uint16_t PadRecordReplay::service(std::uint64_t phase, std::uint16_t live, 
       resume_ = false;
     }
   }
-  std::uint16_t mask = live;
+  std::uint16_t mask = inputs.live;
   if (replay_) {
     // A replay overrides the host/forced input but MERGES the live REPL drive on top (active-low AND
     // = union of pressed bits), so an explicit press issued mid-replay is not a dead command.
     if (const std::optional<std::uint16_t> replayed = replay_->next(phase)) {
-      mask = static_cast<std::uint16_t>(*replayed & replMask);
+      mask = static_cast<std::uint16_t>(*replayed & inputs.repl);
     } else if (resume_ && !resumeAnnounced_) {
       resumeAnnounced_ = true;
       lucent::info("padrec",
@@ -183,9 +183,9 @@ std::uint16_t PadRecordReplay::service(std::uint64_t phase, std::uint16_t live, 
                    frameIndex());
     }
   }
-  recording_.append(phase, mask);
+  recording_.append({.phase = phase, .mask = mask});
   if (sink_) {
-    sink_->append(phase, mask);
+    sink_->append({.phase = phase, .mask = mask});
   }
   return mask;
 }

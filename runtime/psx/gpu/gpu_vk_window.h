@@ -15,13 +15,15 @@
 // The window is an OUTPUT SINK, never a rendering stage: nothing here decides what the picture looks
 // like, and nothing here reads the guest.
 #pragma once
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
+#include <cstdint>
 
 // The window's creation size, defined ONCE and used both at SDL_CreateWindow and as the headless sink
 // default, so the two cannot drift. (They were two hand-copied 960x720 literals; changing the window
 // would silently have desynchronised the headless sink from it.)
-enum { PRESENT_WINDOW_W = 960, PRESENT_WINDOW_H = 720 };
+enum : std::uint16_t { PRESENT_WINDOW_W = 960, PRESENT_WINDOW_H = 720 };
 
 class GpuWindow {
 public:
@@ -51,7 +53,7 @@ public:
   }
 
   // The live drawable extent in pixels. Falls back to 320x240 when there is no window, so these answer
-  // "how big is the SINK" in the windowed leg ONLY (see gpu_vk_present_sink_size).
+  // "how big is the SINK" in the windowed leg ONLY (see GpuDevice::sinkSize).
   int pixel_width() const;
   int pixel_height() const;
   // The refresh period of the display the window is on, in ms; 0 headless or when unknown.

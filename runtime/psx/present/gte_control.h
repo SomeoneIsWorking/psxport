@@ -3,8 +3,8 @@
 #pragma once
 
 #include "blend.h"
+#include "gte.h"
 #include "gte_registers.h"
-#include "gte_state.h"
 
 #include <array>
 #include <cstdint>
@@ -18,10 +18,10 @@ inline constexpr std::uint32_t kGteTranslationEnd = 8;
 
 using GteControl = std::array<std::uint32_t, kGteControlRegisters>;
 
-// The bound GTE's control registers, without clearing its flags.
-GteControl readGteControl();
+// `gte`'s control registers, without clearing its flags.
+GteControl readGteControl(const psx::cpu::Gte &gte);
 // Writes every control register but the flags.
-void writeGteControl(const GteControl &control);
+void writeGteControl(psx::cpu::Gte &gte, const GteControl &control);
 // The control registers `t` of the way from `from` to `to`: rotation elements and translation move, every
 // other register is `to`'s.
 GteControl blendGteControl(const GteControl &from, const GteControl &to, float t);
@@ -29,7 +29,7 @@ GteControl blendGteControl(const GteControl &from, const GteControl &to, float t
 // The whole GTE as a render found it, handed back when the render is done.
 class GteGuard {
 public:
-  GteGuard();
+  explicit GteGuard(psx::cpu::Gte &gte);
   ~GteGuard();
   GteGuard(const GteGuard &) = delete;
   GteGuard &operator=(const GteGuard &) = delete;
@@ -37,7 +37,8 @@ public:
   GteGuard &operator=(GteGuard &&) = delete;
 
 private:
-  GteRawState saved_{};
+  psx::cpu::Gte &gte_;
+  GteRawState saved_;
 };
 
 } // namespace psx::present

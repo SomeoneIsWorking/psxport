@@ -83,7 +83,7 @@ PsxExeParseResult parsePsxExeImage(std::span<const uint8_t> bytes) {
 
 PsxExeLoadResult loadPsxExeImage(Core &core, std::span<const uint8_t> bytes, std::string_view imageName) {
   const auto parsed = parsePsxExeImage(bytes);
-  if (!parsed) {
+  if (!parsed.image.has_value()) {
     return {std::nullopt, {}, parsed.detail};
   }
   if (imageName.empty()) {
@@ -114,6 +114,14 @@ PsxExeLoadResult loadPsxExeImage(Core &core, std::span<const uint8_t> bytes, std
     core.r[30] = image.stackPointer;
   }
   return {identity, image, {}};
+}
+
+void applyPsxExeTopLevelRegisters(Core &core, const PsxExeImage &image) {
+  if (image.stackBase == 0) {
+    core.r[29] = 0x801ffff0u;
+    core.r[30] = core.r[29];
+  }
+  core.r[31] = 0xdead0000u; // top-level return sentinel
 }
 
 } // namespace psx::cpu

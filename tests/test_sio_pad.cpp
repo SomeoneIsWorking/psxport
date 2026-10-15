@@ -10,16 +10,18 @@
 #include "stub_game_runtime.h"
 #include "testutil.h"
 
+#include <memory>
+
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 // The two register-level facts every case needs: a selected port with the /ACK interrupt enabled,
 // and the baud/mode the measured driver programs (reload 0x88, MUL1 → 8 * 0x88 = 1088 ticks/byte).
 constexpr uint16_t kCtrlSelected = 0x1003; // TXEN | select | ACK-interrupt-enable
 constexpr uint16_t kMode = 0x000D;
 constexpr uint16_t kBaud = 0x0088;
-constexpr uint64_t kByteTicks = 8u * kBaud;
+constexpr uint64_t kByteTicks = uint64_t{8} * kBaud;
 constexpr uint32_t kData = 0x1F801040u;
 constexpr uint32_t kStatus = 0x1F801044u;
 constexpr uint32_t kModeReg = 0x1F801048u;
@@ -30,37 +32,37 @@ constexpr uint32_t kIMask = 0x1F801074u;
 
 // A port needs a Game only because the /ACK raises I_STAT, which the interrupt controller owns.
 struct Port {
-  Game *owner = new Game(stubRuntime, {});
+  Game *owner = new Game(*stubRuntime, {});
+  uint16_t held = 0xFFFFu; // active-low buttons the pad reports
   Hle &hle = owner->hle;
 
   Port() {
-    write(kModeReg, kMode, 2);
-    write(kBaudReg, kBaud, 2);
-    write(kCtrl, kCtrlSelected, 2);
+    write({kModeReg, kMode, 2});
+    write({kBaudReg, kBaud, 2});
+    write({kCtrl, kCtrlSelected, 2});
   }
   ~Port() {
     delete owner;
   }
-  uint32_t read(uint32_t addr, uint32_t bytes) {
-    switch (bytes) {
-    case 1:
+  template <unsigned Bytes> uint32_t read(uint32_t addr) {
+    if constexpr (Bytes == 1) {
       return owner->core.mem_r8(addr);
-    case 2:
+    } else if constexpr (Bytes == 2) {
       return owner->core.mem_r16(addr);
-    default:
+    } else {
       return owner->core.mem_r32(addr);
     }
   }
-  void write(uint32_t addr, uint32_t value, uint32_t bytes) {
-    switch (bytes) {
+  void write(GuestStore store) {
+    switch (store.width) {
     case 1:
-      owner->core.mem_w8(addr, static_cast<uint8_t>(value));
+      owner->core.mem_w8(store.address, static_cast<uint8_t>(store.value));
       return;
     case 2:
-      owner->core.mem_w16(addr, static_cast<uint16_t>(value));
+      owner->core.mem_w16(store.address, static_cast<uint16_t>(store.value));
       return;
     default:
-      owner->core.mem_w32(addr, value);
+      owner->core.mem_w32(store.address, store.value);
       return;
     }
   }
@@ -72,15 +74,15 @@ struct Port {
     }
   }
   void clearSioIrq() {
-    write(kIStat, 0x77Fu, 4);
-    write(kCtrl, read(kCtrl, 2) | 0x0010u, 2);
+    write({kIStat, 0x77Fu, 4});
+    write({kCtrl, read<2>(kCtrl) | 0x0010u, 2});
   }
   // Clock one byte out and settle past the whole transfer + ack, the way a driver's own delays do.
-  uint32_t exchange(uint32_t tx, uint16_t buttons) {
-    owner->pad.buttons = buttons;
-    write(kData, tx, 1);
+  uint32_t exchange(uint32_t tx) {
+    owner->pad.buttons = held;
+    write({kData, tx, 1});
     burn(kByteTicks * 4); // well past both deadlines
-    return read(kData, 1);
+    return read<1>(kData);
   }
 };
 
@@ -88,21 +90,22 @@ struct Port {
 // (active-low bit 3) — the mask pad_input.cpp produces for the Start button.
 void test_digital_pad_response_sequence() {
   Port p;
-  CHECK_EQ(p.exchange(0x01, 0xFFF7u), 0xFFu); // address the controller: bus is hi-Z
-  CHECK_EQ(p.exchange(0x42, 0xFFF7u), 0x41u); // read command -> device id (digital pad)
-  CHECK_EQ(p.exchange(0x00, 0xFFF7u), 0x5Au); // data ready
-  CHECK_EQ(p.exchange(0x00, 0xFFF7u), 0xF7u); // buttons lo — START pressed
-  CHECK_EQ(p.exchange(0x00, 0xFFF7u), 0xFFu); // buttons hi
+  p.held = 0xFFF7u;
+  CHECK_EQ(p.exchange(0x01), 0xFFu); // address the controller: bus is hi-Z
+  CHECK_EQ(p.exchange(0x42), 0x41u); // read command -> device id (digital pad)
+  CHECK_EQ(p.exchange(0x00), 0x5Au); // data ready
+  CHECK_EQ(p.exchange(0x00), 0xF7u); // buttons lo — START pressed
+  CHECK_EQ(p.exchange(0x00), 0xFFu); // buttons hi
 }
 
 // Idle is 0xFFFF because the pad is active-low: nothing pressed means every bit set.
 void test_idle_buttons_are_all_ones() {
   Port p;
-  p.exchange(0x01, 0xFFFFu);
-  p.exchange(0x42, 0xFFFFu);
-  p.exchange(0x00, 0xFFFFu);
-  CHECK_EQ(p.exchange(0x00, 0xFFFFu), 0xFFu);
-  CHECK_EQ(p.exchange(0x00, 0xFFFFu), 0xFFu);
+  p.exchange(0x01);
+  p.exchange(0x42);
+  p.exchange(0x00);
+  CHECK_EQ(p.exchange(0x00), 0xFFu);
+  CHECK_EQ(p.exchange(0x00), 0xFFu);
 }
 
 // Nothing answers an address that is not the controller's, and no ACK is raised for it. This is the
@@ -110,51 +113,51 @@ void test_idle_buttons_are_all_ones() {
 void test_unaddressed_device_never_acknowledges() {
   Port p;
   p.owner->pad.buttons = 0xFFFFu;
-  p.write(kData, 0x81, 1); // memory card address — not modelled
+  p.write({kData, 0x81, 1}); // memory card address — not modelled
   p.burn(kByteTicks * 4);
-  CHECK_EQ(p.read(kData, 1), 0xFFu);
-  CHECK_EQ(p.read(kIStat, 4) & 0x80u, 0u);
-  CHECK_EQ(p.read(kStatus, 4) & 0x200u, 0u);
+  CHECK_EQ(p.read<1>(kData), 0xFFu);
+  CHECK_EQ(p.read<4>(kIStat) & 0x80u, 0u);
+  CHECK_EQ(p.read<4>(kStatus) & 0x200u, 0u);
   // Same for a command the digital pad does not implement, after a valid address.
   Port q;
-  q.exchange(0x01, 0xFFFFu);
+  q.exchange(0x01);
   q.clearSioIrq();
-  q.write(kData, 0x43, 1); // config-mode entry: pad ID was already shifting, then no continuation
+  q.write({kData, 0x43, 1}); // config-mode entry: pad ID was already shifting, then no continuation
   q.burn(kByteTicks * 4);
-  CHECK_EQ(q.read(kData, 1), 0x41u);
-  CHECK_EQ(q.read(kIStat, 4) & 0x80u, 0u);
+  CHECK_EQ(q.read<1>(kData), 0x41u);
+  CHECK_EQ(q.read<4>(kIStat) & 0x80u, 0u);
 }
 
 // With the port deselected (CTRL bit 1 clear) the bus is dead — writing DATA reaches nothing.
 void test_deselected_port_has_no_device() {
   Port p;
-  p.write(kCtrl, 0x1001, 2); // TXEN + ACK int, but NOT select
-  p.write(kData, 0x01, 1);
+  p.write({kCtrl, 0x1001, 2}); // TXEN + ACK int, but NOT select
+  p.write({kData, 0x01, 1});
   p.burn(kByteTicks * 4);
-  CHECK_EQ(p.read(kData, 1), 0xFFu);
-  CHECK_EQ(p.read(kIStat, 4) & 0x80u, 0u);
+  CHECK_EQ(p.read<1>(kData), 0xFFu);
+  CHECK_EQ(p.read<4>(kIStat) & 0x80u, 0u);
 
   Port txDisabled;
-  txDisabled.write(kCtrl, 0x1002, 2); // selected, but transmitter disabled
-  txDisabled.write(kData, 0x01, 1);
+  txDisabled.write({kCtrl, 0x1002, 2}); // selected, but transmitter disabled
+  txDisabled.write({kData, 0x01, 1});
   txDisabled.burn(kByteTicks * 4);
-  CHECK_EQ(txDisabled.read(kIStat, 4) & 0x80u, 0u);
+  CHECK_EQ(txDisabled.read<4>(kIStat) & 0x80u, 0u);
 
   Port secondPort;
-  secondPort.write(kCtrl, 0x3003, 2); // Crash Bash selects port 2 this way; no pad is connected there
-  secondPort.write(kData, 0x01, 1);
+  secondPort.write({kCtrl, 0x3003, 2}); // Crash Bash selects port 2 this way; no pad is connected there
+  secondPort.write({kData, 0x01, 1});
   secondPort.burn(kByteTicks * 4);
-  CHECK_EQ(secondPort.read(kIStat, 4) & 0x80u, 0u);
+  CHECK_EQ(secondPort.read<4>(kIStat) & 0x80u, 0u);
 }
 
 void test_switching_ports_cancels_the_first_ports_pending_ack() {
   Port p;
-  p.write(kData, 0x01, 1);
-  p.write(kCtrl, 0x3003, 2); // move DTR from port 1 to the absent port 2 before /ACK arrives
+  p.write({kData, 0x01, 1});
+  p.write({kCtrl, 0x3003, 2}); // move DTR from port 1 to the absent port 2 before /ACK arrives
   p.burn(kByteTicks * 4);
-  CHECK_EQ(p.read(kData, 1), 0xFFu);
-  CHECK_EQ(p.read(kIStat, 4) & 0x80u, 0u);
-  CHECK_EQ(p.read(kStatus, 4) & 0x280u, 0u);
+  CHECK_EQ(p.read<1>(kData), 0xFFu);
+  CHECK_EQ(p.read<4>(kIStat) & 0x80u, 0u);
+  CHECK_EQ(p.read<4>(kStatus) & 0x280u, 0u);
 }
 
 // The last byte of the response is deliberately NOT acknowledged: that absence is how a driver
@@ -165,9 +168,9 @@ void test_last_response_byte_is_not_acknowledged() {
   int acked = 0;
   for (uint32_t byte : tx) {
     p.clearSioIrq();
-    p.write(kData, byte, 1);
+    p.write({kData, byte, 1});
     p.burn(kByteTicks * 4);
-    if (p.read(kIStat, 4) & 0x80u) {
+    if (p.read<4>(kIStat) & 0x80u) {
       ++acked;
     }
   }
@@ -181,17 +184,17 @@ void test_last_response_byte_is_not_acknowledged() {
 void test_ack_arrives_after_the_drivers_pre_delay_clear() {
   Port p;
   p.hle.i_stat = 0;
-  p.write(kData, 0x01, 1);
-  CHECK_EQ(p.read(kIStat, 4) & 0x80u, 0u); // not instant
+  p.write({kData, 0x01, 1});
+  CHECK_EQ(p.read<4>(kIStat) & 0x80u, 0u); // not instant
 
-  constexpr uint64_t kDriverPreDelayTicks = 0x3Cu * 8u; // 0x3C counter-2 units, guest 0x8003C688
+  constexpr uint64_t kDriverPreDelayTicks = uint64_t{0x3C} * 8u; // 0x3C counter-2 units, guest 0x8003C688
   p.burn(kDriverPreDelayTicks);
-  CHECK_EQ(p.read(kIStat, 4) & 0x80u, 0u); // still pending when the driver clears the bit
-  p.write(kIStat, 0x77Fu, 4);              // the driver's `*I_STAT = 0xFFFFFF7F`
+  CHECK_EQ(p.read<4>(kIStat) & 0x80u, 0u); // still pending when the driver clears the bit
+  p.write({kIStat, 0x77Fu, 4});            // the driver's `*I_STAT = 0xFFFFFF7F`
 
-  constexpr uint64_t kDriverTimeoutTicks = 0x1AEu * 8u; // its ack timeout, guest 0x8003B7D8
+  constexpr uint64_t kDriverTimeoutTicks = uint64_t{0x1AE} * 8u; // its ack timeout, guest 0x8003B7D8
   p.burn(kDriverTimeoutTicks);
-  CHECK_EQ(p.read(kIStat, 4) & 0x80u, 0x80u); // and inside the timeout, not after it
+  CHECK_EQ(p.read<4>(kIStat) & 0x80u, 0x80u); // and inside the timeout, not after it
 }
 
 // The measured handler waits for JOY_STAT bit 7 to return low before writing CTRL bit 4. Prove the
@@ -199,12 +202,12 @@ void test_ack_arrives_after_the_drivers_pre_delay_clear() {
 // the handler acknowledges it.
 void test_ack_level_pulses_before_the_driver_acknowledges_it() {
   Port p;
-  p.write(kData, 0x01, 1);
-  constexpr uint64_t kDriverTimeoutTicks = 0x1AEu * 8u;
+  p.write({kData, 0x01, 1});
+  constexpr uint64_t kDriverTimeoutTicks = uint64_t{0x1AE} * 8u;
   bool sawPulse = false;
   uint64_t waited = 0;
   while (waited < kDriverTimeoutTicks) {
-    if (p.read(kStatus, 4) & 0x80u) {
+    if (p.read<4>(kStatus) & 0x80u) {
       sawPulse = true;
       break;
     }
@@ -213,27 +216,27 @@ void test_ack_level_pulses_before_the_driver_acknowledges_it() {
   }
   CHECK(sawPulse);
   CHECK(waited < kDriverTimeoutTicks);
-  CHECK_EQ(p.read(kStatus, 4) & 0x200u, 0x200u);
-  while ((p.read(kStatus, 4) & 0x80u) != 0 && waited < kDriverTimeoutTicks) {
+  CHECK_EQ(p.read<4>(kStatus) & 0x200u, 0x200u);
+  while ((p.read<4>(kStatus) & 0x80u) != 0 && waited < kDriverTimeoutTicks) {
     p.burn(1);
     ++waited;
   }
-  CHECK_EQ(p.read(kStatus, 4) & 0x80u, 0u);
-  p.write(kCtrl, kCtrlSelected | 0x0010u, 2);
-  CHECK_EQ(p.read(kStatus, 4) & 0x200u, 0u);
+  CHECK_EQ(p.read<4>(kStatus) & 0x80u, 0u);
+  p.write({kCtrl, kCtrlSelected | 0x0010u, 2});
+  CHECK_EQ(p.read<4>(kStatus) & 0x200u, 0u);
 }
 
 // The ACK is a future event. An early interrupt poll may clear an unrelated gate, but crossing the
 // device deadline without polling MMIO must latch I_STAT and re-arm delivery at the actual edge.
 void test_due_ack_rearms_delivery_after_an_early_poll() {
   Port p;
-  p.write(kIMask, 0x80u, 4);
-  p.write(kData, 0x01, 1);
+  p.write({kIMask, 0x80u, 4});
+  p.write({kData, 0x01, 1});
   p.owner->core.pending_work |= Core::PW_IRQ;
   p.owner->hle.irqPoll(&p.owner->core);
   CHECK_EQ(p.owner->core.pending_work & Core::PW_IRQ, 0u);
   p.burn(kByteTicks * 4);
-  CHECK_EQ(p.read(kIStat, 4) & 0x80u, 0x80u);
+  CHECK_EQ(p.read<4>(kIStat) & 0x80u, 0x80u);
   CHECK_EQ(p.owner->core.pending_work & Core::PW_IRQ, (uint32_t)Core::PW_IRQ);
 }
 
@@ -241,14 +244,14 @@ void test_due_ack_rearms_delivery_after_an_early_poll() {
 // wait. Reading early reads an empty FIFO.
 void test_rx_fifo_fills_only_when_the_byte_has_shifted() {
   Port p;
-  p.write(kData, 0x01, 1);
-  CHECK_EQ(p.read(kStatus, 4) & 0x02u, 0u);
+  p.write({kData, 0x01, 1});
+  CHECK_EQ(p.read<4>(kStatus) & 0x02u, 0u);
   p.burn(kByteTicks - 1);
-  CHECK_EQ(p.read(kData, 1), 0xFFu);
+  CHECK_EQ(p.read<1>(kData), 0xFFu);
   p.burn(1);
-  CHECK_EQ(p.read(kStatus, 4) & 0x02u, 0x02u);
-  CHECK_EQ(p.read(kData, 1), 0xFFu);        // the address byte's response IS 0xFF
-  CHECK_EQ(p.read(kStatus, 4) & 0x02u, 0u); // popped: FIFO empty again
+  CHECK_EQ(p.read<4>(kStatus) & 0x02u, 0x02u);
+  CHECK_EQ(p.read<1>(kData), 0xFFu);        // the address byte's response IS 0xFF
+  CHECK_EQ(p.read<4>(kStatus) & 0x02u, 0u); // popped: FIFO empty again
 }
 
 // JOY_STAT bit 9 latches an enabled ACK interrupt request, and CTRL bit 4 acknowledges it. Bits 4
@@ -256,56 +259,57 @@ void test_rx_fifo_fills_only_when_the_byte_has_shifted() {
 // raise bit 4 would otherwise acknowledge an interrupt it never saw.
 void test_status_latch_and_ctrl_strobes() {
   Port p;
-  p.write(kData, 0x01, 1);
+  p.write({kData, 0x01, 1});
   const uint64_t settled = kByteTicks * 4;
   p.burn(settled);
-  CHECK_EQ(p.read(kStatus, 4) & 0x200u, 0x200u);
-  p.write(kCtrl, kCtrlSelected | 0x0010u, 2); // acknowledge
-  CHECK_EQ(p.read(kCtrl, 2) & 0x0010u, 0u);
-  CHECK_EQ(p.read(kStatus, 4) & 0x200u, 0u);
+  CHECK_EQ(p.read<4>(kStatus) & 0x200u, 0x200u);
+  p.write({kCtrl, kCtrlSelected | 0x0010u, 2}); // acknowledge
+  CHECK_EQ(p.read<2>(kCtrl) & 0x0010u, 0u);
+  CHECK_EQ(p.read<4>(kStatus) & 0x200u, 0u);
 
-  p.write(kCtrl, kCtrlSelected | 0x0040u, 2); // reset
-  CHECK_EQ(p.read(kCtrl, 2), 0u);
-  CHECK_EQ(p.read(kBaudReg, 2), 0u);
+  p.write({kCtrl, kCtrlSelected | 0x0040u, 2}); // reset
+  CHECK_EQ(p.read<2>(kCtrl), 0u);
+  CHECK_EQ(p.read<2>(kBaudReg), 0u);
 }
 
 void test_reset_cancels_an_in_flight_receive() {
   Port p;
-  p.write(kData, 0x01, 1);
-  p.write(kCtrl, kCtrlSelected | 0x0040u, 2);
-  CHECK_EQ(p.read(kStatus, 4), 0x01u);
+  p.write({kData, 0x01, 1});
+  p.write({kCtrl, kCtrlSelected | 0x0040u, 2});
+  CHECK_EQ(p.read<4>(kStatus), 0x01u);
   p.burn(kByteTicks * 4);
-  CHECK_EQ(p.read(kData, 1), 0xFFu);
-  CHECK_EQ(p.read(kStatus, 4), 0x01u);
+  CHECK_EQ(p.read<1>(kData), 0xFFu);
+  CHECK_EQ(p.read<4>(kStatus), 0x01u);
 }
 
 // CTRL bit 12 gates the SIO interrupt request itself: with it disabled, neither I_STAT bit 7 nor
 // JOY_STAT bit 9 may latch. The physical JOY_STAT bit-7 pulse remains a separate device signal.
 void test_ack_interrupt_enable_gates_only_i_stat() {
   Port p;
-  p.write(kCtrl, 0x0003, 2); // selected, ACK interrupt DISABLED
-  p.write(kData, 0x01, 1);
+  p.write({kCtrl, 0x0003, 2}); // selected, ACK interrupt DISABLED
+  p.write({kData, 0x01, 1});
   const uint64_t settled = kByteTicks * 4;
   p.burn(settled);
-  CHECK_EQ(p.read(kIStat, 4) & 0x80u, 0u);
-  CHECK_EQ(p.read(kStatus, 4) & 0x200u, 0u);
+  CHECK_EQ(p.read<4>(kIStat) & 0x80u, 0u);
+  CHECK_EQ(p.read<4>(kStatus) & 0x200u, 0u);
 }
 
 // The transfer deadline comes from the guest's own JOY_BAUD/JOY_MODE, not from a constant of ours:
 // the memory-card twin programs reload 0x22 and must shift four times faster.
 void test_transfer_time_follows_the_programmed_baud() {
   Port p;
-  p.write(kBaudReg, 0x0022, 2);
-  p.write(kData, 0x01, 1);
+  p.write({kBaudReg, 0x0022, 2});
+  p.write({kData, 0x01, 1});
   p.burn(8u * 0x22u - 1u);
-  CHECK_EQ(p.read(kStatus, 4) & 0x02u, 0u);
+  CHECK_EQ(p.read<4>(kStatus) & 0x02u, 0u);
   p.burn(1);
-  CHECK_EQ(p.read(kStatus, 4) & 0x02u, 0x02u);
+  CHECK_EQ(p.read<4>(kStatus) & 0x02u, 0x02u);
 }
 
 } // namespace
 
 int main() {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(digital_pad_response_sequence);
   RUN(idle_buttons_are_all_ones);
   RUN(unaddressed_device_never_acknowledges);
@@ -320,5 +324,5 @@ int main() {
   RUN(reset_cancels_an_in_flight_receive);
   RUN(ack_interrupt_enable_gates_only_i_stat);
   RUN(transfer_time_follows_the_programmed_baud);
-  return pt_summary();
+  return psx::test::summary();
 }

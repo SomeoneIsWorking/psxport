@@ -1,11 +1,8 @@
 #include "frame_loop_shell.h"
 
-#include "hw_bind.h"
-
 #include "core.h"
 #include "game.h"
 #include "game_runtime.h"
-#include "gpu_native_internal.h"
 
 #include <cstdlib>
 #include <lucent/log.h>
@@ -24,7 +21,6 @@ psx::game::FrameDriver &FrameLoopShell::requireDriver(Game &game) const {
 
 psx::game::FrameDriver &FrameLoopShell::prepareProduct(Game &game) const {
   psx::game::FrameDriver &driver = requireDriver(game);
-  game.platform_hle.initBuiltins();
   game.platform_hle.requireNativeFrameLoopContract();
   game.productFrameLoopPrepared_ = true;
   return driver;
@@ -32,10 +28,9 @@ psx::game::FrameDriver &FrameLoopShell::prepareProduct(Game &game) const {
 
 void FrameLoopShell::bindRunningCore(Core &core) {
   core.gte().bind();
-  core.rsub.projprim.bind(&core);
-  spu_bind(&core);
-  mdec_bind(&core);
-  xa_bind(&core);
+  core.game->spu.bind(&core);
+  core.game->mdec.bind();
+  core.game->xa.bindSamplePull();
   bound_ = &core;
 }
 
@@ -64,12 +59,12 @@ void FrameLoopShell::step(Core &core, uint32_t frame) {
   }
   requireDriver(game).stepFrame(core, frame);
   // THE FRAME'S CAPTURES, HERE, because this is where the frame's presentation ends. A frame can have
-  // more than one presenter — the main one, and gpu_vk_present_image when a native movie is playing —
+  // more than one presenter — the main one, and DisplayPresenter::presentHostPicture when a native movie is playing —
   // and in the movie case the second runs last and is what the window shows. Capturing at the tail of
   // whichever presenter happened to be main therefore read the movie's frame as the empty guest-VRAM
   // composite: black, on every frame of a movie (issue 0040). Both presenters now only present; the
   // capture is taken once, here, and reads whatever the turn ended showing.
-  gpu_present_frame_capture(&core);
+  core.game->display.captureFrame();
   const uint64_t fenceAfter = game.presentation.fence();
   if (fenceAfter != fenceBefore + 1u) {
     lucent::error("frame-loop",

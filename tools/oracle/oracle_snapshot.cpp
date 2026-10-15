@@ -9,7 +9,7 @@ extern "C" {
 #include "oracle_shim.h"
 #include "psx.h"
 }
-#include "gte_state.h"
+#include "beetle_gte.h"
 
 #include <algorithm>
 #include <array>
@@ -26,7 +26,7 @@ namespace {
 
 constexpr std::array<unsigned char, 8> kMagic{'O', 'R', 'A', 'S', 'N', 'A', 'P', '1'};
 constexpr uint32_t kVersion = 1;
-constexpr size_t kMaxBytes = 3u * 1024u * 1024u;
+constexpr size_t kMaxBytes = size_t{3} * size_t{1024} * 1024u;
 constexpr size_t kMaxFields = 64;
 
 struct Field {
@@ -103,10 +103,13 @@ uint32_t checksum(const unsigned char *data, size_t size) {
   return hash;
 }
 
-void transfer(unsigned char *destination, const unsigned char *source, size_t bytes, unsigned width) {
+// `field`'s bytes in little-endian lanes of its width.
+void transfer(unsigned char *destination, const unsigned char *source, const Field &field) {
+  const size_t bytes = field.bytes;
   if constexpr (std::endian::native == std::endian::little) {
     std::memcpy(destination, source, bytes);
   } else {
+    const unsigned width = field.width;
     for (size_t base = 0; base < bytes; base += width) {
       for (unsigned lane = 0; lane < width; ++lane) {
         destination[base + lane] = source[base + width - lane - 1];
@@ -128,7 +131,7 @@ std::vector<unsigned char> encode(const Fields &fields) {
     out.insert(out.end(), field.name.begin(), field.name.end());
     const size_t start = out.size();
     out.resize(start + field.bytes);
-    transfer(out.data() + start, field.data, field.bytes, field.width);
+    transfer(out.data() + start, field.data, field);
   }
   const uint32_t size = static_cast<uint32_t>(out.size());
   const uint32_t hash = checksum(out.data() + 24, out.size() - 24);
@@ -186,7 +189,7 @@ bool decode(const std::vector<unsigned char> &in, const Fields &fields, std::vec
     cursor += 12;
     if (name_bytes != field.name.size() || bytes != field.bytes || width != field.width ||
         name_bytes > in.size() - cursor || bytes > in.size() - cursor - name_bytes ||
-        std::memcmp(in.data() + cursor, field.name.data(), name_bytes)) {
+        std::memcmp(in.data() + cursor, field.name.data(), name_bytes) != 0) {
       std::fprintf(stderr, "oracle snapshot: schema mismatch at owner field %s\n", field.name.c_str());
       return false;
     }
@@ -272,8 +275,8 @@ extern "C" int oracle_snapshot_load(const char *path) {
   }
   std::vector<unsigned char> bytes;
   std::array<unsigned char, 8192> chunk{};
-  size_t count;
-  while ((count = std::fread(chunk.data(), 1, chunk.size(), file.get())) != 0) {
+  while (std::feof(file.get()) == 0 && std::ferror(file.get()) == 0) {
+    const size_t count = std::fread(chunk.data(), 1, chunk.size(), file.get());
     if (count > kMaxBytes - bytes.size()) {
       std::fprintf(stderr, "oracle snapshot: file exceeds byte budget\n");
       return 0;
@@ -292,7 +295,7 @@ extern "C" int oracle_snapshot_load(const char *path) {
   // owners, so copying restores private pipeline fields without reconstruction or normalization.
   for (size_t i = 0; i < fields.entries.size(); ++i) {
     const Field &field = fields.entries[i];
-    transfer(field.data, bytes.data() + offsets[i], field.bytes, field.width);
+    transfer(field.data, bytes.data() + offsets[i], field);
   }
   DMA_DPCR_LoadStateValue(fields.dpcr);
   std::fprintf(stderr,

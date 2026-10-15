@@ -7,7 +7,9 @@
 #include "dma_irq.h"
 #include "testutil.h"
 
-static void test_fresh_registers_are_power_on(void) {
+namespace {
+
+void test_fresh_registers_are_power_on(void) {
   DmaRegisters dma;
   CHECK_EQ(dma.dpcr, DPCR_RESET);
   CHECK_EQ(dma.dicr, 0u);
@@ -16,9 +18,9 @@ static void test_fresh_registers_are_power_on(void) {
   CHECK_EQ(dma.done.mask, 0u);
 }
 
-static void test_a_second_instance_does_not_inherit_the_first(void) {
+void test_a_second_instance_does_not_inherit_the_first(void) {
   DmaRegisters first;
-  first.dicr = dma_dicr_store(first.dicr, 0x1F8010F4u, DICR_MASTER_EN | (1u << (16 + 3)), 4);
+  first.dicr = psx::dma::storeDicr(first.dicr, {0x1F8010F4u, DICR_MASTER_EN | (1u << (16 + 3)), 4});
   CHECK(first.done.complete(first.dicr, 3));
   CHECK(first.done.owed(3));
   DmaRegisters second;
@@ -26,8 +28,10 @@ static void test_a_second_instance_does_not_inherit_the_first(void) {
   CHECK_EQ(second.dicr, 0u);
 }
 
+} // namespace
+
 int main(void) {
   RUN(fresh_registers_are_power_on);
   RUN(a_second_instance_does_not_inherit_the_first);
-  return pt_summary();
+  return psx::test::summary();
 }

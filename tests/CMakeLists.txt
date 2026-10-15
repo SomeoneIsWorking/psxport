@@ -33,6 +33,7 @@ foreach(test_src IN LISTS PSXPORT_TEST_SRCS)
     LINKER_LANGUAGE CXX
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
   target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(${test_name} PRIVATE PSXPORT_SOURCE_DIR="${PSXPORT_ROOT}")
   # Linking libpsxport gives a test the whole framework plus its PUBLIC include dirs. It is a static
   # archive, so only the objects a test actually references are pulled in — a test of one unit does
   # not drag in the renderer. A test that reaches a unit which calls into the game substrate will
@@ -130,6 +131,16 @@ psxport_add_title_link_isolation_test(title_link_isolation_detects_collision
   SECOND link_isolation_second SECOND_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/second)
 set_tests_properties(title_link_isolation_detects_collision PROPERTIES
   PASS_REGULAR_EXPRESSION "collision: link_fixture::sharedName\\(\\)")
+# PIC objects that unwind each define the compiler's DW.ref personality name; it is no title's.
+add_library(link_isolation_first_unwind OBJECT fixtures/link_isolation/first/unwind.cpp)
+add_library(link_isolation_second_unwind OBJECT fixtures/link_isolation/second/unwind.cpp)
+set_target_properties(link_isolation_first_unwind link_isolation_second_unwind PROPERTIES
+  POSITION_INDEPENDENT_CODE ON)
+psxport_add_title_link_isolation_test(title_link_isolation_ignores_compiler_names
+  FIRST link_isolation_first_unwind FIRST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/first
+  SECOND link_isolation_second_unwind SECOND_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/second)
+set_tests_properties(title_link_isolation_ignores_compiler_names PROPERTIES
+  PASS_REGULAR_EXPRESSION "1 shared, 0 collision\\(s\\), 0 without a definition location")
 add_library(link_isolation_no_lines OBJECT fixtures/link_isolation/first/shared_name.cpp)
 psxport_add_title_link_isolation_test(title_link_isolation_refuses_objects_without_lines
   FIRST link_isolation_no_lines FIRST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/first

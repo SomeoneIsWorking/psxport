@@ -6,20 +6,22 @@
 #include "../runtime/ui/choice_navigator.h"
 #include "testutil.h"
 
+namespace {
+
 using psx::ui::ChoiceEntry;
 using psx::ui::ChoiceNavigator;
 
-static ChoiceEntry entry(bool enabled) {
+ChoiceEntry entry(bool enabled) {
   return ChoiceEntry{"label", "detail", enabled, enabled ? "" : "disabled"};
 }
 
-static void test_starts_on_first_enabled(void) {
+void test_starts_on_first_enabled(void) {
   ChoiceNavigator nav({entry(false), entry(true), entry(true)});
   CHECK_EQ(nav.selected(), 1);
   CHECK_EQ(nav.enabledCount(), 2);
 }
 
-static void test_move_skips_disabled_and_wraps(void) {
+void test_move_skips_disabled_and_wraps(void) {
   ChoiceNavigator nav({entry(true), entry(false), entry(true)});
   CHECK_EQ(nav.selected(), 0);
   CHECK(nav.move(+1));
@@ -30,13 +32,13 @@ static void test_move_skips_disabled_and_wraps(void) {
   CHECK_EQ(nav.selected(), 2);
 }
 
-static void test_single_enabled_does_not_move(void) {
+void test_single_enabled_does_not_move(void) {
   ChoiceNavigator nav({entry(false), entry(true), entry(false)});
   CHECK(!nav.move(+1));
   CHECK_EQ(nav.selected(), 1);
 }
 
-static void test_nothing_enabled_selects_nothing(void) {
+void test_nothing_enabled_selects_nothing(void) {
   ChoiceNavigator nav({entry(false), entry(false)});
   CHECK_EQ(nav.selected(), -1);
   CHECK_EQ(nav.enabledCount(), 0);
@@ -44,7 +46,7 @@ static void test_nothing_enabled_selects_nothing(void) {
   CHECK(!nav.move(+1));
 }
 
-static void test_select_refuses_disabled_and_out_of_range(void) {
+void test_select_refuses_disabled_and_out_of_range(void) {
   ChoiceNavigator nav({entry(true), entry(false), entry(true)});
   CHECK(!nav.select(1));
   CHECK(!nav.select(-1));
@@ -54,11 +56,13 @@ static void test_select_refuses_disabled_and_out_of_range(void) {
   CHECK_EQ(nav.selected(), 2);
 }
 
-static void test_activate_returns_the_highlight(void) {
+void test_activate_returns_the_highlight(void) {
   ChoiceNavigator nav({entry(false), entry(true)});
   CHECK(nav.activate().has_value());
   CHECK_EQ(*nav.activate(), 1);
 }
+
+} // namespace
 
 int main(void) {
   RUN(starts_on_first_enabled);
@@ -67,5 +71,5 @@ int main(void) {
   RUN(nothing_enabled_selects_nothing);
   RUN(select_refuses_disabled_and_out_of_range);
   RUN(activate_returns_the_highlight);
-  return pt_summary();
+  return psx::test::summary();
 }

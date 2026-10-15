@@ -41,22 +41,24 @@
 // because the run measured them absent.
 //
 // HERMETIC: a Game is constructed in-process. No disc, no window, no GPU, no wall clock.
+#include "bios_call.h"
 #include "game.h"
 #include "hle.h"
+#include "r3000.h"
 #include "stub_game_runtime.h"
 #include "testutil.h"
 
-namespace {
-psx::test::StubGameRuntime stubRuntime;
-}
+#include <memory>
 
-enum { R_A3 = 7 };
+namespace {
+
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 // The BIOS hardware event classes, as psxport's own memcard.cpp names them in the delivery comments.
-static constexpr uint32_t kSwCard = 0xF4000001u;
-static constexpr uint32_t kHwCard = 0xF0000011u;
-static constexpr uint32_t kHwSpu = 0xF0000009u;
-static constexpr uint32_t kHwCd = 0xF0000003u; // the class the CD-ROM completion would use
+constexpr uint32_t kSwCard = 0xF4000001u;
+constexpr uint32_t kHwCard = 0xF0000011u;
+constexpr uint32_t kHwSpu = 0xF0000009u;
+constexpr uint32_t kHwCd = 0xF0000003u; // the class the CD-ROM completion would use
 
 // SLUS_008.75's CdInit installs three libcd callback bodies into the callback slots, and each one's
 // ENTIRE body is `DeliverEvent(0xF0000003, spec)`:
@@ -64,8 +66,8 @@ static constexpr uint32_t kHwCd = 0xF0000003u; // the class the CD-ROM completio
 //     0x8008A260  a0 = 0xF0000003 ; jal 0x8008F9D0 (B0:0x07) ; a1 = 0x40
 //     0x8008A288  a0 = 0xF0000003 ; jal 0x8008F9D0 (B0:0x07) ; a1 = 0x40
 // 0x20 and 0x40 are therefore the guest's OWN HwCD specs, read from its bytes rather than chosen.
-static constexpr uint32_t kHwCdSpecSync = 0x20u;
-static constexpr uint32_t kHwCdSpecReady = 0x40u;
+constexpr uint32_t kHwCdSpecSync = 0x20u;
+constexpr uint32_t kHwCdSpecReady = 0x40u;
 
 struct GuestEventOpen {
   uint32_t evClass;
@@ -73,7 +75,7 @@ struct GuestEventOpen {
 };
 
 // The MEASURED SLUS_008.75 registration: 9 OpenEvent calls, 3 classes, and no 0xF0000003.
-static constexpr GuestEventOpen kGuestEventTable[] = {
+constexpr GuestEventOpen kGuestEventTable[] = {
     {kSwCard, 0x00000004u},
     {kSwCard, 0x00008000u},
     {kSwCard, 0x00000100u},
@@ -90,33 +92,24 @@ static constexpr GuestEventOpen kGuestEventTable[] = {
 // partway through and every later OpenEvent then returns 0xFFFFFFFF, which reads as "the guest
 // cannot open this class" for a reason that has nothing to do with the class. That is exactly the
 // capacity artifact the third case exists to rule out, so the fixture must not manufacture it.
-static Game *gam() {
-  return new Game(stubRuntime, {});
-}
-
-static uint32_t bios_b0(Game *g, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
-  Core *c = &g->core;
-  c->r[4] = a0;
-  c->r[5] = a1;
-  c->r[6] = a2;
-  c->r[2] = 0xDEADBEEFu; // so "the handler never wrote v0" cannot read as a plausible answer
-  return g->hle.dispatchBios('B', fn) ? c->r[2] : 0xDEADBEEFu;
+Game *gam() {
+  return new Game(*stubRuntime, {});
 }
 
 // Open + enable exactly as the guest does. EvMdNOINTR (0x2000) marks the slot and runs nothing, so
 // this needs no guest code and measures only the class/spec matching rule.
-static uint32_t open_event(Game *g, uint32_t cls, uint32_t spec) {
-  g->core.r[R_A3] = 0;
-  const uint32_t handle = bios_b0(g, 0x08, cls, spec, 0x2000u);
-  bios_b0(g, 0x0C, handle, 0, 0); // EnableEvent — deliverEvent ignores a disabled slot
+uint32_t open_event(Game *g, uint32_t cls, uint32_t spec) {
+  g->core.r[psx::cpu::kA3] = 0;
+  const uint32_t handle = psx::test::biosResult(*g, {'B', 0x08, {cls, spec, 0x2000u}});
+  psx::test::biosResult(*g, {'B', 0x0C, {handle, 0, 0}}); // EnableEvent — deliverEvent ignores a disabled slot
   return handle;
 }
 
-static bool test_event(Game *g, uint32_t handle) {
-  return bios_b0(g, 0x0B, handle, 0, 0) != 0;
+bool test_event(Game *g, uint32_t handle) {
+  return psx::test::biosResult(*g, {'B', 0x0B, {handle, 0, 0}}) != 0;
 }
 
-static void register_guest_table(Game *g) {
+void register_guest_table(Game *g) {
   for (const GuestEventOpen &open : kGuestEventTable) {
     open_event(g, open.evClass, open.spec);
   }
@@ -124,7 +117,7 @@ static void register_guest_table(Game *g) {
 
 // Clear every `fired` flag by testing every open handle, so each case starts from a known state and
 // "not fired" means "not delivered now" rather than "left over from the previous case".
-static void drain_all(Game *g, const uint32_t *handles, int count) {
+void drain_all(Game *g, const uint32_t *handles, int count) {
   for (int i = 0; i < count; i++) {
     (void)test_event(g, handles[i]);
   }
@@ -132,7 +125,7 @@ static void drain_all(Game *g, const uint32_t *handles, int count) {
 
 // THE POSITIVE CONTROL: the exact delivery memcard.cpp:405-406 performs. If this ever stops firing,
 // the instrument is broken and the negative cases below mean nothing.
-static void test_card_pair_delivery_fires_the_opened_slot(void) {
+void test_card_pair_delivery_fires_the_opened_slot(void) {
   Game *g = gam();
   register_guest_table(g);
   const uint32_t h = open_event(g, kHwCard, 0x0004u);
@@ -153,7 +146,7 @@ static void test_card_pair_delivery_fires_the_opened_slot(void) {
 // delivering HwCD marks the planted HwCD slot and never touches the HwCARD handle being watched. A
 // negative case that cannot see the failure it exists to catch is not a negative case, and it would
 // have shipped as one. Asking "did ANY open slot fire" is the question the finding actually raises.
-static int count_fired_slots(Game *g, const uint32_t *handles, int count) {
+int count_fired_slots(Game *g, const uint32_t *handles, int count) {
   int fired = 0;
   for (int i = 0; i < count; i++) {
     if (test_event(g, handles[i])) {
@@ -163,7 +156,7 @@ static int count_fired_slots(Game *g, const uint32_t *handles, int count) {
   return fired;
 }
 
-static void test_hwcd_cannot_fire_without_an_opened_slot(void) {
+void test_hwcd_cannot_fire_without_an_opened_slot(void) {
   Game *g = gam();
   uint32_t handles[sizeof(kGuestEventTable) / sizeof(kGuestEventTable[0])];
   for (size_t i = 0; i < sizeof(kGuestEventTable) / sizeof(kGuestEventTable[0]); i++) {
@@ -190,7 +183,7 @@ static void test_hwcd_cannot_fire_without_an_opened_slot(void) {
 // WHY the CD half above is inert, stated as a fact about the table rather than about the delivery: a
 // HwCD slot is absent because the guest never opened one, and the framework is not going to invent
 // it. This is the DENOMINATOR the negative case needs — 9 opens scanned, 0 of class 0xF0000003.
-static void test_the_guest_event_table_has_no_hwcd_row(void) {
+void test_the_guest_event_table_has_no_hwcd_row(void) {
   int scanned = 0;
   int hwcd = 0;
   for (const GuestEventOpen &open : kGuestEventTable) {
@@ -215,7 +208,7 @@ static void test_the_guest_event_table_has_no_hwcd_row(void) {
 // A DISCRIMINATOR for the other direction: HwCD delivery is not merely "late", it is structurally
 // unreachable while nothing is open, and the framework does not quietly create a slot for it. This
 // is the assertion a future "just add the arm" patch must break to be believed.
-static void test_opening_an_hwcd_slot_is_what_makes_it_deliverable(void) {
+void test_opening_an_hwcd_slot_is_what_makes_it_deliverable(void) {
   Game *g = gam();
   const uint32_t h = open_event(g, kHwCd, kHwCdSpecReady);
   drain_all(g, &h, 1);
@@ -227,10 +220,13 @@ static void test_opening_an_hwcd_slot_is_what_makes_it_deliverable(void) {
   CHECK(!test_event(g, h));
 }
 
+} // namespace
+
 int main(void) {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(card_pair_delivery_fires_the_opened_slot);
   RUN(hwcd_cannot_fire_without_an_opened_slot);
   RUN(the_guest_event_table_has_no_hwcd_row);
   RUN(opening_an_hwcd_slot_is_what_makes_it_deliverable);
-  return pt_summary();
+  return psx::test::summary();
 }

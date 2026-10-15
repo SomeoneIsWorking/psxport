@@ -1,15 +1,16 @@
 #include "frame_presenter.h"
+#include "record_raster_setup.h"
 
-#include "cfg.h"
 #include "core.h"
+#include "diagnostic_config.h"
+#include "display_presenter.h"
 #include "frame_composer.h"
 #include "frame_dump_window.h"
 #include "fs_util.h"
 #include "game.h"
-#include "gpu_native_internal.h"
+#include "gpu_device.h"
 #include "gpu_vk.h"
-#include "in_between_present.h"
-#include "keyed_blend.h"
+#include "gpu_vk_internal.h"
 #include "producer_census.h"
 #include "render_mode.h"
 #include "texture_feedback.h"
@@ -24,8 +25,6 @@
 #include <variant>
 #include <vector>
 
-int gpu_vk_enabled();
-
 namespace psx::frame {
 namespace {
 
@@ -39,16 +38,15 @@ bool drawsAnything(const present::FrameRecord &record) {
 }
 
 constexpr int kDumpMax = 600;
+constexpr lucent::Channel presentDumpChannel{"fps60dump"};
 
 void dump_present(Core *core, uint64_t fence, int &sequence, bool interpolated) {
-  // Keep the established channel name compatible while moving its lifecycle out of Fps60. It now
-  // captures any presented frame; an already-60fps title does not need the interpolation subsystem.
-  static const lucent::Channel channel{"fps60dump"};
-  if (!channel) {
+  // Any presented frame, real or in-between.
+  if (!presentDumpChannel) {
     sequence = 0;
     return;
   }
-  if (!frameDumpWindowContains(fence, cfg_int("PSXPORT_FPS60_DUMP_FROM", 0))) {
+  if (!frameDumpWindowContains(fence, psx::config::present_dump_first_fence())) {
     return;
   }
   if (sequence >= kDumpMax) {
@@ -69,11 +67,7 @@ void dump_present(Core *core, uint64_t fence, int &sequence, bool interpolated) 
   if (!Fs::ensureParentDirs(path)) {
     return;
   }
-  if (gpu_vk_enabled()) {
-    gpu_vk_shot(core, path);
-  } else {
-    gpu_native_shot(core, path);
-  }
+  core->game->gpuVk().shot(path);
   ++sequence;
 }
 
@@ -83,35 +77,20 @@ public:
   CoreFramePresentationBackend(Core &core, int &dumpSequence)
       : core_(core), dumpSequence_(dumpSequence), producers_(core) {}
 
-  void emit(std::span<const RqItem> items) override {
-    std::vector<const RqItem *> stream;
-    stream.reserve(items.size());
-    for (const RqItem &item : items) {
-      stream.push_back(&item);
-    }
-    core_.game->rq.mLedger.inRealPresent = true;
-    core_.game->rq.emitItemStream(&core_, stream);
-    core_.game->rq.mLedger.inRealPresent = false;
-  }
-
   void presentReal() override {
-    gpu_present_ex(&core_, 1);
+    core_.game->display.present(present::PresentCompletion::MainFrame);
   }
 
   void captureDiagnostic(uint64_t fence, bool interpolated) override {
     dump_present(&core_, fence, dumpSequence_, interpolated);
   }
 
-  void pace(int guestFields, int parts) override {
-    core_.runtime.pacePresentation(core_, guestFields, parts);
+  void pace(FieldCadence cadence) override {
+    core_.runtime.pacePresentation(core_, cadence);
   }
 
-  void reconcile(uint64_t fence) override {
-    core_.game->rq.mLedger.reconcile(static_cast<long>(fence), cfg_on("PSXPORT_GATE_PRESENTATION"));
-  }
-
-  void beginLedgerFrame() override {
-    core_.game->rq.mLedger.beginFrame();
+  bool ledgerIsFatal() const override {
+    return psx::config::gate_presentation();
   }
 
   bool interpolatesRecords() const override {
@@ -123,12 +102,13 @@ public:
   }
 
   gpu::RecordRect displayedBuffer() override {
-    const gpu::DisplayArea area = core_.gpuDevice.displayArea();
-    return gpu::clampedVramRect(area.x, area.y, area.width, GpuState::presentedHeight(&core_, area.height));
+    const gpu::DisplayArea area = core_.gpuDevice().displayArea();
+    return gpu::clampedVramRect(
+        {area.x, area.y, area.width, present::DisplayPresenter::presentedHeight(core_, area.height)});
   }
 
   void presentInBetween() override {
-    gpu_present_in_between(&core_);
+    core_.game->display.presentInBetween();
   }
 
   const present::StateProducers *stateProducers() override {
@@ -165,80 +145,34 @@ const present::StateProducer *RuntimeStateProducers::find(std::uint32_t producer
   return core_.runtime.stateProducer(core_, producer);
 }
 
-void FramePresenter::capture(const RqItem *items, int count) {
-  if (count <= 0) {
-    return;
-  }
-  if (!items_) {
-    items_ = std::make_unique<RqItem[]>(RQ_MAX);
-  }
-  if (count_ + count > RQ_MAX) {
-    lucent::error("presentation",
-                  "FramePresenter::capture OVERFLOW: {} captured + {} this flush > RQ_MAX {}. "
-                  "Raise the cap; do not drop prims.",
-                  count_,
-                  count,
-                  RQ_MAX);
-    std::abort();
-  }
-
-  std::memcpy(items_.get() + count_, items, static_cast<size_t>(count) * sizeof(RqItem));
-  for (int i = 0; i < count; ++i) {
-    RqItem &captured = items_[count_ + i];
-    captured.seq += sequenceBase_;
-    captured.flush_ordinal = flushOrdinal_;
-  }
-  count_ += count;
-  sequenceBase_ += static_cast<uint32_t>(count);
-  ++flushOrdinal_;
-}
-
-CapturedFrameView FramePresenter::capturedFrame() const {
-  return {{items_.get(), static_cast<size_t>(count_)}, fence_};
-}
-
-void FramePresenter::commit(Core *core, int guestFields, TemporalFramePresentation *temporal) {
+void FramePresenter::commit(Core *core, int guestFields) {
   if (!core || !core->game) {
     lucent::error("presentation", "FramePresenter::commit requires a bound Core/Game");
     std::abort();
   }
-  present::FrameRecord sealed = core->gpuDevice.sealRecord();
+  present::FrameRecord sealed = core->gpuDevice().sealRecord();
   present::FrameState state = core->frameStates.collect(sealed);
   psx::debug::censusRecord(*core, sealed, state);
   core->frameStates.endFrame();
   CoreFramePresentationBackend backend(*core, dumpSequence_);
-  commit(backend, core, std::move(sealed), std::move(state), guestFields, temporal);
+  commitSealed(backend, std::move(sealed), std::move(state), guestFields);
 }
 
-void FramePresenter::commitUnpresented(Core *core) {
-  if (!core || !core->game) {
-    lucent::error("presentation", "FramePresenter::commitUnpresented requires a bound Core/Game");
-    std::abort();
-  }
-  CoreFramePresentationBackend backend(*core, dumpSequence_);
-  commitUnpresented(backend);
-}
-
-void FramePresenter::commitUnpresented(FramePresentationBackend &backend) {
+void FramePresenter::commitUnpresented() {
   ++fence_;
-  backend.reconcile(fence_);
-  backend.beginLedgerFrame();
-  resetCapture();
 }
 
 void FramePresenter::commit(FramePresentationBackend &backend,
                             int guestFields,
                             present::FrameRecord sealed,
                             present::FrameState state) {
-  commit(backend, nullptr, std::move(sealed), std::move(state), guestFields, nullptr);
+  commitSealed(backend, std::move(sealed), std::move(state), guestFields);
 }
 
-void FramePresenter::commit(FramePresentationBackend &backend,
-                            Core *core,
-                            present::FrameRecord sealed,
-                            present::FrameState state,
-                            int guestFields,
-                            TemporalFramePresentation *temporal) {
+void FramePresenter::commitSealed(FramePresentationBackend &backend,
+                                  present::FrameRecord sealed,
+                                  present::FrameState state,
+                                  int guestFields) {
   const bool interpolates = backend.interpolatesRecords();
   const bool cut = interpolates && backend.sealedFrameIsCut();
   // Only a title with state producers saves state, so an empty state has nothing to compose.
@@ -256,21 +190,13 @@ void FramePresenter::commit(FramePresentationBackend &backend,
     pendingBreak_ = false;
   }
   ++fence_;
-  const CapturedFrameView frame = capturedFrame();
   if (interpolates) {
-    presentRecords(backend, frame, guestFields);
+    presentRecords(backend, guestFields);
   } else {
     shownSequence_.reset();
-    if (temporal) {
-      temporal->present(backend, *core, frame, guestFields);
-    } else {
-      const bool composes = savedState && backend.stateProducers() != nullptr;
-      presentCurrent(backend, frame, guestFields, 1, composes ? shownRecord(backend.displayedBuffer()) : nullptr);
-    }
+    const bool composes = savedState && backend.stateProducers() != nullptr;
+    presentCurrent(backend, {guestFields, 1}, composes ? shownRecord(backend.displayedBuffer()) : nullptr);
   }
-  backend.reconcile(fence_);
-  backend.beginLedgerFrame();
-  resetCapture();
 }
 
 const FramePresenter::SealedRecord *FramePresenter::latestDrawing(const gpu::RecordRect &buffer) const {
@@ -336,7 +262,7 @@ bool FramePresenter::cutBetween(std::uint64_t from, std::uint64_t to) const {
   return false;
 }
 
-void FramePresenter::presentRecords(FramePresentationBackend &backend, CapturedFrameView frame, int guestFields) {
+void FramePresenter::presentRecords(FramePresentationBackend &backend, int guestFields) {
   const SealedRecord *shown = shownRecord(backend.displayedBuffer());
   const SealedRecord *from = shownSequence_ ? sealed(*shownSequence_) : nullptr;
   const std::optional<std::uint64_t> previous = shownSequence_;
@@ -361,14 +287,12 @@ void FramePresenter::presentRecords(FramePresentationBackend &backend, CapturedF
   }
   if (shown == nullptr || from == nullptr || !continuesTo(from->record->sequence(), shown->record->sequence())) {
     ++stability_.withoutInBetween;
-    presentCurrent(backend, frame, guestFields, 1, shown);
+    presentCurrent(backend, {guestFields, 1}, shown);
     return;
   }
   ++stability_.inBetweens;
   const bool cut = cutBetween(from->record->sequence(), shown->record->sequence());
-  present::FrameRecord blended =
-      cut ? present::FrameRecord() : present::keyedBlend(*from->record, *shown->record, 0.5f);
-  const present::FrameRecord &base = cut ? *shown->record : blended;
+  const present::FrameRecord &base = *shown->record;
   if (const present::StateProducers *producers = backend.stateProducers()) {
     composedStore_ = composeGuarded(backend, base, cut ? nullptr : from->state.get(), *shown->state, 0.5f, *producers);
   }
@@ -378,25 +302,28 @@ void FramePresenter::presentRecords(FramePresentationBackend &backend, CapturedF
   composed_ = nullptr;
   composedStore_.reset();
   backend.captureDiagnostic(fence_, true);
-  backend.pace(guestFields, 2);
-  presentCurrent(backend, frame, guestFields, 2, shown);
+  backend.pace({guestFields, 2});
+  presentCurrent(backend, {guestFields, 2}, shown);
 }
 
-void FramePresenter::presentCurrent(
-    FramePresentationBackend &backend, CapturedFrameView frame, int guestFields, int parts, const SealedRecord *shown) {
+void FramePresenter::presentCurrent(FramePresentationBackend &backend,
+                                    FieldCadence cadence,
+                                    const SealedRecord *shown) {
   const present::StateProducers *producers = backend.stateProducers();
   if (shown != nullptr && producers != nullptr) {
     composedStore_ = composeGuarded(backend, *shown->record, nullptr, *shown->state, 1.0f, *producers);
+    if (composedStore_) {
+      ledger_.reconcile(*shown->record, *composedStore_, fence_, backend.ledgerIsFatal());
+    }
   }
   composed_ = composedStore_ ? &*composedStore_ : nullptr;
   composedAdvances_ = composed_ != nullptr;
-  backend.emit(frame.items);
   backend.presentReal();
   composed_ = nullptr;
   composedAdvances_ = false;
   composedStore_.reset();
   backend.captureDiagnostic(fence_, false);
-  backend.pace(guestFields, parts);
+  backend.pace(cadence);
 }
 
 void FramePresenter::reportStability() const {
@@ -407,12 +334,7 @@ void FramePresenter::reportStability() const {
                stability_.withoutInBetween,
                stability_.repeats,
                stability_.backwards);
-}
-
-void FramePresenter::resetCapture() {
-  count_ = 0;
-  sequenceBase_ = 0;
-  flushOrdinal_ = 0;
+  ledger_.report();
 }
 
 } // namespace psx::frame

@@ -9,13 +9,13 @@
 #include <string>
 
 #include "execution_exit.h"
+#include "field_cadence.h"
 #include "guest_address_range.h"
 #include "guest_packet_pool_windows.h"
 #include "input_phase.h"
 #include "logo_image.h"
 #include "pad_delivery.h"
 #include "psx_exe_image.h"
-#include "render_capabilities.h"
 #include "title_settings.h"
 
 class Core;
@@ -24,14 +24,9 @@ class GuestWidescreenProjection;
 namespace psx::cd {
 struct StockReadLanding;
 }
-namespace psx::frame {
-class TemporalFramePresentation;
-} // namespace psx::frame
 namespace psx::present {
 class StateProducer;
 }
-struct GameConfig;
-struct GameHooks;
 namespace psx::state {
 class NativeStatePort;
 } // namespace psx::state
@@ -178,7 +173,7 @@ public:
   }
   // Delivers simulated fields and waits for their deadline; a title whose field scheduler already
   // advances the devices only waits.
-  virtual void pacePresentation(Core &core, int guestFields, int parts);
+  virtual void pacePresentation(Core &core, frame::FieldCadence cadence);
   // Lines the guest scans out, or 0 when the decoded display height is right.
   virtual int displayHeight() const {
     return 0;
@@ -193,14 +188,11 @@ public:
     return std::nullopt;
   }
 
-  // Renderer selection until Record is the only path.
-  virtual RenderCapabilities renderCapabilities() const = 0;
-  virtual bool guestVramIsPicture(const Game &game) const = 0;
+  // The guest picture covers only the native width, so the present samples those columns alone.
   virtual bool guestPictureIsNativeWidth(const Game &game) const {
     (void)game;
     return false;
   }
-  virtual std::unique_ptr<psx::frame::TemporalFramePresentation> createTemporalFramePresentation(Game &game);
 
   // ---- Debug and run
 
@@ -249,33 +241,8 @@ public:
     return {};
   }
 
-  // Legacy views, bound only by LegacyGameRuntimeAdapter.
-  const GameConfig *legacyConfigForMigration() const {
-    return legacyConfig_;
-  }
-  const GameHooks *legacyHooksForMigration() const {
-    return legacyHooks_;
-  }
-
 protected:
   GameRuntime() = default;
-
-  void bindLegacyInterface(const GameConfig *config, const GameHooks *hooks) {
-    legacyConfig_ = config;
-    legacyHooks_ = hooks;
-  }
-
-  const GameHooks *legacyHooks() const {
-    return legacyHooks_;
-  }
-
-private:
-  const GameConfig *legacyConfig_ = nullptr;
-  const GameHooks *legacyHooks_ = nullptr;
 };
 
 } // namespace psx::game
-
-// Shipping queries used by every renderer path.
-bool game_guest_vram_is_picture(const Game &game);
-bool game_guest_picture_is_native_width(const Game &game);

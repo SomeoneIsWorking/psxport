@@ -12,7 +12,7 @@
 // PNG is the default so captures are directly viewable; only an explicit .ppm path keeps the raw
 // P6 representation. This function owns directory creation and error reporting because callers do
 // not know which filesystem or image-codec operation failed.
-bool image_write_rgb24(const char *path, const unsigned char *rgb, int width, int height) {
+bool psx::debug::writeImageRgb24(const char *path, const unsigned char *rgb, int width, int height) {
   if (!path || !rgb || width <= 0 || height <= 0) {
     lucent::error("image_write",
                   "refusing to write: path={} rgb={} {}x{}",

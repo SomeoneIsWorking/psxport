@@ -20,7 +20,7 @@ public:
 
   [[nodiscard]] static constexpr double rateScale(uint32_t backlogFrames) {
     const double error = (static_cast<double>(backlogFrames) - static_cast<double>(kTargetBacklogFrames)) /
-                         static_cast<double>(XA_RING_FRAMES);
+                         static_cast<double>(psx::audio::kXaRingFrames);
     return 1.0 + error * kRateGain;
   }
 };

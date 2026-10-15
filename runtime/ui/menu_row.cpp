@@ -2,7 +2,7 @@
 
 #include "dev_command_control.h"
 #include "mods.h"
-#include "render_path_control.h"
+#include "rml_text.h"
 #include "title_settings.h"
 #include "warp_control.h"
 
@@ -136,29 +136,6 @@ private:
   std::string mId;
 };
 
-class RenderPathBinding final : public RowBinding {
-public:
-  explicit RenderPathBinding(RenderPathControl *render_path) : mRenderPath(render_path) {}
-  bool available() const override {
-    return mRenderPath && mRenderPath->available();
-  }
-  bool text(std::string &out) const override {
-    if (!mRenderPath) {
-      return false;
-    }
-    out = mRenderPath->currentLabel();
-    return true;
-  }
-  void step(int) override {
-    if (mRenderPath) {
-      mRenderPath->cycle();
-    }
-  }
-
-private:
-  RenderPathControl *mRenderPath;
-};
-
 class ActionBinding final : public RowBinding {
 public:
   ActionBinding(std::function<void()> action, std::function<bool()> available)
@@ -193,9 +170,6 @@ std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp) {
 }
 std::unique_ptr<RowBinding> make_dev_command_binding(DevCommandControl *commands, std::string id) {
   return std::make_unique<DevCommandBinding>(commands, std::move(id));
-}
-std::unique_ptr<RowBinding> make_render_path_binding(RenderPathControl *render_path) {
-  return std::make_unique<RenderPathBinding>(render_path);
 }
 std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action, std::function<bool()> available) {
   return std::make_unique<ActionBinding>(std::move(action), std::move(available));
@@ -233,7 +207,7 @@ std::string MenuRow::describe() const {
   }
   std::string kind = "INERT", id;
   for (const char *attr : {"action", "toggle", "adjust"}) {
-    const std::string v = mRoot->GetAttribute<Rml::String>(attr, "");
+    const std::string v = psx::ui::rmlAttributeText(*mRoot, attr, "");
     if (!v.empty()) {
       kind = attr;
       id = v;

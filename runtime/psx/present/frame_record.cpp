@@ -7,22 +7,28 @@
 namespace psx::present {
 namespace {
 
-void placeAxis(int &whole, float &fraction, float position, PrimitiveKind kind) {
+struct AxisPlacement {
+  int whole = 0;
+  float fraction = 0.0f;
+};
+
+AxisPlacement placeAxis(float position, PrimitiveKind kind) {
   if (kind == PrimitiveKind::Polygon) {
     const float below = std::floor(position);
-    whole = static_cast<int>(below);
-    fraction = position - below;
-    return;
+    return {static_cast<int>(below), position - below};
   }
-  whole = static_cast<int>(std::floor(position + 0.5f));
-  fraction = 0.0f;
+  return {static_cast<int>(std::floor(position + 0.5f)), 0.0f};
 }
 
 } // namespace
 
 void placeVertex(RecordVertex &vertex, float x, float y, PrimitiveKind kind) {
-  placeAxis(vertex.x, vertex.subX, x, kind);
-  placeAxis(vertex.y, vertex.subY, y, kind);
+  const AxisPlacement column = placeAxis(x, kind);
+  const AxisPlacement row = placeAxis(y, kind);
+  vertex.x = column.whole;
+  vertex.subX = column.fraction;
+  vertex.y = row.whole;
+  vertex.subY = row.fraction;
 }
 
 std::span<const std::uint16_t> FrameRecord::clut(const DrawPrimitive &primitive) const {

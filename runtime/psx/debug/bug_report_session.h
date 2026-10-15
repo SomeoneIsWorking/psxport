@@ -8,8 +8,8 @@
 // frame:
 //   1. `request()` — the B key (HostInput) or the REPL. Nothing happens mid-frame.
 //   2. The next field begins: the session arms `capturingFrame()`, the frame runs, and the title's
-//      ordering-table kick calls `captureReferenceFrame` with the table it drew; the GPU device's
-//      drawing of that table is the reference picture.
+//      ordering-table kick calls `captureReferenceFrame` once the device has drawn the table; that
+//      drawing is the reference picture.
 //   3. The field after that begins: that frame is on screen, so the session captures the presented
 //      picture, the pad recording up to it and the card it started from, opens the form and holds
 //      the field until the player saves or cancels.
@@ -18,7 +18,7 @@
 // picture and says so in its facts.
 #pragma once
 
-#include "gpu_device.h"
+#include "rgb24_picture.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -46,9 +46,8 @@ public:
   bool capturingFrame() const {
     return mState == State::Capturing;
   }
-  // Called by a title's ordering-table kick while capturingFrame(), after its own draw has run. On a
-  // native path the device never saw the table, so it is drawn here and the device restored after.
-  void captureReferenceFrame(Core &core, std::uint32_t orderingTableHead);
+  // Called by a title's ordering-table kick while capturingFrame(), after the device drew the table.
+  void captureReferenceFrame(Core &core);
 
   // The frame-boundary half, called at the start of every field (FieldTurn::beginField).
   void atFieldBoundary(Core &core);

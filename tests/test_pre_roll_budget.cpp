@@ -28,5 +28,5 @@ void test_the_first_step_always_runs() {
 int main() {
   RUN(a_pre_roll_stops_before_the_field_ends);
   RUN(the_first_step_always_runs);
-  return pt_summary();
+  return psx::test::summary();
 }

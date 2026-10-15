@@ -357,5 +357,5 @@ int main(int argc, char **argv) {
   RUN(a_call_that_outlives_its_budget_is_resumed_until_it_returns);
   RUN(the_return_address_is_the_callers_and_not_whatever_the_guest_left);
   RUN(a_guest_store_into_its_own_code_reaches_ram);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -13,11 +13,13 @@
 // HERMETIC: one Game is constructed in-process and the memory card is a temp file in the CWD. No
 // disc, no window, no network.
 #include "beetle_device_state.h"
+#include "config.h"
 #include "config_var.h"
 #include "config_vars.h"
 #include "device_sections.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "gpu_device.h"
 #include "machine_state.h"
 #include "memcard.h"
 #include "state/state_command.h"
@@ -27,6 +29,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -48,17 +51,18 @@ public:
   psx::game::HostIdentity identity{.cardDefaultPath = kCardPath};
 };
 
-MachineRuntime machineRuntime;
+std::unique_ptr<MachineRuntime> machineRuntime;
+
+std::unique_ptr<Game> machineGame;
 
 Game *makeGame() {
-  static Game *game = nullptr;
-  if (game != nullptr) {
-    return game;
+  if (machineGame != nullptr) {
+    return machineGame.get();
   }
   std::remove(kCardPath);
-  game = new Game(machineRuntime, {});
-  card_overrides_init(game);
-  return game;
+  machineGame = std::make_unique<Game>(*machineRuntime, psx::config::Config{});
+  machineGame->memcard.install();
+  return machineGame.get();
 }
 
 // A fingerprint of everything the owner claims to carry, computed through the SHIPPING writers —
@@ -80,7 +84,7 @@ std::string fingerprint(const Game &game) {
   std::string text;
   const std::vector<std::uint8_t> bytes = out.bytesOut();
   text.reserve(bytes.size() * 2);
-  static const char *digits = "0123456789abcdef";
+  constexpr const char *digits = "0123456789abcdef";
   for (std::uint8_t byte : bytes) {
     text.push_back(digits[byte >> 4]);
     text.push_back(digits[byte & 0x0Fu]);
@@ -110,17 +114,7 @@ void perturb(Game &game) {
   game.core.gte().registers().REG[26] = 256u; // H — the projection distance
   game.core.gte().registers().FLAGS = 0x00000042u;
 
-  game.gpu.s_vram[0] = 0x1234u;
-  game.gpu.s_vram[VRAM_W * 240 + 320] = 0xBEEFu;
-  game.gpu.s_disp_x = 160;
-  game.gpu.s_disp_w = 320;
-  game.gpu.s_tp_x = 640;
-  game.gpu.s_fifo[3] = 0xE3000000u;
-  game.gpu.s_fifo_addr[3] = 0x80009900u;
-  game.gpu.s_fcount = 3;
-  game.gpu.s_fneed = 4;
-  game.gpu.s_frame = 1234;
-  game.gpu.s_cur_node = 0x8000FFF0u;
+  game.core.mem_w32(0x1F801814u, 0x05000000u | 160u); // GP1(05): display start x = 160
 
   game.cdc.loc_lba = 0x1234u;
   game.cdc.reading = 1;
@@ -215,9 +209,7 @@ void test_every_section_round_trips_through_the_file(void) {
   wiped.core.r[3] = 0u;
   wiped.core.pc = 0u;
   wiped.core.cop0[12] = 0u;
-  wiped.gpu.s_vram[0] = 0u;
-  wiped.gpu.s_disp_x = 0;
-  wiped.gpu.s_fifo[3] = 0u;
+  wiped.core.mem_w32(0x1F801814u, 0x05000000u);
   wiped.cdc.loc_lba = 0u;
   wiped.timing.vblank = 0u;
   wiped.hle.i_stat = 0u;
@@ -245,6 +237,7 @@ void test_every_section_round_trips_through_the_file(void) {
   CHECK_EQ(wiped.core.pc, 0x80004000u);
   CHECK_EQ(static_cast<int>(wiped.core.gte().registers().REG[26]), 256);
   CHECK_EQ(static_cast<int>(wiped.cdc.loc_lba), 0x1234);
+  CHECK_EQ(wiped.core.gpuDevice().displayArea().x, 160);
   CHECK_EQ(static_cast<int>(wiped.timing.vblank), 4242);
   CHECK_EQ(static_cast<int>(wiped.hle.rand_state), 0x12345678);
   CHECK_EQ(static_cast<int>(wiped.cd.setloc_lba), 0x2222);
@@ -344,10 +337,10 @@ public:
 class ScopedTitlePort {
 public:
   explicit ScopedTitlePort(psx::state::NativeStatePort *port) {
-    machineRuntime.port = port;
+    machineRuntime->port = port;
   }
   ~ScopedTitlePort() {
-    machineRuntime.port = nullptr;
+    machineRuntime->port = nullptr;
   }
   ScopedTitlePort(const ScopedTitlePort &) = delete;
   ScopedTitlePort &operator=(const ScopedTitlePort &) = delete;
@@ -490,9 +483,9 @@ void test_a_configured_state_that_cannot_load_is_refused(void) {
   Game &game = *makeGame();
   std::string error;
   CHECK(psx::state::applyConfiguredState(game.core, error));
-  psx::config::cv_load_state.set(psx::config::Layer::Runtime, "no/such/state.sav");
+  psx::config::set_runtime("PSXPORT_LOAD_STATE", "no/such/state.sav");
   const bool applied = psx::state::applyConfiguredState(game.core, error);
-  psx::config::cv_load_state.clear(psx::config::Layer::Runtime);
+  psx::config::clear_runtime("PSXPORT_LOAD_STATE");
   CHECK(!applied);
   CHECK(!error.empty());
 }
@@ -500,6 +493,7 @@ void test_a_configured_state_that_cannot_load_is_refused(void) {
 } // namespace
 
 int main(void) {
+  machineRuntime = std::make_unique<MachineRuntime>();
   RUN(every_section_round_trips_through_the_file);
   RUN(beetle_devices_round_trip_through_the_forks_own_functions);
   RUN(a_title_without_native_state_refuses_a_file_that_has_one);
@@ -508,5 +502,5 @@ int main(void) {
   RUN(a_title_section_from_a_newer_title_version_is_refused);
   RUN(a_title_port_adopts_its_state_after_guest_ram_is_restored);
   RUN(a_configured_state_that_cannot_load_is_refused);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -3,6 +3,19 @@
 
 #include <cstdint>
 
+// `bytes` of guest memory at an address.
+struct GuestSpan {
+  uint32_t address = 0;
+  uint32_t bytes = 0;
+};
+
+// One guest store: its virtual address, the value and its width in bytes.
+struct GuestStore {
+  uint32_t address = 0;
+  uint32_t value = 0;
+  uint32_t width = 0;
+};
+
 struct GuestAddressRange {
   uint32_t begin = 0;
   uint32_t end = 0;

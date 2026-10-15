@@ -97,7 +97,7 @@ void test_packaged_defaults_ask_for_a_window_and_the_shipped_assets() {
   CHECK(!psx::config::windowRequested());
   psx::config::applyPackagedDefaults("/mnt/app");
   CHECK(psx::config::windowRequested());
-  CHECK(psx::config::cv_asset_dir.get() == "/mnt/app/usr/share/psxport");
+  CHECK(psx::config::asset_dir() == "/mnt/app/usr/share/psxport");
   setEnv("PSXPORT_VK_HEADLESS", "1");
   CHECK(!psx::config::windowRequested());
   setEnv("PSXPORT_VK_HEADLESS", nullptr);
@@ -126,5 +126,5 @@ int main() {
   RUN(package_root_is_an_absolute_appdir);
   RUN(packaged_defaults_ask_for_a_window_and_the_shipped_assets);
   RUN(the_audit_counts_typed_names_as_declared);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -68,9 +68,10 @@ bool isDeviceAddress(std::uint32_t address) {
 constexpr int kMaxLiveMachines = 8;
 std::atomic<int> liveMachines{0};
 
+std::atomic<std::uint64_t> boundaryOwnerIds{1};
+
 std::uint64_t nextBoundaryOwnerId() {
-  static std::atomic<std::uint64_t> next{1};
-  return next.fetch_add(1, std::memory_order_relaxed);
+  return boundaryOwnerIds.fetch_add(1, std::memory_order_relaxed);
 }
 
 } // namespace
@@ -93,7 +94,7 @@ struct LightrecExecutor::Impl {
   }
 
   bool ensureInitialized() {
-    std::scoped_lock lifecycleLock(lifecycleMutex());
+    std::scoped_lock lifecycleLock(lifecycleMutex_);
     if (state || initializationAttempted) {
       return state != nullptr;
     }
@@ -119,7 +120,7 @@ struct LightrecExecutor::Impl {
     if (!state) {
       return;
     }
-    std::scoped_lock lifecycleLock(lifecycleMutex());
+    std::scoped_lock lifecycleLock(lifecycleMutex_);
     lightrec_destroy(state);
     state = nullptr;
     liveMachines.fetch_sub(1);
@@ -177,10 +178,9 @@ struct LightrecExecutor::Impl {
   static void cop2Operation(lightrec_state *lightrec, std::uint32_t opcode) {
     Impl &impl = owner(lightrec);
     lightrec_registers *registers = lightrec_get_registers(lightrec);
-    impl.core.gte().bind();
-    gte_import_registers(impl.core.gte().registers(), registers->cp2d, registers->cp2c);
-    gte_op_at(&impl.core, opcode, impl.core.pc);
-    gte_export_registers(impl.core.gte().registers(), registers->cp2d, registers->cp2c);
+    psx::cpu::importGteRegisters(impl.core.gte().registers(), registers->cp2d, registers->cp2c);
+    impl.core.gte().execute(opcode);
+    psx::cpu::exportGteRegisters(impl.core.gte().registers(), registers->cp2d, registers->cp2c);
   }
 
   static void enableRam(lightrec_state *, bool) {
@@ -231,19 +231,16 @@ struct LightrecExecutor::Impl {
     core.game->timing.advanceGuestInstructionTicks(instructions);
   }
 
-  static const lightrec_mem_map_ops &memoryOps() {
-    static const lightrec_mem_map_ops operations{
-        .sb = storeByte,
-        .sh = storeHalf,
-        .sw = storeWord,
-        .lb = loadByte,
-        .lh = loadHalf,
-        .lw = loadWord,
-        .lwu = loadWord,
-        .swu = storeUnalignedWord,
-    };
-    return operations;
-  }
+  static constexpr lightrec_mem_map_ops kMemoryOps{
+      .sb = storeByte,
+      .sh = storeHalf,
+      .sw = storeWord,
+      .lb = loadByte,
+      .lh = loadHalf,
+      .lw = loadWord,
+      .lwu = loadWord,
+      .swu = storeUnalignedWord,
+  };
 
   enum class BoundaryReason : std::uint8_t {
     None,
@@ -265,30 +262,24 @@ struct LightrecExecutor::Impl {
     bool active = false;
   };
 
-  static std::unordered_map<std::uint64_t, BoundaryContext> &threadBoundaries() {
-    static thread_local std::unordered_map<std::uint64_t, BoundaryContext> boundaries;
-    return boundaries;
-  }
+  static thread_local std::unordered_map<std::uint64_t, BoundaryContext> threadBoundaries_;
 
   // The context this thread last resolved, so the per-block callback does not hash the owner id into
-  // `threadBoundaries()` for every executed block. It names a node of that map, which is stable until
+  // `threadBoundaries_` for every executed block. It names a node of that map, which is stable until
   // BoundarySession erases it, and the erase clears the slot.
   struct BoundarySlot {
     std::uint64_t ownerId = 0;
     BoundaryContext *context = nullptr;
   };
 
-  static BoundarySlot &threadBoundarySlot() {
-    static thread_local BoundarySlot slot;
-    return slot;
-  }
+  static thread_local BoundarySlot threadBoundarySlot_;
 
   BoundaryContext &activeBoundary() {
-    BoundarySlot &slot = threadBoundarySlot();
+    BoundarySlot &slot = threadBoundarySlot_;
     if (slot.ownerId == boundaryOwnerId && slot.context != nullptr && slot.context->active) {
       return *slot.context;
     }
-    auto &boundaries = threadBoundaries();
+    auto &boundaries = threadBoundaries_;
     const auto found = boundaries.find(boundaryOwnerId);
     if (found == boundaries.end() || !found->second.active) {
       lucent::error("executor", "Lightrec callback reached without a boundary on its host thread");
@@ -427,7 +418,7 @@ struct LightrecExecutor::Impl {
                     std::optional<std::uint32_t> returnAddress,
                     bool dispatchHostServices,
                     FallbackPolicy fallbackPolicy)
-        : impl_(impl), boundary_(threadBoundaries()[impl.boundaryOwnerId]), previous_(boundary_) {
+        : impl_(impl), boundary_(threadBoundaries_[impl.boundaryOwnerId]), previous_(boundary_) {
       boundary_ = {.returnAddress = returnAddress,
                    .dispatchHostServices = dispatchHostServices,
                    .fallbackPolicy = fallbackPolicy,
@@ -438,8 +429,8 @@ struct LightrecExecutor::Impl {
       if (previous_.active) {
         boundary_ = previous_;
       } else {
-        threadBoundaries().erase(impl_.boundaryOwnerId);
-        threadBoundarySlot() = {};
+        threadBoundaries_.erase(impl_.boundaryOwnerId);
+        threadBoundarySlot_ = {};
       }
     }
 
@@ -449,10 +440,7 @@ struct LightrecExecutor::Impl {
     BoundaryContext previous_;
   };
 
-  static std::mutex &lifecycleMutex() {
-    static std::mutex mutex;
-    return mutex;
-  }
+  inline static std::mutex lifecycleMutex_;
 
   void initializeMaps() {
     maps.fill({});
@@ -460,7 +448,7 @@ struct LightrecExecutor::Impl {
         .pc = 0,
         .length = kRamSize,
         .address = core.ram,
-        .ops = &memoryOps(),
+        .ops = &kMemoryOps,
     };
     maps[PSX_MAP_BIOS] = {
         .pc = kBiosBase,
@@ -471,13 +459,13 @@ struct LightrecExecutor::Impl {
         .pc = kScratchBase,
         .length = kScratchSize,
         .address = core.scratch,
-        .ops = &memoryOps(),
+        .ops = &kMemoryOps,
     };
     maps[PSX_MAP_HW_REGISTERS] = {
         .pc = kHardwareBase,
         .length = kHardwareSize,
         .address = core.ram,
-        .ops = &memoryOps(),
+        .ops = &kMemoryOps,
     };
     maps[PSX_MAP_MIRROR1] = {
         .pc = 0x00200000u,
@@ -503,7 +491,7 @@ struct LightrecExecutor::Impl {
     registers->gpr[33] = core.hi;
     std::copy_n(core.cop0, 16, registers->cp0);
     core.gte().bind();
-    gte_export_registers(core.gte().registers(), registers->cp2d, registers->cp2c);
+    psx::cpu::exportGteRegisters(core.gte().registers(), registers->cp2d, registers->cp2c);
   }
 
   void copyLightrecToCore(std::uint32_t nextPc) {
@@ -515,7 +503,7 @@ struct LightrecExecutor::Impl {
     core.pc = nextPc;
     std::copy_n(registers->cp0, 16, core.cop0);
     core.gte().bind();
-    gte_import_registers(core.gte().registers(), registers->cp2d, registers->cp2c);
+    psx::cpu::importGteRegisters(core.gte().registers(), registers->cp2d, registers->cp2c);
   }
 
   // CLASSIFY THE PC A BUDGET EXIT REPORTS, because that pc is where guest execution resumes and
@@ -639,6 +627,10 @@ struct LightrecExecutor::Impl {
   std::unique_ptr<FunctionReach> reach;
 };
 
+thread_local std::unordered_map<std::uint64_t, LightrecExecutor::Impl::BoundaryContext>
+    LightrecExecutor::Impl::threadBoundaries_;
+thread_local LightrecExecutor::Impl::BoundarySlot LightrecExecutor::Impl::threadBoundarySlot_;
+
 LightrecExecutor::LightrecExecutor(Core &core, FallbackPolicyProvider fallbackPolicyProvider)
     : impl_(std::make_unique<Impl>(core, fallbackPolicyProvider ? fallbackPolicyProvider : defaultFallbackPolicy)) {}
 
@@ -646,7 +638,7 @@ LightrecExecutor::~LightrecExecutor() {
   reportFallbackTelemetry("shutdown");
   // Reported from the teardown every exit path reaches: an armed observer that prints nothing reads
   // as "matched no stores".
-  store_observe_report(impl_->storeReport);
+  psx::cpu::reportStoreObserver(impl_->storeReport);
 }
 
 void LightrecExecutor::attachFunctionReach(std::unique_ptr<FunctionReach> reach) {
@@ -789,8 +781,7 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       return {ExecutionExitReason::Fault, nextPc, consumedCycles, "delay-slot exception continuation is unsupported"};
     }
     if (flags & LIGHTREC_EXIT_SYSCALL) {
-      const std::uint32_t instruction = impl.core.mem_r32(nextPc);
-      const auto syscall = handleSyscall(impl.core, (instruction >> 6u) & 0xfffffu, nextPc);
+      const auto syscall = handleSyscall(impl.core, nextPc);
       if (syscall != SyscallResult::Handled) {
         ++impl.counters.faults;
         return {ExecutionExitReason::Fault,

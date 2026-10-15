@@ -14,6 +14,7 @@
 // This drives `psx::cpu::dispatchGuestHostService` at the A0 vector with r[9] = 0x51 — the same entry
 // the executor's host-dispatch boundary uses — and the executable bytes come from an injected reader,
 // so the loader, the register policy, the invalidation and the jump under test are the shipping ones.
+#include "r3000.h"
 #include "testutil.h"
 
 #include "bios_load_exec.h"
@@ -31,13 +32,12 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 constexpr uint32_t kBiosTableA = 0x000000a0u;
 constexpr uint32_t kLoadExec = 0x51u;
 constexpr uint32_t kBiosFunctionRegister = 9;
 constexpr uint32_t kLinkRegister = 31;
-constexpr uint32_t kA0 = 4, kA1 = 5, kA2 = 6, kV0 = 2;
 
 // Where the test parks the guest's filename. Well clear of the BIOS work area the HLE publishes.
 constexpr uint32_t kGuestFilename = 0x8001a000u;
@@ -76,7 +76,7 @@ psxExe(uint32_t entry = kEntry, uint32_t globalPointer = kGlobalPointer, uint32_
   store(0x30, stackBase);
   store(0x34, 0u);
   for (uint32_t index = 0; index < kTextBytes / 4u; ++index) {
-    store(psx::cpu::kPsxExeHeaderBytes + index * 4u, 0x24020000u + index); // addiu v0, zero, N
+    store(psx::cpu::kPsxExeHeaderBytes + std::size_t{4} * index, 0x24020000u + index); // addiu v0, zero, N
   }
   return image;
 }
@@ -127,15 +127,21 @@ void writeFilename(Core &core, const char *text) {
 // A fresh machine with the guest's registers armed for one LoadExec, and the CD reader the BIOS
 // leaf uses replaced by `disc` exactly as `Game::wireRuntimeMembers` binds the real one — the seam
 // is the shipping one, not a second dispatch path.
-std::unique_ptr<Game> armedGuest(FakeDisc &disc, const char *filename, uint32_t stackBase, uint32_t stackOffset) {
-  auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
+// LoadExec's a1/a2: the new program's stack base and the offset added to it.
+struct ExecStack {
+  uint32_t base = 0;
+  uint32_t offset = 0;
+};
+
+std::unique_ptr<Game> armedGuest(FakeDisc &disc, const char *filename, ExecStack stack) {
+  auto game = std::make_unique<Game>(*stubRuntime, psx::config::Config{});
   Core &core = game->core;
   game->hle.loadExecReader = disc.reader();
   writeFilename(core, filename);
-  core.r[kA0] = kGuestFilename;
-  core.r[kA1] = stackBase;
-  core.r[kA2] = stackOffset;
-  core.r[kV0] = 0xdeadbeefu;
+  core.r[psx::cpu::kA0] = kGuestFilename;
+  core.r[psx::cpu::kA1] = stack.base;
+  core.r[psx::cpu::kA2] = stack.offset;
+  core.r[psx::cpu::kV0] = 0xdeadbeefu;
   core.r[kLinkRegister] = kCallerReturn;
   core.mem_w32(kMarkerAddress, kMarkerValue);
   return game;
@@ -146,7 +152,7 @@ std::unique_ptr<Game> armedGuest(FakeDisc &disc, const char *filename, uint32_t 
 void test_load_exec_loads_and_starts_the_named_executable() {
   FakeDisc disc;
   disc.publish("\\S0\\CRASH.EXE;1", psxExe());
-  auto game = armedGuest(disc, "cdrom:\\S0\\CRASH.EXE;1", kCallerStackBase, kCallerStackOffset);
+  auto game = armedGuest(disc, "cdrom:\\S0\\CRASH.EXE;1", {kCallerStackBase, kCallerStackOffset});
   Core &core = game->core;
 
   const BiosCall call = callBiosA0(core, kLoadExec);
@@ -159,7 +165,7 @@ void test_load_exec_loads_and_starts_the_named_executable() {
   CHECK_EQ(call.result.guestPc, kEntry);
   CHECK(core.r[kLinkRegister] != kCallerReturn);
   CHECK_EQ(core.pc, kEntry);
-  CHECK_EQ(core.r[kV0], 0u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 0u);
   // The caller's stack wins over the header's, because stackbase/stackoffset are the point of a2/a3.
   CHECK_EQ(core.r[29], kCallerStackBase + kCallerStackOffset);
   CHECK_EQ(core.r[30], kCallerStackBase + kCallerStackOffset);
@@ -181,7 +187,7 @@ void test_load_exec_loads_and_starts_the_named_executable() {
 // FAILURE 1: the name is not on the disc. That is the BIOS's -1 branch, and the caller keeps going.
 void test_load_exec_refuses_a_file_that_is_not_on_the_disc() {
   FakeDisc disc;
-  auto game = armedGuest(disc, "cdrom:\\S0\\NOTHERE.EXE;1", kCallerStackBase, 0u);
+  auto game = armedGuest(disc, "cdrom:\\S0\\NOTHERE.EXE;1", {kCallerStackBase, 0u});
   Core &core = game->core;
 
   const BiosCall call = callBiosA0(core, kLoadExec);
@@ -189,7 +195,7 @@ void test_load_exec_refuses_a_file_that_is_not_on_the_disc() {
   CHECK_EQ(call.result.reason, psx::cpu::ExecutionExitReason::GuestReturn);
   // Failure RETURNS. Its continuation is the leaf's own r[31].
   CHECK_EQ(call.result.guestPc, kCallerReturn);
-  CHECK_EQ(core.r[kV0], kFailed);
+  CHECK_EQ(core.r[psx::cpu::kV0], kFailed);
   // A refused load changes nothing: no image, no bytes, no register the caller can see moved.
   CHECK_EQ(core.imageCatalog().activeCount(), 0u);
   CHECK(!core.currentImageIdentity(kEntry).has_value());
@@ -203,14 +209,14 @@ void test_load_exec_refuses_bytes_that_are_not_a_psx_exe() {
   FakeDisc disc;
   std::vector<uint8_t> garbage(0x800 + kTextBytes, 0xa5u);
   disc.publish("\\S0\\CRASH.EXE;1", garbage);
-  auto game = armedGuest(disc, "cdrom:\\S0\\CRASH.EXE;1", kCallerStackBase, 0u);
+  auto game = armedGuest(disc, "cdrom:\\S0\\CRASH.EXE;1", {kCallerStackBase, 0u});
   Core &core = game->core;
 
   const BiosCall call = callBiosA0(core, kLoadExec);
   CHECK(call.handled);
   CHECK_EQ(call.result.reason, psx::cpu::ExecutionExitReason::GuestReturn);
   CHECK_EQ(call.result.guestPc, kCallerReturn);
-  CHECK_EQ(core.r[kV0], kFailed);
+  CHECK_EQ(core.r[psx::cpu::kV0], kFailed);
   CHECK_EQ(core.imageCatalog().activeCount(), 0u);
   CHECK_EQ(core.mem_r32(kMarkerAddress), kMarkerValue);
   CHECK_EQ(core.r[29], 0u); // the stack the caller asked for was never installed
@@ -222,14 +228,14 @@ void test_load_exec_refuses_bytes_that_are_not_a_psx_exe() {
 void test_load_exec_refuses_a_filename_the_bounded_read_cut() {
   FakeDisc disc;
   const std::string tooLong = "cdrom:\\" + std::string(300, 'X') + ".EXE;1";
-  auto game = armedGuest(disc, tooLong.c_str(), kCallerStackBase, 0u);
+  auto game = armedGuest(disc, tooLong.c_str(), {kCallerStackBase, 0u});
   Core &core = game->core;
 
   const BiosCall call = callBiosA0(core, kLoadExec);
   CHECK(call.handled);
   CHECK_EQ(call.result.reason, psx::cpu::ExecutionExitReason::GuestReturn);
   CHECK_EQ(call.result.guestPc, kCallerReturn);
-  CHECK_EQ(core.r[kV0], kFailed);
+  CHECK_EQ(core.r[psx::cpu::kV0], kFailed);
   CHECK_EQ(core.imageCatalog().activeCount(), 0u);
 }
 
@@ -239,7 +245,7 @@ void test_an_unstated_stack_leaves_the_loaded_programs_own_stack_in_place() {
   {
     FakeDisc disc;
     disc.publish("\\MAIN.EXE;1", psxExe());
-    auto game = armedGuest(disc, "cdrom:\\MAIN.EXE;1", 0u, 0u);
+    auto game = armedGuest(disc, "cdrom:\\MAIN.EXE;1", {0u, 0u});
     const BiosCall call = callBiosA0(game->core, kLoadExec);
     CHECK_EQ(call.result.guestPc, kEntry);
     CHECK_EQ(game->core.r[29], kHeaderStackBase);
@@ -247,7 +253,7 @@ void test_an_unstated_stack_leaves_the_loaded_programs_own_stack_in_place() {
   {
     FakeDisc disc;
     disc.publish("\\MAIN.EXE;1", psxExe(kEntry, kGlobalPointer, 0u));
-    auto game = armedGuest(disc, "cdrom:\\MAIN.EXE;1", 0u, 0u);
+    auto game = armedGuest(disc, "cdrom:\\MAIN.EXE;1", {0u, 0u});
     const BiosCall call = callBiosA0(game->core, kLoadExec);
     CHECK_EQ(call.result.guestPc, kEntry);
     CHECK(game->core.r[29] != 0u);
@@ -261,13 +267,13 @@ void test_a_refused_load_leaves_no_image_and_no_bytes_behind() {
   FakeDisc disc;
   disc.publish("\\S0\\CRASH.EXE;1", psxExe());
   // A stack whose base+offset runs past the top of the address space.
-  auto game = armedGuest(disc, "cdrom:\\S0\\CRASH.EXE;1", 0xfffff000u, 0x2000u);
+  auto game = armedGuest(disc, "cdrom:\\S0\\CRASH.EXE;1", {0xfffff000u, 0x2000u});
   Core &core = game->core;
 
   const BiosCall call = callBiosA0(core, kLoadExec);
   CHECK_EQ(call.result.reason, psx::cpu::ExecutionExitReason::GuestReturn);
   CHECK_EQ(call.result.guestPc, kCallerReturn);
-  CHECK_EQ(core.r[kV0], kFailed);
+  CHECK_EQ(core.r[psx::cpu::kV0], kFailed);
   CHECK_EQ(core.imageCatalog().activeCount(), 0u);
   CHECK(!core.currentImageIdentity(kEntry).has_value());
   // The payload's own first instruction is nowhere in RAM: the refusal happened BEFORE admission.
@@ -281,24 +287,25 @@ void test_a_refused_load_leaves_no_image_and_no_bytes_behind() {
 // serviced leaf, and the neighbour's answer is still the pre-existing typed fault.
 void test_loadexec_did_not_claim_a_neighbouring_leaf() {
   FakeDisc disc;
-  auto game = armedGuest(disc, "cdrom:\\S0\\CRASH.EXE;1", 0u, 0u);
+  auto game = armedGuest(disc, "cdrom:\\S0\\CRASH.EXE;1", {0u, 0u});
   Core &core = game->core;
 
   const BiosCall neighbour = callBiosA0(core, kLoadExec - 1u);
   CHECK_EQ(neighbour.result.reason, psx::cpu::ExecutionExitReason::Fault);
   CHECK_STREQ(neighbour.result.detail.c_str(), "unimplemented BIOS service");
-  CHECK_EQ(core.r[kV0], 0xdeadbeefu);
+  CHECK_EQ(core.r[psx::cpu::kV0], 0xdeadbeefu);
 
   // With nothing published on the disc, 0x51 is serviced and answers -1 rather than faulting.
   const BiosCall served = callBiosA0(core, kLoadExec);
   CHECK_EQ(served.result.reason, psx::cpu::ExecutionExitReason::GuestReturn);
   CHECK_EQ(served.result.guestPc, kCallerReturn);
-  CHECK_EQ(core.r[kV0], kFailed);
+  CHECK_EQ(core.r[psx::cpu::kV0], kFailed);
 }
 
 } // namespace
 
 int main() {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(load_exec_loads_and_starts_the_named_executable);
   RUN(load_exec_refuses_a_file_that_is_not_on_the_disc);
   RUN(load_exec_refuses_bytes_that_are_not_a_psx_exe);
@@ -306,5 +313,5 @@ int main() {
   RUN(an_unstated_stack_leaves_the_loaded_programs_own_stack_in_place);
   RUN(a_refused_load_leaves_no_image_and_no_bytes_behind);
   RUN(loadexec_did_not_claim_a_neighbouring_leaf);
-  return pt_summary();
+  return psx::test::summary();
 }

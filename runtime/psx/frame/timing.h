@@ -1,12 +1,15 @@
 // timing.h — native display-time state, owned by Game.
 #pragma once
 #include "emulated_time.h"
+#include "field_cadence.h"
 
 #include <cstdint>
 #include <optional>
 
 class Game;
-struct CdcState;
+namespace psx::cd {
+class CdController;
+}
 
 namespace psx::frame {
 
@@ -37,11 +40,13 @@ public:
   uint16_t rootCounter2BaseValue = 0;
   uint64_t rootCounter2OriginTicks = 0;
   [[nodiscard]] uint16_t rootCounter2() const;
-  void rootCounter2Write(uint32_t reg, uint32_t v);
+  void rootCounter2WriteValue(uint16_t value);
+  void rootCounter2WriteMode(uint32_t mode);
+  void rootCounter2WriteTarget(uint32_t target);
 
-  void bindCdcClock(CdcState *cdc);
+  void bindCdcClock(psx::cd::CdController *cdc);
   void advanceGuestInstructionTicks(uint32_t ticks);
-  bool advanceDisplayFields(int fields, int parts, uint32_t fieldRateMilliHz);
+  bool advanceDisplayFields(FieldCadence cadence, uint32_t fieldRateMilliHz);
   // Service CDC deadlines against the emulated drive clock without advancing anything else
   // (test + REPL entry point; the run loop reaches the same path via the two advance methods).
   void serviceCdcTickSource() {
@@ -88,7 +93,7 @@ private:
   unsigned __int128 mDisplayFieldPhaseDenominator = 1;
 
   static uint64_t readEmulatedCpuTicks(void *context);
-  uint32_t consumeCompletedDisplayFields(uint32_t fields, uint32_t parts);
+  uint32_t consumeCompletedDisplayFields(FieldCadence cadence);
   void raiseVBlank(uint32_t fields);
   void serviceCdc();
 };

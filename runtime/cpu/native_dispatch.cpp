@@ -187,7 +187,7 @@ struct ResolvedHostDispatch {
 // Consulting the HLE table first therefore made a title-owned override UNREACHABLE for any address the
 // HLE also claimed, silently. Measured on Mega Man X4, where the title installs its own movie VSync
 // boundary at `0x800E4DB0` (`x4::movie::fieldBoundary`, via `movie::registerOverrides`) while the
-// legacy `GameConfig::hle` window's `.vsyncTrap = 0x800E4DB0` also installs the framework's
+// title's StockVSync at `0x800E4DB0` also installs the framework's
 // `PlatformHle::vsync` there: the framework's builtin won, it requested the bounded exit with `core.pc`
 // (the VSync ENTRY) instead of `core.r[31]` (the call's return address), and so the movie task resumed at
 // the VSync entry forever. The guest's STR frame pull could never execute its retry increment, `StGetNext`
@@ -217,7 +217,7 @@ ResolvedHostDispatch resolveHostDispatch(Core &core, std::uint32_t guestAddress)
     if (NativeFunction service = core.game->platform_hle.lookup(guestAddress)) {
       return {.kind = GuestHostDispatchKind::HostService, .platformFunction = service};
     }
-    const char biosTable = physical == 0xa0u ? 'A' : physical == 0xb0u ? 'B' : physical == 0xc0u ? 'C' : 0;
+    const char biosTable = physical == 0xa0u ? 'A' : physical == 0xb0u ? 'B' : physical == 0xc0u ? 'C' : '\0';
     if (biosTable) {
       return {.kind = GuestHostDispatchKind::HostService, .biosTable = biosTable};
     }
@@ -519,28 +519,10 @@ resumeOriginal(Core &core, NativeKey key, std::uint32_t resumePc, std::uint32_t 
   return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
 }
 
-ExecutionResult resumeGuestToReturnFrom(
-    Core &core, std::uint32_t entry, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget) {
+ExecutionResult resumeGuestToReturn(Core &core, GuestCallSite call, std::uint32_t resumePc, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
-  // A FRESH dispatch scopes call attribution on the entry (`dispatchGuest` does exactly this), so a
-  // resume that omits it reports a submission against the wrong frame. `ot_attr.cpp` reads
-  // `callAttribution.top()` / `caller()` / `visibleDepth()` for the OT submission attribution report, so
-  // this is a reporting defect, not a cosmetic one: primitives submitted during a resumed turn would be
-  // attributed to the enclosing frame rather than the call being resumed. Tekken 3 hand-rolled this scope
-  // because the entry-less form could not express it.
-  auto attribution = core.callAttribution.scope(entry);
-  return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
-}
-
-ExecutionResult
-resumeGuestToReturn(Core &core, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget) {
-  // WITHOUT the entry, call attribution cannot be scoped correctly: the resume point is MID-function, so
-  // it is not the call this turn belongs to. This form therefore scopes on the resume point, which is the
-  // best available and is NOT what a fresh dispatch would produce. A caller that reports OT submission
-  // attribution across a resume must use `resumeGuestToReturnFrom` with the call's ENTRY.
-  NativeCallerContextScope callerContext(core);
-  auto attribution = core.callAttribution.scope(resumePc);
-  return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
+  auto attribution = core.callAttribution.scope(call.entry);
+  return core.lightrecExecutor().executeFunction(resumePc, call.returnPc, budget);
 }
 
 ExecutionResult callOriginal(Core &core, NativeKey key, ExecutionBudget budget) {
@@ -657,17 +639,13 @@ void callOriginalToReturnResuming(Core &core,
                                   std::uint32_t guestAddress,
                                   ExecutionBudget budget,
                                   std::string_view owner) {
-  // The address form resumes through the ENTRY-based seam, which is the framework's own answer for a
-  // caller that has an address rather than a `NativeKey`. It takes the entry explicitly, so OT
-  // submission attribution during a resumed turn stays scoped to this call instead of adopting the
-  // frame that encloses it — the reason that second entry point exists at all.
   refuseUnreturnedCall(resumeUntilExit(
                            core,
                            [&] {
                              return callOriginal(core, guestAddress, budget);
                            },
                            [&](std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget turn) {
-                             return resumeGuestToReturnFrom(core, guestAddress, resumePc, returnPc, turn);
+                             return resumeGuestToReturn(core, GuestCallSite{guestAddress, returnPc}, resumePc, turn);
                            }),
                        owner);
 }

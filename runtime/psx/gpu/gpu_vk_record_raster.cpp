@@ -3,6 +3,7 @@
 
 #include "gpu_vk_check.h"
 #include "gpu_vk_shader.h"
+#include "pixel_size.h"
 #include "psxport_generated/gpu_vk_shaders.h"
 
 #include <algorithm>
@@ -31,13 +32,13 @@ std::uint32_t paddedBytes(std::size_t bytes) {
   return static_cast<std::uint32_t>(std::max<std::size_t>((bytes + 3) & ~std::size_t{3}, 16));
 }
 
-SDL_GPUTexture *makeTexture(SDL_GPUDevice *device, int width, int height, SDL_GPUTextureUsageFlags usage) {
+SDL_GPUTexture *makeTexture(SDL_GPUDevice *device, present::PixelSize size, SDL_GPUTextureUsageFlags usage) {
   SDL_GPUTextureCreateInfo info = {};
   info.type = SDL_GPU_TEXTURETYPE_2D;
   info.format = kVramFormat;
   info.usage = usage;
-  info.width = static_cast<Uint32>(width);
-  info.height = static_cast<Uint32>(height);
+  info.width = static_cast<Uint32>(size.width);
+  info.height = static_cast<Uint32>(size.height);
   info.layer_count_or_depth = 1;
   info.num_levels = 1;
   SDL_GPUTexture *texture = SDL_CreateGPUTexture(device, &info);
@@ -95,18 +96,17 @@ RecordRasterizer::~RecordRasterizer() {
   SDL_ReleaseGPUGraphicsPipeline(device_, pipeline_);
 }
 
-RecordRasterizer::Plane RecordRasterizer::makePlane(int width, int height, int originX, int originY) {
-  const int w = width * scale_;
-  const int h = height * scale_;
+RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape) {
+  const present::PixelSize scaled{shape.width() * scale_, shape.height() * scale_};
   Plane plane;
-  plane.image = makeTexture(device_, w, h, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
-  plane.snapshot = makeTexture(device_, w, h, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-  plane.inBetween = makeTexture(device_, w, h, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
-  plane.before = makeTexture(device_, w, h, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
-  plane.width = width;
-  plane.height = height;
-  plane.originX = originX;
-  plane.originY = originY;
+  plane.image = makeTexture(device_, scaled, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+  plane.snapshot = makeTexture(device_, scaled, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+  plane.inBetween = makeTexture(device_, scaled, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+  plane.before = makeTexture(device_, scaled, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+  plane.width = shape.width();
+  plane.height = shape.height();
+  plane.originX = shape.originX();
+  plane.originY = shape.originY();
   return plane;
 }
 
@@ -139,7 +139,7 @@ void RecordRasterizer::ensureImage(int scale) {
   }
   releaseImage();
   scale_ = scale;
-  vram_ = makePlane(kRecordVramWidth, kRecordVramHeight, 0, 0);
+  vram_ = makePlane(RecordCanvas{.buffer = {0, 0, kRecordVramWidth, kRecordVramHeight}});
   chained_ = false;
   beforeHeld_ = false;
 }
@@ -191,7 +191,7 @@ void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &v
     }
     Canvas added;
     added.shape = RecordCanvas{view.display, view.margin};
-    added.plane = makePlane(added.shape.width(), added.shape.height(), added.shape.originX(), added.shape.originY());
+    added.plane = makePlane(added.shape);
     canvases_.push_back(added);
     canvas = &canvases_.back();
     seedCanvas(cmd, *canvas);
@@ -235,7 +235,7 @@ void RecordRasterizer::selectField(SDL_GPUCommandBuffer *cmd, const present::Fra
     if (field_ != nullptr) {
       SDL_ReleaseGPUTexture(device_, field_);
     }
-    field_ = makeTexture(device_, width * scale_, height * scale_, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    field_ = makeTexture(device_, {width * scale_, height * scale_}, SDL_GPU_TEXTUREUSAGE_SAMPLER);
     fieldWidth_ = width;
     fieldHeight_ = height;
   }
@@ -381,7 +381,7 @@ void RecordRasterizer::copyTexture(
   SDL_EndGPUCopyPass(copy);
 }
 
-void RecordRasterizer::ensureBuffer(Buffer &buffer, std::uint32_t bytes, SDL_GPUBufferUsageFlags usage) {
+void RecordRasterizer::ensureBuffer(Buffer &buffer, std::uint32_t bytes) {
   if (buffer.buffer != nullptr && buffer.size >= bytes) {
     return;
   }
@@ -389,7 +389,7 @@ void RecordRasterizer::ensureBuffer(Buffer &buffer, std::uint32_t bytes, SDL_GPU
     SDL_ReleaseGPUBuffer(device_, buffer.buffer);
   }
   SDL_GPUBufferCreateInfo info = {};
-  info.usage = usage;
+  info.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ; // every record buffer is read by the vertex stage
   info.size = std::max(bytes, buffer.size * 2);
   buffer.buffer = SDL_CreateGPUBuffer(device_, &info);
   GPUCHK(buffer.buffer, "record storage buffer");
@@ -425,11 +425,10 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const RecordRasterPlan
   const std::uint32_t opBytes = paddedBytes(plan.ops.size() * sizeof(RecordOp));
   const std::uint32_t clutBytes = paddedBytes(plan.clutPool.size() * sizeof(std::uint16_t));
   const std::uint32_t pixelBytes = paddedBytes(plan.uploadPool.size() * sizeof(std::uint16_t));
-  const SDL_GPUBufferUsageFlags vertexRead = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-  ensureBuffer(quads_, quadBytes, vertexRead);
-  ensureBuffer(ops_, opBytes, vertexRead);
-  ensureBuffer(cluts_, clutBytes, vertexRead);
-  ensureBuffer(pixels_, pixelBytes, vertexRead);
+  ensureBuffer(quads_, quadBytes);
+  ensureBuffer(ops_, opBytes);
+  ensureBuffer(cluts_, clutBytes);
+  ensureBuffer(pixels_, pixelBytes);
   ensureUpload(quadBytes + opBytes + clutBytes + pixelBytes);
 
   auto *staging = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(device_, upload_, true));

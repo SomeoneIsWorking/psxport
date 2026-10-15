@@ -77,8 +77,14 @@ struct PanelLayout {
 // A panel is geometry; what is shown in it is a session's business.
 class PickerLayout {
 public:
-  // Clamped away from 0 and 1: neither is an animation.
-  PickerLayout(int panelCount, float selectedShare, float unselectedShare, float slantPerWidth, float responsePerFrame);
+  // Shares are ratios normalised by their total; the slant is a fraction of the width.
+  struct Motion {
+    float selectedShare = 0.0f;
+    float unselectedShare = 0.0f;
+    float slantPerWidth = 0.0f;
+    float responsePerFrame = 0.0f; // clamped away from 0 and 1: neither is an animation
+  };
+  PickerLayout(int panelCount, Motion motion);
 
   // Every other panel narrows towards its own share on the next advance().
   void setSelection(int selected);
@@ -97,9 +103,7 @@ public:
   int panelCount() const {
     return mPanelCount;
   }
-  // `pictureWidth`/`pictureHeight` are the aspect of what will be shown (1x1 for a square
-  // source); a non-positive source covers the panel's own shape.
-  PanelLayout panel(int index, int pictureWidth, int pictureHeight) const;
+  PanelLayout panel(int index) const;
 
   // For a diagnostic; the layout itself never reads it back.
   float share(int index) const;

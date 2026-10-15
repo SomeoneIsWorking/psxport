@@ -32,9 +32,20 @@
 #define RML_TEXT_MIDDLE_DOT "\xc2\xb7"
 #define RML_TEXT_SEP " " RML_TEXT_MIDDLE_DOT " "
 
+namespace Rml {
+class Element;
+} // namespace Rml
+
+namespace psx::ui {
+
 // Turn PLAIN TEXT into RML markup that renders exactly that text. The inverse of what RmlUi's
-// parser does, so `DecodeRml(rml_text_markup(t)) == t` for every t — which is the property the
+// parser does, so `DecodeRml(rmlTextMarkup(t)) == t` for every t — which is the property the
 // overlay's change guard depends on. Non-ASCII UTF-8 passes through untouched.
-std::string rml_text_markup(std::string_view plain);
+std::string rmlTextMarkup(std::string_view plain);
+
+// An element's attribute as authored text; `fallback` when it is absent or not a string.
+std::string rmlAttributeText(const Rml::Element &element, const std::string &name, std::string_view fallback);
+
+} // namespace psx::ui
 
 #endif

@@ -41,11 +41,17 @@ public:
   uint64_t ackTicks = 0;         // when /ACK arrives, 0 = the device is not going to acknowledge
   uint64_t ackPulseEndTicks = 0; // when JOY_STAT bit 7 returns low after the /ACK pulse
 
-  void dataWrite(uint32_t byte, uint16_t buttons, uint64_t now);
-  uint32_t dataRead(uint64_t now);
+  // The device answers with the Game's pad buttons, at the Game's emulated CPU clock.
+  void dataWrite(uint32_t byte);
+  uint32_t dataRead();
   void ctrlWrite(uint16_t v);
-  uint32_t status(uint64_t now);
+  uint32_t status();
   // Fold a due /ACK into JOY_STAT bit 9 + I_STAT bit 7. Called from every I_STAT and JOY_STAT
   // access, so no poll can miss the edge regardless of which register the driver watches.
-  void service(uint64_t now);
+  void service();
+
+private:
+  uint64_t now() const;
+  // One byte's transfer time in CPU ticks, from JOY_BAUD and the JOY_MODE baud-rate factor.
+  uint64_t byteTicks() const;
 };

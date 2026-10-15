@@ -8,8 +8,8 @@
 //
 // WHY THIS HEADER EXISTS. The rule was implemented TWICE, and one copy was wrong:
 //
-//     spu_audio.cpp      if (cv_noaudio.get() || !gpu_vk_windowed()) ...  correct
-//     native_fmv.cpp:120  if (cv_noaudio.get()) ...                      MISSING the headless half
+//     spu_audio.cpp      if (no_audio() || !gpu_dev.windowed()) ...  correct
+//     native_fmv.cpp:120  if (no_audio()) ...                      MISSING the headless half
 //
 // So SPU audio went quiet on an automated run and FMV audio did not. USER, 2026-08-06: *"a tomba gate
 // plays audible fmv"* — a gate is headless by construction, and it was playing movie sound out of the
@@ -22,11 +22,15 @@
 // Pure and hermetic on purpose (no SDL, no globals, no Core) so a test can drive BOTH classes without
 // a device, a disc or a window — the same shape as pace_plan.h and video_plan.h.
 
+namespace psx::audio {
+
 // noaudio  = the PSXPORT_NOAUDIO knob (an explicit "stay silent" from the caller).
-// windowed = there is a real on-screen window (gpu_vk_windowed()). Headless is !windowed.
+// windowed = there is a real on-screen window (GpuDevice::windowed). Headless is !windowed.
 //
 // Returns true only when a device may be opened. There is deliberately no third state: a caller that
 // wants to know "why not" should ask the two inputs, not this function.
-static inline bool audio_may_open(bool noaudio, bool windowed) {
+inline bool mayOpenOutput(bool noaudio, bool windowed) {
   return !noaudio && windowed;
 }
+
+} // namespace psx::audio

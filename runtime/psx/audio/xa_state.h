@@ -1,89 +1,76 @@
-// xa_state.h — per-instance native XA-ADPCM CD-audio / voice-clip streamer state (xa_stream.c), so two
-// Cores keep SEPARATE streaming state (active stream, position, decode ring, clip bookkeeping). The
-// state lives in this struct, one per Game (game.h embeds it), and xa_stream.c is BOUND to one
-// instance at a time via xa_bind(Core*) — set from the explicit Core by its title FrameDriver before
-// that core runs, like Gte::bind/spu_bind/mdec_bind. The decoded PCM still feeds the per-instance SPU
-// which mixes to the SHARED host audio sink (one physical speaker; a lockstep RAM/state diff is
-// unaffected by the host device, shared by design — same policy as the FMV audio sink and SPU output).
-//
-// Plain-C struct (no C++) so xa_stream.c stays C, exactly like gte_state.h's GteRegs.
+// xa_state.h — psx::audio::XaStream: the native XA-ADPCM CD-audio and voice-clip streamer, one per Game. The
+// decoded PCM feeds the Game's SPU through Beetle's context-free CDC_GetCDAudioSample pull, which reads the
+// instance bound by bindSamplePull.
 #pragma once
 #include <stdint.h>
 
-// 65536 frames ≈ 1.7 s of 37800 Hz source audio. The drive produces in sector bursts (one audio
-// sector every ~8th LBA) while the SPU pulls continuously; too small a ring turns normal burst
-// jitter into drops (measured on Vagrant Story's intro: 16384 frames filled and dropped within the
-// first second of playback even though consumption matched production overall).
-#define XA_RING_FRAMES 65536
-
-typedef struct XaState {
-  int active;                       // 1 while ReadS streaming with XA-ADPCM enabled  (was s_active)
-  int push_mode;                    // 1 = the CDC drive decodes INTO this ring: pulls must NOT
-                                    //     self-fetch sectors. 0 = pull-driven, where the pull
-                                    //     advances s_lba itself.
-  uint32_t lba;                     // next CHD sector to read                        (was s_lba)
-  uint8_t mode;                     // last Setmode                                   (was s_mode)
-  int filter_set;                   // a Setfilter was issued                         (was s_filter_set)
-  uint8_t filter_file, filter_chan; //                                       (was s_filter_*)
-  uint32_t end_lba;                 // clip end LBA (0 = open-ended)                  (was s_end_lba)
-  uint32_t clip_start;              // clip start LBA (idempotency + loop restart)    (was s_clip_start)
-  uint8_t clip_chan;                // clip channel (idempotency)                     (was s_clip_chan)
-  int loop;                         // loop the clip when the head passes the end     (was s_loop)
-  int16_t ring[XA_RING_FRAMES][2];  // decoded-sample ring (interleaved S16)  (was s_ring)
-  uint32_t wr;                      // total frames written (monotonic)               (was s_wr)
-  double rd;                        // total frames read (monotonic, fractional)      (was s_rd)
-  int16_t hist[2][2];               // XA IIR history, persists across sectors        (was s_hist)
-  int src_freq;                     //                                               (was s_src_freq, init 37800)
-  // Census for the stream currently active, reset at start/play and reported at stop. Decode is
-  // PULL-driven, so "no audio came out" has two very different causes that look identical from
-  // outside: the SPU never pulled a sample (pulls == 0 — the mixer is not running, or CD audio is
-  // gated off), or it pulled and the disc side produced nothing (pulls > 0, sectors == 0). These
-  // need opposite fixes, so the stop line names both counts instead of leaving silence unexplained.
-  uint32_t pulls;           // CDC_GetCDAudioSample calls while this stream was active
-  uint32_t sectors;         // audio sectors actually decoded into the ring
-  uint32_t overflow_streak; // consecutive sectors that arrived on a full ring; log throttle only
-  int primed;               // push mode: playback released since the stream (re)started
-  uint32_t held_pulls;      // push mode: pulls answered with silence while not primed
-  struct DiscState *disc;   // Game-owned disc backend (wired by Game())
-} XaState;
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-// Initialize a fresh XaState to power-on defaults (src_freq=37800, everything else 0). Called by Game().
-void xa_state_init(XaState *s);
-// Bind `s` for the vendored Beetle spu.c sample pull ONLY: CDC_GetCDAudioSample(s32*) is a
-// context-free vendor callback, so it reads the bound instance (sanctioned vendor interop).
-// All xa_stream_* entry points take their XaState explicitly.
-void xa_bind_state(XaState *s);
-// Decode one ALREADY-READ raw 2352-byte Mode2 XA-ADPCM sector into the ring (push mode). The
-// caller owns the disc cursor: this never advances s_lba and never reads the disc. Returns the
-// frames decoded (0 when the sector is not decodable audio), and NEVER asks the caller to hold the
-// sector: a full ring drops its oldest frames and takes the sector anyway, because hardware's SPU CD
-// buffer overflows without stopping the drive. Beetle-parity routing lives in the caller
-// (cdc_native.cpp decides FIFO-vs-decoder from mode/subheader bytes).
-int xa_push_audio_sector(XaState *s, const uint8_t *raw, uint32_t drive_lba);
-// The pull-mode streamer the CD command layer drives (stock libcd, or a title's own CdControl).
-void xa_stream_setmode(XaState *xs, uint8_t mode);
-void xa_stream_setfilter(XaState *xs, uint8_t file, uint8_t chan);
-void xa_stream_setloc(XaState *xs, uint8_t amm, uint8_t ass, uint8_t asect);
-void xa_stream_start(XaState *xs);
-void xa_stream_stop(XaState *xs);
-// The read head while streaming: 1 with *lba set, 0 when idle.
-int xa_stream_play_lba(XaState *xs, uint32_t *lba);
-// Streams channel `chan` over [start, end] (CHD LBAs), restarting at `start` past the end when `loop`.
-void xa_stream_play(XaState *xs, uint8_t chan, uint32_t start, uint32_t end, int loop);
-int xa_stream_is_looping(XaState *xs);
-int xa_stream_is_active(XaState *xs);
-// Beetle spu.c's CD-audio source: one stereo pair per 44.1 kHz output sample from the bound instance.
-void CDC_GetCDAudioSample(int32_t *samples);
-#ifdef __cplusplus
+namespace psx::cd {
+class Disc;
 }
-#endif
 
-#ifdef __cplusplus
 namespace psx::audio {
-// Clears the sample-pull binding if it still names `state`.
-void releaseXaState(const XaState &state);
+
+// About 1.7 s of 37800 Hz audio; a smaller ring turned normal drive burst jitter into drops (Vagrant Story intro).
+inline constexpr uint32_t kXaRingFrames = 65536;
+
+class XaStream {
+public:
+  // Power-on defaults (src_freq=37800); keeps the disc wiring.
+  void reset();
+  // Bind this instance for Beetle spu.c's sample pull; set per frame step from the explicit Core.
+  void bindSamplePull();
+  // Clears the sample-pull binding if it still names this instance.
+  void releaseSamplePull() const;
+  // Decode one already-read raw Mode2 XA sector into the ring (push mode); never touches the disc cursor. A full
+  // ring drops its oldest frames, because hardware's SPU CD buffer overflows without stopping the drive. Returns
+  // the frames decoded.
+  int pushAudioSector(const uint8_t *raw, uint32_t drive_lba);
+  // The pull-mode streamer the CD command layer drives (stock libcd, or a title's own CdControl).
+  void setMode(uint8_t value);
+  void setFilter(uint8_t file, uint8_t chan);
+  void setLoc(uint8_t amm, uint8_t ass, uint8_t asect);
+  void start();
+  void stop();
+  // The read head while streaming; false when idle.
+  bool playLba(uint32_t *head) const;
+  // Streams channel `chan` over [first, last] (CHD LBAs), restarting at `first` past the end when `looping`.
+  void play(uint8_t chan, uint32_t first, uint32_t last, bool looping);
+  bool isLooping() const;
+  bool isActive() const;
+  // One stereo pair per 44.1 kHz output sample, resampled from the XA source rate.
+  void pullSample(int32_t *samples);
+
+  int active = 0;    // ReadS streaming with XA-ADPCM enabled
+  int push_mode = 0; // the CDC drive decodes into this ring; pulls must not self-fetch sectors
+  uint32_t lba = 0;  // next CHD sector to read
+  uint8_t mode = 0;  // last Setmode
+  int filter_set = 0;
+  uint8_t filter_file = 0;
+  uint8_t filter_chan = 0;
+  uint32_t end_lba = 0;    // clip end LBA (0 = open-ended)
+  uint32_t clip_start = 0; // clip start LBA (idempotency + loop restart)
+  uint8_t clip_chan = 0;
+  int loop = 0;
+  int16_t ring[kXaRingFrames][2] = {}; // decoded interleaved S16
+  uint32_t wr = 0;                     // total frames written (monotonic)
+  double rd = 0.0;                     // total frames read (monotonic, fractional)
+  int16_t hist[2][2] = {};             // XA IIR history, persists across sectors
+  int src_freq = 37800;
+  // Census for the active stream: pulls == 0 means the SPU never asked, sectors == 0 that the disc gave nothing.
+  uint32_t pulls = 0;
+  uint32_t sectors = 0;
+  uint32_t overflow_streak = 0; // consecutive sectors on a full ring; log throttle only
+  int primed = 0;               // push mode: playback released since the stream (re)started
+  uint32_t held_pulls = 0;      // push mode: pulls answered with silence while not primed
+  psx::cd::Disc *disc = nullptr;
+
+private:
+  void resetBuffers();
+  int decodeNextSector();
+  int decodeAndStoreSector(const uint8_t *raw, uint32_t drive_lba);
+};
+
 } // namespace psx::audio
-#endif
+
+// Beetle spu.c's CD-audio source: one stereo pair per 44.1 kHz output sample from the bound instance.
+extern "C" void CDC_GetCDAudioSample(int32_t *samples);

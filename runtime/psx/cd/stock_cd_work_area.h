@@ -1,6 +1,8 @@
 // stock_cd_work_area.h — the guest bookkeeping stock libcd's command-send routine keeps.
 #pragma once
 
+#include "stock_cd_command.h"
+
 #include <cstdint>
 
 class Core;
@@ -14,7 +16,7 @@ struct StockCommandWorkArea {
   uint32_t lastCommandAddress = 0;  // one byte, every command sent; CdLastCom() reads it
 };
 
-// Writes what the replaced command-send would have recorded for `command` with `parameter`.
-void publishStockCommandWorkArea(Core &core, const StockCommandWorkArea &workArea, uint8_t command, uint32_t parameter);
+// Writes what the replaced command-send would have recorded for `command`.
+void publishStockCommandWorkArea(Core &core, const StockCommandWorkArea &workArea, StockCdCommand command);
 
 } // namespace psx::cd

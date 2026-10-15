@@ -44,7 +44,7 @@ void RunEndReport::emit(std::uint64_t productSteps) const {
 // PSXPORT_RAMDUMP: the after-loop dump. A run that ends by exiting its process never gets here;
 // PSXPORT_RAMDUMP_FRAME (FieldTurn) is the mid-run one.
 void RunEndReport::dumpRamIfRequested() const {
-  const std::string &path = psx::config::cv_ramdump.get();
+  const std::string path = psx::config::ramdump_path();
   if (path.empty()) {
     return;
   }

@@ -279,8 +279,7 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
     record(stats,
            judgeCompletedCall({afterOriginal, original, live.effects()},
                               {afterNative, native, replay.effects()},
-                              entrySp,
-                              config_.deadStackBytes));
+                              DeadStack{entrySp, config_.deadStackBytes}));
   }
   return original;
 }

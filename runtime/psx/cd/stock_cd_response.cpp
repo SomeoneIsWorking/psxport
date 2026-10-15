@@ -9,12 +9,15 @@
 #include <cstdint>
 #include <lucent/log.h>
 
+namespace psx::cd {
 namespace {
 
 using Response = std::array<uint8_t, 8>;
 
-bool toc_response(Core &core, uint8_t command, uint32_t parameter, Response &response) {
-  DiscState &disc = core.game->disc;
+bool toc_response(Core &core, StockCdCommand sent, Response &response) {
+  const uint8_t command = sent.command;
+  const uint32_t parameter = sent.parameter;
+  psx::cd::Disc &disc = core.game->disc;
   psx::disc_toc::BcdPair answer{};
   if (command == 0x13) {
     if (!psx::disc_toc::track_range(disc, answer)) {
@@ -45,22 +48,24 @@ void publish(Core &core, uint32_t result) {
 
 } // namespace
 
-void stock_cd_forget_response(Core &core) {
+void forgetStockResponse(Core &core) {
   Cd &cd = core.game->cd;
   cd.stock_command_response.fill(0);
   cd.stock_command_response_valid = false;
 }
 
-void stock_cd_zero_result(Core &core, uint32_t result) {
+void zeroStockResult(Core &core, uint32_t result) {
   write_response(core, result, Response{});
 }
 
-bool stock_cd_begin_command(Core &core, uint8_t command, uint32_t parameter, uint32_t result) {
-  stock_cd_forget_response(core);
+bool beginStockCommand(Core &core, StockCdCommand sent) {
+  const uint8_t command = sent.command;
+  const uint32_t result = sent.result;
+  forgetStockResponse(core);
   if (command == 0x13 || command == 0x14) {
     Response response{};
-    if (!toc_response(core, command, parameter, response)) {
-      stock_cd_zero_result(core, result);
+    if (!toc_response(core, sent, response)) {
+      zeroStockResult(core, result);
       lucent::error("cd", "stock command 0x{:02X} refused: missing or invalid disc TOC/track", command);
       return false;
     }
@@ -69,8 +74,8 @@ bool stock_cd_begin_command(Core &core, uint8_t command, uint32_t parameter, uin
   }
   if (command == 0x11) {
     Response response{};
-    if (!cdc_getloc_p(&core.game->cdc, response.data())) {
-      stock_cd_zero_result(core, result);
+    if (!core.game->cdc.getlocP(response.data())) {
+      zeroStockResult(core, result);
       lucent::error("cd", "stock GetlocP refused: the disc layout is unavailable");
       return false;
     }
@@ -81,6 +86,8 @@ bool stock_cd_begin_command(Core &core, uint8_t command, uint32_t parameter, uin
   return true;
 }
 
-void stock_cd_publish_sync(Core &core, uint32_t result) {
+void publishStockSync(Core &core, uint32_t result) {
   publish(core, result);
 }
+
+} // namespace psx::cd

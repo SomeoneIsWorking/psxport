@@ -22,8 +22,8 @@ std::string hexWord(std::uint32_t value) {
 }
 
 // The physical window [begin, end) of callee-frame residue below the entry stack pointer.
-ByteRange deadStackWindow(std::uint32_t entrySp, std::uint32_t deadStackBytes) {
-  const std::uint32_t physical = entrySp & kPhysicalMask;
+ByteRange deadStackWindow(DeadStack deadStack) {
+  const std::uint32_t physical = deadStack.entrySp & kPhysicalMask;
   std::uint32_t base = 0;
   std::uint32_t top = 0;
   if (physical < kRamMirrorSpan) {
@@ -35,7 +35,7 @@ ByteRange deadStackWindow(std::uint32_t entrySp, std::uint32_t deadStackBytes) {
   } else {
     return {};
   }
-  const std::uint32_t begin = top - std::min(deadStackBytes, top - base);
+  const std::uint32_t begin = top - std::min(deadStack.bytes, top - base);
   return {begin, top};
 }
 
@@ -68,25 +68,16 @@ std::string hexBytes(const MachineSnapshot &state, ByteRange range) {
 // not machine state, and two paths that differ only there have done the same thing. Measured on Spyro
 // 2's sector walk, where retail moves a zero-extended `lhu` into VZ0 and an exact native override
 // differed from it in that register alone.
-std::uint32_t architecturalGteWord(std::size_t index, std::uint32_t word) {
-  switch (index) {
-  case 1:
-  case 3:
-  case 5:
-  case 8:
-  case 9:
-  case 10:
-  case 11:
-    return static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(word & 0xFFFFu)));
-  case 7:
-  case 16:
-  case 17:
-  case 18:
-  case 19:
-    return word & 0xFFFFu;
-  default:
-    return word;
+std::array<std::uint32_t, kGteRegisterCount> architecturalGte(const std::array<std::uint32_t, kGteRegisterCount> &gte) {
+  std::array<std::uint32_t, kGteRegisterCount> words = gte;
+  for (const std::size_t index : {1u, 3u, 5u, 8u, 9u, 10u, 11u}) {
+    words[index] =
+        static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(gte[index] & 0xFFFFu)));
   }
+  for (const std::size_t index : {7u, 16u, 17u, 18u, 19u}) {
+    words[index] &= 0xFFFFu;
+  }
+  return words;
 }
 
 void noteFirst(DifferentialOutcome &outcome, DifferentialDifference difference) {
@@ -115,9 +106,11 @@ void compareRegisters(const CallObservation &original, const CallObservation &na
     noteFirst(outcome,
               {"cop0 status", hexWord(original.state.cop0[kCop0Status]), hexWord(native.state.cop0[kCop0Status])});
   }
+  const auto originalGte = architecturalGte(original.state.gte);
+  const auto nativeGte = architecturalGte(native.state.gte);
   for (std::size_t index = 0; index < kGteRegisterCount; ++index) {
-    const std::uint32_t a = architecturalGteWord(index, original.state.gte[index]);
-    const std::uint32_t b = architecturalGteWord(index, native.state.gte[index]);
+    const std::uint32_t a = originalGte[index];
+    const std::uint32_t b = nativeGte[index];
     if (a != b) {
       ++outcome.registersDiffering;
       noteFirst(
@@ -192,15 +185,13 @@ const char *mipsRegisterName(std::uint32_t index) {
   return index < kRegisterNames.size() ? kRegisterNames[index] : "?";
 }
 
-DifferentialOutcome judgeCompletedCall(const CallObservation &original,
-                                       const CallObservation &native,
-                                       std::uint32_t entrySp,
-                                       std::uint32_t deadStackBytes) {
+DifferentialOutcome
+judgeCompletedCall(const CallObservation &original, const CallObservation &native, DeadStack deadStack) {
   DifferentialOutcome outcome;
   outcome.sideEffectsOriginal = original.effects.size();
   outcome.sideEffectsNative = native.effects.size();
   compareRegisters(original, native, outcome);
-  compareMemory(original, native, deadStackWindow(entrySp, deadStackBytes), outcome);
+  compareMemory(original, native, deadStackWindow(deadStack), outcome);
   compareSideEffects(original, native, outcome);
   outcome.verdict = outcome.difference ? DifferentialVerdict::Mismatch : DifferentialVerdict::Match;
   return outcome;

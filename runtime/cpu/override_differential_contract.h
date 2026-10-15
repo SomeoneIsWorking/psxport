@@ -28,12 +28,15 @@ struct CallObservation {
   std::span<const SideEffect> effects;
 };
 
+// The callee-frame window below the entry stack pointer whose byte differences are counted, not judged.
+struct DeadStack {
+  std::uint32_t entrySp = 0;
+  std::uint32_t bytes = 0;
+};
+
 // Judges a call both paths COMPLETED (both returned, neither performed an unreplayable effect): Match, or
-// Mismatch with the first difference and the difference counts. `entrySp` and `deadStackBytes` bound the
-// callee-frame window whose byte differences are counted in `deadStackBytesIgnored` instead of judged.
-DifferentialOutcome judgeCompletedCall(const CallObservation &original,
-                                       const CallObservation &native,
-                                       std::uint32_t entrySp,
-                                       std::uint32_t deadStackBytes);
+// Mismatch with the first difference and the difference counts.
+DifferentialOutcome
+judgeCompletedCall(const CallObservation &original, const CallObservation &native, DeadStack deadStack);
 
 } // namespace psx::cpu

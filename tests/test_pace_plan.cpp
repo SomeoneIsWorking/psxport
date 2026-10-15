@@ -5,7 +5,7 @@
 // both of them shut:
 //
 //   1. HEADLESS WAS NEVER PACED. The shipped rule opened with
-//          if (!gpu_has_window() || cfg_on("PSXPORT_NOPACE")) return;
+//          if (!gpu_has_window() || PSXPORT_NOPACE) return;
 //      so a run without a window ran unthrottled — which means every headless timing number in this
 //      project described a program the user never runs, and headless is where essentially every
 //      measurement is taken. `PSXPORT_NOPACE` was already the independent "run unpaced" switch, so
@@ -36,14 +36,15 @@
 
 #include <math.h>
 
+namespace {
+
 // The two field rates the framework decodes from GP1(0x08) bit 3. Stated here as literals ON PURPOSE:
 // a test that imported the constants it is checking would pass no matter what they were changed to.
-static const unsigned NTSC_MILLIHZ = 59940u; // 60000/1001 Hz
-static const unsigned PAL_MILLIHZ = 50000u;  // 50 Hz
+const unsigned NTSC_MILLIHZ = 59940u; // 60000/1001 Hz
+const unsigned PAL_MILLIHZ = 50000u;  // 50 Hz
 
 // ---- the rule as shipped at 9890eaa8, kept ONLY as this suite's negative control -------------------
-// gpu_native.cpp:1542..1575. Note both defects: `hasWindow` gates pacing, and the interval divides by
-// a hardcoded 60.0 rather than by the game's field rate (which the rule had no way to receive).
+// Both defects kept: `hasWindow` gates pacing, and the interval divides by 60.0, not the field rate.
 [[maybe_unused]] static psx::frame::PacePlan legacy_pace(const psx::frame::PaceInputs &in, bool hasWindow) {
   psx::frame::PacePlan p;
   p.nextMs = in.nextMs;
@@ -71,7 +72,7 @@ static const unsigned PAL_MILLIHZ = 50000u;  // 50 Hz
 
 // The unit under test, with the window presented as a parameter the SHIPPED rule simply ignores —
 // that asymmetry IS the fix, and expressing it this way is what lets one property cover both rules.
-static psx::frame::PacePlan pace(const psx::frame::PaceInputs &in, bool hasWindow) {
+psx::frame::PacePlan pace(const psx::frame::PaceInputs &in, bool hasWindow) {
 #ifdef PSXPORT_TEST_LEGACY_PACE_PLAN
   return legacy_pace(in, hasWindow);
 #else
@@ -80,7 +81,7 @@ static psx::frame::PacePlan pace(const psx::frame::PaceInputs &in, bool hasWindo
 #endif
 }
 
-static bool near_ms(double a, double b, double tol) {
+bool near_ms(double a, double b, double tol) {
   return fabs(a - b) <= tol;
 }
 
@@ -94,7 +95,7 @@ struct Case {
   int parts;
   unsigned rate;
 };
-static const Case CASES[] = {
+const Case CASES[] = {
     {"spyro/spider1: 1 field per call", 1, 1, NTSC_MILLIHZ},
     {"Tomba!2: 2 fields per call", 2, 1, NTSC_MILLIHZ},
     {"fps60 halving a 1-field call", 1, 2, NTSC_MILLIHZ},
@@ -102,26 +103,33 @@ static const Case CASES[] = {
     {"PAL, 1 field per call", 1, 1, PAL_MILLIHZ},
     {"unset quota (reported, paced 1)", 0, 1, NTSC_MILLIHZ},
 };
-static const int NCASES = (int)(sizeof CASES / sizeof CASES[0]);
+const int NCASES = (int)(sizeof CASES / sizeof CASES[0]);
 
-static psx::frame::PaceInputs mk(const Case &c, double nowMs, double nextMs, bool seeded) {
+// The pacer's clock: now, the next field's deadline, and whether that deadline was ever set.
+struct Clock {
+  double nowMs = 0.0;
+  double nextMs = 0.0;
+  bool seeded = false;
+};
+
+psx::frame::PaceInputs mk(const Case &c, Clock clock) {
   psx::frame::PaceInputs in;
   in.unpaced = false;
   in.quota = c.quota;
   in.parts = c.parts;
   in.fieldRateMilliHz = c.rate;
-  in.nowMs = nowMs;
-  in.nextMs = nextMs;
-  in.seeded = seeded;
+  in.nowMs = clock.nowMs;
+  in.nextMs = clock.nextMs;
+  in.seeded = clock.seeded;
   return in;
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────────
 // PROPERTY 1 — the pacing decision is identical with and without a window surface.
 // ────────────────────────────────────────────────────────────────────────────────────────────────────
-static void test_pacing_is_identical_with_and_without_a_window(void) {
+void test_pacing_is_identical_with_and_without_a_window(void) {
   for (int i = 0; i < NCASES; ++i) {
-    const psx::frame::PaceInputs in = mk(CASES[i], /*now*/ 1000.0, /*next*/ 1000.0, /*seeded*/ true);
+    const psx::frame::PaceInputs in = mk(CASES[i], {1000.0, 1000.0, true});
     const psx::frame::PacePlan win = pace(in, /*hasWindow=*/true);
     const psx::frame::PacePlan hdl = pace(in, /*hasWindow=*/false);
     CHECK_EQ(hdl.paced, win.paced);
@@ -135,10 +143,10 @@ static void test_pacing_is_identical_with_and_without_a_window(void) {
 
 // PSXPORT_NOPACE is the ONE switch. It must suppress pacing in BOTH legs — that is what makes it a
 // legitimate replacement for the window term rather than a rename of it.
-static void test_nopace_is_the_only_switch_that_suppresses_pacing(void) {
+void test_nopace_is_the_only_switch_that_suppresses_pacing(void) {
   int suppressed = 0;
   for (int i = 0; i < NCASES; ++i) {
-    psx::frame::PaceInputs in = mk(CASES[i], 1000.0, 1000.0, true);
+    psx::frame::PaceInputs in = mk(CASES[i], {1000.0, 1000.0, true});
     in.unpaced = true;
     const psx::frame::PacePlan win = pace(in, true);
     const psx::frame::PacePlan hdl = pace(in, false);
@@ -156,12 +164,12 @@ static void test_nopace_is_the_only_switch_that_suppresses_pacing(void) {
 // ────────────────────────────────────────────────────────────────────────────────────────────────────
 // PROPERTY 2 — the deadline follows the GAME's field rate, so 59.940 Hz does not sleep on 60.000.
 // ────────────────────────────────────────────────────────────────────────────────────────────────────
-static void test_the_interval_is_one_field_at_the_games_rate(void) {
+void test_the_interval_is_one_field_at_the_games_rate(void) {
   for (int i = 0; i < NCASES; ++i) {
     const Case &c = CASES[i];
     const int quota = c.quota < 1 ? 1 : c.quota; // an unset quota paces at 1 field
     const double want = (double)quota * 1000000.0 / (double)c.rate / (double)c.parts;
-    const psx::frame::PacePlan p = pace(mk(c, 1000.0, 1000.0, true), /*hasWindow=*/true);
+    const psx::frame::PacePlan p = pace(mk(c, {1000.0, 1000.0, true}), /*hasWindow=*/true);
     CHECK(p.paced);
     CHECK(near_ms(p.intervalMs, want, 1e-9));
   }
@@ -170,8 +178,8 @@ static void test_the_interval_is_one_field_at_the_games_rate(void) {
 
 // The concrete number, spelled out, because "follows the rate" is easy to satisfy vacuously:
 // one NTSC field is 1000/(60000/1001) = 16.68335 ms, NOT the 16.66667 ms a 60.000 Hz literal gives.
-static void test_an_ntsc_field_is_not_a_sixtieth_of_a_second(void) {
-  psx::frame::PaceInputs in = mk(CASES[0], 1000.0, 1000.0, true);
+void test_an_ntsc_field_is_not_a_sixtieth_of_a_second(void) {
+  psx::frame::PaceInputs in = mk(CASES[0], {1000.0, 1000.0, true});
   const psx::frame::PacePlan p = pace(in, true);
   CHECK(p.paced);
   CHECK(near_ms(p.intervalMs, 16.6833500, 1e-6));
@@ -179,9 +187,9 @@ static void test_an_ntsc_field_is_not_a_sixtieth_of_a_second(void) {
   CHECK(fabs(p.intervalMs - 1000.0 / 60.0) > 1.0e-5);
 }
 
-static void test_pal_paces_slower_than_ntsc(void) {
-  const psx::frame::PacePlan pal = pace(mk(CASES[4], 1000.0, 1000.0, true), true);
-  const psx::frame::PacePlan ntsc = pace(mk(CASES[0], 1000.0, 1000.0, true), true);
+void test_pal_paces_slower_than_ntsc(void) {
+  const psx::frame::PacePlan pal = pace(mk(CASES[4], {1000.0, 1000.0, true}), true);
+  const psx::frame::PacePlan ntsc = pace(mk(CASES[0], {1000.0, 1000.0, true}), true);
   CHECK(pal.paced);
   CHECK(ntsc.paced);
   CHECK(near_ms(pal.intervalMs, 20.0, 1e-9));
@@ -193,14 +201,14 @@ static void test_pal_paces_slower_than_ntsc(void) {
 // advance(); }`. So over N pacing calls the pacer's accumulated wall-clock target must equal the
 // time the consumer's clock needs to produce N fields. A 60.000 Hz pacer is short by 60 ms per
 // simulated minute — 3.6 whole fields of beat against the counter it is waiting on.
-static void test_the_pacer_and_the_field_counter_do_not_drift(void) {
+void test_the_pacer_and_the_field_counter_do_not_drift(void) {
   const int kCalls = 3600; // one minute of NTSC fields
   const double consumer_ms = (double)kCalls * 1000000.0 / (double)NTSC_MILLIHZ;
   double now = 0.0, next = 0.0;
   bool seeded = false;
   int paced = 0;
   for (int n = 0; n < kCalls; ++n) {
-    psx::frame::PaceInputs in = mk(CASES[0], now, next, seeded);
+    psx::frame::PaceInputs in = mk(CASES[0], {now, next, seeded});
     const psx::frame::PacePlan p = pace(in, /*hasWindow=*/true);
     if (!p.paced) {
       break;
@@ -219,18 +227,18 @@ static void test_the_pacer_and_the_field_counter_do_not_drift(void) {
 // The mechanics of the deadline, unchanged by this work but pinned so the rewrite is an equivalence
 // proof rather than a rewrite.
 // ────────────────────────────────────────────────────────────────────────────────────────────────────
-static void test_an_unseeded_deadline_starts_at_now(void) {
-  psx::frame::PaceInputs in = mk(CASES[0], /*now*/ 5000.0, /*next*/ -1.0, /*seeded*/ false);
+void test_an_unseeded_deadline_starts_at_now(void) {
+  psx::frame::PaceInputs in = mk(CASES[0], {5000.0, -1.0, false});
   const psx::frame::PacePlan p = pace(in, true);
   CHECK(p.paced);
   CHECK(near_ms(p.nextMs, 5000.0 + p.intervalMs, 1e-9));
   CHECK(near_ms(p.sleepMs, p.intervalMs, 1e-9));
 }
 
-static void test_a_deadline_already_past_does_not_sleep(void) {
+void test_a_deadline_already_past_does_not_sleep(void) {
   // The host was late by half an interval: the new deadline is behind `now`, so there is nothing to
   // sleep for — but it is less than a whole interval behind, so the debt is CARRIED, not dropped.
-  psx::frame::PaceInputs in = mk(CASES[0], /*now*/ 1020.0, /*next*/ 1000.0, /*seeded*/ true);
+  psx::frame::PaceInputs in = mk(CASES[0], {1020.0, 1000.0, true});
   const psx::frame::PacePlan p = pace(in, true);
   CHECK(p.paced);
   CHECK(near_ms(p.sleepMs, 0.0, 0.0));
@@ -238,10 +246,10 @@ static void test_a_deadline_already_past_does_not_sleep(void) {
   CHECK_EQ(p.resync, 0);
 }
 
-static void test_a_hitch_resyncs_instead_of_sprinting(void) {
+void test_a_hitch_resyncs_instead_of_sprinting(void) {
   // The host lost 500 ms. Catching up would run the game fast for 30 frames; the deadline is reset
   // to now instead and the debt is dropped.
-  psx::frame::PaceInputs in = mk(CASES[0], /*now*/ 1500.0, /*next*/ 1000.0, /*seeded*/ true);
+  psx::frame::PaceInputs in = mk(CASES[0], {1500.0, 1000.0, true});
   const psx::frame::PacePlan p = pace(in, true);
   CHECK(p.paced);
   CHECK_EQ(p.resync, 1);
@@ -249,21 +257,21 @@ static void test_a_hitch_resyncs_instead_of_sprinting(void) {
   CHECK(near_ms(p.sleepMs, 0.0, 0.0));
 }
 
-static void test_parts_below_one_is_clamped_not_a_divide_by_zero(void) {
+void test_parts_below_one_is_clamped_not_a_divide_by_zero(void) {
   Case c = CASES[0];
   c.parts = 0;
-  const psx::frame::PacePlan p = pace(mk(c, 1000.0, 1000.0, true), true);
+  const psx::frame::PacePlan p = pace(mk(c, {1000.0, 1000.0, true}), true);
   CHECK(p.paced);
   CHECK(near_ms(p.intervalMs, 1000000.0 / (double)NTSC_MILLIHZ, 1e-9));
 }
 
-static void test_an_unset_quota_is_reported_not_silently_guessed(void) {
-  const psx::frame::PacePlan p = pace(mk(CASES[5], 1000.0, 1000.0, true), true);
+void test_an_unset_quota_is_reported_not_silently_guessed(void) {
+  const psx::frame::PacePlan p = pace(mk(CASES[5], {1000.0, 1000.0, true}), true);
   CHECK(p.paced);
   CHECK_EQ(p.quotaUnset, 1);
   CHECK(near_ms(p.intervalMs, 1000000.0 / (double)NTSC_MILLIHZ, 1e-9));
   // …and a port that DID declare its cadence is not flagged.
-  const psx::frame::PacePlan ok = pace(mk(CASES[0], 1000.0, 1000.0, true), true);
+  const psx::frame::PacePlan ok = pace(mk(CASES[0], {1000.0, 1000.0, true}), true);
   CHECK_EQ(ok.quotaUnset, 0);
 }
 
@@ -271,8 +279,8 @@ static void test_an_unset_quota_is_reported_not_silently_guessed(void) {
 // A zero field rate is not a rate. The shipped rule refuses rather than substituting a number —
 // the entire point of this change is that the pacing rate is never invented locally. (The legacy
 // rule has no rate input at all, so this case is meaningless against it.)
-static void test_a_zero_field_rate_refuses_to_pace(void) {
-  psx::frame::PaceInputs in = mk(CASES[0], 1000.0, 1000.0, true);
+void test_a_zero_field_rate_refuses_to_pace(void) {
+  psx::frame::PaceInputs in = mk(CASES[0], {1000.0, 1000.0, true});
   in.fieldRateMilliHz = 0;
   const psx::frame::PacePlan p = pacePlan(in);
   CHECK_EQ(p.paced, 0);
@@ -280,8 +288,8 @@ static void test_a_zero_field_rate_refuses_to_pace(void) {
   CHECK(near_ms(p.nextMs, 1000.0, 0.0));
 }
 
-static void test_unpaced_host_execution_retains_the_guest_field_cadence(void) {
-  psx::frame::PaceInputs in = mk(CASES[3], 1000.0, 1000.0, true);
+void test_unpaced_host_execution_retains_the_guest_field_cadence(void) {
+  psx::frame::PaceInputs in = mk(CASES[3], {1000.0, 1000.0, true});
   in.unpaced = true;
   const psx::frame::PacePlan p = pacePlan(in);
   CHECK_EQ(p.paced, 0);
@@ -300,8 +308,8 @@ static void test_unpaced_host_execution_retains_the_guest_field_cadence(void) {
 // THE SUITE'S OWN NEGATIVE CONTROL, asserted rather than described: the legacy rule must FAIL both
 // properties. If this case ever passes, the properties above have stopped discriminating and every
 // green run below it is worthless.
-static void test_the_legacy_rule_fails_both_properties(void) {
-  const psx::frame::PaceInputs in = mk(CASES[0], 1000.0, 1000.0, true);
+void test_the_legacy_rule_fails_both_properties(void) {
+  const psx::frame::PaceInputs in = mk(CASES[0], {1000.0, 1000.0, true});
   const psx::frame::PacePlan lwin = legacy_pace(in, true);
   const psx::frame::PacePlan lhdl = legacy_pace(in, false);
   CHECK_EQ(lwin.paced, 1);
@@ -317,6 +325,8 @@ static void test_the_legacy_rule_fails_both_properties(void) {
   CHECK(consumer_minute - legacy_minute < 60.2);
 }
 #endif
+
+} // namespace
 
 int main(void) {
   RUN(pacing_is_identical_with_and_without_a_window);
@@ -335,5 +345,5 @@ int main(void) {
   RUN(unpaced_host_execution_retains_the_guest_field_cadence);
   RUN(the_legacy_rule_fails_both_properties);
 #endif
-  return pt_summary();
+  return psx::test::summary();
 }

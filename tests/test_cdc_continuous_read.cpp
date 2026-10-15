@@ -26,81 +26,81 @@ constexpr uint32_t kFirstLba = 16;
 constexpr size_t kRawSectorBytes = 2352;
 constexpr size_t kWholeSectorWords = 2340 / sizeof(uint32_t);
 
-std::array<uint8_t, kRawSectorBytes> make_sector(uint32_t lba) {
+constexpr std::array<uint8_t, kRawSectorBytes> make_sector(uint32_t lba) {
   std::array<uint8_t, kRawSectorBytes> raw{};
   for (size_t offset = 0; offset < raw.size(); ++offset) {
-    raw[offset] = static_cast<uint8_t>((lba * 37u + offset * 11u) & 0xFFu);
+    raw[offset] = static_cast<uint8_t>((std::size_t{37} * lba + offset * 11u) & 0xFFu);
   }
   return raw;
 }
 
-const std::array<uint8_t, kRawSectorBytes> kFirstSector = make_sector(kFirstLba);
-const std::array<uint8_t, kRawSectorBytes> kSecondSector = make_sector(kFirstLba + 1);
+constexpr std::array<uint8_t, kRawSectorBytes> kFirstSector = make_sector(kFirstLba);
+constexpr std::array<uint8_t, kRawSectorBytes> kSecondSector = make_sector(kFirstLba + 1);
 
 uint32_t read_le32(const uint8_t *bytes) {
   return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8u) |
          (static_cast<uint32_t>(bytes[2]) << 16u) | (static_cast<uint32_t>(bytes[3]) << 24u);
 }
 
-void select_bank(CdcState *cdc, uint8_t bank) {
-  cdc_write(cdc, 0x1F801800u, bank);
+void select_bank(psx::cd::CdController *cdc, uint8_t bank) {
+  cdc->write(psx::cd::cdcRegister(0x1F801800u), bank);
 }
 
-uint8_t pending_irq_type(CdcState *cdc) {
+uint8_t pending_irq_type(psx::cd::CdController *cdc) {
   select_bank(cdc, 1);
-  return static_cast<uint8_t>(cdc_read(cdc, 0x1F801803u) & 0x07u);
+  return static_cast<uint8_t>(cdc->read(psx::cd::cdcRegister(0x1F801803u)) & 0x07u);
 }
 
-uint8_t response_byte(CdcState *cdc) {
+uint8_t response_byte(psx::cd::CdController *cdc) {
   select_bank(cdc, 1);
-  return static_cast<uint8_t>(cdc_read(cdc, 0x1F801801u));
+  return static_cast<uint8_t>(cdc->read(psx::cd::cdcRegister(0x1F801801u)));
 }
 
-void acknowledge_irq(CdcState *cdc) {
+void acknowledge_irq(psx::cd::CdController *cdc) {
   select_bank(cdc, 1);
-  cdc_write(cdc, 0x1F801803u, 0x07);
+  cdc->write(psx::cd::cdcRegister(0x1F801803u), 0x07);
 }
 
-void write_bfrd(CdcState *cdc, uint8_t value) {
+void write_bfrd(psx::cd::CdController *cdc, uint8_t value) {
   select_bank(cdc, 0);
-  cdc_write(cdc, 0x1F801803u, value);
+  cdc->write(psx::cd::cdcRegister(0x1F801803u), value);
 }
 
-void issue_command(CdcState *cdc, uint8_t command) {
+void issue_command(psx::cd::CdController *cdc, uint8_t command) {
   select_bank(cdc, 0);
-  cdc_write(cdc, 0x1F801801u, command);
+  cdc->write(psx::cd::cdcRegister(0x1F801801u), command);
 }
 
-// Sector source injected through CdcState (the struct's function pointers), NOT linker symbols:
+// Sector source injected through psx::cd::CdController (the struct's function pointers), NOT linker symbols:
 // the test links all of libpsxport, whose real disc.cpp must stay out of the way. The fake serves
 // two canned sectors and refuses everything else.
-extern "C" int test_fake_disc_read_raw(struct DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+bool test_fake_disc_read_raw(psx::cd::Disc *, uint32_t lba, uint8_t *out, uint32_t count) {
   const auto *sector = lba == kFirstLba ? &kFirstSector : lba == kFirstLba + 1 ? &kSecondSector : nullptr;
   if (sector == nullptr || count > sector->size()) {
-    return 0;
+    return false;
   }
   std::copy_n(sector->data(), count, out);
-  return 1;
+  return true;
 }
 
-extern "C" int test_fake_disc_read_sector(struct DiscState *, uint32_t, uint8_t *) {
-  return 0;
+bool test_fake_disc_read_sector(psx::cd::Disc *, uint32_t, uint8_t *) {
+  return false;
 }
 
-CdcState begin_read(DiscState *disc, CdcTestClock *clock, uint8_t mode = 0xA0) {
-  CdcState cdc{};
+psx::cd::CdController begin_read(psx::cd::Disc *disc, CdcTestClock *clock, uint8_t mode = 0xA0) {
+  psx::cd::CdController cdc{};
   cdc.disc = disc;
-  cdc_state_init(&cdc);
+  cdc.reset();
   cdc.disc_read_raw_fn = test_fake_disc_read_raw;
   cdc.disc_read_sector_fn = test_fake_disc_read_sector;
-  cdc_test_bind(&cdc, clock);
-  cdc_set_mode(&cdc, mode);
-  cdc_begin_read(&cdc, kFirstLba);
+  psx::test::bindCdcClock(&cdc, clock);
+  cdc.setMode(mode);
+  cdc.beginRead(kFirstLba);
   return cdc;
 }
 
-bool acknowledge_current_sector(CdcState *cdc, CdcTestClock *clock) {
-  if (cdc_test_service_deadline(cdc, clock) != 1) {
+bool acknowledge_current_sector(psx::cd::CdController *cdc, CdcTestClock *clock) {
+  if (psx::test::serviceCdcDeadline(cdc, clock) != 1) {
     return false;
   }
   if (pending_irq_type(cdc) != 1) {
@@ -111,21 +111,21 @@ bool acknowledge_current_sector(CdcState *cdc, CdcTestClock *clock) {
 }
 
 void test_first_sector_waits_one_drive_period(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
 
   CHECK_EQ(pending_irq_type(&cdc), 0);
   CHECK_EQ(cdc.data_n, 0);
-  CHECK_EQ(cdc.drive_deadline_ticks, cd_drive_sector_period_cpu_ticks(0xA0));
+  CHECK_EQ(cdc.drive_deadline_ticks, psx::cd::driveSectorPeriodCpuTicks(0xA0));
 
   clock.ticks = cdc.drive_deadline_ticks - 1;
-  CHECK_EQ(cdc_drive_service(&cdc), 0);
+  CHECK_EQ(cdc.service(), 0);
   CHECK_EQ(pending_irq_type(&cdc), 0);
   CHECK_EQ(cdc.data_n, 0);
 
   clock.ticks++;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
   CHECK_EQ(pending_irq_type(&cdc), 1);
   CHECK_EQ(response_byte(&cdc), 0x22); // CdlStatRead | CdlStatStandby
   CHECK_EQ(cdc.data_n, 2340);
@@ -133,9 +133,9 @@ void test_first_sector_waits_one_drive_period(void) {
 }
 
 void test_partial_fifo_does_not_block_following_sector_event(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
   std::array<uint32_t, 3> header{};
   std::array<uint32_t, 512> payload{};
 
@@ -144,11 +144,11 @@ void test_partial_fifo_does_not_block_following_sector_event(void) {
   write_bfrd(&cdc, 0x80); // accept LBA 16; LBA 17 is not due until one drive period elapses
   CHECK_EQ(pending_irq_type(&cdc), 0);
   CHECK(cdc.drive_event_armed);
-  CHECK_EQ(cdc.drive_deadline_ticks, clock.ticks + cd_drive_sector_period_cpu_ticks(0xA0));
+  CHECK_EQ(cdc.drive_deadline_ticks, clock.ticks + psx::cd::driveSectorPeriodCpuTicks(0xA0));
 
-  CHECK_EQ(cdc_dma_read(&cdc, header.data(), static_cast<int>(header.size())), header.size());
+  CHECK_EQ(cdc.dmaRead(header.data(), static_cast<int>(header.size())), header.size());
   write_bfrd(&cdc, 0x80); // repeated assertion between split DMA legs
-  CHECK_EQ(cdc_dma_read(&cdc, payload.data(), static_cast<int>(payload.size())), payload.size());
+  CHECK_EQ(cdc.dmaRead(payload.data(), static_cast<int>(payload.size())), payload.size());
   CHECK_EQ(cdc.loc_lba, kFirstLba);
   CHECK_EQ(cdc.data_rd, 2060);
   CHECK_EQ(cdc.data_n - cdc.data_rd, 280);
@@ -156,11 +156,11 @@ void test_partial_fifo_does_not_block_following_sector_event(void) {
 
   // Neither FIFO traffic nor an early clock wake fabricates a data-ready event.
   clock.ticks = cdc.drive_deadline_ticks - 1;
-  CHECK_EQ(cdc_drive_service(&cdc), 0);
+  CHECK_EQ(cdc.service(), 0);
   CHECK_EQ(pending_irq_type(&cdc), 0);
 
   clock.ticks = cdc.drive_deadline_ticks;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
   CHECK_EQ(pending_irq_type(&cdc), 1);
 
   // Service the due sector in the guest's measured order: ACK, then BFRD 0 -> 1.
@@ -170,53 +170,52 @@ void test_partial_fifo_does_not_block_following_sector_event(void) {
   CHECK_EQ(cdc.loc_lba, kFirstLba + 1);
   CHECK_EQ(cdc.data_rd, 0);
   CHECK_EQ(pending_irq_type(&cdc), 0); // LBA 18 has a new future deadline, not an immediate INT1
-  CHECK_EQ(cdc.drive_deadline_ticks, clock.ticks + cd_drive_sector_period_cpu_ticks(0xA0));
+  CHECK_EQ(cdc.drive_deadline_ticks, clock.ticks + psx::cd::driveSectorPeriodCpuTicks(0xA0));
 
   uint32_t second_word = 0;
-  CHECK_EQ(cdc_dma_read(&cdc, &second_word, 1), 1);
+  CHECK_EQ(cdc.dmaRead(&second_word, 1), 1);
   CHECK_EQ(second_word, read_le32(kSecondSector.data() + 12));
 }
 
 // CTR's data-ready callback reads only the 12-byte header of each sector. Stock libcd's INT1 handler
 // clears the request register first, so the next request presents the announced sector.
 void test_header_only_consumer_receives_the_next_sector_after_a_request_clear(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
   std::array<uint32_t, 3> header{};
   uint32_t next_word = 0;
 
   CHECK(acknowledge_current_sector(&cdc, &clock));
   write_bfrd(&cdc, 0x00);
   write_bfrd(&cdc, 0x80);
-  CHECK_EQ(cdc_dma_read(&cdc, header.data(), static_cast<int>(header.size())), header.size());
+  CHECK_EQ(cdc.dmaRead(header.data(), static_cast<int>(header.size())), header.size());
 
   clock.ticks = cdc.drive_deadline_ticks;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
   acknowledge_irq(&cdc);
   write_bfrd(&cdc, 0x00);
   write_bfrd(&cdc, 0x80);
 
   CHECK_EQ(cdc.loc_lba, kFirstLba + 1);
-  CHECK_EQ(cdc_dma_read(&cdc, &next_word, 1), 1);
+  CHECK_EQ(cdc.dmaRead(&next_word, 1), 1);
   CHECK_EQ(next_word, read_le32(kSecondSector.data() + 12));
 }
 
 void test_stopped_controller_does_not_announce_sector(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
 
   CHECK(acknowledge_current_sector(&cdc, &clock));
   write_bfrd(&cdc, 0x80);
-  const uint64_t cancelled_deadline = cdc.drive_deadline_ticks;
   CHECK(cdc.drive_event_armed);
   issue_command(&cdc, 0x09); // Pause: INT3 acknowledgement followed by INT2 completion
   CHECK_EQ(cdc.reading, 1);
   CHECK_EQ(pending_irq_type(&cdc), 0);
 
-  clock.ticks += cdc_command_ack_delay_cpu_ticks(0);
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  clock.ticks += psx::cd::commandAckDelayCpuTicks(0);
+  CHECK_EQ(cdc.service(), 1);
   CHECK_EQ(cdc.reading, 0);
   CHECK_EQ(cdc.following_sector_ready, 0);
   CHECK_EQ(cdc.drive_event_armed, 0);
@@ -226,7 +225,7 @@ void test_stopped_controller_does_not_announce_sector(void) {
   acknowledge_irq(&cdc);
   CHECK_EQ(pending_irq_type(&cdc), 0);
   clock.ticks = completion_deadline;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
   CHECK_EQ(pending_irq_type(&cdc), 2);
   CHECK_EQ(response_byte(&cdc), 0x02); // completion observes paused/not-reading status
   acknowledge_irq(&cdc);
@@ -237,7 +236,7 @@ void test_stopped_controller_does_not_announce_sector(void) {
   clock.ticks = completion_deadline + 1;
 
   CHECK_EQ(cdc.reading, 0);
-  CHECK_EQ(cdc_drive_service(&cdc), 0);
+  CHECK_EQ(cdc.service(), 0);
   CHECK_EQ(pending_irq_type(&cdc), 0);
   CHECK_EQ(cdc.loc_lba, kFirstLba);
 }
@@ -245,22 +244,22 @@ void test_stopped_controller_does_not_announce_sector(void) {
 // An INT1 already announced when a Pause executes still owes the guest its sector: the Pause ACK
 // queues behind the INT1, and the data-ready handler's BFRD must find the announced sector.
 void test_pause_keeps_an_announced_sector_for_its_pending_data_ready(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
   uint32_t second_word = 0;
 
   CHECK(acknowledge_current_sector(&cdc, &clock));
   write_bfrd(&cdc, 0x00);
   write_bfrd(&cdc, 0x80);
   clock.ticks = cdc.drive_deadline_ticks;
-  CHECK_EQ(cdc_drive_service(&cdc), 1); // INT1 announces LBA 17
+  CHECK_EQ(cdc.service(), 1); // INT1 announces LBA 17
   CHECK_EQ(pending_irq_type(&cdc), 1);
   CHECK_EQ(cdc.following_sector_ready, 1);
 
-  cdc_issue_command(&cdc, 0x09);
-  clock.ticks += cdc_command_ack_delay_cpu_ticks(0);
-  cdc_drive_service(&cdc);
+  cdc.issueCommand(0x09);
+  clock.ticks += psx::cd::commandAckDelayCpuTicks(0);
+  cdc.service();
   CHECK_EQ(cdc.reading, 0);
   CHECK_EQ(pending_irq_type(&cdc), 1); // the INT1 is still first in line
 
@@ -268,60 +267,60 @@ void test_pause_keeps_an_announced_sector_for_its_pending_data_ready(void) {
   write_bfrd(&cdc, 0x00);
   write_bfrd(&cdc, 0x80);
   CHECK_EQ(cdc.loc_lba, kFirstLba + 1);
-  CHECK_EQ(cdc_dma_read(&cdc, &second_word, 1), 1);
+  CHECK_EQ(cdc.dmaRead(&second_word, 1), 1);
   CHECK_EQ(second_word, read_le32(kSecondSector.data() + 12));
 }
 
 void test_native_pause_command_stops_the_controller_and_tells_the_guest(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
 
   CHECK(acknowledge_current_sector(&cdc, &clock));
   CHECK_EQ(cdc.reading, 1);
   // The native CdControl path never writes the command register; it forwards the command it
   // intercepted. The effect must be the register path's, step for step.
-  cdc_issue_command(&cdc, 0x09);
+  cdc.issueCommand(0x09);
   CHECK_EQ(cdc.reading, 1); // the command has not reached its execution phase yet
   CHECK_EQ(pending_irq_type(&cdc), 0);
 
-  clock.ticks += cdc_command_ack_delay_cpu_ticks(0);
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  clock.ticks += psx::cd::commandAckDelayCpuTicks(0);
+  CHECK_EQ(cdc.service(), 1);
   CHECK_EQ(cdc.reading, 0);
   CHECK_EQ(pending_irq_type(&cdc), 3);
   CHECK_EQ(response_byte(&cdc), 0x22); // INT3 observes the still-reading status
   const uint64_t completion_deadline = cdc.command_deadline_ticks;
   acknowledge_irq(&cdc);
   clock.ticks = completion_deadline;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
   CHECK_EQ(pending_irq_type(&cdc), 2);
   CHECK_EQ(response_byte(&cdc), 0x02); // INT2 is what makes the guest's status word leave "reading"
 
   // Negative: the same elapsed time with no command leaves the controller reading.
   CdcTestClock idle_clock{};
-  CdcState idle = begin_read(&disc, &idle_clock);
+  psx::cd::CdController idle = begin_read(&disc, &idle_clock);
   CHECK(acknowledge_current_sector(&idle, &idle_clock));
-  idle_clock.ticks += cdc_command_ack_delay_cpu_ticks(0) + 1'000'000u;
-  cdc_drive_service(&idle);
+  idle_clock.ticks += psx::cd::commandAckDelayCpuTicks(0) + 1'000'000u;
+  idle.service();
   CHECK_EQ(idle.reading, 1);
 }
 
 void test_full_drain_rearms_bfrd_for_announced_sector(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
   std::array<uint32_t, kWholeSectorWords> whole_sector{};
 
   CHECK(acknowledge_current_sector(&cdc, &clock));
   write_bfrd(&cdc, 0x80);
   CHECK_EQ(pending_irq_type(&cdc), 0);
-  CHECK_EQ(cdc_dma_read(&cdc, whole_sector.data(), static_cast<int>(whole_sector.size())), whole_sector.size());
+  CHECK_EQ(cdc.dmaRead(whole_sector.data(), static_cast<int>(whole_sector.size())), whole_sector.size());
   CHECK_EQ(cdc.loc_lba, kFirstLba);
   CHECK_EQ(cdc.data_n, 0);
   CHECK_EQ(cdc.data_rd, 0);
 
   clock.ticks = cdc.drive_deadline_ticks;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
   CHECK_EQ(pending_irq_type(&cdc), 1);
   acknowledge_irq(&cdc);
   write_bfrd(&cdc, 0x80); // empty FIFO makes this a new service request without a prior 0 write
@@ -330,54 +329,54 @@ void test_full_drain_rearms_bfrd_for_announced_sector(void) {
 }
 
 void test_setmode_selects_single_and_double_speed_deadlines(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock single_clock{};
   CdcTestClock double_clock{};
-  CdcState single = begin_read(&disc, &single_clock, 0x20);
-  CdcState twice = begin_read(&disc, &double_clock, 0xA0);
+  psx::cd::CdController single = begin_read(&disc, &single_clock, 0x20);
+  psx::cd::CdController twice = begin_read(&disc, &double_clock, 0xA0);
 
-  CHECK_EQ(single.drive_deadline_ticks, cd_drive_sector_period_cpu_ticks(0x20));
-  CHECK_EQ(twice.drive_deadline_ticks, cd_drive_sector_period_cpu_ticks(0xA0));
+  CHECK_EQ(single.drive_deadline_ticks, psx::cd::driveSectorPeriodCpuTicks(0x20));
+  CHECK_EQ(twice.drive_deadline_ticks, psx::cd::driveSectorPeriodCpuTicks(0xA0));
   CHECK_EQ(single.drive_deadline_ticks, 451'584u);
   CHECK_EQ(twice.drive_deadline_ticks, 225'792u);
 }
 
 void test_paced_read_completion_is_owed_until_the_drive_time_elapses(void) {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc{};
-  cdc_state_init(&cdc);
+  psx::cd::CdController cdc{};
+  cdc.reset();
   cdc.disc = &disc;
-  cdc_test_bind(&cdc, &clock);
+  psx::test::bindCdcClock(&cdc, &clock);
 
-  const uint64_t period = cd_drive_sector_period_cpu_ticks(0x80);
-  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5000, 3, 0x80), 1);
+  const uint64_t period = psx::cd::driveSectorPeriodCpuTicks(0x80);
+  CHECK_EQ(cdc.postDataReadyAfterRead(5000, 3, 0x80), 1);
   CHECK_EQ(pending_irq_type(&cdc), 0); // owed, not announced: the guest still sees the read in flight
   const uint64_t due = cdc.read_completion_deadline_ticks[0];
   CHECK(due > 3 * period);      // the head's seek is part of the read, not just the sector time
   CHECK_EQ(cdc.loc_lba, 5003u); // and the head ends after the last sector read
 
   clock.ticks = due - 1;
-  CHECK_EQ(cdc_drive_service(&cdc), 0);
+  CHECK_EQ(cdc.service(), 0);
   CHECK_EQ(pending_irq_type(&cdc), 0);
 
   clock.ticks = due;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
   CHECK_EQ(pending_irq_type(&cdc), 1);
   CHECK_EQ(cdc.read_completion_n, 0);
 
   // A near read costs less than the long seek did, and queues serially behind the one still owed.
   acknowledge_irq(&cdc);
-  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5003, 1, 0x80), 1);
-  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5004, 1, 0x80), 1);
+  CHECK_EQ(cdc.postDataReadyAfterRead(5003, 1, 0x80), 1);
+  CHECK_EQ(cdc.postDataReadyAfterRead(5004, 1, 0x80), 1);
   CHECK(cdc.read_completion_deadline_ticks[0] - clock.ticks < due);
   CHECK(cdc.read_completion_deadline_ticks[1] >= cdc.read_completion_deadline_ticks[0] + period);
 
   // Negatives: a zero-sector read owes nothing, and a fifth outstanding completion is refused.
-  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5005, 0, 0x80), 0);
-  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5005, 1, 0x80), 1);
-  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5006, 1, 0x80), 1);
-  CHECK_EQ(cdc_post_data_ready_after_read(&cdc, 5007, 1, 0x80), 0);
+  CHECK_EQ(cdc.postDataReadyAfterRead(5005, 0, 0x80), 0);
+  CHECK_EQ(cdc.postDataReadyAfterRead(5005, 1, 0x80), 1);
+  CHECK_EQ(cdc.postDataReadyAfterRead(5006, 1, 0x80), 1);
+  CHECK_EQ(cdc.postDataReadyAfterRead(5007, 1, 0x80), 0);
 }
 
 } // namespace
@@ -392,5 +391,5 @@ int main() {
   RUN(native_pause_command_stops_the_controller_and_tells_the_guest);
   RUN(full_drain_rearms_bfrd_for_announced_sector);
   RUN(setmode_selects_single_and_double_speed_deadlines);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -1,14 +1,14 @@
 // A product frame is advanced only through the framework shell and the title-owned native driver.
 // Guest boot code is not an alternative loop owner: a missing driver must refuse before startProgram can
 // dispatch a non-returning retail main.
+#include "beetle_gte.h"
 #include "frame_loop_shell.h"
 #include "frame_presenter.h"
 #include "game.h"
 #include "game_runtime.h"
-#include "gte_state.h"
 #include "platform_hle.h"
 #include "proj_params.h"
-#include "proj_prim.h"
+#include "record_raster_setup.h"
 #include "stock_vsync.h"
 #include "stub_game_runtime.h"
 #include "testutil.h"
@@ -26,12 +26,9 @@ constexpr uint32_t kVSyncAddress = 0x800859A8u;
 
 class FenceBackend final : public psx::frame::FramePresentationBackend {
 public:
-  void emit(std::span<const RqItem>) override {}
   void presentReal() override {}
   void captureDiagnostic(uint64_t, bool) override {}
-  void pace(int, int) override {}
-  void reconcile(uint64_t) override {}
-  void beginLedgerFrame() override {}
+  void pace(psx::frame::FieldCadence) override {}
   bool interpolatesRecords() const override {
     return false;
   }
@@ -51,10 +48,10 @@ public:
   void stepFrame(Core &core, uint32_t frame) override {
     seenCore = &core;
     seenFrame = frame;
-    stepsOnBoundCore += ProjPrim::current() == &core.rsub.projprim ? 1 : 0;
+    stepsOnBoundCore += GTE_CurState() == &core.gte().registers() ? 1 : 0;
     ++calls;
     for (int fence = 0; fence < fences_; ++fence) {
-      core.game->presentation.commitUnpresented(backend_);
+      core.game->presentation.commitUnpresented();
     }
   }
 
@@ -91,7 +88,7 @@ public:
   int bootCalls = 0;
 
 private:
-  const psx::hle::StockVSync vsync_{kVSyncAddress, 0u};
+  const psx::hle::StockVSync vsync_{{.entry = kVSyncAddress}};
   int fences_;
 };
 
@@ -118,9 +115,7 @@ void step_shell(void *context) {
   psx::frame::FrameLoopShell{}.step(game->core, 91u);
 }
 
-} // namespace
-
-static void test_shell_delegates_exactly_one_native_frame() {
+void test_shell_delegates_exactly_one_native_frame() {
   DriverRuntime runtime(1);
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
@@ -136,8 +131,6 @@ static void test_shell_delegates_exactly_one_native_frame() {
   CHECK_EQ(runtime.bootCalls, 0);
   CHECK_EQ(game->presentation.fence(), 1u);
 }
-
-namespace {
 
 // Another session's boot binds the devices to its own Core; the next step of this one rebinds them.
 void test_a_step_rebinds_after_another_core_was_bound() {
@@ -165,7 +158,7 @@ void test_a_step_of_the_bound_core_does_not_rebind() {
   psx::frame::FrameLoopShell shell;
   shell.prepareProduct(*game);
   shell.step(game->core, 1);
-  other->core.rsub.projprim.bind(&other->core);
+  other->core.gte().bind();
   shell.step(game->core, 2);
   CHECK_EQ(driver->calls, 2);
   CHECK_EQ(driver->stepsOnBoundCore, 1);
@@ -181,7 +174,7 @@ void test_a_forgotten_core_is_rebound() {
   psx::frame::FrameLoopShell shell;
   shell.prepareProduct(*game);
   shell.step(game->core, 1);
-  other->core.rsub.projprim.bind(&other->core);
+  other->core.gte().bind();
   shell.forgetCore(game->core);
   shell.step(game->core, 2);
   CHECK_EQ(driver->stepsOnBoundCore, 2);
@@ -196,20 +189,14 @@ void test_destroying_an_unbound_game_keeps_the_bound_one() {
   shell.bindRunningCore(game->core);
   other.reset();
   CHECK(GTE_CurState() == &game->core.gte().registers());
-  CHECK(ProjParams::current() == &game->core.rsub.projParams);
-  CHECK(ProjPrim::current() == &game->core.rsub.projprim);
   CHECK(game->spu.isBound());
   CHECK(game->mdec.isBound());
   const GteRegs *registers = &game->core.gte().registers();
   game.reset();
   CHECK(GTE_CurState() != registers);
-  CHECK(ProjParams::current() == nullptr);
-  CHECK(ProjPrim::current() == nullptr);
 }
 
-} // namespace
-
-static void test_missing_driver_refuses_before_boot_can_run() {
+void test_missing_driver_refuses_before_boot_can_run() {
   DriverRuntime runtime(-1);
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
@@ -218,7 +205,7 @@ static void test_missing_driver_refuses_before_boot_can_run() {
   CHECK_EQ(runtime.bootCalls, 0);
 }
 
-static void test_step_before_product_preflight_refuses() {
+void test_step_before_product_preflight_refuses() {
   DriverRuntime runtime(1);
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
@@ -227,7 +214,7 @@ static void test_step_before_product_preflight_refuses() {
   CHECK_EQ(runtime.createdDriver->calls, 0);
 }
 
-static void test_driver_returning_without_a_fence_refuses() {
+void test_driver_returning_without_a_fence_refuses() {
   DriverRuntime runtime(0);
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
@@ -237,7 +224,7 @@ static void test_driver_returning_without_a_fence_refuses() {
   CHECK_EQ(game->presentation.fence(), 0u);
 }
 
-static void test_driver_committing_twice_refuses() {
+void test_driver_committing_twice_refuses() {
   DriverRuntime runtime(2);
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
@@ -247,7 +234,7 @@ static void test_driver_committing_twice_refuses() {
   CHECK_EQ(game->presentation.fence(), 0u);
 }
 
-static void test_repl_prompt_request_is_one_shot() {
+void test_repl_prompt_request_is_one_shot() {
   Repl repl;
   CHECK(!repl.consumePromptRequest());
 
@@ -255,6 +242,8 @@ static void test_repl_prompt_request_is_one_shot() {
   CHECK(repl.consumePromptRequest());
   CHECK(!repl.consumePromptRequest());
 }
+
+} // namespace
 
 int main() {
   RUN(shell_delegates_exactly_one_native_frame);
@@ -267,5 +256,5 @@ int main() {
   RUN(driver_returning_without_a_fence_refuses);
   RUN(driver_committing_twice_refuses);
   RUN(repl_prompt_request_is_one_shot);
-  return pt_summary();
+  return psx::test::summary();
 }

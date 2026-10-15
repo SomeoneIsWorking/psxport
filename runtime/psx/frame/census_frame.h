@@ -1,4 +1,4 @@
-// Census rows are stamped with the logic frame; GpuState::s_frame counts presents.
+// Census rows are stamped with the logic frame; DisplayPresenter::frame counts presents.
 #pragma once
 #include "core.h"
 #include "game.h"

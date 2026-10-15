@@ -36,9 +36,6 @@ __pycache__/
 
 .claude/
 
-# FMV STR extract/decode binaries (built by tools/fmv_export/build.py)
-tools/fmv_export/fmv_export
-tools/fmv_export/test_fmv_decode
 psxport_settings.ini
 docs/reference/issues/shot_*.png
 *.log

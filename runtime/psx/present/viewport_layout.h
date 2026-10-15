@@ -7,7 +7,9 @@ struct PaneRect {
   int h;
 };
 
-inline PaneRect pane_letterbox(int aspectWidth, int aspectHeight, int outputWidth, int outputHeight) {
+namespace psx::present {
+
+inline PaneRect letterbox(int aspectWidth, int aspectHeight, int outputWidth, int outputHeight) {
   int width;
   int height;
   if (static_cast<long>(outputWidth) * aspectHeight >= static_cast<long>(outputHeight) * aspectWidth) {
@@ -19,3 +21,5 @@ inline PaneRect pane_letterbox(int aspectWidth, int aspectHeight, int outputWidt
   }
   return {(outputWidth - width) / 2, (outputHeight - height) / 2, width, height};
 }
+
+} // namespace psx::present

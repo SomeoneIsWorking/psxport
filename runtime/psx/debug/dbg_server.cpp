@@ -12,20 +12,18 @@
 //   r  <hex> [n]          — read n bytes  of guest RAM (default 16)
 //   rw <hex> [n]          — read n words  of guest RAM (default 8)
 //   stage                 — scene/stage latches (0x801fe00c / 0x801fe048 / scene-active 0x800BE258)
-//   scene                 — classified display list of the CURRENT frame (gpu_scene_dump_now)
+//   scene                 — classified display list of the CURRENT frame (psx::debug::dumpScene)
 //   shot [path]           — screenshot of the presented display region; default scratch/screenshots/dbg.png (PNG unless
 //   path ends .ppm) frame                 — current present-frame counter
 //
 // Drive it from the repo with tools/dbgclient.py (or `nc 127.0.0.1 5959`).
-#define _GNU_SOURCE
-#include "dbg_server.h" // class DbgServer + `debug_server_port`, which interprets the knob once
-#include "cfg.h"
-#include "config.h"      // `cvars` / `cvar` — the layered CVar registry + env audit
-#include "config_vars.h" // cv_debug_server
-#include "control_surface_limits.h" // kMaxControlReadWords — the one home for the cap — the endpoint's port, and cv_render_path's live switch
-#include "ot_attr.h"             // `otattr watch` / `otattr who` — the SAME last-writer implementation the REPL runs
-#include "render_mode.h"         // `renderpath` — RenderPath + render_path_parse/name/next
-#include "state/state_command.h" // `state save|load <path>` — the whole-machine state owner
+#include "dbg_server.h"             // class DbgServer + `debug_server_port`, which interprets the knob once
+#include "config.h"                 // `cvars` / `cvar` — the layered CVar registry + env audit
+#include "config_vars.h"            // debug_server
+#include "control_surface_limits.h" // kMaxControlReadWords
+#include "ot_attr.h"                // `otattr watch` / `otattr who` — the SAME last-writer implementation the REPL runs
+#include "render_mode.h"            // `renderpath` — RenderPath + render_path_parse/name
+#include "state/state_command.h"    // `state save|load <path>` — the whole-machine state owner
 #include <arpa/inet.h>
 #include <errno.h>
 #include <lucent/log.h>
@@ -40,6 +38,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cstring>
+#include <optional>
+#include <string>
+
 // Portability: some platforms (e.g. macOS / clang under strict -std=c11, which sets __STRICT_ANSI__)
 // hide the BSD constant INADDR_LOOPBACK from <netinet/in.h>. It's a fixed value (127.0.0.1), so define
 // it ourselves when the header didn't — keeps the build working regardless of feature-test macros.
@@ -48,52 +51,20 @@
 #endif
 
 // --- guest RAM + GPU primitives provided by the rest of the port ---------------------------------
-#include "c_subsys.h" // watchdog_suspend / watchdog_resume — a debug pause is intentional idle
-#include "core.h"     // Core, mem_*, guest dispatch — for the RE commands (call/ents/node)
+#include "command_args.h"
+#include "core.h" // Core, mem_*, guest dispatch — for the RE commands (call/ents/node)
 #include "execution_control.h"
-#include "execution_ledger.h"    // `guest`: the executor's own counters, asked live
-#include "game.h"                // Core::game->gpu (render state is per-instance now)
-#include "gpu_native_internal.h" // the GPU diagnostic dumps + gpu_native_shot / gpu_frame_no
-#include "gpu_vk.h"              // gpu_vk_shot / gpu_vk_stats / gpu_vk_vram_region
-#include "gpu_vk_internal.h"     // gpu_vk_enabled — the active-renderer predicate
+#include "execution_ledger.h" // `guest`: the executor's own counters, asked live
+#include "game.h"
+#include "gpu_debug.h" // scene / disp / otattr
+#include "gpu_device.h"
+#include "gpu_vk.h" // psx::gpu::vramRegion / vramWords
+#include "gpu_vk_internal.h"
 #include "guest_call.h"
 #include "lightrec_executor.h"
+#include "watchdog.h"
 // pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
 
-// PSX pad: name -> active-HIGH bit (mirrors the REPL mapping in repl.cpp).
-static unsigned dbg_btn(const char *n) {
-  if (!strcmp(n, "start")) {
-    return 0x0008;
-  }
-  if (!strcmp(n, "select")) {
-    return 0x0001;
-  }
-  if (!strcmp(n, "x") || !strcmp(n, "cross")) {
-    return 0x4000;
-  }
-  if (!strcmp(n, "o") || !strcmp(n, "circle")) {
-    return 0x2000;
-  }
-  if (!strcmp(n, "triangle") || !strcmp(n, "t")) {
-    return 0x1000;
-  }
-  if (!strcmp(n, "square") || !strcmp(n, "sq")) {
-    return 0x8000;
-  }
-  if (!strcmp(n, "up")) {
-    return 0x0010;
-  }
-  if (!strcmp(n, "down")) {
-    return 0x0040;
-  }
-  if (!strcmp(n, "left")) {
-    return 0x0080;
-  }
-  if (!strcmp(n, "right")) {
-    return 0x0020;
-  }
-  return (unsigned)strtoul(n, 0, 16);
-}
 // Held-input / pause / step / ctx / started state live on `class DbgServer` (dbg_server.h). Only
 // one endpoint per process (one host TCP port); whichever Game's `dbg_server.start(c)` wins the
 // bind claims the process-wide server. `sInstance` points at that DbgServer so the impl-TU
@@ -244,59 +215,21 @@ bool probeR16(Core &core, uint32_t address, uint16_t &out) {
 #define s_req_gen (DbgServerInternals::reqGen())
 #define s_resp_gen (DbgServerInternals::respGen())
 
-// Per-command SBS core targeting. A leading "@a " / "@b " token (or "@A "/"@B ") swaps s_ctx to that
-// SBS core for the duration of ONE command, then restores the frame-loop's context. Lets one debug
-// endpoint drive BOTH SBS cores from a single connection without `sbs show` between every command.
-// Silently ignored when the SBS harness isn't running (no-op passthrough with the leading token
-// stripped) so scripts written for SBS work in standalone too.
-static bool parse_core_target(const char *&line, Core *&saved, Core *&override_ctx) {
-  saved = nullptr;
-  override_ctx = nullptr;
-  // Skip leading whitespace so `  @a  r 0x80000000` still targets A.
-  while (*line == ' ' || *line == '\t') {
-    line++;
-  }
-  if (line[0] != '@') {
-    return false;
-  }
-  if (!line[1] || (line[2] != ' ' && line[2] != '\t')) {
-    return false;
-  }
-  (void)saved;
-  (void)override_ctx;
-  line += 3;
-  while (*line == ' ' || *line == '\t') {
-    line++;
-  }
-  return false;
-}
+namespace {
 
 // Execute one command, writing its textual result into `out` (a memstream). MAIN THREAD ONLY.
-static void dbg_exec(FILE *out, const char *line) {
-  char cmd[32] = {0}, arg[256] = {0};
-  unsigned a = 0, b = 0;
-  // Optional "@a "/"@b " prefix redirects this ONE command's Core context to the SBS core.
-  const char *p = line;
-  Core *saved_ctx = nullptr;
-  Core *over_ctx = nullptr;
-  bool targeted = parse_core_target(p, saved_ctx, over_ctx);
-  struct RestoreCtx {
-    Core *&ctx;
-    Core *prev;
-    bool on;
-    ~RestoreCtx() {
-      if (on) {
-        ctx = prev;
-      }
-    }
-  };
-  RestoreCtx rc{s_ctx, saved_ctx, targeted};
-  line = p; // dispatcher sees the command WITHOUT the target token
-  if (sscanf(line, "%31s", cmd) != 1) {
+void dbg_exec(FILE *out, const char *line) {
+  const psx::debug::CommandArgs args(line);
+  const std::string cmd = args.text(0);
+  const std::optional<uint32_t> hex1 = args.hex(1);
+  const std::optional<uint32_t> hex2 = args.hex(2);
+  const std::optional<uint32_t> number1 = args.number(1);
+  const std::optional<uint32_t> number2 = args.number(2);
+  if (cmd.empty()) {
     fprintf(out, "(empty)\n");
     return;
   }
-  if (!strcmp(cmd, "help")) {
+  if (cmd == "help") {
     fprintf(out,
             "commands:\n"
             "  r <hex> [n]      read n bytes of guest RAM (default 16)\n"
@@ -308,10 +241,8 @@ static void dbg_exec(FILE *out, const char *line) {
             "  geomblk G S      model-table lookup: T=*(0x800ECF58+G*4); geomblk=T+*(T+S*4+4)\n"
             "  stage            scene/stage latches\n"
             "  scene            classified display list of the current frame\n"
-            "  shot [path]      screenshot of the presented output (VK readback if VK active, else SW)\n"
-            "  vkshot [path]    force a VK-rendered readback to PPM\n"
-            "  vkstats          last frame's VK batched vertex counts (flat/textured/semi)\n"
-            "  @a <cmd> / @b <cmd>  route this command to SBS core A / B (default: whichever `sbs show` selected)\n"
+            "  shot [path]      the displayed picture: the record image, or the device's VRAM\n"
+            "  vkshot [path]    same as shot\n"
             "  press/release B  hold/release a pad button (up/down/left/right/x/o/triangle/square/start/select)\n"
             "  tap B [n]        tap a button for n frames (default 4)\n"
             "  hold <hex>       set the raw active-low pad mask\n"
@@ -327,10 +258,8 @@ static void dbg_exec(FILE *out, const char *line) {
             "  frame            current present-frame counter + paused state\n"
             "  otattr [addr]    WHO submitted this frame's geometry: bare = the current ordering table\n"
             "                   aggregated by submitter fn (ranked, with the unattributed denominator);\n"
-            "                   with a packet address = that one packet's fn/caller/node\n"
-            "  disp             the display VRAM rect (GP1 05/07/08) + the draw clip (GP0 E3/E4/E5), and\n"
-            "                   whether the game ever PROGRAMMED each — a 240 nobody asked for reads the\n"
-            "                   same as a 240 the game chose, and they mean opposite things\n"
+            "                   with a packet address = that one packet's fn/caller\n"
+            "  disp             the display VRAM rect the device scans out and the draw area origin\n"
             "  cvars            every declared config knob: value, WHICH LAYER it came from, plus the\n"
             "                   PSXPORT_* variables in this process's environment that matched NOTHING\n"
             "  guest            the guest-execution denominators as they stand NOW: translated/executed\n"
@@ -338,11 +267,10 @@ static void dbg_exec(FILE *out, const char *line) {
             "                   faults, and interpreter fallback by reason\n"
             "  cvar N [V]       set knob N to V at the runtime layer (this run only, never persisted);\n"
             "                   bare `cvar N` clears that layer. Ladder: default < value < env < runtime\n"
-            "  renderpath [P]   switch the LIVE render path: native | gte | psx; bare form CYCLES.\n"
-            "                   native = PC producers + PC rasterizer; gte = the guest's own GTE/OT on the\n"
-            "                   PC rasterizer; psx = the guest's own GTE/OT on the PSX software rasterizer.\n"
-            "                   Same switch as the RmlUi Renderer row; refuses under ORACLE/SBS.\n");
-  } else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
+            "  renderpath [P]   switch the live render path: record | device; bare prints it\n");
+  } else if (cmd == "r" && hex1.has_value()) {
+    const unsigned a = *hex1;
+    unsigned b = number2.value_or(0);
     if (!b) {
       b = 16;
     }
@@ -358,7 +286,9 @@ static void dbg_exec(FILE *out, const char *line) {
       }
       fprintf(out, "\n");
     }
-  } else if (!strcmp(cmd, "rw") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
+  } else if (cmd == "rw" && hex1.has_value()) {
+    const unsigned a = *hex1;
+    unsigned b = number2.value_or(0);
     if (!b) {
       b = 8;
     }
@@ -388,39 +318,53 @@ static void dbg_exec(FILE *out, const char *line) {
               a + asked * 4u - 4u,
               (asked - served + psx::control::kMaxControlReadWords - 1u) / psx::control::kMaxControlReadWords);
     }
-  } else if (!strcmp(cmd, "w32") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
-    s_ctx->mem_w32(a, b);
-    fprintf(out, "[%08X] <- %08X\n", a, b);
-  } else if (!strcmp(cmd, "w16") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
-    s_ctx->mem_w16(a, (uint16_t)b);
-    fprintf(out, "[%08X] <- %04X\n", a, b & 0xffff);
-  } else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
-    s_ctx->mem_w8(a, (uint8_t)b);
-    fprintf(out, "[%08X] <- %02X\n", a, b & 0xff);
-  } else if (!strcmp(cmd, "call") && sscanf(line, "%*s %x", &a) == 1) {
+  } else if ((cmd == "w32" || cmd == "w16" || cmd == "w8") && hex1.has_value() && hex2.has_value()) {
+    const unsigned a = *hex1;
+    const unsigned b = *hex2;
+    if (cmd == "w32") {
+      s_ctx->mem_w32(a, b);
+      fprintf(out, "[%08X] <- %08X\n", a, b);
+    } else if (cmd == "w16") {
+      s_ctx->mem_w16(a, static_cast<uint16_t>(b));
+      fprintf(out, "[%08X] <- %04X\n", a, b & 0xffff);
+    } else {
+      s_ctx->mem_w8(a, static_cast<uint8_t>(b));
+      fprintf(out, "[%08X] <- %02X\n", a, b & 0xff);
+    }
+  } else if (cmd == "call" && hex1.has_value()) {
+    const unsigned a = *hex1;
     // Call a guest function on the live CPU context. RE aid: probe a function's effect/return live
     // (e.g. the transform-build 0x80051C8C, the geomblk leaf 0x80051B04) without recompiling a probe.
     // Runs at a frame boundary on the main thread; SIDE EFFECTS ARE REAL (may perturb the game).
     if (!s_ctx) {
       fprintf(out, "call: no CPU context\n");
     } else {
-      uint32_t args[4] = {0, 0, 0, 0};
-      sscanf(line, "%*s %*x %x %x %x %x", &args[0], &args[1], &args[2], &args[3]);
+      uint32_t callArgs[4] = {0, 0, 0, 0};
+      for (std::size_t i = 0; i < 4; i++) {
+        const std::optional<uint32_t> value = args.hex(2 + i);
+        if (!value.has_value()) {
+          break;
+        }
+        callArgs[i] = *value;
+      }
       uint32_t sv[4];
       for (int i = 0; i < 4; i++) {
         sv[i] = s_ctx->r[4 + i];
-        s_ctx->r[4 + i] = args[i];
+        s_ctx->r[4 + i] = callArgs[i];
       }
-      const auto result = psx::cpu::dispatchGuest4(
-          *s_ctx, a, args[0], args[1], args[2], args[3], psx::cpu::ExecutionBudget::currentTurn(*s_ctx));
+      const auto result = psx::cpu::dispatchGuestWithArguments(
+          *s_ctx,
+          a,
+          std::array<std::uint32_t, 4>{callArgs[0], callArgs[1], callArgs[2], callArgs[3]},
+          psx::cpu::ExecutionBudget::currentTurn(*s_ctx));
       if (result.returned()) {
         fprintf(out,
                 "call %08X(a0=%08X,a1=%08X,a2=%08X,a3=%08X) -> v0=%08X v1=%08X\n",
                 a,
-                args[0],
-                args[1],
-                args[2],
-                args[3],
+                callArgs[0],
+                callArgs[1],
+                callArgs[2],
+                callArgs[3],
                 s_ctx->r[2],
                 s_ctx->r[3]);
       } else {
@@ -437,11 +381,14 @@ static void dbg_exec(FILE *out, const char *line) {
       }
       psx::cpu::completeOrPropagate(*s_ctx, result);
     }
-  } else if (!strcmp(cmd, "geomblk") && sscanf(line, "%*s %u %u", &a, &b) == 2) {
+  } else if (cmd == "geomblk" && number1.has_value() && number2.has_value()) {
+    const unsigned a = *number1;
+    const unsigned b = *number2;
     uint32_t T = s_ctx->mem_r32(0x800ECF58u + a * 4);
     uint32_t gb = T + s_ctx->mem_r32(T + b * 4 + 4);
     fprintf(out, "group=%u sub=%u  T=%08X  geomblk=%08X\n", a, b, T, gb);
-  } else if (!strcmp(cmd, "node") && sscanf(line, "%*s %x", &a) == 1) {
+  } else if (cmd == "node" && hex1.has_value()) {
+    const unsigned a = *hex1;
     fprintf(out,
             "node %08X: type=%02X state=%04X rflag=%02X handler=%08X\n",
             a,
@@ -465,7 +412,7 @@ static void dbg_exec(FILE *out, const char *line) {
       uint32_t cmdp = s_ctx->mem_r32(a + 0xc0 + i * 4);
       fprintf(out, "    cmd[%u]=%08X geomblk=%08X\n", i, cmdp, cmdp ? s_ctx->mem_r32(cmdp + 0x40) : 0);
     }
-  } else if (!strcmp(cmd, "ents")) {
+  } else if (cmd == "ents") {
     // Every read below is a REFUSING one. The next-pointer is guest-written, so a stale or cyclic list
     // is a matter of when, not if — and this command used to abort the product on one. The walk also
     // reports WHY it stopped and whether the bound was reached, so a truncated dump is never mistaken
@@ -526,15 +473,15 @@ static void dbg_exec(FILE *out, const char *line) {
       }
     }
     fprintf(out, "(%d nodes read; a partial walk is NOT a complete dump)\n", total);
-  } else if (!strcmp(cmd, "stage")) {
+  } else if (cmd == "stage") {
     fprintf(out,
             "stage(0x801fe00c)=%08X sm48(0x801fe048)=%d scene-active(0x800BE258)=%08X\n",
             s_ctx->mem_r32(0x801fe00c),
             (int)s_ctx->mem_r16(0x801fe048),
             s_ctx->mem_r32(0x800BE258));
-  } else if (!strcmp(cmd, "scene")) {
-    gpu_scene_dump_now(s_ctx, out);
-  } else if (!strcmp(cmd, "otattr")) {
+  } else if (cmd == "scene") {
+    psx::debug::dumpScene(*s_ctx, out);
+  } else if (cmd == "otattr") {
     // The last-writer sub-commands (`watch`, `who`) are the SAME implementation the REPL runs
     // (ot_attr.cpp), so `otattr watch`/`otattr who` mean one thing across every control transport
     // and an agent can drive provenance over this channel exactly as over the REPL. Without a
@@ -543,120 +490,89 @@ static void dbg_exec(FILE *out, const char *line) {
       fprintf(out, "%.*s\n", static_cast<int>(m.size()), m.data());
     });
     if (!consumed) {
-      unsigned one = 0;
-      sscanf(line, "%*s %x", &one);
-      gpu_otattr_dump_now(s_ctx, out, one);
+      psx::debug::dumpOtAttribution(*s_ctx, out, hex1.value_or(0));
     }
-  } else if (!strcmp(cmd, "disp")) {
-    gpu_disp_dump_now(s_ctx, out);
-  } else if (!strcmp(cmd, "shot")) {
-    // Capture what is actually PRESENTED: VK readback when VK is the active renderer, else the SW
-    // display region. (Under VK the SW s_vram has only uploads, not the rasterized geometry.)
-    char path[256] = "scratch/screenshots/dbg.png";
-    sscanf(line, "%*s %255s", path);
-    if (gpu_vk_enabled()) {
-      gpu_vk_shot(s_ctx, path);
-      fprintf(out, "shot (VK) -> %s\n", path);
-    } else {
-      gpu_native_shot(s_ctx, path);
-      fprintf(out, "shot (SW) -> %s\n", path);
-    }
-  } else if (!strcmp(cmd, "dumpram")) {
+  } else if (cmd == "disp") {
+    psx::debug::dumpDisplay(*s_ctx, out);
+  } else if (cmd == "shot") {
+    // The displayed picture before letterboxing: the record image, or the device's VRAM.
+    const std::string path = args.size() > 1 ? args.text(1) : std::string("scratch/screenshots/dbg.png");
+    s_ctx->game->display.shot(path.c_str());
+    fprintf(out, "shot -> %s\n", path.c_str());
+  } else if (cmd == "dumpram") {
     // Full 2MB guest-RAM dump (+ .spad scratchpad sidecar), mirroring the REPL `dumpram`. Lets an
     // interactively-driven debug-server session capture before/after RAM for A/B diffing and feed
     // overlays to `tools/disasm.py`. The main-RAM diff is BLIND to scratchpad, hence the sidecar.
-    char path[256] = "scratch/bin/dbg_ram.bin";
-    sscanf(line, "%*s %255s", path);
-    FILE *fp = fopen(path, "wb");
+    const std::string path = args.size() > 1 ? args.text(1) : std::string("scratch/bin/dbg_ram.bin");
+    FILE *fp = fopen(path.c_str(), "wb");
     if (fp) {
       fwrite(s_ctx->ram, 1, 0x200000, fp);
       fclose(fp);
-      fprintf(out, "dumpram -> %s\n", path);
+      fprintf(out, "dumpram -> %s\n", path.c_str());
     } else {
-      fprintf(out, "dumpram: cannot open %s\n", path);
+      fprintf(out, "dumpram: cannot open %s\n", path.c_str());
     }
-    char spath[264];
-    snprintf(spath, sizeof spath, "%s.spad", path);
-    FILE *sp = fopen(spath, "wb");
+    const std::string spath = path + ".spad";
+    FILE *sp = fopen(spath.c_str(), "wb");
     if (sp) {
       fwrite(s_ctx->scratch, 1, sizeof s_ctx->scratch, sp);
       fclose(sp);
-      fprintf(out, "dumpram scratchpad -> %s\n", spath);
+      fprintf(out, "dumpram scratchpad -> %s\n", spath.c_str());
     }
-  } else if (!strcmp(cmd, "shotb")) {
-    // SBS only: capture render TARGET 1 (core B / right pane). Plain `shot` reads target 0 (core A).
-    char path[256] = "scratch/screenshots/dbg_b.png";
-    sscanf(line, "%*s %255s", path);
-    void gpu_vk_shot_b(Core *, const char *);
-    gpu_vk_shot_b(s_ctx, path);
-    fprintf(out, "shotb (VK target B) -> %s\n", path);
-  } else if (!strcmp(cmd, "vkshot")) {
-    char path[256] = "scratch/screenshots/dbg_vk.png";
-    sscanf(line, "%*s %255s", path);
-    gpu_vk_shot(s_ctx, path);
-    fprintf(out, "vkshot -> %s\n", path);
-  } else if (!strcmp(cmd, "pshot")) {
+  } else if (cmd == "vkshot") {
+    const std::string path = args.size() > 1 ? args.text(1) : std::string("scratch/screenshots/dbg_vk.png");
+    s_ctx->game->gpuVk().shot(path.c_str());
+    fprintf(out, "vkshot -> %s\n", path.c_str());
+  } else if (cmd == "pshot") {
     // What the PLAYER sees: the present image (letterboxed, faded, overlay-screen included), either leg.
     // `shot` reads guest VRAM instead, which is blank for any frame the guest did not draw.
-    char path[256] = "scratch/screenshots/dbg_present.png";
-    sscanf(line, "%*s %255s", path);
-    void gpu_vk_present_shot(Core *, const char *);
-    gpu_vk_present_shot(s_ctx, path);
-    fprintf(out, "pshot -> %s\n", path);
-  } else if (!strcmp(cmd, "vkstats")) {
-    int tri = 0, tex = 0, semi = 0;
-    gpu_vk_stats(s_ctx, &tri, &tex, &semi);
-    fprintf(out,
-            "vk last-frame verts: flat-tri=%d (%d tris) textured=%d (%d tris) semi=%d (%d tris)\n",
-            tri,
-            tri / 3,
-            tex,
-            tex / 3,
-            semi,
-            semi / 3);
-  } else if (!strcmp(cmd, "vkvram")) {
-    unsigned x = 0, y = 0, w = 64, h = 64;
-    char path[256] = "scratch/screenshots/dbg_vkvram.ppm";
-    sscanf(line, "%*s %u %u %u %u %255s", &x, &y, &w, &h, path);
-    gpu_vk_vram_region(s_ctx, path, (int)x, (int)y, (int)w, (int)h);
-    fprintf(out, "vkvram (%u,%u %ux%u) -> %s\n", x, y, w, h, path);
-  } else if (!strcmp(cmd, "vkpix")) { // raw 16-bit VRAM word(s) at x,y (dark-outline STP diag)
-    unsigned x = 0, y = 0, n = 1;
-    sscanf(line, "%*s %u %u %u", &x, &y, &n);
+    const std::string path = args.size() > 1 ? args.text(1) : std::string("scratch/screenshots/dbg_present.png");
+    s_ctx->game->gpuVk().present_shot(path.c_str());
+    fprintf(out, "pshot -> %s\n", path.c_str());
+  } else if (cmd == "vkvram") {
+    const unsigned x = number1.value_or(0);
+    const unsigned y = number2.value_or(0);
+    const unsigned w = args.number(3).value_or(64);
+    const unsigned h = args.number(4).value_or(64);
+    const std::string path = args.size() > 5 ? args.text(5) : std::string("scratch/screenshots/dbg_vkvram.ppm");
+    psx::gpu::vramRegion(
+        *s_ctx, path.c_str(), {static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h)});
+    fprintf(out, "vkvram (%u,%u %ux%u) -> %s\n", x, y, w, h, path.c_str());
+  } else if (cmd == "vkpix") { // raw 16-bit VRAM word(s) at x,y (dark-outline STP diag)
+    const unsigned x = number1.value_or(0);
+    const unsigned y = number2.value_or(0);
+    unsigned n = args.number(3).value_or(1);
     uint16_t words[64];
     if (n > 64) {
       n = 64;
     }
-    void gpu_vk_vram_words(Core *, int, int, int, uint16_t *);
-    gpu_vk_vram_words(s_ctx, (int)x, (int)y, (int)n, words);
+    psx::gpu::vramWords(*s_ctx, {static_cast<int>(x), static_cast<int>(y)}, std::span(words, n));
     fprintf(out, "vkpix (%u,%u x%u):", x, y, n);
     for (unsigned i = 0; i < n; i++) {
       fprintf(out, " %04X", words[i]);
     }
     fprintf(out, "\n");
-  } else if (!strcmp(cmd, "preseq")) {
+  } else if (cmd == "preseq") {
     // Arm a PRESENT-sequence dump: the next N PRESENTED frames, which with fps60 on INTERLEAVES the
     // real and the interpolated frames. That interleave is the only headless view of a TEMPORAL
     // artefact (interp seam, one-frame lag, judder) — a per-logic-frame `step`+`shot` loop steps
     // whole logic frames and therefore skips every interpolated frame, so it is blind to that whole
     // bug class by construction. Was REPL-only, and the REPL blocks the frame loop (see
     // docs/driving-the-game.md), so no interactive session could reach it. Same call the REPL makes.
-    unsigned n = 0;
-    char dir[200] = "scratch/screenshots/preseq";
-    if (sscanf(line, "%*s %u %199s", &n, dir) >= 1 && n > 0) {
-      extern void gpu_vk_preseq_arm(Core *, int, const char *);
-      gpu_vk_preseq_arm(s_ctx, (int)n, dir);
-      fprintf(out, "preseq armed: next %u presents -> %s/p%%04d.ppm\n", n, dir);
+    const unsigned n = number1.value_or(0);
+    const std::string dir = args.size() > 2 ? args.text(2) : std::string("scratch/screenshots/preseq");
+    if (n > 0) {
+      s_ctx->game->gpuVk().preseq_arm(static_cast<int>(n), dir.c_str());
+      fprintf(out, "preseq armed: next %u presents -> %s/p%%04d.ppm\n", n, dir.c_str());
     } else {
       fprintf(out, "preseq <N> [dir] — dump the next N PRESENTED frames (incl. fps60 interp)\n");
     }
-  } else if (!strcmp(cmd, "debug")) {
-    char ch[200] = {0};
-    sscanf(line, "%*s %199[^\n]", ch);
+  } else if (cmd == "debug") {
+    const std::string ch(args.rest(1));
     lucent::enable_channels(ch);
-    psx::config::note_runtime_external("PSXPORT_DEBUG", ch); // the RUNTIME layer; see repl.cpp
-    fprintf(out, "debug channels = %s\n", ch[0] ? ch : "(none)");
-  } else if (!strcmp(cmd, "guest")) {
+    psx::config::note_runtime_debug_channels(ch); // the RUNTIME layer; see repl.cpp
+    fprintf(out, "debug channels = %s\n", ch.empty() ? "(none)" : ch.c_str());
+  } else if (cmd == "guest") {
     // The guest-execution denominators, live. A gameplay gate has to show that the dynarec actually
     // executed the guest, with its invalidations and its bounded fallback accounted for, and until
     // this command existed the only way to read those numbers out of a running product was to scrape
@@ -669,7 +585,7 @@ static void dbg_exec(FILE *out, const char *line) {
         fprintf(out, "%s\n", ledgerLine.c_str());
       }
     }
-  } else if (!strcmp(cmd, "cvars")) {
+  } else if (cmd == "cvars") {
     // The configuration, answered where the question gets asked. Same three facts as report(): what
     // each knob resolved to, WHICH LAYER that came from, and which PSXPORT_* variables in this
     // process's environment matched nothing at all.
@@ -684,161 +600,143 @@ static void dbg_exec(FILE *out, const char *line) {
     });
     const psx::config::EnvAudit a = psx::config::audit_environment();
     fprintf(out,
-            "env audit: %zu PSXPORT_* set -> %zu declared, %zu legacy (observed when read), %zu UNKNOWN\n",
+            "env audit: %zu PSXPORT_* set -> %zu declared, %zu title-supplied, %zu UNKNOWN\n",
             a.set_in_env.size(),
             a.declared.size(),
-            a.legacy.size(),
+            a.identity.size(),
             a.unknown.size());
     for (const std::string &u : a.unknown) {
       fprintf(out, "  UNKNOWN %s — set, matched nothing, did NOTHING this run\n", u.c_str());
     }
     fprintf(out,
-            "blind spot: %zu knobs are declared CVars; an un-migrated one is recognised only "
-            "once something READS it, so one on a path this run never entered counts UNKNOWN.\n",
+            "blind spot: a title's disc or card key is recognised only once the title reads it; "
+            "%zu knobs are declared CVars.\n",
             psx::config::registered_count());
-  } else if (!strcmp(cmd, "cvar")) {
-    char nm[128] = {0}, val[192] = {0};
-    const int n = sscanf(line, "%*s %127s %191[^\n]", nm, val);
-    if (n == 2) {
-      fprintf(out, "cvar %s = %s -> %s\n", nm, val, psx::config::set_runtime(nm, val) ? "ok" : "REJECTED");
-      // PSXPORT_RENDER_PATH is read ONCE, by render_path_install() at boot (render_path.cpp). Setting it
-      // here therefore changes what `cvars` reports and NOTHING about the picture — a knob that reads
-      // back as applied while doing nothing is the exact shape this registry exists to prevent, so say
-      // so instead of leaving the next session to discover it from a screenshot that did not change.
-      if (!strcasecmp(nm, "PSXPORT_RENDER_PATH")) {
+  } else if (cmd == "cvar") {
+    const std::string nm = args.text(1);
+    const std::string val(args.rest(2));
+    if (!val.empty()) {
+      fprintf(out,
+              "cvar %s = %s -> %s\n",
+              nm.c_str(),
+              val.c_str(),
+              psx::config::set_runtime(nm.c_str(), val.c_str()) ? "ok" : "REJECTED");
+      // PSXPORT_RENDER_PATH is read once, when the Game is built.
+      if (strcasecmp(nm.c_str(), "PSXPORT_RENDER_PATH") == 0) {
         fprintf(out,
                 "NOTE: this knob is consumed at BOOT — the live picture is unchanged. Use "
                 "`renderpath %s` to switch the running renderer.\n",
-                val);
+                val.c_str());
       }
-    } else if (n == 1) {
-      fprintf(out, "cvar %s cleared -> %s\n", nm, psx::config::clear_runtime(nm) ? "ok" : "REJECTED");
+    } else if (!nm.empty()) {
+      fprintf(out, "cvar %s cleared -> %s\n", nm.c_str(), psx::config::clear_runtime(nm.c_str()) ? "ok" : "REJECTED");
     } else {
       fprintf(out, "cvar <PSXPORT_NAME> <value> — this run only; `cvar <name>` clears it; `cvars` lists everything\n");
     }
-  } else if (!strcmp(cmd, "renderpath")) {
-    // THE LIVE RENDER-PATH SWITCH, over the wire. The player-facing owner is the RmlUi Renderer row;
-    // this command keeps the same control reachable to headless tools and remote diagnostics.
-    char st[16] = {0};
-    Game *g = s_ctx ? s_ctx->game : nullptr;
-    if (!g) {
-      fprintf(out, "renderpath: no Game on this context\n");
-    } else {
+  } else if (cmd == "renderpath") {
+    // renderpath [record|device]: switch the running renderer; bare prints it.
+    const std::string st = args.text(1);
+    if (!st.empty()) {
       RenderPath p = s_ctx->rsub.mode.path();
-      const bool named = sscanf(line, "%*s %15s", st) == 1;
-      if (named && !render_path_parse(st, &p)) {
-        fprintf(out,
-                "renderpath: '%s' is not a path — valid: native | gte | psx (unchanged: %s)\n",
-                st,
-                render_path_name(s_ctx->rsub.mode.path()));
+      if (psx::gpu::parseRenderPath(st.c_str(), &p)) {
+        s_ctx->rsub.mode.setPath(p);
       } else {
-        if (!named) {
-          p = render_path_next_supported(p, g->runtime.renderCapabilities(), RenderPathAudience::Diagnostic);
-        }
-        const RenderPathSelectionResult selection = render_path_apply(*g, p, RenderPathAudience::Diagnostic);
-        if (selection == RenderPathSelectionResult::Unsupported) {
-          fprintf(out,
-                  "renderpath '%s' REFUSED: this title does not support it (unchanged: %s)\n",
-                  render_path_name(p),
-                  render_path_name(s_ctx->rsub.mode.path()));
-        } else {
-          fprintf(out,
-                  "render path = %s (enhancements %s)\n",
-                  render_path_name(p),
-                  s_ctx->rsub.mode.enhancementsAllowed() ? "ALLOWED" : "locked out — guest render stays pure");
-        }
+        fprintf(out, "renderpath: '%s' is not a path — valid: record | device\n", st.c_str());
       }
     }
-  } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
-    s_held &= ~(unsigned short)dbg_btn(arg);
+    fprintf(out, "render path = %s\n", psx::gpu::renderPathName(s_ctx->rsub.mode.path()));
+  } else if (cmd == "press" && args.size() > 1) {
+    s_held &= static_cast<unsigned short>(~psx::debug::padButtonBit(args.word(1)));
     s_ctx->game->pad.driveHold(s_held);
     fprintf(out, "held=%04X\n", s_held);
-  } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {
-    s_held |= (unsigned short)dbg_btn(arg);
+  } else if (cmd == "release" && args.size() > 1) {
+    s_held |= psx::debug::padButtonBit(args.word(1));
     s_ctx->game->pad.driveHold(s_held);
     fprintf(out, "held=%04X\n", s_held);
-  } else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) {
+  } else if (cmd == "tap" && args.size() > 1) {
+    unsigned a = number2.value_or(0);
     if (!a) {
       a = 4;
     }
-    s_ctx->game->pad.driveTap((unsigned short)(0xFFFF & ~dbg_btn(arg)), (int)a);
-    fprintf(out, "tap %s %u\n", arg, a);
-  } else if (!strcmp(cmd, "hold") && sscanf(line, "%*s %x", &a) == 1) {
-    s_held = (unsigned short)a;
+    s_ctx->game->pad.driveTap({.activeLowMask = static_cast<uint16_t>(0xFFFF & ~psx::debug::padButtonBit(args.word(1))),
+                               .frames = static_cast<int>(a)});
+    fprintf(out, "tap %s %u\n", args.text(1).c_str(), a);
+  } else if (cmd == "hold" && hex1.has_value()) {
+    s_held = static_cast<unsigned short>(*hex1);
     s_ctx->game->pad.driveHold(s_held);
     fprintf(out, "held=%04X\n", s_held);
-  } else if (!strcmp(cmd, "padrec")) {
+  } else if (cmd == "padrec") {
     // Cut a replay out of the LIVE session. Every frame's mask is kept in memory from frame 0, so a
     // session already in progress (user playing, repro on screen) can be captured on demand — no
     // restart into a chosen sink, no racing the incremental file writer.
-    char sub[32] = {0}, path[256] = {0};
-    unsigned nf = 0;
+    const unsigned nf = args.number(3).value_or(0);
     const size_t have = s_ctx->game->pad.recordedFrames();
-    if (sscanf(line, "%*s %31s %255s %u", sub, path, &nf) >= 2 && !strcmp(sub, "save")) {
-      const bool ok = s_ctx->game->pad.saveRecording(path, nf);
+    if (args.word(1) == "save" && args.size() > 2) {
+      const std::string path = args.text(2);
+      const bool ok = s_ctx->game->pad.saveRecording(path.c_str(), nf);
       fprintf(out,
               "padrec save -> %s (%zu of %zu frames)%s\n",
-              path,
+              path.c_str(),
               (nf && nf < have) ? (size_t)nf : have,
               have,
               ok ? "" : " FAILED");
     } else {
       fprintf(out, "padrec: %zu frames captured; 'padrec save <path> [nframes]' to cut a replay\n", have);
     }
-  } else if (!strcmp(cmd, "pause")) {
+  } else if (cmd == "pause") {
     s_paused = 1;
     s_step = 0;
-    fprintf(out, "paused at frame %d\n", gpu_frame_no(s_ctx));
-  } else if (!strcmp(cmd, "play") || !strcmp(cmd, "resume")) {
+    fprintf(out, "paused at frame %d\n", s_ctx->game->display.frame());
+  } else if (cmd == "play" || cmd == "resume") {
     s_paused = 0;
     s_step = 0;
     fprintf(out, "resumed\n");
-  } else if (!strcmp(cmd, "step")) {
-    a = 0;
-    sscanf(line, "%*s %u", &a);
+  } else if (cmd == "step") {
+    unsigned a = number1.value_or(0);
     if (!a) {
       a = 1;
     }
     s_paused = 1;
     s_step += (int)a;
-    fprintf(out, "step +%u (frame %d)\n", a, gpu_frame_no(s_ctx));
-  } else if (!strcmp(cmd, "frame")) {
+    fprintf(out, "step +%u (frame %d)\n", a, s_ctx->game->display.frame());
+  } else if (cmd == "frame") {
     // BOTH present counters, because one of them alone answers a different question. `frame` counts
     // REAL presents; an interpolated 60fps in-between reaches the screen without advancing it, so a
     // cadence claim read off `frame` measures 30 Hz on a product genuinely presenting 60. `interp` is
     // that second counter and `total` is the sum, which is the number a "is this presenting at 60 Hz"
-    // question actually wants. See GpuState::s_interpolated_frames for the measured case.
-    const int real_frames = gpu_frame_no(s_ctx);
-    // Read straight off the owner, as this command already does for the display fields, rather
-    // than through a second accessor in a file under a shrink-only cap.
-    const int inbetweens = s_ctx->game->gpu.s_interpolated_frames;
+    // question actually wants.
+    const int real_frames = s_ctx->game->display.frame();
+    const int inbetweens = s_ctx->game->display.interpolatedFrames();
+    const psx::gpu::DisplayArea area = s_ctx->gpuDevice().displayArea();
     fprintf(out,
             "frame=%d interp=%d total=%d paused=%d disp=(%d,%d)\n",
             real_frames,
             inbetweens,
             real_frames + inbetweens,
             s_paused,
-            s_ctx->game->gpu.s_disp_x,
-            s_ctx->game->gpu.s_disp_y);
-  } else if (!strcmp(cmd, "session")) {
+            area.x,
+            area.y);
+  } else if (cmd == "session") {
     // Host-level session control (session_control.h). `session return` ends this Game and shows the
     // host's selector; it writes no guest state and refuses where the product has no selector.
-    if (sscanf(line, "%*s %31s", arg) == 1 && !strcmp(arg, "return")) {
+    if (args.word(1) == "return") {
       const bool ok = s_ctx->game->session.requestReturn();
       fprintf(out, ok ? "session return requested\n" : "session return REFUSED: this product has no title selector\n");
     } else {
       fprintf(out, "usage: session return\n");
     }
-  } else if (!strcmp(cmd, "state")) {
+  } else if (cmd == "state") {
     // Whole-machine save state (runtime/psx/state/). Serviced HERE, between frames, because that is
     // the only point at which no native override is active and every device is in a state a later run
     // can resume from. Answers on the SAME channel, including a refusal and its reason.
     psx::state::handleControlCommand(*s_ctx, line, out);
-  } else if (s_ctx->runtime.titleCommand(*s_ctx, {.command = cmd, .line = line}, out)) {
+  } else if (s_ctx->runtime.titleCommand(*s_ctx, {.command = cmd.c_str(), .line = line}, out)) {
   } else {
     fprintf(out, "? %s  (try 'help')\n", line);
   }
 }
+
+} // namespace
 
 // Called once per frame from the native frame loop. Services at most one queued command.
 // `c` is the live frame-loop CPU context, stored for the `call` command (runs guest fns at this
@@ -882,10 +780,12 @@ void DbgServer::service(Core *c) {
   pthread_mutex_unlock(&s_mtx);
 }
 
+namespace {
+
 // Submit one command to the main thread and block (this server thread only) for the result. Uses a
 // timed wait so a slow/hung frame can never permanently wedge the server thread — on timeout it
 // abandons the request and returns an error line, keeping the accept loop responsive.
-static char *dbg_submit(const char *line, size_t *out_len) {
+char *dbg_submit(const char *line, size_t *out_len) {
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   ts.tv_sec += 4;
@@ -935,7 +835,7 @@ timeout:;
   const char *msg = "(debug server: command timed out — game frozen or busy)\n";
   char *b = (char *)malloc(strlen(msg) + 1);
   if (b) {
-    strcpy(b, msg);
+    memcpy(b, msg, strlen(msg) + 1);
   }
   *out_len = b ? strlen(msg) : 0;
   return b;
@@ -948,38 +848,33 @@ timeout:;
 // backstop so a client that connects then dies WITHOUT closing eventually frees the serial accept loop
 // instead of wedging it. (Was one-command-per-connection, which broke interactive dbgclient: the 2nd
 // command hit an already-closed socket -> BrokenPipeError.)
-static void serve_conn(int fd) {
+void serve_conn(int fd) {
   struct timeval tv = {120, 0}; // idle backstop: drop a stalled/dead client
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-  char in[1024];
-  size_t fill = 0;
+  constexpr std::size_t kMaxLine = 1023;
+  std::string pending;
+  char chunk[1024];
   for (;;) {
-    char *nl = (char *)memchr(in, '\n', fill); // a pipelined next command may already be buffered
-    while (!nl) {
-      if (fill >= sizeof in - 1) {
+    std::size_t nl = pending.find('\n'); // a pipelined next command may already be buffered
+    while (nl == std::string::npos) {
+      if (pending.size() >= kMaxLine) {
         close(fd);
         return;
       } // overlong line with no newline: give up
-      ssize_t n = read(fd, in + fill, sizeof in - 1 - fill);
+      const ssize_t n = read(fd, chunk, sizeof chunk);
       if (n <= 0) {
         close(fd);
         return;
       } // client closed / recv timeout / error
-      fill += (size_t)n;
-      in[fill] = 0;
-      nl = (char *)memchr(in, '\n', fill);
+      pending.append(chunk, static_cast<std::size_t>(n));
+      nl = pending.find('\n');
     }
-    *nl = 0;
-    char line[512];
-    snprintf(line, sizeof line, "%s", in);
-    size_t consumed = (size_t)(nl - in) + 1; // drop this command + newline; keep any remainder
-    memmove(in, in + consumed, fill - consumed);
-    fill -= consumed;
-    in[fill] = 0;
-    size_t ll = strlen(line);
-    if (ll && line[ll - 1] == '\r') {
-      line[ll - 1] = 0;
+    std::string command = pending.substr(0, std::min<std::size_t>(nl, 511));
+    pending.erase(0, nl + 1);
+    if (!command.empty() && command.back() == '\r') {
+      command.pop_back();
     }
+    const char *line = command.c_str();
     if (!strcmp(line, "quit") || !strcmp(line, "q") || !strcmp(line, "exit")) {
       // The connection ends at once, and the run that OWNS its end-of-run is told to stop. The
       // endpoint is process-lifetime and this thread has no Game, so the request goes to whichever
@@ -1007,13 +902,13 @@ static void serve_conn(int fd) {
   }
 }
 
-static void *dbg_thread(void *arg) {
+void *dbg_thread(void *arg) {
   int *port_arg = static_cast<int *>(arg);
   const int port = *port_arg;
   delete port_arg;
   int ls = socket(AF_INET, SOCK_STREAM, 0);
   if (ls < 0) {
-    perror("[dbgsrv] socket");
+    lucent::error("dbgsrv", "socket: {}", std::strerror(errno));
     return NULL;
   }
   int one = 1;
@@ -1023,12 +918,12 @@ static void *dbg_thread(void *arg) {
   sa.sin_port = htons((uint16_t)port);
   sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   if (bind(ls, (struct sockaddr *)&sa, sizeof sa) < 0) {
-    perror("[dbgsrv] bind");
+    lucent::error("dbgsrv", "bind: {}", std::strerror(errno));
     close(ls);
     return NULL;
   }
   if (listen(ls, 4) < 0) {
-    perror("[dbgsrv] listen");
+    lucent::error("dbgsrv", "listen: {}", std::strerror(errno));
     close(ls);
     return NULL;
   }
@@ -1043,6 +938,8 @@ static void *dbg_thread(void *arg) {
   return NULL;
 }
 
+} // namespace
+
 // A client froze the game: hold here until it says `play` or `step`. The loop keeps the window (or
 // the headless host input) alive and keeps servicing commands, and it re-shows the last REAL frame
 // rather than re-rendering — a pause must never rebuild: the framework's own loop spins at ~66 Hz
@@ -1051,7 +948,7 @@ void DbgServer::honourPause(Core *c) {
   if (!isPaused()) {
     return;
   }
-  watchdog_suspend(); // a debug pause is intentional idle, not a hang
+  psx::platform::Watchdog::suspend(); // a debug pause is intentional idle, not a hang
   while (isPaused()) {
     if (stepPending()) {
       consumeStep();
@@ -1059,19 +956,19 @@ void DbgServer::honourPause(Core *c) {
     }
     idleFrame(c);
   }
-  watchdog_resume(); // re-arm after idle without falsely claiming this frame completed
+  psx::platform::Watchdog::resume(); // re-arm after idle without falsely claiming this frame completed
 }
 
 void DbgServer::idleFrame(Core *c) {
   c->game->pad.pollHostInput(); // host input ONLY — must not tick the pad-frame clock here
-  c->game->gpu.gpu_repaint();
+  c->game->display.repaint();
   service(c); // receive step/play/capture commands
   usleep(15000);
 }
 
 // Start the debug server thread if PSXPORT_DEBUG_SERVER names a port (=1 -> default port).
 void DbgServer::start(Core *c) {
-  const int port = debug_server_port(psx::config::cv_debug_server.get());
+  const int port = psx::debug::debugServerPort(psx::config::debug_server());
   if (port == 0) {
     return;
   }

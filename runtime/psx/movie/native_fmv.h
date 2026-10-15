@@ -71,10 +71,7 @@ private:
   // The blocking loop behind play()/playLba(): pumps host input and steps until the movie ends.
   int playToEnd();
   // Pace playback to the AUDIO/media clock; returns 1 if Start is held (skip).
-  int pace(long media_frames, int freq, uint32_t t0, int uncapped);
-  // Decode an entire BS frame into the MDEC run-level code stream (VLC decode).
-  int bsDecodeFrame(
-      const uint8_t *payload, uint32_t payload_size, int width, int height, uint16_t *codes, int max_codes);
+  int pace();
   // Present one decoded 24-bit frame.
   void presentFrame(const uint8_t *pixels, int width, int height);
   // Allocate the multi-megabyte decode scratch on first use.

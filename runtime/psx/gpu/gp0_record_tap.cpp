@@ -52,10 +52,7 @@ void Gp0RecordTap::resyncIfIdle(const DeviceProbe &probe) {
   }
 }
 
-void Gp0RecordTap::onGp0(std::uint32_t word,
-                         std::uint32_t sourceAddress,
-                         const std::optional<present::RecordKey> &packetKey,
-                         const DeviceProbe &probe) {
+void Gp0RecordTap::onGp0(std::uint32_t word, const Gp0Origin &origin, const DeviceProbe &probe) {
   if (!synced_) {
     resyncIfIdle(probe);
     return;
@@ -80,8 +77,8 @@ void Gp0RecordTap::onGp0(std::uint32_t word,
     break;
   case Mode::Command:
     if (words_.empty()) {
-      packetSource_ = sourceAddress;
-      packetKey_ = packetKey;
+      packetSource_ = origin.sourceAddress;
+      packetKey_ = origin.packetKey;
       need_ = firstDispatchWords(word);
     }
     words_.push_back(word);
@@ -257,7 +254,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     return;
   }
   if (command.opcodeByte() == static_cast<std::uint8_t>(Gp0Opcode::FillRect)) {
-    const Gp0VramRect rect = Gp0Command::fillRectRegion(words_[1], words_[2]);
+    const Gp0VramRect rect = Gp0Command::fillRectRegion({words_[1], words_[2]});
     const Gp0Colour colour = command.colour();
     present::VramFill fill;
     fill.x = rect.x;
@@ -274,7 +271,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
   }
   if (command.isVramCopy()) {
     const Gp0VramPos source = Gp0Command(words_[1]).rectCorner();
-    const Gp0VramRect target = Gp0Command::transferRegion(words_[2], words_[3]);
+    const Gp0VramRect target = Gp0Command::transferRegion({words_[2], words_[3]});
     present::VramCopy copy;
     copy.srcX = source.x;
     copy.srcY = source.y;
@@ -290,7 +287,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     return;
   }
   if (command.isCpuToVramUpload()) {
-    const Gp0VramRect target = Gp0Command::transferRegion(words_[1], words_[2]);
+    const Gp0VramRect target = Gp0Command::transferRegion({words_[1], words_[2]});
     upload_ = present::VramUpload{};
     upload_.x = target.x;
     upload_.y = target.y;

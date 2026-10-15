@@ -38,10 +38,15 @@ public:
   // the host mask, and applies the P / '.' debug keys to the debug channel's pause and step state.
   void pollHostInput();
 
-  void overridesInit();                               // install the per-VBlank pad-read override
-  void driveHold(uint16_t activeLowMask);             // REPL: hold down these bits
-  void driveTap(uint16_t activeLowMask, int nframes); // REPL: press for n frames
-  void driveRelease();                                // REPL: clear the drive entirely
+  void overridesInit();                   // install the per-VBlank pad-read override
+  void driveHold(uint16_t activeLowMask); // REPL: hold down these bits
+  // REPL: press `activeLowMask` for `frames` frames.
+  struct Tap {
+    uint16_t activeLowMask = psx::input::kNoButtons;
+    int frames = 0;
+  };
+  void driveTap(Tap tap);
+  void driveRelease(); // REPL: clear the drive entirely
 
   // The once-per-frame pad service: poll the host, resolve forced / REPL / replay input into `buttons`,
   // record or replay the frame, apply the test hooks, and write the guest packet into the registered

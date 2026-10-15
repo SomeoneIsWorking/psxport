@@ -88,5 +88,5 @@ int main(void) {
   RUN(a_frame_past_the_range_is_counted_and_keeps_its_exact_time);
   RUN(every_frame_past_the_range_still_reports_a_worst);
   RUN(a_backwards_sample_is_charged_to_the_first_bucket_not_out_of_the_array);
-  return pt_summary();
+  return psx::test::summary();
 }

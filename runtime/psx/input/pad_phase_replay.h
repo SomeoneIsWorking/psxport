@@ -35,7 +35,7 @@ namespace psx::input {
 // recorded phase the game has not entered within it, is a replay that has left its route.
 inline constexpr std::uint32_t kDefaultPhaseWaitLimit = 3600;
 
-enum class ReplayStatus { Playing, Complete, Stalled };
+enum class ReplayStatus : std::uint8_t { Playing, Complete, Stalled };
 
 // The replay's own denominators. `framesEmitted` counts recorded frames delivered to the guest,
 // `framesWaited` the neutral frames held while waiting for a phase.
@@ -82,9 +82,9 @@ public:
 private:
   std::uint16_t emit();
   std::optional<std::uint16_t> wait(std::uint64_t observedPhase);
-  void enter(std::size_t segment, std::size_t passed);
+  void enter(std::size_t segment);
   void closeCurrent();
-  std::optional<std::size_t> findNeutralPath(std::size_t from, std::uint64_t phase) const;
+  std::optional<std::size_t> findNeutralPath(std::uint64_t phase) const;
   bool atLastFrame() const;
 
   PadRecording recording_;

@@ -7,10 +7,19 @@ namespace psx::frame {
 
 constexpr uint32_t kNominalPsxCpuHz = 33'868'800u;
 
+// A reading of the emulated CPU clock.
+enum class CpuTicks : uint64_t {};
+
 // Return the integral CPU ticks represented by a display-field interval. Invalid cadence inputs
 // return zero. EmulatedTime retains the fractional part internally; this helper is for evidence and
 // diagnostics, not a second clock implementation.
 uint64_t displayFieldCpuTicks(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz);
+
+// Save-state form of the 128-bit Q32 clock; values are truncated to 64 bits.
+struct EmulatedTimeQ32 {
+  uint64_t now = 0;
+  uint64_t displayBoundary = 0;
+};
 
 class EmulatedTime {
 public:
@@ -19,19 +28,12 @@ public:
   [[nodiscard]] uint64_t nowTicks() const;
   [[nodiscard]] uint64_t hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const;
 
-  // Whole-machine state (written by runtime/psx/state/device_bus.cpp, where this class's private
-  // members are reachable). Split into two 64-bit halves because the field is a 128-bit fixed-point
-  // anchor and there is no portable 128-bit serializer: a save state has to survive being written
-  // through a byte-oriented section codec.
-  [[nodiscard]] uint64_t nowQ32() const {
-    return static_cast<uint64_t>(mNowQ32);
+  [[nodiscard]] EmulatedTimeQ32 q32() const {
+    return {static_cast<uint64_t>(mNowQ32), static_cast<uint64_t>(mDisplayBoundaryQ32)};
   }
-  [[nodiscard]] uint64_t displayBoundaryQ32() const {
-    return static_cast<uint64_t>(mDisplayBoundaryQ32);
-  }
-  void restoreQ32(uint64_t now, uint64_t boundary) {
-    mNowQ32 = static_cast<unsigned __int128>(now);
-    mDisplayBoundaryQ32 = static_cast<unsigned __int128>(boundary);
+  void restore(EmulatedTimeQ32 state) {
+    mNowQ32 = static_cast<unsigned __int128>(state.now);
+    mDisplayBoundaryQ32 = static_cast<unsigned __int128>(state.displayBoundary);
   }
 
 private:

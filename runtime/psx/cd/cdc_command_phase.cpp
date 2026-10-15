@@ -1,82 +1,83 @@
 #include "cdc_command_phase.h"
+#include "cdc_state.h"
 
 #include <algorithm>
 #include <cassert>
 
-namespace {
+namespace psx::cd {
 
-uint8_t pop_parameter(CdcState *state) {
-  const uint8_t value = state->param[0];
-  std::move(state->param + 1, state->param + state->param_n, state->param);
-  --state->param_n;
+uint8_t CdController::popParameter() {
+  const uint8_t value = param[0];
+  std::move(param + 1, param + param_n, param);
+  --param_n;
   return value;
 }
 
-} // namespace
-
-void cdc_command_schedule(CdcState *state, uint8_t command) {
-  assert(state->tick_now != nullptr && "CDC command scheduling requires the bound guest clock");
-  state->pending_command = command;
-  state->command_phase = -1;
-  state->command_arg_n = 0;
-  state->command_event_armed = 1;
-  state->command_deadline_ticks = state->tick_now(state->tick_context) + kCdcCommandWritePhaseCpuTicks;
+void CdController::scheduleCommand(uint8_t command) {
+  assert(tick_now != nullptr && "CDC command scheduling requires the bound guest clock");
+  pending_command = command;
+  command_phase = -1;
+  command_arg_n = 0;
+  command_event_armed = 1;
+  command_deadline_ticks = tick_now(tick_context) + kCdcCommandWritePhaseCpuTicks;
 }
 
-CdcCommandEvent cdc_command_service(CdcState *state, bool completion_can_raise_irq) {
-  if (!state->command_event_armed || !state->tick_now) {
-    return CdcCommandEvent::kNone;
+CdcCommandEvent CdController::serviceCommand(bool completion_can_raise_irq) {
+  if (!command_event_armed || !tick_now) {
+    return CdcCommandEvent::None;
   }
 
-  const uint64_t now_ticks = state->tick_now(state->tick_context);
-  while (now_ticks >= state->command_deadline_ticks) {
-    switch (state->command_phase) {
+  const uint64_t now_ticks = tick_now(tick_context);
+  while (now_ticks >= command_deadline_ticks) {
+    switch (command_phase) {
     case -1:
-      if (state->param_n > 0) {
-        state->command_arg_latch = pop_parameter(state);
-        state->command_phase = 0;
-        state->command_deadline_ticks += kCdcCommandArgumentPhaseCpuTicks;
+      if (param_n > 0) {
+        command_arg_latch = popParameter();
+        command_phase = 0;
+        command_deadline_ticks += kCdcCommandArgumentPhaseCpuTicks;
       } else {
-        state->command_phase = 1;
-        state->command_deadline_ticks += kCdcCommandExecutionPhaseCpuTicks;
+        command_phase = 1;
+        command_deadline_ticks += kCdcCommandExecutionPhaseCpuTicks;
       }
       break;
     case 0:
-      if (state->command_arg_n < sizeof state->command_args) {
-        state->command_args[state->command_arg_n++] = state->command_arg_latch;
+      if (command_arg_n < sizeof command_args) {
+        command_args[command_arg_n++] = command_arg_latch;
       }
-      if (state->param_n > 0) {
-        state->command_arg_latch = pop_parameter(state);
-        state->command_deadline_ticks += kCdcCommandArgumentPhaseCpuTicks;
+      if (param_n > 0) {
+        command_arg_latch = popParameter();
+        command_deadline_ticks += kCdcCommandArgumentPhaseCpuTicks;
       } else {
-        state->command_phase = 1;
-        state->command_deadline_ticks += kCdcCommandExecutionPhaseCpuTicks;
+        command_phase = 1;
+        command_deadline_ticks += kCdcCommandExecutionPhaseCpuTicks;
       }
       break;
     case 1:
-      return CdcCommandEvent::kExecute;
+      return CdcCommandEvent::Execute;
     case 2:
       if (!completion_can_raise_irq) {
-        return CdcCommandEvent::kNone;
+        return CdcCommandEvent::None;
       }
-      state->command_event_armed = 0;
-      state->command_deadline_ticks = 0;
-      return CdcCommandEvent::kComplete;
+      command_event_armed = 0;
+      command_deadline_ticks = 0;
+      return CdcCommandEvent::Complete;
     default:
-      state->command_event_armed = 0;
-      state->command_deadline_ticks = 0;
-      return CdcCommandEvent::kNone;
+      command_event_armed = 0;
+      command_deadline_ticks = 0;
+      return CdcCommandEvent::None;
     }
   }
-  return CdcCommandEvent::kNone;
+  return CdcCommandEvent::None;
 }
 
-void cdc_command_finish_execution(CdcState *state, uint64_t completion_delay_ticks) {
+void CdController::finishCommandExecution(uint64_t completion_delay_ticks) {
   if (completion_delay_ticks == 0) {
-    state->command_event_armed = 0;
-    state->command_deadline_ticks = 0;
+    command_event_armed = 0;
+    command_deadline_ticks = 0;
     return;
   }
-  state->command_phase = 2;
-  state->command_deadline_ticks += completion_delay_ticks;
+  command_phase = 2;
+  command_deadline_ticks += completion_delay_ticks;
 }
+
+} // namespace psx::cd

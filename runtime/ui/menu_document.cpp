@@ -1,6 +1,7 @@
 #include "menu_document.h"
 
 #include "game.h"
+#include "number_text.h"
 #include "rml_text.h"
 #include "ui_component.h"
 
@@ -28,7 +29,6 @@ constexpr const char *kAttrAdjust = "adjust";
 // The adjust rows whose model is not `Mods`.
 constexpr const char *kWarpAreaId = "warp_area";
 constexpr const char *kDevCommandIds[] = {"warp_entry", "flag_index", "flag_value"};
-constexpr const char *kRenderPathId = "render_path";
 
 // A title's declared settings are adjust rows whose id carries this prefix; they are added under
 // `#title_settings` when the document is built.
@@ -38,8 +38,7 @@ constexpr const char *kTitleSettingsHostId = "title_settings";
 } // namespace
 
 MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *game)
-    : Component(doc), mCtx(ctx), mDoc(doc), mGame(game), mDevCommands(game), mWarp(game, &mDevCommands),
-      mRenderPath(game) {
+    : Component(doc), mCtx(ctx), mDoc(doc), mGame(game), mDevCommands(game), mWarp(game, &mDevCommands) {
   if (!mDoc) {
     return;
   }
@@ -119,7 +118,7 @@ void MenuDocument::add_title_setting_rows() {
   std::string rml = "<div class=\"section-heading spaced\">Enhancements</div>";
   for (const psx::game::TitleIntSetting &setting : settings) {
     rml += std::string("<select-button adjust=\"") + std::string(kTitleSettingPrefix) + setting.id + "\"><key>" +
-           rml_text_markup(setting.label) + "</key><value></value></select-button>";
+           psx::ui::rmlTextMarkup(setting.label) + "</key><value></value></select-button>";
   }
   set_markup(host, rml);
 }
@@ -164,7 +163,7 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
 
   // Order matters and matches the old ladder: an `action` row is a one-shot button even if it
   // also carries a `toggle`/`adjust` attribute.
-  std::string id = row->GetAttribute<Rml::String>(kAttrAction, "");
+  std::string id = psx::ui::rmlAttributeText(*row, kAttrAction, "");
   if (!id.empty()) {
     return make_action_binding(
         [this, id] {
@@ -175,11 +174,8 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
         });
   }
 
-  id = row->GetAttribute<Rml::String>(kAttrToggle, "");
+  id = psx::ui::rmlAttributeText(*row, kAttrToggle, "");
   if (!id.empty()) {
-    if (id == kRenderPathId) {
-      return make_render_path_binding(&mRenderPath);
-    }
     if (!ModRowModel::knows(RowKind::Toggle, id)) {
       mUnknownRows++;
       lucent::error("rmlui",
@@ -192,7 +188,7 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
     return make_mod_toggle_binding(mGame ? &mGame->mods : nullptr, id);
   }
 
-  id = row->GetAttribute<Rml::String>(kAttrAdjust, "");
+  id = psx::ui::rmlAttributeText(*row, kAttrAdjust, "");
   if (!id.empty()) {
     if (id == kWarpAreaId) {
       return make_warp_area_binding(&mWarp);
@@ -273,7 +269,7 @@ void MenuDocument::run_action(const std::string &id) {
     if (!audio) {
       return;
     }
-    audio->soundTestPlay(id == "music_stop" ? -1 : atoi(id.c_str() + 6));
+    audio->soundTestPlay(id == "music_stop" ? -1 : psx::config::parseInt(std::string_view(id).substr(6)).value_or(0));
     if (mReadouts) {
       mReadouts->update();
     }
@@ -376,7 +372,7 @@ void MenuDocument::activate_focused(int dir) {
   }
 }
 
-bool MenuDocument::handle_key(int sdl_keycode) {
+bool MenuDocument::handle_key(SDL_Keycode sdl_keycode) {
   if (!mVisible) {
     return false;
   }

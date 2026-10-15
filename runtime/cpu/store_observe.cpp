@@ -1,6 +1,6 @@
 #include "store_observe.h"
 
-#include "config_vars.h" // cv_store_observe — the addresses to watch
+#include "config_vars.h" // store_observe
 #include "core.h"
 #include "lightrec_executor.h"
 
@@ -39,7 +39,7 @@ void observeStore(const StoreObservation &observation, void *context) noexcept {
   // `StoreObservation` carries the guest PC, the phase, the segment-relative cycle and the full
   // register file — but NOT the address that was written, so this line cannot name which of several
   // watched words fired. It deliberately does not invent one: with more than one address armed, run
-  // them one at a time, or read `store_observe_report`, whose per-target rows DO carry the guest PC
+  // them one at a time, or read `psx::cpu::reportStoreObserver`, whose per-target rows DO carry the guest PC
   // and the before/after counts.
   //
   // $a0/$t0/$t1 are logged because a store's data register is usually one of them, and the two
@@ -95,12 +95,13 @@ bool parseTargets(std::string_view text, std::array<std::uint32_t, kMaxObservedS
 
 } // namespace
 
-void store_observe_attach(Core &core) {
-  store_observe_configure(core);
+void psx::cpu::attachStoreObserver(Core &core) {
+  psx::cpu::configureStoreObserver(core);
 }
 
-void store_observe_configure(Core &core) {
-  const std::string_view requested = psx::config::cv_store_observe.get();
+void psx::cpu::configureStoreObserver(Core &core) {
+  const std::string requestedText = psx::config::store_observe();
+  const std::string_view requested = requestedText;
   if (requested.empty()) {
     // The default. Disarming an already-disarmed observer is a no-op, not an error, so a title may
     // call this unconditionally.
@@ -143,7 +144,7 @@ void store_observe_configure(Core &core) {
   }
 }
 
-void store_observe_report(const psx::cpu::StoreObserverReport &report) {
+void psx::cpu::reportStoreObserver(const psx::cpu::StoreObserverReport &report) {
   if (!report.armed && report.targetCount == 0) {
     return; // never armed: the arming line already said so, and silence here is not evidence
   }

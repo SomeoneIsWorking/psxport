@@ -8,6 +8,7 @@
 #include "gpu_vk.h"
 #include "gpu_vk_device.h"
 #include "gpu_vk_internal.h"
+#include "gpu_vk_shader.h"
 #include "image_writer.h"
 
 #include "psxport_generated/gpu_vk_shaders.h"
@@ -43,30 +44,11 @@ struct PanePc {
   float alpha;     // 1 owns its pixels; below 1 blends over the pane beneath
 };
 
-SDL_GPUShader *makeShader(SDL_GPUDevice *dev,
-                          const uint32_t *code,
-                          unsigned len,
-                          SDL_GPUShaderStage stage,
-                          Uint32 num_samplers,
-                          Uint32 num_uniform_buffers) {
-  SDL_GPUShaderCreateInfo ci = {};
-  ci.code_size = len;
-  ci.code = reinterpret_cast<const Uint8 *>(code);
-  ci.entrypoint = "main";
-  ci.format = SDL_GPU_SHADERFORMAT_SPIRV;
-  ci.stage = stage;
-  ci.num_samplers = num_samplers;
-  ci.num_uniform_buffers = num_uniform_buffers;
-  SDL_GPUShader *s = SDL_CreateGPUShader(dev, &ci);
-  if (!s) {
-    lucent::error("pane", "SDL_CreateGPUShader failed: {}", SDL_GetError());
-  }
-  return s;
-}
-
 SDL_GPUGraphicsPipeline *makePipeline(SDL_GPUDevice *dev, SDL_GPUTextureFormat format) {
-  SDL_GPUShader *vs = makeShader(dev, spv_g_pane_vert, spv_g_pane_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-  SDL_GPUShader *fs = makeShader(dev, spv_g_pane_frag, spv_g_pane_frag_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+  SDL_GPUShader *vs =
+      psx::gpu::makeShader(dev, spv_g_pane_vert, spv_g_pane_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, {0, 1});
+  SDL_GPUShader *fs =
+      psx::gpu::makeShader(dev, spv_g_pane_frag, spv_g_pane_frag_len, SDL_GPU_SHADERSTAGE_FRAGMENT, {1, 1});
   SDL_GPUColorTargetDescription ct = {};
   ct.format = format;
   // A picture pane and a divider both write alpha 1, so blending changes nothing for them; it is what
@@ -100,8 +82,10 @@ SDL_GPUGraphicsPipeline *makePipeline(SDL_GPUDevice *dev, SDL_GPUTextureFormat f
 // image IS the sink's shape, so this is the 1:1 copy it claims to be. Windowed only, like every other
 // pass that names the swapchain's format.
 SDL_GPUGraphicsPipeline *makeBlitPipeline(SDL_GPUDevice *dev, SDL_GPUTextureFormat format) {
-  SDL_GPUShader *vs = makeShader(dev, spv_g_image_vert, spv_g_image_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
-  SDL_GPUShader *fs = makeShader(dev, spv_g_image_frag, spv_g_image_frag_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+  SDL_GPUShader *vs =
+      psx::gpu::makeShader(dev, spv_g_image_vert, spv_g_image_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, {0, 0});
+  SDL_GPUShader *fs =
+      psx::gpu::makeShader(dev, spv_g_image_frag, spv_g_image_frag_len, SDL_GPU_SHADERSTAGE_FRAGMENT, {1, 1});
   SDL_GPUColorTargetDescription ct = {};
   ct.format = format;
   SDL_GPUGraphicsPipelineCreateInfo gp = {};
@@ -158,10 +142,10 @@ PaneCompositor::~PaneCompositor() {
 
 void PaneCompositor::ensureState() {
   if (m_device.s_dev == nullptr) {
-    lucent::error("pane", "no GPU device — bring one up with gpu_vk_ensure_device before compositing panes");
+    lucent::error("pane", "no GPU device — bring one up with psx::gpu::ensureDevice before compositing panes");
     return;
   }
-  if (!gpu_vk_enabled()) {
+  if (!m_device.enabled()) {
     return;
   }
   if (!m_panePipe) {
@@ -263,16 +247,15 @@ void PaneCompositor::ensureImage(int w, int h) {
 }
 
 void PaneCompositor::composite(std::span<const Pane> panes, const PaneOverlayPass &overlay) {
-  if (!gpu_vk_enabled()) {
+  if (!m_device.enabled()) {
     return;
   }
   ensureState();
   if (!m_panePipe) {
     return; // no pipeline: the device refused it, and there is nothing to draw with
   }
-  int sinkW = 0, sinkH = 0;
-  gpu_vk_present_sink_size(&sinkW, &sinkH);
-  ensureImage(sinkW, sinkH);
+  const psx::present::PixelSize sink = m_device.sinkSize();
+  ensureImage(sink.width, sink.height);
   if (!m_image || !m_imageRb) {
     return;
   }
@@ -289,9 +272,9 @@ void PaneCompositor::composite(std::span<const Pane> panes, const PaneOverlayPas
   cti.load_op = SDL_GPU_LOADOP_CLEAR;
   cti.store_op = SDL_GPU_STOREOP_STORE;
   SDL_GPURenderPass *rp = SDL_BeginGPURenderPass(cmd, &cti, 1, nullptr);
-  SDL_GPUViewport vp = {0.0f, 0.0f, (float)sinkW, (float)sinkH, 0.0f, 1.0f};
+  SDL_GPUViewport vp = {0.0f, 0.0f, (float)sink.width, (float)sink.height, 0.0f, 1.0f};
   SDL_SetGPUViewport(rp, &vp);
-  SDL_Rect scissor = {0, 0, sinkW, sinkH};
+  SDL_Rect scissor = {0, 0, sink.width, sink.height};
   SDL_SetGPUScissor(rp, &scissor);
   SDL_BindGPUGraphicsPipeline(rp, m_panePipe);
 
@@ -313,9 +296,9 @@ void PaneCompositor::composite(std::span<const Pane> panes, const PaneOverlayPas
         // THE HELD PICTURE, not the newest frame. A session between its own scenes — a fade, a load
         // screen — presents black, and a panel that showed that would read as a title that stopped.
         // The held frame is the newest one this session actually had a picture in.
-        image = pane.core->game->gpu_vk.lastFilledPresented();
+        image = pane.core->game->gpuVk().lastFilledPresented();
         if (!image.valid()) {
-          image = pane.core->game->gpu_vk.lastPresented();
+          image = pane.core->game->gpuVk().lastPresented();
         }
       }
       if (!image.valid()) {
@@ -347,8 +330,8 @@ void PaneCompositor::composite(std::span<const Pane> panes, const PaneOverlayPas
     ubo.axisU[1] = pane.axisUY;
     ubo.axisV[0] = pane.axisVX;
     ubo.axisV[1] = pane.axisVY;
-    ubo.viewport[0] = (float)sinkW;
-    ubo.viewport[1] = (float)sinkH;
+    ubo.viewport[0] = (float)sink.width;
+    ubo.viewport[1] = (float)sink.height;
     SDL_PushGPUVertexUniformData(cmd, 0, &ubo, sizeof ubo);
 
     PanePc pc{};
@@ -374,7 +357,7 @@ void PaneCompositor::composite(std::span<const Pane> panes, const PaneOverlayPas
   }
   // The host's own UI, in the same pass, so it lands ON the panes rather than in a second blit.
   if (overlay) {
-    overlay(cmd, rp, sinkW, sinkH);
+    overlay(cmd, rp, sink.width, sink.height);
   }
   SDL_EndGPURenderPass(rp);
 
@@ -384,13 +367,13 @@ void PaneCompositor::composite(std::span<const Pane> panes, const PaneOverlayPas
     showToWindow(cmd);
   }
   m_frames++;
-  lucent::debug("pane", "frame {}: {} pane(s) drawn, {} empty, {}x{}", m_frames, drawn, empty, sinkW, sinkH);
+  lucent::debug("pane", "frame {}: {} pane(s) drawn, {} empty, {}x{}", m_frames, drawn, empty, sink.width, sink.height);
 }
 
 void PaneCompositor::showToWindow(SDL_GPUCommandBuffer *cmd) {
   SDL_GPUDevice *dev = m_device.s_dev;
   Uint32 w = 0, h = 0;
-  SDL_GPUTexture *swap = sink_acquire(m_sink, cmd, m_device.s_window.window(), &w, &h);
+  SDL_GPUTexture *swap = psx::gpu::acquireSink(m_sink, cmd, m_device.s_window.window(), &w, &h);
   if (!swap) {
     // An occluded window or frames in flight: an idle sink, not a stuck host. The guest sessions keep
     // stepping; the next composite will find an image again.
@@ -423,12 +406,12 @@ void PaneCompositor::showToWindow(SDL_GPUCommandBuffer *cmd) {
   // The window's own events (close, ESC, and the key states the sessions' pads must learn) belong to
   // whoever shows the window, which from here is this object rather than any one session.
   if (m_hostCore != nullptr) {
-    gpu_vk_pump_host_events(m_hostCore);
+    m_hostCore->game->hostInput.drainEvents();
   }
 }
 
 void PaneCompositor::presentShot(const char *path) {
-  if (!gpu_vk_enabled() || !m_image || !m_imageRb) {
+  if (!m_device.enabled() || !m_image || !m_imageRb) {
     lucent::warn("pane", "no composited frame yet — NOTHING captured");
     return;
   }
@@ -494,7 +477,7 @@ void PaneCompositor::presentShot(const char *path) {
     }
   }
   SDL_UnmapGPUTransferBuffer(m_device.s_dev, m_imageRb);
-  const bool wrote = image_write_rgb24(path, rgb.data(), w, h);
+  const bool wrote = psx::debug::writeImageRgb24(path, rgb.data(), w, h);
   lucent::info("pane",
                "{} {} ({}x{}) non-black {}/{} ({:.2f}%)",
                wrote ? "wrote" : "NOTHING captured for",

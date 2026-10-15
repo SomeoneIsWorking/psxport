@@ -8,9 +8,8 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 void test_field_advances_spu_without_a_consumer() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->spu_audio.init();
   game->spu_audio.frame();
@@ -23,5 +22,5 @@ void test_field_advances_spu_without_a_consumer() {
 
 int main() {
   RUN(field_advances_spu_without_a_consumer);
-  return pt_summary();
+  return psx::test::summary();
 }

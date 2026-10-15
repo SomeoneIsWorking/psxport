@@ -1,7 +1,7 @@
 #include "product_host.h"
 
 #include "c_subsys.h"
-#include "cfg.h"
+#include "config.h"
 #include "config_vars.h"
 #include "core.h"
 #include "dbg_server.h"
@@ -29,13 +29,10 @@
 namespace psx::host {
 namespace {
 // Split comma/space-separated slug list. Empty string means "every title".
-std::vector<std::string> splitSlugs(const char *text) {
-  if (text == nullptr) {
-    return {};
-  }
+std::vector<std::string> splitSlugs(const std::string &text) {
   std::vector<std::string> slugs;
   std::string current;
-  for (const char *p = text; *p != '\0'; ++p) {
+  for (const char *p = text.c_str(); *p != '\0'; ++p) {
     if (*p == ',') {
       if (!current.empty()) {
         slugs.push_back(current);
@@ -60,15 +57,9 @@ ProductHost::Process::Process(const TitleCatalog &catalog, const psx::config::Co
       services{config, presentation.device(), quit, budget} {
   // The window belongs to the product, not to whichever Game brought the device up first.
   presentation.setWindowTitle(windowTitle.c_str());
-  // The watchdog is process-wide signal state: armed once here, never by a session.
-  watchdog_init();
-  memcensus_init();
-  cfg_dump();
+  psx::debug::armMemoryCensus();
+  psx::config::report_once();
   lucent::info("cfg", "launch config: {}", config.describe());
-}
-
-ProductHost::Process::~Process() {
-  watchdog_disable();
 }
 
 ProductHost::ProductHost(const TitleCatalog &catalog)
@@ -136,7 +127,7 @@ int ProductHost::runSelector() {
     // Re-probed on every return: a title provisioned while another ran becomes available.
     const std::vector<TitleAvailability> titles = probe.probe();
     // Empty (the default) is every provisioned title.
-    const std::vector<std::string> panelSlugs = splitSlugs(cfg_str("PSXPORT_PICKER_TITLES"));
+    const std::vector<std::string> panelSlugs = splitSlugs(psx::config::picker_titles());
     const PickerContent content(catalog_.productName(), titles, panelSlugs);
     PickerSession picker(pickerRuntime, catalog_, content, state.services);
     const PickerSession::Result choice = picker.run();
@@ -162,7 +153,7 @@ int ProductHost::runSelector() {
 
 int ProductHost::runOnlyTitle() {
   const TitleIdentity &only = catalog_.titles().front();
-  if (config_.packageRoot && !enterUserData(only)) {
+  if (config_.packageRoot.has_value() && !enterUserData(only, *config_.packageRoot)) {
     return 2;
   }
   const std::filesystem::path executable = only.defaultExecutable(catalog_.provisioningRoot());
@@ -180,7 +171,7 @@ int ProductHost::runOnlyTitle() {
   return runExecutable(executable);
 }
 
-bool ProductHost::enterUserData(const TitleIdentity &title) const {
+bool ProductHost::enterUserData(const TitleIdentity &title, const std::filesystem::path &packageRoot) const {
   const std::optional<std::filesystem::path> directory = lucent::platform::user_data_directory(title.slug);
   std::string error = "no user-data directory";
   if (!directory || !lucent::platform::ensure_user_data_directory(*directory, error)) {
@@ -193,7 +184,7 @@ bool ProductHost::enterUserData(const TitleIdentity &title) const {
     lucent::error("host", "cannot enter {}: {}", directory->string(), entered.message());
     return false;
   }
-  lucent::info("host", "packaged run from {}; data in {}", config_.packageRoot->string(), directory->string());
+  lucent::info("host", "packaged run from {}; data in {}", packageRoot.string(), directory->string());
   return true;
 }
 

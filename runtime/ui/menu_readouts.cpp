@@ -1,7 +1,7 @@
 #include "menu_readouts.h"
 
 #include "game.h"
-#include "gpu_vk.h"   // gpu_vk_video_status
+#include "gpu_vk.h"   // psx::gpu::videoStatus
 #include "rml_text.h" // RML_TEXT_SEP — a real U+00B7 in the DATA, never an entity
 
 #include <lucent/log.h>
@@ -37,12 +37,17 @@ MenuReadouts::MenuReadouts(Rml::Element *root, Game *game) : Component(root), mG
 void MenuReadouts::update() {
   char buf[192];
 
-  int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 4;
-  gpu_vk_video_status(mGame ? &mGame->core : nullptr, &nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
+  const psx::gpu::VideoStatus video = mGame != nullptr ? psx::gpu::videoStatus(mGame->core) : psx::gpu::VideoStatus{};
   // RML_TEXT_SEP is a real U+00B7 character in the TEXT, not an entity: these strings are data,
   // and `set_text` encodes them so nothing in them is ever parsed as markup (see rml_text.h).
-  snprintf(
-      buf, sizeof buf, "render %dx%d" RML_TEXT_SEP "window %dx%d" RML_TEXT_SEP "internal %dx", fbw, fbh, ww, wh, ir);
+  snprintf(buf,
+           sizeof buf,
+           "render %dx%d" RML_TEXT_SEP "window %dx%d" RML_TEXT_SEP "internal %dx",
+           video.framebufferWidth,
+           video.framebufferHeight,
+           video.sinkWidth,
+           video.sinkHeight,
+           video.ires);
   set_text(mVideo, buf);
 
   std::string music = "stopped";

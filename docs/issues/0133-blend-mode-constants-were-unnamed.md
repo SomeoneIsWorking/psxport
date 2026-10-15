@@ -1,7 +1,7 @@
 # 0133 — the rasterizer's blending constants were unnamed, and two of them were load-bearing
 
-**State:** recorded as a finding, and the NAMING half is already done. The behavioural question below
-is not.
+**State:** resolved 2026-10-15: the native rasterizer that held these constants is deleted; the record
+rasteriser sets semi-transparency per primitive in `gpu/record_raster_setup.cpp`.
 
 Found 2026-09-28 while splitting the software rasterizer out of `gpu_native.cpp` into
 `runtime/psx/gpu/gpu_native_raster.cpp`.

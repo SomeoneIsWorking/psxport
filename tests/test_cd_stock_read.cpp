@@ -5,6 +5,7 @@
 #include "guest_call.h"
 #include "invalidation.h"
 #include "lightrec_executor.h"
+#include "r3000.h"
 #include "stock_libcd.h"
 #include "testutil.h"
 
@@ -13,26 +14,24 @@
 #include <memory>
 
 namespace {
-psx::test::StubGameRuntime stubRuntime;
-const psx::cd::StockLibcd kLibcd({}, {}, 0);
 
-enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
+const psx::cd::StockLibcd kLibcd({}, {}, 0);
 
 constexpr uint32_t kBuffer = 0x80110000u;
 constexpr uint32_t kResult = 0x80111000u;
 
 // A sector source that fills every byte of the sector with its LBA, so a copied sector is identifiable.
-int fakeSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+bool fakeSector(psx::cd::Disc *, uint32_t lba, uint8_t *out, uint32_t count) {
   for (uint32_t i = 0; i < count; ++i) {
     out[i] = static_cast<uint8_t>(lba);
   }
-  return 1;
+  return true;
 }
 
 // Sector 2 of the read carries a different program from the one already translated there.
 constexpr uint32_t kSecondSectorLba = 8;
 constexpr uint32_t kPayloadOffset = 24; // user data starts after the 24-byte sync, header and subheader
-int codeInSecondSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+bool codeInSecondSector(psx::cd::Disc *, uint32_t lba, uint8_t *out, uint32_t count) {
   for (uint32_t i = 0; i < count; ++i) {
     out[i] = 0;
   }
@@ -44,40 +43,40 @@ int codeInSecondSector(DiscState *, uint32_t lba, uint8_t *out, uint32_t count) 
       }
     }
   }
-  return 1;
+  return true;
 }
 
-} // namespace
-
-static void test_stock_read_refuses_without_a_position() {
+void test_stock_read_refuses_without_a_position() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
-  game->core.r[A0] = 1;
-  game->core.r[A1] = kBuffer;
-  game->core.r[A2] = 0;
-  game->core.r[V0] = 0xDEADBEEFu;
+  game->core.r[psx::cpu::kA0] = 1;
+  game->core.r[psx::cpu::kA1] = kBuffer;
+  game->core.r[psx::cpu::kA2] = 0;
+  game->core.r[psx::cpu::kV0] = 0xDEADBEEFu;
   game->core.mem_w8(kBuffer, 0xA5u);
 
   kLibcd.read(game->core);
 
-  CHECK_EQ(game->core.r[V0], 0u);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 0u);
   CHECK_EQ(game->core.mem_r8(kBuffer), 0xA5u);
   CHECK_EQ(game->cd.setloc_lba, -1);
 }
 
-static void test_zero_sector_stock_read_completes_without_inventing_drive_work() {
+void test_zero_sector_stock_read_completes_without_inventing_drive_work() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->cd.setloc_lba = 321;
   game->cd.sec_pos = 40;
   game->cd.sec_len = 2352;
   game->cd.sec_lba = 320;
   game->cd.stock_reading = 1;
-  game->core.r[A0] = 0;
-  game->core.r[A1] = kBuffer;
-  game->core.r[A2] = 0;
+  game->core.r[psx::cpu::kA0] = 0;
+  game->core.r[psx::cpu::kA1] = kBuffer;
+  game->core.r[psx::cpu::kA2] = 0;
 
   kLibcd.read(game->core);
 
-  CHECK_EQ(game->core.r[V0], 1u);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 1u);
   CHECK_EQ(game->cd.setloc_lba, 321);
   CHECK_EQ(game->cd.sec_pos, 0);
   CHECK_EQ(game->cd.sec_len, 0);
@@ -85,41 +84,44 @@ static void test_zero_sector_stock_read_completes_without_inventing_drive_work()
   CHECK_EQ(game->cd.stock_reading, 0);
 }
 
-static void test_stock_readsync_reports_completed_and_zeros_result() {
+void test_stock_readsync_reports_completed_and_zeros_result() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   for (uint32_t i = 0; i < 8; i++) {
     game->core.mem_w8(kResult + i, static_cast<uint8_t>(0x80u + i));
   }
-  game->core.r[A0] = 0;
-  game->core.r[A1] = kResult;
-  game->core.r[V0] = 0xDEADBEEFu;
+  game->core.r[psx::cpu::kA0] = 0;
+  game->core.r[psx::cpu::kA1] = kResult;
+  game->core.r[psx::cpu::kV0] = 0xDEADBEEFu;
 
   kLibcd.readSync(game->core);
 
-  CHECK_EQ(game->core.r[V0], 0u);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 0u);
   for (uint32_t i = 0; i < 8; i++) {
     CHECK_EQ(game->core.mem_r8(kResult + i), 0u);
   }
 }
 
-static void test_stock_cdsync_reports_ready_and_zeros_result() {
+void test_stock_cdsync_reports_ready_and_zeros_result() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   for (uint32_t i = 0; i < 8; i++) {
     game->core.mem_w8(kResult + i, static_cast<uint8_t>(0x90u + i));
   }
-  game->core.r[A0] = 0;
-  game->core.r[A1] = kResult;
-  game->core.r[V0] = 0xDEADBEEFu;
+  game->core.r[psx::cpu::kA0] = 0;
+  game->core.r[psx::cpu::kA1] = kResult;
+  game->core.r[psx::cpu::kV0] = 0xDEADBEEFu;
 
   kLibcd.sync(game->core);
 
-  CHECK_EQ(game->core.r[V0], 2u);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 2u);
   for (uint32_t i = 0; i < 8; i++) {
     CHECK_EQ(game->core.mem_r8(kResult + i), 0u);
   }
 }
 
-static void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
+void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   auto &core = game->core;
   core.mem_w8(kBuffer, 0x00u);
@@ -132,14 +134,14 @@ static void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
   game->cd.sec_pos = 40;
   game->cd.sec_len = 2352;
   game->cd.sec_lba = 320;
-  core.r[A0] = 0x02u; // Setloc 00:03:20 => LBA 95.
-  core.r[A1] = kBuffer;
-  core.r[A2] = kResult;
-  core.r[V0] = 0xDEADBEEFu;
+  core.r[psx::cpu::kA0] = 0x02u; // Setloc 00:03:20 => LBA 95.
+  core.r[psx::cpu::kA1] = kBuffer;
+  core.r[psx::cpu::kA2] = kResult;
+  core.r[psx::cpu::kV0] = 0xDEADBEEFu;
 
   kLibcd.command(core);
 
-  CHECK_EQ(core.r[V0], 0u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 0u);
   CHECK_EQ(game->cd.setloc_lba, 95);
   CHECK_EQ(game->cd.sec_pos, 0);
   CHECK_EQ(game->cd.sec_len, 0);
@@ -149,24 +151,25 @@ static void test_stock_command_uses_low_level_success_abi_and_applies_setloc() {
   }
 
   // CdControl is a distinct public ABI over the same command effects: its success result is 1.
-  core.r[V0] = 0xDEADBEEFu;
+  core.r[psx::cpu::kV0] = 0xDEADBEEFu;
   kLibcd.control(core);
-  CHECK_EQ(core.r[V0], 1u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 1u);
   CHECK_EQ(game->cd.setloc_lba, 95);
 }
 
-static void test_stock_pause_stops_stream_and_accepts_null_output() {
+void test_stock_pause_stops_stream_and_accepts_null_output() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->cd.stock_reading = 1;
   game->cd.stream_active = 1;
-  game->core.r[A0] = 0x09u;
-  game->core.r[A1] = 0;
-  game->core.r[A2] = 0;
-  game->core.r[V0] = 0xDEADBEEFu;
+  game->core.r[psx::cpu::kA0] = 0x09u;
+  game->core.r[psx::cpu::kA1] = 0;
+  game->core.r[psx::cpu::kA2] = 0;
+  game->core.r[psx::cpu::kV0] = 0xDEADBEEFu;
 
   kLibcd.command(game->core);
 
-  CHECK_EQ(game->core.r[V0], 0u);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 0u);
   CHECK_EQ(game->cd.stock_reading, 0);
   CHECK_EQ(game->cd.stream_active, 0);
 }
@@ -185,7 +188,8 @@ static void test_stock_pause_stops_stream_and_accepts_null_output() {
 // fed it and a counter that reads 0 because the route correctly reported nothing are the same number
 // unless the feeder is shown running first. That is the whole lesson of the nine dead taps in this
 // workspace, so it is asserted rather than assumed.
-static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_not_move_it() {
+void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_not_move_it() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   const uint64_t atRest = game->core.lightrecExecutor().counters().invalidations;
 
@@ -198,29 +202,30 @@ static void test_the_invalidation_counter_is_live_and_a_zero_sector_read_does_no
   // NEGATIVE: a positioned read of ZERO sectors transfers nothing, so it must report nothing. A route
   // that reported an empty range unconditionally would invalidate on every poll.
   game->cd.setloc_lba = 321;
-  game->core.r[A0] = 0;
-  game->core.r[A1] = kBuffer;
-  game->core.r[A2] = 0;
+  game->core.r[psx::cpu::kA0] = 0;
+  game->core.r[psx::cpu::kA1] = kBuffer;
+  game->core.r[psx::cpu::kA2] = 0;
   kLibcd.read(game->core);
-  CHECK_EQ(game->core.r[V0], 1u);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 1u);
   CHECK_EQ(game->core.lightrecExecutor().counters().invalidations, afterDeliberate);
 }
 
 // The positive feeder, through the controller's sector-source binding: each sector costs ONE
 // invalidation (its range, reported once), not one per byte copied.
-static void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte() {
+void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   game->cdc.disc_read_raw_fn = fakeSector;
   game->cd.setloc_lba = 7;
-  game->core.r[A0] = 3; // sectors
-  game->core.r[A1] = kBuffer;
-  game->core.r[A2] = 0; // 2048-byte payloads
+  game->core.r[psx::cpu::kA0] = 3; // sectors
+  game->core.r[psx::cpu::kA1] = kBuffer;
+  game->core.r[psx::cpu::kA2] = 0; // 2048-byte payloads
   const auto before = game->core.lightrecExecutor().counters();
 
   kLibcd.read(game->core);
 
   const auto after = game->core.lightrecExecutor().counters();
-  CHECK_EQ(game->core.r[V0], 1u);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 1u);
   CHECK_EQ(game->core.mem_r8(kBuffer), 7u);
   CHECK_EQ(game->core.mem_r8(kBuffer + 3u * 2048u - 1u), 9u);
   CHECK_EQ(after.invalidations - before.invalidations, 3u);
@@ -232,7 +237,7 @@ static void test_a_stock_read_reports_one_invalidation_per_sector_not_per_byte()
 // every sector at the read's FIRST address left translated code in sectors 2..n stale (Spyro 2 and 3
 // executed it after a module load and faulted at PC 0x10000000). The guest code below is translated
 // in the second sector, then the read replaces it: the next call must run the new program.
-static void test_a_multi_sector_read_invalidates_translated_code_in_a_later_sector() {
+void test_a_multi_sector_read_invalidates_translated_code_in_a_later_sector() {
   psx::test::StubGameRuntime runtime;
   auto game = dynarec_test::makeGame(runtime);
   Core &core = game->core;
@@ -243,37 +248,40 @@ static void test_a_multi_sector_read_invalidates_translated_code_in_a_later_sect
   core.mem_w32(second + 8u, 0u);
   core.r[31] = dynarec_test::kOuterReturn;
   CHECK(psx::cpu::dispatchGuest(core, second, psx::cpu::ExecutionBudget::fromCycles(100)).returned());
-  CHECK_EQ(core.r[V0], 1u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 1u);
   const auto translated = core.lightrecExecutor().counters().translatedBlocks;
 
   game->cdc.disc_read_raw_fn = codeInSecondSector;
   game->cd.setloc_lba = static_cast<int32_t>(kSecondSectorLba - 1u);
-  core.r[A0] = 2;                                   // sectors: LBA 7 then LBA 8
-  core.r[A1] = 0x80000000u | dynarec_test::kCaller; // buffer
-  core.r[A2] = 0;                                   // 2048-byte payloads
+  core.r[psx::cpu::kA0] = 2;                                   // sectors: LBA 7 then LBA 8
+  core.r[psx::cpu::kA1] = 0x80000000u | dynarec_test::kCaller; // buffer
+  core.r[psx::cpu::kA2] = 0;                                   // 2048-byte payloads
   kLibcd.read(core);
-  CHECK_EQ(core.r[V0], 1u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 1u);
   CHECK_EQ(core.mem_r32(second), 0x24020002u);
 
   core.r[31] = dynarec_test::kOuterReturn;
   CHECK(psx::cpu::dispatchGuest(core, second, psx::cpu::ExecutionBudget::fromCycles(100)).returned());
-  CHECK_EQ(core.r[V0], 2u);
+  CHECK_EQ(core.r[psx::cpu::kV0], 2u);
   CHECK(core.lightrecExecutor().counters().translatedBlocks > translated);
 }
 
 // The refusal path must be just as quiet: with no Setloc the read never starts, so there is no write and
 // nothing to report. A refusal that still reported a range would invalidate on every unpositioned poll.
-static void test_a_refused_read_reports_no_executable_write() {
+void test_a_refused_read_reports_no_executable_write() {
+  psx::test::StubGameRuntime stubRuntime;
   auto game = std::make_unique<Game>(stubRuntime, psx::config::Config{});
   psx::cpu::notifyExecutableWrite(game->core, {0x00100000u, 0x00100040u}, psx::cpu::ExecutableWriteSource::ModuleLoad);
   const uint64_t before = game->core.lightrecExecutor().counters().invalidations;
-  game->core.r[A0] = 4;
-  game->core.r[A1] = kBuffer;
-  game->core.r[A2] = 0;
+  game->core.r[psx::cpu::kA0] = 4;
+  game->core.r[psx::cpu::kA1] = kBuffer;
+  game->core.r[psx::cpu::kA2] = 0;
   kLibcd.read(game->core);
-  CHECK_EQ(game->core.r[V0], 0u);
+  CHECK_EQ(game->core.r[psx::cpu::kV0], 0u);
   CHECK_EQ(game->core.lightrecExecutor().counters().invalidations, before);
 }
+
+} // namespace
 
 int main() {
   RUN(stock_command_uses_low_level_success_abi_and_applies_setloc);
@@ -286,5 +294,5 @@ int main() {
   RUN(a_stock_read_reports_one_invalidation_per_sector_not_per_byte);
   RUN(a_multi_sector_read_invalidates_translated_code_in_a_later_sector);
   RUN(a_refused_read_reports_no_executable_write);
-  return pt_summary();
+  return psx::test::summary();
 }

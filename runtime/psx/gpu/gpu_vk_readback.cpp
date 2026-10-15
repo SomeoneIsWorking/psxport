@@ -1,91 +1,72 @@
-// gpu_vk_readback.cpp — the readback owner: GPU → host capture of what this Game's VRAM image and
-// presented picture actually hold.
+// gpu_vk_readback.cpp — what this Game presented, read back: the present image (present shot, the
+// pane hold and its content measure), and the device's VRAM written out as images or raw words.
 //
-// MOVED out of gpu_vk.cpp along its existing seam (the `readback (shot / vram dump)` banner and the
-// `present_shot` banner it belongs with): every instrument that asks the GPU for BYTES rather than
-// asking it to draw. They are one owner because they share one hazard — a download that did not
-// happen, or did not happen this frame — and one answer to it: a bounded submit-and-wait that
-// refuses rather than handing back a stale transfer buffer. Splitting them from the present/raster
-// halves of gpu_vk.cpp is what let a capture instrument sit in its own file instead of inside the
-// per-frame render path.
-//
-// The bodies are unchanged: they reached the device through the same handle macros (now declared
-// once in gpu_vk_device_handles.h) and reached each other through gpu_vk_internal.h.
-#include "cfg.h" // cfg_on — the opt-in GPU trace counters around a download
+// A GPU download goes through a bounded submit-and-wait and refuses rather than handing back a stale
+// transfer buffer. VRAM captures read the GPU device's VRAM on the CPU: it is the guest's VRAM.
 #include "core.h"
-#include "fs_util.h" // host diagnostic-output directory creation
 #include "game.h"
-#include "gpu_vk.h"                // gpu_vk_enabled, gpu_vk_present_sink_size
-#include "gpu_vk_check.h"          // GPUCHK — the one rule for a handle the run depends on
-#include "gpu_vk_device_handles.h" // s_dev / s_inited / s_headless, spelled once for every renderer TU
+#include "gpu_device.h"
+#include "gpu_vk.h"
+#include "gpu_vk_check.h"
+#include "gpu_vk_device.h"
 #include "gpu_vk_internal.h"
 #include "image_writer.h" // one checked RGB24 capture-file boundary
-#include "present_fade_state.h"
-#include "present_plan.h" // present_fade_rgb — the present shader's fade, on the CPU
 
 #include <lucent/log.h>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 
-// ---- readback (shot / vram dump): download THIS Game's VRAM image → host, decode 1555 → PPM ---------
-const uint16_t *readback_vram(GpuVkState &g) {
-  // STEP TRACE (PSXPORT_DEBUG=rbtrace). Kept, not temporary: this is what falsified issue 0018's
-  // recorded diagnosis. That issue said this function BLOCKED from three call sites; the trace shows
-  // enter -> targets ok -> cmd acquired -> submitted -> fence signalled every time, and the real fault
-  // was a null optional GameHooks call at the DUMP site. A claim that a specific call blocks should be
-  // cheap to check rather than re-argued.
-  lucent::debug("rbtrace", "enter");
-  g.ensure_targets();
-  lucent::debug("rbtrace", "targets ok");
-  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
-  GPUCHK(cmd, "AcquireGPUCommandBuffer");
-  lucent::debug("rbtrace", "cmd acquired");
-  SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
-  SDL_GPUTextureRegion srcr = {};
-  srcr.texture = g.s_vram_tex;
-  srcr.w = VRAM_W;
-  srcr.h = VRAM_H;
-  srcr.d = 1;
-  SDL_GPUTextureTransferInfo dsti = {};
-  dsti.transfer_buffer = g.s_rb_xfer;
-  dsti.pixels_per_row = VRAM_W;
-  dsti.rows_per_layer = VRAM_H;
-  SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
-  SDL_EndGPUCopyPass(cp);
-  lucent::debug("rbtrace", "copy pass ended, submitting");
-  // Bounded submit+wait. On a fault the transfer buffer holds whatever was last in it, so returning it
-  // would hand the caller a STALE VRAM image that looks like a real readback — refuse instead.
-  if (!gpu_submit_and_wait(cmd, "readback_vram")) {
-    lucent::error("gpu_vk",
-                  "readback_vram: no VRAM image this call — the GPU is latched off. Callers get "
-                  "nullptr rather than the previous frame's bytes.");
-    return nullptr;
-  }
-  lucent::debug("rbtrace", "fence signalled");
-  const uint16_t *p = (const uint16_t *)SDL_MapGPUTransferBuffer(s_dev, g.s_rb_xfer, false);
-  if (cfg_on("PSXPORT_GPU_TRACE")) {
-    long nz = 0;
-    for (long i = 0; i < (long)VRAM_W * VRAM_H; i++) {
-      if (p[i]) {
-        nz++;
+#include <cstdio>
+#include <span>
+#include <vector>
+
+namespace {
+
+constexpr int kVramW = psx::gpu::kRecordVramWidth;
+constexpr int kVramH = psx::gpu::kRecordVramHeight;
+
+// A VRAM rect as RGB24: 15-bit pixels, or a 24bpp display's packed RGB888 (1.5 halfwords a pixel).
+bool writeVramImage(std::span<const std::uint16_t> vram, const char *path, psx::gpu::VramRect rect, bool rgb24) {
+  const int sx = rect.x;
+  const int sy = rect.y;
+  const int w = rect.width;
+  const int h = rect.height;
+  std::vector<unsigned char> rgb(static_cast<std::size_t>(w) * h * 3);
+  const auto *bytes = reinterpret_cast<const std::uint8_t *>(vram.data());
+  for (int y = 0; y < h; y++) {
+    const int row = (sy + y) % kVramH;
+    for (int x = 0; x < w; x++) {
+      unsigned char *c = &rgb[(static_cast<std::size_t>(y) * w + x) * 3];
+      if (rgb24) {
+        const std::uint8_t *line = bytes + static_cast<std::size_t>(row) * kVramW * 2;
+        const int bx = sx * 2 + x * 3;
+        c[0] = line[bx % (kVramW * 2)];
+        c[1] = line[(bx + 1) % (kVramW * 2)];
+        c[2] = line[(bx + 2) % (kVramW * 2)];
+      } else {
+        const std::uint16_t p = vram[static_cast<std::size_t>(row) * kVramW + ((sx + x) & (kVramW - 1))];
+        c[0] = static_cast<unsigned char>((p & 31) << 3);
+        c[1] = static_cast<unsigned char>(((p >> 5) & 31) << 3);
+        c[2] = static_cast<unsigned char>(((p >> 10) & 31) << 3);
       }
     }
-    lucent::info("gpu_vk", "readback nonzero={}/{}", nz, VRAM_W * VRAM_H);
   }
-  return p;
+  return psx::debug::writeImageRgb24(path, rgb.data(), w, h);
 }
+
+} // namespace
+
 // The download half of present_shot, shared with the presented-image probe so "is there anything
 // on screen" and "what is on screen" cannot disagree about which image they read.
-static const uint8_t *download_present_image(GpuVkState &g, bool *ok) {
+namespace {
+
+const uint8_t *download_present_image(GpuVkState &g, bool *ok) {
   *ok = false;
-  if (!gpu_vk_enabled() || !s_inited || !g.s_present_img) {
+  if (!g.device->enabled() || g.device->s_inited == 0 || g.s_present_img == nullptr) {
     return nullptr;
   }
-  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(g.device->s_dev);
   GPUCHK(cmd, "present image download cmd");
   SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
   SDL_GPUTextureRegion srcr = {};
@@ -99,14 +80,14 @@ static const uint8_t *download_present_image(GpuVkState &g, bool *ok) {
   dsti.rows_per_layer = (Uint32)g.s_present_img_h;
   SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
   SDL_EndGPUCopyPass(cp);
-  if (!gpu_submit_and_wait(cmd, "present image download")) {
+  if (!g.device->submitAndWait(cmd, "present image download")) {
     lucent::error("gpu_vk",
                   "present image download failed; the GPU is latched off and the transfer buffer "
                   "still holds an OLDER frame, so it must not be read as this one");
     return nullptr;
   }
   *ok = true;
-  return static_cast<const uint8_t *>(SDL_MapGPUTransferBuffer(s_dev, g.s_present_rb, false));
+  return static_cast<const uint8_t *>(SDL_MapGPUTransferBuffer(g.device->s_dev, g.s_present_rb, false));
 }
 
 // presentProbeResult — what one readback of the presented image says.
@@ -119,7 +100,7 @@ struct PresentProbe {
 // probePresentImage() — ONE readback that answers both questions the picker asks of a panel: is this
 // frame a picture, and where is the picture inside it. They were two downloads before, which doubled
 // the stall for one answer.
-static PresentProbe probePresentImage(GpuVkState &g) {
+PresentProbe probePresentImage(GpuVkState &g) {
   PresentProbe probe;
   bool ok = false;
   const uint8_t *rgba = download_present_image(g, &ok);
@@ -178,10 +159,12 @@ static PresentProbe probePresentImage(GpuVkState &g) {
   if (probe.filled) {
     // Only a frame that HAS a picture says anything about where the picture is: measuring a fade would
     // measure the fade.
-    g.measurePresentedContent(rgba, w, h);
+    g.measurePresentedContent(rgba, {w, h});
   }
   return probe;
 }
+
+} // namespace
 
 // retainFilledPresentImage() — hold the newest presented frame that HAS a picture, and report whether
 // this session has one to show.
@@ -209,19 +192,20 @@ bool GpuVkState::retainFilledPresentImage() {
     return true;
   }
   s_present_probed_serial = s_present_serial;
-  if (!gpu_vk_enabled() || !s_inited || !s_present_img || !s_present_viewport.w || !s_present_viewport.h) {
+  if (!device->enabled() || device->s_inited == 0 || s_present_img == nullptr || !s_present_viewport.w ||
+      !s_present_viewport.h) {
     return false;
   }
   const PresentProbe probe = probePresentImage(*this);
   if (!probe.filled) {
     if (probe.pixels != nullptr) {
-      SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
+      SDL_UnmapGPUTransferBuffer(device->s_dev, s_present_rb);
     }
     return s_present_filled != nullptr; // keep what is held: a fade or a load screen is not a reason to show nothing
   }
   if (s_present_filled == nullptr || s_present_filled_w != s_present_img_w || s_present_filled_h != s_present_img_h) {
     if (s_present_filled != nullptr) {
-      SDL_ReleaseGPUTexture(s_dev, s_present_filled);
+      SDL_ReleaseGPUTexture(device->s_dev, s_present_filled);
     }
     SDL_GPUTextureCreateInfo info = {};
     info.type = SDL_GPU_TEXTURETYPE_2D;
@@ -233,17 +217,17 @@ bool GpuVkState::retainFilledPresentImage() {
     info.height = (Uint32)s_present_img_h;
     info.layer_count_or_depth = 1;
     info.num_levels = 1;
-    s_present_filled = SDL_CreateGPUTexture(s_dev, &info);
+    s_present_filled = SDL_CreateGPUTexture(device->s_dev, &info);
     GPUCHK(s_present_filled, "CreateGPUTexture(present filled)");
     s_present_filled_w = s_present_filled ? s_present_img_w : 0;
     s_present_filled_h = s_present_filled ? s_present_img_h : 0;
   }
   if (s_present_filled == nullptr) {
-    SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
+    SDL_UnmapGPUTransferBuffer(device->s_dev, s_present_rb);
     return false;
   }
   // The mapped readback is still the source: uploading it back is a copy the SDL actually performs.
-  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device->s_dev);
   GPUCHK(cmd, "present filled upload cmd");
   SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
   SDL_GPUTextureRegion dst = {};
@@ -257,8 +241,8 @@ bool GpuVkState::retainFilledPresentImage() {
   src.rows_per_layer = (Uint32)s_present_img_h;
   SDL_UploadToGPUTexture(cp, &src, &dst, /*cycle=*/true);
   SDL_EndGPUCopyPass(cp);
-  const bool submitted = gpu_submit_and_wait(cmd, "present filled upload");
-  SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
+  const bool submitted = device->submitAndWait(cmd, "present filled upload");
+  SDL_UnmapGPUTransferBuffer(device->s_dev, s_present_rb);
   if (!submitted) {
     return s_present_filled != nullptr; // the held frame stays as it was
   }
@@ -267,8 +251,8 @@ bool GpuVkState::retainFilledPresentImage() {
 }
 
 void GpuVkState::releaseFilledPresentImage() {
-  if (s_present_filled != nullptr && s_dev != nullptr) {
-    SDL_ReleaseGPUTexture(s_dev, s_present_filled);
+  if (s_present_filled != nullptr && device != nullptr && device->s_dev != nullptr) {
+    SDL_ReleaseGPUTexture(device->s_dev, s_present_filled);
   }
   s_present_filled = nullptr;
   s_present_filled_w = 0;
@@ -284,7 +268,9 @@ void GpuVkState::releaseFilledPresentImage() {
 // It only ever WIDENS what is known. A dark scene (a fade, a night interior) must not be able to
 // shrink the crop and zoom into the middle of the picture, so each measurement is a union with the
 // last: the rect converges on the picture's true extent and stays there.
-void GpuVkState::measurePresentedContent(const uint8_t *rgba, int w, int h) {
+void GpuVkState::measurePresentedContent(const uint8_t *rgba, psx::present::PixelSize size) {
+  const int w = size.width;
+  const int h = size.height;
   // The region of interest: the viewport (the picture inside the letterbox), not the whole image.
   const PaneRect area = s_present_viewport;
   if (area.w <= 0 || area.h <= 0) {
@@ -345,7 +331,7 @@ void GpuVkState::measurePresentedContent(const uint8_t *rgba, int w, int h) {
 // It cannot silently return an empty file: with no image it says so and writes nothing, because a
 // plausible black PPM is exactly how the earlier instruments lied.
 void GpuVkState::present_shot(const char *path) {
-  if (!gpu_vk_enabled() || !s_inited) {
+  if (!device->enabled() || device->s_inited == 0) {
     lucent::warn("present_shot", "GPU not active — NOTHING captured");
     return;
   }
@@ -354,7 +340,7 @@ void GpuVkState::present_shot(const char *path) {
     return;
   }
   const int w = s_present_img_w, h = s_present_img_h;
-  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device->s_dev);
   GPUCHK(cmd, "present_shot cmd");
   SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
   SDL_GPUTextureRegion srcr = {};
@@ -368,7 +354,7 @@ void GpuVkState::present_shot(const char *path) {
   dsti.rows_per_layer = (Uint32)h;
   SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
   SDL_EndGPUCopyPass(cp);
-  if (!gpu_submit_and_wait(cmd, "present_shot")) {
+  if (!device->submitAndWait(cmd, "present_shot")) {
     lucent::error("present_shot",
                   "NOTHING captured for {} — the GPU faulted and is latched off. The "
                   "transfer buffer still holds an older frame; writing it would be a "
@@ -376,10 +362,10 @@ void GpuVkState::present_shot(const char *path) {
                   path ? path : "(null)");
     return;
   }
-  const uint8_t *rgba = (const uint8_t *)SDL_MapGPUTransferBuffer(s_dev, s_present_rb, false);
+  const uint8_t *rgba = (const uint8_t *)SDL_MapGPUTransferBuffer(device->s_dev, s_present_rb, false);
   unsigned char *rgb = (unsigned char *)malloc((size_t)w * h * 3);
   if (!rgb) {
-    SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
+    SDL_UnmapGPUTransferBuffer(device->s_dev, s_present_rb);
     lucent::error("present_shot", "out of memory — NOTHING captured");
     return;
   }
@@ -394,8 +380,8 @@ void GpuVkState::present_shot(const char *path) {
       nonblack++;
     }
   }
-  SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
-  const bool wrote = image_write_rgb24(path, rgb, w, h);
+  SDL_UnmapGPUTransferBuffer(device->s_dev, s_present_rb);
+  const bool wrote = psx::debug::writeImageRgb24(path, rgb, w, h);
   free(rgb);
   if (!wrote) {
     // The measurement is real but the FILE is not, and saying "wrote" here is how this instrument
@@ -413,171 +399,53 @@ void GpuVkState::present_shot(const char *path) {
                path ? path : "(null)",
                w,
                h,
-               s_headless ? "headless" : "windowed",
+               device->s_headless != 0 ? "headless" : "windowed",
                nonblack,
                (long)w * h,
                100.0 * (double)nonblack / ((double)w * h));
 }
 
-bool dump_to(GpuVkState &g,
-             const char *path,
-             int sx,
-             int sy,
-             int w,
-             int h,
-             int fade_mode,
-             uint8_t fade_r,
-             uint8_t fade_g,
-             uint8_t fade_b) {
-  // readback_vram returns nullptr when the GPU is latched off. Refuse by NAME here: dereferencing it
-  // would segfault, and pretending success would emit garbage as a measurement.
-  const uint16_t *vram = readback_vram(g);
-  if (!vram) {
-    lucent::error("gpu_vk", "shot24: NOTHING captured — GPU latched off");
-    return false;
-  }
-  unsigned char *rgb = (unsigned char *)malloc((size_t)w * h * 3);
-  if (!rgb) {
-    SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
-    return false;
-  }
-  const int fade[4] = {fade_mode, fade_r, fade_g, fade_b};
-  // 24bpp packs RGB888 across 1.5 VRAM halfwords per pixel, so column x of the display sits at BYTE
-  // offset sx*2 + x*3 in the row — not at halfword sx+x. Decoding it as 1555 is what scrambled the
-  // colours and showed two thirds of the width.
-  const int rgb24 = g.s_disp_rgb24;
-  for (int y = 0; y < h; y++) {
-    for (int x = 0; x < w; x++) {
-      int r, g_, b;
-      if (rgb24) {
-        const uint8_t *row = (const uint8_t *)&vram[((sy + y) % VRAM_H) * VRAM_W];
-        int bx = sx * 2 + x * 3; // VRAM rows are VRAM_W halfwords = VRAM_W*2 bytes
-        r = row[bx % (VRAM_W * 2)];
-        g_ = row[(bx + 1) % (VRAM_W * 2)];
-        b = row[(bx + 2) % (VRAM_W * 2)];
-      } else {
-        uint16_t p = vram[((sy + y) % VRAM_H) * VRAM_W + ((sx + x) & 1023)];
-        r = (p & 31) << 3;
-        g_ = ((p >> 5) & 31) << 3;
-        b = ((p >> 10) & 31) << 3;
-      }
-      int g = g_;
-      present_fade_rgb(fade, r, g, b);
-      unsigned char *c = &rgb[((size_t)y * w + x) * 3];
-      c[0] = (unsigned char)r;
-      c[1] = (unsigned char)g;
-      c[2] = (unsigned char)b;
-    }
-  }
-  // Propagated, not swallowed: every VRAM shot below reports the file it ACTUALLY wrote. These
-  // callers logged "wrote <path>" unconditionally too — the same lie as present_shot's, and measured
-  // in the same run — so they are fixed in the same pass rather than left as the older half of a
-  // rule that now only holds in one place.
-  const bool wrote = image_write_rgb24(path, rgb, w, h);
-  free(rgb);
-  SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
-  return wrote;
-}
 void GpuVkState::shot(const char *path) {
-  if (!gpu_vk_enabled() || !s_inited) {
-    lucent::warn("gpu_shot", "GPU not active — NOTHING captured");
-    return;
-  }
   if (s_present_record) {
     record_shot(path);
     return;
   }
-  FadeState f = present_fade_state(&game->core);
-  const bool wrote = dump_to(*this, path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
-  if (!wrote) {
+  const bool rgb24 = game->core.gpuDevice().displayArea().depth24;
+  if (!writeVramImage(game->core.gpuDevice().vram(), path, {s_last_sx, s_last_sy, s_last_w, s_last_h}, rgb24)) {
     lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)");
     return;
   }
   lucent::info(
       "gpu_shot", "wrote {} ({}x{} @ {},{})", path ? path : "(null)", s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
-void GpuVkState::shot_b(const char *path) {
-  shot(path);
-} // Pass 1: single target
-// GP1(0x08) bit 4 changed. The decode lives in gpu_native; the two things that DECODE the display region
-// live here, so the bit has to cross over. Silently ignoring it is what made a 24bpp still render with
-// every colour scrambled and only two thirds of the width shown.
-void gpu_vk_set_display_depth(Core *core, int rgb24) {
-  if (!core || !core->game) {
+
+namespace psx::gpu {
+
+void vramRegion(Core &core, const char *path, VramRect rect) {
+  if (!writeVramImage(core.gpuDevice().vram(), path, rect, false)) {
+    lucent::error("gpu_vram", "NOTHING captured for {} (image_write said why)", path ? path : "(null)");
     return;
   }
-  core->game->gpu_vk.s_disp_rgb24 = rgb24 ? 1 : 0;
+  lucent::info("gpu_vram", "wrote {} ({}x{} @ {},{})", path ? path : "(null)", rect.width, rect.height, rect.x, rect.y);
 }
-void gpu_vk_shot_region(Core *core, const char *path, int sx, int sy, int w, int h) {
-  if (!gpu_vk_enabled() || !s_inited) {
-    return;
+
+void vramWords(Core &core, VramPoint at, std::span<std::uint16_t> out) {
+  const std::span<const std::uint16_t> vram = core.gpuDevice().vram();
+  for (std::size_t i = 0; i < out.size(); i++) {
+    out[i] = vram[static_cast<std::size_t>(at.y % kVramH) * kVramW + ((at.x + static_cast<int>(i)) & (kVramW - 1))];
   }
-  FadeState f = present_fade_state(core);
-  if (!dump_to(core->game->gpu_vk, path, sx, sy, w, h, f.mode, f.r, f.g, f.b)) {
-    lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)");
-    return;
-  }
-  lucent::info("gpu_shot", "wrote {} ({}x{} @ {},{})", path ? path : "(null)", w, h, sx, sy);
 }
-void gpu_vk_vram_region(Core *core, const char *path, int x, int y, int w, int h) {
-  if (!gpu_vk_enabled() || !s_inited) {
+
+void vramRaw(Core &core, const char *path) {
+  FILE *file = std::fopen(path, "wb");
+  if (file == nullptr) {
+    lucent::error("gpu_vram", "could not open {}, nothing written", path ? path : "(null)");
     return;
   }
-  if (!dump_to(core->game->gpu_vk, path, x, y, w, h, 0, 0, 0, 0)) { // raw VRAM region dump — no engine fade applied
-    lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)");
-  }
-  lucent::info("gpu_vram", "wrote {} ({}x{} @ {},{})", path ? path : "(null)", w, h, x, y);
+  const std::span<const std::uint16_t> vram = core.gpuDevice().vram();
+  std::fwrite(vram.data(), 2, vram.size(), file);
+  std::fclose(file);
+  lucent::info("gpu_vram", "wrote RAW {} ({}x{} u16)", path ? path : "(null)", kVramW, kVramH);
 }
-// Raw 16-bit VRAM words at (x,y..y+n-1 wrapped along X) — dark-outline STP-bit diag (2026-07-01,
-// scratch/handoff.md): tells apart a genuine opaque texel (STP=0, faithful) from a lost/miscomputed
-// STP bit (would-be-blended texel drawing solid instead of translucent).
-void gpu_vk_vram_words(Core *core, int x, int y, int n, uint16_t *out) {
-  if (!gpu_vk_enabled() || !s_inited) {
-    for (int i = 0; i < n; i++) {
-      out[i] = 0;
-    }
-    return;
-  }
-  GpuVkState &g = core->game->gpu_vk;
-  // readback_vram returns nullptr when the GPU is latched off. Refuse by NAME here: dereferencing it
-  // would segfault, and pretending success would emit garbage as a measurement.
-  const uint16_t *vram = readback_vram(g);
-  if (!vram) {
-    lucent::error("gpu_vk",
-                  "vram row read of {} word(s) at ({},{}) UNAVAILABLE — GPU latched "
-                  "off; `out` is left untouched, not zero-filled, so a caller cannot "
-                  "mistake a fault for a black row",
-                  n,
-                  x,
-                  y);
-    return;
-  }
-  for (int i = 0; i < n; i++) {
-    out[i] = vram[(y % VRAM_H) * VRAM_W + ((x + i) & 1023)];
-  }
-  SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
-}
-void gpu_vk_vram_raw(Core *core, const char *path) {
-  if (!gpu_vk_enabled() || !s_inited) {
-    return;
-  }
-  GpuVkState &g = core->game->gpu_vk;
-  // readback_vram returns nullptr when the GPU is latched off. Refuse by NAME here: dereferencing it
-  // would segfault, and pretending success would emit garbage as a measurement.
-  const uint16_t *vram = readback_vram(g);
-  if (!vram) {
-    lucent::error("gpu_vk", "vramdump: NOTHING written to {} — GPU latched off", path ? path : "(null)");
-    return;
-  }
-  FILE *f = fopen(path, "wb");
-  if (!f) {
-    SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
-    return;
-  }
-  for (int y = 0; y < VRAM_H; y++) {
-    fwrite(&vram[y * VRAM_W], 2, VRAM_W, f);
-  }
-  fclose(f);
-  SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
-  lucent::info("gpu_vram", "wrote RAW {} ({}x{} u16)", path ? path : "(null)", VRAM_W, VRAM_H);
-}
+
+} // namespace psx::gpu

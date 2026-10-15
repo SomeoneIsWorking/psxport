@@ -8,8 +8,6 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 void test_address_aliases_and_unload_reveal_are_preserved() {
   psx::cpu::ImageCatalog catalog;
   const auto base = catalog.activate("base", {0x1000u, 0x2000u}, 11u);
@@ -97,6 +95,7 @@ void test_gaps_empty_invalid_and_nonphysical_ranges_refuse() {
 }
 
 void test_core_forwards_range_resolution_to_its_own_catalog() {
+  psx::test::StubGameRuntime stubRuntime;
   auto core = std::make_unique<Core>(stubRuntime);
   const GuestAddressRange whole{0x1000u, 0x2000u};
   const auto base = core->imageCatalog().activate("world", whole, 11u);
@@ -182,5 +181,5 @@ int main() {
   RUN(core_forwards_range_resolution_to_its_own_catalog);
   RUN(subtraction_preserves_only_unwritten_fragments_of_one_generation);
   RUN(subtraction_rejects_invalid_ranges_and_preserves_unrelated_images);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -2,8 +2,8 @@
 //
 // THE BUG THIS PINS (USER, 2026-08-06: "a tomba gate plays audible fmv"). The rule "headless means no
 // window and no audio" was implemented twice and one copy dropped the headless half:
-//     spu_audio.cpp    if (cv_noaudio || !gpu_vk_windowed())  correct
-//     native_fmv.cpp   if (cv_noaudio)                      MISSING -> FMV sound on every gate run
+//     spu_audio.cpp    if (no_audio() || !gpu_vk_windowed())  correct
+//     native_fmv.cpp   if (no_audio())                      MISSING -> FMV sound on every gate run
 // A gate is headless by construction, so every automated run in this workspace was playing movie
 // audio out of the user's speakers.
 //
@@ -16,52 +16,30 @@
 // Hermetic: no SDL, no device, no window, no disc. The lint reads the framework's own sources.
 
 #include "audio_policy.h"
+#include "source_tree.h"
 #include "testutil.h"
 
 #include <stdio.h>
 #include <string>
 #include <vector>
 
+namespace {
+
 // ---- 1. the predicate, both classes ------------------------------------------------------------
-static void test_headless_never_opens_audio(void) {
+void test_headless_never_opens_audio(void) {
   // windowed and not silenced -> the ONLY case that may open a device
-  CHECK_EQ(audio_may_open(/*noaudio=*/false, /*windowed=*/true), true);
+  CHECK_EQ(psx::audio::mayOpenOutput(/*noaudio=*/false, /*windowed=*/true), true);
 
   // headless: silent regardless of the knob. This is the arm native_fmv.cpp was missing.
-  CHECK_EQ(audio_may_open(/*noaudio=*/false, /*windowed=*/false), false);
-  CHECK_EQ(audio_may_open(/*noaudio=*/true, /*windowed=*/false), false);
+  CHECK_EQ(psx::audio::mayOpenOutput(/*noaudio=*/false, /*windowed=*/false), false);
+  CHECK_EQ(psx::audio::mayOpenOutput(/*noaudio=*/true, /*windowed=*/false), false);
 
   // explicit opt-out beats a window
-  CHECK_EQ(audio_may_open(/*noaudio=*/true, /*windowed=*/true), false);
+  CHECK_EQ(psx::audio::mayOpenOutput(/*noaudio=*/true, /*windowed=*/true), false);
 }
 
 // ---- 2. the lint: no audio device is opened outside the shared predicate ------------------------
-// Resolve a framework-relative path from THIS FILE's compile-time location, so the lint works from
-// any cwd. ctest runs from the build dir, not tests/ — a relative path made the test fail there while
-// passing by hand, which is a defect in the test, not in the code under test.
-static std::string src_path(const char *rel) {
-  std::string self = __FILE__; // .../psxport/tests/test_audio_policy.cpp
-  const size_t cut = self.find_last_of('/');
-  const std::string tests_dir = (cut == std::string::npos) ? std::string(".") : self.substr(0, cut);
-  return tests_dir + "/../" + rel; // .../psxport/<rel>
-}
-
-static std::string slurp(const char *path) {
-  FILE *f = fopen(path, "rb");
-  if (!f) {
-    return std::string();
-  }
-  std::string s;
-  char buf[8192];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0) {
-    s.append(buf, n);
-  }
-  fclose(f);
-  return s;
-}
-
-static void test_every_audio_open_site_consults_the_shared_predicate(void) {
+void test_every_audio_open_site_consults_the_shared_predicate(void) {
   // The framework's audio paths. Listed rather than globbed BECAUSE a new audio path must be a
   // deliberate edit here — that is the point of the lint, and a glob would silently absolve a file
   // nobody thought about.
@@ -72,7 +50,7 @@ static void test_every_audio_open_site_consults_the_shared_predicate(void) {
 
   int scanned = 0, sites = 0, guarded = 0;
   for (const char *rel : srcs) {
-    std::string s = slurp(src_path(rel).c_str());
+    std::string s = psx::test::readRepoFile(rel);
     if (s.empty()) { // REFUSE rather than pass vacuously
       printf("  FAIL could not read %s — the lint would have passed by seeing nothing\n", rel);
       CHECK(false);
@@ -83,11 +61,11 @@ static void test_every_audio_open_site_consults_the_shared_predicate(void) {
     for (size_t p = s.find("SDL_OpenAudioDeviceStream"); p != std::string::npos;
          p = s.find("SDL_OpenAudioDeviceStream", p + 1)) {
       sites++;
-      const size_t use = s.rfind("audio_may_open", p);
+      const size_t use = s.rfind("psx::audio::mayOpenOutput", p);
       if (use != std::string::npos) {
         guarded++;
       } else {
-        printf("  FAIL %s: an SDL_OpenAudioDeviceStream site is not guarded by audio_may_open()\n", rel);
+        printf("  FAIL %s: an SDL_OpenAudioDeviceStream site is not guarded by psx::audio::mayOpenOutput()\n", rel);
       }
     }
   }
@@ -99,9 +77,11 @@ static void test_every_audio_open_site_consults_the_shared_predicate(void) {
   CHECK_EQ(guarded, sites);
 }
 
+} // namespace
+
 int main(void) {
   printf("test_audio_policy: headless implies no audio device, on every path\n");
   RUN(headless_never_opens_audio);
   RUN(every_audio_open_site_consults_the_shared_predicate);
-  return pt_summary();
+  return psx::test::summary();
 }

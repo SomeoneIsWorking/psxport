@@ -4,10 +4,9 @@
 
 namespace psx::cd {
 
-void publishStockCommandWorkArea(Core &core,
-                                 const StockCommandWorkArea &workArea,
-                                 uint8_t command,
-                                 uint32_t parameter) {
+void publishStockCommandWorkArea(Core &core, const StockCommandWorkArea &workArea, StockCdCommand sent) {
+  const uint8_t command = sent.command;
+  const uint32_t parameter = sent.parameter;
   if (workArea.lastCommandAddress) {
     core.mem_w8(workArea.lastCommandAddress, command);
   }

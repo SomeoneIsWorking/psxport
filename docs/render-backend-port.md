@@ -6,19 +6,19 @@ product does not carry a second windowing or graphics stack.
 
 ## Ownership
 
-- `runtime/psx/gpu/gpu_vk.cpp` owns the SDL GPU device, window claim, swapchain, VRAM textures, transfer
-  buffers, pipelines, presentation, readback, and dirty-region synchronization.
+- `runtime/psx/gpu/gpu_vk_device.*`, `gpu_vk_window.*` and `gpu_vk_submit.cpp` own the SDL GPU device,
+  window claim, swapchain and submits; `gpu_vk_present.cpp` the present to the sink;
+  `gpu_vk_record_raster.*` the VRAM image, canvases and record passes; `gpu_vk_readback.cpp` readback.
 - `runtime/psx/shaders_gpu/` owns first-party GLSL sources. `tools/gen_gpu_shaders.py` compiles and
   embeds them in a consumer-owned build directory; no shader header is written to the source tree.
-- `runtime/psx/gpu/gpu_native.cpp` and the render-queue owners provide primitive and presentation work
-  through the renderer's narrow interfaces.
-- `runtime/psx/sbs_pane_layout.h` owns side-by-side pane geometry. Each Game renders independently;
+- `docs/presentation.md` is the renderer's contract: what each render path presents and how.
+- `runtime/psx/present/pane_composite.*` (`PaneCompositor`) assembles one window from several Games' panes. Each Game renders independently;
   composition consumes the completed panes without sharing per-Core renderer state.
 
 ## Behavioral requirements
 
 - Preserve the 16-bit PSX VRAM representation, CLUT decode, semitransparency modes, primitive order,
-  depth policy, display-region selection, letterboxing, fades, and bounded readback.
+  display-region selection, letterboxing, fades, and bounded readback.
 - Headless and windowed execution use the same rendering pipeline. Only the final sink differs.
 - Build-owned generated headers are namespaced by consumer so configuring or cleaning one build
   cannot affect another.

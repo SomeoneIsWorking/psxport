@@ -1,14 +1,15 @@
 #include "bug_report_session.h"
 
-#include "c_subsys.h" // watchdog_suspend / watchdog_resume — writing a report is intentional idle
 #include "config_vars.h"
 #include "core.h"
 #include "game.h"
-#include "gpu_vk.h"       // gpu_vk_present_shot
+#include "gpu_device.h"
+#include "gpu_vk.h"
+#include "gpu_vk_internal.h"
 #include "image_writer.h" // image_write_rgb24
-#include "ordering_table.h"
 #include "psxport_build_id.h"
 #include "render_mode.h"
+#include "watchdog.h"
 
 #include <bug_report/draft.h>
 #include <bug_report/form.h>
@@ -61,22 +62,12 @@ void BugReportSession::requestScripted(std::string summary) {
   request();
 }
 
-void BugReportSession::captureReferenceFrame(Core &core, std::uint32_t orderingTableHead) {
-  psx::gpu::GpuDevice &device = core.gpuDevice;
-  const bool kickDrewIt = core.rsub.mode.psxRender();
-  std::vector<std::uint8_t> before;
-  if (!kickDrewIt) {
-    before = device.saveState();
-    psx::gpu::submitOrderingTable(core, device, orderingTableHead);
-  }
+void BugReportSession::captureReferenceFrame(Core &core) {
+  psx::gpu::GpuDevice &device = core.gpuDevice();
   // The table draws into the draw area; the display still shows the previous frame.
   const psx::gpu::DisplayArea display = device.displayArea();
   const psx::gpu::VramPoint origin = device.drawAreaOrigin();
-  mReference = device.picture(origin.x, origin.y, display.width, display.height, false);
-  if (!kickDrewIt && !device.loadState(before)) {
-    lucent::error("bugreport", "the GPU device refused its own state after drawing the reference frame");
-    std::abort();
-  }
+  mReference = device.picture({origin.x, origin.y, display.width, display.height}, false);
 }
 
 void BugReportSession::atFieldBoundary(Core &core) {
@@ -105,7 +96,7 @@ void BugReportSession::atFieldBoundary(Core &core) {
 }
 
 std::optional<std::filesystem::path> BugReportSession::reportRoot(Core &core) const {
-  const std::string &configured = psx::config::cv_bug_report_dir.get();
+  const std::string configured = psx::config::bug_report_dir();
   if (!configured.empty()) {
     return std::filesystem::path(configured);
   }
@@ -138,9 +129,9 @@ void BugReportSession::report(Core &core) {
   }
   attachCaptures(core, *draft);
 
-  watchdog_suspend(); // the player may write for as long as they like
+  psx::platform::Watchdog::suspend(); // the player may write for as long as they like
   const bool saved = holdForm(core, *draft);
-  watchdog_resume();
+  psx::platform::Watchdog::resume();
   if (!saved) {
     lucent::info("bugreport", "report cancelled; nothing saved");
   }
@@ -152,7 +143,7 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
   std::string error;
 
   if (const auto path = draft.pathFor(kScreenshotFile, error)) {
-    gpu_vk_present_shot(&core, path->string().c_str());
+    core.game->gpuVk().present_shot(path->string().c_str());
     std::error_code exists;
     if (std::filesystem::exists(*path, exists)) {
       attachOrWarn(draft, kScreenshotFile, AttachmentRole::Screenshot, "On screen");
@@ -161,8 +152,8 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
 
   if (mReference && !mReference->pixels.empty()) {
     if (const auto path = draft.pathFor(kReferenceFile, error);
-        path &&
-        image_write_rgb24(path->string().c_str(), mReference->pixels.data(), mReference->width, mReference->height)) {
+        path && psx::debug::writeImageRgb24(
+                    path->string().c_str(), mReference->pixels.data(), mReference->width, mReference->height)) {
       attachOrWarn(draft, kReferenceFile, AttachmentRole::Reference, "GPU device render of the same frame");
     }
   } else {
@@ -183,8 +174,8 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
   }
 
   draft.addFact("pad frame", std::to_string(reportedFrame));
-  draft.addFact("present frame", std::to_string(game.gpu.gpu_frame_no()));
-  draft.addFact("render path", render_path_name(core.rsub.mode.path()));
+  draft.addFact("present frame", std::to_string(game.display.frame()));
+  draft.addFact("render path", psx::gpu::renderPathName(core.rsub.mode.path()));
   draft.addFact("build", PSXPORT_BUILD_ID_COMPOSITE);
 
   if (recorded) {

@@ -11,18 +11,26 @@
 
 class Core;
 
-using GtePreOpFn = void (*)(Core *core, uint64_t ordinal, uint32_t guestPc, uint32_t instruction, void *user);
-using GtePostOpFn = void (*)(Core *core, uint64_t ordinal, uint32_t guestPc, uint32_t instruction, void *user);
+// One observed GTE instruction: its ordinal in the armed run, the guest PC and the instruction word.
+struct GteOp {
+  uint64_t ordinal;
+  uint32_t guestPc;
+  uint32_t instruction;
+};
+
+using GteOpFn = void (*)(Core *core, const GteOp &op, void *user);
+
+// Called before and after the instruction; either may be null.
+struct GteOpHooks {
+  GteOpFn pre = nullptr;
+  GteOpFn post = nullptr;
+};
 
 class GtePreOpObserver {
 public:
-  void arm(GtePreOpFn fn, void *user) {
-    arm(fn, nullptr, user);
-  }
-
-  void arm(GtePreOpFn preFn, GtePostOpFn postFn, void *user) {
-    mPreFn = preFn;
-    mPostFn = postFn;
+  void arm(GteOpHooks hooks, void *user) {
+    mPreFn = hooks.pre;
+    mPostFn = hooks.post;
     mUser = user;
     mSeen = 0;
   }
@@ -48,14 +56,14 @@ public:
     }
     const uint64_t ordinal = ++mSeen;
     if (mPreFn) {
-      mPreFn(core, ordinal, guestPc, instruction, mUser);
+      mPreFn(core, GteOp{ordinal, guestPc, instruction}, mUser);
     }
     return ordinal;
   }
 
   void observePost(Core *core, uint64_t ordinal, uint32_t guestPc, uint32_t instruction) {
     if (ordinal != 0 && mPostFn) {
-      mPostFn(core, ordinal, guestPc, instruction, mUser);
+      mPostFn(core, GteOp{ordinal, guestPc, instruction}, mUser);
     }
   }
 
@@ -67,8 +75,8 @@ public:
   }
 
 private:
-  GtePreOpFn mPreFn = nullptr;
-  GtePostOpFn mPostFn = nullptr;
+  GteOpFn mPreFn = nullptr;
+  GteOpFn mPostFn = nullptr;
   void *mUser = nullptr;
   uint64_t mSeen = 0;
 };

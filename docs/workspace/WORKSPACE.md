@@ -48,9 +48,11 @@ recorded as an issue.
 ## Framework
 
 There is no per-game framework pin. Each game's `external/psxport` is a plain relative symlink to the
-workspace's live `psxport` checkout, created by `tools/psxport_fetch.py --auto` (run by `run.sh`), so a
-framework edit is live in every game at once; with no sibling checkout (CI, a fresh clone) it shallow-clones
-psxport `main` instead. Lightrec stays pinned at `PSXPORT_LIGHTREC_REVISION`
+workspace's live `psxport` checkout, so a framework edit is live in every game at once; with no sibling
+checkout (CI, a fresh clone) it is a shallow clone of psxport `main`. psxport's `tools/psxport_fetch.py`
+makes it; no title carries a copy. A title's launcher and CI run it from psxport `main` while the link is
+missing (`uv run --no-project https://raw.githubusercontent.com/SomeoneIsWorking/psxport/main/tools/psxport_fetch.py --auto`),
+and `scripts/bootstrap_workspace.py` runs it for every title. Lightrec stays pinned at `PSXPORT_LIGHTREC_REVISION`
 (`psxport/cmake/lightrec_dependency.cmake`, `psxport_fetch.py --lightrec`).
 
 ## Gates

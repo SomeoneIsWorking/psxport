@@ -30,6 +30,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace psx::config {
 
@@ -47,10 +48,7 @@ const char *kind_name(Kind k);
 class CVarBase;
 
 namespace detail {
-// 1:1 forwarders onto lucent::config, which is what cfg_on/cfg_int/cfg_str WERE. Routing the
-// environment read through these — rather than re-parsing the variable here — is what makes
-// "a migrated knob resolves identically to its pre-migration behaviour" true by construction
-// instead of true by careful re-implementation. Defined in config.cpp.
+// Environment reads through lucent::config, so every knob parses one way. Defined in config.cpp.
 bool env_present(const char *name);
 bool env_bool(const char *name);
 long env_int(const char *name, long fallback);
@@ -128,15 +126,18 @@ protected:
 
 template <class T> class CVar : public CVarBase {
 public:
-  CVar(const char *name, T dflt, const char *help, bool persistable = true, bool external = false) noexcept
-      : CVarBase(name, kind_of(), help, persistable, external), mDefault(std::move(dflt)) {}
+  // The default is built here, inside noexcept, so a file-scope CVar's initialisation cannot throw.
+  template <class D>
+  CVar(const char *name, D &&dflt, const char *help, bool persistable = true, bool external = false) noexcept
+      : CVarBase(name, kind_of(), help, persistable, external), mDefault(std::forward<D>(dflt)) {}
 
   // The effective value. Binds the environment on first use.
   const T &get() const {
     ensure_env_bound();
     for (int i = kLayerCount - 1; i >= 1; --i) {
-      if (mSlot[i - 1].has_value()) {
-        return *mSlot[i - 1];
+      const std::optional<T> &slot = mSlot[i - 1];
+      if (slot.has_value()) {
+        return *slot;
       }
     }
     return mDefault;
@@ -154,7 +155,8 @@ public:
   // user's saved configuration.
   const T &value_for_save() const {
     ensure_env_bound();
-    return mSlot[(int)Layer::Value - 1].has_value() ? *mSlot[(int)Layer::Value - 1] : mDefault;
+    const std::optional<T> &slot = mSlot[(int)Layer::Value - 1];
+    return slot.has_value() ? *slot : mDefault;
   }
 
   void set(Layer l, T v) {
@@ -187,7 +189,8 @@ public:
     if (l == Layer::Default) {
       return to_text(mDefault);
     }
-    return mSlot[(int)l - 1].has_value() ? to_text(*mSlot[(int)l - 1]) : std::string();
+    const std::optional<T> &slot = mSlot[(int)l - 1];
+    return slot.has_value() ? to_text(*slot) : std::string();
   }
 
   bool set_text(Layer l, std::string_view text) override;

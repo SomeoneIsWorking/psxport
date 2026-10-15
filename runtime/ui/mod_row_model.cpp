@@ -22,16 +22,12 @@ struct ToggleRow {
   const char *const *labels;
   int states;
   int fallback;
-  bool persist; // debug toggles are deliberately not written to the settings file
 };
 
 const char *const kOnOff[] = {"Off", "On"};
 const char *const kAspect[] = {"Vanilla", "16:9", "21:9", "Auto"};
 // Merged resolution selector: 0 = Auto, 1..4 = Vanilla(1x)/X2/X3/X4.
 const char *const kIres[] = {"Auto", "Vanilla", "X2", "X3", "X4"};
-// Named for what the player sees, not for the mechanism: "Depth" is per-pixel depth ordering (this
-// port's improvement), "Authored" is the order the game itself filed its polygons in.
-const char *const kFaceOrder[] = {"Depth (enhanced)", "Authored (faithful)"};
 
 const ToggleRow kToggleRows[] = {
     {"aspect",
@@ -40,56 +36,21 @@ const ToggleRow kToggleRows[] = {
      },
      kAspect,
      4,
-     0,
-     true},
+     0},
     {"ires",
      [](Mods &m) {
        return &m.ires;
      },
      kIres,
      5,
-     1,
-     true},
-    {"face_order",
-     [](Mods &m) {
-       return &m.face_order;
-     },
-     kFaceOrder,
-     2,
-     0,
-     true},
+     1},
     {"fps60",
      [](Mods &m) {
        return &m.fps60;
      },
      kOnOff,
      2,
-     0,
-     true},
-    {"debug_ids",
-     [](Mods &m) {
-       return &m.debug_ids;
-     },
-     kOnOff,
-     2,
-     0,
-     false},
-    {"debug_quads",
-     [](Mods &m) {
-       return &m.debug_quads;
-     },
-     kOnOff,
-     2,
-     0,
-     false},
-    {"debug_objects",
-     [](Mods &m) {
-       return &m.debug_objects;
-     },
-     kOnOff,
-     2,
-     0,
-     false},
+     0},
 };
 
 // ---- adjust rows ----------------------------------------------------------------------------------
@@ -180,9 +141,7 @@ void ModRowModel::toggle(Mods &m, std::string_view id) {
   }
   int *v = r->field(m);
   *v = (*v + 1) % r->states;
-  if (r->persist) {
-    m.save();
-  }
+  m.save();
 }
 
 void ModRowModel::adjust(Mods &m, std::string_view id, int dir) {

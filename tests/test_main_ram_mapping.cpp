@@ -1,5 +1,4 @@
 #include "core.h"
-#include "game_iface.h"
 #include "testutil.h"
 
 #include "stub_game_runtime.h"
@@ -7,10 +6,10 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
+std::unique_ptr<psx::test::StubGameRuntime> stubRuntime;
 
 std::unique_ptr<Core> bareCore() {
-  return std::make_unique<Core>(stubRuntime);
+  return std::make_unique<Core>(*stubRuntime);
 }
 
 void test_main_ram_aliases_share_the_store_mapping() {
@@ -43,7 +42,8 @@ void test_non_main_ram_and_straddling_spans_refuse() {
 } // namespace
 
 int main() {
+  stubRuntime = std::make_unique<psx::test::StubGameRuntime>();
   RUN(main_ram_aliases_share_the_store_mapping);
   RUN(non_main_ram_and_straddling_spans_refuse);
-  return pt_summary();
+  return psx::test::summary();
 }

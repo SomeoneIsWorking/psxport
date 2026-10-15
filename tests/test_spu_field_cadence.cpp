@@ -46,9 +46,7 @@ Totals runFields(psx::frame::DisplayFieldRate rate, uint32_t fieldCount) {
   return totals;
 }
 
-} // namespace
-
-static void test_exact_sixty_hz_is_the_legacy_exact_step(void) {
+void test_exact_sixty_hz_is_the_legacy_exact_step(void) {
   const Totals totals = runFields(psx::frame::DisplayFieldRate{60, 1}, 60);
 
   CHECK_EQ(totals.clocks, SpuFieldCadence::kClockRateHz);
@@ -59,7 +57,7 @@ static void test_exact_sixty_hz_is_the_legacy_exact_step(void) {
   CHECK_EQ(totals.maxSamples, 735);
 }
 
-static void test_ntsc_fractional_steps_have_exact_long_run_totals(void) {
+void test_ntsc_fractional_steps_have_exact_long_run_totals(void) {
   const Totals totals =
       runFields(psx::frame::DISPLAY_FIELD_RATE_NTSC, psx::frame::DISPLAY_FIELD_RATE_NTSC.frequencyNumerator);
 
@@ -71,7 +69,7 @@ static void test_ntsc_fractional_steps_have_exact_long_run_totals(void) {
   CHECK_EQ(totals.maxSamples, 736);
 }
 
-static void test_rate_switch_starts_the_new_rational_phase(void) {
+void test_rate_switch_starts_the_new_rational_phase(void) {
   SpuFieldCadence cadence;
   const SpuFieldAdvance ntsc = cadence.advance(psx::frame::DISPLAY_FIELD_RATE_NTSC);
   CHECK_EQ(ntsc.samples, 735);
@@ -84,9 +82,11 @@ static void test_rate_switch_starts_the_new_rational_phase(void) {
   CHECK_EQ(secondPal.samples, 882);
 }
 
+} // namespace
+
 int main(void) {
   RUN(exact_sixty_hz_is_the_legacy_exact_step);
   RUN(ntsc_fractional_steps_have_exact_long_run_totals);
   RUN(rate_switch_starts_the_new_rational_phase);
-  return pt_summary();
+  return psx::test::summary();
 }

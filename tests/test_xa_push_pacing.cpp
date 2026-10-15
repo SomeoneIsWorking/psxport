@@ -23,12 +23,12 @@ std::array<uint8_t, 2352> stereoAudioSector() {
   return raw;
 }
 
-std::unique_ptr<XaState> pushStream() {
-  auto xa = std::make_unique<XaState>();
-  xa_state_init(xa.get());
+std::unique_ptr<psx::audio::XaStream> pushStream() {
+  auto xa = std::make_unique<psx::audio::XaStream>();
+  xa.get()->reset();
   xa->push_mode = 1;
   xa->active = 1;
-  xa_bind_state(xa.get());
+  xa.get()->bindSamplePull();
   return xa;
 }
 
@@ -39,7 +39,7 @@ void test_a_stream_fed_at_the_disc_rate_plays_at_its_true_pitch() {
   double rdAfterFirstSecond = 0.0;
   for (uint32_t pull = 0; pull < 3u * kPullsPerSecond; ++pull) {
     if (pull % kPullsPerSector == 0u) {
-      CHECK_EQ(xa_push_audio_sector(xa.get(), sector.data(), pull / kPullsPerSector), 2016);
+      CHECK_EQ(xa.get()->pushAudioSector(sector.data(), pull / kPullsPerSector), 2016);
     }
     CDC_GetCDAudioSample(sample.data());
     if (pull + 1u == kPullsPerSecond) {
@@ -55,7 +55,7 @@ void test_a_clip_shorter_than_the_backlog_still_plays() {
   auto xa = pushStream();
   const auto sector = stereoAudioSector();
   std::array<int32_t, 2> sample{};
-  CHECK_EQ(xa_push_audio_sector(xa.get(), sector.data(), 0u), 2016);
+  CHECK_EQ(xa.get()->pushAudioSector(sector.data(), 0u), 2016);
   for (uint32_t pull = 0; pull < kPullsPerSecond; ++pull) {
     CDC_GetCDAudioSample(sample.data());
   }
@@ -67,5 +67,5 @@ void test_a_clip_shorter_than_the_backlog_still_plays() {
 int main() {
   RUN(a_stream_fed_at_the_disc_rate_plays_at_its_true_pitch);
   RUN(a_clip_shorter_than_the_backlog_still_plays);
-  return pt_summary();
+  return psx::test::summary();
 }

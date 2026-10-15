@@ -10,25 +10,25 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 constexpr uint32_t kRootCounter1 = 0x1F801110u;
 
 void test_root_counter_one_advances_by_the_video_standard() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *ntsc = new Game(stubRuntime, {});
   CHECK_EQ(ntsc->core.mem_r16(kRootCounter1), 0);
-  CHECK(ntsc->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  CHECK(ntsc->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ));
   CHECK_EQ(ntsc->core.mem_r16(kRootCounter1), psx::frame::DISPLAY_LINES_NTSC);
 
   auto *pal = new Game(stubRuntime, {});
-  CHECK(pal->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_PAL_MILLIHZ));
-  pal->gpu.s_disp_pal = 1;
+  CHECK(pal->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_PAL_MILLIHZ));
+  pal->core.mem_w32(0x1F801814u, 0x08000008u); // GP1(08): PAL
   CHECK_EQ(pal->core.mem_r16(kRootCounter1), psx::frame::DISPLAY_LINES_PAL);
 }
 
 void test_root_counter_reports_intra_field_progress() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
-  game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
+  game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
   CHECK_EQ(game->core.mem_r16(kRootCounter1), psx::frame::DISPLAY_LINES_NTSC);
 
   const uint64_t ticksPerField = psx::frame::displayFieldCpuTicks(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
@@ -41,17 +41,18 @@ void test_root_counter_reports_intra_field_progress() {
 }
 
 void test_root_counter_one_counts_from_a_guest_write() {
+  psx::test::StubGameRuntime stubRuntime;
   auto *game = new Game(stubRuntime, {});
   for (int field = 0; field < 3; ++field) {
-    game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
+    game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
   }
   CHECK_EQ(game->core.mem_r16(kRootCounter1), 3 * psx::frame::DISPLAY_LINES_NTSC);
   game->core.mem_w16(kRootCounter1, 0);
   CHECK_EQ(game->core.mem_r16(kRootCounter1), 0);
-  game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
+  game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
   CHECK_EQ(game->core.mem_r16(kRootCounter1), psx::frame::DISPLAY_LINES_NTSC);
   game->core.mem_w16(kRootCounter1, 0xFFF0);
-  game->timing.advanceDisplayFields(1, 1, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
+  game->timing.advanceDisplayFields({1, 1}, psx::frame::FIELD_RATE_NTSC_MILLIHZ);
   CHECK_EQ(game->core.mem_r16(kRootCounter1), static_cast<uint16_t>(0xFFF0u + psx::frame::DISPLAY_LINES_NTSC));
 }
 
@@ -69,5 +70,5 @@ int main() {
   RUN(root_counter_reports_intra_field_progress);
   RUN(root_counter_one_counts_from_a_guest_write);
   RUN(invalid_hsync_cadence_does_not_invent_a_counter);
-  return pt_summary();
+  return psx::test::summary();
 }

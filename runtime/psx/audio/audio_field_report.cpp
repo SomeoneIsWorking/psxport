@@ -63,8 +63,10 @@ AudioFieldCompareResult compareOne(size_t index, const AudioFieldReport &a, cons
 
 } // namespace
 
-AudioFieldCompareResult
-compareAudioFieldReports(const AudioFieldReport *a, size_t aCount, const AudioFieldReport *b, size_t bCount) {
+AudioFieldCompareResult psx::audio::compareAudioFieldReports(const AudioFieldReport *a,
+                                                             size_t aCount,
+                                                             const AudioFieldReport *b,
+                                                             size_t bCount) {
   if (aCount == 0 && bCount == 0) {
     return mismatch(0, "no audio field reports");
   }

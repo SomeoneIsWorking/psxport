@@ -69,14 +69,8 @@ void publishStockReadLanding(Core &core, const psx::cd::StockReadLanding &landin
                 content.hex);
 }
 
-} // namespace psx::code_module
-
-GuestAddressRange guestCodeModuleWindow(const Core &core) {
-  return core.runtime.guestCodeModuleWindow();
-}
-
-void publishGuestCodeModuleLanding(Core &core, GuestAddressRange landed) {
-  const GuestAddressRange window = guestCodeModuleWindow(core);
+void publishLanding(Core &core, GuestAddressRange landed) {
+  const GuestAddressRange window = core.runtime.guestCodeModuleWindow();
   if (!window.valid() || !landed.valid() || landed.begin < window.begin || landed.end > window.end) {
     return;
   }
@@ -95,3 +89,5 @@ void publishGuestCodeModuleLanding(Core &core, GuestAddressRange landed) {
                identity.generation,
                0x80000000u | landed.begin);
 }
+
+} // namespace psx::code_module

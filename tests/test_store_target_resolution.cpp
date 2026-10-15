@@ -31,7 +31,6 @@
 #include "game.h"
 #include "game_runtime.h"
 #include "lightrec_executor.h"
-#include "render_capabilities.h"
 #include "stub_game_runtime.h"
 #include "testutil.h"
 
@@ -157,5 +156,5 @@ static void test_store_in_a_delay_slot_bumped_base() {
 
 int main() {
   RUN(store_in_a_delay_slot_bumped_base);
-  return pt_summary();
+  return psx::test::summary();
 }

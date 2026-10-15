@@ -10,11 +10,13 @@
 
 #include <vector>
 
-static std::vector<int> trace;
+namespace {
+
+std::vector<int> trace;
 
 // A fiber that yields twice mid-body. Each resume() advances it one segment; the C-stack-local
 // `phase` MUST survive each yield — that is the whole point of a fiber over a longjmp scheduler.
-static void test_midbody_yield_preserves_locals(void) {
+void test_midbody_yield_preserves_locals(void) {
   trace.clear();
   Coro co;
   co.start([&] {
@@ -49,7 +51,7 @@ static void test_midbody_yield_preserves_locals(void) {
 
 // Deep nested calls across a yield: the resume point is mid-INNER-function, the exact case the
 // longjmp scheduler could not do. The nested frames + their locals must all survive.
-static void test_yield_from_nested_frames(void) {
+void test_yield_from_nested_frames(void) {
   trace.clear();
   Coro co;
   auto inner = [&](int base) {
@@ -79,7 +81,7 @@ static void test_yield_from_nested_frames(void) {
 }
 
 // Two interleaved fibers driven by one "scheduler" — resuming A must not disturb B's suspended stack.
-static void test_two_fibers_interleave(void) {
+void test_two_fibers_interleave(void) {
   trace.clear();
   Coro a, b;
   a.start([&] {
@@ -113,7 +115,7 @@ static void test_two_fibers_interleave(void) {
 
 // cancel() on a fiber BLOCKED mid-yield must unwind it to done() so it can be destroyed without
 // destroying a condvar that still has a waiter (the bug that hung the scheduler at a stage transition).
-static void test_cancel_unwinds_blocked_fiber(void) {
+void test_cancel_unwinds_blocked_fiber(void) {
   trace.clear();
   int reached_after = 0;
   {
@@ -137,7 +139,7 @@ static void test_cancel_unwinds_blocked_fiber(void) {
 // ~Coro on a still-blocked fiber must self-cancel (no explicit cancel) — the scheduler relies on
 // `delete co` being safe for an abandoned task. Reaching the check below without hanging IS the result;
 // if the destructor deadlocks, ctest's per-test TIMEOUT reports it rather than wedging the run.
-static void test_destructor_self_cancels(void) {
+void test_destructor_self_cancels(void) {
   int destructed = 0;
   {
     Coro co;
@@ -152,11 +154,13 @@ static void test_destructor_self_cancels(void) {
   CHECK_EQ(destructed, 1);
 }
 
+} // namespace
+
 int main(void) {
   RUN(midbody_yield_preserves_locals);
   RUN(yield_from_nested_frames);
   RUN(two_fibers_interleave);
   RUN(cancel_unwinds_blocked_fiber);
   RUN(destructor_self_cancels);
-  return pt_summary();
+  return psx::test::summary();
 }

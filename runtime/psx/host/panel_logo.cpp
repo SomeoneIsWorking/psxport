@@ -10,8 +10,7 @@
 
 namespace psx::host {
 
-PanelLogo::PanelLogo(int width, int height, std::vector<std::uint8_t> rgba)
-    : m_width(width), m_height(height), m_rgba(std::move(rgba)) {}
+PanelLogo::PanelLogo(LogoImage image) : m_width(image.width), m_height(image.height), m_rgba(std::move(image.rgba)) {}
 
 const PanelLogo &PanelLogo::magnifiedNearest(int factor) const {
   if (factor <= 1 || m_width <= 0 || m_height <= 0) {
@@ -34,7 +33,7 @@ const PanelLogo &PanelLogo::magnifiedNearest(int factor) const {
       std::memcpy(&scaled[to], &m_rgba[from], 4);
     }
   }
-  m_magnified = std::make_unique<PanelLogo>(outW, outH, std::move(scaled));
+  m_magnified = std::make_unique<PanelLogo>(LogoImage{outW, outH, std::move(scaled)});
   m_magnifiedFactor = factor;
   return *m_magnified;
 }

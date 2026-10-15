@@ -7,7 +7,7 @@
 // that precisely, so the process can fail fast NAMING the region instead of freezing a window with
 // a dead close button.
 //
-// Contract under test (spin_detector_sample, runtime/psx/frame/timing.cpp):
+// Contract under test (psx::platform::sampleSpinDetector, runtime/psx/frame/timing.cpp):
 //   * ticks accumulate across calls; a DECISION happens only when the window fills — the caller
 //     chooses the window, so tests stay fast;
 //   * declaring requires BOTH: the host stayed owed a turn through every window (PW_HOST never
@@ -20,12 +20,15 @@
 #include "testutil.h"
 #include <cstdint>
 
-static bool
-sample(SpinDetectorState &st, uint32_t pc, bool starved, uint32_t ticks = 100, uint64_t window = 100, int max_run = 3) {
-  return spin_detector_sample(st, pc, starved, ticks, window, max_run);
+namespace {
+
+bool sample(
+    SpinDetectorState &st, uint32_t pc, bool starved, uint32_t ticks = 100, uint64_t window = 100, int max_run = 3) {
+  return psx::platform::sampleSpinDetector(
+      st, {.pc = pc, .hostStarved = starved, .ticks = ticks}, {.windowTicks = window, .maxRun = max_run});
 }
 
-static void test_host_starved_same_region_spins(void) {
+void test_host_starved_same_region_spins(void) {
   SpinDetectorState st;
   // The anchor decision starts the candidate run (run=1); it never fires itself.
   CHECK(!sample(st, 0x80022484, true));
@@ -37,7 +40,7 @@ static void test_host_starved_same_region_spins(void) {
   CHECK_EQ(st.run, 3);
 }
 
-static void test_host_getting_turns_resets_the_run(void) {
+void test_host_getting_turns_resets_the_run(void) {
   SpinDetectorState st;
   CHECK(!sample(st, 0x80022484, true));
   CHECK(!sample(st, 0x80022484, true));
@@ -51,7 +54,7 @@ static void test_host_getting_turns_resets_the_run(void) {
   CHECK(sample(st, 0x80022484, true));
 }
 
-static void test_leaving_the_region_resets_the_run(void) {
+void test_leaving_the_region_resets_the_run(void) {
   SpinDetectorState st;
   CHECK(!sample(st, 0x80040000, true));
   CHECK(!sample(st, 0x80040100, true));
@@ -64,7 +67,7 @@ static void test_leaving_the_region_resets_the_run(void) {
   CHECK(sample(st, 0x80180020, true)); // reaches max_run=3 in the new region: declared
 }
 
-static void test_first_decision_never_fires(void) {
+void test_first_decision_never_fires(void) {
   // Denominator rule: the very first decision only anchors (run=1) — one starved sample is not
   // yet a spin.
   SpinDetectorState st;
@@ -72,7 +75,7 @@ static void test_first_decision_never_fires(void) {
   CHECK_EQ(st.run, 1);
 }
 
-static void test_disabled_thresholds_never_fire(void) {
+void test_disabled_thresholds_never_fire(void) {
   // window=0 / runs<=0 is the documented off-switch: nothing may fire, ever.
   SpinDetectorState st;
   for (int i = 0; i < 50; ++i) {
@@ -82,7 +85,7 @@ static void test_disabled_thresholds_never_fire(void) {
   CHECK_EQ(st.run, 0);
 }
 
-static void test_partial_window_accumulates(void) {
+void test_partial_window_accumulates(void) {
   // Ticks smaller than the window must accumulate across calls instead of being dropped —
   // otherwise fine-grained callers (per-basic-block tick counts) would never decide at all.
   SpinDetectorState st;
@@ -93,6 +96,8 @@ static void test_partial_window_accumulates(void) {
   CHECK_EQ(st.run, 1);
 }
 
+} // namespace
+
 int main(void) {
   RUN(host_starved_same_region_spins);
   RUN(host_getting_turns_resets_the_run);
@@ -100,5 +105,5 @@ int main(void) {
   RUN(first_decision_never_fires);
   RUN(disabled_thresholds_never_fire);
   RUN(partial_window_accumulates);
-  return pt_summary();
+  return psx::test::summary();
 }

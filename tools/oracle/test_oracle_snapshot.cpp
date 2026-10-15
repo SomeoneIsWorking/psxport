@@ -9,7 +9,7 @@ extern "C" {
 #include "dma_dpcr.h"
 #include "psx.h"
 }
-#include "gte_state.h"
+#include "beetle_gte.h"
 
 #include <array>
 #include <cstdio>

@@ -27,14 +27,6 @@ StubGameRuntime::~StubGameRuntime() {
 
 void StubGameRuntime::registerOverrides(Game &) {}
 
-RenderCapabilities StubGameRuntime::renderCapabilities() const {
-  return RenderCapabilities::direct();
-}
-
-bool StubGameRuntime::guestVramIsPicture(const Game &) const {
-  return false;
-}
-
 const psx::game::HostIdentity *StubGameRuntime::hostIdentity() const {
   return &identity_;
 }

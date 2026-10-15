@@ -13,6 +13,7 @@
 #include "rmlui_overlay.h"
 #include "game.h" // Game — the overlay reaches game->core for the video status
 #include "gpu_vk.h"
+#include "rml_text.h"
 #include "rmlui_render_gpu.h"
 #include <cstdlib>
 
@@ -36,11 +37,15 @@
 // backend. RMLUI_SDL_VERSION_MAJOR is set in this TU's build flags.
 #include "RmlUi_Platform_SDL.h"
 
+namespace {
+
 // ---- typed accessors for the void* handles stored on the class ----------------------------------
 // The header keeps RmlUi types out (so C callers can include it). Impl-side helpers cast back.
-static inline Rml::Context *ctx_(void *p) {
+inline Rml::Context *ctx_(void *p) {
   return (Rml::Context *)p;
 }
+
+} // namespace
 
 RmlOverlay::RmlOverlay() = default;
 // Each overlay releases its OWN resources here, and never the LIBRARY's globals. `Rml::Shutdown` is
@@ -72,9 +77,10 @@ Rml::SystemInterface *g_sys = nullptr;
 
 // Serial for the per-overlay context NAMES (see the CreateContext call in init). Monotonic within a
 // process; a name is never reused, so a context removed and recreated cannot collide with itself.
+unsigned long long contextSerial = 0;
+
 unsigned long long nextContextSerial() {
-  static unsigned long long serial = 0;
-  return ++serial;
+  return ++contextSerial;
 }
 
 // Whether `Rml::Initialise` has already run in this process. NOT the same question as liveOverlays: a
@@ -164,7 +170,7 @@ void RmlOverlay::init(SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat 
   psx::ui::AssetSet assets;
   assets.open();
 
-  static const char *const kFonts[] = {
+  constexpr const char *const kFonts[] = {
       "FiraSans-Regular.ttf",
       "FiraSans-Bold.ttf",
       "FiraSansCondensed-Bold.ttf",
@@ -321,7 +327,7 @@ void RmlOverlay::event(const SDL_Event *e) {
 
   // Menu open: the document takes arrows / Enter / Space; anything it does not claim falls
   // through to the SDL platform shim (hover, clicks, wheel, text).
-  if (e->type == SDL_EVENT_KEY_DOWN && mMenu->handle_key((int)e->key.key)) {
+  if (e->type == SDL_EVENT_KEY_DOWN && mMenu->handle_key(e->key.key)) {
     return;
   }
 
@@ -349,8 +355,8 @@ void RmlOverlay::selectTab(int index) {
     mMenu->select_tab(index);
   }
 }
-bool RmlOverlay::sendKey(int sdl_keycode) {
-  return mMenu && mMenu->send_key(sdl_keycode);
+bool RmlOverlay::sendKey(SDL_Keycode key) {
+  return mMenu && mMenu->handle_key(key);
 }
 void RmlOverlay::dumpMenu() const {
   if (mMenu) {
@@ -386,7 +392,7 @@ bool RmlOverlay::typingText() const {
   }
   const Rml::String &tag = fe->GetTagName();
   if (tag == "input") {
-    Rml::String t = fe->GetAttribute<Rml::String>("type", "text");
+    Rml::String t = psx::ui::rmlAttributeText(*fe, "type", "text");
     if (t == "text" || t == "password") {
       return true;
     }
@@ -403,14 +409,15 @@ void RmlOverlay::newFrame() {
   if (!mInited || !c) {
     return;
   }
-  // Track the SINK, not the window. gpu_vk_video_status reports the sink in BOTH legs (it is the
+  // Track the SINK, not the window. psx::gpu::videoStatus reports the sink in BOTH legs (it is the
   // window size when there is a window and the configured headless present size when there is
   // not), so the menu is laid out for the same rectangle the picture is composed for either way.
   // This used to be SDL_GetWindowSize under `if (mWin)`, which meant the layout simply froze at
   // its initial size in the leg with no window.
   if (game) {
-    int nw = 0, ir = 0, fbw = 0, fbh = 0, sw = 0, sh = 0, cap = 0;
-    gpu_vk_video_status(&game->core, &nw, &ir, &fbw, &fbh, &sw, &sh, &cap);
+    const psx::gpu::VideoStatus video = psx::gpu::videoStatus(game->core);
+    const int sw = video.sinkWidth;
+    const int sh = video.sinkHeight;
     if (sw > 0 && sh > 0) {
       Rml::Vector2i cur = c->GetDimensions();
       if (cur.x != sw || cur.y != sh) {

@@ -28,7 +28,7 @@ constexpr std::uint32_t uv(int u, int v, std::uint16_t attribute) {
 
 std::optional<DrawPrimitive> recorded(const std::vector<std::uint32_t> &packet) {
   GpuDevice device;
-  device.gp1(0x00000000u, 0);
+  device.gp1(0x00000000u, {});
   device.gp0(0xE3000000u);
   device.gp0(0xE4000000u | 1023u | (511u << 10));
   device.gp0(0xE5000000u | static_cast<std::uint32_t>(kOffsetX) | (static_cast<std::uint32_t>(kOffsetY) << 11));
@@ -75,15 +75,13 @@ void checkMatches(const std::vector<std::uint32_t> &packet) {
   }
 }
 
-} // namespace
-
-static void test_a_flat_textured_triangle(void) {
+void test_a_flat_textured_triangle(void) {
   const std::uint16_t clut = (300u << 6) | 3u;
   const std::uint16_t page = 5u | (1u << 4) | (2u << 5) | (1u << 7);
   checkMatches({0x26808080u, xy(1, 2), uv(4, 5, clut), xy(60, 8), uv(40, 5, page), xy(9, 70), uv(4, 50, 0)});
 }
 
-static void test_a_gouraud_textured_quad(void) {
+void test_a_gouraud_textured_quad(void) {
   const std::uint16_t clut = (480u << 6) | 7u;
   const std::uint16_t page = 9u | (0u << 7);
   checkMatches({0x3C102030u,
@@ -100,32 +98,34 @@ static void test_a_gouraud_textured_quad(void) {
                 uv(31, 31, 0)});
 }
 
-static void test_a_flat_untextured_quad(void) {
+void test_a_flat_untextured_quad(void) {
   checkMatches({0x28FF0000u, xy(3, 3), xy(80, 5), xy(4, 60), xy(70, 66)});
 }
 
-static void test_a_textured_sprite(void) {
+void test_a_textured_sprite(void) {
   const std::uint16_t clut = (500u << 6) | 1u;
   checkMatches({0x64808080u, xy(30, 40), uv(8, 16, clut), xy(24, 18)});
 }
 
-static void test_a_fixed_size_sprite(void) {
+void test_a_fixed_size_sprite(void) {
   checkMatches({0x78FFFFFFu, xy(-2, 100)});
 }
 
-static void test_a_gouraud_line(void) {
+void test_a_gouraud_line(void) {
   checkMatches({0x52FFFFFFu, xy(10, 20), 0x00808080u, xy(40, -6)});
 }
 
-static void test_a_flat_line(void) {
+void test_a_flat_line(void) {
   checkMatches({0x40204060u, xy(1, 2), xy(30, 40)});
 }
 
-static void test_other_commands_decode_to_nothing(void) {
+void test_other_commands_decode_to_nothing(void) {
   CHECK(!psx::gpu::decodePacketPrimitive(std::vector<std::uint32_t>{0x02000000u, xy(0, 0), xy(16, 16)}).has_value());
   CHECK(!psx::gpu::decodePacketPrimitive(std::vector<std::uint32_t>{0x20FFFFFFu, xy(0, 0)}).has_value());
   CHECK(!psx::gpu::decodePacketPrimitive(std::vector<std::uint32_t>{0x48FFFFFFu, xy(0, 0), xy(8, 8)}).has_value());
 }
+
+} // namespace
 
 int main() {
   RUN(a_flat_textured_triangle);
@@ -136,5 +136,5 @@ int main() {
   RUN(a_gouraud_line);
   RUN(a_flat_line);
   RUN(other_commands_decode_to_nothing);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -9,6 +9,7 @@
 #include "config.h"
 #include "config_vars.h"
 #include "enhancement_gate.h"
+#include "number_text.h"
 #include "typed_config.h"
 
 #include <lucent/config.h>
@@ -17,32 +18,32 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
 #include <map>
 #include <mutex>
+#include <set>
 #include <span>
 
 namespace psx::config {
 
 namespace {
 
-// The registry. A function-local static, so it is constructed by the first CVar constructor that
-// touches it and cannot be a victim of static-initialisation order.
+// The registry. Built by the first CVar constructor that touches it, so static-initialisation order cannot
+// reach it unconstructed; never destroyed, so a CVar destroyed at exit can still unregister.
 struct Registry {
   std::mutex mutex;
   std::map<std::string, CVarBase *> vars;
-  // Knobs that no CVar declares but which some cfg_* call has READ this run, with what they
-  // resolved to. This is the compatibility path's visibility: an un-migrated knob is invisible until
-  // something reads it, which is honest and is why the audit reports it as its own class.
-  struct LegacyRead {
-    Kind kind;
-    std::string resolved;
-  };
-  std::map<std::string, LegacyRead> legacy;
+  // Names a title identity supplied to launch_setting() this run; known only once read.
+  std::set<std::string> identityKeys;
 };
 
+constinit Registry *registry = nullptr;
+
 Registry &reg() {
-  static Registry r;
-  return r;
+  if (registry == nullptr) {
+    registry = new Registry;
+  }
+  return *registry;
 }
 
 // The one place that decides what counts as one of our knobs. lucent::config::active() lists the
@@ -270,15 +271,15 @@ template class CVar<long>;
 template class CVar<std::string>;
 
 // ── THE INVENTORY ───────────────────────────────────────────────────────────────────────────────
-// Declared in config_vars.h, which carries the per-knob documentation. Keep the two in the same
-// order.
+// Private; read through config_vars.h, which carries the per-knob documentation. Keep the two in
+// the same order.
+namespace {
+
 BoolVar cv_noaudio("PSXPORT_NOAUDIO", false, "open no audio device", /*persistable=*/false);
 // PSXPORT_DEBUG_SERVER — the live, non-blocking TCP debug endpoint. Its VALUE is a port, with 1
 // meaning the default: "1" asks for the default port and a number asks for that port, so it is a
 // TextVar rather than a BoolVar, and the meaning of "1" belongs to dbg_server.h's
-// `debug_server_port`, which both call sites use. It was read through the legacy cfg_str() path and
-// declared NOWHERE, so the boot audit named it UNKNOWN and it did nothing at all: a run with
-// PSXPORT_DEBUG_SERVER=1 started no server and had said so in its own log.
+// `psx::debug::debugServerPort`, which both call sites use.
 TextVar cv_debug_server("PSXPORT_DEBUG_SERVER",
                         "",
                         "live debug TCP port on 127.0.0.1 (1 = default 5959, empty = off)",
@@ -299,12 +300,7 @@ TextVar cv_store_observe("PSXPORT_STORE_OBSERVE",
                          "these are the PCs OF store instructions, NOT the guest words they write",
                          /*persistable=*/false);
 // PSXPORT_RAMDUMP / PSXPORT_RAMDUMP_FRAME — write main RAM to a file, for disassembly of whatever
-// image is resident. They were read with `cfg_str` and DECLARED NOWHERE, which is the same defect the
-// STORE_OBSERVE comment above describes: an undeclared knob has no help text, the end-of-run env
-// audit cannot say what it does, and a reader who sets it and gets no file cannot tell whether the
-// knob is broken or the path is unreachable. Measured 2026-09-27 on Spyro 1, where the second reading
-// was about to be recorded as a broken feature: `PSXORT_RAMDUMP` set a path, no file appeared, and
-// the conclusion "the RAM dump does not work" was wrong — it works, at a different frame.
+// image is resident.
 //
 // THE TWO PATHS DIFFER AND THE DIFFERENCE IS THE POINT. `PSXPORT_RAMDUMP_FRAME=N` writes from INSIDE
 // the frame loop, at native frame N, which is what a live-state question needs: overlay state during
@@ -370,7 +366,6 @@ TextVar cv_asset_dir("PSXPORT_ASSET_DIR",
                      "",
                      "directory containing assets/ (empty = cwd-relative)",
                      /*persistable=*/false);
-namespace {
 BoolVar cv_vk_window("PSXPORT_VK_WINDOW", false, "open the product window", /*persistable=*/false);
 BoolVar cv_vk_headless("PSXPORT_VK_HEADLESS",
                        false,
@@ -386,6 +381,8 @@ void applyPackagedDefaults(const std::filesystem::path &packageRoot) {
   cv_vk_window.set(Layer::Default, true);
   cv_asset_dir.set(Layer::Default, (packageRoot / "usr" / "share" / "psxport").string());
 }
+
+namespace {
 
 TextVar cv_settings_path("PSXPORT_SETTINGS",
                          "psxport_settings.ini",
@@ -408,8 +405,6 @@ TextVar cv_enh("PSXPORT_ENH",
                "",
                "pc_enh selection: <name,name|all> — deliberate guest-state changes; read it "
                "through enh_named()/enh(), never by parsing this text at a call site.");
-
-namespace {
 
 // These knobs have typed public APIs instead of public raw CVars. That keeps consumer titles from
 // duplicating their parsers or mutating diagnostic/runtime policy through implementation details.
@@ -443,7 +438,7 @@ IntVar cv_override_diff_dead_stack("PSXPORT_OVERRIDE_DIFF_DEAD_STACK",
                                    "residue (counted and reported, not judged)",
                                    /*persistable=*/false);
 TextVar cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT",
-                                std::string(psx::cpu::kDefaultDifferentialReportPath),
+                                psx::cpu::kDefaultDifferentialReportPath,
                                 "override differential: JSON report path (cwd-relative default is the title's "
                                 "scratch/)",
                                 /*persistable=*/false);
@@ -453,6 +448,12 @@ TextVar cv_reach_report("PSXPORT_REACH_REPORT",
                         "",
                         "function reach: JSON report of every dispatched guest entry pc by code image (empty = off)",
                         /*persistable=*/false);
+BoolVar cv_fullscreen("PSXPORT_FULLSCREEN", false, "open the window fullscreen", /*persistable=*/false);
+TextVar cv_windowed("PSXPORT_WINDOWED", "", "0 opens the window fullscreen", /*persistable=*/false);
+TextVar cv_picker_titles("PSXPORT_PICKER_TITLES",
+                         "",
+                         "the picker's panel slugs, comma-separated (empty = every provisioned title)",
+                         /*persistable=*/false);
 
 } // namespace
 
@@ -518,6 +519,79 @@ std::string function_reach_report_path() {
   return cv_reach_report.get();
 }
 
+bool no_audio() {
+  return cv_noaudio.get();
+}
+bool producer_census() {
+  return cv_producers.get();
+}
+std::string debug_server() {
+  return cv_debug_server.get();
+}
+std::string store_observe() {
+  return cv_store_observe.get();
+}
+std::string ramdump_path() {
+  return cv_ramdump.get();
+}
+std::string ramdump_frame() {
+  return cv_ramdump_frame.get();
+}
+std::string load_state_path() {
+  return cv_load_state.get();
+}
+std::string bug_report_dir() {
+  return cv_bug_report_dir.get();
+}
+std::string pad_record_path() {
+  return cv_pad_record.get();
+}
+std::string pad_replay_path() {
+  return cv_pad_replay.get();
+}
+std::string pad_resume_path() {
+  return cv_pad_resume.get();
+}
+long watchdog_seconds() {
+  return cv_watchdog.get();
+}
+long spin_ticks() {
+  return cv_spin_ticks.get();
+}
+long spin_runs() {
+  return cv_spin_runs.get();
+}
+long watchdog_boot_seconds() {
+  return cv_watchdog_boot.get();
+}
+long native_frames() {
+  return cv_native_frames.get();
+}
+std::string asset_dir() {
+  return cv_asset_dir.get();
+}
+std::string settings_path() {
+  return cv_settings_path.get();
+}
+
+bool fullscreen_requested() {
+  const std::string &windowed = cv_windowed.get();
+  return cv_fullscreen.get() || (!windowed.empty() && parseInt(windowed).value_or(0) == 0);
+}
+
+std::string picker_titles() {
+  return cv_picker_titles.get();
+}
+
+std::string user_state_dir() {
+  const std::string xdg = detail::env_text("XDG_STATE_HOME");
+  if (!xdg.empty()) {
+    return xdg + "/psxport";
+  }
+  const std::string home = detail::env_text("HOME");
+  return home.empty() ? std::string() : home + "/.local/state/psxport";
+}
+
 namespace {
 
 // The gate's whole mutable state, behind ONE mutex. Two parts, and each is here rather than in a local
@@ -540,9 +614,13 @@ struct EnhState {
   bool parsed_all = false;
   std::vector<std::string> parsed_names;
 };
+constinit EnhState *enhancementState = nullptr;
+
 EnhState &enh_state() {
-  static EnhState s;
-  return s;
+  if (enhancementState == nullptr) {
+    enhancementState = new EnhState;
+  }
+  return *enhancementState;
 }
 
 // True the FIRST time this key is seen in `r`; false afterwards. Caller holds the lock.
@@ -652,60 +730,30 @@ bool enh_named(const char *name) {
   return enh_gate(name, selected);
 }
 
-// PSXPORT_RENDER_PATH — the render path: native | gte | device | record
-// A TextVar rather than an int so the settings file and the REPL
-// both read as the thing they select, and so a typo is REJECTED by render_path_parse instead of
-// resolving to a plausible number. Persistable: the F1 overlay writes the Value layer.
+namespace {
 TextVar cv_render_path("PSXPORT_RENDER_PATH",
-                       "native",
-                       "render path: native (PC producers) | gte (guest GTE+OT on the PC rasterizer) | "
-                       "device (guest GTE+OT drawn by the GPU device) | record (the device's work replayed "
-                       "at the internal resolution). The guest paths are PURE — fps60/wide/deferred are "
-                       "native-only; ires also applies to record.");
+                       "record",
+                       "render path: record (the GPU device's work replayed at the internal resolution) | "
+                       "device (the GPU device's own VRAM)");
+} // namespace
 
-// render_path() — the resolved path, with a NAMED refusal rather than a silent default. A value that
-// parses to nothing is a knob that did nothing, and the CVar audit's whole purpose is that such a knob
-// says so out loud (docs/config.md).
 RenderPath render_path(RenderPath fallback) {
   const std::string &s = cv_render_path.get();
   RenderPath p = fallback;
-  if (!render_path_parse(s.c_str(), &p)) {
+  if (!psx::gpu::parseRenderPath(s.c_str(), &p)) {
     lucent::warn("cfg",
-                 "PSXPORT_RENDER_PATH='{}' matched NO render path — falling back to '{}'. "
-                 "Valid: native | gte | device | record.",
+                 "PSXPORT_RENDER_PATH='{}' matched no render path, using '{}'. Valid: record | device.",
                  s,
-                 render_path_name(fallback));
+                 psx::gpu::renderPathName(fallback));
     return fallback;
   }
   return p;
 }
 
-// render_path_excluding_runtime() — the same ladder with ONE layer removed: Runtime. That layer is
-// process-global (it is where a live `render path` switch is mirrored) while the render path itself is
-// per-Core state. A Core created after a switch was applied to a different Core must resolve its own
-// request, so it reads Override > Value > the knob's own default and leaves the switch to the Core it
-// was addressed to. A layer whose text parses to nothing is a knob that did nothing, and says so
-// exactly as render_path() does — only here the message can also name the layer.
-RenderPath render_path_excluding_runtime(RenderPath fallback) {
-  for (Layer layer : {Layer::Override, Layer::Value}) {
-    const std::string text = cv_render_path.layer_text(layer);
-    if (text.empty()) {
-      continue;
-    }
-    RenderPath parsed = fallback;
-    if (render_path_parse(text.c_str(), &parsed)) {
-      return parsed;
-    }
-    lucent::warn("cfg",
-                 "PSXPORT_RENDER_PATH={} ('{}') matched NO render path — ignoring that {} layer. "
-                 "Valid: native | gte | device | record.",
-                 layer == Layer::Override ? "(override)" : "(value)",
-                 text,
-                 layer_name(layer));
-  }
-  return fallback;
-}
+namespace {
 
+// lucent reads these two itself (LUCENT_CHANNEL_ENV / LUCENT_LOG_FILE_ENV in cmake/psxport.cmake);
+// declared here only so the audit and the dump know them.
 TextVar cv_debug_channels("PSXPORT_DEBUG",
                           "",
                           "enabled diagnostic channels — READ BY LUCENT, declared here for visibility",
@@ -721,6 +769,8 @@ BoolVar cv_selftest_declared("PSXPORT_CFG_SELFTEST_DECLARED",
                              false,
                              "reserved: the environment audit's calibration target, configures nothing",
                              /*persistable=*/false);
+
+} // namespace
 
 // ── lookup ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -752,21 +802,62 @@ std::size_t registered_count() {
   return r.vars.size();
 }
 
-// ── the legacy compatibility path ───────────────────────────────────────────────────────────────
+// ── title-supplied launch settings ──────────────────────────────────────────────────────────────
 
-void note_legacy_read(const char *name, Kind kind, std::string_view resolved) {
-  if (!name || !is_psxport_name(name)) {
-    return;
+namespace {
+
+std::string trimmed(const std::string &value) {
+  const std::size_t first = value.find_first_not_of(" \t\r\n");
+  if (first == std::string::npos) {
+    return {};
   }
-  Registry &r = reg();
-  std::lock_guard<std::mutex> lock(r.mutex);
-  r.legacy[name] = Registry::LegacyRead{kind, std::string(resolved)};
+  return value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
 }
 
-std::size_t legacy_read_count() {
-  Registry &r = reg();
-  std::lock_guard<std::mutex> lock(r.mutex);
-  return r.legacy.size();
+// KEY=VALUE from ./.env, trimmed; empty when absent.
+std::string dotenv_value(std::string_view key) {
+  std::ifstream in(".env");
+  std::string line;
+  while (std::getline(in, line)) {
+    const std::size_t start = line.find_first_not_of(" \t");
+    if (start == std::string::npos || line.compare(start, key.size(), key) != 0 || line.size() <= start + key.size() ||
+        line[start + key.size()] != '=') {
+      continue;
+    }
+    return trimmed(line.substr(start + key.size() + 1));
+  }
+  return {};
+}
+
+} // namespace
+
+std::string launch_setting(std::initializer_list<const char *> keys) {
+  {
+    Registry &r = reg();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    for (const char *key : keys) {
+      if (key != nullptr && *key != '\0') {
+        r.identityKeys.insert(key);
+      }
+    }
+  }
+  for (const char *key : keys) {
+    if (key != nullptr && *key != '\0') {
+      std::string value = trimmed(detail::env_text(key));
+      if (!value.empty()) {
+        return value;
+      }
+    }
+  }
+  for (const char *key : keys) {
+    if (key != nullptr && *key != '\0') {
+      std::string value = dotenv_value(key);
+      if (!value.empty()) {
+        return value;
+      }
+    }
+  }
+  return {};
 }
 
 // ── the environment audit ───────────────────────────────────────────────────────────────────────
@@ -774,12 +865,12 @@ std::size_t legacy_read_count() {
 EnvAudit audit_environment() {
   EnvAudit a;
   std::map<std::string, CVarBase *> vars;
-  std::map<std::string, Registry::LegacyRead> legacy;
+  std::set<std::string> identityKeys;
   {
     Registry &r = reg();
     std::lock_guard<std::mutex> lock(r.mutex);
     vars = r.vars;
-    legacy = r.legacy;
+    identityKeys = r.identityKeys;
   }
   for (const std::string &entry : lucent::config::active()) {
     if (!is_psxport_name(entry)) {
@@ -790,8 +881,8 @@ EnvAudit audit_environment() {
     const std::span<const std::string_view> typed = Config::environmentNames();
     if (vars.count(name) || std::find(typed.begin(), typed.end(), name) != typed.end()) {
       a.declared.push_back(name);
-    } else if (legacy.count(name)) {
-      a.legacy.push_back(name);
+    } else if (identityKeys.count(name)) {
+      a.identity.push_back(name);
     } else {
       a.unknown.push_back(name);
     }
@@ -801,8 +892,7 @@ EnvAudit audit_environment() {
 
 void report() {
   const std::size_t n_declared = registered_count();
-  lucent::info(
-      "cfg", "{} CVar(s) declared, {} knob(s) observed through the legacy cfg_* path", n_declared, legacy_read_count());
+  lucent::info("cfg", "{} CVar(s) declared", n_declared);
 
   enumerate([](CVarBase &v) {
     lucent::Line ln;
@@ -825,20 +915,18 @@ void report() {
   // THE NEGATIVE CARRIES ITS DENOMINATOR AND ITS BLIND SPOT. "0 unknown" printed on its own is
   // indistinguishable from an audit that never looked at anything.
   lucent::info("cfg",
-               "env audit: {} PSXPORT_* variable(s) set -> {} declared, {} legacy (observed when "
+               "env audit: {} PSXPORT_* variable(s) set -> {} declared, {} title-supplied (known once "
                "read), {} UNKNOWN",
                a.set_in_env.size(),
                a.declared.size(),
-               a.legacy.size(),
+               a.identity.size(),
                a.unknown.size());
   for (const std::string &u : a.unknown) {
     lucent::warn("cfg", "UNKNOWN knob {} is set and matched nothing — it did NOTHING in this run", u);
   }
   lucent::info("cfg",
-               "env audit BLIND SPOT: only {} of the port's knobs are declared CVars. An un-migrated "
-               "knob is recognised only once something READS it, so one on a code path this run never "
-               "entered is counted UNKNOWN here. Re-run the audit at exit for the honest number.",
-               n_declared);
+               "env audit BLIND SPOT: a title's disc or card key is recognised only once the title reads "
+               "it, so one not yet read is counted UNKNOWN here. The audit runs again at exit.");
 }
 
 void report_exit_audit() {
@@ -847,22 +935,25 @@ void report_exit_audit() {
   const EnvAudit a = audit_environment();
   lucent::info("cfg",
                "env audit AT EXIT (everything that was going to be read has been): {} PSXPORT_* set "
-               "-> {} declared, {} legacy, {} UNKNOWN",
+               "-> {} declared, {} title-supplied, {} UNKNOWN",
                a.set_in_env.size(),
                a.declared.size(),
-               a.legacy.size(),
+               a.identity.size(),
                a.unknown.size());
   for (const std::string &u : a.unknown) {
     lucent::warn("cfg", "UNKNOWN knob {} was set for this whole run and NOTHING ever read it", u);
   }
 }
 
+namespace {
+bool reported = false;
+} // namespace
+
 void report_once() {
-  static bool done = false;
-  if (done) {
+  if (reported) {
     return;
   }
-  done = true;
+  reported = true;
   report();
   std::atexit(report_exit_audit);
 }
@@ -871,8 +962,8 @@ bool selftest() {
   // Run the classifier against BOTH classes. A name that must come back UNKNOWN, and a declared name
   // that must not. Checking only the first would pass an audit that called everything unknown;
   // checking only the second would pass an audit that returned an empty list forever.
-  static const char kProbe[] = "PSXPORT_CFG_SELFTEST_PROBE_NOT_A_KNOB";
-  static const char kDeclared[] = "PSXPORT_CFG_SELFTEST_DECLARED";
+  constexpr const char *kProbe = "PSXPORT_CFG_SELFTEST_PROBE_NOT_A_KNOB";
+  constexpr const char *kDeclared = "PSXPORT_CFG_SELFTEST_DECLARED";
 
   const bool probe_was_set = detail::env_present(kProbe);
   const bool declared_was_set = detail::env_present(kDeclared);
@@ -955,7 +1046,8 @@ bool set_runtime(std::string_view name, std::string_view text) {
   return true;
 }
 
-void note_runtime_external(std::string_view name, std::string_view text) {
+void note_runtime_debug_channels(std::string_view channels) {
+  constexpr std::string_view name = "PSXPORT_DEBUG";
   // The REPL / debug-server `debug ...` path. The channel set is applied by lucent::enable_channels
   // and is NOT resolved from here; this records it at the Runtime layer so the dump can say what the
   // live channel set is and that a console command, not the environment, is where it came from.
@@ -967,7 +1059,7 @@ void note_runtime_external(std::string_view name, std::string_view text) {
     lucent::warn("cfg", "runtime note for {} dropped: no such CVar", std::string(name));
     return;
   }
-  v->set_text(Layer::Runtime, text);
+  v->set_text(Layer::Runtime, channels);
 }
 
 bool clear_runtime(std::string_view name) {

@@ -34,7 +34,6 @@
 #include "core.h"
 #include "disc.h"
 #include "game.h"
-#include "game_iface.h"
 #include "game_runtime.h"
 #include "guest_call.h"
 #include "image_identity.h"
@@ -49,82 +48,82 @@ constexpr size_t kRawSectorBytes = 2352;
 constexpr size_t kWholeSectorWords = 2340 / sizeof(uint32_t);
 constexpr uint8_t kStreamMode = 0xA0; // whole-sector framing + double speed
 
-std::array<uint8_t, kRawSectorBytes> make_sector(uint32_t lba) {
+constexpr std::array<uint8_t, kRawSectorBytes> make_sector(uint32_t lba) {
   std::array<uint8_t, kRawSectorBytes> raw{};
   for (size_t offset = 0; offset < raw.size(); ++offset) {
-    raw[offset] = static_cast<uint8_t>((lba * 37u + offset * 11u) & 0xFFu);
+    raw[offset] = static_cast<uint8_t>((std::size_t{37} * lba + offset * 11u) & 0xFFu);
   }
   return raw;
 }
 
-const std::array<uint8_t, kRawSectorBytes> kFirstSector = make_sector(16);
-const std::array<uint8_t, kRawSectorBytes> kSecondSector = make_sector(17);
+constexpr std::array<uint8_t, kRawSectorBytes> kFirstSector = make_sector(16);
+constexpr std::array<uint8_t, kRawSectorBytes> kSecondSector = make_sector(17);
 
 // ---- register-level helpers, the same ones test_cdc_continuous_read uses -------------------------
 
-void select_bank(CdcState *cdc, uint8_t bank) {
-  cdc_write(cdc, 0x1F801800u, bank);
+void select_bank(psx::cd::CdController *cdc, uint8_t bank) {
+  cdc->write(psx::cd::cdcRegister(0x1F801800u), bank);
 }
 
-uint8_t pending_irq_type(CdcState *cdc) {
+uint8_t pending_irq_type(psx::cd::CdController *cdc) {
   select_bank(cdc, 1);
-  return static_cast<uint8_t>(cdc_read(cdc, 0x1F801803u) & 0x07u);
+  return static_cast<uint8_t>(cdc->read(psx::cd::cdcRegister(0x1F801803u)) & 0x07u);
 }
 
-uint8_t response_byte(CdcState *cdc) {
+uint8_t response_byte(psx::cd::CdController *cdc) {
   select_bank(cdc, 1);
-  return static_cast<uint8_t>(cdc_read(cdc, 0x1F801801u));
+  return static_cast<uint8_t>(cdc->read(psx::cd::cdcRegister(0x1F801801u)));
 }
 
-void acknowledge_irq(CdcState *cdc) {
+void acknowledge_irq(psx::cd::CdController *cdc) {
   select_bank(cdc, 1);
-  cdc_write(cdc, 0x1F801803u, 0x07);
+  cdc->write(psx::cd::cdcRegister(0x1F801803u), 0x07);
 }
 
-void write_bfrd(CdcState *cdc, uint8_t value) {
+void write_bfrd(psx::cd::CdController *cdc, uint8_t value) {
   select_bank(cdc, 0);
-  cdc_write(cdc, 0x1F801803u, value);
+  cdc->write(psx::cd::cdcRegister(0x1F801803u), value);
 }
 
-void issue_command(CdcState *cdc, uint8_t command) {
+void issue_command(psx::cd::CdController *cdc, uint8_t command) {
   select_bank(cdc, 0);
-  cdc_write(cdc, 0x1F801801u, command);
+  cdc->write(psx::cd::cdcRegister(0x1F801801u), command);
 }
 
 // ---- the disc, injected through the controller's own sector-source bindings ---------------------
 
 uint32_t readableThrough = 17; // LBA 16..readableThrough exist; everything past it is end of media
 
-extern "C" int test_stop_disc_read_raw(struct DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+bool test_stop_disc_read_raw(psx::cd::Disc *, uint32_t lba, uint8_t *out, uint32_t count) {
   if (lba == 16) {
     std::copy_n(kFirstSector.data(), count, out);
-    return 1;
+    return true;
   }
   if (lba == 17 && readableThrough >= 17) {
     std::copy_n(kSecondSector.data(), count, out);
-    return 1;
+    return true;
   }
-  return 0;
+  return false;
 }
 
-extern "C" int test_stop_disc_read_sector(struct DiscState *, uint32_t, uint8_t *) {
-  return 0;
+bool test_stop_disc_read_sector(psx::cd::Disc *, uint32_t, uint8_t *) {
+  return false;
 }
 
-CdcState begin_read(DiscState *disc, CdcTestClock *clock, uint32_t lba = 16) {
-  CdcState cdc{};
+psx::cd::CdController begin_read(psx::cd::Disc *disc, CdcTestClock *clock, uint32_t lba = 16) {
+  psx::cd::CdController cdc{};
   cdc.disc = disc;
-  cdc_state_init(&cdc);
+  cdc.reset();
   cdc.disc_read_raw_fn = test_stop_disc_read_raw;
   cdc.disc_read_sector_fn = test_stop_disc_read_sector;
-  cdc_test_bind(&cdc, clock);
-  cdc_set_mode(&cdc, kStreamMode);
-  cdc_begin_read(&cdc, lba);
+  psx::test::bindCdcClock(&cdc, clock);
+  cdc.setMode(kStreamMode);
+  cdc.beginRead(lba);
   return cdc;
 }
 
-bool acknowledge_current_sector(CdcState *cdc, CdcTestClock *clock) {
-  if (cdc_test_service_deadline(cdc, clock) != 1 || pending_irq_type(cdc) != 1) {
+bool acknowledge_current_sector(psx::cd::CdController *cdc, CdcTestClock *clock) {
+  if (psx::test::serviceCdcDeadline(cdc, clock) != 1 || pending_irq_type(cdc) != 1) {
     return false;
   }
   acknowledge_irq(cdc);
@@ -139,12 +138,12 @@ bool acknowledge_current_sector(CdcState *cdc, CdcTestClock *clock) {
 // because the ordering is invisible at the call site and silently wrong if it ever moves, and because
 // the end-of-read status assertions below only make sense next to a positive for the running case.
 void test_the_first_data_ready_of_a_live_read_carries_the_read_bit() {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
 
   clock.ticks = cdc.drive_deadline_ticks;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
 
   CHECK_EQ(pending_irq_type(&cdc), 1);
   CHECK_EQ(response_byte(&cdc) & kCdlStatRead, kCdlStatRead); // ...and it IS still reading
@@ -155,20 +154,20 @@ void test_the_first_data_ready_of_a_live_read_carries_the_read_bit() {
 // data-ready that says so: type INT1, and a status byte with CdlStatRead already cleared, because
 // `stop_continuous_read` clears it before posting.
 void test_the_drive_stopping_on_the_first_sector_posts_an_end_of_read_completion() {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc{};
+  psx::cd::CdController cdc{};
   cdc.disc = &disc;
-  cdc_state_init(&cdc);
+  cdc.reset();
   cdc.disc_read_raw_fn = test_stop_disc_read_raw;
   cdc.disc_read_sector_fn = test_stop_disc_read_sector;
-  cdc_test_bind(&cdc, &clock);
-  cdc_set_mode(&cdc, kStreamMode);
-  cdc_begin_read(&cdc, 900); // an LBA the image cannot supply
+  psx::test::bindCdcClock(&cdc, &clock);
+  cdc.setMode(kStreamMode);
+  cdc.beginRead(900); // an LBA the image cannot supply
 
   CHECK_EQ(pending_irq_type(&cdc), 0);
   clock.ticks = cdc.drive_deadline_ticks;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
 
   CHECK_EQ(pending_irq_type(&cdc), 1);            // INT1: the shape a guest's read loop waits for
   CHECK_EQ(response_byte(&cdc), kCdlStatStandby); // ...and the read bit is already gone
@@ -179,8 +178,8 @@ void test_the_drive_stopping_on_the_first_sector_posts_an_end_of_read_completion
 
   // The read really is over: no later clock advance manufactures another sector.
   acknowledge_irq(&cdc);
-  clock.ticks += 10 * cd_drive_sector_period_cpu_ticks(kStreamMode);
-  CHECK_EQ(cdc_drive_service(&cdc), 0);
+  clock.ticks += 10 * psx::cd::driveSectorPeriodCpuTicks(kStreamMode);
+  CHECK_EQ(cdc.service(), 0);
   CHECK_EQ(pending_irq_type(&cdc), 0);
 }
 
@@ -188,20 +187,20 @@ void test_the_drive_stopping_on_the_first_sector_posts_an_end_of_read_completion
 // for the next, and that handoff could not load. Same completion, same status, from the request-
 // register path rather than the drive's own clock.
 void test_the_drive_stopping_on_a_following_sector_posts_an_end_of_read_completion() {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
   readableThrough = 16; // LBA 17 is now the first sector past the media
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
 
   CHECK(acknowledge_current_sector(&cdc, &clock));
   write_bfrd(&cdc, 0x80); // accept LBA 16
   std::array<uint32_t, kWholeSectorWords> whole_sector{};
-  CHECK_EQ(cdc_dma_read(&cdc, whole_sector.data(), static_cast<int>(whole_sector.size())),
+  CHECK_EQ(cdc.dmaRead(whole_sector.data(), static_cast<int>(whole_sector.size())),
            static_cast<int>(whole_sector.size()));
 
   // The drive announces the sector it buffered; the guest takes the announce and hands off.
   clock.ticks = cdc.drive_deadline_ticks;
-  CHECK_EQ(cdc_drive_service(&cdc), 1);
+  CHECK_EQ(cdc.service(), 1);
   CHECK_EQ(pending_irq_type(&cdc), 1);
   acknowledge_irq(&cdc);
   write_bfrd(&cdc, 0x80);
@@ -220,20 +219,20 @@ void test_the_drive_stopping_on_a_following_sector_posts_an_end_of_read_completi
 // produce for a command, and it would arrive as a sector the guest never asked for.
 void test_a_guest_command_that_stops_the_read_posts_no_extra_completion() {
   for (const uint8_t command : {0x09, 0x08, 0x0A}) { // Pause, Stop, Reset
-    DiscState disc{};
+    psx::cd::Disc disc{};
     CdcTestClock clock{};
     readableThrough = 17;
-    CdcState cdc = begin_read(&disc, &clock);
+    psx::cd::CdController cdc = begin_read(&disc, &clock);
 
     CHECK(acknowledge_current_sector(&cdc, &clock));
     issue_command(&cdc, command);
 
-    clock.ticks += cdc_command_ack_delay_cpu_ticks(0);
-    CHECK_EQ(cdc_drive_service(&cdc), 1);
+    clock.ticks += psx::cd::commandAckDelayCpuTicks(0);
+    CHECK_EQ(cdc.service(), 1);
     CHECK_EQ(pending_irq_type(&cdc), 3); // INT3: the acknowledgement
     acknowledge_irq(&cdc);
     clock.ticks = cdc.command_deadline_ticks;
-    CHECK_EQ(cdc_drive_service(&cdc), 1);
+    CHECK_EQ(cdc.service(), 1);
     CHECK_EQ(pending_irq_type(&cdc), 2); // INT2: the completion
     acknowledge_irq(&cdc);
 
@@ -246,11 +245,11 @@ void test_a_guest_command_that_stops_the_read_posts_no_extra_completion() {
 // stops — the guest's own status poll says so — and no response is fabricated for a queue that
 // cannot hold one.
 void test_a_full_response_queue_leaves_the_end_of_read_unannounced_and_reported() {
-  DiscState disc{};
+  psx::cd::Disc disc{};
   CdcTestClock clock{};
-  CdcState cdc = begin_read(&disc, &clock);
+  psx::cd::CdController cdc = begin_read(&disc, &clock);
   CHECK(acknowledge_current_sector(&cdc, &clock));
-  while (cdc_post_data_ready(&cdc) != 0) {
+  while (cdc.postDataReady() != 0) {
   }
   CHECK_EQ(pending_irq_type(&cdc), 1); // the queue is full of data-readies
 
@@ -258,9 +257,9 @@ void test_a_full_response_queue_leaves_the_end_of_read_unannounced_and_reported(
   readableThrough = 16;
   write_bfrd(&cdc, 0x80);
   std::array<uint32_t, kWholeSectorWords> whole_sector{};
-  cdc_dma_read(&cdc, whole_sector.data(), static_cast<int>(whole_sector.size()));
+  cdc.dmaRead(whole_sector.data(), static_cast<int>(whole_sector.size()));
   clock.ticks = cdc.drive_deadline_ticks;
-  cdc_drive_service(&cdc);
+  cdc.service();
   acknowledge_irq(&cdc);
   write_bfrd(&cdc, 0x80);
 
@@ -280,15 +279,15 @@ constexpr uint32_t kStreamSectors = 5;
 int readyCallbackCalls = 0;
 uint32_t readyCallbackStatus = 0;
 
-extern "C" int test_stream_disc_read_raw(struct DiscState *, uint32_t lba, uint8_t *out, uint32_t count) {
+bool test_stream_disc_read_raw(psx::cd::Disc *, uint32_t lba, uint8_t *out, uint32_t count) {
   if (lba < kStreamLba || lba >= kStreamLba + kStreamSectors) {
-    return 0; // past the end of the media the drive can supply
+    return false; // past the end of the media the drive can supply
   }
   for (uint32_t i = 0; i < count; ++i) {
     out[i] = static_cast<uint8_t>(lba * 31u + i);
   }
   out[15] = 1u; // Mode 1 data sector: the drive presents it, so this is a DATA stream
-  return 1;
+  return true;
 }
 
 // The guest's registered ready callback, in the shape stock libcd's per-sector path has: take the
@@ -297,13 +296,13 @@ extern "C" int test_stream_disc_read_raw(struct DiscState *, uint32_t lba, uint8
 void readyCallback(Core *core) {
   ++readyCallbackCalls;
   readyCallbackStatus = core->r[4];
-  CdcState &controller = core->game->cdc;
+  psx::cd::CdController &controller = core->game->cdc;
   const int savedBank = controller.index;
   std::array<uint32_t, kWholeSectorWords> sector{};
-  (void)cdc_dma_read(&controller, sector.data(), static_cast<int>(sector.size()));
-  cdc_write(&controller, 0u, 0u);
-  cdc_write(&controller, 3u, 0x80u); // request the next sector
-  cdc_write(&controller, 0u, static_cast<uint8_t>(savedBank));
+  (void)controller.dmaRead(sector.data(), static_cast<int>(sector.size()));
+  controller.write(psx::cd::CdcRegister::Index, 0u);
+  controller.write(psx::cd::CdcRegister::Request, 0x80u); // request the next sector
+  controller.write(psx::cd::CdcRegister::Index, static_cast<uint8_t>(savedBank));
 }
 
 class StreamRuntime final : public psx::test::StubGameRuntime {
@@ -324,13 +323,15 @@ void configureStream(Game &game) {
   readyCallbackCalls = 0;
   readyCallbackStatus = 0;
   game.cdc.disc_read_raw_fn = test_stream_disc_read_raw;
-  cdc_set_mode(&game.cdc, kStreamMode);
-  cdc_begin_read(&game.cdc, kStreamLba);
+  game.cdc.setMode(kStreamMode);
+  game.cdc.beginRead(kStreamLba);
   game.cd.stream_active = 1;
 }
 
+std::unique_ptr<StreamRuntime> streamRuntime;
+
 std::unique_ptr<Game> startStream() {
-  static StreamRuntime runtime;
+  StreamRuntime &runtime = *streamRuntime;
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   configureStream(*game);
@@ -357,11 +358,11 @@ std::unique_ptr<Game> startStream() {
 // So the driver drains: it polls until the read has stopped AND the controller owes nothing.
 int runStreamToItsEnd() {
   auto game = startStream();
-  const uint32_t period = cd_drive_sector_period_cpu_ticks(kStreamMode);
+  const uint32_t period = psx::cd::driveSectorPeriodCpuTicks(kStreamMode);
   for (int step = 0; step < 4 * static_cast<int>(kStreamSectors) + 8; ++step) {
     game->timing.advanceGuestInstructionTicks(period);
     game->hle.irqPoll(&game->core);
-    if (game->cdc.reading == 0 && cdc_current_irq_type(&game->cdc) == 0) {
+    if (game->cdc.reading == 0 && game->cdc.currentIrqType() == 0) {
       break;
     }
   }
@@ -389,22 +390,22 @@ void test_a_stream_that_runs_off_the_media_delivers_its_end_to_the_guest() {
 // FOREVER — however often the guest is polled. The count is the drive's, not the poll count's.
 void test_the_end_of_read_completion_is_delivered_exactly_once() {
   auto game = startStream();
-  const uint32_t period = cd_drive_sector_period_cpu_ticks(kStreamMode);
+  const uint32_t period = psx::cd::driveSectorPeriodCpuTicks(kStreamMode);
   for (int step = 0; step < 4 * static_cast<int>(kStreamSectors) + 8; ++step) {
     game->timing.advanceGuestInstructionTicks(period);
     game->hle.irqPoll(&game->core);
-    if (game->cdc.reading == 0 && cdc_current_irq_type(&game->cdc) == 0) {
+    if (game->cdc.reading == 0 && game->cdc.currentIrqType() == 0) {
       break;
     }
   }
   CHECK_EQ(game->cdc.reading, 0);
-  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0); // the run ended with nothing owed
+  CHECK_EQ(game->cdc.currentIrqType(), 0); // the run ended with nothing owed
   const int drained = readyCallbackCalls;
   for (int poll = 0; poll < 8; ++poll) {
     game->hle.irqPoll(&game->core);
   }
   CHECK_EQ(readyCallbackCalls, drained);
-  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0);
+  CHECK_EQ(game->cdc.currentIrqType(), 0);
   delete game.release();
 }
 
@@ -417,7 +418,7 @@ void test_the_end_of_read_completion_is_delivered_exactly_once() {
 // published telling the guest the read had already stopped.
 void test_a_running_read_owes_no_end_of_read_completion() {
   auto game = startStream();
-  const uint32_t period = cd_drive_sector_period_cpu_ticks(kStreamMode);
+  const uint32_t period = psx::cd::driveSectorPeriodCpuTicks(kStreamMode);
   game->timing.advanceGuestInstructionTicks(period);
   game->hle.irqPoll(&game->core);
   CHECK_EQ(readyCallbackCalls, 1); // the first sector's data-ready, and nothing else
@@ -428,6 +429,7 @@ void test_a_running_read_owes_no_end_of_read_completion() {
 } // namespace
 
 int main() {
+  streamRuntime = std::make_unique<StreamRuntime>();
   RUN(the_first_data_ready_of_a_live_read_carries_the_read_bit);
   RUN(the_drive_stopping_on_the_first_sector_posts_an_end_of_read_completion);
   RUN(the_drive_stopping_on_a_following_sector_posts_an_end_of_read_completion);
@@ -436,5 +438,5 @@ int main() {
   RUN(a_stream_that_runs_off_the_media_delivers_its_end_to_the_guest);
   RUN(the_end_of_read_completion_is_delivered_exactly_once);
   RUN(a_running_read_owes_no_end_of_read_completion);
-  return pt_summary();
+  return psx::test::summary();
 }

@@ -1,8 +1,11 @@
 // Inspect the real watchdog timer inside the shipping REPL input boundary, without a timed wait.
 #include "c_subsys.h"
+#include "config.h"
 #include "config_vars.h"
 #include "repl.h"
 #include "testutil.h"
+#include "watchdog.h"
+#include <optional>
 
 #include <algorithm>
 #include <cstring>
@@ -31,18 +34,18 @@ bool readCommand(std::span<char> line) {
 class WatchdogFixture {
 public:
   explicit WatchdogFixture(bool steady) {
-    psx::config::cv_watchdog.set(psx::config::Layer::Runtime, 3);
-    psx::config::cv_watchdog_boot.set(psx::config::Layer::Runtime, 9);
-    watchdog_init();
+    psx::config::set_runtime("PSXPORT_WATCHDOG", std::to_string(3));
+    psx::config::set_runtime("PSXPORT_WATCHDOG_BOOT", std::to_string(9));
+    watchdog.emplace();
     if (steady) {
-      watchdog_main_present_complete();
+      psx::platform::Watchdog::mainPresentComplete();
     }
     inputCalls = 0;
     inputWasSuspended = false;
   }
-  ~WatchdogFixture() {
-    watchdog_disable();
-  }
+
+private:
+  std::optional<psx::platform::Watchdog> watchdog;
 };
 
 void checkInputLifecycle(const char *command, long expectedResult, bool steady) {
@@ -85,5 +88,5 @@ int main() {
   RUN(step_resumes_steady_watchdog);
   RUN(quit_and_end_restore_watchdog);
   RUN(eof_restores_watchdog);
-  return pt_summary();
+  return psx::test::summary();
 }

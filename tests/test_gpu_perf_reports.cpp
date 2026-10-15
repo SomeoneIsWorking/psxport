@@ -48,10 +48,8 @@ bool anyContains(const std::vector<std::string> &lines, const char *needle) {
   return false;
 }
 
-} // namespace
-
 // ── the positive: the channel is on and a full window closes ────────────────────────────────────
-static void test_a_closed_window_reports_its_average_and_its_distribution(void) {
+void test_a_closed_window_reports_its_average_and_its_distribution(void) {
   lucent::enable_channels("perf");
   const std::vector<std::string> lines = capture(60);
   CHECK(!lines.empty());
@@ -62,7 +60,7 @@ static void test_a_closed_window_reports_its_average_and_its_distribution(void) 
 }
 
 // ── the phase labels name the slots the title opened ────────────────────────────────────────────
-static void test_the_average_line_names_every_phase(void) {
+void test_the_average_line_names_every_phase(void) {
   lucent::enable_channels("perf");
   const std::vector<std::string> lines = capture(60);
   CHECK(anyContains(lines, "pre "));
@@ -74,21 +72,21 @@ static void test_the_average_line_names_every_phase(void) {
 }
 
 // ── the negative: a window that has not closed yet says nothing ─────────────────────────────────
-static void test_an_unfinished_window_reports_nothing(void) {
+void test_an_unfinished_window_reports_nothing(void) {
   lucent::enable_channels("perf");
   const std::vector<std::string> lines = capture(59);
   CHECK_EQ((int)lines.size(), 0);
 }
 
 // ── the other negative: the channel is off ──────────────────────────────────────────────────────
-static void test_an_off_channel_reports_nothing(void) {
+void test_an_off_channel_reports_nothing(void) {
   lucent::enable_channels("");
   const std::vector<std::string> lines = capture(120);
   CHECK_EQ((int)lines.size(), 0);
 }
 
 // ── the window repeats for as long as the run does ──────────────────────────────────────────────
-static void test_two_windows_report_twice(void) {
+void test_two_windows_report_twice(void) {
   lucent::enable_channels("perf");
   const std::vector<std::string> lines = capture(120);
   int averages = 0;
@@ -101,7 +99,7 @@ static void test_two_windows_report_twice(void) {
 }
 
 // ── the present series is recorded with the channel off, and counts misses and their longest run ──
-static void test_presents_count_misses_and_the_longest_run(void) {
+void test_presents_count_misses_and_the_longest_run(void) {
   lucent::enable_channels("");
   GpuPerf perf;
   const double vsync = 1000.0 / 60.0;
@@ -120,7 +118,7 @@ static void test_presents_count_misses_and_the_longest_run(void) {
 }
 
 // ── a restart drops the gap before it: boot is not a missed present ──
-static void test_a_restarted_series_opens_no_interval_across_the_gap(void) {
+void test_a_restarted_series_opens_no_interval_across_the_gap(void) {
   lucent::enable_channels("");
   GpuPerf perf;
   const double vsync = 1000.0 / 60.0;
@@ -135,6 +133,8 @@ static void test_a_restarted_series_opens_no_interval_across_the_gap(void) {
   CHECK(perf.presentIntervals().worstMs() < 17.0);
 }
 
+} // namespace
+
 int main(void) {
   RUN(presents_count_misses_and_the_longest_run);
   RUN(a_restarted_series_opens_no_interval_across_the_gap);
@@ -143,5 +143,5 @@ int main(void) {
   RUN(an_unfinished_window_reports_nothing);
   RUN(an_off_channel_reports_nothing);
   RUN(two_windows_report_twice);
-  return pt_summary();
+  return psx::test::summary();
 }

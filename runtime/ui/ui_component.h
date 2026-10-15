@@ -52,7 +52,7 @@ namespace psx::ui {
 void set_text(Rml::Element *el, std::string_view text);
 
 // Row structure authored by the UI itself (elements and their classes); any data inside it must already go
-// through `rml_text_markup`. `set_text` is this with an encoded text node, so the raw setter stays in one place.
+// through `psx::ui::rmlTextMarkup`. `set_text` is this with an encoded text node, so the raw setter stays in one place.
 void set_markup(Rml::Element *el, const std::string &markup);
 
 class Component {

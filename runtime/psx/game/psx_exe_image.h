@@ -60,7 +60,3 @@ PsxExeLoadResult loadPsxExeImage(Core &core, std::span<const std::uint8_t> bytes
 void applyPsxExeTopLevelRegisters(Core &core, const PsxExeImage &image);
 
 } // namespace psx::cpu
-
-// File-based startup entry: structural admission only, with default stack and
-// top-level return sentinel. Exact title authentication remains the caller's job.
-void load_exe(const char *path, Core *core);

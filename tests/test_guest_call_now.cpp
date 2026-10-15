@@ -37,9 +37,8 @@ void primeArgumentRegisters(Core &core) {
   }
   leafCalls = 0;
 }
-} // namespace
 
-static void test_arguments_reach_r4_to_r7_in_order() {
+void test_arguments_reach_r4_to_r7_in_order() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -55,7 +54,7 @@ static void test_arguments_reach_r4_to_r7_in_order() {
   CHECK_EQ(seenArguments[3], 44u);
 }
 
-static void test_unpassed_argument_registers_are_left_alone() {
+void test_unpassed_argument_registers_are_left_alone() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
   Core &core = game->core;
@@ -78,8 +77,6 @@ static void test_unpassed_argument_registers_are_left_alone() {
   CHECK_EQ(seenArguments[3], kUntouched);
 }
 
-namespace {
-
 void test_result_is_v0() {
   psx::test::StubGameRuntime runtime;
   auto game = makeGame(runtime);
@@ -99,5 +96,5 @@ int main() {
   RUN(arguments_reach_r4_to_r7_in_order);
   RUN(unpassed_argument_registers_are_left_alone);
   RUN(result_is_v0);
-  return pt_summary();
+  return psx::test::summary();
 }

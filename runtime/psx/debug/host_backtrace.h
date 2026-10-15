@@ -3,6 +3,7 @@
 #include <lucent/log.h>
 
 #include <cstdlib>
+#include <span>
 
 #if !defined(__ANDROID__)
 #include <execinfo.h>
@@ -25,19 +26,20 @@ inline int captureBacktrace(void **frames, int capacity) {
   return ::backtrace(frames, capacity);
 }
 
-inline void emitBacktrace(lucent::Level level, const char *channel, void *const *frames, int count, int skip = 0) {
+inline void emitBacktrace(lucent::Level level, const char *channel, std::span<void *const> frames) {
+  const int count = static_cast<int>(frames.size());
   lucent::Line trace;
   trace.add("host backtrace: {} frame(s) captured", count);
-  char **symbols = ::backtrace_symbols(frames, count);
-  for (int i = skip; i < count; ++i) {
+  char **symbols = ::backtrace_symbols(frames.data(), count);
+  for (int i = 0; i < count; ++i) {
     trace.add(" | [{}] {}", i, symbols && symbols[i] ? symbols[i] : "?");
   }
-  std::free(symbols);
+  std::free(static_cast<void *>(symbols));
   trace.flush(level, channel);
 }
 
-inline void emitBacktrace(void *const *frames, int count) {
-  emitBacktrace(lucent::Level::Info, "host-backtrace", frames, count);
+inline void emitBacktrace(std::span<void *const> frames) {
+  emitBacktrace(lucent::Level::Info, "host-backtrace", frames);
 }
 
 } // namespace psxport::host

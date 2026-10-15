@@ -87,5 +87,5 @@ int main() {
   RUN(pcs_outside_every_image_and_outside_ram_are_counted_not_recorded);
   RUN(the_report_names_each_image_and_its_pcs);
   RUN(a_growing_report_is_flushed_before_the_end);
-  return pt_summary();
+  return psx::test::summary();
 }

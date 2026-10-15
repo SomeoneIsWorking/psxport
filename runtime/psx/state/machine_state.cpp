@@ -12,6 +12,8 @@
 #include <lucent/log.h>
 
 #include <algorithm>
+#include <map>
+#include <span>
 
 namespace psx::state {
 namespace {
@@ -139,23 +141,9 @@ std::optional<std::vector<std::uint8_t>> MachineState::capture(std::string &erro
   // Every framework section must be present. A short list here would otherwise produce a file that
   // loads and leaves a device at power-on, which is indistinguishable from a state of a machine
   // that really was at power-on.
-  const std::vector<std::string> required = {section::kCpu.data(),
-                                             section::kRam.data(),
-                                             section::kScratchpad.data(),
-                                             section::kGte.data(),
-                                             section::kGpu.data(),
-                                             section::kBeetleSpu.data(),
-                                             section::kBeetleMdec.data(),
-                                             section::kCdc.data(),
-                                             section::kTiming.data(),
-                                             section::kDma.data(),
-                                             section::kHle.data(),
-                                             section::kSio.data(),
-                                             section::kCard.data(),
-                                             section::kCd.data()};
-  for (const std::string &name : required) {
+  for (const std::string_view name : section::kRequired) {
     if (std::find(written.begin(), written.end(), name) == written.end()) {
-      error = "section '" + name +
+      error = "section '" + std::string(name) +
               "' was not written; the image would restore that device at "
               "power-on and read as a legitimate state";
       return std::nullopt;
@@ -196,30 +184,22 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
   }
 
   // ---- every required framework section present, BEFORE any mutation --------------------------
-  const std::vector<std::string> required = {section::kCpu.data(),
-                                             section::kRam.data(),
-                                             section::kScratchpad.data(),
-                                             section::kGte.data(),
-                                             section::kGpu.data(),
-                                             section::kBeetleSpu.data(),
-                                             section::kBeetleMdec.data(),
-                                             section::kCdc.data(),
-                                             section::kTiming.data(),
-                                             section::kDma.data(),
-                                             section::kHle.data(),
-                                             section::kSio.data(),
-                                             section::kCard.data(),
-                                             section::kCd.data()};
-  for (const std::string &name : required) {
-    if (!file->section(name).has_value()) {
-      error = "the file carries " + std::to_string(outcome.sections.size()) + " sections and none of them is '" + name +
-              "', which this machine needs";
+  std::map<std::string, std::span<const std::uint8_t>, std::less<>> payloads;
+  for (const std::string_view name : section::kRequired) {
+    const std::optional<std::span<const std::uint8_t>> found = file->section(name);
+    if (!found.has_value()) {
+      error = "the file carries " + std::to_string(outcome.sections.size()) + " sections and none of them is '" +
+              std::string(name) + "', which this machine needs";
       return std::nullopt;
     }
+    payloads.emplace(name, *found);
   }
+  auto payload = [&payloads](std::string_view name) {
+    return payloads.find(name)->second;
+  };
 
   // The title's own envelope, read before anything else mutates so a version refusal costs nothing.
-  if (port != nullptr) {
+  if (port != nullptr && titlePayload.has_value()) {
     BlobReader title(*titlePayload);
     const std::uint8_t envelope = title.u8();
     const std::uint32_t version = title.u32();
@@ -238,10 +218,10 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
   // ---- restore, in reverse capture order, control and timing LAST -----------------------------
   Core &core = mGame.core;
   auto read = [&](std::string_view name) {
-    return BlobReader(*file->section(name));
+    return BlobReader(payload(name));
   };
 
-  if (port != nullptr) {
+  if (port != nullptr && titlePayload.has_value()) {
     BlobReader title(*titlePayload);
     title.u8();
     title.u32();
@@ -297,19 +277,17 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
     }
   }
   {
-    const auto payload = file->section(section::kBeetleMdec);
     BeetleDeviceState device;
     std::string deviceError;
-    if (!device.load(core, BeetleDevice::Mdec, *payload, deviceError)) {
+    if (!device.load(core, BeetleDevice::Mdec, payload(section::kBeetleMdec), deviceError)) {
       error = deviceError;
       return std::nullopt;
     }
   }
   {
-    const auto payload = file->section(section::kBeetleSpu);
     BeetleDeviceState device;
     std::string deviceError;
-    if (!device.load(core, BeetleDevice::Spu, *payload, deviceError)) {
+    if (!device.load(core, BeetleDevice::Spu, payload(section::kBeetleSpu), deviceError)) {
       error = deviceError;
       return std::nullopt;
     }

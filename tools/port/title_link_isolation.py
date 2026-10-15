@@ -28,6 +28,8 @@ CLASS_DATA_PREFIXES = (
 
 # Entities only the C++ runtime can define; a title tree never owns one.
 STANDARD_NAMESPACES = ("std::", "__gnu_cxx::", "__cxxabiv1::")
+# Names the compiler emits for itself: PIC code refers to the EH personality through DW.ref.<routine>.
+COMPILER_GENERATED_PREFIXES = ("DW.ref.",)
 
 
 class Refused(RuntimeError):
@@ -167,7 +169,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         holders = first[name] + second[name]
         locations = [definition_location(symbols, name, everything) for symbols in holders]
         readable = holders[0].demangled[name]
-        if entity(readable).startswith(STANDARD_NAMESPACES):
+        if entity(readable).startswith(STANDARD_NAMESPACES) or readable.startswith(COMPILER_GENERATED_PREFIXES):
             continue
         if any(location is None for location in locations):
             unresolved.append(readable)

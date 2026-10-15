@@ -15,8 +15,8 @@ buffers and printed "differing 0/524288 (0.00%)" as a pass — measured on Tomba
 2026-09-19, and the reason this tool was written (psxport issue 0121).
 
 WHAT THIS COMPARES. The frame each core PRESENTS, captured through each core's own present path:
-the product through the REPL's `shot` (gpu_native_shot, so it follows the active render path and the
-wide presentation region), the reference through its libretro framebuffer. Both cores are driven by
+the product through the REPL's `shot` (the presented picture, including the wide presentation
+region), the reference through its libretro framebuffer. Both cores are driven by
 the same title checkpoints `compare.py` uses -- but reaching the same checkpoint is NOT the same as
 standing at the same moment, so every comparison below CHECKS that before it believes a number.
 
@@ -373,8 +373,8 @@ class PictureRun:
         """Crop the product to the rows a console would scan out, which it reported itself.
 
         The native render path deliberately presents more rows than the console showed — the port
-        declares the real count and the framework keeps drawing the rest (psxport gpu_native.cpp,
-        USER 2026-08-19: "PC is fine, oracle isn't"). Comparing the raw frames therefore measures a
+        declares the real count and the framework keeps drawing the rest (psxport
+        GameRuntime::displayHeight, USER 2026-08-19: "PC is fine, oracle isn't"). Comparing the raw frames therefore measures a
         difference nobody considers a defect, and on Tomba! 2 that alone accounted for a 92% pixel
         difference and an apparent 7-pixel vertical offset that was not one.
 

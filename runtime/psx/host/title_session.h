@@ -6,6 +6,7 @@
 
 #include "frame_loop_shell.h"
 #include "gpu_vk_device.h"
+#include "gpu_vk_internal.h" // GpuVkState::PresentedImage
 #include "typed_config.h"
 
 #include <cstdint>
@@ -121,17 +122,13 @@ public:
 
   // ---- what a panel session is allowed to do
   // ------------------------------------------------------ Route this session's present into the
-  // host's composite instead of the window, at `imageWidth` x `imageHeight`. See
-  // gpu_vk_present_to_pane.
-  void presentToPane(int imageWidth, int imageHeight);
+  // host's composite instead of the window, at `image`. See GpuVkState::presentToPane.
+  void presentToPane(psx::present::PixelSize image);
   // Back to the ordinary product route: this session's present IS the window.
   void presentToWindow();
   // The player's controller reaches the confirmed session's guest, and the confirm press itself is
   // delivered there.
   void setPlayerInput(bool live);
-  // Press these active-low buttons to the guest for the next `frames` pad frames. This is how the
-  // confirm press REACHES the game it selected, as a real press rather than as a jump to a state.
-  void pressOnce(std::uint16_t activeLowMask, int frames = 2);
   // Stop advancing / start advancing. A paused session keeps its picture and its guest state
   // exactly where they were and does not present.
   void pause();
@@ -168,7 +165,7 @@ private:
   bool audible_ = false;
   bool preRolling_ = false;
   bool paneDestination_ = false;
-  int paneImageW_ = 0, paneImageH_ = 0;
+  psx::present::PixelSize paneImage_;
   // The last content answer and the step it was taken at, because the answer only changes when the
   // guest draws something new. Mutable since it is a cache of this session's own frame, not state
   // anyone else can observe.

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "record_raster_setup.h"
+#include "vram_bitmap.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -18,8 +19,6 @@ inline int positiveMod(int value, int modulus) {
 // Bits of a plane (VRAM or a canvas, at most VRAM-sized) written by the ops of the open batch.
 class WrittenMap {
 public:
-  WrittenMap() : bits_(static_cast<std::size_t>(kRecordVramHeight) * kWordsPerRow, 0) {}
-
   bool any(const RecordRect &rect) const {
     if (empty_ || rect.x1 <= rect.x0 || rect.y1 <= rect.y0 || rect.x1 <= bounds_.x0 || rect.x0 >= bounds_.x1 ||
         rect.y1 <= bounds_.y0 || rect.y0 >= bounds_.y1) {
@@ -30,7 +29,7 @@ public:
     const int x0 = std::max(rect.x0, bounds_.x0);
     const int x1 = std::min(rect.x1, bounds_.x1);
     for (int y = y0; y < y1; y++) {
-      if (rowAny(y, x0, x1)) {
+      if (bits_.any(y, {x0, x1})) {
         return true;
       }
     }
@@ -42,13 +41,7 @@ public:
       return;
     }
     for (int y = rect.y0; y < rect.y1; y++) {
-      for (int x = rect.x0; x < rect.x1;) {
-        const int word = x >> 6;
-        const int end = std::min(rect.x1, (word + 1) << 6);
-        bits_[static_cast<std::size_t>(y) * kWordsPerRow + static_cast<std::size_t>(word)] |=
-            rangeMask(x & 63, end - (word << 6));
-        x = end;
-      }
+      bits_.mark(y, {rect.x0, rect.x1});
     }
     if (empty_) {
       bounds_ = rect;
@@ -73,59 +66,60 @@ public:
       return;
     }
     for (int y = bounds_.y0; y < bounds_.y1; y++) {
-      std::fill_n(bits_.begin() + static_cast<std::ptrdiff_t>(y) * kWordsPerRow, kWordsPerRow, 0);
+      bits_.clearRow(y);
     }
     empty_ = true;
   }
 
 private:
-  static constexpr int kWordsPerRow = kRecordVramWidth / 64;
-
-  static std::uint64_t rangeMask(int from, int to) {
-    const std::uint64_t high = to >= 64 ? ~0ull : ((1ull << to) - 1ull);
-    return high & ~((1ull << from) - 1ull);
-  }
-
-  bool rowAny(int y, int x0, int x1) const {
-    for (int x = x0; x < x1;) {
-      const int word = x >> 6;
-      const int end = std::min(x1, (word + 1) << 6);
-      if ((bits_[static_cast<std::size_t>(y) * kWordsPerRow + static_cast<std::size_t>(word)] &
-           rangeMask(x & 63, end - (word << 6))) != 0) {
-        return true;
-      }
-      x = end;
-    }
-    return false;
-  }
-
-  std::vector<std::uint64_t> bits_;
+  VramBitmap bits_;
   RecordRect bounds_;
   bool empty_ = true;
 };
 
-// Splits a span of `length` starting at `start` on a ring of `modulus` into at most two runs.
-inline int splitRing(int start, int length, int modulus, std::pair<int, int> out[2]) {
-  if (length <= 0) {
-    return 0;
+// `length` units from `start` on a ring of `modulus` units.
+struct RingRun {
+  int start = 0;
+  int length = 0;
+
+  // At most two runs [first, second) inside [0, modulus).
+  int split(int modulus, std::pair<int, int> out[2]) const {
+    if (length <= 0) {
+      return 0;
+    }
+    const int from = positiveMod(start, modulus);
+    const int units = std::min(length, modulus);
+    const int first = std::min(units, modulus - from);
+    out[0] = {from, from + first};
+    if (first == units) {
+      return 1;
+    }
+    out[1] = {0, units - first};
+    return 2;
   }
-  start = positiveMod(start, modulus);
-  length = std::min(length, modulus);
-  const int first = std::min(length, modulus - start);
-  out[0] = {start, start + first};
-  if (first == length) {
-    return 1;
+
+  bool overlaps(RingRun other, int modulus) const {
+    std::pair<int, int> ra[2];
+    std::pair<int, int> rb[2];
+    const int na = split(modulus, ra);
+    const int nb = other.split(modulus, rb);
+    for (int i = 0; i < na; i++) {
+      for (int j = 0; j < nb; j++) {
+        if (ra[i].first < rb[j].second && rb[j].first < ra[i].second) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
-  out[1] = {0, length - first};
-  return 2;
-}
+};
 
 // The native rectangles a wrapped VRAM rectangle covers.
-inline std::vector<RecordRect> wrappedRects(int x, int y, int width, int height) {
+inline std::vector<RecordRect> wrappedRects(VramRect area) {
   std::pair<int, int> columns[2];
   std::pair<int, int> rows[2];
-  const int nc = splitRing(x, width, kRecordVramWidth, columns);
-  const int nr = splitRing(y, height, kRecordVramHeight, rows);
+  const int nc = RingRun{area.x, area.width}.split(kRecordVramWidth, columns);
+  const int nr = RingRun{area.y, area.height}.split(kRecordVramHeight, rows);
   std::vector<RecordRect> rects;
   for (int r = 0; r < nr; r++) {
     for (int c = 0; c < nc; c++) {
@@ -133,21 +127,6 @@ inline std::vector<RecordRect> wrappedRects(int x, int y, int width, int height)
     }
   }
   return rects;
-}
-
-inline bool ringsOverlap(int a, int lengthA, int b, int lengthB, int modulus) {
-  std::pair<int, int> ra[2];
-  std::pair<int, int> rb[2];
-  const int na = splitRing(a, lengthA, modulus, ra);
-  const int nb = splitRing(b, lengthB, modulus, rb);
-  for (int i = 0; i < na; i++) {
-    for (int j = 0; j < nb; j++) {
-      if (ra[i].first < rb[j].second && rb[j].first < ra[i].second) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 } // namespace psx::gpu

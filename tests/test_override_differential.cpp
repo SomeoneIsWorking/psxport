@@ -120,7 +120,9 @@ constexpr std::array<std::uint32_t, 12> kManyEffectCode = {
     // ---- the loop body: ack I_STAT, decrement, branch back, delay slot ----
     sw(rT2, kT1, 0x1070),
     addiu(rT2, rT2, -1),
-    bne(rT2, kZero, kFunction + kManyEffectBranchIndex * 4u, kFunction + kManyEffectLoopIndex * 4u),
+    bne(rT2,
+        kZero,
+        static_cast<std::int32_t>(kManyEffectLoopIndex) - static_cast<std::int32_t>(kManyEffectBranchIndex) - 1),
     nop(),
     // ---- after the loop ----
     lw(kT0, kT1, 0x1074),
@@ -304,10 +306,10 @@ struct Fixture {
   }
 
   // One guest call of the function under test, through the product dispatch route.
-  void call(std::uint32_t a = kArgA, std::uint32_t b = kArgB) {
+  void call() {
     Core &c = core();
-    c.r[kA0] = a;
-    c.r[kA1] = b;
+    c.r[kA0] = kArgA;
+    c.r[kA1] = kArgB;
     c.r[kA2] = kResult;
     c.r[kT1] = kPatchTarget;
     c.r[kS0] = kCallerS0;
@@ -371,14 +373,15 @@ static void test_a_gte_halfword_register_is_compared_by_its_value_not_its_storag
   native.gte[kVz0] = 0xFFFFF326u;
   const psx::cpu::ExecutionResult returned{psx::cpu::ExecutionExitReason::GuestReturn, kOuterReturn, 0, {}};
   const auto judge = [&] {
-    return psx::cpu::judgeCompletedCall({original, returned, {}}, {native, returned, {}}, kStackTop, 0);
+    return psx::cpu::judgeCompletedCall(
+        {original, returned, {}}, {native, returned, {}}, psx::cpu::DeadStack{kStackTop, 0});
   };
   CHECK(judge().verdict == DifferentialVerdict::Match);
 
   native.gte[kVz0] = 0xFFFF0326u;
   const psx::cpu::DifferentialOutcome differs = judge();
   CHECK(differs.verdict == DifferentialVerdict::Mismatch);
-  CHECK(differs.difference->what == "gte data register 1");
+  CHECK(psx::test::require(differs.difference).what == "gte data register 1");
 }
 
 static void test_a_wrong_result_register_is_a_mismatch_naming_v0(void) {
@@ -388,9 +391,9 @@ static void test_a_wrong_result_register_is_a_mismatch_naming_v0(void) {
   CHECK_EQ(stats.mismatch, 1u);
   CHECK_EQ(stats.match, 0u);
   CHECK(stats.firstMismatch.has_value());
-  CHECK(stats.firstMismatch->difference->what == "register v0");
-  CHECK(stats.firstMismatch->difference->original == "0x00001335");
-  CHECK(stats.firstMismatch->difference->native == "0x00001336");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).what == "register v0");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).original == "0x00001335");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).native == "0x00001336");
   // The run continues from the original whatever the override did.
   CHECK_EQ(f.core().r[kV0], kSum);
 }
@@ -400,9 +403,9 @@ static void test_a_missing_store_is_a_mismatch_naming_the_ram_range(void) {
   f.call();
   const DifferentialKeyStats &stats = f.stats();
   CHECK_EQ(stats.mismatch, 1u);
-  CHECK(stats.firstMismatch->difference->what == "ram [0x00080000,0x00080002)");
-  CHECK(stats.firstMismatch->difference->original == "3513");
-  CHECK(stats.firstMismatch->difference->native == "0000");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).what == "ram [0x00080000,0x00080002)");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).original == "3513");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).native == "0000");
   CHECK_EQ(f.core().mem_r32(kResult), kSum);
 }
 
@@ -411,8 +414,8 @@ static void test_a_clobbered_callee_saved_register_is_a_mismatch_naming_s0(void)
   f.call();
   const DifferentialKeyStats &stats = f.stats();
   CHECK_EQ(stats.mismatch, 1u);
-  CHECK(stats.firstMismatch->difference->what == "register s0");
-  CHECK(stats.firstMismatch->difference->native == "0xDEADBEEF");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).what == "register s0");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).native == "0xDEADBEEF");
   CHECK_EQ(f.core().r[kS0], kCallerS0);
 }
 
@@ -421,8 +424,8 @@ static void test_an_extra_store_is_a_mismatch_and_does_not_survive(void) {
   f.call();
   const DifferentialKeyStats &stats = f.stats();
   CHECK_EQ(stats.mismatch, 1u);
-  CHECK(stats.firstMismatch->difference->what == "ram [0x00080010,0x00080014)");
-  CHECK(stats.firstMismatch->difference->native == "0DF0AD0B");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).what == "ram [0x00080010,0x00080014)");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).native == "0DF0AD0B");
   CHECK_EQ(f.core().mem_r32(kExtraStore), 0u);
 }
 
@@ -432,7 +435,8 @@ static void test_device_traffic_the_original_never_made_is_a_mismatch_and_is_swa
   f.call();
   const DifferentialKeyStats &stats = f.stats();
   CHECK_EQ(stats.mismatch, 1u);
-  CHECK(stats.firstMismatch->difference->what == "side effect #0 (logs of 0 and 1 effects)");
+  CHECK(psx::test::require(psx::test::require(stats.firstMismatch).difference).what ==
+        "side effect #0 (logs of 0 and 1 effects)");
   // The shadow path's write never reached the device.
   CHECK_EQ(f.game->hle.i_mask, 0x55u);
 }
@@ -552,7 +556,7 @@ static void test_a_native_that_loops_forever_storing_to_a_device_terminates_at_t
   CHECK(contains(described, std::to_string(psx::cpu::kMaxSideEffectsPerCall)));
   CHECK(contains(described, "not a comparison"));
   // The fault names the override and its address, so the report points at the override to fix.
-  const std::string reason = stats.firstMismatch->reason;
+  const std::string reason = psx::test::require(stats.firstMismatch).reason;
   CHECK(contains(reason, "under-test"));
   CHECK(contains(reason, "0x00010100"));
   CHECK(contains(reason, "journal bound"));
@@ -566,7 +570,7 @@ static void test_a_native_that_loops_forever_storing_to_a_device_terminates_at_t
   CHECK(contains(report, "\"stopped_call\": true"));
   CHECK(contains(report, "\"bound\": 1048576"));
   CHECK(contains(report, "per-call journal bound"));
-  CHECK(after.value() - before.value() < 192 * 1024);
+  CHECK(after.value() - before.value() < 192LL * 1024);
   // The run continues from the original: its sum is in v0 and in RAM, and the endless store never
   // reached the device.
   CHECK_EQ(f.core().r[kV0], kSum);
@@ -664,5 +668,5 @@ int main() {
   RUN(restoring_the_originals_code_bytes_invalidates_the_translated_block);
   RUN(a_native_that_loops_forever_storing_to_a_device_terminates_at_the_journal_bound);
   RUN(a_real_call_with_many_effects_under_the_bound_still_matches_with_its_journal_intact);
-  return pt_summary();
+  return psx::test::summary();
 }

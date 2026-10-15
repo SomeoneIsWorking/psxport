@@ -5,7 +5,7 @@
 // GPU waits. Each handler must preserve the corresponding guest-visible service contract.
 //
 // One per Game (`c->game->platform_hle`): the stock library classes (psx::hle::Stock*) bind into it from
-// the title's registerOverrides, and the legacy adapter's remaining GameConfig group binds in initBuiltins.
+// the title's registerOverrides.
 #pragma once
 #include <cstdint>
 class Core;
@@ -18,16 +18,9 @@ class StockVSync;
 // The (Core*)->void signature every HLE handler obeys.
 typedef void (*OverrideFn)(Core *c);
 
-// The legacy GameConfig::hle window count.
-inline constexpr int kPlatformHleWindowCapacity = 4;
-
 class PlatformHle {
 public:
   Game *game = nullptr; // back-pointer wired by Game()
-
-  // The legacy adapter's GameConfig::hle group. Boot may call this more than once; registration
-  // replaces matching addresses in place without growing the table.
-  void initBuiltins();
 
   // A stock library entry; zero `addr` is an entry the title has not located. Aborts on a full table.
   void bindStock(uint32_t addr, OverrideFn fn);
@@ -56,10 +49,6 @@ public:
 
   [[nodiscard]] uint32_t vsyncAddress() const;
 
-  // Register a legacy (addr → handler) pair inside the GameConfig::hle windows. Returns false when
-  // the address is refused or the table cannot accept it.
-  bool register_(uint32_t addr, OverrideFn fn);
-
   // Fast lookup — called on every guest call target. Uses a [min,max] gate for the common case.
   // Returns nullptr for a miss.
   OverrideFn lookup(uint32_t addr) const;
@@ -71,7 +60,6 @@ public:
   }
 
 private:
-  static bool inBiosWindow(const struct GameConfig &cfg, uint32_t a);
   bool insert(uint32_t addr, OverrideFn fn);
 
   static constexpr int kMax = 32;

@@ -10,8 +10,6 @@
 
 namespace {
 
-psx::test::StubGameRuntime stubRuntime;
-
 constexpr uint32_t kCounter = 0x1F801120u;
 constexpr uint32_t kMode = 0x1F801124u;
 constexpr uint32_t kTarget = 0x1F801128u;
@@ -26,6 +24,7 @@ void burn(Game &game, uint64_t ticks) {
 }
 
 void test_counter_advances_with_emulated_cpu_time() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *game = new Game(stubRuntime, {});
   game->core.mem_w16(kMode, 0); // mode 0: system clock, and resets the counter
   CHECK_EQ(game->core.mem_r16(kCounter), 0u);
@@ -38,6 +37,7 @@ void test_counter_advances_with_emulated_cpu_time() {
 
 // Mode bit 9 selects system-clock/8, and the guest's own timeout helper normalises against it.
 void test_mode_bit9_selects_the_divided_clock() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *game = new Game(stubRuntime, {});
   game->core.mem_w16(kMode, 0x200u);
   burn(*game, 800);
@@ -46,6 +46,7 @@ void test_mode_bit9_selects_the_divided_clock() {
 }
 
 void test_sync_mode_matrix_stops_only_modes_zero_and_three() {
+  psx::test::StubGameRuntime stubRuntime;
   const uint16_t modes[] = {0x001u, 0x003u, 0x005u, 0x007u};
   const uint16_t expected[] = {0x1234u, 0x12D4u, 0x12D4u, 0x1234u};
   for (unsigned i = 0; i < 4; ++i) {
@@ -63,6 +64,7 @@ void test_sync_mode_matrix_stops_only_modes_zero_and_three() {
 // the measured helper (guest 0x8003C6A8) has an explicit wrap correction that only makes sense if
 // the value wraps.
 void test_counter_wraps_at_16_bits() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *game = new Game(stubRuntime, {});
   game->core.mem_w16(kMode, 0);
   burn(*game, 0x10000u - 4u);
@@ -74,6 +76,7 @@ void test_counter_wraps_at_16_bits() {
 
 // Writing the counter restarts it from that value; writing the mode zeroes it.
 void test_writes_reposition_and_reset() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *game = new Game(stubRuntime, {});
   game->core.mem_w16(kMode, 0);
   burn(*game, 5000);
@@ -87,6 +90,7 @@ void test_writes_reposition_and_reset() {
 }
 
 void test_target_is_stored_and_readable() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *game = new Game(stubRuntime, {});
   game->core.mem_w16(kTarget, 0xABCDu);
   CHECK_EQ(game->core.mem_r16(kTarget), 0xABCDu);
@@ -94,6 +98,7 @@ void test_target_is_stored_and_readable() {
 }
 
 void test_target_reset_wraps_at_the_programmed_period() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *game = new Game(stubRuntime, {});
   game->core.mem_w16(kTarget, 100u);
   game->core.mem_w16(kMode, 0x008u); // system clock, reset on target
@@ -118,6 +123,7 @@ void test_target_reset_wraps_at_the_programmed_period() {
 // A stopwatch measured through the SAME code path the guest uses: latch, spin, compare. This is the
 // shape that could not terminate before, so it is asserted end to end rather than by inspection.
 void test_a_latch_and_spin_budget_terminates() {
+  psx::test::StubGameRuntime stubRuntime;
   Game *game = new Game(stubRuntime, {});
   game->core.mem_w16(kMode, 0x200u); // the driver's units: system clock / 8
   const uint32_t start = game->core.mem_r16(kCounter);
@@ -145,5 +151,5 @@ int main() {
   RUN(target_is_stored_and_readable);
   RUN(target_reset_wraps_at_the_programmed_period);
   RUN(a_latch_and_spin_budget_terminates);
-  return pt_summary();
+  return psx::test::summary();
 }

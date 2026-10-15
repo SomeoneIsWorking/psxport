@@ -2,16 +2,23 @@
 // RAM/scratchpad/DMA state lives in `this`, reached with no global). PSX 2 MB main RAM mirrored
 // across KUSEG/KSEG0/KSEG1 + 1 KB scratchpad; hardware I/O (0x1F801xxx) routes to the per-game
 // peripheral modules. Host is little-endian (PSX is LE), so word access is a memcpy.
-#include "cfg.h"
+#include "c_subsys.h"
+#include "cdc_state.h"
 #include "core.h"
+#include "diagnostic_config.h"
 #include "dma_irq.h"         // DPCR/DICR semantics — which DMA completions the guest hears about
 #include "dma_linked_list.h" // what BCR sync mode 2 means, and the chain walk
 #include "game.h"
+#include "gpu_device.h"
+#include "gpu_ports.h"
 #include "guest_code_module.h"
 #include "host_backtrace.h"
 #include "invalidation.h"
 #include "io_peripherals.h"
+#include "number_text.h"
+#include "spu_beetle.h"
 #include <lucent/log.h>
+#include <optional>
 
 #include <cstdio>
 #include <stdio.h>
@@ -19,41 +26,24 @@
 #include <string.h>
 #include <string>
 
-// Subsystem entry points reached from the I/O map. gpu_dma2_* read/write this instance's RAM and
-// take the Core (declared in core.h); the rest operate on words/buffers handed to them.
-// gpu_gp0/gpu_gp1/gpu_read_word reach this Core's GpuDevice (gpu_native_api.cpp).
-void gpu_gp0(Core *core, uint32_t w);
-void gpu_gp1(Core *, uint32_t w);
-uint32_t gpu_read_word(Core *core);
-extern "C" {
-#include "cdc_state.h"
-void mdec_write(uint32_t addr, uint32_t val);
-uint32_t mdec_read(uint32_t addr);
-int mdec_dma_in(const uint32_t *words, int count); // returns words actually fed (short = deferral)
-uint32_t mdec_dma_read_word(uint32_t *offs);       // pop one OutFIFO word + its scatter displacement
-void mdec_step(void);                              // run the decoder until it parks at a FIFO gate
-bool mdec_dma_can_write(void);
-bool mdec_dma_can_read(void);
-void spu_write(uint32_t addr, uint32_t val);
-uint32_t spu_read(uint32_t addr);
-void spu_dma_write(const uint32_t *words, int count);
-int spu_dma_read(uint32_t *words, int count);
-}
+namespace {
 
-static void dumpHostBacktrace(int depth) {
+void dumpHostBacktrace(int depth) {
   void *frames[32];
   const int count = psxport::host::captureBacktrace(frames, depth);
-  psxport::host::emitBacktrace(frames, count);
+  psxport::host::emitBacktrace(std::span<void *const>(frames, static_cast<std::size_t>(count)));
 }
+
+} // namespace
 
 // Core::Core / ~Core moved to runtime/psx/core/core.cpp (lifetime + subsystem wiring live there).
 
 // PSXPORT_CW="lo,hi" — host-backtrace watchpoint: when ANY store lands in physical byte range
 // [lo,hi), dump a C backtrace. Finds runtime code that clobbers a region the decompressor wrote.
-void Core::mem_set_watch(uint32_t lo, uint32_t hi) {
+void Core::mem_set_watch(GuestAddressRange range) {
   s_cw_init = 1;
-  s_cw_lo = lo & 0x1FFFFFFF;
-  s_cw_hi = hi & 0x1FFFFFFF;
+  s_cw_lo = range.begin & 0x1FFFFFFF;
+  s_cw_hi = range.end & 0x1FFFFFFF;
   s_cw_n = 0;
   lucent::info("cw", "watch [{:08X},{:08X})", 0x80000000u | s_cw_lo, 0x80000000u | s_cw_hi);
 }
@@ -61,22 +51,23 @@ int Core::mem_watch_hits() {
   return s_cw_n;
 }
 
-void Core::cw_check_slow(uint32_t a, uint32_t v, int width) {
+void Core::cw_check_slow(GuestStore store) {
+  const uint32_t a = store.address;
+  const uint32_t v = store.value;
+  const uint32_t width = store.width;
   if (!s_cw_init) {
     s_cw_init = 1;
-    const char *w = cfg_str("PSXPORT_CW");
-    if (w) {
-      unsigned long lo = 0, hi = 0;
-      if (sscanf(w, "%lx,%lx", &lo, &hi) == 2) {
+    const std::string watch = psx::config::cpu_store_watch();
+    if (!watch.empty()) {
+      if (const std::optional<psx::config::NumberPair> range = psx::config::parsePair(watch, psx::config::kHexRange)) {
         // Mask to PHYSICAL exactly like mem_set_watch does. The comparison below masks the store's
         // address, so a KSEG0 range recorded raw here can never match and the watchpoint silently
         // never fires — a diagnostic whose negative is indistinguishable from "nothing wrote it".
-        // This is the same address-form trap wwatch_arm documents for the scratchpad.
-        s_cw_lo = (uint32_t)lo & 0x1FFFFFFF;
-        s_cw_hi = (uint32_t)hi & 0x1FFFFFFF;
+        s_cw_lo = range->first & 0x1FFFFFFF;
+        s_cw_hi = range->second & 0x1FFFFFFF;
         lucent::info("cw", "watch [{:08X},{:08X}) from PSXPORT_CW", 0x80000000u | s_cw_lo, 0x80000000u | s_cw_hi);
       } else {
-        lucent::error("cw", "PSXPORT_CW='{}' is not a 'lo,hi' pair — NO watchpoint is armed", w);
+        lucent::error("cw", "PSXPORT_CW='{}' is not a 'lo,hi' pair — NO watchpoint is armed", watch);
       }
     }
   }
@@ -86,11 +77,8 @@ void Core::cw_check_slow(uint32_t a, uint32_t v, int width) {
     // Cap is configurable: the default 64 silently truncates exactly when the store you care about
     // happens late in a run (chasing the save-sign confirm write, every visible hit was load-time
     // noise). PSXPORT_CW_MAX=0 means unlimited.
-    static int s_cw_max = -1;
-    if (s_cw_max < 0) {
-      s_cw_max = cfg_int("PSXPORT_CW_MAX", 64);
-    }
-    if (s_cw_max == 0 || s_cw_n <= s_cw_max) {
+    const int limit = static_cast<int>(psx::config::cpu_store_watch_limit());
+    if (limit == 0 || s_cw_n <= limit) {
       lucent::info("cw",
                    "#{} store w{} [{:08X}]={:08X}  interp_pc={:08X} sp={:08X}",
                    s_cw_n,
@@ -99,7 +87,7 @@ void Core::cw_check_slow(uint32_t a, uint32_t v, int width) {
                    v,
                    pc,
                    r[29]);
-      if (cfg_str("PSXPORT_CW_BT")) {
+      if (psx::config::cpu_store_watch_backtrace()) {
         dumpHostBacktrace(32);
         lucent::info("mem", "----");
       }
@@ -107,43 +95,32 @@ void Core::cw_check_slow(uint32_t a, uint32_t v, int width) {
   }
 }
 
-// Normalize any incoming addr to kernel-segment form so callers can pass either raw scratchpad
-// (0x1F800xxx) or KSEG0/KSEG1 addrs and get the same behavior. wwatch_check ORs 0x80000000 into
-// the store's address before comparing, so lo/hi must be in the SAME form or scratchpad watches
-// silently never fire (0x1F80017C armed vs 0x9F80017C store -> miss). Pin both to KSEG1-style.
-void Core::wwatch_arm(uint32_t lo, uint32_t hi) {
-  s_ww_init = 1;
-  s_ww_lo = lo | 0x80000000u;
-  s_ww_hi = hi ? (hi | 0x80000000u) : 0u;
-}
-
-// PSXPORT_WWATCH=lo,hi — log the guest PC of any store landing in [lo,hi). Also fires
-// storeWatchCb (programmatic arm via wwatch_arm) for the SBS write-site backtrace.
-void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
+// PSXPORT_WWATCH=lo,hi — log the guest PC of any store landing in [lo,hi).
+void Core::wwatch_check_slow(GuestStore store) {
+  const uint32_t a = store.address;
+  const uint32_t v = store.value;
   if (!s_ww_init) {
     s_ww_init = 1;
-    const char *w = cfg_str("PSXPORT_WWATCH");
-    if (w) {
-      unsigned long lo = 0, hi = 0;
-      if (sscanf(w, "%lx,%lx", &lo, &hi) == 2) {
+    const std::string watch = psx::config::guest_store_watch();
+    if (!watch.empty()) {
+      if (const std::optional<psx::config::NumberPair> range = psx::config::parsePair(watch, psx::config::kHexRange)) {
         // KSEG form, deliberately: the comparison below ORs 0x80000000 into the store address
         // rather than masking it. Say so out loud, because a range given in PHYSICAL form here
         // matches nothing and would read as "no store ever landed".
-        s_ww_lo = (uint32_t)lo | 0x80000000u;
-        s_ww_hi = hi ? ((uint32_t)hi | 0x80000000u) : 0u;
+        s_ww_lo = range->first | 0x80000000u;
+        s_ww_hi = range->second != 0 ? (range->second | 0x80000000u) : 0u;
         lucent::info("wwatch", "watch [{:08X},{:08X}) from PSXPORT_WWATCH", s_ww_lo, s_ww_hi);
       } else {
-        lucent::error("wwatch", "PSXPORT_WWATCH='{}' is not a 'lo,hi' pair — NO watchpoint is armed", w);
+        lucent::error("wwatch", "PSXPORT_WWATCH='{}' is not a 'lo,hi' pair — NO watchpoint is armed", watch);
       }
     }
   }
   uint32_t ka = a | 0x80000000u;
   if (s_ww_hi && ka >= s_ww_lo && ka < s_ww_hi) {
-    if (cfg_str("PSXPORT_WWATCH")) {
-      extern int gpu_frame_no(Core *);
+    if (!psx::config::guest_store_watch().empty()) {
       lucent::info("wwatch",
                    "f{} core={} store [{:08X}]={:08X} by pc={:08X} ra={:08X} stage={:08X}",
-                   gpu_frame_no(this),
+                   game ? game->display.frame() : 0,
                    (void *)this,
                    ka,
                    v,
@@ -163,7 +140,7 @@ void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
       // `r[]` is the block-boundary register file, not the mid-block one, so the pointer shown is
       // the value the block was ENTERED with. For a loop that is still the buffer being written,
       // which is what a copy's caller needs to be told.
-      if (cfg_str("PSXPORT_WWATCH_GPR")) {
+      if (psx::config::guest_store_watch_registers()) {
         std::string regs;
         for (int i = 0; i < 32; ++i) {
           regs += " r" + std::to_string(i) + "=" + [&] {
@@ -176,7 +153,7 @@ void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
       }
       // PSXPORT_WWATCH_BT=1 — host backtrace per hit. This supplements the architectural guest
       // PC/RA with the native call chain that led to the store.
-      if (cfg_str("PSXPORT_WWATCH_BT")) {
+      if (psx::config::guest_store_watch_backtrace()) {
         lucent::info("wwatch-regs",
                      "a0={:08X} a1={:08X} a2={:08X} a3={:08X} s0={:08X} s1={:08X} s2={:08X} s3={:08X} s4={:08X} "
                      "s5={:08X} s6={:08X} s7={:08X}",
@@ -196,9 +173,6 @@ void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
         lucent::info("mem", "----");
       }
     }
-    if (storeWatchCb) {
-      storeWatchCb(this, ka, v, w);
-    }
   }
 }
 
@@ -206,7 +180,7 @@ std::optional<GuestAddressRange> Core::mappedMainRamRange(uint32_t address, uint
   if (bytes == 0u) {
     return std::nullopt;
   }
-  const auto *mapped = host_ptr(address, bytes);
+  const auto *mapped = host_ptr({address, bytes});
   if (!mapped) {
     return std::nullopt;
   }
@@ -221,7 +195,9 @@ std::optional<GuestAddressRange> Core::mappedMainRamRange(uint32_t address, uint
 }
 
 // Map a virtual address to a RAM/scratchpad host pointer, or NULL for I/O.
-uint8_t *Core::host_ptr(uint32_t a, uint32_t bytes) {
+uint8_t *Core::host_ptr(GuestSpan span) {
+  const uint32_t a = span.address;
+  const uint32_t bytes = span.bytes;
   const uint32_t p = a & 0x1FFFFFFF;
   // PSX main RAM is 2 MB, and the memory controller MIRRORS it four times across the low 8 MB of
   // each segment — 0x000000, 0x200000, 0x400000 and 0x600000 are the same storage. Games use the
@@ -260,34 +236,38 @@ uint8_t *Core::host_ptr(uint32_t a, uint32_t bytes) {
 // that finished the transfer: native runtime code is mid-mutation there, and re-entering guest code
 // from a store is how a controller gets re-entered halfway through a command.
 
-void dma_irq_ack(Core &core, int ch) {
+void psx::dma::ackIrq(Core &core, int ch) {
   core.dma.dicr &= ~(1u << (24 + ch));
 }
-bool dma_done_owed(const Core &core, int ch) {
+bool psx::dma::doneOwed(const Core &core, int ch) {
   return core.dma.done.owed(ch);
 }
-void dma_done_taken(Core &core, int ch) {
+void psx::dma::doneTaken(Core &core, int ch) {
   core.dma.done.taken(ch);
 }
-bool dma_done_any(const Core &core) {
+bool psx::dma::doneAny(const Core &core) {
   return core.dma.done.mask != 0;
 }
+
+namespace {
 
 // One completion point per channel, all identical: the DICR gate decides, never the channel number.
 // (mem.cpp is where the transfers finish, so this is where the set is populated.)
 // Returns true if the guest is now owed a callback, so the caller can raise its deferred-work bit
 // (the completion sites are all Core methods; this is deliberately not one, so it cannot touch
 // anything else on the Core by accident).
-static bool dma_completed(DmaRegisters &dma, int ch) {
+bool dma_completed(DmaRegisters &dma, int ch) {
   const bool owed = dma.done.complete(dma.dicr, ch);
-  lucent::debug("dmairq", "DMA{} complete: armed={} (DICR {:08X})", ch, owed ? 1 : 0, dma_dicr_read(dma.dicr));
+  lucent::debug("dmairq", "DMA{} complete: armed={} (DICR {:08X})", ch, owed ? 1 : 0, psx::dma::readDicr(dma.dicr));
   return owed;
 }
 
-static int dma_block_words(uint32_t bcr) { // sync-mode-1 block DMA total word count
+int dma_block_words(uint32_t bcr) { // sync-mode-1 block DMA total word count
   uint32_t bs = bcr & 0xFFFF, bc = bcr >> 16;
   return (int)(bs * (bc ? bc : 1));
 }
+
+} // namespace
 
 // BCR bits 0-1 are the SYNC MODE, and this function used to read BCR as if they were not there. So a
 // guest that programmed a channel for mode 2 got `blockSize * blockCount` taken from a word that is not a
@@ -407,9 +387,9 @@ void Core::mdec_dma_pump() {
       continue; // the step freed a FIFO — keep pumping
     }
 
-    const uint32_t st = mdec_read(0x1F801824u); // MDEC1 status
-    const int in_cmd = (st >> 29) & 1;          // bit 29: a decode command is consuming input
-    const int out_has = !((st >> 31) & 1);      // bit 31 clear: OutFIFO non-empty
+    const uint32_t st = mdec_read(0x1F801824u);          // MDEC1 status
+    const int in_cmd = static_cast<int>((st >> 29) & 1); // bit 29: a decode command is consuming input
+    const int out_has = !((st >> 31) & 1);               // bit 31 clear: OutFIFO non-empty
 
     if (s_mdec0_left > 0 && !in_cmd && (st & 0xFFFF) == 0xFFFF) {
       // The decode command RETIRED (InCounter wrapped to 0xFFFF) with input still pending: the
@@ -487,6 +467,8 @@ void Core::mdec_dma_pump() {
   }
 }
 
+namespace {
+
 // An address that looks like MAIN RAM but did not resolve through host_ptr is a MEMORY-MODEL DEFECT,
 // not a stray peripheral poke, and the two must not share a diagnostic. An unimplemented I/O register
 // reaching here is expected and routine; a RAM address reaching here means the access is being
@@ -500,9 +482,11 @@ void Core::mdec_dma_pump() {
 //
 // Reported once per distinct address so a hot loop cannot drown the log, and NOT gated behind the io
 // verbosity knob: if this fires, something is wrong that the user needs to see without knowing to ask.
-static bool ram_range_addr(uint32_t p) {
+bool ram_range_addr(uint32_t p) {
   return p < 0x1F000000u;
 } // below the I/O window == RAM space
+
+} // namespace
 
 // A bad address is almost always a bad POINTER, and when the guest is in string-handling code (a
 // module/file lookup, an asset name) the STRING the pointers refer to is the single most identifying
@@ -523,9 +507,9 @@ static bool ram_range_addr(uint32_t p) {
 // no name".
 void Core::dumpStringishRegs() {
   Core *const gc = this;
-  static const char *kReg[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2",
-                                 "t3",   "t4", "t5", "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5",
-                                 "s6",   "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
+  constexpr const char *kReg[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2",
+                                    "t3",   "t4", "t5", "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5",
+                                    "s6",   "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
   int examined = 0, mapped = 0, printed = 0;
   for (int i = 1; i < 32; i++) {
     if (i == 28 || i == 29 || i == 30) {
@@ -533,7 +517,7 @@ void Core::dumpStringishRegs() {
     }
     examined++;
     const uint32_t a = gc->r[i];
-    uint8_t *p = gc->host_ptr(a, 1);
+    uint8_t *p = gc->host_ptr({a, 1});
     if (!p) {
       continue;
     }
@@ -543,7 +527,7 @@ void Core::dumpStringishRegs() {
     char buf[64];
     int n = 0;
     while (n < 63) {
-      uint8_t *q = gc->host_ptr(a + (uint32_t)n, 1);
+      uint8_t *q = gc->host_ptr({a + (uint32_t)n, 1});
       if (!q) {
         break;
       }
@@ -571,7 +555,7 @@ void Core::dumpStringishRegs() {
     char hex[16 * 3 + 1], asc[17];
     int hn = 0, an = 0;
     for (int k = 0; k < 16; k++) {
-      uint8_t *q = gc->host_ptr(a + (uint32_t)k, 1);
+      uint8_t *q = gc->host_ptr({a + (uint32_t)k, 1});
       if (!q) {
         break;
       }
@@ -592,6 +576,8 @@ void Core::dumpStringishRegs() {
                 printed,
                 printed ? "this list" : "an empty list");
 }
+namespace {
+
 // FAIL-FAST on an access to RAM space the memory model does not map.
 //
 // This used to warn once per distinct address and then DISCARD the access — writes vanished and reads
@@ -606,7 +592,7 @@ void Core::dumpStringishRegs() {
 // legitimately needs an address in this range (the PSX mirrors its 2 MB of RAM four times across
 // KSEG0, so 0x80800000 aliases physical 0), the fix is to MAP that range in host_ptr — not to let the
 // access evaporate.
-static void warn_unmapped_ram(Core *gc, uint32_t a, uint32_t bytes, const char *how) {
+void warn_unmapped_ram(Core *gc, uint32_t a, uint32_t bytes, const char *how) {
   const uint32_t p = a & 0x1FFFFFFF;
   if (!ram_range_addr(p)) {
     return;
@@ -662,18 +648,20 @@ static void warn_unmapped_ram(Core *gc, uint32_t a, uint32_t bytes, const char *
   abort();
 }
 
+} // namespace
+
 uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
   uint32_t peripheral = 0; // SIO0 + the root counters own their decode (io_peripherals.h)
-  if (io_peripheral_read(*this, a, peripheral)) {
+  if (psx::platform::readIoPeripheral(*this, a, peripheral)) {
     return peripheral;
   }
   if (p == 0x1F801814) {
-    return gpuDevice.status(game->timing.emulatedCpuTicks());
+    return gpuDevice().status(psx::frame::CpuTicks{game->timing.emulatedCpuTicks()});
   }
   if (p >= 0x1F801800 && p <= 0x1F80180F) { // CD controller registers; Beetle's window, which
                                             // mirrors registers 0..3 above ..803 (cdc_read: p & 3)
-    const uint32_t rv = cdc_read(&game->cdc, p);
+    const uint32_t rv = game->cdc.read(psx::cd::cdcRegister(p));
     irqStatLatch(); // the controller may have raised during this access; I_STAT is set THEN, not
                     // when the CPU next looks — and latching here is also what makes the edge
                     // observable on the `irq` channel in a run where nothing reads I_STAT.
@@ -696,7 +684,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   }
   // GPUREAD: a GP0(C0h) readback word, or the last GP1(10h) answer.
   if (p == 0x1F801810) {
-    return gpu_read_word(this);
+    return psx::gpu::gpuRead(*this);
   }
   if (p == 0x1F801820 || p == 0x1F801824) { // MDEC0 data / MDEC1 status
     // Guest-visible poll = pump point: a DecDCTinSync-style status spin (or a data-port tail read)
@@ -710,7 +698,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     return 0; // SPUSTAT: report idle/transfer-complete
   }
   if (p >= 0x1F801C00 && p <= 0x1F801FFF) {
-    return spu_read(p); // SPU register file
+    return psx::audio::spu::read(p); // SPU register file
   }
   if (p == 0x1F8010B0) {
     return dma.dma3Madr; // DMA3 CDROM->RAM
@@ -767,7 +755,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     return dma.dpcr >> ((p & 3u) * 8u);
   }
   if (p >= 0x1F8010F4 && p <= 0x1F8010F7) { // DICR — bit 31 is computed, not stored
-    return dma_dicr_read(dma.dicr) >> ((p & 3u) * 8u);
+    return psx::dma::readDicr(dma.dicr) >> ((p & 3u) * 8u);
   }
   if (p == 0x1F8010E0) {
     return s_dma6_madr; // DMA6 OTC MADR
@@ -791,7 +779,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
 
 void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
-  if (io_peripheral_write(*this, a, v)) { // SIO0 + root counter 2 (io_peripherals.h)
+  if (psx::platform::writeIoPeripheral(*this, {a, v, bytes})) { // SIO0 + root counter 2 (io_peripherals.h)
     return;
   }
   if (p >= 0x1F801800 && p <= 0x1F80180F) { // CD controller (mirrored window, as io_read)
@@ -817,17 +805,17 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         lucent::channel_on("cdcbt") && lucent::channel_on("cdcw")) {
       dumpHostBacktrace(24);
     }
-    cdc_write(&game->cdc, p, (uint8_t)v);
+    game->cdc.write(psx::cd::cdcRegister(p), (uint8_t)v);
     irqStatLatch(); // An ACK may make a queued controller response current and raise a fresh edge;
                     // latch that edge on this access rather than a later, unrelated I_STAT read.
     return;
   }
   if (p == 0x1F801810) {
-    gpu_gp0(this, v);
+    psx::gpu::gp0Write(*this, v);
     return;
   } // GP0 (direct)
   if (p == 0x1F801814) {
-    gpu_gp1(this, v);
+    psx::gpu::gp1Write(*this, v);
     return;
   } // GP1 (display/control)
   if (p == 0x1F801820 || p == 0x1F801824) { // MDEC0 cmd / MDEC1 ctrl
@@ -843,7 +831,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     s_spu_xfer_addr = (v & 0xFFFF) << 3; // SPU transfer-start addr (bytes)
   }
   if (p >= 0x1F801C00 && p <= 0x1F801FFF) {
-    spu_write(p, v);
+    psx::audio::spu::write(p, v);
     return;
   } // SPU register file
   // DMA3 — CDROM sector data -> RAM. This channel was simply ABSENT: an unmapped CHCR read returns
@@ -892,13 +880,13 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
           const int count = (int)(header >> 24);
           const uint32_t next = header & 0x00FFFFFFu;
           const int take = count < remaining ? count : remaining;
-          const int got = cdc_dma_read(&game->cdc, s_dma_buf + (n - remaining), take);
+          const int got = game->cdc.dmaRead(s_dma_buf + (n - remaining), take);
           for (int i = 0; i < take; i++) {
             mem_w32_unnotified(node + 4 + (unsigned)i * 4u, s_dma_buf[n - remaining + i]);
           }
           psx::cpu::notifyExecutableWrite(
               *this, {node + 4, node + 4 + (unsigned)take * 4u}, psx::cpu::ExecutableWriteSource::Dma);
-          publishGuestCodeModuleLanding(*this, {node + 4, node + 4 + (unsigned)take * 4u});
+          psx::code_module::publishLanding(*this, {node + 4, node + 4 + (unsigned)take * 4u});
           lucent::debug("cdc",
                         "DMA3 chain node 0x{:08X}: {} words, FIFO {} + controller-zero {} (head LBA {})",
                         0x80000000u | node,
@@ -913,12 +901,12 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
           node = next & 0x1FFFFC;
         }
       } else {
-        const int fifo_words = cdc_dma_read(&game->cdc, s_dma_buf, n);
+        const int fifo_words = game->cdc.dmaRead(s_dma_buf, n);
         for (int i = 0; i < n; i++) {
           mem_w32_unnotified(da + (unsigned)i * 4u, s_dma_buf[i]);
         }
         psx::cpu::notifyExecutableWrite(*this, {da, da + (unsigned)n * 4u}, psx::cpu::ExecutableWriteSource::Dma);
-        publishGuestCodeModuleLanding(*this, {da, da + (unsigned)n * 4u});
+        psx::code_module::publishLanding(*this, {da, da + (unsigned)n * 4u});
         lucent::debug("cdc",
                       "DMA3 {} words -> 0x{:08X}: FIFO {} + controller-zero {} (head LBA {})",
                       n,
@@ -971,7 +959,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         for (int i = 0; i < n; i++) {
           s_dma_buf[i] = mem_r32(da + i * 4);
         }
-        if (cfg_str("PSXPORT_SPUDMA")) { // log VAB/sample transfers: source -> SPU dest, size
+        if (psx::config::spu_dma_log()) { // log VAB/sample transfers: source -> SPU dest, size
           lucent::info("spudma",
                        "RAM 0x{:08X} -> SPU 0x{:06X}  {} words ({} B)  pc={:08X} stage={:08X}",
                        0x80000000u | da,
@@ -995,9 +983,9 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
             ln.flush(lucent::Level::Info, "spudma");
           }
         }
-        spu_dma_write(s_dma_buf, n);
+        psx::audio::spu::dmaWrite(s_dma_buf, n);
       } else { // SPU -> RAM
-        int got = spu_dma_read(s_dma_buf, n);
+        int got = psx::audio::spu::dmaRead(s_dma_buf, n);
         for (int i = 0; i < got; i++) {
           mem_w32_unnotified(da + i * 4, s_dma_buf[i]);
         }
@@ -1016,7 +1004,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       // for a VAB/sample upload) spins forever, several frames of init after the upload actually
       // finished — with nothing in any log pointing at the SPU.
       // 0xF0000009 is the PSX's fixed HwSPU class, hardware nomenclature rather than a game value,
-      // so it belongs here rather than in GameConfig. The spec mask is left wide because the class
+      // so it belongs here rather than in a title. The spec mask is left wide because the class
       // identifies the source; the guest's own OpenEvent spec decides which slots match.
       game->hle.deliverEvent(0xF0000009u, 0xFFFFFFFFu);
     }
@@ -1108,16 +1096,15 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F8010A8) { // DMA2 CHCR: start triggers the transfer
     s_dma2_chcr = v;
     if (v & 0x01000000u) { // start/busy
-      int sync = (v >> 9) & 3, to_gpu = v & 1;
+      const int sync = static_cast<int>((v >> 9) & 3);
+      const int to_gpu = static_cast<int>(v & 1);
       if (sync == 2) {
-        gpu_dma2_linked_list(this, s_dma2_madr); // ordering-table linked list — full walk
+        psx::gpu::dma2LinkedList(*this, s_dma2_madr); // ordering-table linked list — full walk
       } else if (sync == 1) {
-        gpu_dma2_block(this,
-                       s_dma2_madr, // block: BC = blocks*size
-                       (int)((s_dma2_bcr & 0xFFFF) * (s_dma2_bcr >> 16)),
-                       to_gpu);
+        // block: BC = blocks*size words
+        psx::gpu::dma2Block(*this, {s_dma2_madr, (s_dma2_bcr & 0xFFFF) * (s_dma2_bcr >> 16) * 4u}, to_gpu != 0);
       } else {
-        gpu_dma2_block(this, s_dma2_madr, (int)(s_dma2_bcr & 0xFFFF), to_gpu); // immediate
+        psx::gpu::dma2Block(*this, {s_dma2_madr, (s_dma2_bcr & 0xFFFF) * 4u}, to_gpu != 0); // immediate
       }
       s_dma2_chcr &= ~0x01000000u; // clear busy -> game's DMA-done poll passes
       if (dma_completed(dma, 2)) {
@@ -1127,15 +1114,16 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     return;
   }
   if (p >= 0x1F8010F0 && p <= 0x1F8010F3) { // DPCR
-    const uint32_t lane = dma_lane_mask(p, bytes);
-    dma.dpcr = (dma.dpcr & ~lane) | (dma_lane_value(p, v, bytes) & lane);
+    const GuestStore store{p, v, bytes};
+    const uint32_t lane = psx::dma::laneMask(store);
+    dma.dpcr = (dma.dpcr & ~lane) | (psx::dma::laneValue(store) & lane);
     return;
   }
   if (p >= 0x1F8010F4 && p <= 0x1F8010F7) { // DICR
-    dma.dicr = dma_dicr_store(dma.dicr, p, v, bytes);
+    dma.dicr = psx::dma::storeDicr(dma.dicr, {p, v, bytes});
     unsigned armed = 0;
     for (int ch = 0; ch < 7; ch++) {
-      if (dma_irq_armed(dma.dicr, ch)) {
+      if (psx::dma::irqArmed(dma.dicr, ch)) {
         armed |= 1u << ch;
       }
     }
@@ -1144,7 +1132,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
                   (p & 3u),
                   bytes,
                   v,
-                  dma_dicr_read(dma.dicr),
+                  psx::dma::readDicr(dma.dicr),
                   armed,
                   r[31]);
     return;

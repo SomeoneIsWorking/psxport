@@ -14,7 +14,7 @@ namespace psx::dma {
 
 // CHCR bits 9-10. Mode 2 IGNORES BCR entirely: MADR points at a chain of `{count:8, next:24}` headers and
 // the payload of each node FOLLOWS that node's header.
-enum SyncMode : unsigned { kManual = 0, kRequest = 1, kLinkedList = 2 };
+enum SyncMode : std::uint8_t { kManual = 0, kRequest = 1, kLinkedList = 2 };
 
 [[nodiscard]] unsigned syncMode(std::uint32_t chcr);
 

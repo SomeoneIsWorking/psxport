@@ -1,19 +1,24 @@
 // memcensus implementation — see memcensus.h for what this measures and what it structurally cannot.
 #include "memcensus.h"
 
-#include "cfg.h"
+#include "diagnostic_config.h"
+#include "number_text.h"
 
+#include <algorithm>
 #include <atomic>
+#include <optional>
 #include <stdio.h>
 #include <stdlib.h> // atexit
 #include <string.h>
+#include <string_view>
 
-extern "C" {
-void *__real_memcpy(void *dst, const void *src, size_t n);
-void *__real_memmove(void *dst, const void *src, size_t n);
-void *__wrap_memcpy(void *dst, const void *src, size_t n);
-void *__wrap_memmove(void *dst, const void *src, size_t n);
-}
+namespace psx::debug {
+// The linker's --wrap symbols, named through asm labels.
+void *realMemcpy(void *dst, const void *src, size_t n) __asm__("__real_memcpy");
+void *realMemmove(void *dst, const void *src, size_t n) __asm__("__real_memmove");
+void *wrapMemcpy(void *dst, const void *src, size_t n) __asm__("__wrap_memcpy");
+void *wrapMemmove(void *dst, const void *src, size_t n) __asm__("__wrap_memmove");
+} // namespace psx::debug
 
 namespace {
 
@@ -66,48 +71,17 @@ inline void record(void *ret, size_t n) {
   g_dropped_bytes.fetch_add(n, std::memory_order_relaxed);
 }
 
-} // namespace
-
-// The wrappers themselves. __builtin_return_address(0) is this frame's caller — the site that asked
-// for the copy — which is the whole point: the profile already knew it was inside memmove.
-extern "C" void *__wrap_memcpy(void *dst, const void *src, size_t n) {
-  if (g_on.load(std::memory_order_relaxed)) {
-    record(__builtin_return_address(0), n);
-  }
-  return __real_memcpy(dst, src, n);
-}
-
-extern "C" void *__wrap_memmove(void *dst, const void *src, size_t n) {
-  if (g_on.load(std::memory_order_relaxed)) {
-    record(__builtin_return_address(0), n);
-  }
-  return __real_memmove(dst, src, n);
-}
-
-void memcensus_init(void) {
-  if (!cfg_on("PSXPORT_MEMCENSUS")) {
-    return;
-  }
-  g_on.store(true, std::memory_order_relaxed);
-  // Own exit hook so the report is emitted independently of optional diagnostics.
-  // there would have made the census silently dump only when the sampling profiler happened to be on
-  // too. A run killed by a SIGNAL still gets its dump through hostprof's on_term (which calls this),
-  // but only when the profiler is armed — a census-only run that is SIGTERMed writes nothing, and
-  // that gap is named here rather than discovered from an empty file.
-  atexit(memcensus_dump);
-}
-
-void memcensus_dump(void) {
+void dump() {
   if (!g_on.load(std::memory_order_relaxed) || g_dumped) {
     return;
   }
   g_dumped = true;
   g_on.store(false, std::memory_order_relaxed); // stop counting our own dump
-  const char *out = cfg_str("PSXPORT_MEMCENSUS_OUT");
-  if (!out) {
+  std::string out = psx::config::memory_census_path();
+  if (out.empty()) {
     out = "scratch/raw/memcensus.txt";
   }
-  FILE *f = fopen(out, "w");
+  FILE *f = fopen(out.c_str(), "w");
   if (!f) {
     return;
   }
@@ -144,20 +118,59 @@ void memcensus_dump(void) {
   if (FILE *m = fopen("/proc/self/maps", "r")) {
     char line[512];
     while (fgets(line, sizeof line, m)) {
-      unsigned long long lo = 0, hi = 0;
-      char perms[8] = {0}, path[384] = {0};
-      if (sscanf(line, "%llx-%llx %7s %*s %*s %*s %383[^\n]", &lo, &hi, perms, path) >= 3 && perms[2] == 'x' &&
-          path[0]) {
-        char *p = path;
-        while (*p == ' ') {
-          p++;
-        }
-        if (*p) {
-          fprintf(f, "# map %llx %llx %s\n", lo, hi, p);
-        }
+      // lo-hi perms offset dev inode [path]
+      std::string_view rest(line);
+      std::string_view fields[6];
+      for (std::string_view &field : fields) {
+        rest.remove_prefix(std::min(rest.find_first_not_of(' '), rest.size()));
+        const std::size_t end = std::min(rest.find(' '), rest.size());
+        field = rest.substr(0, end);
+        rest.remove_prefix(end);
+      }
+      rest.remove_prefix(std::min(rest.find_first_not_of(' '), rest.size()));
+      while (!rest.empty() && (rest.back() == '\n' || rest.back() == ' ')) {
+        rest.remove_suffix(1);
+      }
+      const std::size_t dash = fields[0].find('-');
+      const std::optional<std::uint64_t> lo = psx::config::parseUnsigned64(fields[0].substr(0, dash), 16);
+      const std::optional<std::uint64_t> hi =
+          dash == std::string_view::npos ? std::nullopt : psx::config::parseUnsigned64(fields[0].substr(dash + 1), 16);
+      if (lo.has_value() && hi.has_value() && fields[1].size() > 2 && fields[1][2] == 'x' && !rest.empty()) {
+        fprintf(f,
+                "# map %llx %llx %.*s\n",
+                static_cast<unsigned long long>(*lo),
+                static_cast<unsigned long long>(*hi),
+                static_cast<int>(rest.size()),
+                rest.data());
       }
     }
     fclose(m);
   }
   fclose(f);
+}
+
+} // namespace
+
+// The wrappers themselves. __builtin_return_address(0) is this frame's caller — the site that asked
+// for the copy — which is the whole point: the profile already knew it was inside memmove.
+void *psx::debug::wrapMemcpy(void *dst, const void *src, size_t n) {
+  if (g_on.load(std::memory_order_relaxed)) {
+    record(__builtin_return_address(0), n);
+  }
+  return realMemcpy(dst, src, n);
+}
+
+void *psx::debug::wrapMemmove(void *dst, const void *src, size_t n) {
+  if (g_on.load(std::memory_order_relaxed)) {
+    record(__builtin_return_address(0), n);
+  }
+  return realMemmove(dst, src, n);
+}
+
+void psx::debug::armMemoryCensus() {
+  if (!psx::config::memory_census()) {
+    return;
+  }
+  g_on.store(true, std::memory_order_relaxed);
+  atexit(dump); // a signal-terminated run writes nothing
 }

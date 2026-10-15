@@ -7,8 +7,14 @@
 // Both return false for an address that is none of theirs, so mem.cpp's unmapped-peripheral
 // diagnostic still sees everything it used to.
 #pragma once
+#include "guest_address_range.h"
 #include <cstdint>
 class Core;
 
-bool io_peripheral_read(Core &core, uint32_t addr, uint32_t &out);
-bool io_peripheral_write(Core &core, uint32_t addr, uint32_t value);
+namespace psx::platform {
+
+bool readIoPeripheral(Core &core, uint32_t addr, uint32_t &out);
+
+bool writeIoPeripheral(Core &core, GuestStore store);
+
+} // namespace psx::platform

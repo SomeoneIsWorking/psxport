@@ -73,11 +73,9 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/cpu/store_observe.cpp # arms the dynarec store observer from PSXPORT_STORE_OBSERVE
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_loop_shell.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_presenter.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/guest_widescreen_projection.cpp
+  ${PSXPORT_ROOT}/runtime/psx/present/guest_widescreen_projection.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/fs_util.cpp          # generic std::filesystem host-I/O wrapper (class Fs), no game types
-  ${PSXPORT_ROOT}/runtime/psx/game/game_iface.cpp       # polymorphic GameRuntime install + bounded legacy adapter
   ${PSXPORT_ROOT}/runtime/psx/platform/coro.cpp
-  ${PSXPORT_ROOT}/runtime/psx/config/cfg.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/memcensus.cpp      # --wrap=memcpy call-site attribution (PSXPORT_MEMCENSUS)
   ${PSXPORT_ROOT}/runtime/psx/platform/io_peripherals.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/sio_pad.cpp
@@ -86,7 +84,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/core/guest_memory.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/dma_callbacks.cpp # direct-runtime per-Game DMACallback registration state
   ${PSXPORT_ROOT}/runtime/psx/cpu/cpu_divide.cpp     # R3000 DIV/DIVU quotient/remainder semantics
-  ${PSXPORT_ROOT}/runtime/psx/cpu/cop0.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/bios_interrupt.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/bios_pad_work_area.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/bios_libc_string.cpp
@@ -97,17 +94,9 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/hle/syscall_exception.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/kernel_syscall.cpp
   ${PSXPORT_ROOT}/runtime/psx/boot/host_turn.cpp
-  ${PSXPORT_ROOT}/runtime/psx/platform/threads.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_native.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_native_api.cpp # the C-style Core* entry points over the GpuState members
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_native_dma.cpp # DMA2 words into GpuState's parser: OT walk, replay, block
-  ${PSXPORT_ROOT}/runtime/psx/gpu/ordering_table.cpp # the guest DrawOTag chain: node header decoded by field name
-  ${PSXPORT_ROOT}/runtime/psx/present/face_contest.cpp      # the face-contest rule: can the depth buffer be trusted to order this pair
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_native_scanout.cpp
-  ${PSXPORT_ROOT}/runtime/psx/debug/gpu_primitive_dump.cpp # primitive-census CSV diagnostic owner
+  ${PSXPORT_ROOT}/runtime/psx/present/ordering_table.cpp # the guest DrawOTag chain: node header decoded by field name
   ${PSXPORT_ROOT}/runtime/psx/debug/image_writer.cpp      # one checked RGB24 capture-file boundary
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_debug.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/vram_xfer.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_audio.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/audio_field_report.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/host_input.cpp
@@ -122,7 +111,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/movie/native_fmv.cpp
   ${PSXPORT_ROOT}/runtime/psx/movie/fmv_decode.cpp   # pure .STR decode (VLC/MDEC/XA), shared by the player + offline tools
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gte.c
-  ${PSXPORT_ROOT}/runtime/psx/cpu/gte_beetle.cpp
+  ${PSXPORT_ROOT}/runtime/psx/cpu/beetle/gte_beetle.cpp
   # The PSX GPU device (runtime/psx/gpu/gpu_device.cpp). gpu.c #includes gpu_polygon.c / gpu_sprite.c /
   # gpu_line.c, so those are NOT listed; gpu_polygon_sub.c and rhi/rhi_intf.c are separate units.
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gpu.c
@@ -134,20 +123,18 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/gp0_primitive_decode.cpp # a GP0 draw packet's words to a record primitive
   ${PSXPORT_ROOT}/runtime/psx/present/frame_record.cpp # one logic frame's GPU work in execution order
   ${PSXPORT_ROOT}/runtime/psx/present/emission_scope.cpp # producer scopes and the packet keys they bind
-  ${PSXPORT_ROOT}/runtime/psx/present/keyed_blend.cpp # the in-between record from N-1 and N by key
   ${PSXPORT_ROOT}/runtime/psx/present/frame_state.cpp # producer states by scope serial, collected per record
   ${PSXPORT_ROOT}/runtime/psx/present/state_producer.cpp # the registry of producer renders
   ${PSXPORT_ROOT}/runtime/psx/present/emit_memory.cpp # guest or host bytes a packet-emitting body runs over
   ${PSXPORT_ROOT}/runtime/psx/present/gte_control.cpp # the GTE control registers a render runs under
   ${PSXPORT_ROOT}/runtime/psx/present/host_ordering_table.cpp # packets a body linked into a host table, as primitives
   ${PSXPORT_ROOT}/runtime/psx/present/frame_composer.cpp # the frame at t from a record and producer renders
-  ${PSXPORT_ROOT}/runtime/psx/gpu/native_projection.cpp
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
   ${PSXPORT_ROOT}/runtime/psx/movie/mdec_beetle.c
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/spu.c
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_beetle.cpp
   # Beetle's own save-state chunk codec (MDFNSS_StateAction / MDFNSS_SaveSM / MDFNSS_LoadSM). It was
-  # NOT compiled before, which is why runtime/psx/cpu/gte_vendor_hooks.cpp answered MDFNSS_StateAction
+  # NOT compiled before, which is why runtime/psx/cpu/beetle/gte_vendor_hooks.cpp answered MDFNSS_StateAction
   # with a stub returning 1: the lifted SPU and MDEC call it, and a stub that never reads a byte
   # makes every device save state an empty section a load would accept. psx::state::BeetleDeviceState
   # (runtime/psx/state/beetle_device_state.*) now drives the fork's real SPU/MDEC state actions, and
@@ -170,7 +157,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cd/stock_libcd.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/disc_toc.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/stock_cd_response.cpp
-  ${PSXPORT_ROOT}/runtime/psx/cd/cd_drive_timing.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cdc_command_phase.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cdc_native.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/xa_stream.cpp
@@ -178,10 +164,14 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/debug/field_digest.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_pacer.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/timing.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_api.cpp  # the Core*-facing entry points over the GpuVkState methods
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_readback.cpp # GPU->host capture: shot / present_shot / the VRAM dumps
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_device.cpp
+  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_device.cpp # the SDL GPU device: bring-up, samplers, present pipelines
+  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_submit.cpp # command-buffer submit and the persisted GPU fault latch
+  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_present.cpp # a Game's present targets: the presented image, letterbox and swapchain
+  ${PSXPORT_ROOT}/runtime/psx/present/gpu_ports.cpp # GP0/GP1/GPUREAD and DMA2 into the GPU device
+  ${PSXPORT_ROOT}/runtime/psx/present/display_presenter.cpp # the guest display to the screen, once per present
+  ${PSXPORT_ROOT}/runtime/psx/platform/scea_splash.cpp # the SCEA license screen as a host image
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_shader.cpp # SPIR-V shader creation
   ${PSXPORT_ROOT}/runtime/psx/gpu/record_raster_setup.cpp # FrameRecord coverage and interpolants for the record rasterizer
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_record_raster.cpp # FrameRecord rasterized into one VRAM image
@@ -190,22 +180,13 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_screen.cpp # present a host screen (title selector) as the whole picture
   ${PSXPORT_ROOT}/runtime/psx/present/pane_composite.cpp # ONE window frame from SEVERAL sessions' presented pictures
   ${PSXPORT_ROOT}/runtime/psx/present/picture_announce.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_fadewatch.cpp
-  ${PSXPORT_ROOT}/runtime/psx/present/native_composite_capture.cpp # renderer-private completed-composite retention
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_depth.cpp # normalized 3D depth and per-primitive order policy
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_semi_order.cpp # world semi-transparent submission order
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_painter.cpp # painter target lifecycle + authored command staging
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_texture_coverage_selftest.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_modulation_selftest.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_wide_margin.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_semi_selftest.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_texture_phase_selftest.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_untextured_selftest.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_perf.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/gpu_perf.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_time_histogram.cpp  # the frame-time distribution gpu_perf reports percentiles from
   ${PSXPORT_ROOT}/runtime/psx/debug/mods.cpp
   ${PSXPORT_ROOT}/runtime/psx/config/config.cpp   # layered CVar registry + the environment audit (docs/config.md)
   ${PSXPORT_ROOT}/runtime/psx/config/typed_config.cpp # the immutable launch config reached through Game
+  ${PSXPORT_ROOT}/runtime/psx/config/number_text.cpp
+  ${PSXPORT_ROOT}/runtime/psx/config/diagnostic_config.cpp # the opt-in diagnostic knobs
   ${PSXPORT_ROOT}/runtime/psx/hle/platform_hle.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/stock_dma_callbacks.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/stock_libgpu.cpp
@@ -214,7 +195,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/boot/run_end_report.cpp # the one report a finished run owes
   ${PSXPORT_ROOT}/runtime/psx/host/product_host.cpp # the multi-title product: picker, then the chosen title, then the picker
   ${PSXPORT_ROOT}/runtime/psx/host/title_session.cpp # one steppable boot-to-exit run of one catalog title
-  ${PSXPORT_ROOT}/runtime/psx/host/single_title_catalog.cpp # the catalog of a one-title product
+  ${PSXPORT_ROOT}/runtime/psx/catalog/single_title_catalog.cpp # the catalog of a one-title product
   ${PSXPORT_ROOT}/runtime/psx/host/run_budget.cpp # the run's cap in presentation-fence steps
   ${PSXPORT_ROOT}/runtime/psx/host/panel_sessions.cpp # one live session per available title and which of them runs
   ${PSXPORT_ROOT}/runtime/psx/host/panel_logo.cpp # a title's logo image and its lazy GPU texture
@@ -227,25 +208,23 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host/title_disc.cpp # a title's disc, keyed or one exact image
   ${PSXPORT_ROOT}/runtime/psx/host/saved_disc.cpp # the first-run disc choice in user data
   ${PSXPORT_ROOT}/runtime/psx/host/first_run_setup.cpp # the setup-ui screen that asks for the disc
-  ${PSXPORT_ROOT}/runtime/psx/host/title_availability.cpp
-  ${PSXPORT_ROOT}/runtime/psx/host/title_selection.cpp
+  ${PSXPORT_ROOT}/runtime/psx/catalog/title_availability.cpp
+  ${PSXPORT_ROOT}/runtime/psx/catalog/title_selection.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/field_turn.cpp # psx::FieldTurn: the per-field services a loop owes
   ${PSXPORT_ROOT}/runtime/psx/frame/logic_frame.cpp # psx::frame::LogicFrame: the host side of a title logic frame
   ${PSXPORT_ROOT}/runtime/psx/game/crt0_boot.cpp # Crt0Boot — the derived crt0 plan's shipping applier
-  ${PSXPORT_ROOT}/runtime/psx/gpu/render_path.cpp   # render_path_install — the render-path tri-state, one parser for every boot spine
-  ${PSXPORT_ROOT}/runtime/psx/gpu/proj_prim.cpp
-  ${PSXPORT_ROOT}/runtime/psx/cpu/gte_vendor_hooks.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/proj_params.cpp
+  ${PSXPORT_ROOT}/runtime/psx/cpu/beetle/gte_vendor_hooks.cpp
+  ${PSXPORT_ROOT}/runtime/psx/present/proj_params.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/ot_attr.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/producer_census.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/guest_packet_pool_windows.cpp
   ${PSXPORT_ROOT}/runtime/psx/core/guest_code_module.cpp
-  ${PSXPORT_ROOT}/runtime/psx/boot/hw_bind.cpp
+  ${PSXPORT_ROOT}/runtime/psx/audio/spu_device.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/command_args.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/repl.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/dbg_server.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/bug_report_session.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/watchdog.cpp
-  ${PSXPORT_ROOT}/runtime/psx/boot/boot.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/psx_exe_image.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/disc_executable.cpp # a boot stub's hand-off to an executable on its disc
   ${PSXPORT_ROOT}/runtime/ui/rmlui_overlay.cpp  # RmlUi LIFETIME only — the UI itself is runtime/ui/
@@ -258,7 +237,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/mod_row_model.cpp      # what a menu row MEANS (Mods toggle/adjust tables)
   ${PSXPORT_ROOT}/runtime/ui/warp_control.cpp       # the Debug tab's dev area warp
   ${PSXPORT_ROOT}/runtime/ui/dev_command_control.cpp # the Debug tab's warp entry, items and flag commands
-  ${PSXPORT_ROOT}/runtime/ui/render_path_control.cpp # the Display tab's live renderer selector
   ${PSXPORT_ROOT}/runtime/ui/menu_row.cpp           # one <select-button> + its binding
   ${PSXPORT_ROOT}/runtime/ui/menu_pane.cpp          # one tab's page of rows
   ${PSXPORT_ROOT}/runtime/ui/menu_tab_bar.cpp       # the <tab> row and which one is selected
@@ -266,25 +244,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/choice_navigator.cpp   # the rules of a choose-one list (no RmlUi)
   ${PSXPORT_ROOT}/runtime/ui/choice_screen.cpp      # the full-window choose-one screen over choice.rml
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
-  ${PSXPORT_ROOT}/runtime/psx/present/game_hooks_opt.cpp
   ${PSXPORT_ROOT}/runtime/psx/core/overlay_glue.cpp
-  ${PSXPORT_ROOT}/runtime/psx/present/fade_interpolation.cpp # how two screen-fade endpoints resolve at t
-  ${PSXPORT_ROOT}/runtime/psx/present/present_fade_state.cpp  # the fade a present composites, resolved for one Core
-  ${PSXPORT_ROOT}/runtime/psx/present/fps60_game_hooks.cpp  # guarded callbacks used only by temporal presentation
-  ${PSXPORT_ROOT}/runtime/psx/present/in_between_present.cpp # the present of a synthesized in-between frame
-  ${PSXPORT_ROOT}/runtime/psx/present/host_world_pass_strategy.cpp # explicit hook/capture adapter
-  ${PSXPORT_ROOT}/runtime/psx/present/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
-  ${PSXPORT_ROOT}/runtime/psx/present/fps60_sequence_runs.cpp  # the captured-frame run grouping its diagnostic dump iterates
-  ${PSXPORT_ROOT}/runtime/psx/present/in_between_splice.cpp  # which captured slot each reconstructed primitive stands in for
-  ${PSXPORT_ROOT}/runtime/psx/present/projection_provenance.cpp # which scoped guest projection made each screen vertex
-  ${PSXPORT_ROOT}/runtime/psx/gpu/guest_geometry_interpolation.cpp # in-between of the guest's own primitives by provenance
-  ${PSXPORT_ROOT}/runtime/psx/gpu/guest_geometry_scene_source.cpp # InBetweenStrategy over the two above
-  ${PSXPORT_ROOT}/runtime/psx/gpu/ot_lifo_depth.cpp    # PSX AddPrim head-insertion ties -> raster-distinct native depths
-  ${PSXPORT_ROOT}/runtime/psx/gpu/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)
-  ${PSXPORT_ROOT}/runtime/psx/gpu/render_queue_attribution.cpp # attributes a FULL queue: runaway vs capacity
-  ${PSXPORT_ROOT}/runtime/psx/gpu/render_submission.cpp
-  ${PSXPORT_ROOT}/runtime/psx/present/wide_2d_layout.cpp # the 2D layout transform for a Core, by either widening mechanism
-  ${PSXPORT_ROOT}/runtime/psx/gpu/painter_object_layer.cpp # atomic painter admission + authored command plan
+  ${PSXPORT_ROOT}/runtime/psx/present/present_ledger.cpp # recorded vs composed producers of a t = 1 present
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
 add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC})
@@ -324,7 +285,6 @@ target_include_directories(psxport PUBLIC
   ${PSXPORT_ROOT}/${RT}/core
   ${PSXPORT_ROOT}/${RT}/cpu
   ${PSXPORT_ROOT}/${RT}/frame
-  ${PSXPORT_ROOT}/${RT}/gpu
   ${PSXPORT_ROOT}/${RT}/present
   ${PSXPORT_ROOT}/${RT}/input
   ${PSXPORT_ROOT}/${RT}/cd
@@ -335,20 +295,23 @@ target_include_directories(psxport PUBLIC
   ${PSXPORT_ROOT}/${RT}/hle
   ${PSXPORT_ROOT}/${RT}/platform
   ${PSXPORT_ROOT}/${RT}/game
-  ${PSXPORT_ROOT}/${RT}/host
+  ${PSXPORT_ROOT}/${RT}/catalog
   # The save-state owner (runtime/psx/state/). Public so a title's own NativeStatePort implementation
   # can include machine_state.h and state_blob.h the way the framework's own sections do.
   ${PSXPORT_ROOT}/${RT}/state
   ${MED} ${MED}/psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx
-  ${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr/include
-  ${PSXPORT_ROOT}/vendor/rmlui/Include ${PSXPORT_ROOT}/vendor/rmlui/Backends)
+  ${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr/include)
+# Third-party headers: their own diagnostics are not ours.
+target_include_directories(psxport SYSTEM PUBLIC ${PSXPORT_ROOT}/vendor/rmlui/Include ${PSXPORT_ROOT}/vendor/rmlui/Backends)
 # NO game include dirs: the framework #includes no game/ header — the psxport_smoke link proves it.
 
 # Framework internals no title includes; framework tests and tools link psxport_internal for them.
 add_library(psxport_internal INTERFACE)
-target_include_directories(psxport_internal INTERFACE ${PSXPORT_ROOT}/${RT}/boot)
-target_include_directories(psxport PRIVATE ${PSXPORT_ROOT}/${RT}/boot)
+set(PSXPORT_INTERNAL_INCLUDES
+  ${PSXPORT_ROOT}/${RT}/boot ${PSXPORT_ROOT}/${RT}/host ${PSXPORT_ROOT}/${RT}/gpu ${PSXPORT_ROOT}/${RT}/cpu/beetle)
+target_include_directories(psxport_internal INTERFACE ${PSXPORT_INTERNAL_INCLUDES})
+target_include_directories(psxport PRIVATE ${PSXPORT_INTERNAL_INCLUDES})
 
 target_compile_definitions(psxport PUBLIC
   PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)
@@ -370,9 +333,7 @@ if(PSXPORT_WRAP_MEMCPY)
 endif()
 
 # Link deps PUBLIC/INTERFACE so any consumer (the game exe, the smoke) inherits them.
-# lucent — logging + configuration (https://github.com/SomeoneIsWorking/lucent). The cfg_* API in
-# runtime/psx/config/cfg.cpp is a thin shim over it, so every diagnostic in the port shares one output
-# path. Vendored as a submodule (vendor/lucent) alongside beetle-psx/rmlui so the framework and its
+# lucent — logging + configuration (https://github.com/SomeoneIsWorking/lucent). Vendored as a submodule (vendor/lucent) alongside beetle-psx/rmlui so the framework and its
 # offline tools build hermetically — no configure-time network fetch. add_subdirectory installs the `lucent` target and
 # its `lucent::lucent` alias; lucent's own tests are gated on its CMAKE_SOURCE_DIR and never build
 # here.
@@ -450,8 +411,11 @@ function(psxport_add_product target)
     message(FATAL_ERROR
       "psxport_add_product(${target} CATALOG <factory> HEADER <header> [SOURCES ...] [LIBRARIES ...])")
   endif()
-  add_executable(${target}
-    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../runtime/psx/host/product_main.cpp" ${PRODUCT_SOURCES})
+  set(product_main "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../runtime/psx/host/product_main.cpp")
+  add_executable(${target} "${product_main}" ${PRODUCT_SOURCES})
+  # The framework's own main sees the host internals; the title's sources do not.
+  set_source_files_properties("${product_main}" TARGET_DIRECTORY ${target} PROPERTIES
+    INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:psxport_internal,INTERFACE_INCLUDE_DIRECTORIES>")
   target_compile_definitions(${target} PRIVATE
     "PSXPORT_PRODUCT_CATALOG=${PRODUCT_CATALOG}"
     "PSXPORT_PRODUCT_CATALOG_HEADER=\"${PRODUCT_HEADER}\"")

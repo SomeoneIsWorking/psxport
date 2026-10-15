@@ -2,7 +2,6 @@
 // may cap delivery, but it must never invent the controller's INT1 data-ready response.
 #include "cdc_state.h"
 #include "game.h"
-#include "game_iface.h"
 #include "game_runtime.h"
 #include "guest_call.h"
 #include "image_identity.h"
@@ -12,12 +11,6 @@
 #include "testutil.h"
 
 #include <memory>
-#include <optional>
-
-namespace {
-// Rebuilt by each legacy fixture; the Game from the previous fixture is gone by then.
-std::optional<LegacyGameRuntimeAdapter> legacyRuntime;
-} // namespace
 
 namespace {
 
@@ -42,17 +35,17 @@ void callback(Core *core) {
 }
 
 void interruptVerifier(Core *core) {
-  core->r[2] = (core->mem_r32(kIStat) & (1u << 2u)) != 0u && cdc_current_irq_type(&core->game->cdc) == 1u;
+  core->r[2] = (core->mem_r32(kIStat) & (1u << 2u)) != 0u && core->game->cdc.currentIrqType() == 1u;
 }
 
 void interruptHandler(Core *core) {
   ++interruptHandlerCalls;
-  CdcState &controller = core->game->cdc;
+  psx::cd::CdController &controller = core->game->cdc;
   int previousBank = controller.index;
-  cdc_write(&controller, 0u, 1u);
-  interruptResult = static_cast<uint8_t>(cdc_read(&controller, 1u));
-  cdc_write(&controller, 3u, 1u);
-  cdc_write(&controller, 0u, static_cast<uint8_t>(previousBank));
+  controller.write(psx::cd::CdcRegister::Index, 1u);
+  interruptResult = static_cast<uint8_t>(controller.read(psx::cd::CdcRegister::Response));
+  controller.write(psx::cd::CdcRegister::IrqFlag, 1u);
+  controller.write(psx::cd::CdcRegister::Index, static_cast<uint8_t>(previousBank));
   core->mem_w32(kIStat, 0x7FBu);
 
   uint32_t registered = core->mem_r32(kCallbackSlot);
@@ -72,6 +65,15 @@ void installCallback(Game &game) {
   CHECK(game.core.nativeDispatcher().install({{image, kInterruptHandler}, "cd-interrupt-handler", interruptHandler}));
 }
 
+class HostPumpRuntime final : public psx::test::StubGameRuntime {
+public:
+  void registerOverrides(Game &game) override {
+    libcd.bind(game);
+  }
+
+  const psx::cd::StockLibcd libcd{{}, {}, kCallbackSlot};
+};
+
 class DirectRuntime final : public psx::test::StubGameRuntime {
 public:
   void registerOverrides(Game &game) override {
@@ -81,15 +83,13 @@ public:
   const psx::cd::GuestInterruptLibcd libcd{{}, {}, kCallbackSlot, {}};
 };
 
+std::unique_ptr<HostPumpRuntime> hostPumpRuntime;
+std::unique_ptr<DirectRuntime> directRuntime;
+
 std::unique_ptr<Game> freshGame() {
-  static GameConfig config{};
-  static const GameHooks hooks{};
-  config = {};
-  config.recMainLo = kCallback & 0x1FFFFFFFu;
-  config.recMainHi = (kCallback & 0x1FFFFFFFu) + 4u;
-  config.cdReadyCbPtr = kCallbackSlot;
-  legacyRuntime.emplace(config, hooks);
-  auto game = std::make_unique<Game>(*legacyRuntime, psx::config::Config{});
+  HostPumpRuntime &runtime = *hostPumpRuntime;
+  auto game = std::make_unique<Game>(runtime, psx::config::Config{});
+  runtime.registerOverrides(*game);
   installCallback(*game);
   game->core.mem_w32(kCallbackSlot, kCallback);
   game->cd.stream_active = 1;
@@ -102,7 +102,7 @@ std::unique_ptr<Game> freshGame() {
 }
 
 std::unique_ptr<Game> freshInterruptOwnedGame() {
-  static DirectRuntime runtime;
+  DirectRuntime &runtime = *directRuntime;
   auto game = std::make_unique<Game>(runtime, psx::config::Config{});
   runtime.registerOverrides(*game);
   installCallback(*game);
@@ -136,7 +136,7 @@ void test_empty_controller_queue_does_not_invent_first_callback() {
 
   pump(*game);
 
-  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  CHECK_EQ(game->cdc.currentIrqType(), 0u);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(game->cd.stream_delivered, 0u);
 }
@@ -147,7 +147,7 @@ void test_non_data_controller_response_is_not_dispatched_as_stream_data() {
 
   pump(*game);
 
-  CHECK_EQ(cdc_current_irq_type(&game->cdc), 2u);
+  CHECK_EQ(game->cdc.currentIrqType(), 2u);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(game->cd.stream_delivered, 0u);
 }
@@ -160,7 +160,7 @@ void test_current_data_ready_response_dispatches_exactly_one_callback() {
 
   pump(*game);
 
-  CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u);
+  CHECK_EQ(game->cdc.currentIrqType(), 1u);
   CHECK_EQ(callbackCalls, 1);
   CHECK_EQ(callbackA0, 1u);
   CHECK_EQ(callbackA1, 0u);
@@ -181,7 +181,7 @@ void test_interrupt_owned_stream_waits_for_guest_isr_to_consume_int1() {
   game->core.active_native_address = kInterruptHandler;
 
   pump(*game);
-  CHECK_EQ(cdc_current_irq_type(&game->cdc), 1u);
+  CHECK_EQ(game->cdc.currentIrqType(), 1u);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(interruptHandlerCalls, 0);
   CHECK_EQ(game->cd.stream_delivered, 0u);
@@ -196,7 +196,7 @@ void test_interrupt_owned_stream_waits_for_guest_isr_to_consume_int1() {
   CHECK_EQ(callbackCalls, 1);
   CHECK_EQ(callbackA0, 1u);
   CHECK_EQ(callbackA1, 0x22u);
-  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  CHECK_EQ(game->cdc.currentIrqType(), 0u);
   CHECK_EQ(game->core.mem_r32(kIStat) & (1u << 2u), 0u);
   CHECK_EQ(game->core.r[4], 0xAAAAAAAAu);
   CHECK_EQ(game->core.r[5], 0xBBBBBBBBu);
@@ -210,7 +210,7 @@ void test_interrupt_owned_stream_does_not_dispatch_without_int1() {
   pump(*game);
   game->hle.irqPoll(&game->core);
 
-  CHECK_EQ(cdc_current_irq_type(&game->cdc), 0u);
+  CHECK_EQ(game->cdc.currentIrqType(), 0u);
   CHECK_EQ(interruptHandlerCalls, 0);
   CHECK_EQ(callbackCalls, 0);
   CHECK_EQ(game->cd.stream_delivered, 0u);
@@ -219,10 +219,12 @@ void test_interrupt_owned_stream_does_not_dispatch_without_int1() {
 } // namespace
 
 int main() {
+  directRuntime = std::make_unique<DirectRuntime>();
+  hostPumpRuntime = std::make_unique<HostPumpRuntime>();
   RUN(empty_controller_queue_does_not_invent_first_callback);
   RUN(non_data_controller_response_is_not_dispatched_as_stream_data);
   RUN(current_data_ready_response_dispatches_exactly_one_callback);
   RUN(interrupt_owned_stream_waits_for_guest_isr_to_consume_int1);
   RUN(interrupt_owned_stream_does_not_dispatch_without_int1);
-  return pt_summary();
+  return psx::test::summary();
 }

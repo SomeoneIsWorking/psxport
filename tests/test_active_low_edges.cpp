@@ -1,7 +1,9 @@
 #include "active_low_edges.h"
 #include "testutil.h"
 
-static void test_press_hold_release_and_reset() {
+namespace {
+
+void test_press_hold_release_and_reset() {
   ActiveLowEdges edges;
   constexpr uint16_t Start = 0x0008u;
   constexpr uint16_t Cross = 0x4000u;
@@ -36,7 +38,9 @@ static void test_press_hold_release_and_reset() {
   CHECK(edges.pressed(Start));
 }
 
+} // namespace
+
 int main() {
   RUN(press_hold_release_and_reset);
-  return pt_summary();
+  return psx::test::summary();
 }

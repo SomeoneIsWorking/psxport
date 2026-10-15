@@ -24,7 +24,23 @@ struct SpinDetectorState {
   int run = 0;               // consecutive starved in-region decisions
 };
 
+namespace psx::platform {
+
+// One executed chunk.
+struct SpinSample {
+  uint32_t pc = 0;
+  bool hostStarved = false;
+  uint32_t ticks = 0;
+};
+
+// A zero window or run disables detection.
+struct SpinLimits {
+  uint64_t windowTicks = 0;
+  int maxRun = 0;
+};
+
 // Feed one executed chunk. Returns true exactly when a spin is declared (the caller then reports
 // and aborts; this function never aborts, so it stays hermetic-testable).
-bool spin_detector_sample(
-    SpinDetectorState &st, uint32_t pc, bool host_starved, uint32_t ticks, uint64_t window_ticks, int max_run);
+bool sampleSpinDetector(SpinDetectorState &st, SpinSample sample, SpinLimits limits);
+
+} // namespace psx::platform

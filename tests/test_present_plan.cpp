@@ -24,6 +24,8 @@
 #include "present_plan.h"
 #include "testutil.h"
 
+namespace {
+
 // ---- the rule as shipped at af28715a, kept ONLY as this suite's negative control ------------------
 // Headless never reached show_composite, so there was no plan and no picture; windowed computed the
 // real one. Nothing else about the composite differed — which is the point: the split was not a
@@ -32,14 +34,14 @@
   if (headless) {
     return PresentPlan{}; // present() returned before show_composite
   }
-  return plan_present(in, /*headless=*/false);
+  return psx::present::planPresent(in, /*headless=*/false);
 }
 
-static PresentPlan plan(const PresentInputs &in, bool headless) {
+PresentPlan plan(const PresentInputs &in, bool headless) {
 #ifdef PSXPORT_TEST_LEGACY_PRESENT_PLAN
   return legacy_plan(in, headless);
 #else
-  return plan_present(in, headless);
+  return psx::present::planPresent(in, headless);
 #endif
 }
 
@@ -50,7 +52,7 @@ struct Case {
   const char *name;
   PresentInputs in;
 };
-static const Case CASES[] = {
+const Case CASES[] = {
     {"native 4:3", {1280, 960, 0, 0, 320, 240, 320, 0, 0, 0, 0, 0, 0}},
     {"native, y=256", {1280, 960, 0, 256, 320, 240, 320, 0, 0, 0, 0, 0, 0}},
     {"widescreen 512", {1280, 960, 0, 0, 512, 240, 320, 0, 0, 0, 0, 0, 0}},
@@ -61,16 +63,16 @@ static const Case CASES[] = {
     {"24bpp + ires x2", {1280, 960, 0, 0, 320, 240, 320, 2, 0, 0, 0, 0, 1}},
     {"tall window", {800, 1200, 0, 0, 320, 240, 320, 0, 0, 0, 0, 0, 0}},
 };
-static const int NCASES = (int)(sizeof CASES / sizeof CASES[0]);
+const int NCASES = (int)(sizeof CASES / sizeof CASES[0]);
 
 // ---- THE invariant --------------------------------------------------------------------------------
-static void test_only_the_sink_differs_between_legs(void) {
+void test_only_the_sink_differs_between_legs(void) {
   CHECK_EQ(NCASES, 9); // the denominator, asserted rather than assumed
   for (int i = 0; i < NCASES; i++) {
     const PresentPlan hl = plan(CASES[i].in, /*headless=*/true);
     const PresentPlan wn = plan(CASES[i].in, /*headless=*/false);
     // Same picture in both legs...
-    CHECK(present_plan_same_picture(hl, wn));
+    CHECK(psx::present::samePicture(hl, wn));
     // ...and the sink is the only thing that differs.
     CHECK_EQ(hl.to_swapchain, false);
     CHECK_EQ(wn.to_swapchain, true);
@@ -80,7 +82,7 @@ static void test_only_the_sink_differs_between_legs(void) {
 // The composite must RUN headless. Stated separately from the equality above because "both legs
 // produced the same empty plan" would satisfy an equality check while covering nothing — that is the
 // all-zero uniform output this project keeps mistaking for agreement.
-static void test_the_composite_runs_in_both_legs(void) {
+void test_the_composite_runs_in_both_legs(void) {
   for (int i = 0; i < NCASES; i++) {
     CHECK(plan(CASES[i].in, true).build);
     CHECK(plan(CASES[i].in, false).build);
@@ -90,7 +92,7 @@ static void test_the_composite_runs_in_both_legs(void) {
 
 // A non-degenerate picture: the plan must actually place a non-empty viewport, or "same in both
 // legs" would be satisfied by two zeroed rects.
-static void test_the_plan_is_not_degenerate(void) {
+void test_the_plan_is_not_degenerate(void) {
   for (int i = 0; i < NCASES; i++) {
     const PresentPlan p = plan(CASES[i].in, true);
     CHECK(p.viewport.w > 0);
@@ -101,7 +103,7 @@ static void test_the_plan_is_not_degenerate(void) {
 }
 
 // ---- the composite rules themselves ---------------------------------------------------------------
-static void test_ires_scales_the_sampled_rect(void) {
+void test_ires_scales_the_sampled_rect(void) {
   PresentInputs in = {1280, 960, 16, 32, 320, 240, 320, 4, 0, 0, 0, 0, 0};
   const PresentPlan p = plan(in, true);
   CHECK_EQ(p.src_ires, 4);
@@ -111,14 +113,14 @@ static void test_ires_scales_the_sampled_rect(void) {
   CHECK_EQ(p.disp[3], 960);  // 240 * 4
 }
 
-static void test_a_scaled_present_is_never_24bpp(void) {
+void test_a_scaled_present_is_never_24bpp(void) {
   PresentInputs in = {1280, 960, 0, 0, 320, 240, 320, 2, 0, 0, 0, 0, /*rgb24=*/1};
   CHECK_EQ(plan(in, true).fmt[0], 0); // ires composite is our own 1555 raster
   in.present_ires = 0;
   CHECK_EQ(plan(in, true).fmt[0], 1); // native read honours the display register
 }
 
-static void test_widescreen_letterboxes_to_its_own_width(void) {
+void test_widescreen_letterboxes_to_its_own_width(void) {
   // 512:240 in a 1280x960 sink is wider than the sink, so it is height-limited by the aspect:
   // dw = 1280, dh = 1280 * 240 / 512 = 600, centred vertically.
   PresentInputs in = {1280, 960, 0, 0, 512, 240, 320, 0, 0, 0, 0, 0, 0};
@@ -134,7 +136,7 @@ static void test_widescreen_letterboxes_to_its_own_width(void) {
   CHECK_EQ(q.viewport.h, 960);
 }
 
-static void test_fade_is_carried_verbatim(void) {
+void test_fade_is_carried_verbatim(void) {
   PresentInputs in = {1280, 960, 0, 0, 320, 240, 320, 0, 2, 1, 2, 3, 0};
   const PresentPlan p = plan(in, true);
   CHECK_EQ(p.fade[0], 2);
@@ -148,7 +150,7 @@ static void test_fade_is_carried_verbatim(void) {
 // window from three independent places (four counting the swapchain acquire). Mid-resize they
 // disagree, and the letterbox is then computed for a rectangle that is not the one being drawn into.
 // If the sink is not IN the plan, the renderer has to go and ask again — so pin it here.
-static void test_the_plan_carries_its_own_sink(void) {
+void test_the_plan_carries_its_own_sink(void) {
   for (int i = 0; i < NCASES; i++) {
     const PresentPlan p = plan(CASES[i].in, true);
     CHECK_EQ(p.sink_w, CASES[i].in.sink_w);
@@ -167,7 +169,7 @@ static void test_the_plan_carries_its_own_sink(void) {
 // 320-wide game that constant IS its native width, so Tomba2 was correct in BOTH its modes and the
 // bug was invisible there; a 512-wide game (spider1, spyro) had its picture stretched 1.6x wide.
 // The rule is: aspect = 4:3 scaled by how much WIDER THAN ITS OWN NATIVE WIDTH the framebuffer is.
-static void test_native_width_sets_the_aspect_not_the_framebuffer_width(void) {
+void test_native_width_sets_the_aspect_not_the_framebuffer_width(void) {
   // 320-wide game, native: fills a 4:3 sink edge to edge.
   PresentInputs a = {960, 720, 0, 0, 320, 240, 320, 0, 0, 0, 0, 0, 0};
   CHECK_EQ(plan(a, true).viewport.w, 960);
@@ -197,12 +199,12 @@ static void test_native_width_sets_the_aspect_not_the_framebuffer_width(void) {
 // So Tomba2 cannot change in ANY mode, native or widescreen, at any framebuffer width. This asserts
 // it across the whole plausible range rather than trusting the algebra, because "it should be
 // identical" is exactly the kind of claim this project has been burned by.
-static void test_a_320_wide_game_is_bit_identical_to_the_old_rule(void) {
+void test_a_320_wide_game_is_bit_identical_to_the_old_rule(void) {
   int compared = 0;
   for (int disp_w = 256; disp_w <= 640; disp_w++) {
     PresentInputs in = {960, 720, 0, 0, disp_w, 240, 320, 0, 0, 0, 0, 0, 0};
     const PaneRect got = plan(in, true).viewport;
-    const PaneRect old = pane_letterbox(disp_w, 240, 960, 720); // the rule as it shipped
+    const PaneRect old = psx::present::letterbox(disp_w, 240, 960, 720); // the rule as it shipped
     CHECK_EQ(got.x, old.x);
     CHECK_EQ(got.y, old.y);
     CHECK_EQ(got.w, old.w);
@@ -214,7 +216,7 @@ static void test_a_320_wide_game_is_bit_identical_to_the_old_rule(void) {
 
 // An unknown native width must not divide by zero or invent a widescreen: it degrades to 4:3, which
 // is what every PSX display mode is, and is the only safe assumption when the game has not said.
-static void test_unknown_native_width_degrades_to_4_3(void) {
+void test_unknown_native_width_degrades_to_4_3(void) {
   PresentInputs z = {960, 720, 0, 0, 512, 240, 0, 0, 0, 0, 0, 0, 0};
   const PresentPlan p = plan(z, true);
   CHECK(p.build);
@@ -224,7 +226,7 @@ static void test_unknown_native_width_degrades_to_4_3(void) {
 
 // A sink with no area composes nothing — in EITHER leg. This is the only false `build`, and it is a
 // statement about the sink, not about the leg.
-static void test_an_empty_sink_builds_nothing(void) {
+void test_an_empty_sink_builds_nothing(void) {
   const PresentInputs zero_w = {0, 960, 0, 0, 320, 240, 320, 0, 0, 0, 0, 0, 0};
   const PresentInputs zero_h = {1280, 0, 0, 0, 320, 240, 320, 0, 0, 0, 0, 0, 0};
   CHECK(!plan(zero_w, true).build);
@@ -234,20 +236,13 @@ static void test_an_empty_sink_builds_nothing(void) {
   CHECK(!plan(zero_w, false).to_swapchain); // nothing built, so nothing to show
 }
 
-static void test_widescreen_extent_is_not_sampled_from_one_frame(void) {
-  CHECK_EQ(present_display_width(true, 428, 320), 428);
-  CHECK_EQ(present_display_width(false, 320, 320), 320);
+void test_widescreen_extent_is_not_sampled_from_one_frame(void) {
+  CHECK_EQ(psx::present::presentDisplayWidth(true, 428, 320), 428);
+  CHECK_EQ(psx::present::presentDisplayWidth(false, 320, 320), 320);
 }
 
-// A GUEST PICTURE WHOSE OWN WIDENING IS ENGAGED MUST KEEP THE WHOLE WIDTH.
-//
-// `guestVramIsPicture()` is true for EVERY field of a GTE-path title, so it cannot by itself mean
-// "this picture is only native_wide". Spyro 2 (916f4b1) answers it true and still draws all 684
-// columns through its own widened guest projection. `content_w` is the width the guest AUTHORED,
-// which for such a title is `disp_w` — and then the centring inset is exactly 0 and the sampled
-// rect is byte-identical to the pre-widening rule. Anything that cropped a guest picture to
-// `native_w` unconditionally would take Spyro 2's widescreen away, so this case pins the no-op.
-static void test_a_guest_picture_with_an_engaged_guest_widening_keeps_disp_w(void) {
+// A guest that widens its own projection authors disp_w columns, so nothing is cropped (Spyro 2 draws 684).
+void test_a_guest_picture_with_an_engaged_guest_widening_keeps_disp_w(void) {
   PresentInputs in = {1280, 720, 0, 0, 684, 240, 512, 0, 0, 0, 0, 0, 0};
   in.content_w = 684; // the guest widened its own projection and authored the full 684
   const PresentPlan p = plan(in, true);
@@ -275,6 +270,8 @@ static void test_a_guest_picture_with_an_engaged_guest_widening_keeps_disp_w(voi
   CHECK_EQ(q.viewport.h, 720);
 }
 
+} // namespace
+
 int main(void) {
   RUN(only_the_sink_differs_between_legs);
   RUN(the_composite_runs_in_both_legs);
@@ -290,5 +287,5 @@ int main(void) {
   RUN(an_empty_sink_builds_nothing);
   RUN(widescreen_extent_is_not_sampled_from_one_frame);
   RUN(a_guest_picture_with_an_engaged_guest_widening_keeps_disp_w);
-  return pt_summary();
+  return psx::test::summary();
 }

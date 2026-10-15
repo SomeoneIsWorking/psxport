@@ -127,7 +127,7 @@ public:
   // instrument the project uses. Same class of blindness as the windowed-only init that was already
   // removed, and the same answer: the window is a SINK, not the only way in. Host UI state only.
   void selectTab(int index);
-  bool sendKey(int sdl_keycode); // false = the menu did not claim that key
+  bool sendKey(SDL_Keycode key); // false = the menu did not claim that key
   void dumpMenu() const;         // enumerate every tab/pane/row + its live value
 
 private:

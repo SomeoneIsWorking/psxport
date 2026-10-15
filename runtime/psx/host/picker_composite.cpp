@@ -2,6 +2,7 @@
 
 #include "game.h"
 #include "gpu_vk_device.h"
+#include "gpu_vk_internal.h"
 
 #include <lucent/log.h>
 
@@ -77,8 +78,7 @@ PickerComposite::~PickerComposite() = default;
 void PickerComposite::setSurface(const PickerLayout &layout, int width, int height) {
   m_surfaceW = std::max(width, 0);
   m_surfaceH = std::max(height, 0);
-  m_paneImageW = layout.maxPanelWidth(m_surfaceW);
-  m_paneImageH = m_surfaceH;
+  m_paneImage = {layout.maxPanelWidth(m_surfaceW), m_surfaceH};
 }
 
 void PickerComposite::present(const PickerLayout &layout, std::span<const PanelSource> panels, int selected) {
@@ -87,11 +87,12 @@ void PickerComposite::present(const PickerLayout &layout, std::span<const PanelS
   // One entry per panel, then one divider per boundary.
   m_panes.reserve(panels.size() * 2);
   m_dividers.reserve(panels.size());
-  const int dividerPixels = std::max(kDividerMinimumPixels, static_cast<int>(m_surfaceH * kDividerPerHeight));
+  const int dividerPixels =
+      std::max(kDividerMinimumPixels, static_cast<int>(static_cast<float>(m_surfaceH) * kDividerPerHeight));
   for (std::size_t index = 0; index < panels.size(); ++index) {
     const PanelSource &source = panels[index];
     const bool isSelected = static_cast<int>(index) == selected;
-    const PanelLayout geometry = layout.panel(static_cast<int>(index), source.pictureWidth, source.pictureHeight);
+    const PanelLayout geometry = layout.panel(static_cast<int>(index));
 
     // Every pane in a panel — picture and logo — is cut by the same two lines, in the layout's
     // surface pixels, so nothing inside a panel can leak over a neighbour.
@@ -216,9 +217,10 @@ void PickerComposite::present(const PickerLayout &layout, std::span<const PanelS
   if (lucent::detail::channel_enabled("picker")) {
     for (std::size_t index = 0; index < panels.size(); ++index) {
       const PanelSource &source = panels[index];
-      const GpuVkState::PresentedImage image =
-          source.session != nullptr ? source.session->game->gpu_vk.lastFilledPresented() : GpuVkState::PresentedImage{};
-      const PanelLayout geometry = layout.panel(static_cast<int>(index), source.pictureWidth, source.pictureHeight);
+      const GpuVkState::PresentedImage image = source.session != nullptr
+                                                   ? source.session->game->gpuVk().lastFilledPresented()
+                                                   : GpuVkState::PresentedImage{};
+      const PanelLayout geometry = layout.panel(static_cast<int>(index));
       lucent::debug("picker",
                     "panel {} image {}x{} viewport {}x{} at +{}+{} into {}x{} at +{}+{} held={}",
                     index,

@@ -3,6 +3,7 @@
 
 #include "panel_logo.h"
 #include "picker_layout.h"
+#include "pixel_size.h"
 
 #include "pane_composite.h"
 
@@ -43,11 +44,8 @@ public:
     return m_surfaceH;
   }
   // The present-image size a panel session should build its picture at.
-  int paneImageWidth() const {
-    return m_paneImageW;
-  }
-  int paneImageHeight() const {
-    return m_paneImageH;
+  psx::present::PixelSize paneImage() const {
+    return m_paneImage;
   }
 
   // Build the frame: every panel's backdrop, its picture, its title's own logo, and the dividers.
@@ -63,7 +61,7 @@ private:
   // Held back until every panel is drawn; see the pass order in the .cpp.
   std::vector<psxport::Pane> m_dividers;
   int m_surfaceW = 0, m_surfaceH = 0;
-  int m_paneImageW = 0, m_paneImageH = 0;
+  psx::present::PixelSize m_paneImage;
 };
 
 } // namespace psx::host

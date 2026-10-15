@@ -15,7 +15,7 @@
 //     CHECK(setup_ok());
 //     CHECK_EQ(compute(2), 4);
 //   }
-//   int main(void) { RUN(thing); return pt_summary(); }
+//   int main(void) { RUN(thing); return psx::test::summary(); }
 //
 // RULES FOR TESTS IN psxport/tests/
 //   - HERMETIC ONLY. No disc image, no window, no network, no wall-clock sleeps. A GPU rasterizer test
@@ -33,6 +33,14 @@
 
 #include <stdio.h>
 #include <string.h>
+
+#include <exception>
+#include <fstream>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
 
 /* ---- counters -------------------------------------------------------------------------------- */
 static int pt_checks = 0;       /* checks executed across the whole run                            */
@@ -82,6 +90,8 @@ static int pt_expect_fail = 0;  /* self-test only: suppress the FAIL print for a
     }                                                                                                                  \
   } while (0)
 
+namespace psx::test {
+
 /* String equality.
  *
  * THE LIFETIME TRAP THIS IS SHAPED AROUND — do not "simplify" it back. The obvious spelling
@@ -100,7 +110,7 @@ static int pt_expect_fail = 0;  /* self-test only: suppress the FAIL print for a
  * The fix is to do the whole comparison inside ONE full-expression, so every temporary in `got` and
  * `want` is still alive: the call below is that expression. Kept as a plain function (not a lambda,
  * not a statement expression) so C tests can use this header too. */
-static inline int pt_streq_failed(
+inline int streqFailed(
     const char *got_expr, const char *want_expr, const char *got, const char *want, const char *file, int line) {
   if (got && want && strcmp(got, want) == 0) {
     return 0;
@@ -119,11 +129,13 @@ static inline int pt_streq_failed(
   return 1;
 }
 
+} // namespace psx::test
+
 #define CHECK_STREQ(got, want)                                                                                         \
   do {                                                                                                                 \
     ++pt_checks;                                                                                                       \
     ++pt_case_checks;                                                                                                  \
-    if (pt_streq_failed(#got, #want, (got), (want), __FILE__, __LINE__))                                               \
+    if (psx::test::streqFailed(#got, #want, (got), (want), __FILE__, __LINE__))                                        \
       return;                                                                                                          \
   } while (0)
 
@@ -168,36 +180,79 @@ static inline int pt_streq_failed(
 /* RUN(x) calls test_x(). A case that checked nothing is a FAILURE, not a pass: that is the whole
  * point of counting. It catches the empty stub, the case whose body was `#if 0`'d, and the case that
  * returned early before reaching a single assertion. */
-#define RUN(name)                                                                                                      \
-  do {                                                                                                                 \
-    int pt_f0 = pt_fails;                                                                                              \
-    pt_case_checks = 0;                                                                                                \
-    ++pt_tests;                                                                                                        \
-    if (!pt_expect_fail)                                                                                               \
-      fprintf(stderr, "test %s\n", #name);                                                                             \
-    test_##name();                                                                                                     \
-    if (pt_fails != pt_f0) {                                                                                           \
-      ++pt_tests_failed;                                                                                               \
-      if (!pt_expect_fail)                                                                                             \
-        fprintf(stderr, "  FAIL (%d checks, %d failed)\n", pt_case_checks, pt_fails - pt_f0);                          \
-    } else if (pt_case_checks == 0) {                                                                                  \
-      ++pt_tests_failed;                                                                                               \
-      ++pt_fails;                                                                                                      \
-      if (!pt_expect_fail)                                                                                             \
-        fprintf(stderr, "  FAIL: test %s asserted NOTHING (0 checks) - an empty test is not a pass\n", #name);         \
-    } else if (!pt_expect_fail) {                                                                                      \
-      fprintf(stderr, "  PASS (%d checks)\n", pt_case_checks);                                                         \
-    }                                                                                                                  \
-  } while (0)
+#define RUN(name) psx::test::runCase(#name, test_##name)
+
+namespace psx::test {
+
+// The bytes of `path`; empty when it cannot be read.
+inline std::string readFile(const std::string &path) {
+  std::ifstream in(path, std::ios::binary);
+  std::ostringstream text;
+  text << in.rdbuf();
+  return text.str();
+}
+
+// The value held by `value`; an empty optional fails the running case.
+template <class T> T &require(std::optional<T> &value) {
+  if (!value.has_value()) {
+    throw std::runtime_error("required value is empty");
+  }
+  return *value;
+}
+template <class T> const T &require(const std::optional<T> &value) {
+  if (!value.has_value()) {
+    throw std::runtime_error("required value is empty");
+  }
+  return *value;
+}
+template <class T> T require(std::optional<T> &&value) {
+  if (!value.has_value()) {
+    throw std::runtime_error("required value is empty");
+  }
+  return std::move(*value);
+}
+
+// Runs one case; an exception escaping it is that case's failure.
+inline void runCase(const char *name, void (*body)()) {
+  const int failsBefore = pt_fails;
+  pt_case_checks = 0;
+  ++pt_tests;
+  if (!pt_expect_fail) {
+    fprintf(stderr, "test %s\n", name);
+  }
+  try {
+    body();
+  } catch (const std::exception &error) {
+    ++pt_fails;
+    fprintf(stderr, "    FAIL %s threw: %s\n", name, error.what());
+  } catch (...) {
+    ++pt_fails;
+    fprintf(stderr, "    FAIL %s threw a non-standard exception\n", name);
+  }
+  if (pt_fails != failsBefore) {
+    ++pt_tests_failed;
+    if (!pt_expect_fail) {
+      fprintf(stderr, "  FAIL (%d checks, %d failed)\n", pt_case_checks, pt_fails - failsBefore);
+    }
+  } else if (pt_case_checks == 0) {
+    ++pt_tests_failed;
+    ++pt_fails;
+    if (!pt_expect_fail) {
+      fprintf(stderr, "  FAIL: test %s asserted NOTHING (0 checks) - an empty test is not a pass\n", name);
+    }
+  } else if (!pt_expect_fail) {
+    fprintf(stderr, "  PASS (%d checks)\n", pt_case_checks);
+  }
+}
 
 /* The verdict, without printing: 0 = green. A run with NO tests at all is a failure too — an
  * executable that RUN()s nothing would otherwise be a green ctest entry covering zero code. */
-static int pt_verdict(void) {
+inline int verdict() {
   return (pt_tests == 0 || pt_fails) ? 1 : 0;
 }
 
-/* Final line + process exit code; `return pt_summary();` from main. */
-static int pt_summary(void) {
+/* Final line + process exit code; `return psx::test::summary();` from main. */
+inline int summary() {
   if (pt_tests == 0) {
     fprintf(stderr, "\nFAIL: no tests were run (0 RUN() calls) - this binary gates nothing\n");
   } else {
@@ -210,7 +265,9 @@ static int pt_summary(void) {
             pt_checks,
             pt_fails);
   }
-  return pt_verdict();
+  return verdict();
 }
+
+} // namespace psx::test
 
 #endif /* PSXPORT_TESTUTIL_H */

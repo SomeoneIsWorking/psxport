@@ -8,13 +8,15 @@
 // listener bind fails and its `mStarted` stays false. Callers with `Core* c` reach the endpoint via
 // `c->game->dbg_server.method()`. No legacy free-function shims — all callers use the class directly.
 #pragma once
-#include "config_vars.h" // cv_debug_server — the endpoint's port
+#include "config_vars.h" // debug_server
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 class Core;
 class Game;
+
+namespace psx::debug {
 
 // The loopback port the live debug endpoint listens on, or 0 for "off".
 //
@@ -24,7 +26,7 @@ class Game;
 //
 // Unset, empty, "0" and anything that is not a number are OFF, because a knob that silently binds a
 // port nobody asked for is worse than one that does not start.
-inline int debug_server_port(std::string_view value) {
+inline int debugServerPort(std::string_view value) {
   int port = 0;
   for (const char c : value) {
     if (c < '0' || c > '9') {
@@ -42,9 +44,11 @@ inline int debug_server_port(std::string_view value) {
 }
 
 // Whether a client is going to drive this run over the live endpoint. `psx::host::RunBudget` reads it.
-inline bool debug_server_live() {
-  return debug_server_port(psx::config::cv_debug_server.get()) != 0;
+inline bool debugServerLive() {
+  return debugServerPort(psx::config::debug_server()) != 0;
 }
+
+} // namespace psx::debug
 
 class DbgServer {
 public:

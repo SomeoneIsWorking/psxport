@@ -1,6 +1,6 @@
 # 0130 — three TITLE-SPECIFIC guest globals are read by bare address from framework code
 
-**State:** recorded, not fixed. Found 2026-09-28 while naming the guest operations in
+**State:** resolved 2026-10-15: no framework file reads these addresses (`gpu_native.cpp` was deleted in (c) stage 2, the `mem.cpp` and `dbg_server.cpp` reads went with the legacy interface). Recorded Found 2026-09-28 while naming the guest operations in
 `runtime/psx/gpu/gpu_native.cpp`; the same work tried to fix it and was stopped by the gate that exists
 specifically to stop it (below).
 

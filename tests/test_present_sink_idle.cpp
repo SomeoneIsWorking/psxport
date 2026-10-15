@@ -3,7 +3,7 @@
 // showing" from a hung guest thread (measured: SIGABRT "[watchdog] STUCK: no frame presented", parked in
 // the blocking acquire) into a skipped blit.
 //
-// The SDL boundary itself (sink_acquire) needs a window and a swapchain and is therefore exercised by a
+// The SDL boundary itself (psx::gpu::acquireSink) needs a window and a swapchain and is therefore exercised by a
 // run, not here; what these cases pin down is the logic the shipping call site depends on, including the
 // negative ones: a steady state must announce NOTHING, so a missing latch cannot pass as correct.
 #include "gpu_present_sink.h"

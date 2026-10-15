@@ -10,9 +10,11 @@
 
 #include "record_raster_harness.h"
 
+namespace {
+
 using namespace record_raster_harness;
 
-static void test_fills(void) {
+void test_fills(void) {
   Stream s = baseState();
   s.add({rgb(0x02, 0xF8, 0x80, 0x08), xy(16, 16), xy(64, 32)});
   s.add({rgb(0x02, 0x13, 0x57, 0x9B), xy(37, 70), xy(33, 9)});     // x and width round to 16
@@ -20,7 +22,7 @@ static void test_fills(void) {
   CHECK_REPLAY(s);
 }
 
-static void test_copies(void) {
+void test_copies(void) {
   Stream s = baseState();
   s.add({0x80000000u, xy(600, 10), xy(20, 300), xy(40, 30)});
   s.add({0x80000000u, xy(100, 100), xy(103, 102), xy(150, 40)}); // overlapping, moving right/down
@@ -33,22 +35,22 @@ static void test_copies(void) {
   CHECK_REPLAY(s);
 }
 
-static void test_uploads(void) {
+void test_uploads(void) {
   Stream s = baseState();
-  s.upload(10, 10, 33, 7, 1);
-  s.upload(1010, 505, 30, 20, 2); // wraps
+  s.upload({10, 10, 33, 7}, 1);
+  s.upload({1010, 505, 30, 20}, 2); // wraps
   s.mask(true, true);
-  s.upload(20, 12, 16, 16, 3);
+  s.upload({20, 12, 16, 16}, 3);
   CHECK_REPLAY(s);
 }
 
 // At a scale that is not a power of two, an upload and a sprite sampling it fill every pixel of each block.
-static void test_a_scaled_upload_and_a_read_of_it_fill_whole_blocks(void) {
+void test_a_scaled_upload_and_a_read_of_it_fill_whole_blocks(void) {
   Stream s = baseState();
-  s.upload(600, 300, 40, 24, 11);
+  s.upload({600, 300, 40, 24}, 11);
   s.add({drawMode(page(9, 1, 0, 2), false, false, false)});
   s.add({rgb(0x65, 0, 0, 0), xy(10, 10), uv(24, 44, 0), xy(40, 24)});
-  s.upload(1010, 505, 30, 20, 2);
+  s.upload({1010, 505, 30, 20}, 2);
   for (int scale : {3, 5}) {
     const Outcome outcome = replay(s, {}, scale);
     CHECK(outcome.replayed);
@@ -56,7 +58,7 @@ static void test_a_scaled_upload_and_a_read_of_it_fill_whole_blocks(void) {
   }
 }
 
-static void test_flat_and_gouraud_polygons(void) {
+void test_flat_and_gouraud_polygons(void) {
   for (int semi = 0; semi < 4; semi++) {
     for (int dither = 0; dither < 2; dither++) {
       Stream s = baseState();
@@ -88,7 +90,7 @@ static void test_flat_and_gouraud_polygons(void) {
   }
 }
 
-static void test_textured_polygons(void) {
+void test_textured_polygons(void) {
   for (int mode = 0; mode < 3; mode++) {
     for (int semi = 0; semi < 4; semi++) {
       Stream s = baseState();
@@ -161,7 +163,7 @@ static void test_textured_polygons(void) {
 }
 
 // CTR's additive gouraud textured fade triangles: one vertex bright, two black, drawn under a row offset.
-static void test_steep_gouraud_textured_semi_triangles(void) {
+void test_steep_gouraud_textured_semi_triangles(void) {
   Stream s = baseState();
   const std::uint32_t texture = page(14, 0, 1, 0);
   const std::uint32_t clut = clutAt(912, 254);
@@ -191,7 +193,7 @@ static void test_steep_gouraud_textured_semi_triangles(void) {
 
 // gpu.c fetches texels through a cache that only an upload, copy or read invalidates, and a draw reads the
 // pixels it wrote earlier; the rasterizer's snapshot read must still end on the device's picture.
-static void test_a_draw_that_samples_its_own_pixels(void) {
+void test_a_draw_that_samples_its_own_pixels(void) {
   Stream s = baseState();
   const std::uint32_t texture = page(0, 0, 0, 2);
   s.add({drawMode(texture, false, false, false)});
@@ -208,7 +210,7 @@ static void test_a_draw_that_samples_its_own_pixels(void) {
   CHECK_REPLAY(s);
 }
 
-static void test_a_draw_over_a_cached_texture_is_sampled_stale(void) {
+void test_a_draw_over_a_cached_texture_is_sampled_stale(void) {
   Stream s = baseState();
   const std::uint32_t texture = page(0, 0, 0, 2);
   s.add({drawMode(texture, false, false, false)});
@@ -229,7 +231,7 @@ static void test_a_draw_over_a_cached_texture_is_sampled_stale(void) {
 
 // gpu.c SetTPage invalidates its texture cache when the page changes, from E1 or from a textured polygon's own
 // texpage word; a texture read after that sees current VRAM and needs no device-resolved pixels.
-static void test_a_texpage_change_invalidates_the_cache_through_e1(void) {
+void test_a_texpage_change_invalidates_the_cache_through_e1(void) {
   Stream s = baseState();
   const std::uint32_t texture = page(0, 0, 0, 2);
   const std::uint32_t other = page(2, 0, 0, 2);
@@ -250,7 +252,7 @@ static void test_a_texpage_change_invalidates_the_cache_through_e1(void) {
   CHECK_EQ(outcome.uploads, 0u);
 }
 
-static void test_a_texpage_change_invalidates_the_cache_through_a_polygon(void) {
+void test_a_texpage_change_invalidates_the_cache_through_a_polygon(void) {
   Stream s = baseState();
   const std::uint32_t texture = page(0, 0, 0, 2);
   const std::uint32_t other = page(2, 0, 0, 2);
@@ -276,7 +278,7 @@ static void test_a_texpage_change_invalidates_the_cache_through_a_polygon(void) 
   CHECK_EQ(outcome.uploads, 0u);
 }
 
-static void test_texture_window(void) {
+void test_texture_window(void) {
   Stream s = baseState();
   const std::uint32_t texture = page(10, 0, 0, 1);
   s.add({drawMode(texture, false, false, false)});
@@ -295,7 +297,7 @@ static void test_texture_window(void) {
   CHECK_REPLAY(s);
 }
 
-static void test_sprites(void) {
+void test_sprites(void) {
   for (int flip = 0; flip < 4; flip++) {
     Stream s = baseState();
     const std::uint32_t texture = page(11, 1, 1, flip % 3);
@@ -317,7 +319,7 @@ static void test_sprites(void) {
   }
 }
 
-static void test_lines(void) {
+void test_lines(void) {
   for (int semi = 0; semi < 4; semi++) {
     Stream s = baseState();
     s.add({drawMode(page(8, 0, semi, 0), semi % 2 == 0, false, false)});
@@ -340,7 +342,7 @@ static void test_lines(void) {
   }
 }
 
-static void test_clip_offset_and_mask(void) {
+void test_clip_offset_and_mask(void) {
   Stream s = baseState();
   s.area(40, 30, 300, 200);
   s.offset(25, -10);
@@ -353,7 +355,7 @@ static void test_clip_offset_and_mask(void) {
   CHECK_REPLAY(s);
 }
 
-static void test_interlaced_row_skip(void) {
+void test_interlaced_row_skip(void) {
   Stream s;
   s.area(0, 0, 511, 511);
   s.offset(0, 0);
@@ -365,9 +367,27 @@ static void test_interlaced_row_skip(void) {
   CHECK_REPLAY(s, {0x08000000u | 0x24u | 0x01u});
 }
 
+// A fixed pseudo-random input sequence: every run replays the same primitives.
+struct SplitMix64 {
+  using result_type = std::uint64_t;
+  std::uint64_t state;
+  static constexpr result_type min() {
+    return 0;
+  }
+  static constexpr result_type max() {
+    return ~std::uint64_t{0};
+  }
+  result_type operator()() {
+    std::uint64_t z = (state += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30u)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27u)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31u);
+  }
+};
+
 // Seeded random primitives under random state; the bounds in the file comment are kept.
-static void test_random_streams(void) {
-  std::mt19937 random(1234);
+void test_random_streams(void) {
+  SplitMix64 random{1234};
   const auto pick = [&](int low, int high) {
     return std::uniform_int_distribution<int>(low, high)(random);
   };
@@ -435,17 +455,21 @@ static void test_random_streams(void) {
                xy(pick(0, 1023), pick(0, 511)),
                xy(pick(1, 96), pick(1, 64))});
       } else {
-        s.upload(pick(0, 1023), pick(0, 511), pick(1, 40), pick(1, 20), static_cast<std::uint32_t>(random()));
+        s.upload({pick(0, 1023), pick(0, 511), pick(1, 40), pick(1, 20)}, static_cast<std::uint32_t>(random()));
       }
     }
     CHECK_REPLAY(s);
   }
 }
 
+} // namespace
+
 int main(void) {
   SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "offscreen", SDL_HINT_OVERRIDE);
-  if (!SDL_Init(SDL_INIT_VIDEO) ||
-      (gDevice = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, false, nullptr)) == nullptr) {
+  if (SDL_Init(SDL_INIT_VIDEO)) {
+    gDevice = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, false, nullptr);
+  }
+  if (gDevice == nullptr) {
     fprintf(stderr, "    FAIL no headless Vulkan device: %s\n", SDL_GetError());
     return 1;
   }
@@ -468,5 +492,5 @@ int main(void) {
   RUN(random_streams);
   SDL_DestroyGPUDevice(gDevice);
   SDL_Quit();
-  return pt_summary();
+  return psx::test::summary();
 }
