@@ -254,7 +254,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 
 | | |
 |---|---|
-| owners | `C12Runtime`, `C12FrameDriver` |
+| owners | `c12::Runtime`, `c12::FrameDriver` |
 | converts | programImage, HLE plan, cd stream, packet pool, `guestCodeModuleWindow`; `titleIntSettings` stays data |
 | deletes | `tools/source_policy.py` |
 | size | GTE 86; accepted 0; codemap 95. Draw distance is outside this pass. |
