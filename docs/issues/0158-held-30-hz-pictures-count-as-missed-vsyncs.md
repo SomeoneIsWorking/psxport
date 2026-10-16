@@ -1,6 +1,6 @@
 # 0158: held 30 Hz pictures count as missed vsyncs
 
-Status: open (needs a decision)
+Status: fixed
 
 ## Observed
 Tomba! 2 real-window play check (2026-10-16, `warp 1`): `presents: intervals=7336 over_1.5_vsync=1743 (23.76%)
@@ -10,15 +10,15 @@ them are before it: the SCEA card stage (10 s, pacer `quota=2` on every call, 30
 OP.STR.
 
 ## Cause
-A picture the title holds for two fields is presented once: `runtime/psx/frame/frame_presenter.cpp:
-FramePresenter::presentCurrent` paces the whole `guestFields` count and then presents once for a frame with no
-in-between (Tomba! 2's boot cards run at 2 fields per frame), and `runtime/psx/movie/native_fmv.cpp:
-Fmv::presentFrame` presents once per movie frame. Every such interval is over 1.5 vsyncs, which is what
-`runtime/psx/debug/gpu_perf.cpp:GpuPerf::presented` counts as a miss. On screen the swapchain holds the image,
-so the 33 ms intervals look as on a console; the 50 ms ones inside OP.STR are real late frames.
+`runtime/psx/debug/gpu_perf.cpp:GpuPerf::presented` judged every present-to-present interval against one
+field (1.5 refresh periods), while `runtime/psx/frame/frame_presenter.cpp:FramePresenter::presentCurrent`
+and `runtime/psx/movie/native_fmv.cpp:Fmv::presentFrame` present once per picture held for two or more
+fields (Tomba! 2's boot cards at 2 fields per frame, 30 fps movies), so every held picture counted as a miss.
 
-## Gap
-The §6 bar counts a held picture as a miss, and a re-present of the same record would count as a repeat.
-Either the presenter re-presents a held picture every field (FMV and non-interpolated 2-field frames, every
-title), or the play-check counter judges an interval against the cadence the pacer was given. That choice
-changes the bar or every title's present path, so it is not made here.
+## Fix
+A miss is a present that lands late against the deadline its pacer gave it. `FramePacer` reports the
+fields each plan holds the next present for (`GpuPerf::heldFor`, quota / parts) and `Fmv::presentFrame`
+reports the movie's frame period in fields from its media clock (`Fmv::heldFields`). `GpuPerf::presented`
+counts an interval as missed when it is over held fields + 0.5 refresh periods; a present nothing paced is
+held for one field. Test: `tests/test_gpu_perf_reports.cpp`
+(`a_present_misses_only_half_a_period_past_its_held_fields`). The 50 ms intervals inside OP.STR still count.

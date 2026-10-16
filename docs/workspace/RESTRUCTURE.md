@@ -350,7 +350,7 @@ One step, with no agent working in any repo: `gh repo rename` on GitHub (old URL
   - The numbers come from the RunEndReport.
   - **Pass**, absolute only:
     - 0 audio underruns (`needsReprime`) and 0 drops (`shouldDrop`) after boot.
-    - Missed-vsync intervals (over 1.5 periods) at most 0.5%, and never 2 in a row.
+    - Missed-vsync intervals (over 0.5 periods past the present's own paced deadline) at most 0.5%, and never 2 in a row.
     - Stable frame order: the shown record sequence never repeats or goes backwards, and in-betweens are neither dropped nor doubled.
   - **No reference.** No run of the current port is a reference, and "an earlier run showed it too" never passes a failure.
   - **Failures.** Each failure gets one issue file in the owning repo and is fixed in its own brief. A failure does not hold the push, because nothing earlier is a trusted state.

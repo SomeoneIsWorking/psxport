@@ -146,7 +146,7 @@ void GpuPerf::frameEnd() {
   // last bucket.
   lucent::info("perf",
                "{} present distribution p50 {:.2f} p95 {:.2f} p99 {:.2f} worst {:.2f}ms beyond-range {} "
-               "over-1.5-vsync {} longest-miss-run {}",
+               "missed {} longest-miss-run {}",
                mFrames.count(),
                mFrames.percentileMs(0.50),
                mFrames.percentileMs(0.95),
@@ -160,6 +160,8 @@ void GpuPerf::frameEnd() {
 }
 
 void GpuPerf::presented(clk_time_point at, double vsyncPeriodMs) {
+  const double heldFields = mHeldFields > 0.0 ? mHeldFields : 1.0;
+  mHeldFields = 0.0;
   if (!mHavePresent) {
     mHavePresent = true;
     mLastPresent = at;
@@ -172,7 +174,7 @@ void GpuPerf::presented(clk_time_point at, double vsyncPeriodMs) {
   if (vsyncPeriodMs > 0.0) {
     mPresents.vsyncPeriodMs = vsyncPeriodMs;
   }
-  if (mPresents.vsyncPeriodMs > 0.0 && interval > 1.5 * mPresents.vsyncPeriodMs) {
+  if (mPresents.vsyncPeriodMs > 0.0 && interval > (heldFields + 0.5) * mPresents.vsyncPeriodMs) {
     ++mPresents.missed;
     ++mMissRun;
     mPresents.longestMissRun = mMissRun > mPresents.longestMissRun ? mMissRun : mPresents.longestMissRun;
@@ -192,7 +194,7 @@ std::string GpuPerf::presentSummary() const {
   const double missedPct =
       mPresents.intervals != 0 ? 100.0 * (double)mPresents.missed / (double)mPresents.intervals : 0.0;
   return std::format("intervals={} p50={:.2f}ms p99={:.2f}ms worst={:.2f}ms vsync={:.2f}ms "
-                     "over_1.5_vsync={} ({:.2f}%) longest_miss_run={} beyond_range={}",
+                     "missed={} ({:.2f}%) longest_miss_run={} beyond_range={}",
                      mPresents.intervals,
                      mFrames.percentileMs(0.50),
                      mFrames.percentileMs(0.99),

@@ -56,7 +56,9 @@ PacePlan preparePace(Core &core, PaceInputs inputs) {
   return plan;
 }
 
-void waitForPlan(const PacePlan &plan, unsigned fieldRateMilliHz) {
+// The play check judges the next present against the fields this plan holds it for, paced or not.
+void waitForPlan(Core &core, const PacePlan &plan, unsigned fieldRateMilliHz) {
+  core.game->perf.heldFor(static_cast<double>(plan.effectiveQuota) / static_cast<double>(plan.effectiveParts));
   if (!plan.paced) {
     return;
   }
@@ -81,12 +83,12 @@ void FramePacer::paceSubframeFields(Core &core, FieldCadence cadence) {
   if (!plan.rateUnset) {
     core.game->timing.advanceDisplayFields({plan.effectiveQuota, plan.effectiveParts}, fieldRateMilliHz(core));
   }
-  waitForPlan(plan, fieldRateMilliHz(core));
+  waitForPlan(core, plan, fieldRateMilliHz(core));
 }
 
 void FramePacer::waitPresentedFields(Core &core, FieldCadence cadence) {
   const PacePlan plan = preparePace(core, {.quota = cadence.fields, .parts = cadence.parts});
-  waitForPlan(plan, fieldRateMilliHz(core));
+  waitForPlan(core, plan, fieldRateMilliHz(core));
 }
 
 void FramePacer::hostScreenPace(Core &core) {
@@ -96,7 +98,7 @@ void FramePacer::hostScreenPace(Core &core) {
   inputs.parts = 1;
   inputs.fieldRateMilliHz = psx::frame::fieldRateMilliHz(false);
   inputs.nowMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
-  waitForPlan(core.game->framePacer.plan(inputs), inputs.fieldRateMilliHz);
+  waitForPlan(core, core.game->framePacer.plan(inputs), inputs.fieldRateMilliHz);
 }
 
 } // namespace psx::frame

@@ -4,6 +4,8 @@
 #include "gpu_vk.h"
 #include "host_input.h" // psx::input::kButtonStart
 #include "watchdog.h"
+#include <algorithm>
+#include <cmath>
 #include <vector>
 // Native FMV player for the Tomba!2 PC port.
 //
@@ -94,7 +96,18 @@ void present_rgb888(Core *core, std::vector<uint8_t> &rgba, const uint8_t *pixel
 
 } // namespace
 
+int Fmv::heldFields() const {
+  if (media_frames_ <= 0 || xa_freq_ <= 0) {
+    return 1;
+  }
+  // The movie's frame period on its media clock, in display fields.
+  const double frameMs = static_cast<double>(media_frames_) * 1000.0 / xa_freq_ / (frames_ + 1);
+  const double fieldMs = 1000000.0 / game->framePacer.fieldRateMilliHz(game->core);
+  return std::max(1, static_cast<int>(std::lround(frameMs / fieldMs)));
+}
+
 void Fmv::presentFrame(const uint8_t *pixels, int width, int height) {
+  game->perf.heldFor(heldFields());
   present_rgb888(&game->core, rgba_scratch_, pixels, width, height);
   last_frame_width_ = width;
   last_frame_height_ = height;

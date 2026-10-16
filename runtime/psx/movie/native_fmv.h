@@ -72,6 +72,8 @@ private:
   int playToEnd();
   // Pace playback to the AUDIO/media clock; returns 1 if Start is held (skip).
   int pace();
+  // The display fields one movie frame is held for, from the media clock; 1 before any audio.
+  int heldFields() const;
   // Present one decoded 24-bit frame.
   void presentFrame(const uint8_t *pixels, int width, int height);
   // Allocate the multi-megabyte decode scratch on first use.
