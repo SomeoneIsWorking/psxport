@@ -6,12 +6,14 @@
 #include "frame_state.h"
 #include "present_ledger.h"
 #include "state_producer.h"
+#include "vram_rect.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 class Core;
 class RenderMode;
@@ -136,6 +138,8 @@ private:
     bool follows = false; // every record since the drawing record before it was committed and complete
   };
 
+  // Records `record`'s VRAM writes when it drew nothing, and drops writes older than the oldest held drawing record.
+  void holdUndrawnWrites(const present::FrameRecord &record);
   // The latest record that drew `buffer`, or null.
   const SealedRecord *latestDrawing(const gpu::RecordRect &buffer) const;
   // The record a present shows for `buffer`: the latest drawing one, unless a later record wrote the buffer, in
@@ -154,6 +158,12 @@ private:
   int dumpSequence_ = 0;
   std::shared_ptr<const present::FrameRecord> current_ = std::make_shared<const present::FrameRecord>();
   std::array<SealedRecord, kRecordHistory> history_; // drawing records, oldest first
+  // VRAM written by records that drew nothing, since the oldest held drawing record: the latest sequence per rect.
+  struct UndrawnWrite {
+    gpu::VramRect area;
+    std::uint64_t sequence = 0;
+  };
+  std::vector<UndrawnWrite> undrawnWrites_;
   std::optional<std::uint64_t> lastSequence_;
   bool pendingCut_ = false;
   bool pendingBreak_ = false;

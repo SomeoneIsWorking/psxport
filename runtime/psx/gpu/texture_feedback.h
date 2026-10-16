@@ -6,6 +6,7 @@
 #include "vram_bitmap.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace psx::gpu {
@@ -13,7 +14,12 @@ namespace psx::gpu {
 // The VRAM rect a primitive can write: its vertices or sprite extent inside the draw area.
 RecordRect drawBounds(const present::DrawPrimitive &primitive);
 
-// Whether `entry` writes a VRAM pixel inside `rect`: a primitive's draw bounds, a fill, or a copy or upload target.
+// The VRAM rect `entry` writes: a primitive's draw bounds, a fill, or a copy or upload target; none for a copy onto
+// its own source.
+std::optional<RecordRect> entryWrittenRect(const present::RecordEntry &entry);
+bool rectsOverlap(const RecordRect &a, const RecordRect &b);
+
+// Whether `entry` writes a VRAM pixel inside `rect`.
 bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect);
 
 // VRAM pixels drawn into since gpu.c last invalidated its texture cache (upload, copy, read). gpu.c fills a cache

@@ -227,7 +227,9 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   single-buffered title, the one before it on a double-buffered one, however many empty records were
   sealed between them. A later record that wrote the displayed buffer (a clear, a fill, an upload, a copy
   elsewhere; a copy onto its own source writes nothing) makes that picture stale: the present is then the
-  device's (`FramePresenter::shownRecord`). The presenter remembers which record each present showed.
+  device's (`FramePresenter::shownRecord`). Records that drew nothing are not held, so their writes are
+  kept as rects with their sequence until they are older than the oldest held drawing record
+  (`holdUndrawnWrites`). The presenter remembers which record each present showed.
 - **Cadence.** With the title's 60 fps on, each logic frame gets two presents, at `t = 0.5` and
   `t = 1`; with it off, one at `t = 1`. With no record drawing the displayed buffer, S' unknown, or a
   record after S' missing or incomplete, the present is `t = 1`.

@@ -341,6 +341,35 @@ void test_a_copy_onto_itself_leaves_the_shown_picture_composed(void) {
   CHECK(backend.realComposed);
 }
 
+FrameRecord fillOf(std::uint64_t sequence, const psx::gpu::RecordRect &buffer) {
+  psx::present::VramFill fill;
+  fill.x = buffer.x0;
+  fill.y = buffer.y0;
+  fill.width = buffer.x1 - buffer.x0;
+  fill.height = buffer.y1 - buffer.y0;
+  FrameRecord record(sequence, true);
+  record.append(fill);
+  return record;
+}
+
+// Tomba 2's stage handoff: passes that draw nothing fill each buffer black, then display it. The buffer a
+// fill overwrote shows the device's picture, not the last record that drew it.
+void test_a_fill_in_an_earlier_record_that_drew_nothing_makes_the_buffer_stale(void) {
+  psx::frame::FramePresenter presenter;
+  RecordBackend backend(presenter);
+  backend.display = kBufferB;
+  presenter.commit(backend, 2, recordAt({0, 0}, kBufferA));
+  backend.display = kBufferA;
+  presenter.commit(backend, 2, recordAt({1, 20}, kBufferB));
+  backend.display = kBufferB;
+  presenter.commit(backend, 2, fillOf(2, kBufferA));
+  backend.calls.clear();
+  backend.display = kBufferA;
+  presenter.commit(backend, 2, fillOf(3, kBufferB));
+  CHECK(backend.calls == std::vector<std::string>{"real"});
+  CHECK_EQ(presenter.stability().backwards, 0u);
+}
+
 // The play check reads these: every record present after the first brings its in-between, and a
 // record that drew nothing leaves the shown record where it was, which is a repeat.
 void test_stability_counts_in_betweens_and_repeats(void) {
@@ -435,6 +464,7 @@ int main(void) {
   RUN(producer_renders_run_inside_the_display_pass);
   RUN(a_frame_without_saved_state_is_not_composed);
   RUN(stability_counts_in_betweens_and_repeats);
+  RUN(a_fill_in_an_earlier_record_that_drew_nothing_makes_the_buffer_stale);
   RUN(consecutive_records_present_the_shown_record_then_n);
   RUN(each_present_follows_its_pace);
   RUN(a_cut_shows_n_as_its_in_between);

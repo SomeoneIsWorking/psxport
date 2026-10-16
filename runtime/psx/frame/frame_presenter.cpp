@@ -189,6 +189,7 @@ void FramePresenter::commitSealed(FramePresentationBackend &backend,
     pendingCut_ = false;
     pendingBreak_ = false;
   }
+  holdUndrawnWrites(*current_);
   ++fence_;
   if (interpolates) {
     presentRecords(backend, guestFields);
@@ -214,6 +215,38 @@ const FramePresenter::SealedRecord *FramePresenter::latestDrawing(const gpu::Rec
   return nullptr;
 }
 
+void FramePresenter::holdUndrawnWrites(const present::FrameRecord &record) {
+  const auto oldest = std::find_if(history_.begin(), history_.end(), [](const SealedRecord &entry) {
+    return entry.record != nullptr;
+  });
+  if (oldest == history_.end()) {
+    undrawnWrites_.clear();
+    return;
+  }
+  const std::uint64_t oldestSequence = oldest->record->sequence();
+  std::erase_if(undrawnWrites_, [oldestSequence](const UndrawnWrite &write) {
+    return write.sequence < oldestSequence;
+  });
+  if (drawsAnything(record)) {
+    return;
+  }
+  for (const present::RecordEntry &entry : record.entries()) {
+    const std::optional<gpu::RecordRect> rect = gpu::entryWrittenRect(entry);
+    if (!rect) {
+      continue;
+    }
+    const gpu::VramRect area{rect->x0, rect->y0, rect->x1 - rect->x0, rect->y1 - rect->y0};
+    const auto same = std::find_if(undrawnWrites_.begin(), undrawnWrites_.end(), [&rect](const UndrawnWrite &write) {
+      return gpu::clampedVramRect(write.area) == *rect;
+    });
+    if (same != undrawnWrites_.end()) {
+      same->sequence = record.sequence();
+    } else {
+      undrawnWrites_.push_back({area, record.sequence()});
+    }
+  }
+}
+
 const FramePresenter::SealedRecord *FramePresenter::shownRecord(const gpu::RecordRect &buffer) const {
   const SealedRecord *latest = latestDrawing(buffer);
   if (latest == nullptr) {
@@ -226,6 +259,11 @@ const FramePresenter::SealedRecord *FramePresenter::shownRecord(const gpu::Recor
   };
   for (const SealedRecord &entry : history_) {
     if (entry.record && entry.record->sequence() > latest->record->sequence() && writesBuffer(*entry.record)) {
+      return nullptr;
+    }
+  }
+  for (const UndrawnWrite &write : undrawnWrites_) {
+    if (write.sequence > latest->record->sequence() && gpu::rectsOverlap(gpu::clampedVramRect(write.area), buffer)) {
       return nullptr;
     }
   }
