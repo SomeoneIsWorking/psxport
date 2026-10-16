@@ -79,7 +79,7 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Pad | `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `input_phase.h` | The guest pad and its delivery |
 | Pad record/replay | `runtime/psx/input/pad_recording.*`, `pad_phase_replay.*`, `pad_record_replay.*` | `.pad` files and phase-keyed replay |
 | Audio | `runtime/psx/audio/` (`spu_audio.*`, `spu_device.*`, `spu_beetle.*`, `xa_stream.cpp`, `audio_*`) | The SPU, its host sink, XA streaming, audio policy |
-| Movies | `runtime/psx/movie/native_fmv.*`, `fmv_decode.*`, `mdec_*` | FMV playback and the STR decode shared with `tools/fmv_export` |
+| Movies | `runtime/psx/movie/native_fmv.*`, `movie_clock.*`, `fmv_decode.*`, `mdec_*` | FMV playback, its sector/frame clock (`movie_clock`), and the STR decode shared with `tools/fmv_export` |
 | Save states | `runtime/psx/state/` | `MachineState`, `StateFile`, device sections, `NativeStatePort` |
 | Configuration | `runtime/psx/config/config.*`, `config_var.h`, `config_vars.h`, `diagnostic_config.*`, `number_text.*` | The CVar ladder, typed accessors, `launch_setting`, number parsing |
 | Launch config | `runtime/psx/config/typed_config.*` | The immutable `psx::config::Config` on `game.config` |

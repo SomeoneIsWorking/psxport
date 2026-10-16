@@ -5,7 +5,10 @@
 #include "host_input.h" // psx::input::kButtonStart
 #include "watchdog.h"
 #include <algorithm>
-#include <cmath>
+#include <chrono>
+#include <limits>
+#include <optional>
+#include <thread>
 #include <vector>
 // Native FMV player for the Tomba!2 PC port.
 //
@@ -63,6 +66,9 @@
 
 namespace {
 
+// How far ahead of its play time audio is queued.
+constexpr double kAudioLeadMs = 1000.0;
+
 // ====================================================================================
 // MDEC feed + macroblock tiling — in fmv_decode.cpp (psx::movie::decodeMdecToRgb555 / _to_rgb888),
 // which upload the quant/IDCT tables, feed the MDEC in DMA0/DMA1 ping-pong, drain the
@@ -94,32 +100,73 @@ void present_rgb888(Core *core, std::vector<uint8_t> &rgba, const uint8_t *pixel
   submit_rgba(core, rgba, width, height);
 }
 
+// One STR video chunk's sub-header (layout above).
+struct VideoChunk {
+  int chunk = 0;
+  int chunks = 0;
+  int frame = 0;
+  int width = 0;
+  int height = 0;
+};
+
+std::optional<VideoChunk> videoChunk(const uint8_t *raw) {
+  const uint8_t *sbuf = raw + 24; // Form1 video user data
+  if ((raw[18] & 0x04) != 0 || (sbuf[0] | (sbuf[1] << 8)) != 0x0160) {
+    return std::nullopt; // audio, or padding
+  }
+  return VideoChunk{sbuf[4] | (sbuf[5] << 8),
+                    sbuf[6] | (sbuf[7] << 8),
+                    sbuf[8] | (sbuf[9] << 8) | (sbuf[10] << 16) | (sbuf[11] << 24),
+                    sbuf[16] | (sbuf[17] << 8),
+                    sbuf[18] | (sbuf[19] << 8)};
+}
+
+class DiscSectors final : public psx::movie::SectorSource {
+public:
+  explicit DiscSectors(psx::cd::Disc &disc) : disc_(disc) {}
+  bool readRaw(uint32_t lba, uint8_t *out) override {
+    return disc_.readRaw(lba, out, 2352);
+  }
+
+private:
+  psx::cd::Disc &disc_;
+};
+
 } // namespace
 
-int Fmv::heldFields() const {
-  if (media_frames_ <= 0 || xa_freq_ <= 0) {
-    return 1;
-  }
-  // The movie's frame period on its media clock, in display fields.
-  const double frameMs = static_cast<double>(media_frames_) * 1000.0 / xa_freq_ / (frames_ + 1);
-  const double fieldMs = 1000000.0 / game->framePacer.fieldRateMilliHz(game->core);
-  return std::max(1, static_cast<int>(std::lround(frameMs / fieldMs)));
+void Fmv::presentFrame(const uint8_t *pixels, psx::present::PixelSize size, int heldFields) {
+  game->perf.heldFor(heldFields);
+  present_rgb888(&game->core, rgba_scratch_, pixels, size.width, size.height);
 }
 
-void Fmv::presentFrame(const uint8_t *pixels, int width, int height) {
-  game->perf.heldFor(heldFields());
-  present_rgb888(&game->core, rgba_scratch_, pixels, width, height);
-  last_frame_width_ = width;
-  last_frame_height_ = height;
+void Fmv::AudioLag::add(double lagMs) {
+  first = samples == 0 ? lagMs : first;
+  min = samples == 0 ? lagMs : std::min(min, lagMs);
+  max = samples == 0 ? lagMs : std::max(max, lagMs);
+  last = lagMs;
+  ++samples;
 }
 
-void Fmv::replayLastFrame(Core &core) {
-  if (!active_ || last_frame_width_ == 0) {
-    return;
+void Fmv::learnLayout() {
+  clock_ = {};
+  uint8_t raw[2352];
+  const uint32_t end = std::min(sector_count_, psx::movie::MovieClock::kLearnSectors);
+  for (uint32_t sector = 0; sector < end && !clock_.learned(); ++sector) {
+    if (!source_->readRaw(base_lba_ + sector, raw)) {
+      break;
+    }
+    psx::movie::SectorFacts facts;
+    if ((raw[18] & 0x04) != 0) {
+      facts.audio = psx::movie::xaSectorFormat(raw);
+    } else if (const std::optional<VideoChunk> chunk = videoChunk(raw)) {
+      facts.videoFrame = chunk->frame;
+    }
+    clock_.learn(facts);
   }
-  // rgba_scratch_ still holds the frame presented above: the decode buffers are separate, so nothing
-  // since then has overwritten it.
-  submit_rgba(&core, rgba_scratch_, last_frame_width_, last_frame_height_);
+  lucent::info("fmv",
+               "clock: {:.4f} ms per sector, frame slot {} sectors (0 = due at its last chunk)",
+               clock_.sectorMs(),
+               clock_.slotSectors());
 }
 // CD-XA ADPCM audio decode lives in fmv_decode.cpp (psx::movie::decodeXaSector) — the shared machinery
 // this TU and the offline tools both call. It is declared via c_subsys.h / fmv_decode.h.
@@ -170,55 +217,86 @@ void Fmv::audioClose() {
   }
 }
 
-// Pace playback to the AUDIO/media clock: media_frames audio sample-pairs at `freq` Hz define
-// the elapsed media time; sleep until wall-clock catches up. This is the real PSX rate (the
-// fixed-15fps guess was too slow). Polls input and returns 1 if Start was pressed (skip).
-// uncapped (PSXPORT_FMV_FPS=0) disables pacing for fast headless dumps.
-int Fmv::pace() {
-  const long media_frames = media_frames_;
-  const int freq = xa_freq_;
-  const uint32_t t0 = clock_origin_ms_;
-  const bool uncapped = uncapped_;
-  // Reads the pad OWNER'S serviced mask — nothing else. A movie host turn is a presented host frame,
-  // so the frame driver's per-frame service (Pad::serviceFrame) has already run this frame and
-  // resolved host, forced, replay and control-channel input into `buttons`. Polling here for input of
-  // its own would be a second copy of that resolution with different rules, and it would make a movie
-  // skip unreplayable: no pad frame is serviced while the mask is resolved by hand, so a recording
-  // could not contain one.
-  //
-  // A LEVEL, not an EDGE, is the skip condition: the frame's own pad service sampled this press and
-  // consumed its edge before the guest ran, so waiting for an edge here would never see it. What a
-  // player means by skipping a movie is Start held while it is up. The one exception is a Start
-  // already down when the movie opens, which `begin` records: that needs a release first, exactly the
-  // contract the original player had.
-  auto startIsHeld = [this] {
-    return (game->pad.buttons & psx::input::kButtonStart) == 0; // the pad mask is active-low
-  };
-  const auto skipping = [this, &startIsHeld] {
-    if (!startIsHeld()) {
-      start_held_at_begin_ = false; // a release re-arms the skip for this movie
-      return false;
-    }
-    return !start_held_at_begin_;
-  };
-  int pressed = skipping() ? 1 : 0;
-  if (uncapped || freq <= 0) {
-    return pressed;
+std::optional<double> Fmv::audioLagMs() const {
+  const std::optional<uint32_t> first = clock_.firstAudioSector();
+  const int queuedBytes = stream ? SDL_GetAudioStreamQueued((SDL_AudioStream *)stream) : -1;
+  if (!first || queuedBytes < 0 || xa_freq_ <= 0) {
+    return std::nullopt;
   }
-  const uint32_t target = (uint32_t)((long long)media_frames * 1000 / freq);
-  while ((int)(SDL_GetTicks() - t0) < (int)target) {
-    SDL_Delay(2);
-    if (skipping()) {
-      pressed = 1;
-    }
-  }
-  return pressed;
-}
-#else
-int Fmv::pace() {
-  return 0;
+  const long queuedFrames = queuedBytes / 4; // S16 stereo
+  const double playedMs = static_cast<double>(media_frames_ - queuedFrames) * 1000.0 / xa_freq_;
+  return elapsedMs() - (clock_.sectorDeliveredMs(*first) + playedMs);
 }
 #endif
+
+// Wait for `dueMs` on the movie clock. Polls nothing: the frame's pad service has already resolved
+// host, forced, replay and control-channel input into `buttons`, and a second resolution here would
+// make a movie skip unreplayable.
+//
+// A LEVEL, not an EDGE, is the skip condition: the frame's own pad service consumed the press's edge
+// before the guest ran. A Start already down when the movie opens, which `begin` records, needs a
+// release first, the contract the original player had. Uncapped (PSXPORT_FMV_FPS=0) never waits.
+int Fmv::pace(double dueMs) {
+  const bool startHeld = (game->pad.buttons & psx::input::kButtonStart) == 0; // the pad mask is active-low
+  if (!startHeld) {
+    start_held_at_begin_ = false; // a release re-arms the skip for this movie
+  }
+  const int pressed = startHeld && !start_held_at_begin_ ? 1 : 0;
+  if (uncapped_) {
+    feedAudio(dueMs);
+    return pressed;
+  }
+  while (true) {
+    const double now = elapsedMs();
+    if (now >= dueMs) {
+      break;
+    }
+    feedAudio(now);
+    const double wakeMs = std::min(dueMs, nextAudioQueueMs().value_or(dueMs));
+    std::this_thread::sleep_until(origin_ + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                std::chrono::duration<double, std::milli>(wakeMs)));
+  }
+  feedAudio(elapsedMs());
+  return pressed;
+}
+
+double Fmv::elapsedMs() const {
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - origin_).count();
+}
+
+// The first XA sector is queued when the drive delivers it, which starts the audio clock; each later
+// one kAudioLeadMs ahead of that, so a host stall shorter than the lead does not starve the device.
+std::optional<double> Fmv::nextAudioQueueMs() {
+  while (!audio_loaded_ && audio_sector_ < sector_count_) {
+    if (!source_->readRaw(base_lba_ + audio_sector_, audio_raw_.data())) {
+      audio_sector_ = sector_count_;
+      break;
+    }
+    if ((audio_raw_[18] & 0x04) != 0) {
+      audio_loaded_ = true;
+    } else {
+      ++audio_sector_;
+    }
+  }
+  if (!audio_loaded_) {
+    return std::nullopt;
+  }
+  const double leadMs = media_frames_ == 0 ? 0.0 : kAudioLeadMs;
+  return clock_.sectorDeliveredMs(audio_sector_) - leadMs;
+}
+
+void Fmv::feedAudio(double nowMs) {
+  for (std::optional<double> queueMs = nextAudioQueueMs(); queueMs && *queueMs <= nowMs; queueMs = nextAudioQueueMs()) {
+    const int n = psx::movie::decodeXaSector(audio_raw_.data(), xa_pcm, xa_hist_, &xa_freq_);
+    if (media_frames_ == 0) {
+      audioOpen(xa_freq_);
+    }
+    audioQueue(xa_pcm, n);
+    media_frames_ += n;
+    audio_loaded_ = false;
+    ++audio_sector_;
+  }
+}
 
 Fmv::~Fmv() {
   free(payload_buf);
@@ -245,12 +323,20 @@ void Fmv::ensureScratch() {
 // STR demux + playback, stepped
 // ====================================================================================
 bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
+  disc_source_ = std::make_unique<DiscSectors>(game->disc);
+  return begin(*disc_source_, lba, size_bytes);
+}
+
+bool Fmv::begin(psx::movie::SectorSource &source, uint32_t lba, uint32_t size_bytes) {
   mdec_init();
+  source_ = &source;
   ensureScratch();
 
   base_lba_ = lba;
   sector_count_ = (size_bytes + SECTOR_USER - 1) / SECTOR_USER;
   sector_ = 0;
+  audio_sector_ = 0;
+  audio_loaded_ = false;
   frame_in_progress_ = -1;
   payload_len_ = 0;
   expected_chunks_ = 0;
@@ -266,8 +352,8 @@ bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
   active_ = true;
 
   // Audio: STR interleaves XA-ADPCM sectors with the video sectors. Decode them, play through a
-  // dedicated SDL device at the XA rate, and pace VIDEO to the audio/media clock (the real PSX
-  // rate). uncapped = PSXPORT_FMV_FPS=0 (headless dumps: no pacing, no audio device).
+  // dedicated SDL device at the XA rate; every sector and frame is due on the stream's sector clock,
+  // which the XA interleave ties to the audio. uncapped = PSXPORT_FMV_FPS=0 (headless dumps: no pacing).
   // FMV pacing is asked for explicitly, never inferred from the render sink.
   //
   // This used to auto-uncap on PSXPORT_VK_HEADLESS. USER RULE: "Headless and windowed should never
@@ -305,11 +391,13 @@ bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
   // runs, so this is the same mask every other consumer of the frame sees.
   start_held_at_begin_ = (game->pad.buttons & psx::input::kButtonStart) == 0;
   game->pad.resetButtonEdges(game->pad.buttons);
-  clock_origin_ms_ = 0;
-#ifdef PSXPORT_SDL
-  clock_origin_ms_ = SDL_GetTicks();
-#endif
   lucent::info("fmv", "begin: LBA {}, {} bytes ({} sectors)", lba, size_bytes, sector_count_);
+  learnLayout();
+  grid_ = psx::movie::MovieFieldGrid(1000000.0 / game->framePacer.fieldRateMilliHz(game->core));
+  audio_lag_ = {};
+  intervals_at_begin_ = game->perf.presentSeries().intervals;
+  missed_at_begin_ = game->perf.presentSeries().missed;
+  origin_ = std::chrono::steady_clock::now();
   return true;
 }
 
@@ -319,37 +407,19 @@ void Fmv::step() {
   }
   uint8_t raw[2352];
   while (sector_ < sector_count_) {
-    if (!game->disc.readRaw(base_lba_ + sector_, raw, 2352)) {
+    if (!source_->readRaw(base_lba_ + sector_, raw)) {
       break;
     }
-    sector_++;
-    const int submode = raw[18];
-
-    if (submode & 0x04) { // XA-ADPCM audio sector
-      const int n = psx::movie::decodeXaSector(raw, xa_pcm, xa_hist_, &xa_freq_);
-      if (sector_ == 1 || media_frames_ == 0) {
-        audioOpen(xa_freq_);
-      }
-      audioQueue(xa_pcm, n);
-      media_frames_ += n;
-      if (pace()) {
-        endWithSkip();
-        return;
-      }
-      continue;
+    const uint32_t at = sector_++;
+    const std::optional<VideoChunk> video = videoChunk(raw);
+    if (!video) {
+      continue; // audio, which feedAudio reads on its own cursor, or padding
     }
-
-    const uint8_t *sbuf = raw + 24; // Form1 video user data
-    const uint16_t magic = (uint16_t)(sbuf[0] | (sbuf[1] << 8));
-    if (magic != 0x0160) {
-      continue; // not a video data sector (padding)
-    }
-
-    const int chunk_idx = sbuf[4] | (sbuf[5] << 8);
-    const int nchunks = sbuf[6] | (sbuf[7] << 8);
-    const int framenum = sbuf[8] | (sbuf[9] << 8) | (sbuf[10] << 16) | (sbuf[11] << 24);
-    const int w = sbuf[16] | (sbuf[17] << 8);
-    const int h = sbuf[18] | (sbuf[19] << 8);
+    const int chunk_idx = video->chunk;
+    const int nchunks = video->chunks;
+    const int framenum = video->frame;
+    const int w = video->width;
+    const int h = video->height;
 
     if (chunk_idx == 0) {
       frame_in_progress_ = framenum;
@@ -365,7 +435,7 @@ void Fmv::step() {
 
     const uint32_t plen = SECTOR_USER - SUBHDR_LEN;
     if (payload_len_ + plen <= psx::movie::kPayloadBytes) {
-      memcpy(payload_buf + payload_len_, sbuf + SUBHDR_LEN, plen);
+      memcpy(payload_buf + payload_len_, raw + 24 + SUBHDR_LEN, plen);
       payload_len_ += plen;
     }
     got_chunks_++;
@@ -378,23 +448,31 @@ void Fmv::step() {
       payload_len_ = 0;
       const int ncodes = psx::movie::decodeBsFrame(
           {payload_buf, frame_payload}, {frame_width_, frame_height_}, {codes_buf, psx::movie::kMaxCodes});
-      lucent::debug("fmv",
-                    "frame {}: {}x{}, {} payload bytes, {} codes",
-                    framenum,
-                    frame_width_,
-                    frame_height_,
-                    frame_payload,
-                    ncodes);
       if (ncodes > 0 && psx::movie::decodeMdecToRgb888({codes_buf, static_cast<std::size_t>(ncodes)},
                                                        {frame_width_, frame_height_},
                                                        pixels24_buf) > 0) {
-        presentFrame(pixels24_buf, frame_width_, frame_height_);
-        frames_++;
-        // Pace video to the audio/media clock (no audio sector here, so just gate on it).
-        if (pace()) {
+        const psx::movie::MovieFieldGrid::Show show = grid_.show(clock_.frameDueMs({framenum, at}));
+        if (pace(show.atMs)) {
           endWithSkip();
           return;
         }
+        presentFrame(pixels24_buf, {frame_width_, frame_height_}, show.heldFields);
+        frames_++;
+        const std::optional<double> lag = audioLagMs();
+        if (lag) {
+          audio_lag_.add(*lag);
+        }
+        lucent::debug("fmv",
+                      "frame {}: {}x{}, {} payload bytes, {} codes, shown at {:.1f} ms after {} fields, audio lag "
+                      "{:.1f} ms",
+                      framenum,
+                      frame_width_,
+                      frame_height_,
+                      frame_payload,
+                      ncodes,
+                      show.atMs,
+                      show.heldFields,
+                      lag.value_or(0.0));
         if (max_frames_ && frames_ >= max_frames_) {
           endAtEndOfStream();
           return;
@@ -404,6 +482,15 @@ void Fmv::step() {
       // control channel and window events all get a slice between movie frames.
       return;
     }
+  }
+  // The movie ends when its audio has played.
+  feedAudio(std::numeric_limits<double>::infinity());
+  const std::optional<uint32_t> firstAudio = clock_.firstAudioSector();
+  const double audioEndMs =
+      firstAudio ? clock_.sectorDeliveredMs(*firstAudio) + static_cast<double>(media_frames_) * 1000.0 / xa_freq_ : 0.0;
+  if (pace(audioEndMs)) {
+    endWithSkip();
+    return;
   }
   endAtEndOfStream();
 }
@@ -417,12 +504,19 @@ void Fmv::endAtEndOfStream() {
   }
   finished_ = true;
   active_ = false;
-  lucent::debug("fmv",
-                "done: {} video frames, {} audio sample-pairs ({:.2f}s @ {}Hz)",
-                frames_,
-                media_frames_,
-                static_cast<double>(media_frames_) / (double)(xa_freq_ ? xa_freq_ : 37800),
-                xa_freq_);
+  lucent::info("fmv",
+               "done: {} video frames, {} audio sample-pairs ({:.2f}s @ {}Hz), presents {} missed {}, audio lag "
+               "first {:.1f} last {:.1f} min {:.1f} max {:.1f} ms",
+               frames_,
+               media_frames_,
+               static_cast<double>(media_frames_) / (double)(xa_freq_ ? xa_freq_ : 37800),
+               xa_freq_,
+               game->perf.presentSeries().intervals - intervals_at_begin_,
+               game->perf.presentSeries().missed - missed_at_begin_,
+               audio_lag_.first,
+               audio_lag_.last,
+               audio_lag_.min,
+               audio_lag_.max);
   audioClose();
   game->display.present(psx::present::PresentCompletion::Transition);
 }
