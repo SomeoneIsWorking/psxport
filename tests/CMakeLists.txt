@@ -131,7 +131,7 @@ psxport_add_title_link_isolation_test(title_link_isolation_detects_collision
   SECOND link_isolation_second SECOND_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/second)
 set_tests_properties(title_link_isolation_detects_collision PROPERTIES
   PASS_REGULAR_EXPRESSION "collision: link_fixture::sharedName\\(\\)")
-# PIC objects that unwind each define the compiler's DW.ref personality name; it is no title's.
+# PIC objects that unwind each define DW.ref.__gxx_personality_v0 and __clang_call_terminate; neither is a title's.
 add_library(link_isolation_first_unwind OBJECT fixtures/link_isolation/first/unwind.cpp)
 add_library(link_isolation_second_unwind OBJECT fixtures/link_isolation/second/unwind.cpp)
 set_target_properties(link_isolation_first_unwind link_isolation_second_unwind PROPERTIES
@@ -140,7 +140,7 @@ psxport_add_title_link_isolation_test(title_link_isolation_ignores_compiler_name
   FIRST link_isolation_first_unwind FIRST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/first
   SECOND link_isolation_second_unwind SECOND_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/second)
 set_tests_properties(title_link_isolation_ignores_compiler_names PROPERTIES
-  PASS_REGULAR_EXPRESSION "1 shared, 0 collision\\(s\\), 0 without a definition location")
+  PASS_REGULAR_EXPRESSION "2 shared, 0 collision\\(s\\), 0 without a definition location")
 add_library(link_isolation_no_lines OBJECT fixtures/link_isolation/first/shared_name.cpp)
 psxport_add_title_link_isolation_test(title_link_isolation_refuses_objects_without_lines
   FIRST link_isolation_no_lines FIRST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/link_isolation/first
