@@ -329,7 +329,9 @@ target_compile_options(psxport PRIVATE -w -O2 -g)
 # nothing (an A/B this option exists to make possible).
 option(PSXPORT_WRAP_MEMCPY "Route first-party memcpy/memmove through the call-site census" ON)
 if(PSXPORT_WRAP_MEMCPY)
-  target_link_options(psxport INTERFACE -Wl,--wrap=memcpy -Wl,--wrap=memmove)
+  # --undefined pulls memcensus.o from the archive even when only a later library (zstd) calls memcpy.
+  target_link_options(psxport INTERFACE -Wl,--wrap=memcpy -Wl,--wrap=memmove
+    -Wl,--undefined=__wrap_memcpy -Wl,--undefined=__wrap_memmove)
 endif()
 
 # Link deps PUBLIC/INTERFACE so any consumer (the game exe, the smoke) inherits them.
