@@ -298,11 +298,11 @@ void FramePresenter::presentRecords(FramePresentationBackend &backend, int guest
   }
   composed_ = composedStore_ ? &*composedStore_ : &base;
   composedAdvances_ = false;
+  backend.pace({guestFields, 2});
   backend.presentInBetween();
   composed_ = nullptr;
   composedStore_.reset();
   backend.captureDiagnostic(fence_, true);
-  backend.pace({guestFields, 2});
   presentCurrent(backend, {guestFields, 2}, shown);
 }
 
@@ -318,12 +318,13 @@ void FramePresenter::presentCurrent(FramePresentationBackend &backend,
   }
   composed_ = composedStore_ ? &*composedStore_ : nullptr;
   composedAdvances_ = composed_ != nullptr;
+  // Waiting before the present puts it on its deadline whatever work preceded it.
+  backend.pace(cadence);
   backend.presentReal();
   composed_ = nullptr;
   composedAdvances_ = false;
   composedStore_.reset();
   backend.captureDiagnostic(fence_, false);
-  backend.pace(cadence);
 }
 
 void FramePresenter::reportStability() const {
