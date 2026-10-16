@@ -699,13 +699,20 @@ void xa_decode_unit(const uint8_t *in, int16_t *out, int param) {
 // (out[2*n]=L, out[2*n+1]=R); returns stereo frame count (<=2016). `hist[ch][0..1]` is the
 // per-channel history that MUST persist across sectors. `*freq` set to the sample rate.
 // Non-static so the sound oracle (tools/fmv_compare) can diff it against a reference.
+psx::movie::XaFormat psx::movie::xaSectorFormat(const uint8_t *raw) {
+  const int coding = raw[19]; // subheader coding byte (raw = sync12+hdr4+subhdr8+...)
+  const int units = (coding & 0x10) ? 4 : 8;
+  const int channels = (coding & 0x01) ? 2 : 1;
+  return {(coding & 0x04) ? 18900 : 37800, 18 * units * 28 / channels};
+}
+
 int psx::movie::decodeXaSector(const uint8_t *raw, int16_t *out, int16_t hist[2][2], int *freq) {
   int coding = raw[19];                 // subheader coding byte (raw = sync12+hdr4+subhdr8+...)
   int ishift = (coding & 0x10) ? 0 : 1; // unit_index_shift: 1 for 4-bit, 0 for 8-bit
   int stereo = coding & 0x01;
   int units = 4 << ishift; // 8 (4-bit) / 4 (8-bit)
   if (freq) {
-    *freq = (coding & 0x04) ? 18900 : 37800;
+    *freq = xaSectorFormat(raw).rate;
   }
   // Per-channel sample buffer. MONO sectors put ALL units on one channel: 4-bit mono =
   // 18 groups * 8 units * 28 = 4032 samples/sector (vs 2016 per channel when stereo splits

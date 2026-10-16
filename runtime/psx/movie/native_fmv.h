@@ -1,7 +1,8 @@
 // native_fmv.h — class Fmv — the native .STR movie player, owned by Game (`c->game->fmv`,
 // back-pointer wired in Game()). Implemented in native_fmv.cpp: STR demux -> BS VLC decode ->
 // MDEC IDCT/YCbCr (Beetle mdec.c) -> present, plus the interleaved XA-ADPCM audio sectors through a
-// dedicated host audio stream at the XA rate (video paced to the media clock).
+// dedicated host audio stream at the XA rate. Each sector and frame is due on the stream's sector clock,
+// which is the audio clock (movie_clock.h).
 //
 // STEPPED, NOT BLOCKING. A movie is played by begin() + one step() per HOST TURN, each presenting at
 // most one frame. Playing a whole movie inside one turn looked simpler and was wrong three ways: it
@@ -10,10 +11,27 @@
 // exercised at all; and nothing could observe a movie frame. One frame per turn costs a handful of
 // instructions and makes all three true.
 #pragma once
+#include "movie_clock.h"
+#include "pixel_size.h"
+
+#include <chrono>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <vector>
 class Core;
 class Game;
+
+namespace psx::movie {
+
+// Where a movie's raw 2352-byte sectors come from: the disc, in the product.
+class SectorSource {
+public:
+  virtual ~SectorSource() = default;
+  virtual bool readRaw(std::uint32_t lba, std::uint8_t *out) = 0;
+};
+
+} // namespace psx::movie
 
 class Fmv {
 public:
@@ -23,24 +41,19 @@ public:
   // be opened, which leaves the player finished (a caller then answers as the retail player would for
   // a movie that never played).
   bool begin(uint32_t lba, uint32_t size_bytes);
+  // The same, reading `source`, which must outlive the movie.
+  bool begin(psx::movie::SectorSource &source, uint32_t lba, uint32_t size_bytes);
   // Decode and present AT MOST ONE frame, then return. Ends the movie (end of stream, or a Start
   // press) and closes the audio stream; finished() says which happened.
   void step();
   bool finished() const {
     return finished_;
   }
-  // True between begin() and the movie's end. A movie presents its own frame as a native image
-  // from inside the guest call, so whoever else presents the guest's VRAM for that field would show
-  // the guest's layers instead of the movie: this is the query that lets a title's frame driver put
-  // the movie back on top once the host has presented.
+  // True between begin() and the movie's end. The movie paces and presents its own frames, so a
+  // title's frame driver presents nothing else meanwhile.
   bool presenting() const {
     return active_;
   }
-  // Present the movie's most recent frame again, over whatever the host presented. A movie frame is
-  // delivered from inside the guest call, which is BEFORE the host's own present for the same field,
-  // so a title that also presents guest layers each field must re-put the movie last or the guest's
-  // layers cover it.
-  void replayLastFrame(Core &core);
   bool skipped() const {
     return skipped_;
   }
@@ -70,12 +83,19 @@ private:
   void audioClose();
   // The blocking loop behind play()/playLba(): pumps host input and steps until the movie ends.
   int playToEnd();
-  // Pace playback to the AUDIO/media clock; returns 1 if Start is held (skip).
-  int pace();
-  // The display fields one movie frame is held for, from the media clock; 1 before any audio.
-  int heldFields() const;
-  // Present one decoded 24-bit frame.
-  void presentFrame(const uint8_t *pixels, int width, int height);
+  // Learn the stream's sector clock and frame slot from its leading sectors.
+  void learnLayout();
+  // Wait until `dueMs` after the movie began, feeding audio meanwhile; returns 1 if Start is held (skip).
+  int pace(double dueMs);
+  double elapsedMs() const;
+  // When the next XA sector is queued; nullopt when none is left. Loads it into audio_raw_.
+  std::optional<double> nextAudioQueueMs();
+  // Queue every XA sector whose queue time is at or before `nowMs`.
+  void feedAudio(double nowMs);
+  // How far the audio device's position trails the movie clock, in ms; nullopt without audio.
+  std::optional<double> audioLagMs() const;
+  // Present one decoded 24-bit frame, the previous one having been held for `heldFields`.
+  void presentFrame(const uint8_t *pixels, psx::present::PixelSize size, int heldFields);
   // Allocate the multi-megabyte decode scratch on first use.
   void ensureScratch();
   // End the movie: endAtEndOfStream is the ordinary end (stream exhausted, or the dev cap), and
@@ -91,11 +111,15 @@ private:
   uint8_t *pixels24_buf = nullptr; // decoded RGB888 frame (1024x512 px, 3 bytes each)
   // RGBA expansion scratch for presentation; re-harness cpp_policy forbids a function-local static.
   std::vector<uint8_t> rgba_scratch_;
-  int last_frame_width_ = 0; // the frame replayLastFrame() re-presents; 0 until the first frame
-  int last_frame_height_ = 0;
   int16_t *xa_pcm = nullptr; // one sector's decoded stereo PCM (4032 frames)
 
   // --- playback cursors, so step() can stop between frames -------------------------------------
+  std::unique_ptr<psx::movie::SectorSource> disc_source_;
+  psx::movie::SectorSource *source_ = nullptr;
+  // Audio reads ahead of video on its own cursor; audio_raw_ holds the XA sector at audio_sector_.
+  uint32_t audio_sector_ = 0;
+  bool audio_loaded_ = false;
+  std::vector<uint8_t> audio_raw_ = std::vector<uint8_t>(2352);
   uint32_t base_lba_ = 0;
   uint32_t sector_count_ = 0;
   uint32_t sector_ = 0;
@@ -108,7 +132,20 @@ private:
   long media_frames_ = 0; // cumulative audio sample-pairs = the media clock
   int xa_freq_ = 37800;
   int16_t xa_hist_[2][2] = {{0, 0}, {0, 0}};
-  uint32_t clock_origin_ms_ = 0;
+  psx::movie::MovieClock clock_;
+  psx::movie::MovieFieldGrid grid_{1.0}; // replaced at begin() with the display's field period
+  std::chrono::steady_clock::time_point origin_{};
+  // Audio lag over the movie: a drift shows as last moving away from first.
+  struct AudioLag {
+    double first = 0.0;
+    double last = 0.0;
+    double min = 0.0;
+    double max = 0.0;
+    int samples = 0;
+    void add(double lagMs);
+  } audio_lag_;
+  std::uint64_t intervals_at_begin_ = 0;
+  std::uint64_t missed_at_begin_ = 0;
   int max_frames_ = 0; // PSXPORT_FMV_MAXFRAMES dev cap; 0 = play the whole movie
   bool uncapped_ = false;
   bool finished_ = true;

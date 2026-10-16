@@ -109,6 +109,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/platform/memcard.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/card_syscall_log.cpp
   ${PSXPORT_ROOT}/runtime/psx/movie/native_fmv.cpp
+  ${PSXPORT_ROOT}/runtime/psx/movie/movie_clock.cpp
   ${PSXPORT_ROOT}/runtime/psx/movie/fmv_decode.cpp   # pure .STR decode (VLC/MDEC/XA), shared by the player + offline tools
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gte.c
   ${PSXPORT_ROOT}/runtime/psx/cpu/beetle/gte_beetle.cpp

@@ -340,10 +340,33 @@ suppresses host waiting only. Each `Game` owns its `FramePacer` and deadline.
 
 The play check's missed-vsync count (`GpuPerf::presented`, the RunEndReport `presents:` line) judges
 each present against its own paced deadline. Every pacing call reports the fields it holds the next
-present for (`GpuPerf::heldFor`, quota / parts); a movie frame reports its frame period on the media
-clock (`Fmv::heldFields`). Reports before one present add up, and a present nothing paced is held for
+present for (`GpuPerf::heldFor`, quota / parts); a movie frame reports the whole fields its predecessor
+was shown for (`MovieFieldGrid::show`, below). Reports before one present add up, and a present nothing paced is held for
 one field. An interval is a miss when it is over held fields + 0.5 display refresh periods, so a
 2-field frame at 33 ms is on time and at 50 ms is late. `longest_miss_run` counts consecutive misses.
+
+## Movies
+
+`Fmv` (`runtime/psx/movie/native_fmv.*`) plays an STR stream on the stream's own clock
+(`movie_clock.*`). At `begin` it reads the leading sectors: the sector period is one XA sector's
+audio (`xaSectorFormat`) over the XA stride, 150 sectors/s for a silent movie, and the frame slot is
+the sector distance between two frame ends that no XA sector separates. Frame n is due when its slot
+has been read, so frames are evenly spaced whether or not an XA sector falls in their slot; a stream
+whose slot cannot be learned is due at each frame's last chunk. `MovieFieldGrid` shows each frame
+from the first display field at or after its due time and reports the whole fields its predecessor
+was held for, at most one picture per field.
+
+Audio is the clock the sector period is derived from. The first XA sector is queued when the drive
+delivers it, which starts the audio device; later XA sectors are read on their own cursor and queued
+one second ahead, so a host stall shorter than that does not starve the device (an underrun would leave
+the audio permanently behind the video). The movie ends when its
+audio has played. The `fmv` debug line per frame and the `done` line report the audio lag (wall time
+minus the device's played position on the movie clock, device latency included); it stays flat when
+nothing drifts.
+
+While `Fmv::presenting()`, the movie's frame is the field's only present: a title's frame driver
+rotates its fence unpresented (`FramePresenter::commitUnpresented`) and advances its delivered guest
+fields itself. Test: `tests/test_movie_clock.cpp`.
 
 `DisplayPresenter::present` ends each frame: the present, its dumps, then the watchdog's main-present
 completion. A `Transition` present (a movie end, a boot card) reports watchdog progress only.

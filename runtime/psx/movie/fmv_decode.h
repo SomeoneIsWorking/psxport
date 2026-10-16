@@ -26,6 +26,13 @@ int decodeMdecToRgb555(std::span<const uint16_t> codes, present::PixelSize frame
 // display samples. Returns width*height, or negative on error.
 int decodeMdecToRgb888(std::span<const uint16_t> codes, present::PixelSize frame, uint8_t *pixels);
 
+// An XA-ADPCM sector's format, from its subheader coding byte.
+struct XaFormat {
+  int rate = 0;   // Hz
+  int frames = 0; // PCM frames one sector decodes to
+};
+XaFormat xaSectorFormat(const uint8_t *raw);
+
 // One raw 2352-byte XA-ADPCM sector to interleaved S16 stereo; returns frames written.
 int decodeXaSector(const uint8_t *raw, int16_t *out, int16_t hist[2][2], int *freq);
 
