@@ -35,13 +35,13 @@ std::string jsonEscaped(std::string_view text) {
   return out;
 }
 
-// "0x" and `digits` upper-case hex digits; to_chars cannot fail into a 16-character buffer.
-std::string hexLiteral(std::uint64_t value, std::size_t digits) {
+// "0x" and `Digits` upper-case hex digits; to_chars cannot fail into a 16-character buffer.
+template <std::size_t Digits> std::string hexLiteral(std::uint64_t value) {
   std::array<char, 16> buffer{};
   const auto end = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, 16).ptr;
   const auto written = static_cast<std::size_t>(end - buffer.data());
   std::string out = "0x";
-  out.append(digits > written ? digits - written : 0u, '0');
+  out.append(Digits > written ? Digits - written : 0u, '0');
   for (const char *at = buffer.data(); at != end; ++at) {
     out += static_cast<char>(std::toupper(static_cast<unsigned char>(*at)));
   }
@@ -122,13 +122,13 @@ std::string FunctionReach::reportJson(bool complete) const {
   bool firstImage = true;
   for (const auto &[image, pcs] : reached_) {
     json += firstImage ? "" : ",";
-    json += "\n  {\"name\": \"" + jsonEscaped(image.first) + "\", \"content\": \"" + hexLiteral(image.second, 16) +
+    json += "\n  {\"name\": \"" + jsonEscaped(image.first) + "\", \"content\": \"" + hexLiteral<16>(image.second) +
             "\", \"pcs\": [";
     firstImage = false;
     bool firstPc = true;
     for (const std::uint32_t pc : pcs) {
       json += firstPc ? "\"" : ", \"";
-      json += hexLiteral(pc, 8) + "\"";
+      json += hexLiteral<8>(pc) + "\"";
       firstPc = false;
     }
     json += "]}";
