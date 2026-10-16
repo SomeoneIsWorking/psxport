@@ -26,6 +26,7 @@ public:
 
   void presentReal() override {
     calls.emplace_back("real");
+    order.emplace_back("real");
     if (producers == nullptr) {
       CHECK(presenter_.composedRecord() == nullptr);
     } else if (const FrameRecord *record = presenter_.composedRecord()) {
@@ -37,6 +38,7 @@ public:
   void captureDiagnostic(uint64_t, bool) override {}
   void pace(psx::frame::FieldCadence cadence) override {
     paceParts.push_back(cadence.parts);
+    order.emplace_back("pace");
   }
   bool interpolatesRecords() const override {
     return interpolates;
@@ -50,6 +52,7 @@ public:
   }
   void presentInBetween() override {
     calls.emplace_back("in-between");
+    order.emplace_back("in-between");
     const FrameRecord *record = presenter_.composedRecord();
     CHECK(record != nullptr);
     if (record != nullptr) {
@@ -72,6 +75,7 @@ public:
   psx::gpu::RecordRect display = kBufferA;
   std::vector<std::string> calls;
   std::vector<int> paceParts;
+  std::vector<std::string> order; // presents and paces, interleaved
   FrameRecord shown;
   bool shownIsCurrent = false;
   const psx::present::StateProducers *producers = nullptr;
@@ -148,6 +152,17 @@ void test_consecutive_records_present_the_shown_record_then_n(void) {
   CHECK_EQ(shownX(backend.shown), 20); // the shown record, unblended
   CHECK(backend.shownIsCurrent);
   CHECK(presenter.composedRecord() == nullptr);
+}
+
+// A present waits for its deadline first, so the work before it never shifts it off that deadline.
+void test_each_present_follows_its_pace(void) {
+  psx::frame::FramePresenter presenter;
+  RecordBackend backend(presenter);
+  presenter.commit(backend, 2, recordAt({0, 0}));
+  CHECK(backend.order == (std::vector<std::string>{"pace", "real"}));
+  backend.order.clear();
+  presenter.commit(backend, 2, recordAt({1, 20}));
+  CHECK(backend.order == (std::vector<std::string>{"pace", "in-between", "pace", "real"}));
 }
 
 void test_a_cut_shows_n_as_its_in_between(void) {
@@ -421,6 +436,7 @@ int main(void) {
   RUN(a_frame_without_saved_state_is_not_composed);
   RUN(stability_counts_in_betweens_and_repeats);
   RUN(consecutive_records_present_the_shown_record_then_n);
+  RUN(each_present_follows_its_pace);
   RUN(a_cut_shows_n_as_its_in_between);
   RUN(a_record_that_does_not_follow_has_no_in_between);
   RUN(a_double_buffer_shows_the_previous_shown_record);

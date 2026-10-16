@@ -330,7 +330,10 @@ aborts unless `FramePresenter::fence()` advanced by exactly one.
 `FramePacer::paceSubframeFields`, advances Timing, devices and the VBlank latch by the represented field
 count, then waits for the host deadline. A title with its own field scheduler advances
 `Timing::advanceDisplayFields` per delivered field and paces with `FramePacer::waitPresentedFields`,
-which waits without creating a field. In-betweens split the host wait of the same fields. NOPACE
+which waits without creating a field. In-betweens split the host wait of the same fields. Each present
+is composed, then paced, then presented, so it lands on its deadline whatever guest step or composition
+came before it; presenting first offsets it by that work, and the two presents of a 30 Hz frame then
+alternate short and long intervals. NOPACE
 suppresses host waiting only. Each `Game` owns its `FramePacer` and deadline.
 
 `DisplayPresenter::present` ends each frame: the present, its dumps, then the watchdog's main-present

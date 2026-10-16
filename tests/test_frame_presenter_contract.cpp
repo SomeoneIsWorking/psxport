@@ -59,7 +59,7 @@ void test_neutral_commit_owns_the_complete_non_temporal_fence() {
   CHECK_EQ(backend.paceParts, 1);
   CHECK_EQ(presenter.fence(), 1u);
 
-  const std::vector<std::string> expected = {"present", "dump-real", "pace"};
+  const std::vector<std::string> expected = {"pace", "present", "dump-real"};
   CHECK_EQ(backend.calls.size(), expected.size());
   for (size_t i = 0; i < expected.size(); ++i) {
     CHECK(backend.calls[i] == expected[i]);
