@@ -2,6 +2,7 @@
 #include "texture_feedback.h"
 
 #include <algorithm>
+#include <optional>
 #include <variant>
 
 namespace psx::gpu {
@@ -58,22 +59,31 @@ RecordRect drawBounds(const present::DrawPrimitive &primitive) {
   return rect;
 }
 
-bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect) {
-  RecordRect written{};
+std::optional<RecordRect> entryWrittenRect(const present::RecordEntry &entry) {
   if (const auto *primitive = std::get_if<present::DrawPrimitive>(&entry)) {
-    written = drawBounds(*primitive);
-  } else if (const auto *fill = std::get_if<present::VramFill>(&entry)) {
-    written = clampedVramRect({fill->x, fill->y, fill->width, fill->height});
-  } else if (const auto *copy = std::get_if<present::VramCopy>(&entry)) {
+    return drawBounds(*primitive);
+  }
+  if (const auto *fill = std::get_if<present::VramFill>(&entry)) {
+    return clampedVramRect({fill->x, fill->y, fill->width, fill->height});
+  }
+  if (const auto *copy = std::get_if<present::VramCopy>(&entry)) {
     // A copy onto its own source changes no pixel (the guest issues a 2x1 one as a fence).
     if (copy->srcX == copy->dstX && copy->srcY == copy->dstY) {
-      return false;
+      return std::nullopt;
     }
-    written = clampedVramRect({copy->dstX, copy->dstY, copy->width, copy->height});
-  } else if (const auto *upload = std::get_if<present::VramUpload>(&entry)) {
-    written = clampedVramRect({upload->x, upload->y, upload->width, upload->height});
+    return clampedVramRect({copy->dstX, copy->dstY, copy->width, copy->height});
   }
-  return written.x0 < rect.x1 && rect.x0 < written.x1 && written.y0 < rect.y1 && rect.y0 < written.y1;
+  const auto &upload = std::get<present::VramUpload>(entry);
+  return clampedVramRect({upload.x, upload.y, upload.width, upload.height});
+}
+
+bool rectsOverlap(const RecordRect &a, const RecordRect &b) {
+  return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+}
+
+bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect) {
+  const std::optional<RecordRect> written = entryWrittenRect(entry);
+  return written && rectsOverlap(*written, rect);
 }
 
 TextureFeedback::TextureFeedback() = default;
