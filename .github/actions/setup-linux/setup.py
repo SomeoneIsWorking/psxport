@@ -14,7 +14,7 @@ from pathlib import Path
 PACKAGES = (
     "autoconf", "automake", "clang", "clang-format", "clang-tidy", "cmake", "glslc", "libclang-dev",
     "libfreetype-dev", "libtool", "make", "libsdl3-dev", "libsdl3-image-dev",
-    "libvulkan1", "mesa-vulkan-drivers", "ninja-build", "pkg-config", "zlib1g-dev",
+    "libvulkan1", "mesa-vulkan-drivers", "ninja-build", "pkg-config", "xvfb", "zlib1g-dev",
 )
 LIGHTREC_REVISION_DECLARATION = re.compile(r'set\(PSXPORT_LIGHTREC_REVISION "([0-9a-f]{40})"\)')
 Runner = Callable[[Sequence[str], Path], None]

@@ -28,8 +28,9 @@ CLASS_DATA_PREFIXES = (
 
 # Entities only the C++ runtime can define; a title tree never owns one.
 STANDARD_NAMESPACES = ("std::", "__gnu_cxx::", "__cxxabiv1::")
-# Names the compiler emits for itself: PIC code refers to the EH personality through DW.ref.<routine>.
-COMPILER_GENERATED_PREFIXES = ("DW.ref.",)
+# Names the compiler emits for itself: PIC code refers to the EH personality through DW.ref.<routine>,
+# and Clang gives every TU with a noexcept landing pad its own __clang_call_terminate.
+COMPILER_GENERATED_PREFIXES = ("DW.ref.", "__clang_call_terminate")
 
 
 class Refused(RuntimeError):
