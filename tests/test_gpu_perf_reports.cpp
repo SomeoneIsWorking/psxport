@@ -117,6 +117,26 @@ void test_presents_count_misses_and_the_longest_run(void) {
   CHECK(perf.presentIntervals().worstMs() >= 39.9);
 }
 
+// ── a present is judged against the fields it was held for, not one vsync ──
+void test_a_present_misses_only_half_a_period_past_its_held_fields(void) {
+  lucent::enable_channels("");
+  GpuPerf perf;
+  const double vsync = 1000.0 / 60.0;
+  const std::chrono::steady_clock::time_point start{};
+  perf.presented(start, vsync);
+  perf.heldFor(2.0);
+  perf.presented(start + std::chrono::microseconds(33400), vsync);
+  CHECK_EQ(perf.presentSeries().missed, 0u);
+  perf.heldFor(2.0);
+  perf.presented(start + std::chrono::microseconds(83400), vsync);
+  CHECK_EQ(perf.presentSeries().missed, 1u);
+  perf.presented(start + std::chrono::microseconds(116800), vsync);
+  const GpuPerf::PresentSeries series = perf.presentSeries();
+  CHECK_EQ(series.intervals, 3u);
+  CHECK_EQ(series.missed, 2u);
+  CHECK_EQ(series.longestMissRun, 2u);
+}
+
 // ── a restart drops the gap before it: boot is not a missed present ──
 void test_a_restarted_series_opens_no_interval_across_the_gap(void) {
   lucent::enable_channels("");
@@ -137,6 +157,7 @@ void test_a_restarted_series_opens_no_interval_across_the_gap(void) {
 
 int main(void) {
   RUN(presents_count_misses_and_the_longest_run);
+  RUN(a_present_misses_only_half_a_period_past_its_held_fields);
   RUN(a_restarted_series_opens_no_interval_across_the_gap);
   RUN(a_closed_window_reports_its_average_and_its_distribution);
   RUN(the_average_line_names_every_phase);

@@ -28,20 +28,27 @@ public:
   void phaseEnd(Phase phase);   // close it, charging elapsed time to the phase slot
   void frameEnd();              // bottom of the title FrameDriver: close frame + rolling avg
 
-  // One picture reached the window at `at`. Always on: the play check reads it at run end.
+  // The next present holds its picture for `fields` more display fields: the deadline a pacer gave it.
+  // Calls before one present add up.
+  void heldFor(double fields) {
+    mHeldFields += fields;
+  }
+  // One picture reached the window at `at`. Always on: the play check reads it at run end. It is a miss
+  // when it lands over half a period past the fields it was held for, one field when nothing paced it.
   // `vsyncPeriodMs` is the display's refresh period, 0 when unknown.
   void presented(clk_time_point at, double vsyncPeriodMs);
   // Forget the last present, so the next one opens no interval: the gap before a run's first step
   // is boot, not presentation.
   void restartPresentSeries() {
     mHavePresent = false;
+    mHeldFields = 0.0;
   }
   // The present-to-present series, once, at run end.
   void reportPresents() const;
 
   struct PresentSeries {
     std::uint64_t intervals = 0;
-    std::uint64_t missed = 0; // intervals over 1.5 vsync periods
+    std::uint64_t missed = 0; // intervals over 0.5 periods past their held fields
     std::uint64_t longestMissRun = 0;
     double vsyncPeriodMs = 0.0;
   };
@@ -70,6 +77,7 @@ private:
   std::uint64_t mMissRun = 0;
   clk_time_point mLastPresent{};
   bool mHavePresent = false;
+  double mHeldFields = 0.0; // paced since the last present
 
   // Phase accumulators (ms), summed across the averaging window, reset every report. One field per
   // Phase, named identically, so the report label and the slot it prints cannot drift apart.

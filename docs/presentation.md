@@ -338,6 +338,13 @@ came before it; presenting first offsets it by that work, and the two presents o
 alternate short and long intervals. NOPACE
 suppresses host waiting only. Each `Game` owns its `FramePacer` and deadline.
 
+The play check's missed-vsync count (`GpuPerf::presented`, the RunEndReport `presents:` line) judges
+each present against its own paced deadline. Every pacing call reports the fields it holds the next
+present for (`GpuPerf::heldFor`, quota / parts); a movie frame reports its frame period on the media
+clock (`Fmv::heldFields`). Reports before one present add up, and a present nothing paced is held for
+one field. An interval is a miss when it is over held fields + 0.5 display refresh periods, so a
+2-field frame at 33 ms is on time and at 50 ms is late. `longest_miss_run` counts consecutive misses.
+
 `DisplayPresenter::present` ends each frame: the present, its dumps, then the watchdog's main-present
 completion. A `Transition` present (a movie end, a boot card) reports watchdog progress only.
 
