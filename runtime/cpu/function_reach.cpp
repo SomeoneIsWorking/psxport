@@ -3,8 +3,12 @@
 #include "fs_util.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <charconv>
 #include <lucent/log.h>
 #include <optional>
+#include <string>
 
 namespace psx::cpu {
 
@@ -27,6 +31,19 @@ std::string jsonEscaped(std::string_view text) {
       out += '\\';
     }
     out += ch;
+  }
+  return out;
+}
+
+// "0x" and `digits` upper-case hex digits; to_chars cannot fail into a 16-character buffer.
+std::string hexLiteral(std::uint64_t value, std::size_t digits) {
+  std::array<char, 16> buffer{};
+  const auto end = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, 16).ptr;
+  const auto written = static_cast<std::size_t>(end - buffer.data());
+  std::string out = "0x";
+  out.append(digits > written ? digits - written : 0u, '0');
+  for (const char *at = buffer.data(); at != end; ++at) {
+    out += static_cast<char>(std::toupper(static_cast<unsigned char>(*at)));
   }
   return out;
 }
@@ -99,18 +116,19 @@ std::uint64_t FunctionReach::unownedDispatches() const {
 }
 
 std::string FunctionReach::reportJson(bool complete) const {
-  std::string json = lucent::format(
-      "{{\"complete\": {}, \"unowned_dispatches\": {}, \"images\": [", complete ? "true" : "false", unownedDispatches_);
+  std::string json = "{\"complete\": ";
+  json += complete ? "true" : "false";
+  json += ", \"unowned_dispatches\": " + std::to_string(unownedDispatches_) + ", \"images\": [";
   bool firstImage = true;
   for (const auto &[image, pcs] : reached_) {
-    json += lucent::format("{}\n  {{\"name\": \"{}\", \"content\": \"0x{:016X}\", \"pcs\": [",
-                           firstImage ? "" : ",",
-                           jsonEscaped(image.first),
-                           image.second);
+    json += firstImage ? "" : ",";
+    json += "\n  {\"name\": \"" + jsonEscaped(image.first) + "\", \"content\": \"" + hexLiteral(image.second, 16) +
+            "\", \"pcs\": [";
     firstImage = false;
     bool firstPc = true;
     for (const std::uint32_t pc : pcs) {
-      json += lucent::format("{}\"0x{:08X}\"", firstPc ? "" : ", ", pc);
+      json += firstPc ? "\"" : ", \"";
+      json += hexLiteral(pc, 8) + "\"";
       firstPc = false;
     }
     json += "]}";
