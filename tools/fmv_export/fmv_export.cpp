@@ -29,11 +29,7 @@
 #include "wav_writer.h"
 #include "xa_adpcm.h"
 
-namespace {
-
-constexpr std::size_t kMaxPixels = std::size_t{1024} * 512; // VRAM-sized frame
-
-} // namespace
+namespace {} // namespace
 
 int main(int argc, char **argv) {
   if (argc < 2) {
@@ -73,15 +69,16 @@ int main(int argc, char **argv) {
   mdec.bind();
   psx::movie::FrameAssembler assembler;
   psx::movie::FrameDecoder decoder;
+  decoder.start(mdec);
   std::vector<uint16_t> codes(psx::movie::kMaxCodes);
-  std::vector<uint8_t> rgb(kMaxPixels * 3);
+  std::vector<uint8_t> rgb(psx::movie::kMaxFramePixels * 3);
   std::vector<int16_t> xa_pcm(std::size_t{psx::audio::kXaMaxSectorFrames} * 2);
   // The WAV opens at the first audio sector's rate.
   std::optional<psx::audio::WavWriter> wav;
   const long max_frames = psx::config::movie_max_frames();
   const bool dump_codes = psx::config::movie_dump_codes();
 
-  const uint32_t nsectors = (size + psx::movie::kSectorUserBytes - 1) / psx::movie::kSectorUserBytes;
+  const uint32_t nsectors = (size + psx::cd::kDataSectorBytes - 1) / psx::cd::kDataSectorBytes;
   int frames = 0;
   int xa_freq = psx::audio::kXaDefaultRateHz;
   int16_t xa_hist[2][2] = {{0, 0}, {0, 0}};
@@ -92,7 +89,7 @@ int main(int argc, char **argv) {
     if (!disc.readRaw(lba + sec, raw, sizeof raw)) {
       break;
     }
-    if (psx::audio::sectorSubheader(raw).audio()) {
+    if (psx::cd::sectorSubheader(raw).audio()) {
       const psx::audio::XaFormat format = psx::audio::decodeXaSector(raw, xa_pcm.data(), xa_hist);
       if (!wav) {
         xa_freq = format.rate;
@@ -138,8 +135,11 @@ int main(int argc, char **argv) {
       }
       fprintf(stderr, "\n");
     }
-    if (ncodes <= 0 ||
-        decoder.decodeRgb888(mdec, {codes.data(), static_cast<std::size_t>(ncodes)}, frame->size, rgb.data()) <= 0) {
+    if (ncodes <= 0 || decoder.decode(mdec,
+                                      {codes.data(), static_cast<std::size_t>(ncodes)},
+                                      frame->size,
+                                      psx::movie::FramePixels::Rgb24,
+                                      rgb.data()) <= 0) {
       continue;
     }
     char pngpath[512];

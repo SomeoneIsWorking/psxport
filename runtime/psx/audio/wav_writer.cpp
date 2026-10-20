@@ -1,8 +1,11 @@
 #include "wav_writer.h"
 
 #include "audio_queue_policy.h"
+#include "blob_codec.h"
 
 #include <lucent/log.h>
+
+#include <string_view>
 
 namespace psx::audio {
 namespace {
@@ -11,10 +14,18 @@ constexpr long kRiffSizeOffset = 4;
 constexpr long kDataSizeOffset = 40;
 constexpr std::uint32_t kHeaderBytesAfterRiffSize = 36;
 
-void putLe(std::FILE *file, std::uint32_t value, int bytes) {
-  for (int i = 0; i < bytes; i++) {
-    std::fputc(static_cast<int>((value >> (8 * i)) & 0xFFu), file);
-  }
+void fourcc(psx::platform::BlobWriter &out, std::string_view tag) {
+  out.bytes({reinterpret_cast<const std::uint8_t *>(tag.data()), tag.size()});
+}
+
+void put(std::FILE *file, const psx::platform::BlobWriter &blob) {
+  std::fwrite(blob.bytesOut().data(), 1, blob.bytesOut().size(), file);
+}
+
+void putU32(std::FILE *file, std::uint32_t value) {
+  psx::platform::BlobWriter blob;
+  blob.u32(value);
+  put(file, blob);
 }
 
 } // namespace
@@ -26,18 +37,20 @@ WavWriter::WavWriter(const std::string &path, std::uint32_t sampleRateHz)
     return;
   }
   constexpr auto kBytesPerFrame = static_cast<std::uint32_t>(AudioQueuePolicy::kBytesPerFrame);
-  std::fwrite("RIFF", 1, 4, file_);
-  putLe(file_, 0, 4);
-  std::fwrite("WAVEfmt ", 1, 8, file_);
-  putLe(file_, 16, 4);
-  putLe(file_, 1, 2); // PCM
-  putLe(file_, AudioQueuePolicy::kChannels, 2);
-  putLe(file_, sampleRateHz_, 4);
-  putLe(file_, sampleRateHz_ * kBytesPerFrame, 4);
-  putLe(file_, kBytesPerFrame, 2);
-  putLe(file_, AudioQueuePolicy::kBytesPerSample * 8, 2);
-  std::fwrite("data", 1, 4, file_);
-  putLe(file_, 0, 4);
+  psx::platform::BlobWriter header;
+  fourcc(header, "RIFF");
+  header.u32(0);
+  fourcc(header, "WAVEfmt ");
+  header.u32(16);
+  header.u16(1); // PCM
+  header.u16(AudioQueuePolicy::kChannels);
+  header.u32(sampleRateHz_);
+  header.u32(sampleRateHz_ * kBytesPerFrame);
+  header.u16(kBytesPerFrame);
+  header.u16(AudioQueuePolicy::kBytesPerSample * 8);
+  fourcc(header, "data");
+  header.u32(0);
+  put(file_, header);
 }
 
 WavWriter::~WavWriter() {
@@ -69,9 +82,9 @@ void WavWriter::syncSizes() {
   }
   const long end = std::ftell(file_);
   std::fseek(file_, kRiffSizeOffset, SEEK_SET);
-  putLe(file_, kHeaderBytesAfterRiffSize + dataBytes_, 4);
+  putU32(file_, kHeaderBytesAfterRiffSize + dataBytes_);
   std::fseek(file_, kDataSizeOffset, SEEK_SET);
-  putLe(file_, dataBytes_, 4);
+  putU32(file_, dataBytes_);
   std::fseek(file_, end, SEEK_SET);
   std::fflush(file_);
 }

@@ -1,5 +1,6 @@
 // The .STR decode the runtime player and tools/fmv_export share: STR demux, BS VLC decode, MDEC frame decode.
 #include "fmv_decode.h"
+#include "cd_position.h"
 #include "diagnostic_config.h"
 #include "mdec_device.h"
 #include <algorithm>
@@ -240,11 +241,16 @@ constexpr std::size_t kMacroblockBytes = std::size_t{kMacroblockPixels} * kMacro
 constexpr std::size_t kMaxInputWords = std::size_t{128} * 1024;
 constexpr std::size_t kMaxOutputWords = std::size_t{512} * 1024;
 
+void resetForDma(MdecDevice &mdec) {
+  mdec.write(MdecDevice::kControlPort, 0x80000000u);
+  mdec.write(MdecDevice::kControlPort, (1u << 30) | (1u << 29)); // DMA in and out enabled
+}
+
 } // namespace
 
 std::optional<VideoChunk> videoChunk(const uint8_t *raw) {
   const uint8_t *header = raw + 24;
-  if (psx::audio::sectorSubheader(raw).audio() || le16(header) != kVideoChunkMagic) {
+  if (psx::cd::sectorSubheader(raw).audio() || le16(header) != kVideoChunkMagic) {
     return std::nullopt;
   }
   return VideoChunk{static_cast<int>(le16(header + 4)),
@@ -268,7 +274,7 @@ std::optional<FrameAssembler::Frame> FrameAssembler::add(const VideoChunk &chunk
   if (frame_ != chunk.frame) {
     return std::nullopt;
   }
-  constexpr uint32_t kChunkPayload = kSectorUserBytes - kStrChunkHeaderBytes;
+  constexpr uint32_t kChunkPayload = psx::cd::kDataSectorBytes - kStrChunkHeaderBytes;
   if (length_ + kChunkPayload <= kPayloadBytes) {
     std::memcpy(payload_.data() + length_, raw + 24 + kStrChunkHeaderBytes, kChunkPayload);
     length_ += kChunkPayload;
@@ -358,13 +364,15 @@ FrameDecoder::FrameDecoder() {
       idct[u * 8 + x] = static_cast<int16_t>(iv > 32767 ? 32767 : (iv < -32768 ? -32768 : iv));
     }
   }
-  for (int i = 0; i < 32; i++) {
-    idctWords_[i] = static_cast<uint16_t>(idct[2 * i]) | (static_cast<uint32_t>(static_cast<uint16_t>(idct[2 * i + 1])) << 16);
+  for (std::size_t i = 0; i < idctWords_.size(); i++) {
+    idctWords_[i] =
+        static_cast<uint16_t>(idct[2 * i]) | (static_cast<uint32_t>(static_cast<uint16_t>(idct[2 * i + 1])) << 16);
   }
 }
 
 // After power-on both matrices are zero and every block decodes black (libpress DecDCTReset uploads them).
-void FrameDecoder::uploadTables(MdecDevice &mdec) const {
+void FrameDecoder::start(MdecDevice &mdec) const {
+  resetForDma(mdec);
   mdec.write(MdecDevice::kDataPort, (2u << 29) | 1u); // SetIqTab, luma and chroma
   mdec.dmaIn(quantWords_.data(), static_cast<int>(quantWords_.size()));
   mdec.step();
@@ -377,9 +385,7 @@ void FrameDecoder::uploadTables(MdecDevice &mdec) const {
 // that parks with input outstanding ends the frame with the blocks it produced.
 int FrameDecoder::decodeMacroblocks(MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame) {
   const auto ncodes = static_cast<int>(codes.size());
-  mdec.write(MdecDevice::kControlPort, 0x80000000u);
-  mdec.write(MdecDevice::kControlPort, (1u << 30) | (1u << 29)); // DMA in and out enabled
-  uploadTables(mdec);
+  resetForDma(mdec);
   const int nwords = (ncodes + 1) / 2;
   mdec.write(MdecDevice::kDataPort, 0x30000000u | (kDepth24bpp << 27) | static_cast<uint32_t>(nwords & 0xFFFF));
   if (nwords > static_cast<int>(kMaxInputWords)) {
@@ -395,7 +401,7 @@ int FrameDecoder::decodeMacroblocks(MdecDevice &mdec, std::span<const uint16_t> 
   if (totalWords > static_cast<int>(kMaxOutputWords)) {
     return -2;
   }
-  out_.assign(static_cast<std::size_t>(totalWords), 0u);
+  out_.resize(static_cast<std::size_t>(totalWords));
   int fed = 0;
   int got = 0;
   int stall = 0;
@@ -423,32 +429,49 @@ int FrameDecoder::decodeMacroblocks(MdecDevice &mdec, std::span<const uint16_t> 
   return got;
 }
 
-// Macroblocks leave the MDEC column-major: emit index k is row k % rows, column k / rows.
-int FrameDecoder::decodeRgb888(MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame, uint8_t *pixels) {
+// Macroblocks leave the MDEC column-major: emit index k is row k % rows, column k / rows. A block the decode
+// did not produce is black.
+int FrameDecoder::decode(
+    MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame, FramePixels layout, uint8_t *pixels) {
   const int got = decodeMacroblocks(mdec, codes, frame);
   if (got < 0) {
     return got;
   }
   const int width = frame.width;
   const int height = frame.height;
-  std::memset(pixels, 0, static_cast<std::size_t>(width) * height * kBytesPerPixel);
+  const auto outBytes = static_cast<std::size_t>(layout);
   const auto *mb = reinterpret_cast<const uint8_t *>(out_.data());
   const int columns = (width + 15) / 16;
   const int rows = (height + 15) / 16;
-  const int blocks = static_cast<int>(static_cast<std::size_t>(got) * 4 / kMacroblockBytes);
-  for (int blk = 0; blk < blocks; blk++) {
+  const int produced = static_cast<int>(static_cast<std::size_t>(got) * 4 / kMacroblockBytes);
+  for (int blk = 0; blk < columns * rows; blk++) {
     const int bx = blk / rows;
     const int by = blk % rows;
-    if (bx >= columns) {
-      continue;
-    }
-    const uint8_t *src = mb + static_cast<std::size_t>(blk) * kMacroblockBytes;
-    for (int yy = 0; yy < kMacroblockPixels && by * 16 + yy < height; yy++) {
-      const int fx = bx * 16;
-      const int span = std::min(kMacroblockPixels, width - fx);
-      std::memcpy(pixels + (static_cast<std::size_t>(by * 16 + yy) * width + fx) * kBytesPerPixel,
-                  src + static_cast<std::size_t>(yy) * kMacroblockPixels * kBytesPerPixel,
-                  static_cast<std::size_t>(span) * kBytesPerPixel);
+    const int fx = bx * kMacroblockPixels;
+    const int span = std::min(kMacroblockPixels, width - fx);
+    for (int yy = 0; yy < kMacroblockPixels && by * kMacroblockPixels + yy < height; yy++) {
+      uint8_t *dst = pixels + (static_cast<std::size_t>(by * kMacroblockPixels + yy) * width + fx) * outBytes;
+      if (blk >= produced) {
+        std::memset(dst, 0, static_cast<std::size_t>(span) * outBytes);
+        if (layout == FramePixels::Rgba32) {
+          for (int x = 0; x < span; x++) {
+            dst[std::size_t{4} * x + 3] = 255;
+          }
+        }
+        continue;
+      }
+      const uint8_t *row = mb + static_cast<std::size_t>(blk) * kMacroblockBytes +
+                           static_cast<std::size_t>(yy) * kMacroblockPixels * kBytesPerPixel;
+      if (layout == FramePixels::Rgb24) {
+        std::memcpy(dst, row, static_cast<std::size_t>(span) * kBytesPerPixel);
+      } else {
+        for (int x = 0; x < span; x++) {
+          dst[std::size_t{4} * x + 0] = row[std::size_t{3} * x + 0];
+          dst[std::size_t{4} * x + 1] = row[std::size_t{3} * x + 1];
+          dst[std::size_t{4} * x + 2] = row[std::size_t{3} * x + 2];
+          dst[std::size_t{4} * x + 3] = 255;
+        }
+      }
     }
   }
   return width * height;

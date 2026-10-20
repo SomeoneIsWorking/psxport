@@ -1,5 +1,6 @@
 // XaStream: the stream the CD command layer drives and the clip player, resampled to 44.1 kHz for the SPU.
 #include "cd_drive_timing.h"
+#include "cd_position.h"
 #include "cdc_state.h"
 #include "disc.h"
 #include "spu_field_cadence.h"
@@ -109,16 +110,15 @@ int XaStream::decodeNextSector() {
     }
   }
   for (int guard = 0; guard < 64; guard++) {
-    if (!disc->readRaw(lba, raw, sizeof raw) || !isMode2(raw)) {
+    if (!disc->readRaw(lba, raw, sizeof raw) || !psx::cd::isMode2(raw)) {
       active = 0;
       return 0;
     }
-    const SectorSubheader header = sectorSubheader(raw);
+    const psx::cd::SectorSubheader header = psx::cd::sectorSubheader(raw);
     lba++;
     // A clip is file 1 of its channel; an open-ended stream takes what the drive would route to the SPU.
-    const bool pass = end_lba != 0
-                          ? header.audio() && header.file == 1 && header.channel == clip_chan
-                          : drive->sectorRoute(raw) == psx::cd::CdcSectorRoute::XaAudio;
+    const bool pass = end_lba != 0 ? header.audio() && header.file == 1 && header.channel == clip_chan
+                                   : drive->sectorRoute(raw) == psx::cd::CdcSectorRoute::XaAudio;
     if (pass) {
       const int frames = decodeAndStoreSector(raw, lba - 1);
       // A clip ends at end_lba only: EOF markers inside its range belong to interleaved files.
@@ -160,6 +160,7 @@ int XaStream::pushAudioSector(const uint8_t *raw, uint32_t drive_lba) {
 int XaStream::decodeAndStoreSector(const uint8_t *raw, uint32_t drive_lba) {
   int16_t pcm[std::size_t{kXaMaxSectorFrames} * 2];
   const XaFormat format = decodeXaSector(raw, pcm, hist);
+  const psx::cd::SectorSubheader header = psx::cd::sectorSubheader(raw);
   src_freq = format.rate;
   for (int i = 0; i < format.frames; i++) {
     const uint32_t idx = (wr + static_cast<uint32_t>(i)) % kXaRingFrames;
@@ -172,9 +173,9 @@ int XaStream::decodeAndStoreSector(const uint8_t *raw, uint32_t drive_lba) {
   lucent::debug("xasec",
                 "LBA {} file={} chan={} submode={:02X} n={} freq={} (wr={} rd={})",
                 drive_lba,
-                raw[16],
-                raw[17],
-                raw[18],
+                header.file,
+                header.channel,
+                header.submode,
                 format.frames,
                 format.rate,
                 wr,

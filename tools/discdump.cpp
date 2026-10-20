@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "cd_position.h"
 #include "disc.h"
 
 namespace fs = std::filesystem;
@@ -18,8 +19,6 @@ namespace {
 
 using psx::cd::Disc;
 using psx::cd::DiscFile;
-
-constexpr uint32_t kUserDataSize = 2048;
 
 uint32_t ReadLE32(const uint8_t *p) {
   return p[0] | (p[1] << 8) | (p[2] << 16) | (uint32_t(p[3]) << 24);
@@ -36,9 +35,10 @@ std::string NormalizeName(std::string n) {
 }
 
 bool DumpFile(Disc &disc, const DiscFile &f, const fs::path &outpath, std::vector<uint8_t> *contents = nullptr) {
-  std::vector<uint8_t> buf(((size_t)f.size + kUserDataSize - 1) / kUserDataSize * kUserDataSize);
-  for (uint32_t i = 0; i < buf.size() / kUserDataSize; i++) {
-    if (!disc.readSector(f.lba + i, buf.data() + (size_t)i * kUserDataSize)) {
+  std::vector<uint8_t> buf(((size_t)f.size + psx::cd::kDataSectorBytes - 1) / psx::cd::kDataSectorBytes *
+                           psx::cd::kDataSectorBytes);
+  for (uint32_t i = 0; i < buf.size() / psx::cd::kDataSectorBytes; i++) {
+    if (!disc.readSector(f.lba + i, buf.data() + (size_t)i * psx::cd::kDataSectorBytes)) {
       return false;
     }
   }
@@ -52,7 +52,7 @@ bool DumpFile(Disc &disc, const DiscFile &f, const fs::path &outpath, std::vecto
 }
 
 std::optional<DiscFile> RootDir(Disc &disc) {
-  uint8_t sec[kUserDataSize];
+  uint8_t sec[psx::cd::kDataSectorBytes];
   if (!disc.readSector(16, sec) || std::memcmp(sec + 1, "CD001", 5) != 0) {
     std::fprintf(stderr, "no ISO9660 PVD at LBA 16\n");
     return std::nullopt;
@@ -63,18 +63,18 @@ std::optional<DiscFile> RootDir(Disc &disc) {
 
 // Recursively print the ISO9660 directory tree (files: full path, LBA, size).
 void ListTree(Disc &disc, DiscFile dir, const std::string &prefix) {
-  const uint32_t nsec = (dir.size + kUserDataSize - 1) / kUserDataSize;
-  std::vector<uint8_t> buf((size_t)nsec * kUserDataSize);
+  const uint32_t nsec = (dir.size + psx::cd::kDataSectorBytes - 1) / psx::cd::kDataSectorBytes;
+  std::vector<uint8_t> buf((size_t)nsec * psx::cd::kDataSectorBytes);
   for (uint32_t i = 0; i < nsec; i++) {
-    if (!disc.readSector(dir.lba + i, buf.data() + (size_t)i * kUserDataSize)) {
+    if (!disc.readSector(dir.lba + i, buf.data() + (size_t)i * psx::cd::kDataSectorBytes)) {
       return;
     }
   }
 
   // Directory records never straddle a 2048-byte sector boundary.
-  for (uint32_t s = 0; s < buf.size(); s += kUserDataSize) {
+  for (uint32_t s = 0; s < buf.size(); s += psx::cd::kDataSectorBytes) {
     uint32_t pos = s;
-    while (pos < s + kUserDataSize) {
+    while (pos < s + psx::cd::kDataSectorBytes) {
       const uint8_t len = buf[pos];
       if (len == 0) {
         break; // remainder of this sector is padding
@@ -128,20 +128,20 @@ int main(int argc, char **argv) {
     const uint32_t cnt = argc > 3 ? (uint32_t)std::strtoul(argv[3], nullptr, 0) : 16;
     std::printf("LBA      mode file chan submode  audio eof\n");
     for (uint32_t i = 0; i < cnt; i++) {
-      uint8_t raw[2352];
+      uint8_t raw[psx::cd::kRawSectorBytes];
       if (!disc.readRaw(lba0 + i, raw, sizeof raw)) {
         std::printf("%-8u  <read fail>\n", lba0 + i);
         break;
       }
-      const uint8_t md = raw[15], file = raw[16], chan = raw[17], sub = raw[18];
+      const psx::cd::SectorSubheader header = psx::cd::sectorSubheader(raw);
       std::printf("%-8u  %2u  %3u  %3u   0x%02X     %d    %d\n",
                   lba0 + i,
-                  md,
-                  file,
-                  chan,
-                  sub,
-                  (sub & 0x04) != 0,
-                  (sub & 0x80) != 0);
+                  raw[15],
+                  header.file,
+                  header.channel,
+                  header.submode,
+                  header.audio(),
+                  header.endOfFile());
     }
     return 0;
   }

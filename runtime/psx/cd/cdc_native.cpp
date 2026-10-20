@@ -169,12 +169,11 @@ std::optional<ArgumentCounts> commandArgumentCounts(uint8_t command) {
 
 // STRSND routes a Mode2 sector whose submode has all of RT|form2|audio (0x64); the filter drops other channels.
 CdcSectorRoute CdController::sectorRoute(const uint8_t *raw) const {
-  const psx::audio::SectorSubheader header = psx::audio::sectorSubheader(raw);
-  if ((mode & kModeXaAdpcm) == 0 || !psx::audio::isMode2(raw) || (header.submode & 0x64) != 0x64) {
+  const SectorSubheader header = sectorSubheader(raw);
+  if ((mode & kModeXaAdpcm) == 0 || !isMode2(raw) || (header.submode & 0x64) != 0x64) {
     return CdcSectorRoute::Data;
   }
-  const bool selected =
-      (mode & kModeXaFilter) == 0 || (header.file == filter_file && header.channel == filter_chan);
+  const bool selected = (mode & kModeXaFilter) == 0 || (header.file == filter_file && header.channel == filter_chan);
   return selected ? CdcSectorRoute::XaAudio : CdcSectorRoute::XaDropped;
 }
 
@@ -210,11 +209,12 @@ DriveSector CdController::consumeSector(uint32_t lba) {
 // Streaming code tells video from audio by the subheader whole-sector framing puts first.
 void CdController::fillDataFifo(const uint8_t (&raw)[kRawSectorBytes]) {
   const SectorFraming framing = sectorFraming(mode);
+  const SectorSubheader header = sectorSubheader(raw);
   lucent::debug("cdc",
                 "sector file={} chan={} submode=0x{:02X} -> data FIFO {}@{}",
-                raw[16],
-                raw[17],
-                raw[18],
+                header.file,
+                header.channel,
+                header.submode,
                 framing.bytes,
                 framing.offset);
   memcpy(data, raw + framing.offset, framing.bytes);
@@ -563,7 +563,8 @@ uint64_t CdController::execCommand(uint8_t cmd) {
       return 5'000;
     }
     const uint64_t speed_scale = (mode & kModeDoubleSpeed) != 0 ? 1u : 2u;
-    return (1'124'584u + static_cast<uint64_t>(loc_lba) * 42'596u / (uint64_t{kSectorsPerSecond} * kSecondsPerMinute)) * speed_scale;
+    return (1'124'584u + static_cast<uint64_t>(loc_lba) * 42'596u / (uint64_t{kSectorsPerSecond} * kSecondsPerMinute)) *
+           speed_scale;
   }
   case 0x08: {
     const uint8_t reading_status[1] = {stat};
@@ -698,7 +699,7 @@ bool CdController::service() {
 
 // The bytes a consumer reads of a presented sector; a request past them asks for the next sector.
 std::uint32_t CdController::sectorPayloadBytes() const {
-  return (mode & kModeWholeSector) != 0 ? 12u + 2048u : 2048u;
+  return (mode & kModeWholeSector) != 0 ? 12u + kDataSectorBytes : kDataSectorBytes;
 }
 
 // BFRD is a level: a repeated 0x80 keeps the FIFO and cursor, but still presents an announced sector.

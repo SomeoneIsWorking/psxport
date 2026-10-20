@@ -1,5 +1,7 @@
 #include "xa_adpcm.h"
 
+#include "cd_position.h"
+
 #include <cstddef>
 #include <cstring>
 
@@ -12,11 +14,18 @@ constexpr int kSamplesPerUnit = 28;
 
 struct Coding {
   bool stereo;
+  bool halfRate;
   bool eightBit;
   int units;
 
   explicit Coding(std::uint8_t coding)
-      : stereo((coding & 0x01u) != 0), eightBit((coding & 0x10u) != 0), units(eightBit ? 4 : 8) {}
+      : stereo((coding & 0x01u) != 0), halfRate((coding & 0x04u) != 0), eightBit((coding & 0x10u) != 0),
+        units(eightBit ? 4 : 8) {}
+
+  XaFormat format() const {
+    return {halfRate ? kXaDefaultRateHz / 2 : kXaDefaultRateHz,
+            kSoundGroups * units * kSamplesPerUnit / (stereo ? 2 : 1)};
+  }
 };
 
 // `param` is the unit header: shift in the low nibble, filter in the high.
@@ -39,14 +48,11 @@ void decodeUnit(const std::uint8_t *in, std::int16_t *out, int param) {
 } // namespace
 
 XaFormat xaSectorFormat(const std::uint8_t *raw) {
-  const std::uint8_t coding = sectorSubheader(raw).coding;
-  const Coding parsed(coding);
-  return {(coding & 0x04u) != 0 ? kXaDefaultRateHz / 2 : kXaDefaultRateHz,
-          kSoundGroups * parsed.units * kSamplesPerUnit / (parsed.stereo ? 2 : 1)};
+  return Coding(psx::cd::sectorSubheader(raw).coding).format();
 }
 
 XaFormat decodeXaSector(const std::uint8_t *raw, std::int16_t *out, std::int16_t hist[2][2]) {
-  const Coding coding(sectorSubheader(raw).coding);
+  const Coding coding(psx::cd::sectorSubheader(raw).coding);
   const int nibbleShift = coding.eightBit ? 0 : 1;
   std::int16_t channel[2][kXaMaxSectorFrames];
   int written[2] = {0, 0};
@@ -83,12 +89,12 @@ XaFormat decodeXaSector(const std::uint8_t *raw, std::int16_t *out, std::int16_t
       }
     }
   }
-  const int frames = written[0];
-  for (int i = 0; i < frames; i++) {
+  const XaFormat format = coding.format();
+  for (int i = 0; i < format.frames; i++) {
     out[std::size_t{2} * i] = channel[0][i];
     out[std::size_t{2} * i + 1] = channel[1][i];
   }
-  return {xaSectorFormat(raw).rate, frames};
+  return format;
 }
 
 } // namespace psx::audio

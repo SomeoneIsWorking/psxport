@@ -42,7 +42,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/hle/bios_*` — BIOS libc string and memory leaves, setjmp / HookEntryInt, LoadExec / LoadAndExecute, pad work area
 - `runtime/psx/hle/platform_hle.*`, `stock_*` — PSY-Q stock library bodies a title binds: libgpu DrawSync waits, libgte projection setters, libetc VSync frame boundary, DMACallback table
 - `runtime/psx/cd/cd.*`, `stock_libcd.*`, `stock_cd_*`, `cd_stock_read_completion.*`, `cd_ready_delivery.*` — stock libcd served synchronously: CdControl / CdSync responses, work area, CdRead, ready callback and the INT1 a read still owes
-- `runtime/psx/cd/cdc_*`, `cd_drive_timing.h`, `cd_position.*` — CD controller registers 0x1F801800, command phases, sector routing (data FIFO or XA to the SPU), Setmode bits and sector framing, drive timing, BCD / MSF / LBA
+- `runtime/psx/cd/cdc_*`, `cd_drive_timing.h`, `cd_position.*` — CD controller registers 0x1F801800, command phases, sector routing (data FIFO or XA to the SPU), Setmode bits and sector framing, drive timing, BCD / MSF / LBA, raw and data sector sizes, Mode2 subheader (file, channel, submode, coding)
 - `runtime/psx/cd/disc*` — CHD disc image by LBA, ISO9660 file reader, TOC (GetTN / GetTD), disc provisioning
 - `runtime/psx/platform/dma_*` — DMA controller DPCR / DICR, channels, linked-list chain mode, DMA callbacks, DMA IRQ
 - `runtime/psx/platform/io_peripherals.*`, `irq_edge.h` — I_STAT / I_MASK interrupt lines, root counter and SIO decode
@@ -76,12 +76,12 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `stock_pad_buffers.*` — controller / pad as the guest sees it: SIO0, digital packet, fixed pad buffers
 - `runtime/psx/input/pad_recording.*`, `pad_record_replay.*`, `pad_phase_replay.*`, `input_phase.h` — `.pad` record and replay keyed on input phase
 - `runtime/psx/audio/spu_*` — SPU (Beetle spu.c) device, register file, mixer, field cadence, per-field host feed
-- `runtime/psx/audio/xa_adpcm.*` — XA sector subheader, format and ADPCM decode (the one decoder for SPU, FMV and tools)
-- `runtime/psx/audio/xa_state.h`, `xa_stream.cpp`, `xa_push_pacing.h` — XA streaming into the SPU CD ring, push and pull modes, pacing
+- `runtime/psx/audio/xa_adpcm.*` — XA coding-byte format and ADPCM sector decode (the one decoder for SPU, FMV and tools)
+- `runtime/psx/audio/xa_state.h`, `xa_stream.cpp`, `xa_push_pacing.h` — XA streaming into the SPU CD ring, push and pull modes, clip playback (also the REPL xadump), pacing
 - `runtime/psx/audio/host_audio_output.*` — the SDL3 audio stream and the session claim on it (headless means no audio)
 - `runtime/psx/audio/audio_queue_policy.h`, `wav_writer.*` — host queue buffering targets, WAV capture
 - `runtime/psx/movie/mdec_device.*` — MDEC (Beetle mdec.c) device: ports, DMA in/out
-- `runtime/psx/movie/fmv_decode.*`, `native_fmv.*`, `movie_clock.h` — STR frame assembly, BS decode, RGB24 frames through the MDEC, native movie playback and its sector clock
+- `runtime/psx/movie/fmv_decode.*`, `native_fmv.*`, `movie_clock.h` — STR frame assembly, BS decode, MDEC tables once per movie, macroblocks tiled to RGB24 or RGBA32, native movie playback and its sector clock
 - `runtime/psx/state/` — save states / machine state: state file container, device sections, Beetle device streams, native title section, load-state
 - `runtime/psx/config/config*`, `typed_config.*`, `number_text.*` — PSXPORT_* knobs / CVars, environment and .env, typed immutable launch config, strict number parsing
 - `runtime/psx/config/diagnostic_*`, `enhancement_gate.*`, `stepped_range.h` — diagnostic knobs, comparison run mode, pc_enh enhancement gates, stepped setting ranges

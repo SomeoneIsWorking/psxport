@@ -11,6 +11,30 @@ inline constexpr int kLeadInSectors = 150;
 inline constexpr int kSectorsPerSecond = 75;
 inline constexpr int kSecondsPerMinute = 60;
 inline constexpr std::uint32_t kRawSectorBytes = 2352u;
+inline constexpr std::uint32_t kDataSectorBytes = 2048u;
+
+// The Mode2 subheader of a raw sector (sync 12, header 4, subheader 8).
+struct SectorSubheader {
+  std::uint8_t file = 0;
+  std::uint8_t channel = 0;
+  std::uint8_t submode = 0;
+  std::uint8_t coding = 0;
+
+  bool audio() const {
+    return (submode & 0x04u) != 0;
+  }
+  bool endOfFile() const {
+    return (submode & 0x80u) != 0;
+  }
+};
+
+constexpr bool isMode2(const std::uint8_t *raw) {
+  return raw[15] == 2;
+}
+
+constexpr SectorSubheader sectorSubheader(const std::uint8_t *raw) {
+  return {raw[16], raw[17], raw[18], raw[19]};
+}
 
 constexpr int fromBcd(std::uint8_t value) {
   return (value >> 4) * 10 + (value & 0x0F);
