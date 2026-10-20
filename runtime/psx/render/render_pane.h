@@ -14,7 +14,6 @@ struct Pane {
   float seamLeftTop = 0.0f, seamLeftBottom = 0.0f;
   float seamRightTop = 0.0f, seamRightBottom = 0.0f;
   float tintR = 1.0f, tintG = 1.0f, tintB = 1.0f;
-  float alpha = 1.0f;
   float desaturation = 0.0f; // 0 = the picture's own colour, 1 = grey
 };
 

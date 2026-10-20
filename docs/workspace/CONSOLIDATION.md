@@ -377,6 +377,14 @@ Each is a call-site or knob edit forced by an API change that cannot be split.
 | `psx/debug/debug_commands.cpp` (REPL `shot` line) | A3 | B1: `presentedHeight` becomes `presentedRect`. |
 | `psx/movie/native_fmv.cpp` | B1 (render include and name) | B2: everything else. |
 | `psx/host/picker_session.cpp` | B1 (`ensureDevice` fold) | B3: everything else. |
+| `psx/host/title_session.{h,cpp}` | A3, B1, B2 | B3: the pane host hooks, the picture accessors and the deleted content-size helpers (0197). |
+| `psx/movie/native_fmv.cpp` | B1, B2 | B3: `fieldRateMilliHz` read from `Timing::displayFieldRate` once `FramePacer::fieldRateMilliHz` is deleted. |
+| `psx/present/display_presenter.{h,cpp}` | B1 | B3: `buildPanes`, the selector's present (0197). |
+| `psx/render/{render_device.*, render_state.h, render_present.cpp, render_readback.cpp}` | B1 | B3: the pane pipeline and white texture; the content measure and `PresentedImage::content` deleted (0197). |
+| `psx/game/mods.{h,cpp}` | A3 | B3: `Mods::reload`, so a menu setting reaches the running panel. |
+| `psx/host/panel_logo.*` | B1 | B3: the logo magnification deleted. |
+| `ui/menu_pane.h`, `ui/menu_tab_bar.cpp` | none (outside B3's list) | B3: the dead row-builder comment; tab stepping on `ui::wrap`. |
+| `psx-toy-story-2` frame boundary | B2 | B3: the `fieldRateMilliHz` caller, as `native_fmv.cpp`. |
 | Spyro render files that include `core/guest_globals.h` (if any) | A3 (include path) | B4: everything else. |
 | `psx-spyro/titles/spyro1/core/frame/logo_facts.h` | A3 | A4: the logo record loses `clipWidth`. |
 
@@ -392,6 +400,7 @@ State each one in its group's commit and its issue doc.
 - crt0 refuses a field it cannot resolve.
 - Spyro 1 reports that it is still in its boot prefix while the logos play.
 - The picker moves with D-pad Left/Right.
+- B3 (psx-spyro 0197): `picker shot` is removed (`pshot` captures the selector); the selected panel shows its live presents, fades included; a paused panel is drawn 1:1, centred and cut by the seams, so it shows a centre slice of a wider picture; each panel shows the title's own black border rows as bands at its top and bottom, since nothing is cropped; the fps60 menu row is hidden on the selector; `select left|right` replies `ok: step left|right` instead of `ok: panel N (slug)`.
 - A5, every title's launcher: the player build moves to `build/player` and psxport's disc reader to `build/player-tools`; the launcher takes only an optional positional disc and `--prepare-only`. Dropped: CTR's `--headless` (agents use `agent_environment`), Crash Bash's and C-12's `--check`, and C-12's `--disc` (now the positional disc).
 - A5, Spyro's launcher no longer requires OpenSSL; nothing in Spyro links it since A3 deleted `content_identity`.
 - B1, the GPU-fault marker moves from the per-repo user state dir to Lucent's user data dir (`$XDG_CONFIG_HOME/psxport/gpu_fault` on Linux), so one fault refuses the GPU for every title on the machine.

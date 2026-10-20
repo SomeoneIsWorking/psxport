@@ -19,15 +19,7 @@ class PanelSessions;
 class TitleSession;
 struct SessionServices;
 
-// The title selector: a screen of the product whose content is several live games, each in its own
-// panel. The host Game presents it through the same present path, overlay menu and input owners as
-// a game frame.
-//
-// Exactly one guest advances per frame, only the selected session is heard, no panel's guest sees
-// the player's pad, a panel with no picture draws nothing, and confirming destroys every panel
-// session and hands the caller a fresh unbooted one for the chosen title.
-//
-// `services` (the process's window, device, quit and run budget) must outlive this session.
+// The title selector: a product screen of live panels, presented by the host Game like a game frame.
 class PickerSession {
 public:
   enum class Outcome : std::uint8_t { Chosen, Ended };
@@ -54,7 +46,6 @@ private:
 
   // The selector's present: every panel's current picture built into the host's present image.
   void build();
-  void show();
   // Attach the host to the selected, settled panel and detach it from every other.
   void attachPaneHost();
 

@@ -18,13 +18,7 @@
 
 namespace psx::host {
 
-// The product's top level: the title selector, then the chosen title, then the selector again, all
-// in this one process. An explicit executable, or a catalog of one title, skips the selector.
-//
-// Owns the command line and, once it asks for a run, what the process has one of: the window and its
-// SDL_GPU device, the frame watchdog, the quit request and the run budget. Each outlives every
-// session, so picking a title keeps the selector's window. Session teardown releases everything
-// session-owned.
+// The selector, then the chosen title, in one process; owns the window, device, watchdog and run budget.
 class ProductHost {
 public:
   // `catalog` must outlive the host; its product name is the window title.

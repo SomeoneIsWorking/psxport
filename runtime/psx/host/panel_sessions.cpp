@@ -167,14 +167,7 @@ void PanelSessions::latchArrival(int panel) {
 }
 
 int PanelSessions::nextPanelNeedingWork() {
-  // The selected panel is the product: it runs at the player's own speed. Every other panel is a
-  // paused still picture, which costs nothing, except one that has never reached its own picture,
-  // since its title's opening cards leave only by running.
-  //
-  // Pre-rolls rotate one slice each rather than one panel all the way, so the selector takes about
-  // as long as the slowest boot instead of the sum. Still one guest at a time: this picks which
-  // session gets this frame, it never runs two. A settled panel is chosen again only once the
-  // selection moves onto it, and resumes from the frame it froze on.
+  // Unsettled panels pre-roll in turn, one slice each, so the wait is the slowest boot, not the sum.
   for (int turn = 0; turn < count(); ++turn) {
     const int panel = (mBootCursor_ + turn) % count();
     if (!panelSettled(panel)) {
@@ -182,7 +175,6 @@ int PanelSessions::nextPanelNeedingWork() {
       return panel;
     }
   }
-  // Everything is settled: the product runs, and it runs alone.
   return selected_;
 }
 
@@ -246,9 +238,7 @@ unsigned long long PanelSessions::advance(const PreRollBudget &preRoll) {
                    content_.panelTitle(panel).identity->displayName);
       break;
     }
-    // Asked of every unsettled panel each frame, not only the running one: a panel the player is
-    // not looking at must stop consuming the boot budget the moment it reaches its demo. Asking
-    // costs a question, not a step.
+    // Every panel, so one that reached its demo stops taking pre-roll turns.
     for (int other = 0; other < count(); ++other) {
       latchArrival(other);
     }
@@ -262,20 +252,11 @@ std::unique_ptr<TitleSession> PanelSessions::confirm() {
   }
   const int chosen = selected_;
   const TitleAvailability &picked = content_.panelTitle(chosen);
-  // The chosen panel's demo is a preview, so it dies with the rest: choosing a game means booting
-  // it, not resuming someone's attract loop with its memory card writes.
-  //
-  // The fresh session boots on the product's own terms with the window and its device, which
-  // belong to the process rather than to any session.
+  // The chosen title boots fresh; its preview demo is discarded with the rest.
   sessions_.clear();
   booted_.assign(booted_.size(), false);
-  // An arrival belongs to the machine that measured it, so coming back to the selector re-asks
-  // every title.
   settled_.assign(settled_.size(), false);
   running_ = -1;
-  // Panel defaults are undone before boot, and the player's pad must reach the guest: a panel
-  // session starts with player input suppressed so the press that moved the selection does not
-  // also press a button in three demos at once.
   auto session = std::make_unique<TitleSession>(catalog_, picked, TitleSession::Role::Product, true, services_);
   session->presentToWindow();
   session->setPlayerInput(true);
