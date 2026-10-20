@@ -8,7 +8,6 @@
 #include "guest_call.h"
 #include "hle.h"
 #include "irq_edge.h"
-#include "r3000.h"
 
 #include <algorithm>
 #include <array>
@@ -16,14 +15,7 @@
 
 namespace {
 
-// The PlayStation CD controller's response types — the low three bits of the interrupt-flag register
-// at bank 1 of 0x1F801803; this handler serves data-ready only.
-constexpr uint8_t kCdcIrqDataReady = 1;
-
-// MIPS o32 argument registers for the ready-callback ABI.
-
-// The callback's second argument: no sector pointer, the callback reads the sector through the drive
-// (SLUS_008.75's callbacks read neither argument).
+// The callback's second argument: no sector pointer (SLUS_008.75's callbacks read neither argument).
 constexpr uint32_t kNoFirstWord = 0u;
 
 } // namespace
@@ -35,7 +27,7 @@ bool readyCompletionOwed(const Core &core) {
   if ((core.game->hle.i_stat & core.game->hle.i_mask & (1u << IRQ_BIT_CD)) == 0u) {
     return false;
   }
-  return core.game->cdc.currentIrqType() == kCdcIrqDataReady;
+  return core.game->cdc.currentIrqType() == CdcResponse::DataReady;
 }
 
 CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint32_t status) {
@@ -46,7 +38,7 @@ CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint
     return CdReadyDelivery::NothingOwed;
   }
   // A ready callback may issue the next request; its completion must stay owed until this one returns.
-  if (hle.in_irq || !hle.canDispatchInterrupt(core)) {
+  if (!hle.canDispatchInterrupt(core)) {
     hle.cd_ready_declined++;
     lucent::debug("cdirq",
                   "CD data-ready owed, deferred (a guest interrupt handler is running); {} of {} delivered",
@@ -84,38 +76,30 @@ CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint
                 kNoFirstWord,
                 hle.cd_ready_delivered,
                 hle.cd_ready_delivered + hle.cd_ready_declined);
-  // An interrupt handler's context: the whole register file restored, and in_irq held for the callback.
-  hle.in_irq = 1;
-  const R3000 saved = *static_cast<R3000 *>(&core);
-  if (!psx::hle::enterInterruptHandlerContext(&core, hle.exception_exit_buf)) {
-    Hle::enterExceptionStack(core);
-  }
-  core.r[psx::cpu::kA0] = status;
-  core.r[psx::cpu::kA1] = kNoFirstWord;
-  const auto result = psx::cpu::dispatchGuest0(core, callback, psx::cpu::ExecutionBudget::currentTurn(core));
-  *static_cast<R3000 *>(&core) = saved;
-  hle.in_irq = 0;
+  const psx::cpu::ExecutionResult result = [&] {
+    const Hle::InterruptScope scope(hle, core);
+    psx::hle::enterInterruptHandlerContext(&core, hle.exception_exit_buf);
+    return psx::cpu::dispatchGuestNow(core, callback, status, kNoFirstWord);
+  }();
   return psx::cpu::completeOrPropagate(core, result) ? CdReadyDelivery::Delivered : CdReadyDelivery::GuestExited;
 }
 
-std::uint8_t acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> response) {
+CdcResponse acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> response) {
   psx::cd::CdController &controller = core.game->cdc;
   std::ranges::fill(response, std::uint8_t{0});
-  const std::uint8_t type = controller.currentIrqType();
-  if (type == 0u) {
-    return 0u;
+  const CdcResponse type = controller.currentIrqType();
+  if (type == CdcResponse::None) {
+    return type;
   }
   const int savedBank = controller.index;
   controller.takeCurrentResponse(response.data(), static_cast<int>(response.size()));
-  // The line is retired BEFORE the controller acknowledge, because that acknowledge is what raises a
-  // fresh edge for a response already queued behind this one.
+  // Retired before the acknowledge, which raises a fresh edge for a response queued behind this one.
   controller.irq_edge = 0;
   core.game->hle.i_stat &= ~(1u << IRQ_BIT_CD);
   controller.write(psx::cd::CdcRegister::Index, psx::cd::kCdcBankIrq);
-  controller.write(psx::cd::CdcRegister::IrqFlag, type);
+  controller.write(psx::cd::CdcRegister::IrqFlag, static_cast<std::uint8_t>(type));
   controller.write(psx::cd::CdcRegister::Index, static_cast<std::uint8_t>(savedBank));
-  // The same `irqStatLatch()` the MMIO dispatcher performs after a guest controller write, so the
-  // next response is visible to the next poll.
+  // As the MMIO dispatcher latches after a guest controller write.
   core.irqStatLatch();
   core.pending_work |= Core::PW_IRQ;
   return type;

@@ -1,4 +1,4 @@
-// movie_clock.h — psx::movie::MovieClock: when each sector and frame of an STR movie is due.
+// psx::movie::MovieClock: when each sector and frame of an STR movie is due.
 //
 // An STR stream is read at a constant sector rate. Its XA audio sectors recur at a fixed stride, each
 // holding the audio for that many sectors, so the sector period is one XA sector's audio duration over
@@ -6,7 +6,8 @@
 // has been read. Both are learned from the stream's leading sectors.
 #pragma once
 
-#include "fmv_decode.h"
+#include "cd_drive_timing.h"
+#include "xa_adpcm.h"
 
 #include <cstdint>
 #include <optional>
@@ -15,14 +16,14 @@ namespace psx::movie {
 
 // What the clock reads from one STR sector.
 struct SectorFacts {
-  XaFormat audio;     // rate 0 unless an XA audio sector
+  psx::audio::XaFormat audio; // rate 0 unless an XA audio sector
   int videoFrame = 0; // STR frame number of a video chunk, 0 otherwise
 };
 
 class MovieClock {
 public:
-  // The double-speed drive rate STR movies stream at, for a movie without audio.
-  static constexpr double kSilentSectorsPerSecond = 150.0;
+  // A movie without audio streams at the double-speed drive rate.
+  static constexpr double kSilentSectorsPerSecond = psx::cd::driveSectorsPerSecond(psx::cd::kModeDoubleSpeed);
   // Sectors read to learn the layout; past this a silent movie keeps the drive rate.
   static constexpr std::uint32_t kLearnSectors = 512;
 
@@ -55,7 +56,7 @@ private:
   std::uint32_t next_ = 0;
   // Sector period, from the first two XA sectors.
   std::optional<std::uint32_t> firstAudio_;
-  XaFormat audio_;
+  psx::audio::XaFormat audio_;
   std::optional<double> sectorMs_;
   // Frame slot, from two frames whose slot end is exact: the next frame's first chunk follows directly.
   int previousFrame_ = 0; // frame of the previous sector, 0 when it was not a video chunk

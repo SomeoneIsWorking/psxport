@@ -1,5 +1,4 @@
 // mem.cpp — Core's guest address map, the I/O decode it routes to, and the DMA channels.
-#include "c_subsys.h"
 #include "cdc_state.h"
 #include "core.h"
 #include "dma_irq.h"
@@ -9,6 +8,7 @@
 #include "gpu_ports.h"
 #include "guest_code_module.h"
 #include "guest_memory_map.h"
+#include "mdec_device.h"
 #include "host_backtrace.h"
 #include "invalidation.h"
 #include "io_peripherals.h"
@@ -78,17 +78,18 @@ int dma_block_words(uint32_t bcr) { // sync-mode-1 block DMA total word count
 // DMA0 (MDEC-in) and DMA1 (MDEC-out) stay pending around the decoder as in beetle dma.c (ChCan):
 // each start, CHCR poll and MDEC port access pumps both channels forward together.
 void Core::mdec_dma_pump() {
+  MdecDevice &mdec = game->mdec;
   for (;;) {
     bool progress = false;
 
     // DMA0: MDEC_DMACanWrite needs the InFIFO empty, so a 0x10-word chunk is never dropped.
-    while (dma.mdec0Left > 0 && mdec_dma_can_write()) {
+    while (dma.mdec0Left > 0 && mdec.canWrite()) {
       uint32_t chunk_buf[0x10];
       int chunk = dma.mdec0Left < 0x10 ? dma.mdec0Left : 0x10;
       for (int k = 0; k < chunk; k++) {
         chunk_buf[k] = mem_r32((dma.mdec0Addr + (uint32_t)k * 4) & 0x1FFFFCu);
       }
-      int fed = mdec_dma_in(chunk_buf, chunk);
+      int fed = mdec.dmaIn(chunk_buf, chunk);
       dma.mdec0Addr = (dma.mdec0Addr + (uint32_t)fed * 4) & 0xFFFFFFu;
       dma.mdec0Left -= fed;
       if (fed > 0) {
@@ -100,7 +101,7 @@ void Core::mdec_dma_pump() {
     }
 
     // DMA1: one MDEC_DMACanRead gate per block; word i lands at MADR + 4*(i + voffs), as dma.c CH_MDEC_OUT.
-    while (dma.mdec1Left > 0 && mdec_dma_can_read()) {
+    while (dma.mdec1Left > 0 && mdec.canRead()) {
       int bs = (int)(dma.of(DmaChannel::MdecOut).bcr & 0xFFFF);
       if (bs == 0) {
         bs = 0x10000;
@@ -111,7 +112,7 @@ void Core::mdec_dma_pump() {
       uint32_t burstHigh = 0;
       for (int k = 0; k < burst; k++) {
         uint32_t offs = 0;
-        uint32_t val = mdec_dma_read_word(&offs);
+        uint32_t val = mdec.dmaReadWord(&offs);
         const uint32_t dest = (dma.mdec1Addr + (offs << 2)) & 0x1FFFFCu;
         mem_w32_unnotified(dest, val);
         burstLow = dest < burstLow ? dest : burstLow;
@@ -146,12 +147,12 @@ void Core::mdec_dma_pump() {
     }
 
     // No progress: run the decoder to its next FIFO gate and classify where it parked.
-    mdec_step();
-    if ((dma.mdec0Left > 0 && mdec_dma_can_write()) || (dma.mdec1Left > 0 && mdec_dma_can_read())) {
+    mdec.step();
+    if ((dma.mdec0Left > 0 && mdec.canWrite()) || (dma.mdec1Left > 0 && mdec.canRead())) {
       continue; // the step freed a FIFO — keep pumping
     }
 
-    const uint32_t st = mdec_read(0x1F801824u);          // MDEC1 status
+    const uint32_t st = mdec.read(MdecDevice::kControlPort);
     const int in_cmd = static_cast<int>((st >> 29) & 1); // bit 29: a decode command is consuming input
     const int out_has = !((st >> 31) & 1);               // bit 31 clear: OutFIFO non-empty
 
@@ -373,7 +374,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     if (dma.mdec0Left > 0 || dma.mdec1Left > 0) {
       mdec_dma_pump();
     }
-    return mdec_read(p);
+    return game->mdec.read(p);
   }
   if (p == 0x1F801DAE) {
     return 0; // SPUSTAT: report idle/transfer-complete
@@ -487,7 +488,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     return;
   } // GP1 (display/control)
   if (p == 0x1F801820 || p == 0x1F801824) { // MDEC0 cmd / MDEC1 ctrl
-    mdec_write(p, v);
+    game->mdec.write(p, v);
     // A command or control write can unblock a pending transfer.
     if (dma.mdec0Left > 0 || dma.mdec1Left > 0) {
       mdec_dma_pump();
@@ -693,7 +694,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
                     dma.of(DmaChannel::MdecOut).madr,
                     dma.of(DmaChannel::MdecOut).bcr,
                     dma_block_words(dma.of(DmaChannel::MdecOut).bcr),
-                    (int)mdec_dma_can_read());
+                    (int)game->mdec.canRead());
       int n = dma_block_words(dma.of(DmaChannel::MdecOut).bcr);
       if (n > 0x10000) {
         n = 0x10000;

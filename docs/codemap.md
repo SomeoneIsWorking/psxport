@@ -42,14 +42,15 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/hle/bios_*` — BIOS libc string and memory leaves, setjmp / HookEntryInt, LoadExec / LoadAndExecute, pad work area
 - `runtime/psx/hle/platform_hle.*`, `stock_*` — PSY-Q stock library bodies a title binds: libgpu DrawSync waits, libgte projection setters, libetc VSync frame boundary, DMACallback table
 - `runtime/psx/cd/cd.*`, `stock_libcd.*`, `stock_cd_*`, `cd_stock_read_completion.*`, `cd_ready_delivery.*` — stock libcd served synchronously: CdControl / CdSync responses, work area, CdRead, ready callback and the INT1 a read still owes
-- `runtime/psx/cd/cdc_*`, `cd_drive_timing.h`, `cd_position.*` — CD controller registers 0x1F801800, command phases, deterministic drive timing, Setloc position
+- `runtime/psx/cd/cdc_*`, `cd_drive_timing.h`, `cd_position.*` — CD controller registers 0x1F801800, command phases, sector routing (data FIFO or XA to the SPU), Setmode bits and sector framing, drive timing, BCD / MSF / LBA
 - `runtime/psx/cd/disc*` — CHD disc image by LBA, ISO9660 file reader, TOC (GetTN / GetTD), disc provisioning
 - `runtime/psx/platform/dma_*` — DMA controller DPCR / DICR, channels, linked-list chain mode, DMA callbacks, DMA IRQ
 - `runtime/psx/platform/io_peripherals.*`, `irq_edge.h` — I_STAT / I_MASK interrupt lines, root counter and SIO decode
 - `runtime/psx/platform/memcard.*`, `card_syscall_log.*` — memory card device and file, card syscall counts
 - `runtime/psx/platform/coro.*` — coroutine / fiber for a guest task scheduler
 - `runtime/psx/platform/watchdog.*`, `spin_detector.*` — frame watchdog, crash and signal reporters, guest spin / hang detection
-- `runtime/psx/platform/host_clock.h`, `fs_util.*`, `blob_codec.h`, `active_low_edges.h`, `c_subsys.h` — host monotonic clock, host file I/O, little-endian byte codec, active-low button press and release edges, C-linkage for the MDEC adapter
+- `runtime/psx/platform/host_clock.h`, `fs_util.*`, `blob_codec.h`, `active_low_edges.h` — host monotonic clock, host file I/O, little-endian byte codec, active-low button press and release edges
+- `runtime/psx/platform/beetle_device_instance.h` — one per-Game Beetle device state behind Beetle's process-global bind point (SPU, MDEC)
 - `runtime/psx/frame/field_turn.*`, `logic_frame.*`, `frame_loop_shell.*`, `session_control.*` — product loop: per-field services (pause, watchdog, RAM dump, command), logic frame start, frame step, return to selector
 - `runtime/psx/frame/frame_presenter.*` — frame fence: seal the logic frame record, cut, compose, present, pace
 - `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `field_rate.h`, `timing.*`, `emulated_time.*` — frame pacing, NTSC / PAL field rate, field cadence, emulated CPU clock, root counters 1 and 2
@@ -74,10 +75,13 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/input/host_input.*` — SDL event drain, keyboard state, gamepads, quit scope
 - `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `stock_pad_buffers.*` — controller / pad as the guest sees it: SIO0, digital packet, fixed pad buffers
 - `runtime/psx/input/pad_recording.*`, `pad_record_replay.*`, `pad_phase_replay.*`, `input_phase.h` — `.pad` record and replay keyed on input phase
-- `runtime/psx/audio/spu_*` — SPU (Beetle spu.c) device, register file, mixer, field cadence, SDL3 audio sink
-- `runtime/psx/audio/xa_*` — XA-ADPCM CD audio streaming and push pacing
-- `runtime/psx/audio/audio_*` — audio device policy (headless means no audio), queue buffering, field report
-- `runtime/psx/movie/` — FMV / STR movie playback, MDEC (Beetle mdec.c), BS decode, movie sector clock
+- `runtime/psx/audio/spu_*` — SPU (Beetle spu.c) device, register file, mixer, field cadence, per-field host feed
+- `runtime/psx/audio/xa_adpcm.*` — XA sector subheader, format and ADPCM decode (the one decoder for SPU, FMV and tools)
+- `runtime/psx/audio/xa_state.h`, `xa_stream.cpp`, `xa_push_pacing.h` — XA streaming into the SPU CD ring, push and pull modes, pacing
+- `runtime/psx/audio/host_audio_output.*` — the SDL3 audio stream and the session claim on it (headless means no audio)
+- `runtime/psx/audio/audio_queue_policy.h`, `wav_writer.*` — host queue buffering targets, WAV capture
+- `runtime/psx/movie/mdec_device.*` — MDEC (Beetle mdec.c) device: ports, DMA in/out
+- `runtime/psx/movie/fmv_decode.*`, `native_fmv.*`, `movie_clock.h` — STR frame assembly, BS decode, RGB24 frames through the MDEC, native movie playback and its sector clock
 - `runtime/psx/state/` — save states / machine state: state file container, device sections, Beetle device streams, native title section, load-state
 - `runtime/psx/config/config*`, `typed_config.*`, `number_text.*` — PSXPORT_* knobs / CVars, environment and .env, typed immutable launch config, strict number parsing
 - `runtime/psx/config/diagnostic_*`, `enhancement_gate.*`, `stepped_range.h` — diagnostic knobs, comparison run mode, pc_enh enhancement gates, stepped setting ranges
@@ -92,7 +96,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `tools/port/` — tooling every title runs: consumer build, launcher, launch environment, capture checks
 - `tools/oracle/` — CPU oracle / reference emulator: Mednafen snapshot and trace, full-console libretro host, state and picture comparison
 - `tools/decomp_pipeline.py`, `tools/decomp/` — Ghidra headless decompilation, callers, refs
-- `tools/formats/`, `tools/mips/`, `tools/disasm.*`, `tools/discdump.cpp`, `tools/crt0_extract.cpp`, `tools/fmv_export/` — PS-X EXE reader, MIPS decode, disassembly, disc listing and extract, crt0 dump, STR export
+- `tools/formats/`, `tools/mips/`, `tools/disasm.*`, `tools/discdump.cpp`, `tools/crt0_extract.cpp`, `tools/fmv_export/` — PS-X EXE reader, MIPS decode, disassembly, disc listing and extract, crt0 dump, STR export through the shipping decode
 - `tools/dbgclient.py`, `tools/psx_pad.py`, `tools/prof_hot.py` — control-channel client, pad bit table, host profile symbols
 - `tools/psxport_fetch.py`, `scripts/bootstrap_workspace.py`, `scripts/*submodule*.py` — a title's `external/psxport` link, Lightrec worktree, workspace clone and submodules
 - `CMakeLists.txt`, `cmake/`, `tools/CMakeLists.txt`, `tools/build.py`, `tools/project.py`, `tools/automation/`, `pyproject.toml`, `uv.lock`, `.github/` — build composition, Clang / Ninja build, the locked Python environment, build-only CI

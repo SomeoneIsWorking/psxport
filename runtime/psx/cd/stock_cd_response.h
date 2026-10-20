@@ -8,11 +8,9 @@ class Core;
 
 namespace psx::cd {
 
-// Publish a stock libcd command's synchronous response, retaining it for the matching CdSync completion. False
-// means the requested TOC or head position cannot be read.
+// Publish a stock libcd command's synchronous response, retaining it for the matching CdSync. False means the
+// requested TOC or head position cannot be read.
 bool beginStockCommand(Core &core, StockCdCommand command);
-void publishStockSync(Core &core, uint32_t result);
-void forgetStockResponse(Core &core);
 void zeroStockResult(Core &core, uint32_t result);
 
 } // namespace psx::cd

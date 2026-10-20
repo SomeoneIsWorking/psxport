@@ -8,10 +8,6 @@ namespace psx::cd {
 
 inline constexpr int kDiscMaxTracks = 99;
 
-inline constexpr uint8_t toBcd(uint32_t value) {
-  return static_cast<uint8_t>(((value / 10u) << 4u) | (value % 10u));
-}
-
 // An ISO9660 file's first sector and byte size.
 struct DiscFile {
   uint32_t lba = 0;
@@ -65,7 +61,7 @@ public:
   uint32_t hunk_bytes = 0;
   uint8_t *hunk_buf = nullptr;
   uint32_t cached_hunk = 0xFFFFFFFFu; // cache empty
-  // Cache denominators: a cache that reports only hits cannot be told from one nothing asks (Spyro issue 0115).
+  // Cache denominators: hits alone cannot tell a working cache from one nothing asks.
   uint64_t lookups = 0;
   uint64_t hits = 0;
   uint64_t fills = 0;

@@ -6,8 +6,9 @@
 #include "display_presenter.h"
 #include "execution_control.h"
 #include "execution_ledger.h"
-#include "fmv_decode.h"
 #include "game.h"
+#include "wav_writer.h"
+#include "xa_adpcm.h"
 #include "gpu_debug.h"
 #include "gpu_device.h"
 #include "guest_call.h"
@@ -401,38 +402,6 @@ void spuWav(const Call &call) {
   call.reply(lucent::format("wav -> {}", path));
 }
 
-bool writeWav(const std::string &path, std::span<const std::int16_t> stereo, int rate) {
-  std::FILE *fp = std::fopen(path.c_str(), "wb");
-  if (fp == nullptr) {
-    return false;
-  }
-  const auto frames = static_cast<std::uint32_t>(stereo.size() / 2u);
-  const std::uint32_t data = frames * 4u;
-  const std::uint32_t riff = 36u + data;
-  const auto sampleRate = static_cast<std::uint32_t>(rate);
-  const std::uint32_t byteRate = sampleRate * 4u;
-  const std::uint32_t fmtBytes = 16;
-  const std::uint16_t pcm = 1;
-  const std::uint16_t channels = 2;
-  const std::uint16_t blockAlign = 4;
-  const std::uint16_t bits = 16;
-  std::fwrite("RIFF", 1, 4, fp);
-  std::fwrite(&riff, 4, 1, fp);
-  std::fwrite("WAVEfmt ", 1, 8, fp);
-  std::fwrite(&fmtBytes, 4, 1, fp);
-  std::fwrite(&pcm, 2, 1, fp);
-  std::fwrite(&channels, 2, 1, fp);
-  std::fwrite(&sampleRate, 4, 1, fp);
-  std::fwrite(&byteRate, 4, 1, fp);
-  std::fwrite(&blockAlign, 2, 1, fp);
-  std::fwrite(&bits, 2, 1, fp);
-  std::fwrite("data", 1, 4, fp);
-  std::fwrite(&data, 4, 1, fp);
-  std::fwrite(stereo.data(), 4, frames, fp);
-  std::fclose(fp);
-  return true;
-}
-
 // One XA channel decoded straight off the disc: XA never passes through the sequencer.
 void xaDump(const Call &call) {
   const std::optional<std::uint32_t> channel = call.args.number(1);
@@ -447,36 +416,41 @@ void xaDump(const Call &call) {
   std::vector<std::int16_t> out;
   std::array<std::uint8_t, 2352> raw{};
   std::int16_t history[2][2] = {{0, 0}, {0, 0}};
-  int rate = 37800;
+  int rate = psx::audio::kXaDefaultRateHz;
   std::uint32_t lba = *startLba;
   std::uint32_t cap = 0;
   for (int guard = 0; guard < 20000; guard++) {
-    if (!call.core.game->disc.readRaw(lba, raw.data(), raw.size()) || raw[15] != 2) {
+    if (!call.core.game->disc.readRaw(lba, raw.data(), raw.size()) || !psx::audio::isMode2(raw.data())) {
       break;
     }
-    const std::uint8_t file = raw[17];
-    const std::uint8_t submode = raw[18];
+    const psx::audio::SectorSubheader header = psx::audio::sectorSubheader(raw.data());
     lba++;
-    if ((submode & 0x04) == 0 || file != *channel) {
-      if ((submode & 0x80) != 0) {
+    if (!header.audio() || header.channel != *channel) {
+      if (header.endOfFile()) {
         break;
       }
       continue;
     }
-    std::array<std::int16_t, 4032 * 2> pcm{};
-    const int frames = psx::movie::decodeXaSector(raw.data(), pcm.data(), history, &rate);
+    std::array<std::int16_t, std::size_t{psx::audio::kXaMaxSectorFrames} * 2> pcm{};
+    const psx::audio::XaFormat format = psx::audio::decodeXaSector(raw.data(), pcm.data(), history);
+    rate = format.rate;
     cap = cap != 0 ? cap : static_cast<std::uint32_t>(rate) * seconds;
-    for (int i = 0; i < frames && out.size() / 2u < std::min(cap, kFrameCap); i++) {
+    for (int i = 0; i < format.frames && out.size() / 2u < std::min(cap, kFrameCap); i++) {
       out.push_back(pcm[static_cast<std::size_t>(2 * i)]);
       out.push_back(pcm[static_cast<std::size_t>(2 * i + 1)]);
     }
-    if (out.size() / 2u >= cap || (submode & 0x80) != 0) {
+    if (out.size() / 2u >= cap || header.endOfFile()) {
       break;
     }
   }
   const std::string path = call.args.text(3);
-  call.reply(writeWav(path, out, rate) ? lucent::format("xadump -> {} ({} frames @ {} Hz)", path, out.size() / 2u, rate)
-                                       : lucent::format("xadump: cannot open {}", path));
+  psx::audio::WavWriter wav(path, static_cast<std::uint32_t>(rate));
+  if (!wav.isOpen()) {
+    call.reply(lucent::format("xadump: cannot open {}", path));
+    return;
+  }
+  wav.append(out.data(), static_cast<std::uint32_t>(out.size() / 2u));
+  call.reply(lucent::format("xadump -> {} ({} frames @ {} Hz)", path, out.size() / 2u, rate));
 }
 
 void captureText(const Call &call, void (*view)(Core &, std::FILE *)) {

@@ -1,7 +1,9 @@
-// cdc_state.h — psx::cd::CdController: the CXD1199-style register model at 0x1F801800-3 (index/bank,
+// psx::cd::CdController: the CXD1199-style register model at 0x1F801800-3 (index/bank,
 // param/response/data FIFOs, the pending-interrupt queue, drive/read state), one per Game. Its registers
 // stay public members because machine state saves them field by field (state/device_bus.cpp).
 #pragma once
+#include "cd_position.h"
+
 #include <stdint.h>
 
 namespace psx::audio {
@@ -20,7 +22,6 @@ struct CdcIrqEnt {
 
 using CdcTickNowFn = uint64_t (*)(void *context);
 using CdcDiscReadRawFn = bool (*)(Disc *, uint32_t, uint8_t *, uint32_t);
-using CdcDiscReadSectorFn = bool (*)(Disc *, uint32_t, uint8_t *);
 using CdcDiscGetSubqPositionFn = bool (*)(Disc *, uint32_t, uint8_t *);
 
 // Register ports within 0x1F801800 (bank 0 names; IrqFlag is port 3 in bank 1).
@@ -36,15 +37,20 @@ inline constexpr uint8_t kCdcBankData = 0u;
 inline constexpr uint8_t kCdcBankIrq = 1u;
 inline constexpr uint32_t kCdcStatResponseReady = 0x20u;
 
+// A response's type: the low three bits of the interrupt-flag register.
+enum class CdcResponse : uint8_t { None = 0, DataReady = 1, Complete = 2, Acknowledge = 3, Error = 5 };
+
 // Where a raw sector goes during a continuous read (vendor cdc.c DS_READING arm).
 enum class CdcSectorRoute : uint8_t { Data, XaAudio, XaDropped };
+// One drive sector after routing: unreadable, data for the FIFO, or audio the drive consumed.
+enum class DriveSector : uint8_t { ReadFailed, Data, Audio };
 enum class CdcCommandEvent : uint8_t { None, Execute, Complete };
 
 class CdController {
 public:
   // Power-on defaults (stat=0x02); keeps the disc and XA wiring.
   void reset();
-  // Inject the deterministic guest-instruction clock; tests bind a fake counter.
+  // Inject the deterministic guest-instruction clock.
   void bindTickSource(void *context, CdcTickNowFn now);
   // Service due drive and command events. True only when a response became current; it raised an interrupt edge
   // only if the interrupt-enable register admits its type.
@@ -53,8 +59,8 @@ public:
   bool nextDeadlineTicks(uint64_t *absoluteTicks) const;
   // The eight GetlocP bytes for the head's current sector; false when the disc layout is unavailable.
   bool getlocP(uint8_t out[8]) const;
-  // The current response type without consuming it; 0 when the queue is empty.
-  uint8_t currentIrqType() const;
+  // The current response type without consuming it; None when the queue is empty.
+  CdcResponse currentIrqType() const;
   // Queue one INT1 data-ready with the current status, for a completion the native layer owes the guest. False,
   // queuing nothing, when the response queue is full.
   bool postDataReady();
@@ -72,10 +78,11 @@ public:
   void issueCommand(uint8_t command);
   // Drain the current response, keeping the first `capacity` bytes in `bytes`. Returns how many it held.
   int takeCurrentResponse(uint8_t *bytes, int capacity);
-  // Mirror an intercepted Setmode; bit 0x20 decides whole-sector framing.
+  // Setmode, from the register path or an intercepted libcd command; clearing STRSND stops XA output.
   void setMode(uint8_t mode);
-  // Mirror Setfilter; MODE_SF routes only this XA file/channel to the SPU.
+  // Setfilter; with kModeXaFilter only this XA file/channel reaches the SPU.
   void setFilter(uint8_t file, uint8_t channel);
+  // Beetle's routing rule for one raw sector under the current Setmode/Setfilter.
   CdcSectorRoute sectorRoute(const uint8_t *raw) const;
 
   int index = 0;          // 0x1F801800 low 2 bits (register bank)
@@ -117,9 +124,8 @@ public:
   uint8_t irq_edge = 0;
   Disc *disc = nullptr;               // Game-owned disc backend
   psx::audio::XaStream *xa = nullptr; // Game-owned XA ring the drive decodes STRSND audio into
-  // The sector source; reset() points these at Disc so tests can inject fake sectors.
+  // The sector source; reset() points these at Disc.
   CdcDiscReadRawFn disc_read_raw_fn = nullptr;
-  CdcDiscReadSectorFn disc_read_sector_fn = nullptr;
   CdcDiscGetSubqPositionFn disc_get_subq_position_fn = nullptr;
 
 private:
@@ -128,12 +134,12 @@ private:
   bool queueEmpty() const;
   bool irqLine() const;
   void responseBecameCurrent();
-  void raise(uint8_t type, const uint8_t *resp, int len);
+  void raise(CdcResponse type, const uint8_t *resp, int len);
   const CdcIrqEnt *resultsEntry() const;
-  uint32_t commandArgsLba() const;
   uint64_t seekTime(uint32_t target_lba) const;
-  int routeAudioToSpu(const uint8_t *raw, uint32_t drive_lba);
-  bool consumeSector(uint32_t lba, bool *out_audio);
+  DriveSector routeDriveSector(uint32_t lba, uint8_t (&raw)[kRawSectorBytes]);
+  DriveSector consumeSector(uint32_t lba);
+  void fillDataFifo(const uint8_t (&raw)[kRawSectorBytes]);
   bool loadSector(uint32_t lba);
   void queueDataReady();
   bool serviceReadCompletions();

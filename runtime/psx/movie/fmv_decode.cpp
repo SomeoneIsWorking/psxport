@@ -1,117 +1,74 @@
-// fmv_decode.cpp — the .STR decode the runtime player (native_fmv.cpp) and tools/fmv_export share.
-// No game.h/core.h/SDL here: only the mdec_beetle interface (c_subsys.h).
-//
-// Pipeline context (see native_fmv.cpp for the full player):
-//   STR demux -> concat chunk payloads -> VLC-decode BS into the MDEC code stream (this file)
-//     -> DMA into MDEC -> DMA decoded RGB555 out -> tile 16x16 macroblocks into the frame.
+// The .STR decode the runtime player and tools/fmv_export share: STR demux, BS VLC decode, MDEC frame decode.
 #include "fmv_decode.h"
-#include "c_subsys.h" // mdec_init/mdec_write/mdec_dma_in/mdec_dma_out/mdec_dma_out_rest/mdec_dma_can_write/MDEC_Run
 #include "diagnostic_config.h"
+#include "mdec_device.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <lucent/log.h>
-#include <math.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
-#include <vector>
-
-#define FMV_INBUF_WORDS (128u * 1024u)  // MDEC input words
-#define FMV_OUTBUF_WORDS (512u * 1024u) // MDEC output words
-#define MDEC0 0x1F801820u               // data port
-#define MDEC1 0x1F801824u               // control/status port
-
+namespace psx::movie {
 namespace {
 
-// Pump the MDEC decode state machine. Beetle's MDEC only advances its decode loop when it
-// is given clock cycles (MDEC_Run); mdec_write/mdec_dma_in call MDEC_Run(0), which never
-// makes the internal ClockCounter positive, so the decode parks at its cycle-budget check
-// and produces NO output. With no real PSX scheduler in this native path we must pump a
-// large clock count ourselves after feeding a command/data so the block decode runs to
-// completion. (This is the native equivalent of the scheduler ticking the MDEC event.)
-void mdec_pump(void) {
-  MDEC_Run(0x40000000);
+constexpr uint16_t kVideoChunkMagic = 0x0160;
+constexpr int kDefaultWidth = 320;
+constexpr int kDefaultHeight = 240;
+
+uint32_t le16(const uint8_t *p) {
+  return p[0] | (p[1] << 8);
 }
 
-} // namespace
+// BS stores little-endian 16-bit units whose bits are consumed MSB-first.
+class BitReader {
+public:
+  BitReader(const uint8_t *data, uint32_t size) : data_(data), size_(size) {}
 
-// ====================================================================================
-// Bit reader — PSX BS stores the stream as little-endian 16-bit units, but bits within
-// each 16-bit unit are consumed MSB-first.
-// ====================================================================================
-typedef struct {
-  const uint8_t *data;
-  uint32_t size; // bytes available
-  uint32_t bytepos;
-  uint32_t bitbuf; // bits left-aligned, MSB next to consume
-  int bitcnt;      // valid bits in bitbuf
-} BitReader;
-
-namespace {
-
-void br_init(BitReader *b, const uint8_t *data, uint32_t size) {
-  b->data = data;
-  b->size = size;
-  b->bytepos = 0;
-  b->bitbuf = 0;
-  b->bitcnt = 0;
-}
-void br_refill(BitReader *b) {
-  while (b->bitcnt <= 16 && b->bytepos + 1 < b->size) {
-    uint16_t w = (uint16_t)(b->data[b->bytepos] | (b->data[b->bytepos + 1] << 8));
-    b->bytepos += 2;
-    b->bitbuf |= (uint32_t)w << (16 - b->bitcnt);
-    b->bitcnt += 16;
+  uint32_t peek(int n) {
+    refill();
+    if (n == 0) {
+      return 0;
+    }
+    return (bits_ >> (32 - n)) & static_cast<uint32_t>((1ull << n) - 1);
   }
-}
-uint32_t br_peek(BitReader *b, int n) {
-  br_refill(b);
-  if (n == 0) {
-    return 0;
+  void skip(int n) {
+    bits_ <<= n;
+    count_ -= n;
   }
-  return (b->bitbuf >> (32 - n)) & (uint32_t)((1ull << n) - 1);
-}
-void br_skip(BitReader *b, int n) {
-  b->bitbuf <<= n;
-  b->bitcnt -= n;
-}
-uint32_t br_get(BitReader *b, int n) {
-  uint32_t v = br_peek(b, n);
-  br_skip(b, n);
-  return v;
-}
-int br_eof(BitReader *b) {
-  return (b->bitcnt <= 0) && (b->bytepos + 1 >= b->size);
-}
+  uint32_t get(int n) {
+    const uint32_t v = peek(n);
+    skip(n);
+    return v;
+  }
+  bool atEnd() const {
+    return count_ <= 0 && pos_ + 1 >= size_;
+  }
 
-} // namespace
+private:
+  void refill() {
+    while (count_ <= 16 && pos_ + 1 < size_) {
+      const uint32_t w = le16(data_ + pos_);
+      pos_ += 2;
+      bits_ |= w << (16 - count_);
+      count_ += 16;
+    }
+  }
 
-// ====================================================================================
-// PSX STR / MPEG-1 AC run/level VLC table — SINGLE source of truth.
-//
-// This is the standard MPEG-1 Table B-14 AC coefficient code set, which PSX STR/BS v2
-// uses verbatim. The 111 entries below were generated directly from jpsxdec's
-// ZeroRunLengthAcLookup_STR.AC_VARIABLE_LENGTH_CODES_MPEG1 (m35/jpsxdec) — NOT hand-rolled
-// from memory — so the codes are authoritative. Each entry: { len, code, run, level }.
-// Codes are matched MSB-first; the set is uniquely decodable, so a longest-prefix scan by
-// length is exact. A trailing sign bit follows every (run,level) code (1=+, 0=-). Two
-// patterns are special-cased in bs_decode_ac():
-//   End-Of-Block (EOB) = "10"            (len 2)
-//   Escape            = "000001"         (len 6) -> 6-bit run, 10-bit signed level
-// (Frame-end padding "0111111111" for v2 simply fails to match and ends frame decode.)
-//
-// Correctness is PROVEN end-to-end: scratch/fmvdev/fmvtest.c decodes real LOGO.STR and
-// OP.STR frames; OP.STR frames yield ~10k-13k AC codes and render coherent video (verified).
-// ====================================================================================
-typedef struct {
+  const uint8_t *data_;
+  uint32_t size_;
+  uint32_t pos_ = 0;
+  uint32_t bits_ = 0; // left-aligned
+  int count_ = 0;
+};
+
+struct Vlc {
   uint8_t len;
   uint16_t code;
   uint8_t run;
   uint8_t level;
-} VLC;
+};
 
-static const VLC s_vlc[] = {
-    // {len, code, run, level}  -- the canonical MPEG-1 / PSX STR AC VLC table.
+// MPEG-1 Table B-14, which BS v2 uses verbatim (from jpsxdec AC_VARIABLE_LENGTH_CODES_MPEG1); a sign bit follows.
+constexpr Vlc kAcCodes[] = {
     {2, 0x00003, 0, 1},   // 11
     {3, 0x00003, 1, 1},   // 011
     {4, 0x00004, 0, 2},   // 0100
@@ -225,9 +182,6 @@ static const VLC s_vlc[] = {
     {16, 0x0001f, 27, 1}, // 0000000000011111
 };
 
-namespace {
-
-// One AC code from the bitstream: end of block, a (run, level) pair, or a bad code.
 struct AcCode {
   enum class Kind : std::uint8_t { EndOfBlock, Pair, Bad };
   Kind kind = Kind::Bad;
@@ -235,530 +189,269 @@ struct AcCode {
   int level = 0;
 };
 
-AcCode bs_decode_ac(BitReader *b) {
-  // EOB = "10"
-  if (br_peek(b, 2) == 0x2) {
-    br_skip(b, 2);
+// End of block is "10"; escape "000001" carries a 6-bit run and a 10-bit signed level.
+AcCode decodeAc(BitReader &b) {
+  if (b.peek(2) == 0x2) {
+    b.skip(2);
     return {.kind = AcCode::Kind::EndOfBlock};
   }
-  // ESCAPE = "000001"  (6 zero-ish bits: 000001)
-  if (br_peek(b, 6) == 0x1) {
-    br_skip(b, 6);
-    int r = (int)br_get(b, 6);
-    int l = (int)br_get(b, 10);
+  if (b.peek(6) == 0x1) {
+    b.skip(6);
+    const int r = static_cast<int>(b.get(6));
+    int l = static_cast<int>(b.get(10));
     if (l & 0x200) {
       l -= 0x400;
     }
     return {.kind = AcCode::Kind::Pair, .run = r, .level = l};
   }
   for (int n = 1; n <= 16; n++) {
-    uint32_t v = br_peek(b, n);
-    for (unsigned i = 0; i < sizeof(s_vlc) / sizeof(s_vlc[0]); i++) {
-      if (s_vlc[i].len == n && s_vlc[i].code == v) {
-        br_skip(b, n);
-        int s = (int)br_get(b, 1); // sign bit: 0 = positive, 1 = negative (MPEG-1 convention)
-        int lv = s_vlc[i].level;
-        return {.kind = AcCode::Kind::Pair, .run = s_vlc[i].run, .level = s ? -lv : lv};
+    const uint32_t v = b.peek(n);
+    for (const Vlc &vlc : kAcCodes) {
+      if (vlc.len == n && vlc.code == v) {
+        b.skip(n);
+        const int level = vlc.level;
+        return {.kind = AcCode::Kind::Pair, .run = vlc.run, .level = b.get(1) != 0 ? -level : level};
       }
     }
   }
   return {};
 }
 
-} // namespace
-
-// Decode an entire BS frame into the MDEC run-level code stream.
-// Returns number of 16-bit codes written, or negative on error.
-int psx::movie::decodeBsFrame(std::span<const uint8_t> payloadBytes,
-                              present::PixelSize frame,
-                              std::span<uint16_t> codes) {
-  const uint8_t *payload = payloadBytes.data();
-  const auto payload_size = static_cast<uint32_t>(payloadBytes.size());
-  const int width = frame.width;
-  const int height = frame.height;
-  const auto max_codes = static_cast<int>(codes.size());
-  const bool dconly = psx::config::movie_dc_only();
-  if (payload_size < 8) {
-    return -1;
-  }
-  uint16_t bs_q = (uint16_t)(payload[4] | (payload[5] << 8));
-  int qscale = bs_q & 0x3F;
-  if (qscale == 0) {
-    qscale = 1;
-  }
-  lucent::debug("fmv",
-                "BS hdr: nwords={} magic={:04x} qscale={} version={}",
-                (unsigned)(payload[0] | (payload[1] << 8)),
-                (unsigned)(payload[2] | (payload[3] << 8)),
-                qscale,
-                (unsigned)(payload[6] | (payload[7] << 8)));
-
-  BitReader br;
-  br_init(&br, payload + 8, payload_size - 8);
-
-  int mbx = (width + 15) / 16;
-  int mby = (height + 15) / 16;
-  int nblocks = mbx * mby * 6;
-
-  int out = 0;
-  for (int blk = 0; blk < nblocks; blk++) {
-    if (br_eof(&br)) {
-      break;
-    }
-    // BS v2: each block begins with a fixed 10-bit DC coefficient (signed), then run/level
-    // AC VLC pairs until EOB. The MDEC first-word format carries QScale in bits[15:10] and
-    // the DC coefficient in bits[9:0]. (Verified against LOGO.STR: the leading bits parse as
-    // 10-bit DC values followed by "10" EOB on the fade-in frames.)
-    int dc = (int)br_get(&br, 10);
-    if (dc & 0x200) {
-      dc -= 0x400;
-    }
-    if (out >= max_codes) {
-      return out;
-    }
-    codes[out++] = (uint16_t)(((qscale & 0x3F) << 10) | (dc & 0x3FF));
-
-    for (;;) {
-      const AcCode ac = bs_decode_ac(&br);
-      const int run = ac.run;
-      const int level = ac.level;
-      if (ac.kind == AcCode::Kind::EndOfBlock) {
-        if (out >= max_codes) {
-          return out;
-        }
-        codes[out++] = 0xFE00;
-        break;
-      }
-      if (ac.kind == AcCode::Kind::Bad) {
-        return (out > 0) ? out : -2;
-      }
-      if (out >= max_codes) {
-        return out;
-      }
-      if (!dconly) { // DCONLY: consume AC bits (keep sync) but drop the code
-        codes[out++] = (uint16_t)(((run & 0x3F) << 10) | (level & 0x3FF));
-      }
-    }
-  }
-  return out;
-}
-
-// ====================================================================================
-// MDEC table upload — REQUIRED before decoding.
-//
-// After MDEC_Power the quantization matrix and the IDCT cosine matrix are all-zero, so
-// every coefficient dequantizes/IDCTs to 0 and the output is a flat black frame. The PSX
-// uploads these once via libpress DecDCTReset(0): the standard luma/chroma quant table
-// (cmd 2 = SetIqTab) and the scaled IDCT cosine table (cmd 3 = SetIdctTab). We do the same.
-//
-//   cmd 2 (0x60000000 | bit0): load the colour quant table (16 words = 64 luma bytes +
-//          64 chroma bytes when bit0 set). MDEC packs 4 bytes/word into QMatrix[0..1].
-//   cmd 3 (0x60000001? -> see mdec.c: (Command>>29)==3): load 32 words = 64 int16 IDCT
-//          coefficients; mdec.c stores them transposed and >>3.
-//
-// The default quant table is the documented PSX standard table (same as MPEG-1 intra);
-// the IDCT table is *computed* from the standard cosine basis (math, not magic data).
-// ====================================================================================
-
-// PSX/MPEG-1 standard intra quantization matrix, in zig-zag-natural (row-major) order.
-// This is the canonical DecDCTReset default; identical for luma and chroma here.
-static const uint8_t s_quant_default[64] = {
+// The MPEG-1 intra matrix DecDCTReset uploads, in raster order.
+constexpr uint8_t kQuantRaster[64] = {
     2,  16, 19, 22, 26, 27, 29, 34, 16, 16, 22, 24, 27, 29, 34, 37, 19, 22, 26, 27, 29, 34,
     34, 38, 22, 22, 26, 27, 29, 34, 37, 40, 22, 26, 27, 29, 32, 35, 40, 48, 26, 27, 29, 32,
     35, 40, 48, 58, 26, 27, 29, 34, 38, 46, 56, 69, 27, 29, 35, 38, 46, 56, 69, 83,
 };
 
-// mednafen's MDEC ZigZag scan (mdec.c). The quant table is consumed in SCAN order
-// (dequant uses QMatrix[CoeffIndex]; mdec stores the uploaded table linearly, mdec.c:844),
-// so the table must be uploaded in zigzag/scan order: qz[scan] = quant_raster[ZigZag[scan]].
-// s_quant_default is the raster-order MPEG intra matrix; uploading it raw applied the wrong
-// per-frequency weight to every AC coefficient (DC at index 0 is unaffected: ZigZag[0]==0) —
-// the cause of the "DC clean, AC banded" artifact. Reorder it here.
-static const uint8_t MDEC_ZIGZAG[64] = {
+// mdec.c dequantises in scan order, so the matrix is uploaded zigzagged.
+constexpr uint8_t kZigZag[64] = {
     0x00, 0x08, 0x01, 0x02, 0x09, 0x10, 0x18, 0x11, 0x0a, 0x03, 0x04, 0x0b, 0x12, 0x19, 0x20, 0x28,
     0x21, 0x1a, 0x13, 0x0c, 0x05, 0x06, 0x0d, 0x14, 0x1b, 0x22, 0x29, 0x30, 0x38, 0x31, 0x2a, 0x23,
     0x1c, 0x15, 0x0e, 0x07, 0x0f, 0x16, 0x1d, 0x24, 0x2b, 0x32, 0x39, 0x3a, 0x33, 0x2c, 0x25, 0x1e,
     0x17, 0x1f, 0x26, 0x2d, 0x34, 0x3b, 0x3c, 0x35, 0x2e, 0x27, 0x2f, 0x36, 0x3d, 0x3e, 0x37, 0x3f,
 };
 
-namespace {
-
-void mdec_upload_tables(void) {
-  // ---- cmd 2: SetIqTab (quant matrix). bit0=1 -> load both luma+chroma (32 words). ----
-  // Pack 4 bytes per 32-bit word; 64 luma + 64 chroma bytes = 32 words. Reorder raster ->
-  // zigzag so QMatrix[CoeffIndex] (scan order) holds the right per-frequency weight.
-  uint8_t qz[64];
-  for (int p = 0; p < 64; p++) {
-    qz[p] = s_quant_default[MDEC_ZIGZAG[p]];
-  }
-  uint32_t qcmd = (2u << 29) | 1u; // (Command>>29)==2, bit0 set => 0x10+0x10 words
-  mdec_write(MDEC0, qcmd);
-  uint32_t qwords[32];
-  for (int i = 0; i < 16; i++) { // luma 64 bytes (zigzag order)
-    qwords[i] = (uint32_t)qz[i * 4 + 0] | ((uint32_t)qz[i * 4 + 1] << 8) | ((uint32_t)qz[i * 4 + 2] << 16) |
-                ((uint32_t)qz[i * 4 + 3] << 24);
-  }
-  for (int i = 0; i < 16; i++) {
-    qwords[16 + i] = qwords[i]; // chroma = same default
-  }
-  mdec_dma_in(qwords, 32);
-  mdec_pump();
-
-  // ---- cmd 3: SetIdctTab (IDCT cosine matrix). 32 words = 64 int16 coefficients. ----
-  // mdec.c stores IDCTMatrix[((idx&7)<<3)|((idx>>3)&7)] = (int16)val >> 3, so we supply
-  // val = round(cos_basis * 8) for each of the 64 positions, in natural index order.
-  // Basis: c(u) * cos((2x+1)*u*PI/16), c(0)=1/sqrt(2), else 1, scaled by sqrt(2/8)... The
-  // PSX scale that makes the two IDCT passes (each >>15 after *IDCTMatrix) reconstruct is
-  // such that the stored 16-bit value ~= round( (u? cos(...) : 1/sqrt2) * sqrt(2) * 0x5A82/... ).
-  // We use the exact mednafen-compatible scale: value = round( basis * 0x16A0A ) >> ? — to
-  // avoid guesswork we compute the same fixed-point table the BIOS does (see derivation).
-  uint32_t icmd = (3u << 29);
-  mdec_write(MDEC0, icmd);
-  int16_t idct[64];
-  for (int u = 0; u < 8; u++) {
-    for (int x = 0; x < 8; x++) {
-      double cu = (u == 0) ? (1.0 / sqrt(2.0)) : 1.0;
-      double v = cu * cos((2.0 * x + 1.0) * u * M_PI / 16.0);
-      // mednafen mdec.c stores IDCTMatrix = (int16)uploaded >> 3 (mdec.c:869), so the value
-      // we upload must be round(basis * 2^15) — this is the canonical PSX BIOS table whose
-      // u=0 entries are 0x5A82 (= round(cos(pi/4) * 32768) = 23170). Earlier code uploaded
-      // round(basis * 0x5A82) << 3, which for u=0 is 16384<<3 = 131072 and SATURATES to
-      // 0x7FFF; nearly every entry clamped, giving the wrong IDCT gain (washed-out flat
-      // blocks + banding). 2^15 is the correct, non-saturating scale.
-      int iv = (int)lround(v * 32768.0);
-      if (iv > 32767) {
-        iv = 32767;
-      }
-      if (iv < -32768) {
-        iv = -32768;
-      }
-      idct[u * 8 + x] = (int16_t)iv;
-    }
-  }
-  uint32_t iwords[32];
-  for (int i = 0; i < 32; i++) {
-    iwords[i] = (uint16_t)idct[std::size_t{2} * i] | ((uint32_t)(uint16_t)idct[std::size_t{2} * i + 1] << 16);
-  }
-  mdec_dma_in(iwords, 32);
-  mdec_pump();
-}
+// Decode-macroblock depth bits [28:27]: 2 = 24bpp, 3 bytes per pixel.
+constexpr uint32_t kDepth24bpp = 2;
+constexpr int kBytesPerPixel = 3;
+constexpr int kMacroblockPixels = 16;
+constexpr std::size_t kMacroblockBytes = std::size_t{kMacroblockPixels} * kMacroblockPixels * kBytesPerPixel;
+constexpr std::size_t kMaxInputWords = std::size_t{128} * 1024;
+constexpr std::size_t kMaxOutputWords = std::size_t{512} * 1024;
 
 } // namespace
 
-// ====================================================================================
-// MDEC feed + macroblock drain (depth-parameterised) + RGB extraction
-// ====================================================================================
-// MDEC decode-macroblock command depth bits ([28:27]): 2 = 24bpp, 3 = 16bpp (mdec.c cases 2 and 3).
-static const uint32_t kDepth24bpp = 2;
-static const uint32_t kDepth16bpp = 3;
+std::optional<VideoChunk> videoChunk(const uint8_t *raw) {
+  const uint8_t *header = raw + 24;
+  if (psx::audio::sectorSubheader(raw).audio() || le16(header) != kVideoChunkMagic) {
+    return std::nullopt;
+  }
+  return VideoChunk{static_cast<int>(le16(header + 4)),
+                    static_cast<int>(le16(header + 6)),
+                    static_cast<int>(le16(header + 8) | (le16(header + 10) << 16)),
+                    static_cast<int>(le16(header + 16)),
+                    static_cast<int>(le16(header + 18))};
+}
 
-// Feed one frame's code stream through the MDEC at `depth` and drain its macroblocks linearly into
-// `out`. Returns the number of 32-bit output words drained, or negative
-// on error. The block LAYOUT differs with depth and is the caller's business: 16bpp emits 128 words
-// per 16x16 macroblock, 24bpp emits 192 (mdec.c PixelBufferCount32 32 vs 48 per 8x8 block).
-namespace {
+std::optional<FrameAssembler::Frame> FrameAssembler::add(const VideoChunk &chunk, const uint8_t *raw) {
+  if (payload_.empty()) {
+    payload_.resize(kPayloadBytes);
+  }
+  if (chunk.chunk == 0) {
+    frame_ = chunk.frame;
+    length_ = 0;
+    expected_ = chunk.chunks;
+    got_ = 0;
+    size_ = {chunk.width != 0 ? chunk.width : kDefaultWidth, chunk.height != 0 ? chunk.height : kDefaultHeight};
+  }
+  if (frame_ != chunk.frame) {
+    return std::nullopt;
+  }
+  constexpr uint32_t kChunkPayload = kSectorUserBytes - kStrChunkHeaderBytes;
+  if (length_ + kChunkPayload <= kPayloadBytes) {
+    std::memcpy(payload_.data() + length_, raw + 24 + kStrChunkHeaderBytes, kChunkPayload);
+    length_ += kChunkPayload;
+  }
+  got_++;
+  if (expected_ <= 0 || got_ < expected_) {
+    return std::nullopt;
+  }
+  const Frame frame{{payload_.data(), length_}, frame_, size_, expected_};
+  reset();
+  return frame;
+}
 
-int mdec_decode_macroblocks(std::span<const uint16_t> codeSpan,
-                            uint32_t depth,
-                            psx::present::PixelSize frame,
-                            std::vector<uint32_t> &out) {
-  const uint16_t *codes = codeSpan.data();
-  const auto ncodes = static_cast<int>(codeSpan.size());
-  const int width = frame.width;
-  const int height = frame.height;
-  mdec_write(MDEC1, 0x80000000);              // reset
-  mdec_write(MDEC1, (1u << 30) | (1u << 29)); // enable DMA in + out
-  mdec_upload_tables();                       // load quant + IDCT (else output is black)
-
-  int nwords = (ncodes + 1) / 2;
-  // Decode-macroblock command: [31:29]=1, [28:27]=depth, [15:0]=param word count.
-  uint32_t cmd = 0x30000000u | (depth << 27) | (uint32_t)(nwords & 0xFFFF);
-  mdec_write(MDEC0, cmd);
-
-  if (nwords > (int)FMV_INBUF_WORDS) {
+int decodeBsFrame(std::span<const uint8_t> payloadBytes, present::PixelSize frame, std::span<uint16_t> codes) {
+  const uint8_t *payload = payloadBytes.data();
+  const auto payloadSize = static_cast<uint32_t>(payloadBytes.size());
+  const auto maxCodes = static_cast<int>(codes.size());
+  const bool dcOnly = psx::config::movie_dc_only();
+  if (payloadSize < 8) {
     return -1;
   }
-  std::vector<uint32_t> inbuf(static_cast<size_t>(nwords));
-  for (int i = 0; i < nwords; i++) {
-    uint16_t lo = codes[std::size_t{2} * i];
-    uint16_t hi = (i * 2 + 1 < ncodes) ? codes[i * 2 + 1] : 0xFE00;
-    inbuf[i] = (uint32_t)lo | ((uint32_t)hi << 16);
+  int qscale = static_cast<int>(le16(payload + 4) & 0x3F);
+  if (qscale == 0) {
+    qscale = 1;
   }
+  lucent::debug("fmv",
+                "BS hdr: nwords={} magic={:04x} qscale={} version={}",
+                le16(payload),
+                le16(payload + 2),
+                qscale,
+                le16(payload + 6));
 
-  // MDEC emits the frame as a sequence of 16x16 macroblocks in raster order (left->right,
-  // top->bottom). The mdec_dma_out voffs scatter makes each output group a self-contained
-  // 16x16 RASTER block; it does NOT tile the blocks across the frame width (on real PSX the game
-  // DMAs each macroblock to its own computed address). So we drain the whole stream linearly, and
-  // the caller TILES each 16x16 block into the width x height frame.
-  // 16bpp: 2 px/word. 24bpp: 3 bytes/px = 1.5 words/px, so a word covers 4 px across two rows.
-  int total_words = (depth == kDepth24bpp) ? (width * height * 3) / 4 : (width * height) / 2;
-  if (total_words > (int)FMV_OUTBUF_WORDS) {
+  BitReader br(payload + 8, payloadSize - 8);
+  const int blocks = ((frame.width + 15) / 16) * ((frame.height + 15) / 16) * 6;
+  int out = 0;
+  for (int blk = 0; blk < blocks; blk++) {
+    if (br.atEnd()) {
+      break;
+    }
+    // Each block opens with a signed 10-bit DC; the MDEC word carries QScale in [15:10].
+    int dc = static_cast<int>(br.get(10));
+    if (dc & 0x200) {
+      dc -= 0x400;
+    }
+    if (out >= maxCodes) {
+      return out;
+    }
+    codes[out++] = static_cast<uint16_t>(((qscale & 0x3F) << 10) | (dc & 0x3FF));
+    for (;;) {
+      const AcCode ac = decodeAc(br);
+      if (ac.kind == AcCode::Kind::EndOfBlock) {
+        if (out >= maxCodes) {
+          return out;
+        }
+        codes[out++] = 0xFE00;
+        break;
+      }
+      if (ac.kind == AcCode::Kind::Bad) {
+        return out > 0 ? out : -2;
+      }
+      if (out >= maxCodes) {
+        return out;
+      }
+      // DC-only consumes the AC bits to stay in sync but drops the code.
+      if (!dcOnly) {
+        codes[out++] = static_cast<uint16_t>(((ac.run & 0x3F) << 10) | (ac.level & 0x3FF));
+      }
+    }
+  }
+  return out;
+}
+
+// mdec.c keeps (int16)uploaded >> 3, so the BIOS cosine table is round(basis * 2^15) (u = 0 entries 0x5A82).
+FrameDecoder::FrameDecoder() {
+  for (int i = 0; i < 64; i++) {
+    quantWords_[i / 4 % 16] |= static_cast<uint32_t>(kQuantRaster[kZigZag[i]]) << (8 * (i % 4));
+  }
+  for (int i = 0; i < 16; i++) {
+    quantWords_[16 + i] = quantWords_[i];
+  }
+  int16_t idct[64];
+  for (int u = 0; u < 8; u++) {
+    for (int x = 0; x < 8; x++) {
+      const double cu = u == 0 ? 1.0 / std::sqrt(2.0) : 1.0;
+      const double v = cu * std::cos((2.0 * x + 1.0) * u * M_PI / 16.0);
+      const long iv = std::lround(v * 32768.0);
+      idct[u * 8 + x] = static_cast<int16_t>(iv > 32767 ? 32767 : (iv < -32768 ? -32768 : iv));
+    }
+  }
+  for (int i = 0; i < 32; i++) {
+    idctWords_[i] = static_cast<uint16_t>(idct[2 * i]) | (static_cast<uint32_t>(static_cast<uint16_t>(idct[2 * i + 1])) << 16);
+  }
+}
+
+// After power-on both matrices are zero and every block decodes black (libpress DecDCTReset uploads them).
+void FrameDecoder::uploadTables(MdecDevice &mdec) const {
+  mdec.write(MdecDevice::kDataPort, (2u << 29) | 1u); // SetIqTab, luma and chroma
+  mdec.dmaIn(quantWords_.data(), static_cast<int>(quantWords_.size()));
+  mdec.step();
+  mdec.write(MdecDevice::kDataPort, 3u << 29); // SetIdctTab
+  mdec.dmaIn(idctWords_.data(), static_cast<int>(idctWords_.size()));
+  mdec.step();
+}
+
+// The InFIFO holds 0x20 words and drops the rest, so input and output ping-pong as DMA0/DMA1 do. A decoder
+// that parks with input outstanding ends the frame with the blocks it produced.
+int FrameDecoder::decodeMacroblocks(MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame) {
+  const auto ncodes = static_cast<int>(codes.size());
+  mdec.write(MdecDevice::kControlPort, 0x80000000u);
+  mdec.write(MdecDevice::kControlPort, (1u << 30) | (1u << 29)); // DMA in and out enabled
+  uploadTables(mdec);
+  const int nwords = (ncodes + 1) / 2;
+  mdec.write(MdecDevice::kDataPort, 0x30000000u | (kDepth24bpp << 27) | static_cast<uint32_t>(nwords & 0xFFFF));
+  if (nwords > static_cast<int>(kMaxInputWords)) {
+    return -1;
+  }
+  in_.resize(static_cast<std::size_t>(nwords));
+  for (int i = 0; i < nwords; i++) {
+    const uint16_t lo = codes[std::size_t{2} * i];
+    const uint16_t hi = (i * 2 + 1 < ncodes) ? codes[std::size_t{2} * i + 1] : 0xFE00;
+    in_[i] = static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 16);
+  }
+  const int totalWords = frame.width * frame.height * kBytesPerPixel / 4;
+  if (totalWords > static_cast<int>(kMaxOutputWords)) {
     return -2;
   }
-  out.assign(static_cast<size_t>(total_words), 0u);
-  uint32_t *outbuf = out.data();
-
-  // CRITICAL: the MDEC InFIFO is small (~0x20 words). Pushing the whole frame at once would
-  // silently DROP every word past the FIFO depth (MDEC_DMAWrite discards when full). So we
-  // INTERLEAVE: push a burst of input, pump the decode (drains InFIFO -> fills OutFIFO),
-  // drain OutFIFO, repeat — exactly how real DMA0/DMA1 ping-pong around the decoder. Keep
-  // going until all input is consumed AND no more output drains.
-  int in_pos = 0, got = 0, stall = 0;
-  for (;;) {
-    const int progress_before = in_pos + got;
-    // Feed a burst when the InFIFO reports room. MDEC_DMACanWrite is true only when >=0x20
-    // words are free, so a 0x10-word chunk is always safe (never dropped). Pump after each
-    // chunk so the decoder drains the InFIFO before we top it up again.
-    if (in_pos < nwords && mdec_dma_can_write()) {
-      int chunk = nwords - in_pos;
-      if (chunk > 0x10) {
-        chunk = 0x10;
-      }
-      // mdec_dma_in returns the count actually written: it bails early when the decode parks
-      // output-blocked, so advancing by `chunk` would skip the deferred words permanently.
-      int fed = mdec_dma_in(&inbuf[in_pos], chunk);
-      in_pos += fed;
+  out_.assign(static_cast<std::size_t>(totalWords), 0u);
+  int fed = 0;
+  int got = 0;
+  int stall = 0;
+  while (true) {
+    const int before = fed + got;
+    if (fed < nwords && mdec.canWrite()) {
+      fed += mdec.dmaIn(&in_[fed], std::min(nwords - fed, 0x10));
     }
-    mdec_pump();
-    int n = (got < total_words) ? mdec_dma_out(outbuf + got, total_words - got) : 0;
-    got += n;
-    // Termination is by LACK OF PROGRESS, not by exhausted input. The decoder can park while input
-    // is still outstanding — it refuses writes when its output side cannot drain — and a loop that
-    // only counts stalls once the input is gone spins forever in exactly that state. 24bpp reaches
-    // it readily (48 output words per 8x8 block instead of 32), and did: a frame that would not
-    // decode hung the player instead of returning the blocks it had.
-    if (in_pos + got == progress_before) {
+    mdec.step();
+    got += got < totalWords ? mdec.dmaOut(out_.data() + got, totalWords - got) : 0;
+    if (fed + got == before) {
       if (++stall >= 4) {
-        break; // several iterations that fed nothing and drained nothing => the decoder is parked
+        break;
       }
     } else {
       stall = 0;
     }
-    if (got >= total_words && in_pos >= nwords) {
+    if (got >= totalWords && fed >= nwords) {
       break;
     }
   }
-
-  // Tail flush: mdec_dma_out only drains in >=0x20-word bursts (DMACanRead gate), so a final
-  // sub-0x20 remainder can sit in the OutFIFO (the bottom-right macroblock's last words). On
-  // real PSX the game reads that tail via the MDEC data port; we do the same with mdec_read,
-  // appending linearly (this only affects the final partial block's intra-block row order).
-  // Drain the final sub-0x20 remainder WITH the voffs scatter (mdec_dma_out_rest), so the last
-  // macroblock's tail lands at its real raster positions instead of linearly (which produced
-  // garbage/black bits in the bottom-right macroblock).
-  int got_before_tail = got;
-  int tail = mdec_dma_out_rest(outbuf + got, total_words - got);
-  got += tail;
-  lucent::debug(
-      "fmv", "  drain: {} scattered + {} tail-scatter = {}/{} total", got_before_tail, tail, got, total_words);
+  const int scattered = got;
+  got += mdec.dmaOutRest(out_.data() + got, totalWords - got);
+  lucent::debug("fmv", "  drain: {} scattered + {} tail = {}/{} words", scattered, got - scattered, got, totalWords);
   return got;
 }
 
-} // namespace
-
-int psx::movie::decodeMdecToRgb555(std::span<const uint16_t> codes, present::PixelSize frame, uint16_t *pixels) {
-  const int width = frame.width;
-  const int height = frame.height;
-  std::vector<uint32_t> outbuf;
-  int got = mdec_decode_macroblocks(codes, kDepth16bpp, frame, outbuf);
+// Macroblocks leave the MDEC column-major: emit index k is row k % rows, column k / rows.
+int FrameDecoder::decodeRgb888(MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame, uint8_t *pixels) {
+  const int got = decodeMacroblocks(mdec, codes, frame);
   if (got < 0) {
     return got;
   }
-  // Tile 16x16 macroblocks (each 128 words = 256 px, raster within the block) into the frame.
-  memset(pixels, 0, (size_t)width * height * 2);
-  const auto *mb = reinterpret_cast<const uint16_t *>(outbuf.data()); // 2 px per outbuf word
-  int mbx = (width + 15) / 16;
-  int mby = (height + 15) / 16;
-  int produced = got; // words actually drained
-  lucent::debug("fmv", "  drained {} words ({} macroblocks, 16bpp)", got, got / 128);
-  int blocks_avail = produced / 128; // 128 (32-bit) words per 16x16 MB
-  // Each 128-word (256 px) group is a 16x16 RASTER macroblock: mednafen emits four 8x8 Y
-  // sub-blocks and mdec_dma_out's voffs scatter (RAMOffsetWWS=4) lays them out as a 16x16
-  // raster (verified via PSXPORT_MDEC_OFFS). The game emits macroblocks COLUMN-MAJOR
-  // (top->bottom within a column, then the next column right): emit index k -> source
-  // (row=k%mby, col=k/mby). Placing them row-major sheared the frame (verified: a horizontal
-  // logo feature landed at emit stride mby=15). PSXPORT_FMV_ROWMAJOR forces the old order
-  // for A/B testing.
-  int rowmajor = psx::config::movie_row_major() ? 1 : 0;
-  for (int blk = 0; blk < blocks_avail; blk++) {
-    int bx, by;
-    if (rowmajor) {
-      by = blk / mbx;
-      bx = blk % mbx;
-    } else {
-      bx = blk / mby;
-      by = blk % mby;
-    } // column-major emit order
-    if (bx >= mbx || by >= mby) {
-      continue;
-    }
-    const uint16_t *src = mb + std::size_t{256} * blk;
-    for (int yy = 0; yy < 16; yy++) {
-      int fy = by * 16 + yy;
-      if (fy >= height) {
-        break;
-      }
-      for (int xx = 0; xx < 16; xx++) {
-        int fx = bx * 16 + xx;
-        if (fx >= width) {
-          break;
-        }
-        pixels[fy * width + fx] = src[yy * 16 + xx];
-      }
-    }
-  }
-  return width * height; // pixel count
-}
-
-// 24bpp: mdec.c case 2 writes 8 rows of 8 pixels as 3 bytes each (EncodeRow24: out[i*3+0..2],
-// pix_out += 24), so one 8x8 block is 192 bytes and a 16x16 macroblock is four of them: 768 bytes
-// = 192 words, 48 bytes per frame row of 16 pixels. This is the depth Toy Story 2's FMV overlay
-// selects (its player passes depth 3 in ITS convention, compared against the constant 3 at its
-// 24-bit upload), and the same byte layout its 16-pixel LoadImage strips assume.
-int psx::movie::decodeMdecToRgb888(std::span<const uint16_t> codes, present::PixelSize frame, uint8_t *pixels) {
   const int width = frame.width;
   const int height = frame.height;
-  std::vector<uint32_t> outbuf;
-  int got = mdec_decode_macroblocks(codes, kDepth24bpp, frame, outbuf);
-  if (got < 0) {
-    return got;
-  }
-  memset(pixels, 0, (size_t)width * height * 3);
-  const auto *mb = reinterpret_cast<const uint8_t *>(outbuf.data()); // 3 bytes per pixel
-  int mbx = (width + 15) / 16;
-  int mby = (height + 15) / 16;
-  const int kBlockWords = 192; // 16x16 px at 3 B/px
-  lucent::debug("fmv", "  drained {}/{} words ({} macroblocks, 24bpp)", got, got / kBlockWords, got / kBlockWords);
-  int blocks_avail = got / kBlockWords;
-  // Same COLUMN-MAJOR emit order as the 16bpp path above, for the same reason.
-  int rowmajor = psx::config::movie_row_major() ? 1 : 0;
-  for (int blk = 0; blk < blocks_avail; blk++) {
-    int bx, by;
-    if (rowmajor) {
-      by = blk / mbx;
-      bx = blk % mbx;
-    } else {
-      bx = blk / mby;
-      by = blk % mby;
-    }
-    if (bx >= mbx || by >= mby) {
+  std::memset(pixels, 0, static_cast<std::size_t>(width) * height * kBytesPerPixel);
+  const auto *mb = reinterpret_cast<const uint8_t *>(out_.data());
+  const int columns = (width + 15) / 16;
+  const int rows = (height + 15) / 16;
+  const int blocks = static_cast<int>(static_cast<std::size_t>(got) * 4 / kMacroblockBytes);
+  for (int blk = 0; blk < blocks; blk++) {
+    const int bx = blk / rows;
+    const int by = blk % rows;
+    if (bx >= columns) {
       continue;
     }
-    const uint8_t *src = mb + (size_t)blk * kBlockWords * 4;
-    for (int yy = 0; yy < 16; yy++) {
-      int fy = by * 16 + yy;
-      if (fy >= height) {
-        break;
-      }
-      for (int xx = 0; xx < 16; xx++) {
-        int fx = bx * 16 + xx;
-        if (fx >= width) {
-          break;
-        }
-        memcpy(pixels + ((size_t)fy * width + fx) * 3, src + (std::size_t{16} * yy + xx) * 3, 3);
-      }
+    const uint8_t *src = mb + static_cast<std::size_t>(blk) * kMacroblockBytes;
+    for (int yy = 0; yy < kMacroblockPixels && by * 16 + yy < height; yy++) {
+      const int fx = bx * 16;
+      const int span = std::min(kMacroblockPixels, width - fx);
+      std::memcpy(pixels + (static_cast<std::size_t>(by * 16 + yy) * width + fx) * kBytesPerPixel,
+                  src + static_cast<std::size_t>(yy) * kMacroblockPixels * kBytesPerPixel,
+                  static_cast<std::size_t>(span) * kBytesPerPixel);
     }
   }
   return width * height;
 }
 
-// ====================================================================================
-// CD-XA ADPCM audio decode (STR movies interleave XA audio sectors with MDEC video).
-// Algorithm transcribed from mednafen psx/cdc.c (PS_CDC_XA_ProcessSector / DecodeXAADPCM) =
-// the project oracle: 18 sound groups/sector, 8 units/group (4-bit), 28 samples/unit, with
-// a 2-tap IIR (filter weights) over a per-channel 2-sample history that persists across
-// sectors. coding byte (subheader[3]): bit0 stereo, bit2 set => 18900Hz else 37800Hz,
-// bit4 set => 8-bit (we handle both via unit_index_shift).
-// ====================================================================================
-
-static const int32_t XA_W[16][2] = {
-    {0, 0}, {60, 0}, {115, -52}, {98, -55}, {122, -60}}; // mednafen DecodeXAADPCM weights
-
-namespace {
-
-// `param` is the sound unit's header byte: shift in the low nibble, filter in the high.
-void xa_decode_unit(const uint8_t *in, int16_t *out, int param) {
-  const int shift = param & 0x0F;
-  const int filter = param >> 4;
-  for (int i = 0; i < 28; i++) {
-    int32_t s = (int16_t)(in[i] << 8);
-    s >>= shift;
-    s += (out[i - 1] * XA_W[filter][0] + out[i - 2] * XA_W[filter][1]) >> 6;
-    if (s < -32768) {
-      s = -32768;
-    } else if (s > 32767) {
-      s = 32767;
-    }
-    out[i] = (int16_t)s;
-  }
-}
-
-} // namespace
-
-// Decode one XA audio sector (raw 2352B). Writes interleaved S16 stereo to `out`
-// (out[2*n]=L, out[2*n+1]=R); returns stereo frame count (<=2016). `hist[ch][0..1]` is the
-// per-channel history that MUST persist across sectors. `*freq` set to the sample rate.
-// Non-static so the sound oracle (tools/fmv_compare) can diff it against a reference.
-psx::movie::XaFormat psx::movie::xaSectorFormat(const uint8_t *raw) {
-  const int coding = raw[19]; // subheader coding byte (raw = sync12+hdr4+subhdr8+...)
-  const int units = (coding & 0x10) ? 4 : 8;
-  const int channels = (coding & 0x01) ? 2 : 1;
-  return {(coding & 0x04) ? 18900 : 37800, 18 * units * 28 / channels};
-}
-
-int psx::movie::decodeXaSector(const uint8_t *raw, int16_t *out, int16_t hist[2][2], int *freq) {
-  int coding = raw[19];                 // subheader coding byte (raw = sync12+hdr4+subhdr8+...)
-  int ishift = (coding & 0x10) ? 0 : 1; // unit_index_shift: 1 for 4-bit, 0 for 8-bit
-  int stereo = coding & 0x01;
-  int units = 4 << ishift; // 8 (4-bit) / 4 (8-bit)
-  if (freq) {
-    *freq = xaSectorFormat(raw).rate;
-  }
-  // Per-channel sample buffer. MONO sectors put ALL units on one channel: 4-bit mono =
-  // 18 groups * 8 units * 28 = 4032 samples/sector (vs 2016 per channel when stereo splits
-  // them). Size for the mono max, else mono voice (e.g. Tomba2 dialog, 18900Hz mono) overflows.
-  int16_t ch[2][4032 + 8];
-  int cp[2] = {0, 0};
-  for (int group = 0; group < 18; group++) {
-    const uint8_t *sg = raw + 24 + std::size_t{128} * group; // 16 param bytes + 112 sample bytes
-    for (int unit = 0; unit < units; unit++) {
-      int param = sg[(unit & 3) | ((unit & 4) << 1)];
-      int pcopy = sg[4 | (unit & 3) | ((unit & 4) << 1)];
-      uint8_t ib[28];
-      for (int i = 0; i < 28; i++) {
-        uint8_t t = sg[16 + i * 4 + (unit >> ishift)];
-        if (ishift) {
-          t <<= (unit & 1) ? 0 : 4;
-          t &= 0xf0;
-        }
-        ib[i] = t;
-      }
-      int ocn = (unit & 1) && stereo;
-      int16_t ob[2 + 28];
-      ob[0] = hist[ocn][0];
-      ob[1] = hist[ocn][1];
-      xa_decode_unit(ib, ob + 2, param);
-      hist[ocn][0] = ob[28];
-      hist[ocn][1] = ob[29];
-      if (param != pcopy) {
-        memset(ob, 0, sizeof ob); // corruption guard (mednafen parity)
-      }
-      if (stereo) {
-        for (int s = 0; s < 28; s++) {
-          ch[ocn][cp[ocn]++] = ob[2 + s];
-        }
-      } else {
-        for (int s = 0; s < 28; s++) {
-          ch[0][cp[0]++] = ob[2 + s];
-          ch[1][cp[1]++] = ob[2 + s];
-        }
-      }
-    }
-  }
-  int n = cp[0];
-  for (int i = 0; i < n; i++) {
-    out[std::size_t{2} * i] = ch[0][i];
-    out[2 * i + 1] = ch[1][i];
-  }
-  return n;
-}
+} // namespace psx::movie

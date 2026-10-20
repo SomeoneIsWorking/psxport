@@ -62,6 +62,7 @@ void Game::wireRuntimeMembers() {
   hle.loadExecReader = psx::hle::discFileReader(disc);
   cdc.disc = &disc;
   cdc.xa = &xa;
+  xa.drive = &cdc;
   xa.disc = &disc;
 
   // Factories receive a fully wired Game; the session first, so the products can reach it.

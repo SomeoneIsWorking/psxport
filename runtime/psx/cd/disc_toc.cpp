@@ -1,21 +1,10 @@
 #include "disc_toc.h"
 
+#include "cd_position.h"
 #include "disc.h"
 
 namespace psx::disc_toc {
 namespace {
-
-constexpr uint32_t kLeadInFrames = 150;
-constexpr uint32_t kFramesPerSecond = 75;
-constexpr uint32_t kSecondsPerMinute = 60;
-
-bool from_bcd(uint8_t value, uint8_t &decoded) {
-  if ((value & 0x0Fu) > 9 || (value >> 4u) > 9) {
-    return false;
-  }
-  decoded = static_cast<uint8_t>((value >> 4u) * 10u + (value & 0x0Fu));
-  return true;
-}
 
 bool valid_toc(const cd::Disc &disc) {
   if (disc.track_count == 0 || disc.track_count > psx::cd::kDiscMaxTracks) {
@@ -37,13 +26,12 @@ bool valid_toc(const cd::Disc &disc) {
 }
 
 bool lba_to_msf(int64_t lba, BcdPair &out) {
-  const int64_t frames = lba + kLeadInFrames;
-  if (frames < 0 || frames >= 100LL * kSecondsPerMinute * kFramesPerSecond) {
+  if (lba + cd::kLeadInSectors >= 100LL * cd::kSecondsPerMinute * cd::kSectorsPerSecond) {
     return false;
   }
-  const uint32_t total_seconds = static_cast<uint32_t>(frames / kFramesPerSecond);
-  out.first = cd::toBcd(total_seconds / kSecondsPerMinute);
-  out.second = cd::toBcd(total_seconds % kSecondsPerMinute);
+  const std::array<uint8_t, 3> msf = cd::lbaToMsf(static_cast<int>(lba));
+  out.first = msf[0];
+  out.second = msf[1];
   return true;
 }
 
@@ -66,10 +54,10 @@ bool track_range(cd::Disc &disc, BcdPair &out) {
 }
 
 bool track_start(cd::Disc &disc, uint8_t track_bcd, BcdPair &out) {
-  uint8_t track_number = 0;
-  if (!loaded(disc) || !from_bcd(track_bcd, track_number)) {
+  if (!loaded(disc) || !cd::isBcd(track_bcd)) {
     return false;
   }
+  const int track_number = cd::fromBcd(track_bcd);
   int64_t lba = -1;
   if (track_number == 0) {
     const psx::cd::DiscTrackInfo &last = disc.tracks[disc.track_count - 1];

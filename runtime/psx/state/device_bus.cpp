@@ -534,8 +534,8 @@ bool readCardSection(Game &game, psx::platform::BlobReader &in, std::string &err
 void writeCdSection(Game &game, psx::platform::BlobWriter &out) {
   const Cd &cd = game.cd;
   out.u8(kBusLayoutVersion);
-  out.array(cd.stock_command_response.data(), cd.stock_command_response.size());
-  out.boolean(cd.stock_command_response_valid);
+  out.array(cd.stockResponse.bytes().data(), cd.stockResponse.bytes().size());
+  out.boolean(cd.stockResponse.valid());
   out.i32(cd.setloc_lba);
   out.i32(cd.stock_reading);
   out.i32(cd.in_stock_read);
@@ -546,8 +546,13 @@ bool readCdSection(Game &game, psx::platform::BlobReader &in, std::string &error
     return false;
   }
   Cd &cd = game.cd;
-  in.array(cd.stock_command_response.data(), cd.stock_command_response.size());
-  cd.stock_command_response_valid = in.boolean();
+  Cd::StockResponse::Bytes stockResponse{};
+  in.array(stockResponse.data(), stockResponse.size());
+  if (in.boolean()) {
+    cd.stockResponse.set(stockResponse);
+  } else {
+    cd.stockResponse.clear();
+  }
   cd.setloc_lba = in.i32();
   cd.stock_reading = in.i32();
   cd.in_stock_read = in.i32();

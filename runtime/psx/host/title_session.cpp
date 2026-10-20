@@ -1,6 +1,5 @@
 #include "title_session.h"
 
-#include "c_subsys.h" // mdec_init
 #include "config.h"
 #include "core.h"
 #include "dbg_server.h"
@@ -29,7 +28,6 @@ namespace {
 // knows what is bound; then `a0`/`a1` as the BIOS leaves them.
 void bindPerCoreDevices(Game &game, psx::frame::FrameLoopShell &shell) {
   Core &core = game.core;
-  mdec_init();
   psx::audio::spu::init();
   shell.bindRunningCore(core);
   game.spu_audio.init();
@@ -94,7 +92,7 @@ bool TitleSession::boot() {
     // The picker owns the player's input; a panel's guest must not see it (see setPlayerInput).
     game.pad.setPlayerInputSuppressed(!playerInput_);
     // Only the session the player is looking at is heard (see setAudible).
-    game.spu_audio.setOutputEnabled(audible_);
+    game.spu_audio.output().setClaimed(audible_);
     game.session.setPreRolling(preRolling_);
   }
 
@@ -329,7 +327,7 @@ void TitleSession::resume() {
 void TitleSession::setAudible(bool audible) {
   audible_ = audible;
   if (parts_->booted) {
-    parts_->game->spu_audio.setOutputEnabled(audible);
+    parts_->game->spu_audio.output().setClaimed(audible);
   }
 }
 

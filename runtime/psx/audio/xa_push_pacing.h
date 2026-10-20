@@ -1,5 +1,7 @@
 #pragma once
 
+#include "spu_field_cadence.h"
+#include "xa_adpcm.h"
 #include "xa_state.h"
 
 #include <cstdint>
@@ -10,7 +12,7 @@
 class XaPushPacing {
 public:
   static constexpr uint32_t kTargetBacklogFrames = 4096; // two stereo sectors, ~0.11 s at 37.8 kHz
-  static constexpr uint32_t kHoldPulls = kTargetBacklogFrames * 44100u / 37800u;
+  static constexpr uint32_t kHoldPulls = kTargetBacklogFrames * SpuFieldCadence::kSampleRateHz / psx::audio::kXaDefaultRateHz;
   static constexpr double kRateGain = 0.06;
 
   // A clip shorter than the backlog still plays once the hold has lasted as long as the backlog would.

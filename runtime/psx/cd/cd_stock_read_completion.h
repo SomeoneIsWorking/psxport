@@ -1,4 +1,4 @@
-// cd_stock_read_completion.h — the completion a synchronous stock CdRead still owes its guest.
+// The completion a synchronous stock CdRead still owes its guest.
 //
 // StockLibcd::read lands the whole read without touching the controller, so no INT1 rises. A guest that
 // chains reads from its ready callback (Spyro 2 and 3) waits for one, so a GuestInterruptLibcd that
@@ -32,7 +32,7 @@ struct StockReadLanding {
 void announceStockReadLanding(Core &core, const StockReadLanding &landing);
 
 // Owes the completion for one successful stock read of `sectors` sectors from `firstLba` at CdRead mode `mode`.
-// The controller announces it once the drive would have spent the read's time (`cdc_post_data_ready_after_read`),
+// The controller announces it once the drive would have spent the read's time (CdController::postDataReadyAfterRead),
 // so the guest sees the read in flight until then. Returns true only when the completion is owed. A read that
 // moved no sectors completed nothing and owes nothing.
 bool raiseStockReadCompletion(Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode);

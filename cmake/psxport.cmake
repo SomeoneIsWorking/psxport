@@ -96,7 +96,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/debug/image_writer.cpp      # one checked RGB24 capture-file boundary
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_debug.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_audio.cpp
-  ${PSXPORT_ROOT}/runtime/psx/audio/audio_field_report.cpp
+  ${PSXPORT_ROOT}/runtime/psx/audio/host_audio_output.cpp
+  ${PSXPORT_ROOT}/runtime/psx/audio/wav_writer.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/host_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/stock_pad_buffers.cpp
@@ -107,7 +108,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/platform/card_syscall_log.cpp
   ${PSXPORT_ROOT}/runtime/psx/movie/native_fmv.cpp
   ${PSXPORT_ROOT}/runtime/psx/movie/movie_clock.cpp
-  ${PSXPORT_ROOT}/runtime/psx/movie/fmv_decode.cpp   # pure .STR decode (VLC/MDEC/XA), shared by the player + offline tools
+  ${PSXPORT_ROOT}/runtime/psx/movie/fmv_decode.cpp
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gte.c
   ${PSXPORT_ROOT}/runtime/psx/cpu/beetle/gte_beetle.cpp
   # The PSX GPU device (runtime/psx/gpu/gpu_device.cpp). gpu.c #includes gpu_polygon.c / gpu_sprite.c /
@@ -128,7 +129,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/packet_chains.cpp # packets a body linked into tag chains, as primitives
   ${PSXPORT_ROOT}/runtime/psx/present/frame_composer.cpp # the frame at t from a record and producer renders
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
-  ${PSXPORT_ROOT}/runtime/psx/movie/mdec_beetle.c
+  ${PSXPORT_ROOT}/runtime/psx/movie/mdec_device.cpp
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/spu.c
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_beetle.cpp
   # Beetle's state chunk codec; beetle_device_state.cpp defines the StateAction it calls.
@@ -152,6 +153,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cd/cdc_command_phase.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cdc_native.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/xa_stream.cpp
+  ${PSXPORT_ROOT}/runtime/psx/audio/xa_adpcm.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/emulated_time.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/field_digest.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_pacer.cpp
