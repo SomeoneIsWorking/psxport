@@ -138,14 +138,12 @@ def do_clone(link):
 
 
 def init_submodules(root):
-    """Initialise every declared submodule that is not checked out yet, one level at a time with cwd in
-    the real checkout `root` (never through a link). One already checked out is left at its commit."""
+    """Check out every declared submodule at the commit its parent records, one level at a time with cwd
+    in the real checkout `root` (never through a link); Beetle's URL-less nested gitlink rules out --recursive."""
     for parent, sub in SUBMODULES:
         path = os.path.join(root, parent)
         if not os.path.isdir(path):
             print(f"[psxport] NOTE: this revision has no {parent}, so {sub} was NOT initialised.")
-            continue
-        if os.path.exists(os.path.join(path, sub, ".git")):
             continue
         git(["submodule", "update", "--init", sub], path)
 
