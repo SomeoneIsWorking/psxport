@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Canonical CMake operations for asset-free psxport builds."""
+"""psxport build policy: the checkout root, the default build tree and the Lightrec/Lightning overrides."""
 
 from __future__ import annotations
 
-import os
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from automation.process import ToolError, run
+from automation.process import ToolError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,29 +51,3 @@ def lightrec_cmake_definitions(environment: Mapping[str, str]) -> list[str]:
     return [f"-DPSXPORT_LIGHTREC_DIR={checkout}"]
 
 
-def configure(build: Path) -> None:
-    environment = os.environ.copy()
-    lightning_definitions = lightning_cmake_definitions(environment)
-    lightrec_definitions = lightrec_cmake_definitions(environment)
-    run(
-        [
-            "cmake",
-            "-S",
-            ROOT,
-            "-B",
-            build,
-            "-G",
-            "Ninja",
-            "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-            f"-DPython3_EXECUTABLE={sys.executable}",
-            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-            *lightrec_definitions,
-            *lightning_definitions,
-        ],
-        cwd=ROOT,
-        environment=environment,
-    )
-
-
-def build_project(build: Path) -> None:
-    run(["cmake", "--build", build], cwd=ROOT)

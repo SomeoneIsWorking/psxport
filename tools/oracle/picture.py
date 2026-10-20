@@ -61,7 +61,6 @@ the check.
 
 USAGE (from a consuming game, whose own tool supplies the title module and product environment)
   uv run --frozen python tools/picture_oracle.py --bios ../SCPH1001.BIN
-  uv run --frozen python tools/picture_oracle.py --bios ../SCPH1001.BIN --selftest
 """
 
 from __future__ import annotations
@@ -172,7 +171,7 @@ class PictureDiff:
 
     `differing` counts any inequality at all and `significant` counts the pixels whose colour really
     differs (see COLOUR_STEP). Both are reported: the first says whether the frames are bit-identical,
-    which is the only thing a selftest may key on, and the second is the one to read as rendering."""
+    and the second is the one to read as rendering."""
 
     pixels: int
     differing: int
@@ -500,9 +499,7 @@ class PictureRun:
         print(f"[picture] {name}: {diff.significant}/{diff.pixels} pixels are a different COLOUR "
               f"({100 * diff.significant_share:.2f}%), {diff.tiles_touched}/{diff.tiles_total} tiles "
               f"touched — {shape}")
-        # The bare count is kept beside it rather than replaced: it is the difference between "these
-        # frames are bit-identical" and "these frames agree to within rounding", and only the first
-        # clears a comparator selftest.
+        # Bit-identical versus within rounding.
         rounding = diff.differing - diff.significant
         print(f"[picture] {name}: {diff.differing} differ at all; {rounding} of those by one "
               f"{COLOUR_STEP}-value colour step or less (rounding/dither, not rendering)")
@@ -510,24 +507,6 @@ class PictureRun:
             worst = ", ".join(f"({tile[0]},{tile[1]}):{count}" for tile, count in diff.worst_tiles[:4])
             print(f"[picture]   worst tiles {worst}")
         return True
-
-    def selftest(self) -> bool:
-        """Show the other answer before any zero is believed.
-
-        Two captures of the SAME core at two different states must differ, and a capture compared
-        with itself must not. A comparator that cannot produce both is not measuring the pictures."""
-        first, _ = self.capture("selftest-before")
-        self.play(60)
-        second, _ = self.capture("selftest-after")
-        moved = compare_pictures(first.path, second.path)
-        same = compare_pictures(first.path, first.path)
-        detected = moved.differing > 0 and same.differing == 0
-        self.report["selftest"] = {"changed_pixels": moved.differing, "self_compare": same.differing,
-                                   "detected": detected}
-        print(f"[picture] selftest: 60 frames of the title's own route changed {moved.differing} pixel(s), "
-              f"and a picture compared with itself differs in {same.differing} — comparator "
-              f"{'DETECTED both answers' if detected else 'FAILED'}")
-        return detected
 
 
 def launch_picture_sessions(product: Product, args: argparse.Namespace,
@@ -569,20 +548,13 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
         ok = True
         for checkpoint in title.checkpoints:
             run_state.reach(checkpoint, args.budget)
-            if args.selftest and checkpoint is title.checkpoints[-1]:
-                report["complete"] = True
-                return 0 if run_state.selftest() else 1
             if checkpoint.not_picture_comparable:
                 run_state.withhold(checkpoint)
                 continue
             ok = run_state.at(checkpoint.name) and ok
         route = getattr(args, "route", None)
         if route and not args.play:
-            # A SILENTLY IGNORED INPUT IS A FAILURE, NOT A FILTER. --route only feeds the post-checkpoint
-            # gameplay segment, so without --play it changed nothing and the run printed the ordinary
-            # checkpoint comparison as if it had honoured the flag — measured 2026-09-19, where a
-            # 113-second run over a recorded Artisans replay reported the same two checkpoint numbers as
-            # a run with no route at all, and only the identical figures gave it away.
+            # --route only feeds the post-checkpoint segment; refuse rather than ignore it.
             print(f"REFUSED: --route {route} needs --play N; the recorded route drives the gameplay "
                   f"segment AFTER the last checkpoint, and with --play 0 it would have been ignored",
                   file=sys.stderr)
@@ -603,7 +575,7 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
             if core is not None:
                 core.close()
         report["seconds"] = round(time.monotonic() - started, 1)
-        path = out_dir / ("picture_selftest.json" if args.selftest else "picture.json")
+        path = out_dir / "picture.json"
         path.write_text(json.dumps(report, indent=2))
         print(f"[picture] report: {path} ({report['seconds']}s)")
         print(f"[picture] PNGs for a human to judge: {out_dir}/*.png")

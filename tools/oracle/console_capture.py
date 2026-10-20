@@ -9,7 +9,8 @@ import hashlib
 from pathlib import Path
 import struct
 import sys
-import zlib
+
+from PIL import Image
 
 MAX_WIDTH = 2048
 MAX_HEIGHT = 1024
@@ -38,12 +39,11 @@ class Framebuffer:
             raise ValueError(f"invalid framebuffer stride {pitch} for {width}x{height}")
         return cls(width, height, pitch, pixel_format, ct.string_at(pointer, pitch * height))
 
-    def rgb_rows(self) -> bytes:
+    def rgb(self) -> bytes:
         rows = bytearray()
         bpp = PIXEL_BYTES[self.pixel_format]
         word = struct.Struct("=I" if bpp == 4 else "=H")
         for y in range(self.height):
-            rows.append(0)  # PNG filter: none
             for x in range(self.width):
                 value = word.unpack_from(self.data, y * self.pitch + x * bpp)[0]
                 if self.pixel_format == 1:
@@ -60,14 +60,7 @@ class Framebuffer:
         return bytes(rows)
 
     def save_png(self, path: Path) -> None:
-        def chunk(kind: bytes, data: bytes) -> bytes:
-            return (struct.pack(">I", len(data)) + kind + data +
-                    struct.pack(">I", zlib.crc32(kind + data)))
-
-        header = struct.pack(">IIBBBBB", self.width, self.height, 8, 2, 0, 0, 0)
-        payload = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) +
-                   chunk(b"IDAT", zlib.compress(self.rgb_rows())) + chunk(b"IEND", b""))
-        path.write_bytes(payload)
+        Image.frombytes("RGB", (self.width, self.height), self.rgb()).save(path, "PNG")
 
 
 class CaptureHashes:
@@ -100,7 +93,7 @@ class CaptureHashes:
         self.ram.update(ram)
         # Canonical RGB excludes pitch padding, unused pixel bits and native endianness.
         self.video.update(struct.pack("<II", framebuffer.width, framebuffer.height))
-        self.video.update(framebuffer.rgb_rows())
+        self.video.update(framebuffer.rgb())
         self.fields += 1
 
     def status(self) -> dict:

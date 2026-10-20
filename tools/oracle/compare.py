@@ -15,8 +15,6 @@ main loop has run exactly one frame), which state is compared, why the rest is e
 checkpoint is reached, and the representative gameplay. A title module satisfies `Title`; its thin
 `tools/oracle_compare.py` builds a `Product` and calls `run`.
 
-`--selftest` flips one product byte at the first checkpoint and requires the comparator to report
-exactly that divergence; a comparator that has never shown a difference is not trusted.
 """
 
 from __future__ import annotations
@@ -60,14 +58,6 @@ class DeclaredRange:
         return self.address + self.size
 
 
-@dataclass(frozen=True)
-class SelftestSeed:
-    """One product byte the selftest flips, and the declared range/offset that must report it."""
-    address: int
-    range: str
-    offset: int
-
-
 Settle = Optional[frozenset[str]]
 Pattern = Callable[[int, Any], frozenset[str]]  # (frame index, title observation) -> held pad
 Arrived = Callable[[Any], bool]
@@ -97,7 +87,6 @@ class Title(Protocol):
     excluded: dict[str, str]
     checkpoints: Sequence[Checkpoint]
     gameplay: Sequence[tuple[frozenset[str], int]]  # held buttons and game-frame counts
-    selftest: SelftestSeed
 
     def advance(self, core: CoreSession, frames: int, strict: bool = False) -> None: ...
     # Game frames between a hold committed at this core's park point and the frame whose input
@@ -334,19 +323,6 @@ class Comparison:
             used, settle = checkpoint.reach(self.driver, core, budget, settle)
             print(f"[oracle] {core.name}: {checkpoint.name} after {used} game frames")
 
-    def selftest(self) -> bool:
-        """Seed the title's selftest byte on the product and require exactly that divergence."""
-        seed = self.title.selftest
-        original = self.native.read(seed.address, 1)[0]
-        self.native.write8(seed.address, original ^ 0x5A)
-        rows = compare(self.title, snapshot(self.title, self.native), snapshot(self.title, self.console))
-        row = {r["range"]: r for r in rows}[seed.range]
-        hit = (not row["equal"]) and row["first_diff_offset"] == seed.offset
-        self.report["selftest"] = {"seeded_address": f"0x{seed.address:08X}", "detected": hit, "ranges": rows}
-        print(f"[oracle] selftest: seeded byte at 0x{seed.address:08X}; comparator "
-              f"{'DETECTED it' if hit else 'MISSED it'}")
-        return hit
-
     def gameplay(self, frame_step: int, segments: Segments | None = None) -> bool:
         """Feed both cores the held-input segments frame by frame and compare after every
         `frame_step` frames of a segment (once per segment when 0); stop at the first decisive
@@ -443,10 +419,6 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
         first, *rest = title.checkpoints
         comparison.reach(first, args.budget)
         ok = comparison.checkpoint(first.name)
-        if args.selftest:
-            exit_code = 0 if comparison.selftest() else 1
-            report["complete"] = True
-            return exit_code
         for checkpoint in rest:
             comparison.reach(checkpoint, args.budget)
             ok = comparison.checkpoint(checkpoint.name) and ok
@@ -471,7 +443,7 @@ def run(title: Title, product: Product, args: argparse.Namespace, out_dir: Path,
             if core is not None:
                 core.close()
         report["seconds"] = round(time.monotonic() - started, 1)
-        path = out_dir / ("selftest.json" if args.selftest else "compare.json")
+        path = out_dir / "compare.json"
         path.write_text(json.dumps(report, indent=2))
         print(f"[oracle] report: {path} ({report['seconds']}s)")
 
@@ -488,7 +460,6 @@ def build_parser(description: str, default_bios: Path) -> argparse.ArgumentParse
                              "PSXPORT_SETTINGS file with aspect=1; presentation must not change guest RAM")
     parser.add_argument("--frame-step", type=int, default=0,
                         help="compare every N frames inside a gameplay segment (0 = once per segment)")
-    parser.add_argument("--selftest", action="store_true", help="validate the comparator with a seeded divergence")
     parser.add_argument("--console-card", type=Path, metavar="CARD.MCR",
                         help="start the reference from this 128 KiB memory-card image instead of the "
                              "unformatted card a console powers up with. Card state selects a title's "

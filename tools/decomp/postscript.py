@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 
 # The decompiler's own marker for the failure this whole tool is built around. Matched as a phrase,
 # not a whole comment, because the surrounding wording has changed between Ghidra releases and a
@@ -230,16 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         """
         body = function.getBody()
         first = body.getMinAddress()
-        # THE COUNTS BELOW ARE A MIRROR OF tools/decomp/structure.py, and the mirror is forced by
-        # where this file runs: PyGhidra loads a post-script as the module '__main__' with only the
-        # SCRIPT's own directory on sys.path, so it cannot import a repository module at all. That is
-        # a real constraint, not a preference, and it is why the question has an owner elsewhere and a
-        # pinned copy here.
-        #
-        # The pin is a TEST, not a promise: `test_shape_counting_is_exercised` runs this file's
-        # arithmetic against `structure.py`'s over a corpus of real words from a real image, so the
-        # two cannot drift without the selftest going red. Two copies is the floor imposed by the
-        # host boundary; two copies that AGREE is not.
+        # Mirrors tools/decomp/structure.py: PyGhidra runs a post-script with only its own directory
+        # on sys.path, so it cannot import that module.
         #
         # Raw words are read on the body's OWN instruction grid through the MEMORY API. Two wrong
         # approaches are recorded because both produced a clean-looking answer here:

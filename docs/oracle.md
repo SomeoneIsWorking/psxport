@@ -52,7 +52,7 @@ a reach policy each, a game-frame barrier (`advance`: the console is VBlank-step
 whose REPL step is one field is too, so the title steps such a core until its guest main loop has
 run exactly one frame, usually with `step_until_counter_resets` on the guest's per-field counter),
 the per-core pad latency between a park point and the frame whose input read sees a hold
-(`lookahead`), a held-input gameplay schedule, and one selftest seed. The title's thin `tools/oracle_compare.py` builds a
+(`lookahead`) and a held-input gameplay schedule. The title's thin `tools/oracle_compare.py` builds a
 `compare.Product` from its own launch owner and calls `compare.run`.
 
 The driver delivers the same pad to the same game frame's input read on both cores (`Driver`,

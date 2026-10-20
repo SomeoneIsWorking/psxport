@@ -1,22 +1,10 @@
 #!/usr/bin/env python3
 """Resolve a PSXPORT_PROF host-PC sample file into a per-symbol profile.
 
-hostprof.cpp's own header has promised this tool since it was written ("tools/prof_hot.py does the
-symbol mapping with nm, which keeps this file free of any symbol-table parsing"). It did not exist.
-Neither did a working profiler: hostprof_init() was compiled but CALLED FROM NOWHERE, so
-`PSXPORT_PROF=1` came back from the exit audit as "set for this whole run and NOTHING ever read it".
-Both are fixed together, because a profiler with no reader and a reader with no profiler are the same
-amount of evidence: none.
+Host addresses only; needs the exact binary that produced the samples. Samples outside every text
+symbol nm knows about get their own line rather than the nearest preceding symbol.
 
-This works in host addresses and needs the exact binary that produced the samples. Guest-execution
-telemetry belongs to the executor counters rather than this host-symbol profiler.
-
-    tools/prof_hot.py scratch/raw/prof_host.txt scratch/bin/tomba2_port [--top N]
-
-UNRESOLVED SAMPLES ARE REPORTED, NOT HIDDEN. A host PC can land outside every text symbol nm knows
-about (PLT stubs, a stripped vendored object, JIT-less trampolines). Folding those into "the nearest
-preceding symbol" is how a 20% bucket ends up attributed to `data_start` and read as a hot function.
-They get their own line, with the count, so a profile that resolves badly says so.
+    tools/prof_hot.py scratch/raw/prof_host.txt build/agent/bin/tomba2_port [--top N]
 """
 import argparse
 import bisect

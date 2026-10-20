@@ -4,9 +4,8 @@ ONE CONCEPT: the boundary between this pipeline and the Ghidra process. Everythi
 analyse lives in :mod:`tools.decomp.images` and :mod:`tools.decomp.pipeline`; everything about *how
 to start the JVM and what it is allowed to cost* lives here.
 
-The command runner is INJECTED, for two reasons that are both load-bearing rather than tidiness:
-the selftest proves every refusal without a Ghidra install, and the environment is an argument
-rather than ambient process state, so a caller can impose its own heap and cache location.
+The environment is an argument rather than ambient process state, so a caller can impose its own
+heap and cache location.
 
 Every refusal here is an exception. A headless analyzer that is not runnable, a run that fails, and a
 run that was never started must never produce the same empty inventory.
