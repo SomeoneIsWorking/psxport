@@ -206,6 +206,10 @@ public:
     (void)reply;
     return false;
   }
+  // Usage lines for titleCommand's verbs, listed by `help`.
+  virtual std::span<const psx::debug::VerbUsage> commandUsage() const {
+    return {};
+  }
   virtual TitleAudio *audio(Core &core) const {
     (void)core;
     return nullptr;

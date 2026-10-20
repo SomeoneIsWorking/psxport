@@ -25,7 +25,6 @@
 #include <mutex>
 #include <optional>
 #include <thread>
-#include <unordered_map>
 
 namespace psx::cpu {
 namespace {
@@ -209,16 +208,27 @@ struct LightrecExecutor::Impl {
     std::uint64_t admittedFallbackBlocks = 0;
     std::uint32_t fallbackRefusalPc = 0;
     lightrec_fallback_reason fallbackRefusalReason = LIGHTREC_FALLBACK_NONE;
+    std::thread::id thread{};
     bool active = false;
   };
+
+  // Host threads inside the executor at once: the main thread and the fibers parked inside it.
+  static constexpr std::size_t kBoundarySlots = 8;
+
+  BoundaryContext *boundaryOf(std::thread::id thread) {
+    for (BoundaryContext &slot : boundaries) {
+      if (slot.thread == thread) {
+        return &slot;
+      }
+    }
+    return nullptr;
+  }
 
   // The boundary this host thread entered; a cooperative task thread holds its own while it is parked.
   BoundaryContext &activeBoundary() {
     const std::thread::id thread = std::this_thread::get_id();
-    if (cachedThread != thread) {
-      const auto found = boundaries.find(thread);
-      cachedBoundary = found == boundaries.end() ? nullptr : &found->second;
-      cachedThread = thread;
+    if (cachedBoundary == nullptr || cachedBoundary->thread != thread) {
+      cachedBoundary = boundaryOf(thread);
     }
     if (cachedBoundary == nullptr || !cachedBoundary->active) {
       lucent::error("executor", "Lightrec callback reached without a boundary on its host thread");
@@ -332,31 +342,36 @@ struct LightrecExecutor::Impl {
                     std::optional<std::uint32_t> returnAddress,
                     bool dispatchHostServices,
                     FallbackPolicy fallbackPolicy)
-        : impl_(impl), thread_(std::this_thread::get_id()), boundary_(impl.boundaries[thread_]), previous_(boundary_) {
+        : boundary_(claim(impl, std::this_thread::get_id())), previous_(boundary_) {
       boundary_ = {.returnAddress = returnAddress,
                    .dispatchHostServices = dispatchHostServices,
                    .fallbackPolicy = fallbackPolicy,
+                   .thread = previous_.thread,
                    .active = true};
     }
 
     ~BoundarySession() {
-      if (previous_.active) {
-        boundary_ = previous_;
-        return;
-      }
-      if (impl_.cachedThread == thread_) {
-        impl_.cachedThread = {};
-        impl_.cachedBoundary = nullptr;
-      }
-      impl_.boundaries.erase(thread_);
+      boundary_ = previous_.active ? previous_ : BoundaryContext{};
     }
 
     BoundarySession(const BoundarySession &) = delete;
     BoundarySession &operator=(const BoundarySession &) = delete;
 
   private:
-    Impl &impl_;
-    std::thread::id thread_;
+    static BoundaryContext &claim(Impl &impl, std::thread::id thread) {
+      BoundaryContext *slot = impl.boundaryOf(thread);
+      if (slot == nullptr) {
+        slot = impl.boundaryOf(std::thread::id{});
+        if (slot == nullptr) {
+          lucent::error("executor", "more than {} host threads entered the executor at once", kBoundarySlots);
+          std::abort();
+        }
+        slot->thread = thread;
+      }
+      impl.cachedBoundary = slot;
+      return *slot;
+    }
+
     BoundaryContext &boundary_;
     BoundaryContext previous_;
   };
@@ -498,8 +513,7 @@ struct LightrecExecutor::Impl {
   bool initializationAttempted = false;
   FallbackPolicyProvider fallbackPolicyProvider = nullptr;
   // One boundary per host thread; strict fiber ping-pong means no two threads touch this at once.
-  std::unordered_map<std::thread::id, BoundaryContext> boundaries;
-  std::thread::id cachedThread{};
+  std::array<BoundaryContext, kBoundarySlots> boundaries{};
   BoundaryContext *cachedBoundary = nullptr;
   ExecutorCounters counters;
   SegmentClockLedger segmentClock;

@@ -6,10 +6,6 @@ struct Core;
 
 class Repl {
 public:
-  // Requests armed by `newgame` / `skip N`, consumed and cleared by the title's FrameDriver.
-  int navNewgame = 0;
-  long skipFrames = 0;
-
   // One-shot: return to the prompt after the current frame.
   void requestPrompt() {
     promptRequested_ = true;

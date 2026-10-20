@@ -84,8 +84,7 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
     return CallStep{CallOutcome::Returned, result.guestPc, turns_, cycles_, core.r[kV0], {}, result.reason};
   }
   if (!suspends(result.reason)) {
-    requireGuestReturn(result, owner_);
-    return refused(std::string{"the guest call exited as "} + executionExitName(result.reason),
+    return refused(lucent::format("the guest call exited as {}: {}", executionExitName(result.reason), result.detail),
                    result.guestPc,
                    turns_,
                    cycles_,
@@ -155,7 +154,7 @@ std::uint32_t callOriginalResumingToReturn(
 
 ExecutionResult callOriginalResumingToExit(Core &core, std::string_view owner, NativeKey key) {
   ResumableGuestCall call;
-  call.begin(core, owner, GuestCallSite{key.address, core.r[kRa]});
+  call.begin(core, owner, GuestCallSite{key.address, core.r[kRa]}, kResumeToExitTurns);
   CallStep step = call.advance(key);
   while (step.outcome == CallOutcome::Suspended && step.reason == ExecutionExitReason::BudgetExhausted) {
     step = call.advance(key);

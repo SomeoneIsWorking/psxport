@@ -23,6 +23,9 @@ inline constexpr std::uint32_t kUnboundedCallTurns = 0;
 // Far above any finite guest call; each call's turns are reported.
 inline constexpr std::uint32_t kDefaultCallTurns = 8u;
 
+// An original run to its exit gets its first turn plus 64 resumes.
+inline constexpr std::uint32_t kResumeToExitTurns = 65u;
+
 enum class CallOutcome : std::uint8_t {
   Returned,  // the call reached its return address; `value` is r[2]
   Suspended, // one host turn ran out; call `advance` again
@@ -111,7 +114,7 @@ std::uint32_t callOriginalResumingToReturn(Core &core,
                                            std::uint32_t turnCap = kDefaultCallTurns);
 
 // The original body of `key` (ra as the return), resumed only across exhausted turns; returns its
-// return or the first other exit, with the cycles of every turn, for a caller that reports a non-return.
+// return or its first other exit with every turn's cycles, without reporting either.
 ExecutionResult callOriginalResumingToExit(Core &core, std::string_view owner, NativeKey key);
 
 } // namespace psx::cpu

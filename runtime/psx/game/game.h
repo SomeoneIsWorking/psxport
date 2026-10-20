@@ -122,6 +122,13 @@ public:
   template <class T> const T &frameDriverAs() const {
     return static_cast<const T &>(requireFrameDriver());
   }
+  // The installed driver as `T`, or null when none of that type is installed.
+  template <class T> T *frameDriverIf() {
+    return dynamic_cast<T *>(frameDriver.get());
+  }
+  template <class T> const T *frameDriverIf() const {
+    return dynamic_cast<const T *>(frameDriver.get());
+  }
   psx::game::FrameDriver &requireFrameDriver() const;
 
   // core.game / gpuVk().game are back-pointers so a subsystem holding one can reach the rest of the machine.

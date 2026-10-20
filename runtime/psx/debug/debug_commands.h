@@ -3,6 +3,7 @@
 #pragma once
 
 #include "command_args.h"
+#include "host_input.h"
 
 #include <cstdint>
 #include <functional>
@@ -16,18 +17,12 @@ namespace psx::debug {
 // One reply line to the transport's client.
 using ReplySink = std::function<void(std::string_view)>;
 
-// A transport's own verb, listed by `help` before the shared table.
-struct VerbUsage {
-  std::string_view usage;
-  std::string_view summary;
-};
-
 class DebugCommands {
 public:
   // True when the command word is a shared verb or the title's command; the reply went to `reply`.
   bool run(Core &core, const CommandArgs &args, const ReplySink &reply);
-  // `transportVerbs`, then every shared verb, one line each.
-  static void help(std::span<const VerbUsage> transportVerbs, const ReplySink &reply);
+  // `transportVerbs`, every shared verb, then the title's commands, one line each.
+  static void help(const Core &core, std::span<const VerbUsage> transportVerbs, const ReplySink &reply);
 
   struct Call {
     Core &core;
@@ -37,7 +32,7 @@ public:
   };
 
   // Active-low; press, release and hold edit it.
-  std::uint16_t heldMask = 0xFFFF;
+  std::uint16_t heldMask = input::kNoButtons;
 };
 
 } // namespace psx::debug
