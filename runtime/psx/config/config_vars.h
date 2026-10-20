@@ -2,7 +2,7 @@
 #pragma once
 #include "fallback_policy.h"
 #include "override_differential_config.h"
-#include "render_mode.h" // RenderPath
+#include "render_mode.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -55,11 +55,9 @@ psx::cpu::OverrideDifferentialConfig override_differential_config();
 std::string function_reach_report_path(); // PSXPORT_REACH_REPORT: empty disarms
 
 // PSXPORT_RENDER_PATH: record | device; an unknown value warns and gives `fallback`.
-RenderPath render_path(RenderPath fallback = RenderPath::Record);
+present::RenderPath render_path(present::RenderPath fallback = present::RenderPath::Record);
 
 bool fullscreen_requested(); // PSXPORT_FULLSCREEN, or PSXPORT_WINDOWED=0
 std::string picker_titles(); // PSXPORT_PICKER_TITLES: panel slugs, empty for every provisioned title
-// $XDG_STATE_HOME/psxport, else $HOME/.local/state/psxport; empty when neither is set.
-std::string user_state_dir();
 
 } // namespace psx::config

@@ -14,9 +14,6 @@
 
 namespace psx::gpu {
 
-inline constexpr int kDeviceVramWidth = 1024;
-inline constexpr int kDeviceVramHeight = 512;
-
 // The VRAM rectangle the display scans out, as GP1(05/07/08) programmed it.
 struct DisplayArea {
   int x = 0;

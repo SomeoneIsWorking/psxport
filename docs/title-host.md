@@ -135,7 +135,7 @@ audible. The selected panel's present image is the window's size and the panel s
 share of it; the other panels present at a third of their cover (`presentation.md`). The selected
 panel's share of the window width is the settings file's `picker_selected_share` (default 0.6) and the
 others split the rest evenly (`PickerLayout::retarget`), so two titles are 60/40 and three 60/20/20. A black or faded present falls
-back to the retained copy (`GpuVkState::retainFilledPresentImage`), which is a GPU→CPU→GPU round trip and
+back to the retained copy (`RenderState::retainFilledPresentImage`), which is a GPU→CPU→GPU round trip and
 so is refreshed on a gate; a fade therefore goes unnoticed for up to that many presents (measured 15,
 issue 0162). The selector logs its end state with the panel
 summary (`selector ended ... ; panels: [0]*slug demo ...`).

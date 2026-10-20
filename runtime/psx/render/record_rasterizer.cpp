@@ -1,19 +1,22 @@
-// gpu_vk_record_raster.cpp — the record rasterizer's GPU half: buffers, passes and the snapshot.
-#include "gpu_vk_record_raster.h"
+// record_rasterizer.cpp — the record rasterizer's GPU half: buffers, passes and the snapshot.
+#include "record_rasterizer.h"
 
-#include "gpu_vk_check.h"
-#include "gpu_vk_shader.h"
-#include "pixel_size.h"
-#include "psxport_generated/gpu_vk_shaders.h"
+#include "psxport_generated/render_shaders.h"
+#include "render_check.h"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
 
-namespace psx::gpu {
+namespace psx::render {
 namespace {
 
+using gpu::RecordCanvas;
+using gpu::RecordRect;
+
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
+constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}};
+constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {2, 1, 3}};
 
 struct TargetUniform {
   float width = 0;
@@ -28,81 +31,36 @@ struct ParamsUniform {
   std::int32_t unused = 0;
 };
 
+// Storage buffers are read as whole words, and never sized zero.
 std::uint32_t paddedBytes(std::size_t bytes) {
   return static_cast<std::uint32_t>(std::max<std::size_t>((bytes + 3) & ~std::size_t{3}, 16));
 }
 
-SDL_GPUTexture *makeTexture(SDL_GPUDevice *device, present::PixelSize size, SDL_GPUTextureUsageFlags usage) {
-  SDL_GPUTextureCreateInfo info = {};
-  info.type = SDL_GPU_TEXTURETYPE_2D;
-  info.format = kVramFormat;
-  info.usage = usage;
-  info.width = static_cast<Uint32>(size.width);
-  info.height = static_cast<Uint32>(size.height);
-  info.layer_count_or_depth = 1;
-  info.num_levels = 1;
-  SDL_GPUTexture *texture = SDL_CreateGPUTexture(device, &info);
-  GPUCHK(texture, "record image");
-  return texture;
-}
-
 } // namespace
 
-RecordRasterizer::RecordRasterizer(SDL_GPUDevice *device) : device_(device) {
-  SDL_GPUShader *vertex =
-      makeShader(device, spv_g_record_vert, spv_g_record_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, {0, 1, 1});
-  SDL_GPUShader *fragment =
-      makeShader(device, spv_g_record_frag, spv_g_record_frag_len, SDL_GPU_SHADERSTAGE_FRAGMENT, {2, 1, 3});
-  SDL_GPUColorTargetDescription target = {};
-  target.format = kVramFormat;
-  SDL_GPUGraphicsPipelineCreateInfo info = {};
-  info.vertex_shader = vertex;
-  info.fragment_shader = fragment;
-  info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-  info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-  info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-  info.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
-  info.target_info.color_target_descriptions = &target;
-  info.target_info.num_color_targets = 1;
-  pipeline_ = SDL_CreateGPUGraphicsPipeline(device, &info);
-  GPUCHK(pipeline_, "record pipeline");
-  SDL_ReleaseGPUShader(device, vertex);
-  SDL_ReleaseGPUShader(device, fragment);
-  SDL_GPUSamplerCreateInfo sampler = {};
-  sampler.min_filter = SDL_GPU_FILTER_NEAREST;
-  sampler.mag_filter = SDL_GPU_FILTER_NEAREST;
-  sampler.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
-  sampler.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-  sampler.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-  sampler.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-  sampler_ = SDL_CreateGPUSampler(device, &sampler);
-  GPUCHK(sampler_, "record sampler");
+RecordRasterizer::RecordRasterizer(RenderDevice &device)
+    : device_(device), pipeline_(device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat)) {
+  canvases_.reserve(gpu::kRecordMaxCanvases);
 }
 
 RecordRasterizer::~RecordRasterizer() {
   releaseImage();
   for (Buffer *buffer : {&quads_, &ops_, &cluts_, &pixels_}) {
-    if (buffer->buffer != nullptr) {
-      SDL_ReleaseGPUBuffer(device_, buffer->buffer);
-    }
+    device_.release(buffer->buffer);
   }
-  if (upload_ != nullptr) {
-    SDL_ReleaseGPUTransferBuffer(device_, upload_);
-  }
-  if (readback_ != nullptr) {
-    SDL_ReleaseGPUTransferBuffer(device_, readback_);
-  }
-  SDL_ReleaseGPUSampler(device_, sampler_);
-  SDL_ReleaseGPUGraphicsPipeline(device_, pipeline_);
+  device_.release(upload_);
+  device_.release(readback_);
+  device_.release(pipeline_);
 }
 
 RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape) {
-  const present::PixelSize scaled{shape.width() * scale_, shape.height() * scale_};
+  const PixelSize scaled{shape.width() * scale_, shape.height() * scale_};
+  constexpr SDL_GPUTextureUsageFlags kTarget = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
   Plane plane;
-  plane.image = makeTexture(device_, scaled, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
-  plane.snapshot = makeTexture(device_, scaled, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-  plane.inBetween = makeTexture(device_, scaled, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
-  plane.before = makeTexture(device_, scaled, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+  plane.image = device_.makeTexture(scaled, kVramFormat, kTarget);
+  plane.snapshot = device_.makeTexture(scaled, kVramFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+  plane.inBetween = device_.makeTexture(scaled, kVramFormat, kTarget);
+  plane.before = device_.makeTexture(scaled, kVramFormat, kTarget);
   plane.width = shape.width();
   plane.height = shape.height();
   plane.originX = shape.originX();
@@ -111,10 +69,8 @@ RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape) {
 }
 
 void RecordRasterizer::releasePlane(Plane &plane) {
-  for (SDL_GPUTexture *texture : {plane.image, plane.snapshot, plane.inBetween, plane.before}) {
-    if (texture != nullptr) {
-      SDL_ReleaseGPUTexture(device_, texture);
-    }
+  for (SDL_GPUTexture **texture : {&plane.image, &plane.snapshot, &plane.inBetween, &plane.before}) {
+    device_.release(*texture);
   }
   plane = {};
 }
@@ -127,10 +83,7 @@ void RecordRasterizer::releaseImage() {
   canvases_.clear();
   presented_ = {};
   woven_ = {};
-  if (field_ != nullptr) {
-    SDL_ReleaseGPUTexture(device_, field_);
-    field_ = nullptr;
-  }
+  device_.release(field_);
 }
 
 void RecordRasterizer::ensureImage(int scale) {
@@ -139,7 +92,7 @@ void RecordRasterizer::ensureImage(int scale) {
   }
   releaseImage();
   scale_ = scale;
-  vram_ = makePlane(RecordCanvas{.buffer = {0, 0, kRecordVramWidth, kRecordVramHeight}});
+  vram_ = makePlane(RecordCanvas{.buffer = {0, 0, gpu::kVramWidth, gpu::kVramHeight}});
   chained_ = false;
   beforeHeld_ = false;
 }
@@ -153,13 +106,11 @@ RecordRasterizer::Canvas *RecordRasterizer::canvasFor(const RecordView &view) {
   return nullptr;
 }
 
-std::vector<RecordCanvas> RecordRasterizer::canvasShapes() const {
-  std::vector<RecordCanvas> shapes;
-  shapes.reserve(canvases_.size());
-  for (const Canvas &canvas : canvases_) {
-    shapes.push_back(canvas.shape);
+std::span<const RecordCanvas> RecordRasterizer::canvasShapes() {
+  for (std::size_t i = 0; i < canvases_.size(); i++) {
+    shapes_[i] = canvases_[i].shape;
   }
-  return shapes;
+  return {shapes_.data(), canvases_.size()};
 }
 
 RecordRasterizer::Plane &RecordRasterizer::plane(int index) {
@@ -171,7 +122,7 @@ void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &v
   const int height = view.display.y1 - view.display.y0;
   // A margin or display width change makes every canvas another shape.
   std::erase_if(canvases_, [&](Canvas &canvas) {
-    const bool stale = !canvasSurvives(canvas.shape, width, view.margin);
+    const bool stale = !gpu::canvasSurvives(canvas.shape, width, view.margin);
     if (stale) {
       releasePlane(canvas.plane);
     }
@@ -182,7 +133,7 @@ void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &v
   }
   Canvas *canvas = canvasFor(view);
   if (canvas == nullptr) {
-    if (canvases_.size() == static_cast<std::size_t>(kRecordMaxCanvases)) {
+    if (canvases_.size() == static_cast<std::size_t>(gpu::kRecordMaxCanvases)) {
       auto oldest = std::min_element(canvases_.begin(), canvases_.end(), [](const Canvas &a, const Canvas &b) {
         return a.shown < b.shown;
       });
@@ -232,10 +183,8 @@ void RecordRasterizer::selectField(SDL_GPUCommandBuffer *cmd, const present::Fra
     return;
   }
   if (field_ == nullptr || fieldWidth_ != width || fieldHeight_ != height) {
-    if (field_ != nullptr) {
-      SDL_ReleaseGPUTexture(device_, field_);
-    }
-    field_ = makeTexture(device_, {width * scale_, height * scale_}, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    device_.release(field_);
+    field_ = device_.makeTexture({width * scale_, height * scale_}, kVramFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER);
     fieldWidth_ = width;
     fieldHeight_ = height;
   }
@@ -292,12 +241,12 @@ void RecordRasterizer::advance(SDL_GPUCommandBuffer *cmd,
       const Plane &target = plane(index);
       copyTexture(cmd, target.image, {0, 0, target.width, target.height}, target.before, 0, 0);
     }
-    execute(cmd, planRecord(record, scale_, canvasShapes()), false);
+    execute(cmd, planner_.plan(record, scale_, canvasShapes()), false);
     beforeOf_ = applied_;
     beforeHeld_ = true;
     return;
   }
-  execute(cmd, planVramUpload(vram, scale_), false);
+  execute(cmd, planner_.planVramUpload(vram, scale_), false);
   for (Canvas &canvas : canvases_) {
     seedCanvas(cmd, canvas);
   }
@@ -328,7 +277,7 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
       copyTexture(cmd, target.before, whole, target.snapshot, 0, 0);
     }
   }
-  execute(cmd, planRecord(record, scale_, canvasShapes()), true);
+  execute(cmd, planner_.plan(record, scale_, canvasShapes()), true);
   for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     copyTexture(cmd, target.image, {0, 0, target.width, target.height}, target.snapshot, 0, 0);
@@ -385,65 +334,62 @@ void RecordRasterizer::ensureBuffer(Buffer &buffer, std::uint32_t bytes) {
   if (buffer.buffer != nullptr && buffer.size >= bytes) {
     return;
   }
-  if (buffer.buffer != nullptr) {
-    SDL_ReleaseGPUBuffer(device_, buffer.buffer);
-  }
+  device_.release(buffer.buffer);
   SDL_GPUBufferCreateInfo info = {};
-  info.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ; // every record buffer is read by the vertex stage
+  info.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
   info.size = std::max(bytes, buffer.size * 2);
-  buffer.buffer = SDL_CreateGPUBuffer(device_, &info);
+  buffer.buffer = SDL_CreateGPUBuffer(device_.handle(), &info);
   GPUCHK(buffer.buffer, "record storage buffer");
   buffer.size = info.size;
 }
 
-void RecordRasterizer::ensureUpload(std::uint32_t bytes) {
-  if (upload_ != nullptr && uploadSize_ >= bytes) {
+void RecordRasterizer::ensureTransfer(SDL_GPUTransferBuffer *&transfer,
+                                      std::uint32_t &size,
+                                      SDL_GPUTransferBufferUsage usage,
+                                      std::uint32_t bytes) {
+  if (transfer != nullptr && size >= bytes) {
     return;
   }
-  if (upload_ != nullptr) {
-    SDL_ReleaseGPUTransferBuffer(device_, upload_);
-  }
-  SDL_GPUTransferBufferCreateInfo info = {};
-  info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-  info.size = std::max(bytes, uploadSize_ * 2);
-  upload_ = SDL_CreateGPUTransferBuffer(device_, &info);
-  GPUCHK(upload_, "record upload buffer");
-  uploadSize_ = info.size;
+  device_.release(transfer);
+  size = std::max(bytes, size * 2);
+  transfer = device_.makeTransferBuffer(usage, size);
 }
 
-void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const RecordRasterPlan &plan, bool inBetween) {
+void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween) {
   if (plan.batches.empty()) {
     return;
   }
-  std::array<std::uint32_t, kRecordPlanes> firstQuad{};
+  std::array<std::uint32_t, gpu::kRecordPlanes> firstQuad{};
   std::size_t quadCount = 0;
-  for (std::size_t p = 0; p < kRecordPlanes; p++) {
+  for (std::size_t p = 0; p < gpu::kRecordPlanes; p++) {
     firstQuad[p] = static_cast<std::uint32_t>(quadCount);
     quadCount += plan.quads[p].size();
   }
-  const std::uint32_t quadBytes = paddedBytes(quadCount * sizeof(RecordQuad));
-  const std::uint32_t opBytes = paddedBytes(plan.ops.size() * sizeof(RecordOp));
+  const std::uint32_t quadBytes = paddedBytes(quadCount * sizeof(gpu::RecordQuad));
+  const std::uint32_t opBytes = paddedBytes(plan.ops.size() * sizeof(gpu::RecordOp));
   const std::uint32_t clutBytes = paddedBytes(plan.clutPool.size() * sizeof(std::uint16_t));
   const std::uint32_t pixelBytes = paddedBytes(plan.uploadPool.size() * sizeof(std::uint16_t));
   ensureBuffer(quads_, quadBytes);
   ensureBuffer(ops_, opBytes);
   ensureBuffer(cluts_, clutBytes);
   ensureBuffer(pixels_, pixelBytes);
-  ensureUpload(quadBytes + opBytes + clutBytes + pixelBytes);
+  ensureTransfer(
+      upload_, uploadSize_, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, quadBytes + opBytes + clutBytes + pixelBytes);
 
-  auto *staging = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(device_, upload_, true));
+  auto *staging = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(device_.handle(), upload_, true));
   GPUCHK(staging, "record upload map");
-  std::memset(staging, 0, quadBytes + opBytes + clutBytes + pixelBytes);
-  for (std::size_t p = 0; p < kRecordPlanes; p++) {
-    std::memcpy(
-        staging + firstQuad[p] * sizeof(RecordQuad), plan.quads[p].data(), plan.quads[p].size() * sizeof(RecordQuad));
+  // The padding past each array is never read.
+  std::uint8_t *quads = staging;
+  for (std::size_t p = 0; p < gpu::kRecordPlanes; p++) {
+    std::memcpy(quads, plan.quads[p].data(), plan.quads[p].size() * sizeof(gpu::RecordQuad));
+    quads += plan.quads[p].size() * sizeof(gpu::RecordQuad);
   }
-  std::memcpy(staging + quadBytes, plan.ops.data(), plan.ops.size() * sizeof(RecordOp));
+  std::memcpy(staging + quadBytes, plan.ops.data(), plan.ops.size() * sizeof(gpu::RecordOp));
   std::memcpy(staging + quadBytes + opBytes, plan.clutPool.data(), plan.clutPool.size() * sizeof(std::uint16_t));
   std::memcpy(staging + quadBytes + opBytes + clutBytes,
               plan.uploadPool.data(),
               plan.uploadPool.size() * sizeof(std::uint16_t));
-  SDL_UnmapGPUTransferBuffer(device_, upload_);
+  SDL_UnmapGPUTransferBuffer(device_.handle(), upload_);
 
   SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
   std::uint32_t offset = 0;
@@ -460,9 +406,9 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const RecordRasterPlan
 
   const int s = plan.scale;
   const int planes = 1 + static_cast<int>(canvases_.size());
-  for (const RecordBatch &batch : plan.batches) {
+  for (const gpu::RecordBatch &batch : plan.batches) {
     for (int p = 0; p < planes; p++) {
-      const RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
+      const gpu::RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
       if (range.endQuad == range.firstQuad) {
         continue;
       }
@@ -478,7 +424,8 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const RecordRasterPlan
       SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &colour, 1, nullptr);
       SDL_BindGPUGraphicsPipeline(pass, pipeline_);
       SDL_BindGPUVertexStorageBuffers(pass, 0, &quads_.buffer, 1);
-      const SDL_GPUTextureSamplerBinding snapshots[2] = {{target.snapshot, sampler_}, {vram_.snapshot, sampler_}};
+      SDL_GPUSampler *nearest = device_.nearestSampler();
+      const SDL_GPUTextureSamplerBinding snapshots[2] = {{target.snapshot, nearest}, {vram_.snapshot, nearest}};
       SDL_BindGPUFragmentSamplers(pass, 0, snapshots, 2);
       SDL_GPUBuffer *fragmentBuffers[3] = {ops_.buffer, cluts_.buffer, pixels_.buffer};
       SDL_BindGPUFragmentStorageBuffers(pass, 0, fragmentBuffers, 3);
@@ -491,7 +438,7 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const RecordRasterPlan
     }
     // Every pass of the batch read the snapshots as they were; refresh them only now.
     for (int p = 0; p < planes; p++) {
-      const RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
+      const gpu::RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
       const Plane &target = plane(p);
       copyTexture(cmd,
                   inBetween ? target.inBetween : target.image,
@@ -503,57 +450,18 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const RecordRasterPlan
   }
 }
 
-void RecordRasterizer::download(SDL_GPUCommandBuffer *cmd, const RecordPicture &picture) {
+MappedTransfer RecordRasterizer::download(const RecordPicture &picture) {
   const RecordRect &rect = picture.rect;
   const int s = std::max(scale_, 1);
-  const auto width = static_cast<std::uint32_t>((rect.x1 - rect.x0) * s);
-  const auto height = static_cast<std::uint32_t>((rect.y1 - rect.y0) * s);
-  const std::uint32_t bytes = std::max<std::uint32_t>(width * height * 2, 16);
-  if (readback_ == nullptr || readbackSize_ < bytes) {
-    if (readback_ != nullptr) {
-      SDL_ReleaseGPUTransferBuffer(device_, readback_);
-    }
-    SDL_GPUTransferBufferCreateInfo info = {};
-    info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
-    info.size = bytes;
-    readback_ = SDL_CreateGPUTransferBuffer(device_, &info);
-    GPUCHK(readback_, "record readback buffer");
-    readbackSize_ = bytes;
+  const SDL_Rect region{rect.x0 * s, rect.y0 * s, (rect.x1 - rect.x0) * s, (rect.y1 - rect.y0) * s};
+  if (picture.texture == nullptr || region.w <= 0 || region.h <= 0) {
+    return {};
   }
-  downloadRect_ = rect;
-  if (picture.texture == nullptr || width == 0 || height == 0) {
-    downloadRect_ = {};
-    return;
-  }
-  SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
-  SDL_GPUTextureRegion source = {};
-  source.texture = picture.texture;
-  source.x = static_cast<Uint32>(rect.x0 * s);
-  source.y = static_cast<Uint32>(rect.y0 * s);
-  source.w = width;
-  source.h = height;
-  source.d = 1;
-  SDL_GPUTextureTransferInfo destination = {};
-  destination.transfer_buffer = readback_;
-  destination.pixels_per_row = width;
-  destination.rows_per_layer = height;
-  SDL_DownloadFromGPUTexture(copy, &source, &destination);
-  SDL_EndGPUCopyPass(copy);
+  ensureTransfer(readback_,
+                 readbackSize_,
+                 SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
+                 static_cast<std::uint32_t>(region.w) * static_cast<std::uint32_t>(region.h) * 2);
+  return device_.download(picture.texture, region, readback_, "record download");
 }
 
-std::vector<std::uint16_t> RecordRasterizer::downloaded() {
-  const int s = std::max(scale_, 1);
-  const auto count = static_cast<std::size_t>((downloadRect_.x1 - downloadRect_.x0) * s) *
-                     static_cast<std::size_t>((downloadRect_.y1 - downloadRect_.y0) * s);
-  std::vector<std::uint16_t> out(count);
-  if (count == 0) {
-    return out;
-  }
-  const auto *mapped = static_cast<const std::uint16_t *>(SDL_MapGPUTransferBuffer(device_, readback_, false));
-  GPUCHK(mapped, "record readback map");
-  std::memcpy(out.data(), mapped, count * sizeof(std::uint16_t));
-  SDL_UnmapGPUTransferBuffer(device_, readback_);
-  return out;
-}
-
-} // namespace psx::gpu
+} // namespace psx::render

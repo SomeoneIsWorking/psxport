@@ -1,26 +1,28 @@
-// gpu_vk_record_raster.h — FrameRecords rasterized in record order into one VRAM image.
+// record_rasterizer.h — FrameRecords rasterized in record order into one VRAM image.
 #pragma once
 
 #include "frame_record.h"
 #include "record_raster_setup.h"
+#include "render_device.h"
 
 #include <SDL3/SDL_gpu.h>
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
 
-namespace psx::gpu {
+namespace psx::render {
 
 // A texture and the rect of it to show, in native pixels; the texture holds them at the image scale.
 struct RecordPicture {
   SDL_GPUTexture *texture = nullptr;
-  RecordRect rect;
+  gpu::RecordRect rect;
 };
 
 // What a present shows: the guest display (native VRAM pixels) and the columns added each side of it.
 struct RecordView {
-  RecordRect display;
+  gpu::RecordRect display;
   int margin = 0;
 };
 
@@ -30,7 +32,7 @@ struct RecordView {
 // the VRAM image stays exactly the device's, and textures and copies read only it.
 class RecordRasterizer {
 public:
-  explicit RecordRasterizer(SDL_GPUDevice *device);
+  explicit RecordRasterizer(RenderDevice &device);
   ~RecordRasterizer();
   RecordRasterizer(const RecordRasterizer &) = delete;
   RecordRasterizer &operator=(const RecordRasterizer &) = delete;
@@ -46,8 +48,8 @@ public:
 
   // Rasterizes `record` onto copies of the VRAM state before it and shows `view` of them, leaving the
   // chain untouched. That state is the image when `record` follows the last applied record, or the
-  // kept state before the last applied record with entries when `record` is that one. False, with nothing drawn,
-  // when neither holds or `view` has no canvas yet.
+  // kept state before the last applied record with entries when `record` is that one. False, with
+  // nothing drawn, when neither holds or `view` has no canvas yet.
   bool drawInBetween(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record, int scale, const RecordView &view);
 
   // One present: `composed` when given and drawable, then with `advanceToRecord` the image is brought to
@@ -61,10 +63,8 @@ public:
             int scale,
             const RecordView &view);
 
-  // Records a download of `picture` at the image scale; read it after the submit.
-  void download(SDL_GPUCommandBuffer *cmd, const RecordPicture &picture);
-  // The last download, row-major halfwords, (width * scale) x (height * scale).
-  std::vector<std::uint16_t> downloaded();
+  // `picture` at the image scale as row-major halfwords, after everything submitted before it.
+  MappedTransfer download(const RecordPicture &picture);
 
   SDL_GPUTexture *image() const {
     return vram_.image;
@@ -106,7 +106,7 @@ private:
     int originY = 0;
   };
   struct Canvas {
-    RecordCanvas shape;
+    gpu::RecordCanvas shape;
     Plane plane;
     std::uint64_t shown = 0;
   };
@@ -117,29 +117,38 @@ private:
                const present::FrameRecord &record,
                bool deviceAhead,
                std::span<const std::uint16_t> vram);
-  Plane makePlane(const RecordCanvas &shape);
+  Plane makePlane(const gpu::RecordCanvas &shape);
   void releasePlane(Plane &plane);
   // Keeps a canvas for `view`'s display, created from the image with empty margins.
   void showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &view);
   void seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas);
   Canvas *canvasFor(const RecordView &view);
-  std::vector<RecordCanvas> canvasShapes() const;
+  // The shapes the planner draws into, in plane order.
+  std::span<const gpu::RecordCanvas> canvasShapes();
   Plane &plane(int index);
   void present(const RecordView &view, bool inBetween);
   // Replaces the presented picture by the field `record` drew, when it draws one field per frame.
   void selectField(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
-  void execute(SDL_GPUCommandBuffer *cmd, const RecordRasterPlan &plan, bool inBetween);
-  void copyTexture(
-      SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *from, const RecordRect &source, SDL_GPUTexture *to, int toX, int toY);
+  void execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween);
+  void copyTexture(SDL_GPUCommandBuffer *cmd,
+                   SDL_GPUTexture *from,
+                   const gpu::RecordRect &source,
+                   SDL_GPUTexture *to,
+                   int toX,
+                   int toY);
   void ensureBuffer(Buffer &buffer, std::uint32_t bytes);
-  void ensureUpload(std::uint32_t bytes);
+  void ensureTransfer(SDL_GPUTransferBuffer *&transfer,
+                      std::uint32_t &size,
+                      SDL_GPUTransferBufferUsage usage,
+                      std::uint32_t bytes);
   void releaseImage();
 
-  SDL_GPUDevice *device_;
+  RenderDevice &device_;
   SDL_GPUGraphicsPipeline *pipeline_ = nullptr;
-  SDL_GPUSampler *sampler_ = nullptr;
+  gpu::RecordPlanner planner_;
   Plane vram_;
   std::vector<Canvas> canvases_;
+  std::array<gpu::RecordCanvas, gpu::kRecordMaxCanvases> shapes_{};
   std::uint64_t shows_ = 0;
   RecordPicture presented_;
   RecordPicture woven_;
@@ -157,7 +166,6 @@ private:
   std::uint32_t uploadSize_ = 0;
   SDL_GPUTransferBuffer *readback_ = nullptr;
   std::uint32_t readbackSize_ = 0;
-  RecordRect downloadRect_;
 
   bool chained_ = false; // the image holds the device's VRAM after record `applied_`
   std::uint64_t applied_ = 0;
@@ -167,4 +175,4 @@ private:
   std::uint64_t resynced_ = 0;
 };
 
-} // namespace psx::gpu
+} // namespace psx::render

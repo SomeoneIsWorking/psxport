@@ -12,22 +12,17 @@ namespace psx::present {
 // entries the composer removed must draw something in their place. One that draws nothing is dropped.
 class PresentLedger {
 public:
-  // The producers `composed` dropped relative to `shown`, each logged; `fatal` aborts on a drop.
-  std::vector<std::uint32_t>
-  reconcile(const FrameRecord &shown, const FrameRecord &composed, std::uint64_t fence, bool fatal);
+  // Logs each producer `composed` dropped relative to `shown`; `fatal` aborts on a drop.
+  void reconcile(const FrameRecord &shown, const FrameRecord &composed, std::uint64_t fence, bool fatal);
   // The run's totals, with the denominator, so a run that composed nothing cannot read as clean.
   void report() const;
-
-  std::uint64_t framesReconciled() const {
-    return framesReconciled_;
-  }
-  std::uint64_t framesDropped() const {
-    return framesDropped_;
-  }
 
 private:
   std::uint64_t framesReconciled_ = 0;
   std::uint64_t framesDropped_ = 0;
+  // Sorted producer keys of each keyed primitive, reused across frames.
+  std::vector<std::uint32_t> recorded_;
+  std::vector<std::uint32_t> presented_;
 };
 
 } // namespace psx::present

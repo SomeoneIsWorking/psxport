@@ -21,13 +21,13 @@
 
 class Core;
 class Game;
-class GuestWidescreenProjection;
 namespace psx::cd {
 struct StockReadLanding;
 }
 namespace psx::present {
+class GuestWidescreenProjection;
 class StateProducer;
-}
+} // namespace psx::present
 namespace psx::state {
 class NativeStatePort;
 } // namespace psx::state
@@ -181,7 +181,7 @@ public:
     return 0;
   }
   // Optional title-owned guest projection.
-  virtual const GuestWidescreenProjection *guestWidescreenProjection() const {
+  virtual const psx::present::GuestWidescreenProjection *guestWidescreenProjection() const {
     return nullptr;
   }
   // The title's logo for its picker panel, read from its live machine.

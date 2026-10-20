@@ -10,7 +10,9 @@
 #include <memory>
 #include <vector>
 
-class GpuDevice;
+namespace psx::render {
+class RenderDevice;
+} // namespace psx::render
 
 namespace psx::host {
 
@@ -36,16 +38,14 @@ public:
   // Built on first ask and kept: a panel asks every frame, but the logo never changes.
   // Returns `*this` when there is nothing to magnify.
   const PanelLogo &magnifiedNearest(int factor) const;
-  // Created on first use against `device` and destroyed with this object. Const because the
-  // pixels never change: filling the texture cache does not alter the image.
-  SDL_GPUTexture *texture(GpuDevice &device) const;
+  // Created on first use against `device` and destroyed with this object.
+  SDL_GPUTexture *texture(psx::render::RenderDevice &device) const;
 
 private:
   int m_width;
   int m_height;
   std::vector<std::uint8_t> m_rgba;
-  // A texture belongs to the device that made it, and is released through that one.
-  mutable SDL_GPUDevice *m_textureDevice = nullptr;
+  mutable psx::render::RenderDevice *m_textureDevice = nullptr;
   mutable SDL_GPUTexture *m_texture = nullptr;
   // Lazy, and keyed by the factor it was built for; a logo is immutable, so one copy per factor
   // suffices. A factor of 0 means "not built yet".

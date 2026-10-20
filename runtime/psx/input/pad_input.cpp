@@ -2,18 +2,19 @@
 #include "pad_input.h"
 #include "config_vars.h"
 #include "core.h"
-#include "gpu_vk_device.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "render_device.h"
 #include <lucent/log.h>
 
 void Pad::init() {
   buttons = psx::input::kNoButtons;
 }
 
-// A leg with no window keeps whatever forced or replayed mask it resolves; the drain still runs so a close ends the run.
+// A leg with no window keeps whatever forced or replayed mask it resolves; the drain still runs so a close ends the
+// run.
 void Pad::pollHostInput() {
-  const bool windowed = game->gpu_dev.windowed();
+  const bool windowed = game->renderDevice.windowed();
   const uint16_t hostMask = mHost.poll(windowed);
   if (!windowed) {
     return;
@@ -51,7 +52,7 @@ void Pad::driveRelease() {
 
 void Pad::serviceFrame() {
   Core *c = &game->core;
-  const bool windowed = game->gpu_dev.windowed();
+  const bool windowed = game->renderDevice.windowed();
   pollHostInput();
 
   if (!mForcedRead) {

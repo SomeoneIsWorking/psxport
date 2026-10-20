@@ -3,17 +3,17 @@
 // widen is otherwise indistinguishable from one that widened).
 #pragma once
 
-#include <cstdint>
+#include "guest_widescreen_projection.h"
 
-#include "mods.h" // ASPECT_4_3
+#include <cstdint>
 
 class Core;
 
 namespace psx::picture {
 
-// What this run renders. The -1 initial state makes the first present a change.
+// What this run renders. The -1 widths make the first present a change.
 struct Geometry {
-  int aspect = -1;
+  present::PresentationAspect aspect = present::PresentationAspect::Standard4x3;
   int nativeWidth = -1;
   int renderWidth = -1;
 
@@ -34,8 +34,9 @@ enum class WideOutcome : std::uint8_t {
   RefusedUnexplained   // requested and possible, and the width still did not grow
 };
 
-// `aspect` is the requested aspect (the title's own, else Mods::aspect), as an ASPECT_* value.
-WideOutcome classifyWide(int aspect, bool titleProjects, bool recordPath, int nativeWidth, int renderWidth);
+// `aspect` is the requested aspect: the title's own, else the player's setting.
+WideOutcome
+classifyWide(present::PresentationAspect aspect, bool titleProjects, bool recordPath, int nativeWidth, int renderWidth);
 
 // The reason for a refused outcome in one sentence; empty for the two quiet outcomes.
 const char *wideOutcomeReason(WideOutcome outcome);

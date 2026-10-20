@@ -29,7 +29,7 @@ FramePresenter                                seals N, keeps the last 3 drawing 
    │  every present: FrameComposer(S, producer states S' and S, t)
 RecordRasterizer (VK)                         replays N into the VRAM image; draws the composed frame
    │
-DisplayPresenter → gpu_vk present             one present per frame or in-between; captures, counters
+DisplayPresenter → RenderState          one present per frame or in-between; captures, counters
    │
 present plan / sink                           viewport, letterbox, window
 ```
@@ -49,14 +49,15 @@ present plan / sink                           viewport, letterbox, window
 | `gpu/ordering_table.*` | OT node decode and the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
 | `present/packet_chains.*` | a body's packet chains (one chain, or a bucket table of any stride and head offset) read back as primitives under the one E1 rule |
 | `frame/frame_presenter.*` | N and the last three records that drew, which record each present shows, cadence, both presents through the backend |
-| `present/display_presenter.*` | `DisplayPresenter` on `Game`: each present and in-between through `gpu_vk_present`, the present counters, `PSXPORT_SHOT_AT`/`PRESENT_SHOT_AT`/`GPU_DUMP`/`GRAMDUMP` captures |
+| `present/display_presenter.*` | `DisplayPresenter` on `Game`: each present and in-between through its `RenderState`, the present counters, `PSXPORT_SHOT_AT`/`PRESENT_SHOT_AT`/`GPU_DUMP` captures |
+| `gpu/record_geometry.*` | the VRAM rect an entry writes; a flat rectangle's extent |
 | `gpu/record_raster_setup.*` | a record's coverage and interpolants by `gpu.c`'s rules, at scale, per plane, in read-safe batches |
 | `gpu/record_raster_regions.h` | written-pixel map and VRAM-wrapped rects the batch split reads |
-| `gpu/gpu_vk_record_raster.*` | rasterizes a record in order into the VRAM image and display canvases; `presented()` |
-| `gpu/gpu_vk_record_present.cpp` | `RenderPath::Record`: current record to the present source, `shot`, `recordcheck` |
-| `gpu/gpu_vk_present.cpp` | one Game's present: the display picture (record image or device VRAM) through the present plan to the sink |
-| `gpu/gpu_vk_readback.cpp` | what was presented, read back: `shot`, present shot, VRAM regions |
-| `gpu/gpu_vk_device.*`, `gpu_vk_submit.cpp`, `gpu_vk_window.*` | the SDL3 GPU device, its submits and fault latch, the one window and swapchain |
+| `render/record_rasterizer.*` | rasterizes a record in order into the VRAM image and display canvases; `presented()` |
+| `render/record_present.cpp` | `RenderPath::Record`: current record to the present source, `shot`, `recordcheck` |
+| `render/render_state.h`, `render_present.cpp`, `render_screen.cpp` | `RenderState`, one Game's present: the display picture (record image or device VRAM) or a host picture through the present plan into the present image, then to the sink or a pane |
+| `render/render_readback.cpp` | what was presented, read back: `shot`, present shot, VRAM regions |
+| `render/render_device.*`, `render_submit.cpp`, `render_window.*` | `RenderDevice`: the SDL3 GPU device, its samplers and pipelines, uploads, downloads, submits and fault latch, the one window and swapchain, the RmlUi library |
 | `present/guest_widescreen_projection.*` | the one widescreen API: title aspect and guest projection widening |
 
 Draw order is OT slot order (below). There are no bands, layers or painter ranges.
@@ -86,11 +87,11 @@ name is refused with a warning and the Core stays on `record`.
 - **Raster.** The image is VRAM at scale S (RG8 1555). A record applies only on top of the record
   before it (`sequence == applied + 1`, complete, device not ahead); otherwise the device VRAM is
   uploaded. Sequence 0 is the presenter's empty record; the device's records start at 1. Coverage and interpolant bases are computed on the CPU exactly as `gpu.c` does at S;
-  `record.frag` evaluates texel, modulation, dither, blend and mask per pixel. Each op reads a
+  `record.frag` evaluates texel, modulation, blend and mask per pixel. It does not dither: the host picture keeps full colour precision while the device dithers as the guest asks, so `recordcheck` counts a dithered draw's pixels as mismatched by design. Each op reads a
   snapshot of the image; an op whose reads overlap pixels written earlier in its batch starts a new
   batch, so reads see VRAM as the device did.
 - **Scale.** S is the internal-resolution setting (`setires`, `mods.ires`). Vertices and the draw
-  area scale; texels, CLUTs and dither stay on the native grid; sprites, lines and fills cover
+  area scale; texels and CLUTs stay on the native grid; sprites, lines and fills cover
   S×S blocks; uploads replicate, copies run at full resolution. 24bpp display keeps the device picture.
   `record.frag` finds a scaled pixel's native pixel by integer floor division; a float divide is inexact
   at S = 3 and puts each block's first row and column in the block before.
@@ -274,7 +275,7 @@ with black margins and reseeded after a resync. Each record entry is planned onc
 
 - A primitive whose draw area spans the buffer's columns (x range equal, rows inside the buffer; a title may inset its rows) draws into the
   canvas with its x clip widened by M. Any other primitive lands in the canvas only inside the buffer.
-- A fill spanning the buffer's columns also fills the margins on its rows.
+- A fill spanning the buffer's columns also fills the margins on its rows. So does a flat untextured rectangle (a sprite, or an axis-aligned quad) whose columns are exactly the buffer's, such as a screen fade (`addCanvasMargins`, psx-spyro issue 0199).
 - Copies and uploads land in the buffer region 1:1.
 - **Render-to-texture.** Textures, CLUTs and copy sources always read the VRAM image, which stays
   exactly the device's. A draw into the display buffer that the guest later samples is read at its
@@ -287,7 +288,7 @@ displayed buffer evicts one canvas, whose margins are black until redrawn.
 ### The guest projection latch
 
 A runtime may return a `GuestWidescreenProjection`. Declaring an aspect widens nothing: the title calls
-`gpu_vk_latch_guest_projection` at its measured guest projection publication site and applies the
+`present::latchGuestProjection` at its measured guest projection publication site and applies the
 returned plan to its own projection, culling and clipping. The latch takes three distinct title facts:
 the GP1 display extent (decoded by the framework, including the 368-dot mode), the title-authored
 projection extent, and the title-authored draw/clip width. `guest_projection_plan` widens each extent
@@ -327,18 +328,18 @@ count, then waits for the host deadline. A title with its own field scheduler ad
 which waits without creating a field. In-betweens split the host wait of the same fields. NOPACE
 suppresses host waiting only. Each `Game` owns its `FramePacer` and deadline.
 
-Each present, real or in-between, is built, then paced, then shown (`FramePresentationBackend::buildReal`
-or `buildInBetween`, `pace`, `show`), so the show lands on its deadline whatever guest step, composition
+Each present, real or in-between, is built, then paced, then shown (`FramePresenter::presentCurrent`:
+`DisplayPresenter::build` or `buildInBetween`, the pace, `show`), so the show lands on its deadline whatever guest step, composition
 or build came before it. Showing before the wait offsets the present by that work, and the two presents
 of a 30 Hz frame then alternate short and long intervals; building after the wait makes a present late by
 its build (issue 0161). The line between the two is the swapchain:
 
-- **Build** (`DisplayPresenter::build`, `buildInBetween`, `buildHostPicture` → `GpuVkState::build_display`
-  or `build_image`): the overlay's CPU frame, the record raster (`present_record` →
+- **Build** (`DisplayPresenter::build`, `buildInBetween`, `buildHostPicture` → `RenderState::buildDisplay`
+  or `buildImage`): the overlay's CPU frame, the record raster (`presentRecord` →
   `RecordRasterizer::show`, whose plan grows with the internal scale), the device VRAM upload or the host
   picture upload, the letterboxed pass into the present image, and the submit of that command buffer.
   The composed frame (`FramePresenter::composedRecord`) lives only through the build.
-- **Show** (`DisplayPresenter::show` → `GpuVkState::show`): a command buffer that acquires the swapchain
+- **Show** (`DisplayPresenter::show` → `RenderState::show`): a command buffer that acquires the swapchain
   image without waiting (`acquireSink`), blits the present image letterboxed with the overlay over it,
   and submits, which presents. `GpuPerf::presented` is stamped here. The swapchain is MAILBOX, so
   neither the acquire nor the submit waits for a vblank; a build left in flight on the GPU only delays
@@ -350,13 +351,13 @@ once. A movie frame is decoded and built before its field wait and shown after i
 `showFrame`); Tomba's SCEA card builds its host picture, paces, then shows.
 
 A pane present follows the same order through its host (`psx::present::PaneHost`, attached with
-`TitleSession::setPaneHost` → `GpuVkState::setPaneHost`): `build_display` calls the host's `built`
+`TitleSession::setPaneHost` → `RenderState::setPaneHost`): `buildDisplay` calls the host's `built`
 after the pane's build, and `show` calls its `show` after the pane's wait. The picker attaches itself to
 the selected, settled panel and composites at `built` and shows the composite at `show`, so its cadence
 is that panel's presents, in-betweens included. The picker's loop builds, paces with
 `FramePacer::hostScreenPace` and shows its composite itself only on an iteration where no panel
 presented, and skips the pace when the panel's step already paced its fields (`title-host.md`). A pane
-samples the session's live present image (`GpuVkState::newestPresentedPicture`; `title-host.md` for
+samples the session's live present image (`RenderState::newestPresentedPicture`; `title-host.md` for
 the fallback).
 
 A pane's present image is filled, not letterboxed: `PresentInputs::fill` centre-crops the picture to

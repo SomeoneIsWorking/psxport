@@ -56,7 +56,7 @@ public:
   psx::game::GameRuntime &runtime; // the title interface
 
   // ---- Per-Core host-only rendering state. ----
-  RenderSubstrate rsub;
+  psx::present::RenderSubstrate rsub;
   // Nested-call attribution, owned per Core.
   psx::cpu::GuestCallAttribution callAttribution;
   // The run's resumable-guest-call tally. Per-Core like every other counter here: a process that runs

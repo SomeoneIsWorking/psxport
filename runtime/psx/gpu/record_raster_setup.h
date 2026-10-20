@@ -1,27 +1,24 @@
 // record_raster_setup.h — a FrameRecord turned into GPU draw work by gpu.c's own coverage rules.
 //
-// Coverage (triangle edge walk, sprite and line stepping, fill/copy/upload extents) and every
-// interpolant base are computed here on the CPU exactly as gpu.c computes them, at an integer scale.
-// The fragment shader (shaders_gpu/record.frag) only evaluates per-pixel texel, modulation, dither,
-// blend and mask. Ops whose reads overlap pixels written earlier in the same batch start a new batch,
-// so every read sees VRAM exactly as the device would.
+// Each primitive costs one op and a constant number of quads whatever the scale: the CPU sets up gpu.c's
+// integer edge and interpolant inputs at the target scale, and shaders_gpu/record.frag evaluates coverage,
+// texel, modulation, blend and mask per pixel. Ops whose reads overlap pixels written earlier in the same
+// batch start a new batch, so every read sees VRAM exactly as the device would. This header is the op
+// layout's one source; tools/gen_gpu_shaders.py writes it into the shader as record_op.glsl.
 #pragma once
 
 #include "frame_record.h"
-#include "vram_rect.h"
+#include "record_geometry.h"
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
 namespace psx::gpu {
 
-inline constexpr int kRecordVramWidth = 1024;
-inline constexpr int kRecordVramHeight = 512;
-
-// One op's parameters as record.frag reads them; field indices are RecordOpField.
-inline constexpr int kRecordOpWords = 32;
+inline constexpr int kRecordOpWords = 40;
 using RecordOp = std::array<std::uint32_t, kRecordOpWords>;
 
 enum class RecordOpKind : std::uint8_t { Triangle = 0, Sprite = 1, LinePixel = 2, Fill = 3, Copy = 4, Upload = 5 };
@@ -43,6 +40,18 @@ enum RecordOpField : std::uint8_t {
   kOpSourceX = 24, // copy source origin, native pixels; sprite u0; upload width
   kOpSourceY = 25, // copy source; sprite v0; upload height
   kOpPool = 26,    // upload pixel pool halfword offset
+  kOpParts = 22,   // triangle: its two RecordPartField blocks, upper then lower
+};
+
+// A triangle part's words from kOpParts + part * kPartWords. Edges are gpu.c's 32.32 x at interpolant row
+// 0, low word first; row r's x is edge + r * step.
+enum RecordPartField : std::uint8_t {
+  kPartRowShift = 0, // plotted row minus interpolant row
+  kPartLeft = 1,
+  kPartRight = 3,
+  kPartLeftStep = 5,
+  kPartRightStep = 7,
+  kPartWords = 9,
 };
 
 enum RecordOpFlag : std::uint32_t {
@@ -50,7 +59,6 @@ enum RecordOpFlag : std::uint32_t {
   kOpTextured = 1u << 8,
   kOpModulate = 1u << 9,
   kOpGouraud = 1u << 10,
-  kOpDither = 1u << 11,
   kOpSemi = 1u << 12,
   kOpMaskCheck = 1u << 13,
   kOpMaskSet = 1u << 14,
@@ -62,30 +70,17 @@ enum RecordOpFlag : std::uint32_t {
   kOpFlipY = 1u << 23,
 };
 
-// One rectangle of a plane's pixels belonging to an op, scaled, half open. Interpolant offsets and
-// every op origin are in VRAM space, which record.frag reaches by adding the plane's origin.
+// One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,
+// which record.frag reaches by adding the plane's origin.
 struct RecordQuad {
   std::int32_t x0 = 0;
   std::int32_t y0 = 0;
   std::int32_t x1 = 0;
   std::int32_t y1 = 0;
   std::uint32_t op = 0;
-  std::uint32_t param = 0;     // triangle: x interpolant offset; line pixel: its 15-bit value with bit 15
-  std::uint32_t rowOffset = 0; // triangle: y interpolant offset
-  std::uint32_t unused = 0;
+  std::uint32_t param = 0; // triangle: its part; line pixel: its colour r | g << 8 | b << 16
+  std::uint32_t unused[2] = {};
 };
-
-struct RecordRect {
-  int x0 = 0;
-  int y0 = 0;
-  int x1 = 0; // exclusive
-  int y1 = 0;
-
-  bool operator==(const RecordRect &) const = default;
-};
-
-// `rect` clipped to VRAM; how a display area becomes a buffer rect.
-RecordRect clampedVramRect(VramRect rect);
 
 // The draw area is the buffer: its columns exactly, its rows covered.
 bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect &buffer);
@@ -141,12 +136,25 @@ struct RecordRasterPlan {
   std::span<const std::uint16_t> uploadPool;
 };
 
-// Every entry of a complete record, in order, into VRAM and into each canvas it reaches. A primitive
-// whose draw area spans exactly a canvas's buffer columns and covers its rows draws there with the
-// horizontal clip widened by the margin; any other write lands in a canvas only where it lands in the
-// buffer, except a fill spanning the buffer's columns, which spans the canvas's.
-RecordRasterPlan planRecord(const present::FrameRecord &record, int scale, std::span<const RecordCanvas> canvases = {});
-// The whole of `vram` (1024x512) written over the image; how a record that cannot be replayed is shown.
-RecordRasterPlan planVramUpload(std::span<const std::uint16_t> vram, int scale);
+// Plans records into reused buffers; a plan stays valid until the next call.
+class RecordPlanner {
+public:
+  RecordPlanner();
+  ~RecordPlanner();
+  RecordPlanner(const RecordPlanner &) = delete;
+  RecordPlanner &operator=(const RecordPlanner &) = delete;
+
+  // Every entry of a complete record, in order, into VRAM and into each canvas it reaches. A primitive
+  // whose draw area spans exactly a canvas's buffer columns and covers its rows draws there with the
+  // horizontal clip widened by the margin; any other write lands in a canvas only where it lands in the
+  // buffer, except a fill spanning the buffer's columns, which spans the canvas's.
+  const RecordRasterPlan &plan(const present::FrameRecord &record, int scale, std::span<const RecordCanvas> canvases);
+  // The whole of `vram` written over the image; how a record that cannot be replayed is shown.
+  const RecordRasterPlan &planVramUpload(std::span<const std::uint16_t> vram, int scale);
+
+private:
+  class Builder;
+  std::unique_ptr<Builder> builder_;
+};
 
 } // namespace psx::gpu

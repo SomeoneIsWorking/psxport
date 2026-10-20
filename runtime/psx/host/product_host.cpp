@@ -54,7 +54,7 @@ std::vector<std::string> splitSlugs(const std::string &text) {
 
 ProductHost::Process::Process(const TitleCatalog &catalog, const psx::config::Config &launch)
     : config(launch), windowTitle(catalog.productName()), budget(RunBudget::fromConfig(config)),
-      services{config, presentation.device(), quit, budget} {
+      services{config, presentation, quit, budget} {
   // The window belongs to the product, not to whichever Game brought the device up first.
   presentation.setWindowTitle(windowTitle.c_str());
   psx::debug::armMemoryCensus();

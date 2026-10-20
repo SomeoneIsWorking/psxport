@@ -156,19 +156,20 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/debug/field_digest.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_pacer.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/timing.cpp
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_api.cpp  # the Core*-facing entry points over the GpuVkState methods
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_readback.cpp # GPU->host capture: shot / present_shot / the VRAM dumps
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_device.cpp # the SDL GPU device: bring-up, samplers, present pipelines
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_submit.cpp # command-buffer submit and the persisted GPU fault latch
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_present.cpp # a Game's present targets: the presented image, letterbox and swapchain
+  ${PSXPORT_ROOT}/runtime/psx/render/render_api.cpp # the resolution plan
+  ${PSXPORT_ROOT}/runtime/psx/render/render_readback.cpp # present shot, the pane hold probe and the VRAM captures
+  ${PSXPORT_ROOT}/runtime/psx/render/render_device.cpp # the SDL GPU device: bring-up, samplers, pipelines, transfers
+  ${PSXPORT_ROOT}/runtime/psx/render/render_submit.cpp # command-buffer submit and the persisted GPU fault latch
+  ${PSXPORT_ROOT}/runtime/psx/render/render_present.cpp # a Game's present: build the present image, show it
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_ports.cpp # GP1 writes and DMA2 into the GPU device
   ${PSXPORT_ROOT}/runtime/psx/present/display_presenter.cpp # the guest display to the screen, once per present
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_shader.cpp # SPIR-V shader creation
-  ${PSXPORT_ROOT}/runtime/psx/gpu/record_raster_setup.cpp # FrameRecord coverage and interpolants for the record rasterizer
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_record_raster.cpp # FrameRecord rasterized into one VRAM image
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_record_present.cpp # RenderPath::Record present, shot and recordcheck
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_window.cpp # the ONE window + swapchain for the whole product run
-  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_screen.cpp # present a host screen (title selector) as the whole picture
+  ${PSXPORT_ROOT}/runtime/psx/render/render_shader.cpp # SPIR-V shader creation
+  ${PSXPORT_ROOT}/runtime/psx/gpu/record_geometry.cpp # write extents of record entries
+  ${PSXPORT_ROOT}/runtime/psx/gpu/record_raster_setup.cpp # FrameRecord to record-raster quads and ops
+  ${PSXPORT_ROOT}/runtime/psx/render/record_rasterizer.cpp # FrameRecord rasterized into one VRAM image
+  ${PSXPORT_ROOT}/runtime/psx/render/record_present.cpp # RenderPath::Record present, shot and recordcheck
+  ${PSXPORT_ROOT}/runtime/psx/render/render_window.cpp # the one window for the whole product run
+  ${PSXPORT_ROOT}/runtime/psx/render/render_screen.cpp # a Game's present target: window or pane
   ${PSXPORT_ROOT}/runtime/psx/present/pane_composite.cpp # ONE window frame from SEVERAL sessions' presented pictures
   ${PSXPORT_ROOT}/runtime/psx/present/picture_announce.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_perf.cpp
@@ -224,7 +225,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/platform/watchdog.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/psx_exe_image.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/disc_executable.cpp # a boot stub's hand-off to an executable on its disc
-  ${PSXPORT_ROOT}/runtime/ui/rmlui_overlay.cpp  # RmlUi LIFETIME only — the UI itself is runtime/ui/
+  ${PSXPORT_ROOT}/runtime/ui/rmlui_library.cpp  # RmlUi process state on the render device
+  ${PSXPORT_ROOT}/runtime/ui/rmlui_overlay.cpp  # a Game's RmlUi context and menu document
   ${PSXPORT_ROOT}/runtime/ui/rmlui_render_gpu.cpp
   ${PSXPORT_ROOT}/runtime/ui/rml_text.cpp       # DATA -> RML markup boundary (see rml_text.h)
   # ---- runtime/ui: the overlay's component tree. One file pair per responsibility.
@@ -240,7 +242,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video/world/music/warp status lines
   ${PSXPORT_ROOT}/runtime/ui/choice_navigator.cpp   # the rules of a choose-one list (no RmlUi)
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
-  ${PSXPORT_ROOT}/runtime/psx/core/overlay_glue.cpp
   ${PSXPORT_ROOT}/runtime/psx/present/present_ledger.cpp # recorded vs composed producers of a t = 1 present
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
@@ -294,6 +295,7 @@ target_include_directories(psxport PUBLIC
   ${PSXPORT_ROOT}/${RT}/catalog
   # Public: titles call the GPU device, its ports and the ordering-table walk.
   ${PSXPORT_ROOT}/${RT}/gpu
+  ${PSXPORT_ROOT}/${RT}/render
   # Public: a title's NativeStatePort includes machine_state.h.
   ${PSXPORT_ROOT}/${RT}/state
   ${MED} ${MED}/psx

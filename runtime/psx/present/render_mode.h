@@ -1,8 +1,10 @@
-// RenderMode owns the render path and display-pass write guard for one Core.
+// render_mode.h — RenderMode: the render path and the display-pass write guard for one Core.
 #pragma once
 
 #include <cstdint>
-#include <strings.h> // strcasecmp — render_path_parse
+#include <strings.h>
+
+namespace psx::present {
 
 // Who rasterizes the guest's GPU work. Both paths take every word from the GPU device (Beetle).
 enum class RenderPath : std::uint8_t {
@@ -11,8 +13,6 @@ enum class RenderPath : std::uint8_t {
   // The device's own display area, presented as is: the 4:3 reference.
   Device = 1,
 };
-
-namespace psx::gpu {
 
 inline const char *renderPathName(RenderPath p) {
   switch (p) {
@@ -24,7 +24,7 @@ inline const char *renderPathName(RenderPath p) {
   return "?";
 }
 
-// Parse a path name. Returns false and leaves *out untouched on anything it does not recognise.
+// False, leaving *out untouched, on anything it does not recognise.
 inline bool parseRenderPath(const char *s, RenderPath *out) {
   if (!s || !*s || !out) {
     return false;
@@ -39,8 +39,6 @@ inline bool parseRenderPath(const char *s, RenderPath *out) {
   }
   return false;
 }
-
-} // namespace psx::gpu
 
 class RenderMode {
 public:
@@ -80,3 +78,5 @@ private:
   RenderMode &mMode;
   bool mPrev;
 };
+
+} // namespace psx::present

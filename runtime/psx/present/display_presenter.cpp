@@ -7,10 +7,10 @@
 #include "fs_util.h"
 #include "game.h"
 #include "gpu_device.h"
-#include "gpu_vk.h"
-#include "gpu_vk_internal.h"
 #include "image_writer.h"
 #include "number_text.h"
+#include "picture_announce.h"
+#include "render_state.h"
 
 #include <lucent/log.h>
 
@@ -21,30 +21,6 @@
 
 namespace psx::present {
 namespace {
-
-std::vector<std::uint32_t> parseFrameList(const std::string &text) {
-  std::vector<std::uint32_t> frames;
-  std::size_t begin = 0;
-  while (begin < text.size()) {
-    const std::size_t end = std::min(text.find(',', begin), text.size());
-    const std::string item = text.substr(begin, end - begin);
-    if (!item.empty()) {
-      frames.push_back(static_cast<std::uint32_t>(std::strtoul(item.c_str(), nullptr, 0)));
-    }
-    begin = end + 1;
-  }
-  return frames;
-}
-
-// "frame:path"; an unparsable value leaves the frame at -1.
-void parseFrameAndPath(const std::string &text, long &frame, std::string &path) {
-  const std::size_t colon = text.find(':');
-  if (colon == std::string::npos) {
-    return;
-  }
-  frame = std::strtol(text.c_str(), nullptr, 10);
-  path = text.substr(colon + 1);
-}
 
 // "dir[:every]": a trailing all-digit component is the interval, anything else is part of the path.
 void parseDumpDir(const std::string &text, std::string &dir, int &every) {
@@ -66,34 +42,30 @@ void parseDumpDir(const std::string &text, std::string &dir, int &every) {
   }
 }
 
-bool contains(const std::vector<std::uint32_t> &frames, std::uint32_t frame) {
-  return std::find(frames.begin(), frames.end(), frame) != frames.end();
-}
-
 } // namespace
 
 DisplayPresenter::DisplayPresenter(Core &core)
-    : core_(core), shotFrames_(parseFrameList(psx::config::gpu_shot_frames())),
-      presentShotFrames_(parseFrameList(psx::config::present_shot_frames())) {
-  parseFrameAndPath(psx::config::gpu_ram_dump(), ramDumpFrame_, ramDumpPath_);
+    : core_(core), shotFrames_(psx::config::gpu_shot_frames()), presentShotFrames_(psx::config::present_shot_frames()) {
   parseDumpDir(psx::config::gpu_dump_dir(), displayDumpDir_, displayDumpEvery_);
 }
 
-int DisplayPresenter::presentedHeight(Core &core, int displayHeight) {
+gpu::VramRect DisplayPresenter::presentedRect(Core &core) {
+  const gpu::DisplayArea area = core.gpuDevice().displayArea();
   const int declared = core.runtime.displayHeight();
-  return declared > 0 ? declared : displayHeight;
+  return {area.x, area.y, area.width, declared > 0 ? declared : area.height};
 }
 
 void DisplayPresenter::buildDisplay() {
-  const psx::gpu::DisplayArea area = core_.gpuDevice().displayArea();
-  psx::gpu::buildDisplay(core_, area.x, area.y, area.width, presentedHeight(core_, area.height));
-  core_.game->gpuVk().preseq_capture();
+  const gpu::VramRect rect = presentedRect(core_);
+  core_.game->rml_overlay.newFrame();
+  psx::picture::announceOnChange(core_, rect.width);
+  core_.game->render().buildDisplay(rect);
+  core_.game->render().preseqCapture();
 }
 
 void DisplayPresenter::build(PresentCompletion completion) {
   logVramScan();
   buildDisplay();
-  dumpGuestRam();
   dumpDisplay();
   frame_++;
   pendingCompletion_ = completion;
@@ -105,11 +77,11 @@ void DisplayPresenter::buildInBetween() {
 }
 
 void DisplayPresenter::buildHostPicture(const std::uint8_t *rgba, PixelSize size, float fade) {
-  core_.game->gpuVk().build_image(rgba, size, fade);
+  core_.game->render().buildImage(rgba, size, fade);
 }
 
 void DisplayPresenter::show() {
-  core_.game->gpuVk().show();
+  core_.game->render().show();
   if (!pendingCompletion_) {
     return;
   }
@@ -121,26 +93,28 @@ void DisplayPresenter::show() {
   pendingCompletion_.reset();
 }
 
+// The overlay stays interactive while the game is frozen.
 void DisplayPresenter::repaint() {
-  psx::gpu::repaint(core_);
+  core_.game->rml_overlay.newFrame();
+  core_.game->render().repaint();
 }
 
 void DisplayPresenter::shot(const char *path) {
-  core_.game->gpuVk().shot(path);
+  core_.game->render().shot(path);
 }
 
 void DisplayPresenter::captureFrame() {
   const auto frame = static_cast<std::uint32_t>(frame_);
-  if (contains(shotFrames_, frame)) {
+  if (shotFrames_.contains(frame)) {
     char path[128];
     std::snprintf(path, sizeof path, "scratch/screenshots/shot_%u.ppm", frame);
     lucent::info("shot", "present {} -> arming display capture to {}", frame, path);
-    core_.game->gpuVk().shot(path);
+    core_.game->render().shot(path);
   }
-  if (contains(presentShotFrames_, frame)) {
+  if (presentShotFrames_.contains(frame)) {
     char path[128];
     std::snprintf(path, sizeof path, "scratch/screenshots/present_%u.png", frame);
-    core_.game->gpuVk().present_shot(path);
+    core_.game->render().presentShot(path);
   }
 }
 
@@ -150,15 +124,14 @@ void DisplayPresenter::logVramScan() {
     return;
   }
   const std::span<const std::uint16_t> vram = core_.gpuDevice().vram();
-  int minX = psx::gpu::kDeviceVramWidth;
-  int minY = psx::gpu::kDeviceVramHeight;
+  int minX = gpu::kVramWidth;
+  int minY = gpu::kVramHeight;
   int maxX = -1;
   int maxY = -1;
   long lit = 0;
-  for (int y = 0; y < psx::gpu::kDeviceVramHeight; y++) {
-    for (int x = 0; x < psx::gpu::kDeviceVramWidth; x++) {
-      if ((vram[static_cast<std::size_t>(y) * psx::gpu::kDeviceVramWidth + static_cast<std::size_t>(x)] & 0x7FFF) ==
-          0) {
+  for (int y = 0; y < gpu::kVramHeight; y++) {
+    for (int x = 0; x < gpu::kVramWidth; x++) {
+      if ((vram[static_cast<std::size_t>(y) * gpu::kVramWidth + static_cast<std::size_t>(x)] & 0x7FFF) == 0) {
         continue;
       }
       lit++;
@@ -183,21 +156,6 @@ void DisplayPresenter::logVramScan() {
                 maxY);
 }
 
-// PSXPORT_GRAMDUMP="frame:path": the 2 MB of guest RAM at one present.
-void DisplayPresenter::dumpGuestRam() {
-  if (ramDumpFrame_ < 0 || frame_ != ramDumpFrame_) {
-    return;
-  }
-  std::FILE *file = std::fopen(ramDumpPath_.c_str(), "wb");
-  if (!file) {
-    lucent::warn("gramdump", "f{} could not open {}", frame_, ramDumpPath_);
-    return;
-  }
-  const std::size_t written = std::fwrite(core_.ram, 1, 0x200000, file);
-  std::fclose(file);
-  lucent::info("gramdump", "f{} -> {} ({} bytes of 2097152)", frame_, ramDumpPath_, written);
-}
-
 // PSXPORT_GPU_DUMP=dir[:every]: the device's displayed picture as f<NNNNN>.ppm.
 void DisplayPresenter::dumpDisplay() {
   if (displayDumpDir_.empty() || (frame_ % displayDumpEvery_) != 0) {
@@ -209,9 +167,8 @@ void DisplayPresenter::dumpDisplay() {
     lucent::error("gpudump", "cannot create the parent directory of {}", path);
     return;
   }
-  const psx::gpu::DisplayArea area = core_.gpuDevice().displayArea();
-  const psx::gpu::Rgb24Picture picture =
-      core_.gpuDevice().picture({area.x, area.y, area.width, presentedHeight(core_, area.height)}, area.depth24);
+  const gpu::Rgb24Picture picture =
+      core_.gpuDevice().picture(presentedRect(core_), core_.gpuDevice().displayArea().depth24);
   if (!psx::debug::writeImageRgb24(path, picture.pixels.data(), picture.width, picture.height)) {
     lucent::error("gpudump", "f{} could not write {}", frame_, path);
   }

@@ -1,7 +1,6 @@
 #include "c_subsys.h"
 #include "core.h"
-#include "game.h" // class Fmv lives on Game (game->fmv); this TU implements its methods
-#include "gpu_vk.h"
+#include "game.h"       // class Fmv lives on Game (game->fmv); this TU implements its methods
 #include "host_input.h" // psx::input::kButtonStart
 #include "watchdog.h"
 #include <algorithm>
@@ -49,8 +48,8 @@
 #include "config_vars.h"
 #include "diagnostic_config.h"
 #include "fmv_decode.h"
-#include "gpu_vk_device.h"
 #include "number_text.h" // the pure decode machinery (shared with tools/fmv_export + fmv_compare)
+#include "render_device.h"
 #include <lucent/log.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -184,7 +183,7 @@ void Fmv::audioOpen(int freq) {
   // Headless implies NO AUDIO DEVICE — the same rule spu_audio.cpp applies, via the SAME predicate.
   // This line used to test only the knob, so a headless gate still played movie sound (USER,
   // 2026-08-06: "a tomba gate plays audible fmv"). See audio_policy.h for why it is shared.
-  if (!psx::audio::mayOpenOutput(psx::config::no_audio(), game->gpu_dev.windowed())) {
+  if (!psx::audio::mayOpenOutput(psx::config::no_audio(), game->renderDevice.windowed())) {
     return;
   }
   if (st && stream_freq == freq) {

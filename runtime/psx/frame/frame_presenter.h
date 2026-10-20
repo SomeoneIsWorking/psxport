@@ -5,8 +5,8 @@
 #include "frame_record.h"
 #include "frame_state.h"
 #include "present_ledger.h"
+#include "record_geometry.h"
 #include "state_producer.h"
-#include "vram_rect.h"
 
 #include <array>
 #include <cstddef>
@@ -16,16 +16,9 @@
 #include <vector>
 
 class Core;
-class RenderMode;
-
-namespace psx::gpu {
-struct RecordRect;
-} // namespace psx::gpu
 
 namespace psx::frame {
 
-// The host operations behind one frame fence. The production backend targets one Core; the narrow
-// interface also lets the complete shipping state machine be falsified without a GPU or a disc.
 // The renders a Core's title answers from GameRuntime::stateProducer.
 class RuntimeStateProducers final : public present::StateProducers {
 public:
@@ -34,40 +27,6 @@ public:
 
 private:
   Core &core_;
-};
-
-class FramePresentationBackend {
-public:
-  virtual ~FramePresentationBackend() = default;
-
-  // A present is build, pace, show: the picture's CPU and GPU work is submitted before the wait, and only
-  // the window show follows it, so the show lands on its deadline whatever the build cost.
-  // Builds N's picture (composedRecord() when set) without showing it.
-  virtual void buildReal() = 0;
-  // Builds FramePresenter::composedRecord() without advancing the logic frame.
-  virtual void buildInBetween() = 0;
-  virtual void pace(FieldCadence cadence) = 0;
-  // Shows the last build.
-  virtual void show() = 0;
-  virtual void captureDiagnostic(uint64_t fence, bool interpolated) = 0;
-  // Whether a dropped producer aborts the run (PSXPORT_GATE_PRESENTATION).
-  virtual bool ledgerIsFatal() const {
-    return false;
-  }
-  // True when presents rasterize frame records and 60 fps in-betweens are on.
-  virtual bool interpolatesRecords() const = 0;
-  // GameRuntime::sealedFrameIsCut for the frame just sealed.
-  virtual bool sealedFrameIsCut() = 0;
-  // The VRAM rect the next present scans out.
-  virtual gpu::RecordRect displayedBuffer() = 0;
-  // The renders of the title's state producers on the record path; null draws every record as sealed.
-  virtual const present::StateProducers *stateProducers() {
-    return nullptr;
-  }
-  // The mode whose display pass is armed while state producers render; a guest store then aborts.
-  virtual RenderMode *displayPassMode() {
-    return nullptr;
-  }
 };
 
 // What the record path showed, for the play check: the shown record never repeats or goes backwards,
@@ -89,15 +48,8 @@ public:
   FramePresenter(FramePresenter &&) = delete;
   FramePresenter &operator=(FramePresenter &&) = delete;
 
-  // Production entry point used by a title's measured guest frame boundary.
+  // Seals the device's record at a title's measured guest frame boundary and presents it.
   void commit(Core *core, int guestFields);
-
-  // Same state machine with an injected host backend, the device record it sealed and the producer states
-  // that record draws. This is a real seam, not a test reimplementation.
-  void commit(FramePresentationBackend &backend,
-              int guestFields = 0,
-              present::FrameRecord sealed = {},
-              present::FrameState state = {});
 
   // Rotate one delivered-but-deliberately-unpresented field: the fence advances as commit() does, but
   // nothing is presented, paced, or captured diagnostically.
@@ -129,10 +81,7 @@ public:
   void reportStability() const;
 
 private:
-  void commitSealed(FramePresentationBackend &backend,
-                    present::FrameRecord sealed,
-                    present::FrameState state,
-                    int guestFields);
+  void commitSealed(Core &core, present::FrameRecord sealed, present::FrameState state, int guestFields);
   // The last three records that drew: a double-buffered display shows the one before the newest, whose
   // in-between blends from the one before that. Records that drew nothing are not pictures.
   static constexpr std::size_t kRecordHistory = 3;
@@ -155,9 +104,12 @@ private:
   bool continuesTo(std::uint64_t from, std::uint64_t to) const;
   bool cutBetween(std::uint64_t from, std::uint64_t to) const;
   // The record path at 60 fps: the shown record at t = 0.5 from the one shown before, then at t = 1.
-  void presentRecords(FramePresentationBackend &backend, int guestFields);
+  void presentRecords(Core &core, const present::StateProducers *producers, int guestFields);
   // N's present; with `shown`, the shown record composed at t = 1.
-  void presentCurrent(FramePresentationBackend &backend, FieldCadence cadence, const SealedRecord *shown);
+  void
+  presentCurrent(Core &core, const present::StateProducers *producers, FieldCadence cadence, const SealedRecord *shown);
+  // fps60dump: every present, real or in-between, from PSXPORT_FPS60_DUMP_FROM up to a cap.
+  void dumpPresent(Core &core, bool interpolated);
 
   uint64_t fence_ = 0;
   int dumpSequence_ = 0;
@@ -165,7 +117,7 @@ private:
   std::array<SealedRecord, kRecordHistory> history_; // drawing records, oldest first
   // VRAM written by records that drew nothing, since the oldest held drawing record: the latest sequence per rect.
   struct UndrawnWrite {
-    gpu::VramRect area;
+    gpu::RecordRect area;
     std::uint64_t sequence = 0;
   };
   std::vector<UndrawnWrite> undrawnWrites_;

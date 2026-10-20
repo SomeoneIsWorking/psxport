@@ -1,13 +1,13 @@
 // record_raster_regions.h — native VRAM rectangles for the record planner: wrapping and written bits.
 #pragma once
 
-#include "record_raster_setup.h"
+#include "record_geometry.h"
 #include "vram_bitmap.h"
 
 #include <algorithm>
-#include <cstdint>
+#include <array>
+#include <cstddef>
 #include <utility>
-#include <vector>
 
 namespace psx::gpu {
 
@@ -15,6 +15,24 @@ inline int positiveMod(int value, int modulus) {
   const int wrapped = value % modulus;
   return wrapped < 0 ? wrapped + modulus : wrapped;
 }
+
+// At most N values, held inline.
+template <typename T, std::size_t N> class FixedList {
+public:
+  void push_back(const T &value) {
+    items_[count_++] = value;
+  }
+  const T *begin() const {
+    return items_.data();
+  }
+  const T *end() const {
+    return items_.data() + count_;
+  }
+
+private:
+  std::array<T, N> items_{};
+  std::size_t count_ = 0;
+};
 
 // Bits of a plane (VRAM or a canvas, at most VRAM-sized) written by the ops of the open batch.
 class WrittenMap {
@@ -114,13 +132,15 @@ struct RingRun {
   }
 };
 
+using WrappedRects = FixedList<RecordRect, 4>;
+
 // The native rectangles a wrapped VRAM rectangle covers.
-inline std::vector<RecordRect> wrappedRects(VramRect area) {
+inline WrappedRects wrappedRects(VramRect area) {
   std::pair<int, int> columns[2];
   std::pair<int, int> rows[2];
-  const int nc = RingRun{area.x, area.width}.split(kRecordVramWidth, columns);
-  const int nr = RingRun{area.y, area.height}.split(kRecordVramHeight, rows);
-  std::vector<RecordRect> rects;
+  const int nc = RingRun{area.x, area.width}.split(kVramWidth, columns);
+  const int nr = RingRun{area.y, area.height}.split(kVramHeight, rows);
+  WrappedRects rects;
   for (int r = 0; r < nr; r++) {
     for (int c = 0; c < nc; c++) {
       rects.push_back(RecordRect{columns[c].first, rows[r].first, columns[c].second, rows[r].second});

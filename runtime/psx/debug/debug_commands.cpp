@@ -10,14 +10,14 @@
 #include "game.h"
 #include "gpu_debug.h"
 #include "gpu_device.h"
-#include "gpu_vk.h"
-#include "gpu_vk_internal.h"
 #include "guest_call.h"
 #include "lightrec_executor.h"
 #include "machine_state.h"
 #include "ordering_table.h"
 #include "ot_attr.h"
+#include "render.h"
 #include "render_mode.h"
+#include "render_state.h"
 #include "snapshot.h"
 #include "title_command.h"
 
@@ -223,8 +223,9 @@ void tap(const Call &call) {
   }
   std::uint32_t frames = call.args.number(2).value_or(0);
   frames = frames != 0 ? frames : 4u;
-  call.core.game->pad.driveTap({.activeLowMask = static_cast<std::uint16_t>(input::kNoButtons & ~padButtonBit(call.args.word(1))),
-                                .frames = static_cast<int>(frames)});
+  call.core.game->pad.driveTap(
+      {.activeLowMask = static_cast<std::uint16_t>(input::kNoButtons & ~padButtonBit(call.args.word(1))),
+       .frames = static_cast<int>(frames)});
   call.reply(lucent::format("tap {} {}", call.args.word(1), frames));
 }
 
@@ -288,14 +289,14 @@ void census(const Call &call) {
 void renderPath(const Call &call) {
   const std::string name = call.args.text(1);
   if (!name.empty()) {
-    RenderPath path = call.core.rsub.mode.path();
-    if (psx::gpu::parseRenderPath(name.c_str(), &path)) {
+    psx::present::RenderPath path = call.core.rsub.mode.path();
+    if (psx::present::parseRenderPath(name.c_str(), &path)) {
       call.core.rsub.mode.setPath(path);
     } else {
       call.reply(lucent::format("renderpath: '{}' is not a path; valid: record | device", name));
     }
   }
-  call.reply(lucent::format("render path = {}", psx::gpu::renderPathName(call.core.rsub.mode.path())));
+  call.reply(lucent::format("render path = {}", psx::present::renderPathName(call.core.rsub.mode.path())));
 }
 
 void setInternalResolution(const Call &call) {
@@ -316,23 +317,22 @@ void shot(const Call &call) {
   Core &core = call.core;
   const std::string path = pathOr(call, 1, "scratch/screenshots/dbg.png");
   core.game->display.shot(path.c_str());
-  call.reply(
-      lucent::format("shot -> {} [render path = {}] guest_scan={}",
-                     path,
-                     psx::gpu::renderPathName(core.rsub.mode.path()),
-                     psx::present::DisplayPresenter::presentedHeight(core, core.gpuDevice().displayArea().height)));
+  call.reply(lucent::format("shot -> {} [render path = {}] guest_scan={}",
+                            path,
+                            psx::present::renderPathName(core.rsub.mode.path()),
+                            psx::present::DisplayPresenter::presentedRect(core).height));
 }
 
 void deviceShot(const Call &call) {
   const std::string path = pathOr(call, 1, "scratch/screenshots/dbg_vk.png");
-  call.core.game->gpuVk().shot(path.c_str());
+  call.core.game->render().shot(path.c_str());
   call.reply(lucent::format("vkshot -> {}", path));
 }
 
 // The present image the player sees: letterboxed, faded, overlay included.
 void presentShot(const Call &call) {
   const std::string path = pathOr(call, 1, "scratch/screenshots/dbg_present.png");
-  call.core.game->gpuVk().present_shot(path.c_str());
+  call.core.game->render().presentShot(path.c_str());
   call.reply(lucent::format("pshot -> {}", path));
 }
 
@@ -344,7 +344,7 @@ void presentSequence(const Call &call) {
     return;
   }
   const std::string dir = pathOr(call, 2, "scratch/screenshots/preseq");
-  call.core.game->gpuVk().preseq_arm(static_cast<int>(count), dir.c_str());
+  call.core.game->render().preseqArm(static_cast<int>(count), dir.c_str());
   call.reply(lucent::format("preseq armed: next {} presents -> {}/p%04d.ppm", count, dir));
 }
 
@@ -358,7 +358,7 @@ void vramRegion(const Call &call) {
                                 static_cast<int>(call.args.number(3).value_or(0)),
                                 static_cast<int>(call.args.number(4).value_or(1024)),
                                 static_cast<int>(call.args.number(5).value_or(512))};
-  psx::gpu::vramRegion(call.core, path.c_str(), rect);
+  psx::render::vramRegion(call.core, path.c_str(), rect);
   call.reply(lucent::format("vram ({},{} {}x{}) -> {}", rect.x, rect.y, rect.width, rect.height, path));
 }
 
@@ -368,7 +368,7 @@ void vramRaw(const Call &call) {
     return;
   }
   const std::string path = call.args.text(1);
-  psx::gpu::vramRaw(call.core, path.c_str());
+  psx::render::vramRaw(call.core, path.c_str());
   call.reply(lucent::format("vramraw -> {}", path));
 }
 
@@ -377,7 +377,7 @@ void vramPixels(const Call &call) {
   const std::uint32_t y = call.args.number(2).value_or(0);
   std::array<std::uint16_t, 64> words{};
   const std::uint32_t count = std::min<std::uint32_t>(call.args.number(3).value_or(1), words.size());
-  psx::gpu::vramWords(call.core, {static_cast<int>(x), static_cast<int>(y)}, std::span(words.data(), count));
+  psx::render::vramWords(call.core, {static_cast<int>(x), static_cast<int>(y)}, std::span(words.data(), count));
   std::string line = lucent::format("vkpix ({},{} x{}):", x, y, count);
   for (std::uint32_t i = 0; i < count; i++) {
     line += lucent::format(" {:04X}", words[i]);

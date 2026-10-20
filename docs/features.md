@@ -49,8 +49,8 @@ title answers there. A hop with no title entry runs on the framework alone.
 |---|---|---|
 | 1 | `psx/present/render_mode.h:RenderMode`, `psx/config/config_vars.h:render_path` — `record` (default) or `device`, installed by `Game::wireRuntimeMembers` | |
 | 2 | `psx/debug/ot_attr.cpp:OtAttr::refreshPool` → `GameRuntime::packetPool` — the packet pool the census attributes | `packetPool` |
-| 3 | `psx/present/display_presenter.cpp:DisplayPresenter::presentedHeight` → `GameRuntime::displayHeight` | `displayHeight` |
-| 4 | `psx/gpu/gpu_vk_present.cpp:presentInputs` → `GameRuntime::guestPictureIsNativeWidth` | `guestPictureIsNativeWidth` |
+| 3 | `psx/present/display_presenter.cpp:DisplayPresenter::presentedRect` → `GameRuntime::displayHeight` | `displayHeight` |
+| 4 | `psx/render/render_present.cpp:RenderState::presentInputs` → `GameRuntime::guestPictureIsNativeWidth` | `guestPictureIsNativeWidth` |
 | 5 | `psx/gpu/gp0_record_tap.h:Gp0RecordTap`, `psx/present/frame_record.h:FrameRecord` — the device's GP0 work recorded per logic frame | |
 | 6 | `psx/present/display_presenter.cpp:DisplayPresenter::build` — the shown record, rasterised; `show` presents it | |
 

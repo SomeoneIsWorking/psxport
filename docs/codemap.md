@@ -23,7 +23,6 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/core/guest_memory_map.h`, `guest_address_range.h` — physical memory map: main RAM and mirrors, scratchpad, hardware registers, BIOS, KSEG0/KSEG1 folds, address ranges, spans, stores
 - `runtime/psx/core/guest_abi.h` — MIPS o32 guest ABI for native overrides: stack frame, prologue spills, callee-saved registers, preserved return address `$ra`
 - `runtime/psx/core/guest_code_module.*` — runtime-loaded relocatable code module / overlay as an executable residency, identity and generation
-- `runtime/psx/core/overlay_glue.*` — hooks from the SDL_GPU present into the RmlUi overlay
 - `runtime/psx/cpu/r3000.h`, `cpu_divide.*` — R3000A register file, GPR names, COP0 numbers, context save scope, DIV/DIVU LO/HI results and divide by zero
 - `runtime/psx/cpu/gte*.h` — GTE / COP2 per Core: register file, register and command numbers, execute, rotation matrix, raw save and restore, pre-op observer
 - `runtime/psx/cpu/beetle/` — Beetle GTE adapter, register transfer to and from Lightrec, PGXP hooks off
@@ -54,12 +53,15 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/frame/field_turn.*`, `logic_frame.*`, `frame_loop_shell.*`, `session_control.*` — product loop: per-field services (pause, watchdog, RAM dump, command), logic frame start, frame step, return to selector
 - `runtime/psx/frame/frame_presenter.*` — frame fence: seal the logic frame record, cut, compose, present, pace
 - `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `field_rate.h`, `timing.*`, `emulated_time.*` — frame pacing, NTSC / PAL field rate, field cadence, emulated CPU clock, root counters 1 and 2
-- `runtime/psx/frame/frame_time_histogram.*`, `frame_dump_window.*` — frame time percentiles, frame dump window
+- `runtime/psx/frame/frame_time_histogram.*` — frame time percentiles
 - `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h`, `gpu_ports.*` — GPU device (Beetle gpu.c): VRAM, GP0 / GP1, display area and mode, DMA2 blocks and ordering-table walk
 - `runtime/psx/gpu/ordering_table.*` — ordering table / OT / DrawOTag node decode and walk
 - `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*` — GP0 work recorded per logic frame, texture cache feedback / stale VRAM reads
-- `runtime/psx/gpu/gpu_vk_record_raster.*`, `record_raster_*`, `vram_bitmap.h` — record rasteriser: gpu.c coverage rules at internal resolution on the GPU, written-region bitmaps
-- `runtime/psx/gpu/gpu_vk*`, `gpu_present_sink.h`, `runtime/psx/shaders_gpu/`, `cmake/gpu_shaders.cmake`, `tools/gen_gpu_shaders.py` — SDL3 GPU backend: window, swapchain, present mode, device, submit, readback, screenshots, shaders and SPIR-V
+- `runtime/psx/gpu/record_geometry.*`, `record_raster_*`, `vram_bitmap.h` — record raster plan: entry write rects, gpu.c coverage per primitive at internal resolution, canvas margins, written-region bitmaps
+- `runtime/psx/render/record_rasterizer.*`, `record_present.cpp` — record raster on the GPU: ops into VRAM image and canvases, Record-path present, recordcheck, record shot
+- `runtime/psx/render/render_device.*`, `render_window.*`, `render_submit.cpp`, `render_shader.*`, `render_check.h`, `present_sink.h`, `present_mode.h` — SDL3 GPU device (RenderDevice): window, swapchain, present mode, samplers, pipelines, upload, download, submit
+- `runtime/psx/render/render_state.h`, `render_present.cpp`, `render_screen.cpp`, `render_readback.cpp`, `render_api.cpp`, `render.h` — per-Game present (RenderState): present image build and show, pane target, present and device shots, VRAM captures, video status
+- `runtime/psx/shaders_gpu/`, `cmake/gpu_shaders.cmake`, `tools/gen_gpu_shaders.py` — shaders and SPIR-V, generated record op layout
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `present_ledger.*`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale, present ledger
 - `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), display-pass guard, per-Core host render state
 - `runtime/psx/present/frame_composer.*`, `frame_record.*`, `frame_state.*`, `state_producer.*`, `state_bytes.h`, `emission_scope.*`, `emit_memory.*`, `blend.h` — 60 fps interpolation / in-betweens: frame record, producer keys and object state, state producers, emission scope, guest or host emit memory, lerp blends
@@ -68,7 +70,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/packet_chains.*` — packet tag chains and bucket tables walked as primitives
 - `runtime/psx/present/gte_control.*` — GTE control registers saved, blended and restored around a render
 - `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` — widescreen / 16:9: aspect policy, canvas margins, projection constants, picture geometry announce
-- `runtime/psx/present/pane_*`, `host_presentation.h`, `rgb24_picture.h` — one window and device per process, panes from several sessions, host pictures
+- `runtime/psx/present/pane_*`, `rgb24_picture.h` — panes from several sessions on the one device, host pictures
 - `runtime/psx/input/host_input.*` — SDL event drain, keyboard state, gamepads, quit scope
 - `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `stock_pad_buffers.*` — controller / pad as the guest sees it: SIO0, digital packet, fixed pad buffers
 - `runtime/psx/input/pad_recording.*`, `pad_record_replay.*`, `pad_phase_replay.*`, `input_phase.h` — `.pad` record and replay keyed on input phase
@@ -84,7 +86,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/debug/producer_census.*`, `ot_attr.*` — primitives per guest submitter, OT / GTE submission attribution
 - `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*` — diagnostics: scene dump, CPU phase profiler, memmove census, per-field digest, PNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
 - `runtime/psx/debug/bug_report_session.*` — in-app bug report
-- `runtime/ui/` — RmlUi overlay menu: document, tabs, rows, readouts, toggles, choice list, Debug tab warp and dev commands, SDL_GPU render interface, assets
+- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, toggles, choice list, Debug tab warp and dev commands, SDL_GPU render interface, assets
 - `assets/rml/` — overlay menu markup, styles, fonts
 - `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image
 - `tools/port/` — tooling every title runs: consumer build, launcher, launch environment, capture checks

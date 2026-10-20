@@ -5,10 +5,10 @@ headless-operation, content-authoring, and testability requirements; the codemap
 
 ## Where it lives
 
-    runtime/psx/rmlui_overlay.{h,cpp}   RmlUi LIFETIME ONLY — render interface, SDL system
-                                           interface, fonts, context, LoadDocument, SDL event
-                                           routing, the GPU record call. Knows no elements.
-    runtime/psx/core/overlay_glue.{h,cpp} the hooks the present backend calls
+    runtime/ui/rmlui_overlay.{h,cpp}      one Game's overlay: fonts, context, LoadDocument, SDL
+                                           event routing, the GPU record call. Knows no elements.
+    runtime/ui/rmlui_library.{h,cpp}     one Rml::Initialise per RenderDevice: render and system
+                                           interfaces, context names
     runtime/psx/rml_text.{h,cpp}        the DATA -> RML markup encoder
     shared/bug-report (bug_report::Form) the B-key bug report form: a modal document the overlay
                                            hosts in the menu context (showBugReport/closeBugReport);
@@ -77,9 +77,8 @@ was sent to fix, and adopting a second stack now would double the amount of host
 instrument can capture.
 
 **So: NOT YET. What it is waiting on, concretely — the SINK PASS must exist in both legs.**
-The present backend's sink pass (`gpu_vk_present.cpp`) runs only when `plan.to_swapchain`, i.e.
-windowed. Every `overlay_glue_record()` call site lives in a windowed-only path (the sink pass, and
-after `gpu_vk_present_image`'s `if (s_headless) return`). MEASURED 2026-08-06: two headless
+The present backend's sink pass (`RenderState::showPresentImage`) runs only when a swapchain image is
+acquired, i.e. windowed. The one `rml_overlay.recordGpu()` call site lives in that pass. MEASURED 2026-08-06: two headless
 `PSXPORT_PRESENT_SHOT_AT=70` captures, one with the menu SHOWN and one HIDDEN, are **byte-identical**
 (md5 `f68b47bc971bed9bbfa4b27c19e7ee1c`) — even though the menu's own stylesheet paints an
 `rgba(0,0,0,82%)` scrim over the whole screen. Negative control for that instrument: frames 100/300

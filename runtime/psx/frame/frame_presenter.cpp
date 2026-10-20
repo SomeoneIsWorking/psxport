@@ -5,12 +5,9 @@
 #include "diagnostic_config.h"
 #include "display_presenter.h"
 #include "frame_composer.h"
-#include "frame_dump_window.h"
 #include "fs_util.h"
 #include "game.h"
 #include "gpu_device.h"
-#include "gpu_vk.h"
-#include "gpu_vk_internal.h"
 #include "producer_census.h"
 #include "render_mode.h"
 #include "texture_feedback.h"
@@ -40,107 +37,27 @@ bool drawsAnything(const present::FrameRecord &record) {
 constexpr int kDumpMax = 600;
 constexpr lucent::Channel presentDumpChannel{"fps60dump"};
 
-void dump_present(Core *core, uint64_t fence, int &sequence, bool interpolated) {
-  // Any presented frame, real or in-between.
-  if (!presentDumpChannel) {
-    sequence = 0;
-    return;
-  }
-  if (!frameDumpWindowContains(fence, psx::config::present_dump_first_fence())) {
-    return;
-  }
-  if (sequence >= kDumpMax) {
-    if (sequence == kDumpMax) {
-      lucent::info("fps60dump", "cap ({} files) reached — stop capturing", kDumpMax);
-      ++sequence;
-    }
-    return;
-  }
-
-  char path[192];
-  std::snprintf(path,
-                sizeof(path),
-                "scratch/framedump/f%06llu_%04d_%s.png",
-                static_cast<unsigned long long>(fence),
-                sequence,
-                interpolated ? "interp" : "real");
-  if (!Fs::ensureParentDirs(path)) {
-    return;
-  }
-  core->game->gpuVk().shot(path);
-  ++sequence;
-}
-
-// The title's renders, asked through its runtime.
-class CoreFramePresentationBackend final : public FramePresentationBackend {
-public:
-  CoreFramePresentationBackend(Core &core, int &dumpSequence)
-      : core_(core), dumpSequence_(dumpSequence), producers_(core) {}
-
-  void buildReal() override {
-    core_.game->display.build(present::PresentCompletion::MainFrame);
-  }
-
-  void buildInBetween() override {
-    core_.game->display.buildInBetween();
-  }
-
-  void show() override {
-    core_.game->display.show();
-  }
-
-  void captureDiagnostic(uint64_t fence, bool interpolated) override {
-    dump_present(&core_, fence, dumpSequence_, interpolated);
-  }
-
-  void pace(FieldCadence cadence) override {
-    core_.runtime.pacePresentation(core_, cadence);
-  }
-
-  bool ledgerIsFatal() const override {
-    return psx::config::gate_presentation();
-  }
-
-  bool interpolatesRecords() const override {
-    return core_.rsub.mode.path() == RenderPath::Record && core_.game->mods.fps60 != 0;
-  }
-
-  bool sealedFrameIsCut() override {
-    return core_.runtime.sealedFrameIsCut(core_);
-  }
-
-  gpu::RecordRect displayedBuffer() override {
-    const gpu::DisplayArea area = core_.gpuDevice().displayArea();
-    return gpu::clampedVramRect(
-        {area.x, area.y, area.width, present::DisplayPresenter::presentedHeight(core_, area.height)});
-  }
-
-  const present::StateProducers *stateProducers() override {
-    return core_.rsub.mode.path() == RenderPath::Record ? &producers_ : nullptr;
-  }
-
-  RenderMode *displayPassMode() override {
-    return &core_.rsub.mode;
-  }
-
-private:
-  Core &core_;
-  int &dumpSequence_;
-  RuntimeStateProducers producers_;
-};
-
 // A producer render reads saved state only; the armed display pass aborts any guest store it makes.
-std::optional<present::FrameRecord> composeGuarded(FramePresentationBackend &backend,
+std::optional<present::FrameRecord> composeGuarded(Core &core,
                                                    const present::FrameRecord &shown,
                                                    const present::FrameState *from,
                                                    const present::FrameState &to,
                                                    float t,
                                                    const present::StateProducers &producers) {
-  std::optional<DisplayPassGuard> guard;
-  if (RenderMode *mode = backend.displayPassMode()) {
-    guard.emplace(*mode);
-  }
+  const present::DisplayPassGuard guard(core.rsub.mode);
   return present::composeFrame(shown, from, to, t, producers);
+}
+
+gpu::RecordRect displayedBuffer(Core &core) {
+  return gpu::clampedVramRect(present::DisplayPresenter::presentedRect(core));
+}
+
+void buildReal(Core &core) {
+  core.game->display.build(present::PresentCompletion::MainFrame);
+}
+
+void pace(Core &core, FieldCadence cadence) {
+  core.runtime.pacePresentation(core, cadence);
 }
 
 } // namespace
@@ -158,27 +75,19 @@ void FramePresenter::commit(Core *core, int guestFields) {
   present::FrameState state = core->frameStates.collect(sealed);
   psx::debug::censusRecord(*core, sealed, state);
   core->frameStates.endFrame();
-  CoreFramePresentationBackend backend(*core, dumpSequence_);
-  commitSealed(backend, std::move(sealed), std::move(state), guestFields);
+  commitSealed(*core, std::move(sealed), std::move(state), guestFields);
 }
 
 void FramePresenter::commitUnpresented() {
   ++fence_;
 }
 
-void FramePresenter::commit(FramePresentationBackend &backend,
-                            int guestFields,
-                            present::FrameRecord sealed,
-                            present::FrameState state) {
-  commitSealed(backend, std::move(sealed), std::move(state), guestFields);
-}
-
-void FramePresenter::commitSealed(FramePresentationBackend &backend,
-                                  present::FrameRecord sealed,
-                                  present::FrameState state,
-                                  int guestFields) {
-  const bool interpolates = backend.interpolatesRecords();
-  const bool cut = interpolates && backend.sealedFrameIsCut();
+void FramePresenter::commitSealed(Core &core, present::FrameRecord sealed, present::FrameState state, int guestFields) {
+  const bool recordPath = core.rsub.mode.path() == present::RenderPath::Record;
+  const bool interpolates = recordPath && core.game->mods.fps60 != 0;
+  const bool cut = interpolates && core.runtime.sealedFrameIsCut(core);
+  const RuntimeStateProducers runtimeProducers(core);
+  const present::StateProducers *producers = recordPath ? &runtimeProducers : nullptr;
   // Only a title with state producers saves state, so an empty state has nothing to compose.
   const bool savedState = !state.empty();
   const bool gap = !lastSequence_ || sealed.sequence() != *lastSequence_ + 1u;
@@ -196,11 +105,11 @@ void FramePresenter::commitSealed(FramePresentationBackend &backend,
   holdUndrawnWrites(*current_);
   ++fence_;
   if (interpolates) {
-    presentRecords(backend, guestFields);
+    presentRecords(core, producers, guestFields);
   } else {
     shownSequence_.reset();
-    const bool composes = savedState && backend.stateProducers() != nullptr;
-    presentCurrent(backend, {guestFields, 1}, composes ? shownRecord(backend.displayedBuffer()) : nullptr);
+    const bool composes = savedState && producers != nullptr;
+    presentCurrent(core, producers, {guestFields, 1}, composes ? shownRecord(displayedBuffer(core)) : nullptr);
   }
 }
 
@@ -239,14 +148,13 @@ void FramePresenter::holdUndrawnWrites(const present::FrameRecord &record) {
     if (!rect) {
       continue;
     }
-    const gpu::VramRect area{rect->x0, rect->y0, rect->x1 - rect->x0, rect->y1 - rect->y0};
     const auto same = std::find_if(undrawnWrites_.begin(), undrawnWrites_.end(), [&rect](const UndrawnWrite &write) {
-      return gpu::clampedVramRect(write.area) == *rect;
+      return write.area == *rect;
     });
     if (same != undrawnWrites_.end()) {
       same->sequence = record.sequence();
     } else {
-      undrawnWrites_.push_back({area, record.sequence()});
+      undrawnWrites_.push_back({*rect, record.sequence()});
     }
   }
 }
@@ -267,7 +175,7 @@ const FramePresenter::SealedRecord *FramePresenter::shownRecord(const gpu::Recor
     }
   }
   for (const UndrawnWrite &write : undrawnWrites_) {
-    if (write.sequence > latest->record->sequence() && gpu::rectsOverlap(gpu::clampedVramRect(write.area), buffer)) {
+    if (write.sequence > latest->record->sequence() && gpu::rectsOverlap(write.area, buffer)) {
       return nullptr;
     }
   }
@@ -304,8 +212,8 @@ bool FramePresenter::cutBetween(std::uint64_t from, std::uint64_t to) const {
   return false;
 }
 
-void FramePresenter::presentRecords(FramePresentationBackend &backend, int guestFields) {
-  const SealedRecord *shown = shownRecord(backend.displayedBuffer());
+void FramePresenter::presentRecords(Core &core, const present::StateProducers *producers, int guestFields) {
+  const SealedRecord *shown = shownRecord(displayedBuffer(core));
   const SealedRecord *from = shownSequence_ ? sealed(*shownSequence_) : nullptr;
   const std::optional<std::uint64_t> previous = shownSequence_;
   shownSequence_.reset();
@@ -329,46 +237,77 @@ void FramePresenter::presentRecords(FramePresentationBackend &backend, int guest
   }
   if (shown == nullptr || from == nullptr || !continuesTo(from->record->sequence(), shown->record->sequence())) {
     ++stability_.withoutInBetween;
-    presentCurrent(backend, {guestFields, 1}, shown);
+    presentCurrent(core, producers, {guestFields, 1}, shown);
     return;
   }
   ++stability_.inBetweens;
   const bool cut = cutBetween(from->record->sequence(), shown->record->sequence());
   const present::FrameRecord &base = *shown->record;
-  if (const present::StateProducers *producers = backend.stateProducers()) {
-    composedStore_ = composeGuarded(backend, base, cut ? nullptr : from->state.get(), *shown->state, 0.5f, *producers);
+  if (producers != nullptr) {
+    composedStore_ = composeGuarded(core, base, cut ? nullptr : from->state.get(), *shown->state, 0.5f, *producers);
   }
   composed_ = composedStore_ ? &*composedStore_ : &base;
   composedAdvances_ = false;
-  backend.buildInBetween();
+  core.game->display.buildInBetween();
   composed_ = nullptr;
   composedStore_.reset();
-  backend.pace({guestFields, 2});
-  backend.show();
-  backend.captureDiagnostic(fence_, true);
-  presentCurrent(backend, {guestFields, 2}, shown);
+  pace(core, {guestFields, 2});
+  core.game->display.show();
+  dumpPresent(core, true);
+  presentCurrent(core, producers, {guestFields, 2}, shown);
 }
 
-void FramePresenter::presentCurrent(FramePresentationBackend &backend,
+// A present is build, pace, show: only the show waits, so it lands on its deadline whatever the build cost.
+void FramePresenter::presentCurrent(Core &core,
+                                    const present::StateProducers *producers,
                                     FieldCadence cadence,
                                     const SealedRecord *shown) {
-  const present::StateProducers *producers = backend.stateProducers();
   if (shown != nullptr && producers != nullptr) {
-    composedStore_ = composeGuarded(backend, *shown->record, nullptr, *shown->state, 1.0f, *producers);
+    composedStore_ = composeGuarded(core, *shown->record, nullptr, *shown->state, 1.0f, *producers);
     if (composedStore_) {
-      ledger_.reconcile(*shown->record, *composedStore_, fence_, backend.ledgerIsFatal());
+      ledger_.reconcile(*shown->record, *composedStore_, fence_, psx::config::gate_presentation());
     }
   }
   composed_ = composedStore_ ? &*composedStore_ : nullptr;
   composedAdvances_ = composed_ != nullptr;
-  backend.buildReal();
+  buildReal(core);
   composed_ = nullptr;
   composedAdvances_ = false;
   composedStore_.reset();
-  // Only the show waits, so it lands on its deadline whatever the guest step and the build cost.
-  backend.pace(cadence);
-  backend.show();
-  backend.captureDiagnostic(fence_, false);
+  pace(core, cadence);
+  core.game->display.show();
+  dumpPresent(core, false);
+}
+
+void FramePresenter::dumpPresent(Core &core, bool interpolated) {
+  if (!presentDumpChannel) {
+    dumpSequence_ = 0;
+    return;
+  }
+  const long firstFence = psx::config::present_dump_first_fence();
+  if (firstFence > 0 && fence_ < static_cast<std::uint64_t>(firstFence)) {
+    return;
+  }
+  if (dumpSequence_ >= kDumpMax) {
+    lucent::info("fps60dump", "cap ({} files) reached, capture stopped", kDumpMax);
+    dumpSequence_ = -1;
+    return;
+  }
+  if (dumpSequence_ < 0) {
+    return;
+  }
+  char path[192];
+  std::snprintf(path,
+                sizeof(path),
+                "scratch/framedump/f%06llu_%04d_%s.png",
+                static_cast<unsigned long long>(fence_),
+                dumpSequence_,
+                interpolated ? "interp" : "real");
+  if (!Fs::ensureParentDirs(path)) {
+    return;
+  }
+  core.game->display.shot(path);
+  ++dumpSequence_;
 }
 
 void FramePresenter::reportStability() const {

@@ -13,7 +13,9 @@
 #include <vector>
 
 class Core;
-class GpuDevice;
+namespace psx::render {
+class RenderDevice;
+} // namespace psx::render
 
 namespace psx::host {
 
@@ -29,7 +31,7 @@ struct PanelSource {
 
 class PickerComposite {
 public:
-  PickerComposite(GpuDevice &device, Core *hostCore);
+  PickerComposite(psx::render::RenderDevice &device, Core *hostCore);
   ~PickerComposite();
   PickerComposite(const PickerComposite &) = delete;
   PickerComposite &operator=(const PickerComposite &) = delete;
@@ -57,7 +59,7 @@ public:
 
 private:
   psxport::PaneCompositor m_compositor;
-  GpuDevice &m_device;
+  psx::render::RenderDevice &m_device;
   std::vector<psxport::Pane> m_panes;
   // Held back until every panel is drawn; see the pass order in the .cpp.
   std::vector<psxport::Pane> m_dividers;
