@@ -13,7 +13,6 @@
 #include <vector>
 
 class Core;
-class GpuDevice;
 
 namespace psx::host {
 

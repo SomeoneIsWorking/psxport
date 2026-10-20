@@ -1,9 +1,9 @@
 #include "game.h"
 #include "bios_load_exec.h"
 #include "config_vars.h"
-#include "gpu_vk_device.h"
-#include "gpu_vk_internal.h"
 #include "ot_attr.h"
+#include "render_device.h"
+#include "render_state.h"
 #include "xa_state.h"
 
 #include <cstdlib>
@@ -23,14 +23,15 @@ psx::game::FrameDriver &Game::requireFrameDriver() const {
 }
 
 Game::Game(psx::game::GameRuntime &runtime, const psx::config::Config &config)
-    : config(config), core(runtime), gpuVk_(std::make_unique<GpuVkState>()),
-      ownedGpuDevice(std::make_unique<GpuDevice>()), gpu_dev(*ownedGpuDevice), runtime(runtime) {
+    : config(config), ownedRenderDevice(std::make_unique<psx::render::RenderDevice>()),
+      renderDevice(*ownedRenderDevice), core(runtime),
+      render_(std::make_unique<psx::render::RenderState>(*this, renderDevice)), runtime(runtime) {
   wireRuntimeMembers();
 }
 
-// A Game that presents through a device the caller owns and outlives this Game.
-Game::Game(psx::game::GameRuntime &runtime, GpuDevice &presentation, const psx::config::Config &config)
-    : config(config), core(runtime), gpuVk_(std::make_unique<GpuVkState>()), gpu_dev(presentation), runtime(runtime) {
+Game::Game(psx::game::GameRuntime &runtime, psx::render::RenderDevice &presentation, const psx::config::Config &config)
+    : config(config), renderDevice(presentation), core(runtime),
+      render_(std::make_unique<psx::render::RenderState>(*this, renderDevice)), runtime(runtime) {
   wireRuntimeMembers();
 }
 
@@ -38,8 +39,6 @@ void Game::wireRuntimeMembers() {
   // PSXPORT_PRODUCERS is armed per Game, before any guest store.
   g_producer_census_armed = psx::config::producer_census();
   core.game = this;
-  gpuVk_->game = this;
-  gpuVk_->device = &gpu_dev;
   timing.game = this;
   hostInput.attachOverlay(&rml_overlay); // one drain feeds the pad's key state AND the overlay
   pad.game = this;
@@ -54,7 +53,7 @@ void Game::wireRuntimeMembers() {
   mods.declareTitleSettings(runtime.titleIntSettings());
   mods.init(runtime.interpolates());
   core.rsub.mode.setPath(psx::config::render_path());
-  lucent::info("render", "render path: {}", psx::gpu::renderPathName(core.rsub.mode.path()));
+  lucent::info("render", "render path: {}", psx::present::renderPathName(core.rsub.mode.path()));
   cdc.reset();
   timing.bindCdcClock(&cdc);
   xa.reset();
@@ -89,10 +88,8 @@ Game::~Game() {
   // Same reason: without a syscall count a run that reached gameplay through the save menu and one
   // that stalled in the title produce identical card output.
   memcard.syscallLog().report("at shutdown");
-  // This Game's device objects die here, while the device they were created on is alive.
-  gpuVk_->release_device_resources();
 }
 
 void Game::disablePresentation() {
-  gpu_dev.disable();
+  renderDevice.disable();
 }

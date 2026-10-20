@@ -3,50 +3,50 @@
 
 #include <lucent/log.h>
 
+#include <algorithm>
 #include <cstdlib>
-#include <map>
 #include <variant>
 
 namespace psx::present {
 namespace {
 
-std::map<std::uint32_t, long> keyedPrimitives(const FrameRecord &record) {
-  std::map<std::uint32_t, long> counts;
+void collectProducers(const FrameRecord &record, std::vector<std::uint32_t> &producers) {
+  producers.clear();
   for (const RecordEntry &entry : record.entries()) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entry);
     if (primitive != nullptr && primitive->key) {
-      counts[primitive->key->producer]++;
+      producers.push_back(primitive->key->producer);
     }
   }
-  return counts;
+  std::ranges::sort(producers);
 }
 
 } // namespace
 
-std::vector<std::uint32_t>
-PresentLedger::reconcile(const FrameRecord &shown, const FrameRecord &composed, std::uint64_t fence, bool fatal) {
-  const std::map<std::uint32_t, long> recorded = keyedPrimitives(shown);
-  const std::map<std::uint32_t, long> presented = keyedPrimitives(composed);
-  std::vector<std::uint32_t> dropped;
-  for (const auto &[producer, count] : recorded) {
-    if (!presented.contains(producer)) {
-      dropped.push_back(producer);
+void PresentLedger::reconcile(const FrameRecord &shown, const FrameRecord &composed, std::uint64_t fence, bool fatal) {
+  collectProducers(shown, recorded_);
+  collectProducers(composed, presented_);
+  bool dropped = false;
+  for (auto run = recorded_.begin(); run != recorded_.end();) {
+    const auto end = std::upper_bound(run, recorded_.end(), *run);
+    if (!std::ranges::binary_search(presented_, *run)) {
+      dropped = true;
       lucent::error("ledger",
                     "f{} producer {:#010x} recorded {} primitive(s) and the composed present drew none",
                     fence,
-                    producer,
-                    count);
+                    *run,
+                    end - run);
     }
+    run = end;
   }
   ++framesReconciled_;
-  if (dropped.empty()) {
-    return dropped;
+  if (!dropped) {
+    return;
   }
   ++framesDropped_;
   if (fatal) {
     std::abort();
   }
-  return dropped;
 }
 
 void PresentLedger::report() const {

@@ -3,36 +3,32 @@
 #include "core.h"
 #include "game.h"
 #include "gpu_device.h"
-#include "gpu_vk.h"
-#include "gpu_vk_device.h"
-#include "record_raster_setup.h"
+#include "mods.h"
+#include "render_device.h"
+#include "vram_rect.h"
 
 #include <lucent/log.h>
 
 #include <cstdlib>
 
-PresentationAspect GuestWidescreenProjection::presentationAspect(const Core &core) const {
-  if (core.game == nullptr) {
-    return PresentationAspect::Standard4x3;
-  }
+namespace psx::present {
+
+PresentationAspect presentationAspectFor(const Mods &mods) {
   // ASPECT_AUTO is resolved against the live sink by the plan builder, so a headless run stays 4:3.
-  switch (core.game->mods.aspect) {
+  switch (mods.aspect) {
   case ASPECT_4_3:
-    return PresentationAspect::Standard4x3;
   case ASPECT_16_9:
-    return PresentationAspect::Wide16x9;
   case ASPECT_21_9:
-    return PresentationAspect::UltraWide21x9;
   case ASPECT_AUTO:
-    return PresentationAspect::MatchSink;
+    return static_cast<PresentationAspect>(mods.aspect);
   default:
-    lucent::error("wide", "invalid aspect selector {}", core.game->mods.aspect);
+    lucent::error("wide", "invalid aspect selector {}", mods.aspect);
     std::abort();
   }
 }
 
-bool GuestWidescreenProjection::guestCoordinatesWidened(const Core &) const {
-  return false;
+PresentationAspect GuestWidescreenProjection::presentationAspect(const Core &core) const {
+  return presentationAspectFor(core.game->mods);
 }
 
 namespace {
@@ -45,9 +41,20 @@ PresentationAspect requestedAspect(const Core &core) {
   return projection->presentationAspect(core);
 }
 
-} // namespace
+GuestProjectionPlan latch(Core &core, PixelSize nativePresentation, GuestProjectionGeometry nativeProjection) {
+  const GuestProjectionPlan plan = guestProjectionPlan({
+      .path = core.rsub.mode.path(),
+      .requested = requestedAspect(core),
+      .nativePresentation = nativePresentation,
+      .nativeProjection = nativeProjection,
+      .sink = core.game->renderDevice.sinkSize(),
+      .vramWidth = gpu::kVramWidth,
+  });
+  core.game->guestDisplay.latch(plan);
+  return plan;
+}
 
-namespace psx::present {
+} // namespace
 
 bool widePresentation(const Core &core) {
   return core.rsub.mode.path() == RenderPath::Record && core.game->guestDisplay.plan().widescreen();
@@ -55,6 +62,11 @@ bool widePresentation(const Core &core) {
 
 int widePresentationWidth(const Core &core) {
   return core.game->guestDisplay.plan().presentationExtent.width;
+}
+
+PixelSize nativeDisplaySize(Core &core) {
+  const gpu::DisplayArea area = core.gpuDevice().displayArea();
+  return {area.width > 0 ? area.width : WIDE_REFERENCE_NATIVE_W, area.height > 0 ? area.height : PRESENT_NATIVE_LINES};
 }
 
 GuestProjectionPlan latchGuestProjection(Core &core, GuestProjectionGeometry geometry) {
@@ -67,55 +79,11 @@ GuestProjectionPlan latchGuestProjection(Core &core, GuestProjectionGeometry geo
                   geometry.drawWidth);
     std::abort();
   }
-
-  Game *game = core.game;
-  const psx::present::PixelSize sink = game->gpu_dev.sinkSize();
-  const psx::gpu::DisplayArea area = core.gpuDevice().displayArea();
-  const int nativeWidth = area.width > 0 ? area.width : WIDE_REFERENCE_NATIVE_W;
-  const int nativeHeight = area.height > 0 ? area.height : PRESENT_NATIVE_LINES;
-  GuestProjectionPlan plan = psx::present::guestProjectionPlan({
-      .path = core.rsub.mode.path(),
-      .requested = requestedAspect(core),
-      .nativePresentation = {nativeWidth, nativeHeight},
-      .nativeProjection = geometry,
-      .sink = sink,
-      .vramWidth = psx::gpu::kRecordVramWidth,
-  });
-  game->guestDisplay.latch(plan);
-  return plan;
+  return latch(core, nativeDisplaySize(core), geometry);
 }
 
-void unlatchGuestProjection(Core &core) {
-  Game &game = *core.game;
-  // The guest's OWN display mode, read now rather than taken from the caller's geometry: the caller
-  // is publishing that it is not widening this frame, so the frame it is presenting is the one the
-  // guest just published, whatever width that is.
-  const psx::gpu::DisplayArea area = core.gpuDevice().displayArea();
-  const int width = area.width > 0 ? area.width : WIDE_REFERENCE_NATIVE_W;
-  const int height = area.height > 0 ? area.height : PRESENT_NATIVE_LINES;
-  const psx::present::PixelSize sink = game.gpu_dev.sinkSize();
-  game.guestDisplay.latch(psx::present::guestProjectionPlan({
-      .path = core.rsub.mode.path(),
-      .requested = PresentationAspect::Standard4x3,
-      .nativePresentation = {width, height},
-      .nativeProjection = {.extent = {width, height}, .drawWidth = width},
-      .sink = sink,
-      .vramWidth = psx::gpu::kRecordVramWidth,
-  }));
-}
-
-GuestProjectionPlan latchRecordDisplay(Core &core, psx::present::PixelSize display) {
-  const psx::present::PixelSize sink = core.game->gpu_dev.sinkSize();
-  const GuestProjectionPlan plan = psx::present::guestProjectionPlan({
-      .path = core.rsub.mode.path(),
-      .requested = requestedAspect(core),
-      .nativePresentation = display,
-      .nativeProjection = {.extent = display, .drawWidth = display.width},
-      .sink = sink,
-      .vramWidth = psx::gpu::kRecordVramWidth,
-  });
-  core.game->guestDisplay.latch(plan);
-  return plan;
+GuestProjectionPlan latchRecordDisplay(Core &core, PixelSize display) {
+  return latch(core, display, {.extent = display, .drawWidth = display.width});
 }
 
 } // namespace psx::present

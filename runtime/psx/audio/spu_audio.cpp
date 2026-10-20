@@ -11,7 +11,7 @@
 #include "diagnostic_config.h"
 #include "game.h"
 #include "gpu_device.h"
-#include "gpu_vk_device.h"
+#include "render_device.h"
 #include "spu_beetle.h"
 #include "xa_state.h"
 #include <lucent/log.h>
@@ -179,7 +179,7 @@ void SpuAudio::setOutputEnabled(bool enabled) {
 void SpuAudio::openHostDevice() {
   // Headless implies no audio — there's no point driving the sound device for an automated /
   // offscreen run. Audio opens ONLY for a real on-screen window.
-  if (!psx::audio::mayOpenOutput(psx::config::no_audio(), game->gpu_dev.windowed())) {
+  if (!psx::audio::mayOpenOutput(psx::config::no_audio(), game->renderDevice.windowed())) {
     mState = -1;
     return;
   }

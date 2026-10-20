@@ -1,11 +1,5 @@
 #version 450
-// RmlUi 2D overlay vertex stage (SDL_GPU). Positions arrive in pixel space (origin top-left, y-down);
-// the per-draw translate is added, then mapped to clip space. SDL_GPU presents the swapchain Y-UP (it
-// flips so content shows right-side-up), so — exactly like present.vert — we NEGATE clip-space Y so a
-// pixel y of 0 (the menu's TOP) lands at the screen TOP.
-//
-// SDL_GPU binding convention: VERTEX uniform buffers live in set=1 (fed once per draw by
-// SDL_PushGPUVertexUniformData(cmd, slot 0, &UBO, sizeof UBO)).
+// RmlUi geometry in pixels (y down) plus the draw translate; clip Y negated because SDL_GPU presents Y-up.
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec4 aCol;   // R8G8B8A8_UNORM -> normalized, premultiplied alpha
 layout(location = 2) in vec2 aUv;

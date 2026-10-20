@@ -1,7 +1,7 @@
 #include "menu_readouts.h"
 
 #include "game.h"
-#include "gpu_vk.h"   // psx::gpu::videoStatus
+#include "render.h"
 #include "rml_text.h" // RML_TEXT_SEP — a real U+00B7 in the DATA, never an entity
 
 #include <lucent/log.h>
@@ -37,7 +37,8 @@ MenuReadouts::MenuReadouts(Rml::Element *root, Game *game) : Component(root), mG
 void MenuReadouts::update() {
   char buf[192];
 
-  const psx::gpu::VideoStatus video = mGame != nullptr ? psx::gpu::videoStatus(mGame->core) : psx::gpu::VideoStatus{};
+  const psx::render::VideoStatus video =
+      mGame != nullptr ? psx::render::videoStatus(mGame->core) : psx::render::VideoStatus{};
   // RML_TEXT_SEP is a real U+00B7 character in the TEXT, not an entity: these strings are data,
   // and `set_text` encodes them so nothing in them is ever parsed as markup (see rml_text.h).
   snprintf(buf,

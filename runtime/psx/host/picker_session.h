@@ -6,8 +6,6 @@
 #include "picker_runtime.h"
 #include "title_catalog.h"
 
-#include "gpu_vk_device.h"
-
 #include <memory>
 #include <optional>
 #include <span>
@@ -15,7 +13,6 @@
 
 class Core;
 class Game;
-class GpuDevice;
 
 namespace psx::host {
 

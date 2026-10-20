@@ -8,7 +8,7 @@
 //
 // WHY THIS HEADER EXISTS. The rule was implemented TWICE, and one copy was wrong:
 //
-//     spu_audio.cpp      if (no_audio() || !gpu_dev.windowed()) ...  correct
+//     spu_audio.cpp      if (no_audio() || !renderDevice.windowed()) ...  correct
 //     native_fmv.cpp:120  if (no_audio()) ...                      MISSING the headless half
 //
 // So SPU audio went quiet on an automated run and FMV audio did not. USER, 2026-08-06: *"a tomba gate

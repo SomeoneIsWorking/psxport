@@ -5,9 +5,9 @@
 #include "title_catalog.h"
 
 #include "frame_loop_shell.h"
-#include "gpu_vk_device.h"
-#include "gpu_vk_internal.h" // GpuVkState::PresentedImage
 #include "pane_host.h"
+#include "render_device.h"
+#include "render_state.h"
 #include "typed_config.h"
 
 #include <cstdint>
@@ -25,7 +25,7 @@ namespace psx::host {
 // What every session of the process shares, owned by ProductHost.
 struct SessionServices {
   const psx::config::Config &config;
-  GpuDevice &presentation;
+  psx::render::RenderDevice &presentation;
   psx::input::QuitScope &quit;
   RunBudget &budget;
   // Tracks which Core the process-global devices are bound to across every session.
@@ -125,16 +125,16 @@ public:
   int pictureHeight() const;
   // The newest presented frame that had a picture, so a fade or load screen between the guest's
   // scenes leaves the panel showing the last real frame.
-  GpuVkState::PresentedImage presentedPicture() const;
+  psx::render::PresentedImage presentedPicture() const;
   // A picture's own shape for the panel crop: its measured content rect where there is one.
   struct PaneSize {
     int width = 1, height = 1;
   };
-  PaneSize pictureSize(const GpuVkState::PresentedImage &image) const;
+  PaneSize pictureSize(const psx::render::PresentedImage &image) const;
 
   // ---- what a panel session is allowed to do
   // ------------------------------------------------------ Route this session's present into the
-  // host's composite instead of the window, at `image`. See GpuVkState::presentToPane.
+  // host's composite instead of the window, at `image`. See RenderState::presentToPane.
   void presentToPane(psx::present::PixelSize image);
   // Back to the ordinary product route: this session's present IS the window.
   void presentToWindow();

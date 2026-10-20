@@ -9,8 +9,8 @@
 #include "field_turn.h"
 #include "frame_pacer.h"
 #include "game.h"
-#include "gpu_vk.h"
-#include "gpu_vk_device.h"
+#include "render_device.h"
+#include "render_state.h"
 
 #include <lucent/log.h>
 
@@ -146,7 +146,10 @@ PickerSession::Result PickerSession::run() {
   host->hostInput.attachQuitScope(&services_.quit);
   // No guest runs here, so the channel needs no store observer.
   host->dbg_server.start();
-  psx::gpu::ensureDevice(core);
+  // The overlay exists before the first composite.
+  if (services_.presentation.enabled()) {
+    host->render().bringUp();
+  }
 
   composite_ = std::make_unique<PickerComposite>(services_.presentation, &core);
   runtime_.bind(&content_, composite_.get());

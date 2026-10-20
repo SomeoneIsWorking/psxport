@@ -2,12 +2,13 @@
 // in-betweens between them, and the per-present captures and counters. Each present is a build, then a show.
 #pragma once
 
+#include "frame_schedule.h"
 #include "pixel_size.h"
+#include "vram_rect.h"
 
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <vector>
 
 class Core;
 
@@ -20,7 +21,7 @@ class DisplayPresenter {
 public:
   explicit DisplayPresenter(Core &core);
 
-  // Builds the guest display rect through psx::gpu::buildDisplay, then this present's diagnostics and counters.
+  // Builds the presented display rect, then this present's diagnostics and counters.
   // `completion` is reported to the watchdog when the build is shown.
   void build(PresentCompletion completion);
   // Builds an interpolated frame between two presents: counted apart, frame() does not move.
@@ -43,22 +44,19 @@ public:
     return interpolated_;
   }
 
-  // Rows presented for a decoded display height: GameRuntime::displayHeight when the title declares one.
-  static int presentedHeight(Core &core, int displayHeight);
+  // The guest display rect in VRAM, its height GameRuntime::displayHeight when the title declares one.
+  static gpu::VramRect presentedRect(Core &core);
 
 private:
   void buildDisplay();
   void logVramScan();
-  void dumpGuestRam();
   void dumpDisplay();
 
   Core &core_;
   int frame_ = 0;
   int interpolated_ = 0;
-  std::vector<std::uint32_t> shotFrames_;
-  std::vector<std::uint32_t> presentShotFrames_;
-  long ramDumpFrame_ = -1;
-  std::string ramDumpPath_;
+  debug::FrameSchedule shotFrames_;
+  debug::FrameSchedule presentShotFrames_;
   std::string displayDumpDir_;
   int displayDumpEvery_ = 1;
   std::optional<PresentCompletion> pendingCompletion_; // the last build's, until it is shown

@@ -6,7 +6,6 @@
 
 #include "core.h"
 #include "game_runtime.h"
-#include "gpu_vk.h"
 
 #include <lucent/log.h>
 

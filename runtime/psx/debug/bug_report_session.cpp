@@ -4,11 +4,10 @@
 #include "core.h"
 #include "game.h"
 #include "gpu_device.h"
-#include "gpu_vk.h"
-#include "gpu_vk_internal.h"
 #include "image_writer.h" // image_write_rgb24
 #include "psxport_build_id.h"
 #include "render_mode.h"
+#include "render_state.h"
 #include "watchdog.h"
 
 #include <bug_report/draft.h>
@@ -143,7 +142,7 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
   std::string error;
 
   if (const auto path = draft.pathFor(kScreenshotFile, error)) {
-    core.game->gpuVk().present_shot(path->string().c_str());
+    core.game->render().presentShot(path->string().c_str());
     std::error_code exists;
     if (std::filesystem::exists(*path, exists)) {
       attachOrWarn(draft, kScreenshotFile, AttachmentRole::Screenshot, "On screen");
@@ -175,7 +174,7 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
 
   draft.addFact("pad frame", std::to_string(reportedFrame));
   draft.addFact("present frame", std::to_string(game.display.frame()));
-  draft.addFact("render path", psx::gpu::renderPathName(core.rsub.mode.path()));
+  draft.addFact("render path", psx::present::renderPathName(core.rsub.mode.path()));
   draft.addFact("build", PSXPORT_BUILD_ID_COMPOSITE);
 
   if (recorded) {

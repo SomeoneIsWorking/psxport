@@ -1,4 +1,7 @@
+// viewport_layout.h — a rectangle of a presented image and the letterbox rule.
 #pragma once
+
+namespace psx::present {
 
 struct PaneRect {
   int x;
@@ -6,8 +9,6 @@ struct PaneRect {
   int w;
   int h;
 };
-
-namespace psx::present {
 
 inline PaneRect letterbox(int aspectWidth, int aspectHeight, int outputWidth, int outputHeight) {
   int width;

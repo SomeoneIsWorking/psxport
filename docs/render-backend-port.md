@@ -6,9 +6,13 @@ product does not carry a second windowing or graphics stack.
 
 ## Ownership
 
-- `runtime/psx/gpu/gpu_vk_device.*`, `gpu_vk_window.*` and `gpu_vk_submit.cpp` own the SDL GPU device,
-  window claim, swapchain and submits; `gpu_vk_present.cpp` the present to the sink;
-  `gpu_vk_record_raster.*` the VRAM image, canvases and record passes; `gpu_vk_readback.cpp` readback.
+- `runtime/psx/render/render_device.*` (`RenderDevice`), `render_window.*` and `render_submit.cpp` own the SDL GPU
+  device, window claim, swapchain, samplers, pipelines and submits; `render_present.cpp` (`RenderState`) one
+  Game's present to the sink; `record_rasterizer.*` the VRAM image, canvases and record passes;
+  `render_readback.cpp` readback.
+- A device-lost or fence-timeout fault is written to `gpu_fault` in the user data directory
+  (`~/.config/psxport/` on Linux); every later process refuses the GPU until it is removed or
+  `PSXPORT_GPU_FAULT_OVERRIDE=1` is set.
 - `runtime/psx/shaders_gpu/` owns first-party GLSL sources. `tools/gen_gpu_shaders.py` compiles and
   embeds them in a consumer-owned build directory; no shader header is written to the source tree.
 - `docs/presentation.md` is the renderer's contract: what each render path presents and how.

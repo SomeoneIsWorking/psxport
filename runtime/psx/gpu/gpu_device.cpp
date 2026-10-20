@@ -258,7 +258,7 @@ DeviceProbe GpuDevice::probe(CensusMark before) const {
   probe.spriteFlipY = (GPU.SpriteFlip & 0x2000) != 0;
   probe.clutTag = GPU.CLUT_Cache_VB;
   probe.clut = std::span<const uint16_t>(GPU.CLUT_Cache, 256);
-  probe.vram = std::span<const uint16_t>(GPU_get_vram(), static_cast<size_t>(kDeviceVramWidth) * kDeviceVramHeight);
+  probe.vram = std::span<const uint16_t>(GPU_get_vram(), static_cast<size_t>(kVramWidth) * kVramHeight);
   return probe;
 }
 
@@ -344,7 +344,7 @@ void GpuDevice::loadImage(VramRect rect, std::span<const uint16_t> pixels) {
 
 std::span<const uint16_t> GpuDevice::vram() {
   bind();
-  return {GPU_get_vram(), static_cast<size_t>(kDeviceVramWidth) * kDeviceVramHeight};
+  return {GPU_get_vram(), static_cast<size_t>(kVramWidth) * kVramHeight};
 }
 
 DisplayArea GpuDevice::displayArea() {
@@ -374,8 +374,8 @@ Rgb24Picture GpuDevice::picture(VramRect rect, bool depth24) {
   bind();
   const uint16_t *vram = GPU_get_vram();
   const auto at = [vram](int column, int row) {
-    return vram[static_cast<size_t>(row & (kDeviceVramHeight - 1)) * kDeviceVramWidth +
-                static_cast<size_t>(column & (kDeviceVramWidth - 1))];
+    return vram[static_cast<size_t>(row & (kVramHeight - 1)) * kVramWidth +
+                static_cast<size_t>(column & (kVramWidth - 1))];
   };
   Rgb24Picture out{
       width,

@@ -23,6 +23,7 @@
 #include "memcard.h"
 #include "mods.h"
 #include "native_fmv.h"
+#include "pad_frame_probes.h"
 #include "pad_input.h"
 #include "platform_hle.h"
 #include "repl.h"
@@ -30,7 +31,6 @@
 #include "session_control.h"
 #include "session_run.h"
 #include "sio_pad.h"
-#include "pad_frame_probes.h"
 #include "snapshot.h"
 #include "spu_audio.h"
 #include "spu_device.h"
@@ -38,13 +38,19 @@
 #include "typed_config.h"
 #include "xa_state.h"
 
-class GpuDevice;
-struct GpuVkState;
+namespace psx::render {
+class RenderDevice;
+class RenderState;
+} // namespace psx::render
 
 class Game {
 public:
   const psx::config::Config config; // the launch configuration, fixed for this Game's life
-  Core core;                        // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
+  // The process's one window and device. A host running several Games passes the same one to each; a
+  // Game made without one owns it. Declared before every user so it is destroyed after them.
+  std::unique_ptr<psx::render::RenderDevice> ownedRenderDevice;
+  psx::render::RenderDevice &renderDevice;
+  Core core; // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
 
   // ---- migrated subsystem state (one member per migrated subsystem) ----
   psx::frame::Timing timing;
@@ -65,44 +71,31 @@ public:
   // own window drain — reaches the host through this one object.
   psx::input::HostInput hostInput;
   Pad pad{hostInput};
-  Repl repl;                                    // interactive REPL driver + title-consumed requests (repl.cpp)
-  Fmv fmv;                                      // native .STR movie player (native_fmv.cpp)
-  psx::present::DisplayPresenter display{core}; // the guest display to the screen, once per present
-  std::unique_ptr<GpuVkState> gpuVk_;           // this Game's present targets on the SDL GPU device
-  GpuVkState &gpuVk() {
-    return *gpuVk_;
+  Repl repl;                                         // interactive REPL driver + title-consumed requests (repl.cpp)
+  Fmv fmv;                                           // native .STR movie player (native_fmv.cpp)
+  psx::present::DisplayPresenter display{core};      // the guest display to the screen, once per present
+  std::unique_ptr<psx::render::RenderState> render_; // this Game's present targets on renderDevice
+  psx::render::RenderState &render() {
+    return *render_;
   }
 
-  // The SDL3 GPU host window/device/pipelines: the ONE presentation device of the process. A Game
-  // presents through it; it does not have to OWN it. A host that runs several Games in one process — a
-  // title selector, then a title, then the selector again — passes the same device to every one of them
-  // (see psxport::HostPresentation), because a window destroyed and re-created between sessions is what
-  // made the selector look like a separate program. `Game(GameRuntime&)` owns a device
-  // of its own, and `Game(GameRuntime&, GpuDevice&)` presents through one the caller owns and outlives this Game.
-  //
-  // `ownedGpuDevice` is declared FIRST so it is constructed before the reference binds to it, and LAST
-  // so it is destroyed last: a self-owning Game's device outlives every per-Game GPU target rather than
-  // the other way round.
-  std::unique_ptr<GpuDevice> ownedGpuDevice;
-  GpuDevice &gpu_dev;
-
-  psx::frame::FramePresenter presentation; // non-temporal current-frame fence, present and pacing owner
-  GuestPresentationState guestDisplay;     // latched only when the title publishes matching guest projection
+  psx::frame::FramePresenter presentation;           // non-temporal current-frame fence, present and pacing owner
+  psx::present::GuestPresentationState guestDisplay; // latched only when the title publishes matching guest projection
   // A resume replay or a host pre-roll: the pacer does not sleep, movies run uncapped, audio is dropped.
   bool fastForwarding() const {
     return pad.fastForwarding() || session.preRolling();
   }
-  SpuAudio spu_audio;                 // host audio output sink (SDL3 device + optional WAV capture)
-  RmlOverlay rml_overlay;             // in-app mod/debug HTML UI + live world-position HUD
-  PlatformHle platform_hle;           // HW-sync HLE dispatch table (VSync/CdSync/MDEC)
-  Memcard memcard;                    // host-backed 128 KB memory card device (BIOS libcard/libmcrd)
+  SpuAudio spu_audio;       // host audio output sink (SDL3 device + optional WAV capture)
+  RmlOverlay rml_overlay;   // in-app mod/debug HTML UI + live world-position HUD
+  PlatformHle platform_hle; // HW-sync HLE dispatch table (VSync/CdSync/MDEC)
+  Memcard memcard;          // host-backed 128 KB memory card device (BIOS libcard/libmcrd)
   Mods mods;
   psx::host::SessionRun run;          // whether the title asked to end its run
   psx::frame::SessionControl session; // host-level request to end this Game and show the selector (session_control.h)
   DbgServer dbg_server;               // live TCP debug endpoint (PSXPORT_DEBUG_SERVER=<port>)
   psx::debug::DebugCommands debugCommands; // the verbs the REPL and the debug server share
-  psx::debug::BugReportSession bugReport; // B key: freeze, capture, write and save a bug report
-  GpuPerf perf;                           // per-frame CPU phase / frame-time profiler (REPL `debug perf`)
+  psx::debug::BugReportSession bugReport;  // B key: freeze, capture, write and save a bug report
+  GpuPerf perf;                            // per-frame CPU phase / frame-time profiler (REPL `debug perf`)
   SpuDevice spu;   // per-instance SPU device (Beetle spu.c handle + SBS write log); bound via spu.bind()
   MdecDevice mdec; // per-instance MDEC device (Beetle mdec.c handle); bound via mdec.bind()
 
@@ -131,11 +124,10 @@ public:
   }
   psx::game::FrameDriver &requireFrameDriver() const;
 
-  // core.game / gpuVk().game are back-pointers so a subsystem holding one can reach the rest of the machine.
+  // core.game is a back-pointer so a subsystem holding one can reach the rest of the machine.
   Game(psx::game::GameRuntime &runtime, const psx::config::Config &config);
-  // Present through a presentation device the CALLER owns and outlives this Game; this Game never
-  // releases it, so every Game in a host-lifetime-window product shares one window and one device.
-  Game(psx::game::GameRuntime &runtime, GpuDevice &presentation, const psx::config::Config &config);
+  // Present through a device the caller owns and keeps alive past this Game.
+  Game(psx::game::GameRuntime &runtime, psx::render::RenderDevice &presentation, const psx::config::Config &config);
   ~Game();
   // Present nothing: no window or GPU device is brought up.
   void disablePresentation();

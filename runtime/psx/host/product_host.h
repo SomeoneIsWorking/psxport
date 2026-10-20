@@ -9,7 +9,7 @@
 #include "typed_config.h"
 
 #include "host_input.h"
-#include "host_presentation.h"
+#include "render_device.h"
 
 #include <filesystem>
 #include <memory>
@@ -44,7 +44,7 @@ private:
     Process &operator=(const Process &) = delete;
 
     const psx::config::Config config;
-    psxport::HostPresentation presentation;
+    psx::render::RenderDevice presentation;
     // The presentation keeps the title pointer, so the text lives as long as the process state.
     std::string windowTitle;
     psx::input::QuitScope quit;

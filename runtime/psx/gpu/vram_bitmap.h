@@ -1,7 +1,7 @@
 // vram_bitmap.h — one bit per VRAM pixel, marked and tested a row's column run at a time.
 #pragma once
 
-#include "record_raster_setup.h"
+#include "vram_rect.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -10,7 +10,7 @@
 
 namespace psx::gpu {
 
-// Columns [x0, x1) of one row, 0 <= x0 <= x1 <= kRecordVramWidth.
+// Columns [x0, x1) of one row, 0 <= x0 <= x1 <= kVramWidth.
 struct ColumnRun {
   int x0 = 0;
   int x1 = 0;
@@ -18,7 +18,7 @@ struct ColumnRun {
 
 class VramBitmap {
 public:
-  VramBitmap() : words_(static_cast<std::size_t>(kRecordVramHeight) * kWordsPerRow, 0) {}
+  VramBitmap() : words_(static_cast<std::size_t>(kVramHeight) * kWordsPerRow, 0) {}
 
   void mark(int row, ColumnRun run) {
     forEachWord(words_, row, run, [](std::uint64_t &word, std::uint64_t mask) {
@@ -42,7 +42,7 @@ public:
   }
 
 private:
-  static constexpr int kWordsPerRow = kRecordVramWidth / 64;
+  static constexpr int kWordsPerRow = kVramWidth / 64;
 
   // Bits [x0, x1) of one word, 0 <= x0 < x1 <= 64.
   static std::uint64_t wordMask(ColumnRun bits) {

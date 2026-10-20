@@ -1,8 +1,8 @@
 #include "picker_composite.h"
 
 #include "game.h"
-#include "gpu_vk_device.h"
-#include "gpu_vk_internal.h"
+#include "render_device.h"
+#include "render_state.h"
 
 #include <lucent/log.h>
 
@@ -65,7 +65,7 @@ int logoWidthAt(const PanelLogo &logo, int panelWidth) {
 
 } // namespace
 
-PickerComposite::PickerComposite(GpuDevice &device, Core *hostCore)
+PickerComposite::PickerComposite(psx::render::RenderDevice &device, Core *hostCore)
     : m_compositor(device, hostCore), m_device(device) {}
 
 PickerComposite::~PickerComposite() = default;
@@ -229,9 +229,9 @@ void PickerComposite::build(const PickerLayout &layout, std::span<const PanelSou
   if (lucent::detail::channel_enabled("picker")) {
     for (std::size_t index = 0; index < panels.size(); ++index) {
       const PanelSource &source = panels[index];
-      const GpuVkState::PresentedImage image = source.session != nullptr
-                                                   ? source.session->game->gpuVk().newestPresentedPicture()
-                                                   : GpuVkState::PresentedImage{};
+      const psx::render::PresentedImage image = source.session != nullptr
+                                                    ? source.session->game->render().newestPresentedPicture()
+                                                    : psx::render::PresentedImage{};
       const PanelLayout geometry = layout.panel(static_cast<int>(index));
       lucent::debug("picker",
                     "panel {} image {}x{} viewport {}x{} at +{}+{} into {}x{} at +{}+{} held={}",

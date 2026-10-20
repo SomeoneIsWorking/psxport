@@ -10,8 +10,10 @@ function(psxport_add_gpu_shaders psxport_root target)
     ${shader_runtime_dir}/shaders_gpu/*.vert
     ${shader_runtime_dir}/shaders_gpu/*.frag
     ${shader_runtime_dir}/shaders_gpu/*.glsl)
+  # record_op.glsl is generated from the op layout in these headers.
+  list(APPEND shader_sources ${shader_runtime_dir}/gpu/record_raster_setup.h ${shader_runtime_dir}/present/vram_rect.h)
 
-  set(shader_header ${CMAKE_CURRENT_BINARY_DIR}/psxport_generated/gpu_vk_shaders.h)
+  set(shader_header ${CMAKE_CURRENT_BINARY_DIR}/psxport_generated/render_shaders.h)
   set(shader_stamp ${CMAKE_CURRENT_BINARY_DIR}/psxport_gpu_shaders.stamp)
   set(shader_generator ${psxport_root}/tools/gen_gpu_shaders.py)
 
@@ -22,7 +24,7 @@ function(psxport_add_gpu_shaders psxport_root target)
     COMMAND "${Python3_EXECUTABLE}" ${shader_generator} --output ${shader_header} --stamp ${shader_stamp}
     DEPENDS ${shader_sources} ${shader_generator}
     WORKING_DIRECTORY ${psxport_root}
-    COMMENT "Generating SDL_GPU SPIR-V header (gpu_vk_shaders.h)"
+    COMMENT "Generating SDL_GPU SPIR-V header (render_shaders.h)"
     VERBATIM)
 
   # Makefile generators do not rebuild a missing BYPRODUCT from a current stamp. This cheap

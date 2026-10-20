@@ -8,8 +8,6 @@
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_runtime.h"
-#include "gpu_vk.h"
-#include "gpu_vk_internal.h"
 #include "host_input.h"
 #include "host_turn.h"
 #include "psx_exe_image.h"
@@ -91,7 +89,7 @@ bool TitleSession::boot() {
   if (selectorAvailable_) {
     applyPresentRoute();
     // A pane host the picker attached while this panel was still cold.
-    game.core.game->gpuVk().setPaneHost(std::move(pendingPaneHost_));
+    game.render().setPaneHost(std::move(pendingPaneHost_));
     pendingPaneHost_ = {};
     // The picker owns the player's input; a panel's guest must not see it (see setPlayerInput).
     game.pad.setPlayerInputSuppressed(!playerInput_);
@@ -237,7 +235,7 @@ bool TitleSession::showsTitlePicture() const {
 }
 
 bool TitleSession::hasPicture() const {
-  return parts_->booted && parts_->game->gpuVk().lastPresented().valid();
+  return parts_->booted && parts_->game->render().lastPresented().valid();
 }
 
 void TitleSession::refreshPicture() const {
@@ -253,38 +251,32 @@ void TitleSession::refreshPicture() const {
   contentCheckedAtStep_ = steps_;
   // The probe holds the frame it read: asked again while the session runs, never once it is
   // paused, since a frozen panel's picture cannot change.
-  contentSeen_ = parts_->game->gpuVk().retainFilledPresentImage();
+  contentSeen_ = parts_->game->render().retainFilledPresentImage();
 }
 
 int TitleSession::pictureWidth() const {
-  const GpuVkState::PresentedImage image = presentedPicture();
-  return pictureSize(image).width;
+  return pictureSize(presentedPicture()).width;
 }
 
 int TitleSession::pictureHeight() const {
-  const GpuVkState::PresentedImage image = presentedPicture();
-  return pictureSize(image).height;
+  return pictureSize(presentedPicture()).height;
 }
 
 // The same rect the compositor samples, or the panel crops to one aspect and draws another.
-TitleSession::PaneSize TitleSession::pictureSize(const GpuVkState::PresentedImage &image) const {
+TitleSession::PaneSize TitleSession::pictureSize(const psx::render::PresentedImage &image) const {
   if (!image.valid()) {
     return PaneSize{1, 1};
   }
-  const PaneRect picture = image.content.w > 0 && image.content.h > 0 ? image.content : image.viewport;
+  const psx::present::PaneRect picture = image.picture();
   return PaneSize{picture.w, picture.h};
 }
 
-// The picture the compositor samples: GpuVkState's newest presented frame that held one.
-GpuVkState::PresentedImage TitleSession::presentedPicture() const {
+// The picture the compositor samples.
+psx::render::PresentedImage TitleSession::presentedPicture() const {
   if (!parts_->booted) {
     return {};
   }
-  GpuVkState::PresentedImage image = parts_->game->gpuVk().newestPresentedPicture();
-  if (!image.valid()) {
-    image = parts_->game->gpuVk().lastPresented();
-  }
-  return image;
+  return parts_->game->render().newestPresentedPicture();
 }
 
 void TitleSession::applyPresentRoute() {
@@ -292,9 +284,9 @@ void TitleSession::applyPresentRoute() {
     return; // no machine yet; boot() applies it
   }
   if (paneDestination_) {
-    parts_->game->core.game->gpuVk().presentToPane(paneImage_);
+    parts_->game->render().presentToPane(paneImage_);
   } else {
-    parts_->game->core.game->gpuVk().presentToWindow();
+    parts_->game->render().presentToWindow();
   }
 }
 
@@ -310,7 +302,7 @@ void TitleSession::setPaneHost(psx::present::PaneHost host) {
     pendingPaneHost_ = std::move(host);
     return;
   }
-  parts_->game->core.game->gpuVk().setPaneHost(std::move(host));
+  parts_->game->render().setPaneHost(std::move(host));
 }
 
 void TitleSession::presentToWindow() {

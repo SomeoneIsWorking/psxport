@@ -10,7 +10,8 @@
 
 namespace psx::config {
 
-// PSXPORT_CW: log stores into "lo,hi" (hex); _MAX caps the hits logged (0 unlimited), _GPR adds registers, _BT a backtrace.
+// PSXPORT_CW: log stores into "lo,hi" (hex); _MAX caps the hits logged (0 unlimited), _GPR adds registers, _BT a
+// backtrace.
 struct StoreWatchConfig {
   std::string text;
   std::optional<GuestAddressRange> range;
@@ -28,14 +29,13 @@ struct SnapshotSchedule {
 };
 SnapshotSchedule snapshot_schedule();
 
-long present_dump_first_fence();   // PSXPORT_FPS60_DUMP_FROM
-bool gate_presentation();          // PSXPORT_GATE_PRESENTATION
-std::string present_shot_frames(); // PSXPORT_PRESENT_SHOT_AT: comma list of present indices
+long present_dump_first_fence();                  // PSXPORT_FPS60_DUMP_FROM
+bool gate_presentation();                         // PSXPORT_GATE_PRESENTATION
+std::vector<std::uint32_t> present_shot_frames(); // PSXPORT_PRESENT_SHOT_AT: present indices
 
-std::string gpu_ram_dump();    // PSXPORT_GRAMDUMP: "frame:path"
-std::string gpu_dump_dir();    // PSXPORT_GPU_DUMP
-std::string gpu_shot_frames(); // PSXPORT_SHOT_AT: comma list of frames
-long gpu_scene_dump_frame();   // PSXPORT_SCENEDUMP (-1 off)
+std::string gpu_dump_dir();                   // PSXPORT_GPU_DUMP
+std::vector<std::uint32_t> gpu_shot_frames(); // PSXPORT_SHOT_AT: present indices
+long gpu_scene_dump_frame();                  // PSXPORT_SCENEDUMP (-1 off)
 
 bool gpu_validation();      // PSXPORT_GPU_DEBUG
 bool gpu_fault_override();  // PSXPORT_GPU_FAULT_OVERRIDE
@@ -59,7 +59,8 @@ struct GuestPoke {
 std::optional<std::vector<GuestPoke>> guest_poke();
 std::string guest_poke_text();
 
-// PSXPORT_FORCE_BUTTONS pulses, PSXPORT_FORCE_HOLD holds from _HOLD_AT, all stop at _STOP_AT (-1 never); active-low hex.
+// PSXPORT_FORCE_BUTTONS pulses, PSXPORT_FORCE_HOLD holds from _HOLD_AT, all stop at _STOP_AT (-1 never); active-low
+// hex.
 struct ForcedInput {
   std::optional<std::uint16_t> pulse;
   std::optional<std::uint16_t> hold;

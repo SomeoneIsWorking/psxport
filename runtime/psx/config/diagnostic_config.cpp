@@ -18,7 +18,6 @@ Var<long> cv_snapshot_max("PSXPORT_SNAP_MAX", 8, kRunOnly);
 Var<long> cv_present_dump_first_fence("PSXPORT_FPS60_DUMP_FROM", 0, kRunOnly);
 Var<bool> cv_gate_presentation("PSXPORT_GATE_PRESENTATION", false, kRunOnly);
 Var<std::string> cv_present_shot_frames("PSXPORT_PRESENT_SHOT_AT", "", kRunOnly);
-Var<std::string> cv_gpu_ram_dump("PSXPORT_GRAMDUMP", "", kRunOnly);
 Var<std::string> cv_gpu_dump_dir("PSXPORT_GPU_DUMP", "", kRunOnly);
 Var<std::string> cv_gpu_shot_frames("PSXPORT_SHOT_AT", "", kRunOnly);
 Var<long> cv_gpu_scene_dump_frame("PSXPORT_SCENEDUMP", -1, kRunOnly);
@@ -44,15 +43,39 @@ Var<bool> cv_memory_census("PSXPORT_MEMCENSUS", false, kRunOnly);
 Var<std::string> cv_memory_census_path("PSXPORT_MEMCENSUS_OUT", "", kRunOnly);
 
 const Registration kRegistration{
-    cv_store_watch,       cv_store_watch_limit,    cv_store_watch_registers, cv_store_watch_backtrace,
-    cv_snapshot_at,       cv_snapshot_every,       cv_snapshot_max,          cv_present_dump_first_fence,
-    cv_gate_presentation, cv_present_shot_frames,  cv_gpu_ram_dump,          cv_gpu_dump_dir,
-    cv_gpu_shot_frames,   cv_gpu_scene_dump_frame, cv_gpu_validation,        cv_gpu_fault_override,
-    cv_present_sink,      cv_movie_fps,            cv_movie_max_frames,      cv_movie_dc_only,
-    cv_movie_row_major,   cv_movie_dump_codes,     cv_wav_capture_path,      cv_spu_write_backtrace,
-    cv_guest_poke,        cv_forced_buttons,       cv_forced_hold,           cv_forced_hold_at,
-    cv_forced_stop_at,    cv_pad_shot_frames,      cv_pad_dump_frames,       cv_no_host_pads,
-    cv_memory_census,     cv_memory_census_path,
+    cv_store_watch,
+    cv_store_watch_limit,
+    cv_store_watch_registers,
+    cv_store_watch_backtrace,
+    cv_snapshot_at,
+    cv_snapshot_every,
+    cv_snapshot_max,
+    cv_present_dump_first_fence,
+    cv_gate_presentation,
+    cv_present_shot_frames,
+    cv_gpu_dump_dir,
+    cv_gpu_shot_frames,
+    cv_gpu_scene_dump_frame,
+    cv_gpu_validation,
+    cv_gpu_fault_override,
+    cv_present_sink,
+    cv_movie_fps,
+    cv_movie_max_frames,
+    cv_movie_dc_only,
+    cv_movie_row_major,
+    cv_movie_dump_codes,
+    cv_wav_capture_path,
+    cv_spu_write_backtrace,
+    cv_guest_poke,
+    cv_forced_buttons,
+    cv_forced_hold,
+    cv_forced_hold_at,
+    cv_forced_stop_at,
+    cv_pad_shot_frames,
+    cv_pad_dump_frames,
+    cv_no_host_pads,
+    cv_memory_census,
+    cv_memory_census_path,
 };
 
 // A malformed list arms nothing, and says so.
@@ -121,20 +144,16 @@ bool gate_presentation() {
   return cv_gate_presentation.get();
 }
 
-std::string present_shot_frames() {
-  return cv_present_shot_frames.get();
-}
-
-std::string gpu_ram_dump() {
-  return cv_gpu_ram_dump.get();
+std::vector<std::uint32_t> present_shot_frames() {
+  return frameList(cv_present_shot_frames);
 }
 
 std::string gpu_dump_dir() {
   return cv_gpu_dump_dir.get();
 }
 
-std::string gpu_shot_frames() {
-  return cv_gpu_shot_frames.get();
+std::vector<std::uint32_t> gpu_shot_frames() {
+  return frameList(cv_gpu_shot_frames);
 }
 
 long gpu_scene_dump_frame() {

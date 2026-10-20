@@ -74,17 +74,39 @@ Var<std::string> cv_debug_channels("PSXPORT_DEBUG", "", kRunOnly);
 Var<std::string> cv_log_file("PSXPORT_LOG_FILE", "", kRunOnly);
 
 const Registration kRegistration{
-    cv_noaudio,          cv_debug_server,       cv_store_observe,
-    cv_ramdump,          cv_load_state,         cv_bug_report_dir,
-    cv_pad_record,       cv_pad_replay,         cv_pad_resume,
-    cv_watchdog,         cv_spin_ticks,         cv_spin_runs,
-    cv_watchdog_boot,    cv_native_frames,      cv_asset_dir,
-    cv_vk_window,        cv_vk_headless,        cv_settings_path,
-    cv_producers,        cv_render_path,        cv_lightrec_fallback_block_limit,
-    cv_override_diff,    cv_override_diff_first, cv_override_diff_every,
-    cv_override_diff_dead_stack, cv_override_diff_report, cv_reach_report,
-    cv_fullscreen,       cv_windowed,           cv_picker_titles,
-    cv_nopace,           cv_repl,               cv_debug_channels,
+    cv_noaudio,
+    cv_debug_server,
+    cv_store_observe,
+    cv_ramdump,
+    cv_load_state,
+    cv_bug_report_dir,
+    cv_pad_record,
+    cv_pad_replay,
+    cv_pad_resume,
+    cv_watchdog,
+    cv_spin_ticks,
+    cv_spin_runs,
+    cv_watchdog_boot,
+    cv_native_frames,
+    cv_asset_dir,
+    cv_vk_window,
+    cv_vk_headless,
+    cv_settings_path,
+    cv_producers,
+    cv_render_path,
+    cv_lightrec_fallback_block_limit,
+    cv_override_diff,
+    cv_override_diff_first,
+    cv_override_diff_every,
+    cv_override_diff_dead_stack,
+    cv_override_diff_report,
+    cv_reach_report,
+    cv_fullscreen,
+    cv_windowed,
+    cv_picker_titles,
+    cv_nopace,
+    cv_repl,
+    cv_debug_channels,
     cv_log_file,
 };
 
@@ -264,23 +286,14 @@ std::string picker_titles() {
   return cv_picker_titles.get();
 }
 
-std::string user_state_dir() {
-  const std::string &xdg = lucent::config::text("XDG_STATE_HOME");
-  if (!xdg.empty()) {
-    return xdg + "/psxport";
-  }
-  const std::string &home = lucent::config::text("HOME");
-  return home.empty() ? std::string() : home + "/.local/state/psxport";
-}
-
-RenderPath render_path(RenderPath fallback) {
+present::RenderPath render_path(present::RenderPath fallback) {
   const std::string &text = cv_render_path.get();
-  RenderPath path = fallback;
-  if (!psx::gpu::parseRenderPath(text.c_str(), &path)) {
+  present::RenderPath path = fallback;
+  if (!present::parseRenderPath(text.c_str(), &path)) {
     lucent::warn("cfg",
                  "PSXPORT_RENDER_PATH='{}' matched no render path, using '{}'. Valid: record | device.",
                  text,
-                 psx::gpu::renderPathName(fallback));
+                 present::renderPathName(fallback));
     return fallback;
   }
   return path;
@@ -366,8 +379,7 @@ std::vector<std::string> cvar_report_lines(bool withKnobs) {
   std::vector<std::string> lines;
   if (withKnobs) {
     lucent::cvar::enumerate([&lines](lucent::cvar::VarBase &var) {
-      std::string line =
-          lucent::format("{} = {} [{}]", var.name(), var.effective_string(), layer_name(var.layer()));
+      std::string line = lucent::format("{} = {} [{}]", var.name(), var.effective_string(), layer_name(var.layer()));
       for (const Layer layer : {Layer::Value, Layer::Override, Layer::Runtime}) {
         if (layer != var.layer() && var.has(layer)) {
           line += lucent::format(" ({}={})", layer_name(layer), var.layer_string(layer));
