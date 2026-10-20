@@ -266,7 +266,8 @@ def preflight(extra: Iterable[Dependency] = ()) -> None:
     """Refuse on a missing dependency, name the framework checkout, and initialise its vendors."""
     require((*FRAMEWORK_DEPENDENCIES, *extra))
     dirty = " +dirty" if _git("status", "--porcelain") else ""
-    say(f"framework: {FRAMEWORK.resolve()} @ {_git('rev-parse', '--short', 'HEAD') or '?'}{dirty}")
+    source = "PSXPORT_DIR" if os.environ.get("PSXPORT_DIR") else "external/psxport"
+    say(f"framework ({source}): {FRAMEWORK.resolve()} @ {_git('rev-parse', '--short', 'HEAD') or '?'}{dirty}")
     psxport_fetch.init_submodules(str(FRAMEWORK.resolve()))
 
 

@@ -197,7 +197,7 @@ One group because its API breaks reach every caller. psxport commits come first,
 ### A5. Python tooling
 Runs after A3, because `title_profile` reads A3's constexpr facts.
 - **Owner modules and their files:**
-  - psxport `tools/port/{consumer_verify.py, launch_environment.py, new launcher.py, looks_right.py, present_geometry.py, widescreen_pair.py}`, `tools/check_cpp_style.py`, `tools/formats/psx_exe.py`, `tools/decomp/images.py`, `tools/psxport_fetch.py`, `scripts/{bootstrap_workspace.py, submodule_state.py}`, `tools/automation/*`, `tools/oracle/console_capture.py`, `tools/prof_hot.py`, and `tools/clean.py`, `tools/lint/` and `tools/build.py` (all three deleted).
+  - psxport `tools/port/{consumer_verify.py, launch_environment.py, new launcher.py, looks_right.py, present_geometry.py, widescreen_pair.py}`, `tools/check_cpp_style.py`, `tools/formats/psx_exe.py`, `tools/decomp/images.py`, `tools/psxport_fetch.py`, `scripts/{bootstrap_workspace.py, submodule_state.py}`, `tools/automation/*`, `tools/oracle/console_capture.py`, `tools/prof_hot.py`, `tools/build.py`, and `tools/clean.py` and `tools/lint/` (both deleted).
   - All of `psx-spyro/tools/*` and the Spyro `CMakeLists.txt` cpp_ownership line.
   - Every other title's `tools/run.py`/`verify.py`/`bootstrap.py`, Spider-Man's `launcher_dependencies.py`, Vagrant Story's `runtime_boundary.py`, and Tekken 3's `probe_widescreen_pair.py`.
 - **Merged findings and their single implementation:**
@@ -212,7 +212,11 @@ Runs after A3, because `title_profile` reads A3's constexpr facts.
   - `psxport_fetch` `SUBMODULES`/`init_submodules` are the one submodule list, and `submodule_state.declared_entries` is the one `.gitmodules` reader.
   - Spyro's `title_states` owns the gamestate name table and `guest_globals.py` owns the guest words. The `drive.py` re-exports and aliases are deleted, and Spyro 2/3 addresses come from the C++ facts.
   - `ToolError` is the one refusal type once psxport is present, so the Refused-to-Refusal wrappers are deleted.
-  - Dead code deleted: `go_public.py`, the unused automation helpers, the four `*control_settings.ini*` files, the build entry point (`verify --no-test` replaces it), and the "pin" wording.
+  - Dead code deleted: `go_public.py`, the unused automation helpers, the four `*control_settings.ini*` files, and the "pin" wording.
+  - `tools/build.py` stays as psxport's one build entry point, rebuilt on `launcher.configure`/`build_targets`. Finding 252 asked to delete it in favour of `verify.py --no-test`, but `verify.py` went with the tests, so `build.py` is no longer a copy and the workspace build command names it.
+  - `launcher.run` is the one process runner; `automation.process` keeps only `ToolError` and `cpu_jobs`.
+  - `PSXPORT_DIR` still names a framework checkout in place of `external/psxport`, now in every title's `bootstrap.py` (finding 253 rewords its launcher line only).
+  - `psxport_fetch.init_submodules` still moves every vendor to the commit psxport records on each launch and bootstrap.
   - Narration in the launcher and environment files is cut to one line per comment.
 - **Spyro proof:** `tools/run.py` configures and builds (without exec), then `drive.py`, `shot.py` and `title_route.py` each run a headless Spyro 1, 2 and 3 boot to the title screen. The consumer gate passes for Spyro and one other title. Agents never run `run.sh`.
 
@@ -380,6 +384,8 @@ State each one in its group's commit and its issue doc.
 - crt0 refuses a field it cannot resolve.
 - Spyro 1 reports that it is still in its boot prefix while the logos play.
 - The picker moves with D-pad Left/Right.
+- A5, every title's launcher: the player build moves to `build/player` and psxport's disc reader to `build/player-tools`; the launcher takes only an optional positional disc and `--prepare-only`. Dropped: CTR's `--headless` (agents use `agent_environment`), Crash Bash's and C-12's `--check`, and C-12's `--disc` (now the positional disc).
+- A5, Spyro's launcher no longer requires OpenSSL; nothing in Spyro links it since A3 deleted `content_identity`.
 
 ## Performance (applies to every group)
 
