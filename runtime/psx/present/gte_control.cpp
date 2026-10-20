@@ -1,4 +1,3 @@
-// gte_control.cpp — see gte_control.h.
 #include "gte_control.h"
 
 #include <cstring>
@@ -33,13 +32,12 @@ void writeGteControl(psx::cpu::Gte &gte, const GteControl &control) {
 
 GteControl blendGteControl(const GteControl &from, const GteControl &to, float t) {
   GteControl blended = to;
-  for (std::uint32_t reg = 0; reg < kGteTranslationEnd; ++reg) {
-    if (reg >= kGteRotationWords) {
-      blended[reg] = static_cast<std::uint32_t>(
-          lerpInt(static_cast<std::int32_t>(from[reg]), static_cast<std::int32_t>(to[reg]), t));
-    } else {
-      blended[reg] = lerpHalves(from[reg], to[reg], t);
-    }
+  // The rotation matrix as s16 pairs, then the translation as s32.
+  for (std::uint32_t reg = gte::kRotation; reg < gte::kRotation + gte::kRotationWords; ++reg) {
+    blended[reg] = lerpHalves(from[reg], to[reg], t);
+  }
+  for (std::uint32_t reg = gte::kTranslationX; reg <= gte::kTranslationZ; ++reg) {
+    blended[reg] = lerpWord(from[reg], to[reg], t);
   }
   return blended;
 }

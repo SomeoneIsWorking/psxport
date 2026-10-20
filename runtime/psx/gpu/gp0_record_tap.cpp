@@ -3,6 +3,7 @@
 
 #include "gp0_command.h"
 #include "gp0_primitive_decode.h"
+#include "vram_pixel.h"
 
 #include <utility>
 
@@ -261,8 +262,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     fill.y = rect.y;
     fill.width = rect.width;
     fill.height = rect.height;
-    fill.value =
-        static_cast<std::uint16_t>((colour.red >> 3) | ((colour.green >> 3) << 5) | ((colour.blue >> 3) << 10));
+    fill.value = toVram555(colour.red, colour.green, colour.blue);
     fill.skipRowParity = probe.state.skipRowParity;
     feedback_.written({fill.x, fill.y, fill.x + fill.width, fill.y + fill.height});
     record_.append(fill);
@@ -416,8 +416,8 @@ void Gp0RecordTap::recordSprite(const DeviceProbe &probe) {
   primitive.state = probe.state;
   primitive.sourceAddress = packetSource_;
   present::RecordVertex &vertex = primitive.vertices[0];
-  vertex.x = sext11(vertex.x + probe.state.offsetX);
-  vertex.y = sext11(vertex.y + probe.state.offsetY);
+  vertex.x = Gp0Command::signedAxis(static_cast<std::uint32_t>(vertex.x + probe.state.offsetX));
+  vertex.y = Gp0Command::signedAxis(static_cast<std::uint32_t>(vertex.y + probe.state.offsetY));
   if (primitive.textured) {
     primitive.flipX = probe.spriteFlipX;
     primitive.flipY = probe.spriteFlipY;
@@ -447,16 +447,14 @@ void Gp0RecordTap::settleLast(const DeviceProbe &probe) {
   upload.height = rect.y1 - rect.y0;
   upload.sourceAddress = primitive->sourceAddress;
   upload.key = primitive->key;
-  std::vector<std::uint16_t> pixels;
-  pixels.reserve(static_cast<std::size_t>(upload.width) * static_cast<std::size_t>(upload.height));
+  settledPixels_.clear();
   for (int y = rect.y0; y < rect.y1; y++) {
-    const auto row =
-        probe.vram.subspan(static_cast<std::size_t>(y) * kRecordVramWidth + static_cast<std::size_t>(rect.x0),
-                           static_cast<std::size_t>(upload.width));
-    pixels.insert(pixels.end(), row.begin(), row.end());
+    const auto row = probe.vram.subspan(static_cast<std::size_t>(y) * kVramWidth + static_cast<std::size_t>(rect.x0),
+                                        static_cast<std::size_t>(upload.width));
+    settledPixels_.insert(settledPixels_.end(), row.begin(), row.end());
   }
   record_.dropLast();
-  record_.appendUpload(upload, pixels);
+  record_.appendUpload(upload, settledPixels_);
 }
 
 void Gp0RecordTap::consumeUploadWord(std::uint32_t word) {

@@ -8,40 +8,86 @@
 #include <cstdint>
 #include <map>
 #include <new>
+#include <unordered_map>
 #include <span>
 #include <vector>
 
 namespace psx::present {
 
-// Host bytes standing in for ranges of guest memory. A read outside every range falls through to the
-// guest (level data the guest does not change while an object lives); a write outside them aborts.
+// A guest word as a run first read it.
+struct LevelWord {
+  std::uint32_t address = 0;
+  std::uint32_t value = 0;
+};
+
+// The guest words a run read, each with the value it held at the first read.
+class LevelReads {
+public:
+  void note(std::uint32_t wordAddress, std::uint32_t value) {
+    words_.try_emplace(wordAddress, value);
+  }
+  std::vector<LevelWord> words() const;
+  void clear() {
+    words_.clear();
+  }
+
+private:
+  std::unordered_map<std::uint32_t, std::uint32_t> words_;
+};
+
+// Host bytes standing in for ranges of guest memory, one store under every name of an address. Ranges that
+// overlap or touch merge. A read outside every range falls through to the guest (level data the guest does
+// not change while an object lives), or to an overlaid word; a write outside them aborts.
 class HostMemory {
 public:
-  // A range holding a copy of `bytes`; aborts when it overlaps one already held.
+  // A range holding a copy of `bytes`.
   void provide(std::uint32_t address, std::span<const std::byte> bytes);
   // A range of `size` zero bytes.
   void zero(std::uint32_t address, std::uint32_t size);
+  // A range of `size` bytes seeded from the guest (through the overlay) where no range already holds them.
+  void mapGuest(Core &guest, std::uint32_t address, std::uint32_t size);
+  // Fall-through reads of these words take the overlaid value in place of the guest's.
+  void overlay(std::span<const LevelWord> words);
+  // From now on, every word a read falls through to is noted with the value it gave.
+  void keepLevelReads() {
+    keepsLevelReads_ = true;
+  }
+  const LevelReads &levelReads() const {
+    return levelReads_;
+  }
+
   // False when `address` lies in no range; aborts when the access runs past the range's end.
   bool read(std::uint32_t address, void *out, std::uint32_t size) const;
+  // A read in no range, from the overlay or the guest.
+  void fallThrough(Core &guest, std::uint32_t address, void *out, std::uint32_t size) const;
   void write(std::uint32_t address, const void *in, std::uint32_t size);
   // The bytes of the range holding [address, address + size); aborts when none does.
   std::span<const std::byte> view(std::uint32_t address, std::uint32_t size) const;
 
 private:
   using Range = std::vector<std::byte>;
-  void add(std::uint32_t address, std::vector<std::byte> bytes);
-  // The range holding `address` and its physical base, or null.
+  // [base, base + size) at kseg0 `base`, merged with every range it overlaps or touches, which keep their
+  // bytes; returns the merged range's bytes from `base` on.
+  std::byte *place(std::uint32_t base, std::uint32_t size);
+  // The range holding `address` and its base, or null.
   const Range *find(std::uint32_t address, std::uint32_t &base) const;
   Range *find(std::uint32_t address, std::uint32_t &base);
+  const std::uint32_t *overlaid(std::uint32_t wordAddress) const;
 
-  std::map<std::uint32_t, Range> ranges_; // by physical base
+  std::map<std::uint32_t, Range> ranges_; // by kseg0 base
+  std::map<std::uint32_t, std::uint32_t> overlay_; // by kseg0 word address
+  bool keepsLevelReads_ = false;
+  mutable LevelReads levelReads_;
 };
 
-// The accessors of Core a body uses, over the guest or over a HostMemory.
+// The accessors of Core a body uses, over the guest or over a HostMemory. Over the guest it may note each
+// first read outside `working`, the ranges the body owns, as the level data it drew from.
 class EmitMemory {
 public:
   EmitMemory(Core &core) : core_(&core) {}
   EmitMemory(Core &core, HostMemory &host) : core_(&core), host_(&host) {}
+  EmitMemory(Core &core, LevelReads &reads, std::span<const GuestSpan> working)
+      : core_(&core), reads_(&reads), working_(working) {}
 
   Core &core() const {
     return *core_;
@@ -82,11 +128,15 @@ public:
 
 private:
   template <class Value> Value read(std::uint32_t address) const {
+    Value value;
     if (host_ != nullptr) {
-      Value value;
-      if (host_->read(address, &value, sizeof(Value))) {
-        return value;
+      if (!host_->read(address, &value, sizeof(Value))) {
+        host_->fallThrough(*core_, address, &value, sizeof(Value));
       }
+      return value;
+    }
+    if (reads_ != nullptr) {
+      noteRead(address);
     }
     if constexpr (sizeof(Value) == 1) {
       return core_->mem_r8(address);
@@ -107,9 +157,12 @@ private:
       core_->mem_w32(address, value);
     }
   }
+  void noteRead(std::uint32_t address) const;
 
   Core *core_;
   HostMemory *host_ = nullptr;
+  LevelReads *reads_ = nullptr;
+  std::span<const GuestSpan> working_;
 };
 
 // One element of the innermost open object while a body runs over the guest; nothing in a render, and nothing

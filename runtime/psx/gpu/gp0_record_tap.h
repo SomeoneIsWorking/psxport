@@ -112,6 +112,8 @@ private:
   present::VramUpload upload_{};
   std::uint32_t uploadRemaining_ = 0;
   std::vector<std::uint16_t> uploadPixels_;
+  // A settled draw's pixels, reused across draws.
+  std::vector<std::uint16_t> settledPixels_;
 
   TextureFeedback feedback_;
 

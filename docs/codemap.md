@@ -6,9 +6,10 @@ atomic work is `docs/issues/`.
 
 Dependency direction: title code → the title API (`runtime/psx/game/` and section 3.5 of
 `docs/workspace/RESTRUCTURE.md`) → PSX CPU, device and platform owners → host libraries. The executor
-calls services only through typed exits after synchronising guest state. `boot/`, `host/`, `gpu/`
-and `cpu/beetle/` are PRIVATE to `psxport` (`PSXPORT_INTERNAL_INCLUDES`); framework tests and tools
-reach them through `psxport_internal`, titles never do. Test oracles never link into the product.
+calls services only through typed exits after synchronising guest state. `boot/`, `host/` and
+`cpu/beetle/` are PRIVATE to `psxport` (`PSXPORT_INTERNAL_INCLUDES`); framework tests and tools
+reach them through `psxport_internal`, titles never do. `gpu/` is public: titles call the guest GPU
+device, its ports and the ordering-table walk. Test oracles never link into the product.
 
 ## Owners
 
@@ -60,22 +61,22 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Memory card | `runtime/psx/platform/memcard.*`, `card_syscall_log.*` | The card device and its identity |
 | Watchdog | `runtime/psx/platform/watchdog.*` | The frame watchdog `ProductHost` owns |
 | Host clock | `runtime/psx/platform/host_clock.h` | The host's monotonic clock in ns and ms |
-| Boot splash | `runtime/psx/platform/scea_splash.*`, `scea_asset.h` | Decoding the SCEA card picture |
 | Field turn | `runtime/psx/frame/field_turn.*` | The services owed around a title's field body: pause, watchdog re-arm, RAM dump, one command |
 | Frame loop | `runtime/psx/frame/frame_loop_shell.*`, `logic_frame.*` | Stepping a `FrameDriver`; the logic-frame start |
 | Frame presentation | `runtime/psx/frame/frame_presenter.*` | `FramePresenter::commit`: seal, cut, compose, build, pace, show |
 | Pacing and time | `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `timing.*`, `emulated_time.*`, `field_rate.h` | Host pacing, field rate and `fieldIntervalMs`, emulated time |
 | GPU device | `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h` | Beetle `gpu.c`: the only VRAM and GP0 executor |
-| Guest GPU ports | `runtime/psx/present/gpu_ports.*` | `gp0Write`, `gp1Write`, `gpuRead`, DMA2, `loadImage`, `vram`, `sealRecord` |
+| Guest GPU ports | `runtime/psx/gpu/gpu_ports.*` | `gp1Write` at the scanline clock, DMA2 block and linked-list modes; everything else is `core.gpuDevice()` |
 | Frame record | `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*`, `runtime/psx/present/frame_record.*` | The device's GP0 work recorded per logic frame |
 | Record rasteriser | `runtime/psx/gpu/gpu_vk_record_raster.*`, `record_raster_setup.*`, `record_raster_regions.h`, `vram_bitmap.h` | Drawing a record on the device image |
 | SDL3 GPU backend | `runtime/psx/gpu/gpu_vk_*.cpp`, `gpu_vk_window.*`, `gpu_vk_shader.*`, `runtime/psx/shaders_gpu/` | Window, device, present, submit, readback, shaders |
 | Display presenter | `runtime/psx/present/display_presenter.*`, `present_ledger.*`, `present_plan.h`, `video_plan.h`, `pixel_size.h` | Building a record, an in-between or a host picture, and showing it; the present ledger |
 | Render mode | `runtime/psx/present/render_mode.h` | `RenderPath {Record, Device}`, `DisplayPassGuard` |
-| Frame composer | `runtime/psx/present/frame_composer.*`, `state_producer.*`, `frame_state.*`, `emission_scope.*`, `emit_memory.*`, `blend.h` | In-betweens from `StateProducer` renders of saved state; `lerpInt`/`lerpWord`/`lerpHalves` |
-| GP0 decode | `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*`, `state_bytes.h` | One decode of guest draw commands; polygon opcodes and packet tag/byte sizes |
+| Frame composer | `runtime/psx/present/frame_composer.*`, `state_producer.*`, `frame_state.*`, `emission_scope.*`, `emit_memory.*`, `blend.h` | In-betweens from `StateProducer` renders of saved state; `EmitMemory`/`HostMemory` (merged guest-seeded or zeroed ranges, overlay, level reads); `lerpInt`/`lerpWord`/`lerpHalves` |
+| GP0 decode | `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*`, `state_bytes.h` | One decode of guest draw commands; polygon opcodes and packet tag/byte sizes; `DrawModeTracker`, the one GP0(E1) rule |
 | VRAM format | `runtime/psx/present/vram_rect.h`, `vram_pixel.h` | VRAM size, points and rects, the 555 pixel, texpage/CLUT words, the CPU texel sampler |
-| Ordering table | `runtime/psx/present/ordering_table.*`, `host_ordering_table.*` | The guest OT walk and host OT emission |
+| Ordering table | `runtime/psx/gpu/ordering_table.*` | OT node decode, the guest OT walk, `OtTables` |
+| Packet chains | `runtime/psx/present/packet_chains.*` | `PacketChainWalker`: a body's tag chains or bucket table, over guest or host memory, as primitives |
 | Widescreen | `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` | The title's aspect policy, canvas margins, projection publication |
 | Panes | `runtime/psx/present/pane_composite.*`, `pane_host.h`, `host_presentation.h`, `rgb24_picture.h` | Picker panes and host pictures |
 | Host input | `runtime/psx/input/host_input.*` | The one SDL event drain, key state, `QuitScope` |
