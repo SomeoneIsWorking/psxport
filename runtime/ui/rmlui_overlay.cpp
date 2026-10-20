@@ -17,7 +17,6 @@
 #include "rmlui_render_gpu.h"
 #include <cstdlib>
 
-#include "../ui/choice_screen.h"
 #include "../ui/menu_document.h"
 #include "../ui/ui_assets.h"
 
@@ -259,7 +258,6 @@ void RmlOverlay::shutdown() {
   // already destroyed the document — survivable only because RmlUi happened to tear the elements
   // down first.
   mBugReport.reset();
-  mChoice.reset();
   mMenu.reset();
   // The overlay's own CONTEXTS go here, because the LIBRARY's are not released here (see
   // shutdownRmlUiAtExit). Rml::Shutdown used to destroy every context as a side effect, which is the
@@ -268,17 +266,12 @@ void RmlOverlay::shutdown() {
   // name was refused ("context already exists") — a selector that rebuilds itself after a title
   // returns could not build its screen. A context holds documents, listeners and elements, so it is
   // unloaded first and removed second, exactly as a clean shutdown would.
-  if (Rml::Context *screen = ctx_(mScreenCtx)) {
-    screen->UnloadAllDocuments();
-    Rml::RemoveContext(screen->GetName());
-  }
   if (Rml::Context *base = ctx_(mCtx)) {
     base->UnloadAllDocuments();
     Rml::RemoveContext(base->GetName());
   }
   --liveOverlays;
   mCtx = nullptr;
-  mScreenCtx = nullptr;
   // NOT deleted: the renderer and the system interface are the process's (g_render/g_sys) and are
   // released once, when the process leaves.
   mRender = nullptr;
@@ -295,13 +288,6 @@ void RmlOverlay::event(const SDL_Event *e) {
     // The report form is modal: it takes every event, ESC (its cancel) included.
     SDL_Event ev = *e;
     RmlSDL::InputEventHandler(c, mWin, ev);
-    return;
-  }
-  if (mChoice && mChoice->visible() &&
-      (e->type == SDL_EVENT_MOUSE_MOTION || e->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
-       e->type == SDL_EVENT_MOUSE_BUTTON_UP || e->type == SDL_EVENT_MOUSE_WHEEL)) {
-    SDL_Event ev = *e;
-    RmlSDL::InputEventHandler(ctx_(mScreenCtx), mWin, ev);
     return;
   }
   // ESC toggles the menu (the game's old "ESC quits" was removed in gpu_vk.cpp). In options-mode the
@@ -432,11 +418,6 @@ void RmlOverlay::newFrame() {
     mMenu->update(); // no-op while hidden
   }
   c->Update();
-  if (Rml::Context *screen = ctx_(mScreenCtx)) {
-    screen->SetDimensions(c->GetDimensions());
-    screen->SetDensityIndependentPixelRatio(c->GetDensityIndependentPixelRatio());
-    screen->Update();
-  }
 }
 
 // Record the menu geometry into the present render pass. overlay_glue passes the FULL window size so
@@ -472,62 +453,4 @@ bug_report::Form *RmlOverlay::showBugReport(const bug_report::Draft &draft) {
 
 void RmlOverlay::closeBugReport() {
   mBugReport.reset();
-}
-
-// ---- the choice screen -----------------------------------------------------------------------------
-psx::ui::ChoiceView *RmlOverlay::showChoiceScreen(psx::ui::ChoiceContent content) {
-  if (!mInited) {
-    lucent::error("rmlui", "showChoiceScreen: the overlay is not up, so there is nowhere to show a screen");
-    return nullptr;
-  }
-  mChoice.reset();
-  if (mScreenCtx) {
-    ctx_(mScreenCtx)->UnloadAllDocuments();
-  }
-  Rml::Context *base = ctx_(mCtx);
-  if (!mScreenCtx) {
-    mScreenCtx = Rml::CreateContext(mMenuCtxName + "_screen", base->GetDimensions());
-    if (!mScreenCtx) {
-      lucent::error("rmlui", "CreateContext({}_screen) failed — no choice screen", mMenuCtxName);
-      return nullptr;
-    }
-  }
-  psx::ui::AssetSet assets;
-  assets.open();
-  std::string path;
-  if (!assets.require("choice.rml", path)) {
-    assets.report();
-    return nullptr;
-  }
-  Rml::ElementDocument *doc = ctx_(mScreenCtx)->LoadDocument(path.c_str());
-  if (!doc) {
-    lucent::error("rmlui", "LoadDocument({}) FAILED to parse — no choice screen", path);
-    return nullptr;
-  }
-  mChoice = std::make_unique<psx::ui::ChoiceScreen>(ctx_(mScreenCtx), doc, std::move(content));
-  mChoice->show();
-  return mChoice.get();
-}
-
-psx::ui::ChoiceView *RmlOverlay::choiceScreen() const {
-  return mChoice.get();
-}
-
-void RmlOverlay::hideChoiceScreen() {
-  if (mChoice) {
-    mChoice->hide();
-    mChoice.reset();
-    ctx_(mScreenCtx)->UnloadAllDocuments();
-  }
-}
-
-void RmlOverlay::recordScreenGpu(SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h) {
-  Rml::Context *c = ctx_(mScreenCtx);
-  if (!mInited || !c || !mRender || !mChoice || !mChoice->visible()) {
-    return;
-  }
-  auto *r = (RmlRenderInterfaceGpu *)mRender;
-  r->BeginFrame(cmd, rp, w, h);
-  c->Render();
-  r->EndFrame();
 }

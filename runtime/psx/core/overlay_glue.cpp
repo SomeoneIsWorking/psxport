@@ -23,9 +23,3 @@ void psx::ui::recordOverlay(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURender
     game->rml_overlay.recordGpu(cmd, rp, win_w, win_h);
   }
 }
-
-void psx::ui::recordOverlayScreen(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h) {
-  if (game) {
-    game->rml_overlay.recordScreenGpu(cmd, rp, w, h);
-  }
-}

@@ -54,6 +54,9 @@ struct PresentInputs {
   // GUEST-AUTHORED content inside `disp_w`; 0 = the renderer filled `disp_w` and there is nothing
   // narrower to honour. See planPresent.
   int content_w = 0;
+  // 1 = fill the sink instead of letterboxing: centre-crop the picture to the sink's aspect. A pane
+  // is a slice of the window, so the game fills it and the crop is taken at the rendered resolution.
+  int fill = 0;
 };
 
 // The complete description of one presented frame. Two plans that compare equal produce the same
@@ -189,6 +192,23 @@ inline PresentPlan planPresent(const PresentInputs &in, bool headless) {
   // native_w <= 0 means "the game has not told us its native width". Degrade to 4:3 — every PSX
   // display mode is 4:3, so that is the only safe assumption, and it can never divide by zero.
   const int aspect_h = in.native_w > 0 ? in.native_w : aspect_w;
+  if (in.fill && in.sink_w > 0 && in.sink_h > 0 && in.disp_h > 0) {
+    // The picture's shape is the letterbox's 4*aspect_w : 3*aspect_h, whatever its pixel count. The
+    // crop is taken from the rendered source, so the compositor does not resample it again.
+    p.viewport = PaneRect{0, 0, in.sink_w, in.sink_h};
+    const long long pictureW = 4LL * aspect_w;
+    const long long pictureH = 3LL * aspect_h;
+    if (pictureW * in.sink_h > pictureH * in.sink_w) {
+      const int keepWidth = static_cast<int>(aspect_w * pictureH * in.sink_w / (pictureW * in.sink_h));
+      p.disp[0] += (aspect_w - keepWidth) / 2 * scale;
+      p.disp[2] = keepWidth * scale;
+    } else {
+      const int keepHeight = static_cast<int>(in.disp_h * pictureW * in.sink_h / (pictureH * in.sink_w));
+      p.disp[1] += (in.disp_h - keepHeight) / 2 * scale;
+      p.disp[3] = keepHeight * scale;
+    }
+    return p;
+  }
   p.viewport = psx::present::letterbox(4 * aspect_w, 3 * aspect_h, in.sink_w, in.sink_h);
   return p;
 }

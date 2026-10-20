@@ -63,6 +63,11 @@ void Mods::save() const {
   // A launch PSXPORT_FPS60 is one run's choice; the player's saved one stays in the file.
   const int savedFps60 = mLaunchFps60 ? mSavedFps60 : fps60;
   fprintf(f, "aspect=%d\nires=%d\n", aspect, ires);
+  fprintf(f,
+          "picker_selected_share=%g\npicker_slant=%g\npicker_width_response=%g\n",
+          static_cast<double>(pickerSelectedShare),
+          static_cast<double>(pickerSlantPerWidth),
+          static_cast<double>(pickerWidthResponse));
   for (const psx::game::TitleIntSetting &setting : mTitleSettings) {
     fprintf(f, "%s=%ld\n", setting.var->name(), setting.var->value_for_save());
   }
@@ -102,6 +107,12 @@ void Mods::load() {
       if (v != 0) {
         ires = 0;
       }
+    } else if (!strcmp(k, "picker_selected_share")) {
+      pickerSelectedShare = psx::config::parseFloat(text).value_or(pickerSelectedShare);
+    } else if (!strcmp(k, "picker_slant")) {
+      pickerSlantPerWidth = psx::config::parseFloat(text).value_or(pickerSlantPerWidth);
+    } else if (!strcmp(k, "picker_width_response")) {
+      pickerWidthResponse = psx::config::parseFloat(text).value_or(pickerWidthResponse);
     } else if (!strcmp(k, "fps60")) {
       if (mTemporalInterpolationSupported) {
         mSavedFps60 = v != 0 ? 1 : 0;

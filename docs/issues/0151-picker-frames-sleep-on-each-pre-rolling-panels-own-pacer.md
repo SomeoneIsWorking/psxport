@@ -28,7 +28,23 @@ sleep per frame, all three panels settled in 15 s; settled frames mean 33.5 ms (
 30 Hz step). Windowed (MAILBOX): settled picker audio 44100 samples/s, drops 0.
 
 ## Open
-- A panel's picture is the held copy, refreshed once per 24 steps (`TitleSession::refreshPicture`'s
-  12-step gate compounded with `GpuVkState::retainFilledPresentImage`'s 15-present gate), so the
-  selected demo updates about every 0.8 s.
 - Spyro 3's panel passes its boot prefix but no probe finds a filled picture, so it stays empty.
+
+## Follow-up: the selector's PICTURE, not just its loop (2026-10-18)
+
+The resolution above fixed the loop's cadence but left the selector showing one picture per logic
+frame. With interpolation on, a logic frame presents twice (t=0.5 and t=1), so the composite sampled
+only the second and the in-between was never shown: the panel's demo ran at the guest's own 30 Hz
+however fast the picker went. The composite now runs on the selected panel's presents (the picker is
+that panel's `PaneHost`: it composites at the pane build and shows at the pane show), and the loop
+only paces on an iteration where no panel presented.
+
+Measured, paced, headless, Spyro trilogy panels settled, intervals of the `[pane] frame` composite:
+
+| sink | before | after |
+|---|---|---|
+| 960x720 | 38.9 fps | 59.7 fps (mean 16.34 ms, p50 17) |
+| 3840x2160 | 27.4 fps unpaced, work-bound | 61.2 fps |
+
+Also measured at 3840x2160: 2.00 presents per picker loop iteration and 0.99 composites per present,
+which is the hook firing on the in-between.

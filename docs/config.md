@@ -42,7 +42,11 @@ framework read these launch switches only there; they are not CVars and the runt
 
 A set variable resolves exactly as a `BoolVar`'s environment layer does (`lucent::config::flag`). A setting the player changes
 at runtime is not config: 60 fps lives in `Mods::fps60` (`game.mods`), seeded from the settings file's
-`fps60=` line and overridden for the run by `Config::fps60`, which is never saved. The environment audit
+`fps60=` line and overridden for the run by `Config::fps60`, which is never saved. The title selector's
+layout is also a settings-file value in `Mods`: `picker_selected_share` (the selected panel's fraction of
+the width, default 0.6; the others split the rest evenly), `picker_slant` (seam slant as a fraction of
+the width, 0.1) and `picker_width_response` (fraction of the remaining width travel per frame, 0.25).
+`PickerSession` reads them from its host Game's `mods`. The environment audit
 counts `Config::environmentNames()` as declared. Unit test: `tests/test_typed_config.cpp`.
 
 The resolved value, source layer, and complete `PSXPORT_*` environment denominator are available

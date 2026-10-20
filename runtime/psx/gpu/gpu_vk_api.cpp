@@ -14,8 +14,9 @@
 
 namespace {
 
-// The internal-resolution cap: a 128 MiB budget at 14 bytes per pixel of VRAM scaled by i.
-constexpr double kIresBudgetBytes = 128.0 * 1024.0 * 1024.0;
+// The internal-resolution cap: a 640 MiB budget at 14 bytes per pixel of VRAM scaled by i, which
+// admits the 9 a 2160-line window asks for.
+constexpr double kIresBudgetBytes = 640.0 * 1024.0 * 1024.0;
 constexpr double kIresBytesPerPixel = 14.0;
 constexpr int kIresCeiling = 8;
 
@@ -29,7 +30,12 @@ VideoStatus videoStatus(Core &c) {
       std::sqrt(budgetPixels / (static_cast<double>(psx::gpu::kRecordVramWidth) * psx::gpu::kRecordVramHeight)));
   cap = cap < 1 ? 1 : (cap > kIresCeiling ? kIresCeiling : cap);
   VideoInputs v;
-  const psx::present::PixelSize sink = c.game->gpu_dev.sinkSize();
+  psx::present::PixelSize sink = c.game->gpu_dev.sinkSize();
+  // A pane is measured at its own present image, which the host sizes; a paused panel's is small.
+  const GpuVkState &vk = c.game->gpuVk();
+  if (vk.presentTarget() == GpuVkState::PresentTarget::Pane && vk.s_present_img_requested.height > 0) {
+    sink = vk.s_present_img_requested;
+  }
   v.sinkW = sink.width;
   v.sinkH = sink.height;
   v.modsIres = c.game->mods.ires;
@@ -47,10 +53,10 @@ VideoStatus videoStatus(Core &c) {
           .iresCap = cap};
 }
 
-void present(Core &core, int sx, int sy, int w, int h) {
+void buildDisplay(Core &core, int sx, int sy, int w, int h) {
   psx::ui::beginOverlayFrame(&core);
   psx::picture::announceOnChange(core, w);
-  core.game->gpuVk().present(sx, sy, w, h);
+  core.game->gpuVk().build_display(sx, sy, w, h);
 }
 
 void repaint(Core &core) {

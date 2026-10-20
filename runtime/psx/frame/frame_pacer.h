@@ -33,6 +33,13 @@ public:
   // field per call, honouring PSXPORT_NOPACE exactly as guest-driven pacing does.
   void hostScreenPace(Core &core);
 
+  // Display fields this pacer actually waited for, since the pacer was created. The session owner
+  // reads it around a step to learn whether the step paced its own fields; frames the delivery ran
+  // unpaced (a fast-forward) add nothing, which is exactly what the caller must not double-wait.
+  unsigned long long pacedFields() const {
+    return pacedFields_;
+  }
+
   // The display field rate decoded from the standard the guest programmed through GP1(0x08). Zero
   // until it is: no clock to pace against, and none is invented.
   unsigned fieldRateMilliHz(Core &core) const;
@@ -42,6 +49,7 @@ private:
   bool seeded_ = false;
   bool warnedQuotaUnset_ = false;
   bool warnedRateUnset_ = false;
+  unsigned long long pacedFields_ = 0;
 };
 
 } // namespace psx::frame

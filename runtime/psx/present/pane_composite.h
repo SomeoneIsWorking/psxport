@@ -94,9 +94,11 @@ public:
   PaneCompositor(const PaneCompositor &) = delete;
   PaneCompositor &operator=(const PaneCompositor &) = delete;
 
-  // Build one frame from `panes` and show it. A pane whose session has no presented picture is
-  // skipped. `overlay` is recorded over the panes in the same pass; null draws host UI nowhere.
+  // Build one frame from `panes` into the composite image. A pane whose session has no presented picture
+  // is skipped. `overlay` is recorded over the panes in the same pass; null draws host UI nowhere.
   void composite(std::span<const Pane> panes, const PaneOverlayPass &overlay = nullptr);
+  // Show the last composite in the window; a paced host waits between composite() and this.
+  void show();
 
   // Read the composited frame back to a file — WHAT THE PLAYER SEES, in either leg, the same contract
   // as `GpuVkState::present_shot`: with no image it says so and writes nothing, because a plausible
@@ -116,7 +118,6 @@ public:
 private:
   void ensureState();
   void ensureImage(int w, int h);
-  void showToWindow(SDL_GPUCommandBuffer *cmd);
 
   GpuDevice &m_device;
   Core *m_hostCore = nullptr;
@@ -129,6 +130,7 @@ private:
   SinkIdleState m_sink; // idle/resume latch: a window nobody is showing is skipped, not waited on
   int m_imageW = 0, m_imageH = 0;
   uint32_t m_frames = 0;
+  bool m_showPending = false;
 };
 
 } // namespace psxport

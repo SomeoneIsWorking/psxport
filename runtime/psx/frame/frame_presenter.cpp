@@ -77,8 +77,16 @@ public:
   CoreFramePresentationBackend(Core &core, int &dumpSequence)
       : core_(core), dumpSequence_(dumpSequence), producers_(core) {}
 
-  void presentReal() override {
-    core_.game->display.present(present::PresentCompletion::MainFrame);
+  void buildReal() override {
+    core_.game->display.build(present::PresentCompletion::MainFrame);
+  }
+
+  void buildInBetween() override {
+    core_.game->display.buildInBetween();
+  }
+
+  void show() override {
+    core_.game->display.show();
   }
 
   void captureDiagnostic(uint64_t fence, bool interpolated) override {
@@ -105,10 +113,6 @@ public:
     const gpu::DisplayArea area = core_.gpuDevice().displayArea();
     return gpu::clampedVramRect(
         {area.x, area.y, area.width, present::DisplayPresenter::presentedHeight(core_, area.height)});
-  }
-
-  void presentInBetween() override {
-    core_.game->display.presentInBetween();
   }
 
   const present::StateProducers *stateProducers() override {
@@ -336,10 +340,11 @@ void FramePresenter::presentRecords(FramePresentationBackend &backend, int guest
   }
   composed_ = composedStore_ ? &*composedStore_ : &base;
   composedAdvances_ = false;
-  backend.pace({guestFields, 2});
-  backend.presentInBetween();
+  backend.buildInBetween();
   composed_ = nullptr;
   composedStore_.reset();
+  backend.pace({guestFields, 2});
+  backend.show();
   backend.captureDiagnostic(fence_, true);
   presentCurrent(backend, {guestFields, 2}, shown);
 }
@@ -356,12 +361,13 @@ void FramePresenter::presentCurrent(FramePresentationBackend &backend,
   }
   composed_ = composedStore_ ? &*composedStore_ : nullptr;
   composedAdvances_ = composed_ != nullptr;
-  // Waiting before the present puts it on its deadline whatever work preceded it.
-  backend.pace(cadence);
-  backend.presentReal();
+  backend.buildReal();
   composed_ = nullptr;
   composedAdvances_ = false;
   composedStore_.reset();
+  // Only the show waits, so it lands on its deadline whatever the guest step and the build cost.
+  backend.pace(cadence);
+  backend.show();
   backend.captureDiagnostic(fence_, false);
 }
 

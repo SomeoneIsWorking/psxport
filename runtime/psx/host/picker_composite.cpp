@@ -34,10 +34,8 @@ constexpr float kDividerBlue = 0.18f;
 // title's own wordmark, and a wordmark half faded into a demo is not a wordmark.
 constexpr float kLogoAlpha = 1.0f;
 
-// The panel's picture is a 240-line guest frame cover-cropped into a window-tall panel, so the
-// logo is magnified by the same factor the panel applies to the picture: on the console the guest
-// draws that wordmark at the same scale as everything else in the frame. A whole factor is applied
-// texel by texel so the logo keeps the game's pixel grid instead of being interpolated.
+// The logo is magnified by the factor the panel applies to the picture, so it keeps the picture's
+// scale. A whole factor is applied texel by texel so the logo keeps the game's pixel grid.
 int pictureMagnification(const PanelLayout &geometry, const SourceCrop &crop, int pictureHeight) {
   // `crop` is in fractions of the picture, so the rows kept is crop.h * pictureHeight.
   const double rows = static_cast<double>(crop.h) * static_cast<double>(pictureHeight);
@@ -46,14 +44,11 @@ int pictureMagnification(const PanelLayout &geometry, const SourceCrop &crop, in
   }
   const double scale = static_cast<double>(geometry.cover.h) / rows;
   const int whole = static_cast<int>(std::lround(scale));
-  // A panel is never a hundred times its picture; anything past that is a number that went wrong,
-  // and magnifying by it would allocate the wrong image rather than draw one.
+  // A panel is never a hundred times its picture; past that a number went wrong.
   if (whole > 16) {
     return 1;
   }
-  // Only a scale that IS whole is applied texel by texel; anything else is left to the draw, which
-  // is what the picture itself does, so the logo and the picture never disagree about
-  // magnification.
+  // Only a whole scale is applied texel by texel; anything else is left to the draw, as the picture's is.
   return whole >= 1 && std::abs(scale - whole) < 0.02 ? whole : 1;
 }
 
@@ -78,10 +73,26 @@ PickerComposite::~PickerComposite() = default;
 void PickerComposite::setSurface(const PickerLayout &layout, int width, int height) {
   m_surfaceW = std::max(width, 0);
   m_surfaceH = std::max(height, 0);
-  m_paneImage = {layout.maxPanelWidth(m_surfaceW), m_surfaceH};
+  // The selected panel renders at the window's size and shows its panel's share of it, so it is a
+  // crop of a full-resolution picture. The others are paused thumbnails at a third of their own
+  // panel, which keeps three sessions from each holding a full-resolution rasterizer.
+  m_paneImages.assign(static_cast<std::size_t>(std::max(layout.panelCount(), 0)), {});
+  for (int panel = 0; panel < layout.panelCount(); ++panel) {
+    const PanelRect cover = layout.cover(panel);
+    m_paneImages[static_cast<std::size_t>(panel)] = panel == layout.selection()
+                                                        ? psx::present::PixelSize{m_surfaceW, m_surfaceH}
+                                                        : psx::present::PixelSize{cover.w / 3, cover.h / 3};
+  }
 }
 
-void PickerComposite::present(const PickerLayout &layout, std::span<const PanelSource> panels, int selected) {
+psx::present::PixelSize PickerComposite::paneImage(int panel) const {
+  if (panel < 0 || panel >= static_cast<int>(m_paneImages.size())) {
+    return {};
+  }
+  return m_paneImages[static_cast<std::size_t>(panel)];
+}
+
+void PickerComposite::build(const PickerLayout &layout, std::span<const PanelSource> panels, int selected) {
   m_panes.clear();
   m_dividers.clear();
   // One entry per panel, then one divider per boundary.
@@ -103,17 +114,18 @@ void PickerComposite::present(const PickerLayout &layout, std::span<const PanelS
       pane.seamRightBottom = static_cast<float>(geometry.seams.rightBottomX);
     };
 
-    // The pane is the panel's own rectangle, full height, with no backdrop and no letterbox.
-    // How much is cropped is the layout's number, which is what keeps the aspect while
-    // filling the shape.
+    // The pane is the panel's own rectangle, full height, with no backdrop and no letterbox. The crop
+    // is measured against the picture as built, so a paused panel's picture keeps its aspect whatever
+    // size it was built at.
+    const PanelRect picture = geometry.cover;
     psxport::Pane pane{};
     pane.core = source.session;
-    pane.originX = static_cast<float>(geometry.cover.x);
-    pane.originY = static_cast<float>(geometry.cover.y);
-    pane.axisUX = static_cast<float>(geometry.cover.w);
+    pane.originX = static_cast<float>(picture.x);
+    pane.originY = static_cast<float>(picture.y);
+    pane.axisUX = static_cast<float>(picture.w);
     pane.axisUY = 0.0f;
     pane.axisVX = 0.0f;
-    pane.axisVY = static_cast<float>(geometry.cover.h);
+    pane.axisVY = static_cast<float>(picture.h);
     const SourceCrop crop = geometry.sourceCrop(source.pictureWidth, source.pictureHeight);
     pane.sourceU = crop.u;
     pane.sourceV = crop.v;
@@ -218,7 +230,7 @@ void PickerComposite::present(const PickerLayout &layout, std::span<const PanelS
     for (std::size_t index = 0; index < panels.size(); ++index) {
       const PanelSource &source = panels[index];
       const GpuVkState::PresentedImage image = source.session != nullptr
-                                                   ? source.session->game->gpuVk().lastFilledPresented()
+                                                   ? source.session->game->gpuVk().newestPresentedPicture()
                                                    : GpuVkState::PresentedImage{};
       const PanelLayout geometry = layout.panel(static_cast<int>(index));
       lucent::debug("picker",
@@ -239,6 +251,10 @@ void PickerComposite::present(const PickerLayout &layout, std::span<const PanelS
   }
 
   m_compositor.composite(m_panes);
+}
+
+void PickerComposite::show() {
+  m_compositor.show();
 }
 
 void PickerComposite::captureShot(const char *path) {

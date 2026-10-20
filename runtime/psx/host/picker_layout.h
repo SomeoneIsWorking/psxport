@@ -17,8 +17,8 @@ struct PanelRect {
   int x = 0, y = 0, w = 0, h = 0;
 };
 
-// The panel is a different shape from the picture, so the overflow is dropped rather than
-// letterboxed.
+// The part of a picture a panel shows, in fractions of the picture: the panel is a different shape,
+// so the overflow is dropped rather than letterboxed.
 struct SourceCrop {
   float u = 0.0f, v = 0.0f, w = 1.0f, h = 1.0f;
 };
@@ -47,19 +47,19 @@ struct PanelLayout {
   // because the two neighbours' rectangles overlap across the shared seam and the mask decides
   // which owns each pixel there.
   PanelRect cover;
-  // So the picture fills `cover` with its aspect intact; a degenerate source is shown whole.
+  // The centred part of a picture with `cover`'s shape, so it fills `cover` unstretched whatever size
+  // the picture was built at; a degenerate source is shown whole.
   SourceCrop sourceCrop(int pictureWidth, int pictureHeight) const {
-    if (pictureWidth <= 0 || pictureHeight <= 0 || cover.h <= 0 || averageWidth() <= 0) {
+    if (pictureWidth <= 0 || pictureHeight <= 0 || cover.w <= 0 || cover.h <= 0) {
       return SourceCrop{};
     }
-    const double panelAspect = static_cast<double>(averageWidth()) / static_cast<double>(cover.h);
+    const double coverAspect = static_cast<double>(cover.w) / static_cast<double>(cover.h);
     const double pictureAspect = static_cast<double>(pictureWidth) / static_cast<double>(pictureHeight);
-    if (pictureAspect > panelAspect) {
-      // A picture WIDER than the panel: the height is the panel's, so the sides are what is lost.
-      const double keep = panelAspect / pictureAspect;
+    if (pictureAspect > coverAspect) {
+      const double keep = coverAspect / pictureAspect;
       return SourceCrop{static_cast<float>((1.0 - keep) * 0.5), 0.0f, static_cast<float>(keep), 1.0f};
     }
-    const double keep = pictureAspect / panelAspect;
+    const double keep = pictureAspect / coverAspect;
     return SourceCrop{0.0f, static_cast<float>((1.0 - keep) * 0.5), 1.0f, static_cast<float>(keep)};
   }
   // Centred horizontally, vertical centre at `logoCentrePerHeight` of the panel's height, so the
@@ -77,10 +77,10 @@ struct PanelLayout {
 // A panel is geometry; what is shown in it is a session's business.
 class PickerLayout {
 public:
-  // Shares are ratios normalised by their total; the slant is a fraction of the width.
+  // The selected panel's fraction of the width; the others split the rest evenly. The slant is a
+  // fraction of the width.
   struct Motion {
     float selectedShare = 0.0f;
-    float unselectedShare = 0.0f;
     float slantPerWidth = 0.0f;
     float responsePerFrame = 0.0f; // clamped away from 0 and 1: neither is an animation
   };
@@ -108,10 +108,10 @@ public:
   // For a diagnostic; the layout itself never reads it back.
   float share(int index) const;
 
-  // The selected panel's own share once the animation has arrived. A host needs one image size for
-  // every session, and resizing it per frame would rebuild each picture for a width about to
-  // change anyway.
-  int maxPanelWidth(int surfaceWidth) const;
+  // The rectangle panel `index` draws its picture into.
+  PanelRect cover(int index) const {
+    return panel(index).cover;
+  }
 
   // A caller with more titles than this must say so rather than hand over a silently truncated
   // count.
@@ -124,7 +124,6 @@ private:
   void retarget();
   int mPanelCount;
   float mSelectedShare;
-  float mUnselectedShare;
   float mSlantPerWidth;
   float mResponse;
   int mSelected = 0;

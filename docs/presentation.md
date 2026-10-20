@@ -332,11 +332,56 @@ aborts unless `FramePresenter::fence()` advanced by exactly one.
 `FramePacer::paceSubframeFields`, advances Timing, devices and the VBlank latch by the represented field
 count, then waits for the host deadline. A title with its own field scheduler advances
 `Timing::advanceDisplayFields` per delivered field and paces with `FramePacer::waitPresentedFields`,
-which waits without creating a field. In-betweens split the host wait of the same fields. Each present
-is composed, then paced, then presented, so it lands on its deadline whatever guest step or composition
-came before it; presenting first offsets it by that work, and the two presents of a 30 Hz frame then
-alternate short and long intervals. NOPACE
+which waits without creating a field. In-betweens split the host wait of the same fields. NOPACE
 suppresses host waiting only. Each `Game` owns its `FramePacer` and deadline.
+
+Each present, real or in-between, is built, then paced, then shown (`FramePresentationBackend::buildReal`
+or `buildInBetween`, `pace`, `show`), so the show lands on its deadline whatever guest step, composition
+or build came before it. Showing before the wait offsets the present by that work, and the two presents
+of a 30 Hz frame then alternate short and long intervals; building after the wait makes a present late by
+its build (issue 0161). The line between the two is the swapchain:
+
+- **Build** (`DisplayPresenter::build`, `buildInBetween`, `buildHostPicture` → `GpuVkState::build_display`
+  or `build_image`): the overlay's CPU frame, the record raster (`present_record` →
+  `RecordRasterizer::show`, whose plan grows with the internal scale), the device VRAM upload or the host
+  picture upload, the letterboxed pass into the present image, and the submit of that command buffer.
+  The composed frame (`FramePresenter::composedRecord`) lives only through the build.
+- **Show** (`DisplayPresenter::show` → `GpuVkState::show`): a command buffer that acquires the swapchain
+  image without waiting (`acquireSink`), blits the present image letterboxed with the overlay over it,
+  and submits, which presents. `GpuPerf::presented` is stamped here. The swapchain is MAILBOX, so
+  neither the acquire nor the submit waits for a vblank; a build left in flight on the GPU only delays
+  when the shown image is scanned out, not the call.
+
+A headless build, or a pane build with no host attached, leaves nothing to show, and `show` does
+nothing. Unpaced presents (the boot black, a movie's end, a boot card's last frame) build and show at
+once. A movie frame is decoded and built before its field wait and shown after it (`Fmv::buildFrame`,
+`showFrame`); Tomba's SCEA card builds its host picture, paces, then shows.
+
+A pane present follows the same order through its host (`psx::present::PaneHost`, attached with
+`TitleSession::setPaneHost` → `GpuVkState::setPaneHost`): `build_display` calls the host's `built`
+after the pane's build, and `show` calls its `show` after the pane's wait. The picker attaches itself to
+the selected, settled panel and composites at `built` and shows the composite at `show`, so its cadence
+is that panel's presents, in-betweens included. The picker's loop builds, paces with
+`FramePacer::hostScreenPace` and shows its composite itself only on an iteration where no panel
+presented, and skips the pace when the panel's step already paced its fields (`title-host.md`). A pane
+samples the session's live present image (`GpuVkState::newestPresentedPicture`; `title-host.md` for
+the fallback).
+
+A pane's present image is filled, not letterboxed: `PresentInputs::fill` centre-crops the picture to
+the image's shape at its displayed 4:3 aspect, at the rendered resolution. The
+picker then crops each picture to its panel's cover rectangle (`PanelLayout::sourceCrop`), which keeps
+the aspect of a paused panel whose picture was built at another size.
+
+### Auto, a pane, and the internal-resolution budget
+
+Auto is `round(sinkHeight / 240)` — one render sample per PSX scanline — bounded by `videoStatus`'s
+budget, which is derived from the whole 1024x512 VRAM at scale and costs real memory because
+`RecordRasterizer::ensureImage` holds that image in four textures. The budget is 640 MiB at 14 bytes
+per scaled VRAM pixel, which admits 9; `kIresCeiling` caps it at 8.
+
+A pane measures its own present image, not the window. The selector's selected panel is given the
+window's size, so it renders at the display's own resolution and shows its panel's share of it; the
+other panels are given a third of their own cover rectangle, because they are paused thumbnails.
 
 The play check's missed-vsync count (`GpuPerf::presented`, the RunEndReport `presents:` line) judges
 each present against its own paced deadline. Every pacing call reports the fields it holds the next
@@ -368,8 +413,9 @@ While `Fmv::presenting()`, the movie's frame is the field's only present: a titl
 rotates its fence unpresented (`FramePresenter::commitUnpresented`) and advances its delivered guest
 fields itself. Test: `tests/test_movie_clock.cpp`.
 
-`DisplayPresenter::present` ends each frame: the present, its dumps, then the watchdog's main-present
-completion. A `Transition` present (a movie end, a boot card) reports watchdog progress only.
+`DisplayPresenter::build` ends each frame's picture: the build, then its dumps. `show` reports the watchdog's
+main-present completion once the picture is in the window; a `Transition` present (a movie end, a boot
+card) reports watchdog progress only.
 
 ## Interpolation availability
 

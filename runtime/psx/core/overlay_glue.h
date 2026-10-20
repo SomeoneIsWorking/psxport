@@ -25,17 +25,13 @@ void initOverlay(
     Game *game, SDL_Window *win, SDL_GPUDevice *dev, SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h);
 
 // Per-frame CPU step: latch the live world readout from guest RAM (camera/Tomba pos + stage) for
-// the menu's HUD line, then run the overlay's CPU update. Called from present() before recording.
+// the menu's HUD line, then run the overlay's CPU update. Called from buildDisplay() before recording.
 void beginOverlayFrame(Core *core);
 
 // Record the menu geometry into the present render pass `rp` (its command buffer `cmd`). `win_w`/
 // `win_h` = the FULL window pixel size (glue passes them through so the menu covers the whole
 // window, not the letterboxed game pane). No-op if hidden.
 void recordOverlay(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int win_w, int win_h);
-
-// Record the choice SCREEN (a title picker) into the present-image render pass `rp`. Unlike the menu this
-// is picture content, so it goes into the image a present shot reads. No-op when no screen is shown.
-void recordOverlayScreen(Game *game, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int w, int h);
 
 } // namespace psx::ui
 

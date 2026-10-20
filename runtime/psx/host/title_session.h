@@ -7,6 +7,7 @@
 #include "frame_loop_shell.h"
 #include "gpu_vk_device.h"
 #include "gpu_vk_internal.h" // GpuVkState::PresentedImage
+#include "pane_host.h"
 #include "typed_config.h"
 
 #include <cstdint>
@@ -89,6 +90,17 @@ public:
   std::uint64_t steps() const {
     return steps_;
   }
+  // Display fields the last step() waited for through the field pacer. A step that paced nothing
+  // (an unpaced fast-forward step, or a stub that delivers no fields) leaves the picker's frame
+  // owing its wall time, because the panel did not pay it.
+  unsigned long long lastStepPacedFields() const {
+    return lastStepPacedFields_;
+  }
+  // The host compositing this session's pane, told at each pane present's build and show, so it
+  // composites once per presented picture rather than once per logic frame. An empty host detaches it:
+  // a session handed on as the product owns the window, and a host left attached would composite a
+  // selector that is no longer on screen.
+  void setPaneHost(psx::present::PaneHost host);
   // Past its retail boot prefix and drawing its own scene rather than a card the guest uploaded.
   // Both answers are the title's — its frame driver and its presentation owner — because no pixel
   // test can tell an animated publisher logo from an attract demo.
@@ -172,6 +184,9 @@ private:
   mutable bool contentSeen_ = false;
   mutable std::uint64_t contentCheckedAtStep_ = 0;
   std::uint64_t steps_ = 0;
+  unsigned long long lastStepPacedFields_ = 0;
+  // A pane host attached before boot(), waiting for a machine to attach it to.
+  psx::present::PaneHost pendingPaneHost_;
 };
 
 } // namespace psx::host

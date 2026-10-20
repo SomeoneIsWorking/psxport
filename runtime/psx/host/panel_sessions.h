@@ -69,8 +69,11 @@ public:
   }
 
   // One picker frame. Runs the selected session's step, or pre-rolls the next unsettled panel for as
-  // many steps as `preRoll` allows. Returns true when a guest advanced.
-  bool advance(const PreRollBudget &preRoll);
+  // many steps as `preRoll` allows. Returns the display fields the frame's advanced panel waited for
+  // through the field pacer: the loop gives the frame its own field of sleep only when that count is
+  // zero, because a settled panel's step paces its own fields already and a second wait would pace
+  // the same fields twice, which is what ran this loop under its true cadence.
+  unsigned long long advance(const PreRollBudget &preRoll);
   // Ends every session and hands back a fresh unbooted session for the chosen title: the demo was
   // a preview, so choosing a game must start it at power-on rather than resume its preview.
   std::unique_ptr<TitleSession> confirm();

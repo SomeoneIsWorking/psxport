@@ -18,7 +18,7 @@
 //   disc (libchdr, disc.c)  ->  STR demux (this file)
 //     ->  BS (MDEC bitstream) VLC decode (fmv_decode.cpp)
 //       ->  MDEC IDCT/YCbCr (Beetle mdec.c via mdec_beetle.c, driven by fmv_decode.cpp)
-//         ->  present (DisplayPresenter::presentHostPicture)
+//         ->  build (DisplayPresenter::buildHostPicture), pace, show
 //
 // THE DECODE IS SHARED: psx::movie::decodeBsFrame / psx::movie::decodeMdecToRgb555 / psx::movie::decodeXaSector live in
 // fmv_decode.cpp and are the SAME functions the offline exporters (tools/fmv_export,
@@ -75,20 +75,20 @@ constexpr double kAudioLeadMs = 1000.0;
 // frame, and tile the 16x16 macroblocks column-major. See above for the why.
 // ====================================================================================
 // Present the decoded movie frame as a NATIVE RGBA image, letterboxed 4:3 with black bars
-// (DisplayPresenter::presentHostPicture) — NOT a VRAM upload. The PC renderer composites only native submits over
+// (DisplayPresenter::buildHostPicture) — NOT a VRAM upload. The PC renderer composites only native submits over
 // black; a CPU->VRAM upload + gpu_present would be blacked out by that. Presenting the frame directly
 // is also the centering fix — it pillarboxes 4:3 on widescreen instead of left-aligning in the wide FB.
 //
 // The frame is 24bpp because that is what retail PSX movies were authored for: Toy Story 2's FMV
 // overlay asks its player for depth 3 in ITS convention (compared against the literal 3 before its
 // 24-bit upload path), and RGB555 would spend two bits per channel the movie actually encodes.
-void submit_rgba(Core *core, const std::vector<uint8_t> &rgba, int width, int height) {
-  core->game->display.presentHostPicture(rgba.data(), {width, height}, 1.0f);
+void build_rgba(Core *core, const std::vector<uint8_t> &rgba, int width, int height) {
+  core->game->display.buildHostPicture(rgba.data(), {width, height}, 1.0f);
   // Movie frames are progress, not main-present readiness.
   psx::platform::Watchdog::progress();
 }
 
-void present_rgb888(Core *core, std::vector<uint8_t> &rgba, const uint8_t *pixels, int width, int height) {
+void build_rgb888(Core *core, std::vector<uint8_t> &rgba, const uint8_t *pixels, int width, int height) {
   const int npix = width * height;
   rgba.resize((size_t)npix * 4);
   for (int i = 0; i < npix; i++) {
@@ -97,7 +97,7 @@ void present_rgb888(Core *core, std::vector<uint8_t> &rgba, const uint8_t *pixel
     rgba[i * 4 + 2] = pixels[i * 3 + 2];
     rgba[i * 4 + 3] = 255;
   }
-  submit_rgba(core, rgba, width, height);
+  build_rgba(core, rgba, width, height);
 }
 
 // One STR video chunk's sub-header (layout above).
@@ -134,9 +134,13 @@ private:
 
 } // namespace
 
-void Fmv::presentFrame(const uint8_t *pixels, psx::present::PixelSize size, int heldFields) {
+void Fmv::buildFrame(const uint8_t *pixels, psx::present::PixelSize size) {
+  build_rgb888(&game->core, rgba_scratch_, pixels, size.width, size.height);
+}
+
+void Fmv::showFrame(int heldFields) {
   game->perf.heldFor(heldFields);
-  present_rgb888(&game->core, rgba_scratch_, pixels, size.width, size.height);
+  game->display.show();
 }
 
 void Fmv::AudioLag::add(double lagMs) {
@@ -452,11 +456,12 @@ void Fmv::step() {
                                                        {frame_width_, frame_height_},
                                                        pixels24_buf) > 0) {
         const psx::movie::MovieFieldGrid::Show show = grid_.show(clock_.frameDueMs({framenum, at}));
+        buildFrame(pixels24_buf, {frame_width_, frame_height_});
         if (pace(show.atMs)) {
           endWithSkip();
           return;
         }
-        presentFrame(pixels24_buf, {frame_width_, frame_height_}, show.heldFields);
+        showFrame(show.heldFields);
         frames_++;
         const std::optional<double> lag = audioLagMs();
         if (lag) {
@@ -518,7 +523,8 @@ void Fmv::endAtEndOfStream() {
                audio_lag_.min,
                audio_lag_.max);
   audioClose();
-  game->display.present(psx::present::PresentCompletion::Transition);
+  game->display.build(psx::present::PresentCompletion::Transition);
+  game->display.show();
 }
 
 void Fmv::endWithSkip() {

@@ -243,7 +243,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/menu_tab_bar.cpp       # the <tab> row and which one is selected
   ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video/world/music/warp status lines
   ${PSXPORT_ROOT}/runtime/ui/choice_navigator.cpp   # the rules of a choose-one list (no RmlUi)
-  ${PSXPORT_ROOT}/runtime/ui/choice_screen.cpp      # the full-window choose-one screen over choice.rml
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
   ${PSXPORT_ROOT}/runtime/psx/core/overlay_glue.cpp
   ${PSXPORT_ROOT}/runtime/psx/present/present_ledger.cpp # recorded vs composed producers of a t = 1 present
