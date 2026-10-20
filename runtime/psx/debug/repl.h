@@ -1,10 +1,4 @@
-// repl.h — the interactive REPL driver (PSXPORT_REPL=1). Implemented in repl.cpp.
-//
-// The REPL reads stdin commands between frames; some commands ("newgame", "skip N")
-// don't act immediately — they arm auto-drive requests that the title's FrameDriver consumes on
-// subsequent frames. That state lives on a Repl instance owned by Game (per-Core; SBS runs two
-// cores and each can be REPL'd independently in principle). Was the process-globals
-// g_nav_newgame / g_skip_frames.
+// repl.h — the stdin REPL (PSXPORT_REPL=1): run control here, every other verb from DebugCommands.
 #pragma once
 #include <cstdint>
 #include <span>
@@ -12,12 +6,11 @@ struct Core;
 
 class Repl {
 public:
-  // Auto-drive requests armed by REPL commands, consumed + cleared by the title's FrameDriver.
-  int navNewgame = 0;  // `newgame`: pulse Cross to the GAME prologue
-  long skipFrames = 0; // `skip N`: pulse Start N frames into the field
+  // Requests armed by `newgame` / `skip N`, consumed and cleared by the title's FrameDriver.
+  int navNewgame = 0;
+  long skipFrames = 0;
 
-  // A title driver can request that the generic REPL loop return to its prompt after the current
-  // frame has completed. The request is one-shot so it cannot pause a later run budget by accident.
+  // One-shot: return to the prompt after the current frame.
   void requestPrompt() {
     promptRequested_ = true;
   }
@@ -27,17 +20,14 @@ public:
     return requested;
   }
 
-  // A line reader fills one bounded command and returns false on EOF. The default reads stdin;
-  // alternate input sources use the same command loop and intentional-idle lifecycle.
+  // Fills one bounded command; false on EOF.
   using LineReader = bool (*)(std::span<char> line);
 
-  // Read+execute commands until `run N` (returns N), quit/EOF (-1), or end (-2).
+  // Run commands until `run N` (returns N), quit/EOF (-1) or end (-2).
   long read(Core *c, uint32_t f, LineReader readLine = readStdinLine);
 
-  // The loop's side of PSXPORT_REPL: before each product step, block on commands until a `run N`
-  // budget covers it. False when `quit`, `end` or EOF ends the run.
+  // Before each product step: block on commands until a `run N` budget covers it. False when the run ends.
   bool beforeStep(Core *c, uint32_t step, LineReader readLine = readStdinLine);
-  // After the step: a title's prompt request returns the next step to the prompt.
   void afterStep() {
     if (consumePromptRequest()) {
       budget_ = 0;
@@ -48,6 +38,5 @@ private:
   static bool readStdinLine(std::span<char> line);
 
   bool promptRequested_ = false;
-  long budget_ = 0;            // steps left in the current `run N`
-  uint16_t mHeldMask = 0xFFFF; // active-low held pad mask (all released); `press`/`release` edit it
+  long budget_ = 0; // steps left in the current `run N`
 };

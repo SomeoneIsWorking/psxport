@@ -6,11 +6,7 @@
 namespace psx::game {
 
 psx::cpu::PsxExeLoadResult GameRuntime::admitExecutable(Core &core, std::span<const std::uint8_t> bytes) {
-  psx::cpu::PsxExeLoadResult loaded = psx::cpu::loadPsxExeImage(core, bytes, "boot executable");
-  if (loaded) {
-    psx::cpu::applyPsxExeTopLevelRegisters(core, loaded.image);
-  }
-  return loaded;
+  return psx::cpu::loadTopLevelPsxExe(core, bytes, "boot executable");
 }
 
 std::unique_ptr<TitleSessionState> GameRuntime::createSession(Game &) {

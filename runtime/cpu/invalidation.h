@@ -11,6 +11,5 @@ class Core;
 namespace psx::cpu {
 
 void notifyExecutableWrite(Core &core, GuestAddressRange range, ExecutableWriteSource source);
-void notifyExecutableStateReplaced(Core &core, ExecutableWriteSource source);
 
 } // namespace psx::cpu

@@ -145,7 +145,7 @@ PickerSession::Result PickerSession::run() {
   host->pad.useLiveInputOnly(); // a selector must not open or rotate the player's pad recording
   host->hostInput.attachQuitScope(&services_.quit);
   // No guest runs here, so the channel needs no store observer.
-  host->dbg_server.start(&core);
+  host->dbg_server.start();
   psx::gpu::ensureDevice(core);
 
   composite_ = std::make_unique<PickerComposite>(services_.presentation, &core);

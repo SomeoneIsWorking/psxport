@@ -1,17 +1,21 @@
 #include "execution_services.h"
-#include "watchdog.h"
 
-#include "c_subsys.h"
 #include "config_vars.h"
 #include "core.h"
 #include "game.h"
-#include "host_turn.h"
+#include "r3000.h"
 #include "side_effect_journal.h"
+#include "watchdog.h"
 
 #include <lucent/log.h>
 
+#include <array>
+
 namespace psx::cpu {
 namespace {
+
+// The callee-saved registers a pending-work service must leave as it found them.
+inline constexpr std::array kPreservedAcrossService{kSp, kFp, kGp, kS0, kS1, kS2, kS3, kS4, kS5, kS6, kS7};
 
 std::uint64_t spinWindow() {
   const long configured = psx::config::spin_ticks();
@@ -25,14 +29,12 @@ int maximumSpinRun() {
 } // namespace
 
 void accountGuestInstructions(Core &core, std::uint32_t instructions) {
-  // Guest time advances ONCE per call under the override differential: on its live path. The shadow
-  // path's instructions are discarded with its state, so charging them would move every device clock
-  // for work the continued run never did (side_effect_journal.h).
+  // Under the override differential only the live path advances guest time (side_effect_journal.h).
   if (core.sideEffectJournal != nullptr && core.sideEffectJournal->withholdsGuestTime()) {
     return;
   }
   core.game->timing.advanceGuestInstructionTicks(instructions);
-  requestHostTurnWhenDue(core);
+  core.hostTurn.requestWhenDue(core);
   const psx::platform::SpinSample sample{
       .pc = core.pc, .hostStarved = (core.pending_work & Core::PW_HOST) != 0, .ticks = instructions};
   if (psx::platform::sampleSpinDetector(core.spin, sample, {.windowTicks = spinWindow(), .maxRun = maximumSpinRun()})) {
@@ -48,18 +50,15 @@ void servicePendingWork(Core &core) {
     return;
   }
   const bool reportRegisters = lucent::channel_on("pollregs");
-  std::uint32_t before[11]{};
+  std::array<std::uint32_t, kPreservedAcrossService.size()> before{};
   if (reportRegisters) {
-    before[0] = core.r[29];
-    before[1] = core.r[30];
-    before[2] = core.r[28];
-    for (int index = 0; index < 8; ++index) {
-      before[3 + index] = core.r[16 + index];
+    for (std::size_t i = 0; i < kPreservedAcrossService.size(); ++i) {
+      before[i] = core.r[kPreservedAcrossService[i]];
     }
   }
 
   if (core.pending_work & Core::PW_HOST) {
-    serviceHostTurn(core);
+    core.hostTurn.service(core);
   }
   if (core.pending_work & Core::PW_IRQ) {
     core.game->hle.irqPoll(&core);
@@ -68,28 +67,21 @@ void servicePendingWork(Core &core) {
   if (!reportRegisters) {
     return;
   }
-  constexpr const char *names[11] = {"sp", "fp", "gp", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"};
-  const std::uint32_t after[11] = {core.r[29],
-                                   core.r[30],
-                                   core.r[28],
-                                   core.r[16],
-                                   core.r[17],
-                                   core.r[18],
-                                   core.r[19],
-                                   core.r[20],
-                                   core.r[21],
-                                   core.r[22],
-                                   core.r[23]};
-  for (int index = 0; index < 11; ++index) {
-    if (after[index] != before[index]) {
+  for (std::size_t i = 0; i < kPreservedAcrossService.size(); ++i) {
+    const std::uint32_t after = core.r[kPreservedAcrossService[i]];
+    if (after != before[i]) {
       lucent::error("pollregs",
                     "pending-work service clobbered {} at pc=0x{:08X}: 0x{:08X} -> 0x{:08X}",
-                    names[index],
+                    gprName(kPreservedAcrossService[i]),
                     core.pc,
-                    before[index],
-                    after[index]);
+                    before[i],
+                    after);
     }
   }
+}
+
+void handleBreak(Core & /*core*/, std::uint32_t code) {
+  lucent::info("break", "code {}", code);
 }
 
 } // namespace psx::cpu

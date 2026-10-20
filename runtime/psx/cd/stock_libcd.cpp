@@ -425,7 +425,7 @@ void StockLibcd::pumpStream(Core &core, int sectors) const {
   sectors = std::min(sectors, due);
   const R3000 saved = *static_cast<R3000 *>(&core);
   for (int i = 0; i < sectors && cd.stream_active; i++) {
-    game.timing.serviceCdcTickSource();
+    game.timing.serviceCdc();
     if (game.cdc.currentIrqType() != 1u) {
       break;
     }
@@ -444,7 +444,7 @@ void StockLibcd::pumpStream(Core &core, int sectors) const {
 // only advances that clock.
 void GuestInterruptLibcd::pumpStream(Core &core, int sectors) const {
   if (core.game->cd.stream_active && sectors > 0) {
-    core.game->timing.serviceCdcTickSource();
+    core.game->timing.serviceCdc();
   }
 }
 

@@ -14,18 +14,13 @@
 namespace psx::hle {
 namespace {
 
-// MIPS o32 argument registers (== core.r[]).
-
 // The BIOS's own failure answer for a load it could not perform.
 constexpr std::uint32_t kLoadFailed = 0xffffffffu;
 
-// A PSX path is "cdrom:\DIR\FILE.EXT;1", so a device name plus one directory and a file name is well
-// inside this; the bound exists so a guest string is never read without one.
+// A guest path ("cdrom:\DIR\FILE.EXT;1") is read with this bound.
 constexpr std::size_t kFilenameBytes = 256;
 
-// nocash psx-spx spells a BIOS path "device:path". `disc_find_file` resolves an absolute ISO9660
-// path and already ignores case, ";version" and leading separators, so the only translation this
-// service owes is dropping the DEVICE name the guest handed the BIOS and using one separator.
+// "device:path" to the ISO9660 path; the disc lookup already ignores case, ";version" and leading separators.
 std::string isoPathFromBiosPath(const char *biosPath) {
   std::string path = biosPath;
   const std::size_t colon = path.find(':');
@@ -36,8 +31,7 @@ std::string isoPathFromBiosPath(const char *biosPath) {
   return path;
 }
 
-// Answer the BIOS's failure, in one place, with the reason that produced it. The caller resumes at
-// its own `r[31]`: this is the branch the BIOS returns from.
+// The BIOS's failure answer; the caller resumes at its own $ra.
 bool refuseLoad(Core &core, const std::string &reason) {
   lucent::error("hle", "LoadExec refused: {}", reason);
   core.r[psx::cpu::kV0] = kLoadFailed;
@@ -60,22 +54,13 @@ bool dispatchLoadExec(Core &core, const DiscFileReader &readFile) {
     return refuseLoad(core,
                       lucent::format("the filename pointer 0x{:08X} is empty or unreadable", core.r[psx::cpu::kA0]));
   }
-  // A filename that filled the buffer was CUT, and admitting the truncated name would load a
-  // different file than the guest asked for. Refused rather than guessed at.
+  // A name that filled the buffer was cut.
   if (core.mem_r8(core.r[psx::cpu::kA0] + static_cast<std::uint32_t>(length)) != 0u) {
     return refuseLoad(
         core, lucent::format("the filename at 0x{:08X} exceeds {} bytes", core.r[psx::cpu::kA0], kFilenameBytes - 1u));
   }
 
-  // THE CALLER OWNS THE STACK. That is what a1/a2 are for: a stated (stackbase, stackoffset) replaces
-  // whatever the loaded header declares, and an unstated base leaves the header's own stack — or the
-  // conventional boot stack — standing.
-  //
-  // RESOLVED BEFORE ANY BYTES MOVE, and refused here rather than after admission.
-  // `loadPsxExeImage` publishes the payload and rewrites PC/GP/SP, so a refusal that ran after it
-  // would answer -1 with half a program in RAM and a new image identity resident over it: a state the
-  // guest cannot make sense of and can only escape by the run ending. Refusing first leaves the
-  // machine exactly as the caller found it.
+  // A stated a1/a2 stack replaces the header's; it is checked before any byte moves.
   const std::uint32_t statedStackBase = core.r[psx::cpu::kA1];
   const std::uint64_t statedStack =
       static_cast<std::uint64_t>(statedStackBase) + static_cast<std::uint64_t>(core.r[psx::cpu::kA2]);
@@ -96,16 +81,12 @@ bool dispatchLoadExec(Core &core, const DiscFileReader &readFile) {
     return refuseLoad(core, lucent::format("'{}' is not readable from the disc as {}", filename, isoPath));
   }
 
-  // The ONE executable-admission owner: it validates the header, publishes the payload as one
-  // executable write (so no stale translation survives), activates the image identity that owns the
-  // range, and establishes PC/GP and the header's own stack.
-  const psx::cpu::PsxExeLoadResult loaded = psx::cpu::loadPsxExeImage(core, bytes, filename);
+  const psx::cpu::PsxExeLoadResult loaded = psx::cpu::loadTopLevelPsxExe(core, bytes, filename);
   if (!loaded) {
     return refuseLoad(core, lucent::format("'{}': {}", filename, loaded.detail));
   }
-  psx::cpu::applyPsxExeTopLevelRegisters(core, loaded.image);
   if (statedStackBase != 0u) {
-    core.r[29] = core.r[30] = static_cast<std::uint32_t>(statedStack);
+    core.r[psx::cpu::kSp] = core.r[psx::cpu::kFp] = static_cast<std::uint32_t>(statedStack);
   }
 
   core.r[psx::cpu::kV0] = 0;
@@ -114,13 +95,9 @@ bool dispatchLoadExec(Core &core, const DiscFileReader &readFile) {
                filename,
                loaded.image.textAddress,
                loaded.image.entry,
-               core.r[28],
-               core.r[29]);
-  // START IT. The BIOS does not return to its caller on success, so the guest's continuation is the
-  // loaded program's entry and NOT this leaf's r[31]. A requested exit carrying that address is the
-  // framework's own contract for "resume where this leaf chose" (execution_control.h), and
-  // GuestReturn is the reason that keeps the executor inside this turn and resumes at the stated
-  // address instead of handing control back to the title's frame driver.
+               core.r[psx::cpu::kGp],
+               core.r[psx::cpu::kSp]);
+  // The BIOS does not return on success: the guest continues at the loaded entry within this turn.
   psx::cpu::requestExecutionExit(
       core,
       psx::cpu::ExecutionResult{

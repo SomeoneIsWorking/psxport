@@ -10,11 +10,7 @@ psx::cpu::PsxExeLoadResult loadDiscExecutable(Game &game, const psx::host::Title
   if (!selection) {
     return {.detail = selection.detail};
   }
-  psx::cpu::PsxExeLoadResult loaded = psx::cpu::loadPsxExeImage(game.core, selection.bytes, identity.serial);
-  if (loaded) {
-    psx::cpu::applyPsxExeTopLevelRegisters(game.core, loaded.image);
-  }
-  return loaded;
+  return psx::cpu::loadTopLevelPsxExe(game.core, selection.bytes, identity.serial);
 }
 
 } // namespace psx::game

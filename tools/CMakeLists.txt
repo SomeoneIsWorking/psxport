@@ -1,14 +1,8 @@
 # Framework tools. Native binaries are CMake targets; RE and analysis automation is Python. The
 # game-asset exporters (menu_bg_export, tex_export)
 # moved to the consuming game repo (Tomba2Engine) with the assets they read.
-# crt0_extract reports a PSX executable's crt0 boot group through the SHIPPING decoder (crt0_scan in
-# runtime/psx/boot/crt0_verify.h), so the extractor and the boot-time audit that checks its output can
-# never drift apart. Header-only include; it needs lucent for the log macros crt0_verify.h uses.
+# crt0_extract dumps an executable's crt0 through the shipping scanCrt0/planCrt0.
 add_executable(crt0_extract crt0_extract.cpp)
-# psxport (not just lucent) for its PUBLIC include path: crt0_verify.h and crt0_boot.h reach across the
-# boot/ and core/ directories by basename, and a tool that spells a header's DIRECTORY can never see a
-# header that moves. Linking the static library exports the whole subsystem include path and pulls in no
-# code the extractor does not call.
 target_link_libraries(crt0_extract PRIVATE psxport psxport_internal lucent::lucent)
 
 add_executable(discdump discdump.cpp)

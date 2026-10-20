@@ -35,7 +35,7 @@ void bindPerCoreDevices(Game &game, psx::frame::FrameLoopShell &shell) {
   psx::audio::spu::init();
   shell.bindRunningCore(core);
   game.spu_audio.init();
-  game.pad.overridesInit();
+  game.pad.init();
   core.r[4] = 1;
   core.r[5] = 0;
 }
@@ -63,7 +63,7 @@ TitleSession::~TitleSession() {
     return;
   }
   Game &game = *parts_->game;
-  psx::cpu::shutdownHostTurn(game.core);
+  game.core.hostTurn.reset();
   if (role_ == Role::Product) {
     psx::RunEndReport{game}.emit(steps_);
   }
@@ -125,8 +125,8 @@ bool TitleSession::boot() {
   services_.frameLoop.prepareProduct(game);
   // Several sessions each start the channel; only the first owns the host port, which is how the
   // picker and a running title share one.
-  game.dbg_server.start(&core);
-  psx::cpu::attachStoreObserver(core);
+  game.dbg_server.start();
+  psx::cpu::configureStoreObserver(core);
   lucent::info("boot",
                "live control channel {}, store observer armed",
                psx::debug::debugServerLive() ? "attached" : "not requested");

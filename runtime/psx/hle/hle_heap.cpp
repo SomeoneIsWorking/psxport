@@ -5,8 +5,6 @@
 
 #include <lucent/log.h>
 
-enum : std::uint16_t { HEAP_MAX_BLOCKS = 4096 };
-
 void Hle::heapInit(GuestSpan heap) {
   heap_base = heap.address;
   heap_size = heap.bytes;
@@ -26,7 +24,7 @@ uint32_t Hle::heapAlloc(uint32_t size) {
     if (blk[i].used || blk[i].size < size) {
       continue;
     }
-    if (blk[i].size > size && nblk < HEAP_MAX_BLOCKS) {
+    if (blk[i].size > size && nblk < kHeapBlocks) {
       for (int j = nblk; j > i + 1; j--) {
         blk[j] = blk[j - 1];
       }

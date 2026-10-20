@@ -12,13 +12,13 @@ void PlatformHle::completeImmediately(Core *core) {
   core->r[psx::cpu::kV0] = 0;
 }
 
-void PlatformHle::bindStock(std::uint32_t address, OverrideFn function) {
+void PlatformHle::bindStock(std::uint32_t address, psx::cpu::NativeFunction function) {
   if (address && !insert(address, function)) {
     std::abort();
   }
 }
 
-bool PlatformHle::insert(std::uint32_t address, OverrideFn function) {
+bool PlatformHle::insert(std::uint32_t address, psx::cpu::NativeFunction function) {
   for (int index = 0; index < mN; ++index) {
     if (mAddr[index] == address) {
       if (address == vsyncAddress() && mFn[index] != function) {
@@ -86,7 +86,7 @@ void PlatformHle::requireNativeFrameLoopContract() const {
   }
 }
 
-OverrideFn PlatformHle::lookup(std::uint32_t address) const {
+psx::cpu::NativeFunction PlatformHle::lookup(std::uint32_t address) const {
   if (address < mLo || address > mHi) {
     return nullptr;
   }

@@ -10,7 +10,7 @@ void StockDmaCallbacks::bind(Game &game) const & {
   game.dmaCallbacks.bindGuestTable(*this);
 }
 
-std::uint32_t StockDmaCallbacks::callback(Core &core, int channel) const {
+std::uint32_t StockDmaCallbacks::callback(Core &core, psx::dma::DmaChannel channel) const {
   const std::uint32_t slot = psx::dma::callbackSlot(table_, channel);
   return slot ? core.mem_r32(slot) : 0u;
 }

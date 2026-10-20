@@ -2,6 +2,7 @@
 
 #include "execution_exit.h"
 
+#include <cstdint>
 #include <optional>
 
 class Core;
@@ -11,21 +12,16 @@ namespace psx::cpu {
 class ExecutionControl {
 public:
   bool request(ExecutionResult result);
-  std::optional<ExecutionResult> consume();
+  // Takes the pending request; an unstated resume pc (0) becomes `unstatedPc`, and `cycles` are added.
+  std::optional<ExecutionResult> consume(std::uint32_t unstatedPc, std::uint64_t cycles);
   const std::optional<ExecutionResult> &pending() const;
 
 private:
   std::optional<ExecutionResult> pending_;
 };
 
-// Ask for a bounded exit. `reason`-only is the WEAK form: it states no resume address, and whoever
-// consumes the request supplies the correct one for where the request was raised —
-// `NativeExecutionScope` fills the leaf's `r[31]` continuation when the request came from a native
-// override the guest reached by `jal`, and the executor fills the standing architectural PC when it
-// came from interrupt or scheduler work. That split is not a convenience: a `jal`ed leaf's entry is
-// never a valid resume point, so stamping it here and resuming there spins the leaf forever.
-//
-// Use the `result` overload to state a resume address explicitly, and it is always honoured.
+// Ask for a bounded exit. The reason-only form states no resume pc; its consumer supplies one
+// (a jal'ed leaf's r[31], else the architectural pc), because a leaf's entry never is one.
 void requestExecutionExit(Core &core, ExecutionExitReason reason);
 void requestExecutionExit(Core &core, ExecutionResult result);
 bool completeOrPropagate(Core &core, ExecutionResult result);

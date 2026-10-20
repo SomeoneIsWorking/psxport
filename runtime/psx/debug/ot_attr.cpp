@@ -8,111 +8,257 @@
 // that reaching through `c->game` for a frame counter caused.
 #include "command_args.h"
 #include "native_dispatch.h"
+#include "ordering_table.h"
+#include "render_substrate.h"
+#include <algorithm>
 #include <cstdio>
 #include <format>
 #include <lucent/log.h>
 #include <optional>
 #include <string_view>
+#include <vector>
 
-// ---- The `otattr` last-writer sub-commands, shared by EVERY control transport ------------------
-//
-// `otattr watch` / `otattr who` are one implementation here, not one per transport: the REPL
-// (repl.cpp) and the debug server (dbg_server.cpp) both call this, so the command means the same
-// thing and answers identically wherever it is typed, and the workspace rule that agents drive
-// everything through the control channel holds. `emit` is the transport's sink.
-
-bool OtAttr::runLastWriterCommand(std::string_view line, const std::function<void(std::string_view)> &emit) {
-  const psx::debug::CommandArgs args(line);
+void OtAttr::runCommand(Core &core, const psx::debug::CommandArgs &args, const Emit &emit) {
   const std::string_view sub = args.word(1);
-  // LAST-WRITER PROVENANCE sub-commands (ot_attr.h) — answer "who wrote this WORD", independent of
-  // call-flow, for the staging-buffer case where call-path attribution only names the batcher.
   if (sub == "watch") {
-    const uint32_t addr = args.hex(2).value_or(0);
-    const uint32_t len = args.hex(3).value_or(0);
-    if (!args.hex(2).has_value() || len == 0) {
-      emit(std::format("usage: otattr watch <addr-hex> <len-hex>"));
+    watchCommand(args, emit);
+  } else if (sub == "who") {
+    whoCommand(args, emit);
+  } else if (sub == "trace") {
+    traceCommand(args, emit);
+  } else if (sub == "packets") {
+    packetsCommand(core, emit);
+  } else if (const std::optional<uint32_t> address = args.hex(1)) {
+    attributeOne(*address, emit);
+  } else {
+    attributeTable(core, emit);
+  }
+}
+
+// Answers "who wrote this word" for a staging buffer, where call-path attribution only names the batcher.
+void OtAttr::watchCommand(const psx::debug::CommandArgs &args, const Emit &emit) {
+  const uint32_t addr = args.hex(2).value_or(0);
+  const uint32_t len = args.hex(3).value_or(0);
+  if (!args.hex(2).has_value() || len == 0) {
+    emit(std::format("usage: otattr watch <addr-hex> <len-hex>"));
+  } else {
+    int slot = watchRegister({addr, len});
+    if (slot < 0) {
+      emit(std::format("watch REJECTED (slots={}/{} wordsUsed={}/{} overflow={}) — free a slot or shrink the region",
+                       watchSlotCount(),
+                       (int)OtAttr::WATCH_SLOTS,
+                       watchWordsUsed(),
+                       (int)OtAttr::WATCH_CAP_WORDS,
+                       watchOverflow()));
     } else {
-      int slot = watchRegister({addr, len});
-      if (slot < 0) {
-        emit(std::format("watch REJECTED (slots={}/{} wordsUsed={}/{} overflow={}) — free a slot or shrink the region",
-                         watchSlotCount(),
-                         (int)OtAttr::WATCH_SLOTS,
-                         watchWordsUsed(),
-                         (int)OtAttr::WATCH_CAP_WORDS,
-                         watchOverflow()));
-      } else {
-        const OtAttr::WatchRegion *r = watchAt(slot);
-        // Decorate as KSEG0 (0x800xxxxx) ONLY for main-RAM regions — scratchpad (0x1F800000-
-        // 0x1F8003FF) is NOT mirrored across segments the way RAM is, so blindly OR-ing 0x80000000
-        // onto it prints a bogus 0x9F8xxxxx address. Print scratchpad addresses as-is (their own
-        // canonical form).
-        uint32_t dlo = r->lo < 0x200000u ? (0x80000000u | r->lo) : r->lo;
-        uint32_t dhi = r->hi < 0x200000u ? (0x80000000u | r->hi) : r->hi;
-        emit(std::format("watch[{}] = [0x{:08X},0x{:08X}) ({} words) — slots {}/{}, {}/{} words used",
-                         slot,
-                         dlo,
-                         dhi,
-                         (r->hi - r->lo) / 4,
-                         watchSlotCount(),
-                         (int)OtAttr::WATCH_SLOTS,
-                         watchWordsUsed(),
-                         (int)OtAttr::WATCH_CAP_WORDS));
-      }
+      const OtAttr::WatchRegion *r = watchAt(slot);
+      // KSEG0 only for main RAM; the scratchpad prints as itself.
+      uint32_t dlo = r->lo < 0x200000u ? (0x80000000u | r->lo) : r->lo;
+      uint32_t dhi = r->hi < 0x200000u ? (0x80000000u | r->hi) : r->hi;
+      emit(std::format("watch[{}] = [0x{:08X},0x{:08X}) ({} words) — slots {}/{}, {}/{} words used",
+                       slot,
+                       dlo,
+                       dhi,
+                       (r->hi - r->lo) / 4,
+                       watchSlotCount(),
+                       (int)OtAttr::WATCH_SLOTS,
+                       watchWordsUsed(),
+                       (int)OtAttr::WATCH_CAP_WORDS));
     }
-    return true;
   }
-  if (sub == "who") {
-    const std::optional<uint32_t> addrArg = args.hex(2);
-    if (!addrArg.has_value()) {
-      emit(std::format("usage: otattr who <addr-hex> [len-hex]"));
-      return true;
-    }
-    const uint32_t addr = *addrArg;
-    const uint32_t len = args.hex(3).value_or(4);
-    emit(std::format("who 0x{:08X}..0x{:08X} (word-granular, coalesced runs):", addr, addr + len));
-    uint32_t w = addr & ~3u, end = addr + len;
-    bool any = false;
-    OtAttr::WordRec cur{};
-    uint32_t runLo = 0, runHi = 0;
-    bool haveRun = false;
-    auto flush_run = [&]() {
-      if (!haveRun) {
-        return;
-      }
-      if (cur.frame == 0xFFFFFFFFu) {
-        emit(std::format("  [0x{:08X},0x{:08X}) NEVER WRITTEN since watch registered", runLo, runHi));
-      } else {
-        emit(std::format(
-            "  [0x{:08X},0x{:08X}) fn=0x{:08X} caller=0x{:08X} frame={}", runLo, runHi, cur.fn, cur.caller, cur.frame));
-      }
-      any = true;
-      haveRun = false;
-    };
-    for (; w < end; w += 4) {
-      OtAttr::WordRec rec{};
-      uint32_t wa = 0;
-      if (!watchLookup(w, &rec, &wa)) {
-        flush_run();
-        emit(std::format("  [0x{:08X},0x{:08X}) NOT WATCHED — run `otattr watch` first", w, w + 4));
-        return true;
-      }
-      if (haveRun && rec.fn == cur.fn && rec.caller == cur.caller && rec.frame == cur.frame && wa == runHi) {
-        runHi = wa + 4;
-      } else {
-        flush_run();
-        cur = rec;
-        runLo = wa;
-        runHi = wa + 4;
-        haveRun = true;
-      }
-    }
-    flush_run();
-    if (!any) {
-      emit(std::format("  (nothing in range)"));
-    }
-    return true;
+}
+
+void OtAttr::whoCommand(const psx::debug::CommandArgs &args, const Emit &emit) const {
+  const std::optional<uint32_t> addrArg = args.hex(2);
+  if (!addrArg.has_value()) {
+    emit(std::format("usage: otattr who <addr-hex> [len-hex]"));
+    return;
   }
-  return false;
+  const uint32_t addr = *addrArg;
+  const uint32_t len = args.hex(3).value_or(4);
+  emit(std::format("who 0x{:08X}..0x{:08X} (word-granular, coalesced runs):", addr, addr + len));
+  uint32_t w = addr & ~3u, end = addr + len;
+  bool any = false;
+  OtAttr::WordRec cur{};
+  uint32_t runLo = 0, runHi = 0;
+  bool haveRun = false;
+  auto flush_run = [&]() {
+    if (!haveRun) {
+      return;
+    }
+    if (cur.frame == 0xFFFFFFFFu) {
+      emit(std::format("  [0x{:08X},0x{:08X}) NEVER WRITTEN since watch registered", runLo, runHi));
+    } else {
+      emit(std::format(
+          "  [0x{:08X},0x{:08X}) fn=0x{:08X} caller=0x{:08X} frame={}", runLo, runHi, cur.fn, cur.caller, cur.frame));
+    }
+    any = true;
+    haveRun = false;
+  };
+  for (; w < end; w += 4) {
+    OtAttr::WordRec rec{};
+    uint32_t wa = 0;
+    if (!watchLookup(w, &rec, &wa)) {
+      flush_run();
+      emit(std::format("  [0x{:08X},0x{:08X}) NOT WATCHED — run `otattr watch` first", w, w + 4));
+      return;
+    }
+    if (haveRun && rec.fn == cur.fn && rec.caller == cur.caller && rec.frame == cur.frame && wa == runHi) {
+      runHi = wa + 4;
+    } else {
+      flush_run();
+      cur = rec;
+      runLo = wa;
+      runHi = wa + 4;
+      haveRun = true;
+    }
+  }
+  flush_run();
+  if (!any) {
+    emit(std::format("  (nothing in range)"));
+  }
+}
+
+void OtAttr::traceCommand(const psx::debug::CommandArgs &args, const Emit &emit) const {
+  const std::optional<uint32_t> traced = args.hex(2);
+  if (!traced.has_value()) {
+    emit("usage: otattr trace <addr-hex>");
+    return;
+  }
+  const uint32_t addr = *traced;
+  WordRec rec{};
+  uint32_t wa = 0;
+  if (!watchLookup(addr, &rec, &wa)) {
+    emit(std::format("trace 0x{:08X}: NOT in any watched region — `otattr watch <addr> <len>` first", addr));
+    return;
+  }
+  if (rec.frame == 0xFFFFFFFFu) {
+    emit(std::format("trace 0x{:08X}: watched, but NEVER WRITTEN since registration", addr));
+    return;
+  }
+  emit(std::format("trace 0x{:08X} (word 0x{:08X}): last writer fn=0x{:08X} caller=0x{:08X} frame={}",
+                   addr,
+                   wa,
+                   rec.fn,
+                   rec.caller,
+                   rec.frame));
+  // A writer that touches many 4 KB pages in one frame is a copy loop: the object identity was lost before it.
+  const FnStoreStat *st = fnStatFind(rec.fn);
+  if (st == nullptr) {
+    emit("  no per-fn store stat for this fn this frame; trace in the frame the write happened");
+    return;
+  }
+  const bool copyLoop = st->pageOverflow || st->pageCount >= 3;
+  emit(std::format("  fn=0x{:08X} made {} store(s) over {} distinct 4KB page(s){} -> {}",
+                   rec.fn,
+                   st->count,
+                   st->pageCount,
+                   st->pageOverflow ? "+" : "",
+                   copyLoop ? "a copy/batch loop: decompile it for its source, then `otattr watch` that"
+                            : "a direct, single-destination writer"));
+}
+
+void OtAttr::packetsCommand(Core &core, const Emit &emit) const {
+  if (core.rsub.lastOrderingTable == 0) {
+    emit("no ordering table walked yet this run");
+    return;
+  }
+  psx::gpu::OrderingTableCursor cursor(core, core.rsub.lastOrderingTable);
+  do {
+    const psx::gpu::OtNode &node = cursor.node();
+    if (!node.carriesPrimitive()) {
+      continue;
+    }
+    const uint32_t command = core.mem_r32(node.gp0WordRamOffset(0));
+    const uint32_t vertex = node.gp0WordCount() >= 2 ? core.mem_r32(node.gp0WordRamOffset(1)) : 0u;
+    Span sp{};
+    const bool found = lookupStore(node.gp0WordRamOffset(0), &sp);
+    emit(std::format("  [{:4}] packet=0x{:08X} op=0x{:02X} n={} v0=({},{}) fn=0x{:08X} caller=0x{:08X}",
+                     cursor.nodesEntered() - 1,
+                     node.guestAddress(),
+                     command >> 24,
+                     node.gp0WordCount(),
+                     static_cast<int16_t>(vertex & 0xFFFFu),
+                     static_cast<int16_t>(vertex >> 16),
+                     found ? sp.fn : 0u,
+                     found ? sp.caller : 0u));
+  } while (cursor.advance());
+  emit(
+      std::format("GTE RTPS/RTPT calls this frame by fn ({} fn(s){}):", mGteCount, mGteOverflow ? ", overflowed" : ""));
+  for (int i = 0; i < mGteCount; i++) {
+    emit(std::format("  fn=0x{:08X} count={}", mGte[i].fn, mGte[i].count));
+  }
+}
+
+void OtAttr::attributeOne(uint32_t address, const Emit &emit) const {
+  Span sp{};
+  if (lookupStore(address, &sp)) {
+    emit(std::format("0x{:08X} <- fn=0x{:08X} caller=0x{:08X} claimed=0x{:08X} (span [0x{:08X},0x{:08X}))",
+                     address | 0x80000000u,
+                     sp.fn,
+                     sp.caller,
+                     sp.claimed,
+                     sp.lo,
+                     sp.hi));
+    return;
+  }
+  // No span is "not recorded", not "nobody wrote it".
+  emit(std::format("0x{:08X}: no span covers it ({} spans this frame{})",
+                   address | 0x80000000u,
+                   mSpanCount,
+                   mSpanOverflow ? ", the table overflowed" : ""));
+}
+
+// Attribution is not total: a packet stored before the table was armed, or past its cap, is unattributed.
+void OtAttr::attributeTable(Core &core, const Emit &emit) const {
+  struct Row {
+    uint32_t fn;
+    int packets;
+  };
+  std::vector<Row> rows;
+  int nodes = 0;
+  int attributed = 0;
+  if (core.rsub.lastOrderingTable != 0) {
+    psx::gpu::OrderingTableCursor cursor(core, core.rsub.lastOrderingTable);
+    do {
+      if (!cursor.node().carriesPrimitive()) {
+        continue;
+      }
+      nodes++;
+      Span sp{};
+      if (!lookupStore(cursor.node().gp0WordRamOffset(0), &sp)) {
+        continue;
+      }
+      attributed++;
+      const auto row = std::find_if(rows.begin(), rows.end(), [&sp](const Row &r) {
+        return r.fn == sp.fn;
+      });
+      if (row != rows.end()) {
+        row->packets++;
+      } else {
+        rows.push_back({sp.fn, 1});
+      }
+    } while (cursor.advance());
+  }
+  std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) {
+    return a.packets > b.packets;
+  });
+  emit(std::format("frame {} OT@0x{:08X}: {} drawing nodes, {} attributed, {} UNATTRIBUTED ({} spans{}); watch "
+                   "slots {}/{} words {}/{}",
+                   mFrame,
+                   0x80000000u | core.rsub.lastOrderingTable,
+                   nodes,
+                   attributed,
+                   nodes - attributed,
+                   mSpanCount,
+                   mSpanOverflow ? ", TABLE OVERFLOWED" : "",
+                   watchSlotCount(),
+                   static_cast<int>(WATCH_SLOTS),
+                   watchWordsUsed(),
+                   static_cast<int>(WATCH_CAP_WORDS)));
+  for (const Row &row : rows) {
+    emit(std::format("  fn=0x{:08X}  {} packet(s)", row.fn, row.packets));
+  }
 }
 
 void OtAttr::refreshPool(Core *c) {

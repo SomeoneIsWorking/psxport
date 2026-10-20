@@ -7,8 +7,7 @@ class Game;
 
 namespace psx {
 
-// The executor counts and ledger, the guest-call census, the play-check counters, the after-loop RAM
-// dump when asked, then the title's own lines (`GameRuntime::reportRun`).
+// Executor ledger, guest-call census, play-check counters, the PSXPORT_RAMDUMP capture, then the title's lines.
 class RunEndReport {
 public:
   explicit RunEndReport(Game &game) : game_(game) {}
@@ -16,8 +15,6 @@ public:
   void emit(std::uint64_t productSteps) const;
 
 private:
-  void dumpRamIfRequested() const;
-
   Game &game_;
 };
 

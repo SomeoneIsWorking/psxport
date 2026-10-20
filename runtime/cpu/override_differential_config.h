@@ -1,6 +1,4 @@
-// The typed, immutable configuration of the per-function override differential. The configuration
-// owner (`runtime/psx/config/config.cpp`, `psx::config::override_differential_config`) reads the knobs once and
-// converts them through `overrideDifferentialConfigFrom`; nothing else reads the environment.
+// The typed configuration of the override differential, built once by the config owner.
 #pragma once
 
 #include <cstdint>
@@ -13,11 +11,7 @@ namespace psx::cpu {
 
 inline constexpr std::uint32_t kDefaultDifferentialFirstCalls = 16;
 inline constexpr std::uint32_t kDefaultDifferentialEveryKth = 64;
-// Bytes below the entry stack pointer whose differences are CALLEE FRAME residue, not a result. The
-// O32 contract gives a caller nothing below its own `sp` after a return, and an original that built a
-// frame leaves its locals there while a native override that needs no frame does not. The window is
-// bounded because main RAM below the stack is also ordinary data; differing bytes inside it are still
-// counted and reported, only not judged.
+// Callee-frame residue below the entry sp: counted, not judged, since O32 promises nothing below sp.
 inline constexpr std::uint32_t kDefaultDifferentialDeadStackBytes = 0x2000;
 inline constexpr std::string_view kDefaultDifferentialReportPath = "scratch/override_differential.json";
 
@@ -25,6 +19,10 @@ inline constexpr std::string_view kDefaultDifferentialReportPath = "scratch/over
 struct DifferentialSelector {
   std::string text;
   std::optional<std::uint32_t> address;
+
+  bool matches(std::uint32_t entry, std::string_view name) const {
+    return address ? entry == *address : name == text;
+  }
 };
 
 struct OverrideDifferentialConfig {

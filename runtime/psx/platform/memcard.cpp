@@ -5,6 +5,7 @@
 #include "memcard.h"
 #include "config.h" // launch_setting — the title card key, then PSXPORT_CARD
 #include "core.h"
+#include "fs_util.h"
 #include "game.h" // c->game->hle.deliverEvent — Hle subsystem lives on Game
 #include "game_runtime.h"
 #include <filesystem>
@@ -18,78 +19,32 @@
 #include <string>
 #include <system_error>
 #include <vector>
-#ifdef _WIN32
-#include <direct.h>
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#endif
 
 // class Memcard is a Game member (see memcard.h). All BIOS handlers below reach it via `c->game->memcard`.
 
-namespace {
-
-char *mc_dup_trim(const char *s) {
-  while (*s == ' ' || *s == '\t') {
-    s++;
-  }
-  size_t n = strlen(s);
-  while (n && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' || s[n - 1] == '\t')) {
-    n--;
-  }
-  char *o = (char *)malloc(n + 1);
-  memcpy(o, s, n);
-  o[n] = 0;
-  return o;
-}
-
-} // namespace
-// The game's card key then PSXPORT_CARD, from the environment then ./.env (launch_setting); then the
-// game's default path (HostIdentity::cardEnvVar / cardDefaultPath).
-char *Memcard::resolvePath(const psx::game::HostIdentity &identity) {
+// The game's card key then PSXPORT_CARD (launch_setting trims), then the game's default path.
+std::string Memcard::resolvePath(const psx::game::HostIdentity &identity) {
   const std::string configured = psx::config::launch_setting({identity.cardEnvVar, "PSXPORT_CARD"});
   if (!configured.empty()) {
-    return mc_dup_trim(configured.c_str());
+    return configured;
   }
   if (identity.cardDefaultPath && *identity.cardDefaultPath) {
-    return mc_dup_trim(identity.cardDefaultPath);
+    return identity.cardDefaultPath;
   }
-  return mc_dup_trim("scratch/saves/card.mcr");
-}
-
-void Memcard::mkParents(const char *path) {
-  char buf[1024];
-  size_t n = strlen(path);
-  if (n >= sizeof buf) {
-    return;
-  }
-  memcpy(buf, path, n + 1);
-  for (char *p = buf + 1; *p; p++) {
-    if (*p == '/') {
-      *p = 0;
-#ifdef _WIN32
-      _mkdir(buf);
-#else
-      mkdir(buf, 0777);
-#endif
-      *p = '/';
-    }
-  }
+  return "scratch/saves/card.mcr";
 }
 
 void Memcard::init() {
   if (mCard) {
     return;
   }
-  char *path = resolvePath(game ? game->hostIdentity() : psx::game::HostIdentity{});
-  snprintf(mPath, sizeof mPath, "%s", path);
-  free(path);
-  mkParents(mPath);
+  mPath = resolvePath(game ? game->hostIdentity() : psx::game::HostIdentity{});
+  Fs::ensureParentDirs(mPath);
 
   // Open existing for read+write; if absent, create zero-filled (a freshly formatted blank card).
-  mCard = fopen(mPath, "r+b");
+  mCard = fopen(mPath.c_str(), "r+b");
   if (!mCard) {
-    mCard = fopen(mPath, "w+b");
+    mCard = fopen(mPath.c_str(), "w+b");
     if (mCard) {
       constexpr uint8_t zero[kFrameSize] = {};
       for (uint32_t i = 0; i < kFrames; i++) {
@@ -165,9 +120,7 @@ psx::input::CardSnapshot Memcard::snapshot() {
   if (mCard) {
     fflush(mCard);
   } else {
-    char *resolved = resolvePath(game ? game->hostIdentity() : psx::game::HostIdentity{});
-    path = resolved;
-    free(resolved);
+    path = resolvePath(game ? game->hostIdentity() : psx::game::HostIdentity{});
   }
   // A card file that does not exist yet is the blank formatted image init() will create on first
   // access. Naming it that way keeps this query free of side effects: nothing is created to answer it.
@@ -761,12 +714,12 @@ int Memcard::dispatchBiosA0(uint32_t fn, Core *c) {
                   c->r[psx::cpu::kA0],
                   c->r[psx::cpu::kA1],
                   c->r[psx::cpu::kA2]);
-    m.syscallLog().record(psxport::card::Vector::A0, fn, true);
+    m.syscallLog().record(psx::platform::card::Vector::A0, fn, true);
     Memcard::deliverComplete(c);
     c->r[psx::cpu::kV0] = 1;
     return 1;
   default:
-    m.syscallLog().record(psxport::card::Vector::A0, fn, false);
+    m.syscallLog().record(psx::platform::card::Vector::A0, fn, false);
     return 0;
   }
 }
@@ -845,7 +798,7 @@ int Memcard::dispatchBiosB0(uint32_t fn, Core *c) {
     break;
   }
   const int handled = card_dispatch_b0(fn, c);
-  c->game->memcard.syscallLog().record(psxport::card::Vector::B0, fn, handled != 0);
+  c->game->memcard.syscallLog().record(psx::platform::card::Vector::B0, fn, handled != 0);
   return handled;
 }
 

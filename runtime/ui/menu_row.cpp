@@ -61,7 +61,7 @@ public:
     return true;
   }
   void step(int dir) override {
-    mSetting->var->set(psx::config::Layer::Value, mSetting->range.stepped(mSetting->var->get(), dir));
+    mSetting->var->set(mSetting->range.stepped(mSetting->var->get(), dir), psx::config::Layer::Value);
     if (mMods) {
       mMods->save();
     }

@@ -10,6 +10,7 @@
 #include "pad_recording.h"
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 struct Core;
 class Game;
@@ -45,7 +46,7 @@ public:
   int dispatchBiosB0(uint32_t fn, Core *c);
   // The backing file chosen by init(); empty before it.
   const char *path() const {
-    return mPath;
+    return mPath.c_str();
   }
   bool present() const {
     return mCard != nullptr;
@@ -121,7 +122,7 @@ public:
 
   // Diagnostics. The syscall log accounts for every dispatched BIOS card call, handled or not;
   // see card_syscall_log.h for why an unhandled call must leave a record.
-  psxport::card::SyscallLog &syscallLog() {
+  psx::platform::card::SyscallLog &syscallLog() {
     return mSyscallLog;
   }
   // Deliver the libcard I/O-complete event (SwCARD/HwCARD EvSpIOE) so callers waiting on TestEvent
@@ -134,12 +135,11 @@ public:
 
 private:
   FILE *mCard = nullptr;
-  char mPath[1024] = {0};
-  psxport::card::SyscallLog mSyscallLog;
+  std::string mPath;
+  psx::platform::card::SyscallLog mSyscallLog;
   McFd mFd[kFdMax] = {};
   char mScanPat[64] = {0};     // firstfile/nextfile pattern, device prefix already stripped
   uint32_t mScanBlk = kBlocks; // next directory block to examine; kBlocks = scan exhausted/unarmed
 
-  static char *resolvePath(const psx::game::HostIdentity &identity);
-  static void mkParents(const char *path);
+  static std::string resolvePath(const psx::game::HostIdentity &identity);
 };

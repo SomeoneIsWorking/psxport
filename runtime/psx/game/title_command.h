@@ -5,6 +5,10 @@
 
 class Core;
 
+namespace psx::debug {
+class CommandArgs;
+}
+
 namespace psx::game {
 
 struct TitleCommandReply {
@@ -13,7 +17,7 @@ struct TitleCommandReply {
   std::string text;
 };
 
-// GameRuntime::titleCommand for `line` with its surrounding whitespace dropped; its first word is the command.
-TitleCommandReply runTitleCommand(Core &core, const std::string &line);
+// GameRuntime::titleCommand for `args`; its first word is the command.
+TitleCommandReply runTitleCommand(Core &core, const psx::debug::CommandArgs &args);
 
 } // namespace psx::game

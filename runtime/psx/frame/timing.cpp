@@ -1,16 +1,9 @@
-// Native display-time source. The host frame loop advances fields through frame_pacer.cpp and
-// advances one title-neutral counter through frameTick(). A title that mirrors it into guest RAM
-// owns the guest address and write order at its frame boundary.
+#include "timing.h"
+
 #include "cdc_state.h"
 #include "core.h"
-#include "field_rate.h"
 #include "game.h"
 #include "gpu_device.h"
-#include "host_turn.h"
-#include <algorithm> // std::min
-#include <lucent/log.h>
-#include <stdio.h>
-#include <stdlib.h>
 
 namespace psx::frame {
 
@@ -37,13 +30,13 @@ bool Timing::advanceDisplayFields(FieldCadence cadence, uint32_t fieldRateMilliH
           static_cast<uint32_t>(cadence.fields), static_cast<uint32_t>(cadence.parts), fieldRateMilliHz)) {
     return false;
   }
-  // A delivered display field is the host field clock's boundary. Re-anchor it here, before the
-  // field's guest callbacks run: the advance above lands exactly on the deadline this field was
-  // owed at, and a callback that accounted guest time against the stale deadline would request
-  // the very field it is inside.
-  psx::cpu::notifyDisplayField(game->core);
+  // Re-anchored before the field's callbacks run, or one would request the field it is inside.
+  game->core.hostTurn.onDisplayField(game->core);
   game->sio.service();
-  raiseVBlank(consumeCompletedDisplayFields(cadence));
+  // A latch, not a count, as the hardware bit is; a guest that leaves VBlank masked sees nothing.
+  if (consumeCompletedDisplayFields(cadence) != 0) {
+    game->core.raiseInterrupt(IRQ_BIT_VBLANK);
+  }
   serviceCdc();
   game->fieldDigest.recordField(*game);
   return true;
@@ -83,28 +76,6 @@ uint32_t Timing::consumeCompletedDisplayFields(FieldCadence cadence) {
   return static_cast<uint32_t>(completed);
 }
 
-// Every display field ends in a VBlank, and the display controller raises I_STAT bit 0 for it
-// whether or not anything is listening. The port owns FRAME PACING natively and traps every guest
-// VSync wait (see sync_overrides.cpp) — that is unchanged. What this asserts is only the INTERRUPT
-// EDGE, which is a separate thing a guest can own and which several drivers do: Crash Bash patches
-// its own pad engine into the kernel C0 table and does the whole controller handshake inside the
-// interrupt element it registers, so with no VBlank edge its verifier never ran, no SIO transfer
-// ever started, and no button state reached guest RAM (crashbash issue 0019).
-//
-// It costs nothing where nobody is listening: Hle::irqPoll delivers only when the guest has both
-// unmasked bit 0 in I_MASK and registered a chain element, and the bit stays latched until the
-// guest acknowledges it exactly as hardware does. A title that leaves VBlank masked — every one
-// whose vblank work the port already owns natively — sees no behavior change at all.
-void Timing::raiseVBlank(uint32_t fields) {
-  if (fields == 0) {
-    return;
-  }
-  // A latch, not a count: a guest that has not acknowledged the previous edge sees one pending
-  // VBlank, which is what the hardware bit does. Missed edges are the guest's own problem.
-  game->hle.i_stat |= 1u;
-  game->core.pending_work |= Core::PW_IRQ; // arm the per-function-entry delivery gate
-}
-
 std::optional<uint64_t> Timing::ticksUntilDeviceEvent() const {
   uint64_t deadline = 0;
   if (!game->cdc.nextDeadlineTicks(&deadline)) {
@@ -118,21 +89,8 @@ uint64_t Timing::emulatedCpuTicks() const {
   return mEmulatedTime.nowTicks();
 }
 
-// ---- root counter 2 ------------------------------------------------------------------------
-// Counts the same emulated CPU time everything else here is measured in, so it advances exactly
-// when the guest executes instructions or waits out a display field, and it wraps at 16 bits like
-// the hardware register. Mode bit 9 selects system-clock/8. With sync enabled (bit 0), sync modes
-// 0 and 3 stop timer 2 while modes 1 and 2 free-run; without sync it always runs.
-//
-// Crash Bash's pad driver is why this exists (crashbash issue 0019): its inter-byte delays and its
-// per-byte /ACK timeout are both `latch counter 2, spin until the delta exceeds N` (guest
-// 0x8003C688 / 0x8003C6A8), so with the register unmapped and reading 0 the delta was always 0,
-// the budget was never reached, and the SIO transfer hung in its first delay forever.
-//
-// NOT modelled, deliberately, because nothing has yet demanded it: the target/wrap IRQ (mode bits
-// 4-5 and 10, I_STAT bit 6) and the reached-target/reached-max status bits 11-12. A guest that
-// waits on a timer INTERRUPT still gets nothing, and will hang visibly rather than being handed a
-// fabricated event.
+// Root counter 2 on the emulated clock, wrapping at 16 bits; mode bit 9 is system clock / 8, and sync
+// modes 0 and 3 stop it. The target/wrap IRQ and the reached-target status bits are not modelled.
 uint16_t Timing::rootCounter2() const {
   const uint32_t syncMode = (rootCounter2Mode >> 1u) & 0x3u;
   const bool stopped = (rootCounter2Mode & 0x1u) != 0 && (syncMode == 0u || syncMode == 3u);
@@ -165,9 +123,13 @@ void Timing::rootCounter2WriteTarget(uint32_t target) {
   rootCounter2Target = target & 0xFFFFu;
 }
 
+DisplayFieldRate Timing::displayFieldRate() const {
+  return psx::frame::displayFieldRate(game != nullptr && game->core.gpuDevice().displayArea().pal);
+}
+
 uint64_t Timing::hSyncTotal() const {
-  const bool pal = game && game->core.gpuDevice().displayArea().pal;
-  return mEmulatedTime.hSyncCount(fieldRateMilliHz(pal), displayLinesPerField(pal));
+  const DisplayFieldRate rate = displayFieldRate();
+  return mEmulatedTime.hSyncCount(fieldRateMilliHz(rate), displayLinesPerField(rate == DISPLAY_FIELD_RATE_PAL));
 }
 
 uint16_t Timing::hSyncCounter() const {
@@ -184,65 +146,20 @@ void Timing::serviceCdc() {
   }
 }
 
-// 0x80085BB0 FUN_80085bb0 VSyncCallback(func): no-op. The original routes the per-vblank
-// callback through the libapi interrupt vector we don't model; we don't deliver preemptive
-// VBlank IRQs at all — the game's vblank busy-waits are ported to PC behavior natively
-// (see games_tomba2.c), so registering the callback is unnecessary and its unmodeled-vector
-// deref is skipped. Was ov_vsync_callback (taxi-in via c->r[4]; the callback ptr arg is
-// unused here, so no arg on the method).
-void Timing::vsyncCallback() {
-  game->core.r[psx::cpu::kV0] = 0;
-}
-
-// Advance the host field count once per title-owned native frame. Guest memory layout is title
-// policy: a frame driver that needs a libetc compatibility mirror writes its measured address.
 void Timing::frameTick() {
   vblank += 1u;
 }
 
-} // namespace psx::frame
-
-// ---- SPIN DETECTOR (see Core::spin_* and tests/test_spin_detector.cpp) -----------------------
-// One decision per `window_ticks` guest instructions. A decision counts toward a spin only when
-// BOTH hold: the host is still owed turns it never took (PW_HOST set — the guest has not reached
-// any call boundary for the whole window), and the pc stayed within one ±32KB region of the
-// anchor. Anything else resets: host serviced, or execution moved on. When the run reaches
-// `max_run` consecutive starved in-region decisions the process fail-fasts NAMING the region —
-// measured live as Vagrant's movie-wait spinning inside a single resident libcd poll body while
-// CD sectors flowed (issue #25; the concrete pc lives in that issue's record, not here).
-
-bool psx::platform::sampleSpinDetector(SpinDetectorState &st, SpinSample sample, SpinLimits limits) {
-  const uint32_t pc = sample.pc;
-  const bool host_starved = sample.hostStarved;
-  const uint64_t window_ticks = limits.windowTicks;
-  const int max_run = limits.maxRun;
-  const uint32_t ticks = sample.ticks;
-  if (window_ticks == 0 || max_run <= 0) {
-    return false; // detection disabled by configuration
-  }
-  st.window_ticks += ticks;
-  if (st.window_ticks < window_ticks) {
-    return false;
-  }
-  st.window_ticks = 0;
-
-  constexpr uint32_t kRegionMask =
-      ~0x7FFFFu; // same ±512KB region (measured: Vagrant's movie-wait chain spans ~100KB across dispatcher blocks)
-  const bool same_region = st.anchor != 0 && (pc & kRegionMask) == (st.anchor & kRegionMask);
-  if (!host_starved) {
-    // Host got its turn: healthy frame loop, whatever the code is doing. Full reset.
-    st.anchor = pc;
-    st.run = 0;
-    return false;
-  }
-  if (!same_region) {
-    // Starved but MOVED: execution is walking other functions — forward progress of a kind, but
-    // also the first decision of a fresh candidate run anchored HERE (a migrating spin must not
-    // get a free ride by hopping regions every window).
-    st.anchor = pc;
-    st.run = 1;
-    return st.run >= max_run;
-  }
-  st.run = std::min(st.run + 1, max_run + 1); // saturate; never overflow
-  return st.run >= max_run;
+Timing::ClockSnapshot Timing::clockSnapshot() const {
+  return {mEmulatedTime.q32(),
+          static_cast<uint64_t>(mDisplayFieldPhaseNumerator),
+          static_cast<uint64_t>(mDisplayFieldPhaseDenominator)};
 }
+
+void Timing::restoreClockSnapshot(const ClockSnapshot &clock) {
+  mEmulatedTime.restore(clock.time);
+  mDisplayFieldPhaseNumerator = clock.displayPhaseNumerator;
+  mDisplayFieldPhaseDenominator = clock.displayPhaseDenominator;
+}
+
+} // namespace psx::frame

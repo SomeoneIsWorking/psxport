@@ -37,20 +37,7 @@ void psx::input::HostInput::drainEvents() {
 
 #ifdef PSXPORT_SDL
 
-// THE HOST KEY STATE COMES FROM THE EVENTS, NOT FROM SDL_GetKeyboardState().
-//
-// SDL3 keeps its keyboard array per KEYBOARD-FOCUS window. When the product's window is not the
-// focused one SDL still DELIVERS the key events, but it does not apply them to that array, so every
-// entry reads "up". Measured on Spyro's shipping window (2026-10-01, SDL 3.0.4): a real X11 KEY_DOWN
-// for SDL_SCANCODE_RETURN reached SDL_PollEvent and the array entry was still 0 on the same frame,
-// so the pad mask never moved and Start/Cross did nothing.
-//
-// A player hits that whenever the window is not focused — after alt-tabbing back, a fullscreen
-// change, a notification, or a window manager that leaves focus at the pointer root. The symptom is
-// uniform and unreadable (the game ignores every press while the same key "works" under a forced mask
-// or a replay), which is why every gate in the project stayed green. So the events are the truth and
-// the SDL array is still OR-ed in, because it is correct whenever SDL does have focus and costs
-// nothing.
+// SDL3 applies key events to its state array only for the focused window, so delivered events are the truth.
 void psx::input::HostInput::noteHostKey(int scancode, bool down) {
   if (scancode > 0 && scancode < kHostKeyStates) {
     mKeyDown[scancode] = down;
@@ -74,53 +61,48 @@ namespace {
 // thresholded -> L2/R2; Start -> Start, Back -> Select, stick clicks -> L3/R3. The d-pad AND the left
 // stick are directions.
 //
-// The directional STICK threshold is a LARGE fraction of full deflection, never a small off-centre
-// value: a lower one OR-ed directions in from every connected pad with no lower guard, so a stick
-// resting slightly off centre — or reading stale/extreme before the first joystick event is pumped —
-// held a phantom direction continuously, which reads as "WASD doesn't move the player / maybe analog
-// mode". At ~67% only a deliberate push registers and resting drift never does.
+// Only a deliberate push registers; a resting or stale stick must not hold a direction.
 constexpr Sint16 kDirectionalDeflection = 22000; // ~67% of 32767
-constexpr std::uint16_t kStart = psx::input::kButtonStart;
 
 void applyGamepad(SDL_Gamepad *gamepad, std::uint16_t &mask) {
 #define HOST_BUTTON(button, bit)                                                                                       \
   if (SDL_GetGamepadButton(gamepad, (button))) {                                                                       \
     mask &= static_cast<std::uint16_t>(~(bit));                                                                        \
   }
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_UP, 0x0010u)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, 0x0020u)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_DOWN, 0x0040u)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_LEFT, 0x0080u)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_START, kStart)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_BACK, 0x0001u)  // Select
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_SOUTH, 0x4000u) // Cross  (SDL3 SOUTH = bottom)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_EAST, 0x2000u)  // Circle (EAST = right)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_WEST, 0x8000u)  // Square (WEST = left)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_NORTH, 0x1000u) // Triangle (NORTH = top)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, 0x0400u)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, 0x0800u)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_STICK, 0x0002u)  // L3
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_RIGHT_STICK, 0x0004u) // R3
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_UP, psx::input::kButtonUp)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, psx::input::kButtonRight)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_DOWN, psx::input::kButtonDown)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_LEFT, psx::input::kButtonLeft)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_START, psx::input::kButtonStart)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_BACK, psx::input::kButtonSelect)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_SOUTH, psx::input::kButtonCross)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_EAST, psx::input::kButtonCircle)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_WEST, psx::input::kButtonSquare)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_NORTH, psx::input::kButtonTriangle)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, psx::input::kButtonL1)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, psx::input::kButtonR1)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_STICK, psx::input::kButtonL3)
+  HOST_BUTTON(SDL_GAMEPAD_BUTTON_RIGHT_STICK, psx::input::kButtonR3)
 #undef HOST_BUTTON
   const Sint16 lx = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX);
   const Sint16 ly = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
   if (ly < -kDirectionalDeflection) {
-    mask &= static_cast<std::uint16_t>(~0x0010u); // Up
+    mask &= static_cast<std::uint16_t>(~psx::input::kButtonUp);
   }
   if (lx > kDirectionalDeflection) {
-    mask &= static_cast<std::uint16_t>(~0x0020u); // Right
+    mask &= static_cast<std::uint16_t>(~psx::input::kButtonRight);
   }
   if (ly > kDirectionalDeflection) {
-    mask &= static_cast<std::uint16_t>(~0x0040u); // Down
+    mask &= static_cast<std::uint16_t>(~psx::input::kButtonDown);
   }
   if (lx < -kDirectionalDeflection) {
-    mask &= static_cast<std::uint16_t>(~0x0080u); // Left
+    mask &= static_cast<std::uint16_t>(~psx::input::kButtonLeft);
   }
   if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > kDirectionalDeflection) {
-    mask &= static_cast<std::uint16_t>(~0x0100u); // L2
+    mask &= static_cast<std::uint16_t>(~psx::input::kButtonL2);
   }
   if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > kDirectionalDeflection) {
-    mask &= static_cast<std::uint16_t>(~0x0200u); // R2
+    mask &= static_cast<std::uint16_t>(~psx::input::kButtonR2);
   }
 }
 
@@ -225,46 +207,46 @@ std::uint16_t psx::input::HostInput::poll(bool windowAvailable) {
   const bool gameOwnsKeyboard = mOverlay == nullptr || !mOverlay->wantsKeyboard();
   if (gameOwnsKeyboard) {
     if (keyDown(SDL_SCANCODE_UP) || keyDown(SDL_SCANCODE_W)) {
-      mask &= static_cast<std::uint16_t>(~0x0010u);
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonUp);
     }
     if (keyDown(SDL_SCANCODE_RIGHT) || keyDown(SDL_SCANCODE_D)) {
-      mask &= static_cast<std::uint16_t>(~0x0020u);
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonRight);
     }
     if (keyDown(SDL_SCANCODE_DOWN) || keyDown(SDL_SCANCODE_S)) {
-      mask &= static_cast<std::uint16_t>(~0x0040u);
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonDown);
     }
     if (keyDown(SDL_SCANCODE_LEFT) || keyDown(SDL_SCANCODE_A)) {
-      mask &= static_cast<std::uint16_t>(~0x0080u);
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonLeft);
     }
     if (keyDown(SDL_SCANCODE_RETURN)) {
       mask &= static_cast<std::uint16_t>(~kButtonStart);
     }
     if (keyDown(SDL_SCANCODE_RSHIFT) || keyDown(SDL_SCANCODE_TAB)) {
-      mask &= static_cast<std::uint16_t>(~0x0001u); // Select
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonSelect);
     }
     if (keyDown(SDL_SCANCODE_K)) {
-      mask &= static_cast<std::uint16_t>(~0x4000u); // Cross
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonCross);
     }
     if (keyDown(SDL_SCANCODE_L)) {
-      mask &= static_cast<std::uint16_t>(~0x2000u); // Circle
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonCircle);
     }
     if (keyDown(SDL_SCANCODE_I)) {
-      mask &= static_cast<std::uint16_t>(~0x1000u); // Triangle
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonTriangle);
     }
     if (keyDown(SDL_SCANCODE_J)) {
-      mask &= static_cast<std::uint16_t>(~0x8000u); // Square
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonSquare);
     }
     if (keyDown(SDL_SCANCODE_Q)) {
-      mask &= static_cast<std::uint16_t>(~0x0400u); // L1
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonL1);
     }
     if (keyDown(SDL_SCANCODE_E)) {
-      mask &= static_cast<std::uint16_t>(~0x0800u); // R1
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonR1);
     }
     if (keyDown(SDL_SCANCODE_1)) {
-      mask &= static_cast<std::uint16_t>(~0x0100u); // L2
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonL2);
     }
     if (keyDown(SDL_SCANCODE_3)) {
-      mask &= static_cast<std::uint16_t>(~0x0200u); // R2
+      mask &= static_cast<std::uint16_t>(~psx::input::kButtonR2);
     }
   }
 
@@ -286,8 +268,7 @@ std::uint16_t psx::input::HostInput::poll(bool windowAvailable) {
   // analog stick in "analog mode") is the input, not the keyboard. Active-low, so a CHANGED direction
   // bit is a cleared one. PSXPORT_PAD_NOPAD=1 is the documented way out when it cannot be unplugged.
   if (!mPadDirsWarned) {
-    constexpr std::uint16_t kDirections = 0x00F0u; // Up/Right/Down/Left
-    if ((keyboardMask & kDirections) == kDirections && (mask & kDirections) != kDirections) {
+    if ((keyboardMask & psx::input::kButtonDirections) == psx::input::kButtonDirections && (mask & psx::input::kButtonDirections) != psx::input::kButtonDirections) {
       lucent::info("pad",
                    "a game controller is driving DIRECTIONS (host pad mask=0x{:04x}). If WASD seems dead, an analog "
                    "stick / phantom pad is the input. Set PSXPORT_PAD_NOPAD=1 to use the keyboard only.",

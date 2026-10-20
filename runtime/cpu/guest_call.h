@@ -1,6 +1,9 @@
 #pragma once
 
+#include "core.h"
+#include "guest_call_site.h"
 #include "native_dispatch.h"
+#include "r3000.h"
 
 #include <array>
 #include <concepts>
@@ -30,19 +33,29 @@ inline ExecutionResult dispatchGuest0(Core &core, std::uint32_t address, Executi
   return dispatchGuestWithArguments(core, address, {}, budget);
 }
 
-inline void dispatchGuestToReturn0(Core &core, std::uint32_t address, ExecutionBudget budget, std::string_view owner) {
-  dispatchGuestWithArgumentsToReturn(core, address, {}, budget, owner);
-}
-
-// The common native-to-guest leaf call: the guest function must return within the current host turn
-// (ExecutionBudget::currentTurn), `owner` names the native caller for the failure report, and every
-// argument lands in r4..r7 in order. This is the one home of that budget policy; callers do not spell
-// the budget themselves.
+// The native-to-guest leaf call: it must return within the current host turn, `owner` names the caller
+// in the failure report, and the arguments land in a0..a3. The one place the current-turn budget is spelled.
 template <typename... Args>
   requires(sizeof...(Args) <= 4 && (std::convertible_to<Args, std::uint32_t> && ...))
 void callGuestNow(Core &core, std::string_view owner, std::uint32_t address, Args... args) {
   const std::array<std::uint32_t, sizeof...(Args)> arguments{static_cast<std::uint32_t>(args)...};
   dispatchGuestWithArgumentsToReturn(core, address, arguments, ExecutionBudget::currentTurn(core), owner);
+}
+
+// callGuestNow for a jal site: ra is set to the site's return address first.
+template <typename... Args>
+  requires(sizeof...(Args) <= 4 && (std::convertible_to<Args, std::uint32_t> && ...))
+void callGuestNow(Core &core, std::string_view owner, GuestCallSite call, Args... args) {
+  core.r[kRa] = call.returnPc;
+  callGuestNow(core, owner, call.entry, args...);
+}
+
+// The same current-turn call, returning how it exited for a caller that handles a non-return itself.
+template <typename... Args>
+  requires(sizeof...(Args) <= 4 && (std::convertible_to<Args, std::uint32_t> && ...))
+ExecutionResult dispatchGuestNow(Core &core, std::uint32_t address, Args... args) {
+  const std::array<std::uint32_t, sizeof...(Args)> arguments{static_cast<std::uint32_t>(args)...};
+  return dispatchGuestWithArguments(core, address, arguments, ExecutionBudget::currentTurn(core));
 }
 
 // callGuestNow for a leaf whose v0 the caller reads.

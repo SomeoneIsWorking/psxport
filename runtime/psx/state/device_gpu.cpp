@@ -14,20 +14,20 @@ constexpr std::uint8_t kGpuLayoutVersion = 3;
 
 } // namespace
 
-void writeGpuSection(Game &game, BlobWriter &out) {
+void writeGpuSection(Game &game, psx::platform::BlobWriter &out) {
   out.u8(kGpuLayoutVersion);
   const std::vector<std::uint8_t> device = game.core.gpuDevice().saveState();
   out.blob(device);
 }
 
-bool readGpuSection(Game &game, BlobReader &in, std::string &error) {
-  const std::uint8_t layout = in.u8();
-  if (layout != kGpuLayoutVersion) {
-    error = "gpu section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kGpuLayoutVersion);
+bool readGpuSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
+  if (!in.expectLayout("gpu", kGpuLayoutVersion, error)) {
     return false;
   }
   std::vector<std::uint8_t> device;
-  in.blob(device);
+  if (!in.blob(device)) {
+    return in.decoded("gpu", error);
+  }
   if (!game.core.gpuDevice().loadState(device)) {
     error = "the GPU device did not accept its " + std::to_string(device.size()) + "-byte state stream";
     return false;

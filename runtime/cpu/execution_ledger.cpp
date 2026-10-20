@@ -3,7 +3,6 @@
 #include "executable_write_source.h"
 
 #include <array>
-#include <lucent/log.h>
 #include <string_view>
 
 namespace psx::cpu {
@@ -27,7 +26,8 @@ std::vector<std::string> ledgerLines(const ExecutorCounters &k) {
   const InterpreterFallbackCounters &f = k.fallback;
   return {
       lucent::format("guest: calls={} translated_blocks={} executed_blocks={} executed_instructions={} "
-                     "host_dispatches={} cache_hits={} cache_misses={} memory_callbacks={} invalidations={} faults={}",
+                     "host_dispatches={} cache_hits={} cache_misses={} memory_callbacks={} device_clock_commits={} "
+                     "device_clock_commit_instructions={} invalidations={} faults={}",
                      k.calls,
                      k.translatedBlocks,
                      k.executedBlocks,
@@ -36,13 +36,11 @@ std::vector<std::string> ledgerLines(const ExecutorCounters &k) {
                      k.cacheHits,
                      k.cacheMisses,
                      k.memoryCallbacks,
+                     k.deviceClockCommits,
+                     k.deviceClockCommitInstructions,
                      k.invalidations,
                      k.faults),
       invalidationsBySource(k),
-      // `budget_exits` is the denominator that makes the other two mean anything: with it "0 outside"
-      // is a measurement; without it, it is indistinguishable from a run that never took a budget exit.
-      // What the invalidations cost inside Lightrec: calls the guard answered alone versus walks over
-      // every registered block, and how many blocks those walks examined and revoked.
       lucent::format("invalidation_work: lightrec_calls={} words_examined={} guarded_calls={} walks={} "
                      "block_scans={} revoked_blocks={}",
                      k.lightrecInvalidationCalls,
@@ -55,12 +53,11 @@ std::vector<std::string> ledgerLines(const ExecutorCounters &k) {
                      k.budgetExits,
                      k.budgetExitPcInCodeImage,
                      k.budgetExitPcOutsideCodeImage),
-      // Every reason the fallback counters carry: a report naming three of six reasons reads as "the
-      // other three are zero" when it means "the other three were never asked".
-      lucent::format("fallback: calls={} instructions={} refused_calls={} compilation_failed={} "
-                     "self_modifying_code={} unsupported_block={} load_delay_hazard={} unsafe_instruction_fetch={} "
-                     "refused_compilation_failed={} refused_self_modifying_code={} refused_unsupported_block={} "
-                     "refused_load_delay_hazard={} refused_unsafe_instruction_fetch={}",
+      lucent::format("fallback: max_blocks_per_execution={} calls={} instructions={} refused_calls={} "
+                     "compilation_failed={} self_modifying_code={} unsupported_block={} load_delay_hazard={} "
+                     "unsafe_instruction_fetch={} refused_compilation_failed={} refused_self_modifying_code={} "
+                     "refused_unsupported_block={} refused_load_delay_hazard={} refused_unsafe_instruction_fetch={}",
+                     k.maxFallbackBlocksPerExecution,
                      f.calls,
                      f.instructions,
                      f.refusedCalls,
@@ -77,9 +74,9 @@ std::vector<std::string> ledgerLines(const ExecutorCounters &k) {
   };
 }
 
-void logRunEndLedger(const ExecutorCounters &counters) {
+void logLedger(const ExecutorCounters &counters, std::string_view phase, lucent::Level level) {
   for (const std::string &line : ledgerLines(counters)) {
-    lucent::info("guest", "run-end: {}", line);
+    lucent::log(level, "guest", lucent::format("{}: {}", phase, line));
   }
 }
 

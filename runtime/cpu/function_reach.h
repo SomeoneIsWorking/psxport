@@ -1,17 +1,5 @@
-// function_reach — which guest code entries a run actually reached, per code image.
-//
-// Every guest PC the dynarec dispatches passes Lightrec's block boundary before lookup, compilation,
-// fallback or execution (LightrecExecutor::Impl::blockBoundary), and every call target and native
-// override entry is one of those PCs. Recording the distinct PCs there, keyed by the resident image
-// that owned each one, answers "was this function reached on this route" for every function at once,
-// without one probe per candidate. A title intersects the report with its own function list to state
-// coverage as reached/total.
-//
-// The key is the image's NAME and CONTENT identity, never its load generation, so two runs that load the
-// same overlay produce comparable reports and two overlays that reuse one address never merge.
-//
-// COST. Disarmed by default. Armed, a PC costs one bitmap test; only the first sighting of a PC under
-// the current residency resolves its image.
+// function_reach — the distinct guest entry pcs a run dispatched, per code image (name and content
+// identity, never generation). Disarmed by default; armed, a pc costs one bitmap test.
 #pragma once
 
 #include "image_identity.h"
@@ -37,10 +25,6 @@ public:
 
   void observe(std::uint32_t guestPc);
 
-  // (image name, content identity) -> the distinct guest PCs reached inside that image.
-  using Reached = std::map<std::pair<std::string, std::uint64_t>, std::set<std::uint32_t>>;
-  const Reached &reached() const;
-  std::uint64_t unownedDispatches() const;
   std::string reportJson(bool complete) const;
 
 private:
@@ -51,7 +35,8 @@ private:
   std::string reportPath_;
   std::vector<std::uint64_t> seenUnderRevision_;
   std::uint64_t revision_ = 0;
-  Reached reached_;
+  // (image name, content identity) -> the distinct guest PCs reached inside that image.
+  std::map<std::pair<std::string, std::uint64_t>, std::set<std::uint32_t>> reached_;
   std::uint64_t unownedDispatches_ = 0;
   std::uint64_t newSinceFlush_ = 0;
 };

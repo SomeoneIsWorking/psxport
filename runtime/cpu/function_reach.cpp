@@ -1,12 +1,14 @@
 #include "function_reach.h"
 
 #include "fs_util.h"
+#include "guest_memory_map.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <charconv>
 #include <lucent/log.h>
+#include <lucent/text.h>
 #include <optional>
 #include <string>
 
@@ -14,26 +16,10 @@ namespace psx::cpu {
 
 namespace {
 
-// Main RAM is 2 MiB and instructions are word-aligned, so one bit per word covers every PC that can
-// hold translated code. BIOS and scratchpad PCs fall outside it; those dispatches, and any to RAM no image owns, are
-// counted, not recorded.
-inline constexpr std::uint32_t kMainRamBytes = 0x200000u;
+// One bit per main-RAM word; dispatches outside main RAM or any image are counted, not recorded.
 inline constexpr std::size_t kBitmapWords = kMainRamBytes / 4u / 64u;
-// A run that ends by being killed never reaches the destructor, so the report is also rewritten after
-// this many new entries and at every residency change. It says `"complete": false` until the end.
+// Rewritten after this many new entries and at every residency change, so a killed run leaves a report.
 inline constexpr std::uint64_t kFlushEveryNewEntries = 64u;
-
-std::string jsonEscaped(std::string_view text) {
-  std::string out;
-  out.reserve(text.size());
-  for (const char ch : text) {
-    if (ch == '"' || ch == '\\') {
-      out += '\\';
-    }
-    out += ch;
-  }
-  return out;
-}
 
 // "0x" and `Digits` upper-case hex digits; to_chars cannot fail into a 16-character buffer.
 template <std::size_t Digits> std::string hexLiteral(std::uint64_t value) {
@@ -76,12 +62,12 @@ void FunctionReach::observe(std::uint32_t guestPc) {
     flush();
     std::fill(seenUnderRevision_.begin(), seenUnderRevision_.end(), 0u);
   }
-  const std::uint32_t physical = guestPc & 0x1fffffffu;
-  if (physical >= kMainRamBytes) {
+  const std::uint32_t target = physical(guestPc);
+  if (target >= kMainRamBytes) {
     ++unownedDispatches_;
     return;
   }
-  const std::uint32_t word = physical / 4u;
+  const std::uint32_t word = target / 4u;
   const std::uint64_t bit = std::uint64_t{1} << (word % 64u);
   std::uint64_t &slot = seenUnderRevision_[word / 64u];
   if ((slot & bit) != 0u) {
@@ -107,14 +93,6 @@ void FunctionReach::flush() {
   }
 }
 
-const FunctionReach::Reached &FunctionReach::reached() const {
-  return reached_;
-}
-
-std::uint64_t FunctionReach::unownedDispatches() const {
-  return unownedDispatches_;
-}
-
 std::string FunctionReach::reportJson(bool complete) const {
   std::string json = "{\"complete\": ";
   json += complete ? "true" : "false";
@@ -122,8 +100,8 @@ std::string FunctionReach::reportJson(bool complete) const {
   bool firstImage = true;
   for (const auto &[image, pcs] : reached_) {
     json += firstImage ? "" : ",";
-    json += "\n  {\"name\": \"" + jsonEscaped(image.first) + "\", \"content\": \"" + hexLiteral<16>(image.second) +
-            "\", \"pcs\": [";
+    json += "\n  {\"name\": " + lucent::text::json_quote(image.first) + ", \"content\": \"" +
+            hexLiteral<16>(image.second) + "\", \"pcs\": [";
     firstImage = false;
     bool firstPc = true;
     for (const std::uint32_t pc : pcs) {
@@ -139,8 +117,9 @@ std::string FunctionReach::reportJson(bool complete) const {
 
 bool FunctionReach::writeReport(bool complete) const {
   const std::string json = reportJson(complete);
-  if (!Fs::writeFile(reportPath_, json.data(), json.size())) {
-    lucent::error("reach", "could not write the report to {}", reportPath_);
+  std::string error;
+  if (!Fs::writeFile(reportPath_, json.data(), json.size(), error)) {
+    lucent::error("reach", "could not write the report: {}", error);
     return false;
   }
   return true;

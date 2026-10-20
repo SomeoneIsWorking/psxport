@@ -115,8 +115,7 @@ void Sio0::service() {
   ackPulseEndTicks = arrived + kAckPulseTicks;
   if (ctrl & 0x1000u) { // CTRL bit 12: /ACK interrupt enable
     irq = true;
-    game->hle.i_stat |= 0x80u;
-    game->core.pending_work |= Core::PW_IRQ;
+    game->core.raiseInterrupt(IRQ_BIT_SIO);
   }
   lucent::debug("sio", "/ACK{}", (ctrl & 0x1000u) ? " -> JOY_STAT#9 + I_STAT#7" : " (interrupt disabled)");
 }

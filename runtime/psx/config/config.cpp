@@ -1,506 +1,169 @@
-// config.cpp — the CVar registry, the environment binding, the inventory, and the audit.
-//
-// Everything lives in one translation unit on purpose. The registry, the knob definitions and the
-// audit are pulled into any link that touches ANY of them, so it is not possible to end up with a
-// binary that has the lookup but not the knobs, or the knobs but not the reporting. psxport has
-// already paid once for an initialisation step that was reachable only from one entry point
-// (PSXPORT_DEBUG, see tests/test_lucent_channel_env.cpp); one object file with no ordering
-// requirements is the cheapest way not to repeat it.
 #include "config.h"
 #include "config_vars.h"
-#include "enhancement_gate.h"
 #include "number_text.h"
 #include "typed_config.h"
 
 #include <lucent/config.h>
 #include <lucent/log.h>
+#include <lucent/text.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
-#include <map>
 #include <mutex>
 #include <set>
-#include <span>
+#include <system_error>
 
 namespace psx::config {
 
+Registration::Registration(std::initializer_list<std::reference_wrapper<lucent::cvar::VarBase>> vars) {
+  for (lucent::cvar::VarBase &var : vars) {
+    lucent::cvar::register_var(var);
+  }
+}
+
 namespace {
 
-// The registry. Built by the first CVar constructor that touches it, so static-initialisation order cannot
-// reach it unconstructed; never destroyed, so a CVar destroyed at exit can still unregister.
-struct Registry {
-  std::mutex mutex;
-  std::map<std::string, CVarBase *> vars;
-  // Names a title identity supplied to launch_setting() this run; known only once read.
-  std::set<std::string> identityKeys;
+Var<bool> cv_noaudio("PSXPORT_NOAUDIO", false, kRunOnly);
+Var<long> cv_debug_server("PSXPORT_DEBUG_SERVER", 0, kRunOnly);
+Var<std::string> cv_store_observe("PSXPORT_STORE_OBSERVE", "", kRunOnly);
+Var<std::string> cv_ramdump("PSXPORT_RAMDUMP", "", kRunOnly);
+Var<std::string> cv_load_state("PSXPORT_LOAD_STATE", "", kRunOnly);
+Var<std::string> cv_bug_report_dir("PSXPORT_BUG_REPORT_DIR", "", kRunOnly);
+Var<std::string> cv_pad_record("PSXPORT_PAD_RECORD", "", kRunOnly);
+Var<std::string> cv_pad_replay("PSXPORT_PAD_REPLAY", "", kRunOnly);
+Var<std::string> cv_pad_resume("PSXPORT_PAD_RESUME", "", kRunOnly);
+Var<long> cv_watchdog("PSXPORT_WATCHDOG", 3, kRunOnly);
+Var<long> cv_spin_ticks("PSXPORT_SPIN_TICKS", 8000000, kRunOnly);
+Var<long> cv_spin_runs("PSXPORT_SPIN_RUNS", 48, kRunOnly);
+Var<long> cv_watchdog_boot("PSXPORT_WATCHDOG_BOOT", -1, kRunOnly);
+Var<long> cv_native_frames("PSXPORT_NATIVE_FRAMES", 0, kRunOnly);
+Var<std::string> cv_asset_dir("PSXPORT_ASSET_DIR", "", kRunOnly);
+Var<bool> cv_vk_window("PSXPORT_VK_WINDOW", false, kRunOnly);
+Var<bool> cv_vk_headless("PSXPORT_VK_HEADLESS", false, kRunOnly);
+Var<std::string> cv_settings_path("PSXPORT_SETTINGS", "psxport_settings.ini", kRunOnly);
+// Off stops the producer DB recording; it prices the census, it fixes nothing.
+Var<bool> cv_producers("PSXPORT_PRODUCERS", true, kRunOnly);
+Var<std::string> cv_render_path("PSXPORT_RENDER_PATH", "record", kSaved);
+Var<long> cv_lightrec_fallback_block_limit("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT",
+                                           static_cast<long>(psx::cpu::kDefaultMaxFallbackBlocksPerExecution),
+                                           kRunOnly);
+// A settings file must never arm a gate that rewrites the continued run's state.
+Var<std::string> cv_override_diff("PSXPORT_OVERRIDE_DIFF", "", kRunOnly);
+Var<long> cv_override_diff_first("PSXPORT_OVERRIDE_DIFF_FIRST",
+                                 static_cast<long>(psx::cpu::kDefaultDifferentialFirstCalls),
+                                 kRunOnly);
+Var<long> cv_override_diff_every("PSXPORT_OVERRIDE_DIFF_EVERY",
+                                 static_cast<long>(psx::cpu::kDefaultDifferentialEveryKth),
+                                 kRunOnly);
+Var<long> cv_override_diff_dead_stack("PSXPORT_OVERRIDE_DIFF_DEAD_STACK",
+                                      static_cast<long>(psx::cpu::kDefaultDifferentialDeadStackBytes),
+                                      kRunOnly);
+Var<std::string> cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT",
+                                         std::string(psx::cpu::kDefaultDifferentialReportPath),
+                                         kRunOnly);
+Var<std::string> cv_reach_report("PSXPORT_REACH_REPORT", "", kRunOnly);
+Var<bool> cv_fullscreen("PSXPORT_FULLSCREEN", false, kRunOnly);
+Var<bool> cv_windowed("PSXPORT_WINDOWED", true, kRunOnly);
+Var<std::string> cv_picker_titles("PSXPORT_PICKER_TITLES", "", kRunOnly);
+Var<bool> cv_nopace("PSXPORT_NOPACE", false, kRunOnly);
+Var<bool> cv_repl("PSXPORT_REPL", false, kRunOnly);
+// Lucent reads these two itself; declared so the audit and the report know them.
+Var<std::string> cv_debug_channels("PSXPORT_DEBUG", "", kRunOnly);
+Var<std::string> cv_log_file("PSXPORT_LOG_FILE", "", kRunOnly);
+
+const Registration kRegistration{
+    cv_noaudio,          cv_debug_server,       cv_store_observe,
+    cv_ramdump,          cv_load_state,         cv_bug_report_dir,
+    cv_pad_record,       cv_pad_replay,         cv_pad_resume,
+    cv_watchdog,         cv_spin_ticks,         cv_spin_runs,
+    cv_watchdog_boot,    cv_native_frames,      cv_asset_dir,
+    cv_vk_window,        cv_vk_headless,        cv_settings_path,
+    cv_producers,        cv_render_path,        cv_lightrec_fallback_block_limit,
+    cv_override_diff,    cv_override_diff_first, cv_override_diff_every,
+    cv_override_diff_dead_stack, cv_override_diff_report, cv_reach_report,
+    cv_fullscreen,       cv_windowed,           cv_picker_titles,
+    cv_nopace,           cv_repl,               cv_debug_channels,
+    cv_log_file,
 };
 
-constinit Registry *registry = nullptr;
+bool isExternal(std::string_view name) {
+  return name == cv_debug_channels.name() || name == cv_log_file.name();
+}
 
-Registry &reg() {
-  if (registry == nullptr) {
-    registry = new Registry;
+// The keys titles passed to launch_setting(), known to the audit once read.
+struct LaunchKeys {
+  std::mutex mutex;
+  std::set<std::string> keys;
+};
+constinit LaunchKeys *launchKeys = nullptr;
+
+LaunchKeys &launchKeyState() {
+  if (launchKeys == nullptr) {
+    launchKeys = new LaunchKeys;
   }
-  return *registry;
+  return *launchKeys;
 }
 
-// The one place that decides what counts as one of our knobs. lucent::config::active() lists the
-// whole environment when the prefix is empty (psxport never calls set_prefix — every call site
-// passes the full PSXPORT_-prefixed name), so the filter lives here.
-bool is_psxport_name(std::string_view s) {
-  return s.rfind("PSXPORT_", 0) == 0;
+std::string dotenvValue(std::string_view key) {
+  std::ifstream in(".env");
+  std::string line;
+  while (std::getline(in, line)) {
+    const std::string_view entry = lucent::text::trim(line);
+    if (entry.size() <= key.size() || entry.substr(0, key.size()) != key || entry[key.size()] != '=') {
+      continue;
+    }
+    return std::string(lucent::text::trim(entry.substr(key.size() + 1)));
+  }
+  return {};
 }
 
-std::string name_of_entry(const std::string &entry) {
-  const std::size_t eq = entry.find('=');
-  return eq == std::string::npos ? entry : entry.substr(0, eq);
+// Saves never land in a source checkout, where they would overwrite a tracked file.
+bool insideCheckout(const std::string &path) {
+  std::error_code error;
+  for (std::filesystem::path dir(path); !dir.empty(); dir = dir.parent_path()) {
+    if (std::filesystem::exists(dir / ".git", error)) {
+      return true;
+    }
+    if (dir == dir.parent_path()) {
+      return false;
+    }
+  }
+  return false;
 }
 
-bool contains(const std::vector<std::string> &v, std::string_view s) {
-  return std::find(v.begin(), v.end(), s) != v.end();
+bool reported = false;
+
+void reportExitAudit() {
+  for (const std::string &line : cvar_report_lines(false)) {
+    lucent::info("cfg", "at exit: {}", line);
+  }
 }
 
 } // namespace
 
-// ── names ───────────────────────────────────────────────────────────────────────────────────────
-
-const char *layer_name(Layer l) {
-  switch (l) {
+const char *layer_name(Layer layer) {
+  switch (layer) {
   case Layer::Default:
     return "default";
   case Layer::Value:
-    return "value"; // psxport_settings.ini
+    return "settings";
   case Layer::Override:
-    return "env"; // PSXPORT_* launch environment
+    return "env";
   case Layer::Runtime:
-    return "runtime"; // REPL / debug-server, this run only
+    return "runtime";
   }
   return "?";
 }
-
-const char *kind_name(Kind k) {
-  switch (k) {
-  case Kind::Bool:
-    return "bool";
-  case Kind::Int:
-    return "int";
-  case Kind::Text:
-    return "text";
-  }
-  return "?";
-}
-
-// ── detail: the forwarders and the registry hooks ───────────────────────────────────────────────
-
-namespace detail {
-
-// These four are the ENTIRE environment-reading surface of the CVar system, and each is exactly the
-// expression the pre-migration cfg_* function used. That is what makes the compatibility claim
-// structural rather than aspirational.
-bool env_present(const char *name) {
-  return lucent::config::present(name);
-}
-bool env_bool(const char *name) {
-  return lucent::config::flag(name);
-}
-long env_int(const char *name, long fallback) {
-  return lucent::config::number(name, fallback);
-}
-std::string env_text(const char *name) {
-  return lucent::config::text(name);
-}
-
-void registry_lock() {
-  reg().mutex.lock();
-}
-void registry_unlock() {
-  reg().mutex.unlock();
-}
-
-void registry_add(CVarBase *v) {
-  Registry &r = reg();
-  std::lock_guard<std::mutex> lock(r.mutex);
-  const auto it = r.vars.find(v->name());
-  if (it != r.vars.end()) {
-    // Two CVars claiming one name is a build-time mistake that would make `find()` return whichever
-    // object won a race. Say so; do not silently keep one.
-    lucent::error("cfg", "CVar name collision: {} is declared twice — the second declaration is ignored", v->name());
-    return;
-  }
-  r.vars.emplace(v->name(), v);
-}
-
-void registry_remove(CVarBase *v) {
-  Registry &r = reg();
-  std::lock_guard<std::mutex> lock(r.mutex);
-  const auto it = r.vars.find(v->name());
-  if (it != r.vars.end() && it->second == v) {
-    r.vars.erase(it);
-  }
-}
-
-} // namespace detail
-
-// ── CVarBase ────────────────────────────────────────────────────────────────────────────────────
-
-CVarBase::CVarBase(const char *name, Kind kind, const char *help, bool persistable, bool external) noexcept
-    : mName(name), mHelp(help), mKind(kind), mPersistable(persistable), mExternal(external) {
-  detail::registry_add(this);
-}
-
-CVarBase::~CVarBase() {
-  detail::registry_remove(this);
-}
-
-Layer CVarBase::layer() const {
-  ensure_env_bound();
-  for (int i = kLayerCount - 1; i >= 1; --i) {
-    if (mSet[i]) {
-      return (Layer)i;
-    }
-  }
-  return Layer::Default;
-}
-
-bool CVarBase::has(Layer l) const {
-  ensure_env_bound();
-  return mSet[(int)l];
-}
-
-void CVarBase::ensure_env_bound() const {
-  if (mEnvBound) {
-    return;
-  }
-  // Set the flag BEFORE binding: bind_env() reads the environment, which can log, and a logging call
-  // that came back here would recurse. Binding twice is harmless; recursing is not.
-  mEnvBound = true;
-  const_cast<CVarBase *>(this)->bind_env();
-}
-
-// ── CVar<T> ─────────────────────────────────────────────────────────────────────────────────────
-
-template <> std::string CVar<bool>::to_text(const bool &v) {
-  return v ? "true" : "false";
-}
-template <> std::string CVar<long>::to_text(const long &v) {
-  return std::to_string(v);
-}
-template <> std::string CVar<std::string>::to_text(const std::string &v) {
-  return v;
-}
-
-template <> bool CVar<bool>::set_text(Layer l, std::string_view text) {
-  std::string s(text);
-  for (char &c : s) {
-    c = (char)tolower((unsigned char)c);
-  }
-  // Deliberately the same vocabulary lucent::config::flag accepts, so a value that means "off" in
-  // the environment means "off" in the settings file and in a REPL command too.
-  const bool off = s == "0" || s == "false" || s == "no" || s == "off";
-  const bool on = s == "1" || s == "true" || s == "yes" || s == "on";
-  if (!off && !on) {
-    return false;
-  }
-  set(l, on);
-  return true;
-}
-
-template <> bool CVar<long>::set_text(Layer l, std::string_view text) {
-  const std::string s(text);
-  char *end = nullptr;
-  const long v = std::strtol(s.c_str(), &end, 0);
-  if (s.empty() || !end || *end != '\0') {
-    return false;
-  }
-  set(l, v);
-  return true;
-}
-
-template <> bool CVar<std::string>::set_text(Layer l, std::string_view text) {
-  set(l, std::string(text));
-  return true;
-}
-
-// The environment binding, per Kind.
-//
-// `external` CVars (PSXPORT_DEBUG, PSXPORT_LOG_FILE) bind their Override layer like any other. That
-// is not a shadow copy that can drift: lucent reads the environment variable OF THAT NAME, built in
-// as LUCENT_CHANNEL_ENV / LUCENT_LOG_FILE_ENV, so both of us are reading the same string. What
-// `external` refuses is MUTATION — set_from_settings_file / set_runtime will not touch them, because
-// writing here would not change what lucent does and would then be a lie on the dump. (The one way
-// this could drift is a call to lucent::set_channel_env() renaming the variable at runtime; nothing
-// in psxport does that, and the build-time name is what makes it unnecessary.)
-template <> void CVar<bool>::bind_env() {
-  if (!detail::env_present(mName)) {
-    return;
-  }
-  mSlot[(int)Layer::Override - 1] = detail::env_bool(mName);
-  mSet[(int)Layer::Override] = true;
-}
-
-template <> void CVar<long>::bind_env() {
-  if (!detail::env_present(mName)) {
-    return;
-  }
-  // The VALUE is whatever the pre-migration call would have produced — lucent::config::number with
-  // this CVar's default as the fallback — so migrating cannot change what the run does. The warning
-  // is the part that is new: a typo'd integer used to silently become the default, and a knob that
-  // silently did not apply is the exact failure this system exists to make impossible.
-  const std::string raw = detail::env_text(mName);
-  char *end = nullptr;
-  (void)std::strtol(raw.c_str(), &end, 0);
-  if (raw.empty() || !end || *end != '\0') {
-    lucent::warn("cfg", "{}=\"{}\" is not an integer — falling back to the default {}", mName, raw, mDefault);
-  }
-  mSlot[(int)Layer::Override - 1] = detail::env_int(mName, mDefault);
-  mSet[(int)Layer::Override] = true;
-}
-
-template <> void CVar<std::string>::bind_env() {
-  if (!detail::env_present(mName)) {
-    return;
-  }
-  mSlot[(int)Layer::Override - 1] = detail::env_text(mName);
-  mSet[(int)Layer::Override] = true;
-}
-
-template class CVar<bool>;
-template class CVar<long>;
-template class CVar<std::string>;
-
-// ── THE INVENTORY ───────────────────────────────────────────────────────────────────────────────
-// Private; read through config_vars.h, which carries the per-knob documentation. Keep the two in
-// the same order.
-namespace {
-
-BoolVar cv_noaudio("PSXPORT_NOAUDIO", false, "open no audio device", /*persistable=*/false);
-// PSXPORT_DEBUG_SERVER — the live, non-blocking TCP debug endpoint. Its VALUE is a port, with 1
-// meaning the default: "1" asks for the default port and a number asks for that port, so it is a
-// TextVar rather than a BoolVar, and the meaning of "1" belongs to dbg_server.h's
-// `psx::debug::debugServerPort`, which both call sites use.
-TextVar cv_debug_server("PSXPORT_DEBUG_SERVER",
-                        "",
-                        "live debug TCP port on 127.0.0.1 (1 = default 5959, empty = off)",
-                        /*persistable=*/false);
-
-// PSXPORT_STORE_OBSERVE — guest addresses whose translated stores are observed, as a comma- or
-// space-separated hex list (e.g. "0x80078AE0,0x80076B80"), up to kMaxObservedStoreTargets of them.
-// Empty is the default and disarms, so an ordinary run pays nothing. It exists because the dynarec
-// store observer is the only instrument that names the GUEST instruction behind a store together with
-// the register file, and it previously had no way to be armed from a product run at all: `PSXPORT_CW`
-// sees host-side stores only, so a live divergence investigation could not ask which instruction wrote
-// a given guest word (Spyro 1 docs/issues/0133). The meaning of the list belongs to
-// runtime/cpu/store_observe.cpp's `store_observe_configure`, which both this and the live endpoint's
-// pattern follow: declare it ONCE here, interpret it ONCE there.
-TextVar cv_store_observe("PSXPORT_STORE_OBSERVE",
-                         "",
-                         "hex guest STORE-INSTRUCTION PCs to observe, comma-separated (empty = off) — "
-                         "these are the PCs OF store instructions, NOT the guest words they write",
-                         /*persistable=*/false);
-// PSXPORT_RAMDUMP / PSXPORT_RAMDUMP_FRAME — write main RAM to a file, for disassembly of whatever
-// image is resident.
-//
-// THE TWO PATHS DIFFER AND THE DIFFERENCE IS THE POINT. `PSXPORT_RAMDUMP_FRAME=N` writes from INSIDE
-// the frame loop, at native frame N, which is what a live-state question needs: overlay state during
-// gameplay differs from end-of-run, and a resident overlay is usually only resident DURING play.
-// `PSXPORT_RAMDUMP` on its own writes AFTER the frame loop returns — and that return is not a path
-// every product takes. Spyro 1's run reaches the loop's shutdown telemetry (from ~LightrecExecutor)
-// and never prints `frame loop done`, so the end-of-run dump silently does nothing there. Reach for
-// RAMDUMP_FRAME, or the live channel's `dumpram <path>` verb, which dumps on demand at any point.
-TextVar cv_ramdump("PSXPORT_RAMDUMP",
-                   "",
-                   "write main RAM to this path AFTER the frame loop returns; a path not every product "
-                   "reaches — prefer PSXPORT_RAMDUMP_FRAME, or the live channel's `dumpram`",
-                   /*persistable=*/false);
-TextVar cv_ramdump_frame("PSXPORT_RAMDUMP_FRAME",
-                         "",
-                         "native frame N at which to write the PSXPORT_RAMDUMP path mid-run; this is "
-                         "the one that works while a title is playing",
-                         /*persistable=*/false);
-TextVar cv_load_state("PSXPORT_LOAD_STATE",
-                      "",
-                      "whole-machine state file to resume from before the first field; unset boots "
-                      "normally, and a path that cannot be loaded refuses rather than falling back",
-                      /*persistable=*/false);
-TextVar cv_bug_report_dir("PSXPORT_BUG_REPORT_DIR",
-                          "",
-                          "save B-key bug reports here instead of <user data>/<title>/bug-reports",
-                          /*persistable=*/false);
-TextVar cv_pad_record("PSXPORT_PAD_RECORD",
-                      "",
-                      "write this session's phase-keyed pad recording here (0 = no sink; windowed runs "
-                      "default to scratch/bin/pad_session.pad)",
-                      /*persistable=*/false);
-TextVar cv_pad_replay("PSXPORT_PAD_REPLAY",
-                      "",
-                      "replay this phase-keyed pad recording at real speed; refused when its card differs",
-                      /*persistable=*/false);
-TextVar cv_pad_resume("PSXPORT_PAD_RESUME",
-                      "",
-                      "replay this phase-keyed pad recording fast-forwarded, then hand control to the player",
-                      /*persistable=*/false);
-IntVar cv_watchdog("PSXPORT_WATCHDOG",
-                   3,
-                   "frame-progress timeout, seconds (0 = off)",
-                   /*persistable=*/false);
-IntVar cv_spin_ticks("PSXPORT_SPIN_TICKS",
-                     8000000,
-                     "guest instructions per spin-detector sample (0 = spin detection off)",
-                     /*persistable=*/false);
-IntVar cv_spin_runs("PSXPORT_SPIN_RUNS",
-                    48,
-                    "consecutive host-starved in-region samples that declare a guest spin",
-                    /*persistable=*/false);
-IntVar cv_watchdog_boot("PSXPORT_WATCHDOG_BOOT",
-                        -1,
-                        "main-presenter cold-init grace, seconds (-1 = derive: max(WATCHDOG, 45))",
-                        /*persistable=*/false);
-IntVar cv_native_frames("PSXPORT_NATIVE_FRAMES",
-                        0,
-                        "run cap in presentation-fence steps (0 = the run budget's default)",
-                        /*persistable=*/false);
-
-TextVar cv_asset_dir("PSXPORT_ASSET_DIR",
-                     "",
-                     "directory containing assets/ (empty = cwd-relative)",
-                     /*persistable=*/false);
-BoolVar cv_vk_window("PSXPORT_VK_WINDOW", false, "open the product window", /*persistable=*/false);
-BoolVar cv_vk_headless("PSXPORT_VK_HEADLESS",
-                       false,
-                       "never open a window; wins over PSXPORT_VK_WINDOW",
-                       /*persistable=*/false);
-} // namespace
 
 bool windowRequested() {
   return cv_vk_window.get() && !cv_vk_headless.get();
 }
 
 void applyPackagedDefaults(const std::filesystem::path &packageRoot) {
-  cv_vk_window.set(Layer::Default, true);
-  cv_asset_dir.set(Layer::Default, (packageRoot / "usr" / "share" / "psxport").string());
-}
-
-namespace {
-
-TextVar cv_settings_path("PSXPORT_SETTINGS",
-                         "psxport_settings.ini",
-                         "path to the settings file — selects the Value layer, so never persisted",
-                         /*persistable=*/false);
-
-// The producer census runs on every guest store and every prim. Its cost was recorded in ot_attr.h as
-// "+0.26%" from a 300-frame run at 77.7 s — i.e. 3.9 fps, a pace at which almost anything looks free.
-// A host profile of an unpaced 3D field scene puts OtAttr::resolveClaimedFrame at 13.31% and
-// trackStoreSlow at 3.91%. Those two numbers cannot both describe the same thing, and until this knob
-// existed there was no way to A/B it at all — the arm was a hardcoded `inline bool = true`.
-// Default TRUE, so behaviour is unchanged and the census the USER asked for keeps working.
-BoolVar cv_producers("PSXPORT_PRODUCERS",
-                     true,
-                     "arm the producer census (per-store + per-prim attribution). Off makes the "
-                     "producer DB stop recording; use it to price the census, not to fix a bug",
-                     /*persistable=*/false);
-
-TextVar cv_enh("PSXPORT_ENH",
-               "",
-               "pc_enh selection: <name,name|all> — deliberate guest-state changes; read it "
-               "through enh_named()/enh(), never by parsing this text at a call site.");
-
-// These knobs have typed public APIs instead of public raw CVars. That keeps consumer titles from
-// duplicating their parsers or mutating diagnostic/runtime policy through implementation details.
-TextVar cv_diagnostic_run("PSXPORT_DIAGNOSTIC_RUN",
-                          "product",
-                          "diagnostic role: product | compare-candidate | compare-reference",
-                          /*persistable=*/false);
-IntVar cv_lightrec_fallback_block_limit(
-    "PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT",
-    static_cast<long>(psx::cpu::kDefaultMaxFallbackBlocksPerExecution),
-    "maximum automatic interpreter-fallback blocks admitted by one bounded Lightrec execution",
-    /*persistable=*/false);
-// The override differential's knobs. Diagnostic-only, so none is persistable: a settings file must
-// never silently arm a gate that rewrites the continued run's state on every sampled call.
-TextVar cv_override_diff("PSXPORT_OVERRIDE_DIFF",
-                         "",
-                         "native overrides to shadow against their original guest bodies: registered override "
-                         "NAMES or 0x-prefixed guest entry ADDRESSES, comma-separated (empty = off)",
-                         /*persistable=*/false);
-IntVar cv_override_diff_first("PSXPORT_OVERRIDE_DIFF_FIRST",
-                              static_cast<long>(psx::cpu::kDefaultDifferentialFirstCalls),
-                              "override differential: shadow the first N calls of each selected override",
-                              /*persistable=*/false);
-IntVar cv_override_diff_every("PSXPORT_OVERRIDE_DIFF_EVERY",
-                              static_cast<long>(psx::cpu::kDefaultDifferentialEveryKth),
-                              "override differential: after the first N, shadow every Kth call (0 = none)",
-                              /*persistable=*/false);
-IntVar cv_override_diff_dead_stack("PSXPORT_OVERRIDE_DIFF_DEAD_STACK",
-                                   static_cast<long>(psx::cpu::kDefaultDifferentialDeadStackBytes),
-                                   "override differential: bytes below the entry sp treated as callee-frame "
-                                   "residue (counted and reported, not judged)",
-                                   /*persistable=*/false);
-TextVar cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT",
-                                psx::cpu::kDefaultDifferentialReportPath,
-                                "override differential: JSON report path (cwd-relative default is the title's "
-                                "scratch/)",
-                                /*persistable=*/false);
-// PSXPORT_REACH_REPORT — arms the function-reach recorder (runtime/cpu/function_reach.h): every
-// dispatched guest entry pc, keyed by its code image, written as JSON to this path. Empty = disarmed.
-TextVar cv_reach_report("PSXPORT_REACH_REPORT",
-                        "",
-                        "function reach: JSON report of every dispatched guest entry pc by code image (empty = off)",
-                        /*persistable=*/false);
-BoolVar cv_fullscreen("PSXPORT_FULLSCREEN", false, "open the window fullscreen", /*persistable=*/false);
-TextVar cv_windowed("PSXPORT_WINDOWED", "", "0 opens the window fullscreen", /*persistable=*/false);
-TextVar cv_picker_titles("PSXPORT_PICKER_TITLES",
-                         "",
-                         "the picker's panel slugs, comma-separated (empty = every provisioned title)",
-                         /*persistable=*/false);
-
-} // namespace
-
-const char *diagnostic_run_mode_name(DiagnosticRunMode mode) {
-  switch (mode) {
-  case DiagnosticRunMode::Product:
-    return "product";
-  case DiagnosticRunMode::CompareCandidate:
-    return "compare-candidate";
-  case DiagnosticRunMode::CompareReference:
-    return "compare-reference";
-  case DiagnosticRunMode::Invalid:
-    return "invalid";
-  }
-  return "invalid";
-}
-
-DiagnosticRunMode diagnostic_run_mode() {
-  const std::string &mode = cv_diagnostic_run.get();
-  if (mode == diagnostic_run_mode_name(DiagnosticRunMode::Product)) {
-    return DiagnosticRunMode::Product;
-  }
-  if (mode == diagnostic_run_mode_name(DiagnosticRunMode::CompareCandidate)) {
-    return DiagnosticRunMode::CompareCandidate;
-  }
-  if (mode == diagnostic_run_mode_name(DiagnosticRunMode::CompareReference)) {
-    return DiagnosticRunMode::CompareReference;
-  }
-  return DiagnosticRunMode::Invalid;
-}
-
-bool diagnostic_run_is_comparison(DiagnosticRunMode mode) {
-  return mode == DiagnosticRunMode::CompareCandidate || mode == DiagnosticRunMode::CompareReference;
-}
-
-ScopedDiagnosticRun::ScopedDiagnosticRun(DiagnosticRunMode mode)
-    : hadRuntimeValue_(cv_diagnostic_run.has(Layer::Runtime)),
-      previousRuntimeValue_(cv_diagnostic_run.layer_text(Layer::Runtime)) {
-  cv_diagnostic_run.set(Layer::Runtime, diagnostic_run_mode_name(mode));
-}
-
-ScopedDiagnosticRun::~ScopedDiagnosticRun() {
-  if (hadRuntimeValue_) {
-    cv_diagnostic_run.set(Layer::Runtime, previousRuntimeValue_);
-  } else {
-    cv_diagnostic_run.clear(Layer::Runtime);
-  }
+  cv_vk_window.set(true, Layer::Default);
+  cv_asset_dir.set((packageRoot / "usr" / "share" / "psxport").string(), Layer::Default);
 }
 
 psx::cpu::FallbackPolicy lightrec_fallback_policy() {
@@ -522,61 +185,79 @@ std::string function_reach_report_path() {
 bool no_audio() {
   return cv_noaudio.get();
 }
+
 bool producer_census() {
   return cv_producers.get();
 }
-std::string debug_server() {
-  return cv_debug_server.get();
+
+int debug_server_port() {
+  constexpr long kDefaultPort = 5959;
+  constexpr long kMaxPort = 65535;
+  const long port = cv_debug_server.get();
+  if (port <= 0 || port > kMaxPort) {
+    return 0;
+  }
+  return static_cast<int>(port == 1 ? kDefaultPort : port);
 }
-std::string store_observe() {
-  return cv_store_observe.get();
+
+std::optional<std::vector<std::uint32_t>> store_observe_pcs() {
+  return parseUnsignedList(cv_store_observe.get(), 16);
 }
+
 std::string ramdump_path() {
   return cv_ramdump.get();
 }
-std::string ramdump_frame() {
-  return cv_ramdump_frame.get();
-}
+
 std::string load_state_path() {
   return cv_load_state.get();
 }
+
 std::string bug_report_dir() {
   return cv_bug_report_dir.get();
 }
+
 std::string pad_record_path() {
   return cv_pad_record.get();
 }
+
 std::string pad_replay_path() {
   return cv_pad_replay.get();
 }
+
 std::string pad_resume_path() {
   return cv_pad_resume.get();
 }
+
 long watchdog_seconds() {
   return cv_watchdog.get();
 }
+
 long spin_ticks() {
   return cv_spin_ticks.get();
 }
+
 long spin_runs() {
   return cv_spin_runs.get();
 }
+
 long watchdog_boot_seconds() {
   return cv_watchdog_boot.get();
 }
+
 long native_frames() {
   return cv_native_frames.get();
 }
+
 std::string asset_dir() {
   return cv_asset_dir.get();
 }
+
 std::string settings_path() {
   return cv_settings_path.get();
 }
 
 bool fullscreen_requested() {
-  const std::string &windowed = cv_windowed.get();
-  return cv_fullscreen.get() || (!windowed.empty() && parseInt(windowed).value_or(0) == 0);
+  return cv_fullscreen.get() || !cv_windowed.get();
 }
 
 std::string picker_titles() {
@@ -584,370 +265,135 @@ std::string picker_titles() {
 }
 
 std::string user_state_dir() {
-  const std::string xdg = detail::env_text("XDG_STATE_HOME");
+  const std::string &xdg = lucent::config::text("XDG_STATE_HOME");
   if (!xdg.empty()) {
     return xdg + "/psxport";
   }
-  const std::string home = detail::env_text("HOME");
+  const std::string &home = lucent::config::text("HOME");
   return home.empty() ? std::string() : home + "/.local/state/psxport";
 }
 
-namespace {
-
-// The gate's whole mutable state, behind ONE mutex. Two parts, and each is here rather than in a local
-// static for a stated reason:
-//
-//  * THE WARN-ONCE REGISTERS, keyed on the KNOB and outcome. A run can legitimately suppress one
-//    enhancement and honour another, and neither announcement may silence the other. Keying by NAME
-//    also makes the two public enhancement entry points share one announcement record.
-//  * THE PARSED PSXPORT_ENH LIST, cached against the TEXT the ladder resolved rather than behind a
-//    one-shot "seeded" flag. A Runtime-layer (REPL) write changes the text and the cache must notice.
-//    That one-shot seeding is precisely the pre-migration defect: after the first call nothing could
-//    change the answer for the rest of the process.
-struct EnhState {
-  std::mutex mutex;
-  std::vector<std::string> warned_suppressed;
-  std::vector<std::string> warned_invalid_mode;
-  std::vector<std::string> warned_active;
-  bool warned_nameless = false;
-  std::string parsed_text = "\x01"; // a value no environment can produce: the first call always parses
-  bool parsed_all = false;
-  std::vector<std::string> parsed_names;
-};
-constinit EnhState *enhancementState = nullptr;
-
-EnhState &enh_state() {
-  if (enhancementState == nullptr) {
-    enhancementState = new EnhState;
-  }
-  return *enhancementState;
-}
-
-// True the FIRST time this key is seen in `r`; false afterwards. Caller holds the lock.
-bool first_time(std::vector<std::string> &r, const char *key) {
-  if (contains(r, key)) {
-    return false;
-  }
-  r.emplace_back(key);
-  return true;
-}
-
-} // namespace
-
-bool enh_gate(const char *key, bool asked) {
-  // A NAMELESS enhancement is refused, LOUDLY — the one place this deliberately departs from the
-  // pre-migration behaviour, which returned 1 for cfg_enh("") whenever PSXPORT_ENH=all because `all`
-  // short-circuited before it ever looked at the name. That made an empty or unexpanded name at a call
-  // site read as a working enabled enhancement, and it cannot be carried forward: every notice here is
-  // keyed on the knob's identity, so a nameless key would produce an unattributable log line and a
-  // register entry nothing can match. tests/test_config_enh.cpp asserts this divergence explicitly
-  // rather than letting the compatibility gate paper over it.
-  if (!key || !*key) {
-    EnhState &s = enh_state();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    if (!s.warned_nameless) {
-      s.warned_nameless = true;
-      lucent::error("cfg",
-                    "enhancement gate called with an EMPTY name — refused. An enhancement is "
-                    "identified by its name; a call site with none is a bug at the call site, "
-                    "not a knob that is off.");
-    }
-    return false;
-  }
-  const DiagnosticRunMode runMode = diagnostic_run_mode();
-  EnhState &s = enh_state();
-  std::lock_guard<std::mutex> lock(s.mutex);
-  if (asked && diagnostic_run_is_comparison(runMode)) {
-    if (first_time(s.warned_suppressed, key)) {
-      lucent::warn("cfg",
-                   "{} enhancement suppressed: diagnostic run '{}' must remain enhancement-free",
-                   key,
-                   diagnostic_run_mode_name(runMode));
-    }
-    return false;
-  }
-  if (asked && runMode == DiagnosticRunMode::Invalid) {
-    if (first_time(s.warned_invalid_mode, key)) {
-      lucent::error("cfg",
-                    "{} enhancement refused: PSXPORT_DIAGNOSTIC_RUN='{}' is invalid; expected "
-                    "product, compare-candidate, or compare-reference",
-                    key,
-                    cv_diagnostic_run.get());
-    }
-    return false;
-  }
-  // THE POSITIVE PRINTS TOO. "No SUPPRESSED line" is otherwise indistinguishable from "the gate was
-  // never reached", and a pc_enh changes canon guest state — a run that had one on must name it, or a
-  // later byte-compare against that run reads the deliberate divergence as a port bug.
-  if (asked && first_time(s.warned_active, key)) {
-    lucent::info("cfg", "{} enhancement active in product run", key);
-  }
-  return asked;
-}
-
-bool enh(const CVar<bool> &v) {
-  return enh_gate(v.name(), v.get());
-}
-
-long enh_int(const CVar<long> &v) {
-  const long value = v.get();
-  return enh_gate(v.name(), value != 0) ? value : 0;
-}
-
-bool enh_named(const char *name) {
-  if (!name || !*name) {
-    return enh_gate(name, false); // refused, and it says so — see enh_gate
-  }
-  const std::string &text = cv_enh.get();
-  bool selected = false;
-  {
-    EnhState &s = enh_state();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    if (s.parsed_text != text) {
-      s.parsed_text = text;
-      s.parsed_all = (text == "all");
-      s.parsed_names.clear();
-      if (!s.parsed_all && !text.empty()) {
-        // The pre-migration splitter, verbatim: the separators are `,`, `:` and space. It is compared
-        // against the old body over 36 (value, name) pairs in tests/test_config_enh.cpp — that
-        // comparison, not this comment, is what keeps the parse identical.
-        std::size_t start = 0;
-        while (start <= text.size()) {
-          const std::size_t sep = text.find_first_of(",: ", start);
-          const std::size_t end = (sep == std::string::npos) ? text.size() : sep;
-          if (end > start) {
-            s.parsed_names.emplace_back(text.substr(start, end - start));
-          }
-          if (sep == std::string::npos) {
-            break;
-          }
-          start = sep + 1;
-        }
-      }
-    }
-    selected = s.parsed_all || contains(s.parsed_names, name);
-  }
-  return enh_gate(name, selected);
-}
-
-namespace {
-TextVar cv_render_path("PSXPORT_RENDER_PATH",
-                       "record",
-                       "render path: record (the GPU device's work replayed at the internal resolution) | "
-                       "device (the GPU device's own VRAM)");
-} // namespace
-
 RenderPath render_path(RenderPath fallback) {
-  const std::string &s = cv_render_path.get();
-  RenderPath p = fallback;
-  if (!psx::gpu::parseRenderPath(s.c_str(), &p)) {
+  const std::string &text = cv_render_path.get();
+  RenderPath path = fallback;
+  if (!psx::gpu::parseRenderPath(text.c_str(), &path)) {
     lucent::warn("cfg",
                  "PSXPORT_RENDER_PATH='{}' matched no render path, using '{}'. Valid: record | device.",
-                 s,
+                 text,
                  psx::gpu::renderPathName(fallback));
     return fallback;
   }
-  return p;
+  return path;
 }
 
-namespace {
-
-// lucent reads these two itself (LUCENT_CHANNEL_ENV / LUCENT_LOG_FILE_ENV in cmake/psxport.cmake);
-// declared here only so the audit and the dump know them.
-TextVar cv_debug_channels("PSXPORT_DEBUG",
-                          "",
-                          "enabled diagnostic channels — READ BY LUCENT, declared here for visibility",
-                          /*persistable=*/false,
-                          /*external=*/true);
-TextVar cv_log_file("PSXPORT_LOG_FILE",
-                    "",
-                    "log output path — READ BY LUCENT, declared here for visibility",
-                    /*persistable=*/false,
-                    /*external=*/true);
-
-BoolVar cv_selftest_declared("PSXPORT_CFG_SELFTEST_DECLARED",
-                             false,
-                             "reserved: the environment audit's calibration target, configures nothing",
-                             /*persistable=*/false);
-
-} // namespace
-
-// ── lookup ──────────────────────────────────────────────────────────────────────────────────────
-
-CVarBase *find(std::string_view name) {
-  Registry &r = reg();
-  std::lock_guard<std::mutex> lock(r.mutex);
-  const auto it = r.vars.find(std::string(name));
-  return it == r.vars.end() ? nullptr : it->second;
-}
-
-void enumerate(const std::function<void(CVarBase &)> &fn) {
-  // Copy under the lock, then call: a callback that reads a CVar takes the lock itself.
-  std::vector<CVarBase *> snapshot;
-  {
-    Registry &r = reg();
-    std::lock_guard<std::mutex> lock(r.mutex);
-    for (const auto &kv : r.vars) {
-      snapshot.push_back(kv.second);
-    }
+Config Config::fromEnvironment() {
+  Config config;
+  config.unpaced = cv_nopace.get();
+  config.repl = cv_repl.get();
+  std::filesystem::path root(lucent::config::text("APPDIR"));
+  if (root.is_absolute()) {
+    config.packageRoot = root;
   }
-  for (CVarBase *v : snapshot) {
-    fn(*v);
-  }
+  return config;
 }
 
-std::size_t registered_count() {
-  Registry &r = reg();
-  std::lock_guard<std::mutex> lock(r.mutex);
-  return r.vars.size();
+std::string Config::describe() const {
+  return lucent::format("nopace={} repl={} package={}",
+                        unpaced ? "on" : "off",
+                        repl ? "on" : "off",
+                        packageRoot.has_value() ? packageRoot->string() : std::string("none"));
 }
-
-// ── title-supplied launch settings ──────────────────────────────────────────────────────────────
-
-namespace {
-
-std::string trimmed(const std::string &value) {
-  const std::size_t first = value.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) {
-    return {};
-  }
-  return value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
-}
-
-// KEY=VALUE from ./.env, trimmed; empty when absent.
-std::string dotenv_value(std::string_view key) {
-  std::ifstream in(".env");
-  std::string line;
-  while (std::getline(in, line)) {
-    const std::size_t start = line.find_first_not_of(" \t");
-    if (start == std::string::npos || line.compare(start, key.size(), key) != 0 || line.size() <= start + key.size() ||
-        line[start + key.size()] != '=') {
-      continue;
-    }
-    return trimmed(line.substr(start + key.size() + 1));
-  }
-  return {};
-}
-
-} // namespace
 
 std::string launch_setting(std::initializer_list<const char *> keys) {
+  std::vector<std::string_view> named;
+  for (const char *key : keys) {
+    if (key != nullptr && *key != '\0') {
+      named.emplace_back(key);
+    }
+  }
   {
-    Registry &r = reg();
-    std::lock_guard<std::mutex> lock(r.mutex);
-    for (const char *key : keys) {
-      if (key != nullptr && *key != '\0') {
-        r.identityKeys.insert(key);
-      }
+    LaunchKeys &state = launchKeyState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    for (const std::string_view key : named) {
+      state.keys.emplace(key);
     }
   }
-  for (const char *key : keys) {
-    if (key != nullptr && *key != '\0') {
-      std::string value = trimmed(detail::env_text(key));
-      if (!value.empty()) {
-        return value;
-      }
+  for (const std::string_view key : named) {
+    std::string value(lucent::text::trim(lucent::config::text(key)));
+    if (!value.empty()) {
+      return value;
     }
   }
-  for (const char *key : keys) {
-    if (key != nullptr && *key != '\0') {
-      std::string value = dotenv_value(key);
-      if (!value.empty()) {
-        return value;
-      }
+  for (const std::string_view key : named) {
+    std::string value = dotenvValue(key);
+    if (!value.empty()) {
+      return value;
     }
   }
   return {};
 }
 
-// ── the environment audit ───────────────────────────────────────────────────────────────────────
-
 EnvAudit audit_environment() {
-  EnvAudit a;
-  std::map<std::string, CVarBase *> vars;
-  std::set<std::string> identityKeys;
+  std::set<std::string> declared;
+  lucent::cvar::enumerate([&declared](lucent::cvar::VarBase &var) {
+    declared.insert(var.env_name());
+  });
+  std::set<std::string> identity;
   {
-    Registry &r = reg();
-    std::lock_guard<std::mutex> lock(r.mutex);
-    vars = r.vars;
-    identityKeys = r.identityKeys;
+    LaunchKeys &state = launchKeyState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    identity = state.keys;
   }
+  EnvAudit audit;
   for (const std::string &entry : lucent::config::active()) {
-    if (!is_psxport_name(entry)) {
+    if (entry.rfind("PSXPORT_", 0) != 0) {
       continue;
     }
-    a.set_in_env.push_back(entry);
-    const std::string name = name_of_entry(entry);
-    const std::span<const std::string_view> typed = Config::environmentNames();
-    if (vars.count(name) || std::find(typed.begin(), typed.end(), name) != typed.end()) {
-      a.declared.push_back(name);
-    } else if (identityKeys.count(name)) {
-      a.identity.push_back(name);
+    audit.set_in_env.push_back(entry);
+    const std::string name = entry.substr(0, entry.find('='));
+    if (declared.contains(name)) {
+      audit.declared.push_back(name);
+    } else if (identity.contains(name)) {
+      audit.identity.push_back(name);
     } else {
-      a.unknown.push_back(name);
+      audit.unknown.push_back(name);
     }
   }
-  return a;
+  return audit;
+}
+
+std::vector<std::string> cvar_report_lines(bool withKnobs) {
+  std::vector<std::string> lines;
+  if (withKnobs) {
+    lucent::cvar::enumerate([&lines](lucent::cvar::VarBase &var) {
+      std::string line =
+          lucent::format("{} = {} [{}]", var.name(), var.effective_string(), layer_name(var.layer()));
+      for (const Layer layer : {Layer::Value, Layer::Override, Layer::Runtime}) {
+        if (layer != var.layer() && var.has(layer)) {
+          line += lucent::format(" ({}={})", layer_name(layer), var.layer_string(layer));
+        }
+      }
+      lines.push_back(std::move(line));
+    });
+    std::sort(lines.begin(), lines.end());
+  }
+  const EnvAudit audit = audit_environment();
+  lines.push_back(lucent::format("env audit: {} PSXPORT_* set -> {} declared, {} title-supplied, {} unknown",
+                                 audit.set_in_env.size(),
+                                 audit.declared.size(),
+                                 audit.identity.size(),
+                                 audit.unknown.size()));
+  for (const std::string &name : audit.unknown) {
+    lines.push_back(lucent::format("UNKNOWN {} is set and matched nothing", name));
+  }
+  return lines;
 }
 
 void report() {
-  const std::size_t n_declared = registered_count();
-  lucent::info("cfg", "{} CVar(s) declared", n_declared);
-
-  enumerate([](CVarBase &v) {
-    lucent::Line ln;
-    ln.add("  {} = {} [{}]", v.name(), v.value_text(), layer_name(v.layer()));
-    // Show the layers BELOW the winner too — "it is 1 because the env says so, and your settings
-    // file says 0" is the answer people actually need, and it is one line.
-    for (int i = 1; i < kLayerCount; ++i) {
-      const Layer l = (Layer)i;
-      if (l != v.layer() && v.has(l)) {
-        ln.add("  ({}={})", layer_name(l), v.layer_text(l));
-      }
-    }
-    if (v.external()) {
-      ln.add("  (external: resolved by lucent, not by this registry)");
-    }
-    ln.flush(lucent::Level::Info, "cfg");
-  });
-
-  const EnvAudit a = audit_environment();
-  // THE NEGATIVE CARRIES ITS DENOMINATOR AND ITS BLIND SPOT. "0 unknown" printed on its own is
-  // indistinguishable from an audit that never looked at anything.
-  lucent::info("cfg",
-               "env audit: {} PSXPORT_* variable(s) set -> {} declared, {} title-supplied (known once "
-               "read), {} UNKNOWN",
-               a.set_in_env.size(),
-               a.declared.size(),
-               a.identity.size(),
-               a.unknown.size());
-  for (const std::string &u : a.unknown) {
-    lucent::warn("cfg", "UNKNOWN knob {} is set and matched nothing — it did NOTHING in this run", u);
-  }
-  lucent::info("cfg",
-               "env audit BLIND SPOT: a title's disc or card key is recognised only once the title reads "
-               "it, so one not yet read is counted UNKNOWN here. The audit runs again at exit.");
-}
-
-void report_exit_audit() {
-  // Runs from std::atexit, so a killed run (SIGTERM -> _exit(130)) never reaches it; ask the live
-  // process with `cvars` instead.
-  const EnvAudit a = audit_environment();
-  lucent::info("cfg",
-               "env audit AT EXIT (everything that was going to be read has been): {} PSXPORT_* set "
-               "-> {} declared, {} title-supplied, {} UNKNOWN",
-               a.set_in_env.size(),
-               a.declared.size(),
-               a.identity.size(),
-               a.unknown.size());
-  for (const std::string &u : a.unknown) {
-    lucent::warn("cfg", "UNKNOWN knob {} was set for this whole run and NOTHING ever read it", u);
+  for (const std::string &line : cvar_report_lines(true)) {
+    lucent::log(line.starts_with("UNKNOWN") ? lucent::Level::Warn : lucent::Level::Info, "cfg", line);
   }
 }
-
-namespace {
-bool reported = false;
-} // namespace
 
 void report_once() {
   if (reported) {
@@ -955,149 +401,53 @@ void report_once() {
   }
   reported = true;
   report();
-  std::atexit(report_exit_audit);
-}
-
-bool selftest() {
-  // Run the classifier against BOTH classes. A name that must come back UNKNOWN, and a declared name
-  // that must not. Checking only the first would pass an audit that called everything unknown;
-  // checking only the second would pass an audit that returned an empty list forever.
-  constexpr const char *kProbe = "PSXPORT_CFG_SELFTEST_PROBE_NOT_A_KNOB";
-  constexpr const char *kDeclared = "PSXPORT_CFG_SELFTEST_DECLARED";
-
-  const bool probe_was_set = detail::env_present(kProbe);
-  const bool declared_was_set = detail::env_present(kDeclared);
-  if (probe_was_set || declared_was_set) {
-    lucent::error("cfg", "selftest cannot run: {}/{} already set in the environment", kProbe, kDeclared);
-    return false;
-  }
-
-  setenv(kProbe, "1", 1);
-  setenv(kDeclared, "1", 1);
-  lucent::config::reset_cache();
-  const EnvAudit a = audit_environment();
-  unsetenv(kProbe);
-  unsetenv(kDeclared);
-  lucent::config::reset_cache();
-
-  const bool positive = contains(a.unknown, kProbe);
-  const bool negative = contains(a.declared, kDeclared) && !contains(a.unknown, kDeclared);
-  if (!positive) {
-    lucent::error("cfg",
-                  "selftest FAILED: an undeclared knob set in the environment was NOT reported ({} of {} scanned)",
-                  a.unknown.size(),
-                  a.set_in_env.size());
-  }
-  if (!negative) {
-    lucent::error(
-        "cfg",
-        "selftest FAILED: a DECLARED knob set in the environment was misclassified ({} declared of {} scanned)",
-        a.declared.size(),
-        a.set_in_env.size());
-  }
-
-  return positive && negative;
-}
-
-// ── mutation from outside ───────────────────────────────────────────────────────────────────────
-
-namespace {
-bool set_layer_from_text(std::string_view name, std::string_view text, Layer l, const char *who) {
-  CVarBase *v = find(name);
-  if (!v) {
-    lucent::warn("cfg", "{}: {} is not a declared CVar — ignored", who, std::string(name));
-    return false;
-  }
-  if (v->external()) {
-    lucent::warn("cfg", "{}: {} is resolved by lucent, not by this registry — ignored", who, std::string(name));
-    return false;
-  }
-  if (l == Layer::Value && !v->persistable()) {
-    lucent::warn("cfg", "{}: {} is not persistable and has no Value layer — ignored", who, std::string(name));
-    return false;
-  }
-  if (!v->set_text(l, text)) {
-    lucent::warn("cfg",
-                 "{}: \"{}\" is not a valid {} for {} — ignored",
-                 who,
-                 std::string(text),
-                 kind_name(v->kind()),
-                 std::string(name));
-    return false;
-  }
-  return true;
-}
-} // namespace
-
-bool set_from_settings_file(std::string_view name, std::string_view text) {
-  return set_layer_from_text(name, text, Layer::Value, "settings");
+  std::atexit(reportExitAudit);
 }
 
 bool set_runtime(std::string_view name, std::string_view text) {
-  if (!set_layer_from_text(name, text, Layer::Runtime, "runtime")) {
+  lucent::cvar::VarBase *var = lucent::cvar::find(name);
+  if (var == nullptr || isExternal(name)) {
+    lucent::warn("cfg", "runtime: {} is not a knob this registry resolves; ignored", name);
     return false;
   }
-  CVarBase *v = find(name);
-  lucent::info("cfg",
-               "runtime: {} = {} [{}] (this run only, never persisted)",
-               std::string(name),
-               v->value_text(),
-               layer_name(v->layer()));
+  if (!var->apply(text, Layer::Runtime)) {
+    lucent::warn("cfg", "runtime: \"{}\" is not a valid value for {}; ignored", text, name);
+    return false;
+  }
+  lucent::info("cfg", "runtime: {} = {} (this run only)", name, var->effective_string());
+  return true;
+}
+
+bool clear_runtime(std::string_view name) {
+  lucent::cvar::VarBase *var = lucent::cvar::find(name);
+  if (var == nullptr) {
+    lucent::warn("cfg", "runtime: {} is not a knob; ignored", name);
+    return false;
+  }
+  var->clear(Layer::Runtime);
+  lucent::info("cfg", "runtime: {} cleared -> {} [{}]", name, var->effective_string(), layer_name(var->layer()));
   return true;
 }
 
 void note_runtime_debug_channels(std::string_view channels) {
-  constexpr std::string_view name = "PSXPORT_DEBUG";
-  // The REPL / debug-server `debug ...` path. The channel set is applied by lucent::enable_channels
-  // and is NOT resolved from here; this records it at the Runtime layer so the dump can say what the
-  // live channel set is and that a console command, not the environment, is where it came from.
-  // Without this the one documented precedence rule in the whole repo — "a REPL `debug` still
-  // overrides the environment for the rest of the run" — would remain a sentence in a doc with no
-  // representation in the program.
-  CVarBase *v = find(name);
-  if (!v) {
-    lucent::warn("cfg", "runtime note for {} dropped: no such CVar", std::string(name));
-    return;
-  }
-  v->set_text(Layer::Runtime, channels);
+  cv_debug_channels.set(std::string(channels), Layer::Runtime);
 }
 
-bool clear_runtime(std::string_view name) {
-  CVarBase *v = find(name);
-  if (!v) {
-    lucent::warn("cfg", "runtime: {} is not a declared CVar — ignored", std::string(name));
+void load_settings() {
+  lucent::cvar::load_file(cv_settings_path.get().c_str());
+}
+
+bool save_settings() {
+  const std::string &path = cv_settings_path.get();
+  if (insideCheckout(path)) {
+    lucent::warn("cfg", "refusing to save settings into a source checkout: {}; point PSXPORT_SETTINGS elsewhere", path);
     return false;
   }
-  v->clear(Layer::Runtime);
-  lucent::info("cfg", "runtime: {} cleared -> {} [{}]", std::string(name), v->value_text(), layer_name(v->layer()));
+  if (!lucent::cvar::save_file(path.c_str())) {
+    lucent::error("cfg", "could not write settings file {}", path);
+    return false;
+  }
   return true;
-}
-
-void reset_for_test() {
-  std::vector<CVarBase *> snapshot;
-  {
-    Registry &r = reg();
-    std::lock_guard<std::mutex> lock(r.mutex);
-    for (const auto &kv : r.vars) {
-      snapshot.push_back(kv.second);
-    }
-  }
-  for (CVarBase *v : snapshot) {
-    v->clear(Layer::Override);
-    v->mEnvBound = false;
-  }
-  // The enhancement warn-once registers are "what this configuration has already announced". A test
-  // that reconfigures the environment and then measures the previous configuration's silence would
-  // be measuring the reset it forgot to ask for, so this is not separable.
-  EnhState &s = enh_state();
-  std::lock_guard<std::mutex> lock(s.mutex);
-  s.warned_suppressed.clear();
-  s.warned_invalid_mode.clear();
-  s.warned_active.clear();
-  s.warned_nameless = false;
-  s.parsed_text = "\x01";
-  s.parsed_all = false;
-  s.parsed_names.clear();
 }
 
 } // namespace psx::config

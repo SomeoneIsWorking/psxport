@@ -15,9 +15,15 @@ bool ExecutionControl::request(ExecutionResult result) {
   return true;
 }
 
-std::optional<ExecutionResult> ExecutionControl::consume() {
-  auto result = std::move(pending_);
+std::optional<ExecutionResult> ExecutionControl::consume(std::uint32_t unstatedPc, std::uint64_t cycles) {
+  std::optional<ExecutionResult> result = std::move(pending_);
   pending_.reset();
+  if (result) {
+    result->cycles += cycles;
+    if (result->guestPc == 0u) {
+      result->guestPc = unstatedPc;
+    }
+  }
   return result;
 }
 
@@ -26,9 +32,6 @@ const std::optional<ExecutionResult> &ExecutionControl::pending() const {
 }
 
 void requestExecutionExit(Core &core, ExecutionExitReason reason) {
-  // guestPc 0 means "unstated", and the consumer supplies the correct continuation. See the contract
-  // in execution_control.h: stamping `core.pc` here is wrong for every request raised inside a
-  // `jal`ed native override, because that is the override's own entry.
   requestExecutionExit(core, ExecutionResult{reason, 0, 0, {}});
 }
 

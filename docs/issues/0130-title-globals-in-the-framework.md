@@ -1,6 +1,6 @@
 # 0130 — three TITLE-SPECIFIC guest globals are read by bare address from framework code
 
-**State:** resolved 2026-10-15: no framework file reads these addresses (`gpu_native.cpp` was deleted in (c) stage 2, the `mem.cpp` and `dbg_server.cpp` reads went with the legacy interface). Recorded Found 2026-09-28 while naming the guest operations in
+**State:** resolved 2026-10-20. The 2026-10-15 resolution was wrong: `dbg_server.cpp` still read all three in `stage`, and `ents`, `node` and `geomblk` walked Tomba! 2's entity lists (`0x800FB168`, `0x800F2624`) and model table (`0x800ECF58`). Those verbs moved to Tomba! 2's `game/core/debug/repl_commands.cpp`, which already owned `ents` and `stage`; no framework file reads these addresses now. Found 2026-09-28 while naming the guest operations in
 `runtime/psx/gpu/gpu_native.cpp`; the same work tried to fix it and was stopped by the gate that exists
 specifically to stop it (below).
 

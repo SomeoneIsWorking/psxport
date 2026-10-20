@@ -25,18 +25,9 @@ struct DispatchEpoch {
   }
 };
 
-struct HostDispatchCacheStats {
-  std::uint64_t hits = 0;
-  std::uint64_t misses = 0;
-  std::uint64_t flushes = 0;
-};
-
 // The answer to "what is this guest address" for every block boundary the executor crosses.
 //
-// WHY IT EXISTS. The boundary callback runs for every executed block (364 million in a 1000-frame Toy
-// Story 2 route) and asked the whole resolution chain each time: an image-catalog scan, a hash lookup
-// of the override table, the HLE tables. Only ~9,650 distinct addresses are ever reached, and the
-// answer for an address cannot change unless one of the inputs in `DispatchEpoch` does.
+// Verdicts are a function of the epoch, so one direct-mapped table answers every block boundary.
 //
 // A direct-mapped table of verdicts, flushed as a whole when the epoch moves. It stores only verdicts
 // that are a function of the epoch; an address whose answer also depends on live guest memory is never
@@ -52,10 +43,6 @@ public:
   std::optional<GuestHostDispatchKind> find(std::uint32_t guestAddress);
   void store(std::uint32_t guestAddress, GuestHostDispatchKind kind);
 
-  const HostDispatchCacheStats &stats() const {
-    return stats_;
-  }
-
 private:
   struct Slot {
     std::uint32_t address = 0;
@@ -70,7 +57,6 @@ private:
   std::vector<Slot> slots_;
   DispatchEpoch epoch_;
   std::uint32_t generation_ = 1;
-  HostDispatchCacheStats stats_;
 };
 
 } // namespace psx::cpu

@@ -1,6 +1,7 @@
 #include "invalidation.h"
 
 #include "core.h"
+#include "guest_memory_map.h"
 #include "lightrec_executor.h"
 
 #include <algorithm>
@@ -8,7 +9,7 @@
 namespace psx::cpu {
 namespace {
 
-constexpr std::uint64_t kPhysicalAddressSpaceSize = 0x20000000ull;
+constexpr std::uint64_t kPhysicalAddressSpaceSize = std::uint64_t{kPhysicalMask} + 1u;
 
 void invalidatePhysicalSegment(Core &core, std::uint32_t begin, std::uint32_t length, ExecutableWriteSource source) {
   if (length == 0) {
@@ -32,17 +33,13 @@ void notifyExecutableWrite(Core &core, GuestAddressRange range, ExecutableWriteS
     return;
   }
 
-  const std::uint32_t begin = range.begin & 0x1fffffffu;
+  const std::uint32_t begin = physical(range.begin);
   const std::uint64_t firstLength = std::min(length, kPhysicalAddressSpaceSize - begin);
   invalidatePhysicalSegment(core, begin, static_cast<std::uint32_t>(firstLength), source);
   const std::uint64_t remaining = length - firstLength;
   if (remaining != 0) {
     invalidatePhysicalSegment(core, 0, static_cast<std::uint32_t>(remaining), source);
   }
-}
-
-void notifyExecutableStateReplaced(Core &core, ExecutableWriteSource source) {
-  core.lightrecExecutor().invalidateAll(source);
 }
 
 } // namespace psx::cpu

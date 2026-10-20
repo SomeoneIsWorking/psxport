@@ -10,6 +10,7 @@ extern "C" {
 #include "psx.h"
 }
 #include "beetle_gte.h"
+#include "blob_codec.h"
 
 #include <algorithm>
 #include <array>
@@ -19,6 +20,7 @@ extern "C" {
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -85,14 +87,8 @@ bool collect(Fields &fields) {
   return owners_ok && oracle_snapshot_visit_shim(collect_shim, &fields, 0) && fields.valid;
 }
 
-void append32(std::vector<unsigned char> &out, uint32_t value) {
-  for (unsigned shift = 0; shift < 32; shift += 8) {
-    out.push_back(static_cast<unsigned char>(value >> shift));
-  }
-}
-
 uint32_t read32(const unsigned char *bytes) {
-  return uint32_t(bytes[0]) | uint32_t(bytes[1]) << 8 | uint32_t(bytes[2]) << 16 | uint32_t(bytes[3]) << 24;
+  return psx::platform::BlobReader(std::span<const std::uint8_t>(bytes, 4)).u32();
 }
 
 uint32_t checksum(const unsigned char *data, size_t size) {
@@ -119,27 +115,25 @@ void transfer(unsigned char *destination, const unsigned char *source, const Fie
 }
 
 std::vector<unsigned char> encode(const Fields &fields) {
-  std::vector<unsigned char> out(kMagic.begin(), kMagic.end());
-  append32(out, kVersion);
-  append32(out, static_cast<uint32_t>(fields.entries.size()));
-  append32(out, 0);
-  append32(out, 0);
+  psx::platform::BlobWriter body;
   for (const Field &field : fields.entries) {
-    append32(out, static_cast<uint32_t>(field.name.size()));
-    append32(out, static_cast<uint32_t>(field.bytes));
-    append32(out, field.width);
-    out.insert(out.end(), field.name.begin(), field.name.end());
-    const size_t start = out.size();
-    out.resize(start + field.bytes);
-    transfer(out.data() + start, field.data, field);
+    body.u32(static_cast<uint32_t>(field.name.size()));
+    body.u32(static_cast<uint32_t>(field.bytes));
+    body.u32(field.width);
+    body.bytes(std::span(reinterpret_cast<const std::uint8_t *>(field.name.data()), field.name.size()));
+    std::vector<std::uint8_t> lanes(field.bytes);
+    transfer(lanes.data(), field.data, field);
+    body.bytes(lanes);
   }
-  const uint32_t size = static_cast<uint32_t>(out.size());
-  const uint32_t hash = checksum(out.data() + 24, out.size() - 24);
-  for (unsigned lane = 0; lane < 4; ++lane) {
-    out[16 + lane] = static_cast<unsigned char>(size >> (lane * 8));
-    out[20 + lane] = static_cast<unsigned char>(hash >> (lane * 8));
-  }
-  return out;
+  const std::vector<std::uint8_t> &fieldBytes = body.bytesOut();
+  psx::platform::BlobWriter out;
+  out.bytes(kMagic);
+  out.u32(kVersion);
+  out.u32(static_cast<uint32_t>(fields.entries.size()));
+  out.u32(static_cast<uint32_t>(24 + fieldBytes.size()));
+  out.u32(checksum(fieldBytes.data(), fieldBytes.size()));
+  out.bytes(fieldBytes);
+  return out.take();
 }
 
 bool state_value_valid(const Field &field, const unsigned char *data) {

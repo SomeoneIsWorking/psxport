@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace psxport::card {
+namespace psx::platform::card {
 namespace {
 
 constexpr int index(Vector vector) {
@@ -61,4 +61,4 @@ void SyscallLog::report(const char *when) const {
                histogram(mUnhandledByFunction));
 }
 
-} // namespace psxport::card
+} // namespace psx::platform::card

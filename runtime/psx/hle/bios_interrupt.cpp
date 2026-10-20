@@ -1,4 +1,3 @@
-// bios_interrupt.cpp — the Sony BIOS HookEntryInt jmp_buf contract.
 #include "bios_interrupt.h"
 #include "core.h"
 #include <cstdlib>
@@ -13,7 +12,31 @@ constexpr uint32_t kS0Offset = 0x0Cu;
 constexpr uint32_t kGpOffset = 0x2Cu;
 
 struct ReturnFromException {};
+
+uint32_t enterInterruptCustomExit(Core *c, uint32_t buffer) {
+  if (!buffer) {
+    return 0;
+  }
+  const uint32_t resume = c->mem_r32(buffer + kResumeOffset);
+  if (!resume) {
+    return 0;
+  }
+  psx::hle::enterInterruptHandlerContext(c, buffer);
+  c->r[psx::cpu::kV0] = 1;
+  return resume;
+}
+
 } // namespace
+
+void psx::hle::saveJmpBuf(Core *c, uint32_t buffer) {
+  c->mem_w32(buffer + kResumeOffset, c->r[psx::cpu::kRa]);
+  c->mem_w32(buffer + kSpOffset, c->r[psx::cpu::kSp]);
+  c->mem_w32(buffer + kFpOffset, c->r[psx::cpu::kFp]);
+  for (uint32_t i = 0; i < 8; i++) {
+    c->mem_w32(buffer + kS0Offset + 4u * i, c->r[psx::cpu::kS0 + i]);
+  }
+  c->mem_w32(buffer + kGpOffset, c->r[psx::cpu::kGp]);
+}
 
 void psx::hle::traceInterruptCustomExit(Core *c, uint32_t buffer) {
   if (!buffer || !lucent::channel_on("bios")) {
@@ -44,23 +67,9 @@ bool psx::hle::enterInterruptHandlerContext(Core *c, uint32_t buffer) {
   return true;
 }
 
-uint32_t psx::hle::enterInterruptCustomExit(Core *c, uint32_t buffer) {
-  if (!buffer) {
-    return 0;
-  }
-  const uint32_t resume = c->mem_r32(buffer + kResumeOffset);
-  if (!resume) {
-    return 0;
-  }
-
-  psx::hle::enterInterruptHandlerContext(c, buffer);
-  c->r[psx::cpu::kV0] = 1;
-  return resume;
-}
-
 BiosInterruptDispatchResult
 psx::hle::dispatchInterruptCustomExit(Core *c, uint32_t buffer, BiosInterruptGuestDispatch dispatch) {
-  const uint32_t resume = psx::hle::enterInterruptCustomExit(c, buffer);
+  const uint32_t resume = enterInterruptCustomExit(c, buffer);
   if (!resume || !dispatch) {
     return BiosInterruptDispatchResult::Refused;
   }

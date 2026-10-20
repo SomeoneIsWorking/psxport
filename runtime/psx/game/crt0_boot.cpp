@@ -1,77 +1,105 @@
-// crt0_boot.cpp — Crt0Boot: the thin applier that binds the derived crt0 plan to a Core.
+// crt0_boot.cpp — planCrt0's arithmetic and Crt0Boot, which binds it to a Core.
 #include "crt0_boot.h"
 
 #include "core.h"
-#include "crt0_verify.h"
 #include "guest_call.h"
 
 #include <cstdlib>
-
 #include <lucent/log.h>
 
 namespace psx::game {
 
-void Crt0Boot::run(Core &core) const {
-  const Crt0Image *image = &image_;
-  // The two words the guest crt0 loads. Read before the .bss clear, exactly as the guest does — and
-  // read through the plan's inputs rather than inside it, so the plan stays pure and testable.
-  const uint32_t stackTopWord = core.mem_r32(image->stackTopWordAddress);
-  const uint32_t reserveWord = core.mem_r32(image->stackReserveWordAddress);
-  const Crt0Plan p = psx::game::planCrt0(image, stackTopWord, reserveWord, "Crt0Boot");
-  if (!p.ok) {
-    // psx::game::planCrt0 has already named the missing fields and its denominator. Refuse before mutating any
-    // guest state.
+Crt0Plan planCrt0(const Crt0Scan &scan, std::uint32_t stackTopWord, std::uint32_t stackReserveWord, const char *who) {
+  Crt0Plan p;
+  const std::string unresolved = scan.unresolved();
+  if (!unresolved.empty()) {
     lucent::error("crt0",
-                  "boot ABORTED: the game's crt0 boot group is incomplete (see above). No "
-                  "guest state has been modified.");
-    exit(1);
+                  "{}: refusing: the scan stopped on {} after {} instruction(s) ({} zero) without resolving {}",
+                  who,
+                  scan.stopped,
+                  scan.decoded,
+                  scan.allZero,
+                  unresolved);
+    return p;
   }
-  // CROSS-CHECK THE SHIPPED CONSTANTS AGAINST THE GUEST'S OWN crt0 BYTES, before applying any of them.
-  // This is the gate that was missing: every field above is a MEASURED value hand-copied into the game's
-  // derived runtime, and nothing compared the copy to the measurement. psx::game::auditCrt0 re-derives the group
-  // from the instruction stream at image->crt0Entry and refuses a CONFIRMED disagreement (crt0_verify.h).
-  if (!psx::game::auditCrt0(
-          image,
-          p,
-          [&core](uint32_t a) {
-            return core.mem_r32(a);
-          },
-          "Crt0Boot")) {
+  if (scan.bssHi <= scan.bssLo || (scan.bssLo & 3u) != 0u || (scan.bssHi & 3u) != 0u) {
+    lucent::error("crt0", "{}: refusing: .bss [0x{:08X}, 0x{:08X}) is not a word-aligned span", who, scan.bssLo, scan.bssHi);
+    return p;
+  }
+  // v0 = mem[stackTop] + bias; sp = fp = v0 | KSEG0; a1 = (v0 - mem[reserve]) - (heapBase & 0x1FFFFFFF).
+  const auto v0 = static_cast<std::uint32_t>(static_cast<std::int64_t>(stackTopWord) + scan.bias);
+  const std::uint32_t heapBaseMasked = scan.heapBase & 0x1FFFFFFFu;
+  const std::uint32_t heapSize = (v0 - stackReserveWord) - heapBaseMasked;
+  if (heapSize == 0 || heapSize >= kCrt0MaxPlausibleHeap) {
     lucent::error("crt0",
-                  "boot ABORTED: the shipped crt0 boot group DISAGREES with the guest's own "
-                  "crt0 (see above). No guest state has been modified.");
-    exit(1);
+                  "{}: refusing: heap size 0x{:X} from mem[0x{:08X}]=0x{:08X} bias {} - mem[0x{:08X}]=0x{:08X} - 0x{:08X}",
+                  who,
+                  heapSize,
+                  scan.stackTopBase,
+                  stackTopWord,
+                  scan.bias,
+                  scan.stackTopBase2,
+                  stackReserveWord,
+                  heapBaseMasked);
+    return p;
   }
-  // a1 = heap size USED TO BE MISSING: libcInit is the BIOS A(39h) InitHeap(ptr, size) thunk in every
-  // consumer measured so far, and hle.cpp's `case 0x39` copies a1 straight into Hle::heap_size — the
-  // capacity every BIOS malloc is checked against. Log the incoming register value beside the
-  // measured capacity so the diagnostic exposes a caller that failed to initialize a1.
+  p.ok = true;
+  p.bssLo = scan.bssLo;
+  p.bssHi = scan.bssHi;
+  p.sp = v0 | 0x80000000u;
+  p.gp = scan.gp;
+  p.heapBaseMasked = heapBaseMasked;
+  p.a0 = (heapBaseMasked | 0x80000000u) + 4u;
+  p.a1 = heapSize;
+  p.libcInit = scan.libcInit;
+  p.storeHeapSize = scan.sawHeapSizeStore;
+  p.heapSizeAddr = scan.heapSizePtr;
+  p.storeHeapBase = scan.sawHeapBaseStore;
+  p.heapBaseAddr = scan.heapBasePtr;
   lucent::info("crt0",
-               "libcInit 0x{:08X}: a0=0x{:08X} a1=0x{:X} (a1 held 0x{:08X} = {} before crt0 set "
-               "it — that stale value is the heap capacity this port passed to InitHeap before "
-               "the r[5] fix; a difference here is the bug's blast radius)",
+               "{}: bss [0x{:08X},0x{:08X}) | sp=fp=0x{:08X} (mem[0x{:08X}]=0x{:08X} bias {}) | gp=0x{:08X} | "
+               "libcInit 0x{:08X}(a0=0x{:08X}, a1=0x{:X}; InitHeap thunk {}, a1 live {}) | heap-size store {} | "
+               "heap-base store {}",
+               who,
+               p.bssLo,
+               p.bssHi,
+               p.sp,
+               scan.stackTopBase,
+               stackTopWord,
+               scan.bias,
+               p.gp,
                p.libcInit,
                p.a0,
                p.a1,
-               core.r[5],
-               core.r[5]);
-  // The write sequence itself comes from psx::game::applyCrt0, NOT from lines here: the defect was in the
-  // application (an unconditional store through a zero pointer), so the sequence lives in the tested
-  // header and this is only the adapter that binds it to a Core.
+               scan.libcInitIsInitHeap ? "yes" : "no",
+               scan.a1LiveAtCall ? "yes" : "no",
+               p.storeHeapSize ? lucent::format("0x{:08X}", p.heapSizeAddr) : std::string("none"),
+               p.storeHeapBase ? lucent::format("0x{:08X}", p.heapBaseAddr) : std::string("none"));
+  return p;
+}
+
+void Crt0Boot::run(Core &core) const {
+  const Crt0Scan scan = scanCrt0(image_.entry, [&core](std::uint32_t address) {
+    return core.mem_r32(address);
+  });
+  const Crt0Plan p = planCrt0(scan, core.mem_r32(scan.stackTopBase), core.mem_r32(scan.stackTopBase2), "Crt0Boot");
+  if (!p.ok) {
+    lucent::error("crt0", "boot aborted at crt0 0x{:08X}; no guest state was modified", image_.entry);
+    std::exit(1);
+  }
   struct CoreWriter {
     Core &c;
-    void w32(uint32_t a, uint32_t v) {
+    void w32(std::uint32_t a, std::uint32_t v) {
       c.mem_w32(a, v);
     }
-    void reg(int i, uint32_t v) {
+    void reg(int i, std::uint32_t v) {
       c.r[i] = v;
     }
-    void call(uint32_t entry) {
-      psx::cpu::dispatchGuestToReturn0(
-          c, entry, psx::cpu::ExecutionBudget::currentTurn(c), "native crt0 libc initialization");
+    void call(std::uint32_t entry) {
+      psx::cpu::callGuestNow(c, "native crt0 libc initialization", entry);
     }
   } w{core};
-  psx::game::applyCrt0(p, w);
+  applyCrt0(p, w);
 }
 
 } // namespace psx::game

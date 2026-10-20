@@ -1,17 +1,5 @@
-// device_bus.cpp — the devices between the CPU and the disc: the CD controller, the display clock,
-// the DMA controller, the BIOS HLE/interrupt state, the controller port with the pad behind it, the
-// memory card, and the native CD subsystem.
-//
-// WHAT IS NOT HERE, named so it cannot be mistaken for an oversight:
-//
-//   * psx::cd::CdController's function pointers, tick context, disc and XA back-pointers. Those are OWNERSHIP
-//     (which Game's disc backend this controller reads from), restored by Game's own construction,
-//     not machine state; serializing a pointer would write an address into a file.
-//   * Memcard's host FILE* and path. Also ownership. Its CONTENTS are captured — see writeCardSection
-//     — because the card is an input the guest reads and a file the run writes, so a run restored
-//     against a different card is a different machine.
-//   * The Pad's SDL handles and its recording/replay session index. Host-side input plumbing.
-//   * Cd's pending native read cursors beyond the position/setloc state, which live in psx::cd::CdController.
+// The CD controller, display clock, DMA controller, BIOS HLE, controller port and pad, memory card and
+// native CD. Host handles, pointers and the card's FILE are ownership, rebuilt by Game, never written.
 #include "device_sections.h"
 
 #include "cd.h"
@@ -34,11 +22,11 @@
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kBusLayoutVersion = 3;
+constexpr std::uint8_t kBusLayoutVersion = 4;
 
 // psx::cd::CdController's queue, verbatim. `psx::cd::CdcIrqEnt` is a plain-C struct so it is written field by field
 // rather than memcpy'd: a memcpy would put the struct's padding in the file, and padding is not a contract.
-void writeIrqQueue(const psx::cd::CdController &cdc, BlobWriter &out) {
+void writeIrqQueue(const psx::cd::CdController &cdc, psx::platform::BlobWriter &out) {
   out.i32(cdc.q_head);
   out.i32(cdc.q_tail);
   out.i32(cdc.resp_rd);
@@ -51,7 +39,7 @@ void writeIrqQueue(const psx::cd::CdController &cdc, BlobWriter &out) {
   }
 }
 
-void readIrqQueue(psx::cd::CdController &cdc, BlobReader &in) {
+void readIrqQueue(psx::cd::CdController &cdc, psx::platform::BlobReader &in) {
   cdc.q_head = in.i32();
   cdc.q_tail = in.i32();
   cdc.resp_rd = in.i32();
@@ -66,7 +54,7 @@ void readIrqQueue(psx::cd::CdController &cdc, BlobReader &in) {
 
 } // namespace
 
-void writeCdcSection(Game &game, BlobWriter &out) {
+void writeCdcSection(Game &game, psx::platform::BlobWriter &out) {
   const psx::cd::CdController &cdc = game.cdc;
   out.u8(kBusLayoutVersion);
   out.i32(cdc.index);
@@ -100,10 +88,8 @@ void writeCdcSection(Game &game, BlobWriter &out) {
   writeIrqQueue(cdc, out);
 }
 
-bool readCdcSection(Game &game, BlobReader &in, std::string &error) {
-  const std::uint8_t layout = in.u8();
-  if (layout != kBusLayoutVersion) {
-    error = "cdc section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kBusLayoutVersion);
+bool readCdcSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
+  if (!in.expectLayout("cdc", kBusLayoutVersion, error)) {
     return false;
   }
   psx::cd::CdController &cdc = game.cdc;
@@ -136,9 +122,7 @@ bool readCdcSection(Game &game, BlobReader &in, std::string &error) {
   cdc.read_completion_n = in.u8();
   in.array(cdc.read_completion_deadline_ticks, std::size(cdc.read_completion_deadline_ticks));
   readIrqQueue(cdc, in);
-  if (!in.ok()) {
-    error = "the cdc section is " + std::to_string(in.size()) + " bytes and did not decode (" +
-            std::to_string(in.offset()) + " consumed)";
+  if (!in.decoded("cdc", error)) {
     return false;
   }
   if (cdc.q_head < 0 || cdc.q_head >= static_cast<int>(std::size(cdc.q)) || cdc.q_tail < 0 ||
@@ -155,7 +139,7 @@ bool readCdcSection(Game &game, BlobReader &in, std::string &error) {
   return true;
 }
 
-void writeTimingSection(Game &game, BlobWriter &out) {
+void writeTimingSection(Game &game, psx::platform::BlobWriter &out) {
   const psx::frame::Timing &timing = game.timing;
   out.u8(kBusLayoutVersion);
   out.u32(timing.vblank);
@@ -167,17 +151,14 @@ void writeTimingSection(Game &game, BlobWriter &out) {
   out.u64(timing.rootCounter2OriginTicks);
   out.u64(timing.rootCounter1Offset);
   const psx::frame::Timing::ClockSnapshot clock = timing.clockSnapshot();
-  out.u64(clock.nowQ32);
-  out.u64(clock.displayBoundaryQ32);
+  out.u64(clock.time.now);
+  out.u64(clock.time.displayBoundary);
   out.u64(clock.displayPhaseNumerator);
   out.u64(clock.displayPhaseDenominator);
 }
 
-bool readTimingSection(Game &game, BlobReader &in, std::string &error) {
-  const std::uint8_t layout = in.u8();
-  if (layout != kBusLayoutVersion) {
-    error =
-        "timing section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kBusLayoutVersion);
+bool readTimingSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
+  if (!in.expectLayout("timing", kBusLayoutVersion, error)) {
     return false;
   }
   psx::frame::Timing &timing = game.timing;
@@ -190,13 +171,11 @@ bool readTimingSection(Game &game, BlobReader &in, std::string &error) {
   const std::uint64_t origin = in.u64();
   const std::uint64_t counter1Offset = in.u64();
   psx::frame::Timing::ClockSnapshot clock{};
-  clock.nowQ32 = in.u64();
-  clock.displayBoundaryQ32 = in.u64();
+  clock.time.now = in.u64();
+  clock.time.displayBoundary = in.u64();
   clock.displayPhaseNumerator = in.u64();
   clock.displayPhaseDenominator = in.u64();
-  if (!in.ok()) {
-    error = "the timing section is " + std::to_string(in.size()) + " bytes and did not decode (" +
-            std::to_string(in.offset()) + " consumed)";
+  if (!in.decoded("timing", error)) {
     return false;
   }
   if (clock.displayPhaseDenominator == 0) {
@@ -216,39 +195,51 @@ bool readTimingSection(Game &game, BlobReader &in, std::string &error) {
   return true;
 }
 
-void writeDmaSection(Core &core, BlobWriter &out) {
-  const DmaRegisters &dma = core.dma;
+void writeDmaSection(Core &core, psx::platform::BlobWriter &out) {
+  const psx::dma::DmaRegisters &dma = core.dma;
   out.u8(kBusLayoutVersion);
-  out.u32(dma.dma3Madr);
-  out.u32(dma.dma3Bcr);
-  out.u32(dma.dma3Chcr);
+  for (const psx::dma::ChannelRegisters &channel : dma.channel) {
+    out.u32(channel.madr);
+    out.u32(channel.bcr);
+    out.u32(channel.chcr);
+  }
+  out.u32(dma.mdec0Addr);
+  out.i32(dma.mdec0Left);
+  out.u32(dma.mdec1Addr);
+  out.i32(dma.mdec1Left);
+  out.u32(dma.spuXferAddr);
   out.u32(dma.dpcr);
   out.u32(dma.dicr);
   out.u32(dma.done.mask);
 }
 
-bool readDmaSection(Core &core, BlobReader &in, std::string &error) {
-  const std::uint8_t layout = in.u8();
-  if (layout != kBusLayoutVersion) {
-    error = "dma section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kBusLayoutVersion);
+bool readDmaSection(Core &core, psx::platform::BlobReader &in, std::string &error) {
+  if (!in.expectLayout("dma", kBusLayoutVersion, error)) {
     return false;
   }
-  DmaRegisters &dma = core.dma;
-  dma.dma3Madr = in.u32();
-  dma.dma3Bcr = in.u32();
-  dma.dma3Chcr = in.u32();
+  psx::dma::DmaRegisters dma;
+  for (psx::dma::ChannelRegisters &channel : dma.channel) {
+    channel.madr = in.u32();
+    channel.bcr = in.u32();
+    channel.chcr = in.u32();
+  }
+  dma.mdec0Addr = in.u32();
+  dma.mdec0Left = in.i32();
+  dma.mdec1Addr = in.u32();
+  dma.mdec1Left = in.i32();
+  dma.spuXferAddr = in.u32();
   dma.dpcr = in.u32();
   dma.dicr = in.u32();
   dma.done.mask = in.u32();
-  if (!in.ok()) {
-    error = "the dma section is " + std::to_string(in.size()) + " bytes and did not decode (" +
-            std::to_string(in.offset()) + " consumed)";
+  if (!in.decoded("dma", error)) {
     return false;
   }
+  core.dma = dma;
+  core.forgetMdecReports();
   return true;
 }
 
-void writeHleSection(Game &game, BlobWriter &out) {
+void writeHleSection(Game &game, psx::platform::BlobWriter &out) {
   const Hle &hle = game.hle;
   out.u8(kBusLayoutVersion);
   for (const HleEvCB &slot : hle.ev) {
@@ -289,10 +280,8 @@ void writeHleSection(Game &game, BlobWriter &out) {
   out.i32(hle.dcb_n);
 }
 
-bool readHleSection(Game &game, BlobReader &in, std::string &error) {
-  const std::uint8_t layout = in.u8();
-  if (layout != kBusLayoutVersion) {
-    error = "hle section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kBusLayoutVersion);
+bool readHleSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
+  if (!in.expectLayout("hle", kBusLayoutVersion, error)) {
     return false;
   }
   Hle &hle = game.hle;
@@ -333,9 +322,7 @@ bool readHleSection(Game &game, BlobReader &in, std::string &error) {
   const bool padInitialized = in.boolean();
   const bool padIrqStarted = in.boolean();
   const std::int32_t dcbN = in.i32();
-  if (!in.ok()) {
-    error = "the hle section is " + std::to_string(in.size()) + " bytes and did not decode (" +
-            std::to_string(in.offset()) + " consumed)";
+  if (!in.decoded("hle", error)) {
     return false;
   }
   if (irqN < 0 || irqN > Hle::IRQ_CHAIN_MAX) {
@@ -377,7 +364,7 @@ bool readHleSection(Game &game, BlobReader &in, std::string &error) {
   return true;
 }
 
-void writeSioSection(Game &game, BlobWriter &out) {
+void writeSioSection(Game &game, psx::platform::BlobWriter &out) {
   const Sio0 &sio = game.sio;
   const Pad &pad = game.pad;
   out.u8(kBusLayoutVersion);
@@ -397,10 +384,8 @@ void writeSioSection(Game &game, BlobWriter &out) {
   out.i32(pad.repl_on);
 }
 
-bool readSioSection(Game &game, BlobReader &in, std::string &error) {
-  const std::uint8_t layout = in.u8();
-  if (layout != kBusLayoutVersion) {
-    error = "sio section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kBusLayoutVersion);
+bool readSioSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
+  if (!in.expectLayout("sio", kBusLayoutVersion, error)) {
     return false;
   }
   Sio0 &sio = game.sio;
@@ -419,9 +404,7 @@ bool readSioSection(Game &game, BlobReader &in, std::string &error) {
   const std::uint16_t replTap = in.u16();
   const std::int32_t replTapN = in.i32();
   const std::int32_t replOn = in.i32();
-  if (!in.ok()) {
-    error = "the sio section is " + std::to_string(in.size()) + " bytes and did not decode (" +
-            std::to_string(in.offset()) + " consumed)";
+  if (!in.decoded("sio", error)) {
     return false;
   }
   sio.mode = mode;
@@ -445,7 +428,7 @@ bool readSioSection(Game &game, BlobReader &in, std::string &error) {
   return true;
 }
 
-void writeCardSection(Game &game, BlobWriter &out, std::string &error) {
+void writeCardSection(Game &game, psx::platform::BlobWriter &out, std::string &error) {
   out.u8(kBusLayoutVersion);
   if (!game.memcard.present()) {
     error =
@@ -480,11 +463,8 @@ void writeCardSection(Game &game, BlobWriter &out, std::string &error) {
   out.u32(game.memcard.scanBlock());
 }
 
-bool readCardSection(Game &game, BlobReader &in, std::string &error) {
-  const std::uint8_t layout = in.u8();
-  if (layout != kBusLayoutVersion) {
-    error =
-        "card section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kBusLayoutVersion);
+bool readCardSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
+  if (!in.expectLayout("card", kBusLayoutVersion, error)) {
     return false;
   }
   if (!game.memcard.present()) {
@@ -551,7 +531,7 @@ bool readCardSection(Game &game, BlobReader &in, std::string &error) {
   return true;
 }
 
-void writeCdSection(Game &game, BlobWriter &out) {
+void writeCdSection(Game &game, psx::platform::BlobWriter &out) {
   const Cd &cd = game.cd;
   out.u8(kBusLayoutVersion);
   out.array(cd.stock_command_response.data(), cd.stock_command_response.size());
@@ -561,10 +541,8 @@ void writeCdSection(Game &game, BlobWriter &out) {
   out.i32(cd.in_stock_read);
 }
 
-bool readCdSection(Game &game, BlobReader &in, std::string &error) {
-  const std::uint8_t layout = in.u8();
-  if (layout != kBusLayoutVersion) {
-    error = "cd section layout " + std::to_string(layout) + ", this build writes " + std::to_string(kBusLayoutVersion);
+bool readCdSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
+  if (!in.expectLayout("cd", kBusLayoutVersion, error)) {
     return false;
   }
   Cd &cd = game.cd;
@@ -573,9 +551,7 @@ bool readCdSection(Game &game, BlobReader &in, std::string &error) {
   cd.setloc_lba = in.i32();
   cd.stock_reading = in.i32();
   cd.in_stock_read = in.i32();
-  if (!in.ok()) {
-    error = "the cd section is " + std::to_string(in.size()) + " bytes and did not decode (" +
-            std::to_string(in.offset()) + " consumed)";
+  if (!in.decoded("cd", error)) {
     return false;
   }
   if (cd.in_stock_read) {
@@ -587,20 +563,3 @@ bool readCdSection(Game &game, BlobReader &in, std::string &error) {
 }
 
 } // namespace psx::state
-
-// Core/psx::frame::Timing member definitions live at global scope, next to nothing: they are ordinary members of
-// their own classes, defined here because this is where the save-state owner reaches their private
-// state, and NOT because of any ownership they have over the machine.
-psx::frame::Timing::ClockSnapshot psx::frame::Timing::clockSnapshot() const {
-  const EmulatedTimeQ32 time = mEmulatedTime.q32();
-  return ClockSnapshot{time.now,
-                       time.displayBoundary,
-                       static_cast<std::uint64_t>(mDisplayFieldPhaseNumerator),
-                       static_cast<std::uint64_t>(mDisplayFieldPhaseDenominator)};
-}
-
-void psx::frame::Timing::restoreClockSnapshot(const ClockSnapshot &clock) {
-  mEmulatedTime.restore({.now = clock.nowQ32, .displayBoundary = clock.displayBoundaryQ32});
-  mDisplayFieldPhaseNumerator = static_cast<unsigned __int128>(clock.displayPhaseNumerator);
-  mDisplayFieldPhaseDenominator = static_cast<unsigned __int128>(clock.displayPhaseDenominator);
-}

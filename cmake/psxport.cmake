@@ -91,7 +91,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/hle/hle_interrupt.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/syscall_exception.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/kernel_syscall.cpp
-  ${PSXPORT_ROOT}/runtime/psx/boot/host_turn.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/host_turn.cpp
   ${PSXPORT_ROOT}/runtime/psx/present/ordering_table.cpp # the guest DrawOTag chain: node header decoded by field name
   ${PSXPORT_ROOT}/runtime/psx/debug/image_writer.cpp      # one checked RGB24 capture-file boundary
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_debug.cpp
@@ -103,7 +103,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/input/pad_recording.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_phase_replay.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_record_replay.cpp
-  ${PSXPORT_ROOT}/runtime/psx/core/snapshot.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/memcard.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/card_syscall_log.cpp
   ${PSXPORT_ROOT}/runtime/psx/movie/native_fmv.cpp
@@ -132,14 +131,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/movie/mdec_beetle.c
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/spu.c
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_beetle.cpp
-  # Beetle's own save-state chunk codec (MDFNSS_StateAction / MDFNSS_SaveSM / MDFNSS_LoadSM). It was
-  # NOT compiled before, which is why runtime/psx/cpu/beetle/gte_vendor_hooks.cpp answered MDFNSS_StateAction
-  # with a stub returning 1: the lifted SPU and MDEC call it, and a stub that never reads a byte
-  # makes every device save state an empty section a load would accept. psx::state::BeetleDeviceState
-  # (runtime/psx/state/beetle_device_state.*) now drives the fork's real SPU/MDEC state actions, and
-  # defines the `StateAction` aggregate this unit calls.
+  # Beetle's state chunk codec; beetle_device_state.cpp defines the StateAction it calls.
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/state.c
-  ${PSXPORT_ROOT}/runtime/psx/state/state_blob.cpp
   ${PSXPORT_ROOT}/runtime/psx/state/state_file.cpp
   ${PSXPORT_ROOT}/runtime/psx/state/beetle_device_state.cpp
   ${PSXPORT_ROOT}/runtime/psx/state/machine_state.cpp
@@ -181,11 +174,12 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/picture_announce.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_perf.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_time_histogram.cpp  # the frame-time distribution gpu_perf reports percentiles from
-  ${PSXPORT_ROOT}/runtime/psx/debug/mods.cpp
-  ${PSXPORT_ROOT}/runtime/psx/config/config.cpp   # layered CVar registry + the environment audit (docs/config.md)
-  ${PSXPORT_ROOT}/runtime/psx/config/typed_config.cpp # the immutable launch config reached through Game
+  ${PSXPORT_ROOT}/runtime/psx/game/mods.cpp
+  ${PSXPORT_ROOT}/runtime/psx/config/config.cpp
   ${PSXPORT_ROOT}/runtime/psx/config/number_text.cpp
   ${PSXPORT_ROOT}/runtime/psx/config/diagnostic_config.cpp # the opt-in diagnostic knobs
+  ${PSXPORT_ROOT}/runtime/psx/config/diagnostic_run.cpp
+  ${PSXPORT_ROOT}/runtime/psx/config/enhancement_gate.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/platform_hle.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/stock_dma_callbacks.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/stock_libgpu.cpp
@@ -220,9 +214,14 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/core/guest_code_module.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_device.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/command_args.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/pad_frame_probes.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/snapshot.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/store_watch.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/repl.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/dbg_server.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/debug_commands.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/bug_report_session.cpp
+  ${PSXPORT_ROOT}/runtime/psx/platform/spin_detector.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/watchdog.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/psx_exe_image.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/disc_executable.cpp # a boot stub's hand-off to an executable on its disc
@@ -294,8 +293,7 @@ target_include_directories(psxport PUBLIC
   ${PSXPORT_ROOT}/${RT}/platform
   ${PSXPORT_ROOT}/${RT}/game
   ${PSXPORT_ROOT}/${RT}/catalog
-  # The save-state owner (runtime/psx/state/). Public so a title's own NativeStatePort implementation
-  # can include machine_state.h and state_blob.h the way the framework's own sections do.
+  # Public: a title's NativeStatePort includes machine_state.h.
   ${PSXPORT_ROOT}/${RT}/state
   ${MED} ${MED}/psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx

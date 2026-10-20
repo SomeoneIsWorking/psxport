@@ -1,24 +1,19 @@
 #include "state_file.h"
 
-#include "state_blob.h"
+#include "blob_codec.h"
 
 #include <algorithm>
 #include <array>
-#include <cstdio>
 #include <cstring>
 
 namespace psx::state {
-
-std::vector<std::string> frameworkSectionNames() {
-  std::vector<std::string> names(section::kRequired.begin(), section::kRequired.end());
-  names.emplace_back(section::kTitle);
-  return names;
-}
+namespace {
 
 bool isFrameworkSectionName(std::string_view name) {
-  const std::vector<std::string> names = frameworkSectionNames();
-  return std::find(names.begin(), names.end(), name) != names.end();
+  return name == section::kTitle || std::ranges::find(section::kRequired, name) != section::kRequired.end();
 }
+
+} // namespace
 
 bool StateImage::add(std::string_view name, std::span<const std::uint8_t> payload) {
   if (name.empty() || name.size() >= kSectionNameBytes) {
@@ -31,7 +26,7 @@ bool StateImage::add(std::string_view name, std::span<const std::uint8_t> payloa
     return false;
   }
   if (mNames.empty()) {
-    BlobWriter header;
+    psx::platform::BlobWriter header;
     header.bytes(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(kStateMagic), 8));
     header.u32(kFormatVersion);
     // The section count is patched below, so write a placeholder the patch step overwrites.
@@ -41,14 +36,14 @@ bool StateImage::add(std::string_view name, std::span<const std::uint8_t> payloa
   std::array<char, kSectionNameBytes> padded{};
   std::memcpy(padded.data(), name.data(), name.size());
   mBytes.insert(mBytes.end(), padded.begin(), padded.end());
-  BlobWriter tail;
+  psx::platform::BlobWriter tail;
   tail.u32(static_cast<std::uint32_t>(payload.size()));
   const auto tailBytes = tail.bytesOut();
   mBytes.insert(mBytes.end(), tailBytes.begin(), tailBytes.end());
   mBytes.insert(mBytes.end(), payload.begin(), payload.end());
   mNames.emplace_back(name);
   // Patch the section count in place: bytes [8, 12) are the version, [12, 16) the count.
-  BlobWriter count;
+  psx::platform::BlobWriter count;
   count.u32(static_cast<std::uint32_t>(mNames.size()));
   const auto countBytes = count.bytesOut();
   std::memcpy(mBytes.data() + 12, countBytes.data(), countBytes.size());
@@ -69,7 +64,7 @@ std::optional<StateFile> StateFile::open(std::vector<std::uint8_t> bytes, OpenEr
     error.reason = "magic is not PSXSTATE";
     return std::nullopt;
   }
-  BlobReader head(std::span<const std::uint8_t>(bytes.data(), 16));
+  psx::platform::BlobReader head(std::span<const std::uint8_t>(bytes.data(), 16));
   head.u32(); // skip the magic, already compared above
   head.u32();
   const std::uint32_t version = head.u32();
@@ -111,7 +106,7 @@ std::optional<StateFile> StateFile::open(std::vector<std::uint8_t> bytes, OpenEr
       error.reason = "unknown section '" + name + "'";
       return std::nullopt;
     }
-    BlobReader lengthBytes(std::span<const std::uint8_t>(file.mBytes.data() + offset + kSectionNameBytes, 4));
+    psx::platform::BlobReader lengthBytes(std::span<const std::uint8_t>(file.mBytes.data() + offset + kSectionNameBytes, 4));
     const std::uint32_t length = lengthBytes.u32();
     offset += kSectionNameBytes + 4;
     if (length > file.mBytes.size() - offset) {
@@ -145,49 +140,6 @@ std::optional<std::span<const std::uint8_t>> StateFile::section(std::string_view
     }
   }
   return std::nullopt;
-}
-
-std::optional<std::vector<std::uint8_t>> readFile(const std::string &path, std::string &error) {
-  error.clear();
-  FILE *file = std::fopen(path.c_str(), "rb");
-  if (file == nullptr) {
-    error = "cannot open '" + path + "' for reading";
-    return std::nullopt;
-  }
-  std::vector<std::uint8_t> bytes;
-  std::uint8_t chunk[64 * 1024];
-  while (true) {
-    const std::size_t got = std::fread(chunk, 1, sizeof(chunk), file);
-    if (got > 0) {
-      bytes.insert(bytes.end(), chunk, chunk + got);
-    }
-    if (got < sizeof(chunk)) {
-      break;
-    }
-  }
-  const bool failed = std::ferror(file) != 0;
-  std::fclose(file);
-  if (failed) {
-    error = "read of '" + path + "' failed part way through";
-    return std::nullopt;
-  }
-  return bytes;
-}
-
-bool writeFile(const std::string &path, std::span<const std::uint8_t> bytes, std::string &error) {
-  error.clear();
-  FILE *file = std::fopen(path.c_str(), "wb");
-  if (file == nullptr) {
-    error = "cannot open '" + path + "' for writing";
-    return false;
-  }
-  const std::size_t written = bytes.empty() ? 0 : std::fwrite(bytes.data(), 1, bytes.size(), file);
-  const bool flushed = std::fclose(file) == 0;
-  if (written != bytes.size() || !flushed) {
-    error = "wrote " + std::to_string(written) + " of " + std::to_string(bytes.size()) + " bytes to '" + path + "'";
-    return false;
-  }
-  return true;
 }
 
 } // namespace psx::state

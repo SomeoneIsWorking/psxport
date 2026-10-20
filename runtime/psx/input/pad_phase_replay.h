@@ -75,9 +75,6 @@ public:
     return recording_;
   }
 
-  // One line with every denominator, at a level that matches the outcome. A run that ends while the
-  // replay is still playing is reported TRUNCATED.
-  void reportRunEnd() const;
 
 private:
   std::uint16_t emit();

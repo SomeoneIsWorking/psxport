@@ -1,13 +1,4 @@
-// Frame-progress watchdog. The native boot loop can wedge (an interpreted task spinning on a
-// condition that never becomes true, an infinite loop, etc.) without crashing — so an external
-// `timeout` is the only way to stop it and it tells you nothing about WHERE. This arms a SIGALRM
-// that fires if no frame has been presented within N seconds and dumps the current backtrace
-// (the stuck call stack) before aborting. The main VRAM presenter owns the one-way transition from
-// cold-init grace to steady timing. Bootstrap image presenters report progress without making that
-// transition: they do not allocate the main presenter's per-Game targets or prove it is ready.
-//
-// Build note: backtrace symbol names need -rdynamic at link time (run.sh adds it). Without it
-// you still get addresses — resolve with `addr2line -e scratch/bin/tomba2_port <addr>`.
+// Frame-progress watchdog: SIGALRM fires when no frame presents within N seconds, dumps the backtrace and aborts.
 #include "watchdog.h"
 #include "config_vars.h" // watchdog_seconds / watchdog_boot_seconds
 #include "host_backtrace.h"
@@ -62,7 +53,7 @@ void onAlarm(int sig) {
 }
 
 void onFault(int sig) {
-  // See on_alarm: this handler can use only the emergency async-signal-safe fd 2 path.
+  // See onAlarm: this handler can use only the emergency async-signal-safe fd 2 path.
   constexpr char msg[] = "\n[watchdog] FAULT (signal): backtrace:\n";
   write(2, msg, sizeof(msg) - 1);
   {
@@ -119,7 +110,7 @@ void onInterrupt(int sig) {
     _exit(130); // second Ctrl+C: bail without touching anything
   }
   s_wd.int_seen = 1;
-  // See on_alarm: this handler can use only the emergency async-signal-safe fd 2 path.
+  // See onAlarm: this handler can use only the emergency async-signal-safe fd 2 path.
   constexpr char msg[] = "\n[watchdog] INTERRUPT (SIGINT/SIGTERM) — where it was stuck:\n";
   write(2, msg, sizeof(msg) - 1);
 #ifdef HAVE_BACKTRACE
@@ -149,30 +140,18 @@ Watchdog::Watchdog() {
   sigaction(SIGABRT, &fa, 0);
   sigaction(SIGBUS, &fa, 0);
 
-  // Always make Ctrl+C / kill work + diagnostic, regardless of the frame-watchdog setting — a hung
-  // guest loop otherwise leaves the window unclosable and SIGINT swallowed (the event pump
-  // never runs). Our handler force-exits with the stuck PC.
+  // A hung guest loop never pumps events, so SIGINT/SIGTERM force-exit with the stuck PC.
   struct sigaction ia = {};
   ia.sa_handler = onInterrupt;
   sigaction(SIGINT, &ia, 0);
   sigaction(SIGTERM, &ia, 0);
 
-  // Frame-progress watchdog. Default ON (3s) even when PSXPORT_WATCHDOG is unset, so a hang in a
-  // windowed `./run.sh` self-aborts with a backtrace instead of wedging forever. A frame must take
-  // well under a second, so 3s is already far past any healthy frame; gameplay pets every present
-  // and never trips it. Explicit PSXPORT_WATCHDOG=0 disables it; set higher only for slow debugging.
-  // A malformed PSXPORT_WATCHDOG falls back to the default rather than disabling the watchdog.
+  // PSXPORT_WATCHDOG=0 disables it.
   s_wd.secs = (int)psx::config::watchdog_seconds();
   if (s_wd.secs <= 0) {
     return;
   }
-  // The FIRST main-VRAM frame is legitimately slow: RADV/AMD compiles every Vulkan pipeline
-  // (tritex, present blit, …) on first use, so that present can block in the GPU fence
-  // wait for several seconds on a cold shader cache (e.g. right after a full ./run.sh rebuild). That
-  // is NOT a hang, so the 3s steady-state budget must not apply to it. Give cold initialization a much
-  // larger grace (still finite, so a real first-frame GPU hang is still caught + a Ctrl+C works).
-  // PSXPORT_WATCHDOG_BOOT overrides; default = max(s_secs, 45). Its unset sentinel is -1 so an
-  // explicit 0 still means zero.
+  // A cold pipeline cache can stall the first present for seconds; unset (-1) grants max(secs, 45).
   const long boot = psx::config::watchdog_boot_seconds();
   s_wd.boot_secs = boot >= 0 ? (int)boot : (s_wd.secs > 45 ? s_wd.secs : 45);
   struct sigaction sa = {};

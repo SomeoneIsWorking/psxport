@@ -15,8 +15,7 @@ namespace psx::input {
 
 namespace {
 
-// The default sink keeps the previous five sessions (pad_session.1..5.pad): a windowed bug-repro run
-// used to be destroyed by the next launch, which is how the bucket-cutscene repro was lost (#57).
+// The default sink keeps the previous five sessions (pad_session.1..5.pad).
 void rotateDefaultSink() {
   std::error_code ignored;
   for (int k = 4; k >= 1; k--) {
@@ -77,10 +76,7 @@ void PadRecordReplay::openSink(const PadSessionConfig &config, const CardIdentit
   if (path == "0") {
     return; // explicit disable
   }
-  // Default-on recording is WINDOWED-ONLY and never while REPLAYING (#56/#57): headless probes have
-  // no session worth keeping and were truncating the user's real captures. A RESUME keeps recording on
-  // purpose: the sink captures the replayed prefix and the live play after it as one from-boot
-  // recording, which is what makes a resume chainable.
+  // The default sink records windowed runs, never a replay; a resume records so it can be resumed again.
   if (path.empty() && config.replayPath.empty() && config.windowed) {
     path = kDefaultSink;
     defaultSink = true;
@@ -106,12 +102,13 @@ void PadRecordReplay::openSink(const PadSessionConfig &config, const CardIdentit
 
 void PadRecordReplay::loadReplay(const std::string &path, const CardIdentity &card) {
   const char *role = resume_ ? "resume" : "replay";
-  const std::vector<std::uint8_t> bytes = Fs::readFile(path);
-  if (bytes.empty()) {
-    lucent::error("padrec", "{} REFUSED: {} is missing, unreadable or empty", role, path);
+  std::string error;
+  const std::optional<std::vector<std::uint8_t>> bytes = Fs::readFile(path, error);
+  if (!bytes) {
+    lucent::error("padrec", "{} REFUSED: {}", role, error);
     return;
   }
-  DecodedPadRecording decoded = PadRecording::decode(bytes);
+  DecodedPadRecording decoded = PadRecording::decode(*bytes);
   if (!decoded.recording) {
     lucent::error("padrec", "{} REFUSED: {}: {}", role, path, decoded.error);
     return;
@@ -183,9 +180,10 @@ std::uint16_t PadRecordReplay::service(std::uint64_t phase, Inputs inputs) {
                    frameIndex());
     }
   }
-  recording_.append({.phase = phase, .mask = mask});
+  const PadFrame frame{.phase = phase, .mask = mask};
+  const PadAppend what = recording_.append(frame);
   if (sink_) {
-    sink_->append({.phase = phase, .mask = mask});
+    sink_->append(frame, what);
   }
   return mask;
 }
@@ -195,7 +193,12 @@ bool PadRecordReplay::saveRecording(const char *path, std::size_t frameLimit) co
     return false;
   }
   const std::vector<std::uint8_t> bytes = recording_.encode(frameLimit);
-  return Fs::writeFile(path, bytes.data(), bytes.size());
+  std::string error;
+  if (!Fs::writeFile(path, bytes.data(), bytes.size(), error)) {
+    lucent::error("padrec", "{}", error);
+    return false;
+  }
+  return true;
 }
 
 } // namespace psx::input

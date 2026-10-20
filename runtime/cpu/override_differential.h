@@ -1,41 +1,6 @@
-// override_differential — the per-function gate every new native override must pass before landing.
-//
-// WHAT IT DOES. For each configured override (by registered name or guest entry address) it SHADOWS a
-// sample of real calls inside a real run:
-//
-//   1. snapshot the CPU (GPRs, HI/LO, PC, COP0), GTE registers, main RAM and scratchpad;
-//   2. run the ORIGINAL guest body to its return (native suppressed for that key, resumed across budget
-//      exhaustion), journaling every device access and host service it makes — live;
-//   3. capture that post-state A, then restore the snapshot, invalidating Lightrec for every range whose
-//      bytes change so no block translated from the replaced bytes survives;
-//   4. run the NATIVE override against the restored state with its device traffic REPLAYED from step 2's
-//      journal (reads served from the log, writes compared and swallowed, guest time held);
-//   5. capture post-state B, diff A against B under the MIPS O32 contract, restore A, and continue the run
-//      from A — the original's result — so the game stays faithful whatever the override did.
-//
-// THE CONTRACT COMPARED. v0, v1, s0-s7, gp, sp, s8/fp and ra must match, and so must the continuation PC,
-// COP0 Status and all 64 GTE registers. Caller-saved temporaries (at, a0-a3, t0-t9, k0/k1, HI/LO) are not
-// compared. Every main-RAM and scratchpad byte must match, except differences inside the callee-frame
-// window below the entry `sp` (`OverrideDifferentialConfig::deadStackBytes`), which are counted and
-// reported but not judged. The ordered device/host-service journals must be equal.
-//
-// WHAT IT CANNOT COMPARE, and what the verdict then says. A call whose original performs anything the
-// journal cannot replay — a BIOS or platform-HLE service, a syscall, pending interrupt/host-turn work — or
-// exits for any reason other than returning, is INCOMPARABLE with that reason, never a match; the native
-// is not run for it. A native that performs such a service is likewise incomparable. Device models reached
-// by native code DIRECTLY in C++, bypassing `Core`'s memory API, are not observed by any of this.
-//
-// THE JOURNAL'S PER-CALL BOUND IS A MISMATCH, not an incomparable. One call producing more than
-// `psx::cpu::kMaxSideEffectsPerCall` effects is a runaway — measured, where a
-// candidate override looped inside one call and grew the journal to 7.4 GB — and a verdict that lets
-// such a call pass as "nothing to compare" is the failure the bound exists to prevent. Either path
-// reaching the bound is a MISMATCH naming the override, its address, the path, the effect, and the
-// bound; the run continues from the ORIGINAL's state either way, and a native stopped at the bound is
-// stopped by an unwind out of its own body, never by a `throw` across a translated Lightrec frame.
-//
-// Output: one log line per verdict CHANGE per override, a summary with denominators at shutdown, and a
-// machine-readable JSON report (`tools/override_differential_gate.py` gates on it). A requested selector
-// that sampled zero calls is a FAILURE in both.
+// override_differential — shadows sampled calls of selected overrides: the original runs live and is
+// journaled, the native replays that journal from the restored entry state, the two post-states are
+// judged under the O32 contract, and the run continues from the original's state.
 #pragma once
 
 #include "execution_exit.h"
@@ -101,16 +66,10 @@ struct DifferentialKeyStats {
   std::optional<std::uint64_t> firstMismatchCall;
   std::optional<DifferentialOutcome> firstMismatch;
   std::optional<DifferentialVerdict> lastVerdict;
-  // THE LARGEST SAMPLED CALL'S JOURNAL, and the total the bound above it. These are the measurement
-  // `psx::cpu::kMaxSideEffectsPerCall` is sized from, reported on every run so the constant's comment
-  // is checkable against a real corpus instead of being a number nobody can test. Both are counts
-  // across the key's sampled calls, so a key that was never sampled reports 0 of 0 — the same zero
-  // that means "scanned and found none" only when `sampled` is non-zero, which the summary states.
+  // The largest sampled original journal, which sizes kMaxSideEffectsPerCall.
   std::size_t largestSampledCallEffects = 0;
   std::uint64_t largestSampledCallNumber = 0;
-  // Sampled calls that stopped at the journal's per-call bound, and the first of them. A non-zero count
-  // is a gate failure; it is recorded separately from `mismatch` so a reader can tell "the two paths
-  // differ" from "one path could not be journaled at all".
+  // Sampled calls that stopped at the journal's per-call bound, and the first of them.
   std::uint64_t journalBoundFaults = 0;
   std::optional<psx::cpu::JournalBoundViolation> firstJournalBoundFault;
 };

@@ -24,12 +24,14 @@ bool Fs::ensureParentDirs(const std::string &path) {
   return !ec;
 }
 
-bool Fs::writeFile(const std::string &path, const void *data, size_t size) {
+bool Fs::writeFile(const std::string &path, const void *data, size_t size, std::string &error) {
   if (!ensureParentDirs(path)) {
+    error = "cannot create the directory for '" + path + "'";
     return false;
   }
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
   if (!f) {
+    error = "cannot open '" + path + "' for writing";
     return false;
   }
   if (size) {
@@ -41,24 +43,28 @@ bool Fs::writeFile(const std::string &path, const void *data, size_t size) {
   if (!ok) {
     std::error_code ec;
     fs::remove(path, ec);
+    error = "writing " + std::to_string(size) + " bytes to '" + path + "' failed";
     return false;
   }
   return true;
 }
 
-std::vector<uint8_t> Fs::readFile(const std::string &path) {
+std::optional<std::vector<uint8_t>> Fs::readFile(const std::string &path, std::string &error) {
   std::ifstream f(path, std::ios::binary | std::ios::ate);
   if (!f) {
-    return {};
+    error = "cannot open '" + path + "' for reading";
+    return std::nullopt;
   }
-  std::streamsize n = f.tellg();
+  const std::streamsize n = f.tellg();
   if (n < 0) {
-    return {};
+    error = "cannot size '" + path + "'";
+    return std::nullopt;
   }
   f.seekg(0, std::ios::beg);
   std::vector<uint8_t> buf(static_cast<size_t>(n));
   if (n && !f.read(reinterpret_cast<char *>(buf.data()), n)) {
-    return {};
+    error = "read of '" + path + "' failed part way through";
+    return std::nullopt;
   }
   return buf;
 }

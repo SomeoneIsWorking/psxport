@@ -1,147 +1,116 @@
-// diagnostic_config.cpp — see diagnostic_config.h.
 #include "diagnostic_config.h"
 
 #include "config_var.h"
+#include "number_text.h"
+
+#include <lucent/log.h>
 
 namespace psx::config {
 namespace {
 
-TextVar cv_cpu_store_watch("PSXPORT_CW",
-                           "",
-                           "log host-side stores into a physical range: \"lo,hi\" (hex)",
-                           /*persistable=*/false);
-IntVar cv_cpu_store_watch_limit("PSXPORT_CW_MAX", 64, "PSXPORT_CW hits logged (0 = unlimited)", /*persistable=*/false);
-BoolVar
-    cv_cpu_store_watch_backtrace("PSXPORT_CW_BT", false, "host backtrace per PSXPORT_CW hit", /*persistable=*/false);
-TextVar cv_guest_store_watch("PSXPORT_WWATCH",
-                             "",
-                             "log the guest PC of stores into a KSEG range: \"lo,hi\" (hex)",
-                             /*persistable=*/false);
-BoolVar cv_guest_store_watch_registers("PSXPORT_WWATCH_GPR",
-                                       false,
-                                       "the whole GPR file per PSXPORT_WWATCH hit",
-                                       /*persistable=*/false);
-BoolVar cv_guest_store_watch_backtrace("PSXPORT_WWATCH_BT",
-                                       false,
-                                       "host backtrace per PSXPORT_WWATCH hit",
-                                       /*persistable=*/false);
-BoolVar cv_spu_dma_log("PSXPORT_SPUDMA", false, "log RAM-to-SPU DMA transfers", /*persistable=*/false);
-TextVar
-    cv_snapshot_frames("PSXPORT_SNAP_AT", "", "machine snapshot at these frames: comma list", /*persistable=*/false);
-TextVar cv_snapshot_every("PSXPORT_SNAP_EVERY", "", "machine snapshot every N frames", /*persistable=*/false);
-TextVar cv_snapshot_max("PSXPORT_SNAP_MAX", "", "cap on scheduled machine snapshots", /*persistable=*/false);
-IntVar cv_present_dump_first_fence("PSXPORT_FPS60_DUMP_FROM",
-                                   0,
-                                   "first presentation fence the fps60dump channel writes",
-                                   /*persistable=*/false);
-BoolVar cv_gate_presentation("PSXPORT_GATE_PRESENTATION",
-                             false,
-                             "fail the frame when the presentation ledger does not reconcile",
-                             /*persistable=*/false);
-TextVar cv_present_shot_frames("PSXPORT_PRESENT_SHOT_AT",
-                               "",
-                               "screenshot the presented image at these present indices: comma list",
-                               /*persistable=*/false);
-TextVar cv_gpu_ram_dump("PSXPORT_GRAMDUMP", "", "write guest RAM at \"frame:path\"", /*persistable=*/false);
-TextVar cv_gpu_dump_dir("PSXPORT_GPU_DUMP",
-                        "",
-                        "write a PPM of every presented frame into this directory",
-                        /*persistable=*/false);
-TextVar cv_gpu_shot_frames("PSXPORT_SHOT_AT",
-                           "",
-                           "screenshot the native frame at these frames: comma list",
-                           /*persistable=*/false);
-IntVar cv_gpu_scene_dump_frame("PSXPORT_SCENEDUMP",
-                               -1,
-                               "log the ordering-table scene at this frame (-1 = off)",
-                               /*persistable=*/false);
-BoolVar
-    cv_gpu_validation("PSXPORT_GPU_DEBUG", false, "create the SDL GPU device with validation", /*persistable=*/false);
-BoolVar cv_gpu_fault_override("PSXPORT_GPU_FAULT_OVERRIDE",
-                              false,
-                              "start despite a recorded GPU fault",
-                              /*persistable=*/false);
-TextVar cv_present_sink("PSXPORT_PRESENT_SINK", "", "headless present sink size \"WxH\"", /*persistable=*/false);
-TextVar cv_movie_fps("PSXPORT_FMV_FPS", "", "0 plays movies uncapped", /*persistable=*/false);
-IntVar cv_movie_max_frames("PSXPORT_FMV_MAXFRAMES", 0, "movie frames to play (0 = all)", /*persistable=*/false);
-BoolVar cv_movie_dc_only("PSXPORT_FMV_DCONLY",
-                         false,
-                         "decode movie blocks from DC only (diagnostic)",
-                         /*persistable=*/false);
-BoolVar cv_movie_row_major("PSXPORT_FMV_ROWMAJOR",
-                           false,
-                           "place movie blocks row-major (A/B diagnostic)",
-                           /*persistable=*/false);
-BoolVar cv_movie_dump_codes("PSXPORT_FMV_DUMPCODES", false, "log decoded movie run-level codes", /*persistable=*/false);
-TextVar cv_wav_capture_path("PSXPORT_WAV", "", "write the mixed audio to this WAV file", /*persistable=*/false);
-TextVar cv_spu_write_backtrace("PSXPORT_SPUBT",
-                               "",
-                               "host backtrace on writes to this SPU register offset (hex)",
-                               /*persistable=*/false);
-TextVar cv_guest_poke("PSXPORT_GUEST_POKE",
-                      "",
-                      "guest writes \"addr:val[:width],...\" (hex) applied each frame",
-                      /*persistable=*/false);
-TextVar cv_forced_buttons("PSXPORT_FORCE_BUTTONS", "", "pulse this active-low pad mask (hex)", /*persistable=*/false);
-TextVar cv_forced_hold("PSXPORT_FORCE_HOLD",
-                       "",
-                       "hold this active-low pad mask (hex) from PSXPORT_FORCE_HOLD_AT",
-                       /*persistable=*/false);
-TextVar cv_forced_hold_at("PSXPORT_FORCE_HOLD_AT", "", "frame PSXPORT_FORCE_HOLD starts", /*persistable=*/false);
-IntVar
-    cv_forced_stop_at("PSXPORT_FORCE_STOP_AT", -1, "frame all forced input stops (-1 = never)", /*persistable=*/false);
-TextVar
-    cv_pad_shot_frames("PSXPORT_PAD_SHOT_AT", "", "screenshot at these pad frames: comma list", /*persistable=*/false);
-TextVar
-    cv_pad_dump_frames("PSXPORT_PAD_DUMP_AT", "", "dump RAM at these pad frames: comma list", /*persistable=*/false);
-TextVar cv_pad_trace("PSXPORT_PAD_TRACE", "", "trace pad frames \"lo-hi\" or up to \"hi\"", /*persistable=*/false);
-BoolVar cv_no_host_pads("PSXPORT_PAD_NOPAD", false, "open no host controllers", /*persistable=*/false);
-BoolVar cv_memory_census("PSXPORT_MEMCENSUS", false, "count host allocations by call site", /*persistable=*/false);
-TextVar cv_memory_census_path("PSXPORT_MEMCENSUS_OUT",
-                              "",
-                              "host allocation census output (default scratch/raw/memcensus.txt)",
-                              /*persistable=*/false);
+Var<std::string> cv_store_watch("PSXPORT_CW", "", kRunOnly);
+Var<long> cv_store_watch_limit("PSXPORT_CW_MAX", 64, kRunOnly);
+Var<bool> cv_store_watch_registers("PSXPORT_CW_GPR", false, kRunOnly);
+Var<bool> cv_store_watch_backtrace("PSXPORT_CW_BT", false, kRunOnly);
+Var<std::string> cv_snapshot_at("PSXPORT_SNAP_AT", "", kRunOnly);
+Var<long> cv_snapshot_every("PSXPORT_SNAP_EVERY", 0, kRunOnly);
+Var<long> cv_snapshot_max("PSXPORT_SNAP_MAX", 8, kRunOnly);
+Var<long> cv_present_dump_first_fence("PSXPORT_FPS60_DUMP_FROM", 0, kRunOnly);
+Var<bool> cv_gate_presentation("PSXPORT_GATE_PRESENTATION", false, kRunOnly);
+Var<std::string> cv_present_shot_frames("PSXPORT_PRESENT_SHOT_AT", "", kRunOnly);
+Var<std::string> cv_gpu_ram_dump("PSXPORT_GRAMDUMP", "", kRunOnly);
+Var<std::string> cv_gpu_dump_dir("PSXPORT_GPU_DUMP", "", kRunOnly);
+Var<std::string> cv_gpu_shot_frames("PSXPORT_SHOT_AT", "", kRunOnly);
+Var<long> cv_gpu_scene_dump_frame("PSXPORT_SCENEDUMP", -1, kRunOnly);
+Var<bool> cv_gpu_validation("PSXPORT_GPU_DEBUG", false, kRunOnly);
+Var<bool> cv_gpu_fault_override("PSXPORT_GPU_FAULT_OVERRIDE", false, kRunOnly);
+Var<std::string> cv_present_sink("PSXPORT_PRESENT_SINK", "", kRunOnly);
+Var<std::string> cv_movie_fps("PSXPORT_FMV_FPS", "", kRunOnly);
+Var<long> cv_movie_max_frames("PSXPORT_FMV_MAXFRAMES", 0, kRunOnly);
+Var<bool> cv_movie_dc_only("PSXPORT_FMV_DCONLY", false, kRunOnly);
+Var<bool> cv_movie_row_major("PSXPORT_FMV_ROWMAJOR", false, kRunOnly);
+Var<bool> cv_movie_dump_codes("PSXPORT_FMV_DUMPCODES", false, kRunOnly);
+Var<std::string> cv_wav_capture_path("PSXPORT_WAV", "", kRunOnly);
+Var<std::string> cv_spu_write_backtrace("PSXPORT_SPUBT", "", kRunOnly);
+Var<std::string> cv_guest_poke("PSXPORT_GUEST_POKE", "", kRunOnly);
+Var<std::string> cv_forced_buttons("PSXPORT_FORCE_BUTTONS", "", kRunOnly);
+Var<std::string> cv_forced_hold("PSXPORT_FORCE_HOLD", "", kRunOnly);
+Var<long> cv_forced_hold_at("PSXPORT_FORCE_HOLD_AT", 0, kRunOnly);
+Var<long> cv_forced_stop_at("PSXPORT_FORCE_STOP_AT", -1, kRunOnly);
+Var<std::string> cv_pad_shot_frames("PSXPORT_PAD_SHOT_AT", "", kRunOnly);
+Var<std::string> cv_pad_dump_frames("PSXPORT_PAD_DUMP_AT", "", kRunOnly);
+Var<bool> cv_no_host_pads("PSXPORT_PAD_NOPAD", false, kRunOnly);
+Var<bool> cv_memory_census("PSXPORT_MEMCENSUS", false, kRunOnly);
+Var<std::string> cv_memory_census_path("PSXPORT_MEMCENSUS_OUT", "", kRunOnly);
+
+const Registration kRegistration{
+    cv_store_watch,       cv_store_watch_limit,    cv_store_watch_registers, cv_store_watch_backtrace,
+    cv_snapshot_at,       cv_snapshot_every,       cv_snapshot_max,          cv_present_dump_first_fence,
+    cv_gate_presentation, cv_present_shot_frames,  cv_gpu_ram_dump,          cv_gpu_dump_dir,
+    cv_gpu_shot_frames,   cv_gpu_scene_dump_frame, cv_gpu_validation,        cv_gpu_fault_override,
+    cv_present_sink,      cv_movie_fps,            cv_movie_max_frames,      cv_movie_dc_only,
+    cv_movie_row_major,   cv_movie_dump_codes,     cv_wav_capture_path,      cv_spu_write_backtrace,
+    cv_guest_poke,        cv_forced_buttons,       cv_forced_hold,           cv_forced_hold_at,
+    cv_forced_stop_at,    cv_pad_shot_frames,      cv_pad_dump_frames,       cv_no_host_pads,
+    cv_memory_census,     cv_memory_census_path,
+};
+
+// A malformed list arms nothing, and says so.
+std::vector<std::uint32_t> frameList(const Var<std::string> &var) {
+  std::optional<std::vector<std::uint32_t>> frames = parseUnsignedList(var.get(), 0);
+  if (!frames) {
+    lucent::error("cfg", "{}='{}' is not a list of frame numbers; nothing is scheduled", var.name(), var.get());
+    return {};
+  }
+  return std::move(*frames);
+}
+
+std::optional<std::uint16_t> buttonMask(const Var<std::string> &var) {
+  if (var.get().empty()) {
+    return std::nullopt;
+  }
+  const std::optional<std::uint32_t> mask = parseUnsigned(var.get(), 16);
+  if (!mask || *mask > 0xFFFFu) {
+    lucent::error("cfg", "{}='{}' is not a hex pad mask; ignored", var.name(), var.get());
+    return std::nullopt;
+  }
+  return static_cast<std::uint16_t>(*mask);
+}
+
+std::uint32_t nonNegative(const Var<long> &var) {
+  return var.get() > 0 ? static_cast<std::uint32_t>(var.get()) : 0u;
+}
+
+std::optional<GuestPoke> parsePoke(std::string_view entry) {
+  const std::vector<std::string_view> fields = splitList(entry, ":");
+  if (fields.size() < 2 || fields.size() > 3) {
+    return std::nullopt;
+  }
+  const std::optional<std::uint32_t> address = parseUnsigned(fields[0], 16);
+  const std::optional<std::uint32_t> value = parseUnsigned(fields[1], 16);
+  const std::optional<std::uint32_t> width = fields.size() == 3 ? parseUnsigned(fields[2], 10) : 1u;
+  if (!address || !value || !width || (*width != 1 && *width != 2 && *width != 4)) {
+    return std::nullopt;
+  }
+  return GuestPoke{*address, *value, *width};
+}
 
 } // namespace
 
-std::string cpu_store_watch() {
-  return cv_cpu_store_watch.get();
+StoreWatchConfig store_watch() {
+  StoreWatchConfig config{cv_store_watch.get(),
+                          std::nullopt,
+                          nonNegative(cv_store_watch_limit),
+                          cv_store_watch_registers.get(),
+                          cv_store_watch_backtrace.get()};
+  if (const std::optional<NumberPair> pair = parsePair(config.text, kHexRange)) {
+    config.range = GuestAddressRange{pair->first, pair->second};
+  }
+  return config;
 }
 
-long cpu_store_watch_limit() {
-  return cv_cpu_store_watch_limit.get();
-}
-
-bool cpu_store_watch_backtrace() {
-  return cv_cpu_store_watch_backtrace.get();
-}
-
-std::string guest_store_watch() {
-  return cv_guest_store_watch.get();
-}
-
-bool guest_store_watch_registers() {
-  return cv_guest_store_watch_registers.get();
-}
-
-bool guest_store_watch_backtrace() {
-  return cv_guest_store_watch_backtrace.get();
-}
-
-bool spu_dma_log() {
-  return cv_spu_dma_log.get();
-}
-
-std::string snapshot_frames() {
-  return cv_snapshot_frames.get();
-}
-
-std::string snapshot_every() {
-  return cv_snapshot_every.get();
-}
-
-std::string snapshot_max() {
-  return cv_snapshot_max.get();
+SnapshotSchedule snapshot_schedule() {
+  return {frameList(cv_snapshot_at), nonNegative(cv_snapshot_every), nonNegative(cv_snapshot_max)};
 }
 
 long present_dump_first_fence() {
@@ -212,36 +181,35 @@ std::string spu_write_backtrace() {
   return cv_spu_write_backtrace.get();
 }
 
-std::string guest_poke() {
+std::optional<std::vector<GuestPoke>> guest_poke() {
+  std::vector<GuestPoke> pokes;
+  for (const std::string_view entry : splitList(cv_guest_poke.get(), ",")) {
+    const std::optional<GuestPoke> poke = parsePoke(entry);
+    if (!poke) {
+      return std::nullopt;
+    }
+    pokes.push_back(*poke);
+  }
+  return pokes;
+}
+
+std::string guest_poke_text() {
   return cv_guest_poke.get();
 }
 
-std::string forced_buttons() {
-  return cv_forced_buttons.get();
+ForcedInput forced_input() {
+  return {buttonMask(cv_forced_buttons),
+          buttonMask(cv_forced_hold),
+          nonNegative(cv_forced_hold_at),
+          cv_forced_stop_at.get()};
 }
 
-std::string forced_hold() {
-  return cv_forced_hold.get();
+std::vector<std::uint32_t> pad_shot_frames() {
+  return frameList(cv_pad_shot_frames);
 }
 
-std::string forced_hold_at() {
-  return cv_forced_hold_at.get();
-}
-
-long forced_stop_at() {
-  return cv_forced_stop_at.get();
-}
-
-std::string pad_shot_frames() {
-  return cv_pad_shot_frames.get();
-}
-
-std::string pad_dump_frames() {
-  return cv_pad_dump_frames.get();
-}
-
-std::string pad_trace() {
-  return cv_pad_trace.get();
+std::vector<std::uint32_t> pad_dump_frames() {
+  return frameList(cv_pad_dump_frames);
 }
 
 bool no_host_pads() {

@@ -8,9 +8,7 @@
 // the tail-jump stub at `0x8005DB24`; `0x801FFF00` is the top of main RAM, which is a stack and is
 // not a load address any program could be loaded at.
 //
-// The service reuses the framework's executable-admission owner (`psx::cpu::loadPsxExeImage`) and its
-// top-level register policy (`applyPsxExeTopLevelRegisters`) rather than admitting a second loader,
-// and it says where the guest continues through the executor's exit contract instead of returning.
+// It loads through `psx::cpu::loadTopLevelPsxExe` and continues the guest through the executor's exit contract.
 #pragma once
 
 #include <cstdint>

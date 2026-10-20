@@ -37,8 +37,9 @@ Provisioning provisionExecutable(const TitleIdentity &title, const std::filesyst
   }
   const std::string discPath(title.discExecutablePath);
   const std::vector<std::uint8_t> &bytes = selection.bytes;
-  if (!Fs::writeFile(target.string(), bytes.data(), bytes.size())) {
-    lucent::error("provision", "cannot write {}", target.string());
+  std::string writeError;
+  if (!Fs::writeFile(target.string(), bytes.data(), bytes.size(), writeError)) {
+    lucent::error("provision", "{}", writeError);
     return Provisioning::Unavailable;
   }
   lucent::info("provision", "extracted {} from {}'s disc to {}", discPath, title.displayName, target.string());

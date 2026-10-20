@@ -1,11 +1,10 @@
-// The override differential's two outputs: the shutdown summary through the logger and the
-// machine-readable JSON report `tools/override_differential_gate.py` gates on. The failure rules are
-// stated here and re-derived by the gate from the raw counts, so neither trusts the other's verdict.
+// The override differential's shutdown summary and its JSON report.
 #include "override_differential.h"
 
 #include "fs_util.h"
 
 #include <lucent/log.h>
+#include <lucent/text.h>
 
 #include <string>
 #include <vector>
@@ -23,40 +22,8 @@ inline constexpr std::string_view kNotObserved =
     "device or host state a native override changes by calling a device model directly in C++ rather than "
     "through Core's memory API; caller-saved registers (at a0-a3 t0-t9 k0 k1 hi lo)";
 
-std::string jsonString(std::string_view text) {
-  std::string out = "\"";
-  for (const char c : text) {
-    switch (c) {
-    case '"':
-      out += "\\\"";
-      break;
-    case '\\':
-      out += "\\\\";
-      break;
-    case '\n':
-      out += "\\n";
-      break;
-    case '\t':
-      out += "\\t";
-      break;
-    default:
-      if (static_cast<unsigned char>(c) < 0x20) {
-        out += lucent::format("\\u{:04x}", static_cast<unsigned>(c));
-      } else {
-        out += c;
-      }
-    }
-  }
-  out += '"';
-  return out;
-}
-
 std::string hexAddress(std::uint32_t address) {
-  return jsonString(lucent::format("0x{:08X}", address));
-}
-
-bool selectorMatches(const DifferentialSelector &selector, const DifferentialKeyStats &stats) {
-  return selector.address ? stats.key.address == *selector.address : stats.name == selector.text;
+  return lucent::text::json_quote(lucent::format("0x{:08X}", address));
 }
 
 // The rules the gate re-derives: a requested selector with zero sampled calls, or with samples none of
@@ -67,7 +34,7 @@ std::vector<std::string> failuresOf(const OverrideDifferential &differential) {
     std::uint64_t keys = 0;
     std::uint64_t compared = 0;
     for (const DifferentialKeyStats &stats : differential.keys()) {
-      if (selectorMatches(selector, stats)) {
+      if (selector.matches(stats.key.address, stats.name)) {
         ++keys;
         compared += stats.match + stats.mismatch;
       }
@@ -121,9 +88,9 @@ std::string mismatchJson(const DifferentialKeyStats &stats) {
   return lucent::format("{{\"call\": {}, \"what\": {}, \"original\": {}, \"native\": {}, \"registers_differing\": {}, "
                         "\"memory_ranges_differing\": {}, \"memory_bytes_differing\": {}}}",
                         stats.firstMismatchCall.value_or(0),
-                        jsonString(outcome.difference->what),
-                        jsonString(outcome.difference->original),
-                        jsonString(outcome.difference->native),
+                        lucent::text::json_quote(outcome.difference->what),
+                        lucent::text::json_quote(outcome.difference->original),
+                        lucent::text::json_quote(outcome.difference->native),
                         outcome.registersDiffering,
                         outcome.memoryRangesDiffering,
                         outcome.memoryBytesDiffering);
@@ -142,18 +109,18 @@ std::string journalBoundJson(const DifferentialKeyStats &stats) {
       "{{\"call\": {}, \"path\": {}, \"bound\": {}, \"effects_journaled\": {}, \"effects_refused\": {}, "
       "\"stopped_call\": {}, \"offending\": {}}}",
       stats.firstMismatchCall.value_or(0),
-      jsonString(violation.mode == psx::cpu::SideEffectMode::Record ? "original" : "native"),
+      lucent::text::json_quote(violation.mode == psx::cpu::SideEffectMode::Record ? "original" : "native"),
       psx::cpu::kMaxSideEffectsPerCall,
       violation.effects,
       violation.refused,
       violation.stoppedCall ? "true" : "false",
-      jsonString(psx::cpu::describeSideEffect(violation.offending)));
+      lucent::text::json_quote(psx::cpu::describeSideEffect(violation.offending)));
 }
 
 std::string keyJson(const DifferentialKeyStats &stats) {
   std::string reasons;
   for (const auto &[reason, count] : stats.incomparableByReason) {
-    reasons += lucent::format("{}{}: {}", reasons.empty() ? "" : ", ", jsonString(reason), count);
+    reasons += lucent::format("{}{}: {}", reasons.empty() ? "" : ", ", lucent::text::json_quote(reason), count);
   }
   return lucent::format(
       "{{\"name\": {}, \"address\": {}, \"image_id\": {}, \"image_generation\": {}, "
@@ -162,7 +129,7 @@ std::string keyJson(const DifferentialKeyStats &stats) {
       "\"largest_sampled_call_effects\": {}, \"largest_sampled_call_number\": {}, "
       "\"effects_bound\": {}, \"journal_bound_faults\": {}, \"first_journal_bound\": {}, "
       "\"first_mismatch\": {}}}",
-      jsonString(stats.name),
+      lucent::text::json_quote(stats.name),
       hexAddress(stats.key.address),
       stats.key.image.id,
       stats.key.image.generation,
@@ -197,25 +164,25 @@ std::string OverrideDifferential::reportJson(bool complete) const {
   const std::string selectors = jsonArray(config_.selectors, [&](const DifferentialSelector &selector) {
     std::uint64_t keys = 0;
     for (const DifferentialKeyStats &stats : keys_) {
-      keys += selectorMatches(selector, stats) ? 1u : 0u;
+      keys += selector.matches(stats.key.address, stats.name) ? 1u : 0u;
     }
     return lucent::format("{{\"selector\": {}, \"address\": {}, \"keys_matched\": {}, \"sampled\": {}}}",
-                          jsonString(selector.text),
+                          lucent::text::json_quote(selector.text),
                           selector.address ? hexAddress(*selector.address) : std::string("null"),
                           keys,
                           sampledFor(selector));
   });
   const std::string keys = jsonArray(keys_, keyJson);
   const std::string failures = jsonArray(failuresOf(*this), [](const std::string &failure) {
-    return jsonString(failure);
+    return lucent::text::json_quote(failure);
   });
   return lucent::format("{{\n  \"schema\": {},\n  \"complete\": {},\n  \"compared\": {},\n  \"not_observed\": {},\n"
                         "  \"config\": {{\"first_calls\": {}, \"every_kth\": {}, \"dead_stack_bytes\": {}}},\n"
                         "  \"selectors\": {},\n  \"keys\": {},\n  \"failures\": {}\n}}\n",
-                        jsonString(kSchema),
+                        lucent::text::json_quote(kSchema),
                         complete ? "true" : "false",
-                        jsonString(kCompared),
-                        jsonString(kNotObserved),
+                        lucent::text::json_quote(kCompared),
+                        lucent::text::json_quote(kNotObserved),
                         config_.firstCalls,
                         config_.everyKth,
                         config_.deadStackBytes,
@@ -226,8 +193,9 @@ std::string OverrideDifferential::reportJson(bool complete) const {
 
 bool OverrideDifferential::writeReport(bool complete) const {
   const std::string json = reportJson(complete);
-  if (!Fs::writeFile(config_.reportPath, json.data(), json.size())) {
-    lucent::error("override-diff", "could not write the report to {}", config_.reportPath);
+  std::string error;
+  if (!Fs::writeFile(config_.reportPath, json.data(), json.size(), error)) {
+    lucent::error("override-diff", "could not write the report: {}", error);
     return false;
   }
   return true;

@@ -1,23 +1,9 @@
-// Accounting for the BIOS card syscalls a title actually makes.
-//
-// WHY THIS EXISTS. `Memcard::dispatchBiosB0`/`dispatchBiosA0` dispatch by function number and end in
-// `default: return 0` -- "not handled", silently, leaving no record that the call happened. A title
-// that stalls waiting on a card function this runtime does not implement therefore produces no
-// evidence at all: the card channel prints the image it opened and nothing else, and an
-// investigator reads that silence as "the title made no card calls".
-//
-// MEASURED 2026-09-19 on Spyro 1: a run that reaches gameplay through the save menu and a run that
-// stalls in title sub_state 12 for 12,000 fields emitted the SAME two card lines. The absence said
-// nothing about either, because nothing in the dispatcher was counting.
-//
-// So this counts every dispatched function, handled and unhandled, and reports the totals with
-// their denominator at teardown -- including the all-zero case, which is the one an investigator
-// most needs to be able to tell apart from "the instrument never ran".
+// Counts every BIOS card syscall, handled or not, and reports the totals at teardown.
 #pragma once
 
 #include <cstdint>
 
-namespace psxport::card {
+namespace psx::platform::card {
 
 // Which BIOS vector a call arrived on. The same function number means different things on each.
 enum class Vector : uint8_t { A0, B0 };
@@ -48,4 +34,4 @@ private:
   uint32_t mUnhandled = 0;
 };
 
-} // namespace psxport::card
+} // namespace psx::platform::card

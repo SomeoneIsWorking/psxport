@@ -1,6 +1,8 @@
 // stock_dma_callbacks.h — libapi DMACallback keeping its per-channel table in guest RAM.
 #pragma once
 
+#include "dma_irq.h"
+
 #include <cstdint>
 
 class Core;
@@ -19,7 +21,7 @@ public:
   void bind(Game &game) const && = delete;
 
   // The callback the table holds for `channel` now; 0 when none.
-  std::uint32_t callback(Core &core, int channel) const;
+  std::uint32_t callback(Core &core, psx::dma::DmaChannel channel) const;
   // libapi masks the DMA line around its GPU queue loops, and its handler runs only while it is open.
   static bool handlerRuns(const Core &core);
 
