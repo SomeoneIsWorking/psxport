@@ -264,7 +264,12 @@ Flagged: frame_presenter\*, display_presenter\*, gpu_vk_present\*, gpu_vk_record
   - **Diagnostics in these files.** `DisplayPresenter` uses A3's `FrameSchedule` and typed shot lists. `dumpGuestRam`, `parseFrameAndPath`, `parseFrameList` and the GRAMDUMP knob are deleted. `dump_present` keeps its per-show hook on the shared schedule.
   - **Dead code.** The `ProjParams` camera and projection cluster, `guestCoordinatesWidened`, `samePicture`, `PRESENT_DISPLAY_ASPECT_H`, ledger accessors, `identityFor`, the `OtNode` accessors, `truncated_` and its narration, the `faulted()`/destructor/`int` latch, and `pixel_width`/`pixel_height` (replaced by `pixelSize()`).
   - **Narration** in every gpu, present, shader and pane block listed.
+- **Internal resolution costs GPU only.** Today `PlanBuilder::addTriangle` walks scaled scanlines on the CPU and emits one quad per scaled row per plane, so CPU work and op count grow with ires. The CPU instead does a constant-cost setup per primitive at the target scale (edge equations, bounding box, the gpu.c coverage rule's integer inputs) and emits one op per primitive. `record.frag` evaluates coverage per pixel from those edges, with exact integer arithmetic (emulated 64-bit where needed), so there is one coverage rule and it matches gpu.c at 1x. Guest VRAM and the Beetle device stay native; ires changes only the host image size. Op counts at 1x and 4x must be equal for the same frame.
+- **No dithering in the host picture (psx-spyro 0200).** `record.frag` stops dithering. The dither LUT, `kDitherTable`, `ditherChannel` and the CPU pack are deleted. The guest device keeps its dither bit as guest state.
+- **Fades span the widescreen canvas (psx-spyro 0199).** Trace Spyro's fade primitive at 16:9. If the record rule for buffer-spanning draws is incomplete, fix it in `record_raster_setup`/`record_geometry`. If the guest site needs widening instead, write the owner into 0199 for B4.
 - **Spyro proof:**
+  - Op-count log lines for the same Spyro 1 frame at ires 1 and 4 are equal; shots at both scales show the same picture.
+  - Spyro 1 sky gradient before/after shows no dither; a 16:9 shot mid-fade shows the margins darkened.
   - In a Spyro 1 level, take display-path and record-path shots at aspect 4:3 and 16:9, plus fps60 in-between dumps. The HUD should sit at the screen edges, logo fades should be intact, and there should be no cracks.
   - The picker composite shows all three panes and the pane shot reports coverage.
   - Run PSXPORT_GPU_DUMP and `shot` on the same frame. **Expected change:** the dump's 15-bit pixels get brighter, up to +7 per channel.
@@ -315,7 +320,9 @@ Runs after B2.
   - Dead code deleted: `ChoiceNavigator`/`ChoiceContent`/`content()`/`heading`, the Adjust-row machinery, the `pace_plan`/`session_control` namespace-before-pragma, and the `c_subsys.h` include.
   - `frame_loop_shell` calls `frameDriverAs`.
   - Narration trimmed.
+- **The selector is a screen of the product (psx-spyro 0197).** It is presented through the same frame present path, overlay, RmlUi menu and input owners as a game frame, with the panels as that screen's content. The separate picker composite path is deleted. Panel pictures come from each panel session's own image at its own resolution, and nothing is cover-cropped or magnified.
 - **Spyro proof:**
+  - The in-game RmlUi menu opens over the selector and its settings apply there.
   - Picker cycles Spyro 1, 2 and 3 with D-pad Left/Right (**changed**: L2/R2 no longer move it) and through the control channel's `select left|right`.
   - Each panel boots and the selection follows.
   - Menu rows and the dev panel work.
@@ -345,6 +352,7 @@ Runs after B1 (the present namespace) and A4.
     - One Spyro 3 drawer template.
   - **Spyro 1 render facts.** Literals come from A3's `guest_globals` (sine/cos, light struct, models, camera, scratchpad + offset, `kRenderGlobals` packet cursor/OT); `ScreenOverlays::kPacketCursor` and `OrderingTable::kBinTablePointer` are deleted. Glow and sparkle pool layout is owned by `glows.h`. Header helpers used in only one translation unit become anonymous-namespace functions.
   - **Narration** in the HUD and render blocks.
+- **Gameplay in-betweens judder (psx-spyro 0196).** Reproduce with fps60 on `warp 10` per title. Find the object whose in-between position does not lie between its two records, or the camera and an object blended on different terms, and fix it at the producer or pairing that places it. Follow the interpolation contract: identity from a draw-site tag, transforms lerped and never screen vertices, and a frame with any unowned entry shown as frame n whole.
 - **Spyro proof:**
   - In Spyro 1, 2 and 3 levels (warp), take fps60 in-between dumps and record-path shots before and after. Terrain, actors, sky, glows, sparkles, particles, shadows, sprite queue, HUD anchors at 16:9, and the letterbox/tint must match.
   - **Expected change:** the unified E1 rule now applies texpage and blend to textured sprites.
