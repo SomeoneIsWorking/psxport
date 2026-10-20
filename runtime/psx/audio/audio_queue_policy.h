@@ -1,5 +1,7 @@
 #pragma once
 
+#include "spu_field_cadence.h"
+
 #include <algorithm>
 
 // Host playback buffering policy. The SPU still advances from the exact delivered display-field
@@ -12,7 +14,7 @@
 // hard limit no steady producer reaches.
 class AudioQueuePolicy {
 public:
-  static constexpr int kSampleRateHz = 44100;
+  static constexpr int kSampleRateHz = static_cast<int>(SpuFieldCadence::kSampleRateHz);
   static constexpr int kChannels = 2;
   static constexpr int kBytesPerSample = 2;
   // Four NTSC fields of producer gap (a 30 Hz title missing two frames) plus one device period:
@@ -23,7 +25,8 @@ public:
   // Largest consumption-rate trim: 8.6 cents, below what a listener hears as pitch.
   static constexpr double kMaxRateTrim = 0.005;
 
-  static constexpr int kBytesPerSecond = kSampleRateHz * kChannels * kBytesPerSample;
+  static constexpr int kBytesPerFrame = kChannels * kBytesPerSample;
+  static constexpr int kBytesPerSecond = kSampleRateHz * kBytesPerFrame;
   static constexpr int kPlaybackTargetBytes = (kBytesPerSecond * kPlaybackTargetMs) / 1000;
   static constexpr int kQueueLimitBytes = (kBytesPerSecond * kQueueLimitMs) / 1000;
 

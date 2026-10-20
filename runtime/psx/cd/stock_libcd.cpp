@@ -7,13 +7,15 @@
 #include "execution_control.h"
 #include "game.h"
 #include "guest_call.h"
+#include "host_clock.h"
 #include "platform_hle.h"
+#include "r3000.h"
 #include "stock_cd_response.h"
 #include "xa_state.h"
 
 #include <algorithm>
-#include <chrono>
 #include <lucent/log.h>
+#include <optional>
 
 namespace psx::cd {
 namespace {
@@ -25,33 +27,12 @@ const StockLibcd &libcdOf(const Core *core) {
   return *core->game->cd.stockLibrary();
 }
 
-void readEntry(Core *core) {
-  libcdOf(core).read(*core);
-}
-void readSyncEntry(Core *core) {
-  libcdOf(core).readSync(*core);
-}
-void commandEntry(Core *core) {
-  libcdOf(core).command(*core);
-}
-void controlEntry(Core *core) {
-  libcdOf(core).control(*core);
-}
-void controlFireEntry(Core *core) {
-  libcdOf(core).controlFire(*core);
-}
-void syncEntry(Core *core) {
-  libcdOf(core).sync(*core);
-}
-void searchFileEntry(Core *core) {
-  libcdOf(core).searchFile(*core);
-}
-void getSectorEntry(Core *core) {
-  libcdOf(core).getSector(*core);
+template <void (StockLibcd::*Body)(Core &) const> void entry(Core *core) {
+  (libcdOf(core).*Body)(*core);
 }
 
-// Applies a command's position parameter to the XA cursor and the data read position. One owner for
-// the explicit Setloc and the implicit one a position-carrying command performs (issue 0115).
+// The explicit Setloc and the implicit one a position-carrying command performs (issue 0115). A lead-in
+// position is no data sector: the read position is cleared and the XA cursor left where it was.
 void positionFromParam(Core &core, std::uint32_t param, const char *why) {
   if (param == 0) {
     return;
@@ -60,19 +41,18 @@ void positionFromParam(Core &core, std::uint32_t param, const char *why) {
   const auto ss = static_cast<std::uint8_t>(core.mem_r8(param + 1));
   const auto ff = static_cast<std::uint8_t>(core.mem_r8(param + 2));
   Cd &cd = core.game->cd;
-  core.game->xa.setLoc(mm, ss, ff);
-  // Repositioning invalidates the buffered sector.
+  const int lba = msfToLba(mm, ss, ff);
   cd.sec_pos = 0;
   cd.sec_len = 0;
   cd.sec_lba = -1;
-  cd.setloc_lba = msfToLba(mm, ss, ff);
-  lucent::debug("cd", "{} {:02X}:{:02X}:{:02X} -> LBA {}", why, mm, ss, ff, cd.setloc_lba);
-}
-
-std::uint64_t steadyNowNs() {
-  return static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
-          .count());
+  if (lba < 0) {
+    cd.setloc_lba = -1;
+    lucent::error("cd", "{} {:02X}:{:02X}:{:02X} is inside the lead-in; no position set", why, mm, ss, ff);
+    return;
+  }
+  core.game->xa.setLoc(static_cast<std::uint32_t>(lba));
+  cd.setloc_lba = lba;
+  lucent::debug("cd", "{} {:02X}:{:02X}:{:02X} -> LBA {}", why, mm, ss, ff, lba);
 }
 
 // The command libcd passed in a0/a1, answered into `result`.
@@ -85,21 +65,19 @@ StockCdCommand sentCommand(const Core &core, std::uint32_t result) {
 void StockLibcd::bind(Game &game) const & {
   game.cd.bindStockLibrary(*this);
   PlatformHle &table = game.platform_hle;
-  table.bindStock(entries_.read, readEntry);
-  table.bindStock(entries_.readSync, readSyncEntry);
-  table.bindStock(entries_.command, commandEntry);
-  table.bindStock(entries_.control, controlEntry);
-  table.bindStock(entries_.controlBlocking, controlEntry);
-  table.bindStock(entries_.controlFire, controlFireEntry);
-  table.bindStock(entries_.sync, syncEntry);
-  table.bindStock(entries_.searchFile, searchFileEntry);
-  table.bindStock(entries_.getSector, getSectorEntry);
+  table.bindStock(entries_.read, entry<&StockLibcd::read>);
+  table.bindStock(entries_.readSync, entry<&StockLibcd::readSync>);
+  table.bindStock(entries_.command, entry<&StockLibcd::command>);
+  table.bindStock(entries_.control, entry<&StockLibcd::control>);
+  table.bindStock(entries_.controlBlocking, entry<&StockLibcd::control>);
+  table.bindStock(entries_.controlFire, entry<&StockLibcd::controlFire>);
+  table.bindStock(entries_.sync, entry<&StockLibcd::sync>);
+  table.bindStock(entries_.searchFile, entry<&StockLibcd::searchFile>);
+  table.bindStock(entries_.getSector, entry<&StockLibcd::getSector>);
 }
 
 psx::cpu::ExecutionResult StockLibcd::callReady(Core &core, std::uint32_t callback) const {
-  constexpr std::uint32_t kDataReady = 1u;
-  return psx::cpu::dispatchGuestWithArguments(
-      core, callback, std::array<std::uint32_t, 2>{kDataReady, 0u}, psx::cpu::ExecutionBudget::currentTurn(core));
+  return psx::cpu::dispatchGuestNow(core, callback, static_cast<std::uint32_t>(CdcResponse::DataReady), 0u);
 }
 
 void StockLibcd::readStarted(Core &core) const {
@@ -120,23 +98,27 @@ void StockLibcd::driveFiniteRead(Core &core) const {
   }
   cd.in_stock_read = 1;
   cd.stock_reading = 1;
-  const R3000 saved = *static_cast<R3000 *>(&core);
+  std::optional<psx::cpu::ExecutionResult> exit;
   unsigned n = 0;
-  for (; n < kMaxBurstSectors && cd.stock_reading; n++) {
-    const std::uint32_t callback = core.mem_r32(readySlot_);
-    if (!callback) {
-      break;
-    }
-    const auto result = callReady(core, callback);
-    if (!result.returned()) {
-      *static_cast<R3000 *>(&core) = saved;
-      cd.in_stock_read = 0;
-      psx::cpu::completeOrPropagate(core, result);
-      return;
+  {
+    const psx::cpu::GuestContextScope context(core);
+    for (; n < kMaxBurstSectors && cd.stock_reading; n++) {
+      const std::uint32_t callback = core.mem_r32(readySlot_);
+      if (!callback) {
+        break;
+      }
+      auto result = callReady(core, callback);
+      if (!result.returned()) {
+        exit.emplace(std::move(result));
+        break;
+      }
     }
   }
-  *static_cast<R3000 *>(&core) = saved;
   cd.in_stock_read = 0;
+  if (exit) {
+    psx::cpu::completeOrPropagate(core, std::move(*exit));
+    return;
+  }
   if (n >= kMaxBurstSectors) {
     lucent::error("cd",
                   "stock read did not terminate after {} sectors; the guest never issued Pause/Stop. Read abandoned; "
@@ -173,26 +155,20 @@ void StockLibcd::applyCommand(Core &core) const {
   const std::uint8_t p0 = param ? static_cast<std::uint8_t>(core.mem_r8(param)) : 0;
   // The replaced command-send recorded Setloc/Setmode in guest RAM; libcd reads them back later.
   publishStockCommandWorkArea(core, workArea_, {static_cast<std::uint8_t>(cmd), param, 0u});
+  if (cmd == 0x02) {
+    positionFromParam(core, param, "setloc");
+  } else if (commandCarriesPosition(static_cast<std::uint8_t>(cmd))) {
+    positionFromParam(core, param, "implicit setloc");
+  }
   switch (cmd) {
-  case 0x0E: // Setmode, to the XA streamer and the controller (0x20 selects whole-sector framing)
-    game.xa.setMode(p0);
+  case 0x0E: // Setmode
     game.cdc.setMode(p0);
     break;
   case 0x0D: // Setfilter
-    game.xa.setFilter(p0, param ? static_cast<std::uint8_t>(core.mem_r8(param + 1)) : 0);
     game.cdc.setFilter(p0, param ? static_cast<std::uint8_t>(core.mem_r8(param + 1)) : 0);
     break;
-  case 0x02:
-    positionFromParam(core, param, "setloc");
-    break;
-  case 0x03: // SetlocL
-  case 0x15: // SeekL
-  case 0x16: // SeekP
-    positionFromParam(core, param, "implicit setloc");
-    break;
   case 0x06:
-  case 0x1B: // ReadN / ReadS: libcd's CdControl sends the implicit Setloc first (issue 0115)
-    positionFromParam(core, param, "implicit setloc");
+  case 0x1B: // ReadN / ReadS
     game.xa.start();
     // The controller reads too: streaming code waits on its DRQSTS bit before kicking DMA3.
     if (cd.setloc_lba >= 0) {
@@ -233,7 +209,7 @@ void StockLibcd::controlFire(Core &core) const {
 }
 
 void StockLibcd::sync(Core &core) const {
-  publishStockSync(core, core.r[psx::cpu::kA1]);
+  core.game->cd.stockResponse.publish(core, core.r[psx::cpu::kA1]);
   core.r[psx::cpu::kV0] = 2;
 }
 
@@ -290,8 +266,7 @@ void StockLibcd::getSector(Core &core) const {
   core.r[psx::cpu::kV0] = 0;
 }
 
-// CdRead(sectors, buf, mode): the whole read, synchronously, from the Setloc position. Bytes per sector
-// follow the guest's own mode selection: 2048 from offset 24, 2340 from 12 (whole sector), else 2328.
+// CdRead(sectors, buf, mode): the whole read, synchronously, from the Setloc position, framed by the guest's mode.
 void StockLibcd::read(Core &core) const {
   const std::uint32_t sectors = core.r[psx::cpu::kA0];
   const std::uint32_t buf = core.r[psx::cpu::kA1];
@@ -302,14 +277,12 @@ void StockLibcd::read(Core &core) const {
     core.r[psx::cpu::kV0] = 0;
     return;
   }
-  const std::uint32_t m = mode & 0x30u;
-  const std::uint32_t bytes = (m == 0x00u) ? 2048u : (m == 0x20u) ? 2340u : 2328u;
-  const std::uint32_t off = (m == 0x20u) ? 12u : 24u;
+  const SectorFraming framing = sectorFraming(static_cast<std::uint8_t>(mode));
+  const std::uint32_t bytes = framing.bytes;
 
-  std::uint8_t raw[2352];
+  std::uint8_t raw[kRawSectorBytes];
   for (std::uint32_t i = 0; i < sectors; i++) {
     const std::uint32_t lba = static_cast<std::uint32_t>(cd.setloc_lba) + i;
-    // Through the controller's sector source, so a hermetic test can feed fake sectors.
     if (!core.game->cdc.disc_read_raw_fn(&core.game->disc, lba, raw, sizeof raw)) {
       lucent::error("cd",
                     "CdRead: LBA {} unreadable at sector {}/{}; {} sector(s) delivered, the rest not written",
@@ -322,7 +295,7 @@ void StockLibcd::read(Core &core) const {
     }
     // A guest may stream a code module through CdRead (Tomba! 1 does), so each sector is reported.
     core.mem_write(
-        buf + i * bytes, std::span<const std::uint8_t>(raw + off, bytes), psx::cpu::ExecutableWriteSource::ModuleLoad);
+        buf + i * bytes, std::span<const std::uint8_t>(raw + framing.offset, bytes), psx::cpu::ExecutableWriteSource::ModuleLoad);
   }
   cd.setloc_lba += static_cast<std::int32_t>(sectors);
   cd.sec_pos = 0;
@@ -375,13 +348,10 @@ void StockLibcd::searchFile(Core &core) const {
   }
   const std::uint32_t lba = file->lba;
   const std::uint32_t size = file->size;
-  const std::uint32_t total = lba + 150u; // sector 0 is 00:02:00
-  auto bcd = [](std::uint32_t v) {
-    return static_cast<std::uint8_t>(((v / 10) << 4) | (v % 10));
-  };
-  core.mem_w8(loc + 0, bcd(total / (75u * 60u)));
-  core.mem_w8(loc + 1, bcd((total / 75u) % 60u));
-  core.mem_w8(loc + 2, bcd(total % 75u));
+  const std::array<std::uint8_t, 3> msf = lbaToMsf(static_cast<int>(lba));
+  core.mem_w8(loc + 0, msf[0]);
+  core.mem_w8(loc + 1, msf[1]);
+  core.mem_w8(loc + 2, msf[2]);
   core.mem_w8(loc + 3, 0);
   core.mem_w32(loc + 4, size);
   for (unsigned i = 0; i < 16; i++) {
@@ -403,7 +373,7 @@ void StockLibcd::pumpStream(Core &core, int sectors) const {
   if (!callback) {
     return;
   }
-  const std::uint64_t nowNs = steadyNowNs();
+  const std::uint64_t nowNs = psx::platform::hostNowNs();
   if (cd.stream_t0_ns == 0) {
     cd.stream_t0_ns = nowNs;
   }
@@ -423,21 +393,25 @@ void StockLibcd::pumpStream(Core &core, int sectors) const {
     return;
   }
   sectors = std::min(sectors, due);
-  const R3000 saved = *static_cast<R3000 *>(&core);
-  for (int i = 0; i < sectors && cd.stream_active; i++) {
-    game.timing.serviceCdc();
-    if (game.cdc.currentIrqType() != 1u) {
-      break;
-    }
-    cd.stream_delivered++;
-    const auto result = callReady(core, callback);
-    if (!result.returned()) {
-      *static_cast<R3000 *>(&core) = saved;
-      psx::cpu::completeOrPropagate(core, result);
-      return;
+  std::optional<psx::cpu::ExecutionResult> exit;
+  {
+    const psx::cpu::GuestContextScope context(core);
+    for (int i = 0; i < sectors && cd.stream_active; i++) {
+      game.timing.serviceCdc();
+      if (game.cdc.currentIrqType() != CdcResponse::DataReady) {
+        break;
+      }
+      cd.stream_delivered++;
+      auto result = callReady(core, callback);
+      if (!result.returned()) {
+        exit.emplace(std::move(result));
+        break;
+      }
     }
   }
-  *static_cast<R3000 *>(&core) = saved;
+  if (exit) {
+    psx::cpu::completeOrPropagate(core, std::move(*exit));
+  }
 }
 
 // The controller raises INT1 on its own drive clock and the guest's service delivers it, so a stream
@@ -475,7 +449,7 @@ int streamSectorsDue(StreamProgress progress, int sectorsPerSecond) {
     return 0;
   }
   const uint64_t due = owed - static_cast<uint64_t>(progress.delivered);
-  return static_cast<int>(due > static_cast<uint64_t>(CD_STREAM_MAX_BURST) ? CD_STREAM_MAX_BURST : due);
+  return static_cast<int>(std::min(due, static_cast<uint64_t>(kStreamMaxBurst)));
 }
 
 } // namespace psx::cd

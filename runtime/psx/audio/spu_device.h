@@ -1,66 +1,39 @@
-// spu_device.h — class SpuDevice — RAII owner of one per-instance Beetle SPU state (spu.c keeps
-// its struct layout private; we hold the opaque handle), plus the per-Game SBS write log. One per
-// Game so two cores keep SEPARATE SPU state; bound per core frame-step via bind() (hw_bind.cpp).
+// class SpuDevice: one Game's Beetle SPU state, its interrupt line and its debug counters.
 #pragma once
+#include "beetle_device_instance.h"
 #include "spu_beetle.h"
 #include "spu_state.h"
 #include <cstdint>
+#include <optional>
 class Core;
 
-class SpuDevice {
+class SpuDevice : public psx::platform::BeetleDeviceInstance<SPU_NewState, SPU_FreeState, SPU_BindState, SPU_Power> {
 public:
-  void *state = nullptr; // per-instance SPU state (Beetle spu.c), heap-allocated
-  int powered = 0;       // SPU_Power run on this instance's state yet? (lazy power on first bind)
-  // Asserted LEVEL of this instance's interrupt lines (only bit IRQ_BIT_SPU is driven here). I_STAT is
-  // edge-latched from it — see irq_edge.h and psx::audio::spu::raiseIrq (spu_device.cpp). Per-Game, so two cores keep
-  // separate interrupt lines exactly as they keep separate SPU state.
+  SpuDevice();
+
+  // Asserted level of this instance's interrupt line; I_STAT is edge-latched from it (spu_device.cpp).
   uint32_t irqLevel = 0;
+  psx::audio::spu::DebugCounters debug;
+  // PSXPORT_SPUBT: the register offset whose writes print a host backtrace.
+  std::optional<uint32_t> writeBacktraceOffset;
 
-  SpuDevice() {
-    state = SPU_NewState();
+  // Make this instance the live SPU with `core` its interrupt target, powering it at first use.
+  void bind(Core *core) {
+    core_ = core;
+    BeetleDeviceInstance::bind();
   }
-  ~SpuDevice() {
-    SPU_FreeState(state);
+  // Bind without powering, for the save-state owner.
+  void bindExisting(Core *core) {
+    core_ = core;
+    BeetleDeviceInstance::bindExisting();
   }
-  SpuDevice(const SpuDevice &) = delete;
-  SpuDevice &operator=(const SpuDevice &) = delete;
-
-  // Make this instance the active SPU (its Core the IRQ-line target),
-  // lazily powering it on.
-  void bind(Core *c) {
-    bindExisting(c);
-    if (!powered) {
-      SPU_Power();
-      powered = 1;
-    }
+  Core *core() const {
+    return core_;
   }
-
-  // Bind WITHOUT powering on. The save-state owner needs the instance bound to serialize it, and
-  // powering an instance that was never powered on would fabricate the state it is about to capture
-  // (and would make a state saved before the first bind describe a machine that never existed).
-  // Deliberately separate from bind() rather than a flag on it: "bind this" and "make this live" are
-  // different decisions and only the frame step makes the second one.
-  void bindExisting(Core *c) {
-    SPU_BindState(state);
-    psx::audio::spu::bindIrqCore(c);
-    bound_ = this;
-  }
-
-  bool isBound() const {
-    return bound_ == this;
-  }
-
-  // Returns the SPU bind points to their defaults if this instance holds them.
-  void release() {
-    if (bound_ != this) {
-      return;
-    }
-    SPU_BindState(nullptr);
-    psx::audio::spu::bindIrqCore(nullptr);
-    bound_ = nullptr;
+  static SpuDevice *bound() {
+    return static_cast<SpuDevice *>(boundInstance());
   }
 
 private:
-  // Beetle's bind point is process-global; this records which instance it names.
-  inline static const SpuDevice *bound_ = nullptr;
+  Core *core_ = nullptr;
 };

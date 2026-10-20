@@ -1,39 +1,81 @@
-// fmv_decode.h — the pure .STR decode machinery, shared by the runtime FMV player (native_fmv.cpp) and the
-// offline tools (tools/fmv_export), so a tool dump runs the same code the runtime runs.
+// The .STR decode machinery shared by the runtime player (native_fmv.cpp) and tools/fmv_export.
 #pragma once
 #include "pixel_size.h"
+#include "xa_adpcm.h"
 
+#include <array>
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <stdint.h>
+#include <vector>
+
+class MdecDevice;
 
 namespace psx::movie {
 
 inline constexpr std::size_t kPayloadBytes = std::size_t{512} * 1024; // one frame's concatenated BS payload
 inline constexpr std::size_t kMaxCodes = std::size_t{512} * 1024;     // MDEC run-level codes per frame
+inline constexpr uint32_t kSectorUserBytes = 2048u;
+inline constexpr uint32_t kStrChunkHeaderBytes = 32u;
 
-// Decode an entire BS frame (8-byte BS header + VLC bitstream) into the MDEC run-level code
-// stream for a `frame`-sized picture. Returns number of 16-bit codes written, or negative on error.
+// One STR video chunk's 32-byte header: its index and count within the frame, the frame number and size.
+struct VideoChunk {
+  int chunk = 0;
+  int chunks = 0;
+  int frame = 0;
+  int width = 0;
+  int height = 0;
+};
+// Nullopt for an audio sector or padding.
+std::optional<VideoChunk> videoChunk(const uint8_t *raw);
+
+// Concatenates one frame's chunk payloads; a chunk of another frame waits for the next chunk 0.
+class FrameAssembler {
+public:
+  struct Frame {
+    std::span<const uint8_t> payload; // valid until the next add()
+    int number = 0;
+    present::PixelSize size;
+    int chunks = 0;
+  };
+  std::optional<Frame> add(const VideoChunk &chunk, const uint8_t *raw);
+  // Drop a partly assembled frame.
+  void reset() {
+    frame_ = -1;
+    expected_ = 0;
+    got_ = 0;
+    length_ = 0;
+  }
+
+private:
+  std::vector<uint8_t> payload_;
+  uint32_t length_ = 0;
+  int frame_ = -1;
+  int expected_ = 0;
+  int got_ = 0;
+  present::PixelSize size_{320, 240};
+};
+
+// A BS frame (8-byte header + VLC bitstream) to the MDEC run-level code stream; returns codes written, negative
+// on error.
 int decodeBsFrame(std::span<const uint8_t> payload, present::PixelSize frame, std::span<uint16_t> codes);
 
-// Feed the MDEC (16bpp) with the code stream and extract/tile the RGB555 frame into `pixels`
-// (width*height entries). Uploads the quant + IDCT tables first. Returns width*height, or
-// negative on error.
-int decodeMdecToRgb555(std::span<const uint16_t> codes, present::PixelSize frame, uint16_t *pixels);
+// Runs a code stream through the bound MDEC at 24bpp and tiles it into R,G,B triples (EncodeRow24's layout).
+class FrameDecoder {
+public:
+  FrameDecoder();
+  // Returns width*height, or negative on error.
+  int decodeRgb888(MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame, uint8_t *pixels);
 
-// Same at MDEC depth 2 (24bpp): `pixels` receives width*height RGB888 triples, three bytes per
-// pixel in R,G,B order — the layout mdec.c's EncodeRow24 writes and the layout the PSX 24-bit
-// display samples. Returns width*height, or negative on error.
-int decodeMdecToRgb888(std::span<const uint16_t> codes, present::PixelSize frame, uint8_t *pixels);
+private:
+  void uploadTables(MdecDevice &mdec) const;
+  int decodeMacroblocks(MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame);
 
-// An XA-ADPCM sector's format, from its subheader coding byte.
-struct XaFormat {
-  int rate = 0;   // Hz
-  int frames = 0; // PCM frames one sector decodes to
+  std::array<uint32_t, 32> quantWords_{};
+  std::array<uint32_t, 32> idctWords_{};
+  std::vector<uint32_t> in_;
+  std::vector<uint32_t> out_;
 };
-XaFormat xaSectorFormat(const uint8_t *raw);
-
-// One raw 2352-byte XA-ADPCM sector to interleaved S16 stereo; returns frames written.
-int decodeXaSector(const uint8_t *raw, int16_t *out, int16_t hist[2][2], int *freq);
 
 } // namespace psx::movie

@@ -1,4 +1,4 @@
-// spu_beetle.h — the SPU register file, DMA port and mixer, served by Beetle's spu.c.
+// The SPU register file, DMA port and mixer, served by Beetle's spu.c on the bound SpuDevice.
 #pragma once
 
 #include <cstdint>
@@ -7,10 +7,21 @@ class Core;
 
 namespace psx::audio::spu {
 
+// `debug spu` print counters; log numbering only, never machine state.
+struct DebugCounters {
+  long writes = 0;
+  long dataPortWrites = 0;
+  long voiceWrites = 0;
+  long keyOffWrites = 0;
+  long mainVolumeWrites = 0;
+  long cdVolumeWrites = 0;
+  std::uint32_t transferAddress = 0;
+  long dmaCalls = 0;
+  long dmaWords = 0;
+};
+
 // Create and power the process SPU state each SpuDevice binds over.
 void init();
-// The Core whose I_STAT the SPU interrupt line latches into; null drops the line.
-void bindIrqCore(Core *core);
 void write(std::uint32_t addr, std::uint32_t val);
 std::uint32_t read(std::uint32_t addr);
 void dmaWrite(const std::uint32_t *words, int count);

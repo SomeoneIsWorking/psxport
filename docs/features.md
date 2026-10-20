@@ -75,7 +75,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 | hop | owner | title |
 |---|---|---|
 | 1 | `psx/movie/native_fmv.cpp:Fmv::play` — a movie a title starts, decoded and presented until it ends | title movie owner |
-| 2 | `psx/movie/fmv_decode.cpp` — STR/MDEC decode | |
+| 2 | `psx/movie/fmv_decode.cpp` — STR frame assembly and BS decode through `psx/movie/mdec_device.cpp:MdecDevice`, XA through `psx/audio/xa_adpcm.cpp` | |
 
 ## F-CD — disc reads
 
@@ -90,7 +90,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/audio/spu_audio.cpp:SpuAudio::frameEx` → `GameRuntime::audio` (`TitleAudio::mixFrame`) | `audio` |
+| 1 | `psx/audio/spu_audio.cpp:SpuAudio::frame` → `GameRuntime::audio` (`TitleAudio::mixFrame`) → `psx/audio/host_audio_output.cpp:HostAudioOutput::Stream` | `audio` |
 | 2 | `psx/audio/spu_device.cpp`, `psx/audio/xa_stream.cpp:XaStream` — the SPU and the XA streamer | |
 
 ## F-LOAD — loading removal

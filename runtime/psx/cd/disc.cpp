@@ -1,15 +1,14 @@
 // disc.cpp — the title's CHD read by LBA through libchdr: 2048-byte user data and raw sectors for the
 // CD controller, the stock libcd reads and a title's own CD overrides.
 #include "disc.h"
-#include "config.h" // launch_setting — the title disc key, then PSXPORT_DISC
+#include "cd_position.h"
+#include "config.h"
+#include "host_clock.h"
 #include "number_text.h"
-#include "r3000.h"
 #include <libchdr/chd.h>
 #include <lucent/log.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include <algorithm>
 #include <array>
@@ -80,7 +79,7 @@ bool parseTrackMetadata(const char *metadata, bool metadata2, int32_t *physical_
   }
   DiscTrackInfo track{};
   track.number = static_cast<uint8_t>(track_number);
-  track.pregap = track_number == 1 ? 150 : (pregap_in_file ? 0 : pregap);
+  track.pregap = track_number == 1 ? kLeadInSectors : (pregap_in_file ? 0 : pregap);
   track.pregap_dv = pregap_in_file;
   const int64_t start = static_cast<int64_t>(*physical_lba) + track.pregap + track.pregap_dv;
   track.sectors = static_cast<uint32_t>(frames - track.pregap_dv);
@@ -97,25 +96,8 @@ bool parseTrackMetadata(const char *metadata, bool metadata2, int32_t *physical_
 
 namespace {
 
-constexpr uint32_t kRawFrame = 2448u; // 2352 raw + 96 subcode, CHD CD unit
+constexpr uint32_t kRawFrame = kRawSectorBytes + 96u; // raw sector + subcode, the CHD CD unit
 constexpr uint32_t kUserData = 2048u;
-
-std::string trimmed(const char *s) {
-  while (*s == ' ' || *s == '\t') {
-    s++;
-  }
-  size_t n = strlen(s);
-  while (n && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' || s[n - 1] == '\t')) {
-    n--;
-  }
-  return std::string(s, n);
-}
-
-uint64_t monotonicNs() {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-}
 
 uint32_t readLe32(const uint8_t *p) {
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -149,14 +131,14 @@ bool Disc::open() {
   if (chd) {
     return true;
   }
-  std::string path = trimmed(psx::config::launch_setting({env_key, "PSXPORT_DISC"}).c_str());
+  std::string path = psx::config::launch_setting({env_key, "PSXPORT_DISC"});
   if (path.empty() && saved_path[0] != '\0') {
-    path = trimmed(saved_path);
+    path = saved_path;
   }
   if (path.empty()) {
     char buf[512];
     if (findDropinImage(buf, sizeof buf)) {
-      path = trimmed(buf);
+      path = buf;
     }
   }
   if (path.empty()) {
@@ -186,7 +168,7 @@ bool Disc::openImage(const char *path) {
   }
   memset(tracks, 0, sizeof tracks);
   track_count = 0;
-  int32_t physical_lba = -150;
+  int32_t physical_lba = -kLeadInSectors;
   uint32_t metadata_index = 0;
   while (metadata_index < kDiscMaxTracks) {
     char metadata[256] = {};
@@ -239,15 +221,12 @@ bool Disc::subqPosition(uint32_t lba, uint8_t out[8]) {
 
   const uint32_t relative =
       static_cast<uint32_t>(position >= track->lba ? position - track->lba : track->lba - position);
-  const uint32_t absolute = lba + 150u;
+  const std::array<uint8_t, 3> trackMsf = sectorsToMsf(relative);
+  const std::array<uint8_t, 3> absoluteMsf = lbaToMsf(static_cast<int>(lba));
   out[0] = toBcd(track->number);
   out[1] = toBcd(position < track->lba ? 0u : 1u);
-  out[2] = toBcd(relative / (60u * 75u));
-  out[3] = toBcd((relative / 75u) % 60u);
-  out[4] = toBcd(relative % 75u);
-  out[5] = toBcd(absolute / (60u * 75u));
-  out[6] = toBcd((absolute / 75u) % 60u);
-  out[7] = toBcd(absolute % 75u);
+  std::copy(trackMsf.begin(), trackMsf.end(), out + 2);
+  std::copy(absoluteMsf.begin(), absoluteMsf.end(), out + 5);
   return true;
 }
 
@@ -258,11 +237,11 @@ const uint8_t *Disc::residentHunk(uint32_t hunk, uint32_t lba, const char *reade
     hits++;
     return hunk_buf;
   }
-  const uint64_t started = monotonicNs();
+  const uint64_t started = psx::platform::hostNowNs();
   if (chd_read(chd, hunk, hunk_buf) != CHDERR_NONE) {
     return nullptr;
   }
-  const uint64_t elapsed = monotonicNs() - started;
+  const uint64_t elapsed = psx::platform::hostNowNs() - started;
   fills++;
   fill_ns += elapsed;
   if (elapsed > worst_fill_ns) {
@@ -320,8 +299,8 @@ bool Disc::readRaw(uint32_t lba, uint8_t *out, uint32_t n) {
   if (!chd && !open()) {
     return false;
   }
-  if (n > 2352u) {
-    n = 2352u;
+  if (n > kRawSectorBytes) {
+    n = kRawSectorBytes;
   }
   uint32_t hunk = lba / frames_per_hunk;
   uint32_t off = (lba % frames_per_hunk) * kRawFrame;

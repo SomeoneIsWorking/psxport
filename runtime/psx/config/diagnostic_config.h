@@ -44,11 +44,10 @@ std::string present_sink(); // PSXPORT_PRESENT_SINK: "WxH"
 std::string movie_fps(); // PSXPORT_FMV_FPS: "0" uncaps
 long movie_max_frames(); // PSXPORT_FMV_MAXFRAMES (0 all)
 bool movie_dc_only();    // PSXPORT_FMV_DCONLY
-bool movie_row_major();  // PSXPORT_FMV_ROWMAJOR
 bool movie_dump_codes(); // PSXPORT_FMV_DUMPCODES
 
 std::string wav_capture_path();    // PSXPORT_WAV
-std::string spu_write_backtrace(); // PSXPORT_SPUBT: hex register offset
+std::optional<std::uint32_t> spu_write_backtrace(); // PSXPORT_SPUBT: hex SPU register offset
 
 // PSXPORT_GUEST_POKE: "addr:val[:1|2|4],..." (hex) rewritten every frame; nullopt if any entry is malformed.
 struct GuestPoke {

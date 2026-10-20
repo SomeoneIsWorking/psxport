@@ -1,4 +1,4 @@
-// cd_ready_delivery.h — the framework's stand-in for the BIOS CD-ROM interrupt handler.
+// The framework's stand-in for the BIOS CD-ROM interrupt handler.
 //
 // A stock libcd learns a sector arrived because the BIOS handler calls the CdReadyCallback pointer the
 // guest installed; no event class is involved (psxport issue 0123). For a psx::cd::GuestInterruptLibcd
@@ -7,6 +7,8 @@
 // and never for a host-pumped libcd, which gets its one callback per completion from the pump.
 // A completion is consumed only when it is delivered, because these completions chain.
 #pragma once
+
+#include "cdc_state.h"
 
 #include <cstdint>
 #include <span>
@@ -23,10 +25,10 @@ enum class CdReadyDelivery : std::uint8_t {
 
 // The handler's service of the CURRENT controller response, whatever its type: drain its bytes into
 // `response` (the rest zeroed), retire the CD line, acknowledge the controller and fold the edge that
-// acknowledge raises for a response queued behind it. Returns the response type, 0 when none is
+// acknowledge raises for a response queued behind it. Returns the response type, None when none is
 // current. The one owner of that sequence; a title that serves libcd's CdReady natively calls it too.
 namespace psx::cd {
-std::uint8_t acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> response);
+CdcResponse acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> response);
 
 // A data-ready response is current and the CD interrupt line is asserted and unmasked.
 [[nodiscard]] bool readyCompletionOwed(const Core &core);

@@ -27,7 +27,6 @@ Var<std::string> cv_present_sink("PSXPORT_PRESENT_SINK", "", kRunOnly);
 Var<std::string> cv_movie_fps("PSXPORT_FMV_FPS", "", kRunOnly);
 Var<long> cv_movie_max_frames("PSXPORT_FMV_MAXFRAMES", 0, kRunOnly);
 Var<bool> cv_movie_dc_only("PSXPORT_FMV_DCONLY", false, kRunOnly);
-Var<bool> cv_movie_row_major("PSXPORT_FMV_ROWMAJOR", false, kRunOnly);
 Var<bool> cv_movie_dump_codes("PSXPORT_FMV_DUMPCODES", false, kRunOnly);
 Var<std::string> cv_wav_capture_path("PSXPORT_WAV", "", kRunOnly);
 Var<std::string> cv_spu_write_backtrace("PSXPORT_SPUBT", "", kRunOnly);
@@ -62,7 +61,6 @@ const Registration kRegistration{
     cv_movie_fps,
     cv_movie_max_frames,
     cv_movie_dc_only,
-    cv_movie_row_major,
     cv_movie_dump_codes,
     cv_wav_capture_path,
     cv_spu_write_backtrace,
@@ -184,10 +182,6 @@ bool movie_dc_only() {
   return cv_movie_dc_only.get();
 }
 
-bool movie_row_major() {
-  return cv_movie_row_major.get();
-}
-
 bool movie_dump_codes() {
   return cv_movie_dump_codes.get();
 }
@@ -196,8 +190,16 @@ std::string wav_capture_path() {
   return cv_wav_capture_path.get();
 }
 
-std::string spu_write_backtrace() {
-  return cv_spu_write_backtrace.get();
+std::optional<std::uint32_t> spu_write_backtrace() {
+  const std::string text = cv_spu_write_backtrace.get();
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  const std::optional<std::uint32_t> offset = parseUnsigned(text, 16);
+  if (!offset) {
+    lucent::error("config", "PSXPORT_SPUBT={} is not a hex SPU register offset; ignored", text);
+  }
+  return offset;
 }
 
 std::optional<std::vector<GuestPoke>> guest_poke() {

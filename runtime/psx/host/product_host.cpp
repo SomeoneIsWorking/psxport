@@ -1,6 +1,5 @@
 #include "product_host.h"
 
-#include "c_subsys.h"
 #include "config.h"
 #include "config_vars.h"
 #include "core.h"
