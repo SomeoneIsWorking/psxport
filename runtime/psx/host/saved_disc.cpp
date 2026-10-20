@@ -5,6 +5,7 @@
 
 #include <lucent/log.h>
 #include <lucent/platform.h>
+#include <lucent/text.h>
 
 #include <cstring>
 #include <fstream>
@@ -28,10 +29,15 @@ std::optional<std::filesystem::path> SavedDisc::load() const {
   }
   std::ifstream in(*file_);
   std::string line;
-  if (!std::getline(in, line) || line.empty()) {
+  if (!std::getline(in, line)) {
     return std::nullopt;
   }
-  return std::filesystem::path(line);
+  // A hand-edited file may carry a carriage return or spaces around the path.
+  const std::string_view path = lucent::text::trim(line);
+  if (path.empty()) {
+    return std::nullopt;
+  }
+  return std::filesystem::path(path);
 }
 
 bool SavedDisc::save(const std::filesystem::path &image) const {

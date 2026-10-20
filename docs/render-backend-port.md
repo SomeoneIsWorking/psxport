@@ -16,8 +16,8 @@ product does not carry a second windowing or graphics stack.
 - `runtime/psx/shaders_gpu/` owns first-party GLSL sources. `tools/gen_gpu_shaders.py` compiles and
   embeds them in a consumer-owned build directory; no shader header is written to the source tree.
 - `docs/presentation.md` is the renderer's contract: what each render path presents and how.
-- `runtime/psx/present/pane_composite.*` (`PaneCompositor`) assembles one window from several Games' panes. Each Game renders independently;
-  composition consumes the completed panes without sharing per-Core renderer state.
+- `RenderState::buildPanes` (`runtime/psx/render/render_panes.cpp`) draws a host screen's panes into its own present image,
+  sampling other Games' completed present images without sharing per-Core renderer state.
 
 ## Behavioral requirements
 

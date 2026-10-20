@@ -4,6 +4,7 @@
 #include "pixel_size.h"
 #include "present_sink.h"
 #include "record_rasterizer.h"
+#include "render_pane.h"
 #include "viewport_layout.h"
 
 #include <cstdint>
@@ -21,20 +22,15 @@ namespace psx::render {
 
 class RenderDevice;
 
-// A presented picture: its image, where the picture sits in it, and its measured lit extent.
+// A presented picture: its image and where the picture sits in it.
 struct PresentedImage {
   SDL_GPUTexture *texture = nullptr;
   int width = 0;
   int height = 0;
   present::PaneRect viewport{0, 0, 0, 0};
-  present::PaneRect content{0, 0, 0, 0};
 
   bool valid() const {
     return texture != nullptr && width > 0 && height > 0 && viewport.w > 0 && viewport.h > 0;
-  }
-  // The measured content once a probe found some, else the viewport: never the title's own border rows.
-  present::PaneRect picture() const {
-    return content.w > 0 && content.h > 0 ? content : viewport;
   }
 };
 
@@ -58,6 +54,8 @@ public:
   void buildDisplay(gpu::VramRect display);
   // A host RGBA8 picture (movie frame, splash) letterboxed 4:3 and faded by `fade`.
   void buildImage(const std::uint8_t *rgba, PixelSize size, float fade);
+  // A host screen assembled from panes, drawn in order (render_panes.cpp).
+  void buildPanes(std::span<const Pane> panes);
   // Shows the last build when it went to the window; nothing otherwise.
   void show();
   // Re-shows the last build without building anything (debug-server pause loop).
@@ -86,7 +84,7 @@ public:
   }
 
   PresentedImage lastPresented() const {
-    return {presentImage_, presentImageSize_.width, presentImageSize_.height, viewport_, content_};
+    return {presentImage_, presentImageSize_.width, presentImageSize_.height, viewport_};
   }
   // What a pane shows: the live present image, unless the newest present was probed blank (a fade, a
   // load screen), then the retained copy.
@@ -108,7 +106,6 @@ private:
   void showPresentImage(SDL_GPUCommandBuffer *cmd);
   // One readback of the present image: whether it holds a picture, and where.
   bool probePicture(const std::uint8_t *rgba);
-  void measurePresentedContent(const std::uint8_t *rgba);
 
   Game &game_;
   RenderDevice &device_;
@@ -127,7 +124,6 @@ private:
   SDL_GPUTransferBuffer *presentReadback_ = nullptr;
   PixelSize presentImageSize_;
   present::PaneRect viewport_{0, 0, 0, 0}; // where the picture sits in that image
-  present::PaneRect content_{0, 0, 0, 0};  // the picture's own lit extent, widened by every filled probe
   SinkIdleState sink_;
 
   PresentTarget target_ = PresentTarget::Swapchain;

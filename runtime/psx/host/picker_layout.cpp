@@ -12,23 +12,27 @@ constexpr float kSettled = 0.0005f;
 
 } // namespace
 
+psx::present::PaneRect PanelLayout::logoRect(int logoWidth, int logoHeight) const {
+  if (logoWidth <= 0 || logoHeight <= 0 || cover.h <= 0) {
+    return psx::present::PaneRect{cover.x, cover.y, 0, 0};
+  }
+  const int centreY = static_cast<int>(std::lround(static_cast<double>(cover.h) * logoCentrePerHeight));
+  return psx::present::PaneRect{cover.x + (cover.w - logoWidth) / 2, centreY - logoHeight / 2, logoWidth, logoHeight};
+}
+
 PickerLayout::PickerLayout(int panelCount, Motion motion)
     : mPanelCount(std::clamp(panelCount, 0, kMaxPickerPanels)),
       mSelectedShare(std::clamp(motion.selectedShare, 0.0f, 1.0f)), mSlantPerWidth(motion.slantPerWidth),
       mResponse(std::clamp(motion.responsePerFrame, 0.01f, 1.0f)) {
-  retarget();
+  retarget(0);
   mShare = mTargetShare; // a layout starts settled; the first advance() has nothing to animate
 }
 
 void PickerLayout::setSelection(int selected) {
-  if (mPanelCount <= 0) {
-    return;
-  }
-  mSelected = std::clamp(selected, 0, mPanelCount - 1);
-  retarget();
+  retarget(selected);
 }
 
-void PickerLayout::retarget() {
+void PickerLayout::retarget(int selected) {
   if (mPanelCount <= 0) {
     mTargetShare.clear();
     return;
@@ -40,7 +44,7 @@ void PickerLayout::retarget() {
   // The shares sum to one: the selected panel's, and the rest split evenly.
   mTargetShare.assign(static_cast<std::size_t>(mPanelCount),
                       (1.0f - mSelectedShare) / static_cast<float>(mPanelCount - 1));
-  mTargetShare[static_cast<std::size_t>(mSelected)] = mSelectedShare;
+  mTargetShare[static_cast<std::size_t>(std::clamp(selected, 0, mPanelCount - 1))] = mSelectedShare;
 }
 
 void PickerLayout::setSurface(int width, int height) {
@@ -67,14 +71,16 @@ bool PickerLayout::advance() {
   return settling;
 }
 
-float PickerLayout::share(int index) const {
-  if (index < 0 || index >= mPanelCount) {
-    return 0.0f;
-  }
-  return mShare[static_cast<std::size_t>(index)];
+PanelLayout PickerLayout::panel(int index) const {
+  return layoutAt(index, mShare);
 }
 
-PanelLayout PickerLayout::panel(int index) const {
+psx::present::PixelSize PickerLayout::imageSize(int index) const {
+  const psx::present::PaneRect cover = layoutAt(index, mTargetShare).cover;
+  return {cover.w, cover.h};
+}
+
+PanelLayout PickerLayout::layoutAt(int index, const std::vector<float> &shares) const {
   PanelLayout out;
   if (mPanelCount <= 0 || index < 0 || index >= mPanelCount || mSurfaceW <= 0 || mSurfaceH <= 0) {
     return out;
@@ -83,16 +89,16 @@ PanelLayout PickerLayout::panel(int index) const {
   // left edge by construction.
   float edge = 0.0f;
   for (int i = 0; i < index; ++i) {
-    edge += mShare[static_cast<std::size_t>(i)];
+    edge += shares[static_cast<std::size_t>(i)];
   }
   const float start = edge;
-  const float width = mShare[static_cast<std::size_t>(index)];
+  const float width = shares[static_cast<std::size_t>(index)];
   const int x = static_cast<int>(std::lround(start * static_cast<float>(mSurfaceW)));
   // The last panel ends on the surface edge whatever rounding the shares carry.
   const int right = index == mPanelCount - 1
                         ? mSurfaceW
                         : static_cast<int>(std::lround((start + width) * static_cast<float>(mSurfaceW)));
-  out.bounds = PanelRect{x, 0, std::max(right - x, 0), mSurfaceH};
+  out.bounds = psx::present::PaneRect{x, 0, std::max(right - x, 0), mSurfaceH};
   // A fraction of the width, not the height: the slant is a horizontal displacement, and a
   // fraction of the height makes it invisible on a wide window.
   out.slantX = static_cast<int>(std::lround(mSlantPerWidth * static_cast<float>(mSurfaceW)));
@@ -111,8 +117,7 @@ PanelLayout PickerLayout::panel(int index) const {
   // each pixel belong to exactly one of them.
   const int coverLeft = std::min(out.seams.leftTopX, out.seams.leftBottomX);
   const int coverRight = std::max(out.seams.rightTopX, out.seams.rightBottomX);
-  out.cover = PanelRect{coverLeft, 0, std::max(coverRight - coverLeft, 0), mSurfaceH};
-  // There is nothing else in a panel to leave a band for.
+  out.cover = psx::present::PaneRect{coverLeft, 0, std::max(coverRight - coverLeft, 0), mSurfaceH};
   return out;
 }
 

@@ -4,6 +4,7 @@
 #include "panel_logo.h"
 #include "picker_content.h"
 #include "pre_roll_budget.h"
+#include "render_state.h"
 #include "title_availability.h"
 #include "title_catalog.h"
 
@@ -31,47 +32,33 @@ public:
   int count() const {
     return static_cast<int>(sessions_.size());
   }
-  // Panels are numbered by available title, so panel 0 is the first provisioned title in the
-  // catalog whatever its slug.
-  const TitleAvailability &title(int panel) const;
-  // The panel showing this slug, or -1 when it is unprovisioned or unauthenticated.
-  int panelOf(std::string_view slug) const;
   // The session behind a panel, or null. Null before boot() — which is also when it has no picture.
   TitleSession *session(int panel);
   // The same handle from a const host, for a caller that only asks what a panel is showing.
   const TitleSession *session(int panel) const;
-  // The session behind a panel, if it has ever presented a picture.
-  bool hasPicture(int panel) const;
-  // The panels draw from this: black boot frames leave a panel empty, since an empty panel reads
-  // as "not loaded" and a black one as "broken".
-  bool hasVisiblePicture(int panel) const;
   // Whether the panel may be drawn: an unready panel is left empty, since an empty panel reads
   // as "not chosen" and a black one as "broken".
   bool panelReady(int panel) const;
   // A panel that has pre-rolled its fixed number of steps from power-on, picture or not.
   bool panelSettled(int panel) const;
-  // The picture's own aspect, which decides how a panel is cover-cropped; 1:1 for an empty panel,
-  // which the layout treats as the panel's own shape.
-  int pictureWidth(int panel) const;
-  int pictureHeight(int panel) const;
-  // What PickerComposite draws.
-  Core *core(int panel);
+  // The panel's newest picture at the size its session built it; invalid while the panel is not ready.
+  psx::render::PresentedImage picture(int panel) const;
   // This panel's own logo, decoded once from its own session; a logo cannot outlive the machine
   // that decoded it.
   PanelLogo *logo(int panel);
 
-  // Which demo the player watches and hears. advance() decides which session runs, since a panel
-  // with no picture must be brought up first.
+  // Which demo the player watches and hears; the one selection owner. advance() decides which
+  // session runs, since a panel with no picture must be brought up first.
   void select(int panel);
+  // One panel left (-1) or right (+1), wrapping at the ends: the pad and `select left|right` alike.
+  void step(int dir);
   int selected() const {
     return selected_;
   }
 
-  // One picker frame. Runs the selected session's step, or pre-rolls the next unsettled panel for as
-  // many steps as `preRoll` allows. Returns the display fields the frame's advanced panel waited for
-  // through the field pacer: the loop gives the frame its own field of sleep only when that count is
-  // zero, because a settled panel's step paces its own fields already and a second wait would pace
-  // the same fields twice, which is what ran this loop under its true cadence.
+  // One picker frame: the selected session's step, or the next unsettled panel's pre-roll for as many
+  // steps as `preRoll` allows. Returns the display fields that step waited for, so the loop paces the
+  // frame itself only when the panel did not.
   unsigned long long advance(const PreRollBudget &preRoll);
   // Ends every session and hands back a fresh unbooted session for the chosen title: the demo was
   // a preview, so choosing a game must start it at power-on rather than resume its preview.
@@ -93,7 +80,7 @@ private:
   void takeLogo(int panel, TitleSession &session);
 
   const TitleCatalog &catalog_;
-  std::vector<const TitleAvailability *> titles_;
+  const PickerContent &content_;
   std::vector<std::unique_ptr<TitleSession>> sessions_;
   // Kept because confirm() builds the fresh session the player gets.
   SessionServices &services_;

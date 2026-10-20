@@ -1,6 +1,7 @@
 #include "menu_document.h"
 
 #include "game.h"
+#include "mod_row_model.h"
 #include "number_text.h"
 #include "rml_text.h"
 #include "ui_component.h"
@@ -20,18 +21,16 @@
 namespace psx::ui {
 namespace {
 
-// Attribute names the document uses to say what a row is wired to. Kept together so the set is
-// visible in one place rather than as five string literals scattered through the ladders.
+// The attributes that say what a row is wired to.
 constexpr const char *kAttrAction = "action";
 constexpr const char *kAttrToggle = "toggle";
 constexpr const char *kAttrAdjust = "adjust";
 
-// The adjust rows whose model is not `Mods`.
+// The Debug tab's adjust rows.
 constexpr const char *kWarpAreaId = "warp_area";
 constexpr const char *kDevCommandIds[] = {"warp_entry", "flag_index", "flag_value"};
 
-// A title's declared settings are adjust rows whose id carries this prefix; they are added under
-// `#title_settings` when the document is built.
+// A title's declared settings: adjust rows with this id prefix, added under `#title_settings`.
 constexpr std::string_view kTitleSettingPrefix = "title:";
 constexpr const char *kTitleSettingsHostId = "title_settings";
 
@@ -45,8 +44,7 @@ MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *g
 
   add_title_setting_rows();
 
-  // Readouts first: the initial tab selection at the bottom of this constructor refreshes the
-  // whole tree, so the readouts must already exist by then.
+  // Before the first tab selection below, which refreshes them.
   mReadouts = &adopt<MenuReadouts>(mDoc, mGame);
 
   if (Rml::Element *bar = mDoc->QuerySelector("tab-bar")) {
@@ -57,21 +55,16 @@ MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *g
 
   Rml::ElementList panes;
   mDoc->GetElementsByTagName(panes, "pane");
-  // The cast is explicit because RowBuilder is a PRIVATE base: the conversion is accessible here
-  // but not inside make_unique, which is where adopt<>() actually performs it.
+  // RowBuilder is a private base, so the conversion happens here rather than inside adopt<>().
   RowBuilder &builder = *this;
   for (Rml::Element *p : panes) {
     mPanes.push_back(&adopt<MenuPane>(p, builder));
   }
 
-  // THE MISMATCH THAT USED TO BE SILENT. The old code indexed tabs and panes by one integer and
-  // clamped with std::min, so a document with six tabs and five panes simply lost the sixth tab's
-  // page and said nothing — a tab that opens onto nothing reads as a rendering bug. It is a
-  // document error and it is named as one.
+  // Tabs and panes pair by position.
   if (mTabBar && mTabBar->count() != (int)mPanes.size()) {
     lucent::error("rmlui",
-                  "menu document MISMATCH: {} <tab> vs {} <pane> — they are paired by position, "
-                  "so {} of them have no counterpart and will do nothing",
+                  "menu document mismatch: {} <tab> vs {} <pane>; {} of them pair with nothing",
                   mTabBar->count(),
                   (int)mPanes.size(),
                   mTabBar->count() > (int)mPanes.size() ? mTabBar->count() - (int)mPanes.size()
@@ -84,12 +77,12 @@ MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *g
                pane_count(),
                row_count(),
                readout_count(),
-               mUnknownRows ? " — SEE THE UNRECOGNISED ROW ERRORS ABOVE" : "");
+               mUnknownRows ? ", with the unrecognised rows reported above" : "");
 
   if (mTabBar) {
     mTabBar->select(0); // stamps :selected on tab 0 and shows pane 0
   }
-  mDoc->Hide(); // start hidden; ESC shows it
+  mDoc->Hide(); // ESC shows it
 }
 
 MenuDocument::~MenuDocument() = default;
@@ -124,9 +117,7 @@ void MenuDocument::add_title_setting_rows() {
 }
 
 void MenuDocument::dump() const {
-  // Counts FIRST, so the enumeration below always arrives with its denominator attached. A dump
-  // that printed rows without saying how many it expected could not tell "the Sound tab is empty"
-  // from "I stopped enumerating".
+  // Counts first, so the rows below arrive with their denominator.
   lucent::info("rmlui",
                "MENU: {} tabs, {} panes, {} rows, {} of 4 readouts, {} unrecognised row(s)",
                tab_count(),
@@ -155,14 +146,12 @@ int MenuDocument::row_count() const {
   return n;
 }
 
-// ---- RowBuilder ------------------------------------------------------------------------------------
 std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
   if (!row) {
     return nullptr;
   }
 
-  // Order matters and matches the old ladder: an `action` row is a one-shot button even if it
-  // also carries a `toggle`/`adjust` attribute.
+  // An `action` row is a button even if it also carries `toggle` or `adjust`.
   std::string id = psx::ui::rmlAttributeText(*row, kAttrAction, "");
   if (!id.empty()) {
     return make_action_binding(
@@ -176,11 +165,10 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
 
   id = psx::ui::rmlAttributeText(*row, kAttrToggle, "");
   if (!id.empty()) {
-    if (!ModRowModel::knows(RowKind::Toggle, id)) {
+    if (!ModRowModel::knows(id)) {
       mUnknownRows++;
       lucent::error("rmlui",
-                    "menu row toggle=\"{}\" is UNRECOGNISED — the row will display its "
-                    "authored placeholder and do nothing when activated (known toggles: {})",
+                    "menu row toggle=\"{}\" is unrecognised and inert ({} toggles exist)",
                     id,
                     ModRowModel::toggle_count());
       return nullptr;
@@ -205,34 +193,22 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
         return make_title_setting_binding(setting, &mGame->mods);
       }
     }
-    if (!ModRowModel::knows(RowKind::Adjust, id)) {
-      mUnknownRows++;
-      lucent::error("rmlui",
-                    "menu row adjust=\"{}\" is UNRECOGNISED — the row will display its "
-                    "authored placeholder and do nothing when activated (known adjusts: {})",
-                    id,
-                    ModRowModel::adjust_count());
-      return nullptr;
-    }
-    return make_mod_adjust_binding(mGame ? &mGame->mods : nullptr, id);
+    mUnknownRows++;
+    lucent::error("rmlui", "menu row adjust=\"{}\" is unrecognised and inert", id);
+    return nullptr;
   }
 
-  // A <select-button> with none of the three attributes is focusable but inert. That is a
-  // document error too — it takes a place in the navigation order and does nothing.
   mUnknownRows++;
-  lucent::error("rmlui",
-                "menu row has no action/toggle/adjust attribute — it is focusable but "
-                "inert, and it still occupies a slot in the Up/Down order");
+  lucent::error("rmlui", "menu row has no action/toggle/adjust attribute; it is focusable but inert");
   return nullptr;
 }
 
 void MenuDocument::on_row_clicked(MenuRow &row) {
-  // Match the keyboard path exactly: focus the row, then activate it with dir = +1.
+  // As the keyboard does: focus, then activate.
   row.focus();
   row.step(+1);
 }
 
-// ---- actions ---------------------------------------------------------------------------------------
 void MenuDocument::run_action(const std::string &id) {
   if (id == "quit") {
     lucent::info("rmlui", "quit from menu");
@@ -275,12 +251,9 @@ void MenuDocument::run_action(const std::string &id) {
     }
     return;
   }
-  // Reported rather than ignored: an action id nobody handles is a dead button, and the old code
-  // returned silently from exactly here.
-  lucent::error("rmlui", "menu row action=\"{}\" is UNRECOGNISED — the button does nothing", id);
+  lucent::error("rmlui", "menu row action=\"{}\" is unrecognised; the button does nothing", id);
 }
 
-// ---- visibility + per-frame -------------------------------------------------------------------------
 void MenuDocument::show() {
   if (!mDoc) {
     return;
@@ -290,7 +263,7 @@ void MenuDocument::show() {
   if (mCtx) {
     mCtx->Update();
   }
-  // Re-select the current tab: shows its pane, refreshes every value, focuses the first row.
+  // Shows the tab's pane, refreshes every value and focuses the first row.
   if (mTabBar) {
     mTabBar->select(mTabBar->active());
   }
@@ -313,13 +286,10 @@ void MenuDocument::update() {
   if (!mVisible) {
     return;
   }
-  Component::update(); // readouts + the shown pane's rows; hidden panes return early
+  Component::update(); // hidden panes return early
 }
 
-// ---- navigation -------------------------------------------------------------------------------------
-// The tab bar's callback — NOT a way to change tab. Everything that wants a different tab calls
-// `mTabBar->select()`, which owns the wrap and the selected state and then calls this. Having two
-// entry points for "change tab" is what would make the re-entry ambiguous.
+// The tab bar's callback; a tab change goes through `mTabBar->select()`.
 void MenuDocument::on_tab_selected(int index) {
   if (!mDoc) {
     return;
@@ -356,8 +326,7 @@ void MenuDocument::focus_step(int dir) {
   if (!mCtx) {
     return;
   }
-  // RmlUi owns focus order (driven by the `tab-index: auto` RCSS property, menu.rcss:141), so
-  // Down/Up are its own TAB / Shift+TAB navigation rather than an index we maintain in parallel.
+  // RmlUi owns focus order (`tab-index: auto`), so Down/Up are its TAB / Shift+TAB.
   const int mods = dir < 0 ? Rml::Input::KM_SHIFT : 0;
   mCtx->ProcessKeyDown(Rml::Input::KI_TAB, mods);
   mCtx->ProcessKeyUp(Rml::Input::KI_TAB, mods);
@@ -387,8 +356,7 @@ bool MenuDocument::handle_key(SDL_Keycode sdl_keycode) {
   case SDLK_LEFT: {
     const int dir = sdl_keycode == SDLK_RIGHT ? +1 : -1;
     MenuRow *r = focused_row();
-    // A row that steps with arrows consumes them; anything else lets them change TAB. That
-    // is why a toggle row's Left/Right moves between tabs — deliberate, and preserved.
+    // A row that steps with arrows takes them; otherwise they change tab.
     if (r && r->steps_with_arrows()) {
       r->step(dir);
     } else if (mTabBar) {

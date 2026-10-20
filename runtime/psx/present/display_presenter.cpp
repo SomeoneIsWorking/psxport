@@ -80,6 +80,11 @@ void DisplayPresenter::buildHostPicture(const std::uint8_t *rgba, PixelSize size
   core_.game->render().buildImage(rgba, size, fade);
 }
 
+void DisplayPresenter::buildPanes(std::span<const render::Pane> panes) {
+  core_.game->rml_overlay.newFrame();
+  core_.game->render().buildPanes(panes);
+}
+
 void DisplayPresenter::show() {
   core_.game->render().show();
   if (!pendingCompletion_) {

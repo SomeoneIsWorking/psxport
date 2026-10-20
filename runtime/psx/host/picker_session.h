@@ -1,14 +1,13 @@
 #pragma once
 
-#include "picker_composite.h"
 #include "picker_content.h"
 #include "picker_layout.h"
+#include "picker_panes.h"
 #include "picker_runtime.h"
 #include "title_catalog.h"
 
 #include <memory>
 #include <optional>
-#include <span>
 #include <vector>
 
 class Core;
@@ -20,8 +19,9 @@ class PanelSessions;
 class TitleSession;
 struct SessionServices;
 
-// The title selector: the product state in which several games are alive at once, each showing its
-// own picture in its own panel.
+// The title selector: a screen of the product whose content is several live games, each in its own
+// panel. The host Game presents it through the same present path, overlay menu and input owners as
+// a game frame.
 //
 // Exactly one guest advances per frame, only the selected session is heard, no panel's guest sees
 // the player's pad, a panel with no picture draws nothing, and confirming destroys every panel
@@ -33,18 +33,16 @@ public:
   enum class Outcome : std::uint8_t { Chosen, Ended };
   struct Result {
     Outcome outcome = Outcome::Ended;
-    std::unique_ptr<TitleSession> session; // the chosen title's LIVE session, set when Chosen
+    std::unique_ptr<TitleSession> session; // the chosen title's session, set when Chosen
   };
 
-  // `content` names the panels (available entries in catalog order); both outlive this session. Each
-  // selector frame is one step of the process's run budget; a window close or a client `quit` ends
-  // the selector.
+  // `content` names the panels; it and `catalog` outlive this session. Each selector frame is one
+  // step of the run budget; a window close or a client `quit` ends the selector.
   PickerSession(PickerRuntime &runtime,
                 const TitleCatalog &catalog,
                 const PickerContent &content,
                 SessionServices &services);
-  // Out of line because the result owns a session: a unique_ptr over a forward-declared type can
-  // only be destroyed where that type is complete.
+  // Out of line: the result owns a session, complete only in the .cpp.
   ~PickerSession();
 
   Result run();
@@ -52,26 +50,27 @@ public:
 private:
   // Read the pad and the control channel for one frame and act on them. Returns the chosen panel,
   // or -1 to keep the selector up.
-  int serviceInput(Game &host);
+  int serviceInput();
 
-  // Build the window's one frame from every panel's current picture: at each build of the selected
-  // panel's present, and from the loop when no panel presented.
-  void composite();
-  // Attach this host to the selected, settled panel and detach it from every other.
+  // The selector's present: every panel's current picture built into the host's present image.
+  void build();
+  void show();
+  // Attach the host to the selected, settled panel and detach it from every other.
   void attachPaneHost();
 
   PickerRuntime &runtime_;
   const TitleCatalog &catalog_;
   const PickerContent &content_;
   SessionServices &services_;
+  // The Game that holds the control endpoint, reads the pad, draws the menu and presents the screen.
+  std::unique_ptr<Game> host_;
   std::optional<PickerLayout> layout_; // built in run() from the host Game's settings
-  std::unique_ptr<PickerComposite> composite_;
+  PickerPanes panes_;
   std::unique_ptr<PanelSessions> panels_;
   std::vector<PanelSource> sources_;
-  // A panel presented during the current loop iteration, so the loop knows the frame is already paid
-  // for and must not pace or composite a second time.
-  bool composited_ = false;
-  // The panel this host is attached to, and whether it had settled then.
+  // A panel presented during this loop iteration, so the loop must not build or pace a second time.
+  bool built_ = false;
+  // The panel the host is attached to, and whether it had settled then.
   int hostedPanel_ = -1;
   bool hostedSettled_ = false;
 };

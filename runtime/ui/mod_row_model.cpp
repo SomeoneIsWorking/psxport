@@ -2,20 +2,10 @@
 
 #include "mods.h"
 
-#include <cstdio>
-
 namespace psx::ui {
 namespace {
 
-// ---- toggle rows ---------------------------------------------------------------------------------
-// `states` is the cycle length: `v = (v + 1) % states`. That reproduces the three hand-written
-// cycles it replaces exactly — `(aspect + 1) & 3` for 4 states, `ires += 1; if (ires > 4) ires = 0`
-// for 5, and `!v` for a 0/1 bool.
-//
-// `fallback` is the value DISPLAYED for an out-of-range field, and it is deliberately per-row
-// rather than a uniform 0: the old code clamped a bad `aspect` to 0 (Vanilla) but a bad `ires` to 1
-// (also Vanilla, but index 1 because 0 means Auto for that row). Collapsing the two to one constant
-// would have silently changed what a corrupt settings file shows.
+// `fallback` is the label index shown for an out-of-range field.
 struct ToggleRow {
   const char *id;
   int *(*field)(Mods &);
@@ -26,7 +16,7 @@ struct ToggleRow {
 
 const char *const kOnOff[] = {"Off", "On"};
 const char *const kAspect[] = {"Vanilla", "16:9", "21:9", "Auto"};
-// Merged resolution selector: 0 = Auto, 1..4 = Vanilla(1x)/X2/X3/X4.
+// 0 = Auto, 1..4 = Vanilla(1x)/X2/X3/X4.
 const char *const kIres[] = {"Auto", "Vanilla", "X2", "X3", "X4"};
 
 const ToggleRow kToggleRows[] = {
@@ -53,16 +43,6 @@ const ToggleRow kToggleRows[] = {
      0},
 };
 
-// ---- adjust rows ----------------------------------------------------------------------------------
-struct AdjustRow {
-  const char *id;
-  float *(*field)(Mods &);
-  float step, lo, hi;
-  int precision;
-};
-
-const AdjustRow kAdjustRows[] = {};
-
 const ToggleRow *find_toggle(std::string_view id) {
   for (const ToggleRow &r : kToggleRows) {
     if (id == r.id) {
@@ -72,67 +52,32 @@ const ToggleRow *find_toggle(std::string_view id) {
   return nullptr;
 }
 
-const AdjustRow *find_adjust(std::string_view id) {
-  for (const AdjustRow &r : kAdjustRows) {
-    if (id == r.id) {
-      return &r;
-    }
-  }
-  return nullptr;
-}
-
-std::string fmt_f(float v, int precision) {
-  char b[32];
-  snprintf(b, sizeof b, "%.*f", precision, v);
-  return b;
-}
-
 } // namespace
 
-bool ModRowModel::knows(RowKind kind, std::string_view id) {
-  if (kind == RowKind::Toggle) {
-    return find_toggle(id) != nullptr;
-  }
-  if (kind == RowKind::Adjust) {
-    return find_adjust(id) != nullptr;
-  }
-  return false;
+bool ModRowModel::knows(std::string_view id) {
+  return find_toggle(id) != nullptr;
 }
 
-bool ModRowModel::available(const Mods &m, RowKind kind, std::string_view id) {
-  return kind != RowKind::Toggle || id != "fps60" || m.temporalInterpolationSupported();
+bool ModRowModel::available(const Mods &m, std::string_view id) {
+  return id != "fps60" || m.temporalInterpolationSupported();
 }
 
-bool ModRowModel::value_text(const Mods &m, RowKind kind, std::string_view id, std::string &out) {
-  // The tables' accessors take a non-const Mods& because they are shared with the mutating paths;
-  // reading through them here is const in effect, and casting once at the single read site is
-  // clearer than maintaining a parallel const table.
-  Mods &mm = const_cast<Mods &>(m);
-  if (kind == RowKind::Toggle) {
-    const ToggleRow *r = find_toggle(id);
-    if (!r) {
-      return false;
-    }
-    int v = *r->field(mm);
-    if (v < 0 || v >= r->states) {
-      v = r->fallback;
-    }
-    out = r->labels[v];
-    return true;
+bool ModRowModel::value_text(const Mods &m, std::string_view id, std::string &out) {
+  const ToggleRow *r = find_toggle(id);
+  if (!r) {
+    return false;
   }
-  if (kind == RowKind::Adjust) {
-    const AdjustRow *r = find_adjust(id);
-    if (!r) {
-      return false;
-    }
-    out = fmt_f(*r->field(mm), r->precision);
-    return true;
+  // The table's accessors are shared with toggle(); this read does not write.
+  int v = *r->field(const_cast<Mods &>(m));
+  if (v < 0 || v >= r->states) {
+    v = r->fallback;
   }
-  return false;
+  out = r->labels[v];
+  return true;
 }
 
 void ModRowModel::toggle(Mods &m, std::string_view id) {
-  if (!available(m, RowKind::Toggle, id)) {
+  if (!available(m, id)) {
     return;
   }
   const ToggleRow *r = find_toggle(id);
@@ -144,27 +89,8 @@ void ModRowModel::toggle(Mods &m, std::string_view id) {
   m.save();
 }
 
-void ModRowModel::adjust(Mods &m, std::string_view id, int dir) {
-  const AdjustRow *r = find_adjust(id);
-  if (!r) {
-    return;
-  }
-  float *v = r->field(m);
-  *v += r->step * (float)dir;
-  if (*v < r->lo) {
-    *v = r->lo;
-  }
-  if (*v > r->hi) {
-    *v = r->hi;
-  }
-  m.save();
-}
-
 int ModRowModel::toggle_count() {
-  return (int)(sizeof(kToggleRows) / sizeof(kToggleRows[0]));
-}
-int ModRowModel::adjust_count() {
-  return (int)(sizeof(kAdjustRows) / sizeof(kAdjustRows[0]));
+  return static_cast<int>(sizeof(kToggleRows) / sizeof(kToggleRows[0]));
 }
 
 } // namespace psx::ui

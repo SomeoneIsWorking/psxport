@@ -4,7 +4,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 
 - `runtime/psx/host/product_host.*`, `product_main.cpp` — the one `main`, process top level, command line, window and GPU device lifetime across sessions, quit request, title selector then title then selector loop
 - `runtime/psx/host/title_session.*` — one title's session: shared boot steps for every product, one field step, session services, load-state at first boot
-- `runtime/psx/host/picker_*`, `panel_sessions.*`, `panel_logo.*`, `pre_roll_budget.*` — in-window title picker / selector: panels, panel layout and seams, panel logo texture, one live session per panel, pre-roll budget, `pick` command
+- `runtime/psx/host/picker_*`, `panel_sessions.*`, `panel_logo.*`, `pre_roll_budget.*` — in-window title selector, a host screen built through the host Game's present: panel-to-title mapping, selection, panel layout and seams, panes from each panel's own picture, panel logo texture, one live session per panel, pre-roll budget, `picker` / `pick` / `select` commands
 - `runtime/psx/host/run_budget.*` — run length cap in presentation-fence steps, frame limit
 - `runtime/psx/host/first_run_setup.*`, `saved_disc.*`, `title_disc.*` — first-run disc picker (setup-ui), remembered disc image choice, a title's disc opened for one read
 - `runtime/psx/host/executable_provisioner.*` — extract and authenticate a missing boot executable (SCUS/SLUS) from the title's own disc
@@ -61,7 +61,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/gpu/record_geometry.*`, `record_raster_*`, `vram_bitmap.h` — record raster plan: entry write rects, gpu.c coverage per primitive at internal resolution, canvas margins, written-region bitmaps
 - `runtime/psx/render/record_rasterizer.*`, `record_present.cpp` — record raster on the GPU: ops into VRAM image and canvases, Record-path present, recordcheck, record shot
 - `runtime/psx/render/render_device.*`, `render_window.*`, `render_submit.cpp`, `render_shader.*`, `render_check.h`, `present_sink.h`, `present_mode.h` — SDL3 GPU device (RenderDevice): window, swapchain, present mode, samplers, pipelines, upload, download, submit
-- `runtime/psx/render/render_state.h`, `render_present.cpp`, `render_screen.cpp`, `render_readback.cpp`, `render_api.cpp`, `render.h` — per-Game present (RenderState): present image build and show, pane target, present and device shots, VRAM captures, video status
+- `runtime/psx/render/render_state.h`, `render_present.cpp`, `render_panes.cpp`, `render_pane.h`, `render_screen.cpp`, `render_readback.cpp`, `render_api.cpp`, `render.h` — per-Game present (RenderState): present image build and show, panes built into the present image, pane target, present and device shots, VRAM captures, video status
 - `runtime/psx/shaders_gpu/`, `cmake/gpu_shaders.cmake`, `tools/gen_gpu_shaders.py` — shaders and SPIR-V, generated record op layout
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `present_ledger.*`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale, present ledger
 - `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), display-pass guard, per-Core host render state
@@ -71,7 +71,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/packet_chains.*` — packet tag chains and bucket tables walked as primitives
 - `runtime/psx/present/gte_control.*` — GTE control registers saved, blended and restored around a render
 - `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` — widescreen / 16:9: aspect policy, canvas margins, projection constants, picture geometry announce
-- `runtime/psx/present/pane_*`, `rgb24_picture.h` — panes from several sessions on the one device, host pictures
+- `runtime/psx/present/pane_host.h`, `rgb24_picture.h` — a session presenting into a host screen's pane, host pictures
 - `runtime/psx/input/host_input.*` — SDL event drain, keyboard state, gamepads, quit scope
 - `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `stock_pad_buffers.*` — controller / pad as the guest sees it: SIO0, digital packet, fixed pad buffers
 - `runtime/psx/input/pad_recording.*`, `pad_record_replay.*`, `pad_phase_replay.*`, `input_phase.h` — `.pad` record and replay keyed on input phase
@@ -90,7 +90,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/debug/producer_census.*`, `ot_attr.*` — primitives per guest submitter, OT / GTE submission attribution
 - `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*` — diagnostics: scene dump, CPU phase profiler, memmove census, per-field digest, PNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
 - `runtime/psx/debug/bug_report_session.*` — in-app bug report
-- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, toggles, choice list, Debug tab warp and dev commands, SDL_GPU render interface, assets
+- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, toggles, wrapped stepping, Debug tab warp and dev commands, SDL_GPU render interface, assets
 - `assets/rml/` — overlay menu markup, styles, fonts
 - `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image
 - `tools/port/` — tooling every title runs: consumer build, launcher, launch environment, capture checks

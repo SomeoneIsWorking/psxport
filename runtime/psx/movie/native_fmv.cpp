@@ -219,7 +219,8 @@ bool Fmv::begin(psx::movie::SectorSource &source, uint32_t lba, uint32_t size_by
   game->pad.resetButtonEdges(game->pad.buttons);
   lucent::info("fmv", "begin: LBA {}, {} bytes ({} sectors)", lba, size_bytes, sector_count_);
   learnLayout();
-  grid_ = psx::movie::MovieFieldGrid(psx::frame::fieldIntervalMs(game->framePacer.fieldRateMilliHz(game->core), 1, 1));
+  grid_ = psx::movie::MovieFieldGrid(
+      psx::frame::fieldIntervalMs(psx::frame::fieldRateMilliHz(game->timing.displayFieldRate()), 1, 1));
   audio_lag_ = {};
   intervals_at_begin_ = game->perf.presentSeries().intervals;
   missed_at_begin_ = game->perf.presentSeries().missed;

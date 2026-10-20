@@ -356,17 +356,19 @@ once. A movie frame is decoded and built before its field wait and shown after i
 A pane present follows the same order through its host (`psx::present::PaneHost`, attached with
 `TitleSession::setPaneHost` → `RenderState::setPaneHost`): `buildDisplay` calls the host's `built`
 after the pane's build, and `show` calls its `show` after the pane's wait. The picker attaches itself to
-the selected, settled panel and composites at `built` and shows the composite at `show`, so its cadence
-is that panel's presents, in-betweens included. The picker's loop builds, paces with
-`FramePacer::hostScreenPace` and shows its composite itself only on an iteration where no panel
-presented, and skips the pace when the panel's step already paced its fields (`title-host.md`). A pane
+the selected, settled panel, builds its own present image at `built` and shows it at `show`, so its cadence
+is that panel's presents, in-betweens included. The selector is a host screen of the product: its Game
+builds panes into its present image (`DisplayPresenter::buildPanes` → `RenderState::buildPanes`) and
+shows it through `showPresentImage`, so the overlay, the RmlUi menu and host input are the ones a title
+frame has. The picker's loop builds, paces with `FramePacer::hostScreenPace` and shows itself only on an
+iteration where no panel presented, and skips the pace when the panel's step already paced its fields (`title-host.md`). A pane
 samples the session's live present image (`RenderState::newestPresentedPicture`; `title-host.md` for
 the fallback).
 
 A pane's present image is filled, not letterboxed: `PresentInputs::fill` centre-crops the picture to
 the image's shape at its displayed 4:3 aspect, at the rendered resolution. The
-picker then crops each picture to its panel's cover rectangle (`PanelLayout::sourceCrop`), which keeps
-the aspect of a paused panel whose picture was built at another size.
+selector draws each picture 1:1 at its own size, centred on its panel's cover rectangle and cut by the
+seams (`PickerPanes`), so nothing is cropped to fit or magnified.
 
 ### Auto, a pane, and the internal-resolution budget
 
@@ -375,9 +377,9 @@ budget, which is derived from the whole 1024x512 VRAM at scale and costs real me
 `RecordRasterizer::ensureImage` holds that image in four textures. The budget is 640 MiB at 14 bytes
 per scaled VRAM pixel, which admits 9; `kIresCeiling` caps it at 8.
 
-A pane measures its own present image, not the window. The selector's selected panel is given the
-window's size, so it renders at the display's own resolution and shows its panel's share of it; the
-other panels are given a third of their own cover rectangle, because they are paused thumbnails.
+A pane measures its own present image, not the window. Each panel is given its settled cover rectangle
+(`PickerLayout::imageSize`), so the selected panel renders at the display's resolution for its share of
+the window; a paused panel keeps the size it last presented at.
 
 The play check's missed-vsync count (`GpuPerf::presented`, the RunEndReport `presents:` line) judges
 each present against its own paced deadline. Every pacing call reports the fields it holds the next

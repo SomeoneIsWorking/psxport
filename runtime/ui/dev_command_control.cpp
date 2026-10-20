@@ -3,18 +3,11 @@
 #include "command_args.h"
 #include "game.h"
 #include "title_command.h"
+#include "wrap.h"
 
 #include <lucent/log.h>
 
 namespace psx::ui {
-namespace {
-
-template <int Max> int wrap(int value, int dir) {
-  constexpr int span = Max + 1;
-  return ((value + dir) % span + span) % span;
-}
-
-} // namespace
 
 std::string DevCommandControl::send(const std::string &line) const {
   if (!mGame) {
@@ -42,15 +35,15 @@ std::string DevCommandControl::writeFlag() const {
 }
 
 void DevCommandControl::adjustEntry(int dir) {
-  mEntry = wrap<kMaxEntry>(mEntry, dir);
+  mEntry = wrap(mEntry, dir, kMaxEntry + 1);
 }
 
 void DevCommandControl::adjustFlagIndex(int dir) {
-  mFlagIndex = wrap<kMaxByte>(mFlagIndex, dir);
+  mFlagIndex = wrap(mFlagIndex, dir, kMaxByte + 1);
 }
 
 void DevCommandControl::adjustFlagValue(int dir) {
-  mFlagValue = wrap<kMaxByte>(mFlagValue, dir);
+  mFlagValue = wrap(mFlagValue, dir, kMaxByte + 1);
 }
 
 } // namespace psx::ui

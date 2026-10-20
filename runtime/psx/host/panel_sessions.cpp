@@ -5,7 +5,9 @@
 #include "title_session.h"
 
 #include "core.h"
+#include "game.h"
 #include "game_runtime.h"
+#include "wrap.h"
 
 #include <lucent/log.h>
 
@@ -24,18 +26,16 @@ constexpr int kPreRollSteps = 900;
 } // namespace
 
 PanelSessions::PanelSessions(const TitleCatalog &catalog, const PickerContent &content, SessionServices &services)
-    : catalog_(catalog), services_(services) {
-  for (int panel = 0; panel < content.panelCount(); ++panel) {
-    titles_.push_back(&content.panelTitle(panel));
-  }
-  sessions_.reserve(titles_.size());
-  booted_.assign(titles_.size(), false);
-  settled_.assign(titles_.size(), false);
-  logos_.resize(titles_.size());
-  for (const TitleAvailability *title : titles_) {
-    // Constructed, not booted: an unasked session costs only its handle, and boot() is the
-    // expensive part.
-    sessions_.push_back(std::make_unique<TitleSession>(catalog_, *title, TitleSession::Role::Panel, true, services_));
+    : catalog_(catalog), content_(content), services_(services) {
+  const auto panels = static_cast<std::size_t>(content_.panelCount());
+  sessions_.reserve(panels);
+  booted_.assign(panels, false);
+  settled_.assign(panels, false);
+  logos_.resize(panels);
+  for (int panel = 0; panel < content_.panelCount(); ++panel) {
+    // Constructed, not booted: boot() is the expensive part.
+    sessions_.push_back(std::make_unique<TitleSession>(
+        catalog_, content_.panelTitle(panel), TitleSession::Role::Panel, true, services_));
   }
   if (sessions_.empty()) {
     lucent::warn("picker", "no provisioned title: the selector has no panels");
@@ -49,23 +49,6 @@ PanelSessions::PanelSessions(const TitleCatalog &catalog, const PickerContent &c
 
 PanelSessions::~PanelSessions() = default;
 
-const TitleAvailability &PanelSessions::title(int panel) const {
-  if (panel < 0 || panel >= count()) {
-    lucent::error("picker", "panel {} is outside the {} panel(s) that exist", panel, count());
-    std::abort();
-  }
-  return *titles_[static_cast<std::size_t>(panel)];
-}
-
-int PanelSessions::panelOf(std::string_view slug) const {
-  for (int panel = 0; panel < count(); ++panel) {
-    if (titles_[static_cast<std::size_t>(panel)]->identity->slug == slug) {
-      return panel;
-    }
-  }
-  return -1;
-}
-
 TitleSession *PanelSessions::session(int panel) {
   if (panel < 0 || panel >= count()) {
     return nullptr;
@@ -78,13 +61,6 @@ const TitleSession *PanelSessions::session(int panel) const {
     return nullptr;
   }
   return sessions_[static_cast<std::size_t>(panel)].get();
-}
-
-bool PanelSessions::hasPicture(int panel) const {
-  if (panel < 0 || panel >= count() || !booted_[static_cast<std::size_t>(panel)]) {
-    return false;
-  }
-  return sessions_[static_cast<std::size_t>(panel)]->hasPicture();
 }
 
 // Past the title's boot prefix and holding a picture: a publisher logo passes the picture test
@@ -107,29 +83,11 @@ bool PanelSessions::panelReady(int panel) const {
   return session->heldPicture();
 }
 
-bool PanelSessions::hasVisiblePicture(int panel) const {
-  return panelReady(panel);
-}
-
-int PanelSessions::pictureWidth(int panel) const {
-  if (panel < 0 || panel >= count() || !booted_[static_cast<std::size_t>(panel)]) {
-    return 1;
+psx::render::PresentedImage PanelSessions::picture(int panel) const {
+  if (!panelReady(panel)) {
+    return {};
   }
-  return sessions_[static_cast<std::size_t>(panel)]->pictureWidth();
-}
-
-int PanelSessions::pictureHeight(int panel) const {
-  if (panel < 0 || panel >= count() || !booted_[static_cast<std::size_t>(panel)]) {
-    return 1;
-  }
-  return sessions_[static_cast<std::size_t>(panel)]->pictureHeight();
-}
-
-Core *PanelSessions::core(int panel) {
-  if (!hasVisiblePicture(panel)) {
-    return nullptr;
-  }
-  return &sessions_[static_cast<std::size_t>(panel)]->core();
+  return sessions_[static_cast<std::size_t>(panel)]->presentedPicture();
 }
 
 PanelLogo *PanelSessions::logo(int panel) {
@@ -159,6 +117,10 @@ void PanelSessions::select(int panel) {
   if (panel < 0 || panel >= count() || panel == selected_) {
     return;
   }
+  // The outgoing panel pauses on its last present; one probe here lets a fade fall back to the held picture.
+  if (const TitleSession *outgoing = session(selected_)) {
+    outgoing->refreshPicture();
+  }
   selected_ = panel;
   // The demo the player is looking at is the one they hear. The host audio device is a per-process
   // resource, so every other session must release it.
@@ -167,7 +129,11 @@ void PanelSessions::select(int panel) {
       session->setAudible(other == panel);
     }
   }
-  lucent::info("picker", "selected panel {}: {}", panel, title(panel).identity->displayName);
+  lucent::info("picker", "selected panel {}: {}", panel, content_.panelTitle(panel).identity->displayName);
+}
+
+void PanelSessions::step(int dir) {
+  select(psx::ui::wrap(selected_, dir, count()));
 }
 
 bool PanelSessions::panelSettled(int panel) const {
@@ -196,7 +162,7 @@ void PanelSessions::latchArrival(int panel) {
     lucent::info("picker",
                  "panel {} ({}) finished its pre-roll and now runs as the product",
                  panel,
-                 title(panel).identity->displayName);
+                 content_.panelTitle(panel).identity->displayName);
   }
 }
 
@@ -240,12 +206,13 @@ unsigned long long PanelSessions::advance(const PreRollBudget &preRoll) {
   }
   if (!booted_[static_cast<std::size_t>(panel)]) {
     if (!current->boot()) {
-      lucent::error("picker", "{} could not be booted: its panel stays empty", title(panel).identity->displayName);
+      lucent::error(
+          "picker", "{} could not be booted: its panel stays empty", content_.panelTitle(panel).identity->displayName);
       booted_[static_cast<std::size_t>(panel)] = true;
       return 0;
     }
     booted_[static_cast<std::size_t>(panel)] = true;
-    lucent::info("picker", "booting panel {}: {}", panel, title(panel).identity->displayName);
+    lucent::info("picker", "booting panel {}: {}", panel, content_.panelTitle(panel).identity->displayName);
   }
   if (current->returnRequested()) {
     return 0;
@@ -254,6 +221,8 @@ unsigned long long PanelSessions::advance(const PreRollBudget &preRoll) {
   // waited for are the frame's wall time: an unpaced fast-forward step pays nothing and owes the
   // loop's field pace, which is what the return value tells the loop.
   current->setPreRolling(!panelSettled(panel));
+  // The selector's menu writes the settings; the panel that runs shows them.
+  current->core().game->mods.reload();
   unsigned long long pacedFields = 0;
   PreRollBudget::Clock::duration lastStep{};
   for (int step = 0; current->end() == TitleSession::End::Running; ++step) {
@@ -264,16 +233,17 @@ unsigned long long PanelSessions::advance(const PreRollBudget &preRoll) {
     current->step();
     lastStep = PreRollBudget::Clock::now() - stepStart;
     pacedFields += current->lastStepPacedFields();
-    // The running panel is the only one whose picture can have changed, so it is the only one worth
-    // reading back; its own slow cadence is what keeps a demo playing in the panel.
-    current->refreshPicture();
+    // A readback, so only until the panel first holds a picture; after that a pane shows the live image.
+    if (!current->heldPicture()) {
+      current->refreshPicture();
+    }
     // Once, from this session's VRAM while its own screen is still up.
     takeLogo(panel, *current);
     if (current->end() != TitleSession::End::Running) {
       lucent::info("picker",
                    "panel {} ({}) ended its run; its panel keeps the picture it last presented",
                    panel,
-                   title(panel).identity->displayName);
+                   content_.panelTitle(panel).identity->displayName);
       break;
     }
     // Asked of every unsettled panel each frame, not only the running one: a panel the player is
@@ -291,17 +261,17 @@ std::unique_ptr<TitleSession> PanelSessions::confirm() {
     return nullptr;
   }
   const int chosen = selected_;
-  const TitleAvailability &picked = title(chosen);
+  const TitleAvailability &picked = content_.panelTitle(chosen);
   // The chosen panel's demo is a preview, so it dies with the rest: choosing a game means booting
   // it, not resuming someone's attract loop with its memory card writes.
   //
   // The fresh session boots on the product's own terms with the window and its device, which
   // belong to the process rather than to any session.
   sessions_.clear();
-  booted_.assign(titles_.size(), false);
+  booted_.assign(booted_.size(), false);
   // An arrival belongs to the machine that measured it, so coming back to the selector re-asks
   // every title.
-  settled_.assign(titles_.size(), false);
+  settled_.assign(settled_.size(), false);
   running_ = -1;
   // Panel defaults are undone before boot, and the player's pad must reach the guest: a panel
   // session starts with player input suppressed so the press that moved the selection does not
@@ -324,7 +294,7 @@ std::string PanelSessions::summary() const {
     line += std::format(" [{}]{}{} {}",
                         panel,
                         isSelected ? "*" : " ",
-                        titles_[static_cast<std::size_t>(panel)]->identity->slug,
+                        content_.panelTitle(panel).identity->slug,
                         panelReady(panel) ? (panelSettled(panel) ? "demo" : "picture")
                                           : (booted_[static_cast<std::size_t>(panel)] ? "booting" : "cold"));
   }

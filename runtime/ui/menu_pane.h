@@ -27,10 +27,7 @@ namespace psx::ui {
 class RowBuilder {
 public:
   virtual ~RowBuilder() = default;
-  // Build the binding for an authored `<select-button>`. Returning null is allowed and means "I
-  // do not recognise this row"; the pane still adopts it so navigation order is unchanged, and
-  // the builder is responsible for REPORTING the unknown id (a silently-skipped row is exactly
-  // the failure mod_row_model.h describes).
+  // The binding for an authored `<select-button>`; null for an unknown row, which the builder reports.
   virtual std::unique_ptr<RowBinding> bind_row(Rml::Element *row) = 0;
   virtual void on_row_clicked(MenuRow &row) = 0;
 };

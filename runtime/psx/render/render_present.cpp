@@ -95,8 +95,6 @@ void RenderState::ensurePresentImage(PixelSize size) {
   presentReadback_ = device_.makeTransferBuffer(SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
                                                 static_cast<std::uint32_t>(size.width) * size.height * 4);
   presentImageSize_ = size;
-  // A new image is a new picture: the measured content belonged to the old size.
-  content_ = present::PaneRect{0, 0, 0, 0};
   lucent::info(
       "render", "present image {}x{} ({} sink)", size.width, size.height, device_.windowed() ? "windowed" : "headless");
 }

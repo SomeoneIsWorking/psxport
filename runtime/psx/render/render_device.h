@@ -106,6 +106,14 @@ public:
   SDL_GPUGraphicsPipeline *sinkPipeline() const {
     return sinkPipeline_;
   }
+  // A seam-cut, tinted rectangle into the present image (render_pane.h), blended over what is there.
+  SDL_GPUGraphicsPipeline *panePipeline() const {
+    return panePipeline_;
+  }
+  // The 1x1 source a solid pane is drawn from.
+  SDL_GPUTexture *whiteTexture() const {
+    return whiteTexture_;
+  }
   ui::RmlUiLibrary &rmlUi() {
     return *rmlUi_;
   }
@@ -163,6 +171,8 @@ private:
   SDL_GPUGraphicsPipeline *presentPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *imagePipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *sinkPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *panePipeline_ = nullptr;
+  SDL_GPUTexture *whiteTexture_ = nullptr;
   std::unique_ptr<ui::RmlUiLibrary> rmlUi_;
 };
 
