@@ -20,9 +20,9 @@
 - **Files:** `include/lucent/text.h`, `src/text.cpp`, `include/lucent/cvar.hpp`, `src/cvar.cpp`.
 - **Moves:** `cvar::detail::trim` becomes `lucent::text::trim(string_view)`.
 - **Adds:**
-  - `lucent::text::jsonQuote`, with the full escaping that `override_differential_report.cpp::jsonString` does today.
-  - Four cvar extensions: a Runtime layer, a per-layer value query, a non-persistable flag, and exact-name environment binding (plus a warning when an environment integer does not parse).
-- **Deletes:** nothing (additive).
+  - `lucent::text::json_quote` (Lucent naming), with the full escaping that `override_differential_report.cpp::jsonString` does today.
+  - Four cvar extensions: `Layer::Runtime`, per-layer queries (`has`, `at`, `layer_string`, `clear`), `Persistence::RunOnly`, and `Options::env_name` for an exact environment name; a value of any type that does not parse is logged through Lucent and ignored.
+- **Deletes:** `http.cpp`'s private header trim, folded into `lucent::text::trim`; header names and values now also lose edge CR, LF, VT and FF, not only SP/HTAB (lines split on CRLF, so only malformed headers differ).
 - **The one implementation:** text trim, JSON quoting and layered config variables all live in Lucent.
 - **Spyro proof:** psxport and Spyro build; Spyro 1 boots to its title screen headless.
 
@@ -112,7 +112,7 @@ One group because its API breaks reach every caller. psxport commits come first,
     - Spyro's `HandoffStoreObserver` and `StageUpdateObserver` are deleted.
   - **Reports.**
     - `execution_ledger::ledgerLines` owns every counter's text; `reportFallbackTelemetry` is deleted.
-    - `lucent::text::jsonQuote` replaces `jsonEscaped`/`jsonString`.
+    - `lucent::text::json_quote` replaces `jsonEscaped`/`jsonString`.
     - `DifferentialSelector::matches` is the one selector predicate.
   - **Save states.**
     - `saveToFile`/`loadFromFile` are the only save/load paths; `state::save` and `state::load` are deleted.
