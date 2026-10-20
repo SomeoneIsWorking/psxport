@@ -4,7 +4,7 @@
 A title runs this from psxport `main` before it has a framework (`uv run --no-project <raw URL> --auto`
 in the title root), so it is stdlib only and imports nothing else from psxport. With a sibling `psxport`
 checkout it publishes a relative symlink; with none it shallow-clones psxport `main` and its vendor
-submodules, then fetches re-harness through the clone's `tools/policy/harness.py --fetch`.
+submodules.
 `PSXPORT_FRAMEWORK_URL` names a fork or mirror for that clone.
 
 No git command runs with its cwd at `external/psxport` or through a link this tool did not create
@@ -131,20 +131,10 @@ def do_clone(link):
         if not published:
             return 2
         print(f"[psxport] external/psxport cloned from {branch}")
-        return fetch_harness(link)
+        return 0
     finally:
         if not published:
             shutil.rmtree(staging, ignore_errors=True)
-
-
-def fetch_harness(link):
-    """The policy tools a cloned framework's gates run, located or cloned by the framework itself."""
-    locator = os.path.join(link, "tools", "policy", "harness.py")
-    if not os.path.isfile(locator):
-        print("[psxport] REFUSED: the cloned framework has no tools/policy/harness.py to fetch re-harness.")
-        return 2
-    done = subprocess.run([sys.executable, locator, "--fetch"], cwd=os.path.dirname(link))
-    return 0 if done.returncode == 0 else 2
 
 
 def init_submodules(root):

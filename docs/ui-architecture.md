@@ -52,7 +52,7 @@ the DOM in C++. The method is therefore named `adopt<T>(element, args…)`.
 
 The reason is the framework/game seam: **the menu's structure is CONTENT.** A game ships its own
 `menu.rml`, and psxport hard-coding Tomba!2's six tabs in C++ would be the framework knowing a game
-— the thing `psxport_smoke` exists to prevent.
+— the framework/game coupling the link boundary exists to prevent.
 
 ## ONE stack, not two — the ImGui decision (2026-08-06)
 
@@ -131,9 +131,7 @@ RmlUi is the upstream 6.3 release as the `vendor/rmlui` submodule.
 ## Rules for adding to the menu
 
 - **Text goes in through `psx::ui::set_text()` and nowhere else.** It is the only raw inner-RML call
-  site in the subsystem, and `tests/test_rml_text_encoding.cpp` enumerates `runtime/ui/**` at run
-  time (not a hardcoded list) and fails if there is ever more than one, or if it is in the wrong
-  file.
+  site in the subsystem; keep it the only one in the subsystem.
 - **A new row kind is a new `RowBinding`**, not a branch in `MenuDocument`.
 - **A new Mods-backed `toggle=`/`adjust=` id is a row in `mod_row_model.cpp`'s table.** Feature-owned
   state gets a cohesive control plus `RowBinding`, as `warp_control` does;

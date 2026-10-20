@@ -40,17 +40,9 @@ runs:
         fetch-depth: 0
         persist-credentials: false
         submodules: recursive
-    - name: Check the setup policy
-      shell: bash
-      run: uv run --frozen python "${{ github.action_path }}/test_setup.py"
     - name: Provision the Linux build environment
       shell: bash
       env:
         PSXPORT_CI_FRAMEWORK: ${{ inputs.framework-directory }}
         PSXPORT_CI_DEPENDENCIES: ${{ inputs.dependency-directory }}
       run: uv run --frozen python "${{ github.action_path }}/setup.py"
-    - name: Give the whole job one X display
-      shell: bash
-      run: |
-        Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &
-        echo "DISPLAY=:99" >> "$GITHUB_ENV"

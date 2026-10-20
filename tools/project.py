@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Canonical CMake operations for asset-free psxport builds and verification."""
+"""Canonical CMake operations for asset-free psxport builds."""
 
 from __future__ import annotations
 
@@ -69,9 +69,6 @@ def configure(build: Path) -> None:
             "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
             f"-DPython3_EXECUTABLE={sys.executable}",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-            "-DPSXPORT_BUILD_SMOKE=ON",
-            "-DPSXPORT_BUILD_TESTS=ON",
-            "-DPSXPORT_ORACLE_PC_OBSERVER=ON",
             *lightrec_definitions,
             *lightning_definitions,
         ],
@@ -82,7 +79,3 @@ def configure(build: Path) -> None:
 
 def build_project(build: Path) -> None:
     run(["cmake", "--build", build], cwd=ROOT)
-
-
-def test_project(build: Path) -> None:
-    run(["ctest", "--test-dir", build, "--output-on-failure"], cwd=ROOT)

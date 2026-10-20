@@ -207,30 +207,10 @@ the event drain, so it reaches the run-end report like a client `quit`.
    [SOURCES ...] [LIBRARIES ...])` (`cmake/psxport.cmake`). The title writes no `main`.
 4. Have the title's frame drivers call `core.game->run.requestEnd()` when the title cannot go on; a
    picked title then returns to the selector.
-5. A product that links several title trees registers
-   `psxport_add_title_link_isolation_test(<test> FIRST <target> FIRST_ROOT <dir> SECOND <target>
-   SECOND_ROOT <dir>)` (`cmake/psxport.cmake`, `tools/port/title_link_isolation.py`): it fails on an
-   external name both trees define from their own sources. psxport's
-   `title_link_isolation_detects_collision` and `title_link_isolation_refuses_objects_without_lines`
-   prove it over `tests/fixtures/link_isolation/`.
 
-## Testing
+## Running
 
-`tests/test_title_selection.cpp`, `test_title_picker.cpp` and `test_picker_layout.cpp` cover
-selection, availability, the control commands and panel geometry over a fake catalog, with no window.
-`test_run_budget.cpp` covers the cap's precedence. `test_first_run_setup.cpp` drives the screen's validator
-(the fixture disc accepted, another title's bytes and a non-image refused by reason), the saved choice
-as the disc a title opens and provisions from, the title key winning over it, and the hidden-run refusal. `test_executable_provisioner.cpp` extracts from the
-fixture disc `tests/fixtures/provision_disc/provision.chd` (regenerate with
-`tests/fixtures/make_provision_disc.py`) and refuses bytes that are not the title. `psxport_product_fixture` (`tests/product_fixture_catalog.*`) is a product built by `psxport_add_product` over an empty catalog; CTest runs its `-h`/`--help` and a refused argument through `product_main.cpp`. `test_product_host_session.cpp` runs the shipping
-`ProductHost` through `run(argc, argv)` over a stub catalog and frame driver on an offscreen device: help
-and refused arguments boot nothing; a one-title catalog boots without a selector; the cap, a client quit and
-a window close each reach one run-end report; a capped selector boots its panels without one; a
-window close in the selector ends it without a report; and a picked title that ends its own run
-returns to the selector, where a second pick boots without reloading `PSXPORT_LOAD_STATE`; a `Crt0` image
-with an incomplete crt0 group is refused by name, the same image declared `DriverOwned` boots with no
-crt0, and a missing executable is provisioned from the fixture disc and booted. `test_pre_roll_budget.cpp` covers the per-frame pre-roll
-budget and `test_frame_pacer.cpp` that a pre-rolling Game does not pace. Picker frame time is read
+Picker frame time is read
 from consecutive `[picker] panels:` lines of a paced run (`PSXPORT_DEBUG=picker,pacer`, no NOPACE). The headless walk (`picker`, `pick <slug>`,
 `session return`, `pick <slug>`) runs on a built port with `PSXPORT_DEBUG_SERVER` and
 `tools/dbgclient.py`; see the consuming port's docs for its route.

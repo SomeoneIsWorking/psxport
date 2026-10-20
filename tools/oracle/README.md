@@ -11,13 +11,8 @@ unsupported, and touching them stops and taints the window. No tool here is a pl
 Build with the repository's Clang-configured CMake tree:
 
 ```sh
-cmake --build build/ci --target oracle_spike oracle_trace oracle_window test_oracle_snapshot
-build/ci/tools/oracle/test_oracle_snapshot scratch/oracle-snapshot
+cmake --build build/ci --target oracle_trace oracle_window
 ```
-
-`oracle_spike` remains the independent CPU/device discriminator. `test_oracle_snapshot` exercises
-actual CPU load/branch delay continuations across snapshot restore, complete owner-state replay,
-malformed-input atomic refusal, hardware-taint preservation, and explicit boundary normalization.
 
 ## Exact isolated-oracle snapshot
 

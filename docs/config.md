@@ -47,7 +47,7 @@ layout is also a settings-file value in `Mods`: `picker_selected_share` (the sel
 the width, default 0.6; the others split the rest evenly), `picker_slant` (seam slant as a fraction of
 the width, 0.1) and `picker_width_response` (fraction of the remaining width travel per frame, 0.25).
 `PickerSession` reads them from its host Game's `mods`. The environment audit
-counts `Config::environmentNames()` as declared. Unit test: `tests/test_typed_config.cpp`.
+counts `Config::environmentNames()` as declared.
 
 The resolved value, source layer, and complete `PSXPORT_*` environment denominator are available
 through `psx::config::report()` and the `cvars` runtime command. `PSXPORT_LOG_FILE` selects the log
@@ -132,13 +132,6 @@ widened, not requested, no title projection, the `device` path, `ASPECT_AUTO` on
 wide, and a request that was possible and still did not grow the width. A refused outcome is a
 warning. The announced `render_width` is derived with the presenter's own `present_display_width`.
 
-`tests/test_config_cvar.cpp` exercises precedence, invalid input, environment auditing, and runtime
-mutation through the production registry. `tests/test_debug_server_port.cpp` pins the endpoint's port
-contract, including the `1` sentinel and every shape of text that must not bind a port.
-`tests/test_picture_announce.cpp` drives the shipping `classifyWide` over the exact geometries two
-repositories recorded, and the mutation that silences the AUTO verdict fails it.
-`tests/test_render_path.cpp` pins the render path names and parse.
-
 ## PSXPORT_OVERRIDE_DIFF — does this native override equal its original?
 
 `PSXPORT_OVERRIDE_DIFF` arms the per-function override differential (`runtime/cpu/override_differential.h`)
@@ -150,14 +143,9 @@ with the original's device traffic replayed to it, the two post-states are compa
 contract, and the run continues from the **original's** state. `PSXPORT_OVERRIDE_DIFF_DEAD_STACK`
 (default 8192) bounds the callee-frame window below the entry `sp` whose differences are counted but not
 judged. The log line of a mismatch lists up to eight further differences after the first. `PSXPORT_OVERRIDE_DIFF_REPORT` (default `scratch/override_differential.json`, cwd-relative) is the
-JSON report; gate on it with
-
-    uv run --frozen python tools/port/override_differential_gate.py scratch/override_differential.json --require <name>
-
-which exits nonzero on any mismatch, on a requested selector that sampled zero calls or only
-incomparable ones, and on an incomplete report. An unparsable list is refused by name and arms nothing,
-so the gate then fails on the missing report. What is and is not compared is written into the report
-itself (`compared`, `not_observed`).
+JSON report, read by hand after the run. An unparsable list is refused by name and arms nothing, so
+no report is written. What is and is not compared is written into the report itself (`compared`,
+`not_observed`).
 
 ## PSXPORT_STORE_OBSERVE — which instruction wrote this guest word
 
@@ -200,8 +188,3 @@ Two honest limits, both stated in `runtime/cpu/store_observe.cpp` rather than pa
 A title wanting richer handling than a log line calls
 `LightrecExecutor::configureStoreObserver` itself with its own callback; this is the
 configuration-driven path, so an investigation needs no product edit.
-`tests/test_diagnostic_run.cpp` proves product,
-comparison, nesting, and invalid-role behavior through the shipping enhancement gate;
-`tests/test_dynarec_contract.cpp` proves zero/nonzero telemetry and both sides of fallback threshold
-enforcement. The product-boundary check rejects CPU-engine selectors and explicit interpreter mode
-independently of configuration tests.

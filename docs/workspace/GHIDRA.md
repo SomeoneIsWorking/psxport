@@ -125,7 +125,7 @@ be, so:
 
 ### What a wrong load base costs, measured
 
-Not "it fails" — the number, from `tests/controls_overlay.py`:
+Not "it fails" — the measured numbers:
 
 | base | measured addresses still covered |
 |---|---|
@@ -194,7 +194,7 @@ On Spyro 1 and on a purpose-built fixture, Ghidra's "Non-Returning Functions - D
 **ran and marked nothing** — its row is in the analyzer table, 0 marked of 673 functions. So the
 defence could not be provoked through auto-analysis, and the fixture **sets the flag itself** on the
 one function that genuinely never returns, then measures both halves over the same caller in one
-process (`tests/noreturn_fixture_run.py`, a ctest that launches Ghidra):
+process (a one-off Ghidra run):
 
 | caller | phase | bytes | statements | warning |
 |---|---|---|---|---|

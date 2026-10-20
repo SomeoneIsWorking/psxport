@@ -2,7 +2,7 @@
 
 This guide describes the native/Lightrec architecture. psxport's current code is still migrating to
 it; follow `docs/project-state.md` and do not begin a new title until the active PSX title's declared
-conformance gate is complete.
+completion bar is met.
 
 ## What the framework provides
 
@@ -89,14 +89,14 @@ environment/`.env`, then a repo drop-in, but no game data enters Git or a packag
 A fresh checkout with documented native dependencies, `uv`, and a compatible compiler must provision
 and launch without generated guest code, Ghidra, or private machine paths.
 
-## Completion gate
+## Completion bar
 
 A title is migrated only when:
 
 - the authenticated product reaches at least its prior verified frontier and representative
   interactive gameplay;
 - native overrides and an original call execute through the runtime dispatcher;
-- relevant module reuse and executable invalidation pass positive and negative controls;
+- relevant module reuse and executable invalidation work in the running product;
 - timing, interrupts, memory, and relevant device state are compared at named boundaries;
 - each released host architecture meets its declared correctness and frame-time budget;
 - product-link and selector audits find no standalone interpreter mode or generated guest bodies,

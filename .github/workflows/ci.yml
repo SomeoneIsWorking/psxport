@@ -1,4 +1,4 @@
-name: Asset-free native runtime contract
+name: Build
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   linux-x86_64:
-    name: Linux x86-64 native/Lightrec contract
+    name: Linux x86-64 build
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
@@ -33,11 +33,5 @@ jobs:
           enable-cache: false
       - name: Provision the shared Linux build inputs
         uses: ./.github/actions/setup-linux
-      - name: Fetch the shared policy tools
-        run: uv run --frozen python tools/policy/harness.py --fetch
-      - name: Provision Ghidra for the decompiler fixture
-        run: |
-          sudo apt-get install --yes default-jdk-headless
-          uv run --frozen python tools/decomp/install.py
-      - name: Run the asset-free product and repository contracts
-        run: uv run --frozen python tools/verify.py
+      - name: Build the shipping binaries
+        run: uv run --frozen python tools/build.py

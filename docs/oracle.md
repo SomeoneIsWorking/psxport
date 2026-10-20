@@ -58,9 +58,7 @@ the per-core pad latency between a park point and the frame whose input read see
 The driver delivers the same pad to the same game frame's input read on both cores (`Driver`,
 `Playback`), drives the console first at each checkpoint so the product's settle frame reads the
 console's arrival pad, and treats the title's pad words as decisive so a delivery difference fails
-before anything downstream. `test_compare.py` proves both answers over fake cores: the matching
-lookahead matches every checkpoint, a wrong lookahead is reported as a `pad` divergence, and the
-seeded selftest is detected. Tomba! 2 (`psx-tomba/tools/oracle_title.py`) and Spyro 1
+before anything downstream. Tomba! 2 (`psx-tomba/tools/oracle_title.py`) and Spyro 1
 (`psx-spyro/tools/oracle_spyro1.py`) are the consumers.
 
 ## Evidence rules

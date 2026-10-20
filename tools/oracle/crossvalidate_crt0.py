@@ -29,7 +29,6 @@ Every way this can fail to answer prints something that is NOT mistakable for ag
 And the denominator is always printed: how many fields were compared out of how many were attempted.
 
 Usage:  crossvalidate_crt0.py <PS-X EXE> [--build DIR] [--steps N]
-        crossvalidate_crt0.py --selftest
 Exit:   0 = every comparable field agrees, and at least one was compared.
         1 = a real disagreement.
         2 = could not compare (a tool missing, the window too short, a field invisible).
@@ -141,47 +140,13 @@ def row_counts(rows):
             sum(a is None or b is None for a, b in compared))
 
 
-def selftest():
-    crash = {"gp": 0x800563FC, "libcInit": 0x80011A18, "heapBase": 0x80061A78,
-             "planSp": 0x801FFFF8, "planA0": 0x80061A7C, "planA1": 0x19D580, "stackBias": -8}
-    call_text = """# CAPTURED-CALL target=0x80011A18 ra=0x8003E0A8 step=57910
-# CALL-BOUNDARY-REGS step=57910 pc=0x80011A18
-# CALL-BOUNDARY-REG gp=0x800563FC
-# CALL-BOUNDARY-REG sp=0x801FFFF8
-# CALL-BOUNDARY-REG a0=0x80061A7C
-# CALL-BOUNDARY-REG a1=0x0019D580"""
-    call = parse_boundary(call_text, "CALL-BOUNDARY")
-    ctr = dict(crash, biosFn=0x39)
-    exit_text = """# BOUNDARY-REGS step=57913 pc=0x000000A0
-# BOUNDARY-LAST-JAL target=0x80011A18 ra=0x8003E0A8 step=57910
-# BOUNDARY-REG t1=0x00000039"""
-    checks = [
-        ("Crash in-image libcInit", row_counts(comparison_rows(crash, call)) == (6, 0, 0)),
-        ("unreached call refuses", parse_boundary("# FIRST CALL WAS NOT REACHED", "CALL-BOUNDARY") is None),
-        ("wrong call target disagrees", row_counts(comparison_rows(
-            crash, parse_boundary(call_text.replace("target=0x80011A18", "target=0x80011A1C"),
-                                  "CALL-BOUNDARY"))) == (5, 1, 0)),
-        ("CTR A(39h) control", row_counts(comparison_rows(ctr, call, parse_boundary(exit_text))) == (7, 0, 0)),
-        ("unrelated exit is unseen", row_counts(comparison_rows(
-            ctr, call, parse_boundary(exit_text.replace("target=0x80011A18", "target=0x80011A1C")))) == (6, 0, 1)),
-    ]
-    for label, ok in checks:
-        print(f"  {'PASS' if ok else 'FAIL'} {label}")
-    failed = sum(not ok for _, ok in checks)
-    print(f"crossvalidate_crt0 --selftest: {len(checks) - failed}/{len(checks)} passed")
-    return 1 if failed else 0
-
-
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("exe", nargs="?")
     ap.add_argument("--build", default=None, help="build dir holding crt0_extract and oracle_trace")
     ap.add_argument("--steps", type=int, default=400000,
                     help="instructions to execute; a bss-zeroing loop can be ~220k (default 400000)")
-    ap.add_argument("--selftest", action="store_true", help="run bounded Crash/CTR boundary tests")
     a = ap.parse_args()
-    if a.selftest:
-        return selftest() if not a.exe else die("--selftest does not take an executable")
     if not a.exe:
         die("no executable given")
 

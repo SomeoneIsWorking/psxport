@@ -93,10 +93,7 @@ The backend milestone requires all of the following:
 8. A reference consumer reaches representative interactive gameplay with native services active,
    nonzero translated blocks, and fallback below its declared release threshold.
 
-The current Linux x86-64 tree satisfies the synthetic backend portion of item 1. A focused contract
-test proves translated call to native dispatch and translated resume, nested native context, an
-original guest body stopping at the exact caller continuation, measured timing/pending work,
-self-modifying-code retranslation, typed unsafe-fetch failure, and fallback telemetry. Items 2
+The current Linux x86-64 tree builds with Clang for item 1. Items 2
 through 8 remain open at representative-title scope, as do Apple Silicon and Android AArch64
 qualification. Complete executable-writer coverage and fallback threshold enforcement remain open.
 
@@ -117,5 +114,4 @@ Host-turn callbacks execute only outside guest IRQ handlers, masked critical sec
 dispatch, pending redirects, and another host-turn callback. All deferred requests retain
 `Core::PW_HOST`; at an eligible boundary the bit is acknowledged for delivery, or retired if that
 Core has no registered handler. A request never dispatches another Core's callback. A request raised
-during a callback remains pending for the next eligible boundary. Production-boundary regressions live in
-`tests/test_host_turn_irq.cpp`, `tests/test_cd_stock_read.cpp`, and `tests/test_game_runtime.cpp`.
+during a callback remains pending for the next eligible boundary. 

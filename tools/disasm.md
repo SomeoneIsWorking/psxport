@@ -4,11 +4,9 @@ From the framework checkout:
 
 ```sh
 uv run --frozen python tools/disasm.py scratch/oracle-console/ram.bin 80012340 80012380
-uv run --frozen python tests/test_disasm.py
 ```
 
 Capstone 5 is a required, locked maintainer dependency in `pyproject.toml` and `uv.lock`.
-The same Python interpreter runs the `ram_disassembler_cli` test in the normal CMake suite.
 
 The dump must contain exactly 2 MiB. Start and exclusive end addresses are hexadecimal, word aligned,
 nonempty and contained within one physical, KSEG0 or KSEG1 mapping of that RAM. Ranges cannot wrap,

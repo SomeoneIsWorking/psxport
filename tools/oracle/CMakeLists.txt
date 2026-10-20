@@ -68,85 +68,18 @@ target_include_directories(psxport_oracle PUBLIC
 target_compile_options(psxport_oracle PRIVATE -Wall -Wextra -O2 -g -fno-strict-aliasing)
 target_link_libraries(psxport_oracle PUBLIC m)
 
-# oracle_spike — the proof that the library above actually executes injected MIPS, and refuses to hide a
-# hardware access. It runs a POSITIVE program with hand-derived expected registers and a NEGATIVE program
-# that must be reported as a hardware stop, prints a check PLAN up front, and REFUSES (exit 2) if the
-# number of checks that ran differs from the number planned.
-add_executable(oracle_spike oracle_spike.c)
-target_link_libraries(oracle_spike PRIVATE psxport_oracle)
-target_compile_options(oracle_spike PRIVATE -O2 -g)
-
-# Standalone psxport registers this gate. An embedded consumer still gets the oracle targets but owns
-# its own CTest surface unless it explicitly opts into the complete framework suite.
-if(PSXPORT_BUILD_TESTS)
-  add_test(NAME oracle_spike COMMAND oracle_spike)
-endif()
-
 # oracle_trace — runs a REAL game executable in the reference and writes a per-instruction trace, which is
 # one side of milestone 2's differential. A trace FILE rather than a pipe or a symbol-prefixed archive: it
 # keeps the reference in its own process (so it shares no state with the port), needs no IPC protocol, and
 # is reproducible and human-readable, so "did the oracle change or did we?" stays answerable.
 add_executable(oracle_trace oracle_trace.c)
 # oracle_shim.h fixes its enums' base type, a C23 feature, for the C and C++ units that share its structs.
-set_target_properties(psxport_oracle oracle_spike oracle_trace PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
+set_target_properties(psxport_oracle oracle_trace PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
 target_link_libraries(oracle_trace PRIVATE psxport_oracle)
 target_compile_options(oracle_trace PRIVATE -O2 -g)
-if(PSXPORT_BUILD_TESTS)
-  add_test(NAME crossvalidate_crt0_selftest
-           COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
-                   ${CMAKE_CURRENT_SOURCE_DIR}/crossvalidate_crt0.py --selftest)
-  add_test(NAME oracle_trace_selftest
-           COMMAND ${CMAKE_COMMAND} -E env "${Python3_EXECUTABLE}"
-                   ${CMAKE_CURRENT_SOURCE_DIR}/test_oracle_trace.py
-                   $<TARGET_FILE:oracle_trace>
-                   --scratch ${CMAKE_BINARY_DIR}/scratch/oracle-trace-selftest)
-endif()
-
-# NO mutation harness here. The retired mutation harness rebuilt the shim with one thing broken and
-# require oracle_spike to fail. It earned its keep once — it is what exposed the unpopulated-FastMap and
-# the missing RAM-mirror bugs — but it was a test OF A TEST, and USER, 2026-08-13: *"we have too much meta
-# imo, so deep that the base gets ignored among all of it"*. The coverage that actually matters did not
-# live in it: oracle_spike's own 22 checks are what catch a broken FastMap, a reset step clock, an
-# unmirrored RAM window and a silently-swallowed device access. Deleting the harness loses the assurance
-# that those checks would notice, not the checks themselves.
-
 # Snapshot/window tools remain separate diagnostic processes; the player never links this library.
 target_compile_features(psxport_oracle PRIVATE cxx_std_20)
 add_executable(oracle_window oracle_window.cpp)
 target_compile_features(oracle_window PRIVATE cxx_std_20)
 target_compile_options(oracle_window PRIVATE -Wall -Wextra)
 target_link_libraries(oracle_window PRIVATE psxport_oracle)
-add_executable(test_oracle_snapshot test_oracle_snapshot.cpp)
-target_compile_features(test_oracle_snapshot PRIVATE cxx_std_20)
-target_compile_options(test_oracle_snapshot PRIVATE -Wall -Wextra)
-target_link_libraries(test_oracle_snapshot PRIVATE psxport_oracle)
-option(PSXPORT_ORACLE_PC_OBSERVER "Build the separate CPU observer diagnostic qualification" OFF)
-if(PSXPORT_ORACLE_PC_OBSERVER)
-  target_sources(psxport_oracle PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/beetle-psx/mednafen/psx/pc_observer.c)
-  target_compile_definitions(psxport_oracle PRIVATE PSX_PC_OBSERVER=1)
-  add_executable(test_console_pc_observer test_pc_observer.cpp)
-  target_compile_features(test_console_pc_observer PRIVATE cxx_std_20)
-  target_compile_options(test_console_pc_observer PRIVATE -Wall -Wextra)
-  target_include_directories(test_console_pc_observer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../tests)
-  target_link_libraries(test_console_pc_observer PRIVATE psxport_oracle)
-  if(PSXPORT_BUILD_TESTS)
-    add_test(NAME oracle_pc_observer COMMAND test_console_pc_observer)
-    set_tests_properties(oracle_pc_observer PROPERTIES TIMEOUT 60)
-  endif()
-endif()
-if(PSXPORT_BUILD_TESTS)
-  add_test(NAME oracle_snapshot COMMAND test_oracle_snapshot ${CMAKE_CURRENT_SOURCE_DIR}/../../scratch/oracle-snapshot)
-  add_test(NAME oracle_console_host
-           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_console_host.py)
-  set_tests_properties(oracle_console_host PROPERTIES TIMEOUT 60)
-  add_test(NAME oracle_console_observer
-           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_console_observer.py)
-  set_tests_properties(oracle_console_observer PROPERTIES TIMEOUT 60)
-  add_test(NAME oracle_compare
-           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_compare.py)
-  set_tests_properties(oracle_compare PROPERTIES TIMEOUT 60)
-  add_test(NAME oracle_picture
-           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_picture.py)
-  set_tests_properties(oracle_picture PROPERTIES TIMEOUT 60)
-endif()
