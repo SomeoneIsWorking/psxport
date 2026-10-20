@@ -2,9 +2,11 @@
 #pragma once
 
 #include "gte_preop_observer.h"
+#include "gte_registers.h"
 #include "gte_state.h"
 
 #include <cstdint>
+#include <span>
 
 class Core;
 
@@ -27,6 +29,20 @@ public:
   void writeControl(std::uint32_t reg, std::uint32_t value);
   // One COP2 command at the Core's current PC, with the Core's GTE observer.
   void execute(std::uint32_t instruction);
+
+  // The rotation matrix, CR0..CR4.
+  void loadRotation(std::span<const std::uint32_t, gte::kRotationWords> words) {
+    for (std::uint32_t i = 0; i < gte::kRotationWords; ++i) {
+      writeControl(gte::kRotation + i, words[i]);
+    }
+  }
+  gte::RotationWords storeRotation() {
+    gte::RotationWords words{};
+    for (std::uint32_t i = 0; i < gte::kRotationWords; ++i) {
+      words[i] = readControl(gte::kRotation + i);
+    }
+    return words;
+  }
 
   // The whole register file and flags, copied without running a read port.
   GteRawState saveRaw() const;

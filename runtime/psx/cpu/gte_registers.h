@@ -1,6 +1,7 @@
 // gte_registers.h — GTE (COP2) register numbers and the command words native bodies issue.
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 namespace psx::gte {
@@ -33,11 +34,14 @@ inline constexpr std::uint32_t kMac1 = 25;
 inline constexpr std::uint32_t kMac2 = 26;
 inline constexpr std::uint32_t kMac3 = 27;
 inline constexpr std::uint32_t kIrgb = 28;
+inline constexpr std::uint32_t kLzcs = 30;
+inline constexpr std::uint32_t kLzcr = 31;
 
 // Control registers: 0..4 the rotation matrix, 5..7 the translation, 8..12 the light matrix,
 // 13..15 the background colour, 16..20 the light colour matrix.
 inline constexpr std::uint32_t kRotation = 0;
 inline constexpr std::uint32_t kRotationWords = 5;
+using RotationWords = std::array<std::uint32_t, kRotationWords>;
 inline constexpr std::uint32_t kTranslationX = 5;
 inline constexpr std::uint32_t kTranslationY = 6;
 inline constexpr std::uint32_t kTranslationZ = 7;
@@ -76,6 +80,11 @@ inline constexpr std::uint32_t kCc = 0x4B38041Cu;          // lm=1
 inline constexpr std::uint32_t kMvmvaRtIr = 0x4A49E012u;   // sf, RT * IR, no offset
 inline constexpr std::uint32_t kMvmvaRtV0 = 0x4A486012u;   // sf, RT * V0, no offset
 inline constexpr std::uint32_t kMvmvaRtIrTr = 0x4A498012u; // sf, RT * IR + TR
+inline constexpr std::uint32_t kMvmvaRtV0Tr = 0x4A480012u; // sf, RT * V0 + TR
+inline constexpr std::uint32_t kMvmvaLlmIr = 0x4A43E012u;  // LLM * IR, no offset
+inline constexpr std::uint32_t kMvmvaLcmIr = 0x4A45E012u;  // LCM * IR, no offset
+inline constexpr std::uint32_t kSqr = 0x4AA00428u;         // lm=1, IR squared
+inline constexpr std::uint32_t kOp = 0x4B70000Cu;          // outer product of the RT diagonal and IR
 inline constexpr std::uint32_t kGpf = 0x4B90003Du;         // MAC = IR0 * IR
 inline constexpr std::uint32_t kGpl = 0x4BA0003Eu;         // MAC += IR0 * IR
 inline constexpr std::uint32_t kGpfSf = 0x4B98003Du;       // sf, MAC = IR0 * IR >> 12

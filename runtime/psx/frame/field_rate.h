@@ -1,23 +1,6 @@
 #pragma once
-// THE DISPLAY FIELD RATE — one exact rational definition, with milli-hertz retained for APIs that
-// cannot consume the rational form.
-//
-// WHY MILLI-HERTZ. NTSC's field rate is 60000/1001 Hz = 59.94005... — not representable in integer
-// Hz, and not equal to 60. The framework's other field-clock consumer already speaks milli-hertz
-// (`rec_host_turn_register(core, fn, fps_millihz)`), so this is the unit that already existed rather
-// than a new one.
-//
-// WHY THIS HEADER EXISTS AT ALL. The frame pacer computed its sleep deadline as `quota * 1000.0 /
-// 60.0` — a literal 60.000 Hz — while the port counting the fields it was pacing against used the
-// real rate. Two clocks at different rates across one wait loop is a beat, and a beat in a wait loop
-// is what reaches the screen. Fixing that by writing 59940 at the pacer would have been the same
-// bug with a different number, so the rate has exactly ONE spelling per standard, here, and the
-// framework READS which standard the game is in from the game itself: GP1(0x08) bit 3, decoded in
-// the GPU device into `DisplayArea::pal` and served by `frame_pacer.cpp`.
-//
-// PAL IS UNTESTED IN THIS WORKSPACE — all three consuming games are NTSC discs, so the PAL arm has
-// never executed on real data. It is stated as the documented hardware rate rather than measured,
-// and that is exactly what it should say here rather than being quietly presented as verified.
+// The display field rate as an exact rational, with milli-hertz for integer APIs. NTSC is
+// 60000/1001 Hz; the standard is GP1(0x08) bit 3, decoded into DisplayArea::pal.
 #include <cstdint>
 
 namespace psx::frame {
@@ -37,11 +20,10 @@ constexpr unsigned fieldRateMilliHz(DisplayFieldRate rate) {
 }
 
 inline constexpr unsigned FIELD_RATE_NTSC_MILLIHZ = fieldRateMilliHz(DISPLAY_FIELD_RATE_NTSC);
-inline constexpr unsigned FIELD_RATE_PAL_MILLIHZ = fieldRateMilliHz(DISPLAY_FIELD_RATE_PAL);
+// Host screens (the picker) have no guest display mode and pace at the NTSC rate.
+inline constexpr unsigned kHostScreenFieldRateMilliHz = FIELD_RATE_NTSC_MILLIHZ;
 
-// Nominal non-interlaced field geometry used by the PSX GPU and HBlank-clocked root counter 1.
-// Interlaced hardware alternates adjacent line counts; the deterministic framework clock does
-// not yet model field parity, so it retains the standard's nominal complete-field denominator.
+// Nominal non-interlaced lines per field; field parity is not modelled.
 inline constexpr unsigned DISPLAY_LINES_NTSC = 263u;
 inline constexpr unsigned DISPLAY_LINES_PAL = 314u;
 
@@ -56,4 +38,10 @@ inline unsigned fieldRateMilliHz(bool pal) {
 inline unsigned displayLinesPerField(bool pal) {
   return pal ? DISPLAY_LINES_PAL : DISPLAY_LINES_NTSC;
 }
+
+// `fields` display fields at `rateMilliHz`, split into `parts` equal intervals, in milliseconds.
+constexpr double fieldIntervalMs(unsigned rateMilliHz, unsigned fields, unsigned parts) {
+  return static_cast<double>(fields) * 1000000.0 / static_cast<double>(rateMilliHz) / static_cast<double>(parts);
+}
+
 } // namespace psx::frame

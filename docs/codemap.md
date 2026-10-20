@@ -30,16 +30,17 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Canonical PSX state | `runtime/psx/core/core.*` | Per-Core registers, RAM, scratchpad, device ownership |
 | Guest memory | `runtime/psx/core/guest_memory.cpp`, `mem.cpp` | Loads, stores, write guards, MMIO dispatch and executable-write notification |
 | Guest code modules | `runtime/psx/core/guest_code_module.*`, `overlay_glue.*` | A landed module's identity and generation |
-| Guest ABI | `runtime/psx/core/guest_abi.h`, `guest_address_range.h` | The guest stack frame and address ranges |
+| Guest ABI | `runtime/psx/core/guest_abi.h`, `guest_address_range.h` | The guest stack frame, `PreservedReturnAddress`, `GuestFrameScope`, address ranges |
+| Memory map | `runtime/psx/core/guest_memory_map.h` | RAM, mirror, scratchpad, hardware and BIOS spans; `physical`, `mainRamOffset`, `kseg0Address` |
 | Machine snapshot tick | `runtime/psx/core/snapshot.*` | The periodic snapshot a title ticks |
-| Architectural state | `runtime/psx/cpu/` (`r3000.h`, COP0, divide unit) | The register file the executor transfers |
-| GTE | `runtime/psx/cpu/gte.h`, `gte_registers.h`, `gte_state.h` | `psx::cpu::Gte` per Core (`core.gte()`): reads, writes, `execute`, `storeScreenXy`, `saveRaw`/`restoreRaw` |
+| Architectural state | `runtime/psx/cpu/` (`r3000.h`, COP0, `cpu_divide.*`) | The register file the executor transfers, `Gpr`/`gprName`, COP0 numbers, `GuestContextScope`, DIV `quotient`/`remainder` |
+| GTE | `runtime/psx/cpu/gte.h`, `gte_registers.h`, `gte_state.h` | `psx::cpu::Gte` per Core (`core.gte()`): reads, writes, `execute`, `storeScreenXy`, `loadRotation`/`storeRotation`, `saveRaw`/`restoreRaw`; `psx::gte` register and command names |
 | Beetle GTE adapter | `runtime/psx/cpu/beetle/` (`beetle_gte.h`, `gte_beetle.cpp`, `gte_register_transfer.h`, `gte_vendor_hooks.cpp`) | Beetle's GTE binding, the executor's register transfer, disabled PGXP hooks |
 | GTE guard | `runtime/psx/present/gte_control.*` | `GteGuard`: a host pass hands the GTE back as it found it |
 | Lightrec executor | `runtime/cpu/lightrec_executor.*`, `fallback_policy.h` | Lightrec lifetime per Core, state sync, bounded execution, fallback telemetry |
 | Typed exits | `runtime/cpu/execution_exit.*`, `execution_control.*`, `execution_services.*` | Exit reasons, budgets, `handleBreak`, exit requests |
 | Image identity | `runtime/cpu/image_identity.*` | Authenticated resident and module identity and generation |
-| Native dispatch | `runtime/cpu/native_dispatch.*`, `guest_call.*`, `guest_call_site.h` | Image-scoped overrides, `Producer{Arg}` registration, scoped original calls |
+| Native dispatch | `runtime/cpu/native_dispatch.*`, `native_function.h`, `guest_call.*`, `guest_call_site.h` | Image-scoped overrides, `NativeFunction`, `Producer{Arg}` registration, scoped original calls, `GuestCallSite::fromJal` |
 | Resumable guest call | `runtime/cpu/resumable_guest_call.*`, `guest_call_census.*` | A guest call across fields: boundary latch, turn cap, refusals; the run's call census |
 | Host-dispatch cache | `runtime/cpu/host_dispatch_cache.*`, `guest_host_dispatch_kind.h` | What an address is, until an image, override or service registration changes |
 | Invalidation | `runtime/cpu/invalidation.*`, `executable_write_source.h` | Executable writes revoking translated blocks and dispatch decisions |
@@ -58,20 +59,22 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Guest continuations | `runtime/psx/platform/coro.*` | The `Coro` a title's task scheduler runs on |
 | Memory card | `runtime/psx/platform/memcard.*`, `card_syscall_log.*` | The card device and its identity |
 | Watchdog | `runtime/psx/platform/watchdog.*` | The frame watchdog `ProductHost` owns |
+| Host clock | `runtime/psx/platform/host_clock.h` | The host's monotonic clock in ns and ms |
 | Boot splash | `runtime/psx/platform/scea_splash.*`, `scea_asset.h` | Decoding the SCEA card picture |
 | Field turn | `runtime/psx/frame/field_turn.*` | The services owed around a title's field body: pause, watchdog re-arm, RAM dump, one command |
 | Frame loop | `runtime/psx/frame/frame_loop_shell.*`, `logic_frame.*` | Stepping a `FrameDriver`; the logic-frame start |
 | Frame presentation | `runtime/psx/frame/frame_presenter.*` | `FramePresenter::commit`: seal, cut, compose, build, pace, show |
-| Pacing and time | `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `timing.*`, `emulated_time.*`, `field_rate.h` | Host pacing, field rate, emulated time |
+| Pacing and time | `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `timing.*`, `emulated_time.*`, `field_rate.h` | Host pacing, field rate and `fieldIntervalMs`, emulated time |
 | GPU device | `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h` | Beetle `gpu.c`: the only VRAM and GP0 executor |
-| Guest GPU ports | `runtime/psx/present/gpu_ports.*`, `vram_rect.h` | `gp0Write`, `gp1Write`, `gpuRead`, DMA2, `loadImage`, `vram`, `sealRecord` |
+| Guest GPU ports | `runtime/psx/present/gpu_ports.*` | `gp0Write`, `gp1Write`, `gpuRead`, DMA2, `loadImage`, `vram`, `sealRecord` |
 | Frame record | `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*`, `runtime/psx/present/frame_record.*` | The device's GP0 work recorded per logic frame |
 | Record rasteriser | `runtime/psx/gpu/gpu_vk_record_raster.*`, `record_raster_setup.*`, `record_raster_regions.h`, `vram_bitmap.h` | Drawing a record on the device image |
 | SDL3 GPU backend | `runtime/psx/gpu/gpu_vk_*.cpp`, `gpu_vk_window.*`, `gpu_vk_shader.*`, `runtime/psx/shaders_gpu/` | Window, device, present, submit, readback, shaders |
 | Display presenter | `runtime/psx/present/display_presenter.*`, `present_ledger.*`, `present_plan.h`, `video_plan.h`, `pixel_size.h` | Building a record, an in-between or a host picture, and showing it; the present ledger |
 | Render mode | `runtime/psx/present/render_mode.h` | `RenderPath {Record, Device}`, `DisplayPassGuard` |
-| Frame composer | `runtime/psx/present/frame_composer.*`, `state_producer.*`, `frame_state.*`, `emission_scope.*`, `emit_memory.*`, `blend.h` | In-betweens from `StateProducer` renders of saved state |
-| GP0 decode | `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*`, `state_bytes.h` | One decode of guest draw commands |
+| Frame composer | `runtime/psx/present/frame_composer.*`, `state_producer.*`, `frame_state.*`, `emission_scope.*`, `emit_memory.*`, `blend.h` | In-betweens from `StateProducer` renders of saved state; `lerpInt`/`lerpWord`/`lerpHalves` |
+| GP0 decode | `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*`, `state_bytes.h` | One decode of guest draw commands; polygon opcodes and packet tag/byte sizes |
+| VRAM format | `runtime/psx/present/vram_rect.h`, `vram_pixel.h` | VRAM size, points and rects, the 555 pixel, texpage/CLUT words, the CPU texel sampler |
 | Ordering table | `runtime/psx/present/ordering_table.*`, `host_ordering_table.*` | The guest OT walk and host OT emission |
 | Widescreen | `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` | The title's aspect policy, canvas margins, projection publication |
 | Panes | `runtime/psx/present/pane_composite.*`, `pane_host.h`, `host_presentation.h`, `rgb24_picture.h` | Picker panes and host pictures |
@@ -81,7 +84,7 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Audio | `runtime/psx/audio/` (`spu_audio.*`, `spu_device.*`, `spu_beetle.*`, `xa_stream.cpp`, `audio_*`) | The SPU, its host sink, XA streaming, audio policy |
 | Movies | `runtime/psx/movie/native_fmv.*`, `movie_clock.*`, `fmv_decode.*`, `mdec_*` | FMV playback, its sector/frame clock (`movie_clock`), and the STR decode shared with `tools/fmv_export` |
 | Save states | `runtime/psx/state/` | `MachineState`, `StateFile`, device sections, `NativeStatePort` |
-| Configuration | `runtime/psx/config/config.*`, `config_var.h`, `config_vars.h`, `diagnostic_config.*`, `number_text.*` | The CVar ladder, typed accessors, `launch_setting`, number parsing |
+| Configuration | `runtime/psx/config/config.*`, `config_var.h`, `config_vars.h`, `diagnostic_config.*`, `number_text.*` | The CVar ladder, typed accessors, `launch_setting`, number and list parsing |
 | Launch config | `runtime/psx/config/typed_config.*` | The immutable `psx::config::Config` on `game.config` |
 | Title enhancement knobs | `runtime/psx/config/enhancement_gate.h`, `stepped_range.h` | `pc_enh` gates and stepped menu rows |
 | Control channel | `runtime/psx/debug/dbg_server.*`, `command_args.*` | The loopback automation endpoint |

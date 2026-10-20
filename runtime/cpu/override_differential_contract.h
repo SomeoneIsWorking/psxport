@@ -6,6 +6,7 @@
 #include "execution_exit.h"
 #include "machine_snapshot.h"
 #include "override_differential.h"
+#include "r3000.h"
 #include "side_effect_journal.h"
 
 #include <array>
@@ -18,7 +19,6 @@ namespace psx::cpu {
 // gp/sp/ra. Everything else is caller-saved or kernel-reserved and is not compared.
 inline constexpr std::array<std::uint32_t, 14> kO32PreservedOrResultRegisters = {
     2, 3, 16, 17, 18, 19, 20, 21, 22, 23, 28, 29, 30, 31};
-inline constexpr std::uint32_t kCop0Status = 12;
 
 const char *mipsRegisterName(std::uint32_t index);
 
