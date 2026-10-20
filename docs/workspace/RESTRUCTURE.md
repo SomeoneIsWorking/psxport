@@ -16,7 +16,6 @@ Measured on 2026-10-14: psxport `93e0f1ab` with an uncommitted M8a tree, and eve
 - **Uncommitted M8a (psxport, about 120 files).**
   - `Core(GameRuntime&)` and `Game(GameRuntime&[, GpuDevice&])` exist.
   - `psxport_install_game`, `psxport_game_runtime`, `installedRuntime` and `g_ownedLegacyRuntime` are deleted.
-  - `tests/support/stub_game_runtime.{h,cpp}` and the `psxport_test_support` target are new, and 82 test files are edited.
 - **Consequence.** No title builds against the live `external/psxport` today, because about 120 references in 69 title files still call the deleted install functions. Until a title's own pass lands, it can only be run from its existing `build/` binary.
 
 | repo | render path today | interp | GTE call sites | accepted.txt (global fn / block static / extern) | codemap lines |
@@ -89,7 +88,7 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 - Beetle `gpu.c` is the only VRAM and the only GP0 executor.
 - `RenderPath = {Record, Device}`. Device is the oracle and diagnostic view.
 - `FrameComposer` builds every in-between from `StateProducer` renders of saved state, with the shown record as the base. No packet lerp and no keyed blend. `DisplayPassGuard` aborts a guest-memory write inside `StateProducer::render`.
-- recordcheck covers t=1 only. In-betweens are covered by per-producer unit tests through `composeFrame`.
+- recordcheck covers t=1 only. In-betweens are checked in the running product.
 - SDL3 GPU stays. `gpu_vk.cpp` (3,592 lines) splits into `gpu_vk_present.cpp` and `gpu_vk_submit.cpp`, each under 1,200 lines (done in (c) stage 2: `gpu_vk_present.cpp` 432, `gpu_vk_submit.cpp` 127; the display presenter is `present/display_presenter.*`, the guest ports `present/gpu_ports.*`).
 - **Deleted.**
   - Native: `gpu_native*` (the second VRAM), `render_queue*`, `gpu_painter`, `painter_object_layer`, `face_contest`, `proj_prim`, `ot_lifo_depth`, `guest_packet_filter`, `render_noise`, `native_composite_capture`, `fade_interpolation`, `fps60*`, `host_world_pass_strategy`, `game_hooks_opt`, `gpu_vk_depth`, `gpu_vk_semi_order`, the PC-rasterizer selftests.
@@ -135,13 +134,8 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 - **Every title's `docs/features.md`.** Title hops only, joined as `psxport F-X.n`. C-12 (the template) joins F-BOOT.1 (catalog and disc), F-BOOT.6 (`registerOverrides`, `createSession`), F-TURN.2 (`FrameDriver::stepFrame`), F-TURN.4 (run-end report), F-CD.1 (stock libcd binding), F-CD.3 (module landing), F-RENDER.1 (render path), F-RENDER.2 (`packetPool`), F-WIDE.1 (projection policy) and F-WIDE.2 (widened culls). Tomba adds F-BOOT.5 (`startProgram`), F-TURN.3 (the title's task scheduler, stepped by its frame driver), F-INPUT.1 (`deliverPad`), F-RENDER.3 (`displayHeight`), F-FPS60.1 (`stateProducer`), F-FPS60.2 (`sealedFrameIsCut`), F-FMV.1 (a title-started movie), F-AUDIO.1 (`TitleAudio`), F-SAVE.1 (`hostIdentity`), F-SAVE.2 (`nativeState`), F-DEBUG.1 (`titleCommand`), F-DEBUG.2 (`TitleDevWarp`) and F-DEBUG.3 (`worldReadout`). Spyro adds F-TURN.5 (`pacePresentation`), F-INPUT.2 (`inputPhase`), F-PICK.1 (`panelLogo`) and F-RENDER.4 (`guestPictureIsNativeWidth`). psxport's `features.md` keeps those hop numbers.
 - **Codemap.** At most 150 lines in Owners-table shape, with no source-tree dump and no "Who owns it" chains. psxport's is 120 lines (stage 4); its hop chains moved to `features.md`.
 - **Renderer doc.** `presentation.md` is the one renderer doc. Delete `one-renderer.md` and `presentation-contract.md` (done in (c) stage 2). Every other psxport doc and open issue that named deleted code is corrected or resolved (stage 4).
-- **cpp_policy** (re-harness `cpp_policy.py`, called by psxport `check_cpp_style.py`):
-  - `entry point` with no exceptions.
-  - `global-namespace function`, `extern declaration` and `block-scope static` with every `accepted.txt` empty.
-  - `retired name` gains `psxport_install_game`, `bindLegacyInterface`, `cfg_logf` and `gte_write_data` for title repos.
-- **Size caps.** `PSXPORT_CAPS` loses the `gpu_native.cpp`, `render_queue.cpp`, `gpu_vk.cpp`, `game_iface.h`, `render_path_control.*` and `test_synchronous_task_wait.cpp` rows (the renderer rows are gone in (c) stage 2).
 - **clang-tidy.** Every repo's `.clang-tidy` is `clang-analyzer-*`, `bugprone-*` and `performance-*`, with warnings as errors. psxport's is aligned (done in (c) stage 3, vendor headers excluded); every finding is fixed except `bugprone-easily-swappable-parameters` (191 sites in 105 files, among them the title-facing `dispatchGuest*`, `GuestMemory`, GPU-port and GTE signatures), whose fix is strong argument types at each signature and every title caller.
-- **Tooling copies.** One `re_frontier.py`, re-harness's. Delete the copies in psxport `tools/port/`, spyro, spider1, megamanx4 and toystory2. Any `tools/source_policy.py` that duplicates `tools/policy/harness.py` is deleted (spyro, spider1, crashbash, c12). Done: the title copies went in their passes, psxport's in (c) stage 4.
+- **Tooling copies.** One `re_frontier.py`, re-harness's. Delete the copies in psxport `tools/port/`, spyro, spider1, megamanx4 and toystory2. `tools/source_policy.py` is deleted (spyro, spider1, crashbash, c12). Done: the title copies went in their passes, psxport's in (c) stage 4.
 - **Framework fetch.** `tools/psxport_fetch.py` exists only in psxport. A title's launcher and CI run it from psxport `main` with `uv run --no-project https://raw.githubusercontent.com/SomeoneIsWorking/psxport/main/tools/psxport_fetch.py --auto`, and only while `external/psxport` is missing; its verifier refuses with that command instead of fetching. `--repo` defaults to the working directory. `scripts/bootstrap_workspace.py` runs psxport's own copy for every title. A uv git dependency was rejected: uv initialises psxport's submodules recursively (gnulib included) just to install one script. Done in (c) stage 4 for all 11 title repos.
 
 ## 4. End state per title repo
@@ -331,15 +325,15 @@ One step, with no agent working in any repo: `gh repo rename` on GitHub (old URL
 ### (d) push as each pass lands
 
 - **psxport (a) with c12.** Title CI shallow-clones psxport `main`, so psxport (a) goes first, then c12 in the same session.
-- **Each title after its pass.** The repo is pushed once its section 6 checks are green.  CI was red in 11 of 12 repos on 2026-10-14 for causes unrelated to this pass (psxport: undeclared submodules, fixed in 336cbe60; c12: `c12_frame_driver` needs a video device on the runner, `c12_cpp_style`; vagrant: launcher tests need provisioned inputs; Tomba: `cpp_policy` at 510 s and link isolation; toystory2, spider1, megamanx4: configure; tekken3: bootstrap). Breakage during the pass is accepted: CI is made green across all 12 repos once, after (c) and before the play check, each cause fixed at its owner.
+- **Each title after its pass.** The repo is pushed once its section 6 checks are green.  CI was red in 11 of 12 repos on 2026-10-14 for causes unrelated to this pass (psxport: undeclared submodules, fixed in 336cbe60; c12: `c12_frame_driver` needs a video device on the runner, `c12_cpp_style`; vagrant: launcher tests need provisioned inputs; Tomba: `cpp_policy` at 510 s and link isolation; toystory2, spider1, megamanx4: configure; tekken3: bootstrap). Breakage during the pass is accepted: CI is build-only now: configure and build the shipping binaries, no test, verify, smoke or policy steps.
 - **Unmigrated titles.** From (a) until its own pass lands, an unmigrated title cannot build from source, locally or in CI; its CI stays red in that window and nobody rebuilds its `build/`. This is the cost of no compatibility layer, and it shrinks one repo per brief.
 - **psxport (c)** is pushed after the last title, with a rebuild of all 12 repos against it.
 
 ## 6. Checks
 
 - **Per repo, at the end of its brief:**
-  - Build with Clang.
-  - Boot-smoke every title in the repo: the built binary, hidden window, `PSXPORT_NATIVE_FRAMES` set, reaching that title's documented boot milestone. A repo with a picker smokes it too.
+  - Build with Clang. There are no unit tests, gates or verifiers.
+  - Boot-smoke and recordcheck are product runs, not gates. Boot-smoke every title in the repo: the built binary, hidden window, `PSXPORT_NATIVE_FRAMES` set, reaching that title's documented boot milestone. A repo with a picker smokes it too.
   - Record titles also get recordcheck at t=1 and 1x 4:3, with `mismatched=0` as an absolute oracle match, not a before/after comparison.
   - No full sweeps; untouched repos only have to build.
 - **Once, after (c): the play check.**

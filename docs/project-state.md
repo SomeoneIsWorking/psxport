@@ -69,11 +69,10 @@ An enclosing native override running its original body through an ordinary nativ
 frame exit proves guest execution resumes from the returned continuation, independently of the
 scoped C++ caller PC restored by nested native dispatch.
 
-Override correctness has a gate: `runtime/cpu/override_differential.*` shadows sampled calls of selected
+Override correctness has a diagnostic: `runtime/cpu/override_differential.*` shadows sampled calls of selected
 overrides in a real run (`PSXPORT_OVERRIDE_DIFF`), compares original and native under the O32 contract
-with device traffic replayed, continues from the original, and reports to
-`tools/port/override_differential_gate.py`. Verified hermetically only
-(`tests/test_override_differential.cpp`); gap: not yet exercised on a real title's override
+with device traffic replayed, continues from the original, and writes its report to
+`PSXPORT_OVERRIDE_DIFF_REPORT`. Gap: not yet exercised on a real title's override
 (`docs/issues/0138-override-differential-gate.md`).
 
 ### S015 — Central executable-code invalidation
@@ -152,8 +151,7 @@ x86-64 synthetic runtime; unsupported hosts have no green placeholder jobs.
 
 Partial, in the product host: a one-title product with no usable disc shows the shared setup-ui
 first-run screen and remembers the accepted image; a packaged (AppImage `APPDIR`) run defaults to a
-window and its shipped assets and keeps its data in user data (`docs/title-host.md`). Evidence:
-`tests/test_first_run_setup.cpp`; a Crash Bash zero-argument packaged run refused with no disc
+window and its shipped assets and keeps its data in user data (`docs/title-host.md`). Evidence: a Crash Bash zero-argument packaged run refused with no disc
 (hidden) and, from a saved choice, extracted its executable and booted. Gaps: the windowed screen has
 not been driven by a player click, it has no handset-size capture, and the selector has no first-run
 screen.
@@ -181,13 +179,6 @@ psxport `main` (`uv run --no-project <raw URL> --auto`) only while `external/psx
 choice: `psxport_fetch.py --lightrec` reads `PSXPORT_LIGHTREC_REVISION` out of
 `cmake/lightrec_dependency.cmake`, so the pin has one home, materialises that revision as a detached
 worktree, and `psxport_configure_lightrec_dependency()` probes that worktree before the plain checkout.
-
-Evidence: `tests/test_psxport_fetch.py` over real git repositories and no network — the relative symlink, an
-existing equivalent link left alone, a link to a checkout discovery cannot name left alone, a real clone
-refused rather than destroyed, a second run leaving its own clone alone, a downloaded copy resolving
-the title it runs in, the clone path with the sibling checkout's working tree and `.git/modules`
-byte-unchanged; and `tests/test_lightrec_pinned_worktree.py` over three real CMake configures of a
-throwaway two-commit Lightrec repository and its own pin.
 
 ### S024 — In-app bug report
 

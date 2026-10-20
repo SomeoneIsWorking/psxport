@@ -114,15 +114,7 @@ name is refused with a warning and the Core stays on `record`.
 - **Capture.** `RecordRasterizer::presented()` is the picture the last present showed (the VRAM
   image's display rect, a canvas, or an in-between copy). `shot`, `preseq` and the fps60 dump all go
   through `record_shot`, which downloads it and applies the present fade; nothing else reads it.
-- **Test.** `tests/test_record_raster.cpp` replays synthetic GP0 streams through `GpuDevice` and the
-  rasterizer at 1x on a headless Vulkan device and requires all of VRAM to match (at S = 3 and 5, an
-  upload and a sprite reading it must fill every pixel of each block with the device's pixel), and checks
-  the display canvas against the device drawing the same stream with its draw area widened;
-  `tests/test_gp0_record_tap.cpp` covers decode and seal boundaries. `tests/test_record_raster.cpp` also drives
-  `FramePresenter` and `RecordRasterizer::show` over a single- and a double-buffered stream with a
-  moving triangle: with a producer render each in-between differs from both reals and equals the device
-  drawing the t = 0.5 triangle; without one it is the shown record. `tests/test_record_cadence.cpp`
-  covers shown-record selection. On a title,
+- **Check.** On a title,
   `PSXPORT_DEBUG=recordcheck` logs per present the display-area pixels that differ from the device
   (at S > 1, each block's top-left pixel), and the replay/resync counts; a composed `t = 1` present at
   4:3 is checked as drawn (`composed=1`), which is a title producer's proof on real frames.
@@ -209,7 +201,7 @@ The composer builds the frame at `t` from S's record:
   first recorded primitive at or after its position), and the CLUT from S's sample of the same CLUT
   attribute (`clutWord`).
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
-  each producer has a unit test on that, and the title's oracle compare covers the frame.
+  the title's oracle compare covers the frame.
 
 `EmissionScope` binds each packet to `(P, obj)` at store time and the OT walk stamps the key on its
 entries, so the composer knows what a producer replaces. `element` and `part` are not pairing keys;
@@ -411,7 +403,7 @@ nothing drifts.
 
 While `Fmv::presenting()`, the movie's frame is the field's only present: a title's frame driver
 rotates its fence unpresented (`FramePresenter::commitUnpresented`) and advances its delivered guest
-fields itself. Test: `tests/test_movie_clock.cpp`.
+fields itself.
 
 `DisplayPresenter::build` ends each frame's picture: the build, then its dumps. `show` reports the watchdog's
 main-present completion once the picture is in the window; a `Transition` present (a movie end, a boot

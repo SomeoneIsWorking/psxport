@@ -109,13 +109,12 @@ not accumulated in `Core`, the boot composition, `dispatch.cpp`, or a replacemen
 - `runtime/cpu/image_identity.*`: authenticated resident/module identity and generation;
 - `runtime/cpu/native_dispatch.*`: image-scoped overrides and one-call original dispatch;
 - `runtime/cpu/invalidation.*`: normalized executable-write notification and Lightrec invalidation;
-- `tests/oracle/`: separately built interpreter/oracle support, never a product dependency.
+- `tools/oracle/`: separately built reference emulator, never a product dependency.
 
 Names are target ownership, not permission to add empty forwarding files. Each class owns one cohesive
 concept, receives explicit dependencies, has bounded RAII lifetime, and exposes a narrow API. The host
 entry point composes owners and does not absorb their implementation. Before extending an existing
-1,200-line source, split the touched responsibility. The normal structure gate must keep the 1,200-line
-default cap, shrink-only legacy limits, forbidden dependency checks, and exact-file failures.
+1,200-line source, split the touched responsibility.
 
 ## Never duplicate declarations or policy
 
@@ -215,15 +214,15 @@ Widescreen is a deterministic projection/viewport/scissor change that renders ad
 It never stretches the final image or samples adjacent frames/content to decide coverage. Temporal
 interpolation is separate and may blend only matching source geometry with explicit provenance.
 
-## Build, test, and repository hygiene
+## Build and repository hygiene
 
 Agents configure C++ verification builds with Clang and confirm the build metadata names Clang. The
 project remains compatible with its supported GCC, Clang, and AppleClang toolchains. Touched C/C++ is
 formatted with the tracked `.clang-format` and linted with the tracked `.clang-tidy`; do not suppress
 or weaken diagnostics.
 
-Use focused hermetic tests while iterating and one combined gate only after semantic edits are frozen.
-`./run.sh` belongs to players and is not an agent test command. Project automation is Python; `run.sh`
+There are no unit tests, gates or verifiers; a passing test is not evidence, the running product is.
+Agents build with Clang (`uv run --frozen python tools/build.py`). `./run.sh` belongs to players and is not an agent command. Project automation is Python; `run.sh`
 is the only allowed shell launcher. Build products belong under top-level `build/`; run artifacts go
 under the gitignored `scratch/`, never `/tmp`. Never issue raw `rm`; use the scoped cleanup tools.
 
@@ -232,5 +231,5 @@ absolute paths. The user supplies game assets at runtime, with explicit path fir
 second, and repo drop-in last. A fresh product must not require Ghidra or any offline translator.
 
 The code is not migrated merely because these plans are coherent. Implementation is complete only
-after the focused and combined gates pass on the integrated tree and the operator commits and pushes
+after it builds on the integrated tree, works in the running product, and the operator commits and pushes
 the milestone on `main`.

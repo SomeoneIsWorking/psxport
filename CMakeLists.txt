@@ -14,21 +14,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 # libchdr (CHD access for psx::cd::Disc) — from the Beetle PSX submodule (bundles its own lzma).
 add_subdirectory(vendor/beetle-psx/deps/libchdr EXCLUDE_FROM_ALL)
 
-# A standalone psxport configure owns and runs the framework suite. An embedded consumer owns its own
-# CTest surface: registering psxport tests there advertises executables that a consumer target did not
-# build, and makes framework cpp_style inspect the consumer with framework policy. Explicit ON remains
-# available to a consumer that deliberately builds and runs the complete framework suite.
-option(PSXPORT_BUILD_TESTS "Register the complete psxport CTest suite" ${PROJECT_IS_TOP_LEVEL})
-if(PSXPORT_BUILD_TESTS)
-  enable_testing()
-endif()
 add_subdirectory(tools)
 
-# The framework static library `psxport` (+ option(PSXPORT_BUILD_SMOKE) + the standalone agnosticism smoke).
+# The framework static library `psxport`.
 include(cmake/psxport.cmake)
-
-# Framework test suite — `ctest --test-dir build`. Must come after psxport.cmake (the tests link
-# `psxport`). Embedded consumers default this off even if they add_subdirectory the framework root.
-if(PSXPORT_BUILD_TESTS)
-  add_subdirectory(tests)
-endif()

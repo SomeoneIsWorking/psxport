@@ -10,13 +10,11 @@ session callbacks, framebuffer conversion, firmware admission and build policy i
 Its callbacks retain their Python owners for the complete native lifetime. A callback exception
 poisons the session and raises at the next foreign-call return; execution never resumes afterward.
 
-## Build and test
+## Build
 
 From the framework checkout, use its locked Python environment:
 
 ```sh
-uv run --frozen python tools/oracle/test_console_host.py
-uv run --frozen python tools/oracle/test_console_observer.py
 uv run --frozen python tools/oracle/console.py build --cc clang --cxx clang++ --jobs 6
 ```
 
@@ -24,16 +22,11 @@ The builder requires Git, Make, a C/C++ compiler, pkg-config and zlib developmen
 only the recorded Beetle gitlink, verifies required full-core inputs, and never modifies the vendor
 checkout. Hardware rendering and Lightrec are disabled at build time. This diagnostic build explicitly selects
 `PSX_PC_OBSERVER=1`; product and default upstream core builds omit the observer module and all
-CPU-loop references. The framework verifier separately enables its CPU-only diagnostic regression. The manifest records the observer ABI. Uncommitted fork edits are not build inputs. The fork's GTE state declaration
+CPU-loop references. The manifest records the observer ABI. Uncommitted fork edits are not build inputs. The fork's GTE state declaration
 is supplied from `runtime/psx/cpu/gte_state.h`; its digest is part of the build identity. Source exports,
 objects, library and identity manifests live in `build/oracle-console`. Linux `.so` and macOS `.dylib`
 are recognized; other platforms refuse explicitly. Recognizing a platform is not runtime qualification.
 The activity lock prevents overlapping host builds/runs. The application launcher does not call this tool.
-
-`test_console_host.py` uses synthetic buffers and invokes the actual C callback trampolines. It checks
-ownership after garbage collection, copied video memory, padded rows, all three software pixel formats,
-PNG bytes, callback failure propagation, options, controls, audio consumption and firmware refusal.
-It has no game assets and does not certify core compatibility or game conformance.
 
 ## Explicit firmware and disc inputs
 
@@ -148,15 +141,6 @@ bounded steps to keep complete coverage. Zero matches explicitly report a nonzer
 and incomplete status. Every configured target must be observed and every requested return paired;
 all counters remain visible after `observe_off`. A valid new configuration starts a new census; an
 invalid one preserves the previous configuration and census.
-
-The canonical asset-free verifier (`tools/verify.py`, also used by hosted CI) explicitly configures
-`PSXPORT_ORACLE_PC_OBSERVER=ON` through `tools/project.py`. The raw CMake option defaults off.
-For focused qualification in the configured `build/ci` tree, build `test_console_pc_observer`
-and run CTest `^oracle_pc_observer$`. It executes the actual Mednafen loop
-and checks observer on/off state preservation, active pending-load capture, saved return arrival,
-unreachable PC, buffer overflow and invalid-configuration preservation. This is CPU-boundary evidence;
-it cannot qualify full-console devices. The option affects only the separately linked oracle library,
-never the product CPU or its runtime linkage.
 
 ## Canonical on/off capture windows
 

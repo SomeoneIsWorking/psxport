@@ -92,15 +92,13 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Bug report | `runtime/psx/debug/bug_report_session.*`, `vendor/bug-report` | The in-app report and its reference frame |
 | Player UI | `runtime/ui/` | The RmlUi overlay, menus, readouts, warp control |
 | Logging | `vendor/lucent/` | All output |
-| Framework tests | `tests/`, `tests/support/`, `tools/smoke/` | Hermetic tests, the stub runtime, the smoke product |
 | CPU oracle | `tools/oracle/` | Mednafen snapshots, the full-console host, state-aligned comparison |
 | Title tooling | `tools/port/` | Engines every title runs (`README.md` there) |
 | Framework fetch | `tools/psxport_fetch.py` | A title's `external/psxport` and the Lightrec worktree; titles run it from psxport `main` |
 | Workspace bootstrap | `scripts/bootstrap_workspace.py`, `scripts/submodule_state.py`, `scripts/sync_submodules.py` | Cloning the workspace and its submodules |
 | Decompilation | `tools/decomp_pipeline.py`, `tools/decomp/` | Ghidra-backed decompilation and queries (`docs/workspace/GHIDRA.md`) |
 | Binary and MIPS tools | `tools/formats/`, `tools/mips/`, `tools/disasm.py`, `tools/discdump.cpp`, `tools/crt0_extract.cpp` | Image formats, disassembly, disc reads |
-| Policy | `tools/check_cpp_style.py`, `tools/policy/`, `tools/lint/`, `tools/repository_policy.py` | Format, tidy, size caps, re-harness `cpp_policy.py`, literal and repository checks |
-| Build and CI | `CMakeLists.txt`, `cmake/`, `tools/build.py`, `tools/verify.py`, `.github/` | Composition, the gate, hosted CI |
+| Build and CI | `CMakeLists.txt`, `cmake/`, `tools/build.py`, `.github/` | Composition, the Clang build, hosted build-only CI |
 | Vendored dependencies | `vendor/` (beetle-psx, lucent, rmlui, bug-report, setup-ui), `external/psycross` | Pinned forks and sources |
 
 ## Where new work goes

@@ -30,16 +30,14 @@ See [project state](docs/project-state.md), [migration requirements](docs/migrat
 
 ## Development
 
-Framework verification uses the canonical Python owner, which configures Ninja and runs the
-complete asset-free suite. Maintainers select Clang explicitly; the project accepts supported
-compilers through CMake and the usual CC/CXX environment:
+The canonical Python owner configures Ninja and builds the framework. Maintainers select Clang
+explicitly; the project accepts supported compilers through CMake and the usual CC/CXX environment:
 
 ```sh
-CC=clang CXX=clang++ uv run --frozen python tools/verify.py
+CC=clang CXX=clang++ uv run --frozen python tools/build.py
 ```
 
-`uv run --frozen python tools/build.py` performs the same configure/build without running tests.
-Hosted CI exercises the real synthetic Lightrec runtime on Linux x86-64 with full repository history
+Hosted CI builds the framework on Linux x86-64 with full repository history
 and the exact fork revision. Unsupported platforms are not represented by green placeholder jobs.
 
 Consumers supply the runnable product and launcher. A consumer must authenticate user media, link

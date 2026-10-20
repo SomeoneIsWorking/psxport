@@ -4,8 +4,6 @@
 # presentation owners, and vendored hardware backends. Title code and restricted game data remain in
 # the consumer. Build-generated shader and identity headers belong to the consumer's build tree.
 
-option(PSXPORT_BUILD_SMOKE "Build headless game-agnostic framework smoke (psxport_smoke)" OFF)
-
 include("${CMAKE_CURRENT_LIST_DIR}/psxport_presentation_dependencies.cmake")
 psxport_configure_presentation_dependencies()
 
@@ -304,9 +302,9 @@ target_include_directories(psxport PUBLIC
   ${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr/include)
 # Third-party headers: their own diagnostics are not ours.
 target_include_directories(psxport SYSTEM PUBLIC ${PSXPORT_ROOT}/vendor/rmlui/Include ${PSXPORT_ROOT}/vendor/rmlui/Backends)
-# NO game include dirs: the framework #includes no game/ header — the psxport_smoke link proves it.
+# NO game include dirs: the framework #includes no game/ header.
 
-# Framework internals no title includes; framework tests and tools link psxport_internal for them.
+# Framework internals no title includes; framework tools link psxport_internal for them.
 add_library(psxport_internal INTERFACE)
 set(PSXPORT_INTERNAL_INCLUDES
   ${PSXPORT_ROOT}/${RT}/boot ${PSXPORT_ROOT}/${RT}/host ${PSXPORT_ROOT}/${RT}/gpu ${PSXPORT_ROOT}/${RT}/cpu/beetle)
@@ -320,7 +318,7 @@ target_compile_options(psxport PRIVATE -w -O2 -g)
 
 # WHICH CALL SITES MOVE THE BYTES (runtime/psx/debug/memcensus.cpp). --wrap is a LINK-time rewrite, and
 # it must be on the final executable's link rather than this static library's, so it is INTERFACE:
-# every consumer (the game exe, psxport_smoke) inherits it and every first-party memcpy/memmove call
+# every consumer (the game exe) inherits it and every first-party memcpy/memmove call
 # routes through __wrap_*. Always linked, never always counting — the wrapper is one relaxed load and
 # a not-taken branch unless PSXPORT_MEMCENSUS=1, so an ordinary run is unaffected.
 #
@@ -364,24 +362,6 @@ target_link_libraries(psxport PUBLIC
 # The first-run screen is the host's own; titles never include it.
 target_link_libraries(psxport PRIVATE setup_ui::setup_ui)
 
-# ---- test support: the stub GameRuntime for framework and title tests with no title runtime ----
-add_library(psxport_test_support STATIC EXCLUDE_FROM_ALL ${PSXPORT_ROOT}/tests/support/stub_game_runtime.cpp)
-set_target_properties(psxport_test_support PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-target_include_directories(psxport_test_support PUBLIC ${PSXPORT_ROOT}/tests/support)
-target_link_libraries(psxport_test_support PUBLIC psxport)
-
-# ---- headless game-agnostic smoke (PSXPORT_BUILD_SMOKE=ON) ------------------------------------
-# Links only psxport and inherited system dependencies. Any consumer-title symbol pulled into the
-# Core-only client fails this link. See tools/smoke/psxport_smoke.cpp.
-if(PSXPORT_BUILD_SMOKE)
-  add_executable(psxport_smoke tools/smoke/psxport_smoke.cpp)
-  set_target_properties(psxport_smoke PROPERTIES
-    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/scratch/bin)
-  # The smoke includes the public framework headers and inherits their build-owned include paths.
-  target_link_libraries(psxport_smoke PRIVATE psxport psxport_test_support)
-endif()
-
 # The vendored GPU sources use sscanf/fprintf/stderr without including <stdio.h>. Supply it on the
 # compile line rather than editing the fork — psxport's rule is that beetle changes live in the
 # committed fork, and this is a build-flag concern, not a source defect worth forking over.
@@ -422,31 +402,4 @@ function(psxport_add_product target)
     "PSXPORT_PRODUCT_CATALOG=${PRODUCT_CATALOG}"
     "PSXPORT_PRODUCT_CATALOG_HEADER=\"${PRODUCT_HEADER}\"")
   target_link_libraries(${target} PRIVATE psxport ${PRODUCT_LIBRARIES})
-endfunction()
-
-# ---- title link isolation ----------------------------------------------------------------------
-# psxport_add_title_link_isolation_test(<test> FIRST <target> FIRST_ROOT <dir> SECOND <target> SECOND_ROOT <dir>)
-# A test that refuses an external name both targets' objects define from sources under their roots
-# (tools/port/title_link_isolation.py). The targets are built with -g: definition locations come from
-# line information.
-function(psxport_add_title_link_isolation_test test)
-  cmake_parse_arguments(PARSE_ARGV 1 ISOLATION "" "FIRST;FIRST_ROOT;SECOND;SECOND_ROOT" "")
-  if(NOT ISOLATION_FIRST OR NOT ISOLATION_FIRST_ROOT OR NOT ISOLATION_SECOND OR NOT ISOLATION_SECOND_ROOT
-     OR ISOLATION_UNPARSED_ARGUMENTS)
-    message(FATAL_ERROR "psxport_add_title_link_isolation_test(${test} FIRST <target> FIRST_ROOT <dir> "
-                        "SECOND <target> SECOND_ROOT <dir>)")
-  endif()
-  find_program(PSXPORT_GNU_NM NAMES nm gnm)
-  foreach(side IN ITEMS FIRST SECOND)
-    target_compile_options(${ISOLATION_${side}} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-g>)
-    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/link_isolation/${test}.${side}.objects"
-         CONTENT "$<JOIN:$<TARGET_OBJECTS:${ISOLATION_${side}}>,\n>\n")
-  endforeach()
-  add_test(NAME ${test}
-           COMMAND "${Python3_EXECUTABLE}" "${PSXPORT_ROOT}/tools/port/title_link_isolation.py"
-                   --nm "${PSXPORT_GNU_NM}"
-                   --first "${CMAKE_BINARY_DIR}/link_isolation/${test}.FIRST.objects"
-                   --first-root "${ISOLATION_FIRST_ROOT}"
-                   --second "${CMAKE_BINARY_DIR}/link_isolation/${test}.SECOND.objects"
-                   --second-root "${ISOLATION_SECOND_ROOT}")
 endfunction()

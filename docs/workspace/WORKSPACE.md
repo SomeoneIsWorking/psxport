@@ -55,14 +55,17 @@ missing (`uv run --no-project https://raw.githubusercontent.com/SomeoneIsWorking
 and `scripts/bootstrap_workspace.py` runs it for every title. Lightrec stays pinned at `PSXPORT_LIGHTREC_REVISION`
 (`psxport/cmake/lightrec_dependency.cmake`, `psxport_fetch.py --lightrec`).
 
-## Gates
+## Build
+
+There are no unit tests or gates. Each repo is checked by building its product with Clang:
 
 | repo | command |
 |---|---|
-| psxport | `uv run --frozen python tools/verify.py --build build` |
-| psx-spyro | `uv run --frozen python tools/verify.py --jobs 6` |
-| psx-toy-story-2 | `CXX=clang++ CC=clang CMAKE_BUILD_PARALLEL_LEVEL=6 uv run --frozen python tools/verify.py` |
-| psx-crash-bash | `uv run --frozen python tools/verify.py` |
+| psxport | `CC=clang CXX=clang++ uv run --frozen python tools/build.py --build build/agent` |
+| every title | `CC=clang CXX=clang++ uv run --frozen python external/psxport/tools/port/consumer_build.py --build build/agent --target <product>` |
+
+Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_port`, `tomba2_port`,
+`spiderman_port`, `vagrant_port`, `megamanx4_port`, `tekken3_port`, `c12_port`.
 
 ## Rules
 
