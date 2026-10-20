@@ -18,7 +18,7 @@ constexpr std::size_t kMaxPacketWords = 255;
 } // namespace
 
 void PacketChainWalker::emitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
-  std::array<std::uint32_t, kMaxPacketWords> words{};
+  std::array<std::uint32_t, kMaxPacketWords> words;
   for (gpu::OtNode tag(0, gpu::OtHeaderWord{link}); !tag.endsChain();) {
     const std::uint32_t packet = gpu::guestAddressOf(tag.nextRamOffset());
     tag = gpu::OtNode(gpu::mainRamOffsetOf(packet), gpu::OtHeaderWord{memory_.mem_r32(packet)});
@@ -39,16 +39,15 @@ void PacketChainWalker::emitChain(std::uint32_t link, OtSlot slot, DrawModeTrack
     if (!tag.carriesPrimitive()) {
       continue;
     }
-    for (std::uint32_t i = 0; i < count; ++i) {
-      words[i] = memory_.mem_r32(packet + 4u * (i + 1u));
-    }
-    const std::span<const std::uint32_t> command(words.data(), count);
+    const std::span<std::uint32_t> command(words.data(), count);
+    memory_.readWords(packet + 4u, command);
     if (drawMode.take(command)) {
       continue;
     }
     std::optional<DrawPrimitive> primitive = gpu::decodePacketPrimitive(command);
     if (!primitive) {
-      lucent::error("packet-chain", "the packet 0x{:08X} at 0x{:08X} is not a polygon, line or sprite", words[0], packet);
+      lucent::error(
+          "packet-chain", "the packet 0x{:08X} at 0x{:08X} is not a polygon, line or sprite", words[0], packet);
       std::abort();
     }
     drawMode.apply(*primitive);

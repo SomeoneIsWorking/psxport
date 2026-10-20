@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <map>
 #include <new>
-#include <unordered_map>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace psx::present {
@@ -74,7 +74,7 @@ private:
   Range *find(std::uint32_t address, std::uint32_t &base);
   const std::uint32_t *overlaid(std::uint32_t wordAddress) const;
 
-  std::map<std::uint32_t, Range> ranges_; // by kseg0 base
+  std::map<std::uint32_t, Range> ranges_;          // by kseg0 base
   std::map<std::uint32_t, std::uint32_t> overlay_; // by kseg0 word address
   bool keepsLevelReads_ = false;
   mutable LevelReads levelReads_;
@@ -111,6 +111,8 @@ public:
   std::int32_t mem_r16s(std::uint32_t address) const {
     return static_cast<std::int16_t>(mem_r16(address));
   }
+  // Consecutive words from `address`; one copy when a host range holds the first, which must then hold all.
+  void readWords(std::uint32_t address, std::span<std::uint32_t> out) const;
   void mem_w8(std::uint32_t address, std::uint8_t value) const {
     write(address, value);
   }
