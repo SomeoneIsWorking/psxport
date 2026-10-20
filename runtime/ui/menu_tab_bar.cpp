@@ -1,5 +1,7 @@
 #include "menu_tab_bar.h"
 
+#include "wrap.h"
+
 #include <utility>
 
 namespace psx::ui {
@@ -32,17 +34,9 @@ void MenuTabBar::select(int index) {
   if (n == 0) {
     return;
   }
-  if (index < 0) {
-    index = n - 1;
-  } else if (index >= n) {
-    index = 0;
-  }
+  index = wrap(index, 0, n);
   mActive = index;
-  // Deliberately NOT guarded on `index == mActive`. This is the single place tab state is
-  // applied, so the very first call — select(0) at construction, where mActive is already 0 —
-  // must still stamp the pseudo-class and run the callback. An early-out here would leave the
-  // opening tab styled as unselected and its pane hidden, which is precisely the bug an
-  // "optimisation" of this shape would introduce.
+  // No early-out on index == mActive: the construction-time select(0) must still style the tab.
   for (int i = 0; i < n; i++) {
     mTabs[i]->set_selected(i == index);
   }

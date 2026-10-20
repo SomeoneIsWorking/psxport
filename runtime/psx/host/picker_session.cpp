@@ -53,13 +53,7 @@ void PickerSession::build() {
   built_ = true;
 }
 
-void PickerSession::show() {
-  host_->display.show();
-}
-
-// The selected panel is the only one that steps, so its presents are the selector's cadence: the
-// screen is built with the panel's build and shown with its show. A pre-rolling panel can present a
-// hundred times in one selector frame, so it gets no host and the loop builds for it.
+// The settled selected panel's presents drive the selector; a pre-rolling one gets no host.
 void PickerSession::attachPaneHost() {
   for (int panel = 0; panel < panels_->count(); ++panel) {
     if (TitleSession *session = panels_->session(panel)) {
@@ -70,7 +64,7 @@ void PickerSession::attachPaneHost() {
                                   },
                               .show =
                                   [this] {
-                                    show();
+                                    host_->display.show();
                                   }});
       } else {
         session->setPaneHost({});
@@ -196,7 +190,7 @@ PickerSession::Result PickerSession::run() {
       if (pacedFields == 0) {
         host_->framePacer.hostScreenPace(core);
       }
-      show();
+      host_->display.show();
     }
     services_.budget.step();
     fieldTurn.endField(core, static_cast<std::uint32_t>(frame));

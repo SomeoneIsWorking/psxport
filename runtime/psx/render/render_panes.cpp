@@ -18,11 +18,10 @@ struct PaneUbo {
   float viewport[2];
 };
 
-// pane.frag: the tint, the seam lines and the opacity.
+// pane.frag: the tint and the seam lines.
 struct PanePc {
   float tint[4]; // rgb = channel scale, w = desaturation
   float seam[4]; // left top, left bottom, right top, right bottom
-  float alpha;
 };
 
 } // namespace
@@ -57,8 +56,7 @@ void RenderState::buildPanes(std::span<const Pane> panes) {
                       {static_cast<float>(size.width), static_cast<float>(size.height)}};
     SDL_PushGPUVertexUniformData(cmd, 0, &ubo, sizeof ubo);
     const PanePc pc{{pane.tintR, pane.tintG, pane.tintB, pane.desaturation},
-                    {pane.seamLeftTop, pane.seamLeftBottom, pane.seamRightTop, pane.seamRightBottom},
-                    pane.alpha};
+                    {pane.seamLeftTop, pane.seamLeftBottom, pane.seamRightTop, pane.seamRightBottom}};
     SDL_PushGPUFragmentUniformData(cmd, 0, &pc, sizeof pc);
     const SDL_GPUTextureSamplerBinding binding = {source, device_.nearestSampler()};
     SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);

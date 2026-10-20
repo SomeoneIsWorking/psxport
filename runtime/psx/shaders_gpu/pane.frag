@@ -9,7 +9,6 @@ layout(set = 2, binding = 0) uniform sampler2D u_pane;
 layout(set = 3, binding = 0) uniform PC {
     vec4 uTint;   // rgb = channel scale, w = desaturation
     vec4 uSeam;   // left top, left bottom, right top, right bottom — sink pixels
-    float uAlpha; // 1 for a pane that owns its pixels; below 1 for one drawn OVER another
 } pc;
 void main() {
     // Seam endpoints are the boundary's columns at the surface's top and bottom.
@@ -22,6 +21,5 @@ void main() {
     vec4 texel = texture(u_pane, v_uv);
     vec3 rgb = texel.rgb * pc.uTint.rgb;
     const float grey = dot(rgb, vec3(0.299, 0.587, 0.114));
-    // The pane's opacity and the picture's own transparency both apply.
-    o_col = vec4(mix(rgb, vec3(grey), clamp(pc.uTint.w, 0.0, 1.0)), pc.uAlpha * texel.a);
+    o_col = vec4(mix(rgb, vec3(grey), clamp(pc.uTint.w, 0.0, 1.0)), texel.a);
 }
