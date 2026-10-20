@@ -394,6 +394,9 @@ State each one in its group's commit and its issue doc.
 - The picker moves with D-pad Left/Right.
 - A5, every title's launcher: the player build moves to `build/player` and psxport's disc reader to `build/player-tools`; the launcher takes only an optional positional disc and `--prepare-only`. Dropped: CTR's `--headless` (agents use `agent_environment`), Crash Bash's and C-12's `--check`, and C-12's `--disc` (now the positional disc).
 - A5, Spyro's launcher no longer requires OpenSSL; nothing in Spyro links it since A3 deleted `content_identity`.
+- B1, the GPU-fault marker moves from the per-repo user state dir to Lucent's user data dir (`$XDG_CONFIG_HOME/psxport/gpu_fault` on Linux), so one fault refuses the GPU for every title on the machine.
+- B1, the image pass always renders in the present-image format; the swapchain and pane sink draw through a separate `sinkPipeline` in the swapchain format, where before one pipeline took the swapchain format whenever a window was up.
+- B1, at ires above 1 the record planner splits batches by gpu.c's 1x coverage; an op that overlaps an earlier op of its batch only inside one native pixel blends against the batch's snapshot there.
 
 ## Performance (applies to every group)
 

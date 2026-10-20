@@ -2,8 +2,9 @@
 //
 // Each primitive costs one op and a constant number of quads whatever the scale: the CPU sets up gpu.c's
 // integer edge and interpolant inputs at the target scale, and shaders_gpu/record.frag evaluates coverage,
-// texel, modulation, blend and mask per pixel. Ops whose reads overlap pixels written earlier in the same
-// batch start a new batch, so every read sees VRAM exactly as the device would. This header is the op
+// texel, modulation, blend and mask per pixel. Ops whose reads overlap pixels gpu.c wrote at 1x earlier in
+// the same batch start a new batch, so at 1x every read sees VRAM exactly as the device would and the ops
+// and batches are the same at every scale. This header is the op
 // layout's one source; tools/gen_gpu_shaders.py writes it into the shader as record_op.glsl.
 #pragma once
 

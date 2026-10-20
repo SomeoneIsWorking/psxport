@@ -34,7 +34,8 @@ private:
   std::size_t count_ = 0;
 };
 
-// Bits of a plane (VRAM or a canvas, at most VRAM-sized) written by the ops of the open batch.
+// Bits of a plane (VRAM or a canvas, at most VRAM-sized) written by the ops of the open batch, and the
+// bounds of every pixel they change.
 class WrittenMap {
 public:
   bool any(const RecordRect &rect) const {
@@ -60,6 +61,14 @@ public:
     }
     for (int y = rect.y0; y < rect.y1; y++) {
       bits_.mark(y, {rect.x0, rect.x1});
+    }
+    extend(rect);
+  }
+
+  // Grows the bounds alone: pixels the batch may change that no read is tested against.
+  void extend(const RecordRect &rect) {
+    if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) {
+      return;
     }
     if (empty_) {
       bounds_ = rect;

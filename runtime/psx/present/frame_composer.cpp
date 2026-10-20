@@ -99,7 +99,6 @@ void applyEnvironment(DrawPrimitive &primitive, const RecordDrawState &environme
   state.windowMaskY = environment.windowMaskY;
   state.windowOffsetX = environment.windowOffsetX;
   state.windowOffsetY = environment.windowOffsetY;
-  state.dither = environment.dither;
   state.maskSet = environment.maskSet;
   state.maskCheck = environment.maskCheck;
   state.skipRowParity = environment.skipRowParity;
