@@ -67,15 +67,29 @@ constexpr std::uint16_t vramHalfWord(std::span<const std::uint16_t> vram, VramPo
 }
 
 // The texel at (u, v) of a page as the GPU fetches it, without the texture window; 0 is transparent.
-constexpr std::uint16_t sampleTexel(std::span<const std::uint16_t> vram, TexPage page, VramPoint clut, int u, int v) {
+// `halfWordAt(VramPoint)` reads the VRAM halfword there.
+template <class HalfWordAt>
+constexpr std::uint16_t fetchTexel(const HalfWordAt &halfWordAt, TexPage page, VramPoint clut, int u, int v) {
   if (page.depth == TexDepth::Direct15 || page.depth == TexDepth::Reserved) {
-    return vramHalfWord(vram, {page.x + u, page.y + v});
+    return halfWordAt(VramPoint{page.x + u, page.y + v});
   }
   const int shift = 2 - static_cast<int>(page.depth); // log2 of the texels in one halfword
   const int bits = 16 >> shift;
-  const std::uint16_t word = vramHalfWord(vram, {page.x + (u >> shift), page.y + v});
+  const std::uint16_t word = halfWordAt(VramPoint{page.x + (u >> shift), page.y + v});
   const int index = (word >> ((u & ((1 << shift) - 1)) * bits)) & ((1 << bits) - 1);
-  return vramHalfWord(vram, {clut.x + index, clut.y});
+  return halfWordAt(VramPoint{clut.x + index, clut.y});
+}
+
+// fetchTexel over a whole VRAM image.
+constexpr std::uint16_t sampleTexel(std::span<const std::uint16_t> vram, TexPage page, VramPoint clut, int u, int v) {
+  return fetchTexel(
+      [vram](VramPoint at) {
+        return vramHalfWord(vram, at);
+      },
+      page,
+      clut,
+      u,
+      v);
 }
 
 } // namespace psx::gpu

@@ -106,8 +106,7 @@ void HostMemory::mapGuest(Core &guest, std::uint32_t address, std::uint32_t size
       }
     }
     const std::uint32_t gapEnd = gap.address + gap.bytes;
-    for (auto word = overlay_.lower_bound(gap.address & ~3u); word != overlay_.end() && word->first < gapEnd;
-         ++word) {
+    for (auto word = overlay_.lower_bound(gap.address & ~3u); word != overlay_.end() && word->first < gapEnd; ++word) {
       for (std::uint32_t byte = 0; byte < 4u; ++byte) {
         const std::uint32_t target = word->first + byte;
         if (target >= gap.address && target < gapEnd) {
@@ -188,6 +187,15 @@ std::span<const std::byte> HostMemory::view(std::uint32_t address, std::uint32_t
     std::abort();
   }
   return std::span<const std::byte>(*range).subspan(offset, size);
+}
+
+void EmitMemory::readWords(std::uint32_t address, std::span<std::uint32_t> out) const {
+  if (host_ != nullptr && host_->read(address, out.data(), static_cast<std::uint32_t>(out.size_bytes()))) {
+    return;
+  }
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    out[i] = mem_r32(address + 4u * static_cast<std::uint32_t>(i));
+  }
 }
 
 void EmitMemory::noteRead(std::uint32_t address) const {

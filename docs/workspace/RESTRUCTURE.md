@@ -89,7 +89,7 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 - `RenderPath = {Record, Device}`. Device is the oracle and diagnostic view.
 - `FrameComposer` builds every in-between from `StateProducer` renders of saved state, with the shown record as the base. No packet lerp and no keyed blend. `DisplayPassGuard` aborts a guest-memory write inside `StateProducer::render`.
 - recordcheck covers t=1 only. In-betweens are checked in the running product.
-- SDL3 GPU stays. `gpu_vk.cpp` (3,592 lines) splits into `gpu_vk_present.cpp` and `gpu_vk_submit.cpp`, each under 1,200 lines (done in (c) stage 2: `gpu_vk_present.cpp` 432, `gpu_vk_submit.cpp` 127; the display presenter is `present/display_presenter.*`, the guest ports `present/gpu_ports.*`).
+- SDL3 GPU stays. `gpu_vk.cpp` (3,592 lines) splits into `gpu_vk_present.cpp` and `gpu_vk_submit.cpp`, each under 1,200 lines (done in (c) stage 2: `gpu_vk_present.cpp` 432, `gpu_vk_submit.cpp` 127; the display presenter is `present/display_presenter.*`, the guest ports `gpu/gpu_ports.*`).
 - **Deleted.**
   - Native: `gpu_native*` (the second VRAM), `render_queue*`, `gpu_painter`, `painter_object_layer`, `face_contest`, `proj_prim`, `ot_lifo_depth`, `guest_packet_filter`, `render_noise`, `native_composite_capture`, `fade_interpolation`, `fps60*`, `host_world_pass_strategy`, `game_hooks_opt`, `gpu_vk_depth`, `gpu_vk_semi_order`, the PC-rasterizer selftests.
   - Gte: `guest_geometry_interpolation`, `guest_geometry_scene_source`, `projection_provenance`, `in_between_splice`, `in_between_strategy.h`, `wide_2d_layout`, the render_path_control player cycle.

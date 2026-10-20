@@ -177,7 +177,7 @@ One group because its API breaks reach every caller. psxport commits come first,
   - `gpu_ports.*` and `ordering_table.*`, moved to `psx/gpu/`.
   - `psx/gpu/gp0_record_tap.cpp`.
   - `psx/platform/scea_splash.*` and `scea_asset.h`, which move to `psx-tomba/game/core/frame/`.
-  - In other repos: Tomba's `boot_cards.cpp` and `asset.cpp`, Spider-Man's `frame_envelope.cpp`, and Spyro's `game/core/title_logo.cpp` and `title_logo_facts.h`.
+  - In other repos: Tomba's `boot_cards.cpp` and `asset.cpp`, Spider-Man's `frame_envelope.cpp`, Crash Bash's `game/render/packet_decode.*`, and Spyro's `game/core/title_logo.cpp` and `titles/spyro1/core/frame/logo_facts.h`.
 - **Merged findings and their single implementation:**
   - `OtNode`/`OrderingTableCursor` own the node decode. `emitHostOrderingTable` is generalized into one packet-chain walker that takes a stride, head offset, single-chain start, bound and word reader. `kTagNextMask` is deleted.
   - `psx::present::DrawModeTracker` (keyed on `Gp0Op::SetDrawMode`, applied to everything except textured polygons) is the single E1 rule.
@@ -366,6 +366,7 @@ Each is a call-site or knob edit forced by an API change that cannot be split.
 | `psx/movie/native_fmv.cpp` | B1 (render include and name) | B2: everything else. |
 | `psx/host/picker_session.cpp` | B1 (`ensureDevice` fold) | B3: everything else. |
 | Spyro render files that include `core/guest_globals.h` (if any) | A3 (include path) | B4: everything else. |
+| `psx-spyro/titles/spyro1/core/frame/logo_facts.h` | A3 | A4: the logo record loses `clipWidth`. |
 
 ## Shipped behaviour that changes on purpose
 State each one in its group's commit and its issue doc.
