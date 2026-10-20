@@ -91,7 +91,7 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Live mods | `runtime/psx/debug/mods.*` | Per-Game player toggles (`aspect`, `ires`, `fps60`, the selector layout) and the settings file |
 | Bug report | `runtime/psx/debug/bug_report_session.*`, `vendor/bug-report` | The in-app report and its reference frame |
 | Player UI | `runtime/ui/` | The RmlUi overlay, menus, readouts, warp control |
-| Logging | `vendor/lucent/` | All output |
+| Logging, layered config variables, text primitives | `vendor/lucent/` | All output; `lucent::cvar`, `lucent::text::trim` / `json_quote` |
 | CPU oracle | `tools/oracle/` | Mednafen snapshots, the full-console host, state-aligned comparison |
 | Title tooling | `tools/port/` | Engines every title runs (`README.md` there) |
 | Framework fetch | `tools/psxport_fetch.py` | A title's `external/psxport` and the Lightrec worktree; titles run it from psxport `main` |
