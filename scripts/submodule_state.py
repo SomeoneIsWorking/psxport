@@ -82,18 +82,9 @@ def _declared_paths(git: Git, repo: Path) -> list[str]:
 
 
 def declared_entries(git: Git, repo: Path) -> list[tuple[str, str]]:
-    """``(name, path)`` for every declared submodule, in .gitmodules order.
+    """``(name, path)`` for every declared submodule in .gitmodules order; the one .gitmodules reader.
 
-    The NAME is needed because the submodule's URL lives under ``submodule.<name>.url`` in the
-    repository config, and pointing that at a local source is how a clone is redirected without
-    editing .gitmodules -- which is shared by every worktree of the repository and is not ours to
-    change.
-
-    ``name`` is the BARE name (``vendor/beetle-psx``), not the config key the query returned
-    (``submodule.vendor/beetle-psx.path``). MEASURED: returning the key with the ``submodule.``
-    prefix left in it made the caller write ``submodule.submodule.vendor/beetle-psx.url``, so the
-    override landed on a key nothing reads, the real URL stayed the GitHub one, and the clone
-    silently fetched from the network -- a local clone that is not local and prints that it was.
+    ``name`` is bare (``vendor/beetle-psx``), since ``submodule.<name>.url`` is where a clone is redirected.
     """
     modules = repo / ".gitmodules"
     if not modules.is_file():

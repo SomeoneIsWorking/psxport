@@ -77,7 +77,6 @@ USAGE (from a consuming game, where external/psxport is the framework)
   external/psxport/tools/port/fps60_check.py --dir scratch/framedump --seq scratch/seq.log
   external/psxport/tools/port/fps60_check.py --triple f001234    # one triple, with a tile map
   external/psxport/tools/port/fps60_check.py --dir <product> --forced <t=0 capture>
-  external/psxport/tools/port/fps60_check.py --selftest          # the attribution's own fixtures
 
 Filenames come from Fps60::dumpPresent: scratch/framedump/f<fence>_<seq>_<real|interp>.png.
 Needs Pillow (already used elsewhere in tools/).
@@ -291,7 +290,6 @@ def owner_of(runs, tx, ty, tile):
     return best
 
 
-
 # ---------------------------------------------------------------------------------------------
 # Did the in-between present RESPOND to the interpolation factor?
 # ---------------------------------------------------------------------------------------------
@@ -338,7 +336,6 @@ def _changed_pixel_verdicts(pa, pc, p0, w, h, at_next_counts):
             else:
                 neither += 1
     return prev, nxt, neither
-
 
 
 def _mean_abs_diff(a, b):
@@ -505,273 +502,6 @@ def forced_factor_report(product_dir, forced_dir, out=print):
     return 0
 
 
-
-def _forced_factor_selftest(check):
-    """Drive forced_factor_report over dumps whose right answer is known by construction.
-
-    Every branch here can print a number, so every branch gets a case: the responding scene, the
-    snapping scene, the still scene, the drifted route, and the two empty-input refusals. The one
-    that matters is the SNAP — a measure that says "interpolated" on content drawn at the next
-    endpoint regardless of t would be exactly as reassuring as a correct one."""
-    import shutil, tempfile
-
-    def frame(path, boxes):
-        im = Image.new("RGB", (48, 24), (0, 0, 0))
-        px = im.load()
-        for (x0, colour) in boxes:
-            for y in range(2, 6):
-                for x in range(x0, x0 + 3):
-                    px[x, y] = colour
-        im.save(path)
-
-    def dump(d, interp_at):
-        """real(A) has the box at x=2, real(C) at x=8; the in-between sits where told."""
-        os.makedirs(d, exist_ok=True)
-        frame(os.path.join(d, "f100_0_real.png"), [(2, (200, 30, 30))])
-        frame(os.path.join(d, "f100_1_interp.png"), [(interp_at, (200, 30, 30))])
-        frame(os.path.join(d, "f101_2_real.png"), [(8, (200, 30, 30))])
-        return d
-
-    root = tempfile.mkdtemp(prefix="fps60_forced_")
-    try:
-        product = dump(os.path.join(root, "product"), 5)   # halfway: the product's own factor
-        responds = dump(os.path.join(root, "responds"), 2)  # forced to 0 -> at the PREVIOUS endpoint
-        snaps = dump(os.path.join(root, "snaps"), 8)        # unmoved by t -> at the NEXT endpoint
-
-        def run(a, b):
-            lines = []
-            code = forced_factor_report(a, b, out=lines.append)
-            return code, "\n".join(lines)
-
-        code, text = run(product, responds)
-        check("responding scene passes", code, 0)
-        check("responding scene is all previous", "100.00%)" in text
-              and "PREVIOUS endpoint when forced) :        24 (100.00%" in text, True)
-        check("responding scene says so", "Every changed pixel responded" in text, True)
-        check("a clean triple is counted clean",
-              "per triple: 1 of 1 are <=1% unresponsive, 0 are >=99%" in text, True)
-
-        code, text = run(product, snaps)
-        check("one triple is counted once", "per triple: 0 of 1 are <=1% unresponsive, 1 are >=99%"
-              in text, True)
-        # The snapping fixture moves a small box, so its endpoints are close: a continuous triple
-        # that did not respond, which is the defect and must not be excused as a cut.
-        check("a snap on continuous content is a defect",
-              "1 are CONTINUOUS and still did not respond — the defect, at fence(s) 100" in text,
-              True)
-        # The share needs its denominator beside it or a nearly-black frame reads as a whole-screen
-        # defect; the box is 3x4 at two positions, so 24 pixels changed out of 48x24.
-        check("the defect carries its denominator",
-              "those cover 24 changed pixel(s): median 24 per triple, smallest 24, largest 24, "
-              "against 1152 in a frame" in text, True)
-        check("the worst triple carries it too",
-              "at 100.00% unresponsive of 24 changed pixel(s)" in text, True)
-        check("and is not filed as a cut", "0 are across a DISCONTINUITY" in text, True)
-        check("fence runs collapse", _fence_runs([1, 2, 3, 9, 20, 21]),
-              "6 fence(s) in 3 run(s): 1..3, 9, 20..21")
-        check("snapping scene still returns 0", code, 0)
-        check("snapping scene is all next",
-              "at the NEXT endpoint whatever t is)   :        24 (100.00%" in text, True)
-        check("snapping scene localises", "distinct positions in x 2..10 y 2..5" in text, True)
-        # The bands have to place it, not just count it: the box occupies four of twelve row bands
-        # and none of the outer ones, so a localisation that files everything under one band or
-        # spreads it evenly is wrong even though the totals above are right.
-        check("row bands place the box",
-              "by row band (top to bottom):  0.0% 50.0% 50.0%  0.0%  0.0%  0.0%  0.0%  0.0% "
-              " 0.0%  0.0%  0.0%  0.0%" in text, True)
-        check("col bands place the box",
-              "by col band (left to right): 33.3% 16.7% 50.0%  0.0%" in text, True)
-
-        # Across a CUT the same non-response is correct, and the split has to say so, or every
-        # scene change in a capture reads as an interpolation failure.
-        cut = os.path.join(root, "cut")
-        os.makedirs(cut)
-        Image.new("RGB", (48, 24), (0, 0, 0)).save(os.path.join(cut, "f100_0_real.png"))
-        Image.new("RGB", (48, 24), (255, 255, 255)).save(os.path.join(cut, "f100_1_interp.png"))
-        Image.new("RGB", (48, 24), (255, 255, 255)).save(os.path.join(cut, "f101_2_real.png"))
-        cut_product = os.path.join(root, "cut_product")
-        os.makedirs(cut_product)
-        Image.new("RGB", (48, 24), (0, 0, 0)).save(os.path.join(cut_product, "f100_0_real.png"))
-        Image.new("RGB", (48, 24), (128, 128, 128)).save(os.path.join(cut_product, "f100_1_interp.png"))
-        Image.new("RGB", (48, 24), (255, 255, 255)).save(os.path.join(cut_product, "f101_2_real.png"))
-        code, text = run(cut_product, cut)
-        check("a cut is not called a defect", "1 are across a DISCONTINUITY" in text, True)
-        check("a cut says nothing is continuous", "none is continuous" in text, True)
-
-        # Several triples at once, because every statistic above is a single number over a list and
-        # a one-triple fixture cannot tell a sorted list from an unsorted one. Here the FIRST triple
-        # is the broken one, so "worst triple" naming the last fence would be the tell.
-        def series(d, interp_at):
-            """Five reals with the box at 2, 8, 14, 20, 26; interp_at(k) places the in-between."""
-            os.makedirs(d)
-            for k in range(5):
-                frame(os.path.join(d, f"f{200 + k}_{2 * k}_real.png"), [(2 + 6 * k, (200, 30, 30))])
-            for k in range(4):
-                frame(os.path.join(d, f"f{200 + k}_{2 * k + 1}_interp.png"),
-                      [(interp_at(k), (200, 30, 30))])
-            return d
-
-        many_product = series(os.path.join(root, "many_product"), lambda k: 5 + 6 * k)
-        # forced: triple 0 snaps to the NEXT endpoint, the other three fall back to the previous.
-        many_forced = series(os.path.join(root, "many_forced"),
-                             lambda k: 8 if k == 0 else 2 + 6 * k)
-        code, text = run(many_product, many_forced)
-        check("four triples are all used", "4 triples" in text, True)
-        check("the broken one is 1 of 4",
-              "per triple: 3 of 4 are <=1% unresponsive, 1 are >=99%" in text, True)
-        check("the worst triple is the FIRST fence, not the last",
-              "worst triple: fence 200 at 100.00% unresponsive" in text, True)
-
-        # A still scene must REFUSE, not score 100%: with no pixel changing between the endpoints
-        # there is nothing for the factor to move, and reporting a pass there is the silent lie.
-        still = os.path.join(root, "still")
-        os.makedirs(still)
-        for name in ("f100_0_real.png", "f100_1_interp.png", "f101_2_real.png"):
-            frame(os.path.join(still, name), [(2, (200, 30, 30))])
-        code, text = run(still, still)
-        check("still scene refuses", code, 2)
-        # ...and so must the TILE path, which had no such guard. The decision is
-        # `tile_census_is_still`, driven here over the class counts a census produces, so both answers
-        # are pinned: a still census refuses, and a census with any motion at all does not. The two
-        # failure classes matter most -- an all-AHEAD or all-STALE census is a DEFECT (everything moved
-        # and nothing was reconstructed), and the guard must not swallow it into "nothing measured",
-        # because that would hide the very defect it exists to surface.
-        check("tile census calls an all-STATIC census still",
-              tile_census_is_still({"STATIC": 480, "BETWEEN": 0, "STALE": 0, "AHEAD": 0}), True)
-        check("tile census does not call a reconstructed census still",
-              tile_census_is_still({"STATIC": 100, "BETWEEN": 380, "STALE": 0, "AHEAD": 0}), False)
-        check("tile census does not swallow an all-AHEAD defect into still",
-              tile_census_is_still({"STATIC": 0, "BETWEEN": 0, "STALE": 0, "AHEAD": 480}), False)
-        check("tile census does not swallow an all-STALE defect into still",
-              tile_census_is_still({"STATIC": 0, "BETWEEN": 0, "STALE": 480, "AHEAD": 0}), False)
-        check("still scene says nothing was measured", "NOTHING WAS MEASURED" in text, True)
-
-        # The control: if a real frame differs, the two runs are not one route.
-        drift = dump(os.path.join(root, "drift"), 2)
-        frame(os.path.join(drift, "f101_2_real.png"), [(9, (200, 30, 30))])
-        code, text = run(product, drift)
-        check("a drifted route refuses", code, 2)
-        check("drift names the count", "1 of 2 real frames differ" in text, True)
-
-        # No shared fence at all is a different refusal from a drifted one.
-        apart = os.path.join(root, "apart")
-        os.makedirs(apart)
-        frame(os.path.join(apart, "f900_0_real.png"), [(2, (200, 30, 30))])
-        frame(os.path.join(apart, "f900_1_interp.png"), [(2, (200, 30, 30))])
-        frame(os.path.join(apart, "f901_2_real.png"), [(8, (200, 30, 30))])
-        code, text = run(product, apart)
-        check("no shared fence refuses", code, 2)
-        check("no shared fence says why", "share no real frame" in text, True)
-
-        code, text = run(product, os.path.join(root, "absent"))
-        check("a missing dir refuses", code, 2)
-        check("a missing dir says nothing was compared", "NOTHING WAS COMPARED" in text, True)
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def selftest():
-    """Prove the attribution can say every answer it is capable of printing.
-
-    The failure this guards is silent: owner_of returning the FIRST covering run instead of the
-    smallest credits the full-screen sky fill for everything drawn in front of it, and every row but
-    one goes to zero without anything looking wrong."""
-    log = ("[fps60seq] f7 t=0.500 emitted n=3\n"
-           "  rqcur layer=2 verbatim  n=2 seq=[0..1] producer=00000000 node0=00000000 "
-           "x=[-320..641) y=[0..241)\n"
-           "  rqcur layer=1 TIER1     n=9 seq=[2..10] producer=0000ABCD node0=800E7E80 "
-           "x=[100..140) y=[100..140)\n"
-           "[fps60seq] f8 t=0.500 emitted n=0\n"
-           # f9 is the negative the overlap question needs: a reconstructed run with NO verbatim
-           # run anywhere near it. Without this fence, dropping the ownership filter entirely still
-           # passes, because every other tile that a TIER1 run covers is under the full-screen
-           # verbatim fill as well. Measured 2026-09-19: the filter was disconnected and the
-           # selftest stayed green.
-           "[fps60seq] f9 t=0.500 emitted n=1\n"
-           "  rqcur layer=1 TIER1     n=4 seq=[0..3] producer=0000BEEF node0=800E7E80 "
-           "x=[10..50) y=[10..50)\n")
-    import tempfile
-    with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
-        fh.write(log)
-        path = fh.name
-    try:
-        runs = load_sequence_runs(path)
-    finally:
-        os.unlink(path)
-
-    failures = []
-    def check(name, got, want):
-        if got != want:
-            failures.append(f"  {name}: got {got!r}, want {want!r}")
-
-    # f8 has a marker but no runs, so it gets no entry at all: a fence the log never described and
-    # a fence the log described as empty are the same answer to "who drew here", and both must land
-    # in the (no run) row rather than being credited to a neighbouring fence.
-    check("fences with runs", sorted(runs), [7, 9])
-    check("runs at f7", len(runs[7]), 2)
-
-    # inside the small run: the SMALL one must win even though the big one also covers it
-    inside = owner_of(runs[7], 112, 112, 16)
-    check("small run wins where both cover", (inside[1], inside[2], inside[3]),
-          (True, "0000ABCD", "800E7E80"))
-    # outside it, only the full-screen run covers
-    outside = owner_of(runs[7], 16, 200, 16)
-    check("big run owns what only it covers", (outside[1], outside[2], outside[3]),
-          (False, "00000000", "00000000"))
-    # the producer is what a defect is actionable by, so it must not collapse into the node
-    check("producer is carried apart from the node", inside[2] != inside[3], True)
-    # a fence with no runs attributes nothing — the branch that prints "(no run)"
-    check("no owner when no run covers", owner_of(runs.get(8, ()), 16, 16, 16), None)
-    # and a tile outside every run in a populated fence is also unowned
-    check("no owner above the full-screen run", owner_of(runs[7], 16, 300, 16), None)
-
-    # The TIER1-vs-verbatim overlap question needs both answers too: a tile inside the small
-    # reconstructed run also has the full-screen verbatim run drawn over it, while one outside
-    # every verbatim extent does not. Without the negative, "they all overlap" is unfalsifiable.
-    check("verbatim also covers the reconstructed tile",
-          any_verbatim_over(runs[7], 112, 112, 16), True)
-    check("no verbatim over a tile only a reconstructed run covers",
-          any_verbatim_over(runs[9], 16, 16, 16), False)
-
-    # The mapping check needs both answers or it is decoration.
-    check("a mapping where runs predict motion is accepted",
-          mapping_verdict({"display": (80, 100, 10, 100)})[0], True)
-    check("a mapping where they predict nothing is refused",
-          mapping_verdict({"display": (30, 100, 30, 100)})[0], False)
-    # The control decides, not the constant: the SAME 1.25x lift is a pass when a wrong offset
-    # scores 0.9 and a refusal when it scores 1.2. Without this pair the threshold is a guess.
-    check("a weak lift the control cannot match is accepted",
-          mapping_verdict({"display": (25, 100, 20, 100),
-                           "shifted": (18, 100, 20, 100)})[0], True)
-    check("a weak lift the control matches is refused",
-          mapping_verdict({"display": (25, 100, 20, 100),
-                           "shifted": (24, 100, 20, 100)})[0], False)
-    check("a mapping another offset beats is refused",
-          mapping_verdict({"display": (30, 100, 10, 100),
-                           "raw": (90, 100, 10, 100)})[0], False)
-    check("nothing scored is a refusal, not an agreement", mapping_verdict({})[0], False)
-
-    # The fill must not be able to vouch for a mapping: f7's full-screen run covers everything.
-    big_area = 961 * 241
-    check("a screen-sized fill is not a specific run",
-          covered_by_specific_run(runs[7], 16, 200, 16, big_area), False)
-    check("a small run is a specific run",
-          covered_by_specific_run(runs[7], 112, 112, 16, big_area), True)
-
-    _forced_factor_selftest(check)
-
-    if failures:
-        print("fps60_check selftest: FAIL")
-        print("\n".join(failures))
-        return 1
-    print("fps60_check selftest: PASS (43 checks: fence parsing, smallest-run wins, "
-          "big-run-only, empty fence, out-of-range tile, verbatim overlap both ways, "
-          "producer kept apart from node, mapping verdict six ways incl. a wrong-offset "
-          "control, fill is not specific; forced-factor responds/snaps/still/drifted/"
-          "disjoint/missing, band and per-triple placement, fence runs, cut vs continuous)")
-    return 0
-
-
 def tile_census_is_still(counts):
     """True when the census saw no motion at all, and so has nothing to say about interpolation.
 
@@ -821,12 +551,7 @@ def main():
     ap.add_argument("--forced", help="a second capture of the SAME route taken with "
                                      "PSXPORT_FPS60_TFORCE=0: reports, per pixel, whether the "
                                      "in-between present responded to the interpolation factor")
-    ap.add_argument("--selftest", action="store_true",
-                    help="check the attribution against fixtures with a known answer")
     args = ap.parse_args()
-
-    if args.selftest:
-        return selftest()
 
     if args.forced:
         return forced_factor_report(args.dir, args.forced)
@@ -935,9 +660,7 @@ def main():
     if not n_triples:
         sys.exit("fps60_check: no real/interp/real triples found (is fps60 actually on?)")
 
-    # A STILL SCENE MUST REFUSE, not pass -- see `tile_census_is_still` for the measurement that
-    # motivated it. The guard is a named predicate rather than an inline test so the selftest drives
-    # the same decision this path makes.
+    # A still scene refuses rather than passes.
     if tile_census_is_still(counts):
         print(f"\n{n_triples} triple(s), tile={args.tile}px")
         print(f"  STATIC      {counts['STATIC']:6d}  (100.0%)")

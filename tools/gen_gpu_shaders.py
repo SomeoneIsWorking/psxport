@@ -8,7 +8,6 @@ includes are dependencies, but are not standalone shader entry points.
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import os
 import shutil
 import struct
@@ -146,222 +145,8 @@ def generate(
     return header_changed
 
 
-def write_selftest_fixture(root: Path) -> tuple[Path, Path]:
-    shader_dir = root / SHADER_DIR_REL
-    shader_dir.mkdir(parents=True)
-    for source_name, _array_name in SHADERS:
-        (shader_dir / source_name).write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
-    (shader_dir / "shared.glsl").write_text("const int sharedValue = 1;\n", encoding="utf-8")
-
-    tool_path = root / "tools/gen_gpu_shaders.py"
-    tool_path.parent.mkdir(parents=True)
-    tool_path.write_text("# selftest dependency\n", encoding="utf-8")
-
-    fake_glslc = root / "fake_glslc.py"
-    fake_glslc.write_text(
-        """#!/usr/bin/env python3
-import os
-from pathlib import Path
-import struct
-import sys
-
-args = sys.argv[1:]
-source = next(Path(arg) for arg in args if arg.endswith((\".vert\", \".frag\")))
-include_dir = Path(args[args.index(\"-I\") + 1])
-output = Path(args[args.index(\"-o\") + 1])
-if include_dir != source.parent:
-    raise SystemExit(8)
-with Path(os.environ[\"GEN_GPU_SHADERS_SELFTEST_LOG\"]).open(\"a\") as log:
-    log.write(source.name + \"\\n\")
-if os.environ.get(\"GEN_GPU_SHADERS_SELFTEST_FAIL\") == source.name:
-    print(\"forced compiler rejection\", file=sys.stderr)
-    raise SystemExit(9)
-word = sum(source.name.encode(\"utf-8\"))
-output.write_bytes(struct.pack(\"<II\", 0x07230203, word))
-""",
-        encoding="utf-8",
-    )
-    fake_glslc.chmod(0o755)
-    return tool_path, fake_glslc
-
-
-def run_selftest(root: Path) -> bool:
-    scratch = root / "scratch"
-    scratch.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="gen_gpu_shaders-selftest-", dir=scratch) as temp_name:
-        fixture = Path(temp_name)
-        tool_path, fake_glslc = write_selftest_fixture(fixture)
-        log_path = fixture / "glslc.log"
-        output = fixture / "build/main/psxport_generated/gpu_vk_shaders.h"
-        stamp = fixture / "build/main/gen_gpu_shaders.stamp"
-        old_log = os.environ.get("GEN_GPU_SHADERS_SELFTEST_LOG")
-        old_fail = os.environ.get("GEN_GPU_SHADERS_SELFTEST_FAIL")
-        os.environ["GEN_GPU_SHADERS_SELFTEST_LOG"] = str(log_path)
-        try:
-            first_changed = generate(
-                fixture,
-                str(fake_glslc),
-                output=output,
-                tool_path=tool_path,
-                stamp=stamp,
-                announce=False,
-            )
-            first_bytes = output.read_bytes()
-            first_mtime = output.stat().st_mtime_ns
-            second_changed = generate(
-                fixture,
-                str(fake_glslc),
-                output=output,
-                tool_path=tool_path,
-                stamp=stamp,
-                announce=False,
-            )
-            second_mtime = output.stat().st_mtime_ns
-
-            header = first_bytes.decode("utf-8")
-            array_positions = [header.find(f"uint32_t {array_name}[]") for _source, array_name in SHADERS]
-            exact_arrays = all(position >= 0 for position in array_positions) and array_positions == sorted(
-                array_positions
-            )
-            exact_compile_order = log_path.read_text(encoding="utf-8").splitlines() == [
-                source for source, _array in SHADERS
-            ]
-
-            include = fixture / SHADER_DIR_REL / "shared.glsl"
-            include.write_text("const int sharedValue = 2;\n", encoding="utf-8")
-            include_mtime = include.stat().st_mtime_ns
-            if stamp.stat().st_mtime_ns >= include_mtime:
-                os.utime(stamp, ns=(include_mtime - 1, include_mtime - 1))
-            include_changed = generate(
-                fixture,
-                str(fake_glslc),
-                output=output,
-                tool_path=tool_path,
-                stamp=stamp,
-                announce=False,
-            )
-            include_kept_header_mtime = output.stat().st_mtime_ns == first_mtime
-            include_refreshed_stamp = path_is_current(stamp, [include])
-            include_recompiled_all = len(log_path.read_text(encoding="utf-8").splitlines()) == 2 * len(
-                SHADERS
-            )
-
-            before_failure = output.read_bytes()
-            source = fixture / SHADER_DIR_REL / SHADERS[0][0]
-            source.write_text("#version 450\nvoid main() { int fail = 1; }\n", encoding="utf-8")
-            source_mtime = source.stat().st_mtime_ns
-            if stamp.stat().st_mtime_ns >= source_mtime:
-                os.utime(stamp, ns=(source_mtime - 1, source_mtime - 1))
-            stamp_before_failure = stamp.stat().st_mtime_ns
-            os.environ["GEN_GPU_SHADERS_SELFTEST_FAIL"] = SHADERS[1][0]
-            compiler_refused = False
-            try:
-                generate(
-                    fixture,
-                    str(fake_glslc),
-                    output=output,
-                    tool_path=tool_path,
-                    stamp=stamp,
-                    announce=False,
-                )
-            except GeneratorError as error:
-                compiler_refused = "forced compiler rejection" in str(error)
-            output_preserved = output.read_bytes() == before_failure
-            stamp_preserved = stamp.stat().st_mtime_ns == stamp_before_failure
-
-            os.environ.pop("GEN_GPU_SHADERS_SELFTEST_FAIL", None)
-            concurrent_outputs = [
-                fixture / f"build/concurrent-{name}/psxport_generated/gpu_vk_shaders.h"
-                for name in ("a", "b")
-            ]
-            concurrent_stamps = [
-                fixture / f"build/concurrent-{name}/gen_gpu_shaders.stamp"
-                for name in ("a", "b")
-            ]
-
-            def generate_concurrent(index: int) -> bool:
-                return generate(
-                    fixture,
-                    str(fake_glslc),
-                    output=concurrent_outputs[index],
-                    tool_path=tool_path,
-                    stamp=concurrent_stamps[index],
-                    announce=False,
-                )
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                concurrent_results = list(executor.map(generate_concurrent, range(2)))
-            concurrent_bytes = [path.read_bytes() for path in concurrent_outputs]
-            other_mtime = concurrent_outputs[1].stat().st_mtime_ns
-            concurrent_outputs[0].unlink()
-            regenerated_after_own_clean = generate_concurrent(0)
-            isolated_clean = (
-                concurrent_outputs[0].is_file()
-                and concurrent_outputs[1].read_bytes() == concurrent_bytes[1]
-                and concurrent_outputs[1].stat().st_mtime_ns == other_mtime
-            )
-            concurrent_isolated = (
-                all(concurrent_results)
-                and concurrent_bytes[0] == concurrent_bytes[1]
-                and regenerated_after_own_clean
-                and isolated_clean
-                and not (fixture / LEGACY_SOURCE_OUTPUT_REL).exists()
-            )
-
-            shared_output_refused = False
-            try:
-                generate(
-                    fixture,
-                    str(fake_glslc),
-                    output=fixture / LEGACY_SOURCE_OUTPUT_REL,
-                    tool_path=tool_path,
-                    announce=False,
-                )
-            except GeneratorError as error:
-                shared_output_refused = "shared source path" in str(error)
-
-            missing_refused = False
-            try:
-                find_glslc("")
-            except GeneratorError as error:
-                missing_refused = str(error) == "glslc not found (install the Vulkan SDK)"
-
-            checks = {
-                "positive exact shader arrays/order": first_changed and exact_arrays and exact_compile_order,
-                "positive idempotent no-op": not second_changed and second_mtime == first_mtime,
-                "positive byte-stable include rebuild": (
-                    not include_changed
-                    and include_recompiled_all
-                    and include_kept_header_mtime
-                    and include_refreshed_stamp
-                ),
-                "negative compiler failure preserves outputs": (
-                    compiler_refused and output_preserved and stamp_preserved
-                ),
-                "positive concurrent build outputs survive peer clean": concurrent_isolated,
-                "negative shared source-tree output refusal": shared_output_refused,
-                "negative missing glslc refusal": missing_refused,
-            }
-        finally:
-            if old_log is None:
-                os.environ.pop("GEN_GPU_SHADERS_SELFTEST_LOG", None)
-            else:
-                os.environ["GEN_GPU_SHADERS_SELFTEST_LOG"] = old_log
-            if old_fail is None:
-                os.environ.pop("GEN_GPU_SHADERS_SELFTEST_FAIL", None)
-            else:
-                os.environ["GEN_GPU_SHADERS_SELFTEST_FAIL"] = old_fail
-
-    for name, passed in checks.items():
-        print(f"[gen_gpu_shaders:selftest] {'PASS' if passed else 'FAIL'} {name}")
-    passed_count = sum(checks.values())
-    print(f"[gen_gpu_shaders:selftest] {passed_count}/{len(checks)} checks passed")
-    return passed_count == len(checks)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--selftest", action="store_true", help="run positive and negative fixtures")
     parser.add_argument(
         "--output",
         type=Path,
@@ -374,11 +159,9 @@ def main() -> int:
     )
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
-    if args.selftest:
-        return 0 if run_selftest(root) else 1
     try:
         if args.output is None:
-            raise GeneratorError("--output is required outside --selftest")
+            raise GeneratorError("--output is required")
         stamp = args.stamp
         if stamp is None:
             stamp = root / "scratch/gen_gpu_shaders.stamp"

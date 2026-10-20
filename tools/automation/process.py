@@ -1,9 +1,8 @@
-"""Process helpers shared by build and maintenance entry points."""
+"""The tool refusal type and process helpers shared by build and launch entry points."""
 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -11,14 +10,6 @@ from pathlib import Path
 
 class ToolError(RuntimeError):
     """An actionable refusal at a tool boundary."""
-
-
-def require_program(name: str, guidance: str | None = None) -> str:
-    path = shutil.which(name)
-    if path is None:
-        suffix = f" ({guidance})" if guidance else ""
-        raise ToolError(f"required program not found: {name}{suffix}")
-    return path
 
 
 def run(
@@ -45,12 +36,9 @@ def run(
 
 
 def cpu_jobs() -> int:
+    """Build parallelism from the affinity mask, so a cgroup-limited host is not oversubscribed."""
+    if hasattr(os, "sched_getaffinity"):
+        return max(1, len(os.sched_getaffinity(0)))
     return max(1, os.cpu_count() or 1)
 
 
-def first_file(root: Path, filename: str) -> Path | None:
-    return next((path for path in sorted(root.rglob(filename)) if path.is_file()), None)
-
-
-def repository_root(script: Path, levels: int = 1) -> Path:
-    return script.resolve().parents[levels]

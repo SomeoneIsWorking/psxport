@@ -55,13 +55,7 @@ class GhidraLock:
                 self._stamp()
                 return self
             except OSError as error:
-                # EEXIST is the contended case and falls through to the wait below. Every other
-                # errno is a real filesystem failure and is refused rather than retried, because
-                # retrying a permission error until the deadline reports a machine fault as a busy
-                # lock. NOTE: there is deliberately no separate `except FileExistsError` clause --
-                # it would be dead, since this branch already treats EEXIST as "contended", and a
-                # seed that removed the dead clause used to leave the selftest GREEN, which is how
-                # that redundancy was found.
+                # EEXIST is contention and waits; any other errno is a filesystem fault and refuses.
                 if error.errno != errno.EEXIST:
                     raise LockRefusal(
                         f"cannot create the Ghidra lock at {self.directory}: {error}. Refusing "
@@ -126,11 +120,6 @@ def default_lock_dir(workspace: Path | None = None) -> Path:
     is the SAME directory the area claims use, so one `ls coord/locks` shows every scarce resource
     currently held. A lock inside a repository would not coordinate anything, because every title
     has its own repository and the whole point is to serialise ACROSS them.
-
-    MEASURED: an earlier revision of this dropped the ``coord/`` component and created
-    ``~/repo/psx/locks/ghidra``. That is a lock which coordinates nobody -- the operator's stated
-    protocol directory stayed empty while this one was held -- so the path is asserted by the
-    selftest rather than left to be re-derived.
     """
     root = Path(workspace) if workspace else Path.home() / "repo" / "psx"
     return Path(root) / DEFAULT_DIR_NAME

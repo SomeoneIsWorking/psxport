@@ -7,13 +7,14 @@ engine refuses rather than passes when it reads nothing.
 | engine | reads (per title) |
 |---|---|
 | `consumer_build.py` | a title root: one Ninja configure and build with the caller's Clang (`--build build/agent`, `--target`, `-DNAME=VALUE`) |
+| `launcher.py` | a title's `tools/run.py`: dependency refusals, the `build/player` configure and build, the framework discdump in `build/player-tools`, the product exec |
 | `launch_environment.py` | the process environment at a launcher's product exec (`player_environment`, `agent_environment`) |
-| `present_geometry.py` | a capture the caller names (PPM or PNG) |
+| `present_geometry.py` | a capture the caller names, read with Pillow |
 | `widescreen_pair.py` | a 4:3 and a 16:9 capture of one frame; reuses `present_geometry.py`'s reader |
 | `looks_right.py` | a built product it drives through the debug server |
 | `fps60_check.py` | an fps60 dump capture |
 
 The title gets `external/psxport` from psxport's `tools/psxport_fetch.py`, run from psxport `main` by
-its launcher and CI. Maintainer builds use `CC=clang CXX=clang++`.
+its `bootstrap.py` and CI. Maintainer builds use `CC=clang CXX=clang++`.
 
 The RE-frontier tracker is re-harness `tools/re_frontier.py`.

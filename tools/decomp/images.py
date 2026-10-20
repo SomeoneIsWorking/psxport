@@ -41,12 +41,9 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-MANIFEST = Path(__file__).resolve().parent / "manifest.json"
+from formats import psx_exe
 
-# The PS-X EXE header is fixed-size and its text always begins 0x800 bytes into the file.
-PSX_EXE_MAGIC = b"PS-X EXE"
-PSX_EXE_TEXT_FILE_OFFSET = 0x800
-PSX_EXE_HEADER_SIZE = 0x800
+MANIFEST = Path(__file__).resolve().parent / "manifest.json"
 
 # A guest RAM image lives in 2 MiB of KSEG0. A load base outside it, or one that would run a module
 # off the end of RAM, cannot be right, and is refused rather than slowly analysed.
@@ -182,66 +179,46 @@ class ImageSpec:
         }
 
 
-@dataclass(frozen=True)
-class PsxExeHeader:
-    entry: int
-    gp: int
-    load: int
-    text_size: int
-    sp_base: int
-    sp_offset: int
-    file_size: int
-
-
-def read_psx_exe_header(path: Path) -> PsxExeHeader:
+def read_psx_exe_header(path: Path) -> psx_exe.PsxExeHeader:
     """The PS-X EXE header, or REFUSE. A raw module has no header and is a different kind."""
     if not path.is_file():
         raise ImageRefusal(
             f"no image at {path}. This tool needs the admitted image (provision it first); refusing "
-            "rather than reporting an empty inventory, because 'the image is absent' and 'the image "
-            "analyses to nothing' would otherwise print the same line."
+            "rather than reporting an empty inventory."
         )
-    with path.open("rb") as handle:
-        head = handle.read(PSX_EXE_HEADER_SIZE)
-        size = path.stat().st_size
-    if len(head) < 0x40:
-        raise ImageRefusal(f"{path} is {len(head)} bytes, too short to hold a PS-X EXE header")
-    if head[:8] != PSX_EXE_MAGIC:
+    try:
+        return psx_exe.read_header(path)
+    except ValueError as error:
         raise ImageRefusal(
-            f"{path} starts {head[:8]!r}, not {PSX_EXE_MAGIC!r}. A raw module is not a PS-X EXE: it "
-            "has no header, so its load base and code window must come from the manifest as "
-            "measured data. Point --image at the right file, or declare it as kind 'module'.")
-    entry, gp = struct.unpack_from("<II", head, 0x10)
-    load, text_size = struct.unpack_from("<II", head, 0x18)
-    sp_base, sp_offset = struct.unpack_from("<II", head, 0x30)
-    return PsxExeHeader(entry, gp, load, text_size, sp_base, sp_offset, size)
+            f"{error}. A raw module has no header, so its load base and code window must come from "
+            "the manifest as measured data: point --image at the right file, or declare it as kind "
+            "'module'.") from error
 
 
-def cross_check_resident(spec: ImageSpec, header: PsxExeHeader, path: Path) -> None:
+def cross_check_resident(spec: ImageSpec, header: psx_exe.PsxExeHeader, path: Path) -> None:
     """Refuse when the manifest disagrees with a PS-X EXE's own header.
 
-    This is the assertion that catches a wrong base address, and it is the seeded difference the
-    selftest uses. A wrong base does not fail on its own: Ghidra imports happily and every function
-    lands at a plausible address, just not the one the title's documents name.
+    A wrong base does not fail on its own: Ghidra imports happily and every function lands at a
+    plausible address, just not the one the title's documents name.
     """
     if spec.text_load_address != header.load:
         raise ImageRefusal(
             f"{spec.name} ({spec.serial}) manifest says text loads at 0x{spec.text_load_address:08X} "
             f"but {path} says 0x{header.load:08X}. Every guest address the pipeline reports would be "
             "wrong. Fix the manifest entry, not the base.")
-    if spec.text_file_offset != PSX_EXE_TEXT_FILE_OFFSET:
+    if spec.text_file_offset != psx_exe.TEXT_FILE_OFFSET:
         raise ImageRefusal(
             f"{spec.name} manifest says text starts at file offset 0x{spec.text_file_offset:X}, but "
-            f"a PS-X EXE always starts it at 0x{PSX_EXE_TEXT_FILE_OFFSET:X}. Overlays may differ; a "
+            f"a PS-X EXE always starts it at 0x{psx_exe.TEXT_FILE_OFFSET:X}. Overlays may differ; a "
             "main executable may not.")
     if spec.text_size != header.text_size:
         raise ImageRefusal(
             f"{spec.name} manifest says text size 0x{spec.text_size:X} but {path} says "
             f"0x{header.text_size:X}. The window would cover the wrong bytes.")
-    if PSX_EXE_TEXT_FILE_OFFSET + header.text_size > header.file_size:
+    if psx_exe.TEXT_FILE_OFFSET + header.text_size > header.file_size:
         raise ImageRefusal(
             f"{path} holds {header.file_size} bytes but its header declares {header.text_size} bytes "
-            f"of text at offset 0x{PSX_EXE_TEXT_FILE_OFFSET:X}, which runs past the end of the file. "
+            f"of text at offset 0x{psx_exe.TEXT_FILE_OFFSET:X}, which runs past the end of the file. "
             "The image is truncated.")
 
 

@@ -13,7 +13,8 @@ REMOTE_BACKED = ("psx-spyro", "psx-spider-man", "psx-tomba", "psx-vagrant-story"
 LOCAL_ONLY: tuple[str, ...] = ()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-from psxport_fetch import SUBMODULES  # noqa: E402
+from psxport_fetch import SUBMODULES, init_submodules  # noqa: E402
+from submodule_state import Git, declared_entries  # noqa: E402
 
 
 def say(message: str) -> None:
@@ -28,23 +29,9 @@ def run(arguments: Sequence[str | Path], *, cwd: Path, required: bool = True) ->
     return completed
 
 
-def submodule_paths(repo: Path) -> list[str]:
-    modules = repo / ".gitmodules"
-    if not modules.is_file():
-        return []
-    result = run(
-        ["git", "config", "-f", modules, "--get-regexp", r"^submodule\..*\.path$"],
-        cwd=repo,
-        required=False,
-    )
-    if result.returncode not in (0, 1):
-        raise RuntimeError(f"cannot enumerate {modules}: {result.stderr.strip()}")
-    return [line.split(None, 1)[1] for line in result.stdout.splitlines() if len(line.split(None, 1)) == 2]
-
-
 def initialize_framework_vendors(framework: Path) -> None:
+    init_submodules(str(framework))
     for parent, relative in SUBMODULES:
-        run(["git", "submodule", "update", "--init", relative], cwd=framework / parent)
         if parent == ".":
             run(["git", "reset", "--hard", "-q", "HEAD"], cwd=framework / relative)
 
@@ -76,7 +63,7 @@ def main() -> int:
                 say(f"cloning {name}…")
                 run(["git", "clone", f"{GITHUB_ROOT}/{name}.git", game], cwd=workspace)
                 cloned += 1
-            for relative in submodule_paths(game):
+            for _name, relative in declared_entries(Git(), game):
                 if relative == "external/psxport":
                     continue
                 result = run(["git", "submodule", "update", "--init", relative], cwd=game, required=False)

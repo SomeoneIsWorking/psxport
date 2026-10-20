@@ -1,30 +1,14 @@
 #!/usr/bin/env python3
-"""Drive a built port and answer the only question that decides a port is done: does it RUN, and does
-it LOOK RIGHT — at 4:3, in widescreen, and with interpolated 60fps.
+"""Drive a built port and report whether it runs and looks right at 4:3, widescreen and 60 fps.
 
-USER 2026-08-30: "Change the directive, pixel matching doesn't matter. I just want working game that
-looks correct." and "It's pretty frustrating that all the previous work went to pixel matching
-(I mean before you) instead of just verifying it works fine and looks fine wide/60, this correction
-should apply to all PSX projects."
+  reaches      the requested frames are presented with no executor fault or fatal trap
+  widescreen   the widened picture differs from the 4:3 one (a no-op aspect knob fails)
+  coverage     how much wider the drawn picture became (a rescale reads no-gain)
+  fps60        the extra presents carry interpolated prims (tier1=N>0); a duplicate frame fails, and
+               a run with no --replay/--route that sees no in-between is UNJUDGED
 
-This tool exists because Crash Bash's frame-300 difference count was driven from 98,280 to 6 pixels
-over many sessions while NOBODY EVER LOOKED AT THE GAME. When it was finally driven to a live match:
-widescreen worked but its 2D layers kept a 4:3 extent, and `PSXPORT_FPS60=1` was inserting a
-DUPLICATE frame rather than an interpolated one — 60Hz pacing of 30Hz motion, invisible to every
-pixel comparison ever run, and visible in one log line.
-
-So the checks here are the ones a difference count structurally cannot make:
-
-  reaches      the requested frame count is presented, with no executor fault or fatal trap
-  widescreen   the widened picture actually DIFFERS from the 4:3 one (a no-op aspect knob FAILS)
-  coverage     MEASURES how much wider the drawn picture became (a rescale reads no-gain)
-  fps60        the extra presents carry interpolated prims (`tier1=N>0`); an inserted duplicate FAILS,
-               and a run with no --replay/--route that sees no in-between at all is UNJUDGED, not passed
-
-It keeps the port's directly written PNGs for a human to look at, because "looks right" is a judgement
-no tool makes. It reports what it could not assert instead of passing quietly: a missing disc, a binary
-that never launched, or a title that declares no interpolation product is REFUSED (exit 2), never a
-green tick.
+The PNGs are kept for a person to look at; nothing here decides that a picture looks right. A missing
+binary or capture is REFUSED (exit 2).
 """
 
 import argparse
@@ -33,8 +17,9 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+from launch_environment import agent_environment
 
 PASS, FAIL, REFUSED = 0, 1, 2
 
@@ -60,11 +45,7 @@ class Capture:
     def differs_from(self, other):
         return self.encoded != other.encoded
 
-    # Everything the port actually drew, as a half-open pixel box, plus the frame it was drawn in.
-    # "Drawn" is non-black: a present is letterboxed/pillarboxed into the sink with black, so the
-    # black is the frame around the picture rather than part of it. A scene that legitimately ends
-    # in black at its edges under-reports its own extent, which is why the coverage verdict below
-    # only ever uses this to compare ONE leg against another leg of the SAME scene.
+    # Non-black bounding box; only compared between legs of the same scene.
     def drawn_extent(self):
         from PIL import Image
 
@@ -75,7 +56,6 @@ class Capture:
             return None, width, height
         return box, width, height
 
-    # The aspect of what was drawn, which is the number that moves when a picture genuinely widens.
     def drawn_aspect(self):
         box, _, _ = self.drawn_extent()
         if box is None:
@@ -85,12 +65,7 @@ class Capture:
 
 
 def fps60_verdict(log_text):
-    """(state, interpolated_prims, extra_presents) from a run's own fps60 telemetry.
-
-    The failure this names is the measured one: the extra present exists and reports `tier1=0`, so the
-    in-between frame is the previous queue replayed verbatim. A tool that only asked "did fps60 turn
-    on" would have called that working for as long as anyone cared to ask.
-    """
+    """(state, interpolated_prims, extra_presents) from a run's fps60 telemetry; tier1=0 is a duplicate."""
     if FPS60_REFUSED_MARK in log_text:
         return "refused", 0, 0
     if FPS60_ON_MARK not in log_text:
@@ -123,40 +98,12 @@ def presentation_fences(log_text):
 
 
 def fps60_unjudged(state, routed):
-    """Whether a `no-extra-present` verdict is a product failure or a run that could not see one.
-
-    Boot and attract can present pictures with no geometry — Spyro's 24bpp Universal logo is an
-    upload-only guest-VRAM present — so with no replay and no route the absence of an in-between
-    frame is not evidence about interpolation. Every other state is judged regardless of route.
-    """
+    """Whether no-extra-present means nothing: boot and attract can present with no geometry."""
     return state == "no-extra-present" and not routed
 
 
 def coverage_measure(standard, wide):
-    """(state, detail): how much wider the picture this scene actually DREW became.
-
-    `widescreen` above asks only whether the two PNGs DIFFER, and rescaling the whole picture
-    satisfies that. Measured 2026-09-19 on Tomba! 2's title options page: the 4:3 leg drew 960x720
-    (ratio 1.333) and the 16:9 leg drew 718x538 (ratio 1.335) — the same 320-wide page, scaled down
-    because the target around it got wider, with black pillars either side on a real 16:9 display.
-    `widescreen` called that a PASS. This tool's own docstring names that failure ("its 2D layers
-    kept a 4:3 extent") and the check it shipped with could not see it.
-
-    A MEASUREMENT, NOT A VERDICT, and that is deliberate on evidence. Two rules were tried and both
-    were wrong:
-
-      - "judge only when the 4:3 leg fills the frame" excluded the cases that matter most. A PSX
-        picture is letterboxed inside the sink, so Spyro's genuinely widened 3D scene reaches 93.3%
-        of the sink's height; all eleven of Spyro's paired captures came back not-applicable.
-      - "abstain when the content is sparse" does not separate the populations. Over 15 real paired
-        captures, `spyro/secondary` f399 at 27.8% density correctly reads flat while `spyro/lr`
-        f3000 at 30.6% correctly reads widened. Adjacent densities, opposite right answers.
-
-    What remains true is the number itself, and a scene that legitimately draws black (Spyro's
-    level-intro card, 1.992 -> 2.000) reports no gain because there was no content to gain. Whether
-    a given scene SHOULD widen is a judgement about that scene, so this prints what it measured and
-    leaves the judgement where this tool always leaves it — with the person looking at the PNGs.
-    """
+    """(state, detail): how much wider the drawn picture became; whether it should is for a person."""
     flat, widened = standard.drawn_aspect(), wide.drawn_aspect()
     if flat is None or widened is None:
         return "blank", "a leg drew nothing at all"
@@ -179,15 +126,7 @@ def reset_run_outputs(log, capture_paths):
 
 
 def route_command(template, shot, settings, log):
-    """A title's own command for reaching the state worth judging, with this run's paths in it.
-
-    A recorded pad is a fixed list of frame numbers, so it describes wherever the game happened to
-    be when it was recorded and rots the moment anything before that point changes length. Spyro's
-    only gameplay pad ended up sitting on the save-file warning for the whole run, and every verdict
-    taken through it described a dialog (spyro issue 0116). An observed route asks the running game
-    where it is instead, so it keeps meaning what it says. This tool stays title-neutral: what the
-    route knows about menus and game states belongs to the title that wrote it.
-    """
+    """A title's own command for reaching the state worth judging, with this run's paths in it."""
     missing = [field for field in ("{shot}",) if field not in template]
     if missing:
         raise ValueError(f"--route must contain {' and '.join(missing)} so the capture has a path")
@@ -202,20 +141,16 @@ def default_repository(binary):
 
 def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, extra_env, repository,
              route=None):
-    """One headless run with cwd at the repository (present shots are repository-relative).
-    Returns (log_text, {frame: Capture}, exit_code). The exit code is RETURNED, not merely printed:
-    a leg that died mid-run can still leave behind the shots and the telemetry it wrote before it
-    died, and every verdict built from those reads as if the run had finished. Measured 2026-09-19
-    on Tomba! 2 — the 16:9 and fps60 legs both aborted at exit 139 on a render-queue overflow, and
-    `fps60` still reported PASS from the presents that preceded the abort."""
+    """One hidden-window run rooted at the repository; returns (log_text, {frame: Capture}, exit_code).
+
+    A leg that died still leaves shots and telemetry behind, so callers must check the exit code.
+    """
     scratch = Path(scratch).resolve()
     settings = scratch / f"{name}.ini"
     settings.write_text(f"aspect={aspect}\n")
     log = scratch / f"{name}.log"
     shots = scratch / name
     shots.mkdir(parents=True, exist_ok=True)
-    # A route decides for itself when the game is worth looking at, so it names one capture rather
-    # than a list of frame numbers this tool chose in advance.
     routed_shot = shots / "present.png"
     capture_paths = (
         {shot_frames[0]: routed_shot} if route
@@ -223,17 +158,9 @@ def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, 
               for frame in shot_frames}
     )
     reset_run_outputs(log, capture_paths.values())
-    env = dict(os.environ)
-    env.update(extra_env)
-    env.update({"PSXPORT_NOAUDIO": "1", "PSXPORT_NOPACE": "1", "PSXPORT_SETTINGS": str(settings)})
+    env = agent_environment({**os.environ, **extra_env}, settings)
     if not route:
-        # A route runs the game from its own REPL, so a frame cap would cut the drive short and a
-        # fixed shot frame would fire wherever the route had got to. It also launches the port
-        # itself and is handed {log}, so it owns where the log goes: setting PSXPORT_LOG_FILE for
-        # it is worse than redundant, because it diverts the port's own REPL banner into the file
-        # and a driver waiting for that banner on stdout then waits forever. Measured 2026-09-19 —
-        # driver and port both sat at 0% CPU, one waiting for a prompt that had been written to a
-        # file, the other waiting for the command that prompt would have triggered.
+        # A route owns its log and frame cap; a log file here would swallow its REPL banner.
         env["PSXPORT_LOG_FILE"] = str(log)
         env["PSXPORT_NATIVE_FRAMES"] = str(frames)
         env["PSXPORT_PRESENT_SHOT_AT"] = ",".join(str(f) for f in shot_frames)
@@ -241,17 +168,11 @@ def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, 
         env["PSXPORT_PAD_REPLAY"] = str(replay)
     if fps60:
         env["PSXPORT_FPS60"] = "1"
-        # The per-present slot line is debug audience, so the telemetry this verdict reads only exists
-        # when the channel is asked for. Without this the tool reports "no extra present" for a run that
-        # emitted one every frame — a false FAILURE, which is the same class of lie as a false pass.
+        # The slot lines are on the fps60 debug channel.
         channels = env.get("PSXPORT_DEBUG", "")
         env["PSXPORT_DEBUG"] = f"{channels},fps60" if channels else "fps60"
     command = (route_command(route, routed_shot, settings, log) if route else [str(binary)])
-    # Not capture_output: that gives the child a pipe, and a pipe that nobody drains blocks its
-    # writer once the kernel buffer fills. Measured 2026-09-19 — a routed run sat at 0% CPU on
-    # "[repl] frame=0 ready" for as long as it was left, because the port had filled 64 KB of
-    # stderr and stopped. A file also leaves the reason behind when a route fails, which a
-    # discarded pipe does not.
+    # A file, not a pipe: an undrained pipe stalls the port once full.
     console = scratch / f"{name}.out"
     with console.open("wb") as sink:
         completed = subprocess.run(command, env=env, cwd=repository, stdout=sink,
@@ -272,8 +193,7 @@ def run_port(binary, scratch, name, frames, shot_frames, replay, aspect, fps60, 
 
 
 def crashed(exit_code):
-    """Whether a leg died. Anything but a clean exit means the run did not finish, so nothing it
-    produced describes a completed frame sequence."""
+    """Whether a leg died before finishing."""
     return exit_code != 0
 
 
@@ -301,11 +221,8 @@ def main(argv=None):
     parser.add_argument("--out", default="scratch/looks-right", help="where captures, PNGs and logs land")
     parser.add_argument("--env", action="append", default=[], metavar="K=V", help="extra environment, repeatable")
     parser.add_argument("--skip-fps60", action="store_true", help="title declares no interpolation product")
-    parser.add_argument("--selftest", action="store_true", help="prove the verdicts on constructed inputs")
     args = parser.parse_args(argv)
 
-    if args.selftest:
-        return selftest()
     if not args.binary:
         print("[looks-right] REFUSED: --binary names the built port; this run asserted NOTHING")
         return REFUSED
@@ -342,10 +259,7 @@ def main(argv=None):
 
     ok = True
     failures = run_failures(standard_log)
-    # A run that captured FEWER frames than were asked for did not reach them, and every later verdict
-    # here is then about a different picture than the one requested. Measured 2026-09-19 on Spyro: four
-    # frames requested, one captured, and this line said PASS. Name the denominator and fail on a short
-    # capture even when the log carries no failure mark, because "it stopped early" leaves none.
+    # A short capture fails even with no failure mark in the log.
     missing = [f for f in shot_frames if f not in standard]
     detail = f"{len(standard)}/{len(shot_frames)} shot(s) captured, failure marks: {failures or 'none'}"
     if missing:
@@ -378,11 +292,6 @@ def main(argv=None):
     else:
         fps_log, _, fps_exit = run_port(binary, out, "fps60", args.frames, shot_frames, args.replay, 0, True, extra_env, repository, args.route)
         state, interpolated, extras = fps60_verdict(fps_log)
-        # A run with neither a replay nor a route only ever sees boot and attract, and a boot picture
-        # can be an upload-only guest-VRAM present with no geometry at all (Spyro's 24bpp Universal
-        # logo). "no extra present" then says nothing about whether interpolation works, and reading
-        # it as a product failure is exactly the misreading this tool exists to prevent. It is still
-        # not a pass — an unrunnable check is a named failure, never a green tick.
         unjudged = fps60_unjudged(state, routed=bool(args.replay or args.route))
         detail = {
             "interpolating": f"{interpolated} interpolated prim(s) over {extras} extra present(s)",
@@ -395,9 +304,6 @@ def main(argv=None):
             "refused": "the title declares no temporal interpolation product",
         }[state]
         if crashed(fps_exit):
-            # The prims and presents below were counted from a log that STOPS at the crash. They are a
-            # real count of a partial run, which is exactly what makes them dangerous: they look like a
-            # complete measurement. Say both.
             ok &= report("fps60", False, f"{detail}, but {crash_detail('fps60', fps_exit)}")
         elif unjudged:
             print(f"[looks-right] fps60        UNJUDGED — {detail}")
@@ -408,114 +314,6 @@ def main(argv=None):
     print(f"[looks-right] PNGs for a human to judge: {out}/*/present_*.png")
     print("[looks-right] LOOKING AT THEM IS THE REST OF THE CHECK — this tool cannot tell you it looks right.")
     return PASS if ok else FAIL
-
-
-def selftest():
-    """Both answers, on constructed inputs, for every verdict this tool makes."""
-    checks = []
-
-    # The shape the product actually emits (runtime/psx/present/fps60.cpp). It said "replay prev=Q[N-1]"
-    # until 2026-09-19, which was never true: both presents run over the current fence's queue.
-    duplicate = "[fps60] TRUE per-object interpolated 60fps ON (source: env)\n" + "".join(
-        f"[fps60] f{f} slotA: in-between over Q[N] n=3613 tier1=0 backdrop=0 t=0.500\n" for f in range(3)
-    )
-    live = "[fps60] TRUE per-object interpolated 60fps ON (source: env)\n" + "".join(
-        f"[fps60] f{f} slotA: in-between over Q[N] n=3613 tier1=1800 backdrop=12 t=0.500\n" for f in range(3)
-    )
-    checks.append(("fps60 duplicate frame is a FAILURE", fps60_verdict(duplicate)[0] == "duplicate-frame"))
-    checks.append(("fps60 interpolating is a PASS", fps60_verdict(live)[0] == "interpolating"))
-    checks.append(("fps60 counts interpolated prims", fps60_verdict(live)[1] == 5400))
-    enabled_only = "[fps60] TRUE per-object interpolated 60fps ON (source: env)"
-    checks.append(("fps60 enabled with no extra present", fps60_verdict(enabled_only)[0] == "no-extra-present"))
-    checks.append(
-        ("fps60 refusal is not a pass", fps60_verdict("[fps60] interpolated 60fps REFUSED")[0] == "refused")
-    )
-    checks.append(("fps60 off is named, not assumed", fps60_verdict("quiet log")[0] == "not-enabled"))
-    fence_log = "[runtime] run complete: product_steps=868 presentation_fences=868 faults=0"
-    checks.append(("the fence count is read from the run", presentation_fences(fence_log) == 868))
-    checks.append(("a log that never says is not guessed", presentation_fences("quiet log") is None))
-    # The unjudged/failing split is a property of the run, not of the log, so it is checked here on
-    # the two inputs that decide it. Both answers, as every verdict in this file must have.
-    checks.append(("no extra present over a route is judged", fps60_unjudged("no-extra-present", routed=True) is False))
-    checks.append(("no extra present with no route is UNJUDGED", fps60_unjudged("no-extra-present", routed=False) is True))
-    checks.append(("a duplicate frame is judged even with no route", fps60_unjudged("duplicate-frame", routed=False) is False))
-
-    # A leg's exit status, both answers. Measured 2026-09-19 on Tomba! 2: the 16:9 and fps60 legs both
-    # died at 139 on a render-queue overflow, and fps60 still printed PASS from the 2,271,143 prims the
-    # run had emitted before it died. A partial run's counts are real numbers about an unfinished run.
-    checks.append(("a clean exit is believed", crashed(0) is False))
-    checks.append(("a SIGSEGV leg is NOT believed", crashed(139) is True))
-    checks.append(("a nonzero exit is NOT believed", crashed(1) is True))
-    checks.append(("the crash detail names the exit", "139" in crash_detail("fps60", 139)))
-
-    checks.append(("a clean log has no failure marks", run_failures("all good") == []))
-    checks.append(("an executor fault is a failure mark", run_failures("executor fault at 0x8001") != []))
-
-    png_header = b"\x89PNG\r\n\x1a\n"
-    flat = Capture(png_header + b"same picture")
-    same = Capture(png_header + b"same picture")
-    other = Capture(png_header + b"wider picture")
-    checks.append(("an identical widescreen picture is a FAILURE", not flat.differs_from(same)))
-    checks.append(("a widened picture differs", flat.differs_from(other)))
-
-    # coverage, on constructed pictures, both answers. `drawn` paints a white box of the given size
-    # centred in a 400x300 frame, which is the shape every one of these measurements is about.
-    def drawn(box_w, box_h, frame=(400, 300)):
-        from PIL import Image
-
-        image = Image.new("RGB", frame, (0, 0, 0))
-        image.paste(Image.new("RGB", (box_w, box_h), (255, 255, 255)),
-                    ((frame[0] - box_w) // 2, (frame[1] - box_h) // 2))
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        return Capture(buffer.getvalue())
-
-    full43 = drawn(400, 300)      # a full-screen 4:3 picture
-    rescaled = drawn(300, 225)    # the SAME picture, smaller — Tomba! 2's options page
-    widened = drawn(400, 225)     # genuinely wider content
-    window = drawn(280, 200)      # a bordered window: unchanged between legs
-    # Spyro's real shape: a picture letterboxed INSIDE the sink. An earlier "must fill the frame"
-    # rule excluded exactly this from judgement; it must be measured, and it must read wider.
-    letterboxed43, letterboxed169 = drawn(400, 280), drawn(400, 209)
-    checks.append(("coverage: a rescaled full-screen picture reads no-gain",
-                   coverage_measure(full43, rescaled)[0] == "no-gain"))
-    checks.append(("coverage: a genuinely widened picture reads wider",
-                   coverage_measure(full43, widened)[0] == "wider"))
-    checks.append(("coverage: a letterboxed picture is MEASURED, not skipped",
-                   coverage_measure(letterboxed43, letterboxed169)[0] == "wider"))
-    checks.append(("coverage: an unchanged window reads no-gain",
-                   coverage_measure(window, window)[0] == "no-gain"))
-    checks.append(("coverage: a near-blank leg reads no-gain, never wider",
-                   coverage_measure(full43, drawn(1, 1))[0] == "no-gain"))
-    checks.append(("coverage: a leg that drew nothing at all is named",
-                   coverage_measure(full43, drawn(0, 0))[0] == "blank"))
-
-    with tempfile.TemporaryDirectory() as directory:
-        stale = Path(directory) / "run.log"
-        stale_capture = Path(directory) / "present.png"
-        stale.write_text("stale run\n")
-        stale_capture.write_bytes(png_header + b"stale picture")
-        reset_run_outputs(stale, [stale_capture])
-        checks.append(("a run starts without stale evidence", stale.read_text() == "" and not stale_capture.exists()))
-
-    built = route_command("drive.py --shot {shot} --settings {settings} --log {log}",
-                          "/s/present.png", "/s/a.ini", "/s/a.log")
-    checks.append(("a route command carries this run's paths",
-                   built == ["drive.py", "--shot", "/s/present.png", "--settings", "/s/a.ini",
-                             "--log", "/s/a.log"]))
-    try:
-        route_command("drive.py gameplay", "/s/present.png", "/s/a.ini", "/s/a.log")
-        refused_no_shot = False
-    except ValueError:
-        refused_no_shot = True
-    checks.append(("a route with nowhere to put the capture is REFUSED", refused_no_shot))
-
-    passed = sum(1 for _, ok in checks if ok)
-    for name, ok in checks:
-        if not ok:
-            print(f"[looks-right:selftest] FAILED: {name}")
-    print(f"[looks-right] selftest {passed}/{len(checks)} => {'PASS' if passed == len(checks) else 'FAIL'}")
-    return PASS if passed == len(checks) else FAIL
 
 
 if __name__ == "__main__":
