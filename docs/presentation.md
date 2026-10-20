@@ -19,7 +19,7 @@ widescreen and how each part is tested.
 ## Structure
 
 ```
-guest CPU ─ GP0/GP1, GPUREAD, DMA2/OT walk  gpu_ports, ordering_table, gp0_command
+guest CPU ─ GP1, DMA2/OT walk               gpu_ports, ordering_table, gp0_command
    │
 GpuDevice (Beetle gpu.c)                      the only VRAM, GPUSTAT/GPUREAD, display mode
    │  each executed command is appended, in execution order, to
@@ -37,7 +37,7 @@ present plan / sink                           viewport, letterbox, window
 | module | owns |
 |---|---|
 | `gpu/gpu_device.*` | Beetle `gpu.c` per `Core`: VRAM, GP0/GP1, GPUSTAT, GPUREAD, display area (incl. PAL) |
-| `present/gpu_ports.*` | the guest-visible ports and the title-facing GPU API: GP0/GP1 writes, GPUREAD, DMA2 block and linked-list modes, `loadImage`, `vram`, `sealRecord` |
+| `gpu/gpu_ports.*` | GP1 writes at the device's scanline clock, DMA2 block and linked-list modes; titles call `core.gpuDevice()` for GP0, GPUREAD, `loadImage` and `vram` |
 | `present/render_mode.h` | the Core's `RenderPath` (`record` or `device`) and its parse |
 | `present/frame_record.*` | ordered primitives and VRAM ops of one logic frame |
 | `gpu/gp0_record_tap.*` | executed GP0 command to `FrameRecord` entry, with its key |
@@ -46,7 +46,8 @@ present plan / sink                           viewport, letterbox, window
 | `present/frame_state.*` | producer states by the scope serial that saved them; per record, the states its packets came from |
 | `present/state_producer.*` | `StateProducer` (render at `t`), `PrimitiveSink`, the `StateProducers` registry on `Core` |
 | `present/frame_composer.*` | the frame at `t`: S's unproduced entries plus each producer's render, by OT slot |
-| `present/ordering_table.*` | the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
+| `gpu/ordering_table.*` | OT node decode and the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
+| `present/packet_chains.*` | a body's packet chains (one chain, or a bucket table of any stride and head offset) read back as primitives under the one E1 rule |
 | `frame/frame_presenter.*` | N and the last three records that drew, which record each present shows, cadence, both presents through the backend |
 | `present/display_presenter.*` | `DisplayPresenter` on `Game`: each present and in-between through `gpu_vk_present`, the present counters, `PSXPORT_SHOT_AT`/`PRESENT_SHOT_AT`/`GPU_DUMP`/`GRAMDUMP` captures |
 | `gpu/record_raster_setup.*` | a record's coverage and interpolants by `gpu.c`'s rules, at scale, per plane, in read-safe batches |
@@ -167,8 +168,7 @@ so a picture is always drawn from the state its own packets came from. States ar
 ambiguous and keeps its entries.
 
 The serial names a state, not an object, and differs on every scope: `RecordKey ==` compares it, so code that
-asks whether two packets belong to the same object compares `RecordKey::identity()` (or reads
-`EmissionScope::identityFor`), the key without the serial. Producer tests assert identity keys.
+asks whether two packets belong to the same object compares `RecordKey::identity()`, the key without the serial.
 
 ## Interpolation
 

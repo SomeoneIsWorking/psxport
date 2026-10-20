@@ -1,6 +1,8 @@
 // gp0_primitive_decode.cpp — GP0 draw packet decoding.
 #include "gp0_primitive_decode.h"
 
+#include "vram_pixel.h"
+
 namespace psx::gpu {
 
 present::RecordVertex colourVertex(std::uint32_t colourWord) {
@@ -10,10 +12,6 @@ present::RecordVertex colourVertex(std::uint32_t colourWord) {
   vertex.g = colour.green;
   vertex.b = colour.blue;
   return vertex;
-}
-
-int sext11(int value) {
-  return ((value & 0x7FF) ^ 0x400) - 0x400;
 }
 
 present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
@@ -46,10 +44,11 @@ void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex 
 }
 
 void applyTexPageAttribute(present::RecordDrawState &state, std::uint16_t attribute) {
-  state.texPageX = (attribute & 0xF) * 64;
-  state.texPageY = ((attribute >> 4) & 1) * 256;
-  state.blendMode = (attribute >> 5) & 3;
-  state.texMode = (attribute >> 7) & 3;
+  const TexPage page = decodeTexPage(attribute);
+  state.texPageX = page.x;
+  state.texPageY = page.y;
+  state.blendMode = page.blend;
+  state.texMode = static_cast<int>(page.depth);
 }
 
 std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std::uint32_t> words) {
@@ -116,3 +115,21 @@ std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std:
 }
 
 } // namespace psx::gpu
+
+namespace psx::present {
+
+bool DrawModeTracker::take(std::span<const std::uint32_t> words) {
+  if (words.empty() || gpu::Gp0Command(words[0]).opcode() != gpu::Gp0Opcode::SetDrawMode) {
+    return false;
+  }
+  attribute_ = static_cast<std::uint16_t>(words[0]);
+  return true;
+}
+
+void DrawModeTracker::apply(DrawPrimitive &primitive) const {
+  if (primitive.kind != PrimitiveKind::Polygon || !primitive.textured) {
+    gpu::applyTexPageAttribute(primitive.state, attribute_);
+  }
+}
+
+} // namespace psx::present

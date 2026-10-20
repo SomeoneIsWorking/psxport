@@ -1,5 +1,6 @@
-// emission_scope.cpp — the emission scope stack and the packet-address to key bindings.
 #include "emission_scope.h"
+
+#include "guest_memory_map.h"
 
 #include <lucent/log.h>
 
@@ -9,15 +10,15 @@
 namespace psx::present {
 namespace {
 
-constexpr std::size_t kMainRamWords = 0x200000u / 4u;
+constexpr std::size_t kMainRamWords = kMainRamBytes / 4u;
 
-// Main RAM is 2 MB mirrored through the first 8 MB; anything else is not a DMA-able packet.
+// Only main RAM holds a DMA-able packet.
 std::optional<std::uint32_t> mainRamWord(std::uint32_t address) {
-  const std::uint32_t physical = address & 0x1FFFFFFFu;
-  if (physical >= 0x800000u) {
+  const std::optional<std::uint32_t> offset = mainRamOffset(address);
+  if (!offset) {
     return std::nullopt;
   }
-  return (physical & 0x1FFFFCu) >> 2u;
+  return *offset >> 2u;
 }
 
 } // namespace
@@ -99,14 +100,6 @@ std::optional<RecordKey> EmissionScope::keyFor(std::uint32_t packetAddress) cons
     return std::nullopt;
   }
   return words_[*word];
-}
-
-std::optional<RecordKey> EmissionScope::identityFor(std::uint32_t packetAddress) const {
-  const std::optional<RecordKey> key = keyFor(packetAddress);
-  if (!key) {
-    return std::nullopt;
-  }
-  return key->identity();
 }
 
 void EmissionScope::clear() {

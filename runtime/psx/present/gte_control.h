@@ -12,9 +12,6 @@
 namespace psx::present {
 
 inline constexpr std::uint32_t kGteControlRegisters = 32;
-// Control registers 0..4 hold the rotation matrix as s16 pairs, 5..7 the translation as s32.
-inline constexpr std::uint32_t kGteRotationWords = 5;
-inline constexpr std::uint32_t kGteTranslationEnd = 8;
 
 using GteControl = std::array<std::uint32_t, kGteControlRegisters>;
 

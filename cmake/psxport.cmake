@@ -92,7 +92,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/hle/syscall_exception.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/kernel_syscall.cpp
   ${PSXPORT_ROOT}/runtime/cpu/host_turn.cpp
-  ${PSXPORT_ROOT}/runtime/psx/present/ordering_table.cpp # the guest DrawOTag chain: node header decoded by field name
+  ${PSXPORT_ROOT}/runtime/psx/gpu/ordering_table.cpp # the guest DrawOTag chain and the tables a walk attributes to
   ${PSXPORT_ROOT}/runtime/psx/debug/image_writer.cpp      # one checked RGB24 capture-file boundary
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_debug.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_audio.cpp
@@ -125,7 +125,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/state_producer.cpp # the registry of producer renders
   ${PSXPORT_ROOT}/runtime/psx/present/emit_memory.cpp # guest or host bytes a packet-emitting body runs over
   ${PSXPORT_ROOT}/runtime/psx/present/gte_control.cpp # the GTE control registers a render runs under
-  ${PSXPORT_ROOT}/runtime/psx/present/host_ordering_table.cpp # packets a body linked into a host table, as primitives
+  ${PSXPORT_ROOT}/runtime/psx/present/packet_chains.cpp # packets a body linked into tag chains, as primitives
   ${PSXPORT_ROOT}/runtime/psx/present/frame_composer.cpp # the frame at t from a record and producer renders
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
   ${PSXPORT_ROOT}/runtime/psx/movie/mdec_beetle.c
@@ -161,9 +161,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_device.cpp # the SDL GPU device: bring-up, samplers, present pipelines
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_submit.cpp # command-buffer submit and the persisted GPU fault latch
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_present.cpp # a Game's present targets: the presented image, letterbox and swapchain
-  ${PSXPORT_ROOT}/runtime/psx/present/gpu_ports.cpp # GP0/GP1/GPUREAD and DMA2 into the GPU device
+  ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_ports.cpp # GP1 writes and DMA2 into the GPU device
   ${PSXPORT_ROOT}/runtime/psx/present/display_presenter.cpp # the guest display to the screen, once per present
-  ${PSXPORT_ROOT}/runtime/psx/platform/scea_splash.cpp # the SCEA license screen as a host image
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_shader.cpp # SPIR-V shader creation
   ${PSXPORT_ROOT}/runtime/psx/gpu/record_raster_setup.cpp # FrameRecord coverage and interpolants for the record rasterizer
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_vk_record_raster.cpp # FrameRecord rasterized into one VRAM image
@@ -293,6 +292,8 @@ target_include_directories(psxport PUBLIC
   ${PSXPORT_ROOT}/${RT}/platform
   ${PSXPORT_ROOT}/${RT}/game
   ${PSXPORT_ROOT}/${RT}/catalog
+  # Public: titles call the GPU device, its ports and the ordering-table walk.
+  ${PSXPORT_ROOT}/${RT}/gpu
   # Public: a title's NativeStatePort includes machine_state.h.
   ${PSXPORT_ROOT}/${RT}/state
   ${MED} ${MED}/psx
@@ -305,7 +306,7 @@ target_include_directories(psxport SYSTEM PUBLIC ${PSXPORT_ROOT}/vendor/rmlui/In
 # Framework internals no title includes; framework tools link psxport_internal for them.
 add_library(psxport_internal INTERFACE)
 set(PSXPORT_INTERNAL_INCLUDES
-  ${PSXPORT_ROOT}/${RT}/boot ${PSXPORT_ROOT}/${RT}/host ${PSXPORT_ROOT}/${RT}/gpu ${PSXPORT_ROOT}/${RT}/cpu/beetle)
+  ${PSXPORT_ROOT}/${RT}/boot ${PSXPORT_ROOT}/${RT}/host ${PSXPORT_ROOT}/${RT}/cpu/beetle)
 target_include_directories(psxport_internal INTERFACE ${PSXPORT_INTERNAL_INCLUDES})
 target_include_directories(psxport PRIVATE ${PSXPORT_INTERNAL_INCLUDES})
 
