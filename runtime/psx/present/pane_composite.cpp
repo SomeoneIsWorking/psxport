@@ -15,6 +15,7 @@
 
 #include <lucent/log.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <vector>
 
@@ -293,10 +294,8 @@ void PaneCompositor::composite(std::span<const Pane> panes, const PaneOverlayPas
       // would be a panel that looks like a title that booted and showed nothing.
       GpuVkState::PresentedImage image{};
       if (pane.core != nullptr) {
-        // THE HELD PICTURE, not the newest frame. A session between its own scenes — a fade, a load
-        // screen — presents black, and a panel that showed that would read as a title that stopped.
-        // The held frame is the newest one this session actually had a picture in.
-        image = pane.core->game->gpuVk().lastFilledPresented();
+        // GpuVkState's answer: the live image, or the retained copy for a fade or a load screen (0162).
+        image = pane.core->game->gpuVk().newestPresentedPicture();
         if (!image.valid()) {
           image = pane.core->game->gpuVk().lastPresented();
         }
@@ -360,18 +359,23 @@ void PaneCompositor::composite(std::span<const Pane> panes, const PaneOverlayPas
     overlay(cmd, rp, sink.width, sink.height);
   }
   SDL_EndGPURenderPass(rp);
-
-  if (m_device.s_headless) {
-    SDL_SubmitGPUCommandBuffer(cmd);
-  } else {
-    showToWindow(cmd);
-  }
+  SDL_SubmitGPUCommandBuffer(cmd);
+  m_showPending = m_device.s_headless == 0;
   m_frames++;
   lucent::debug("pane", "frame {}: {} pane(s) drawn, {} empty, {}x{}", m_frames, drawn, empty, sink.width, sink.height);
 }
 
-void PaneCompositor::showToWindow(SDL_GPUCommandBuffer *cmd) {
+void PaneCompositor::show() {
+  if (!m_showPending) {
+    return;
+  }
+  m_showPending = false;
   SDL_GPUDevice *dev = m_device.s_dev;
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(dev);
+  if (!cmd) {
+    lucent::error("pane", "AcquireGPUCommandBuffer failed: {}", SDL_GetError());
+    return;
+  }
   Uint32 w = 0, h = 0;
   SDL_GPUTexture *swap = psx::gpu::acquireSink(m_sink, cmd, m_device.s_window.window(), &w, &h);
   if (!swap) {
@@ -403,6 +407,9 @@ void PaneCompositor::showToWindow(SDL_GPUCommandBuffer *cmd) {
   }
   SDL_EndGPURenderPass(rp);
   SDL_SubmitGPUCommandBuffer(cmd);
+  if (m_hostCore != nullptr) {
+    m_hostCore->game->perf.presented(std::chrono::steady_clock::now(), m_device.s_window.refresh_period_ms());
+  }
   // The window's own events (close, ESC, and the key states the sessions' pads must learn) belong to
   // whoever shows the window, which from here is this object rather than any one session.
   if (m_hostCore != nullptr) {

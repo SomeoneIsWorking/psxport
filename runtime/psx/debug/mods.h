@@ -24,6 +24,12 @@ public:
   int ires = 1;   // internal resolution scale: 0 = AUTO (derive from window height), 1..4 = fixed
                   // Vanilla(1x)/X2/X3/X4. Capped by psx::gpu::videoStatus.
   int fps60 = 0;  // interpolated 60fps tier
+  // The title selector's layout: the selected panel's fraction of the width (the others split the
+  // rest), the seam slant as a fraction of the width, and the fraction of the remaining travel a
+  // width animation covers per frame.
+  float pickerSelectedShare = 0.6f;
+  float pickerSlantPerWidth = 0.1f;
+  float pickerWidthResponse = 0.25f;
   // The title's own integer settings, persisted beside the fields above. Declared before init() so the
   // settings-file load reads them.
   void declareTitleSettings(std::span<const psx::game::TitleIntSetting> settings) {

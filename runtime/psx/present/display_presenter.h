@@ -1,10 +1,11 @@
 // display_presenter.h — the guest display to the screen: one present per completed frame, the
-// in-betweens between them, and the per-present captures and counters.
+// in-betweens between them, and the per-present captures and counters. Each present is a build, then a show.
 #pragma once
 
 #include "pixel_size.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,14 +20,17 @@ class DisplayPresenter {
 public:
   explicit DisplayPresenter(Core &core);
 
-  // The guest display rect through psx::gpu::present, then this present's diagnostics and counters.
-  void present(PresentCompletion completion);
-  // An interpolated frame between two presents: shown, counted apart, frame() does not move.
-  void presentInBetween();
+  // Builds the guest display rect through psx::gpu::buildDisplay, then this present's diagnostics and counters.
+  // `completion` is reported to the watchdog when the build is shown.
+  void build(PresentCompletion completion);
+  // Builds an interpolated frame between two presents: counted apart, frame() does not move.
+  void buildInBetween();
+  // Builds a host RGBA8 picture (movie frame, splash) as the whole frame, letterboxed 4:3 and faded by `fade` (0..1).
+  void buildHostPicture(const std::uint8_t *rgba, PixelSize size, float fade);
+  // Shows the last build in the window; a paced present waits between its build and this.
+  void show();
   // Re-show the last present without building anything (debug-server pause loop).
   void repaint();
-  // A host RGBA8 picture (movie frame, splash) as the whole frame, letterboxed 4:3 and faded by `fade` (0..1).
-  void presentHostPicture(const std::uint8_t *rgba, PixelSize size, float fade);
   // The displayed picture: the record image on RenderPath::Record, the device's VRAM otherwise.
   void shot(const char *path);
   // PSXPORT_SHOT_AT / PSXPORT_PRESENT_SHOT_AT, once the frame's presentation is complete.
@@ -43,7 +47,7 @@ public:
   static int presentedHeight(Core &core, int displayHeight);
 
 private:
-  void presentDisplay();
+  void buildDisplay();
   void logVramScan();
   void dumpGuestRam();
   void dumpDisplay();
@@ -57,6 +61,7 @@ private:
   std::string ramDumpPath_;
   std::string displayDumpDir_;
   int displayDumpEvery_ = 1;
+  std::optional<PresentCompletion> pendingCompletion_; // the last build's, until it is shown
 };
 
 } // namespace psx::present

@@ -84,32 +84,41 @@ int DisplayPresenter::presentedHeight(Core &core, int displayHeight) {
   return declared > 0 ? declared : displayHeight;
 }
 
-void DisplayPresenter::presentDisplay() {
+void DisplayPresenter::buildDisplay() {
   const psx::gpu::DisplayArea area = core_.gpuDevice().displayArea();
-  psx::gpu::present(core_, area.x, area.y, area.width, presentedHeight(core_, area.height));
+  psx::gpu::buildDisplay(core_, area.x, area.y, area.width, presentedHeight(core_, area.height));
   core_.game->gpuVk().preseq_capture();
 }
 
-void DisplayPresenter::present(PresentCompletion completion) {
+void DisplayPresenter::build(PresentCompletion completion) {
   logVramScan();
-  presentDisplay();
+  buildDisplay();
   dumpGuestRam();
   dumpDisplay();
   frame_++;
-  if (completion == PresentCompletion::MainFrame) {
+  pendingCompletion_ = completion;
+}
+
+void DisplayPresenter::buildInBetween() {
+  buildDisplay();
+  interpolated_++;
+}
+
+void DisplayPresenter::buildHostPicture(const std::uint8_t *rgba, PixelSize size, float fade) {
+  core_.game->gpuVk().build_image(rgba, size, fade);
+}
+
+void DisplayPresenter::show() {
+  core_.game->gpuVk().show();
+  if (!pendingCompletion_) {
+    return;
+  }
+  if (*pendingCompletion_ == PresentCompletion::MainFrame) {
     psx::platform::Watchdog::mainPresentComplete();
   } else {
     psx::platform::Watchdog::progress();
   }
-}
-
-void DisplayPresenter::presentInBetween() {
-  presentDisplay();
-  interpolated_++;
-}
-
-void DisplayPresenter::presentHostPicture(const std::uint8_t *rgba, PixelSize size, float fade) {
-  core_.game->gpuVk().present_image(rgba, size, fade);
+  pendingCompletion_.reset();
 }
 
 void DisplayPresenter::repaint() {

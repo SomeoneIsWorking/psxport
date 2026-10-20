@@ -4,6 +4,7 @@
 #define GPU_GPU_INTERNAL_H
 #include "gpu_present_sink.h"     // SinkIdleState — the sink may not wait for the window
 #include "gpu_vk_record_raster.h" // RecordRasterizer — RenderPath::Record's picture
+#include "pane_host.h"
 #include "pixel_size.h"
 #include "viewport_layout.h" // PaneRect — where the presented picture sits in its image
 
@@ -56,6 +57,13 @@ struct GpuVkState {
   void presentToPane(psx::present::PixelSize image);
   void presentToWindow();
 
+  // The host compositing this pane: told after each pane build and at each show, so an in-between is
+  // composited and shown like any other present.
+  psx::present::PaneHost s_pane_host;
+  void setPaneHost(psx::present::PaneHost host) {
+    s_pane_host = std::move(host);
+  }
+
   struct PresentedImage {
     SDL_GPUTexture *texture = nullptr;
     int width = 0, height = 0;
@@ -77,9 +85,20 @@ struct GpuVkState {
   PaneRect s_present_filled_viewport{0, 0, 0, 0};
   bool retainFilledPresentImage();
   void releaseFilledPresentImage();
-  PresentedImage lastFilledPresented() const {
+  // The newest present a probe found NOT to be a picture: a fade, a load screen, black. Issue 0162.
+  std::uint64_t s_present_blank_serial = 0;
+  // The retained copy: a pane's fallback for a frame that is not a picture, refreshed on a gate.
+  PresentedImage retainedPicture() const {
     return PresentedImage{
         s_present_filled, s_present_filled_w, s_present_filled_h, s_present_filled_viewport, s_present_content};
+  }
+  // What a pane shows: the live present image, which the panel's own present just rebuilt and which
+  // costs nothing to sample, unless the newest present was probed blank — then the retained copy.
+  PresentedImage newestPresentedPicture() const {
+    if (s_present_serial != s_present_blank_serial) {
+      return lastPresented();
+    }
+    return retainedPicture();
   }
 
   // RenderPath::Record's rasterizer and what the last present took from it.
@@ -100,15 +119,20 @@ struct GpuVkState {
   void release_device_resources();
   ~GpuVkState() = default;
 
-  void present(int sx, int sy, int w, int h);
+  // A present is built, then shown. Building rasterizes the picture into the present image and submits
+  // that GPU work; showing only acquires the swapchain image, blits the present image and presents it.
+  void build_display(int sx, int sy, int w, int h);
+  // A host RGBA8 picture (movie frame, splash) built the same way, letterboxed 4:3 and faded by `fade`.
+  void build_image(const std::uint8_t *rgba, psx::present::PixelSize size, float fade);
+  // Shows the last build when it went to the window; nothing otherwise.
+  void show();
+  bool s_show_pending = false;
   void repaint();
   void present_record(PresentInputs &inputs);
   bool record_shot(const char *path);
   void build_present_image(SDL_GPUCommandBuffer *cmd, const PresentPlan &plan);
-  void show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay = true);
-  void present_image(const std::uint8_t *rgba, psx::present::PixelSize size, float fade);
+  void show_present_image(SDL_GPUCommandBuffer *cmd);
   void build_image_present_image(SDL_GPUCommandBuffer *cmd, float fade);
-  void present_screen();
   void present_shot(const char *path); // what the player sees, either leg
   void shot(const char *path);         // the record picture, or the device's displayed VRAM
 };

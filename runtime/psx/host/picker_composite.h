@@ -43,13 +43,14 @@ public:
   int surfaceHeight() const {
     return m_surfaceH;
   }
-  // The present-image size a panel session should build its picture at.
-  psx::present::PixelSize paneImage() const {
-    return m_paneImage;
-  }
+  // The present-image size panel `panel` builds its picture at: the window's for the selected panel,
+  // a third of its own panel for the rest.
+  psx::present::PixelSize paneImage(int panel) const;
 
   // Build the frame: every panel's backdrop, its picture, its title's own logo, and the dividers.
-  void present(const PickerLayout &layout, std::span<const PanelSource> panels, int selected);
+  void build(const PickerLayout &layout, std::span<const PanelSource> panels, int selected);
+  // Show the built frame in the window.
+  void show();
 
   // What the player sees of the selector, in either leg.
   void captureShot(const char *path);
@@ -61,7 +62,7 @@ private:
   // Held back until every panel is drawn; see the pass order in the .cpp.
   std::vector<psxport::Pane> m_dividers;
   int m_surfaceW = 0, m_surfaceH = 0;
-  psx::present::PixelSize m_paneImage;
+  std::vector<psx::present::PixelSize> m_paneImages; // per panel, from setSurface
 };
 
 } // namespace psx::host

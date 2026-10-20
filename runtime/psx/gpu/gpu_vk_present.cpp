@@ -1,5 +1,6 @@
-// gpu_vk_present.cpp — one Game's present: the display picture (the record image on RenderPath::Record,
-// the device's VRAM on Device and for a 24bpp display) letterboxed into the present image, then shown.
+// gpu_vk_present.cpp — one Game's present in two steps: build the display picture (the record image on
+// RenderPath::Record, the device's VRAM on Device and for a 24bpp display, or a host picture) letterboxed
+// into the present image, then show that image in the window.
 //
 // The picture is built identically windowed and headless; the leg decides only whether the built image
 // reaches a window (present_plan.h).
@@ -61,6 +62,10 @@ PresentInputs presentInputs(const GpuVkState &g, psx::gpu::VramRect display, int
   if (g.s_present_img_requested.width > 0 && g.s_present_img_requested.height > 0) {
     in.sink_w = g.s_present_img_requested.width;
     in.sink_h = g.s_present_img_requested.height;
+    // A pane is a slice of a host's composite, sized to the panel it will occupy and drawn over the
+    // whole of it, so the picture fills the pane and is cropped to the panel's aspect here — at the
+    // resolution it was rendered — rather than letterboxed into a band the player is not watching.
+    in.fill = 1;
   }
   return in;
 }
@@ -157,7 +162,7 @@ void GpuVkState::ensure_present_img(int w, int h) {
   lucent::info("gpu_vk", "present image {}x{} ({} sink)", w, h, device->s_headless != 0 ? "headless" : "windowed");
 }
 
-void GpuVkState::present(int sx, int sy, int w, int h) {
+void GpuVkState::build_display(int sx, int sy, int w, int h) {
   if (!device->enabled()) {
     return;
   }
@@ -197,11 +202,29 @@ void GpuVkState::present(int sx, int sy, int w, int h) {
   if (plan.build) {
     build_present_image(cmd, plan);
   }
-  if (plan.to_swapchain && s_present_target == PresentTarget::Swapchain) {
-    show_present_image(cmd);
+  device->submit(cmd, "present build");
+  // A pane's window belongs to the host compositing it, so the host composites here and shows at show().
+  const bool toPaneHost = s_present_target == PresentTarget::Pane && s_pane_host.attached();
+  s_show_pending = toPaneHost || (plan.to_swapchain && s_present_target == PresentTarget::Swapchain);
+  if (toPaneHost) {
+    s_pane_host.built();
+  }
+}
+
+void GpuVkState::show() {
+  if (!s_show_pending) {
     return;
   }
-  device->submit(cmd, "present");
+  s_show_pending = false;
+  if (s_present_target == PresentTarget::Pane) {
+    if (s_pane_host.attached()) {
+      s_pane_host.show();
+    }
+    return;
+  }
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device->s_dev);
+  GPUCHK(cmd, "AcquireGPUCommandBuffer");
+  show_present_image(cmd);
 }
 
 // Samples the display region psx::present::planPresent() chose into the present image, letterboxed, with the fade.
@@ -238,7 +261,7 @@ void GpuVkState::build_present_image(SDL_GPUCommandBuffer *cmd, const PresentPla
 
 // The sink: blit the finished picture into the window, letterboxed, with the overlay on top. Acquires
 // without waiting, because a window nobody shows never becomes ready (gpu_present_sink.h).
-void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay) {
+void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd) {
   Uint32 sw = 0;
   Uint32 sh = 0;
   SDL_GPUTexture *swapchain = psx::gpu::acquireSink(s_sink, cmd, device->s_window.window(), &sw, &sh);
@@ -269,9 +292,7 @@ void GpuVkState::show_present_image(SDL_GPUCommandBuffer *cmd, bool withOverlay)
     SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
   }
   // Host UI belongs to the sink, not to the picture a present shot reads.
-  if (withOverlay) {
-    psx::ui::recordOverlay(game, cmd, pass, static_cast<int>(sw), static_cast<int>(sh));
-  }
+  psx::ui::recordOverlay(game, cmd, pass, static_cast<int>(sw), static_cast<int>(sh));
   SDL_EndGPURenderPass(pass);
   device->submit(cmd, "show_present_image");
   game->perf.presented(std::chrono::steady_clock::now(), device->s_window.refresh_period_ms());
@@ -288,8 +309,7 @@ void GpuVkState::repaint() {
   show_present_image(cmd);
 }
 
-// The image pass into the present image, for the leg with no swapchain: the same pipeline, source,
-// 4:3 letterbox and fade as the window blit in present_image().
+// The host picture into the present image, letterboxed 4:3 and faded.
 void GpuVkState::build_image_present_image(SDL_GPUCommandBuffer *cmd, float fade) {
   const psx::present::PixelSize sink = device->sinkSize();
   ensure_present_img(sink.width, sink.height);
@@ -318,7 +338,7 @@ void GpuVkState::build_image_present_image(SDL_GPUCommandBuffer *cmd, float fade
 }
 
 // A plain RGBA8 image fullscreen, letterboxed 4:3, every channel scaled by `fade`: movies and splashes.
-void GpuVkState::present_image(const std::uint8_t *rgba, psx::present::PixelSize size, float fade) {
+void GpuVkState::build_image(const std::uint8_t *rgba, psx::present::PixelSize size, float fade) {
   const int width = size.width;
   const int height = size.height;
   if (!device->enabled() || width <= 0 || height <= 0) {
@@ -344,43 +364,9 @@ void GpuVkState::present_image(const std::uint8_t *rgba, psx::present::PixelSize
   destination.d = 1;
   SDL_UploadToGPUTexture(copy, &source, &destination, false);
   SDL_EndGPUCopyPass(copy);
-  // Headless builds the same picture into the present image, which is what a present shot reads.
-  if (device->s_headless != 0) {
-    build_image_present_image(cmd, fade);
-    device->submit(cmd, "present_image");
-    return;
-  }
-  SDL_GPUTexture *swapchain = nullptr;
-  Uint32 sw = 0;
-  Uint32 sh = 0;
-  if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, device->s_window.window(), &swapchain, &sw, &sh) ||
-      swapchain == nullptr) {
-    device->submit(cmd, "present_image");
-    game->hostInput.drainEvents();
-    return;
-  }
-  SDL_GPUColorTargetInfo target = {};
-  target.texture = swapchain;
-  target.clear_color = (SDL_FColor){0, 0, 0, 1};
-  target.load_op = SDL_GPU_LOADOP_CLEAR;
-  target.store_op = SDL_GPU_STOREOP_STORE;
-  SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &target, 1, nullptr);
-  const float brightness[4] = {fade, 0, 0, 0};
-  SDL_PushGPUFragmentUniformData(cmd, 0, brightness, sizeof brightness);
-  const SDL_GPUViewport viewport =
-      viewportOf(psx::present::letterbox(4, 3, static_cast<int>(sw), static_cast<int>(sh)));
-  const SDL_Rect scissor = {0, 0, static_cast<int>(sw), static_cast<int>(sh)};
-  SDL_BindGPUGraphicsPipeline(pass, device->s_image_pipe);
-  SDL_SetGPUViewport(pass, &viewport);
-  SDL_SetGPUScissor(pass, &scissor);
-  const SDL_GPUTextureSamplerBinding binding = {device->s_img_tex, device->s_samp_linear};
-  SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
-  SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
-  psx::ui::recordOverlay(game, cmd, pass, static_cast<int>(sw), static_cast<int>(sh));
-  SDL_EndGPURenderPass(pass);
-  device->submit(cmd, "present_image");
-  game->perf.presented(std::chrono::steady_clock::now(), device->s_window.refresh_period_ms());
-  game->hostInput.drainEvents();
+  build_image_present_image(cmd, fade);
+  device->submit(cmd, "present_image build");
+  s_show_pending = device->s_headless == 0 && s_present_target == PresentTarget::Swapchain;
 }
 
 void GpuVkState::preseq_arm(int count, const char *dir) {

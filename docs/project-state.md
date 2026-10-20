@@ -142,7 +142,7 @@ framework code.
 One renderer: the device executes the guest stream and the record rasterizer draws it
 (`docs/presentation.md`); the native and GTE paths are deleted. Evidence: recordcheck t=1
 `mismatched=0` on C-12, Spyro 1/2 and Tomba! 2. Gap: each title's widescreen and interpolation must be
-requalified in the real-window play check.
+requalified in the play check.
 
 ### S021 — Portable desktop and Android delivery
 

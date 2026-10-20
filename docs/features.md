@@ -52,7 +52,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 | 3 | `psx/present/display_presenter.cpp:DisplayPresenter::presentedHeight` → `GameRuntime::displayHeight` | `displayHeight` |
 | 4 | `psx/gpu/gpu_vk_present.cpp:presentInputs` → `GameRuntime::guestPictureIsNativeWidth` | `guestPictureIsNativeWidth` |
 | 5 | `psx/gpu/gp0_record_tap.h:Gp0RecordTap`, `psx/present/frame_record.h:FrameRecord` — the device's GP0 work recorded per logic frame | |
-| 6 | `psx/present/display_presenter.cpp:DisplayPresenter::present` — the shown record, rasterised and presented | |
+| 6 | `psx/present/display_presenter.cpp:DisplayPresenter::build` — the shown record, rasterised; `show` presents it | |
 
 ## F-WIDE — widescreen
 

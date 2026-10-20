@@ -24,9 +24,9 @@ struct VideoStatus {
 };
 VideoStatus videoStatus(Core &core);
 
-// The display rect in VRAM (sx, sy, w, h) to the sink: the record image on RenderPath::Record, the device's VRAM
-// otherwise.
-void present(Core &core, int sx, int sy, int w, int h);
+// Builds the display rect in VRAM (sx, sy, w, h) into the present image: the record image on RenderPath::Record,
+// the device's VRAM otherwise. GpuVkState::show puts it in the window.
+void buildDisplay(Core &core, int sx, int sy, int w, int h);
 // Re-show the last presented frame without building anything (debug-server pause loop).
 void repaint(Core &core);
 // The device's VRAM: a rect as an image, `n` raw words along a row, or the whole of it raw.

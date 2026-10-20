@@ -90,6 +90,9 @@ bool TitleSession::boot() {
   // never gets there, and the run stalls in the first guest step with no frame ever presented.
   if (selectorAvailable_) {
     applyPresentRoute();
+    // A pane host the picker attached while this panel was still cold.
+    game.core.game->gpuVk().setPaneHost(std::move(pendingPaneHost_));
+    pendingPaneHost_ = {};
     // The picker owns the player's input; a panel's guest must not see it (see setPlayerInput).
     game.pad.setPlayerInputSuppressed(!playerInput_);
     // Only the session the player is looking at is heard (see setAudible).
@@ -129,7 +132,8 @@ bool TitleSession::boot() {
                psx::debug::debugServerLive() ? "attached" : "not requested");
   if (role_ == Role::Product) {
     // Black before the title builds, so its first frames never composite over a stale splash.
-    game.display.present(psx::present::PresentCompletion::Transition);
+    game.display.build(psx::present::PresentCompletion::Transition);
+    game.display.show();
   }
   runtime.startProgram(core);
   if (role_ == Role::Product && services_.configuredStatePending) {
@@ -194,12 +198,14 @@ void TitleSession::step() {
   const psx::frame::FieldTurn fieldTurn;
   fieldTurn.beginField(game.core);
   ++steps_;
+  const unsigned long long pacedBefore = game.framePacer.pacedFields();
   services_.frameLoop.step(game.core, static_cast<std::uint32_t>(steps_));
   if (product) {
     services_.budget.step();
     game.repl.afterStep();
   }
   fieldTurn.endField(game.core, static_cast<std::uint32_t>(steps_));
+  lastStepPacedFields_ = game.framePacer.pacedFields() - pacedBefore;
   endRequested(game);
 }
 
@@ -269,12 +275,12 @@ TitleSession::PaneSize TitleSession::pictureSize(const GpuVkState::PresentedImag
   return PaneSize{picture.w, picture.h};
 }
 
-// The held frame, because that is what the compositor samples.
+// The picture the compositor samples: GpuVkState's newest presented frame that held one.
 GpuVkState::PresentedImage TitleSession::presentedPicture() const {
   if (!parts_->booted) {
     return {};
   }
-  GpuVkState::PresentedImage image = parts_->game->gpuVk().lastFilledPresented();
+  GpuVkState::PresentedImage image = parts_->game->gpuVk().newestPresentedPicture();
   if (!image.valid()) {
     image = parts_->game->gpuVk().lastPresented();
   }
@@ -296,6 +302,15 @@ void TitleSession::presentToPane(psx::present::PixelSize image) {
   paneDestination_ = true;
   paneImage_ = image;
   applyPresentRoute();
+}
+
+void TitleSession::setPaneHost(psx::present::PaneHost host) {
+  if (parts_->game == nullptr) {
+    // Kept until boot(): a panel is created before it boots, and the picker attaches its host then.
+    pendingPaneHost_ = std::move(host);
+    return;
+  }
+  parts_->game->core.game->gpuVk().setPaneHost(std::move(host));
 }
 
 void TitleSession::presentToWindow() {

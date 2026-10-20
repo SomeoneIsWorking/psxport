@@ -9,6 +9,7 @@
 #include "gpu_vk_device.h"
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -56,14 +57,26 @@ private:
   // or -1 to keep the selector up.
   int serviceInput(Game &host);
 
+  // Build the window's one frame from every panel's current picture: at each build of the selected
+  // panel's present, and from the loop when no panel presented.
+  void composite();
+  // Attach this host to the selected, settled panel and detach it from every other.
+  void attachPaneHost();
+
   PickerRuntime &runtime_;
   const TitleCatalog &catalog_;
   const PickerContent &content_;
   SessionServices &services_;
-  PickerLayout layout_;
+  std::optional<PickerLayout> layout_; // built in run() from the host Game's settings
   std::unique_ptr<PickerComposite> composite_;
   std::unique_ptr<PanelSessions> panels_;
   std::vector<PanelSource> sources_;
+  // A panel presented during the current loop iteration, so the loop knows the frame is already paid
+  // for and must not pace or composite a second time.
+  bool composited_ = false;
+  // The panel this host is attached to, and whether it had settled then.
+  int hostedPanel_ = -1;
+  bool hostedSettled_ = false;
 };
 
 } // namespace psx::host

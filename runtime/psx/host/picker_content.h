@@ -2,7 +2,7 @@
 
 #include "title_availability.h"
 
-#include <choice_view.h>
+#include <choice_content.h>
 #include <optional>
 #include <span>
 #include <string_view>

@@ -94,8 +94,10 @@ private:
   void feedAudio(double nowMs);
   // How far the audio device's position trails the movie clock, in ms; nullopt without audio.
   std::optional<double> audioLagMs() const;
-  // Present one decoded 24-bit frame, the previous one having been held for `heldFields`.
-  void presentFrame(const uint8_t *pixels, psx::present::PixelSize size, int heldFields);
+  // Build one decoded 24-bit frame; it is shown after the wait for its field.
+  void buildFrame(const uint8_t *pixels, psx::present::PixelSize size);
+  // Show the built frame, the previous one having been held for `heldFields`.
+  void showFrame(int heldFields);
   // Allocate the multi-megabyte decode scratch on first use.
   void ensureScratch();
   // End the movie: endAtEndOfStream is the ordinary end (stream exhausted, or the dev cap), and

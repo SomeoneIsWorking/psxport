@@ -14,6 +14,8 @@ std::optional<std::uint32_t> parseUnsigned(std::string_view text, int base);
 std::optional<long> parseSigned(std::string_view text);
 // The whole of `text` as an int in decimal.
 std::optional<int> parseInt(std::string_view text);
+// The whole of `text` as a finite decimal float.
+std::optional<float> parseFloat(std::string_view text);
 
 struct NumberPair {
   std::uint32_t first;

@@ -83,11 +83,17 @@ void FramePacer::paceSubframeFields(Core &core, FieldCadence cadence) {
   if (!plan.rateUnset) {
     core.game->timing.advanceDisplayFields({plan.effectiveQuota, plan.effectiveParts}, fieldRateMilliHz(core));
   }
+  if (plan.paced) {
+    pacedFields_ += static_cast<unsigned long long>(plan.effectiveQuota);
+  }
   waitForPlan(core, plan, fieldRateMilliHz(core));
 }
 
 void FramePacer::waitPresentedFields(Core &core, FieldCadence cadence) {
   const PacePlan plan = preparePace(core, {.quota = cadence.fields, .parts = cadence.parts});
+  if (plan.paced) {
+    pacedFields_ += static_cast<unsigned long long>(plan.effectiveQuota);
+  }
   waitForPlan(core, plan, fieldRateMilliHz(core));
 }
 

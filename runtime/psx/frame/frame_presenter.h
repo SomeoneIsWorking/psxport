@@ -40,9 +40,16 @@ class FramePresentationBackend {
 public:
   virtual ~FramePresentationBackend() = default;
 
-  virtual void presentReal() = 0;
-  virtual void captureDiagnostic(uint64_t fence, bool interpolated) = 0;
+  // A present is build, pace, show: the picture's CPU and GPU work is submitted before the wait, and only
+  // the window show follows it, so the show lands on its deadline whatever the build cost.
+  // Builds N's picture (composedRecord() when set) without showing it.
+  virtual void buildReal() = 0;
+  // Builds FramePresenter::composedRecord() without advancing the logic frame.
+  virtual void buildInBetween() = 0;
   virtual void pace(FieldCadence cadence) = 0;
+  // Shows the last build.
+  virtual void show() = 0;
+  virtual void captureDiagnostic(uint64_t fence, bool interpolated) = 0;
   // Whether a dropped producer aborts the run (PSXPORT_GATE_PRESENTATION).
   virtual bool ledgerIsFatal() const {
     return false;
@@ -53,8 +60,6 @@ public:
   virtual bool sealedFrameIsCut() = 0;
   // The VRAM rect the next present scans out.
   virtual gpu::RecordRect displayedBuffer() = 0;
-  // Presents FramePresenter::composedRecord() without advancing the logic frame.
-  virtual void presentInBetween() = 0;
   // The renders of the title's state producers on the record path; null draws every record as sealed.
   virtual const present::StateProducers *stateProducers() {
     return nullptr;
@@ -102,7 +107,7 @@ public:
   const present::FrameRecord &currentRecord() const {
     return *current_;
   }
-  // The frame at t the present draws instead of N's picture, non-null only during a present that has one.
+  // The frame at t the present draws instead of N's picture, non-null only while a present that has one builds.
   const present::FrameRecord *composedRecord() const {
     return composed_;
   }

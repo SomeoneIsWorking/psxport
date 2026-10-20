@@ -26,7 +26,7 @@ catalog contract a title implements (`title_catalog.h`, `single_title_catalog`, 
 | `panel_sessions.{h,cpp}` | `PanelSessions`: one live session per panel (the available titles `PSXPORT_PICKER_TITLES` asks for) and the rules about which of them runs |
 | `picker_session.{h,cpp}` | `PickerSession`: the selector frame loop; one guest advances per frame |
 | `picker_runtime.{h,cpp}` | `PickerRuntime`: the selector's own `GameRuntime`; the control commands `picker`, `pick`, `select` |
-| `picker_content.{h,cpp}`, `picker_layout.{h,cpp}`, `picker_composite.{h,cpp}` | what the panels advertise, their geometry and cover crop, and the composited window frame |
+| `picker_content.{h,cpp}`, `picker_layout.{h,cpp}`, `picker_composite.{h,cpp}` | what the panels advertise, their geometry and the picture rect each one shows, and the composited window frame |
 | `panel_logo.{h,cpp}` | `PanelLogo`: a `LogoImage` plus its lazily uploaded texture and nearest magnification |
 | `logo_image.h` | `LogoImage`: straight-alpha RGBA8, included by `game_runtime.h` without SDL |
 | `product_host.{h,cpp}` | `ProductHost`: the process top level; owns the command line and help, the window and device, the `QuitScope`, the `RunBudget` and the process watchdog |
@@ -125,9 +125,19 @@ selected panel runs and the others hold. A pre-roll is a fast-forward (`SessionC
 read through `Game::fastForwarding`): its steps do not sleep on the panel's pacer and its audio is
 dropped. Each picker frame pre-rolls one panel for as many steps as fit in one NTSC field
 (`PreRollBudget`), at least one. A settled panel steps once per picker frame on its own pacer, so the
-picker then runs at that title's step cadence. Panel 0 starts selected and audible.
-A panel shows the newest presented frame that held a picture (`GpuVkState::retainFilledPresentImage`);
-a black or faded present keeps the held frame shown. The selector logs its end state with the panel
+picker's loop runs at that title's step cadence, but the composite follows the selected panel's
+presents: the picker is that panel's pane host (`TitleSession::setPaneHost`), compositing at each pane
+build and showing at each pane show, so an interpolated logic frame's in-between reaches the window.
+The loop builds, paces and shows a composite itself only on an iteration where no panel presented,
+and paces only when the panel's step paced nothing. A pre-rolling panel gets no host, since its
+fast-forward steps would composite many times inside one picker frame. Panel 0 starts selected and
+audible. The selected panel's present image is the window's size and the panel shows its cover's
+share of it; the other panels present at a third of their cover (`presentation.md`). The selected
+panel's share of the window width is the settings file's `picker_selected_share` (default 0.6) and the
+others split the rest evenly (`PickerLayout::retarget`), so two titles are 60/40 and three 60/20/20. A black or faded present falls
+back to the retained copy (`GpuVkState::retainFilledPresentImage`), which is a GPU→CPU→GPU round trip and
+so is refreshed on a gate; a fade therefore goes unnoticed for up to that many presents (measured 15,
+issue 0162). The selector logs its end state with the panel
 summary (`selector ended ... ; panels: [0]*slug demo ...`).
 
 `ProductHost` hands every session its `SessionServices`: the presentation device, the process

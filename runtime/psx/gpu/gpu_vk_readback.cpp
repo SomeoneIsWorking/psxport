@@ -93,7 +93,6 @@ const uint8_t *download_present_image(GpuVkState &g, bool *ok) {
 // presentProbeResult — what one readback of the presented image says.
 struct PresentProbe {
   bool filled = false;             // this frame carries a real, coherent picture
-  bool advertises = false;         // ...and it MOVED since the last probe: a demo, not a held card
   const uint8_t *pixels = nullptr; // the readback, mapped; null when nothing could be read
 };
 
@@ -182,11 +181,9 @@ bool GpuVkState::retainFilledPresentImage() {
   // A session that already holds a frame still gets that frame REPLACED, on a slow cadence. Holding
   // forever is what it used to do, and it is wrong: a panel's demo plays on, so a panel frozen on the
   // first picture it ever had is a slideshow of one stale frame — and for a title that spends a minute
-  // on its publisher card, that frame is the card, forever. Refreshing every frame would mean a
-  // GPU->CPU->GPU round trip per panel per field, which is the whole reason the hold exists; so the
-  // cadence is bounded instead: at most one refresh every kHoldRefreshPresents new presents, which is
-  // a quarter second of a panel's own time at 60 Hz. A hold is what this is for — it survives fades,
-  // loads and black frames — not a way to stop time.
+  // on its publisher card, that frame is the card, forever. The cadence is bounded because the round
+  // trip is the cost. It does not bound what a pane SHOWS, which is the live present image (issue
+  // 0162); it bounds only how fresh the fallback is.
   constexpr std::uint64_t kHoldRefreshPresents = 15;
   if (s_present_filled != nullptr && s_present_serial - s_present_probed_serial < kHoldRefreshPresents) {
     return true;
@@ -201,6 +198,8 @@ bool GpuVkState::retainFilledPresentImage() {
     if (probe.pixels != nullptr) {
       SDL_UnmapGPUTransferBuffer(device->s_dev, s_present_rb);
     }
+    // A pane must not show this one, so the picture selector answers with the retained copy.
+    s_present_blank_serial = s_present_serial;
     return s_present_filled != nullptr; // keep what is held: a fade or a load screen is not a reason to show nothing
   }
   if (s_present_filled == nullptr || s_present_filled_w != s_present_img_w || s_present_filled_h != s_present_img_h) {

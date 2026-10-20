@@ -1,6 +1,7 @@
 #include "number_text.h"
 
 #include <charconv>
+#include <cmath>
 #include <limits>
 #include <system_error>
 
@@ -41,6 +42,15 @@ std::optional<int> parseInt(std::string_view text) {
     return std::nullopt;
   }
   return static_cast<int>(*value);
+}
+
+std::optional<float> parseFloat(std::string_view text) {
+  float value = 0.0f;
+  const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+  if (error != std::errc() || end != text.data() + text.size() || !std::isfinite(value)) {
+    return std::nullopt;
+  }
+  return value;
 }
 
 std::optional<NumberPair> parsePair(std::string_view text, PairFormat format) {

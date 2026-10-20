@@ -221,14 +221,14 @@ int PanelSessions::nextPanelNeedingWork() {
   return selected_;
 }
 
-bool PanelSessions::advance(const PreRollBudget &preRoll) {
+unsigned long long PanelSessions::advance(const PreRollBudget &preRoll) {
   const int panel = nextPanelNeedingWork();
   if (panel < 0 || count() == 0) {
-    return false;
+    return 0;
   }
   TitleSession *current = session(panel);
   if (current == nullptr) {
-    return false;
+    return 0;
   }
   // Switching is pause-then-resume, never two at once: the frame a panel gets to bring itself up
   // is the frame the selected panel does not run.
@@ -243,18 +243,19 @@ bool PanelSessions::advance(const PreRollBudget &preRoll) {
     if (!current->boot()) {
       lucent::error("picker", "{} could not be booted: its panel stays empty", title(panel).identity->displayName);
       booted_[static_cast<std::size_t>(panel)] = true;
-      return false;
+      return 0;
     }
     booted_[static_cast<std::size_t>(panel)] = true;
     lucent::info("picker", "booting panel {}: {}", panel, title(panel).identity->displayName);
   }
   if (current->returnRequested()) {
-    return false;
+    return 0;
   }
-  // An arrived panel gets one step per picker frame on its own pacer. A pre-rolling panel fills the
-  // rest of the picker's field unpaced, since the picker frame owns wall time while it boots.
+  // An arrived panel gets one step per picker frame on its own pacer, and the fields that step
+  // waited for are the frame's wall time: an unpaced fast-forward step pays nothing and owes the
+  // loop's field pace, which is what the return value tells the loop.
   current->setPreRolling(!panelSettled(panel));
-  bool advanced = false;
+  unsigned long long pacedFields = 0;
   PreRollBudget::Clock::duration lastStep{};
   for (int step = 0; current->end() == TitleSession::End::Running; ++step) {
     if (step > 0 && (panelSettled(panel) || !preRoll.mayStep(step, PreRollBudget::Clock::now(), lastStep))) {
@@ -263,7 +264,7 @@ bool PanelSessions::advance(const PreRollBudget &preRoll) {
     const PreRollBudget::Clock::time_point stepStart = PreRollBudget::Clock::now();
     current->step();
     lastStep = PreRollBudget::Clock::now() - stepStart;
-    advanced = true;
+    pacedFields += current->lastStepPacedFields();
     // The running panel is the only one whose picture can have changed, so it is the only one worth
     // reading back; its own slow cadence is what keeps a demo playing in the panel.
     current->refreshPicture();
@@ -283,7 +284,7 @@ bool PanelSessions::advance(const PreRollBudget &preRoll) {
       latchArrival(other);
     }
   }
-  return advanced;
+  return pacedFields;
 }
 
 std::unique_ptr<TitleSession> PanelSessions::confirm() {

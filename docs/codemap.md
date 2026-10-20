@@ -61,20 +61,20 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Boot splash | `runtime/psx/platform/scea_splash.*`, `scea_asset.h` | Decoding the SCEA card picture |
 | Field turn | `runtime/psx/frame/field_turn.*` | The services owed around a title's field body: pause, watchdog re-arm, RAM dump, one command |
 | Frame loop | `runtime/psx/frame/frame_loop_shell.*`, `logic_frame.*` | Stepping a `FrameDriver`; the logic-frame start |
-| Frame presentation | `runtime/psx/frame/frame_presenter.*` | `FramePresenter::commit`: seal, cut, compose, pace |
+| Frame presentation | `runtime/psx/frame/frame_presenter.*` | `FramePresenter::commit`: seal, cut, compose, build, pace, show |
 | Pacing and time | `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `timing.*`, `emulated_time.*`, `field_rate.h` | Host pacing, field rate, emulated time |
 | GPU device | `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h` | Beetle `gpu.c`: the only VRAM and GP0 executor |
 | Guest GPU ports | `runtime/psx/present/gpu_ports.*`, `vram_rect.h` | `gp0Write`, `gp1Write`, `gpuRead`, DMA2, `loadImage`, `vram`, `sealRecord` |
 | Frame record | `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*`, `runtime/psx/present/frame_record.*` | The device's GP0 work recorded per logic frame |
 | Record rasteriser | `runtime/psx/gpu/gpu_vk_record_raster.*`, `record_raster_setup.*`, `record_raster_regions.h`, `vram_bitmap.h` | Drawing a record on the device image |
 | SDL3 GPU backend | `runtime/psx/gpu/gpu_vk_*.cpp`, `gpu_vk_window.*`, `gpu_vk_shader.*`, `runtime/psx/shaders_gpu/` | Window, device, present, submit, readback, shaders |
-| Display presenter | `runtime/psx/present/display_presenter.*`, `present_ledger.*`, `present_plan.h`, `video_plan.h`, `pixel_size.h` | Presenting a record, an in-between or a host picture; the present ledger |
+| Display presenter | `runtime/psx/present/display_presenter.*`, `present_ledger.*`, `present_plan.h`, `video_plan.h`, `pixel_size.h` | Building a record, an in-between or a host picture, and showing it; the present ledger |
 | Render mode | `runtime/psx/present/render_mode.h` | `RenderPath {Record, Device}`, `DisplayPassGuard` |
 | Frame composer | `runtime/psx/present/frame_composer.*`, `state_producer.*`, `frame_state.*`, `emission_scope.*`, `emit_memory.*`, `blend.h` | In-betweens from `StateProducer` renders of saved state |
 | GP0 decode | `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*`, `state_bytes.h` | One decode of guest draw commands |
 | Ordering table | `runtime/psx/present/ordering_table.*`, `host_ordering_table.*` | The guest OT walk and host OT emission |
 | Widescreen | `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` | The title's aspect policy, canvas margins, projection publication |
-| Panes | `runtime/psx/present/pane_composite.*`, `host_presentation.h`, `rgb24_picture.h` | Picker panes and host pictures |
+| Panes | `runtime/psx/present/pane_composite.*`, `pane_host.h`, `host_presentation.h`, `rgb24_picture.h` | Picker panes and host pictures |
 | Host input | `runtime/psx/input/host_input.*` | The one SDL event drain, key state, `QuitScope` |
 | Pad | `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `input_phase.h` | The guest pad and its delivery |
 | Pad record/replay | `runtime/psx/input/pad_recording.*`, `pad_phase_replay.*`, `pad_record_replay.*` | `.pad` files and phase-keyed replay |
@@ -88,7 +88,7 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | REPL | `runtime/psx/debug/repl.*` | Interactive inspection |
 | Producer census | `runtime/psx/debug/producer_census.*`, `ot_attr.*` | Primitives per guest submitter, keyed and rendered |
 | Diagnostics | `runtime/psx/debug/` (`gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `diagnostic_run.h`) | Dumps, counters and capture |
-| Live mods | `runtime/psx/debug/mods.*` | Per-Game player toggles (`aspect`, `fps60`) and the settings file |
+| Live mods | `runtime/psx/debug/mods.*` | Per-Game player toggles (`aspect`, `ires`, `fps60`, the selector layout) and the settings file |
 | Bug report | `runtime/psx/debug/bug_report_session.*`, `vendor/bug-report` | The in-app report and its reference frame |
 | Player UI | `runtime/ui/` | The RmlUi overlay, menus, readouts, warp control |
 | Logging | `vendor/lucent/` | All output |
