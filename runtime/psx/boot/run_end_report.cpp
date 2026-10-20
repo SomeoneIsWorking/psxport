@@ -6,56 +6,29 @@
 #include "game.h"
 #include "game_runtime.h"
 #include "lightrec_executor.h"
+#include "snapshot.h"
 
 #include <lucent/log.h>
 
-#include <cstdio>
 #include <string>
 
 namespace psx {
 
 void RunEndReport::emit(std::uint64_t productSteps) const {
   Core &core = game_.core;
-  const auto &counts = core.lightrecExecutor().counters();
   lucent::info("runtime",
-               "run complete: product_steps={} presentation_fences={} "
-               "translated_blocks={} executed_blocks={} executed_instructions={} "
-               "cache_hits={} cache_misses={} host_dispatches={} invalidations={} faults={}",
+               "run complete: product_steps={} presentation_fences={}",
                productSteps,
-               game_.presentation.fence(),
-               counts.translatedBlocks,
-               counts.executedBlocks,
-               counts.executedInstructions,
-               counts.cacheHits,
-               counts.cacheMisses,
-               counts.hostDispatches,
-               counts.invalidations,
-               counts.faults);
-  core.lightrecExecutor().reportFallbackTelemetry("run-complete");
-  psx::cpu::logRunEndLedger(counts);
+               game_.presentation.fence());
+  psx::cpu::logLedger(core.lightrecExecutor().counters(), "run-end", lucent::Level::Info);
   core.guestCallCensus().log("product loop ended");
   game_.perf.reportPresents();
   game_.presentation.reportStability();
   game_.spu_audio.reportQueue();
-  dumpRamIfRequested();
+  if (const std::string &path = psx::config::ramdump_path(); !path.empty()) {
+    psx::debug::Snapshotter::writeRam(core, path);
+  }
   core.runtime.reportRun(core);
-}
-
-// PSXPORT_RAMDUMP: the after-loop dump. A run that ends by exiting its process never gets here;
-// PSXPORT_RAMDUMP_FRAME (FieldTurn) is the mid-run one.
-void RunEndReport::dumpRamIfRequested() const {
-  const std::string path = psx::config::ramdump_path();
-  if (path.empty()) {
-    return;
-  }
-  FILE *dump = fopen(path.c_str(), "wb");
-  if (dump == nullptr) {
-    lucent::error("run", "end-of-run RAM dump could not open {}", path);
-    return;
-  }
-  fwrite(game_.core.ram, 1, 0x200000, dump);
-  fclose(dump);
-  lucent::info("run", "dumped 2MB RAM -> {}", path);
 }
 
 } // namespace psx

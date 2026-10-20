@@ -1,3 +1,4 @@
+// host_backtrace.h — host call-stack capture for fault and watch reports.
 #pragma once
 
 #include <lucent/log.h>
@@ -40,6 +41,13 @@ inline void emitBacktrace(lucent::Level level, const char *channel, std::span<vo
 
 inline void emitBacktrace(std::span<void *const> frames) {
   emitBacktrace(lucent::Level::Info, "host-backtrace", frames);
+}
+
+// Captures and logs up to 32 frames of the current host stack.
+inline void logBacktrace(int depth) {
+  void *frames[32];
+  const int count = captureBacktrace(frames, depth < 32 ? depth : 32);
+  emitBacktrace(std::span<void *const>(frames, static_cast<std::size_t>(count)));
 }
 
 } // namespace psxport::host

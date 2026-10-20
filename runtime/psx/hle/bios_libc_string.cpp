@@ -14,59 +14,27 @@ bool isAsciiSpace(uint8_t c) {
 
 } // namespace
 
+void psx::hle::guestCopy(Core &core, uint32_t dst, uint32_t src, uint32_t n, CopyOrder order) {
+  if (order == CopyOrder::OverlapSafe && dst > src) {
+    for (uint32_t i = n; i-- > 0;) {
+      core.mem_w8(dst + i, core.mem_r8(src + i));
+    }
+    return;
+  }
+  for (uint32_t i = 0; i < n; i++) {
+    core.mem_w8(dst + i, core.mem_r8(src + i));
+  }
+}
+
 bool psx::hle::dispatchLibcString(Core *core, uint32_t fn) {
   const uint32_t a0 = core->r[psx::cpu::kA0];
   const uint32_t a1 = core->r[psx::cpu::kA1];
   const uint32_t a2 = core->r[psx::cpu::kA2];
 
   switch (fn) {
-  // --- BIOS libc MEMORY leaves -------------------------------------------------------------
-  // MOVED HERE from hle.cpp, which is under a shrink-only line cap and could not absorb the fifth
-  // member of this family. The family is bzero/memcpy/memset plus the overlap-safe copy, and the
-  // string block above was already in this module -- so the memory half was the odd one out.
-  //
-  // A0:0x27 IS THE ONE THAT WAS MISSING, and 0x2C IS NOT IT.
-  //
-  // The guest emits each BIOS call as its own stub --
-  //   addiu $t2,$zero,0xA0 ; jr $t2 ; addiu $t1,$zero,FN
-  // -- so a census of those stubs is a census of the functions a title actually uses, read from
-  // BYTES rather than from a table somebody remembered. Across the ten titles in this workspace:
-  //
-  //   0x27  <- this one, unimplemented until now
-  //   0x28  bzero(dst, n)
-  //   0x2A  memcpy(dst, src, n)
-  //   0x2B  memset(dst, c, n)
-  //   0x2C  "memmove" -- CALLED BY NO TITLE, 0 of 0
-  //
-  // The four the family actually uses are CONTIGUOUS in the guest's own stub table (0x8003d6f0,
-  // d700, d710, d720 in SCUS_949.00), so 0x27 sits immediately before the bzero stub. **0x2C was
-  // the wrong number for the overlap-safe copy: a memmove at a number no title emits is a memmove
-  // that has never once run, while the number they all do emit was unimplemented.**
-  //
-  // WHAT THIS IS AND IS NOT EVIDENCE FOR, stated plainly. The identification rests on FAMILY
-  // POSITION plus the argument signature at the call site -- NOT on reading the BIOS ROM's own
-  // dispatch table, because the A/B/C vectors live in RAM the BIOS populates at boot, so the ROM
-  // file carries nothing at file offset 0xA0 and the table has to be recovered from the BIOS's own
-  // code. The call that forced the question is
-  //
-  //   A0:0x27(0x8005E168, 0x80061A80, 0x730, 0xFFFFFFFE) from 0x80011D0C
-  //
-  // a copy triple -- destination, source, length -- plus a fourth argument no copy function reads.
-  // The overlap-safe direction is correct whether the intended member is memmove or memcpy, because
-  // for non-overlapping ranges the two agree, and here src-dst is 0x3918 against a length of 0x730
-  // so they do not overlap at this call. **A member that was NOT a copy at all is the one reading
-  // this would get wrong**, and neither the signature nor the family position supports that -- so
-  // the ROM-level confirmation is named as the remaining check rather than assumed here.
-  case 0x27:       // memmove(dst, src, n)
-    if (a0 > a1) { // overlap-correct, unlike 0x2A
-      for (uint32_t i = a2; i-- > 0;) {
-        core->mem_w8(a0 + i, core->mem_r8(a1 + i));
-      }
-    } else {
-      for (uint32_t i = 0; i < a2; i++) {
-        core->mem_w8(a0 + i, core->mem_r8(a1 + i));
-      }
-    }
+  case 0x27: // memmove(dst, src, n); 0x2C is the same leaf at another vector
+  case 0x2C:
+    psx::hle::guestCopy(*core, a0, a1, a2, psx::hle::CopyOrder::OverlapSafe);
     core->r[psx::cpu::kV0] = a0;
     return true;
   case 0x28: // bzero(dst, n)
@@ -76,26 +44,12 @@ bool psx::hle::dispatchLibcString(Core *core, uint32_t fn) {
     core->r[psx::cpu::kV0] = a0;
     return true;
   case 0x2A: // memcpy(dst, src, n)
-    for (uint32_t i = 0; i < a2; i++) {
-      core->mem_w8(a0 + i, core->mem_r8(a1 + i));
-    }
+    psx::hle::guestCopy(*core, a0, a1, a2, psx::hle::CopyOrder::Forward);
     core->r[psx::cpu::kV0] = a0;
     return true;
   case 0x2B: // memset(dst, c, n)
     for (uint32_t i = 0; i < a2; i++) {
       core->mem_w8(a0 + i, (uint8_t)a1);
-    }
-    core->r[psx::cpu::kV0] = a0;
-    return true;
-  case 0x2C:       // memmove(dst, src, n) —
-    if (a0 > a1) { // overlap-correct, unlike 2Ah
-      for (uint32_t i = a2; i-- > 0;) {
-        core->mem_w8(a0 + i, core->mem_r8(a1 + i));
-      }
-    } else {
-      for (uint32_t i = 0; i < a2; i++) {
-        core->mem_w8(a0 + i, core->mem_r8(a1 + i));
-      }
     }
     core->r[psx::cpu::kV0] = a0;
     return true;

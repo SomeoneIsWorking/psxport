@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 
+#include "command_args.h"
 #include "execution_exit.h"
 #include "field_cadence.h"
 #include "guest_address_range.h"
@@ -33,10 +34,11 @@ class NativeStatePort;
 
 namespace psx::game {
 
-// One control-channel line: its first word and the whole trimmed line.
+// One control-channel line: its first word, and every word for the title to parse.
 struct TitleCommandLine {
   const char *command;
-  const char *line;
+  // Word 0 is the command.
+  const psx::debug::CommandArgs &args;
 };
 
 // Where a title's memory card and user data live. The framework reads the card variable through its

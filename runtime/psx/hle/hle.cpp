@@ -1,61 +1,38 @@
-// Guest-native HLE BIOS (S2 boot subset). Transcribed from the proven wide60 HLE
-// (runtime/hle_kernel.cpp), adapted to operate directly on the Core register file and
-// g_ram via the guest memory accessors. Scope: exactly the A0/B0/C0 calls the boot path
-// exercises; extended as binary and runtime evidence reveal more. Faithful-first — semantics
-// match the wide60 HLE that provably boots Tomba!2; not reimplemented from guesswork.
-//
-// State (event control blocks, native heap, IRQ / work-area flags) lives on `class Hle`
-// in game.h (`c->game->hle`) so each Core has independent BIOS state. BIOS dispatch is owned by
-// the Hle instance; typed syscall and break entry points live in execution_services.h.
+// The A0/B0/C0 BIOS calls the titles reach, and EvMdINTR event delivery.
 #include "bios_interrupt.h"
 #include "bios_libc_string.h"
 #include "bios_load_exec.h"
 #include "core.h"
 #include "execution_control.h"
-#include "execution_services.h"
-#include "fs_util.h" // Fs::writeFile — the miss RAM dump below
 #include "game.h"
-#include "guest_call.h"   // rc0 — invoke an EvMdINTR handler
-#include "memcard.h"      // Memcard::dispatchBiosA0/B0 — libcard BIOS dispatch
-#include "platform_hle.h" // class PlatformHle — sync-primitive HLE consulted on a RAM-code miss
+#include "memcard.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <lucent/log.h>
 
-// MIPS o32 register indices (== c->r[]).
+namespace {
 
-// ---- Event control blocks (B0:0x07-0x0D) --------------------------------------------
-constexpr int EVCB_MAX = 16;
-static const uint32_t EV_ID_BASE = 0xF1000000u;
+constexpr uint32_t EV_ID_BASE = 0xF1000000u;
+
+// The guest terminates its own lines; the log is one line per call.
+void logGuestLine(char *text) {
+  const size_t n = std::strlen(text);
+  if (n && text[n - 1] == '\n') {
+    text[n - 1] = 0;
+  }
+  lucent::debug("guest", "{}", text);
+}
+
+} // namespace
 
 int Hle::eventIndex(uint32_t id) const {
   uint32_t idx = id - EV_ID_BASE;
-  return (idx < EVCB_MAX && ev[idx].open) ? (int)idx : -1;
+  return (idx < kEventSlots && ev[idx].open) ? (int)idx : -1;
 }
 
-// Event delivery (called by the frame tick, the CD model and the memory-card model).
-//
-// TWO DELIVERY MODES, and only one of them used to work. An event opened EvMdNOINTR (0x2000) is POLLED:
-// the game calls TestEvent, which reads and clears `fired`, so marking the slot is the whole job. An
-// event opened EvMdINTR (0x1000) is a CALLBACK: the BIOS invokes the handler stored at OpenEvent, and
-// the game never polls it at all. This function only ever marked slots, so every EvMdINTR event was
-// registered, delivered, and silently dropped — the slot's `func` was captured and never called.
-//
-// That is not hypothetical: Spyro opens SwCARD (0xF4000001) spec 4 with mode 0x1000 and waits forever
-// on a handler that could not run (consumer issue 0027). Marking `fired` for such a slot is worse than
-// doing nothing, because it leaves state saying the event was handled when nothing ran.
-//
-// RE-ENTRANCY IS GUARDED. A handler may itself deliver events — the card handlers do — and without a
-// depth guard a handler that (directly or otherwise) re-delivers its own class recurses until the host
-// stack dies. The guard drops nested delivery rather than queueing it: the BIOS runs these at interrupt
-// time with interrupts masked, so "not re-entered" is the faithful behaviour, and a silent stack
-// overflow is the alternative.
-//
-// The register file is saved and restored around the call for the same reason vsync.cpp does it: this
-// runs from INSIDE guest execution, and a real interrupt preserves the interrupted function's registers.
 void Hle::unDeliverEvent(uint32_t evClass, uint32_t spec) {
-  for (int i = 0; i < EVCB_MAX; i++) {
+  for (int i = 0; i < kEventSlots; i++) {
     if (ev[i].open && ev[i].ev_class == evClass && (ev[i].spec & spec) && ev[i].mode == EV_MD_NOINTR) {
       ev[i].fired = 0;
     }
@@ -64,7 +41,7 @@ void Hle::unDeliverEvent(uint32_t evClass, uint32_t spec) {
 
 void Hle::deliverEvent(uint32_t evClass, uint32_t spec) {
   Core *c = &game->core;
-  for (int i = 0; i < EVCB_MAX; i++) {
+  for (int i = 0; i < kEventSlots; i++) {
     if (!(ev[i].open && ev[i].enabled && ev[i].ev_class == evClass && (ev[i].spec & spec))) {
       continue;
     }
@@ -82,9 +59,7 @@ void Hle::deliverEvent(uint32_t evClass, uint32_t spec) {
       continue;
     }
     ev_depth++;
-    R3000 saved = *static_cast<R3000 *>(c);
-    const auto result = psx::cpu::dispatchGuest0(*c, ev[i].func, psx::cpu::ExecutionBudget::currentTurn(*c));
-    *static_cast<R3000 *>(c) = saved;
+    const auto result = runAsInterrupt(*c, ev[i].func);
     ev_depth--;
     if (!psx::cpu::completeOrPropagate(*c, result)) {
       return;
@@ -92,11 +67,7 @@ void Hle::deliverEvent(uint32_t evClass, uint32_t spec) {
   }
 }
 
-// ---- Native work area for GetB0Table()/GetC0Table() ---------------------------------
-// These are guest-visible BIOS tables, not opaque HLE bookkeeping. Guests read entries and may then
-// replace them in ordinary RAM. Preserve the existing callable C0 fallback at the table base,
-// publish B0[0x5B]'s native control area, and publish C0[0x06] as the BIOS ExceptionHandler entry
-// address documented by the PSX BIOS and consumed through GetC0Table.
+// C0 keeps a callable `jr ra` at its base; B0[0x5B] publishes the native control area.
 enum { HLE_C0TABLE = 0x8000F800u };
 void Hle::workAreaInit() {
   Core *c = &game->core;
@@ -110,36 +81,7 @@ void Hle::workAreaInit() {
   c->mem_w32(HLE_C0TABLE + 0x06u * sizeof(uint32_t), 0x00000C80u);
 }
 
-// ---- BIOS DEVICE TABLE (kernel 0x150/0x154 + the DeviceControlBlocks they point at) --------------
-//
-// The BIOS publishes its installed devices as an array of 80-byte DeviceControlBlocks: kernel word
-// 0x00000150 holds the array's ADDRESS and 0x00000154 its SIZE IN BYTES. Guest code that resolves a
-// path by device prefix walks that array ITSELF rather than going through a BIOS vector. Tomba!2's
-// memory-card browser does exactly that in FUN_80080940 — parse "bu" out of "bu00:*", scan the DCBs
-// for a name match, then call B0:0x42 firstfile.
-//
-// Nothing published those two words, so the walk read base=0 and length=0x40000404 (whatever the
-// guest's own use of low RAM had left there) and marched from address 0 treating every 80th word as
-// a `char*` device name. The first non-zero one it reached was a BIOS-code word, strcmp dereferenced
-// it, and the memory model refused the unmapped read — the user-reported "saving crashes the game".
-// The crash is in the DEVICE LOOKUP, before any card I/O is attempted.
-//
-// DCB layout — the slots guest code is known to touch are marked:
-//   +0x00 char* name      <-- FUN_80080940 strcmp target
-//   +0x04 flags        +0x08 sector size   +0x0C char* description
-//   +0x10 init   +0x14 open   +0x18 inout  +0x1C read   +0x20 write  +0x24 close  +0x28 ioctl
-//   +0x2C exit   +0x30 action +0x34 firstfile  <-- FUN_80080940 PATCHES this  +0x38 nextfile
-//   +0x3C format +0x40 chdir  +0x44 rename +0x48 remove +0x4C testdevice
-//
-// THE FUNCTION-POINTER SLOTS ARE ZERO AND ARE NEVER DISPATCHED, and that is a claim with a check
-// behind it rather than an omission. On hardware they point into BIOS ROM; this port has no BIOS
-// ROM — every device entry point is serviced by the A0/B0 HLE. The only guest that touches one is
-// FUN_80080940, which saves +0x34 aside, replaces it with its own restore-trampoline FUN_80080ADC
-// and calls B0:0x42; that trampoline's entire body is "put the saved pointer back, then tail-call
-// it". So servicing B0:0x42 in the HLE and restoring +0x34 there (Hle::deviceUnhook, called from
-// memcard.cpp's file_firstfile) reaches the same end state without dispatching a pointer that has
-// no code behind it. If a game ever needs a slot to be genuinely callable, that is the moment to
-// give the HLE a dispatchable stub page — not to leave a plausible-looking address in the table.
+// 80-byte DCBs, +0x00 name, +0x34 firstfile, +0x38 nextfile; entry slots stay 0 because the HLE services them.
 enum { HLE_DCB_TABLE = 0x8000F900u, HLE_DCB_NAMES = 0x8000FA40u, HLE_DCB_NAME_STRIDE = 16u };
 
 uint32_t Hle::deviceFind(const char *name) const {
@@ -150,18 +92,9 @@ uint32_t Hle::deviceFind(const char *name) const {
     if (!np) {
       continue;
     }
-    int k = 0;
-    for (;; k++) {
-      const char got = (char)c->mem_r8(np + (uint32_t)k);
-      if (got != name[k]) {
-        k = -1;
-        break;
-      }
-      if (!got) {
-        break;
-      }
-    }
-    if (k >= 0) {
+    char got[HLE_DCB_NAME_STRIDE];
+    c->readCString(np, got, sizeof got);
+    if (std::strcmp(got, name) == 0) {
       return dcb;
     }
   }
@@ -194,8 +127,7 @@ void Hle::deviceAdd(const char *name) {
   c->mem_w8(np + k, 0);
   c->mem_w32(dcb + DCB_OFF_NAME, np);
   dcb_n = slot + 1;
-  // Republish both kernel words together: a base with a stale length is the exact shape that made
-  // the un-published table walk hundreds of megabytes.
+  // Base and length are published together; a stale length sends the guest walk past the table.
   c->mem_w32(KERNEL_DCB_ADDR, HLE_DCB_TABLE);
   c->mem_w32(KERNEL_DCB_SIZE, (uint32_t)dcb_n * DCB_STRIDE);
   lucent::info("hle",
@@ -223,15 +155,10 @@ constexpr uint32_t kBiosThreadHandle = 0xFF000000u;
 
 } // namespace
 
-// Dispatch one A0/B0/C0 BIOS call. Returns true if handled (c->r[V0] set), false otherwise.
 bool Hle::dispatchBios(char table, uint32_t fn) {
   Core *c = &game->core;
   uint32_t a0 = c->r[psx::cpu::kA0], a1 = c->r[psx::cpu::kA1], a2 = c->r[psx::cpu::kA2];
-  // `PSXPORT_DEBUG=bios` — EVERY BIOS call the guest makes, handled or not. The existing UNIMPL log
-  // only fires for calls that fall through, which answers "what is missing" but not "what does this
-  // game actually use" — and that second question is what a port needs when deciding which BIOS
-  // subsystem to model. $ra is the caller: the A0/B0/C0 stubs are tail jumps (`li $t2,0xA0; jr $t2`),
-  // so it still holds the real call site and links a call back to the library routine that made it.
+  // The A0/B0/C0 stubs tail-jump, so ra is the library call site.
   lucent::debug("bios",
                 "{}0:0x{:02X}(0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X}) from 0x{:08X}",
                 table,
@@ -240,16 +167,13 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                 a1,
                 a2,
                 c->r[psx::cpu::kA3],
-                c->r[31]);
-  HleEvCB *s_ev = ev; // alias so the switch bodies below read tersely
+                c->r[psx::cpu::kRa]);
   if (table == 'A') {
     if (psx::hle::dispatchLibcString(c, fn)) {
       return true;
     }
     switch (fn) {
-    // Sony libc rand/srand. This exact LCG also appears in linked PSX libc implementations:
-    // unsigned 32-bit wrap, then the upper 15 bits. Keep the state per Hle/Game rather than using
-    // host rand(), whose sequence and process-global coupling are both wrong for dual-core runs.
+    // Sony libc rand/srand: 32-bit LCG, upper 15 bits.
     case 0x2F:
       rand_state = rand_state * 0x41C64E6Du + 0x3039u;
       c->r[psx::cpu::kV0] = (rand_state >> 16) & 0x7FFFu;
@@ -288,44 +212,23 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       }
       uint32_t np = heapAlloc(ns), os = heapBlockSize(old);
       if (np) {
-        uint32_t n = os < ns ? os : ns;
-        for (uint32_t i = 0; i < n; i++) {
-          c->mem_w8(np + i, c->mem_r8(old + i));
-        }
+        psx::hle::guestCopy(*c, np, old, os < ns ? os : ns, psx::hle::CopyOrder::Forward);
         heapFree(old);
       }
       c->r[psx::cpu::kV0] = np;
       return true;
     }
-    // InitHeap(base, size). LOGGED AT INFO, not debug-gated, and it prints on EVERY boot because
-    // both arguments come from the guest register file and a wrong `size` here is silent: the
-    // native arena simply reports whatever it was given, and heapAlloc only fails once a request
-    // exceeds it. A boot that initialises the heap with a leftover register value looks identical
-    // to a correct one until an allocation near the limit fails, arbitrarily far away. So the
-    // measured pair is stated once per boot rather than being knowable only under a debug channel.
+    // Logged every boot: a wrong guest size only shows when an allocation near it fails.
     case 0x39:
       lucent::info("hle", "InitHeap(base=0x{:08X}, size=0x{:X} = {} bytes) from guest a0/a1", a0, a1, a1);
       heapInit({a0, a1});
       c->r[psx::cpu::kV0] = 0;
       return true; // InitHeap
-    // setjmp: fill the guest's jmp_buf with the real callee-saved set and return 0 (the
-    // direct-call result). The layout is the BIOS's: ra, sp, fp, s0..s7, gp. Writing it truthfully
-    // matters even though longjmp is unsupported below — a guest that INSPECTS the buffer, or
-    // that longjmps and is therefore about to abort, should see the state that actually existed.
-    case 0x13: { // setjmp(buf)
-      constexpr int kSave[12] = {31, 29, 30, 16, 17, 18, 19, 20, 21, 22, 23, 28};
-      for (int i = 0; i < 12; i++) {
-        c->mem_w32(a0 + 4u * (uint32_t)i, c->r[kSave[i]]);
-      }
+    case 0x13: // setjmp(buf)
+      psx::hle::saveJmpBuf(c, a0);
       c->r[psx::cpu::kV0] = 0;
       return true;
-    }
-    // longjmp CANNOT be honoured here and must not be faked. Restoring the guest's $sp/$ra does
-    // nothing without a modeled guest unwind: returning normally
-    // would resume the setjmp caller's successor instead of unwinding to it — silently running
-    // the error path's continuation with the failed operation's state still live. Stop instead;
-    // a guest reaching longjmp is a real event that needs a real mechanism (host setjmp at the
-    // dispatch boundary, or a coroutine unwind), not a plausible-looking return.
+    // No guest unwind exists; a normal return would resume the wrong continuation.
     case 0x14: // longjmp(buf, val)
       lucent::error("hle",
                     "A0:0x14 longjmp(buf=0x{:08X}, val={}) — psxport has no guest unwind "
@@ -334,22 +237,18 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                     a0,
                     a1);
       abort();
-    // A(3Fh) printf — the GAME'S OWN diagnostics. Leaving this unimplemented threw away the most
-    // direct evidence a port can get: the binary saying, in English, what it thinks went wrong.
-    // This port's single most useful identification so far came from a string the executable
-    // emits, and every one of these was being discarded as "UNIMPL A0:0x3F" (hundreds per boot).
-    // Routed to the `guest` channel so a normal run is quiet and PSXPORT_DEBUG=guest shows it.
+    // printf: the guest's own diagnostics, on the `guest` channel.
     case 0x3F: {
       char out[1024];
       unsigned o = 0;
       uint32_t fmt = a0, argi = 0;
       const uint32_t argreg[3] = {a1, a2, c->r[psx::cpu::kA3]};
-      // Varargs past the fourth land on the guest stack, at sp+16 in the o32 layout.
+      // o32 varargs past a3 sit at sp+16.
       auto nextarg = [&]() -> uint32_t {
         if (argi < 3) {
           return argreg[argi++];
         }
-        return c->mem_r32(c->r[29] + 16u + 4u * (argi++ - 3));
+        return c->mem_r32(c->r[psx::cpu::kSp] + 16u + 4u * (argi++ - 3));
       };
       for (uint32_t i = 0; o + 1 < sizeof out; i++) {
         const char ch = (char)c->mem_r8(fmt + i);
@@ -360,8 +259,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
           out[o++] = ch;
           continue;
         }
-        // Copy the whole conversion spec through to the host printf rather than reimplementing
-        // width/precision/flags: the guest's format string is the authority on its own arguments.
+        // The host printf applies the guest's own conversion spec.
         char spec[32];
         unsigned sn = 0;
         spec[sn++] = '%';
@@ -388,16 +286,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
           continue;
         }
         if (conv == 's') {
-          const uint32_t p = nextarg();
-          unsigned n = 0;
-          while (n + 1 < sizeof tmp) {
-            const char sc = (char)c->mem_r8(p + n);
-            if (!sc) {
-              break;
-            }
-            tmp[n++] = sc;
-          }
-          tmp[n] = 0;
+          c->readCString(nextarg(), tmp, sizeof tmp);
           o += (unsigned)snprintf(out + o, sizeof out - o, "%s", tmp);
         } else if (conv == 'c') {
           o += (unsigned)snprintf(out + o, sizeof out - o, "%c", (char)nextarg());
@@ -407,11 +296,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
         }
       }
       out[o < sizeof out ? o : sizeof out - 1] = 0;
-      // The guest terminates its own lines; strip a trailing newline so the log stays one-per-line.
-      if (o && out[o - 1] == '\n') {
-        out[o - 1] = 0;
-      }
-      lucent::debug("guest", "{}", out);
+      logGuestLine(out);
       c->r[psx::cpu::kV0] = 0;
       return true;
     }
@@ -419,8 +304,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     case 0x49: // GPU_cw (GP0 word — harmless)
       c->r[psx::cpu::kV0] = 0;
       return true;
-    // LoadAndExecute: load the CD executable this guest named and START it — the BIOS never returns
-    // to its caller on success, so the loaded program's entry is the guest's continuation.
+    // LoadAndExecute: on success the loaded entry is the continuation; the BIOS never returns.
     case 0x51:
       return psx::hle::dispatchLoadExec(*c, loadExecReader);
     case 0x70: // _bu_init no-op
@@ -450,20 +334,16 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       c->r[psx::cpu::kV0] = 0;
       return true; // UnDeliverEvent
     case 0x08: {   // OpenEvent
-      for (int i = 0; i < EVCB_MAX; i++) {
-        if (!s_ev[i].open) {
-          s_ev[i].open = 1;
-          s_ev[i].enabled = 0;
-          s_ev[i].fired = 0;
-          s_ev[i].ev_class = a0;
-          s_ev[i].spec = a1;
-          s_ev[i].mode = a2;
-          s_ev[i].func = c->r[psx::cpu::kA3];
-          // `PSXPORT_DEBUG=ev` — which events a game opens, and the handle each got. A title's frame
-          // driver must deliver those CLASSES or every TestEvent wait spins forever. There was no way to
-          // discover a game's classes short of reading its OpenEvent call sites by hand; this
-          // prints them from the run. Handle is what TestEvent/WaitEvent are later called with,
-          // so it also links a spinning poll back to the event it is waiting on.
+      for (int i = 0; i < kEventSlots; i++) {
+        if (!ev[i].open) {
+          ev[i].open = 1;
+          ev[i].enabled = 0;
+          ev[i].fired = 0;
+          ev[i].ev_class = a0;
+          ev[i].spec = a1;
+          ev[i].mode = a2;
+          ev[i].func = c->r[psx::cpu::kA3];
+          // The classes a frame driver must deliver, and the handle a spinning TestEvent names.
           lucent::debug("ev",
                         "OpenEvent class=0x{:08X} spec=0x{:08X} mode=0x{:08X} handler=0x{:08X} -> handle=0x{:08X}",
                         a0,
@@ -481,7 +361,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     case 0x09: {
       int i = eventIndex(a0); // CloseEvent
       if (i >= 0) {
-        s_ev[i].open = 0;
+        ev[i].open = 0;
         c->r[psx::cpu::kV0] = 1;
       } else {
         c->r[psx::cpu::kV0] = 0;
@@ -491,7 +371,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     case 0x0A: {
       int i = eventIndex(a0); // WaitEvent (can't block)
       if (i >= 0) {
-        s_ev[i].fired = 0;
+        ev[i].fired = 0;
         c->r[psx::cpu::kV0] = 1;
       } else {
         c->r[psx::cpu::kV0] = 0;
@@ -500,8 +380,8 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     }
     case 0x0B: {
       int i = eventIndex(a0); // TestEvent (read+clear)
-      if (i >= 0 && s_ev[i].fired) {
-        s_ev[i].fired = 0;
+      if (i >= 0 && ev[i].fired) {
+        ev[i].fired = 0;
         c->r[psx::cpu::kV0] = 1;
       } else {
         c->r[psx::cpu::kV0] = 0;
@@ -511,7 +391,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     case 0x0C: {
       int i = eventIndex(a0); // EnableEvent
       if (i >= 0) {
-        s_ev[i].enabled = 1;
+        ev[i].enabled = 1;
         c->r[psx::cpu::kV0] = 1;
       } else {
         c->r[psx::cpu::kV0] = 0;
@@ -521,7 +401,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     case 0x0D: {
       int i = eventIndex(a0); // DisableEvent
       if (i >= 0) {
-        s_ev[i].enabled = 0;
+        ev[i].enabled = 0;
         c->r[psx::cpu::kV0] = 1;
       } else {
         c->r[psx::cpu::kV0] = 0;
@@ -530,19 +410,8 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     }
     case 0x3F: { // B(3Fh) puts
       char out[512];
-      unsigned n = 0;
-      while (n + 1 < sizeof out) {
-        const char ch = (char)c->mem_r8(a0 + n);
-        if (!ch) {
-          break;
-        }
-        out[n++] = ch;
-      }
-      out[n] = 0;
-      if (n && out[n - 1] == '\n') {
-        out[n - 1] = 0;
-      }
-      lucent::debug("guest", "{}", out);
+      c->readCString(a0, out, sizeof out);
+      logGuestLine(out);
       c->r[psx::cpu::kV0] = 0;
       return true;
     }
@@ -561,17 +430,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       psx::hle::traceInterruptCustomExit(c, a0);
       c->r[psx::cpu::kV0] = 0;
       return true;
-    // B0:0x35 FileWrite is NOT handled here. It used to be, unconditionally: this switch wrote fd
-    // 1/2 to stderr and then returned `len` FOR EVERY fd — so a write to a memory-card file never
-    // reached the card at all, and the guest was told the byte count as if it had. Two bugs in one
-    // line: the save was silently discarded, and `len` is the wrong return for a card fd (see
-    // memcard.cpp file_read for the libmcrd retry loop that spins on a non-zero return; that spin
-    // is the user-reported SELECT MEMORY CARD softlock). memcard.cpp's `file_write` already
-    // implements the console-device arm identically, so the whole call now goes to Memcard::dispatchBiosB0
-    // through the default arm below and the console path has ONE definition.
-    // Pinned by tests/test_memcard_file_api.cpp, which drives THIS function rather than the card
-    // module directly — precisely because an earlier case here can claim a number before the card
-    // module sees it.
+    // B0:0x35 FileWrite, console fds included, belongs to Memcard::dispatchBiosB0.
     // BIOS threads: no context switch; a title that runs guest threads binds its own.
     case 0x0E:
       c->r[psx::cpu::kV0] = kBiosThreadHandle;
@@ -609,12 +468,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
   }
   if (table == 'C') {
     switch (fn) {
-    // SysEnqIntRP / SysDeqIntRP. Still return the element (what callers expect), but LOG it:
-    // psxport does not yet dispatch interrupts to guest code (WART-05 in the Spider-Man port), and
-    // the first thing a delivery model needs is the guest InterruptElement's field layout, which
-    // cannot be read off the SDK header with confidence. Dumping the four words at registration
-    // time answers it from the run: whichever slots hold addresses inside the guest .text are
-    // the handler/verifier pair.
+    // SysEnqIntRP / SysDeqIntRP return the element.
     case 0x02:
     case 0x03:
       if (lucent::channel_on("bios")) {
@@ -651,9 +505,4 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
     }
   }
   return false;
-}
-
-void psx::cpu::handleBreak(Core &core, uint32_t code) {
-  lucent::info("break", "code {}", code);
-  (void)core;
 }

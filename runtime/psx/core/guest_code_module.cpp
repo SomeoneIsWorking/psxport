@@ -74,7 +74,7 @@ void publishLanding(Core &core, GuestAddressRange landed) {
   if (!window.valid() || !landed.valid() || landed.begin < window.begin || landed.end > window.end) {
     return;
   }
-  if (core.currentImageIdentity(window).has_value()) {
+  if (core.imageCatalog().resolve(window).has_value()) {
     return; // already a residency; this sector is part of the same load
   }
   const auto content =

@@ -67,8 +67,8 @@ two stale comments — `rmlui_overlay.cpp:1` ("replaces the former Dear ImGui ov
 when both halves had been false for some time. Both are now gone, so there is nothing half-wired.
 
 **psxport already has the developer stack, and it is better suited than ImGui here.**
-`runtime/psx/debug/repl.cpp` (stdin) and `runtime/psx/debug/dbg_server.cpp` (TCP + `tools/dbgclient.py`)
-own the developer-console responsibility and work with no window at all.
+`runtime/psx/debug/debug_commands.cpp` holds the developer verbs; `repl.cpp` (stdin) and `dbg_server.cpp`
+(TCP + `tools/dbgclient.py`) carry them and work with no window at all.
 
 **And that is the deciding constraint.** `docs/workspace/PROTOCOL.md`: *agents never run windowed*. An ImGui
 developer stack draws into the swapchain, so the primary consumer of developer tooling in this

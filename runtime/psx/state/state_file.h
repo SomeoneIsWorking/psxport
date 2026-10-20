@@ -1,25 +1,5 @@
-// state_file.h — the ONE versioned container every whole-machine state is written through.
-//
-// A file is a header plus a flat sequence of named sections:
-//
-//   "PSXSTATE"            8 bytes
-//   formatVersion        u32   (kFormatVersion)
-//   sectionCount         u32
-//   then, per section:  name[32] (NUL-padded), payloadLength u32, payload
-//
-// WHY SECTIONS AND NOT ONE BLOB. Two independent reasons, and the second is the one that costs
-// money if it is forgotten. First, the title's own section is written by title code against a
-// different version, so a version boundary has to exist somewhere the framework does not own.
-// Second, a section table means a load can name the section it could not read instead of applying
-// a partial machine: a file written by a newer framework, or by a title this build does not know,
-// is refused with the section that differs rather than silently restoring some devices and not
-// others.
-//
-// SECTION NAMES ARE A CONTRACT. `frameworkSectionNames()` is the complete list the framework owns;
-// `StateFile` refuses to open an image carrying a name outside that list AND outside the one
-// declared title section. An unknown section therefore always means "this file was written by
-// something that knows state this build does not" — which is exactly the case where restoring the
-// rest would produce a machine that never existed.
+// The versioned whole-machine container: "PSXSTATE", u32 version, u32 count, then per section a
+// NUL-padded name[32], u32 length and payload. A name outside section::kRequired and `title` is refused.
 #pragma once
 
 #include <array>
@@ -37,8 +17,6 @@ inline constexpr std::uint32_t kFormatVersion = 1;
 inline constexpr std::size_t kSectionNameBytes = 32;
 inline constexpr std::size_t kMaxSectionCount = 64;
 
-// The section names the framework itself writes. One list, owned here, because the loader has to be
-// able to tell a framework section from a title section without the writer's cooperation.
 namespace section {
 inline constexpr std::string_view kCpu = "cpu";
 inline constexpr std::string_view kRam = "ram";
@@ -55,22 +33,15 @@ inline constexpr std::string_view kSio = "sio";
 inline constexpr std::string_view kCard = "card";
 inline constexpr std::string_view kCd = "cd";
 inline constexpr std::string_view kTitle = "title";
-// Every device section a machine image must carry; the title section is the one optional name.
+// Every device section a machine image carries, in capture order; `title` is the one optional name.
 inline constexpr std::array<std::string_view, 14> kRequired{
     kCpu, kRam, kScratchpad, kGte, kGpu, kBeetleSpu, kBeetleMdec, kCdc, kTiming, kDma, kHle, kSio, kCard, kCd};
 } // namespace section
 
-// Every framework section name, in one vector. Built once, so the answer cannot drift between the
-// writer and the reader.
-std::vector<std::string> frameworkSectionNames();
-bool isFrameworkSectionName(std::string_view name);
-
 // A written image: the bytes plus the section directory read back out of them.
 class StateImage {
 public:
-  // Append a section. A name longer than kSectionNameBytes-1 is refused, and a duplicate name is
-  // refused: two sections of one name would make the load order — and therefore the restored
-  // machine — depend on which one the reader happened to find.
+  // Refuses an over-long or duplicate name.
   bool add(std::string_view name, std::span<const std::uint8_t> payload);
   const std::vector<std::uint8_t> &bytes() const {
     return mBytes;
@@ -89,11 +60,7 @@ public:
     std::string reason;
   };
 
-  // Parse `bytes`. Fails, by name, on: not a state file, a format version this build does not
-  // write, a truncated section table, a section that runs past the end of the image, more sections
-  // than kMaxSectionCount, a duplicate section name, or a section name this build does not know
-  // (`title` excepted — that one is checked by the title port, which is the only thing that can
-  // tell whether it is ITS section).
+  // Refuses, by name, a bad magic or version, a truncated table or payload, too many, duplicate or unknown sections.
   static std::optional<StateFile> open(std::vector<std::uint8_t> bytes, OpenError &error);
 
   [[nodiscard]] std::uint32_t version() const {
@@ -117,10 +84,5 @@ private:
   std::vector<std::string> mNames;
   std::uint32_t mVersion = kFormatVersion;
 };
-
-// Read/write the whole image. Both report failure by name rather than throwing: a state file that
-// cannot be written is an operator problem, and the reply has to say which path and why.
-std::optional<std::vector<std::uint8_t>> readFile(const std::string &path, std::string &error);
-bool writeFile(const std::string &path, std::span<const std::uint8_t> bytes, std::string &error);
 
 } // namespace psx::state

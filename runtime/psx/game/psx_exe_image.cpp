@@ -1,6 +1,7 @@
 #include "psx_exe_image.h"
 
 #include "core.h"
+#include "guest_code_module.h"
 #include "invalidation.h"
 
 #include <algorithm>
@@ -12,6 +13,8 @@ namespace psx::cpu {
 namespace {
 
 constexpr uint32_t kRamBytes = 0x200000;
+constexpr uint32_t kBootStackPointer = 0x801ffff0u;
+constexpr uint32_t kTopLevelReturn = 0xdead0000u;
 
 uint32_t readWord(std::span<const uint8_t> bytes, std::size_t offset) {
   uint32_t value = 0;
@@ -97,31 +100,30 @@ PsxExeLoadResult loadPsxExeImage(Core &core, std::span<const uint8_t> bytes, std
   }
   const auto &image = *parsed.image;
   const auto payload = bytes.subspan(kPsxExeHeaderBytes, image.textBytes);
-  uint64_t contentIdentity = 1469598103934665603ull;
-  for (uint8_t byte : payload) {
-    contentIdentity ^= byte;
-    contentIdentity *= 1099511628211ull;
-  }
-  // One complete payload publication, followed by the same central invalidation
-  // used by guest stores and DMA. No raw copy can leave an older translation live.
   std::memcpy(core.ram + image.physicalText.begin, payload.data(), payload.size());
   notifyExecutableWrite(core, image.physicalText, ExecutableWriteSource::ModuleLoad);
-  const auto identity = core.imageCatalog().activate(imageName, image.physicalText, contentIdentity);
+  const auto identity =
+      core.imageCatalog().activate(imageName, image.physicalText, psx::code_module::digest(payload).identity);
   core.pc = image.entry;
-  core.r[28] = image.globalPointer;
+  core.r[kGp] = image.globalPointer;
   if (image.stackBase != 0) {
-    core.r[29] = image.stackPointer;
-    core.r[30] = image.stackPointer;
+    core.r[kSp] = image.stackPointer;
+    core.r[kFp] = image.stackPointer;
   }
   return {identity, image, {}};
 }
 
-void applyPsxExeTopLevelRegisters(Core &core, const PsxExeImage &image) {
-  if (image.stackBase == 0) {
-    core.r[29] = 0x801ffff0u;
-    core.r[30] = core.r[29];
+PsxExeLoadResult loadTopLevelPsxExe(Core &core, std::span<const uint8_t> bytes, std::string_view imageName) {
+  PsxExeLoadResult loaded = loadPsxExeImage(core, bytes, imageName);
+  if (!loaded) {
+    return loaded;
   }
-  core.r[31] = 0xdead0000u; // top-level return sentinel
+  if (loaded.image.stackBase == 0) {
+    core.r[kSp] = kBootStackPointer;
+    core.r[kFp] = core.r[kSp];
+  }
+  core.r[kRa] = kTopLevelReturn;
+  return loaded;
 }
 
 } // namespace psx::cpu

@@ -22,8 +22,7 @@ std::optional<std::uint16_t> PhaseReplay::next(std::uint64_t observedPhase) {
     return std::nullopt;
   }
   const PadSegment &current = recording_.segments()[segment_];
-  const bool matches = current.phase == kUnkeyedPhase || current.phase == observedPhase;
-  if (entered_ && matches) {
+  if (entered_ && current.matches(observedPhase)) {
     return offset_ < current.frames() ? std::optional<std::uint16_t>(emit()) : wait(observedPhase);
   }
   if (entered_) {
@@ -83,7 +82,7 @@ std::optional<std::uint16_t> PhaseReplay::wait(std::uint64_t observedPhase) {
   }
   waitRun_++;
   progress_.framesWaited++;
-  return kNeutralMask;
+  return kNoButtons;
 }
 
 // Segments between the current one and `segment` were passed over unobserved.
@@ -158,7 +157,7 @@ void PhaseReplay::closeCurrent() {
 std::optional<std::size_t> PhaseReplay::findNeutralPath(std::uint64_t phase) const {
   const std::vector<PadSegment> &segments = recording_.segments();
   for (std::size_t index = segment_; index < segments.size(); index++) {
-    if (segments[index].phase == kUnkeyedPhase || segments[index].phase == phase) {
+    if (segments[index].matches(phase)) {
       return index;
     }
     if (segments[index].inputFramesFrom(0)) {
@@ -166,30 +165,6 @@ std::optional<std::size_t> PhaseReplay::findNeutralPath(std::uint64_t phase) con
     }
   }
   return std::nullopt;
-}
-
-void PhaseReplay::reportRunEnd() const {
-  const ReplayProgress &p = progress_;
-  const char *status = p.status == ReplayStatus::Complete  ? "COMPLETE"
-                       : p.status == ReplayStatus::Stalled ? "STALLED"
-                                                           : "TRUNCATED (the run ended first)";
-  lucent::log(p.status == ReplayStatus::Complete ? lucent::Level::Info : lucent::Level::Warn,
-              "padphase",
-              lucent::format("run-end: replay {} — segments entered {} of {} (+{} neutral passed unobserved), "
-                             "frames delivered {} of {}, neutral frames waited {} over {} phase(s) (longest {} "
-                             "at segment {}), button frames dropped {} in {} segment(s)",
-                             status,
-                             p.segmentsEntered,
-                             p.segmentsTotal,
-                             p.segmentsPassed,
-                             p.framesEmitted,
-                             p.framesRecorded,
-                             p.framesWaited,
-                             p.phasesWaitedFor,
-                             p.longestWait,
-                             p.longestWaitSegment + 1,
-                             p.inputFramesDropped,
-                             p.segmentsWithDroppedInput));
 }
 
 } // namespace psx::input

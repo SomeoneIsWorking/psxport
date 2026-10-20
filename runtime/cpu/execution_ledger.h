@@ -1,27 +1,20 @@
-// execution_ledger — the whole-run guest-execution ledger, in ONE format.
-//
-// The dynarec's denominators (translated and executed blocks and instructions, cache hits and misses,
-// invalidations by who asked, budget exits, and interpreter fallback by every reason it counts) used to
-// reach a reader only through the live debug endpoint's `guest` command, or through a destructor's
-// telemetry line that a title which never destroys its Game (`new Game()` with no delete) does not
-// reach. A run that ended cleanly therefore left no ledger in its default log. This module owns the
-// text of the ledger, so the live endpoint and the run-end report cannot disagree about what a counter
-// is called, and `logRunEndLedger` is what every native boot prints when its frame loop returns.
+// execution_ledger — the one text of every executor counter, for the run-end log and the live endpoint.
 #pragma once
 
 #include "lightrec_executor.h"
 
+#include <lucent/log.h>
+
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace psx::cpu {
 
-// The ledger as `name: key=value ...` lines: `guest`, `invalidations_by_source`,
-// `invalidation_work`, `budget_exit`, `fallback`. Every counter of ExecutorCounters that the ledger reports appears by
-// name, including each fallback reason and each refused-fallback reason, so an absent name is never read as a zero.
+// The ledger as `name: key=value ...` lines naming every counter, so an absent name never reads as zero.
 std::vector<std::string> ledgerLines(const ExecutorCounters &counters);
 
-// One Lucent info line per ledger line, prefixed `run-end:`, on the `guest` channel.
-void logRunEndLedger(const ExecutorCounters &counters);
+// One line per ledger line on the `guest` channel, prefixed `<phase>:`.
+void logLedger(const ExecutorCounters &counters, std::string_view phase, lucent::Level level);
 
 } // namespace psx::cpu

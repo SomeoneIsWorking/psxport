@@ -1,16 +1,25 @@
 #include "game.h"
-#include "bios_load_exec.h" // the disc reader A0:0x51 LoadAndExecute is bound with, below
-#include "config_vars.h"    // producer_census, render_path
+#include "bios_load_exec.h"
+#include "config_vars.h"
 #include "gpu_vk_device.h"
 #include "gpu_vk_internal.h"
-#include "ot_attr.h" // g_producer_census_armed — armed by every Game's constructor, below
+#include "ot_attr.h"
 #include "xa_state.h"
 
+#include <cstdlib>
 #include <lucent/log.h>
 
 psx::game::HostIdentity Game::hostIdentity() const {
   const psx::game::HostIdentity *declared = runtime.hostIdentity();
   return declared ? *declared : psx::game::HostIdentity{};
+}
+
+psx::game::FrameDriver &Game::requireFrameDriver() const {
+  if (frameDriver == nullptr) {
+    lucent::error("frame-loop", "the title runtime installed no FrameDriver");
+    std::abort();
+  }
+  return *frameDriver;
 }
 
 Game::Game(psx::game::GameRuntime &runtime, const psx::config::Config &config)
@@ -42,9 +51,8 @@ void Game::wireRuntimeMembers() {
   rml_overlay.game = this;
   platform_hle.game = this;
   memcard.game = this;
-  dbg_server.game = this;
   mods.declareTitleSettings(runtime.titleIntSettings());
-  mods.init(runtime.interpolates(), config.fps60);
+  mods.init(runtime.interpolates());
   core.rsub.mode.setPath(psx::config::render_path());
   lucent::info("render", "render path: {}", psx::gpu::renderPathName(core.rsub.mode.path()));
   cdc.reset();

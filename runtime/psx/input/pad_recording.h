@@ -1,14 +1,4 @@
-// pad_recording.h — the phase-keyed .pad recording: its in-memory form, its file format, and the
-// streaming sink that writes it while a session is being played.
-//
-// WHY THE FORMAT CHANGED. The original .pad was one uint16 mask per pad-service frame from boot.
-// Replaying it assumed every boot, load and menu took exactly as many frames as when it was
-// recorded, and assumed the memory card held what it held then. Spyro's only gameplay route
-// (spyro issue 0116) broke on the second assumption: recorded against a card that held a save, it
-// was replayed against one that did not, the menu took a different branch, and the recorded presses
-// answered a dialog they were never meant for, silently. This format stores both facts the old one
-// could not: which PHASE each frame belongs to (input_phase.h), and the identity of the card image
-// the recording started from.
+// The phase-keyed .pad recording: in-memory form, file format and streaming sink.
 //
 // FILE LAYOUT, version 1, all integers little-endian:
 //
@@ -19,14 +9,11 @@
 //   records  'P' u64 phase                 a new phase was entered; the runs that follow belong to it
 //            'R' u16 mask  u32 frames      `frames` consecutive pad frames with one active-low mask
 //
-// A run before the first phase record, a phase record with no runs, a zero-length run, a truncated
-// record, an unknown tag, an unknown version and a file without the magic are all REFUSED by name.
-// In particular the pre-v1 raw format is refused, never read as absolute input: it carries neither
-// phase nor card identity, which is the defect this format exists to end. `tools/psx_pad.py migrate`
-// converts one into a v1 file with a single explicitly UNKEYED segment and an UNKNOWN card, which
-// preserves its from-boot meaning and says so in the header.
+// Malformed records and the pre-v1 raw format are refused by name; `tools/psx_pad.py migrate` converts raw files.
 #pragma once
 
+#include "blob_codec.h"
+#include "host_input.h"
 #include "input_phase.h"
 
 #include <array>
@@ -40,8 +27,6 @@
 #include <vector>
 
 namespace psx::input {
-
-inline constexpr std::uint16_t kNeutralMask = 0xFFFFu; // active-low: no button held
 
 // A phase as a log reads it: hex, or "unkeyed" for kUnkeyedPhase.
 std::string describePhase(std::uint64_t phase);
@@ -65,14 +50,14 @@ struct CardSnapshot {
 };
 
 struct PadRun {
-  std::uint16_t mask = kNeutralMask;
+  std::uint16_t mask = kNoButtons;
   std::uint32_t frames = 0;
 };
 
 // One serviced pad frame: the phase the game was in and the active-low mask it received.
 struct PadFrame {
   std::uint64_t phase = kUnkeyedPhase;
-  std::uint16_t mask = kNeutralMask;
+  std::uint16_t mask = kNoButtons;
 };
 
 // Every frame recorded while the game stayed in one phase, as run-length masks from phase entry.
@@ -85,7 +70,14 @@ struct PadSegment {
   std::uint16_t maskAt(std::uint32_t offset) const;
   // How many of the frames at or after `offset` hold any button. Zero means the rest is neutral.
   std::uint32_t inputFramesFrom(std::uint32_t offset) const;
+  // An unkeyed segment matches every phase.
+  bool matches(std::uint64_t observedPhase) const {
+    return phase == kUnkeyedPhase || phase == observedPhase;
+  }
 };
+
+// What appending one frame did to the recording's segments and runs.
+enum class PadAppend : std::uint8_t { Extended, NewRun, NewSegment };
 
 struct DecodedPadRecording;
 
@@ -102,8 +94,8 @@ public:
 
   explicit PadRecording(CardIdentity card = {});
 
-  // A phase different from the previous frame's opens a new segment.
-  void append(PadFrame frame);
+  // A phase different from the previous frame's opens a new segment; a new mask opens a run.
+  PadAppend append(PadFrame frame);
 
   const CardIdentity &card() const {
     return card_;
@@ -123,10 +115,10 @@ public:
 
   static DecodedPadRecording decode(std::span<const std::uint8_t> bytes);
 
-  // Record encoders, shared with the streaming writer so there is one spelling of each record.
-  static void putHeader(std::vector<std::uint8_t> &out, const CardIdentity &card);
-  static void putPhase(std::vector<std::uint8_t> &out, std::uint64_t phase);
-  static void putRun(std::vector<std::uint8_t> &out, PadRun run);
+  // Record encoders, shared with the streaming writer.
+  static void putHeader(psx::platform::BlobWriter &out, const CardIdentity &card);
+  static void putPhase(psx::platform::BlobWriter &out, std::uint64_t phase);
+  static void putRun(psx::platform::BlobWriter &out, PadRun run);
 
 private:
   CardIdentity card_;
@@ -140,10 +132,7 @@ struct DecodedPadRecording {
   std::string error; // set exactly when `recording` is empty
 };
 
-// The live sink behind PSXPORT_PAD_RECORD. Every frame reaches the file before the next one is
-// serviced: a new run is appended, or the current run's frame count is rewritten in place, and the
-// stream is flushed. A session that crashes therefore leaves a file that decodes up to its last frame,
-// which is the frame a crash repro most needs.
+// PSXPORT_PAD_RECORD's sink: each frame is flushed before the next, so a crash leaves a file decodable to its last frame.
 class PadRecordingWriter {
 public:
   // Null with `error` set when the file cannot be created or the header cannot be written.
@@ -154,20 +143,16 @@ public:
   PadRecordingWriter(PadRecordingWriter &&) = delete;
   PadRecordingWriter &operator=(PadRecordingWriter &&) = delete;
 
-  // False once a write has failed; the failure is logged once and later frames are not written.
-  bool append(PadFrame frame);
+  // Writes what PadRecording::append did with `frame`; false once a write has failed.
+  bool append(PadFrame frame, PadAppend what);
 
 private:
   PadRecordingWriter() = default;
-  bool write(const std::vector<std::uint8_t> &bytes);
+  bool write(std::span<const std::uint8_t> bytes);
   bool fail(const char *what);
 
   std::ofstream file_;
   bool failed_ = false;
-  bool havePhase_ = false;
-  std::uint64_t phase_ = kUnkeyedPhase;
-  bool haveRun_ = false;
-  std::uint16_t runMask_ = kNeutralMask;
   std::uint32_t runFrames_ = 0;
   std::streamoff runFramesPos_ = -1; // file offset of the open run's frame count
 };

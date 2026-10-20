@@ -1,17 +1,5 @@
-// coro.h — a cooperative fiber implemented as a thread that BLOCKS on a condvar at a yield.
-//
-// WHY: guest execution can only ENTER a guest function at
-// its top, so it cannot resume a cooperative PSX task at the mid-function PC where it yielded. A longjmp
-// yield UNWINDS the C stack, destroying the resume point. A Coro instead runs the task body on its OWN
-// thread and "yields" by BLOCKING that thread — the C stack (the whole nested guest call chain) is
-// preserved, so resuming continues exactly where it left off, mid-function, executor-only. (USER
-// directive 2026-06-30: "the PSX path needs to work executor-only; condvars with pause-resume.")
-//
-// It is a FIBER, not real concurrency: strict ping-pong, exactly one side runnable at a time. The
-// scheduler calls resume() and blocks until the body calls yield() (still alive) or returns (finished).
-// The body calls yield() and blocks until the next resume(). So guest register state (Core::r[], shared,
-// single copy) is never touched by two parties at once — the scheduler save/restores it around the
-// handoff exactly as the old longjmp scheduler did.
+// A cooperative fiber as a thread that blocks on a condvar at each yield, so a guest task resumes mid-function.
+// Strict ping-pong: exactly one side runs at a time.
 #pragma once
 
 #include <condition_variable>

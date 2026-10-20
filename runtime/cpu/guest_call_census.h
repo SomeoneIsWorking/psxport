@@ -16,17 +16,8 @@ public:
   // call in the per-call line; a call that returned inside its first turn is counted and not logged.
   void recordCompleted(std::uint32_t entry, std::uint32_t returnPc, std::uint32_t turns, std::uint64_t cycles);
 
-  [[nodiscard]] std::uint64_t completed() const {
-    return completed_;
-  }
-  [[nodiscard]] std::uint64_t resumed() const {
-    return resumed_;
-  }
   [[nodiscard]] std::uint32_t deepestTurns() const {
     return deepestTurns_;
-  }
-  [[nodiscard]] std::uint64_t resumedCycles() const {
-    return resumedCycles_;
   }
 
   // The run-end line, with its denominators. `why` names why the run ended.

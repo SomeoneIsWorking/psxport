@@ -1,18 +1,19 @@
 #include "execution_exit.h"
 
 #include "core.h"
+#include "emulated_time.h"
+#include "field_rate.h"
+#include "game.h"
 
 #include <lucent/log.h>
 
 namespace psx::cpu {
 
+// One display field of guest cycles at the core's display rate.
 ExecutionBudget ExecutionBudget::currentTurn(const Core &core) {
-  // The host-turn deadline is not represented as a public Core duration yet. Keep the temporary
-  // boundary finite and deterministic; the executor reports BudgetExhausted instead of extending it.
-  // Replacing this with the timing owner's measured deadline is tracked at the executor integration
-  // boundary, not duplicated by callers.
-  (void)core;
-  return fromCycles(33'868'800u / 60u);
+  const psx::frame::DisplayFieldRate rate =
+      core.game != nullptr ? core.game->timing.displayFieldRate() : psx::frame::DISPLAY_FIELD_RATE_NTSC;
+  return fromCycles(psx::frame::displayFieldCpuTicks(1, 1, psx::frame::fieldRateMilliHz(rate)));
 }
 
 const char *executionExitName(ExecutionExitReason reason) {

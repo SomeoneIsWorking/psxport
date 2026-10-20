@@ -3,6 +3,7 @@
 #include "core.h"
 #include "machine_snapshot.h"
 #include "override_differential_contract.h"
+#include "resumable_guest_call.h"
 #include "side_effect_journal.h"
 
 #include <lucent/log.h>
@@ -13,10 +14,7 @@
 namespace psx::cpu {
 namespace {
 
-inline constexpr std::uint32_t kStackPointer = 29;
-
-// Holds `flag` for one shadowed call so a selected override reached INSIDE either path is dispatched
-// normally rather than shadowed again: nesting would snapshot a half-run call and double-count it.
+// A selected override reached inside either path runs normally rather than shadowing a half-run call.
 class ShadowingScope {
 public:
   explicit ShadowingScope(bool &flag) : flag_(flag) {
@@ -39,15 +37,7 @@ DifferentialOutcome incomparable(std::string reason) {
   return outcome;
 }
 
-// THE JOURNAL'S PER-CALL BOUND, AS A VERDICT.
-//
-// It is a MISMATCH and not an INCOMPARABLE because those two answers mean opposite things to whoever
-// reads the gate. Incomparable is a statement about the CALL: "there was nothing here to compare", and
-// `failuresOf` treats a selector whose samples are all incomparable as a failure anyway, but a single
-// incomparable call among comparable ones is tolerated. A bound violation is a statement about a
-// LOG that could not be completed, so comparing around it would report agreement the run never
-// measured. Reporting it as mismatch makes the run FAIL, which is what the bound exists for: a
-// runaway override must come back as a verdict, not as a skip.
+// A journal overrun is a mismatch: comparing around a truncated log reports agreement never measured.
 DifferentialOutcome
 journalBoundFault(const DifferentialKeyStats &stats, const JournalBoundViolation &violation, std::size_t journaled) {
   DifferentialOutcome outcome;
@@ -109,8 +99,7 @@ OverrideDifferential::OverrideDifferential(Core &core, OverrideDifferentialConfi
                config_.firstCalls,
                config_.everyKth,
                config_.reportPath);
-  // Written at once, so a run that never reaches a selected override still leaves a report — one that
-  // says zero calls were sampled, which the gate reads as the failure it is.
+  // Written at once so a run that never reaches a selected override still reports zero samples.
   (void)writeReport(false);
 }
 
@@ -130,8 +119,7 @@ const std::vector<DifferentialKeyStats> &OverrideDifferential::keys() const {
 std::uint64_t OverrideDifferential::sampledFor(const DifferentialSelector &selector) const {
   std::uint64_t sampled = 0;
   for (const DifferentialKeyStats &stats : keys_) {
-    const bool matches = selector.address ? stats.key.address == *selector.address : stats.name == selector.text;
-    if (matches) {
+    if (selector.matches(stats.key.address, stats.name)) {
       sampled += stats.sampled;
     }
   }
@@ -140,7 +128,7 @@ std::uint64_t OverrideDifferential::sampledFor(const DifferentialSelector &selec
 
 bool OverrideDifferential::selects(NativeKey key, std::string_view name) const {
   return std::any_of(config_.selectors.begin(), config_.selectors.end(), [&](const DifferentialSelector &selector) {
-    return selector.address ? key.address == *selector.address : name == selector.text;
+    return selector.matches(key.address, name);
   });
 }
 
@@ -179,7 +167,7 @@ OverrideDifferential::intercept(NativeKey key, std::string_view name, NativeFunc
 ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, NativeFunction function) {
   const ShadowingScope shadowing(shadowing_);
   const NativeKey key = stats.key;
-  const std::uint32_t entrySp = core_.r[kStackPointer];
+  const std::uint32_t entrySp = core_.r[kSp];
   const MachineSnapshot entry = MachineSnapshot::capture(core_);
 
   // 1. The original, live: its device traffic reaches the devices and is journaled.
@@ -187,7 +175,7 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
   ExecutionResult original;
   {
     const SideEffectJournal::Scope journal(core_, live);
-    original = callOriginalResumingToExit(core_, key, ExecutionBudget::currentTurn(core_));
+    original = callOriginalResumingToExit(core_, stats.name, key);
   }
   if (!original.returned()) {
     // The run continues exactly where the original stopped; the native is never run for this call.
@@ -196,25 +184,18 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
                "original did not return: {} at 0x{:08X}", executionExitName(original.reason), original.guestPc)));
     return original;
   }
-  // Reported exactly as `invokeNativeFunction` reports the native it stands in for: a returned host
-  // service with no cycles of its own. The original's guest time was already accounted by the nested
-  // execution, so adding its cycles here would charge the caller's budget for them a second time.
+  // Reported as the native it stands in for: its guest time was already charged by the nested run.
   original.cycles = 0;
   original.detail = stats.name;
   if (live.unreplayable()) {
     record(stats, incomparable(*live.unreplayable()));
     return original;
   }
-  // THE ORIGINAL OVERRAN THE JOURNAL'S PER-CALL BOUND. Its log is truncated, so there is nothing to
-  // replay and the native must not run: the verdict is the fault, and the run continues from the
-  // original's state exactly as every other outcome does.
+  // A truncated original journal leaves nothing to replay; the native does not run.
   if (const auto &violation = live.boundViolation()) {
     record(stats, journalBoundFault(stats, *violation, live.effects().size()));
     return original;
   }
-  // The measurement `kMaxSideEffectsPerCall` is sized from, taken on the ORIGINAL's journal because
-  // that is the log the shadow path must reproduce — a native that made more effects than the original
-  // is already a mismatch the judge reports, and its own count is not what sizes the storage.
   if (live.effects().size() > stats.largestSampledCallEffects) {
     stats.largestSampledCallEffects = live.effects().size();
     stats.largestSampledCallNumber = stats.callsSeen;
@@ -228,16 +209,7 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
   bool stoppedAtBound = false;
   {
     const SideEffectJournal::Scope journal(core_, replay);
-    // THE RUNAWAY CASE. A native override that never returns kept appending to
-    // `replay` at ~6 MB/s until the host died. The journal now refuses past its per-call bound and
-    // raises out of HERE, where every frame is host code: a native body is the one place on a shadow
-    // path with no translated frame below it, which is why `refuseAtBound` throws only in that case.
-    //
-    // Nothing is decided in the catch. `NativeExecutionScope` has already restored the core's PC and
-    // active address by the time it runs, and the journal stays ATTACHED until this scope ends — so the
-    // state restore, the snapshot and the verdict all happen below with the journal detached, exactly
-    // as they do on every other path. Deciding here would mean writing to the Core and to `stats` from
-    // inside a catch, which is how a fault path ends up behaving differently from a normal one.
+    // A runaway native is stopped by the journal bound; host frames only, so throwing here is safe.
     try {
       native = invokeNativeFunction(core_, key.address, function, stats.name);
     } catch (const JournalBoundExceeded &) {
@@ -246,17 +218,12 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
   }
 
   if (stoppedAtBound) {
-    // 3. Continue from the original's state. The native was stopped MID-LOOP, so its state is DISCARDED
-    // rather than compared — comparing a partial body to a complete one would judge a call that never
-    // finished. Only the original's result reaches the caller.
+    // 3. Continue from the original's state; the partial native state is discarded, not compared.
     stats.restoredRanges += afterOriginal.restoreInto(core_).rangesWritten;
     ++stats.journalBoundFaults;
     if (!stats.firstJournalBoundFault) {
       stats.firstJournalBoundFault = replay.boundViolation();
     }
-    // `refuseAtBound` records the violation before it raises, so it is present by construction. The
-    // `value_or` is a total function over an absent record rather than an unhandled case, and its
-    // `describe()` still names the bound — so even a lost record reports the bound rather than nothing.
     record(
         stats,
         journalBoundFault(stats, replay.boundViolation().value_or(JournalBoundViolation{}), replay.effects().size()));

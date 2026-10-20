@@ -1,6 +1,4 @@
-// The comparison policy of the override differential: what an original and a native override must agree
-// on after one call, under the MIPS O32 contract. Pure — it reads two captured states and two journals and
-// never touches a Core — so the policy is testable on constructed states as well as through a real call.
+// override_differential_contract — what an original and its native override must agree on after one call (O32).
 #pragma once
 
 #include "execution_exit.h"
@@ -18,9 +16,7 @@ namespace psx::cpu {
 // The registers a caller may rely on after `jr $ra`: results v0/v1, callee-saved s0-s7 and s8/fp, and
 // gp/sp/ra. Everything else is caller-saved or kernel-reserved and is not compared.
 inline constexpr std::array<std::uint32_t, 14> kO32PreservedOrResultRegisters = {
-    2, 3, 16, 17, 18, 19, 20, 21, 22, 23, 28, 29, 30, 31};
-
-const char *mipsRegisterName(std::uint32_t index);
+    kV0, kV1, kS0, kS1, kS2, kS3, kS4, kS5, kS6, kS7, kGp, kSp, kFp, kRa};
 
 struct CallObservation {
   const MachineSnapshot &state;

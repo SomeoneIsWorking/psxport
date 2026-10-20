@@ -19,11 +19,25 @@ struct SDL_Gamepad; // opaque; only held as pointers (SDL build only)
 
 namespace psx::input {
 
-// PSX digital button bits are ACTIVE-LOW: a cleared bit is a pressed button, and nothing pressed is
-// every bit set. This owner and the pad it feeds both speak that layout, so nothing converts between
-// them, and these are the only spellings of it.
+// The digital pad's button bits; masks are active-low, so nothing pressed is every bit set.
 inline constexpr std::uint16_t kNoButtons = 0xFFFFu;
+inline constexpr std::uint16_t kButtonSelect = 0x0001u;
+inline constexpr std::uint16_t kButtonL3 = 0x0002u;
+inline constexpr std::uint16_t kButtonR3 = 0x0004u;
 inline constexpr std::uint16_t kButtonStart = 0x0008u;
+inline constexpr std::uint16_t kButtonUp = 0x0010u;
+inline constexpr std::uint16_t kButtonRight = 0x0020u;
+inline constexpr std::uint16_t kButtonDown = 0x0040u;
+inline constexpr std::uint16_t kButtonLeft = 0x0080u;
+inline constexpr std::uint16_t kButtonL2 = 0x0100u;
+inline constexpr std::uint16_t kButtonR2 = 0x0200u;
+inline constexpr std::uint16_t kButtonL1 = 0x0400u;
+inline constexpr std::uint16_t kButtonR1 = 0x0800u;
+inline constexpr std::uint16_t kButtonTriangle = 0x1000u;
+inline constexpr std::uint16_t kButtonCircle = 0x2000u;
+inline constexpr std::uint16_t kButtonCross = 0x4000u;
+inline constexpr std::uint16_t kButtonSquare = 0x8000u;
+inline constexpr std::uint16_t kButtonDirections = kButtonUp | kButtonRight | kButtonDown | kButtonLeft;
 
 class QuitScope;
 

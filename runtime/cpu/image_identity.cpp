@@ -1,5 +1,7 @@
 #include "image_identity.h"
 
+#include "guest_memory_map.h"
+
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
@@ -14,7 +16,7 @@ ImageIdentity ImageCatalog::activate(std::string_view name, GuestAddressRange ra
 }
 
 std::size_t ImageCatalog::subtractRange(ImageIdentity identity, GuestAddressRange physicalRange) {
-  if (!physicalRange.valid() || physicalRange.end > 0x20000000u) {
+  if (!physicalRange.valid() || physicalRange.end > psx::kPhysicalMask + 1u) {
     throw std::invalid_argument("image range subtraction requires a valid physical range");
   }
   const auto entry = std::find_if(entries_.begin(), entries_.end(), [identity](const Entry &candidate) {
@@ -56,7 +58,7 @@ bool ImageCatalog::deactivate(ImageIdentity identity) {
 }
 
 std::optional<ImageIdentity> ImageCatalog::resolve(std::uint32_t guestAddress) const {
-  const std::uint32_t physical = guestAddress & 0x1fffffffu;
+  const std::uint32_t physical = psx::physical(guestAddress);
   // Later activations have residency precedence. This allows a relocatable
   // module to cover part of a still-resident executable and makes unload
   // reveal the underlying image again without address-only collisions.
@@ -72,7 +74,7 @@ std::optional<ImageIdentity> ImageCatalog::resolve(std::uint32_t guestAddress) c
 }
 
 std::optional<ImageIdentity> ImageCatalog::resolve(GuestAddressRange physicalRange) const {
-  if (!physicalRange.valid() || physicalRange.end > 0x20000000u) {
+  if (!physicalRange.valid() || physicalRange.end > psx::kPhysicalMask + 1u) {
     return std::nullopt;
   }
   for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry) {

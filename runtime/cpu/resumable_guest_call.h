@@ -1,27 +1,6 @@
-// resumable_guest_call — one guest call that may legitimately cross host turns.
-//
-// The contract, in seven statements. Every one of them was previously re-derived by each title that
-// owned a native function that calls guest code:
-//
-//   1. the return address is captured BEFORE the first dispatch and reused on every resume, so a
-//      resume cannot adopt the nested `$ra` the guest body left behind and end the call elsewhere;
-//   2. it is also latched into `r[31]`, because the guest entry returns through `jr $ra`;
-//   3. every segment runs under `ExecutionBudget::currentTurn` - one display field - unless the
-//      caller names another budget;
-//   4. a segment that ends `BudgetExhausted` having consumed no cycles (or stopped at pc 0) made no
-//      progress and is REFUSED, never retried;
-//   5. the number of host turns a call may consume is a stated policy constant in display fields;
-//   6. a stop is classified as Returned / Suspended / Refused, so a caller never reads a fault or a
-//      yield as progress. A turn that ended BudgetExhausted, FrameBoundary or CooperativeYield is a
-//      SUSPENSION: the first ran out of cycles, the second reached the guest's own field barrier, and
-//      the third handed the turn back from a native replacement, and `CallStep::reason` says which.
-//
-//   7. the register file the call suspended with is kept and put back before the next segment, because
-//      the host work between two fields (input, audio, interrupt delivery, native guest calls)
-//      borrows the same registers and a call suspended mid-body needs every one of them.
-//
-// The ENTRY address, the RETURN address and the turn cap VALUE are the caller's facts. The loop,
-// the latch, the refusals and the classification are not.
+// resumable_guest_call — one guest call that may cross host turns: the return address is captured
+// before the first segment and latched into ra, each segment runs one display field, a turn that
+// suspends keeps its register file for the next, and a stop is Returned, Suspended or Refused.
 #pragma once
 
 #include "execution_exit.h"
@@ -41,8 +20,7 @@ namespace psx::cpu {
 // A turn cap that states no cap: the caller (a title's frame driver) is the thing bounding the call.
 inline constexpr std::uint32_t kUnboundedCallTurns = 0;
 
-// Far above anything a finite guest call measures, and reported per call so it is falsifiable from
-// the log rather than trusted.
+// Far above any finite guest call; each call's turns are reported.
 inline constexpr std::uint32_t kDefaultCallTurns = 8u;
 
 enum class CallOutcome : std::uint8_t {
@@ -58,10 +36,7 @@ struct CallStep {
   std::uint64_t cycles = 0;  // guest cycles over those turns
   std::uint32_t value = 0;   // r[2], once Returned
   std::string detail;        // the refusal, empty otherwise
-  // WHY the turn ended, so a caller that counts display fields can count the ones that are display
-  // fields. A title whose guest waits on VSync reaches FrameBoundary, and a title whose native
-  // replacement yields a slice reaches CooperativeYield; neither is a budget exhaustion, and both are
-  // a suspension rather than a fault.
+  // Why the turn ended: BudgetExhausted, FrameBoundary and CooperativeYield all suspend.
   ExecutionExitReason reason = ExecutionExitReason::GuestReturn;
 };
 
@@ -128,15 +103,15 @@ std::uint32_t callGuestToReturnResuming(Core &core,
                                         const std::optional<NativeKey> &original = std::nullopt,
                                         std::uint32_t turnCap = kDefaultCallTurns);
 
-// The same, for the ORIGINAL guest body at `guestAddress`: the key is resolved through the active
-// image identity (refused by name when no image owns it), the first segment runs with that key's
-// override suppressed, and every resumed segment re-establishes that suppression, so guest code
-// running inside the original cannot re-enter the override it is inside. This is the call an
-// override makes when it needs its own guest body back.
+// The same for the original body at `guestAddress`, its override suppressed on every segment.
 std::uint32_t callOriginalResumingToReturn(Core &core,
                                            std::string_view owner,
                                            std::uint32_t guestAddress,
                                            std::uint32_t returnPc,
                                            std::uint32_t turnCap = kDefaultCallTurns);
+
+// The original body of `key` (ra as the return), resumed only across exhausted turns; returns its
+// return or the first other exit, with the cycles of every turn, for a caller that reports a non-return.
+ExecutionResult callOriginalResumingToExit(Core &core, std::string_view owner, NativeKey key);
 
 } // namespace psx::cpu

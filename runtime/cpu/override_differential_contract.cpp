@@ -1,5 +1,7 @@
 #include "override_differential_contract.h"
 
+#include "gte_registers.h"
+
 #include <lucent/log.h>
 
 #include <algorithm>
@@ -10,11 +12,7 @@
 namespace psx::cpu {
 namespace {
 
-inline constexpr std::array<const char *, 32> kRegisterNames = {
-    "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
-    "s0",   "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "s8", "ra"};
-inline constexpr std::uint32_t kPhysicalMask = 0x1FFFFFFFu;
-inline constexpr std::uint32_t kRamMirrorSpan = 0x800000u;
+inline constexpr std::size_t kGteWords = sizeof(GteRawState::reg) / sizeof(std::uint32_t);
 inline constexpr std::uint32_t kShownBytes = 16;
 
 std::string hexWord(std::uint32_t value) {
@@ -23,14 +21,13 @@ std::string hexWord(std::uint32_t value) {
 
 // The physical window [begin, end) of callee-frame residue below the entry stack pointer.
 ByteRange deadStackWindow(DeadStack deadStack) {
-  const std::uint32_t physical = deadStack.entrySp & kPhysicalMask;
+  const std::uint32_t address = physical(deadStack.entrySp);
   std::uint32_t base = 0;
   std::uint32_t top = 0;
-  if (physical < kRamMirrorSpan) {
-    top = physical & (kMainRamBytes - 1u);
-    base = 0;
-  } else if (physical >= kScratchpadPhysicalBase && physical <= kScratchpadPhysicalBase + kScratchpadBytes) {
-    top = physical;
+  if (address < kRamMirrorSpan) {
+    top = *mainRamOffset(address);
+  } else if (address >= kScratchpadPhysicalBase && address <= kScratchpadPhysicalBase + kScratchpadBytes) {
+    top = address;
     base = kScratchpadPhysicalBase;
   } else {
     return {};
@@ -59,22 +56,15 @@ std::string hexBytes(const MachineSnapshot &state, ByteRange range) {
   return text;
 }
 
-// A GTE data register's ARCHITECTURAL value -- what MFC2 returns and what every GTE command reads --
-// from its storage word. The two writers of the one register file store the 16-bit registers
-// differently: Lightrec's MTC2 keeps the raw 32-bit word (`lightrec_mtc2`), while the GTE's own
-// register port (`GTE_WriteDR`, reached by native overrides through `gte_write_data`) sign-extends
-// VZ0..2 and IR0..3 on the way in. Both read back only the low halfword, signed for VZn/IRn and
-// unsigned for OTZ/SZn (`lightrec_mfc2`, Beetle's `Vectors(...)`), so the upper half of those words is
-// not machine state, and two paths that differ only there have done the same thing. Measured on Spyro
-// 2's sector walk, where retail moves a zero-extended `lhu` into VZ0 and an exact native override
-// differed from it in that register alone.
-std::array<std::uint32_t, kGteRegisterCount> architecturalGte(const std::array<std::uint32_t, kGteRegisterCount> &gte) {
-  std::array<std::uint32_t, kGteRegisterCount> words = gte;
-  for (const std::size_t index : {1u, 3u, 5u, 8u, 9u, 10u, 11u}) {
+// MFC2 reads VZn/IRn as a signed and OTZ/SZn as an unsigned halfword, so the upper half is not state.
+std::array<std::uint32_t, kGteWords> architecturalGte(const GteRawState &gte) {
+  std::array<std::uint32_t, kGteWords> words{};
+  std::copy_n(gte.reg, kGteWords, words.begin());
+  for (const std::uint32_t index : {gte::kVz0, gte::kVz1, gte::kVz2, gte::kIr0, gte::kIr1, gte::kIr2, gte::kIr3}) {
     words[index] =
-        static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(gte[index] & 0xFFFFu)));
+        static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(gte.reg[index] & 0xFFFFu)));
   }
-  for (const std::size_t index : {7u, 16u, 17u, 18u, 19u}) {
+  for (const std::uint32_t index : {gte::kOtz, gte::kSz0, gte::kSz1, gte::kSz2, gte::kSz3}) {
     words[index] &= 0xFFFFu;
   }
   return words;
@@ -98,7 +88,7 @@ void compareRegisters(const CallObservation &original, const CallObservation &na
     const std::uint32_t b = native.state.gpr[index];
     if (a != b) {
       ++outcome.registersDiffering;
-      noteFirst(outcome, {lucent::format("register {}", kRegisterNames[index]), hexWord(a), hexWord(b)});
+      noteFirst(outcome, {lucent::format("register {}", gprName(index)), hexWord(a), hexWord(b)});
     }
   }
   if (original.state.cop0[kCop0Status] != native.state.cop0[kCop0Status]) {
@@ -108,7 +98,7 @@ void compareRegisters(const CallObservation &original, const CallObservation &na
   }
   const auto originalGte = architecturalGte(original.state.gte);
   const auto nativeGte = architecturalGte(native.state.gte);
-  for (std::size_t index = 0; index < kGteRegisterCount; ++index) {
+  for (std::size_t index = 0; index < kGteWords; ++index) {
     const std::uint32_t a = originalGte[index];
     const std::uint32_t b = nativeGte[index];
     if (a != b) {
@@ -180,10 +170,6 @@ void compareSideEffects(const CallObservation &original, const CallObservation &
 }
 
 } // namespace
-
-const char *mipsRegisterName(std::uint32_t index) {
-  return index < kRegisterNames.size() ? kRegisterNames[index] : "?";
-}
 
 DifferentialOutcome
 judgeCompletedCall(const CallObservation &original, const CallObservation &native, DeadStack deadStack) {

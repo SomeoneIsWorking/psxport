@@ -16,13 +16,13 @@ ExecutionResult dispatchGuestWithArguments(Core &core,
     return {ExecutionExitReason::Fault, address, 0, "too many guest arguments"};
   }
   for (std::size_t index = 0; index < arguments.size(); ++index) {
-    core.r[4 + index] = arguments[index];
+    core.r[kA0 + index] = arguments[index];
   }
-  return dispatchGuest(core, address, budget, "guest_call.cpp: callGuest");
+  return dispatchGuest(core, address, budget, "dispatchGuestWithArguments");
 }
 
 std::uint32_t guestReturnValue(const Core &core) {
-  return core.r[2];
+  return core.r[kV0];
 }
 
 void dispatchGuestWithArgumentsToReturn(Core &core,

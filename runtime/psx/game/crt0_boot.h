@@ -1,302 +1,68 @@
-// crt0_boot.h — THE ONE derivation of a PSY-Q crt0's register/memory writes from
-// psx::game::Crt0Image, and the ONE place that decides whether a game's boot group is complete enough
-// to run.
-//
-// WHY THIS FILE EXISTS (megamanx4 docs/issues/0005). The first `Crt0Boot::run` was a faithful
-// transcription of the FIRST consumer's crt0 (Tomba!2, FUN_800896E0) wearing generic clothes. That was
-// established by MEASUREMENT, not by reading the C. The extractor is `tools/crt0_extract` (it shares
-// `psx::game::scanCrt0` with the boot-time audit, so the two cannot drift); run over Tomba!2's MAIN.EXE it
-// re-derives all NINE values Tomba2Engine's game_config.cpp had recorded independently by hand —
-// bssZeroLo/Hi, stackTopBase/2, heapBase, heapSizePtr, heapBasePtr, gp, libcInit — with zero
-// disagreements, which is what licenses trusting it on the five executables nobody had hand-RE'd.
-// Six of its ten steps generalise. Four did not:
-//
-//   1. it hardcoded `mem_r32(stackTopBase) - 8`. Tomba!2 / Spyro / Spider-Man / Vagrant Story really do
-//      `addi v0,v0,-8`; Mega Man X4's crt0 (0x800DAE8C) has NO bias instruction, so its sp came out
-//      0x801FFFF8 instead of 0x80200000 — and because the biased word also feeds the heap-size
-//      subtraction, the heap length was wrong by the same 8 bytes. MEASURED over all six executables
-//      by `tools/crt0_extract`: it is 4 biasing vs 2 not, because TOY STORY 2 also has no bias
-//      instruction (entry 0x80082D60, measured 0). So "-8 is the norm and X4 is the exception" was
-//      itself too small a sample — a third of the corpus does not bias.
-//   2/3. it stored the heap size and heap base to `heapSizePtr` / `heapBasePtr` UNCONDITIONALLY. X4's
-//      crt0 stores them NOWHERE (it passes both in registers; its only absolute store is `sw ra`), so
-//      those fields have no honest value — and left at 0, the framework wrote the heap size and base
-//      to GUEST ADDRESS 0x00000000 on every boot, silently, injecting two writes the real game never
-//      makes and diverging any RAM compare. A write through an unset pointer is the write-time form of
-//      "a diagnostic that can print nothing": it cannot fail visibly, so it never gets reported.
-//   4. it set only `c->r[4]` before dispatching `libcInit`. Both games' libcInit is the BIOS A(39h)
-//      `InitHeap(ptr, size)` thunk and BOTH pass the size in `a1`, so `c->r[5]` was whatever the
-//      register file happened to hold. This was a LIVE bug against the shipping consumer, not only a
-//      portability gap: hle.cpp's `case 0x39` reads a1 and Hle::heapInit copies it into `heap_size`,
-//      which is the arena capacity every BIOS malloc is measured against.
-//
-// THE SHAPE OF THE FIX. The arithmetic and every completeness decision live HERE, in a pure function
-// over (psx::game::Crt0Image, the two guest words it reads). `Crt0Boot::run` became a thin applier that
-// performs no arithmetic of its own, so the code the tests exercise IS the code that ships — there
-// is no helper beside the shipping path to drift from it.
-//
-// ABSENT vs UNSET, which is the distinction the old code could not express:
-//   * ABSENT   — "this guest crt0 has no such global". The typed store address is 0. That is a
-//                MEASURED answer, so the plan simply does not perform the store, and SAYS SO with
-//                the store count it did perform. Never a write to guest 0.
-//   * UNSET    — a REQUIRED value nobody has reverse-engineered yet. The plan REFUSES: `ok == false`,
-//                one error line naming every missing field AND the denominator (how many were
-//                checked), and the caller must not boot. Refusing is the only honest answer, because
-//                every remaining alternative fabricates guest state.
-//
-// WHAT A NEGATIVE PRINTS. `planCrt0` never returns quietly. A refusal names the fields and the count
-// checked; a success prints the whole applied group (sp/gp/a0/a1, the bss span, and which of the two
-// optional stores it performed out of how many the game declares). "No store performed" and "I was
-// never given an address" are therefore different lines, which is the entire point.
+// crt0_boot.h — a title's PSY-Q crt0 replayed natively: the boot group comes from scanCrt0 over the guest's own
+// prologue, planCrt0 is the arithmetic, applyCrt0 the write sequence.
 #pragma once
-#include "guest_address_range.h"
+
+#include "crt0_scan.h"
+
+#include <cstdint>
 
 class Core;
 
-#include <lucent/log.h>
-#include <stdint.h>
-#include <string>
-
 namespace psx::game {
 
-// A PSY-Q crt0's boot group, measured out of the title's executable. Zero is "not measured" for every
-// address; the stack bias is declared explicitly because 0 is a real measured value.
+// The executable's crt0 entry; everything else is decoded from the guest bytes there.
 struct Crt0Image {
-  GuestAddressRange bss;
-  uint32_t stackTopWordAddress = 0;
-  uint32_t stackReserveWordAddress = 0;
-  uint32_t heapBase = 0;
-  uint32_t heapSizeStoreAddress = 0;
-  uint32_t heapBaseStoreAddress = 0;
-  uint32_t globalPointer = 0;
-  uint32_t libcInitEntry = 0;
-  uint32_t crt0Entry = 0;
-
-  struct StackBias {
-    bool declared = false;
-    int32_t bytes = 0;
-  } stackBias;
+  std::uint32_t entry = 0;
 };
 
-} // namespace psx::game
+// A heap at or above 8 MiB (dev-unit RAM) is the subtraction underflowing on an unloaded word.
+inline constexpr std::uint32_t kCrt0MaxPlausibleHeap = 0x00800000u;
 
-// The largest heap a PSX crt0 can be computing. Main RAM is 2 MiB on retail and 8 MiB on a dev unit,
-// so a "heap size" at or above 8 MiB is not a heap size — it is the subtraction underflowing because
-// one of the two guest words was never loaded (a zero stack-top word makes `(v0 - v1) - a0` wrap to
-// something near 2^32). This is a RAM-map fact, not a tuned threshold: no value in [1, 8 MiB) is
-// rejected, so every real consumer's heap (Tomba!2 ~0xF9xxx, X4 0x820C8, Vagrant Story 0x1BBE50)
-// passes untouched.
-static const uint32_t CRT0_MAX_PLAUSIBLE_HEAP = 0x00800000u;
-
-// Crt0Plan — everything the guest crt0 does, COMPUTED BUT NOT YET APPLIED. `ok == false` means the
-// caller must refuse to boot; every other field is then meaningless and left zero.
+// The crt0's writes, computed but not applied. `ok == false` refuses the boot.
 struct Crt0Plan {
   bool ok = false;
-
-  uint32_t bssLo = 0, bssHi = 0; // .bss clear span, [lo, hi), word-stepped
-  uint32_t sp = 0, gp = 0;       // sp (== fp) and gp
-  uint32_t a0 = 0, a1 = 0;       // the libcInit arguments: heap base + 4, heap size
-  uint32_t libcInit = 0;         // the entry to dispatch once the writes are applied
-
-  // The two OPTIONAL absolute stores. `store*` false = this guest crt0 has no such global (ABSENT);
-  // the address is then 0 and must not be written.
+  std::uint32_t bssLo = 0; // [bssLo, bssHi), word-stepped
+  std::uint32_t bssHi = 0;
+  std::uint32_t sp = 0; // sp and fp
+  std::uint32_t gp = 0;
+  std::uint32_t a0 = 0; // InitHeap(heap base | KSEG0 + 4, heap size)
+  std::uint32_t a1 = 0;
+  std::uint32_t libcInit = 0;
   bool storeHeapSize = false;
-  uint32_t heapSizeAddr = 0;
+  std::uint32_t heapSizeAddr = 0;
   bool storeHeapBase = false;
-  uint32_t heapBaseAddr = 0;
-
-  // Intermediate values, kept because they are what a boot log needs to be readable.
-  uint32_t heapBaseMasked = 0; // heapBase & 0x1FFFFFFF
-  uint32_t stackTopWord = 0;   // mem[stackTopBase], as read
-  int32_t stackTopBias = 0;    // the guest crt0's own adjustment of that word
+  std::uint32_t heapBaseAddr = 0;
+  std::uint32_t heapBaseMasked = 0;
 };
 
-namespace psx {
+// `stackTopWord` and `stackReserveWord` are the two guest words the crt0 loads; `who` names the caller in the log.
+Crt0Plan planCrt0(const Crt0Scan &scan, std::uint32_t stackTopWord, std::uint32_t stackReserveWord, const char *who);
 
-// The required crt0 fields an image leaves unset; `planCrt0` refuses on any of them.
-struct Crt0Completeness {
-  std::string unset; // the unset field names, comma-separated; empty when the group is complete
-  int unsetCount = 0;
-  int required = 0;
-};
-
-inline Crt0Completeness crt0Completeness(const psx::game::Crt0Image &image) {
-  struct Required {
-    const char *name;
-    uint32_t value;
-  };
-  // Every one of these is an address in guest RAM (0x8xxxxxxx) or, for the bias declaration, an
-  // explicit flag, so ZERO is unambiguously "not reverse-engineered yet" and never a real value.
-  const Required required[] = {
-      {"bss.begin", image.bss.begin},
-      {"bss.end", image.bss.end},
-      {"stackTopWordAddress", image.stackTopWordAddress},
-      {"stackReserveWordAddress", image.stackReserveWordAddress},
-      {"heapBase", image.heapBase},
-      {"globalPointer", image.globalPointer},
-      {"libcInitEntry", image.libcInitEntry},
-      // The stack-top bias CANNOT use zero-means-absent: 0 is X4's real, measured value. So the
-      // declaration is explicit and separate from the value, and an undeclared bias refuses rather than
-      // inheriting the stock PSY-Q -8.
-      {"stackBias.declared", image.stackBias.declared},
-  };
-  Crt0Completeness result;
-  for (const Required &field : required) {
-    ++result.required;
-    if (field.value != 0u) {
-      continue;
-    }
-    result.unset += result.unset.empty() ? "" : ", ";
-    result.unset += field.name;
-    ++result.unsetCount;
+// Writes nothing for a refused plan. `Writer` provides w32(address, value), reg(index, value) and call(entry).
+template <class Writer> bool applyCrt0(const Crt0Plan &p, Writer &w) {
+  if (!p.ok) {
+    return false;
   }
-  return result;
+  for (std::uint32_t a = p.bssLo; a < p.bssHi; a += 4) {
+    w.w32(a, 0);
+  }
+  if (p.storeHeapSize) {
+    w.w32(p.heapSizeAddr, p.a1);
+  }
+  if (p.storeHeapBase) {
+    w.w32(p.heapBaseAddr, p.heapBaseMasked | 0x80000000u);
+  }
+  w.reg(28, p.gp);
+  w.reg(29, p.sp);
+  w.reg(30, p.sp);
+  w.reg(4, p.a0);
+  w.reg(5, p.a1);
+  w.call(p.libcInit);
+  return true;
 }
 
-} // namespace psx
-
-namespace psx::game {
-
-// planCrt0 — derive the plan, or refuse.
-//
-// `stackTopWord` / `stackReserveWord` are the two words the guest crt0 LOADS (mem[stackTopBase] and
-// mem[stackTopBase2]); they are passed in rather than read here so this function is pure and can be
-// exercised hermetically against the exact words a real boot saw.
-//
-// `who` names the caller in every emitted line (a boot has more than one Core: SBS boots two).
-inline Crt0Plan
-planCrt0(const psx::game::Crt0Image *image, uint32_t stackTopWord, uint32_t stackReserveWord, const char *who) {
-  Crt0Plan p;
-  if (!image) {
-    lucent::error("crt0",
-                  "{}: NO crt0 image — the boot group could not be read at all, so "
-                  "0 of 8 required fields were checked. Refusing to run a crt0 (the previous "
-                  "behaviour was to clear a zero-length .bss and write the heap base to guest "
-                  "0x00000000).",
-                  who);
-    return p;
-  }
-
-  // ── the REQUIRED group ──────────────────────────────────────────────────────────────────────────
-  const psx::Crt0Completeness completeness = psx::crt0Completeness(*image);
-  const int n_req = completeness.required;
-  const int n_missing = completeness.unsetCount;
-  if (n_missing) {
-    lucent::error("crt0",
-                  "{}: REFUSING TO BOOT — {} of {} required boot-group field(s) are UNSET: {}."
-                  "\n  This is an un-reverse-engineered crt0, not a framework failure. The "
-                  "group is consumed AS A GROUP: running it half-filled clears a wrong .bss "
-                  "span, builds sp from mem[0], and hands InitHeap a garbage size."
-                  "\n  Fill them in the Crt0Image the title passes to Crt0Boot, with a "
-                  "citation per field. `stackBias` must be stated explicitly even when the "
-                  "measured bias is 0 — see crt0_boot.h.",
-                  who,
-                  n_missing,
-                  n_req,
-                  completeness.unset);
-    return p;
-  }
-
-  // ── relations that must hold for the group to describe a crt0 at all ────────────────────────────
-  if (image->bss.end <= image->bss.begin || (image->bss.begin & 3u) || (image->bss.end & 3u)) {
-    lucent::error("crt0",
-                  "{}: REFUSING — .bss clear span [0x{:08X}, 0x{:08X}) is not a word-aligned "
-                  "non-empty range. All {} required fields are set, so this is a WRONG value, "
-                  "not a missing one.",
-                  who,
-                  image->bss.begin,
-                  image->bss.end,
-                  n_req);
-    return p;
-  }
-
-  // ── the arithmetic, in the guest's own order ─────────────────────────────────────────────────────
-  //   v0 = mem[stackTopBase] (+ bias)      sp = fp = v0 | 0x80000000
-  //   a0 = heapBase & 0x1FFFFFFF           a1 = (v0 - mem[stackTopBase2]) - a0
-  //   a0 |= 0x80000000                     libcInit(a0 + 4, a1)
-  const int32_t bias = image->stackBias.bytes;
-  const uint32_t v0 = (uint32_t)((int64_t)stackTopWord + bias);
-  const uint32_t a0m = image->heapBase & 0x1FFFFFFFu;
-  const uint32_t hsz = (v0 - stackReserveWord) - a0m;
-
-  if (hsz == 0 || hsz >= CRT0_MAX_PLAUSIBLE_HEAP) {
-    lucent::error("crt0",
-                  "{}: REFUSING — computed heap size 0x{:X} is not a heap size (0 or >= "
-                  "0x{:X}, the largest PSX main RAM). ((mem[0x{:08X}]=0x{:08X} {} {}) - "
-                  "mem[0x{:08X}]=0x{:08X}) - 0x{:08X}. Every required field is set, so one of "
-                  "the two loaded WORDS is wrong: the usual cause is a stackTopBase that does "
-                  "not name the stack-top global, whose word then reads 0 and underflows this "
-                  "subtraction. InitHeap would be handed this value as its arena capacity.",
-                  who,
-                  hsz,
-                  CRT0_MAX_PLAUSIBLE_HEAP,
-                  image->stackTopWordAddress,
-                  stackTopWord,
-                  bias < 0 ? "-" : "+",
-                  bias < 0 ? -(int64_t)bias : (int64_t)bias,
-                  image->stackReserveWordAddress,
-                  stackReserveWord,
-                  a0m);
-    return p;
-  }
-
-  p.ok = true;
-  p.bssLo = image->bss.begin;
-  p.bssHi = image->bss.end;
-  p.stackTopWord = stackTopWord;
-  p.stackTopBias = bias;
-  p.sp = v0 | 0x80000000u;
-  p.gp = image->globalPointer;
-  p.heapBaseMasked = a0m;
-  p.a0 = (a0m | 0x80000000u) + 4u;
-  p.a1 = hsz;
-  p.libcInit = image->libcInitEntry;
-  p.storeHeapSize = image->heapSizeStoreAddress != 0u;
-  p.heapSizeAddr = image->heapSizeStoreAddress;
-  p.storeHeapBase = image->heapBaseStoreAddress != 0u;
-  p.heapBaseAddr = image->heapBaseStoreAddress;
-
-  // The POSITIVE report. Printed at info on every boot, not behind a debug channel, because every
-  // number here is a guest fact that decides whether the game runs: an 8-byte sp error and a wrong
-  // InitHeap capacity both boot fine and fail somewhere else entirely. The store line states the
-  // denominator ("1 of 2 declared") so "stored nothing" is distinguishable from "was never asked to".
-  const int n_stores = (p.storeHeapSize ? 1 : 0) + (p.storeHeapBase ? 1 : 0);
-  lucent::info("crt0",
-               "{}: bss [0x{:08X},0x{:08X}) {} bytes | sp=fp=0x{:08X} (mem[0x{:08X}]=0x{:08X} "
-               "bias {}) | gp=0x{:08X} | heap base 0x{:08X} size 0x{:X} | libcInit 0x{:08X}"
-               "(a0=0x{:08X}, a1=0x{:X}) | {} of 2 declared absolute store(s)",
-               who,
-               p.bssLo,
-               p.bssHi,
-               p.bssHi - p.bssLo,
-               p.sp,
-               image->stackTopWordAddress,
-               stackTopWord,
-               bias,
-               p.gp,
-               a0m | 0x80000000u,
-               p.a1,
-               p.libcInit,
-               p.a0,
-               p.a1,
-               n_stores);
-  if (n_stores != 2) {
-    lucent::info("crt0",
-                 "{}: heap-size global {} / heap-base global {} — this crt0 keeps {} in "
-                 "REGISTERS ONLY, so no store is performed. That is a MEASURED absence "
-                 "(Crt0Image leaves the pointer 0), not a missing address: the framework used "
-                 "to write these to guest 0x00000000.",
-                 who,
-                 p.storeHeapSize ? "present" : "ABSENT",
-                 p.storeHeapBase ? "present" : "ABSENT",
-                 n_stores == 0 ? "both" : "one of them");
-  }
-  return p;
-}
-
-// Replays a title's crt0 on a Core: reads the two guest crt0 words, refuses an incomplete or
-// disagreeing group, then applies applyCrt0's write sequence and calls libcInit. No arithmetic of its
-// own; every value comes from planCrt0.
+// Scans the crt0 at the image's entry in guest RAM, refuses a group it cannot resolve, then applies the plan
+// and calls libcInit.
 class Crt0Boot {
 public:
   explicit Crt0Boot(const Crt0Image &image) : image_(image) {}
@@ -305,42 +71,5 @@ public:
 private:
   Crt0Image image_;
 };
-
-// applyCrt0 — APPLY a plan. Also here, and also templated, for ONE reason: the defect this file
-// exists to fix was not in the arithmetic, it was in the APPLICATION — an unconditional store
-// through the optional heap-size address when the address was absent. A test that only checked the plan would assert
-// `storeHeapSize == false` and still not know whether the caller honoured it. So the write SEQUENCE is
-// generated here, over an abstract writer, and the hermetic test drives it with a RECORDING writer that
-// asserts the set of addresses written — i.e. "no write to guest 0" is a checked postcondition of the
-// shipping code path rather than a property a human read off the applier.
-//
-// `Writer` must provide:
-//   void w32(uint32_t addr, uint32_t val);   // a guest word store
-//   void reg(int idx, uint32_t val);         // a guest register assignment
-//   void call(uint32_t entry);               // dispatch the guest libcInit
-//
-// Returns false (writing NOTHING) when the plan was refused, so a caller that forgot to check `ok`
-// still cannot fabricate guest state.
-template <class Writer> inline bool applyCrt0(const Crt0Plan &p, Writer &w) {
-  if (!p.ok) {
-    return false;
-  }
-  for (uint32_t a = p.bssLo; a < p.bssHi; a += 4) {
-    w.w32(a, 0); // .bss clear
-  }
-  if (p.storeHeapSize) {
-    w.w32(p.heapSizeAddr, p.a1); // heap-size global, IF ANY
-  }
-  if (p.storeHeapBase) {
-    w.w32(p.heapBaseAddr, p.heapBaseMasked | 0x80000000u); // heap-base global, IF ANY
-  }
-  w.reg(28, p.gp); // gp
-  w.reg(29, p.sp);
-  w.reg(30, p.sp); // sp, fp
-  w.reg(4, p.a0);  // a0 = heap base|KSEG0 + 4
-  w.reg(5, p.a1);  // a1 = heap size — WAS MISSING
-  w.call(p.libcInit);
-  return true;
-}
 
 } // namespace psx::game

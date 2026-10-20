@@ -1,6 +1,7 @@
 #include "title_selection.h"
 
 #include "disc_file.h"
+#include "psx_exe_image.h"
 
 #include <lucent/content.h>
 
@@ -12,12 +13,6 @@
 
 namespace psx::host {
 namespace {
-
-std::uint32_t readU32(std::span<const std::uint8_t> bytes, std::size_t offset) {
-  return static_cast<std::uint32_t>(bytes[offset]) | (static_cast<std::uint32_t>(bytes[offset + 1]) << 8u) |
-         (static_cast<std::uint32_t>(bytes[offset + 2]) << 16u) |
-         (static_cast<std::uint32_t>(bytes[offset + 3]) << 24u);
-}
 
 std::string hexadecimal(std::uint32_t value) {
   std::ostringstream stream;
@@ -51,26 +46,30 @@ selectExecutable(std::string_view serial, std::span<const std::uint8_t> bytes, s
                     expected,
                     "expected " + std::to_string(expected.fileSize) + " bytes, got " + std::to_string(bytes.size()));
   }
-  constexpr std::array<std::uint8_t, 8> kPsxExeMagic{'P', 'S', '-', 'X', ' ', 'E', 'X', 'E'};
-  if (bytes.size() < 0x800u || !std::ranges::equal(kPsxExeMagic, bytes.first(8))) {
-    return {SelectionStatus::InvalidExecutable, &expected, std::string(expected.serial) + " is not a PS-X EXE", index};
+  const psx::cpu::PsxExeParseResult parsed = psx::cpu::parsePsxExeImage(bytes);
+  if (!parsed) {
+    return {SelectionStatus::InvalidExecutable,
+            &expected,
+            std::string(expected.serial) + " is not a PS-X EXE: " + parsed.detail,
+            index};
   }
+  const psx::cpu::PsxExeImage &header = *parsed.image;
 
   struct HeaderFact {
-    std::size_t offset;
+    std::uint32_t actual;
     std::uint32_t expected;
     std::string_view name;
   };
   const std::array facts{
-      HeaderFact{0x10u, expected.entry, "entry"},
-      HeaderFact{0x14u, expected.globalPointer, "global pointer"},
-      HeaderFact{0x18u, expected.textAddress, "text address"},
-      HeaderFact{0x1Cu, expected.textSize, "text size"},
-      HeaderFact{0x30u, expected.stackAddress, "stack address"},
-      HeaderFact{0x34u, expected.stackOffset, "stack offset"},
+      HeaderFact{header.entry, expected.entry, "entry"},
+      HeaderFact{header.globalPointer, expected.globalPointer, "global pointer"},
+      HeaderFact{header.textAddress, expected.textAddress, "text address"},
+      HeaderFact{header.textBytes, expected.textSize, "text size"},
+      HeaderFact{header.stackBase, expected.stackAddress, "stack address"},
+      HeaderFact{header.stackOffset, expected.stackOffset, "stack offset"},
   };
   for (const HeaderFact &fact : facts) {
-    const std::uint32_t actual = readU32(bytes, fact.offset);
+    const std::uint32_t actual = fact.actual;
     if (actual != fact.expected) {
       return mismatch(catalog,
                       expected,

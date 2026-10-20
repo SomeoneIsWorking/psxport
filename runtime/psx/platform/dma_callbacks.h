@@ -5,6 +5,8 @@
 // only: the title body still performs the measured DICR read/modify/write that arms its channel.
 #pragma once
 
+#include "dma_irq.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -13,21 +15,11 @@ namespace psx::hle {
 class StockDmaCallbacks;
 }
 
-enum class DmaChannel : uint8_t {
-  MdecIn = 0,
-  MdecOut = 1,
-  Gpu = 2,
-  Cdrom = 3,
-  Spu = 4,
-  Pio = 5,
-  Otc = 6,
-};
-
 class DmaCallbackRegistry {
 public:
   // Sony DMACallback returns the callback previously registered for this channel.
-  uint32_t exchange(DmaChannel channel, uint32_t callback);
-  uint32_t current(DmaChannel channel) const;
+  uint32_t exchange(psx::dma::DmaChannel channel, uint32_t callback);
+  uint32_t current(psx::dma::DmaChannel channel) const;
 
   // The title's guest-RAM table, owned by its session; null keeps the native registry.
   void bindGuestTable(const psx::hle::StockDmaCallbacks &table) {
@@ -38,10 +30,10 @@ public:
   }
 
 private:
-  static constexpr std::size_t index(DmaChannel channel) {
+  static constexpr std::size_t index(psx::dma::DmaChannel channel) {
     return static_cast<std::size_t>(channel);
   }
 
-  std::array<uint32_t, 7> callbacks_{};
+  std::array<uint32_t, psx::dma::kChannelCount> callbacks_{};
   const psx::hle::StockDmaCallbacks *guestTable_ = nullptr;
 };

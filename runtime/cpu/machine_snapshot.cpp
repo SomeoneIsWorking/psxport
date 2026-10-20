@@ -59,8 +59,7 @@ MachineSnapshot MachineSnapshot::capture(const Core &core) {
   snapshot.lo = core.lo;
   snapshot.pc = core.pc;
   std::copy_n(core.cop0, snapshot.cop0.size(), snapshot.cop0.begin());
-  std::copy_n(core.gte().registers().REG, snapshot.gte.size(), snapshot.gte.begin());
-  snapshot.gteFlags = core.gte().registers().FLAGS;
+  snapshot.gte = core.gte().saveRaw();
   snapshot.ram.assign(core.ram, core.ram + kMainRamBytes);
   snapshot.scratchpad.assign(core.scratch, core.scratch + kScratchpadBytes);
   return snapshot;
@@ -68,13 +67,12 @@ MachineSnapshot MachineSnapshot::capture(const Core &core) {
 
 RestoreReport MachineSnapshot::restoreInto(Core &core) const {
   std::copy(gpr.begin(), gpr.end(), core.r);
-  core.r[0] = 0;
+  core.r[kZero] = 0;
   core.hi = hi;
   core.lo = lo;
   core.pc = pc;
   std::copy(cop0.begin(), cop0.end(), core.cop0);
-  std::copy(gte.begin(), gte.end(), core.gte().registers().REG);
-  core.gte().registers().FLAGS = gteFlags;
+  core.gte().restoreRaw(gte);
   RestoreReport report;
   restoreRegion(core, {core.ram, kMainRamBytes}, ram, 0, report);
   restoreRegion(core, {core.scratch, kScratchpadBytes}, scratchpad, kScratchpadPhysicalBase, report);

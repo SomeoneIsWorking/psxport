@@ -22,9 +22,9 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Title catalog | `runtime/psx/catalog/` | `TitleCatalog`, `SingleTitleCatalog`, `TitleIdentity`, selection, availability, logo image |
 | Title interface | `runtime/psx/game/game_runtime.*` | `GameRuntime`, `FrameDriver`, `TitleSessionState`, `TitleAudio`, `TitleDevWarp`, `HostIdentity` |
 | Game composition | `runtime/psx/game/game.*` | One title's `Core`, devices, presenters and session; `Game::wireRuntimeMembers` |
-| Title commands | `runtime/psx/game/title_command.*` | One capture of a title command's reply for the REPL and the Debug tab |
-| Crt0 replay | `runtime/psx/game/crt0_boot.*`, `runtime/psx/boot/crt0_verify.h` | `Crt0Boot::run` over a title's `Crt0Image`, the completeness refusal and the guest-bytes audit |
-| Executable admission | `runtime/psx/game/psx_exe_image.*`, `disc_executable.h` | Mapping an authenticated PS-X EXE and its entry registers |
+| Title commands | `runtime/psx/game/title_command.*` | One capture of a title command's reply for the debug verbs and the Debug tab |
+| Crt0 replay | `runtime/psx/game/crt0_boot.*`, `runtime/psx/game/crt0_scan.h` | `scanCrt0` decodes the boot group from the guest prologue at the title's `Crt0Image::entry`; `planCrt0` refuses an unresolved group; `Crt0Boot::run` applies it |
+| Executable admission | `runtime/psx/game/psx_exe_image.*`, `disc_executable.h` | `parsePsxExeImage` reads the header; `loadTopLevelPsxExe` maps a top-level EXE, sets its entry registers and names it by `code_module::digest` |
 | Packet pool layouts | `runtime/psx/game/guest_packet_pool_windows.*` | The layouts a title answers `packetPool` with |
 | Title settings | `runtime/psx/game/title_settings.h` | `TitleIntSetting` rows a title declares |
 | Canonical PSX state | `runtime/psx/core/core.*` | Per-Core registers, RAM, scratchpad, device ownership |
@@ -87,8 +87,9 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Configuration | `runtime/psx/config/config.*`, `config_var.h`, `config_vars.h`, `diagnostic_config.*`, `number_text.*` | The CVar ladder, typed accessors, `launch_setting`, number and list parsing |
 | Launch config | `runtime/psx/config/typed_config.*` | The immutable `psx::config::Config` on `game.config` |
 | Title enhancement knobs | `runtime/psx/config/enhancement_gate.h`, `stepped_range.h` | `pc_enh` gates and stepped menu rows |
-| Control channel | `runtime/psx/debug/dbg_server.*`, `command_args.*` | The loopback automation endpoint |
-| REPL | `runtime/psx/debug/repl.*` | Interactive inspection |
+| Debug verbs | `runtime/psx/debug/debug_commands.*`, `command_args.*` | `DebugCommands`: the one table of verbs (memory, pad, capture, state, otattr, ...) both transports run, answering through a line sink, then the title's command |
+| Control channel | `runtime/psx/debug/dbg_server.*` | The loopback endpoint: `DebugChannel` hands one command to the main thread; pause/step/frame are its own verbs |
+| REPL | `runtime/psx/debug/repl.*` | The stdin transport: run/step/newgame/skip/end are its own verbs |
 | Producer census | `runtime/psx/debug/producer_census.*`, `ot_attr.*` | Primitives per guest submitter, keyed and rendered |
 | Diagnostics | `runtime/psx/debug/` (`gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `diagnostic_run.h`) | Dumps, counters and capture |
 | Live mods | `runtime/psx/debug/mods.*` | Per-Game player toggles (`aspect`, `ires`, `fps60`, the selector layout) and the settings file |

@@ -1,75 +1,41 @@
-#ifndef PSXPORT_CONFIG_H
-#define PSXPORT_CONFIG_H
-// config.h — the CVar REGISTRY: lookup, mutation from the outside world, and introspection.
-//
-// Include config_var.h if you only need to READ a knob. This header is the mutation and reporting
-// surface, and it is deliberately small so that "what can change a knob" stays answerable.
-// THE PART THAT MATTERS MOST: audit_environment() / report().
-//
-// Every knob can be asked whether it exists, what it resolves to and which layer that came from, and
-// every PSXPORT_* variable found in the environment is classified into one of exactly three buckets,
-// one of which is "this did nothing".
-//
-// The audit reports its DENOMINATOR and its BLIND SPOT even when it finds nothing, because "0
-// unknown" and "the audit never ran" must not print the same way.
+// The knob registry's outside surface: launch settings, the environment audit, runtime changes and the report.
+#pragma once
 #include "config_var.h"
 
-#include <cstddef>
-#include <functional>
 #include <initializer_list>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace psx::config {
 
-// --- lookup ------------------------------------------------------------------------------------
-CVarBase *find(std::string_view name);                     // null if not declared
-void enumerate(const std::function<void(CVarBase &)> &fn); // every declared CVar, name order
-std::size_t registered_count();
+const char *layer_name(Layer layer);
 
-// --- title-supplied launch settings ----------------------------------------------------------------
-// The first of `keys` set in the environment, else the first set in ./.env; empty when none is. For
-// the disc and card paths a title identity names; each key is recorded for the audit.
+// The first of `keys` set in the environment, else in ./.env; empty when none is. Each key counts as known to the audit.
 std::string launch_setting(std::initializer_list<const char *> keys);
 
-// --- the environment audit -----------------------------------------------------------------------
 struct EnvAudit {
-  // "NAME=value" for every PSXPORT_* variable present in the environment. The denominator.
-  std::vector<std::string> set_in_env;
-  std::vector<std::string> declared; // names matching a registered CVar
-  std::vector<std::string> identity; // names a title supplied to launch_setting() this run
-  std::vector<std::string> unknown;  // names matching NEITHER — these did nothing
+  std::vector<std::string> set_in_env; // every PSXPORT_* variable present, "NAME=value"
+  std::vector<std::string> declared;
+  std::vector<std::string> identity; // keys a title passed to launch_setting()
+  std::vector<std::string> unknown;  // matched nothing, so did nothing
 };
 EnvAudit audit_environment();
 
-// Log the whole configuration state: every declared CVar with its value and resolving layer, every
-// title-supplied key, then the audit with its denominator and its blind spot. `unknown` entries
-// come out at WARN. Safe to call more than once (the boot call is one-shot via report_once()).
+// Every knob with its value and layer when `withKnobs`, then the audit; WARN-worthy lines start with "UNKNOWN".
+std::vector<std::string> cvar_report_lines(bool withKnobs);
 void report();
-// The boot call. Also arms report_exit_audit() via std::atexit, so a cleanly-exiting run gets the
-// audit again with nothing left unread. A run killed by a signal does not — see the comment on
-// report_exit_audit in config.cpp, and use `cvars` over the debug server for a live answer.
+// The boot report, plus the audit again at a clean exit.
 void report_once();
-void report_exit_audit();
 
-// Prove the environment audit reports both a known and an unknown variable.
-bool selftest();
-
-// --- mutation from outside -------------------------------------------------------------------------
-// Returns false if the name is not a declared CVar, or the text does not parse for its Kind. Both
-// are reported; neither is swallowed.
-bool set_from_settings_file(std::string_view name, std::string_view text); // -> Layer::Value
-bool set_runtime(std::string_view name, std::string_view text);            // -> Layer::Runtime (REPL)
+// This run only; false (and logged) for an unknown name or text that does not parse.
+bool set_runtime(std::string_view name, std::string_view text);
 bool clear_runtime(std::string_view name);
-
-// PSXPORT_DEBUG's value lives in lucent::enable_channels: record at the Runtime layer the channel set a
-// console command just applied, so the dump says what is live and where it came from. Records; does not apply.
+// Records at the Runtime layer the PSXPORT_DEBUG channel set a console command applied.
 void note_runtime_debug_channels(std::string_view channels);
 
-// Forget every environment binding so a subsequent read re-reads the environment. For tests, which
-// need setenv() to take effect. Pair it with lucent::config::reset_cache().
-void reset_for_test();
+// The settings file (PSXPORT_SETTINGS): every saved knob's Value layer.
+void load_settings();
+bool save_settings();
 
 } // namespace psx::config
-
-#endif // PSXPORT_CONFIG_H

@@ -9,7 +9,6 @@ void HostDispatchVerdictCache::observe(const DispatchEpoch &epoch) {
     return;
   }
   epoch_ = epoch;
-  ++stats_.flushes;
   // A generation is never reused, so no slot has to be touched to discard what it holds. The counter
   // wrapping would revive a slot from four billion flushes ago; clearing then keeps that impossible.
   if (++generation_ == 0) {
@@ -25,10 +24,8 @@ HostDispatchVerdictCache::Slot &HostDispatchVerdictCache::slotFor(std::uint32_t 
 std::optional<GuestHostDispatchKind> HostDispatchVerdictCache::find(std::uint32_t guestAddress) {
   const Slot &slot = slotFor(guestAddress);
   if (slot.generation != generation_ || slot.address != guestAddress) {
-    ++stats_.misses;
     return std::nullopt;
   }
-  ++stats_.hits;
   return slot.kind;
 }
 

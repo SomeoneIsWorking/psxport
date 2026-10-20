@@ -112,7 +112,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/game/title_command.cpp:runTitleCommand`, `psx/debug/dbg_server.cpp:DbgServer` → `GameRuntime::titleCommand` | `titleCommand` |
+| 1 | `psx/debug/debug_commands.cpp:DebugCommands::run` → `psx/game/title_command.cpp:runTitleCommand` → `GameRuntime::titleCommand` | `titleCommand` |
 | 2 | `ui/warp_control.cpp:WarpControl::titleWarp` → `GameRuntime::devWarp` | `devWarp` |
 | 3 | `ui/menu_readouts.cpp:MenuReadouts::update` → `GameRuntime::worldReadout` | `worldReadout` |
 | 4 | `psx/debug/producer_census.h:ProducerCensus` — primitives per producer, keyed and rendered | |

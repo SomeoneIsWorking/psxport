@@ -42,7 +42,7 @@ public:
   bool titleCommand(Core &core, const psx::game::TitleCommandLine &input, FILE *out) override;
 
   // The command logic itself, which needs no Core: a hermetic test drives it directly.
-  bool handle(const char *cmd, const char *line, FILE *out);
+  bool handle(const psx::debug::CommandArgs &args, FILE *out);
   // The panel count is the content's own, so `select left|right` cannot resolve a panel that does
   // not exist.
   void setSelection(int selected);

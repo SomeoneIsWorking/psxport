@@ -2,49 +2,28 @@
 
 #include "picker_composite.h"
 
-#include <cctype>
-#include <cstring>
 #include <format>
 #include <string_view>
 
 namespace psx::host {
-namespace {
-
-// Whatever follows the first `skipBytes` bytes of the whole command line. Trimmed here because an
-// argument still carrying the newline names a different path on a terminal than on a socket.
-std::string_view arguments(const char *line, std::size_t skipBytes) {
-  std::string_view rest(line + skipBytes);
-  while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t')) {
-    rest.remove_prefix(1);
-  }
-  while (!rest.empty() && std::isspace(static_cast<unsigned char>(rest.back()))) {
-    rest.remove_suffix(1);
-  }
-  return rest;
-}
-
-constexpr const char *kPickerShotCommand = "picker shot";
-
-} // namespace
-
 bool PickerRuntime::titleCommand(Core &, const psx::game::TitleCommandLine &input, FILE *out) {
-  return handle(input.command, input.line, out);
+  return handle(input.args, out);
 }
 
 void PickerRuntime::setSelection(int selected) {
   selected_ = selected;
 }
 
-bool PickerRuntime::handle(const char *cmd, const char *line, FILE *out) {
+bool PickerRuntime::handle(const psx::debug::CommandArgs &args, FILE *out) {
   if (!content_) {
     return false;
   }
-  if (std::strcmp(cmd, "picker") == 0) {
-    const std::string_view rest = arguments(line, std::strlen(cmd));
+  const std::string_view cmd = args.word(0);
+  if (cmd == "picker") {
     // The composited frame — every panel, dividers and screen text — since no single
     // session's present shot can see a frame the host assembled from three.
-    if (rest.starts_with("shot")) {
-      const std::string path(arguments(line, std::strlen(kPickerShotCommand)));
+    if (args.word(1) == "shot") {
+      const std::string path(args.rest(2));
       if (path.empty() || composite_ == nullptr) {
         std::fprintf(out, "refused: picker shot needs a path and a composited frame\n");
         return true;
@@ -56,8 +35,8 @@ bool PickerRuntime::handle(const char *cmd, const char *line, FILE *out) {
     std::fputs(content_->listing().c_str(), out);
     return true;
   }
-  if (std::strcmp(cmd, "pick") == 0) {
-    const std::string slug(arguments(line, std::strlen(cmd)));
+  if (cmd == "pick") {
+    const std::string slug(args.rest(1));
     std::string refusal;
     if (const TitleAvailability *title = content_->findAvailable(slug, refusal)) {
       pendingSlug_ = std::string(title->identity->slug);
@@ -69,8 +48,8 @@ bool PickerRuntime::handle(const char *cmd, const char *line, FILE *out) {
     }
     return true;
   }
-  if (std::strcmp(cmd, "select") == 0) {
-    const std::string_view argument(arguments(line, std::strlen(cmd)));
+  if (cmd == "select") {
+    const std::string_view argument = args.rest(1);
     const int panelCount = content_->panelCount();
     if (panelCount <= 0) {
       std::fprintf(out, "refused: there are no panels to select\n");

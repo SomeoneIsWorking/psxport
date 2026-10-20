@@ -1,30 +1,14 @@
 #include "override_differential_config.h"
 
+#include "number_text.h"
+
 #include <lucent/log.h>
 
-#include <charconv>
 #include <limits>
 #include <utility>
 
 namespace psx::cpu {
 namespace {
-
-bool isSeparator(char c) {
-  return c == ',' || c == ' ' || c == '\t';
-}
-
-std::optional<std::uint32_t> parseAddress(std::string_view token) {
-  if (token.size() < 3 || token[0] != '0' || (token[1] != 'x' && token[1] != 'X')) {
-    return std::nullopt;
-  }
-  const std::string_view digits = token.substr(2);
-  std::uint32_t value = 0;
-  const auto [end, status] = std::from_chars(digits.data(), digits.data() + digits.size(), value, 16);
-  if (status != std::errc{} || end != digits.data() + digits.size()) {
-    return std::nullopt;
-  }
-  return value;
-}
 
 bool isAddressToken(std::string_view token) {
   return token.size() >= 2 && token[0] == '0' && (token[1] == 'x' || token[1] == 'X');
@@ -45,23 +29,10 @@ OverrideDifferentialConfig overrideDifferentialConfigFrom(std::string_view selec
                                                           std::int64_t deadStackBytes,
                                                           std::string_view reportPath) {
   OverrideDifferentialConfig config;
-  std::size_t at = 0;
-  while (at < selectors.size()) {
-    while (at < selectors.size() && isSeparator(selectors[at])) {
-      ++at;
-    }
-    std::size_t end = at;
-    while (end < selectors.size() && !isSeparator(selectors[end])) {
-      ++end;
-    }
-    if (end == at) {
-      break;
-    }
-    const std::string_view token = selectors.substr(at, end - at);
-    at = end;
+  for (const std::string_view token : psx::config::splitList(selectors, psx::config::kListSeparators)) {
     DifferentialSelector selector{std::string(token), std::nullopt};
     if (isAddressToken(token)) {
-      selector.address = parseAddress(token);
+      selector.address = psx::config::parseUnsigned(token, 16);
       if (!selector.address) {
         config.error = lucent::format("selector '{}' starts with 0x but is not a 32-bit hex address", token);
       }

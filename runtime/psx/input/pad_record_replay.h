@@ -58,8 +58,8 @@ public:
   // `live` is the mask every other input source resolved to; `repl` is the live REPL drive, which a
   // replay merges rather than swallows.
   struct Inputs {
-    std::uint16_t live = kNeutralMask;
-    std::uint16_t repl = kNeutralMask;
+    std::uint16_t live = kNoButtons;
+    std::uint16_t repl = kNoButtons;
   };
   // One pad frame. Returns the mask the guest receives.
   std::uint16_t service(std::uint64_t phase, Inputs inputs);

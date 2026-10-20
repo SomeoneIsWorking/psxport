@@ -1,4 +1,5 @@
 #include "core.h"
+#include "guest_memory_map.h"
 #include "invalidation.h"
 #include "render_substrate.h"
 #include "side_effect_journal.h"
@@ -58,36 +59,24 @@ void Core::deviceWrite(uint32_t a, uint32_t v, uint32_t bytes) {
 }
 namespace {
 
-// OT/GTE submission attribution (`debug otattr`, game/render/ot_attr.h): attribute a packet-pool store
-// to the current otattr-shadow-stack fn + render-walk node. No-op unless the channel is on.
+// Packet-pool store attribution for `debug otattr`; a no-op unless the channel is on.
 inline void pkt_track(Core *c, uint32_t a, uint32_t bytes) {
   c->rsub.otAttr.trackStore(c, {a, bytes});
 }
 
-// FAIL-FAST guard for the pc_render READ-ONLY-OVERLAY invariant (CLAUDE.md): pc_render's native
-// display pass (DisplayPassGuard-armed scope in game_tomba2.cpp's Engine::drawOTag) reads guest RAM
-// + engine state and draws to HOST memory only — it must NEVER write guest main RAM or scratchpad.
-// Checked at the top of every guest store; the `!armed` branch is the hot-path no-op (single
-// predicted-false bool read gates the address test, so this is cheap when the flag is off, which is
-// always except during the pc_render display pass on this Core).
+// The native display pass reads guest state and draws to host memory only; a guest store inside it aborts.
 void display_pass_write_guard(Core *c, GuestStore store) {
-  if (!c->rsub.mode.displayPassArmed()) {
+  if (!c->rsub.mode.displayPassArmed() || !c->isGuestStorage(store.address, store.width)) {
     return;
   }
-  const uint32_t p = store.address & 0x1FFFFFFF;
-  const bool guest_ram = p < 0x200000;
-  const bool scratchpad = p >= 0x1F800000 && p < 0x1F800400;
-  if (!guest_ram && !scratchpad) {
-    return;
-  }
-  lucent::info("mem",
-               "\n[pc_render VIOLATION] guest write to 0x{:08X} (val 0x{:X}, width {}) during pc_render display pass — "
-               "pc_render MUST be a read-only overlay (CLAUDE.md). interp_pc={:08X} sp={:08X}",
-               0x80000000u | p,
-               store.value,
-               store.width,
-               c->pc,
-               c->r[29]);
+  lucent::error("mem",
+                "display-pass guard: guest write to 0x{:08X} (val 0x{:X}, width {}) inside the native display "
+                "pass, which must not write guest memory. pc={:08X} sp={:08X}",
+                psx::kseg0Address(store.address),
+                store.value,
+                store.width,
+                c->pc,
+                c->r[psx::cpu::kSp]);
   abort();
 }
 
@@ -98,8 +87,9 @@ void Core::writeGuestMemory(uint32_t a, Value v, psx::cpu::ExecutableWriteSource
   constexpr auto width = static_cast<uint32_t>(sizeof(Value));
   uint8_t *p = host_ptr({a, width});
   display_pass_write_guard(this, {a, static_cast<uint32_t>(v), width});
-  wwatch_check({a, static_cast<uint32_t>(v), width});
-  cw_check({a, static_cast<uint32_t>(v), width});
+  if (storeWatch.armed()) {
+    storeWatch.observe(*this, {a, static_cast<uint32_t>(v), width});
+  }
   pkt_track(this, a, width);
   emission.noteStore(a);
   if (p) {

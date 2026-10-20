@@ -32,47 +32,7 @@ class Core;
 
 namespace psx::cpu {
 
-// THE BOUND ON ONE CALL'S JOURNAL. MEASURED-SIZED, and the measurement is stated here rather than
-// left to the reader's imagination.
-//
-// WHY A BOUND AT ALL. The journal is the differential's memory, and the differential exists to catch
-// a WRONG native override, including one that never returns. Measured: a candidate override
-// for Spyro 1 `update_player_frame` (0x8003FE40) looped inside one call, storing to a device address
-// each pass, and `effects_` — an unbounded `std::vector` — grew at ~6 MB/s under `PSXPORT_OVERRIDE_DIFF`
-// to 7.4 GB of peak address space, `std::bad_alloc` in `append` included. Eight such gates explain
-// every memory reap of 2026-09-29/30. A diagnostic that turns the worst kind of wrong override into a
-// host OOM is not a gate.
-//
-// WHY NOT SMALLER, WITH THE MEASUREMENT. The bound has to sit far above the largest REAL call, and a
-// PSX function's journaled traffic is data movement rather than waiting: the long waits (VSync,
-// CdReadSync, MDEC synchronisation, wait) are `platform_hle` services, which the journal marks
-// UNREPLAYABLE instead of counting, so they never reach a count at all.
-//
-// MEASURED 2026-09-30 over the differential's own per-call log line ("N side effect(s) replayed"),
-// kept in the port repositories' run artifacts under `scratch/`, across FIVE TITLES and every override
-// they have gated so far: 1,011 real shadowed calls — 6,574 completed differential reports covering
-// 166,098 sampled calls over 132 distinct real override names — of which the per-call effect count was
-// recorded for 1,011. The distribution is `p50 = 0`, `p99 = 94`, `max = 145` (the largest is Spyro 1's
-// `update_active_voices @0x8005637C`; the largest count any real report names as a log LENGTH is 1, and
-// the largest side-effect INDEX a real mismatch names is #12, which is a lower bound of 13). The
-// framework's own hermetic corpus adds 18 sampled calls, max 4,097 — that is
-// `tests/test_override_differential.cpp`'s deliberate many-effect case, a 4096-pass I_STAT-ack loop, and
-// it is the largest effect count this repository produces on purpose.
-//
-// So the physical headroom is stated three ways: 1,048,576 is 256x the largest effect count measured
-// in ANY real call in this workspace (145), 7,223x the framework's own largest deliberate case, and 2x
-// the largest movement one function can physically make — the machine's whole 2 MiB of VRAM in 4-byte
-// transfers, 524,288 words. A PSX function cannot journal more than it moves, so that last figure is a
-// ceiling no real override can pass, not an estimate.
-//
-// The claim is re-checkable rather than a comment nobody can test: `OverrideDifferential`'s per-key
-// summary prints the largest sampled call against this number on every real run, and the JSON report
-// carries `largest_sampled_call_effects` beside `effects_bound`.
-//
-// WHAT THE BOUND BUYS. `SideEffect` is 16 bytes, so one journal is capped at 16 MiB and one shadowed
-// call — which holds the live journal and the shadow journal at once — at 32 MiB, in place of the
-// unbounded growth above. Reaching it is a FAILURE, never a wrap and never a silent truncation: see
-// `JournalBoundViolation` and `boundViolation()`.
+// Twice the 2 MiB of VRAM in words, far above any real call; reaching it is a JournalBoundViolation.
 inline constexpr std::size_t kMaxSideEffectsPerCall = 1u << 20;
 
 enum class SideEffectKind : std::uint8_t {

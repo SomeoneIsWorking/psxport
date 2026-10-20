@@ -1,12 +1,7 @@
 // sio_pad.h — class Sio0 — the controller port (SIO0, 0x1F801040-0x1F80104F) and the device on it,
 // owned by Game (`c->game->sio`, back-pointer wired in Game()). Register decode is io_peripherals.h;
 // the behaviour is here.
-//
-// It is modelled as HARDWARE, not as one driver's expectations. Crash Bash is why it exists (see
-// the crashbash title's findings): it patches its own pad engine into the kernel
-// C0 table and drives SIO0 through a runtime pointer, so no BIOS pad entry and no per-VBlank buffer
-// fill is ever involved. Before this model the registers were unmapped I/O returning 0, the
-// driver's transfers never completed, and no button state reached guest RAM.
+// Modelled as hardware: Crash Bash drives SIO0 from its own C0-patched pad engine.
 //
 // What the guest sees: it selects the port (CTRL bit 1), clocks command bytes into DATA and, for
 // each byte the device acknowledges, gets the /ACK interrupt — JOY_STAT bit 9 plus I_STAT bit 7

@@ -19,10 +19,6 @@ namespace {
 inline constexpr std::uint32_t kOpMask = 0x3F;
 inline constexpr std::uint32_t kOpRtps = 0x01;
 inline constexpr std::uint32_t kOpRtpt = 0x30;
-inline constexpr std::uint32_t kCrOfx = 24;
-inline constexpr std::uint32_t kCrOfy = 25;
-inline constexpr std::uint32_t kCrH = 26;
-inline constexpr float kFixed16 = 65536.0f;
 
 } // namespace
 
@@ -69,10 +65,6 @@ void Gte::execute(std::uint32_t instruction) {
   if (op != kOpRtps && op != kOpRtpt) {
     return;
   }
-  // pzToOrd places its near plane from H; OFX/OFY are 16.16.
-  core_.rsub.projParams.setProjH(static_cast<std::uint16_t>(GTE_ReadCR(kCrH)));
-  core_.rsub.projParams.setProjCenter(static_cast<float>(static_cast<std::int32_t>(GTE_ReadCR(kCrOfx))) / kFixed16,
-                                      static_cast<float>(static_cast<std::int32_t>(GTE_ReadCR(kCrOfy))) / kFixed16);
   core_.rsub.otAttr.trackGte(&core_);
 }
 

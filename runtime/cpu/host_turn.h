@@ -1,4 +1,8 @@
+// host_turn — the per-Core host field clock: one display field owed per field period of emulated
+// guest time, taken at an executor boundary outside the guest's critical sections.
 #pragma once
+
+#include "native_function.h"
 
 #include <cstdint>
 
@@ -6,28 +10,27 @@ class Core;
 
 namespace psx::cpu {
 
-using HostTurnFunction = void (*)(Core *core);
+class HostTurnClock {
+public:
+  // Starts the clock with the handler a due field runs; a second arm on a running clock is refused.
+  void arm(Core &core, NativeFunction function, unsigned fieldRateMilliHz);
+  void reset();
+  // Raises PW_HOST once the guest clock reaches the deadline.
+  void requestWhenDue(Core &core) const;
+  // Guest ticks until the next field is owed; unbounded with no handler.
+  std::uint64_t ticksUntilDue(const Core &core) const;
+  // A field was delivered: the next one is owed one period from now, and a latched request is cancelled.
+  void onDisplayField(Core &core);
+  void service(Core &core);
 
-// The host field clock runs on EMULATED guest time. A display field is owed once one field period
-// of psx::frame::Timing::emulatedCpuTicks has elapsed since the last delivered field, whether that time was
-// spent executing guest instructions or waiting out fields the native frame loop delivered. Host
-// speed never decides how many fields a long guest update observes.
-void registerHostTurn(Core &core, HostTurnFunction function, unsigned fieldRateMillihertz);
-// Raise the pending host turn when the registered core's guest clock has reached its field deadline.
-// Called from the executor's instruction accounting; the turn itself is taken at the next eligible
-// dispatch boundary by serviceHostTurn.
-void requestHostTurnWhenDue(Core &core);
-// Guest ticks until the registered core's next field is owed: 0 when it is already due, and no
-// bound at all for a core without a host clock. The executor ends a translated segment there so a
-// guest loop that waits on the field's work cannot outrun the clock inside one segment.
-std::uint64_t hostTurnTicksUntilDue(const Core &core);
-// A display field was delivered on this core: the next field is owed one period from now and any
-// latched request for this same field is cancelled. psx::frame::Timing::advanceDisplayFields is the caller;
-// titles advance display fields through it and never acknowledge fields themselves.
-void notifyDisplayField(Core &core);
-void serviceHostTurn(Core &core);
-// Drop this Core's clock (see Core::hostTurn). It is per-Core, so one session's teardown cannot
-// unpace the sessions still running in the same process.
-void shutdownHostTurn(Core &core);
+private:
+  void rearm(const Core &core);
+
+  NativeFunction function_ = nullptr;
+  std::uint64_t periodTicks_ = 0;
+  std::uint64_t deadlineTicks_ = 0;
+  // The handler runs guest code that tests the gate again.
+  bool inTurn_ = false;
+};
 
 } // namespace psx::cpu

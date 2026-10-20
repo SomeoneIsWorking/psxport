@@ -10,9 +10,6 @@ void SegmentClockLedger::beginSegment() noexcept {
 
 std::uint32_t SegmentClockLedger::commitThrough(std::uint32_t currentCycle) noexcept {
   if (currentCycle <= chargedThroughCycles_) {
-    // One branch for both cases, and that is the point: "has not moved" and "moved backwards" are
-    // the same no-charge outcome, so the backwards case cannot be given a different, wrong answer by
-    // a later edit. Re-anchoring to a value that did not move is a no-op.
     chargedThroughCycles_ = currentCycle;
     return 0;
   }

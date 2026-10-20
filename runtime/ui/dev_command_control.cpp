@@ -1,5 +1,6 @@
 #include "dev_command_control.h"
 
+#include "command_args.h"
 #include "game.h"
 #include "title_command.h"
 
@@ -19,7 +20,7 @@ std::string DevCommandControl::send(const std::string &line) const {
   if (!mGame) {
     return "not available";
   }
-  const psx::game::TitleCommandReply reply = psx::game::runTitleCommand(mGame->core, line);
+  const psx::game::TitleCommandReply reply = psx::game::runTitleCommand(mGame->core, psx::debug::CommandArgs(line));
   lucent::info("rmlui", "dev command '{}': {}", line, reply.handled ? reply.text : "not handled by this game");
   return reply.handled ? reply.text : "not supported by this game";
 }
