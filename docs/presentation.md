@@ -88,8 +88,11 @@ name is refused with a warning and the Core stays on `record`.
   before it (`sequence == applied + 1`, complete, device not ahead); otherwise the device VRAM is
   uploaded. Sequence 0 is the presenter's empty record; the device's records start at 1. Coverage and interpolant bases are computed on the CPU exactly as `gpu.c` does at S;
   `record.frag` evaluates texel, modulation, blend and mask per pixel. It does not dither: the host picture keeps full colour precision while the device dithers as the guest asks, so `recordcheck` counts a dithered draw's pixels as mismatched by design. Each op reads a
-  snapshot of the image; an op whose reads overlap pixels written earlier in its batch starts a new
-  batch, so reads see VRAM as the device did.
+  snapshot of the image; an op whose reads overlap pixels `gpu.c` wrote at 1x earlier in its batch
+  starts a new batch, so at 1x reads see VRAM as the device did. Which ops exist and where batches
+  split come from the 1x walk at every S: the `record_plan` line's ops and batches for one frame are
+  equal at every S, and only its quads (and the GPU's pixels) grow. A batch's snapshot refresh
+  covers every scaled pixel its quads can reach.
 - **Scale.** S is the internal-resolution setting (`setires`, `mods.ires`). Vertices and the draw
   area scale; texels and CLUTs stay on the native grid; sprites, lines and fills cover
   S×S blocks; uploads replicate, copies run at full resolution. 24bpp display keeps the device picture.
@@ -198,7 +201,7 @@ The composer builds the frame at `t` from S's record:
   table's walk order puts it. A render naming a table S never walked, or a CLUT S never sampled, leaves
   that object as S drew it.
 - **Environment.** A render sets texture page, texture mode and blend mode; draw area, offset,
-  dither, mask, texture window and interlace are those in effect where the primitive lands in S (the
+  mask, texture window and interlace are those in effect where the primitive lands in S (the
   first recorded primitive at or after its position), and the CLUT from S's sample of the same CLUT
   attribute (`clutWord`).
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <utility>
 #include <variant>
 
@@ -187,6 +188,7 @@ struct TrianglePart {
   std::uint64_t step[2] = {};
   int rowLow = 0; // plotted rows, half open
   int rowHigh = 0;
+  std::int64_t half = 0; // the 11-bit x wrap at the walk's scale
 };
 
 // Plotted columns [x0, x1), and how far wrapping moved them from the interpolant columns.
@@ -196,23 +198,149 @@ struct PlottedSpan {
   std::int64_t shift = 0;
 };
 
-PlottedSpan plottedSpan(const TrianglePart &part, int row, std::int64_t half) {
+PlottedSpan plottedSpan(const TrianglePart &part, int row) {
   const auto yi = static_cast<std::uint64_t>(static_cast<std::int64_t>(row - part.rowShift));
   const std::int32_t left = polyXInt(part.edge[0] + yi * part.step[0]);
   const std::int32_t right = polyXInt(part.edge[1] + yi * part.step[1]);
-  const auto x0 = static_cast<int>(wrapSigned(left, half));
+  const auto x0 = static_cast<int>(wrapSigned(left, part.half));
   return {x0, x0 + (right - left), x0 - static_cast<std::int64_t>(left)};
 }
 
-// Columns any of rows [first, last] covers, inside [clipX0, clipX1). Each edge is linear in the row.
-std::pair<int, int>
-coveredColumns(const TrianglePart &part, int first, int last, std::int64_t half, int clipX0, int clipX1) {
-  const PlottedSpan a = plottedSpan(part, first, half);
-  const PlottedSpan b = plottedSpan(part, last, half);
-  if (a.shift != b.shift) {
-    return {clipX0, clipX1};
+// `area` narrowed to the columns any of its rows covers. Each edge is linear in the row.
+RecordRect coveredColumns(const TrianglePart &part, RecordRect area) {
+  const PlottedSpan a = plottedSpan(part, area.y0);
+  const PlottedSpan b = plottedSpan(part, area.y1 - 1);
+  if (a.shift == b.shift) {
+    area.x0 = std::max(std::min(a.x0, b.x0), area.x0);
+    area.x1 = std::min(std::max(a.x1, b.x1), area.x1);
   }
-  return {std::max(std::min(a.x0, b.x0), clipX0), std::min(std::max(a.x1, b.x1), clipX1)};
+  return area;
+}
+
+std::int64_t calcis(const TriVertex vertices[3], std::int32_t TriVertex::*x, std::int32_t TriVertex::*y) {
+  const TriVertex &A = vertices[0];
+  const TriVertex &B = vertices[1];
+  const TriVertex &C = vertices[2];
+  return static_cast<std::int64_t>(B.*x - A.*x) * (C.*y - B.*y) -
+         static_cast<std::int64_t>(C.*x - B.*x) * (B.*y - A.*y);
+}
+
+// gpu_polygon.c DrawTriangle's vertex order and edge walk, in VRAM-space pixels at `s`.
+struct TriangleWalk {
+  TriVertex vertices[3]; // sorted by y
+  unsigned core = 0;
+  std::int64_t denom = 0;
+  TrianglePart parts[2];
+};
+
+std::optional<TriangleWalk> walkTriangle(const TriVertex input[3], int s) {
+  const auto spanY = static_cast<std::int64_t>(kVramHeight) * s;
+  const auto spanX = static_cast<std::int64_t>(kVramWidth) * s;
+  for (int a = 0; a < 3; a++) {
+    const TriVertex &p = input[a];
+    const TriVertex &q = input[(a + 1) % 3];
+    if (std::llabs(static_cast<long long>(q.y) - p.y) >= spanY ||
+        std::llabs(static_cast<long long>(q.x) - p.x) >= spanX) {
+      return std::nullopt;
+    }
+  }
+  TriangleWalk walk;
+  TriVertex *vertices = walk.vertices;
+  std::copy(input, input + 3, vertices);
+  unsigned cvtemp = 0;
+  if (vertices[1].x <= vertices[0].x) {
+    cvtemp = vertices[2].x <= vertices[1].x ? (1u << 2) : (1u << 1);
+  } else if (vertices[2].x < vertices[0].x) {
+    cvtemp = 1u << 2;
+  } else {
+    cvtemp = 1u << 0;
+  }
+  if (vertices[2].y < vertices[1].y) {
+    std::swap(vertices[2], vertices[1]);
+    cvtemp = ((cvtemp >> 1) & 0x2) | ((cvtemp << 1) & 0x4) | (cvtemp & 0x1);
+  }
+  if (vertices[1].y < vertices[0].y) {
+    std::swap(vertices[1], vertices[0]);
+    cvtemp = ((cvtemp >> 1) & 0x1) | ((cvtemp << 1) & 0x2) | (cvtemp & 0x4);
+  }
+  if (vertices[2].y < vertices[1].y) {
+    std::swap(vertices[2], vertices[1]);
+    cvtemp = ((cvtemp >> 1) & 0x2) | ((cvtemp << 1) & 0x4) | (cvtemp & 0x1);
+  }
+  walk.core = cvtemp >> 1;
+  if (vertices[0].y == vertices[2].y) {
+    return std::nullopt;
+  }
+  walk.denom = calcis(vertices, &TriVertex::x, &TriVertex::y);
+  if (walk.denom == 0) {
+    return std::nullopt;
+  }
+
+  const std::uint64_t baseCoord = makePolyXFP(vertices[0].x);
+  const std::int64_t baseStep = makePolyXFPStep(vertices[2].x - vertices[0].x, vertices[2].y - vertices[0].y);
+  std::int64_t boundUpper = 0;
+  bool rightFacing = false;
+  if (vertices[1].y == vertices[0].y) {
+    rightFacing = vertices[1].x > vertices[0].x;
+  } else {
+    boundUpper = makePolyXFPStep(vertices[1].x - vertices[0].x, vertices[1].y - vertices[0].y);
+    rightFacing = boundUpper > baseStep;
+  }
+  const std::int64_t boundLower = vertices[2].y == vertices[1].y
+                                      ? 0
+                                      : makePolyXFPStep(vertices[2].x - vertices[1].x, vertices[2].y - vertices[1].y);
+  const unsigned vo = walk.core != 0 ? 1u : 0u;
+  const unsigned vp = walk.core == 2 ? 3u : 0u;
+  struct Tripart {
+    std::uint64_t coord[2] = {};
+    std::uint64_t step[2] = {};
+    std::int32_t yCoord = 0;
+    std::int32_t yBound = 0;
+    bool decrement = false;
+  } tripart[2];
+  const auto along = [&](std::int32_t y) {
+    return baseCoord + static_cast<std::uint64_t>(static_cast<std::int64_t>(y - vertices[0].y) * baseStep);
+  };
+  const int r = rightFacing ? 1 : 0;
+  {
+    Tripart &part = tripart[vo];
+    part.yCoord = vertices[0 ^ vo].y;
+    part.yBound = vertices[1 ^ vo].y;
+    part.coord[r] = makePolyXFP(vertices[0 ^ vo].x);
+    part.step[r] = static_cast<std::uint64_t>(boundUpper);
+    part.coord[1 - r] = along(vertices[vo].y);
+    part.step[1 - r] = static_cast<std::uint64_t>(baseStep);
+    part.decrement = vo != 0;
+  }
+  {
+    Tripart &part = tripart[vo ^ 1];
+    part.yCoord = vertices[1 ^ vp].y;
+    part.yBound = vertices[2 ^ vp].y;
+    part.coord[r] = makePolyXFP(vertices[1 ^ vp].x);
+    part.step[r] = static_cast<std::uint64_t>(boundLower);
+    part.coord[1 - r] = along(vertices[1 ^ vp].y);
+    part.step[1 - r] = static_cast<std::uint64_t>(baseStep);
+    part.decrement = vp != 0;
+  }
+
+  // gpu.c plots 11-bit rows: a part stops at the clip, before its rows could wrap, so one shift serves it.
+  const std::int64_t half = static_cast<std::int64_t>(kVramWidth) * s;
+  for (int i = 0; i < 2; i++) {
+    const Tripart &rows = tripart[i];
+    TrianglePart &part = walk.parts[i];
+    const std::int32_t first = rows.decrement ? rows.yCoord - 1 : rows.yCoord;
+    const std::int32_t count = rows.decrement ? rows.yCoord - rows.yBound : rows.yBound - rows.yCoord;
+    part.half = half;
+    part.rowShift = static_cast<std::int32_t>(wrapSigned(first, half) - first);
+    part.rowLow = (rows.decrement ? rows.yBound : rows.yCoord) + part.rowShift;
+    part.rowHigh = part.rowLow + std::max(count, 0);
+    for (int side = 0; side < 2; side++) {
+      part.step[side] = rows.step[side];
+      part.edge[side] =
+          rows.coord[side] - static_cast<std::uint64_t>(static_cast<std::int64_t>(rows.yCoord)) * rows.step[side];
+    }
+  }
+  return walk;
 }
 
 void storeWords(RecordOp &op, int index, std::uint64_t value) {
@@ -238,6 +366,7 @@ public:
     plan_.uploadPool = uploadPool;
     canvases_ = canvases;
     batchStart_ = {};
+    lines_ = 0;
     target(0);
   }
 
@@ -246,18 +375,21 @@ public:
   void addCopy(const present::VramCopy &copy);
   void addUpload(const present::VramUpload &upload);
 
-  const RecordRasterPlan &finish() {
+  // `sequence` is the planned record's, 0 for a VRAM upload.
+  const RecordRasterPlan &finish(std::uint64_t sequence) {
     closeBatch();
     std::size_t quads = 0;
     for (const std::vector<RecordQuad> &plane : plan_.quads) {
       quads += plane.size();
     }
     lucent::debug("record_plan",
-                  "scale {}: {} ops, {} quads, {} batches",
+                  "record {} scale {}: {} ops, {} quads, {} batches, {} lines",
+                  sequence,
                   plan_.scale,
                   plan_.ops.size(),
                   quads,
-                  plan_.batches.size());
+                  plan_.batches.size(),
+                  lines_);
     return plan_;
   }
 
@@ -277,7 +409,9 @@ private:
   };
 
   void addPolygon(const DrawPrimitive &primitive);
-  void addTriangle(TriVertex vertices[3], const DrawPrimitive &primitive, bool offU, bool offV);
+  // `scaled` at the plan scale draws; `native`, the same vertices at 1x, decides what the op writes.
+  void addTriangle(
+      const TriVertex scaled[3], const TriVertex native[3], const DrawPrimitive &primitive, bool offU, bool offV);
   void addSprite(const DrawPrimitive &primitive);
   void addLine(const DrawPrimitive &primitive);
   // A flat rectangle spanning a buffer's columns spans its canvas's, as a fill does.
@@ -289,12 +423,13 @@ private:
   void textureReads(const RecordDrawState &state, const TexelRange &u, const TexelRange &v);
   // A quad in VRAM-space scaled pixels placed on the current target plane, its pixels marked written separately.
   void place(RecordQuad quad);
-  // Scaled VRAM-space pixels the op writes on the current target plane.
-  void markWritten(int x0, int y0, int x1, int y1);
-  void emit(const RecordQuad &quad);
+  // VRAM-space native pixels the op writes on the current target plane.
+  void markWritten(const RecordRect &rect);
+  // A VRAM-space native rect drawn and written on the current target plane.
+  void emit(const RecordRect &rect, std::uint32_t param = 0);
   // VRAM rects written by a transfer, into VRAM and where they land in each canvas buffer.
   void emitTransferRects(const WrappedRects &rects);
-  void emitNativeRect(const RecordRect &rect);
+  // Keeps the op when its native footprint reached a plane, whatever its quads at this scale.
   void commit(const RecordOp &op, bool readsDestination);
   void closeBatch();
 
@@ -308,6 +443,8 @@ private:
   std::vector<PlaneQuad> opQuads_;
   std::vector<PlaneRect> opWrites_;
   std::vector<RecordRect> opReads_;
+  bool reaches_ = false;
+  int lines_ = 0; // line primitives planned
 };
 
 PlaneClips RecordPlanner::Builder::planeClips(const RecordDrawState &state) const {
@@ -402,29 +539,22 @@ void RecordPlanner::Builder::place(RecordQuad quad) {
   opQuads_.push_back(PlaneQuad{plane_, quad});
 }
 
-void RecordPlanner::Builder::markWritten(int x0, int y0, int x1, int y1) {
-  const int s = plan_.scale;
-  x0 -= originX_ * s;
-  y0 -= originY_ * s;
-  x1 -= originX_ * s;
-  y1 -= originY_ * s;
-  opWrites_.push_back(PlaneRect{plane_, {x0 / s, y0 / s, (x1 + s - 1) / s, (y1 + s - 1) / s}});
+void RecordPlanner::Builder::markWritten(const RecordRect &rect) {
+  opWrites_.push_back(
+      PlaneRect{plane_, {rect.x0 - originX_, rect.y0 - originY_, rect.x1 - originX_, rect.y1 - originY_}});
 }
 
-void RecordPlanner::Builder::emit(const RecordQuad &quad) {
-  place(quad);
-  markWritten(quad.x0, quad.y0, quad.x1, quad.y1);
-}
-
-void RecordPlanner::Builder::emitNativeRect(const RecordRect &rect) {
+void RecordPlanner::Builder::emit(const RecordRect &rect, std::uint32_t param) {
   const int s = plan_.scale;
-  emit({.x0 = rect.x0 * s, .y0 = rect.y0 * s, .x1 = rect.x1 * s, .y1 = rect.y1 * s});
+  place({.x0 = rect.x0 * s, .y0 = rect.y0 * s, .x1 = rect.x1 * s, .y1 = rect.y1 * s, .param = param});
+  markWritten(rect);
+  reaches_ = true;
 }
 
 void RecordPlanner::Builder::emitTransferRects(const WrappedRects &rects) {
   target(0);
   for (const RecordRect &rect : rects) {
-    emitNativeRect(rect);
+    emit(rect);
   }
   for (std::size_t i = 0; i < canvases_.size(); i++) {
     const RecordRect &buffer = canvases_[i].buffer;
@@ -435,7 +565,7 @@ void RecordPlanner::Builder::emitTransferRects(const WrappedRects &rects) {
                               std::min(rect.x1, buffer.x1),
                               std::min(rect.y1, buffer.y1)};
       if (inside.x0 < inside.x1 && inside.y0 < inside.y1) {
-        emitNativeRect(inside);
+        emit(inside);
       }
     }
   }
@@ -443,11 +573,13 @@ void RecordPlanner::Builder::emitTransferRects(const WrappedRects &rects) {
 }
 
 void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination) {
-  if (opQuads_.empty()) {
+  if (!reaches_) {
+    opQuads_.clear();
     opWrites_.clear();
     opReads_.clear();
     return;
   }
+  reaches_ = false;
   bool conflict = false;
   for (const RecordRect &read : opReads_) {
     conflict = conflict || written_[0].any(read);
@@ -462,9 +594,13 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination) {
   }
   const auto opIndex = static_cast<std::uint32_t>(plan_.ops.size());
   plan_.ops.push_back(op);
+  const int s = plan_.scale;
   for (PlaneQuad &pending : opQuads_) {
     pending.quad.op = opIndex;
     plan_.quads[static_cast<std::size_t>(pending.plane)].push_back(pending.quad);
+    const RecordQuad &quad = pending.quad;
+    written_[static_cast<std::size_t>(pending.plane)].extend(
+        {quad.x0 / s, quad.y0 / s, (quad.x1 + s - 1) / s, (quad.y1 + s - 1) / s});
   }
   for (const PlaneRect &write : opWrites_) {
     written_[static_cast<std::size_t>(write.plane)].mark(write.rect);
@@ -507,73 +643,39 @@ void RecordPlanner::Builder::addPrimitive(const DrawPrimitive &primitive) {
 
 void RecordPlanner::Builder::addPolygon(const DrawPrimitive &primitive) {
   const int s = plan_.scale;
-  TriVertex first[3] = {scaledVertex(primitive.vertices[0], s),
-                        scaledVertex(primitive.vertices[1], s),
-                        scaledVertex(primitive.vertices[2], s)};
+  TriVertex scaled[4];
+  TriVertex native[4];
+  for (std::size_t i = 0; i < 4; i++) {
+    scaled[i] = scaledVertex(primitive.vertices[i], s);
+    native[i] = scaledVertex(primitive.vertices[i], 1);
+  }
+  TriVertex first[3] = {scaled[0], scaled[1], scaled[2]};
   // The second triangle starts from the first's vertices before the UV adjustment.
-  TriVertex second[3] = {first[1], first[2], scaledVertex(primitive.vertices[3], s)};
+  TriVertex second[3] = {scaled[1], scaled[2], scaled[3]};
   bool offU = false;
   bool offV = false;
   if (primitive.textured) {
     adjustUv(first, s, offU, offV);
   }
-  addTriangle(first, primitive, offU, offV);
+  addTriangle(first, native, primitive, offU, offV);
   if (primitive.vertexCount == 4) {
     if (primitive.textured) {
       adjustUv(second, s, offU, offV);
     }
-    addTriangle(second, primitive, offU, offV);
+    addTriangle(second, native + 1, primitive, offU, offV);
   }
 }
 
-void RecordPlanner::Builder::addTriangle(TriVertex vertices[3], const DrawPrimitive &primitive, bool offU, bool offV) {
+void RecordPlanner::Builder::addTriangle(
+    const TriVertex scaled[3], const TriVertex native[3], const DrawPrimitive &primitive, bool offU, bool offV) {
   const int s = plan_.scale;
-  const auto spanY = static_cast<std::int64_t>(kVramHeight) * s;
-  const auto spanX = static_cast<std::int64_t>(kVramWidth) * s;
-  for (int a = 0; a < 3; a++) {
-    const TriVertex &p = vertices[a];
-    const TriVertex &q = vertices[(a + 1) % 3];
-    if (std::llabs(static_cast<long long>(q.y) - p.y) >= spanY ||
-        std::llabs(static_cast<long long>(q.x) - p.x) >= spanX) {
-      return;
-    }
-  }
-  // gpu_polygon.c DrawTriangle: core vertex, then sort by y.
-  unsigned cvtemp = 0;
-  if (vertices[1].x <= vertices[0].x) {
-    cvtemp = vertices[2].x <= vertices[1].x ? (1u << 2) : (1u << 1);
-  } else if (vertices[2].x < vertices[0].x) {
-    cvtemp = 1u << 2;
-  } else {
-    cvtemp = 1u << 0;
-  }
-  if (vertices[2].y < vertices[1].y) {
-    std::swap(vertices[2], vertices[1]);
-    cvtemp = ((cvtemp >> 1) & 0x2) | ((cvtemp << 1) & 0x4) | (cvtemp & 0x1);
-  }
-  if (vertices[1].y < vertices[0].y) {
-    std::swap(vertices[1], vertices[0]);
-    cvtemp = ((cvtemp >> 1) & 0x1) | ((cvtemp << 1) & 0x2) | (cvtemp & 0x4);
-  }
-  if (vertices[2].y < vertices[1].y) {
-    std::swap(vertices[2], vertices[1]);
-    cvtemp = ((cvtemp >> 1) & 0x2) | ((cvtemp << 1) & 0x4) | (cvtemp & 0x1);
-  }
-  const unsigned core = cvtemp >> 1;
-  if (vertices[0].y == vertices[2].y) {
+  const std::optional<TriangleWalk> walk = walkTriangle(scaled, s);
+  // The native walk decides what the op writes, so ops and batches are the same at every scale.
+  const std::optional<TriangleWalk> nativeWalk = s == 1 ? walk : walkTriangle(native, 1);
+  if (!walk || !nativeWalk) {
     return;
   }
-  const TriVertex &A = vertices[0];
-  const TriVertex &B = vertices[1];
-  const TriVertex &C = vertices[2];
-  const auto calcis = [&](auto x, auto y) {
-    return static_cast<std::int64_t>(B.*x - A.*x) * (C.*y - B.*y) -
-           static_cast<std::int64_t>(C.*x - B.*x) * (B.*y - A.*y);
-  };
-  const std::int64_t denom = calcis(&TriVertex::x, &TriVertex::y);
-  if (denom == 0) {
-    return;
-  }
+  const TriVertex *vertices = walk->vertices;
   TriangleSetup setup;
   std::int32_t TriVertex::*const channels[5] = {
       &TriVertex::r, &TriVertex::g, &TriVertex::b, &TriVertex::u, &TriVertex::v};
@@ -581,11 +683,11 @@ void RecordPlanner::Builder::addTriangle(TriVertex vertices[3], const DrawPrimit
       primitive.gouraud, primitive.gouraud, primitive.gouraud, primitive.textured, primitive.textured};
   for (int c = 0; c < 5; c++) {
     if (interpolated[c]) {
-      setup.dx[c] = static_cast<std::uint32_t>(calcis(channels[c], &TriVertex::y) * 4096 / denom) << 12;
-      setup.dy[c] = static_cast<std::uint32_t>(calcis(&TriVertex::x, channels[c]) * 4096 / denom) << 12;
+      setup.dx[c] = static_cast<std::uint32_t>(calcis(vertices, channels[c], &TriVertex::y) * 4096 / walk->denom) << 12;
+      setup.dy[c] = static_cast<std::uint32_t>(calcis(vertices, &TriVertex::x, channels[c]) * 4096 / walk->denom) << 12;
     }
   }
-  const TriVertex &coreVertex = vertices[core];
+  const TriVertex &coreVertex = vertices[walk->core];
   const auto uvBias = static_cast<std::uint32_t>(2048 / s);
   for (int c = 0; c < 5; c++) {
     const auto value = static_cast<std::uint32_t>(coreVertex.*channels[c]);
@@ -601,97 +703,32 @@ void RecordPlanner::Builder::addTriangle(TriVertex vertices[3], const DrawPrimit
     setup.base[c] += setup.dy[c] * static_cast<std::uint32_t>(-coreVertex.y);
   }
 
-  const std::uint64_t baseCoord = makePolyXFP(vertices[0].x);
-  const std::int64_t baseStep = makePolyXFPStep(vertices[2].x - vertices[0].x, vertices[2].y - vertices[0].y);
-  std::int64_t boundUpper = 0;
-  bool rightFacing = false;
-  if (vertices[1].y == vertices[0].y) {
-    rightFacing = vertices[1].x > vertices[0].x;
-  } else {
-    boundUpper = makePolyXFPStep(vertices[1].x - vertices[0].x, vertices[1].y - vertices[0].y);
-    rightFacing = boundUpper > baseStep;
-  }
-  const std::int64_t boundLower = vertices[2].y == vertices[1].y
-                                      ? 0
-                                      : makePolyXFPStep(vertices[2].x - vertices[1].x, vertices[2].y - vertices[1].y);
-  const unsigned vo = core != 0 ? 1u : 0u;
-  const unsigned vp = core == 2 ? 3u : 0u;
-  struct Tripart {
-    std::uint64_t coord[2] = {};
-    std::uint64_t step[2] = {};
-    std::int32_t yCoord = 0;
-    std::int32_t yBound = 0;
-    bool decrement = false;
-  } tripart[2];
-  const auto along = [&](std::int32_t y) {
-    return baseCoord + static_cast<std::uint64_t>(static_cast<std::int64_t>(y - vertices[0].y) * baseStep);
-  };
-  const int r = rightFacing ? 1 : 0;
-  {
-    Tripart &part = tripart[vo];
-    part.yCoord = vertices[0 ^ vo].y;
-    part.yBound = vertices[1 ^ vo].y;
-    part.coord[r] = makePolyXFP(vertices[0 ^ vo].x);
-    part.step[r] = static_cast<std::uint64_t>(boundUpper);
-    part.coord[1 - r] = along(vertices[vo].y);
-    part.step[1 - r] = static_cast<std::uint64_t>(baseStep);
-    part.decrement = vo != 0;
-  }
-  {
-    Tripart &part = tripart[vo ^ 1];
-    part.yCoord = vertices[1 ^ vp].y;
-    part.yBound = vertices[2 ^ vp].y;
-    part.coord[r] = makePolyXFP(vertices[1 ^ vp].x);
-    part.step[r] = static_cast<std::uint64_t>(boundLower);
-    part.coord[1 - r] = along(vertices[1 ^ vp].y);
-    part.step[1 - r] = static_cast<std::uint64_t>(baseStep);
-    part.decrement = vp != 0;
-  }
-
-  // gpu.c plots 11-bit rows: a part stops at the clip, before its rows could wrap, so one shift serves it.
-  const std::int64_t half = static_cast<std::int64_t>(kVramWidth) * s;
-  TrianglePart parts[2];
-  for (int i = 0; i < 2; i++) {
-    const Tripart &walk = tripart[i];
-    TrianglePart &part = parts[i];
-    const std::int32_t first = walk.decrement ? walk.yCoord - 1 : walk.yCoord;
-    const std::int32_t rows = walk.decrement ? walk.yCoord - walk.yBound : walk.yBound - walk.yCoord;
-    part.rowShift = static_cast<std::int32_t>(wrapSigned(first, half) - first);
-    part.rowLow = (walk.decrement ? walk.yBound : walk.yCoord) + part.rowShift;
-    part.rowHigh = part.rowLow + std::max(rows, 0);
-    for (int side = 0; side < 2; side++) {
-      part.step[side] = walk.step[side];
-      part.edge[side] =
-          walk.coord[side] - static_cast<std::uint64_t>(static_cast<std::int64_t>(walk.yCoord)) * walk.step[side];
-    }
-  }
-
   for (const PlaneClip &planeClip : planeClips(primitive.state)) {
     target(planeClip.plane);
-    const int clipX0 = planeClip.clip.x0 * s;
-    const int clipX1 = (planeClip.clip.x1 + 1) * s;
-    const int clipY0 = planeClip.clip.y0 * s;
-    const int clipY1 = (planeClip.clip.y1 + 1) * s;
+    const Clip &clip = planeClip.clip;
     for (int i = 0; i < 2; i++) {
-      const TrianglePart &part = parts[i];
-      const int rowLow = std::max(part.rowLow, clipY0);
-      const int rowHigh = std::min(part.rowHigh, clipY1);
-      if (rowLow >= rowHigh) {
-        continue;
-      }
-      const auto [x0, x1] = coveredColumns(part, rowLow, rowHigh - 1, half, clipX0, clipX1);
-      if (x0 >= x1) {
-        continue;
-      }
-      place({.x0 = x0, .y0 = rowLow, .x1 = x1, .y1 = rowHigh, .param = static_cast<std::uint32_t>(i)});
-      // Written pixels per native row, so a neighbour that shares an edge does not split the batch.
-      for (int row = rowLow; row < rowHigh;) {
-        const int rowEnd = std::min(rowHigh, (row / s + 1) * s);
-        const auto [columnLow, columnHigh] = coveredColumns(part, row, rowEnd - 1, half, clipX0, clipX1);
-        if (columnLow < columnHigh) {
-          markWritten(columnLow, row, columnHigh, rowEnd);
+      const TrianglePart &part = walk->parts[i];
+      const int rowLow = std::max(part.rowLow, clip.y0 * s);
+      const int rowHigh = std::min(part.rowHigh, (clip.y1 + 1) * s);
+      if (rowLow < rowHigh) {
+        const RecordRect covered = coveredColumns(part, {clip.x0 * s, rowLow, (clip.x1 + 1) * s, rowHigh});
+        if (covered.x0 < covered.x1) {
+          place({.x0 = covered.x0,
+                 .y0 = covered.y0,
+                 .x1 = covered.x1,
+                 .y1 = covered.y1,
+                 .param = static_cast<std::uint32_t>(i)});
         }
-        row = rowEnd;
+      }
+      const TrianglePart &nativePart = nativeWalk->parts[i];
+      const int nativeLow = std::max(nativePart.rowLow, clip.y0);
+      const int nativeHigh = std::min(nativePart.rowHigh, clip.y1 + 1);
+      reaches_ = reaches_ || nativeLow < nativeHigh;
+      for (int row = nativeLow; row < nativeHigh; row++) {
+        const RecordRect covered = coveredColumns(nativePart, {clip.x0, row, clip.x1 + 1, row + 1});
+        if (covered.x0 < covered.x1) {
+          markWritten(covered);
+        }
       }
     }
   }
@@ -705,11 +742,12 @@ void RecordPlanner::Builder::addTriangle(TriVertex vertices[3], const DrawPrimit
   }
   for (int i = 0; i < 2; i++) {
     const int words = kOpParts + i * kPartWords;
-    op[static_cast<std::size_t>(words + kPartRowShift)] = static_cast<std::uint32_t>(parts[i].rowShift);
-    storeWords(op, words + kPartLeft, parts[i].edge[0]);
-    storeWords(op, words + kPartRight, parts[i].edge[1]);
-    storeWords(op, words + kPartLeftStep, parts[i].step[0]);
-    storeWords(op, words + kPartRightStep, parts[i].step[1]);
+    const TrianglePart &part = walk->parts[i];
+    op[static_cast<std::size_t>(words) + kPartRowShift] = static_cast<std::uint32_t>(part.rowShift);
+    storeWords(op, words + kPartLeft, part.edge[0]);
+    storeWords(op, words + kPartRight, part.edge[1]);
+    storeWords(op, words + kPartLeftStep, part.step[0]);
+    storeWords(op, words + kPartRightStep, part.step[1]);
   }
   if (primitive.textured) {
     // Every covered pixel lies within a pixel of the vertices' hull, where the interpolant is linear.
@@ -742,7 +780,6 @@ void RecordPlanner::Builder::addTriangle(TriVertex vertices[3], const DrawPrimit
 
 // gpu_sprite.c DrawSprite. The op keeps the unclipped origin; u and v wrap at 256 either way.
 void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
-  const int s = plan_.scale;
   const present::RecordVertex &vertex = primitive.vertices[0];
   std::uint8_t u = 0;
   std::uint8_t v = 0;
@@ -780,7 +817,7 @@ void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
       continue;
     }
     target(planeClip.plane);
-    emit({.x0 = xStart * s, .y0 = yStart * s, .x1 = xBound * s, .y1 = yBound * s});
+    emit({xStart, yStart, xBound, yBound});
     if (primitive.textured) {
       const auto u0 = static_cast<std::uint8_t>(u + (xStart - vertex.x) * uIncrement);
       const auto v0 = static_cast<std::uint8_t>(v + (yStart - vertex.y) * vIncrement);
@@ -802,7 +839,6 @@ void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
 
 // gpu_line.c DrawLine: the pixels are walked here and drawn as single-pixel quads.
 void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
-  const int s = plan_.scale;
   present::RecordVertex p0 = primitive.vertices[0];
   present::RecordVertex p1 = primitive.vertices[1];
   const int deltaX = std::abs(p1.x - p0.x);
@@ -810,6 +846,7 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
   if (deltaX >= kVramWidth || deltaY >= kVramHeight) {
     return;
   }
+  lines_++;
   const int k = std::max(deltaX, deltaY);
   if (p0.x > p1.x && k != 0) {
     std::swap(p0, p1);
@@ -853,7 +890,7 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
         const Clip &clip = planeClip.clip;
         if (nx >= clip.x0 && nx <= clip.x1 && ny >= clip.y0 && ny <= clip.y1) {
           target(planeClip.plane);
-          emit({.x0 = nx * s, .y0 = ny * s, .x1 = (nx + 1) * s, .y1 = (ny + 1) * s, .param = colour});
+          emit({nx, ny, nx + 1, ny + 1}, colour);
         }
       }
     }
@@ -887,10 +924,10 @@ void RecordPlanner::Builder::addCanvasMargins(const DrawPrimitive &primitive) {
     const int left = std::max(canvas.originX(), clip.x0);
     const int right = std::min(canvas.buffer.x1 + canvas.margin, clip.x1 + 1);
     if (left < canvas.buffer.x0) {
-      emitNativeRect({left, y0, canvas.buffer.x0, y1});
+      emit({left, y0, canvas.buffer.x0, y1});
     }
     if (right > canvas.buffer.x1) {
-      emitNativeRect({canvas.buffer.x1, y0, right, y1});
+      emit({canvas.buffer.x1, y0, right, y1});
     }
   }
   target(0);
@@ -908,8 +945,8 @@ void RecordPlanner::Builder::addFill(const present::VramFill &fill) {
       const int y0 = std::max(rect.y0, canvas.buffer.y0);
       const int y1 = std::min(rect.y1, canvas.buffer.y1);
       if (rect.x0 <= canvas.buffer.x0 && rect.x1 >= canvas.buffer.x1 && y0 < y1) {
-        emitNativeRect({canvas.originX(), y0, canvas.buffer.x0, y1});
-        emitNativeRect({canvas.buffer.x1, y0, canvas.buffer.x1 + canvas.margin, y1});
+        emit({canvas.originX(), y0, canvas.buffer.x0, y1});
+        emit({canvas.buffer.x1, y0, canvas.buffer.x1 + canvas.margin, y1});
       }
     }
   }
@@ -996,7 +1033,7 @@ RecordPlanner::plan(const FrameRecord &record, int scale, std::span<const Record
       builder_->addUpload(*upload);
     }
   }
-  return builder_->finish();
+  return builder_->finish(record.sequence());
 }
 
 const RecordRasterPlan &RecordPlanner::planVramUpload(std::span<const std::uint16_t> vram, int scale) {
@@ -1005,7 +1042,7 @@ const RecordRasterPlan &RecordPlanner::planVramUpload(std::span<const std::uint1
   upload.width = kVramWidth;
   upload.height = kVramHeight;
   builder_->addUpload(upload);
-  return builder_->finish();
+  return builder_->finish(0);
 }
 
 } // namespace psx::gpu

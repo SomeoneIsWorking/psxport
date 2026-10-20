@@ -64,7 +64,6 @@ struct RecordDrawState {
   int windowMaskY = 0;
   int windowOffsetX = 0;
   int windowOffsetY = 0;
-  bool dither = false;
   bool maskSet = false;
   bool maskCheck = false;
   // Interlaced drawing: -1 draws every row

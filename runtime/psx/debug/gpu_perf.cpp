@@ -1,31 +1,5 @@
-// gpu_perf.cpp — PORTABLE per-frame CPU phase / frame-time profiler for the native port.
-// ----------------------------------------------------------------------------------------------------
-// Companion to the `vkprof` channel in gpu_vk.cpp (which times the GPU present side: VRAM upload, the
-// VK render pass via timestamp queries, and prim counts). This module fills the gap vkprof can't see:
-// the per-frame CPU phase breakdown of the GUEST-LOGIC half of the frame, plus the overall
-// present-to-present frame time, so "CPU-bound vs GPU-bound" is answerable directly.
-//
-// THE FRAME, as the title's native FrameDriver runs it:
-//   FRAME boundary  -- perf.frameBegin()  (top of FrameDriver::stepFrame)
-//     [pre-tick host work: input, IRQ events, OT clear]
-//     Phase::PadFence / Audio / Present / GameLogic, whichever the title brackets. gpu_perf.h
-//     defines what each one measures; a title opens only the phases it actually has.
-//
-//     PadFence times only the title's input-edge fence, not the frame's guest work.
-//     [post-tick host work: draw sync, OT submit]
-//   FRAME boundary  -- perf.frameEnd()    (bottom of FrameDriver::stepFrame): wall delta = full frame time.
-//
-// All timing is std::chrono::steady_clock (monotonic, portable to macOS/MoltenVK — NOT gettimeofday /
-// wall-clock-of-day). Default OFF: enabled at runtime via the REPL `debug perf` channel (or
-// PSXPORT_DEBUG=perf). When OFF the hooks cost one cached-int branch each — no clock reads, no overhead.
-// Emits a rolling average every 60 frames through the configured logger, e.g.:
-//
-//   [perf] 60f avg 4.42ms (226.2 fps) | frame 4.42 = pre 0.02 padfence 0.00 audio 0.30 present-cpu 2.42
-//   idle/pace 0.89 | <-CPU sum 7.53ms
-//
-// Read it against vkprof's "GPU X.XXms": if the CPU phase sum ~= frame time and GPU ms << frame time,
-// the port is CPU-BOUND. The lever is whichever phase actually holds the time — read the line, do not
-// GPU ms ~= frame time while CPU phases are small, it is GPU-BOUND (the present/raster path is the lever).
+// gpu_perf.cpp — per-frame CPU phase and frame-time averages on the `perf` channel, one line per 60 frames.
+// The phases are the ones gpu_perf.h defines and the title's FrameDriver brackets; nothing here times the GPU.
 
 #include "gpu_perf.h"
 #include <cstdio>

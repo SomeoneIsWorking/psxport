@@ -246,7 +246,6 @@ DeviceProbe GpuDevice::probe(CensusMark before) const {
   state.windowMaskY = GPU.twh;
   state.windowOffsetX = GPU.twx;
   state.windowOffsetY = GPU.twy;
-  state.dither = GPU.dtd && psx_gpu_dither_mode != DITHER_OFF;
   state.maskSet = GPU.MaskSetOR != 0;
   state.maskCheck = GPU.MaskEvalAND != 0;
   // gpu.c LineSkipTest.

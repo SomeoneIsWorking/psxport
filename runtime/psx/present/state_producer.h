@@ -12,7 +12,7 @@
 namespace psx::present {
 
 // Where a render puts its primitives. Positions are draw-offset relative, as the guest packet holds
-// them. The render sets the texture page, texture mode and blend mode; draw area, offset, dither, mask,
+// them. The render sets the texture page, texture mode and blend mode; draw area, offset, mask,
 // texture window and interlace come from the object's own entries, and the CLUT from `clutWord`.
 class PrimitiveSink {
 public:
