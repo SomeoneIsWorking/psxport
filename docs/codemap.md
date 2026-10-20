@@ -89,7 +89,7 @@ reach them through `psxport_internal`, titles never do. Test oracles never link 
 | Title enhancement knobs | `runtime/psx/config/enhancement_gate.h`, `stepped_range.h` | `pc_enh` gates and stepped menu rows |
 | Debug verbs | `runtime/psx/debug/debug_commands.*`, `command_args.*` | `DebugCommands`: the one table of verbs (memory, pad, capture, state, otattr, ...) both transports run, answering through a line sink, then the title's command |
 | Control channel | `runtime/psx/debug/dbg_server.*` | The loopback endpoint: `DebugChannel` hands one command to the main thread; pause/step/frame are its own verbs |
-| REPL | `runtime/psx/debug/repl.*` | The stdin transport: run/step/newgame/skip/end are its own verbs |
+| REPL | `runtime/psx/debug/repl.*` | The stdin transport: run/step/quit/end are its own verbs |
 | Producer census | `runtime/psx/debug/producer_census.*`, `ot_attr.*` | Primitives per guest submitter, keyed and rendered |
 | Diagnostics | `runtime/psx/debug/` (`gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `diagnostic_run.h`) | Dumps, counters and capture |
 | Live mods | `runtime/psx/debug/mods.*` | Per-Game player toggles (`aspect`, `ires`, `fps60`, the selector layout) and the settings file |

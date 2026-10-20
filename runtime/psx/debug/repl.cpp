@@ -27,11 +27,9 @@ public:
   WatchdogInputWait &operator=(const WatchdogInputWait &) = delete;
 };
 
-inline constexpr std::array<psx::debug::VerbUsage, 7> kReplVerbs{{
+inline constexpr std::array<psx::debug::VerbUsage, 5> kReplVerbs{{
     {"run <n>", "run n frames, then prompt again"},
     {"step [n]", "run n frames (default 1)"},
-    {"newgame", "pulse Cross to the game prologue"},
-    {"skip [n]", "pulse Start for n frames (default 500)"},
     {"quit | q", "detach the REPL and let the game run"},
     {"end", "end the run cleanly so run-end reports print"},
     {"help", "this list"},
@@ -90,18 +88,8 @@ long Repl::read(Core *c, uint32_t f, LineReader readLine) {
     if (cmd == "step") {
       return count.value_or(0) != 0 ? static_cast<long>(*count) : 1;
     }
-    if (cmd == "newgame") {
-      navNewgame = 1;
-      lucent::info("repl", "newgame: pulsing to GAME prologue");
-      return 100000;
-    }
-    if (cmd == "skip") {
-      skipFrames = count.value_or(0) != 0 ? static_cast<long>(*count) : 500;
-      lucent::info("repl", "skip {} frames", skipFrames);
-      return skipFrames;
-    }
     if (cmd == "help") {
-      psx::debug::DebugCommands::help(kReplVerbs, reply);
+      psx::debug::DebugCommands::help(*c, kReplVerbs, reply);
       continue;
     }
     if (!c->game->debugCommands.run(*c, args, reply)) {

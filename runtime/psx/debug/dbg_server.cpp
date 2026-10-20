@@ -252,7 +252,7 @@ void DbgServer::runCommand(Core &core, const char *line, std::string &reply) {
   const psx::debug::CommandArgs args(line);
   const std::string_view cmd = args.word(0);
   if (cmd == "help") {
-    psx::debug::DebugCommands::help(kServerVerbs, sink);
+    psx::debug::DebugCommands::help(core, kServerVerbs, sink);
   } else if (cmd == "pause") {
     mPaused = true;
     mStep = 0;

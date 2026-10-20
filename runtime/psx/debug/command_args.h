@@ -10,6 +10,12 @@
 
 namespace psx::debug {
 
+// One command's usage line for `help`.
+struct VerbUsage {
+  std::string_view usage;
+  std::string_view summary;
+};
+
 class CommandArgs {
 public:
   explicit CommandArgs(std::string_view line);

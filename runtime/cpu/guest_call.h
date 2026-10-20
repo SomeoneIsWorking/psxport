@@ -58,6 +58,11 @@ ExecutionResult dispatchGuestNow(Core &core, std::uint32_t address, Args... args
   return dispatchGuestWithArguments(core, address, arguments, ExecutionBudget::currentTurn(core));
 }
 
+// A current-turn run from `address` that stops only at an executor exit, for a title's frame turn.
+inline ExecutionResult dispatchGuestUntilExitNow(Core &core, std::uint32_t address) {
+  return dispatchGuestUntilExit(core, address, ExecutionBudget::currentTurn(core));
+}
+
 // callGuestNow for a leaf whose v0 the caller reads.
 template <typename... Args>
   requires(sizeof...(Args) <= 4 && (std::convertible_to<Args, std::uint32_t> && ...))

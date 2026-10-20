@@ -223,7 +223,7 @@ void tap(const Call &call) {
   }
   std::uint32_t frames = call.args.number(2).value_or(0);
   frames = frames != 0 ? frames : 4u;
-  call.core.game->pad.driveTap({.activeLowMask = static_cast<std::uint16_t>(0xFFFFu & ~padButtonBit(call.args.word(1))),
+  call.core.game->pad.driveTap({.activeLowMask = static_cast<std::uint16_t>(input::kNoButtons & ~padButtonBit(call.args.word(1))),
                                 .frames = static_cast<int>(frames)});
   call.reply(lucent::format("tap {} {}", call.args.word(1), frames));
 }
@@ -704,14 +704,16 @@ bool DebugCommands::run(Core &core, const CommandArgs &args, const ReplySink &re
   return title.handled;
 }
 
-void DebugCommands::help(std::span<const VerbUsage> transportVerbs, const ReplySink &reply) {
+void DebugCommands::help(const Core &core, std::span<const VerbUsage> transportVerbs, const ReplySink &reply) {
   for (const VerbUsage &verb : transportVerbs) {
     reply(lucent::format("  {:<40} {}", verb.usage, verb.summary));
   }
   for (const Verb &verb : kVerbs) {
     reply(lucent::format("  {:<40} {}", verb.usage, verb.summary));
   }
-  reply("  the title's own commands answer after these");
+  for (const VerbUsage &verb : core.runtime.commandUsage()) {
+    reply(lucent::format("  {:<40} {}", verb.usage, verb.summary));
+  }
 }
 
 } // namespace psx::debug

@@ -1,5 +1,6 @@
 #include "command_args.h"
 
+#include "host_input.h"
 #include "number_text.h"
 
 #include <array>
@@ -17,21 +18,27 @@ struct PadButtonName {
   std::uint16_t bit;
 };
 
-inline constexpr std::array<PadButtonName, 14> kPadButtonNames{{
-    {"select", 0x0001},
-    {"start", 0x0008},
-    {"up", 0x0010},
-    {"right", 0x0020},
-    {"down", 0x0040},
-    {"left", 0x0080},
-    {"t", 0x1000},
-    {"triangle", 0x1000},
-    {"o", 0x2000},
-    {"circle", 0x2000},
-    {"x", 0x4000},
-    {"cross", 0x4000},
-    {"sq", 0x8000},
-    {"square", 0x8000},
+inline constexpr std::array<PadButtonName, 20> kPadButtonNames{{
+    {"select", input::kButtonSelect},
+    {"l3", input::kButtonL3},
+    {"r3", input::kButtonR3},
+    {"start", input::kButtonStart},
+    {"up", input::kButtonUp},
+    {"right", input::kButtonRight},
+    {"down", input::kButtonDown},
+    {"left", input::kButtonLeft},
+    {"l2", input::kButtonL2},
+    {"r2", input::kButtonR2},
+    {"l1", input::kButtonL1},
+    {"r1", input::kButtonR1},
+    {"t", input::kButtonTriangle},
+    {"triangle", input::kButtonTriangle},
+    {"o", input::kButtonCircle},
+    {"circle", input::kButtonCircle},
+    {"x", input::kButtonCross},
+    {"cross", input::kButtonCross},
+    {"sq", input::kButtonSquare},
+    {"square", input::kButtonSquare},
 }};
 
 } // namespace
