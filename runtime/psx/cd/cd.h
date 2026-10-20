@@ -2,6 +2,8 @@
 // loaders live in the title.
 #pragma once
 
+#include "cd_position.h"
+
 #include <array>
 #include <cstdint>
 class Game;
@@ -66,7 +68,7 @@ public:
   uint32_t stream_delivered = 0;
 
   // CdGetSector pops one raw sector sequentially from past the sync, as the whole-sector data FIFO does.
-  uint8_t sec_raw[2352] = {};
+  uint8_t sec_raw[psx::cd::kRawSectorBytes] = {};
   int sec_pos = 0;
   int sec_len = 0;
   int32_t sec_lba = -1;

@@ -24,8 +24,9 @@ bool raiseStockReadCompletion(Core &core, std::uint32_t firstLba, std::uint32_t 
   }
   if (core.game->cdc.postDataReadyAfterRead(firstLba, sectors, mode) == 0) {
     lucent::error("cd",
-                  "stock CdRead of {} sector(s) completed but its completion could NOT be queued: the controller "
-                  "response queue is full, so the guest's ready callback will not run for this read",
+                  "stock CdRead of {} sector(s) completed but its completion could NOT be queued: four completions "
+                  "are already owed or the response queue is full, so the guest's ready callback will not run "
+                  "for this read",
                   sectors);
     return false;
   }

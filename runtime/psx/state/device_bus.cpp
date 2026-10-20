@@ -430,6 +430,8 @@ bool readSioSection(Game &game, psx::platform::BlobReader &in, std::string &erro
 
 void writeCardSection(Game &game, psx::platform::BlobWriter &out, std::string &error) {
   out.u8(kBusLayoutVersion);
+  // A guest that has not touched the card yet gets the one its first card call would open.
+  game.memcard.init();
   if (!game.memcard.present()) {
     error =
         "the memory card is not open (" + std::string(game.memcard.path()) + "), so this run has no card state to save";
@@ -467,6 +469,7 @@ bool readCardSection(Game &game, psx::platform::BlobReader &in, std::string &err
   if (!in.expectLayout("card", kBusLayoutVersion, error)) {
     return false;
   }
+  game.memcard.init();
   if (!game.memcard.present()) {
     error = "the memory card is not open (" + std::string(game.memcard.path()) +
             "), so a state carrying card contents cannot be loaded";

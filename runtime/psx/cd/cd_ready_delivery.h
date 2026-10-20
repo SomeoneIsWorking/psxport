@@ -1,11 +1,4 @@
-// The framework's stand-in for the BIOS CD-ROM interrupt handler.
-//
-// A stock libcd learns a sector arrived because the BIOS handler calls the CdReadyCallback pointer the
-// guest installed; no event class is involved (psxport issue 0123). For a psx::cd::GuestInterruptLibcd
-// the framework plays that handler: read the controller's data-ready response, acknowledge it and call
-// the slot's current value. It runs only after the guest's own interrupt elements declined the CD bit,
-// and never for a host-pumped libcd, which gets its one callback per completion from the pump.
-// A completion is consumed only when it is delivered, because these completions chain.
+// The BIOS CD-ROM interrupt handler's CdReadyCallback call for a GuestInterruptLibcd (psxport issue 0123).
 #pragma once
 
 #include "cdc_state.h"
@@ -23,17 +16,13 @@ enum class CdReadyDelivery : std::uint8_t {
   GuestExited, // delivered, and the guest carried a typed exit out of the handler
 };
 
-// The handler's service of the CURRENT controller response, whatever its type: drain its bytes into
-// `response` (the rest zeroed), retire the CD line, acknowledge the controller and fold the edge that
-// acknowledge raises for a response queued behind it. Returns the response type, None when none is
-// current. The one owner of that sequence; a title that serves libcd's CdReady natively calls it too.
+// Drains the current response into `response`, acknowledges it and retires the CD line; None when none is current.
 namespace psx::cd {
 CdcResponse acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> response);
 
 // A data-ready response is current and the CD interrupt line is asserted and unmasked.
 [[nodiscard]] bool readyCompletionOwed(const Core &core);
 
-// Delivers at most one owed data-ready completion to the callback in `slot`, with `a0 = status`. Every
-// `NothingOwed` leaves the completion owed; the register context is restored on every path.
+// Runs the callback in `slot` with `a0 = status` for one owed completion; NothingOwed leaves it owed.
 [[nodiscard]] CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint32_t status);
 } // namespace psx::cd

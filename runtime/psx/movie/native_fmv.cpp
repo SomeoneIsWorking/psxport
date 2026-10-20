@@ -20,7 +20,6 @@ namespace {
 
 // How far ahead of its play time audio is queued.
 constexpr double kAudioLeadMs = 1000.0;
-constexpr std::size_t kMaxFramePixels = std::size_t{1024} * 512;
 
 class DiscSectors final : public psx::movie::SectorSource {
 public:
@@ -37,16 +36,8 @@ private:
 
 // The movie is a native RGBA picture pillarboxed 4:3, not a VRAM upload: the renderer composites only native
 // submits. 24bpp is what retail movies were authored for (Toy Story 2's overlay asks for its depth 3).
-void Fmv::buildFrame(const uint8_t *pixels, psx::present::PixelSize size) {
-  const int npix = size.width * size.height;
-  rgba_scratch_.resize(static_cast<std::size_t>(npix) * 4);
-  for (int i = 0; i < npix; i++) {
-    rgba_scratch_[i * 4 + 0] = pixels[i * 3 + 0];
-    rgba_scratch_[i * 4 + 1] = pixels[i * 3 + 1];
-    rgba_scratch_[i * 4 + 2] = pixels[i * 3 + 2];
-    rgba_scratch_[i * 4 + 3] = 255;
-  }
-  game->display.buildHostPicture(rgba_scratch_.data(), size, 1.0f);
+void Fmv::buildFrame(psx::present::PixelSize size) {
+  game->display.buildHostPicture(rgba_.data(), size, 1.0f);
   // Movie frames are progress, not main-present readiness.
   psx::platform::Watchdog::progress();
 }
@@ -73,7 +64,7 @@ void Fmv::learnLayout() {
       break;
     }
     psx::movie::SectorFacts facts;
-    if (psx::audio::sectorSubheader(raw).audio()) {
+    if (psx::cd::sectorSubheader(raw).audio()) {
       facts.audio = psx::audio::xaSectorFormat(raw);
     } else if (const std::optional<psx::movie::VideoChunk> chunk = psx::movie::videoChunk(raw)) {
       facts.videoFrame = chunk->frame;
@@ -150,7 +141,7 @@ std::optional<double> Fmv::nextAudioQueueMs() {
       audio_sector_ = sector_count_;
       break;
     }
-    if (psx::audio::sectorSubheader(audio_raw_.data()).audio()) {
+    if (psx::cd::sectorSubheader(audio_raw_.data()).audio()) {
       audio_loaded_ = true;
     } else {
       ++audio_sector_;
@@ -180,7 +171,7 @@ void Fmv::feedAudio(double nowMs) {
 void Fmv::ensureScratch() {
   if (codes_.empty()) {
     codes_.resize(psx::movie::kMaxCodes);
-    pixels24_.resize(kMaxFramePixels * 3);
+    rgba_.resize(psx::movie::kMaxFramePixels * 4);
   }
 }
 
@@ -191,11 +182,12 @@ bool Fmv::begin(uint32_t lba, uint32_t size_bytes) {
 
 bool Fmv::begin(psx::movie::SectorSource &source, uint32_t lba, uint32_t size_bytes) {
   game->mdec.power();
+  decoder_.start(game->mdec);
   source_ = &source;
   ensureScratch();
 
   base_lba_ = lba;
-  sector_count_ = (size_bytes + psx::movie::kSectorUserBytes - 1) / psx::movie::kSectorUserBytes;
+  sector_count_ = (size_bytes + psx::cd::kDataSectorBytes - 1) / psx::cd::kDataSectorBytes;
   sector_ = 0;
   audio_sector_ = 0;
   audio_loaded_ = false;
@@ -255,10 +247,13 @@ void Fmv::step() {
       continue;
     }
     const int ncodes = psx::movie::decodeBsFrame(frame->payload, frame->size, codes_);
-    if (ncodes > 0 &&
-        decoder_.decodeRgb888(game->mdec, {codes_.data(), static_cast<std::size_t>(ncodes)}, frame->size, pixels24_.data()) > 0) {
+    if (ncodes > 0 && decoder_.decode(game->mdec,
+                                      {codes_.data(), static_cast<std::size_t>(ncodes)},
+                                      frame->size,
+                                      psx::movie::FramePixels::Rgba32,
+                                      rgba_.data()) > 0) {
       const psx::movie::MovieFieldGrid::Show show = grid_.show(clock_.frameDueMs({frame->number, at}));
-      buildFrame(pixels24_.data(), frame->size);
+      buildFrame(frame->size);
       if (pace(show.atMs)) {
         endWithSkip();
         return;

@@ -16,8 +16,8 @@ namespace psx::movie {
 
 inline constexpr std::size_t kPayloadBytes = std::size_t{512} * 1024; // one frame's concatenated BS payload
 inline constexpr std::size_t kMaxCodes = std::size_t{512} * 1024;     // MDEC run-level codes per frame
-inline constexpr uint32_t kSectorUserBytes = 2048u;
 inline constexpr uint32_t kStrChunkHeaderBytes = 32u;
+inline constexpr std::size_t kMaxFramePixels = std::size_t{1024} * 512; // VRAM-sized frame
 
 // One STR video chunk's 32-byte header: its index and count within the frame, the frame number and size.
 struct VideoChunk {
@@ -61,15 +61,19 @@ private:
 // on error.
 int decodeBsFrame(std::span<const uint8_t> payload, present::PixelSize frame, std::span<uint16_t> codes);
 
-// Runs a code stream through the bound MDEC at 24bpp and tiles it into R,G,B triples (EncodeRow24's layout).
+enum class FramePixels : uint8_t { Rgb24 = 3, Rgba32 = 4 };
+
+// Runs a code stream through the bound MDEC at 24bpp and tiles it straight into the caller's pixel layout.
 class FrameDecoder {
 public:
   FrameDecoder();
+  // Uploads the quant and IDCT tables once per movie; a control reset keeps them (Beetle mdec.c).
+  void start(MdecDevice &mdec) const;
   // Returns width*height, or negative on error.
-  int decodeRgb888(MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame, uint8_t *pixels);
+  int decode(
+      MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame, FramePixels layout, uint8_t *pixels);
 
 private:
-  void uploadTables(MdecDevice &mdec) const;
   int decodeMacroblocks(MdecDevice &mdec, std::span<const uint16_t> codes, present::PixelSize frame);
 
   std::array<uint32_t, 32> quantWords_{};

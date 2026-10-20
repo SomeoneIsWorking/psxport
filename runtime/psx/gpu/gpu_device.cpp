@@ -19,7 +19,7 @@
 #include "pgxp/pgxp_mem.h"
 
 // gpu.c's link-time knobs and machine hooks. gMode, widescreen_hack and its aspect setting are owned
-// by gte_beetle.cpp, EventCycles by mdec_beetle.c, IRQ_Assert by spu_beetle.cpp.
+// by gte_beetle.cpp, EventCycles by mdec_device.cpp, IRQ_Assert by spu_beetle.cpp.
 extern "C" {
 
 uint8_t psx_gpu_upscale_shift = 0;

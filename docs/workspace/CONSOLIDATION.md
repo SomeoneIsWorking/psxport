@@ -288,7 +288,7 @@ Flagged: frame_presenter\*, display_presenter\*, gpu_vk_present\*, gpu_vk_record
   - `CdcResponse` enum.
   - `Cd::StockResponse`; `publishStockSync`/`forgetStockResponse` are deleted, and one template entry replaces the eight trampolines.
   - `Hle::runAsInterrupt` and `GuestContextScope` are used in `cd_ready_delivery` and `stock_libcd`. The redundant `in_irq` check is dropped.
-  - New `audio/xa_adpcm` owns the XA-ADPCM decoder and `kXaMaxSectorFrames`, with one coding-byte parse. A sector-header accessor set serves `native_fmv`, `repl_xadump` (A3 already routed it through XaStream) and `fmv_export`.
+  - New `audio/xa_adpcm` owns the XA-ADPCM decoder and `kXaMaxSectorFrames`, with one coding-byte parse. A sector-header accessor set in `cd_position.h` serves the drive, `disc`, `native_fmv`, `fmv_export` and `discdump`; `repl_xadump` plays through a clip XaStream.
   - `fmv_decode` owns the STR demux (`videoChunk` plus `FrameAssembler`) and one macroblock tiler. `PSXPORT_FMV_ROWMAJOR` is deleted, and `fmv_export` reads `movie_max_frames()`.
   - `MdecDevice` owns MDEC (one run-to-park constant); `mdec_pump`, the forwarding wrappers and `c_subsys.h` are deleted. One `BeetleDeviceState` template serves SPU and MDEC.
   - `HostAudioOutput` owns the gate, claim and stream; Fmv uses it and `audio_policy.h` folds in.
@@ -397,6 +397,8 @@ State each one in its group's commit and its issue doc.
 - B1, the GPU-fault marker moves from the per-repo user state dir to Lucent's user data dir (`$XDG_CONFIG_HOME/psxport/gpu_fault` on Linux), so one fault refuses the GPU for every title on the machine.
 - B1, the image pass always renders in the present-image format; the swapchain and pane sink draw through a separate `sinkPipeline` in the swapchain format, where before one pipeline took the swapchain format whenever a window was up.
 - B1, at ires above 1 the record planner splits batches by gpu.c's 1x coverage; an op that overlaps an earlier op of its batch only inside one native pixel blends against the batch's snapshot there.
+- B2 (issue 0165): a register-path Setmode clearing STRSND stops XA; Mega Man X4's Setfilter reaches the drive; an open-ended pull stream routes by the drive's 0x64 rule; a lead-in Setloc sets no position; the register FIFO honours Setmode 0x10 (2328 bytes from offset 24); the XA ring drops once less than 4032 frames are free; movies respect the audio claim; `Fmv::begin` powers the MDEC instead of `title_session`; PCM summaries only with `audiofield` on; `fmv_export` writes the MDEC's 24-bit frames; the CD ready callback runs under `InterruptScope` with the sentinel `ra` on the exception stack.
+- B2 (issue 0165): a state save or load opens the configured memory card when the guest has not; `xadump` plays file 1 of the channel through a clip `XaStream` at 44.1 kHz and skips other channels' EOFs.
 
 ## Performance (applies to every group)
 

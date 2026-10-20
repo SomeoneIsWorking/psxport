@@ -97,7 +97,6 @@ bool parseTrackMetadata(const char *metadata, bool metadata2, int32_t *physical_
 namespace {
 
 constexpr uint32_t kRawFrame = kRawSectorBytes + 96u; // raw sector + subcode, the CHD CD unit
-constexpr uint32_t kUserData = 2048u;
 
 uint32_t readLe32(const uint8_t *p) {
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -288,9 +287,9 @@ bool Disc::readSector(uint32_t lba, uint8_t *out) {
     return false;
   }
   const uint8_t *raw = hunk_base + off;
-  // Mode byte at raw[15]; mode-2 sectors carry an 8-byte subheader before user data.
-  uint32_t data_off = (raw[15] == 2) ? 24 : 16;
-  memcpy(out, raw + data_off, kUserData);
+  // Mode-2 sectors carry an 8-byte subheader before user data.
+  const uint32_t data_off = isMode2(raw) ? 24 : 16;
+  memcpy(out, raw + data_off, kDataSectorBytes);
   return true;
 }
 
@@ -320,7 +319,7 @@ std::optional<DiscFile> Disc::findFile(const char *path) {
   if (!chd && !open()) {
     return std::nullopt;
   }
-  uint8_t sec[2048];
+  uint8_t sec[kDataSectorBytes];
   // Primary Volume Descriptor at sector 16; its root directory record sits at offset 156 (34 bytes).
   if (!readSector(16, sec)) {
     return std::nullopt;
@@ -348,16 +347,16 @@ std::optional<DiscFile> Disc::findFile(const char *path) {
     const bool is_last = (*p == 0);
 
     // Records never cross a 2048-byte sector boundary.
-    uint32_t nsec = (dir_size + 2047u) / 2048u;
+    uint32_t nsec = (dir_size + kDataSectorBytes - 1u) / kDataSectorBytes;
     bool found = false;
     for (uint32_t s = 0; s < nsec && !found; s++) {
       if (!readSector(dir_lba + s, sec)) {
         return std::nullopt;
       }
       uint32_t o = 0;
-      while (o < 2048u) {
+      while (o < kDataSectorBytes) {
         uint32_t rlen = sec[o];
-        if (rlen == 0 || o + rlen > 2048u) {
+        if (rlen == 0 || o + rlen > kDataSectorBytes) {
           break;
         }
         int nlen = sec[o + 32];

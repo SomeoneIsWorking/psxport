@@ -7,8 +7,6 @@
 #include "execution_control.h"
 #include "execution_ledger.h"
 #include "game.h"
-#include "wav_writer.h"
-#include "xa_adpcm.h"
 #include "gpu_debug.h"
 #include "gpu_device.h"
 #include "guest_call.h"
@@ -20,13 +18,17 @@
 #include "render_mode.h"
 #include "render_state.h"
 #include "snapshot.h"
+#include "spu_field_cadence.h"
 #include "title_command.h"
+#include "wav_writer.h"
+#include "xa_state.h"
 
 #include <lucent/log.h>
 
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <optional>
 #include <string>
 #include <strings.h>
@@ -402,7 +404,7 @@ void spuWav(const Call &call) {
   call.reply(lucent::format("wav -> {}", path));
 }
 
-// One XA channel decoded straight off the disc: XA never passes through the sequencer.
+// One XA channel of file 1 played off the disc by a clip XaStream, as the SPU would hear it.
 void xaDump(const Call &call) {
   const std::optional<std::uint32_t> channel = call.args.number(1);
   const std::optional<std::uint32_t> startLba = call.args.number(2);
@@ -410,47 +412,34 @@ void xaDump(const Call &call) {
     call.reply("usage: xadump <channel> <lba> <path> [seconds]");
     return;
   }
+  psx::cd::Disc &disc = call.core.game->disc;
+  if (!disc.isOpen()) {
+    call.reply("xadump: no disc is open");
+    return;
+  }
   std::uint32_t seconds = call.args.number(4).value_or(3);
   seconds = seconds != 0 ? seconds : 3u;
-  constexpr std::uint32_t kFrameCap = 200000;
+  auto stream = std::make_unique<psx::audio::XaStream>();
+  stream->disc = &disc;
+  stream->drive = &call.core.game->cdc;
+  stream->play(static_cast<std::uint8_t>(*channel), *startLba, disc.hunk_count * disc.frames_per_hunk - 1u, false);
+  const std::uint32_t frames = seconds * SpuFieldCadence::kSampleRateHz;
   std::vector<std::int16_t> out;
-  std::array<std::uint8_t, 2352> raw{};
-  std::int16_t history[2][2] = {{0, 0}, {0, 0}};
-  int rate = psx::audio::kXaDefaultRateHz;
-  std::uint32_t lba = *startLba;
-  std::uint32_t cap = 0;
-  for (int guard = 0; guard < 20000; guard++) {
-    if (!call.core.game->disc.readRaw(lba, raw.data(), raw.size()) || !psx::audio::isMode2(raw.data())) {
-      break;
-    }
-    const psx::audio::SectorSubheader header = psx::audio::sectorSubheader(raw.data());
-    lba++;
-    if (!header.audio() || header.channel != *channel) {
-      if (header.endOfFile()) {
-        break;
-      }
-      continue;
-    }
-    std::array<std::int16_t, std::size_t{psx::audio::kXaMaxSectorFrames} * 2> pcm{};
-    const psx::audio::XaFormat format = psx::audio::decodeXaSector(raw.data(), pcm.data(), history);
-    rate = format.rate;
-    cap = cap != 0 ? cap : static_cast<std::uint32_t>(rate) * seconds;
-    for (int i = 0; i < format.frames && out.size() / 2u < std::min(cap, kFrameCap); i++) {
-      out.push_back(pcm[static_cast<std::size_t>(2 * i)]);
-      out.push_back(pcm[static_cast<std::size_t>(2 * i + 1)]);
-    }
-    if (out.size() / 2u >= cap || header.endOfFile()) {
-      break;
-    }
+  out.reserve(std::size_t{frames} * 2u);
+  for (std::uint32_t i = 0; i < frames && stream->isActive(); i++) {
+    std::int32_t sample[2];
+    stream->pullSample(sample);
+    out.push_back(static_cast<std::int16_t>(sample[0]));
+    out.push_back(static_cast<std::int16_t>(sample[1]));
   }
   const std::string path = call.args.text(3);
-  psx::audio::WavWriter wav(path, static_cast<std::uint32_t>(rate));
+  psx::audio::WavWriter wav(path, SpuFieldCadence::kSampleRateHz);
   if (!wav.isOpen()) {
     call.reply(lucent::format("xadump: cannot open {}", path));
     return;
   }
   wav.append(out.data(), static_cast<std::uint32_t>(out.size() / 2u));
-  call.reply(lucent::format("xadump -> {} ({} frames @ {} Hz)", path, out.size() / 2u, rate));
+  call.reply(lucent::format("xadump -> {} ({} frames @ {} Hz)", path, out.size() / 2u, SpuFieldCadence::kSampleRateHz));
 }
 
 void captureText(const Call &call, void (*view)(Core &, std::FILE *)) {
@@ -641,7 +630,10 @@ inline constexpr std::array kVerbs{
     Verb{"vkpix", "vkpix <x> <y> [n]", "raw VRAM words at x,y", &vramPixels},
     Verb{"dumpram", "dumpram [path]", "main RAM to path and the scratchpad to path.spad", &dumpRam},
     Verb{"wav", "wav <path>", "record SPU output to a WAV", &spuWav},
-    Verb{"xadump", "xadump <channel> <lba> <path> [seconds]", "decode an XA channel off the disc to a WAV", &xaDump},
+    Verb{"xadump",
+         "xadump <channel> <lba> <path> [seconds]",
+         "play an XA channel of file 1 off the disc to a 44.1 kHz WAV",
+         &xaDump},
     Verb{"scene", "scene", "the classified display list of the last ordering table", &scene},
     Verb{"disp", "disp", "the scanned-out VRAM rect and the draw area origin", &display},
     Verb{"otattr",

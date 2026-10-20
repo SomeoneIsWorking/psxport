@@ -4,22 +4,13 @@
 
 #include <algorithm>
 
-// Host playback buffering policy. The SPU still advances from the exact delivered display-field
-// cadence; this policy only decides when already-rendered PCM is released to the audio device and
-// how fast the device consumes it.
-//
-// The queue is held at one target level. Playback starts once the target is primed, re-primes after
-// a confirmed empty queue, and in between the device's consumption rate is trimmed toward the target
-// so a burst or a hitch is absorbed without a drop or a gap. Rendered PCM is dropped only above a
-// hard limit no steady producer reaches.
+// When rendered SPU PCM starts playing on the host device, how its consumption is trimmed, and when it drops.
 class AudioQueuePolicy {
 public:
   static constexpr int kSampleRateHz = static_cast<int>(SpuFieldCadence::kSampleRateHz);
   static constexpr int kChannels = 2;
   static constexpr int kBytesPerSample = 2;
-  // Four NTSC fields of producer gap (a 30 Hz title missing two frames) plus one device period:
-  // SDL's default 1024 frames, 23 ms at 44.1 kHz, which PipeWire resamples into its 1024-frame
-  // 48 kHz quantum.
+  // Four NTSC fields of producer gap plus one 1024-frame SDL device period.
   static constexpr int kPlaybackTargetMs = 90;
   static constexpr int kQueueLimitMs = 2 * kPlaybackTargetMs;
   // Largest consumption-rate trim: 8.6 cents, below what a listener hears as pitch.

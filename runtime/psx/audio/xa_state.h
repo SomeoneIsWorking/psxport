@@ -12,7 +12,7 @@ class Disc;
 
 namespace psx::audio {
 
-// About 1.7 s of 37800 Hz audio; a smaller ring turned normal drive burst jitter into drops (Vagrant Story intro).
+// About 1.7 s of 37800 Hz audio, to absorb drive burst jitter.
 inline constexpr uint32_t kXaRingFrames = 65536;
 
 class XaStream {
@@ -41,9 +41,9 @@ public:
   void pullSample(int32_t *samples);
 
   int active = 0;
-  int push_mode = 0; // the drive decodes into this ring; pulls must not read ahead
-  uint32_t lba = 0;  // next sector a pull reads
-  uint32_t end_lba = 0;    // clip end (0 = open-ended)
+  int push_mode = 0;    // the drive decodes into this ring; pulls must not read ahead
+  uint32_t lba = 0;     // next sector a pull reads
+  uint32_t end_lba = 0; // clip end (0 = open-ended)
   uint32_t clip_start = 0;
   uint8_t clip_chan = 0;
   int loop = 0;

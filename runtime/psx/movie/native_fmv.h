@@ -75,7 +75,7 @@ private:
   void feedAudio(double nowMs);
   // How far the audio device's position trails the movie clock, in ms; nullopt without audio.
   std::optional<double> audioLagMs() const;
-  void buildFrame(const uint8_t *pixels, psx::present::PixelSize size);
+  void buildFrame(psx::present::PixelSize size);
   // Show the built frame, the previous one having been held for `heldFields`.
   void showFrame(int heldFields);
   void ensureScratch();
@@ -87,8 +87,7 @@ private:
   psx::movie::FrameAssembler assembler_;
   psx::movie::FrameDecoder decoder_;
   std::vector<uint16_t> codes_;
-  std::vector<uint8_t> pixels24_; // decoded RGB888 frame, VRAM-sized
-  std::vector<uint8_t> rgba_scratch_;
+  std::vector<uint8_t> rgba_; // the decoded frame, VRAM-sized
   std::array<int16_t, std::size_t{psx::audio::kXaMaxSectorFrames} * 2> xa_pcm_{};
 
   std::unique_ptr<psx::movie::SectorSource> disc_source_;

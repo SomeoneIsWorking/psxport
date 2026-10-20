@@ -1,6 +1,7 @@
 // Setmode bits and the drive timing they select, in the per-Game emulated CPU clock.
 #pragma once
 
+#include "cd_position.h"
 #include "emulated_time.h"
 
 #include <cstdint>
@@ -14,7 +15,7 @@ inline constexpr uint8_t kModeSize2328 = 0x10u;    // 2328 bytes after the subhe
 inline constexpr uint8_t kModeXaFilter = 0x08u;    // only the Setfilter file/channel reaches the SPU
 
 constexpr int driveSectorsPerSecond(uint8_t mode) {
-  return (mode & kModeDoubleSpeed) != 0 ? 150 : 75;
+  return (mode & kModeDoubleSpeed) != 0 ? 2 * kSectorsPerSecond : kSectorsPerSecond;
 }
 
 constexpr uint64_t driveSectorPeriodCpuTicks(uint8_t mode) {
@@ -34,7 +35,7 @@ constexpr SectorFraming sectorFraming(uint8_t mode) {
   if ((mode & kModeWholeSector) != 0) {
     return {12u, 2340u};
   }
-  return {24u, 2048u};
+  return {24u, kDataSectorBytes};
 }
 
 } // namespace psx::cd
